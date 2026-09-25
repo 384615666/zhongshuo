@@ -785,6 +785,29 @@ export const dmThread5: Message[] = [
   },
 ];
 
+/**
+ * data-backfill 项目的私信（第十七批）。
+ *
+ * 名字与「众说」项目里的 Codex 同名，但**另一个项目、另一位成员实体、
+ * 另一条会话**：统一私信入口必须并列显示两条、互不合并，也不能靠显示名去认人。
+ */
+export const dmThreadBf1: Message[] = [
+  {
+    projectId: I.P_BACKFILL, roomId: 'dm', authorType: 'human' as const,
+    id: 'dmbf1_1', threadId: 'dm_thread_bf_1', threadMessageSeq: 1,
+    authorId: I.M_HUMAN, kind: 'text',
+    createdAt: NOW - min(60 * 20),
+    body: '回填脚本的断点续传口径，我们私下对一下：是按主键区间记进度，还是按已提交游标？',
+  },
+  {
+    projectId: I.P_BACKFILL, roomId: 'dm', authorType: 'agent' as const,
+    id: 'dmbf1_2', threadId: 'dm_thread_bf_1', threadMessageSeq: 2,
+    authorId: I.M_BF_CODEX, kind: 'text',
+    createdAt: NOW - min(60 * 5),
+    body: '建议按已提交游标 —— 主键区间在并发补数据时会漏。我先把两种口径写成对照表，你挑一个我再改脚本。',
+  },
+];
+
 /* ============================================================
  * 导出
  * ============================================================ */
@@ -870,4 +893,5 @@ export const messages: Message[] = [
   ...dmThread3,
   ...dmThread4,
   ...dmThread5,
+  ...dmThreadBf1,
 ];

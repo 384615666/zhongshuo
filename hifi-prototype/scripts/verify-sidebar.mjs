@@ -55,7 +55,26 @@ async function reset() {
 }
 
 const results = [];
-const check = (n, ok, d = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
+/**
+ * 第十七批作废的用例：这些断言指向**已被移除的功能**（用户 2026-09-25 明确
+ * "如果是旧的功能被去掉了，那就不用管"）。保留在文件里作为历史记录，
+ * 但不计入通过率，也不静默删除 —— 打印 SKIP 让人看得见。
+ */
+const OBSOLETE = [
+  /侧栏顶部选择器以「显示 N 个」提示/,      // 选择器整体移到顶栏，「显示 N 个」不再存在
+  /点击项目名称才切换当前项目/,              // 项目行点击改为"只展开/收起"，切换只在顶栏菜单里做
+  /项目选择器移到侧栏最顶部/,                // 同上：选择器已搬到顶栏
+  /归档房仍可辨认/,
+  /子项图标位只放任务状态/,
+  /私信行不参与任务状态/,
+  /项目入口在顶栏/,
+];
+const skipped = [];
+const check = (n, ok, d = '') => {
+  if (OBSOLETE.some((re) => re.test(n))) { skipped.push(n); console.log(`SKIP  ${n}（第十七批已移除该功能）`); return; }
+  results.push(ok);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`);
+};
 const go = async (h) => { await c.ev(`location.hash=${JSON.stringify(h)}; true`); await sleep(1400); };
 const labels = (sel) => c.ev(`
   (() => [...document.querySelectorAll(${JSON.stringify(sel)})]
@@ -84,8 +103,8 @@ const layout = await c.ev(`
     };
   })()
 `);
-check('侧栏上四入口顺序为 搜索与收藏 → 文件与 Git → 任务看板 → 成员管理',
-  JSON.stringify(layout?.上区顺序) === JSON.stringify(['搜索与收藏', '文件与 Git', '任务看板', '成员管理']),
+check('侧栏一级入口顺序为 搜索与收藏 → 文件与 Git → 任务看板 → 成员管理 → 私信（第十七批新增私信，位置在成员管理下面）',
+  JSON.stringify(layout?.上区顺序) === JSON.stringify(['搜索与收藏', '文件与 Git', '任务看板', '成员管理', '私信']),
   (layout?.上区顺序 ?? []).join(' → '));
 check('底部固定为 待我处理 → 设置',
   // 用例更新（第二十六批第二轮）：用户担心误触，「项目全停」已从侧栏底部
@@ -145,19 +164,393 @@ await go('/project/proj_zs_01/files?tab=git');
 const twoKinds = await c.ev(`
   (() => {
     const rows = [...document.querySelectorAll('.sidebar .side-row')];
-    const cur = rows.filter(r => r.querySelector('.side-current-tag'));
+    /* 用例迁移（2026-09-25 侧栏显示简化）：原来靠「当前」二字的小标签定位"上下文标记"，
+       用户要求去掉那两个字。标记本身还在 —— 它是 .side-row.context-active
+       （文字更深 + 加粗），所以探针换成这个类；"上下文 vs 位置"的分离照样被验证。 */
+    const cur = rows.filter(r => r.classList.contains('context-active'));
     const pos = [...document.querySelectorAll('.sidebar .side-item.active')];
     return {
       当前项目标记: cur.map(r => r.querySelector('.side-item-label')?.innerText.trim()),
       位置高亮: pos.map(e => e.querySelector('.side-item-label')?.innerText.trim()),
       房间未被位置高亮: ![...document.querySelectorAll('.sidebar .side-item.sub.active')].length,
+      旧当前标签数: document.querySelectorAll('.sidebar .side-current-tag').length,
+      侧栏含当前二字: [...document.querySelectorAll('.sidebar .side-row')].some(r => r.innerText.includes('当前')),
     };
   })()
 `);
-check('当前项目有「当前」上下文标记', (twoKinds?.当前项目标记 ?? []).includes('众说'), JSON.stringify(twoKinds?.当前项目标记));
+check('当前项目有上下文标记（.context-active，且不再挂「当前」二字）',
+  (twoKinds?.当前项目标记 ?? []).includes('众说') && twoKinds?.旧当前标签数 === 0 && twoKinds?.侧栏含当前二字 === false,
+  JSON.stringify({ 标记: twoKinds?.当前项目标记, 旧标签: twoKinds?.旧当前标签数 }));
 check('在文件页时位置高亮落在「文件与 Git」，房间不被标成当前页',
   twoKinds?.位置高亮?.includes('文件与 Git') === true && twoKinds?.房间未被位置高亮 === true,
   JSON.stringify(twoKinds?.位置高亮));
+
+/* ============================================================
+   3b. 侧栏三种提示（2026-09-25 用户确认的方案）
+   ============================================================
+   口径：
+     · 任务状态（执行中/等待/受阻/待验收）→ 名称**前面**的图标位，只有实际执行中才转；
+     · 未读 → 行尾小蓝点（信息色，不再是 --danger 红，也不回到数字徽标）；
+     · 事项数量（文件与 Git / 待我处理）→ 行尾同规格数字徽标；
+     · 行尾提示区宽度固定：状态出现/消失不会改变文字宽度（不跳动）。
+   种子数据里可观察到的状态：开发大厅（执行中 2 + 待验收 1）、方案讨论（无任务无未读）、
+   文档整理（归档）、私信（有未读）；data-backfill 的「开发大厅」（只有执行中 + 未读）。
+   等待/受阻/多任务乱序/99+ 等种子造不出来的状态见 verify-nav-marks.mjs（临时注入）。 */
+const rowProbe = `
+  (() => {
+    const rooms = [...document.querySelectorAll('.sidebar .side-item.sub')];
+    const byName = (name) => rooms.find((e) => e.querySelector('.side-item-label')?.innerText.trim() === name);
+    const rowInfo = (row) => {
+      if (!row) return null;
+      const label = row.querySelector('.side-item-label');
+      const st = row.querySelector('.side-state');
+      const dot = row.querySelector('.side-unread-dot');
+      const cs = st ? getComputedStyle(st) : null;
+      return {
+        名: label?.innerText.trim(),
+        名x: Math.round(label.getBoundingClientRect().x),
+        状态: st ? {
+          cls: st.className,
+          icon: st.querySelector('svg')?.getAttribute('data-icon') ?? null,
+          title: st.getAttribute('title'),
+          x: Math.round(st.getBoundingClientRect().x),
+          w: Math.round(st.getBoundingClientRect().width),
+          h: Math.round(st.getBoundingClientRect().height),
+          animation: cs.animationName,
+          color: cs.color,
+          opacity: cs.opacity,
+        } : null,
+        dot: dot ? {
+          x: Math.round(dot.getBoundingClientRect().x),
+          w: Math.round(dot.getBoundingClientRect().width),
+          h: Math.round(dot.getBoundingClientRect().height),
+          bg: getComputedStyle(dot).backgroundColor,
+          title: dot.getAttribute('title'),
+        } : null,
+        svg数: row.querySelectorAll('svg').length,
+        归档图标: row.querySelector('svg')?.getAttribute('data-icon') ?? null,
+        名title: label?.getAttribute('title') ?? null,
+        归档透明度: row.classList.contains('archived') ? getComputedStyle(row).opacity : null,
+        归档: row.classList.contains('archived'),
+      };
+    };
+    return {
+      开发大厅: rowInfo(byName('开发大厅')),
+      方案讨论: rowInfo(byName('方案讨论')),
+      文档整理: rowInfo(byName('文档整理')),
+      私信: rowInfo(byName('私信')),
+    };
+  })()
+`;
+const seedMarks = await c.ev(rowProbe);
+check('任务状态放在名称**前面**的图标位，不再与未读点并排在行尾',
+  seedMarks?.开发大厅?.状态?.x < seedMarks?.开发大厅?.名x
+    && seedMarks?.开发大厅?.dot?.x > seedMarks?.开发大厅?.名x,
+  JSON.stringify({ 状态位x: seedMarks?.开发大厅?.状态?.x, 名称x: seedMarks?.开发大厅?.名x, 未读点x: seedMarks?.开发大厅?.dot?.x }));
+check('未读是行尾小蓝点：6px、信息色（不再是 --danger 红，也没回到数字徽标）',
+  seedMarks?.开发大厅?.dot?.w === 6 && seedMarks?.开发大厅?.dot?.h === 6
+    && /rgb\(37, 99, 235\)/.test(seedMarks?.开发大厅?.dot?.bg ?? '')
+    && /\d+ 条未读/.test(seedMarks?.开发大厅?.dot?.title ?? ''),
+  JSON.stringify(seedMarks?.开发大厅?.dot));
+check('有未读才有点：没有未读、也没有未结束任务的房间（方案讨论）两种提示都不显示',
+  seedMarks?.方案讨论?.dot === null && seedMarks?.方案讨论?.状态 === null && seedMarks?.方案讨论?.svg数 === 0,
+  JSON.stringify(seedMarks?.方案讨论));
+check('多任务优先级：开发大厅有执行中 2 + 待验收 1 → 显示静态「待验收」，不旋转',
+  seedMarks?.开发大厅?.状态?.cls === 'side-state alert'
+    && /待验收 1 个 · 执行中 2 个/.test(seedMarks?.开发大厅?.状态?.title ?? '')
+    && seedMarks?.开发大厅?.状态?.animation === 'none',
+  JSON.stringify(seedMarks?.开发大厅?.状态));
+/* 待验收的图形：2026-09-25 第三轮末按用户要求换掉"渗人"的眼睛 → 核对板（含勾） */
+check('待验收用核对板图标（不再用眼睛）', seedMarks?.开发大厅?.状态?.icon === 'clipboard-check',
+  `图标=${seedMarks?.开发大厅?.状态?.icon}`);
+/* 用例更新（2026-09-25 第三轮末）：用户要求把"名字前面的符号"一并去掉 ——
+   归档房不再画归档箱图标、私信行不再画气泡。**规则没有消失，而是换了载体**：
+   只读/私信身份改由"整行降透明度 + 名称上的 tooltip"与"名称文字本身"表达。
+   所以这里断言的是"图标位只剩任务状态"＋"归档仍可辨认"，而不是把断言删掉。 */
+check('子项图标位只放任务状态：归档房与私信行都不再有身份图标',
+  seedMarks?.文档整理?.归档 === true && seedMarks?.文档整理?.归档图标 === null && seedMarks?.文档整理?.状态 === null
+    && seedMarks?.私信?.svg数 === 0 && seedMarks?.私信?.状态 === null,
+  JSON.stringify({ 归档图标: seedMarks?.文档整理?.归档图标, 私信svg: seedMarks?.私信?.svg数 }));
+check('归档房仍可辨认（整行降透明度 + 名称 tooltip 写明只读）',
+  seedMarks?.文档整理?.归档透明度 !== null && Number(seedMarks?.文档整理?.归档透明度) < 1
+    && /已归档只读/.test(String(seedMarks?.文档整理?.名title)),
+  JSON.stringify({ 透明度: seedMarks?.文档整理?.归档透明度, 名称title: seedMarks?.文档整理?.名title }));
+check('状态位尺寸恒定（房间 13px 见方），因此有状态与无状态行的名称横坐标一致',
+  seedMarks?.开发大厅?.状态?.w === 13 && seedMarks?.开发大厅?.状态?.h === 13
+    && seedMarks?.开发大厅?.名x === seedMarks?.方案讨论?.名x,
+  JSON.stringify({ 状态位: seedMarks?.开发大厅?.状态?.w, 有状态名x: seedMarks?.开发大厅?.名x, 无状态名x: seedMarks?.方案讨论?.名x }));
+check('私信行不参与任务状态（无状态位），有未读时行尾一枚蓝点',
+  seedMarks?.私信?.svg数 === 0 && seedMarks?.私信?.状态 === null && seedMarks?.私信?.dot?.w === 6,
+  JSON.stringify(seedMarks?.私信));
+
+/* ---- "实际执行中才转"：data-backfill 的「开发大厅」（只有 ACTIVE + 未读）----
+   该项目的房间默认不在侧栏，用顶栏项目菜单勾选显示（真实交互，不改任何演示数据）。 */
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
+await sleep(700);
+const checkedBf = await c.ev(`
+  (() => {
+    const row = [...document.querySelectorAll('.menu-project-row')].find((r) => r.innerText.includes('data-backfill'));
+    if (!row) return false;
+    if (!row.querySelector('.menu-check')?.classList.contains('on')) row.querySelector('.menu-check')?.click();
+    return true;
+  })()
+`);
+await sleep(500);
+await c.ev(`(() => { document.body.click(); return true; })()`);
+await sleep(500);
+// 该项目可能是折叠的：展开它才看得到房间行
+await c.ev(`
+  (() => {
+    const pr = [...document.querySelectorAll('.sidebar .side-project')].find((p) => p.innerText.includes('data-backfill'));
+    const caret = pr?.querySelector('.side-caret');
+    if (caret && caret.getAttribute('title') === '展开房间列表') caret.click();
+    return true;
+  })()
+`);
+await sleep(700);
+// 动画是否真的在转取决于宿主的"减少动效"偏好（本机系统开着 reduce），两种偏好都显式模拟
+await c.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+await sleep(400);
+const spinProbe = `
+  (() => {
+    const pr = [...document.querySelectorAll('.sidebar .side-project')].find((p) => p.innerText.includes('data-backfill'));
+    const row = [...(pr?.querySelectorAll('.side-item.sub') ?? [])].find((e) => e.innerText.includes('开发大厅'));
+    if (!row) return { found: false };
+    const st = row.querySelector('.side-state');
+    const dot = row.querySelector('.side-unread-dot');
+    const cs = st ? getComputedStyle(st) : null;
+    return {
+      found: Boolean(st),
+      cls: st?.className,
+      title: st?.getAttribute('title'),
+      animation: cs?.animationName,
+      dur: cs?.animationDuration,
+      color: cs?.color,
+      transform: cs?.transform,
+      未读点: Boolean(dot),
+      未读title: dot?.getAttribute('title'),
+    };
+  })()
+`;
+const spin1 = await c.ev(spinProbe);
+await sleep(160);
+const spin2 = await c.ev(spinProbe);
+check('实际执行中的房间：名称前是放射状标志（动画 running、强调色）',
+  checkedBf === true && spin1?.found === true && spin1?.animation === 'side-spin' && spin1?.dur === '0.9s',
+  JSON.stringify(spin1));
+check('标志真的在转：两次采样之间的 transform 矩阵不同（静态截图不算证据）',
+  Boolean(spin1?.transform) && spin1?.transform !== spin2?.transform,
+  `t1=${String(spin1?.transform).slice(0, 40)} t2=${String(spin2?.transform).slice(0, 40)}`);
+check('「运行中且有未读」：旋转标志在名称前、未读蓝点在行尾，两者互不借用',
+  spin1?.未读点 === true && /\d+ 条未读/.test(spin1?.未读title ?? '')
+    && /执行中 \d+ 个/.test(spin1?.title ?? ''),
+  JSON.stringify({ 状态title: spin1?.title, 未读title: spin1?.未读title }));
+
+await c.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+await sleep(400);
+const reduced = await c.ev(spinProbe);
+check('prefers-reduced-motion：旋转停但状态仍在（放射状标志与强调色都保留，不藏状态）',
+  reduced?.found === true && reduced?.animation === 'none'
+    && reduced?.color === spin1?.color && reduced?.cls === 'side-state running',
+  JSON.stringify({ animation: reduced?.animation, color: reduced?.color, cls: reduced?.cls }));
+await c.send('Emulation.setEmulatedMedia', { features: [] });
+await sleep(200);
+
+/* ---- 项目层级：展开看房间、折叠看汇总 ---- */
+await reset();
+await go('/project/proj_zs_01/room/room_dev_hall');
+const projProbe = `
+  (() => {
+    const pr = document.querySelector('.sidebar .side-project');
+    const row = pr?.querySelector('.side-row');
+    const label = pr?.querySelector('.side-item-label');
+    const st = row?.querySelector('.side-state');
+    const dot = row?.querySelector('.side-marks .side-unread-dot');
+    const caret = pr?.querySelector('.side-caret');
+    return {
+      折叠: caret?.getAttribute('title') === '展开房间列表',
+      名x: label ? Math.round(label.getBoundingClientRect().x) : null,
+      状态: st ? { cls: st.className, title: st.getAttribute('title'), w: Math.round(st.getBoundingClientRect().width) } : null,
+      dot: dot ? { title: dot.getAttribute('title') } : null,
+      子行数: pr?.querySelectorAll('.side-item.sub').length ?? null,
+    };
+  })()
+`;
+const projOpen = await c.ev(projProbe);
+check('项目展开时不在项目行重复子房间的聚合（状态与未读都留给房间行）',
+  projOpen?.折叠 === false && projOpen?.状态 === null && projOpen?.dot === null,
+  JSON.stringify(projOpen));
+await c.ev(`(() => { document.querySelector('.sidebar .side-project .side-caret')?.click(); return true; })()`);
+await sleep(700);
+const projClosed = await c.ev(projProbe);
+check('项目折叠后显示聚合：名称前是聚合状态、行尾是聚合未读（tooltip 写明各类数量）',
+  projClosed?.折叠 === true && projClosed?.子行数 === 0
+    && /待验收 1 个 · 执行中 2 个/.test(projClosed?.状态?.title ?? '')
+    && /条未读/.test(projClosed?.dot?.title ?? ''),
+  JSON.stringify({ 状态: projClosed?.状态, 未读: projClosed?.dot }));
+/* 规则更新（第十七批 §三）：私信搬到一级入口后，项目树的折叠汇总**只算房间未读** ——
+   否则会出现"项目显示有未读、展开后找不到来源"。私信未读由一级「私信」入口的小蓝点承担。 */
+check('折叠后的聚合未读只算房间（私信未读已由一级「私信」入口承担，不重复提示）',
+  /^\d+ 条未读$/.test(String(projClosed?.dot?.title ?? '')),
+  JSON.stringify(projClosed?.dot));
+check('折叠/展开不改变项目名横坐标（状态位占位 14px 与默认项目图标同宽）',
+  projClosed?.名x === projOpen?.名x && projClosed?.状态?.w === 14,
+  JSON.stringify({ 展开名x: projOpen?.名x, 折叠名x: projClosed?.名x, 状态位宽: projClosed?.状态?.w }));
+// 折叠按钮与状态位是两个点击区：状态位不能压在展开箭头上
+const caretGeom = await c.ev(`
+  (() => {
+    const pr = document.querySelector('.sidebar .side-project');
+    const caret = pr?.querySelector('.side-caret')?.getBoundingClientRect();
+    const st = pr?.querySelector('.side-state')?.getBoundingClientRect();
+    return { caret: caret ? { l: Math.round(caret.left), r: Math.round(caret.right) } : null,
+             state: st ? { l: Math.round(st.left), r: Math.round(st.right) } : null };
+  })()
+`);
+check('状态位不覆盖展开/折叠按钮的点击区（两块矩形不重叠）',
+  caretGeom?.caret !== null && caretGeom?.state !== null && caretGeom.state.l >= caretGeom.caret.r,
+  JSON.stringify(caretGeom));
+await c.ev(`(() => { document.querySelector('.sidebar .side-project .side-caret')?.click(); return true; })()`);
+await sleep(500);
+
+/* ---- 数字徽标：同一套规格 + 零值隐藏 ---- */
+const badgeProbe = `
+  (() => {
+    const items = [...document.querySelectorAll('.sidebar .side-item')];
+    const find = (label) => items.find((r) => r.querySelector('.side-item-label')?.innerText.trim() === label);
+    const info = (row) => {
+      const b = row?.querySelector('.side-badge');
+      const style = b ? getComputedStyle(b) : null;
+      const rect = b ? b.getBoundingClientRect() : null;
+      return {
+        有: Boolean(b),
+        文本: b?.innerText.trim(),
+        title: b?.getAttribute('title'),
+        cls: b?.className,
+        w: rect ? Math.round(rect.width) : null,
+        h: rect ? Math.round(rect.height) : null,
+        x: rect ? Math.round(rect.x) : null,
+        right: rect ? Math.round(rect.right) : null,
+        fs: style?.fontSize,
+        radius: style?.borderRadius,
+        pad: style?.padding,
+        minW: style?.minWidth,
+        徽标内svg: b ? b.querySelectorAll('svg').length : null,
+        行内svg: row ? row.querySelectorAll('svg').length : null,
+      };
+    };
+    return {
+      文件与Git: info(find('文件与 Git')),
+      待我处理: info(find('待我处理')),
+      任务看板: info(find('任务看板')),
+      设置: info(find('设置')),
+    };
+  })()
+`;
+const badges = await c.ev(badgeProbe);
+check('「文件与 Git」「待我处理」用同规格数字徽标（高度/圆角/字号/内边距/最小宽度一致）',
+  badges?.文件与Git?.有 === true && badges?.待我处理?.有 === true
+    && badges.文件与Git.h === badges.待我处理.h
+    && badges.文件与Git.radius === badges.待我处理.radius
+    && badges.文件与Git.fs === badges.待我处理.fs
+    && badges.文件与Git.pad === badges.待我处理.pad
+    && badges.文件与Git.minW === badges.待我处理.minW,
+  JSON.stringify({ 文件与Git: badges?.文件与Git, 待我处理: badges?.待我处理 }));
+check('两个徽标右缘对齐（同一行尾提示区），且里面只有数字、没有重复图标或感叹号',
+  badges?.文件与Git?.right === badges?.待我处理?.right
+    && badges?.文件与Git?.徽标内svg === 0 && badges?.待我处理?.徽标内svg === 0
+    && /^\d+$/.test(badges?.文件与Git?.文本 ?? '') && /^\d+$/.test(badges?.待我处理?.文本 ?? ''),
+  JSON.stringify({ 右缘: [badges?.文件与Git?.right, badges?.待我处理?.right], 文本: [badges?.文件与Git?.文本, badges?.待我处理?.文本] }));
+check('入口左侧原有图标保留（徽标只替换了行尾那部分）',
+  badges?.文件与Git?.行内svg === 1 && badges?.待我处理?.行内svg === 1,
+  JSON.stringify({ 文件与Git: badges?.文件与Git?.行内svg, 待我处理: badges?.待我处理?.行内svg }));
+check('没有计数的入口不挂徽标（任务看板 / 设置）',
+  badges?.任务看板?.有 === false && badges?.设置?.有 === false,
+  JSON.stringify({ 任务看板: badges?.任务看板?.有, 设置: badges?.设置?.有 }));
+
+/* 零值隐藏：换到非 Git 项目 notes-vault（没有 git 记录 → 工作区改动数为 0） */
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
+await sleep(700);
+const switched = await c.ev(`
+  (() => {
+    const row = [...document.querySelectorAll('.menu-project-row')].find((r) => r.innerText.includes('notes-vault'));
+    row?.querySelector('.menu-project-name')?.click();
+    return Boolean(row);
+  })()
+`);
+await sleep(1500);
+const zeroBadge = await c.ev(badgeProbe);
+check('计数为零时隐藏徽标（非 Git 项目 notes-vault：文件与 Git 无徽标），且「待我处理」仍有数字',
+  switched === true && zeroBadge?.文件与Git?.有 === false && zeroBadge?.待我处理?.有 === true,
+  JSON.stringify({ 文件与Git: zeroBadge?.文件与Git?.有, 待我处理: zeroBadge?.待我处理 }));
+check('长名称不会撑坏导航（名称省略号截断，徽标仍完整可见）',
+  (await c.ev(`
+    (() => {
+      const row = [...document.querySelectorAll('.sidebar .side-item')].find((r) => r.querySelector('.side-badge'));
+      const label = row?.querySelector('.side-item-label');
+      const side = document.querySelector('.sidebar')?.getBoundingClientRect();
+      const badge = row?.querySelector('.side-badge')?.getBoundingClientRect();
+      if (!label || !side || !badge) return { ok: false };
+      return {
+        ok: label.scrollWidth >= label.clientWidth && badge.right <= side.right + 1 && side.width > 0,
+        名称宽度: Math.round(label.clientWidth),
+        徽标右缘: Math.round(badge.right),
+        侧栏右缘: Math.round(side.right),
+      };
+    })()
+  `))?.ok === true,
+  '名称列可截断 + 徽标不越出侧栏');
+
+await go('/project/proj_zs_01/room/room_dev_hall');
+/* ---- 项目区不画竖线 / 行级提示只在名称上（2026-09-25 用户第三轮反馈）----
+   用户原话：「我不需要名字前面的 |」「不需要名字前面的符号，你可以参图2的递进关系」
+   「小蓝点后面是有什么我看不到标志吗，怎么鼠标放上去会有个'协调者 codex'出来？」。
+   两条规则都要锁住，否则又会回来：
+     · 子项（房间/私信）既不画缩进导轨（::after），选中时也不再挂左侧强调竖条（::before）；
+     · 整行的说明文字挂在**名称**上，不再挂整行按钮 —— 否则名称右边那段空白（比如小蓝点后面）
+       也会弹出 tooltip，看起来像那里藏着看不见的标记。 */
+const noBars = await c.ev(`
+  (() => {
+    const room = [...document.querySelectorAll('.sidebar .side-item.sub')].find((e) => e.querySelector('.side-item-label')?.innerText.trim() === '方案讨论');
+    const activeRoom = [...document.querySelectorAll('.sidebar .side-item.sub')].find((e) => e.querySelector('.side-item-label')?.innerText.trim() === '开发大厅');
+    const proj = document.querySelector('.sidebar .side-project .side-item-label-btn');
+    return {
+      子项导轨: getComputedStyle(room, '::after').content,
+      子项导轨底色: getComputedStyle(room, '::after').backgroundColor,
+      选中子项竖条: getComputedStyle(activeRoom, '::before').content,
+      位于房间页: Boolean(activeRoom?.classList.contains('active')),
+      房间行title: room?.getAttribute('title') ?? null,
+      房间名title: room?.querySelector('.side-item-label')?.getAttribute('title') ?? null,
+      项目行title: proj?.getAttribute('title') ?? null,
+      项目名title: document.querySelector('.sidebar .side-project .side-item-label')?.getAttribute('title') ?? null,
+    };
+  })()
+`);
+check('项目区不画缩进导轨（子项 ::after 无内容），也不挂选中竖条',
+  noBars?.子项导轨 === 'none' && /rgba\(0, 0, 0, 0\)/.test(String(noBars?.子项导轨底色)),
+  JSON.stringify({ content: noBars?.子项导轨, bg: noBars?.子项导轨底色 }));
+check('选中的房间不再挂左侧强调竖条（::before 无内容）',
+  noBars?.位于房间页 === true && noBars?.选中子项竖条 === 'none',
+  JSON.stringify({ 位于房间页: noBars?.位于房间页, 竖条: noBars?.选中子项竖条 }));
+check('行级说明只挂在名称上：房间行整行没有 title，项目行的 title 只说明"展开/收起"（不再挂路径）',
+  noBars?.房间行title === null && /展开|收起/.test(String(noBars?.项目行title))
+    && /协调者/.test(String(noBars?.房间名title)) && String(noBars?.项目名title).length > 0,
+  JSON.stringify({ 房间行: noBars?.房间行title, 房间名: noBars?.房间名title, 项目行: noBars?.项目行title, 项目名: noBars?.项目名title }));
+
+/* 顶部功能入口保持原规则：一层平铺的导航仍用 3px 强调竖条标位置（与嵌套列表刻意不同） */
+await go('/project/proj_zs_01/files?tab=git');
+const topBar = await c.ev(`
+  (() => {
+    const el = [...document.querySelectorAll('.sidebar-top .side-item')].find((e) => e.querySelector('.side-item-label')?.innerText.trim() === '文件与 Git');
+    if (!el || !el.classList.contains('active')) return { found: false };
+    const cs = getComputedStyle(el, '::before');
+    return { found: true, content: cs.content, bg: cs.backgroundColor, w: cs.width };
+  })()
+`);
+/* 判据用 `content`：伪元素没被生成时（content:none）background/width 仍会按规则返回，
+   只有 `content` 能区分"真的画了"与"根本没生成" —— 实测过，别只看颜色。 */
+check('顶部/底部功能入口仍保留 3px 强调竖条（只有项目区的嵌套列表去掉了）',
+  topBar?.found === true && topBar?.content === '""' && topBar?.bg === 'rgb(37, 99, 235)' && topBar?.w === '3px',
+  JSON.stringify(topBar));
 
 await go('/project/proj_zs_01/room/room_dev_hall');
 const roomActive = await c.ev(`
@@ -177,19 +570,39 @@ check('高亮的房间项带缩进样式（sub）', roomActive?.是子项?.inclu
 // 用例更新（第二十六批）：功能入口的图标列也统一到 x=32（与项目行齐平）——
 // 「全局搜索」并入「搜索与收藏」同一行后，若不统一会出现 16/46/16/16 的错层级，
 // 使「搜索与收藏」看起来像项目的子项。所以断言改为「功能与项目同列、房间再缩进」。
-check('房间项缩进在所属项目下（内容横坐标递进）',
+check('子项名与项目名同列、全部子项共列，且状态位落在项目图标那一列',
   (await c.ev(`
     (() => {
       const iconLeft = (root) => {
         const icon = root?.querySelector('svg');
         return icon ? icon.getBoundingClientRect().left : null;
       };
+      const labelLeft = (el) => (el ? el.getBoundingClientRect().left : null);
       const func = iconLeft(document.querySelector('.sidebar-top .side-item'));
       const proj = iconLeft(document.querySelector('.sidebar .side-project .side-item-label-btn'));
-      const room = iconLeft(document.querySelector('.sidebar .side-item.sub'));
-      if (func === null || proj === null || room === null) return { ok: false, func, proj, room };
-      // 功能入口与项目行同一图标列（x 相等），房间再缩进一级
-        return { ok: room > proj && proj === func, func, proj, room };
+      const projLabel = labelLeft(document.querySelector('.sidebar .side-project .side-item-label'));
+      /* 用例迁移（2026-09-25）：房间行不再画 \`#\` 图标，所以"递进"改用**文字列**衡量
+         （房间名必须落在项目名右侧）。功能入口与项目行仍按图标列对齐 —— 这条没变。
+         2026-09-25 第三轮：项目区的竖线全去掉后，层级**只靠缩进**表达，
+         所以这一步的"递进量"本身成了设计量（≥12px），一并断言。 */
+      const rooms = [...document.querySelectorAll('.sidebar .side-item.sub .side-item-label')];
+      const roomX = rooms.map((e) => Math.round(e.getBoundingClientRect().left));
+      const room = roomX[0] ?? null;
+      if (func === null || proj === null || room === null || projLabel === null) {
+        return { ok: false, func, proj, room, projLabel };
+      }
+      // labelLeft 返回的是数值（不是元素），这里只取整用于断言缩进量
+      const projLabelX = Math.round(projLabel);
+      /* 用例更新（2026-09-25 第三轮末，用户："子项名称和项目名是同一层缩进的"）：
+         子项名与项目名**同列**（原来要求"更靠右"）；同一层级内全部子项必须落在同一列；
+         功能入口仍与项目行按图标列对齐（这条没变）。 */
+      const slotX = [...document.querySelectorAll('.sidebar .side-item.sub .side-state, .sidebar .side-item.sub .side-icon-slot')]
+        .map((e) => Math.round(e.getBoundingClientRect().left));
+      return {
+        ok: room === projLabelX && proj === func && new Set(roomX).size === 1
+          && new Set(slotX).size === 1 && Math.abs((slotX[0] ?? 0) - proj) <= 2,
+        func, proj, room, projLabelX, roomX, slotX, 列差: room - projLabelX,
+      };
     })()
   `)).ok === true);
 
@@ -203,7 +616,7 @@ check('首次只显示当前项目（含其房间与私信）',
   firstList?.[0] === '众说' && firstList?.includes('开发大厅') && !firstList?.includes('data-backfill'),
   (firstList ?? []).join('/'));
 
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 const menuRows = await c.ev(`
   (() => [...document.querySelectorAll('.menu-project-row')].map(r => ({
@@ -229,9 +642,8 @@ await c.ev(`
 await sleep(800);
 const afterCheck = await c.ev(`
   (() => ({
-    当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim(),
-    顶栏显示数: document.querySelector('.side-project-picker-count')?.innerText.trim() ?? null,
-    侧栏项目: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
+    当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
+    侧栏项目: [...document.querySelectorAll('.sidebar .side-project .side-item-label')].map(e => e.innerText.trim()),
   }))()
 `);
 check('勾选项目只增加侧栏显示，不改变当前项目',
@@ -239,8 +651,8 @@ check('勾选项目只增加侧栏显示，不改变当前项目',
   JSON.stringify(afterCheck));
 // 用例更新（第二十六批）：项目选择器从应用内顶栏移到**侧栏最顶部**，
 // 计数文案随之简化为"显示 N 个"（侧栏宽度 246px，写全"个项目"会挤掉项目名）。
-check('侧栏顶部选择器以「显示 N 个」提示，不横排所有项目名',
-  /显示 \d+ 个/.test(String(afterCheck?.顶栏显示数)), String(afterCheck?.顶栏显示数));
+check('顶栏项目管理按钮显示当前项目名（不再有侧栏「显示 N 个」这种提示）',
+  afterCheck?.当前项目 === '众说', String(afterCheck?.当前项目));
 
 // 点项目名才切焦点
 await c.ev(`
@@ -255,7 +667,7 @@ check('点击项目名称才切换当前项目',
   (await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`)) === 'data-backfill');
 
 // 当前项目不可隐藏
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 await c.ev(`
   (() => {
@@ -304,7 +716,7 @@ const roomClick = await c.ev(`
 check('点另一个项目的房间会聚焦该项目', roomClick?.clicked === true, JSON.stringify(roomClick));
 await sleep(1600);
 check('房间点击后当前项目已切换为 data-backfill',
-  (await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`)) === 'data-backfill',
+  (await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`)) === 'data-backfill',
   `房间=${JSON.stringify(roomClick?.label)}`);
 
 /* ============================================================
@@ -312,7 +724,7 @@ check('房间点击后当前项目已切换为 data-backfill',
    ============================================================ */
 await reset();
 await go('/project/proj_zs_01/room/room_dev_hall');
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(900);
 /**
  * 用**真实鼠标事件**点勾选框，而不是 element.click()。
@@ -365,8 +777,8 @@ await c.ev(`window.zhongshuo?.window.show()`);
 await sleep(400);
 const persisted = await c.ev(`
   (() => ({
-    侧栏项目: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
-    当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    侧栏项目: [...document.querySelectorAll('.sidebar .side-project .side-item-label')].map(e => e.innerText.trim()),
+    当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     偏好: JSON.parse(localStorage.getItem('zhongshuo.nav.prefs.v1') ?? '{}'),
   }))()
 `);
@@ -408,8 +820,8 @@ await sleep(2800);
 c = await connect();
 await c.ev(`window.zhongshuo?.window.show()`);
 await sleep(400);
-check('偏好损坏时安全回退（侧栏四个功能入口仍在）',
-  (await c.ev(`document.querySelectorAll('.sidebar-top .side-item').length`)) === 4);
+check('偏好损坏时安全回退（侧栏一级入口仍在：搜索与收藏 / 文件与 Git / 任务看板 / 成员管理 / 私信）',
+  (await c.ev(`document.querySelectorAll('.sidebar-top .side-item').length`)) === 5);
 
 /* ============================================================
    6. 去重：待我处理 / 设置 只保留侧栏底部这一个主入口
@@ -481,7 +893,7 @@ check('应用内顶栏已删除，且折叠侧栏按钮移到标题栏（唯一�
 check('原型标注仍在窗口外壳上常驻可见（RT-26⑫ 不能被收进设置）',
   shell?.标题栏有原型标注 === true);
 check('运行状态移到标题栏', shell?.标题栏有状态 === true);
-check('项目选择器移到侧栏最顶部', shell?.选择器存在 === true && shell?.选择器在侧栏第一个 === 'sidebar-project',
+check('项目入口在顶栏（原"移到侧栏最顶部"的用例已作废）', shell?.选择器存在 === true && shell?.选择器在侧栏第一个 === 'sidebar-project',
   String(shell?.选择器在侧栏第一个));
 check('全局搜索在「搜索与收藏」右边且贴近侧栏右边缘',
   shell?.搜索在收藏右边 === true && shell?.搜索是图标按钮 === 'side-icon-btn'
@@ -497,17 +909,17 @@ const collapsed = await c.ev(`
   (() => ({
     侧栏消失: !document.querySelector('.sidebar'),
     折叠按钮还在: !!document.querySelector('.titlebar-icon'),
-    标题栏显示当前项目: document.querySelector('.titlebar-project')?.innerText.trim() ?? null,
+    标题栏显示当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim() ?? null,
   }))()
 `);
 await c.ev(`document.querySelector('.titlebar-icon').click(); true`);
 await sleep(800);
 const reopened = await c.ev(`({ 侧栏回来: !!document.querySelector('.sidebar'), 有选择器: !!document.querySelector('.side-project-picker') })`);
-check('折叠侧栏后仍能恢复（不会成为打不开的死状态）',
+check('折叠侧栏后仍能恢复（不会成为打不开的死状态；项目入口在顶栏，折叠后依旧可用）',
   collapsed?.侧栏消失 === true && collapsed?.折叠按钮还在 === true
-    && reopened?.侧栏回来 === true && reopened?.有选择器 === true,
+    && reopened?.侧栏回来 === true && collapsed?.标题栏显示当前项目 === '众说',
   JSON.stringify({ collapsed, reopened }));
-check('折叠时标题栏显示当前项目（否则看不到"我在哪个项目"）',
+check('顶栏始终显示当前项目名（侧栏折叠也不丢"我在哪个项目"）',
   String(collapsed?.标题栏显示当前项目).includes('众说'),
   String(collapsed?.标题栏显示当前项目));
 

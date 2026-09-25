@@ -355,7 +355,7 @@ check(
   JSON.stringify(listState),
 );
 /* 新建弹窗：单选 */
-await ev(`(() => { const b = [...document.querySelectorAll('button')].find((x) => (x.getAttribute('title') || '') === '新建私聊'); b?.click(); return !!b; })()`);
+await ev(`(() => { const b = [...document.querySelectorAll('button')].find((x) => /新建私聊/.test(x.getAttribute('title') || '')); b?.click(); return !!b; })()`);
 await sleep(700);
 const modal = await ev(`(() => {
   const m = document.querySelector('.modal');
@@ -374,10 +374,14 @@ check(
     && !String(modal.文案).includes('小群') && !String(modal.文案).includes('多选'),
   JSON.stringify(modal),
 );
-const pickedTwo = await ev(`(() => {
+/* 用例迁移（第十七批）：React 的受控单选框在 click 后是**异步**重渲染的，
+   同步读 checked 会读到 0（新加的"项目"下拉多了一次渲染，把原本踩线的时序暴露出来）。
+   这里改成点击后等一拍再读，断言语义不变（连点两位成员只能留下一位）。 */
+const pickedTwo = await ev(`(async () => {
   const rows = [...document.querySelectorAll('.modal .wpolicy input')];
   rows[0]?.click();
   rows[1]?.click();
+  await new Promise((r) => setTimeout(r, 250));
   return [...document.querySelectorAll('.modal .wpolicy input')].filter((i) => i.checked).length;
 })()`);
 check('连点两位成员只会保留一位（单选语义）', pickedTwo === 1, `checked=${pickedTwo}`);

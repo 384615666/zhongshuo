@@ -100,6 +100,37 @@ const P: Record<string, JSX.Element> = {
       <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
     </>
   ),
+  /**
+   * 核对板（侧栏"待验收"）。2026-09-25 用户反馈原来用的眼睛图标"太渗人了"，
+   * 换成这块"带夹板的单子 + 一个勾"—— 语义是"有一份交付等你核对"，不像眼睛那样有生物联想。
+   * 候选里还比过空复选框（13px 下与"受阻"八角轮廓太像）、勾选框（会被读成"已完成"）。
+   */
+  'clipboard-check': (
+    <>
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+      <rect x="8" y="2" width="8" height="4" rx="1" />
+      <polyline points="9 14.5 11.5 17 15.5 13" />
+    </>
+  ),
+  /**
+   * 放射状旋转标志（侧栏"任务正在执行"，2026-09-25 用户按参考图指定）。
+   *
+   * 八条短线从中心向外放射、中心留空 —— 与原来的"空心圆环"相比，
+   * 旋转时方向感更强（圆环转起来几乎看不出来）。坐标固定取 24 网格上
+   * 半径 4.6→9.2 的八向辐条，笔画两端圆头，所以看起来是八段圆角短线。
+   */
+  'spinner-rays': (
+    <>
+      <line x1="12" y1="7.4" x2="12" y2="2.8" />
+      <line x1="15.25" y1="8.75" x2="18.51" y2="5.49" />
+      <line x1="16.6" y1="12" x2="21.2" y2="12" />
+      <line x1="15.25" y1="15.25" x2="18.51" y2="18.51" />
+      <line x1="12" y1="16.6" x2="12" y2="21.2" />
+      <line x1="8.75" y1="15.25" x2="5.49" y2="18.51" />
+      <line x1="7.4" y1="12" x2="2.8" y2="12" />
+      <line x1="8.75" y1="8.75" x2="5.49" y2="5.49" />
+    </>
+  ),
   'wifi-off': (
     <>
       <line x1="1" y1="1" x2="23" y2="23" />
@@ -525,7 +556,7 @@ export function Icon({
   const content = P[name as string];
   if (!content) {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" className={className} style={style} aria-hidden="true">
+      <svg width={size} height={size} viewBox="0 0 24 24" className={className} style={style} aria-hidden="true" data-icon={String(name)}>
         <circle cx="12" cy="12" r="9" />
       </svg>
     );
@@ -544,6 +575,10 @@ export function Icon({
       style={style}
       aria-hidden="true"
       focusable="false"
+      /* 图标名进 DOM：视觉上无影响，但让"这一格到底是哪个图标"可被断言 ——
+         侧栏的任务状态位靠图标形状区分（手/八角/眼睛/放射条），
+         只比 class 或尺寸判不出是哪一个。 */
+      data-icon={name as string}
     >
       {content}
     </svg>

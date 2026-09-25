@@ -18,13 +18,14 @@ import { Avatar, EmptyState, Modal, Tag, memberColor } from '../components/ui';
 import { Composer } from '../components/Composer';
 import { PreviewPane } from '../components/PreviewPane';
 import { useStore, setState, recordLocalOnly, toast } from '../data/store';
-import { submitDmMessage } from '../data/actions';
+import { markDmRead, submitDmMessage } from '../data/actions';
 import { byId, memberLabel } from '../data/selectors';
 import { clockTime, fullTime, relTime } from '../lib/format';
 import type { DmConversation } from '../data/types';
 /* UX-PREVIEW-01：私信资源同样走共享预览（§17.9 第 7 条） */
 import { attachmentsOfMessage, audienceAllows } from '../lib/resource';
 import { openPreview } from '../data/actions-preview';
+import { navigate } from '../lib/router';
 import { useElementWidth } from '../lib/useElementWidth';
 import { SIDEBAR_WIDTH } from '../lib/layout';
 
@@ -37,22 +38,59 @@ const newId = (p: string) => `${p}_${Math.random().toString(36).slice(2, 9)}`;
  * 保留兼容：前者按当前项目，后者**先从成员实体解析其所属项目**再打开，
  * 避免两个项目里的同名成员串线。
  */
-export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: string; projectId?: string } = {}) {
+export function DmPage({
+  memberId,
+  projectId: projectIdProp,
+  query,
+}: { memberId?: string; projectId?: string; query?: Record<string, string> } = {}) {
   const s = useStore((x) => x);
 
   /**
-   * 项目归属判定顺序：
-   *  1. 路由显式给的 projectId（/project/:id/dm）
-   *  2. 成员实体自己的 projectId（/dm/:memberId —— 同名成员不能靠当前项目猜）
-   *  3. 当前项目
+   * 第十七批 §三：**统一私信页** —— 一级导航里唯一的私信入口，默认汇总**所有可访问项目**
+   * 的会话，页内可按项目筛选。这里不是"把项目上下文合并掉了"：
+   * 每条会话仍然带自己的 `projectId` / `conversationId` / audience，
+   * 两个项目里的同名成员是**两条独立会话**，不会合并。
+   *
+   * 范围判定顺序（越靠前越优先；旧链接因此都能正确打开）：
+   *  1. `/project/:id/dm` 的路由参数 —— 等于"先筛选到该项目"
+   *  2. `?project=<id>` —— 页内筛选器写入的 URL 状态
+   *  3. `/dm/:memberId` —— 先从**成员实体**解析所属项目（同名成员不能靠当前项目猜）
+   *  4. 都没有 → 全部日常项目
    */
   const memberProjectId = memberId
     ? s.members.find((m) => m.id === memberId)?.projectId
     : undefined;
-  const projectId = projectIdProp ?? memberProjectId ?? s.activeProjectId;
-  const all = useMemo(() => s.dms.filter((d) => d.projectId === projectId), [s.dms, projectId]);
+  const scopeProjectId = projectIdProp ?? query?.project ?? memberProjectId;
+
+  /** 可访问项目：归档项目的历史仍可查看（只读）；已移除的项目不再列出 */
+  const accessibleProjects = useMemo(
+    () => s.projects.filter((p) => !p.removedAt),
+    [s.projects],
+  );
+  const daily = accessibleProjects.filter((p) => !p.archivedAt);
+  /** 本页列出的项目：指定了筛选就用那一个，否则是全部日常项目 */
+  const scopeProjects = scopeProjectId
+    ? accessibleProjects.filter((p) => p.id === scopeProjectId)
+    : daily;
+  const scopeIds = useMemo(() => new Set(scopeProjects.map((p) => p.id)), [scopeProjects]);
+
+  const all = useMemo(
+    () => s.dms.filter((d) => scopeIds.has(d.projectId)),
+    [s.dms, scopeIds],
+  );
   const active = all.filter((d) => !d.archivedAt).sort(sortDm);
   const archived = all.filter((d) => d.archivedAt).sort(sortDm);
+
+  /** 会话所属项目（列表行、会话头部、只读判定都要用） */
+  const projectOfDm = (d: DmConversation) => s.projects.find((p) => p.id === d.projectId);
+  /** 项目整体归档/移除时，会话只读；会话自身归档也只读 */
+  const dmReadOnlyReason = (d: DmConversation): string | undefined => {
+    if (d.archivedAt) return '这个私聊已归档：只读，可取消归档';
+    const p = projectOfDm(d);
+    if (p?.archivedAt) return `项目「${p.displayName}」已归档：私信只读，可先恢复项目`;
+    if (p?.removedAt) return `项目「${p.displayName}」已从应用移除：仅可查看历史`;
+    return undefined;
+  };
 
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
@@ -66,7 +104,24 @@ export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: stri
       ?? active.find((d) => d.memberIds.includes(memberId))
     : undefined;
   const selected = all.find((d) => d.id === selectedId) ?? preferred ?? active[0];
+  /**
+   * 成员/上下文一律跟着**选中的那条会话**走，而不是"当前项目"：
+   * 统一列表跨项目，用当前项目当上下文会让"切换会话"串到别的项目去。
+   */
+  const projectId = selected?.projectId ?? scopeProjectId ?? s.activeProjectId;
+  const selectedProject = s.projects.find((p) => p.id === projectId);
   const members = s.members.filter((m) => m.projectId === projectId);
+  /** 会话头部与输入区用的只读原因（会话自身归档 / 项目归档 / 项目已移除） */
+  const selectedReadOnlyReason = selected ? dmReadOnlyReason(selected) : undefined;
+
+  /**
+   * 打开会话即标记已读（第十七批）：统一入口用一枚小蓝点表示"有未读"，
+   * 而私信的 unread 以前只有"发送消息"会清零 —— 点永远不会消失就成了假提示。
+   * 与房间的"打开即已读"保持一致。
+   */
+  useEffect(() => {
+    if (selected && selected.unread > 0) markDmRead(selected.id);
+  }, [selected?.id, selected?.unread]);
 
   /** 当前 DM 上下文可见的预览标签（audience 隔离，§17.9 第 7 条） */
   const previewTabs = useStore((x) => x.preview.tabs);
@@ -148,27 +203,58 @@ export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: stri
           <span className="pool-title">私信</span>
           <Tag plain data-batch="M3">M3 批次</Tag>
           <div className="spacer" />
-          <button className="btn sm primary" onClick={() => setCreateOpen(true)} title="新建私聊">
+          <button
+            className="btn sm primary"
+            onClick={() => setCreateOpen(true)}
+            title={scopeProjectId ? '在这个项目里新建私聊' : '新建私聊（先选项目，再选成员）'}
+          >
             <Icon name="plus" size={12} />
           </button>
         </div>
 
+        {/* 项目筛选（§三）：会话是跨项目聚合的，项目多了必须能筛、也要能看出归属 */}
+        <div className="dm-scope-filter">
+          <Icon name="folder" size={12} className="faint" />
+          <select
+            className="select sm"
+            value={scopeProjectId ?? 'all'}
+            title="按项目筛选会话；选「全部项目」看所有可访问项目的私信"
+            onChange={(e) => {
+              const v = e.target.value;
+              navigate(v === 'all' ? '/dm' : `/project/${v}/dm`);
+            }}
+          >
+            <option value="all">全部项目（{daily.length}）</option>
+            {accessibleProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.displayName}
+                {p.archivedAt ? '（已归档）' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="dm-list">
           {active.length === 0 ? (
-            <div className="small faint" style={{ padding: 14 }}>
-              还没有私聊。点右上角 + 新建一个。
+            <div className="small faint" style={{ padding: 14 }} data-testid="dm-empty">
+              {scopeProjectId
+                ? '这个项目还没有私聊。点右上角 + 新建一个，或把上面的筛选切到「全部项目」。'
+                : '还没有私聊。点右上角 + 新建一个。'}
             </div>
           ) : (
             active.map((d) => (
               <DmRow
                 key={d.id}
                 dm={d}
+                project={projectOfDm(d)}
+                /* 跨项目列表里每行都要能认出归属：项目名只在"全部项目"时显示（单项目筛选时是冗余） */
+                showProject={!scopeProjectId}
                 selected={d.id === selected?.id}
                 onSelect={() => {
                   setSelectedId(d.id);
                 }}
                 onArchive={() => setArchiveOpen(d)}
-                members={members}
+                members={s.members.filter((m) => m.projectId === d.projectId)}
               />
             ))
           )}
@@ -189,11 +275,13 @@ export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: stri
                     <DmRow
                       key={d.id}
                       dm={d}
+                      project={projectOfDm(d)}
+                      showProject={!scopeProjectId}
                       archived
                       selected={d.id === selected?.id}
                       onSelect={() => setSelectedId(d.id)}
                       onArchive={() => setArchiveOpen(d)}
-                      members={members}
+                      members={s.members.filter((m) => m.projectId === d.projectId)}
                     />
                   ))
                 : null}
@@ -224,6 +312,8 @@ export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: stri
         ) : (
           <DmConversationView
             dm={selected}
+            project={selectedProject}
+            readOnlyReason={selectedReadOnlyReason}
             onOpenSettings={() => setSettingsOpen(true)}
             onArchive={() => setArchiveOpen(selected)}
             onOpenResource={(id, rev) => {
@@ -270,7 +360,8 @@ export function DmPage({ memberId, projectId: projectIdProp }: { memberId?: stri
       {createOpen ? (
         <CreateDmModal
           projectId={projectId}
-          members={members}
+          projects={accessibleProjects}
+          allMembers={s.members}
           onClose={() => setCreateOpen(false)}
           onCreated={(id) => {
             setSelectedId(id);
@@ -298,6 +389,8 @@ function sortDm(a: DmConversation, b: DmConversation) {
 
 function DmRow({
   dm,
+  project,
+  showProject,
   members,
   selected,
   archived,
@@ -305,6 +398,9 @@ function DmRow({
   onArchive,
 }: {
   dm: DmConversation;
+  /** 会话所属项目（第十七批：统一列表跨项目，每行都要能认出归属） */
+  project?: { id: string; displayName: string; archivedAt?: number };
+  showProject?: boolean;
   members: { id: string; displayName: string; ordinal?: number }[];
   selected: boolean;
   archived?: boolean;
@@ -330,6 +426,14 @@ function DmRow({
           {dm.unread > 0 && !archived ? <Tag tone="info" icon="message-square">{dm.unread}</Tag> : null}
         </div>
         <div className="dm-row-meta">
+          {showProject && project ? (
+            /* 项目归属：同名成员在不同项目里是**两条独立会话**，这里必须写出行属哪个项目 */
+            <span className="dm-row-project" title={`所属项目：${project.displayName}`}>
+              {project.displayName}
+              {project.archivedAt ? ' · 已归档' : ''}
+            </span>
+          ) : null}
+          {showProject && project ? <span className="faint"> · </span> : null}
           {people.map((m) => (m.ordinal && m.ordinal > 1 ? `${m.displayName}#${m.ordinal}` : m.displayName)).join('、')}
           <span className="faint"> · {archived ? '已归档' : relTime(dm.lastMessageAt)}</span>
         </div>
@@ -352,10 +456,16 @@ function DmRow({
 
 function DmConversationView({
   dm,
+  project,
+  readOnlyReason,
   onOpenSettings,
   onArchive,
   onOpenResource,
 }: {
+  /** 会话所属项目（头部要显示出来，避免跨项目列表里"这是哪个项目的私信"说不清） */
+  project?: { id: string; displayName: string; archivedAt?: number };
+  /** 只读原因：会话归档 / 项目归档 / 项目已移除 —— 三者都不能发消息 */
+  readOnlyReason?: string;
   dm: DmConversation;
   onOpenSettings: () => void;
   /** 归档态下输入条直接提供「取消归档」，避免提示指路却找不到入口 */
@@ -378,6 +488,17 @@ function DmConversationView({
             ))}
           </div>
           <span className="strong">{dm.title}</span>
+          {/* 打开会话后仍要能确认"这是哪个项目里的私信"（§三） */}
+          {project ? (
+            <Tag
+              plain={!project.archivedAt}
+              tone={project.archivedAt ? 'neutral' : undefined}
+              icon={project.archivedAt ? 'archive' : 'folder'}
+              title={`所属项目：${project.displayName}${project.archivedAt ? '（已归档）' : ''}`}
+            >
+              {project.displayName}
+            </Tag>
+          ) : null}
           {archived ? <Tag tone="neutral" icon="archive">已归档 · 只读</Tag> : <Tag plain data-batch="M3">M3 批次</Tag>}
           <div className="spacer" />
           {/* 会话级设置统一从头部菜单进，头部不再摆一排平级按钮 */}
@@ -467,7 +588,7 @@ function DmConversationView({
             commandId: p.commandId,
           });
         }}
-        sendDisabledReason={archived ? '该私信已归档：只读，取消归档后才能发送新内容' : undefined}
+        sendDisabledReason={readOnlyReason}
         sendDisabledLabel={archived ? '只读：已归档' : undefined}
         inputDisabledReason={archived ? '已归档：取消归档后才能发送' : undefined}
         extraAction={
@@ -486,17 +607,25 @@ function DmConversationView({
 
 function CreateDmModal({
   projectId,
-  members,
+  projects,
+  allMembers,
   onClose,
   onCreated,
 }: {
+  /** 初始项目：来自页内筛选或成员页跳转（"从成员页面发起时自动携带其所属项目"） */
   projectId: string;
-  members: { id: string; displayName: string; ordinal?: number; workState: string; model: string }[];
+  /** 可默认选的项目（日常项目 + 归档项目只读提示） */
+  projects: { id: string; displayName: string; archivedAt?: number }[];
+  allMembers: { id: string; displayName: string; ordinal?: number; workState: string; model: string; projectId: string }[];
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const [ownerId, setOwnerId] = useState(projectId);
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
+  /** 成员按**选中的项目**过滤：同名成员分属不同项目，不能跨项目挑人 */
+  const members = allMembers.filter((m) => m.projectId === ownerId);
+  const owner = projects.find((p) => p.id === ownerId);
 
   const picked = pickedId ? [pickedId] : [];
   const pickedMember = members.find((m) => m.id === pickedId);
@@ -511,7 +640,7 @@ function CreateDmModal({
     <Modal
       size="md"
       title="新建私聊"
-      subtitle="1 对 1：选一位项目成员；同一个成员可以建多个私聊，互不串上下文"
+      subtitle="1 对 1：先选项目、再选一位成员；同名成员在不同项目里是两条独立会话"
       onClose={onClose}
       footer={
         <>
@@ -532,7 +661,7 @@ function CreateDmModal({
                   ...st.dms,
                   {
                     id,
-                    projectId,
+                    projectId: ownerId,
                     title: t,
                     memberIds: picked,
                     threadId: newId('dm_thread'),
@@ -544,9 +673,9 @@ function CreateDmModal({
               }));
               recordLocalOnly(
                 'dm.conversation.create',
-                `conversation=${id} member=${pickedId} → 1 对 1；同一成员可有多条私聊`,
+                `conversation=${id} project=${ownerId} member=${pickedId} → 1 对 1；同一成员可有多条私聊`,
               );
-              toast(`已创建与 ${t} 的私聊`, 'success');
+              toast(`已在「${owner?.displayName ?? ownerId}」创建与 ${t} 的私聊`, 'success');
               onCreated(id);
             }}
           >
@@ -555,6 +684,23 @@ function CreateDmModal({
         </>
       }
     >
+      <div className="field">
+        <label className="field-label">项目</label>
+        <select
+          className="select"
+          value={ownerId}
+          title="私聊归属的项目：同名成员在不同项目里是不同的人，会话也不合并"
+          onChange={(e) => { setOwnerId(e.target.value); setPickedId(null); }}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.displayName}
+              {p.archivedAt ? '（已归档 · 只读）' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="field">
         <label className="field-label">选择成员（单选；私聊是 1 对 1）</label>
         <div className="col" style={{ gap: 6 }}>

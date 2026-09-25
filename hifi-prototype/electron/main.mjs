@@ -231,11 +231,22 @@ ipcMain.handle('zs:pick-directory', async () => {
   return res.filePaths[0];
 });
 
-/** 在资源管理器中打开（仅允许已登记的项目路径） */
+/** 在资源管理器中**定位并选中**（reveal-path 与 open-path 是两种不同动作） */
 ipcMain.handle('zs:reveal-path', async (_e, targetPath) => {
   if (typeof targetPath !== 'string' || !targetPath) return false;
   shell.showItemInFolder(targetPath);
   return true;
+});
+
+/**
+ * 用系统默认程序**打开**该路径（第十七批 §七"在资源管理器中打开项目目录"）。
+ * 与 reveal-path 的区别：这个打开目录本身，那个是在父目录里选中它。
+ * `shell.openPath` 返回空字符串表示成功，非空是错误原因 —— 如实回给渲染层。
+ */
+ipcMain.handle('zs:open-path', async (_e, targetPath) => {
+  if (typeof targetPath !== 'string' || !targetPath) return { ok: false, reason: '路径为空' };
+  const err = await shell.openPath(targetPath);
+  return err ? { ok: false, reason: err } : { ok: true };
 });
 
 ipcMain.handle('zs:open-external', async (_e, url) => {

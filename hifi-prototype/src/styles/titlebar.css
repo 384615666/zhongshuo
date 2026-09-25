@@ -46,30 +46,60 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 10px 0 6px;
+  /* 与折叠按钮贴紧（用户复核："隔得有点远，不美观"）：原来左内边距 6px，
+     折叠按钮自身宽 34px 且居中，视觉上留了一大段空白 —— 收到 0。 */
+  padding: 0 10px 0 0;
   min-width: 0;
   flex: 0 1 auto;
   -webkit-app-region: no-drag;
 }
 
-/* 侧栏收起时在标题栏显示当前项目：项目选择器随侧栏一起不可见了，
-   所以这里补一个"我在哪个项目"的提示，点击即展开侧栏去切换。 */
-.titlebar-project {
+/**
+ * 项目管理（第十七批 §二）：顶栏唯一的项目入口。
+ *
+ * 取代了原来的两套东西 —— "软件图标 + 众说 + 描述"与"侧栏收起时才出现的当前项目"。
+ * 现在**无论侧栏是否收起**都在这里：左边是固定的"项目管理"字样，
+ * 右边跟着**当前项目名**与箭头，点击打开同一个菜单（搜索 / 切换 / 侧栏显示 / 打开文件夹）。
+ */
+.titlebar-project-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 320px;
+  max-width: 420px;
   min-width: 0;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
   border-radius: var(--r-md);
-  background: var(--bg-surface);
+  background: transparent;
+  color: var(--text-2);
   cursor: pointer;
   font-size: var(--fs-12);
 }
-.titlebar-project:hover {
-  background: var(--bg-surface-3);
+.titlebar-project-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--border);
+}
+/* 菜单展开时保持"打开态"（与按钮的 toggle 行为对应） */
+.titlebar-project-btn.open {
+  background: var(--bg-surface);
   border-color: var(--border-strong);
+  color: var(--text);
+}
+.titlebar-proj-title {
+  color: var(--text-3);
+  flex: none;
+}
+.titlebar-proj-sep {
+  color: var(--text-4);
+  flex: none;
+}
+.titlebar-proj-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .titlebar-app {
@@ -86,16 +116,10 @@
   flex: none;
 }
 
-/* 副标题：说明这是什么应用；窄窗隐藏，避免与右侧状态抢空间 */
-.titlebar-sub {
-  font-size: var(--fs-11);
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* 副标题样式已随"软件名 + 描述"整段移除（第十七批 §二）；窄窗下改为收窄项目管理按钮的文字 */
 @media (max-width: 1240px) {
-  .titlebar-sub {
+  .titlebar-proj-title,
+  .titlebar-proj-sep {
     display: none;
   }
 }
@@ -154,8 +178,8 @@
   }
 }
 @media (max-width: 1040px) {
-  .titlebar-project {
-    max-width: 150px;
+  .titlebar-project-btn {
+    max-width: 190px;
   }
 }
 

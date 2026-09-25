@@ -56,6 +56,23 @@ async function reset() {
 }
 
 const results = [];
+/**
+ * 第十七批作废的用例：指向**已被移除的功能**（侧栏顶部项目选择器、"显示 N 个"、
+ * 项目树里的私信行、点项目名切换当前项目、折叠时标题栏另一套当前项目展示）。
+ * 用户 2026-09-25 明确"如果是旧的功能被去掉了，那就不用管"，因此这里显式 SKIP
+ * （保留原文可查，不计入通过率，也不静默删除）。
+ */
+const OBSOLETE = [
+  /侧栏顶部/,
+  /显示 N 个/,
+  /项目树.*私信行/,
+  /私信行.*项目树/,
+  /点击项目名称才切换当前项目/,
+  /点项目名.*切换/,
+  /折叠时标题栏/,
+  /归档房.*保留.*图标/,
+];
+const skipped = [];
 const check = (n, ok, d = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ` — ${d}` : ''}`); };
 const go = async (h) => { await c.ev(`location.hash=${JSON.stringify(h)}; true`); await sleep(1500); };
 const hash = () => c.ev(`location.hash`);
@@ -82,8 +99,8 @@ const rt1 = await c.ev(`
     };
   })()
 `);
-check('RT-26① 上四入口顺序正确',
-  JSON.stringify(rt1?.top) === JSON.stringify(['搜索与收藏', '文件与 Git', '任务看板', '成员管理']), (rt1?.top ?? []).join('→'));
+check('RT-26① 一级入口顺序正确（第十七批新增一级「私信」，位于成员管理下面）',
+  JSON.stringify(rt1?.top) === JSON.stringify(['搜索与收藏', '文件与 Git', '任务看板', '成员管理', '私信']), (rt1?.top ?? []).join('→'));
 // 用例更新（第二十六批第二轮）：用户担心「项目全停」在侧栏底部易误触，
 // 已移入「项目设置 → 高级操作」。底部固定区回到两项。
 check('RT-26① 底部入口固定且可达（待我处理 / 设置）',
@@ -97,7 +114,7 @@ check('RT-26① 项目区独立滚动、无独立 Git/Runtime 重复入口',
    ============================================================ */
 await reset();
 await go('/project/proj_zs_01/room/room_dev_hall');
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 await c.ev(`
   (() => {
@@ -109,7 +126,7 @@ await c.ev(`
 await sleep(800);
 const rt2a = await c.ev(`
   (() => ({
-    当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
     锁定: [...document.querySelectorAll('.menu-project-row')]
       .find(r => r.innerText.includes('众说'))?.querySelector('.menu-check')?.classList.contains('locked'),
@@ -127,10 +144,10 @@ await c.ev(`
   })()
 `);
 await sleep(1500);
-check('RT-26② 点项目名切换焦点', (await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`)) === 'data-backfill');
+check('RT-26② 点项目名切换焦点', (await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`)) === 'data-backfill');
 
 // 点房间 → 聚焦所属项目（先切回众说）
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 await c.ev(`
   (() => {
@@ -151,7 +168,7 @@ const roomClick = await c.ev(`
 `);
 await sleep(1500);
 check('RT-26② 点房间聚焦其所属项目',
-  roomClick === 'clicked' && (await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`)) === 'data-backfill',
+  roomClick === 'clicked' && (await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`)) === 'data-backfill',
   `点击=${roomClick}`);
 
 /* ============================================================
@@ -397,9 +414,11 @@ for (const [name, hash] of focusCases) {
   await go(hash);
   const st = await c.ev(`
     (() => ({
-      顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+      顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
+      /* 用例迁移（2026-09-25）：「当前」二字已按用户要求从侧栏去掉，
+         上下文标记改用 .side-row.context-active（标记本身仍在）。 */
       侧栏当前: [...document.querySelectorAll('.side-row')]
-        .filter(r => r.querySelector('.side-current-tag'))
+        .filter(r => r.classList.contains('context-active'))
         .map(r => r.querySelector('.side-item-label')?.innerText.trim()),
     }))()
   `);
@@ -431,7 +450,7 @@ check('§17.8 项目设置标明的是 URL 里的那个项目（标题+路径，
 await go('/welcome?recovery=0');
 await reset();
 await go('/dm/member_bf_codex');
-const dmFocus = await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`);
+const dmFocus = await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`);
 check('§17.7 旧 /dm/:memberId 按成员所属项目同步焦点（不靠当前项目猜）',
   dmFocus === 'data-backfill', `顶栏=${dmFocus}`);
 
@@ -456,13 +475,14 @@ const dmB = await c.ev(`
     const t = document.body.innerText;
     return {
       会话数: document.querySelectorAll('.dm-row').length,
-      说明还没有: t.includes('还没有私聊'),
+      空态或只有本项目: t.includes('这个项目还没有私聊') || !(t.includes('评审口径') || t.includes('周报分工')),
       列出众说会话: t.includes('评审口径') || t.includes('周报分工'),
     };
   })()
 `);
-check('§9.6 data-backfill 私信页不列出众说的会话（不同名成员也不串项目）',
-  dmB?.会话数 === 0 && dmB?.列出众说会话 === false, JSON.stringify(dmB));
+check('§9.6 data-backfill 私信页只列出本项目的会话（不串到众说；第十七批：该项目自己有一条私信）',
+  dmB?.会话数 >= 1 && dmB?.列出众说会话 === false && dmB?.空态或只有本项目 === true,
+  JSON.stringify(dmB));
 
 /* §17.7「不能拿全局 activeProjectId 拼来源链接」：
    从聚合看板点另一个项目的任务卡，落点必须用**任务自己的** projectId。 */
@@ -477,7 +497,7 @@ await c.ev(`
 `);
 await sleep(1900);
 const boardNav = await c.ev(`
-  (() => ({ hash: location.hash, 顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim() }))()
+  (() => ({ hash: location.hash, 顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim() }))()
 `);
 check('§17.7 聚合看板点卡用任务自己的项目拼链接（不用 activeProjectId）',
   /proj_backfill_02/.test(String(boardNav?.hash)) && boardNav?.顶栏 === 'data-backfill',
@@ -542,7 +562,7 @@ check('RT-26④ 裸 /tasks 默认 scope=visible',
 await reset();
 await go('/tasks?scope=project&projectId=proj_backfill_02');
 check('RT-26④ 单项目筛选同步当前项目焦点',
-  (await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`)) === 'data-backfill');
+  (await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`)) === 'data-backfill');
 
 // 换范围后失效 roomId 被清空
 await go('/tasks?scope=project&projectId=proj_zs_01&roomId=room_bf_dev_hall');
@@ -583,7 +603,7 @@ await c.ev(`
 await sleep(1600);
 const memB = await c.ev(`
   (() => ({
-    顶栏当前: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    顶栏当前: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     hash: location.hash,
     成员卡数: document.querySelectorAll('.card').length,
   }))()
@@ -601,10 +621,10 @@ check('RT-26⑤ 无成员项目显示空态（不显示混合成员名单）',
    RT-26 ⑥ 隐藏项目待办仍计数；深链自动补选
    ============================================================ */
 await reset();
-const baseline = await c.ev(`document.querySelector('.sidebar-foot .side-item .tag')?.innerText.trim() ?? '0'`);
+const baseline = await c.ev(`document.querySelector('.sidebar-foot .side-item .side-badge')?.innerText.trim() ?? '0'`);
 // 隐藏一个非当前项目（先勾选 data-backfill，再隐藏）
 await go('/project/proj_zs_01/room/room_dev_hall');
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 await c.ev(`
   (() => {
@@ -627,7 +647,7 @@ await c.ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape',
 await sleep(600);
 const afterHide = await c.ev(`
   (() => ({
-    待办角标: document.querySelector('.sidebar-foot .side-item .tag')?.innerText.trim() ?? '0',
+    待办角标: document.querySelector('.sidebar-foot .side-item .side-badge')?.innerText.trim() ?? '0',
     侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
   }))()
 `);
@@ -673,7 +693,7 @@ check('RT-26⑥ §9.7 能点到隐藏项目的待办卡', revealFromCard?.clicke
 await sleep(1800);
 const afterCardClick = await c.ev(`
   (() => ({
-    当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
     有提示: document.body.innerText.includes('已在侧栏显示项目'),
   }))()
@@ -704,7 +724,7 @@ await sleep(1400);
 const revealed = await c.ev(`
   (() => ({
     侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
-    当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     有提示: document.body.innerText.includes('已在侧栏显示项目'),
   }))()
 `);
@@ -741,7 +761,7 @@ await reset();
 await go('/dm/member_bf_codex');
 await sleep(1600);
 const dmResolve = await c.ev(`
-  (() => ({ hash: location.hash, 当前项目: document.querySelector('.side-project-picker-name')?.innerText.trim() }))()
+  (() => ({ hash: location.hash, 当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim() }))()
 `);
 check('RT-26⑦ 旧 /dm/:memberId 按成员所属项目解析（不串到当前项目）',
   dmResolve?.当前项目 === 'data-backfill' || /proj_backfill_02/.test(String(dmResolve?.hash)),
@@ -822,7 +842,7 @@ check('§9.6 无成员项目给空态（不显示其他项目的混合名单）'
 await go('/welcome?recovery=0');
 await reset();
 await go('/welcome?recovery=0');
-const beforeBrowse = await c.ev(`document.querySelector('.sidebar-foot .side-item .tag')?.innerText.trim() ?? '0'`);
+const beforeBrowse = await c.ev(`document.querySelector('.sidebar-foot .side-item .side-badge')?.innerText.trim() ?? '0'`);
 await go('/project/proj_zs_01/files?tab=files');
 await c.ev(`(() => { const r = [...document.querySelectorAll('.file-row')]; if (r[1]) r[1].click(); return true; })()`);
 await sleep(700);
@@ -830,7 +850,7 @@ await go('/project/proj_zs_01/files?tab=git');
 await go('/tasks?scope=all');
 await go('/project/proj_zs_01/room/room_dev_hall?thread=thread_t13&tab=delivery');
 await sleep(1200);
-const afterBrowse = await c.ev(`document.querySelector('.sidebar-foot .side-item .tag')?.innerText.trim() ?? '0'`);
+const afterBrowse = await c.ev(`document.querySelector('.sidebar-foot .side-item .side-badge')?.innerText.trim() ?? '0'`);
 check('§9.11 浏览目录树/diff/看板/交付面板不会新增待办或验收',
   afterBrowse === beforeBrowse, `浏览前=${beforeBrowse} 浏览后=${afterBrowse}`);
 
@@ -1028,7 +1048,7 @@ const settingsDefault = await c.ev(`
 check('RT-26⑩ 设置默认进入应用级分区（通用），导航树呈现应用级四分区',
   (settingsDefault?.当前分区 ?? []).includes('通用')
     && JSON.stringify(settingsDefault?.分组) === JSON.stringify(['应用'])
-    && JSON.stringify(settingsDefault?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '诊断与帮助']),
+    && JSON.stringify(settingsDefault?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '归档管理', '诊断与帮助']),
   JSON.stringify(settingsDefault));
 
 await go('/settings?section=runtime');
@@ -1162,13 +1182,13 @@ const emptyState = await c.ev(`
     return {
       侧栏项目: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
       有空态: side.includes('没有显示中的项目') || side.includes('打开文件夹'),
-      四个入口仍在: document.querySelectorAll('.sidebar-top .side-item').length,
+      一级入口仍在: document.querySelectorAll('.sidebar-top .side-item').length,
     };
   })()
 `);
 // 当前项目必须被补回可见集合（§17.7），所以不会真的空 —— 这本身就是断言点
 check('RT-26⑨ 可见集合为空时自动补回当前项目（当前项目不可被隐藏）',
-  emptyState?.侧栏项目?.includes('众说') === true && emptyState?.四个入口仍在 === 4,
+  emptyState?.侧栏项目?.includes('众说') === true && emptyState?.一级入口仍在 === 5,
   JSON.stringify(emptyState));
 
 /* ============================================================
@@ -1224,7 +1244,7 @@ console.log('  -- 第十六批：项目行入口 --');
 await go('/project/proj_zs_01/room/room_dev_hall');
 
 // 勾选第二个项目，验证"每个项目行都有 ⋯"
-await c.ev(`(() => { document.querySelector('.side-project-picker')?.click(); return true; })()`);
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
 await sleep(700);
 await c.ev(`
   (() => {
@@ -1240,30 +1260,33 @@ await sleep(600);
 
 const moreBtns = await c.ev(`
   (() => {
-    const btns = [...document.querySelectorAll('.side-project-more')];
+    // 第十七批：项目行末尾是 ⋯ 与 + 两个按钮（⋯ 有 aria-haspopup，+ 没有）
+    const btns = [...document.querySelectorAll('.side-row-act')];
+    const rows = document.querySelectorAll('.side-project').length;
     return {
       数量: btns.length,
-      每个项目一个: btns.length === document.querySelectorAll('.side-project').length,
+      行数: rows,
+      每行两个: rows > 0 && btns.length === rows * 2,
       可Tab: btns.every(b => b.tagName === 'BUTTON'),
-      有aria: btns.every(b => b.getAttribute('aria-haspopup') === 'menu'),
+      有aria: btns.filter(b => b.getAttribute('aria-haspopup') === 'menu').length === rows,
       默认淡出: btns.every(b => getComputedStyle(b).opacity === '0'),
     };
   })()
 `);
-check('每个可见项目行都有独立的「⋯」按钮（键盘可达、默认淡出不抢注意力）',
-  moreBtns?.数量 >= 2 && moreBtns?.每个项目一个 === true && moreBtns?.可Tab === true && moreBtns?.有aria === true,
+check('每个可见项目行都有独立的「⋯」与「+」按钮（键盘可达、默认淡出不抢注意力）',
+  moreBtns?.数量 >= 2 && moreBtns?.每行两个 === true && moreBtns?.可Tab === true && moreBtns?.有aria === true,
   JSON.stringify(moreBtns));
 
 // 点 ⋯ 只开菜单，不切项目/房间/折叠
 // 点 ⋯ 只开菜单，不切项目/房间/折叠。
-// 注意：要**明确指定**是哪个项目的那一个按钮（.side-project-more 的 DOM 顺序
+// 注意：要**明确指定**是哪个项目的那一个按钮（.side-row-act 的 DOM 顺序
 // 就是侧栏项目顺序，下标不可靠 —— 早先按下标取，结果点到了别的项目）。
-const beforeMore = await c.ev(`({ hash: location.hash, 顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim(), 房间数: document.querySelectorAll('.side-item.sub').length })`);
+const beforeMore = await c.ev(`({ hash: location.hash, 顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim(), 房间数: document.querySelectorAll('.side-item.sub').length })`);
 const clickedWhich = await c.ev(`
   (() => {
     const proj = [...document.querySelectorAll('.side-project')]
       .find(sp => sp.innerText.includes('data-backfill'));
-    const b = proj?.querySelector('.side-project-more');
+    const b = proj?.querySelector('.side-row-act');
     if (!b) return null;
     b.click();
     return proj.querySelector('.side-item-label')?.innerText.trim();
@@ -1273,7 +1296,7 @@ await sleep(900);
 const afterMore = await c.ev(`
   (() => ({
     hash: location.hash,
-    顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim(),
+    顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
     房间数: document.querySelectorAll('.side-item.sub').length,
     菜单项: [...document.querySelectorAll('.menu button, .menu .menu-item')].map(e => e.innerText.trim()).filter(Boolean),
   }))()
@@ -1294,7 +1317,7 @@ await c.ev(`
   })()
 `);
 await sleep(1600);
-const afterEnter = await c.ev(`({ hash: location.hash, 顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim() })`);
+const afterEnter = await c.ev(`({ hash: location.hash, 顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim() })`);
 check('菜单里的「项目设置」进入该项目设置单页并聚焦该项目',
   /\/project\/proj_backfill_02\/settings/.test(String(afterEnter?.hash)) && afterEnter?.顶栏 === 'data-backfill',
   JSON.stringify(afterEnter));
@@ -1367,9 +1390,9 @@ const appSet = await c.ev(`
     };
   })()
 `);
-check('应用设置只剩四个应用分区，无"当前项目"组、无项目选择器、无项目类分区',
+check('应用设置只剩应用分区（第十七批新增「归档管理」）、无"当前项目"组、无项目类分区',
   String(appSet?.标题) === '应用设置'
-    && JSON.stringify(appSet?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '诊断与帮助'])
+    && JSON.stringify(appSet?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '归档管理', '诊断与帮助'])
     && appSet?.有项目选择器 === false
     && appSet?.有项目类分区 === false,
   JSON.stringify({ 标题: appSet?.标题, 分区: appSet?.分区 }));
@@ -1484,9 +1507,9 @@ check('旧 section=errors 规范化到 diagnostics 并展开速查',
 // 应用链接上多余的 projectId 不应切换焦点
 await reset();
 await go('/project/proj_zs_01/room/room_dev_hall');
-const focusBefore = await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`);
+const focusBefore = await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`);
 await go('/settings?section=runtime&projectId=proj_backfill_02');
-const strayId = await c.ev(`({ 顶栏: document.querySelector('.side-project-picker-name')?.innerText.trim(), hash: location.hash })`);
+const strayId = await c.ev(`({ 顶栏: document.querySelector('.titlebar-proj-name')?.innerText.trim(), hash: location.hash })`);
 check('应用设置链接上残留的 projectId 不改变焦点（且被清除）',
   strayId?.顶栏 === focusBefore && !String(strayId?.hash).includes('projectId'),
   JSON.stringify({ before: focusBefore, after: strayId }));

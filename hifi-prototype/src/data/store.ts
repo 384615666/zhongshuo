@@ -35,6 +35,7 @@ function persistNav(s: AppState) {
     activeProjectId: s.activeProjectId,
     visibleProjectIds: s.visibleProjectIds,
     expandedProjectIds: s.expandedProjectIds,
+    pinnedProjectIds: s.pinnedProjectIds,
     fileGitTabs: s.fileGitTabs,
   });
 }

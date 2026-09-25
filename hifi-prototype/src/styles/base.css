@@ -287,6 +287,10 @@ code, pre, .mono {
 .side-row.context-active {
   background: var(--bg-hover);
 }
+/* 悬浮整行时给底色：一是列表行的常规反馈，二是让 ⋯/+ 的底色与行底色一致 */
+.side-row:hover {
+  background: var(--bg-hover);
+}
 .side-caret {
   flex: none;
   width: 20px;
@@ -326,16 +330,223 @@ code, pre, .mono {
   color: var(--text);
   font-weight: 600;
 }
-/* "当前"是上下文标记（我在哪个项目），不是位置高亮（我在哪一页） */
-.side-current-tag {
-  flex: none;
-  font-size: var(--fs-10);
-  padding: 1px 5px;
-  border-radius: var(--r-xs);
-  background: var(--bg-active);
-  color: var(--text-3);
-  font-weight: 600;
+/* 项目行的状态位与那里的项目图标（14px）同宽，替换时项目名不移动 */
+.side-item-label-btn .side-state {
+  --side-state-size: 14px;
 }
+/**
+ * 侧栏的三种提示（2026-09-25 用户口径，取代"行尾空心圈 + 实心点并排"的写法）。
+ *
+ * 形状即语义、位置固定、互不借用：
+ *  · **任务状态**（执行中 / 等待 / 受阻 / 待验收）→ 名称**前面**的图标位 `.side-state`；
+ *  · **未读**（项目 / 房间 / 私信）→ 行尾小蓝点 `.side-unread-dot`；
+ *  · **事项数量**（文件与 Git / 待我处理）→ 行尾数字徽标 `.side-badge`。
+ *
+ * 两种行尾提示共用同一个 `.side-marks` 区域，区域宽度固定：出现、消失或
+ * 数字变化都不会把名称挤来挤去（用户要求"不造成明显布局跳动"）。
+ */
+/* 名称前的状态位：固定 13px 见方。开转/停转、有状态/没状态占同样大小，
+   所以房间名的横坐标恒定。项目行那一格默认放 14px 的项目图标，
+   用 --side-state-size 跟着改成 14px，替换时名称同样不移动。 */
+.side-state {
+  flex: none;
+  width: var(--side-state-size, 13px);
+  height: var(--side-state-size, 13px);
+  display: grid;
+  place-items: center;
+}
+/* 等待 / 受阻 / 待验收：低饱和琥珀色，靠图标形状区分（手 / 八角 / 眼睛）。
+   这里**不用 --danger**：当前数据模型里 TaskStatus 没有失败态、种子也没有
+   FAILED/INTERRUPTED 运行，把"受阻"一律画成红色等于把"等一个条件"说成"严重故障"。
+   红色只留给数据确实表示失败的情况（届时按数据驱动另加判断，见施工报告）。 */
+.side-state.alert {
+  color: var(--warning);
+}
+/* 只有**实际执行中**才转（等待/受阻/待验收都是静态的）。颜色用主题强调色，
+   不因为参考图是青绿色就新增一套主题颜色。 */
+.side-state.running {
+  color: var(--accent);
+  animation: side-spin 0.9s linear infinite;
+}
+@keyframes side-spin {
+  to { transform: rotate(360deg); }
+}
+/* 减少动画：停转，但形状与颜色仍在 —— 状态提示不能因为"别动"就消失 */
+@media (prefers-reduced-motion: reduce) {
+  .side-state.running {
+    animation: none;
+  }
+}
+
+/* 行尾统一提示区（固定宽度：有没有提示都占位） */
+.side-marks {
+  flex: none;
+  min-width: 22px;
+  display: flex;
+  align-items: center;
+  /* 数字徽标按**右缘**对齐：位数从 1 位变到 99+ 也不会左右错位 */
+  justify-content: flex-end;
+}
+/* 小点单独在区域里时居中（auto 外边距把剩余空间分到两侧） */
+.side-marks > .side-unread-dot {
+  margin: 0 auto;
+}
+
+/* 未读：一枚小蓝点（信息色）。不再用 --danger，也不恢复成数字徽标 ——
+   数字进 tooltip 与 aria-label，视觉上只回答"有没有"。 */
+.side-unread-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--info);
+}
+
+/* 数字徽标：「文件与 Git」的中性色与「待我处理」的琥珀色**共用**同一套
+   高度 / 圆角 / 字号 / 内边距 / 最小宽度，只换颜色。徽标里只有数字。 */
+.side-badge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.side-badge.neutral {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+}
+.side-badge.warn {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+/* 房间行的空图标位：只占宽度、不画字形，保证房间名与归档房间/项目名的列对齐 */
+.side-icon-slot {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+/* 第十七批 §六：项目行末尾的 ⋯ 与 +。
+   默认隐藏、**位置恒定占位**，项目行 hover、键盘焦点进入、菜单打开时显示 ——
+   显示/隐藏不会挤动名称、未读点或状态标志（用户要求的"不造成布局跳动"）。 */
+/** 项目行的 ⋯ / +：**绝对定位**在行右端（2026-09-25 用户复核 §1/§2）。
+ *
+ *  为什么绝对定位：未读小点要固定在最右侧，而这两个按钮只在悬浮时出现 ——
+ *  如果它们参与排版，未读点就会被挤到左边（实测偏左 61px，与一级入口的点不在
+ *  一条竖线上）。改成绝对定位后：
+ *   · 未读点永远停在"行右缘 − 8px 内边距 − 22px 提示区"这一条线上，与私信等
+ *     一级入口的点完全对齐；
+ *   · 悬浮时这两个按钮**盖在**未读点上（用户原话"可以被 + 和 … 覆盖过去"），
+ *     所以给整组一个不透明底色，正好是行悬浮时的底色，看不出补丁。
+ *
+ *  居中：两个按钮都是 22×22 的正方形，用 inline-flex 双向居中 + 0 内边距，
+ *  图标本身 14×14、笔画在 24 网格上左右上下对称，因此字符在按钮里是正的。
+ */
+.side-row {
+  position: relative;
+}
+.side-row-actions {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 1px;
+  /* 不给这一组加任何底色（2026-09-25 用户复核第三轮）：
+     页面底 #F2F8FB → 项目行选中/悬浮 #E8EEF3 → 按钮再来一层 #CDD5DF，三层叠在一起太脏。
+     现在按钮就是**行底色上的两个裸图标**，只有字形颜色变化（悬浮变深、打开态用强调色），
+     未读点按上一轮的规则在按钮出现时隐藏，所以也不需要底色去"盖"它。 */
+}
+
+.side-row-act {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+.side-row-act > svg {
+  display: block;
+  flex: none;
+}
+.side-row:hover .side-row-act,
+.side-row:focus-within .side-row-act,
+.side-row-act:focus-visible,
+.side-row-act.on {
+  opacity: 1;
+}
+/**
+ * 操作按钮出现时**把未读点藏起来**（2026-09-25 用户复核第二轮）。
+ *
+ * 上一次的做法是"让按钮盖住点"，但点在 DOM 里属于名称按钮、按钮是绝对定位的邻居，
+ * 实机上点会从 + 的笔画缝里透出来（用户截图：蓝点与 + 同时可见）。
+ * 按用户给的两种方案里更干净的一种办：**按钮一出现就隐藏这枚点**。
+ * 覆盖三种出现条件：鼠标悬浮、键盘聚焦、菜单打开（⋯ 带 `.on`）。
+ */
+.side-row:hover .side-marks,
+.side-row:focus-within .side-marks,
+.side-row:has(.side-row-act.on) .side-marks {
+  visibility: hidden;
+}
+/* 悬浮/聚焦**只改字形颜色，不加底色**（同上：去掉多余的那一层）。
+   两个按钮规则完全一致，所以 … 与 + 的呈现始终对称。 */
+.side-row-act:hover,
+.side-row-act:focus-visible {
+  background: transparent;
+  color: var(--text);
+}
+.side-row-act.active,
+.side-row-act.on {
+  color: var(--accent-text);
+}
+/* 没有悬浮能力的设备（触屏）：常驻可见，保证操作可被发现 */
+@media (hover: none) {
+  .side-row-act {
+    opacity: 1;
+  }
+}
+
+/* 统一私信页的项目筛选行 */
+.dm-scope-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.dm-scope-filter .select {
+  flex: 1;
+  min-width: 0;
+}
+/* 会话行里的项目归属：跨项目列表必须能认出"这是哪个项目的私信" */
+.dm-row-project {
+  color: var(--text-2);
+  font-weight: 550;
+}
+/* 归档管理：房间行 */
+.archive-row {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+}
+
 .side-empty {
   padding: 8px;
   font-size: var(--fs-12);
@@ -571,22 +782,28 @@ code, pre, .mono {
 /* 房间：缩进挂在所属项目下，并用左侧竖线明确"这是它的子项"，
    而不是和项目同级平铺（用户反馈"看不出房间属于当前项目"） */
 .side-item.sub {
-  padding-left: 22px;
+  /* 左内边距 13px（2026-09-25 第三轮末）：**子项名称与项目名同列**
+     （用户原话"子项名称和项目名是同一层缩进的"）。
+     算法：子项行 [margin-left 12 + padding-left 13 + 13px 状态位 + 8px 间距] = 项目名 x（54），
+     顺带把状态位落在项目图标那一列 —— 正好是用户给的参考图里的排布：
+     父行图标 / 子行图标共用一列，两行文字对齐，层级由箭头与行内文字大小表达。
+     项目区不画竖线（导轨与选中竖条都已删除），这里再用 padding 凑对齐。 */
+  padding-left: 13px;
+  /* 右侧不再为"项目行的操作区"预留槽位（2026-09-25 用户复核 §1）：
+     未读小点要**固定在最右侧**、与一级入口（私信等）的点同一条竖线 ——
+     统一取「行右缘 − 8px 内边距 − 22px 提示区」这唯一一套规则。
+     项目行的 ⋯/+ 改成绝对定位后不再占位，所以这里也回到 8px。 */
+  padding-right: 8px;
   font-size: var(--fs-12);
   margin-left: 12px;
   width: calc(100% - 12px);
 }
-.side-item.sub::after {
-  content: '';
-  position: absolute;
-  left: -1px;
-  top: 4px;
-  bottom: 4px;
-  width: 1px;
-  background: var(--border);
-}
-.side-item.sub.active::after {
-  background: var(--accent);
+/* 选中态的分工（2026-09-25 第二轮）：**子项不画左侧强调竖条**。
+   子项是嵌套列表，选中已经有"渐变底 + 强调色文字 600"三件套，再挂一条竖条就是用户说的
+   "名字前面的 |"。顶部/底部那些平铺的功能入口保持原样（见 `.side-item.active::before`），
+   两边规则不同是有意的：一层平铺的导航靠竖条标位置，嵌套列表靠缩进 + 底色。 */
+.side-item.sub.active::before {
+  content: none;
 }
 .side-item.archived {
   opacity: 0.62;
@@ -638,12 +855,51 @@ code, pre, .mono {
   min-height: 0;
   overflow-y: auto;
   padding: 20px 24px 40px;
+  /* 上内边距挪到第一个子元素上（见下面的 `.page > :first-child`）。
+     原因：sticky 的粘附位置按**内容盒**算，容器自己的 padding-top 会在吸顶行上方
+     留出一条 20px 的"漏缝"，滚动时半行内容从缝里透出来（视觉复核实测 3 张滚动图都有）。
+     版式不变：首个子元素补同样的 margin-top。 */
+  padding-top: 0;
 }
 .page.narrow {
   padding: 20px 24px 40px;
+  padding-top: 0;
   max-width: 1080px;
   margin: 0 auto;
   width: 100%;
+}
+
+/**
+ * 吸顶（第十七批复核 §8，第二轮修正）：只让**页签行 / 筛选行**吸顶。
+ *
+ * 滚动容器是 `.page`（内部滚动），所以给页面内的那两类行加 `position: sticky; top: 0`。
+ *
+ * 第一版把 `.page-head`（大标题 + 主操作）也设成了 sticky，实机滚动起来问题很明显：
+ * 标题块本身占掉近百像素，吸顶后与它下面的 `.thread-tabs` **一起停在顶部互相叠**，
+ * 一屏可用高度被吃掉两块 —— 用户要求"自己滚动一下看几张图"，看到的就是这个。
+ * 现在：标题块正常滚走，只留**页签/筛选**这一条常驻（它才是滚动中真正要一直能用的东西）。
+ */
+.page > :first-child {
+  margin-top: 20px;
+}
+
+.page > .thread-tabs,
+.page > .page-filters {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+/**
+ * 两行都吸顶会**互相叠**（实测：文件与 Git 页里页签与筛选行都停在 top=58、44px 高的一行被压在 35px 的另一行下面）。
+ * 所以按"这一页真正要常驻什么"分工：
+ *   · 有页签的页面（文件与 Git）→ **只让页签吸顶**，筛选/工具行跟着内容滚走；
+ *   · 没有页签的列表页（看板 / 搜索与收藏 / 归档管理）→ 筛选行吸顶。
+ */
+.page > .page-filters:has(+ .thread-tabs) {
+  position: static;
+  box-shadow: none;
 }
 
 .page-head {

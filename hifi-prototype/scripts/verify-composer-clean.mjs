@@ -47,7 +47,24 @@ await ev(`window.zhongshuo?.window.show()`);
 await sleep(400);
 /* 整页重载拿干净会话：本脚本连的是常驻 Electron 窗口，前序脚本可能留下
    "讨论模式"或某个未关闭的菜单（实测过一次：`menus.at(-1)` 抓到的是侧栏项目菜单，
-   导致误报）。重载后 composer 回到任务模式，断言才有确定性。 */
+   导致误报）。重载后 composer 回到任务模式，断言才有确定性。
+   2026-09-25 补充：草稿现在会**持久化**（用户要求"刷新后仅记录意图还在"），
+   前序脚本输入过的正文与 @（例如 verify-review-fixes 的"预算推导测试" + @全体）
+   会活过 reload，把"空输入区 = AUTO、不常驻预算 chip"的断言打成红的 —— 实测发现的。
+   所以这里在重载前显式清掉本页两个输入框的草稿：断言的前置条件**自建**，
+   不指望前序脚本替我们收拾。 */
+await ev(`
+  (() => {
+    try {
+      const key = 'zhongshuo.drafts.v2';
+      const all = JSON.parse(localStorage.getItem(key) ?? '{}');
+      delete all['room:room_dev_hall'];
+      delete all['thread:thread_t12'];
+      localStorage.setItem(key, JSON.stringify(all));
+    } catch { /* 存储不可用时按无草稿处理 */ }
+    return true;
+  })()
+`);
 await ev(`location.hash='#/project/proj_zs_01/room/room_dev_hall?thread=thread_t12&recovery=0'; location.reload(); true`);
 await sleep(3000);
 

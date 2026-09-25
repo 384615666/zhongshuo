@@ -18,6 +18,8 @@ import { useEffect, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { Avatar, Switch, Tag } from '../components/ui';
 import { useStore, toast, setAppSetting, setTheme, resetStore } from '../data/store';
+import { ArchiveManager } from './ArchivePage';
+import { restoreRemovedProject } from '../data/actions-project';
 import {
   exportDiagnostics, generatePairingCode, revokeDevice, rotateToken, testAdminBoundary,
 } from '../data/actions';
@@ -30,13 +32,16 @@ import type { AppState, ErrorCode } from '../data/types';
    分区定义（只有应用级）
    ============================================================ */
 
-export type AppSettingsSection = 'general' | 'runtime' | 'lan' | 'diagnostics';
+export type AppSettingsSection = 'general' | 'runtime' | 'lan' | 'archive' | 'diagnostics';
 
 /** 旧写法 → 新分区。第十六批把 errors 并入 diagnostics，其余保持应用分区。 */
 const SECTION_ALIASES: Record<string, AppSettingsSection> = {
   general: 'general',
   runtime: 'runtime',
   lan: 'lan',
+  // 第十七批：归档管理成为应用设置里的正式入口（与 /archive、项目 ⋯ 共用同一页面）
+  archive: 'archive',
+  archived: 'archive',
   diagnostics: 'diagnostics',
   // 旧写法兼容
   app: 'general',
@@ -52,6 +57,7 @@ const NAV = [
   { key: 'general' as const, label: '通用', icon: 'settings', hint: '启动、托盘、数据存放位置' },
   { key: 'runtime' as const, label: '执行工具', icon: 'cpu', hint: 'Codex / Claude CLI 的检测、登录与认证状态' },
   { key: 'lan' as const, label: '设备与局域网', icon: 'monitor', hint: '配对局域网设备、吊销设备、轮换令牌' },
+  { key: 'archive' as const, label: '归档管理', icon: 'archive', hint: '已归档的项目与房间：查看与恢复' },
   { key: 'diagnostics' as const, label: '诊断与帮助', icon: 'activity', hint: '导出诊断包、最近的运行记录、错误码速查' },
 ];
 
@@ -67,6 +73,44 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
 /* ============================================================
    通用（应用级）
    ============================================================ */
+
+/**
+ * 已移除的项目 + 重新关联（第十七批 §七）。
+ *
+ * 放在应用设置里，是为了让"移除"**不是不可逆**的：数据一直都在，
+ * 只是在应用里解除了关联；这里按原目录重新关联，历史与任务记录原样保留。
+ */
+function RemovedProjects() {
+  const s = useStore((x) => x);
+  const removed = s.projects.filter((p) => p.removedAt);
+  if (removed.length === 0) return null;
+  return (
+    <>
+      <div className="section-title">
+        已移除的项目<span className="count">{removed.length}</span>
+      </div>
+      <div className="small muted" style={{ lineHeight: 1.7, marginBottom: 8 }}>
+        「移除」只是在应用里解除关联：磁盘文件、聊天记录、任务与成果都还在。
+        重新关联后这个项目会回到侧栏，沿用原来的历史。
+      </div>
+      {removed.map((p) => (
+        <div key={p.id} className="row tight" style={{ padding: '6px 0' }}>
+          <Icon name="folder" size={13} className="faint" />
+          <span>{p.displayName}</span>
+          <span className="small faint truncate">{p.rootPath}</span>
+          <div className="spacer" />
+          <button
+            className="btn sm"
+            title="按原目录重新关联（不复制、不重建，历史与任务记录保持不变）"
+            onClick={() => restoreRemovedProject(p.id)}
+          >
+            <Icon name="refresh" size={12} /> 重新关联
+          </button>
+        </div>
+      ))}
+    </>
+  );
+}
 
 function SectionGeneral({ s }: { s: AppState }) {
   const app = s.appSettings;
@@ -153,6 +197,8 @@ function SectionGeneral({ s }: { s: AppState }) {
             <Avatar name="我" color="var(--m-human)" size={28} round />
           </div>
         </div>
+
+        <RemovedProjects />
 
         {/* 危险/破坏性动作就地降权，避免和上面的普通开关混在一起 */}
         <div className="settings-advanced" style={{ marginTop: 14 }}>
@@ -513,6 +559,16 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
             ) : null}
 
             {section === 'lan' ? <SectionLan /> : null}
+            {section === 'archive' ? (
+              <>
+                <SectionHead
+                  title="归档管理"
+                  sub="已归档的项目与房间都保留只读历史，随时可以恢复；与侧栏「项目 ⋯ → 归档管理」是同一个页面。"
+                />
+                {/* 与 /archive 共用同一个主体：不做第二套归档页面、也不维护第二份状态 */}
+                <ArchiveManager query={{}} />
+              </>
+            ) : null}
             {section === 'diagnostics' ? <SectionDiagnostics expanded={errorsExpanded} /> : null}
           </div>
         </div>

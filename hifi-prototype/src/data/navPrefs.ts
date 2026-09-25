@@ -21,6 +21,7 @@ export function defaultNavPrefs(activeProjectId?: string): NavigationPreferences
     activeProjectId,
     visibleProjectIds: activeProjectId ? [activeProjectId] : [],
     expandedProjectIds: activeProjectId ? [activeProjectId] : [],
+    pinnedProjectIds: [],
     fileGitTabs: {},
   };
 }
@@ -67,6 +68,14 @@ export function normalizeNavPrefs(
     if (typeof id === 'string' && valid.has(id) && !seenExpanded.has(id)) {
       seenExpanded.add(id);
       base.expandedProjectIds.push(id);
+    }
+  }
+  // 置顶顺序：同样要校验 ID 与去重（localStorage 里可能残留已删项目的 ID）
+  const seenPinned = new Set<string>();
+  for (const id of Array.isArray(r.pinnedProjectIds) ? r.pinnedProjectIds : []) {
+    if (typeof id === 'string' && valid.has(id) && !seenPinned.has(id)) {
+      seenPinned.add(id);
+      base.pinnedProjectIds.push(id);
     }
   }
   if (r.fileGitTabs && typeof r.fileGitTabs === 'object') {
@@ -123,6 +132,7 @@ export function applyNavPrefs(s: AppState, p: NavigationPreferences): AppState {
     activeProjectId: norm.activeProjectId ?? s.activeProjectId,
     visibleProjectIds: norm.visibleProjectIds,
     expandedProjectIds: norm.expandedProjectIds,
+    pinnedProjectIds: norm.pinnedProjectIds,
     fileGitTabs: norm.fileGitTabs,
   };
 }

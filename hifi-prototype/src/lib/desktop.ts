@@ -23,6 +23,8 @@ export interface DesktopBridge {
   };
   pickDirectory: () => Promise<string | null>;
   revealPath: (p: string) => Promise<boolean>;
+  /** 用系统默认程序打开路径；返回 null 表示宿主没提供这个能力 */
+  openPath: (p: string) => Promise<{ ok: boolean; reason?: string } | null>;
   openExternal: (url: string) => Promise<boolean>;
   reportRuntime: (summary: { runningTasks: number; runningTurns: number; detail?: string }) => Promise<boolean>;
 }
@@ -83,4 +85,14 @@ export async function revealPath(p: string): Promise<boolean> {
   const d = desktop();
   if (!d) return false;
   return d.revealPath(p);
+}
+
+/**
+ * 用系统默认程序打开一个目录（"在资源管理器中打开项目目录"）。
+ * 浏览器宿主没有原生能力 → 返回 null，由调用方显示限制说明，不假装打开成功。
+ */
+export async function openPath(p: string): Promise<{ ok: boolean; reason?: string } | null> {
+  const d = desktop();
+  if (!d || typeof d.openPath !== 'function') return null;
+  return d.openPath(p);
 }

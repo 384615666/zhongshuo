@@ -222,7 +222,8 @@ check('权限请求与验收独立并存（不合并成一条）', activity?.有
 const badge = await c.ev(`
   (() => {
     const foot = document.querySelector('.sidebar-foot .side-item');
-    const n = foot?.querySelector('.tag')?.innerText.trim();
+    // 用例迁移（2026-09-25）：侧栏角标改为同规格数字徽标 .side-badge；去重口径不变
+    const n = foot?.querySelector('.side-badge')?.innerText.trim();
     const others = [...document.querySelectorAll('.card.tight')].filter(
       x => x.innerText.includes('需要动作') && !x.innerText.includes('任务交付验收'),
     ).length;
@@ -549,18 +550,33 @@ await c.ev(`
 await sleep(700);
 await c.ev(`(() => { document.body.click(); return true; })()`);
 await sleep(600);
+/* 用例迁移（第十七批）：用户改了项目行的点击语义 ——
+   点项目名/行内空白**只展开收起**，显式切换当前项目改到**顶栏项目管理菜单**里点项目名。
+   这里断言两件事：① 顶栏菜单点项目名能切焦点；② 点侧栏项目行**不会**切焦点。 */
+await c.ev(`(() => { document.querySelector('.titlebar-project-btn')?.click(); return true; })()`);
+await sleep(600);
 await c.ev(`
   (() => {
-    const proj = [...document.querySelectorAll('.sidebar .side-item-label-btn')]
+    const name = [...document.querySelectorAll('.menu-project-name')]
       .find(e => e.innerText.includes('legacy-docs'));
-    if (proj) proj.click();
-    return !!proj;
+    if (name) name.click();
+    return !!name;
   })()
 `);
 await sleep(1800);
-// 焦点切换后确认顶栏真的切了（避免"点了但没切"被后续断言误判成功能缺陷）
-const focused = await c.ev(`document.querySelector('.side-project-picker-name')?.innerText.trim()`);
-check('侧栏点项目名切换当前项目（显示与焦点分离）', focused === 'legacy-docs', `当前项目=${focused}`);
+const focused = await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`);
+// 再点**另一个**项目的行：只应展开/收起，绝不切换当前项目（第十七批新语义）
+await c.ev(`(() => {
+  const row = [...document.querySelectorAll('.sidebar .side-item-label-btn')]
+    .find(e => e.innerText.includes('众说'));
+  if (row) row.click();
+  return !!row;
+})()`);
+await sleep(900);
+const afterRowClick = await c.ev(`document.querySelector('.titlebar-proj-name')?.innerText.trim()`);
+check('切换当前项目走顶栏项目管理菜单；点项目行只展开/收起（不切当前项目）',
+  focused === 'legacy-docs' && afterRowClick === 'legacy-docs',
+  `菜单切换后=${focused} 点另一个项目行后=${afterRowClick}`);
 
 // 切到非 Git 项目 legacy-docs 后，进入**它自己的**项目设置页。
 // 用例更新（第十六批 §17.8）：项目设置路由带 projectId，不再靠"当前项目"。

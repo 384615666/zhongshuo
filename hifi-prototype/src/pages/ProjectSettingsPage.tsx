@@ -23,6 +23,7 @@ import { lockOfProject } from '../data/selectors';
 import { setTaskReviewEnabled } from '../data/actions-delivery';
 import { setWriteConcurrencyPolicy, stopAll, updateLoopSettings } from '../data/actions';
 import { navigate } from '../lib/router';
+import { archiveProject, unfinishedTasksOfProject, updateProjectInfo } from '../data/actions-project';
 
 /** 分节锚点：只用于滚动定位，不生成第二张页面（§17.8 兼容表） */
 export type ProjectSettingsAnchor = 'collab' | 'write' | 'delivery';
@@ -158,10 +159,20 @@ export function ProjectSettingsPage({
 }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === projectId);
+  /** 项目信息草稿（与 ⋯ 菜单弹窗共用 updateProjectInfo，这里只是另一处入口） */
+  const [nameDraft, setNameDraft] = useState('');
+  const [descDraft, setDescDraft] = useState('');
 
   const anchor = anchorOf(query.anchor);
   /** 项目全停的确认弹窗（第二十六批第二轮从侧栏底部移来） */
   const [stopAllOpen, setStopAllOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  useEffect(() => {
+    if (!project) return;
+    setNameDraft(project.displayName);
+    setDescDraft(project.description ?? '');
+    // 只在项目切换（或保存后 revision 变化）时同步，避免输入被覆盖
+  }, [project?.id, project?.revision]);
 
   /**
    * 锚点只用于**滚动定位分节**（§17.8 兼容表：anchor 不产生第二张页面）。
@@ -226,6 +237,8 @@ export function ProjectSettingsPage({
     const room = th ? s.rooms.find((r) => r.id === th.roomId) : undefined;
     return room ? room.projectId === project.id : false;
   }).length;
+  /** 归档前要检查的"未结束工作"：与房间归档同一口径（ACTIVE / WAITING_USER / BLOCKED） */
+  const unfinishedCount = unfinishedTasksOfProject(s, project.id).length;
 
   return (
     <div className="main">
@@ -235,6 +248,46 @@ export function ProjectSettingsPage({
             {/* 标题含项目名 + 真实路径；不放项目下拉（切项目走顶栏/侧栏） */}
             <div className="page-title">{project.displayName} · 项目设置</div>
             <div className="page-sub mono">{project.rootPath}</div>
+          </div>
+        </div>
+
+        {/* 项目信息（第十七批 §七）：与项目 ⋯ →「编辑项目信息…」共用同一个动作
+            updateProjectInfo（同一份数据、同一套校验）。明确写清不重命名磁盘目录。 */}
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <div className="panel-title"><Icon name="folder" size={13} /> 项目信息</div>
+          <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 220px', minWidth: 180 }}>
+              <label className="field-label">显示名称</label>
+              <input
+                className="input"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                placeholder="项目显示名"
+              />
+            </div>
+            <div className="field" style={{ flex: '2 1 280px', minWidth: 200 }}>
+              <label className="field-label">描述（可选）</label>
+              <input
+                className="input"
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                placeholder="例如：订单表回填与数据修复"
+              />
+            </div>
+            <button
+              className="btn sm"
+              disabled={!nameDraft.trim() || (nameDraft === project.displayName && descDraft === (project.description ?? ''))}
+              onClick={() => {
+                if (updateProjectInfo(project.id, { displayName: nameDraft, description: descDraft })) {
+                  setNameDraft(nameDraft.trim());
+                }
+              }}
+            >
+              保存
+            </button>
+          </div>
+          <div className="small faint" style={{ marginTop: 6 }}>
+            只改应用里的显示信息，<strong>不会</strong>重命名磁盘目录（{project.rootPath}）。
           </div>
         </div>
 
@@ -455,6 +508,24 @@ export function ProjectSettingsPage({
               高级操作
               <span className="small faint">停止是不可逆的动作，请确认后再用</span>
             </div>
+            {/* 归档项目（第十七批 §十）：与项目 ⋯ 菜单里的归档入口复用同一流程 archiveProject，
+                有未结束的工作时拒绝并给出查看入口 —— 不直接强停、不丢任务。 */}
+            <div className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div className="strong" style={{ fontSize: 12 }}>归档项目</div>
+                <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
+                  退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。
+                  单独归档过的房间不会跟着恢复，恢复项目也不会重放旧任务。
+                  {unfinishedCount > 0 ? (
+                    <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束，需要先处理。</>
+                  ) : null}
+                </div>
+              </div>
+              <button className="btn sm" onClick={() => setArchiveOpen(true)} disabled={Boolean(project.archivedAt)}>
+                <Icon name="archive" size={12} /> {project.archivedAt ? '已归档' : '归档项目'}
+              </button>
+            </div>
+
             <div className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0 }}>
                 <div className="strong" style={{ fontSize: 12 }}>停止这个项目的全部任务</div>
@@ -470,6 +541,45 @@ export function ProjectSettingsPage({
           </div>
         </div>
       </div>
+
+      {archiveOpen && project ? (
+        <Modal
+          size="sm"
+          title={`归档项目「${project.displayName}」`}
+          onClose={() => setArchiveOpen(false)}
+          footer={
+            <>
+              <div className="spacer" />
+              <button className="btn" onClick={() => setArchiveOpen(false)}>取消</button>
+              <button
+                className="btn primary"
+                disabled={unfinishedCount > 0}
+                onClick={() => {
+                  const res = archiveProject(project.id);
+                  setArchiveOpen(false);
+                  // 归档的就是当前正在看的项目：落到归档管理（它现在的位置），不留失效路由
+                  if (res === 'archived') navigate(`/archive?project=${project.id}`);
+                }}
+              >
+                归档项目
+              </button>
+            </>
+          }
+        >
+          {unfinishedCount > 0 ? (
+            <div className="panel warning">
+              <div className="panel-title"><Icon name="alert-triangle" size={13} /> 还有工作没结束</div>
+              本项目有 {unfinishedCount} 个未结束的工作。归档不会强停它们 ——
+              请先在房间或任务看板处理，或改用「项目全停」再归档。
+            </div>
+          ) : (
+            <div className="small muted" style={{ lineHeight: 1.75 }}>
+              归档后项目退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。
+              单独归档过的房间不会跟着恢复；恢复项目也不会重放旧的待派发任务。磁盘文件不受影响。
+            </div>
+          )}
+        </Modal>
+      ) : null}
 
       {stopAllOpen ? (
         <Modal

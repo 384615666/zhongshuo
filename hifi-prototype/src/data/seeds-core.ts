@@ -1280,6 +1280,7 @@ export const initialState: AppState = {
    */
   visibleProjectIds: [I.P_ZS],
   expandedProjectIds: [I.P_ZS],
+  pinnedProjectIds: [],
   fileGitTabs: {},
   runtimeInstallations,
   profiles: [
@@ -1343,6 +1344,19 @@ export const initialState: AppState = {
       lastMessageAt: NOW - min(60 * 24 * 7),
       archivedAt: NOW - min(60 * 24 * 6),
       unread: 0,
+    },
+    /* 第十七批：另一个项目的私信。
+       统一私信入口要能证明两件事：跨项目会话并列展示、**两个项目里同名的 Codex
+       是两条独立会话**（按 conversationId/projectId 隔离，不合并）。 */
+    {
+      id: 'dm_bf_1',
+      projectId: I.P_BACKFILL,
+      title: 'Codex · 回填口径确认',
+      memberIds: [I.M_BF_CODEX],
+      threadId: 'dm_thread_bf_1',
+      createdAt: NOW - min(60 * 20),
+      lastMessageAt: NOW - min(60 * 5),
+      unread: 1,
     },
   ],
   messages,

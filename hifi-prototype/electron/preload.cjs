@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('zhongshuo', {
   /** 原生目录选择器（§8.2） */
   pickDirectory: () => ipcRenderer.invoke('zs:pick-directory'),
   revealPath: (p) => ipcRenderer.invoke('zs:reveal-path', p),
+  /** 用系统默认程序打开路径（目录/文件）；返回 {ok, reason}，不猜结果 */
+  openPath: (p) => ipcRenderer.invoke('zs:open-path', p),
   openExternal: (url) => ipcRenderer.invoke('zs:open-external', url),
 
   /** 把运行态摘要同步给主进程，供托盘提示与退出确认使用 */

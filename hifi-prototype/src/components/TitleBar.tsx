@@ -37,10 +37,16 @@ export function TitleBar({
   sidebarOpen,
   onToggleSidebar,
   onOpenRecovery,
+  onOpenProjectMenu,
+  projectMenuOpen,
 }: {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenRecovery: () => void;
+  /** 项目管理菜单是否已展开（用于 aria-expanded 与"打开态"底色） */
+  projectMenuOpen: boolean;
+  /** 打开项目管理菜单（第十七批：项目选择器从侧栏移到顶栏，锚点由调用方按按钮位置算） */
+  onOpenProjectMenu: (rect: DOMRect) => void;
 }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === s.activeProjectId) ?? s.projects[0];
@@ -84,28 +90,37 @@ export function TitleBar({
         <Icon name="panel-left" size={15} />
       </button>
 
+      {/* 第十七批 §二：原来的"软件名称 + 描述"整段换成**项目管理**入口 ——
+          项目选择器从侧栏顶部搬到这里，并且按钮本身就显示当前项目名（不能只有一个
+          "项目管理"的固定文字）。侧栏折叠后这个入口依然在，所以折叠状态不再需要
+          另一套"当前项目"展示（原来那段 `.titlebar-project` 已删除）。
+          打开后仍是同一个菜单：搜索、切换当前项目、勾选侧栏显示、打开文件夹添加项目。 */}
       <div className="titlebar-left">
-        <span className="brand-mark" style={{ width: 18, height: 18, fontSize: 10 }}>众</span>
-        <span className="titlebar-app">众说</span>
-        <span className="titlebar-sep" />
-        {/*
-          侧栏收起时，把当前项目显示在这里 —— 否则用户看不到"我现在在哪个项目"，
-          而切换项目的入口（侧栏顶部的选择器）也一起被收走了。
-          侧栏展开时项目选择器就在侧栏顶部，这里就不再重复一遍。
-        */}
-        {!sidebarOpen && project ? (
-          <button
-            className="titlebar-project"
-            title={`当前项目：${project.displayName}（${project.rootPath}）— 展开侧栏可切换`}
-            onClick={onToggleSidebar}
-          >
-            <Icon name="folder" size={12} />
-            <span className="strong">{project.displayName}</span>
-            {project.isGit ? <Tag plain icon="git-branch">{project.gitBranch}</Tag> : null}
-          </button>
-        ) : (
-          <span className="titlebar-sub">本地项目群聊多 Agent 协同工作台</span>
-        )}
+        <button
+          className={`titlebar-project-btn${projectMenuOpen ? ' open' : ''}`}
+          onClick={(e) => onOpenProjectMenu((e.currentTarget as HTMLElement).getBoundingClientRect())}
+          title={
+            project
+              ? `项目管理：切换当前项目 / 侧栏显示 / 打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
+              : '项目管理：打开文件夹添加项目'
+          }
+          aria-haspopup="menu"
+          aria-expanded={projectMenuOpen}
+        >
+          <Icon
+            name={project?.status === 'missing' ? 'alert-triangle' : 'folder'}
+            size={13}
+            className={project?.status === 'missing' ? 'warn-icon' : 'faint'}
+          />
+          <span className="titlebar-proj-title">项目管理</span>
+          {/* 分支芯片放在"项目管理"一侧：用户给的字面格式是「项目管理 · 当前项目名 ▾」，
+              项目名后面必须紧跟箭头（视觉复核指出过"箭头没紧跟项目名"） */}
+          {project?.isGit ? <Tag plain icon="git-branch">{project.gitBranch}</Tag> : null}
+          <span className="titlebar-proj-sep">·</span>
+          <span className="strong titlebar-proj-name">{project?.displayName ?? '未选择项目'}</span>
+          {project?.status === 'missing' ? <Tag tone="danger">目录失效</Tag> : null}
+          <Icon name="chevron-down" size={12} className="faint" />
+        </button>
       </div>
 
       {/* 拖动区：双击最大化/还原 */}

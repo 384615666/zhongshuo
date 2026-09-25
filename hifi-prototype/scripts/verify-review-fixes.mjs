@@ -272,6 +272,23 @@ check(
 );
 await ev(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); true`);
 await sleep(250);
+/* 收尾：清掉本步输入的草稿（"预算推导测试" + @全体）。
+   2026-09-25 起，草稿**持久化到 localStorage**（用户要求"刷新后仅记录意图还在"），
+   于是本脚本留下的草稿会活过 reload，把后面"空输入区 = AUTO 不常驻预算 chip"的
+   用例（verify-composer-clean）打成红的 —— 实测就是这么发现的。
+   各用例的前置条件由各自掌握：这里清掉自己造的那一份。 */
+await ev(`
+  (() => {
+    try {
+      const key = 'zhongshuo.drafts.v2';
+      const all = JSON.parse(localStorage.getItem(key) ?? '{}');
+      delete all['room:room_dev_hall'];
+      localStorage.setItem(key, JSON.stringify(all));
+    } catch { /* 存储不可用时不必清理 */ }
+    return true;
+  })()
+`);
+await sleep(200);
 
 /* ============ 指控 4：E9 六项 M3 入口缺 3 个 ============ */
 // 文件选区评论 + 附件七类（房间 → 文件 tab）

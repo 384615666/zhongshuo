@@ -256,8 +256,10 @@ const badge = await ev(`
   (() => {
     const row = [...document.querySelectorAll('.sidebar .side-item')]
       .find(e => e.querySelector('.side-item-label')?.innerText.trim() === '文件与 Git');
-    // 角标是行内唯一的 .tag（图标 badge），取它的数字
-    const txt = row?.querySelector('.tag')?.innerText.trim() ?? null;
+    /* 用例迁移（2026-09-25 侧栏提示统一）：行尾角标从 Tag（图标 + 数字）改成
+       同规格数字徽标 .side-badge（只有数字）。这里断言的**语义**没变：
+       角标 = 工作区未提交改动数，且不含任何审批语义。 */
+    const txt = row?.querySelector('.side-badge')?.innerText.trim() ?? null;
     return { 找到入口: !!row, 角标: txt === null ? null : Number(txt) };
   })()
 `);

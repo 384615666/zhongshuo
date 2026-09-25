@@ -66,6 +66,22 @@ export function submitMessage(input: {
 }): { threadId: string; taskId?: string } {
   const s0 = getState();
 
+  /**
+   * 第十七批（§十）：**归档项目 / 归档房间是只读的** —— 不能发消息、建任务、被调度唤醒。
+   * 守卫写在写入路径上（不是只把按钮禁用）：任何入口（主池、任务串、插件式调用）
+   * 都要经过这里，避免"界面禁用了但状态仍能被改"。
+   */
+  const targetRoom = s0.rooms.find((r) => r.id === input.target.roomId);
+  const targetProject = s0.projects.find((p) => p.id === targetRoom?.projectId);
+  if (targetProject?.archivedAt) {
+    toast(`「${targetProject.displayName}」已归档：只读，不能发消息或创建任务。需要继续请先恢复项目`, 'error');
+    return { threadId: input.target.threadId ?? '' };
+  }
+  if (targetRoom?.archivedAt) {
+    toast('这个房间已归档：只读，不能发消息或创建任务。需要继续请先取消归档', 'error');
+    return { threadId: input.target.threadId ?? '' };
+  }
+
   // RT-01：同一 commandId 重复提交返回相同逻辑结果，不创建第二个任务
   // （仅记录同样带 commandId 进留痕，所以重复点击也不会写出第二条记录）
   const existing = s0.ui.writeLog.find((w) => w.detail.includes(input.commandId));
@@ -424,6 +440,26 @@ export function submitDmMessage(input: {
    阅读状态：只改人的阅读偏好，绝不触发模型（TH-11、§15.5）
    ============================================================ */
 
+/**
+ * 私信会话已读（第十七批）。
+ *
+ * 私信的未读此前是**只读字段**：只有"发送消息"会把 unread 清零，
+ * 打开会话、读过消息都不清 —— 统一私信入口要用一枚小蓝点表示"有未读"，
+ * 点永远不会消失就成了假提示（红点/蓝点必须能被消耗掉）。这里补上与房间一致的规则：
+ * 打开该会话即标记已读，并留痕（`dm.markRead`）。
+ */
+export function markDmRead(conversationId: string) {
+  const s = getState();
+  const dm = s.dms.find((d) => d.id === conversationId);
+  if (!dm || dm.unread === 0) return;
+  const before = dm.unread;
+  setState((st) => ({
+    ...st,
+    dms: st.dms.map((d) => (d.id === conversationId ? { ...d, unread: 0 } : d)),
+  }));
+  recordWrite('dm.markRead', `conversation=${conversationId} 未读 ${before} → 0（不唤醒任何成员）`);
+}
+
 export function markThreadRead(threadId: string) {
   const s = getState();
   const thread = s.threads.find((t) => t.id === threadId);
@@ -721,6 +757,12 @@ export function archiveRoom(roomId: string) {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   if (!room) return;
+  // 项目已归档时不允许再单独归档房间：项目只读已经覆盖了它，操作没有意义（§十）
+  const owner = s.projects.find((p) => p.id === room.projectId);
+  if (owner?.archivedAt) {
+    toast(`「${owner.displayName}」已整体归档，房间无需单独归档`, 'warn');
+    return;
+  }
   // §25.6：先检查所有根任务、子任务和待派发；有活跃工作时阻止归档并提供停止入口
   const active = s.tasks.filter((t) => t.roomId === roomId && ['ACTIVE', 'WAITING_USER', 'BLOCKED'].includes(t.status));
   if (active.length > 0) {
@@ -744,6 +786,17 @@ export function archiveRoom(roomId: string) {
  * 只能由用户显式继续某个任务。
  */
 export function unarchiveRoom(roomId: string) {
+  const s0 = getState();
+  const room0 = s0.rooms.find((r) => r.id === roomId);
+  const owner0 = s0.projects.find((p) => p.id === room0?.projectId);
+  /**
+   * 第十七批（§十）：**项目还归档着的时候，不能靠单独恢复房间绕过项目只读** ——
+   * 否则会出现"项目归档中，但某个房间又能发消息"的矛盾状态。引导先恢复项目。
+   */
+  if (owner0?.archivedAt) {
+    toast(`项目「${owner0.displayName}」仍在归档中：请先恢复项目，再单独恢复房间`, 'warn');
+    return;
+  }
   setState((s) => ({
     ...s,
     rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, archivedAt: undefined, revision: r.revision + 1 } : r)),

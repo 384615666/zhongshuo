@@ -118,6 +118,18 @@ export interface Project {
   revision: number;
   isGit: boolean;
   gitBranch?: string;
+  /** 项目描述（可编辑，只影响显示，不写磁盘；见 updateProjectInfo） */
+  description?: string;
+  /**
+   * 项目归档（第十七批 §八/§十）。
+   *
+   * 语义：**保留历史、退出日常项目树**，不是删除 —— 归档后其下房间不能发消息、
+   * 建任务或被调度唤醒；恢复项目时**原本单独归档的房间仍保持归档**（不动 room.archivedAt）。
+   * 与"隐藏"（只影响侧栏显示）和"移除"（从项目列表移除关联）是三件不同的事。
+   */
+  archivedAt?: number;
+  /** 项目移除：从应用项目列表移除关联，**不删除磁盘文件、不丢弃历史数据**；可在设置里重新关联 */
+  removedAt?: number;
   /**
    * 写入并发策略（v1.9 §14.1 / E20）。
    * single_writer 为默认：同一物理原目录最多 1 个受管理写入者。
@@ -1088,6 +1100,8 @@ export interface NavigationPreferences {
   activeProjectId?: string;
   visibleProjectIds: string[];
   expandedProjectIds: string[];
+  /** 置顶项目（有序）：排在项目列表前部。只影响顺序，不复制出第二个入口（§七） */
+  pinnedProjectIds: string[];
   /** 文件与 Git 合页的标签记忆，按 projectId 各存一份 */
   fileGitTabs: Record<string, 'files' | 'git'>;
 }
@@ -1097,6 +1111,8 @@ export interface AppState {
   /** 第十五批：侧栏可见项目（有序去重）。显示 ≠ 焦点，见 NavigationPreferences */
   visibleProjectIds: string[];
   expandedProjectIds: string[];
+  /** 置顶项目的顺序（§七：只影响排列，不复制出第二个入口；随导航偏好持久化） */
+  pinnedProjectIds: string[];
   fileGitTabs: Record<string, 'files' | 'git'>;
   runtimeInstallations: RuntimeInstallation[];
   profiles: AgentProfile[];

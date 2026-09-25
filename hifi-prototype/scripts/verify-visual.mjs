@@ -190,14 +190,39 @@ const sideSel = await ev(`(() => {
     color: cs.color,
     fontWeight: cs.fontWeight,
     before: getComputedStyle(el, '::before').backgroundColor,
+    beforeContent: getComputedStyle(el, '::before').content,
+    isSub: el.classList.contains('sub'),
   };
 })()`);
 check('§5.1 侧栏当前房间：渐变选中 + accent-text + 600',
   sideSel?.found === true && sideSel?.hasGradient === true
   && sideSel?.color === 'rgb(29, 78, 216)' && Number(sideSel?.fontWeight) >= 600,
   JSON.stringify(sideSel));
-check('§5.1 选中项保留左侧 3px --accent 竖条',
-  sideSel?.before === 'rgb(37, 99, 235)', sideSel?.before);
+/* 用例更新（2026-09-25 第三轮，用户要求）：侧栏**项目区的嵌套列表不再挂左侧竖条**
+   （原话"我不需要名字前面的 | / 不需要名字前面的符号，你可以参图2的递进关系"），
+   选中只靠渐变底 + 强调色文字；层级只靠缩进（缩进量另有断言）。
+   规则没有消失，而是按区域分工 —— 所以下面一条**同时**断言平铺的功能入口仍保留竖条，
+   避免"删掉旧断言"等于把 §5.1 的选中态规则悄悄丢掉。 */
+check('§5.1 当前房间（嵌套子项）不挂左侧竖条：靠渐变底 + 强调色文字区分选中',
+  sideSel?.isSub === true && sideSel?.beforeContent === 'none',
+  JSON.stringify({ isSub: sideSel?.isSub, content: sideSel?.beforeContent, before: sideSel?.before }));
+
+await ev(`location.hash='/project/proj_zs_01/files?tab=git'; true`);
+await sleep(1200);
+const flatSel = await ev(`(() => {
+  const el = [...document.querySelectorAll('.sidebar-top .side-item')]
+    .find((e) => e.querySelector('.side-item-label')?.innerText.trim() === '文件与 Git');
+  if (!el || !el.classList.contains('active')) return { found: false };
+  const cs = getComputedStyle(el, '::before');
+  return { found: true, content: cs.content, bg: cs.backgroundColor, w: cs.width };
+})()`);
+check('§5.1 顶部/底部一层平铺的功能入口仍保留 3px --accent 竖条',
+  flatSel?.found === true && flatSel?.content === '""'
+  && flatSel?.bg === 'rgb(37, 99, 235)' && flatSel?.w === '3px',
+  JSON.stringify(flatSel));
+// 回到房间页：后面的页签/布局断言都以前提页面状态为准
+await ev(`location.hash='/project/proj_zs_01/room/room_dev_hall?recovery=0'; true`);
+await sleep(1300);
 
 /* 上下文（当前项目）与位置（当前页）必须可分：上下文浅底无竖条。
    注意类名挂在 .side-row 上（不是 .side-item）—— 按实际 DOM 选择，不按猜测。 */

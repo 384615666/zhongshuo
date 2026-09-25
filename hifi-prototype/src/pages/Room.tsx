@@ -168,6 +168,13 @@ export function RoomPage({
 }) {
   const s = useStore((x) => x);
   const room = roomOf(s, roomId);
+  /** 项目归档/移除 ⇒ 房间头部要标明整体只读（第十七批 §十；写入守卫另有 submitMessage 一层） */
+  const ownerProject = room ? s.projects.find((p) => p.id === room.projectId) : undefined;
+  const ownerReadOnly = ownerProject?.archivedAt
+    ? `项目已归档 · 只读`
+    : ownerProject?.removedAt
+      ? '项目已移除 · 只读'
+      : undefined;
   const [roomTab, setRoomTab] = useState<'chat' | 'tasks' | 'files'>('chat');
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 房间「⋯」菜单锚点（房间设置/成员/归档统一入口） */
@@ -255,6 +262,25 @@ export function RoomPage({
   }, [decision.hideNav]);
 
   /** 打开资源：openedFrom 由调用处给定（主池消息 vs 线程消息） */
+  /**
+   * 主动切换上下文 → 预览并排的那一侧跟着走（§3.3），并置位"期间切过上下文"（§3.4 第 2 条）。
+   *
+   * 只在**已经打开预览**且 `threadId` 真的发生变化时改写：
+   *  · 打开文件那一刻不改（否则会覆盖 §3.2"从主池打开就留在主池"的规则）；
+   *  · 从主池点开一条回复串时，卡片 `open()` 会主动改成 thread 侧并收起附件（L2）；
+   *  · L4 点「主池」→ 改成 pool 侧 → L3（主池＋文件）✓
+   */
+  const prevThreadIdRef = useRef<string | undefined>(threadId);
+  useEffect(() => {
+    const prev = prevThreadIdRef.current;
+    prevThreadIdRef.current = threadId;
+    if (prev === threadId) return;
+    if (!hasPreview) return;
+    setPreviewContextSide(threadId ? 'thread' : 'pool');
+    // §3.4 第 2 条：期间主动切过上下文 → 关闭预览时保留最新选择，不跳回旧任务
+    noteContextChanged();
+  }, [threadId, hasPreview]);
+
   const openResource = useCallback(
     (resourceId: string, revision: number | undefined, from?: ContextLocation) => {
       const target: ContextLocation = from ?? { target: context };
@@ -263,6 +289,15 @@ export function RoomPage({
     [context],
   );
 
+  /**
+   * 房间不存在（旧链接、归档后被删、刷新后内存态回种子）→ 明确的错误态。
+   *
+   * 位置很关键：必须在**所有 Hook 之后**。此前这个 early return 排在
+   * "跟踪 threadId 改预览侧"那对 useRef/useEffect 之前，于是"房间从有到无"时
+   * RoomPage 渲染的 Hook 变少 —— React 抛 "Rendered fewer hooks than expected"，
+   * 整棵树白屏（实测：打开一个不存在的房间链接后，侧栏与顶栏一起消失）。
+   * 第十七批顺手修掉：把它挪到 Hook 之后。
+   */
   if (!room) {
     return (
       <div className="main">
@@ -411,24 +446,6 @@ export function RoomPage({
    */
   const poolCollapsedByFile = hasPreview && showContextRegion && !showMainPool && Boolean(threadId);
 
-  /**
-   * 主动切换上下文 → 预览并排的那一侧跟着走（§3.3），并置位"期间切过上下文"（§3.4 第 2 条）。
-   *
-   * 只在**已经打开预览**且 `threadId` 真的发生变化时改写：
-   *  · 打开文件那一刻不改（否则会覆盖 §3.2"从主池打开就留在主池"的规则）；
-   *  · 从主池点开一条回复串时，卡片 `open()` 会主动改成 thread 侧并收起附件（L2）；
-   *  · L4 点「主池」→ 改成 pool 侧 → L3（主池＋文件）✓
-   */
-  const prevThreadIdRef = useRef<string | undefined>(threadId);
-  useEffect(() => {
-    const prev = prevThreadIdRef.current;
-    prevThreadIdRef.current = threadId;
-    if (prev === threadId) return;
-    if (!hasPreview) return;
-    setPreviewContextSide(threadId ? 'thread' : 'pool');
-    // §3.4 第 2 条：期间主动切过上下文 → 关闭预览时保留最新选择，不跳回旧任务
-    noteContextChanged();
-  }, [threadId, hasPreview]);
 
   /**
    * 回复串「收起/返回」在 RoomPage 层的动作。
@@ -501,7 +518,9 @@ export function RoomPage({
         <div className="pool-head" style={{ padding: '12px 18px 0' }}>
           <Icon name={room.archivedAt ? 'archive' : 'hash'} size={16} className="faint" />
           <span className="pool-title">{room.name}</span>
-          {room.archivedAt ? <Tag tone="neutral" icon="archive">已归档 · 只读</Tag> : null}
+          {room.archivedAt || ownerReadOnly ? (
+            <Tag tone="neutral" icon="archive">{room.archivedAt ? '已归档 · 只读' : ownerReadOnly}</Tag>
+          ) : null}
           {/**
            * 协调者与成员数合并成**一个轻量房间信息入口**（减负 §3）。
            * 原来它们是两个并列元素（「协调者 X」标签 + 「N 名成员」文字），
@@ -690,6 +709,17 @@ function RoomPool({
   );
   const room = roomOf(s, roomId);
   const project = room ? s.projects.find((p) => p.id === room.projectId) : undefined;
+  /**
+   * 第十七批 §十：**项目归档后其下房间整体只读** —— 不能发消息、建任务、被唤醒。
+   * 判定放在这里一次，供房间头部标签、输入区与只读说明共用；
+   * 写入路径上还有一层守卫（`submitMessage`），界面禁用了也改不动状态。
+   */
+  const projectReadOnlyReason = project?.archivedAt
+    ? `项目「${project.displayName}」已归档 · 只读`
+    : project?.removedAt
+      ? `项目「${project.displayName}」已从应用移除 · 仅可查看历史`
+      : undefined;
+  const roomReadOnlyReason = room?.archivedAt ? '已归档 · 只读' : projectReadOnlyReason;
   const lease = project ? lockOfProject(s, project.id) : null;
   const parallel = project?.writeConcurrencyPolicy === 'parallel_writers';
   const holders = lease ? (lease.parallelHolders ?? [lease.ownerTaskId]) : [];
@@ -761,7 +791,7 @@ function RoomPool({
         ))}
       </div>
 
-      {room && !room.archivedAt ? (
+      {room && !roomReadOnlyReason ? (
         <Composer
           target={{ kind: 'room_root', roomId }}
           draftKey={`room:${roomId}`}
@@ -780,11 +810,14 @@ function RoomPool({
            * 输入框被隐藏不等于身份消失，这里用同一套目标摘要元素（静态态）表达。
            */}
           <div className="composer-target-line">
-            <span className="composer-target-summary static" title={`「${room?.name ?? '此房间'}」已归档，只读`}>
+            <span
+              className="composer-target-summary static"
+              title={roomReadOnlyReason ? `${projectReadOnlyReason ?? `「${room?.name ?? '此房间'}」已归档`}，只读` : '只读'}
+            >
               <Icon name="archive" size={11} />
               <span className="composer-target-label">{room?.name ?? '此房间'}</span>
               <span className="faint">·</span>
-              <span className="composer-target-title">已归档 · 只读</span>
+              <span className="composer-target-title">{roomReadOnlyReason ?? '只读'}</span>
             </span>
           </div>
           <div className="panel" style={{ margin: 0 }}>
@@ -1751,9 +1784,13 @@ function ThreadPanel({
           insertText={composerInsert}
           /* 归档房间是只读的：主池早已这样处理，线程输入条此前漏了同一判定 */
           sendDisabledReason={
-            threadRoom?.archivedAt ? '房间已归档 · 只读，不能发送新内容'
-              : threadRoom?.memberIds.length === 0 ? '房间还没有成员，请先添加成员'
-                : undefined
+            threadRoom?.archivedAt
+              ? '房间已归档 · 只读，不能发送新内容'
+              : threadRoom && s.projects.find((p) => p.id === threadRoom.projectId)?.archivedAt
+                ? '项目已归档 · 只读，不能发送新内容'
+                : threadRoom?.memberIds.length === 0
+                  ? '房间还没有成员，请先添加成员'
+                  : undefined
           }
           /* 2026-09-25：输入区文案改为"跟进当前任务，可 @ 指定成员…"，
              任务号与方式的常驻提示不再占用 placeholder（它们在
@@ -1788,9 +1825,13 @@ function ThreadPanel({
           recordThread
           insertText={composerInsert}
           sendDisabledReason={
-            threadRoom?.archivedAt ? '房间已归档 · 只读，不能发送新内容'
-              : threadRoom?.memberIds.length === 0 ? '房间还没有成员，请先添加成员'
-                : undefined
+            threadRoom?.archivedAt
+              ? '房间已归档 · 只读，不能发送新内容'
+              : threadRoom && s.projects.find((p) => p.id === threadRoom.projectId)?.archivedAt
+                ? '项目已归档 · 只读，不能发送新内容'
+                : threadRoom?.memberIds.length === 0
+                  ? '房间还没有成员，请先添加成员'
+                  : undefined
           }
           /* 讨论串的目标摘要行同样已移除（第三轮）：讨论内容就在上方回复流里，
              不必再在输入框上方重复一次根消息摘要。 */
@@ -2931,52 +2972,69 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
    F 房间切换辅助（供页面其它位置创建房间）
    ============================================================ */
 
-export function NewRoomButton({ projectId }: { projectId: string }) {
+/**
+ * 「新建对话池 / 房间」弹窗（第十七批：抽出来给侧栏项目行的 `+` 复用）。
+ *
+ * 用户要求侧栏项目行的 `+` "直接打开添加对话池流程、绑定该项目、不重复询问项目归属"，
+ * 且要"复用现有创建流程，保留输入校验、成功反馈和合理的创建后落点" ——
+ * 所以这里把原来只藏在项目页页头的弹窗抽成组件：同一个表单、同一个 createRoom、
+ * 同样的创建后跳转（进新房间），只是入口多了侧栏一个。
+ */
+export function CreateRoomModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const s = useStore((x) => x);
-  const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
+  const project = s.projects.find((p) => p.id === projectId);
   const members = s.members.filter((m) => m.projectId === projectId);
+
+  return (
+    <Modal
+      size="sm"
+      title={`新建对话池 · ${project?.displayName ?? '项目'}`}
+      onClose={onClose}
+      footer={
+        <>
+          <div className="spacer" />
+          <button className="btn" onClick={onClose}>取消</button>
+          <button
+            className="btn primary"
+            disabled={!name.trim()}
+            onClick={() => {
+              const id = createRoom(projectId, name.trim(), members[0]?.id ?? '');
+              onClose();
+              // 创建后落点与项目页一致：直接进这个新房间（它属于被点击的那个项目）
+              navigate(`/project/${projectId}/room/${id}`);
+            }}
+          >
+            创建
+          </button>
+        </>
+      }
+    >
+      <div className="field">
+        <label className="field-label">房间名称</label>
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：性能专项" />
+        <div className="field-hint">
+          将建在项目「{project?.displayName ?? projectId}」下；协调者沿用项目当前默认协调者（
+          {memberLabel(members[0])}），成员默认加入项目现有成员。
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export function NewRoomButton({ projectId }: { projectId: string }) {
+  const [open, setOpen] = useState(false);
 
   return (
     <>
       {/* 「新建房间」是项目页页头的主创建动作（同区另一枚「文件与改动」是导航，
           不是创建）。此前用次按钮样式，导致**项目页没有任何 --grad 主按钮**，
-          与规范 §5.8「主按钮给重操作」不符。同一操作区仍只有一个 --grad。 */}
+          与规范 §5.8「主按钮给重操作」不符。同一操作区仍只有一个 --grad。
+          第十七批：弹窗抽成 `CreateRoomModal`，与侧栏项目行的 `+` 共用同一套流程。 */}
       <button className="btn primary sm" onClick={() => setOpen(true)}>
         <Icon name="plus" size={12} /> 新建房间
       </button>
-      {open ? (
-        <Modal
-          size="sm"
-          title="新建房间"
-          onClose={() => setOpen(false)}
-          footer={
-            <>
-              <div className="spacer" />
-              <button className="btn" onClick={() => setOpen(false)}>取消</button>
-              <button
-                className="btn primary"
-                disabled={!name.trim()}
-                onClick={() => {
-                  const id = createRoom(projectId, name.trim(), members[0]?.id ?? '');
-                  setOpen(false);
-                  navigate(`/project/${projectId}/room/${id}`);
-                }}
-              >
-                创建
-              </button>
-            </>
-          }
-        >
-          <div className="field">
-            <label className="field-label">房间名称</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：性能专项" />
-            <div className="field-hint">
-              新房间的协调者沿用项目当前默认协调者（{memberLabel(members[0])}），成员默认加入项目现有成员。
-            </div>
-          </div>
-        </Modal>
-      ) : null}
+      {open ? <CreateRoomModal projectId={projectId} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
