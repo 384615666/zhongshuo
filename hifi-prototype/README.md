@@ -74,6 +74,8 @@ node scripts/smoke.mjs http://localhost:5284   # 交互冒烟 27 项
 
 主题可用 URL 固定：`?theme=dark`。`?recovery=0` 抑制启动恢复弹窗自动弹出。
 
+> **仓库**：本工程与设计文档同仓，根目录是 `D:\zhongshuo`（分支 `main`，2026-09-25 初始化，初始提交 `84a2250`）。`node_modules/`、`dist/`、截图目录与 `archive/` 不入库 —— 新克隆后先 `pnpm install && pnpm run build` 再跑桌面宿主的用例与截图；改动前的基线改用 Git 提交记录，不再需要手工快照。
+
 ### 验证状态
 
 - `pnpm run build`：**通过**（tsc 严格模式，无 any 兜底）。

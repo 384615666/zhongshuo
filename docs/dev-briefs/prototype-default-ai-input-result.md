@@ -4,7 +4,8 @@
 > 依据：用户确认的产品行为调整「取消任务/讨论常驻切换，普通发送默认与 AI 交流」
 > 状态：**已实施并通过回归**；本报告如实区分"通过 / 失败 / 未验证 / 不适用"。
 > 施工前快照：`D:\zhongshuo\archive\default-ai-input-pre-20260925\`（`src/`、`scripts/`、`electron/`、配置与 README 共 154 个文件 + `MANIFEST-pre.sha256.txt`）。
-> 工程**不是 Git 仓库**，所以以快照 + 哈希对账代替 `git status`。
+> 施工时工程**不是 Git 仓库**，所以以快照 + 哈希对账代替 `git status`。
+> **2026-09-25 补记**：本工作区已在同日初始化 Git 仓库（根 = `D:\zhongshuo`，分支 `main`，初始提交 `84a2250`）——此后改动请直接走 Git，`archive/` 快照做法可退役（见 §9）。
 
 ## 1. 结论先说
 
@@ -180,3 +181,12 @@ node scripts/verify-permission-modes.mjs
 # 截图
 node scripts/shot-default-ai-input.mjs
 ```
+
+## 9. 补记：仓库初始化（2026-09-25）
+
+本次施工的**开工快照仍按当时的无 Git 纪律保留**（`archive/default-ai-input-pre-20260925/` + SHA256 清册，用于对账）。施工结束后按用户要求初始化了 Git 仓库：
+
+- 仓库根 = `D:\zhongshuo`（设计资料 + 原型同仓），分支 `main`，初始提交 `84a2250`「chore: 初始化仓库，导入当前工作区状态」（270 个文件）。
+- 忽略规则见根 `.gitignore` 与 `hifi-prototype/.gitignore`：`node_modules/`、`dist/`、`*.log`、`archive/`、各截图目录与 `gui-test-screenshots/`、`.obsidian/`、`.qoder/`。
+- **对新克隆的影响**：`dist/` 与 `node_modules/` 不入库，跑桌面宿主前需要 `pnpm install && pnpm run build`（本文 §8 的复现命令第一步就是构建）。
+- 本报告的通过数不因有 Git 而改动；后续轮次的报告可以省去"施工前快照"一节，改为记录基线的 commit（本轮基线即 `84a2250`）。
