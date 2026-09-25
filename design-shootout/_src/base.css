@@ -1,0 +1,168 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   base.css —— 三套规范共用的**结构骨架**（不含任何视觉取值）
+   只定义：重置、栅格/弹性布局、面板尺寸、滚动。
+   颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效 全部由各主题 CSS 负责。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+button { cursor: pointer; text-align: left; }
+input { cursor: default; }
+button:focus-visible, input:focus-visible { outline: none; }
+p, h1, h2, h3 { margin: 0; }
+a { text-decoration: none; color: inherit; }
+time { font-style: normal; }
+em, i, b { font-style: normal; }
+
+/* ── 图标：全部走 sprite，尺寸由 CSS 决定，描边不随字号缩放 ── */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+svg.ic {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 应用外壳 ──────────────────────────────────────────────────────── */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+.titlebar button, .winctl { -webkit-app-region: no-drag; }
+
+.tb-brand { display: flex; align-items: baseline; white-space: nowrap; }
+.tb-brand i { white-space: nowrap; }
+.tb-drag { flex: 1 1 auto; min-width: 0; }
+
+.winctl { display: flex; align-items: stretch; }
+.winbtn { display: flex; align-items: center; justify-content: center; }
+
+/* ── 侧栏 ──────────────────────────────────────────────────────────── */
+.sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.side-foot { flex: none; }
+
+.side-item, .side-row, .side-subitem, .side-heading {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.side-item > .side-label,
+.side-row > .side-label,
+.side-subitem > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-heading > span { flex: 1; }
+.side-badge { flex: none; }
+.side-sub { display: flex; flex-direction: column; }
+
+/* ── 主内容区 ──────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.page-head, .page-tabs, .thread-bar, .thread-tabs, .card-head, .card-foot,
+.composer-tools, .root-msg, .msg-head, .bubble-head, .st-head {
+  display: flex;
+  align-items: center;
+}
+.page-head { flex: none; }
+.page-tabs, .thread-tabs { flex: none; }
+.stream { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.stream > * { flex: none; }
+
+.card { display: block; }
+.card-foot .tb-drag { flex: 1; }
+
+/* ── 分割条 ────────────────────────────────────────────────────────── */
+.splitter { flex: none; }
+
+/* ── 回复串 ────────────────────────────────────────────────────────── */
+.thread {
+  flex: none;
+  width: var(--thread-w, 620px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.thread-pane > * { flex: none; }
+.thread-bar .tb-drag { flex: 1; }
+
+.root-msg { flex: none; }
+.root-text { flex: 1; min-width: 0; }
+
+.msg { display: flex; align-items: flex-start; }
+.msg-main { flex: 1; min-width: 0; }
+.msg-head .tb-drag { flex: 1; }
+
+/* 分工计划卡内 */
+.subtask { display: block; }
+.bubble-head .tb-drag { flex: 1; }
+
+/* ── 底部发布器 ────────────────────────────────────────────────────── */
+.composer { flex: none; display: flex; flex-direction: column; }
+.composer-input { display: flex; align-items: center; }
+.composer-input input { flex: 1; min-width: 0; }
+.composer-tools { flex-wrap: nowrap; }
+.cbtn { display: inline-flex; align-items: center; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; white-space: nowrap; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+/* ── 滚动条（各主题可覆盖配色；此处只定尺寸与常显） ──────────────── */
+.stream::-webkit-scrollbar,
+.thread-pane::-webkit-scrollbar,
+.side-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.stream::-webkit-scrollbar-track,
+.thread-pane::-webkit-scrollbar-track,
+.side-scroll::-webkit-scrollbar-track { background: transparent; }
+.stream::-webkit-scrollbar-thumb,
+.thread-pane::-webkit-scrollbar-thumb,
+.side-scroll::-webkit-scrollbar-thumb { border-radius: 999px; }

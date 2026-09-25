@@ -1,0 +1,35 @@
+            <!-- 授权请求卡（等待你决定） -->
+            <div class="rmsg">
+              <div class="av md c-codex"><span>K</span><span class="st busy"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Codex</span><span class="tm">10:01</span><span class="tag" style="background:var(--amber-soft);color:var(--amber)">授权请求</span></div>
+                <div class="af-card" style="border-color:color-mix(in srgb,var(--amber) 40%,transparent)">
+                  <div class="af-h" style="background:var(--amber-soft)"><svg width="13" height="13" style="color:var(--amber)"><use href="#i-shield"/></svg>等你决定 · 写入授权<span class="mini" style="margin-left:auto">22 分钟后过期</span></div>
+                  <div class="af-b"><span class="mono">{"write":["src/auth/refresh.ts","src/auth/session.ts"]}</span><br><span style="color:var(--ink2);font-size:11.5px">Codex 请求在第 2 轮收尾时写入上述两个文件的互斥锁改动。允许后仅本次有效。</span></div>
+                  <div class="af-f">
+                    <button class="btn sm primary" onclick="toast('已允许一次（本次有效）')">允许一次</button>
+                    <button class="btn sm danger" onclick="toast('已拒绝，并附注原因给 Codex')">拒绝</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div><!-- /th-body -->
+
+          <!-- 串内输入框 -->
+          <div class="th-composer">
+            <div class="cbox">
+              <div class="cbox-top">
+                <span class="chip on" style="cursor:default">→ 回复整个任务串</span>
+                <span class="route-hint">@新成员 = 邀请加入本任务（需你确认 · 决策 10）</span>
+              </div>
+              <textarea placeholder="在线程内跟进… 沿用本任务参与者与模式；阅读不唤醒 agent" style="min-height:38px"></textarea>
+              <div class="cbox-bot">
+                <button class="ibtn" title="附件"><svg><use href="#i-clip"/></svg></button>
+                <div class="sp"></div>
+                <span class="cap-note" style="color:var(--ink3)">回复只进本串，不进主池</span>
+                <button class="send" onclick="toast('已发送到任务 #12 的线程')">回复 <svg><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

@@ -1,0 +1,43 @@
+          <!-- 消息区：主角，视野大 -->
+          <div class="th-body">
+            <div class="sys-ev">PREPARE 完成 · 基线 a4f2 · 首轮独立会话已建立（互相隔离）</div>
+
+            <div class="rmsg">
+              <div class="av md c-claude"><span>C</span><span class="st on"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Claude</span><span class="tag t-gray" style="font-size:10px">主持</span><span class="tm">09:19 · 独立分析</span><span class="tag t-discuss">初稿 v1</span></div>
+                <div class="af-card">
+                  <div class="af-h">📄 初稿：鉴权流程分析（Claude）<span class="kv">af01</span><span class="link" style="margin-left:auto">展开</span></div>
+                  <div class="af-b">识别出 4 处会话过期边界缺陷；建议把令牌轮换收敛到 <span class="mono">auth/refresh.ts</span> 单点。12 条论断均挂证据，区分事实与建议。</div>
+                  <div class="af-f"><span class="kv">baseline:a4f2</span><span class="kv num">论断 12 · 证据 9</span><span class="kv">observed 8 / inferred 3 / proposal 1</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rmsg">
+              <div class="av md c-codex"><span>K</span><span class="st busy"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Codex</span><span class="tm">09:21 · 独立分析</span><span class="tag t-discuss">初稿 v1</span></div>
+                <div class="af-card">
+                  <div class="af-h">📄 初稿：鉴权流程分析（Codex）<span class="kv">af02</span><span class="link" style="margin-left:auto">展开</span></div>
+                  <div class="af-b">结论大体一致，但「滑动过期是否续期」给出相反建议，引用 <span class="mono">auth/session.ts:132</span>；另发现并发标签页下刷新竞态可复现。</div>
+                  <div class="af-f"><span class="kv">baseline:a4f2</span><span class="kv num">论断 9 · 证据 7</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sys-ev">CROSS_REVIEW 完成 · 互评 3/3 · 结构化争议清单：2 项 open</div>
+
+            <div class="rmsg">
+              <div class="av md c-codex2"><span>2</span><span class="st off"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Codex-2</span><span class="tm">09:34 · 互评</span></div>
+                <div class="af-card">
+                  <div class="af-b" style="padding:4px 12px">
+                    <div class="rl"><span class="stance st-ok">同意</span><div>对 af01·C3（刷新竞态）— 证据充分，与我本地复现一致。</div></div>
+                    <div class="rl"><span class="stance st-no">异议</span><div>对 af02·C5（滑动过期即续期）— 会放大被盗令牌窗口，见 <span class="mono">auth/refresh.ts:88</span>。</div></div>
+                    <div class="rl"><span class="stance st-need">需证据</span><div>对 af01·C7 —「会话表无索引」需给出查询计划截图。</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>

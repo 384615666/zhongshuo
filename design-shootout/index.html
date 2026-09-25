@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>众说 · 回复串界面 · 三套视觉规范对比台</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   index.html —— 三方案横向对比台（默认自带样式，不依赖任何主题 CSS）
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --line: #2a2f3a;
+  --line-2: #363c49;
+  --ink: #e9ecf2;
+  --ink-2: #a9b1c0;
+  --ink-3: #737d8e;
+  --accent: #6f8dff;
+  --r: 10px;
+  --mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  --ui: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--ui);
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────── */
+header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  height: 60px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.brand span { color: var(--ink-3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+.spacer { flex: 1; }
+
+.seg { display: flex; gap: 2px; padding: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); }
+.seg button {
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: none; border: 0; border-radius: 7px;
+  padding: 6px 14px; cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.seg button:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+.seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
+.layout { display: flex; gap: 2px; padding: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); }
+.layout button { font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+.layout button.on { background: rgba(255,255,255,.10); color: var(--ink); font-weight: 600; }
+
+.tip { font-size: 12px; color: var(--ink-3); }
+.tip kbd {
+  font-family: var(--mono); font-size: 11px;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+
+/* ── 舞台 ─────────────────────────────────────────────────────────── */
+.stage { flex: 1; min-height: 0; display: flex; gap: 1px; background: var(--line); }
+.cell { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+.cell-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; height: 44px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.rank {
+  flex: none; width: 22px; height: 22px; border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; font-family: var(--mono);
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+.name { font-size: 13px; font-weight: 600; }
+.via { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.ratio { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.grow { flex: 1; }
+.open {
+  font: inherit; font-size: 12px; color: var(--ink-2); text-decoration: none;
+  padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line-2);
+  transition: background-color .12s, color .12s;
+}
+.open:hover { background: var(--panel-2); color: var(--ink); }
+
+/* iframe 始终按设计稿原生 1372×872 渲染，再用 transform 等比缩放，
+   保证三栏并排时看到的仍是"整屏"，而不是被挤变形的局部。 */
+.frame {
+  flex: 1; min-height: 0; padding: 12px;
+  display: grid; place-items: start center;
+  overflow: auto; background: #0b0d11;
+}
+.stage[data-layout="single"] .frame { place-items: start center; }
+.scaler { position: relative; width: calc(1372px * var(--k, .4)); height: calc(872px * var(--k, .4)); }
+.scaler iframe {
+  position: absolute; top: 0; left: 0; display: block; border: 0;
+  width: 1372px; height: 872px;
+  transform: scale(var(--k, .4)); transform-origin: top left;
+  background: #fff; box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
+}
+
+/* 单栏模式：1:1 原尺寸（超出则滚动） */
+.stage[data-layout="single"] .cell { flex: none; width: 100%; }
+.stage[data-layout="single"] { --k: 1; }
+
+.notice {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+  font-size: 12px; padding: 8px 16px; border-radius: 999px;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.notice.show { opacity: 1; }
+
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">众说 · 打开回复串界面<span>三套视觉规范对照 · 同一 DOM，只有样式不同</span></span>
+  <span class="spacer"></span>
+
+  <div class="seg" id="side-filter" title="只显示某一套">
+    <button data-side="all" class="on">三套并排</button>
+    <button data-side="A">A Mimo</button>
+    <button data-side="B">B Kimi K3</button>
+    <button data-side="C">C hy4</button>
+  </div>
+
+  <div class="seg" id="theme-switch" title="浅色 / 深色">
+    <button data-theme="light" class="on">浅色</button>
+    <button data-theme="dark">深色</button>
+  </div>
+
+  <div class="layout" id="layout-switch" title="并排 / 单栏 1:1">
+    <button data-layout="side" class="on">并排</button>
+    <button data-layout="single">1:1</button>
+  </div>
+
+  <span class="tip">按 <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 单看 · 按 <kbd>D</kbd> 切深浅</span>
+</header>
+
+<div class="stage" id="stage" data-layout="side">
+
+      <section class="cell" data-side="A">
+        <div class="cell-head">
+          <span class="rank">A</span>
+          <span class="name">Mimo</span>
+          <span class="via">zhongshuo-frontend-design-spec-zcode.md</span>
+          <span class="grow"></span>
+          <span class="ratio">1372×872</span>
+          <a class="open" href="mimo.html" target="_blank" rel="noopener">单独打开 ↗</a>
+        </div>
+        <div class="frame"><div class="scaler"><iframe data-file="mimo.html" title="Mimo" loading="eager"></iframe></div></div>
+      </section>
+
+      <section class="cell" data-side="B">
+        <div class="cell-head">
+          <span class="rank">B</span>
+          <span class="name">Kimi K3</span>
+          <span class="via">zhongshuo-visual-design-spec-v1.md</span>
+          <span class="grow"></span>
+          <span class="ratio">1372×872</span>
+          <a class="open" href="kimi.html" target="_blank" rel="noopener">单独打开 ↗</a>
+        </div>
+        <div class="frame"><div class="scaler"><iframe data-file="kimi.html" title="Kimi K3" loading="eager"></iframe></div></div>
+      </section>
+
+      <section class="cell" data-side="C">
+        <div class="cell-head">
+          <span class="rank">C</span>
+          <span class="name">hy4</span>
+          <span class="via">design-spec/DESIGN.md v3.0</span>
+          <span class="grow"></span>
+          <span class="ratio">1372×872</span>
+          <a class="open" href="hy4-fixed.html" target="_blank" rel="noopener">单独打开 ↗</a>
+        </div>
+        <div class="frame"><div class="scaler"><iframe data-file="hy4-fixed.html" title="hy4" loading="eager"></iframe></div></div>
+      </section>
+</div>
+
+<div class="notice" id="notice"></div>
+
+<script>
+  var NATIVE_W = 1372, NATIVE_H = 872;
+  var stage = document.getElementById('stage');
+  var theme = 'light';
+
+  function layout() {
+    var single = document.querySelector('#layout-switch .on').dataset.layout === 'single';
+
+    document.querySelectorAll('.cell').forEach(function (cell) {
+      if (cell.style.display === 'none') return;
+      var f = cell.querySelector('.frame');
+      var availW = f.clientWidth - 24, availH = f.clientHeight - 24;
+      var k = single ? 1 : Math.min(availW / NATIVE_W, availH / NATIVE_H);
+      cell.querySelector('.scaler').style.setProperty('--k', Math.max(k, .1).toFixed(4));
+    });
+  }
+
+  function measure() {}
+
+  function load(refresh) {
+    var side = document.querySelector('#side-filter .on').dataset.side;
+    var layoutName = document.querySelector('#layout-switch .on').dataset.layout;
+    stage.dataset.layout = layoutName;
+
+    document.querySelectorAll('.cell').forEach(function (cell) {
+      var show = side === 'all' || cell.dataset.side === side;
+      cell.style.display = show ? '' : 'none';
+      if (!show && !refresh) return;
+      if (!show) return;
+      var frame = cell.querySelector('iframe');
+      var want = frame.dataset.file + (theme === 'dark' ? '?theme=dark' : '');
+      if (frame.dataset.loaded !== want) {
+        frame.dataset.loaded = want;
+        frame.src = want;
+      }
+    });
+    requestAnimationFrame(layout);
+  }
+
+  document.querySelectorAll('iframe').forEach(function (f) {
+    f.addEventListener('load', function () { requestAnimationFrame(layout); });
+  });
+
+  function wire(id, after) {
+    document.getElementById(id).addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+      load(true);
+      after && after();
+    });
+  }
+
+  wire('side-filter');
+  wire('theme-switch', function () {
+    theme = document.querySelector('#theme-switch .on').dataset.theme;
+  });
+  wire('layout-switch');
+
+  var notice = document.getElementById('notice');
+  function flash(msg) {
+    notice.textContent = msg;
+    notice.classList.add('show');
+    clearTimeout(flash.t);
+    flash.t = setTimeout(function () { notice.classList.remove('show'); }, 1400);
+  }
+
+  addEventListener('resize', layout);
+
+  var ORDER = ['all', 'A', 'B', 'C'];
+  document.addEventListener('keydown', function (e) {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key >= '1' && e.key <= String(ORDER.length - 1)) {
+      var b = document.querySelector('#side-filter button[data-side="' + ORDER[+e.key] + '"]');
+      if (b) { b.click(); flash('只看 ' + b.textContent.trim()); }
+    } else if (e.key === '0') {
+      document.querySelector('#side-filter button[data-side="all"]').click();
+      flash('三套并排');
+    } else if (e.key === 'd' || e.key === 'D') {
+      var t = document.querySelector('#theme-switch button' + (theme === 'light' ? '[data-theme="dark"]' : '[data-theme="light"]'));
+      t.click(); flash(theme === 'light' ? '切换为深色' : '切换为浅色');
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+      <!-- ══ 计算机与访问 ══ -->
+      <section class="view" id="view-computers">
+        <div class="list-page">
+          <div class="list-head"><h2>计算机与访问</h2><div class="tabs"><div class="tab on">本机与设备</div><div class="tab">配对记录</div></div></div>
+          <div class="comp-grid">
+            <div class="ccard">
+              <div class="ch"><div class="ci" style="background:var(--c-codex)">💻</div>
+                <div><div style="font-weight:800">DESKTOP-LSJ（本机）</div><div style="font-size:11px;color:var(--green);font-weight:700;margin-top:2px">● 在线 · daemon v0.1.0 · Windows 11</div></div>
+              </div>
+              <div class="rt"><div>已检测 runtime：Codex App Server ✓ · Claude Code ✓</div><div>承载成员：Claude、Codex、Codex-2</div><div>监听：命名管道（本机）· 127.0.0.1 + 局域网（强制 HTTPS/WSS）</div></div>
+              <div class="pair-box">
+                <div style="font-size:12px;font-weight:800">局域网配对（E18 · 先配对后访问）</div>
+                <div style="font-size:11px;color:var(--ink2);margin-top:4px;line-height:1.6">配对码仅本机显示、限时 10 分钟、一次一用。配对成功的设备获得与本机同等权限，可随时逐个吊销。</div>
+                <div class="pair-code">7K4D-92QF</div>
+                <div style="display:flex;gap:8px"><button class="btn sm" onclick="toast('已重新生成（默认随机 8 位，可自设：校验最短长度与重复）')">重新生成</button><button class="btn sm" onclick="toast('自设配对码：最短 8 位，不与近期重复')">自设…</button><span class="mini" style="margin-left:auto">09:47 后过期</span></div>
+              </div>
+            </div>
+            <div class="ccard">
+              <div class="ch"><div class="ci" style="background:var(--c-human)">📱</div>
+                <div><div style="font-weight:800">客厅 iPad（已配对）</div><div style="font-size:11px;color:var(--ink2);margin-top:2px">局域网 · 192.168.1.23 · 配对于昨天 21:14</div></div>
+              </div>
+              <div class="rt"><div>权限：与本机同等（发任务 / 停止 / 改设置）</div><div>最近活动：今天 08:02 查看任务 #12</div><div>连接：WSS ✓ · Origin/Host 校验通过</div></div>
+              <div style="display:flex;gap:8px;margin-top:12px"><button class="btn sm danger" onclick="toast('已吊销该设备，连接立即断开')">吊销设备</button><button class="btn sm" onclick="toast('令牌已轮换（不影响其他已配对设备）')">轮换令牌</button></div>
+            </div>
+            <div class="ccard" style="border-style:dashed;box-shadow:none;background:transparent">
+              <div class="ch"><div class="ci" style="background:var(--surface3);color:var(--ink3)">＋</div>
+                <div><div style="font-weight:800;color:var(--ink2)">添加计算机</div><div style="font-size:11px;color:var(--ink3);margin-top:2px">多机执行 · 完整目标（FULL-05，待 ADR-10 更新）</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

@@ -1,0 +1,39 @@
+      <!-- ══ 任务看板 ══ -->
+      <section class="view" id="view-tasks">
+        <div class="page">
+          <div class="page-head"><h2>任务看板</h2><span class="sub">与对话池同一份数据的另一视图 · 点击卡片回到原线程（TASK-05）</span><span style="margin-left:auto"></span><button class="btn sm primary">+ 新建任务</button></div>
+          <div class="board-body">
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill p-todo"><span class="d"></span>待办</span><span class="n">2</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')"><div class="ti">#14 梳理 daemon 单实例锁在快速重启下的竞态</div><div class="meta"><span class="mini">#主房间</span><span class="mini">负责人：未认领</span></div></div>
+                <div class="tcard" onclick="switchView('chat')"><div class="ti">#13 为导出 Word/HTML 定稿样式模板</div><div class="meta"><span class="mini">#发布筹备 🔒</span><span class="mini">Claude</span><span class="av xs c-claude">C</span></div></div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill p-run"><span class="d"></span>进行中</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')"><div class="ti">#12 src/auth 鉴权流程分析与重构建议</div><div class="meta"><span class="tag t-delib">研讨</span><span class="mini num">分歧讨论 R2 · 预算 14/23</span></div><div class="meta"><span class="avs"><span class="av xs c-claude">C</span><span class="av xs c-codex">K</span><span class="av xs c-codex2">2</span></span><span class="mini">#主房间</span></div></div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill p-wait"><span class="d"></span>待审阅</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')"><div class="ti">#10 README 安装步骤更新（pnpm 单仓）</div><div class="meta"><span class="tag t-direct">指定 Codex</span><span class="mini">等待你确认扩大范围</span></div><div class="meta"><button class="btn sm primary" onclick="event.stopPropagation();toast('已确认')">确认</button><button class="btn sm" onclick="event.stopPropagation();toast('退回，附审阅意见')">退回</button></div></div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill p-done"><span class="d"></span>已完成</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')"><div class="ti">#11 登录表单校验抽离 + 单测</div><div class="meta"><span class="tag t-auto">自动分工</span><span class="mini">3 文件 · 12 用例通过</span></div><div class="meta"><span class="link">报告</span><span class="link" onclick="event.stopPropagation();switchView('files')">改动</span></div></div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill p-todo"><span class="d"></span>已关闭</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" style="opacity:.6" onclick="switchView('chat')"><div class="ti">#8 试用 Gemini 作为第三 runtime（已取消）</div><div class="meta"><span class="mini">wont-do · 决策 37</span><span class="link">重新打开</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

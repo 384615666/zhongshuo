@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>众说 · 回复串界面（方案 C：hy4《前端视觉规范 v1.0》）</title>
+<style>
+/* ── 骨架（共用） ── */
+/* ═══════════════════════════════════════════════════════════════════════
+   base.css —— 三套规范共用的**结构骨架**（不含任何视觉取值）
+   只定义：重置、栅格/弹性布局、面板尺寸、滚动。
+   颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效 全部由各主题 CSS 负责。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+button { cursor: pointer; text-align: left; }
+input { cursor: default; }
+button:focus-visible, input:focus-visible { outline: none; }
+p, h1, h2, h3 { margin: 0; }
+a { text-decoration: none; color: inherit; }
+time { font-style: normal; }
+em, i, b { font-style: normal; }
+
+/* ── 图标：全部走 sprite，尺寸由 CSS 决定，描边不随字号缩放 ── */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+svg.ic {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 应用外壳 ──────────────────────────────────────────────────────── */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+.titlebar button, .winctl { -webkit-app-region: no-drag; }
+
+.tb-brand { display: flex; align-items: baseline; white-space: nowrap; }
+.tb-brand i { white-space: nowrap; }
+.tb-drag { flex: 1 1 auto; min-width: 0; }
+
+.winctl { display: flex; align-items: stretch; }
+.winbtn { display: flex; align-items: center; justify-content: center; }
+
+/* ── 侧栏 ──────────────────────────────────────────────────────────── */
+.sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.side-foot { flex: none; }
+
+.side-item, .side-row, .side-subitem, .side-heading {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.side-item > .side-label,
+.side-row > .side-label,
+.side-subitem > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-heading > span { flex: 1; }
+.side-badge { flex: none; }
+.side-sub { display: flex; flex-direction: column; }
+
+/* ── 主内容区 ──────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.page-head, .page-tabs, .thread-bar, .thread-tabs, .card-head, .card-foot,
+.composer-tools, .root-msg, .msg-head, .bubble-head, .st-head {
+  display: flex;
+  align-items: center;
+}
+.page-head { flex: none; }
+.page-tabs, .thread-tabs { flex: none; }
+.stream { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.stream > * { flex: none; }
+
+.card { display: block; }
+.card-foot .tb-drag { flex: 1; }
+
+/* ── 分割条 ────────────────────────────────────────────────────────── */
+.splitter { flex: none; }
+
+/* ── 回复串 ────────────────────────────────────────────────────────── */
+.thread {
+  flex: none;
+  width: var(--thread-w, 620px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.thread-pane > * { flex: none; }
+.thread-bar .tb-drag { flex: 1; }
+
+.root-msg { flex: none; }
+.root-text { flex: 1; min-width: 0; }
+
+.msg { display: flex; align-items: flex-start; }
+.msg-main { flex: 1; min-width: 0; }
+.msg-head .tb-drag { flex: 1; }
+
+/* 分工计划卡内 */
+.subtask { display: block; }
+.bubble-head .tb-drag { flex: 1; }
+
+/* ── 底部发布器 ────────────────────────────────────────────────────── */
+.composer { flex: none; display: flex; flex-direction: column; }
+.composer-input { display: flex; align-items: center; }
+.composer-input input { flex: 1; min-width: 0; }
+.composer-tools { flex-wrap: nowrap; }
+.cbtn { display: inline-flex; align-items: center; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; white-space: nowrap; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+/* ── 滚动条（各主题可覆盖配色；此处只定尺寸与常显） ──────────────── */
+.stream::-webkit-scrollbar,
+.thread-pane::-webkit-scrollbar,
+.side-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.stream::-webkit-scrollbar-track,
+.thread-pane::-webkit-scrollbar-track,
+.side-scroll::-webkit-scrollbar-track { background: transparent; }
+.stream::-webkit-scrollbar-thumb,
+.thread-pane::-webkit-scrollbar-thumb,
+.side-scroll::-webkit-scrollbar-thumb { border-radius: 999px; }
+
+/* ── 方案规范 ── */
+/* ═══════════════════════════════════════════════════════════════════════
+   theme-hy4.css —— 方案 C：hy4
+   规范来源：WorkBuddy/2026-09-21-23-22-50/design-spec/DESIGN.md（前端视觉规范 v1.0）
+             配套 components.md（组件变体表）+ tokens.patch.css（新增令牌）
+   核心主张：**沿用现有颜色与命名、只补规则不改值**；先能读再好看（信息文字 ≥4.5:1）/
+             层级靠明度与间距不靠边框堆叠 / 桌面密度靠间距呼吸不靠缩小字号 /
+             状态三通道 / 同一视觉区域内最多一层描边 / 控件高度只 24·30·36
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.app {
+  /* ── §3.1 背景层级（由深到浅，一次只用一层） ── */
+  --bg-app:      #eef0f4;
+  --bg-sunken:   #f3f4f7;
+  --bg-surface-3:#eff1f5;
+  --bg-surface-2:#f7f8fa;
+  --bg-surface:  #ffffff;
+  --bg-hover:    rgba(15, 23, 42, .045);
+  --bg-active:   rgba(15, 23, 42, .075);
+  --bg-selected: rgba(37, 99, 235, .085);
+  --bg-scrim:    rgba(15, 23, 42, .42);
+
+  /* ── §3.1 文本层级（附使用边界：--text-4 只允许装饰/禁用/角标） ── */
+  --text:         #101828;
+  --text-2:       #475467;
+  --text-3:       #667085;
+  --text-4:       #98a2b3;
+  --text-inverse: #ffffff;
+
+  --border:        #e2e5ec;
+  --border-strong: #cdd2dc;
+  --border-subtle: #eceef3;
+
+  /* ── 主色与语义色（每个语义色是三件套 fg + soft + border） ── */
+  --accent:        #2563eb;
+  --accent-hover:  #1d4ed8;
+  --accent-soft:   #e8efff;
+  --accent-border: #b9cdfb;
+  --accent-text:   #1b4bd0;
+
+  --info:    #2563eb; --info-soft:    #e8efff; --info-border:    #b9cdfb;
+  --success: #067647; --success-soft: #e6f6ee; --success-border: #a6e0c4;
+  --warning: #b54708; --warning-soft: #fdf3e6; --warning-border: #f2ce9a;
+  --danger:  #b42318; --danger-soft:  #fdecea; --danger-border:  #f3b4ad;
+  --neutral: #475467; --neutral-soft: #eef0f4; --neutral-border: #d5d9e2;
+
+  /* 成员识别色：只用于头像与线程归属条，不表示状态 */
+  --m-codex:  #0f766e;
+  --m-claude: #7c3aed;
+  --m-codex2: #b45309;
+  --m-human:  #2563eb;
+
+  /* ── §3.7 阴影三级 + 焦点环（卡片默认只用 sm） ── */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, .06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, .09), 0 1px 3px rgba(16, 24, 40, .05);
+  --shadow-lg: 0 16px 44px rgba(16, 24, 40, .17), 0 3px 10px rgba(16, 24, 40, .07);
+  --ring:      0 0 0 3px rgba(37, 99, 235, .22);
+
+  /* ── §3.6 圆角六档 ── */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+
+  --font: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Consolas', 'Sarasa Mono SC', ui-monospace, monospace;
+
+  /* ── §3.2 字号九档（补齐 --fs-10） ── */
+  --fs-10: 10px; --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
+  --fs-15: 15px; --fs-17: 17px; --fs-20: 20px; --fs-24: 24px;
+
+  /* ── §3.3 行高四档 ── */
+  --lh-tight: 1.3; --lh-flat: 1.4; --lh-normal: 1.5; --lh-relaxed: 1.65;
+
+  /* ── §3.4 字重四档 ── */
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600; --fw-bold: 700;
+
+  /* ── §3.5 间距六档（4px 栅格） ── */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* ── §3.8 动效三档 + §3.9 层级六档 ── */
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 320ms;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --z-sticky: 10; --z-splitter: 20; --z-dropdown: 40; --z-modal: 80;
+
+  /* ── §3.10 尺寸：控件高度三档；回复串默认 620 ── */
+  --h-sm: 24px; --h-md: 30px; --h-lg: 36px;
+  --w-sidebar: 240px;
+  --w-thread: 620px;
+  --titlebar-h: 36px;
+
+  font-family: var(--font);
+  font-size: var(--fs-13);
+  line-height: var(--lh-relaxed);
+  color: var(--text);
+  background: var(--bg-app);
+}
+
+/* ── §7 深色模式：一一映射，soft/border 用 alpha，禁纯黑纯白 ───────── */
+.app[data-theme="dark"] {
+  --bg-app:      #0d1117;
+  --bg-sunken:   #10151c;
+  --bg-surface-3:#212833;
+  --bg-surface-2:#1a2029;
+  --bg-surface:  #151a22;
+  --bg-hover:    rgba(255, 255, 255, .055);
+  --bg-active:   rgba(255, 255, 255, .09);
+  --bg-selected: rgba(96, 152, 255, .15);
+
+  --text:         #e8ecf2;
+  --text-2:       #b3bccb;
+  --text-3:       #8b95a5;
+  --text-4:       #6b7484;
+  --text-inverse: #0d1117;
+
+  --border:        #262e3a;
+  --border-strong: #38414f;
+  --border-subtle: #1e242e;
+
+  --accent:        #6098ff; --accent-hover: #7cabff;
+  --accent-soft:   rgba(96, 152, 255, .14);
+  --accent-border: rgba(96, 152, 255, .36);
+  --accent-text:   #93bcff;
+
+  --info:    #6098ff; --info-soft:    rgba(96, 152, 255, .14); --info-border:    rgba(96, 152, 255, .36);
+  --success: #4ade80; --success-soft: rgba(74, 222, 128, .13); --success-border: rgba(74, 222, 128, .32);
+  --warning: #fbbf24; --warning-soft: rgba(251, 191, 36, .13); --warning-border: rgba(251, 191, 36, .32);
+  --danger:  #ff6b60; --danger-soft:  rgba(255, 107, 96, .13); --danger-border:  rgba(255, 107, 96, .34);
+  --neutral: #9aa4b4; --neutral-soft: rgba(255, 255, 255, .07); --neutral-border: #38414f;
+
+  --m-codex: #2dd4bf; --m-claude: #c4a2ff; --m-codex2: #fbbf24; --m-human: #6098ff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, .6);
+  --ring: 0 0 0 3px rgba(96, 152, 255, .30);
+}
+
+/* §6 交互态：focus-visible 必须有 --ring 替代，禁止 outline:none 裸奔 */
+.app :focus-visible { box-shadow: var(--ring); border-radius: var(--r-sm); }
+/* §4 数字：任务号/耗时/序号 tabular-nums，避免跳动 */
+.app .idx, .app .num, .app .time, .app .mono { font-variant-numeric: tabular-nums; }
+.app .mono, .app .idx { font-family: var(--font-mono); }
+
+/* ═══ §6 桌面外壳 / 自绘标题栏：高 36，窗口按钮 44×36 ═══════════════ */
+.titlebar {
+  height: var(--titlebar-h);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  gap: var(--sp-3);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  z-index: var(--z-sticky);
+}
+.tb-brand { font-size: var(--fs-12); font-weight: var(--fw-semibold); gap: var(--sp-2); }
+.tb-brand i { font-size: var(--fs-11); font-weight: var(--fw-regular); color: var(--text-3); }
+
+.tb-project {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: var(--h-sm); padding: 0 var(--sp-2);
+  border-radius: var(--r-sm); font-size: var(--fs-12); color: var(--text-2);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.tb-project:hover { background: var(--bg-hover); }
+.tb-path { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-3); }
+.tb-branch { display: inline-flex; align-items: center; gap: var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-3); }
+.ic-caret { width: 12px; height: 12px; color: var(--text-3); }
+
+.tb-stats { display: flex; align-items: center; gap: var(--sp-1); }
+.tb-stat {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  height: var(--h-sm); padding: 0 var(--sp-2);
+  border-radius: var(--r-sm); font-size: var(--fs-12); color: var(--text-2);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.tb-stat:hover { background: var(--bg-hover); }
+.tb-stat em { font-size: var(--fs-11); color: var(--text-3); }
+.tb-stat .num { font-size: var(--fs-11); font-weight: var(--fw-semibold); color: var(--text-2); }
+
+.winctl { margin-left: var(--sp-1); }
+.winbtn { width: 44px; height: var(--titlebar-h); color: var(--text-3); transition: background-color var(--dur-fast) var(--ease-out); }
+.winbtn:hover { background: var(--bg-hover); color: var(--text); }
+.winbtn.close:hover { background: var(--danger); color: var(--text-inverse); }
+
+/* ═══ §4 侧栏：宽 240，项高 30，selected = bg-selected（无竖条，靠底色）══ */
+.sidebar {
+  width: var(--w-sidebar);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  padding: var(--sp-2);
+  gap: 2px;
+}
+.side-item, .side-row, .side-subitem {
+  height: var(--h-md); gap: var(--sp-2); padding: 0 var(--sp-2);
+  border-radius: var(--r-sm); font-size: var(--fs-13); color: var(--text-2);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.side-item:hover, .side-row:hover, .side-subitem:hover { background: var(--bg-hover); color: var(--text); }
+.side-item .ic, .side-row .ic, .side-subitem .ic { color: var(--text-3); }
+
+.side-heading {
+  height: var(--h-sm); padding: 0 var(--sp-2); margin-top: var(--sp-3);
+  font-size: var(--fs-11); font-weight: var(--fw-medium); color: var(--text-3);
+}
+.side-heading .icon-btn { width: 20px; height: 20px; color: var(--text-4); border-radius: var(--r-sm); }
+.side-heading .icon-btn:hover { background: var(--bg-hover); color: var(--text-2); }
+
+.side-project { margin-top: 2px; }
+.side-sub { margin: var(--sp-1) 0 0 var(--sp-4); gap: 2px; }
+.side-subitem { height: var(--h-md); font-size: var(--fs-13); }
+.side-subitem.is-current { background: var(--bg-selected); color: var(--text); font-weight: var(--fw-medium); }
+
+/* 徽章：--fs-10 / --r-xs（角标允许 10px，中文正文禁用） */
+.side-badge {
+  min-width: 18px; height: 18px; padding: 0 var(--sp-1);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-xs); background: var(--neutral-soft); color: var(--text-2);
+  font-size: var(--fs-11); font-weight: var(--fw-semibold); line-height: 1;
+}
+.side-badge.alert { background: var(--warning-soft); color: var(--warning); }
+.side-foot { padding-top: var(--sp-2); margin-top: var(--sp-2); border-top: 1px solid var(--border-subtle); }
+
+/* ═══ 主内容区：面差分层，不使用整块外框 ═════════════════════════════ */
+.main { background: var(--bg-app); }
+
+.page-head { gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-3); }
+.ph-title { font-size: var(--fs-20); font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
+.ph-sub { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-13); color: var(--text-3); }
+.ph-sub em { color: var(--text-3); }
+.unread {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  height: var(--h-md); padding: 0 var(--sp-2);
+  border-radius: var(--r-full); background: var(--accent-soft);
+  border: 1px solid var(--accent-border); color: var(--accent-text);
+  font-size: var(--fs-12); font-weight: var(--fw-semibold);
+}
+
+/* §6 按钮：高 30（sm→24 / lg→36），padding 0 12，--fs-13，--r-sm */
+.btn {
+  gap: var(--sp-1); height: var(--h-md); padding: 0 var(--sp-3);
+  border-radius: var(--r-sm); font-size: var(--fs-13); font-weight: var(--fw-semibold);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.btn-primary { background: var(--accent); color: var(--text-inverse); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-ghost { color: var(--text-2); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+
+.icon-btn {
+  width: var(--h-md); height: var(--h-md); border-radius: var(--r-sm); color: var(--text-3);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+/* §4 标签页：高 34，选中项下边 2px 主色 */
+.page-tabs { gap: var(--sp-4); padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); }
+.tab {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  height: 34px; font-size: var(--fs-13); color: var(--text-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.tab:hover { color: var(--text); }
+.tab.is-active { color: var(--text); font-weight: var(--fw-semibold); border-bottom-color: var(--accent); }
+
+/* 消息流：内容最大宽 1080（列表类），卡片间距 8 */
+.stream {
+  padding: var(--sp-3) var(--sp-4) var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+
+/* §5 提示条：warning 三件套；不闪烁、不自动消失 */
+.warnbar {
+  display: flex; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  background: var(--warning-soft); border: 1px solid var(--warning-border);
+  border-radius: var(--r-md);
+}
+.warnbar > .ic { color: var(--warning); margin-top: 2px; }
+.wb-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--warning); }
+.wb-detail { font-size: var(--fs-12); color: var(--text-2); line-height: var(--lh-normal); }
+.wb-detail a { color: var(--accent-text); }
+
+/* §2 卡片：padding 16、--r-md、--border 1px、--shadow-sm；
+      **卡片内只用 spacing 分隔，不再套一层边框** */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-sm);
+}
+.card-head { gap: var(--sp-2); }
+.card-head .time { margin-left: auto; font-size: var(--fs-11); color: var(--text-3); }
+
+/* §5 业务卡：任务号 = 中立序号，用 --fs-11 + mono */
+.idx {
+  font-size: var(--fs-11); font-weight: var(--fw-semibold); color: var(--text-2);
+  background: var(--neutral-soft); border: 1px solid var(--neutral-border);
+  border-radius: var(--r-xs); padding: 0 6px; line-height: 18px;
+}
+/* §5 标签 .tag：高 20、padding 0 6、--fs-11、--r-xs、**必须带图标** */
+.tag {
+  gap: var(--sp-1); height: 20px; padding: 0 6px;
+  border-radius: var(--r-xs); font-size: var(--fs-11); font-weight: var(--fw-semibold); line-height: 1;
+}
+.tag .ic { width: 11px; height: 11px; }
+.tag-accent  { background: var(--accent-soft);  border: 1px solid var(--accent-border);  color: var(--accent-text); }
+.tag-warning { background: var(--warning-soft); border: 1px solid var(--warning-border); color: var(--warning); }
+.tag-neutral { background: var(--neutral-soft); border: 1px solid var(--neutral-border); color: var(--neutral); }
+
+.ttl { font-size: var(--fs-15); font-weight: var(--fw-semibold); line-height: var(--lh-tight); margin-top: var(--sp-3); }
+.who { font-size: var(--fs-12); color: var(--text-3); margin-top: var(--sp-1); }
+.blurb { font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text); margin-top: var(--sp-3); max-width: 720px; }
+
+/* 卡内嵌块：只用 --sp-3 留白 + 底色差，不加边框 */
+.quote {
+  margin-top: var(--sp-3); padding: var(--sp-3);
+  background: var(--bg-sunken); border-radius: var(--r-sm);
+  font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2); max-width: 720px;
+}
+.card-foot { gap: var(--sp-2); margin-top: var(--sp-4); }
+.meta { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-11); color: var(--text-3); }
+.meta .ic { width: 12px; height: 12px; }
+.card-foot .btn { height: var(--h-sm); font-size: var(--fs-12); }
+
+/* ── 输入区：外框 --border-strong；工具栏与输入框同属一个 --r-lg 容器 ── */
+.composer {
+  margin: 0 var(--sp-4) var(--sp-4); background: var(--bg-surface);
+  border: 1px solid var(--border-strong); border-radius: var(--r-lg);
+}
+.composer:focus-within { border-color: var(--accent); box-shadow: var(--ring); }
+.composer-input { gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-2); }
+.composer-input .cbadge {
+  width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-xs); background: var(--accent-soft); color: var(--accent-text);
+  font-size: var(--fs-11); font-weight: var(--fw-semibold);
+}
+.composer-input input { font-size: var(--fs-13); color: var(--text-3); }
+/* 工具条：同一容器内，用 --border-subtle 1px 横线分隔（§5.5） */
+.composer-tools {
+  gap: var(--sp-1); padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.cbtn {
+  gap: var(--sp-1); height: var(--h-sm); padding: 0 var(--sp-2);
+  border-radius: var(--r-sm); font-size: var(--fs-12); color: var(--text-2);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.cbtn:hover { background: var(--bg-hover); color: var(--text); }
+.hash { color: var(--text-3); }
+.composer-tools .btn-primary { margin-left: var(--sp-1); }
+
+/* ═══ 回复串：默认 620，左缘 1px border ═════════════════════════════ */
+.thread { width: var(--w-thread); background: var(--bg-surface); border-left: 1px solid var(--border); }
+.splitter { width: 6px; background: var(--bg-app); }
+
+.thread-bar { gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--border-subtle); }
+.thread-bar .icon-btn { width: var(--h-sm); height: var(--h-sm); color: var(--text-3); }
+
+.root-msg { gap: var(--sp-2); padding: var(--sp-3); background: var(--bg-surface-2); border-bottom: 1px solid var(--border-subtle); }
+.root-arrow { color: var(--text-3); }
+.root-text { font-size: var(--fs-13); color: var(--text-2); line-height: var(--lh-normal); }
+.root-msg .time { font-size: var(--fs-11); color: var(--text-3); flex: none; }
+
+.thread-tabs { gap: var(--sp-3); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); }
+.thread-tab {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  height: 34px; font-size: var(--fs-12); color: var(--text-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.thread-tab:hover { color: var(--text); }
+.thread-tab.is-active { color: var(--text); font-weight: var(--fw-semibold); border-bottom-color: var(--accent); }
+.thread-tab .num { color: var(--text-3); font-weight: var(--fw-semibold); }
+
+.thread-pane { padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
+
+/* §5 系统卡：中性 surface-2 底 + 左侧 3px 语义色条；不带头像 */
+.sys-card {
+  padding: var(--sp-3); background: var(--bg-surface-2); border-radius: var(--r-md);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.sc-head { display: flex; align-items: center; gap: var(--sp-2); }
+.sc-head .ic { color: var(--accent); }
+.sc-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); }
+.sc-body { margin-top: var(--sp-2); font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2); }
+.sc-body b { color: var(--accent-text); font-weight: var(--fw-semibold); }
+
+/* §5 消息：作者 --fs-13/600，时间 --fs-11 --text-3，正文 --fs-13 行高 1.65 */
+.msg { gap: var(--sp-2); }
+.avatar {
+  width: 22px; height: 22px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm); color: var(--text-inverse);
+  font-size: var(--fs-11); font-weight: var(--fw-semibold); line-height: 1;
+}
+.avatar[data-m="codex"]  { background: var(--m-codex); }
+.avatar[data-m="claude"] { background: var(--m-claude); }
+.avatar[data-m="codex2"] { background: var(--m-codex2); }
+.avatar[data-m="human"]  { background: var(--m-human); }
+
+.msg-main { position: relative; padding-left: var(--sp-2); }
+.msg-main::before {
+  content: ""; position: absolute; left: 0; top: 2px;
+  width: 2px; height: 13px; border-radius: 1px; background: var(--m-codex);
+}
+.msg-head { gap: var(--sp-2); }
+.msg-author { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); }
+.msg-time { font-size: var(--fs-11); color: var(--text-3); }
+.msg-seq { font-size: var(--fs-11); color: var(--text-3); }
+.msg-text { margin-top: var(--sp-1); font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text); max-width: 720px; }
+
+/* §5 通用消息卡 .msg-card：padding 12、--r-md；一条消息最多套一层卡片 */
+.bubble {
+  margin-top: var(--sp-3); background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-3);
+}
+.bubble-head { gap: var(--sp-2); }
+.bubble-head > .ic { color: var(--text-3); }
+.bubble-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); }
+.bubble-note { font-size: var(--fs-12); color: var(--text-3); }
+.bubble-meta { font-size: var(--fs-11); color: var(--text-3); }
+
+/* §5 子任务行：高 40；卡内第二层用底色差，不再叠边框 */
+.bubble .subtask {
+  margin-top: var(--sp-2); padding: var(--sp-3);
+  background: var(--bg-surface-2); border-radius: var(--r-sm);
+}
+.st-head { gap: var(--sp-2); }
+.st-head .ic { width: 13px; height: 13px; color: var(--text-3); }
+.st-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); }
+.st-head .tag { margin-left: auto; }
+.st-body { margin-top: var(--sp-2); font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2); }
+.st-meta { display: flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-2); font-size: var(--fs-11); line-height: var(--lh-normal); color: var(--text-3); }
+.st-meta .ic { width: 12px; height: 12px; color: var(--text-3); }
+
+.plan-foot {
+  display: flex; align-items: flex-start; gap: var(--sp-2);
+  margin-top: var(--sp-2); padding: var(--sp-3);
+  background: var(--bg-surface-2); border-radius: var(--r-sm);
+  font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2);
+}
+.plan-foot .ic { margin-top: 3px; color: var(--text-3); }
+
+/* 滚动条：桌面工具可发现性优先，常显 */
+.stream::-webkit-scrollbar-thumb,
+.thread-pane::-webkit-scrollbar-thumb,
+.side-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); }
+
+/* §3.8 尊重系统设置：reduced-motion 下全部动效降为 0 */
+@media (prefers-reduced-motion: reduce) {
+  .app * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+</style>
+</head>
+<body>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     众说 · 打开回复串界面 —— 共享语义骨架（三套规范共用同一 DOM，只有 CSS 不同）
+     场景来源：截图 1372×872，开发大厅 · #14 整理本周演化日志并写周报 · 回复串已打开
+     ═══════════════════════════════════════════════════════════════════════ -->
+<svg class="sprite" aria-hidden="true" width="0" height="0" style="position:absolute">
+<defs>
+  <g id="i-search"><circle cx="7.2" cy="7.2" r="4.6"/><path d="M10.6 10.6 14 14"/></g>
+  <g id="i-file"><path d="M4 2.2h5.2L13 6v7.8H4z"/><path d="M9.2 2.2V6H13"/></g>
+  <g id="i-list"><path d="M6 4.2h8M6 8h8M6 11.8h8"/><path d="M3 4.2h.01M3 8h.01M3 11.8h.01"/></g>
+  <g id="i-users"><circle cx="6.4" cy="6" r="2.4"/><path d="M2.4 13.4c0-2.1 1.8-3.4 4-3.4s4 1.3 4 3.4"/><path d="M11.4 4.2a2.2 2.2 0 0 1 0 4.3M12.2 13.4c0-1.6-.6-2.7-1.5-3.3"/></g>
+  <g id="i-plus"><path d="M8 3.4v9.2M3.4 8h9.2"/></g>
+  <g id="i-caret"><path d="M5.6 6.6 8 9.2l2.4-2.6"/></g>
+  <g id="i-folder"><path d="M2.4 4.4h4l1.3 1.6h5.9v6.6H2.4z"/></g>
+  <g id="i-tune"><path d="M3 5h10M3 11h10"/><circle cx="6.4" cy="5" r="1.6"/><circle cx="9.8" cy="11" r="1.6"/></g>
+  <g id="i-inbox"><path d="M2.4 9.2 4 3.4h8l1.6 5.8v3.4H2.4z"/><path d="M2.4 9.2h3.2l.8 1.6h3.2l.8-1.6h3.2"/></g>
+  <g id="i-robot"><rect x="3.4" y="5" width="9.2" height="7" rx="1.6"/><path d="M8 2.4V5M6.4 8h.01M9.6 8h.01"/></g>
+  <g id="i-msg"><path d="M13.6 8.4c0 3-2.5 5.2-5.6 5.2-1 0-1.9-.2-2.7-.6L2.4 14l.9-2.4A5 5 0 0 1 2.4 8.4C2.4 5.4 4.9 3.2 8 3.2s5.6 2.2 5.6 5.2Z"/></g>
+  <g id="i-room"><path d="M3 13V3.6h6.4V13"/><path d="M9.4 6.6H13V13"/><path d="M2 13h12"/></g>
+  <g id="i-check"><path d="M3.2 8.4 6.4 11.6 12.8 5"/></g>
+  <g id="i-lock"><rect x="3.6" y="7" width="8.8" height="6.2" rx="1.4"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></g>
+  <g id="i-play"><path d="M5.8 4.2 11.8 8l-6 3.8z"/></g>
+  <g id="i-clock"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.6"/></g>
+  <g id="i-eye"><path d="M1.8 8S4.2 4.2 8 4.2 14.2 8 14.2 8 11.8 11.8 8 11.8 1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="1.8"/></g>
+  <g id="i-attach"><path d="M10.6 7.4 6.4 11.6a2.5 2.5 0 0 1-3.5-3.5l4.9-4.9a1.7 1.7 0 0 1 2.4 2.4l-4.9 4.9a.85.85 0 0 1-1.2-1.2l4.5-4.5"/></g>
+  <g id="i-at"><circle cx="8" cy="8" r="2.6"/><path d="M10.6 8v1.2a1.7 1.7 0 0 0 3.4 0V8a6 6 0 1 0-2.4 4.8"/></g>
+  <g id="i-activity"><path d="M2.4 8.6h3l1.8-5 2 9.4 1.6-4.4h2.8"/></g>
+  <g id="i-gear"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M2.4 8h2M11.6 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></g>
+  <g id="i-send"><path d="M13.8 2.6 7 9.4M13.8 2.6l-4.2 11.2-2.6-4.4-4.4-2.6z"/></g>
+  <g id="i-export"><path d="M8 10.4V2.8M5.2 5.6 8 2.8l2.8 2.8"/><path d="M3 10v3.2h10V10"/></g>
+  <g id="i-target"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6"/><path d="M8 1.2v1.8M8 13v1.8M1.2 8h1.8M13 8h1.8"/></g>
+  <g id="i-bell"><path d="M4.4 11.4V7.6a3.6 3.6 0 0 1 7.2 0v3.8z"/><path d="M3.2 11.4h9.6M6.6 13.2a1.6 1.6 0 0 0 2.8 0"/></g>
+  <g id="i-close"><path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8"/></g>
+  <g id="i-min"><path d="M3.6 8h8.8"/></g>
+  <g id="i-max"><rect x="3.8" y="3.8" width="8.4" height="8.4" rx="1.2"/></g>
+  <g id="i-model"><path d="M8 2.2 13.6 5.4v5.2L8 13.8 2.4 10.6V5.4z"/><path d="M2.4 5.4 8 8.6l5.6-3.2M8 8.6v5.2"/></g>
+  <g id="i-ring"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.4"/></g>
+  <g id="i-refresh"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13.2 3v2.6h-2.6"/></g>
+  <g id="i-branch"><circle cx="4.6" cy="3.6" r="1.6"/><circle cx="4.6" cy="12.4" r="1.6"/><circle cx="11.4" cy="6.4" r="1.6"/><path d="M4.6 5.2v5.6M6.2 6.4h3.6"/></g>
+  <g id="i-mute"><path d="M3 6.2h2.2L8.4 3.6v8.8L5.2 9.8H3z"/><path d="M10.8 6.4 13.6 9.2M13.6 6.4l-2.8 2.8"/></g>
+  <g id="i-corner"><path d="M5 3.4v4.2a2 2 0 0 0 2 2h5"/><path d="M10.4 7.8 12.4 9.6l-2 1.8"/></g>
+  <g id="i-user"><circle cx="8" cy="5.8" r="2.6"/><path d="M3 13.4c0-2.4 2.2-3.8 5-3.8s5 1.4 5 3.8"/></g>
+  <g id="i-merge"><path d="M4.6 3.6v4a3 3 0 0 0 3 3h3.8"/><path d="M9.6 8.8l2 1.8-2 1.8"/><circle cx="4.6" cy="2.6" r="1.4"/></g>
+  <g id="i-grid"><rect x="2.6" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="2.6" y="8.8" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="8.8" width="4.6" height="4.6" rx="1"/></g>
+</defs>
+</svg>
+
+
+<div class="app" data-theme="light">
+
+  <!-- ── 标题栏 36px ────────────────────────────────────────────────── -->
+  <header class="titlebar">
+    <span class="tb-brand">众说<i>本地项目群聊多 Agent 协同工作台</i></span>
+
+    <button class="tb-project" type="button">
+      <svg class="ic"><use href="#i-grid"/></svg>
+      <span>众说</span>
+      <span class="tb-path">D:\zhongshuo</span>
+      <span class="tb-branch"><svg class="ic"><use href="#i-branch"/></svg>main</span>
+      <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+    </button>
+
+    <span class="tb-drag"></span>
+
+    <nav class="tb-stats">
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-model"/></svg>原型 · 内存数据</button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-branch"/></svg>后台任务<b class="num">4</b><em>· 5 turn 在跑</em></button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-ring"/></svg>项目全境</button>
+      <button class="tb-stat icon-only" type="button" aria-label="搜索"><svg class="ic"><use href="#i-search"/></svg></button>
+      <button class="tb-stat icon-only" type="button" aria-label="自动更新"><svg class="ic"><use href="#i-refresh"/></svg></button>
+    </nav>
+
+    <div class="winctl">
+      <button class="winbtn" type="button" aria-label="最小化"><svg class="ic"><use href="#i-min"/></svg></button>
+      <button class="winbtn" type="button" aria-label="最大化"><svg class="ic"><use href="#i-max"/></svg></button>
+      <button class="winbtn close" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ── 侧栏 240px ───────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="side-scroll">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-search"/></svg><span class="side-label">搜索与收藏</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-file"/></svg><span class="side-label">文件与 Git</span><b class="side-badge">5</b></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-list"/></svg><span class="side-label">任务看板</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-users"/></svg><span class="side-label">成员管理</span></button>
+
+        <div class="side-heading"><span>项目</span><button class="icon-btn" type="button" aria-label="添加项目"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+
+        <div class="side-project is-open">
+          <button class="side-row" type="button">
+            <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+            <svg class="ic"><use href="#i-folder"/></svg>
+            <span class="side-label">众说</span>
+            <span class="side-note">当前</span>
+            <b class="side-badge">3</b>
+          </button>
+          <div class="side-sub">
+            <button class="side-subitem is-current" type="button"><span>开发大厅</span><b class="side-badge">3</b></button>
+            <button class="side-subitem" type="button"><span>方案讨论</span></button>
+            <button class="side-subitem" type="button"><span>文档整理</span></button>
+            <button class="side-subitem" type="button"><svg class="ic"><use href="#i-tune"/></svg><span>私信</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-foot">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-inbox"/></svg><span class="side-label">待我处理</span><b class="side-badge alert">5</b></button>
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-tune"/></svg><span class="side-label">设置</span></button>
+      </div>
+    </aside>
+
+    <!-- ── 主内容区 ─────────────────────────────────────────────────── -->
+    <main class="main">
+
+      <div class="page-head">
+        <h1 class="ph-title">开发大厅</h1>
+        <span class="ph-sub"><svg class="ic"><use href="#i-robot"/></svg>协调者 Codex<em>3 名成员</em></span>
+        <span class="tb-drag"></span>
+        <button class="unread" type="button"><svg class="ic"><use href="#i-msg"/></svg>3 条未读</button>
+        <button class="btn btn-ghost" type="button"><svg class="ic"><use href="#i-room"/></svg>房间设置</button>
+      </div>
+
+      <div class="page-tabs">
+        <button class="tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>对话池</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-check"/></svg>任务看板</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-file"/></svg>文件</button>
+      </div>
+
+      <div class="stream">
+
+        <!-- 警示条 -->
+        <div class="warnbar">
+          <svg class="ic"><use href="#i-lock"/></svg>
+          <div>
+            <p class="wb-title">有任务正在改文件</p>
+            <p class="wb-detail">任务 <span class="mono">#13</span> 修复 <span class="mono">build</span> 脚本在中文路径下失败 正在写入，其他修改任务排队。<a href="#">悬停查看说明</a></p>
+          </div>
+        </div>
+
+        <!-- #14 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#14</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">1 小时前</time>
+          </div>
+          <h2 class="ttl">整理本周演化日志并写周报</h2>
+          <p class="who">Codex 正在处理</p>
+          <p class="blurb">整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+          <p class="quote"><span class="mono">Codex</span> 两个子任务都已派发。Claude 跑条在等 <span class="mono">#13</span> 释放写入锁 —— 同一物理目录最多 1 个受管理写入者…<br><span class="mono">Codex#2</span> 我这边开始扫 <span class="mono">docs/</span> 了，大约需要 3 分钟。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #13 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#13</span>
+            <span class="tag tag-warning"><svg class="ic"><use href="#i-clock"/></svg>待你审阅</span>
+            <span class="tb-drag"></span>
+            <time class="time">2 小时前</time>
+          </div>
+          <h2 class="ttl">修复 build 脚本在中文路径下失败</h2>
+          <p class="who">Claude 已修改 3 个文件</p>
+          <p class="blurb">@Claude build 脚本在中文路径下报 ENOENT，定位一下并修掉，改完给我验证记录。</p>
+          <p class="quote"><span class="mono">Claude</span> 另一条验证没跑：<span class="mono">pnpm build</span> 全量构建需要 6 分钟，你这次没要求，所以我没执行，报告里…<br><span class="mono">Claude</span> 任务完成，等你审阅改动。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>6 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #12 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#12</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">3 小时前</time>
+          </div>
+          <h2 class="ttl">分析模块划分并给出重构建议</h2>
+          <p class="who">Codex、Claude 正在处理</p>
+          <p class="blurb">@全体 请审查 <span class="mono">src/</span> 下六个边界的实际依赖方向，找出违反契约的引用，并给出可执行的重构步骤。只分析，不要改文件。</p>
+          <p class="quote"><span class="mono">Codex</span> 整合稿 R1 已完成，含 2 条共同确认结论、1 条仍开放的分歧（议题 <span class="mono">#12-2</span> 需要你决定）和 3 个…<br><span class="mono">Claude</span> @Codex 议题 <span class="mono">#12-2</span> 我倾向不允许直连。但先别急着定，把 <span class="mono">ui → persistence</span> 的 6 处按"类型越界 / …</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+      </div>
+
+      <!-- 底部发布器 -->
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">@</span>
+          <input type="text" value="向对话池发布新任务 · 自动… 输入 @ 选择成员" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送</button>
+        </div>
+      </div>
+
+    </main>
+
+    <span class="splitter"></span>
+
+    <!-- ── 回复串（详情面板） ───────────────────────────────────────── -->
+    <aside class="thread">
+      <div class="thread-bar">
+        <span class="idx">#14</span>
+        <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+        <span class="tag tag-neutral"><svg class="ic"><use href="#i-play"/></svg>运行中</span>
+        <span class="tb-drag"></span>
+        <button class="icon-btn" type="button" aria-label="导出"><svg class="ic"><use href="#i-export"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="定位"><svg class="ic"><use href="#i-target"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关注"><svg class="ic"><use href="#i-eye"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+
+      <div class="root-msg">
+        <span class="root-arrow">↳</span>
+        <p class="root-text">你 整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+        <time class="time">10:42</time>
+      </div>
+
+      <div class="thread-tabs">
+        <button class="thread-tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>回复<b class="num">3</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-check"/></svg>成果</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-activity"/></svg>活动</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-users"/></svg>成员<b class="num">1</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-list"/></svg>任务详情</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-play"/></svg>运行详情</button>
+      </div>
+
+      <div class="thread-pane">
+
+        <!-- 模式提示 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-mute"/></svg><span class="sc-title">模式 AUTO：默认协调者接单</span></div>
+          <p class="sc-body">本条没有 <b>@</b>，按路由表由房间协调者 Codex 接单。它可以直接回答，也可以提交结构化分工计划。协调者等待子任务期间不占用活跃模型调用槽。</p>
+        </div>
+
+        <!-- Codex 消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:43</time>
+              <span class="msg-seq">#2</span>
+            </div>
+            <p class="msg-text">这条我拆成两个子任务，互不依赖，可以并行取证。</p>
+
+            <!-- 分工计划卡 -->
+            <section class="bubble">
+              <div class="bubble-head">
+                <svg class="ic"><use href="#i-list"/></svg>
+                <span class="bubble-title">分工计划</span>
+                <span class="bubble-note">2 个子任务</span>
+                <span class="tb-drag"></span>
+                <span class="bubble-meta">程序校验通过后才生成任务</span>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">从 docs/ 提取本周变更要点</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">按日期筛出本周新增/修改的文档与设计决策，输出要点清单</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：带文件引用与版本号的要点清单 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：每条要点标注来源文件与章节；区分"已拍板"与"仍待决"</p>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">整理决策时间线</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">把本周的决策按时间顺序排成时间线，标出互相依赖项</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：Markdown 时间线 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：日期与来源可回溯；标注被后续决策覆盖的条目</p>
+              </div>
+
+              <p class="plan-foot"><svg class="ic"><use href="#i-merge"/></svg>整合计划：汇总两份要点，按"功能进展 / 决策变更 / 风险"三段生成周报草稿。</p>
+            </section>
+          </div>
+        </article>
+
+        <!-- 校验说明 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-check"/></svg><span class="sc-title">程序校验通过后才生成任务</span></div>
+          <p class="sc-body">校验项：无跨项目依赖、无循环依赖、负责人均在房间内、未提升你未授权的权限、子任务数 2 ≤ 6、拆分深度 1 层。本任务未拆分时界面会记录"本次未拆分"，不靠自然语言判断成功。</p>
+        </div>
+
+        <!-- Codex 第二条消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:44</time>
+              <span class="msg-seq">#4</span>
+            </div>
+          </div>
+        </article>
+
+      </div>
+
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">↳</span>
+          <input type="text" value="跟进 #14 · 延续自动… 输入 @ 定向提问" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送补充</button>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  /* 支持 ?theme=dark 切换深色 */
+  var t = new URLSearchParams(location.search).get('theme');
+  if (t === 'dark') document.querySelector('.app').setAttribute('data-theme', 'dark');
+</script>
+</body>
+</html>

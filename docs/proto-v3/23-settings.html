@@ -1,0 +1,26 @@
+      <!-- ══ 设置 ══ -->
+      <section class="view" id="view-settings">
+        <div class="settings">
+          <div class="set-nav">
+            <div class="si on">常规</div><div class="si">协作与预算</div><div class="si">通知</div><div class="si">局域网访问</div><div class="si">Runtime 与成员</div><div class="si">数据与备份</div><div class="si">诊断与反馈</div>
+          </div>
+          <div class="set-body">
+            <div class="set-sec"><h3>常规</h3><div class="sub">桌面客户端行为（Windows 优先）</div>
+              <div class="srow"><div class="sl"><div class="t">关闭窗口时最小化到托盘</div><div class="d">daemon 继续运行，进行中的任务不中断；显式「退出」才走停止流程（决策 43）</div></div><div class="tgl on" onclick="this.classList.toggle('on')"></div></div>
+              <div class="srow"><div class="sl"><div class="t">开机自启并驻留托盘</div><div class="d">默认开启，可关闭（决策 44）</div></div><div class="tgl on" onclick="this.classList.toggle('on')"></div></div>
+              <div class="srow"><div class="sl"><div class="t">启动时询问未完成任务</div><div class="d">重启后列出未完成任务等你点「继续」，不自动接着调用模型（E7）</div></div><div class="tgl on" onclick="this.classList.toggle('on')"></div></div>
+              <div class="srow"><div class="sl"><div class="t">深色模式</div><div class="d">一键切换浅色 / 深色主题</div></div><button class="btn sm" onclick="toggleTheme()">切换主题</button></div>
+            </div>
+            <div class="set-sec"><h3>协作与预算</h3><div class="sub">研讨流程与护栏默认值（A2 / E4 / E12）</div>
+              <div class="srow"><div class="sl"><div class="t">缺席容忍时间</div><div class="d">成员超过此时长未回，自动「按缺席继续」，不打断仍在运行的成员</div></div><input class="inp num" style="width:70px" value="20"><span style="font-size:11px;color:var(--ink3)">分钟</span></div>
+              <div class="srow"><div class="sl"><div class="t">预算上限推导</div><div class="d">核心 6N+1、含修订 7N+2，按冻结名单推导；SYNTHESIS/RATIFY 预留尾部配额，耗尽后程序拼接已有稿兜底</div></div><select class="inp"><option>自动（按名单）</option><option>自定义</option></select></div>
+              <div class="srow"><div class="sl"><div class="t">审阅策略 reviewPolicy</div><div class="d">报告自动交付；代码改动需人工审阅后才标记完成（A4）</div></div><select class="inp"><option>报告自动 · 代码人工</option><option>全部人工</option></select></div>
+              <div class="srow"><div class="sl"><div class="t">子任务规模上限</div><div class="d">每次分工最多 6 个子任务、拆分深度 1 层（§5.3）</div></div><input class="inp num" style="width:60px" value="6"></div>
+            </div>
+            <div class="set-sec"><h3>数据与隐私</h3><div class="sub">控制面与工作记录只存本机（U06）</div>
+              <div class="srow"><div class="sl"><div class="t">本地数据库</div><div class="d">SQLite（WAL）· 应用数据目录 · 任务上下文默认按任务隔离（U08）</div></div><button class="btn sm">打开数据目录</button></div>
+              <div class="srow"><div class="sl"><div class="t">导出</div><div class="d">报告与线程可导出 Markdown / Word / HTML（决策 34）</div></div><button class="btn sm">导出…</button></div>
+            </div>
+          </div>
+        </div>
+      </section>

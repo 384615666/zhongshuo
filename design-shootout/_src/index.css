@@ -1,0 +1,117 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   index.html —— 三方案横向对比台（默认自带样式，不依赖任何主题 CSS）
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --line: #2a2f3a;
+  --line-2: #363c49;
+  --ink: #e9ecf2;
+  --ink-2: #a9b1c0;
+  --ink-3: #737d8e;
+  --accent: #6f8dff;
+  --r: 10px;
+  --mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  --ui: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--ui);
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────── */
+header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  height: 60px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.brand span { color: var(--ink-3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+.spacer { flex: 1; }
+
+.seg { display: flex; gap: 2px; padding: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); }
+.seg button {
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: none; border: 0; border-radius: 7px;
+  padding: 6px 14px; cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.seg button:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+.seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
+.layout { display: flex; gap: 2px; padding: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); }
+.layout button { font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+.layout button.on { background: rgba(255,255,255,.10); color: var(--ink); font-weight: 600; }
+
+.tip { font-size: 12px; color: var(--ink-3); }
+.tip kbd {
+  font-family: var(--mono); font-size: 11px;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+
+/* ── 舞台 ─────────────────────────────────────────────────────────── */
+.stage { flex: 1; min-height: 0; display: flex; gap: 1px; background: var(--line); }
+.cell { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+.cell-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; height: 44px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.rank {
+  flex: none; width: 22px; height: 22px; border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; font-family: var(--mono);
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+.name { font-size: 13px; font-weight: 600; }
+.via { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.ratio { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.grow { flex: 1; }
+.open {
+  font: inherit; font-size: 12px; color: var(--ink-2); text-decoration: none;
+  padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line-2);
+  transition: background-color .12s, color .12s;
+}
+.open:hover { background: var(--panel-2); color: var(--ink); }
+
+/* iframe 始终按设计稿原生 1372×872 渲染，再用 transform 等比缩放，
+   保证三栏并排时看到的仍是"整屏"，而不是被挤变形的局部。 */
+.frame {
+  flex: 1; min-height: 0; padding: 12px;
+  display: grid; place-items: start center;
+  overflow: auto; background: #0b0d11;
+}
+.stage[data-layout="single"] .frame { place-items: start center; }
+.scaler { position: relative; width: calc(1372px * var(--k, .4)); height: calc(872px * var(--k, .4)); }
+.scaler iframe {
+  position: absolute; top: 0; left: 0; display: block; border: 0;
+  width: 1372px; height: 872px;
+  transform: scale(var(--k, .4)); transform-origin: top left;
+  background: #fff; box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
+}
+
+/* 单栏模式：1:1 原尺寸（超出则滚动） */
+.stage[data-layout="single"] .cell { flex: none; width: 100%; }
+.stage[data-layout="single"] { --k: 1; }
+
+.notice {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+  font-size: 12px; padding: 8px 16px; border-radius: 999px;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.notice.show { opacity: 1; }

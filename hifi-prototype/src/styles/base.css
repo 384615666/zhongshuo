@@ -1,0 +1,1725 @@
+/* ============================================================
+   众说 · 高保真原型基础样式
+   桌面客户端密度；状态一律「文字 + 图标」（§17.5）
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+h1, h2, h3, h4, h5, h6, p, figure {
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+ul, ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+code, pre, .mono {
+  font-family: var(--font-mono);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--r-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-4);
+  background-clip: content-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   应用外壳
+   ============================================================ */
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  /* 覆盖式查看面板（.detail-overlay）以此为定位祖先，
+     叠在房间之上而不挤走它 */
+  position: relative;
+}
+
+/* ---------- 顶部工具栏：第二十六批已整条删除 ----------
+   原来这里是应用内那条 46px 的 `.topbar`（折叠侧栏 / 项目选择器 / 原型标注 /
+   后台任务 / 恢复检查 / 项目全停 / 搜索 / 主题 / 账号）。
+   用户要求"这条顶部栏不要了"，各项按职责分到三处：
+     · 标题栏（.titlebar，窗口外壳）— 折叠侧栏、原型标注、后台任务与恢复检查
+     · 侧栏（.sidebar-project / .sidebar-foot）— 项目选择器、全局搜索、项目全停
+     · 应用设置 → 通用 → 外观与账号 — 主题、账号、退出、重置原型数据
+   相关样式见 titlebar.css 与下方"侧栏"一节。 */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+  font-weight: 650;
+  font-size: var(--fs-14);
+  letter-spacing: 0.01em;
+  flex: none;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  /* 品牌标识是 --grad 除主按钮外**唯一**的合法去处（规范 §5.9）。
+     底色与渐变分开写：`background-color` 是**兜底实色**，
+     `--grad` 一旦解析失败（自定义属性缺失/被覆盖/引擎异常），
+     只剩实色也不会出现"白底白字"（见 .btn.primary 同款注释）。 */
+  background-color: var(--accent);
+  background-image: var(--grad);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  flex: none;
+}
+/**
+ * 深色主题下 --grad 是**亮**渐变（#60a5fa→#6ee7b7），白字对比仅 1.86:1。
+ * 规范 §2.8 要求配深字 #0b0d10，故品牌标识与主按钮同步改用 --text-inverse
+ * （深色主题下即 #0d1117，视觉上与 #0b0d10 等效且已是既有令牌）。
+ */
+:root[data-theme='dark'] .brand-mark {
+  color: var(--text-inverse);
+}
+
+/* ---------- 侧栏 ---------- */
+
+.sidebar {
+  flex: none;
+  width: 246px;
+  display: flex;
+  flex-direction: column;
+  /* 侧栏与分区底色（规范 §2.1）：与白主区靠**面差**分区，不靠粗边框 */
+  background: var(--bg-app);
+  border-right: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.sidebar.collapsed {
+  width: 0;
+  border-right: none;
+}
+
+/* ---------- 第二十六批：侧栏最顶部的项目选择器 ----------
+   从应用内顶栏搬来。它管的就是下面那个项目列表，选择器与对象放在一起更顺手。 */
+.sidebar-project {
+  flex: none;
+  padding: 8px 8px 0;
+}
+.side-project-picker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.side-project-picker:hover {
+  background: var(--bg-surface-3);
+  border-color: var(--border-strong);
+}
+.side-project-picker-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 650;
+  font-size: var(--fs-13);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* "显示 N 个"：项目多时提示还有别的项目在下面列表里（§17.1） */
+.side-project-picker-count {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.warn-icon {
+  color: var(--warning);
+}
+/* 目录失效是"配置还在但成员读写会失败"，与"项目不存在"分开提示 */
+.side-project-warn {
+  margin-top: 5px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* 「搜索与收藏」+ 它右边贴边的全局搜索小按钮。
+ *
+ * 对齐是这里的关键：如果行内条目不加左内边距，它的图标会落在 16px，
+ * 而其余三个功能入口在 32px —— 视觉上「搜索与收藏」会被读成另一层级
+ * （第二轮反馈：搜索按钮改到右边后，我曾把 16/46/16/16 修成 32/32/32/32，
+ * 这次换位后必须保持 32 这条基线）。
+ * 所以行内条目自己补 24px 左内边距（8 容器 + 24 = 32），
+ * 搜索按钮用 margin-left:auto 顶到侧栏右边缘。 */
+/* 其余三个功能入口（文件与 Git / 任务看板 / 成员管理）与上面那一行同一条图标基线：
+   8(容器) + 24(条目左内边距) = 32。少了这条它们会落在 16px，
+   与「搜索与收藏」的 32px 形成错层级。 */
+.sidebar-top > .side-item {
+  padding-left: 24px;
+}
+.side-row-flat {
+  display: flex;
+  align-items: center;
+}
+.side-row-flat .side-item {
+  flex: 1;
+  min-width: 0;
+  padding-left: 24px;
+}
+.side-icon-btn {
+  flex: none;
+  /* 贴右边缘：把按钮推到行尾（用户要求"贴近右边框"） */
+  margin-left: auto;
+  width: 24px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.side-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 8px 12px;
+}
+
+/* ---------- 第十五批：三段式侧栏 ----------
+   上部（功能入口）与底部（待办/设置）不滚动，只有中间的项目区滚动。
+   这样项目再多也不会把"任务看板""待我处理"顶出视口（第十三批实测过该缺陷）。 */
+.sidebar-top {
+  flex: none;
+  padding: 8px 8px 4px;
+}
+
+/* 项目行：展开箭头与"切换项目"是两个动作，用 flex 分成两个点击区 */
+.side-project {
+  margin-bottom: 2px;
+}
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--r-sm);
+}
+.side-row.context-active {
+  background: var(--bg-hover);
+}
+.side-caret {
+  flex: none;
+  width: 20px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+.side-caret:hover {
+  background: var(--bg-active);
+  color: var(--text-2);
+}
+/* 项目名按钮：占满剩余宽度，点击才切换当前项目 */
+.side-item-label-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.side-item-label-btn:hover {
+  color: var(--text);
+}
+.side-row.context-active .side-item-label-btn {
+  color: var(--text);
+  font-weight: 600;
+}
+/* "当前"是上下文标记（我在哪个项目），不是位置高亮（我在哪一页） */
+.side-current-tag {
+  flex: none;
+  font-size: var(--fs-10);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--bg-active);
+  color: var(--text-3);
+  font-weight: 600;
+}
+.side-empty {
+  padding: 8px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ---------- 顶栏项目菜单：勾选（显示）与项目名（焦点）分开 ---------- */
+.menu-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.menu-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-12);
+  outline: none;
+}
+.menu-head {
+  padding: 6px 10px 2px;
+}
+.menu-project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.menu-check {
+  flex: none;
+  width: 26px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+.menu-check:hover {
+  background: var(--bg-active);
+}
+.menu-check.on {
+  color: var(--accent-text);
+}
+/* 当前项目的勾选框不可点：它不能被隐藏（§17.7） */
+.menu-check.locked {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+.menu-project-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 4px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+}
+.menu-project-name:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* 底部固定区：需要"始终可见、一键可达"的入口放这里，
+   不和滚动内容一起被推走（待我处理属于这一类） */
+.sidebar-foot {
+  flex: none;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--border-subtle);
+  /* 与侧栏同底（规范 §5.1）：底部固定区不另起一层灰，避免出现灰色夹层 */
+  background: var(--bg-app);
+}
+
+.side-section {
+  margin-bottom: 14px;
+}
+
+.side-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+/* 可折叠的分组标题：整行可点，去掉按钮默认外观 */
+.side-heading-toggle {
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+.side-heading-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-3);
+}
+.side-heading-note {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+  flex: none;
+}
+/* 分组标题右侧的轻量链接（如「项目成员 → 管理」）：与 note 同级样式，悬停强调 */
+.side-heading-link {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+  flex: none;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+}
+.side-heading-link:hover {
+  background: var(--bg-active);
+  color: var(--accent-text);
+}
+/* 在 /members 页时高亮该链接：功能组不再有重复的「成员管理」nav 项，
+   位置感由这个入口承担，否则用户进到成员管理页会在侧栏找不到自己在哪。
+   选中态 = 主题 --bg-surface 垫底渐变 + --accent-text（规范 §2.0/§5.1） */
+.side-heading-link.on {
+  /* 分层写：底色与渐变各一条声明。
+     用 `background: var(--grad-soft), var(--bg-surface)` 简写时，
+     只要 --grad-soft 解析失败，**整条声明**（含垫底的 --bg-surface）一起被丢弃，
+     选中态就退化成"没有任何底色"→ 看起来和未选中一样（用户报的"全白看不见"）。
+     拆开后即使渐变失效，至少还留着主题面底色。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.side-heading button {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+}
+.side-heading button:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.side-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/**
+ * 选中态（位置）：主题 --bg-surface 垫底渐变 + --accent-text（规范 §2.0/§5.1）。
+ *
+ * `--grad-soft` 是 CSS image，只能用于 background（不能 background-color），
+ * 且必须垫 `--bg-surface` —— 垫在灰槽或语义 soft 底上会混色、偏离基准图
+ * （approved-selected-gradient.png 是白底环境下的取样）。
+ */
+.side-item.active {
+  /* 分层写：底色与渐变各一条声明。
+     用 `background: var(--grad-soft), var(--bg-surface)` 简写时，
+     只要 --grad-soft 解析失败，**整条声明**（含垫底的 --bg-surface）一起被丢弃，
+     选中态就退化成"没有任何底色"→ 看起来和未选中一样（用户报的"全白看不见"）。
+     拆开后即使渐变失效，至少还留着主题面底色。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.side-item.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--accent);
+}
+
+/* "你在哪个项目"（上下文）与"你在哪一页"（位置）是两件事，视觉上必须分得开：
+   上下文 = 浅底、无强调条；位置 = 浅底 + 左侧强调条。
+   否则项目项和功能页项长得一样，用户分不清哪个是"当前所在页"。 */
+.side-item.context-active {
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+.side-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 房间：缩进挂在所属项目下，并用左侧竖线明确"这是它的子项"，
+   而不是和项目同级平铺（用户反馈"看不出房间属于当前项目"） */
+.side-item.sub {
+  padding-left: 22px;
+  font-size: var(--fs-12);
+  margin-left: 12px;
+  width: calc(100% - 12px);
+}
+.side-item.sub::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+}
+.side-item.sub.active::after {
+  background: var(--accent);
+}
+.side-item.archived {
+  opacity: 0.62;
+}
+
+.avatar {
+  flex: none;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  /* 头像字母色随主题（规范 §2.6）：浅色成员色深 → 白字；深色成员色亮 → 深字 */
+  color: var(--avatar-fg);
+  letter-spacing: 0;
+  position: relative;
+}
+.avatar.round {
+  border-radius: var(--r-full);
+}
+.avatar-16 { width: 16px; height: 16px; font-size: 9px; }
+.avatar-18 { width: 18px; height: 18px; font-size: 10px; }
+.avatar-22 { width: 22px; height: 22px; font-size: 11px; }
+.avatar-28 { width: 28px; height: 28px; font-size: 12px; }
+.avatar-36 { width: 36px; height: 36px; font-size: 14px; }
+
+.avatar .state-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--r-full);
+  border: 2px solid var(--bg-surface-2);
+}
+
+/* ---------- 主区 ---------- */
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 40px;
+}
+.page.narrow {
+  padding: 20px 24px 40px;
+  max-width: 1080px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.page-title {
+  font-size: var(--fs-20);
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+.page-sub {
+  margin-top: 4px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  max-width: 78ch;
+  line-height: 1.65;
+}
+.page-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.section {
+  margin-bottom: 22px;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-13);
+  font-weight: 680;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+.section-title .count {
+  font-weight: 500;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+/* ============================================================
+   卡片与面板
+   ============================================================ */
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px;
+}
+.card.tight {
+  padding: 10px 12px;
+}
+.card.flat {
+  border-radius: var(--r-md);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.card-title {
+  font-weight: 650;
+  font-size: var(--fs-13);
+}
+.card-meta {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+.panel {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.panel.warning {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--text);
+}
+.panel.danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--text);
+}
+.panel.info {
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  color: var(--text);
+}
+.panel.success {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--text);
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 网格 ---------- */
+
+.grid {
+  display: grid;
+  gap: 12px;
+}
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid-auto { grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); }
+
+@media (max-width: 1180px) {
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ============================================================
+   按钮
+   ============================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 11px;
+  min-height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: var(--fs-12);
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-surface-3);
+}
+.btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/**
+ * 主按钮 = `--grad` 深渐变（规范 §5.8）。
+ *
+ * `--grad` 与 `--grad-soft` 分工：深渐变只给品牌标识与浮层操作（新回复 pill）；
+ * 浅渐变给选中态与主按钮。深色主题下 --grad 是亮渐变，文字须用深字。
+ *
+ * ⚠ **必须分开写 `background-color` 与 `background-image`，不能用 `background`
+ * 简写**：一旦渐变令牌解析失败（自定义属性缺失、被覆盖、或引擎异常），
+ * `background` 简写整条声明会被丢弃。原先 `background: var(--grad)` +
+ * `color:#fff` 的组合在渐变失效时会退化成"白底白字"的隐形按钮
+ * （用户反馈的"选中后直接全白什么都看不见了"正是这个现象）。
+ *
+ * 主按钮样式：浅蓝→浅绿渐变 + 蓝色文字（用户指定，对照 approved-selected-gradient.png，
+ * 与选中态同族，靠按钮形状与边框区分"可点操作"与"位置选中"）。
+ * 兜底实色是主题面（`--bg-surface`）：即使渐变失效，蓝色文字在主题面上依然可读。
+ */
+.btn.primary {
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  /* 浅底 hover 用轻微压暗（与深底的提亮相反） */
+  filter: brightness(0.97);
+}
+/**
+ * 主按钮禁用态：**可辨认，但不褪成灰白**。
+ *
+ * 视觉：去饱和（saturate .45）——渐变族不变，只是"哑"了，未悬停也能看出不可点；
+ * 不用 opacity（会把浅渐变连同蓝字一起冲淡）。禁用语义另由 cursor: not-allowed、
+ * disabled 属性、无 hover 反馈与 composer 内的原因提示共同承担：
+ *   - 结构性原因（房间无成员等 sendDisabledReason）→ 输入区常驻 --warning 提示；
+ *   - 内容为空 → 按钮 title="输入内容后可发送"（Composer 按状态生成）。
+ */
+.btn.primary:disabled {
+  filter: saturate(0.45);
+  cursor: not-allowed;
+}
+.btn.primary:disabled:hover {
+  /* 禁用态 hover 保持哑态，不得恢复饱和（否则悬停时像可用按钮） */
+  filter: saturate(0.45);
+}
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.btn.sm {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: var(--fs-11);
+}
+.btn.lg {
+  min-height: 34px;
+  padding: 7px 16px;
+  font-size: var(--fs-13);
+}
+.btn.block {
+  width: 100%;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex: none;
+}
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.icon-btn.active {
+  /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0） */
+  /* 分层写：底色与渐变各一条声明。
+     用 `background: var(--grad-soft), var(--bg-surface)` 简写时，
+     只要 --grad-soft 解析失败，**整条声明**（含垫底的 --bg-surface）一起被丢弃，
+     选中态就退化成"没有任何底色"→ 看起来和未选中一样（用户报的"全白看不见"）。
+     拆开后即使渐变失效，至少还留着主题面底色。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+}
+.icon-btn.sm {
+  width: 22px;
+  height: 22px;
+}
+
+/* ============================================================
+   状态标签（文字 + 图标成对，§17.5）
+   ============================================================ */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border: 1px solid;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+  flex: none;
+}
+.tag.neutral { color: var(--neutral); border-color: var(--neutral-border); background: var(--neutral-soft); }
+.tag.info { color: var(--info); border-color: var(--info-border); background: var(--info-soft); }
+.tag.success { color: var(--success); border-color: var(--success-border); background: var(--success-soft); }
+.tag.warning { color: var(--warning); border-color: var(--warning-border); background: var(--warning-soft); }
+.tag.danger { color: var(--danger); border-color: var(--danger-border); background: var(--danger-soft); }
+.tag.accent { color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-soft); }
+.tag.solid.neutral { background: var(--neutral); color: #fff; border-color: var(--neutral); }
+.tag.solid.info { background: var(--info); color: #fff; border-color: var(--info); }
+.tag.solid.success { background: var(--success); color: #fff; border-color: var(--success); }
+.tag.solid.warning { background: var(--warning); color: #fff; border-color: var(--warning); }
+.tag.solid.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+.tag.plain {
+  border-color: var(--border);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-weight: 550;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface-2);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.chip.mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.chip button {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.chip button:hover {
+  color: var(--danger);
+}
+
+/* 灰色意图标签（E8：显示实际能力，不画锁/盾） */
+.intent-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  cursor: help;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   头像行 / 成员行
+   ============================================================ */
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  color: var(--text-2);
+}
+.member-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.member-row-name {
+  font-weight: 550;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-row-state {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  flex: none;
+}
+
+/* ============================================================
+   表单
+   ============================================================ */
+
+.field {
+  margin-bottom: 13px;
+}
+.field-label {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--text);
+}
+.field-hint {
+  margin-top: 4px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+/* ---------- 页内筛选行 ----------
+   筛选/范围控件统一放在**内容区左上角**（不是页头右侧）：
+   页头右侧离侧栏最远，用户点完侧栏入口还要把鼠标横跨整屏去操作，
+   而且和"标题/说明"挤在一行时会把标题压窄。
+
+   为什么需要 .field.inline：这个类此前被四个页面使用，却**从未定义过样式**，
+   于是退化成块级 .field（label 独占一行）并被子项 flex 拉伸 ——
+   实测同一页里出现 33px / 70px 两种下拉高度，两个下拉看起来不是一套控件。
+   这里明确：行内排布、label 与控件同一基线、控件不被拉伸。 */
+.field.inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  flex: none;
+}
+.field.inline > .field-label {
+  display: block;
+  margin-bottom: 0;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* 筛选行容器：所有筛选控件共用一致的高度与间距 */
+.page-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+}
+.page-filters .select,
+.page-filters .input {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: var(--fs-12);
+}
+/* 下拉按内容宽（覆盖 .select 的 width:100%），不被拉满 */
+.page-filters .field.inline .select {
+  width: auto;
+  min-width: 132px;
+  max-width: 260px;
+}
+/* 搜索框这类"可增长"的输入允许撑满剩余宽度 */
+.page-filters > div > .input {
+  width: 100%;
+}
+.page-filters .field.inline {
+  gap: 6px;
+}
+/* 筛选行内的所有控件必须**同高**，否则一行里三种高度看起来像没做完。
+   实测修前：下拉 30px、.seg 33px（含自身 padding/border）、.btn.sm 25px。 */
+.page-filters .seg {
+  height: 30px;
+  box-sizing: border-box;
+  align-items: center;
+}
+.page-filters .seg button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+.page-filters .btn.sm {
+  min-height: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+}
+/* 筛选行里的"动作按钮"（如添加成员）紧跟在控件之后，
+   不推到行尾 —— 它在左侧附近才符合"从侧栏进来鼠标就在左边"的动线。 */
+.page-filters .spacer {
+  display: none;
+}
+.page-filters > .btn {
+  flex: none;
+}
+/* 筛选行里的范围说明/计数等只读文字 */
+.page-filters .filter-note {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.5;
+  align-self: center;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 6px 10px;
+  min-height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  font-size: var(--fs-13);
+  color: var(--text);
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.65;
+}
+.input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+.input.invalid {
+  border-color: var(--danger);
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: var(--fs-13);
+}
+.switch-track {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  border-radius: var(--r-full);
+  background: var(--border-strong);
+  transition: background 0.15s;
+  flex: none;
+}
+.switch-track.on {
+  background: var(--accent);
+}
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--r-full);
+  background: #fff;
+  transition: transform 0.15s;
+  box-shadow: var(--shadow-sm);
+}
+.switch-track.on .switch-knob {
+  transform: translateX(15px);
+}
+.switch.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/**
+ * 分段控件（「任务/讨论」「预览/源码」等模式切换；规范 §5.5）。
+ *
+ * **组内不使用渐变** —— 渐变垫在 --bg-surface-3 灰槽上会混色、偏离基准图（§2.0）。
+ * 激活块用白底 + --shadow-sm + --text 600 表达"选中的那一块"。
+ * 这与"独立选中项"（导航项/内容页签/文件标签，用 --grad-soft）是两种不同控件，
+ * 不得用全局 .selected 类把两者统一染成渐变。
+ */
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-3);
+  gap: 2px;
+}
+.seg button {
+  border: none;
+  background: transparent;
+  padding: 4px 11px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg button:hover:not(:disabled) {
+  color: var(--text);
+}
+.seg button.on {
+  background: var(--bg-surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   表格 / 定义列表
+   ============================================================ */
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 5px 14px;
+  font-size: var(--fs-12);
+  align-items: baseline;
+}
+.kv dt {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.kv dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+  /* 用 break-word 而不是 anywhere：只在"整词放不下"时才断，避免把
+     "Codex" 断成 "Co de x"（用户反馈：成员名逐字断行）。 */
+  overflow-wrap: break-word;
+}
+/* 成员名等短标识永不内部断行；长路径/hash 仍允许任意位置断（它们本来就没有词边界） */
+.kv-name { white-space: nowrap; }
+.kv .mono-sm, .kv dd code { overflow-wrap: anywhere; }
+
+/**
+ * 「技术信息」折叠区（任务属性卡内，2026-09-24 收尾②）：
+ * threadId / taskRevision 这类内部标识默认收起，不与产品信息争注意力。
+ * 样式刻意比正文更弱（11px、--text-3、无边框），展开后才出现等宽标识。
+ */
+.kv-tech {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+.kv-tech > summary {
+  cursor: pointer;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  list-style: none;
+  user-select: none;
+}
+.kv-tech > summary::-webkit-details-marker { display: none; }
+.kv-tech > summary::before { content: '▸ '; color: var(--text-4); }
+.kv-tech[open] > summary::before { content: '▾ '; }
+.kv-tech > summary:hover { color: var(--text-2); }
+.kv-tech > .kv { margin-top: 8px; }
+
+/**
+ * 详情内嵌进侧面板（详情 → 任务概况，减负第二轮 §1）：
+ * 面板宽度通常只有 560–640px，两列/三列网格会把每格压到 ~180px，
+ * 于是成员名、模式说明被迫逐字断行。这里改成"按面板宽度自适应"：
+ * 够宽才分列，窄了就单列；成员名列永不内部断行。
+ */
+.detail-embed .grid-2 { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.detail-embed .grid-3 { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.detail-embed .kv { grid-template-columns: minmax(76px, auto) 1fr; gap: 5px 10px; }
+
+table.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+}
+table.tbl th {
+  text-align: left;
+  font-weight: 650;
+  color: var(--text-3);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-2);
+  white-space: nowrap;
+  font-size: var(--fs-11);
+}
+table.tbl td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+table.tbl tr:last-child td {
+  border-bottom: none;
+}
+table.tbl tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+/* ============================================================
+   空状态与错误态
+   ============================================================ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 44px 20px;
+  color: var(--text-4);
+  text-align: center;
+}
+.empty-title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.empty-detail {
+  font-size: var(--fs-12);
+  max-width: 46ch;
+  line-height: 1.7;
+  /* 空态说明是可读内容（§2.3）：最低 --text-3，不用 --text-4 */
+  color: var(--text-3);
+}
+/* 空态大图标是纯装饰（§7）：允许 --text-4（.faint 全局已提为 --text-3） */
+.empty .faint { color: var(--text-4); }
+
+.error-state {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+.error-state .code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--danger);
+  font-weight: 600;
+}
+.error-state .action {
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+/* ============================================================
+   浮层：抽屉 / 弹窗 / 菜单 / 提示
+   ============================================================ */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-scrim);
+  z-index: 60;
+  display: flex;
+  animation: fade 0.12s ease-out;
+}
+.scrim.center {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.scrim.right {
+  justify-content: flex-end;
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+}
+
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+  animation: pop 0.14s ease-out;
+  width: 100%;
+}
+.modal.sm { max-width: 420px; }
+.modal.md { max-width: 620px; }
+.modal.lg { max-width: 880px; }
+.modal.xl { max-width: 1180px; }
+
+.drawer {
+  width: 100%;
+  max-width: 560px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: pop 0.14s ease-out;
+}
+.drawer.wide { max-width: 720px; }
+
+.overlay-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.overlay-title {
+  font-size: var(--fs-15);
+  font-weight: 680;
+}
+.overlay-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+.overlay-foot {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 11px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface-2);
+}
+.overlay-foot .spacer {
+  flex: 1;
+}
+
+.menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 190px;
+  max-width: 320px;
+  padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: pop 0.1s ease-out;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-12);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.menu-item.danger {
+  color: var(--danger);
+}
+.menu-item .hint {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  padding-left: 12px;
+}
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+.menu-label {
+  padding: 5px 9px 3px;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+/**
+ * 菜单里的说明块（「本次运行设置」用）。
+ * 只读信息，不是可点项：不加 hover、不参与键盘遍历顺序。
+ */
+.menu-note {
+  padding: 7px 10px;
+  margin: 2px 4px;
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  max-width: 360px;
+}
+
+.toast-host {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-12);
+  max-width: 560px;
+  animation: pop 0.15s ease-out;
+  pointer-events: auto;
+  /* 宿主是 div、提示是 button：清掉按钮默认外观，点击即关闭 */
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.toast:hover {
+  background: var(--bg-hover);
+}
+.toast.info { border-color: var(--info-border); }
+.toast.success { border-color: var(--success-border); }
+.toast.warn { border-color: var(--warning-border); }
+.toast.error { border-color: var(--danger-border); }
+
+/* ============================================================
+   杂项
+   ============================================================ */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row.wrap {
+  flex-wrap: wrap;
+}
+.row.baseline {
+  align-items: baseline;
+}
+.row.tight {
+  gap: 5px;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.muted { color: var(--text-3); }
+.faint { color: var(--text-3); }
+.small { font-size: var(--fs-11); }
+.mono-sm {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.strong { font-weight: 650; }
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 12px 0;
+}
+.divider.soft {
+  background: var(--border-subtle);
+}
+
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  background: var(--bg-surface-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.bar {
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--bg-surface-3);
+  overflow: hidden;
+  display: flex;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+}
+.bar-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-top: 6px;
+}
+.bar-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+/* 原型水印，提醒当前是原型而非真实运行 */
+.proto-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-4);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}

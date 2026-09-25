@@ -1,0 +1,44 @@
+            <div class="rmsg">
+              <div class="av md c-claude"><span>C</span><span class="st on"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Claude</span><span class="tag t-gray" style="font-size:10px">主持</span><span class="tm">09:47 · 分歧讨论 第 1 轮</span></div>
+                <div class="rm-text">争议清单冻结为 2 项。就「滑动过期」：我接受 Codex-2 的证据，撤回默认续期建议，改为<strong>显式续期 + 滑动上限 24h</strong>。剩余 1 项待 Codex 回应。</div>
+              </div>
+            </div>
+
+            <div class="rmsg">
+              <div class="av md c-codex"><span>K</span><span class="st busy"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Codex</span><span class="tm">09:52 · 分歧讨论 第 2 轮</span></div>
+                <div class="rm-text">同意显式续期方案。补充证据：<span class="mono">auth/refresh.ts:88</span> 的竞态在并发 2 个标签页时可复现，建议整合稿把「刷新互斥锁」列为 P0。按决策 06，下一轮（第 3 轮）将作为<strong>强制复核检查点</strong>，由主持者评估是否仍有新证据值得继续。</div>
+              </div>
+            </div>
+
+            <!-- 缺席提示（E4） -->
+            <div class="notice amber">
+              <div class="row"><svg width="14" height="14" style="color:var(--amber)"><use href="#i-clock"/></svg><strong>Codex-2 已 18 分钟未回应本轮</strong><span style="color:var(--ink2)">（容忍上限 20 分钟，设置可改）。仍在运行的成员不受影响。</span></div>
+              <div class="row" style="font-size:11px;color:var(--ink2)">超时后自动「按缺席继续」：阶段屏障以现有成果推进、先生成部分成果；其迟到成果按阶段规则并入，最终报告如实标注「迟到纳入」。失败时可「重试 / 按现有成员继续」。</div>
+            </div>
+
+            <!-- 用户 steering -->
+            <div class="rmsg">
+              <div class="av md c-human">刘</div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">刘</span><span class="tm">09:55</span><span class="tag t-discuss">补充 · taskRevision 2</span></div>
+                <div class="rm-text">重构建议里请把「不改对外 API」作为硬约束写进验收标准。</div>
+              </div>
+            </div>
+            <div class="sys-ev">补充已作为本轮证据并入 · 不重建工作流 · 当前 turn 结束后生效</div>
+
+            <!-- 子任务卡 -->
+            <div class="rmsg">
+              <div class="av md c-claude"><span>C</span><span class="st on"></span></div>
+              <div class="rm-main">
+                <div class="rm-head"><span class="au">Claude</span><span class="tag t-gray" style="font-size:10px">主持</span><span class="tm">09:58</span></div>
+                <div class="af-card" style="border-color:color-mix(in srgb,var(--green) 35%,transparent)">
+                  <div class="af-h" style="background:var(--green-soft)"><svg width="13" height="13" style="color:var(--green)"><use href="#i-check"/></svg>子任务 #12-1 完成：令牌刷新路径盘点<span class="link" style="margin-left:auto" onclick="toast('输入框锚定 → 子任务 #12-1')">定向跟进</span></div>
+                  <div class="af-b">产出问题清单 6 条，全部标注文件与行号；验证：typecheck 通过（真实执行记录 <span class="mono">run-883</span>）。</div>
+                  <div class="af-f"><span class="kv">负责人 Codex</span><span class="kv">与子任务 #12-2 无依赖</span></div>
+                </div>
+              </div>
+            </div>

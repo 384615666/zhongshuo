@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>众说 · 本地项目群聊多 Agent 协同工作台 — 高保真原型 v3</title>
+<style>
+/* ═══ 主题变量：浅色（默认） ═══ */
+:root{
+  --bg:#F7F8FA; --surface:#FFFFFF; --surface2:#F2F4F7; --surface3:#EAEDF1;
+  --hover:#F0F2F5; --active:#E9EDF3;
+  --border:#E3E7EC; --border2:#D5DBE2;
+  --ink:#1B1F24; --ink2:#4B5563; --ink3:#8B94A1;
+  --accent:#4F6EF7; --accent-h:#3D5AEC; --accent-soft:#EEF1FE; --accent-ink:#3B54D9;
+  --green:#16A34A; --green-soft:#E8F7EE;
+  --amber:#D97706; --amber-soft:#FDF3E1;
+  --orange:#EA580C; --orange-soft:#FDEEE4;
+  --red:#DC2626; --red-soft:#FCEBEB;
+  --violet:#8B5CF6; --violet-soft:#F1ECFE;
+  --teal:#0D9488; --teal-soft:#E4F5F3;
+  --c-claude:#D97706; --c-codex:#4F6EF7; --c-codex2:#8B5CF6; --c-human:#0D9488;
+  --shadow-s:0 1px 2px rgba(16,24,40,.04);
+  --shadow:0 1px 3px rgba(16,24,40,.06),0 4px 14px rgba(16,24,40,.05);
+  --shadow-lg:0 12px 48px rgba(16,24,40,.16);
+  --r:14px; --r-s:9px;
+}
+/* ═══ 深色 ═══ */
+[data-theme="dark"]{
+  --bg:#101216; --surface:#17191F; --surface2:#1E2129; --surface3:#262A33;
+  --hover:#22252E; --active:#282C37;
+  --border:#2A2E38; --border2:#383D49;
+  --ink:#E8EAEF; --ink2:#A7AEBB; --ink3:#6B7280;
+  --accent:#7C93FF; --accent-h:#94A6FF; --accent-soft:#232A44; --accent-ink:#A9B8FF;
+  --green:#34D399; --green-soft:#14332A;
+  --amber:#FBBF24; --amber-soft:#3A2E12;
+  --orange:#FB923C; --orange-soft:#3C2514;
+  --red:#F87171; --red-soft:#3D1E1E;
+  --violet:#A78BFA; --violet-soft:#2C2444;
+  --teal:#2DD4BF; --teal-soft:#123B37;
+  --c-claude:#F59E0B; --c-codex:#7C93FF; --c-codex2:#A78BFA; --c-human:#2DD4BF;
+  --shadow-s:0 1px 2px rgba(0,0,0,.3);
+  --shadow:0 1px 3px rgba(0,0,0,.35),0 4px 14px rgba(0,0,0,.25);
+  --shadow-lg:0 12px 48px rgba(0,0,0,.5);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:"Inter","PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  font-size:13.5px;color:var(--ink);background:var(--bg);
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+  transition:background .2s,color .2s;
+}
+.num{font-variant-numeric:tabular-nums}
+/* ── 模拟桌面窗口 ── */
+.window{display:flex;flex-direction:column;height:100vh}
+.titlebar{
+  height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 6px 0 14px;
+  background:var(--surface);border-bottom:1px solid var(--border);user-select:none;
+}
+.tb-logo{
+  width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--accent),#7A5CFF);color:#fff;font-size:12px;font-weight:800;
+}
+.tb-name{font-size:13px;font-weight:700;letter-spacing:.3px}
+.tb-sub{font-size:11.5px;color:var(--ink3)}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:4px}
+.tb-chip{
+  display:inline-flex;align-items:center;gap:6px;height:27px;padding:0 11px;border-radius:99px;
+  background:var(--green-soft);color:var(--green);font-size:11.5px;font-weight:600;
+}
+.tb-chip.amber{background:var(--amber-soft);color:var(--amber)}
+.tb-win{width:42px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--ink3);border-radius:6px}
+.tb-win:hover{background:var(--hover);color:var(--ink)}
+.tb-win.close:hover{background:var(--red);color:#fff}
+</style>

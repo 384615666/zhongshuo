@@ -1,0 +1,683 @@
+/**
+ * 共享预览面板样式（UX-PREVIEW-01 / §17.9）。
+ *
+ * 视觉沿用现有原型 token 与组件形态（施工说明 §1：不合并其他皮肤）。
+ * 这里只新增预览区所需的结构样式，不改动既有房间/线程外观。
+ *
+ * 宽度契约（§5.2 / §17.9 第 8 条）：
+ *  - L2 保留既有 MAIN_MIN=420 / THREAD_MIN=380，**不改全局常量**；
+ *  - 预览下限 480px 是**候选值**，需在 1280/1372/1100/900 实测后定稿；
+ *  - 数值集中在这里与 lib/layout.ts，避免散落。
+ */
+
+.preview-pane {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ---------- 工作区容器（L1—L5 的布局宿主） ----------
+   应用导航之外最多并排两个内容区域（§17.9 第 2 条）。
+   容器宽度由 ResizeObserver 测量，布局解析结果写在 data-layout 上，
+   便于截图取证与自动化断言（不靠猜 CSS 类名）。 */
+.workspace {
+  flex: 1;
+  min-width: 0;
+  /**
+   * `min-height: 0` 是**必须的**：本容器处在 `flex-direction: column` 的
+   * `.app-body` 里，而它的子项（.col-main / .col-thread）内部有很长的内容。
+   * 不加这一条时，flex 项的自动最小尺寸会被内容撑开 ——
+   * 实测两个内容列长到 **1618px**（视口只有 872px），
+   * 于是**输入条被推到视口外**（`composer.top = 1554`），
+   * 用户看到的现象就是"房间和回复串的输入栏不见了"。
+   */
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+  /**
+   * **不要用 `flex-wrap: wrap`**。
+   *
+   * 之前为了让单区域切换器独占一行而加了 wrap，副作用是：
+   * 一旦某个子项宽度超过容器（例如预览 + 对话的 flex-basis 之和偏大），
+   * flex 会把**换行后的行高按内容自然高度**计算，内容列的 1618px 高度
+   * 就此进入布局 → 输入条被顶出视口。
+   * 单区域切换器改用 `flex-basis: 100%`（见下方规则）即可独占一行，
+   * 不需要 wrap；`nowrap` 保证所有子项在同一行内被约束到容器高度。
+   */
+  flex-wrap: nowrap;
+}
+/* 单区域切换器：用 100% 基宽独占一行，靠 `flex-wrap: wrap` 之外的机制实现。
+   注意 nowrap 下它会被压成窄条 —— 所以单区域时改为纵向排列容器内容。 */
+.workspace[data-layout='single'] {
+  flex-direction: column;
+  flex-wrap: nowrap;
+}
+.workspace[data-layout='single'] > .single-region-switch { flex: 0 0 auto; }
+.workspace[data-layout='single'] > .col-main,
+.workspace[data-layout='single'] > .col-thread,
+.workspace[data-layout='single'] > .preview-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/**
+ * 双区（L3/L4）的预览列。
+ *
+ * 宽度由 JS 算好写进 `--preview-w`（自定义属性，见 Room.tsx：
+ * 打开附件时左右两列宽度**对调**）。
+ *
+ * ⚠ **不要在这里加入场动画**（本轮试过两种，都实测失败并已回退）：
+ *  1) `@keyframes` 里 `to { flex-basis: var(--preview-w) }` 的 var 不被采纳，
+ *     动画停在起始帧 → 整个预览列被压成 1px；
+ *  2) "首帧起始态 + 下一拍加 `.entered` 过渡"：页面为 `visibilityState: hidden`
+ *     时（后台窗口、CDP 驱动）**setTimeout 被冻结、CSS 动画不推进**，
+ *     `.entered` 永远加不上，而基类的 `opacity:0` 会让面板**永久隐形**。
+ *     实测 2.5s 内 className 始终是 `preview-pane`，opacity 恒为 0。
+ *
+ * 结论：入场动画需要一个"元素保持挂载、只让宽度变化"的结构
+ * （收起时 `--preview-w: 0`，展开时给真值），这样过渡才有起点。
+ * 那属于结构调整，本轮未做；这里只保留**可靠的宽度过渡**。
+ */
+.workspace[data-layout='context-preview'] > .preview-pane {
+  flex: 0 1 var(--preview-w, 480px);
+  min-width: 0;
+  transition: flex-basis 0.22s ease;
+}
+
+/**
+ * 双区里的对话列（回复串）必须允许收缩到 flex-basis 以下。
+ * 否则它的 `min-width: auto`（= 内容最小宽度，实测 597px）会**顶住** flex-basis，
+ * 让"宽度对调"落不了地：声明 `--context-w: 566px`，实际渲染 597px。
+ */
+.workspace[data-layout='context-preview'] > .col-thread {
+  min-width: 0;
+}
+
+/* 单区域模式：预览与对话二选一，占满内容区 */
+.preview-pane.single {
+  flex: 1 1 auto;
+  border-left: none;
+}
+
+/* 放大：临时占满工作内容区（导航保留） */
+.preview-pane.maximized {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  border-left: none;
+}
+
+/* ---------- 第一行：文件标签 ---------- */
+
+.preview-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-2);
+  min-height: 38px;
+}
+
+.preview-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 固定单行 + 横向滚动：不让标签换行推高顶部（§4.4） */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.preview-tab-strip::-webkit-scrollbar { height: 4px; }
+
+/**
+ * 文件标签（规范 §5.7）：激活标签 = 主题 --bg-surface 垫底渐变 + --accent-text。
+ *
+ * 原实现是 `--accent-soft` 平色底 + `--accent-border` 描边 —— 规范明确要求
+ * 改为渐变选中态，与内容页签、侧栏选中项**同一套观感**（对照
+ * approved-selected-gradient.png）。描边同时去掉：渐变底 + 彩色描边会显脏，
+ * 选中已由渐变与文字色表达。
+ */
+.preview-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  max-width: 220px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  overflow: hidden;
+}
+.preview-tab:hover {
+  background: var(--bg-hover);
+}
+.preview-tab.on {
+  border-color: transparent;
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释） */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+}
+.preview-tab.on:hover {
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释） */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+}
+
+.preview-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.preview-tab.on .preview-tab-label { color: var(--accent-text); font-weight: 600; }
+.preview-tab-label .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.preview-tab-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+}
+.preview-tab-close:hover { background: var(--bg-hover); color: var(--danger); }
+
+.preview-icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.preview-icon-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+/**
+ * 按下态（如"放大预览"处于开启）。
+ * 这是**开关状态**不是选中项，保留 accent-soft 平色 ——
+ * 渐变只给"独立选中项"（导航项/内容页签/文件标签），避免满屏都是渐变。
+ */
+.preview-icon-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-text); }
+
+.preview-back { flex: none; }
+/* 区域级收起/返回（左端，与回复串同一组件）：这里只补它在标签行里的自身尺寸，
+   视觉与 hover 完全走 .panel-nav-btn，避免又长出一套"预览专用"样式。 */
+.preview-nav-back {
+  align-self: center;
+}
+
+/* ---------- 第二行：当前文件工具 ---------- */
+
+.preview-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  /* 防挤爆：允许内部收缩，不换行推高 */
+  min-height: 40px;
+  overflow: hidden;
+}
+
+.preview-path {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.preview-path .strong { overflow: hidden; text-overflow: ellipsis; }
+
+.preview-version { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+
+.tag-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.tag-btn.warning {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.tag-btn.warning:hover { background: var(--warning-border); color: #fff; }
+
+/* 小号分段控件（预览工具行里要比 .seg 更紧凑） */
+.seg.tiny { height: 26px; }
+.seg.tiny button {
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-11);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ---------- 来源行 ---------- */
+
+.preview-origin {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  min-height: 28px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.preview-origin .truncate { overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
+
+/* ---------- 正文 ---------- */
+
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 28px;
+  background: var(--bg-surface);
+}
+
+.preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.preview-unsupported {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 32px 8px;
+  max-width: 560px;
+}
+
+/* ---------- 源码 / 纯文本 ---------- */
+
+.preview-source {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: 1.7;
+  min-width: 100%;
+  width: max-content;
+}
+.preview-source-row { display: flex; gap: 12px; }
+.preview-source-no {
+  flex: none;
+  width: 42px;
+  text-align: right;
+  color: var(--text-3);
+  user-select: none;
+}
+.preview-source-text {
+  white-space: pre;
+  color: var(--text);
+}
+/**
+ * 自动换行（减负 §5「阅读 ▾ → 自动换行」）。
+ * 只对**源码/纯文本**视图生效：Markdown 阅读视图本来就会折行，
+ * 这里解决的是"一行长代码横向拖到底"的问题。
+ */
+.preview-source.wrap {
+  width: auto;
+  min-width: 0;
+}
+.preview-source.wrap .preview-source-row {
+  align-items: flex-start;
+}
+.preview-source.wrap .preview-source-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 阅读 ▾ / 还原 / 引用选区（减负 §5） ---------- */
+
+/**
+ * 「阅读 ▾」取代常驻的「预览/源码」分段控件。
+ * 仍然是一个**始终可见**的按钮（不是 hover 才出现），当前模式写在按钮上，
+ * 所以"现在是阅读还是源码"一眼可见，只是切换动作进了菜单。
+ */
+.preview-read {
+  flex: none;
+  gap: 4px;
+}
+.preview-read.open {
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+/* 放大后常驻的还原按钮：不能只靠 tooltip 让人找 */
+.preview-restore {
+  flex: none;
+  gap: 4px;
+}
+/* 选中文字后的「引用选区」：浮在正文右下角，明确"只加草稿、仍需发送" */
+.preview-quote-selection {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--accent-border);
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+.preview-quote-selection:hover {
+  border-color: var(--accent);
+}
+
+/* ---------- 图片 ---------- */
+
+.preview-image-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 100%;
+  justify-content: center;
+}
+.preview-image-wrap.scroll { justify-content: flex-start; align-items: flex-start; overflow: auto; }
+.preview-image {
+  /* 透明区用棋盘底显示，"透明背景可辨"（§8.1 图片行） */
+  background-image:
+    linear-gradient(45deg, var(--bg-surface-3) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--bg-surface-3) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--bg-surface-3) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--bg-surface-3) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  image-rendering: -webkit-optimize-contrast;
+}
+.preview-image-meta { text-align: center; }
+
+/* ---------- CSV ---------- */
+
+.preview-csv-wrap { overflow: auto; }
+.preview-csv {
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+  min-width: 100%;
+}
+.preview-csv th,
+.preview-csv td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+  white-space: pre-wrap;
+  vertical-align: top;
+}
+.preview-csv th {
+  background: var(--bg-surface-2);
+  font-weight: 600;
+  color: var(--text-2);
+  position: sticky;
+  top: 0;
+}
+
+/* ---------- diff ---------- */
+
+.preview-diff { display: flex; flex-direction: column; gap: 10px; }
+.preview-diff-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.preview-diff-head .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--r-full);
+  font-size: var(--fs-11);
+  border: 1px solid;
+}
+.preview-diff-head .pill.del {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.preview-diff-head .pill.add {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.preview-diff-body {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: 1.65;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: auto;
+  width: max-content;
+  min-width: 100%;
+}
+.preview-diff-row { display: flex; }
+.preview-diff-row.add { background: var(--success-soft); }
+.preview-diff-row.del { background: var(--danger-soft); }
+.preview-diff-no {
+  flex: none;
+  width: 40px;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--text-3);
+  user-select: none;
+}
+.preview-diff-sign { flex: none; width: 16px; color: var(--text-3); }
+.preview-diff-text { white-space: pre; padding-right: 16px; }
+
+/* ---------- Markdown ---------- */
+
+/**
+ * Markdown 阅读面（规范 §6.1）：正文 15px/1.65，限宽 76ch。
+ *
+ * 原实现写死 `max-width: 820px` 且行高 1.75 —— 820px 是魔法数字，
+ * 与"76 字符"的规范口径不对应；改用 ch 单位后随字号/字体自动成立。
+ */
+.md-view { max-width: 76ch; line-height: 1.65; font-size: var(--fs-15); }
+.md-h { margin: 18px 0 8px; line-height: 1.4; }
+.md-h:first-child { margin-top: 0; }
+.md-h1 { font-size: var(--fs-20); font-weight: 650; }
+.md-h2 { font-size: var(--fs-17); font-weight: 650; padding-bottom: 5px; border-bottom: 1px solid var(--border-subtle); }
+.md-h3 { font-size: var(--fs-15); font-weight: 600; }
+.md-p { margin: 9px 0; }
+.md-ul, .md-ol { margin: 8px 0; padding-left: 22px; }
+.md-ul li, .md-ol li { margin: 4px 0; }
+.md-quote {
+  margin: 10px 0;
+  padding: 8px 14px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.md-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+}
+.md-pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: 1.65;
+}
+.md-hr { margin: 16px 0; border: none; border-top: 1px solid var(--border); }
+.md-table-wrap { overflow-x: auto; margin: 10px 0; }
+.md-table { border-collapse: collapse; font-size: var(--fs-12); min-width: 100%; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.md-table th { background: var(--bg-surface-2); font-weight: 600; }
+.md-link { color: var(--accent-text); }
+.md-link-mark { font-size: 0.8em; opacity: 0.7; }
+
+/* ---------- 收起后的重开入口 ----------
+   房间头部里的普通 chip（不是浮层）：原先浮在右下角会压住输入区的发送按钮
+   （用户截图反馈），现在参与正常布局，窄窗可只留图标 + 计数。 */
+.preview-reopen {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  color: var(--accent-text);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.preview-reopen:hover { background: var(--accent-soft); }
+
+/* ---------- 文件引用 chip（消息内可点击的文件名） ---------- */
+
+.msg-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msg-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  text-align: left;
+}
+.msg-attach:hover { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); }
+.msg-attach .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-attach-kind { flex: none; font-size: var(--fs-11); color: var(--text-3); }
+.msg-attach:hover .msg-attach-kind { color: var(--accent-text); }
+
+/* ---------- 引用卡（草稿内） ---------- */
+
+.ref-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font-size: var(--fs-12);
+}
+.ref-card-body { min-width: 0; flex: 1; }
+.ref-card-title { font-weight: 600; color: var(--accent-text); }
+.ref-card-meta { color: var(--text-3); font-size: var(--fs-11); margin-top: 2px; }
+.ref-card-excerpt {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------- 单区域切换器 ---------- */
+
+.single-region-switch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-2);
+}
+.single-region-switch .seg { height: 28px; }
+
+/* ============================================================
+   两区并排时的线程头部防挤爆（§8.3 硬性规则）
+   ============================================================
+   实测（截图为证）：1372px 下 L4 的对话侧只有 487px，线程 tab 行
+   把「成果」「活动」压成**竖排单字**，等于标签不可读。
+   §8.3 明确禁止徽章/标签竖排折行，并要求"宁可精简文案也不许被裁切"。
+
+   处理：标签行改为**单行 + 横向滚动**，每个 tab 自身不收缩
+   （和窄窗全屏页已有的做法一致，不新造规则）。
+   选择滚动而不是换行：换行会把整个回复串顶部推高，
+   在 871px 高的窗口里直接吃掉正文空间。 */
+.col-thread .thread-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.col-thread .thread-tabs::-webkit-scrollbar { display: none; }
+.col-thread .thread-tabs > .thread-tab {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 预览区自身也不允许标签竖排（同一类问题，一并锁住） */
+.preview-tab-label,
+.preview-icon-btn,
+.preview-tools .seg.tiny button {
+  white-space: nowrap;
+}

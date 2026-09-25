@@ -1,0 +1,1333 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>众说 · 本地项目群聊多 Agent 协同工作台 — 高保真原型 v2</title>
+<style>
+:root{
+  --bg:#F4F1EA; --surface:#FFFFFF; --surface2:#FAF8F3; --surface3:#F1EDE3;
+  --border:#E6E1D5; --border2:#D9D3C4;
+  --ink:#26282C; --ink2:#5C6067; --ink3:#989DA4;
+  --rail:#22242A; --rail2:#2C2F36; --rail-ink:#B9BDC6; --rail-ink2:#7C818B;
+  --accent:#C2401F; --accent-h:#A93415; --accent-soft:#F8E9E4; --accent-ink:#8F2F13;
+  --green:#2F9E63; --green-soft:#E4F3EB;
+  --amber:#C98A0B; --amber-soft:#FAF0DA;
+  --orange:#DE6A21; --orange-soft:#FBEBDF;
+  --blue:#3B6CB4; --blue-soft:#E7EEF8;
+  --violet:#7A5CAD; --violet-soft:#EFEBF7;
+  --teal:#1F8A8A; --teal-soft:#E2F1F1;
+  --shadow:0 1px 2px rgba(38,40,44,.05),0 4px 16px rgba(38,40,44,.06);
+  --shadow-lg:0 8px 40px rgba(38,40,44,.18);
+  --r:10px; --r-s:7px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  font-size:13px;color:var(--ink);background:var(--bg);
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+}
+.window{display:flex;flex-direction:column;height:100vh}
+/* ── 标题栏（模拟 Electron 自定义框） ───────────────── */
+.titlebar{
+  height:38px;flex:none;background:var(--rail);color:var(--rail-ink);
+  display:flex;align-items:center;padding:0 0 0 14px;gap:10px;
+  -webkit-app-region:drag;user-select:none;
+}
+.titlebar .logo{
+  width:20px;height:20px;border-radius:6px;background:var(--accent);
+  color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  font-family:"Songti SC","SimSun",serif;
+}
+.titlebar .tt{font-size:12px;letter-spacing:.4px}
+.titlebar .tt b{color:#EDEEF1;font-weight:600}
+.titlebar .path{font-size:11px;color:var(--rail-ink2);margin-left:2px}
+.tb-right{margin-left:auto;display:flex;height:100%;-webkit-app-region:no-drag}
+.tb-btn{width:46px;display:flex;align-items:center;justify-content:center;color:var(--rail-ink2);cursor:default}
+.tb-btn:hover{background:var(--rail2);color:#fff}
+.tb-btn.close:hover{background:#E81123}
+/* ── 主骨架 ───────────────── */
+.appbody{flex:1;display:flex;min-height:0}
+/* 左一：深色墨条导航 */
+.rail{
+  width:60px;flex:none;background:var(--rail);display:flex;flex-direction:column;
+  align-items:center;padding:10px 0 12px;gap:4px;
+}
+.rail .proj{
+  width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#C2401F,#DE6A21);
+  color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;
+  cursor:pointer;position:relative;margin-bottom:4px;font-family:"Songti SC","SimSun",serif;
+}
+.rail .proj::after{
+  content:"";position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:50%;
+  background:var(--green);border:2px solid var(--rail);
+}
+.rail-item{
+  width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  color:var(--rail-ink2);cursor:pointer;position:relative;flex:none;
+}
+.rail-item:hover{background:var(--rail2);color:var(--rail-ink)}
+.rail-item.active{background:var(--rail2);color:#fff}
+.rail-item.active::before{
+  content:"";position:absolute;left:-10px;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--accent);
+}
+.rail-item .bdg{
+  position:absolute;top:4px;right:4px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+  background:var(--accent);color:#fff;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;
+}
+.rail-sep{width:24px;height:1px;background:var(--rail2);margin:6px 0;flex:none}
+.rail .spacer{flex:1}
+.rail .me{
+  width:32px;height:32px;border-radius:50%;background:#4A6FA5;color:#fff;font-size:12px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+}
+</style>
+<style>
+/* 左二：项目 / 房间侧栏 */
+.sidebar{
+  width:236px;flex:none;background:var(--surface2);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;min-height:0;
+}
+.sb-head{padding:14px 14px 10px;border-bottom:1px solid var(--border)}
+.sb-proj{display:flex;align-items:center;gap:8px;cursor:pointer}
+.sb-proj .nm{font-size:14px;font-weight:700}
+.sb-proj .ph{font-size:11px;color:var(--ink3);margin-top:2px;display:flex;align-items:center;gap:4px}
+.sb-proj .ph code{font-family:Consolas,monospace;font-size:10.5px;background:var(--surface3);padding:1px 5px;border-radius:4px}
+.sb-search{
+  margin:10px 14px 4px;height:30px;border:1px solid var(--border);border-radius:8px;background:var(--surface);
+  display:flex;align-items:center;gap:7px;padding:0 9px;color:var(--ink3);font-size:12px;cursor:pointer;
+}
+.sb-search kbd{margin-left:auto;font-family:inherit;font-size:10px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+.sb-sec{padding:12px 14px 4px;display:flex;align-items:center;justify-content:space-between}
+.sb-sec .t{font-size:11px;font-weight:600;color:var(--ink3);letter-spacing:1px}
+.sb-sec .add{width:18px;height:18px;border-radius:5px;color:var(--ink3);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px}
+.sb-sec .add:hover{background:var(--surface3);color:var(--ink)}
+.sb-list{overflow-y:auto;padding:0 8px;flex:1}
+.sb-item{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;cursor:pointer;
+  color:var(--ink2);font-size:12.5px;position:relative;
+}
+.sb-item:hover{background:var(--surface3)}
+.sb-item.active{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow)}
+.sb-item .hash{color:var(--ink3);font-weight:400}
+.sb-item .cnt{margin-left:auto;font-size:10.5px;background:var(--accent);color:#fff;border-radius:8px;padding:1px 6px;font-weight:600}
+.sb-item .cnt.gray{background:var(--surface3);color:var(--ink3)}
+.sb-item .lock{font-size:10px;color:var(--ink3)}
+.sb-item .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.sb-item .av{width:20px;height:20px;border-radius:6px;font-size:10px;color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+.sb-foot{
+  flex:none;border-top:1px solid var(--border);padding:9px 14px;font-size:11px;color:var(--ink3);
+  display:flex;align-items:center;gap:7px;
+}
+.sb-foot .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(47,158,99,.15)}
+/* 主区 */
+.main{flex:1;display:flex;min-width:0;min-height:0;background:var(--bg)}
+.view{display:none;flex:1;min-width:0;min-height:0}
+.view.active{display:flex}
+/* 通用 */
+.av{width:30px;height:30px;border-radius:9px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex:none}
+.av.sm{width:22px;height:22px;border-radius:6px;font-size:10px}
+.av.xs{width:18px;height:18px;border-radius:5px;font-size:9px}
+.av.claude{background:var(--teal)} .av.codex{background:var(--blue)} .av.codex2{background:var(--violet)} .av.human{background:#4A6FA5}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:1.5px 7px;border-radius:5px;font-weight:600;white-space:nowrap}
+.tag-task{background:var(--surface3);color:var(--ink2)}
+.mode-auto{background:var(--blue-soft);color:var(--blue)}
+.mode-delib{background:var(--violet-soft);color:var(--violet)}
+.mode-direct{background:var(--teal-soft);color:var(--teal)}
+.mode-discuss{background:var(--surface3);color:var(--ink2)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap}
+.pill .d{width:6px;height:6px;border-radius:50%}
+.pill.run{background:var(--blue-soft);color:var(--blue)} .pill.run .d{background:var(--blue);animation:blink 1.2s infinite}
+.pill.done{background:var(--green-soft);color:var(--green)} .pill.done .d{background:var(--green)}
+.pill.review{background:var(--amber-soft);color:var(--amber)} .pill.review .d{background:var(--amber)}
+.pill.wait{background:var(--amber-soft);color:var(--amber)} .pill.wait .d{background:var(--amber)}
+.pill.block{background:var(--orange-soft);color:var(--orange)} .pill.block .d{background:var(--orange)}
+.pill.todo{background:var(--surface3);color:var(--ink2)} .pill.todo .d{background:var(--ink3)}
+@keyframes blink{50%{opacity:.35}}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);color:var(--ink);font-size:12.5px;font-weight:500;cursor:pointer;
+}
+.btn:hover{background:var(--surface2);border-color:var(--border2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-h)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink2)}
+.btn.ghost:hover{background:var(--surface3)}
+.btn.danger{color:var(--accent)} .btn.danger:hover{background:var(--accent-soft);border-color:#EEC9BE}
+.btn.sm{height:25px;padding:0 9px;font-size:11.5px;border-radius:7px}
+.icon-btn{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--ink2);cursor:pointer;border:1px solid transparent}
+.icon-btn:hover{background:var(--surface3)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#D6D0C0;border-radius:6px;border:2.5px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#C4BDAA;border:2.5px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+<style>
+/* ── 对话池视图 ───────────────── */
+.chat-wrap{flex:1;display:flex;min-width:0}
+.pool{flex:1;display:flex;flex-direction:column;min-width:0;transition:flex .18s}
+.pool-head{
+  flex:none;height:52px;display:flex;align-items:center;gap:10px;padding:0 18px;
+  background:var(--surface);border-bottom:1px solid var(--border);
+}
+.pool-head .rh{min-width:0}
+.pool-head .rh .n{font-size:14.5px;font-weight:700;display:flex;align-items:center;gap:7px}
+.pool-head .rh .d{font-size:11px;color:var(--ink3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pool-head .acts{margin-left:auto;display:flex;gap:6px;align-items:center}
+.pool-body{flex:1;overflow-y:auto;padding:18px 22px 8px;display:flex;flex-direction:column;gap:14px}
+.day-div{display:flex;align-items:center;gap:12px;color:var(--ink3);font-size:11px;margin:4px 0}
+.day-div::before,.day-div::after{content:"";flex:1;height:1px;background:var(--border)}
+/* 顶层消息卡（RootMessage） */
+.msg{display:flex;gap:11px;cursor:pointer;padding:12px 14px;border-radius:var(--r);border:1px solid transparent;margin:-6px -8px}
+.msg:hover{background:var(--surface);border-color:var(--border);box-shadow:var(--shadow)}
+.msg.sel{background:var(--surface);border-color:var(--accent);box-shadow:var(--shadow)}
+.msg-main{flex:1;min-width:0}
+.msg-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.msg-head .au{font-weight:700;font-size:13px}
+.msg-head .tm{font-size:11px;color:var(--ink3)}
+.msg-text{margin-top:4px;font-size:13.5px;line-height:1.65;color:var(--ink)}
+.msg-text .mt{color:var(--accent);font-weight:600;background:var(--accent-soft);border-radius:4px;padding:0 4px}
+.msg-text .mt.blue{color:var(--blue);background:var(--blue-soft)}
+/* 回复预览投影（§3.4：主池卡片内 2—3 条简短预览） */
+.msg-preview{
+  margin-top:9px;border-left:2px solid var(--border2);padding:2px 0 2px 11px;
+  display:flex;flex-direction:column;gap:5px;
+}
+.pv{display:flex;gap:7px;font-size:12px;color:var(--ink2);align-items:baseline}
+.pv .who{font-weight:600;flex:none}
+.pv .tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg-foot{margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.reply-cnt{
+  display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--blue);font-weight:600;
+  background:var(--blue-soft);border-radius:99px;padding:2.5px 10px;
+}
+.msg:hover .reply-cnt,.msg.sel .reply-cnt{background:#D8E5F6}
+.avatars{display:flex}
+.avatars .av{margin-left:-6px;border:2px solid var(--bg)}
+.avatars .av:first-child{margin-left:0}
+.mini-stat{font-size:11px;color:var(--ink3);display:inline-flex;align-items:center;gap:4px}
+/* 系统条 */
+.sys-note{align-self:center;font-size:11px;color:var(--ink3);background:var(--surface3);border-radius:99px;padding:3px 12px}
+/* 输入条 */
+.composer{flex:none;padding:12px 22px 16px}
+.composer-box{
+  background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);
+  padding:10px 12px 8px;
+}
+.composer-box:focus-within{border-color:#C9BBA4;box-shadow:0 0 0 3px rgba(194,64,31,.08)}
+.composer-top{display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--surface3);border-radius:8px;padding:2px}
+.seg button{
+  border:0;background:transparent;font-size:11.5px;font-weight:600;color:var(--ink2);
+  padding:3.5px 12px;border-radius:6px;cursor:pointer;font-family:inherit;
+}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink2);
+  border:1px dashed var(--border2);border-radius:99px;padding:3px 10px;cursor:pointer;background:transparent;font-family:inherit;
+}
+.chip.on{border-style:solid;border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.chip .k{color:var(--ink3)} .chip.on .k{color:var(--accent)}
+.route-hint{margin-left:auto;font-size:11px;color:var(--ink3)}
+.route-hint b{color:var(--violet);font-weight:600}
+.composer textarea{
+  width:100%;border:0;outline:0;resize:none;font-family:inherit;font-size:13.5px;line-height:1.6;
+  color:var(--ink);background:transparent;min-height:44px;
+}
+.composer-bot{display:flex;align-items:center;gap:4px;margin-top:6px}
+.composer-bot .sp{flex:1}
+.cap-note{font-size:10.5px;color:var(--ink3);display:flex;align-items:center;gap:5px}
+.cap-note .d{width:6px;height:6px;border-radius:50%;background:var(--amber)}
+.send{
+  width:32px;height:32px;border-radius:9px;background:var(--accent);color:#fff;border:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.send:hover{background:var(--accent-h)}
+</style>
+<style>
+/* ── 线程面板 ───────────────── */
+.thread{
+  width:0;flex:none;display:none;flex-direction:column;background:var(--surface);
+  border-left:1px solid var(--border);min-height:0;
+}
+.thread.open{width:520px;display:flex}
+.th-head{
+  flex:none;padding:12px 16px 0;border-bottom:1px solid var(--border);
+}
+.th-head .r1{display:flex;align-items:center;gap:9px}
+.th-head .r1 .ti{font-size:14px;font-weight:700}
+.th-anchor{
+  margin-top:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;
+}
+.th-anchor .msg-text{font-size:13px}
+/* 任务卡 */
+.task-card{
+  margin-top:10px;border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface);
+}
+.tc-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.tc-row:last-child{border-bottom:0}
+.tc-k{font-size:11px;color:var(--ink3);width:56px;flex:none}
+.tc-v{font-size:12px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:1;min-width:0}
+.budget-bar{width:90px;height:5px;border-radius:3px;background:var(--surface3);overflow:hidden}
+.budget-bar i{display:block;height:100%;background:var(--amber);border-radius:3px}
+.mono{font-family:Consolas,monospace;font-size:11px;background:var(--surface3);padding:1px 6px;border-radius:4px}
+/* 阶段条 */
+.stages{display:flex;align-items:center;gap:0;padding:10px 12px}
+.stage{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;position:relative}
+.stage .dot{
+  width:16px;height:16px;border-radius:50%;border:2px solid var(--border2);background:var(--surface);
+  display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;z-index:1;
+}
+.stage .lb{font-size:10px;color:var(--ink3);white-space:nowrap}
+.stage.done .dot{background:var(--green);border-color:var(--green)}
+.stage.done .lb{color:var(--green);font-weight:600}
+.stage.now .dot{border-color:var(--blue);background:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
+.stage.now .lb{color:var(--blue);font-weight:700}
+.stage::before{content:"";position:absolute;top:8px;left:-50%;width:100%;height:2px;background:var(--border2)}
+.stage:first-child::before{display:none}
+.stage.done::before,.stage.now::before{background:var(--green)}
+.stage.now::before{background:var(--green)}
+/* 跟进名单 */
+.roster{display:flex;align-items:center;gap:6px;padding:9px 12px;border-top:1px dashed var(--border);flex-wrap:wrap}
+.roster .t{font-size:11px;color:var(--ink3)}
+.roster .rk{
+  display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:99px;padding:2px 9px 2px 3px;font-size:11px;
+}
+.roster .rk .x{color:var(--ink3);cursor:pointer;font-size:12px;line-height:1}
+.roster .rk .x:hover{color:var(--accent)}
+.roster .rk.late{border-color:#EFC9A8;background:var(--amber-soft)}
+.th-body{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:13px}
+/* 串内回复 */
+.rmsg{display:flex;gap:9px}
+.rmsg .rm-main{flex:1;min-width:0}
+.rmsg .rm-head{display:flex;align-items:baseline;gap:7px}
+.rmsg .rm-head .au{font-weight:700;font-size:12.5px}
+.rmsg .rm-head .tm{font-size:10.5px;color:var(--ink3)}
+.rmsg .rm-text{margin-top:3px;font-size:12.8px;line-height:1.65;color:var(--ink)}
+.bubble{
+  margin-top:6px;background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:9px 11px;
+  font-size:12.3px;line-height:1.6;
+}
+/* 成果卡（Artifact） */
+.artifact{
+  margin-top:7px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--surface);
+}
+.artifact .af-h{
+  display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--surface2);border-bottom:1px solid var(--border);
+}
+.artifact .af-h .t{font-weight:700;font-size:12px}
+.artifact .af-b{padding:9px 11px;font-size:12px;color:var(--ink2);line-height:1.65}
+.artifact .af-f{padding:7px 11px;border-top:1px solid var(--border);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.kv{font-size:10.5px;color:var(--ink3);background:var(--surface3);border-radius:4px;padding:2px 7px}
+.link{color:var(--blue);cursor:pointer;font-size:11.5px;font-weight:600}
+.link:hover{text-decoration:underline}
+/* 互评条 */
+.review-line{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed var(--border);font-size:12px}
+.review-line:last-child{border-bottom:0}
+.stance{flex:none;font-size:10.5px;font-weight:700;border-radius:4px;padding:1.5px 7px;margin-top:1px}
+.stance.agree{background:var(--green-soft);color:var(--green)}
+.stance.dis{background:var(--accent-soft);color:var(--accent-ink)}
+.stance.need{background:var(--amber-soft);color:var(--amber)}
+/* 缺席提示 */
+.absence{
+  border:1px solid #EFC9A8;background:var(--amber-soft);border-radius:9px;padding:9px 12px;
+  font-size:12px;color:#7A5A16;display:flex;flex-direction:column;gap:7px;
+}
+.absence .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 系统事件 */
+.sys-ev{align-self:center;font-size:10.5px;color:var(--ink3);background:var(--surface3);border-radius:99px;padding:2.5px 11px;text-align:center}
+/* 串内输入 */
+.th-composer{flex:none;border-top:1px solid var(--border);padding:10px 14px 12px;background:var(--surface)}
+.th-composer .composer-box{width:100%}
+.th-composer textarea{width:100%;display:block}
+.steer-tag{
+  display:inline-flex;align-items:center;gap:5px;background:var(--teal-soft);color:var(--teal);
+  font-size:11px;font-weight:600;border-radius:6px;padding:2px 8px;margin-bottom:6px;
+}
+</style>
+<style>
+/* ── 看板 ───────────────── */
+.board{flex:1;display:flex;flex-direction:column;min-width:0}
+.board-body{flex:1;display:flex;gap:12px;padding:14px 16px;overflow-x:auto;min-height:0}
+.bcol{width:262px;flex:none;display:flex;flex-direction:column;min-height:0}
+.bcol-h{display:flex;align-items:center;gap:7px;padding:4px 4px 9px}
+.bcol-h .t{font-size:12px;font-weight:700}
+.bcol-h .n{font-size:10.5px;color:var(--ink3);background:var(--surface3);border-radius:8px;padding:1px 7px}
+.bcol-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px}
+.tcard{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;
+  cursor:pointer;box-shadow:var(--shadow);
+}
+.tcard:hover{border-color:var(--border2)}
+.tcard .ti{font-size:12.5px;font-weight:600;line-height:1.5}
+.tcard .meta{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap}
+.tcard .room{font-size:10.5px;color:var(--ink3)}
+/* ── 文件 ───────────────── */
+.files-view{flex:1;display:flex;min-width:0}
+.ftree{width:250px;flex:none;border-right:1px solid var(--border);background:var(--surface2);overflow-y:auto;padding:10px 6px}
+.ft{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;font-size:12px;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.ft:hover{background:var(--surface3)}
+.ft.sel{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:var(--shadow)}
+.ft .fi{width:15px;text-align:center;flex:none;color:var(--ink3);font-size:11px}
+.ft .mod{font-size:9px;color:var(--amber);margin-left:auto}
+.fprev{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.fprev-h{flex:none;height:46px;display:flex;align-items:center;gap:9px;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.fprev-b{flex:1;overflow:auto;background:var(--surface)}
+.diff{font-family:Consolas,monospace;font-size:12px;line-height:1.7;min-width:max-content}
+.diff .ln{display:flex;padding:0 16px}
+.diff .no{width:42px;flex:none;text-align:right;padding-right:14px;color:var(--ink3);user-select:none}
+.diff .add{background:var(--green-soft)} .diff .add .tx{color:#1C6B42}
+.diff .del{background:var(--accent-soft)} .diff .del .tx{color:var(--accent-ink);text-decoration:line-through;text-decoration-color:rgba(143,47,19,.4)}
+.diff .hunk{color:var(--blue);background:var(--blue-soft)}
+.fprev-note{
+  flex:none;display:flex;align-items:center;gap:8px;padding:8px 16px;font-size:11px;color:var(--ink2);
+  background:var(--blue-soft);border-top:1px solid var(--border);
+}
+/* ── 动态 / 收藏 ───────────────── */
+.list-page{flex:1;display:flex;flex-direction:column;min-width:0}
+.list-head{flex:none;padding:16px 22px 0;background:var(--bg)}
+.list-head h2{font-size:17px;font-weight:700}
+.tabs{display:flex;gap:2px;margin-top:12px;border-bottom:1px solid var(--border)}
+.tab{padding:7px 14px;font-size:12.5px;color:var(--ink2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+.list-body{flex:1;overflow-y:auto;padding:14px 22px;display:flex;flex-direction:column;gap:8px}
+.feed{
+  display:flex;gap:11px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:11px 14px;cursor:pointer;
+}
+.feed:hover{box-shadow:var(--shadow)}
+.feed .fx{flex:1;min-width:0}
+.feed .ft1{font-size:12.8px;line-height:1.55}
+.feed .ft2{font-size:11px;color:var(--ink3);margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.unread-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;margin-top:6px}
+</style>
+<style>
+/* ── 成员 ───────────────── */
+.members{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:12px}
+.mcard{
+  display:flex;gap:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:13px 15px;align-items:center;box-shadow:var(--shadow);
+}
+.mcard .mx{flex:1;min-width:0}
+.mcard .mn{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+.mcard .md{font-size:11.5px;color:var(--ink2);margin-top:3px}
+.mcard .mm{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+/* ── 计算机 / 配对 ───────────────── */
+.comp-grid{flex:1;overflow-y:auto;padding:18px 22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;align-content:start}
+.ccard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px;box-shadow:var(--shadow)}
+.ccard .ch{display:flex;align-items:center;gap:10px}
+.ccard .ci{width:36px;height:36px;border-radius:10px;background:var(--rail);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px}
+.ccard .rt{margin-top:10px;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink2)}
+.pair-box{
+  margin-top:12px;border:1px dashed var(--border2);border-radius:9px;padding:10px 12px;background:var(--surface2);
+}
+.pair-code{
+  font-family:Consolas,monospace;font-size:20px;letter-spacing:6px;font-weight:700;text-align:center;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin:8px 0;
+}
+/* ── 设置 ───────────────── */
+.settings{flex:1;display:flex;min-width:0}
+.set-nav{width:200px;flex:none;border-right:1px solid var(--border);background:var(--surface2);padding:14px 8px;overflow-y:auto}
+.set-nav .si{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--ink2);cursor:pointer}
+.set-nav .si:hover{background:var(--surface3)}
+.set-nav .si.on{background:var(--surface);font-weight:700;color:var(--ink);box-shadow:var(--shadow)}
+.set-body{flex:1;overflow-y:auto;padding:20px 26px;max-width:720px}
+.set-sec{margin-bottom:26px}
+.set-sec h3{font-size:14px;font-weight:700;margin-bottom:3px}
+.set-sec .sub{font-size:11.5px;color:var(--ink3);margin-bottom:12px}
+.srow{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--border)}
+.srow:last-child{border-bottom:0}
+.srow .sl{flex:1;min-width:0}
+.srow .sl .t{font-size:12.8px;font-weight:600}
+.srow .sl .d{font-size:11px;color:var(--ink3);margin-top:2px;line-height:1.5}
+.tgl{width:36px;height:20px;border-radius:99px;background:#CFC9BA;position:relative;cursor:pointer;flex:none;transition:.15s}
+.tgl::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.tgl.on{background:var(--accent)} .tgl.on::after{left:18px}
+.inp{height:30px;border:1px solid var(--border);border-radius:7px;padding:0 10px;font-size:12.5px;font-family:inherit;background:var(--surface);color:var(--ink);outline:none}
+.inp:focus{border-color:#C9BBA4;box-shadow:0 0 0 3px rgba(194,64,31,.08)}
+select.inp{cursor:pointer}
+</style>
+<style>
+/* ── 弹层：Ctrl+K / 恢复询问 ───────────────── */
+.overlay{
+  position:fixed;inset:0;background:rgba(30,28,25,.42);display:none;align-items:flex-start;justify-content:center;
+  padding-top:12vh;z-index:50;backdrop-filter:blur(2px);
+}
+.overlay.open{display:flex}
+.cmdk{
+  width:600px;background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);overflow:hidden;
+  border:1px solid var(--border2);
+}
+.cmdk .ck-in{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.cmdk .ck-in input{flex:1;border:0;outline:0;font-size:14.5px;font-family:inherit;background:transparent}
+.cmdk .ck-list{max-height:380px;overflow-y:auto;padding:8px}
+.ck-sec{font-size:10.5px;font-weight:700;color:var(--ink3);letter-spacing:1px;padding:8px 10px 4px}
+.ck-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.8px}
+.ck-item:hover,.ck-item.hot{background:var(--surface2)}
+.ck-item mark{background:transparent;color:var(--accent);font-weight:700}
+.modal{
+  width:480px;background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);padding:22px;
+  border:1px solid var(--border2);
+}
+.modal h3{font-size:15px;font-weight:700}
+.modal .mp{font-size:12.5px;color:var(--ink2);margin-top:8px;line-height:1.7}
+.modal .mrow{display:flex;gap:9px;margin-top:18px;justify-content:flex-end}
+.resume-task{
+  display:flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:9px;padding:9px 12px;margin-top:9px;
+  font-size:12.3px;background:var(--surface2);
+}
+/* toast */
+.toast{
+  position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--rail);color:#EDEEF1;
+  font-size:12.5px;border-radius:99px;padding:9px 18px;box-shadow:var(--shadow-lg);display:none;z-index:99;
+}
+.toast.show{display:block;animation:up .25s ease}
+@keyframes up{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+</style>
+</head>
+<body>
+<div class="window">
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="logo">众</div>
+    <div class="tt"><b>众说</b> · zhongshuo</div>
+    <div class="path">D:\projects\zhongshuo-app — 本地控制面 · 数据不出本机</div>
+    <div class="tb-right">
+      <div class="tb-btn" title="最小化">—</div>
+      <div class="tb-btn" title="最大化">▢</div>
+      <div class="tb-btn close" title="关闭到托盘（任务继续运行）">✕</div>
+    </div>
+  </div>
+
+  <div class="appbody">
+    <!-- 左一：导航墨条 -->
+    <nav class="rail">
+      <div class="proj" title="切换项目（E10：多项目）" onclick="toast('项目切换：zhongshuo-app / notes / demo-api')">众</div>
+      <div class="rail-sep"></div>
+      <div class="rail-item active" data-view="chat" title="聊天">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-8 8H4l2-3.2A8 8 0 1 1 21 12z"/></svg>
+        <span class="bdg">3</span>
+      </div>
+      <div class="rail-item" data-view="activity" title="动态">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span class="bdg">2</span>
+      </div>
+      <div class="rail-item" data-view="saved" title="收藏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="rail-sep"></div>
+      <div class="rail-item" data-view="tasks" title="任务看板">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+      </div>
+      <div class="rail-item" data-view="files" title="文件与改动">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="rail-item" data-view="members" title="成员">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </div>
+      <div class="rail-item" data-view="computers" title="计算机与配对">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </div>
+      <div class="spacer"></div>
+      <div class="rail-item" data-view="settings" title="设置">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.63.28 1.13.88 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </div>
+      <div class="me" title="刘（Owner · 人类成员）">刘</div>
+    </nav>
+    <!-- 左二：项目侧栏 -->
+    <aside class="sidebar">
+      <div class="sb-head">
+        <div class="sb-proj" onclick="toast('项目切换（E10 · v0.1 即支持多项目）')">
+          <div>
+            <div class="nm">zhongshuo-app <span style="color:var(--ink3);font-weight:400;font-size:12px">▾</span></div>
+            <div class="ph"><code>D:\projects\zhongshuo-app</code></div>
+          </div>
+        </div>
+      </div>
+      <div class="sb-search" onclick="openCmdk()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        搜索消息、任务、成员…
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="sb-sec"><span class="t">房间</span><span class="add" title="新建房间">+</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item active"><span class="hash">#</span>主房间<span class="cnt">3</span></div>
+        <div class="sb-item"><span class="hash">#</span>架构评审<span class="cnt gray">1</span></div>
+        <div class="sb-item"><span class="hash">#</span>发布筹备<span class="lock">🔒</span></div>
+      </div>
+      <div class="sb-sec"><span class="t">私信</span><span class="add" title="发起私信">+</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item"><span class="av xs claude">C</span>Claude<span class="cnt gray">2</span></div>
+        <div class="sb-item"><span class="av xs codex">K</span>Codex</div>
+      </div>
+      <div class="sb-sec"><span class="t">提醒</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item">⏰ 明早 9:00 · 复核集成报告<span class="lock" style="margin-left:auto">仅唤醒创建者</span></div>
+      </div>
+      <div class="spacer" style="flex:1"></div>
+      <div class="sb-foot">
+        <span class="pulse"></span>daemon 运行中 · 托盘驻留
+        <span style="margin-left:auto" title="2 个成员工作中">
+          <span class="pill run" style="padding:1px 7px"><span class="d"></span>2</span>
+        </span>
+      </div>
+    </aside>
+    <!-- 主区 -->
+    <main class="main">
+
+      <!-- ══════ 视图：对话池 + 线程 ══════ -->
+      <section class="view active" id="view-chat">
+        <div class="chat-wrap">
+          <!-- 对话池 -->
+          <div class="pool" id="pool">
+            <div class="pool-head">
+              <div class="rh">
+                <div class="n"># 主房间 <span class="tag tag-task">公开</span></div>
+                <div class="d">协调者：Claude（本房间默认，可在房间设置更换 · E5） · 成员 4</div>
+              </div>
+              <div class="acts">
+                <button class="btn sm ghost" onclick="switchView('tasks')">看板</button>
+                <button class="btn sm ghost" onclick="switchView('files')">Files</button>
+                <div class="icon-btn" title="房间设置">⚙</div>
+              </div>
+            </div>
+            <div class="pool-body" id="poolBody">
+              <div class="day-div">今天 09:12</div>
+
+              <!-- 顶层消息 1：研讨中（选中，右侧打开线程） -->
+              <div class="msg sel" onclick="openThread()">
+                <div class="av human">刘</div>
+                <div class="msg-main">
+                  <div class="msg-head">
+                    <span class="au">刘</span>
+                    <span class="tm">09:12</span>
+                    <span class="tag mode-delib">共同研讨 · @全体</span>
+                    <span class="tag tag-task">任务 #12</span>
+                    <span class="pill run"><span class="d"></span>研讨中 · 分歧讨论 第 2 轮</span>
+                  </div>
+                  <div class="msg-text"><span class="mt">@全体</span> 分析一下 src/auth 模块的鉴权流程，给出重构建议。重点关注令牌刷新和会话过期的边界情况。</div>
+                  <!-- 回复预览：线程消息的投影，非复制（§3.4） -->
+                  <div class="msg-preview">
+                    <div class="pv"><span class="av xs claude">C</span><span class="who">Claude</span><span class="tx">两份互评已收齐，当前有 2 项实质分歧，正在第 2 轮讨论…</span></div>
+                    <div class="pv"><span class="av xs codex">K</span><span class="who">Codex</span><span class="tx">关于 refresh token 轮换，我补充了 auth/refresh.ts:88 的证据…</span></div>
+                  </div>
+                  <div class="msg-foot">
+                    <span class="reply-cnt">💬 14 条回复</span>
+                    <span class="avatars">
+                      <span class="av xs claude">C</span><span class="av xs codex">K</span><span class="av xs codex2">2</span>
+                    </span>
+                    <span class="mini-stat">⏱ 预算 14 / 23 次</span>
+                    <span class="mini-stat">📄 初稿 3/3 · 互评 3/3</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 顶层消息 2：自动分工完成 -->
+              <div class="msg" onclick="openThread()">
+                <div class="av human">刘</div>
+                <div class="msg-main">
+                  <div class="msg-head">
+                    <span class="au">刘</span><span class="tm">昨天 17:40</span>
+                    <span class="tag mode-auto">自动分工</span>
+                    <span class="tag tag-task">任务 #11</span>
+                    <span class="pill done"><span class="d"></span>已完成</span>
+                  </div>
+                  <div class="msg-text">把登录页的表单校验抽成独立模块，顺手补上单测。</div>
+                  <div class="msg-preview">
+                    <div class="pv"><span class="av xs claude">C</span><span class="who">Claude · 协调者</span><span class="tx">已拆分为 2 个子任务并整合：改动 3 个文件，12 个新用例全部通过。</span></div>
+                  </div>
+                  <div class="msg-foot">
+                    <span class="reply-cnt">💬 9 条回复</span>
+                    <span class="link" onclick="event.stopPropagation();switchView('files')">查看改动（3 个文件）</span>
+                    <span class="link">查看报告</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 顶层消息 3：指定成员，待确认 -->
+              <div class="msg" onclick="openThread()">
+                <div class="av human">刘</div>
+                <div class="msg-main">
+                  <div class="msg-head">
+                    <span class="au">刘</span><span class="tm">昨天 15:02</span>
+                    <span class="tag mode-direct">指定成员</span>
+                    <span class="tag tag-task">任务 #10</span>
+                    <span class="pill wait"><span class="d"></span>等待你确认</span>
+                  </div>
+                  <div class="msg-text"><span class="mt blue">@Codex</span> 帮我把 README 里的安装步骤更新到 pnpm 单仓结构。</div>
+                  <div class="msg-preview">
+                    <div class="pv"><span class="av xs codex">K</span><span class="who">Codex</span><span class="tx">初稿完成。我判断还需要同步 CONTRIBUTING.md，是否同意扩大范围？</span></div>
+                  </div>
+                  <div class="msg-foot">
+                    <span class="reply-cnt">💬 4 条回复</span>
+                    <button class="btn sm primary" onclick="event.stopPropagation();toast('已确认：同意扩大范围，创建承接新运行')">同意</button>
+                    <button class="btn sm" onclick="event.stopPropagation();toast('维持原范围，继续')">维持原范围</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 顶层消息 4：纯讨论（E1：无任务号） -->
+              <div class="msg" onclick="openThread()">
+                <div class="av human">刘</div>
+                <div class="msg-main">
+                  <div class="msg-head">
+                    <span class="au">刘</span><span class="tm">昨天 11:26</span>
+                    <span class="tag mode-discuss">讨论</span>
+                  </div>
+                  <div class="msg-text">备忘：M1 价值闸门要等原型出来后挑 3–5 个真任务做「研讨 vs 单成员」对比，不提前做手工实验。</div>
+                  <div class="msg-foot">
+                    <span class="reply-cnt">💬 2 条回复</span>
+                    <span class="mini-stat">纯讨论 · 不调用模型</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sys-note">Claude 已离线 32 分钟 · 期间 2 条 @ 提及将在其上线后按规则投递</div>
+            </div>
+            <!-- 输入条（E6 定案：任务/讨论 + 方式芯片） -->
+            <div class="composer">
+              <div class="composer-box">
+                <div class="composer-top">
+                  <div class="seg">
+                    <button class="on" id="segTask" onclick="segSel(this)">任务</button>
+                    <button id="segDiscuss" onclick="segSel(this)">讨论</button>
+                  </div>
+                  <button class="chip" onclick="this.classList.toggle('on')">先给方案再执行 <span class="k">· 需确认后才动手</span></button>
+                  <span class="route-hint">输入 <b>@全体</b> 共同研讨 · <b>@成员</b> 指定执行 · 不 @ 自动分工</span>
+                </div>
+                <textarea placeholder="向 #主房间 发布任务…  @ 提及成员，模式由 @ 自动推导"></textarea>
+                <div class="composer-bot">
+                  <div class="icon-btn" title="附件（文本/代码/图片/PDF/Word/Excel/PPT）">📎</div>
+                  <div class="icon-btn" title="定时提醒">⏰</div>
+                  <div class="sp"></div>
+                  <span class="cap-note"><span class="d"></span>权限：本项目目录 · 单写者生效中（v0.1 无强制写拦截，E8）</span>
+                  <button class="send" title="发送" onclick="toast('已创建：顶层消息 + 根任务 + 回复串（单事务）')">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 线程面板：任务 #12 的回复串 -->
+          <aside class="thread open" id="thread">
+            <div class="th-head">
+              <div class="r1">
+                <span class="ti">任务 #12</span>
+                <span class="tag mode-delib">共同研讨</span>
+                <span class="pill run"><span class="d"></span>进行中</span>
+                <span style="margin-left:auto"></span>
+                <div class="icon-btn" title="暂停后续阶段（不打断当前工具）">⏸</div>
+                <div class="icon-btn" title="停止任务（中断所有活跃 turn）" style="color:var(--accent)">⏹</div>
+                <div class="icon-btn" title="关闭面板" onclick="closeThread()">✕</div>
+              </div>
+              <div class="th-anchor">
+                <div class="msg-head"><span class="au" style="font-size:12px">刘</span><span class="tm">09:12 · 锚定消息</span></div>
+                <div class="msg-text"><span class="mt">@全体</span> 分析一下 src/auth 模块的鉴权流程，给出重构建议。</div>
+              </div>
+              <!-- 任务卡 -->
+              <div class="task-card">
+                <div class="tc-row">
+                  <span class="tc-k">参与者</span>
+                  <span class="tc-v">
+                    <span class="av xs claude">C</span>Claude · 主持
+                    <span class="av xs codex">K</span>Codex
+                    <span class="av xs codex2">2</span>Codex-2
+                    <span class="mini-stat">名单已冻结（3 人）</span>
+                  </span>
+                </div>
+                <div class="tc-row">
+                  <span class="tc-k">预算</span>
+                  <span class="tc-v">
+                    <span class="budget-bar"><i style="width:61%"></i></span>
+                    14 / 23 次 <span class="mini-stat">核心 6N+1 · 含修订 7N+2（E12）· 已为整合与确认预留尾部配额</span>
+                  </span>
+                </div>
+                <div class="tc-row">
+                  <span class="tc-k">分析基线</span>
+                  <span class="tc-v"><span class="mono">baseline:a4f2</span><span class="mini-stat">Git HEAD 3e9b1c · 42 个文件 · 含未提交修改 · 内容散列一致</span></span>
+                </div>
+                <div class="tc-row">
+                  <span class="tc-k">子任务</span>
+                  <span class="tc-v">
+                    <span class="link" onclick="toast('输入框锚定：→ 子任务 #12-1（E3 定向跟进）')">#12-1 令牌刷新路径</span>
+                    <span class="link" onclick="toast('输入框锚定：→ 子任务 #12-2')">#12-2 会话过期边界</span>
+                    <span class="mini-stat">点子任务卡 = 定向跟进</span>
+                  </span>
+                </div>
+              </div>
+              <!-- 阶段条 -->
+              <div class="stages">
+                <div class="stage done"><span class="dot">✓</span><span class="lb">准备</span></div>
+                <div class="stage done"><span class="dot">✓</span><span class="lb">独立分析 3/3</span></div>
+                <div class="stage done"><span class="dot">✓</span><span class="lb">互评 3/3</span></div>
+                <div class="stage now"><span class="dot">2</span><span class="lb">分歧讨论 · 第 2 轮</span></div>
+                <div class="stage"><span class="dot"></span><span class="lb">整合</span></div>
+                <div class="stage"><span class="dot"></span><span class="lb">确认</span></div>
+                <div class="stage"><span class="dot"></span><span class="lb">发布</span></div>
+              </div>
+              <!-- 跟进名单（E2） -->
+              <div class="roster">
+                <span class="t">正在跟进：</span>
+                <span class="rk"><span class="av xs claude">C</span>Claude<span class="x" title="移出 = 停止自动唤醒，历史保留，可再 @ 回">×</span></span>
+                <span class="rk"><span class="av xs codex">K</span>Codex<span class="x">×</span></span>
+                <span class="rk late"><span class="av xs codex2">2</span>Codex-2 · 迟到<span class="x">×</span></span>
+              </div>
+            </div>
+            <div class="th-body">
+              <div class="sys-ev">PREPARE 完成 · 基线 a4f2 · 独立会话已建立（首轮互相隔离）</div>
+
+              <!-- 独立初稿成果 -->
+              <div class="rmsg">
+                <div class="av sm claude">C</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Claude</span><span class="tm">09:19 · 独立分析</span><span class="tag mode-discuss">初稿 v1</span></div>
+                  <div class="artifact">
+                    <div class="af-h"><span class="t">📄 初稿：鉴权流程分析（Claude）</span><span class="kv">artifact:af01</span><span class="link" style="margin-left:auto">展开</span></div>
+                    <div class="af-b">识别出 4 处会话过期边界缺陷；建议将令牌轮换收敛到 <span class="mono">auth/refresh.ts</span> 单点。12 条论断均挂证据。</div>
+                    <div class="af-f"><span class="kv">baseline:a4f2</span><span class="kv">论断 12 · 证据 9</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="rmsg">
+                <div class="av sm codex">K</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Codex</span><span class="tm">09:21 · 独立分析</span><span class="tag mode-discuss">初稿 v1</span></div>
+                  <div class="artifact">
+                    <div class="af-h"><span class="t">📄 初稿：鉴权流程分析（Codex）</span><span class="kv">artifact:af02</span><span class="link" style="margin-left:auto">展开</span></div>
+                    <div class="af-b">与 Claude 结论大体一致，但在「滑动过期是否续期」上给出相反建议，并引用 <span class="mono">auth/session.ts:132</span>。</div>
+                    <div class="af-f"><span class="kv">baseline:a4f2</span><span class="kv">论断 9 · 证据 7</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sys-ev">CROSS_REVIEW 完成 · 互评 3/3 · 生成结构化争议清单（2 项 open）</div>
+
+              <!-- 互评 -->
+              <div class="rmsg">
+                <div class="av sm codex2">2</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Codex-2</span><span class="tm">09:34 · 互评</span></div>
+                  <div class="bubble">
+                    <div class="review-line"><span class="stance agree">同意</span><div>对 af01·C3（刷新竞态）— 证据充分，与我本地复现一致。</div></div>
+                    <div class="review-line"><span class="stance dis">异议</span><div>对 af02·C5（滑动过期即续期）— 会放大被盗令牌窗口，见 auth/refresh.ts:88。</div></div>
+                    <div class="review-line"><span class="stance need">需证据</span><div>对 af01·C7 —「会话表无索引」需给出查询计划截图。</div></div>
+                  </div>
+                </div>
+              </div>
+              <!-- 分歧讨论轮次 -->
+              <div class="rmsg">
+                <div class="av sm claude">C</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Claude · 主持</span><span class="tm">09:47 · 分歧讨论 第 1 轮</span></div>
+                  <div class="rm-text">争议清单冻结为 2 项。就「滑动过期」：我接受 Codex-2 的证据，撤回原建议的默认续期，改为显式续期 + 滑动上限 24h。剩余 1 项待 Codex 回应。</div>
+                </div>
+              </div>
+              <div class="rmsg">
+                <div class="av sm codex">K</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Codex</span><span class="tm">09:52 · 分歧讨论 第 2 轮</span></div>
+                  <div class="rm-text">同意显式续期方案。补充证据：<span class="mono">auth/refresh.ts:88</span> 的竞态在并发 2 个标签页时可复现，建议整合稿把「刷新互斥锁」列为 P0。另：第 3 轮将作为<strong>强制复核检查点</strong>（决策 06）。</div>
+                </div>
+              </div>
+
+              <!-- 缺席容忍（E4） -->
+              <div class="absence">
+                <div class="row">⏳ <strong>Codex-2 已 18 分钟未回应本轮</strong>（容忍上限 20 分钟，设置可改）。仍在运行的成员不受影响。</div>
+                <div class="row" style="font-size:11px">超时后自动「按缺席继续」：以现有成果推进并先生成部分成果；迟到成果按阶段规则并入，最终报告如实标注「迟到纳入」。</div>
+              </div>
+
+              <!-- 用户跟进（steering） -->
+              <div class="rmsg">
+                <div class="av sm human">刘</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">刘</span><span class="tm">09:55</span><span class="tag mode-discuss">补充要求 · taskRevision 2</span></div>
+                  <div class="rm-text">重构建议里请把「不改对外 API」作为硬约束写进验收标准。</div>
+                </div>
+              </div>
+              <div class="sys-ev">补充已作为本轮证据并入 · 不重建工作流 · 当前 turn 结束后生效</div>
+
+              <!-- 子任务卡 -->
+              <div class="rmsg">
+                <div class="av sm claude">C</div>
+                <div class="rm-main">
+                  <div class="rm-head"><span class="au">Claude · 主持</span><span class="tm">09:58</span></div>
+                  <div class="artifact" style="border-color:#CBE3D8">
+                    <div class="af-h" style="background:var(--green-soft)"><span class="t">✓ 子任务 #12-1 完成：令牌刷新路径盘点</span><span class="link" style="margin-left:auto">定向跟进</span></div>
+                    <div class="af-b">产出问题清单 6 条，全部标注文件与行号；验证：typecheck 通过。</div>
+                    <div class="af-f"><span class="kv">负责人 Codex</span><span class="kv">真实执行记录 #run-883</span></div>
+                  </div>
+                </div>
+              </div>
+            </div><!-- /th-body -->
+
+            <!-- 串内输入框（独立草稿，不猜目的地） -->
+            <div class="th-composer">
+              <div class="composer-box" style="box-shadow:none">
+                <div class="steer-tag" title="E3">→ 回复整个任务串</div>
+                <textarea placeholder="在线程内跟进… 沿用本任务参与者与模式；@新成员 = 邀请加入（需你确认）" style="min-height:38px;display:block"></textarea>
+                <div class="composer-bot">
+                  <div class="icon-btn" title="附件">📎</div>
+                  <div class="sp"></div>
+                  <span class="cap-note" style="color:var(--ink3)">回复只进本串，不进主池 · 阅读不唤醒 agent</span>
+                  <button class="send" onclick="toast('已发送到任务 #12 的线程')">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+      <!-- ══════ 视图：任务看板 ══════ -->
+      <section class="view" id="view-tasks">
+        <div class="board">
+          <div class="pool-head" style="flex:none">
+            <div class="rh">
+              <div class="n">任务看板</div>
+              <div class="d">与对话池同一份数据的另一视图 · 点击卡片回到原线程（TASK-05）</div>
+            </div>
+            <div class="acts">
+              <button class="btn sm primary" onclick="toast('创建任务：三入口之一（As Task / Convert / 对话框）汇入同一命令')">+ 新建任务</button>
+            </div>
+          </div>
+          <div class="board-body">
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill todo"><span class="d"></span>待办</span><span class="n">2</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')">
+                  <div class="ti">#14 梳理 daemon 单实例锁在快速重启下的竞态</div>
+                  <div class="meta"><span class="room">#主房间</span><span class="mini-stat">负责人：未认领</span></div>
+                </div>
+                <div class="tcard" onclick="switchView('chat')">
+                  <div class="ti">#13 为导出 Word/HTML 定稿样式模板</div>
+                  <div class="meta"><span class="room">#发布筹备 🔒</span><span class="mini-stat">负责人：Claude</span><span class="av xs claude">C</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill run"><span class="d"></span>进行中</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')">
+                  <div class="ti">#12 src/auth 鉴权流程分析与重构建议</div>
+                  <div class="meta">
+                    <span class="tag mode-delib">共同研讨</span>
+                    <span class="mini-stat">分歧讨论 第 2 轮 · 预算 14/23</span>
+                  </div>
+                  <div class="meta"><span class="avatars"><span class="av xs claude">C</span><span class="av xs codex">K</span><span class="av xs codex2">2</span></span><span class="room">#主房间</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill review"><span class="d"></span>待审阅</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')">
+                  <div class="ti">#10 README 安装步骤更新（pnpm 单仓）</div>
+                  <div class="meta"><span class="tag mode-direct">指定 Codex</span><span class="mini-stat">等待你确认扩大范围</span></div>
+                  <div class="meta"><button class="btn sm primary" onclick="event.stopPropagation();toast('已确认')">确认</button><button class="btn sm" onclick="event.stopPropagation();toast('退回，附审阅意见')">退回</button></div>
+                </div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill done"><span class="d"></span>已完成</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" onclick="switchView('chat')">
+                  <div class="ti">#11 登录表单校验抽离 + 单测</div>
+                  <div class="meta"><span class="tag mode-auto">自动分工</span><span class="mini-stat">3 文件 · 12 用例通过</span></div>
+                  <div class="meta"><span class="link">报告</span><span class="link" onclick="event.stopPropagation();switchView('files')">改动</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="bcol">
+              <div class="bcol-h"><span class="pill todo"><span class="d"></span>已关闭</span><span class="n">1</span></div>
+              <div class="bcol-list">
+                <div class="tcard" style="opacity:.62" onclick="switchView('chat')">
+                  <div class="ti">#8 试用 Gemini 作为第三 runtime（已取消）</div>
+                  <div class="meta"><span class="mini-stat">wont-do · 决策 37</span><span class="link">重新打开</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ══════ 视图：文件与改动 ══════ -->
+      <section class="view" id="view-files">
+        <div class="files-view">
+          <div class="ftree">
+            <div class="sb-sec" style="padding-top:2px"><span class="t">项目文件 · Git</span><span class="mini-stat">⎇ main</span></div>
+            <div class="ft"><span class="fi">▾</span>src</div>
+            <div class="ft" style="padding-left:26px"><span class="fi">▾</span>auth</div>
+            <div class="ft sel" style="padding-left:44px"><span class="fi">◆</span>refresh.ts<span class="mod">●改</span></div>
+            <div class="ft" style="padding-left:44px"><span class="fi">◇</span>session.ts<span class="mod">●改</span></div>
+            <div class="ft" style="padding-left:26px"><span class="fi">◇</span>login-form.ts</div>
+            <div class="ft"><span class="fi">◇</span>README.md</div>
+            <div class="sb-sec"><span class="t">Files 成果集合</span></div>
+            <div class="ft"><span class="fi">📄</span>鉴权分析-整合报告.md</div>
+            <div class="ft"><span class="fi">📊</span>竞态复现-查询计划.png</div>
+          </div>
+          <div class="fprev">
+            <div class="fprev-h">
+              <span style="font-weight:700;font-size:13px">src/auth/refresh.ts</span>
+              <span class="tag tag-task">任务 #11 的改动</span>
+              <span style="margin-left:auto"></span>
+              <button class="btn sm" onclick="toast('打开定位评论：选择行/段落作为锚点（COMMENT-02，M3）')">💬 评论</button>
+              <button class="btn sm" onclick="toast('版本历史：记录原版本与位置，更新后不静默漂移')">历史</button>
+            </div>
+            <div class="fprev-b">
+              <div class="diff">
+                <div class="ln hunk"><span class="no"></span><span class="tx">@@ -84,7 +84,9 @@ export async function refreshToken(</span></div>
+                <div class="ln"><span class="no">84</span><span class="tx">  const session = await store.get(sessionId);</span></div>
+                <div class="ln"><span class="no">85</span><span class="tx">  if (!session) throw new AuthError('NO_SESSION');</span></div>
+                <div class="ln del"><span class="no">86</span><span class="tx">  const next = await rotate(session.refreshToken);</span></div>
+                <div class="ln add"><span class="no">86</span><span class="tx">  // P0：刷新互斥锁，修复多标签页并发竞态（任务 #12 整合稿）</span></div>
+                <div class="ln add"><span class="no">87</span><span class="tx">  const next = await withLock(`rt:${sessionId}`, () =&gt; rotate(session.refreshToken));</span></div>
+                <div class="ln"><span class="no">88</span><span class="tx">  await store.save(sessionId, next);</span></div>
+                <div class="ln"><span class="no">89</span><span class="tx">  return next.accessToken;</span></div>
+              </div>
+            </div>
+            <div class="fprev-note">
+              ⓘ 本改动来自任务 #11（已完成）。撤销是带版本检查的单独操作——停止 ≠ 撤销。非 Git 目录将以整目录快照作内容级前像（E15）。
+              <span class="link" style="margin-left:auto" onclick="switchView('chat')">回到任务线程</span>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ══════ 视图：动态 ══════ -->
+      <section class="view" id="view-activity">
+        <div class="list-page">
+          <div class="list-head">
+            <h2>动态</h2>
+            <div class="tabs">
+              <div class="tab on">全部</div>
+              <div class="tab">未读 <span class="cnt" style="font-size:10px;background:var(--accent);color:#fff;border-radius:8px;padding:0 6px">2</span></div>
+              <div class="tab">@ 提及我</div>
+            </div>
+          </div>
+          <div class="list-body">
+            <div class="feed">
+              <span class="unread-dot"></span>
+              <div class="av sm claude">C</div>
+              <div class="fx">
+                <div class="ft1"><b>Claude</b> 在 <b>任务 #12</b> 的分歧讨论中提到你：「等用户确认硬约束后进入第 2 轮收尾」</div>
+                <div class="ft2"><span>#主房间 · 4 分钟前</span><span class="pill run" style="padding:1px 8px"><span class="d"></span>研讨中</span></div>
+              </div>
+              <span class="link">跳到原串</span>
+            </div>
+            <div class="feed">
+              <span class="unread-dot"></span>
+              <div class="av sm codex">K</div>
+              <div class="fx">
+                <div class="ft1"><b>Codex</b> 请求扩大 <b>任务 #10</b> 的范围：同步更新 CONTRIBUTING.md</div>
+                <div class="ft2"><span>#主房间 · 昨天 15:40</span><span class="pill wait" style="padding:1px 8px"><span class="d"></span>待你处理</span></div>
+              </div>
+              <span class="link">去确认</span>
+            </div>
+            <div class="feed">
+              <div class="av sm human">刘</div>
+              <div class="fx">
+                <div class="ft1">你关注的线程 <b>「#8 第三 runtime 评估」</b>有新回复</div>
+                <div class="ft2"><span>#架构评审 · 昨天 13:12</span></div>
+              </div>
+              <span class="link">跳到原串</span>
+            </div>
+            <div class="feed">
+              <div class="av sm codex2">2</div>
+              <div class="fx">
+                <div class="ft1"><b>Codex-2</b> 在私信中回复了你（私信上下文独立，不进任务）</div>
+                <div class="ft2"><span>私信 · 昨天 10:05</span></div>
+              </div>
+              <span class="link">打开私信</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════ 视图：收藏 ══════ -->
+      <section class="view" id="view-saved">
+        <div class="list-page">
+          <div class="list-head"><h2>收藏</h2>
+            <div class="tabs"><div class="tab on">全部收藏</div><div class="tab">消息</div><div class="tab">成果</div></div>
+          </div>
+          <div class="list-body">
+            <div class="feed">
+              <div class="av sm claude">C</div>
+              <div class="fx">
+                <div class="ft1">📄 <b>鉴权流程分析 · 整合报告 v2</b>（带异议标注：Codex 对滑动窗口保留条件同意）</div>
+                <div class="ft2"><span>任务 #12 · 收藏于今天 09:50</span><span class="kv">artifact:af09</span></div>
+              </div>
+              <span class="link">打开</span>
+            </div>
+            <div class="feed">
+              <div class="av sm codex">K</div>
+              <div class="fx">
+                <div class="ft1">「刷新互斥锁的竞态复现步骤」— Codex 在任务 #12 第 2 轮的回复</div>
+                <div class="ft2"><span>#主房间 · 收藏于今天 09:53</span></div>
+              </div>
+              <span class="link">跳回原位置</span>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ══════ 视图：成员 ══════ -->
+      <section class="view" id="view-members">
+        <div class="list-page">
+          <div class="list-head">
+            <h2>成员</h2>
+            <div class="tabs"><div class="tab on">本项目成员</div><div class="tab">成员模板</div></div>
+          </div>
+          <div class="members">
+            <div class="mcard">
+              <div class="av claude" style="width:40px;height:40px;border-radius:12px;font-size:15px">C</div>
+              <div class="mx">
+                <div class="mn">Claude <span class="tag mode-auto">协调者 · 本房间默认</span> <span class="pill done" style="padding:1px 8px"><span class="d"></span>在线</span></div>
+                <div class="md">Claude Code headless · 擅长分析与整合 · 主持研讨时首轮同样先独立出稿</div>
+                <div class="mm"><span class="kv">模型：sonnet-4.5</span><span class="kv">思考强度：高</span><span class="kv">技能：代码分析 / 报告整合</span><span class="kv">内部子助手：开（计入用量 · 决策 11）</span></div>
+              </div>
+              <button class="btn sm">配置</button>
+              <button class="btn sm" onclick="toast('发起私信（DM 独立上下文）')">私信</button>
+            </div>
+            <div class="mcard">
+              <div class="av codex" style="width:40px;height:40px;border-radius:12px;font-size:15px">K</div>
+              <div class="mx">
+                <div class="mn">Codex <span class="pill run" style="padding:1px 8px"><span class="d"></span>工作中 · 任务 #12</span></div>
+                <div class="md">Codex App Server · 擅长直接修改与单测 · 当前会话按任务 #12 隔离（U08）</div>
+                <div class="mm"><span class="kv">模型：gpt-5-codex</span><span class="kv">思考强度：中</span><span class="kv">技能：改码 / 测试</span><span class="kv">会话代次 gen-3</span></div>
+              </div>
+              <button class="btn sm">配置</button>
+              <button class="btn sm" onclick="toast('发起私信')">私信</button>
+            </div>
+            <div class="mcard">
+              <div class="av codex2" style="width:40px;height:40px;border-radius:12px;font-size:15px">2</div>
+              <div class="mx">
+                <div class="mn">Codex-2 <span class="pill review" style="padding:1px 8px"><span class="d"></span>迟到标记</span></div>
+                <div class="md">Codex App Server（第 2 实例）· 同名成员以不可变 ID 区分，界面用名称+序号消歧（§3.2）</div>
+                <div class="mm"><span class="kv">模型：gpt-5-codex</span><span class="kv">思考强度：低</span><span class="kv">技能：审查 / 复现</span></div>
+              </div>
+              <button class="btn sm">配置</button>
+              <button class="btn sm" onclick="toast('发起私信')">私信</button>
+            </div>
+            <div class="mcard" style="border-style:dashed;box-shadow:none;background:transparent">
+              <div class="av" style="width:40px;height:40px;border-radius:12px;background:var(--surface3);color:var(--ink3);font-size:18px">+</div>
+              <div class="mx"><div class="mn" style="color:var(--ink2)">添加成员</div>
+              <div class="md">从模板创建或新建 · 自动检测本机已装 runtime（Claude Code / Codex）</div></div>
+              <button class="btn sm primary">添加</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ══════ 视图：计算机与局域网配对 ══════ -->
+      <section class="view" id="view-computers">
+        <div class="list-page">
+          <div class="list-head"><h2>计算机与访问</h2>
+            <div class="tabs"><div class="tab on">本机与设备</div><div class="tab">配对记录</div></div>
+          </div>
+          <div class="comp-grid">
+            <div class="ccard">
+              <div class="ch">
+                <div class="ci">💻</div>
+                <div><div style="font-weight:700">DESKTOP-LSJ（本机）</div>
+                <div style="font-size:11px;color:var(--green);font-weight:600;margin-top:2px">● 在线 · daemon v0.1.0 · Windows 11</div></div>
+              </div>
+              <div class="rt">
+                <div>已检测 runtime：Codex App Server ✓ · Claude Code ✓</div>
+                <div>承载成员：Claude、Codex、Codex-2</div>
+                <div>监听：命名管道（本机）· 127.0.0.1 + 局域网（HTTPS/WSS 强制）</div>
+              </div>
+              <div class="pair-box">
+                <div style="font-size:12px;font-weight:700">局域网配对（E18 · 先配对后访问）</div>
+                <div style="font-size:11px;color:var(--ink2);margin-top:4px;line-height:1.6">配对码仅本机显示、限时 10 分钟、一次一用。配对成功的设备获得与本机同等权限，可随时逐个吊销。</div>
+                <div class="pair-code">7K4D-92QF</div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn sm" onclick="toast('已重新生成（默认随机 8 位，可自设：校验最短长度与重复）')">重新生成</button>
+                  <button class="btn sm" onclick="toast('自设配对码：最短 8 位，不可与近期重复')">自设…</button>
+                  <span class="mini-stat" style="margin-left:auto">09:47 后过期</span>
+                </div>
+              </div>
+            </div>
+            <div class="ccard">
+              <div class="ch">
+                <div class="ci" style="background:var(--teal)">📱</div>
+                <div><div style="font-weight:700">客厅 iPad（已配对）</div>
+                <div style="font-size:11px;color:var(--ink2);margin-top:2px">局域网 · 192.168.1.23 · 配对于昨天 21:14</div></div>
+              </div>
+              <div class="rt">
+                <div>权限：与本机同等（发任务 / 停止 / 改设置）</div>
+                <div>最近活动：今天 08:02 查看任务 #12</div>
+                <div>连接：WSS ✓ · Origin/Host 校验通过</div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn sm danger" onclick="toast('已吊销该设备，连接立即断开')">吊销设备</button>
+                <button class="btn sm" onclick="toast('令牌已轮换（不影响其他已配对设备）')">轮换令牌</button>
+              </div>
+            </div>
+            <div class="ccard" style="border-style:dashed;box-shadow:none;background:transparent">
+              <div class="ch">
+                <div class="ci" style="background:var(--surface3);color:var(--ink3)">＋</div>
+                <div><div style="font-weight:700;color:var(--ink2)">添加计算机</div>
+                <div style="font-size:11px;color:var(--ink3);margin-top:2px">多机执行 · 完整目标（FULL-05，待 ADR-10 更新）</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ══════ 视图：设置 ══════ -->
+      <section class="view" id="view-settings">
+        <div class="settings">
+          <div class="set-nav">
+            <div class="si on">常规</div>
+            <div class="si">协作与预算</div>
+            <div class="si">通知</div>
+            <div class="si">局域网访问</div>
+            <div class="si">Runtime 与成员</div>
+            <div class="si">数据与备份</div>
+            <div class="si">诊断与反馈</div>
+          </div>
+          <div class="set-body">
+            <div class="set-sec">
+              <h3>常规</h3>
+              <div class="sub">桌面客户端行为（Windows 优先）</div>
+              <div class="srow">
+                <div class="sl"><div class="t">关闭窗口时最小化到托盘</div>
+                <div class="d">daemon 继续运行，进行中的任务不中断；显式「退出」才走停止流程（决策 43）</div></div>
+                <div class="tgl on" onclick="this.classList.toggle('on')"></div>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">开机自启并驻留托盘</div>
+                <div class="d">默认开启，可关闭（决策 44）</div></div>
+                <div class="tgl on" onclick="this.classList.toggle('on')"></div>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">启动时询问未完成任务</div>
+                <div class="d">重启后列出未完成任务等你点「继续」，不自动接着调用模型（E7）</div></div>
+                <div class="tgl on" onclick="this.classList.toggle('on')"></div>
+              </div>
+            </div>
+            <div class="set-sec">
+              <h3>协作与预算</h3>
+              <div class="sub">研讨流程与护栏默认值（A2 / E4 / E12）</div>
+              <div class="srow">
+                <div class="sl"><div class="t">缺席容忍时间</div>
+                <div class="d">成员超过此时长未回，自动「按缺席继续」，不打断仍在运行的成员</div></div>
+                <input class="inp" style="width:80px" value="20"> <span style="font-size:11px;color:var(--ink3)">分钟</span>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">预算上限推导</div>
+                <div class="d">核心 6N+1、含修订 7N+2，按冻结名单推导；SYNTHESIS/RATIFY 预留尾部配额，耗尽后程序拼接已有稿兜底</div></div>
+                <select class="inp"><option>自动（按名单）</option><option>自定义</option></select>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">审阅策略 reviewPolicy</div>
+                <div class="d">报告自动交付；代码改动需人工审阅后才标记完成（A4）</div></div>
+                <select class="inp"><option>报告自动 · 代码人工</option><option>全部人工</option></select>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">子任务规模上限</div>
+                <div class="d">每次分工最多 6 个子任务、拆分深度 1 层（§5.3）</div></div>
+                <input class="inp" style="width:64px" value="6">
+              </div>
+            </div>
+            <div class="set-sec">
+              <h3>数据与隐私</h3>
+              <div class="sub">控制面与工作记录只存本机（U06）</div>
+              <div class="srow">
+                <div class="sl"><div class="t">本地数据库</div>
+                <div class="d">SQLite（WAL）· 应用数据目录 · 任务上下文默认按任务隔离（U08）</div></div>
+                <button class="btn sm">打开数据目录</button>
+              </div>
+              <div class="srow">
+                <div class="sl"><div class="t">导出</div>
+                <div class="d">报告与线程可导出 Markdown / Word / HTML（决策 34）</div></div>
+                <button class="btn sm">导出…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<!-- Ctrl+K 搜索 -->
+<div class="overlay" id="cmdk" onclick="if(event.target===this)closeCmdk()">
+  <div class="cmdk">
+    <div class="ck-in">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="cmdkInput" placeholder="搜索消息、任务、成员、频道…（ATTN-03：不搜索文件正文）" autofocus>
+      <kbd style="font-size:10px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;color:var(--ink3)">ESC</kbd>
+    </div>
+    <div class="ck-list">
+      <div class="ck-sec">任务</div>
+      <div class="ck-item hot" onclick="closeCmdk();switchView('chat')"><span class="tag tag-task">#12</span>src/auth <mark>鉴权</mark>流程分析与重构建议<span class="mini-stat" style="margin-left:auto">研讨中</span></div>
+      <div class="ck-item" onclick="closeCmdk();switchView('tasks')"><span class="tag tag-task">#10</span>README 安装步骤更新<span class="mini-stat" style="margin-left:auto">待审阅</span></div>
+      <div class="ck-sec">消息</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('chat')"><span class="av xs codex2">2</span>「<mark>鉴权</mark>滑动窗口的被盗风险」— Codex-2 · 任务 #12<span class="mini-stat" style="margin-left:auto">09:34</span></div>
+      <div class="ck-sec">成员</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('members')"><span class="av xs claude">C</span>Claude · 协调者</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('members')"><span class="av xs codex">K</span>Codex</div>
+    </div>
+  </div>
+</div>
+
+<!-- 启动恢复询问（E7） -->
+<div class="overlay" id="resumeModal">
+  <div class="modal">
+    <h3>欢迎回来</h3>
+    <p class="mp">上次退出时有 <b>2 个任务未完成</b>。恢复 ≠ 自动派发：选择「继续」后才会创建新运行，不会悄悄消耗模型调用（E7 · 决策 44）。</p>
+    <div class="resume-task"><span class="pill run"><span class="d"></span>研讨中</span><span>#12 src/auth 鉴权流程分析 · 停在分歧讨论第 2 轮</span></div>
+    <div class="resume-task"><span class="pill wait"><span class="d"></span>等你确认</span><span>#10 README 更新 · Codex 请求扩大范围</span></div>
+    <div class="mrow">
+      <button class="btn" onclick="closeResume();toast('已搁置，可在任务看板随时继续')">稍后处理</button>
+      <button class="btn primary" onclick="closeResume();toast('已为选中任务创建承接运行')">继续这 2 个任务</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+// 视图切换
+const railItems=document.querySelectorAll('.rail-item[data-view]');
+function switchView(name){
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+name));
+  railItems.forEach(i=>i.classList.toggle('active',i.dataset.view===name));
+  window.scrollTo(0,0);
+}
+railItems.forEach(i=>i.addEventListener('click',()=>switchView(i.dataset.view)));
+
+// 线程面板开合
+function openThread(){document.getElementById('thread').classList.add('open')}
+function closeThread(){document.getElementById('thread').classList.remove('open')}
+
+// 输入条 任务/讨论 切换
+function segSel(btn){
+  btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  toast(btn.textContent==='讨论'?'已切到「讨论」：保存但不调用模型、不派工（E1 可开回复串）':'已切到「任务」：自动建轻任务并按 @ 路由');
+}
+
+// Ctrl+K
+const cmdk=document.getElementById('cmdk');
+function openCmdk(){cmdk.classList.add('open');setTimeout(()=>document.getElementById('cmdkInput').focus(),30)}
+function closeCmdk(){cmdk.classList.remove('open')}
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();cmdk.classList.contains('open')?closeCmdk():openCmdk()}
+  if(e.key==='Escape'){closeCmdk();closeResume()}
+});
+
+// 恢复询问
+function closeResume(){document.getElementById('resumeModal').classList.remove('open')}
+
+// toast
+let toastTimer;
+function toast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
+}
+
+// 深链：?resume=1 展示启动恢复询问；?view=tasks 直达视图；?thread=0 收起线程
+const q=new URLSearchParams(location.search);
+if(q.get('resume')==='1')document.getElementById('resumeModal').classList.add('open');
+if(q.get('view'))switchView(q.get('view'));
+if(q.get('thread')==='0')closeThread();
+</script>
+</body>
+</html>

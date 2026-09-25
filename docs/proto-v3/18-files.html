@@ -1,0 +1,39 @@
+      <!-- ══ 文件与改动 ══ -->
+      <section class="view" id="view-files">
+        <div class="files-view">
+          <div class="ftree">
+            <div class="sb-sec" style="padding-top:2px"><span class="t">项目文件 · GIT</span><span class="mini mono" style="padding:0 5px">main</span></div>
+            <div class="ft"><span class="fi">▾</span>src</div>
+            <div class="ft" style="padding-left:24px"><span class="fi">▾</span>auth</div>
+            <div class="ft sel" style="padding-left:42px"><span class="fi">◆</span>refresh.ts<span class="mod">●改</span></div>
+            <div class="ft" style="padding-left:42px"><span class="fi">◇</span>session.ts<span class="mod">●改</span></div>
+            <div class="ft" style="padding-left:24px"><span class="fi">◇</span>login-form.ts</div>
+            <div class="ft"><span class="fi">◇</span>README.md</div>
+            <div class="sb-sec"><span class="t">FILES 成果集合</span></div>
+            <div class="ft"><span class="fi">📄</span>鉴权分析-整合报告.md</div>
+            <div class="ft"><span class="fi">📊</span>竞态复现-查询计划.png</div>
+          </div>
+          <div class="fprev">
+            <div class="fprev-h">
+              <span style="font-weight:800;font-size:13px">src/auth/refresh.ts</span>
+              <span class="tag t-gray">任务 #11 的改动</span>
+              <span style="margin-left:auto"></span>
+              <button class="btn sm" onclick="toast('定位评论：选择行/段落作锚点（COMMENT-02，M3）')">💬 评论</button>
+              <button class="btn sm" onclick="toast('版本历史：记录原版本与位置，更新后不静默漂移')">历史</button>
+            </div>
+            <div class="fprev-b">
+              <div class="diff">
+                <div class="ln hunk"><span class="no"></span><span class="tx">@@ -84,7 +84,9 @@ export async function refreshToken(</span></div>
+                <div class="ln"><span class="no">84</span><span class="tx">  const session = await store.get(sessionId);</span></div>
+                <div class="ln"><span class="no">85</span><span class="tx">  if (!session) throw new AuthError('NO_SESSION');</span></div>
+                <div class="ln del"><span class="no">86</span><span class="tx">  const next = await rotate(session.refreshToken);</span></div>
+                <div class="ln add"><span class="no">86</span><span class="tx">  // P0：刷新互斥锁，修复多标签页并发竞态（任务 #12 整合稿）</span></div>
+                <div class="ln add"><span class="no">87</span><span class="tx">  const next = await withLock(`rt:${sessionId}`, () =&gt; rotate(session.refreshToken));</span></div>
+                <div class="ln"><span class="no">88</span><span class="tx">  await store.save(sessionId, next);</span></div>
+                <div class="ln"><span class="no">89</span><span class="tx">  return next.accessToken;</span></div>
+              </div>
+            </div>
+            <div class="fprev-note">ⓘ 本改动来自任务 #11（已完成）。撤销是带版本检查的单独操作——停止 ≠ 撤销。非 Git 目录将以整目录快照作内容级前像（E15）。<span class="link" style="margin-left:auto" onclick="switchView('chat')">回到任务线程</span></div>
+          </div>
+        </div>
+      </section>

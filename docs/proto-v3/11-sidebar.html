@@ -1,0 +1,46 @@
+  <div class="appbody">
+    <!-- 左侧栏 -->
+    <aside class="sb">
+      <div class="sb-head" onclick="toast('切换项目：zhongshuo-app / notes / demo-api（E10 多项目）')">
+        <div class="sb-logo">众</div>
+        <div style="min-width:0">
+          <div class="nm">zhongshuo-app ▾</div>
+          <div class="ph">D:\projects\zhongshuo-app</div>
+        </div>
+      </div>
+      <div class="sb-search" onclick="openCmdk()">
+        <svg width="13" height="13"><use href="#i-search"/></svg>
+        搜索…<kbd>Ctrl K</kbd>
+      </div>
+      <div class="sb-list">
+        <div class="sb-item" data-view="welcome" onclick="switchView('welcome')"><svg><use href="#i-home"/></svg>项目首页</div>
+        <div class="sb-item active" data-view="chat" onclick="switchView('chat')"><svg><use href="#i-chat"/></svg>对话池<span class="cnt">3</span></div>
+        <div class="sb-item" data-view="activity" onclick="switchView('activity')"><svg><use href="#i-bolt"/></svg>动态<span class="cnt">2</span></div>
+        <div class="sb-item" data-view="saved" onclick="switchView('saved')"><svg><use href="#i-star"/></svg>收藏</div>
+        <div class="sb-item" data-view="tasks" onclick="switchView('tasks')"><svg><use href="#i-board"/></svg>任务看板</div>
+        <div class="sb-item" data-view="files" onclick="switchView('files')"><svg><use href="#i-folder"/></svg>文件与改动</div>
+        <div class="sb-item" data-view="members" onclick="switchView('members')"><svg><use href="#i-users"/></svg>成员</div>
+        <div class="sb-item" data-view="computers" onclick="switchView('computers')"><svg><use href="#i-monitor"/></svg>计算机与访问</div>
+      </div>
+      <div class="sb-sec"><span class="t">房间</span><span class="add">+</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item active"><span class="hash">#</span>主房间<span class="cnt">3</span></div>
+        <div class="sb-item"><span class="hash">#</span>架构评审<span class="cnt gray">1</span></div>
+        <div class="sb-item"><span class="hash">#</span>发布筹备<span class="sub">🔒</span></div>
+      </div>
+      <div class="sb-sec"><span class="t">私信</span><span class="add">+</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item"><span class="av xs c-claude">C</span>Claude<span class="cnt gray">2</span></div>
+        <div class="sb-item"><span class="av xs c-codex">K</span>Codex</div>
+      </div>
+      <div class="sb-sec"><span class="t">提醒</span></div>
+      <div class="sb-list" style="flex:none">
+        <div class="sb-item"><svg><use href="#i-bell"/></svg><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">明早 9:00 · 复核集成报告</span><span class="sub">仅唤醒创建者</span></div>
+      </div>
+      <div class="sb-foot">
+        <span class="pulse"></span>daemon 运行中 · 托盘驻留
+        <span style="margin-left:auto"><span class="pill p-run" style="padding:1px 8px"><span class="d"></span>2</span></span>
+      </div>
+    </aside>
+
+    <main class="main">

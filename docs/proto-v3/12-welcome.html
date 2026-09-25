@@ -1,0 +1,47 @@
+      <!-- ══ 视图：欢迎/项目首页 ══ -->
+      <section class="view" id="view-welcome">
+        <div class="welcome">
+          <div class="wc">
+            <div class="wc-hero">
+              <div class="wc-logo">众</div>
+              <h1>打开一个本地文件夹，让多个 agent 在这里协作</h1>
+              <div class="lede">文件夹是根对象，房间是它的协作视图。控制面与工作记录只存本机；@ 决定谁来干活，回复串锚定在任务上。</div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:center">
+              <button class="btn primary"><svg width="14" height="14"><use href="#i-folder"/></svg>选择本地文件夹作为项目</button>
+              <button class="btn">继续上次的项目</button>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:800;color:var(--ink3);letter-spacing:1.2px;margin-bottom:8px">最近的项目</div>
+              <div class="proj-grid">
+                <div class="proj-card" onclick="switchView('chat')">
+                  <div class="pn"><svg width="14" height="14" style="color:var(--accent)"><use href="#i-folder"/></svg>zhongshuo-app</div>
+                  <div class="pp">D:\projects\zhongshuo-app</div>
+                  <div class="pm"><span>3 房间</span><span>·</span><span>4 活跃任务</span><span>·</span><span class="mono" style="padding:0 4px">main</span></div>
+                </div>
+                <div class="proj-card">
+                  <div class="pn"><svg width="14" height="14" style="color:var(--ink3)"><use href="#i-folder"/></svg>data-backfill</div>
+                  <div class="pp">D:\work\data-backfill</div>
+                  <div class="pm"><span>0 活跃任务</span><span>·</span><span class="mono" style="padding:0 4px">feat/orders-etl</span></div>
+                </div>
+                <div class="proj-card" style="border-color:color-mix(in srgb,var(--amber) 45%,transparent)">
+                  <div class="pn"><svg width="14" height="14" style="color:var(--amber)"><use href="#i-folder"/></svg>legacy-docs</div>
+                  <div class="pp">E:\archive\legacy-docs</div>
+                  <div class="pm"><span class="pill p-wait" style="padding:1px 8px"><span class="d"></span>目录已移动 · 需重新定位</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-h"><svg width="15" height="15" style="color:var(--amber)"><use href="#i-flag"/></svg><span class="t">启动恢复检查</span><span class="sub">E7 · 不自动续跑，等你确认</span></div>
+              <div style="padding:10px 14px">
+                <div class="resume-task"><span class="pill p-run"><span class="d"></span>研讨中</span><span style="flex:1">#12 src/auth 鉴权流程分析 · 停在分歧讨论第 2 轮</span><button class="btn sm" onclick="switchView('chat')">继续</button></div>
+                <div class="resume-task"><span class="pill p-wait"><span class="d"></span>待你确认</span><span style="flex:1">#10 README 更新 · Codex 请求扩大范围</span><button class="btn sm" onclick="switchView('chat')">去确认</button></div>
+                <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">
+                  <button class="btn sm ghost">稍后处理</button>
+                  <button class="btn sm primary" onclick="toast('已为选中任务创建承接运行（重排队 ≠ 自动派发）')">继续选中的 2 项</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

@@ -1,0 +1,101 @@
+      <!-- ══ 视图：对话池 + 线程 ══ -->
+      <section class="view active" id="view-chat">
+        <!-- 对话池：线程打开时收窄 -->
+        <div class="pool shrunk" id="pool">
+          <div class="pool-head">
+            <div class="rh">
+              <div class="n"># 主房间 <span class="tag t-gray">公开</span></div>
+              <div class="d">协调者：Claude · 成员 4</div>
+            </div>
+            <div class="acts">
+              <button class="ibtn" title="看板视图" onclick="switchView('tasks')"><svg><use href="#i-board"/></svg></button>
+              <button class="ibtn" title="Files" onclick="switchView('files')"><svg><use href="#i-folder"/></svg></button>
+              <button class="ibtn" title="房间设置"><svg><use href="#i-gear"/></svg></button>
+            </div>
+          </div>
+          <div class="pool-body">
+            <div class="day-div">今天 09:12</div>
+            <div class="msg sel" onclick="openThread()">
+              <div class="av md c-human">刘</div>
+              <div class="msg-main">
+                <div class="msg-head">
+                  <span class="au">刘</span><span class="tm">09:12</span>
+                  <span class="tag t-delib">共同研讨</span>
+                  <span class="tag t-gray num">#12</span>
+                  <span class="pill p-run"><span class="d"></span>分歧讨论 第 2 轮</span>
+                </div>
+                <div class="msg-text"><span class="mt v">@全体</span> 分析 src/auth 鉴权流程，给出重构建议。重点关注令牌刷新和会话过期边界。</div>
+                <div class="msg-pv">
+                  <div class="pv"><span class="who" style="color:var(--c-claude)">Claude</span><span class="tx">两份互评已收齐，当前 2 项实质分歧…</span></div>
+                  <div class="pv"><span class="who" style="color:var(--c-codex)">Codex</span><span class="tx">补充了 auth/refresh.ts:88 的证据…</span></div>
+                </div>
+                <div class="msg-foot">
+                  <span class="rcnt">💬 14</span>
+                  <span class="avs"><span class="av xs c-claude">C</span><span class="av xs c-codex">K</span><span class="av xs c-codex2">2</span></span>
+                  <span class="mini num">预算 14/23</span>
+                  <span class="mini">初稿 3/3 · 互评 3/3</span>
+                </div>
+              </div>
+            </div>
+            <div class="msg" onclick="openThread()">
+              <div class="av md c-human">刘</div>
+              <div class="msg-main">
+                <div class="msg-head">
+                  <span class="au">刘</span><span class="tm">昨天 17:40</span>
+                  <span class="tag t-auto">自动分工</span>
+                  <span class="tag t-gray num">#11</span>
+                  <span class="pill p-done"><span class="d"></span>已完成</span>
+                </div>
+                <div class="msg-text">把登录页表单校验抽成独立模块，顺手补上单测。</div>
+                <div class="msg-foot">
+                  <span class="rcnt">💬 9</span>
+                  <span class="link" onclick="event.stopPropagation();switchView('files')">改动 3 文件</span>
+                  <span class="link">报告</span>
+                </div>
+              </div>
+            </div>
+            <div class="msg" onclick="openThread()">
+              <div class="av md c-human">刘</div>
+              <div class="msg-main">
+                <div class="msg-head">
+                  <span class="au">刘</span><span class="tm">昨天 15:02</span>
+                  <span class="tag t-direct">指定 Codex</span>
+                  <span class="tag t-gray num">#10</span>
+                  <span class="pill p-wait"><span class="d"></span>待你确认</span>
+                </div>
+                <div class="msg-text"><span class="mt">@Codex</span> 把 README 安装步骤更新到 pnpm 单仓结构。</div>
+                <div class="msg-foot">
+                  <span class="rcnt">💬 4</span>
+                  <button class="btn sm primary" onclick="event.stopPropagation();toast('已确认扩大范围，创建承接新运行')">同意</button>
+                  <button class="btn sm" onclick="event.stopPropagation();toast('维持原范围')">维持</button>
+                </div>
+              </div>
+            </div>
+            <div class="msg" onclick="openThread()">
+              <div class="av md c-human">刘</div>
+              <div class="msg-main">
+                <div class="msg-head"><span class="au">刘</span><span class="tm">昨天 11:26</span><span class="tag t-discuss">讨论</span></div>
+                <div class="msg-text">备忘：M1 价值闸门等原型出来后挑 3–5 个真任务做「研讨 vs 单成员」对比。</div>
+                <div class="msg-foot"><span class="rcnt">💬 2</span><span class="mini">纯讨论 · 不调用模型</span></div>
+              </div>
+            </div>
+            <div class="sys-note">Claude 已离线 32 分钟 · 2 条 @ 提及将在其上线后按规则投递</div>
+          </div>
+          <div class="pool-composer">
+            <div class="cbox">
+              <div class="cbox-top">
+                <div class="seg"><button class="on" onclick="segSel(this)">任务</button><button onclick="segSel(this)">讨论</button></div>
+                <button class="chip" onclick="this.classList.toggle('on')">先给方案再执行</button>
+                <span class="route-hint"><b>@全体</b> 研讨 · <b>@成员</b> 指定 · 不@ 自动分工</span>
+              </div>
+              <textarea placeholder="向 #主房间 发布任务…  @ 提及成员，模式由 @ 自动推导"></textarea>
+              <div class="cbox-bot">
+                <button class="ibtn" title="附件"><svg><use href="#i-clip"/></svg></button>
+                <button class="ibtn" title="提醒"><svg><use href="#i-bell"/></svg></button>
+                <div class="sp"></div>
+                <span class="cap-note"><span class="d"></span>本项目目录 · 单写者生效（v0.1 无强制写拦截）</span>
+                <button class="send" onclick="toast('已创建：顶层消息 + 根任务 + 回复串（单事务）')">发送 <svg><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>

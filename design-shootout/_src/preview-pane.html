@@ -1,0 +1,58 @@
+    <!-- ── 文件预览面板：带文件标签页；关闭即恢复主池 ────────────── -->
+    <div class="fp-splitter" id="fpSplitter" role="separator" aria-orientation="vertical" title="拖拽调整对话列宽"></div>
+    <section class="filepane" id="filepane" aria-label="文件预览">
+      <div class="fp-head">
+        <div class="fp-tabs" role="tablist">
+          <button class="fp-tab is-active" data-doc="components" type="button"><svg class="ic"><use href="#i-file"/></svg>components.md</button>
+          <button class="fp-tab" data-doc="design" type="button"><svg class="ic"><use href="#i-file"/></svg>DESIGN.md</button>
+          <button class="fp-tab" data-doc="tokens" type="button"><svg class="ic"><use href="#i-file"/></svg>tokens.patch.css</button>
+        </div>
+        <span class="tb-drag"></span>
+        <span class="fp-hint">预览不占用对话 · 关闭即恢复主池</span>
+        <button class="icon-btn" id="fpClose" type="button" aria-label="关闭预览并恢复主池"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="fp-body">
+        <article class="fp-doc" data-doc="components">
+          <h1>components.md — 组件清单与规格</h1>
+          <p>本文件由任务 #14 产出：视觉规范 v1.5 的组件级落地清单，按「容器 / 导航 / 反馈 / 输入」分组。</p>
+          <h2>容器</h2>
+          <ul>
+            <li><code>.card</code> 白卡 + 发丝边 + 16px 圆角；内部禁止再描边，嵌套 ≤ 2 层</li>
+            <li><code>.bubble</code> 分工计划卡：卡内子任务用 <code>--bg-surface-3</code> 沉底块</li>
+            <li><code>.sys-card</code> 系统说明降级为状态行（12px / surface-2），细节按需展开</li>
+          </ul>
+          <h2>导航</h2>
+          <ul>
+            <li>页签 = 分段控件（灰槽 + 白激活块 + <code>shadow-sm</code>），不使用下划线</li>
+            <li>侧栏当前项：淡蓝晕染 <code>--bg-selected</code> + 主色文字，无硬竖条</li>
+          </ul>
+          <h2>反馈</h2>
+          <ul>
+            <li>状态 = 图标 + 文字，颜色是第三重冗余；同屏语义色元素 ≤ 2 处</li>
+            <li>警示条：soft 底 + 图标，无框无竖条</li>
+          </ul>
+        </article>
+        <article class="fp-doc" data-doc="design" hidden>
+          <h1>DESIGN.md — 设计原则</h1>
+          <p>双主色：清透蓝 <code>#3b9eff</code> 为主、薄荷绿 <code>#22c08a</code> 为辅。密度来自布局，不来自小字号。</p>
+          <h2>背景层级</h2>
+          <p>侧栏浅蓝白（<code>--bg-app</code>）≠ 主区纯白（<code>--bg-surface</code>），两者必须可区分；深色反向分层：侧栏最深 → 主区 → 卡片。</p>
+          <h2>主次分区</h2>
+          <p>主池负责扫描，回复串负责阅读与操作；文件预览打开时主池收起，但对话历史原样保留。</p>
+        </article>
+        <article class="fp-doc" data-doc="tokens" hidden>
+          <h1>tokens.patch.css</h1>
+          <pre><code>:root {
+  --accent: #3b9eff;
+  --accent2: #22c08a;
+  --accent-grad: linear-gradient(135deg, #2b83e6, #0b8a60);
+
+  --bg-app: #f2f8fb;      /* 侧栏分区色 */
+  --bg-surface: #ffffff;  /* 主区：全场最亮 */
+
+  --r-lg: 16px;
+  --r-full: 999px;        /* 仅头像 / 徽标 / 计数 chip */
+}</code></pre>
+        </article>
+      </div>
+    </section>

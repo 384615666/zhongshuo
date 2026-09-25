@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>众说 · 首版界面原型草图 v2（静态）</title>
+<style>
+:root{--bg:#f6f8fb;--panel:#fff;--ink:#172033;--muted:#5f6b7d;--line:#d8dfeb;--blue:#2563eb;--blue-soft:#eaf1ff;--green:#0f8a5f;--green-soft:#e7f7f1;--orange:#b85d0b;--orange-soft:#fff1df;--purple:#7357c8;--purple-soft:#f0ebff;--red:#b42318;--red-soft:#fdecea;--shadow:0 8px 28px rgba(23,32,51,.08);--radius:14px}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1320;--panel:#151d2b;--ink:#ecf1fa;--muted:#aab5c6;--line:#2b374a;--blue:#79a7ff;--blue-soft:#172b4f;--green:#5ed2a6;--green-soft:#12372f;--orange:#ffad66;--orange-soft:#442a16;--purple:#b8a2ff;--purple-soft:#2f2850;--red:#ff8e86;--red-soft:#3d1c18;--shadow:0 10px 34px rgba(0,0,0,.25)}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.6}
+.topbar{display:flex;align-items:center;gap:14px;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 18px;position:sticky;top:0;z-index:5}
+.topbar .brand{font-weight:700;font-size:16px}
+.topbar .project{color:var(--muted)}
+.topbar .grow{flex:1}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:9px;padding:6px 12px;cursor:pointer;font-size:13px}
+.btn.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,var(--line))}
+.badge{position:absolute;top:-9px;right:-9px;width:20px;height:20px;border-radius:50%;background:var(--blue);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;box-shadow:0 0 0 3px var(--bg)}
+.layout{display:grid;grid-template-columns:225px minmax(0,1fr) minmax(0,1.15fr);gap:14px;padding:14px 16px 24px;max-width:1500px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.side{padding:14px}
+.side h4{margin:2px 0 8px;font-size:12px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+.side .proj{display:flex;align-items:center;gap:7px;font-weight:600;padding:5px 7px;border-radius:8px}
+.side .proj .dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+.side .proj .pcnt{margin-left:auto;font-size:11.5px;color:var(--muted);font-weight:400}
+.side .proj.other{color:var(--muted);cursor:pointer;font-weight:500}
+.side .proj.other:hover{background:var(--blue-soft);color:var(--ink)}
+.side .proj.other .tri{font-size:11px}
+.roomlist{margin:2px 0 10px;padding-left:14px}
+.room{padding:5px 8px;border-radius:8px;color:var(--muted);cursor:pointer}
+.room:hover{background:var(--blue-soft);color:var(--ink)}
+.room.active{background:var(--blue-soft);color:var(--ink);font-weight:600}
+.av{width:24px;height:24px;border-radius:8px;display:inline-grid;place-items:center;color:#fff;font-size:12px;font-weight:700;flex:none}
+.av-codex{background:#2563eb}.av-claude{background:#7357c8}.av-gemini{background:#0f8a5f}.av-human{background:#b85d0b}
+.member{display:flex;justify-content:space-between;align-items:center;padding:5px 7px;border-radius:8px;cursor:pointer}
+.member:hover{background:var(--blue-soft)}
+.member .mleft{display:flex;align-items:center;gap:8px}
+.member .st{font-size:12px;padding:1px 8px;border-radius:999px}
+.st.busy{color:var(--orange);background:var(--orange-soft)}
+.st.idle{color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent)}
+.center{display:flex;flex-direction:column;min-height:640px}
+.roomhead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.roomhead b{font-size:15px;cursor:pointer}
+.roomhead b:hover{color:var(--blue)}
+.tabs{display:flex;gap:6px;margin-left:auto}
+.tab{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 12px;border-radius:9px;cursor:pointer;font-size:13px}
+.tab[aria-selected="true"]{background:var(--blue);border-color:var(--blue);color:#fff}
+.gearbtn{border:1px solid var(--line);background:var(--panel);border-radius:9px;width:30px;height:28px;cursor:pointer;font-size:14px;color:var(--muted)}
+.gearbtn:hover{color:var(--blue);border-color:var(--blue)}
+.feed{flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.msg-user{align-self:flex-end;max-width:78%;background:var(--blue-soft);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:9px 13px}
+.taskcard{border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:var(--panel)}
+.taskcard .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.taskno{font-weight:700;color:var(--blue)}
+.status{font-size:12px;padding:1px 9px;border-radius:999px}
+.status.run{color:var(--orange);background:var(--orange-soft)}
+.status.exec{color:var(--blue);background:var(--blue-soft)}
+.meta{color:var(--muted);font-size:12.5px}
+.preview{color:var(--muted);font-size:13px;margin:8px 0 0;border-top:1px dashed var(--line);padding-top:7px}
+.open{margin-left:auto;border:1px solid var(--blue);color:var(--blue);background:transparent;border-radius:8px;padding:3px 10px;cursor:pointer;font-size:12.5px}
+.composer{border-top:1px solid var(--line);padding:12px 14px}
+.composer .modes{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.mode{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);cursor:pointer}
+.mode.sel{background:var(--blue);border-color:var(--blue);color:#fff}
+.inputbox{display:flex;gap:8px;align-items:flex-start}
+.inputbox textarea{flex:1;min-height:52px;resize:vertical;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:9px 11px;font:inherit}
+.send{background:var(--blue);color:#fff;border:none;border-radius:10px;padding:9px 18px;font-weight:600;cursor:pointer}
+.hint{color:var(--muted);font-size:12px;margin-top:6px}
+.thread{display:flex;flex-direction:column;min-height:640px;position:relative}
+.threadhead{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.threadhead b{color:var(--blue)}
+.avstack{display:flex;align-items:center;margin-left:auto;cursor:pointer;position:relative}
+.avstack .av{width:26px;height:26px;margin-left:-8px;border:2px solid var(--panel)}
+.avstack .av:first-child{margin-left:0}
+.avstack .cnt{font-size:12px;color:var(--muted);margin:0 4px 0 6px}
+.caret{font-size:10px;color:var(--muted)}
+.anchor{margin:10px 14px 0;border:1px dashed var(--line);border-radius:10px;padding:9px 12px;color:var(--muted);background:var(--bg)}
+.anchor b{color:var(--ink)}
+.tmsg{margin:10px 14px 0;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tmsg .who{font-weight:700;font-size:13px;margin-bottom:3px;display:flex;align-items:center;gap:7px}
+.tmsg .who small{color:var(--muted);font-weight:400}
+.tmsg.claude{border-left:3px solid var(--purple)}
+.tmsg.codex{border-left:3px solid var(--blue)}
+.tmsg.gemini{border-left:3px solid var(--green)}
+.dispute{border-left:3px solid var(--orange);background:var(--orange-soft)}
+.reportcard{border:1px solid var(--line);border-radius:12px;background:var(--green-soft);padding:10px 12px;margin:10px 14px 0}
+.reportcard b{color:var(--green)}
+.filechip{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:3px 10px;font-size:12.5px;margin:4px 6px 0 0;background:var(--panel)}
+.threadfeed{flex:1;overflow:auto;padding-bottom:8px}
+.thread .composer .send{background:var(--purple)}
+/* 正在关注的成员 弹层（对照 Raft 线程右上角头像堆叠） */
+.followpop{position:absolute;top:52px;right:12px;width:320px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.18);z-index:40;display:none}
+.followpop h5{margin:0;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.frow{display:flex;align-items:center;gap:9px;padding:9px 14px;border-bottom:1px dashed var(--line);font-size:13.5px}
+.frow:last-of-type{border-bottom:0}
+.frow .sub{color:var(--muted);font-size:12px}
+.frow .rm{margin-left:auto;border:1px solid var(--line);background:var(--panel);border-radius:7px;width:24px;height:24px;cursor:pointer;color:var(--muted)}
+.frow .rm:hover{color:var(--red);border-color:var(--red)}
+.fpop-foot{padding:9px 14px;color:var(--muted);font-size:12px;background:var(--bg);border-top:1px solid var(--line);border-radius:0 0 12px 12px}
+/* 房间设置抽屉（对照 Raft 频道设置面板） */
+.backdrop{position:fixed;inset:0;background:rgba(9,14,25,.4);z-index:50;display:none}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,94vw);background:var(--panel);border-left:1px solid var(--line);z-index:55;overflow:auto;display:none;box-shadow:-12px 0 40px rgba(0,0,0,.18)}
+.drawer .dhead{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.drawer .dhead b{font-size:16px}
+.pubchip{font-size:12px;color:var(--green);background:var(--green-soft);border-radius:999px;padding:1px 9px}
+.dsec{padding:14px 18px;border-bottom:1px solid var(--line)}
+.dsec h5{margin:0 0 10px;font-size:12px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+.avrow{display:flex;flex-wrap:wrap;gap:6px}
+.avrow .av{width:30px;height:30px;cursor:pointer}
+.avrow .av:hover{outline:2px solid var(--blue)}
+.addav{width:30px;height:30px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.fld{margin-bottom:10px}
+.fld label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.fld input,.fld textarea,.fld select{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);padding:8px 10px;font:inherit}
+.fld textarea{min-height:56px;resize:vertical}
+.pref{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line)}
+.pref:last-child{border-bottom:0}
+.pref .pt b{font-weight:600;font-size:13.5px;display:block}
+.pref .pt span{color:var(--muted);font-size:12px}
+.switch{position:relative;width:38px;height:22px;flex:none}
+.switch input{display:none}
+.switch i{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.15s;cursor:pointer}
+.switch i:before{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;background:#fff;border-radius:50%;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.switch input:checked + i{background:var(--blue)}
+.switch input:checked + i:before{transform:translateX(16px)}
+.switch input:disabled + i{opacity:.45;cursor:not-allowed}
+.opbtn{width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);margin-bottom:8px;cursor:pointer;font:inherit;color:var(--ink)}
+.opbtn:hover{border-color:var(--blue)}
+.opbtn small{display:block;color:var(--muted);font-size:12px}
+.opbtn.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,var(--line));background:var(--red-soft)}
+.dfoot{padding:12px 18px;color:var(--muted);font-size:12px}
+/* 成员设置弹窗（决策 38：模型/思考强度/技能） */
+.modal{position:fixed;inset:0;display:none;place-items:center;z-index:60}
+.mcard{width:min(560px,94vw);max-height:86vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.3)}
+.mhead{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.mhead b{font-size:15px}
+.mbody{padding:16px 18px}
+.frow2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mops{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.mfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.primary{background:var(--blue);color:#fff;border:none;border-radius:9px;padding:8px 18px;font-weight:600;cursor:pointer}
+.legend{max-width:1500px;margin:0 auto 40px;padding:0 16px}
+.legend .card{padding:18px 20px}
+.legend h3{margin:0 0 10px;font-size:16px}
+.legend ol{margin:0;padding-left:20px}
+.legend li{margin:5px 0;color:var(--muted)}
+.legend b{color:var(--ink)}
+.note{max-width:1500px;margin:14px auto 0;padding:0 16px;color:var(--muted);font-size:12.5px}
+.kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px 16px}
+.kanban h5{margin:0 0 8px;color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.05em}
+.kitem{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:var(--panel)}
+.filelist{padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.fitem{display:flex;justify-content:space-between;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.artlist{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.actlist{padding:14px 16px;color:var(--muted);font-size:13px}
+.actrow{border-bottom:1px dashed var(--line);padding:7px 0}
+.actlist .actrow:last-child{border-bottom:0}
+@media(max-width:1080px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">众说</span>
+  <span class="project">当前项目：D:\众说</span>
+  <span class="grow"></span>
+  <span style="position:relative"><button class="btn">后台任务 2</button><span class="badge">3</span></span>
+  <button class="btn danger">项目全停</button>
+  <button class="btn">设置</button>
+</div>
+
+<div class="note" style="border-left:4px solid #b54708;background:#fdf3e6">
+  <b>⚠ 已过时（2026-09-19 补注）</b>：本文件是早期的<b>静态草图 v3</b>，对应设计报告 v1.5，仅用于当时拍板 E1—E8 的画面控件。
+  当前权威口径为<b>设计报告 v1.9</b>，可点击的高保真原型在 <code>../hifi-prototype/</code>（Electron 桌面客户端）。
+  本页保留作历史记录，<b>不要据此判断现状</b>：E 节已增至 20 项、新增 v1.9 写入并发策略，页面结构也与现行 §17 有出入。
+</div>
+
+<div class="note">静态原型草图 v3 · 对应设计报告 v1.5 §17（仅展示布局与信息结构，按钮不会真的派发任务）。主要入口：左栏<b>多项目切换</b>；线程右上角“正在关注的成员”弹层（对照 Raft 消息列头像堆叠）；房间设置抽屉（对照 Raft 频道设置面板）；成员设置弹窗（模型/思考强度/技能，决策 38）。带 ①—⑩ 角标对应的要点见页底说明。</div>
+
+<div class="layout">
+
+  <!-- 左栏：项目与成员（成员行可点击 → 成员设置） -->
+  <div class="card side">
+    <h4>项目（点击切换）</h4>
+    <div class="proj" title="当前项目"><span class="dot"></span>众说</div>
+    <div class="roomlist">
+      <div class="room active"># 开发大厅</div>
+      <div class="room"># 方案讨论</div>
+    </div>
+    <div class="proj other" title="点击切换到此项目"><span class="tri">▸</span>电商后台<span class="pcnt">2 房间</span></div>
+    <div class="proj other" title="点击切换到此项目"><span class="tri">▸</span>官网改版<span class="pcnt">1 房间</span></div>
+    <div class="room" style="color:var(--blue)">+ 打开文件夹…</div>
+    <h4>当前项目成员（点击设置）</h4>
+    <div class="member" data-member="Codex"><span class="mleft"><span class="av av-codex">C</span>Codex</span><span class="st busy">工作中</span></div>
+    <div class="member" data-member="Claude"><span class="mleft"><span class="av av-claude">C</span>Claude</span><span class="st busy">工作中</span></div>
+    <div class="member" data-member="Gemini"><span class="mleft"><span class="av av-gemini">G</span>Gemini</span><span class="st idle">空闲</span></div>
+    <div class="room" style="color:var(--blue);padding-left:7px" data-member="">+ 添加成员</div>
+  </div>
+
+  <!-- 中栏：对话池 -->
+  <div class="card center">
+    <div class="roomhead">
+      <b id="btnRoomSettings" title="打开房间设置"># 开发大厅</b><span class="meta">· 对话池</span>
+      <div class="tabs" role="tablist">
+        <button class="tab" aria-selected="true" data-tab="chat">聊天</button>
+        <button class="tab" aria-selected="false" data-tab="board">任务</button>
+        <button class="tab" aria-selected="false" data-tab="files">文件</button>
+      </div>
+      <button class="gearbtn" id="btnGear" title="房间设置">⚙</button>
+    </div>
+
+    <div id="chat" class="feed" role="tabpanel">
+      <div class="msg-user">@全体 分析模块划分</div>
+      <div class="taskcard">
+        <div class="row1">
+          <span class="taskno">#12</span>
+          <span class="status run">研讨中</span>
+          <span class="meta">3 名成员 · 143 条回复 · <b style="color:var(--red)">5 条未读</b></span>
+          <button class="open">打开</button>
+        </div>
+        <div class="preview">Codex：第一份报告认为登录模块应拆为…<br>Claude：我的结论不同，鉴权应该集中在…</div>
+      </div>
+      <div class="msg-user">@Codex 修复另一个问题</div>
+      <div class="taskcard">
+        <div class="row1">
+          <span class="taskno">#13</span>
+          <span class="status exec">执行中</span>
+          <span class="meta">仅 Codex · 6 条回复</span>
+          <button class="open">打开</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="board" class="kanban" role="tabpanel" hidden>
+      <div><h5>执行中</h5>
+        <div class="kitem"><b>#12</b> 分析模块划分 · 3 名成员</div>
+        <div class="kitem"><b>#13</b> 修复另一个问题 · Codex</div>
+      </div>
+      <div><h5>待我处理</h5>
+        <div class="kitem"><b>#12</b> 有一处争议等你决定</div>
+      </div>
+      <div><h5>已完成</h5>
+        <div class="kitem"><b>#11</b> 整理依赖清单 · 已交付</div>
+      </div>
+    </div>
+
+    <div id="files" class="filelist" role="tabpanel" hidden>
+      <div class="fitem"><span>📄 模块划分最终报告 v3.md</span><span class="meta">#12 · 刚刚</span></div>
+      <div class="fitem"><span>📄 登录模块问题清单.md</span><span class="meta">#12 · 10 分钟前</span></div>
+      <div class="fitem"><span>🖼️ 界面参考.png</span><span class="meta">#8 · 昨天</span></div>
+    </div>
+
+    <div class="composer">
+      <div class="modes">
+        <span class="mode sel">自动协作</span>
+        <span class="mode">全体研讨</span>
+        <span class="mode">指定成员</span>
+        <span class="mode">💬 讨论（不调用 AI）</span>
+      </div>
+      <div class="inputbox">
+        <textarea placeholder="向对话池发布新任务…（输入 @ 选择成员）"></textarea>
+        <button class="send">发送</button>
+      </div>
+      <div class="hint">当前模式：自动协作 · 无 @ 时由协调者（默认第一个成员 Codex，可在设置更换）接单 · 分析权限</div>
+    </div>
+  </div>
+
+  <!-- 右栏：任务线程（头部含“正在关注的成员”入口） -->
+  <div class="card thread">
+    <div class="threadhead">
+      <b>任务 #12</b><span class="meta">的回复串</span>
+      <div class="tabs" role="tablist">
+        <button class="tab" aria-selected="true" data-ttab="replies">回复</button>
+        <button class="tab" aria-selected="false" data-ttab="arts">成果</button>
+        <button class="tab" aria-selected="false" data-ttab="acts">活动</button>
+      </div>
+      <div class="avstack" id="btnFollow" title="正在关注的成员">
+        <span class="av av-codex">C</span><span class="av av-claude">C</span><span class="av av-gemini">G</span>
+        <span class="cnt">3</span><span class="caret">▼</span>
+      </div>
+      <span class="meta" style="cursor:pointer">×</span>
+    </div>
+
+    <!-- 对照 Raft “正在关注的 Agent” 弹层（决策 13B） -->
+    <div class="followpop" id="followPop">
+      <h5>正在关注的成员 · 3</h5>
+      <div class="frow"><span class="av av-codex">C</span><span>Codex<div class="sub">参与中 · 本轮互评</div></span><button class="rm" title="移出关注">×</button></div>
+      <div class="frow"><span class="av av-claude">C</span><span>Claude<div class="sub">参与中 · 已提交报告 v1</div></span><button class="rm" title="移出关注">×</button></div>
+      <div class="frow"><span class="av av-gemini">G</span><span>Gemini<div class="sub">参与中 · 已提交报告 v1</div></span><button class="rm" title="移出关注">×</button></div>
+      <div class="frow" style="color:var(--blue);cursor:pointer"><b>＋ 邀请成员跟进</b></div>
+      <div class="fpop-foot">移出 = 停止自动唤醒该成员；历史保留，仍可 @ 回来（决策 13B）</div>
+    </div>
+
+    <div class="anchor"><b>原消息：</b>用户 · @全体 分析模块划分</div>
+
+    <div id="replies" class="threadfeed" role="tabpanel">
+      <div class="tmsg codex"><div class="who"><span class="av av-codex" style="width:20px;height:20px;font-size:10px">C</span>Codex<small>报告 v1</small></div>登录模块目前混杂了鉴权与会话逻辑，建议拆分为三部分：…</div>
+      <div class="tmsg claude"><div class="who"><span class="av av-claude" style="width:20px;height:20px;font-size:10px">C</span>Claude<small>报告 v1</small></div>我的结论不同：鉴权应集中在网关层，理由是…</div>
+      <div class="tmsg gemini"><div class="who"><span class="av av-gemini" style="width:20px;height:20px;font-size:10px">G</span>Gemini<small>报告 v1</small></div>补充验证：两种方案在测试覆盖上的差异…</div>
+      <div class="tmsg dispute"><div class="who" style="color:var(--orange)">⚠ 争议待你决定</div>模块边界：Codex 主张拆分（引用报告 v1 §2），Claude 主张集中（引用报告 v1 §3）。双方各有证据，已过第 3 轮复核检查点。</div>
+      <div class="reportcard"><b>整合报告 v3（带分歧）</b><br><span class="meta">3 份独立报告 → 2 轮互评 → 已确认 4 项结论，1 项分歧</span><br><span class="filechip">模块划分最终报告 v3.md</span><span class="filechip">登录模块问题清单.md</span></div>
+    </div>
+
+    <div id="arts" class="artlist" role="tabpanel" hidden>
+      <div class="tmsg codex"><div class="who">Codex</div>登录模块分析报告 · v2（修订版）</div>
+      <div class="tmsg claude"><div class="who">Claude</div>鉴权集中方案论证 · v1</div>
+      <div class="reportcard"><b>整合报告 v3</b><br><span class="meta">最终交付 · 附 3 份初稿与互评链接</span></div>
+    </div>
+
+    <div id="acts" class="actlist" role="tabpanel" hidden>
+      <div class="actrow">15:42 · Codex 完成第 2 轮互评（调用 1 次）</div>
+      <div class="actrow">15:37 · Claude 阅读报告 v1 并提出异议（调用 1 次）</div>
+      <div class="actrow">15:21 · 三名成员完成独立首稿（各 1 次调用）</div>
+      <div class="actrow">15:20 · 研讨开始 · 冻结名单：Codex、Claude、Gemini</div>
+    </div>
+
+    <div class="composer">
+      <div class="modes"><span class="mode">回复任务 #12</span><span class="mode sel">全体研讨</span></div>
+      <div class="inputbox">
+        <textarea placeholder="在此任务线程内跟进…（不会混入其他任务）"></textarea>
+        <button class="send">发送</button>
+      </div>
+      <div class="hint">串内输入框与主池独立 · 草稿互不转移 · 另起任务请回到主池</div>
+    </div>
+  </div>
+</div>
+
+<!-- 遮罩 -->
+<div class="backdrop" id="backdrop"></div>
+
+<!-- 房间设置抽屉（对照 Raft 频道设置） -->
+<aside class="drawer" id="roomDrawer">
+  <div class="dhead"><b># 开发大厅</b><span class="pubchip">项目内公开</span>
+    <span style="margin-left:auto;cursor:pointer" class="closedrawer">×</span></div>
+  <div class="dsec">
+    <h5>成员</h5>
+    <div class="avrow">
+      <span class="av av-human" data-member="liusj" title="liusj（你）">L</span>
+      <span class="av av-codex" data-member="Codex" title="Codex">C</span>
+      <span class="av av-claude" data-member="Claude" title="Claude">C</span>
+      <span class="av av-gemini" data-member="Gemini" title="Gemini">G</span>
+      <span class="addav" title="添加成员到房间">＋</span>
+      <span class="meta" style="align-self:center;margin-left:4px">1 位人类 · 3 个 Agent</span>
+    </div>
+  </div>
+  <div class="dsec">
+    <h5>信息</h5>
+    <div class="fld"><label>名称</label><input value="开发大厅"></div>
+    <div class="fld"><label>描述（可选）</label><textarea placeholder="这个房间是做什么的？"></textarea></div>
+  </div>
+  <div class="dsec">
+    <h5>偏好（只影响你自己）</h5>
+    <div class="pref"><span class="pt"><b>置顶房间</b><span>固定在侧栏顶部（首版后置，决策 23）</span></span><label class="switch"><input type="checkbox" disabled><i></i></label></div>
+    <div class="pref"><span class="pt"><b>静音房间活动</b><span>普通讨论不弹通知；需要你处理的事仍进“待我处理”</span></span><label class="switch"><input type="checkbox"><i></i></label></div>
+    <div class="pref"><span class="pt"><b>折叠长回复</b><span>超过一屏的串内回复折叠为“展开全文”</span></span><label class="switch"><input type="checkbox" checked><i></i></label></div>
+  </div>
+  <div class="dsec">
+    <h5>操作</h5>
+    <button class="opbtn">⏸ 停止成员运行<small>停止本房间所有受管理的当前执行（可恢复）</small></button>
+    <button class="opbtn">📦 归档房间<small>只读封存，保留全部历史；有活跃任务时先阻止</small></button>
+    <button class="opbtn danger">🗑 删除房间<small>永久删除本房间消息与任务记录；不影响项目文件</small></button>
+  </div>
+  <div class="dfoot">私密房间与跨项目联合房间为后续能力（决策 23 / 原始清单 24 边界）。</div>
+</aside>
+
+<!-- 成员设置弹窗（决策 38） -->
+<div class="modal" id="memberModal">
+  <div class="mcard">
+    <div class="mhead"><span class="av av-codex" id="mAvatar">C</span><b id="mTitle">成员设置 · Codex</b><span style="margin-left:auto;cursor:pointer" class="closemodal">×</span></div>
+    <div class="mbody">
+      <div class="frow2">
+        <div class="fld"><label>显示名称</label><input id="mName" value="Codex"></div>
+        <div class="fld"><label>Runtime</label><select id="mRuntime"><option>Codex App Server</option><option>Claude Code</option></select></div>
+      </div>
+      <div class="frow2">
+        <div class="fld"><label>模型（留空 = runtime 默认）</label><input id="mModel" placeholder="如 gpt-5.3 / sonnet-4.6"></div>
+        <div class="fld"><label>思考强度</label><select id="mEffort"><option>低</option><option selected>中</option><option>高</option></select></div>
+      </div>
+      <div class="fld"><label>技能（逗号分隔，供协调者分工参考）</label><input id="mSkills" placeholder="如：代码审查, 前端, 数据分析"></div>
+      <div class="fld"><label>职责描述</label><textarea id="mDesc" placeholder="这个成员负责什么？"></textarea></div>
+      <div class="fld"><label>内部子助手（决策 11）</label>
+        <div class="pref" style="border:0;padding-top:0"><span class="pt"><span>允许该成员使用 runtime 内置子助手；开启时用量计入本成员</span></span><label class="switch"><input type="checkbox" checked><i></i></label></div>
+      </div>
+      <div class="fld"><label>生命周期操作（§25.6）</label>
+        <div class="mops">
+          <button class="opbtn">⏸ 停止成员<small>停止自动唤醒与当前执行</small></button>
+          <button class="opbtn">↻ 重启 runtime<small>按能力续接当前会话</small></button>
+          <button class="opbtn">⟲ 重置当前任务会话<small>新会话代次，保留工作空间</small></button>
+          <button class="opbtn danger">🧹 清理托管私有资料<small>列出将清理的应用私有路径后执行</small></button>
+        </div>
+      </div>
+    </div>
+    <div class="mfoot"><button class="btn closemodal">取消</button><button class="primary closemodal">保存（对后续轮次生效）</button></div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="card">
+    <h3>这张图里的 10 个关键点（★ 为本版新增）</h3>
+    <ol>
+      <li><b>左栏 · 多项目与成员</b>：一个文件夹 = 一个项目，可同时登记多个项目，左栏点击即切换；展开的项目显示它自己的房间（房间、成员、任务都按项目隔离）。成员行<b>点击直接打开成员设置</b>（模型/思考强度/技能/生命周期）。首次使用的欢迎页列出最近项目与“打开文件夹”。</li>
+      <li><b>顶栏 · 后台任务角标</b>：离开界面也能看到有几个任务在跑；「项目全停」一键停止一切。</li>
+      <li><b>任务卡</b>：主池里 AI 的所有回复都收在原消息下，只显示回复数和短预览，不刷屏。</li>
+      <li><b>你的原消息</b>：@全体 → 全体研讨；@某人 → 只有那个人工作；不 @ → 协调者（默认第一个成员，可改）接单。</li>
+      <li><b>输入框模式切换</b>：发送前就能看到这次输入会触发什么；「讨论」模式不调用 AI。</li>
+      <li><b>右侧任务线程</b>：点「打开」进入完整回复串；成果、活动是该串的另外两个标签页。</li>
+      <li><b>争议卡</b>：如实标出双方立场和证据，交给你决定，不伪造共识。</li>
+      <li><b>活动标签</b>：每次模型调用都有记录（谁、何时、几次），对应预算控制。</li>
+      <li>★ <b>线程右上角头像堆叠</b>（对照 Raft 消息列）：点开是“正在关注的成员”弹层，可逐个移出（停止自动唤醒、保留历史、可再 @ 回来，决策 13B），也可邀请新成员跟进。</li>
+      <li>★ <b>房间设置</b>：点房间名或 ⚙ 打开抽屉（对照 Raft 频道设置面板）——成员头像行（点击进成员设置）、名称/描述、静音等偏好、停止成员运行/归档/删除。</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+  var backdrop=document.getElementById('backdrop');
+  var drawer=document.getElementById('roomDrawer');
+  var modal=document.getElementById('memberModal');
+  var pop=document.getElementById('followPop');
+  function closeAll(){drawer.style.display='none';modal.style.display='none';pop.style.display='none';backdrop.style.display='none';}
+  function openDrawer(){closeAll();drawer.style.display='block';backdrop.style.display='block';}
+  function openModal(key){
+    closeAll();
+    var d={
+      'Codex':{c:'av-codex',l:'C',runtime:'Codex App Server',model:'gpt-5.3',effort:'高',skills:'代码审查, 后端, 数据分析',desc:'项目协调者（默认第一个成员）。负责接单、分工与整合。'},
+      'Claude':{c:'av-claude',l:'C',runtime:'Claude Code',model:'sonnet-4.6',effort:'中',skills:'前端, 文档, 方案评审',desc:'实现与评审成员。'},
+      'Gemini':{c:'av-gemini',l:'G',runtime:'Claude Code',model:'',effort:'低',skills:'检索, 验证',desc:'补充验证与资料检索。'},
+      'liusj':{c:'av-human',l:'L',runtime:'—（人类）',model:'',effort:'',skills:'',desc:'项目所有者。'},
+      '':{c:'av-codex',l:'＋',runtime:'Codex App Server',model:'',effort:'中',skills:'',desc:''}
+    };
+    var m=d[key]||d[''];
+    var av=document.getElementById('mAvatar');
+    av.className='av '+m.c;av.textContent=m.l;
+    document.getElementById('mTitle').textContent=key?'成员设置 · '+key:'添加成员';
+    document.getElementById('mName').value=key?key:'';
+    document.getElementById('mRuntime').value=m.runtime;
+    document.getElementById('mModel').value=m.model;
+    document.getElementById('mSkills').value=m.skills;
+    document.getElementById('mDesc').value=m.desc;
+    modal.style.display='grid';backdrop.style.display='block';
+  }
+  document.getElementById('btnGear').addEventListener('click',openDrawer);
+  document.getElementById('btnRoomSettings').addEventListener('click',openDrawer);
+  document.getElementById('btnFollow').addEventListener('click',function(e){e.stopPropagation();pop.style.display=pop.style.display==='block'?'none':'block';});
+  document.addEventListener('click',function(e){if(!pop.contains(e.target)&&e.target.id!=='btnFollow')pop.style.display='none';});
+  document.querySelectorAll('.closedrawer,.closemodal').forEach(function(el){el.addEventListener('click',closeAll);});
+  backdrop.addEventListener('click',closeAll);
+  document.querySelectorAll('[data-member]').forEach(function(el){el.addEventListener('click',function(){openModal(el.getAttribute('data-member'));});});
+  document.querySelectorAll('.member .av').forEach(function(el){el.addEventListener('click',function(e){e.stopPropagation();openModal(el.closest('.member').getAttribute('data-member'));});});
+  /* 标签页切换 */
+  function bind(group,attr){var tabs=document.querySelectorAll('['+attr+']');tabs.forEach(function(btn){btn.addEventListener('click',function(){tabs.forEach(function(b){b.setAttribute('aria-selected','false')});btn.setAttribute('aria-selected','true');var scope=btn.closest('.card');scope.querySelectorAll('[role="tabpanel"]').forEach(function(p){p.hidden=true});var panel=document.getElementById(btn.getAttribute(attr));if(panel)panel.hidden=false;});});}
+  bind(document,'data-tab');bind(document,'data-ttab');
+  var modes=document.querySelectorAll('.modes');
+  modes.forEach(function(group){group.addEventListener('click',function(e){var m=e.target.closest('.mode');if(!m)return;group.querySelectorAll('.mode').forEach(function(x){x.classList.remove('sel')});m.classList.add('sel');});});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,317 @@
+<!-- ═══════════════════════════════════════════════════════════════════════
+     众说 · 打开回复串界面 —— 共享语义骨架（三套规范共用同一 DOM，只有 CSS 不同）
+     场景来源：截图 1372×872，开发大厅 · #14 整理本周演化日志并写周报 · 回复串已打开
+     ═══════════════════════════════════════════════════════════════════════ -->
+{{ICONS}}
+
+<div class="app" data-theme="{{THEME}}">
+
+  <!-- ── 标题栏 36px ────────────────────────────────────────────────── -->
+  <header class="titlebar">
+    <span class="tb-brand">众说<i>本地项目群聊多 Agent 协同工作台</i></span>
+
+    <button class="tb-project" type="button">
+      <svg class="ic"><use href="#i-grid"/></svg>
+      <span>众说</span>
+      <span class="tb-path">D:\zhongshuo</span>
+      <span class="tb-branch"><svg class="ic"><use href="#i-branch"/></svg>main</span>
+      <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+    </button>
+
+    <span class="tb-drag"></span>
+
+    <nav class="tb-stats">
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-model"/></svg>原型 · 内存数据</button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-branch"/></svg>后台任务<b class="num">4</b><em>· 5 turn 在跑</em></button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-ring"/></svg>项目全境</button>
+      <button class="tb-stat icon-only" type="button" aria-label="搜索"><svg class="ic"><use href="#i-search"/></svg></button>
+      <button class="tb-stat icon-only" type="button" aria-label="自动更新"><svg class="ic"><use href="#i-refresh"/></svg></button>
+    </nav>
+
+    <div class="winctl">
+      <button class="winbtn" type="button" aria-label="最小化"><svg class="ic"><use href="#i-min"/></svg></button>
+      <button class="winbtn" type="button" aria-label="最大化"><svg class="ic"><use href="#i-max"/></svg></button>
+      <button class="winbtn close" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ── 侧栏 240px ───────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="side-scroll">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-search"/></svg><span class="side-label">搜索与收藏</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-file"/></svg><span class="side-label">文件与 Git</span><b class="side-badge">5</b></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-list"/></svg><span class="side-label">任务看板</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-users"/></svg><span class="side-label">成员管理</span></button>
+
+        <div class="side-heading"><span>项目</span><button class="icon-btn" type="button" aria-label="添加项目"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+
+        <div class="side-project is-open">
+          <button class="side-row" type="button">
+            <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+            <svg class="ic"><use href="#i-folder"/></svg>
+            <span class="side-label">众说</span>
+            <span class="side-note">当前</span>
+            <b class="side-badge">3</b>
+          </button>
+          <div class="side-sub">
+            <button class="side-subitem is-current" type="button"><span>开发大厅</span><b class="side-badge">3</b></button>
+            <button class="side-subitem" type="button"><span>方案讨论</span></button>
+            <button class="side-subitem" type="button"><span>文档整理</span></button>
+            <button class="side-subitem" type="button"><svg class="ic"><use href="#i-tune"/></svg><span>私信</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-foot">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-inbox"/></svg><span class="side-label">待我处理</span><b class="side-badge alert">5</b></button>
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-tune"/></svg><span class="side-label">设置</span></button>
+      </div>
+    </aside>
+
+    <!-- ── 主内容区 ─────────────────────────────────────────────────── -->
+    <main class="main">
+
+      <div class="page-head">
+        <h1 class="ph-title">开发大厅</h1>
+        <span class="ph-sub"><svg class="ic"><use href="#i-robot"/></svg>协调者 Codex<em>3 名成员</em></span>
+        <span class="tb-drag"></span>
+        <button class="unread" type="button"><svg class="ic"><use href="#i-msg"/></svg>3 条未读</button>
+        <button class="btn btn-ghost" type="button"><svg class="ic"><use href="#i-room"/></svg>房间设置</button>
+      </div>
+
+      <div class="page-tabs">
+        <button class="tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>对话池</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-check"/></svg>任务看板</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-file"/></svg>文件</button>
+      </div>
+
+      <div class="stream">
+
+        <!-- 警示条 -->
+        <div class="warnbar">
+          <svg class="ic"><use href="#i-lock"/></svg>
+          <div>
+            <p class="wb-title">有任务正在改文件</p>
+            <p class="wb-detail">任务 <span class="mono">#13</span> 修复 <span class="mono">build</span> 脚本在中文路径下失败 正在写入，其他修改任务排队。<a href="#">悬停查看说明</a></p>
+          </div>
+        </div>
+
+        <!-- #14 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#14</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">1 小时前</time>
+          </div>
+          <h2 class="ttl">整理本周演化日志并写周报</h2>
+          <p class="who">Codex 正在处理</p>
+          <p class="blurb">整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+          <p class="quote"><span class="mono">Codex</span> 两个子任务都已派发。Claude 跑条在等 <span class="mono">#13</span> 释放写入锁 —— 同一物理目录最多 1 个受管理写入者…<br><span class="mono">Codex#2</span> 我这边开始扫 <span class="mono">docs/</span> 了，大约需要 3 分钟。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #13 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#13</span>
+            <span class="tag tag-warning"><svg class="ic"><use href="#i-clock"/></svg>待你审阅</span>
+            <span class="tb-drag"></span>
+            <time class="time">2 小时前</time>
+          </div>
+          <h2 class="ttl">修复 build 脚本在中文路径下失败</h2>
+          <p class="who">Claude 已修改 3 个文件</p>
+          <p class="blurb">@Claude build 脚本在中文路径下报 ENOENT，定位一下并修掉，改完给我验证记录。</p>
+          <p class="quote"><span class="mono">Claude</span> 另一条验证没跑：<span class="mono">pnpm build</span> 全量构建需要 6 分钟，你这次没要求，所以我没执行，报告里…<br><span class="mono">Claude</span> 任务完成，等你审阅改动。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>6 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #12 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#12</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">3 小时前</time>
+          </div>
+          <h2 class="ttl">分析模块划分并给出重构建议</h2>
+          <p class="who">Codex、Claude 正在处理</p>
+          <p class="blurb">@全体 请审查 <span class="mono">src/</span> 下六个边界的实际依赖方向，找出违反契约的引用，并给出可执行的重构步骤。只分析，不要改文件。</p>
+          <p class="quote"><span class="mono">Codex</span> 整合稿 R1 已完成，含 2 条共同确认结论、1 条仍开放的分歧（议题 <span class="mono">#12-2</span> 需要你决定）和 3 个…<br><span class="mono">Claude</span> @Codex 议题 <span class="mono">#12-2</span> 我倾向不允许直连。但先别急着定，把 <span class="mono">ui → persistence</span> 的 6 处按"类型越界 / …</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+      </div>
+
+      <!-- 底部发布器 -->
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">@</span>
+          <input type="text" value="向对话池发布新任务 · 自动… 输入 @ 选择成员" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送</button>
+        </div>
+      </div>
+
+    </main>
+
+    <span class="splitter"></span>
+
+    <!-- ── 回复串（详情面板） ───────────────────────────────────────── -->
+    <aside class="thread">
+      <div class="thread-bar">
+        <span class="idx">#14</span>
+        <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+        <span class="tag tag-neutral"><svg class="ic"><use href="#i-play"/></svg>运行中</span>
+        <span class="tb-drag"></span>
+        <button class="icon-btn" type="button" aria-label="导出"><svg class="ic"><use href="#i-export"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="定位"><svg class="ic"><use href="#i-target"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关注"><svg class="ic"><use href="#i-eye"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+
+      <div class="root-msg">
+        <span class="root-arrow">↳</span>
+        <p class="root-text">你 整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+        <time class="time">10:42</time>
+      </div>
+
+      <div class="thread-tabs">
+        <button class="thread-tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>回复<b class="num">3</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-check"/></svg>成果</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-activity"/></svg>活动</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-users"/></svg>成员<b class="num">1</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-list"/></svg>任务详情</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-play"/></svg>运行详情</button>
+      </div>
+
+      <div class="thread-pane">
+
+        <!-- 模式提示 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-mute"/></svg><span class="sc-title">模式 AUTO：默认协调者接单</span></div>
+          <p class="sc-body">本条没有 <b>@</b>，按路由表由房间协调者 Codex 接单。它可以直接回答，也可以提交结构化分工计划。协调者等待子任务期间不占用活跃模型调用槽。</p>
+        </div>
+
+        <!-- Codex 消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:43</time>
+              <span class="msg-seq">#2</span>
+            </div>
+            <p class="msg-text">这条我拆成两个子任务，互不依赖，可以并行取证。</p>
+
+            <!-- 分工计划卡 -->
+            <section class="bubble">
+              <div class="bubble-head">
+                <svg class="ic"><use href="#i-list"/></svg>
+                <span class="bubble-title">分工计划</span>
+                <span class="bubble-note">2 个子任务</span>
+                <span class="tb-drag"></span>
+                <span class="bubble-meta">程序校验通过后才生成任务</span>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">从 docs/ 提取本周变更要点</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">按日期筛出本周新增/修改的文档与设计决策，输出要点清单</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：带文件引用与版本号的要点清单 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：每条要点标注来源文件与章节；区分"已拍板"与"仍待决"</p>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">整理决策时间线</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">把本周的决策按时间顺序排成时间线，标出互相依赖项</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：Markdown 时间线 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：日期与来源可回溯；标注被后续决策覆盖的条目</p>
+              </div>
+
+              <p class="plan-foot"><svg class="ic"><use href="#i-merge"/></svg>整合计划：汇总两份要点，按"功能进展 / 决策变更 / 风险"三段生成周报草稿。</p>
+            </section>
+          </div>
+        </article>
+
+        <!-- 校验说明 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-check"/></svg><span class="sc-title">程序校验通过后才生成任务</span></div>
+          <p class="sc-body">校验项：无跨项目依赖、无循环依赖、负责人均在房间内、未提升你未授权的权限、子任务数 2 ≤ 6、拆分深度 1 层。本任务未拆分时界面会记录"本次未拆分"，不靠自然语言判断成功。</p>
+        </div>
+
+        <!-- Codex 第二条消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:44</time>
+              <span class="msg-seq">#4</span>
+            </div>
+          </div>
+        </article>
+
+      </div>
+
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">↳</span>
+          <input type="text" value="跟进 #14 · 延续自动… 输入 @ 定向提问" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送补充</button>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>

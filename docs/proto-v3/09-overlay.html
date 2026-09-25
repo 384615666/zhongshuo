@@ -1,0 +1,25 @@
+<style>
+/* ── 弹层 ── */
+.overlay{position:fixed;inset:0;background:rgba(10,12,16,.44);display:none;align-items:flex-start;justify-content:center;padding-top:11vh;z-index:50;backdrop-filter:blur(3px)}
+.overlay.open{display:flex}
+.cmdk{width:620px;background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);overflow:hidden;border:1px solid var(--border)}
+.ck-in{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border)}
+.ck-in input{flex:1;border:0;outline:0;font-size:14.5px;font-family:inherit;background:transparent;color:var(--ink)}
+.ck-list{max-height:380px;overflow-y:auto;padding:8px}
+.ck-sec{font-size:10px;font-weight:800;color:var(--ink3);letter-spacing:1.2px;padding:8px 10px 3px}
+.ck-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;cursor:pointer;font-size:12.8px}
+.ck-item:hover,.ck-item.hot{background:var(--hover)}
+.ck-item mark{background:transparent;color:var(--accent-ink);font-weight:800}
+.modal{width:500px;background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);padding:20px;border:1px solid var(--border)}
+.modal h3{font-size:15px;font-weight:800}
+.modal .mp{font-size:12.5px;color:var(--ink2);margin-top:8px;line-height:1.7}
+.modal .mrow{display:flex;gap:9px;margin-top:16px;justify-content:flex-end}
+.resume-task{display:flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:var(--r-s);padding:9px 12px;margin-top:8px;font-size:12.3px;background:var(--surface2)}
+/* toast */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1B1F24;color:#EDEEF1;font-size:12.5px;border-radius:99px;padding:9px 18px;box-shadow:var(--shadow-lg);display:none;z-index:99;font-weight:600}
+[data-theme="dark"] .toast{background:#EDEEF1;color:#1B1F24}
+.toast.show{display:block;animation:up .22s ease}
+@keyframes up{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+</style>
+</head>
+<body>

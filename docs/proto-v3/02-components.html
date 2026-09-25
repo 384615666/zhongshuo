@@ -1,0 +1,49 @@
+<style>
+/* ── 通用组件 ── */
+.av{border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex:none;position:relative}
+.av.lg{width:36px;height:36px;font-size:13px}
+.av.md{width:28px;height:28px;font-size:11px}
+.av.sm{width:22px;height:22px;font-size:9.5px}
+.av.xs{width:18px;height:18px;font-size:8.5px}
+.av .st{position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;border-radius:50%;border:2px solid var(--surface)}
+.st.on{background:var(--green)} .st.busy{background:var(--amber)} .st.off{background:var(--ink3)}
+.c-claude{background:var(--c-claude)} .c-codex{background:var(--c-codex)} .c-codex2{background:var(--c-codex2)} .c-human{background:var(--c-human)}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;white-space:nowrap}
+.t-auto{background:var(--accent-soft);color:var(--accent-ink)}
+.t-delib{background:var(--violet-soft);color:var(--violet)}
+.t-direct{background:var(--teal-soft);color:var(--teal)}
+.t-discuss{background:var(--surface3);color:var(--ink2)}
+.t-gray{background:var(--surface3);color:var(--ink2)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;white-space:nowrap}
+.pill .d{width:6px;height:6px;border-radius:50%;flex:none}
+.p-run{background:var(--accent-soft);color:var(--accent-ink)} .p-run .d{background:var(--accent);animation:blink 1.4s infinite}
+.p-done{background:var(--green-soft);color:var(--green)} .p-done .d{background:var(--green)}
+.p-wait{background:var(--amber-soft);color:var(--amber)} .p-wait .d{background:var(--amber)}
+.p-block{background:var(--orange-soft);color:var(--orange)} .p-block .d{background:var(--orange)}
+.p-todo{background:var(--surface3);color:var(--ink2)} .p-todo .d{background:var(--ink3)}
+@keyframes blink{50%{opacity:.3}}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:9px;
+  border:1px solid var(--border);background:var(--surface);color:var(--ink);
+  font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;
+}
+.btn:hover{background:var(--hover);border-color:var(--border2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-h)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink2);font-weight:500}
+.btn.ghost:hover{background:var(--hover)}
+.btn.danger{color:var(--red)} .btn.danger:hover{background:var(--red-soft);border-color:var(--red)}
+.btn.sm{height:27px;padding:0 10px;font-size:11.5px;border-radius:7px}
+.ibtn{
+  width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  color:var(--ink2);cursor:pointer;border:0;background:transparent;transition:.12s;flex:none;
+}
+.ibtn:hover{background:var(--hover);color:var(--ink)}
+.ibtn.on{background:var(--accent-soft);color:var(--accent-ink)}
+.ibtn svg{width:16px;height:16px}
+.mono{font-family:"JetBrains Mono",Consolas,monospace;font-size:11px;background:var(--surface3);padding:2px 7px;border-radius:5px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:6px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--ink3);border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+</style>

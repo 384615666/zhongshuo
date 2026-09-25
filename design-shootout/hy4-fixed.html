@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>众说 · 回复串界面（方案 C：hy4 v11 信息主次+对比度修正《前端视觉规范》）</title>
+<style>
+/* ── 骨架（三套共用） ───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   base.css —— 三套规范共用的**结构骨架**（不含任何视觉取值）
+   只定义：重置、栅格/弹性布局、面板尺寸、滚动。
+   颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效 全部由各主题 CSS 负责。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+button { cursor: pointer; text-align: left; }
+input { cursor: default; }
+button:focus-visible, input:focus-visible { outline: none; }
+p, h1, h2, h3 { margin: 0; }
+a { text-decoration: none; color: inherit; }
+time { font-style: normal; }
+em, i, b { font-style: normal; }
+
+/* ── 图标：全部走 sprite，尺寸由 CSS 决定，描边不随字号缩放 ── */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+svg.ic {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 应用外壳 ──────────────────────────────────────────────────────── */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+}
+.titlebar button, .winctl { -webkit-app-region: no-drag; }
+
+.tb-brand { display: flex; align-items: baseline; white-space: nowrap; }
+.tb-brand i { white-space: nowrap; }
+.tb-drag { flex: 1 1 auto; min-width: 0; }
+
+.winctl { display: flex; align-items: stretch; }
+.winbtn { display: flex; align-items: center; justify-content: center; }
+
+/* ── 侧栏 ──────────────────────────────────────────────────────────── */
+.sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.side-foot { flex: none; }
+
+.side-item, .side-row, .side-subitem, .side-heading {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.side-item > .side-label,
+.side-row > .side-label,
+.side-subitem > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-heading > span { flex: 1; }
+.side-badge { flex: none; }
+.side-sub { display: flex; flex-direction: column; }
+
+/* ── 主内容区 ──────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.page-head, .page-tabs, .thread-bar, .thread-tabs, .card-head, .card-foot,
+.composer-tools, .root-msg, .msg-head, .bubble-head, .st-head {
+  display: flex;
+  align-items: center;
+}
+.page-head { flex: none; }
+.page-tabs, .thread-tabs { flex: none; }
+.stream { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.stream > * { flex: none; }
+
+.card { display: block; }
+.card-foot .tb-drag { flex: 1; }
+
+/* ── 分割条 ────────────────────────────────────────────────────────── */
+.splitter { flex: none; }
+
+/* ── 回复串 ────────────────────────────────────────────────────────── */
+.thread {
+  flex: none;
+  width: var(--thread-w, 620px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.thread-pane > * { flex: none; }
+.thread-bar .tb-drag { flex: 1; }
+
+.root-msg { flex: none; }
+.root-text { flex: 1; min-width: 0; }
+
+.msg { display: flex; align-items: flex-start; }
+.msg-main { flex: 1; min-width: 0; }
+.msg-head .tb-drag { flex: 1; }
+
+/* 分工计划卡内 */
+.subtask { display: block; }
+.bubble-head .tb-drag { flex: 1; }
+
+/* ── 底部发布器 ────────────────────────────────────────────────────── */
+.composer { flex: none; display: flex; flex-direction: column; }
+.composer-input { display: flex; align-items: center; }
+.composer-input input { flex: 1; min-width: 0; }
+.composer-tools { flex-wrap: nowrap; }
+.cbtn { display: inline-flex; align-items: center; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; white-space: nowrap; }
+.tag { display: inline-flex; align-items: center; white-space: nowrap; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+/* ── 滚动条（各主题可覆盖配色；此处只定尺寸与常显） ──────────────── */
+.stream::-webkit-scrollbar,
+.thread-pane::-webkit-scrollbar,
+.side-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.stream::-webkit-scrollbar-track,
+.thread-pane::-webkit-scrollbar-track,
+.side-scroll::-webkit-scrollbar-track { background: transparent; }
+.stream::-webkit-scrollbar-thumb,
+.thread-pane::-webkit-scrollbar-thumb,
+.side-scroll::-webkit-scrollbar-thumb { border-radius: 999px; }
+
+/* ── 方案规范（hy4 v11 信息主次+对比度修正） ───────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   theme-hy10-shell.css —— 方案 C（hy4）v10 · 连续外壳
+   DOM 与 hy4.html 完全一致，只改 CSS。
+
+   评审反馈后的重做（本版落实）：
+   1. 去掉"每列一张浮起圆角面板"——改**连续外壳**：贴边铺满，用轻微底色差 + 1px 细分隔 + 稳定对齐组织空间
+   2. 收回外层沟槽与重复内边距：窗口边距 0、面板无圆角无投影，把空间还给内容
+   3. 修空间分配：页头允许换行 + 标题不换行（修"开发大厅"被挤断）；列宽用 clamp 自适应；
+      工具条允许换行（修发送按钮被裁）；字号一律不缩小
+   4. 减少卡片嵌套：主池任务卡保留（它有独立操作），但卡内引用不再套灰块；
+      回复串里对话连续排版，分工计划不再是一张卡，子任务用细线分隔的行表达
+   5. 状态色回到语义：执行中=蓝（运行态）、待你审阅=琥珀（待办态）、只分析=中性；
+      文字 + 图标始终存在，颜色不单独承载含义
+   6. 品牌色仍是蓝→淡绿渐变，但只出现在品牌位与发送按钮
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.app {
+  /* ── 背景：浅白系，靠"底色差"分层，不靠圆角与投影 ── */
+  --bg-app:      #f4f6f8;   /* 仅出现在拖动槽等缝隙 */
+  --bg-side:     #f2f4f7;   /* 侧栏（比主区深一档） */
+  --bg-main:     #f8f9fb;   /* 主池（浅） */
+  --bg-sunken:   #f1f3f6;   /* 引用 / 说明块 */
+  --bg-surface:  #ffffff;   /* 卡片、回复串 */
+  --bg-surface-2:#f7f8fa;
+  --bg-surface-3:#e7eaef;
+  --bg-hover:    rgba(16, 20, 28, .05);
+  --bg-active:   rgba(16, 20, 28, .09);
+  --bg-selected: rgba(37, 99, 235, .09);
+  --bg-scrim:    rgba(12, 16, 22, .38);
+
+  --text:         #16181d;
+  --text-2:       #585e68;   /* 6.53:1 白底 / 6.20:1 主池底 */
+  --text-3:       #626b75;   /* 5.41:1 白底 / 5.14:1 主池底 / 4.87:1 引用底 —— 实测达标，可承载阅读内容 */
+  --text-4:       #a4aab4;   /* 仅装饰图标与禁用态，禁止承载阅读信息 */
+  --text-inverse: #ffffff;
+
+  --border:        rgba(16, 20, 28, .10);
+  --border-strong: rgba(16, 20, 28, .18);
+  --border-subtle: rgba(16, 20, 28, .06);
+
+  /* ── 品牌色：蓝 → 淡绿 渐变（只用于品牌位与主按钮）── */
+  --accent:        #2563eb;
+  --accent-hover:  #1d4ed8;
+  --accent-soft:   #e8effd;
+  --accent-border: rgba(37, 99, 235, .26);
+  --accent-text:   #1d4ed8;
+  /* 渐变实底：端点必须让白字 ≥4.5:1（#1d4ed8 6.70 / #15649e 6.27 / #0f766e 5.47）
+     淡绿 #34d399 对白字只有 1.92:1，只能出现在 --grad-soft 这种不承载文字的装饰底里 */
+  --grad:      linear-gradient(135deg, #1d4ed8 0%, #15649e 55%, #0f766e 100%);
+  --grad-soft: linear-gradient(135deg, rgba(37, 99, 235, .10) 0%, rgba(52, 211, 153, .10) 100%);
+  --btn-fg:    #ffffff;      /* 实底按钮文字色（深色模式换成深字，见下） */
+  --accent-mid:    #2563eb;
+  --accent-deep:   #1d4ed8;
+
+  /* ── 语义色：各自职责，不跟品牌色统一 ── */
+  --info:    #2563eb; --info-soft:    #e8effd; --info-border:    rgba(37, 99, 235, .26);
+  --success: #059669; --success-soft: #d1fae5; --success-border: rgba(5, 150, 105, .26);
+  --warning: #b45309; --warning-soft: #fef3c7; --warning-border: rgba(180, 83, 9, .24);
+  --danger:  #be3a34; --danger-soft:  #fee2e0; --danger-border:  rgba(190, 58, 52, .24);
+  --neutral: #585e68; --neutral-soft: #f1f3f6; --neutral-border: rgba(16, 20, 28, .10);
+  --green:   #059669; --green-soft:   #d1fae5; --green-border:   rgba(5, 150, 105, .26); --green-text: #047857;
+
+  /* 导航识别色 */
+  --n-search:  #2563eb;
+  --n-file:    #0891b2;
+  --n-board:   #059669;
+  --n-member:  #7c3aed;
+  --n-inbox:   #2563eb;
+  --n-gear:    #64748b;
+
+  --m-codex:  #0d9488;
+  --m-claude: #6366f1;
+  --m-codex2: #0891b2;
+  --m-human:  #2563eb;
+
+  --shadow-sm: 0 1px 2px rgba(16, 20, 28, .05);
+  --shadow-md: 0 2px 6px rgba(16, 20, 28, .06), 0 12px 28px rgba(16, 20, 28, .10);
+  --shadow-lg: 0 4px 10px rgba(16, 20, 28, .08), 0 24px 60px rgba(16, 20, 28, .14);
+  --ring:      0 0 0 3px rgba(37, 99, 235, .22);
+
+  --r-xs: 5px; --r-sm: 8px; --r-md: 10px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+
+  --font: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Cascadia Mono', 'Consolas', 'Sarasa Mono SC', ui-monospace, monospace;
+
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
+  --fs-15: 15px; --fs-17: 17px; --fs-20: 20px; --fs-24: 24px;
+
+  --lh-tight: 1.3; --lh-flat: 1.4; --lh-normal: 1.5; --lh-relaxed: 1.65;
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600; --fw-bold: 700;
+
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 28px;
+
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 320ms;
+  --ease-out: cubic-bezier(.2, .8, .3, 1);
+  --z-sticky: 10; --z-splitter: 20; --z-dropdown: 40; --z-modal: 80;
+
+  --h-sm: 28px; --h-md: 32px; --h-lg: 40px;
+  /* 列宽自适应：窗口变窄时先收列宽，不压缩字号 */
+  --w-sidebar: clamp(200px, 18vw, 240px);
+  --w-thread:  clamp(380px, 42vw, 580px);
+  --titlebar-h: 40px;
+
+  font-family: var(--font);
+  font-size: var(--fs-14);
+  line-height: var(--lh-relaxed);
+  color: var(--text);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app[data-theme="dark"] {
+  --bg-app:      #0b0d10;
+  --bg-side:     #13161a;
+  --bg-main:     #0f1215;
+  --bg-sunken:   #171b20;
+  --bg-surface:  #15181c;
+  --bg-surface-2:#191d22;
+  --bg-surface-3:#262b32;
+  --bg-hover:    rgba(255, 255, 255, .06);
+  --bg-active:   rgba(255, 255, 255, .10);
+  --bg-selected: rgba(96, 165, 250, .16);
+
+  --text: #e7e9ee; --text-2: #a6acb6; --text-3: #959da8; --text-4: #6b7280; --text-inverse: #0b0d10;
+
+  --border: rgba(255,255,255,.10); --border-strong: rgba(255,255,255,.18); --border-subtle: rgba(255,255,255,.06);
+
+  --accent: #60a5fa; --accent-hover: #93c5fd;
+  --accent-soft: rgba(96,165,250,.15); --accent-border: rgba(96,165,250,.30); --accent-text: #93c5fd;
+  /* 深色模式：亮渐变 + 深字（#0b0d10 对三个端点 7.65 / 10.45 / 12.77，全部达标） */
+  --grad: linear-gradient(135deg, #60a5fa 0%, #2dd4bf 55%, #6ee7b7 100%);
+  --grad-soft: linear-gradient(135deg, rgba(96,165,250,.16) 0%, rgba(110,231,183,.16) 100%);
+  --btn-fg: #0b0d10;
+  --accent-mid: #60a5fa; --accent-deep: #93c5fd;
+
+  --info: #60a5fa; --info-soft: rgba(96,165,250,.15); --info-border: rgba(96,165,250,.30);
+  --success: #34d399; --success-soft: rgba(52,211,153,.15); --success-border: rgba(52,211,153,.30);
+  --warning: #fcd34d; --warning-soft: rgba(252,211,77,.14); --warning-border: rgba(252,211,77,.28);
+  --danger: #f3a094; --danger-soft: rgba(243,160,148,.14); --danger-border: rgba(243,160,148,.28);
+  --neutral: #a6acb6; --neutral-soft: rgba(255,255,255,.06); --neutral-border: rgba(255,255,255,.10);
+  --green: #34d399; --green-soft: rgba(52,211,153,.15); --green-border: rgba(52,211,153,.30); --green-text: #6ee7b7;
+
+  --n-search: #60a5fa; --n-file: #22d3ee; --n-board: #34d399; --n-member: #a5b4fc; --n-inbox: #60a5fa; --n-gear: #868d98;
+  --m-codex: #2dd4bf; --m-claude: #a5b4fc; --m-codex2: #22d3ee; --m-human: #60a5fa;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-md: 0 2px 6px rgba(0,0,0,.30), 0 12px 28px rgba(0,0,0,.38);
+  --shadow-lg: 0 4px 10px rgba(0,0,0,.30), 0 24px 60px rgba(0,0,0,.48);
+  --ring: 0 0 0 3px rgba(96,165,250,.30);
+}
+
+svg.ic { stroke-width: 1.7; }
+.app :focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
+.app .idx, .app .num, .app .time, .app .mono { font-variant-numeric: tabular-nums; }
+.app .mono, .app .idx { font-family: var(--font-mono); }
+
+/* ═══ 连续外壳：贴边铺满，靠底色差与 1px 细线分层 ═════════════════ */
+.body { gap: 0; }
+
+.titlebar {
+  height: var(--titlebar-h);
+  padding: 0 var(--sp-3) 0 var(--sp-4);
+  gap: var(--sp-3);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0; box-shadow: none;
+}
+.tb-brand { font-size: var(--fs-13); font-weight: var(--fw-semibold); gap: var(--sp-2); letter-spacing: -.01em; white-space: nowrap; }
+.tb-brand::before { content: ""; width: 16px; height: 16px; flex: none; border-radius: var(--r-full); background: var(--grad); }
+.tb-brand i { font-size: var(--fs-11); font-weight: var(--fw-regular); color: var(--text-3); }
+
+.tb-project {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--h-sm); padding: 0 10px; flex: none;
+  border-radius: var(--r-full); background: var(--bg-sunken);
+  font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text-2);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.tb-project:hover { background: var(--bg-surface-3); color: var(--text); }
+.tb-path { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-4); }
+.tb-branch { display: inline-flex; align-items: center; gap: var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-3); }
+.ic-caret { width: 12px; height: 12px; color: var(--text-3); }
+
+.tb-stats { display: flex; align-items: center; gap: 2px; flex: none; }
+.tb-stat {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-sm); padding: 0 10px;
+  border-radius: var(--r-full); font-size: var(--fs-12); color: var(--text-2); white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.tb-stat:hover { background: var(--bg-hover); color: var(--text); }
+.tb-stat em { font-size: var(--fs-11); color: var(--text-4); }
+.tb-stat .num { font-size: var(--fs-12); font-weight: var(--fw-semibold); color: var(--text); }
+
+.winctl { margin-left: var(--sp-2); gap: 0; }
+.winbtn { width: 38px; height: var(--titlebar-h); border-radius: 0; color: var(--text-3); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.winbtn:hover { background: var(--bg-hover); color: var(--text); }
+.winbtn.close:hover { background: #d8453c; color: #fff; }
+
+/* ── 侧栏：一档底色 + 右侧细线，无圆角无投影 ── */
+.sidebar {
+  width: var(--w-sidebar);
+  background: var(--bg-side);
+  border-right: 1px solid var(--border);
+  border-radius: 0; box-shadow: none;
+  padding: var(--sp-3) var(--sp-2);
+  gap: 2px;
+}
+.side-item, .side-row, .side-subitem {
+  height: var(--h-md); gap: 10px; padding: 0 8px;
+  border-radius: var(--r-sm); font-size: var(--fs-13); color: var(--text); font-weight: var(--fw-medium);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.side-item:hover, .side-row:hover, .side-subitem:hover { background: rgba(255, 255, 255, .85); }
+.side-item .ic, .side-row .ic, .side-subitem .ic {
+  width: 22px; height: 22px; padding: 4px; border-radius: var(--r-full);
+  background: var(--neutral-soft); color: var(--text-3);
+}
+.side-scroll > .side-item:nth-child(1) .ic { color: var(--n-search); background: color-mix(in srgb, var(--n-search) 16%, var(--bg-side)); }
+.side-scroll > .side-item:nth-child(2) .ic { color: var(--n-file);   background: color-mix(in srgb, var(--n-file) 16%, var(--bg-side)); }
+.side-scroll > .side-item:nth-child(3) .ic { color: var(--n-board);  background: color-mix(in srgb, var(--n-board) 16%, var(--bg-side)); }
+.side-scroll > .side-item:nth-child(4) .ic { color: var(--n-member); background: color-mix(in srgb, var(--n-member) 16%, var(--bg-side)); }
+.side-foot    > .side-item:nth-child(1) .ic { color: var(--n-inbox); background: color-mix(in srgb, var(--n-inbox) 16%, var(--bg-side)); }
+.side-foot    > .side-item:nth-child(2) .ic { color: var(--n-gear);  background: color-mix(in srgb, var(--n-gear) 16%, var(--bg-side)); }
+.side-row .ic { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg-side)); }
+
+.side-heading {
+  height: 28px; padding: 0 10px; margin-top: var(--sp-3);
+  font-size: var(--fs-11); font-weight: var(--fw-semibold); color: var(--text-3); letter-spacing: .05em;
+}
+.side-heading .icon-btn { width: 24px; height: 24px; color: var(--text-4); border-radius: var(--r-full); }
+.side-heading .icon-btn:hover { background: rgba(255, 255, 255, .9); color: var(--accent); }
+
+.side-project { margin-top: 2px; }
+.side-sub { margin: 2px 0 0 var(--sp-4); gap: 2px; }
+.side-subitem { height: var(--h-sm); font-size: var(--fs-13); }
+.side-subitem.is-current { background: var(--grad-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+
+.side-badge {
+  min-width: 20px; height: 20px; padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-full); background: rgba(16, 20, 28, .08); color: var(--text-2);
+  font-size: var(--fs-11); font-weight: var(--fw-semibold); line-height: 1;
+}
+.side-badge.alert { background: var(--accent-soft); color: var(--accent-text); }
+.side-foot { padding-top: var(--sp-2); margin-top: var(--sp-2); border-top: 1px solid var(--border); }
+
+/* ── 主池：浅底，卡片纯白 ── */
+.main { background: var(--bg-main); border-radius: 0; box-shadow: none; }
+
+/* 页头：允许换行，标题永不折断 */
+.page-head {
+  gap: var(--sp-2) var(--sp-3); padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  flex-wrap: wrap; row-gap: var(--sp-2);
+}
+.ph-title { font-size: var(--fs-20); font-weight: var(--fw-semibold); line-height: var(--lh-tight); letter-spacing: -.02em; white-space: nowrap; flex: none; }
+.ph-sub { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-12); color: var(--text-3); flex: none; white-space: nowrap; }
+.ph-sub em { color: var(--text-3); }
+.ph-sub .ic { color: var(--text-3); }
+
+.unread {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: var(--h-sm); padding: 0 10px;
+  border-radius: var(--r-full); background: var(--accent-soft); color: var(--accent-text);
+  font-size: var(--fs-12); font-weight: var(--fw-semibold); white-space: nowrap;
+}
+.unread .ic { color: var(--accent); }
+
+.btn {
+  gap: 6px; height: var(--h-md); padding: 0 var(--sp-3); flex: none;
+  border-radius: var(--r-sm); font-size: var(--fs-13); font-weight: var(--fw-medium);
+  border: 1px solid transparent; letter-spacing: -.005em; white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.btn .ic { width: 16px; height: 16px; }
+.btn-primary { background: var(--grad); color: var(--btn-fg); box-shadow: 0 1px 2px rgba(29, 78, 216, .30); }
+.btn-primary:hover { filter: brightness(1.06); box-shadow: 0 2px 8px rgba(29, 78, 216, .34); }
+.btn-ghost { background: var(--bg-surface); border-color: var(--border); color: var(--text-2); }
+.btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
+
+.icon-btn { width: var(--h-md); height: var(--h-md); border-radius: var(--r-sm); color: var(--text-3); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.icon-btn:hover { background: var(--bg-hover); color: var(--accent); }
+
+.page-tabs { gap: 2px; padding: 0 var(--sp-5) var(--sp-3); border-bottom: 0; flex-wrap: wrap; }
+.tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-md); padding: 0 var(--sp-3);
+  border-radius: var(--r-full); font-size: var(--fs-13); color: var(--text-3);
+  border-bottom: 0; margin-bottom: 0; white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.tab:hover { background: var(--bg-surface); color: var(--text); }
+.tab.is-active { background: var(--grad-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.tab .ic { width: 16px; height: 16px; color: var(--text-4); }
+.tab.is-active .ic { color: var(--accent); }
+
+.stream { padding: var(--sp-2) var(--sp-5) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.warnbar {
+  display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  background: var(--warning-soft); border: 0; border-radius: var(--r-sm);
+}
+.warnbar > .ic { color: var(--warning); margin-top: 2px; width: 16px; height: 16px; }
+.wb-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--warning); }
+.wb-detail { font-size: var(--fs-13); line-height: var(--lh-normal); color: var(--text-2); margin-top: 2px; }
+.wb-detail a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+
+/* 任务卡：保留卡片形态（它有独立操作），但内部不再套块 */
+/* 信息主次（评审轮 2）：
+   ① 主池 = 任务清单，当前打开回复串的那条任务要能被认出来（左侧主色条）
+   ② 回复串 = 该任务的对话流，所以串内"原消息/模式说明/校验说明"全部降级为脚注级，
+      不能再与对话争视觉权重 */
+.stream > .card:nth-of-type(1) { border-left: 3px solid var(--accent); }
+.stream > .card:nth-of-type(1) .ttl { color: var(--text); }
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  box-shadow: none;
+}
+.card-head { gap: var(--sp-2); }
+.card-head .time { margin-left: auto; font-size: var(--fs-12); color: var(--text-3); white-space: nowrap; }
+
+.idx { font-size: var(--fs-12); font-weight: var(--fw-medium); color: var(--text-3); background: none; border: 0; padding: 0; line-height: 1; }
+
+.tag {
+  gap: 5px; height: 22px; padding: 0 8px;
+  border-radius: var(--r-full); font-size: var(--fs-12); font-weight: var(--fw-semibold); line-height: 1; border: 0; white-space: nowrap;
+}
+.tag .ic { width: 13px; height: 13px; }
+.tag-accent  { background: var(--info-soft);   color: var(--accent-text); }   /* 执行中 = 运行态：蓝 */
+.tag-warning { background: var(--warning-soft); color: var(--warning); }      /* 待你审阅 = 待办态：琥珀 */
+.tag-neutral { background: var(--neutral-soft); color: var(--text-2); }
+
+.ttl { font-size: var(--fs-17); font-weight: var(--fw-semibold); line-height: var(--lh-tight); margin-top: var(--sp-2); letter-spacing: -.015em; }
+.who { font-size: var(--fs-12); color: var(--text-2); margin-top: 4px; }
+.blurb { font-size: var(--fs-14); line-height: var(--lh-relaxed); color: var(--text); margin-top: var(--sp-2); }
+
+/* 引用：左侧细线，不再是一块灰底 */
+.quote {
+  margin-top: var(--sp-2); padding: 2px 0 2px var(--sp-3);
+  background: none; border-left: 2px solid var(--border-strong);
+  font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2);
+}
+.quote .mono { color: var(--text); font-weight: var(--fw-medium); }
+
+.card-foot { gap: var(--sp-2); margin-top: var(--sp-3); }
+.meta { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-12); color: var(--text-3); }
+.meta .ic { width: 14px; height: 14px; color: var(--text-4); }
+.card-foot .btn { height: var(--h-sm); font-size: var(--fs-12); padding: 0 var(--sp-2); }
+
+/* 输入区：贴边、可换行的工具条（不再裁切发送键） */
+.composer {
+  margin: 0 var(--sp-5) var(--sp-4); background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: none;
+}
+.composer:focus-within { border-color: var(--accent-border); box-shadow: var(--ring); }
+.composer-input { gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) 6px; }
+.composer-input .cbadge {
+  width: 24px; height: 24px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-full); background: var(--accent-soft); color: var(--accent-text);
+  font-size: var(--fs-12); font-weight: var(--fw-semibold);
+}
+.composer-input input { font-size: var(--fs-14); color: var(--text-3); }
+
+.composer-tools {
+  gap: 0; padding: 6px; flex-wrap: wrap; row-gap: 4px;
+  border-top: 1px solid var(--border-subtle); border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.cbtn {
+  gap: 4px; height: var(--h-sm); padding: 0 8px;
+  border-radius: var(--r-full); font-size: var(--fs-12); color: var(--text-2); white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.cbtn .ic { width: 14px; height: 14px; }
+.cbtn:hover { background: var(--bg-sunken); color: var(--text); }
+.hash { color: var(--accent); font-weight: var(--fw-semibold); }
+/* 发送按钮永远靠右（换行时也不会跑到左下角） */
+.composer-tools .btn-primary { margin-left: auto; padding: 0 var(--sp-3); }
+
+/* ── 窄窗策略：先收紧留白 → 再收起低频参数项 → 最后才允许换行 ──
+   换行是兜底，不是首选手段 */
+@media (max-width: 1280px) {
+  .page-head { padding: var(--sp-3) var(--sp-4) 10px; }
+  .page-tabs, .stream { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+  .composer { margin: 0 var(--sp-4) var(--sp-3); }
+  .composer-tools { padding: 5px; }
+  .cbtn { padding: 0 6px; }
+  .tab { padding: 0 var(--sp-2); }
+  .thread-tab { padding: 0 8px; gap: 4px; }
+  .thread-pane { padding: var(--sp-3); }
+  .root-msg { margin-left: var(--sp-3); margin-right: var(--sp-3); }
+  .thread-bar, .thread-tabs { padding-left: var(--sp-3); padding-right: var(--sp-3); }
+}
+/* 更窄时收起低频参数项（「最多 20 次」是轮次上限的参数展示，非高频动作），
+   发送与权限档位「计划模式」必须保留；正式产品应把它移入"更多"而非直接隐藏 */
+@media (max-width: 1120px) {
+  .composer-tools > .cbtn:nth-child(6) { display: none; }
+}
+
+/* ── 回复串：贴边白底 + 左侧细线，无圆角无投影 ── */
+.thread { width: var(--w-thread); background: var(--bg-surface); border-left: 1px solid var(--border); border-radius: 0; box-shadow: none; }
+.splitter { width: 6px; background: transparent; }
+
+.thread-bar { gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
+.thread-bar .icon-btn { width: var(--h-sm); height: var(--h-sm); color: var(--text-3); }
+
+/* 原消息：脚注级（它在主池任务卡里已经完整出现过一次） */
+.root-msg {
+  gap: 6px; margin: var(--sp-3) var(--sp-4) 0; padding: 0 0 0 var(--sp-2);
+  background: none; border: 0; border-left: 2px solid var(--border-strong); border-radius: 0;
+}
+.root-arrow { color: var(--text-4); }
+.root-text {
+  font-size: var(--fs-12); color: var(--text-3); line-height: var(--lh-normal);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.root-msg .time { font-size: var(--fs-11); color: var(--text-4); flex: none; }
+
+.thread-tabs { gap: 2px; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.thread-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-sm); padding: 0 10px;
+  border-radius: var(--r-full); font-size: var(--fs-13); color: var(--text-3);
+  border-bottom: 0; margin-bottom: 0; white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.thread-tab:hover { background: var(--bg-sunken); color: var(--text); }
+.thread-tab.is-active { background: var(--grad-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.thread-tab .num { color: inherit; opacity: .75; font-weight: var(--fw-medium); }
+.thread-tab .ic { width: 15px; height: 15px; }
+
+/* 对话连续排版：消息之间靠留白，不套卡 */
+.thread-pane { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+
+/* 模式说明 / 校验说明：脚注级 —— 无底色、无圆角、12px、辅助色，靠细线与对话分隔 */
+.sys-card {
+  padding: var(--sp-2) 0; background: none;
+  border-top: 1px solid var(--border-subtle); border-radius: 0;
+}
+.sc-head { display: flex; align-items: center; gap: 6px; }
+.sc-head .ic { color: var(--text-3); width: 14px; height: 14px; }
+.sc-title { font-size: var(--fs-12); font-weight: var(--fw-semibold); color: var(--text-2); }
+.sc-body { margin-top: 2px; font-size: var(--fs-12); line-height: var(--lh-normal); color: var(--text-3); }
+.sc-body b { color: var(--text-2); font-weight: var(--fw-semibold); }
+
+.msg { gap: var(--sp-2); }
+.avatar {
+  width: 28px; height: 28px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-full); color: #fff;
+  font-size: var(--fs-12); font-weight: var(--fw-semibold); line-height: 1;
+}
+.avatar[data-m="codex"]  { background: var(--m-codex); }
+.avatar[data-m="claude"] { background: var(--m-claude); }
+.avatar[data-m="codex2"] { background: var(--m-codex2); }
+.avatar[data-m="human"]  { background: var(--m-human); }
+
+.msg-main { padding-left: 0; }
+.msg-main::before { display: none; }
+.msg-head { gap: var(--sp-2); }
+.msg-author { font-size: var(--fs-14); font-weight: var(--fw-semibold); color: var(--text); letter-spacing: -.01em; }
+.msg-time { font-size: var(--fs-12); color: var(--text-3); }
+.msg-seq { font-size: var(--fs-12); color: var(--text-3); }
+.msg-text { margin-top: 4px; font-size: var(--fs-14); line-height: var(--lh-relaxed); color: var(--text); }
+
+/* 分工计划：不是卡片，是一段带标题 + 细线分隔的子任务行 */
+.bubble { margin-top: var(--sp-3); background: none; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
+.bubble-head { gap: var(--sp-2); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border-subtle); }
+.bubble-head > .ic { color: var(--accent); width: 16px; height: 16px; }
+.bubble-title { font-size: var(--fs-14); font-weight: var(--fw-semibold); color: var(--text); letter-spacing: -.01em; }
+.bubble-note { font-size: var(--fs-12); color: var(--text-2); }
+.bubble-meta { font-size: var(--fs-12); color: var(--text-3); }
+
+.bubble .subtask {
+  margin-top: var(--sp-2); padding: var(--sp-2) 0 0; background: none; border-radius: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.st-head { gap: var(--sp-2); flex-wrap: wrap; }
+.st-head .ic { width: 15px; height: 15px; color: var(--text-3); }
+.st-title { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--text); }
+.st-head .tag { margin-left: auto; }
+.st-body { margin-top: 4px; font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2); }
+.st-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--fs-12); line-height: var(--lh-normal); color: var(--text-3); flex-wrap: wrap; }
+.st-meta .ic { width: 14px; height: 14px; color: var(--text-4); }
+
+.plan-foot {
+  display: flex; align-items: flex-start; gap: var(--sp-2);
+  margin-top: var(--sp-2); padding: var(--sp-2) 0 0;
+  background: none; border-radius: 0; border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-13); line-height: var(--lh-relaxed); color: var(--text-2);
+}
+.plan-foot .ic { margin-top: 3px; color: var(--accent); width: 15px; height: 15px; }
+
+.stream::-webkit-scrollbar,
+.thread-pane::-webkit-scrollbar,
+.side-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.stream::-webkit-scrollbar-thumb,
+.thread-pane::-webkit-scrollbar-thumb,
+.side-scroll::-webkit-scrollbar-thumb { background: rgba(16, 20, 28, .14); border: 2px solid transparent; background-clip: content-box; }
+.app[data-theme="dark"] .stream::-webkit-scrollbar-thumb,
+.app[data-theme="dark"] .thread-pane::-webkit-scrollbar-thumb,
+.app[data-theme="dark"] .side-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+</style>
+</head>
+<body>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     众说 · 打开回复串界面 —— 共享语义骨架（三套规范共用同一 DOM，只有 CSS 不同）
+     场景来源：截图 1372×872，开发大厅 · #14 整理本周演化日志并写周报 · 回复串已打开
+     ═══════════════════════════════════════════════════════════════════════ -->
+<svg class="sprite" aria-hidden="true" width="0" height="0" style="position:absolute">
+<defs>
+  <g id="i-search"><circle cx="7.2" cy="7.2" r="4.6"/><path d="M10.6 10.6 14 14"/></g>
+  <g id="i-file"><path d="M4 2.2h5.2L13 6v7.8H4z"/><path d="M9.2 2.2V6H13"/></g>
+  <g id="i-list"><path d="M6 4.2h8M6 8h8M6 11.8h8"/><path d="M3 4.2h.01M3 8h.01M3 11.8h.01"/></g>
+  <g id="i-users"><circle cx="6.4" cy="6" r="2.4"/><path d="M2.4 13.4c0-2.1 1.8-3.4 4-3.4s4 1.3 4 3.4"/><path d="M11.4 4.2a2.2 2.2 0 0 1 0 4.3M12.2 13.4c0-1.6-.6-2.7-1.5-3.3"/></g>
+  <g id="i-plus"><path d="M8 3.4v9.2M3.4 8h9.2"/></g>
+  <g id="i-caret"><path d="M5.6 6.6 8 9.2l2.4-2.6"/></g>
+  <g id="i-folder"><path d="M2.4 4.4h4l1.3 1.6h5.9v6.6H2.4z"/></g>
+  <g id="i-tune"><path d="M3 5h10M3 11h10"/><circle cx="6.4" cy="5" r="1.6"/><circle cx="9.8" cy="11" r="1.6"/></g>
+  <g id="i-inbox"><path d="M2.4 9.2 4 3.4h8l1.6 5.8v3.4H2.4z"/><path d="M2.4 9.2h3.2l.8 1.6h3.2l.8-1.6h3.2"/></g>
+  <g id="i-robot"><rect x="3.4" y="5" width="9.2" height="7" rx="1.6"/><path d="M8 2.4V5M6.4 8h.01M9.6 8h.01"/></g>
+  <g id="i-msg"><path d="M13.6 8.4c0 3-2.5 5.2-5.6 5.2-1 0-1.9-.2-2.7-.6L2.4 14l.9-2.4A5 5 0 0 1 2.4 8.4C2.4 5.4 4.9 3.2 8 3.2s5.6 2.2 5.6 5.2Z"/></g>
+  <g id="i-room"><path d="M3 13V3.6h6.4V13"/><path d="M9.4 6.6H13V13"/><path d="M2 13h12"/></g>
+  <g id="i-check"><path d="M3.2 8.4 6.4 11.6 12.8 5"/></g>
+  <g id="i-lock"><rect x="3.6" y="7" width="8.8" height="6.2" rx="1.4"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></g>
+  <g id="i-play"><path d="M5.8 4.2 11.8 8l-6 3.8z"/></g>
+  <g id="i-clock"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.6"/></g>
+  <g id="i-eye"><path d="M1.8 8S4.2 4.2 8 4.2 14.2 8 14.2 8 11.8 11.8 8 11.8 1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="1.8"/></g>
+  <g id="i-attach"><path d="M10.6 7.4 6.4 11.6a2.5 2.5 0 0 1-3.5-3.5l4.9-4.9a1.7 1.7 0 0 1 2.4 2.4l-4.9 4.9a.85.85 0 0 1-1.2-1.2l4.5-4.5"/></g>
+  <g id="i-at"><circle cx="8" cy="8" r="2.6"/><path d="M10.6 8v1.2a1.7 1.7 0 0 0 3.4 0V8a6 6 0 1 0-2.4 4.8"/></g>
+  <g id="i-activity"><path d="M2.4 8.6h3l1.8-5 2 9.4 1.6-4.4h2.8"/></g>
+  <g id="i-gear"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M2.4 8h2M11.6 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></g>
+  <g id="i-send"><path d="M13.8 2.6 7 9.4M13.8 2.6l-4.2 11.2-2.6-4.4-4.4-2.6z"/></g>
+  <g id="i-export"><path d="M8 10.4V2.8M5.2 5.6 8 2.8l2.8 2.8"/><path d="M3 10v3.2h10V10"/></g>
+  <g id="i-target"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.6"/><path d="M8 1.2v1.8M8 13v1.8M1.2 8h1.8M13 8h1.8"/></g>
+  <g id="i-bell"><path d="M4.4 11.4V7.6a3.6 3.6 0 0 1 7.2 0v3.8z"/><path d="M3.2 11.4h9.6M6.6 13.2a1.6 1.6 0 0 0 2.8 0"/></g>
+  <g id="i-close"><path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8"/></g>
+  <g id="i-min"><path d="M3.6 8h8.8"/></g>
+  <g id="i-max"><rect x="3.8" y="3.8" width="8.4" height="8.4" rx="1.2"/></g>
+  <g id="i-model"><path d="M8 2.2 13.6 5.4v5.2L8 13.8 2.4 10.6V5.4z"/><path d="M2.4 5.4 8 8.6l5.6-3.2M8 8.6v5.2"/></g>
+  <g id="i-ring"><circle cx="8" cy="8" r="5.4"/><circle cx="8" cy="8" r="1.4"/></g>
+  <g id="i-refresh"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13.2 3v2.6h-2.6"/></g>
+  <g id="i-branch"><circle cx="4.6" cy="3.6" r="1.6"/><circle cx="4.6" cy="12.4" r="1.6"/><circle cx="11.4" cy="6.4" r="1.6"/><path d="M4.6 5.2v5.6M6.2 6.4h3.6"/></g>
+  <g id="i-mute"><path d="M3 6.2h2.2L8.4 3.6v8.8L5.2 9.8H3z"/><path d="M10.8 6.4 13.6 9.2M13.6 6.4l-2.8 2.8"/></g>
+  <g id="i-corner"><path d="M5 3.4v4.2a2 2 0 0 0 2 2h5"/><path d="M10.4 7.8 12.4 9.6l-2 1.8"/></g>
+  <g id="i-user"><circle cx="8" cy="5.8" r="2.6"/><path d="M3 13.4c0-2.4 2.2-3.8 5-3.8s5 1.4 5 3.8"/></g>
+  <g id="i-merge"><path d="M4.6 3.6v4a3 3 0 0 0 3 3h3.8"/><path d="M9.6 8.8l2 1.8-2 1.8"/><circle cx="4.6" cy="2.6" r="1.4"/></g>
+  <g id="i-grid"><rect x="2.6" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="2.6" y="8.8" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="8.8" width="4.6" height="4.6" rx="1"/></g>
+</defs>
+</svg>
+
+
+<div class="app" data-theme="light">
+
+  <!-- ── 标题栏 36px ────────────────────────────────────────────────── -->
+  <header class="titlebar">
+    <span class="tb-brand">众说<i>本地项目群聊多 Agent 协同工作台</i></span>
+
+    <button class="tb-project" type="button">
+      <svg class="ic"><use href="#i-grid"/></svg>
+      <span>众说</span>
+      <span class="tb-path">D:\zhongshuo</span>
+      <span class="tb-branch"><svg class="ic"><use href="#i-branch"/></svg>main</span>
+      <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+    </button>
+
+    <span class="tb-drag"></span>
+
+    <nav class="tb-stats">
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-model"/></svg>原型 · 内存数据</button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-branch"/></svg>后台任务<b class="num">4</b><em>· 5 turn 在跑</em></button>
+      <button class="tb-stat" type="button"><svg class="ic"><use href="#i-ring"/></svg>项目全境</button>
+      <button class="tb-stat icon-only" type="button" aria-label="搜索"><svg class="ic"><use href="#i-search"/></svg></button>
+      <button class="tb-stat icon-only" type="button" aria-label="自动更新"><svg class="ic"><use href="#i-refresh"/></svg></button>
+    </nav>
+
+    <div class="winctl">
+      <button class="winbtn" type="button" aria-label="最小化"><svg class="ic"><use href="#i-min"/></svg></button>
+      <button class="winbtn" type="button" aria-label="最大化"><svg class="ic"><use href="#i-max"/></svg></button>
+      <button class="winbtn close" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ── 侧栏 240px ───────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="side-scroll">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-search"/></svg><span class="side-label">搜索与收藏</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-file"/></svg><span class="side-label">文件与 Git</span><b class="side-badge">5</b></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-list"/></svg><span class="side-label">任务看板</span></button>
+
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-users"/></svg><span class="side-label">成员管理</span></button>
+
+        <div class="side-heading"><span>项目</span><button class="icon-btn" type="button" aria-label="添加项目"><svg class="ic"><use href="#i-plus"/></svg></button></div>
+
+        <div class="side-project is-open">
+          <button class="side-row" type="button">
+            <svg class="ic ic-caret"><use href="#i-caret"/></svg>
+            <svg class="ic"><use href="#i-folder"/></svg>
+            <span class="side-label">众说</span>
+            <span class="side-note">当前</span>
+            <b class="side-badge">3</b>
+          </button>
+          <div class="side-sub">
+            <button class="side-subitem is-current" type="button"><span>开发大厅</span><b class="side-badge">3</b></button>
+            <button class="side-subitem" type="button"><span>方案讨论</span></button>
+            <button class="side-subitem" type="button"><span>文档整理</span></button>
+            <button class="side-subitem" type="button"><svg class="ic"><use href="#i-tune"/></svg><span>私信</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-foot">
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-inbox"/></svg><span class="side-label">待我处理</span><b class="side-badge alert">5</b></button>
+        <button class="side-item" type="button"><svg class="ic"><use href="#i-tune"/></svg><span class="side-label">设置</span></button>
+      </div>
+    </aside>
+
+    <!-- ── 主内容区 ─────────────────────────────────────────────────── -->
+    <main class="main">
+
+      <div class="page-head">
+        <h1 class="ph-title">开发大厅</h1>
+        <span class="ph-sub"><svg class="ic"><use href="#i-robot"/></svg>协调者 Codex<em>3 名成员</em></span>
+        <span class="tb-drag"></span>
+        <button class="unread" type="button"><svg class="ic"><use href="#i-msg"/></svg>3 条未读</button>
+        <button class="btn btn-ghost" type="button"><svg class="ic"><use href="#i-room"/></svg>房间设置</button>
+      </div>
+
+      <div class="page-tabs">
+        <button class="tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>对话池</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-check"/></svg>任务看板</button>
+        <button class="tab" type="button"><svg class="ic"><use href="#i-file"/></svg>文件</button>
+      </div>
+
+      <div class="stream">
+
+        <!-- 警示条 -->
+        <div class="warnbar">
+          <svg class="ic"><use href="#i-lock"/></svg>
+          <div>
+            <p class="wb-title">有任务正在改文件</p>
+            <p class="wb-detail">任务 <span class="mono">#13</span> 修复 <span class="mono">build</span> 脚本在中文路径下失败 正在写入，其他修改任务排队。<a href="#">悬停查看说明</a></p>
+          </div>
+        </div>
+
+        <!-- #14 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#14</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">1 小时前</time>
+          </div>
+          <h2 class="ttl">整理本周演化日志并写周报</h2>
+          <p class="who">Codex 正在处理</p>
+          <p class="blurb">整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+          <p class="quote"><span class="mono">Codex</span> 两个子任务都已派发。Claude 跑条在等 <span class="mono">#13</span> 释放写入锁 —— 同一物理目录最多 1 个受管理写入者…<br><span class="mono">Codex#2</span> 我这边开始扫 <span class="mono">docs/</span> 了，大约需要 3 分钟。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #13 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#13</span>
+            <span class="tag tag-warning"><svg class="ic"><use href="#i-clock"/></svg>待你审阅</span>
+            <span class="tb-drag"></span>
+            <time class="time">2 小时前</time>
+          </div>
+          <h2 class="ttl">修复 build 脚本在中文路径下失败</h2>
+          <p class="who">Claude 已修改 3 个文件</p>
+          <p class="blurb">@Claude build 脚本在中文路径下报 ENOENT，定位一下并修掉，改完给我验证记录。</p>
+          <p class="quote"><span class="mono">Claude</span> 另一条验证没跑：<span class="mono">pnpm build</span> 全量构建需要 6 分钟，你这次没要求，所以我没执行，报告里…<br><span class="mono">Claude</span> 任务完成，等你审阅改动。</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>6 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+        <!-- #12 -->
+        <article class="card">
+          <div class="card-head">
+            <span class="idx">#12</span>
+            <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+            <span class="tb-drag"></span>
+            <time class="time">3 小时前</time>
+          </div>
+          <h2 class="ttl">分析模块划分并给出重构建议</h2>
+          <p class="who">Codex、Claude 正在处理</p>
+          <p class="blurb">@全体 请审查 <span class="mono">src/</span> 下六个边界的实际依赖方向，找出违反契约的引用，并给出可执行的重构步骤。只分析，不要改文件。</p>
+          <p class="quote"><span class="mono">Codex</span> 整合稿 R1 已完成，含 2 条共同确认结论、1 条仍开放的分歧（议题 <span class="mono">#12-2</span> 需要你决定）和 3 个…<br><span class="mono">Claude</span> @Codex 议题 <span class="mono">#12-2</span> 我倾向不允许直连。但先别急着定，把 <span class="mono">ui → persistence</span> 的 6 处按"类型越界 / …</p>
+          <div class="card-foot">
+            <span class="meta"><svg class="ic"><use href="#i-msg"/></svg>3 条回复</span>
+            <span class="meta"><svg class="ic"><use href="#i-eye"/></svg>已关注</span>
+            <span class="tb-drag"></span>
+            <button class="btn btn-ghost" type="button">打开回复串</button>
+            <button class="btn btn-ghost" type="button">任务详情</button>
+          </div>
+        </article>
+
+      </div>
+
+      <!-- 底部发布器 -->
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">@</span>
+          <input type="text" value="向对话池发布新任务 · 自动… 输入 @ 选择成员" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送</button>
+        </div>
+      </div>
+
+    </main>
+
+    <span class="splitter"></span>
+
+    <!-- ── 回复串（详情面板） ───────────────────────────────────────── -->
+    <aside class="thread">
+      <div class="thread-bar">
+        <span class="idx">#14</span>
+        <span class="tag tag-accent"><svg class="ic"><use href="#i-play"/></svg>执行中</span>
+        <span class="tag tag-neutral"><svg class="ic"><use href="#i-play"/></svg>运行中</span>
+        <span class="tb-drag"></span>
+        <button class="icon-btn" type="button" aria-label="导出"><svg class="ic"><use href="#i-export"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="定位"><svg class="ic"><use href="#i-target"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关注"><svg class="ic"><use href="#i-eye"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+        <button class="icon-btn" type="button" aria-label="关闭"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+
+      <div class="root-msg">
+        <span class="root-arrow">↳</span>
+        <p class="root-text">你 整理一下本周的演化日志，出一份能直接发出去的周报草稿。</p>
+        <time class="time">10:42</time>
+      </div>
+
+      <div class="thread-tabs">
+        <button class="thread-tab is-active" type="button"><svg class="ic"><use href="#i-msg"/></svg>回复<b class="num">3</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-check"/></svg>成果</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-activity"/></svg>活动</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-users"/></svg>成员<b class="num">1</b></button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-list"/></svg>任务详情</button>
+        <button class="thread-tab" type="button"><svg class="ic"><use href="#i-play"/></svg>运行详情</button>
+      </div>
+
+      <div class="thread-pane">
+
+        <!-- 模式提示 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-mute"/></svg><span class="sc-title">模式 AUTO：默认协调者接单</span></div>
+          <p class="sc-body">本条没有 <b>@</b>，按路由表由房间协调者 Codex 接单。它可以直接回答，也可以提交结构化分工计划。协调者等待子任务期间不占用活跃模型调用槽。</p>
+        </div>
+
+        <!-- Codex 消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:43</time>
+              <span class="msg-seq">#2</span>
+            </div>
+            <p class="msg-text">这条我拆成两个子任务，互不依赖，可以并行取证。</p>
+
+            <!-- 分工计划卡 -->
+            <section class="bubble">
+              <div class="bubble-head">
+                <svg class="ic"><use href="#i-list"/></svg>
+                <span class="bubble-title">分工计划</span>
+                <span class="bubble-note">2 个子任务</span>
+                <span class="tb-drag"></span>
+                <span class="bubble-meta">程序校验通过后才生成任务</span>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">从 docs/ 提取本周变更要点</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">按日期筛出本周新增/修改的文档与设计决策，输出要点清单</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：带文件引用与版本号的要点清单 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：每条要点标注来源文件与章节；区分"已拍板"与"仍待决"</p>
+              </div>
+
+              <div class="subtask">
+                <div class="st-head">
+                  <svg class="ic"><use href="#i-corner"/></svg>
+                  <span class="idx">#14</span>
+                  <span class="st-title">整理决策时间线</span>
+                  <span class="tag tag-neutral"><svg class="ic"><use href="#i-eye"/></svg>只分析</span>
+                </div>
+                <p class="st-body">把本周的决策按时间顺序排成时间线，标出互相依赖项</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-user"/></svg>Codex &nbsp;交付：Markdown 时间线 &nbsp;依赖：无</p>
+                <p class="st-meta"><svg class="ic"><use href="#i-check"/></svg>验收标准：日期与来源可回溯；标注被后续决策覆盖的条目</p>
+              </div>
+
+              <p class="plan-foot"><svg class="ic"><use href="#i-merge"/></svg>整合计划：汇总两份要点，按"功能进展 / 决策变更 / 风险"三段生成周报草稿。</p>
+            </section>
+          </div>
+        </article>
+
+        <!-- 校验说明 -->
+        <div class="sys-card">
+          <div class="sc-head"><svg class="ic"><use href="#i-check"/></svg><span class="sc-title">程序校验通过后才生成任务</span></div>
+          <p class="sc-body">校验项：无跨项目依赖、无循环依赖、负责人均在房间内、未提升你未授权的权限、子任务数 2 ≤ 6、拆分深度 1 层。本任务未拆分时界面会记录"本次未拆分"，不靠自然语言判断成功。</p>
+        </div>
+
+        <!-- Codex 第二条消息 -->
+        <article class="msg">
+          <span class="avatar" data-m="codex">C</span>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-author">Codex</span>
+              <time class="msg-time">10:44</time>
+              <span class="msg-seq">#4</span>
+            </div>
+          </div>
+        </article>
+
+      </div>
+
+      <div class="composer">
+        <div class="composer-input">
+          <span class="cbadge">↳</span>
+          <input type="text" value="跟进 #14 · 延续自动… 输入 @ 定向提问" readonly>
+        </div>
+        <div class="composer-tools">
+          <button class="cbtn" type="button"><b class="hash">#</b>任务</button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-msg"/></svg>讨论</button>
+          <button class="cbtn icon-only" type="button" aria-label="附件"><svg class="ic"><use href="#i-attach"/></svg></button>
+          <button class="cbtn icon-only" type="button" aria-label="提及成员"><svg class="ic"><use href="#i-at"/></svg></button>
+          <span class="tb-drag"></span>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-activity"/></svg>最多 20 次<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="cbtn" type="button"><svg class="ic"><use href="#i-gear"/></svg>计划模式<svg class="ic ic-caret"><use href="#i-caret"/></svg></button>
+          <button class="btn btn-primary" type="button"><svg class="ic"><use href="#i-send"/></svg>发送补充</button>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  /* 支持 ?theme=dark 供对照页切换；页内不添加任何截图外的界面元素 */
+  var t = new URLSearchParams(location.search).get('theme');
+  if (t === 'dark') document.querySelector('.app').setAttribute('data-theme', 'dark');
+</script>
+<script>
+/* hy4-interaction.js —— 注入到 hy4-fixed.html 的交互层（由 splice.cjs 注入）
+   状态：默认 = 对比台那一屏；点击对话里的「components.md」→ 主池收起，
+   对话留在左侧（完整历史 + 输入框），右侧出现带文件标签页的预览。
+   运行时才创建 DOM，源文件 hy4-fixed.html 的静态标记仍与 hy4.html 一致。
+
+   第三轮修订：
+   ① 窄窗切换条改为**内容区顶部横条**（先把 main/splitter/thread 包进 .content/.content-body，
+      切换条作为列容器的第一行，不再被当成一列）
+   ② Markdown 默认**渲染阅读**，提供「阅读 / 源码」切换；代码文件才默认带行号的源码
+   ③ 文件状态拆成三条独立事实：磁盘改动 / 编辑器未保存 / 任务交付版本，不再混叫"未保存"
+*/
+
+(function () {
+  var css = [
+    '.filechip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;margin-top:var(--sp-2);',
+    'width:auto;max-width:none;flex:none;white-space:nowrap;border-radius:var(--r-full);background:var(--accent-soft);color:var(--accent-text);',
+    'font-family:var(--font-mono);font-size:var(--fs-12);font-weight:var(--fw-semibold);',
+    'box-shadow:inset 0 0 0 1px var(--accent-border);cursor:pointer}',
+    '.filechip .ic{width:13px;height:13px}',
+    '.filechip[aria-pressed="true"]{background:var(--grad-soft)}',
+
+    /* 内容区：列容器（顶部横条 + 下方横向行） */
+    '.content{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}',
+    '.content-body{flex:1;min-height:0;display:flex;align-items:stretch}',
+
+    '.splitter2{flex:none;width:6px;background:transparent;cursor:col-resize;position:relative;z-index:var(--z-splitter)}',
+    '.splitter2::after{content:"";position:absolute;inset:0 2px;border-radius:3px;background:transparent;transition:background var(--dur-fast) var(--ease-out)}',
+    '.splitter2:hover::after,.splitter2.dragging::after{background:var(--accent)}',
+
+    '.preview{flex:none;width:var(--w-preview,620px);min-width:340px;display:flex;flex-direction:column;min-height:0;',
+    'background:var(--bg-surface);border-left:1px solid var(--border)}',
+    '.preview[hidden]{display:none}',
+    '.pv-head{flex:none;display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-subtle)}',
+    '.pv-name{font-family:var(--font-mono);font-size:var(--fs-13);font-weight:var(--fw-semibold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.pv-path{font-family:var(--font-mono);font-size:var(--fs-11);color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.pv-tabs{flex:none;display:flex;align-items:center;gap:2px;padding:var(--sp-2) var(--sp-2) 0;border-bottom:1px solid var(--border-subtle);overflow-x:auto}',
+    '.pv-tab{display:inline-flex;align-items:center;gap:6px;height:var(--h-sm);padding:0 10px;border-radius:var(--r-sm) var(--r-sm) 0 0;',
+    'font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-3);white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px}',
+    '.pv-tab:hover{background:var(--bg-sunken);color:var(--text)}',
+    '.pv-tab.is-active{color:var(--text);font-weight:var(--fw-semibold);background:var(--bg-sunken);border-bottom-color:var(--accent)}',
+    '.pv-tab .ic{width:13px;height:13px}',
+
+    /* 文件状态：三条独立事实 */
+    '.pv-state{flex:none;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:4px}',
+    '.pv-row{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-12);line-height:1.5;flex-wrap:wrap}',
+    '.pv-key{flex:none;width:64px;color:var(--text-3)}',
+    '.pv-val{color:var(--text-2);min-width:0}',
+
+    '.pv-bar{flex:none;display:flex;align-items:center;gap:var(--sp-2);padding:6px var(--sp-3);border-bottom:1px solid var(--border-subtle);flex-wrap:wrap;row-gap:4px}',
+    '.pv-seg{display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:var(--r-full);background:var(--bg-sunken)}',
+    '.pv-seg button{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 10px;border-radius:var(--r-full);font-size:var(--fs-12);color:var(--text-3)}',
+    '.pv-seg button.on{background:var(--bg-surface);color:var(--text);font-weight:var(--fw-semibold);box-shadow:var(--shadow-sm)}',
+    '.pv-note{font-size:var(--fs-12);color:var(--text-3)}',
+
+    '.pv-body{flex:1;min-height:0;overflow:auto}',
+
+    /* 阅读态（Markdown 渲染） */
+    '.md{padding:var(--sp-5) var(--sp-5) var(--sp-6);max-width:760px}',
+    '.md h1{font-size:var(--fs-20);font-weight:var(--fw-semibold);line-height:var(--lh-tight);letter-spacing:-.02em;margin:0 0 var(--sp-2)}',
+    '.md h2{font-size:var(--fs-17);font-weight:var(--fw-semibold);line-height:var(--lh-tight);letter-spacing:-.015em;margin:var(--sp-5) 0 var(--sp-2)}',
+    '.md p{font-size:var(--fs-14);line-height:var(--lh-relaxed);color:var(--text);margin:var(--sp-2) 0}',
+    '.md .quote{margin:var(--sp-3) 0;padding:2px 0 2px var(--sp-3);border-left:2px solid var(--border-strong);font-size:var(--fs-13);color:var(--text-2)}',
+    '.md table{width:100%;border-collapse:collapse;font-size:var(--fs-13);margin:var(--sp-2) 0}',
+    '.md th,.md td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border-subtle);vertical-align:top}',
+    '.md th{font-size:var(--fs-12);font-weight:var(--fw-semibold);color:var(--text-3);background:var(--bg-sunken)}',
+    '.md td code{font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text)}',
+    '.md ol{padding-left:20px;margin:var(--sp-2) 0;font-size:var(--fs-14);line-height:var(--lh-relaxed);color:var(--text)}',
+    '.md li{margin:2px 0}',
+
+    /* 源码态 */
+    '.code{font-family:var(--font-mono);font-size:var(--fs-12);line-height:1.7}',
+    '.code-row{display:flex}',
+    '.code-ln{flex:none;width:44px;padding:0 10px 0 var(--sp-3);text-align:right;color:var(--text-4);user-select:none}',
+    '.code-tx{flex:1;white-space:pre-wrap;word-break:break-word;padding-right:var(--sp-4);color:var(--text)}',
+    '.code-row.is-hit .code-tx{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}',
+    '.code-row.is-hit .code-ln{background:var(--accent-soft);color:var(--accent-text)}',
+    '.c-h1{font-weight:var(--fw-semibold)}.c-h2{color:var(--accent-text);font-weight:var(--fw-semibold)}.c-mut{color:var(--text-3)}',
+    '.pv-foot{flex:none;display:flex;align-items:center;gap:var(--sp-2);padding:6px var(--sp-3);border-top:1px solid var(--border-subtle);font-size:var(--fs-12);color:var(--text-3)}',
+
+    '.viewswitch{display:none}',
+
+    /* 预览态：主池收起，对话变宽 */
+    '.app[data-view="file"] .content-body > .main{display:none}',
+    '.app[data-view="file"] .content-body > .splitter{display:none}',
+    '.app[data-view="file"] .content-body > .thread{flex:1 1 auto;width:auto;min-width:320px}',
+
+    /* 窄窗：切换条 = 内容区顶部横条；对话与预览二选一 */
+    '@media (max-width:1120px){',
+    '  .viewswitch{display:flex;align-items:center;gap:2px;flex:none;padding:var(--sp-2) var(--sp-4);',
+    '    border-bottom:1px solid var(--border-subtle);background:var(--bg-surface)}',
+    '  .viewswitch button{display:inline-flex;align-items:center;gap:6px;height:var(--h-sm);padding:0 var(--sp-3);',
+    '    border-radius:var(--r-full);font-size:var(--fs-13);color:var(--text-3)}',
+    '  .viewswitch button.on{background:var(--grad-soft);color:var(--accent-text);font-weight:var(--fw-semibold)}',
+    '  .app[data-view="file"] .content-body > .thread{display:none}',
+    '  .app[data-view="conv"] .preview{display:none}',
+    '  .app[data-view="file"] .preview{flex:1 1 auto;width:auto;min-width:0;border-left:0}',
+    '  .app[data-view="file"] .content-body > .splitter2{display:none}',
+    '  .md{padding:var(--sp-4)}',
+    '}'
+  ].join('\n');
+
+  var style = document.createElement('style');
+  style.textContent = css;
+  document.head.appendChild(style);
+
+  var app = document.querySelector('.app');
+  var body = app && app.querySelector('.body');
+  var thread = app && app.querySelector('.thread');
+  if (!app || !body || !thread) return;
+
+  function ic(id) { return '<svg class="ic"><use href="#' + id + '"/></svg>'; }
+
+  /* ---------- 1. 内容区容器：切换条成为顶部横条 ---------- */
+  var content = document.createElement('div');
+  content.className = 'content';
+  var contentBody = document.createElement('div');
+  contentBody.className = 'content-body';
+  content.appendChild(contentBody);
+  body.appendChild(content);
+
+  var sw = document.createElement('div');
+  sw.className = 'viewswitch';
+  sw.innerHTML =
+    '<button type="button" data-v="conv">' + ic('i-msg') + '对话</button>' +
+    '<button type="button" data-v="file">' + ic('i-file') + 'components.md</button>';
+  content.insertBefore(sw, contentBody);
+
+  var main = app.querySelector('.main');
+  var splitter = app.querySelector('.body > .splitter');
+  if (main) contentBody.appendChild(main);
+  if (splitter) contentBody.appendChild(splitter);
+  contentBody.appendChild(thread);
+
+  /* ---------- 2. 对话里的文件入口 ---------- */
+  var host = thread.querySelector('.msg-main');
+  if (host) {
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'filechip';
+    chip.setAttribute('aria-pressed', 'false');
+    chip.innerHTML = ic('i-file') + 'components.md';
+    var anchor = host.querySelector('.msg-text') || host;
+    anchor.insertAdjacentElement('afterend', chip);
+    chip.addEventListener('click', function () { toggle(chip.getAttribute('aria-pressed') !== 'true'); });
+  }
+
+  /* ---------- 3. 预览面板 ---------- */
+  var MD_SRC = [
+    [1, 'c-h1', '# 众说 · 组件规范 v3.0（与 DESIGN.md v3.0 同步）'],
+    [2, '', ''],
+    [3, 'c-mut', '&gt; 配套 DESIGN.md v3.0。左列是现有 CSS 类，右列是本规范给定的形态与取值。'],
+    [4, '', ''],
+    [5, 'c-h2', '## 1. 基础控件'],
+    [6, '', ''],
+    [7, '', '| 主按钮 | `.btn.btn-primary` | 高 32，radius 8，渐变实底 |'],
+    [8, '', '| 次按钮 | `.btn.btn-ghost` | 白底 + 1px 细线 |', 1],
+    [9, '', '| 标签 chip | `.tag` | 高 22，pill，无边框，必须带图标 |'],
+    [10, '', '| 输入框 | `.input` | 高 32，radius 8 |'],
+    [11, '', ''],
+    [12, 'c-h2', '## 2. 容器'],
+    [13, '', ''],
+    [14, '', '| 外壳 | `.app` | 连续外壳：贴边铺满，全高面板无圆角无投影 |'],
+    [15, '', '| 卡片 | `.card` | 白底 + 1px 细线 + radius 10 |'],
+    [16, '', '| 页签 | `.tab` | 高 32，胶囊，禁止下划线式 |'],
+    [17, '', ''],
+    [18, 'c-h2', '## 5. 业务卡（消息流）'],
+    [19, '', ''],
+    [20, '', '统一骨架：头（作者 + 时间 + 序号）→ 正文 → 可选内嵌结构 → 脚（动作）'],
+    [21, '', '对话连续排版，消息间只用留白。'],
+    [22, '', ''],
+    [23, 'c-mut', '三条硬规则：①一条消息最多一层卡片 ②状态必须图标+文字+颜色 ③禁止兜底字面量']
+  ];
+  var CSS_SRC = [
+    [1, 'c-mut', '/* tokens.patch.css —— 视觉规范 v3.0 落地补丁 */'],
+    [2, '', ":root, :root[data-theme='light'] {"],
+    [3, '', '  --bg-side:     #f2f4f7;   /* 侧栏 */'],
+    [4, '', '  --bg-main:     #f8f9fb;   /* 主池 */'],
+    [5, '', '  --text:        #16181d;   /* 17.8:1 */'],
+    [6, '', '  --text-3:      #626b75;   /* 5.41:1 可承载阅读内容 */', 1],
+    [7, '', '  --grad: linear-gradient(135deg, #1d4ed8, #15649e 55%, #0f766e);'],
+    [8, '', '}']
+  ];
+  function rowsHTML(src) {
+    return '<div class="code">' + src.map(function (r) {
+      return '<div class="code-row' + (r[3] ? ' is-hit' : '') + '">' +
+        '<span class="code-ln">' + r[0] + '</span>' +
+        '<span class="code-tx ' + r[1] + '">' + r[2] + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  var MD_VIEW = [
+    '<div class="md">',
+    '<h1>众说 · 组件规范 v3.0</h1>',
+    '<p class="quote">配套 DESIGN.md v3.0。左列是现有 CSS 类，右列是本规范给定的形态与取值。</p>',
+    '<h2>1. 基础控件</h2>',
+    '<table><thead><tr><th>组件</th><th>类</th><th>规格</th></tr></thead><tbody>',
+    '<tr><td>主按钮</td><td><code>.btn.btn-primary</code></td><td>高 32，radius 8，渐变实底 + 白字（端点对比度 ≥5.4:1）</td></tr>',
+    '<tr><td>次按钮</td><td><code>.btn.btn-ghost</code></td><td>白底 + 1px 细线，radius 8</td></tr>',
+    '<tr><td>标签 chip</td><td><code>.tag</code></td><td>高 22，pill，无边框，必须带图标</td></tr>',
+    '<tr><td>输入框</td><td><code>.input</code></td><td>高 32，radius 8，清空不得被钳回默认值</td></tr>',
+    '</tbody></table>',
+    '<h2>2. 容器</h2>',
+    '<table><thead><tr><th>组件</th><th>类</th><th>规格</th></tr></thead><tbody>',
+    '<tr><td>外壳</td><td><code>.app</code></td><td>连续外壳：贴边铺满，全高面板无圆角无投影</td></tr>',
+    '<tr><td>卡片</td><td><code>.card</code></td><td>白底 + 1px 细线 + radius 10；只给有独立操作的对象</td></tr>',
+    '<tr><td>页签</td><td><code>.tab</code></td><td>高 32，胶囊，选中 = 渐变柔底；禁止下划线式</td></tr>',
+    '</tbody></table>',
+    '<h2>5. 业务卡（消息流）</h2>',
+    '<p>统一骨架：头（作者 + 时间 + 序号）→ 正文 → 可选内嵌结构 → 脚（动作）。对话连续排版，消息间只用留白。</p>',
+    '<ol><li>一条消息最多一层卡片</li><li>状态必须图标 + 文字 + 颜色</li><li>拿不到数据就省略，禁止兜底字面量</li></ol>',
+    '</div>'
+  ].join('');
+
+  var sp2 = document.createElement('div');
+  sp2.className = 'splitter2';
+  sp2.setAttribute('role', 'separator');
+  sp2.setAttribute('aria-label', '调整预览宽度');
+  sp2.tabIndex = 0;
+
+  var pv = document.createElement('aside');
+  pv.className = 'preview';
+  pv.hidden = true;
+  pv.innerHTML =
+    '<div class="pv-head">' + ic('i-file') +
+      '<span class="pv-name" id="pvName">components.md</span>' +
+      '<span class="pv-path" id="pvPath">D:\\zhongshuo\\design-spec\\components.md</span>' +
+      '<span class="tb-drag"></span>' +
+      '<button class="icon-btn" type="button" aria-label="复制路径">' + ic('i-branch') + '</button>' +
+      '<button class="icon-btn" type="button" aria-label="关闭预览" id="pvClose">' + ic('i-close') + '</button>' +
+    '</div>' +
+    '<div class="pv-tabs">' +
+      '<button class="pv-tab is-active" type="button" data-f="md">' + ic('i-file') + 'components.md</button>' +
+      '<button class="pv-tab" type="button" data-f="css">' + ic('i-file') + 'tokens.patch.css</button>' +
+      '<button class="pv-tab" type="button" data-f="css2">' + ic('i-file') + 'base.css</button>' +
+    '</div>' +
+    '<div class="pv-state">' +
+      '<div class="pv-row"><span class="pv-key">磁盘状态</span>' +
+        '<span class="tag tag-warning">' + ic('i-clock') + '工作区已改动</span>' +
+        '<span class="pv-val">相对 HEAD 有 2 处改动，尚未提交</span></div>' +
+      '<div class="pv-row"><span class="pv-key">编辑器</span>' +
+        '<span class="tag tag-neutral">' + ic('i-check') + '无未保存</span>' +
+        '<span class="pv-val">当前内容与磁盘一致</span></div>' +
+      '<div class="pv-row"><span class="pv-key">交付版本</span>' +
+        '<span class="tag tag-accent">' + ic('i-branch') + '任务 #14 · 交付 R2</span>' +
+        '<span class="pv-val">本预览是该交付版本的快照，不是工作区实时文件</span></div>' +
+    '</div>' +
+    '<div class="pv-bar">' +
+      '<span class="pv-seg" id="pvSeg">' +
+        '<button type="button" data-m="read" class="on">阅读</button>' +
+        '<button type="button" data-m="src">源码</button>' +
+      '</span>' +
+      '<span class="pv-note" id="pvNote"></span>' +
+      '<span class="tb-drag"></span>' +
+      '<button class="btn btn-ghost" type="button" style="height:28px;font-size:12px">在编辑器打开</button>' +
+    '</div>' +
+    '<div class="pv-body" id="pvBody"></div>' +
+    '<div class="pv-foot"><span id="pvMeta"></span><span class="tb-drag"></span>' +
+      '<span>拖动分隔条调整宽度 · 双击复位</span></div>';
+
+  contentBody.appendChild(sp2);
+  contentBody.appendChild(pv);
+
+  /* ---------- 4. 阅读 / 源码 ---------- */
+  var FILES = {
+    md:   { name: 'components.md', path: 'D:\\zhongshuo\\design-spec\\components.md', view: MD_VIEW, src: MD_SRC, meta: 'Markdown · 23 行 · UTF-8' },
+    css:  { name: 'tokens.patch.css', path: 'D:\\zhongshuo\\design-spec\\tokens.patch.css', view: null, src: CSS_SRC, meta: 'CSS · 8 行 · UTF-8' },
+    css2: { name: 'base.css', path: 'D:\\zhongshuo\\design-spec\\base.css', view: null, src: CSS_SRC, meta: 'CSS · 8 行 · UTF-8' }
+  };
+  var curFile = 'md', curMode = 'read';
+  var pvBody = pv.querySelector('#pvBody');
+  var pvSeg = pv.querySelector('#pvSeg');
+  var pvNote = pv.querySelector('#pvNote');
+
+  function render() {
+    var f = FILES[curFile];
+    pv.querySelector('#pvName').textContent = f.name;
+    pv.querySelector('#pvPath').textContent = f.path;
+    pv.querySelector('#pvMeta').textContent = f.meta;
+    var canRead = !!f.view;
+    if (!canRead) curMode = 'src';
+    pvSeg.querySelectorAll('button').forEach(function (b) {
+      var m = b.dataset.m;
+      b.disabled = (m === 'read' && !canRead);
+      b.style.opacity = (m === 'read' && !canRead) ? '.45' : '';
+      b.classList.toggle('on', m === curMode);
+    });
+    if (curMode === 'read') {
+      pvBody.innerHTML = f.view;
+      pvNote.textContent = 'Markdown 已按交付版本渲染 · 可切到源码对照行号';
+    } else {
+      pvBody.innerHTML = rowsHTML(f.src);
+      pvNote.textContent = '源码视图 · 带行号，改动行已高亮';
+    }
+  }
+  pvSeg.querySelectorAll('button').forEach(function (b) {
+    b.addEventListener('click', function () { if (!b.disabled) { curMode = b.dataset.m; render(); } });
+  });
+  pv.querySelectorAll('.pv-tab').forEach(function (b) {
+    b.addEventListener('click', function () {
+      pv.querySelectorAll('.pv-tab').forEach(function (x) { x.classList.remove('is-active'); });
+      b.classList.add('is-active');
+      curFile = b.dataset.f;
+      curMode = curFile === 'md' ? 'read' : 'src';
+      render();
+      sw.querySelectorAll('button')[1].innerHTML = ic('i-file') + FILES[curFile].name;
+    });
+  });
+
+  /* ---------- 5. 状态切换 / 宽度 ---------- */
+  var KEY = 'zs.preview.width';
+  function clamp(px) {
+    var min = 340, max = Math.max(340, window.innerWidth - 240 - 420);
+    return Math.min(Math.max(px, min), max);
+  }
+  function applyWidth(px) {
+    px = clamp(px);
+    pv.style.setProperty('--w-preview', px + 'px');
+    try { localStorage.setItem(KEY, px); } catch (e) {}
+  }
+  function syncSwitch() {
+    var v = app.getAttribute('data-view');
+    sw.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.v === v); });
+    var c = app.querySelector('.filechip');
+    if (c) c.setAttribute('aria-pressed', v === 'file' ? 'true' : 'false');
+  }
+  function narrow() { return window.matchMedia('(max-width: 1120px)').matches; }
+  function toggle(open) {
+    if (open) {
+      app.setAttribute('data-view', 'file');
+      pv.hidden = false;
+      applyWidth(parseInt((localStorage.getItem(KEY) || '620'), 10));
+    } else {
+      app.setAttribute('data-view', 'conv');
+      pv.hidden = true;
+    }
+    sp2.style.display = narrow() ? 'none' : '';
+    syncSwitch();
+  }
+  pv.querySelector('#pvClose').addEventListener('click', function () { toggle(false); });
+  sw.querySelectorAll('button').forEach(function (b) {
+    b.addEventListener('click', function () { toggle(b.dataset.v === 'file'); });
+  });
+
+  var dragging = false;
+  sp2.addEventListener('pointerdown', function (e) { dragging = true; sp2.classList.add('dragging'); sp2.setPointerCapture(e.pointerId); });
+  sp2.addEventListener('pointermove', function (e) { if (dragging) applyWidth(window.innerWidth - e.clientX); });
+  sp2.addEventListener('pointerup', function () { dragging = false; sp2.classList.remove('dragging'); });
+  sp2.addEventListener('dblclick', function () { applyWidth(620); });
+  sp2.addEventListener('keydown', function (e) {
+    var cur = parseInt(pv.style.getPropertyValue('--w-preview')) || 620;
+    if (e.key === 'ArrowLeft') applyWidth(cur + 24);
+    if (e.key === 'ArrowRight') applyWidth(cur - 24);
+  });
+  window.addEventListener('resize', function () {
+    if (!pv.hidden) { applyWidth(parseInt((localStorage.getItem(KEY) || '620'), 10)); sp2.style.display = narrow() ? 'none' : ''; }
+  });
+
+  /* ---------- 6. 初始 ---------- */
+  var q = new URLSearchParams(location.search);
+  curMode = q.get('mode') === 'src' ? 'src' : 'read';
+  render();
+  toggle(q.get('view') === 'file');
+})();
+
+</script>
+</body>
+</html>

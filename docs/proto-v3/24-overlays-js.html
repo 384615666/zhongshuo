@@ -1,0 +1,78 @@
+    </main>
+  </div>
+</div>
+
+<!-- Ctrl+K 搜索 -->
+<div class="overlay" id="cmdk" onclick="if(event.target===this)closeCmdk()">
+  <div class="cmdk">
+    <div class="ck-in"><svg width="16" height="16" style="color:var(--ink3)"><use href="#i-search"/></svg><input id="cmdkInput" placeholder="搜索消息、任务、成员、频道…（ATTN-03：不搜索文件正文）" autofocus><kbd style="font-size:10px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;color:var(--ink3)">ESC</kbd></div>
+    <div class="ck-list">
+      <div class="ck-sec">任务</div>
+      <div class="ck-item hot" onclick="closeCmdk();switchView('chat')"><span class="tag t-gray num">#12</span>src/auth <mark>鉴权</mark>流程分析与重构建议<span class="mini" style="margin-left:auto">研讨中</span></div>
+      <div class="ck-item" onclick="closeCmdk();switchView('tasks')"><span class="tag t-gray num">#10</span>README 安装步骤更新<span class="mini" style="margin-left:auto">待审阅</span></div>
+      <div class="ck-sec">消息</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('chat')"><span class="av xs c-codex2">2</span>「<mark>鉴权</mark>滑动窗口的被盗风险」— Codex-2 · 任务 #12<span class="mini" style="margin-left:auto">09:34</span></div>
+      <div class="ck-sec">成员</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('members')"><span class="av xs c-claude">C</span>Claude · 协调者</div>
+      <div class="ck-item" onclick="closeCmdk();switchView('members')"><span class="av xs c-codex">K</span>Codex</div>
+    </div>
+  </div>
+</div>
+
+<!-- 启动恢复询问（E7） -->
+<div class="overlay" id="resumeModal">
+  <div class="modal">
+    <h3>欢迎回来</h3>
+    <p class="mp">上次退出时有 <b>2 个任务未完成</b>。恢复 ≠ 自动派发：选择「继续」后才会创建新运行，不会悄悄消耗模型调用（E7 · 决策 44）。</p>
+    <div class="resume-task"><span class="pill p-run"><span class="d"></span>研讨中</span><span>#12 src/auth 鉴权流程分析 · 停在分歧讨论第 2 轮</span></div>
+    <div class="resume-task"><span class="pill p-wait"><span class="d"></span>待确认</span><span>#10 README 更新 · Codex 请求扩大范围</span></div>
+    <div class="mrow"><button class="btn" onclick="closeResume();toast('已搁置，可在任务看板随时继续')">稍后处理</button><button class="btn primary" onclick="closeResume();toast('已为选中任务创建承接运行')">继续这 2 个任务</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// 主题切换（浅色/深色）
+function toggleTheme(){
+  const h=document.documentElement;
+  const dark=h.dataset.theme==='dark';
+  h.dataset.theme=dark?'light':'dark';
+  document.querySelector('#themeIco use').setAttribute('href',dark?'#i-moon':'#i-sun');
+  toast(dark?'已切到浅色主题':'已切到深色主题');
+}
+// 视图切换
+const navItems=document.querySelectorAll('.sb-item[data-view]');
+function switchView(name){
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+name));
+  navItems.forEach(i=>i.classList.toggle('active',i.dataset.view===name));
+}
+navItems.forEach(i=>i.addEventListener('click',()=>switchView(i.dataset.view)));
+// 线程开合：打开时对话池收窄
+function openThread(){document.getElementById('thread').classList.add('open');document.getElementById('pool').classList.add('shrunk')}
+function closeThread(){document.getElementById('thread').classList.remove('open');document.getElementById('pool').classList.remove('shrunk')}
+// 线程详情抽屉
+function toggleDetail(){document.getElementById('thDetail').classList.toggle('open')}
+// 任务/讨论切换
+function segSel(btn){btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');toast(btn.textContent==='讨论'?'已切到「讨论」：保存但不调用模型（E1 可开回复串）':'已切到「任务」：按 @ 结构自动路由')}
+// Ctrl+K
+const cmdk=document.getElementById('cmdk');
+function openCmdk(){cmdk.classList.add('open');setTimeout(()=>document.getElementById('cmdkInput').focus(),30)}
+function closeCmdk(){cmdk.classList.remove('open')}
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();cmdk.classList.contains('open')?closeCmdk():openCmdk()}
+  if(e.key==='Escape'){closeCmdk();closeResume()}
+});
+// 恢复弹窗
+function closeResume(){document.getElementById('resumeModal').classList.remove('open')}
+// toast
+let tt;function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2600)}
+// 深链
+const q=new URLSearchParams(location.search);
+if(q.get('resume')==='1')document.getElementById('resumeModal').classList.add('open');
+if(q.get('view'))switchView(q.get('view'));
+if(q.get('thread')==='0')closeThread();
+if(q.get('theme')==='dark')toggleTheme();
+</script>
+</body>
+</html>

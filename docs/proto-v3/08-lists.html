@@ -1,0 +1,51 @@
+<style>
+/* 列表页（动态/收藏/成员/计算机） */
+.list-page{flex:1;display:flex;flex-direction:column;min-width:0}
+.list-head{flex:none;padding:15px 20px 0}
+.list-head h2{font-size:17px;font-weight:800}
+.tabs{display:flex;gap:2px;margin-top:11px;border-bottom:1px solid var(--border)}
+.tab{padding:7px 13px;font-size:12.5px;color:var(--ink2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:600}
+.tab.on{color:var(--accent-ink);border-bottom-color:var(--accent);font-weight:800}
+.list-body{flex:1;overflow-y:auto;padding:13px 20px;display:flex;flex-direction:column;gap:8px}
+.feed{display:flex;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:11px 13px;cursor:pointer}
+.feed:hover{box-shadow:var(--shadow)}
+.feed .fx{flex:1;min-width:0}
+.feed .ft1{font-size:12.5px;line-height:1.55}
+.feed .ft2{font-size:10.5px;color:var(--ink3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.udot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;margin-top:6px}
+/* 成员 */
+.mcard{display:flex;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:13px 15px;align-items:center;box-shadow:var(--shadow-s)}
+.mcard .mx{flex:1;min-width:0}
+.mcard .mn{font-size:13.5px;font-weight:800;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mcard .md{font-size:11.5px;color:var(--ink2);margin-top:3px}
+.mcard .mm{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+/* 计算机 */
+.comp-grid{flex:1;overflow-y:auto;padding:16px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px;align-content:start}
+.ccard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px;box-shadow:var(--shadow-s)}
+.ccard .ch{display:flex;align-items:center;gap:10px}
+.ccard .ci{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;color:#fff}
+.ccard .rt{margin-top:10px;display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--ink2)}
+.pair-box{margin-top:11px;border:1px dashed var(--border2);border-radius:var(--r-s);padding:10px 12px;background:var(--surface2)}
+.pair-code{font-family:"JetBrains Mono",Consolas,monospace;font-size:20px;letter-spacing:6px;font-weight:800;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin:8px 0}
+/* 设置 */
+.settings{flex:1;display:flex;min-width:0}
+.set-nav{width:196px;flex:none;border-right:1px solid var(--border);background:var(--surface2);padding:13px 8px;overflow-y:auto}
+.set-nav .si{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;font-size:12.5px;color:var(--ink2);cursor:pointer}
+.set-nav .si:hover{background:var(--hover)}
+.set-nav .si.on{background:var(--surface);font-weight:700;color:var(--ink);box-shadow:var(--shadow-s)}
+.set-body{flex:1;overflow-y:auto;padding:20px 26px;max-width:700px}
+.set-sec{margin-bottom:24px}
+.set-sec h3{font-size:14px;font-weight:800;margin-bottom:3px}
+.set-sec .sub{font-size:11.5px;color:var(--ink3);margin-bottom:11px}
+.srow{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--border)}
+.srow:last-child{border-bottom:0}
+.srow .sl{flex:1;min-width:0}
+.srow .sl .t{font-size:12.8px;font-weight:700}
+.srow .sl .d{font-size:11px;color:var(--ink3);margin-top:2px;line-height:1.5}
+.tgl{width:36px;height:20px;border-radius:99px;background:var(--border2);position:relative;cursor:pointer;flex:none;transition:.15s}
+.tgl::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.tgl.on{background:var(--accent)} .tgl.on::after{left:18px}
+.inp{height:30px;border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:12.5px;font-family:inherit;background:var(--surface);color:var(--ink);outline:none}
+.inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}
+select.inp{cursor:pointer}
+</style>

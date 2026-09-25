@@ -1,0 +1,43 @@
+        <!-- 线程面板：主区，头部信息折叠 -->
+        <div class="thread open" id="thread">
+          <!-- 一行顶部条 -->
+          <div class="th-top">
+            <span class="ti">任务 #12</span>
+            <span class="tag t-delib">共同研讨 · @全体</span>
+            <span class="pill p-run"><span class="d"></span>进行中</span>
+            <span class="sub num">143 条回复 · 3 位参与者 · 预算 14/23</span>
+            <div class="acts">
+              <button class="ibtn" id="detailToggle" title="任务详情（参与者/基线/子任务）" onclick="toggleDetail()"><svg><use href="#i-eye"/></svg></button>
+              <button class="ibtn" title="研讨详情（阶段矩阵/争议）" onclick="switchView('dd')"><svg><use href="#i-flag"/></svg></button>
+              <button class="ibtn" title="暂停后续阶段（不打断当前工具）"><svg><use href="#i-pause"/></svg></button>
+              <button class="ibtn" title="停止任务" style="color:var(--red)"><svg><use href="#i-stop"/></svg></button>
+              <button class="ibtn" title="收起线程" onclick="closeThread()"><svg><use href="#i-x"/></svg></button>
+            </div>
+          </div>
+          <!-- 阶段胶囊条（一行） -->
+          <div class="stage-strip">
+            <span class="stp done"><span class="n"><svg width="9" height="9"><use href="#i-check"/></svg></span>准备</span><span class="stp-arrow">›</span>
+            <span class="stp done"><span class="n"><svg width="9" height="9"><use href="#i-check"/></svg></span>独立 3/3</span><span class="stp-arrow">›</span>
+            <span class="stp done"><span class="n"><svg width="9" height="9"><use href="#i-check"/></svg></span>互评 3/3</span><span class="stp-arrow">›</span>
+            <span class="stp now"><span class="n">2</span>分歧讨论 · 第 2 轮</span><span class="stp-arrow">›</span>
+            <span class="stp"><span class="n">5</span>整合</span><span class="stp-arrow">›</span>
+            <span class="stp"><span class="n">6</span>确认</span><span class="stp-arrow">›</span>
+            <span class="stp"><span class="n">7</span>发布</span>
+            <span class="strip-sep"></span>
+            <span class="strip-info" title="正在跟进；移出 = 停止自动唤醒，可再 @ 回">👀
+              <span class="avs"><span class="av xs c-claude">C</span><span class="av xs c-codex">K</span><span class="av xs c-codex2">2</span></span>
+            </span>
+            <span class="strip-info" title="核心 6N+1 · 含修订 7N+2，已为整合与确认预留尾部配额"><span class="budget"><i style="width:61%"></i></span><b class="num">14/23</b></span>
+            <span class="strip-info" title="Git HEAD 3e9b1c · 42 文件 · 含未提交修改">基线 <span class="mono" style="padding:0 5px">a4f2</span></span>
+          </div>
+          <!-- 可展开详情抽屉（默认折叠） -->
+          <div class="th-detail" id="thDetail">
+            <div class="td-grid">
+              <div class="td-row"><span class="k">锚定消息</span><span style="color:var(--ink2)">@全体 分析 src/auth 鉴权流程，给出重构建议（09:12）</span></div>
+              <div class="td-row"><span class="k">参与者</span><span class="avs" style="align-items:center"><span class="av xs c-claude">C</span><span class="av xs c-codex">K</span><span class="av xs c-codex2">2</span></span><span style="color:var(--ink2)">名单已冻结（3 人）</span></div>
+              <div class="td-row"><span class="k">子任务</span><span class="link" onclick="toast('输入框锚定 → 子任务 #12-1（E3 定向跟进）')">#12-1 令牌刷新路径</span><span class="link" onclick="toast('→ 子任务 #12-2')">#12-2 会话过期边界</span></div>
+              <div class="td-row"><span class="k">预算推导</span><span style="color:var(--ink2)">核心 6N+1、含修订 7N+2（E12）· SYNTHESIS/RATIFY 预留尾部配额</span></div>
+              <div class="td-row"><span class="k">分析基线</span><span class="mono">baseline:a4f2</span><span style="color:var(--ink2)">Git HEAD 3e9b1c · 42 文件 · 内容散列一致</span></div>
+              <div class="td-row"><span class="k">隔离</span><span style="color:var(--ink2)">首轮独立会话，互不见他人初稿（U08）· 阶段屏障由 daemon 控制</span></div>
+            </div>
+          </div>

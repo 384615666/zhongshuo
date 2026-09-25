@@ -1,0 +1,35 @@
+# 众说工作区（docs + hifi-prototype 原型）——忽略规则
+#
+# 口径与 hifi-prototype/.gitignore 一致：**依赖、构建产物、运行日志、快照副本、
+# 可重新生成的截图证据**不进版本库；其余文本（源码/脚本/文档/配置）全部纳入。
+
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+*.tsbuildinfo
+
+# 运行日志与临时文件
+*.log
+
+# 无 Git 时期的快照副本（体积大、内容与当时源码重复；历史已由 Git 承担）
+# 例：archive/prototype-v1.8 内含 452MB node_modules
+archive/
+
+# 截图与一次性视觉证据：都可由 scripts/*.mjs（shot-*.mjs / capture-*.mjs）重新生成
+screenshots/
+screenshots-desktop/
+screenshots-visual/
+screenshots-preview/
+screenshots-desktop-preview/
+gui-test-screenshots/
+design-shootout/_shots/
+
+# 编辑器 / 工具自身的状态目录（不是项目内容）
+.obsidian/
+.qoder/
+docs/.qoder/
+
+# 操作系统噪声
+.DS_Store
+Thumbs.db

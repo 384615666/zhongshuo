@@ -1,0 +1,33 @@
+{
+  "name": "zhongshuo-hifi-prototype",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "众说桌面客户端高保真原型（Electron + React，依据开发设计报告 v1.9）",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "desktop": "electron .",
+    "desktop:debug": "electron . --remote-debugging-port=9333",
+    "desktop:dev": "concurrently -k -n vite,electron -c cyan,magenta \"vite --port 5300 --strictPort\" \"wait-on tcp:127.0.0.1:5300 && cross-env ZS_DEV_URL=http://localhost:5300 electron .\"",
+    "shot": "node scripts/shot.mjs",
+    "shot:desktop": "node scripts/shot-desktop.mjs"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "concurrently": "9.1.0",
+    "cross-env": "7.0.3",
+    "electron": "33.4.11",
+    "typescript": "5.6.3",
+    "vite": "5.4.11",
+    "wait-on": "8.0.1"
+  }
+}
