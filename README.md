@@ -30,6 +30,7 @@
 ## 仓库（Git，2026-09-25 初始化）
 
 - **仓库根 = 本目录 `D:\zhongshuo`**（设计资料 + 原型同仓），分支 `main`；初始提交 `84a2250`「chore: 初始化仓库，导入当前工作区状态」。
+- **远端**：GitHub **私有**仓库 <https://github.com/384615666/zhongshuo>（账号 `384615666`，用 `gh auth login` 登录；2026-09-25 首次推送，`origin/main` 与本地 `main` 同 commit）。新克隆：`git clone https://github.com/384615666/zhongshuo.git && cd zhongshuo/hifi-prototype && pnpm install && pnpm run build`。
 - **纳入版本库**：`docs/`（设计报告、决策清单、任务书与施工报告等文本与设计资产）、`hifi-prototype/`（源码 `src/`、回归脚本 `scripts/`、Electron 宿主 `electron/`、配置与 README）、`design-shootout/` 与 `prototype/` 的内容部分。
 - **有意忽略**（见根 `.gitignore`）：`node_modules/`、`dist/` 构建产物、`*.log`、`archive/`（无 Git 时期的大体量快照副本，含 452MB node_modules）、各截图目录与 `gui-test-screenshots/`（都可由 `scripts/shot-*.mjs` 重新生成）、`.obsidian/`、`.qoder/`。
 - **拿到新克隆后**：`cd hifi-prototype && pnpm install && pnpm run build` —— `dist/` 与 `node_modules/` 不入库，Electron 宿主跑的是构建产物。
