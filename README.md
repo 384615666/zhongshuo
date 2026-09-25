@@ -18,7 +18,7 @@
 
 ## 权威文档
 
-- [docs/zhongshuo-development-design-v1.md](docs/zhongshuo-development-design-v1.md) — 开发设计报告，**唯一权威版本**（文件名中的 v1 保持稳定，当前 **v1.18**；项目设置独立于应用设置，导航、文件/Git 合页、项目分组看板和可选验收沿用；2026-09-25 起输入区**默认交给 AI**、私聊收敛为 1 对 1（§0.19–§0.22）。历史 B1—B5 验证不代替 B6 权限验证；E11、E13 剩余契约与 R4—R11 等工程事项仍需收口）
+- [docs/zhongshuo-development-design-v1.md](docs/zhongshuo-development-design-v1.md) — 开发设计报告，**唯一权威版本**（文件名中的 v1 保持稳定，当前 **v1.21**；项目设置独立于应用设置，导航、文件/Git 合页、项目分组看板和可选验收沿用；2026-09-25 起输入区**默认交给 AI**、私聊收敛为 1 对 1（§0.19–§0.22）；同日新增 **§31 MCP 接入层**（E25/ADR-16/RT-28/FULL-11，不进 v0.1、预留条款即时生效），**v1.20/v1.21 已吸收三轮外部评审修订**——协议勘误、Tasks/MRTR 采用边界（首批不采用）、身份/授权契约与提交型工具幂等键收口（§0.24/§0.25）。历史 B1—B5 验证不代替 B6 权限验证；E11、E13 剩余契约与 R4—R11 等工程事项仍需收口）
 - [docs/product-decisions-guide.md](docs/product-decisions-guide.md) — 产品决策指南（48 项逐项讲解：背景/选项/优劣/推荐）
 - [docs/product-decisions-checklist.md](docs/product-decisions-checklist.md) — 产品行为与功能待确认清单（48 项，含确认记录；原始清单，已加历史提示）
 - [docs/pre-development-checklist.md](docs/pre-development-checklist.md) — 正式开发前待办清单
@@ -60,6 +60,6 @@
 ### 共享文件预览原型施工（2026-09-22 已确认）
 
 - [原型施工说明](docs/dev-briefs/prototype-workspace-preview.md) — 直接交施工 AI，修改现有 hifi-prototype；实际代码和验证交付。
-- [交互规格 v1.2](docs/zhongshuo-workspace-preview-interaction-v1.md) — 开发报告 v1.15 §17.9 配套细则。具体文件正文使用共享预览，主池/线程/私信入口均覆盖；宽度候选仍需实测。
+- [交互规格 v1.2](docs/zhongshuo-workspace-preview-interaction-v1.md) — §17.9 配套细则（v1.15 时并入主设计，此版本号为历史基线）。具体文件正文使用共享预览，主池/线程/私信入口均覆盖；宽度候选仍需实测。
 
 既有 README/历史规范中“成果正文仅在串内 tab”描述由 §17.9 部分替换，非文件详情、线程隔离、权限和正式工程门槛不变。
