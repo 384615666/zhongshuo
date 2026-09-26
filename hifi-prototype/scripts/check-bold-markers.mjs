@@ -48,9 +48,15 @@ const routes = [
   ['项目设置·任务交付', '/project/proj_zs_01/settings?anchor=delivery'],
   ['项目设置·协作限制', '/project/proj_zs_01/settings?anchor=collab'],
   ['项目设置·文件修改', '/project/proj_zs_01/settings?anchor=write'],
+  /* 路由更新（第二十八批）：五分区 → 七类；旧 key（lan / diagnostics）仍可用，
+     但地面真相应查**新分区**，否则新增文案没人看。 */
   ['应用设置·通用', '/settings?section=general'],
-  ['应用设置·设备', '/settings?section=lan'],
-  ['应用设置·诊断', '/settings?section=diagnostics'],
+  ['应用设置·外观', '/settings?section=appearance'],
+  ['应用设置·通知', '/settings?section=notifications'],
+  ['应用设置·AI 工具', '/settings?section=runtime'],
+  ['应用设置·连接与设备', '/settings?section=connections'],
+  ['应用设置·数据与存储', '/settings?section=data'],
+  ['应用设置·帮助与关于', '/settings?section=help'],
   ['待我处理', '/activity'],
   ['任务看板', '/tasks?scope=all'],
   ['房间', '/project/proj_zs_01/room/room_dev_hall'],

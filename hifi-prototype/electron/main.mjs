@@ -255,6 +255,21 @@ ipcMain.handle('zs:open-external', async (_e, url) => {
   return true;
 });
 
+/**
+ * 真实的应用数据目录（应用设置 → 数据与存储 → 打开目录）。
+ *
+ * 为什么单独开一个只读通道：界面显示的 `<appData>/zhongshuo/` 是文档口径，
+ * 而「打开目录」必须真的能打开一个存在的目录（§2.4：不能让按钮变成假成功）。
+ * `app.getPath('userData')` 就是这台机器上真实存在的数据目录。
+ */
+ipcMain.handle('zs:app-data-dir', () => {
+  try {
+    return app.getPath('userData');
+  } catch {
+    return null;
+  }
+});
+
 /** 渲染层同步运行态摘要：托盘提示与退出确认都依赖它 */
 ipcMain.handle('zs:report-runtime', (_e, summary) => {
   if (summary && typeof summary === 'object') {

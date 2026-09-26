@@ -141,21 +141,24 @@
   overflow: visible;
 }
 
+/*
+ * 合页改造后本页的两栏骨架由 .fg-body 承担（见文件末尾「文件与 Git 合页」一节），
+ * .files-layout 只作为同规格兜底保留（旧截图脚本 / 独立页仍可能命中）。
+ * 左栏宽度统一成 300px：文件页与 Git 页切换时左栏不跳动。
+ */
 .files-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) 1fr;
+  grid-template-columns: 300px 1fr;
   gap: 16px;
-  align-items: start;
-}
-@media (max-width: 1100px) {
-  .files-layout {
-    grid-template-columns: 1fr;
-  }
+  align-items: stretch;
 }
 
 .files-tree {
-  max-height: 62vh;
-  overflow-y: auto;
+  /*
+   * 原来这里写死 `max-height: 62vh; overflow-y: auto` —— 与右栏的高度体系
+   * 完全无关，于是滚右侧详情会带着左栏一起走。现在高度由所在 pane 的
+   * 剩余空间决定（.fg-pane > .fg-pane-scroll），不再写死视口比例。
+   */
   padding: 10px;
 }
 .file-tree {
@@ -679,6 +682,249 @@ button.composer-target-summary:hover {
   flex: none;
 }
 
+/**
+ * 当前值列（§2.2）：值不再塞进 label 括号（如「深色外观（当前：浅色）」），
+ * 而是独立一列排在控件左边 —— 扫视时控件右对齐成一列，值也不会跟控件混在一起。
+ */
+.pset-value {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+/* 长值（成员名单、路径）：换行而不是截断（§2.1 不允许截到不可读） */
+.pset-value-wrap {
+  white-space: normal;
+  max-width: 260px;
+  text-align: right;
+  line-height: 1.6;
+}
+
+/**
+ * 控件列宽可变（§2.2 的例外条款）：路径输入、认证配置、授权范围表单
+ * 按内容需要占宽，不套用普通开关的窄列。
+ */
+.pset-row-control.wide {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* 行内"原型模拟"标记：跟在名称/按钮后面，不占一整行 */
+.pset-row-name .tag,
+.pset-row-control .tag {
+  vertical-align: middle;
+}
+
+/** 被禁用并被说明原因的控件（§2.4：禁用必须说明原因，不能只是变灰） */
+.pset-disabled {
+  display: inline-flex;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pset-row-blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--text-4);
+}
+
+/** 折叠区展开后的正文（技术详情 / 了解更多） */
+.settings-why-body {
+  margin-top: 10px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+/** 卡片级折叠组展开后的正文（原型工具 / 错误码速查） */
+.settings-collapse-body {
+  border-top: 1px solid var(--border);
+  padding: 4px 12px 12px;
+}
+
+/**
+ * 中性容器（原「高级操作」橙色分隔带，§2.6）：
+ * 危险色留给真正的危险按钮，普通说明不再占一整块警示面板 ——
+ * 大面积常驻橙色会让真正的风险提示失去分量。
+ */
+.settings-actions {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+}
+.settings-actions-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: var(--fs-12);
+  font-weight: 680;
+}
+.settings-actions-head .small {
+  font-weight: 400;
+}
+
+/** 就地权限说明（配对设备权限、MCP 未接入、故障处理）：简短、中性、不占整块 */
+.conn-perm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.7;
+}
+.conn-perm svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+
+/** 数据目录树：等宽、可滚，不撑破正文宽度 */
+.data-tree {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  line-height: 1.9;
+  overflow-x: auto;
+}
+
+/** 免打扰时段的时间输入：窄，不跟着卡片拉长 */
+.dnd-time {
+  width: 106px;
+}
+
+/** 授权范围编辑器（MCP）：项目/房间/成员的勾选清单 */
+.scope-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+}
+.scope-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+.scope-item:hover {
+  background: var(--bg-hover);
+}
+.scope-item input {
+  margin-top: 3px;
+  flex: none;
+}
+.scope-item .mono-sm {
+  margin-left: auto;
+  flex: none;
+  max-width: 55%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.scope-item-sub {
+  padding-left: 26px;
+}
+
+/** 设置搜索：输入框 + 结果列表（§3.4 的追加项） */
+.settings-search {
+  margin-bottom: 4px;
+}
+.settings-search .row {
+  position: relative;
+}
+.settings-search .input {
+  width: 100%;
+  padding-left: 26px;
+}
+.settings-search > .row > svg {
+  position: absolute;
+  left: 8px;
+  pointer-events: none;
+}
+.settings-search-clear {
+  position: absolute;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.settings-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.settings-search-hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-search-hit:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-search-hit-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/**
+ * 搜索命中后的短暂高亮：告诉用户"就是这一项"。
+ * 用 outline（不改变布局），1.8s 后由 JS 摘掉类名。
+ */
+.settings-jump-flash {
+  animation: settings-flash 1.8s ease-out;
+  border-radius: var(--r-sm);
+}
+@keyframes settings-flash {
+  0%,
+  40% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent-border);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
 .pset-divider {
   height: 1px;
   background: var(--border);
@@ -838,10 +1084,53 @@ button.composer-target-summary:hover {
    ============================================================ */
 
 .settings-layout {
+  /**
+   * 正文宽度在这里定义，`.settings-body` 取它（同一个变量，避免两处各写一个数就对不上）。
+   * 见 `.settings-body` 与 §2.1 的例外条款。
+   */
+  --settings-body-max: 880px;
+  --settings-nav-w: 200px;
+  --settings-gap: 22px;
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 22px;
+  grid-template-columns: var(--settings-nav-w) minmax(0, 1fr);
+  gap: var(--settings-gap);
   align-items: start;
+  /**
+   * 居中与最大宽度（§2.1，第二十八批）：
+   * 参照物是项目设置的 `.pset { max-width: 920px }` —— 应用设置此前**没有任何宽度约束**，
+   * 1440px 窗口下正文横跨整个主内容区，一行开关配一整屏宽的白卡。
+   *
+   * max-width 取「导航 + 间距 + 正文」的和：这样**看得见的内容**（导航到正文右缘）
+   * 在主内容区里正好居中，而不是"容器居中了但正文右边缘还空一大块"。
+   * 数值来自六档窗口实测（1920/1600/1440/1280/1100/900），见施工报告。
+   */
+  max-width: calc(var(--settings-nav-w) + var(--settings-gap) + var(--settings-body-max));
+  margin-inline: auto;
+}
+
+/* 常规设置正文的最大宽度（见 `.settings-body` 与 §2.1 的例外条款） */
+
+/* 嵌入的归档管理：日期/项目分组卡片按内容占宽 */
+/**
+ * 归档管理筛选行（§2.3）：搜索框与项目下拉**同高同宽基准**。
+ * 原实现搜索框很窄、项目下拉拉满全宽，同一行控件宽度不统一；窄窗下允许换行。
+ */
+.archive-filters .archive-filter-search {
+  flex: 0 1 260px;
+  min-width: 170px;
+}
+.archive-filters .archive-filter-project {
+  flex: 0 0 auto;
+  width: 180px;
+  min-width: 140px;
+  max-width: 100%;
+}
+@media (max-width: 620px) {
+  .archive-filters .archive-filter-search,
+  .archive-filters .archive-filter-project {
+    flex: 1 1 100%;
+    width: auto;
+  }
 }
 
 /* 左栏：分区导航。粘住顶部，内容长了也不用滚回去点分区 */
@@ -932,7 +1221,21 @@ button.composer-target-summary:hover {
 }
 
 .settings-body {
+  /**
+   * 常规设置正文的最大宽度（§2.1）：与项目设置的 `.pset { max-width: 920px }` 同量级，
+   * 窄窗下自动缩到可用宽度 —— 控件换行，标签不挤压。
+   * 表格、日志、运行记录、错误码表按 §2.1 的例外条款不受它约束（标 `.settings-wide`）。
+   */
   min-width: 0;
+  max-width: var(--settings-body-max);
+}
+
+/**
+ * 宽表 / 长内容例外（§2.1）：表格与日志**保留自身横向滚动**，
+ * 不为了对齐而压缩正文，也不为了让正文变宽把表格挤成不可读。
+ */
+.settings-body .settings-wide {
+  overflow-x: auto;
 }
 
 /* 分区标题：一句话说明这一节是干什么的 */
@@ -998,8 +1301,11 @@ button.composer-target-summary:hover {
   font-weight: 400;
 }
 
-/* 窄窗：左栏导航改为横向排布，避免把内容挤成一条缝 */
-@media (max-width: 860px) {
+/* 窄窗：左栏导航改为横向排布，避免把内容挤成一条缝。
+   阈值 980px（第二十八批从 860 上调）：主内容区还要减去主侧栏约 250px，
+   所以"视口 900 时正文只剩 374px"，行内说明被挤成多行 —— 此时改单列，
+   正文拿到整个主内容区宽度（实测 900 档：单列后正文 606px）。 */
+@media (max-width: 980px) {
   .settings-layout {
     grid-template-columns: 1fr;
     gap: 14px;
@@ -1032,6 +1338,10 @@ button.composer-target-summary:hover {
   }
   .settings-nav-foot {
     display: none;
+  }
+  /* 单列时导航变成横向流：搜索框占满一整行，不然只剩一百多像素 */
+  .settings-search {
+    flex: 1 1 100%;
   }
 }
 
@@ -2306,3 +2616,286 @@ button.composer-target-summary:hover {
     transform: none;
   }
 }
+
+/* ============================================================
+   文件与 Git 合页：状态条 + 左清单 / 右详情（本轮布局改造）
+
+   2026-09-26 交互收尾（滚动 / 选择 / diff 阅读 / 提交复核）：
+   本页**不再以"全页只有一条滚动条"为目标**。此页要的是"左边选对象、
+   右边看详情"互不干扰 —— 所以两栏各自一条纵向滚动条，滚一侧不动另一侧。
+
+   高度契约（不用 62vh 之类写死值）：
+     .main(overflow:hidden)
+       └ .page.fg-page        flex 列、**自身不滚动**、吃掉 .main 全部高度
+           ├ .page-head       flex:none
+           ├ .thread-tabs     flex:none
+           ├ .fg-statusbar    flex:none
+           └ .fg-body         flex:1; min-height:0 —— 剩余高度全给它
+               ├ .fg-pane（左）flex 列：.fg-pane-head 常驻 + .fg-pane-scroll 滚动
+               └ .fg-pane（右）同上
+   每个 flex 项都带 min-height:0，否则内容会把容器撑开、滚动条落在 .page 上。
+
+   原来这里有一处真实缺陷：.thread-tabs / .fg-statusbar / .git-prepare 三个元素
+   都用 `position: sticky; top: 0`，只是 z-index 不同 —— 它们会叠在同一条线上
+   互相遮挡。本轮不再靠"提高 z-index"或"再给一个 top 值"打补丁，
+   而是让页面本身不滚动：吸顶失去意义，三者各自在 flex 流里占自己的位置。
+   ============================================================ */
+
+/* 状态条：全页状态只在这一条里说一遍。
+   页面本身不再滚动，所以不需要 sticky —— 它就在自己的位置上一行。 */
+.fg-statusbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.5;
+  flex: none;
+}
+.fg-sep {
+  width: 1px;
+  height: 11px;
+  background: var(--border);
+  flex: none;
+}
+
+/* 本页的 .page 变体：**只有**加了 .fg-page 的这一页不整体滚动。
+   房间 / 线程 / 私信 / 看板用的还是普通 .page，行为不受影响。 */
+.fg-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+.fg-page > * { flex: none; }
+.fg-page > .fg-body,
+.fg-page > .git-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 两栏骨架：左 300px 清单 + 右 1fr 详情。
+   文件页与 Git 页用同一套比例，切换顶层标签时左栏不跳动、分隔线位置一致。 */
+.fg-body,
+.git-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * 窄窗口：不再把完整长列表垂直堆在详情上方。
+ * 改为"列表 → 详情 → 返回列表"：一次只显示一栏，
+ * 选中项与列表滚动位置由 JS 记住（见 useNarrowPane）。
+ */
+.fg-body.narrow,
+.git-layout.narrow { grid-template-columns: 1fr; }
+.fg-body.narrow[data-pane='list'] > .fg-pane-detail,
+.git-layout.narrow[data-pane='list'] > .fg-pane-detail,
+.fg-body.narrow[data-pane='detail'] > .fg-pane-list,
+.git-layout.narrow[data-pane='detail'] > .fg-pane-list { display: none; }
+
+/* 一栏 = 一个 flex 列：头部常驻（视图切换不会被滚走），
+   下方 .fg-pane-scroll 吃掉剩余高度并独立滚动。 */
+.fg-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.fg-pane-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.fg-pane-head.row { flex-direction: row; align-items: center; }
+/* 右栏唯一的纵向滚动容器 —— 预览与 diff 不再各自再套一层 */
+.fg-pane-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain; /* 滚到底不把外层带着走 */
+  padding: 12px;
+}
+/* 共享预览直接当右栏滚动宿主：它内部的 .preview-body 才是那一条滚动条 */
+.fg-pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fg-pane-body > .preview-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-left: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.git-list {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.git-list-head { flex: none; padding: 10px 10px 0; }
+.git-list-body { display: flex; flex-direction: column; gap: 14px; }
+.git-list-sec { min-width: 0; }
+.git-list-sec .section-title { margin-bottom: 6px; }
+
+/* 左栏一行：状态点 + 路径（截断）+ 等宽数字右对齐 */
+.git-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.git-list-row:hover { background: var(--bg-hover); color: var(--text); }
+.git-list-row.on {
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+}
+/*
+ * 带行内操作（取消暂存）的行：主区与操作区是**兄弟**元素，
+ * 点主区 = 选中该文件；点操作 = 取消暂存。
+ * 不能把按钮嵌在按钮里，也不能让"取消暂存"跟"选中"抢同一次点击。
+ */
+.git-list-row.wrap { padding: 0 4px 0 0; gap: 0; }
+.git-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-list-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-list-num {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--text-3);
+}
+.git-list-num.add { color: var(--success); }
+.git-list-num.del { color: var(--danger); }
+.git-row-act { padding: 0 4px; flex: none; }
+
+/* 状态点：形状相同、只靠颜色区分，配合 title 说明（不靠颜色单独表意） */
+.git-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-4);
+}
+.git-dot.modified { background: var(--warning); }
+.git-dot.added { background: var(--success); }
+.git-dot.deleted { background: var(--danger); }
+.git-dot.renamed { background: var(--info); }
+.git-dot.untracked { background: var(--text-4); }
+.git-dot.conflicted { background: var(--danger); }
+
+/* 任务分组头：标题一行、操作一行（按钮常驻，不靠悬浮才出现） */
+.git-task { margin-bottom: 8px; }
+.git-task-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 常驻的短说明（§14.2 那句不能跟着折叠收起） */
+.git-note {
+  margin: 2px 8px 4px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.git-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.git-detail-scroll > .card { margin-bottom: 12px; }
+.git-detail-scroll > .card:last-child { margin-bottom: 0; }
+
+/*
+ * 准备提交：常驻右栏顶部（flex:none，不 sticky）。
+ * 它在 flex 流里占自己的位置，所以**不会盖住正文**，
+ * 也不需要靠 z-index 去压住谁；暂存区为空时整块收成一行提示。
+ */
+.git-prepare {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+}
+.git-prepare-idle { padding: 8px 12px; }
+
+/*
+ * 改动集详情里的次要引用区：小字、弱色、排在主信息之后。
+ * 不折叠 —— 前像口径是如实披露（§14.3 / RT-26⑫），藏起来会让人误以为没有前像。
+ */
+.cs-refs {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.cs-refs-title { font-size: var(--fs-11); color: var(--text-3); margin-bottom: 4px; }
+.cs-refs .kv { font-size: var(--fs-11); color: var(--text-3); }

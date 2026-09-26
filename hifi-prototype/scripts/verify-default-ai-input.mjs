@@ -225,7 +225,12 @@ async function readWriteLog() {
   await sleep(300);
   return rows;
 }
-const topBar = `document.querySelector('.tb-right')?.innerText.replace(/\\n/g, ' ').trim() ?? ''`;
+// 顶栏已移除，不能用缺失节点的 -1 === -1 证明没有创建任务。
+const executionInventory = `(async () => {
+  const { getState } = await import('/src/data/store.ts');
+  const s = getState();
+  return { tasks: s.tasks.map(t => t.id).sort(), runs: s.runs.map(r => r.id).sort(), turns: s.turns.map(t => t.id).sort() };
+})()`;
 
 /* ============================================================
    1. 主池：普通发送 = 交给 AI（新建根任务）
@@ -308,7 +313,7 @@ check('@全体 发送后按既有规则创建共同研讨任务', /（DELIBERATE
    ============================================================ */
 await reset(ROOM);
 const logBefore = await readWriteLog();
-const tasksBefore = Number((await ev(topBar)).match(/后台任务\s*(\d+)/)?.[1] ?? -1);
+const tasksBefore = await ev(executionInventory);
 const cardsBeforeRecord = await ev(`document.querySelectorAll('.col-main .root-card').length`);
 const rec = await chooseRecord('.col-main');
 check('⋯ 菜单里有「仅记录，不请求回复」入口', rec.clicked === true && rec.items.some((t) => t.includes('仅记录')), JSON.stringify(rec.items));
@@ -359,8 +364,12 @@ check(
   recordSave.记录卡 === true && /已保存记录/.test(recordSave.toast ?? '') && recordSave.根卡数 === cardsBeforeRecord + 1,
   JSON.stringify(recordSave),
 );
-const tasksAfter = Number((await ev(topBar)).match(/后台任务\s*(\d+)/)?.[1] ?? -1);
-check('仅记录不创建运行：顶部"后台任务"计数不变', tasksAfter === tasksBefore, `${tasksBefore} → ${tasksAfter}`);
+const tasksAfter = await ev(executionInventory);
+check('仅记录不创建任务/运行/turn：真实内存实体 ID 集合不变',
+  Array.isArray(tasksBefore?.tasks) && tasksBefore.tasks.length > 0
+    && Array.isArray(tasksBefore?.runs) && Array.isArray(tasksBefore?.turns)
+    && JSON.stringify(tasksAfter) === JSON.stringify(tasksBefore),
+  JSON.stringify({ before: tasksBefore, after: tasksAfter }));
 
 const logAfter = await readWriteLog();
 const newRows = logAfter.slice(0, Math.max(0, logAfter.length - logBefore.length));

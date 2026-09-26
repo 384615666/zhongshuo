@@ -18,7 +18,9 @@
 
 ## 权威文档
 
-- [docs/zhongshuo-development-design-v1.md](docs/zhongshuo-development-design-v1.md) — 开发设计报告，**唯一权威版本**（文件名中的 v1 保持稳定，当前 **v1.21**；项目设置独立于应用设置，导航、文件/Git 合页、项目分组看板和可选验收沿用；2026-09-25 起输入区**默认交给 AI**、私聊收敛为 1 对 1（§0.19–§0.22）；同日新增 **§31 MCP 接入层**（E25/ADR-16/RT-28/FULL-11，不进 v0.1、预留条款即时生效），**v1.20/v1.21 已吸收三轮外部评审修订**——协议勘误、Tasks/MRTR 采用边界（首批不采用）、身份/授权契约与提交型工具幂等键收口（§0.24/§0.25）。历史 B1—B5 验证不代替 B6 权限验证；E11、E13 剩余契约与 R4—R11 等工程事项仍需收口）
+- **2026-09-26 开工基线 v1.23**：[契约与收口](docs/development-baseline-v1.23.md)、[137 项分批与发布依赖](docs/development-delivery-matrix-v1.23.md)。R4/R5/R6/E11/MCP 预留/LAN 已完成设计，DEV-01 同步；B6、真实 M0 与原生模块仍须实施验证，不能把文档当运行证据。
+
+- [docs/zhongshuo-development-design-v1.md](docs/zhongshuo-development-design-v1.md) — 开发设计报告，**唯一权威版本**（文件名中的 v1 保持稳定，当前 **v1.23**；2026-09-26 新增 §14.7：多 Agent 并行写入增强**已延期、未批准施工**，当前以同一物理目录默认单写者完成闭环，探索记录见 [docs/zhongshuo-parallel-write-exploration-v1.md](docs/zhongshuo-parallel-write-exploration-v1.md)，候选设计稿见 [docs/zhongshuo-parallel-write-intent-gate-v1.md](docs/zhongshuo-parallel-write-intent-gate-v1.md)（已标注延期）；项目设置独立于应用设置，导航、文件/Git 合页、项目分组看板和可选验收沿用；2026-09-25 起输入区**默认交给 AI**、私聊收敛为 1 对 1（§0.19–§0.22）；同日新增 **§31 MCP 接入层**（E25/ADR-16/RT-28/FULL-11，不进 v0.1、预留条款即时生效），**v1.20/v1.21 已吸收三轮外部评审修订**——协议勘误、Tasks/MRTR 采用边界（首批不采用）、身份/授权契约与提交型工具幂等键收口（§0.24/§0.25）。历史 B1—B5 验证不代替 B6 权限验证；E11/E13 与 R4—R11 的工程设计已由 v1.23 收口，代码/schema 和真实验证按工作包完成）
 - [docs/product-decisions-guide.md](docs/product-decisions-guide.md) — 产品决策指南（48 项逐项讲解：背景/选项/优劣/推荐）
 - [docs/product-decisions-checklist.md](docs/product-decisions-checklist.md) — 产品行为与功能待确认清单（48 项，含确认记录；原始清单，已加历史提示）
 - [docs/pre-development-checklist.md](docs/pre-development-checklist.md) — 正式开发前待办清单

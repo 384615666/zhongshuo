@@ -172,7 +172,18 @@ export interface RuntimeInstallation {
   executable: string;
   version: string;
   adapterVersion: string;
+  /**
+   * 综合可用性（一个运行时的总体结论）。**不要用它反推单项状态**：
+   * 「不可用」不等于「未安装」—— 未登录、协议不兼容、还没验证都会是"不可用"。
+   * 单项状态由下面三个字段分别记录（§4.1 要求安装/认证/验证分开显示）。
+   */
   health: 'ready' | 'not_installed' | 'not_logged_in' | 'unverified' | 'incompatible';
+  /** 安装状态：可执行文件是否存在（检测不到时如实写 unknown，不猜） */
+  installState: 'installed' | 'not_installed' | 'unknown';
+  /** 认证状态：账号/订阅是否仍有效 */
+  authState: 'logged_in' | 'not_logged_in' | 'expired' | 'unknown';
+  /** 能力验证状态（与 §19 的 C0—C4 对应） */
+  verifyState: 'verified' | 'unverified' | 'incompatible';
   /** 能力协商结果；界面按真实能力显示，不承诺做不到的隔离（§9.3/ADR-14） */
   capabilities: {
     streaming: boolean;
@@ -1045,6 +1056,74 @@ export interface PairedDevice {
   tokenPrefix: string;
 }
 
+/* ============================================================
+   执行工具的接入配置（§4.1「工具配置」）
+   ============================================================ */
+
+/**
+ * 一个 runtime 的接入配置：**可执行文件位置、认证方式、连接配置**。
+ *
+ * 为什么要有它：原实现里"工具"只有一份检测报告 —— 用户看得到"不可用"，
+ * 却没有任何地方能改路径或换认证方式。§4.1 要求从"检测报告"改成"配置流程"，
+ * 这一份就是那个流程的落地物（原型写内存值，正式实现写本机配置）。
+ */
+export interface RuntimeConfig {
+  runtimeId: string;
+  /** 可执行文件位置（绝对路径） */
+  executablePath: string;
+  /** 认证方式：订阅（复用登录态）或 API key（密钥存在 CLI 自己的凭据存储） */
+  authMode: 'subscription' | 'api-key';
+  /** 连接配置：传给 CLI 的启动参数（如 App Server 端口） */
+  connectionArgs: string;
+  updatedAt: number;
+}
+
+/* ============================================================
+   外部 AI 连接（MCP，§31.5）
+   ============================================================ */
+
+/**
+ * 操作集（§31.5 授权范围四项之一）。
+ *
+ * 为什么不按 12 个工具名逐个开关：用户要判断的是"这个外部助手能做什么"，
+ * 不是"它能不能调 tasks_steer"。这里按**四类动作**分组，具体工具名在技术详情里
+ * 逐条列出，与 §31.3 的首批工具面一一对应。
+ */
+export type McpOperation = 'read' | 'task.write' | 'task.stop' | 'message.send';
+
+/**
+ * 一个外部 AI 连接（`external_connections` + `external_grants`，§31.8）。
+ *
+ * 与 `PairedDevice` **刻意分成两份数据**：设备配对（§8.3）授予的是"和本机一样"的
+ * 全权，MCP 连接授予的是四维受限范围 —— 两套权限模型，不混成一张"已连接客户端"列表（§3.1）。
+ */
+export interface McpConnection {
+  id: string;
+  /** 客户端名称（用户可改，如「Claude Desktop」） */
+  name: string;
+  /** 客户端类型说明：传输与认证方式 */
+  clientType: string;
+  transfer: 'stdio' | 'http';
+  tokenPrefix: string;
+  createdAt: number;
+  revokedAt?: number;
+  lastActiveAt: number;
+  /** 累计调用数（§31.5 连接列表三项之一，别漏中间那项） */
+  callCount: number;
+  /** 授权范围：项目/房间集合 × 操作集 × 可调度成员 × 预算上限 */
+  scope: {
+    /** 项目 id 或 `room:<roomId>`；空数组 = 未授予范围，连接不可用 */
+    targets: string[];
+    operations: McpOperation[];
+    /** 可调度成员集合，是该连接发起工作链（子任务/交接/互唤）的硬上限 */
+    memberIds: string[];
+    /** 预算上限（次调用，跨任务累计）；null = 未设上限 */
+    budgetCapCalls: number | null;
+    /** 已用调用数（扣减与派发同事务原子进行，§31.5） */
+    usedCalls: number;
+  };
+}
+
 export interface DiagnosticRecord {
   id: string;
   at: number;
@@ -1148,6 +1227,10 @@ export interface AppState {
   attention: AttentionItem[];
   reminders: PendingReminder[];
   devices: PairedDevice[];
+  /** 执行工具的接入配置（按 runtimeId 索引，§4.1） */
+  runtimeConfigs: Record<string, RuntimeConfig>;
+  /** 外部 AI 连接（MCP，§31.5）：与 `devices` 是两套权限模型，分开存、分组展示 */
+  mcpConnections: McpConnection[];
   diagnostics: DiagnosticRecord[];
   startupRecovery: StartupRecovery;
   /** 线程阅读水位：thread_read_states */
@@ -1216,6 +1299,12 @@ export interface AppState {
     keepInTray: boolean;
     /** 重启后自动继续未完成任务（默认关，E7 不自动续跑） */
     autoResumeTasks: boolean;
+    /** 日志保留天数（§12.5 清理；7/14/30 可选，默认 14） */
+    logRetentionDays: LogRetentionDays;
+    /** 通知偏好（§27.11 ATTN-05 的应用级那一层） */
+    notifications: AppNotificationPrefs;
+    /** 应用级运行并发（§10.3 决策 12：可配置，3/1 是**建议起始值**不是硬上限） */
+    runtimeLimits: AppRuntimeLimits;
   };
   ui: {
     theme: 'light' | 'dark';
@@ -1225,4 +1314,74 @@ export interface AppState {
     /** 原型留痕，便于评审时回看每一步写操作 */
     writeLog: { at: number; api: string; detail: string }[];
   };
+}
+
+/** 日志保留：只给三个真实可选值，避免"点击后没有调整入口"的假按钮（§2.4） */
+export type LogRetentionDays = 7 | 14 | 30;
+
+/* ============================================================
+   通知偏好（§27.11 ATTN-05 / §3.2）
+   ============================================================ */
+
+/**
+ * 应用级通知偏好。
+ *
+ * **单一真相源（必守）**：这里只放"应用级"这一层；房间静音与线程关注仍读写
+ * `s.subscriptions` —— 界面把三层覆盖关系（应用级全静音/免打扰 > 房间静音 >
+ * 线程关注）写清楚，但**不另存第二份"通知订阅"状态**。
+ *
+ * ATTN-06 的口径一并写在界面文案里：通知、人的 Activity、Agent inbox delivery
+ * 是三种不同机制，通知开关**不等于执行授权**。
+ */
+export interface AppNotificationPrefs {
+  /** 服务器级全静音（ATTN-05 明文要求的全局开关） */
+  muteAll: boolean;
+  /** 事件开关：原型优先覆盖的四类（不是 ATTN-05 的完整清单） */
+  events: {
+    /** 需要审批 */
+    approval: boolean;
+    /** 任务失败 */
+    taskFailed: boolean;
+    /** 任务完成 */
+    taskDone: boolean;
+    /** 被提及 */
+    mentioned: boolean;
+  };
+  /** 渠道：只做原型能如实表示的三种 */
+  channel: 'desktop' | 'tray' | 'in-app';
+  /** 提示音 */
+  sound: boolean;
+  /** 免打扰时段 */
+  dnd: {
+    enabled: boolean;
+    from: string;
+    to: string;
+  };
+}
+
+/* ============================================================
+   应用级运行并发（§10.3 / §4.3，决策 12）
+   ============================================================ */
+
+/**
+ * 应用级运行并发。
+ *
+ * 依据 §10.3 原文：「**建议起始值**：全应用最多 3 个活跃模型 turn；单成员 1 个；
+ * 单 provider 可单独限额。上限均可在设置中配置（2026-09-17 确认默认值，决策 12）」
+ * —— 可配置性已定案，3 / 1 是确认的**默认起始值**，不是硬上限。
+ *
+ * 与另外两个"限制"回答的是不同问题（§4.3，界面文案按同一口径写）：
+ *  - 应用级运行并发（这里）= 整个软件同时执行多少个模型调用；
+ *  - 项目写入并发（writeConcurrencyPolicy）= 这个项目同时允许多少个受管理任务改文件；
+ *  - 任务预算 = 这一次任务累计最多用多少调用额度。
+ */
+export interface AppRuntimeLimits {
+  /** 全应用同时运行的模型 turn 数（默认 3） */
+  maxActiveTurns: number;
+  /** 单个成员同时运行的 turn 数（默认 1） */
+  maxTurnsPerMember: number;
+  /** 单 provider 限额开关（关闭时不给 provider 单独收紧） */
+  providerCapEnabled: boolean;
+  /** 单 provider 同时运行的 turn 数 */
+  providerCapTurns: number;
 }

@@ -1,64 +1,131 @@
 /**
- * 应用设置（第十六批 §17.8：只保留整个软件的配置）
+ * 应用设置（第十六批 §17.8 收窄为纯应用级；第二十八批按 §3.1 重排为七类）
  *
- * 第十六批把它**收窄为纯应用级**：
- *  - 删掉「当前项目」分组、项目选择器、以及任务验收/协作限制/文件写入等项目分区
- *    —— 那些移到了 `/project/:projectId/settings`（见 ProjectSettingsPage）。
- *
- * 为什么这样更清楚：项目设置与应用设置混在一页时，只能反复用分组标题和副标题
- * 去解释"这项影响项目、那项影响应用"；拆开后用户的心智模型是直接的：
+ * 为什么这样分：项目设置与应用设置混在一页时，只能反复用分组标题和副标题去解释
+ * "这项影响项目、那项影响应用"；拆开后用户的心智模型是直接的：
  * **想改某个项目，去那个项目旁边（⋯ → 项目设置）；想改整个软件，点底部设置。**
  *
- * 保留原有左侧分类导航（用户已认可该形态），但只剩四个应用级分区：
- * 通用 / 执行工具 / 设备与局域网 / 诊断与帮助。
- * 「错误码速查」并入「诊断与帮助」作为可展开内容，旧 `section=errors` 深链仍精确定位。
+ * 七个一级分类（§3.1）：通用 / 外观 / 通知 / AI 工具 / 连接与设备 / 数据与存储 / 帮助与关于。
+ * 三条施工铁律（写在代码旁边，避免以后被"补整齐"补回去）：
+ *  1. §3.1 的【暂缺】项**不显示**：不做占位控件、空表单或"敬请期待"空页 ——
+ *     要做先补规格（用户操作 / 保存结果 / 生效时机 / 失败处理）；
+ *  2. 归档管理不再独占一级分类，归入「数据与存储」，但仍与 `/archive`、
+ *     项目 ⋯ 共用同一个 `ArchiveManager` 与同一份状态；
+ *  3. 设备配对与 MCP 连接共用一个入口，但**权限说明与数据都分开**（两套权限模型）。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { Avatar, Switch, Tag } from '../components/ui';
-import { useStore, toast, setAppSetting, setTheme, resetStore } from '../data/store';
-import { ArchiveManager } from './ArchivePage';
-import { restoreRemovedProject } from '../data/actions-project';
-import {
-  exportDiagnostics, generatePairingCode, revokeDevice, rotateToken, testAdminBoundary,
-} from '../data/actions';
-import { errorCopy } from '../lib/format';
+import { useStore } from '../data/store';
 import { navigate } from '../lib/router';
 import { RuntimePanel } from './pages-misc';
-import type { AppState, ErrorCode } from '../data/types';
+import { SectionAppearance, SectionGeneral } from './SettingsGeneral';
+import { SectionNotifications } from './SettingsNotify';
+import { SectionConnections } from './SettingsMcp';
+import { SectionData } from './SettingsData';
+import { SectionHelp } from './SettingsHelp';
 
 /* ============================================================
-   分区定义（只有应用级）
+   分区定义
    ============================================================ */
 
-export type AppSettingsSection = 'general' | 'runtime' | 'lan' | 'archive' | 'diagnostics';
+export type AppSettingsSection =
+  | 'general'
+  | 'appearance'
+  | 'notifications'
+  | 'runtime'
+  | 'connections'
+  | 'data'
+  | 'help';
 
-/** 旧写法 → 新分区。第十六批把 errors 并入 diagnostics，其余保持应用分区。 */
+/**
+ * 旧写法 → 现分区（§3.4 深链兼容：**一个都不许漏**）。
+ *
+ * 逐条说明为什么这么映射：
+ *  - `app` → general：旧「应用」分区的名字，现在叫「通用」；
+ *  - `runtime` 保留为**主键**：它同时是标签「AI 工具」的分区键，
+ *    这样 `/runtimes` → `?section=runtime` 的路由规范化不用改一行；
+ *  - `lan` → connections：设备与局域网并入「连接与设备」；
+ *  - `archive` / `archived` → data：归档管理归入「数据与存储」，不再独占一级分类；
+ *  - `diagnostics` / `errors` → help：诊断与帮助改名「帮助与关于」；
+ *    `errors` 还要额外展开速查 —— 判定看 `anchor=errors`（见下面的既有踩坑注释）。
+ */
 const SECTION_ALIASES: Record<string, AppSettingsSection> = {
+  // 现主键
   general: 'general',
+  appearance: 'appearance',
+  notifications: 'notifications',
   runtime: 'runtime',
-  lan: 'lan',
-  // 第十七批：归档管理成为应用设置里的正式入口（与 /archive、项目 ⋯ 共用同一页面）
-  archive: 'archive',
-  archived: 'archive',
-  diagnostics: 'diagnostics',
-  // 旧写法兼容
+  connections: 'connections',
+  data: 'data',
+  help: 'help',
+  // 旧写法兼容（逐个点名）
   app: 'general',
-  // errors 不再独占分区，落到 diagnostics 并展开速查（§17.8 兼容表）
-  errors: 'diagnostics',
+  lan: 'connections',
+  archive: 'data',
+  archived: 'data',
+  diagnostics: 'help',
+  errors: 'help',
 };
 
 export function appSectionOf(raw: string | undefined): AppSettingsSection {
   return (raw && SECTION_ALIASES[raw]) || 'general';
 }
 
-const NAV = [
-  { key: 'general' as const, label: '通用', icon: 'settings', hint: '启动、托盘、数据存放位置' },
-  { key: 'runtime' as const, label: '执行工具', icon: 'cpu', hint: 'Codex / Claude CLI 的检测、登录与认证状态' },
-  { key: 'lan' as const, label: '设备与局域网', icon: 'monitor', hint: '配对局域网设备、吊销设备、轮换令牌' },
-  { key: 'archive' as const, label: '归档管理', icon: 'archive', hint: '已归档的项目与房间：查看与恢复' },
-  { key: 'diagnostics' as const, label: '诊断与帮助', icon: 'activity', hint: '导出诊断包、最近的运行记录、错误码速查' },
+type NavItem = { key: AppSettingsSection; label: string; icon: string; hint: string };
+
+const NAV: NavItem[] = [
+  { key: 'general', label: '通用', icon: 'settings', hint: '启动与托盘、应用级运行并发、本机账号与会话' },
+  { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
+  { key: 'notifications', label: '通知', icon: 'bell', hint: '哪些事件提醒你、渠道与免打扰；与房间静音/线程关注是同一套订阅' },
+  { key: 'runtime', label: 'AI 工具', icon: 'cpu', hint: '工具安装与检测、认证与登录、连接配置（应用级）' },
+  { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '访问众说的设备（配对）与外部 AI 连接（MCP），两套权限分开' },
+  { key: 'data', label: '数据与存储', icon: 'layers', hint: '数据位置与占用、备份与恢复、归档管理、已移除的项目' },
+  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '故障诊断与日志、错误码速查、版本与更新、原型工具' },
+];
+
+/**
+ * 设置搜索（§3.4 的追加项）：输入「登录」「备份」「通知」能定位到对应项。
+ *
+ * 只索引**真实存在**的项 —— 【暂缺】项（发送快捷键、消息密度、界面缩放）不在这里，
+ * 搜不到就是搜不到，不用"即将支持"占位。
+ */
+type SearchEntry = { section: AppSettingsSection; label: string; keywords: string; match: string };
+
+const SEARCH_INDEX: SearchEntry[] = [
+  { section: 'general', label: '开机自动启动', keywords: '启动 开机 自启 登录系统', match: '开机自动启动' },
+  { section: 'general', label: '关闭窗口时继续在托盘运行', keywords: '托盘 关闭窗口 最小化', match: '关闭窗口时继续在托盘运行' },
+  { section: 'general', label: '重启后自动继续未完成的任务', keywords: '重启 续跑 恢复 启动恢复', match: '重启后自动继续未完成的任务' },
+  { section: 'general', label: '运行并发（全应用 / 单成员 / provider）', keywords: '并发 同时运行 turn 上限 排队 限流 资源', match: '运行并发' },
+  { section: 'general', label: '本机账号与会话', keywords: '账号 管理员 登录 退出 会话', match: '本机账号与会话' },
+  { section: 'appearance', label: '主题（深色外观）', keywords: '外观 主题 深色 浅色 暗色 夜间', match: '深色外观' },
+  { section: 'notifications', label: '全部静音', keywords: '通知 静音 免打扰 全静音', match: '全部静音' },
+  { section: 'notifications', label: '免打扰时段', keywords: '免打扰 时段 夜间 勿扰', match: '免打扰时段' },
+  { section: 'notifications', label: '通知渠道', keywords: '通知 渠道 桌面 托盘 提示', match: '通知渠道' },
+  { section: 'notifications', label: '提示音', keywords: '声音 提示音 通知', match: '提示音' },
+  { section: 'notifications', label: '哪些事提醒我（审批 / 失败 / 完成 / 提及）', keywords: '通知 事件 审批 失败 完成 提及 at', match: '哪些事提醒我' },
+  { section: 'notifications', label: '已静音的线程 / 已关注的线程', keywords: '静音 关注 房间 线程 订阅', match: '已静音的线程' },
+  { section: 'runtime', label: '工具安装与检测（重新检测）', keywords: '登录 认证 安装 runtime cli codex claude 检测 版本', match: '重新检测' },
+  { section: 'runtime', label: '认证与登录方式', keywords: '登录 认证 凭据 订阅 api key token', match: '认证状态' },
+  { section: 'runtime', label: '连接测试', keywords: '连接 测试 故障 失败 排查', match: '连接测试' },
+  { section: 'runtime', label: '版本、协议能力与验证记录（技术详情）', keywords: '版本 协议 能力 验证 c0 c4 技术详情', match: '技术详情' },
+  { section: 'connections', label: '生成配对码 / 已连接设备', keywords: '设备 配对 局域网 手机 浏览器 命令', match: '生成配对码' },
+  { section: 'connections', label: '外部 AI 连接（MCP）', keywords: 'mcp 外部 ai 客户端 授权 范围 令牌 连接', match: '外部 AI 连接' },
+  { section: 'connections', label: '创建连接（范围授权）', keywords: '创建连接 令牌 范围 预算 成员', match: '创建连接' },
+  { section: 'data', label: '数据位置（应用数据目录）', keywords: '数据 目录 位置 路径 打开 复制 appdata', match: '应用数据目录' },
+  { section: 'data', label: '占用空间', keywords: '占用 空间 大小 磁盘 清理', match: '占用空间' },
+  { section: 'data', label: '备份与恢复', keywords: '备份 恢复 sqlite wal 一致性', match: '备份与恢复' },
+  { section: 'data', label: '清理应用成果', keywords: '清理 删除 草稿 快照 日志 成果', match: '清理应用成果' },
+  { section: 'data', label: '归档管理', keywords: '归档 恢复 只读 项目 房间', match: '归档管理' },
+  { section: 'data', label: '已移除的项目', keywords: '移除 重新关联 项目', match: '已移除的项目' },
+  { section: 'help', label: '导出诊断包', keywords: '诊断 导出 日志 脱敏 排查', match: '导出诊断包' },
+  { section: 'help', label: '日志保留', keywords: '日志 保留 清理 14 天 7 30', match: '日志保留' },
+  { section: 'help', label: '最近的运行记录', keywords: '运行记录 日志 诊断 级别 追溯', match: '最近的运行记录' },
+  { section: 'help', label: '错误码速查', keywords: '错误码 报错 恢复 err 速查', match: '错误码速查' },
+  { section: 'help', label: '版本与更新', keywords: '版本 更新 升级 关于 版本说明', match: '版本与更新' },
+  { section: 'help', label: '使用帮助（哪项设置在哪里改）', keywords: '帮助 归属 在哪 项目设置 成员 房间', match: '使用帮助' },
+  { section: 'help', label: '反馈', keywords: '反馈 建议 报告问题 提交', match: '反馈' },
+  { section: 'help', label: '原型工具（重置原型数据 / 清除导航偏好）', keywords: '重置 原型 种子 导航 偏好 演示 复现', match: '原型工具' },
 ];
 
 function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
@@ -67,422 +134,6 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
       <div className="settings-section-title">{title}</div>
       <div className="settings-section-sub">{sub}</div>
     </div>
-  );
-}
-
-/* ============================================================
-   通用（应用级）
-   ============================================================ */
-
-/**
- * 已移除的项目 + 重新关联（第十七批 §七）。
- *
- * 放在应用设置里，是为了让"移除"**不是不可逆**的：数据一直都在，
- * 只是在应用里解除了关联；这里按原目录重新关联，历史与任务记录原样保留。
- */
-function RemovedProjects() {
-  const s = useStore((x) => x);
-  const removed = s.projects.filter((p) => p.removedAt);
-  if (removed.length === 0) return null;
-  return (
-    <>
-      <div className="section-title">
-        已移除的项目<span className="count">{removed.length}</span>
-      </div>
-      <div className="small muted" style={{ lineHeight: 1.7, marginBottom: 8 }}>
-        「移除」只是在应用里解除关联：磁盘文件、聊天记录、任务与成果都还在。
-        重新关联后这个项目会回到侧栏，沿用原来的历史。
-      </div>
-      {removed.map((p) => (
-        <div key={p.id} className="row tight" style={{ padding: '6px 0' }}>
-          <Icon name="folder" size={13} className="faint" />
-          <span>{p.displayName}</span>
-          <span className="small faint truncate">{p.rootPath}</span>
-          <div className="spacer" />
-          <button
-            className="btn sm"
-            title="按原目录重新关联（不复制、不重建，历史与任务记录保持不变）"
-            onClick={() => restoreRemovedProject(p.id)}
-          >
-            <Icon name="refresh" size={12} /> 重新关联
-          </button>
-        </div>
-      ))}
-    </>
-  );
-}
-
-function SectionGeneral({ s }: { s: AppState }) {
-  const app = s.appSettings;
-  return (
-    <>
-      <SectionHead title="通用" sub="这些设置作用于本机，和打开哪个项目无关。" />
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-title row tight" style={{ marginBottom: 12 }}>
-          启动与托盘
-          {/* 如实标注原型边界：没有系统桥接，不能声称真的改了开机项（§17.8 第 7 条） */}
-          <Tag plain title="原型只改内存里的模拟值，未接入系统开机项或托盘行为">原型模拟</Tag>
-        </div>
-        <div className="col" style={{ gap: 12 }}>
-          <Switch
-            checked={app.launchAtLogin}
-            onChange={(v) => setAppSetting('launchAtLogin', v)}
-            label="开机自动启动"
-          />
-          <Switch
-            checked={app.keepInTray}
-            onChange={(v) => setAppSetting('keepInTray', v)}
-            label="关闭窗口时继续在托盘运行"
-          />
-          <Switch
-            checked={app.autoResumeTasks}
-            onChange={(v) => setAppSetting('autoResumeTasks', v)}
-            label="重启后自动继续未完成的任务"
-          />
-        </div>
-        <div className="panel" style={{ marginTop: 12 }}>
-          「开机自启」和「重启后自动继续」是两件事：前者默认开启、可以关；
-          后者默认关闭 —— 重启后先把可继续的任务列给你，你点了才继续。
-          <div className="small faint" style={{ marginTop: 6 }}>
-            原型里这三个开关只改变模拟状态（点击会真实变化并留痕），不代表已修改你的系统设置。
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title" style={{ marginBottom: 12 }}>数据存放位置</div>
-        <div className="panel" style={{ fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.9 }}>
-          &lt;appData&gt;/zhongshuo/<br />
-          {'  '}state.sqlite<br />
-          {'  '}artifacts/&lt;projectId&gt;/<br />
-          {'  '}contexts/&lt;projectId&gt;/<br />
-          {'  '}drafts/&lt;projectId&gt;/　← 托管草稿，绝不放项目根<br />
-          {'  '}snapshots/&lt;projectId&gt;/<br />
-          {'  '}diagnostics/<br />
-          {'  '}backups/
-        </div>
-        <div className="small faint" style={{ marginTop: 10 }}>
-          数据只存在本机的应用数据目录，不放在网络盘或同步盘上。
-          众说不会往你的项目目录里插配置文件，也不会自动 git init。
-        </div>
-      </div>
-
-      {/* ============================================================
-          外观与账号（第二十六批从应用内顶栏收进来的）
-          ============================================================
-          顶栏整条去掉后，主题切换、账号、退出、重置原型数据都落到这里。
-          它们的共同点是"低频、配置性质" —— 不需要一直占着一条常驻工具栏，
-          放进设置不会拖慢任何日常操作。
-          但**「项目全停」没有收进来**：那是紧急停止，埋在设置里出事故时找不到，
-          它留在侧栏底部固定区。 */}
-      <div className="card" style={{ marginTop: 14 }}>
-        <div className="card-title" style={{ marginBottom: 12 }}>外观与账号</div>
-
-        <div className="col" style={{ gap: 12 }}>
-          {/* 主题在标题栏里也有快捷键（太阳/月亮），这里给的是可读的当前值 */}
-          <Switch
-            checked={s.ui.theme === 'dark'}
-            onChange={(v) => setTheme(v ? 'dark' : 'light')}
-            label={`深色外观（当前：${s.ui.theme === 'dark' ? '深色' : '浅色'}）`}
-          />
-
-          <div className="row" style={{ justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ minWidth: 0 }}>
-              <div className="strong" style={{ fontSize: 12 }}>本机账号</div>
-              <div className="small faint" style={{ marginTop: 2 }}>
-                你（管理员）· 本机模式。原型没有登录体系，也没有云端账号。
-              </div>
-            </div>
-            <Avatar name="我" color="var(--m-human)" size={28} round />
-          </div>
-        </div>
-
-        <RemovedProjects />
-
-        {/* 危险/破坏性动作就地降权，避免和上面的普通开关混在一起 */}
-        <div className="settings-advanced" style={{ marginTop: 14 }}>
-          <div className="settings-advanced-head">
-            <Icon name="alert-triangle" size={13} />
-            高级操作
-            <span className="small faint">下面这些会丢弃当前内存状态或结束会话</span>
-          </div>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button
-              className="btn sm"
-              onClick={() => {
-                resetStore();
-                toast('已回到初始种子状态：本轮新增的成员、改过的设置与留痕都被丢弃', 'info');
-              }}
-            >
-              <Icon name="refresh" size={12} /> 重置原型数据
-            </button>
-            <button
-              className="btn ghost sm"
-              onClick={() => toast('显式退出会先展示正在终止的任务数量；关闭窗口只是缩到托盘继续运行', 'warn')}
-            >
-              <Icon name="log-out" size={12} /> 退出
-            </button>
-          </div>
-          <div className="small faint" style={{ marginTop: 10, lineHeight: 1.7 }}>
-            重置只影响原型的内存状态，不会动你的项目目录、不会卸载 CLI、也不会清除真实的 Git 改动。
-            关闭窗口是缩到托盘继续运行；要真正退出请用托盘菜单里的退出。
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/* ============================================================
-   设备与局域网（应用级）
-   ============================================================ */
-
-function SectionLan() {
-  const s = useStore((x) => x);
-  const [pairCode, setPairCode] = useState<string | null>(null);
-  const [customCode, setCustomCode] = useState('');
-  const [codeError, setCodeError] = useState('');
-
-  return (
-    <>
-      <SectionHead title="设备与局域网" sub="让手机或另一台电脑通过浏览器使用同一个众说。" />
-
-      <div className="panel warning" style={{ marginBottom: 14 }}>
-        <div className="panel-title"><Icon name="shield-off" size={13} /> 配对的设备拥有和本机一样的权限</div>
-        被配对的设备能发任务、停止任务、改设置。所以配对码只在本机显示、限时有效、用一次就作废；
-        连接强制加密（HTTPS/WSS），拒绝明文 HTTP。
-      </div>
-
-      <div className="grid grid-2" style={{ marginBottom: 14 }}>
-        <div className="card">
-          <div className="card-title row tight" style={{ marginBottom: 12 }}>
-            生成配对码
-            <Tag plain>M3 批次</Tag>
-          </div>
-
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button
-              className="btn primary sm"
-              onClick={() => {
-                setPairCode(generatePairingCode());
-                setCodeError('');
-              }}
-            >
-              <Icon name="hash" size={12} /> 随机生成
-            </button>
-            <input
-              className="input mono"
-              style={{ width: 140 }}
-              placeholder="或自设 8 位以上"
-              value={customCode}
-              onChange={(e) => {
-                setCustomCode(e.target.value);
-                setCodeError('');
-              }}
-            />
-            <button
-              className="btn sm"
-              onClick={() => {
-                if (customCode.trim().length < 8) {
-                  setCodeError('自设配对码至少 8 位');
-                  return;
-                }
-                if (s.devices.some((d) => d.tokenPrefix.endsWith(customCode.trim()))) {
-                  setCodeError('该配对码使用过，不能重复');
-                  return;
-                }
-                setPairCode(customCode.trim());
-                toast(`已使用自设配对码 ${customCode.trim()}：限时 5 分钟、一次一用`, 'info');
-              }}
-            >
-              使用自设码
-            </button>
-          </div>
-
-          {codeError ? <div className="panel danger" style={{ marginTop: 10 }}>{codeError}</div> : null}
-
-          {pairCode ? (
-            <div className="card" style={{ marginTop: 12, textAlign: 'center', background: 'var(--accent-soft)', borderColor: 'var(--accent-border)' }}>
-              <div className="small faint">在局域网设备的浏览器里输入</div>
-              <div className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '0.14em', marginTop: 4 }}>
-                {pairCode}
-              </div>
-              <div className="small faint" style={{ marginTop: 6 }}>
-                只在本机显示 · 5 分钟内有效 · 用一次就作废
-              </div>
-            </div>
-          ) : null}
-
-          <div className="small faint" style={{ marginTop: 10 }}>
-            监听地址：<span className="mono-sm">https://127.0.0.1:7411</span> 与
-            <span className="mono-sm"> https://192.168.1.10:7411</span>（自签证书，首次连接需要信任）。
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-title" style={{ marginBottom: 12 }}>已连接设备</div>
-          <div className="col" style={{ gap: 10 }}>
-            {s.devices.map((d) => (
-              <div key={d.id} className="row" style={{ justifyContent: 'space-between', gap: 10 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="row tight">
-                    <Icon name={d.kind === 'this-machine' ? 'monitor' : 'wifi-off'} size={13} className="faint" />
-                    <span className="strong" style={{ fontSize: 12 }}>{d.name}</span>
-                    {d.kind === 'this-machine' ? <Tag plain>本机</Tag> : null}
-                  </div>
-                  <div className="mono-sm" style={{ marginTop: 2 }}>
-                    {d.address} · {d.tokenPrefix}*** · 最近联机 {new Date(d.lastSeenAt).toLocaleString('zh-CN')}
-                  </div>
-                </div>
-                {/* 每台设备旁**直接**放断开，不再在下方"高级操作"里重复列一遍设备
-                    （原实现把对象和操作拆到两处，用户要来回对应 —— §17.8） */}
-                {d.kind !== 'this-machine' ? (
-                  <button
-                    className="btn sm danger"
-                    onClick={() => revokeDevice(d.id)}
-                    title="断开后这台设备的连接立即失效，其他设备不受影响"
-                  >
-                    断开访问
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <div className="divider" />
-          <div className="small faint">要再连一台设备，用左边的配对码。</div>
-        </div>
-      </div>
-
-      {/* 高级操作：只留下真正"影响全局"的危险动作 */}
-      <div className="settings-advanced">
-        <div className="settings-advanced-head">
-          <Icon name="alert-triangle" size={13} />
-          高级操作
-          <span className="small faint">下面这些会影响所有已连接的设备</span>
-        </div>
-
-        <div className="col" style={{ gap: 10 }}>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button className="btn sm" onClick={rotateToken} title="所有已配对设备无需重新配对，吊销仍是单独动作">
-              <Icon name="refresh" size={12} /> 轮换会话令牌
-            </button>
-            <button
-              className="btn ghost sm"
-              onClick={testAdminBoundary}
-              title="检查来源校验、明文 HTTP 拒绝与令牌是否走请求头"
-            >
-              检查局域网连接是否安全
-            </button>
-          </div>
-          <div className="small faint" style={{ lineHeight: 1.7 }}>
-            轮换令牌不会把已配对的设备踢下线；断开某台设备请用上面它自己那一行的按钮。
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/* ============================================================
-   诊断与帮助（含错误码速查）
-   ============================================================ */
-
-function SectionDiagnostics({ expanded }: { expanded: boolean }) {
-  const s = useStore((x) => x);
-  // 旧 section=errors 深链要"精确定位到速查"，所以默认展开并滚到那里
-  const [showErrors, setShowErrors] = useState(expanded);
-
-  useEffect(() => {
-    if (!expanded) return;
-    setShowErrors(true);
-    const el = document.getElementById('settings-errors');
-    if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, [expanded]);
-
-  return (
-    <>
-      <SectionHead title="诊断与帮助" sub="出问题时把这份记录导出来，能定位到是哪一步断的。" />
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="row wrap" style={{ gap: 10 }}>
-          <button className="btn sm" onClick={() => exportDiagnostics(s.activeProjectId)}>
-            <Icon name="download" size={12} /> 导出诊断包
-          </button>
-          <button className="btn ghost sm" onClick={() => toast('日志保留默认 14 天，可在此调整', 'info')}>
-            <Icon name="clock" size={12} /> 日志保留：14 天
-          </button>
-        </div>
-        <div className="panel" style={{ marginTop: 10 }}>
-          导出时默认脱敏凭据、环境变量值和敏感路径；是否包含源码或报告正文由你决定。
-        </div>
-      </div>
-
-      <div className="section-title">最近的运行记录<span className="count">{s.diagnostics.length}</span></div>
-      <div className="card" style={{ padding: 0, marginBottom: 18 }}>
-        <table className="tbl">
-          <thead>
-            <tr><th style={{ width: 90 }}>时间</th><th style={{ width: 70 }}>级别</th><th>内容</th><th style={{ width: 300 }}>追溯键</th></tr>
-          </thead>
-          <tbody>
-            {s.diagnostics.map((d) => (
-              <tr key={d.id}>
-                <td className="small">{new Date(d.at).toLocaleTimeString('zh-CN')}</td>
-                <td>
-                  <Tag
-                    tone={d.level === 'error' ? 'danger' : d.level === 'warn' ? 'warning' : 'neutral'}
-                    icon={d.level === 'error' ? 'x-circle' : d.level === 'warn' ? 'alert-triangle' : 'info'}
-                  >
-                    {d.level}
-                  </Tag>
-                </td>
-                <td className="small">{d.message}</td>
-                <td className="mono-sm" style={{ overflowWrap: 'anywhere' }}>
-                  {Object.entries(d.trace).map(([k, v]) => `${k}=${v}`).join(' ')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* 错误码速查并入这里，作为可展开内容（不再独占一个导航项） */}
-      <div className="card" style={{ padding: 0 }}>
-        <button
-          className="settings-collapse-head"
-          onClick={() => setShowErrors((v) => !v)}
-          aria-expanded={showErrors}
-          id="settings-errors"
-        >
-          <Icon name={showErrors ? 'chevron-down' : 'chevron-right'} size={13} />
-          错误码速查
-          <span className="small faint">
-            出现问题时界面会怎么告诉你、你能做什么（{Object.keys(errorCopy).length} 条）
-          </span>
-        </button>
-        {showErrors ? (
-          <div style={{ borderTop: '1px solid var(--border)' }}>
-            <div className="small faint" style={{ padding: '10px 12px' }}>
-              界面统一用「一句话说明 + 一个可点的恢复动作」呈现，不会把错误码直接甩给你。
-            </div>
-            <table className="tbl">
-              <thead>
-                <tr><th style={{ width: 220 }}>错误码</th><th style={{ width: 220 }}>用户看到什么</th><th>恢复方式</th></tr>
-              </thead>
-              <tbody>
-                {(Object.keys(errorCopy) as ErrorCode[]).map((code) => (
-                  <tr key={code}>
-                    <td className="mono-sm" style={{ color: 'var(--danger)' }}>{code}</td>
-                    <td className="small strong">{errorCopy[code].title}</td>
-                    <td className="small">{errorCopy[code].action}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </div>
-    </>
   );
 }
 
@@ -499,80 +150,165 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
    * 旧 `section=errors` 深链要**直接展开**速查表（§17.8 兼容表：保留速查定位）。
    *
    * 注意：路由层会先把 `section=errors` 规范化成
-   * `section=diagnostics&anchor=errors`，所以这里不能只看 section ——
+   * `section=help&anchor=errors`，所以这里不能只看 section ——
    * 必须认 **anchor=errors**，否则重定向后判定为 false，表格不展开（实测踩过）。
    */
   const errorsExpanded = raw === 'errors' || q.anchor === 'errors';
+
+  const [search, setSearch] = useState('');
+  /** 搜索结果点击后要滚到的目标（按标签文本匹配，避免给每一行都加 id） */
+  const [jumpTo, setJumpTo] = useState<string | null>(null);
 
   const go = (next: AppSettingsSection) => {
     // 应用链接**不带 projectId**：切换项目不应改变应用配置（§17.8）
     navigate(`/settings?section=${next}`, { replace: true });
   };
 
+  /**
+   * 结果点击：先切分区，再在渲染完成后滚到那一项并短暂高亮。
+   * 依赖里带 section 是必须的 —— 目标项可能不在当前分区，要等它渲染出来。
+   */
+  useEffect(() => {
+    if (!jumpTo) return;
+    const el = findByLabel(jumpTo);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('settings-jump-flash');
+    const t = window.setTimeout(() => el.classList.remove('settings-jump-flash'), 1800);
+    return () => window.clearTimeout(t);
+  }, [jumpTo, section]);
+
+  const results = useMemo(() => {
+    const kw = search.trim().toLowerCase();
+    if (!kw) return [];
+    return SEARCH_INDEX.filter(
+      (e) => e.label.toLowerCase().includes(kw) || e.keywords.toLowerCase().includes(kw),
+    );
+  }, [search]);
+
   return (
     <div className="main">
       <div className="page">
-        <div className="page-head">
-          <div>
-            <div className="page-title">应用设置</div>
-            <div className="page-sub">
-              这里只放整个软件的配置，和打开哪个项目无关。
-              要改某个项目（任务验收、协作限制、文件修改），用侧栏该项目旁的 <strong>⋯ → 项目设置</strong>。
-            </div>
-          </div>
-        </div>
+        {/**
+         * 页头（「应用设置」大标题 + "这里只放整个软件的配置…"那一段）已按用户要求删除
+         * （2026-09-26）：左边就是分类导航、当前分区还高亮着，页头那份说明属于重复叙述。
+         * 归属边界（应用级 vs 项目级）改由每个分区的副标题各说一次，信息没丢。
+         */}
 
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="设置分区">
-            <div className="settings-nav-group">
-              <div className="settings-nav-label">应用</div>
-              {NAV.map((it) => (
-                <button
-                  key={it.key}
-                  className={`settings-nav-item${section === it.key ? ' on' : ''}`}
-                  onClick={() => go(it.key)}
-                  title={it.hint}
-                  aria-current={section === it.key ? 'page' : undefined}
-                >
-                  <Icon name={it.icon} size={14} />
-                  <span className="settings-nav-text">{it.label}</span>
-                </button>
-              ))}
+            {/* 设置搜索（§3.4）：七类之后，翻分类比翻长页慢，用关键词直接定位 */}
+            <div className="settings-search">
+              <div className="row tight">
+                <Icon name="search" size={13} className="faint" />
+                <input
+                  className="input sm"
+                  placeholder="搜设置项：登录、备份、通知…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  aria-label="搜索设置项"
+                />
+                {search ? (
+                  <button className="settings-search-clear" onClick={() => setSearch('')} aria-label="清除搜索">
+                    <Icon name="x" size={12} />
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="settings-nav-foot">
-              项目设置已独立：在侧栏项目行点 ⋯ 进入。提醒在「待我处理」。
-            </div>
+            {search.trim() ? (
+              <div className="settings-search-results" role="list">
+                {results.length === 0 ? (
+                  <div className="small faint" style={{ padding: '4px 8px' }}>
+                    没找到匹配的设置项。这里只索引已经做好的项 —— 没做的不会用"即将支持"占位。
+                  </div>
+                ) : (
+                  results.map((r) => (
+                    <button
+                      key={`${r.section}-${r.match}`}
+                      className="settings-search-hit"
+                      role="listitem"
+                      onClick={() => {
+                        setJumpTo(r.match);
+                        go(r.section);
+                        setSearch('');
+                      }}
+                    >
+                      <span className="settings-search-hit-label">{r.label}</span>
+                      <span className="small faint">{NAV.find((n) => n.key === r.section)?.label}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="settings-nav-group">
+                <div className="settings-nav-label">应用</div>
+                {NAV.map((it) => (
+                  <button
+                    key={it.key}
+                    className={`settings-nav-item${section === it.key ? ' on' : ''}`}
+                    onClick={() => go(it.key)}
+                    title={it.hint}
+                    aria-current={section === it.key ? 'page' : undefined}
+                  >
+                    <Icon name={it.icon} size={14} />
+                    <span className="settings-nav-text">{it.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* 原「项目设置已独立：在侧栏项目行点 ⋯ 进入。提醒在「待我处理」。」脚注已删除（§2.5）：
+                同类信息在页头 page-sub 说一次就够，不在界面里重复文档语气。 */}
           </nav>
 
           <div className="settings-body">
-            {section === 'general' ? <SectionGeneral s={s} /> : null}
+            {section === 'general' ? <SectionGeneral /> : null}
+
+            {section === 'appearance' ? <SectionAppearance /> : null}
+
+            {section === 'notifications' ? <SectionNotifications /> : null}
 
             {section === 'runtime' ? (
               <>
                 <SectionHead
-                  title="执行工具（Runtime）"
-                  sub="安装检测、版本、登录与能力认证。应用级配置：切换项目不会换出另一套。"
+                  title="AI 工具"
+                  sub="接入哪些工具、现在登录的是谁、用订阅还是 API 配置。这是应用级配置：切换项目不会换出另一套。"
                 />
                 <RuntimePanel embedded />
               </>
             ) : null}
 
-            {section === 'lan' ? <SectionLan /> : null}
-            {section === 'archive' ? (
-              <>
-                <SectionHead
-                  title="归档管理"
-                  sub="已归档的项目与房间都保留只读历史，随时可以恢复；与侧栏「项目 ⋯ → 归档管理」是同一个页面。"
-                />
-                {/* 与 /archive 共用同一个主体：不做第二套归档页面、也不维护第二份状态 */}
-                <ArchiveManager query={{}} />
-              </>
-            ) : null}
-            {section === 'diagnostics' ? <SectionDiagnostics expanded={errorsExpanded} /> : null}
+            {section === 'connections' ? <SectionConnections /> : null}
+
+            {section === 'data' ? <SectionData s={s} /> : null}
+
+            {section === 'help' ? <SectionHelp expanded={errorsExpanded} /> : null}
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * 按标签文本找目标元素。
+ *
+ * 为什么不给每个设置行加 id：行基元是共享的（项目设置也用），给应用设置的每一行
+ * 挂 id 会把基元污染成"两处都要维护的清单"。这里按**渲染后的文本**匹配：
+ * 先找设置行名（`.pset-row-name` 精确匹配），再退到卡片标题、折叠头、分节标题。
+ */
+function findByLabel(text: string): HTMLElement | null {
+  const roots = Array.from(document.querySelectorAll<HTMLElement>('.settings-body *'));
+  const nameHit = roots.find((el) => el.classList.contains('pset-row-name') && el.textContent?.trim() === text);
+  if (nameHit) return nameHit.closest('.pset-row') ?? nameHit;
+  const blockHit = roots.find(
+    (el) =>
+      (el.classList.contains('card-title') ||
+        el.classList.contains('settings-collapse-head') ||
+        el.classList.contains('section-title') ||
+        el.classList.contains('settings-section-title')) &&
+      (el.textContent ?? '').includes(text),
+  );
+  return blockHit ?? null;
 }

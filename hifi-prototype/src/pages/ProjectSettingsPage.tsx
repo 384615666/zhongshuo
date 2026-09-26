@@ -17,7 +17,8 @@
 
 import { useEffect, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { ErrorState, Modal, Switch, Tag } from '../components/ui';
+import { NumberField, SwitchRow } from '../components/SettingsRow';
+import { ErrorState, Modal, Tag } from '../components/ui';
 import { useStore } from '../data/store';
 import { lockOfProject } from '../data/selectors';
 import { setTaskReviewEnabled } from '../data/actions-delivery';
@@ -35,120 +36,10 @@ export function anchorOf(raw: string | undefined): ProjectSettingsAnchor {
 }
 
 /**
- * 数字输入框：**保留编辑态**。
- *
- * 为什么不能直接受控于 store：原实现把 value 绑到 store 并在 onChange 里
- * `Math.max(1, Math.min(240, Number(v) || 20))` —— 用户一清空就立刻变回 20，
- * 于是没法把「20」改成「45」（得先选中再输，或慢慢删）。
- * 实测确认：清空输入框后值立刻回到 20。
- *
- * 现在：本地草稿字符串 → 失焦或 Enter 时才校验提交；Escape 恢复已保存值；
- * 无效值不写入并显示行内提示。
+ * 数字输入与开关行现由 `components/SettingsRow` 提供（应用设置 §2.2 与项目设置 §17.8
+ * 共用同一个行基元）。原实现在本文件内联为 `NumberField` / `SwitchRow`，行为一字未改 ——
+ * 这里的注释保留原因：数字输入**必须保留编辑态**（清空输入框后值立刻被钳回 20 的实测问题）。
  */
-function NumberField({
-  label,
-  hint,
-  value,
-  min,
-  max,
-  unit,
-  onCommit,
-}: {
-  label: string;
-  hint: React.ReactNode;
-  value: number;
-  min: number;
-  max: number;
-  unit: string;
-  onCommit: (v: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  const [error, setError] = useState<string | null>(null);
-
-  // store 里的值被别处改动（如切项目）时同步过来，但不要在编辑中被覆盖
-  useEffect(() => {
-    setDraft(String(value));
-    setError(null);
-  }, [value]);
-
-  const commit = () => {
-    const raw = draft.trim();
-    if (raw === '') {
-      setError(`请填 ${min}–${max} 之间的数字`);
-      return;
-    }
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n < min || n > max) {
-      setError(`只能是 ${min}–${max} 之间的数字`);
-      return;
-    }
-    setError(null);
-    if (n !== value) onCommit(n);
-  };
-
-  return (
-    <div className="pset-row">
-      <div className="pset-row-label">
-        <div className="pset-row-name">{label}</div>
-        <div className="pset-row-hint">{hint}</div>
-        {error ? <div className="pset-row-error">{error}</div> : null}
-      </div>
-      <div className="pset-row-control">
-        <input
-          className="input pset-number"
-          type="number"
-          min={min}
-          max={max}
-          value={draft}
-          aria-label={label}
-          aria-invalid={error ? true : undefined}
-          onChange={(e) => {
-            // 只改草稿，不钳制、不提交 —— 让用户能把数字敲完
-            setDraft(e.target.value);
-            if (error) setError(null);
-          }}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit();
-            if (e.key === 'Escape') {
-              setDraft(String(value));
-              setError(null);
-            }
-          }}
-        />
-        <span className="pset-unit">{unit}</span>
-      </div>
-    </div>
-  );
-}
-
-/** 开关行：名称 + 一句说明在左，开关在右 */
-function SwitchRow({
-  label,
-  hint,
-  checked,
-  onChange,
-  children,
-}: {
-  label: string;
-  hint: React.ReactNode;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="pset-row">
-      <div className="pset-row-label">
-        <div className="pset-row-name">{label}</div>
-        <div className="pset-row-hint">{hint}</div>
-        {children}
-      </div>
-      <div className="pset-row-control">
-        <Switch checked={checked} onChange={onChange} label={<span className="visually-hidden">{label}</span>} />
-      </div>
-    </div>
-  );
-}
 
 export function ProjectSettingsPage({
   projectId,
@@ -350,6 +241,7 @@ export function ProjectSettingsPage({
                 max={240}
                 unit="分钟"
                 onCommit={(v) => updateLoopSettings(project.id, { absenceGraceMin: v })}
+                integer
               />
 
               <div className="pset-divider" />
@@ -362,6 +254,7 @@ export function ProjectSettingsPage({
                 max={480}
                 unit="分钟"
                 onCommit={(v) => updateLoopSettings(project.id, { analysisTurnDeadlineMin: v })}
+                integer
               />
 
               <NumberField
@@ -372,6 +265,7 @@ export function ProjectSettingsPage({
                 max={480}
                 unit="分钟"
                 onCommit={(v) => updateLoopSettings(project.id, { modifyTurnDeadlineMin: v })}
+                integer
               />
 
               <details className="settings-why">
@@ -447,6 +341,7 @@ export function ProjectSettingsPage({
                     max={6}
                     unit="个"
                     onCommit={(v) => setWriteConcurrencyPolicy(project.id, 'parallel_writers', v)}
+                    integer
                   />
                   <div className="panel warning" style={{ marginTop: 12 }}>
                     <div className="panel-title"><Icon name="alert-triangle" size={13} /> 开启后这些行为会改变</div>

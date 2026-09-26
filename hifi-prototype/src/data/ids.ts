@@ -95,6 +95,12 @@ export const ART_13_PATCH_NOTE = 'artifact_13_patch_note';
 /* ---------- 改动集 ---------- */
 export const CS_13 = 'changeset_13';
 export const CS_11 = 'changeset_11';
+/** 任务 #12 第二轮（2026-09-26 补数据）：未提交，与 Git 工作区逐条对应 */
+export const CS_12_R2 = 'changeset_12_r2';
+/** 子任务 #12（adapter 类型泄漏核对）的未提交改动集（2026-09-26 补数据） */
+export const CS_12_ARCH = 'changeset_12_arch';
+/** 任务 #14 周报（2026-09-26 补数据）：未提交 */
+export const CS_14 = 'changeset_14';
 /** notes-vault（非 Git）的改动集：前像是整目录快照而不是 git ref（E15） */
 export const CS_NG1 = 'changeset_ng_1';
 

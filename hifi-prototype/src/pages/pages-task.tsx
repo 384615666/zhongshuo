@@ -898,16 +898,8 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   return (
     <div className="main">
       <div className="page">
-        <div className="page-head">
-          <div>
-            <div className="page-title">任务看板</div>
-            <div className="page-sub">
-              按项目分组，项目内再按状态分组。两处同名房间、同号任务也能区分——
-              卡片自带来源项目；房间内看板只看本房间。点击卡片打开所属回复串的「任务详情」tab；
-              编号只用于显示，稳定 ID 才是主键。
-            </div>
-          </div>
-        </div>
+        {/* 页头（「任务看板」+ 一段说明）已按用户要求删除（2026-09-26）：
+            分组规则由图上的项目分组标题与状态分组标题直接体现，不必再用一段话解释。 */}
 
         {/* 筛选控件统一放内容区左上角（不塞进页头右侧）：
             从侧栏进来后鼠标就在左侧，不必横跨整屏去操作；

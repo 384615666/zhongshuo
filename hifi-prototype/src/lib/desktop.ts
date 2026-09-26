@@ -25,6 +25,8 @@ export interface DesktopBridge {
   revealPath: (p: string) => Promise<boolean>;
   /** 用系统默认程序打开路径；返回 null 表示宿主没提供这个能力 */
   openPath: (p: string) => Promise<{ ok: boolean; reason?: string } | null>;
+  /** 真实的应用数据目录（Electron userData）；浏览器宿主没有这个概念 */
+  appDataDir: () => Promise<string | null>;
   openExternal: (url: string) => Promise<boolean>;
   reportRuntime: (summary: { runningTasks: number; runningTurns: number; detail?: string }) => Promise<boolean>;
 }
@@ -95,4 +97,18 @@ export async function openPath(p: string): Promise<{ ok: boolean; reason?: strin
   const d = desktop();
   if (!d || typeof d.openPath !== 'function') return null;
   return d.openPath(p);
+}
+
+/**
+ * 真实的应用数据目录。
+ *
+ * 为什么需要它：应用设置里的「打开目录」不能是假按钮（§2.4）。UI 显示的
+ * `<appData>/zhongshuo/` 是文档口径；桌面宿主里能打开的**真实**目录就是
+ * Electron 的 userData（原型不写 SQLite，所以这里没有 state.sqlite）。
+ * 浏览器宿主没有原生目录 → null，由调用方如实说明限制。
+ */
+export async function appDataDir(): Promise<string | null> {
+  const d = desktop();
+  if (!d || typeof d.appDataDir !== 'function') return null;
+  return d.appDataDir();
 }

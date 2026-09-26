@@ -230,6 +230,25 @@ export function PreviewPane({
     return () => ro.disconnect();
   }, [tabs.length, s.preview.hidden]);
 
+  /**
+   * 标签显示名：同名补父路径，避免"两个 README.md"分不清。
+   *
+   * ⚠ 这个 useMemo 必须待在**所有 early return 之前**。
+   * 原来它写在 `tabs.length === 0` / `!resource` 两个 return 之后 ——
+   * 于是"关掉最后一个标签"或"资源失效"时 hook 数量变少，
+   * React 抛 #300（Rendered fewer hooks than expected）把**整页**打崩。
+   * 文件页关掉最后一个预览标签就能稳定复现。
+   */
+  const tabNames = useMemo(() => {
+    const items = tabs.map((t) => {
+      const r = resourceOf(s, t.resourceId);
+      const p = (r?.relativePath ?? r?.title ?? '未知文件').split('/');
+      const name = p.pop() ?? '未知文件';
+      return { key: t.key, name, dir: p.join('/') };
+    });
+    return disambiguatedNames(items);
+  }, [tabs, s.resources]);
+
   if (tabs.length === 0) {
     // 不需要常驻空态时，整块不渲染（DM 页靠这个保持简洁）
     if (!showEmpty && !singleRegion) return null;
@@ -285,17 +304,6 @@ export function PreviewPane({
    * 完整路径进「⋯ → 文件信息」。`url` 仍保留给文件信息与 tooltip 用。
    */
   const url = resource.relativePath ?? resource.title;
-
-  /** 标签显示名：同名补父路径，避免"两个 README.md"分不清 */
-  const tabNames = useMemo(() => {
-    const items = tabs.map((t) => {
-      const r = resourceOf(s, t.resourceId);
-      const p = (r?.relativePath ?? r?.title ?? '未知文件').split('/');
-      const name = p.pop() ?? '未知文件';
-      return { key: t.key, name, dir: p.join('/') };
-    });
-    return disambiguatedNames(items);
-  }, [tabs, s.resources]);
 
   /**
    * 阅读方式入口只在**真的有可切换的内容**时出现：

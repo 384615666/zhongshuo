@@ -3,7 +3,7 @@
  * 依据 §17.2 页面清单，含各自的空状态与失败状态。
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { Avatar, EmptyState, ErrorState, Modal, Switch, Tag, TaskStatusTag, memberColor } from '../components/ui';
 import { useStore, toast } from '../data/store';
@@ -22,13 +22,18 @@ import { NewRoomButton } from './Room';
    欢迎页（§17.2：打开文件夹、最近项目；没有 CLI 时显示连接配置入口）
    ============================================================ */
 
-export function WelcomePage() {
-  const s = useStore((x) => x);
-  const [openMissing, setOpenMissing] = useState(false);
+/**
+ * 「打开文件夹」流程 —— 欢迎页按钮、顶栏项目管理菜单、空态入口**共用同一个组件**。
+ *
+ * 为什么抽出来并且默认 `autoPick`：入口文案写的是"打开文件夹"，用户点下去就应该
+ * **直接看到系统目录选择器**。原来顶栏菜单项只做了 `navigate('/welcome')`，用户到了
+ * 欢迎页还得再点一次「打开文件夹」才弹对话框 —— 用户实测点名为"多此一举"。
+ * 现在凡"点了就该弹系统对话框"的入口（顶栏项目菜单、空态、项目缺失页）挂载即调起选择器
+ * —— 用户取消也不会连弹第二次，取消后在弹窗里可以重选。
+ */
+export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => void; autoPick?: boolean }) {
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const [pickReason, setPickReason] = useState<string | null>(null);
-  const runtimes = s.runtimeInstallations;
-  const notReady = runtimes.filter((r) => r.health !== 'ready');
   const desktopHost = isDesktop();
 
   /** 走原生目录选择器；浏览器宿主会返回原因而不是假装成功（§8.2） */
@@ -41,6 +46,91 @@ export function WelcomePage() {
     }
     setPickReason(res.reason ?? '已取消。');
   };
+
+  // 只自动调起一次：之后由「浏览…」手动重选，避免反复弹出对话框
+  useEffect(() => {
+    if (autoPick) void doPick();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Modal
+      size="sm"
+      title="打开文件夹"
+      subtitle="选择一个本地目录作为项目"
+      onClose={onClose}
+      footer={
+        <>
+          <div className="spacer" />
+          <button className="btn" onClick={onClose}>取消</button>
+          <button
+            className="btn primary"
+            onClick={async () => {
+              if (pickedPath) {
+                // 已选到真实路径：登记为项目
+                onClose();
+                toast(`已选择 ${pickedPath}。原型不实际扫描磁盘：真实版本会解析目录身份（卷/文件 ID、junction）并建立索引`, 'success');
+                return;
+              }
+              await doPick();
+            }}
+          >
+            <Icon name="folder" size={12} />
+            {pickedPath ? '打开这个目录' : '浏览…'}
+          </button>
+        </>
+      }
+    >
+      <div className="field">
+        <label className="field-label">目录路径</label>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <input
+            className="input mono"
+            style={{ flex: '1 1 260px' }}
+            value={pickedPath ?? ''}
+            readOnly
+            placeholder={desktopHost ? '点「浏览…」调用系统目录选择器' : '浏览器宿主无法打开本地目录'}
+          />
+          <button className="btn" onClick={doPick}>
+            <Icon name="folder" size={12} /> 浏览…
+          </button>
+        </div>
+        {pickReason ? (
+          <div className="panel warning" style={{ marginTop: 8 }}>{pickReason}</div>
+        ) : null}
+        <div className="field-hint">
+          打开后自动创建默认房间与隐式空间，不要求注册云端账号。不会向项目目录写入任何配置文件，
+          也不会自动 git init。
+        </div>
+      </div>
+
+      <div className={`panel ${desktopHost ? 'success' : 'warning'}`}>
+        <div className="panel-title">
+          <Icon name={desktopHost ? 'check-circle' : 'info'} size={13} />
+          {desktopHost ? '正在桌面客户端中运行' : '正在浏览器宿主中运行'}
+        </div>
+        {desktopHost ? (
+          <>
+            「浏览…」会调起 Windows 原生目录选择对话框（Electron 的 dialog.showOpenDialog）。
+            选定后会解析 junction、符号链接、盘符与大小写规则来确定目录身份，
+            用于识别"再次打开同一目录"与"移动后重新定位"。
+          </>
+        ) : (
+          <>
+            浏览器里没有原生目录选择器，也没有托盘与窗口控制。桌面客户端（Electron）才有这些能力；
+            浏览器入口用于查看与操作已有项目。启动桌面客户端：<code>pnpm run desktop</code>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+export function WelcomePage() {
+  const s = useStore((x) => x);
+  const [openFolder, setOpenFolder] = useState(false);
+  const runtimes = s.runtimeInstallations;
+  const notReady = runtimes.filter((r) => r.health !== 'ready');
 
   return (
     <div className="main">
@@ -56,11 +146,13 @@ export function WelcomePage() {
             不需要复制路径、不需要开多个终端、不需要手动转发报告。每次协作都有明确的参与者、执行状态、文件依据和最终成果。
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: 18, gap: 10 }}>
-            <button className="btn primary lg" onClick={() => setOpenMissing(true)}>
+            {/* 点下去直接调起系统目录选择器（autoPick），不再先弹一层"浏览…"的中间步 */}
+            <button className="btn primary lg" onClick={() => setOpenFolder(true)}>
               <Icon name="folder" size={14} /> 打开文件夹
-            </button>            <button className="btn lg" onClick={() => navigate(`/project/${s.activeProjectId}`)}>
-              进入当前项目
             </button>
+            {/* 「进入当前项目」已按用户要求删除（2026-09-26）：
+                欢迎页只回答"打开一个本地文件夹"；要回项目走侧栏或下面的最近项目卡片，
+                这两处本来就是常驻入口，不必在这里再放一个按钮。 */}
           </div>
         </div>
 
@@ -148,77 +240,11 @@ export function WelcomePage() {
         </div>
       </div>
 
-      {openMissing ? (
-        <Modal
-          size="sm"
-          title="打开文件夹"
-          subtitle="选择一个本地目录作为项目"
-          onClose={() => setOpenMissing(false)}
-          footer={
-            <>
-              <div className="spacer" />
-              <button className="btn" onClick={() => setOpenMissing(false)}>取消</button>
-              <button
-                className="btn primary"
-                onClick={async () => {
-                  if (pickedPath) {
-                    // 已选到真实路径：登记为项目
-                    setOpenMissing(false);
-                    toast(`已选择 ${pickedPath}。原型不实际扫描磁盘：真实版本会解析目录身份（卷/文件 ID、junction）并建立索引`, 'success');
-                    return;
-                  }
-                  await doPick();
-                }}
-              >
-                <Icon name="folder" size={12} />
-                {pickedPath ? '打开这个目录' : '浏览…'}
-              </button>
-            </>
-          }
-        >
-          <div className="field">
-            <label className="field-label">目录路径</label>
-            <div className="row wrap" style={{ gap: 8 }}>
-              <input
-                className="input mono"
-                style={{ flex: '1 1 260px' }}
-                value={pickedPath ?? ''}
-                readOnly
-                placeholder={desktopHost ? '点「浏览…」调用系统目录选择器' : '浏览器宿主无法打开本地目录'}
-              />
-              <button className="btn" onClick={doPick}>
-                <Icon name="folder" size={12} /> 浏览…
-              </button>
-            </div>
-            {pickReason ? (
-              <div className="panel warning" style={{ marginTop: 8 }}>{pickReason}</div>
-            ) : null}
-            <div className="field-hint">
-              打开后自动创建默认房间与隐式空间，不要求注册云端账号。不会向项目目录写入任何配置文件，
-              也不会自动 git init。
-            </div>
-          </div>
-
-          <div className={`panel ${desktopHost ? 'success' : 'warning'}`}>
-            <div className="panel-title">
-              <Icon name={desktopHost ? 'check-circle' : 'info'} size={13} />
-              {desktopHost ? '正在桌面客户端中运行' : '正在浏览器宿主中运行'}
-            </div>
-            {desktopHost ? (
-              <>
-                「浏览…」会调起 Windows 原生目录选择对话框（Electron 的 dialog.showOpenDialog）。
-                选定后会解析 junction、符号链接、盘符与大小写规则来确定目录身份，
-                用于识别"再次打开同一目录"与"移动后重新定位"。
-              </>
-            ) : (
-              <>
-                浏览器里没有原生目录选择器，也没有托盘与窗口控制。桌面客户端（Electron）才有这些能力；
-                浏览器入口用于查看与操作已有项目。启动桌面客户端：<code>pnpm run desktop</code>
-              </>
-            )}
-          </div>
-        </Modal>
-      ) : null}
+      {/* 打开文件夹弹窗（与顶栏项目菜单、空态入口共用同一个组件）。
+          这里**不**自动调起系统选择器：欢迎页本身就是"打开文件夹"的自述页面，
+          先给用户看路径框与边界说明，再由他点「浏览…」；
+          顶栏菜单那种"点了就该弹系统对话框"的入口才用 autoPick。 */}
+      {openFolder ? <OpenFolderModal onClose={() => setOpenFolder(false)} /> : null}
     </div>
   );
 }
@@ -268,10 +294,10 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
     <div className="main">
       <div className="page">
         <div className="page-head">
+          {/* 项目名与路径已按用户要求删除（2026-09-26）：顶栏一直显示当前项目名，
+              路径在「文件与 Git」「项目设置」里都有。这里保留的是**只有这一页才有的**概览标签与操作。 */}
           <div>
-            <div className="page-title">{p.displayName}</div>
-            <div className="page-sub mono">{p.canonicalPath}</div>
-            <div className="row tight wrap" style={{ marginTop: 8 }}>
+            <div className="row tight wrap">
               {p.isGit ? <Tag plain icon="git-branch">{p.gitBranch}</Tag> : <Tag plain icon="folder">普通目录</Tag>}
               <Tag plain icon="layers">{rooms.length} 个房间</Tag>
               <Tag plain icon="users">{members.length} 名成员</Tag>
@@ -384,14 +410,12 @@ export function ActivityPage() {
   return (
     <div className="main">
       <div className="page">
+        {/* 页头（「待我处理」+ 一段说明）已按用户要求删除（2026-09-26）。
+            这一段里真正有用的两条信息留下了：**范围**（下面是范围标签）与**筛选**（右侧分段控件）——
+            其余解释性文字（"不复制一份可以另行回复的新会话"）属于文档语气。 */}
         <div className="page-head">
           <div>
-            <div className="page-title">待我处理</div>
-            <div className="page-sub">
-              需要你回答的问题、授权、失败、剩余分歧和可交付成果。每一条都指回原线程，不复制一份可以另行回复的新会话。
-              普通的多 agent 讨论只积累线程未读，不会每条都弹通知。（回复串里的「活动」tab 是该串的执行记录，与这里不是一回事。）
-            </div>
-            <div className="row tight wrap" style={{ marginTop: 8 }}>
+            <div className="row tight wrap">
               {/*
                 §17.7「底部范围固定」：待我处理**默认汇总当前用户全部可访问项目**，
                 即使项目被隐藏也不算丢，页头必须写明范围、卡片必须标来源 ——
@@ -674,15 +698,9 @@ export function LibraryPage({ query }: { query: Record<string, string> }) {
   return (
     <div className="main">
       <div className="page">
-        <div className="page-head">
-          <div>
-            <div className="page-title">搜索与收藏</div>
-            <div className="page-sub">
-              收藏独立存放你挑出来的结论与报告，跳转回原始位置。搜索结果点击后回到对应串并高亮；
-              你在搜索里看过某项结果，不会自动授权给当前 agent。
-            </div>
-          </div>
-        </div>
+        {/* 页头（「搜索与收藏」+ 一段说明）已按用户要求删除（2026-09-26）：
+            这个页面的身份由侧栏高亮 + 下面的页签（搜索/收藏）承担，
+            页头那段话是重复叙述。 */}
 
         {/* 标签在上、**一个**筛选行在下。
             此前是"范围条 → 标签 → 搜索条"两条分开的横条夹着标签，

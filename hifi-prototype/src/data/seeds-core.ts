@@ -130,6 +130,11 @@ export const runtimeInstallations: RuntimeInstallation[] = [
     version: '0.48.0',
     adapterVersion: 'zs-adapter-codex 0.1.0',
     health: 'ready',
+    /* 安装 / 认证 / 验证分开记录：这三项合起来才是 health='ready'（§4.1）。
+       不要用 health 反推单项 —— "不可用"不等于"未安装"。 */
+    installState: 'installed',
+    authState: 'logged_in',
+    verifyState: 'verified',
     capabilities: {
       streaming: true,
       toolEvents: true,
@@ -148,6 +153,9 @@ export const runtimeInstallations: RuntimeInstallation[] = [
     version: '2.0.11',
     adapterVersion: 'zs-adapter-claude 0.1.0',
     health: 'ready',
+    installState: 'installed',
+    authState: 'logged_in',
+    verifyState: 'verified',
     capabilities: {
       streaming: true,
       toolEvents: true,
@@ -1008,6 +1016,221 @@ export const changeSets: ChangeSet[] = [
   },
   {
     /**
+     * 任务 #12 第二轮（2026-09-26 补数据，用户要求"能测向下滚动"）。
+     *
+     * 与 Git 工作区**逐条对应**：seeds-git.ts 里这四条 status 的 changeSetId
+     * 就是本 id，路径也一致 —— 「文件」页树上的改动标记、改动集详情、
+     * Git 页的「改动集」Tag 读的是同一份数据（§4，不复制两份）。
+     * 未提交 + 已应用：原目录直接写入模式下这是常态（§14.3）。
+     */
+    id: I.CS_12_R2,
+    projectId: I.P_ZS,
+    taskId: I.TASK_12,
+    workspaceId: 'ws_zs_primary',
+    beforeRef: 'git:HEAD@3c91d2e + snapshot:snap_20260926_0910（含未提交内容前像，E15）',
+    afterRef: 'git:WORKTREE@uncommitted',
+    applicationStatus: 'applied',
+    files: [
+      {
+        path: 'src/contracts/events.ts',
+        change: 'modified',
+        additions: 31,
+        deletions: 12,
+        diff: [
+          {
+            header: '@@ -3,9 +3,14 @@',
+            lines: [
+              { type: 'ctx', text: 'export type NormalizedEvent =', oldNo: 3, newNo: 3 },
+              { type: 'ctx', text: '  | { kind: "message"; text: string }', oldNo: 4, newNo: 4 },
+              { type: 'del', text: '  | { kind: "tool"; name: string };', oldNo: 5 },
+              { type: 'add', text: '  | { kind: "tool"; name: string; input?: unknown }', newNo: 5 },
+              { type: 'add', text: '  | { kind: "error"; code: string; retriable: boolean }', newNo: 6 },
+              { type: 'add', text: '  | { kind: "usage"; tokensIn: number; tokensOut: number };', newNo: 7 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'src/adapter/codex-appserver.ts',
+        change: 'modified',
+        additions: 18,
+        deletions: 6,
+        diff: [
+          {
+            header: '@@ -41,8 +41,14 @@ export class CodexAppServerAdapter {',
+            lines: [
+              { type: 'ctx', text: '  private handleNotification(msg: unknown) {', oldNo: 41, newNo: 41 },
+              { type: 'del', text: '    const ev = msg as CodexEvent;', oldNo: 42 },
+              { type: 'add', text: '    // 厂商类型只在本层出现：出边一律转成 NormalizedEvent，', newNo: 42 },
+              { type: 'add', text: '    // domain 不 import 任何 provider 联合类型（§6 边界）。', newNo: 43 },
+              { type: 'add', text: '    const ev = normalizeCodexEvent(msg);', newNo: 44 },
+              { type: 'ctx', text: '    this.onEvent(ev);', oldNo: 43, newNo: 45 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'src/adapter/legacy-zod.ts',
+        change: 'deleted',
+        additions: 0,
+        deletions: 4,
+        diff: [
+          {
+            header: '@@ -1,7 +0,0 @@',
+            lines: [
+              { type: 'del', text: '/** 早期实验：用 zod 校验厂商事件，已由 contracts 层取代。 */', oldNo: 1 },
+              { type: 'del', text: "import { z } from 'zod';", oldNo: 2 },
+              { type: 'del', text: 'export const codexEvent = z.object({ type: z.string() });', oldNo: 3 },
+              { type: 'del', text: 'export const parseCodex = (raw: unknown) => codexEvent.parse(raw);', oldNo: 4 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'src/components/Composer.tsx',
+        change: 'renamed',
+        additions: 3,
+        deletions: 3,
+        diff: [
+          {
+            header: '@@ -1,5 +1,6 @@  src/ui/Composer.tsx → src/components/Composer.tsx',
+            lines: [
+              { type: 'ctx', text: '/** 输入区：房间 / 线程 / 私信共用同一个组件。 */', oldNo: 1, newNo: 1 },
+              { type: 'add', text: '// 移动原因：输入区不再只服务 ui 内部，放在 components 下供三处 import。', newNo: 2 },
+              { type: 'ctx', text: 'export function Composer(props: ComposerProps) {', oldNo: 2, newNo: 3 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    /**
+     * 任务 #14（周报）。与 Git 工作区对应，未提交。
+     * 这条让「改动集详情」有第二份**多文件**内容可点：
+     * 否则左栏只有一张卡，右栏永远只看得到同一个集合。
+     */
+    id: I.CS_14,
+    projectId: I.P_ZS,
+    taskId: I.TASK_14,
+    workspaceId: 'ws_zs_primary',
+    beforeRef: 'git:HEAD@3c91d2e + snapshot:snap_20260925_2200（含未提交内容前像，E15）',
+    afterRef: 'git:WORKTREE@uncommitted',
+    applicationStatus: 'applied',
+    files: [
+      {
+        path: 'docs/weekly/2026-W39.md',
+        change: 'added',
+        additions: 64,
+        deletions: 0,
+        diff: [
+          {
+            header: '@@ -0,0 +1,8 @@',
+            lines: [
+              { type: 'add', text: '# 第 39 周演化日志（2026-09-21 ~ 2026-09-26）', newNo: 1 },
+              { type: 'add', text: '', newNo: 2 },
+              { type: 'add', text: '## 完成', newNo: 3 },
+              { type: 'add', text: '- 文件与 Git 合页：三层结构收敛为一条滚动轴', newNo: 4 },
+              { type: 'add', text: '- 侧栏状态提示统一：状态位 / 蓝点 / 数字徽标', newNo: 5 },
+              { type: 'add', text: '', newNo: 6 },
+              { type: 'add', text: '## 受阻', newNo: 7 },
+              { type: 'add', text: '- Windows 中文路径：已定位，改动待验收（任务 #13）', newNo: 8 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'docs/evo-log.md',
+        change: 'modified',
+        additions: 12,
+        deletions: 4,
+        diff: [
+          {
+            header: '@@ -8,6 +8,11 @@',
+            lines: [
+              { type: 'ctx', text: '## 2026-09-20', oldNo: 8, newNo: 8 },
+              { type: 'ctx', text: '- 私信沿用房间三模式，以参与者为可见范围。', oldNo: 9, newNo: 9 },
+              { type: 'add', text: '', newNo: 10 },
+              { type: 'add', text: '## 2026-09-25', newNo: 11 },
+              { type: 'add', text: '- 仓库初始化并推送远端；截图与 dist 不入库。', newNo: 12 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    /**
+     * 子任务 #12（核对 adapter 层的厂商类型泄漏）。未提交，与工作区对应。
+     *
+     * 为什么给它单独一条改动集：Git 页「待提交 · 按任务」的分组头读的是
+     * taskId → 任务标题，子任务与父任务同号（都是 #12）——这里正好让
+     * "同号任务不能靠编号区分、必须靠 id" 这件事在 Git 页也被覆盖到。
+     */
+    id: I.CS_12_ARCH,
+    projectId: I.P_ZS,
+    taskId: I.SUB_12_ARCH,
+    workspaceId: 'ws_zs_primary',
+    beforeRef: 'git:HEAD@3c91d2e',
+    afterRef: 'git:WORKTREE@uncommitted',
+    applicationStatus: 'applied',
+    files: [
+      {
+        path: 'src/adapter/claude-headless.ts',
+        change: 'modified',
+        additions: 14,
+        deletions: 5,
+        diff: [
+          {
+            header: '@@ -12,7 +12,11 @@ export class ClaudeHeadlessAdapter {',
+            lines: [
+              { type: 'ctx', text: '  async *run(turn: TurnInput): AsyncIterable<NormalizedEvent> {', oldNo: 12, newNo: 12 },
+              { type: 'del', text: '    for await (const raw of this.transport(turn)) yield raw as any;', oldNo: 13 },
+              { type: 'add', text: '    // 泄漏点：这里原来把厂商流事件直接 yield 出去，', newNo: 13 },
+              { type: 'add', text: '    // domain 因此能看到 ClaudeStreamEvent（§6 违规）。', newNo: 14 },
+              { type: 'add', text: '    for await (const raw of this.transport(turn)) yield normalizeClaudeEvent(raw);', newNo: 15 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'src/adapter/provider-registry.ts',
+        change: 'modified',
+        additions: 4,
+        deletions: 4,
+        diff: [
+          {
+            header: '@@ -1,6 +1,6 @@',
+            lines: [
+              { type: 'ctx', text: '/** 首版只接 Codex App Server 与 Claude Code headless（决策 37）。 */', oldNo: 1, newNo: 1 },
+              { type: 'del', text: 'export const ADAPTERS: Record<string, () => Adapter> = {', oldNo: 2 },
+              { type: 'add', text: 'export const ADAPTERS: Record<RuntimeId, () => Adapter> = {', newNo: 2 },
+              { type: 'ctx', text: '  [RT_CODEX]: () => new CodexAppServerAdapter(),', oldNo: 3, newNo: 3 },
+            ],
+          },
+        ],
+      },
+      {
+        path: 'tests/unit/task_status.test.ts',
+        change: 'modified',
+        additions: 21,
+        deletions: 0,
+        diff: [
+          {
+            header: '@@ -12,3 +12,8 @@',
+            lines: [
+              { type: 'ctx', text: "describe('任务状态机', () => {", oldNo: 12, newNo: 12 },
+              { type: 'add', text: "  it('adapter 层不得把厂商类型带出边界', () => {", newNo: 13 },
+              { type: 'add', text: '    expect(importsOf("src/domain").some(isProviderType)).toBe(false);', newNo: 14 },
+              { type: 'add', text: '  });', newNo: 15 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    /**
      * notes-vault（**非 Git**）的改动集。
      *
      * 关键差别（E15 / §14.2）：非 Git 目录没有 ref 可用，前像必须是
@@ -1436,8 +1659,72 @@ export const initialState: AppState = {
       tokenPrefix: 'zs_tok_11ab',
     },
   ],
+  /**
+   * 执行工具的接入配置（§4.1 的"工具配置"）。
+   * 种子与检测报告一致：两个 CLI 都用订阅方式、路径就是检测到的那条。
+   */
+  runtimeConfigs: {
+    [I.RT_CODEX]: {
+      runtimeId: I.RT_CODEX,
+      executablePath: 'C:\\Users\\user\\AppData\\Roaming\\npm\\codex.cmd',
+      authMode: 'subscription',
+      connectionArgs: '--app-server',
+      updatedAt: NOW - min(60 * 24 * 9),
+    },
+    [I.RT_CLAUDE]: {
+      runtimeId: I.RT_CLAUDE,
+      executablePath: 'C:\\Users\\user\\AppData\\Roaming\\npm\\claude.cmd',
+      authMode: 'subscription',
+      connectionArgs: '',
+      updatedAt: NOW - min(60 * 24 * 9),
+    },
+  },
   diagnostics,
   startupRecovery,
+  /**
+   * 外部 AI 连接（MCP，§31.5）。
+   *
+   * 两个连接刻意演示不同状态：一个**范围受限、预算快用完**的活跃连接，
+   * 一个**已吊销**的连接（保留记录才看得出"吊销后立即失效、审计仍在"）。
+   * 数字全是模拟值 —— 原型没有 MCP 服务端，界面必须如实标注后台未接入（§3.3）。
+   */
+  mcpConnections: [
+    {
+      id: 'mcp_1',
+      name: 'Claude Desktop',
+      clientType: 'stdio · zs mcp 桥接（连接令牌即凭据）',
+      transfer: 'stdio',
+      tokenPrefix: 'zs_mcp_4d1a',
+      createdAt: NOW - min(60 * 24 * 6),
+      lastActiveAt: NOW - min(12),
+      callCount: 47,
+      scope: {
+        targets: [I.P_ZS, `room:${I.R_DEV}`],
+        operations: ['read', 'task.write', 'message.send'],
+        memberIds: [I.M_CODEX, I.M_CLAUDE],
+        budgetCapCalls: 60,
+        usedCalls: 47,
+      },
+    },
+    {
+      id: 'mcp_2',
+      name: 'Cursor（另一个工作区）',
+      clientType: 'Streamable HTTP · 私有令牌模式（不提供 OAuth 发现）',
+      transfer: 'http',
+      tokenPrefix: 'zs_mcp_7b02',
+      createdAt: NOW - min(60 * 24 * 20),
+      revokedAt: NOW - min(60 * 30),
+      lastActiveAt: NOW - min(60 * 31),
+      callCount: 12,
+      scope: {
+        targets: [I.P_BACKFILL],
+        operations: ['read'],
+        memberIds: [],
+        budgetCapCalls: 20,
+        usedCalls: 12,
+      },
+    },
+  ],
   readStates: {
     [I.T_12]: 13,
     [I.T_13]: 9,
@@ -1494,6 +1781,29 @@ export const initialState: AppState = {
     keepInTray: true,
     // E7：重启后**不**自动续跑是默认值，必须先列出可继续任务等用户确认
     autoResumeTasks: false,
+    // 日志保留：7/14/30 三个真实可选值，默认 14（§2.4 的选项①，不是"点击无入口"的假按钮）
+    logRetentionDays: 14,
+    /**
+     * 通知偏好（§27.11 ATTN-05 的应用级层）。
+     * 只放应用级这一层：房间静音与线程关注仍是 `subscriptions`（同一份订阅状态）。
+     */
+    notifications: {
+      muteAll: false,
+      events: { approval: true, taskFailed: true, taskDone: true, mentioned: true },
+      channel: 'desktop',
+      sound: true,
+      dnd: { enabled: false, from: '22:00', to: '08:00' },
+    },
+    /**
+     * 应用级运行并发（§10.3 决策 12）：3 / 1 是**建议起始值**，不是硬上限。
+     * provider 单独限额默认不开。
+     */
+    runtimeLimits: {
+      maxActiveTurns: 3,
+      maxTurnsPerMember: 1,
+      providerCapEnabled: false,
+      providerCapTurns: 2,
+    },
   },
   ui: {
     theme: 'light',

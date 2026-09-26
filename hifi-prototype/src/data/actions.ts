@@ -1228,7 +1228,8 @@ export function rotateToken() {
     ...s,
     devices: s.devices.map((d) => (d.kind === 'lan' ? { ...d, tokenPrefix: `${token}_${d.id.slice(-4)}` } : d)),
   }));
-  recordLocalOnly('device.token.rotate', `token=${token}*** → 轮换不影响已配对设备；吊销与轮换相互独立`);
+  // 留痕不记录令牌（连前缀也不记）：凭据不进日志，与 MCP 轮换同一口径
+  recordLocalOnly('device.token.rotate', '已轮换会话令牌 → 不影响已配对设备；吊销与轮换相互独立');
   toast('会话令牌已轮换：所有已配对设备无需重新配对，吊销设备仍是单独动作', 'success');
 }
 

@@ -938,24 +938,36 @@ const align = await c.ev(`
 check('四个功能入口的图标在同一列（不出现被挤成子项的错层级）',
   align?.全同列 === true, JSON.stringify(align?.xs));
 
-// 主题与账号已收进应用设置
-await go('/settings?section=general');
+/**
+ * 主题与账号/退出/重置原型数据都在应用设置里 —— 但**位置按七类重排（第二十八批 §3.1）变了**：
+ *  · 主题 → 「外观」分区（原来在通用的「外观与账号」卡片里，值走独立值列）；
+ *  · 退出 → 「通用」的「本机账号与会话」；
+ *  · 重置原型数据 → 「帮助与关于」底部的「原型工具」折叠组（默认折叠，展开后可见）。
+ * 断言口径不变：这三件事必须都能在应用设置里找到，且标题栏不再有主题键。
+ */
+await go('/settings?section=appearance');
 const account = await c.ev(`
   (() => {
     const t = document.querySelector('.settings-body')?.innerText ?? '';
-    return {
-      有外观与账号: t.includes('外观与账号'),
-      有深色外观: t.includes('深色外观'),
-      有重置原型数据: t.includes('重置原型数据'),
-      有退出: t.includes('退出'),
-      标题栏无主题键: !document.querySelector('.titlebar .icon-btn'),
-    };
+    return { 有深色外观: t.includes('深色外观'), 有当前值: t.includes('当前：') };
   })()
 `);
-check('主题切换与账号/退出/重置原型数据收进应用设置',
-  account?.有外观与账号 === true && account?.有深色外观 === true
-    && account?.有重置原型数据 === true && account?.有退出 === true,
-  JSON.stringify(account));
+await go('/settings?section=general');
+const generalHasQuit = await c.ev(`(document.querySelector('.settings-body')?.innerText ?? '').includes('退出')`);
+await go('/settings?section=help');
+const protoTools = await c.ev(`
+  (async () => {
+    const head = [...document.querySelectorAll('.settings-collapse-head')].find(h => h.innerText.includes('原型工具'));
+    head?.click();
+    await new Promise(r => setTimeout(r, 400));
+    const body = head?.parentElement?.querySelector('.settings-collapse-body');
+    return { 有重置原型数据: (body?.innerText ?? '').includes('重置原型数据'), 标题栏无主题键: !document.querySelector('.titlebar .icon-btn') };
+  })()
+`);
+check('主题切换与账号/退出/重置原型数据仍在应用设置里（七类重排后的新落点）',
+  account?.有深色外观 === true && account?.有当前值 === true
+    && generalHasQuit === true && protoTools?.有重置原型数据 === true,
+  JSON.stringify({ account, generalHasQuit, protoTools }));
 
 /* ============================================================
    7. bug 修复仍成立：窄视口下底部固定入口可达

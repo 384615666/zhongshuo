@@ -170,15 +170,42 @@ const afterCommit = await ev(`
     const t = document.querySelector('.page').innerText;
     return {
       暂存区空了: t.includes('暂存区是空的'),
-      提交信息清空: document.querySelector('.git-commit-input')?.value === '',
+      /* 2026-09-26：暂存区为空时「准备提交」收成一行短提示，
+         不再留一个大 textarea 占着右栏阅读区 —— 所以此刻不该有输入框。 */
+      表单已收起: !document.querySelector('.git-commit-input'),
+      有提交入口: [...document.querySelectorAll('.git-prepare .btn')].some(b => b.textContent.trim() === '提交'),
     };
   })()
 `);
 check('提交后暂存区清空', afterCommit?.暂存区空了 === true);
-check('提交后提交信息被清空', afterCommit?.提交信息清空 === true);
+check('暂存区为空时准备提交收成短提示（不留大 textarea）', afterCommit?.表单已收起 === true);
+check('准备提交收起后提交入口仍然可达', afterCommit?.有提交入口 === true);
+
+/*
+ * 「提交信息被清空」这条断言**不能删**（它验证的是提交后草稿不残留）。
+ * 但表单此时是收起的，读不到 textarea —— 所以重新暂存一个文件把表单展开回来，
+ * 再读它的 value：为空才说明草稿真的被清掉了。
+ */
+await ev(`
+  (() => {
+    const b = [...document.querySelectorAll('.git-detail .btn')].find(x => x.textContent.trim() === '暂存');
+    if (b) { b.click(); return true; }
+    return false;
+  })()
+`);
+await sleep(600);
+const draftCleared = await ev(`
+  (() => {
+    const ta = document.querySelector('.git-commit-input');
+    return { 表单回来了: !!ta, 提交信息清空: ta?.value === '' };
+  })()
+`);
+check('提交后提交信息被清空（草稿不残留）',
+  draftCleared?.表单回来了 === true && draftCleared?.提交信息清空 === true,
+  `value=${JSON.stringify(draftCleared?.提交信息清空)}`);
 
 // 历史里应出现新提交
-await ev(`(() => { const t=[...document.querySelectorAll('.thread-tab')].find(e=>e.innerText.includes('历史')); t&&t.click(); return true; })()`);
+await ev(`(() => { const t=[...document.querySelectorAll('.seg button')].find(e=>e.innerText.includes('历史')); t&&t.click(); return true; })()`);
 await sleep(700);
 const newCommit = await ev(`document.querySelector('.page').innerText.includes('收敛中文路径解析')`);
 check('新提交出现在历史里', newCommit === true);
@@ -197,7 +224,7 @@ const afterUndo = await ev(`
 `);
 check('撤销提交后 reflog 记录软回退', afterUndo?.reflog出现reset === true);
 // 回到工作区，内容应该还在
-await ev(`(() => { const t=[...document.querySelectorAll('.thread-tab')].find(e=>e.innerText.includes('工作区')); t&&t.click(); return true; })()`);
+await ev(`(() => { const t=[...document.querySelectorAll('.seg button')].find(e=>e.innerText.includes('工作区')); t&&t.click(); return true; })()`);
 await sleep(700);
 const worktreeAfterUndo = await ev(`
   (() => {
@@ -208,8 +235,17 @@ const worktreeAfterUndo = await ev(`
 check('§14.5 撤销后文件回到工作区，没有删除', worktreeAfterUndo?.文件还在 === true);
 
 /* ---------- 4. 切换分支 ---------- */
-await ev(`(() => { const t=[...document.querySelectorAll('.thread-tab')].find(e=>e.innerText.includes('分支')); t&&t.click(); return true; })()`);
+await ev(`(() => { const t=[...document.querySelectorAll('.seg button')].find(e=>e.innerText.includes('分支')); t&&t.click(); return true; })()`);
 await sleep(700);
+// 改造后「切换」只在选中非当前分支后的详情里出现（当前分支没有可切换的目标）
+await ev(`
+  (() => {
+    const r = [...document.querySelectorAll('.git-list-row')].find(x => x.innerText.includes('zs/task-12-module-boundaries'));
+    if (r) r.click();
+    return !!r;
+  })()
+`);
+await sleep(450);
 await clickBtn('切换');
 await sleep(700);
 const afterCheckout = await ev(`

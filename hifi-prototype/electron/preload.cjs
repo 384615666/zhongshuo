@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('zhongshuo', {
   revealPath: (p) => ipcRenderer.invoke('zs:reveal-path', p),
   /** 用系统默认程序打开路径（目录/文件）；返回 {ok, reason}，不猜结果 */
   openPath: (p) => ipcRenderer.invoke('zs:open-path', p),
+  /** 真实的应用数据目录（应用设置 → 数据与存储 → 打开目录用）；浏览器宿主没有这个概念 */
+  appDataDir: () => ipcRenderer.invoke('zs:app-data-dir'),
   openExternal: (url) => ipcRenderer.invoke('zs:open-external', url),
 
   /** 把运行态摘要同步给主进程，供托盘提示与退出确认使用 */

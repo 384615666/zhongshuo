@@ -1,6 +1,6 @@
 # 众说：本地项目群聊多 Agent 协同工作台
 
-开发设计报告 v1.21 · 2026-09-25（文件路径保持稳定）
+开发设计报告 v1.23 · 2026-09-26（文件路径保持稳定）
 
 **2026-09-22 文件预览交互确认（UX-PREVIEW-01）优先**：用户批准共享预览方案并要求交给施工 AI 修改原型。§17.9 为新增交互基线，具体规则见 [房间、回复串与文件预览规格 v1.2](./zhongshuo-workspace-preview-interaction-v1.md)，施工入口见 [原型施工说明](./dev-briefs/prototype-workspace-preview.md)。这是对 §17.1/17.2 的部分修订：成果集合、活动与任务等详情保留线程归属，具体文件正文进入共享预览区域；主池、线程、私信和项目文件均可打开。原型施工已授权，正式 daemon/API 开发与外部写入不因此授权；未验证宽度仍是实验参数，未宣称实现或验收通过。
 
@@ -9,6 +9,12 @@
 第十五批导航决定优先：侧栏依次为“搜索与收藏 → 文件与 Git → 任务看板 → 成员管理 → 选中项目及其会话”，底部固定“待我处理、设置”；顶栏多选仅控制侧栏可见项目，当前项目仍为单个。文件/Git 合为页面内两个标签，任务看板按项目分组，成员页可切项目，Runtime 移入设置。此决定替代第十三批侧栏分组和第十四批“暂不合页”的范围说明，任务验收可选规则不变（§17.1/17.7）。
 
 第十六批设置范围优先：项目设置从应用设置中拆出，每个项目通过侧栏项目行的“⋯ → 项目设置”进入自己的单页；底部“设置”只打开应用设置，不含项目分组或项目选择器。项目页绑定 URL projectId，标题为“项目名 · 项目设置”，无效目标禁止回退至其他项目。任务验收、协作限制、文件修改配置属于项目；通用、Runtime、设备与局域网、诊断属于应用（§17.8）。设置位置变化不改变原有权限/任务策略。
+
+**2026-09-26 应用设置重排优先（第二十八批，施工依据 [dev-briefs/prototype-settings-visual-and-ia.md](./dev-briefs/prototype-settings-visual-and-ia.md)）**：应用设置由「通用、执行工具（Runtime）、设备与局域网、归档管理、诊断与帮助」重排为**七个一级分类**：通用（启动与托盘、应用级运行并发、本机账号与会话）、外观（主题）、通知（首次落地，依据 §27.11 ATTN-05）、AI 工具（原执行工具）、连接与设备（设备配对与外部 AI 连接（MCP，§31.5）两个**分组**，权限说明分开）、数据与存储（数据位置与占用、备份与恢复、归档管理、已移除的项目）、帮助与关于（诊断、日志保留、错误码速查、版本与更新、原型工具折叠组）。**归档管理不再独占一级分类**，仍与 `/archive`、项目 ⋯ 共用同一份数据与操作；分类只有骨架，§3.1 的【暂缺】项（发送快捷键、消息密度、界面缩放等）不显示占位控件。旧 section 链接 `app/general/runtime/lan/archive/archived/diagnostics/errors` 与 `/runtimes`、`section=reminders` 全部继续可用（`errors` 仍规范化并展开速查）。应用设置的**归属边界不变**：本机的软件行为、工具接入、通知、数据与外部连接属应用；项目交付要求、成员身份与模型、房间规则、任务预算仍归各自页面（§17.8）。
+
+**2026-09-26 应用设置重排（第二轮修订）**：按外部评审收窄完成口径并修六处交互缺陷 —— ①数据目录「显示 / 打开 / 复制」共用同一个已解析路径，复制等写入结果、失败如实报错；②令牌不进写操作留痕（`external.connection.rotated` 不再记录令牌）；③数量类输入（并发、预算等）只接受范围内整数，创建与编辑共用同一套校验，非法值不写入；④免打扰按当前时间判定，区分「已启用」与「此刻生效」（含跨零点）；⑤runtime 的安装 / 认证 / 验证状态分别记录，**不由不可用反推未安装**；⑥§4.1 从检测报告补成可改可存的工具配置流程（可执行文件位置 / 认证方式 / 连接参数）。**完成口径**：第二批完成；第三批按条目分别声明 —— §4.2 数据（备份/恢复/清理）与 §4.4 帮助与关于仍是「入口与说明整理完成 + 明确标注的模拟」，§4.3 可改上限但不接调度器，均未接真实文件系统、CLI 探测与更新后端。
+
+**2026-09-26 页面头部与滚动条位（用户第二轮反馈）**：①**去掉页面顶部头部** —— 纯「标题 + 说明」的页头整块删除（应用设置、搜索与收藏、成员管理、任务看板、归档管理、Runtime 兼容页）；带控件的页头只删标题与说明、保留控件（待我处理的范围标签与筛选、项目主页的概览标签与操作、文件与 Git 的路径与项目选择、Git 的路径与拉取/推送、文件与改动的路径与标签）；实体标题（任务/成员/成果详情、项目设置的项目名与路径）保留。归属边界改由各分区副标题承担，范围为标签、路径为坐标，信息不重复也不丢失。②滚动容器 `.page` 采用 `scrollbar-gutter: stable`：原来短内容分区不出现滚动条、长内容分区出现，居中的设置布局会左右各漂约 5px（实测导航左缘 312 / 307）。
 
 **2026-09-24 界面信息减负优先（第二批 UI 减负，施工依据 [dev-briefs/prototype-ui-declutter.md](./dev-briefs/prototype-ui-declutter.md)）**：回复串删除顶部两行（任务号/状态/图标组与原消息摘要横条），常驻视图收敛为「回复、成果(讨论串为附件)、详情」＋一条紧凑导航（左侧收起/返回、最右「⋯」）；任务身份改由输入区目标摘要承担（`跟进 #N · 简短标题`），完整标题、编号、原始要求、真实状态与方式在「详情 → 任务概况」内可查；活动、成员、运行、交付与验收、研讨按分组就地展开，**八类旧 tab 键与 `/task`、`/run`、`/deliberation`、`/artifact`、`/thread` 深链继续可用**（按 §17.4 的映射表落位）。主池卡片去掉「任务详情」「打开回复串」两个常驻按钮，改由标题、回复数与卡片「⋯」进入；同一卡片只保留一种未读表达；协调者与成员数合并为房间信息入口，房间设置进房间「⋯」。预览的文件名只在标签出现一次，视图切换由常驻分段控件改为「阅读 ▾」菜单，放大与导出等收进文件「⋯」。本节取代 §17.2/§17.4 中“顶部原消息”“另起任务始终可见”“预览/源码常驻分段控件”等旧表述；任务/讨论语义、权限、执行状态、预算约束、停止、成员跟进、版本、audience、引用授权与草稿归属均不变。
 
@@ -234,6 +240,24 @@ v1.20 后评审再指出四处问题，逐一核实原文后全部成立并修�
 
 本批同步：§31.1/31.3/31.4/31.6、§21.2 RT-28②③⑪、清单注记与 README 版本。仍只改文档，未实现任何 MCP 能力。
 
+### 0.26 v1.22 修订摘要（2026-09-26 多 Agent 并行写入：延期决定与探索记录）
+
+围绕「多个 Agent 同时修改同一项目」讨论了三套候选方案（Agent 自申报公告锁、意图声明 + 乐观并发 + 整合闸门、派发前写范围分区 + 统一准入）与既有 worktree 路线。经多方评审后用户决定：**暂缓并行写入增强的定稿与实现，先以默认单写者完成协作闭环**。
+
+本次记录该决定，不实现任何并行能力，不改 §14.1 默认值与七条底线：
+
+1. **新增 §14.7**：写明延期决定、延后期间的默认工作方式（并行分析与审查、串行写入）、已延期的候选清单、重启评估的触发条件，以及**不随延期而延后的六项基础保护**（基线记录与用户改动保护 §14.2、撤销边界 §14.5、停止进程树与旧进程确认 §16.3/RT-07、启动恢复进程身份核对 §16.4、验证结果关联真实执行记录 §5.4/§14.3、目录锁域检测 §3.3/RT-09）。
+2. **§14.1 补充指针**：注明 `parallel_writers` 的增强方案已延期、未批准施工，默认值与底线不变。
+3. **§14.4 补充指针**：worktree 落地时机与并行写入增强一起评估，当前随 §14.7 延期；并明确 worktree 不等于安全沙箱，有本机读取权限的 CLI 仍可能直接读原目录（与 §6.2 一致）。
+4. **新增探索记录文档** `docs/zhongshuo-parallel-write-exploration-v1.md`：记录问题起点、四套候选方案、已形成的八条共识、**六项未解决分歧**（原目录并行是否值得投入、派发前分区的保证强度、范围校验是否只检查可能同时运行的任务、阶段屏障能否替代 worktree、成本断言无测量依据、`out_of_scope` 与 `attribution=ambiguous` 是否分开）与后续评估入口。
+5. **候选设计稿修订为 v1.1** `docs/zhongshuo-parallel-write-intent-gate-v1.md`：标注「已延期、未批准施工」，并按评审修正——删除「声明错误无害」「任何文件不会被覆盖」两处不成立的正确性承诺；把快照能力收敛为「检测可观察变化，证据不足时保留归属不确定」；整合闸门按原目录与独立工作区两种模式分别定义并补版本绑定、失败恢复与「未执行」记录规则；修正「无锁 ⇒ 崩溃无影响」的推导；降低过强断言；区分 `out_of_scope` 与 `attribution=ambiguous`；放宽「接口变更是唯一值得排队的场景」。
+
+本批同步：§0.26、§14.1、§14.4、§14.7、两份新文档。只改文档，**未实现任何并行写入、范围校验、整合闸门或工作区隔离能力**；主设计中的条款引用仍只代表设计约定，不代表对应能力已实现。
+
+### 0.27 v1.23 开工基线收口（2026-09-26）
+
+本次授权完成 DEV-01 复核、项目内普通一对一对话设计、MCP 预留及 R4—R11 工程设计收口；原型验证单独记录。规范性增量见 [开工契约 v1.23](./development-baseline-v1.23.md)，C8/R10 逐项排期见 [137 项分批表](./development-delivery-matrix-v1.23.md)。本文仍为总入口；补充文件的会话字段、命令、名单与迟到规则是本版正式增量，优先于下方明确标为历史的旧说明。设计已收口不等于 runtime/数据库/MCP 已实现；B6、ABI、真实 M0 闭环仍按对应包验收。
+
 ## 1. 产品目标与核心体验
 
 ### 1.1 产品承诺
@@ -408,6 +432,8 @@ DIRECT 的 `delegationAllowed=false` 约束本产品的房间交接接口：其�
 
 ### 4.5 回复目的地是服务端约束
 
+本节 thread 约束适用于房间任务；DM 的目的地是 conversationId，采用 §4.6/v1.23 §2，不创建伪 thread。
+
 AUTO、DELIBERATE、DIRECT 三种模式都必须在输入根消息的线程内发布进度、交接、互评、讨论与最终结果。所有 agent 输出继承 AgentTurn.threadId；agent 不能用结果参数更换 roomId、threadId 或冒充主池新任务。
 
 用户在主池底部输入框发送新请求时创建新线程；在线程底部输入框跟进时沿用该线程。两份输入框拥有独立草稿、mention、附件列表和发送状态，不能根据“当前打开的任务”猜测已发消息的目的地。
@@ -425,7 +451,7 @@ AUTO、DELIBERATE、DIRECT 三种模式都必须在输入根消息的线程内�
 - 人类参与者不作为 Agent 派发对象；
 - 私信**不绕开确认、预算与阶段屏障**（R4 落地、私信真正能派工之后仍然适用）；
 - 成果、附件与预览仅向该私信 audience 提供（§17.9 第 7 条），跨会话必须暂藏；
-- 私信**不创建任务号**：任务顶层消息与正式提交接口仍由清单 **R4** 补齐 —— 界面如实说明"暂不创建任务"，不伪造任务卡。
+- 私信不显示房间任务号或任务卡；后台按 [R4 契约](./development-baseline-v1.23.md#2-r4项目文件夹内的普通一对一对话) 为普通 Agent 发送保留 dm_turn 任务与 DIRECT 执行记录，支持停止、预算、审批和恢复。同一 conversation 串行并续接本会话，不同对话隔离；一次性 record_only 只保存。DM 界面不选择 Mode、不做 @ 路由。
 
 > **历史（已被本节取代）**：2026-09-20 版曾规定"私信沿用 §4.2 三模式、以 @ 结构路由、支持多参与者小群（@全体即冻结该私信全部启用 Agent）"。该口径在 2026-09-25 被用户决定取代；若将来恢复小群或 @ 路由，应作为**新的产品决策**重新写入本节，而不是当作既有条款继续引用。
 
@@ -501,7 +527,7 @@ sequenceDiagram
 | 阶段 | 输入 | 输出 | 推进条件 |
 |---|---|---|---|
 | PREPARE | 任务、冻结名单、项目资料 | analysisBaseline、资料清单、预算预估 | 基线和参与者准备完成 |
-| INDEPENDENT | 相同题目与基线，各自不见他人报告 | 每人一份版本化初稿 | 所有预期成员完成，或用户明确允许缺席 |
+| INDEPENDENT | 相同题目与基线，各自不见他人报告 | 每人一份版本化初稿 | 所有预期成员完成，或未完成席位已按 v1.23 缺席/失败/撤出规则终结；全员无有效输入则 BLOCKED |
 | CROSS_REVIEW | 全体已完成初稿 | 每人一份带引用的互评 | 收齐本阶段预期互评 |
 | ISSUE_DISCUSSION | 结构化争议清单和证据 | 新证据、逐项意见、修订 | 共识成立或达到预算上限；第 3 轮为强制复核检查点 |
 | SYNTHESIS | 报告、互评、最终意见 | 主持者整合稿 | 整合稿格式和引用有效 |
@@ -658,6 +684,8 @@ Electron 将 main、renderer、preload 分开，适合把本机能力通过受�
 SQLite WAL 适用于本机并发读取场景，但仍只有一个写者，并要求同机共享内存机制。本设计由 daemon 独占业务写入，避免将运行数据库放在网络盘或同步盘上。[SQLite WAL 文档](https://www.sqlite.org/wal.html)
 
 ### 8.3 通信和 daemon 生命周期
+
+**v1.23 实施协议**：[开工契约 §8](./development-baseline-v1.23.md) 固定配对码寿命/限速、设备凭据与短期会话、TLS 信任及吊销流程。自定义 Authorization header 适用于 HTTP；浏览器 WSS 使用先经 HTTPS 领取的一次性票据首帧认证，不能照搬自定义请求头。
 
 Windows 使用用户级命名管道，其他平台预留 Unix socket。Electron 主进程把窄接口转发至 daemon；agent 的 `zs` CLI 使用相同命令面，但使用任务范围凭据。v1.5 决策 47 原为仅回环监听；2026-09-19 修订（E18）：daemon 在 127.0.0.1 与局域网地址提供与本机界面相同的契约（复用 renderer 代码），权限全开放（含发任务、停止、改设置），仍不需公网服务器。因局域网可达且 daemon 能驱动拥有用户完整权限的 agent，E14 要求升级为该批必做：必须校验 Origin/Host（防 DNS rebinding 与任意网页打本地端口）、令牌走自定义请求头（不得只用 cookie）。
 
@@ -1022,6 +1050,8 @@ fencing 能阻止过期进程写业务状态，但不能撤销它已执行的文
 
 ### 12.2 表结构目录
 
+**v1.23 正式增量**：[开工契约 §2.2](./development-baseline-v1.23.md) 补充 conversation_id、DM 的 nullable room/thread 约束、dm_turn 与 DM session 续接。下面原有字段必须合并该增量，不能直接照旧 room-only 字段生成 migration。conversation_members 用于房间会话成员投影；DM 参与者以 dm_participants 为唯一真源，禁止维护第二份独立名单。
+
 所有 ID 使用稳定随机 ID；时间保存 UTC 毫秒。所有跨项目关联在服务层校验，关键表增加组合外键，禁止只依赖前端传入的 projectId。
 
 | 表 | 核心字段 / 约束 |
@@ -1045,7 +1075,7 @@ fencing 能阻止过期进程写业务状态，但不能撤销它已执行的文
 | runtime_sessions | id、project_id、thread_id、member_id、task_id、session_generation、provider_session_id、cwd、capabilities_json |
 | domain_events | seq、event_id、schema_version、project_id、aggregate_id、kind、payload_json、created_at |
 | outbox | id、dispatch_key、turn_id、status、lease_owner、lease_until、attempt_epoch |
-| command_receipts | command_id、payload_hash、result_json、created_at |
+| command_receipts | idempotency_scope、command_id、payload_hash、result_json、created_at；(idempotency_scope,command_id) 唯一，scope 从认证主体推导；保留去重墓碑，详见 v1.23 §3.2 |
 | workspaces | id、project_id、kind、path、baseline_id、status |
 | workspace_leases | lock_domain、owner_turn_id、epoch、heartbeat_at、status；`single_writer`（默认）下同一 lock_domain 同时最多 1 条活跃租约，租约过期不给新写者放行（RT-07）；`parallel_writers` 下同一 lock_domain 允许**多条活跃租约**，活跃判重按「lock_domain + owner_turn_id」组合，总数受项目 `write_concurrency_policy` 的写入者上限约束（默认建议 2），每条租约独立心跳与 epoch；此时同一 lock_domain 的组合约束由单一独占租约放宽为多条共存，冲突记账与 `attribution=ambiguous` 标记随之产生（§14.1，v1.9 第十二批） |
 | baselines | id、project_id、task_revision、manifest_hash、manifest_path、status |
@@ -1065,8 +1095,8 @@ fencing 能阻止过期进程写业务状态，但不能撤销它已执行的文
 | attention_items | id、viewer_id、thread_id、source_event_id、kind、read_at，事件去重 |
 | message_attachments | id、message_id、thread_id、artifact_id、display_name、mime_type、source_hash |
 | context_grants | id、target_thread_id、source_ref_json、source_revision、granted_by、created_at、revoked_at |
-| conversations、conversation_members | M3（决策 24，E17；原"首版收尾批"并入 M3，2026-09-19 第十一批）：项目内频道会话与成员；DM 使用独立 audience |
-| dm_participants | M3（决策 24，E17）：私信参与者；**2026-09-25 起私信为 1 对 1，一条私信只对应一位参与者**，同一成员可有多条 |
+| conversations、conversation_members | M0 建公共会话基础，M3 接 DM；字段/成员真源以 v1.23 §2.2 为准；房间和 DM 均绑定 project_id |
+| dm_participants | M3：一对一恰有两个不同主体（当前用户与对端 Agent），不是数据库只有一个参与者；同一成员可有多个 conversationId，见 v1.23 §2 |
 | reminders | M3（决策 45，E17）：ownerMemberId、threadId、taskId、时区、计划、授权范围、预算 |
 | file_comments | M3（决策 33，E17）：artifactId/version/hash、锚点类型与坐标/行/时间 |
 
@@ -1205,6 +1235,8 @@ RuntimeSession 的复用键至少为 `(projectId, threadId, memberId, taskId, se
 
 锁只协调本产品启动的执行。外部编辑器、终端以及未被约束的进程仍可能修改文件，必须通过前后快照和文件事件检测标注，不得声称“绝不会冲突”。严格防护需要更强执行隔离。开启 `parallel_writers` 不改变这条边界，外部编辑器与未被约束的进程仍不在协调范围内。
 
+`parallel_writers` 的增强方案（意图声明、派发前范围校验、整合闸门等）**已延期，未批准施工**，当前不按候选稿实现；本节的默认值与七条底线不变。见 §14.7 与 `docs/zhongshuo-parallel-write-exploration-v1.md`。
+
 ### 14.2 用户未提交改动
 
 开始修改前记录基线：Git HEAD、索引状态、跟踪文件的工作区内容、纳入范围的未跟踪文件。不能 stash、reset 或自动提交用户原有改动来获得“干净仓库”。
@@ -1228,6 +1260,8 @@ worktree 按 task/run 建立，避免同一成员做两个任务共享目录。G
 后续流程：冻结并记录基线 → 创建工作目录 → 按记录把允许的未提交内容带入 → 执行 → 固定成果 → 整合区验证 → 按已授权策略应用到原项目。不能假设 `worktree add` 自动包含原工作区未提交修改。
 
 原目录在任务过程中变化时重新执行整合检查；冲突保留在隔离区，不覆盖用户文件。依赖安装、端口、测试数据库按任务配置，不能仅靠文件隔离宣称执行隔离。
+
+worktree 的落地时机与并行写入增强一起评估，**当前已随 §14.7 延期**，本节保留为后续设计。worktree 只提供不同的工作目录，不自动解决合并、端口、数据库或外部服务冲突；它也不等同于安全沙箱，有本机读取权限的 CLI 仍可能直接读取原目录文件（§6.2）。
 
 ### 14.5 撤销
 
@@ -1272,6 +1306,30 @@ v1.13 导航落点：本节“Git 页”统一指“文件与 Git”页面内的
 
 - 推送需要明确的目标分支、远端与有效授权。用户主动执行 push 是独立的 Git 操作，不能因未启用任务验收或 Task.REVIEW 而额外要求先验收；Agent 不得仅因任务完成、验收通过或开关关闭而自动 push。已有原生权限与远端保护继续有效。
 - 分支切换不替用户 stash，会如实说明“N 个未提交改动会跟着过去”——这是反映 Git 的真实行为，不是保护措施。
+
+### 14.7 并行写入增强：已延期，保留候选与评估入口（v1.22，2026-09-26）
+
+**决定**：暂缓多 Agent 并行写入增强的方案定稿与实现。当前以同一物理目录默认单写者（§14.1 `single_writer`）完成协作闭环；保留并行能力目标与现有候选提案，后续结合真实任务和冲突样例单独评审。
+
+延后期间的默认工作方式：**并行分析与审查，串行写入**（与 §5.3 一致）。多个 Agent 可以同时分析、规划和审查；同一物理项目目录同时只安排一个受管理写入任务，其余按依赖顺序排队。
+
+**已延期的候选增强**（均**未定案、未实现**，不得据此施工）：
+
+| 候选 | 说明 |
+|---|---|
+| 修改意图声明（write_intent） | 任务声明预计修改范围与涉及的契约，用于分工可见与依赖发现，**不构成互斥** |
+| 派发前写范围校验 | 协调者在 §5.2 契约中给出写范围，daemon 在派发前程序校验重叠、越权与依赖环 |
+| 跨任务变更请求 | 「提出需求 → 接收确认 → 交付版本 → 依赖方联调」的闭环 |
+| 整合闸门 | ChangeSet 冻结后的检查点，原目录模式与独立工作区模式分别定义检查对象 |
+| 按任务 worktree | 见 §14.4，与并行写入增强一起评估落地时机 |
+
+**探索过程、候选方案对比、未解决分歧与后续评估入口**记录在 `docs/zhongshuo-parallel-write-exploration-v1.md`；候选设计稿 `docs/zhongshuo-parallel-write-intent-gate-v1.md` 已标注「已延期、未批准施工」。
+
+**重启评估的触发条件**（满足其一）：真实使用中出现多个独立编码任务经常排队且等待明显影响效率；出现真实的并行写入冲突或覆盖事故；受控写入入口或任务独立工作区具备实现条件，使「强制维持分区」成为可能。届时需以真实任务、冲突样例与排队数据作为输入，不围绕假设定案。
+
+**不随本次延期而延后的基础保护**：基线记录与用户改动保护（§14.2）、撤销边界（§14.5）、停止进程树与旧进程确认（§16.3、RT-07）、启动恢复的进程身份核对（§16.4）、验证结果必须关联真实执行记录（§5.4、§14.3）、目录锁域重叠检测（§3.3、RT-09）。即使只有一个写入 Agent，这些也仍然需要。
+
+**措辞纪律**：任何并行能力都不得表述为「已隔离」「不会冲突」「绝不会覆盖」。外部编辑器、终端与有本机权限的 CLI 不在协调范围内（§14.1、§6.2）；受管理执行之间的协调能力，只能按「减少冲突」描述。本次只改文档，未实现任何并行写入能力。
 
 ## 15. 本地接口与 Agent 房间工具
 
@@ -1320,7 +1378,7 @@ interface DomainEvent<T> {
 | project.list | cursor | 项目列表 |
 | room.create | projectId、name、memberIds | room |
 | member.configure | memberId、settings、expectedRevision | 能力及配置版本 |
-| message.submit | target（room_root 或 thread）、body、mentions、intent | messageId、threadId、taskId、runId、resolvedRoute |
+| message.submit | target（room_root / thread / dm，含 conversationId）、body、attachmentRefs、mentions、intent | messageId、conversationId、threadId?、taskId?、runId?、disposition、resolvedRoute；DM/record_only 规则见 v1.23 §2.3 |
 | thread.open | threadId、aroundMessageId? | anchor、summary、分页回复及阅读水位 |
 | thread.history | threadId、beforeSeq?、limit | 串内回复；agent 调用额外限制任务与阶段 |
 | thread.markRead | threadId、throughMessageSeq | 更新后的未读数 |
@@ -1364,7 +1422,7 @@ UI 提交的 intent 至少包含权限意图 `analyze / modify`，路由模式�
 
 v1.12 从新 UI 命令面移除 git.reviewCommit；旧原型的“验收这个提交”及退回提交逻辑不沿用。必要的历史兼容入口只能返回已废止提示，不能暗中映射为任务验收或 Git 回退。task.delivery.review 与 approval.respond、RATIFY 的成果提交分别处理。
 
-本清单为 M0—M3 首批命令面；私信、提醒、文件评论以及附件七类、导出、本机+局域网浏览器访问的命令面**并入 M3**（决策 24/45/33/31/34/47，E9 统一口径，2026-09-19 第十一批拍板）；浏览器访问批的安全前置见 §8.3 配对码与 §21.2 RT-21。表情、搜索过滤等其余全量命令随 FULL 工作包（§28.5）扩展。
+本清单为 M0—M3 首批命令面；私信、提醒、文件评论以及附件七类、导出、本机+局域网浏览器访问的命令面**并入 M3**（决策 24/45/33/31/34/47，E9 统一口径，2026-09-19 第十一批拍板）；浏览器访问批的安全前置见 §8.3 配对码与 §21.2 RT-21。简单表情和首版搜索过滤归 DEV-18/M3；完整扩展随 FULL，详见 C8 v1.23 分批表。
 
 事件订阅先取得快照与同一事务读取水位，再请求 afterSeq 之后事件；客户端按 seq 去重。重连游标过旧时返回 SNAPSHOT_REQUIRED，不能悄悄跳过中间状态。
 
@@ -1391,6 +1449,8 @@ Raft 实机模式（2026-09-17 本机采集，见 runtime-verification 报告）
 首版允许两种输出路径：adapter 收到结构化最终结果后由 daemon 代为入库；或 agent 主动调用 zs 提交。两者携带同一 resultKey，避免一份答案被重复发布。逐 token 进度只由 adapter 回流，agent 不需重复用 zs 发送。
 
 ### 15.4 工具授权与阶段约束
+
+**v1.23**：命令×模式×阶段允许表、结构化 mention 的 request-file 入口、回执和 resultKey/fencing 以 [开工契约 §6](./development-baseline-v1.23.md) 为正式补充。DM 使用 conversation read，room read 仅保留房间兼容。
 
 daemon 启动 agent 时注入短期任务凭据，绑定 project/member/run/turn、有效期和可调用动作。凭据不写进 prompt、报告或命令行参数；本地 endpoint 对身份和作用域独立验证。
 
@@ -1526,7 +1586,7 @@ renderer 关闭 Node 直访并启用 contextIsolation，preload 仅暴露明确�
 | 项目设置（独立项目页） | 项目行“⋯ → 项目设置”；URL 绑定项目，单页含任务交付/协作限制/文件修改，不放项目下拉或第二级设置导航 | 无效/无权限项目显示错误且无写入控件，不回退；设置策略沿用 §10.5/14.1 |
 | 成员管理 | 页面内切换项目并同步全局当前项目，仅展示该项目成员；成员详情可配置名称/runtime/能力 | 无成员提示添加；模板/runtime 可复用但项目身份不混用；未安装/未登录/未验证分开 |
 | 运行详情 | 工具活动、用量、错误、原始诊断 | 已停止、结果不确定分别显示 |
-| 应用设置（底部设置入口） | 通用、执行工具（Runtime）、设备与局域网、诊断与帮助；不含项目配置或项目选择器 | 无项目也可打开；应用配置不因切项目而复制；检测/登录/认证/诊断能力保留 |
+| 应用设置（底部设置入口） | 七个一级分类：通用、外观、通知、AI 工具、连接与设备（设备配对与外部 AI 连接两个分组）、数据与存储（含归档管理）、帮助与关于；不含项目配置或项目选择器 | 无项目也可打开；应用配置不因切项目而复制；检测/登录/认证/通知/外部连接/诊断能力保留 |
 
 ### 17.3 消息类型
 
@@ -1620,7 +1680,7 @@ v1.15 补充：具体文件正文的旧 `/artifact/:id`、串内 artifact 查询
 | 成员管理 | `#/project/:projectId/members` | `/members` 按当前项目规范化；`/member/:memberId` 校验归属后定位详情 |
 | 私信 | `#/project/:projectId/dm?conversationId=…&memberId=…` | `/dm/:memberId` 从成员实体解析项目，`/dm` 按当前项目；现有私信链接兼容，禁止跨项目选错同名成员 |
 | 项目设置 | `#/project/:projectId/settings?anchor=collab或write`（anchor 可省略） | 旧 `/settings?section=project或collab或budget或write&projectId=…` 规范化到独立项目页，完整兼容见 §17.8 |
-| 应用设置 | `#/settings?section=general或runtime或lan或diagnostics` | `/runtimes` → runtime，app → general，errors → diagnostics 内速查；应用链接的多余 projectId 清除，不据此切换焦点 |
+| 应用设置 | `#/settings?section=general或appearance或notifications或runtime或connections或data或help` | `/runtimes` → runtime（分区改称「AI 工具」，主键保留），旧 `app→general`、`lan→connections`、`archive/archived→data`、`diagnostics→help`、`errors→help` 内速查（并展开）；应用链接的多余 projectId 清除，不据此切换焦点 |
 
 表中“或”代表枚举候选，不是 URL 字面值。兼容重定向使用 replace，避免后退陷入重定向循环；具体实体参数继续服务端校验。文件/Git 的页面壳复用相同 projectId；页内切换不复制 ChangeSet 或验收记录。Git 标签保留原来的工作区、历史、分支与远端等内部视图，不新增第三个顶层“历史”标签。非 Git 项目打开 git 深链时展示说明，不自动初始化，也不把 Git 状态伪装成空仓库成功。
 
@@ -1730,6 +1790,8 @@ runtime 和 adapter 版本组合分别认证，安装新版本后保留旧认证
 
 ### 20.1 工作包
 
+**v1.23**：[分批表](./development-delivery-matrix-v1.23.md) 补 DEV-21 提示词、DEV-22 DM、DEV-23 提醒、DEV-24 附件/评论/导出、DEV-25 LAN，并逐项映射 §27 全部 137 项。
+
 | ID | 工作包 | 依赖 | 交付物与完成定义 |
 |---|---|---|---|
 | DEV-01 | contracts 与路由 | 无 | DTO/schema、RootMessage/Thread/Task、三模式与回复目标测试 |
@@ -1747,7 +1809,7 @@ runtime 和 adapter 版本组合分别认证，安装新版本后保留旧认证
 | DEV-13 | 恢复与故障测试 | DEV-02/05/12 | 不确定窗口处理、进程核对、成果一致性 |
 | DEV-14 | UI 完整协作视图 | DEV-07/09/11/12 | 三模式、任务面板、报告、授权与诊断 |
 | DEV-15 | Windows 打包 | DEV-13/14 | 安装、卸载保留数据、托盘、更新迁移验证 |
-| DEV-16 | 发布验收 | DEV-10—15 | 必测场景、性能记录、已知限制与兼容表 |
+| DEV-16 | 发布验收 | DEV-10—15、17—19、21—25；G2/G3/G4 | 必测场景、性能记录、已知限制与兼容表 |
 | DEV-17 | 线程关联与隔离 | DEV-01/02/05 | 目标绑定、专属会话、阶段/跨任务过滤、双任务串线测试；并入 M0 |
 | DEV-18 | 未读与导航 | DEV-07/17 | 回复投影、关注、水位、直达链接、Saved、待我处理；M3 |
 | DEV-19 | 房间协作视图 | DEV-11/12/17 | 根任务看板、来源关联 Files、基础搜索、附件；M3 |
@@ -1893,6 +1955,8 @@ TH-01—TH-09 为 M0 必测，TH-10—TH-15 为 M3 发布必测；后续功能�
 ### 22.3 第一批应暂缓的内容
 
 完整 IDE 编辑器、漂亮的编排画布、云同步、账号系统、市场、复杂角色设定、自动长期记忆、全量 Raft 命令兼容和真实多人网络协作。把开发资源先用于文件夹→成员→真实工作→结果的闭环。
+
+**多 Agent 并行写入增强**（公告锁 / 写范围分区 / 跨任务变更请求 / 整合闸门 / 按任务 worktree）已于 2026-09-26 延期，见 §14.7；同物理目录默认单写者仍是当前执行方式。
 
 ## 23. 设计决策记录与后续选择
 
@@ -2550,6 +2614,8 @@ MCP 是上述能力的一种对外暴露方式。与既有边界的关系：FULL
 **归属 ≠ 权限（v1.20）**：代发消息 author_type=human 只表示内容归属与展示，不授予该连接以用户身份执行操作的权限。approval.respond、task.delivery.review、预算提升、成员配置等「仅用户可做」的命令，一律按实际调用主体（连接）判断并拒绝；实现不得复用「author_type=human 即有权限」这类旧判断，仅隐藏 MCP 工具名或加展示标记不够（评审指出的身份契约缺口）。
 
 ### 31.3 首批工具面与命令映射
+
+**v1.23**：[开工契约 §3](./development-baseline-v1.23.md) 已定义四项查询 DTO、CallerContext/预算范围、幂等查询与停止代次；本节“FULL-11 新增”指实现批次，字段不再待设计。第一批 MCP 不开放 DM，所有间接读取也必须执行会话 audience 过滤。
 
 工具名以下表为准（snake_case 是 MCP 惯例，与众说 `a.b` 命令名并存，映射由服务端维护）。映射**以既有命令为主，但 4 项查询契约需随 FULL-11 新增**（room.list、member.list、task.get、events 列表化）——不是全部现成（v1.20 勘误，原「映射 §15.2 既有命令」表述过满）：
 

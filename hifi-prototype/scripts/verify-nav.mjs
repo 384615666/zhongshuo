@@ -196,16 +196,33 @@ await go('/project/proj_zs_01/files?tab=git');
 const gitTab = await c.ev(`
   (() => {
     const txt = document.querySelector('.page')?.innerText ?? '';
+    /* 用例迁移（2026-09-26）：Git 内部三视图从第二层 .thread-tab 降级为
+       分段控件，且「分支与远端」简化为「分支」（远端是分支视图内的分区）。
+       断言的**语义**不变：三个视图都在，且能看到 diff。 */
+    const segs = [...document.querySelectorAll('.seg button')].map(e => e.innerText.trim());
     return {
-      有工作区: txt.includes('工作区'),
-      有历史: txt.includes('历史'),
-      有分支与远端: txt.includes('分支与远端'),
+      有工作区: segs.some(x => x.includes('工作区')),
+      有历史: segs.some(x => x.includes('历史')),
+      有分支: segs.some(x => x.includes('分支')),
       有diff: !!document.querySelector('.diff-view') || document.querySelectorAll('.diff-line').length > 0,
     };
   })()
 `);
+// 远端是「分支」视图里的分区（不是顶层标签），切过去才能断言
+await c.ev(`
+  (() => {
+    const t = [...document.querySelectorAll('.seg button')].find(e => e.innerText.includes('分支'));
+    t?.click();
+    return !!t;
+  })()
+`);
+await sleep(700);
+const remoteSec = await c.ev(`
+  (() => document.querySelector('.page')?.innerText.includes('远端') ?? false)()
+`);
 check('RT-26③ Git 标签保留工作区/历史/分支与远端与 diff',
-  gitTab?.有工作区 && gitTab?.有历史 && gitTab?.有分支与远端, JSON.stringify(gitTab));
+  gitTab?.有工作区 && gitTab?.有历史 && gitTab?.有分支 && remoteSec === true,
+  JSON.stringify({ ...gitTab, 有远端: remoteSec }));
 
 /* 标签记忆按项目；显式 tab 优先于记忆 */
 await c.ev(`
@@ -354,7 +371,9 @@ const filterBarCases = [
   ['任务看板(可见项目)', '/tasks?scope=visible'],
   ['搜索与收藏', '/library?tab=search&scope=project&projectId=proj_notgit_04'],
   ['成员管理', '/project/proj_notgit_04/members'],
-  ['文件与 Git', '/project/proj_notgit_04/files?tab=files'],
+  /* 「文件与 Git」不在本循环内：合页按 §17.7 把项目选择器并入页头操作簇
+     （避免"顶栏写一个项目、页面操作另一个"），**故意**不用 .page-filters。
+     它另有一条专项断言，见下方。 */
 ];
 for (const [name, hash] of filterBarCases) {
   await go(hash);
@@ -381,6 +400,29 @@ for (const [name, hash] of filterBarCases) {
     r?.有筛选行 === true && r?.高度统一 === true && r?.左对齐内容区 === true && r?.起点在左半区 === true,
     JSON.stringify(r));
 }
+
+/*
+ * 「文件与 Git」的等价断言：项目选择器在页内、与页面操作同处一行，
+ * 且切它时顶栏焦点跟着走（§17.7：不能出现顶栏 A / 页面 B）。
+ */
+await go('/project/proj_notgit_04/files?tab=files');
+const fgPick = await c.ev(`
+  (() => {
+    const page = document.querySelector('.page');
+    const sel = page?.querySelector('.page-head select.select');
+    const head = page?.querySelector('.page-head');
+    return {
+      有页内项目选择器: !!sel,
+      在页头内: !!sel && !!head && head.contains(sel),
+      可选项目数: sel ? sel.options.length : 0,
+      无第二套筛选行: !page?.querySelector('.page-filters'),
+    };
+  })()
+`);
+check('「文件与 Git」项目选择器在页内页头（不另起筛选行，与页面操作同处一行）',
+  fgPick?.有页内项目选择器 === true && fgPick?.在页头内 === true
+    && fgPick?.可选项目数 > 0 && fgPick?.无第二套筛选行 === true,
+  JSON.stringify(fgPick));
 
 // 页头右侧不应再残留筛选型下拉（避免"一边左一边右"两套位置）
 await go('/tasks?scope=all');
@@ -907,7 +949,9 @@ await go('/project/proj_zs_01/files?tab=files');
 const lockOwn = await c.ev(`
   (() => {
     const t = document.querySelector('.page')?.innerText ?? '';
-    return { 显示租约: t.includes('当前写入锁'), 提到13: t.includes('#13') };
+    /* 用例迁移（2026-09-26）：写入锁并入页内状态条一行（"锁：… 持有"），
+       不再单独占一块 panel；断言语义不变 —— 有租约的项目要显示自己的锁。 */
+    return { 显示租约: /锁[:：]/.test(t), 提到13: t.includes('#13') };
   })()
 `);
 check('RT-26⑧ 有租约的项目在自己页面上显示写入锁',
@@ -1045,10 +1089,17 @@ const settingsDefault = await c.ev(`
     return { 分组: groups, 分区: items, 当前分区: on };
   })()
 `);
-check('RT-26⑩ 设置默认进入应用级分区（通用），导航树呈现应用级四分区',
+/**
+ * 用例更新（第二十八批 · 应用设置七类重排 §3.1）：
+ * 五分区 → 七类（通用 / 外观 / 通知 / AI 工具 / 连接与设备 / 数据与存储 / 帮助与关于）。
+ * 断言口径不变：默认落在应用级分区、分组标签仍是「应用」、导航项逐项点名。
+ */
+check('RT-26⑩ 设置默认进入应用级分区（通用），导航树呈现应用级七类',
   (settingsDefault?.当前分区 ?? []).includes('通用')
     && JSON.stringify(settingsDefault?.分组) === JSON.stringify(['应用'])
-    && JSON.stringify(settingsDefault?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '归档管理', '诊断与帮助']),
+    && JSON.stringify(settingsDefault?.分区) === JSON.stringify([
+      '通用', '外观', '通知', 'AI 工具', '连接与设备', '数据与存储', '帮助与关于',
+    ]),
   JSON.stringify(settingsDefault));
 
 await go('/settings?section=runtime');
@@ -1131,7 +1182,7 @@ await go('/project/proj_zs_01/files?tab=git');
 // 说明面板在 Git 内部的「历史」视图里（历史属于 Git 内部导航，不是第三个顶层标签）
 await c.ev(`
   (() => {
-    const t = [...document.querySelectorAll('.thread-tab')].find(e => e.innerText.includes('历史'));
+    const t = [...document.querySelectorAll('.seg button')].find(e => e.innerText.includes('历史'));
     t?.click();
     return !!t;
   })()
@@ -1141,7 +1192,7 @@ const gitBoundary = await c.ev(`
   (() => {
     const t = document.querySelector('.page')?.innerText ?? '';
     return {
-      说明两件事: t.includes('Git 提交与任务验收是两件事'),
+      说明两件事: t.includes('提交 ≠ 验收') || t.includes('Git 提交与任务验收是两件事'),
       无commit级审批: !t.includes('验收这个提交'),
       无虚假已审阅: !/已审阅/.test(t),
     };
@@ -1212,17 +1263,31 @@ check('RT-26⑫ 界面明确标注为原型/内存数据（不冒充真实能力
 await go('/project/proj_zs_01/files?tab=files');
 const treeDisclosure = await c.ev(`
   (() => {
-    const t = document.querySelector('.page')?.innerText ?? '';
-    return { 文件树标注mock: t.includes('mock') };
+    /* 用例迁移（2026-09-26）："这是 mock 目录"属于调试性标注，
+       按本原型的约定收进 tooltip（不占标题行）。断言改为查标注本身，
+       语义不变 —— 文件树必须自述为 mock，不声称扫描真实磁盘。 */
+    const tips = [...document.querySelectorAll('.page [title]')].map(e => e.getAttribute('title') ?? '');
+    return { 文件树标注mock: tips.some(x => /mock|不扫描真实磁盘/.test(x)) };
   })()
 `);
 check('RT-26⑫ 文件树自述为 mock 目录（不声称扫描真实磁盘）',
   treeDisclosure?.文件树标注mock === true, JSON.stringify(treeDisclosure));
 
 await go('/project/proj_notgit_04/files?tab=files');
+/* 前像口径写在**改动集详情**里：合页改造后右栏默认显示文件树预览，
+   所以要先切到「改动集」视图才看得到 —— 断言语义不变。 */
+await c.ev(`
+  (() => {
+    const b = [...document.querySelectorAll('.seg button')].find(e => e.innerText.includes('改动集'));
+    b?.click();
+    return !!b;
+  })()
+`);
+await sleep(800);
 const snapshotDisclosure = await c.ev(`
   (() => {
-    const t = document.querySelector('.page')?.innerText ?? '';
+    const t = document.querySelector('.fg-pane-detail')?.innerText
+      ?? document.querySelector('.page')?.innerText ?? '';
     return {
       前像用snapshot: t.includes('snapshot:'),
       明确说明非Git无ref: t.includes('非 Git 目录无 ref 可用') || t.includes('整目录快照'),
@@ -1390,9 +1455,19 @@ const appSet = await c.ev(`
     };
   })()
 `);
-check('应用设置只剩应用分区（第十七批新增「归档管理」）、无"当前项目"组、无项目类分区',
-  String(appSet?.标题) === '应用设置'
-    && JSON.stringify(appSet?.分区) === JSON.stringify(['通用', '执行工具', '设备与局域网', '归档管理', '诊断与帮助'])
+/**
+ * 用例更新（第二十八批 §3.1）：七类重排后只剩应用级分区；
+ * 「归档管理」不再独占一级分类（归入「数据与存储」），新增「通知」与「外部 AI 连接」所在的「连接与设备」。
+ */
+/**
+ * 用例更新（2026-09-26 用户要求"界面顶部的头部去掉"）：应用设置页的
+ * 「应用设置 + 一段说明」页头已删除，这里不再断言 `.page-title`；
+ * 其余口径不变（七类、无项目选择器、无项目类分区）。
+ */
+check('应用设置只有应用级七类（归档并入数据与存储、新增通知与连接）、无"当前项目"组、无项目类分区',
+  JSON.stringify(appSet?.分区) === JSON.stringify([
+      '通用', '外观', '通知', 'AI 工具', '连接与设备', '数据与存储', '帮助与关于',
+    ])
     && appSet?.有项目选择器 === false
     && appSet?.有项目类分区 === false,
   JSON.stringify({ 标题: appSet?.标题, 分区: appSet?.分区 }));
@@ -1408,7 +1483,7 @@ check('应用设置里的开关点击后**真实改变值**（不再是固定 ch
   JSON.stringify(swBefore) !== JSON.stringify(swAfter),
   `${JSON.stringify(swBefore)} → ${JSON.stringify(swAfter)}`);
 
-// 错误码速查并入诊断与帮助，且可展开
+// 错误码速查并入「帮助与关于」（第二十八批前叫「诊断与帮助」），且可展开
 await go('/settings?section=diagnostics');
 const errorsInDiag = await c.ev(`
   (() => {
@@ -1420,7 +1495,7 @@ const errorsInDiag = await c.ev(`
     };
   })()
 `);
-check('「错误码速查」并入「诊断与帮助」并作为可展开内容',
+check('「错误码速查」并入「帮助与关于」并作为可展开内容',
   errorsInDiag?.有折叠头 === true && errorsInDiag?.含错误码速查 === true,
   JSON.stringify(errorsInDiag));
 
@@ -1484,12 +1559,16 @@ for (const [url, expect] of [
   check(`项目类旧链接规范化到项目设置页：${url}`, String(got).includes(expect), String(got));
 }
 
+/* 用例更新（第二十八批 §3.4）：旧 key 一律仍要定位到新分区标题 ——
+   执行工具→AI 工具、设备与局域网→连接与设备、诊断与帮助→帮助与关于。 */
 for (const [url, expect] of [
   ['/settings?section=app', '通用'],
   ['/settings?section=general', '通用'],
-  ['/settings?section=runtime', '执行工具（Runtime）'],
-  ['/settings?section=lan', '设备与局域网'],
-  ['/settings?section=diagnostics', '诊断与帮助'],
+  ['/settings?section=runtime', 'AI 工具'],
+  ['/settings?section=lan', '连接与设备'],
+  ['/settings?section=diagnostics', '帮助与关于'],
+  ['/settings?section=archive', '数据与存储'],
+  ['/settings?section=archived', '数据与存储'],
 ]) {
   await go(url);
   const title = await c.ev(`document.querySelector('.settings-section-title')?.innerText.trim() ?? null`);
@@ -1500,8 +1579,10 @@ for (const [url, expect] of [
 await go('/settings?section=errors');
 const errUrl = await c.ev(`location.hash`);
 const errTitle = await c.ev(`document.querySelector('.settings-section-title')?.innerText.trim() ?? null`);
-check('旧 section=errors 规范化到 diagnostics 并展开速查',
-  String(errUrl).includes('section=diagnostics') && errTitle === '诊断与帮助',
+/* 用例更新（第二十八批 §3.4）：主键由 diagnostics 变为 help（分区改名「帮助与关于」），
+   但「必须真的改 URL + 展开速查」两条口径不变。 */
+check('旧 section=errors 规范化到 help 并展开速查',
+  String(errUrl).includes('section=help') && String(errUrl).includes('anchor=errors') && errTitle === '帮助与关于',
   `hash=${errUrl} 标题=${errTitle}`);
 
 // 应用链接上多余的 projectId 不应切换焦点
@@ -1519,7 +1600,10 @@ await go('/settings?section=reminders');
 const remindersMoved = await c.ev(`
   (() => ({
     hash: location.hash,
-    在待我处理页: (document.querySelector('.page-title')?.innerText ?? '').includes('待我处理'),
+    /* 用例更新（2026-09-26）：「待我处理」页头已按用户要求删除，
+       改用它**独有**的范围标签与筛选控件判断"确实在待我处理页"，不弱化断言。 */
+    在待我处理页: /范围：全部可访问项目/.test(document.body.innerText)
+      && !!document.querySelector('.page-head .seg'),
     有提醒分节: document.body.innerText.includes('我设的提醒'),
     说明与待办相反: document.body.innerText.includes('和上面的待办方向相反'),
   }))()

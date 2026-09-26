@@ -336,20 +336,31 @@ await ev(`
 `);
 await sleep(400);
 
-// 浏览器访问 / 局域网配对的 M3 标注
-// 用例更新（第十五批设置页重构）：入口从"按钮排里的「局域网与设备」"
-// 改为左导航树的「设备与局域网」，M3 标注留在该分区的配对码卡片上。
+// 浏览器访问 / 局域网配对：**M3 批次编号已移除**（第二十八批 §2.5）。
+//
+// 这是一次有意识的决定翻转（E9 之后特意补的标签，现在按"内部批次编号不进正文"的
+// 既有约定（设置分离方案 §3 第 3 条）撤掉），所以检查本身也改写成**新口径**：
+// 正文不得出现内部编号，但配对的权限说明必须仍在（那才是用户要判断的东西）。
+// 不是加白名单绕过 —— 断言从"有 M3 标签"改成"无内部编号 + 有权限说明"。
 await goto('/settings?section=lan&recovery=0');
 await sleep(700);
-const lanBadge = await ev(`
+const lanCard = await ev(`
   (() => {
     const body = document.querySelector('.settings-body');
     const card = [...(body?.querySelectorAll('.card') ?? [])]
       .find(c => c.textContent.includes('生成配对码'));
-    return card?.textContent ?? null;
+    const t = body?.innerText ?? '';
+    return {
+      card: card?.textContent ?? null,
+      无内部编号: !/M3|批次/.test(t),
+      有权限说明: t.includes('配对的设备拥有和本机一样的权限'),
+      在连接与设备分区: true,
+    };
   })()
 `);
-check('④ 局域网访问入口标注 M3 批次（E9）', String(lanBadge.value).includes('M3'), String(lanBadge.value).replace(/\s+/g, ' ').slice(0, 60));
+check('④ 局域网访问入口不再标内部批次编号，且配对权限说明仍在（E9 标签撤销，第二十八批 §2.5）',
+  String(lanCard.value?.card ?? '').length > 0 && lanCard.value?.无内部编号 === true && lanCard.value?.有权限说明 === true,
+  String(JSON.stringify(lanCard.value)).slice(0, 160));
 
 /* ============ 指控 6：取消归档无入口 ============ */
 /* 用例更新（2026-09-24 减负 §3）：房间设置/归档统一进房间名附近「⋯」；

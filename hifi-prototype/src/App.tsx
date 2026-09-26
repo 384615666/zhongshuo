@@ -24,7 +24,7 @@ import { setNavAutoHidden } from './data/actions-preview';
 import { navigate, parseQuery, pathOf, useHashRoute } from './lib/router';
 import type { Project } from './data/types';
 import { CreateRoomModal, RoomPage } from './pages/Room';
-import { ActivityPage, LibraryPage, ProjectHomePage, WelcomePage } from './pages/pages-secondary';
+import { ActivityPage, LibraryPage, OpenFolderModal, ProjectHomePage, WelcomePage } from './pages/pages-secondary';
 import { FilesGitPage, MemberDetailPage, MembersPage } from './pages/pages-misc';
 import { ArchivePage } from './pages/ArchivePage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
@@ -57,6 +57,12 @@ export default function App() {
   const [editInfoFor, setEditInfoFor] = useState<string | null>(null);
   const [archiveFor, setArchiveFor] = useState<string | null>(null);
   const [removeFor, setRemoveFor] = useState<string | null>(null);
+  /**
+   * 「打开文件夹」弹窗（2026-09-26 用户反馈修复）：
+   * 顶栏项目菜单、侧栏空态、项目缺失页三个入口共用它；弹窗挂载即**直接调起系统目录选择器**
+   * （autoPick），不再先跳欢迎页再让用户点第二次。
+   */
+  const [openFolder, setOpenFolder] = useState(false);
   /** 顶栏项目菜单里的项目搜索词（项目多时用得上） */
   const [projectFilter, setProjectFilter] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -370,7 +376,7 @@ export default function App() {
               {visibleProjects.length === 0 ? (
                 <div className="side-empty">
                   没有显示中的项目
-                  <button className="btn ghost sm" onClick={() => navigate('/welcome')}>打开文件夹</button>
+                  <button className="btn ghost sm" onClick={() => setOpenFolder(true)}>打开文件夹</button>
                 </div>
               ) : null}
 
@@ -832,7 +838,7 @@ export default function App() {
           <MenuItem
             icon="plus"
             title="打开本地文件夹作为新项目（原型不写盘，只演示流程与限制说明）"
-            onClick={() => { navigate('/welcome'); setProjectMenu(null); }}
+            onClick={() => { setProjectMenu(null); setOpenFolder(true); }}
           >
             打开本地文件夹…
           </MenuItem>
@@ -863,6 +869,9 @@ export default function App() {
           也就是说此前所有 toast（保存成功、权限被拒、深链补选提示等）**都不可见**，
           用户只看到"点了没反应"。这里补上唯一的渲染出口。 */}
       <ToastHost />
+
+      {/* 「打开文件夹」的唯一弹窗出口：任一入口置位即可，挂载即调起系统目录选择器 */}
+      {openFolder ? <OpenFolderModal autoPick onClose={() => setOpenFolder(false)} /> : null}
 
       {recoveryOpen ? (
         <RecoveryModal
@@ -966,6 +975,8 @@ function NormalizeMembersLink() {
  * （那会让用户以为在改自己的项目，实际改了别的）。
  */
 function NormalizeLegacyProjectSettings({ anchor }: { anchor: string }) {
+  /** 这一页也提供"打开本地文件夹"，同样直接调起系统选择器 */
+  const [openFolder, setOpenFolder] = useState(false);
   const activeProjectId = useStore((x) => x.activeProjectId);
   const hasProject = useStore((x) => x.projects.some((p) => p.id === x.activeProjectId));
   useEffect(() => {
@@ -989,9 +1000,11 @@ function NormalizeLegacyProjectSettings({ anchor }: { anchor: string }) {
           detail="这条链接没有指明是哪个项目。为避免改错项目，请从侧栏项目行旁的「⋯ → 项目设置」进入。"
         />
         <div className="panel-actions">
-          <button className="btn sm" onClick={() => navigate('/welcome')}>打开本地文件夹</button>
+          {/* 入口文案是"打开本地文件夹"，点了就直接弹系统目录选择器（用户 2026-09-26 反馈） */}
+          <button className="btn sm" onClick={() => setOpenFolder(true)}>打开本地文件夹</button>
         </div>
       </div>
+      {openFolder ? <OpenFolderModal autoPick onClose={() => setOpenFolder(false)} /> : null}
     </div>
   );
 }
@@ -1077,7 +1090,9 @@ function renderBase(path: string, query: Record<string, string>) {
       - 项目类 section：有 projectId → 规范化到项目页；没有 → 交给
         NormalizeLegacyProjectSettings 用"当前项目"补，补不上就提示从项目菜单进。
       - 应用类 section：**清除多余 projectId**，不据此切换焦点。
-      - errors → diagnostics（并展开速查）；reminders → 待我处理。 */
+      - errors → help（并展开速查）；reminders → 待我处理。
+      - 其余旧应用分区名（app / lan / archive / archived / diagnostics）由
+        SettingsPage 的 SECTION_ALIASES 兜底，地址栏保持用户给的写法即可。 */
   if (path === '/runtimes') return <RedirectTo to="/settings?section=runtime" />;
 
   if (path === '/settings') {
@@ -1101,11 +1116,13 @@ function renderBase(path: string, query: Record<string, string>) {
       return <RedirectTo to={`/settings?${qs.toString()}`} />;
     }
 
-    /* 旧 section=errors → 规范化到 diagnostics（并展开速查定位）。
-       §17.8 兼容表要求"跳 section=diagnostics&anchor=errors"：
+    /* 旧 section=errors → 规范化到 help（并展开速查定位）。
+       §17.8 兼容表要求"跳 §section=diagnostics&anchor=errors"：
        必须**真的改 URL**，不能只在组件内部映射 —— 否则地址栏保留一个
-       已经不存在的分区名，用户复制出去的链接含义不明。 */
-    if (sec === 'errors') return <RedirectTo to="/settings?section=diagnostics&anchor=errors" />;
+       已经不存在的分区名，用户复制出去的链接含义不明。
+       第二十八批把「诊断与帮助」改名「帮助与关于」，主键由 diagnostics 变为 help，
+       旧名仍在 SECTION_ALIASES 里可解析；这里写的是**新主键**。 */
+    if (sec === 'errors') return <RedirectTo to="/settings?section=help&anchor=errors" />;
 
     return <SettingsPage query={query} />;
   }

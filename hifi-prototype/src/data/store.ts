@@ -70,6 +70,27 @@ export function resetStore() {
   emit();
 }
 
+/**
+ * 只清导航偏好（侧栏可见项目、展开、置顶、文件/Git 标签、当前项目焦点）。
+ *
+ * 为什么与 resetStore 分开（§2.6 的「原型工具」组）：演示前常只需要把界面
+ * 摆回初始形态，不想丢掉刚改过的设置与留痕 —— 两个动作的影响范围不一样，
+ * 就不能塞进同一个按钮里。
+ */
+export function resetNavPrefsOnly() {
+  clearNavPrefs();
+  const base = structuredClone(initialState);
+  setState((s) => ({
+    ...s,
+    activeProjectId: base.activeProjectId,
+    visibleProjectIds: base.visibleProjectIds,
+    expandedProjectIds: base.expandedProjectIds,
+    pinnedProjectIds: base.pinnedProjectIds,
+    fileGitTabs: base.fileGitTabs,
+  }));
+  recordLocalOnly('navigation.preferences.reset', '侧栏可见项目 / 展开 / 置顶 / 文件-Git 标签 / 当前项目 → 回到初始种子');
+}
+
 export { persistNav, defaultNavPrefs };
 
 /* ---------- 写操作留痕（原型专用，不属于产品契约） ---------- */
@@ -132,6 +153,78 @@ export function setAppSetting<K extends keyof AppState['appSettings']>(
     'app.settings.update',
     `${key}=${String(value)}（原型只改内存模拟值，未接入系统开机项/托盘）`,
   );
+}
+
+/* ---------- 通知偏好 / 运行并发 / 日志保留（第二十八批：应用设置七类重排） ---------- */
+
+/**
+ * 通知偏好（应用级这一层）。
+ *
+ * **单一真相源**：这里改的只是"应用级"层；房间静音与线程关注仍在 `s.subscriptions`，
+ * 不另存第二份"通知订阅"状态（§3.2）。
+ */
+export function setNotificationPref<K extends keyof AppState['appSettings']['notifications']>(
+  key: K,
+  value: AppState['appSettings']['notifications'][K],
+) {
+  setState((s) => ({
+    ...s,
+    appSettings: { ...s.appSettings, notifications: { ...s.appSettings.notifications, [key]: value } },
+  }));
+  recordLocalOnly('app.settings.update', `notifications.${key}=${String(value)}（原型只改内存模拟值）`);
+}
+
+/** 单个事件开关（需要审批 / 任务失败 / 任务完成 / 被提及） */
+export function setNotificationEvent(
+  kind: keyof AppState['appSettings']['notifications']['events'],
+  value: boolean,
+) {
+  setState((s) => ({
+    ...s,
+    appSettings: {
+      ...s.appSettings,
+      notifications: {
+        ...s.appSettings.notifications,
+        events: { ...s.appSettings.notifications.events, [kind]: value },
+      },
+    },
+  }));
+  recordLocalOnly('app.settings.update', `notifications.events.${kind}=${String(value)}（原型只改内存模拟值）`);
+}
+
+/** 免打扰时段（应用级覆盖层：> 房间静音 > 线程关注） */
+export function setDnd(patch: Partial<AppState['appSettings']['notifications']['dnd']>) {
+  setState((s) => ({
+    ...s,
+    appSettings: {
+      ...s.appSettings,
+      notifications: { ...s.appSettings.notifications, dnd: { ...s.appSettings.notifications.dnd, ...patch } },
+    },
+  }));
+  recordLocalOnly('app.settings.update', `notifications.dnd=${JSON.stringify(patch)}（原型只改内存模拟值）`);
+}
+
+/**
+ * 应用级运行并发（§10.3 决策 12）。
+ *
+ * 改的是**上限**，3 / 1 只是建议起始值；这里不声称能改真实调度器 ——
+ * 原型没有调度器，界面用「原型模拟」标注（§4.3）。
+ */
+export function setRuntimeLimit<K extends keyof AppState['appSettings']['runtimeLimits']>(
+  key: K,
+  value: AppState['appSettings']['runtimeLimits'][K],
+) {
+  setState((s) => ({
+    ...s,
+    appSettings: { ...s.appSettings, runtimeLimits: { ...s.appSettings.runtimeLimits, [key]: value } },
+  }));
+  recordLocalOnly('app.settings.update', `runtimeLimits.${key}=${String(value)}（原型只改内存模拟值）`);
+}
+
+/** 日志保留天数：真实可选值，写入状态（§2.4 选项①） */
+export function setLogRetention(days: AppState['appSettings']['logRetentionDays']) {
+  setState((s) => ({ ...s, appSettings: { ...s.appSettings, logRetentionDays: days } }));
+  recordLocalOnly('app.settings.update', `logRetentionDays=${days}（原型只改内存模拟值，不真的删日志）`);
 }
 
 /* ---------- 草稿：主池与线程分别保存，切线程不转移（§4.5 / TH-04） ---------- */

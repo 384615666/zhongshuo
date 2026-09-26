@@ -225,13 +225,13 @@ check('任务执行中时未读点不变灰、也不贴到运行图标上（点�
   JSON.stringify({ 点: unreadWithRun?.dot, 状态位x: unreadWithRun?.状态?.x, 名称x: unreadWithRun?.名x }));
 
 /* ============================================================
-   4. 归档房间里真有未结束任务 / 没有未读也没有任务
+   4. 归档房间的任务保留，但入口只在归档管理 / 没有未读也没有任务
    ============================================================ */
 await ev(`
   (async () => {
     const m = window.__zsNavMarks;
     m.setState((s) => {
-      // 把 文档整理（归档房）里塞一个执行中的顶层任务：状态位必须让给任务状态
+      // 注入历史未结束任务：归档不能丢任务，也不能把房间重新塞回日常侧栏。
       const donor = s.tasks.find((t) => t.id === 'task_12');
       const clone = { ...donor, id: 'tmp_archived_task', roomId: 'room_docs', status: 'ACTIVE', roomTaskNumber: 99 };
       return { ...s, tasks: [...s.tasks, clone] };
@@ -241,9 +241,25 @@ await ev(`
   })()
 `);
 const archivedRow = await settled('文档整理');
-check('归档房间里有未结束任务时：图标位让给任务状态（可操作信息优先），行仍标为归档',
-  archivedRow?.归档 === true && archivedRow?.状态?.icon === 'spinner-rays',
-  JSON.stringify({ 归档: archivedRow?.归档, icon: archivedRow?.状态?.icon, title: archivedRow?.状态?.title }));
+await ev(`location.hash = '#/archive?project=proj_zs_01'; 'ok'`);
+await sleep(600);
+const archivedEvidence = await ev(`(() => {
+  const s = window.__zsNavMarks.getState();
+  const task = s.tasks.find(t => t.id === 'tmp_archived_task');
+  const room = s.rooms.find(r => r.id === 'room_docs');
+  return {
+    taskPreserved: task?.status === 'ACTIVE' && task.roomId === room?.id,
+    roomArchived: Boolean(room?.archivedAt),
+    archiveVisible: document.querySelector('.main')?.innerText.includes('文档整理'),
+    historyEntry: [...document.querySelectorAll('.main button')].some(b => b.innerText.includes('查看历史')),
+  };
+})()`);
+check('归档房间即使保留未结束任务也不回侧栏；任务保留且归档管理可查看历史',
+  archivedRow === null && archivedEvidence.taskPreserved && archivedEvidence.roomArchived
+    && archivedEvidence.archiveVisible && archivedEvidence.historyEntry,
+  JSON.stringify({ sidebarAbsent: archivedRow === null, ...archivedEvidence }));
+await ev(`location.hash = '#/project/proj_zs_01/room/room_dev_hall'; 'ok'`);
+await sleep(600);
 
 await setRoomStatuses(['DONE', 'DONE', 'DONE', 'DONE']);
 const onlyUnread = await settled('开发大厅');
@@ -305,13 +321,14 @@ const setGitCount = (n) => ev(`
     return true;
   })()
 `);
-const oneDigit = await badge('文件与 Git');   // 种子值（一位数）
+await setGitCount(3); // 显式造一位数，不能假定不断变化的种子仍是一位数。
+const oneDigit = await badge('文件与 Git');
 await setGitCount(12);
 const twoDigit = await badge('文件与 Git');
 await setGitCount(150);
 const bigBadge = await badge('文件与 Git');
 check('位数变化不错位：1 位 / 2 位 / 99+ 的徽标右缘一致，且都不越出侧栏',
-  oneDigit?.有 === true && twoDigit?.文本 === '12' && bigBadge?.文本 === '99+'
+  oneDigit?.文本 === '3' && twoDigit?.文本 === '12' && bigBadge?.文本 === '99+'
     && oneDigit.right === twoDigit.right && twoDigit.right === bigBadge.right
     && bigBadge.right <= bigBadge.侧栏右缘 + 1,
   JSON.stringify({ 一位数: oneDigit, 两位数: twoDigit, 封顶: bigBadge }));

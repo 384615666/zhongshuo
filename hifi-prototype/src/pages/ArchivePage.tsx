@@ -37,10 +37,26 @@ export function ArchivePage({ query }: { query: Record<string, string> }) {
 }
 
 /** 归档管理主体（不带页面外壳，便于嵌进设置分区） */
-export function ArchiveManager({ query }: { query: Record<string, string> }) {
+export function ArchiveManager({ query, embedded }: { query: Record<string, string>; embedded?: boolean }) {
   const s = useStore((x) => x);
   const [keyword, setKeyword] = useState('');
-  const projectFilter = query.project;
+  /**
+   * 项目筛选的归属：**嵌入模式下是组件内状态**（任务书 §2.3）。
+   *
+   * 原实现里「清除项目筛选」与项目下拉都是 `navigate('/archive…')` ——
+   * 嵌进应用设置后，点这两个控件会把用户从设置页拽到独立归档页。
+   * 现在：嵌进设置时只更新局部渲染；独立路由仍以 URL 为准（深链语义不变），
+   * 只有「打开项目主页 / 查看历史」这类明确钻取才导航。
+   */
+  const [localProject, setLocalProject] = useState('all');
+  const projectFilter = embedded ? (localProject === 'all' ? undefined : localProject) : query.project;
+  const setProject = (v: string) => {
+    if (embedded) {
+      setLocalProject(v);
+      return;
+    }
+    navigate(v === 'all' ? '/archive' : `/archive?project=${v}`);
+  };
 
   /** 已归档项目（不含已移除的） */
   const archivedProjects = useMemo(
@@ -82,31 +98,23 @@ export function ArchiveManager({ query }: { query: Record<string, string> }) {
     .filter((g) => (keyword.trim() ? g.rooms.length > 0 : true));
 
   const totalRooms = groups.reduce((n, g) => n + g.rooms.length, 0);
-  const filteredProject = projectFilter ? s.projects.find((p) => p.id === projectFilter) : undefined;
 
   return (
     <>
-      <div className="page-head">
-          <div>
-            <h1 className="page-title">
-              归档管理
-              {filteredProject ? <span className="muted" style={{ fontWeight: 400 }}> · {filteredProject.displayName}</span> : null}
-            </h1>
-            <div className="page-sub">
-              归档不是删除：历史消息、任务与成果都保留只读，恢复后可以继续。已归档的项目退出日常项目列表；
-              活跃项目里被归档的房间也不再出现在侧栏，但都能在这里找到。
-            </div>
-          </div>
-          <div className="spacer" />
-          {projectFilter ? (
-            <button className="btn sm" onClick={() => navigate('/archive')} title="清除项目筛选，查看全部归档内容">
-              <Icon name="x" size={12} /> 返回全部归档
-            </button>
-          ) : null}
-        </div>
+      {/**
+       * 页头整个删掉（用户 2026-09-26 要求"界面顶部的头部去掉"）。
+       * 原来它只在独立路由（/archive）渲染、嵌进设置时不渲染（§2.3 双标题）；
+       * 现在独立路由也不再有标题与说明：当前筛到哪个项目由筛选行的下拉显示，
+       * 归档语义由各行的「恢复」动作与卡片标签表达。
+       */}
+      {/**
+       * 注意：这里**不能**留下 `{!embedded ? ( … ) : null}` 的空壳 ——
+       * 三元分支里只放注释会变成"渲染一个空对象"，整棵树会因 React #31 白屏（实测踩到）。
+       */}
 
-        <div className="page-filters">
-          <div className="row tight" style={{ flex: '0 1 260px' }}>
+        {/* 筛选行：搜索与项目下拉**同高同宽基准**，窄窗换行；清除筛选就地在行内（§2.3） */}
+        <div className="page-filters archive-filters">
+          <div className="row tight archive-filter-search">
             <Icon name="search" size={13} className="faint" />
             <input
               className="input sm"
@@ -116,19 +124,29 @@ export function ArchiveManager({ query }: { query: Record<string, string> }) {
             />
           </div>
           <select
-            className="select sm"
+            className="select sm archive-filter-project"
             value={projectFilter ?? 'all'}
             title="按项目筛选归档内容"
-            onChange={(e) => {
-              const v = e.target.value;
-              navigate(v === 'all' ? '/archive' : `/archive?project=${v}`);
-            }}
+            onChange={(e) => setProject(e.target.value)}
           >
             <option value="all">全部项目</option>
             {[...archivedProjects, ...activeWithArchivedRooms].map((p) => (
               <option key={p.id} value={p.id}>{p.displayName}</option>
             ))}
           </select>
+          {projectFilter ? (
+            <button
+              className="btn sm"
+              onClick={() => setProject('all')}
+              title={
+                embedded
+                  ? '清除项目筛选，查看全部归档内容（留在应用设置内）'
+                  : '清除项目筛选，查看全部归档内容'
+              }
+            >
+              <Icon name="x" size={12} /> {embedded ? '清除项目筛选' : '返回全部归档'}
+            </button>
+          ) : null}
           <div className="spacer" />
           <span className="small faint">
             {groups.length} 个项目 · {totalRooms} 个房间
@@ -139,11 +157,11 @@ export function ArchiveManager({ query }: { query: Record<string, string> }) {
           <EmptyState
             icon="archive"
             title={projectFilter ? '这个项目没有归档内容' : '没有归档内容'}
-            detail={
-              projectFilter
-                ? '这个项目当前既没有整体归档，也没有单独归档的房间。可以点上方「返回全部归档」看别的项目。'
-                : '还没有项目或房间被归档。归档后的项目与房间会出现在这里，随时可以恢复。'
-            }
+              detail={
+                projectFilter
+                  ? `这个项目当前既没有整体归档，也没有单独归档的房间。可以点上方「${embedded ? '清除项目筛选' : '返回全部归档'}」看别的项目。`
+                  : '还没有项目或房间被归档。归档后的项目与房间会出现在这里，随时可以恢复。'
+              }
           />
         ) : (
           <div className="col" style={{ gap: 14 }}>
