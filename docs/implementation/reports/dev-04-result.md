@@ -27,3 +27,8 @@
 ## 修改文件
 
 新增：`src/daemon/directoryIdentity.ts`、`projectStore.ts`、`workspaceLocks.ts`、`baseline.ts`、`tests/integration/projectWorkspace.test.ts`；总账更新。未触碰 `hifi-prototype/`。
+
+## 勘误（2026-09-27 修复轮，外部只读审查后）
+
+1. **原 RT-07 验证声明作废重立**：原用例心跳 300/now 400/阈值 60s——租约根本未过期，测的是 active 阻塞，属假阳性；且原实现 `acquireLease` 只查 `active`，expired 租约确实会被绕过。现修复为：未确认释放（active+expired）一律阻塞；测试先断言租约真实进入 `expired` 再验证阻塞与确认终止后放行。
+2. **parallel_writers 违约开放已收回**：原实现允许调用方传入 `parallel_writers` 开启共存分支，与 §14.7 延期基线不一致；现入口一律 `CAPABILITY_UNSUPPORTED` 拒绝（ADR-I19），原放行测试改为拒绝测试。§14.1 底线逻辑保留在代码注释中待批准后恢复。

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
+import { holdDispatchGate } from '../persistence/daemonState.ts';
 import { evaluateStopTarget } from '../domain/scope/stopTarget.ts';
 import type { TaskStopOutcome } from '../contracts/task.ts';
 import type { RunStatus } from '../contracts/run.ts';
@@ -119,7 +120,8 @@ export interface RecoverySnapshot {
 
 /**
  * 启动恢复：非终态 run→INTERRUPTED、turn→UNKNOWN（进程身份核实随 DEV-06 真实进程补强）；
- * 过期租约的 outbox 重排回 pending，但**不自动派发**——恢复后先列出可继续任务等用户确认（§16.4-6）。
+ * 过期租约的 outbox 重排回 pending 并**落下派发门禁**——恢复后先列出可继续任务等用户
+ * 确认「继续」（openDispatchGate）才开放新调度（§16.4-6/决策 44/E7）。
  */
 export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
   const tx = db.transaction((): RecoverySnapshot => {
@@ -136,6 +138,10 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
       .prepare(`SELECT lock_domain, owner_turn_id, status FROM workspace_leases WHERE status != 'released'`)
       .all() as Array<{ lock_domain: string; owner_turn_id: string; status: string }>)
       .map((row) => ({ lockDomain: row.lock_domain, ownerTurnId: row.owner_turn_id, status: row.status }));
+    // 派发门禁：存在任何需要人工核对的痕迹即 held（即使本轮无重排队列）。
+    const gateNeeded =
+      interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0;
+    if (gateNeeded) holdDispatchGate(db, now);
     return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases };
   });
   return tx();

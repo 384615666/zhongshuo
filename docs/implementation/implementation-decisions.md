@@ -113,3 +113,39 @@ pnpm 10+ 把 onlyBuiltDependencies/allowBuilds 等设置迁到 pnpm-workspace.ya
 开工契约 §7「occurrence 以 (reminderId,scheduledAt) 唯一、错过合并」需要持久化载体；
 001 迁移加了该表（主键即唯一约束）。已在报告标注，属对 §12.2 的工程性补充，
 待下次主设计修订时同步回写目录。
+
+## ADR-I19 · parallel_writers 租约入口禁用（2026-09-27，修复轮）
+
+§14.7 将并行写入增强整体延期，但 DEV-04 首版 acquireLease 允许调用方传
+`parallel_writers` 开启共存分支——外部审查指出这与"未批准施工"基线不一致。
+修复：入口一律 `CAPABILITY_UNSUPPORTED` 拒绝（含测试断言拒绝且不产生租约行）；
+§14.1 底线实现逻辑保留在代码注释，待用户重新批准后恢复。
+
+## ADR-I20 · 派发门禁（daemon_state，2026-09-27，修复轮）
+
+恢复流程"重排不自动补跑"原只有注释无执行约束。迁移 003 建 `daemon_state` 表：
+`applyRecovery` 检测到任何需人工核对的痕迹（中断 run/未知 turn/重排队列/未释放租约）
+即落 `dispatch_gate=held`；worker 每次领取前检查；`openDispatchGate`（用户确认继续）
+放行（§16.4-6/决策 44/E7）。崩溃重领（dispatch_key 已有 turn）不重试执行：
+failOutbox + `run.reconcileRequired` 审计（RT-03 不确定窗口语义，人工/DEV-13 处理）。
+
+## ADR-I21 · 单实例锁原子化（2026-09-27，修复轮）
+
+check-then-write 在并发启动下可双成功。改为 `open(path,'wx')`（O_CREAT|O_EXCL）
+独占创建；持有 pid 存活即 BUSY；已死则先把旧锁原子 rename 移走（并发接管仅一个
+成功）再独占创建。双进程竞态用例（真实子进程）验证恰好一个赢家。
+
+## ADR-I22 · worker 模式门禁与验收收尾（2026-09-27，修复轮）
+
+M0 仅 DIRECT：route_json 模式非 DIRECT 的任务派发时转 BLOCKED 并留
+`mode_unavailable_in_m0` 审计（明确不可用，不冒充单成员执行后把研讨任务报完成）。
+完成收尾按任务 review_policy 快照：user_review → task REVIEW + pending 交付
+（manifest_hash=最终回复 sha256，唯一待办）；auto_deliver → DONE + not_required
+（reviewed_by/at 为空，不伪造人工通过）。
+
+## ADR-I23 · 事件流竞速不吞事件（2026-09-27，修复轮）
+
+worker 的截止计时用 Promise.race 实现；race 输掉的一侧若是对 async iterator 的
+`next()` 调用，该读取仍会消费一条事件但结果被丢弃（async generator 禁止并发 next，
+排队执行）——实测导致沉默超时用例吞掉终结事件。修复：保留 pending 的 next promise
+跨 race 复用，不重复调用 next()。同类经验适用于一切对 async iterator 的超时控制。

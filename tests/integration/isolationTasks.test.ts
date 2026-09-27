@@ -92,6 +92,46 @@ describe('双任务不串线（TH-02/TH-03 存储级）', () => {
 
     // 双方 DONE。
     expect(db.prepare("SELECT count(*) c FROM tasks WHERE status = 'DONE'").get()).toMatchObject({ c: 2 });
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('同一成员先后两个任务：输入包互不包含对方线程内容（FIX-6）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    createRoomRootTask(db, directTask(3, 'm_a'));
+    const adapter = new FakeRuntimeAdapter();
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1' });
+    await worker.runOnce(); // 任务 3 完成（产生串内回复）
+
+    createRoomRootTask(db, directTask(4, 'm_a')); // 同成员第二个任务
+    await worker.runOnce();
+
+    // 每个任务一个 bundle；按任务归属断言。
+    const perTask = db
+      .prepare(
+        `SELECT r.task_id AS task_id, cb.included_refs_json
+         FROM context_bundles cb
+         JOIN agent_turns at ON at.id = cb.turn_id
+         JOIN workflow_runs r ON r.id = at.run_id
+         ORDER BY r.task_id`,
+      )
+      .all() as Array<{ task_id: string; included_refs_json: string }>;
+    expect(perTask).toHaveLength(2);
+    const task3 = perTask.find((x) => x.task_id === 'task_3')!;
+    const task4 = perTask.find((x) => x.task_id === 'task_4')!;
+    const included3 = JSON.parse(task3.included_refs_json).included as Array<{ kind: string; refId: string }>;
+    const included4 = JSON.parse(task4.included_refs_json).included as Array<{ kind: string; refId: string }>;
+    // 各自只含自己的指令与本线程消息；任务 4 的输入不含任务 3 线程的任何消息。
+    expect(included3.map((x) => x.refId)).toContain('task:task_3:goal');
+    const msgRefs4 = included4.filter((x) => x.kind === 'message');
+    const task3ThreadMessages = db
+      .prepare('SELECT id FROM messages WHERE thread_id = ?')
+      .all('thread_3') as Array<{ id: string }>;
+    for (const m of task3ThreadMessages) {
+      expect(msgRefs4.some((x) => x.refId === m.id)).toBe(false);
+    }
+    await adapter.closeAllSessions();
     db.close();
   });
 });

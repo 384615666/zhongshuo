@@ -23,6 +23,8 @@ export interface FakeAdapterOptions {
   capabilities?: Partial<RuntimeCapabilities>;
   /** 脚本表：第 N 次 startTurn（1 起）用第 N 条；越界用最后一条；缺省 successTurn。 */
   turnScripts?: readonly FakeTurnScript[];
+  /** openSession 人为延迟（竞态/停止窗口测试）。 */
+  openSessionDelayMs?: number;
 }
 
 type ApprovalChoice = 'allow_once' | 'deny' | 'interrupted';
@@ -119,6 +121,9 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
   }
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
+    if (this.options.openSessionDelayMs != null && this.options.openSessionDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.openSessionDelayMs));
+    }
     this.sessionSeq += 1;
     const ref: SessionRef = {
       id: `fake-session-${this.sessionSeq}`,
@@ -332,6 +337,18 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       state.active = null;
     }
     this.sessions.delete(session.id);
+  }
+
+  /** 测试清理：关闭全部会话（清空挂起的 stall 计时器，避免进程悬挂）。 */
+  async closeAllSessions(): Promise<void> {
+    for (const state of [...this.sessions.values()]) {
+      if (state.active != null && !state.active.done) {
+        state.active.done = true;
+        state.active.wake();
+        state.active = null;
+      }
+    }
+    this.sessions.clear();
   }
 
   private stateOf(session: SessionRef): SessionState {

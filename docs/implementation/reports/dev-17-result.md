@@ -33,3 +33,10 @@
 ## 修改文件
 
 新增：`src/domain/isolation/`（binding.ts、contextFilter.ts）、`src/contracts/contextBundle.ts`、`tests/unit/isolation.test.ts`、`tests/integration/isolationTasks.test.ts`；修改：`src/daemon/dispatchWorker.ts`（消息 ID turn 命名空间修复）、contracts/domain 出口。未触碰 `hifi-prototype/`。
+
+## 勘误（2026-09-27 修复轮，外部只读审查后）
+
+1. 原结论"上下文过滤已验证"表述过满：原实现对 directive/summary 无条件放行、file 只验 baselineId 非空，未校验归属。现全部白名单化（allowedDirectives/allowedSummaries/allowedBaselineIds，服务端解析归属），补伪造指令/跨任务摘要/错误基线三个反例。
+2. 隔离原仅在单测层：现 worker 派发路径实际接入——按 §13.4 过滤组装 ContextBundle（含拒绝记录）并落 `context_bundles` 表，输入文本携带真实组装结果（正式模板文本仍归 DEV-21-M0）。
+3. 原双任务用例为不同成员串行：补同成员先后双任务用例，断言任务 4 的输入包不含任务 3 线程任何消息。
+4. 结论修正为：**任务级隔离合同与派发路径接线已实现并验证**；阶段级过滤（INDEPENDENT 草稿隔离等）与 OS 级边界仍分别归 DEV-08/09 与 DEV-20，不在本包范围。

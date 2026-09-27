@@ -30,3 +30,17 @@
 ## 修改文件
 
 新增：`src/daemon/dispatchWorker.ts`、`stopFlow.ts`、`singletonLock.ts`、`src/persistence/migrations/002-stop-generation.ts`、`tests/integration/dev05Daemon.test.ts`；修改：`migrations/registry.ts`、`stores/roomRootTask.ts`（route_json/owner 落库）、DEV-02 迁移测试改为对齐注册表长度。未触碰 `hifi-prototype/`。
+
+## 勘误（2026-09-27 修复轮，外部只读审查后）
+
+原报告六项缺陷由外部只读审查发现，全部修复并补真反例（详见总账"修复轮"表与 `tests/integration/m0Fixes.test.ts`）：
+
+1. 超时依赖事件到达：改独立截止计时（沉默 runtime 按时中断；中断宽限后无终结→UNKNOWN，不伪造）。
+2. 会话打开期间停止失效：openSession 返回后复查停止代次/终态，停止已生效不 startTurn、按取消收尾并留 `stop-during-session-open` 审计。
+3. 恢复无执行约束：迁移 003 `daemon_state` 派发门禁——applyRecovery 落 `held`、`openDispatchGate`（用户确认继续）放行、worker 领取前检查；重排后 worker 不再自动补跑（drain=0 用例）。
+4. 崩溃重领与既有 turn 唯一键冲突：dispatch_key 已有 turn → `failOutbox` + `run.reconcileRequired` 审计（RT-03 语义），不新建 turn。
+5. 模式门禁缺失：AUTO/DELIBERATE 任务 → BLOCKED + `mode_unavailable_in_m0` 审计，不冒充单成员执行。
+6. 验收策略未执行：user_review → REVIEW+pending 交付（唯一待办、current_delivery_id）；auto_deliver → DONE+not_required（不伪造人工通过）。
+7. 单实例锁非原子：O_EXCL 独占创建+陈旧锁原子接管，真实双进程竞态用例（恰好一个赢家）。
+8. **IPC 传输已补齐交付**（撤回原"随 DEV-07 后移"结论）：`namedPipeIpc` JSON 行协议（同 socket FIFO 串行），测试客户端往返验证；Electron 接线仍随 DEV-07。
+9. 修复中额外发现：事件竞速丢弃 pending 的 `iterator.next()` 会吞事件（async iterator 禁止并发 next）——已修。

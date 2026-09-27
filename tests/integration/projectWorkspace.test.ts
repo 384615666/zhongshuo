@@ -202,30 +202,33 @@ seedTurn('turn_p');
     releaseLease(db, { lockDomain: childDomain, ownerTurnId: 'turn_ch2' });
   });
 
-  it('RT-07：租约心跳过期仍阻塞，确认终止后放行', () => {
+  it('RT-07：租约真实过期（expired 状态）仍阻塞，确认终止后才放行', () => {
     const a = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_old', policy: 'single_writer', now: 300 });
     expect(a).toMatchObject({ ok: true });
-    // 心跳 300，超时阈值 60s：now=400 时已过期。
-    markExpiredLeases(db, 400, 60_000);
-    const b = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new', policy: 'single_writer', now: 401 });
-    expect(b).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } }); // 过期不放行
+    // 心跳 300，超时阈值 60s：now=61_000 时 300 < 61_000-60_000=1_000，租约真实进入 expired。
+    markExpiredLeases(db, 61_000, 60_000);
+    const row = db
+      .prepare("SELECT status FROM workspace_leases WHERE owner_turn_id = 'turn_old'")
+      .get() as { status: string };
+    expect(row.status).toBe('expired'); // 前置断言：确实过期，不是仍 active
+    // 过期但未确认终止 → 新写者仍被拒（持有者信息可见）
+    const b = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new', policy: 'single_writer', now: 61_001 });
+    expect(b).toMatchObject({
+      ok: false,
+      error: { code: 'WORKSPACE_BUSY', details: { holders: [{ ownerTurnId: 'turn_old', status: 'expired' }] } },
+    });
+    // 确认旧持有者已终止 → 放行
     confirmLeaseTerminated(db, { lockDomain: parentDomain, ownerTurnId: 'turn_old' });
-    const c = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new', policy: 'single_writer', now: 402 });
+    const c = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new', policy: 'single_writer', now: 61_002 });
     expect(c).toMatchObject({ ok: true });
     releaseLease(db, { lockDomain: parentDomain, ownerTurnId: 'turn_new' });
   });
 
-  it('parallel_writers：同域共存至上限、跨父子域仍拒绝（§14.1 底线）', () => {
-    const ok1 = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw1', policy: 'parallel_writers', now: 500, parallelMaxWriters: 2 });
-    expect(ok1).toMatchObject({ ok: true });
-    const ok2 = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw2', policy: 'parallel_writers', now: 501, parallelMaxWriters: 2 });
-    expect(ok2).toMatchObject({ ok: true });
-    const ok3 = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw3', policy: 'parallel_writers', now: 502, parallelMaxWriters: 2 });
-    expect(ok3).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } }); // 上限 2，超出排队
-    const cross = acquireLease(db, { lockDomain: childDomain, ownerTurnId: 'pw4', policy: 'parallel_writers', now: 503, parallelMaxWriters: 2 });
-    expect(cross).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } }); // 锁域判定不变
-    releaseLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw1' });
-    releaseLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw2' });
+  it('parallel_writers 已延期：入口拒绝，调用方无法绕过开启（§14.7/ADR-I19）', () => {
+    const r = acquireLease(db, { lockDomain: parentDomain, ownerTurnId: 'pw1', policy: 'parallel_writers', now: 500 });
+    expect(r).toMatchObject({ ok: false, error: { code: 'CAPABILITY_UNSUPPORTED' } });
+    // 未产生任何租约行
+    expect(db.prepare("SELECT count(*) c FROM workspace_leases WHERE owner_turn_id = 'pw1'").get()).toMatchObject({ c: 0 });
   });
 
   it('同一 owner 重取租约：epoch 递增（fencing）', () => {

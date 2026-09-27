@@ -1,6 +1,7 @@
 /**
- * 上下文过滤（§13.4 隔离矩阵的最小实现）：组装输入包时按任务范围过滤；
- * 未授权引用拒绝（CONTEXT_NOT_GRANTED），不先检索全房间再指望模型自己忽略。
+ * 上下文过滤（§13.4 隔离矩阵）：组装输入包时按任务范围过滤。
+ * 所有引用按「服务端解析的真实归属」校验——指令/摘要/文件与消息一样有白名单，
+ * 不因 kind 是 directive/summary 或带了个 baselineId 就无条件放行。
  * agent 入口（zs/adapter 读取）与 daemon 组装共用本过滤。
  */
 import { domainErr, domainOk } from '../../contracts/errors.ts';
@@ -10,8 +11,14 @@ import type { ContextRef } from '../../contracts/contextBundle.ts';
 export interface ContextScopeInput {
   /** 当前任务（含线程）。 */
   task: { id: string; threadId: string | null };
-  /** 本线程历史（允许）。 */
+  /** 本线程历史消息 ID（允许）。 */
   threadMessageIds: readonly string[];
+  /** 当前任务获准的指令引用（如 `task:{id}:goal`）。 */
+  allowedDirectives: readonly string[];
+  /** 当前线程获准的摘要引用（如 `thread:{id}:summary`）。 */
+  allowedSummaries: readonly string[];
+  /** 当前任务获准的分析基线 ID（§6.3/§13.2：文件引用必须落在基线内）。 */
+  allowedBaselineIds: readonly string[];
   /** 显式 context_grant 的引用（跨任务引用经用户确认创建，§13.4）。 */
   grantedRefs: readonly string[];
   /** agent/组装方请求的引用集合。 */
@@ -20,27 +27,34 @@ export interface ContextScopeInput {
 
 export interface FilteredContext {
   included: ContextRef[];
-  rejected: Array<{ ref: ContextRef; reason: 'not_in_task_scope' | 'grant_missing' }>;
+  rejected: Array<{ ref: ContextRef; reason: 'not_in_task_scope' | 'grant_missing' | 'baseline_not_allowed' }>;
 }
 
 /**
  * 规则（§13.4 矩阵）：
- * - directive/summary 类任务指令与摘要：允许（属当前任务）。
- * - message：必须属于本线程（threadMessageIds）或经 grant。
- * - artifact：必须经 grant（跨任务成果显式授权）；本任务自身成果由 stageArtifacts 白名单承接（DEV-08/09 扩展）。
- * - file：属项目基线范围（baselineId 存在即项目共享文件，允许；无基线引用按 not_in_task_scope 拒绝）。
+ * - directive/summary：必须在任务/线程白名单内（服务端解析归属，不信请求自报）。
+ * - message：本线程历史或经 grant。
+ * - artifact：仅经 grant（本任务自身成果白名单由 DEV-08/09 阶段承接扩展）。
+ * - file：baselineId 必须属于当前任务获准基线。
  */
 export function filterContextScope(input: ContextScopeInput): DomainResult<FilteredContext> {
   const included: ContextRef[] = [];
   const rejected: FilteredContext['rejected'] = [];
   const thread = new Set(input.threadMessageIds);
   const grants = new Set(input.grantedRefs);
+  const directives = new Set(input.allowedDirectives);
+  const summaries = new Set(input.allowedSummaries);
+  const baselines = new Set(input.allowedBaselineIds);
 
   for (const ref of input.requestedRefs) {
     switch (ref.kind) {
       case 'directive':
+        if (directives.has(ref.refId)) included.push(ref);
+        else rejected.push({ ref, reason: 'not_in_task_scope' });
+        break;
       case 'summary':
-        included.push(ref);
+        if (summaries.has(ref.refId)) included.push(ref);
+        else rejected.push({ ref, reason: 'not_in_task_scope' });
         break;
       case 'message':
         if (thread.has(ref.refId) || grants.has(ref.refId)) included.push(ref);
@@ -51,8 +65,8 @@ export function filterContextScope(input: ContextScopeInput): DomainResult<Filte
         else rejected.push({ ref, reason: 'grant_missing' });
         break;
       case 'file':
-        if (ref.baselineId != null) included.push(ref);
-        else rejected.push({ ref, reason: 'not_in_task_scope' });
+        if (ref.baselineId != null && baselines.has(ref.baselineId)) included.push(ref);
+        else rejected.push({ ref, reason: ref.baselineId == null ? 'not_in_task_scope' : 'baseline_not_allowed' });
         break;
     }
   }

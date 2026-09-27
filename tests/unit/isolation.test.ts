@@ -87,14 +87,17 @@ describe('会话复用键（§13.4/开工契约 §2.2）', () => {
   });
 });
 
-describe('上下文过滤（§13.4 矩阵最小）', () => {
-  it('本线程消息与指令放行；其他任务消息/未授权成果拒绝但返回部分结果', () => {
+describe('上下文过滤（§13.4 矩阵；服务端解析归属）', () => {
+  it('白名单内的指令/本线程消息放行；跨任务消息与未授权成果拒绝但返回部分结果', () => {
     const r = filterContextScope({
       task: { id: 'task_b', threadId: 'thread_b' },
       threadMessageIds: ['msg_b1', 'msg_b2'],
+      allowedDirectives: ['task:task_b:goal'],
+      allowedSummaries: ['thread:thread_b:summary'],
+      allowedBaselineIds: ['bl_b1'],
       grantedRefs: [],
       requestedRefs: [
-        { kind: 'directive', refId: 'goal' },
+        { kind: 'directive', refId: 'task:task_b:goal' },
         { kind: 'message', refId: 'msg_b1' },
         { kind: 'message', refId: 'msg_a9' }, // 任务 A 的消息
         { kind: 'artifact', refId: 'art_a1' }, // 未授权成果
@@ -102,7 +105,7 @@ describe('上下文过滤（§13.4 矩阵最小）', () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.value.included.map((x) => x.refId)).toEqual(['goal', 'msg_b1']);
+      expect(r.value.included.map((x) => x.refId)).toEqual(['task:task_b:goal', 'msg_b1']);
       expect(r.value.rejected).toEqual([
         { ref: { kind: 'message', refId: 'msg_a9' }, reason: 'not_in_task_scope' },
         { ref: { kind: 'artifact', refId: 'art_a1' }, reason: 'grant_missing' },
@@ -110,10 +113,76 @@ describe('上下文过滤（§13.4 矩阵最小）', () => {
     }
   });
 
+  it('伪造指令引用（不在任务白名单）→ 拒绝（不信请求自报归属）', () => {
+    const r = filterContextScope({
+      task: { id: 'task_b', threadId: 'thread_b' },
+      threadMessageIds: ['msg_b1'],
+      allowedDirectives: ['task:task_b:goal'],
+      allowedSummaries: [],
+      allowedBaselineIds: [],
+      grantedRefs: [],
+      requestedRefs: [
+        { kind: 'directive', refId: 'task:task_a:goal' }, // 冒充别任务的指令
+        { kind: 'message', refId: 'msg_b1' }, // 让 included 非空以观察部分拒绝
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.included.map((x) => x.refId)).toEqual(['msg_b1']);
+      expect(r.value.rejected).toEqual([
+        { ref: { kind: 'directive', refId: 'task:task_a:goal' }, reason: 'not_in_task_scope' },
+      ]);
+    }
+  });
+
+  it('跨任务线程摘要 → 拒绝；本线程摘要放行', () => {
+    const r = filterContextScope({
+      task: { id: 'task_b', threadId: 'thread_b' },
+      threadMessageIds: [],
+      allowedDirectives: [],
+      allowedSummaries: ['thread:thread_b:summary'],
+      allowedBaselineIds: [],
+      grantedRefs: [],
+      requestedRefs: [
+        { kind: 'summary', refId: 'thread:thread_b:summary' },
+        { kind: 'summary', refId: 'thread:thread_a:summary' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.included.map((x) => x.refId)).toEqual(['thread:thread_b:summary']);
+      expect(r.value.rejected[0]?.reason).toBe('not_in_task_scope');
+    }
+  });
+
+  it('文件：仅当前任务获准基线内放行；无基线或错误基线拒绝', () => {
+    const r = filterContextScope({
+      task: { id: 't', threadId: 'th' },
+      threadMessageIds: [],
+      allowedDirectives: [],
+      allowedSummaries: [],
+      allowedBaselineIds: ['bl_ok'],
+      grantedRefs: [],
+      requestedRefs: [
+        { kind: 'file', refId: 'src/a.ts', baselineId: 'bl_ok' },
+        { kind: 'file', refId: 'src/b.ts', baselineId: 'bl_other_task' },
+        { kind: 'file', refId: 'secret.txt' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.included.map((x) => x.refId)).toEqual(['src/a.ts']);
+      expect(r.value.rejected.map((x) => x.reason)).toEqual(['baseline_not_allowed', 'not_in_task_scope']);
+    }
+  });
+
   it('grant 后的跨任务引用放行（TH-07 形态）', () => {
     const r = filterContextScope({
       task: { id: 'task_b', threadId: 'thread_b' },
       threadMessageIds: [],
+      allowedDirectives: [],
+      allowedSummaries: [],
+      allowedBaselineIds: [],
       grantedRefs: ['art_a1@v3'],
       requestedRefs: [{ kind: 'artifact', refId: 'art_a1@v3', revision: 3 }],
     });
@@ -121,27 +190,13 @@ describe('上下文过滤（§13.4 矩阵最小）', () => {
     if (r.ok) expect(r.value.included).toHaveLength(1);
   });
 
-  it('基线内文件放行；无基线文件拒绝', () => {
-    const r = filterContextScope({
-      task: { id: 't', threadId: 'th' },
-      threadMessageIds: [],
-      grantedRefs: [],
-      requestedRefs: [
-        { kind: 'file', refId: 'src/a.ts', baselineId: 'bl_1' },
-        { kind: 'file', refId: 'secret.txt' },
-      ],
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.value.included.map((x) => x.refId)).toEqual(['src/a.ts']);
-      expect(r.value.rejected[0]?.reason).toBe('not_in_task_scope');
-    }
-  });
-
   it('全部被拒 → CONTEXT_NOT_GRANTED（不装出空输入包）', () => {
     const r = filterContextScope({
       task: { id: 't', threadId: 'th' },
       threadMessageIds: [],
+      allowedDirectives: [],
+      allowedSummaries: [],
+      allowedBaselineIds: [],
       grantedRefs: [],
       requestedRefs: [{ kind: 'artifact', refId: 'art_x' }],
     });

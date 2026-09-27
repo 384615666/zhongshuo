@@ -6,8 +6,8 @@
 
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
-- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05 已完成（见 reports/）
-- 最近更新：2026-09-27
+- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17 已实现（见 reports/）
+- 最近更新：2026-09-27（M0 核心修复轮完成：外部只读审查提出的 8 项缺陷全部修复并补真反例，`pnpm check` 222/222）
 
 ## 工作包状态
 
@@ -16,31 +16,47 @@
 | DEV-01 | 类型/schema、目标判别、路由、来源/权限/预算合同、MCP 预留 | **VERIFIED**（G0 范围） | `src/contracts/` `src/domain/` | G0 | [reports/dev-01-result.md](reports/dev-01-result.md) |
 | DEV-02 | SQLite migration/事务、组合约束、回执、outbox、重启读取 | **VERIFIED**（存储侧） | `src/persistence/` | G1（存储侧子集） | [reports/dev-02-result.md](reports/dev-02-result.md) |
 | DEV-03 | 可脚本化 fake adapter（六类 fixture） | **VERIFIED** | `src/adapter/fake/` + `src/contracts/runtime.ts` | — | [reports/dev-03-result.md](reports/dev-03-result.md) |
-| DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED** | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md) |
-| DEV-05 | daemon 单实例、派发 worker、停止代次、恢复基础 | **VERIFIED**（核心；IPC 传输随 DEV-07、真实进程注册随 DEV-06） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)：派发/停止/恢复全链 192/192 |
-| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属） | **VERIFIED**（M0 最小隔离） | `src/domain/isolation/` | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)：五级绑定+事件归属+上下文过滤+双任务不串线；阶段级过滤随 DEV-08/09 |
-| DEV-04 | 项目目录打开/去重/重定位、物理锁域、基线、用户内容保护 | NOT_STARTED | `src/daemon/` | G1/RT-07/09 | 依赖 DEV-01 ✅ / DEV-02 |
-| DEV-05 | daemon 单实例、IPC、进程/会话注册、派发、停止代次、恢复基础 | NOT_STARTED | `src/daemon/` | G1 | 依赖 DEV-02/03 |
-| DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05 + 最小隔离（DEV-17）+ 最小合同（DEV-21-M0）先行 |
+| DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED**（修复轮后） | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md)+勘误：RT-07 真过期阻塞已修复（原用例假阳性）；parallel_writers 入口已禁用（ADR-I19） |
+| DEV-05 | daemon 单实例锁、派发 worker、停止代次、恢复基础、命名管道 IPC | **VERIFIED**（修复轮后） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)+勘误：独立截止计时/会话竞态复查/派发门禁/重领对账/模式门禁/验收策略/锁原子化/IPC 全部补齐；**真实进程边界随 DEV-06 验证，不提前声称** |
+| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
+| DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05/17 ✅ + DEV-21-M0 合同先行 |
 | DEV-07 | 正式 UI 最小接入（保留原型交互，去 mock） | NOT_STARTED | `src/ui/` | G3 | 依赖 DEV-04/05/06 |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | NOT_STARTED | `src/adapter/` | G2/G4 | M2 |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
 | DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | NOT_STARTED | `src/daemon/` | RT-07/08/10 | M2 |
-| DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3 |
+| DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3；RT-03 重领对账的存储侧已在修复轮落地 |
 | DEV-14 | 三模式完整 UI、任务/成果/确认/诊断、设置、教程帮助 | NOT_STARTED | `src/ui/` | G5 | M3 |
 | DEV-15 | Windows 安装/卸载/托盘/升级迁移 | NOT_STARTED | 打包配置 | G5 | M3；native 依赖首次引入即验 ABI |
 | DEV-16 | 发布验收（集成、兼容矩阵、性能、G5 结论） | NOT_STARTED | — | G5 | 依赖 DEV-10—15、17—19、21—25 与适用 G0—G4 |
-| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属） | NOT_STARTED | `src/domain/`+`src/daemon/` | G1/G3 | M0；最小隔离须在真实调用前具备 |
 | DEV-18 | 未读与导航（水位、关注、搜索、收藏、深链、待我处理） | NOT_STARTED | `src/ui/` | RT-26/TH | M3 |
 | DEV-19 | 房间协作视图（看板、Files 集合、附件、搜索） | NOT_STARTED | `src/ui/` | TH/WPV | M3 |
 | DEV-20 | 完整权限加固（ADR-14 后置项） | NOT_STARTED（后续） | — | RT-20 | 首版原生限制不后置（DEV-06/10/14 承担） |
-| DEV-21 | 提示词/输出合同（M0 DIRECT → M3 DM/提醒/跟进） | NOT_STARTED | `src/contracts/`+模板 | PP-01—12 | M0 段先出 DIRECT 最小合同 |
+| DEV-21 | 提示词/输出合同（M0 DIRECT → M3 DM/提醒/跟进） | NOT_STARTED | `src/contracts/`+模板 | PP-01—12 | **下一包**；ContextBundle 契约骨架已就位（DEV-17） |
 | DEV-22 | DM 持久化与实际执行（串行、暂停、权限、附件） | NOT_STARTED | `src/daemon/` | DM-BASE-01—08 | M3；契约已在 DEV-01 落 |
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## M0 核心修复轮（2026-09-27，外部只读审查后）
+
+外部审查发现 8 项缺陷 + 2 项记录错误，全部修复（`tests/integration/m0Fixes.test.ts` 等新增反例；`pnpm check` 222/222）：
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| 1 | 过期租约被绕过（acquire 只查 active）+ RT-07 测试假阳性（未真正过期） | acquire 检查全部未释放租约（active+expired）；测试先断言 expired 再验阻塞 |
+| 2 | worker 超时依赖新事件到达（沉默 runtime 永不超时） | 独立截止计时 + 中断宽限；沉默→中断 CANCELLED、中断无响应→UNKNOWN 两用例 |
+| 3 | 会话打开期间停止失效、之后仍启动 | openSession 后复查停止代次/终态→不 startTurn、取消收尾+审计；竞态用例（openSessionDelayMs 400ms 窗口内停止） |
+| 4 | 恢复无执行约束（pending 会被直接领取）+ 重领与既有 turn 唯一键冲突 | 迁移 003 daemon_state + 派发门禁（applyRecovery 落 held、openDispatchGate 用户确认放行、worker 检查）；dispatch_key 已有 turn→failOutbox+reconcileRequired 审计（RT-03 语义） |
+| 5 | 单实例锁 check-then-write 非原子 | O_EXCL 独占创建 + 陈旧锁原子 rename 接管；真实双进程竞态用例（恰好一个赢家） |
+| 6 | 上下文过滤不足（directive/summary/file 无归属校验）+未接入派发路径 | 白名单化（allowedDirectives/Summaries/BaselineIds）+ 3 反例；worker 组装 ContextBundle（过滤+落库+真实输入文本）；同成员双任务 bundle 隔离用例 |
+| 7 | replyAdded 事件 ID 与库内消息 ID 不一致 | 事件 payload 用实际 rowId；断言按事件可查到消息 |
+| 8 | worker 不拒绝 AUTO/DELIBERATE、完成不按验收策略收尾 | 模式门禁（非 DIRECT→BLOCKED+审计）；user_review→REVIEW+pending 交付、auto_deliver→DONE+not_required |
+| 记A | 总账 DEV-04/05/17 双记录、"下一步"指向已完成的 DEV-04 | 本文件整体重写 |
+| 记B | parallel_writers 可经调用参数开启（违反延期基线） | 入口一律拒绝（ADR-I19），放行测试改为拒绝测试 |
+
+修复过程中额外发现并修复 2 个新缺陷：worker 事件竞速丢弃 pending 的 iterator.next() 会吞事件（async iterator 禁止并发 next）；IPC 同 socket 并发处理导致响应乱序（改行 FIFO 串行）。
 
 ## FULL 阶段（v0.1 后）
 
@@ -61,7 +77,7 @@
 
 ## 明确延期项（授权范围外，不得擅自恢复）
 
-- 多 Agent 并行写入增强（write_intent、写范围校验、跨任务变更请求、整合闸门）、按任务 worktree（主设计 §14.7，2026-09-26 延期）。当前仅 `single_writer` 默认策略；`parallel_writers` 的七条底线约束已在契约中定义（`WriteConcurrencyPolicy`）。
+- 多 Agent 并行写入增强（write_intent、写范围校验、跨任务变更请求、整合闸门）、按任务 worktree（主设计 §14.7，2026-09-26 延期）。当前仅 `single_writer`；`parallel_writers` 在租约入口被拒绝（ADR-I19），契约类型保留待后续批准。
 
 ## 阻塞登记
 
@@ -72,6 +88,6 @@
 
 ## 下一步（按依赖）
 
-1. **DEV-04**（项目目录真实打开/去重/重定位、物理锁域 RT-09、基线清单）——依赖已齐（DEV-01/02 ✅）。
-2. **DEV-05**（daemon 单实例、IPC、进程/会话注册、派发 worker、停止代次、恢复基础）——依赖 DEV-02 ✅/DEV-03 ✅；与 DEV-04 可并行推进。
-3. 随后 DEV-17 最小隔离 + DEV-21-M0 最小合同 → DEV-06 真实 runtime（Codex App Server，专用 fixture）→ DEV-07/G3 用户闭环。
+1. **DEV-21-M0**（提示词/输出最小合同）：先读 `docs/zhongshuo-prompts-v0.1.md`；DIRECT 模板（版本+hash）、TaskComplete 输出 schema、ContextBundle 正式拼装（消费已有 filterContextScope/契约骨架）。
+2. **DEV-06**（真实 runtime，Codex App Server）：修复轮后防线就绪；专用 fixture + 独立测试会话 + 有限预算；B6/RT-23 档位认证未过前 UI 禁用。
+3. **DEV-07**（Electron main/preload + 复用 hifi-prototype 交互接命名管道 IPC 与真实命令面）→ G3 演示。

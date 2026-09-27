@@ -23,8 +23,6 @@ export interface AcquireLeaseInput {
   ownerTurnId: string;
   policy: 'single_writer' | 'parallel_writers';
   now: number;
-  /** parallel_writers 的写入者上限（项目设置；默认建议 2）。 */
-  parallelMaxWriters?: number;
 }
 
 export interface LeaseHolderInfo {
@@ -42,33 +40,27 @@ export interface AcquireLeaseOk {
 /**
  * 申请写入租约。
  * - 冲突时返回 WORKSPACE_BUSY 并列出全部重叠持有者（排队可见）。
- * - 「过期但未确认终止」的租约同样阻塞（RT-07：不给新写者放行）。
+ * - RT-07：`active` 与 `expired`（心跳超时但持有者未确认终止）都阻塞新写者；
+ *   只有 `released`（正常释放或确认终止）才放行。
+ * - parallel_writers 已按 §14.7 延期（ADR-I19）：入口一律拒绝，调用方无法绕过开启。
  */
 export function acquireLease(
   db: ZhongshuoDatabase,
   input: AcquireLeaseInput,
 ): DomainResult<AcquireLeaseOk> {
+  if (input.policy !== 'single_writer') {
+    return domainErr(
+      'CAPABILITY_UNSUPPORTED',
+      'parallel_writers 写入并发策略已延期、未批准施工（§14.7/ADR-I19）；当前仅开放 single_writer',
+    );
+  }
+  // 未确认释放的租约（active 或 expired）都是潜在持有者。
   const rows = db
-    .prepare("SELECT * FROM workspace_leases WHERE status = 'active'")
+    .prepare("SELECT * FROM workspace_leases WHERE status != 'released'")
     .all() as LeaseRow[];
   const overlapping = rows.filter((row) => lockDomainsOverlap(row.lock_domain, input.lockDomain));
-
-  if (input.policy === 'single_writer') {
-    if (overlapping.length > 0) {
-      return busy(overlapping);
-    }
-  } else {
-    const sameDomain = overlapping.filter((row) => row.lock_domain === input.lockDomain);
-    // 并行上限（§14.1 底线 4：超出排队）。
-    const cap = input.parallelMaxWriters ?? 2;
-    if (sameDomain.length >= cap) {
-      return busy(sameDomain);
-    }
-    // 并行模式仍不允许跨父子/junction 的交叠锁域并发（锁域判定不变，§14.1 底线 1）。
-    const crossDomain = overlapping.filter((row) => row.lock_domain !== input.lockDomain);
-    if (crossDomain.length > 0) {
-      return busy(crossDomain);
-    }
+  if (overlapping.length > 0) {
+    return busy(overlapping);
   }
 
   const prev = db
