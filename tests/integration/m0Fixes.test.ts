@@ -13,7 +13,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { stuckTurn, unresponsiveTurn } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { applyRecovery, requestStop } from '../../src/daemon/stopFlow.ts';
-import { acquireSingletonLock } from '../../src/daemon/singletonLock.ts';
+import { acquireSingletonLock, readSingletonLock, writeLockFileForTest } from '../../src/daemon/singletonLock.ts';
 import { startNamedPipeIpc } from '../../src/daemon/namedPipeIpc.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-fix-'));
@@ -324,5 +324,54 @@ describe('FIX-1 附加：锁与租约修复后的基础回归', () => {
     expect(acquireSingletonLock(dir)).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
     firstHandle.release();
     expect(acquireSingletonLock(dir).ok).toBe(true);
+  });
+});
+
+describe('收口1：单实例锁受控时间窗口', () => {
+  it('刚创建尚未写完（空文件、新 mtime）→ 保守 BUSY，不当陈旧接管', () => {
+    const dir = join(tmpRoot, 'lock-creating');
+    writeLockFileForTest(dir, '', new Date()); // 创建中：内容为空、mtime 刚刚
+    const r = acquireSingletonLock(dir, { createGraceMs: 2_000 });
+    expect(r).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+  });
+
+  it('空文件超过创建宽限（旧 mtime）→ 按陈旧损坏接管成功', () => {
+    const dir = join(tmpRoot, 'lock-corrupt-old');
+    writeLockFileForTest(dir, '', new Date(Date.now() - 60_000)); // 损坏且超宽限
+    const r = acquireSingletonLock(dir, { createGraceMs: 2_000 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(readSingletonLock(dir)?.pid).toBe(process.pid);
+      r.value.release();
+    }
+  });
+
+  it('陈旧判定窗口内锁被替换为活 pid 的新锁 → 直接 BUSY，不移走新锁', () => {
+    const dir = join(tmpRoot, 'lock-replaced');
+    // 模拟：旧内容为死 pid；另一进程在接管前完成了自己的新锁（持有者是本测试进程）。
+    writeLockFileForTest(dir, JSON.stringify({ pid: 999999999, startedAt: 0 }));
+    writeLockFileForTest(dir, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+    const r = acquireSingletonLock(dir, { createGraceMs: 100 });
+    expect(r).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+    // 新锁原样保留（没被当作陈旧锁移走）。
+    expect(readSingletonLock(dir)?.pid).toBe(process.pid);
+  });
+});
+
+describe('收口3：adapter.interrupt 永不返回时宽限仍生效', () => {
+  it('挂起的 interrupt 不阻塞宽限计时：到点按 UNKNOWN 收尾，不挂死', async () => {
+    const db = openMem();
+    makeTask(db, 9);
+    const adapter = new FakeRuntimeAdapter({ turnScripts: [stuckTurn(60_000)], hangInterrupt: true });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1', turnDeadlineMs: 80, interruptGraceMs: 150 });
+    const startedAt = Date.now();
+    await worker.runOnce();
+    const elapsed = Date.now() - startedAt;
+    expect(db.prepare("SELECT status FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id = ?)").get('task_9')).toMatchObject({ status: 'UNKNOWN' });
+    expect(db.prepare('SELECT status FROM workflow_runs WHERE task_id = ?').get('task_9')).toMatchObject({ status: 'INTERRUPTED' });
+    // 宽限生效：总时长 ≈ deadline+grace（+少量调度余量），远小于挂起的 interrupt。
+    expect(elapsed).toBeLessThan(1_500);
+    await adapter.closeAllSessions();
+    db.close();
   });
 });

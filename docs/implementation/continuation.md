@@ -2,23 +2,29 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（M0 核心修复轮完成时点）
+- 更新：2026-09-27（收口轮 2 + DEV-21-M0 完成时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
 
-- **M0 核心修复轮**：外部只读审查的 8 项缺陷 + 2 项记录错误全部整改（过期租约、独立超时、会话竞态、派发门禁+重领对账、锁原子化、上下文过滤强化+worker 接入 ContextBundle、事件 ID、模式门禁+验收收尾、总账重写、parallel_writers 禁用）；额外修复 race 吞事件与 IPC 乱序两个新缺陷；`pnpm check` **222/222**。详见 [reports/m0-fix-round-result.md](reports/m0-fix-round-result.md) 与总账"修复轮"小节。
+- **收口轮 2**：锁接管纪律（受控窗口三反例）、门禁覆盖已提交未领取（RT-02 门禁化）、interrupt 限时发送（hangInterrupt 反例）。
+- **DEV-21-M0**：standing v0.1.1/turn v0.1.2/TaskComplete v1 契约 + worker 正式输入组装（根消息+获准历史正文注入、信封 hash 一致、组装失败不派发）；PP-02/03/04/05 自测子集通过。`pnpm check` **244/244**。详见 reports/dev-21-m0-and-closure2-result.md。
+- （前一轮）**M0 核心修复轮**：外部只读审查的 8 项缺陷 + 2 项记录错误全部整改（过期租约、独立超时、会话竞态、派发门禁+重领对账、锁原子化、上下文过滤强化+worker 接入 ContextBundle、事件 ID、模式门禁+验收收尾、总账重写、parallel_writers 禁用）；额外修复 race 吞事件与 IPC 乱序两个新缺陷；`pnpm check` **222/222**。详见 [reports/m0-fix-round-result.md](reports/m0-fix-round-result.md) 与总账"修复轮"小节。
 
 ## 当前故障 / 待停止进程
 
 - 无遗留进程。
 
-## 下一步（直接开工，无需再确认；采纳审查建议的顺序）
+## 下一步（直接开工，无需再确认）
 
-1. **DEV-21-M0（提示词/输出最小合同）**：先读 `docs/zhongshuo-prompts-v0.1.md`；DIRECT 模板 `zs-direct-v0.1.0`（文本+版本+sha256）、TaskComplete 输出 schema（zod strict：success 与 verification 分离——模型说"测试通过"不算验证）、ContextBundle 正式拼装（消费 filterContextScope 与 contextBundle.ts 骨架，替换 worker 中的 zs-context-v0 过渡文本）、注入参数拼装（developerInstructions/policyId）。验收 PP 子集可自测的部分。
-2. **DEV-06（真实 runtime，Codex App Server）**：防线已就绪（隔离/门禁/停止/恢复/预算）。专用 fixture 目录 + 独立测试会话 + 有限预算；先 probe 版本/能力；App Server 换行 JSON-RPC（initialize→thread.start→turn.start）按 runtime-injection-review-2026-09-20.md schema；§9.5 四坑（spawn EINVAL/stdin EOF/--skip-git-repo-check/GBK）；B6/RT-23 档位认证未过前 UI 档位禁用（RT-23 矩阵逐项跑）。
-3. **DEV-07**：Electron main/preload + 命名管道 IPC 接线（传输层已验证）+ hifi-prototype 交互复用接真实命令面 → G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留记录；双任务不串线）。
-4. 每包结束更新总账四件套 + 本文件。
+1. **DEV-06（真实 runtime：Codex App Server 专用 fixture 适配认证）**：
+   - 先决探测：本机 codex 可执行入口（勿直接 spawn .cmd——解析到原生 exe，§9.5 EINVAL 坑）、`codex app-server` 子命令存在性与版本。
+   - adapter：`src/adapter/codex/`（stdio 换行 JSON-RPC：initialize(clientInfo)→initialized→thread/turn 生命周期；developerInstructions=层 A 快照；turn/start 输入=层 B 渲染文本）；事件映射到 §9.4 规范事件；stdin 显式管理（EOF 坑）。
+   - 专用 fixture：tmp 目录小项目+已知内容文件；独立测试会话+有限预算（maxTurns≤2）；断言回复含真实文件内容（不是种子文本）。
+   - B6/RT-23：计划档读写限制、确认档（未过前禁用）逐项认证；PP-01/PP-12 注入/steer 真实路径验证。
+   - 失败不降级 full_access；档位证据回填 runtime-capability-matrix.md。
+2. **DEV-07**：Electron main/preload + 命名管道 IPC 接线 + hifi-prototype 交互复用接真实命令面 → G3 演示。
+3. 每包结束更新总账四件套 + 本文件。
 
 ## 施工纪律提醒（下一轮自查）
 

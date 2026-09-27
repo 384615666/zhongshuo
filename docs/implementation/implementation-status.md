@@ -6,8 +6,8 @@
 
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
-- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17 已实现（见 reports/）
-- 最近更新：2026-09-27（M0 核心修复轮完成：外部只读审查提出的 8 项缺陷全部修复并补真反例，`pnpm check` 222/222）
+- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
+- 最近更新：2026-09-27（收口轮 2 + DEV-21-M0 完成：`pnpm check` 244/244）
 
 ## 工作包状态
 
@@ -33,11 +33,15 @@
 | DEV-18 | 未读与导航（水位、关注、搜索、收藏、深链、待我处理） | NOT_STARTED | `src/ui/` | RT-26/TH | M3 |
 | DEV-19 | 房间协作视图（看板、Files 集合、附件、搜索） | NOT_STARTED | `src/ui/` | TH/WPV | M3 |
 | DEV-20 | 完整权限加固（ADR-14 后置项） | NOT_STARTED（后续） | — | RT-20 | 首版原生限制不后置（DEV-06/10/14 承担） |
-| DEV-21 | 提示词/输出合同（M0 DIRECT → M3 DM/提醒/跟进） | NOT_STARTED | `src/contracts/`+模板 | PP-01—12 | **下一包**；ContextBundle 契约骨架已就位（DEV-17） |
+| DEV-21 | 提示词/输出合同（M0 DIRECT → M3 DM/提醒/跟进） | **M0 段 VERIFIED**（fake+存储级；PP-01/12 随 DEV-06） | `src/contracts/prompts.ts` + `src/daemon/turnInput.ts` | PP-02/03/04/05 子集 | [reports/dev-21-m0-and-closure2-result.md](reports/dev-21-m0-and-closure2-result.md)：standing v0.1.1/turn v0.1.2/TaskComplete v1；根消息+历史正文真实注入；hash 一致；组装失败不派发 |
 | DEV-22 | DM 持久化与实际执行（串行、暂停、权限、附件） | NOT_STARTED | `src/daemon/` | DM-BASE-01—08 | M3；契约已在 DEV-01 落 |
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## 收口轮 2（2026-09-27，GPT 复核意见后）
+
+单实例锁（创建中窗口不接管/二次读取/读回核对+受控窗口反例）、恢复门禁覆盖已提交未领取分支（RT-02 改门禁化）、interrupt 挂起宽限仍生效（限时发送+定时器清理）。详见 [reports/dev-21-m0-and-closure2-result.md](reports/dev-21-m0-and-closure2-result.md)。
 
 ## M0 核心修复轮（2026-09-27，外部只读审查后）
 
@@ -88,6 +92,5 @@
 
 ## 下一步（按依赖）
 
-1. **DEV-21-M0**（提示词/输出最小合同）：先读 `docs/zhongshuo-prompts-v0.1.md`；DIRECT 模板（版本+hash）、TaskComplete 输出 schema、ContextBundle 正式拼装（消费已有 filterContextScope/契约骨架）。
-2. **DEV-06**（真实 runtime，Codex App Server）：修复轮后防线就绪；专用 fixture + 独立测试会话 + 有限预算；B6/RT-23 档位认证未过前 UI 禁用。
-3. **DEV-07**（Electron main/preload + 复用 hifi-prototype 交互接命名管道 IPC 与真实命令面）→ G3 演示。
+1. **DEV-06**（真实 runtime，Codex App Server 专用 fixture 适配认证）：防线与输入合同已就绪（隔离/门禁/停止/恢复/预算/DEV-21-M0 信封）；先 probe 版本/能力，再 initialize→thread.start→turn.start 真实路径；B6/RT-23 档位认证未过前 UI 档位禁用；PP-01/PP-12 注入验证随本包联合完成。
+2. **DEV-07**（Electron main/preload + 命名管道 IPC 接线 + hifi-prototype 交互复用接真实命令面）→ G3 演示。

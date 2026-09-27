@@ -149,3 +149,26 @@ worker 的截止计时用 Promise.race 实现；race 输掉的一侧若是对 as
 `next()` 调用，该读取仍会消费一条事件但结果被丢弃（async generator 禁止并发 next，
 排队执行）——实测导致沉默超时用例吞掉终结事件。修复：保留 pending 的 next promise
 跨 race 复用，不重复调用 next()。同类经验适用于一切对 async iterator 的超时控制。
+
+
+## ADR-I24 · 单实例锁接管纪律（2026-09-27，收口轮 2）
+
+创建中窗口（空/半截锁文件、mtime < createGraceMs）保守 BUSY 不接管（宁可误判占用不可双 daemon）；
+陈旧接管三步：判定死 pid → rename 前二次读取确认内容未变 → rename 后读回核对，误移他人新锁则还原并 BUSY。
+
+## ADR-I25 · interrupt 限时发送（2026-09-27，收口轮 2）
+
+adapter.interrupt() 可能永不返回：worker 限时发送（宽限剩余时间为上限、fire-and-forget）后立即回主循环，
+宽限计时由主循环承担；事件 race 侧定时器 clearTimeout+unref，不悬挂进程。
+
+## ADR-I26 · 输入组装前置与信封落库格式（2026-09-27，DEV-21-M0）
+
+assembleDirectTurn 在 createRun **之前**执行（必要材料缺失/敏感命中→BLOCKED+task.contextAssemblyFailed 审计，不建 run/turn）；
+context_bundles.included_refs_json 存**完整信封**（版本/预算/权限/材料/线程摘要/输出契约），hash=canonical JSON sha256，
+与 startTurn 文本同源（PP-04 可核对）；层 A 经 OpenSessionInput.developerInstructions+promptVersion 随会话注入。
+追加 turn 用 `task:{id}:redispatch` 键（任务非终态+stop_generation=0 才放行）。
+
+## ADR-I27 · 再交付 revision 递增（2026-09-27，DEV-21-M0 轮发现）
+
+追加 turn 的交付按 (task_id) MAX(revision)+1 递增，旧 pending 标 superseded（§10.5-5「替换当前待办」）；
+修复首版固定 revision=1 撞唯一键的缺陷。

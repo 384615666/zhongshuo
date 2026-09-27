@@ -25,6 +25,8 @@ export interface FakeAdapterOptions {
   turnScripts?: readonly FakeTurnScript[];
   /** openSession 人为延迟（竞态/停止窗口测试）。 */
   openSessionDelayMs?: number;
+  /** interrupt() 永不返回（真实世界的协议挂起反例）。 */
+  hangInterrupt?: boolean;
 }
 
 type ApprovalChoice = 'allow_once' | 'deny' | 'interrupted';
@@ -60,6 +62,8 @@ interface SessionState {
   lateByTurnIndex: Map<number, LateDelivery[]>;
   turnCounter: number;
   steers: Array<{ turnId: string; text: string }>;
+  developerInstructions?: string;
+  promptVersion?: string;
 }
 
 /** 事件流：backlog + 尾部推送；多次迭代均从积压头部回放（重连语义，消费方按 eventKey 去重）。 */
@@ -89,6 +93,8 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
   private readonly sessions = new Map<string, SessionState>();
   private sessionSeq = 0;
   private emitSeq = 0;
+  /** 测试观测：startTurn 收到的输入（DEV-21 验证实际注入文本与 bundle 一致）。 */
+  readonly startTurnLog: Array<{ turnId: string; inputBundleId: string; text: string; developerInstructions?: string; promptVersion?: string }> = [];
 
   constructor(options: FakeAdapterOptions = {}) {
     this.options = options;
@@ -141,6 +147,8 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       lateByTurnIndex: new Map(),
       turnCounter: 0,
       steers: [],
+      developerInstructions: input.developerInstructions,
+      promptVersion: input.promptVersion,
     };
     this.sessions.set(ref.id, state);
     this.emit(state, { kind: 'session.ready', providerSessionId: ref.providerSessionId });
@@ -158,6 +166,13 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       : successTurn();
     state.turnCounter += 1;
 
+    this.startTurnLog.push({
+      turnId: input.turnId,
+      inputBundleId: input.inputBundleId,
+      text: input.text,
+      developerInstructions: this.sessions.get(session.id)?.developerInstructions,
+      promptVersion: this.sessions.get(session.id)?.promptVersion,
+    });
     const turn: ActiveTurnState = {
       turnId: input.turnId,
       items: script,
@@ -300,6 +315,10 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
   }
 
   async interrupt(session: SessionRef, turnId: string): Promise<void> {
+    if (this.options.hangInterrupt === true) {
+      // 永不 resolve：验证消费方不被 interrupt 阻塞。
+      await new Promise<void>(() => {});
+    }
     const state = this.stateOf(session);
     if (this.capabilities().interrupt !== 'supported') {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '该 runtime 声明不支持 interrupt');

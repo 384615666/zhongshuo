@@ -12,6 +12,8 @@
  * - 迟到完成不复活停止：turn 已 STOPPING 时完成事件走取消收尾并留 lateCompletion 审计（RT-06 形态）。
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { claimNextOutbox, completeOutbox, failOutbox } from '../persistence/outbox.ts';
 import type { OutboxRow } from '../persistence/outbox.ts';
@@ -21,8 +23,8 @@ import type { RuntimeAdapter, NormalizedRuntimeEvent } from '../contracts/runtim
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
-import { filterContextScope } from '../domain/isolation/contextFilter.ts';
-import type { ContextBundleDraft } from '../contracts/contextBundle.ts';
+import { assembleDirectTurn } from './turnInput.ts';
+import { renderStandingPrompt, scanSensitivePatterns } from '../contracts/prompts.ts';
 
 interface TaskRow {
   id: string;
@@ -30,6 +32,7 @@ interface TaskRow {
   conversation_id: string;
   room_id: string;
   conversation_thread_id: string;
+  root_message_id: string | null;
   owner_member_id: string | null;
   status: string;
   review_policy: string;
@@ -61,6 +64,8 @@ export interface DispatchWorkerOptions {
   interruptGraceMs?: number;
   /** DIRECT 预算上限（决策 12：6）。 */
   maxTurns?: number;
+  /** 应用数据目录（层 A draftDir 变量与未来快照存储）；DEV-07 接真实 appData。 */
+  appDataDir?: string;
 }
 
 export class DispatchWorker {
@@ -71,6 +76,7 @@ export class DispatchWorker {
   private readonly turnDeadlineMs: number;
   private readonly interruptGraceMs: number;
   private readonly maxTurns: number;
+  private readonly appDataDir: string;
   private readonly live = new Map<string, { turnId: string; sessionId: string }>();
 
   constructor(options: DispatchWorkerOptions) {
@@ -81,6 +87,7 @@ export class DispatchWorker {
     this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
     this.interruptGraceMs = options.interruptGraceMs ?? 5_000;
     this.maxTurns = options.maxTurns ?? 6;
+    this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
   }
 
   /** 处理一条 outbox 项；返回是否处理了（门禁 held/无项返回 false）。 */
@@ -156,16 +163,22 @@ export class DispatchWorker {
     }
 
     const project = this.db
-      .prepare('SELECT id, canonical_path FROM projects WHERE id = ?')
-      .get(task.project_id) as ProjectRow | undefined;
+      .prepare('SELECT id, display_name, canonical_path FROM projects WHERE id = ?')
+      .get(task.project_id) as (ProjectRow & { display_name: string }) | undefined;
     const member = this.db
-      .prepare('SELECT id, project_id, enabled FROM project_members WHERE id = ?')
-      .get(task.owner_member_id ?? '') as MemberRow | undefined;
+      .prepare('SELECT id, project_id, display_name, enabled FROM project_members WHERE id = ?')
+      .get(task.owner_member_id ?? '') as (MemberRow & { display_name: string }) | undefined;
     if (project == null || member == null || member.enabled !== 1) {
       await this.transitionTask(task.id, 'BLOCKED');
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
+    const room = this.db
+      .prepare('SELECT id, name FROM rooms WHERE id = ?')
+      .get(task.room_id) as { id: string; name: string } | undefined;
+    const conversationKind = (
+      this.db.prepare('SELECT kind FROM conversations WHERE id = ?').get(task.conversation_id) as { kind: 'room' | 'dm' } | undefined
+    )?.kind;
 
     const runId = `run_${randomUUID()}`;
     const turnId = `turn_${randomUUID()}`;
@@ -175,6 +188,39 @@ export class DispatchWorker {
       usedTurns: 0,
       inFlightReservedTurns: 1,
     };
+
+    // 输入组装（DEV-21-M0）：必要材料缺失/敏感命中 → 组装失败，不建 run、不派发。
+    const assembled = assembleDirectTurn({
+      db: this.db,
+      task: {
+        id: task.id,
+        projectId: task.project_id,
+        conversationId: task.conversation_id,
+        conversationKind: conversationKind ?? 'room',
+        roomId: task.room_id,
+        threadId: task.conversation_thread_id,
+        rootMessageId: task.root_message_id,
+        title: task.title,
+        objective: task.objective,
+        taskRevision: 0,
+      },
+      identity: {
+        member: { id: member.id, displayName: member.display_name },
+        project: { id: project.id, displayName: project.display_name },
+        room: room ?? { id: task.room_id, name: '未命名房间' },
+      },
+      turnId,
+      budget,
+    });
+    if (!assembled.ok) {
+      await this.transitionTask(task.id, 'BLOCKED');
+      this.audit(task, null, null, 'task.contextAssemblyFailed', {
+        reason: (assembled.error.details as { reason?: string } | undefined)?.reason ?? 'assembly-failed',
+        message: assembled.error.message,
+      });
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
 
     const createRun = this.db.transaction(() => {
       this.db.prepare(
@@ -189,10 +235,48 @@ export class DispatchWorker {
          VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1)`,
       ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key);
       this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
+      // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
+      this.db.prepare(
+        `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
+         VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
+      ).run(assembled.value.bundleId, turnId, task.conversation_thread_id, JSON.stringify(assembled.value.envelope), assembled.value.hash);
       this.transitionTask(task.id, 'ACTIVE');
-      this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT' });
+      this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
     });
     createRun();
+
+    // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
+    const draftDir = join(this.appDataDir, 'drafts', task.project_id);
+    const standing = renderStandingPrompt({
+      conversationKind: conversationKind ?? 'room',
+      vars: {
+        memberId: member.id,
+        memberDisplayName: member.display_name,
+        projectId: project.id,
+        projectName: project.display_name,
+        roomId: task.room_id,
+        roomName: room?.name ?? '未命名房间',
+        threadId: task.conversation_thread_id,
+        taskId: task.id,
+        workspacePath: project.canonical_path,
+        draftDir,
+      },
+    });
+    if (!standing.ok) {
+      await this.transitionTask(task.id, 'BLOCKED');
+      this.audit(task, null, null, 'task.contextAssemblyFailed', {
+        reason: 'standing-prompt-render-failed',
+        message: standing.error.message,
+      });
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    if (scanSensitivePatterns(standing.value.text).length > 0) {
+      await this.transitionTask(task.id, 'BLOCKED');
+      this.audit(task, null, null, 'task.contextAssemblyFailed', { reason: 'sensitive-standing-prompt', message: '层 A 渲染命中敏感模式（PP-03）' });
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
 
     // 会话：任务/成员/generation 维度（§13.4）。
     const generation = this.db
@@ -206,6 +290,8 @@ export class DispatchWorker {
       sessionGeneration: generation.c,
       cwd: project.canonical_path,
       policyId: 'policy-analyze',
+      developerInstructions: standing.value.text,
+      promptVersion: standing.value.version,
     });
     this.db.prepare(
       `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
@@ -232,18 +318,11 @@ export class DispatchWorker {
     this.live.set(turnId, { turnId, sessionId: session.id });
 
     try {
-      // 输入组装：按 §13.4 过滤后落 ContextBundle（隔离接入派发路径；模板文本 DEV-21-M0 完善）。
-      const bundle = this.buildContextBundle(task, turnId);
       await this.adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
-        inputBundleId: bundle.id,
-        text: JSON.stringify({
-          schema: 'zs-context-v0',
-          bundleId: bundle.id,
-          directive: { title: task.title, objective: task.objective },
-          included: bundle.includedRefs,
-        }),
+        inputBundleId: assembled.value.bundleId,
+        text: assembled.value.text,
         policyId: 'policy-analyze',
         taskRevision: 0,
       });
@@ -252,44 +331,6 @@ export class DispatchWorker {
       this.live.delete(turnId);
     }
     await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-  }
-
-  /** 服务端解析的真实归属组装输入（§13.4）：指令 + 本线程历史；拒绝项如实记录。 */
-  private buildContextBundle(task: TaskRow, turnId: string): { id: string; hash: string; includedRefs: unknown[] } {
-    const threadMessages = this.db
-      .prepare('SELECT id FROM messages WHERE thread_id = ? ORDER BY thread_message_seq')
-      .all(task.conversation_thread_id) as Array<{ id: string }>;
-    const directiveRef = { kind: 'directive' as const, refId: `task:${task.id}:goal` };
-    const requested = [
-      directiveRef,
-      ...threadMessages.map((m) => ({ kind: 'message' as const, refId: m.id })),
-    ];
-    const filtered = filterContextScope({
-      task: { id: task.id, threadId: task.conversation_thread_id },
-      threadMessageIds: threadMessages.map((m) => m.id),
-      allowedDirectives: [`task:${task.id}:goal`],
-      allowedSummaries: [`thread:${task.conversation_thread_id}:summary`],
-      allowedBaselineIds: [],
-      grantedRefs: [],
-      requestedRefs: requested,
-    });
-    const included = filtered.ok ? filtered.value.included : [];
-    const rejected = filtered.ok ? filtered.value.rejected : [{ refId: 'all', reason: 'CONTEXT_NOT_GRANTED' as const }];
-    const draft: ContextBundleDraft = {
-      turnId,
-      threadId: task.conversation_thread_id,
-      taskRevision: 0,
-      baselineId: null,
-      includedRefs: included,
-      scopeGrants: [],
-    };
-    const hash = createHash('sha256').update(JSON.stringify(draft)).digest('hex');
-    const bundleId = `cb_${hash.slice(0, 24)}`;
-    this.db.prepare(
-      `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
-       VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
-    ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ included, rejected }), hash);
-    return { id: bundleId, hash, includedRefs: included };
   }
 
   private stoppingOrTerminal(taskId: string, turnId: string): boolean {
@@ -310,8 +351,11 @@ export class DispatchWorker {
   /**
    * 消费事件直到终结；截止计时独立于事件流（沉默 runtime 也会按时中断）。
    * 中断后宽限内仍无终结 → UNKNOWN（§10.2 结果不确定，不伪造成功/失败）。
-   * 实现注意：async iterator 不允许并发 next——race 输掉的读取必须保留复用，
-   * 否则被丢弃的 next() 会吞掉一条事件（修复轮实测缺陷）。
+   * 实现注意（修复轮 2 收口）：
+   * - async iterator 不允许并发 next——race 输掉的读取必须保留复用，否则吞事件。
+   * - race 侧的定时器在事件获胜时 clearTimeout 并 unref，不悬挂进程。
+   * - adapter.interrupt() 本身可能永不返回：限时发送（宽限剩余时间为上限）后立即
+   *   回到主循环，宽限计时由主循环承担，不因 interrupt 挂起而失效。
    */
   private async consumeUntilTerminal(task: TaskRow, runId: string, turnId: string, sessionId: string): Promise<void> {
     const deadline = Date.now() + this.turnDeadlineMs;
@@ -327,16 +371,28 @@ export class DispatchWorker {
       const nextPromise: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> =
         pending ?? iterator.next();
       pending = null;
-      const winner = await Promise.race([
-        nextPromise,
-        new Promise<'timer'>((resolve) => setTimeout(() => resolve('timer'), waitMs)),
-      ]);
+      let timer: NodeJS.Timeout | undefined;
+      const timerPromise = new Promise<'timer'>((resolve) => {
+        timer = setTimeout(() => resolve('timer'), waitMs);
+        timer.unref?.();
+      });
+      const winner = await Promise.race([nextPromise, timerPromise]);
+      clearTimeout(timer);
       if (winner === 'timer') {
         pending = nextPromise; // 保留进行中的读取，不吞事件
         const at = Date.now();
         if (!interruptSent && at >= deadline) {
           interruptSent = true;
-          await this.adapter.interrupt({ id: sessionId } as never, turnId);
+          // interrupt 限时发送：不 await 其完成；宽限由主循环计时（挂起也不影响）。
+          void Promise.race([
+            this.adapter.interrupt({ id: sessionId } as never, turnId),
+            new Promise((resolve) => {
+              const guard = setTimeout(resolve, Math.max(1, interruptDeadline - Date.now()));
+              guard.unref?.();
+            }),
+          ]).catch(() => {
+            // 发送失败/超时：宽限到点后按不确定处理。
+          });
           continue;
         }
         if (interruptSent && at >= interruptDeadline) break; // 中断后仍无终结：不确定
@@ -415,18 +471,27 @@ export class DispatchWorker {
           this.db.prepare(`UPDATE workflow_runs SET status = 'SUCCEEDED' WHERE id = ?`).run(runId);
           this.settleBudget(runId);
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
+          // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const finalText = event.finalText ?? '';
           const manifestHash = createHash('sha256').update(finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
+          const prevRevision = (this.db
+            .prepare('SELECT COALESCE(MAX(revision), 0) r FROM task_deliveries WHERE task_id = ?')
+            .get(task.id) as { r: number }).r;
+          if (prevRevision > 0) {
+            this.db.prepare(
+              `UPDATE task_deliveries SET review_status = 'superseded' WHERE task_id = ? AND review_status = 'pending'`,
+            ).run(task.id);
+          }
           this.db.prepare(
             `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json,
                change_set_refs_json, verification_refs_json, review_status)
-             VALUES (?, ?, ?, 1, ?, ?, '[]', '[]', ?)`,
-          ).run(deliveryId, task.id, runId, manifestHash, JSON.stringify([`turn:${turnId}:final`]), reviewStatus);
+             VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', ?)`,
+          ).run(deliveryId, task.id, runId, prevRevision + 1, manifestHash, JSON.stringify([`turn:${turnId}:final`]), reviewStatus);
           this.db.prepare('UPDATE tasks SET current_delivery_id = ? WHERE id = ?').run(deliveryId, task.id);
           this.transitionTask(task.id, task.review_policy === 'user_review' ? 'REVIEW' : 'DONE');
-          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'SUCCEEDED', reviewStatus });
+          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'SUCCEEDED', reviewStatus, deliveryRevision: prevRevision + 1 });
         });
         tx();
         break;
@@ -543,7 +608,8 @@ export class DispatchWorker {
 }
 
 function parseInitialTaskId(dispatchKey: string): string | null {
-  const m = dispatchKey.match(/^task:(.+):initial$/);
+  // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）。
+  const m = dispatchKey.match(/^task:(.+):(?:initial|redispatch)$/);
   return m?.[1] ?? null;
 }
 

@@ -120,17 +120,26 @@ describe('双任务不串线（TH-02/TH-03 存储级）', () => {
     expect(perTask).toHaveLength(2);
     const task3 = perTask.find((x) => x.task_id === 'task_3')!;
     const task4 = perTask.find((x) => x.task_id === 'task_4')!;
-    const included3 = JSON.parse(task3.included_refs_json).included as Array<{ kind: string; refId: string }>;
-    const included4 = JSON.parse(task4.included_refs_json).included as Array<{ kind: string; refId: string }>;
-    // 各自只含自己的指令与本线程消息；任务 4 的输入不含任务 3 线程的任何消息。
-    expect(included3.map((x) => x.refId)).toContain('task:task_3:goal');
-    const msgRefs4 = included4.filter((x) => x.kind === 'message');
+    // 新格式：included_refs_json = 完整信封（DEV-21-M0）；隔离断言基于 materials+threadDigest。
+    const envelope3 = JSON.parse(task3.included_refs_json) as {
+      materials: Array<{ ref: string; reason?: string }>;
+      threadDigest: { rootMessageId: string; messages: Array<{ messageId: string }> };
+    };
+    const envelope4 = JSON.parse(task4.included_refs_json) as typeof envelope3;
+    // 任务 3 的输入含自己的根消息与线程历史。
+    expect(envelope3.threadDigest.rootMessageId).toBe('msg_root_3');
+    // 任务 4 的输入不含任务 3 线程的任何消息（materials 与 threadDigest 双查）。
     const task3ThreadMessages = db
       .prepare('SELECT id FROM messages WHERE thread_id = ?')
       .all('thread_3') as Array<{ id: string }>;
+    const refs4 = new Set<string>([
+      ...envelope4.materials.map((m) => m.ref),
+      ...envelope4.threadDigest.messages.map((m) => m.messageId),
+    ]);
     for (const m of task3ThreadMessages) {
-      expect(msgRefs4.some((x) => x.refId === m.id)).toBe(false);
+      expect(refs4.has(m.id)).toBe(false);
     }
+    expect(envelope4.threadDigest.rootMessageId).toBe('msg_root_4');
     await adapter.closeAllSessions();
     db.close();
   });

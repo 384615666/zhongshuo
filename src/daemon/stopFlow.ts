@@ -122,6 +122,8 @@ export interface RecoverySnapshot {
  * 启动恢复：非终态 run→INTERRUPTED、turn→UNKNOWN（进程身份核实随 DEV-06 真实进程补强）；
  * 过期租约的 outbox 重排回 pending 并**落下派发门禁**——恢复后先列出可继续任务等用户
  * 确认「继续」（openDispatchGate）才开放新调度（§16.4-6/决策 44/E7）。
+ * 门禁覆盖两种崩溃分支：①曾领取（中断 run/未知 turn/重排队列）②已提交但尚未领取
+ * （pending outbox 遗留）——两者都不得直接派发遗留工作。
  */
 export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
   const tx = db.transaction((): RecoverySnapshot => {
@@ -138,9 +140,12 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
       .prepare(`SELECT lock_domain, owner_turn_id, status FROM workspace_leases WHERE status != 'released'`)
       .all() as Array<{ lock_domain: string; owner_turn_id: string; status: string }>)
       .map((row) => ({ lockDomain: row.lock_domain, ownerTurnId: row.owner_turn_id, status: row.status }));
-    // 派发门禁：存在任何需要人工核对的痕迹即 held（即使本轮无重排队列）。
+    // 已提交未领取的遗留派发工作：同样落下门禁，等用户确认继续。
+    const pendingOutbox = (db
+      .prepare(`SELECT count(*) c FROM outbox WHERE status = 'pending'`)
+      .get() as { c: number }).c;
     const gateNeeded =
-      interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0;
+      interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0 || pendingOutbox > 0;
     if (gateNeeded) holdDispatchGate(db, now);
     return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases };
   });

@@ -10,6 +10,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { failingTurn, stuckTurn } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { applyRecovery, requestStop, StopCommandError } from '../../src/daemon/stopFlow.ts';
+import { openDispatchGate } from '../../src/persistence/daemonState.ts';
 import { acquireSingletonLock } from '../../src/daemon/singletonLock.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev05-'));
@@ -129,15 +130,21 @@ describe('派发 worker：成功全链路（G1 核心）', () => {
     db.close();
   });
 
-  it('RT-02：提交后崩溃（派发前）→ 重启后 worker 从 outbox 继续，历史完整', async () => {
+  it('RT-02：提交后崩溃（派发前）→ 重启落门禁不自动补跑，用户确认后续派', async () => {
     const path = join(tmpRoot, 'restart-dev05.db');
     const db = openDatabase(path);
     seed(db);
     makeTask(db, 4);
-    db.close(); // 崩溃：任务已提交、未派发
+    db.close(); // 崩溃：任务已提交、未领取（无 run/turn）
 
     const reopened = openDatabase(path);
+    // 启动恢复：已提交未领取的遗留 outbox 也落门禁（修复轮 2 收口）。
+    applyRecovery(reopened, 10_000);
     const worker = new DispatchWorker({ db: reopened, adapter: new FakeRuntimeAdapter(), leaseOwner: 'w2' });
+    expect(await worker.drain()).toBe(0); // 不自动补跑（决策 44/E7）
+    expect(reopened.prepare('SELECT count(*) c FROM workflow_runs').get()).toMatchObject({ c: 0 });
+
+    openDispatchGate(reopened); // 用户确认继续
     expect(await worker.drain()).toBe(1);
     expect(reopened.prepare('SELECT status FROM tasks WHERE id = ?').get('task_4')).toMatchObject({ status: 'DONE' });
     expect(reopened.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get('thread_4')).toMatchObject({ c: 1 });

@@ -89,6 +89,9 @@ export interface OpenSessionInput {
   cwd: string;
   policyId: string;
   resume?: SessionRef;
+  /** 层 A 常驻提示词渲染快照（规格 §2.1/§5.1：会话绑定，resume 不换版）。 */
+  developerInstructions?: string;
+  promptVersion?: string;
 }
 
 /** §9.3 RuntimeAdapter 接口（fake/codex/claude 共同实现）。 */

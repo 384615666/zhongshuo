@@ -17,3 +17,12 @@ export type OpaqueCursor = string;
 
 /** 能力/验证三态：unverified 不得按 supported 处理（§9.3）。 */
 export type Support = 'supported' | 'unsupported' | 'unverified';
+
+/** 规范化 JSON：对象键排序、数组保序——同一数据不同字段顺序得到相同序列化。 */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+}

@@ -7,17 +7,12 @@
 import { createHash } from 'node:crypto';
 import type { CallerContext } from '../contracts/caller.ts';
 import type { CommandId, PayloadHash } from '../contracts/commands.ts';
+import { canonicalJson } from '../contracts/common.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
 
-/** 规范化 JSON：对象键排序、数组保序——同一 payload 不同字段顺序得到相同摘要。 */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
-}
+export { canonicalJson };
+
 
 export interface PayloadHashInput {
   method: string;
