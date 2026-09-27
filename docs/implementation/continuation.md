@@ -2,10 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（DEV-06 第一阶段完成时点）
+- 更新：2026-09-27（DEV-06 修复轮 2 + 真实认证通过时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
+
+- **DEV-06 修复轮 2**：GPT 复核 7 项全整改（终态映射/turn 归属/生命周期+resume/TaskComplete 接入完成路径/B6 收紧/能力收窄/锁目录协议）；协议回放 mock 8 用例（零额度）；`pnpm check` 254/254。
+- **真实认证通过（gpt-6-luna，e2e 4/4）**：C1 真实文件内容回流（ZS-DEV06-4242）+ 层 A 行为证据（ZS-ACK）；B6 计划档两路径（直接编辑：内容逐字节未变；shell：文件未创建）+ 工具失败证据。deepseek-flash 在当前渠道 400，已切 gpt-6-luna（ZS_E2E_MODEL 可覆盖）。详见 reports/dev-06-fixround2-result.md。
 
 - **DEV-06 第一阶段**：codex 0.157.1 协议类型固化（generate-ts，tests/fixtures/codex-protocol/，已排除编译）、CodexAppServerAdapter（stdio 换行 JSON-RPC 全生命周期+§9.4 映射+审批通道）、e2e 隔离配置（pnpm test:e2e，默认套件不烧额度）。真实进程验证：probe/initialize/thread/start/turn/start/通知映射全通；**模型 turn 被额度限制阻断**（"try again at 12:29 PM"）——C1 文件回流与 B6 计划档未验证（B6 断言已收紧防额度冒充）。详见 reports/dev-06-stage1-result.md。
 
@@ -19,8 +22,8 @@
 
 ## 下一步（直接开工，无需再确认）
 
-1. **额度重置后（12:29 PM）先重跑 `pnpm test:e2e`**：C1（fixture 暗号 ZS-DEV06-4242 回流+层 A 暗语行为证据）与 B6（read-only 写拒绝）。通过后回填 runtime-capability-matrix（supported 项+RT-23 计划档证据），再各花 1 turn 补 steer（PP-12 局部）与 thread/resume（PP-02 局部）真实用例。
-2. **DEV-06 收尾**后进 **DEV-07**：Electron main/preload + 命名管道 IPC 接线 + hifi-prototype 交互复用接真实命令面 → G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留；双任务不串线）。
+1. **DEV-06 收尾（每项 1 turn，gpt-6-luna，总量 ≤4）**：steer 真实用例（turn/steer+expectedTurnId：正常追加→影响输出；错 ID→拒绝）＝PP-12 局部；thread/resume 续接（暗号跨 turn 保持）＝PP-02 局部；审批桥真实往返（临时开 approvalPolicy=on-request 的 fixture 会话：请求→adapter approval.requested→respondApproval→继续/拒绝）＝RT-23 确认档；通过后按项升级 capability matrix。
+2. **DEV-07**：Electron main/preload + 命名管道 IPC 接线（传输层已验证）+ hifi-prototype 交互复用接真实命令面（DispatchWorker×CodexAppServerAdapter 组装进 daemon 入口）→ G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留；双任务不串线）。
 3. 每包结束更新总账四件套 + 本文件。
 
 （历史）DEV-06 原始指引：

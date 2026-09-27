@@ -64,7 +64,7 @@ export interface SessionRef {
   cwd: string;
 }
 
-/** §9.3 TurnRequest。 */
+/** §9.3 TurnRequest。resultKey：输出合同的提交键（DEV-21；fake 据此生成合法结构化终态）。 */
 export interface TurnRequest {
   turnId: string;
   dispatchKey: string;
@@ -72,6 +72,7 @@ export interface TurnRequest {
   text: string;
   policyId: string;
   taskRevision: number;
+  resultKey?: string;
 }
 
 export interface ProbeResult {

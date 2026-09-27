@@ -172,3 +172,16 @@ context_bundles.included_refs_json 存**完整信封**（版本/预算/权限/�
 
 追加 turn 的交付按 (task_id) MAX(revision)+1 递增，旧 pending 标 superseded（§10.5-5「替换当前待办」）；
 修复首版固定 revision=1 撞唯一键的缺陷。
+
+
+## ADR-I28 · 单实例锁目录协议（2026-09-27，修复轮 2 重写）
+
+文件锁的"读-判-rename"接管无法原子化（审查确认）。重写为目录协议：锁=mkdir `daemon.lock.d`（创建即持有，原子）；接管=先 mkdir `claim/`（原子，并发接管唯一赢家；claim 主活着含本进程重入→BUSY；死了→清理重试）→ rename 整目录归档 → 内容复核（与判定不符则不启动）→ 重建。legacy 文件锁兼容迁移。测试用 onClaimed 同步点注入真实竞争窗口。
+
+## ADR-I29 · TaskComplete 输出合同接入完成路径（2026-09-27，修复轮 2）
+
+worker 收到 turn.completed 必须先通过 taskCompleteSchema（JSON 解析→schema→resultKey 与 `result_${turnId}` 绑定）；非法输出（空/散文/缺项/错版本/错 resultKey）→ turn FAILED + 任务回 ACTIVE + `turn.outputInvalid` 审计 + **零交付**（不 DONE/REVIEW）。有限修复 turn（规格 §4.5：最多一次、新 turnId、共用 resultKey）随调度器扩展实现，不在本轮伪造。fake adapter 的 turn.completed 改为结构化终态（structuredFinal 默认开启，TurnRequest.resultKey 驱动），与真实合同同构——单测的 schema fixture 通过不再等于运行路径受约束，两层各有断言。
+
+## ADR-I30 · Codex 适配器能力三态口径（2026-09-27，修复轮 2）
+
+协议字段存在、适配器方法实现、真实行为通过是三个不同状态。probe 能力表仅 structuredEvents=supported（真实进程观察到通知链路）；resumeSession（thread/resume 已接线）、steerActiveTurn（expectedTurnId 已接线）、interrupt、usageTokens、structuredFinal、interactiveApprovals、restrictWrites/Shell、disableDelegation 一律 unverified，按真实用例逐项升级。RT-23 计划档两路径（直接编辑/shell）已 PASS 并记入能力矩阵；确认档维持 UI 禁用。

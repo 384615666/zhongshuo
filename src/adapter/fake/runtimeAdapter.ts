@@ -27,6 +27,8 @@ export interface FakeAdapterOptions {
   openSessionDelayMs?: number;
   /** interrupt() 永不返回（真实世界的协议挂起反例）。 */
   hangInterrupt?: boolean;
+  /** 结构化终态（默认 true）：turn.completed finalText=TaskComplete JSON；false 保留原文本（非法输出反例）。 */
+  structuredFinal?: boolean;
 }
 
 type ApprovalChoice = 'allow_once' | 'deny' | 'interrupted';
@@ -52,6 +54,9 @@ interface ActiveTurnState {
   wake: () => void;
   approvalWaiter: PendingApproval | null;
   done: boolean;
+  resultKey: string | null;
+  /** 结构化终态：turn.completed 的 finalText 为合法 TaskComplete JSON（与真实合同一致）。 */
+  structuredFinal: boolean;
 }
 
 interface SessionState {
@@ -182,6 +187,8 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       wake: () => {},
       approvalWaiter: null,
       done: false,
+      resultKey: input.resultKey ?? null,
+      structuredFinal: this.options.structuredFinal !== false,
     };
     state.active = turn;
 
@@ -206,7 +213,10 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       if (item == null) break;
 
       if (item.kind === 'event') {
-        this.emit(state, item.event, turn.turnId);
+        const rendered = item.event.kind === 'turn.completed' && turn.structuredFinal
+          ? { ...item.event, finalText: renderStructuredFinal(item.event, turn.resultKey) }
+          : item.event;
+        this.emit(state, rendered as never, turn.turnId);
       } else if (item.kind === 'unresponsiveToInterrupt') {
         turn.unresponsive = true;
       } else if (item.kind === 'stall') {
@@ -409,4 +419,20 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       steers: [...s.steers],
     };
   }
+}
+
+/** 结构化终态渲染：TaskComplete JSON（schema 见 contracts/prompts；fake 与真实合同一致）。 */
+function renderStructuredFinal(
+  event: { kind: 'turn.completed'; finalText?: string },
+  resultKey: string | null,
+): string {
+  return JSON.stringify({
+    schemaVersion: 'task-complete-v1',
+    resultKey: resultKey ?? 'result_fake_unbound',
+    changeSummary: event.finalText ?? '',
+    files: [],
+    executedVerifications: [],
+    unexecutedVerifications: [],
+    remainingIssues: [],
+  });
 }

@@ -90,7 +90,9 @@ describe('fake adapter：成功 fixture', () => {
     const turnEvents = events.filter((e) => e.kind.startsWith('turn.'));
     expect(turnEvents.every((e) => e.turnId === 'turn_ok')).toBe(true);
     const completed = events.find((e) => e.kind === 'turn.completed');
-    expect(completed).toMatchObject({ finalText: '分析完成' });
+    // 结构化终态（修复轮）：finalText=TaskComplete JSON，changeSummary 承载原文。
+    const parsed = JSON.parse((completed as { finalText: string }).finalText) as { changeSummary: string };
+    expect(parsed.changeSummary).toBe('分析完成');
     expect(adapter.observe(session.id)?.activeTurnId).toBeNull();
   });
 
@@ -133,7 +135,8 @@ describe('fake adapter：审批 fixture（§9.6 最小确认通道）', () => {
     const events = await collecting;
     expect(events.map((e) => e.kind)).toContain('approval.requested');
     expect(events.map((e) => e.kind)).toContain('tool.completed');
-    expect(events.find((e) => e.kind === 'turn.completed')).toMatchObject({ finalText: '已写入' });
+    const done = events.find((e) => e.kind === 'turn.completed') as { finalText: string };
+    expect(JSON.parse(done.finalText)).toMatchObject({ changeSummary: '已写入' });
   });
 
   it('deny：拒绝后失败，无继续执行', async () => {

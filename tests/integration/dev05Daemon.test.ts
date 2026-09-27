@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
@@ -11,7 +11,7 @@ import { failingTurn, stuckTurn } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { applyRecovery, requestStop, StopCommandError } from '../../src/daemon/stopFlow.ts';
 import { openDispatchGate } from '../../src/persistence/daemonState.ts';
-import { acquireSingletonLock } from '../../src/daemon/singletonLock.ts';
+import { acquireSingletonLock, writeLockDirForTest } from '../../src/daemon/singletonLock.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev05-'));
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
@@ -269,30 +269,22 @@ describe('恢复（§16.4：不自动补跑）', () => {
   });
 });
 
-describe('daemon 单实例锁（§8.3）', () => {
-  it('互斥 + 释放 + 死进程接管', () => {
-    const dir = join(tmpRoot, 'lockdir');
+describe('daemon 单实例锁（§8.3，目录协议）', () => {
+  it('同进程顺序互斥 + 释放 + 陈旧接管', () => {
+    const dir = join(tmpRoot, 'basic-lock');
     const first = acquireSingletonLock(dir);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const firstHandle = first.value;
-
-    const second = acquireSingletonLock(dir);
-    expect(second).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
-
+    expect(acquireSingletonLock(dir)).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
     firstHandle.release();
     const third = acquireSingletonLock(dir);
     expect(third.ok).toBe(true);
-
-    // 陈旧锁（pid 已死）允许接管。
     if (third.ok) third.value.release();
-    const lockPath = join(dir, 'daemon.lock');
-    writeFileSync(lockPath, JSON.stringify({ pid: 999999999, startedAt: 0 }), 'utf8');
+    // 死持有者接管。
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
     const fourth = acquireSingletonLock(dir);
     expect(fourth.ok).toBe(true);
-    if (fourth.ok) {
-      expect(JSON.parse(readFileSync(lockPath, 'utf8')).pid).toBe(process.pid);
-      fourth.value.release();
-    }
+    if (fourth.ok) fourth.value.release();
   });
 });

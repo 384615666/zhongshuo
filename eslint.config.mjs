@@ -69,6 +69,7 @@ const boundaryRule = {
 
 export default tseslint.config(
   { ignores: ['node_modules/', 'dist/', 'archive/', 'hifi-prototype/', 'prototype/', 'design-shootout/', 'docs/'] },
+  { files: ['tests/fixtures/**/*.mjs'], languageOptions: { globals: { process: 'readonly', console: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly' } } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

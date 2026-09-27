@@ -1,14 +1,20 @@
 /**
- * Codex App Server 适配器（DEV-06；协议依据：codex-cli 0.157.1 `app-server generate-ts`
- * 生成的类型，见 tests/fixtures/codex-protocol/；传输=stdio 换行分隔 JSON-RPC，§9.2/实测 B1）。
+ * Codex App Server 适配器（DEV-06 修复轮：终态映射/事件归属/生命周期/审批绑定/resume）。
+ * 协议依据：codex-cli 0.157.1 `app-server generate-ts`（tests/fixtures/codex-protocol/）。
  *
- * 生命周期：spawn（解析 npm shim → node 原生入口，§9.5 EINVAL 坑）→ initialize(clientInfo)
- * → thread/start（cwd/developerInstructions/sandbox/approvalPolicy，按权限档位映射）
- * → turn/start（input=[{type:'text',...}]）→ 通知流映射 §9.4 规范化事件。
- * 审批：ServerRequest（applyPatchApproval、execCommandApproval、item 系列请求）
- * 映射为 approval.requested；respondApproval 回响应 ServerRequest id。
- * 权限映射（M0）：plan → sandbox='read-only'+approvalPolicy='never'；其他档位未认证，
- * 按映射存在但不标 supported（B6/RT-23 认证前 UI 禁用）。
+ * 修复轮要点（外部只读审查后）：
+ * - turn/completed 按 turn.status 映射：completed→turn.completed；interrupted→turn.failed
+ *   {code:'INTERRUPTED'}；failed→turn.failed{code:error.kind,message}。工具 item 按
+ *   status（completed/failed/declined）映射 outcome，不再一律 success。
+ * - 事件归属：provider turnId↔内部 turnId 映射；startTurn 先登记 awaiting turn，
+ *   通知早于响应也能建立映射；未知 provider turn 的事件按迟到处理（不带内部 turnId）。
+ * - 审批绑定：v2 请求带 threadId/turnId → 精确定位会话与轮次；legacy conversationId →
+ *   会话；无法定位的请求按协议 deny，不投递、不悬挂。
+ * - 生命周期：进程代次（generation）管理；旧子进程 close 回调不清新代次的 child/pending；
+ *   每次新连接重置协议状态并完成 initialize + initialized 通知（官方握手要求）。
+ * - resume：openSession 消费 input.resume → thread/resume（真实续接验证随 PP-02）。
+ * - 能力自报：仅 structuredEvents=supported（真实进程观察到通知链路）；其余 unverified
+ *   或 unsupported——协议字段存在、方法实现、真实行为通过是三个不同状态。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -26,8 +32,8 @@ import type {
 } from '../../contracts/runtime.ts';
 import { EventStream } from '../eventStream.ts';
 
-const ADAPTER_VERSION = 'codex-appserver-adapter-0.1.0';
-const SUPPORTED_CODEX_VERSION_PREFIX = '0.157.';
+const ADAPTER_VERSION = 'codex-appserver-adapter-0.2.0';
+export const SUPPORTED_CODEX_VERSION_PREFIX = '0.157.';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -38,35 +44,46 @@ interface JsonRpcRequest {
 
 type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 
+interface AwaitingTurn {
+  internalTurnId: string;
+  providerTurnId: string | null;
+}
+
 interface SessionState {
   ref: SessionRef;
   stream: EventStream;
   providerThreadId: string;
-  /** 内部 turnId → provider turnId（turn/started 时登记；steer/interrupt 必需）。 */
-  providerTurnIds: Map<string, string>;
-  /** 每会话消息序号（eventKey 稳定）。 */
+  providerTurnToInternal: Map<string, string>;
   seq: number;
 }
 
+interface ToolLikeItem extends Record<string, unknown> {
+  status?: unknown;
+}
+
 export interface CodexAdapterOptions {
-  /** npm shim 路径（默认从 PATH 解析 codex.cmd → node codex.js）。 */
   codexCmdPath?: string;
-  /** 请求超时（initialize/thread/turn 请求；默认 60s，§10.4 startupTimeout）。 */
   requestTimeoutMs?: number;
-  /** 权限档位（M0 固定 plan：read-only 沙箱）。 */
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  /** thread/start 的 model 覆盖（e2e 认证用低成本渠道，如 deepseek-flash / gpt-6 luna）。 */
+  model?: string;
+  /** 测试注入：替换 spawn 的脚本入口（本地协议回放，不消耗额度）。 */
+  mockEntry?: { executable: string; args?: string[] };
 }
 
 export class CodexAppServerAdapter implements RuntimeAdapter {
   private child: ChildProcessWithoutNullStreams | null = null;
+  private childGeneration = 0;
   private nextRequestId = 1;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly sessions = new Map<string, SessionState>();
-  private readonly serverRequests = new Map<string, number>(); // approvalId → JSON-RPC id
+  private readonly serverRequests = new Map<string, { rpcId: number; sessionId: string }>();
   private buffer = '';
   private stderrTail = '';
-  private protocolVersion: string | null = null;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string };
+  /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
+  private handshakeDone = false;
+  private awaitingTurn: AwaitingTurn | null = null;
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; mockEntry?: CodexAdapterOptions['mockEntry'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
@@ -75,6 +92,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       codexCmdPath: options.codexCmdPath,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       sandboxMode: options.sandboxMode ?? 'read-only',
+      model: options.model,
+      mockEntry: options.mockEntry,
     };
   }
 
@@ -82,7 +101,13 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.child != null && this.child.exitCode == null) return this.child;
-    const entry = this.resolveEntry();
+    const entry = this.options.mockEntry != null
+      ? { executable: this.options.mockEntry.executable, args: this.options.mockEntry.args ?? [] }
+      : this.resolveEntry();
+    const generation = ++this.childGeneration;
+    this.buffer = '';
+    this.stderrTail = '';
+    this.handshakeDone = false; // 新连接必须重新 initialize + initialized（修复轮）
     const child = spawn(process.execPath, [entry.executable, ...entry.args, 'app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -91,27 +116,30 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
     child.stderr.on('data', (chunk: string) => {
-      // 诊断通道：保留原始 stderr 供排障（§9.4 保留厂商原始事件作受控诊断附件）。
       this.stderrTail = (this.stderrTail + chunk).slice(-2000);
       process.stderr.write(`[codex-appserver] ${chunk}`);
     });
     child.on('close', (code) => {
-      const event: NormalizedRuntimeEvent = {
-        kind: 'process.exited',
-        eventKey: `proc:exit:${randomUUID()}`,
-        sessionId: 'codex-appserver',
-        exitCode: code,
-        expected: true,
-        receivedAt: Date.now(),
-      };
-      for (const session of this.sessions.values()) session.stream.push(event);
+      // 旧代次回调：只广播退出，不清理新代次的 child/pending（修复轮）。
+      for (const session of [...this.sessions.values()]) {
+        session.seq += 1;
+        session.stream.push({
+          kind: 'process.exited',
+          eventKey: `${session.ref.id}:${session.seq}`,
+          sessionId: session.ref.id,
+          exitCode: code,
+          expected: true,
+          receivedAt: Date.now(),
+        } as NormalizedRuntimeEvent);
+      }
+      if (generation !== this.childGeneration) return;
+      this.child = null;
       const tail = this.stderrTail.slice(-1600);
       for (const { reject, timer } of this.pending.values()) {
         clearTimeout(timer);
         reject(new AdapterCallError('RUNTIME_NOT_FOUND', `app-server 进程退出（code=${code}）stderr 尾部：${tail}`));
       }
       this.pending.clear();
-      this.child = null;
     });
     this.child = child;
     return child;
@@ -123,12 +151,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (cmdPath == null) {
       throw new AdapterCallError('RUNTIME_NOT_FOUND', '未找到 codex 可执行入口（PATH 无 codex.cmd）');
     }
-    // npm shim 布局是确定的：<shimDir>/node_modules/@openai/codex/bin/codex.js（%dp0% 相对路径）。
     const candidate = join(cmdPath, '..', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-    if (existsSync(candidate)) {
-      return { executable: candidate, args: [] };
-    }
-    // 兜底：从 shim 文本解析（非标准布局）。
+    if (existsSync(candidate)) return { executable: candidate, args: [] };
     const shim = readFileSync(cmdPath, 'utf8');
     const m = shim.match(/"([^"]+[@\\/]openai[\\/][^"]*codex[^"]*\.js)"/) ?? shim.match(/node\s+"([^"]+codex[^"]*\.js)"/);
     if (m == null) {
@@ -159,6 +183,11 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
       this.writeLine(`${JSON.stringify(message)}`);
     });
+  }
+
+  private writeLine(line: string): void {
+    this.ensureProcess();
+    this.child!.stdin.write(`${line}\n`);
   }
 
   private onStdout(chunk: string): void {
@@ -192,9 +221,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       }
       return;
     }
-    // Server→Client 请求（审批）带 id + method
     if (message['id'] != null && typeof message['method'] === 'string') {
-      this.handleServerRequest(Number(message['id']), message['method'], message['params']);
+      this.handleServerRequest(Number(message['id']), message['method'], message['params'] as Record<string, unknown> | undefined);
       return;
     }
     if (typeof message['method'] === 'string') {
@@ -202,93 +230,90 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     }
   }
 
-  private handleServerRequest(id: number, method: string, params: unknown): void {
-    // 审批请求 → approval.requested（挂到相关会话；M0 fixture 会话唯一时可直接定位）
-    const approvalId = `appr_${id}`;
-    this.serverRequests.set(approvalId, id);
+  // ---------- 审批：绑定准确会话/轮次，未知归属按协议 deny ----------
+
+  private handleServerRequest(id: number, method: string, params: Record<string, unknown> | undefined): void {
+    const p = params ?? {};
+    // 归属解析：v2 带 threadId/turnId；legacy 带 conversationId（ThreadId）。
+    const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : typeof p['conversationId'] === 'string' ? p['conversationId'] : null;
+    const session = threadKey != null ? this.sessionByThread(threadKey) : null;
     const payloadHash = createHash('sha256').update(JSON.stringify({ method, params })).digest('hex');
-    const target = [...this.sessions.values()][0];
-    if (target == null) {
-      // 无会话消费：按协议拒绝（不悬挂服务端请求）。
+    if (session == null) {
+      // 无法定位归属：按协议拒绝（不悬挂服务端请求，也不投递给错误会话）。
       void this.respondToServer(id, { decision: 'deny' });
       return;
     }
-    target.stream.push(this.event(target, {
+    const approvalId = `appr_${id}`;
+    this.serverRequests.set(approvalId, { rpcId: id, sessionId: session.ref.id });
+    session.stream.push(this.event(session, {
       kind: 'approval.requested',
       approvalId,
       request: { method, params, payloadHash },
       allowedChoices: ['allow_once', 'deny'],
-    }, this.currentTurnIdOf(target)));
+    }, this.internalTurnOf(session, typeof p['turnId'] === 'string' ? p['turnId'] : undefined)));
   }
 
   private async respondToServer(id: number, result: unknown): Promise<void> {
-    this.ensureProcess();
     this.writeLine(JSON.stringify({ jsonrpc: '2.0', id, result }));
   }
 
-  /** 写一行到 app-server stdin（显式管道：stdin 由本适配器独占管理，§9.5）。 */
-  private writeLine(line: string): void {
-    this.ensureProcess();
-    this.child!.stdin.write(`${line}\n`);
-  }
+  // ---------- 通知映射（§9.4；按 provider turn 精确归属） ----------
 
   private handleNotification(method: string, params: Record<string, unknown> | undefined): void {
     const p = params ?? {};
-    const threadId = typeof p['threadId'] === 'string' ? p['threadId'] : null;
-    const session = threadId != null ? this.sessionByThread(threadId) : [...this.sessions.values()][0];
+    const threadKey = typeof p['threadId'] === 'string' ? p['threadId'] : null;
+    const session = threadKey != null ? this.sessionByThread(threadKey) : [...this.sessions.values()][0];
+    if (session == null) return;
+    const providerTurnId = typeof p['turnId'] === 'string' ? p['turnId'] : undefined;
+
     switch (method) {
       case 'turn/started': {
-        if (session == null) return;
-        const turn = p['turn'] as { id: string } | undefined;
-        const internalId = this.currentTurnIdOf(session);
-        if (internalId != null && turn != null) session.providerTurnIds.set(internalId, turn.id);
-        session.stream.push(this.event(session, { kind: 'turn.started', providerTurnId: turn?.id }, internalId));
+        const turn = p['turn'] as { id?: string } | undefined;
+        const providerId = turn?.id ?? providerTurnId;
+        if (providerId != null) this.registerTurnMapping(session, providerId);
+        session.stream.push(this.event(session, { kind: 'turn.started', providerTurnId: providerId }, this.internalTurnOf(session, providerId)));
         break;
       }
       case 'item/agentMessage/delta': {
-        if (session == null) return;
         session.stream.push(this.event(session, {
           kind: 'message.delta',
           messageId: String(p['itemId'] ?? randomUUID()),
           text: String(p['delta'] ?? ''),
-        }));
+        }, this.internalTurnOf(session, providerTurnId)));
         break;
       }
       case 'item/completed': {
-        if (session == null) return;
-        const item = p['item'] as Record<string, unknown> | undefined;
+        const item = p['item'] as ToolLikeItem | undefined;
         const type = item?.['type'];
         if (type === 'agentMessage') {
           session.stream.push(this.event(session, {
             kind: 'message.completed',
             messageId: String(item?.['id'] ?? randomUUID()),
             text: String(item?.['text'] ?? ''),
-          }));
+          }, this.internalTurnOf(session, providerTurnId)));
         } else if (type === 'commandExecution' || type === 'fileChange' || type === 'mcpToolCall' || type === 'dynamicToolCall') {
           session.stream.push(this.event(session, {
             kind: 'tool.completed',
             toolCallId: String(item?.['id'] ?? randomUUID()),
-            outcome: 'success',
-          }));
+            outcome: toolOutcome(item?.['status']),
+          }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
       }
       case 'item/started': {
-        if (session == null) return;
-        const item = p['item'] as Record<string, unknown> | undefined;
+        const item = p['item'] as ToolLikeItem | undefined;
         const type = item?.['type'];
         if (type === 'commandExecution' || type === 'fileChange' || type === 'mcpToolCall' || type === 'dynamicToolCall') {
           session.stream.push(this.event(session, {
             kind: 'tool.started',
             toolCallId: String(item?.['id'] ?? randomUUID()),
             toolName: String(type),
-            argumentsSummary: String((item as { command?: unknown })?.['command'] ?? '').slice(0, 120),
-          }));
+            argumentsSummary: String(item?.['command'] ?? '').slice(0, 120),
+          }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
       }
       case 'thread/tokenUsage/updated': {
-        if (session == null) return;
         const usage = p['tokenUsage'] as { total?: Record<string, number> } | undefined;
         const total = usage?.total;
         session.stream.push(this.event(session, {
@@ -298,21 +323,33 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
           cachedTokens: total?.['cachedInputTokens'],
           outputTokens: total?.['outputTokens'],
           costQuality: 'unknown',
-        }));
+        }, this.internalTurnOf(session, providerTurnId)));
         break;
       }
       case 'turn/completed': {
-        if (session == null) return;
-        const turn = p['turn'] as { items?: Array<Record<string, unknown>>; status?: string } | undefined;
+        // 按真实终态映射（修复轮）：completed 才是成功；interrupted/failed 走失败。
+        const turn = p['turn'] as { status?: string; error?: { kind?: string; message?: string }; items?: Array<Record<string, unknown>> } | undefined;
+        const status = turn?.status ?? 'completed';
+        const internalTurnId = this.internalTurnOf(session, providerTurnId);
+        if (status === 'failed' || status === 'interrupted') {
+          session.stream.push(this.event(session, {
+            kind: 'turn.failed',
+            code: status === 'interrupted' ? 'INTERRUPTED' : String(turn?.error?.['kind'] ?? 'CODEX_ERROR'),
+            message: status === 'interrupted'
+              ? 'turn 被 interrupt（codex turn.status=interrupted）'
+              : String(turn?.error?.['message'] ?? 'codex turn 失败'),
+            retryable: false,
+          }, internalTurnId));
+          break;
+        }
         const finalText = (turn?.items ?? [])
           .filter((i) => i['type'] === 'agentMessage')
           .map((i) => String(i['text'] ?? ''))
           .join('\n');
-        session.stream.push(this.event(session, { kind: 'turn.completed', finalText }, this.currentTurnIdOf(session)));
+        session.stream.push(this.event(session, { kind: 'turn.completed', finalText }, internalTurnId));
         break;
       }
       case 'error': {
-        if (session == null) return;
         const err = p['error'] as { message?: string; kind?: string } | undefined;
         const willRetry = p['willRetry'] === true;
         if (!willRetry) {
@@ -321,18 +358,29 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             code: String(err?.['kind'] ?? 'CODEX_ERROR'),
             message: String(err?.['message'] ?? 'codex 通知错误'),
             retryable: false,
-          }, this.currentTurnIdOf(session)));
+          }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
       }
       default:
-        break; // 未知通知：忽略并保留原始行（§9.4 未知可选事件可忽略）
+        break;
     }
   }
 
-  private currentTurnIdOf(session: SessionState): string | undefined {
-    // M0 单活跃 turn：取 providerTurnIds 最后登记的内部 turn（worker 串行派发）。
-    return [...session.providerTurnIds.keys()].pop();
+  /** turn 映射（修复轮）：awaiting 未绑定则认领；未知 provider turn 不猜归属。 */
+  private registerTurnMapping(session: SessionState, providerTurnId: string): void {
+    if (session.providerTurnToInternal.has(providerTurnId)) return;
+    if (this.awaitingTurn != null && this.awaitingTurn.providerTurnId == null) {
+      this.awaitingTurn.providerTurnId = providerTurnId;
+      session.providerTurnToInternal.set(providerTurnId, this.awaitingTurn.internalTurnId);
+    }
+  }
+
+  private internalTurnOf(session: SessionState, providerTurnId: string | undefined): string | undefined {
+    if (providerTurnId != null) {
+      return session.providerTurnToInternal.get(providerTurnId); // 未知=迟到：返回 undefined
+    }
+    return this.awaitingTurn?.providerTurnId == null ? this.awaitingTurn?.internalTurnId : undefined;
   }
 
   private sessionByThread(threadId: string): SessionState | undefined {
@@ -354,22 +402,18 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async probe(): Promise<ProbeResult> {
     if (this.codexVersion == null) {
-      const entry = this.resolveEntry();
-      this.executable = entry.executable;
-      // 版本经 app-server initialize 前先跑 --version（一次性、无模型调用）。
+      const entry = this.options.mockEntry != null
+        ? this.options.mockEntry.executable
+        : this.resolveEntry().executable;
+      this.executable = entry;
       this.codexVersion = await this.readVersion(entry);
     }
-    const version = this.codexVersion!;
-    return {
-      executable: this.executable ?? '(npm shim)',
-      version,
-      capabilities: this.capabilities(),
-    };
+    return { executable: this.executable ?? '(npm shim)', version: this.codexVersion!, capabilities: this.capabilities() };
   }
 
-  private readVersion(entry: { executable: string }): Promise<string> {
+  private readVersion(entry: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [entry.executable, '--version'], { windowsHide: true });
+      const child = spawn(process.execPath, [entry, '--version'], { windowsHide: true });
       let out = '';
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (c: string) => (out += c));
@@ -379,38 +423,44 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   private capabilities(): RuntimeCapabilities {
-    const ok: RuntimeCapabilities[keyof RuntimeCapabilities] = 'supported';
+    // 口径（修复轮）：协议字段存在、方法实现、真实行为通过是三个状态。
+    // 真实进程已观察到的仅：通知流解析与映射（structuredEvents）。
     return {
-      structuredEvents: ok,
-      taskContextIsolation: 'unverified', // 会话隔离已由历史实测佐证，正式认证待 G2 组合用例
-      resumeSession: 'supported', // thread/resume 存在于协议；有效续接验证随 PP-02
-      steerActiveTurn: 'supported', // turn/steer + expectedTurnId；PP-12 验证
-      interrupt: 'supported',
-      interactiveApprovals: 'unverified', // 通道存在；B6/RT-23 认证前不标 supported
-      structuredFinal: 'unverified', // outputSchema 存在；正式输出验证随 DEV-21 实测
-      restrictWrites: 'unverified', // read-only 沙箱；RT-23 认证前 unverified
+      structuredEvents: 'supported',
+      taskContextIsolation: 'unverified',
+      resumeSession: 'unverified', // thread/resume 已接线；有效续接待 PP-02 真实验证
+      steerActiveTurn: 'unverified', // turn/steer 已接线；expectedTurnId 行为待 PP-12
+      interrupt: 'unverified', // turn/interrupt 已接线；真实停止待认证
+      interactiveApprovals: 'unverified',
+      structuredFinal: 'unverified', // outputSchema 待 DEV-21 实测
+      restrictWrites: 'unverified', // read-only 沙箱待 RT-23
       restrictShell: 'unverified',
       disableDelegation: 'unverified',
-      usageTokens: 'supported',
+      usageTokens: 'unverified', // tokenUsage 通知映射已实现；真实数值口径待观察
       usageCost: 'unsupported',
     };
   }
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
     this.ensureProcess();
-    if (this.protocolVersion == null) {
-      const init = await this.request('initialize', {
+    if (!this.handshakeDone) {
+      await this.request('initialize', {
         clientInfo: { name: 'zhongshuo', title: '众说', version: ADAPTER_VERSION },
       });
-      this.protocolVersion = String((init as Record<string, unknown>)?.['codexHome'] != null ? 'app-server-v2' : 'app-server');
+      // 官方握手要求：initialize 响应后发送 initialized 通知（修复轮）。
+      this.writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }));
+      this.handshakeDone = true;
     }
     const threadParams: Record<string, unknown> = {
       cwd: input.cwd,
       sandbox: this.options.sandboxMode,
-      approvalPolicy: 'never', // M0：不启用审批桥（B6 认证后再开对应档位）
+      approvalPolicy: 'never',
     };
+    if (this.options.model != null && this.options.model.length > 0) threadParams['model'] = this.options.model;
     if (input.developerInstructions != null) threadParams['developerInstructions'] = input.developerInstructions;
-    const result = await this.request<{ thread: { id: string } }>('thread/start', threadParams);
+    const method = input.resume != null ? 'thread/resume' : 'thread/start';
+    if (input.resume != null) threadParams['threadId'] = input.resume.providerSessionId;
+    const result = await this.request<{ thread: { id: string } }>(method, threadParams);
     const providerThreadId = result.thread.id;
     const ref: SessionRef = {
       id: `codex-session-${randomUUID()}`,
@@ -425,7 +475,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       ref,
       stream: new EventStream(),
       providerThreadId,
-      providerTurnIds: new Map(),
+      providerTurnToInternal: new Map(),
       seq: 0,
     };
     this.sessions.set(ref.id, state);
@@ -435,12 +485,19 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
     const state = this.stateOf(session);
+    // 先登记 awaiting（通知可能早于响应到达，修复轮）。
+    this.awaitingTurn = { internalTurnId: input.turnId, providerTurnId: null };
     const result = await this.request<{ turn: { id: string } }>('turn/start', {
       threadId: state.providerThreadId,
       input: [{ type: 'text', text: input.text, text_elements: [] }],
       clientUserMessageId: input.dispatchKey,
     });
-    state.providerTurnIds.set(input.turnId, result.turn.id);
+    if (!state.providerTurnToInternal.has(result.turn.id)) {
+      state.providerTurnToInternal.set(result.turn.id, input.turnId);
+    }
+    if (this.awaitingTurn?.internalTurnId === input.turnId && this.awaitingTurn.providerTurnId == null) {
+      this.awaitingTurn.providerTurnId = result.turn.id;
+    }
   }
 
   events(session: SessionRef): AsyncIterable<NormalizedRuntimeEvent> {
@@ -449,7 +506,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async steer(session: SessionRef, input: TurnRequest): Promise<void> {
     const state = this.stateOf(session);
-    const providerTurnId = state.providerTurnIds.get(input.turnId);
+    const providerTurnId = [...state.providerTurnToInternal.entries()]
+      .find(([, internal]) => internal === input.turnId)?.[0];
     if (providerTurnId == null) {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'steer 需要 expectedTurnId：目标 turn 尚未登记 provider ID');
     }
@@ -462,37 +520,42 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async interrupt(session: SessionRef, turnId: string): Promise<void> {
     const state = this.stateOf(session);
-    const providerTurnId = state.providerTurnIds.get(turnId);
-    if (providerTurnId == null) return; // 目标未开始：无需协议中断
-    await this.request('turn/interrupt', {
-      threadId: state.providerThreadId,
-      turnId: providerTurnId,
-    });
+    const providerTurnId = [...state.providerTurnToInternal.entries()]
+      .find(([, internal]) => internal === turnId)?.[0];
+    if (providerTurnId == null) return;
+    await this.request('turn/interrupt', { threadId: state.providerThreadId, turnId: providerTurnId });
   }
 
   async respondApproval(session: SessionRef, approvalId: string, choice: 'allow_once' | 'deny'): Promise<void> {
-    this.stateOf(session); // 会话存在性校验
-    const rpcId = this.serverRequests.get(approvalId);
-    if (rpcId == null) throw new AdapterCallError('RESOURCE_NOT_FOUND', `没有待答复的审批请求：${approvalId}`);
+    this.stateOf(session);
+    const pendingRequest = this.serverRequests.get(approvalId);
+    if (pendingRequest == null) {
+      throw new AdapterCallError('RESOURCE_NOT_FOUND', `没有待答复的审批请求：${approvalId}`);
+    }
+    // 审批归属校验（修复轮）：只能答复自己会话的请求。
+    if (pendingRequest.sessionId !== session.id) {
+      throw new AdapterCallError('THREAD_SCOPE_MISMATCH', `审批 ${approvalId} 不属于该会话`);
+    }
     this.serverRequests.delete(approvalId);
-    await this.respondToServer(rpcId, { decision: choice === 'allow_once' ? 'accept' : 'deny' });
+    await this.respondToServer(pendingRequest.rpcId, { decision: choice === 'allow_once' ? 'accept' : 'deny' });
   }
 
   async close(session: SessionRef): Promise<void> {
     this.stateOf(session);
     this.sessions.delete(session.id);
     if (this.sessions.size === 0 && this.child != null) {
-      this.child.kill();
+      const child = this.child;
       this.child = null;
+      child.kill();
     }
   }
 
-  /** 诊断：完整关闭（测试收尾，避免残留 app-server 进程）。 */
   async dispose(): Promise<void> {
     this.sessions.clear();
     if (this.child != null) {
-      this.child.kill();
+      const child = this.child;
       this.child = null;
+      child.kill();
     }
   }
 
@@ -503,4 +566,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 }
 
-export { SUPPORTED_CODEX_VERSION_PREFIX };
+function toolOutcome(status: unknown): 'success' | 'failure' | 'unknown' {
+  if (status === 'completed') return 'success';
+  if (status === 'failed' || status === 'declined') return 'failure';
+  return 'unknown';
+}

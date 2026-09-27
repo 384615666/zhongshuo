@@ -24,7 +24,7 @@ import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
-import { renderStandingPrompt, scanSensitivePatterns } from '../contracts/prompts.ts';
+import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
 
 interface TaskRow {
   id: string;
@@ -325,6 +325,7 @@ export class DispatchWorker {
         text: assembled.value.text,
         policyId: 'policy-analyze',
         taskRevision: 0,
+        resultKey: assembled.value.resultKey,
       });
       await this.consumeUntilTerminal(task, runId, turnId, session.id);
     } finally {
@@ -467,12 +468,27 @@ export class DispatchWorker {
             this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'late-completion-after-stop' });
             return;
           }
+          // 输出合同校验（修复轮）：finalText 必须是合法 TaskComplete 且 resultKey 匹配本 turn。
+          // 非法输出（空/散文/缺项/错版本/错 resultKey）走 OUTPUT_INVALID：不产生交付、不 DONE/REVIEW，
+          // 原稿保留（消息已入库），任务回 ACTIVE；有限修复 turn 随调度器扩展（规格 §4.5）。
+          const finalText = event.finalText ?? '';
+          const contract = this.validateTaskCompleteOutput(finalText, `result_${turnId}`);
+          if (!contract.ok) {
+            this.casTurn(turnId, 'FAILED');
+            this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
+            this.settleBudget(runId);
+            this.transitionTask(task.id, 'ACTIVE');
+            this.audit(task, runId, turnId, 'turn.outputInvalid', {
+              issues: contract.issues,
+              rawLength: finalText.length,
+            });
+            return;
+          }
           this.casTurn(turnId, 'SUCCEEDED');
           this.db.prepare(`UPDATE workflow_runs SET status = 'SUCCEEDED' WHERE id = ?`).run(runId);
           this.settleBudget(runId);
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
-          const finalText = event.finalText ?? '';
           const manifestHash = createHash('sha256').update(finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
@@ -557,6 +573,26 @@ export class DispatchWorker {
       });
     });
     tx();
+  }
+
+  /** TaskComplete 输出合同校验：JSON 解析、schema、版本、resultKey 绑定（修复轮）。 */
+  private validateTaskCompleteOutput(finalText: string, expectedResultKey: string): { ok: true } | { ok: false; issues: string[] } {
+    const issues: string[] = [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(finalText);
+    } catch {
+      return { ok: false, issues: ['finalText 不是 JSON（期望 TaskComplete 结构化输出）'] };
+    }
+    const result = taskCompleteSchema.safeParse(parsed);
+    if (!result.success) {
+      issues.push(...result.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`));
+      return { ok: false, issues };
+    }
+    if (result.data.resultKey !== expectedResultKey) {
+      issues.push(`resultKey 不匹配：期望 ${expectedResultKey}，实际 ${result.data.resultKey}`);
+    }
+    return issues.length > 0 ? { ok: false, issues } : { ok: true };
   }
 
   private casTurn(turnId: string, status: string): void {

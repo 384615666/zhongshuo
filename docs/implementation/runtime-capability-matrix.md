@@ -7,7 +7,7 @@
 
 | Runtime | 接入方式 | 版本 | 能力验证 | 权限档位验证 | 状态 | 承载包 |
 |---|---|---|---|---|---|---|
-| Codex（App Server） | stdio 换行 JSON-RPC（adapter 已实现） | **0.157.1**（2026-09-27 实测；协议类型 generate-ts 固化） | 协议链路 VERIFIED（initialize/thread/turn/通知映射真实进程通过）；**模型行为 BLOCKED**（额度限制，12:29 重置后重跑 pnpm test:e2e） | 计划档 read-only：待重跑（磁盘无写入已确认，但失败原因需排除额度冒充） | IN_PROGRESS | DEV-06 |
+| Codex（App Server） | stdio 换行 JSON-RPC（adapter v0.2.0） | **0.157.1**（2026-09-27 实测；协议类型 generate-ts 固化） | 已验证：启动/握手/请求/turn 派发/通知映射 + **真实文件内容回流（ZS-DEV06-4242）+ 层 A 行为证据（ZS-ACK）**（model=gpt-6-luna，e2e 4/4）。本地协议回放 8 用例覆盖终态各态/迟到/审批归属/重建 | **计划档 read-only 两路径 PASS**（B6-1 直接编辑：内容逐字节未变+工具失败证据；B6-2 shell：文件未创建+工具失败证据）。确认档/续接/steer/审批桥未验证 | **部分 VERIFIED**（C1+RT-23 计划档；PP-12/PP-02 待补） | DEV-06 |
 | Claude Code（headless） | 计划 `-p` stream-json | 未锁定（设计核对时 2.1.278） | 无 | 无 | NOT_STARTED | DEV-10 |
 | fake adapter | 进程内脚本化 | — | — | — | NOT_STARTED | DEV-03 |
 

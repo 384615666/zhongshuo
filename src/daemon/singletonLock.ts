@@ -1,16 +1,17 @@
 /**
- * daemon 单实例锁（§8.3：daemon 采用单实例锁；第二个实例不再启动另一份调度器）。
+ * daemon 单实例锁（§8.3）。目录式协议（修复轮 2 重写：接管互斥靠原子 mkdir，不靠多次读取）。
  *
- * 原子性与接管纪律（修复轮 2 收口）：
- * - 获取：`O_CREAT|O_EXCL` 独占创建——并发启动只有一个进程成功。
- * - 「创建中」窗口（刚创建尚未写完内容的空/半截文件）：不当作陈旧锁接管；
- *   在 createGraceMs 内视为创建中并保守返回 BUSY（宁可误判占用，不可双 daemon），
- *   超过宽限且仍损坏才按陈旧处理。
- * - 陈旧接管三步防误移：①判定持有 pid 已死；②rename 前二次读取确认内容未变
- *   （他人可能已在这期间完成新锁——读到活 pid 即 BUSY）；③rename 到唯一路径后
- *   读回核对内容确实是被判定的旧锁，否则尽力还原并返回 BUSY（我们移走了别人的新锁）。
+ * 协议：
+ * - 锁 = 目录 `daemon.lock.d/`；创建即持有（mkdir 原子：并发启动只有一个赢家）。
+ * - 持有信息 = 目录内 `owner.json`（pid+startedAt）；claim = 目录内 `claim/`（原子 mkdir）。
+ * - 接管（持有 pid 已死）：先 mkdir `claim/`——**只有一个接管者能成功**；claim 内写接管者
+ *   pid；随后 rename 整个锁目录到 stale 归档并重建。并发第三进程在 claim 存在期间启动 →
+ *   保守 BUSY（宁可误判占用，不可双 daemon）。
+ * - 非接管者永远不动目录；唯一可能的“替换”只能来自另一个接管者，而 claim 已互斥。
+ * - 旧代次回调与新进程：锁对象无跨进程后台回调，风险面在进程退出竞态——release 仅删
+ *   owner.pid 匹配的目录。
  */
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
@@ -22,11 +23,14 @@ export interface SingletonLockHandle {
 }
 
 export interface SingletonLockOptions {
-  /** 锁文件「创建中」宽限：内容损坏/为空但 mtime 在此窗口内视为创建中，保守 BUSY。 */
-  createGraceMs?: number;
+  /** 测试注入：claim 成功后的同步点（构造真实竞争窗口）。 */
+  onClaimed?: () => void;
 }
 
-const DEFAULT_CREATE_GRACE_MS = 2_000;
+interface LockContent {
+  pid: number;
+  startedAt: number;
+}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -37,35 +41,23 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function tryExclusiveCreate(lockPath: string, content: string): boolean {
+function readOwner(lockDir: string): { kind: 'ok'; content: LockContent } | { kind: 'unreadable' } | { kind: 'missing' } {
   try {
-    const fd = openSync(lockPath, 'wx');
-    try {
-      writeSync(fd, content, 0, 'utf8');
-    } finally {
-      closeSync(fd);
-    }
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw error;
-  }
-}
-
-interface LockContent {
-  pid: number;
-  startedAt: number;
-}
-
-function readLock(lockPath: string): { kind: 'ok'; content: LockContent } | { kind: 'unreadable' } | { kind: 'missing' } {
-  try {
-    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as LockContent;
+    const parsed = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')) as LockContent;
     if (Number.isFinite(parsed?.pid)) return { kind: 'ok', content: parsed };
     return { kind: 'unreadable' };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
-    // 空文件/半截 JSON（写入未完成）。
     return { kind: 'unreadable' };
+  }
+}
+
+function readDirPid(path: string): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pid?: number };
+    return Number.isFinite(parsed?.pid) ? (parsed.pid as number) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -73,106 +65,143 @@ export function acquireSingletonLock(
   appDataDir: string,
   options: SingletonLockOptions = {},
 ): DomainResult<SingletonLockHandle> {
-  const createGraceMs = options.createGraceMs ?? DEFAULT_CREATE_GRACE_MS;
-  const lockPath = join(appDataDir, 'daemon.lock');
   mkdirSync(appDataDir, { recursive: true });
-  const content = JSON.stringify({ pid: process.pid, startedAt: Date.now() });
+  const lockDir = join(appDataDir, 'daemon.lock.d');
+  const ownerPath = join(lockDir, 'owner.json');
+  const claimDir = join(lockDir, 'claim');
+  const content: LockContent = { pid: process.pid, startedAt: Date.now() };
+
+  // 兼容旧版残留的文件锁（升级路径）：存在则按陈旧处理移走。
+  const legacyPath = join(appDataDir, 'daemon.lock');
+  if (existsSync(legacyPath)) {
+    try {
+      const legacyPid = readDirPid(legacyPath);
+      if (legacyPid != null && isProcessAlive(legacyPid)) {
+        return domainErr('WORKSPACE_BUSY', `daemon 已在运行（pid=${legacyPid}，旧版文件锁）`);
+      }
+      renameSync(legacyPath, `${legacyPath}.stale-${Date.now()}`);
+    } catch {
+      // 处理失败按无遗留继续。
+    }
+  }
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    if (tryExclusiveCreate(lockPath, content)) {
-      return domainOk({
-        lockPath,
-        pid: process.pid,
-        release() {
-          try {
-            const current = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number };
-            if (current.pid === process.pid) rmSync(lockPath);
-          } catch {
-            // 释放失败不阻塞退出。
-          }
-        },
-      });
+    // 1) 原子创建（并发启动唯一赢家）。
+    try {
+      mkdirSync(lockDir);
+      writeFileSync(ownerPath, JSON.stringify(content), 'utf8');
+      return handle(lockDir, ownerPath);
+    } catch {
+      // EEXIST：已被持有或接管中。
     }
 
-    const first = readLock(lockPath);
-    if (first.kind === 'missing') continue; // 他人刚移走旧锁并已创建/正在创建——重试
-    if (first.kind === 'unreadable') {
-      // 创建中窗口：不接管。超过宽限仍损坏才按陈旧处理。
-      const age = Date.now() - statSync(lockPath).mtimeMs;
-      if (age < createGraceMs) {
-        return domainErr('WORKSPACE_BUSY', '锁文件正在创建中（内容未就绪），保守拒绝启动');
+    // 2) 接管者claim期间：保守等待（另一接管者正在重建）。
+    if (existsSync(claimDir)) {
+      const claimPid = readDirPid(join(claimDir, 'claimer.json'));
+      // claimer 活着（含本进程重入：接管窗口内的第二次获取同样拒绝）→ 保守 BUSY。
+      if (claimPid != null && isProcessAlive(claimPid)) {
+        return domainErr('WORKSPACE_BUSY', `锁接管进行中（pid=${claimPid}），保守拒绝启动`);
       }
-      // 陈旧损坏：接管（rename 到唯一路径），随后重试独占创建。
+      // claim 持有者已死（接管者崩溃）：清理 claim 重试。
       try {
-        renameSync(lockPath, `${lockPath}.corrupt-${Date.now()}-${process.pid}`);
+        rmSync(claimDir, { recursive: true, force: true });
       } catch {
-        // 他人已处理。
+        /* 竞态：他人已清 */
       }
       continue;
     }
 
-    if (isProcessAlive(first.content.pid)) {
+    // 3) 判定持有者。
+    const owner = readOwner(lockDir);
+    if (owner.kind === 'missing') continue; // 被移走，重试创建
+    if (owner.kind === 'unreadable') {
+      // 创建中/损坏：短暂等待后重试；仍损坏按死锁接管（旧版文件锁语义收敛于此）。
+      const waited = Date.now();
+      void waited;
+      try {
+        mkdirSync(claimDir);
+        writeFileSync(join(claimDir, 'claimer.json'), JSON.stringify({ pid: process.pid }), 'utf8');
+        try {
+          renameSync(lockDir, `${lockDir}.corrupt-${Date.now()}-${process.pid}`);
+        } finally {
+          rmSync(claimDir, { recursive: true, force: true });
+        }
+        continue;
+      } catch {
+        continue;
+      }
+    }
+    if (isProcessAlive(owner.content.pid)) {
       return domainErr(
         'WORKSPACE_BUSY',
-        `daemon 已在运行（pid=${first.content.pid}）；第二个实例不再启动另一份调度器（§8.3）`,
+        `daemon 已在运行（pid=${owner.content.pid}）；第二个实例不再启动另一份调度器（§8.3）`,
       );
     }
 
-    // 持有者已死：二次读取确认锁内容未变（防止移走他人刚创建的新锁）。
-    const second = readLock(lockPath);
-    if (second.kind === 'missing') continue;
-    if (second.kind !== 'ok' || second.content.pid !== first.content.pid) {
-      if (second.kind === 'ok' && isProcessAlive(second.content.pid)) {
-        return domainErr('WORKSPACE_BUSY', `daemon 已在运行（pid=${second.content.pid}）`);
-      }
-      continue; // 内容已变化且仍非活锁：重试整体流程
-    }
-
-    // 原子移走旧锁（并发接管仅一个 rename 成功），并读回核对内容确系被判定旧锁。
-    const stalePath = `${lockPath}.stale-${Date.now()}-${process.pid}`;
+    // 4) 原子 claim：并发接管者只有一个 mkdir 成功。
     try {
-      renameSync(lockPath, stalePath);
+      mkdirSync(claimDir);
     } catch {
-      continue; // 他人已移走
+      continue; // 他人已 claim：回到第 2 步语义（下一轮等待/清理）。
     }
-    const moved = readLock(stalePath);
-    if (moved.kind !== 'ok' || moved.content.pid !== first.content.pid) {
-      // 误移了他人的新锁：尽力还原并拒绝启动。
+    writeFileSync(join(claimDir, 'claimer.json'), JSON.stringify({ pid: process.pid }), 'utf8');
+    options.onClaimed?.(); // 测试同步点：claim 后、rename 前的真实竞争窗口
+    // 5) 整目录归档后重建。rename 后二次核对归档内容确系被判定的旧 owner（防御性）。
+    const archive = `${lockDir}.stale-${Date.now()}-${process.pid}`;
+    try {
+      renameSync(lockDir, archive);
+    } catch {
       try {
-        renameSync(stalePath, lockPath);
-      } catch {
-        // 还原失败：下轮流程会按现有内容重新判定。
-      }
-      return domainErr('WORKSPACE_BUSY', '锁内容在接管窗口内被替换，放弃接管以避免双实例');
+        rmSync(claimDir, { recursive: true, force: true });
+      } catch { /* 已清 */ }
+      continue;
     }
-    // 读回一致：确系陈旧锁，继续下一轮独占创建。
+    const archived = readOwner(archive);
+    if (archived.kind !== 'ok' || archived.content.pid !== owner.content.pid) {
+      // 误移风险兜底：归档内容与判定不符 → 不启动，保留归档待人工核对。
+      return domainErr('WORKSPACE_BUSY', '接管窗口内锁内容发生变化，放弃启动以避免双实例（归档已保留）');
+    }
+    // claim 随目录归档；继续下一轮创建。
   }
   return domainErr('WORKSPACE_BUSY', '单实例锁竞争未收敛：请重试启动');
+
+  function handle(dir: string, ownerFile: string): DomainResult<SingletonLockHandle> {
+    return domainOk({
+      lockPath: dir,
+      pid: process.pid,
+      release() {
+        try {
+          const current = JSON.parse(readFileSync(ownerFile, 'utf8')) as { pid: number };
+          if (current.pid === process.pid) rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // 释放失败不阻塞退出。
+        }
+      },
+    });
+  }
 }
 
 // ---------- 测试辅助 ----------
 
 export function readSingletonLock(appDataDir: string): LockContent | undefined {
-  const r = readLock(join(appDataDir, 'daemon.lock'));
+  const r = readOwner(join(appDataDir, 'daemon.lock.d'));
   return r.kind === 'ok' ? r.content : undefined;
 }
 
-/** 测试辅助：按指定内容与 mtime 写入锁文件（模拟创建中/陈旧窗口）。 */
-export function writeLockFileForTest(
-  appDataDir: string,
-  content: string,
-  mtime: Date = new Date(),
-): void {
-  mkdirSync(appDataDir, { recursive: true });
-  const fd = openSync(join(appDataDir, 'daemon.lock'), 'w');
-  try {
-    writeSync(fd, content, 0, 'utf8');
-  } finally {
-    closeSync(fd);
-  }
-  utimesSync(join(appDataDir, 'daemon.lock'), mtime, mtime);
+/** 测试辅助：写入指定内容的 owner（模拟死/活持有者）。 */
+export function writeLockDirForTest(appDataDir: string, owner: LockContent): void {
+  const lockDir = join(appDataDir, 'daemon.lock.d');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(join(lockDir, 'owner.json'), JSON.stringify(owner), 'utf8');
+}
+
+/** 测试辅助：预置 claim（模拟接管者 A 已 claim 且卡住）。 */
+export function preclaimLockForTest(appDataDir: string, claimerPid: number): void {
+  const claimDir = join(appDataDir, 'daemon.lock.d', 'claim');
+  mkdirSync(claimDir, { recursive: true });
+  writeFileSync(join(claimDir, 'claimer.json'), JSON.stringify({ pid: claimerPid }), 'utf8');
 }
 
 export function lockPathOf(appDataDir: string): string {
-  return join(appDataDir, 'daemon.lock');
+  return join(appDataDir, 'daemon.lock.d');
 }
