@@ -6,7 +6,7 @@
 
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
-- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01、DEV-02 已完成（见 reports/）
+- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01、DEV-02、DEV-03 已完成（见 reports/）
 - 最近更新：2026-09-27
 
 ## 工作包状态
@@ -14,8 +14,9 @@
 | 包 | 交付重点 | 状态 | 代码位置 | 验收 | 证据/备注 |
 |---|---|---|---|---|---|
 | DEV-01 | 类型/schema、目标判别、路由、来源/权限/预算合同、MCP 预留 | **VERIFIED**（G0 范围） | `src/contracts/` `src/domain/` | G0 | [reports/dev-01-result.md](reports/dev-01-result.md)：`pnpm check` 全绿；无模型调用、无 IO |
-| DEV-02 | SQLite migration/事务、组合约束、回执、outbox、重启读取 | **VERIFIED**（存储侧） | `src/persistence/` | G1（存储侧子集） | [reports/dev-02-result.md](reports/dev-02-result.md)：151/151；RT-01/02/05 存储侧通过；G1 整体待 DEV-03/04/05/17 |
-| DEV-03 | 可脚本化 fake adapter（成功/失败/审批/超时/停止不响应/迟到） | NOT_STARTED | `src/adapter/` | — | 依赖 DEV-01 ✅ / DEV-02 ✅；可立即开工 |
+| DEV-02 | SQLite migration/事务、组合约束、回执、outbox、重启读取 | **VERIFIED**（存储侧） | `src/persistence/` | G1（存储侧子集） | [reports/dev-02-result.md](reports/dev-02-result.md)：RT-01/02/05 存储侧通过；G1 整体待 DEV-04/05/17 |
+| DEV-03 | 可脚本化 fake adapter（成功/失败/审批/超时/停止不响应/迟到） | **VERIFIED** | `src/adapter/fake/` + `src/contracts/runtime.ts` | — | [reports/dev-03-result.md](reports/dev-03-result.md)：六类 fixture 全覆盖；§9.3/§9.4 契约落 contracts |
+| DEV-04 | 项目目录打开/去重/重定位、物理锁域、基线、用户内容保护 | NOT_STARTED | `src/daemon/` | G1/RT-07/09 | 依赖 DEV-01 ✅/DEV-02 ✅；可开工 |
 | DEV-04 | 项目目录打开/去重/重定位、物理锁域、基线、用户内容保护 | NOT_STARTED | `src/daemon/` | G1/RT-07/09 | 依赖 DEV-01 ✅ / DEV-02 |
 | DEV-05 | daemon 单实例、IPC、进程/会话注册、派发、停止代次、恢复基础 | NOT_STARTED | `src/daemon/` | G1 | 依赖 DEV-02/03 |
 | DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05 + 最小隔离（DEV-17）+ 最小合同（DEV-21-M0）先行 |
@@ -69,6 +70,6 @@
 
 ## 下一步（按依赖）
 
-1. **DEV-03**（fake adapter）——依赖已齐，`src/adapter/` 可立即开工：先把 §9.3 RuntimeAdapter/SessionRef/TurnRequest/NormalizedRuntimeEvent 落为 contracts 代码，再实现可脚本化 fake（成功/失败/审批/超时/停止不响应/迟到六类 fixture）。
-2. **DEV-04**（项目目录/锁域/基线）与 **DEV-05**（daemon/IPC/派发/停止代次）依赖 DEV-02 ✅/DEV-03。
+1. **DEV-04**（项目目录真实打开/去重/重定位、物理锁域 RT-09、基线清单）——依赖已齐（DEV-01/02 ✅）。
+2. **DEV-05**（daemon 单实例、IPC、进程/会话注册、派发 worker、停止代次、恢复基础）——依赖 DEV-02 ✅/DEV-03 ✅；与 DEV-04 可并行推进。
 3. 随后 DEV-17 最小隔离 + DEV-21-M0 最小合同 → DEV-06 真实 runtime（Codex App Server，专用 fixture）→ DEV-07/G3 用户闭环。
