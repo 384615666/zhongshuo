@@ -2,10 +2,15 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（修复轮 4 + DEV-06 G2 收口 + DEV-07 骨干时点）
+- 更新：2026-09-27（修复轮 5 + DEV-07 Electron 接线 + 真实 G3 核心链路通过时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
+
+- **修复轮 5**：pipeClient 请求-响应关联重写（FIFO/超时/断连清理，无 pending 泄漏）；project.open 正式引导 room_members + 查询命令（room.list/member.list/thread.history/task.get）；smoke 纯 IPC 6/6；IPC 握手凭据（AUTH_REQUIRED）+ dispatch.resume{confirm:true}；daemon 生命周期（drain 单飞/stop 序/重复 stop/启动失败清理）。
+- **DEV-07 Electron**：main（daemon=系统 Node 子进程，ADR-I38）+ preload 窄接口 + renderer（原型布局：侧栏/主池/线程/输入区，mention+仅记录+停止+断连提示）；esbuild .cjs 构建；ZS_UI_DEMO 自动化。
+- **真实 G3 核心链路通过（gpt-6-luna，2 turn）**：Electron UI→打开真实目录→DIRECT→模型真实读 notes.md→回复含 G3-CODEX-8848 进正确线程→TaskComplete schema 校验→DONE（第 1 轮发现输出契约字段不足——ADR-I39 修复后第 2 轮通过）。截图因 RDP 无 GPU 合成器失败（已改非致命，如实记录）。
+- 残留：UI 停止端到端演示、双任务真并发交错、运行中退出不确定窗口注入。详见 reports/round-20260927-dev07-electron-g3.md。
 
 - **修复轮 4**：B6 证据绑定共享验证器（declined/sandbox-denial；7 负例；B6-1 审批仪器化重跑、B6-2 签名重跑均过）；锁未知身份一律 BUSY+代次校验接管（ADR-I34）。默认 270/270。
 - **DEV-06 认证收口（G2 范围 VERIFIED，Codex 单 runtime）**：steer 正常+服务端拒、审批 allow、resume 不放宽、interrupt、usageTokens——真实层累计 12 用例（gpt-6-luna）。

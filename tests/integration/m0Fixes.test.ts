@@ -280,7 +280,7 @@ describe('FIX-9：命名管道 IPC（测试客户端验证）', () => {
       const e = envelope as { method?: string };
       if (e.method === 'ping') return { ok: true, data: 'pong' };
       return { ok: false, error: { code: 'VALIDATION_INVALID', message: 'unknown', retryable: false } };
-    });
+    }, { authToken: 'test-token' });
 
     const responses = await new Promise<string[]>((resolve, reject) => {
       const socket = connect(pipeName);
@@ -288,6 +288,7 @@ describe('FIX-9：命名管道 IPC（测试客户端验证）', () => {
       let buffer = '';
       const lines: string[] = [];
       socket.on('connect', () => {
+        socket.write(`${JSON.stringify({ type: 'auth', token: 'test-token' })}\n`);
         socket.write(`${JSON.stringify({ protocolVersion: 1, commandId: 'cmd-12345678', method: 'ping', params: {} })}\n`);
         socket.write('this is not json\n');
       });
@@ -295,9 +296,10 @@ describe('FIX-9：命名管道 IPC（测试客户端验证）', () => {
         buffer += chunk;
         let i = buffer.indexOf('\n');
         while (i >= 0) {
-          lines.push(buffer.slice(0, i).trim());
+          const line = buffer.slice(0, i).trim();
           buffer = buffer.slice(i + 1);
           i = buffer.indexOf('\n');
+          if (line.length > 0 && !line.includes('"auth.ok"')) lines.push(line); // 握手确认行不计入命令响应
         }
         if (lines.length >= 2) {
           socket.end();

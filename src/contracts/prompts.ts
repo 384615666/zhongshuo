@@ -273,6 +273,10 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   lines.push(
     `kind=${envelope.outputContract.kind}（${TASK_COMPLETE_SCHEMA_VERSION}）；submitVia=${envelope.outputContract.submitVia}；resultKey=${envelope.outputContract.resultKey}；进度消息：${envelope.outputContract.progressAllowed ? '允许' : '不允许'}`,
   );
+  // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
+  lines.push(
+    `最终结果必须是一个 JSON 对象（仅此对象，作为最后一条消息）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","changeSummary":"一句话说明完成了什么","files":["涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
+  );
   lines.push('── 协作接口 ──');
   lines.push(`结构化 mention 未开放：${envelope.communicationContract.disabledReason}；可报告协作需求，不能宣称已唤醒`);
   if (envelope.notes != null && envelope.notes.length > 0) {

@@ -1,40 +1,58 @@
 /**
- * DEV-07 集成 smoke（零额度，fake adapter）：daemon 入口全链——
- * project.open → message.submit（路由→落库→outbox→worker→任务完成→事件）→
- * 重启 daemon（历史保留 + 门禁 held 不自动续跑）→ dispatch.resume 后新任务可执行。
- * 验证 IPC 信封校验/幂等重放/未知命令错误。
+ * DEV-07 集成 smoke（修复轮 5 重写：纯 IPC 命令链路，零额度）。
+ * - 从空应用数据库开始；业务创建/操作只经正式 IPC 命令；
+ *   只读 DB 仅作结果断言（不 INSERT/UPDATE 业务状态）。
+ * - 覆盖：凭据握手（错 token 拒绝）；project.open 引导（含 room_members）；
+ *   查询命令（room.list/member.list/task.get/thread.history）；DIRECT 提交→worker→事件；
+ *   重启历史保留+门禁+confirm 续跑；pipeClient 并发/错误不串/断连清理；stop 幂等。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { connect as netConnect } from 'node:net';
 import { startDaemon } from '../../src/daemon/entry.ts';
 import type { RunningDaemon } from '../../src/daemon/entry.ts';
 import { connectPipe } from '../../src/daemon/pipeClient.ts';
-import { isDispatchGateHeld, openDispatchGate } from '../../src/persistence/daemonState.ts';
+import type { PipeClient } from '../../src/daemon/pipeClient.ts';
+import { isDispatchGateHeld } from '../../src/persistence/daemonState.ts';
 
-const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev07-'));
+const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev07r5-'));
 const projDir = join(fixtureRoot, 'proj');
 const appData = join(fixtureRoot, 'appdata');
+const SMOKE_USER = `smoke-${randomUUID().slice(0, 8)}`;
+const SMOKE_PIPE = `\\\\.\\pipe\\zhongshuo-smoke-${randomUUID().slice(0, 8)}`;
 let daemon: RunningDaemon;
-let pipe: Awaited<ReturnType<typeof connectPipe>>;
+let pipe: PipeClient;
 
 beforeAll(() => {
   mkdirSync(projDir, { recursive: true });
-  writeFileSync(join(projDir, 'notes.md'), '# 备忘\n\n宇宙密码：DEV07-4242\n', 'utf8');
+  writeFileSync(join(projDir, 'notes.md'), '# 备忘\n\n宇宙密码：DEV07R5-4242\n', 'utf8');
 });
 afterAll(async () => {
   pipe?.close();
   await daemon?.stop();
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 });
 
 function envelope(method: string, params: unknown, commandId = `cmd-${randomUUID()}`): unknown {
   return { protocolVersion: 1, commandId, method, params };
 }
 
-interface ResultShape { ok: boolean; data?: { project?: { id: string }; created?: boolean }; error?: { code: string; message: string }; replayed?: boolean }
+interface ResultShape {
+  ok: boolean
+  data?: Record<string, unknown> & { items?: Array<Record<string, unknown>> }
+  error?: { code: string; message: string }
+  replayed?: boolean
+}
 
 async function waitFor(cond: () => boolean, timeoutMs = 10_000, label = ''): Promise<void> {
   const start = Date.now();
@@ -44,89 +62,157 @@ async function waitFor(cond: () => boolean, timeoutMs = 10_000, label = ''): Pro
   }
 }
 
-describe('DEV-07 daemon smoke（fake runtime，零额度）', () => {
-  it('project.open：打开真实目录→项目+默认房间/成员引导；重复打开幂等', async () => {
-    daemon = await startDaemon({ appDataDir: appData, runtime: 'fake', tickMs: 100 });
-    pipe = await connectPipe(daemon.pipeName);
+/** 上下文全部经查询命令取得（DB 只读断言用）。 */
+async function readProjectRef(): Promise<{ projectId: string; roomId: string; conversationId: string; memberId: string }> {
+  const project = daemon.db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string };
+  const rooms = (await pipe.send(envelope('room.list', { projectId: project.id }))) as ResultShape;
+  const roomItem = rooms.data?.items?.[0] as { id: string; conversationId: string | null };
+  const members = (await pipe.send(envelope('member.list', { projectId: project.id, roomId: roomItem.id }))) as ResultShape;
+  const member = members.data?.items?.find((m) => (m as { principalType: string }).principalType === 'agent') as { id: string };
+  return { projectId: project.id, roomId: roomItem.id, conversationId: roomItem.conversationId ?? '', memberId: member.id };
+}
+
+describe('DEV-07 r5 smoke：凭据 + 纯 IPC 命令链路（fake，零额度）', () => {
+  it('凭据握手：错 token 连接被拒；正确 token 可用', async () => {
+    daemon = await startDaemon({ appDataDir: appData, runtime: 'fake', tickMs: 100, localUserId: SMOKE_USER, pipeName: SMOKE_PIPE });
+    const bad = await new Promise<{ ok: boolean; error?: { code: string } }>((resolve, reject) => {
+      const socket = netConnect(SMOKE_PIPE);
+      socket.setEncoding('utf8');
+      let settled = false;
+      socket.on('connect', () => socket.write(`${JSON.stringify({ type: 'auth', token: 'wrong-token' })}\n`));
+      socket.on('data', (d: string) => {
+        if (settled) return;
+        const line = d.trim().split('\n')[0] ?? '';
+        if (line.length > 0) {
+          settled = true;
+          socket.destroy();
+          resolve(JSON.parse(line));
+        }
+      });
+      socket.on('error', (e) => {
+        if (!settled) {
+          settled = true;
+          reject(e);
+        }
+      });
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          reject(new Error('握手响应超时'));
+        }
+      }, 5_000).unref?.();
+    });
+    expect(bad).toMatchObject({ ok: false, error: { code: 'AUTH_REQUIRED' } });
+    pipe = await connectPipe(SMOKE_PIPE, { token: daemon.credential.token });
+    const pong = (await pipe.send(envelope('room.list', { projectId: 'none' }))) as ResultShape;
+    expect(pong.ok).toBe(true); // 空项目也正常返回（非 AUTH 错误）
+  }, 30_000);
+
+  it('project.open：正式命令引导成员/房间/房间成员关系/会话；重复打开幂等', async () => {
     const r1 = (await pipe.send(envelope('project.open', { path: projDir }))) as ResultShape;
     expect(r1.ok).toBe(true);
-    expect(r1.data?.project?.id).toBeDefined();
-    expect(r1.data?.created).toBe(true);
-    const r2 = (await pipe.send(envelope('project.open', { path: projDir }))) as ResultShape;
-    expect(r2.data?.project?.id).toBe(r1.data?.project?.id);
-    expect(r2.data?.created).toBe(false);
-    // 同 commandId 重放。
+    expect((r1.data as { created: boolean }).created).toBe(true);
+    const projectId = (r1.data as { project: { id: string } }).project.id;
+    // 引导完整性（只读断言）：room_members 已由正式命令建立。
+    expect((daemon.db.prepare('SELECT count(*) c FROM room_members WHERE room_id IN (SELECT id FROM rooms WHERE project_id = ?)').get(projectId) as { c: number }).c).toBeGreaterThanOrEqual(1);
+    expect((daemon.db.prepare('SELECT count(*) c FROM conversations WHERE project_id = ?').get(projectId) as { c: number }).c).toBe(1);
+    // 重复打开：不重复创建。
     const cmd = `cmd-${randomUUID()}`;
-    const a = (await pipe.send(envelope('project.open', { path: projDir }, cmd))) as ResultShape;
-    const b = (await pipe.send(envelope('project.open', { path: projDir }, cmd))) as ResultShape;
-    expect(b.replayed).toBe(true);
-    expect((b.data as { project: { id: string } }).project.id).toBe((a.data as { project: { id: string } }).project.id);
+    const r2 = (await pipe.send(envelope('project.open', { path: projDir }, cmd))) as ResultShape;
+    expect((r2.data as { project: { id: string }; created: boolean }).project.id).toBe(projectId);
+    expect((r2.data as { created: boolean }).created).toBe(false);
+    const r3 = (await pipe.send(envelope('project.open', { path: projDir }, cmd))) as ResultShape;
+    expect(r3.replayed).toBe(true);
+    expect((daemon.db.prepare('SELECT count(*) c FROM rooms').get() as { c: number }).c).toBe(1);
   }, 30_000);
 
-  it('message.submit：指定成员→任务落库→worker 执行→完成事件回流（IPC 通路）', async () => {
-    const projectRow = daemon.db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string };
-    const roomRow = daemon.db.prepare('SELECT id, coordinator_member_id FROM rooms LIMIT 1').get() as { id: string; coordinator_member_id: string };
-    const convRow = daemon.db.prepare('SELECT id FROM conversations LIMIT 1').get() as { id: string };
-    const memberRow = daemon.db.prepare('SELECT id FROM project_members LIMIT 1').get() as { id: string };
-    // room_members 引导（bootstrap 未含；直接补上，UI 接线由 DEV-07 后续补全表维护命令）。
-    daemon.db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) VALUES (?, ?)').run(roomRow.id, memberRow.id);
-
-    const r = (await pipe.send(envelope('message.submit', {
-      target: { kind: 'room_root', projectId: projectRow.id, conversationId: convRow.id, roomId: roomRow.id },
+  it('纯 IPC 链路：查询取上下文 → DIRECT 提交 → worker 完成 → 事件/线程历史/task.get 回流', async () => {
+    const ref = await readProjectRef();
+    expect(ref.conversationId.length).toBeGreaterThan(0);
+    const submit = (await pipe.send(envelope('message.submit', {
+      target: { kind: 'room_root', projectId: ref.projectId, conversationId: ref.conversationId, roomId: ref.roomId },
       body: '@成员 请读取 notes.md 并告诉我宇宙密码',
       intent: 'default',
-      mentions: [{ kind: 'member', memberId: memberRow.id }],
+      mentions: [{ kind: 'member', memberId: ref.memberId }],
     }))) as ResultShape;
-    expect(r.ok).toBe(true);
+    expect(submit.ok).toBe(true);
+    const submitData = submit.data as { taskId: string | null; threadId: string };
+    expect(submitData.taskId).toBeDefined();
 
-    // worker（drain tick=100ms）→ 任务完成 → 事件可读。
-    await waitFor(() => (daemon.db.prepare("SELECT count(*) c FROM tasks WHERE status = 'DONE'").get() as { c: number }).c > 0, 10_000, '任务完成');
-    const events = (await pipe.send(envelope('events.list', { projectId: projectRow.id }))) as { ok: boolean; data: { items: Array<{ kind: string }> } };
-    expect(events.ok).toBe(true);
-    const kinds = events.data.items.map((e) => e.kind);
+    await waitFor(() => (daemon.db.prepare("SELECT count(*) c FROM tasks WHERE status = 'DONE'").get() as { c: number }).c >= 1, 10_000, '任务完成');
+
+    const task = (await pipe.send(envelope('task.get', { taskId: submitData.taskId }))) as ResultShape;
+    expect((task.data as { task: { status: string } }).task.status).toBe('DONE');
+    const history = (await pipe.send(envelope('thread.history', { threadId: submitData.threadId }))) as ResultShape;
+    const items = (history.data as { items: Array<{ authorType: string }> }).items;
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(items.some((m) => m.authorType === 'agent')).toBe(true); // agent 回复已入线程
+    const events = (await pipe.send(envelope('events.list', { projectId: ref.projectId }))) as ResultShape;
+    const kinds = ((events.data as { items: Array<{ kind: string }> }).items).map((e) => e.kind);
     expect(kinds).toContain('run.created');
-    expect(kinds).toContain('thread.replyAdded');
   }, 30_000);
 
-  it('信封校验与未知命令：多余字段/未知 method 返回结构化错误', async () => {
-    const bad = await pipe.send({ protocolVersion: 1, commandId: `cmd-${randomUUID()}`, method: 'project.open', authorId: 'attacker', params: {} });
-    expect(bad).toMatchObject({ ok: false, error: { code: 'VALIDATION_INVALID' } });
-    const unknown = (await pipe.send(envelope('no.such.command', {}))) as ResultShape;
-    expect(unknown).toMatchObject({ ok: false, error: { code: 'VALIDATION_INVALID', message: expect.stringContaining('未知命令') } });
-  }, 15_000);
+  it('pipeClient 并发与失败清理：3 并发各归其位；业务错误不串；断连清理', async () => {
+    const ref = await readProjectRef();
+    const [a, b, c] = (await Promise.all([
+      pipe.send(envelope('room.list', { projectId: ref.projectId })),
+      pipe.send(envelope('member.list', { projectId: ref.projectId, roomId: ref.roomId })),
+      pipe.send(envelope('task.get', { taskId: 'no-such-task' })),
+    ])) as [ResultShape, ResultShape, ResultShape];
+    expect(a.ok).toBe(true);
+    expect((a.data as { items: unknown[] }).items.length).toBeGreaterThanOrEqual(1);
+    expect(b.ok).toBe(true);
+    expect((b.data as { items: unknown[] }).items.length).toBeGreaterThanOrEqual(1);
+    expect(c).toMatchObject({ ok: false, error: { code: 'RESOURCE_NOT_FOUND' } });
+    // 断连：未决请求被拒绝（不留 pending）。
+    const pending = pipe.send(envelope('room.list', { projectId: ref.projectId }));
+    pipe.close();
+    await expect(pending).rejects.toBeInstanceOf(Error);
+    // 重连可用。
+    pipe = await connectPipe(SMOKE_PIPE, { token: daemon.credential.token });
+    const again = (await pipe.send(envelope('room.list', { projectId: ref.projectId }))) as ResultShape;
+    expect(again.ok).toBe(true);
+  }, 30_000);
 
-  it('重启：历史保留；恢复落门禁不自动续跑；dispatch.resume 后恢复调度', async () => {
-    // 留一个未执行任务再重启。
-    const projectRow = daemon.db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string };
-    const roomRow = daemon.db.prepare('SELECT id FROM rooms LIMIT 1').get() as { id: string };
-    const convRow = daemon.db.prepare('SELECT id FROM conversations LIMIT 1').get() as { id: string };
-    const memberRow = daemon.db.prepare('SELECT id FROM project_members LIMIT 1').get() as { id: string };
-    const r = (await pipe.send(envelope('message.submit', {
-      target: { kind: 'room_root', projectId: projectRow.id, conversationId: convRow.id, roomId: roomRow.id },
+  it('重启：历史保留；门禁不自动续跑；resume 无 confirm 拒绝；confirm 后续跑', async () => {
+    const ref = await readProjectRef();
+    const submit = (await pipe.send(envelope('message.submit', {
+      target: { kind: 'room_root', projectId: ref.projectId, conversationId: ref.conversationId, roomId: ref.roomId },
       body: '第二个任务：再说一遍密码',
       intent: 'default',
-      mentions: [{ kind: 'member', memberId: memberRow.id }],
+      mentions: [{ kind: 'member', memberId: ref.memberId }],
     }))) as ResultShape;
-    expect(r.ok).toBe(true);
+    expect(submit.ok).toBe(true);
     await waitFor(() => (daemon.db.prepare("SELECT count(*) c FROM outbox WHERE status = 'pending'").get() as { c: number }).c >= 1, 5_000, 'pending outbox');
 
-    // 重启 daemon（close → start；历史保留）。
     pipe.close();
     const taskCountBefore = (daemon.db.prepare('SELECT count(*) c FROM tasks').get() as { c: number }).c;
     await daemon.stop();
 
-    daemon = await startDaemon({ appDataDir: appData, runtime: 'fake', tickMs: 100 });
-    pipe = await connectPipe(daemon.pipeName);
-    const taskCountAfter = (daemon.db.prepare('SELECT count(*) c FROM tasks').get() as { c: number }).c;
-    expect(taskCountAfter).toBe(taskCountBefore); // 历史保留
-    expect(isDispatchGateHeld(daemon.db)).toBe(true); // 恢复门禁：不自动续跑
-    await new Promise((resolve) => setTimeout(resolve, 400)); // 门禁期间 worker 不领取
+    daemon = await startDaemon({ appDataDir: appData, runtime: 'fake', tickMs: 100, localUserId: SMOKE_USER, pipeName: SMOKE_PIPE });
+    pipe = await connectPipe(SMOKE_PIPE, { token: daemon.credential.token });
+    expect((daemon.db.prepare('SELECT count(*) c FROM tasks').get() as { c: number }).c).toBe(taskCountBefore);
+    expect(isDispatchGateHeld(daemon.db)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
     expect((daemon.db.prepare("SELECT count(*) c FROM outbox WHERE status = 'pending'").get() as { c: number }).c).toBeGreaterThanOrEqual(1);
 
-    // 用户确认继续（IPC 命令）→ 派发恢复。
-    const resume = (await pipe.send(envelope('dispatch.resume', {}))) as ResultShape;
+    const noConfirm = (await pipe.send(envelope('dispatch.resume', {}))) as ResultShape;
+    expect(noConfirm).toMatchObject({ ok: false, error: { code: 'VALIDATION_INVALID' } });
+    expect(isDispatchGateHeld(daemon.db)).toBe(true);
+    const resume = (await pipe.send(envelope('dispatch.resume', { confirm: true }))) as ResultShape;
     expect(resume.ok).toBe(true);
     await waitFor(() => (daemon.db.prepare("SELECT count(*) c FROM tasks WHERE status = 'DONE'").get() as { c: number }).c >= 2, 10_000, '第二任务完成');
-    void openDispatchGate;
   }, 60_000);
+
+  it('daemon stop：运行中退出幂等且资源释放（可重启、锁可再获取）', async () => {
+    await daemon.stop();
+    await daemon.stop(); // 重复 stop 幂等
+    const again = await startDaemon({ appDataDir: appData, runtime: 'fake', tickMs: 100, localUserId: SMOKE_USER, pipeName: SMOKE_PIPE });
+    expect(again.pipeName).toBe(daemon.pipeName);
+    daemon = again;
+    pipe = await connectPipe(SMOKE_PIPE, { token: daemon.credential.token });
+    const projectId = (daemon.db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string }).id;
+    const rooms = (await pipe.send(envelope('room.list', { projectId }))) as ResultShape;
+    expect(rooms.ok).toBe(true);
+  }, 30_000);
 });

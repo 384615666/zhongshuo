@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>众说</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="brand">众说</div>
+      <button id="open-folder" class="primary">打开本地文件夹…</button>
+      <div id="project-name" class="project-name">未打开项目</div>
+      <nav id="room-list" class="rooms"></nav>
+      <div class="sidebar-foot">
+        <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="thread-head">
+        <span id="thread-title">主对话池</span>
+        <span id="conn-state" class="conn"></span>
+      </header>
+      <section id="pool" class="pool"></section>
+      <section id="thread" class="thread hidden">
+        <div class="thread-back"><button id="thread-back-btn">← 返回主池</button></div>
+        <div id="thread-messages"></div>
+        <div class="thread-stop"><button id="stop-btn" class="danger hidden">停止任务</button></div>
+      </section>
+      <footer class="composer">
+        <div class="composer-row">
+          <input id="mention-pick" class="mention-pick" list="member-list" placeholder="@ 指定成员（留空=自动）" />
+          <datalist id="member-list"></datalist>
+          <button id="record-toggle" class="chip" title="一次性意图：只保存不派发">仅记录</button>
+        </div>
+        <div class="composer-row">
+          <textarea id="composer-input" rows="2" placeholder="这条发给谁"></textarea>
+          <button id="send" class="primary">发送</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

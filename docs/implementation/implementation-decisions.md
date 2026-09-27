@@ -233,3 +233,26 @@ applyRecovery 原只重排 lease_until 过期的租约——daemon 崩溃重启�
 结构化错误（不吞异常）。同步命令经 run() 包装；异步命令（task.stop 含中断回调）自包 runCommand 而不
 双层包裹（曾因 async handler 传入同步事务导致 data 序列化为空——已修正并记入测试）。dispatch.resume
 是恢复门禁的用户确认入口（§16.4-6 的 IPC 形态）。
+
+
+## ADR-I38 · Electron 与 daemon 进程分离 + 系统 Node 承载（2026-09-27，DEV-07）
+
+Electron 主进程内直接加载 better-sqlite3 失败：Electron ABI 与预编译二进制不匹配
+（ELECTRON_RUN_AS_NODE 实测同样失败——其 Node 运行时仍报 Electron 模块版本）。
+决定：daemon 始终为**系统 Node 子进程**（spawn node --experimental-strip-types entry.ts），
+Electron 主进程仅持 pipeClient；UI 关闭时 kill 子进程。符合 §8.3「daemon 与界面进程分离」。
+打包形态由 DEV-15 换绑随包 Node；ZS_NODE_BIN 可覆盖。
+
+## ADR-I39 · 输出契约精确字段约束（2026-09-27，真实 G3 发现）
+
+真实模型在输出契约只写 kind/resultKey 时不猜 schema（首跑自造 kind/result 字段 → OUTPUT_INVALID）。
+renderTurnBundle 输出契约分节必须给出**足以无歧义生成结果的确切 JSON 字段集**
+（§4.2 原文要求，此前实现不足）。修复后真实模型产出 schema 合规 TaskComplete 并通过
+worker 校验→交付→DONE。教训：契约文本要能被陌生模型一次写对，不是只给人看的摘要。
+
+## ADR-I40 · 本地管道凭据握手（2026-09-27，修复轮 5）
+
+命名管道能收发 JSON ≠ 连接可信。daemon 每实例生成随机 token（appData/local.token，
+0600 语义）；客户端首帧 {"type":"auth","token"}，验证通过才接受命令；错凭据连接被拒
+（AUTH_REQUIRED + 断开），CallerContext 只在验证后构造。dispatch.resume 须 {confirm:true}
+显式确认 + runCommand 幂等；同 socket 响应 FIFO 串行。

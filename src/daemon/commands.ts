@@ -1,9 +1,11 @@
 /**
- * daemon 命令面（DEV-07）：命名管道上的统一业务入口。
- * - CommandEnvelope strict 校验 + 本地 UI CallerContext（可信身份，无连接 ID）。
- * - 命令：project.open（打开/去重/引导默认房间与成员）、message.submit（路由→单事务落库→入 outbox）、
- *   events.list（增量读取）、dispatch.resume（恢复门禁的用户确认）、task.stop。
- * - 幂等经 runCommand（command_receipts 同事务）；错误映射 CommandResult.error，不吞异常。
+ * daemon 命令面（DEV-07；修复轮 5 扩充）。
+ * - 每连接经凭据握手后才进入此处；CallerContext 由验证入口构造（可信）。
+ * - project.open：引导默认成员/房间/房间成员关系/会话（room_members 不再由测试补）。
+ * - 只读查询：room.list / member.list / thread.history / task.get（UI 稳定返回值）。
+ * - dispatch.resume 参数化（confirm:true 显式确认）+ runCommand 幂等。
+ * - task.stop 委托 requestStop（自包幂等/中断）。
+ * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import { randomUUID } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -11,12 +13,12 @@ import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
 import { openProject } from './projectStore.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
-import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
-import type { MentionNode } from '../contracts/routing.ts';
+import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { listEvents } from '../persistence/events.ts';
+import { openDispatchGate } from '../persistence/daemonState.ts';
 import { z } from 'zod';
 
 export interface DaemonCommandDeps {
@@ -25,9 +27,18 @@ export interface DaemonCommandDeps {
   interruptTurn: (turnId: string) => Promise<void>;
 }
 
+export class DaemonCommandError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'DaemonCommandError';
+    this.code = code;
+  }
+}
+
 const localScope = (userId: string): string => `user:${userId}`;
 
-/** 引导默认房间/会话/成员（project.open 幂等副作用；仅缺失时创建）。 */
+/** project.open 的默认引导（成员/房间/房间成员关系/会话；重复打开不重复创建）。 */
 function bootstrapProject(db: ZhongshuoDatabase, projectId: string): void {
   const memberCount = (db.prepare('SELECT count(*) c FROM project_members WHERE project_id = ?').get(projectId) as { c: number }).c;
   if (memberCount === 0) {
@@ -40,10 +51,14 @@ function bootstrapProject(db: ZhongshuoDatabase, projectId: string): void {
     db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES (?, ?, '默认房间', ?)`)
       .run(`room_default_${projectId}`, projectId, defaultMember);
   }
-  const convCount = (db.prepare('SELECT count(*) c FROM conversations WHERE room_id = ?').get(`room_default_${projectId}`) as { c: number }).c;
+  const roomId = `room_default_${projectId}`;
+  // 房间成员关系（修复轮 5：此前 smoke 手工 INSERT 绕过——正式链路必须引导）。
+  db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) SELECT ?, id FROM project_members WHERE project_id = ?')
+    .run(roomId, projectId);
+  const convCount = (db.prepare('SELECT count(*) c FROM conversations WHERE room_id = ?').get(roomId) as { c: number }).c;
   if (convCount === 0) {
     db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES (?, ?, 'room', ?)`)
-      .run(`conv_default_${projectId}`, projectId, `room_default_${projectId}`);
+      .run(`conv_default_${projectId}`, projectId, roomId);
   }
 }
 
@@ -62,6 +77,17 @@ const messageSubmitParams = z.strictObject({
   ])),
 });
 
+function coordinatorOf(db: ZhongshuoDatabase, roomId: string): string {
+  return (db.prepare('SELECT coordinator_member_id c FROM rooms WHERE id = ?').get(roomId) as { c: string } | undefined)?.c ?? '';
+}
+function enabledAgents(db: ZhongshuoDatabase, roomId: string): string[] {
+  return (db.prepare(`SELECT rm.member_id FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? AND pm.enabled = 1`).all(roomId) as Array<{ member_id: string }>).map((r) => r.member_id);
+}
+function reviewPolicyOf(db: ZhongshuoDatabase, projectId: string): 'auto_deliver' | 'user_review' {
+  const row = db.prepare('SELECT task_review_enabled FROM projects WHERE id = ?').get(projectId) as { task_review_enabled: number } | undefined;
+  return row?.task_review_enabled === 1 ? 'user_review' : 'auto_deliver';
+}
+
 export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: unknown): Promise<unknown> {
   const parsedEnvelope = commandEnvelopeSchema(z.unknown()).safeParse(envelope);
   if (!parsedEnvelope.success) {
@@ -70,7 +96,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
   const env = parsedEnvelope.data;
   const payloadHash = computeCommandPayloadHash({ method: env.method, target: null, params: env.params, expectedRevision: env.expectedRevision ?? null });
   const scope = localScope(deps.localUserId);
-  // runCommand 为同步事务：handler 必须同步返回（异步命令自行包 runCommand，见 task.stop）。
+  // runCommand 为同步事务：handler 必须同步返回（异步命令自包 runCommand，如 task.stop）。
   const run = <T>(handler: () => T): { data: T; replayed: boolean } => {
     const outcome = runCommand<T>(deps.db, { idempotencyScope: scope, commandId: env.commandId, payloadHash, now: Date.now() }, handler);
     if (!outcome.ok) throw new DaemonCommandError(outcome.error.code, outcome.error.message);
@@ -89,6 +115,37 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return { ok: true, commandId: env.commandId, data: result.data, replayed: result.replayed };
       }
+      case 'room.list': {
+        const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+        const rooms = deps.db.prepare('SELECT id, name, archived_at FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null }>;
+        const items = rooms.map((r) => {
+          const conversation = deps.db.prepare('SELECT id FROM conversations WHERE room_id = ? LIMIT 1').get(r.id) as { id: string } | undefined;
+          return { id: r.id, name: r.name, archived: r.archived_at != null, conversationId: conversation?.id ?? null };
+        });
+        return { ok: true, commandId: env.commandId, data: { items } };
+      }
+      case 'member.list': {
+        const params = z.strictObject({ projectId: z.string().min(1), roomId: z.string().min(1).optional() }).parse(env.params);
+        const rows = params.roomId != null
+          ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? ORDER BY pm.id`).all(params.roomId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>)
+          : (deps.db.prepare('SELECT id, display_name, principal_type, enabled FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>);
+        return { ok: true, commandId: env.commandId, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1 })) } };
+      }
+      case 'thread.history': {
+        const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
+        const limit = params.limit ?? 50;
+        const rows = (params.beforeSeq != null
+          ? deps.db.prepare('SELECT id, author_type, author_id, thread_message_seq, body_json, created_at FROM messages WHERE thread_id = ? AND thread_message_seq < ? ORDER BY thread_message_seq DESC LIMIT ?').all(params.threadId, params.beforeSeq, limit)
+          : deps.db.prepare('SELECT id, author_type, author_id, thread_message_seq, body_json, created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq DESC LIMIT ?').all(params.threadId, limit)) as Array<{ id: string; author_type: string; author_id: string; thread_message_seq: number; body_json: string; created_at: number }>;
+        return { ok: true, commandId: env.commandId, data: { items: rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at })) } };
+      }
+      case 'task.get': {
+        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        const task = deps.db.prepare('SELECT id, title, status, room_id, conversation_thread_id, room_task_number, revision FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
+        if (task == null) return { ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } };
+        const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
+        return { ok: true, commandId: env.commandId, data: { task, activeRun: activeRun ?? null } };
+      }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
         const result = run(() => {
@@ -101,7 +158,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          const outcome = deps.db.transaction(() => {
+          return deps.db.transaction(() => {
             const ids = {
               messageId: `msg_${randomUUID()}`,
               threadId: `thread_${randomUUID()}`,
@@ -127,7 +184,6 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
             return created.value;
           })();
-          return outcome;
         });
         return { ok: true, commandId: env.commandId, data: result.data, replayed: result.replayed };
       }
@@ -137,10 +193,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return { ok: true, commandId: env.commandId, data: { items, hasMore: items.length >= (params.limit ?? 100) } };
       }
       case 'dispatch.resume': {
-        // 恢复门禁的用户确认（§16.4-6：恢复后先列出可继续任务，确认才开放调度）。
-        const { openDispatchGate } = await import('../persistence/daemonState.ts');
-        openDispatchGate(deps.db);
-        return { ok: true, commandId: env.commandId, data: { gate: 'open' } };
+        // 恢复门禁的用户确认（修复轮 5：须显式 confirm:true，不接受空参数直开）。
+        z.strictObject({ confirm: z.literal(true) }).parse(env.params);
+        const result = run(() => {
+          openDispatchGate(deps.db);
+          return { gate: 'open' as const };
+        });
+        return { ok: true, commandId: env.commandId, data: result.data, replayed: result.replayed };
       }
       case 'task.stop': {
         const params = z.strictObject({ taskId: z.string().min(1), targetRunId: z.string().min(1), expectedStopGeneration: z.number().int().nonnegative() }).parse(env.params);
@@ -170,24 +229,4 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
     // 不吞异常假装成功（§16.5）。
     return { ok: false, error: { code: 'STORAGE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error), retryable: false } };
   }
-}
-
-export class DaemonCommandError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = 'DaemonCommandError';
-    this.code = code;
-  }
-}
-
-function coordinatorOf(db: ZhongshuoDatabase, roomId: string): string {
-  return (db.prepare('SELECT coordinator_member_id c FROM rooms WHERE id = ?').get(roomId) as { c: string } | undefined)?.c ?? '';
-}
-function enabledAgents(db: ZhongshuoDatabase, roomId: string): string[] {
-  return (db.prepare(`SELECT rm.member_id FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? AND pm.enabled = 1`).all(roomId) as Array<{ member_id: string }>).map((r) => r.member_id);
-}
-function reviewPolicyOf(db: ZhongshuoDatabase, projectId: string): 'auto_deliver' | 'user_review' {
-  const row = db.prepare('SELECT task_review_enabled FROM projects WHERE id = ?').get(projectId) as { task_review_enabled: number } | undefined;
-  return row?.task_review_enabled === 1 ? 'user_review' : 'auto_deliver';
 }
