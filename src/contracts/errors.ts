@@ -47,7 +47,11 @@ export type ErrorCode =
   | 'CLAIM_NOT_FOUND'
   | 'CLAIM_DUPLICATED'
   | 'CLAIM_COVERAGE_INCOMPLETE'
-  | 'RATIFY_ALREADY_SUBMITTED';
+  | 'RATIFY_ALREADY_SUBMITTED'
+  // DELIBERATE 成果发布协议（M1 修复轮：不可变版本/完整性）
+  | 'ARTIFACT_CONFLICT'
+  | 'ARTIFACT_BODY_MISSING'
+  | 'ARTIFACT_BODY_MISMATCH';
 
 export interface CommandError {
   code: ErrorCode;

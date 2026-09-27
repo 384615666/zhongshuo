@@ -334,7 +334,8 @@ const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'CROSS_REVIEW|stage_work': `你是互评成员。对其他成员的初稿逐条 claim 给出评审意见：
 - 立场只能是 agree / disagree / needs_evidence，必须写明理由与证据编号；可给建议的验证方式。
-- 只评审输入中列出的 claimId；不引入未提供的内容。
+- 只评审输入中列出的结论，引用时必须原样使用其 artifactId、revision 与 claimId（三元组缺一即拒绝）。
+- 不引入未提供的内容。
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'ISSUE_DISCUSSION|stage_work': `你是分歧讨论参与成员。本轮争议清单与证据版本已冻结：
 - 对每项争议给出立场（agree/disagree/needs_evidence）与理由；有新证据才填 newEvidence（证据编号须来自本轮输入）。
@@ -357,7 +358,7 @@ const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
 /** 各阶段输出契约（ADR-I39：精确 JSON 字段集，与 deliberation.ts schema 一字不差）。 */
 export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
   'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"一句话总览","claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
-  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","reviews":[{"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
+  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","reviews":[{"targetArtifactId":"art_x","targetRevision":1,"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
   'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
   'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
   'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"整合结论总览","claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,

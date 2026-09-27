@@ -63,10 +63,12 @@ export interface AnalysisReport {
   payload: AnalysisDraftPayload;
 }
 
-/** CROSS_REVIEW 阶段模型输出：对他人初稿 claim 的逐条评审。 */
+/** CROSS_REVIEW 阶段模型输出：对他人初稿 claim 的逐条评审（三元组绑定，防跨成员/跨版本混并）。 */
 export const reviewPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CROSS_REVIEW_SCHEMA_VERSION),
   reviews: z.array(z.strictObject({
+    targetArtifactId: z.string().min(1),
+    targetRevision: z.number().int().min(1),
     targetClaimId: z.string().min(1),
     stance: z.enum(['agree', 'disagree', 'needs_evidence']),
     reason: z.string().min(1),

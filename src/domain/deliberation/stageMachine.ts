@@ -2,10 +2,20 @@
  * DELIBERATE 阶段机（§6.1/§6.5；纯逻辑，不触库）。
  * 阶段屏障只认程序侧事实（成员产物/缺席状态），不解析自然语言；
  * 主持者不能单方面把他人反对标成同意——聚合只认 ratification_records（§6.5）。
+ *
+ * 修复轮（M1 第二批）：
+ * - 屏障以**程序冻结的阶段参与集合**为准：名单成员缺事实记录=未完成，不能靠
+ *   “过滤掉未传入的成员”凑收齐；重复成员事实按最后一次出现去重（确定性）。
+ * - 争议/互评引用绑定 (artifactId, artifactRevision, claimId) 三元组并校验其
+ *   属于冻结可读版本；issueId 为运行范围唯一身份（含 runId 的稳定散列），
+ *   不得用局部 claimId 冒充跨运行全局键。
  */
+import { createHash } from 'node:crypto';
 import type { ClaimConsensus, ClaimRatificationSummary, FrozenRoster, ParticipantStatus } from '../../contracts/deliberation.ts';
 import { CLAIM_CONSENSUS_PRIORITY } from '../../contracts/deliberation.ts';
 import type { DeliberateStage } from '../../contracts/run.ts';
+import { domainErr, domainOk } from '../../contracts/errors.ts';
+import type { DomainResult } from '../../contracts/errors.ts';
 
 export interface ParticipantFacts {
   memberId: string;
@@ -24,18 +34,31 @@ function terminatedForBarrier(p: ParticipantFacts): boolean {
   return p.status === 'completed' || p.status === 'absent' || p.status === 'failed' || (p.status === 'late' && !p.hasStageOutput);
 }
 
+/** 重复成员事实去重：按最后一次出现（确定性；调用方按时间序追加）。 */
+export function dedupeFacts(participants: ReadonlyArray<ParticipantFacts>): ParticipantFacts[] {
+  const byId = new Map<string, ParticipantFacts>();
+  for (const p of participants) byId.set(p.memberId, p);
+  return [...byId.values()];
+}
+
+function factsFor(expected: ReadonlyArray<{ memberId: string }>, participants: ReadonlyArray<ParticipantFacts>): ParticipantFacts[] {
+  const byId = new Map(dedupeFacts(participants).map((p) => [p.memberId, p]));
+  return expected.map((m) => byId.get(m.memberId) ?? { memberId: m.memberId, status: 'pending' as const, hasStageOutput: false });
+}
+
 /**
  * INDEPENDENT 屏障（§6.1）：所有预期成员完成，或未完成席位已按缺席/失败/撤出规则终结；
- * 全员无有效输入 → BLOCKED。
+ * 全员无有效输入 → BLOCKED。名单成员缺事实记录 = pending（未完成），不跳过。
  */
 export function decideIndependentBarrier(roster: FrozenRoster, participants: ReadonlyArray<ParticipantFacts>): StageAdvanceDecision {
   const expected = roster.members.filter((m) => m.expected);
   if (expected.length === 0) return { decision: 'blocked', reason: '冻结名单为空' };
-  const facts = expected.map((m) => participants.find((p) => p.memberId === m.memberId) ?? { memberId: m.memberId, status: 'pending' as const, hasStageOutput: false });
+  const facts = factsFor(expected, participants);
   const withOutput = facts.filter((p) => p.hasStageOutput);
   if (withOutput.length === 0) {
-    const allTerminated = facts.every(terminatedForBarrier);
-    if (allTerminated) return { decision: 'blocked', reason: '全员无有效输入（§6.1 INDEPENDENT 终结规则）' };
+    if (facts.every(terminatedForBarrier)) {
+      return { decision: 'blocked', reason: '全员无有效输入（§6.1 INDEPENDENT 终结规则；不合成虚构研讨报告）' };
+    }
     return { decision: 'wait', reason: `独立初稿 0/${expected.length}，等待或按 E4 缺席推进` };
   }
   const outstanding = facts.filter((p) => !p.hasStageOutput && !terminatedForBarrier(p));
@@ -45,31 +68,64 @@ export function decideIndependentBarrier(roster: FrozenRoster, participants: Rea
   return { decision: 'advance', next: 'CROSS_REVIEW', reason: `独立初稿收齐（${withOutput.length}/${expected.length}，缺席/失败席位已终结）` };
 }
 
-/** CROSS_REVIEW 屏障：收齐本阶段预期互评（有初稿者才被期待互评）。 */
-export function decideCrossReviewBarrier(roster: FrozenRoster, participants: ReadonlyArray<ParticipantFacts>): StageAdvanceDecision {
-  const expectedReviewers = roster.members.filter((m) => m.expected);
-  const outstanding = expectedReviewers.filter((m) => {
-    const p = participants.find((x) => x.memberId === m.memberId);
-    return p != null && !p.hasStageOutput && !terminatedForBarrier(p);
-  });
-  if (outstanding.length > 0) {
-    return { decision: 'wait', reason: `互评未收齐；待：${outstanding.map((m) => m.memberId).join(', ')}` };
+/**
+ * CROSS_REVIEW 屏障（修复轮）：预期参与者由**程序冻结**（= INDEPENDENT 产出有效初稿的
+ * 成员集合，编排层在进入阶段时固化）。集合外的成员（名单内但无有效初稿者）不参与
+ * 互评，也不因“没传事实”被跳过；预期集合为空 = 无可评审 → blocked。
+ */
+export function decideCrossReviewBarrier(input: {
+  roster: FrozenRoster;
+  /** 程序冻结的互评预期参与集合（进入 CROSS_REVIEW 时确定，不再随迟到成果变化）。 */
+  expectedReviewerIds: ReadonlyArray<string>;
+  participants: ReadonlyArray<ParticipantFacts>;
+}): StageAdvanceDecision {
+  const expected = [...new Set(input.expectedReviewerIds)];
+  if (expected.length === 0) {
+    return { decision: 'blocked', reason: '无可评审成果（预期互评集合为空）' };
   }
-  return { decision: 'advance', next: 'ISSUE_DISCUSSION', reason: '互评收齐（或未完成席位已终结）' };
+  const facts = factsFor(expected.map((memberId) => ({ memberId })), input.participants);
+  const withOutput = facts.filter((p) => p.hasStageOutput);
+  if (withOutput.length === 0) {
+    if (facts.every(terminatedForBarrier)) {
+      return { decision: 'blocked', reason: '互评全员无有效输入' };
+    }
+    return { decision: 'wait', reason: `互评 0/${expected.length}，等待或按 E4 缺席推进` };
+  }
+  const outstanding = facts.filter((p) => !p.hasStageOutput && !terminatedForBarrier(p));
+  if (outstanding.length > 0) {
+    return { decision: 'wait', reason: `互评未收齐（${withOutput.length}/${expected.length}）；待：${outstanding.map((p) => p.memberId).join(', ')}` };
+  }
+  return { decision: 'advance', next: 'ISSUE_DISCUSSION', reason: `互评收齐（${withOutput.length}/${expected.length}，缺席/失败席位已终结）` };
 }
 
-// ---------- 争议清单构建（CROSS_REVIEW → ISSUE_DISCUSSION 输入） ----------
+// ---------- 成果引用（三元组绑定）与争议身份 ----------
+
+/** 结论的唯一身份：来源成果 + 版本 + 局部 claimId（缺一即可能跨成员/跨版本混并）。 */
+export interface ClaimRef {
+  artifactId: string;
+  artifactRevision: number;
+  claimId: string;
+}
+
+export interface FrozenClaim extends ClaimRef {
+  statement: string;
+}
 
 export interface ReviewPosition {
   reviewerMemberId: string;
-  targetClaimId: string;
+  target: ClaimRef;
   stance: 'agree' | 'disagree' | 'needs_evidence';
 }
 
+/** 运行范围唯一争议身份：含 runId 的稳定散列（不同 run 同名 claim 不冲突）。 */
+export function issueIdFor(runId: string, ref: ClaimRef): string {
+  const h = createHash('sha256').update(`${runId}|${ref.artifactId}|${ref.artifactRevision}|${ref.claimId}`).digest('hex');
+  return `iss_${h.slice(0, 24)}`;
+}
+
 export interface DerivedIssue {
-  /** 派生自被异议的 claim：`iss_{claimId}`（同 claim 的异议合并为一项争议）。 */
   issueId: string;
-  targetClaimId: string;
+  target: ClaimRef;
   statement: string;
   status: 'open';
   disagreeMemberIds: string[];
@@ -77,21 +133,37 @@ export interface DerivedIssue {
 }
 
 /**
- * 由互评立场构建结构化争议清单：只收 disagree/needs_evidence；
- * 全员同意的 claim 不进争议（无争议 → 跳过 ISSUE_DISCUSSION 直入 SYNTHESIS）。
+ * 校验互评引用属于当前冻结可读版本（组装/提交侧调用，不信模型自报）：
+ * 未知成果、错误版本、未知 claimId → 整份拒绝并指出首个违规项。
+ */
+export function validateClaimReferences(frozenClaims: ReadonlyArray<FrozenClaim>, reviews: ReadonlyArray<ReviewPosition>): DomainResult<{ matched: ReadonlyArray<ReviewPosition> }> {
+  const index = new Set(frozenClaims.map((c) => `${c.artifactId}|${c.artifactRevision}|${c.claimId}`));
+  for (const r of reviews) {
+    const key = `${r.target.artifactId}|${r.target.artifactRevision}|${r.target.claimId}`;
+    if (!index.has(key)) {
+      return domainErr('CLAIM_NOT_FOUND', `互评引用未获准的结论版本：artifact=${r.target.artifactId} rev=${r.target.artifactRevision} claim=${r.target.claimId}（评审人 ${r.reviewerMemberId}）`);
+    }
+  }
+  return domainOk({ matched: reviews });
+}
+
+/**
+ * 由互评立场构建结构化争议清单（按结论三元组合并同名项）：
+ * 只收 disagree/needs_evidence；全员同意的 claim 不进争议。
  */
 export function deriveIssues(
-  claims: ReadonlyArray<{ claimId: string; statement: string }>,
+  runId: string,
+  frozenClaims: ReadonlyArray<FrozenClaim>,
   reviews: ReadonlyArray<ReviewPosition>,
 ): DerivedIssue[] {
   const issues: DerivedIssue[] = [];
-  for (const claim of claims) {
-    const disagree = reviews.filter((r) => r.targetClaimId === claim.claimId && r.stance === 'disagree').map((r) => r.reviewerMemberId);
-    const needsEvidence = reviews.filter((r) => r.targetClaimId === claim.claimId && r.stance === 'needs_evidence').map((r) => r.reviewerMemberId);
+  for (const claim of frozenClaims) {
+    const disagree = reviews.filter((r) => r.target.artifactId === claim.artifactId && r.target.artifactRevision === claim.artifactRevision && r.target.claimId === claim.claimId && r.stance === 'disagree').map((r) => r.reviewerMemberId);
+    const needsEvidence = reviews.filter((r) => r.target.artifactId === claim.artifactId && r.target.artifactRevision === claim.artifactRevision && r.target.claimId === claim.claimId && r.stance === 'needs_evidence').map((r) => r.reviewerMemberId);
     if (disagree.length === 0 && needsEvidence.length === 0) continue;
     issues.push({
-      issueId: `iss_${claim.claimId}`,
-      targetClaimId: claim.claimId,
+      issueId: issueIdFor(runId, claim),
+      target: { artifactId: claim.artifactId, artifactRevision: claim.artifactRevision, claimId: claim.claimId },
       statement: claim.statement,
       status: 'open',
       disagreeMemberIds: disagree,
@@ -122,7 +194,7 @@ export function checkpointEligible(input: {
 export interface ClaimRatifyRecord {
   claimId: string;
   memberId: string;
-  /** null = pending/missing（未收到答复；关闭屏障后落 missing）。 */
+  /** null = 未提交（pending/missing；程序记 missing 不等于模型明确 unconfirmed）。 */
   stance: 'confirm' | 'conditional' | 'object' | 'unconfirmed' | null;
   responseStatus: 'pending' | 'submitted' | 'missing';
 }
