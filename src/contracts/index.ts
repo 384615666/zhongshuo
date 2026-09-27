@@ -20,3 +20,4 @@ export * from './runtime.ts';
 export * from './contextBundle.ts';
 export * from './prompts.ts';
 export * from './daemonIpc.ts';
+export * from './deliberation.ts';

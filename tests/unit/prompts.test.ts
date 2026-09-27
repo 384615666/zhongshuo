@@ -75,14 +75,29 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
     if (r.ok) expect(r.value).toContain('你是本任务唯一执行成员');
   });
 
-  it('AUTO/DELIBERATE/checkpoint → M0 未实现，组装失败（不降级渲染）', () => {
+  it('AUTO/未知阶段/非 host 的 checkpoint → 未实现，组装失败（不降级渲染）', () => {
     for (const input of [
       { mode: 'AUTO', role: 'coordinator', stage: null, turnPurpose: 'stage_work' },
-      { mode: 'DELIBERATE', role: 'participant', stage: 'INDEPENDENT', turnPurpose: 'stage_work' },
+      { mode: 'DELIBERATE', role: 'participant', stage: 'UNKNOWN_STAGE', turnPurpose: 'stage_work' },
       { mode: 'DIRECT', role: 'executor', stage: null, turnPurpose: 'checkpoint' },
     ]) {
       expect(selectStageInstruction(input)).toMatchObject({ ok: false, error: { code: 'CAPABILITY_UNSUPPORTED' } });
     }
+  });
+
+  it('M1 DELIBERATE 各阶段模板可选；checkpoint 仅 host（DEV-21-M1）', () => {
+    for (const input of [
+      { mode: 'DELIBERATE', role: 'participant', stage: 'INDEPENDENT', turnPurpose: 'stage_work' },
+      { mode: 'DELIBERATE', role: 'participant', stage: 'CROSS_REVIEW', turnPurpose: 'stage_work' },
+      { mode: 'DELIBERATE', role: 'participant', stage: 'ISSUE_DISCUSSION', turnPurpose: 'stage_work' },
+      { mode: 'DELIBERATE', role: 'host', stage: 'ISSUE_DISCUSSION', turnPurpose: 'checkpoint' },
+      { mode: 'DELIBERATE', role: 'host', stage: 'SYNTHESIS', turnPurpose: 'stage_work' },
+      { mode: 'DELIBERATE', role: 'participant', stage: 'RATIFY', turnPurpose: 'stage_work' },
+    ]) {
+      expect(selectStageInstruction(input).ok).toBe(true);
+    }
+    // checkpoint 模板 host 专属：普通成员不得复用（§6.1）。
+    expect(selectStageInstruction({ mode: 'DELIBERATE', role: 'member', stage: 'ISSUE_DISCUSSION', turnPurpose: 'checkpoint' })).toMatchObject({ ok: false });
   });
 });
 

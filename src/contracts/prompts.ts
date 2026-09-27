@@ -312,11 +312,57 @@ export function selectStageInstruction(input: {
   if (input.mode === 'DIRECT' && input.role === 'executor' && (input.stage == null || input.stage === 'direct.work') && input.turnPurpose === 'stage_work') {
     return domainOk(DIRECT_EXECUTOR_INSTRUCTION);
   }
+  if (input.mode === 'DELIBERATE') {
+    const key = `${input.stage ?? ''}|${input.turnPurpose}`;
+    const template = DELIBERATE_STAGE_TEMPLATES[key];
+    if (template != null && (input.turnPurpose !== 'checkpoint' || input.role === 'host')) {
+      return domainOk(template);
+    }
+  }
   return domainErr(
     'CAPABILITY_UNSUPPORTED',
-    `模板未实现（mode=${input.mode} role=${input.role} stage=${input.stage} purpose=${input.turnPurpose}）；M0 仅 DIRECT/stage_work`,
+    `模板未实现（mode=${input.mode} role=${input.role} stage=${input.stage} purpose=${input.turnPurpose}）；已实现=M0 DIRECT/stage_work、M1 DELIBERATE 各阶段`,
   );
 }
+
+// ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
+
+const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
+  'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮要求**先独立完成**：
+- 只依据任务目标与分析基线资料作答；不假设、不引用其他成员的结论（本轮输入也不包含它们）。
+- 结论逐条给出 claim：说明是观察到的事实（observed）、推断（inferred）还是建议（proposal），附证据编号与不确定性。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+  'CROSS_REVIEW|stage_work': `你是互评成员。对其他成员的初稿逐条 claim 给出评审意见：
+- 立场只能是 agree / disagree / needs_evidence，必须写明理由与证据编号；可给建议的验证方式。
+- 只评审输入中列出的 claimId；不引入未提供的内容。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+  'ISSUE_DISCUSSION|stage_work': `你是分歧讨论参与成员。本轮争议清单与证据版本已冻结：
+- 对每项争议给出立场（agree/disagree/needs_evidence）与理由；有新证据才填 newEvidence（证据编号须来自本轮输入）。
+- 不重复已有立场时也须显式作答（矩阵以本轮记录为准）。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+  'ISSUE_DISCUSSION|checkpoint': `你是本轮主持复核（第 3 轮强制检查点）。评估是否仍有**新证据**值得继续讨论：
+- verdict=continue 仅当存在明确的新证据或新的可验证路径；否则 stop 转入整合。
+- 理由必须引用本轮输入中的证据；不得以“再聊聊”为由继续。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+  'SYNTHESIS|stage_work': `你是主持者，负责整合稿。基于各成员报告、互评与最终意见：
+- 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧必须如实列入 disputedClaims（含分歧摘要），不得用一句总结覆盖反对意见。
+- 不得把缺席/未回复成员记为同意。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+  'RATIFY|stage_work': `你是确认成员。对整合稿的每条结论给出独立确认或异议：
+- stance 只能是 confirm / conditional（附条件）/ object（附理由）/ unconfirmed（无法判断）。
+- 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
+- 完成时严格按输出契约的 JSON 字段提交。`,
+};
+
+/** 各阶段输出契约（ADR-I39：精确 JSON 字段集，与 deliberation.ts schema 一字不差）。 */
+export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
+  'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"一句话总览","claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
+  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","reviews":[{"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
+  'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
+  'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
+  'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"整合结论总览","claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
+  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
+};
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------
 

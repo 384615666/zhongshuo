@@ -19,11 +19,19 @@
 
 - 无遗留进程（本轮 electron/daemon 均清理）。
 
+## M1 第一批（已提交，本轮内完成）
+
+- **contracts/deliberation.ts**：§6.4 报告/互评/立场/检查点/整合/确认 payload schema（schemaVersion 字面量，模型自报身份字段一律程序赋值）；E12 预算推导（6N+1+C / 7N+2+C）与尾部账目（M/U/I、S=1/Q=N、R/T/F、stageAvailableTurns、occupyTail/settle 纯函数）。
+- **domain/deliberation/stageMachine.ts**：INDEPENDENT/CROSS_REVIEW 屏障（E4 缺席不默认完成、全员无输入 BLOCKED）；争议派生（同 claim 合并、无争议跳过讨论）；第 3 轮检查点资格（host 专属）；共识聚合（unanimous/qualified/disputed/unconfirmed，缺席不覆盖反对）。
+- **persistence/stores/deliberation.ts**：artifacts 落 appData 管理目录+hash；synthesis_claims 冻结；RATIFY 矩阵初始化/提交事务（claim 全覆盖且无重复、非预期成员/阶段不符整份拒绝、同 resultKey 重放、已确认不可自然语言覆盖、关屏障 pending→missing 不伪造 turn_id）；issues/positions。
+- **DEV-21-M1 模板**：DELIBERATE 六阶段指令（(mode,role,stage,turnPurpose) 选择表扩展，checkpoint host 专属）+ 精确 JSON 输出契约（ADR-I39 口径）。
+- 测试 +19：预算 4 / 阶段机 10 / 持久化 5（含 prompts 表更新）。默认 295/295。
+
 ## 下一步（直接开工，无需再确认）
 
-**G3 已收口，按授权默认进入 M1**：
+**G3 已收口，M1 第一批（合同/纯逻辑/持久化）已落地；接续**：
 
-1. **DEV-08**（独立分析与互评：冻结名单、阶段过滤、报告校验）——M1 首包。
+1. **DEV-08/09 worker 编排**：dispatchWorker DELIBERATE 分支——阶段过滤输入组装（INDEPENDENT 不含他人稿）、逐成员派发+产物校验（一次格式修复）、阶段推进事务、E4 缺席定时、budget_json 贯通尾部占用/结算；route.mode 门禁放开 DELIBERATE（有实现后再放开，不提前）。
 2. **DEV-09**（分歧与整合：争议、轮次预算、确认矩阵）。
 3. **DEV-21-M1 段**（提示词/输出合同从 M0 DIRECT 扩展到 M1 场景）。
 4. 每包结束更新总账四件套 + 本文件；G4 验收时复用本轮 UI e2e 框架（CDP 驱动）扩场景。
