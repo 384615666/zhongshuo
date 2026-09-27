@@ -1,6 +1,8 @@
 # 众说开工契约与实施基线 v1.23
 
-日期：2026-09-26。主设计 §4.6、§8.3、§12、§15、§20、§31 的规范性补充；由主设计引用生效。解决 R4—R11、E11/E13 的设计缺口，设计完成不等于程序实现或行为认证。产品约束延续用户既有决定；本文新增默认值属于实施默认，不另增产品功能。
+日期：2026-09-26。主设计 §4.6、§8.3、§12、§15、§20、§31 的规范性补充；由主设计引用生效。解决 R4/R5/R6/R8/R9/R10/R11、E11/E13 的设计缺口；R7 并行增强按既有决定延期。设计完成不等于程序实现或行为认证。产品约束延续用户既有决定；本文新增默认值属于实施默认，不另增产品功能。
+
+**本轮交付边界**：用户最新指令为“只看文档、写文档，不跑测试”。以下类型、迁移、工作包和验收条目是交给后续施工的规范；本轮最终结论只评价文档是否具备开工依据，不认证原型、runtime、数据库或 MCP 的实际能力。
 
 ## 1. 当前范围与工程入口
 
@@ -8,7 +10,7 @@
 - 原型是交互基准，正式工程复用经过核对的组件和样式；不能将原型内存 actions/store 直接作为数据库或调度内核。主设计决定业务语义，原型决定已确认的交互；发现两者冲突先定位并记录，不自行用 mock 行为覆盖主设计。
 - DEV-01 仅 contracts、路由纯函数、schema 与测试。M0 依次完成契约、持久化/fake adapter、目录/daemon、真实 runtime、线程隔离、界面接入。不要将本次文档收口当作后端已实现。
 - `parallel_writers` 及 worktree 增强按 §14.7 延期，当前实现只开放 single_writer；旧配置若为 parallel_writers，显示能力不可用并按单写者调度，不隐式开放。重叠目录锁域、前像、停止旧进程与恢复检查继续必做。
-- 提交前逐项确认改动归属；默认新施工分支 `codex/<work-package>`，保留用户未提交改动，不自动全量 add、提交或推送其他会话的工作。
+- 提交前逐项确认改动归属；本次全功能施工采用 `codex/full-implementation`，各包在同一施工分支形成检查点，已有合适分支或用户指定时沿用，具体以 [全功能任务书 §3.3](./dev-briefs/full-implementation-brief-glm5.3.md) 为准。`codex/<work-package>` 仅是独立单包任务未另作约定时的命名模板，不要求全功能施工每包一支。保留用户未提交改动，不自动全量 add、提交或推送其他会话的工作。
 
 ## 2. R4：项目文件夹内的普通一对一对话
 
@@ -22,16 +24,19 @@
 
 后续发送可续接同一私信 session，因此能记住该对话上文；不同 conversationId 永不共享 session。重试同一消息不重复创建执行；显式“重试回答”创建新 attempt 并保留旧输出。归档后禁止新发/续跑/提醒，保留历史；正在执行的运行按停止流程收尾，无法确认退出时维持锁和明确故障，不伪称已停止。
 
+项目 taskReviewEnabled 对 DM 执行同样生效：任务创建时快照 reviewPolicy；关闭时交付即结束，开启时在对话交付消息内提供验收操作，不增加房间任务号或群聊任务卡。验收绑定 deliveryId/revision/manifestHash，仅该对话有权人类可操作；待我处理可以汇总入口但不能向其他主体泄露私信正文。
+
 人对人只投递保存，不产生 Agent 运行。Agent 对 Agent 的消息默认只投递，不以每条输出继续自动唤醒：需要既有授权任务链的显式派发，并继承链预算/范围/停止代次；不新增无界互聊循环。该扩展随 FULL-02，v0.1 先交付本机用户与项目 Agent 的一对一闭环，保留其他参与者类型契约。
 
 ### 2.2 表结构增量（§12.2 的正式增量）
 
 | 实体 | 字段与约束 |
 |---|---|
-| conversations | id、project_id、kind(room/dm)、room_id?、title、archived_at、revision、last_message_seq；room 类型恰有一个所属 room 且同项目唯一，dm 的 room_id 为 NULL |
+| conversations | id、project_id、kind(room/dm)、room_id?、title、archived_at、revision、last_message_seq；每个 room 恰有一个对应 conversation，(project_id,room_id) 在非 NULL 行唯一；同项目可有多个房间/会话，dm 的 room_id 为 NULL |
 | dm_participants | project_id、conversation_id、principal_type(human/agent)、principal_id；组合唯一；dm 创建事务中必须恰好两个不同主体，v0.1 为一个本机用户和一个本项目 Agent；创建后不可追加第三人或替换对端 |
+| conversation_read_states | project_id、conversation_id、viewer_id、last_read_seq、revision；(conversation_id,viewer_id) 唯一，DM 阅读水位；仅真实授权读取后可推进，单调不回退；房间线程水位仍用 thread_read_states |
 | conversation_threads | 增 conversation_id；房间 thread 保留 room_id；DM 不创建 thread（thread_id 为 NULL） |
-| messages | 增 conversation_id、conversation_seq、client_message_id?、via_connection_id?；DM room_id/thread_id 均 NULL；房间消息保留旧关联；(conversation_id,conversation_seq) 唯一；序号由服务端事务分配 |
+| messages | 增 conversation_id、conversation_seq、client_message_id?、via_connection_id?；DM room_id/thread_id/thread_message_seq 均 NULL；房间消息保留旧关联；(conversation_id,conversation_seq) 唯一；序号由服务端事务分配 |
 | tasks | 增 kind(room_task/dm_turn)、conversation_id；dm_turn 的 room_id、conversation_thread_id、room_task_number 均 NULL，root_message_id 指本次用户消息；room_task 继续原约束；部分唯一索引仅约束非 NULL 房间任务号 |
 | workflow_runs / agent_turns | 增 conversation_id；DM thread_id 可空，run/turn 必须与 task 同项目同会话；run 内部 mode=DIRECT，唯一参与者为对端 Agent |
 | runtime_sessions | 增 conversation_id、scope_kind(task/dm)；房间按 task/member/generation 隔离；DM 按 project/conversation/member/generation 复用，task_id 对 DM session 为空；当前 task 由 turn 绑定，不随会话复用改写历史 turn |
@@ -49,7 +54,7 @@ type MessageTarget =
   | { kind: 'room_root'; projectId: string; conversationId: string; roomId: string }
   | { kind: 'thread'; projectId: string; conversationId: string; threadId: string }
   | { kind: 'dm'; projectId: string; conversationId: string };
-type DispatchDisposition = 'none' | 'queued' | 'paused';
+type DispatchDisposition = 'none' | 'queued' | 'paused' | 'blocked';
 // 默认发送意图为 default；DM 同样保留菜单内一次性 record_only，不恢复常驻切换。
 ```
 
@@ -58,12 +63,16 @@ type DispatchDisposition = 'none' | 'queued' | 'paused';
 | conversation.create | projectId、kind=dm、peerMemberId、title?、commandId | conversationId、revision；主体从 CallerContext 推导；重复同 commandId 返回同一对话，不按成员自动合并 |
 | conversation.list | projectId、archived?、limit、cursor? | 本人有权看到的会话摘要、最后消息与未读；不返回其他 audience 正文 |
 | conversation.history | conversationId、beforeSeq?、limit | 授权历史、nextCursor；Agent 必须同时受其 turn 的上下文范围限制 |
+| conversation.markRead | conversationId、throughMessageSeq | 当前人类 viewer 的 lastReadSeq/revision；不得替另一参与者标记已读；正文未获权不可仅凭 ID 推进 |
+| conversation.rename | conversationId、title、expectedRevision | 更新标题与 revision；不更换 project/对端、不重置历史或 session |
 | conversation.archive / restore | conversationId、expectedRevision | revision；归档触发上述停止/暂停规则；restore 不自动续跑 |
 | message.submit | target、body、attachmentRefs[]、intent、mentions[]、commandId | messageId、conversationId、threadId?、taskId?、runId?、disposition、resolvedRoute；DM mentions 必须为空；record_only 只保存、不建 task/run、不占预算，成功后意图复位；human 对端无 task/run |
 | task.stop | taskId、targetRunId、expectedStopGeneration、commandId | stopping/stopped/already_stopped/target_obsolete；不停止更新的 run |
 | task.resume | taskId、expectedRevision、commandId | 新 run 或恢复的受支持 attempt；只允许人类显式继续，重新核对归档、成员、权限和预算 |
 
-预算不足/对端不可用/权限档位未验证时：消息仍可保存，内部任务标 BLOCKED/WAITING_USER、无运行或无派发，回执给出原因；权限与目标校验失败则整笔拒绝，不能先泄露/保存到其他会话。消息、内部任务、预算占用、outbox 和回执须原子提交；“已发送”只证明保存，“正在运行”来自真实 turn.started。
+预算不足/对端不可用/权限档位未验证时：消息仍可保存，内部任务标 BLOCKED/WAITING_USER，disposition=blocked 且给 reason、无运行或无派发；权限与目标校验失败则整笔拒绝，不能先泄露/保存到其他会话。被占用对话的下一条请求 disposition=queued，但没有活动执行许可；用户暂停队列则 paused。消息与内部任务及回执原子提交；若同时获准派发，预算占用和 outbox 也在该事务提交，否则待队列出队时以独立事务重新检查并占用，禁止先报 queued 后无凭据悄悄执行。“已发送”只证明保存，“正在运行”来自真实 turn.started。
+
+conversation.list/history 的 limit 默认 50、范围 1—200；cursor 绑定主体、会话/过滤条件和授权版本，规则沿 §3.3。重命名、归档、阅读水位均使用共用 CommandEnvelope 的 commandId，不因表中省略而成为非幂等写入口。DM 附件、搜索结果、导出、通知预览共用 conversationId 校验；跨会话引用必须显式授权版本，不因为同项目或同一 Agent 就自动可见。
 
 DM-BASE-01—08：新建与重复提交；同成员两会话隔离及本会话续接；跨项目目标拒绝；无 @ 派工/无任务号；连续发送串行及停止后暂停队列；归档只读/恢复不自动执行；附件搜索导出 audience 一致；崩溃重启历史保留且未完成运行等待用户。以上为正式实现验收，原型只能覆盖其中 UI/mock 部分。
 
@@ -76,6 +85,8 @@ DM-BASE-01—08：新建与重复提交；同成员两会话隔离及本会话�
 有效范围为调用凭据 ∩ 当前授权 ∩ 目标 audience ∩ 运行链上限；枚举、读取、派发、停止分开判断。调用者有项目权限仍不能默认读该项目所有 DM。MCP 首批只暴露房间/线程目标，DM 必须新增显式会话授权与工具契约后才开放，不能经 tasks_get/artifacts_read/events_list 间接读取私信。
 
 预算是第四维：DEV-01 定义 BudgetGrant/Reservation 与纯校验，DEV-02/05 承担事务预占/结算；每次派发同时检查任务预算和发起连接工作链预算，子任务/交接继承上限。检查与占用必须同事务；无真实价格时保留 unknown，不伪造费用为零。读取权限不附带任何模型调用额度。
+
+`connectionId` 表示当前直接接入的外部连接，`sourceConnectionId` 表示任务链最初发起连接，两者分开。本机用户新建根任务的 sourceConnectionId 为 null；外部任务派生的子任务、提醒和本地 zs 调用必须从服务端 run/父任务继承来源与范围，不能因当前入口为本地就清空限制。Message.via_connection_id 只标本条消息的直接代发来源，不作为任务链授权真源。
 
 ### 3.2 幂等、查询与停止
 
@@ -110,7 +121,7 @@ FOLLOW-01—04：三名单不混用；移出时待发/在跑/下一阶段分支�
 
 ## 5. R6：缺席、超时与迟到结果
 
-- absenceGrace（默认 20 分钟）从成员在该阶段首个真实 turn.started 起算；等待写锁/并发/用户确认不计缺席，等待原因单列。未开始成员由 dispatchWaitDeadline 管理（实施默认 20 分钟，可配置），超过后按 unavailable 缺席处理，不能一直阻挡其他已完成成员。
+- absenceGrace（默认 20 分钟）从成员在该阶段首个真实 turn.started 起算，以持久化累计的非暂停时长计数；等待用户确认期间暂停该时钟，等待原因单列。未开始成员由 dispatchWaitDeadline 管理（实施默认 20 分钟，可配置），排队等待写锁/并发单列为 waiting_dispatch，超过该独立截止才按 unavailable 缺席处理，不能算成“模型已运行 20 分钟”。审批自己的有效期不随之延长；审批超时走拒绝/失败分支。
 - turnDeadline 管单次运行超时；两个截止同时发生，先处理终止/超时与进程确认，再计算屏障；该成员不同时计为有效完成和缺席。计时信息持久化，睡眠/重启后核对实际截止，不自动补跑。
 - 屏障满足“全员有效完成，或每个未完成席位已有明确失败/缺席/撤出原因”可自动推进；至少要有一份有效输入。全员缺席/无有效输入进入 BLOCKED，无模型合成虚构报告，用户可重试/调整预算/取消。
 - 阶段因缺席推进不强杀仍在跑的成员，原输出凭原 turn 凭据与原 resultKey 可上传至迟到收件区，但**不能作为当前阶段提交、推进屏障或触发新派发**。原 attempt 被重试取代、停止或授权撤销后，普通提交拒绝 STALE_EXECUTION；仅 adapter 的受信诊断通道可存原始残留，标 invalid，不当成果。
@@ -146,6 +157,8 @@ resultKey 由 daemon 为逻辑输出分配，绑定 run/stage/member/targetRevis
 E11-01—06：每行正反用例；合法互唤恰好一次；阶段禁止/名单外零派发；DIRECT 零扩员；双提交同 key 去重/异参冲突；旧代次/修复/迟到分支独立。
 
 ## 7. E13/R9：提示词、输出与恢复
+
+2026-09-27 实施顺序澄清：DEV-21-M0 的最小合同/模板定义依 DEV-01/03，在真实 runtime 调用前具备；注入/续接/恢复的实际验证与 DEV-06 联合完成。下文对 DEV-06 的依赖指适配验证，不表示必须等 DEV-06 全包完成才定义合同。DEV-17 同样先交付最小隔离，再联合完成正式隔离验证，G3 开放前全部具备。
 
 正式包编号 DEV-21；M0 交付 DIRECT 和权限/注入基础，M1 交付研讨模板，M2 交付 AUTO，M3 交付 DM/提醒/跟进模板。依赖 DEV-01/03/06，验收 PP-01—12；schema 源归正式 contracts，DEV-01 写基础目标/信封，DEV-21 写阶段输出 schema，不要求先把 FULL 都写成字段。
 
@@ -189,8 +202,8 @@ LAN-01—08：错误/重复/过期码；限速；证书不信任；Origin/Host �
 | G2 原生权限 B6 | DEV-06/10 | runtime+adapter+OS 版本、实际命令/脱敏事件、文件前后 hash；直接编辑/shell 写、确认允许/拒绝、续接规则、故障不降级；Codex 走 App Server |
 | G3 M0 真实闭环 | DEV-07/17/21-M0 | 真实目录→指定成员→读真实 fixture→正确串流→停止进程→重启保留记录；会话不串、失败可解释 |
 | G4 协作 | DEV-08—11/21 | FOLLOW/LATE/E11 正反例，M1 用 3—5 个真实任务对比单成员，保留合理分歧 |
-| G5 发布 | DEV-16 | M3 全包及 DEV-18—25；AT/RT/TH/PP/WPV 与分批表首版子集逐条通过，不能只看旧 DEV-10—15 |
+| G5 发布 | DEV-16 | M3 全包及 DEV-18/19/21—25（不把延期的 DEV-20 加入首版依赖）；AT/RT/TH/PP/WPV 与分批表首版子集逐条通过，不能只看旧 DEV-10—15 |
 
-B6、固定 runtime 注入恢复、Electron/SQLite ABI 和真实 G3 目前仍未实现/未认证；本轮不调用付费模型、不修改全局 CLI 或假造通过。DEV-02 锁 Node/SQLite 版本并跑事务/重启 fixture；DEV-05 锁 Electron，按 SQLite 实际运行进程选择 Node ABI 或 Electron rebuild，至少跑全新依赖安装、建库/读写/退出重启。由独立 daemon 持有 SQLite 时不得错误要求 renderer 加载 native module。安装包 gate 在 DEV-15，不能推迟首次 native 模块验证。
+B6、固定 runtime 注入恢复、Electron/SQLite ABI 和真实 G3 仍待对应工程实施与认证。DEV-02 锁 Node/SQLite 版本并跑事务/重启 fixture；DEV-05 锁 Electron，按 SQLite 实际运行进程选择 Node ABI 或 Electron rebuild，至少跑全新依赖安装、建库/读写/退出重启。由独立 daemon 持有 SQLite 时不得错误要求 renderer 加载 native module。安装包 gate 在 DEV-15，不能推迟首次 native 模块验证。这些是后续工作包的执行要求，本次文档阶段不运行。
 
 每包报告必须列：基线 SHA 与工作树摘要、修改文件、实现范围、未实现项、命令/退出码/测试数、证据路径、失败原因。原型视觉/mock 回归不能勾 G1/G2/G3；文档完成不勾 runtime 支持。C8 分批总表见 `development-delivery-matrix-v1.23.md`。

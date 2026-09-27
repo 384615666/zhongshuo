@@ -1063,16 +1063,16 @@ fencing 能阻止过期进程写业务状态，但不能撤销它已执行的文
 | project_members | id、project_id、profile_id、display_name、enabled、settings_revision |
 | rooms | id、project_id、name、coordinator_member_id、settings_json、archived_at、revision；新房间 coordinator 沿用项目当前默认（E5） |
 | room_members | room_id、member_id，组合唯一 |
-| conversation_threads | id、project_id、room_id、anchor_message_id、root_task_id（讨论串为空，E1）、status、last_message_seq、revision |
-| messages | id、project_id、room_id、thread_id（顶层为 NULL）、task_id、reply_to_message_id、thread_message_seq、author_type（human/agent/system/third_party_app，与 Raft 1.0.32 一致，为应用生态预留）、author_id、body_json、status、created_at |
+| conversation_threads | id、project_id、conversation_id、room_id、anchor_message_id、root_task_id（记录串为空，E1）、status、last_message_seq、revision；仅房间会话创建 thread，DM 不伪造 thread |
+| messages | id、project_id、conversation_id、conversation_seq、room_id?、thread_id?、task_id?、reply_to_message_id、thread_message_seq?、author_type（human/agent/system/third_party_app）、author_id、via_connection_id?、body_json、status、created_at；DM room/thread/线程序号为空，conversation_seq 非空；见 v1.23 §2 |
 | message_revisions | message_id、revision、body_json；编辑不改变历史派发输入 |
-| tasks | id、project_id、room_id、conversation_thread_id、root_message_id（仅根任务）、room_task_number、owner_member_id、parent_task_id、title、objective、status、revision、review_policy（创建时快照）、current_delivery_id |
+| tasks | id、project_id、conversation_id、kind(room_task/dm_turn)、room_id?、conversation_thread_id?、root_message_id（房间根任务/DM 本次用户输入）、room_task_number?、owner_member_id、parent_task_id、source_connection_id?、title、objective、status、revision、review_policy（创建时快照）、current_delivery_id；dm_turn 无 room/thread/房间任务号，来源连接沿派生链继承 |
 | task_deliveries | id、task_id、run_id、revision、manifest_hash、artifact_refs_json、change_set_refs_json、verification_refs_json、review_status（not_required/pending/accepted/changes_requested/superseded）、reviewed_by、reviewed_at、review_note；(task_id,revision) 唯一，一个任务最多一个 pending 版本；关闭验收时 reviewed_by/at 为空，不伪造人工通过 |
 | task_dependencies | task_id、depends_on_task_id，唯一；服务层验证无环 |
-| workflow_runs | id、task_id、thread_id、mode、task_revision、status、stage、round_no、roster_revision、budget_json、revision |
+| workflow_runs | id、task_id、conversation_id、thread_id?、mode、task_revision、status、stage、round_no、roster_revision、budget_json、revision；DM 内部 mode=DIRECT、thread_id 为空；同对话串行 |
 | run_participants | run_id、member_id、role、expected、status；组合唯一 |
-| agent_turns | id、run_id、thread_id、member_id、stage_key、turn_purpose（stage_work/checkpoint/format_repair）、attempt、epoch、status、dispatch_key、session_id；stage_key 包含阶段、轮次、职责和目标成果版本，避免主持 checkpoint 与同轮普通意见冲突 |
-| runtime_sessions | id、project_id、thread_id、member_id、task_id、session_generation、provider_session_id、cwd、capabilities_json |
+| agent_turns | id、run_id、conversation_id、thread_id?、member_id、stage_key、turn_purpose（stage_work/checkpoint/format_repair）、attempt、epoch、status、dispatch_key、session_id；stage_key 包含阶段、轮次、职责和目标成果版本，避免主持 checkpoint 与同轮普通意见冲突；DM thread_id 为空，所有关联按会话验证 |
+| runtime_sessions | id、project_id、conversation_id、scope_kind(task/dm)、thread_id?、member_id、task_id?、session_generation、provider_session_id、cwd、capabilities_json；房间按 task 隔离，DM 按 conversation/member/generation 续接且 task_id 为空；不跨对话复用 |
 | domain_events | seq、event_id、schema_version、project_id、aggregate_id、kind、payload_json、created_at |
 | outbox | id、dispatch_key、turn_id、status、lease_owner、lease_until、attempt_epoch |
 | command_receipts | idempotency_scope、command_id、payload_hash、result_json、created_at；(idempotency_scope,command_id) 唯一，scope 从认证主体推导；保留去重墓碑，详见 v1.23 §3.2 |
@@ -1091,13 +1091,15 @@ fencing 能阻止过期进程写业务状态，但不能撤销它已执行的文
 | context_entries | id、project_id、scope、kind、revision、source_refs_json、confirmed_by |
 | thread_read_states | thread_id、viewer_id、last_read_message_seq、updated_at，组合唯一 |
 | thread_subscriptions | thread_id、viewer_id、followed、muted，组合唯一；不是执行队列 |
+| thread_agent_followers | project_id、conversation_id、thread_id、member_id、status、revision、added_by、updated_at；线程/成员组合唯一；跨运行跟进名单，与阅读关注及本次 run_participants 分离，见 v1.23 §4 |
+| conversation_read_states | project_id、conversation_id、viewer_id、last_read_seq、revision；DM 阅读水位，(conversation_id,viewer_id) 唯一，单调推进且不可替其他参与者标已读 |
 | saved_items | viewer_id、message_id、created_at，组合唯一 |
 | attention_items | id、viewer_id、thread_id、source_event_id、kind、read_at，事件去重 |
 | message_attachments | id、message_id、thread_id、artifact_id、display_name、mime_type、source_hash |
 | context_grants | id、target_thread_id、source_ref_json、source_revision、granted_by、created_at、revoked_at |
-| conversations、conversation_members | M0 建公共会话基础，M3 接 DM；字段/成员真源以 v1.23 §2.2 为准；房间和 DM 均绑定 project_id |
+| conversations、conversation_members | M0 建公共会话基础，M3 接 DM；conversations 含 id/project_id/kind/room_id?/title/archived_at/revision/last_message_seq；每个 room 恰有一个会话，同项目可有多个会话。conversation_members 仅房间成员投影，DM 唯一名单来源为 dm_participants；见 v1.23 §2.2 |
 | dm_participants | M3：一对一恰有两个不同主体（当前用户与对端 Agent），不是数据库只有一个参与者；同一成员可有多个 conversationId，见 v1.23 §2 |
-| reminders | M3（决策 45，E17）：ownerMemberId、threadId、taskId、时区、计划、授权范围、预算 |
+| reminders | M3：ownerMemberId、conversationId、threadId?、taskId?、sourceRef、时区、计划、nextAt、status、revision、授权范围、预算；occurrence 以 reminderId+scheduledAt 唯一；DM 不伪造 thread，见 v1.23 §7 |
 | file_comments | M3（决策 33，E17）：artifactId/version/hash、锚点类型与坐标/行/时间 |
 
 确认记录约束：`ratification_records` 的目标结论外键引用 synthesis_claims 组合键，成员外键引用 run_participants(run_id,member_id)；服务层核对相同项目、线程和冻结 rosterRevision。submitted 必须有有效 stance、源响应及实际提交 turn；conditional 必须有非空条件，object/unconfirmed 必须给理由；pending/missing 不得携带伪造 stance，missing 必须给程序原因。整合稿修订使用新 revision 并创建全新矩阵，不更新旧结论文本或复制旧确认。父 artifact 删除受引用约束，历史记录保留至显式数据清理策略执行。原始响应、矩阵记录、domain_events 和 command_receipts 在同一提交事务确认。
@@ -1383,6 +1385,9 @@ interface DomainEvent<T> {
 | thread.history | threadId、beforeSeq?、limit | 串内回复；agent 调用额外限制任务与阶段 |
 | thread.markRead | threadId、throughMessageSeq | 更新后的未读数 |
 | thread.follow | threadId、followed、muted | 阅读关注设置；不触发模型调用 |
+| thread.members.add / remove | threadId、memberId、expectedRevision | AI 跟进名单 revision；仅授权人类操作，不修改已有冻结名单，不以新增名单直接派发；v1.23 §4 |
+| conversation.create / list / history / markRead / rename / archive / restore | v1.23 §2.3 的判别参数，写操作使用统一 commandId | 项目内 DM 的创建/历史/水位/标题/生命周期；列表与正文均按 audience 校验 |
+| command.result.get | commandId（scope 从 CallerContext 推导） | 同授权范围的持久回执；正文过期返回 RESULT_EXPIRED，不重复执行；v1.23 §3.2 |
 | thread.copyLink | threadId、messageId? | 本机应用内直达链接 |
 | message.save | messageId、saved | 收藏状态 |
 | message.search | projectId、roomId?、threadId?、query、authorId?、cursor | 来源明确的结果；agent 入口强制限定授权范围 |
@@ -1396,7 +1401,7 @@ interface DomainEvent<T> {
 | room.update | roomId、name?、description?、expectedRevision | 更新后的房间资料 |
 | room.members.add / room.members.remove | roomId、memberIds、expectedRevision | 成员变更结果 |
 | task.steer | taskId、body、deliveryPolicy | accepted / queued / requires_restart |
-| task.stop | taskId | stopping 状态 |
+| task.stop | taskId、targetRunId、expectedStopGeneration、commandId | stopping/stopped/already_stopped/target_obsolete；旧请求不影响新 run，v1.23 §3.2 |
 | project.stopAll | projectId | 新 stopGeneration |
 | task.retry | taskId、sourceRunId、resumePolicy | 新 runId |
 | run.allowMissing | runId、excludedMemberIds、expectedRevision | 新 rosterRevision |
@@ -1809,7 +1814,7 @@ runtime 和 adapter 版本组合分别认证，安装新版本后保留旧认证
 | DEV-13 | 恢复与故障测试 | DEV-02/05/12 | 不确定窗口处理、进程核对、成果一致性 |
 | DEV-14 | UI 完整协作视图 | DEV-07/09/11/12 | 三模式、任务面板、报告、授权与诊断 |
 | DEV-15 | Windows 打包 | DEV-13/14 | 安装、卸载保留数据、托盘、更新迁移验证 |
-| DEV-16 | 发布验收 | DEV-10—15、17—19、21—25；G2/G3/G4 | 必测场景、性能记录、已知限制与兼容表 |
+| DEV-16 | 发布验收 | DEV-10—15、17—19、21—25；适用 G0—G4 | 必测场景、性能记录、已知限制与兼容表；执行并产出 G5，不以 G5 作为自身前置 |
 | DEV-17 | 线程关联与隔离 | DEV-01/02/05 | 目标绑定、专属会话、阶段/跨任务过滤、双任务串线测试；并入 M0 |
 | DEV-18 | 未读与导航 | DEV-07/17 | 回复投影、关注、水位、直达链接、Saved、待我处理；M3 |
 | DEV-19 | 房间协作视图 | DEV-11/12/17 | 根任务看板、来源关联 Files、基础搜索、附件；M3 |
@@ -1940,6 +1945,8 @@ TH-01—TH-09 为 M0 必测，TH-10—TH-15 为 M3 发布必测；后续功能�
 > 为“众说”创建 Windows 本地桌面原型，遵循本报告最新版（当前 v1.10；此处的版本号随报告更新，执行时一律以报告实际最新版为准）。采用独立 contracts、domain、persistence、adapter、daemon 和 UI 边界。实现打开本地目录、默认房间、主对话池、原消息锚定的独立回复串、一个已配置 CLI 成员、结构化 @指定成员、真实文件分析、串内流式回复、任务停止与消息持久化。主池仅保留原消息及回复聚合，每个任务独立会话；主池和线程使用独立输入框及草稿。先用 fake adapter 验证双任务输出归属、上下文隔离、事件和状态，再接入一个经能力检测的真实 runtime。不要调用模型 API 自建执行循环。先完成路由、停止和持久化再扩展自动协作。保留用户已有文件，不安装或修改全局 CLI 配置。
 
 ### 22.2 首批完成定义
+
+本节“首批”指 **M0 技术闭环（DEV-01—07/17/21-M0）**，不等同第一个 DEV-01 包。DEV-01 只做契约/路由与对应纯逻辑测试，禁止把下面的数据库、真实 adapter 和 UI 接入一次塞进 DEV-01；其专属完成定义见任务书。
 
 1. 项目能从明确命令启动，依赖版本固定，有基本开发说明。
 2. 路由模块已为 AUTO、DELIBERATE、DIRECT 定义类型；首批只开放已实现的 DIRECT，未实现模式明确禁用。

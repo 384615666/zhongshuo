@@ -705,7 +705,15 @@ button.composer-target-summary:hover {
  * 按内容需要占宽，不套用普通开关的窄列。
  */
 .pset-row-control.wide {
-  flex: 1 1 auto;
+  /**
+   * `0 1 auto`：控件列**按内容占宽**，不参与拉伸。
+   *
+   * 原来写 `flex: 1 1 auto`，于是宽屏下标签列与控件列各分一半空白 ——
+   * 说明被挤成三行、中间还空一截（1920 档实测看到的）。改成不拉伸后，
+   * 剩余宽度全给标签列，说明少折行；路径与按钮仍靠右对齐。
+   * 仍然允许收缩（`1`）并在窄窗换行，不会溢出。
+   */
+  flex: 0 1 auto;
   min-width: 0;
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -1088,7 +1096,15 @@ button.composer-target-summary:hover {
    * 正文宽度在这里定义，`.settings-body` 取它（同一个变量，避免两处各写一个数就对不上）。
    * 见 `.settings-body` 与 §2.1 的例外条款。
    */
-  --settings-body-max: 880px;
+  /**
+   * 正文宽度**随窗口增长**（2026-09-26 用户反馈："全屏模型下，左右留空有点多"）。
+   *
+   * 原来固定 880px：1920 宽窗口下主内容区有 1668px，正文仍只占 880，两侧各空 ~300px。
+   * 现在下限 880（普通窗口的阅读宽度，也是实测最稳的一档），上限 1040（再宽一行的中文说明就拉成
+   * 八十多字，读起来累）。中间用 vw 过渡 —— 主侧栏是固定 246px，所以 56vw 约等于"主内容区的 62%"。
+   * 注意它只是**上限**：可用宽度不足时列宽照旧收缩（窄窗不会溢出）。
+   */
+  --settings-body-max: clamp(880px, 56vw, 1040px);
   --settings-nav-w: 200px;
   --settings-gap: 22px;
   display: grid;
@@ -1136,7 +1152,14 @@ button.composer-target-summary:hover {
 /* 左栏：分区导航。粘住顶部，内容长了也不用滚回去点分区 */
 .settings-nav {
   position: sticky;
-  top: 0;
+  /**
+   * 贴合位 = 页面顶部留白（`--page-top-gap`，定义在 `.page` 上）。
+   *
+   * 原先是 `top: 0`：左栏自然位置比滚动容器内容盒低 20px，于是**一开始滚动它就往上跳 20px**
+   * 才吸住 —— 用户看到的是"滚动正文时左边目录跟着一起滚"（实测视口 top 58 → 38）。
+   * 对齐之后滚动全程停在原位（实测 58 → 58）。
+   */
+  top: var(--page-top-gap, 20px);
   display: flex;
   flex-direction: column;
   gap: 16px;

@@ -813,9 +813,27 @@ for (const w of [1920, 1600, 1440, 1280, 1100, 900]) {
   await sleep(700);
   const m = await measure();
   check(`${w}px：正文有宽度约束、无水平溢出、标签与控件不重叠`,
-    m?.视口 === w && m.正文宽 > 0 && m.正文宽 <= 900 && m.水平溢出 === 0 && m.重叠 === 0,
+    m?.视口 === w && m.正文宽 > 0 && m.正文宽 <= 1050 && m.水平溢出 === 0 && m.重叠 === 0,
     JSON.stringify(m));
 }
+/* 宽屏要真的用上空间（用户 2026-09-26 反馈"全屏模型下左右留空有点多"） */
+const widthRows = [];
+for (const w of [1440, 1600, 1920]) {
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await sleep(700);
+  const m = await measure();
+  const mainW = await ev(`Math.round(document.querySelector('.main').getBoundingClientRect().width)`);
+  widthRows.push({ w, 正文宽: m?.正文宽 ?? 0, 主区宽: mainW });
+}
+const bodyOf = (n) => widthRows.find((x) => x.w === n)?.正文宽 ?? 0;
+check('宽屏下正文随窗口变宽（1440 ≤ 1600 ≤ 1920 且 1920 档不低于 1000）',
+  bodyOf(1440) <= bodyOf(1600) && bodyOf(1600) <= bodyOf(1920) && bodyOf(1920) >= 1000,
+  JSON.stringify(widthRows));
+const r1920 = widthRows.find((x) => x.w === 1920);
+check('1920 档正文占主内容区 ≥ 60%（左右留白不再吃掉大半屏）',
+  Boolean(r1920) && r1920.正文宽 / r1920.主区宽 >= 0.6,
+  JSON.stringify(r1920));
+
 await send('Emulation.clearDeviceMetricsOverride');
 await sleep(400);
 
@@ -849,6 +867,28 @@ check('窄窗下长内容（错误码速查 20 条 + 运行记录表）不撑破
   JSON.stringify(narrowWide));
 await send('Emulation.clearDeviceMetricsOverride');
 await sleep(400);
+
+/* 左栏导航在滚动时不得跟着动（用户 2026-09-26 反馈） */
+await go('/settings?section=help');
+const navScroll = await ev(`
+  (async () => {
+    const page = document.querySelector('.page');
+    const nav = document.querySelector('.settings-nav');
+    const first = document.querySelector('.settings-nav-item');
+    page.scrollTop = 0;
+    await new Promise(r => setTimeout(r, 400));
+    const 未滚动 = { 导航top: Math.round(nav.getBoundingClientRect().top), 首项top: Math.round(first.getBoundingClientRect().top) };
+    page.scrollTop = 99999;
+    await new Promise(r => setTimeout(r, 500));
+    const 滚到底 = { 导航top: Math.round(nav.getBoundingClientRect().top), 首项top: Math.round(first.getBoundingClientRect().top), 滚动位置: Math.round(page.scrollTop) };
+    return { 未滚动, 滚到底 };
+  })()
+`);
+check('滚动设置正文时左栏导航**不动**（吸顶位与页面顶部留白对齐，不再跟着上移）',
+  navScroll?.滚到底?.滚动位置 > 50
+    && navScroll?.未滚动?.导航top === navScroll?.滚到底?.导航top
+    && navScroll?.未滚动?.首项top === navScroll?.滚到底?.首项top,
+  JSON.stringify(navScroll));
 
 /* 值列已经在上面的断言里查过；这里补一条"共用同一个行基元" */
 await go('/project/proj_zs_01/settings');

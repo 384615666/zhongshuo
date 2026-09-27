@@ -1,0 +1,24 @@
+{
+  "base": "http://127.0.0.1:5317",
+  "host": "headless browser",
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "node": "v24.16.0",
+  "startedAt": "2026-09-26T15:27:13.615Z",
+  "scope": "prototype UI/mock only",
+  "results": [
+    {
+      "name": "verify-nav",
+      "exitCode": 0,
+      "durationMs": 336524,
+      "tail": "PASS  应用设置链接上残留的 projectId 不改变焦点（且被清除） — {\"before\":\"众说\",\"after\":{\"顶栏\":\"众说\",\"hash\":\"#/settings?section=runtime\"}}\nPASS  提醒已移出设置：section=reminders 重定向到「待我处理」并独立成节 — {\"hash\":\"#/activity\",\"在待我处理页\":true,\"有提醒分节\":true,\"说明与待办相反\":true}\nPASS  设置导航树里不再有「提醒」分区 — [\"通用\",\"外观\",\"通知\",\"AI 工具\",\"连接与设备\",\"数据与存储\",\"帮助与关于\"]\n\n123/123 通过"
+    },
+    {
+      "name": "verify-quote",
+      "exitCode": 0,
+      "durationMs": 5943,
+      "tail": "OK   引用不直接发送（消息数不变）\nOK   主池草稿不受引用影响\nOK   引用核验期间无控制台错误\n\n=== 引用目标核验：8 通过 / 0 失败 ==="
+    }
+  ],
+  "output": "D:\\zhongshuo\\hifi-prototype\\verification\\predevelopment-2026-09-26T15-27-13.610Z",
+  "finishedAt": "2026-09-26T15:32:58.117Z"
+}

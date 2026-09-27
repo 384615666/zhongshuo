@@ -1,0 +1,18 @@
+{
+  "base": "http://127.0.0.1:5317",
+  "host": "isolated Electron (hidden window)",
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "node": "v24.16.0",
+  "startedAt": "2026-09-26T15:32:59.675Z",
+  "scope": "prototype UI/mock only",
+  "results": [
+    {
+      "name": "verify-settings-fixes",
+      "exitCode": 1,
+      "durationMs": 35017,
+      "tail": "OK   ⑥ 非法配置不写入：空路径与相对路径都留在弹窗里报错\nOK   ⑥ 合法配置能保存并反映在列表（认证方式与路径同步更新）\nOK   ⑥ 配置保存留下写操作留痕（可回溯\"谁改了什么\"）\n\n结果：19 通过 / 2 失败"
+    }
+  ],
+  "output": "D:\\zhongshuo\\hifi-prototype\\verification\\predevelopment-2026-09-26T15-32-59.665Z",
+  "finishedAt": "2026-09-26T15:33:36.729Z"
+}

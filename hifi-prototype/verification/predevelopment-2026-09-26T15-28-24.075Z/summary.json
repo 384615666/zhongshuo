@@ -1,0 +1,24 @@
+{
+  "base": "http://127.0.0.1:5317",
+  "host": "isolated Electron (hidden window)",
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "node": "v24.16.0",
+  "startedAt": "2026-09-26T15:28:24.083Z",
+  "scope": "prototype UI/mock only",
+  "results": [
+    {
+      "name": "verify-settings-ia",
+      "exitCode": 4294967295,
+      "durationMs": 273069,
+      "tail": "FAIL 设置导航里有搜索框（§3.4 追加项）\nFAIL 分区标题：general → 通用  —— 标题=undefined\nFAIL 分区标题：appearance → 外观  —— 标题=undefined\nFAIL 分区标题：notifications → 通知  —— 标题=undefined\nFAIL 分区标题：runtime → AI 工具  —— 标题=undefined"
+    },
+    {
+      "name": "verify-settings-fixes",
+      "exitCode": 1,
+      "durationMs": 71,
+      "tail": "    port: 9427\n  }\n}\n\nNode.js v24.16.0"
+    }
+  ],
+  "output": "D:\\zhongshuo\\hifi-prototype\\verification\\predevelopment-2026-09-26T15-28-24.075Z",
+  "finishedAt": "2026-09-26T15:32:59.270Z"
+}

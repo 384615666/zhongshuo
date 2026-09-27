@@ -19,6 +19,7 @@
 ## 权威文档
 
 - **2026-09-26 开工基线 v1.23**：[契约与收口](docs/development-baseline-v1.23.md)、[137 项分批与发布依赖](docs/development-delivery-matrix-v1.23.md)。R4/R5/R6/E11/MCP 预留/LAN 已完成设计，DEV-01 同步；B6、真实 M0 与原生模块仍须实施验证，不能把文档当运行证据。
+- **本轮文档交付**：[五项要求的收口报告](docs/dev-briefs/pre-development-closeout-v1.23.md)、[原型到真实工程的闭环交接](docs/dev-briefs/prototype-to-runtime-handoff-v1.23.md)。按用户最新要求只做文档，不继续原型测试；报告中的设计完成不代表实现验收。
 
 - [docs/zhongshuo-development-design-v1.md](docs/zhongshuo-development-design-v1.md) — 开发设计报告，**唯一权威版本**（文件名中的 v1 保持稳定，当前 **v1.23**；2026-09-26 新增 §14.7：多 Agent 并行写入增强**已延期、未批准施工**，当前以同一物理目录默认单写者完成闭环，探索记录见 [docs/zhongshuo-parallel-write-exploration-v1.md](docs/zhongshuo-parallel-write-exploration-v1.md)，候选设计稿见 [docs/zhongshuo-parallel-write-intent-gate-v1.md](docs/zhongshuo-parallel-write-intent-gate-v1.md)（已标注延期）；项目设置独立于应用设置，导航、文件/Git 合页、项目分组看板和可选验收沿用；2026-09-25 起输入区**默认交给 AI**、私聊收敛为 1 对 1（§0.19–§0.22）；同日新增 **§31 MCP 接入层**（E25/ADR-16/RT-28/FULL-11，不进 v0.1、预留条款即时生效），**v1.20/v1.21 已吸收三轮外部评审修订**——协议勘误、Tasks/MRTR 采用边界（首批不采用）、身份/授权契约与提交型工具幂等键收口（§0.24/§0.25）。历史 B1—B5 验证不代替 B6 权限验证；E11/E13 与 R4—R11 的工程设计已由 v1.23 收口，代码/schema 和真实验证按工作包完成）
 - [docs/product-decisions-guide.md](docs/product-decisions-guide.md) — 产品决策指南（48 项逐项讲解：背景/选项/优劣/推荐）
@@ -39,6 +40,8 @@
 - 提交约定：本仓库提交使用本机 Git 全局身份；施工报告与 README 里的"通过数/证据"仍按各套件真实输出填写，不因有 Git 而放宽。
 
 ## 开发
+
+- **全功能正式施工入口（GLM‑5.3）**：[施工总任务书](docs/dev-briefs/full-implementation-brief-glm5.3.md)。用户已确认原型与开工准备完成；该文档定义 M0—M3、DEV 与 FULL-01—11 的持续施工、验收、进度与续工要求，末尾附可直接发送的启动指令。编写该文档不代表正式工程已经实施。
 
 - 交互原型：`hifi-prototype/`（Electron 桌面外壳为真，业务为内存 mock；可整目录删除，不代表正式工程结构）
 - 正式代码仓库：`D:\zhongshuo`（= 当前工作区）。**2026-09-25 已在此初始化 Git**；正式工程结构仍以 [目录归属方案](docs/workspace-layout-proposal.md) 与开发清单、DEV-01 的前置条件为准，本轮初始化只做版本化，不改变目录归属结论、也不搬移文件。

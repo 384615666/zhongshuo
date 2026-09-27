@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 const cwd=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const base=process.argv[2]??'http://127.0.0.1:5317';
 const names=process.argv.slice(3);
-const suites=names.length?names:['smoke','verify-dm-composer','verify-default-ai-input','verify-nav-marks','verify-nav','verify-workspace-preview','verify-quote','verify-settings-ia','verify-settings-fixes'];
+const desktop=process.env.ZS_BASELINE_HOST==='electron';
+const suites=names.length?names:(desktop?['verify-settings-ia','verify-settings-fixes']:['smoke','verify-dm-composer','verify-default-ai-input','verify-nav-marks','verify-nav','verify-workspace-preview','verify-quote']);
 if(suites.some(n=>!/^[a-z0-9-]+$/.test(n)||!existsSync(join(cwd,'scripts',n+'.mjs')))) throw Error('Invalid suite');
 const port=Number(process.env.ZS_BASELINE_CDP_PORT??9417);
 try { await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(500)}); throw Error('CDP port occupied; choose a free ZS_BASELINE_CDP_PORT'); }
@@ -22,9 +23,16 @@ if(!browser)throw Error('No test browser');
 const profile=mkdtempSync(join(tmpdir(),'zs-predevelopment-'));
 const out=join(cwd,'verification','predevelopment-'+new Date().toISOString().replaceAll(':','-'));
 mkdirSync(out,{recursive:true});
-const host=spawn(browser,['--headless=new','--disable-gpu','--no-first-run',`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,base],{stdio:'ignore',windowsHide:true});
+const desktopEnv={...process.env,ZS_DEV_URL:base,ZS_BASELINE_USER_DATA:profile};
+delete desktopEnv.ELECTRON_RUN_AS_NODE;
+const host=desktop
+  ?spawn(join(cwd,'node_modules/electron/dist/electron.exe'),[join(cwd,'scripts/predevelopment-desktop.mjs'),`--remote-debugging-port=${port}`],{cwd,env:desktopEnv,stdio:['ignore','pipe','pipe'],windowsHide:true})
+  :spawn(browser,['--headless=new','--disable-gpu','--no-first-run','--window-size=1680,1050',`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,base],{stdio:'ignore',windowsHide:true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const summary={base,browser,node:process.version,startedAt:new Date().toISOString(),scope:'prototype UI/mock only',results:[],output:out};
+const summary={base,host:desktop?'isolated Electron (hidden window)':'headless browser',browser,node:process.version,startedAt:new Date().toISOString(),scope:'prototype UI/mock only',results:[],output:out};
+let hostLog='';
+for(const stream of [host.stdout,host.stderr])stream?.on('data',b=>{hostLog+=b;writeFileSync(join(out,'host.log'),hostLog)});
+host.on('exit',(code,signal)=>{hostLog+=`\nHost exit code=${code} signal=${signal}\n`;writeFileSync(join(out,'host.log'),hostLog)});
 try {
   let ready=false;
   for(let i=0;i<40;i++){try{const tabs=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json(); if(tabs.some(t=>t.type==='page')){ready=true;break}}catch{} await sleep(250)}
@@ -33,9 +41,10 @@ try {
   for(const name of suites){
     const started=Date.now();
     const result=await new Promise((res,rej)=>{
-      const child=spawn(process.execPath,[join(cwd,'scripts',name+'.mjs'),base],{cwd,env:{...process.env,TEMP:profile,TMP:profile,ZS_CDP_PORT:String(port),ZS_WPV_CDP_PORT:String(port),ZS_SMOKE_CDP_PORT:String(port+1),ZS_DMC_CDP_PORT:String(port+2),ZS_DAI_CDP_PORT:String(port+3),ZS_NAV_MARKS_CDP_PORT:String(port+4)},windowsHide:true});
-      let output=''; const timer=setTimeout(()=>{spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true});},180000);
-      child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);
+      const child=spawn(process.execPath,[join(cwd,'scripts',name+'.mjs'),base],{cwd,env:{...process.env,TEMP:profile,TMP:profile,ZS_CDP_PORT:String(port),ZS_WPV_CDP_PORT:String(port),ZS_VIS_CDP_PORT:String(port),ZS_SMOKE_CDP_PORT:String(port+1),ZS_DMC_CDP_PORT:String(port+2),ZS_DAI_CDP_PORT:String(port+3),ZS_NAV_MARKS_CDP_PORT:String(port+4)},windowsHide:true});
+      let output=''; const timer=setTimeout(()=>{spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true});},600000);
+      const collect=b=>{output+=b;writeFileSync(join(out,name+'.log'),output)};
+      child.stdout.on('data',collect);child.stderr.on('data',collect);
       child.on('error',rej);child.on('close',code=>{clearTimeout(timer);res({code,output})});
     });
     writeFileSync(join(out,name+'.log'),result.output);

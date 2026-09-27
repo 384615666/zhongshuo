@@ -139,6 +139,16 @@ for (const sec of ['appearance', 'notifications', 'runtime', 'connections', 'dat
 await send('Emulation.clearDeviceMetricsOverride');
 await sleep(500);
 
+/* 宽屏取证：正文随窗口变宽后，长行（路径 + 按钮）与长表在 1920 下要看一眼 */
+await send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1400, deviceScaleFactor: 1, mobile: false });
+await sleep(700);
+for (const [name, sec] of [['w1920-general', 'general'], ['w1920-data', 'data'], ['w1920-help', 'help']]) {
+  await go(`/settings?section=${sec}`);
+  await shot(name);
+}
+await send('Emulation.clearDeviceMetricsOverride');
+await sleep(500);
+
 /* ============================================================
    二、七个分区各截一张（高视口，一次看完整节）
    ============================================================ */

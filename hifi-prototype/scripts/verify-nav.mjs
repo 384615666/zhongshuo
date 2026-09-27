@@ -127,7 +127,7 @@ await sleep(800);
 const rt2a = await c.ev(`
   (() => ({
     当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
-    侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
+    侧栏: [...document.querySelectorAll('.sidebar .side-project .side-item-label')].map(e => e.innerText.trim()),
     锁定: [...document.querySelectorAll('.menu-project-row')]
       .find(r => r.innerText.includes('众说'))?.querySelector('.menu-check')?.classList.contains('locked'),
   }))()
@@ -736,7 +736,7 @@ await sleep(1800);
 const afterCardClick = await c.ev(`
   (() => ({
     当前项目: document.querySelector('.titlebar-proj-name')?.innerText.trim(),
-    侧栏: [...document.querySelectorAll('.sidebar-scroll .side-item-label')].map(e => e.innerText.trim()),
+    侧栏: [...document.querySelectorAll('.sidebar .side-project .side-item-label')].map(e => e.innerText.trim()),
     有提示: document.body.innerText.includes('已在侧栏显示项目'),
   }))()
 `);

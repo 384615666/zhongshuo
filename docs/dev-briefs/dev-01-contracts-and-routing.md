@@ -7,9 +7,9 @@
 ## 已定工程决策（2026-09-18 用户拍板；2026-09-26 按仓库现状修订）
 
 - 仓库（2026-09-26 更新，取代原"先按 D7 确认目录归属、前置完成后才 git init"的口径）：`D:\zhongshuo` 已于 2026-09-25 初始化 Git（分支 `main`），docs 与原型同仓管理，已有提交历史；**不得再次 git init、不得改写既有提交历史**。正式工程脚手架在仓库根与现有内容并存（见"范围 0"）。清单 D7 的收口勾选仍由清单自己维护，不因本条自动完成。
-- 远端备份：GitHub 私有仓库 `384615666/zhongshuo` 已配置并完成过推送，gh 已登录，无需用户再在场登录。"只推代码，不推任何用户数据、凭据、模型 key"的口径继续有效（.gitignore 已先行：忽略 node_modules/dist/日志/archive/可再生成截图）。
+- 远端备份：GitHub 私有仓库 `384615666/zhongshuo` 已配置并完成过推送；实施时沿现有配置，需要推送时再检查当前认证状态，不将历史登录状态当作永久有效。"只推代码，不推任何用户数据、凭据、模型 key"的口径继续有效（.gitignore 已先行：忽略 node_modules/dist/日志/archive/可再生成截图）。
 - 包管理/结构：pnpm + 单仓单包；模块边界用仓库根 `src/` 下六个目录 + lint 规则约束（contracts / domain / persistence / adapter / daemon / ui，对应设计报告 §8.4 C6 口径）。正式工程与 `hifi-prototype/`（原型，自带 package.json）并存、互不依赖，不建 workspace。
-- 工具链：Node 24.x（本机 24.14.0 ✓）、TypeScript（strict）、Vitest；Electron、better-sqlite3、Playwright 等在用到它们的后续开发包时锁定版本。
+- 工具链：Node 24.x、TypeScript（strict）、Vitest；实施时记录实际 patch 版本并锁定依赖，不将历史的本机版本号当作固定现状。Electron、better-sqlite3、Playwright 等在用到它们的后续开发包时锁定版本。
 - 开工条件（2026-09-26 更新，取代原第十批"确认之前不写 DEV-01、不 git init、不碰界面代码"）：原型（hifi-prototype/）已经多批次施工并经用户逐轮确认，验证状态见其 README；仓库亦已初始化——门槛的历史条件已被实际进展超越。**本包及后续后端包写代码的开工条件改为**：清单设计前置完成（R4 与 C8 本轮已设计收口）且收到正式工程实施指令。修订本任务书本身不属于开工。
 
 ## 总纲（设计报告 §22.1 模板，版本以主方案为准）
@@ -35,7 +35,7 @@
 3. **授权范围逐次校验**：提供纯函数按「可读上下文 / 可执行操作 / 可调度成员」三维度分别判断，并定义第四维预算 BudgetGrant/Reservation（事务预占由 DEV-02/05 实现）；读不蕴含唤醒，发起不蕴含扩权。
 4. **幂等可查询**：commandId 幂等键类型（同第 1 条）；本包固定按认证 scope + commandId 去重的类型与 command.result.get 契约；MCP 工具层映射在 FULL-11 实现。
 5. **发言与执行分离**：路由只由结构化参数（mention 节点、SendIntent、目标）决定，正文文本不构成执行指令——§4.1/AT-09 的口径扩展到所有写入来源（含外部 AI 写入的文本）。
-6. **字段预留**：`Message.via_connection_id`（author_type=human 时标记代发，author_type 不新增取值）、`Task.source_connection_id`（发起连接）；本地入口恒为 null。`external_connections` / `external_grants` 表结构、MCP 服务器本体、首批 12 工具与协议适配均不在本包（FULL-11）。
+6. **字段预留**：`Message.via_connection_id`（author_type=human 时标记直接代发，author_type 不新增取值）、`Task.source_connection_id`（任务链发起连接）。本地用户新建根任务为 null；外部任务派生的本地 zs 调用、子任务与提醒继承原来源/范围，不能因入口本地化清空来源。`external_connections` / `external_grants` 表结构、MCP 服务器本体、首批 12 工具与协议适配均不在本包（FULL-11）。
 
 ## 范围（做什么）
 
@@ -48,14 +48,14 @@
 - 根 package.json（pnpm、单仓单包）、tsconfig（strict）、Vitest 配置、eslint（六边界 import 规则）；提交 pnpm-lock。
 - `src/` 六边界目录骨架（contracts / domain / persistence / adapter / daemon / ui）；本包实际只填充 contracts 与承载路由纯函数的 domain 目录，其余为带说明的空骨架。
 - README 增补正式工程的安装与测试方法（根目录 `pnpm install && pnpm test`；不进入 hifi-prototype，两者各自独立 package.json）。
-- 默认施工分支 codex/dev-01（或用户指定分支）；先核对已有工作树，不重写历史、不一并提交其他会话改动，推送遵循用户授权。
+- 作为本次全功能施工的第一包时，沿 [总任务书 §3.3](./full-implementation-brief-glm5.3.md) 使用 `codex/full-implementation` 或已确定施工分支，不另建分支；只有独立执行本包且无其他约定时才默认 `codex/dev-01`。先核对已有工作树，不重写历史、不一并提交其他会话改动，推送遵循用户授权。
 
 ### 1. contracts：核心类型与 schema
 
 以设计报告 §12.2 表结构目录为准（§12.2 为唯一权威命名，不得按旧名建类型），定义 TypeScript 类型 + 运行时校验（schema 库由执行者选定，如 zod）：
 
 - Project、Room（含 coordinator_member_id）、AgentProfile / ProjectMember
-- Conversation(room/dm)、DmParticipant、MessageTarget 判别联合、dm_turn 任务类型、DM session 作用域；会话关联及 null 约束按 v1.23 §2.2
+- Conversation(room/dm)、DmParticipant、ConversationReadState、MessageTarget 判别联合、dm_turn 任务类型、DM session 作用域；会话关联及 null 约束按 v1.23 §2.2；补 create/list/history/markRead/rename/archive/restore 契约
 - ConversationThread（anchor_message_id、root_task_id 可为空＝记录串；DM 无 thread、status、last_message_seq）
 - Message（author_type：human / agent / system / third_party_app；thread_id 顶层为 NULL；reply_to_message_id；thread_message_seq；via_connection_id 预留字段）
 - Task（root_message_id、parent_task_id、room_task_number（DM 为 null）、review_policy、source_connection_id 预留字段）
@@ -75,7 +75,7 @@
   历史记录串（root_task_id 为空）内跟进 → 默认仍是保存记录（兼容例外）。
   原"输入框切讨论档"（决策 21）已取消，**不得**把'讨论'实现为 Mode 取值或常驻切换参数。
 - `resolveDmRoute`（私信 1 对 1）：输入为 conversationId 与对端成员；输出＝投递给该会话唯一成员，**不推导 Mode、不涉及协调者、无群聊冻结名单选择**；对端为 human 时派发集合为空；正文/粘贴文本中的 `@` 对结果零影响；同一成员的多条私信按 conversationId 隔离；default Agent 发送由 daemon 建内部 dm_turn，record_only 不建执行，不分配房间任务号。
-- `resolveReplyTarget`：主池发送 → 创建新线程（预分配 threadId，§12.3 单事务关联）；串内跟进 → 沿用该 threadId；目标不匹配 → 返回 THREAD_SCOPE_MISMATCH，绝不兜底发到主池（§4.5）。
+- `resolveReplyTarget`：房间主池发送 → 创建新线程（预分配 threadId，§12.3 单事务关联）；串内跟进 → 沿用该 threadId；DM → 保持 conversationId、不创建 thread；目标不匹配 → 返回 THREAD_SCOPE_MISMATCH/CONVERSATION_SCOPE_MISMATCH，绝不兜底发到主池（§4.5）。
 - `validateDispatchScope`（§31.1 第 3 条的最小落地）：对计划派发结果按「可读上下文 / 可执行操作 / 可调度成员」分别校验，读权限不蕴含唤醒。
 - mention 有效性：只有输入框识别的结构化 mention 节点参与路由；代码块、Markdown 引用、文件正文、系统日志/工具输出中的 `@` 永不触发（§4.1、验收 AT-09）；该口径同样适用于外部 AI 写入的文本。
 - 串内跟进：无 mention → 延续当前任务参与者与模式（steering）；点名当前参与者 → 定向提问；点名非参与者 → 产出"待用户确认的扩大参与范围"结果，不直接唤醒（决策 10）。ADR-15 任务内互唤的执行语义留给后续 daemon/domain 包，本包只提供相关类型。
@@ -86,7 +86,7 @@
 - SendIntent='record_only'：保存不派发、正文含 @全体 零唤醒、意图与 Mode 分开（类型层面不得把 record_only 当 Mode）；记录串内跟进默认保存（兼容例外）；
 - 私信 1 对 1：路由结果仅含该会话成员、human 对端派发集合为空、正文 @ 文本零影响、同成员多私信按 conversationId 隔离不合并、不产出房间任务号，record_only 不建执行；
 - 回复目标绑定：主池新线程 / 串内沿用 / 目标不匹配三分支；
-- MCP 预留契约：CommandEnvelope/CommandResult/CallerContext 类型齐备、via_connection_id/source_connection_id 字段存在且本地入口为 null、validateDispatchScope 三分支（读不蕴含唤醒）、契约层不接受自报 authorId、预算不足拒派发、旧 stop 目标不匹配拒绝影响新 run；
+- MCP 预留契约：CommandEnvelope/CommandResult/CallerContext 类型齐备；本机用户新建根任务来源为 null，外部任务派生链保留 source_connection_id；validateDispatchScope 三分支（读不蕴含唤醒）、契约层不接受自报 authorId、预算不足拒派发、旧 stop 目标不匹配拒绝影响新 run；
 - 幂等键（commandId）类型定义存在，执行语义留给 DEV-02。
 
 ## 非目标（本包不做）
@@ -95,7 +95,7 @@
 
 ## 完成定义
 
-1. 根目录 `pnpm install && pnpm test` 一条命令全绿；依赖版本锁定并提交锁文件；不改动 `hifi-prototype/` 与 `docs/` 下任何文件（根配置与 `src/` 除外）。
+1. 根目录 `pnpm install && pnpm test` 一条命令全绿；依赖版本锁定并提交锁文件；不改动 `hifi-prototype/`。允许在 `docs/implementation/` 新增和维护施工总账、需求映射、实施决策、能力矩阵、续工记录及本包报告；不进行与本包无关的产品设计或历史文档改写。根配置、`src/`、必要测试与 README 按本包范围实施。
 2. 三种协作模式、一次性「仅记录」意图、私信 1 对 1 路由的类型和判定函数齐备，路由表全覆盖测试。
 3. 回复目标解析含 THREAD_SCOPE_MISMATCH 分支且有测试。
 4. 本包新增 contracts/domain 不含网络或模型调用，不以整个既有原型仓库作为该断言范围。

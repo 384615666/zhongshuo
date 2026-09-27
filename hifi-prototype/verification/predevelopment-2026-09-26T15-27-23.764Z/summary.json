@@ -1,0 +1,11 @@
+{
+  "base": "http://127.0.0.1:5317",
+  "host": "isolated Electron (hidden window)",
+  "browser": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "node": "v24.16.0",
+  "startedAt": "2026-09-26T15:27:23.776Z",
+  "scope": "prototype UI/mock only",
+  "results": [],
+  "output": "D:\\zhongshuo\\hifi-prototype\\verification\\predevelopment-2026-09-26T15-27-23.764Z",
+  "finishedAt": "2026-09-26T15:27:34.241Z"
+}
