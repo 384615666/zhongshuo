@@ -6,7 +6,7 @@
 
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
-- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—04 已完成（见 reports/）
+- 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05 已完成（见 reports/）
 - 最近更新：2026-09-27
 
 ## 工作包状态
@@ -16,8 +16,9 @@
 | DEV-01 | 类型/schema、目标判别、路由、来源/权限/预算合同、MCP 预留 | **VERIFIED**（G0 范围） | `src/contracts/` `src/domain/` | G0 | [reports/dev-01-result.md](reports/dev-01-result.md) |
 | DEV-02 | SQLite migration/事务、组合约束、回执、outbox、重启读取 | **VERIFIED**（存储侧） | `src/persistence/` | G1（存储侧子集） | [reports/dev-02-result.md](reports/dev-02-result.md) |
 | DEV-03 | 可脚本化 fake adapter（六类 fixture） | **VERIFIED** | `src/adapter/fake/` + `src/contracts/runtime.ts` | — | [reports/dev-03-result.md](reports/dev-03-result.md) |
-| DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED** | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md)：junction/大小写/父子域实测；§14.2 完整前像归 DEV-12 |
-| DEV-05 | daemon 单实例、IPC、进程/会话注册、派发、停止代次、恢复基础 | NOT_STARTED | `src/daemon/` | G1 | 依赖 DEV-02 ✅/DEV-03 ✅/DEV-04 ✅——下一包 |
+| DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED** | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md) |
+| DEV-05 | daemon 单实例、派发 worker、停止代次、恢复基础 | **VERIFIED**（核心；IPC 传输随 DEV-07、真实进程注册随 DEV-06） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)：派发/停止/恢复全链 192/192 |
+| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属） | NOT_STARTED | `src/domain/`+`src/daemon/` | G1/G3 | M0 剩余核心件（G3 前必备） |
 | DEV-04 | 项目目录打开/去重/重定位、物理锁域、基线、用户内容保护 | NOT_STARTED | `src/daemon/` | G1/RT-07/09 | 依赖 DEV-01 ✅ / DEV-02 |
 | DEV-05 | daemon 单实例、IPC、进程/会话注册、派发、停止代次、恢复基础 | NOT_STARTED | `src/daemon/` | G1 | 依赖 DEV-02/03 |
 | DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05 + 最小隔离（DEV-17）+ 最小合同（DEV-21-M0）先行 |

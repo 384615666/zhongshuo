@@ -91,7 +91,6 @@ export function migrate(
 
 /** 迁移内容指纹：实现源码文本摘要，防止同名迁移被静默改写（版本不可变）。 */
 function checksumOf(migration: Migration): string {
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- 仅取源码文本做指纹
   const source = migration.up.toString();
   let hash = 0x811c9dc5;
   for (let i = 0; i < source.length; i++) {

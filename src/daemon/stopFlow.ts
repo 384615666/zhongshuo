@@ -1,0 +1,142 @@
+/**
+ * 停止流程（§7.3/§16.3、开工契约 §3.2）与恢复（§16.4）。
+ * 停止：evaluateStopTarget 纯判定 + 状态推进 + worker 中断回调；STOPPING 直到确认退出。
+ * 恢复：标记非终态运行、重排过期租约 outbox（不自动补跑，决策 44/E7）。
+ */
+import { randomUUID } from 'node:crypto';
+import type { ZhongshuoDatabase } from '../persistence/db.ts';
+import { runCommand } from '../persistence/commandGateway.ts';
+import { appendDomainEvent } from '../persistence/events.ts';
+import { evaluateStopTarget } from '../domain/scope/stopTarget.ts';
+import type { TaskStopOutcome } from '../contracts/task.ts';
+import type { RunStatus } from '../contracts/run.ts';
+
+export interface RequestStopInput {
+  taskId: string;
+  targetRunId: string;
+  expectedStopGeneration: number;
+  commandId: string;
+  idempotencyScope: string;
+  payloadHash: string;
+  now: number;
+  /** worker 提供的在途 turn 中断回调（§16.3：先协议中断，确认退出才算停止）。 */
+  interruptTurn: (turnId: string) => Promise<void>;
+}
+
+export interface RequestStopResult {
+  outcome: TaskStopOutcome;
+  stopGeneration: number;
+}
+
+export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput): Promise<RequestStopResult> {
+  const outcome = runCommand<RequestStopResult>(
+    db,
+    { idempotencyScope: input.idempotencyScope, commandId: input.commandId, payloadHash: input.payloadHash, now: input.now },
+    () => {
+      const task = db
+        .prepare('SELECT id, project_id, conversation_id, conversation_thread_id, stop_generation, status FROM tasks WHERE id = ?')
+        .get(input.taskId) as
+        | { id: string; project_id: string; conversation_id: string; conversation_thread_id: string; stop_generation: number; status: string }
+        | undefined;
+      if (task == null) {
+        throw new StopCommandError('RESOURCE_NOT_FOUND', '任务不存在');
+      }
+      const run = db
+        .prepare('SELECT id, status FROM workflow_runs WHERE id = ? AND task_id = ?')
+        .get(input.targetRunId, input.taskId) as { id: string; status: RunStatus } | undefined;
+      const verdict = evaluateStopTarget({
+        taskCurrentRunId: currentRunIdOf(db, input.taskId),
+        targetRunId: input.targetRunId,
+        expectedStopGeneration: input.expectedStopGeneration,
+        currentStopGeneration: task.stop_generation,
+        targetRunStatus: run?.status ?? 'FAILED',
+      });
+      if (!verdict.ok) {
+        throw new StopCommandError(verdict.error.code, verdict.error.message);
+      }
+      let stopGeneration = task.stop_generation;
+      if (verdict.value === 'stopping') {
+        stopGeneration = task.stop_generation + 1;
+        const tx = db.transaction(() => {
+          db.prepare('UPDATE tasks SET stop_generation = ? WHERE id = ?').run(stopGeneration, task.id);
+          db.prepare(`UPDATE workflow_runs SET status = 'STOPPING' WHERE id = ? AND status IN ('QUEUED','RUNNING','WAITING')`).run(input.targetRunId);
+          db.prepare(`UPDATE agent_turns SET status = 'STOPPING' WHERE run_id = ? AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')`).run(input.targetRunId);
+          appendDomainEvent(db, {
+            schemaVersion: 1,
+            eventId: `evt_${randomUUID()}`,
+            projectId: task.project_id,
+            conversationId: task.conversation_id,
+            threadId: task.conversation_thread_id,
+            taskId: task.id,
+            runId: input.targetRunId,
+            kind: 'run.statusChanged',
+            createdAt: input.now,
+            payload: { status: 'STOPPING', stopGeneration },
+          });
+        });
+        tx();
+      }
+      return { outcome: verdict.value, stopGeneration };
+    },
+  );
+  if (!outcome.ok) {
+    throw new StopCommandError(outcome.error.code, outcome.error.message);
+  }
+  // 中断在途 turn（事务外执行：协议中断是外部副作用）。
+  if (outcome.data.outcome === 'stopping') {
+    const turn = db
+      .prepare(`SELECT id FROM agent_turns WHERE run_id = ? AND status = 'STOPPING' ORDER BY id LIMIT 1`)
+      .get(input.targetRunId) as { id: string } | undefined;
+    if (turn != null) await input.interruptTurn(turn.id);
+  }
+  return outcome.data;
+}
+
+export class StopCommandError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'StopCommandError';
+    this.code = code;
+  }
+}
+
+function currentRunIdOf(db: ZhongshuoDatabase, taskId: string): string | null {
+  const row = db
+    .prepare(`SELECT id FROM workflow_runs WHERE task_id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED') ORDER BY revision DESC, id DESC LIMIT 1`)
+    .get(taskId) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+// ---------- 恢复（§16.4） ----------
+
+export interface RecoverySnapshot {
+  interruptedRuns: number;
+  unknownTurns: number;
+  requeuedOutbox: number;
+  heldLeases: Array<{ lockDomain: string; ownerTurnId: string; status: string }>;
+}
+
+/**
+ * 启动恢复：非终态 run→INTERRUPTED、turn→UNKNOWN（进程身份核实随 DEV-06 真实进程补强）；
+ * 过期租约的 outbox 重排回 pending，但**不自动派发**——恢复后先列出可继续任务等用户确认（§16.4-6）。
+ */
+export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
+  const tx = db.transaction((): RecoverySnapshot => {
+    const interruptedRuns = db
+      .prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE status IN ('QUEUED','RUNNING','WAITING','STOPPING')`)
+      .run().changes;
+    const unknownTurns = db
+      .prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`)
+      .run().changes;
+    const requeuedOutbox = db
+      .prepare(`UPDATE outbox SET status = 'pending', lease_owner = NULL, lease_until = NULL WHERE status = 'leased' AND lease_until < ?`)
+      .run(now).changes;
+    const heldLeases = (db
+      .prepare(`SELECT lock_domain, owner_turn_id, status FROM workspace_leases WHERE status != 'released'`)
+      .all() as Array<{ lock_domain: string; owner_turn_id: string; status: string }>)
+      .map((row) => ({ lockDomain: row.lock_domain, ownerTurnId: row.owner_turn_id, status: row.status }));
+    return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases };
+  });
+  return tx();
+}

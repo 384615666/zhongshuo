@@ -40,6 +40,18 @@ export interface CreateRoomRootTaskResult {
   disposition: DispatchDisposition;
 }
 
+/** 初始接单成员：AUTO=协调者；DIRECT=指定成员；DELIBERATE=名单首位（多轮派发由后续调度扩展）。 */
+function initialOwnerOf(route: TopLevelRouteOutcome & { kind: 'dispatch' }): string | null {
+  switch (route.mode) {
+    case 'AUTO':
+      return route.coordinatorMemberId;
+    case 'DIRECT':
+      return route.targetMemberId;
+    case 'DELIBERATE':
+      return route.frozenMemberIds[0] ?? null;
+  }
+}
+
 /**
  * 单事务步骤：会话校验 → 分配 conversation_seq → 写 anchor 消息 → 写 thread
  * （root_task_id 先空）→ 需要时写根任务并回填 thread.root_task_id → 追加事件 →
@@ -128,8 +140,9 @@ export function createRoomRootTask(
     db.prepare(
       `INSERT INTO tasks
          (id, project_id, conversation_id, kind, room_id, conversation_thread_id, root_message_id,
-          room_task_number, source_connection_id, title, status, revision, review_policy)
-       VALUES (?, ?, ?, 'room_task', ?, ?, ?, ?, ?, ?, 'OPEN', 0, ?)`,
+          room_task_number, owner_member_id, source_connection_id, title, status, revision, review_policy,
+          route_json, stop_generation)
+       VALUES (?, ?, ?, 'room_task', ?, ?, ?, ?, ?, ?, ?, 'OPEN', 0, ?, ?, 0)`,
     ).run(
       taskId,
       input.projectId,
@@ -138,9 +151,11 @@ export function createRoomRootTask(
       input.ids.threadId,
       input.ids.messageId,
       roomTaskNumber,
+      input.route.kind === 'dispatch' ? initialOwnerOf(input.route) : null,
       input.sourceConnectionId,
       input.title,
       input.reviewPolicy,
+      input.route.kind === 'dispatch' ? JSON.stringify(input.route) : null,
     );
     db.prepare('UPDATE conversation_threads SET root_task_id = ? WHERE id = ?').run(
       taskId,

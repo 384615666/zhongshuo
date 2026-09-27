@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { openDatabase, migrate } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase, Migration } from '../../src/persistence/db.ts';
+import { MIGRATIONS } from '../../src/persistence/migrations/index.ts';
 import { runCommand, getReceipt } from '../../src/persistence/commandGateway.ts';
 import { claimNextOutbox, completeOutbox, enqueueOutbox, listOutbox } from '../../src/persistence/outbox.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
@@ -93,10 +94,10 @@ describe('迁移（§12.5）', () => {
       expect(names).toContain(expected);
     }
     expect(names.length).toBeGreaterThanOrEqual(45);
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
     const audit = db.prepare('SELECT id, name, checksum FROM schema_migrations').all();
-    expect(audit.length).toBe(1);
+    expect(audit.length).toBe(MIGRATIONS.length);
     db.close();
   });
 
@@ -113,12 +114,14 @@ describe('迁移（§12.5）', () => {
   it('重开迁移幂等：无待应用，审计不重复', () => {
     const path = join(tmpRoot, 'reopen.db');
     const first = openDatabase(path);
-    expect(first.pragma('user_version', { simple: true })).toBe(1);
+    expect(first.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
     first.close();
     const second = openDatabase(path);
     const result = migrate(second);
     expect(result.applied).toEqual([]);
-    expect(second.prepare('SELECT count(*) c FROM schema_migrations').get()).toMatchObject({ c: 1 });
+    expect(second.prepare('SELECT count(*) c FROM schema_migrations').get()).toMatchObject({
+      c: MIGRATIONS.length,
+    });
     second.close();
   });
 

@@ -45,7 +45,7 @@
 
 ### 正式工程（2026-09-27 起，分支 `codex/full-implementation`）
 
-- **运行与验证**：仓库根 `pnpm install && pnpm check`（= `tsc --noEmit` + `eslint .`（六边界 import 规则）+ `vitest run`）。当前 **DEV-01（契约与路由）与 DEV-02（SQLite 基础：迁移/事务幂等/outbox/重启）已完成并验证**（151/151 测试；报告见 [docs/implementation/reports/](docs/implementation/reports/)）。
+- **运行与验证**：仓库根 `pnpm install && pnpm check`（= `tsc --noEmit` + `eslint .`（六边界 import 规则）+ `vitest run`）。当前 **DEV-01—05 已完成并验证**（契约/路由、SQLite 事务与 outbox、fake adapter、目录/锁域/基线、daemon 派发/停止/恢复核心；192/192 测试；报告见 [docs/implementation/reports/](docs/implementation/reports/)）。
 - **结构**：`src/` 六边界（contracts / domain / persistence / adapter / daemon / ui，主设计 §8.4 C6）+ `tests/`。contracts 与 domain 已实装；persistence/adapter/daemon/ui 为骨架（分别由 DEV-02/03/04-05/07 起承载）。技术栈：Node ≥24、TypeScript 6.x strict、zod 4、Vitest 5、ESLint 10（依赖锁定见 `pnpm-lock.yaml`）。
 - **施工总账**：[docs/implementation/implementation-status.md](docs/implementation/implementation-status.md)（DEV/FULL 包状态）、[需求追踪表](docs/implementation/requirements-traceability.md)（137 项）、[实施决策](docs/implementation/implementation-decisions.md)（ADR-Ixx）、[runtime 能力矩阵](docs/implementation/runtime-capability-matrix.md)、[续工记录](docs/implementation/continuation.md)。跨会话续工先读这些文件，不重新调研。
 
