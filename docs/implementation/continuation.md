@@ -2,23 +2,23 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（DEV-03 完成时点）
-- 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03（见 git log，reports/dev-03-result.md）
-- 工作树归属：本包新增 `src/contracts/runtime.ts`、`src/adapter/fake/`、`tests/unit/fakeAdapter.test.ts`；总账更新
+- 更新：2026-09-27（DEV-04 完成时点）
+- 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053`（已推送）→ DEV-03 `30e5424`、DEV-04（**本地已提交，GitHub TLS 间歇失败未推送——续工先 `git push`**）
 
 ## 刚完成
 
-- **DEV-03 完成**：§9.3/§9.4 运行时契约落 contracts；可脚本化 fake adapter（六类 fixture：成功/失败/审批/超时/停止不响应/迟到）+ 16 用例；`pnpm check` 167/167。
+- **DEV-03 完成**：§9.3/§9.4 运行时契约 + fake adapter 六类 fixture（167/167 时点）。
+- **DEV-04 完成**：目录身份（junction/大小写/realpath）、项目去重/重定位、写入租约（single_writer/parallel_writers/RT-07 过期阻塞）、基线清单（§6.3 排除+hash+Git HEAD）；`pnpm check` 183/183。
 
 ## 当前故障 / 待停止进程
 
-- 无。
+- 无遗留进程。待办：推送 DEV-03/DEV-04 两个本地提交（TLS 间歇失败，重试即可）。
 
 ## 下一步（直接开工，无需再确认）
 
-1. **DEV-04（项目与 workspace）**：目录身份（junction/符号链接/盘符解析→identityKey）、同物理目录去重命中（重开定位已有 projectId）、重定位（保 projectId）、锁域重叠检测（父子目录、junction，RT-09）、基线清单（§6.3 排除规则+hash，Git 目录 ref+工作区前像 §14.2——最小实现先做清单骨架）。依赖 DEV-01/02 ✅。
-2. **DEV-05（daemon 与 supervisor）**：单实例锁、命名管道 IPC 骨架、outbox worker（消费 DEV-02 的 claimNextOutbox → 经 DEV-03 fake adapter 派发 → 回写 turn 事件/预算结算——G1 关键路径）、停止代次持久化、恢复读取（§16.4 步骤）。
-3. 每包结束更新总账四件套 + 本文件；G3 前必备 DEV-17 最小隔离与 DEV-21-M0 正式合同。
+1. **DEV-05（daemon 与 supervisor）**——依赖全齐：单实例锁（用户级命名管道/锁文件）、outbox worker（claimNextOutbox → fake adapter 派发 → 事件落库 → 预算结算 → completeOutbox；RT-02/05 全链路）、停止代次持久化与停止流程（task.stop 接 evaluateStopTarget + adapter.interrupt + 租约释放）、恢复读取（§16.4：读非终态 run/turn/lease，进程身份核对接口，不自动补跑）。这是 G1 的最后核心件（连同 DEV-17）。
+2. 之后 DEV-17 最小隔离 + DEV-21-M0 最小合同 → DEV-06（Codex App Server 真实接入，专用 fixture）→ DEV-07/G3。
+3. 每包结束更新总账四件套 + 本文件。
 
 ## 施工纪律提醒（下一轮自查）
 
