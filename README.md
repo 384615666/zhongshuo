@@ -41,10 +41,15 @@
 
 ## 开发
 
-- **全功能正式施工入口（GLM‑5.3）**：[施工总任务书](docs/dev-briefs/full-implementation-brief-glm5.3.md)。用户已确认原型与开工准备完成；该文档定义 M0—M3、DEV 与 FULL-01—11 的持续施工、验收、进度与续工要求，末尾附可直接发送的启动指令。编写该文档不代表正式工程已经实施。
+- **全功能正式施工入口（GLM‑5.3）**：[施工总任务书](docs/dev-briefs/full-implementation-brief-glm5.3.md)。用户已确认原型与开工准备完成；该文档定义 M0—M3、DEV 与 FULL-01—11 的持续施工、验收、进度与续工要求，末尾附可直接发送的启动指令。
 
-- 交互原型：`hifi-prototype/`（Electron 桌面外壳为真，业务为内存 mock；可整目录删除，不代表正式工程结构）
-- 正式代码仓库：`D:\zhongshuo`（= 当前工作区）。**2026-09-25 已在此初始化 Git**；正式工程结构仍以 [目录归属方案](docs/workspace-layout-proposal.md) 与开发清单、DEV-01 的前置条件为准，本轮初始化只做版本化，不改变目录归属结论、也不搬移文件。
+### 正式工程（2026-09-27 起，分支 `codex/full-implementation`）
+
+- **运行与验证**：仓库根 `pnpm install && pnpm check`（= `tsc --noEmit` + `eslint .`（六边界 import 规则）+ `vitest run`）。当前 **DEV-01 已完成并验证**（契约与路由纯逻辑，127/127 测试；报告见 [docs/implementation/reports/dev-01-result.md](docs/implementation/reports/dev-01-result.md)）。
+- **结构**：`src/` 六边界（contracts / domain / persistence / adapter / daemon / ui，主设计 §8.4 C6）+ `tests/`。contracts 与 domain 已实装；persistence/adapter/daemon/ui 为骨架（分别由 DEV-02/03/04-05/07 起承载）。技术栈：Node ≥24、TypeScript 6.x strict、zod 4、Vitest 5、ESLint 10（依赖锁定见 `pnpm-lock.yaml`）。
+- **施工总账**：[docs/implementation/implementation-status.md](docs/implementation/implementation-status.md)（DEV/FULL 包状态）、[需求追踪表](docs/implementation/requirements-traceability.md)（137 项）、[实施决策](docs/implementation/implementation-decisions.md)（ADR-Ixx）、[runtime 能力矩阵](docs/implementation/runtime-capability-matrix.md)、[续工记录](docs/implementation/continuation.md)。跨会话续工先读这些文件，不重新调研。
+
+- 交互原型：`hifi-prototype/`（Electron 桌面外壳为真，业务为内存 mock；可整目录删除，不代表正式工程结构；与根工程各自独立 package.json，正式 UI 施工时按已确认交互复用改造进 `src/ui/`）
 - [docs/dev-briefs/dev-01-contracts-and-routing.md](docs/dev-briefs/dev-01-contracts-and-routing.md) — 第一个开发包任务说明（消息契约与路由）；后续开发包说明也放 `docs/dev-briefs/`
 
 ## Raft 调研（2026-09-17，基于 1.0.32 官方二进制静态核查）
