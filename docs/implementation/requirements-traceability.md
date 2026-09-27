@@ -98,14 +98,16 @@ CH-02 NOT_STARTED（M0/DEV-04/07）；CH-01/03 NOT_STARTED（M3/DEV-14/17）；C
 | 项 | 承载包 | 状态 | 备注 |
 |---|---|---|---|
 | Git 客户端 | DEV-12/14（RT-24） | NOT_STARTED | ChangeSet 契约已落（applicationStatus 与验收分离） |
-| 可选任务验收 | DEV-14（RT-25） | **IN_PROGRESS（契约）** | Task.reviewPolicy/TaskDelivery.reviewStatus/not_required 不伪造人工通过——schema 级 refine 已落并有测试 |
+| 可选任务验收 | DEV-14（RT-25） | **IN_PROGRESS（契约+DB 约束）** | schema refine + DB CHECK（not_required 不带人工记录、accepted 必带、单 pending 部分唯一索引）已落并有测试 |
 | 共享预览 | DEV-24（WPV-01—36） | NOT_STARTED | |
-| MCP 预留（§31.1 五条） | DEV-01/02/05（MCP-BASE） | **IN_PROGRESS** | 五条预留的契约+纯逻辑已落：CommandEnvelope/CommandResult/CallerContext、via/source_connection_id、validateDispatchScope、command.result.get、发言与执行分离；事务语义待 DEV-02/05，协议本体 FULL-11 |
-| 默认单写者与前像 | DEV-04/12/13（RT-07/08/09） | NOT_STARTED | WriteConcurrencyPolicy 契约已落；锁域实现待 DEV-04 |
+| MCP 预留（§31.1 五条） | DEV-01/02/05（MCP-BASE） | **IN_PROGRESS** | DEV-01 契约+纯逻辑；DEV-02 落 command_receipts 事务语义（重放/冲突/隔离/清理过期）；预算事务预占与协议本体待 DEV-05/FULL-11 |
+| 默认单写者与前像 | DEV-04/12/13（RT-07/08/09） | **IN_PROGRESS（表结构）** | workspace_leases 表已落（组合主键）；锁域判定与数量策略待 DEV-04（ADR-I14） |
 
-## 验收编号登记（本包覆盖）
+## 验收编号登记（DEV-01 + DEV-02 覆盖）
 
-- G0（DEV-01）：schema/路由/目标/主体/范围/预算纯校验——**通过**（127/127，报告见 [reports/dev-01-result.md](reports/dev-01-result.md)）
+- G0（DEV-01）：schema/路由/目标/主体/范围/预算纯校验——**通过**（127/127，[reports/dev-01-result.md](reports/dev-01-result.md)）
+- G1 存储侧子集（DEV-02）：迁移幂等/回滚/升级备份、RT-01 幂等重放、RT-02 重启保留、RT-05 单次派发、约束反例——**通过**（[reports/dev-02-result.md](reports/dev-02-result.md)）；G1 整体（进程/隔离）待 DEV-03/04/05/17
 - AT-09（代码块 @全体 不触发）：通过（`topLevelRoute.test.ts`）
-- MCP-BASE 纯逻辑子集（自报身份拒绝/读不派发/同键同参异参/旧停止不伤新 run）：通过；事务与查询部分待 DEV-02/FULL-11
+- RT-13（磁盘满）：未模拟（错误映射+回滚已测；物理注入待 DEV-13）
+- MCP-BASE 纯逻辑子集（自报身份拒绝/读不派发/同键同参异参/旧停止不伤新 run/提交后丢响应重试的存储语义）：通过；查询游标/撤权/空页待 FULL-11
 - 其余 AT/RT/TH/DM-BASE/FOLLOW/LATE/E11/LAN/WPV/PP：未执行（随对应包）

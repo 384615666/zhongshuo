@@ -19,3 +19,9 @@
 ## B6/RT-23 认证记录
 
 （空——由 DEV-06/10 逐 runtime/adapter/平台/模式填入：计划档写限制、确认前无变更/允许后继续/拒绝后无变更、续接不放宽、故障不回退。）
+
+## native 模块记录
+
+| 模块 | 版本 | 运行环境 | 验证 | 日期 |
+|---|---|---|---|---|
+| better-sqlite3 | 13.0.3（prebuilds，SQLite 3.53.4） | Node 24.16.0（daemon 进程；renderer 不加载 native） | 真实执行 SQL 通过（`pnpm check` 151/151 含 24 集成用例）；Electron 场景 DEV-05/15 复验 | 2026-09-27 |

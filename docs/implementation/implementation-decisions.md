@@ -70,3 +70,46 @@ noFallthroughCasesInSwitch / verbatimModuleSyntax / isolatedModules / allowImpor
 Message schema 只能表达单实体不变量（thread_id ⇔ thread_message_seq、via_connection_id 仅 human）；
 「DM 消息 room/thread/线程序号全空」需要会话 kind，落在 `validateMessageConversationBinding`
 跨实体纯函数（服务端提交路径执行）。DB CHECK 约束由 DEV-02 迁移再补第三层。
+
+## ADR-I12 · better-sqlite3 13.0.3（2026-09-27，DEV-02）
+
+版本锁定 13.0.3（包内 prebuilds，无需 node-gyp 源码构建），实测 Node 24.16.0 真实执行 SQL
+（SQLite 3.53.4）——ABI 以真实运行为证，非"装上即认"。WAL 对 `:memory:` 不生效（SQLite 限制，
+journal_mode 保持 memory），文件库生效——测试分别断言。Electron 场景：daemon 进程持库，
+renderer 不加载 native 模块（开工契约 §9），Electron rebuild 需求在 DEV-05/15 引入 Electron 时复验。
+pnpm 11 构建许可经 `pnpm-workspace.yaml` 的 `allowBuilds` 授权。
+
+## ADR-I13 · external_connections/external_grants 延后至 FULL-11 迁移（2026-09-27）
+
+§31.8 的两张表不在 §12.2 表结构目录内；§12.2 为唯一权威命名。messages.via_connection_id/
+tasks.source_connection_id 列已按 §12.2 落地（无 FK，FULL-11 迁移补引用约束）。
+
+## ADR-I14 · workspace_leases 活跃租约数量约束在服务层（2026-09-27）
+
+single_writer（≤1 活跃租约/锁域）与 parallel_writers（多租约+上限）随项目设置变化，
+数据库层无法用单个部分唯一索引同时表达两种策略；表结构保留组合主键 (lock_domain, owner_turn_id)，
+数量约束由 DEV-04/12 的服务层按项目策略执行（RT-07/08/09 验证）。
+
+## ADR-I15 · dm_participants「恰两主体」在创建事务执行（2026-09-27）
+
+SQLite 无延迟约束触发器，逐行插入无法在中途满足"恰好两行"；由服务层创建事务保证
+（插入恰两行不同主体后提交），测试承载反例（第三人插入拒绝路径随 DEV-22）。
+
+## ADR-I16 · run/turn 会话绑定经组合外键链（2026-09-27）
+
+组合外键 (project_id, conversation_id)→conversations 落在有 project_id 列的表
+（threads/messages/tasks/members/dm_participants/read_states/sessions/followers）；
+workflow_runs/agent_turns 目录未列 project_id，经 task→tasks 组合外键链绑定，
+run.conversation_id==task.conversation_id 由服务层提交路径校验（§2.2「任务/run/turn
+同时校验所属关系」的服务层部分）。
+
+## ADR-I17 · pnpm-workspace.yaml 仅承载设置（2026-09-27）
+
+pnpm 10+ 把 onlyBuiltDependencies/allowBuilds 等设置迁到 pnpm-workspace.yaml。
+本文件的 `packages: ['.']` 只声明根包自身，**不构成多包 workspace**（C6 单仓单包口径不变）。
+
+## ADR-I18 · reminder_occurrences 表超出 §12.2 字面目录（2026-09-27）
+
+开工契约 §7「occurrence 以 (reminderId,scheduledAt) 唯一、错过合并」需要持久化载体；
+001 迁移加了该表（主键即唯一约束）。已在报告标注，属对 §12.2 的工程性补充，
+待下次主设计修订时同步回写目录。

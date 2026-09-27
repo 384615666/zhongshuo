@@ -15,10 +15,12 @@
     "check": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.3",
     "eslint": "^10.11.0",
     "typescript": "^6.0.3",

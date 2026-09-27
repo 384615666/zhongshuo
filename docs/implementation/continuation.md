@@ -2,13 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（DEV-01 完成时点）
-- 分支：`codex/full-implementation`；基线：`afbbdb6`（main）→ 本包检查点提交见 `git log`（`docs/implementation/reports/dev-01-result.md` 记录）
-- 工作树归属：本包新增根工程脚手架 + `src/` + `tests/` + `docs/implementation/` + README 增补；无用户未提交改动混入
+- 更新：2026-09-27（DEV-02 完成时点）
+- 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02（见 git log，报告 reports/dev-02-result.md）
+- 工作树归属：本包新增 `src/persistence/` 实装 + `tests/integration/` + `pnpm-workspace.yaml`（仅设置）+ 总账更新；无用户未提交改动混入
 
 ## 刚完成
 
-- **DEV-01 全部完成并验证**：契约 14 文件 + domain 纯函数 12 文件 + 127/127 测试 + 六边界 lint（反例验证）。详见 [reports/dev-01-result.md](reports/dev-01-result.md)。
+- **DEV-02 全部完成并验证**：迁移运行器（备份/审计/回滚）+ §12.2 全量 001 迁移 + 事务命令网关 + outbox CAS + 主池根任务单事务写入路径；`pnpm check` 151/151（含 24 集成用例：RT-01/02/05 存储侧、约束反例、升级备份）。详见 [reports/dev-02-result.md](reports/dev-02-result.md)。
 
 ## 当前故障 / 待停止进程
 
@@ -16,13 +16,12 @@
 
 ## 下一步（直接开工，无需再确认）
 
-1. **DEV-02（SQLite 基础）**：`src/persistence/` 实装——better-sqlite3 锁版本（首次引入即验 Node ABI，ADR 记录）、§12.2 全表 + 开工契约 §2.2 增量的正式 migration（含 §12.3 唯一索引/部分索引）、事务命令去重（command_receipts 表 + evaluateIdempotency 接线）、outbox、WAL、重启读取 fixture。验收对应 G1 子集（RT-01/02/05/13 的存储侧）。
-2. **DEV-03（fake adapter）** 可并行：`src/adapter/` 按 §9.3 RuntimeAdapter 接口（契约已在 DEV-01 定型前置于 contracts——DEV-03 需先把 RuntimeAdapter/SessionRef/TurnRequest/NormalizedRuntimeEvent 从 §9.3 落为 contracts 代码，再实现 fake）。
-3. 注意 DEV-02 时同步更新 `requirements-traceability.md` 与本文件。
+1. **DEV-03（fake adapter）**：①先把主设计 §9.3 的 RuntimeAdapter/SessionRef/TurnRequest/RuntimeCapabilities 与 §9.4 NormalizedRuntimeEvent 落为 `src/contracts/runtime.ts`（契约层，DEV-03 起消费）；②在 `src/adapter/fake/` 实现可脚本化 fake adapter——六类 fixture：成功流、失败、审批请求/答复、超时、停止不响应、迟到事件；③表驱动测试。注意 DEV-03 不碰真实模型（总任务书 §6.1）。
+2. **DEV-04/05** 随后（依赖 DEV-02 ✅/DEV-03）：目录身份/锁域（RT-09 junction/父子检测）、daemon 单实例/IPC/停止代次持久化。
+3. 每包结束更新：implementation-status / requirements-traceability / reports/<包名>-result.md / 本文件。
 
 ## 施工纪律提醒（下一轮自查）
 
-- 检查点提交只挑本包文件，不全量 add。
+- 检查点提交只挑本包文件，不全量 add；TS 6.x / zod 4.6.5 / better-sqlite3 13.0.3 已锁。
 - 三态区分：IMPLEMENTED ≠ VERIFIED；报告写实际命令与退出码。
-- TS 保持 6.x（ADR-I03）；zod 已锁 4.6.5。
-- 用户明确延期项（并行写入增强/worktree）不得恢复。
+- 用户明确延期项（并行写入增强/worktree）不得恢复；G3 前必须具备 DEV-17 最小隔离与 DEV-21-M0 正式合同。
