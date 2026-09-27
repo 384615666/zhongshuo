@@ -18,7 +18,7 @@
 | DEV-03 | 可脚本化 fake adapter（六类 fixture） | **VERIFIED** | `src/adapter/fake/` + `src/contracts/runtime.ts` | — | [reports/dev-03-result.md](reports/dev-03-result.md) |
 | DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED** | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md) |
 | DEV-05 | daemon 单实例、派发 worker、停止代次、恢复基础 | **VERIFIED**（核心；IPC 传输随 DEV-07、真实进程注册随 DEV-06） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)：派发/停止/恢复全链 192/192 |
-| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属） | NOT_STARTED | `src/domain/`+`src/daemon/` | G1/G3 | M0 剩余核心件（G3 前必备） |
+| DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属） | **VERIFIED**（M0 最小隔离） | `src/domain/isolation/` | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)：五级绑定+事件归属+上下文过滤+双任务不串线；阶段级过滤随 DEV-08/09 |
 | DEV-04 | 项目目录打开/去重/重定位、物理锁域、基线、用户内容保护 | NOT_STARTED | `src/daemon/` | G1/RT-07/09 | 依赖 DEV-01 ✅ / DEV-02 |
 | DEV-05 | daemon 单实例、IPC、进程/会话注册、派发、停止代次、恢复基础 | NOT_STARTED | `src/daemon/` | G1 | 依赖 DEV-02/03 |
 | DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05 + 最小隔离（DEV-17）+ 最小合同（DEV-21-M0）先行 |

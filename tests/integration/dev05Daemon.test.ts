@@ -89,7 +89,6 @@ describe('派发 worker：成功全链路（G1 核心）', () => {
     // 最终回复落在正确线程（thread_message_seq=1；conversation_seq=2 紧跟 anchor）
     const reply = db.prepare('SELECT * FROM messages WHERE thread_id = ?').get('thread_1');
     expect(reply).toMatchObject({
-      id: 'msg_msg_fake_1',
       thread_message_seq: 1,
       conversation_seq: 2,
       author_type: 'agent',

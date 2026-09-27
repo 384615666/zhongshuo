@@ -13,3 +13,5 @@ export * from './scope/sourceConnection.ts';
 export * from './idempotency.ts';
 export * from './budget.ts';
 export * from './approval.ts';
+export * from './isolation/binding.ts';
+export * from './isolation/contextFilter.ts';

@@ -287,10 +287,12 @@ export class DispatchWorker {
   }
 
   private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string): void {
+    // 消息身份以 turn 为命名空间：同 turn 内重放去重（RT-05），跨 turn/会话的同名 provider id 不冲突。
+    const rowId = `msg_${turnId}_${messageId}`;
     const tx = this.db.transaction(() => {
       const existing = this.db
         .prepare('SELECT id FROM messages WHERE id = ?')
-        .get(`msg_${messageId}`) as { id: string } | undefined;
+        .get(rowId) as { id: string } | undefined;
       if (existing != null) return; // 重放去重（RT-05）
       const convSeq = this.db
         .prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
@@ -306,7 +308,7 @@ export class DispatchWorker {
            thread_message_seq, author_type, author_id, body_json, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, ?, 'final', ?)`,
       ).run(
-        `msg_${messageId}`,
+        rowId,
         task.project_id,
         task.conversation_id,
         convSeq.last_message_seq,

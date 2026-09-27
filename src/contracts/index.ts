@@ -17,3 +17,4 @@ export * from './budget.ts';
 export * from './permission.ts';
 export * from './queries.ts';
 export * from './runtime.ts';
+export * from './contextBundle.ts';
