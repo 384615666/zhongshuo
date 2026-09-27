@@ -7,7 +7,7 @@
 
 | Runtime | 接入方式 | 版本 | 能力验证 | 权限档位验证 | 状态 | 承载包 |
 |---|---|---|---|---|---|---|
-| Codex（App Server） | stdio 换行 JSON-RPC（adapter v0.2.0+修复轮3） | **0.157.1**（2026-09-27 实测；协议类型 generate-ts 固化） | 已验证：启动/握手/请求/turn 派发/通知映射 + 真实文件内容回流 + 层 A 行为证据 + **resume 跨进程续接（LUNA-RESUME-7 恢复）** + steer 错误 ID 拒绝（model=gpt-6-luna，e2e 7/7）。协议回放覆盖终态各态/迟到/双会话并发/未知归属终态/审批归属/重建 | **计划档两路径 PASS**（B6 证据绑定：指定工具+toolCallId+目标路径+status:declined）；**确认档 deny 路径 PASS**（read-only+on-request→approval.requested→deny→无写入）。确认档 allow/续接不放宽/steer 正常路径未验证 | **部分 VERIFIED**（待补：steer 正常、审批 allow、structuredFinal、usageTokens 口径） | DEV-06 |
+| Codex（App Server） | stdio 换行 JSON-RPC（adapter v0.2.0+r3/r4） | **0.157.1**（2026-09-27 实测；协议类型 generate-ts 固化） | **G2 范围 VERIFIED**（累计 12 真实用例）：启动/握手/请求/turn 派发/通知映射/文件内容回流/层 A/resume 跨进程续接+不放宽/steer 正常+服务端拒/interrupt/usageTokens 口径。协议回放覆盖终态各态/迟到/双会话并发/未知归属/审批归属/重建 | 计划档两路径 PASS（declined + failed;sandbox-denial 证据绑定，共享验证器+7 负例）；确认档 **allow+deny 双路径 PASS**（确认前无变更；allow 后仅获准操作） | **G2 VERIFIED（Codex）**；structuredFinal 真实输出与 UI 集成随 G3 | DEV-06 |
 | Claude Code（headless） | 计划 `-p` stream-json | 未锁定（设计核对时 2.1.278） | 无 | 无 | NOT_STARTED | DEV-10 |
 | fake adapter | 进程内脚本化 | — | — | — | NOT_STARTED | DEV-03 |
 

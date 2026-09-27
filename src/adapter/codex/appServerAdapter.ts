@@ -297,10 +297,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             kind: 'tool.completed',
             toolCallId: String(item?.['id'] ?? randomUUID()),
             outcome: toolOutcome(item?.['status']),
-            // 拒绝原因留痕（B6 证据绑定）：declined=权限拒绝；failed=执行失败。
-            ...(item?.['status'] === 'declined' || item?.['status'] === 'failed'
-              ? { resultRef: `status:${String(item?.['status'])}` }
-              : {}),
+            // 拒绝原因留痕（B6 证据绑定，修复轮 4）：declined=权限拒绝；
+            // failed 附 exitCode，且 aggregatedOutput 命中沙箱/权限拒绝签名时标记
+            // sandbox-denial——纯 failed（可能是语法错误）不构成可辨识权限拒绝。
+            ...(item?.['status'] === 'declined'
+              ? { resultRef: 'status:declined' }
+              : item?.['status'] === 'failed'
+                ? { resultRef: `status:failed;exit:${String(item?.['exitCode'] ?? '?')}${sandboxDenialSignature(item) ? ';sandbox-denial' : ''}` }
+                : {}),
           }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
@@ -561,7 +565,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (this.sessions.size === 0 && this.child != null) {
       const child = this.child;
       this.child = null;
-      child.kill();
+      await this.killAndWait(child);
     }
   }
 
@@ -570,8 +574,21 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (this.child != null) {
       const child = this.child;
       this.child = null;
-      child.kill();
+      await this.killAndWait(child);
     }
+  }
+
+  /** 终止并等待子进程退出（默认 5s 上限）：避免残留进程锁住 fixture 目录（EPERM）。 */
+  private async killAndWait(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), timeoutMs);
+      timer.unref?.();
+      child.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.kill();
+    });
   }
 
   private stateOf(session: SessionRef): SessionState {
@@ -585,6 +602,12 @@ function toolOutcome(status: unknown): 'success' | 'failure' | 'unknown' {
   if (status === 'completed') return 'success';
   if (status === 'failed' || status === 'declined') return 'failure';
   return 'unknown';
+}
+
+/** 沙箱/权限拒绝签名：failed 的 aggregatedOutput 命中才算可辨识的权限拒绝原因。 */
+function sandboxDenialSignature(item: ToolLikeItem | undefined): boolean {
+  const output = String(item?.['aggregatedOutput'] ?? '');
+  return /read-only|sandbox|not permitted|denied|permission|access is denied|只读|拒绝/i.test(output);
 }
 
 /** 工具目标摘要：fileChange 用 changes[].path；commandExecution 用 command；其余用工具名。 */

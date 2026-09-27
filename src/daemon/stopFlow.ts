@@ -133,9 +133,12 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
     const unknownTurns = db
       .prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`)
       .run().changes;
+    // 单实例锁保证旧持有者已终止：启动恢复重排全部 leased（孤儿租约），
+    // 不等待 60s 自然过期（修复轮 4 发现：未过期孤儿租约会卡住重启后的派发）。
     const requeuedOutbox = db
-      .prepare(`UPDATE outbox SET status = 'pending', lease_owner = NULL, lease_until = NULL WHERE status = 'leased' AND lease_until < ?`)
-      .run(now).changes;
+      .prepare(`UPDATE outbox SET status = 'pending', lease_owner = NULL, lease_until = NULL WHERE status = 'leased'`)
+      .run().changes;
+    void now;
     const heldLeases = (db
       .prepare(`SELECT lock_domain, owner_turn_id, status FROM workspace_leases WHERE status != 'released'`)
       .all() as Array<{ lock_domain: string; owner_turn_id: string; status: string }>)

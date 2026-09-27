@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-27（修复轮 3：用户复核三项收口 + steer/resume/审批桥认证通过；默认 260/260、e2e 7/7）
+- 最近更新：2026-09-27（修复轮 4 + DEV-06 认证收口 + DEV-07 骨干：默认 270/270、daemon smoke 4/4、真实层累计 12 用例）
 
 ## 工作包状态
 
@@ -19,8 +19,8 @@
 | DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED**（修复轮后） | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md)+勘误：RT-07 真过期阻塞已修复（原用例假阳性）；parallel_writers 入口已禁用（ADR-I19） |
 | DEV-05 | daemon 单实例锁、派发 worker、停止代次、恢复基础、命名管道 IPC | **VERIFIED**（修复轮后） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)+勘误：独立截止计时/会话竞态复查/派发门禁/重领对账/模式门禁/验收策略/锁原子化/IPC 全部补齐；**真实进程边界随 DEV-06 验证，不提前声称** |
 | DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
-| DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **部分 VERIFIED**（C1/计划档两路径/steer 拒绝/resume 续接/审批桥 deny 通过；steer 正常路径与审批 allow 待补） | `src/adapter/codex/` | G2 子集/B6 计划档+确认档 deny | [reports/dev-06-fixround3-result.md](reports/dev-06-fixround3-result.md)（勘误链：stage1→fixround2→fixround3） |
-| DEV-07 | 正式 UI 最小接入（保留原型交互，去 mock） | NOT_STARTED | `src/ui/` | G3 | 依赖 DEV-04/05/06 |
+| DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **VERIFIED（G2 适用范围）**：C1/层 A、计划档两路径（declined/sandbox-denial 证据绑定）、确认档 allow+deny、steer 正常+服务端拒、resume 续接+不放宽、interrupt、usageTokens | `src/adapter/codex/` | G2（Codex 单 runtime；structuredFinal 真实输出随 G3） | [reports/round-20260927-fix4-dev6finish-dev07backbone.md](reports/round-20260927-fix4-dev6finish-dev07backbone.md)（勘误链完整） |
+| DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **IN_PROGRESS**（骨干已通：daemon 命令面/管道客户端/组装入口/smoke 4/4；Electron 壳与 renderer 接线未开始） | `src/daemon/`+`src/ui/` | G3 | 依赖 DEV-04/05/06 ✅；下一轮=Electron main/preload+原型交互接线+codex 端到端 |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | NOT_STARTED | `src/adapter/` | G2/G4 | M2 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## 修复轮 4 + DEV-06 收口 + DEV-07 骨干（2026-09-27）
+
+详见 [reports/round-20260927-fix4-dev6finish-dev07backbone.md](reports/round-20260927-fix4-dev6finish-dev07backbone.md)。B6 证据绑定共享验证器（declined/sandbox-denial 可辨识原因，7 负例）；锁未知身份一律 BUSY+代次校验接管（ADR-I34）；DEV-06 剩余认证 5/5（steer 正常+服务端拒/审批 allow/resume 不放宽/usageTokens/interrupt）；DEV-07 骨干落地（commands/entry/pipeClient + smoke：project.open→message.submit→worker→事件→重启门禁→resume 续跑）；顺带修复孤儿租约重排与 fake 会话 id 唯一。
 
 ## 修复轮 3（2026-09-27，用户复核三项后）
 

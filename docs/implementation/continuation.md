@@ -2,10 +2,14 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（修复轮 3 + DEV-06 收尾认证通过时点）
+- 更新：2026-09-27（修复轮 4 + DEV-06 G2 收口 + DEV-07 骨干时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
+
+- **修复轮 4**：B6 证据绑定共享验证器（declined/sandbox-denial；7 负例；B6-1 审批仪器化重跑、B6-2 签名重跑均过）；锁未知身份一律 BUSY+代次校验接管（ADR-I34）。默认 270/270。
+- **DEV-06 认证收口（G2 范围 VERIFIED，Codex 单 runtime）**：steer 正常+服务端拒、审批 allow、resume 不放宽、interrupt、usageTokens——真实层累计 12 用例（gpt-6-luna）。
+- **DEV-07 骨干**：daemon 命令面（project.open/message.submit/events.list/dispatch.resume/task.stop）+ 组装入口（锁→恢复门禁→IPC→worker tick）+ 管道客户端；smoke 4/4（fake，零额度）：含重启历史保留+门禁+确认续跑。顺带修复孤儿租约重排（ADR-I36）/fake 会话 id 唯一/命令面 run 同步语义（ADR-I37）。
 
 - **修复轮 3**：用户复核三项收口——①turn/started|completed 只认 turn.id（mock 去伪字段）+awaiting 按会话隔离+响应解析同步点注册映射（未知归属终态：adapter 无内部 turnId/worker 审计不终结当前轮，含双会话并发与 ghost 反例）；②锁身份写入窗口（半写入≠已死，mtime 宽限+onBeforeClaimIdentity 无双持有）；③B6 证据绑定（指定工具+toolCallId 配对+目标路径+resultRef 拒绝原因）。默认 260/260。
 - **DEV-06 收尾认证（gpt-6-luna）**：steer 错误 ID 拒绝；**resume 跨进程续接**（暗号 LUNA-RESUME-7 恢复）；**审批桥 deny**（read-only+on-request→approval.requested→deny→无写入）。e2e 累计 7/7。详见 reports/dev-06-fixround3-result.md。

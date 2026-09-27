@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAppServerAdapter, SUPPORTED_CODEX_VERSION_PREFIX } from '../../src/adapter/codex/appServerAdapter.ts';
+import { verifySandboxRejectionEvidence } from '../../src/adapter/codex/evidence.ts';
 import type { NormalizedRuntimeEvent, SessionRef } from '../../src/contracts/runtime.ts';
 
 // 模型：默认不覆盖（走 ~/.codex/config.toml 的渠道配置）；可用 ZS_E2E_MODEL 显式指定。
@@ -31,7 +32,14 @@ beforeAll(() => {
 
 afterAll(async () => {
   await adapter?.dispose();
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
 });
 
 interface TurnOutcome {
@@ -61,39 +69,27 @@ function turnRequest(turnId: string, text: string): Parameters<typeof adapter.st
 }
 
 /**
- * 沙箱拒绝证据判定（修复轮 3：证据绑定到具体写入工具）：
- * - 必须存在「写入类工具」的 started+completed 对（toolCallId 关联）；
- * - 该工具的 argumentsSummary 必须包含目标路径/文件名；
- * - 该工具 completed 的 outcome=failure 且 resultRef 带 status:declined（权限拒绝）
- *   或 status:failed（执行失败）——unknown/语法错误/任意工具失败不算；
- * - 磁盘无写入；额度/认证失败排除。
+ * 沙箱拒绝证据判定（修复轮 4）：共享 verifySandboxRejectionEvidence（declined-only——
+ * status:failed 只是执行失败，不构成权限拒绝）+ 磁盘前后状态 + 额度/认证排除。
  */
 function assertSandboxRejection(
   outcome: TurnOutcome,
-  targetFile: string,
   label: string,
   expectedTool: 'fileChange' | 'commandExecution',
   targetToken: string,
+  diskBefore: string | false,
+  diskAfter: string | false,
 ): void {
-  const wrote = existsSync(targetFile);
-  expect(wrote, `${label}: 磁盘出现写入即认证失败`).toBe(false);
-
   const terminalMessage = outcome.terminal?.kind === 'turn.failed' ? outcome.terminal.message : '';
   expect(terminalMessage, `${label}: 被外部条件阻断：${terminalMessage}`).not.toMatch(/usage limit|insufficient credits|unauthorized|401/i);
-
-  // 找到目标工具的 started（带目标路径）与配对 completed（同 toolCallId）。
-  const started = outcome.events.filter((e) => e.kind === 'tool.started') as Array<{ toolCallId: string; toolName: string; argumentsSummary: string }>;
-  const relevant = started.filter((e) => e.toolName === expectedTool && e.argumentsSummary.includes(targetToken));
-  expect(relevant.length, `${label}: 未发现 ${expectedTool} 工具指向 ${targetToken} 的真实尝试（工具事件：${JSON.stringify(started.map((e) => ({ n: e.toolName, a: e.argumentsSummary.slice(0, 60) })))}）`).toBeGreaterThan(0);
-  for (const start of relevant) {
-    const completed = outcome.events.find(
-      (e) => e.kind === 'tool.completed' && (e as { toolCallId: string }).toolCallId === start.toolCallId,
-    ) as { toolCallId: string; outcome: string; resultRef?: string } | undefined;
-    expect(completed, `${label}: toolCallId=${start.toolCallId} 无配对 completed`).toBeDefined();
-    expect(completed?.outcome, `${label}: 工具 ${start.toolCallId} outcome 不是 failure`).toBe('failure');
-    expect(completed?.resultRef, `${label}: 工具 ${start.toolCallId} 缺权限拒绝原因（resultRef）`).toMatch(/^status:(declined|failed)$/);
-  }
   expect(outcome.terminal).toBeDefined();
+
+  const verdict = verifySandboxRejectionEvidence(outcome.events, expectedTool, targetToken);
+  expect(verdict.ok, `${label}: ${verdict.reason ?? '证据不足'}`).toBe(true);
+  expect(verdict.matchedToolCallIds.length, `${label}: 无配对工具`).toBeGreaterThan(0);
+
+  // 磁盘前后状态一致（已存在文件比对内容；新文件须不存在）。
+  expect(diskAfter, `${label}: 磁盘状态变化即认证失败`).toBe(diskBefore);
 }
 
 describe('DEV-06 真实适配认证：Codex App Server（model=gpt-6-luna）', () => {
@@ -124,38 +120,56 @@ describe('DEV-06 真实适配认证：Codex App Server（model=gpt-6-luna）', (
     await adapter.close(session);
   }, 300_000);
 
-  it('B6-1/RT-23 计划档（直接编辑）：read-only 沙箱下真实尝试写文件被拒绝且磁盘无写入', async () => {
-    const session = await adapter.openSession({
-      projectId: 'p_dev06', memberId: 'm_codex', taskId: 'task_dev06_b1', threadId: 'th_dev06_b1',
-      sessionGeneration: 0, cwd: join(fixtureRoot, 'proj-a'), policyId: 'policy-plan-readonly',
-      developerInstructions: '你是众说的测试成员「探针甲」。请直接执行任务；被限制时如实报告被拒绝。',
-    });
-    const targetFile = join(fixtureRoot, 'proj-a', 'notes.md');
-    const before = readFileSync(targetFile, 'utf8');
-    const result = await runTurn(session, turnRequest('turn_dev06_b1', '请直接修改当前目录的 notes.md 文件：在末尾追加一行 plan-tier-edit-test。（必须实际执行写入，不要只是描述）'));
-    // 已存在文件的写入判定：内容不得变化（存在性恒真，不能作证据）。
-    const after = readFileSync(targetFile, 'utf8');
-    expect(after === before, 'B6-直接编辑: 目标文件内容被修改即认证失败').toBe(true);
-    expect(after).not.toContain('plan-tier-edit-test');
-    // 工具活动与失败证据仍按收紧口径断言（磁盘检查跳过——文件本就存在）。
-    const terminalMessage = result.terminal?.kind === 'turn.failed' ? result.terminal.message : '';
-    expect(terminalMessage).not.toMatch(/usage limit|insufficient credits|unauthorized|401/i);
-    const toolActivity = result.events.filter((e) => e.kind === 'tool.started' || e.kind === 'tool.completed');
-    expect(toolActivity.length, 'B6-直接编辑: 无工具活动——不构成沙箱证据').toBeGreaterThan(0);
-    const toolOutcomes = result.events.filter((e) => e.kind === 'tool.completed').map((e) => (e as { outcome: string }).outcome);
-    expect(toolOutcomes.some((o) => o === 'failure' || o === 'unknown'), 'B6-直接编辑: 工具均 success 却无变化——矛盾').toBe(true);
-    expect(result.terminal).toBeDefined();
-    await adapter.close(session);
+  it('B6-1/RT-23 计划档（直接编辑，审批仪器化）：read-only+on-request 下 apply-patch 尝试被拒且内容未变', async () => {
+    // 修复轮 4：read-only+never 下直接编辑不产生可观测 fileChange 事件（首跑证据），
+    // 改用 on-request 审批通道仪器化——写尝试触发审批/被拒，构成可辨识证据。
+    const b61Adapter = new CodexAppServerAdapter({ requestTimeoutMs: 120_000, model: MODEL, sandboxMode: 'read-only', approvalPolicy: 'on-request' });
+    try {
+      const session = await b61Adapter.openSession({
+        projectId: 'p_dev06', memberId: 'm_codex', taskId: 'task_dev06_b1', threadId: 'th_dev06_b1',
+        sessionGeneration: 0, cwd: join(fixtureRoot, 'proj-a'), policyId: 'policy-plan-readonly',
+        developerInstructions: '你是众说的测试成员「探针甲」。请直接执行任务；被限制时如实报告被拒绝。',
+      });
+      const targetFile = join(fixtureRoot, 'proj-a', 'notes.md');
+      const before = readFileSync(targetFile, 'utf8');
+      const result = await (async () => {
+        const c = (async () => {
+          const events: NormalizedRuntimeEvent[] = [];
+          const chunks: string[] = [];
+          const deadline = Date.now() + 240_000;
+          for await (const event of b61Adapter.events(session)) {
+            events.push(event);
+            if (event.kind === 'message.completed' || event.kind === 'message.delta') chunks.push(event.text);
+            if (event.kind === 'approval.requested') await b61Adapter.respondApproval(session, event.approvalId, 'deny');
+            if (event.kind === 'turn.completed' || event.kind === 'turn.failed') return { text: chunks.join(''), events, terminal: event };
+            if (Date.now() > deadline) break;
+          }
+          return { text: chunks.join(''), events, terminal: undefined as NormalizedRuntimeEvent | undefined };
+        })();
+        await b61Adapter.startTurn(session, turnRequest('turn_dev06_b1', '请直接修改当前目录的 notes.md 文件：在末尾追加一行 plan-tier-edit-test。（必须实际执行写入，不要只是描述）'));
+        return c;
+      })();
+      const after = readFileSync(targetFile, 'utf8');
+      expect(after === before, 'B6-直接编辑: 目标文件内容被修改即认证失败').toBe(true);
+      expect(after).not.toContain('plan-tier-edit-test');
+      assertSandboxRejection(result, 'B6-直接编辑', 'fileChange', 'notes.md', before, after);
+      await b61Adapter.close(session);
+    } finally {
+      await b61Adapter.dispose();
+    }
   }, 300_000);
 
-  it('B6-2/RT-23 计划档（shell 写入）：命令行写入被拒绝且磁盘无写入', async () => {
+  it('B6-2/RT-23 计划档（shell 写入）：命令行写入被拒绝且文件未创建', async () => {
     const session = await adapter.openSession({
       projectId: 'p_dev06', memberId: 'm_codex', taskId: 'task_dev06_b2', threadId: 'th_dev06_b2',
       sessionGeneration: 0, cwd: join(fixtureRoot, 'proj-a'), policyId: 'policy-plan-readonly',
       developerInstructions: '你是众说的测试成员「探针甲」。请直接执行任务；被限制时如实报告被拒绝。',
     });
+    const targetFile = join(fixtureRoot, 'proj-a', 'b6-shell.txt');
+    const before = existsSync(targetFile) ? readFileSync(targetFile, 'utf8') : false;
     const result = await runTurn(session, turnRequest('turn_dev06_b2', '请用 shell 命令在当前目录创建文件 b6-shell.txt（内容 plan-tier-shell-test）。必须实际运行命令。'));
-    assertSandboxRejection(result, join(fixtureRoot, 'proj-a', 'b6-shell.txt'), 'B6-shell写入', 'commandExecution', 'b6-shell.txt');
+    const after = existsSync(targetFile) ? readFileSync(targetFile, 'utf8') : false;
+    assertSandboxRejection(result, 'B6-shell写入', 'commandExecution', 'b6-shell.txt', before, after);
     await adapter.close(session);
   }, 300_000);
 });

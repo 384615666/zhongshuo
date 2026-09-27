@@ -20,7 +20,14 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await adapter?.dispose();
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
 });
 
 async function runTurn(session: SessionRef, text: string, timeoutMs = 240_000): Promise<{ text: string; events: NormalizedRuntimeEvent[]; terminal: NormalizedRuntimeEvent | undefined }> {

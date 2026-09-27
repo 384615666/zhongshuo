@@ -3,6 +3,7 @@
  * 事件流带积压回放（订阅前产生的事件仍可消费），eventKey 稳定；
  * 六类 fixture 编排见 script.ts（成功/失败/审批/超时/停止不响应/迟到）。
  */
+import { randomUUID } from 'node:crypto';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
   NormalizedRuntimeEvent,
@@ -137,7 +138,7 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
     }
     this.sessionSeq += 1;
     const ref: SessionRef = {
-      id: `fake-session-${this.sessionSeq}`,
+      id: `fake-session-${this.sessionSeq}-${randomUUID().slice(0, 8)}`,
       providerSessionId: input.resume?.providerSessionId ?? `fake-provider-${this.sessionSeq}`,
       runtimeInstallationId: input.resume?.runtimeInstallationId ?? 'fake-installation',
       adapterVersion: FAKE_VERSION,

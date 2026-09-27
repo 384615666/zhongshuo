@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -350,8 +350,8 @@ describe('收口1：单实例锁受控时间窗口（目录协议）', () => {
     writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
     // 受控同步点：claim 成功后、rename 前挂起——模拟接管者 A 卡在窗口内。
     const acquired = acquireSingletonLock(dir, {
-      onClaimed: () => {
-        // 窗口内第二获取：应看到 claim 并 BUSY。
+      onBeforeClaimArchive: () => {
+        // 窗口内第二获取：应看到 claim（身份=本进程，活）并 BUSY。
         const second = acquireSingletonLock(dir);
         expect(second).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
       },
@@ -397,46 +397,96 @@ describe('收口1：单实例锁受控时间窗口（目录协议）', () => {
   }, 30_000);
 });
 
-describe('修复轮3：锁身份写入窗口（不清理、不接管、无双持有）', () => {
-  it('claim mkdir 后、claimer.json 写入前：第二获取 BUSY（身份缺失≠已死）', () => {
-    const dir = join(tmpRoot, 'lockdir-identity-window');
+describe('修复轮4：锁未知身份保守化 + 代次安全接管', () => {
+  it('身份写入前暂停（无宽限参数、任意时长）：竞争者仍不能获得第二把锁', () => {
+    const dir = join(tmpRoot, 'lockdir-r4-identity');
     writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
     const acquired = acquireSingletonLock(dir, {
-      identityGraceMs: 60_000,
       onBeforeClaimIdentity: () => {
-        // 身份写入前窗口：另一个获取应保守 BUSY，不得清理 claim 或取得锁。
-        const second = acquireSingletonLock(dir, { identityGraceMs: 60_000 });
+        // 模拟暂停任意时长（超任何旧宽限）后，竞争者仍 BUSY——身份缺失≠死亡。
+        const second = acquireSingletonLock(dir);
         expect(second).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+        expect((second as { error?: { message?: string } }).error?.message).toContain('身份');
       },
     });
-    // 窗口方完成后，接管方正常取得唯一锁。
     expect(acquired.ok).toBe(true);
     if (acquired.ok) acquired.value.release();
   });
 
-  it('claim 身份缺失超过宽限（接管者崩溃）：清理后可再接管', () => {
-    const dir = join(tmpRoot, 'lockdir-claim-stale');
+  it('身份读取失败/半写入不能开放接管：claim 与 owner 均保守 BUSY（不论多久）', () => {
+    const dir = join(tmpRoot, 'lockdir-r4-unreadable');
     writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
-    // 预置无身份的 claim + 旧 mtime（模拟接管者 mkdir 后崩溃）。
+    // claim 半写入（半截 JSON）。
     mkdirSync(join(dir, 'daemon.lock.d', 'claim'), { recursive: true });
-    utimesSync(join(dir, 'daemon.lock.d', 'claim'), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-    const r = acquireSingletonLock(dir, { identityGraceMs: 1_000 });
+    writeFileSync(join(dir, 'daemon.lock.d', 'claim', 'claimer.json'), '{"pid": 9', 'utf8');
+    utimesSync(join(dir, 'daemon.lock.d', 'claim'), new Date(Date.now() - 300_000), new Date(Date.now() - 300_000));
+    const r = acquireSingletonLock(dir);
+    expect(r).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+    // owner 半写入同规则。
+    const dir2 = join(tmpRoot, 'lockdir-r4-owner-unreadable');
+    mkdirSync(join(dir2, 'daemon.lock.d'), { recursive: true });
+    writeFileSync(join(dir2, 'daemon.lock.d', 'owner.json'), '{"pid": 1', 'utf8');
+    utimesSync(join(dir2, 'daemon.lock.d'), new Date(Date.now() - 300_000), new Date(Date.now() - 300_000));
+    const r2 = acquireSingletonLock(dir2);
+    expect(r2).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+    // 归档未被自动删除（不自动破坏锁）。
+    expect(existsSync(join(dir, 'daemon.lock.d', 'claim'))).toBe(true);
+  });
+
+  it('清理者确认死 claim 后被替换：代次校验放弃启动，不删新接管者的 claim', () => {
+    const dir = join(tmpRoot, 'lockdir-r4-cleanrace');
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
+    preclaimLockForTest(dir, 999999998); // 崩溃接管者（死身份）
+    // 清理者 A 读到死身份 999999998 后、归档 rename 前暂停；
+    // 窗口内 claim 被新接管者 B（活 pid=测试父进程）替换。
+    const r = acquireSingletonLock(dir, {
+      onBeforeDeadClaimArchive: () => {
+        writeFileSync(join(dir, 'daemon.lock.d', 'claim', 'claimer.json'), JSON.stringify({ pid: process.ppid, at: Date.now() }), 'utf8');
+      },
+    });
+    // A 的代次校验发现归档内容（B）≠ 所确认（999999998）：还原归档、放弃启动。
+    expect(r).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+    expect((r as { error?: { message?: string } }).error?.message).toContain('替换');
+    // B 的 claim 原样保留（未被删除/归档丢弃）。
+    const claimer = JSON.parse(readFileSync(join(dir, 'daemon.lock.d', 'claim', 'claimer.json'), 'utf8')) as { pid: number };
+    expect(claimer.pid).toBe(process.ppid);
+  });
+
+  it('已确认死亡的 claim（身份可读且死）：归档清理后可再接管', () => {
+    const dir = join(tmpRoot, 'lockdir-r4-deadclaim');
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
+    preclaimLockForTest(dir, 999999998); // 崩溃接管者（身份完整可读）
+    const r = acquireSingletonLock(dir);
     expect(r.ok).toBe(true);
     if (r.ok) r.value.release();
   });
 
-  it('owner 半写入（owner.json 损坏 + 新建目录）：宽限内 BUSY；超宽限按陈旧接管', () => {
-    const dir = join(tmpRoot, 'lockdir-owner-halfwrite');
-    const lockDir = join(dir, 'daemon.lock.d');
-    mkdirSync(lockDir, { recursive: true });
-    writeFileSync(join(lockDir, 'owner.json'), '{"pid": 12', 'utf8'); // 半截 JSON
-    const fresh = acquireSingletonLock(dir, { identityGraceMs: 60_000 });
-    expect(fresh).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } }); // 宽限内不接管
-    utimesSync(lockDir, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000)); // 推老 mtime
-    const stale = acquireSingletonLock(dir, { identityGraceMs: 1_000 });
-    expect(stale.ok).toBe(true);
-    if (stale.ok) stale.value.release();
-  });
+  it('双进程并发接管死锁：恰好一个成功（真实子进程）', async () => {
+    const dir = join(tmpRoot, 'lockdir-r4-race-' + Date.now());
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
+    const run = (): Promise<{ ok: boolean }> =>
+      new Promise((resolve, reject) => {
+        execFile(
+          process.execPath,
+          ['--experimental-strip-types', 'tests/fixtures/lockRaceWorker.ts', dir],
+          { cwd: process.cwd(), timeout: 15_000 },
+          (error, stdout) => {
+            if (error != null && !stdout) {
+              reject(error);
+              return;
+            }
+            const line = stdout.trim().split(String.fromCharCode(10)).pop() ?? '';
+            try {
+              resolve(JSON.parse(line) as { ok: boolean });
+            } catch {
+              reject(new Error(`无法解析子进程输出: ${line}`));
+            }
+          },
+        );
+      });
+    const [a, b] = await Promise.all([run(), run()]);
+    expect([a, b].filter((r2) => r2.ok).length).toBe(1);
+  }, 30_000);
 });
 
 describe('收口3：adapter.interrupt 永不返回时宽限仍生效', () => {

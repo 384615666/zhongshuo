@@ -206,3 +206,30 @@ owner.json 半写入同规则。测试同步点 onBeforeClaimIdentity 置于身�
 commandExecution=command）含目标路径；同 toolCallId 配对 tool.completed outcome=failure 且 resultRef 带
 status:declined|failed（权限拒绝原因）。unknown/语法错误/任意工具失败/口头拒绝不构成证据。确认档正确语义为
 read-only+on-request（workspace-write 内的写入被沙箱自动放行，不触发审批）；审批桥 deny 路径已真实验证。
+
+
+## ADR-I34 · 锁未知身份保守化（2026-09-27，修复轮 4）
+
+owner/claim 身份缺失、半写入、stat/read 失败一律 BUSY（人工核对），不以任何宽限后的自动清理替代互斥——
+身份不可读不证明持有者死亡。已确认死亡（身份可读且 pid 死）才接管；claim/死 claim 归档一律原子 rename +
+归档内容代次校验（与所确认 pid 不符→还原+放弃），绝不 rmSync 他人 claim。
+
+## ADR-I35 · B6 可辨识拒绝原因（2026-09-27，修复轮 4）
+
+权限拒绝证据 = status:declined（审批/沙箱明确拒绝）或 status:failed;exit:N;sandbox-denial
+（aggregatedOutput 命中沙箱/权限签名）。纯 failed（语法错误等）/unknown/无关工具/错路径/口头拒绝不构成
+认证证据（共享 verifySandboxRejectionEvidence + 负例回放）。fileChange 直接编辑路径在 read-only+never 下
+无可观测工具事件——用 on-request 审批仪器化：审批请求（含目标文件清单）本身即权限门证据。
+
+## ADR-I36 · 恢复重排全部孤儿租约（2026-09-27，DEV-07 smoke 发现）
+
+applyRecovery 原只重排 lease_until 过期的租约——daemon 崩溃重启后未过期孤儿租约（60s）会卡住派发。
+单实例锁保证旧持有者已终止，故启动恢复重排**全部** leased 为 pending 并落门禁；worker 内部的租约超时
+回收逻辑不变（针对存活的并发 worker）。
+
+## ADR-I37 · daemon 命令面形态（2026-09-27，DEV-07）
+
+命名管道上的统一入口：信封 strict 校验→本地可信 CallerContext→runCommand 同步事务（幂等回执）→
+结构化错误（不吞异常）。同步命令经 run() 包装；异步命令（task.stop 含中断回调）自包 runCommand 而不
+双层包裹（曾因 async handler 传入同步事务导致 data 序列化为空——已修正并记入测试）。dispatch.resume
+是恢复门禁的用户确认入口（§16.4-6 的 IPC 形态）。
