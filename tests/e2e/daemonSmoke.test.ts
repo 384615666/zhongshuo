@@ -14,8 +14,8 @@ import { randomUUID } from 'node:crypto';
 import { connect as netConnect } from 'node:net';
 import { startDaemon } from '../../src/daemon/entry.ts';
 import type { RunningDaemon } from '../../src/daemon/entry.ts';
-import { connectPipe } from '../../src/daemon/pipeClient.ts';
-import type { PipeClient } from '../../src/daemon/pipeClient.ts';
+import { connectPipe } from '../../src/contracts/daemonIpc.ts';
+import type { PipeClient } from '../../src/contracts/daemonIpc.ts';
 import { isDispatchGateHeld } from '../../src/persistence/daemonState.ts';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev07r5-'));
@@ -172,6 +172,23 @@ describe('DEV-07 r5 smoke：凭据 + 纯 IPC 命令链路（fake，零额度）'
     pipe = await connectPipe(SMOKE_PIPE, { token: daemon.credential.token });
     const again = (await pipe.send(envelope('room.list', { projectId: ref.projectId }))) as ResultShape;
     expect(again.ok).toBe(true);
+  }, 30_000);
+
+  it('响应按 commandId 关联：同连接连续请求各得其所、回执 id 不冒充', async () => {
+    const ref = await readProjectRef();
+    const conn = await connectPipe(daemon.pipeName, { token: daemon.credential.token, requestTimeoutMs: 3_000 });
+    // A、B 同连接背靠背：响应按 commandId 精确配对。
+    const aP = conn.send(envelope('room.list', { projectId: ref.projectId }, 'cmd-A-id'));
+    const bP = conn.send(envelope('member.list', { projectId: ref.projectId, roomId: ref.roomId }, 'cmd-B-id'));
+    const [a, b] = (await Promise.all([aP, bP])) as [ResultShape, ResultShape];
+    expect((a as { commandId?: string }).commandId).toBe('cmd-A-id');
+    expect(a.ok).toBe(true);
+    expect((a.data as { items: unknown[] }).items.length).toBeGreaterThanOrEqual(1);
+    expect((b as { commandId?: string }).commandId).toBe('cmd-B-id');
+    expect((b.data as { items: unknown[] }).items.length).toBeGreaterThanOrEqual(1);
+    conn.close();
+    // 超时丢弃路径（A 超时→B 正常→A 迟到响应被丢弃）由延迟服务端注入单测覆盖：
+    // tests/unit/pipeClientTimeout.test.ts。
   }, 30_000);
 
   it('重启：历史保留；门禁不自动续跑；resume 无 confirm 拒绝；confirm 后续跑', async () => {

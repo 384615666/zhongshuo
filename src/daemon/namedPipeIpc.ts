@@ -8,10 +8,6 @@
  */
 import { createServer, type Server, type Socket } from 'node:net';
 
-export function daemonPipeNameFor(user: string): string {
-  return `\\.\pipe\zhongshuo-daemon-${user}`;
-}
-
 export interface NamedPipeIpcHandle {
   pipeName: string;
   close(): Promise<void>;

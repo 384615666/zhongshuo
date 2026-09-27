@@ -12,20 +12,21 @@
  */
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { writeFileSync, rmSync } from 'node:fs';
 import { openDatabase } from '../persistence/db.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { acquireSingletonLock } from './singletonLock.ts';
-import type { SingletonLockHandle } from './singletonLock.ts';
 import { applyRecovery } from './stopFlow.ts';
 import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
+import { successTurn } from '../adapter/fake/script.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
-import { ensureLocalCredential } from './localCredential.ts';
-import type { LocalCredential } from './localCredential.ts';
+import { daemonPipeNameFor, ensureLocalCredential } from '../contracts/daemonIpc.ts';
+import type { LocalCredential } from '../contracts/daemonIpc.ts';
 
 export interface DaemonOptions {
   appDataDir: string;
@@ -34,6 +35,8 @@ export interface DaemonOptions {
   localUserId?: string;
   pipeName?: string;
   tickMs?: number;
+  /** stop 时等待在途 drain 收敛的上限（默认 10s）。 */
+  drainSettleTimeoutMs?: number;
 }
 
 export interface RunningDaemon {
@@ -47,10 +50,6 @@ export interface RunningDaemon {
 
 export function defaultAppDataDir(): string {
   return join(homedir(), '.zhongshuo');
-}
-
-export function daemonPipeNameFor(user: string): string {
-  return `\\\\.\\pipe\\zhongshuo-daemon-${user}`;
 }
 
 export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon> {
@@ -71,7 +70,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     adapter = options.runtime === 'codex'
       ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
-      : new FakeRuntimeAdapter();
+      : new FakeRuntimeAdapter(
+          // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
+          // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）。
+          process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
+            ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
+            : undefined,
+        );
     const worker = new DispatchWorker({
       db,
       adapter,
@@ -94,39 +99,56 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     );
 
     // drain 单飞（修复轮 5）：串行调度——上一轮未完成时跳过本 tick，不重入。
+    // 修复轮 6：保存 drain Promise，stop 等待其收敛后才关库（数据库关闭后零业务写入）。
     let draining = false;
+    let inFlightDrain: Promise<void> | null = null;
     const tick = setInterval(() => {
       if (draining) return;
       draining = true;
-      void worker.drain()
+      inFlightDrain = worker.drain()
+        .then(() => undefined)
         .catch((error) => {
           process.stderr.write(`[zhongshuo-daemon] drain error: ${error instanceof Error ? error.stack : String(error)}\n`);
         })
         .finally(() => {
           draining = false;
+          inFlightDrain = null;
         });
     }, options.tickMs ?? 500);
     tick.unref?.();
 
     let stopped = false;
+    let stopPromise: Promise<void> | null = null; // 重复 stop 共用同一次关闭
     return {
       pipeName,
       db,
       worker,
       adapter,
       credential,
-      async stop() {
-        if (stopped) return; // 重复 stop 幂等
+      stop(): Promise<void> {
+        if (stopPromise != null) return stopPromise; // 重复 stop 幂等：同一关闭过程
         stopped = true;
-        clearInterval(tick);  // 1) 拒新派发
-        await ipc!.close();   // 2) 拒新命令（断开全部连接）
-        if (adapter instanceof CodexAppServerAdapter) {
-          await adapter.dispose(); // 3) 收拢 runtime（等待子进程退出）
-        } else {
-          await (adapter as FakeRuntimeAdapter).closeAllSessions();
-        }
-        db!.close();          // 4) 关库
-        lockHandle.release(); // 5) 释放锁
+        stopPromise = (async () => {
+          clearInterval(tick);          // 1) 拒新派发（停 tick）
+          await ipc!.close();           // 2) 拒新命令（断开全部连接）
+          // 3) 等待在途 drain 收敛（不取消——让当前事务/事件落库后停），
+          //    上限保护：tick 间隔级 drain 不应长挂；超时则记录并继续（数据库仍按序关闭）。
+          if (inFlightDrain != null) {
+            await Promise.race([
+              inFlightDrain,
+              new Promise((r) => { const t = setTimeout(r, options.drainSettleTimeoutMs ?? 10_000); t.unref?.(); }),
+            ]);
+          }
+          if (adapter instanceof CodexAppServerAdapter) {
+            await adapter.dispose();    // 4) 收拢 runtime（等待子进程退出）
+          } else {
+            await (adapter as FakeRuntimeAdapter).closeAllSessions();
+          }
+          db!.close();                  // 5) 关库（此后 worker 任何写入都会抛 SQLITE 错误——按序保证不再发生）
+          lockHandle.release();         // 6) 释放锁
+          void stopped;
+        })();
+        return stopPromise;
       },
     };
   } catch (error) {
@@ -148,10 +170,14 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts')) {
     process.stderr.write('[zhongshuo-daemon] fake runtime 仅限开发/测试（ZS_RUNTIME=fake 需同时设置 ZS_ALLOW_FAKE=1）；生产请用 ZS_RUNTIME=codex\n');
     process.exit(2);
   }
-  void startDaemon({ appDataDir, runtime }).then((daemon) => {
+  void startDaemon({ appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME }).then((daemon) => {
     process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
+    // pid 落盘（诊断/UI 端到端定位子进程；正常退出删除——SIGKILL 残留即崩溃现场）。
+    const pidPath = join(appDataDir, 'daemon.pid');
+    writeFileSync(pidPath, String(process.pid), 'utf8');
     const shutdown = async () => {
       await daemon.stop();
+      try { rmSync(pidPath, { force: true }); } catch { /* 退出路径不因此失败 */ }
       process.exit(0);
     };
     process.on('SIGINT', () => void shutdown());

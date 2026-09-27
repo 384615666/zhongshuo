@@ -9,7 +9,7 @@
 - IN_PROGRESS：部分落地（见备注列的具体范围）
 - IMPLEMENTED / VERIFIED：见对应包报告
 
-## 逐项状态（2026-09-27，DEV-01 完成后）
+## 逐项状态（最近核对：2026-09-27 修复轮 6/G3 收口；包级权威状态见 implementation-status.md 工作包表）
 
 ### START（9 项）
 
@@ -17,7 +17,7 @@
 |---|---|---|---|
 | START-01 | M0/DEV-04/07 | NOT_STARTED | |
 | START-02 | M3/DEV-14 | NOT_STARTED | |
-| START-03 | M0/DEV-01/07/17 | **IN_PROGRESS** | 契约+路由纯函数已落（`src/contracts/routing.ts`、`src/domain/routing/`）；真实闭环待 DEV-07/17 |
+| START-03 | M0/DEV-01/07/17 | **VERIFIED（G3）** | 契约+路由纯函数 + renderer 用户链路真实闭环（CDP 真点击 11/11 + 真实 codex UI 一轮，reports/round-20260927-fix6-ui-e2e-g3-closeout.md） |
 | START-04 | M0/DEV-04/06/07 | NOT_STARTED | |
 | START-05 | FULL-05 | NOT_STARTED | |
 | START-06 | M3/DEV-25 | NOT_STARTED | |

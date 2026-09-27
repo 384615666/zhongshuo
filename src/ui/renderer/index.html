@@ -15,6 +15,7 @@
       <nav id="room-list" class="rooms"></nav>
       <div class="sidebar-foot">
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
+        <div id="resume-info" class="resume-info hidden"></div>
       </div>
     </aside>
     <main class="main">
@@ -24,11 +25,15 @@
       </header>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">
-        <div class="thread-back"><button id="thread-back-btn">← 返回主池</button></div>
+        <div class="thread-back">
+          <button id="thread-back-btn">← 返回主池</button>
+          <span id="thread-status" class="thread-status"></span>
+          <button id="stop-btn" class="danger hidden">停止任务</button>
+        </div>
         <div id="thread-messages"></div>
-        <div class="thread-stop"><button id="stop-btn" class="danger hidden">停止任务</button></div>
       </section>
       <footer class="composer">
+        <div id="send-error" class="send-error hidden"></div>
         <div class="composer-row">
           <input id="mention-pick" class="mention-pick" list="member-list" placeholder="@ 指定成员（留空=自动）" />
           <datalist id="member-list"></datalist>

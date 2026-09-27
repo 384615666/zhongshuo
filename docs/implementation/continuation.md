@@ -2,53 +2,37 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（修复轮 5 + DEV-07 Electron 接线 + 真实 G3 核心链路通过时点）
+- 更新：2026-09-27（修复轮 6 + G3 收口时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
-## 刚完成
+## 刚完成（修复轮 6 + G3 收口）
 
-- **修复轮 5**：pipeClient 请求-响应关联重写（FIFO/超时/断连清理，无 pending 泄漏）；project.open 正式引导 room_members + 查询命令（room.list/member.list/thread.history/task.get）；smoke 纯 IPC 6/6；IPC 握手凭据（AUTH_REQUIRED）+ dispatch.resume{confirm:true}；daemon 生命周期（drain 单飞/stop 序/重复 stop/启动失败清理）。
-- **DEV-07 Electron**：main（daemon=系统 Node 子进程，ADR-I38）+ preload 窄接口 + renderer（原型布局：侧栏/主池/线程/输入区，mention+仅记录+停止+断连提示）；esbuild .cjs 构建；ZS_UI_DEMO 自动化。
-- **真实 G3 核心链路通过（gpt-6-luna，2 turn）**：Electron UI→打开真实目录→DIRECT→模型真实读 notes.md→回复含 G3-CODEX-8848 进正确线程→TaskComplete schema 校验→DONE（第 1 轮发现输出契约字段不足——ADR-I39 修复后第 2 轮通过）。截图因 RDP 无 GPU 合成器失败（已改非致命，如实记录）。
-- 残留：UI 停止端到端演示、双任务真并发交错、运行中退出不确定窗口注入。详见 reports/round-20260927-dev07-electron-g3.md。
-
-- **修复轮 4**：B6 证据绑定共享验证器（declined/sandbox-denial；7 负例；B6-1 审批仪器化重跑、B6-2 签名重跑均过）；锁未知身份一律 BUSY+代次校验接管（ADR-I34）。默认 270/270。
-- **DEV-06 认证收口（G2 范围 VERIFIED，Codex 单 runtime）**：steer 正常+服务端拒、审批 allow、resume 不放宽、interrupt、usageTokens——真实层累计 12 用例（gpt-6-luna）。
-- **DEV-07 骨干**：daemon 命令面（project.open/message.submit/events.list/dispatch.resume/task.stop）+ 组装入口（锁→恢复门禁→IPC→worker tick）+ 管道客户端；smoke 4/4（fake，零额度）：含重启历史保留+门禁+确认续跑。顺带修复孤儿租约重排（ADR-I36）/fake 会话 id 唯一/命令面 run 同步语义（ADR-I37）。
-
-- **修复轮 3**：用户复核三项收口——①turn/started|completed 只认 turn.id（mock 去伪字段）+awaiting 按会话隔离+响应解析同步点注册映射（未知归属终态：adapter 无内部 turnId/worker 审计不终结当前轮，含双会话并发与 ghost 反例）；②锁身份写入窗口（半写入≠已死，mtime 宽限+onBeforeClaimIdentity 无双持有）；③B6 证据绑定（指定工具+toolCallId 配对+目标路径+resultRef 拒绝原因）。默认 260/260。
-- **DEV-06 收尾认证（gpt-6-luna）**：steer 错误 ID 拒绝；**resume 跨进程续接**（暗号 LUNA-RESUME-7 恢复）；**审批桥 deny**（read-only+on-request→approval.requested→deny→无写入）。e2e 累计 7/7。详见 reports/dev-06-fixround3-result.md。
-
-- **DEV-06 修复轮 2**：GPT 复核 7 项全整改（终态映射/turn 归属/生命周期+resume/TaskComplete 接入完成路径/B6 收紧/能力收窄/锁目录协议）；协议回放 mock 8 用例（零额度）；`pnpm check` 254/254。
-- **真实认证通过（gpt-6-luna，e2e 4/4）**：C1 真实文件内容回流（ZS-DEV06-4242）+ 层 A 行为证据（ZS-ACK）；B6 计划档两路径（直接编辑：内容逐字节未变；shell：文件未创建）+ 工具失败证据。deepseek-flash 在当前渠道 400，已切 gpt-6-luna（ZS_E2E_MODEL 可覆盖）。详见 reports/dev-06-fixround2-result.md。
-
-- **DEV-06 第一阶段**：codex 0.157.1 协议类型固化（generate-ts，tests/fixtures/codex-protocol/，已排除编译）、CodexAppServerAdapter（stdio 换行 JSON-RPC 全生命周期+§9.4 映射+审批通道）、e2e 隔离配置（pnpm test:e2e，默认套件不烧额度）。真实进程验证：probe/initialize/thread/start/turn/start/通知映射全通；**模型 turn 被额度限制阻断**（"try again at 12:29 PM"）——C1 文件回流与 B6 计划档未验证（B6 断言已收紧防额度冒充）。详见 reports/dev-06-stage1-result.md。
-
-- **收口轮 2**：锁接管纪律（受控窗口三反例）、门禁覆盖已提交未领取（RT-02 门禁化）、interrupt 限时发送（hangInterrupt 反例）。
-- **DEV-21-M0**：standing v0.1.1/turn v0.1.2/TaskComplete v1 契约 + worker 正式输入组装（根消息+获准历史正文注入、信封 hash 一致、组装失败不派发）；PP-02/03/04/05 自测子集通过。`pnpm check` **244/244**。详见 reports/dev-21-m0-and-closure2-result.md。
-- （前一轮）**M0 核心修复轮**：外部只读审查的 8 项缺陷 + 2 项记录错误全部整改（过期租约、独立超时、会话竞态、派发门禁+重领对账、锁原子化、上下文过滤强化+worker 接入 ContextBundle、事件 ID、模式门禁+验收收尾、总账重写、parallel_writers 禁用）；额外修复 race 吞事件与 IPC 乱序两个新缺陷；`pnpm check` **222/222**。详见 [reports/m0-fix-round-result.md](reports/m0-fix-round-result.md) 与总账"修复轮"小节。
+- **证据口径修正**：ZS_UI_DEMO=宿主内命令链路（main 直连 pipe），不再称等价人工点击；发现并修复正式 renderer app.js 从未成功执行的问题（顶层 const 与 contextBridge 非配置全局冲突 → IIFE 包裹）。
+- **R1-R5 renderer 全量接通**（src/ui/renderer/app.js 重写）：停止按钮（点击时快照绑定，切线程不误停）；恢复入口（recovery.status 只读 + 显式 dispatch.resume{confirm:true}）；主池 room.pool + 线程 thread 目标（不新建根任务）；双视图草稿独立/在途去重（同 commandId 重试横幅）/IME/仅记录一次性复位/M0 模式诚实实现（仅 DIRECT，恰一名 agent 时预填 mention）；重载/重启按上次项目恢复（localStorage + userData 隔离）。
+- **B1/B2**：管道 commandId 关联+迟到响应丢弃反例（2/2）；daemon 生命周期 drain 收敛/重复 stop/关库后零写入（3/3）。
+- **UI e2e（CDP 真点击）**：tests/e2e/uiE2e.test.ts fake 11/11（发送→DONE→线程回复/跟进/草稿/仅记录/双击双 Enter 去重/IME/重载恢复/UI 停止→CANCELLED/SIGKILL 崩溃→重启→门禁→确认→中断任务不重跑+新调度恢复）；**真实 codex 1 turn（UIE2E-CODEX-6666，24.7s）**。
+- **隔离**：同成员两任务先排队再派发用例（串行完成/各一 run/顺序正确/会话不因同成员合并）。
+- **架构**：IPC 协议共享层下沉 src/contracts/daemonIpc.ts（ui→daemon 边界违规清零）；task.get 补 stopGeneration；recovery.status/room.pool/thread 目标服务端合同；ZS_PIPE_NAME/ZS_FAKE_STALL_MS/daemon.pid/pnpm build:ui 配套。ADR-I41/I42。
+- **数字**：pnpm check 全绿 276/276；lint 0（此前 24）。详见 reports/round-20260927-fix6-ui-e2e-g3-closeout.md（五段）。
 
 ## 当前故障 / 待停止进程
 
-- 无遗留进程。
+- 无遗留进程（本轮 electron/daemon 均清理）。
 
 ## 下一步（直接开工，无需再确认）
 
-1. **DEV-06 残余（各 1 turn，gpt-6-luna）**：steer 正常路径（活跃 turn 追加输入影响输出）；审批 allow 路径（允许后继续）；structuredFinal（outputSchema 约束）与 usageTokens 数值口径观察。已过项勿重跑。
-2. **DEV-07**：Electron main/preload + 命名管道 IPC 接线（传输层已验证）+ hifi-prototype 交互复用接真实命令面（DispatchWorker×CodexAppServerAdapter 组装进 daemon 入口）→ G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留；双任务不串线）。
-3. 每包结束更新总账四件套 + 本文件。
+**G3 已收口，按授权默认进入 M1**：
 
-（历史）DEV-06 原始指引：
-   - 先决探测：本机 codex 可执行入口（勿直接 spawn .cmd——解析到原生 exe，§9.5 EINVAL 坑）、`codex app-server` 子命令存在性与版本。
-   - adapter：`src/adapter/codex/`（stdio 换行 JSON-RPC：initialize(clientInfo)→initialized→thread/turn 生命周期；developerInstructions=层 A 快照；turn/start 输入=层 B 渲染文本）；事件映射到 §9.4 规范事件；stdin 显式管理（EOF 坑）。
-   - 专用 fixture：tmp 目录小项目+已知内容文件；独立测试会话+有限预算（maxTurns≤2）；断言回复含真实文件内容（不是种子文本）。
-   - B6/RT-23：计划档读写限制、确认档（未过前禁用）逐项认证；PP-01/PP-12 注入/steer 真实路径验证。
-   - 失败不降级 full_access；档位证据回填 runtime-capability-matrix.md。
-2. **DEV-07**：Electron main/preload + 命名管道 IPC 接线 + hifi-prototype 交互复用接真实命令面 → G3 演示。
-3. 每包结束更新总账四件套 + 本文件。
+1. **DEV-08**（独立分析与互评：冻结名单、阶段过滤、报告校验）——M1 首包。
+2. **DEV-09**（分歧与整合：争议、轮次预算、确认矩阵）。
+3. **DEV-21-M1 段**（提示词/输出合同从 M0 DIRECT 扩展到 M1 场景）。
+4. 每包结束更新总账四件套 + 本文件；G4 验收时复用本轮 UI e2e 框架（CDP 驱动）扩场景。
+
+已知小残留（不阻塞 M1，随相关包顺手收）：跨房间切换 UI 场景（正式命令面无建房命令，待房间管理命令落地后补）；UI 发送横栏传输失败路径的 UI 级注入测试（传输层已有单测+smoke）。
 
 ## 施工纪律提醒（下一轮自查）
 
 - 检查点提交只挑本包文件，不全量 add；TS 6.x / zod 4.6.5 / better-sqlite3 13.0.3 已锁。
 - 三态区分：IMPLEMENTED ≠ VERIFIED；报告写实际命令与退出码。
-- 用户明确延期项（并行写入增强/worktree）不得恢复；G3 前必须具备 DEV-17 最小隔离与 DEV-21-M0 正式合同。
+- 用户明确延期项（并行写入增强/worktree）不得恢复；G3 已收口，不再重跑已过认证（steer/allow/resume/usage 等）。
+- UI 相关验收：真点击链路用 CDP 方式（ADR-I41）；宿主内 ZS_UI_DEMO 证据只作后台链路口径。

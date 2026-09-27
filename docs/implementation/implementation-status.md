@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-27（修复轮 5 + DEV-07 Electron 接线 + 真实 G3 核心链路通过：默认 270/270、smoke 6/6、G3 codex 档 ✓）
+- 最近更新：2026-09-27（修复轮 6 + G3 收口：renderer 用户链路端到端 11/11 + 真实 codex UI 一轮；默认 276/276；DEV-07 升 VERIFIED，默认进入 M1）
 
 ## 工作包状态
 
@@ -20,7 +20,7 @@
 | DEV-05 | daemon 单实例锁、派发 worker、停止代次、恢复基础、命名管道 IPC | **VERIFIED**（修复轮后） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)+勘误：独立截止计时/会话竞态复查/派发门禁/重领对账/模式门禁/验收策略/锁原子化/IPC 全部补齐；**真实进程边界随 DEV-06 验证，不提前声称** |
 | DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
 | DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **VERIFIED（G2 适用范围）**：C1/层 A、计划档两路径（declined/sandbox-denial 证据绑定）、确认档 allow+deny、steer 正常+服务端拒、resume 续接+不放宽、interrupt、usageTokens | `src/adapter/codex/` | G2（Codex 单 runtime；structuredFinal 真实输出随 G3） | [reports/round-20260927-fix4-dev6finish-dev07backbone.md](reports/round-20260927-fix4-dev6finish-dev07backbone.md)（勘误链完整） |
-| DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **G3 核心链路 VERIFIED**（真实目录→UI 发送→codex 真实读文件→正确线程→TaskComplete 交付；Electron main/preload/renderer 已接命令面；残留=UI 停止端到端演示、双任务真并发交错、打包随包 Node） | `src/ui/` + `src/daemon/` | G3（核心通过，两子场景待补） | [reports/round-20260927-dev07-electron-g3.md](reports/round-20260927-dev07-electron-g3.md) |
+| DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **VERIFIED（G3 范围）**：CDP 真点击用户链路 11/11（发送/DONE/线程回复/跟进不新建根任务/草稿独立/仅记录/去重/IME/重载恢复/UI 停止/崩溃恢复门禁）+ 真实 codex UI 一轮（1 turn）；打包随包 Node 属 DEV-15 | `src/ui/` + `src/daemon/` + `src/contracts/daemonIpc.ts` | G3 ✓ | [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md) |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | NOT_STARTED | `src/adapter/` | G2/G4 | M2 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## 修复轮 6 + G3 收口（2026-09-27）
+
+详见 [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md)。证据口径修正（ZS_UI_DEMO=宿主内链路，非 UI 端到端；renderer app.js 此前从未成功执行——IIFE 修复）；R1-R5 renderer 全量接通（停止/恢复入口/room.pool+thread 目标/草稿去重 IME/重启恢复）；B1 管道 commandId 关联（超时迟到响应丢弃反例）；B2 生命周期收口（drain 收敛/重复 stop/关库后零写入）；CDP 驱动 UI e2e fake 11/11 + 真实 codex 1 turn（UIE2E-CODEX-6666）；同成员排队用例补齐；IPC 协议下沉 contracts/daemonIpc.ts（边界违规清零，ADR-I41/I42）。默认 276/276。**G3 收口，进入 M1。**
 
 ## 修复轮 4 + DEV-06 收口 + DEV-07 骨干（2026-09-27）
 

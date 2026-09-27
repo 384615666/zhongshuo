@@ -256,3 +256,22 @@ worker 校验→交付→DONE。教训：契约文本要能被陌生模型一次
 0600 语义）；客户端首帧 {"type":"auth","token"}，验证通过才接受命令；错凭据连接被拒
 （AUTH_REQUIRED + 断开），CallerContext 只在验证后构造。dispatch.resume 须 {confirm:true}
 显式确认 + runCommand 幂等；同 socket 响应 FIFO 串行。
+
+## ADR-I41 · UI 端到端 = CDP 驱动 renderer 真点击（2026-09-27，修复轮 6）
+
+ZS_UI_DEMO 在 main 直连 pipe.send，只证明宿主内命令链路，不经过 renderer/preload/IPC——
+不得标为等价人工点击（本轮口径修正）。UI 端到端统一为：Electron `--remote-debugging-port` +
+CDP Runtime.evaluate 在页面内派发真实 DOM 事件；原生目录选择以显式 `ZS_PICK_FOLDER`
+环境钩子替代返回值（main 侧标注测试专用），其余链路全部真实。配套：页面就绪门
+（等 app.js 绑定 onclick，防 CDP 早于脚本执行丢点击）；userData 隔离至
+appData/electron-user-data（localStorage 测试/多实例不串扰）；`ZS_PIPE_NAME` 显式覆盖管道名
+（默认按用户不变）；daemon 落 `daemon.pid`（崩溃现场定位）。附带教训：renderer 顶层
+`const zs = window.zs` 与 contextBridge 注入的非配置全局冲突抛 SyntaxError——页面脚本要用
+IIFE 包裹；宿主内自动化演示永远覆盖不了页面脚本本身。
+
+## ADR-I42 · ui↔daemon IPC 协议共享层置于 contracts（2026-09-27，修复轮 6）
+
+管道名/本地身份/凭据文件/管道客户端由 ui（Electron main）与 daemon 两侧共用，属跨进程合同
+而非 daemon 内部实现——置于 `src/contracts/daemonIpc.ts`。此前 ui/main.ts 直接 import
+daemon 四处违反六边界（ui 仅许依赖 contracts）；本轮下沉后边界违规清零。daemon 侧
+namedPipeIpc（服务端）与 pipeClient（客户端）同名函数重复定义与死代码一并清除。

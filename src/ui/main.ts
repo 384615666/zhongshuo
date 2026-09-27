@@ -7,15 +7,12 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { connectPipe } from '../daemon/pipeClient.ts';
-import type { PipeClient } from '../daemon/pipeClient.ts';
-import { ensureLocalCredential } from '../daemon/localCredential.ts';
-import { daemonPipeNameFor, defaultAppDataDir } from '../daemon/entry.ts';
+import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
+import type { PipeClient } from '../contracts/daemonIpc.ts';
 
 // daemon 独立进程承载（§8.3：界面与 daemon 进程分离；native 模块只在 Node
 // 进程加载，Electron 主进程仅经命名管道连接——不做 Electron ABI rebuild）。
@@ -23,33 +20,40 @@ let daemonProcess: ChildProcess | null = null;
 let pipe: PipeClient | null = null;
 
 /** 启动独立 daemon 子进程（Node 运行时；native 模块不进 Electron）。 */
-async function startDaemonProcess(appDataDir: string, runtime: 'fake' | 'codex'): Promise<void> {
+async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'codex'): Promise<void> {
   const entry = process.env.ZS_DAEMON_ENTRY ?? join(__dirname, '..', '..', 'src', 'daemon', 'entry.ts');
-  mkdirSync(appDataDir, { recursive: true }); // 凭据/数据库目录可能尚不存在
-  const credential = ensureLocalCredential(appDataDir);
+  mkdirSync(appDataDirToUse, { recursive: true }); // 凭据/数据库目录可能尚不存在
+  const credential = ensureLocalCredential(appDataDirToUse);
+  // 管道名默认按本机用户（单实例语义）；显式 ZS_PIPE_NAME 供多实例/端到端隔离。
+  daemonPipe = process.env.ZS_PIPE_NAME ?? daemonPipeNameFor(localUserId());
+  daemonToken = credential.token;
   // daemon 用系统 Node 运行（ELECTRON_RUN_AS_NODE 的 electron.exe 是 Electron ABI，
   // better-sqlite3 原生模块按 Node ABI 预编译——混用即 NODE_MODULE_VERSION 不匹配）。
   // 打包形态由 DEV-15 换绑随包 Node；开发/测试用 PATH 上的 node。
   const nodeBin = process.env.ZS_NODE_BIN ?? 'node';
   daemonProcess = spawn(nodeBin, ['--experimental-strip-types', entry], {
-    env: { ...process.env, ZS_APP_DATA: appDataDir, ZS_RUNTIME: runtime, ZS_ALLOW_FAKE: process.env.ZS_ALLOW_FAKE ?? '1' },
+    env: {
+      ...process.env,
+      ZS_APP_DATA: appDataDirToUse,
+      ZS_RUNTIME: runtime,
+      ZS_ALLOW_FAKE: process.env.ZS_ALLOW_FAKE ?? '1',
+      ZS_PIPE_NAME: daemonPipe,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   daemonProcess.stderr?.on('data', (d: Buffer) => process.stderr.write(`[daemon] ${d}`));
   daemonProcess.once('exit', (code) => {
     process.stderr.write(`[zhongshuo-ui] daemon 退出（code=${code}）\n`);
   });
-  daemonPipe = daemonPipeNameFor(localUserId());
-  daemonToken = credential.token;
 }
 
 let daemonPipe = '';
 let daemonToken = '';
-function localUserId(): string {
-  const home = homedir();
-  const cleaned = home.split('').map((ch) => (ch === '\\' || ch === ':' ? '_' : ch)).join('');
-  return `local-${cleaned}`;
-}
+
+// UI 本地状态（localStorage 等）与 daemon 同仓隔离：不写宿主 %APPDATA%/Electron，
+// 测试/多实例（ZS_APP_DATA）互不串扰。userData 必须在 app ready 前设定。
+const appDataDir = process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo');
+app.setPath('userData', join(appDataDir, 'electron-user-data'));
 
 async function ensureConnection(): Promise<void> {
   if (pipe != null && !pipe.closed) return;
@@ -87,7 +91,6 @@ function pipeClosedCheck(): void {
 }
 
 app.whenReady().then(async () => {
-  const appDataDir = process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo');
   const runtime = (process.env.ZS_RUNTIME === 'codex' ? 'codex' : 'fake') as 'fake' | 'codex';
   if (runtime === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
     process.stderr.write('[zhongshuo-ui] fake 仅限开发模式（需 ZS_ALLOW_FAKE=1）；生产用 ZS_RUNTIME=codex\n');
@@ -101,6 +104,8 @@ app.whenReady().then(async () => {
     return pipe!.send(envelope);
   });
   ipcMain.handle('zs:pickFolder', async () => {
+    // 自动化测试钩子（仅显式 ZS_PICK_FOLDER 时替代原生对话框返回值；后续链路不变）。
+    if (process.env.ZS_PICK_FOLDER != null) return process.env.ZS_PICK_FOLDER;
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
@@ -173,7 +178,7 @@ async function runDemo(win: BrowserWindow, resultPath: string): Promise<void> {
 
   // 轮询任务状态（经命令面，不直连 DB）。
   const deadline = Date.now() + (Number(process.env.ZS_DEMO_TIMEOUT_MS ?? 240_000));
-  let taskStatus = 'UNKNOWN';
+  let taskStatus: string;
   for (;;) {
     const task = (await pipe!.send(e('task.get', { taskId: submit.data!.taskId }))) as { data: { task: { status: string } } };
     taskStatus = task.data.task.status;

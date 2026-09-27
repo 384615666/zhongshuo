@@ -143,4 +143,37 @@ describe('双任务不串线（TH-02/TH-03 存储级）', () => {
     await adapter.closeAllSessions();
     db.close();
   });
+
+  it('同成员两任务同时排队（修复轮 6）：串行逐个完成、各恰一 run、回复各归线程（上限 1 语义）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    // 两任务先建（同成员 m_a、双 pending outbox）再统一派发——排队正确性不依赖「先完成再建」。
+    createRoomRootTask(db, directTask(5, 'm_a'));
+    createRoomRootTask(db, directTask(6, 'm_a'));
+
+    const adapter = new FakeRuntimeAdapter();
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1' });
+    // drain 串行消费：M0 正式并发策略=单写者串行（不另起第二个 daemon/worker 制造并发）。
+    expect(await worker.drain()).toBe(2);
+
+    // 各任务恰一个 run，且按排队顺序完成（task_5 先）。
+    const runs = db.prepare('SELECT task_id, status FROM workflow_runs ORDER BY revision, task_id').all() as Array<{ task_id: string; status: string }>;
+    expect(runs).toHaveLength(2);
+    expect(new Set(runs.map((r) => r.task_id))).toEqual(new Set(['task_5', 'task_6']));
+    expect(runs.every((r) => r.status === 'SUCCEEDED')).toBe(true);
+    // 完成顺序 = 派发顺序（task_5 的 run 先建）。
+    expect(runs[0]!.task_id).toBe('task_5');
+
+    // 回复各归各线程，作者都是 m_a。
+    const reply5 = db.prepare('SELECT author_id FROM messages WHERE thread_id = ?').get('thread_5');
+    const reply6 = db.prepare('SELECT author_id FROM messages WHERE thread_id = ?').get('thread_6');
+    expect(reply5).toMatchObject({ author_id: 'm_a' });
+    expect(reply6).toMatchObject({ author_id: 'm_a' });
+    // 会话按任务隔离：同成员两个任务两个会话（不因成员相同而合并）。
+    const sessions = db.prepare('SELECT task_id FROM runtime_sessions ORDER BY task_id').all() as Array<{ task_id: string }>;
+    expect(sessions.map((s) => s.task_id)).toEqual(['task_5', 'task_6']);
+    expect(db.prepare("SELECT count(*) c FROM tasks WHERE status = 'DONE'").get()).toMatchObject({ c: 2 });
+    await adapter.closeAllSessions();
+    db.close();
+  });
 });

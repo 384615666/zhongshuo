@@ -1,3 +1,5 @@
 # pnpm 11 配置（仅设置承载，不构成多包 workspace——单仓单包口径不变，ADR-I17）
 allowBuilds:
   better-sqlite3: true
+  electron: true
+  esbuild: true
