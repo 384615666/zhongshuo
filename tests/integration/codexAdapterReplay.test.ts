@@ -219,3 +219,99 @@ describe('回放：生命周期与 resume', () => {
     expect(entries.some((e) => e['method'] === 'thread/start')).toBe(false);
   });
 });
+
+
+describe('回放（修复轮 3）：真实协议形状反例', () => {
+  it('双会话同时启动 turn：归属互不串扰', async () => {
+    scenario([
+      { notifications: [{ kind: 'turn.started' }, { kind: 'agentMessage.completed', text: '会话A的结果' }, { kind: 'turn.completed', status: 'completed', finalText: 'A完成' }] },
+      { notifications: [{ kind: 'turn.started' }, { kind: 'agentMessage.completed', text: '会话B的结果' }, { kind: 'turn.completed', status: 'completed', finalText: 'B完成' }] },
+    ]);
+    adapter = mockAdapter();
+    const sessionA = await openMockSession(adapter);
+    const sessionB = await openMockSession(adapter);
+    const readerA = new SessionReader(adapter, sessionA);
+    const readerB = new SessionReader(adapter, sessionB);
+    // 并发启动（Promise.all，两会话的 awaiting 互不覆盖）。
+    const collectA = readerA.readTurn();
+    const collectB = readerB.readTurn();
+    await Promise.all([
+      adapter.startTurn(sessionA, turnRequest('turn_sA')),
+      adapter.startTurn(sessionB, turnRequest('turn_sB')),
+    ]);
+    const [eventsA, eventsB] = await Promise.all([collectA, collectB]);
+    expect(eventsA.find((e) => e.kind === 'message.completed')?.text).toBe('会话A的结果');
+    expect(eventsA.find((e) => e.kind === 'turn.completed')?.turnId).toBe('turn_sA');
+    expect(eventsB.find((e) => e.kind === 'message.completed')?.text).toBe('会话B的结果');
+    expect(eventsB.find((e) => e.kind === 'turn.completed')?.turnId).toBe('turn_sB');
+    await adapter.dispose();
+  });
+
+  it('未知归属的终态（ghost turn）不影响当前轮：当前轮仍得到自己的终结', async () => {
+    scenario([{ notifications: [
+      // 先到一条无法归属的失败终态（turn.id=ghost，未登记）。
+      { kind: 'unattributedTerminal', unknownTurnId: 'ghost-turn-999', status: 'failed', error: { kind: 'Ghost', message: '幽灵终态' } },
+      { kind: 'agentMessage.completed', text: '当前轮正常消息' },
+      { kind: 'turn.completed', status: 'completed', finalText: '当前轮完成' },
+    ] }]);
+    adapter = mockAdapter();
+    const session = await openMockSession(adapter);
+    // 连续读取（reader 跨多个终态）：幽灵终态后继续读，直到拿到归属当前轮的终结。
+    const reader = new SessionReader(adapter, session);
+    const reading = (async () => {
+      const events: NormalizedRuntimeEvent[] = [];
+      for (;;) {
+        const next = await reader.next(4_000);
+        if (next === 'timeout' || next.done) return events;
+        events.push(next.value);
+        if (next.value.kind === 'turn.completed' && next.value.turnId === 'turn_current') return events;
+      }
+    })();
+    await adapter.startTurn(session, turnRequest('turn_current'));
+    const events = await reading;
+    // 幽灵终态存在且不带内部 turnId。
+    const ghost = events.find((e) => e.kind === 'turn.failed');
+    expect(ghost).toBeDefined();
+    expect(ghost?.turnId).toBeUndefined();
+    // 当前轮消息与终结归属正确。
+    expect(events.find((e) => e.kind === 'message.completed')?.turnId).toBe('turn_current');
+    const completed = events.find((e) => e.kind === 'turn.completed' && e.turnId === 'turn_current');
+    expect(completed).toBeDefined();
+    await adapter.dispose();
+  });
+
+  it('worker 側：未知归属终态被审计且不终结当前 turn（DispatchWorker×mock 集成）', async () => {
+    const { openDatabase } = await import('../../src/persistence/db.ts');
+    const { createRoomRootTask } = await import('../../src/persistence/stores/roomRootTask.ts');
+    const { DispatchWorker } = await import('../../src/daemon/dispatchWorker.ts');
+    const db = openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','d','D:/x','D:/x','{}',0)`).run();
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('m_human','p1','我','human',1),('m_a','p1','甲','agent',1)`).run();
+    db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('room_1','p1','大厅','m_a')`).run();
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_room_1','p1','room','room_1')`).run();
+    const t = createRoomRootTask(db, {
+      ids: { messageId: 'msg_root_1', threadId: 'thread_1', taskId: 'task_1', taskEventId: 'e1', threadEventId: 'e2' },
+      projectId: 'p1', conversationId: 'conv_room_1', roomId: 'room_1', intent: 'default',
+      title: 'T', body: 'x', mentions: [{ kind: 'member', memberId: 'm_a' }],
+      author: { authorType: 'human', authorId: 'm_human' }, reviewPolicy: 'auto_deliver',
+      sourceConnectionId: null,
+      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'm_a', frozenMemberIds: ['m_a'], initialWakeMemberIds: ['m_a'] } as never,
+      now: 1,
+    });
+    if (!t.ok) throw new Error(t.error.message);
+    scenario([{ notifications: [
+      { kind: 'unattributedTerminal', unknownTurnId: 'ghost-turn-999', status: 'failed', error: { kind: 'Ghost', message: '幽灵失败' } },
+      { kind: 'turn.completed', status: 'completed', finalText: JSON.stringify({ schemaVersion: 'task-complete-v1', resultKey: '{RESULT_KEY}', changeSummary: '当前轮完成', files: [], executedVerifications: [], unexecutedVerifications: [], remainingIssues: [] }) },
+    ] }]);
+    adapter = mockAdapter();
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-replay', turnDeadlineMs: 8_000, interruptGraceMs: 2_000 });
+    await worker.runOnce();
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).toMatchObject({ status: 'DONE' });
+    expect(db.prepare('SELECT status FROM workflow_runs WHERE task_id = ?').get('task_1')).toMatchObject({ status: 'SUCCEEDED' });
+    const audit = db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'turn.unattributedTerminal'").get();
+    expect(audit).toMatchObject({ c: 1 });
+    await adapter.dispose();
+    db.close();
+  });
+});
+

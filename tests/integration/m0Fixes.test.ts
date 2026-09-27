@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -395,6 +395,48 @@ describe('收口1：单实例锁受控时间窗口（目录协议）', () => {
     const [a, b] = await Promise.all([run(), run()]);
     expect([a, b].filter((r) => r.ok).length).toBe(1);
   }, 30_000);
+});
+
+describe('修复轮3：锁身份写入窗口（不清理、不接管、无双持有）', () => {
+  it('claim mkdir 后、claimer.json 写入前：第二获取 BUSY（身份缺失≠已死）', () => {
+    const dir = join(tmpRoot, 'lockdir-identity-window');
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
+    const acquired = acquireSingletonLock(dir, {
+      identityGraceMs: 60_000,
+      onBeforeClaimIdentity: () => {
+        // 身份写入前窗口：另一个获取应保守 BUSY，不得清理 claim 或取得锁。
+        const second = acquireSingletonLock(dir, { identityGraceMs: 60_000 });
+        expect(second).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } });
+      },
+    });
+    // 窗口方完成后，接管方正常取得唯一锁。
+    expect(acquired.ok).toBe(true);
+    if (acquired.ok) acquired.value.release();
+  });
+
+  it('claim 身份缺失超过宽限（接管者崩溃）：清理后可再接管', () => {
+    const dir = join(tmpRoot, 'lockdir-claim-stale');
+    writeLockDirForTest(dir, { pid: 999999999, startedAt: 0 });
+    // 预置无身份的 claim + 旧 mtime（模拟接管者 mkdir 后崩溃）。
+    mkdirSync(join(dir, 'daemon.lock.d', 'claim'), { recursive: true });
+    utimesSync(join(dir, 'daemon.lock.d', 'claim'), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    const r = acquireSingletonLock(dir, { identityGraceMs: 1_000 });
+    expect(r.ok).toBe(true);
+    if (r.ok) r.value.release();
+  });
+
+  it('owner 半写入（owner.json 损坏 + 新建目录）：宽限内 BUSY；超宽限按陈旧接管', () => {
+    const dir = join(tmpRoot, 'lockdir-owner-halfwrite');
+    const lockDir = join(dir, 'daemon.lock.d');
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, 'owner.json'), '{"pid": 12', 'utf8'); // 半截 JSON
+    const fresh = acquireSingletonLock(dir, { identityGraceMs: 60_000 });
+    expect(fresh).toMatchObject({ ok: false, error: { code: 'WORKSPACE_BUSY' } }); // 宽限内不接管
+    utimesSync(lockDir, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000)); // 推老 mtime
+    const stale = acquireSingletonLock(dir, { identityGraceMs: 1_000 });
+    expect(stale.ok).toBe(true);
+    if (stale.ok) stale.value.release();
+  });
 });
 
 describe('收口3：adapter.interrupt 永不返回时宽限仍生效', () => {

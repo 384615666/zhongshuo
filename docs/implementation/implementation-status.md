@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-27（DEV-06 修复轮 2：外部复核 7 项全整改；真实认证 C1+计划档两路径通过（gpt-6-luna））
+- 最近更新：2026-09-27（修复轮 3：用户复核三项收口 + steer/resume/审批桥认证通过；默认 260/260、e2e 7/7）
 
 ## 工作包状态
 
@@ -19,7 +19,7 @@
 | DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED**（修复轮后） | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md)+勘误：RT-07 真过期阻塞已修复（原用例假阳性）；parallel_writers 入口已禁用（ADR-I19） |
 | DEV-05 | daemon 单实例锁、派发 worker、停止代次、恢复基础、命名管道 IPC | **VERIFIED**（修复轮后） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)+勘误：独立截止计时/会话竞态复查/派发门禁/重领对账/模式门禁/验收策略/锁原子化/IPC 全部补齐；**真实进程边界随 DEV-06 验证，不提前声称** |
 | DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
-| DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **部分 VERIFIED**（审查修复轮后：C1 文件回流+层 A+计划档两路径真实通过；PP-12/PP-02/确认档待补） | `src/adapter/codex/` | G2 子集/B6 计划档 | [reports/dev-06-fixround2-result.md](reports/dev-06-fixround2-result.md)+勘误链：adapter v0.2.0（终态映射/归属/生命周期/审批绑定/resume 接线）+协议回放 8 用例+真实 e2e 4/4（gpt-6-luna） |
+| DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **部分 VERIFIED**（C1/计划档两路径/steer 拒绝/resume 续接/审批桥 deny 通过；steer 正常路径与审批 allow 待补） | `src/adapter/codex/` | G2 子集/B6 计划档+确认档 deny | [reports/dev-06-fixround3-result.md](reports/dev-06-fixround3-result.md)（勘误链：stage1→fixround2→fixround3） |
 | DEV-07 | 正式 UI 最小接入（保留原型交互，去 mock） | NOT_STARTED | `src/ui/` | G3 | 依赖 DEV-04/05/06 |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | NOT_STARTED | `src/domain/` | G4 | M1 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## 修复轮 3（2026-09-27，用户复核三项后）
+
+协议/锁/B6 收口（详见 [reports/dev-06-fixround3-result.md](reports/dev-06-fixround3-result.md)）：turn/started|completed 只认 turn.id（mock 去伪字段）+awaiting 按会话隔离+响应解析同步点注册映射（未知归属终态在 adapter 层不带内部 turnId、worker 层审计不终结当前轮）；锁身份写入窗口（半写入≠已死，mtime 宽限，onBeforeClaimIdentity 同步点无双持有）；B6 证据绑定（指定工具+toolCallId 配对+目标路径+resultRef 拒绝原因）。真实认证新增：steer 错误 ID 拒绝、resume 跨进程续接（暗号恢复）、审批桥 deny（read-only+on-request 触发 approval.requested→deny→无写入）。默认 260/260；e2e 7/7（gpt-6-luna）。
 
 ## 修复轮 2（2026-09-27，GPT 复核 7 项后）
 

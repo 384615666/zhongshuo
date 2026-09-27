@@ -407,6 +407,15 @@ export class DispatchWorker {
         this.audit(task, runId, turnId, 'turn.lateEventArrived', { eventKey: event.eventKey, kind: event.kind });
         continue;
       }
+      // 终态事件必须可归属（turnId 匹配本 turn）：未知归属的 turn.completed/turn.failed
+      // （provider turn 无法映射，修复轮 3）不得终结/污染当前 turn，只记审计。
+      if (
+        (event.kind === 'turn.completed' || event.kind === 'turn.failed') &&
+        event.turnId == null
+      ) {
+        this.audit(task, runId, turnId, 'turn.unattributedTerminal', { eventKey: event.eventKey, kind: event.kind });
+        continue;
+      }
       const turnRow = this.db
         .prepare('SELECT status FROM agent_turns WHERE id = ?')
         .get(turnId) as { status: string } | undefined;

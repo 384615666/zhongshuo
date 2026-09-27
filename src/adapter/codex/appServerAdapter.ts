@@ -44,16 +44,13 @@ interface JsonRpcRequest {
 
 type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 
-interface AwaitingTurn {
-  internalTurnId: string;
-  providerTurnId: string | null;
-}
-
 interface SessionState {
   ref: SessionRef;
   stream: EventStream;
   providerThreadId: string;
   providerTurnToInternal: Map<string, string>;
+  /** 本会话待认领 turn（按会话隔离：双会话并发 startTurn 不互扰，修复轮 3）。 */
+  awaitingTurn: { internalTurnId: string; providerTurnId: string | null } | null;
   seq: number;
 }
 
@@ -65,8 +62,10 @@ export interface CodexAdapterOptions {
   codexCmdPath?: string;
   requestTimeoutMs?: number;
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
-  /** thread/start 的 model 覆盖（e2e 认证用低成本渠道，如 deepseek-flash / gpt-6 luna）。 */
+  /** thread/start 的 model 覆盖（e2e 认证用低成本渠道，如 gpt-6 luna）。 */
   model?: string;
+  /** 审批策略（默认 never=M0 不开审批桥；认证用例可开 on-request）。 */
+  approvalPolicy?: 'untrusted' | 'on-request' | 'never';
   /** 测试注入：替换 spawn 的脚本入口（本地协议回放，不消耗额度）。 */
   mockEntry?: { executable: string; args?: string[] };
 }
@@ -75,15 +74,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private childGeneration = 0;
   private nextRequestId = 1;
-  private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+  private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; onResult?: (v: unknown) => void }>();
   private readonly sessions = new Map<string, SessionState>();
   private readonly serverRequests = new Map<string, { rpcId: number; sessionId: string }>();
   private buffer = '';
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
-  private awaitingTurn: AwaitingTurn | null = null;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; mockEntry?: CodexAdapterOptions['mockEntry'] };
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
@@ -93,6 +91,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       sandboxMode: options.sandboxMode ?? 'read-only',
       model: options.model,
+      approvalPolicy: options.approvalPolicy,
       mockEntry: options.mockEntry,
     };
   }
@@ -170,7 +169,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return null;
   }
 
-  private request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  private request<T = unknown>(method: string, params?: unknown, onResult?: (v: unknown) => void): Promise<T> {
     this.ensureProcess();
     const id = this.nextRequestId++;
     const message: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
@@ -180,7 +179,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         reject(new AdapterCallError('RUNTIME_NOT_FOUND', `${method} 请求超时（${this.options.requestTimeoutMs}ms）`));
       }, this.options.requestTimeoutMs);
       timer.unref?.();
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer, onResult });
       this.writeLine(`${JSON.stringify(message)}`);
     });
   }
@@ -217,6 +216,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         const err = message['error'] as { message?: string; code?: number };
         entry.reject(new AdapterCallError('CAPABILITY_UNSUPPORTED', `JSON-RPC 错误（${err.code ?? '?'}）：${err.message ?? '未知'}`));
       } else {
+        // 同步点：映射注册先于同 chunk 后续通知的处理（await 微任务不参与顺序，修复轮 3）。
+        if (entry.onResult != null) entry.onResult(message['result']);
         entry.resolve(message['result']);
       }
       return;
@@ -268,8 +269,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
     switch (method) {
       case 'turn/started': {
-        const turn = p['turn'] as { id?: string } | undefined;
-        const providerId = turn?.id ?? providerTurnId;
+        // 真实协议：TurnStartedNotification = { threadId, turn }——provider ID 只在 turn.id。
+        const providerId = (p['turn'] as { id?: string } | undefined)?.['id'];
         if (providerId != null) this.registerTurnMapping(session, providerId);
         session.stream.push(this.event(session, { kind: 'turn.started', providerTurnId: providerId }, this.internalTurnOf(session, providerId)));
         break;
@@ -296,6 +297,10 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             kind: 'tool.completed',
             toolCallId: String(item?.['id'] ?? randomUUID()),
             outcome: toolOutcome(item?.['status']),
+            // 拒绝原因留痕（B6 证据绑定）：declined=权限拒绝；failed=执行失败。
+            ...(item?.['status'] === 'declined' || item?.['status'] === 'failed'
+              ? { resultRef: `status:${String(item?.['status'])}` }
+              : {}),
           }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
@@ -308,7 +313,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             kind: 'tool.started',
             toolCallId: String(item?.['id'] ?? randomUUID()),
             toolName: String(type),
-            argumentsSummary: String(item?.['command'] ?? '').slice(0, 120),
+            // 目标路径留痕（B6 证据绑定）：fileChange 取 changes[].path；命令取 command。
+            argumentsSummary: toolTargets(item).slice(0, 200),
           }, this.internalTurnOf(session, providerTurnId)));
         }
         break;
@@ -327,10 +333,10 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         break;
       }
       case 'turn/completed': {
-        // 按真实终态映射（修复轮）：completed 才是成功；interrupted/failed 走失败。
-        const turn = p['turn'] as { status?: string; error?: { kind?: string; message?: string }; items?: Array<Record<string, unknown>> } | undefined;
+        // 按真实终态映射；provider ID 只在 turn.id（TurnCompletedNotification 无顶层 turnId）。
+        const turn = p['turn'] as { id?: string; status?: string; error?: { kind?: string; message?: string }; items?: Array<Record<string, unknown>> } | undefined;
         const status = turn?.status ?? 'completed';
-        const internalTurnId = this.internalTurnOf(session, providerTurnId);
+        const internalTurnId = this.internalTurnOf(session, turn?.['id']);
         if (status === 'failed' || status === 'interrupted') {
           session.stream.push(this.event(session, {
             kind: 'turn.failed',
@@ -370,9 +376,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   /** turn 映射（修复轮）：awaiting 未绑定则认领；未知 provider turn 不猜归属。 */
   private registerTurnMapping(session: SessionState, providerTurnId: string): void {
     if (session.providerTurnToInternal.has(providerTurnId)) return;
-    if (this.awaitingTurn != null && this.awaitingTurn.providerTurnId == null) {
-      this.awaitingTurn.providerTurnId = providerTurnId;
-      session.providerTurnToInternal.set(providerTurnId, this.awaitingTurn.internalTurnId);
+    if (session.awaitingTurn != null && session.awaitingTurn.providerTurnId == null) {
+      session.awaitingTurn.providerTurnId = providerTurnId;
+      session.providerTurnToInternal.set(providerTurnId, session.awaitingTurn.internalTurnId);
     }
   }
 
@@ -380,7 +386,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if (providerTurnId != null) {
       return session.providerTurnToInternal.get(providerTurnId); // 未知=迟到：返回 undefined
     }
-    return this.awaitingTurn?.providerTurnId == null ? this.awaitingTurn?.internalTurnId : undefined;
+    return session.awaitingTurn?.providerTurnId == null ? session.awaitingTurn?.internalTurnId : undefined;
   }
 
   private sessionByThread(threadId: string): SessionState | undefined {
@@ -454,7 +460,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     const threadParams: Record<string, unknown> = {
       cwd: input.cwd,
       sandbox: this.options.sandboxMode,
-      approvalPolicy: 'never',
+      approvalPolicy: this.options.approvalPolicy ?? 'never',
     };
     if (this.options.model != null && this.options.model.length > 0) threadParams['model'] = this.options.model;
     if (input.developerInstructions != null) threadParams['developerInstructions'] = input.developerInstructions;
@@ -476,6 +482,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       stream: new EventStream(),
       providerThreadId,
       providerTurnToInternal: new Map(),
+      awaitingTurn: null,
       seq: 0,
     };
     this.sessions.set(ref.id, state);
@@ -486,18 +493,26 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
     const state = this.stateOf(session);
     // 先登记 awaiting（通知可能早于响应到达，修复轮）。
-    this.awaitingTurn = { internalTurnId: input.turnId, providerTurnId: null };
-    const result = await this.request<{ turn: { id: string } }>('turn/start', {
-      threadId: state.providerThreadId,
-      input: [{ type: 'text', text: input.text, text_elements: [] }],
-      clientUserMessageId: input.dispatchKey,
-    });
-    if (!state.providerTurnToInternal.has(result.turn.id)) {
-      state.providerTurnToInternal.set(result.turn.id, input.turnId);
-    }
-    if (this.awaitingTurn?.internalTurnId === input.turnId && this.awaitingTurn.providerTurnId == null) {
-      this.awaitingTurn.providerTurnId = result.turn.id;
-    }
+    state.awaitingTurn = { internalTurnId: input.turnId, providerTurnId: null };
+    const result = await this.request<{ turn: { id: string } }>(
+      'turn/start',
+      {
+        threadId: state.providerThreadId,
+        input: [{ type: 'text', text: input.text, text_elements: [] }],
+        clientUserMessageId: input.dispatchKey,
+      },
+      (r) => {
+        // 响应解析同步点：立即固化映射（同 chunk 的通知随后处理时即可命中）。
+        const providerTurnId = (r as { turn?: { id?: string } })?.turn?.id;
+        if (providerTurnId != null) {
+          state.providerTurnToInternal.set(providerTurnId, input.turnId);
+          if (state.awaitingTurn?.internalTurnId === input.turnId && state.awaitingTurn.providerTurnId == null) {
+            state.awaitingTurn.providerTurnId = providerTurnId;
+          }
+        }
+      },
+    );
+    void result;
   }
 
   events(session: SessionRef): AsyncIterable<NormalizedRuntimeEvent> {
@@ -570,4 +585,15 @@ function toolOutcome(status: unknown): 'success' | 'failure' | 'unknown' {
   if (status === 'completed') return 'success';
   if (status === 'failed' || status === 'declined') return 'failure';
   return 'unknown';
+}
+
+/** 工具目标摘要：fileChange 用 changes[].path；commandExecution 用 command；其余用工具名。 */
+function toolTargets(item: ToolLikeItem | undefined): string {
+  const type = String(item?.['type'] ?? '');
+  if (type === 'fileChange') {
+    const changes = (item?.['changes'] as Array<{ path?: string }> | undefined) ?? [];
+    return changes.map((c) => String(c['path'] ?? '')).join(', ');
+  }
+  if (type === 'commandExecution') return String(item?.['command'] ?? '');
+  return type;
 }

@@ -185,3 +185,24 @@ worker 收到 turn.completed 必须先通过 taskCompleteSchema（JSON 解析→
 ## ADR-I30 · Codex 适配器能力三态口径（2026-09-27，修复轮 2）
 
 协议字段存在、适配器方法实现、真实行为通过是三个不同状态。probe 能力表仅 structuredEvents=supported（真实进程观察到通知链路）；resumeSession（thread/resume 已接线）、steerActiveTurn（expectedTurnId 已接线）、interrupt、usageTokens、structuredFinal、interactiveApprovals、restrictWrites/Shell、disableDelegation 一律 unverified，按真实用例逐项升级。RT-23 计划档两路径（直接编辑/shell）已 PASS 并记入能力矩阵；确认档维持 UI 禁用。
+
+
+## ADR-I31 · 响应解析同步点注册 turn 映射（2026-09-27，修复轮 3）
+
+turn/start 响应行与后续通知可能同 stdout chunk 到达：await 微任务不参与行处理顺序。pending 条目增加 onResult 回调，
+响应解析时**同步**固化 provider→internal 映射（先于同 chunk 通知处理）。撤销"终态认领 awaiting"——未知归属终态
+（ghost turn.id）在 adapter 层不带内部 turnId、worker 层记 turn.unattributedTerminal 审计且不终结当前轮。
+mock 回放必须使用真实协议形状（turn/started|completed 无顶层 turnId，provider ID 只在 turn.id），不得为测试便利加伪字段。
+
+## ADR-I32 · 锁身份写入窗口（2026-09-27，修复轮 3）
+
+claim mkdir 与 claimer.json 写入之间存在窗口：身份缺失/半写入 ≠ 持有者已死。规则：目录 mtime 在 identityGraceMs
+（默认 2s）内 → 保守 BUSY（不清理不接管）；超宽限仍无有效身份 → 按崩溃清理（rm 竞态由 mkdir claim 原子性兜底）。
+owner.json 半写入同规则。测试同步点 onBeforeClaimIdentity 置于身份写入前，验证窗口内无双持有。
+
+## ADR-I33 · B6 证据绑定与确认档语义（2026-09-27，修复轮 3）
+
+沙箱认证证据必须绑定到具体写入工具：tool.started 的 toolName+argumentsSummary（fileChange=changes[].path，
+commandExecution=command）含目标路径；同 toolCallId 配对 tool.completed outcome=failure 且 resultRef 带
+status:declined|failed（权限拒绝原因）。unknown/语法错误/任意工具失败/口头拒绝不构成证据。确认档正确语义为
+read-only+on-request（workspace-write 内的写入被沙箱自动放行，不触发审批）；审批桥 deny 路径已真实验证。

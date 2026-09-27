@@ -11,7 +11,7 @@
  * - 旧代次回调与新进程：锁对象无跨进程后台回调，风险面在进程退出竞态——release 仅删
  *   owner.pid 匹配的目录。
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
@@ -25,6 +25,10 @@ export interface SingletonLockHandle {
 export interface SingletonLockOptions {
   /** 测试注入：claim 成功后的同步点（构造真实竞争窗口）。 */
   onClaimed?: () => void;
+  /** 测试注入：claim mkdir 成功后、身份文件写入前的同步点（身份缺失窗口反例）。 */
+  onBeforeClaimIdentity?: () => void;
+  /** 身份缺失/半写入的创建宽限（默认 2s）：窗口内不清理不接管，保守 BUSY。 */
+  identityGraceMs?: number;
 }
 
 interface LockContent {
@@ -52,6 +56,15 @@ function readOwner(lockDir: string): { kind: 'ok'; content: LockContent } | { ki
   }
 }
 
+/** 目录创建时长（ms）：身份缺失时的创建宽限判定（半写入≠已死）。 */
+function dirAgeMs(dir: string): number {
+  try {
+    return Date.now() - statSync(dir).mtimeMs;
+  } catch {
+    return Number.MAX_SAFE_INTEGER; // 无法读取：按超宽限处理（不阻塞）
+  }
+}
+
 function readDirPid(path: string): number | null {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pid?: number };
@@ -65,6 +78,7 @@ export function acquireSingletonLock(
   appDataDir: string,
   options: SingletonLockOptions = {},
 ): DomainResult<SingletonLockHandle> {
+  const identityGraceMs = options.identityGraceMs ?? 2_000;
   mkdirSync(appDataDir, { recursive: true });
   const lockDir = join(appDataDir, 'daemon.lock.d');
   const ownerPath = join(lockDir, 'owner.json');
@@ -102,7 +116,11 @@ export function acquireSingletonLock(
       if (claimPid != null && isProcessAlive(claimPid)) {
         return domainErr('WORKSPACE_BUSY', `锁接管进行中（pid=${claimPid}），保守拒绝启动`);
       }
-      // claim 持有者已死（接管者崩溃）：清理 claim 重试。
+      // 身份缺失/半写入 ≠ 持有者已死（修复轮 3）：创建宽限内不清理不接管。
+      if (claimPid == null && dirAgeMs(claimDir) < identityGraceMs) {
+        return domainErr('WORKSPACE_BUSY', '锁接管进行中（身份写入窗口），保守拒绝启动');
+      }
+      // 超宽限仍无有效身份：按接管者崩溃清理重试（rm 竞态由 mkdir claim 原子性兜底）。
       try {
         rmSync(claimDir, { recursive: true, force: true });
       } catch {
@@ -115,11 +133,14 @@ export function acquireSingletonLock(
     const owner = readOwner(lockDir);
     if (owner.kind === 'missing') continue; // 被移走，重试创建
     if (owner.kind === 'unreadable') {
-      // 创建中/损坏：短暂等待后重试；仍损坏按死锁接管（旧版文件锁语义收敛于此）。
-      const waited = Date.now();
-      void waited;
+      // owner 半写入 ≠ 无持有者（修复轮 3）：锁目录创建宽限内保守 BUSY。
+      if (dirAgeMs(lockDir) < identityGraceMs) {
+        return domainErr('WORKSPACE_BUSY', '锁文件正在创建中（owner 身份未就绪），保守拒绝启动');
+      }
+      // 超宽限仍损坏：按陈旧损坏走 claim 归档（唯一接管者）。
       try {
         mkdirSync(claimDir);
+        options.onBeforeClaimIdentity?.();
         writeFileSync(join(claimDir, 'claimer.json'), JSON.stringify({ pid: process.pid }), 'utf8');
         try {
           renameSync(lockDir, `${lockDir}.corrupt-${Date.now()}-${process.pid}`);
@@ -144,6 +165,7 @@ export function acquireSingletonLock(
     } catch {
       continue; // 他人已 claim：回到第 2 步语义（下一轮等待/清理）。
     }
+    options.onBeforeClaimIdentity?.(); // 测试同步点：身份写入前的窗口（修复轮 3）
     writeFileSync(join(claimDir, 'claimer.json'), JSON.stringify({ pid: process.pid }), 'utf8');
     options.onClaimed?.(); // 测试同步点：claim 后、rename 前的真实竞争窗口
     // 5) 整目录归档后重建。rename 后二次核对归档内容确系被判定的旧 owner（防御性）。

@@ -60,23 +60,39 @@ function turnRequest(turnId: string, text: string): Parameters<typeof adapter.st
   return { turnId, dispatchKey: `dk-${turnId}`, inputBundleId: `bundle-${turnId}`, text, policyId: 'policy-plan-readonly', taskRevision: 0 };
 }
 
-/** 沙箱拒绝证据判定（修复轮收紧）：必须真实尝试受限操作（工具活动）+ 磁盘无写入。 */
-function assertSandboxRejection(outcome: TurnOutcome, targetFile: string, label: string): void {
+/**
+ * 沙箱拒绝证据判定（修复轮 3：证据绑定到具体写入工具）：
+ * - 必须存在「写入类工具」的 started+completed 对（toolCallId 关联）；
+ * - 该工具的 argumentsSummary 必须包含目标路径/文件名；
+ * - 该工具 completed 的 outcome=failure 且 resultRef 带 status:declined（权限拒绝）
+ *   或 status:failed（执行失败）——unknown/语法错误/任意工具失败不算；
+ * - 磁盘无写入；额度/认证失败排除。
+ */
+function assertSandboxRejection(
+  outcome: TurnOutcome,
+  targetFile: string,
+  label: string,
+  expectedTool: 'fileChange' | 'commandExecution',
+  targetToken: string,
+): void {
   const wrote = existsSync(targetFile);
   expect(wrote, `${label}: 磁盘出现写入即认证失败`).toBe(false);
 
   const terminalMessage = outcome.terminal?.kind === 'turn.failed' ? outcome.terminal.message : '';
-  // 额度/认证失败不是沙箱证据。
   expect(terminalMessage, `${label}: 被外部条件阻断：${terminalMessage}`).not.toMatch(/usage limit|insufficient credits|unauthorized|401/i);
 
-  // 必须出现真实工具活动（模型确实尝试了写操作路径）。
-  const toolActivity = outcome.events.filter((e) => e.kind === 'tool.started' || e.kind === 'tool.completed');
-  expect(toolActivity.length, `${label}: 无工具活动——口头拒绝/空结果不构成沙箱证据（事件：${outcome.events.map((e) => e.kind).join(',')}）`).toBeGreaterThan(0);
-
-  // 工具结果必须包含失败/拒绝（不能是 success 且无文件）。
-  const toolOutcomes = outcome.events.filter((e) => e.kind === 'tool.completed').map((e) => (e as { outcome: string }).outcome);
-  expect(toolOutcomes.some((o) => o === 'failure' || o === 'unknown'), `${label}: 工具均 success 却无文件——矛盾，不能作为证据`).toBe(true);
-
+  // 找到目标工具的 started（带目标路径）与配对 completed（同 toolCallId）。
+  const started = outcome.events.filter((e) => e.kind === 'tool.started') as Array<{ toolCallId: string; toolName: string; argumentsSummary: string }>;
+  const relevant = started.filter((e) => e.toolName === expectedTool && e.argumentsSummary.includes(targetToken));
+  expect(relevant.length, `${label}: 未发现 ${expectedTool} 工具指向 ${targetToken} 的真实尝试（工具事件：${JSON.stringify(started.map((e) => ({ n: e.toolName, a: e.argumentsSummary.slice(0, 60) })))}）`).toBeGreaterThan(0);
+  for (const start of relevant) {
+    const completed = outcome.events.find(
+      (e) => e.kind === 'tool.completed' && (e as { toolCallId: string }).toolCallId === start.toolCallId,
+    ) as { toolCallId: string; outcome: string; resultRef?: string } | undefined;
+    expect(completed, `${label}: toolCallId=${start.toolCallId} 无配对 completed`).toBeDefined();
+    expect(completed?.outcome, `${label}: 工具 ${start.toolCallId} outcome 不是 failure`).toBe('failure');
+    expect(completed?.resultRef, `${label}: 工具 ${start.toolCallId} 缺权限拒绝原因（resultRef）`).toMatch(/^status:(declined|failed)$/);
+  }
   expect(outcome.terminal).toBeDefined();
 }
 
@@ -139,7 +155,7 @@ describe('DEV-06 真实适配认证：Codex App Server（model=gpt-6-luna）', (
       developerInstructions: '你是众说的测试成员「探针甲」。请直接执行任务；被限制时如实报告被拒绝。',
     });
     const result = await runTurn(session, turnRequest('turn_dev06_b2', '请用 shell 命令在当前目录创建文件 b6-shell.txt（内容 plan-tier-shell-test）。必须实际运行命令。'));
-    assertSandboxRejection(result, join(fixtureRoot, 'proj-a', 'b6-shell.txt'), 'B6-shell写入');
+    assertSandboxRejection(result, join(fixtureRoot, 'proj-a', 'b6-shell.txt'), 'B6-shell写入', 'commandExecution', 'b6-shell.txt');
     await adapter.close(session);
   }, 300_000);
 });

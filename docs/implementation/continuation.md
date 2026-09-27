@@ -2,10 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（DEV-06 修复轮 2 + 真实认证通过时点）
+- 更新：2026-09-27（修复轮 3 + DEV-06 收尾认证通过时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
+
+- **修复轮 3**：用户复核三项收口——①turn/started|completed 只认 turn.id（mock 去伪字段）+awaiting 按会话隔离+响应解析同步点注册映射（未知归属终态：adapter 无内部 turnId/worker 审计不终结当前轮，含双会话并发与 ghost 反例）；②锁身份写入窗口（半写入≠已死，mtime 宽限+onBeforeClaimIdentity 无双持有）；③B6 证据绑定（指定工具+toolCallId 配对+目标路径+resultRef 拒绝原因）。默认 260/260。
+- **DEV-06 收尾认证（gpt-6-luna）**：steer 错误 ID 拒绝；**resume 跨进程续接**（暗号 LUNA-RESUME-7 恢复）；**审批桥 deny**（read-only+on-request→approval.requested→deny→无写入）。e2e 累计 7/7。详见 reports/dev-06-fixround3-result.md。
 
 - **DEV-06 修复轮 2**：GPT 复核 7 项全整改（终态映射/turn 归属/生命周期+resume/TaskComplete 接入完成路径/B6 收紧/能力收窄/锁目录协议）；协议回放 mock 8 用例（零额度）；`pnpm check` 254/254。
 - **真实认证通过（gpt-6-luna，e2e 4/4）**：C1 真实文件内容回流（ZS-DEV06-4242）+ 层 A 行为证据（ZS-ACK）；B6 计划档两路径（直接编辑：内容逐字节未变；shell：文件未创建）+ 工具失败证据。deepseek-flash 在当前渠道 400，已切 gpt-6-luna（ZS_E2E_MODEL 可覆盖）。详见 reports/dev-06-fixround2-result.md。
@@ -22,7 +25,7 @@
 
 ## 下一步（直接开工，无需再确认）
 
-1. **DEV-06 收尾（每项 1 turn，gpt-6-luna，总量 ≤4）**：steer 真实用例（turn/steer+expectedTurnId：正常追加→影响输出；错 ID→拒绝）＝PP-12 局部；thread/resume 续接（暗号跨 turn 保持）＝PP-02 局部；审批桥真实往返（临时开 approvalPolicy=on-request 的 fixture 会话：请求→adapter approval.requested→respondApproval→继续/拒绝）＝RT-23 确认档；通过后按项升级 capability matrix。
+1. **DEV-06 残余（各 1 turn，gpt-6-luna）**：steer 正常路径（活跃 turn 追加输入影响输出）；审批 allow 路径（允许后继续）；structuredFinal（outputSchema 约束）与 usageTokens 数值口径观察。已过项勿重跑。
 2. **DEV-07**：Electron main/preload + 命名管道 IPC 接线（传输层已验证）+ hifi-prototype 交互复用接真实命令面（DispatchWorker×CodexAppServerAdapter 组装进 daemon 入口）→ G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留；双任务不串线）。
 3. 每包结束更新总账四件套 + 本文件。
 
