@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-27（收口轮 2 + DEV-21-M0 完成：`pnpm check` 244/244）
+- 最近更新：2026-09-27（DEV-06 第一阶段：协议层真实验证；模型认证受阻于额度，重置后重跑）
 
 ## 工作包状态
 
@@ -19,7 +19,7 @@
 | DEV-04 | 目录打开/去重/重定位、物理锁域、基线清单 | **VERIFIED**（修复轮后） | `src/daemon/` | RT-07/09（存储侧） | [reports/dev-04-result.md](reports/dev-04-result.md)+勘误：RT-07 真过期阻塞已修复（原用例假阳性）；parallel_writers 入口已禁用（ADR-I19） |
 | DEV-05 | daemon 单实例锁、派发 worker、停止代次、恢复基础、命名管道 IPC | **VERIFIED**（修复轮后） | `src/daemon/` | G1 核心 | [reports/dev-05-result.md](reports/dev-05-result.md)+勘误：独立截止计时/会话竞态复查/派发门禁/重领对账/模式门禁/验收策略/锁原子化/IPC 全部补齐；**真实进程边界随 DEV-06 验证，不提前声称** |
 | DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
-| DEV-06 | 真实 runtime（优先 Codex App Server）、能力/权限检测 | NOT_STARTED | `src/adapter/` | G2/B6/RT-23 | 依赖 DEV-03/05/17 ✅ + DEV-21-M0 合同先行 |
+| DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **IN_PROGRESS**（协议层 VERIFIED；模型认证 BLOCKED-额度） | `src/adapter/codex/` | G2/B6/RT-23 | [reports/dev-06-stage1-result.md](reports/dev-06-stage1-result.md)：0.157.1 类型固化+适配器+真实进程链路通；C1/B6 待额度重置（12:29）后 `pnpm test:e2e` 重跑 |
 | DEV-07 | 正式 UI 最小接入（保留原型交互，去 mock） | NOT_STARTED | `src/ui/` | G3 | 依赖 DEV-04/05/06 |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | NOT_STARTED | `src/domain/` | G4 | M1 |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | NOT_STARTED | `src/domain/` | G4 | M1 |
@@ -87,8 +87,8 @@
 
 | 事项 | 影响范围 | 状态 |
 |---|---|---|
+| Codex 渠道额度用尽（2026-09-27 12:29 重置） | DEV-06 的 C1 文件回流 / B6 计划档 / PP-01 行为证据 | BLOCKED（外部临时条件）：重置后 `pnpm test:e2e` 重跑即可；协议层不受影响 |
 | FULL-10 商业参数（定价/商户/法务）未提供 | FULL-10 生产集成 | 已登记；无依赖部分可先行，不阻塞其他包 |
-| 无其他阻塞 | — | — |
 
 ## 下一步（按依赖）
 

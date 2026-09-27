@@ -2,10 +2,12 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-- 更新：2026-09-27（收口轮 2 + DEV-21-M0 完成时点）
+- 更新：2026-09-27（DEV-06 第一阶段完成时点）
 - 分支：`codex/full-implementation`；检查点：DEV-01 `8e88799` → DEV-02 `0feb053` → DEV-03 `30e5424` → DEV-04 `35df2f3` → DEV-05 `41b58dc` → DEV-17 `2535a74` → **修复轮**（见 git log）；全部已推送
 
 ## 刚完成
+
+- **DEV-06 第一阶段**：codex 0.157.1 协议类型固化（generate-ts，tests/fixtures/codex-protocol/，已排除编译）、CodexAppServerAdapter（stdio 换行 JSON-RPC 全生命周期+§9.4 映射+审批通道）、e2e 隔离配置（pnpm test:e2e，默认套件不烧额度）。真实进程验证：probe/initialize/thread/start/turn/start/通知映射全通；**模型 turn 被额度限制阻断**（"try again at 12:29 PM"）——C1 文件回流与 B6 计划档未验证（B6 断言已收紧防额度冒充）。详见 reports/dev-06-stage1-result.md。
 
 - **收口轮 2**：锁接管纪律（受控窗口三反例）、门禁覆盖已提交未领取（RT-02 门禁化）、interrupt 限时发送（hangInterrupt 反例）。
 - **DEV-21-M0**：standing v0.1.1/turn v0.1.2/TaskComplete v1 契约 + worker 正式输入组装（根消息+获准历史正文注入、信封 hash 一致、组装失败不派发）；PP-02/03/04/05 自测子集通过。`pnpm check` **244/244**。详见 reports/dev-21-m0-and-closure2-result.md。
@@ -17,7 +19,11 @@
 
 ## 下一步（直接开工，无需再确认）
 
-1. **DEV-06（真实 runtime：Codex App Server 专用 fixture 适配认证）**：
+1. **额度重置后（12:29 PM）先重跑 `pnpm test:e2e`**：C1（fixture 暗号 ZS-DEV06-4242 回流+层 A 暗语行为证据）与 B6（read-only 写拒绝）。通过后回填 runtime-capability-matrix（supported 项+RT-23 计划档证据），再各花 1 turn 补 steer（PP-12 局部）与 thread/resume（PP-02 局部）真实用例。
+2. **DEV-06 收尾**后进 **DEV-07**：Electron main/preload + 命名管道 IPC 接线 + hifi-prototype 交互复用接真实命令面 → G3 演示（真实 fixture 文件夹→指定成员→读真实文件→回复入正确线程→停止→重启保留；双任务不串线）。
+3. 每包结束更新总账四件套 + 本文件。
+
+（历史）DEV-06 原始指引：
    - 先决探测：本机 codex 可执行入口（勿直接 spawn .cmd——解析到原生 exe，§9.5 EINVAL 坑）、`codex app-server` 子命令存在性与版本。
    - adapter：`src/adapter/codex/`（stdio 换行 JSON-RPC：initialize(clientInfo)→initialized→thread/turn 生命周期；developerInstructions=层 A 快照；turn/start 输入=层 B 渲染文本）；事件映射到 §9.4 规范事件；stdin 显式管理（EOF 坑）。
    - 专用 fixture：tmp 目录小项目+已知内容文件；独立测试会话+有限预算（maxTurns≤2）；断言回复含真实文件内容（不是种子文本）。

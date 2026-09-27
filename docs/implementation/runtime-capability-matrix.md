@@ -7,7 +7,7 @@
 
 | Runtime | 接入方式 | 版本 | 能力验证 | 权限档位验证 | 状态 | 承载包 |
 |---|---|---|---|---|---|---|
-| Codex（App Server） | 计划 stdio JSON-RPC | 未锁定（2026-09-17 实测环境曾见 0.154/0.155，施工时重新检测锁定） | 无 | 无 | NOT_STARTED | DEV-06 |
+| Codex（App Server） | stdio 换行 JSON-RPC（adapter 已实现） | **0.157.1**（2026-09-27 实测；协议类型 generate-ts 固化） | 协议链路 VERIFIED（initialize/thread/turn/通知映射真实进程通过）；**模型行为 BLOCKED**（额度限制，12:29 重置后重跑 pnpm test:e2e） | 计划档 read-only：待重跑（磁盘无写入已确认，但失败原因需排除额度冒充） | IN_PROGRESS | DEV-06 |
 | Claude Code（headless） | 计划 `-p` stream-json | 未锁定（设计核对时 2.1.278） | 无 | 无 | NOT_STARTED | DEV-10 |
 | fake adapter | 进程内脚本化 | — | — | — | NOT_STARTED | DEV-03 |
 
