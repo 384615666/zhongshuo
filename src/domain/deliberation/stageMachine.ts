@@ -11,7 +11,10 @@
  *   不得用局部 claimId 冒充跨运行全局键。
  */
 import { createHash } from 'node:crypto';
-import type { ClaimConsensus, ClaimRatificationSummary, FrozenRoster, ParticipantStatus } from '../../contracts/deliberation.ts';
+import type { ClaimConsensus, ClaimRatificationSummary, ParticipantStatus } from '../../contracts/deliberation.ts';
+import type { FrozenRoster } from '../../contracts/deliberation.ts';
+
+export type { FrozenRoster, ParticipantStatus, ClaimConsensus, ClaimRatificationSummary };
 import { CLAIM_CONSENSUS_PRIORITY } from '../../contracts/deliberation.ts';
 import type { DeliberateStage } from '../../contracts/run.ts';
 import { domainErr, domainOk } from '../../contracts/errors.ts';
@@ -31,7 +34,9 @@ export type StageAdvanceDecision =
 
 /** 参与者是否已对该阶段屏障终结（完成/缺席/失败——E4：缺席不默认当作已完成）。 */
 function terminatedForBarrier(p: ParticipantFacts): boolean {
-  return p.status === 'completed' || p.status === 'absent' || p.status === 'failed' || (p.status === 'late' && !p.hasStageOutput);
+  // 'completed' 指上一阶段产出（本阶段未产出时不是终结——否则上一阶段完成会绕过
+  // 本阶段屏障）；缺席/失败是跨阶段终结；late 无本阶段产出按缺席口径（E4）。
+  return p.status === 'absent' || p.status === 'failed' || (p.status === 'late' && !p.hasStageOutput);
 }
 
 /** 重复成员事实去重：按最后一次出现（确定性；调用方按时间序追加）。 */

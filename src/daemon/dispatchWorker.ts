@@ -25,6 +25,18 @@ import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
+import {
+  assembleStepInput,
+  onStepOutput,
+  parseDelibStep,
+  parseRepairTarget,
+  prepareDeliberation,
+  pumpDeliberation,
+  repairDispatchKey,
+  type DelibStep,
+} from './deliberationRunner.ts';
+import { budgetAccounting, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
+import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 
 interface TaskRow {
   id: string;
@@ -66,6 +78,12 @@ export interface DispatchWorkerOptions {
   maxTurns?: number;
   /** 应用数据目录（层 A draftDir 变量与未来快照存储）；DEV-07 接真实 appData。 */
   appDataDir?: string;
+  /** DELIBERATE 编排开关（M1）：默认关闭——后端与正式 UI 链路具备证据后才放开。 */
+  enableDeliberate?: boolean;
+  /** E4 缺席容忍（默认 20 分钟）；测试用小值假时钟推进。 */
+  absenceToleranceMs?: number;
+  /** DELIBERATE 总调用上限覆盖（缺省按 E12 核心公式推导）。 */
+  deliberateMaxTurns?: number;
 }
 
 export class DispatchWorker {
@@ -77,6 +95,9 @@ export class DispatchWorker {
   private readonly interruptGraceMs: number;
   private readonly maxTurns: number;
   private readonly appDataDir: string;
+  private readonly enableDeliberate: boolean;
+  private readonly absenceToleranceMs: number;
+  private readonly deliberateMaxTurns?: number;
   private readonly live = new Map<string, { turnId: string; sessionId: string }>();
 
   constructor(options: DispatchWorkerOptions) {
@@ -88,11 +109,20 @@ export class DispatchWorker {
     this.interruptGraceMs = options.interruptGraceMs ?? 5_000;
     this.maxTurns = options.maxTurns ?? 6;
     this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
+    this.enableDeliberate = options.enableDeliberate === true;
+    this.absenceToleranceMs = options.absenceToleranceMs ?? 20 * 60_000;
+    this.deliberateMaxTurns = options.deliberateMaxTurns;
+  }
+
+  private deliberationOptions() {
+    return { absenceToleranceMs: this.absenceToleranceMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
   }
 
   /** 处理一条 outbox 项；返回是否处理了（门禁 held/无项返回 false）。 */
   async runOnce(now = Date.now()): Promise<boolean> {
     if (isDispatchGateHeld(this.db)) return false;
+    // DELIBERATE 泵：缺席标记/屏障推进/下一步入队（幂等；不依赖完成事件驱动）。
+    if (this.enableDeliberate) this.pumpDeliberations(now);
     const claimed = claimNextOutbox(this.db, {
       leaseOwner: this.leaseOwner,
       leaseUntil: now + this.leaseMs,
@@ -101,6 +131,15 @@ export class DispatchWorker {
     if (claimed == null) return false;
     await this.dispatchClaimed(claimed);
     return true;
+  }
+
+  private pumpDeliberations(now: number): void {
+    const runs = this.db
+      .prepare("SELECT task_id FROM workflow_runs WHERE mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING')")
+      .all() as Array<{ task_id: string }>;
+    for (const r of runs) {
+      pumpDeliberation(this.db, r.task_id, this.deliberationOptions(), now);
+    }
   }
 
   /** 排空当前可领取的 outbox（门禁 held 时为 0）。 */
@@ -118,6 +157,17 @@ export class DispatchWorker {
   }
 
   private async dispatchClaimed(claimed: OutboxRow): Promise<void> {
+    // DELIBERATE 步骤键：task:{id}:delib:{stage}:{member}:{round}:{purpose}
+    const repairStep = parseRepairTarget(claimed.dispatch_key);
+    const delibStep = parseDelibStep(claimed.dispatch_key);
+    if (repairStep != null || delibStep != null) {
+      if (!this.enableDeliberate) {
+        await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+      await this.dispatchDeliberationStep(claimed, repairStep ?? delibStep!, repairStep != null ? repairDispatchKey(repairStep) === claimed.dispatch_key : false);
+      return;
+    }
     const taskId = parseInitialTaskId(claimed.dispatch_key);
     if (taskId == null) {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -150,6 +200,23 @@ export class DispatchWorker {
     }
 
     const route = task.route_json != null ? (JSON.parse(task.route_json) as TopLevelRouteOutcome) : null;
+    // DELIBERATE：编排开关开启时走 PREPARE（程序完成）；关闭时维持模式门禁 BLOCKED。
+    if (route != null && route.kind === 'dispatch' && route.mode === 'DELIBERATE' && this.enableDeliberate) {
+      const prepared = prepareDeliberation(
+        this.db,
+        { id: task.id, conversationId: task.conversation_id, threadId: task.conversation_thread_id ?? null },
+        route,
+        this.deliberationOptions(),
+      );
+      if (!prepared.ok) {
+        await this.transitionTask(task.id, 'BLOCKED');
+        this.audit(task, null, null, 'task.deliberationPrepareFailed', { message: prepared.error.message });
+      } else {
+        this.audit(task, prepared.value.runId, null, 'run.prepared', { mode: 'DELIBERATE' });
+      }
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
     // 模式门禁：M0 仅 DIRECT；AUTO/DELIBERATE 未实现前明确不可用，不冒充单成员执行。
     if (route == null || route.kind !== 'dispatch' || route.mode !== 'DIRECT') {
       await this.transitionTask(task.id, 'BLOCKED');
@@ -334,6 +401,172 @@ export class DispatchWorker {
     await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
   }
 
+  /** DELIBERATE 步骤派发：预算核对/占用 → turn 建立 → 按成员会话 → 事件消费（复用截止/中断纪律）。 */
+  private async dispatchDeliberationStep(claimed: OutboxRow, step: DelibStep, isRepair: boolean): Promise<void> {
+    const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(step.taskId) as TaskRow | undefined;
+    if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) {
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    if (task.stop_generation > 0) {
+      // 停止已生效：完结本步骤并把运行收尾为取消（停止作用于指定运行，§7.3）。
+      const run0 = this.db.prepare("SELECT id, status FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(step.taskId) as { id: string; status: string } | undefined;
+      if (run0 != null && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'INTERRUPTED'].includes(run0.status)) {
+        const tx0 = this.db.transaction(() => {
+          this.db.prepare("UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?").run(run0.id);
+          this.transitionTask(task.id, 'CANCELLED');
+          this.audit(task, run0.id, null, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-before-dispatch' });
+        });
+        tx0();
+      }
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const run = this.db.prepare("SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(step.taskId) as
+      | { id: string; status: string; stage: string | null; budget_json: string | null }
+      | undefined;
+    if (run == null || !['RUNNING', 'WAITING'].includes(run.status)) {
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const repairError = isRepair ? this.kvGet(`delib:repair:${claimed.dispatch_key}`) : undefined;
+    const assembly = assembleStepInput(this.db, { taskId: step.taskId, runId: run.id, step, repairError: repairError ?? undefined });
+    if (!assembly.ok) {
+      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'delib-assembly-failed', message: assembly.error.message, stage: step.stage });
+      return;
+    }
+    const budget = (run.budget_json != null ? JSON.parse(run.budget_json) : null) as DeliberationBudgetState | null;
+    if (budget == null) {
+      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const accStage = step.stage === 'SYN' ? 'SYNTHESIS' : step.stage === 'RAT' ? 'RATIFY' : 'front';
+    const acc = budgetAccounting(budget, accStage);
+    if (acc.stageAvailableTurns < 1) {
+      this.audit(task, run.id, null, 'run.budgetSkipped', { dispatchKey: claimed.dispatch_key, stageAvailableTurns: acc.stageAvailableTurns, remaining: acc.remainingTurns });
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      return;
+    }
+    const nextBudget = accStage === 'front' ? budget : occupyTailForDispatch(budget, accStage);
+
+    const member = this.db
+      .prepare('SELECT id, display_name FROM project_members WHERE id = ?')
+      .get(step.memberId) as { id: string; display_name: string } | undefined;
+    if (member == null) {
+      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const project = this.db.prepare('SELECT id, display_name, canonical_path FROM projects WHERE id = ?').get(task.project_id) as (ProjectRow & { display_name: string }) | undefined;
+    const room = this.db.prepare('SELECT id, name FROM rooms WHERE id = ?').get(task.room_id) as { id: string; name: string } | undefined;
+    if (project == null) {
+      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const turnId = `turn_${randomUUID()}`;
+    const textHash = createHash('sha256').update(assembly.value.text, 'utf8').digest('hex');
+    const bundleId = `cb_${randomUUID()}`;
+    const createTurn = this.db.transaction(() => {
+      this.db.prepare(
+        `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1)`,
+      ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key);
+      this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
+      this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
+      this.db.prepare(
+        `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
+         VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
+      ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, textHash }), textHash);
+      if (task.status === 'PENDING') this.transitionTask(task.id, 'ACTIVE');
+    });
+    createTurn();
+
+    const standing = renderStandingPrompt({
+      conversationKind: 'room',
+      vars: {
+        memberId: member.id,
+        memberDisplayName: member.display_name,
+        projectId: project.id,
+        projectName: project.display_name,
+        roomId: task.room_id,
+        roomName: room?.name ?? '未命名房间',
+        threadId: task.conversation_thread_id,
+        taskId: task.id,
+        workspacePath: project.canonical_path,
+        draftDir: join(this.appDataDir, 'drafts', task.project_id),
+      },
+    });
+    if (!standing.ok || scanSensitivePatterns(standing.value.text).length > 0) {
+      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'standing-prompt-invalid' });
+      return;
+    }
+    const generation = this.db
+      .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
+      .get(step.memberId, task.conversation_id) as { c: number };
+    const session = await this.adapter.openSession({
+      projectId: task.project_id,
+      memberId: step.memberId,
+      taskId: task.id,
+      threadId: task.conversation_thread_id,
+      sessionGeneration: generation.c,
+      cwd: project.canonical_path,
+      policyId: 'policy-analyze',
+      developerInstructions: standing.value.text,
+      promptVersion: standing.value.version,
+    });
+    this.db.prepare(
+      `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
+       VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
+    ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path);
+
+    if (this.stoppingOrTerminal(task.id, turnId)) {
+      await this.adapter.close(session);
+      const cancel = this.db.transaction(() => {
+        this.casTurn(turnId, 'CANCELLED');
+        this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(run.id);
+        this.transitionTask(task.id, 'CANCELLED');
+        this.audit(task, run.id, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-during-session-open' });
+      });
+      cancel();
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+
+    this.live.set(turnId, { turnId, sessionId: session.id });
+    try {
+      await this.adapter.startTurn(session, {
+        turnId,
+        dispatchKey: claimed.dispatch_key,
+        inputBundleId: bundleId,
+        text: assembly.value.text,
+        policyId: 'policy-analyze',
+        taskRevision: 0,
+        resultKey: `result_${turnId}`,
+      });
+      await this.consumeUntilTerminal(task, run.id, turnId, session.id);
+    } finally {
+      this.live.delete(turnId);
+    }
+    await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+  }
+
+  private kvGet(key: string): string | null {
+    return (this.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+  }
+
+  private kvSet(key: string, value: string): void {
+    this.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(key, value, Date.now());
+  }
+
+  private settleDelibBudget(runId: string): void {
+    const row = this.db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string } | undefined;
+    if (row?.budget_json == null) return;
+    const state = JSON.parse(row.budget_json) as DeliberationBudgetState;
+    this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(settleTurn(state)), runId);
+  }
+
   private stoppingOrTerminal(taskId: string, turnId: string): boolean {
     const task = this.db
       .prepare('SELECT stop_generation, status FROM tasks WHERE id = ?')
@@ -440,6 +673,12 @@ export class DispatchWorker {
   }
 
   private applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
+    // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
+    const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
+    if (turnMeta?.stage_key != null && turnMeta.stage_key.startsWith('delib.')) {
+      this.applyDeliberationTerminal(task, runId, turnId, turnMeta.dispatch_key ?? '', event);
+      return;
+    }
     switch (event.kind) {
       case 'turn.started': {
         const turn = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
@@ -539,6 +778,102 @@ export class DispatchWorker {
       }
       default:
         break; // delta/tool 事件 M0 不落库（流式与工具明细归 DEV-07/14 展示层）
+    }
+  }
+
+  /** DELIBERATE 终态：完成→产物校验计入屏障（或一次格式修复）；失败/中断→缺席或停止语义。 */
+  private applyDeliberationTerminal(task: TaskRow, runId: string, turnId: string, dispatchKey: string, event: NormalizedRuntimeEvent): void {
+    const baseStep = parseRepairTarget(dispatchKey) ?? parseDelibStep(dispatchKey);
+    if (event.kind === 'turn.completed') {
+      const turn = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
+      if (turn.status === 'STOPPING') {
+        const tx = this.db.transaction(() => {
+          this.casTurn(turnId, 'CANCELLED');
+          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?`).run(runId);
+          this.settleDelibBudget(runId);
+          this.transitionTask(task.id, 'CANCELLED');
+          this.audit(task, runId, turnId, 'turn.lateCompletion', { finalText: event.finalText ?? null });
+        });
+        tx();
+        return;
+      }
+      if (baseStep == null) {
+        const tx = this.db.transaction(() => {
+          this.casTurn(turnId, 'FAILED');
+          this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: ['dispatch_key 无法解析为研讨步骤'] });
+        });
+        tx();
+        return;
+      }
+      const out = onStepOutput(this.db, {
+        taskId: task.id,
+        runId,
+        step: baseStep,
+        turnId,
+        finalText: event.finalText ?? '',
+        options: this.deliberationOptions(),
+      });
+      if (!out.ok) {
+        const tx = this.db.transaction(() => {
+          this.casTurn(turnId, 'FAILED');
+          this.settleDelibBudget(runId);
+          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);
+          this.audit(task, runId, turnId, 'run.stepFailed', { stage: baseStep.stage, message: out.error.message });
+        });
+        tx();
+        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        return;
+      }
+      if (out.value.counted) {
+        const tx = this.db.transaction(() => {
+          this.casTurn(turnId, 'SUCCEEDED');
+          this.settleDelibBudget(runId);
+          this.audit(task, runId, turnId, 'run.stepArtifact', { stage: baseStep.stage, memberId: baseStep.memberId, roundNo: baseStep.roundNo });
+        });
+        tx();
+        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        return;
+      }
+      const repairKey = repairDispatchKey(baseStep);
+      const repairTurn = this.db.prepare('SELECT id FROM agent_turns WHERE dispatch_key = ?').get(repairKey) as { id: string } | undefined;
+      const tx = this.db.transaction(() => {
+        this.casTurn(turnId, 'FAILED');
+        this.settleDelibBudget(runId);
+        if (repairTurn == null && baseStep.stage !== 'RAT') {
+          this.kvSet(`delib:repair:${repairKey}`, out.value.needsRepair ?? '格式无效');
+          this.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(repairKey);
+          this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairEnqueued: repairKey });
+        } else {
+          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);
+          this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairExhausted: true });
+        }
+      });
+      tx();
+      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      return;
+    }
+    if (event.kind === 'turn.failed') {
+      const interrupted = event.code === 'INTERRUPTED';
+      const tx = this.db.transaction(() => {
+        this.casTurn(turnId, interrupted ? 'CANCELLED' : 'FAILED');
+        this.settleDelibBudget(runId);
+        if (interrupted) {
+          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?`).run(runId);
+          this.transitionTask(task.id, 'CANCELLED');
+        } else if (baseStep != null) {
+          this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);
+        }
+        this.audit(task, runId, turnId, 'turn.statusChanged', { status: interrupted ? 'CANCELLED' : 'FAILED', code: event.code });
+      });
+      tx();
+      if (!interrupted) pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      return;
+    }
+    if (event.kind === 'usage.updated') {
+      this.db.prepare(
+        `INSERT INTO usage_records (turn_id, provider_event_id, reported_json, normalized_json, cost_quality)
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT (turn_id, provider_event_id) DO NOTHING`,
+      ).run(turnId, event.eventKey, JSON.stringify(event), JSON.stringify(event), event.costQuality);
     }
   }
 

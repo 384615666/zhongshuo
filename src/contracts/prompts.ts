@@ -313,9 +313,11 @@ export function selectStageInstruction(input: {
     return domainOk(DIRECT_EXECUTOR_INSTRUCTION);
   }
   if (input.mode === 'DELIBERATE') {
-    const key = `${input.stage ?? ''}|${input.turnPurpose}`;
+    // format_repair 复用原阶段 stage_work 模板（修复指令在正文，§6.4；不是缺失模板的降级）。
+    const purpose = input.turnPurpose === 'format_repair' ? 'stage_work' : input.turnPurpose;
+    const key = `${input.stage ?? ''}|${purpose}`;
     const template = DELIBERATE_STAGE_TEMPLATES[key];
-    if (template != null && (input.turnPurpose !== 'checkpoint' || input.role === 'host')) {
+    if (template != null && (purpose !== 'checkpoint' || input.role === 'host')) {
       return domainOk(template);
     }
   }

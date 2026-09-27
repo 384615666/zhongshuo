@@ -30,6 +30,8 @@ export interface FakeAdapterOptions {
   hangInterrupt?: boolean;
   /** 结构化终态（默认 true）：turn.completed finalText=TaskComplete JSON；false 保留原文本（非法输出反例）。 */
   structuredFinal?: boolean;
+  /** 全局脚本序列（跨会话按调用顺序取，M1 研讨编排测试用：每步骤一个新会话）。 */
+  turnScriptSequencer?: () => FakeTurnScript;
 }
 
 type ApprovalChoice = 'allow_once' | 'deny' | 'interrupted';
@@ -167,9 +169,11 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       throw new AdapterCallError('WORKSPACE_BUSY', `会话已有进行中的 turn：${state.active.turnId}`);
     }
     const scripts = this.options.turnScripts;
-    const script = scripts && scripts.length > 0
-      ? (scripts[Math.min(state.turnCounter, scripts.length - 1)]!)
-      : successTurn();
+    const script = this.options.turnScriptSequencer != null
+      ? this.options.turnScriptSequencer()
+      : scripts && scripts.length > 0
+        ? (scripts[Math.min(state.turnCounter, scripts.length - 1)]!)
+        : successTurn();
     state.turnCounter += 1;
 
     this.startTurnLog.push({
