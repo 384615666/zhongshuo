@@ -37,6 +37,8 @@ const state = {
   // 双视图草稿独立（R4）：{ text, mention } 各一份；recordOnly 是一次性意图，不属草稿。
   drafts: { pool: { text: '', mention: '' }, thread: { text: '', mention: '' } },
   recordOnly: false,
+  // @全体研讨（M1）：mentions=[{kind:'all'}] → 服务端 DELIBERATE 路由；一次性意图。
+  deliberateAll: false,
   pollTimer: null,
   pollTick: 0,
   // 发送在途（R4 去重）：视图内单飞，双击/重复 Enter 直接忽略。
@@ -199,6 +201,58 @@ async function renderPool() {
 
 // ---------- 线程视图（R1：停止；R3：线程内跟进） ----------
 
+// 研讨呈现（M1）：阶段进度/成员状态/预算（run.progress）与最终报告逐结论确认（report.get）。
+// 程序共识以 ratification 记录聚合为准——「模型说一致」不当作共识结果。
+const STAGE_TEXT = {
+  PREPARE: '准备', INDEPENDENT: '独立分析', CROSS_REVIEW: '互评', ISSUE_DISCUSSION: '分歧讨论',
+  SYNTHESIS: '整合', RATIFY: '逐结论确认', PUBLISH: '发布',
+};
+const MEMBER_STATUS_TEXT = { pending: '待产出', completed: '已产出', late: '迟到', absent: '缺席', failed: '失败' };
+
+async function renderDeliberation() {
+  const progress = el('delib-progress');
+  const report = el('delib-report');
+  if (state.openTaskId == null) {
+    progress.classList.add('hidden');
+    report.classList.add('hidden');
+    return;
+  }
+  let data;
+  try {
+    data = await command('run.progress', { taskId: state.openTaskId });
+  } catch {
+    progress.classList.add('hidden');
+    report.classList.add('hidden');
+    return;
+  }
+  if (data.mode !== 'DELIBERATE') {
+    progress.classList.add('hidden');
+    report.classList.add('hidden');
+    return;
+  }
+  const stage = STAGE_TEXT[data.stage] ?? data.stage ?? '';
+  const round = data.stage === 'ISSUE_DISCUSSION' && data.roundNo ? ` 第 ${data.roundNo} 轮` : '';
+  const budget = data.budget ? ` · 调用 ${data.budget.usedTurns}/${data.budget.runMaxTurns}` : '';
+  const members = (data.participants || []).map((p) =>
+    `<span class="member ${p.status}" title="${p.displayName}（${MEMBER_STATUS_TEXT[p.status] ?? p.status}）">${p.displayName}·${MEMBER_STATUS_TEXT[p.status] ?? p.status}</span>`).join('');
+  progress.innerHTML = `<span class="stage">研讨·${stage}${round}</span>${budget} · ${members}${(data.issues || []).length > 0 ? ` · 开放争议 ${data.issues.length} 项` : ''}`;
+  progress.classList.remove('hidden');
+  // 最终报告（存在即渲染）：逐结论确认状态与整体共识。
+  let rep = null;
+  try {
+    rep = (await command('report.get', { taskId: state.openTaskId })).report;
+  } catch { /* 报告未发布时隐藏 */ }
+  if (rep == null) {
+    report.classList.add('hidden');
+    return;
+  }
+  const claims = (rep.claimResults || []).map((c) =>
+    `<div class="claim"><span class="consensus ${c.consensus}">${c.consensus}</span><span>${c.statement || c.claimId}${c.missing > 0 ? `（${c.missing} 人未确认）` : ''}${c.objects > 0 ? `（${c.objects} 人反对）` : ''}</span></div>`).join('');
+  const disputed = (rep.disputedClaims || []).map((d) => `<div>分歧：${d.statement}——${d.disagreementSummary}</div>`).join('');
+  report.innerHTML = `<div>最终报告（整体共识：<b class="consensus ${rep.overallConsensus}">${rep.overallConsensus ?? '-'}</b>）</div>${claims}${disputed ? `<div class="disputed-list">${disputed}</div>` : ''}`;
+  report.classList.remove('hidden');
+}
+
 async function renderThread() {
   if (state.openThreadId == null) return;
   const box = el('thread-messages');
@@ -229,6 +283,7 @@ async function renderThread() {
     box.appendChild(div);
   }
   box.scrollTop = box.scrollHeight;
+  await renderDeliberation();
   if (state.openTaskId != null) {
     // 任务串：拉取任务快照（状态行 + 停止按钮的 runId/停止代次来源）。
     try {
@@ -335,7 +390,7 @@ function buildEnvelope() {
   const text = el('composer-input').value.trim();
   const mention = el('mention-pick').value.trim();
   const member = state.members.find((m) => m.displayName === mention && m.principalType === 'agent');
-  const mentions = member ? [{ kind: 'member', memberId: member.id }] : [];
+  const mentions = state.deliberateAll ? [{ kind: 'all' }] : member ? [{ kind: 'member', memberId: member.id }] : [];
   let target;
   if (state.openThreadId == null) {
     // 主池：room_root——由服务端按 §4.2 路由（无 mention=AUTO、单 mention=DIRECT）。
@@ -361,6 +416,12 @@ function afterSendSuccess(view, recordIntent) {
     // 「仅记录」是一次性意图：发送后复位，下一条默认交回路由。
     state.recordOnly = false;
     el('record-toggle').classList.remove('on');
+  }
+  if (state.deliberateAll) {
+    // 「@全体研讨」同为一次性意图。
+    state.deliberateAll = false;
+    el('deliberate-toggle').classList.remove('on');
+    el('mention-pick').value = '';
   }
   void (state.openThreadId != null ? renderThread() : renderPool()).catch(showConnError);
   schedulePoll();
@@ -459,6 +520,10 @@ el('send').onclick = () => void send();
 el('record-toggle').onclick = () => {
   state.recordOnly = !state.recordOnly;
   el('record-toggle').classList.toggle('on', state.recordOnly);
+};
+el('deliberate-toggle').onclick = () => {
+  state.deliberateAll = !state.deliberateAll;
+  el('deliberate-toggle').classList.toggle('on', state.deliberateAll);
 };
 el('resume-gate').onclick = () => void resumeFromGate();
 el('stop-btn').onclick = () => void stopTask();

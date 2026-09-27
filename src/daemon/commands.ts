@@ -8,6 +8,7 @@
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
@@ -39,11 +40,15 @@ export class DaemonCommandError extends Error {
 const localScope = (userId: string): string => `user:${userId}`;
 
 /** project.open 的默认引导（成员/房间/房间成员关系/会话；重复打开不重复创建）。 */
-function bootstrapProject(db: ZhongshuoDatabase, projectId: string): void {
+function bootstrapProject(db: ZhongshuoDatabase, projectId: string, agentNames?: string[]): void {
   const memberCount = (db.prepare('SELECT count(*) c FROM project_members WHERE project_id = ?').get(projectId) as { c: number }).c;
   if (memberCount === 0) {
-    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES (?, ?, '执行成员', 'agent', 1)`)
-      .run(`m_default_${projectId}`, projectId);
+    // 可选多成员引导（M1 研讨用；缺省单成员「执行成员」不变）。
+    const names = agentNames != null && agentNames.length > 0 ? agentNames : ['执行成员'];
+    for (const [i, name] of names.entries()) {
+      db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES (?, ?, ?, 'agent', 1)`)
+        .run(`m_default_${projectId}_${i}`, projectId, name);
+    }
   }
   const roomCount = (db.prepare('SELECT count(*) c FROM rooms WHERE project_id = ?').get(projectId) as { c: number }).c;
   if (roomCount === 0) {
@@ -156,11 +161,11 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
   try {
     switch (env.method) {
       case 'project.open': {
-        const params = z.strictObject({ path: z.string().min(1), displayName: z.string().optional() }).parse(env.params);
+        const params = z.strictObject({ path: z.string().min(1), displayName: z.string().optional(), agentNames: z.array(z.string().min(1)).optional() }).parse(env.params);
         const result = run(() => {
           const opened = openProject(deps.db, { rootPath: params.path, displayName: params.displayName, now: Date.now() });
           if (!opened.ok) throw new DaemonCommandError(opened.error.code, opened.error.message);
-          bootstrapProject(deps.db, opened.value.project.id);
+          bootstrapProject(deps.db, opened.value.project.id, params.agentNames ?? (process.env.ZS_BOOTSTRAP_AGENTS?.split(',').filter((n) => n.trim().length > 0)));
           return { project: opened.value.project, created: opened.value.created };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
@@ -335,6 +340,31 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           });
         }
         return withCommandId({ ok: true, data: { items } });
+      }
+      case 'run.progress': {
+        // 研讨进度（只读）：阶段/轮次/成员状态/预算——「模型说一致」不作为程序共识。
+        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        const run = deps.db.prepare("SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(params.taskId) as
+          | { id: string; stage: string | null; round_no: number | null; status: string; budget_json: string | null }
+          | undefined;
+        if (run == null) {
+          const direct = deps.db.prepare('SELECT stage, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { stage: string | null; status: string } | undefined;
+          return withCommandId({ ok: true, data: { mode: 'DIRECT', stage: direct?.stage ?? null, runStatus: direct?.status ?? null, participants: [], budget: null, issues: [] } });
+        }
+        const participants = (deps.db.prepare(
+          'SELECT rp.member_id, rp.role, rp.status, pm.display_name FROM run_participants rp JOIN project_members pm ON pm.id = rp.member_id WHERE rp.run_id = ? ORDER BY rp.role, rp.member_id',
+        ).all(run.id) as Array<{ member_id: string; role: string; status: string; display_name: string }>).map((r) => ({ memberId: r.member_id, displayName: r.display_name, role: r.role, status: r.status }));
+        const budget = run.budget_json != null ? JSON.parse(run.budget_json) as { runMaxTurns: number; usedTurns: number } : null;
+        const issues = (deps.db.prepare('SELECT id, statement, status FROM issues WHERE run_id = ? ORDER BY id').all(run.id) as Array<{ id: string; statement: string; status: string }>);
+        return withCommandId({ ok: true, data: { mode: 'DELIBERATE', stage: run.stage, roundNo: run.round_no, runStatus: run.status, participants, budget, issues } });
+      }
+      case 'report.get': {
+        // 最终报告（只读）：整合稿引用 + 逐结论确认状态（反对/条件/未确认/缺席可见）。
+        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        const report = deps.db.prepare("SELECT id, blob_path FROM artifacts WHERE task_id = ? AND kind = 'final_report' ORDER BY revision DESC LIMIT 1").get(params.taskId) as { id: string; blob_path: string } | undefined;
+        if (report == null) return withCommandId({ ok: true, data: { report: null } });
+        const payload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as Record<string, unknown>;
+        return withCommandId({ ok: true, data: { report: { artifactId: report.id, ...payload } } });
       }
       case 'dispatch.resume': {
         // 恢复门禁的用户确认（修复轮 5：须显式 confirm:true，不接受空参数直开）。

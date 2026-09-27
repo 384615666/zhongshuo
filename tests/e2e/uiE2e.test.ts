@@ -434,6 +434,63 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
   }, 150_000);
 });
 
+// ---------- 研讨（DELIBERATE）renderer 链路（fake sim，零额度） ----------
+
+describe('UI 研讨链路（@全体 → DELIBERATE 全阶段 → 最终报告）', () => {
+  it('点击 @全体研讨发送 → 阶段进度/成员状态可见 → DONE → 逐结论共识报告', async () => {
+    const app = await launchUi({
+      appData: join(fixtureRoot, 'appdata-delib'),
+      runtime: 'fake',
+      extraEnv: { ZS_ENABLE_DELIBERATE: '1', ZS_FAKE_DELIB: '1', ZS_BOOTSTRAP_AGENTS: '研究员甲,研究员乙', ZS_ABSENCE_MS: '600000' },
+    });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    // @全体研讨芯片（一次性意图）→ mentions=[{kind:'all'}] → 服务端 DELIBERATE 路由。
+    await call('click', 'deliberate-toggle');
+    await call('type', 'composer-input', '请全员研讨当前目录的架构风险');
+    await call('click', 'send');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') !== '',
+      30_000, '研讨任务卡出现',
+    );
+    await call('openCard', 0);
+    // 阶段进度可见（成员状态芯片 + 阶段名）；直至任务 DONE（fake sim 秒级完成各步）。
+    await waitFor(
+      async () => (await call<string>('text', 'delib-progress')).includes('研讨·'),
+      30_000, '研讨进度条出现',
+    );
+    try {
+      // 线程视图轮询只刷线程（主池 DOM 陈旧）——按线程状态行等待终态，再回主池核对卡片。
+      await waitFor(
+        async () => (await call<string>('threadStatus')).includes('已完成'),
+        120_000, '研讨完成',
+      );
+    } catch (e) {
+      const dbg = await app.page.eval(`(async()=>{ const w=window; const ev=(m,p)=>w.zs.command({protocolVersion:1,commandId:'dbg-'+Math.random(),method:m,params:p}); const proj=await ev('project.open',{path:${JSON.stringify(projDir)}}); const pid=proj.data.project.id; const evs=await ev('events.list',{projectId:pid,limit:40}); return JSON.stringify({kinds: evs.ok && evs.data.items.map((i)=>i.kind)}); })()`).catch((x: unknown) => `eval-failed ${x}`);
+      console.error('[delib-diag]', dbg, '[stderr]', app.stderr.slice(-1500));
+      throw e;
+    }
+    // 最终报告：逐结论共识芯片 + 整体共识（程序聚合，非模型自述）。
+    await waitFor(
+      async () => (await call<string>('text', 'delib-report')).length > 0,
+      30_000, '最终报告渲染',
+    );
+    await call('click', 'thread-back-btn');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'DONE',
+      30_000, '主池卡片 DONE',
+    );
+    const reportText = await call<string>('text', 'delib-report');
+    expect(reportText).toContain('整体共识');
+    expect(reportText).toMatch(/unanimous|qualified|unconfirmed|disputed/);
+    const progressText = await call<string>('text', 'delib-progress');
+    expect(progressText).toMatch(/研究员甲|研究员乙/);
+    expect(await call<boolean>('hidden', 'delib-progress')).toBe(false);
+  }, 240_000);
+});
+
 // ---------- 真实 runtime（显式触发，预算受控：单 turn） ----------
 
 describe('UI 端到端（真实 codex，renderer 点击链路）', () => {

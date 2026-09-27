@@ -23,6 +23,7 @@ import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
+import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
 import { daemonPipeNameFor, ensureLocalCredential } from '../contracts/daemonIpc.ts';
@@ -72,16 +73,23 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
       : new FakeRuntimeAdapter(
           // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
-          // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）。
+          // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）；
+          // ZS_FAKE_DELIB=1 时按输入契约生成合法研讨载荷（UI 全链路演练）。
           process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
             ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
-            : undefined,
+            : process.env.ZS_FAKE_DELIB === '1'
+              ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
+              : undefined,
         );
     const worker = new DispatchWorker({
       db,
       adapter,
       leaseOwner: `daemon-${process.pid}`,
       appDataDir: options.appDataDir,
+      // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
+      enableDeliberate: process.env.ZS_ENABLE_DELIBERATE !== '0', // M1：编排+UI+e2e 证据齐备，默认开放（=0 关闭）
+      absenceToleranceMs: process.env.ZS_ABSENCE_MS != null ? Number(process.env.ZS_ABSENCE_MS) : undefined,
+      deliberateMaxTurns: process.env.ZS_DELIB_MAX_TURNS != null ? Number(process.env.ZS_DELIB_MAX_TURNS) : undefined,
     });
 
     const credential = ensureLocalCredential(options.appDataDir);

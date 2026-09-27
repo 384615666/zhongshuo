@@ -30,6 +30,8 @@
           <span id="thread-status" class="thread-status"></span>
           <button id="stop-btn" class="danger hidden">停止任务</button>
         </div>
+        <div id="delib-progress" class="delib-progress hidden"></div>
+        <div id="delib-report" class="delib-report hidden"></div>
         <div id="thread-messages"></div>
       </section>
       <footer class="composer">
@@ -38,6 +40,7 @@
           <input id="mention-pick" class="mention-pick" list="member-list" placeholder="@ 指定成员（留空=自动）" />
           <datalist id="member-list"></datalist>
           <button id="record-toggle" class="chip" title="一次性意图：只保存不派发">仅记录</button>
+          <button id="deliberate-toggle" class="chip" title="@全体：全体成员独立分析→互评→讨论→整合→逐结论确认（研讨模式）">@全体研讨</button>
         </div>
         <div class="composer-row">
           <textarea id="composer-input" rows="2" placeholder="这条发给谁"></textarea>
