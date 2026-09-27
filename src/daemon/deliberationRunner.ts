@@ -242,7 +242,14 @@ export interface PumpResult {
  */
 export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options: DeliberationOptions, now = Date.now()): PumpResult {
   const run = db.prepare('SELECT * FROM workflow_runs WHERE task_id = ? AND mode = ?').get(taskId, 'DELIBERATE') as (RunRow & { stage_started_at: number | null }) | undefined;
-  if (run == null || !['RUNNING', 'WAITING'].includes(run.status)) return { advanced: false };
+  if (run == null) return { advanced: false };
+  if (run.status === 'INTERRUPTED') {
+    // 单轮超时/中断后结果不确定（§10.2 不伪造）：如实把任务置 BLOCKED 供用户决策
+    // （重开新研讨或停止），不让界面停在"进行中"。
+    db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ? AND status NOT IN ('CANCELLED','DONE','BLOCKED')").run(taskId);
+    return { advanced: false, blocked: '运行中断（单轮超时结果不确定）' };
+  }
+  if (!['RUNNING', 'WAITING'].includes(run.status)) return { advanced: false };
   const task = db.prepare('SELECT id, conversation_id, conversation_thread_id, status FROM tasks WHERE id = ?').get(taskId) as
     | { id: string; conversation_id: string; conversation_thread_id: string | null; status: string }
     | undefined;

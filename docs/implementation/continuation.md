@@ -27,14 +27,19 @@
 - **DEV-21-M1 模板**：DELIBERATE 六阶段指令（(mode,role,stage,turnPurpose) 选择表扩展，checkpoint host 专属）+ 精确 JSON 输出契约（ADR-I39 口径）。
 - 测试 +19：预算 4 / 阶段机 10 / 持久化 5（含 prompts 表更新）。默认 295/295。
 
+## M1 第一轮（已提交）
+
+- **四缺陷收口**（迁移 004 payload_hash / 005 stage_started_at）：屏障冻结参与集合、互评三元组+run 范围 issueId、RATIFY 同键同规范化载荷幂等/异载荷冲突+全前置核对+行数校验、成果发布协议（不可变版本/失败恢复/完整性校验）。零额度反例齐备。
+- **DELIBERATE 编排**（deliberationRunner+worker 集成）：PREPARE→IND→CR→（争议）ISS 轮次+第3轮 checkpoint→SYN→RAT→PUBLISH 全链；确定性 dispatch_key；服务端输入隔离+ContextBundle hash；E12 预算单一账（占用/结算/退款/尾部保证/耗尽兜底）；E4 假时钟缺席；停止作用于运行；一次格式修复。集成 9 用例。
+- **研讨 UI**：run.progress/report.get 命令、@全体芯片、进度条（成员状态可见）、逐结论共识报告；门禁按证据开放（entry 默认；worker 级默认关，m0Fixes 语义不变）。UI e2e fake 12/12。
+- 数字：默认 323/323、lint 0。
+
 ## 下一步（直接开工，无需再确认）
 
-**G3 已收口，M1 第一批（合同/纯逻辑/持久化）已落地；接续**：
-
-1. **DEV-08/09 worker 编排**：dispatchWorker DELIBERATE 分支——阶段过滤输入组装（INDEPENDENT 不含他人稿）、逐成员派发+产物校验（一次格式修复）、阶段推进事务、E4 缺席定时、budget_json 贯通尾部占用/结算；route.mode 门禁放开 DELIBERATE（有实现后再放开，不提前）。
-2. **DEV-09**（分歧与整合：争议、轮次预算、确认矩阵）。
-3. **DEV-21-M1 段**（提示词/输出合同从 M0 DIRECT 扩展到 M1 场景）。
-4. 每包结束更新总账四件套 + 本文件；G4 验收时复用本轮 UI e2e 框架（CDP 驱动）扩场景。
+1. **真实研讨演示（PENDING，预算已耗 3×≤7 调用）**：三次 e2e 窗口内未达终态（根因=真实轮耗时×串行链超窗；单轮截止已修 300s 默认+INTERRUPTED 如实 BLOCKED）。改用长窗/异步观察或缩小任务再试；完成后核对 ContextBundle/版本/hash 与报告一致。
+2. **M1 价值闸门材料**（需预算）：3—5 组同题对比（DELIBERATE vs DIRECT，同基线），用 events.list/usage_records/budget_json 出质量/漏项/分歧处理/调用/耗时对比表——材料齐备后请求业务价值判断（不提前、不自行宣称多人更优）。
+3. **E4 后半段**：迟到成员成果"能进当前阶段则进"并入逻辑（roster 标 late 后的并入窗口）；跨房间 UI 场景待建房命令。
+4. 每包结束更新总账四件套 + 本文件。价值闸门通过前不进 M2。
 
 已知小残留（不阻塞 M1，随相关包顺手收）：跨房间切换 UI 场景（正式命令面无建房命令，待房间管理命令落地后补）；UI 发送横栏传输失败路径的 UI 级注入测试（传输层已有单测+smoke）。
 

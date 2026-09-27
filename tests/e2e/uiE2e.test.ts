@@ -491,6 +491,36 @@ describe('UI 研讨链路（@全体 → DELIBERATE 全阶段 → 最终报告）
   }, 240_000);
 });
 
+// ---------- 真实研讨演示（显式触发，预算受控） ----------
+
+describe('UI 真实研讨（ZS_M1_REAL=1，真实 codex 多成员研讨一轮）', () => {
+  it('两成员真实研讨：独立产出→互评→（争议则讨论）→整合→逐结论确认→报告一致', async ({ skip }) => {
+    if (process.env.ZS_M1_REAL !== '1') skip(); // 真实档显式触发，预算受控
+    const app = await launchUi({
+      appData: join(fixtureRoot, 'appdata-m1real'),
+      runtime: 'codex',
+      extraEnv: { ZS_BOOTSTRAP_AGENTS: '分析师甲,分析师乙', ZS_DELIB_MAX_TURNS: '7', ZS_ABSENCE_MS: '600000', ZS_TURN_DEADLINE_MS: '420000' }, // 7=IND2+CR2+SYN1+RAT2 恰满；真实轮可长至 420s
+    });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    await call('click', 'deliberate-toggle');
+    await call('type', 'composer-input', '请两位分别独立分析 notes.md 的内容要点与可疑之处，随后互评并形成整合结论');
+    await call('click', 'send');
+    await call('openCard', 0);
+    await waitFor(
+      async () => (await call<string>('threadStatus')).includes('已完成') || (await call<string>('threadStatus')).includes('待处理') || (await call<string>('threadStatus')).includes('失败'),
+      840_000, '真实研讨终态',
+    );
+    const status = await call<string>('threadStatus');
+    expect(status).toContain('已完成');
+    const reportText = await call<string>('text', 'delib-report');
+    expect(reportText).toContain('整体共识');
+    expect(reportText).toMatch(/unanimous|qualified|unconfirmed|disputed/);
+  }, 900_000);
+});
+
 // ---------- 真实 runtime（显式触发，预算受控：单 turn） ----------
 
 describe('UI 端到端（真实 codex，renderer 点击链路）', () => {
