@@ -80,6 +80,38 @@ ContextBundle hash==sha256(全文) ✓；artifacts 磁盘 hash==DB ✓；预算 
 调用量/耗时）与总预算待列明后**请求预算批准**再执行；不预设研讨优于单成员。价值闸门未通过前
 不开放受其约束的自动分工（DEV-11）；不影响其他独立工程工作。
 
+## 补记（2026-09-28 下午：审计 v2 + E4/冻结收口）
+
+**证据强度修正（WAL 取证）**：三次历史尝试的取证依据为 WAL 字符串片段——可支持
+"存在某 turn/事件"的观察事实；**未恢复完整数据库与提交状态前，不据此证明完整派发总数
+或精确计费**（"1/1/2"为提取到的 turn 记录数，渠道侧以账单为准）。根因不再猜测。
+
+**真实运行数据保全与恢复**：taskkill 后主库未检查点（WAL 2MB、主文件空）——手工按
+WAL 帧重放重建独立 DB（492 帧全部为提交帧； rebuilt3.sqlite 留档于
+%TEMP%/zs-recover/）。经验：强杀收尾应先优雅 stop（harness stop 已是；本轮收尾用了
+taskkill——已记入 harness 改进项：stop 优先 UI task.stop）。
+
+**审计 v2（显式定位+存在性断言+强化核对，零新额度）**：对既有真实运行（36c19de 代码）
+显式指定 task/run 复跑：**56/58**。唯二失败=CR/RAT 冻结清单不存在——清单机制在该
+运行之后才实现（属预期 N/A，非数据缺陷）。v1 的"29/29"范围=hash/三元组/共识重算/预算；
+v2 新增=存在性断言（防空循环假通过）、IND 源白名单（artifactId/claim 正文/summary
+三重不包含）、CR 清单绑定（id@rev#hash）、RAT 精确三元组+hash 前缀、预算==事件账
+（stepArtifact/usage/迟到）。
+
+**E4 执行语义与冻结边界（同日收口，默认 339/339）**：
+- absenceGrace 按成员**在途 turn 有效执行时间**（迁移 006：exec_started_at/exec_paused_ms；
+  审批/等待暂停扣除）判定，到期标记缺席并推进屏障、**不强杀**在途成员（后续完成走迟到
+  路径）；与单轮 turnDeadline（中断分支）分离；排队成员永不记执行超时（只记
+  dispatchWait 观察线诊断）；两截止同发=单一结局无双标记；崩溃重启时钟保留、
+  INTERRUPTED 如实 BLOCKED、RT-03 不重派。
+- **未完成（如实）**：并行执行下"执行中成员缺席推进"的调度观测（M1 串行架构中泵在
+  turn 间运行，机制与测试已备，生产观测需 M2 并行调度）；审批暂停的**事件接线**
+  （accumulateApprovalPause 就绪，M1 研讨路径无审批桥，语义以测试锁定）。
+- 输入冻结清单（daemon_state manifest：entries=artifactId@revision#hash+总 hash）：
+  CR 阶段进入时冻结初稿集合——迟到初稿不改任何同轮成员材料；SYNTHESIS 进入时新版本
+  （含迟到稿）；RATIFY 绑定精确整合稿三元组（frozenSynthesisOf，不凭 clm 名/文本片段）；
+  迟到经真实 adapter 事件路径集成验证（非仅直调 onStepOutput）。
+
 ## 七、遗留与下一步
 
 - 真实补证（按需、小额）：一组带真实分歧的任务（两位模型立场不同）验证讨论轮+checkpoint
