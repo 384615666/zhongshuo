@@ -37,7 +37,7 @@ import {
   repairDispatchKey,
   type DelibStep,
 } from './deliberationRunner.ts';
-import { budgetAccounting, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
+import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 
 interface TaskRow {
@@ -737,7 +737,9 @@ export class DispatchWorker {
       pumpDeliberation(this.db, task.id, this.deliberationOptions());
       return;
     }
-    const nextBudget = accStage === 'front' ? budget : occupyTailForDispatch(budget, accStage);
+    // 前置派发也占用（I+1）：防并行领取读到旧账（A 组真实运行缺陷：双成员 DIS 并行
+    // 派发时第 10 个调用漏出 runMaxTurns=9）；settleTurn 结算时释放占用。
+    const nextBudget = accStage === 'front' ? occupyFrontForDispatch(budget) : occupyTailForDispatch(budget, accStage);
 
     const member = this.db
       .prepare('SELECT id, display_name FROM project_members WHERE id = ?')

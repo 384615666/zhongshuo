@@ -153,3 +153,44 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     db.close();
   }, 30_000);
 });
+
+describe('预算硬上限（A 组真实运行缺陷回归，2026-09-28：前置派发占用）', () => {
+  it('争议+修复分支在 runMaxTurns 内闭合：并行前置派发不超发（≤cap、不变式成立、budgetSkipped 留审计）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    createDelibTask(db, 9, ['m1', 'm2']);
+    const { simulateDeliberationTurn } = await import('../../src/adapter/fake/deliberationSim.ts');
+    let first = true;
+    const adapter = new FakeRuntimeAdapter({
+      structuredFinal: false,
+      // 首个 IND 输出非法载荷 → 触发格式修复路径；其余按输入契约模拟（含争议讨论分支）。
+      turnScriptSequencer: (input) => (first ? ((first = false), [{ kind: 'event', event: { kind: 'turn.completed', finalText: '不是合法载荷' } }]) : simulateDeliberationTurn(input.text)),
+    });
+    const CAP = 6; // 人为收紧：正常 7 也放不下——预算竞争必须在 6 内收尾
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'w-cap', enableDeliberate: true, detachedTurnConsumption: true,
+      absenceToleranceMs: 150, turnDeadlineMs: 8_000, interruptGraceMs: 50,
+      deliberateMaxTurns: CAP, appDataDir: join(tmpRoot, 'cap'),
+    });
+    const deadline = Date.now() + 40_000;
+    while (Date.now() < deadline) {
+      void worker.runOnce();
+      const st = db.prepare("SELECT status FROM workflow_runs WHERE mode = 'DELIBERATE'").get() as { status: string } | undefined;
+      if (st != null && ['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'INTERRUPTED'].includes(st.status)) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const run = db.prepare("SELECT id, status, budget_json FROM workflow_runs WHERE mode = 'DELIBERATE'").get() as { id: string; status: string; budget_json: string };
+    expect(['SUCCEEDED', 'PARTIAL']).toContain(run.status); // 预算不足按合同收尾（不假装全共识）
+    const b = JSON.parse(run.budget_json) as { usedTurns: number; runMaxTurns: number; inFlightReservedTurns: number };
+    expect(b.usedTurns).toBeLessThanOrEqual(CAP); // 硬上限：不再出现 usedTurns=10>9
+    expect(b.inFlightReservedTurns).toBe(0); // 终态时占用全部结算
+    const turns = (db.prepare("SELECT count(*) c FROM agent_turns WHERE stage_key LIKE 'delib.%'").get() as { c: number }).c;
+    expect(turns).toBeLessThanOrEqual(CAP); // 实发 turn 数=真实调用数，不超上限
+    const skipped = (db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'run.budgetSkipped'").get() as { c: number }).c;
+    expect(skipped).toBeGreaterThanOrEqual(1); // 预算竞争的落选者留审计（非静默丢弃）
+    const task = db.prepare('SELECT status FROM tasks ORDER BY rowid DESC LIMIT 1').get() as { status: string };
+    expect(task.status).toBe('DONE'); // 收尾交付（带异议/缩减覆盖——如实）
+    await worker.awaitInFlightTurns(5_000);
+    db.close();
+  }, 60_000);
+});

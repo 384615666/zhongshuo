@@ -230,6 +230,16 @@ export function occupyTailForDispatch(
   };
 }
 
+/**
+ * 派发前置调用（IND/CR/DIS/checkpoint/格式修复）的占用预留（I 加 1）。
+ * 2026-09-28 A 组真实运行缺陷修复：前置派发此前不设占用——两个前置 turn（如争议讨论
+ * 的双成员 DIS）并行领取时各自读到同一份预算快照（usedTurns 未含对方），第 10 个调用
+ * 漏出上限（runMaxTurns=9 实发 10）。派发时预留、settleTurn 释放，账目在并发下闭合。
+ */
+export function occupyFrontForDispatch(state: DeliberationBudgetState): DeliberationBudgetState {
+  return { ...state, inFlightReservedTurns: state.inFlightReservedTurns + 1 };
+}
+
 /** 结算：I 减 1、U 加 1（R 不重复扣减）。重试/格式修复只能用 F（不借用其他预留）。 */
 export function settleTurn(state: DeliberationBudgetState): DeliberationBudgetState {
   return {
