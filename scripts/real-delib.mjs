@@ -140,7 +140,7 @@ async function doSubmit(taskText) {
   await evalPage(`document.getElementById('send').click(), true`);
   // 任务卡出现 → 记录 taskId（一次提交的证据锚点）。
   await waitForEval(`!!document.querySelector('#pool .pool-card')`, 60_000, '任务卡出现');
-  const projId = (await evalPage(`(async()=>{ const r = await ${cmd('project.open', { path: PROJ })}; return r.ok ? r.data.project.id : 'ERR ' + r.error.message; })()`));
+  const projId = (await evalPage(`(async()=>{ const r = await ${cmd('project.open', { path: '@@P@@' })}; return r.ok ? r.data.project.id : 'ERR ' + r.error.message; })()`.replaceAll('"@@P@@"', JSON.stringify(PROJ.split(String.fromCharCode(92)).join('/')))));
   if (typeof projId !== 'string' || !projId.startsWith('prj_')) throw new Error(`project.open 失败：${projId}`);
   const roomId = await evalPage(`(async()=>{ const r = await ${cmd('room.list', { projectId: 'PROJID' })}; return r.data.items[0].id; })()`.replace("'PROJID'", JSON.stringify(projId)));
   const taskId = await evalPage(`(async()=>{ const r = await ${cmd('room.pool', { roomId: 'ROOMID' })}; return r.data.items[0].taskId; })()`.replace("'ROOMID'", JSON.stringify(roomId)));

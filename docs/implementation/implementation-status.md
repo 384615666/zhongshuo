@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-27（M1 第一轮：四缺陷收口+DELIBERATE 编排+研讨 UI+门禁开放；默认 323/323、UI e2e fake 12/12；价值闸门未做结论）
+- 最近更新：2026-09-28（M1 收口轮：真实研讨一组完成并过 29/29 审计；调度/E4/迟到/运行身份零额度收口 331/331；价值闸门未做结论）
 
 ## 工作包状态
 
@@ -21,8 +21,8 @@
 | DEV-17 | 线程关联与隔离（目标绑定、会话隔离、事件归属、上下文过滤接入派发路径） | **VERIFIED**（任务级；阶段级随 DEV-08/09） | `src/domain/isolation/` + worker 接线 | G1/G3 前置 | [reports/dev-17-result.md](reports/dev-17-result.md)+勘误：过滤白名单强化（指令/摘要/文件均验归属）、ContextBundle 已在派发路径组装落库、同成员双任务隔离用例 |
 | DEV-06 | 真实 runtime（Codex App Server）、能力/权限检测 | **VERIFIED（G2 适用范围）**：C1/层 A、计划档两路径（declined/sandbox-denial 证据绑定）、确认档 allow+deny、steer 正常+服务端拒、resume 续接+不放宽、interrupt、usageTokens | `src/adapter/codex/` | G2（Codex 单 runtime；structuredFinal 真实输出随 G3） | [reports/round-20260927-fix4-dev6finish-dev07backbone.md](reports/round-20260927-fix4-dev6finish-dev07backbone.md)（勘误链完整） |
 | DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **VERIFIED（G3 范围）**：CDP 真点击用户链路 11/11（发送/DONE/线程回复/跟进不新建根任务/草稿独立/仅记录/去重/IME/重载恢复/UI 停止/崩溃恢复门禁）+ 真实 codex UI 一轮（1 turn）；打包随包 Node 属 DEV-15 | `src/ui/` + `src/daemon/` + `src/contracts/daemonIpc.ts` | G3 ✓ | [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md) |
-| DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | **IMPLEMENTED+集成验证（fake）**：IND/CR 阶段+三元组引用+屏障+输入隔离（编排集成 9 用例+UI e2e）；真实层见 round 报告 | `src/daemon/deliberationRunner.ts` + `src/domain/deliberation/` | G4（价值闸门未做） | [reports/round-20260927-m1-deliberation.md](reports/round-20260927-m1-deliberation.md) |
-| DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **IMPLEMENTED+集成验证（fake）**：ISSUE 轮次+第3轮 checkpoint+SYNTHESIS 冻结+RATIFY 提交事务+共识聚合+E12 尾部预算贯通+E4 缺席+停止；真实层见 round 报告 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
+| DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | **真实已验证（一组，29/29 审计）**：IND 隔离/CR 三元组/屏障经真实模型闭环（round-20260928）+fake 集成 | `src/daemon/deliberationRunner.ts` + `src/domain/deliberation/` | G4（价值闸门未做） | [reports/round-20260928-m1-closeout.md](reports/round-20260928-m1-closeout.md) |
+| DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **无争议分支真实已验证**（SYN/RAT/共识矩阵 29/29）；讨论轮/checkpoint/缺席/迟到=受控用例已验、真实补证按需另排 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
 | DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | NOT_STARTED | `src/adapter/` | G2/G4 | M2 |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
 | DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | NOT_STARTED | `src/daemon/` | RT-07/08/10 | M2 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## M1 收口轮：真实研讨闭环 + 调度/E4/迟到/身份收口（2026-09-28）
+
+详见 [reports/round-20260928-m1-closeout.md](reports/round-20260928-m1-closeout.md)。三次历史真实尝试完成 WAL 取证（两次=截止中断误判用户停止的缺陷、一次=CODEX_ERROR 正文未存档）；时钟注入/排队≠缺席/成员级缺席/迟到三分支/run 作用域派发键/确定性 RATIFY 收口全部零额度反例落地（331/331）；提交-观察分离 harness（scripts/real-delib.mjs）；**一组真实研讨完成**（7/9 预算精确、unanimous、29/29 逐项审计：隔离/三元组/冻结版本/矩阵共识/hash/预算账）；门禁改显式 opt-in。**价值闸门未做结论**。
 
 ## M1 第一轮：缺陷收口 + DELIBERATE 编排 + UI + 门禁开放（2026-09-27）
 
