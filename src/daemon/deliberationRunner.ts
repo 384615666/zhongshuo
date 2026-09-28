@@ -42,6 +42,7 @@ import {
 } from '../domain/deliberation/stageMachine.ts';
 import {
   closeRatificationBarrier,
+  type SaveArtifactInput,
   getRatificationRecords,
   getSynthesisClaims,
   initRatificationMatrix,
@@ -64,6 +65,8 @@ export type DelibStageCode = 'IND' | 'CR' | 'ISS' | 'CHK' | 'SYN' | 'RAT' | 'RPR
 
 export interface DelibStep {
   taskId: string;
+  /** 归属 run：派发键/预算/成果都按 run 作用域——同任务新运行不复用旧运行键。 */
+  runId: string;
   stage: DelibStageCode;
   memberId: string;
   roundNo: number;
@@ -77,34 +80,34 @@ const STAGE_CODE: Record<DelibStageCode, string> = { IND: 'IND', CR: 'CR', ISS: 
 export function delibDispatchKey(step: DelibStep): string {
   const purposeChar = step.purpose === 'checkpoint' ? 'c' : step.purpose === 'format_repair' ? 'f' : 'w';
   if (step.stage === 'RPR') {
-    return `task:${step.taskId}:delib:RPR:${step.memberId}:${step.roundNo}:${step.repairTarget ?? 'IND'}`;
+    return `task:${step.taskId}:delib:${step.runId}:RPR:${step.memberId}:${step.roundNo}:${step.repairTarget ?? 'IND'}`;
   }
-  return `task:${step.taskId}:delib:${STAGE_CODE[step.stage]}:${step.memberId}:${step.roundNo}:${purposeChar}`;
+  return `task:${step.taskId}:delib:${step.runId}:${STAGE_CODE[step.stage]}:${step.memberId}:${step.roundNo}:${purposeChar}`;
 }
 
 export function parseDelibStep(dispatchKey: string): DelibStep | null {
-  const m = dispatchKey.match(/^task:(.+):delib:(IND|CR|ISS|CHK|SYN|RAT|RPR):([^:]+):(\d+):(w|c|f)$/);
+  const m = dispatchKey.match(/^task:([^:]+):delib:(run_[^:]+):(IND|CR|ISS|CHK|SYN|RAT|RPR):([^:]+):(\d+):(w|c|f)$/);
   if (m == null) return null;
-  const stage = m[2] as DelibStageCode;
+  const stage = m[3] as DelibStageCode;
   return {
     taskId: m[1]!,
+    runId: m[2]!,
     stage,
-    memberId: m[3]!,
-    roundNo: Number(m[4]),
-    purpose: m[5] === 'c' ? 'checkpoint' : m[5] === 'f' ? 'format_repair' : 'stage_work',
-    repairTarget: stage === 'RPR' ? ((m[5] as unknown as DelibStageCode) ?? 'IND') : undefined,
+    memberId: m[4]!,
+    roundNo: Number(m[5]),
+    purpose: m[6] === 'c' ? 'checkpoint' : m[6] === 'f' ? 'format_repair' : 'stage_work',
   };
 }
 
 /** RPR 键的目标阶段编码在用途位（w/c/f 位置放目标 code）。 */
 export function repairDispatchKey(base: DelibStep): string {
-  return `task:${base.taskId}:delib:RPR:${base.memberId}:${base.roundNo}:${base.stage}`;
+  return `task:${base.taskId}:delib:${base.runId}:RPR:${base.memberId}:${base.roundNo}:${base.stage}`;
 }
 
 export function parseRepairTarget(dispatchKey: string): DelibStep | null {
-  const m = dispatchKey.match(/^task:(.+):delib:RPR:([^:]+):(\d+):(IND|CR|ISS|CHK|SYN|RAT)$/);
+  const m = dispatchKey.match(/^task:([^:]+):delib:(run_[^:]+):RPR:([^:]+):(\d+):(IND|CR|ISS|CHK|SYN|RAT)$/);
   if (m == null) return null;
-  return { taskId: m[1]!, stage: m[4] as DelibStep['stage'], memberId: m[2]!, roundNo: Number(m[3]), purpose: 'format_repair' };
+  return { taskId: m[1]!, runId: m[2]!, stage: m[5] as DelibStep['stage'], memberId: m[3]!, roundNo: Number(m[4]), purpose: 'format_repair' };
 }
 
 // ---------- PREPARE（程序） ----------
@@ -141,13 +144,17 @@ export function prepareDeliberation(
   route: Extract<TopLevelRouteOutcome, { kind: 'dispatch'; mode: 'DELIBERATE' }>,
   options: DeliberationOptions,
 ): DomainResult<{ runId: string }> {
-  const existing = db.prepare('SELECT * FROM workflow_runs WHERE task_id = ? AND mode = ?').get(task.id, 'DELIBERATE') as RunRow | undefined;
   const host = route.initialWakeMemberIds[0] ?? route.frozenMemberIds[0];
   if (host == null) return domainErr('VALIDATION_INVALID', 'DELIBERATE 路由缺少冻结名单');
+  // 复用仅限活跃 run；终态后再次提交=承接新证据的新运行（新键/新版本，§6.5）。
+  const existing = db.prepare(
+    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY revision DESC LIMIT 1",
+  ).get(task.id) as RunRow | undefined;
   if (existing != null) {
     enqueueIndependentSteps(db, existing.id, task.id, route.frozenMemberIds);
     return domainOk({ runId: existing.id });
   }
+  const prevRoster = db.prepare("SELECT COALESCE(MAX(roster_revision), 0) AS r FROM workflow_runs WHERE task_id = ?").get(task.id) as { r: number };
   const runId = `run_${randomUUID()}`;
   const budget = initDeliberationBudget({
     rosterSize: route.frozenMemberIds.length,
@@ -157,8 +164,8 @@ export function prepareDeliberation(
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, stage, round_no, roster_revision, budget_json, stage_started_at)
-       VALUES (?, ?, ?, ?, 'DELIBERATE', 0, 'RUNNING', 'INDEPENDENT', 0, 1, ?, ?)`,
-    ).run(runId, task.id, task.conversationId, task.threadId, JSON.stringify(budget), Date.now());
+       VALUES (?, ?, ?, ?, 'DELIBERATE', 0, 'RUNNING', 'INDEPENDENT', 0, ?, ?, ?)`,
+    ).run(runId, task.id, task.conversationId, task.threadId, prevRoster.r + 1, JSON.stringify(budget), Date.now());
     for (const memberId of route.frozenMemberIds) {
       db.prepare(
         `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, ?, 1, 'pending')`,
@@ -167,7 +174,7 @@ export function prepareDeliberation(
     appendDomainEvent(db, {
       schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversationId,
       threadId: task.threadId, taskId: task.id, runId, kind: 'run.stageAdvanced', createdAt: Date.now(),
-      payload: { stage: 'INDEPENDENT', rosterRevision: 1, members: route.frozenMemberIds },
+      payload: { stage: 'INDEPENDENT', rosterRevision: prevRoster.r + 1, members: route.frozenMemberIds },
     });
   });
   tx();
@@ -176,10 +183,9 @@ export function prepareDeliberation(
 }
 
 function enqueueIndependentSteps(db: ZhongshuoDatabase, runId: string, taskId: string, memberIds: readonly string[]): void {
-  void runId;
   const tx = db.transaction(() => {
     for (const memberId of memberIds) {
-      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, stage: 'IND', memberId, roundNo: 0, purpose: 'stage_work' }) });
+      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'IND', memberId, roundNo: 0, purpose: 'stage_work' }) });
     }
   });
   tx();
@@ -241,7 +247,10 @@ export interface PumpResult {
  * 与最终报告发布（程序完成，不调用模型）。
  */
 export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options: DeliberationOptions, now = Date.now()): PumpResult {
-  const run = db.prepare('SELECT * FROM workflow_runs WHERE task_id = ? AND mode = ?').get(taskId, 'DELIBERATE') as (RunRow & { stage_started_at: number | null }) | undefined;
+  // 活跃 run：同任务多 run 时只推进最新非终态（旧 run 遗留不复活）。
+  const run = db.prepare(
+    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY revision DESC LIMIT 1",
+  ).get(taskId) as (RunRow & { stage_started_at: number | null }) | undefined;
   if (run == null) return { advanced: false };
   if (run.status === 'INTERRUPTED') {
     // 单轮超时/中断后结果不确定（§10.2 不伪造）：如实把任务置 BLOCKED 供用户决策
@@ -256,26 +265,21 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) return { advanced: false };
   const threadId = task.conversation_thread_id ?? run.thread_id ?? '';
   const roster = rosterOf(db, run.id);
-  let participants = participantsOf(db, run.id);
+  // E4 语义（修复轮）：排队等待≠缺席——缺席只来自成员自己的执行事实（单轮截止中断/
+  // UNKNOWN，由 worker 终态处理写入）。此处不再按阶段起算时间批量标记 pending。
+  const participants = participantsOf(db, run.id);
   const drafts = frozenDrafts(db, run.id);
   const stage = run.stage ?? 'INDEPENDENT';
-
-  // E4：阶段开始超过容忍窗口仍未产出的 pending 席位 → absent（不打断在途成员）。
-  const stageAge = run.stage_started_at != null ? now - run.stage_started_at : 0;
-  if (options.absenceToleranceMs > 0 && stageAge >= options.absenceToleranceMs) {
-    markOverdueAbsent(db, run.id, stage, now);
-    participants = participantsOf(db, run.id); // 缺席标记后重读（否则屏障看到陈旧 pending）
-  }
 
   const budget = readBudget(run.budget_json);
   // §6.5 预算兜底：前置配额耗尽且无在途步骤时，转入整合（有产出即出诚实报告；
   // 无任何产出 → BLOCKED，不合成虚构研讨）。讨论轮被截停属预期（AT-05）。
   const frontAvail = budgetAccounting(budget, 'front').stageAvailableTurns;
   if (frontAvail < 1 && ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION'].includes(stage) && drafts.length > 0) {
-    const noPendingSteps = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:%`) as { c: number }).c === 0;
+    const noPendingSteps = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:%`) as { c: number }).c === 0;
     if (noPendingSteps) {
       advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: stage, reason: '前置预算耗尽，按 §6.5 转入整合' });
-      enqueueSynthesis(db, taskId, hostOf(roster));
+      enqueueSynthesis(db, run.id, taskId, hostOf(roster));
       return { advanced: true };
     }
   }
@@ -290,7 +294,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const decision = decideIndependentBarrier(roster, facts);
       if (decision.decision === 'advance') {
         advanceStage(db, run.id, taskId, 'CROSS_REVIEW', 0, now, { from: 'INDEPENDENT', reason: decision.reason });
-        enqueueReviewerSteps(db, taskId, drafts.map((d) => d.memberId));
+        enqueueReviewerSteps(db, run.id, taskId, drafts.map((d) => d.memberId));
         return { advanced: true };
       }
       if (decision.decision === 'blocked') {
@@ -324,10 +328,10 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
             advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', 1, now, { from: 'CROSS_REVIEW', reason: next.reason, issueCount: issues.length });
           });
           tx();
-          enqueueIssueSteps(db, taskId, reviewers, 1);
+          enqueueIssueSteps(db, run.id, taskId, reviewers, 1);
         } else {
           advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'CROSS_REVIEW', reason: next.reason });
-          enqueueSynthesis(db, taskId, hostOf(roster));
+          enqueueSynthesis(db, run.id, taskId, hostOf(roster));
         }
         return { advanced: true };
       }
@@ -349,29 +353,29 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const host = hostOf(roster);
       const checkpointDone = listRunArtifacts(db, run.id, 'checkpoint_verdict').some((a) => a.revision === round);
       if (round === 3 && !checkpointDone) {
-        enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, stage: 'CHK', memberId: host, roundNo: round, purpose: 'checkpoint' }) });
+        enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId: run.id, stage: 'CHK', memberId: host, roundNo: round, purpose: 'checkpoint' }) });
         return { advanced: false };
       }
       if (round === 3 && checkpointDone) {
         const verdict = checkpointVerdictOf(db, run.id, round);
         if (verdict === 'continue') {
           advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: '第 3 轮检查点：继续（有新证据）', round: round + 1 });
-          enqueueIssueSteps(db, taskId, reviewers, round + 1);
+          enqueueIssueSteps(db, run.id, taskId, reviewers, round + 1);
           return { advanced: true };
         }
         advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: '检查点停止/预算上限，转入整合' });
-        enqueueSynthesis(db, taskId, host);
+        enqueueSynthesis(db, run.id, taskId, host);
         return { advanced: true };
       }
       if (round > 3) {
         // 检查点后的额外轮：一轮后即回检查点语义（预算承担硬上限，决策 06）。
         advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮完成，转入整合` });
-        enqueueSynthesis(db, taskId, host);
+        enqueueSynthesis(db, run.id, taskId, host);
         return { advanced: true };
       }
       // round 1→2：直接进入下一轮（每轮开始冻结争议与证据版本；M1 复用 revision 1 争议集）。
       advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮意见收齐`, round: round + 1 });
-      enqueueIssueSteps(db, taskId, reviewers, round + 1);
+      enqueueIssueSteps(db, run.id, taskId, reviewers, round + 1);
       return { advanced: true };
     }
     case 'SYNTHESIS': {
@@ -399,14 +403,20 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const claims = getSynthesisClaims(db, run.id, synthesis.artifactId, synthesis.revision).map((c) => c.claim_id);
       const records = getRatificationRecords(db, run.id, synthesis.artifactId, synthesis.revision);
       const expectedMembers = roster.members.map((m) => m.memberId);
-      const pendingMembers = expectedMembers.filter((memberId: string) => records.some((r) => r.member_id === memberId && r.response_status === 'pending'));
-      const inFlight = listRunArtifacts(db, run.id, 'ratify_response'); // 已有答复的成员
-      const stillWorking = pendingMembers.filter((memberId: string) => !inFlight.some((a) => a.author_id === memberId) || statusOf(participants, memberId) === 'pending');
-      const overdue = run.stage_started_at != null && now - run.stage_started_at >= options.absenceToleranceMs;
-      if (pendingMembers.length > 0 && !overdue) return { advanced: false };
-      // 屏障关闭：未答复落 missing（程序记录，不伪造意见）。
-      closeRatificationBarrier(db, { runId: run.id, synthesisArtifactId: synthesis.artifactId, synthesisRevision: synthesis.revision, missingReason: overdue ? '未回复（缺席容忍超时）' : '阶段终结' });
-      void stillWorking;
+      // 屏障收口（确定性，非 wall-clock）：待定格的成员若仍有可派发/在途的 RAT 步骤则等待；
+      // 否则（席位失败/缺席/预算跳过）按 missing 关闭——程序记录，不伪造意见。
+      const waiting = expectedMembers.filter((memberId) => {
+        const cells = records.filter((r) => r.member_id === memberId);
+        if (cells.length === 0) return true; // 矩阵不完整：等（不应发生）
+        if (cells.some((r) => r.response_status === 'submitted')) return false;
+        const participant = statusOf(participants, memberId);
+        if (participant === 'failed' || participant === 'absent') return false;
+        const itemPending = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:RAT:${memberId}:%`) as { c: number }).c > 0;
+        const turnActive = (db.prepare("SELECT count(*) c FROM agent_turns t JOIN outbox o ON o.turn_id = t.id WHERE t.run_id = ? AND t.member_id = ? AND t.stage_key = 'delib.ratify' AND t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')").get(run.id, memberId) as { c: number }).c > 0;
+        return itemPending || turnActive;
+      });
+      if (waiting.length > 0) return { advanced: false };
+      closeRatificationBarrier(db, { runId: run.id, synthesisArtifactId: synthesis.artifactId, synthesisRevision: synthesis.revision, missingReason: '席位终结（失败/缺席/预算跳过），未回复' });
       publishFinalReport(db, { runId: run.id, taskId, conversationId: task.conversation_id, threadId, claims, expectedMembers, synthesis, now, blobDir: options.blobDir, reviewPolicy: reviewPolicyOf(db, taskId) });
       return { advanced: true };
     }
@@ -428,33 +438,6 @@ function readBudget(json: string | null): DeliberationBudgetState {
   return JSON.parse(json) as DeliberationBudgetState;
 }
 
-function markOverdueAbsent(db: ZhongshuoDatabase, runId: string, stage: string, now: number): void {
-  const rows = db.prepare("SELECT member_id FROM run_participants WHERE run_id = ? AND status = 'pending'").all(runId) as Array<{ member_id: string }>;
-  const tx = db.transaction(() => {
-    for (const r of rows) {
-      const hasOutput = memberHasStageOutput(db, runId, stage, r.member_id);
-      if (hasOutput) continue;
-      db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status = 'pending'").run(runId, r.member_id);
-      appendDomainEvent(db, {
-        schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: '',
-        threadId: null, runId, kind: 'run.participantAbsent', createdAt: now,
-        payload: { memberId: r.member_id, stage, reason: 'absence-tolerance' },
-      });
-    }
-  });
-  tx();
-}
-
-function memberHasStageOutput(db: ZhongshuoDatabase, runId: string, stage: string, memberId: string): boolean {
-  const kind = stage === 'INDEPENDENT' ? 'analysis_draft'
-    : stage === 'CROSS_REVIEW' ? 'cross_review'
-      : stage === 'ISSUE_DISCUSSION' ? 'issue_position'
-        : stage === 'RATIFY' ? 'ratify_response'
-          : null;
-  if (kind == null) return true;
-  return listRunArtifacts(db, runId, kind).some((a) => a.author_id === memberId);
-}
-
 function advanceStage(db: ZhongshuoDatabase, runId: string, taskId: string, stage: string, roundNo: number, now: number, payload: Record<string, unknown>): void {
   db.prepare('UPDATE workflow_runs SET stage = ?, round_no = ?, stage_started_at = ?, revision = revision + 1 WHERE id = ?').run(stage, roundNo, now, runId);
   appendDomainEvent(db, {
@@ -463,27 +446,27 @@ function advanceStage(db: ZhongshuoDatabase, runId: string, taskId: string, stag
   });
 }
 
-function enqueueReviewerSteps(db: ZhongshuoDatabase, taskId: string, reviewerIds: readonly string[]): void {
+function enqueueReviewerSteps(db: ZhongshuoDatabase, runId: string, taskId: string, reviewerIds: readonly string[]): void {
   const tx = db.transaction(() => {
     for (const memberId of reviewerIds) {
-      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, stage: 'CR', memberId, roundNo: 0, purpose: 'stage_work' }) });
+      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'CR', memberId, roundNo: 0, purpose: 'stage_work' }) });
     }
   });
   tx();
 }
 
-function enqueueIssueSteps(db: ZhongshuoDatabase, taskId: string, memberIds: readonly string[], round: number): void {
+function enqueueIssueSteps(db: ZhongshuoDatabase, runId: string, taskId: string, memberIds: readonly string[], round: number): void {
   const tx = db.transaction(() => {
     for (const memberId of memberIds) {
-      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, stage: 'ISS', memberId, roundNo: round, purpose: 'stage_work' }) });
+      enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'ISS', memberId, roundNo: round, purpose: 'stage_work' }) });
     }
   });
   tx();
 }
 
-function enqueueSynthesis(db: ZhongshuoDatabase, taskId: string, hostId: string): void {
+function enqueueSynthesis(db: ZhongshuoDatabase, runId: string, taskId: string, hostId: string): void {
   const tx = db.transaction(() => {
-    enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, stage: 'SYN', memberId: hostId, roundNo: 0, purpose: 'stage_work' }) });
+    enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'SYN', memberId: hostId, roundNo: 0, purpose: 'stage_work' }) });
   });
   tx();
 }
@@ -571,6 +554,45 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
 
 function projectIdOf(db: ZhongshuoDatabase, taskId: string): string {
   return (db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(taskId) as { project_id: string }).project_id;
+}
+
+/**
+ * 迟到材料记录（不计数）：发布 artifact（run 作用域）+ 审计事件。
+ * 已停止/旧 run/发布后到达——只展示迟到材料；报告更新走新运行/新版本。
+ */
+function recordLateArrival(db: ZhongshuoDatabase, input: { taskId: string; runId: string; step: DelibStep; turnId: string; finalText: string; options: DeliberationOptions }, now: number, reason: string): DomainResult<StepOutputResult> {
+  const schema = STEP_SCHEMAS[input.step.stage];
+  if (schema == null) return domainErr('VALIDATION_INVALID', `未知研讨步骤 ${input.step.stage}`);
+  const parsed = schema.safeParse(JSON.parse(input.finalText));
+  if (!parsed.success) return domainOk({ counted: false, needsRepair: `迟到输出未通过校验（${reason}）` });
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId) as
+    | { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null }
+    | undefined;
+  if (task == null) return domainErr('RESOURCE_NOT_FOUND', '任务不存在');
+  const artifactId = `art_${input.turnId}`;
+  const kind = stepArtifactKind(input.step.stage);
+  const revision = input.step.stage === 'ISS' || input.step.stage === 'CHK' ? input.step.roundNo : 1;
+  const published = publishDeliberationArtifact(db, {
+    artifactId, projectId: task.project_id, conversationId: task.conversation_id, threadId: task.conversation_thread_id ?? '',
+    taskId: input.taskId, runId: input.runId, authorId: input.step.memberId, kind, revision,
+    payload: parsed.data, blobDir: input.options.blobDir, now,
+  });
+  if (!published.ok) return domainErr(published.error.code, published.error.message);
+  appendDomainEvent(db, {
+    schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id, conversationId: task.conversation_id,
+    threadId: task.conversation_thread_id, taskId: input.taskId, runId: input.runId, kind: 'run.lateArrivalRecorded', createdAt: now,
+    payload: { memberId: input.step.memberId, stage: input.step.stage, roundNo: input.step.roundNo, reason, artifactId, counted: false },
+  });
+  return domainOk({ counted: false, lateRecorded: true });
+}
+
+function stepArtifactKind(stage: DelibStageCode): SaveArtifactInput['kind'] {
+  return stage === 'IND' ? 'analysis_draft'
+    : stage === 'CR' ? 'cross_review'
+      : stage === 'ISS' ? 'issue_position'
+        : stage === 'CHK' ? 'checkpoint_verdict'
+          : stage === 'SYN' ? 'synthesis'
+            : 'ratify_response';
 }
 
 // ---------- 步骤输入组装（服务端隔离） ----------
@@ -718,6 +740,15 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   now?: number;
 }): DomainResult<StepOutputResult> {
   const now = input.now ?? Date.now();
+  // 迟到/过期守卫（修复轮）：运行已终结/已停止/step 归属旧 run → 只留迟到材料记录，
+  // 不计入屏障、不复活运行（更新报告须走新运行/新版本，§6.5/E4）。
+  const runRow = db.prepare('SELECT status, stage FROM workflow_runs WHERE id = ?').get(input.runId) as { status: string; stage: string | null } | undefined;
+  const taskRow0 = db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(input.taskId) as { stop_generation: number; status: string } | undefined;
+  const runTerminal = runRow == null || !['RUNNING', 'WAITING'].includes(runRow.status);
+  const stopped = taskRow0 != null && (taskRow0.stop_generation > 0 || taskRow0.status === 'CANCELLED');
+  if (runTerminal || stopped || input.step.runId !== input.runId) {
+    return recordLateArrival(db, input, now, runTerminal ? `run-${runRow?.status ?? 'gone'}` : stopped ? 'task-stopped' : 'stale-run');
+  }
   const schema = STEP_SCHEMAS[input.step.stage];
   if (schema == null) return domainErr('VALIDATION_INVALID', `未知研讨步骤 ${input.step.stage}`);
   let parsed: unknown;
@@ -761,7 +792,16 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   if (!published.ok) return domainErr(published.error.code, published.error.message);
 
   const tx = db.transaction(() => {
-    db.prepare("UPDATE run_participants SET status = 'completed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(input.runId, input.step.memberId);
+    const wasAbsent = statusOf(participantsOf(db, input.runId), input.step.memberId) === 'absent';
+    db.prepare("UPDATE run_participants SET status = ? WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','absent')")
+      .run(wasAbsent ? 'late' : 'completed', input.runId, input.step.memberId);
+    if (wasAbsent) {
+      appendDomainEvent(db, {
+        schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: projectIdOf(db, input.taskId), conversationId: '',
+        threadId: null, taskId: input.taskId, runId: input.runId, kind: 'run.lateArrivalRecorded', createdAt: now,
+        payload: { memberId: input.step.memberId, stage: input.step.stage, roundNo: input.step.roundNo, note: '缺席后成果到达，纳入后续未冻结输入' },
+      });
+    }
     if (input.step.stage === 'ISS') {
       const positions = payload.positions as Array<{ issueId: string; stance: 'agree' | 'disagree' | 'needs_evidence' }>;
       for (const p of positions) {
@@ -786,7 +826,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       const tx2members = roster.members.map((m: { memberId: string }) => m.memberId);
       for (const memberId of tx2members) {
         if (statusOf(participantsOf(db, input.runId), memberId) === 'absent') continue; // 缺席者不再派发确认
-        enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId: input.taskId, stage: 'RAT', memberId, roundNo: 0, purpose: 'stage_work' }) });
+        enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId: input.taskId, runId: input.runId, stage: 'RAT', memberId, roundNo: 0, purpose: 'stage_work' }) });
       }
     }
     if (input.step.stage === 'RAT') {

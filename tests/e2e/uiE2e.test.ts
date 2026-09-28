@@ -192,9 +192,18 @@ beforeAll(() => {
   mkdirSync(projDir, { recursive: true });
   writeFileSync(join(projDir, 'notes.md'), '# 备忘\n\n宇宙密码：UIE2E-CODEX-6666\n', 'utf8');
 });
+// 证据保全（修复轮）：真实/研讨用例失败时保留 fixture（取证优先于清理——此前三次
+// 真实尝试的数据被清理，事后只能靠 WAL 字符串取证）。成功时正常清理。
+let keepFixture = false;
+(globalThis as unknown as { __zsKeepFixture?: (v: boolean) => void }).__zsKeepFixture = (v: boolean) => { keepFixture = v; };
 afterAll(() => {
   for (const a of apps) a.kill();
   killTree(replacementDaemon?.pid);
+  if (keepFixture) {
+    process.stderr.write(`[uiE2e] 测试失败，保留取证目录：${fixtureRoot}
+`);
+    return;
+  }
   for (let i = 0; i < 3; i += 1) {
     try { rmSync(fixtureRoot, { recursive: true, force: true }); break; } catch { /* retry */ }
   }
@@ -513,11 +522,16 @@ describe('UI 真实研讨（ZS_M1_REAL=1，真实 codex 多成员研讨一轮）
       async () => (await call<string>('threadStatus')).includes('已完成') || (await call<string>('threadStatus')).includes('待处理') || (await call<string>('threadStatus')).includes('失败'),
       840_000, '真实研讨终态',
     );
-    const status = await call<string>('threadStatus');
-    expect(status).toContain('已完成');
-    const reportText = await call<string>('text', 'delib-report');
-    expect(reportText).toContain('整体共识');
-    expect(reportText).toMatch(/unanimous|qualified|unconfirmed|disputed/);
+    try {
+      const status = await call<string>('threadStatus');
+      expect(status).toContain('已完成');
+      const reportText = await call<string>('text', 'delib-report');
+      expect(reportText).toContain('整体共识');
+      expect(reportText).toMatch(/unanimous|qualified|unconfirmed|disputed/);
+    } catch (e) {
+      (globalThis as unknown as { __zsKeepFixture?: (v: boolean) => void }).__zsKeepFixture?.(true);
+      throw e;
+    }
   }, 900_000);
 });
 

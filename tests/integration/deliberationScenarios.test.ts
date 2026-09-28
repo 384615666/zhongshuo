@@ -30,22 +30,41 @@ function make(db: ZhongshuoDatabase, n: number, members: string[], opts?: { maxT
   return { taskId, scripts, adapter, worker };
 }
 
-describe('E4 缺席容忍（假时钟，不等真实 20 分钟）', () => {
-  it('m2 超时缺席：屏障以现有成果推进，roster 标 absent，报告如实 unconfirmed', async () => {
+describe('E4 缺席容忍（成员执行事实级；假时钟/短截止，不真实等待）', () => {
+  it('m2 的 IND 轮单轮截止中断 → 成员级 absent（非用户停止、run 不死），屏障以现有成果推进', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2']);
-    // m2 的 IND 步骤用 stall（不响应）——缺席由假时钟+泵标记，不真实等待。
-    const { taskId, scripts, adapter, worker } = make(db, 1, ['m1', 'm2'], { absenceMs: 50 });
-    scripts.push(done(draft('甲', [{ claimId: 'c1', statement: '结论' }])));
+    const { scripts, adapter, worker } = make(db, 1, ['m1', 'm2']);
+    (worker as unknown as { turnDeadlineMs: number }).turnDeadlineMs = 80;
+    (worker as unknown as { interruptGraceMs: number }).interruptGraceMs = 40;
     await step(worker, scripts); // PREPARE
-    await step(worker, scripts); // IND m1 ✓
-    // 泵按推进的假时钟标记 m2 缺席并推进屏障（不走真实 wall-clock）。
-    pumpDeliberation(db, taskId, { absenceToleranceMs: 50, blobDir: join(tmpRoot, 'app-1', 'artifacts') }, Date.now() + 60_000);
+    scripts.push(done(draft('甲', [{ claimId: 'c1', statement: '结论' }])));
+    await step(worker, scripts); // IND m1 ✓（正常完成）
+    // m2 的 IND 轮静默超截止：截止中断=成员级缺席（不判用户停止、run 不 CANCELLED）。
+    scripts.push([{ kind: 'stall', ms: 60_000 }]);
+    await step(worker, scripts); // IND m2 截止中断 → absent
     const runId = runIdOf(db);
-    const participant = db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(runId, 'm2') as { status: string };
-    expect(participant.status).toBe('absent');
-    // 屏障推进：stage 不再停在 INDEPENDENT（以 m1 单人成果继续）。
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(runId, 'm2')).toMatchObject({ status: 'absent' });
+    expect(db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ status: 'RUNNING' });
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).not.toMatchObject({ status: 'CANCELLED' });
+    // 屏障以 m1 现有成果推进到互评。
+    pumpDeliberation(db, 'task_1', { absenceToleranceMs: 60_000, blobDir: join(tmpRoot, 'app-1', 'artifacts') });
     expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'CROSS_REVIEW' });
+    await adapter.closeAllSessions();
+    db.close();
+  }, 30_000);
+
+  it('排队≠缺席：m2 仍在队列（未派发）时推进时钟不标缺席', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const { scripts, adapter, worker } = make(db, 6, ['m1', 'm2']);
+    await step(worker, scripts); // PREPARE
+    scripts.push(done(draft('甲', [{ claimId: 'c1', statement: '结论' }])));
+    await step(worker, scripts); // IND m1 ✓；IND m2 仍 pending（排队）
+    const runId = runIdOf(db);
+    pumpDeliberation(db, 'task_6', { absenceToleranceMs: 60_000, blobDir: join(tmpRoot, 'app-6', 'artifacts') }, Date.now() + 3_600_000);
+    expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(runId, 'm2')).toMatchObject({ status: 'pending' });
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'INDEPENDENT' });
     await adapter.closeAllSessions();
     db.close();
   }, 30_000);
