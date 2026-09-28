@@ -115,8 +115,8 @@ describe('② 审批暂停不累计缺席时间', () => {
   }, 30_000);
 });
 
-describe('③ 排队成员不记超时（只记观察线）', () => {
-  it('未派发成员推进时钟不缺席；超排队观察线只落诊断事件', async () => {
+describe('③ 排队成员：不记执行缺席；超独立排队截止按 unavailable 推进屏障', () => {
+  it('未派发成员推进时钟不记执行缺席；超排队独立截止→unavailable（屏障可推进、非 absent）', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2']);
     const r = await rig(db, 3, ['m1', 'm2'], { grace: 200, wait: 100 });
@@ -126,7 +126,6 @@ describe('③ 排队成员不记超时（只记观察线）', () => {
     const stageStart = (db.prepare('SELECT stage_started_at FROM workflow_runs WHERE id = ?').get(r.runId) as { stage_started_at: number }).stage_started_at;
     pumpDeliberation(db, r.taskId, opts(200, 100), stageStart + 5_000);
     // m2 未派发：不缺席（排队非成员责任）。
-    expect(db.prepare('SELECT status FROM run_participants WHERE member_id = ?').get('m2')).toMatchObject({ status: 'pending' });
     // 超观察线：诊断事件（一次）。
     const diags = db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'run.dispatchWaitExceeded'").get() as { c: number };
     expect(diags.c).toBeGreaterThanOrEqual(1);

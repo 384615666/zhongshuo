@@ -11,7 +11,7 @@ import { z } from 'zod';
 // ---------- 名单与缺席（§4.3/E4） ----------
 
 /** run_participants.status 的语义集（迟到=超时后按缺席继续、成果随后到达）。 */
-export const PARTICIPANT_STATUS = ['pending', 'completed', 'late', 'absent', 'failed'] as const;
+export const PARTICIPANT_STATUS = ['pending', 'completed', 'late', 'absent', 'unavailable', 'failed'] as const;
 export type ParticipantStatus = (typeof PARTICIPANT_STATUS)[number];
 
 /** 冻结名单（创建运行时冻结，不悄悄排除离线成员；新增房间成员不自动加入）。 */

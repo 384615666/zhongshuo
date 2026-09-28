@@ -207,10 +207,16 @@ function noteDispatchWait(db: ZhongshuoDatabase, runId: string, stage: string, n
   const exists = db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key);
   if (exists != null) return;
   db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify({ memberId, stage, waitMs, at: now }), now);
+  // 合同修正（收口轮四）：未开始成员有独立 dispatchWaitDeadline——超出按 unavailable
+  // 规则处理（屏障不再无限等待该席位），非仅观察线。成员状态置 'unavailable'：
+  //   - 屏障视同缺席终结（不占住阶段）；
+  //   - 与 absent 区分：原因=排队等待（调度资源），后续轮次可恢复参与；
+  //   - 资源恢复/用户重试不重复派发旧步骤（旧键已被屏障消费）。
+  db.prepare("UPDATE run_participants SET status = 'unavailable' WHERE run_id = ? AND member_id = ? AND status = 'pending'").run(runId, memberId);
   appendDomainEvent(db, {
     schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: '',
     threadId: null, runId, kind: 'run.dispatchWaitExceeded', createdAt: now,
-    payload: { memberId, stage, waitMs, note: '排队等待观察线（非成员缺席）' },
+    payload: { memberId, stage, waitMs, disposition: 'unavailable', note: '排队等待独立截止：按 unavailable 规则处理（屏障推进；后续阶段可恢复）' },
   });
 }
 
@@ -517,8 +523,8 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         status: statusOf(participants, memberId),
         hasStageOutput: listRunArtifacts(db, run.id, 'issue_position').some((a) => a.author_id === memberId && a.revision === round),
       }));
-      // 'completed' 指上一阶段产出——本阶段收齐只认本阶段产出或跨阶段终结（缺席/失败）。
-      const allSettled = facts.every((f) => f.hasStageOutput || f.status === 'absent' || f.status === 'failed');
+      // 'completed' 指上一阶段产出——本阶段收齐只认本阶段产出或跨阶段终结（缺席/失败/unavailable）。
+      const allSettled = facts.every((f) => f.hasStageOutput || f.status === 'absent' || f.status === 'failed' || f.status === 'unavailable');
       if (!allSettled) return { advanced: false };
       // 第 3 轮强制检查点（§6.1）：host、意见已收集、未派发过。
       const host = hostOf(roster);
@@ -582,7 +588,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         if (cells.length === 0) return true; // 矩阵不完整：等（不应发生）
         if (cells.some((r) => r.response_status === 'submitted')) return false;
         const participant = statusOf(participants, memberId);
-        if (participant === 'failed' || participant === 'absent') return false;
+        if (participant === 'failed' || participant === 'absent' || participant === 'unavailable') return false;
         const itemPending = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:RAT:${memberId}:%`) as { c: number }).c > 0;
         const turnActive = (db.prepare("SELECT count(*) c FROM agent_turns t JOIN outbox o ON o.turn_id = t.id WHERE t.run_id = ? AND t.member_id = ? AND t.stage_key = 'delib.ratify' AND t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')").get(run.id, memberId) as { c: number }).c > 0;
         return itemPending || turnActive;
@@ -1002,7 +1008,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       advanceStage(db, input.runId, input.taskId, 'RATIFY', 0, now, { from: 'SYNTHESIS', reason: '整合稿冻结，进入确认', synthesisArtifactId: artifactId });
       const tx2members = roster.members.map((m: { memberId: string }) => m.memberId);
       for (const memberId of tx2members) {
-        if (statusOf(participantsOf(db, input.runId), memberId) === 'absent') continue; // 缺席者不再派发确认
+        if (['absent', 'unavailable'].includes(statusOf(participantsOf(db, input.runId), memberId))) continue; // 缺席/排队截止者不再派发确认
         enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId: input.taskId, runId: input.runId, stage: 'RAT', memberId, roundNo: 0, purpose: 'stage_work' }) });
       }
     }
