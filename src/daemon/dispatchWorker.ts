@@ -88,6 +88,11 @@ export interface DispatchWorkerOptions {
   deliberateMaxTurns?: number;
   /** 可注入时钟（默认 Date.now）：领取租约/泵判定在判定时点取当前时间，drain 循环不复用旧 now。 */
   clock?: () => number;
+  /**
+   * 成员级 adapter 选择（DEV-10 生产接线）：按成员 runtime 绑定（memberRuntime.registry）
+   * 选择 adapter；缺省回落单一 adapter（历史行为，全部现有测试路径不变）。
+   */
+  adapterFor?: (memberId: string) => RuntimeAdapter;
 }
 
 export class DispatchWorker {
@@ -104,11 +109,13 @@ export class DispatchWorker {
   private readonly dispatchWaitDeadlineMs?: number;
   private readonly deliberateMaxTurns?: number;
   private readonly clock: () => number;
-  private readonly live = new Map<string, { turnId: string; sessionId: string }>();
+  private readonly adapterForMember?: (memberId: string) => RuntimeAdapter;
+  private readonly live = new Map<string, { turnId: string; sessionId: string; adapter: RuntimeAdapter }>();
 
   constructor(options: DispatchWorkerOptions) {
     this.db = options.db;
     this.adapter = options.adapter;
+    this.adapterForMember = options.adapterFor;
     this.leaseOwner = options.leaseOwner;
     this.leaseMs = options.leaseMs ?? 60_000;
     this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
@@ -124,6 +131,11 @@ export class DispatchWorker {
 
   private deliberationOptions() {
     return { absenceToleranceMs: this.absenceToleranceMs, dispatchWaitDeadlineMs: this.dispatchWaitDeadlineMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
+  }
+
+  /** 成员级 adapter（DEV-10）：有成员绑定解析器时按成员选择，否则全局单 adapter。 */
+  private adapterOf(memberId: string): RuntimeAdapter {
+    return this.adapterForMember != null ? this.adapterForMember(memberId) : this.adapter;
   }
 
   /** 处理一条 outbox 项；返回是否处理了（门禁 held/无项返回 false）。 */
@@ -163,7 +175,7 @@ export class DispatchWorker {
   async interruptTurn(turnId: string): Promise<void> {
     const liveEntry = this.live.get(turnId);
     if (liveEntry == null) return;
-    await this.adapter.interrupt({ id: liveEntry.sessionId } as never, turnId);
+    await liveEntry.adapter.interrupt({ id: liveEntry.sessionId } as never, turnId);
   }
 
   private async dispatchClaimed(claimed: OutboxRow): Promise<void> {
@@ -355,11 +367,12 @@ export class DispatchWorker {
       return;
     }
 
-    // 会话：任务/成员/generation 维度（§13.4）。
+    // 会话：任务/成员/generation 维度（§13.4）；adapter 按成员 runtime 绑定选择（DEV-10）。
+    const adapter = this.adapterOf(member.id);
     const generation = this.db
       .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
       .get(member.id, task.conversation_id) as { c: number };
-    const session = await this.adapter.openSession({
+    const session = await adapter.openSession({
       projectId: task.project_id,
       memberId: member.id,
       taskId: task.id,
@@ -380,7 +393,7 @@ export class DispatchWorker {
 
     // 会话打开竞态复查（修复轮）：停止/终态在 openSession await 期间生效 → 不启动 turn。
     if (this.stoppingOrTerminal(task.id, turnId)) {
-      await this.adapter.close(session);
+      await adapter.close(session);
       const cancel = this.db.transaction(() => {
         this.casTurn(turnId, 'CANCELLED');
         this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
@@ -392,10 +405,10 @@ export class DispatchWorker {
       return;
     }
 
-    this.live.set(turnId, { turnId, sessionId: session.id });
+    this.live.set(turnId, { turnId, sessionId: session.id, adapter });
 
     try {
-      await this.adapter.startTurn(session, {
+      await adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
         inputBundleId: assembled.value.bundleId,
@@ -404,7 +417,7 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
       });
-      await this.consumeUntilTerminal(task, runId, turnId, session.id);
+      await this.consumeUntilTerminal(task, runId, turnId, session.id, adapter);
     } finally {
       this.live.delete(turnId);
     }
@@ -512,10 +525,11 @@ export class DispatchWorker {
       this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'standing-prompt-invalid' });
       return;
     }
+    const adapter = this.adapterOf(step.memberId);
     const generation = this.db
       .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
       .get(step.memberId, task.conversation_id) as { c: number };
-    const session = await this.adapter.openSession({
+    const session = await adapter.openSession({
       projectId: task.project_id,
       memberId: step.memberId,
       taskId: task.id,
@@ -532,7 +546,7 @@ export class DispatchWorker {
     ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path);
 
     if (this.stoppingOrTerminal(task.id, turnId)) {
-      await this.adapter.close(session);
+      await adapter.close(session);
       const cancel = this.db.transaction(() => {
         this.casTurn(turnId, 'CANCELLED');
         this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(run.id);
@@ -544,9 +558,9 @@ export class DispatchWorker {
       return;
     }
 
-    this.live.set(turnId, { turnId, sessionId: session.id });
+    this.live.set(turnId, { turnId, sessionId: session.id, adapter });
     try {
-      await this.adapter.startTurn(session, {
+      await adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
         inputBundleId: bundleId,
@@ -555,7 +569,7 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: `result_${turnId}`,
       });
-      await this.consumeUntilTerminal(task, run.id, turnId, session.id);
+      await this.consumeUntilTerminal(task, run.id, turnId, session.id, adapter);
     } finally {
       this.live.delete(turnId);
     }
@@ -607,10 +621,10 @@ export class DispatchWorker {
    * - adapter.interrupt() 本身可能永不返回：限时发送（宽限剩余时间为上限）后立即
    *   回到主循环，宽限计时由主循环承担，不因 interrupt 挂起而失效。
    */
-  private async consumeUntilTerminal(task: TaskRow, runId: string, turnId: string, sessionId: string): Promise<void> {
+  private async consumeUntilTerminal(task: TaskRow, runId: string, turnId: string, sessionId: string, adapter: RuntimeAdapter = this.adapter): Promise<void> {
     const deadline = Date.now() + this.turnDeadlineMs;
     const interruptDeadline = deadline + this.interruptGraceMs;
-    const iterator = this.adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
+    const iterator = adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
     let interruptSent = false;
     let pending: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> | null = null;
 
@@ -635,7 +649,7 @@ export class DispatchWorker {
           interruptSent = true;
           // interrupt 限时发送：不 await 其完成；宽限由主循环计时（挂起也不影响）。
           void Promise.race([
-            this.adapter.interrupt({ id: sessionId } as never, turnId),
+            adapter.interrupt({ id: sessionId } as never, turnId),
             new Promise((resolve) => {
               const guard = setTimeout(resolve, Math.max(1, interruptDeadline - Date.now()));
               guard.unref?.();
@@ -731,7 +745,7 @@ export class DispatchWorker {
         if (turn.status === 'STOPPING') {
           // 停止先于开始回执生效：不回到 RUNNING，再发中断并留审计。
           this.audit(task, runId, turnId, 'turn.stoppingRace', { note: 'turn.started after stop; re-interrupting' });
-          void this.adapter.interrupt({ id: event.sessionId } as never, turnId);
+          void (this.live.get(turnId)?.adapter ?? this.adapter).interrupt({ id: event.sessionId } as never, turnId);
           break;
         }
         this.casTurn(turnId, 'RUNNING');
@@ -816,6 +830,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.statusChanged', {
             status: interrupted ? 'CANCELLED' : 'FAILED',
             code: event.code,
+            message: event.message.slice(0, 400), // 失败取证（真实跑挂时 stderr 尾部在此，不丢现场）
             retryable: event.retryable,
           });
         });

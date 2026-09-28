@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-28 深夜（DEV-10：Claude adapter 实装+回放 8 用例+跨 runtime 绑定；dispatchWait 合同一致化；价值 v3=33 待批；353/353）
+- 最近更新：2026-09-28 深夜·二（DEV-10：deepseek-flash 真实认证 turn1 全链成功+启动路径安全+成员级 runtime 生产接线；预算 2/2 用尽、受控中断待补；360/360）
 
 ## 工作包状态
 
@@ -23,7 +23,7 @@
 | DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **VERIFIED（G3 范围）**：CDP 真点击用户链路 11/11（发送/DONE/线程回复/跟进不新建根任务/草稿独立/仅记录/去重/IME/重载恢复/UI 停止/崩溃恢复门禁）+ 真实 codex UI 一轮（1 turn）；打包随包 Node 属 DEV-15 | `src/ui/` + `src/daemon/` + `src/contracts/daemonIpc.ts` | G3 ✓ | [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md) |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | **真实已验证（一组，29/29 审计）**：IND 隔离/CR 三元组/屏障经真实模型闭环（round-20260928）+fake 集成 | `src/daemon/deliberationRunner.ts` + `src/domain/deliberation/` | G4（价值闸门未做） | [reports/round-20260928-m1-closeout.md](reports/round-20260928-m1-closeout.md) |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **无争议分支真实已验证**（SYN/RAT/共识矩阵 29/29）；讨论轮/checkpoint/缺席/迟到=受控用例已验、真实补证按需另排 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
-| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（adapter 已实装+零额度回放）**：cliAdapter（进程模型/事件归一化/能力三态/拒绝语义）+ 协议回放 8 用例 + 共用 worker 跨 runtime 成员绑定（回放）；剩余=entry 成员级接入+真实认证（2 调用待批） | `src/adapter/claude/cliAdapter.ts` | G2/G4 | M2 | [round-20260928-dev10-adapter.md](reports/round-20260928-dev10-adapter.md) |
+| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（真实认证 1/2 完成）**：deepseek-flash 经当前渠道实测可用（turn1 全链 DONE/暗号回流/resultKey 匹配/usage 20,875+53,760cache+11,822、$0.4268 est）；启动路径安全（无 shell/stdin 传 prompt/--verbose）；**成员级 runtime 生产接线完成**（member.setRuntime→registry→worker adapterFor）；剩余=受控中断 1 次待批预算+resumeSession 真实认证+interactiveApprovals | `src/adapter/claude/cliAdapter.ts`、`src/daemon/memberRuntime.ts` | G2/G4 | M2 | [round-20260928-dev10-real-auth.md](reports/round-20260928-dev10-real-auth.md) |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
 | DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | NOT_STARTED | `src/daemon/` | RT-07/08/10 | M2 |
 | DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3；RT-03 重领对账的存储侧已在修复轮落地 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## DEV-10 真实认证轮：deepseek-flash + 启动安全 + 成员级生产接线（2026-09-28 深夜·二）
+
+详见 [reports/round-20260928-dev10-real-auth.md](reports/round-20260928-dev10-real-auth.md)。渠道核对（http://192.0.2.10 代理、/v1/models 含裸 deepseek-flash、unrecognized_model=服务端透传且成功 turn 亦有该告警、`[1m]`=CLI 后缀语法被 adapter 拒绝）；启动路径安全（shell:false+原生 exe 解析+prompt 全文走 stdin+argv 固定+字符集校验+--verbose，特殊字符零额度反例）；resultKey 回放闭环（模拟器读 stdin 合同→DONE，错误 resultKey 反例）；成员级 runtime 生产接线（member.setRuntime/member.runtime 命令→绑定链→MemberRuntimeRegistry→worker adapterFor 两路径，未绑定回落默认、不可用 kind 如实抛错）；真实预算 2/2（1 次意外探活事故=settings env 优先于子进程 env+1 次 turn1 全链成功）；受控中断待批补 1 次。默认 360/360、lint 0。
 
 ## DEV-10 适配器实装 + dispatchWait 合同一致化（2026-09-28 深夜）
 

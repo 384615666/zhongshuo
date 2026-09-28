@@ -21,18 +21,20 @@ import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
+import { MemberRuntimeRegistry, type MemberAdapterFactory } from './memberRuntime.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
+import { ClaudeCliAdapter } from '../adapter/claude/cliAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
 import { daemonPipeNameFor, ensureLocalCredential } from '../contracts/daemonIpc.ts';
 import type { LocalCredential } from '../contracts/daemonIpc.ts';
 
 export interface DaemonOptions {
   appDataDir: string;
-  /** fake 仅限显式开发/测试模式（ZS_RUNTIME=fake + ZS_ALLOW_FAKE=1）；正式用户路径不得静默使用。 */
-  runtime: 'fake' | 'codex';
+  /** 全局默认 runtime（未绑定成员的回落值；fake 仅限显式开发/测试模式 ZS_ALLOW_FAKE=1）。 */
+  runtime: 'fake' | 'codex' | 'claude';
   localUserId?: string;
   pipeName?: string;
   tickMs?: number;
@@ -44,7 +46,10 @@ export interface RunningDaemon {
   pipeName: string;
   db: ZhongshuoDatabase;
   worker: DispatchWorker;
+  /** 全局默认 adapter（未绑定成员回落值）。 */
   adapter: RuntimeAdapter;
+  /** 成员级 runtime 注册表（DEV-10：按成员绑定选择 adapter）。 */
+  memberRuntime: MemberRuntimeRegistry;
   credential: LocalCredential;
   stop(): Promise<void>;
 }
@@ -71,19 +76,40 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     adapter = options.runtime === 'codex'
       ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
-      : new FakeRuntimeAdapter(
-          // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
-          // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）；
-          // ZS_FAKE_DELIB=1 时按输入契约生成合法研讨载荷（UI 全链路演练）。
-          process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
-            ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
-            : process.env.ZS_FAKE_DELIB === '1'
-              ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
-              : undefined,
-        );
+      : options.runtime === 'claude'
+        ? new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL })
+        : new FakeRuntimeAdapter(
+            // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
+            // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）；
+            // ZS_FAKE_DELIB=1 时按输入契约生成合法研讨载荷（UI 全链路演练）。
+            process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
+              ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
+              : process.env.ZS_FAKE_DELIB === '1'
+                ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
+                : undefined,
+          );
+
+    // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
+    // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
+    const claudePermissionOf = (mode: string | null): 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | undefined =>
+      mode === 'default' || mode === 'plan' || mode === 'acceptEdits' || mode === 'bypassPermissions' ? mode : undefined;
+    const factories: Record<string, MemberAdapterFactory> = {
+      codex: (binding) => new CodexAppServerAdapter({ model: binding.model ?? process.env.ZS_E2E_MODEL }),
+      claude: (binding) => new ClaudeCliAdapter({
+        model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
+        executable: binding.executable ?? undefined,
+        permissionMode: claudePermissionOf(binding.permissionMode),
+        installationId: binding.installationId ?? undefined,
+      }),
+    };
+    if (process.env.ZS_ALLOW_FAKE === '1') {
+      factories.fake = () => new FakeRuntimeAdapter();
+    }
+    const memberRuntime = new MemberRuntimeRegistry(db, adapter, factories);
     const worker = new DispatchWorker({
       db,
       adapter,
+      adapterFor: (memberId) => memberRuntime.adapterFor(memberId),
       leaseOwner: `daemon-${process.pid}`,
       appDataDir: options.appDataDir,
       // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
@@ -135,6 +161,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       db,
       worker,
       adapter,
+      memberRuntime,
       credential,
       stop(): Promise<void> {
         if (stopPromise != null) return stopPromise; // 重复 stop 幂等：同一关闭过程
@@ -150,11 +177,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               new Promise((r) => { const t = setTimeout(r, options.drainSettleTimeoutMs ?? 10_000); t.unref?.(); }),
             ]);
           }
-          if (adapter instanceof CodexAppServerAdapter) {
-            await adapter.dispose();    // 4) 收拢 runtime（等待子进程退出）
-          } else {
-            await (adapter as FakeRuntimeAdapter).closeAllSessions();
-          }
+          // 4) 收拢全部 runtime（成员级 + 默认；等待子进程退出）
+          await memberRuntime.disposeAll();
           db!.close();                  // 5) 关库（此后 worker 任何写入都会抛 SQLITE 错误——按序保证不再发生）
           lockHandle.release();         // 6) 释放锁
           void stopped;
@@ -175,11 +199,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 /** 独立进程入口：node --experimental-strip-types src/daemon/entry.ts */
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts')) {
   const appDataDir = process.env.ZS_APP_DATA ?? defaultAppDataDir();
-  const runtime = (process.env.ZS_RUNTIME === 'codex' ? 'codex' : 'fake') as 'fake' | 'codex';
+  const rawRuntime = process.env.ZS_RUNTIME ?? 'fake';
+  const runtime = (rawRuntime === 'codex' || rawRuntime === 'claude' ? rawRuntime : 'fake') as 'fake' | 'codex' | 'claude';
   if (runtime === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
     // 正式用户启动路径不得静默使用 fake runtime（显式开发模式需 ZS_ALLOW_FAKE=1）。
-    process.stderr.write('[zhongshuo-daemon] fake runtime 仅限开发/测试（ZS_RUNTIME=fake 需同时设置 ZS_ALLOW_FAKE=1）；生产请用 ZS_RUNTIME=codex\n');
+    process.stderr.write('[zhongshuo-daemon] fake runtime 仅限开发/测试（ZS_RUNTIME=fake 需同时设置 ZS_ALLOW_FAKE=1）；生产请用 ZS_RUNTIME=codex|claude\n');
     process.exit(2);
+  }
+  if (runtime === 'claude' && process.env.ZS_CLAUDE_MODEL == null) {
+    // 只警告不退出：成员级绑定（agent_profiles.settings_json.model）可提供模型。
+    process.stderr.write('[zhongshuo-daemon] ZS_CLAUDE_MODEL 未设置：全局 claude runtime 需显式模型（成员配置可按成员提供）\n');
   }
   void startDaemon({ appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME }).then((daemon) => {
     process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);

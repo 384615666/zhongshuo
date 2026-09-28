@@ -157,6 +157,8 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
         cost?: number;
         currency?: string;
         costQuality: 'reported' | 'estimated' | 'unknown';
+        /** 服务端回报的模型标识（原样记录；不提供则留空，不得以成功推断实际后端模型）。 */
+        model?: string;
       }
     | { kind: 'turn.completed'; finalText?: string; structuredResult?: unknown }
     | { kind: 'turn.failed'; code: string; message: string; retryable: boolean }

@@ -2,26 +2,43 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 深夜，唯一权威快照）
+## 当前真实状态（2026-09-28 深夜·第二轮，唯一权威快照）
 
+- **DEV-10 真实认证（本轮已消耗预算 2/2）**：①意外探活 1 次（事故：settings.json env 优先
+  于子进程 env，"关闭端口"诊断仍打到渠道；$0.0995、model=deepseek-flash 成功）；②**turn1
+  fixture 只读分析全链成功**（task DONE、暗号 ZS-DEV10-CLAUDE-7749 原样回流、resultKey 匹配、
+  usage 20,875/53,760cache/11,822、$0.4268 estimated、55.6s；经正式 daemon+管道+成员绑定
+  生产链路）。**受控中断 turn2 未执行（预算耗尽，脚本就绪待批 1 次）**。
+- **deepseek-flash 接入结论**：当前渠道（http://192.0.2.10 代理 + Claude Code 2.1.283）
+  可用，显式 `--model deepseek-flash`（渠道 /v1/models 在列；`[1m]`=CLI 后缀语法，adapter
+  拒绝）；`unrecognized_model` stderr 告警在成功 turn 亦出现（SDK 噪音）——adapter 不因它
+  终结，回退与否以响应报文为准（result.model→assistant.message.model 双源取证）。
+  认证范围仅限实测组合（2.1.283+adapter-0.2+该渠道+deepseek-flash+plan 只读档）。
+- **DEV-10 工程线全落地**：启动路径安全（无 shell/原生 exe 解析/prompt 全文走 stdin/argv
+  固定+字符集校验/--verbose）；resultKey 回放闭环（模拟器读 stdin 合同→全链 DONE，错误
+  resultKey 反例保留）；**成员级 runtime 生产接线**（member.setRuntime/member.runtime 命令
+  →project_members→agent_profiles→runtime_installations→MemberRuntimeRegistry→worker
+  adapterFor 两派发路径；未绑定回落 ZS_RUNTIME 默认；不可用 kind 如实抛错）。
 - **无争议真实研讨**：一组证据（历史参考口径，中性正文实验将全跑新组）；分支类=受控用例已验。
-- **E4**：执行时钟/审批暂停（生产事件路径 121ms 验证）/排队独立截止→unavailable（合同
-  一致化）已落地；**在途缺席推进的生产承载未完成**（串行 drain 限制，机制+假时钟已备，
-  M2 前置调度解耦承载——不开启无约束并发）。
-- **DEV-10**：Claude CLI adapter **已实装**（进程模型/事件归一化/能力三态/拒绝语义）+
-  零额度协议回放 8 用例 + 共用 worker 跨 runtime 成员绑定验证（domain 无厂商分支）；
-  **未做**：entry 成员级 adapterFor 生产接入（project_members.runtime 字段+注册表）、
-  真实认证（最小 2 调用：1 turn 只读全链 + 1 次中断——待批模型名与预算）。
-- **价值对比 v3 预算**：每组 DIRECT 上限 2（正常 1+修复 1）+ DELIB 上限 9（正常 7+共享
-  修复 2，尾部含总额内）× 3 组 = **总新增上限 33**（待批准；批准前不执行、不探活）。
-  A 组旧运行=历史参考，无"确认后视为同题"选项。
-- **门禁**：ZS_ENABLE_DELIBERATE=1 显式 opt-in（能力状态合同见 round 报告）。
+- **E4**：执行时钟/审批暂停/排队→unavailable 已落地；**在途缺席推进的生产承载未完成**
+  （串行 drain 限制，M2 前置调度解耦承载）。
+- **价值对比 v3 预算**：总新增上限 **33**（每组 DIRECT 2+DELIB 9×3；**本轮未批准、未动用**）。
+- **门禁**：ZS_ENABLE_DELIBERATE=1 显式 opt-in。
+- 数字：全套 **360/360**、typecheck/lint 0。报告：reports/round-20260928-dev10-real-auth.md。
 
 ## 当前下一步（唯一）
 
-1. **等待用户输入**：① 价值对比 33 上限批准与否；② Claude 真实认证的模型名 + 2 调用预算。
-2. 无需等待直接开工：entry 成员级 adapterFor 接入；E4 调度解耦设计稿（M2 前置）；
-   harness stop 改进（UI task.stop 优先）。
+1. **等待用户输入**：① 价值对比 33 上限批准与否；② DEV-10 受控中断补 1 次调用预算
+   （`node scripts/dev10-real-auth.ts turn2` 就绪）；③ 可选：--resume 真实续接认证（另计）。
+2. 无需等待直接开工：E4 调度解耦设计稿（M2 前置）；harness stop 改进（UI task.stop 优先）；
+   resumeSession 真实行为的零额度准备（回放已备）。
+
+---
+
+## （上一轮快照，2026-09-28 深夜·第一轮）
+
+- DEV-10：adapter 实装+零额度回放 8 用例+worker 跨 runtime 验证；当时遗留 entry 成员级接入
+  与真实认证——**本轮已全部处理**（见上）。
 
 ---
 

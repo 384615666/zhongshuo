@@ -20,6 +20,9 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
+import { readMemberRuntimeBinding } from './memberRuntime.ts';
+import { CLAUDE_ADAPTER_VERSION } from '../adapter/claude/cliAdapter.ts';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 export interface DaemonCommandDeps {
@@ -203,6 +206,60 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? ORDER BY pm.id`).all(params.roomId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>)
           : (deps.db.prepare('SELECT id, display_name, principal_type, enabled FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>);
         return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1 })) } });
+      }
+      case 'member.setRuntime': {
+        // 成员级 runtime 绑定（DEV-10）：成员→profile→installation 链落库；派发侧按此选 adapter。
+        // fake 仅显式开发模式（ZS_ALLOW_FAKE=1）；claude 必须显式模型（默认配置不被 CLI 接受）。
+        // capabilities_json 分开记录工具能力三态/模型可用性/权限认证——不因配置成功宣称已认证。
+        const params = z.strictObject({
+          memberId: z.string().min(1),
+          kind: z.enum(['codex', 'claude', 'fake']),
+          model: z.string().min(1).optional(),
+          executable: z.string().min(1).optional(),
+          permissionMode: z.enum(['default', 'plan', 'acceptEdits', 'bypassPermissions']).optional(),
+        }).parse(env.params);
+        if (params.kind === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', 'fake runtime 仅限显式开发模式（ZS_ALLOW_FAKE=1）');
+        }
+        if (params.kind === 'claude' && (params.model == null || params.model.length === 0)) {
+          throw new DaemonCommandError('VALIDATION_INVALID', 'claude 绑定必须显式指定模型（如 deepseek-flash）');
+        }
+        const result = run(() => {
+          const member = deps.db.prepare('SELECT id FROM project_members WHERE id = ?').get(params.memberId) as { id: string } | undefined;
+          if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
+          const executable = params.executable ?? (params.kind === 'claude' ? 'claude' : params.kind);
+          const installationId = `ri_${params.kind}_${createHash('sha256').update(`${params.kind}|${executable}`).digest('hex').slice(0, 10)}`;
+          const adapterVersion = params.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : params.kind === 'codex' ? 'codex-appserver-adapter' : 'fake-adapter';
+          const capabilities = {
+            toolCapabilities: {
+              note: '三态表见 adapter CAPABILITIES；本记录为登记时点快照',
+              structuredEvents: params.kind === 'fake' ? 'supported' : 'supported',
+            },
+            modelAvailability: params.model != null ? 'configured-unverified' : 'not-specified',
+            permissionAuth: 'unverified',
+          };
+          deps.db.prepare(
+            `INSERT INTO runtime_installations (id, kind, executable, version, adapter_version, capabilities_json, detected_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET capabilities_json = excluded.capabilities_json, detected_at = excluded.detected_at`,
+          ).run(installationId, params.kind, executable, '', adapterVersion, JSON.stringify(capabilities), Date.now());
+          const profileId = `ap_${params.memberId}`;
+          deps.db.prepare(
+            `INSERT INTO agent_profiles (id, name, description, runtime_installation_id, settings_json) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET runtime_installation_id = excluded.runtime_installation_id, settings_json = excluded.settings_json`,
+          ).run(profileId, `成员 ${params.memberId} 的 runtime profile`, null, installationId, JSON.stringify({ model: params.model ?? null, permissionMode: params.permissionMode ?? null }));
+          deps.db.prepare('UPDATE project_members SET profile_id = ?, settings_revision = settings_revision + 1 WHERE id = ?').run(profileId, params.memberId);
+          return { memberId: params.memberId, installationId, kind: params.kind, model: params.model ?? null, permissionMode: params.permissionMode ?? null };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'member.runtime': {
+        const params = z.strictObject({ memberId: z.string().min(1) }).parse(env.params);
+        const binding = readMemberRuntimeBinding(deps.db, params.memberId);
+        if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
+        const installation = binding.installationId == null ? null
+          : (deps.db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
+        return withCommandId({ ok: true, data: { binding, installation } });
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);

@@ -1,0 +1,53 @@
+{
+  "turn": 1,
+  "rehearsal": false,
+  "purpose": "fixture 只读分析全链（正式 adapter + 成员绑定 + 输出合同 + 线程归属）",
+  "model": "deepseek-flash",
+  "channelHost": "192.0.2.10",
+  "cliVersion": "2.1.283 (Claude Code)",
+  "taskId": "task_300a3aac-3207-4287-848b-dc8a525d78cd",
+  "threadId": "thread_91deb211-8900-44ff-b570-bbf06e4dbb38",
+  "memberId": "m_default_prj_ade80814-b3c2-42b0-99ec-d97fbe002e6c_0",
+  "elapsedMs": 55627,
+  "taskStatus": "DONE",
+  "runStatus": "SUCCEEDED",
+  "turnStatus": "SUCCEEDED",
+  "secretInReply": true,
+  "secret": "ZS-DEV10-CLAUDE-7749",
+  "replyExcerpt": "{\"schemaVersion\":\"task-complete-v1\",\"resultKey\":\"result_turn_e8dfbb0d-8c0c-44c6-ba54-b63b9388297a\",\"changeSummary\":\"以只读方式分析 notes.md：给出 3 条要点（DEV-10 迁移信息/旧机 10.0.0.11 已下线、新机 10.0.0.22 SSH 2222、备份未校验），在其中一条原样引用“宇宙暗号”完整字符串 ZS-DEV10-CLAUDE-7749，并指出可疑点（夜间 2 点约 5 分钟日志空窗原因不明，疑为审计盲区），未修改任何文件。\",\"files\":[\"notes.md\"],\"executedVerifications\":[\"Read 工具完整读取 notes.md（6 行 / 299 字节），逐行核对，确认引用字符串与文件内容一致\",\"ls 列目录确认 proj 下仅存在 notes.md，无其他文件被创建或改动\",\"sha256sum notes.md 记录只读指纹：be4c50aa5bb52597b7e2fdff6f786971d58435f438eaf41aea6bc8df974dbb48\"],\"unexecutedVerifications\":[{\"item\":\"核查夜间 2 点日志空窗约 5 分钟的成因（日志/审计记录）\",\"reason\":\"目标主机（10.0.0.22/10.0.0.11）与日志不在本目录，本轮仅限本地只读文本分析，无网络或执行授权\"},{\"item\":\"校验数据库备份 /backup/db-20260920.sql.gz 完整性（文件标注“未校验”）\",\"reason\":\"备份文件不在当前目录且未获访问/执行授权，任务范围限定为 notes.md 只读分析\"}],\"remainingIssues\":[\"主要可疑点待跟进：夜间 2 点定时出现的约 5 分钟日志空窗“原因不明”，可能是未记录的计划任务或访问窗口，构成审计盲区，建议优先核查该时段访问与任务记录\",\"“宇宙暗号” ZS-DEV10-CLAUDE-7749 为明文认证类字符串（文件自述为只读认证 fixture，疑似测试 canary），不应外泄、不应作为任何授权凭证使用\",\"旧机 10.0.0.11 已下线、新机 SSH 2222 及备份路径等信息仅作分析呈现，未执行任何连接或操作；如需后续验证须另行授权\"]}",
+  "usage": [
+    {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 20875,
+      "cachedTokens": 53760,
+      "outputTokens": 11822,
+      "cost": 0.426805,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "eventKey": "cevt_9a68a22197d4a6ba6678",
+      "sessionId": "claude_sess_e2c2d35f-f096-428e-83a9-17b767372069",
+      "turnId": "turn_e8dfbb0d-8c0c-44c6-ba54-b63b9388297a",
+      "receivedAt": 1790596110490
+    }
+  ],
+  "reportedModel": null,
+  "delivery": {
+    "revision": 1,
+    "review_status": "not_required",
+    "manifest_hash": "2a6475e6d84c9329676f1117e45f9b99864d38c2fdf27b9a1667f5cbe4a47245"
+  },
+  "audits": [
+    {
+      "kind": "turn.statusChanged",
+      "payload_json": "{\"status\":\"SUCCEEDED\",\"reviewStatus\":\"not_required\",\"deliveryRevision\":1}",
+      "created_at": 1790596110522
+    }
+  ],
+  "checks": {
+    "taskDone": true,
+    "secretEchoed": true,
+    "usageRecorded": true,
+    "deliveryCreated": true
+  }
+}

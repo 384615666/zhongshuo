@@ -20,7 +20,7 @@ let daemonProcess: ChildProcess | null = null;
 let pipe: PipeClient | null = null;
 
 /** 启动独立 daemon 子进程（Node 运行时；native 模块不进 Electron）。 */
-async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'codex'): Promise<void> {
+async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'codex' | 'claude'): Promise<void> {
   const entry = process.env.ZS_DAEMON_ENTRY ?? join(__dirname, '..', '..', 'src', 'daemon', 'entry.ts');
   mkdirSync(appDataDirToUse, { recursive: true }); // 凭据/数据库目录可能尚不存在
   const credential = ensureLocalCredential(appDataDirToUse);
@@ -91,9 +91,10 @@ function pipeClosedCheck(): void {
 }
 
 app.whenReady().then(async () => {
-  const runtime = (process.env.ZS_RUNTIME === 'codex' ? 'codex' : 'fake') as 'fake' | 'codex';
+  const rawRuntime = process.env.ZS_RUNTIME ?? 'fake';
+  const runtime = (rawRuntime === 'codex' || rawRuntime === 'claude' ? rawRuntime : 'fake') as 'fake' | 'codex' | 'claude';
   if (runtime === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
-    process.stderr.write('[zhongshuo-ui] fake 仅限开发模式（需 ZS_ALLOW_FAKE=1）；生产用 ZS_RUNTIME=codex\n');
+    process.stderr.write('[zhongshuo-ui] fake 仅限开发模式（需 ZS_ALLOW_FAKE=1）；生产用 ZS_RUNTIME=codex|claude\n');
     app.quit();
     return;
   }
@@ -144,7 +145,8 @@ app.on('window-all-closed', () => {
 /** 自动化演示（G3 取证）：open → submit → 等待 → history → screenshot → 写结果退出。 */
 async function runDemo(win: BrowserWindow, resultPath: string): Promise<void> {
   const fixtureDir = process.env.ZS_DEMO_DIR;
-  const demoRuntime = process.env.ZS_RUNTIME === 'codex' ? 'codex' : 'fake';
+  const rawDemo = process.env.ZS_RUNTIME ?? 'fake';
+  const demoRuntime = rawDemo === 'codex' || rawDemo === 'claude' ? rawDemo : 'fake';
   if (fixtureDir == null) throw new Error('ZS_UI_DEMO 需要 ZS_DEMO_DIR');
   const shotDir = process.env.ZS_DEMO_SHOTS ?? join(resultPath, '..');
   mkdirSync(shotDir, { recursive: true });
