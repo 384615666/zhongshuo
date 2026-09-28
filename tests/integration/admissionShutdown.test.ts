@@ -193,10 +193,53 @@ describe('统一派发准入', () => {
     db.close();
   }, 20_000);
 
-  it('⑤ 启动失败后槽位回收（startTurn 抛错 → catch 释放 → 后续可派发）', async () => {
+  it('⑤(启动失败-openSession) 不确定收尾：UNKNOWN+保留占位+live 不泄漏；他成员不受卡死', async () => {
     const scripts: FakeTurnScript[] = [];
     const db = openDatabase(':memory:');
-    const admission = new DispatchAdmission({ globalMaxInFlight: 1, perProjectMaxInFlight: 2, perProviderMaxInFlight: 2 });
+    const admission = new DispatchAdmission({ globalMaxInFlight: 2, perProjectMaxInFlight: 2, perProviderMaxInFlight: 2 });
+    const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => scripts.shift() ?? [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
+    let failFirstOpen = true;
+    const brokenOpen: RuntimeAdapter = {
+      probe: () => inner.probe(),
+      openSession: (i) => {
+        if (failFirstOpen) { failFirstOpen = false; return Promise.reject(new Error('openSession 注入失败（无法关闭从未拿到的会话——进程状态不确定）')); }
+        return inner.openSession(i);
+      },
+      startTurn: (s, i) => inner.startTurn(s, i),
+      events: (s) => inner.events(s),
+      steer: (s, i) => inner.steer(s, i),
+      interrupt: (s, t) => inner.interrupt(s, t),
+      respondApproval: (s, a, c) => inner.respondApproval(s, a, c),
+      close: (s) => inner.close(s),
+    };
+    const worker = new DispatchWorker({
+      db, adapter: brokenOpen, leaseOwner: 'w-openfail', detachedTurnConsumption: true,
+      admission, turnDeadlineMs: 8_000, appDataDir: join(tmpRoot, 'openfail'),
+    });
+    seedDirect(db, ['p1'], [{ id: 'mA', project: 'p1' }, { id: 'mB', project: 'p1' }]);
+    makeDirect(db, 1, 'mA', 'p1');
+    await expect(worker.runOnce()).rejects.toThrow(/openSession 注入失败/);
+    // 不确定（情形②）：UNKNOWN 收尾 + 保留占位（对账未定不提前放行）。
+    const turn = db.prepare("SELECT t.status AS turn_status, r.status AS run_status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.member_id = 'mA'").get() as { turn_status: string; run_status: string };
+    expect(turn.turn_status).toBe('UNKNOWN');
+    expect(turn.run_status).toBe('INTERRUPTED');
+    expect(admission.snapshot().global).toBe(1);
+    expect(await worker.requestStopAll()).toEqual([]); // live 未泄漏（失败的启动不留在停止名单）
+    const audit = db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'turn.startupFailed'`).get() as { payload_json: string };
+    expect(JSON.parse(audit.payload_json)).toMatchObject({ phase: 'openSession', classification: 'uncertain' });
+    // 他成员照常派发（占用是他成员不可见的——仅失败成员槽保留）。
+    scripts.push([{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }]);
+    makeDirect(db, 2, 'mB', 'p1');
+    await worker.runOnce();
+    await waitUntil(() => (db.prepare("SELECT status FROM tasks WHERE id = 'atk2'").get() as { status: string }).status === 'DONE', 4_000, '他成员完成');
+    expect(admission.snapshot().byMember).toEqual({ mA: 1 }); // mA 保留、mB 已释放
+    db.close();
+  }, 15_000);
+
+  it('⑤(启动失败-startTurn) 不确定收尾：UNKNOWN+保留占位（请求可能已被 runtime 接收）', async () => {
+    const scripts: FakeTurnScript[] = [];
+    const db = openDatabase(':memory:');
+    const admission = new DispatchAdmission({ globalMaxInFlight: 2, perProjectMaxInFlight: 2, perProviderMaxInFlight: 2 });
     const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => scripts.shift() ?? [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
     let failFirstStartTurn = true;
     const flaky: RuntimeAdapter = {
@@ -218,13 +261,44 @@ describe('统一派发准入', () => {
     });
     seedDirect(db, ['p1'], [{ id: 'mA', project: 'p1' }]);
     makeDirect(db, 1, 'mA', 'p1');
-    await expect(worker.runOnce()).rejects.toBeInstanceOf(Error); // 启动失败上抛
-    expect(admission.snapshot().global).toBe(0); // 槽位已回收
-    scripts.push([{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }]);
-    // outbox 留 leased 等租约重领（RT-03 对账）；此处直接验证准入不卡死：新任务可派发。
-    makeDirect(db, 2, 'mA', 'p1');
-    await worker.runOnce();
-    await waitUntil(() => (db.prepare("SELECT count(*) c FROM agent_turns WHERE status = 'SUCCEEDED'").get() as { c: number }).c === 1, 4_000, '后续派发成功');
+    await expect(worker.runOnce()).rejects.toBeInstanceOf(Error); // 启动失败上抛（信号不丢）
+    // startTurn 抛错=请求可能已发出（情形②）：UNKNOWN + 占位保留，不再直接放行。
+    expect((db.prepare("SELECT status FROM agent_turns WHERE member_id = 'mA'").get() as { status: string }).status).toBe('UNKNOWN');
+    expect(admission.snapshot().global).toBe(1);
+    expect(await worker.requestStopAll()).toEqual([]); // live 未泄漏
+    // outbox 留 leased 等租约重领（RT-03 对账）——本轮不重试（uncertain 不复活）。
+    db.close();
+  }, 15_000);
+
+  it('⑤(部分资源) 会话记录写入失败（会话已取得）→ 有界关闭确认 → 清理收尾+释放占位', async () => {
+    const db = openDatabase(':memory:');
+    const admission = new DispatchAdmission({ globalMaxInFlight: 2, perProjectMaxInFlight: 2, perProviderMaxInFlight: 2 });
+    const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
+    const dupId: RuntimeAdapter = {
+      probe: () => inner.probe(),
+      openSession: async (i) => ({ ...(await inner.openSession(i)), id: 'sess-dupe' } as SessionRef),
+      startTurn: (s, i) => inner.startTurn(s, i),
+      events: (s) => inner.events(s),
+      steer: (s, i) => inner.steer(s, i),
+      interrupt: (s, t) => inner.interrupt(s, t),
+      respondApproval: (s, a, c) => inner.respondApproval(s, a, c),
+      close: (s) => (s.id === 'sess-dupe' ? Promise.resolve() : inner.close(s)),
+    };
+    const worker = new DispatchWorker({
+      db, adapter: dupId, leaseOwner: 'w-dup', detachedTurnConsumption: true,
+      admission, turnDeadlineMs: 8_000, appDataDir: join(tmpRoot, 'dup'),
+    });
+    seedDirect(db, ['p1'], [{ id: 'mA', project: 'p1' }]);
+    // 预占 runtime_sessions 主键 → 会话记录 INSERT 约束失败（取得会话后、turn 启动前）。
+    db.prepare(`INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd) VALUES ('sess-dupe','p1','c_p1','task',NULL,'mA','atk1',0,'D:/x')`).run();
+    makeDirect(db, 1, 'mA', 'p1');
+    await expect(worker.runOnce()).rejects.toThrow(); // 主键冲突上抛（信号不丢）
+    const turn = db.prepare("SELECT t.status AS turn_status, r.status AS run_status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.member_id = 'mA'").get() as { turn_status: string; run_status: string };
+    expect(turn.turn_status).toBe('FAILED'); // 情形①：会话已确认关闭 → 清理收尾
+    expect(turn.run_status).toBe('FAILED');
+    expect(admission.snapshot().global).toBe(0); // 释放占位
+    const outboxRow = db.prepare('SELECT status FROM outbox').get() as { status: string };
+    expect(outboxRow.status).toBe('done'); // outbox 完结（不进入重试循环）
     db.close();
   }, 15_000);
 
@@ -402,7 +476,7 @@ describe('退出状态机', () => {
     await expect(startDaemon({ appDataDir: appdata, runtime: 'fake', pipeName: pipeNameFor('unc2') })).rejects.toThrow(/单实例锁/);
   }, 20_000);
 
-  it('消费器迟迟不结束 → incomplete；force 路径 → UNKNOWN 收尾后关库（forced-closed）', async () => {
+  it('消费器迟迟不结束 → incomplete；force 路径 → 杀进程+UNKNOWN 收尾**核对后**关库（forced-closed，complete=true）', async () => {
     const appdata = mkdtempSync(join(tmpRoot, 'sd-slow-'));
     // 不可中断 + 长停延：interrupt 无效、消费器等到单轮截止（300s）——stop 窗口内绝不收敛。
     const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'unresponsiveToInterrupt' }, { kind: 'stall', ms: 60_000 }] });
@@ -415,7 +489,8 @@ describe('退出状态机', () => {
     expect(graceful.phase).toBe('incomplete');
     expect(() => daemon.db.prepare('SELECT 1').get()).not.toThrow(); // 未关库
     const forced = await daemon.stop({ force: true });
-    expect(forced.complete).toBe(false);
+    // 强制路径核对通过（dispose 收拢+消费器 UNKNOWN 已落库+启动窗口收尾）→ 才关库，complete=true。
+    expect(forced.complete).toBe(true);
     expect(forced.phase).toBe('forced-closed');
     await new Promise((r) => setTimeout(r, 300));
     expect(() => daemon.db.prepare('SELECT 1').get()).toThrow(); // 已关库
@@ -423,6 +498,101 @@ describe('退出状态机', () => {
     const db2 = openDatabase(join(appdata, 'state.sqlite'));
     const turn = db2.prepare('SELECT status FROM agent_turns ORDER BY rowid DESC LIMIT 1').get() as { status: string };
     expect(turn.status).toBe('UNKNOWN');
+    const stopRec = JSON.parse((db2.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string }).value) as { phase: string };
+    expect(stopRec.phase).toBe('forced-closed');
     db2.close();
+  }, 25_000);
+
+  it('openSession 超过 drainSettle 后才返回 → graceful incomplete（drain/启动中派发计入判定）；晚返回按关闭状态清理', async () => {
+    const appdata = mkdtempSync(join(tmpRoot, 'sd-late-'));
+    const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
+    const daemon = await startDaemon({
+      appDataDir: appdata, runtime: 'fake', tickMs: 50, drainSettleTimeoutMs: 300,
+      testAdapter: new ControllableAdapter(inner, { openSessionDelayMs: 1_200 }), pipeName: pipeNameFor('5'),
+    });
+    const seed = seedForDaemon(daemon.db);
+    await submitViaPipe(daemon, seed, '晚返回任务');
+    await new Promise((r) => setTimeout(r, 100)); // drain 进入 openSession 窗口
+    const result = await daemon.stop();
+    // 判定时 drain 仍挂起 + 启动中的派发未收尾 → incomplete（旧版只查 inFlightTurns 会漏判）。
+    expect(result.complete).toBe(false);
+    expect(result.phase).toBe('incomplete');
+    expect(result.drainPending).toBe(true);
+    expect((result.startingRemaining ?? []).length).toBe(1);
+    expect(() => daemon.db.prepare('SELECT 1').get()).not.toThrow(); // 未关库
+    // 晚返回的 openSession 检查关闭状态：不启动 turn，按事实清理（CANCELLED + 会话关闭 + 占位释放）。
+    await waitUntil(() => {
+      const t = daemon.db.prepare('SELECT status FROM agent_turns ORDER BY rowid DESC LIMIT 1').get() as { status: string } | undefined;
+      return t?.status === 'CANCELLED';
+    }, 5_000, '晚返回清理为 CANCELLED');
+    const stopAudit = daemon.db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'turn.statusChanged' AND payload_json LIKE '%daemon-shutdown%'`).get() as { payload_json: string } | undefined;
+    expect(stopAudit).toBeDefined(); // 关闭原因入审计（含 sessionClose 结果）
+    // 不确定记录已实际持久化（重开连接可读——stderr 不算持久化）。
+    const db2 = openDatabase(join(appdata, 'state.sqlite'));
+    const rec = JSON.parse((db2.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string }).value) as { phase: string; reason: string };
+    expect(rec.phase).toBe('incomplete');
+    expect(rec.reason).toContain('drain 未收敛');
+    db2.close();
+  }, 25_000);
+
+  it('openSession 永不返回 → graceful 与 force 均 incomplete：不关库、不声称已杀完（崩溃语义现场保留）', async () => {
+    const appdata = mkdtempSync(join(tmpRoot, 'sd-hang-'));
+    const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
+    const hangOpen: RuntimeAdapter = {
+      probe: () => inner.probe(),
+      openSession: () => new Promise<SessionRef>(() => { /* 永不返回（真实反例：协议挂起） */ }),
+      startTurn: (s, i) => inner.startTurn(s, i),
+      events: (s) => inner.events(s),
+      steer: (s, i) => inner.steer(s, i),
+      interrupt: (s, t) => inner.interrupt(s, t),
+      respondApproval: (s, a, c) => inner.respondApproval(s, a, c),
+      close: (s) => inner.close(s),
+    };
+    const daemon = await startDaemon({ appDataDir: appdata, runtime: 'fake', tickMs: 50, drainSettleTimeoutMs: 300, testAdapter: hangOpen, pipeName: pipeNameFor('6') });
+    const seed = seedForDaemon(daemon.db);
+    await submitViaPipe(daemon, seed, '挂起任务');
+    await new Promise((r) => setTimeout(r, 120)); // drain 进入永不返回的 openSession
+    const graceful = await daemon.stop();
+    expect(graceful.complete).toBe(false);
+    expect(graceful.drainPending).toBe(true);
+    expect(graceful.startingRemaining?.length).toBe(1);
+    expect(() => daemon.db.prepare('SELECT 1').get()).not.toThrow(); // 未关库
+    const forced = await daemon.stop({ force: true });
+    // 强制路径核对：启动中的派发仍未收尾（openSession 挂起）→ 不关库、不释放锁，
+    // 如实返回 incomplete（宿主退出=崩溃语义；不得声称已确认杀完/落库）。
+    expect(forced.complete).toBe(false);
+    expect(forced.reason).toContain('强制路径仍未收敛');
+    expect(() => daemon.db.prepare('SELECT 1').get()).not.toThrow(); // 未关库
+    // 强制尝试的不确定对象已持久化（可被重启恢复读取）。
+    const db2 = openDatabase(join(appdata, 'state.sqlite'));
+    const rec = JSON.parse((db2.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string }).value) as { phase: string; reason: string; startingRemaining: string[] };
+    expect(rec.phase).toBe('forced-incomplete');
+    expect(rec.reason).toContain('启动中的派发未收尾');
+    expect(rec.startingRemaining.length).toBe(1);
+    // 重启恢复读取：applyRecovery 快照携带 stopRecord（上一次退出未收口）。
+    const { applyRecovery } = await import('../../src/daemon/stopFlow.ts');
+    const snapshot = applyRecovery(db2, Date.now());
+    expect(snapshot.stopRecord?.phase).toBe('forced-incomplete');
+    // 挂起窗口内的派发按恢复语义收 UNKNOWN（不伪造完成）。
+    expect(snapshot.unknownTurns).toBe(1);
+    db2.close();
+  }, 25_000);
+
+  it('dispose 挂起不返回 → 有界收拢合成失败项 → incomplete（不无限等待）', async () => {
+    const appdata = mkdtempSync(join(tmpRoot, 'sd-dispose-'));
+    const inner = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } }] });
+    const hangDispose: RuntimeAdapter = Object.create(inner) as RuntimeAdapter;
+    (hangDispose as unknown as { dispose: () => Promise<void> }).dispose = () => new Promise<void>(() => { /* 永不返回 */ });
+    const daemon = await startDaemon({ appDataDir: appdata, runtime: 'fake', tickMs: 50, drainSettleTimeoutMs: 400, testAdapter: hangDispose, pipeName: pipeNameFor('7') });
+    const seed = seedForDaemon(daemon.db);
+    await submitViaPipe(daemon, seed, '收拢挂起任务');
+    await waitUntil(() => (daemon.db.prepare('SELECT count(*) c FROM agent_turns').get() as { c: number }).c === 1, 4_000, '已派发');
+    const started = Date.now();
+    const result = await daemon.stop();
+    expect(result.complete).toBe(false);
+    expect(result.disposeReport?.failed.length).toBe(1);
+    expect(result.disposeReport?.failed[0]?.error).toContain('收拢超时');
+    expect(Date.now() - started).toBeLessThan(15_000); // 有界等待（settleMs=400 两轮 + settlement）
+    expect(() => daemon.db.prepare('SELECT 1').get()).not.toThrow(); // 未关库
   }, 25_000);
 });

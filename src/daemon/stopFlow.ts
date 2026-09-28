@@ -116,6 +116,8 @@ export interface RecoverySnapshot {
   unknownTurns: number;
   requeuedOutbox: number;
   heldLeases: Array<{ lockDomain: string; ownerTurnId: string; status: string }>;
+  /** 上一次 daemon 停止记录（daemon:stop:last——上次退出未收口时的恢复依据，2026-09-28 第五轮）。 */
+  stopRecord: { at: number; phase: string; reason?: string; drainPending?: boolean } | null;
 }
 
 /**
@@ -147,10 +149,21 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
     const pendingOutbox = (db
       .prepare(`SELECT count(*) c FROM outbox WHERE status = 'pending'`)
       .get() as { c: number }).c;
+    // 上次退出的不确定记录（实际持久化在 daemon_state——重启可读，stderr 不算持久化）。
+    let stopRecord: RecoverySnapshot['stopRecord'] = null;
+    const stopRow = db.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string } | undefined;
+    if (stopRow != null) {
+      try {
+        const parsed = JSON.parse(stopRow.value) as { at?: number; phase?: string; reason?: string; drainPending?: boolean };
+        if (typeof parsed.at === 'number' && typeof parsed.phase === 'string') {
+          stopRecord = { at: parsed.at, phase: parsed.phase, reason: parsed.reason, drainPending: parsed.drainPending };
+        }
+      } catch { /* 损坏记录不阻断恢复 */ }
+    }
     const gateNeeded =
       interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0 || pendingOutbox > 0;
     if (gateNeeded) holdDispatchGate(db, now);
-    return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases };
+    return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases, stopRecord };
   });
   return tx();
 }

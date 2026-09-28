@@ -30,11 +30,17 @@ global（ZS_MAX_INFLIGHT_GLOBAL=4）/ project（=2）/ provider=runtime kind（=
 disposeReport, inFlightRemaining, reason}`）：停 tick→**worker.stopAccepting()（drain 安全边界
 拒新领取）**→IPC 关→drain 有界收敛→**requestStopAll（对在途发停止请求，请求≠确认）**→
 disposeAll（杀+等退出确认，失败/未确认汇总不吞）→awaitInFlightTurns（消费器写库收敛）→
-**仅零后台写库确认后关库+释放锁**；超时=**incomplete：不关库、不释放锁**（单实例锁≠子进程退出；
-恢复依据=崩溃恢复语义 WAL+applyRecovery）——修正了原"只写日志仍关库"路径。**强制路径另行定义**
-（`stop({force:true})`，幂等）：杀进程→**abortConsumers**（消费器循环内检测+200ms 轮询粒度→
-按既有 UNKNOWN 语义收尾写库后退出——保证关库后零回调写库）→关库+释放锁→
-{complete:false, phase:'forced-closed'}。standalone 入口按结果区分退出码（0/3）。
+收敛确认后关库+释放锁；超时=**incomplete：不关库、不释放锁**（单实例锁≠子进程退出；
+恢复依据=崩溃恢复语义 WAL+applyRecovery）——修正了原"只写日志仍关库"路径。
+
+> **第五轮更正（2026-09-28，见 round-20260928-admission-exit-hardening.md）**：本节原表述
+> 有两处超出证据：①「零后台写库确认」当时只检查了 inFlightTurns（消费器）——晚返回的
+> openSession/startTurn 所在启动窗口不在其内，drain 超时也未计入最终判定；②强制路径原文
+> 「杀进程→abortConsumers→……保证关库后零回调写库→关库+释放锁→{complete:false,
+> phase:'forced-closed'}」——实际实现吞掉 disposeAll 结果、忽略 awaitInFlightTurns 返回值
+> 即直接关库，「零回调写库」与「已杀进程」均未核对即声称。两处已在第五轮收口：关闭判定
+> 覆盖 startingTurns+inFlightTurns+drain 挂起；force 路径核对收拢/消费器/启动窗口结果，
+> 全收敛才关库（complete:true）否则 incomplete 不关库（崩溃语义现场保留）。
 
 本地反例（可控 adapter/慢窗口/不可中断脚本，全过）：drain 打开 session 窗口退出不崩；多 detached
 在途退出+**关闭期间到达完成事件正常落库**（关库后重开 DB 证明持久化）；adapter 退出未确认→
@@ -53,11 +59,19 @@ force→UNKNOWN 收尾后关库（重开 DB 验证 UNKNOWN 持久化）；重复
 
 ## 4. 线程工具审计呈现（服务端+renderer）
 
+> **第五轮更正（2026-09-28）**：本节原文两处口径已收紧——①「同 toolCallId 去重」在跨
+> turn 场景会把不同 turn/成员的同名 toolCallId 错并成一张卡，第五轮改为
+> **turnId+toolCallId 作用域键**（started 取首/completed 取末，结果与时间取自同一条选定
+> 事件；身份不完整保留为未归属条目，不按时间戳合并）；②「无参数正文落库=无泄露面」改为
+> 准确字段范围说明：**查询面返回 toolCallId/toolName/outcome/eventKey/成员与 turn 归属**
+> ——工具参数正文不落库（worker 审计不含参数），错误等其他可显示字段按既有脱敏规则处理。
+> CDP 级 UI 断言已随第五轮补齐（见 round-20260928-admission-exit-hardening.md §3）。
+
 - 命令 `thread.toolCalls`（commands.ts）：**真源=worker 落库的 tool.started/tool.completed 审计
   （domain_events）**，不从模型 executedVerifications 自述生成；按线程→task 限定（切换任务/房间/
   项目不串记录）；同 toolCallId 迟到/重复事件去重（started 取首/completed 取末）；返回
   memberId（turn 归属）/turnId/toolName/outcome（success/failure/unknown/进行中）/时间/eventKey
-  关联；**无参数正文/凭据落库=无泄露面**（审计 payload 仅 id/名称/结果键）。
+  关联（审计 payload 仅 id/名称/结果键）。
 - renderer（renderThread 尾部只读区块"工具调用记录"）：成员/工具名/结果/时间/toolCallId，
   title 携带 turn+eventKeys——**线程信息组织内追加，不新增抢占主界面的监控页**。
 - 验证（零额度）：集成用例（fake tool 事件→worker 审计→命令查询）：单卡去重（重复 completed

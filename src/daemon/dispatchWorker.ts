@@ -19,7 +19,7 @@ import { claimNextOutbox, completeOutbox, failOutbox, releaseOutbox } from '../p
 import type { OutboxRow } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { isDispatchGateHeld } from '../persistence/daemonState.ts';
-import type { RuntimeAdapter, NormalizedRuntimeEvent } from '../contracts/runtime.ts';
+import type { RuntimeAdapter, NormalizedRuntimeEvent, SessionRef } from '../contracts/runtime.ts';
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
@@ -130,6 +130,13 @@ export class DispatchWorker {
   private accepting = true;
   /** 强制退出路径：消费器循环检测后按 UNKNOWN 收尾退出（保证关库后零回调写库）。 */
   private aborting = false;
+  /** 关闭状态机已启动（stopAccepting）：启动窗口内晚返回的 openSession 不得继续正常启动下一步。 */
+  private shutdownStarted = false;
+  /**
+   * 启动窗口登记（准入占位后 → 消费器登记/启动收尾）：晚返回的 openSession/startTurn
+   * 既不在 live 也不在 inFlightTurns——不登记则 stop 收敛对启动中的派发不可见。
+   */
+  private readonly startingTurns = new Map<string, { memberId: string; projectId: string }>();
   private readonly inFlightTurns = new Map<string, {
     memberId: string;
     promise: Promise<void>;
@@ -359,106 +366,102 @@ export class DispatchWorker {
       return;
     }
 
-    const createRun = this.db.transaction(() => {
-      this.db.prepare(
-        `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
-         VALUES (?, ?, ?, ?, 'DIRECT', 0, 'RUNNING', ?)`,
-      ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, JSON.stringify(budget));
-      this.db.prepare(
-        `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
-      ).run(runId, member.id);
-      this.db.prepare(
-        `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch)
-         VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1)`,
-      ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key);
-      this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
-      // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
-      this.db.prepare(
-        `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
-         VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
-      ).run(assembled.value.bundleId, turnId, task.conversation_thread_id, JSON.stringify(assembled.value.envelope), assembled.value.hash);
-      this.transitionTask(task.id, 'ACTIVE');
-      this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
-    });
-    createRun();
-
-    // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
-    const draftDir = join(this.appDataDir, 'drafts', task.project_id);
-    const standing = renderStandingPrompt({
-      conversationKind: conversationKind ?? 'room',
-      vars: {
-        memberId: member.id,
-        memberDisplayName: member.display_name,
-        projectId: project.id,
-        projectName: project.display_name,
-        roomId: task.room_id,
-        roomName: room?.name ?? '未命名房间',
-        threadId: task.conversation_thread_id,
-        taskId: task.id,
-        workspacePath: project.canonical_path,
-        draftDir,
-      },
-    });
-    if (!standing.ok) {
-      await this.transitionTask(task.id, 'BLOCKED');
-      this.audit(task, null, null, 'task.contextAssemblyFailed', {
-        reason: 'standing-prompt-render-failed',
-        message: standing.error.message,
-      });
-      this.releaseAdmission(turnId);
-      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
-    if (scanSensitivePatterns(standing.value.text).length > 0) {
-      await this.transitionTask(task.id, 'BLOCKED');
-      this.audit(task, null, null, 'task.contextAssemblyFailed', { reason: 'sensitive-standing-prompt', message: '层 A 渲染命中敏感模式（PP-03）' });
-      this.releaseAdmission(turnId);
-      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
-
-    // 会话：任务/成员/generation 维度（§13.4）；adapter 按成员 runtime 绑定选择（DEV-10）。
-    const adapter = this.adapterOf(member.id);
-    const generation = this.db
-      .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
-      .get(member.id, task.conversation_id) as { c: number };
-    const session = await adapter.openSession({
-      projectId: task.project_id,
-      memberId: member.id,
-      taskId: task.id,
-      threadId: task.conversation_thread_id,
-      sessionGeneration: generation.c,
-      cwd: project.canonical_path,
-      policyId: 'policy-analyze',
-      developerInstructions: standing.value.text,
-      promptVersion: standing.value.version,
-    });
-    this.db.prepare(
-      `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
-       VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
-    ).run(
-      session.id, task.project_id, task.conversation_id, task.conversation_thread_id,
-      member.id, task.id, generation.c, project.canonical_path,
-    );
-
-    // 会话打开竞态复查（修复轮）：停止/终态在 openSession await 期间生效 → 不启动 turn。
-    if (this.stoppingOrTerminal(task.id, turnId)) {
-      await adapter.close(session);
-      const cancel = this.db.transaction(() => {
-        this.casTurn(turnId, 'CANCELLED');
-        this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
-        this.transitionTask(task.id, 'CANCELLED');
-        this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-during-session-open' });
-      });
-      cancel();
-      this.releaseAdmission(turnId);
-      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
-
-    this.live.set(turnId, { turnId, sessionId: session.id, adapter });
-
+    // 启动窗口登记（准入后整个启动过程入统一生命周期）：createRun 记录写入 → 常驻提示词 →
+    // openSession → 会话记录 → startTurn → 消费器登记。任何一步失败按两分类收尾
+    // （settleStartupFailure：确认未启动=清理+释放；不确定=UNKNOWN+保留占位+对账）。
+    this.startingTurns.set(turnId, { memberId: member.id, projectId: task.project_id });
+    let startupPhase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn' = 'records';
+    let openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null;
     try {
+      const createRun = this.db.transaction(() => {
+        this.db.prepare(
+          `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
+           VALUES (?, ?, ?, ?, 'DIRECT', 0, 'RUNNING', ?)`,
+        ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, JSON.stringify(budget));
+        this.db.prepare(
+          `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
+        ).run(runId, member.id);
+        this.db.prepare(
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch)
+           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1)`,
+        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key);
+        this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
+        // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
+        this.db.prepare(
+          `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
+           VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
+        ).run(assembled.value.bundleId, turnId, task.conversation_thread_id, JSON.stringify(assembled.value.envelope), assembled.value.hash);
+        this.transitionTask(task.id, 'ACTIVE');
+        this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
+      });
+      createRun();
+
+      // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
+      startupPhase = 'standing-prompt';
+      const draftDir = join(this.appDataDir, 'drafts', task.project_id);
+      const standing = renderStandingPrompt({
+        conversationKind: conversationKind ?? 'room',
+        vars: {
+          memberId: member.id,
+          memberDisplayName: member.display_name,
+          projectId: project.id,
+          projectName: project.display_name,
+          roomId: task.room_id,
+          roomName: room?.name ?? '未命名房间',
+          threadId: task.conversation_thread_id,
+          taskId: task.id,
+          workspacePath: project.canonical_path,
+          draftDir,
+        },
+      });
+      if (!standing.ok) throw new Error(`standing-prompt-render-failed: ${standing.error.message}`);
+      if (scanSensitivePatterns(standing.value.text).length > 0) throw new Error('sensitive-standing-prompt: 层 A 渲染命中敏感模式（PP-03）');
+
+      // 会话：任务/成员/generation 维度（§13.4）；adapter 按成员 runtime 绑定选择（DEV-10）。
+      startupPhase = 'openSession';
+      const adapter = this.adapterOf(member.id);
+      const generation = this.db
+        .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
+        .get(member.id, task.conversation_id) as { c: number };
+      const session = await adapter.openSession({
+        projectId: task.project_id,
+        memberId: member.id,
+        taskId: task.id,
+        threadId: task.conversation_thread_id,
+        sessionGeneration: generation.c,
+        cwd: project.canonical_path,
+        policyId: 'policy-analyze',
+        developerInstructions: standing.value.text,
+        promptVersion: standing.value.version,
+      });
+      openedSession = { adapter, session };
+      startupPhase = 'session-record';
+      this.db.prepare(
+        `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
+         VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
+      ).run(
+        session.id, task.project_id, task.conversation_id, task.conversation_thread_id,
+        member.id, task.id, generation.c, project.canonical_path,
+      );
+
+      // 会话打开竞态复查（修复轮）+ 关闭状态检查（第五轮）：停止/终态/daemon 关闭在
+      // openSession await 期间生效 → 不启动 turn（情形①：turn 从未交给 runtime）。
+      if (this.stoppingOrTerminal(task.id, turnId) || this.shutdownStarted) {
+        const closeOutcome = await this.closeSessionBounded(adapter, session);
+        const cancel = this.db.transaction(() => {
+          this.casTurn(turnId, 'CANCELLED');
+          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
+          this.transitionTask(task.id, 'CANCELLED');
+          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: this.shutdownStarted ? 'daemon-shutdown-during-session-open' : 'stop-during-session-open', sessionClose: closeOutcome });
+        });
+        cancel();
+        this.releaseAdmission(turnId);
+        await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+
+      this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+      startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
@@ -472,16 +475,80 @@ export class DispatchWorker {
       // detached：consumeTurn 已登记消费器并返回（live/outbox 完结由消费器收尾）；
       // inline：此处返回时 turn 已终态、outbox 已完结。
     } catch (dispatchError) {
-      // 启动失败（openSession/startTurn 抛错）：槽位回收（detached 消费器未登记，须在此释放；
-      // inline 由下方 finally 兜底）。outbox 留待租约超时重领→existingTurn 对账（RT-03）。
-      if (this.detached) this.releaseAdmission(turnId);
+      // 启动失败统一收尾（第五轮：openSession/startTurn/记录写入全覆盖，两分类——
+      // 确认未启动=清理+释放占位；不确定=UNKNOWN+保留占位+对账要求）。
+      await this.settleStartupFailure(task, runId, turnId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
       throw dispatchError;
     } finally {
       if (!this.detached) {
         this.live.delete(turnId); // detached：消费器 finally 删（停止请求须可达）
         this.releaseAdmission(turnId); // inline：终态/启动失败统一回收（幂等——consumeTurn 已释放则 no-op）
       }
+      this.startingTurns.delete(turnId); // 成功路径消费器登记时已删（幂等）；失败路径在此兜底
     }
+  }
+
+  /**
+   * DIRECT 启动失败收尾（统一生命周期，2026-09-28 第五轮）——两分类：
+   * ① 确认没有启动执行、没有遗留活动进程（记录写入/常驻提示词失败——runtime 从未被调用；
+   *    或会话记录写入失败且会话确认关闭）：终态 FAILED、释放占位、outbox 完结、任务回 ACTIVE/BLOCKED；
+   * ② 请求可能已被 runtime 接收或进程状态不确定（openSession 抛错——无法关闭从未拿到的会话；
+   *    startTurn 抛错——请求可能已发出；会话记录失败且关闭未确认）：UNKNOWN 收尾（持久化
+   *    不确定状态）、保留准入占位（不提前放行）、outbox 留待租约超时重领 → existingTurn
+   *    对账（RT-03）。均留审计后上抛原错误（drain 记日志，信号不丢）。
+   */
+  private async settleStartupFailure(
+    task: TaskRow, runId: string, turnId: string,
+    outbox: { id: number; attemptEpoch: number },
+    phase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn',
+    error: unknown,
+    openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null,
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const finishUncertain = (note: string): void => {
+      // ② 不确定：UNKNOWN（settleUnknown 含 DIRECT run→INTERRUPTED/审计）；live 清理
+      // （未登记消费器）；可能残留的进程由 stop 状态机的 adapter 级 dispose 收拢。
+      this.settleUnknown(task, runId, turnId, `startup-failed-${phase}`);
+      this.audit(task, runId, turnId, 'turn.startupFailed', {
+        phase, message: message.slice(0, 200), classification: 'uncertain', note,
+      });
+      this.live.delete(turnId);
+      this.releaseAdmission(turnId); // UNKNOWN → 不释放（releaseAdmission 自查）
+    };
+    if (phase === 'openSession' || phase === 'startTurn') {
+      finishUncertain('准入占位保留（UNKNOWN 语义）；outbox 留待租约重领对账（RT-03）');
+      return;
+    }
+    if (phase === 'session-record') {
+      // 部分资源（会话）已取得、turn 未启动：有界关闭——确认关闭 → ① 清理收尾；未确认 → ② 不确定。
+      const closeOutcome = openedSession != null
+        ? await this.closeSessionBounded(openedSession.adapter, openedSession.session)
+        : 'close-failed' as const;
+      if (closeOutcome !== 'closed') {
+        finishUncertain(`会话关闭未确认（${closeOutcome}）——保留占位待对账`);
+        return;
+      }
+      const tx = this.db.transaction(() => {
+        this.casTurn(turnId, 'FAILED');
+        this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
+        this.transitionTask(task.id, 'ACTIVE');
+        this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started', sessionClose: closeOutcome });
+      });
+      tx();
+      this.releaseAdmission(turnId);
+      try { await completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* db 故障时尽力而为 */ }
+      return;
+    }
+    // ① 确认未启动（记录写入/常驻提示词失败——runtime 从未被调用）：终态 FAILED + 释放占位 + outbox 完结。
+    const tx = this.db.transaction(() => {
+      this.casTurn(turnId, 'FAILED');
+      this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
+      this.transitionTask(task.id, phase === 'standing-prompt' ? 'BLOCKED' : 'ACTIVE');
+      this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started' });
+    });
+    tx();
+    this.releaseAdmission(turnId);
+    try { await completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* db 故障时尽力而为（异常上抛保留信号） */ }
   }
 
   /**
@@ -495,6 +562,7 @@ export class DispatchWorker {
     memberId: string, outbox: { id: number; attemptEpoch: number },
   ): Promise<void> {
     if (!this.detached) {
+      this.startingTurns.delete(turnId); // 启动窗口结束（inline 消费阻塞 drain——drainPending 兜底）
       try {
         await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
       } finally {
@@ -528,6 +596,7 @@ export class DispatchWorker {
     }, Math.max(1_000, Math.floor(this.leaseMs / 2)));
     leaseKeeper.unref?.();
     this.inFlightTurns.set(turnId, { memberId, promise, outbox, leaseKeeper });
+    this.startingTurns.delete(turnId); // 启动窗口结束（消费器已登记——stop 收敛改看 inFlightTurns）
   }
 
   /**
@@ -549,6 +618,7 @@ export class DispatchWorker {
   /** 停止接新派发（退出状态机：drain 安全边界——正在执行的当前项继续，不再领取新项）。 */
   stopAccepting(): void {
     this.accepting = false;
+    this.shutdownStarted = true;
   }
 
   /** 中止全部消费器（强制退出路径专用）：循环内检测→按既有 UNKNOWN 语义收尾后退出。 */
@@ -580,6 +650,43 @@ export class DispatchWorker {
         Promise.allSettled(entries.map(([, e]) => e.promise)),
         new Promise((r) => { const t = setTimeout(r, Math.min(500, Math.max(1, deadline - Date.now()))); t.unref?.(); }),
       ]);
+    }
+  }
+
+  /**
+   * stop 收敛（graceful/force 共用，2026-09-28 第五轮）：同时覆盖「启动中的派发」
+   * （startingTurns——晚返回的 openSession 尚未登记 live/消费器）与「运行中的消费器」；
+   * 超时返回剩余（不确定，不假装完成）。
+   */
+  async awaitSettlement(timeoutMs = 10_000): Promise<{ remaining: Array<{ turnId: string; phase: 'starting' | 'consuming' }> }> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = [
+        ...[...this.startingTurns.keys()].map((turnId) => ({ turnId, phase: 'starting' as const })),
+        ...[...this.inFlightTurns.keys()].map((turnId) => ({ turnId, phase: 'consuming' as const })),
+      ];
+      if (remaining.length === 0) return { remaining: [] };
+      if (Date.now() > deadline) return { remaining };
+      await Promise.race([
+        Promise.allSettled([...this.inFlightTurns.values()].map((e) => e.promise)),
+        new Promise((r) => { const t = setTimeout(r, Math.min(200, Math.max(1, deadline - Date.now()))); t.unref?.(); }),
+      ]);
+    }
+  }
+
+  /** 有界关闭会话（启动窗口取消/失败清理）：close 可能挂起——限时返回结果，不假装已关闭。 */
+  private async closeSessionBounded(adapter: RuntimeAdapter, session: SessionRef, timeoutMs = 2_000): Promise<'closed' | 'close-failed' | 'close-timeout'> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        adapter.close(session).then(() => 'closed' as const),
+        new Promise<'close-timeout'>((r) => { timer = setTimeout(() => r('close-timeout'), timeoutMs); }),
+      ]);
+      return outcome;
+    } catch {
+      return 'close-failed';
+    } finally {
+      if (timer != null) clearTimeout(timer);
     }
   }
 
@@ -659,81 +766,88 @@ export class DispatchWorker {
       this.audit(task, run.id, null, 'run.admissionDeferred', { reason: admission.reason, dispatchKey: claimed.dispatch_key });
       return;
     }
-    const textHash = createHash('sha256').update(assembly.value.text, 'utf8').digest('hex');
-    const bundleId = `cb_${randomUUID()}`;
-    const createTurn = this.db.transaction(() => {
-      this.db.prepare(
-        `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1)`,
-      ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key);
-      this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
-      this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
-      this.db.prepare(
-        `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
-         VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
-      // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
-      ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text }), textHash);
-      if (task.status === 'PENDING') this.transitionTask(task.id, 'ACTIVE');
-    });
-    createTurn();
 
-    const standing = renderStandingPrompt({
-      conversationKind: 'room',
-      vars: {
-        memberId: member.id,
-        memberDisplayName: member.display_name,
-        projectId: project.id,
-        projectName: project.display_name,
-        roomId: task.room_id,
-        roomName: room?.name ?? '未命名房间',
-        threadId: task.conversation_thread_id,
-        taskId: task.id,
-        workspacePath: project.canonical_path,
-        draftDir: join(this.appDataDir, 'drafts', task.project_id),
-      },
-    });
-    if (!standing.ok || scanSensitivePatterns(standing.value.text).length > 0) {
-      this.releaseAdmission(turnId);
-      await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'standing-prompt-invalid' });
-      return;
-    }
-    const adapter = this.adapterOf(step.memberId);
-    const generation = this.db
-      .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
-      .get(step.memberId, task.conversation_id) as { c: number };
-    const session = await adapter.openSession({
-      projectId: task.project_id,
-      memberId: step.memberId,
-      taskId: task.id,
-      threadId: task.conversation_thread_id,
-      sessionGeneration: generation.c,
-      cwd: project.canonical_path,
-      policyId: 'policy-analyze',
-      developerInstructions: standing.value.text,
-      promptVersion: standing.value.version,
-    });
-    this.db.prepare(
-      `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
-       VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
-    ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path);
-
-    if (this.stoppingOrTerminal(task.id, turnId)) {
-      await adapter.close(session);
-      const cancel = this.db.transaction(() => {
-        this.casTurn(turnId, 'CANCELLED');
-        this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(run.id);
-        this.transitionTask(task.id, 'CANCELLED');
-        this.audit(task, run.id, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-during-session-open' });
-      });
-      cancel();
-      this.releaseAdmission(turnId);
-      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
-
-    this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+    // 启动窗口登记（与 DIRECT 同一生命周期；失败分类见 settleDelibStartupFailure）。
+    this.startingTurns.set(turnId, { memberId: step.memberId, projectId: task.project_id });
+    let startupPhase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn' = 'records';
+    let openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null;
     try {
+      const textHash = createHash('sha256').update(assembly.value.text, 'utf8').digest('hex');
+      const bundleId = `cb_${randomUUID()}`;
+      const createTurn = this.db.transaction(() => {
+        this.db.prepare(
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1)`,
+        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key);
+        this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
+        this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
+        this.db.prepare(
+          `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
+           VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
+        // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
+        ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text }), textHash);
+        if (task.status === 'PENDING') this.transitionTask(task.id, 'ACTIVE');
+      });
+      createTurn();
+
+      startupPhase = 'standing-prompt';
+      const standing = renderStandingPrompt({
+        conversationKind: 'room',
+        vars: {
+          memberId: member.id,
+          memberDisplayName: member.display_name,
+          projectId: project.id,
+          projectName: project.display_name,
+          roomId: task.room_id,
+          roomName: room?.name ?? '未命名房间',
+          threadId: task.conversation_thread_id,
+          taskId: task.id,
+          workspacePath: project.canonical_path,
+          draftDir: join(this.appDataDir, 'drafts', task.project_id),
+        },
+      });
+      if (!standing.ok) throw new Error(`standing-prompt-render-failed: ${standing.error.message}`);
+      if (scanSensitivePatterns(standing.value.text).length > 0) throw new Error('sensitive-standing-prompt: 层 A 渲染命中敏感模式（PP-03）');
+
+      startupPhase = 'openSession';
+      const adapter = this.adapterOf(step.memberId);
+      const generation = this.db
+        .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
+        .get(step.memberId, task.conversation_id) as { c: number };
+      const session = await adapter.openSession({
+        projectId: task.project_id,
+        memberId: step.memberId,
+        taskId: task.id,
+        threadId: task.conversation_thread_id,
+        sessionGeneration: generation.c,
+        cwd: project.canonical_path,
+        policyId: 'policy-analyze',
+        developerInstructions: standing.value.text,
+        promptVersion: standing.value.version,
+      });
+      openedSession = { adapter, session };
+      startupPhase = 'session-record';
+      this.db.prepare(
+        `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
+         VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
+      ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path);
+
+      if (this.stoppingOrTerminal(task.id, turnId) || this.shutdownStarted) {
+        const closeOutcome = await this.closeSessionBounded(adapter, session);
+        const cancel = this.db.transaction(() => {
+          this.casTurn(turnId, 'CANCELLED');
+          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(run.id);
+          this.transitionTask(task.id, 'CANCELLED');
+          this.audit(task, run.id, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: this.shutdownStarted ? 'daemon-shutdown-during-session-open' : 'stop-during-session-open', sessionClose: closeOutcome });
+        });
+        cancel();
+        this.releaseAdmission(turnId);
+        await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+
+      this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+      startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
@@ -745,14 +859,68 @@ export class DispatchWorker {
       });
       await this.consumeTurn(task, run.id, turnId, session.id, adapter, step.memberId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
     } catch (dispatchError) {
-      if (this.detached) this.releaseAdmission(turnId); // 启动失败回收（inline 由 finally 兜底）
+      await this.settleDelibStartupFailure(task, run.id, turnId, step, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
       throw dispatchError;
     } finally {
       if (!this.detached) {
         this.live.delete(turnId);
         this.releaseAdmission(turnId); // inline：终态/启动失败统一回收（幂等）
       }
+      this.startingTurns.delete(turnId); // 成功路径消费器登记时已删（幂等）；失败路径在此兜底
     }
+  }
+
+  /**
+   * DELIB 启动失败收尾（与 DIRECT 同一分类纪律，2026-09-28 第五轮）：
+   * ① 确认未启动（记录写入/常驻提示词/会话记录失败且会话确认关闭）：turn FAILED + 预算结算
+   *    + 成员标 failed（run 继续——泵推进缺席/修复路径）+ 释放占位；
+   * ② 不确定（openSession/startTurn 抛错、会话关闭未确认）：UNKNOWN + 成员 absent（run 继续）
+   *    + 保留占位 + outbox 留待租约重领对账（RT-03）。
+   */
+  private async settleDelibStartupFailure(
+    task: TaskRow, runId: string, turnId: string, step: DelibStep,
+    outbox: { id: number; attemptEpoch: number },
+    phase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn',
+    error: unknown,
+    openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null,
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const finishConfirmed = (extra: Record<string, unknown>): void => {
+      const tx = this.db.transaction(() => {
+        this.casTurn(turnId, 'FAILED');
+        this.settleDelibBudget(runId);
+        this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, step.memberId);
+        this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started', ...extra });
+      });
+      tx();
+      this.releaseAdmission(turnId);
+      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+    };
+    const finishUncertain = (note: string): void => {
+      // settleUnknown 的 delib.* 分支：成员 absent、run 继续、泵推进。
+      this.settleUnknown(task, runId, turnId, `startup-failed-${phase}`);
+      this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'uncertain', note });
+      this.live.delete(turnId);
+      this.releaseAdmission(turnId); // UNKNOWN → 不释放
+    };
+    if (phase === 'openSession' || phase === 'startTurn') {
+      finishUncertain('准入占位保留（UNKNOWN 语义）；outbox 留待租约重领对账（RT-03）');
+      return;
+    }
+    if (phase === 'session-record') {
+      const closeOutcome = openedSession != null
+        ? await this.closeSessionBounded(openedSession.adapter, openedSession.session)
+        : 'close-failed' as const;
+      if (closeOutcome !== 'closed') {
+        finishUncertain(`会话关闭未确认（${closeOutcome}）——保留占位待对账`);
+        return;
+      }
+      finishConfirmed({ sessionClose: closeOutcome });
+      try { await completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 尽力而为 */ }
+      return;
+    }
+    finishConfirmed({});
+    try { await completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 尽力而为 */ }
   }
 
   /** 审批/等待暂停累计（E4：暂停不计入成员执行时间）。M1 研讨路径未接审批桥——
