@@ -98,6 +98,9 @@ export function simulateDeliberationTurn(text: string): FakeTurnScript {
       responses: unique.map((claimId) => ({ claimId, stance: 'confirm' })),
     });
   }
-  // 非研讨输入（含 DIRECT TaskComplete 契约）：通用成功。
-  return [{ kind: 'event', event: { kind: 'turn.completed', finalText: JSON.stringify({ schemaVersion: 'task-complete-v1' }) } }];
+  // 非研讨输入（含 DIRECT TaskComplete 契约）：通用合法 TaskComplete（DIRECT 全链可走通）。
+  return [{ kind: 'event', event: { kind: 'turn.completed', finalText: JSON.stringify({
+    schemaVersion: 'task-complete-v1', resultKey: '__RESULTKEY__', changeSummary: '模拟完成', files: [],
+    executedVerifications: [], unexecutedVerifications: [], remainingIssues: [],
+  }) } }];
 }

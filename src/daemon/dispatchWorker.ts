@@ -702,12 +702,25 @@ export class DispatchWorker {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
     if (turnMeta?.stage_key != null && turnMeta.stage_key.startsWith('delib.')) {
-      // E4 执行时钟：turn.started 起算（审批/等待输入暂停在状态迁移处累计）。
+      // E4 执行时钟：turn.started 起算；审批/等待输入暂停在状态迁移处累计（生产接线）。
       if (event.kind === 'turn.started') {
         this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
       }
-      if (event.kind === 'approval.requested') {
-        this.db.prepare("UPDATE agent_turns SET status = 'WAITING_APPROVAL' WHERE id = ? AND status = 'RUNNING'").run(turnId);
+      if (event.kind === 'approval.requested' || event.kind === 'input.requested') {
+        // 暂停起点（kv）；等待审批/输入期间不计入有效执行时间。
+        const waitKey = `delib:pause:${turnId}`;
+        if (this.kvGet(waitKey) == null) this.kvSet(waitKey, String(this.clock()));
+        this.db.prepare('UPDATE agent_turns SET status = ? WHERE id = ? AND status = ?').run(event.kind === 'approval.requested' ? 'WAITING_APPROVAL' : 'WAITING_INPUT', turnId, 'RUNNING');
+      } else {
+        // 非 wait 事件到达=暂停结束（审批已处理/输入已续）：结算累计并回 RUNNING。
+        const waitKey = `delib:pause:${turnId}`;
+        const pauseStart = this.kvGet(waitKey);
+        if (pauseStart != null) {
+          this.accumulateApprovalPause(turnId, this.clock() - Number(pauseStart));
+          this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(waitKey);
+          const st = (this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string }).status;
+          if (st === 'WAITING_APPROVAL' || st === 'WAITING_INPUT') this.casTurn(turnId, 'RUNNING');
+        }
       }
       this.applyDeliberationTerminal(task, runId, turnId, turnMeta.dispatch_key ?? '', event);
       return;

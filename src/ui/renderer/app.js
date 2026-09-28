@@ -34,8 +34,9 @@ const state = {
   openAnchorText: null,
   // 最近一次 task.get 结果（停止按钮的 runId/停止代次来源）。
   openTaskSnapshot: null,
-  // 双视图草稿独立（R4）：{ text, mention } 各一份；recordOnly 是一次性意图，不属草稿。
-  drafts: { pool: { text: '', mention: '' }, thread: { text: '', mention: '' } },
+  // 草稿独立（R4+建房轮）：按「房间:视图」双键——切房间/切视图互不覆盖；
+  // recordOnly/@全体是一次性意图，不属草稿。
+  drafts: {},
   recordOnly: false,
   // @全体研讨（M1）：mentions=[{kind:'all'}] → 服务端 DELIBERATE 路由；一次性意图。
   deliberateAll: false,
@@ -93,6 +94,7 @@ async function loadProject(path) {
 }
 
 async function selectRoom(roomId, conversationId, roomEl) {
+  if (state.roomId !== roomId) saveDraft(); // 切房间前存当前草稿（按旧房间键）
   state.roomId = roomId;
   state.conversationId = conversationId;
   for (const item of document.querySelectorAll('.room-item')) item.classList.remove('active');
@@ -110,8 +112,13 @@ async function selectRoom(roomId, conversationId, roomEl) {
   // 「默认交给 AI」在 M0 的诚实实现：恰一名启用 agent 时预填 mention（用户可见、可清空）；
   // 清空后发送=按 AUTO 提交，服务端会如实置为「待处理」。
   if (enabledAgents.length === 1) {
-    if (state.drafts.pool.mention === '') state.drafts.pool.mention = enabledAgents[0].displayName;
-    if (state.drafts.thread.mention === '') state.drafts.thread.mention = enabledAgents[0].displayName;
+    // 预填到「当前房间」的池/线程草稿键（建房轮：草稿按房间隔离）。
+    for (const view of ['pool', 'thread']) {
+      const key = `${state.roomId ?? 'noroom'}:${view}`;
+      if ((state.drafts[key]?.mention ?? '') === '') {
+        state.drafts[key] = { ...(state.drafts[key] ?? { text: '' }), mention: enabledAgents[0].displayName };
+      }
+    }
   }
   showPool();
   await renderPool();
@@ -120,12 +127,16 @@ async function selectRoom(roomId, conversationId, roomEl) {
 
 // ---------- 视图切换（R4：草稿独立） ----------
 
+function draftKey() {
+  return `${state.roomId ?? 'noroom'}:${currentView()}`;
+}
+
 function saveDraft() {
-  state.drafts[currentView()] = { text: el('composer-input').value, mention: el('mention-pick').value };
+  state.drafts[draftKey()] = { text: el('composer-input').value, mention: el('mention-pick').value };
 }
 
 function restoreDraft() {
-  const d = state.drafts[currentView()];
+  const d = state.drafts[draftKey()] ?? { text: '', mention: '' };
   el('composer-input').value = d.text;
   el('mention-pick').value = d.mention;
 }
@@ -410,7 +421,8 @@ function buildEnvelope() {
 function afterSendSuccess(view, recordIntent) {
   // 视图/意图在发起时固定（修复轮 6）：响应到达前用户可能已切换视图——
   // 只清发起视图的草稿与输入框，不动另一视图。
-  state.drafts[view] = { text: '', mention: state.drafts[view].mention };
+  const key = `${state.roomId ?? 'noroom'}:${view}`;
+  state.drafts[key] = { text: '', mention: state.drafts[key]?.mention ?? '' };
   if (currentView() === view) el('composer-input').value = '';
   if (recordIntent) {
     // 「仅记录」是一次性意图：发送后复位，下一条默认交回路由。

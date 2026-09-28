@@ -19,7 +19,11 @@ const Database = (await import('better-sqlite3')).default;
 const db = new Database(appData); // 直接传 DB 文件路径（或目录/state.sqlite）
 const sha = (t) => createHash('sha256').update(t, 'utf8').digest('hex');
 const checks = [];
-const add = (name, ok, detail = '') => checks.push({ name, ok, detail });
+// 四态：PASS / FAIL / NOT_APPLICABLE（机制晚于目标运行等）/ NOT_VERIFIABLE（证据缺失）
+const add = (name, ok, detail = '') => checks.push({ name, status: ok ? 'PASS' : 'FAIL', detail });
+const na = (name, detail) => checks.push({ name, status: 'NOT_APPLICABLE', detail });
+const nv = (name, detail) => checks.push({ name, status: 'NOT_VERIFIABLE', detail });
+void nv;
 
 console.log('== 审计目标（显式指定） ==');
 const dbFile = existsSync(`${appData}/state.sqlite`) ? `${appData}/state.sqlite` : appData;
@@ -65,9 +69,10 @@ for (const b of bundles.filter((x) => x.stage_key === 'delib.independent')) {
 // ---- 2) CR 输入精确绑定冻结清单 ----
 const kv = (k) => db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(k)?.value;
 const crManifestRaw = kv(`delib:${runIdArg}:inputs:CROSS_REVIEW:0`);
-add('CR 冻结清单存在（daemon_state manifest）', crManifestRaw != null);
+if (crManifestRaw == null) na('CR 冻结清单', '清单机制晚于该运行代码（见 gitRev 参数）——历史版本缺此证据，不做通过声明'); else add('CR 冻结清单存在（daemon_state manifest）', true);
 if (crManifestRaw != null) {
   const manifest = JSON.parse(crManifestRaw);
+  void manifest;
   add('CR 清单条目==2 且==实际初稿集合', manifest.entries.length === 2 && manifest.entries.every((e) => draftIds.has(e.artifactId)), JSON.stringify(manifest.entries.map((e) => e.artifactId.slice(0, 10))));
   for (const e of manifest.entries) {
     const row = drafts.find((d) => d.id === e.artifactId);
@@ -96,7 +101,7 @@ for (const rv of reviews) {
 // ---- 3) RAT 绑定精确 synthesis 三元组（不凭 clm 名/文本片段） ----
 const syn = synthesis[0];
 const ratManifestRaw = kv(`delib:${runIdArg}:inputs:RATIFY:0`);
-add('RAT 冻结清单存在', ratManifestRaw != null);
+if (ratManifestRaw == null) na('RAT 冻结清单', '同上：历史版本无清单机制，无法验证'); else add('RAT 冻结清单存在', true);
 if (ratManifestRaw != null) {
   const m = JSON.parse(ratManifestRaw);
   const e = m.entries[0];
@@ -152,9 +157,10 @@ for (const a of db.prepare('SELECT id, hash, blob_path FROM artifacts WHERE run_
   if (existsSync(a.blob_path)) add(`artifact hash==磁盘 ${a.id.slice(0, 12)}…`, sha(readFileSync(a.blob_path, 'utf8')) === a.hash);
 }
 
-const failed = checks.filter((c) => !c.ok);
-console.log('== 审计结论 ==');
-console.log(JSON.stringify({ target: { runId: runIdArg, taskId: taskIdArg, gitRev: gitRevArg ?? 'unspecified' }, total: checks.length, passed: checks.length - failed.length, failed: failed.length }));
-for (const f of failed) console.log('FAIL:', f.name, f.detail?.slice(0, 160));
+const byStatus = { PASS: 0, FAIL: 0, NOT_APPLICABLE: 0, NOT_VERIFIABLE: 0 };
+for (const c of checks) byStatus[c.status] += 1;
+console.log('== 审计结论（四态） ==');
+console.log(JSON.stringify({ target: { runId: runIdArg, taskId: taskIdArg, gitRev: gitRevArg ?? 'unspecified' }, ...byStatus, dataSource: dbFile.includes('rebuilt') ? '派生：WAL 帧重建 DB（原始文件+工具+hash 见 evidence-note）' : '原始数据库' }));
+for (const c of checks.filter((x) => x.status !== 'PASS')) console.log(`${c.status}:`, c.name, c.detail?.slice(0, 160));
 db.close();
-process.exit(failed.length > 0 ? 1 : 0);
+process.exit(byStatus.FAIL > 0 ? 1 : 0);

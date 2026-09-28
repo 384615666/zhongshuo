@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-28（M1 收口轮：真实研讨一组完成并过 29/29 审计；调度/E4/迟到/运行身份零额度收口 331/331；价值闸门未做结论）
+- 最近更新：2026-09-28 晚（收口轮三：价值方案 v2 待批；E4 审批暂停生产接线+建房 UI 链路 e2e；审计 v3 四态；DEV-10 环境确认+契约核对；344/344）
 
 ## 工作包状态
 
@@ -23,7 +23,7 @@
 | DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **VERIFIED（G3 范围）**：CDP 真点击用户链路 11/11（发送/DONE/线程回复/跟进不新建根任务/草稿独立/仅记录/去重/IME/重载恢复/UI 停止/崩溃恢复门禁）+ 真实 codex UI 一轮（1 turn）；打包随包 Node 属 DEV-15 | `src/ui/` + `src/daemon/` + `src/contracts/daemonIpc.ts` | G3 ✓ | [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md) |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | **真实已验证（一组，29/29 审计）**：IND 隔离/CR 三元组/屏障经真实模型闭环（round-20260928）+fake 集成 | `src/daemon/deliberationRunner.ts` + `src/domain/deliberation/` | G4（价值闸门未做） | [reports/round-20260928-m1-closeout.md](reports/round-20260928-m1-closeout.md) |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **无争议分支真实已验证**（SYN/RAT/共识矩阵 29/29）；讨论轮/checkpoint/缺席/迟到=受控用例已验、真实补证按需另排 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
-| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | NOT_STARTED | `src/adapter/` | G2/G4 | M2 |
+| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（环境+契约核对完成）**：CLI 2.1.283 在机、认证可执行（需显式 --model，默认配置 deepseek-flash 不被接受）；适配合同逐点核对成文；adapter/回放/真实认证待实施 | `src/adapter/claude/`（待建） | G2/G4 | M2 | [dev10-claude-contract-check.md](dev10-claude-contract-check.md) |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
 | DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | NOT_STARTED | `src/daemon/` | RT-07/08/10 | M2 |
 | DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3；RT-03 重领对账的存储侧已在修复轮落地 |
@@ -38,6 +38,15 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## M1 收口轮三：价值方案 v2 + E4 生产接线 + 建房 UI 链路 + DEV-10 启动（2026-09-28 晚）
+
+- 价值方案 v2（m1-value-gate-proposal.md）：中性任务目标（协作流程不入共同正文）、逐行预算（A-DIRECT 3/A-DELIB 9/B/C 各 3+9，总新增 36；旧 A 运行标历史参考不复用）、评定者盲表述、合成 fixture=受控场景声明。**待批准，未调用模型**。
+- E4 生产接线：approval.requested/input.requested→暂停起点（kv），续行事件结算 exec_paused_ms 并回 RUNNING——真实审批桥（fake waitApproval+respondApproval）集成验证：121ms 暂停窗正确累计、缺席判定扣除。dispatchWait 合同核对：排队超线只诊断不改成员状态（与"排队非成员责任"一致）；派发不可能（预算耗尽跳过）由屏障按 missing/缺席处理——既有收口语义覆盖。
+- 审计 v3 四态（PASS/FAIL/NOT_APPLICABLE/NOT_VERIFIABLE）：历史运行 56 PASS/0 FAIL/2 N/A（清单机制晚于该运行，"历史版本缺此证据，无法验证"——不再计 FAIL 也不宣称通过）；派生证据记录（原始 WAL 三件 hash+重建工具+结论来源区分，evidence/m1-real-run-derived-db.md）。
+- 建房用户链路 e2e（fake，13/13 之一）：建房→成员子集→切换→DELIB 发送→回复；两房主池/草稿（按房间键隔离）不串线。
+- DEV-10：本机环境确认（零模型预算除 1 次探活）+ 契约核对成文；实施计划登记。
+- 默认 344/344；UI e2e fake 13/13。
 
 ## M1 收口轮：真实研讨闭环 + 调度/E4/迟到/身份收口（2026-09-28）
 

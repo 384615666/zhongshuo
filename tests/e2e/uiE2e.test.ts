@@ -535,6 +535,71 @@ describe('UI 真实研讨（ZS_M1_REAL=1，真实 codex 多成员研讨一轮）
   }, 900_000);
 });
 
+// ---------- 建房与跨房间 renderer 链路（fake sim，零额度） ----------
+
+describe('UI 建房与跨房间链路', () => {
+  it('建房→成员子集→切换房间→发送→回复；草稿/主池/异步回复不跨房间串线', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-rooms'), runtime: 'fake', extraEnv: { ZS_ENABLE_DELIBERATE: '1', ZS_FAKE_DELIB: '1', ZS_BOOTSTRAP_AGENTS: '分析甲,分析乙' } });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    // 房 1：发一条 DELIB 任务（@全体；fake sim 全链契约合法）。
+    await call('click', 'deliberate-toggle');
+    await call('type', 'composer-input', '房间一的任务');
+    await call('click', 'send');
+    await waitFor(async () => (await call<Array<{ status: string }>>('cards')).length > 0, 30_000, '房1卡出现');
+    await call('openCard', 0);
+    try {
+      await waitFor(() => call<string>('threadStatus').then((t) => t.includes('已完成')), 150_000, '房1任务 DONE');
+    } catch (e) {
+      const st = await call<string>('threadStatus').catch(() => 'ERR');
+      const prog = await call<string>('text', 'delib-progress').catch(() => 'ERR');
+      console.error('[room-diag] threadStatus:', st, '| progress:', prog.slice(0, 200));
+      throw e;
+    }
+    await call('click', 'thread-back-btn');
+    await new Promise((r) => setTimeout(r, 1_500));
+    const pool1Count = (await call<Array<unknown>>('cards')).length;
+    // 建房（成员子集=乙；prompt 由 CDP 模拟返回值）。
+    await app.page.eval(`window.prompt = () => '作战室'; true`);
+    await call('click', 'room-create');
+    await waitFor(() => call<string>('text', 'room-list').then((t) => t.includes('作战室')), 30_000, '新房出现');
+    // 新房自动重进（loadProject）→ 切到新房（第二个房间项）并核对主池为空（不混房1线程）。
+    const roomItems = async () => (await app.page.eval(`[...document.querySelectorAll('.room-item')].map((e) => e.textContent)`)) as string[];
+    await waitFor(async () => (await roomItems()).length >= 2, 15_000, '两房间');
+    await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('作战室')).click(), true`);
+    await waitFor(
+      async () => (await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('作战室'))?.classList.contains('active')`)) === true,
+      15_000, '新房激活',
+    );
+    await new Promise((r) => setTimeout(r, 2_500));
+    expect((await call<Array<unknown>>('cards')).length).toBe(0); // 房1 的任务不混入新房
+    // 在新房发送 DELIB 任务并等终态。
+    await call('click', 'deliberate-toggle');
+    await call('type', 'composer-input', '作战室的任务');
+    await call('click', 'send');
+    await call('openCard', 0);
+    await waitFor(() => call<string>('threadStatus').then((t) => t.includes('已完成')), 120_000, '房2任务 DONE');
+    await call('click', 'thread-back-btn');
+    await new Promise((r) => setTimeout(r, 1_500));
+    // 切回房 1：主池数量不变（房 2 的新任务不串入房 1）。
+    await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('默认房间')).click(), true`);
+    await waitFor(
+      async () => (await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('默认房间'))?.classList.contains('active')`)) === true,
+      15_000, '房1重新激活',
+    );
+    await new Promise((r) => setTimeout(r, 2_500));
+    expect((await call<Array<unknown>>('cards')).length).toBe(pool1Count);
+    // 草稿独立：在房 1 输入草稿→切房 2→草稿区为空→切回→草稿保留。
+    await call('type', 'composer-input', '房1草稿');
+    await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('作战室')).click(), true`);
+    await waitFor(async () => (await call<string>('inputValue', 'composer-input')) === '', 10_000, '切房后草稿清空');
+    await app.page.eval(`[...document.querySelectorAll('.room-item')].find((e) => e.textContent.includes('默认房间')).click(), true`);
+    await waitFor(async () => (await call<string>('inputValue', 'composer-input')) === '房1草稿', 10_000, '切回后草稿保留');
+  }, 240_000);
+});
+
 // ---------- 真实 runtime（显式触发，预算受控：单 turn） ----------
 
 describe('UI 端到端（真实 codex，renderer 点击链路）', () => {
