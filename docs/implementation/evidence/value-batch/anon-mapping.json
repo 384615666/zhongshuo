@@ -1,0 +1,20 @@
+{
+  "A": {
+    "A1": "direct",
+    "A2": "delib",
+    "flipped": true,
+    "createdAt": 1790613927549
+  },
+  "B": {
+    "B2": "direct",
+    "B1": "delib",
+    "flipped": false,
+    "createdAt": 1790613927602
+  },
+  "C": {
+    "C1": "direct",
+    "C2": "delib",
+    "flipped": true,
+    "createdAt": 1790613927660
+  }
+}

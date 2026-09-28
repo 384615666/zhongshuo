@@ -1,0 +1,126 @@
+{
+ "sides": [
+  {
+   "group": "A",
+   "side": "direct",
+   "calls": 2,
+   "turnStatuses": [
+    "FAILED",
+    "FAILED"
+   ],
+   "succeeded": 0,
+   "taskStatus": "ACTIVE",
+   "estCostUsd": 0.4092,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "6064529b8",
+   "submittedAt": 1790607985315
+  },
+  {
+   "group": "A",
+   "side": "delib",
+   "calls": 10,
+   "turnStatuses": [
+    "SUCCEEDED",
+    "FAILED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED"
+   ],
+   "succeeded": 9,
+   "taskStatus": "DONE",
+   "estCostUsd": 2.1327,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "6064529b8",
+   "submittedAt": 1790609540882
+  },
+  {
+   "group": "B",
+   "side": "direct",
+   "calls": 2,
+   "turnStatuses": [
+    "FAILED",
+    "FAILED"
+   ],
+   "succeeded": 0,
+   "taskStatus": "ACTIVE",
+   "estCostUsd": 0.8768,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "915f0dbdc",
+   "submittedAt": 1790610199827
+  },
+  {
+   "group": "B",
+   "side": "delib",
+   "calls": 7,
+   "turnStatuses": [
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED"
+   ],
+   "succeeded": 7,
+   "taskStatus": "DONE",
+   "estCostUsd": 2.935,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "915f0dbdc",
+   "submittedAt": 1790612583674
+  },
+  {
+   "group": "C",
+   "side": "direct",
+   "calls": 2,
+   "turnStatuses": [
+    "FAILED",
+    "SUCCEEDED"
+   ],
+   "succeeded": 1,
+   "taskStatus": "DONE",
+   "estCostUsd": 0.4338,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "915f0dbdc",
+   "submittedAt": 1790613152413
+  },
+  {
+   "group": "C",
+   "side": "delib",
+   "calls": 7,
+   "turnStatuses": [
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED",
+    "SUCCEEDED"
+   ],
+   "succeeded": 7,
+   "taskStatus": "DONE",
+   "estCostUsd": 1.8704,
+   "models": [
+    "deepseek-flash"
+   ],
+   "codeCommit": "915f0dbdc",
+   "submittedAt": 1790613713967
+  }
+ ],
+ "totalCalls": 30,
+ "cap": 33
+}
