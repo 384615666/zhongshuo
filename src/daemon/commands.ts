@@ -29,6 +29,8 @@ export interface DaemonCommandDeps {
   db: ZhongshuoDatabase;
   localUserId: string;
   interruptTurn: (turnId: string) => Promise<void>;
+  /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
+  appDataDir?: string;
 }
 
 export class DaemonCommandError extends Error {
@@ -361,9 +363,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'thread.toolCalls': {
-        // 线程内工具审计（2026-09-28 第四轮）：真源=worker 落库的 tool.started/tool.completed
-        // 审计事件（非模型 executedVerifications 自述）。按线程→task 限定隔离；同 toolCallId
-        // 的迟到/重复事件去重（started 取首、completed 取末）；无参数正文落库=无泄露面。
+        // 线程内工具审计（2026-09-28 第五轮）：真源=worker 落库的 tool.started/tool.completed
+        // 审计事件（非模型 executedVerifications 自述）。按线程→task 限定隔离；合并键=
+        // turnId+toolCallId（带作用域——不同 turn/成员的同名 toolCallId 各自保留）；
+        // started 取首、completed 取末（结果与完成时间取自同一条选定事件）；eventKey 重复
+        // 不重复计数；身份不完整（缺 turnId 或 toolCallId）的事件保留为未归属条目，不按
+        // 时间戳强行合并。字段范围：toolCallId/toolName/outcome/eventKey/成员与 turn 归属
+        // ——工具参数正文不落库（worker 审计不含参数），因此查询面不含参数与凭据字段。
         const params = z.strictObject({ threadId: z.string().min(1) }).parse(env.params);
         const rows = deps.db.prepare(
           `SELECT de.kind, de.payload_json, de.created_at, de.turn_id
@@ -372,24 +378,40 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
              AND de.task_id IN (SELECT id FROM tasks WHERE conversation_thread_id = ?)
            ORDER BY de.seq`,
         ).all(params.threadId) as Array<{ kind: string; payload_json: string; created_at: number; turn_id: string | null }>;
-        const byCall = new Map<string, { toolCallId: string; toolName: string | null; memberId: string | null; turnId: string | null; startedAt: number | null; completedAt: number | null; outcome: string | null; eventKeys: string[] }>();
+        interface ToolCallItem {
+          toolCallId: string; toolName: string | null; memberId: string | null; turnId: string | null;
+          startedAt: number | null; completedAt: number | null; outcome: string | null;
+          eventKeys: string[]; unattributed: boolean;
+        }
+        const byCall = new Map<string, ToolCallItem>();
+        const pushEventKey = (item: ToolCallItem, eventKey: string | undefined): void => {
+          if (eventKey != null && !item.eventKeys.includes(eventKey)) item.eventKeys.push(eventKey);
+        };
         for (const r of rows) {
           const payload = JSON.parse(r.payload_json) as { toolCallId?: string; toolName?: string; outcome?: string; eventKey?: string };
-          const id = payload.toolCallId ?? `unknown_${r.created_at}`;
-          let entry = byCall.get(id);
+          const hasIdentity = r.turn_id != null && payload.toolCallId != null;
+          // 带作用域的合并键：turnId+toolCallId；身份不完整 → 每条事件独立未归属条目（seq 唯一）。
+          const key = hasIdentity ? `${r.turn_id}:${payload.toolCallId}` : `unattributed:${r.created_at}:${r.kind}:${payload.eventKey ?? ''}`;
+          let entry = byCall.get(key);
           if (entry == null) {
-            entry = { toolCallId: id, toolName: null, memberId: null, turnId: r.turn_id, startedAt: null, completedAt: null, outcome: null, eventKeys: [] };
-            byCall.set(id, entry);
+            entry = {
+              toolCallId: payload.toolCallId ?? '(未归属)', toolName: null, memberId: null,
+              turnId: r.turn_id, startedAt: null, completedAt: null, outcome: null,
+              eventKeys: [], unattributed: !hasIdentity,
+            };
+            byCall.set(key, entry);
           }
           if (r.kind === 'tool.started' && entry.startedAt == null) {
+            // started 取首：时间与工具名取自同一条选定事件。
             entry.startedAt = r.created_at;
-            entry.toolName = entry.toolName ?? payload.toolName ?? null;
+            entry.toolName = payload.toolName ?? entry.toolName;
           }
-          if (r.kind === 'tool.completed') {
-            entry.completedAt = entry.completedAt ?? r.created_at;
-            entry.outcome = payload.outcome ?? entry.outcome;
+          if (r.kind === 'tool.completed' && r.turn_id === entry.turnId) {
+            // completed 取末：结果与完成时间取自同一条选定事件（不同 turn 的同名 id 不串）。
+            entry.completedAt = r.created_at;
+            entry.outcome = payload.outcome ?? null;
           }
-          if (payload.eventKey != null) entry.eventKeys.push(payload.eventKey);
+          pushEventKey(entry, payload.eventKey);
         }
         // memberId：turn 归属成员（批量查询一次）。
         const items = [...byCall.values()];
@@ -421,6 +443,50 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             interruptedRuns: interrupted,
           },
         });
+      }
+      case 'changeset.captureBaseline': {
+        // DEV-12 正式命令：基线捕获（Git HEAD+索引状态+内容前像；变更归属 taskId/runId）。
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          taskId: z.string().min(1).nullable().optional(),
+          runId: z.string().min(1).nullable().optional(),
+          paths: z.array(z.string().min(1)).optional(),
+          maxBytes: z.number().int().positive().optional(),
+        }).parse(env.params);
+        if (deps.appDataDir == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', 'daemon 未配置 appDataDir（内容前像存储不可用）');
+        const { captureBaseline } = await import('./changeset.ts');
+        const r = captureBaseline(deps.db, {
+          projectId: params.projectId, taskId: params.taskId ?? null, runId: params.runId ?? null,
+          paths: params.paths, maxBytes: params.maxBytes, appDataDir: deps.appDataDir, now: Date.now(),
+        });
+        if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
+        return withCommandId({ ok: true, data: r.value });
+      }
+      case 'changeset.finalize': {
+        // 差异定型：捕获 after 前像+diff 入库（直接原目录模式 → application_status='applied'）。
+        const params = z.strictObject({ changeSetId: z.string().min(1) }).parse(env.params);
+        if (deps.appDataDir == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', 'daemon 未配置 appDataDir（内容前像存储不可用）');
+        const { finalizeChangeset } = await import('./changeset.ts');
+        const r = finalizeChangeset(deps.db, { changeSetId: params.changeSetId, appDataDir: deps.appDataDir, now: Date.now() });
+        if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
+        return withCommandId({ ok: true, data: r.value });
+      }
+      case 'changeset.undo': {
+        // 非破坏撤销（§14.5）：执行前逐文件重验当前==after；冲突不覆盖；逐步持久化可恢复续跑。
+        const params = z.strictObject({ changeSetId: z.string().min(1) }).parse(env.params);
+        if (deps.appDataDir == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', 'daemon 未配置 appDataDir（内容前像存储不可用）');
+        const { undoChangeset } = await import('./changeset.ts');
+        const r = undoChangeset(deps.db, { changeSetId: params.changeSetId, appDataDir: deps.appDataDir, now: Date.now() });
+        if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
+        return withCommandId({ ok: true, data: r.value });
+      }
+      case 'changeset.get': {
+        // 只读查询：before/after 前像、应用状态与撤销进度（恢复/对账依据）。
+        const params = z.strictObject({ changeSetId: z.string().min(1) }).parse(env.params);
+        const { getChangeSet } = await import('./changeset.ts');
+        const r = getChangeSet(deps.db, params.changeSetId);
+        if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
+        return withCommandId({ ok: true, data: r.value });
       }
       case 'room.pool': {
         // 房间主池（修复轮 6）：room 限定的根消息+线程摘要——不用事件拼接、不混其他房间。

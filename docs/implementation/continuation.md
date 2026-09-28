@@ -2,7 +2,50 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 第四轮，唯一权威快照）
+## 当前真实状态（2026-09-28 第五轮，唯一权威快照）
+
+- **准入占位完整生命周期完成**：DIRECT/DELIB 的 openSession（原来在 try 之外——上轮报告
+  「均回收」超出证据，已收口）纳入统一 try/catch/finally；启动失败两分类——确认未启动
+  （记录/提示词失败、会话记录失败且关闭确认）=FAILED+释放占位+outbox 完结；不确定
+  （openSession/startTurn 抛错、关闭未确认）=UNKNOWN+**保留占位**+租约重领对账（RT-03）；
+  detached 启动失败 live 遗留修复；standing 失败 turn 悬挂修复。
+- **退出状态机收口**：`startingTurns` 登记（晚返回 openSession 不再对 stop 不可见）+
+  `awaitSettlement`（starting∪consuming）；drain 挂起计入 incomplete 判定（drainPending）；
+  晚返回 openSession 检查 shutdownStarted→不启动 turn、有界关闭、CANCELLED 清理；force 路径
+  **核对后**关库（全收敛={complete:true,forced-closed}；否则 forced-incomplete 不关库不释放锁
+  ——崩溃语义现场保留，不声称已杀完/已落库）；`boundedDisposeAll`（dispose 挂起不无限等待）；
+  stop 记录实际持久化（daemon:stop:last 四态落盘；applyRecovery 快照 stopRecord 可读）。
+  上轮报告「已杀进程/零后台写库」超限表述已加更正注记。
+- **工具审计收口**：thread.toolCalls 合并键=turnId+toolCallId（作用域；同名跨 turn 不错并）；
+  completed 结果与时间取自同一条选定事件；eventKey 去重；身份不完整=未归属条目（不按时间戳
+  合并）；「零泄露面」改为准确字段范围说明；CDP 级 UI 断言 2 例（显示/去重/进行中/失败/
+  unknown/切线程/刷新——ZS_FAKE_TOOL_EVENTS 首个-turn 编排钩子，仅 ZS_ALLOW_FAKE=1）。
+- **DEV-12 主体完成**（daemon 层 preimage.ts+changeset.ts+迁移 007+changeset.* 四命令；
+  domain 只许依赖 contracts——两模块因此归 daemon 层，六边界 lint 强制）：三态基础数据模型
+  （unknown 不推导增删改/不自动撤销）；内容寻址前像存储（回读核对+撤销前再核对+大小上限
+  contentUnavailable 提前呈现）；Git 基线（HEAD+porcelain+未提交/未跟踪内容前像——不
+  stash/reset，撤销不动 Git 历史）；非 Git 整目录扫描（排除 .git、截断如实；扫描完整时基线
+  无行=变更前 absent，截断=unknown）；非破坏撤销（逐步执行前重验当前==after、冲突不覆盖、
+  撤销新增先确认仍是本次产物、单文件临时+回读+rename、多文件逐步持久化+中断续跑幂等、
+  reverted/partial 如实）；单写者（重叠活跃/expired 租约拒绝并列持有者+同项目撤销互斥）。
+  验收映射+反例见报告 §4（临时 fixture 含临时 Git 仓库，正式命令路径 9/9+前像单元 6/6）。
+- 认证范围保留不扩大；零真实调用、零探活；价值对比 33 未动用；M1/DEV-11 闸门不变。
+- 数字：全套 **402/402**、UI e2e **15/15**（真实档 2 例按 env 跳过）、lint 0。
+  报告：reports/round-20260928-admission-exit-hardening.md。
+
+## 当前下一步（唯一）
+
+1. **等待用户输入**：① 价值对比 33 批准与否；② 可选最小预算：resumeSession 真实续接（1 turn）、
+   restrict* 拒写对照（B6 前置）、双任务真实隔离。
+2. 无需等待直接开工（按交付矩阵依赖已满足且零真实调用）：**DEV-13 恢复与故障测试**
+   （不确定窗口/进程核对/成果一致性——RT-03 重领对账、崩溃恢复语义的系统性用例化；
+   本轮 stopRecord/UNKNOWN 现场已为它备好素材）；或 DEV-12 任务侧接线预备（B6 写档接入时
+   派发自动 capture/finalize 的设计落点）；E4 detached 下真实研讨一组复跑准备（价值闸门
+   过前不跑）。
+
+---
+
+## （上一轮快照，2026-09-28 第四轮）
 
 - **统一派发准入完成**（admission.ts：global4/project2/provider2/member1+writeRoot 接入口；
   占位覆盖 openSession/startTurn 窗口；UNKNOWN 保留占用；预算与并发不混用；泵必经准入）——
@@ -19,13 +62,6 @@
   Git/非 Git 基线为主体实施项。
 - 认证范围保留不扩大（usage=0=未收到用量报告非零扣费）；零真实调用、零探活；价值对比 33 未动用。
 - 数字：全套 **384/384**、lint 0。报告：reports/round-20260928-admission-shutdown-tools.md。
-
-## 当前下一步（唯一）
-
-1. **等待用户输入**：① 价值对比 33 批准与否；② 可选最小预算：resumeSession 真实续接（1 turn）、
-   restrict* 拒写对照（B6 前置）、双任务真实隔离。
-2. 无需等待直接开工：DEV-12 主体（前像还原的原子撤销/失败回滚+Git 基线，临时 fixture）；
-   toolCalls 的 CDP 级 UI 断言；E4 detached 下真实研讨一组复跑准备（价值闸门过前不跑）。
 
 ---
 

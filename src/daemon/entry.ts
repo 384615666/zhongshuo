@@ -28,6 +28,7 @@ import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
 import { ClaudeCliAdapter } from '../adapter/claude/cliAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
+import type { FakeTurnScript } from '../adapter/fake/script.ts';
 import { daemonPipeNameFor, ensureLocalCredential } from '../contracts/daemonIpc.ts';
 import type { LocalCredential } from '../contracts/daemonIpc.ts';
 
@@ -117,7 +118,28 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
                 ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
                 : process.env.ZS_FAKE_DELIB === '1'
                   ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
-                  : undefined,
+                  : process.env.ZS_FAKE_TOOL_EVENTS === '1'
+                    ? (() => {
+                        // 仅首个 turn 发工具事件序列（含迟到重复/进行中/失败——thread.toolCalls
+                        // UI 审计断言用）；后续 turn 回落默认成功脚本（切线程隔离对照）。
+                        let toolTurnUsed = false;
+                        return {
+                          turnScriptSequencer: (): FakeTurnScript => {
+                            if (toolTurnUsed) return successTurn();
+                            toolTurnUsed = true;
+                            return [
+                              { kind: 'event', event: { kind: 'tool.started', toolCallId: 'tc_read_1', toolName: 'Read', argumentsSummary: '' } },
+                              { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tc_read_1', outcome: 'success' } },
+                              { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tc_read_1', outcome: 'unknown' } },
+                              { kind: 'event', event: { kind: 'tool.started', toolCallId: 'tc_grep_2', toolName: 'Grep', argumentsSummary: '' } },
+                              { kind: 'event', event: { kind: 'tool.started', toolCallId: 'tc_bash_3', toolName: 'Bash', argumentsSummary: '' } },
+                              { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tc_bash_3', outcome: 'failure' } },
+                              { kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } },
+                            ];
+                          },
+                        };
+                      })()
+                    : undefined,
             );
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定

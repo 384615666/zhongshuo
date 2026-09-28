@@ -44,6 +44,8 @@ window.__t = {
   stopVisible: () => !document.getElementById('stop-btn')?.classList.contains('hidden'),
   stopDisabled: () => document.getElementById('stop-btn')?.disabled ?? true,
   threadStatus: () => document.getElementById('thread-status')?.textContent ?? '',
+  toolAudit: () => [...document.querySelectorAll('#thread-messages .tool-audit .tool-audit-row')].map((r) => ({ id: r.dataset.toolCallId ?? '', text: r.textContent ?? '' })),
+  toolAuditHead: () => document.querySelector('#thread-messages .tool-audit .meta')?.textContent ?? null,
   recordOn: () => document.getElementById('record-toggle')?.classList.contains('on') ?? false,
   projectName: () => document.getElementById('project-name')?.textContent ?? '',
   reload: () => { location.reload(); return true; },
@@ -348,6 +350,85 @@ describe('UI 端到端（renderer 真实点击链路，fake 档零额度）', ()
       60_000, '主池历史恢复',
     );
     expect(await app.page.call('gateVisible')).toBe(false);
+  }, 120_000);
+});
+
+// ---------- 场景（app T：fake + ZS_FAKE_TOOL_EVENTS=1，线程内工具审计 UI） ----------
+
+describe('UI 线程工具审计（CDP 断言：显示/去重/进行中/失败/unknown/切线程/刷新）', () => {
+  let app: UiApp;
+  const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+
+  beforeAll(async () => {
+    // 独立实例：工具事件脚本只影响本实例首个 turn（后续回落默认——切线程隔离对照）。
+    app = await launchUi({ appData: join(fixtureRoot, 'appdata-tools'), runtime: 'fake', extraEnv: { ZS_FAKE_TOOL_EVENTS: '1' } });
+    apps.push(app);
+  });
+
+  it('工具审计卡：服务端去重后 3 张（重复 completed 不重卡）；结果/进行中如实显示', async () => {
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    await call('type', 'composer-input', '带工具事件的审计任务');
+    await call('click', 'send');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'DONE',
+      30_000, '任务 DONE',
+    );
+    expect(await call<boolean>('openCard', 0)).toBe(true);
+    const rows = await waitFor(
+      async () => {
+        const r = await call<Array<{ id: string; text: string }>>('toolAudit');
+        return r.length === 3 ? r : null;
+      },
+      30_000, '工具审计 3 张卡（重复事件去重）',
+    );
+    expect(rows!.map((r) => r.id)).toEqual(['tc_read_1', 'tc_grep_2', 'tc_bash_3']);
+    // 迟到重复 completed 取末值（unknown，如实）+ 进行中 + 失败：三条各自正确。
+    expect(rows![0]!.text).toContain('unknown');
+    expect(rows![1]!.text).toContain('进行中');
+    expect(rows![2]!.text).toContain('failure');
+    expect(rows![0]!.text).toContain('Read'); // 工具名来自首条 started
+    expect(await call<string>('toolAuditHead')).toContain('3 条'); // 头部计数与去重一致
+  }, 90_000);
+
+  it('切线程不串记录：无工具事件的线程不渲染审计区块；重载后记录仍完整', async () => {
+    // 回主池发第二个任务（本实例脚本已耗尽 → 默认脚本、无工具事件）。
+    await call('click', 'thread-back-btn');
+    await call('type', 'composer-input', '无工具事件的对照任务');
+    await call('click', 'send');
+    let dbg = '';
+    await waitFor(
+      async () => {
+        const cards = await call<Array<{ status: string }>>('cards');
+        dbg = JSON.stringify(cards);
+        return (cards[1]?.status ?? '') === 'DONE';
+      },
+      30_000, '对照任务 DONE',
+    ).catch((e) => { throw new Error(`${(e as Error).message}——现场 cards=${dbg}`); });
+    // 最新在前（room.pool 按 created_at DESC）：cards[0]=对照任务（新）、cards[1]=工具任务。
+    expect(await call<boolean>('openCard', 0)).toBe(true);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await call<Array<unknown>>('toolAudit')).toEqual([]); // 线程隔离：对照线程无记录
+    // 刷新（等价应用重启视图）：回到工具线程，审计卡仍完整（服务端真源）。
+    await call('click', 'thread-back-btn');
+    await app.page.eval('window.__t.reload()');
+    await new Promise((r) => setTimeout(r, 2_000));
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(
+      () => app.page.eval<boolean>(`document.readyState === 'complete' && typeof document.getElementById('open-folder')?.onclick === 'function'`),
+      60_000, '重载后 renderer 就绪',
+    );
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 60_000, '重载后自动恢复项目');
+    await waitFor(async () => ((await call<Array<unknown>>('cards'))).length >= 2, 30_000, '主池恢复');
+    expect(await call<boolean>('openCard', 1)).toBe(true); // cards[1]=工具任务（旧）
+    const rows = await waitFor(
+      async () => {
+        const r = await call<Array<{ id: string; text: string }>>('toolAudit');
+        return r.length === 3 ? r : null;
+      },
+      30_000, '重载后审计卡仍 3 张',
+    );
+    expect(rows!.map((r) => r.id)).toEqual(['tc_read_1', 'tc_grep_2', 'tc_bash_3']);
   }, 120_000);
 });
 

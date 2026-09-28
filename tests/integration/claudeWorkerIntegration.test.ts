@@ -184,7 +184,8 @@ describe('跨 runtime 成员绑定 × 共用 worker（生产 registry，零额�
         { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tool_read_1', outcome: 'success' } },
         // 迟到/重复：同 toolCallId 的重复 completed 不得生成第二张卡（服务端取末值去重）。
         { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tool_read_1', outcome: 'unknown' } },
-        { kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } },
+        // 以失败终局（保持任务非终态——供下方同线程 redispatch 反例再起一个 turn）。
+        { kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '注入失败', retryable: false } },
       ]),
     });
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-tool', appDataDir: join(tmpRoot, 'tool') });
@@ -200,6 +201,16 @@ describe('跨 runtime 成员绑定 × 共用 worker（生产 registry，零额�
     expect(item.turnId).toBeTruthy();
     const r6 = await runCommand(db, 'thread.toolCalls', { threadId: 'th6' }) as { data: { items: unknown[] } };
     expect(r6.data.items.length).toBe(0); // 线程隔离：th6 无记录
+    // 反例（第五轮）：同一线程两个 turn 使用同名 toolCallId → 各自保留（作用域键=turnId+toolCallId）。
+    db.prepare("INSERT INTO outbox (dispatch_key) VALUES ('task:tk5:redispatch')").run();
+    await worker.runOnce(); // 先领走 tk6 初始项（默认脚本、无工具）
+    await worker.runOnce(); // 再领 redispatch：第二个 turn（同线程同 toolCallId、不同 turnId）
+    await new Promise((r) => setTimeout(r, 150));
+    const r5b = await runCommand(db, 'thread.toolCalls', { threadId: 'th5' }) as { data: { items: Array<{ toolCallId: string; turnId: string | null; outcome: string | null }> } };
+    const readItems = r5b.data.items.filter((i) => i.toolCallId === 'tool_read_1');
+    expect(readItems.length).toBe(2); // 两个 turn 各一张卡（旧按 toolCallId 全局合并会错并成 1）
+    expect(new Set(readItems.map((i) => i.turnId)).size).toBe(2);
+    for (const i of readItems) expect(i.outcome).toBe('unknown'); // 各自取末值（不跨 turn 串结果）
     await adapter.closeAllSessions();
     db.close();
   }, 15_000);

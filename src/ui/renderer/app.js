@@ -265,7 +265,9 @@ async function renderDeliberation() {
 }
 
 /** 线程内工具审计（2026-09-28）：真源=服务端 tool.started/tool.completed 审计（非模型自述）。
- *  只读区块置于线程消息尾部——不新增监控页面；同 toolCallId 迟到/重复事件由服务端去重。 */
+ *  只读区块置于线程消息尾部——不新增监控页面；服务端按 turnId+toolCallId 作用域键去重
+ *  （迟到/重复事件不重复生成卡）。展示字段=成员/工具名/结果/时间/toolCallId——工具参数
+ *  正文不落库因此不在此呈现；错误与其他字段按服务端脱敏规则原样显示。 */
 async function renderToolCalls(box) {
   let data = null;
   try {
