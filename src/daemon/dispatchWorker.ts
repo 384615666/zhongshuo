@@ -82,6 +82,8 @@ export interface DispatchWorkerOptions {
   enableDeliberate?: boolean;
   /** E4 缺席容忍（默认 20 分钟）；测试用小值假时钟推进。 */
   absenceToleranceMs?: number;
+  /** 排队等待观察线（只诊断，不记成员缺席）。 */
+  dispatchWaitDeadlineMs?: number;
   /** DELIBERATE 总调用上限覆盖（缺省按 E12 核心公式推导）。 */
   deliberateMaxTurns?: number;
   /** 可注入时钟（默认 Date.now）：领取租约/泵判定在判定时点取当前时间，drain 循环不复用旧 now。 */
@@ -99,6 +101,7 @@ export class DispatchWorker {
   private readonly appDataDir: string;
   private readonly enableDeliberate: boolean;
   private readonly absenceToleranceMs: number;
+  private readonly dispatchWaitDeadlineMs?: number;
   private readonly deliberateMaxTurns?: number;
   private readonly clock: () => number;
   private readonly live = new Map<string, { turnId: string; sessionId: string }>();
@@ -114,12 +117,13 @@ export class DispatchWorker {
     this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
     this.enableDeliberate = options.enableDeliberate === true;
     this.absenceToleranceMs = options.absenceToleranceMs ?? 20 * 60_000;
+    this.dispatchWaitDeadlineMs = options.dispatchWaitDeadlineMs;
     this.deliberateMaxTurns = options.deliberateMaxTurns;
     this.clock = options.clock ?? (() => Date.now());
   }
 
   private deliberationOptions() {
-    return { absenceToleranceMs: this.absenceToleranceMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
+    return { absenceToleranceMs: this.absenceToleranceMs, dispatchWaitDeadlineMs: this.dispatchWaitDeadlineMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
   }
 
   /** 处理一条 outbox 项；返回是否处理了（门禁 held/无项返回 false）。 */
@@ -558,6 +562,12 @@ export class DispatchWorker {
     await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
   }
 
+  /** 审批/等待暂停累计（E4：暂停不计入成员执行时间）。M1 研讨路径未接审批桥——
+   *  接线点就绪：approval.requested 记起点、resolved/turn 回 RUNNING 时结算累计。 */
+  accumulateApprovalPause(turnId: string, pausedMs: number): void {
+    this.db.prepare('UPDATE agent_turns SET exec_paused_ms = exec_paused_ms + ? WHERE id = ?').run(Math.max(0, pausedMs), turnId);
+  }
+
   private kvGet(key: string): string | null {
     return (this.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
   }
@@ -692,6 +702,13 @@ export class DispatchWorker {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
     if (turnMeta?.stage_key != null && turnMeta.stage_key.startsWith('delib.')) {
+      // E4 执行时钟：turn.started 起算（审批/等待输入暂停在状态迁移处累计）。
+      if (event.kind === 'turn.started') {
+        this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
+      }
+      if (event.kind === 'approval.requested') {
+        this.db.prepare("UPDATE agent_turns SET status = 'WAITING_APPROVAL' WHERE id = ? AND status = 'RUNNING'").run(turnId);
+      }
       this.applyDeliberationTerminal(task, runId, turnId, turnMeta.dispatch_key ?? '', event);
       return;
     }

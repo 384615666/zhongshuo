@@ -11,7 +11,7 @@
  * 预算（E12）：派发前核对 stageAvailableTurns；尾部派发先占用 S/Q；
  * 结算/未启动取消退款走同一套账（budget_json 单一真源）；耗尽后不再调用模型。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
@@ -110,6 +110,157 @@ export function parseRepairTarget(dispatchKey: string): DelibStep | null {
   return { taskId: m[1]!, runId: m[2]!, stage: m[5] as DelibStep['stage'], memberId: m[3]!, roundNo: Number(m[4]), purpose: 'format_repair' };
 }
 
+function artifactsEntries(db: ZhongshuoDatabase, runId: string, kind: string): Array<{ artifactId: string; revision: number; hash: string }> {
+  return listRunArtifacts(db, runId, kind as never).map((a) => ({ artifactId: a.id, revision: a.revision, hash: a.hash }));
+}
+
+/** SYNTHESIS 输入清单：全部初稿+互评+立场（迟到者含——进入本阶段时的新版本）。 */
+function freezeSynthesisInputs(db: ZhongshuoDatabase, runId: string): void {
+  const entries = [
+    ...artifactsEntries(db, runId, 'analysis_draft'),
+    ...artifactsEntries(db, runId, 'cross_review'),
+    ...artifactsEntries(db, runId, 'issue_position'),
+  ];
+  freezeStageInputs(db, runId, 'SYNTHESIS', 0, entries);
+}
+
+function inputEntriesOf(db: ZhongshuoDatabase, runId: string, draftIds: readonly string[], _reviews: unknown): Array<{ artifactId: string; revision: number; hash: string }> {
+  void _reviews;
+  return artifactsEntries(db, runId, 'analysis_draft');
+}
+
+/** 按冻结清单读 artifacts（清单缺失或条目缺失=组装失败，不回退到实时查询）。 */
+function draftsFromManifest(db: ZhongshuoDatabase, runId: string, manifest: FrozenInputs | null): DraftArtifact[] {
+  if (manifest == null) return []; // 未冻结（旧数据）：调用方决定失败
+  const out: DraftArtifact[] = [];
+  for (const e of manifest.entries) {
+    const row = db.prepare('SELECT id, run_id, author_id, kind, revision, hash, blob_path FROM artifacts WHERE id = ?').get(e.artifactId) as { id: string; run_id: string; author_id: string; revision: number; hash: string; blob_path: string } | undefined;
+    if (row == null || row.run_id !== runId || row.revision !== e.revision || row.hash !== e.hash) continue; // 与冻结版本不一致：不读
+    const payload = JSON.parse(readFileSync(row.blob_path, 'utf8')) as DraftArtifact['payload'];
+    out.push({ artifactId: row.id, memberId: row.author_id, revision: row.revision, payload });
+  }
+  return out;
+}
+
+// ---------- E4 执行语义：成员执行时钟/缺席宽限/排队区分（§4.3） ----------
+
+export interface MemberAbsenceVerdict {
+  memberId: string;
+  markedAbsent: boolean;
+  /** open=有在途 turn 且执行时间达宽限；queued=未派发（不缺席）；terminalHandled=终态路径已处理。 */
+  basis: 'open-execution' | 'queued' | 'no-stage-turn' | 'within-grace';
+  effectiveExecMs?: number;
+}
+
+/** 成员当前阶段在途 turn 的 stage_key 前缀（delib.<stage>[.rN...]）。 */
+function stageTurnPrefix(stage: string): string {
+  return `delib.${stage.toLowerCase()}`;
+}
+
+/**
+ * 逐成员缺席宽限判定（只标记，不杀 turn）：
+ * - 有本阶段**在途** turn 且 有效执行时间(now-started-paused) ≥ grace → absent（basis=open-execution）；
+ * - 无 turn（排队）→ 永不缺席；turn 未启动(exec_started_at 空) → 不计。
+ * 单轮截止/UNKNOWN/失败等其他 basis 由 worker 终态路径处理（互不重复：此处只看在途）。
+ */
+export function evaluateMemberAbsence(db: ZhongshuoDatabase, runId: string, stage: string, now: number, graceMs: number, expectedMemberIds: readonly string[]): MemberAbsenceVerdict[] {
+  const verdicts: MemberAbsenceVerdict[] = [];
+  for (const memberId of expectedMemberIds) {
+    const open = db.prepare(
+      `SELECT id, exec_started_at, exec_paused_ms FROM agent_turns
+       WHERE run_id = ? AND member_id = ? AND stage_key LIKE ? AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')
+       ORDER BY rowid DESC LIMIT 1`,
+    ).get(runId, memberId, `${stageTurnPrefix(stage)}%`) as { id: string; exec_started_at: number | null; exec_paused_ms: number } | undefined;
+    if (open == null) {
+      // 无在途 turn：要么还没派发（排队），要么已终态（缺席/失败由终态路径负责）。
+      const ever = db.prepare(
+        'SELECT id FROM agent_turns WHERE run_id = ? AND member_id = ? AND stage_key LIKE ? LIMIT 1',
+      ).get(runId, memberId, `${stageTurnPrefix(stage)}%`);
+      verdicts.push({ memberId, markedAbsent: false, basis: ever == null ? 'queued' : 'no-stage-turn' });
+      continue;
+    }
+    if (open.exec_started_at == null) {
+      verdicts.push({ memberId, markedAbsent: false, basis: 'within-grace' }); // 未收到 turn.started：不累计
+      continue;
+    }
+    const effective = Math.max(0, now - open.exec_started_at - (open.exec_paused_ms ?? 0));
+    if (effective >= graceMs) {
+      const changed = db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, memberId).changes;
+      if (changed > 0) {
+        appendDomainEvent(db, {
+          schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: '',
+          threadId: null, runId, kind: 'run.participantAbsent', createdAt: now,
+          payload: { memberId, stage, reason: 'absence-grace', effectiveExecMs: effective, turnId: open.id, killed: false },
+        });
+      }
+      verdicts.push({ memberId, markedAbsent: true, basis: 'open-execution', effectiveExecMs: effective });
+    } else {
+      verdicts.push({ memberId, markedAbsent: false, basis: 'within-grace', effectiveExecMs: effective });
+    }
+  }
+  return verdicts;
+}
+
+/** 排队等待观察线：只记诊断（每成员每阶段一次），不改成员状态。 */
+function noteDispatchWait(db: ZhongshuoDatabase, runId: string, stage: string, now: number, waitMs: number, memberId: string): void {
+  const key = `delib:${runId}:dispatchwait:${stage}:${memberId}`;
+  const exists = db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key);
+  if (exists != null) return;
+  db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify({ memberId, stage, waitMs, at: now }), now);
+  appendDomainEvent(db, {
+    schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: '',
+    threadId: null, runId, kind: 'run.dispatchWaitExceeded', createdAt: now,
+    payload: { memberId, stage, waitMs, note: '排队等待观察线（非成员缺席）' },
+  });
+}
+
+// ---------- 阶段输入冻结清单（不可变输入版本/hash；迟到边界） ----------
+
+export interface FrozenInputs {
+  version: number;
+  stage: string;
+  round: number;
+  /** artifactId@revision 列表（排序后参与 hash）；synthesis 类为 artifactId+revision+hash。 */
+  entries: ReadonlyArray<{ artifactId: string; revision: number; hash: string }>;
+  hash: string;
+}
+
+function freezeKey(runId: string, stage: string, round: number): string {
+  return `delib:${runId}:inputs:${stage}:${round}`;
+}
+
+/** 冻结阶段输入（进入阶段时一次写入；后续迟到材料不改本清单——只入迟到记录与后续阶段清单）。 */
+export function freezeStageInputs(db: ZhongshuoDatabase, runId: string, stage: string, round: number, entries: ReadonlyArray<{ artifactId: string; revision: number; hash: string }>): FrozenInputs {
+  const sorted = [...entries].sort((a, b) => (a.artifactId < b.artifactId ? -1 : a.artifactId > b.artifactId ? 1 : a.revision - b.revision));
+  const hash = createHashFor(sorted.map((e) => `${e.artifactId}@${e.revision}#${e.hash}`).join('|'));
+  const frozen: FrozenInputs = { version: 1, stage, round, entries: sorted, hash };
+  db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO NOTHING')
+    .run(freezeKey(runId, stage, round), JSON.stringify(frozen), Date.now());
+  return frozen;
+}
+
+export function frozenStageInputs(db: ZhongshuoDatabase, runId: string, stage: string, round: number): FrozenInputs | null {
+  const row = db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(freezeKey(runId, stage, round)) as { value: string } | undefined;
+  return row != null ? (JSON.parse(row.value) as FrozenInputs) : null;
+}
+
+/** RATIFY 权威冻结整合稿（manifest 优先；缺失时回退 max-revision 供旧数据）。 */
+export function frozenSynthesisOf(db: ZhongshuoDatabase, runId: string): { artifactId: string; revision: number; hash: string } | null {
+  const m = frozenStageInputs(db, runId, 'RATIFY', 0);
+  if (m != null && m.entries.length > 0) {
+    const e = m.entries[0]!;
+    return { artifactId: e.artifactId, revision: e.revision, hash: e.hash };
+  }
+  const fallback = currentSynthesisVersion(db, runId);
+  if (fallback == null) return null;
+  const row = db.prepare('SELECT hash FROM artifacts WHERE id = ?').get(fallback.artifactId) as { hash: string } | undefined;
+  return { ...fallback, hash: row?.hash ?? '' };
+}
+
+function createHashFor(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
 // ---------- PREPARE（程序） ----------
 
 export interface RunRow {
@@ -126,8 +277,12 @@ export interface RunRow {
 }
 
 export interface DeliberationOptions {
-  /** E4 缺席容忍（默认 20 分钟）；测试用小值假时钟推进。 */
+  /** E4 absenceGrace：成员**实际执行时间**（turn.started 起、扣审批/等待暂停）超过即按缺席推进；
+   * 不强杀在途成员（其后续完成走迟到路径）。与单轮 turnDeadline（中断分支）分离。
+   * 兼容旧字段名 absenceToleranceMs。默认 20 分钟。 */
   absenceToleranceMs: number;
+  /** 排队等待观察线：成员步骤尚未派发超过此时长只记诊断事件（不记成员缺席——排队非成员责任）。 */
+  dispatchWaitDeadlineMs?: number;
   /** 总调用上限；缺省按 E12 核心公式推导（6N+1）。 */
   runMaxTurns?: number;
   blobDir: string;
@@ -247,9 +402,9 @@ export interface PumpResult {
  * 与最终报告发布（程序完成，不调用模型）。
  */
 export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options: DeliberationOptions, now = Date.now()): PumpResult {
-  // 活跃 run：同任务多 run 时只推进最新非终态（旧 run 遗留不复活）。
+  // 最新 run（任意状态）：INTERRUPTED 需如实 surfaced；终态的其他状态不推进。
   const run = db.prepare(
-    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY revision DESC LIMIT 1",
+    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' ORDER BY revision DESC LIMIT 1",
   ).get(taskId) as (RunRow & { stage_started_at: number | null }) | undefined;
   if (run == null) return { advanced: false };
   if (run.status === 'INTERRUPTED') {
@@ -265,11 +420,21 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) return { advanced: false };
   const threadId = task.conversation_thread_id ?? run.thread_id ?? '';
   const roster = rosterOf(db, run.id);
-  // E4 语义（修复轮）：排队等待≠缺席——缺席只来自成员自己的执行事实（单轮截止中断/
-  // UNKNOWN，由 worker 终态处理写入）。此处不再按阶段起算时间批量标记 pending。
-  const participants = participantsOf(db, run.id);
-  const drafts = frozenDrafts(db, run.id);
+  // E4 语义（修复轮）：排队等待≠缺席——缺席只来自成员自己的执行事实（宽限/截止中断/
+  // UNKNOWN）。阶段起算时间只用于排队观察线，不标记成员。
   const stage = run.stage ?? 'INDEPENDENT';
+  let participants = participantsOf(db, run.id);
+  if (options.absenceToleranceMs > 0) {
+    evaluateMemberAbsence(db, run.id, stage, now, options.absenceToleranceMs, roster.members.map((m) => m.memberId));
+    participants = participantsOf(db, run.id); // 宽限标记后重读
+  }
+  if (options.dispatchWaitDeadlineMs != null && run.stage_started_at != null && now - run.stage_started_at >= options.dispatchWaitDeadlineMs) {
+    for (const m of roster.members) {
+      const dispatched = db.prepare('SELECT id FROM agent_turns WHERE run_id = ? AND member_id = ? AND stage_key LIKE ? LIMIT 1').get(run.id, m.memberId, `${stageTurnPrefix(stage)}%`);
+      if (dispatched == null) noteDispatchWait(db, run.id, stage, now, now - run.stage_started_at, m.memberId);
+    }
+  }
+  const drafts = frozenDrafts(db, run.id);
 
   const budget = readBudget(run.budget_json);
   // §6.5 预算兜底：前置配额耗尽且无在途步骤时，转入整合（有产出即出诚实报告；
@@ -279,6 +444,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
     const noPendingSteps = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:%`) as { c: number }).c === 0;
     if (noPendingSteps) {
       advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: stage, reason: '前置预算耗尽，按 §6.5 转入整合' });
+      freezeSynthesisInputs(db, run.id);
       enqueueSynthesis(db, run.id, taskId, hostOf(roster));
       return { advanced: true };
     }
@@ -294,6 +460,8 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const decision = decideIndependentBarrier(roster, facts);
       if (decision.decision === 'advance') {
         advanceStage(db, run.id, taskId, 'CROSS_REVIEW', 0, now, { from: 'INDEPENDENT', reason: decision.reason });
+        // 冻结互评输入清单：此后到达的迟到初稿不入本阶段任何成员的互评材料（§4.3/E4 边界）。
+        freezeStageInputs(db, run.id, 'CROSS_REVIEW', 0, artifactsEntries(db, run.id, 'analysis_draft'));
         enqueueReviewerSteps(db, run.id, taskId, drafts.map((d) => d.memberId));
         return { advanced: true };
       }
@@ -323,6 +491,8 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         const issues = deriveIssues(run.id, claims, reviews.map((r) => ({ reviewerMemberId: r.memberId, target: r.target, stance: r.stance })));
         const next = nextAfterCrossReview(issues);
         if (next.next === 'ISSUE_DISCUSSION') {
+          // 冻结第 2 轮起的讨论输入清单（初稿+互评集合，迟到材料不改）。
+          freezeStageInputs(db, run.id, 'ISSUE_DISCUSSION', 1, inputEntriesOf(db, run.id, drafts.map((d) => d.artifactId), reviews.map((r) => r.stance)));
           const tx = db.transaction(() => {
             insertIssues(db, run.id, issues.map((i) => ({ issueId: i.issueId, statement: i.statement, evidenceRefs: [] })), 1);
             advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', 1, now, { from: 'CROSS_REVIEW', reason: next.reason, issueCount: issues.length });
@@ -331,6 +501,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
           enqueueIssueSteps(db, run.id, taskId, reviewers, 1);
         } else {
           advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'CROSS_REVIEW', reason: next.reason });
+          freezeSynthesisInputs(db, run.id);
           enqueueSynthesis(db, run.id, taskId, hostOf(roster));
         }
         return { advanced: true };
@@ -370,6 +541,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       if (round > 3) {
         // 检查点后的额外轮：一轮后即回检查点语义（预算承担硬上限，决策 06）。
         advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮完成，转入整合` });
+        freezeSynthesisInputs(db, run.id);
         enqueueSynthesis(db, run.id, taskId, host);
         return { advanced: true };
       }
@@ -448,7 +620,7 @@ function advanceStage(db: ZhongshuoDatabase, runId: string, taskId: string, stag
 
 function enqueueReviewerSteps(db: ZhongshuoDatabase, runId: string, taskId: string, reviewerIds: readonly string[]): void {
   const tx = db.transaction(() => {
-    for (const memberId of reviewerIds) {
+    for (const memberId of [...reviewerIds].sort()) { // 成员序确定：派发顺序可复现
       enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'CR', memberId, roundNo: 0, purpose: 'stage_work' }) });
     }
   });
@@ -676,7 +848,9 @@ function renderStageBody(
     return `${base}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
   }
   if (step.stage === 'CR') {
-    const drafts = frozenDrafts(db, runId).filter((d) => d.memberId !== step.memberId);
+    // 冻结清单约束：只读 CROSS_REVIEW 冻结版本中的初稿（迟到初稿不改任何同轮成员材料）。
+    const manifest = frozenStageInputs(db, runId, 'CROSS_REVIEW', 0);
+    const drafts = (manifest != null ? draftsFromManifest(db, runId, manifest) : frozenDrafts(db, runId)).filter((d) => d.memberId !== step.memberId);
     const listing = drafts.map((d) => ({
       artifactId: d.artifactId,
       revision: d.revision,
@@ -692,16 +866,17 @@ function renderStageBody(
     return `${base}\n\n冻结争议清单（issueId 即身份）：\n${JSON.stringify(issues, null, 2)}\n\n已有立场摘要：\n${JSON.stringify(positions, null, 2)}`;
   }
   if (step.stage === 'SYN') {
-    const drafts = frozenDrafts(db, runId);
+    const manifest = frozenStageInputs(db, runId, 'SYNTHESIS', 0);
+    const drafts = manifest != null ? draftsFromManifest(db, runId, manifest).filter((d) => d.payload.claims != null) : frozenDrafts(db, runId);
     const reviews = collectReviews(db, runId);
     const positions = collectIssuePositions(db, runId);
     return `${base}\n\n全部初稿：\n${JSON.stringify(drafts.map((d) => ({ artifactId: d.artifactId, revision: d.revision, author: d.memberId, summary: d.payload.summary, claims: d.payload.claims })), null, 2)}\n\n全部互评：\n${JSON.stringify(reviews, null, 2)}\n\n讨论立场：\n${JSON.stringify(positions, null, 2)}\n\n你是主持者（${hostOf(roster)}），产出整合稿：共识入 claims、分歧如实入 disputedClaims。`;
   }
-  // RATIFY
-  const synthesis = currentSynthesisVersion(db, runId);
+  // RATIFY：绑定冻结清单的精确整合稿（artifactId+revision+hash；不凭 clm 名/文本片段）。
+  const synthesis = frozenSynthesisOf(db, runId);
   if (synthesis == null) return `${base}\n（整合稿缺失）`;
   const claims = getSynthesisClaims(db, runId, synthesis.artifactId, synthesis.revision);
-  return `${base}\n\n冻结整合稿（${synthesis.artifactId} rev${synthesis.revision}）结论清单：\n${JSON.stringify(claims.map((c) => ({ claimId: c.claim_id, statement: c.statement })), null, 2)}`;
+  return `${base}\n\n冻结整合稿（${synthesis.artifactId} rev${synthesis.revision} hash=${synthesis.hash.slice(0, 12)}…）结论清单：\n${JSON.stringify(claims.map((c) => ({ claimId: c.claim_id, statement: c.statement })), null, 2)}`;
 }
 
 function collectIssuePositions(db: ZhongshuoDatabase, runId: string): unknown {
@@ -817,6 +992,8 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       const claims = synthesisPayload.claims.map((c, i) => ({ claimId: `clm_${i + 1}`, statement: c.statement, sourceRefs: c.sourceRefs }));
       const inserted = insertSynthesisClaims(db, { runId: input.runId, synthesisArtifactId: artifactId, synthesisRevision: 1, claims });
       if (!inserted.ok) throw new Error(inserted.error.message);
+      // 冻结 RATIFY 输入=整合稿精确定位（artifactId+revision+hash，不凭 clm 名或文本片段）。
+      freezeStageInputs(db, input.runId, 'RATIFY', 0, [{ artifactId, revision: 1, hash: (published as { value?: { hash?: string } }).value?.hash ?? '' }]);
       const roster = rosterOf(db, input.runId);
       initRatificationMatrix(db, {
         runId: input.runId, synthesisArtifactId: artifactId, synthesisRevision: 1,
@@ -830,7 +1007,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       }
     }
     if (input.step.stage === 'RAT') {
-      const synthesis = currentSynthesisVersion(db, input.runId);
+      const synthesis = frozenSynthesisOf(db, input.runId);
       if (synthesis != null) {
         const responses = (payload.responses as Array<{ claimId: string; stance: 'confirm' | 'conditional' | 'object' | 'unconfirmed'; conditions?: string[]; reason?: string }>);
         const submitted = submitRatification(db, {
