@@ -572,6 +572,41 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data });
       }
+      case 'task.redispatch': {
+        // DIRECT 追加 turn（跟进/格式修复）：经 outbox 正式编排（worker 领取→准入→成员绑定
+        // adapter），不绕过产品链路直调 CLI。前置：任务存在、非终态、stop_generation=0、
+        // 无在途 turn（防止并发双派）；同 (taskId, 在途) 语义下重复调用幂等拒绝。
+        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional() }).parse(env.params);
+        const result = run(() => {
+          const task = deps.db
+            .prepare('SELECT id, status, stop_generation FROM tasks WHERE id = ?')
+            .get(params.taskId) as { id: string; status: string; stop_generation: number } | undefined;
+          if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
+          if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
+          if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加 turn');
+          const inFlight = deps.db
+            .prepare(`SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
+              WHERE t.dispatch_key LIKE 'task:' || ? || ':%' AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`)
+            .get(params.taskId) as { c: number };
+          if (inFlight.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlight.c}）：不得并发追加`);
+          const already = deps.db
+            .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
+            .get(`task:${params.taskId}:redispatch`) as { c: number };
+          if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
+          deps.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(`task:${params.taskId}:redispatch`);
+          appendDomainEvent(deps.db, {
+            schemaVersion: 1,
+            eventId: `evt_${randomUUID()}`,
+            projectId: (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(params.taskId) as { project_id: string }).project_id,
+            taskId: params.taskId,
+            kind: 'task.redispatchEnqueued',
+            createdAt: Date.now(),
+            payload: { reason: params.reason ?? 'manual-redispatch' },
+          });
+          return { enqueued: true as const, dispatchKey: `task:${params.taskId}:redispatch` };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       default:
         return withCommandId({ ok: false, error: { code: 'VALIDATION_INVALID', message: `未知命令：${env.method}`, retryable: false } });
     }

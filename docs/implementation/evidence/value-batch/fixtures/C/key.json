@@ -1,0 +1,22 @@
+{
+  "group": "C",
+  "note": "机核=异常召回/排序/清单结构的关键词统计（命中≠定位正确——时间/条数核对列 manualForHuman）。",
+  "plantedAnomalies": {
+    "AN1": "09-23 02:10–02:14 connection reset 风暴（13 条 ERROR，随后恢复）",
+    "AN2": "09-25 11:04 /api/order 延迟尖峰（3 笔 9 秒级，之后恢复）",
+    "AN3": "09-26 内存单调增长 512MB→4096MB，21:05 OOM killed（exit=137）后重启"
+  },
+  "findings": [
+    { "id": "C-F1", "desc": "召回 AN1 连接重置风暴", "any": ["connection reset", "连接重置", "reset"] },
+    { "id": "C-F2", "desc": "召回 AN2 订单接口延迟尖峰", "any": ["延迟", "latency", "尖峰", "9214", "9 秒", "9s"] },
+    { "id": "C-F3", "desc": "召回 AN3 内存增长/OOM", "any": ["OOM", "oom", "内存", "memory", "137"] },
+    { "id": "C-F4", "desc": "给出严重度排序", "any": ["严重度", "排序", "优先级", "severity", "severity"] },
+    { "id": "C-F5", "desc": "给出需人工确认清单", "any": ["人工", "确认清单", "需人工", "待确认"] },
+    { "id": "C-F6", "desc": "区分正常噪音与异常（如 429 非重点）", "any": ["429", "限流", "正常"] }
+  ],
+  "manualForHuman": [
+    "时间定位是否准确（AN1=09-23 凌晨；AN3=全天增长至 21:05 OOM）",
+    "严重度排序理由是否成立（如 OOM>尖峰>reset 风暴的论证）",
+    "是否把正常事件（429×2、常规 health 检查）误报为异常"
+  ]
+}

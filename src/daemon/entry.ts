@@ -156,7 +156,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     };
     if (process.env.ZS_ALLOW_FAKE === '1') {
-      factories.fake = () => new FakeRuntimeAdapter();
+      // 成员级 fake 实例与默认实例同款编排（ZS_FAKE_DELIB=1 时按输入契约生成合法研讨
+      // 载荷——彩排/演练经成员绑定路径与真实链路一致，不因工厂实例缺编排而假失败）。
+      factories.fake = () => new FakeRuntimeAdapter(
+        process.env.ZS_FAKE_DELIB === '1'
+          ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
+          : undefined,
+      );
     }
     const memberRuntime = new MemberRuntimeRegistry(db, adapter, factories);
     const worker = new DispatchWorker({
