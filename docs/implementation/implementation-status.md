@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-28 晚（收口轮三：价值方案 v2 待批；E4 审批暂停生产接线+建房 UI 链路 e2e；审计 v3 四态；DEV-10 环境确认+契约核对；344/344）
+- 最近更新：2026-09-28 深夜（DEV-10：Claude adapter 实装+回放 8 用例+跨 runtime 绑定；dispatchWait 合同一致化；价值 v3=33 待批；353/353）
 
 ## 工作包状态
 
@@ -23,7 +23,7 @@
 | DEV-07 | 正式 UI 接入（Electron+IPC+renderer） | **VERIFIED（G3 范围）**：CDP 真点击用户链路 11/11（发送/DONE/线程回复/跟进不新建根任务/草稿独立/仅记录/去重/IME/重载恢复/UI 停止/崩溃恢复门禁）+ 真实 codex UI 一轮（1 turn）；打包随包 Node 属 DEV-15 | `src/ui/` + `src/daemon/` + `src/contracts/daemonIpc.ts` | G3 ✓ | [reports/round-20260927-fix6-ui-e2e-g3-closeout.md](reports/round-20260927-fix6-ui-e2e-g3-closeout.md) |
 | DEV-08 | 独立分析与互评（冻结名单、阶段过滤、报告校验） | **真实已验证（一组，29/29 审计）**：IND 隔离/CR 三元组/屏障经真实模型闭环（round-20260928）+fake 集成 | `src/daemon/deliberationRunner.ts` + `src/domain/deliberation/` | G4（价值闸门未做） | [reports/round-20260928-m1-closeout.md](reports/round-20260928-m1-closeout.md) |
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **无争议分支真实已验证**（SYN/RAT/共识矩阵 29/29）；讨论轮/checkpoint/缺席/迟到=受控用例已验、真实补证按需另排 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
-| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（环境+契约核对完成）**：CLI 2.1.283 在机、认证可执行（需显式 --model，默认配置 deepseek-flash 不被接受）；适配合同逐点核对成文；adapter/回放/真实认证待实施 | `src/adapter/claude/`（待建） | G2/G4 | M2 | [dev10-claude-contract-check.md](dev10-claude-contract-check.md) |
+| DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（adapter 已实装+零额度回放）**：cliAdapter（进程模型/事件归一化/能力三态/拒绝语义）+ 协议回放 8 用例 + 共用 worker 跨 runtime 成员绑定（回放）；剩余=entry 成员级接入+真实认证（2 调用待批） | `src/adapter/claude/cliAdapter.ts` | G2/G4 | M2 | [round-20260928-dev10-adapter.md](reports/round-20260928-dev10-adapter.md) |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
 | DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | NOT_STARTED | `src/daemon/` | RT-07/08/10 | M2 |
 | DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3；RT-03 重领对账的存储侧已在修复轮落地 |
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## DEV-10 适配器实装 + dispatchWait 合同一致化（2026-09-28 深夜）
+
+详见 [reports/round-20260928-dev10-adapter.md](reports/round-20260928-dev10-adapter.md)。Claude CLI adapter 实装（进程模型/--resume 续接/NDJSON 归一化/合成事件依据注明/能力三态/steer·审批拒绝）；零额度回放 8 用例+共用 worker 跨 runtime 成员绑定（fake+Claude 回放不串线、domain 无厂商分支）；dispatchWait 独立截止→unavailable（合同一致，与 absent 区分、可恢复、不重派旧键）；价值方案 v3（DIRECT 2/组+DELIB 9/组×3=33 待批，A 旧运行无确认选项）；E4 在途推进生产承载如实未完成（串行 drain 限制，M2 前置）。默认 353/353。
 
 ## M1 收口轮三：价值方案 v2 + E4 生产接线 + 建房 UI 链路 + DEV-10 启动（2026-09-28 晚）
 
