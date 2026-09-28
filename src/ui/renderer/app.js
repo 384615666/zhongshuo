@@ -9,7 +9,7 @@
  *   不发送；「仅记录」一次性复位；M0 无模式选择（明确不提供，非禁用残影）。
  * - R5 主池：room.pool 房间限定正式接口（不事件拼接、不混其他房间）；重启后按上次项目路径恢复。
  */
-/* global window, document, crypto, alert, setInterval, clearInterval, localStorage */
+/* global window, document, crypto, alert, prompt, setInterval, clearInterval, localStorage */
 // 整体包在 IIFE：顶层 const/global 词法声明会与 contextBridge 注入 window 的
 // 非配置属性（zs）冲突（GlobalDeclarationInstantiation 抛 SyntaxError）。
 (() => {
@@ -526,6 +526,14 @@ el('deliberate-toggle').onclick = () => {
   el('deliberate-toggle').classList.toggle('on', state.deliberateAll);
 };
 el('resume-gate').onclick = () => void resumeFromGate();
+el('room-create').onclick = () => {
+  // 建房（M1）：经命令面创建并切换——跨房间切换/隔离场景的正式数据面。
+  const name = prompt('新房间名称：', '');
+  if (name == null || name.trim().length === 0) return;
+  void command('room.create', { projectId: state.projectId, name: name.trim() })
+    .then(() => loadProject(localStorage.getItem('zs.lastProjectPath') ?? ''))
+    .catch((e) => alert(`建房失败：${e.message}`));
+};
 el('stop-btn').onclick = () => void stopTask();
 el('thread-back-btn').onclick = () => { showPool(); void renderPool().catch(showConnError); };
 el('composer-input').addEventListener('keydown', (ev) => {
