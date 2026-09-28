@@ -2,41 +2,38 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 第三轮，唯一权威快照）
+## 当前真实状态（2026-09-28 第四轮，唯一权威快照）
 
-- **DEV-10 受控中断真实认证通过（本轮预算 1/1 已用）**：真实 claude 进程证据（pid 26792）
-  后 2ms 停止→turn/task/run 全 CANCELLED（INTERRUPTED 语义+stderr 尾取证）、无交付、无孤
-  儿进程、迟到不复活、重启不复活；usage=0 如实（早停无 result，实际消耗以渠道账单为准）。
-  **interrupt 按证据升 supported**（范围=CLI 2.1.283+渠道+Windows kill）。
-- **能力声明已逐项按证据修正**（cliAdapter CAPABILITIES 单一真源）：resumeSession/
-  restrictWrites/restrictShell/disableDelegation/taskContextIsolation=unverified（参数存在
-  ≠认证）；--allowedTools=预授权非总白名单（init.tools 仍含 Bash，取证）；只读档新配方
-  （permission-prompts none + disallowedTools + strict-mcp-config + bare +
-  disable-slash-commands）；worker 落库 tool.started/completed 审计（模型自述核对依据；
-  turn1 的 ls/sha256sum 自述=无记录未采信）。
-- **中断/收拢实装**：停止请求与退出确认分离（waitForTurnExit 宽限、不确认不假装）；
-  INTERRUPTED 语义；停止后迟到 result 忽略不交付；disposeAll 汇总上报（failed/unconfirmed
-  不吞）；entry stop=dispose→awaitInFlightTurns→关库。本地真实进程 fixture 6 用例。
-- **E4 调度解耦实装（生产承载完成）**：detachedTurnConsumption（entry 默认开，
-  ZS_DETACHED_TURNS=0 关）——泵与 turn 消费解耦、成员级互斥（skipIds+releaseOutbox）、租
-  约续期、awaitInFlightTurns；假时钟集成 4 用例（含泵在途推进/不强杀/迟到 late/同成员互
-  斥）。**顺带修复 detached 暴露的两真实缺陷**：lateRecorded 被误判格式无效；SYN 在途预
-  算误判 synthesisUnavailable。detached 全链预算 20/20 与 inline 一致。
-- **零额度纪律固化**：settings env 优先于子进程 env（限本次版本组合）——env 覆盖不是出网
-  隔离；零额度测试只用本地模拟/回放/二进制取证。
-- 数字：全套 **370/370**、UI e2e fake 13/13、lint 0。报告：
-  reports/round-20260928-dev10-interrupt-e4.md。
-- 未认证续工点：resumeSession 真实续接、restrict* 真实拒写对照（B6）、双任务真实隔离、
-  interactiveApprovals；**M1 价值对比 33 未批准未动用**。
+- **统一派发准入完成**（admission.ts：global4/project2/provider2/member1+writeRoot 接入口；
+  占位覆盖 openSession/startTurn 窗口；UNKNOWN 保留占用；预算与并发不混用；泵必经准入）——
+  7 组反例全过；顺带修三真实缺陷（DIRECT 截止中断误判 CANCELLED→UNKNOWN；requestStopAll
+  hangInterrupt 死锁；关库后 settle 抛无人接拒绝）。
+- **退出状态机完成**（stop→DaemonStopResult：incomplete 不关库不释放锁；force 路径另行定义=
+  杀+abortConsumers UNKNOWN 收尾后关库；standalone 退出码 0/3）——本地反例全过（未确认不关库
+  锁保留、强制后 UNKNOWN 持久化、关闭期完成事件落库、重复 stop 同结果、关库后零写入）。
+- **harness stop 闭环**（real-delib doStop：正式 task.stop 绑定 runId/停止代次→观察至可解释终态；
+  taskkill 仅 ZS_CRASH_INJECT=1 崩溃注入）。
+- **线程工具审计呈现**（thread.toolCalls 命令：domain_events 真源/线程隔离/toolCallId 去重/
+  member 归属；renderer 线程尾只读区块；集成 4/4——CDP 级断言随下次 UI e2e 批次）。
+- **DEV-12 起步**：src/domain/preimage.ts（前像捕获/diff 纯函数+临时 fixture）——撤销执行与
+  Git/非 Git 基线为主体实施项。
+- 认证范围保留不扩大（usage=0=未收到用量报告非零扣费）；零真实调用、零探活；价值对比 33 未动用。
+- 数字：全套 **384/384**、lint 0。报告：reports/round-20260928-admission-shutdown-tools.md。
 
 ## 当前下一步（唯一）
 
-1. **等待用户输入**：① 价值对比 33 上限批准与否；② 可选新预算：resumeSession 真实续接
-   （1 turn）、restrict* 拒写对照（B6 前置）。
-2. 无需等待直接开工：harness stop 改进（UI task.stop 优先）；tool 事件审计的 UI 呈现
-   （线程内工具调用记录）；ZS_DETACHED_TURNS=1 下真实研讨一组的复跑准备（价值闸门过前
-   不跑）。
+1. **等待用户输入**：① 价值对比 33 批准与否；② 可选最小预算：resumeSession 真实续接（1 turn）、
+   restrict* 拒写对照（B6 前置）、双任务真实隔离。
+2. 无需等待直接开工：DEV-12 主体（前像还原的原子撤销/失败回滚+Git 基线，临时 fixture）；
+   toolCalls 的 CDP 级 UI 断言；E4 detached 下真实研讨一组复跑准备（价值闸门过前不跑）。
 
+---
+
+## （上一轮快照，2026-09-28 第三轮）
+
+- DEV-10 受控中断真实认证通过（预算 1/1：进程证据后 2ms 停止/CANCELLED 全链/无孤儿/重启不复活）
+  →interrupt 按证据 supported；能力逐项修正（resume/restrict*/isolation=unverified）；只读档
+  正式机制组合；tool 事件落库审计；E4 调度解耦实装（detached+成员互斥+两缺陷修复）。
 ---
 
 ## （上一轮快照，2026-09-28 深夜·二）

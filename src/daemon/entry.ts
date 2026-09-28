@@ -21,7 +21,7 @@ import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
-import { MemberRuntimeRegistry, type MemberAdapterFactory } from './memberRuntime.ts';
+import { MemberRuntimeRegistry, type MemberAdapterFactory, type MemberDisposeReport } from './memberRuntime.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
@@ -40,6 +40,20 @@ export interface DaemonOptions {
   tickMs?: number;
   /** stop 时等待在途 drain 收敛的上限（默认 10s）。 */
   drainSettleTimeoutMs?: number;
+  /** 测试注入口：覆盖默认 adapter 构建（仅测试用——生产路径不传）。 */
+  testAdapter?: RuntimeAdapter;
+}
+
+/** 退出状态机结果：complete=全部收拢（关库+释放锁）；否则未完成，上层不得视为成功。 */
+export interface DaemonStopResult {
+  complete: boolean;
+  phase: 'closed' | 'incomplete' | 'forced-closed';
+  /** 停止请求已发的 turnId（不含退出确认——确认在 disposeReport/inFlightRemaining）。 */
+  stopRequestsSentTo: string[];
+  disposeReport?: MemberDisposeReport;
+  inFlightRemaining?: string[];
+  /** 未完成原因摘要（恢复依据：WAL/崩溃恢复语义 + 审计）。 */
+  reason?: string;
 }
 
 export interface RunningDaemon {
@@ -51,7 +65,16 @@ export interface RunningDaemon {
   /** 成员级 runtime 注册表（DEV-10：按成员绑定选择 adapter）。 */
   memberRuntime: MemberRuntimeRegistry;
   credential: LocalCredential;
-  stop(): Promise<void>;
+  /**
+   * 退出状态机（幂等：重复调用返回同一关闭过程的结果）。
+   * - 优雅路径：拒新命令/派发 → drain 安全边界 → 对在途发停止请求 → 收拢 runtime（杀+等退出）
+   *   → 等消费器写库收敛 → 确认零后台写库后关库+释放锁 → {complete:true}。
+   * - 超时（进程退出未确认/消费器未收敛/收拢失败）：**不关库、不释放锁**（单实例锁≠子进程
+   *   退出；恢复依据=崩溃恢复语义：WAL+applyRecovery），返回 {complete:false}。
+   * - 强制路径（force:true）：优雅超时后杀进程+中止消费器（UNKNOWN 收尾）再关库——
+   *   {complete:false, phase:'forced-closed'}，恢复依据已持久化。
+   */
+  stop(options?: { force?: boolean }): Promise<DaemonStopResult>;
 }
 
 export function defaultAppDataDir(): string {
@@ -74,20 +97,22 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     applyRecovery(db, Date.now()); // 孤儿租约重排 + 非终态标记 + 门禁
 
-    adapter = options.runtime === 'codex'
-      ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
-      : options.runtime === 'claude'
-        ? new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL })
-        : new FakeRuntimeAdapter(
-            // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
-            // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）；
-            // ZS_FAKE_DELIB=1 时按输入契约生成合法研讨载荷（UI 全链路演练）。
-            process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
-              ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
-              : process.env.ZS_FAKE_DELIB === '1'
-                ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
-                : undefined,
-          );
+    adapter = options.testAdapter != null
+      ? options.testAdapter
+      : options.runtime === 'codex'
+        ? new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL })
+        : options.runtime === 'claude'
+          ? new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL })
+          : new FakeRuntimeAdapter(
+              // fake 专用编排入口（仅 ZS_ALLOW_FAKE=1 显式开发模式）：停延 stall 供
+              // UI 端到端在「运行中」窗口内点击停止/制造中断现场（正式路径不读取）；
+              // ZS_FAKE_DELIB=1 时按输入契约生成合法研讨载荷（UI 全链路演练）。
+              process.env.ZS_FAKE_STALL_MS != null && Number(process.env.ZS_FAKE_STALL_MS) > 0
+                ? { turnScripts: [[{ kind: 'stall', ms: Number(process.env.ZS_FAKE_STALL_MS) }, ...successTurn()]] }
+                : process.env.ZS_FAKE_DELIB === '1'
+                  ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
+                  : undefined,
+            );
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
     // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
@@ -114,6 +139,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // E4 调度解耦（生产承载）：turn 消费不阻塞 drain——泵可在成员在途期间推进屏障。
       // ZS_DETACHED_TURNS=0 显式关闭（排障用；既有内联语义）。
       detachedTurnConsumption: process.env.ZS_DETACHED_TURNS !== '0',
+      defaultProviderKey: options.runtime, // 未绑定成员的 provider 准入键=全局 runtime 标识
       appDataDir: options.appDataDir,
       // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
       enableDeliberate: process.env.ZS_ENABLE_DELIBERATE === '1', // 能力状态合同：fake/UI 已验、真实研讨未完成——显式 opt-in；真实闭环验证后再默认开放
@@ -157,8 +183,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }, options.tickMs ?? 500);
     tick.unref?.();
 
-    let stopped = false;
-    let stopPromise: Promise<void> | null = null; // 重复 stop 共用同一次关闭
+    let stopPromise: Promise<DaemonStopResult> | null = null; // 优雅关闭（幂等缓存）
+    let forcePromise: Promise<DaemonStopResult> | null = null; // 强制关闭（另行定义，幂等缓存）
     return {
       pipeName,
       db,
@@ -166,35 +192,77 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       adapter,
       memberRuntime,
       credential,
-      stop(): Promise<void> {
-        if (stopPromise != null) return stopPromise; // 重复 stop 幂等：同一关闭过程
-        stopped = true;
-        stopPromise = (async () => {
-          clearInterval(tick);          // 1) 拒新派发（停 tick）
-          await ipc!.close();           // 2) 拒新命令（断开全部连接）
-          // 3) 等待在途 drain 收敛（不取消——让当前事务/事件落库后停），
-          //    上限保护：tick 间隔级 drain 不应长挂；超时则记录并继续（数据库仍按序关闭）。
+      stop(stopOptions?: { force?: boolean }): Promise<DaemonStopResult> {
+        const settleMs = options.drainSettleTimeoutMs ?? 10_000;
+        const beginGraceful = (): Promise<DaemonStopResult> => {
+          if (stopPromise != null) return stopPromise; // 重复 stop 幂等：同一关闭过程同一结果
+          stopPromise = runGraceful();
+          return stopPromise;
+        };
+        const runGraceful = async (): Promise<DaemonStopResult> => {
+          clearInterval(tick);                     // 1) 拒新派发（停 tick）
+          worker.stopAccepting();                  // 1b) drain 安全边界：拒新领取（在执行项继续）
+          await ipc!.close();                      // 2) 拒新命令（断开全部连接）
+          // 3) 等待在途 drain 收敛（不取消——当前项在安全边界内收尾）。
           if (inFlightDrain != null) {
             await Promise.race([
               inFlightDrain,
-              new Promise((r) => { const t = setTimeout(r, options.drainSettleTimeoutMs ?? 10_000); t.unref?.(); }),
+              new Promise((r) => { const t = setTimeout(r, settleMs); t.unref?.(); }),
             ]);
           }
-          // 4) 收拢全部 runtime（成员级 + 默认；等待子进程退出）——失败/未确认上报，不吞。
-          //    杀进程触发在途消费器收终态 → 5) 等消费器写库收敛（关库前回调必须收敛）。
+          // 4) 对全部在途 turn 发停止请求（请求≠退出确认）；随后收拢 runtime（杀+等退出确认）。
+          const stopRequestsSentTo = await worker.requestStopAll();
           const disposeReport = await memberRuntime.disposeAll();
-          if (disposeReport.failed.length > 0 || disposeReport.unconfirmed.length > 0) {
-            process.stderr.write(`[zhongshuo-daemon] runtime 收拢未全确认：failed=${JSON.stringify(disposeReport.failed)} unconfirmed=${JSON.stringify(disposeReport.unconfirmed)}\n`);
+          // 5) 等消费器写库收敛——确认不会再有后台写库后才允许关库。
+          const inFlight = await worker.awaitInFlightTurns(settleMs);
+          const incomplete =
+            inFlight.remaining.length > 0 ||
+            disposeReport.failed.length > 0 ||
+            disposeReport.unconfirmed.length > 0;
+          const persistIncomplete = (phase: 'incomplete' | 'forced-closed', extra?: string): DaemonStopResult => {
+            const result: DaemonStopResult = {
+              complete: false, phase,
+              stopRequestsSentTo, disposeReport, inFlightRemaining: inFlight.remaining,
+              reason: [
+                inFlight.remaining.length > 0 ? `消费器未收敛(${inFlight.remaining.length})` : null,
+                disposeReport.failed.length > 0 ? `收拢失败(${disposeReport.failed.length})` : null,
+                disposeReport.unconfirmed.length > 0 ? `退出未确认(${disposeReport.unconfirmed.length})` : null,
+                extra ?? null,
+              ].filter((x) => x != null).join('；'),
+            };
+            process.stderr.write(`[zhongshuo-daemon] stop 未完成（${phase}）：${result.reason}——恢复依据=崩溃恢复语义（WAL+applyRecovery），审计已留\n`);
+            return result;
+          };
+          if (!incomplete) {
+            db!.close();                  // 6) 关库（零后台写库已确认）
+            lockHandle.release();         // 7) 释放锁
+            return { complete: true, phase: 'closed', stopRequestsSentTo, disposeReport, inFlightRemaining: [] };
           }
-          const inFlight = await worker.awaitInFlightTurns(options.drainSettleTimeoutMs ?? 10_000);
-          if (inFlight.remaining.length > 0) {
-            process.stderr.write(`[zhongshuo-daemon] stop：在途 turn 消费器未全收敛（不确定，不假装完成）：${inFlight.remaining.join(',')}\n`);
-          }
-          db!.close();                  // 6) 关库（此后 worker 任何写入都会抛 SQLITE 错误——按序保证不再发生）
-          lockHandle.release();         // 6) 释放锁
-          void stopped;
-        })();
-        return stopPromise;
+          // 未完成：不关库、不释放锁（daemon 退出≠子进程退出；锁保留=崩溃现场，恢复路径收口）。
+          return persistIncomplete('incomplete');
+        };
+        if (stopOptions?.force === true) {
+          // 强制路径（另行定义，幂等）：等优雅结果 → 已完成则复用 → 否则杀进程 + 中止消费器
+          // （UNKNOWN 收尾，写库后退出）→ 再等 → 关库。恢复依据已持久化。
+          if (forcePromise != null) return forcePromise;
+          forcePromise = (async (): Promise<DaemonStopResult> => {
+            const gracefulResult = await beginGraceful();
+            if (gracefulResult.complete) return gracefulResult;
+            await memberRuntime.disposeAll().catch(() => {});
+            worker.abortConsumers();
+            await worker.awaitInFlightTurns(Math.min(settleMs, 5_000));
+            db!.close();
+            lockHandle.release();
+            return {
+              ...gracefulResult,
+              phase: 'forced-closed',
+              reason: `${gracefulResult.reason ?? ''}；强制路径：已杀进程+消费器按 UNKNOWN 收尾后关库`.replace(/^；/, ''),
+            };
+          })();
+          return forcePromise;
+        }
+        // 非强制：若强制已发生，返回其结果（同一关闭过程的最终结果）。
+        return forcePromise ?? beginGraceful();
       },
     };
   } catch (error) {
@@ -227,9 +295,13 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts')) {
     const pidPath = join(appDataDir, 'daemon.pid');
     writeFileSync(pidPath, String(process.pid), 'utf8');
     const shutdown = async () => {
-      await daemon.stop();
+      let result = await daemon.stop();
+      if (!result.complete) {
+        // 优雅关闭未完成：走强制路径（恢复依据已持久化），退出码区分。
+        result = await daemon.stop({ force: true });
+      }
       try { rmSync(pidPath, { force: true }); } catch { /* 退出路径不因此失败 */ }
-      process.exit(0);
+      process.exit(result.complete ? 0 : 3);
     };
     process.on('SIGINT', () => void shutdown());
     process.on('SIGTERM', () => void shutdown());

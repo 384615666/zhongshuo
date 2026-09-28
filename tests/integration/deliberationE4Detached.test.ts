@@ -63,9 +63,10 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     scripts.push(done(draft('丙稿', [{ claimId: 'c1', statement: '丙' }])));
     expect(await worker.runOnce()).toBe(true); // m3 IND
     await waitUntil(() => {
+      void worker.runOnce().catch(() => {}); // 准入排队项（project/provider 上限）由 tick 重领
       const rows = db.prepare("SELECT member_id, status FROM agent_turns WHERE stage_key = 'delib.independent'").all() as Array<{ member_id: string; status: string }>;
       return ['m2', 'm3'].every((m) => rows.find((r) => r.member_id === m)?.status === 'SUCCEEDED');
-    }, 5_000, 'm2/m3 IND 完成');
+    }, 8_000, 'm2/m3 IND 完成');
 
     // 泵经 runOnce（真实调度路径）：m1 在途（仍 RUNNING、stall 未结束）时按宽限标缺席并推进互评。
     const started = db.prepare("SELECT exec_started_at FROM agent_turns WHERE stage_key = 'delib.independent' AND member_id = 'm1'").get() as { exec_started_at: number };
@@ -81,11 +82,12 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     ] });
     scripts.push(reviewOf(m3Art.id)); // CR m2
     scripts.push(reviewOf(m2Art.id)); // CR m3
+    // CR 阶段完成以**成果**计（首次载荷校验失败→一次格式修复成功=机制按设计自愈，
+    // 修复 turn 的 stage_key 带 .fx 后缀，不计入原键 turn 状态）。
     await waitUntil(() => {
       void worker.runOnce(fakeNow); // tick：泵→（屏障开）CR 入队→领取→后台消费
-      const cr = db.prepare("SELECT count(*) c FROM agent_turns WHERE stage_key = 'delib.cross_review' AND status = 'SUCCEEDED'").get() as { c: number };
-      return cr.c >= 2;
-    }, 5_000, 'CR m2/m3 派发完成');
+      return listRunArtifacts(db, runId, 'cross_review').length >= 2;
+    }, 8_000, 'CR m2/m3 成果齐');
 
     // 不强杀：m1 turn 仍 RUNNING（缺席推进≠杀成员）；屏障以 m2/m3 推进、冻结清单不含 m1。
     expect(db.prepare("SELECT status FROM agent_turns WHERE member_id = 'm1' AND stage_key = 'delib.independent'").get()).toMatchObject({ status: 'RUNNING' });

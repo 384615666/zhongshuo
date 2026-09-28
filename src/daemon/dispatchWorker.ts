@@ -24,6 +24,8 @@ import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
+import { readMemberRuntimeBinding } from './memberRuntime.ts';
+import { DispatchAdmission } from './admission.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -99,6 +101,10 @@ export interface DispatchWorkerOptions {
    * 不强杀成员）。默认 false=inline 串行（历史行为）。
    */
   detachedTurnConsumption?: boolean;
+  /** 统一派发准入（global/project/provider/member/write-root；默认按 env 上限构建）。 */
+  admission?: DispatchAdmission;
+  /** 未绑定成员的 provider 维度键（entry 传 runtime 标识）。 */
+  defaultProviderKey?: string;
 }
 
 export class DispatchWorker {
@@ -119,6 +125,11 @@ export class DispatchWorker {
   private readonly live = new Map<string, { turnId: string; sessionId: string; adapter: RuntimeAdapter }>();
   /** E4 解耦：detached 模式的在途 turn 消费器（成员级互斥+stop 收敛依据）。 */
   private readonly detached: boolean;
+  private readonly admission: DispatchAdmission;
+  private readonly defaultProviderKey: string;
+  private accepting = true;
+  /** 强制退出路径：消费器循环检测后按 UNKNOWN 收尾退出（保证关库后零回调写库）。 */
+  private aborting = false;
   private readonly inFlightTurns = new Map<string, {
     memberId: string;
     promise: Promise<void>;
@@ -133,6 +144,8 @@ export class DispatchWorker {
     this.adapter = options.adapter;
     this.adapterForMember = options.adapterFor;
     this.detached = options.detachedTurnConsumption === true;
+    this.admission = options.admission ?? new DispatchAdmission();
+    this.defaultProviderKey = options.defaultProviderKey ?? 'default-runtime';
     this.leaseOwner = options.leaseOwner;
     this.leaseMs = options.leaseMs ?? 60_000;
     this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
@@ -157,6 +170,7 @@ export class DispatchWorker {
 
   /** 处理一条 outbox 项；返回是否处理了（门禁 held/无项返回 false）。 */
   async runOnce(now?: number): Promise<boolean> {
+    if (this.accepting === false) return false; // 退出安全边界：拒新领取（在执行的当前项继续）
     if (isDispatchGateHeld(this.db)) return false;
     // 时钟：在判定时点读取（可注入）；drain 循环每轮取新值，不复用进入时的 now。
     const at = now ?? this.clock();
@@ -281,13 +295,6 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    // E4 解耦·成员级在途互斥：该成员有未终态 turn → 本项放回 pending 并跳过（同成员串行
-    // 语义与 inline 一致；其余成员的项不受影响——claim 侧 skipIds 排除，不阻塞 drain）。
-    if (this.detached && this.memberInFlight(member.id)) {
-      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      this.blockedOutbox.set(claimed.id, member.id);
-      return;
-    }
     const room = this.db
       .prepare('SELECT id, name FROM rooms WHERE id = ?')
       .get(task.room_id) as { id: string; name: string } | undefined;
@@ -337,6 +344,21 @@ export class DispatchWorker {
       return;
     }
 
+    // 统一派发准入（global/project/provider/member/write-root；启动窗口前占位——覆盖
+    // openSession/startTurn；拒绝方放回 pending 并 skip，其他成员/项目的项照常领取）。
+    const admission = this.admission.tryAcquire(turnId, {
+      memberId: member.id,
+      projectId: task.project_id,
+      providerKey: this.providerKeyOf(member.id),
+      writeRootKey: null, // 当前全只读档（plan/analyze）；写档接入点就绪（B6）
+    });
+    if (!admission.granted) {
+      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.blockedOutbox.set(claimed.id, `admission:${admission.reason}`);
+      this.audit(task, null, null, 'run.admissionDeferred', { reason: admission.reason, dispatchKey: claimed.dispatch_key });
+      return;
+    }
+
     const createRun = this.db.transaction(() => {
       this.db.prepare(
         `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
@@ -383,12 +405,14 @@ export class DispatchWorker {
         reason: 'standing-prompt-render-failed',
         message: standing.error.message,
       });
+      this.releaseAdmission(turnId);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
     if (scanSensitivePatterns(standing.value.text).length > 0) {
       await this.transitionTask(task.id, 'BLOCKED');
       this.audit(task, null, null, 'task.contextAssemblyFailed', { reason: 'sensitive-standing-prompt', message: '层 A 渲染命中敏感模式（PP-03）' });
+      this.releaseAdmission(turnId);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
@@ -427,6 +451,7 @@ export class DispatchWorker {
         this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-during-session-open' });
       });
       cancel();
+      this.releaseAdmission(turnId);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
@@ -446,8 +471,16 @@ export class DispatchWorker {
       await this.consumeTurn(task, runId, turnId, session.id, adapter, member.id, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
       // detached：consumeTurn 已登记消费器并返回（live/outbox 完结由消费器收尾）；
       // inline：此处返回时 turn 已终态、outbox 已完结。
+    } catch (dispatchError) {
+      // 启动失败（openSession/startTurn 抛错）：槽位回收（detached 消费器未登记，须在此释放；
+      // inline 由下方 finally 兜底）。outbox 留待租约超时重领→existingTurn 对账（RT-03）。
+      if (this.detached) this.releaseAdmission(turnId);
+      throw dispatchError;
     } finally {
-      if (!this.detached) this.live.delete(turnId); // detached：消费器 finally 删（停止请求须可达）
+      if (!this.detached) {
+        this.live.delete(turnId); // detached：消费器 finally 删（停止请求须可达）
+        this.releaseAdmission(turnId); // inline：终态/启动失败统一回收（幂等——consumeTurn 已释放则 no-op）
+      }
     }
   }
 
@@ -465,14 +498,16 @@ export class DispatchWorker {
       try {
         await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
       } finally {
+        this.releaseAdmission(turnId); // 终态/失败/取消统一回收（UNKNOWN 不释放——对账未定不提前放行）
         await completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
       }
       return;
     }
     const settle = (): void => {
-      void completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
+      // 关库后到达（强制退出路径残余消费者）不再抛——恢复语义由 UNKNOWN 审计承载。
+      try { completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 已关库：恢复语义承载 */ }
       this.live.delete(turnId); // detached：live 由消费器收尾删（inline 已由调用方删，幂等）
-      this.unblockMember(memberId);
+      try { this.releaseAdmission(turnId); } catch { /* 已关库：准入账本随进程消亡 */ }
     };
     const promise = this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter)
       .then(() => undefined)
@@ -495,17 +530,43 @@ export class DispatchWorker {
     this.inFlightTurns.set(turnId, { memberId, promise, outbox, leaseKeeper });
   }
 
-  private memberInFlight(memberId: string): boolean {
-    for (const entry of this.inFlightTurns.values()) {
-      if (entry.memberId === memberId) return true;
-    }
-    return false;
+  /**
+   * 准入占位释放 + 解除排队 skip（终态时保守清全部——skip 项下一轮重试判定）。
+   * UNKNOWN 不释放：结果不确定（对账未定）不提前放行——由恢复/强制退出路径收口。
+   */
+  private releaseAdmission(turnId: string): void {
+    const st = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
+    if (st?.status === 'UNKNOWN') return;
+    this.admission.release(turnId);
+    this.blockedOutbox.clear();
   }
 
-  private unblockMember(memberId: string): void {
-    for (const [id, owner] of [...this.blockedOutbox.entries()]) {
-      if (owner === memberId) this.blockedOutbox.delete(id);
+  /** 成员绑定的 runtime kind（provider 维度准入键；未绑定回落默认 runtime 标识）。 */
+  private providerKeyOf(memberId: string): string {
+    return readMemberRuntimeBinding(this.db, memberId)?.kind ?? this.defaultProviderKey;
+  }
+
+  /** 停止接新派发（退出状态机：drain 安全边界——正在执行的当前项继续，不再领取新项）。 */
+  stopAccepting(): void {
+    this.accepting = false;
+  }
+
+  /** 中止全部消费器（强制退出路径专用）：循环内检测→按既有 UNKNOWN 语义收尾后退出。 */
+  abortConsumers(): void {
+    this.aborting = true;
+  }
+
+  /** 对全部在途 turn 发送停止请求（退出状态机第 4 步；只发送，不等退出确认/不挂起）。 */
+  async requestStopAll(): Promise<string[]> {
+    const ids = [...this.live.keys()];
+    for (const turnId of ids) {
+      // 发送限时：adapter.interrupt 可能永不返回（hangInterrupt 反例）——不阻塞状态机。
+      void Promise.race([
+        this.interruptTurn(turnId),
+        new Promise((r) => { const t = setTimeout(r, 2_000); t.unref?.(); }),
+      ]).catch(() => {});
     }
+    return ids;
   }
 
   /** stop 收敛：等待全部在途消费器终态（有界；超时返回剩余 turnId——不确定，不假装完成）。 */
@@ -527,12 +588,6 @@ export class DispatchWorker {
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(step.taskId) as TaskRow | undefined;
     if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
-    // E4 解耦·成员级在途互斥（研讨步骤同成员串行：与 DIRECT 同一准入）。
-    if (this.detached && this.memberInFlight(step.memberId)) {
-      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      this.blockedOutbox.set(claimed.id, step.memberId);
       return;
     }
     if (task.stop_generation > 0) {
@@ -591,6 +646,19 @@ export class DispatchWorker {
       return;
     }
     const turnId = `turn_${randomUUID()}`;
+    // 统一派发准入（与 DIRECT 同一账本/语义；预算在上方已核对——预算限总量、准入限并发，不混用）。
+    const admission = this.admission.tryAcquire(turnId, {
+      memberId: step.memberId,
+      projectId: task.project_id,
+      providerKey: this.providerKeyOf(step.memberId),
+      writeRootKey: null, // 只读档；写档接入点就绪（B6）
+    });
+    if (!admission.granted) {
+      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.blockedOutbox.set(claimed.id, `admission:${admission.reason}`);
+      this.audit(task, run.id, null, 'run.admissionDeferred', { reason: admission.reason, dispatchKey: claimed.dispatch_key });
+      return;
+    }
     const textHash = createHash('sha256').update(assembly.value.text, 'utf8').digest('hex');
     const bundleId = `cb_${randomUUID()}`;
     const createTurn = this.db.transaction(() => {
@@ -625,6 +693,7 @@ export class DispatchWorker {
       },
     });
     if (!standing.ok || scanSensitivePatterns(standing.value.text).length > 0) {
+      this.releaseAdmission(turnId);
       await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'standing-prompt-invalid' });
       return;
@@ -658,6 +727,7 @@ export class DispatchWorker {
         this.audit(task, run.id, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-during-session-open' });
       });
       cancel();
+      this.releaseAdmission(turnId);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
@@ -674,8 +744,14 @@ export class DispatchWorker {
         resultKey: `result_${turnId}`,
       });
       await this.consumeTurn(task, run.id, turnId, session.id, adapter, step.memberId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
+    } catch (dispatchError) {
+      if (this.detached) this.releaseAdmission(turnId); // 启动失败回收（inline 由 finally 兜底）
+      throw dispatchError;
     } finally {
-      if (!this.detached) this.live.delete(turnId); // detached：消费器 finally 删
+      if (!this.detached) {
+        this.live.delete(turnId);
+        this.releaseAdmission(turnId); // inline：终态/启动失败统一回收（幂等）
+      }
     }
   }
 
@@ -732,9 +808,17 @@ export class DispatchWorker {
     let pending: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> | null = null;
 
     for (;;) {
+      if (this.aborting) {
+        // 强制退出路径（循环内检测，含已进入等待的消费器）：UNKNOWN 收尾后退出——
+        // 保证关库后零回调写库。
+        this.settleUnknown(task, runId, turnId, 'forced-shutdown-abort');
+        return;
+      }
       const now = Date.now();
       const wakeAt = interruptSent ? interruptDeadline : deadline;
-      const waitMs = Math.max(1, wakeAt - now);
+      // 等待上限 200ms：多醒仅重评估（截止/中断/中止判定不变）——保证强制退出中止
+      // 与既有时序在最坏一个轮询周期内被感知。
+      const waitMs = Math.min(200, Math.max(1, wakeAt - now));
       const nextPromise: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> =
         pending ?? iterator.next();
       pending = null;
@@ -792,6 +876,11 @@ export class DispatchWorker {
       if (event.kind === 'turn.completed' || event.kind === 'turn.failed') return;
     }
 
+    this.settleUnknown(task, runId, turnId);
+  }
+
+  /** UNKNOWN 收尾（§10.2 结果不确定，不伪造）：截止后无终态/强制退出中止共用。 */
+  private settleUnknown(task: TaskRow, runId: string, turnId: string, reason = 'no-terminal-after-deadline'): void {
     const current = this.db
       .prepare('SELECT status FROM agent_turns WHERE id = ?')
       .get(turnId) as { status: string } | undefined;
@@ -800,14 +889,13 @@ export class DispatchWorker {
       const tx = this.db.transaction(() => {
         this.db.prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE id = ?`).run(turnId);
         if (stageKey.startsWith('delib.')) {
-          // 研讨轮结果不确定（§10.2 不伪造）：成员级缺席（E4），运行继续——
-          // 不因单成员 UNKNOWN 杀死整个研讨；全员无产出由泵走 BLOCKED。
+          // 研讨轮结果不确定：成员级缺席（E4），运行继续——不因单成员 UNKNOWN 杀死整个研讨。
           const memberRow = this.db.prepare('SELECT member_id FROM agent_turns WHERE id = ?').get(turnId) as { member_id: string };
           this.db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, memberRow.member_id);
-          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'UNKNOWN', reason: 'no-terminal-after-deadline', memberAbsenced: memberRow.member_id });
+          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'UNKNOWN', reason, memberAbsenced: memberRow.member_id });
         } else {
           this.db.prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE id = ?`).run(runId);
-          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'UNKNOWN', reason: 'no-terminal-after-deadline' });
+          this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'UNKNOWN', reason });
         }
       });
       tx();
@@ -934,8 +1022,17 @@ export class DispatchWorker {
         break;
       }
       case 'turn.failed': {
+        // 用户停止判定（与 DELIB 口径一致）：INTERRUPTED + stop_generation 已推进/任务已
+        // CANCELLED。无用户停止的 INTERRUPTED=单轮截止中断——结果不确定（请求可能已发出），
+        // UNKNOWN 收尾，不伪造取消/失败。
+        const taskNowStop = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
+        const userStop = event.code === 'INTERRUPTED' && (taskNowStop != null && (taskNowStop.stop_generation > 0 || taskNowStop.status === 'CANCELLED'));
+        if (event.code === 'INTERRUPTED' && !userStop) {
+          this.settleUnknown(task, runId, turnId, 'turn-deadline-interrupt');
+          break;
+        }
         const tx = this.db.transaction(() => {
-          const interrupted = event.code === 'INTERRUPTED';
+          const interrupted = userStop;
           this.casTurn(turnId, interrupted ? 'CANCELLED' : 'FAILED');
           this.db.prepare(`UPDATE workflow_runs SET status = ? WHERE id = ?`).run(interrupted ? 'CANCELLED' : 'FAILED', runId);
           this.settleBudget(runId);

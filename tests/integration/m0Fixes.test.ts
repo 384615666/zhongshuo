@@ -121,14 +121,17 @@ describe('FIX-8b：验收策略收尾（§10.5）', () => {
 });
 
 describe('FIX-2：沉默 runtime 的独立截止计时', () => {
-  it('开始后持续无输出：截止到点自动中断（响应中断 → CANCELLED）', async () => {
+  it('开始后持续无输出：截止到点自动中断（非用户停止 → 结果不确定 UNKNOWN，不伪造取消/失败）', async () => {
     const db = openMem();
     makeTask(db, 1);
     const adapter = new FakeRuntimeAdapter({ turnScripts: [stuckTurn(60_000)] });
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1', turnDeadlineMs: 100, interruptGraceMs: 2_000 });
     await worker.runOnce(); // 事件流沉默，靠独立计时器触发中断
-    expect(db.prepare('SELECT status FROM workflow_runs WHERE task_id = ?').get('task_1')).toMatchObject({ status: 'CANCELLED' });
-    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).toMatchObject({ status: 'CANCELLED' });
+    // 语义修正（2026-09-28 第四轮）：无用户停止的截止中断=对账未定（请求可能已发出）——
+    // turn UNKNOWN、run INTERRUPTED、任务回 ACTIVE 等修复/重试；CANCELLED 仅属用户停止。
+    expect(db.prepare('SELECT status FROM agent_turns ORDER BY rowid DESC LIMIT 1').get()).toMatchObject({ status: 'UNKNOWN' });
+    expect(db.prepare('SELECT status FROM workflow_runs WHERE task_id = ?').get('task_1')).toMatchObject({ status: 'INTERRUPTED' });
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).toMatchObject({ status: 'ACTIVE' });
     await adapter.closeAllSessions();
     db.close();
   });

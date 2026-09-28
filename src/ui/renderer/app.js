@@ -264,6 +264,36 @@ async function renderDeliberation() {
   report.classList.remove('hidden');
 }
 
+/** 线程内工具审计（2026-09-28）：真源=服务端 tool.started/tool.completed 审计（非模型自述）。
+ *  只读区块置于线程消息尾部——不新增监控页面；同 toolCallId 迟到/重复事件由服务端去重。 */
+async function renderToolCalls(box) {
+  let data = null;
+  try {
+    data = await command('thread.toolCalls', { threadId: state.openThreadId });
+  } catch { /* 命令不可用（旧 daemon）：区块不渲染 */ }
+  const items = data?.items ?? [];
+  if (items.length === 0) return;
+  const section = document.createElement('div');
+  section.className = 'tool-audit';
+  section.dataset.section = 'tool-audit';
+  const head = document.createElement('div');
+  head.className = 'meta';
+  head.textContent = `工具调用记录（程序侧实录 ${items.length} 条）`;
+  section.appendChild(head);
+  for (const t of items) {
+    const row = document.createElement('div');
+    row.className = 'tool-audit-row';
+    row.dataset.toolCallId = t.toolCallId;
+    const outcome = t.outcome ?? (t.startedAt != null && t.completedAt == null ? '进行中' : '未知');
+    const when = t.startedAt != null ? new Date(t.startedAt).toLocaleTimeString() : '';
+    row.textContent = `${t.memberId ?? '?'} · ${t.toolName ?? '?'} · ${outcome}${when ? ' · ' + when : ''} · ${t.toolCallId}`;
+    row.title = `turn=${t.turnId ?? '?'} eventKeys=${(t.eventKeys ?? []).join(',')}`;
+    section.appendChild(row);
+  }
+  box.appendChild(section);
+  box.scrollTop = box.scrollHeight;
+}
+
 async function renderThread() {
   if (state.openThreadId == null) return;
   const box = el('thread-messages');
@@ -294,6 +324,7 @@ async function renderThread() {
     box.appendChild(div);
   }
   box.scrollTop = box.scrollHeight;
+  await renderToolCalls(box);
   await renderDeliberation();
   if (state.openTaskId != null) {
     // 任务串：拉取任务快照（状态行 + 停止按钮的 runId/停止代次来源）。

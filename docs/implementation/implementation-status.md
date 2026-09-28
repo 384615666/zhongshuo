@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-28 第三轮（DEV-10：受控中断真实认证通过+能力声明逐项修正+E4 调度解耦实装含两缺陷修复；370/370、e2e 13/13）
+- 最近更新：2026-09-28 第四轮（统一派发准入+退出状态机+harness stop 闭环+线程工具审计+DEV-12 前像起步；384/384、lint 0、零真实调用）
 
 ## 工作包状态
 
@@ -38,6 +38,10 @@
 | DEV-23 | 提醒（一次/循环、occurrence 唯一、错过合并、通知） | NOT_STARTED | `src/daemon/` | REM/FOLLOW | M3 |
 | DEV-24 | 七类附件、评论、导出、共享预览 | NOT_STARTED | `src/ui/`+服务 | WPV-01—36 | M3 |
 | DEV-25 | 本机/LAN 浏览器、配对/吊销、HTTPS/WSS | NOT_STARTED | `src/daemon/` | RT-21/LAN-01—08 | M3 |
+
+## 统一准入/退出状态机/harness/工具审计（2026-09-28 第四轮）
+
+详见 [reports/round-20260928-admission-shutdown-tools.md](reports/round-20260928-admission-shutdown-tools.md)。统一派发准入（global/project/provider/member+writeRoot 接入口、启动窗口占位、UNKNOWN 保留占用、预算并发不混用；7 组反例+修三缺陷含 DIRECT 截止中断误判 CANCELLED→UNKNOWN）；退出状态机（incomplete 不关库不释放锁、force 路径=杀+abort UNKNOWN 收尾后关库、退出码 0/3；本地反例全过）；real-delib stop 操作闭环（正式 task.stop 绑定代次→观察至可解释终态、taskkill 仅崩溃注入）；thread.toolCalls 命令+renderer 线程尾只读区块（domain_events 真源、隔离去重、集成 4/4）；DEV-12 前像捕获/diff 纯函数起步（临时 fixture）。
 
 ## DEV-10 受控中断认证 + 能力修正 + E4 解耦实装（2026-09-28 第三轮）
 

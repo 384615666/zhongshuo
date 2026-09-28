@@ -360,6 +360,47 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
+      case 'thread.toolCalls': {
+        // 线程内工具审计（2026-09-28 第四轮）：真源=worker 落库的 tool.started/tool.completed
+        // 审计事件（非模型 executedVerifications 自述）。按线程→task 限定隔离；同 toolCallId
+        // 的迟到/重复事件去重（started 取首、completed 取末）；无参数正文落库=无泄露面。
+        const params = z.strictObject({ threadId: z.string().min(1) }).parse(env.params);
+        const rows = deps.db.prepare(
+          `SELECT de.kind, de.payload_json, de.created_at, de.turn_id
+           FROM domain_events de
+           WHERE de.kind IN ('tool.started','tool.completed')
+             AND de.task_id IN (SELECT id FROM tasks WHERE conversation_thread_id = ?)
+           ORDER BY de.seq`,
+        ).all(params.threadId) as Array<{ kind: string; payload_json: string; created_at: number; turn_id: string | null }>;
+        const byCall = new Map<string, { toolCallId: string; toolName: string | null; memberId: string | null; turnId: string | null; startedAt: number | null; completedAt: number | null; outcome: string | null; eventKeys: string[] }>();
+        for (const r of rows) {
+          const payload = JSON.parse(r.payload_json) as { toolCallId?: string; toolName?: string; outcome?: string; eventKey?: string };
+          const id = payload.toolCallId ?? `unknown_${r.created_at}`;
+          let entry = byCall.get(id);
+          if (entry == null) {
+            entry = { toolCallId: id, toolName: null, memberId: null, turnId: r.turn_id, startedAt: null, completedAt: null, outcome: null, eventKeys: [] };
+            byCall.set(id, entry);
+          }
+          if (r.kind === 'tool.started' && entry.startedAt == null) {
+            entry.startedAt = r.created_at;
+            entry.toolName = entry.toolName ?? payload.toolName ?? null;
+          }
+          if (r.kind === 'tool.completed') {
+            entry.completedAt = entry.completedAt ?? r.created_at;
+            entry.outcome = payload.outcome ?? entry.outcome;
+          }
+          if (payload.eventKey != null) entry.eventKeys.push(payload.eventKey);
+        }
+        // memberId：turn 归属成员（批量查询一次）。
+        const items = [...byCall.values()];
+        for (const item of items) {
+          if (item.turnId != null) {
+            const member = deps.db.prepare('SELECT member_id FROM agent_turns WHERE id = ?').get(item.turnId) as { member_id: string } | undefined;
+            item.memberId = member?.member_id ?? null;
+          }
+        }
+        return withCommandId({ ok: true, data: { items } });
+      }
       case 'events.list': {
         const params = z.strictObject({ projectId: z.string().min(1), afterSeq: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
         const items = listEvents(deps.db, params.projectId, params.afterSeq ?? 0, params.limit ?? 100);

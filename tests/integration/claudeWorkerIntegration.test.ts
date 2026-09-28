@@ -175,6 +175,35 @@ describe('跨 runtime 成员绑定 × 共用 worker（生产 registry，零额�
     db.close();
   }, 30_000);
 
+  it('线程工具审计：fake tool 事件→worker 落库→thread.toolCalls 呈现（隔离/去重/成员归属）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const adapter = new FakeRuntimeAdapter({
+      turnScriptSequencer: () => ([
+        { kind: 'event', event: { kind: 'tool.started', toolCallId: 'tool_read_1', toolName: 'Read', argumentsSummary: '' } },
+        { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tool_read_1', outcome: 'success' } },
+        // 迟到/重复：同 toolCallId 的重复 completed 不得生成第二张卡（服务端取末值去重）。
+        { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'tool_read_1', outcome: 'unknown' } },
+        { kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } },
+      ]),
+    });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-tool', appDataDir: join(tmpRoot, 'tool') });
+    makeTask(db, 5, 'm_fake');
+    makeTask(db, 6, 'm_fake'); // 另一线程：不串记录
+    await worker.runOnce();
+    await new Promise((r) => setTimeout(r, 150));
+    const r5 = await runCommand(db, 'thread.toolCalls', { threadId: 'th5' }) as { data: { items: Array<{ toolCallId: string; toolName: string | null; outcome: string | null; memberId: string | null; turnId: string | null }> } };
+    expect(r5.data.items.length).toBe(1); // 去重：一次 toolCallId 一张卡
+    const item = r5.data.items[0]!;
+    expect(item).toMatchObject({ toolCallId: 'tool_read_1', toolName: 'Read', memberId: 'm_fake' });
+    expect(item.outcome).toBe('unknown'); // 迟到重复取末值（如实）
+    expect(item.turnId).toBeTruthy();
+    const r6 = await runCommand(db, 'thread.toolCalls', { threadId: 'th6' }) as { data: { items: unknown[] } };
+    expect(r6.data.items.length).toBe(0); // 线程隔离：th6 无记录
+    await adapter.closeAllSessions();
+    db.close();
+  }, 15_000);
+
   it('绑定不可用 kind（daemon 未注册工厂）→ 派发如实失败，不静默换 runtime', async () => {
     const db = openDatabase(':memory:');
     seed(db);

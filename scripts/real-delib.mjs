@@ -160,18 +160,57 @@ async function doObserve() {
   process.exit(1);
 }
 
+/**
+ * 停止=操作闭环（2026-09-28 第四轮）：默认经**正式 task.stop 命令**（绑定 taskId/
+ * targetRunId/expectedStopGeneration——从 task.get 现场读取），随后观察进程与业务状态
+ * 直到**可解释终态**（CANCELLED/FAILED/UNKNOWN 落库 + 进程清单核对），不把"请求已发"
+ * 写成"已停止"。taskkill 仅用于崩溃注入场景（ZS_CRASH_INJECT=1 显式），与正常停止的
+ * 证据分开记录；UI 不可达时按观察不可用如实记录，不以强杀制造取消成功。
+ */
 async function doStop() {
   const m = JSON.parse(readFileSync(MANIFEST, 'utf8'));
-  // 优先走真实停止路径（renderer task.stop）；进程不可达则按进程收尾（kill 树）。
+  const stopRequestedAt = Date.now();
+  // 1) 正式停止命令：task.get 现场取 runId/停止代次 → task.stop（校验代次防双停竞态）。
+  let stopAck;
   try {
-    await evalPage(`(async()=>{ const p = await ${cmd('run.progress', { taskId: m.taskId })}; const runId = null; document.getElementById('stop-btn') && document.getElementById('stop-btn').click(); return true; })()`);
-    await new Promise((r) => setTimeout(r, 2000));
-  } catch { /* UI 不在运行视图则直接进程收尾 */ }
-  if (alive(m.electronPid)) {
-    try { execSync(`taskkill /PID ${m.electronPid} /T /F`); } catch { /* 尽力 */ }
+    const got = await evalPage(`(async()=>{ try { return JSON.stringify(await ${cmd('task.get', { taskId: m.taskId })}); } catch(e){ return 'ERR '+e.message; } })()`);
+    const parsed = JSON.parse(String(got));
+    const t = parsed?.data?.task ?? parsed?.task;
+    const run = parsed?.data?.activeRun ?? parsed?.activeRun;
+    if (t == null || run == null) throw new Error(`task.get 现场缺失：${String(got).slice(0, 200)}`);
+    const ack = await evalPage(`(async()=>{ try { return JSON.stringify(await ${cmd('task.stop', { taskId: m.taskId, targetRunId: run.id, expectedStopGeneration: t.stopGeneration ?? 0 })}); } catch(e){ return 'ERR '+e.message; } })()`);
+    stopAck = { targetRunId: run.id, expectedStopGeneration: t.stopGeneration ?? 0, ack: String(ack).slice(0, 300) };
+  } catch (e) {
+    // 观察退出≠重复提交：UI 不可达时如实记录（不强杀制造取消）。
+    console.log(JSON.stringify({ stopped: false, reason: 'stop-request-unreachable', error: String(e).slice(0, 200), note: '观察退出不自动重试/不开新任务；恢复见 continuation' }, null, 2));
+    return;
   }
-  const snap = await (async () => { try { return await snapshot(); } catch { return { note: 'app 已关闭，观察不可用' }; } })();
-  console.log(JSON.stringify({ stopped: true, final: snap }, null, 2));
+  // 2) 观察到可解释终态（有上限；超时=未确认，不假装已停止）。
+  const TERMINAL = ['CANCELLED', 'FAILED', 'BLOCKED', 'DONE', 'REVIEW'];
+  let final = null;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const st = await snapshot();
+      const status = st?.manifest?.taskId ? (await evalPage(`(async()=>{ try { const r = await ${cmd('task.get', { taskId: m.taskId })}; return JSON.stringify(r?.data?.task?.status ?? r?.task?.status ?? null); } catch(e){ return null; } })()`)) : null;
+      final = { taskStatus: status ? JSON.parse(String(status)) : null, snapshotNote: st?.note ?? null };
+      if (final.taskStatus != null && TERMINAL.includes(final.taskStatus)) break;
+    } catch { final = { taskStatus: null, note: '观察不可用' }; }
+  }
+  // 3) 崩溃注入（显式开关）：与正常停止分开记录——恢复路径走崩溃恢复语义。
+  let crashInjected = null;
+  if (process.env.ZS_CRASH_INJECT === '1' && m.electronPid != null && alive(m.electronPid)) {
+    try { execSync(`taskkill /PID ${m.electronPid} /T /F`); crashInjected = { pid: m.electronPid, method: 'taskkill-tree' }; } catch { crashInjected = { pid: m.electronPid, method: 'taskkill-failed' }; }
+  }
+  const explained = final?.taskStatus != null && TERMINAL.includes(final.taskStatus);
+  console.log(JSON.stringify({
+    stopped: explained === true,
+    stopRequestedAt, stopAck, final,
+    crashInjected,
+    residualProcess: m.electronPid != null ? alive(m.electronPid) : null,
+    note: explained === true ? '可解释终态已观察' : '超时未确认：不假装已停止；证据保留在 manifest/DB，恢复走崩溃恢复语义',
+  }, null, 2));
 }
 
 const [action, , taskText] = process.argv.slice(2);
