@@ -44,23 +44,27 @@ export function enqueueOutbox(
 
 /**
  * CAS 领取：pending 或租约已过期的行，原子置为 leased 并推进 attemptEpoch。
+ * skipIds：跳过指定行（成员级在途互斥的排队项——不领取、不推进，保持 pending）。
  * 无可领取项返回 null。
  */
 export function claimNextOutbox(
   db: ZhongshuoDatabase,
-  claim: { leaseOwner: string; leaseUntil: number; now: number },
+  claim: { leaseOwner: string; leaseUntil: number; now: number; skipIds?: number[] },
 ): OutboxRow | null {
+  const skip = (claim.skipIds ?? []).filter((id) => Number.isInteger(id));
+  const notIn = skip.length > 0 ? `AND id NOT IN (${skip.map(() => '?').join(',')})` : '';
   const row = db
     .prepare(
       `UPDATE outbox SET status = 'leased', lease_owner = ?, lease_until = ?, attempt_epoch = attempt_epoch + 1
        WHERE id IN (
          SELECT id FROM outbox
-         WHERE status = 'pending' OR (status = 'leased' AND lease_until IS NOT NULL AND lease_until < ?)
+         WHERE (status = 'pending' OR (status = 'leased' AND lease_until IS NOT NULL AND lease_until < ?))
+         ${notIn}
          ORDER BY id LIMIT 1
        )
        RETURNING *`,
     )
-    .get(claim.leaseOwner, claim.leaseUntil, claim.now) as OutboxRow | undefined;
+    .get(claim.leaseOwner, claim.leaseUntil, claim.now, ...skip) as OutboxRow | undefined;
   return row ?? null;
 }
 
@@ -70,6 +74,17 @@ export function completeOutbox(db: ZhongshuoDatabase, id: number, attemptEpoch: 
     .prepare(
       `UPDATE outbox SET status = 'done', lease_owner = NULL, lease_until = NULL
        WHERE id = ? AND attempt_epoch = ?`,
+    )
+    .run(id, attemptEpoch);
+  return info.changes > 0;
+}
+
+/** 放回 pending（成员级互斥暂不派发）：仅持当前代次可放回，防跨 worker 误放。 */
+export function releaseOutbox(db: ZhongshuoDatabase, id: number, attemptEpoch: number): boolean {
+  const info = db
+    .prepare(
+      `UPDATE outbox SET status = 'pending', lease_owner = NULL, lease_until = NULL
+       WHERE id = ? AND attempt_epoch = ? AND status = 'leased'`,
     )
     .run(id, attemptEpoch);
   return info.changes > 0;

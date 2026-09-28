@@ -196,62 +196,101 @@ async function evidenceTurn2(): Promise<void> {
   const ctx = await bootDaemon();
   const t0 = Date.now();
   const claudeBefore = claudeProcesses();
+  let restartCheck: Record<string, unknown>;
   try {
     const { taskId, memberId } = await submitTask(ctx,
       `请只读分析当前目录下的 notes.md，逐条列出可疑之处并给出核查建议（不需要得出结论，慢慢分析即可）。不要修改任何文件。`);
     log(`任务已提交 taskId=${taskId} memberId=${memberId}`);
 
-    // 等真实运行开始：agent_turn 进入 RUNNING（真实进程已启动、事件流已建立）。
+    // 等真实运行证据：agent_turn RUNNING 且（真实档）**新 claude 进程已实际出现**——
+    // 进程级证据，非仅状态位；彩排（fake）无独立进程，只等 RUNNING。
+    const needPid = process.env.ZS_DEV10_REHEARSE !== '1';
     const deadline = Date.now() + 120_000;
     let turnRow: { id: string; status: string } | null = null;
+    let spawnedPid: number | null = null;
     for (;;) {
       turnRow = ctx.daemon.db.prepare('SELECT id, status FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id = ?) ORDER BY rowid DESC LIMIT 1').get(taskId) as { id: string; status: string } | null;
-      if (turnRow != null && ['RUNNING', 'WAITING_APPROVAL'].includes(turnRow.status)) break;
-      if (Date.now() > deadline) throw new Error(`等待真实运行开始超时（turn 状态=${turnRow?.status ?? 'null'}）`);
-      await new Promise((r) => setTimeout(r, 500));
+      if (needPid) {
+        const nowProcs = claudeProcesses();
+        spawnedPid = nowProcs.find((p) => !claudeBefore.some((b) => b.pid === p.pid))?.pid ?? null;
+      } else {
+        spawnedPid = -1; // 彩排：fake adapter 无独立进程
+      }
+      if (turnRow != null && turnRow.status === 'RUNNING' && spawnedPid != null) break;
+      if (Date.now() > deadline) throw new Error(`等待真实运行证据超时（turn=${turnRow?.status ?? 'null'} claudePid=${spawnedPid}）`);
+      await new Promise((r) => setTimeout(r, 400));
     }
     const startedAt = Date.now();
-    log(`真实运行已开始 turnId=${turnRow.id}（status=${turnRow.status}）——执行受控停止`);
+    log(`真实运行证据齐备 turnId=${turnRow.id} claudePid=${spawnedPid}——立即受控停止（不等大段输出）`);
 
     const got = await command(ctx, 'task.get', { taskId });
     const taskData = got.data as { task: { stopGeneration: number }; activeRun: { id: string } | null };
     const stopped = await command(ctx, 'task.stop', { taskId, targetRunId: taskData.activeRun!.id, expectedStopGeneration: taskData.task.stopGeneration });
     if (!stopped.ok) throw new Error(`task.stop 失败：${JSON.stringify(stopped.error)}`);
-    log('task.stop 已发出');
+    const stopAckAt = Date.now();
+    log(`task.stop 已发出（${stopAckAt - startedAt}ms）`);
 
     const final = await waitTaskTerminal(ctx, taskId, 60_000);
     // 停止后再观察 8s：迟到事件/孤儿进程判定窗口。
     await new Promise((r) => setTimeout(r, 8_000));
     const claudeAfter = claudeProcesses();
-    const newPids = claudeAfter.filter((p) => !claudeBefore.some((b) => b.pid === p.pid));
+    const orphanPids = claudeAfter.filter((p) => !claudeBefore.some((b) => b.pid === p.pid)).map((p) => p.pid);
     const lateEvents = ctx.daemon.db.prepare("SELECT kind, payload_json, created_at FROM domain_events WHERE task_id = ? AND kind LIKE 'turn.%' AND created_at >= ? ORDER BY created_at").all(taskId, startedAt) as Array<{ kind: string; payload_json: string; created_at: number }>;
     const turnFinal = ctx.daemon.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnRow.id) as { status: string };
     const usage = ctx.daemon.db.prepare('SELECT normalized_json FROM usage_records WHERE turn_id = ?').all(turnRow.id) as Array<{ normalized_json: string }>;
+    const deliveries = ctx.daemon.db.prepare('SELECT count(*) c FROM task_deliveries WHERE task_id = ?').get(taskId) as { c: number };
+    const toolEvents = ctx.daemon.db.prepare("SELECT kind, payload_json FROM domain_events WHERE task_id = ? AND kind LIKE 'tool.%' ORDER BY seq").all(taskId) as Array<{ kind: string; payload_json: string }>;
+    const stopAudit = ctx.daemon.db.prepare("SELECT payload_json FROM domain_events WHERE task_id = ? AND kind = 'turn.statusChanged' AND payload_json LIKE '%INTERRUPTED%' ORDER BY seq DESC LIMIT 1").get(taskId) as { payload_json: string } | undefined;
+    // 响应自报模型：中断早停通常无 assistant 消息——如实 null（不以请求模型冒充响应模型）。
+    const reportedModel = usage.map((u) => (JSON.parse(u.normalized_json) as { model?: string }).model).find((m) => m != null) ?? null;
 
     const evidence = {
       turn: 2, rehearsal: process.env.ZS_DEV10_REHEARSE === '1',
-      purpose: '受控中断：真实运行开始后停止——终态/进程收尾/迟到事件/资源回收',
-      model: MODEL, channelHost: channelHost(), cliVersion: claudeVersion(),
-      taskId, memberId, turnId: turnRow.id,
-      stopSentAtMs: startedAt, elapsedMs: Date.now() - t0,
+      purpose: '受控中断：真实运行证据后停止——正确目标/终态/进程收尾/迟到事件/交付无/重启不复活',
+      requestedModel: MODEL, reportedModel, channelHost: channelHost(), cliVersion: claudeVersion(),
+      taskId, memberId, turnId: turnRow.id, runId: taskData.activeRun?.id ?? null,
+      stopRequestedAtMs: startedAt, stopAckMs: stopAckAt - startedAt, elapsedMs: Date.now() - t0,
       taskStatus: final.taskStatus, runStatus: final.runStatus, turnStatus: final.turnStatus, turnFinalStatus: turnFinal.status,
-      claudeProcessesBefore: claudeBefore.length, claudeProcessesAfter: claudeAfter.length, newClaudePids: newPids,
+      spawnedClaudePid: spawnedPid, orphanClaudePids: orphanPids,
       lateEvents: lateEvents.slice(-15),
-      // process.exited 归一化事件在 worker 侧被忽略（不入审计）——进程收尾以系统进程清单核验。
-      processExitedAudit: null as null,
+      stopAudit: stopAudit?.payload_json ?? null,
+      toolEvents,
       usage: usage.map((u) => JSON.parse(u.normalized_json)),
+      deliveries: deliveries.c,
+      restartCheck: null as unknown,
       checks: {
-        stopReachedTerminal: ['CANCELLED', 'FAILED', 'BLOCKED', 'INTERRUPTED'].includes(final.taskStatus) || final.turnStatus === 'INTERRUPTED' || turnFinal.status === 'INTERRUPTED' || turnFinal.status === 'CANCELLED',
-        noOrphanClaude: newPids.length === 0,
-        daemonAliveAfterStop: true,
+        correctTargetInterrupted: turnFinal.status === 'CANCELLED' || turnFinal.status === 'INTERRUPTED',
+        taskCancelled: final.taskStatus === 'CANCELLED',
+        noDelivery: deliveries.c === 0,
+        noOrphanClaude: orphanPids.length === 0,
+        noLateRevival: lateEvents.every((e) => !e.kind.includes('SUCCEEDED')),
       },
     };
-    writeFileSync(join(ROOT, process.env.ZS_DEV10_REHEARSE === '1' ? 'evidence-turn2-rehearsal.json' : 'evidence-turn2.json'), JSON.stringify(evidence, null, 2), 'utf8');
-    log(`turn2 完成：task=${final.taskStatus} turn=${turnFinal.status} 新claude进程(仍存活)=${newPids.length} lateEvents=${lateEvents.length}`);
-    log(`证据：${join(ROOT, 'evidence-turn2.json')}`);
-  } finally {
+
+    // 重启不复活：关 daemon → 重启（applyRecovery 跑）→ 任务仍 CANCELLED、无新 run/turn。
     await ctx.pipe.close();
     await ctx.daemon.stop();
+    const daemon2 = await startDaemon({ appDataDir: APPDATA, runtime: 'fake', tickMs: 400 });
+    try {
+      await new Promise((r) => setTimeout(r, 1_500)); // 恢复+若干 tick
+      const taskAfter = daemon2.db.prepare('SELECT status, stop_generation FROM tasks WHERE id = ?').get(taskId) as { status: string; stop_generation: number };
+      const runsAfter = daemon2.db.prepare('SELECT count(*) c FROM workflow_runs WHERE task_id = ?').get(taskId) as { c: number };
+      const turnsAfter = daemon2.db.prepare('SELECT count(*) c FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id = ?)').get(taskId) as { c: number };
+      const delAfter = daemon2.db.prepare('SELECT count(*) c FROM task_deliveries WHERE task_id = ?').get(taskId) as { c: number };
+      restartCheck = { taskStatus: taskAfter.status, stopGeneration: taskAfter.stop_generation, runs: runsAfter.c, turns: turnsAfter.c, deliveries: delAfter.c };
+      (evidence as { restartCheck: unknown }).restartCheck = restartCheck;
+      (evidence as { checks: Record<string, boolean> }).checks.noRevivalAfterRestart = taskAfter.status === 'CANCELLED' && turnsAfter.c === 1 && delAfter.c === 0;
+    } finally {
+      await daemon2.stop();
+    }
+    writeFileSync(join(ROOT, process.env.ZS_DEV10_REHEARSE === '1' ? 'evidence-turn2-rehearsal.json' : 'evidence-turn2.json'), JSON.stringify(evidence, null, 2), 'utf8');
+    log(`turn2 完成：task=${final.taskStatus} turn=${turnFinal.status} pid=${spawnedPid}→孤儿=${orphanPids.length} 交付=${deliveries.c} lateEvents=${lateEvents.length} toolEvents=${toolEvents.length}`);
+    log(`重启检查：${JSON.stringify(restartCheck)}`);
+    log(`证据：${join(ROOT, 'evidence-turn2.json')}`);
+    return;
+  } finally {
+    try { ctx.pipe.close(); } catch { /* 已关闭/无连接 */ }
+    try { await ctx.daemon.stop(); } catch { /* 已停止（幂等）*/ }
   }
 }
 

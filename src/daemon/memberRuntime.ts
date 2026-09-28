@@ -96,22 +96,47 @@ export class MemberRuntimeRegistry {
     return adapter;
   }
 
-  /** daemon 收拢：逐个关闭默认与已构建的成员 adapter（尽力而为，不抛出）。 */
-  async disposeAll(): Promise<void> {
+  /**
+   * daemon 收拢：逐个关闭默认与已构建的成员 adapter；**不静默吞失败**——
+   * 继续清理其余，但汇总每个 adapter 的结果（成功/失败/退出未确认），上层据此上报。
+   */
+  async disposeAll(): Promise<MemberDisposeReport> {
     const all = [...new Set([this.defaultAdapter, ...this.cache.values()])];
+    const report: MemberDisposeReport = { entries: [], failed: [], unconfirmed: [] };
     for (const adapter of all) {
+      const label = adapter.constructor.name;
       const disposable = adapter as unknown as {
         dispose?: () => Promise<void>;
-        disposeAll?: () => Promise<void>;
+        disposeAll?: () => Promise<Array<{ turnId: string; exitConfirmed: boolean }>>;
         closeAllSessions?: () => Promise<void>;
       };
       try {
-        if (typeof disposable.dispose === 'function') await disposable.dispose();
-        else if (typeof disposable.disposeAll === 'function') await disposable.disposeAll();
-        else if (typeof disposable.closeAllSessions === 'function') await disposable.closeAllSessions();
-      } catch {
-        // 收拢尽力而为：单个 adapter 失败不阻断其余。
+        if (typeof disposable.dispose === 'function') {
+          await disposable.dispose();
+          report.entries.push({ adapter: label, outcome: 'disposed' });
+        } else if (typeof disposable.disposeAll === 'function') {
+          const exits = await disposable.disposeAll();
+          for (const e of exits) {
+            report.entries.push({ adapter: label, outcome: 'disposed', turnId: e.turnId, exitConfirmed: e.exitConfirmed });
+            if (!e.exitConfirmed) report.unconfirmed.push({ adapter: label, turnId: e.turnId });
+          }
+        } else if (typeof disposable.closeAllSessions === 'function') {
+          await disposable.closeAllSessions();
+          report.entries.push({ adapter: label, outcome: 'disposed' });
+        } else {
+          report.entries.push({ adapter: label, outcome: 'no-dispose-needed' });
+        }
+      } catch (error) {
+        report.failed.push({ adapter: label, error: String(error).slice(0, 200) });
       }
     }
+    return report;
   }
+}
+
+export interface MemberDisposeReport {
+  entries: Array<{ adapter: string; outcome: 'disposed' | 'no-dispose-needed'; turnId?: string; exitConfirmed?: boolean }>;
+  failed: Array<{ adapter: string; error: string }>;
+  /** 停止请求已发但退出未确认的 turn（不确定，不假装已停止）。 */
+  unconfirmed: Array<{ adapter: string; turnId: string }>;
 }

@@ -21,7 +21,7 @@ import { requestStop } from './stopFlow.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { readMemberRuntimeBinding } from './memberRuntime.ts';
-import { CLAUDE_ADAPTER_VERSION } from '../adapter/claude/cliAdapter.ts';
+import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
@@ -216,7 +216,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           kind: z.enum(['codex', 'claude', 'fake']),
           model: z.string().min(1).optional(),
           executable: z.string().min(1).optional(),
-          permissionMode: z.enum(['default', 'plan', 'acceptEdits', 'bypassPermissions']).optional(),
+          permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).optional(),
         }).parse(env.params);
         if (params.kind === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
           throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', 'fake runtime 仅限显式开发模式（ZS_ALLOW_FAKE=1）');
@@ -230,11 +230,11 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           const executable = params.executable ?? (params.kind === 'claude' ? 'claude' : params.kind);
           const installationId = `ri_${params.kind}_${createHash('sha256').update(`${params.kind}|${executable}`).digest('hex').slice(0, 10)}`;
           const adapterVersion = params.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : params.kind === 'codex' ? 'codex-appserver-adapter' : 'fake-adapter';
+          // 能力登记（单一真源=adapter 能力表；分别记录：工具能力三态/模型可用性/权限认证——
+          // 配置成功≠已认证，真实认证结论只适用于实测组合）。
+          const toolCapabilities = params.kind === 'claude' ? claudeCapabilities() : { note: 'codex/fake 能力表随各自 adapter 认证轮登记' };
           const capabilities = {
-            toolCapabilities: {
-              note: '三态表见 adapter CAPABILITIES；本记录为登记时点快照',
-              structuredEvents: params.kind === 'fake' ? 'supported' : 'supported',
-            },
+            toolCapabilities,
             modelAvailability: params.model != null ? 'configured-unverified' : 'not-specified',
             permissionAuth: 'unverified',
           };

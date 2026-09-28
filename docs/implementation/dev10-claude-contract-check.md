@@ -1,5 +1,17 @@
 # DEV-10 第二 runtime（Claude Code）契约核对与环境状态（2026-09-28，零模型预算）
 
+> **2026-09-28 第三轮：能力矩阵（本文件为登记真源之一；程序真源=cliAdapter CAPABILITIES）**
+> supported：structuredEvents/structuredFinal/usageTokens（真实 turn1 全链）、usageCost
+> （CLI 估算→estimated，非渠道账单）、interrupt（真实受控中断认证通过：进程证据后停/
+> CANCELLED 全链/无孤儿/重启不复活；本地真实进程 fixture 6 用例）。
+> unverified：resumeSession（--resume 仅回放）、restrictWrites/restrictShell/disableDelegation
+> （正式机制组合已实现：--permission-prompts none+--disallowedTools+--strict-mcp-config+
+> --bare+--disable-slash-commands；--allowedTools 只是预授权免审批清单**非总白名单**——
+> init.tools 仍含 Bash 等执行类工具，取证见 round-20260928-dev10-real-auth.md）、
+> taskContextIsolation（回放验证；真实侧单任务）、interactiveApprovals。
+> unsupported：steerActiveTurn（设计性拒绝）。
+> 详见 reports/round-20260928-dev10-interrupt-e4.md §1。
+
 > **2026-09-28 第二轮修订**：下表"模型配置"行的初步判断已被真实取证修正——
 > `deepseek-flash[1m]` 的 unrecognized_model 为**服务端错误透传**（渠道 /v1/models 不含带
 > `[1m]` 后缀的名，含裸 `deepseek-flash`）；该告警在**成功** turn 上也会出现（SDK 噪音）。

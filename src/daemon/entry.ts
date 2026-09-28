@@ -91,8 +91,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
     // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
-    const claudePermissionOf = (mode: string | null): 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | undefined =>
-      mode === 'default' || mode === 'plan' || mode === 'acceptEdits' || mode === 'bypassPermissions' ? mode : undefined;
+    const claudePermissionOf = (mode: string | null): 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' | undefined =>
+      mode === 'plan' || mode === 'manual' || mode === 'acceptEdits' || mode === 'auto' || mode === 'dontAsk' || mode === 'bypassPermissions' ? mode : undefined;
     const factories: Record<string, MemberAdapterFactory> = {
       codex: (binding) => new CodexAppServerAdapter({ model: binding.model ?? process.env.ZS_E2E_MODEL }),
       claude: (binding) => new ClaudeCliAdapter({
@@ -111,6 +111,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       adapter,
       adapterFor: (memberId) => memberRuntime.adapterFor(memberId),
       leaseOwner: `daemon-${process.pid}`,
+      // E4 调度解耦（生产承载）：turn 消费不阻塞 drain——泵可在成员在途期间推进屏障。
+      // ZS_DETACHED_TURNS=0 显式关闭（排障用；既有内联语义）。
+      detachedTurnConsumption: process.env.ZS_DETACHED_TURNS !== '0',
       appDataDir: options.appDataDir,
       // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
       enableDeliberate: process.env.ZS_ENABLE_DELIBERATE === '1', // 能力状态合同：fake/UI 已验、真实研讨未完成——显式 opt-in；真实闭环验证后再默认开放
@@ -177,9 +180,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               new Promise((r) => { const t = setTimeout(r, options.drainSettleTimeoutMs ?? 10_000); t.unref?.(); }),
             ]);
           }
-          // 4) 收拢全部 runtime（成员级 + 默认；等待子进程退出）
-          await memberRuntime.disposeAll();
-          db!.close();                  // 5) 关库（此后 worker 任何写入都会抛 SQLITE 错误——按序保证不再发生）
+          // 4) 收拢全部 runtime（成员级 + 默认；等待子进程退出）——失败/未确认上报，不吞。
+          //    杀进程触发在途消费器收终态 → 5) 等消费器写库收敛（关库前回调必须收敛）。
+          const disposeReport = await memberRuntime.disposeAll();
+          if (disposeReport.failed.length > 0 || disposeReport.unconfirmed.length > 0) {
+            process.stderr.write(`[zhongshuo-daemon] runtime 收拢未全确认：failed=${JSON.stringify(disposeReport.failed)} unconfirmed=${JSON.stringify(disposeReport.unconfirmed)}\n`);
+          }
+          const inFlight = await worker.awaitInFlightTurns(options.drainSettleTimeoutMs ?? 10_000);
+          if (inFlight.remaining.length > 0) {
+            process.stderr.write(`[zhongshuo-daemon] stop：在途 turn 消费器未全收敛（不确定，不假装完成）：${inFlight.remaining.join(',')}\n`);
+          }
+          db!.close();                  // 6) 关库（此后 worker 任何写入都会抛 SQLITE 错误——按序保证不再发生）
           lockHandle.release();         // 6) 释放锁
           void stopped;
         })();

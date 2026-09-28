@@ -1,0 +1,48 @@
+{
+  "turn": 2,
+  "rehearsal": false,
+  "purpose": "受控中断：真实运行证据后停止——正确目标/终态/进程收尾/迟到事件/交付无/重启不复活",
+  "requestedModel": "deepseek-flash",
+  "reportedModel": null,
+  "channelHost": "192.0.2.10",
+  "cliVersion": "2.1.283 (Claude Code)",
+  "taskId": "task_fe230344-7517-4a0a-87c3-279a9b33224c",
+  "memberId": "m_default_prj_ade80814-b3c2-42b0-99ec-d97fbe002e6c_0",
+  "turnId": "turn_8fcfd69b-5aed-4351-ad28-d6993db17e5a",
+  "runId": "run_769eb6f5-6e36-4688-9468-e4645bc46337",
+  "stopRequestedAtMs": 1790599724377,
+  "stopAckMs": 2,
+  "elapsedMs": 9816,
+  "taskStatus": "CANCELLED",
+  "runStatus": "CANCELLED",
+  "turnStatus": "CANCELLED",
+  "turnFinalStatus": "CANCELLED",
+  "spawnedClaudePid": 26792,
+  "orphanClaudePids": [],
+  "lateEvents": [
+    {
+      "kind": "turn.statusChanged",
+      "payload_json": "{\"status\":\"CANCELLED\",\"code\":\"INTERRUPTED\",\"message\":\"停止请求后进程退出（code=null）且无 result 终结事件；stderr尾：[claude-code:unrecognized_model] {\\\"model\\\":\\\"deepseek-flash\\\",\\\"query_source\\\":\\\"sdk\\\"}\\n\",\"retryable\":false}",
+      "created_at": 1790599724483
+    }
+  ],
+  "stopAudit": "{\"status\":\"CANCELLED\",\"code\":\"INTERRUPTED\",\"message\":\"停止请求后进程退出（code=null）且无 result 终结事件；stderr尾：[claude-code:unrecognized_model] {\\\"model\\\":\\\"deepseek-flash\\\",\\\"query_source\\\":\\\"sdk\\\"}\\n\",\"retryable\":false}",
+  "toolEvents": [],
+  "usage": [],
+  "deliveries": 0,
+  "restartCheck": {
+    "taskStatus": "CANCELLED",
+    "stopGeneration": 1,
+    "runs": 1,
+    "turns": 1,
+    "deliveries": 0
+  },
+  "checks": {
+    "correctTargetInterrupted": true,
+    "taskCancelled": true,
+    "noDelivery": true,
+    "noOrphanClaude": true,
+    "noLateRevival": true,
+    "noRevivalAfterRestart": true
+  }
+}

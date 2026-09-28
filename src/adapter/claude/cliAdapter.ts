@@ -22,13 +22,11 @@
  * 在 stderr 命中该签名时立即判 PROVIDER_LIMITED 失败，不吞回退；渠道模型清单见
  * docs/implementation/reports/round-20260928-dev10-real-auth.md（裸 deepseek-flash 在列）。
  *
- * 能力标记（诚实）：interrupt/usageTokens/usageCost/structuredEvents=supported
- * （stream-json；cost 为 CLI 估算→costQuality=estimated，实测组合 2026-09-28：
- * Claude Code 2.1.283 + 渠道 + deepseek-flash）；
- * resumeSession=supported（--resume，回放已验、真实未认证）；interactiveApprovals/
- * steerActiveTurn=unverified（headless 只读档未开审批；steer 明确拒绝）；
- * restrictWrites/restrictShell/disableDelegation=supported（--permission-mode 受限+工具
- * 白名单 --allowedTools 只读集）；taskContextIsolation=supported（进程 cwd+独立会话）。
+ * 能力标记（2026-09-28 证据口径，逐项按证据、见 CAPABILITIES 注释）：supported 仅
+ * structuredEvents/structuredFinal/usageTokens/usageCost（真实 turn1 全链证据；cost 为 CLI
+ * 估算→estimated）；interrupt/resumeSession/restrictWrites/restrictShell/disableDelegation/
+ * taskContextIsolation=unverified（实现存在、真实认证未完成，不按支持处理）；steerActiveTurn
+ * =unsupported（headless -p 无 turn 内追加输入，明确拒绝不模拟）。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -46,12 +44,49 @@ import type {
   TurnRequest,
 } from '../../contracts/runtime.ts';
 
-export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.2';
+export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.3';
 
 /** 渠道裸模型名（deepseek-flash / deepseek/deepseek-v4.1-flash / glm-5.3…）；拒绝 [1m] 类后缀语法。 */
 const CLAUDE_MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 /** provider session id（CLI result session_id）：UUID/字母数字下划线连字符。 */
 const PROVIDER_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * 能力表（2026-09-28 证据口径，用户令逐项按证据修正；单一真源——probe/命令登记共用）：
+ * - supported 仅限有真实或回放+生产链路双证据项：
+ *   structuredEvents（真实 turn1 stream-json 全链）、structuredFinal（真实 turn1
+ *   TaskComplete 校验+交付）、usageTokens（真实 turn1 usage 落库）、usageCost（CLI
+ *   total_cost_usd 估算字段真实存在；costQuality=estimated——不是渠道账单）、
+ *   interrupt（真实受控中断 2026-09-28 认证通过：进程证据后停止 2ms 确认、目标/收尾/
+ *   不复活/无孤儿全过——范围=CLI 2.1.283+当前渠道+Windows kill 语义；本地 fixture
+ *   另有 6 用例）；
+ * - unverified（实现存在、真实认证未完成，不得按支持处理）：
+ *   resumeSession（--resume 仅回放验证）、restrictWrites/restrictShell/disableDelegation
+ *   （--disallowedTools+--permission-prompts none+--bare 等正式机制已实现；参数存在≠已认证，
+ *   且 --allowedTools 只是预授权免审批清单、不是禁用其余工具的总白名单——2026-09-28 取证：
+ *   init.tools 仍含 Bash 等执行类工具）、taskContextIsolation（进程 cwd+独立会话，回放验证
+ *   两任务隔离；真实侧仅单任务）、interactiveApprovals（headless 只读档未开审批通道）；
+ * - unsupported（设计性拒绝，不模拟）：steerActiveTurn（headless -p 无 turn 内追加输入）。
+ */
+const CAPABILITIES: RuntimeCapabilities = {
+  structuredEvents: 'supported',
+  taskContextIsolation: 'unverified',
+  resumeSession: 'unverified',
+  steerActiveTurn: 'unsupported',
+  interrupt: 'supported',
+  interactiveApprovals: 'unverified',
+  structuredFinal: 'supported',
+  restrictWrites: 'unverified',
+  restrictShell: 'unverified',
+  disableDelegation: 'unverified',
+  usageTokens: 'supported',
+  usageCost: 'supported', // CLI 估算（estimated），非渠道实际账单
+};
+
+/** probe/成员登记共用的能力表快照（单一真源）。 */
+export function claudeCapabilities(): RuntimeCapabilities {
+  return { ...CAPABILITIES };
+}
 
 interface RuntimeEventBaseFields {
   eventKey: string;
@@ -65,8 +100,8 @@ export interface ClaudeCliAdapterOptions {
   executable?: string;
   /** 显式模型（必填口径：默认配置模型不被 CLI 接受）。 */
   model?: string;
-  /** 权限策略（默认 plan 只读档）。 */
-  permissionMode?: 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions';
+  /** 权限模式（CLI 2.1.283 实际枚举；默认 plan 只读档）。 */
+  permissionMode?: 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions';
   /** 额外 CLI 参数（测试注入）。 */
   extraArgs?: string[];
   installationId?: string;
@@ -158,22 +193,26 @@ interface ActiveTurn {
   reportedModel: string | null;
   /** stderr 尾部留存（失败取证：真实跑挂时 CLI 的错误行进 message，不丢现场）。 */
   stderrTail: string;
+  /** 停止请求已发（与"已确认退出"分离：kill≠退出）。 */
+  stopRequested: boolean;
+  /** 终态来源：result=CLI 正常/错误终态；interrupted=停止请求后 close 兜底。 */
+  terminalKind: 'result' | 'error' | 'interrupted' | null;
+  /** 进程退出已确认（close 事件到达）。 */
+  exitConfirmed: boolean;
+  exitCode: number | null;
+  /** 等待退出确认的解决器（close 到达或超时由调用方处理）。 */
+  exitWaiters: Array<(r: TurnExitState) => void>;
 }
 
-const CAPABILITIES: RuntimeCapabilities = {
-  structuredEvents: 'supported',
-  taskContextIsolation: 'supported',
-  resumeSession: 'supported',
-  steerActiveTurn: 'unsupported',
-  interrupt: 'supported',
-  interactiveApprovals: 'unverified',
-  structuredFinal: 'supported',
-  restrictWrites: 'supported',
-  restrictShell: 'supported',
-  disableDelegation: 'supported',
-  usageTokens: 'supported',
-  usageCost: 'supported', // CLI total_cost_usd 估算（costQuality=estimated；实测：deepseek-flash 成功 turn）
-};
+/** turn 进程退出状态（停止请求与退出确认分离的取证口径）。 */
+export interface TurnExitState {
+  turnId: string;
+  stopRequested: boolean;
+  exitConfirmed: boolean;
+  exitCode: number | null;
+  /** 终态事件来源（result=CLI 正常终态；interrupted=停止请求后无 result 的 close 兜底）。 */
+  terminal: 'result' | 'interrupted' | 'error' | 'none';
+}
 
 export class ClaudeCliAdapter implements RuntimeAdapter {
   private readonly options: ClaudeCliAdapterOptions;
@@ -255,11 +294,21 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     if (!CLAUDE_MODEL_NAME_RE.test(model)) {
       throw new AdapterCallError('VALIDATION_INVALID', `模型名含本适配器不接受的字符（只接受渠道裸模型名，如 deepseek-flash；不接受 [1m] 类后缀）：${model.slice(0, 40)}`);
     }
-    // --verbose：CLI 2.1.x 在 -p + stream-json 下要求显式 --verbose（否则参数校验即退出——
-    // 本机关闭端口诊断取证 2026-09-28，零额度）。
+    // 只读分析档（B6 对齐）——按 CLI 2.1.283 正式机制组合，而非单一参数（取证 2026-09-28：
+    // --allowedTools 只是"预授权免审批"清单，init.tools 仍含 Bash 等执行类工具，不是总白名单）：
+    // - --permission-mode plan + --permission-prompts none：headless 下任何需审批的动作自动拒绝；
+    // - --allowedTools Read,Glob,Grep：只读三件套预授权（免审批即用）；
+    // - --disallowedTools：明确禁用执行/写入/网络/委派/技能类工具（含 mcp__ 通配）；
+    // - --strict-mcp-config（不传 --mcp-config）：不加载任何附加 MCP 服务器；
+    // - --bare：跳过 hooks/插件/LSP/auto-memory 等用户 settings 附加能力（凭据 env 不受影响）；
+    // - --disable-slash-commands：禁用技能。
+    // 注：--restricted 能移除执行类内置工具，但会忽略 user settings（渠道 env/凭据在其中）——不可用。
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', model,
       '--permission-mode', this.options.permissionMode ?? 'plan',
-      '--allowedTools', 'Read,Glob,Grep', // 只读分析档（B6 对齐：无写/shell）
+      '--permission-prompts', 'none',
+      '--allowedTools', 'Read,Glob,Grep',
+      '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
+      '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
     if (state.providerSessionId != null) {
       if (!PROVIDER_SESSION_ID_RE.test(state.providerSessionId)) {
@@ -290,6 +339,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       lastMessageId: null,
       reportedModel: null,
       stderrTail: '',
+      stopRequested: false,
+      terminalKind: null,
+      exitConfirmed: false,
+      exitCode: null,
+      exitWaiters: [],
     };
     state.active = turn;
     proc.stdout.setEncoding('utf8');
@@ -301,21 +355,39 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       //（2026-09-28 渠道诊断）：deepseek-flash 成功 turn 亦伴随该告警（query_source=sdk，
       // SDK 侧校验噪音），是否回退以 result.model 为准（响应报什么模型就记什么）。
       if (/authentication|login required/i.test(chunk)) {
+        turn.terminalKind = 'error';
         this.pushEvent(state, turn, { kind: 'turn.failed', code: 'AUTH_REQUIRED', message: chunk.slice(0, 200), retryable: false, ...this.baseEvent(state, turn) });
         this.finishTurn(state, turn);
       }
     });
     proc.on('error', (error) => {
+      turn.terminalKind = turn.terminalKind ?? 'error';
       this.pushEvent(state, turn, { kind: 'turn.failed', code: 'RUNTIME_NOT_FOUND', message: `${String(error)}${turn.stderrTail ? `；stderr尾：${turn.stderrTail.slice(-300)}` : ''}`, retryable: false, ...this.baseEvent(state, turn) });
       this.finishTurn(state, turn);
+      this.resolveExitWaiters(turn); // spawn 失败：close 可能不达——释放等待器（exitConfirmed=false 如实）
     });
     proc.on('close', (code) => {
+      // 退出确认（与停止请求分离）：close 到达才算退出；等待器统一在此解决。
+      turn.exitConfirmed = true;
+      turn.exitCode = code;
       // 进程退出：无终结事件=缺终态（坏流/静默）——如实 failed，不冒充完成；带 stderr 尾部取证。
+      // 停止请求后的无 result 退出=INTERRUPTED（worker 映射 CANCELLED），区别于故障。
       if (!turn.done) {
-        this.pushEvent(state, turn, { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: `进程退出（code=${code}）且无 result 终结事件${turn.stderrTail ? `；stderr尾：${turn.stderrTail.slice(-300)}` : ''}`, retryable: true, ...this.baseEvent(state, turn) });
+        const interrupted = turn.stopRequested;
+        turn.terminalKind = interrupted ? 'interrupted' : 'error';
+        this.pushEvent(state, turn, {
+          kind: 'turn.failed',
+          code: interrupted ? 'INTERRUPTED' : 'PROVIDER_ERROR',
+          message: interrupted
+            ? `停止请求后进程退出（code=${code}）且无 result 终结事件；stderr尾：${turn.stderrTail.slice(-300)}`
+            : `进程退出（code=${code}）且无 result 终结事件${turn.stderrTail ? `；stderr尾：${turn.stderrTail.slice(-300)}` : ''}`,
+          retryable: !interrupted,
+          ...this.baseEvent(state, turn),
+        });
       }
       this.pushEvent(state, turn, { kind: 'process.exited', exitCode: code, expected: turn.done, ...this.baseEvent(state, turn) });
       this.finishTurn(state, turn);
+      this.resolveExitWaiters(turn);
     });
     return Promise.resolve();
   }
@@ -357,9 +429,48 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     const state = this.stateOf(session);
     const turn = state.active;
     if (turn == null || turn.turnId !== turnId) return;
-    // Windows 无 SIGINT 语义：kill 触发 close；close 处理器兜底（若 CLI 输出中断 result
-    // 则按其 code 映射，否则按无终态 failed）。
-    turn.process.kill();
+    // 停止请求已发（kill）；退出确认由 close 事件回执（waitForTurnExit/close 可等）。
+    // Windows 无 SIGINT 语义：kill 触发 close；close 处理器发 INTERRUPTED 终态（无 result 时）。
+    turn.stopRequested = true;
+    try {
+      turn.process.kill();
+    } catch {
+      // kill 抛错（已死/权限）：close 处理器兜底；等待器由其解决。
+    }
+  }
+
+  /**
+   * 等待 turn 进程退出确认（宽限上限；超时=无法确认退出，如实返回 exitConfirmed=false——
+   * 不假装已停止）。无活动 turn 时立即返回该 turn 的最终状态（或 null）。
+   */
+  waitForTurnExit(session: SessionRef, turnId: string, timeoutMs = 5_000): Promise<TurnExitState | null> {
+    const state = this.sessions.get(session.id);
+    const turn = state?.active ?? null;
+    if (state == null || turn == null || turn.turnId !== turnId) return Promise.resolve(null);
+    if (turn.exitConfirmed) return Promise.resolve(this.exitStateOf(turn));
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const i = turn.exitWaiters.indexOf(resolve);
+        if (i >= 0) turn.exitWaiters.splice(i, 1);
+        resolve(this.exitStateOf(turn)); // 宽限耗尽：无法确认退出（不确认=不假装）
+      }, timeoutMs);
+      timer.unref?.();
+      const wrapped = () => { clearTimeout(timer); resolve(this.exitStateOf(turn)); };
+      turn.exitWaiters.push(wrapped);
+    });
+  }
+
+  async close(session: SessionRef): Promise<void> {
+    const state = this.sessions.get(session.id);
+    if (state == null) return;
+    state.closed = true;
+    if (state.active != null && !state.active.done) {
+      state.active.stopRequested = true;
+      try { state.active.process.kill(); } catch { /* close 兜底 */ }
+      // 有界等待退出确认（不等=可能孤儿进程；超时=不确定，如实留在汇总里）。
+      await this.waitForTurnExit(session, state.active.turnId, 3_000);
+    }
+    this.sessions.delete(session.id);
   }
 
   async respondApproval(_session: SessionRef, _approvalId: string, _choice: 'allow_once' | 'deny'): Promise<void> {
@@ -367,19 +478,20 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Claude headless 只读档未开审批通道（unverified；不模拟）');
   }
 
-  async close(session: SessionRef): Promise<void> {
-    const state = this.sessions.get(session.id);
-    if (state == null) return;
-    state.closed = true;
-    if (state.active != null && !state.active.done) state.active.process.kill();
-    this.sessions.delete(session.id);
-  }
-
-  /** daemon 收拢：关闭全部会话（杀活动 turn 进程，资源回收）。 */
-  async disposeAll(): Promise<void> {
-    for (const state of [...this.sessions.values()]) {
+  /**
+   * daemon 收拢：关闭全部会话（杀活动 turn 进程并等待退出确认）。
+   * 返回逐会话退出汇总（未确认/失败不吞——上层据此上报，不假装全部成功）。
+   */
+  async disposeAll(): Promise<TurnExitState[]> {
+    const entries = [...this.sessions.values()];
+    const results: TurnExitState[] = [];
+    for (const state of entries) {
+      const activeTurn = state.active != null && !state.active.done ? state.active : null;
+      const turnId = activeTurn?.turnId ?? null;
       await this.close(state.ref);
+      if (turnId != null && activeTurn != null) results.push(this.exitStateOf(activeTurn));
     }
+    return results;
   }
 
   // ---------- 内部 ----------
@@ -443,6 +555,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       return;
     }
     if (type === 'result') {
+      // 停止请求后的迟到 result 不作为终态：不产生成功交付/复活（用户令 2026-09-28）；
+      // 留取证，close 兜底发 INTERRUPTED。
+      if (turn.stopRequested) {
+        turn.stderrTail = (turn.stderrTail + `\n[late-result-after-stop ignored] ${line.slice(0, 200)}`).slice(-2_000);
+        return;
+      }
       const isError = parsed['is_error'] === true;
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;
       if (sid != null) {
@@ -470,16 +588,34 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       }
       if (isError) {
         const subtype = String(parsed['subtype'] ?? 'error_max_turns');
+        turn.terminalKind = 'error';
         this.pushEvent(state, turn, {
           kind: 'turn.failed', code: subtype.startsWith('error_') ? subtype.slice(6).toUpperCase() : 'PROVIDER_ERROR',
           message: String(parsed['result'] ?? subtype), retryable: subtype !== 'error_during_execution',
           ...this.baseEvent(state, turn, randomUUID().slice(0, 6)),
         } as NormalizedRuntimeEvent);
       } else {
+        turn.terminalKind = 'result';
         this.pushEvent(state, turn, { kind: 'turn.completed', finalText: String(parsed['result'] ?? ''), ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
       }
       this.finishTurn(state, turn);
     }
+  }
+
+  private exitStateOf(turn: ActiveTurn): TurnExitState {
+    return {
+      turnId: turn.turnId,
+      stopRequested: turn.stopRequested,
+      exitConfirmed: turn.exitConfirmed,
+      exitCode: turn.exitCode,
+      terminal: turn.done ? (turn.stopRequested ? 'interrupted' : 'result') : 'none',
+    };
+  }
+
+  private resolveExitWaiters(turn: ActiveTurn): void {
+    const waiters = [...turn.exitWaiters];
+    turn.exitWaiters.length = 0;
+    for (const w of waiters) w(this.exitStateOf(turn));
   }
 
   private baseEvent(state: SessionState, turn: ActiveTurn, salt = ''): RuntimeEventBaseFields {

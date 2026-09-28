@@ -18,6 +18,7 @@ const cwd = mkdtempSync(join(tmpdir(), 'zs-claude-'));
 
 /** 模拟进程工厂：脚本=按序输出的行数组（每项 {delay?, lines?, exit?} 分段）；stdin 记录入参。 */
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 
 type FakeProc = ChildProcessWithoutNullStreams & { _stdinText(): string };
 
@@ -273,7 +274,11 @@ describe('启动路径安全（用户令 2026-09-28：用户文本不经 shell/a
     const s = await a.openSession(openInput());
     await a.startTurn(s, { ...turnInput('t_safe'), text: nasty });
     await collect(a, s, 'completed');
-    expect(seenArgs).toEqual([['-p', '--output-format', 'stream-json', '--verbose', '--model', 'deepseek-flash', '--permission-mode', 'plan', '--allowedTools', 'Read,Glob,Grep']]);
+    expect(seenArgs).toEqual([['-p', '--output-format', 'stream-json', '--verbose', '--model', 'deepseek-flash',
+      '--permission-mode', 'plan', '--permission-prompts', 'none',
+      '--allowedTools', 'Read,Glob,Grep',
+      '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
+      '--strict-mcp-config', '--bare', '--disable-slash-commands']]);
     expect(proc._stdinText()).toBe(nasty); // 字节级原样：不转义、不二次解释
   }, 10_000);
 
@@ -326,4 +331,116 @@ describe('启动路径安全（用户令 2026-09-28：用户文本不经 shell/a
     const usage = events.find((e) => e.kind === 'usage.updated');
     expect(usage).toMatchObject({ model: 'deepseek-flash', inputTokens: 3, outputTokens: 2 }); // result.model 原样记录
   }, 10_000);
+});
+
+describe('中断/退出确认/收拢（本地真实进程 fixture，零额度）', () => {
+  const hangScript = 'setInterval(()=>{},1<<30)'; // 永不自行退出（真实 OS 进程）
+  const spawnReal = (script: string) => (args: string[], c: string) => {
+    void args;
+    return spawn(process.execPath, ['-e', script], { cwd: c, shell: false }) as ChildProcessWithoutNullStreams;
+  };
+
+  it('运行中停止（真实进程）：kill→close 回执=INTERRUPTED；waitForTurnExit 退出确认', async () => {
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, spawnReal(hangScript));
+    const s = await a.openSession(openInput());
+    await a.startTurn(s, turnInput('t_run_stop'));
+    await new Promise((r) => setTimeout(r, 150)); // 进程已真实运行
+    await a.interrupt(s, 't_run_stop'); // 停止请求已发
+    const exit = await a.waitForTurnExit(s, 't_run_stop', 5_000);
+    expect(exit).toMatchObject({ stopRequested: true, exitConfirmed: true, terminal: 'interrupted' });
+    const events = await collect(a, s, 'failed');
+    const failed = events.find((e) => e.kind === 'turn.failed');
+    expect(failed).toMatchObject({ code: 'INTERRUPTED', retryable: false }); // worker 映射 CANCELLED
+  }, 15_000);
+
+  it('启动中停止 + 重复停止 + close 幂等：单次 INTERRUPTED、不抛异常', async () => {
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, spawnReal(hangScript));
+    const s = await a.openSession(openInput());
+    await a.startTurn(s, turnInput('t_early_stop'));
+    await a.interrupt(s, 't_early_stop'); // 启动中（无任何输出）即停
+    await a.interrupt(s, 't_early_stop'); // 重复停止
+    await a.interrupt(s, 'other_turn');   // 非本 turn 目标：无操作不误伤
+    const exit = await a.waitForTurnExit(s, 't_early_stop', 5_000);
+    expect(exit).toMatchObject({ exitConfirmed: true, terminal: 'interrupted' });
+    const events = await collect(a, s, 'failed');
+    expect(events.filter((e) => e.kind === 'turn.failed').length).toBe(1); // 不重复终态
+    await a.close(s); // 已终态后 close 幂等
+    await a.close(s);
+  }, 15_000);
+
+  it('退出无响应（kill 后 close 不达）：waitForTurnExit 宽限耗尽=无法确认退出（不假装已停止）', async () => {
+    // fake 进程：kill 吞掉 close（模拟无法确认退出的运行时）。
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, () => ({
+      stdout: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+      stderr: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+      stdin: Object.assign(new EventEmitter(), { write: () => undefined, end: () => undefined }),
+      on: () => undefined as never, // 不注册 close/error：kill 后永远无回执
+      kill: () => undefined,        // 吞 kill：进程"不退出"
+    } as unknown as ChildProcessWithoutNullStreams));
+    const s = await a.openSession(openInput());
+    await a.startTurn(s, turnInput('t_no_exit'));
+    await a.interrupt(s, 't_no_exit');
+    const t0 = Date.now();
+    const exit = await a.waitForTurnExit(s, 't_no_exit', 300);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(280); // 确实等了宽限
+    expect(exit).toMatchObject({ stopRequested: true, exitConfirmed: false, terminal: 'none' }); // 不确定≠已停止
+  }, 10_000);
+
+  it('跨成员误停防护（真实进程）：停 A 不影响 B 完成', async () => {
+    const bScript = 'setTimeout(()=>{process.stdout.write(JSON.stringify({type:"result",subtype:"success",session_id:"cs_b",result:"b done"})+"\\n");process.exit(0);},350)';
+    let n = 0;
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, (args: string[], c: string) => {
+      n += 1;
+      return spawn(process.execPath, ['-e', n === 1 ? hangScript : bScript], { cwd: c, shell: false }) as ChildProcessWithoutNullStreams;
+    });
+    const sA = await a.openSession(openInput(0));
+    const sB = await a.openSession(openInput(1));
+    await a.startTurn(sA, turnInput('A'));
+    await a.startTurn(sB, turnInput('B'));
+    await new Promise((r) => setTimeout(r, 100));
+    await a.interrupt(sA, 'A'); // 只停 A
+    const [eA] = await Promise.all([collect(a, sA, 'failed'), collect(a, sB, 'completed')]);
+    expect(eA.find((e) => e.kind === 'turn.failed')).toMatchObject({ code: 'INTERRUPTED' });
+    const done = (await a.events(sB)[Symbol.asyncIterator]().next()).value as NormalizedRuntimeEvent; // B 事件流仍可消费（未收拢）
+    void done; // B 已 completed（collect 已验证）
+    const exitA = await a.waitForTurnExit(sA, 'A', 5_000);
+    expect(exitA).toMatchObject({ exitConfirmed: true, terminal: 'interrupted' });
+  }, 15_000);
+
+  it('中断后迟到输出：INTERRUPTED 在先、迟到 result 在后（worker 侧守卫不产生交付）', async () => {
+    // fake 进程：kill 时先吐一条迟到 result 再 close（模拟停止与输出的竞态）。
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, () => {
+      const fake = {
+        stdout: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+        stderr: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+        stdin: Object.assign(new EventEmitter(), { write: () => undefined, end: () => undefined }),
+        on: (ev: string, cb: (arg?: unknown) => void) => { (fake as unknown as Record<string, unknown>)[`_on_${ev}`] = cb; return fake; },
+        kill: () => {
+          (fake.stdout as EventEmitter & { emit: (e: string, d: string) => boolean }).emit('data',
+            `${j({ type: 'result', subtype: 'success', session_id: 'cs_late', result: 'late completion' })}\n`);
+          ((fake as unknown as Record<string, unknown>)['_on_close'] as ((c: number | null) => void) | undefined)?.(null);
+        },
+        setEncoding: () => undefined,
+      };
+      return fake as unknown as ChildProcessWithoutNullStreams;
+    });
+    const s = await a.openSession(openInput());
+    await a.startTurn(s, turnInput('t_late'));
+    await a.interrupt(s, 't_late'); // kill → 迟到 result 先到 → close 兜底
+    const events = await collect(a, s, 'failed');
+    const failed = events.find((e) => e.kind === 'turn.failed');
+    expect(failed).toMatchObject({ code: 'INTERRUPTED' });
+    // 停止请求后的迟到 result 不产生成功终态（不复活、不交付；worker 侧守卫见 worker 测试）。
+    expect(events.some((e) => e.kind === 'turn.completed')).toBe(false);
+  }, 10_000);
+
+  it('disposeAll 汇总：活动进程退出确认入汇总（未确认不吞）', async () => {
+    const a = new ClaudeCliAdapter({ model: 'deepseek-flash' }, spawnReal(hangScript));
+    const s = await a.openSession(openInput());
+    await a.startTurn(s, turnInput('t_dispose'));
+    await new Promise((r) => setTimeout(r, 100));
+    const results = await a.disposeAll();
+    expect(results.length).toBe(1);
+    expect(results[0]).toMatchObject({ turnId: 't_dispose', stopRequested: true, exitConfirmed: true, terminal: 'interrupted' });
+  }, 15_000);
 });

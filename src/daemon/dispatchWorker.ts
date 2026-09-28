@@ -15,7 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
-import { claimNextOutbox, completeOutbox, failOutbox } from '../persistence/outbox.ts';
+import { claimNextOutbox, completeOutbox, failOutbox, releaseOutbox } from '../persistence/outbox.ts';
 import type { OutboxRow } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { isDispatchGateHeld } from '../persistence/daemonState.ts';
@@ -93,6 +93,12 @@ export interface DispatchWorkerOptions {
    * 选择 adapter；缺省回落单一 adapter（历史行为，全部现有测试路径不变）。
    */
   adapterFor?: (memberId: string) => RuntimeAdapter;
+  /**
+   * E4 调度解耦（M2 前置最小实现）：true=turn 事件消费不阻塞 drain（独立消费器+成员级
+   * 在途互斥+租约续期），阶段泵可在 turn 在途期间推进屏障（absenceGrace 到点→缺席推进，
+   * 不强杀成员）。默认 false=inline 串行（历史行为）。
+   */
+  detachedTurnConsumption?: boolean;
 }
 
 export class DispatchWorker {
@@ -111,11 +117,22 @@ export class DispatchWorker {
   private readonly clock: () => number;
   private readonly adapterForMember?: (memberId: string) => RuntimeAdapter;
   private readonly live = new Map<string, { turnId: string; sessionId: string; adapter: RuntimeAdapter }>();
+  /** E4 解耦：detached 模式的在途 turn 消费器（成员级互斥+stop 收敛依据）。 */
+  private readonly detached: boolean;
+  private readonly inFlightTurns = new Map<string, {
+    memberId: string;
+    promise: Promise<void>;
+    outbox: { id: number; attemptEpoch: number } | null;
+    leaseKeeper: NodeJS.Timeout | null;
+  }>();
+  /** 成员在途期间暂不派发的 outbox 行（outboxId → memberId）。 */
+  private readonly blockedOutbox = new Map<number, string>();
 
   constructor(options: DispatchWorkerOptions) {
     this.db = options.db;
     this.adapter = options.adapter;
     this.adapterForMember = options.adapterFor;
+    this.detached = options.detachedTurnConsumption === true;
     this.leaseOwner = options.leaseOwner;
     this.leaseMs = options.leaseMs ?? 60_000;
     this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
@@ -144,11 +161,13 @@ export class DispatchWorker {
     // 时钟：在判定时点读取（可注入）；drain 循环每轮取新值，不复用进入时的 now。
     const at = now ?? this.clock();
     // DELIBERATE 泵：屏障推进/下一步入队（幂等；不依赖完成事件驱动）。
+    // detached 模式下 drain 不被在途 turn 阻塞——泵可在成员在途期间按 absenceGrace 推进（E4）。
     if (this.enableDeliberate) this.pumpDeliberations(at);
     const claimed = claimNextOutbox(this.db, {
       leaseOwner: this.leaseOwner,
       leaseUntil: at + this.leaseMs,
       now: at,
+      skipIds: [...this.blockedOutbox.keys()],
     });
     if (claimed == null) return false;
     await this.dispatchClaimed(claimed);
@@ -260,6 +279,13 @@ export class DispatchWorker {
     if (project == null || member == null || member.enabled !== 1) {
       await this.transitionTask(task.id, 'BLOCKED');
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    // E4 解耦·成员级在途互斥：该成员有未终态 turn → 本项放回 pending 并跳过（同成员串行
+    // 语义与 inline 一致；其余成员的项不受影响——claim 侧 skipIds 排除，不阻塞 drain）。
+    if (this.detached && this.memberInFlight(member.id)) {
+      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.blockedOutbox.set(claimed.id, member.id);
       return;
     }
     const room = this.db
@@ -417,11 +443,83 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
       });
-      await this.consumeUntilTerminal(task, runId, turnId, session.id, adapter);
+      await this.consumeTurn(task, runId, turnId, session.id, adapter, member.id, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
+      // detached：consumeTurn 已登记消费器并返回（live/outbox 完结由消费器收尾）；
+      // inline：此处返回时 turn 已终态、outbox 已完结。
     } finally {
-      this.live.delete(turnId);
+      if (!this.detached) this.live.delete(turnId); // detached：消费器 finally 删（停止请求须可达）
     }
-    await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+  }
+
+  /**
+   * turn 事件消费（E4 解耦入口）：
+   * - inline（默认）：await 到终态，返回时 outbox 已完结（历史行为，全部既有测试依赖）；
+   * - detached：登记消费器后立即返回（drain 不被阻塞——泵可在在途期间推进屏障）；
+   *   outbox 完结/租约续期/成员互斥解除都由消费器 finally 收口。
+   */
+  private async consumeTurn(
+    task: TaskRow, runId: string, turnId: string, sessionId: string, adapter: RuntimeAdapter,
+    memberId: string, outbox: { id: number; attemptEpoch: number },
+  ): Promise<void> {
+    if (!this.detached) {
+      try {
+        await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
+      } finally {
+        await completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
+      }
+      return;
+    }
+    const settle = (): void => {
+      void completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
+      this.live.delete(turnId); // detached：live 由消费器收尾删（inline 已由调用方删，幂等）
+      this.unblockMember(memberId);
+    };
+    const promise = this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter)
+      .then(() => undefined)
+      .catch((error) => {
+        process.stderr.write(`[zhongshuo-worker] turn 消费器异常（turnId=${turnId}）：${error instanceof Error ? error.stack : String(error)}\n`);
+      })
+      .finally(() => {
+        const entry = this.inFlightTurns.get(turnId);
+        if (entry?.leaseKeeper != null) clearInterval(entry.leaseKeeper);
+        this.inFlightTurns.delete(turnId);
+        settle();
+      });
+    // 租约续期：detached 消费可长于租约窗口；完结以 attemptEpoch fencing 保护。
+    const leaseKeeper = setInterval(() => {
+      this.db
+        .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND attempt_epoch = ? AND status = 'leased'`)
+        .run(this.clock() + this.leaseMs, outbox.id, outbox.attemptEpoch);
+    }, Math.max(1_000, Math.floor(this.leaseMs / 2)));
+    leaseKeeper.unref?.();
+    this.inFlightTurns.set(turnId, { memberId, promise, outbox, leaseKeeper });
+  }
+
+  private memberInFlight(memberId: string): boolean {
+    for (const entry of this.inFlightTurns.values()) {
+      if (entry.memberId === memberId) return true;
+    }
+    return false;
+  }
+
+  private unblockMember(memberId: string): void {
+    for (const [id, owner] of [...this.blockedOutbox.entries()]) {
+      if (owner === memberId) this.blockedOutbox.delete(id);
+    }
+  }
+
+  /** stop 收敛：等待全部在途消费器终态（有界；超时返回剩余 turnId——不确定，不假装完成）。 */
+  async awaitInFlightTurns(timeoutMs = 10_000): Promise<{ settled: number; remaining: string[] }> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const entries = [...this.inFlightTurns.entries()];
+      if (entries.length === 0) return { settled: 0, remaining: [] };
+      if (Date.now() > deadline) return { settled: 0, remaining: entries.map(([id]) => id) };
+      await Promise.race([
+        Promise.allSettled(entries.map(([, e]) => e.promise)),
+        new Promise((r) => { const t = setTimeout(r, Math.min(500, Math.max(1, deadline - Date.now()))); t.unref?.(); }),
+      ]);
+    }
   }
 
   /** DELIBERATE 步骤派发：预算核对/占用 → turn 建立 → 按成员会话 → 事件消费（复用截止/中断纪律）。 */
@@ -429,6 +527,12 @@ export class DispatchWorker {
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(step.taskId) as TaskRow | undefined;
     if (task == null || ['CANCELLED', 'DONE'].includes(task.status)) {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    // E4 解耦·成员级在途互斥（研讨步骤同成员串行：与 DIRECT 同一准入）。
+    if (this.detached && this.memberInFlight(step.memberId)) {
+      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.blockedOutbox.set(claimed.id, step.memberId);
       return;
     }
     if (task.stop_generation > 0) {
@@ -569,11 +673,10 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: `result_${turnId}`,
       });
-      await this.consumeUntilTerminal(task, run.id, turnId, session.id, adapter);
+      await this.consumeTurn(task, run.id, turnId, session.id, adapter, step.memberId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
     } finally {
-      this.live.delete(turnId);
+      if (!this.detached) this.live.delete(turnId); // detached：消费器 finally 删
     }
-    await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
   }
 
   /** 审批/等待暂停累计（E4：暂停不计入成员执行时间）。M1 研讨路径未接审批桥——
@@ -754,6 +857,16 @@ export class DispatchWorker {
       case 'message.completed':
         this.insertThreadReply(task, turnId, event.messageId, event.text);
         break;
+      case 'tool.started': {
+        // 实际工具调用记录（用户令 2026-09-28）：模型自述 executedVerifications 的核对依据——
+        // 有记录=实际行为证据；无记录=模型自述、未采信。
+        this.audit(task, runId, turnId, 'tool.started', { toolCallId: event.toolCallId, toolName: event.toolName, eventKey: event.eventKey });
+        break;
+      }
+      case 'tool.completed': {
+        this.audit(task, runId, turnId, 'tool.completed', { toolCallId: event.toolCallId, outcome: event.outcome, eventKey: event.eventKey });
+        break;
+      }
       case 'usage.updated':
         this.db
           .prepare(
@@ -890,6 +1003,18 @@ export class DispatchWorker {
           this.casTurn(turnId, 'SUCCEEDED');
           this.settleDelibBudget(runId);
           this.audit(task, runId, turnId, 'run.stepArtifact', { stage: baseStep.stage, memberId: baseStep.memberId, roundNo: baseStep.roundNo });
+        });
+        tx();
+        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        return;
+      }
+      if (out.value.lateRecorded === true) {
+        // 运行终态/停止/stale-run 后的迟到输出：材料已记录（run.lateArrivalRecorded）——
+        // 不是格式问题，不入格式修复、不复活运行；turn 如实收 SUCCEEDED（已产出，恢复不重跑）。
+        const tx = this.db.transaction(() => {
+          this.casTurn(turnId, 'SUCCEEDED');
+          this.settleDelibBudget(runId);
+          this.audit(task, runId, turnId, 'turn.lateRecorded', { stage: baseStep.stage, memberId: baseStep.memberId, roundNo: baseStep.roundNo });
         });
         tx();
         pumpDeliberation(this.db, task.id, this.deliberationOptions());

@@ -2,43 +2,49 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 深夜·第二轮，唯一权威快照）
+## 当前真实状态（2026-09-28 第三轮，唯一权威快照）
 
-- **DEV-10 真实认证（本轮已消耗预算 2/2）**：①意外探活 1 次（事故：settings.json env 优先
-  于子进程 env，"关闭端口"诊断仍打到渠道；$0.0995、model=deepseek-flash 成功）；②**turn1
-  fixture 只读分析全链成功**（task DONE、暗号 ZS-DEV10-CLAUDE-7749 原样回流、resultKey 匹配、
-  usage 20,875/53,760cache/11,822、$0.4268 estimated、55.6s；经正式 daemon+管道+成员绑定
-  生产链路）。**受控中断 turn2 未执行（预算耗尽，脚本就绪待批 1 次）**。
-- **deepseek-flash 接入结论**：当前渠道（http://192.0.2.10 代理 + Claude Code 2.1.283）
-  可用，显式 `--model deepseek-flash`（渠道 /v1/models 在列；`[1m]`=CLI 后缀语法，adapter
-  拒绝）；`unrecognized_model` stderr 告警在成功 turn 亦出现（SDK 噪音）——adapter 不因它
-  终结，回退与否以响应报文为准（result.model→assistant.message.model 双源取证）。
-  认证范围仅限实测组合（2.1.283+adapter-0.2+该渠道+deepseek-flash+plan 只读档）。
-- **DEV-10 工程线全落地**：启动路径安全（无 shell/原生 exe 解析/prompt 全文走 stdin/argv
-  固定+字符集校验/--verbose）；resultKey 回放闭环（模拟器读 stdin 合同→全链 DONE，错误
-  resultKey 反例保留）；**成员级 runtime 生产接线**（member.setRuntime/member.runtime 命令
-  →project_members→agent_profiles→runtime_installations→MemberRuntimeRegistry→worker
-  adapterFor 两派发路径；未绑定回落 ZS_RUNTIME 默认；不可用 kind 如实抛错）。
-- **无争议真实研讨**：一组证据（历史参考口径，中性正文实验将全跑新组）；分支类=受控用例已验。
-- **E4**：执行时钟/审批暂停/排队→unavailable 已落地；**在途缺席推进的生产承载未完成**
-  （串行 drain 限制，M2 前置调度解耦承载）。
-- **价值对比 v3 预算**：总新增上限 **33**（每组 DIRECT 2+DELIB 9×3；**本轮未批准、未动用**）。
-- **门禁**：ZS_ENABLE_DELIBERATE=1 显式 opt-in。
-- 数字：全套 **360/360**、typecheck/lint 0。报告：reports/round-20260928-dev10-real-auth.md。
+- **DEV-10 受控中断真实认证通过（本轮预算 1/1 已用）**：真实 claude 进程证据（pid 26792）
+  后 2ms 停止→turn/task/run 全 CANCELLED（INTERRUPTED 语义+stderr 尾取证）、无交付、无孤
+  儿进程、迟到不复活、重启不复活；usage=0 如实（早停无 result，实际消耗以渠道账单为准）。
+  **interrupt 按证据升 supported**（范围=CLI 2.1.283+渠道+Windows kill）。
+- **能力声明已逐项按证据修正**（cliAdapter CAPABILITIES 单一真源）：resumeSession/
+  restrictWrites/restrictShell/disableDelegation/taskContextIsolation=unverified（参数存在
+  ≠认证）；--allowedTools=预授权非总白名单（init.tools 仍含 Bash，取证）；只读档新配方
+  （permission-prompts none + disallowedTools + strict-mcp-config + bare +
+  disable-slash-commands）；worker 落库 tool.started/completed 审计（模型自述核对依据；
+  turn1 的 ls/sha256sum 自述=无记录未采信）。
+- **中断/收拢实装**：停止请求与退出确认分离（waitForTurnExit 宽限、不确认不假装）；
+  INTERRUPTED 语义；停止后迟到 result 忽略不交付；disposeAll 汇总上报（failed/unconfirmed
+  不吞）；entry stop=dispose→awaitInFlightTurns→关库。本地真实进程 fixture 6 用例。
+- **E4 调度解耦实装（生产承载完成）**：detachedTurnConsumption（entry 默认开，
+  ZS_DETACHED_TURNS=0 关）——泵与 turn 消费解耦、成员级互斥（skipIds+releaseOutbox）、租
+  约续期、awaitInFlightTurns；假时钟集成 4 用例（含泵在途推进/不强杀/迟到 late/同成员互
+  斥）。**顺带修复 detached 暴露的两真实缺陷**：lateRecorded 被误判格式无效；SYN 在途预
+  算误判 synthesisUnavailable。detached 全链预算 20/20 与 inline 一致。
+- **零额度纪律固化**：settings env 优先于子进程 env（限本次版本组合）——env 覆盖不是出网
+  隔离；零额度测试只用本地模拟/回放/二进制取证。
+- 数字：全套 **370/370**、UI e2e fake 13/13、lint 0。报告：
+  reports/round-20260928-dev10-interrupt-e4.md。
+- 未认证续工点：resumeSession 真实续接、restrict* 真实拒写对照（B6）、双任务真实隔离、
+  interactiveApprovals；**M1 价值对比 33 未批准未动用**。
 
 ## 当前下一步（唯一）
 
-1. **等待用户输入**：① 价值对比 33 上限批准与否；② DEV-10 受控中断补 1 次调用预算
-   （`node scripts/dev10-real-auth.ts turn2` 就绪）；③ 可选：--resume 真实续接认证（另计）。
-2. 无需等待直接开工：E4 调度解耦设计稿（M2 前置）；harness stop 改进（UI task.stop 优先）；
-   resumeSession 真实行为的零额度准备（回放已备）。
+1. **等待用户输入**：① 价值对比 33 上限批准与否；② 可选新预算：resumeSession 真实续接
+   （1 turn）、restrict* 拒写对照（B6 前置）。
+2. 无需等待直接开工：harness stop 改进（UI task.stop 优先）；tool 事件审计的 UI 呈现
+   （线程内工具调用记录）；ZS_DETACHED_TURNS=1 下真实研讨一组的复跑准备（价值闸门过前
+   不跑）。
 
 ---
 
-## （上一轮快照，2026-09-28 深夜·第一轮）
+## （上一轮快照，2026-09-28 深夜·二）
 
-- DEV-10：adapter 实装+零额度回放 8 用例+worker 跨 runtime 验证；当时遗留 entry 成员级接入
-  与真实认证——**本轮已全部处理**（见上）。
+- deepseek-flash 真实认证：意外探活 1 次（settings env 优先级事故）+ turn1 全链成功
+  （暗号回流/resultKey/usage 20,875+53,760cache+11,822/$0.4268 est/55.6s）；成员级
+  runtime 生产接线完成（member.setRuntime→registry→worker adapterFor）。受控中断当时未
+  执行——**本轮已补并全部通过**（见上）。
 
 ---
 

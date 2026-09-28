@@ -561,6 +561,17 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       if (synthesis != null) return { advanced: false }; // 完成路径已入队 RATIFY
       const host = hostOf(roster);
       const hostFailed = statusOf(participants, host) === 'failed';
+      // 在途守卫（E4 解耦）：SYN 已派发未终结（outbox 未 done 或 turn 非终态）→ 等待，
+      // 不做预算失败判定——在途占用的预算会被误算成"预算不足以整合"（inline 串行下
+      // 派发与完成同轮，从未暴露；detached 高频泵每 tick 都会看到在途状态）。
+      const synKey = delibDispatchKey({ taskId, runId: run.id, stage: 'SYN', memberId: host, roundNo: 0, purpose: 'stage_work' });
+      const synPending = db
+        .prepare("SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'")
+        .get(synKey) != null;
+      const synTurnOpen = db
+        .prepare("SELECT 1 FROM agent_turns WHERE dispatch_key = ? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')")
+        .get(synKey) != null;
+      if (!hostFailed && (synPending || synTurnOpen)) return { advanced: false };
       const acc = budgetAccounting(budget, 'SYNTHESIS');
       if (hostFailed || acc.stageAvailableTurns < 1) {
         // 整合不可得：不合成虚构报告——任务 BLOCKED（如实记录原因）。
@@ -895,6 +906,8 @@ export interface StepOutputResult {
   counted: boolean;
   needsRepair?: string;
   stageAdvanced?: boolean;
+  /** 运行终态/停止/stale-run 后的迟到输出：材料已记录但不计入屏障（不是格式问题，不入修复）。 */
+  lateRecorded?: boolean;
 }
 
 const STEP_SCHEMAS: Partial<Record<DelibStageCode, z.ZodTypeAny>> = {
