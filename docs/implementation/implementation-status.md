@@ -7,7 +7,7 @@
 - 施工分支：`codex/full-implementation`（总任务书 §3.3：各包在同一施工分支形成检查点）
 - 依据：[施工总任务书 v1.1](../dev-briefs/full-implementation-brief-glm5.3.md) · [主设计 v1.23](../zhongshuo-development-design-v1.md) · [开工契约 v1.23](../development-baseline-v1.23.md) · [分批表 v1.23](../development-delivery-matrix-v1.23.md)
 - 当前阶段：**M0（单成员真实工作闭环）**；DEV-01—05/17/21-M0 已实现（见 reports/）
-- 最近更新：2026-09-28 第五轮（准入占位完整生命周期+退出状态机收口（drain/启动窗口计入判定、force 核对后关库、stop 记录持久化）+工具审计作用域键去重+CDP 断言+**DEV-12 主体完成**（三态前像/内容存储/Git 与非 Git 基线/非破坏撤销/正式命令）；402/402+UI e2e 15/15、lint 0、零真实调用）
+- 最近更新：2026-09-28 第五轮·下（**价值对比批次已执行**：A/B/C 六侧 30/33 调用全 deepseek-flash 零回退、逐侧核验归档、匿名材料+盲评表待用户评分；**预算超发缺陷修复**（A-DELIB 10>9：前置派发 occupy）；**DEV-12 四项修复**（扫描完整性/三态与物理边界/崩溃恢复窗口三向判定/统一物理写入占位）；412/412、UI e2e 15/15、lint 0）
 
 ## 工作包状态
 
@@ -25,7 +25,7 @@
 | DEV-09 | 分歧与整合（争议、轮次预算、确认矩阵） | **无争议分支真实已验证**（SYN/RAT/共识矩阵 29/29）；讨论轮/checkpoint/缺席/迟到=受控用例已验、真实补证按需另排 | `src/daemon/deliberationRunner.ts` + `src/persistence/stores/deliberation.ts` | G4（价值闸门未做） | 同上 |
 | DEV-10 | 第二 runtime（Claude Code）、跨 runtime 互评 | **IN_PROGRESS（真实认证：turn1 全链+受控中断均通过）**：deepseek-flash 实测可用；interrupt 按证据 supported（进程证据后停/无孤儿/不复活）；resume/restrict*/isolation=unverified（逐项按证据）；只读档正式机制组合（--permission-prompts none+--disallowedTools+--bare 等）；E4 调度解耦实装（detached+成员互斥）；剩余=resumeSession 真实续接+restrict* 拒写对照（B6） | `src/adapter/claude/cliAdapter.ts`、`src/daemon/memberRuntime.ts`、`src/daemon/dispatchWorker.ts` | G2/G4 | M2 | [round-20260928-dev10-interrupt-e4.md](reports/round-20260928-dev10-interrupt-e4.md) |
 | DEV-11 | 自动分工（计划校验、子任务 DAG、交接、有限返工） | NOT_STARTED | `src/domain/` | G4 | M2 |
-| DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | **IMPLEMENTED（本地验证；审查版本 UI 归 DEV-13/14）**：三态前像（present/absent/unknown——unknown 不推导）+内容寻址存储（双端 hash 核对+大小上限提前呈现）+Git 基线（HEAD+porcelain+未提交内容前像，不 stash/reset）+非 Git 整目录扫描（截断如实）+非破坏撤销（逐步重验当前==after、冲突不覆盖、单文件临时+rename、多文件逐步持久化可恢复续跑）+正式命令 changeset.captureBaseline/finalize/undo/get+单写者租约检查；反例 9/9+前像单元 6/6（临时 fixture 含临时 Git 仓库） | `src/daemon/preimage.ts`、`src/daemon/changeset.ts`、migrations/007 | RT-07/08（租约侧）/10 | [round-20260928-admission-exit-hardening.md](reports/round-20260928-admission-exit-hardening.md)；RT-08 派发侧完整用例待 B6 写档接线 |
+| DEV-12 | 修改与 diff（单写者、前后基线、审查版本、非破坏撤销） | **IMPLEMENTED（本地验证；第五轮四项修复后加固：扫描完整性（失败不静默+进入前物理核验+空目录合法）、撤销三态与最近祖先 realpath 重核、崩溃窗口三向恢复判定（补记不重执行/不误判冲突/failed 可续跑）、PhysicalWriteRootRegistry 统一写入占位（B6 接线点）；审查版本 UI 归 DEV-13/14）**：三态前像（present/absent/unknown——unknown 不推导）+内容寻址存储（双端 hash 核对+大小上限提前呈现）+Git 基线（HEAD+porcelain+未提交内容前像，不 stash/reset）+非 Git 整目录扫描（截断如实）+非破坏撤销（逐步重验当前==after、冲突不覆盖、单文件临时+rename、多文件逐步持久化可恢复续跑）+正式命令 changeset.captureBaseline/finalize/undo/get+单写者租约检查；反例 9/9+前像单元 6/6（临时 fixture 含临时 Git 仓库） | `src/daemon/preimage.ts`、`src/daemon/changeset.ts`、migrations/007 | RT-07/08（租约侧）/10 | [round-20260928-admission-exit-hardening.md](reports/round-20260928-admission-exit-hardening.md)；RT-08 派发侧完整用例待 B6 写档接线 |
 | DEV-13 | 恢复与故障测试（不确定窗口、进程核对、成果一致性） | NOT_STARTED | `src/daemon/` | G1/RT | M3；RT-03 重领对账的存储侧已在修复轮落地 |
 | DEV-14 | 三模式完整 UI、任务/成果/确认/诊断、设置、教程帮助 | NOT_STARTED | `src/ui/` | G5 | M3 |
 | DEV-15 | Windows 安装/卸载/托盘/升级迁移 | NOT_STARTED | 打包配置 | G5 | M3；native 依赖首次引入即验 ABI |

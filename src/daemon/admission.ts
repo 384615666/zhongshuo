@@ -106,3 +106,34 @@ function envInt(name: string, fallback: number): number {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
+
+/**
+ * 物理目录写入占位注册表（DEV-12 修复④，2026-09-28）：同一物理目录（含 junction/symlink/
+ * 父子目录重叠——lockDomainsOverlap 判定）同时只允许一个受管理写入占位者。
+ *
+ * 这是**统一约束点**：DEV-12 撤销执行在此占位；B6 写档任务派发接入时，worker 准入的
+ * writeRoot 维度也经同一注册表占位（派发侧另有 DispatchAdmission 的并发计数——两者不混：
+ * 本注册表只管物理目录互斥）。完整接通前写档能力保持关闭（并行写入增强仍延期）。
+ */
+export class PhysicalWriteRootRegistry {
+  private readonly held = new Map<string, string>(); // identityKey → holder 描述
+  private readonly overlap: (a: string, b: string) => boolean;
+
+  constructor(overlap: (a: string, b: string) => boolean) {
+    this.overlap = overlap;
+  }
+
+  tryAcquire(identityKey: string, holder: string): { granted: true } | { granted: false; holders: string[] } {
+    const overlapping: string[] = [];
+    for (const [key, h] of this.held) {
+      if (this.overlap(key, identityKey)) overlapping.push(`${h}（${key}）`);
+    }
+    if (overlapping.length > 0) return { granted: false, holders: overlapping };
+    this.held.set(identityKey, holder);
+    return { granted: true };
+  }
+
+  release(identityKey: string): boolean {
+    return this.held.delete(identityKey);
+  }
+}

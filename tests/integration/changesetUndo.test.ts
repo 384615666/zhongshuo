@@ -298,3 +298,172 @@ describe('DEV-12 Git 目录：基线=HEAD+未提交内容前像（不 stash/rese
     db.close();
   }, 30_000);
 });
+
+describe('DEV-12 第五轮四项修复（扫描完整性/三态边界/崩溃窗口/写入占位）', () => {
+  it('修复①：空目录是合法基线（0 文件可 finalize）；新增文件可撤销回空', async () => {
+    const dir = join(fixtureRoot, 'empty-base');
+    mkdirSync(dir, { recursive: true });
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE1', dir);
+    const base = await cmd<{ changeSetId: string; fileCount: number }>(db, 'changeset.captureBaseline', { projectId: 'pE1' });
+    expect(base.fileCount).toBe(0); // 空目录=合法基线（不因零行拒绝）
+    writeFileSync(join(dir, 'new.txt'), '任务新增', 'utf8');
+    const fin = await cmd<{ diff: { added: string[] } }>(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    expect(fin.diff.added).toEqual(['new.txt']); // 扫描完整（无失败/截断）→ 基线无行=变更前 absent
+    const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    expect(undo.status).toBe('succeeded');
+    expect(existsSync(join(dir, 'new.txt'))).toBe(false); // 撤销回空目录
+    db.close();
+  }, 30_000);
+
+  it('修复②：目标被目录占位（非普通文件）=unknown——拒绝自动覆盖，原状保留', async () => {
+    const dir = join(fixtureRoot, 'dir-in-place');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f.txt'), 'v1', 'utf8');
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE2', dir);
+    const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'pE2', paths: ['f.txt'] });
+    writeFileSync(join(dir, 'f.txt'), 'v2', 'utf8');
+    await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    // 撤销前外部把文件换成同名目录（stat=directory——旧 hashIfPresent 会当作「不存在」误判）。
+    unlinkSync(join(dir, 'f.txt'));
+    mkdirSync(join(dir, 'f.txt'), { recursive: true });
+    writeFileSync(join(dir, 'f.txt', 'inner.txt'), '占位内容', 'utf8');
+    const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    const step = undo.steps.find((s) => s.path === 'f.txt')!;
+    expect(step.status).toBe('failed'); // unknown → 拒绝自动覆盖
+    expect(step.detail).toContain('未知');
+    expect(existsSync(join(dir, 'f.txt', 'inner.txt'))).toBe(true); // 原状保留（未删未覆盖）
+    db.close();
+  }, 30_000);
+
+  it('修复③：崩溃窗口（rename 已成功、done 未写库）→ 恢复三向判定补记不重执行、不误判冲突', async () => {
+    const { undoChangeset } = await import('../../src/daemon/changeset.ts');
+    const dir = join(fixtureRoot, 'crashwin');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'mod.txt'), 'one', 'utf8');   // 修改类
+    writeFileSync(join(dir, 'del.txt'), 'two', 'utf8');   // 将被任务删除（restore-removed）
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE3', dir);
+    const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'pE3' });
+    writeFileSync(join(dir, 'mod.txt'), 'ONE', 'utf8');
+    unlinkSync(join(dir, 'del.txt'));
+    await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    // 崩溃注入：完成第 1 个文件动作（mod.txt rename 已落盘）后、记账前崩溃。
+    const crashed = undoChangeset(db, { changeSetId: base.changeSetId, appDataDir: appData, crashAfterStepActions: 1 });
+    expect(crashed.ok).toBe(true);
+    // 步骤按路径序：del.txt（restore-removed）先执行——崩溃注入点在其 rename 之后。
+    expect(readFileSync(join(dir, 'del.txt'), 'utf8')).toBe('two');  // 动作确实已执行（记账缺失）
+    expect(readFileSync(join(dir, 'mod.txt'), 'utf8')).toBe('ONE');  // 第二步未执行
+    // 恢复：del.txt=已执行未记账 → 补记 done（不重执行、不误判用户冲突）；mod.txt 照常还原。
+    const resumed = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    const modStep = resumed.steps.find((s) => s.path === 'mod.txt')!;
+    const delStep = resumed.steps.find((s) => s.path === 'del.txt')!;
+    expect(delStep.status).toBe('done');
+    expect(delStep.detail).toContain('补记');   // 三向判定命中「已执行未记账」
+    expect(modStep.status).toBe('done');
+    expect(resumed.status).toBe('succeeded');
+    expect(readFileSync(join(dir, 'mod.txt'), 'utf8')).toBe('one');
+    expect(readFileSync(join(dir, 'del.txt'), 'utf8')).toBe('two');
+    db.close();
+  }, 30_000);
+
+  it('修复③：崩溃窗口（delete-added 已删除、记账缺失）→ 恢复补记 absent 不重复执行', async () => {
+    const { undoChangeset } = await import('../../src/daemon/changeset.ts');
+    const dir = join(fixtureRoot, 'crashwin-del');
+    mkdirSync(dir, { recursive: true });
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE4', dir);
+    const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'pE4', paths: ['gen.txt'] });
+    writeFileSync(join(dir, 'gen.txt'), '产物', 'utf8'); // 新增
+    await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    const crashed = undoChangeset(db, { changeSetId: base.changeSetId, appDataDir: appData, crashAfterStepActions: 1 });
+    expect(crashed.ok).toBe(true);
+    expect(existsSync(join(dir, 'gen.txt'))).toBe(false); // 删除已执行、记账缺失
+    const resumed = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    const step = resumed.steps[0]!;
+    expect(step.status).toBe('done');
+    expect(step.detail).toContain('补记');
+    expect(resumed.status).toBe('succeeded');
+    db.close();
+  }, 30_000);
+
+  it('修复③：failed 步骤续跑重试（此前只处理 pending——失败后永远不能恢复）', async () => {
+    const dir = join(fixtureRoot, 'retry-failed');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'r.txt'), 'v1', 'utf8');
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE5', dir);
+    const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'pE5', paths: ['r.txt'] });
+    writeFileSync(join(dir, 'r.txt'), 'v2', 'utf8');
+    await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    // 制造 failed：删掉内容存储里的前像文件（restore 读取失败）。
+    const storeDir = join(appData, 'preimages', 'pE5');
+    const beforeHashRow = db.prepare(`SELECT content_ref FROM change_set_files WHERE change_set_id = ? AND role = 'before' AND path = 'r.txt'`).get(base.changeSetId) as { content_ref: string };
+    const storeFile = join(storeDir, beforeHashRow.content_ref);
+    rmSync(storeFile, { force: true });
+    const first = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    expect(first.steps[0]!.status).toBe('failed'); // 存储缺失 → failed
+    expect(readFileSync(join(dir, 'r.txt'), 'utf8')).toBe('v2'); // 原文件不动
+    // 恢复存储后重试：failed → 重置 pending → 三向重验 → 执行成功。
+    writeFileSync(storeFile, 'v1', 'utf8');
+    const second = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    expect(second.steps[0]!.status).toBe('done');
+    expect(readFileSync(join(dir, 'r.txt'), 'utf8')).toBe('v1');
+    expect(second.status).toBe('succeeded');
+    db.close();
+  }, 30_000);
+
+  it('修复②：基线后父目录被换成指向外部的 junction/symlink → 物理重核拒绝（外部零写入）', async () => {
+    const dir = join(fixtureRoot, 'parent-swap');
+    mkdirSync(join(dir, 'sub'), { recursive: true });
+    writeFileSync(join(dir, 'sub', 'f.txt'), 'v1', 'utf8');
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE6', dir);
+    const base = await cmd<BaselineOk>(db, 'changeset.captureBaseline', { projectId: 'pE6', paths: ['sub/f.txt'] });
+    writeFileSync(join(dir, 'sub', 'f.txt'), 'v2', 'utf8');
+    await cmd(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    const outside = mkdtempSync(join(tmpdir(), 'zs-dev12-out-'));
+    const symlinkSync = (await import('node:fs')).symlinkSync;
+    const renameSync = (await import('node:fs')).renameSync;
+    try {
+      symlinkSync(outside, join(dir, 'sub-link'), 'dir');
+    } catch {
+      db.close();
+      rmSync(outside, { recursive: true, force: true });
+      return; // 无目录链接权限的环境跳过（Windows 开发者模式要求）
+    }
+    // 基线后：删除真实 sub，把指向外部的链接改名为 sub（字符串前缀仍在界内——物理重核必须先拒）。
+    rmSync(join(dir, 'sub'), { recursive: true, force: true });
+    renameSync(join(dir, 'sub-link'), join(dir, 'sub'));
+    const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    const step = undo.steps[0]!;
+    expect(step.status).toBe('failed'); // 字符串前缀在界内但物理路径越界 → 拒绝
+    expect(step.detail).toContain('物理路径核对失败');
+    expect(existsSync(join(outside, 'f.txt'))).toBe(false); // 外部目录零写入
+    db.close();
+    rmSync(outside, { recursive: true, force: true });
+  }, 30_000);
+});
+
+describe('DEV-12 修复①：扫描失败不静默——基线缺失判 unknown 不推导 absent', () => {
+  it('manifest 记录 failedDirs/rejected → finalize 新文件=undeterminable（非 added）；undo=manual', async () => {
+    const dir = join(fixtureRoot, 'scan-integrity');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'keep.txt'), 'v1', 'utf8');
+    const db = openDatabase(':memory:');
+    seedProject(db, 'pE7', dir);
+    const base = await cmd<{ changeSetId: string }>(db, 'changeset.captureBaseline', { projectId: 'pE7' });
+    // 模拟扫描完整性破口（跨平台确定性：直接把 manifest 标记为有失败——等价于 readdir/物理拒绝后的落库事实）。
+    db.prepare(`UPDATE change_sets SET manifest_json = json_set(manifest_json, '$.scanFailedDirs', 1) WHERE id = ?`).run(base.changeSetId);
+    writeFileSync(join(dir, 'new-file.txt'), '任务新增', 'utf8');
+    const fin = await cmd<{ diff: { added: string[]; undeterminable: Array<{ path: string }> } }>(db, 'changeset.finalize', { changeSetId: base.changeSetId });
+    expect(fin.diff.added).not.toContain('new-file.txt'); // 扫描不完整 → 不能断定变更前不存在
+    expect(fin.diff.undeterminable.map((u) => u.path)).toContain('new-file.txt'); // 判 unknown
+    const undo = await cmd<UndoOk>(db, 'changeset.undo', { changeSetId: base.changeSetId });
+    const step = undo.steps.find((s) => s.path === 'new-file.txt')!;
+    expect(step.status).toBe('manual'); // unknown 不自动撤销（也不自动删除）
+    expect(existsSync(join(dir, 'new-file.txt'))).toBe(true); // 原样保留
+    db.close();
+  }, 30_000);
+});

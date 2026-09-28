@@ -18,7 +18,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -28,7 +28,8 @@ import {
   captureFilePreimage, diffPreimages, readStoredContent, scanDirectoryFiles,
   type PreimageCapture, type PreimageEntry,
 } from './preimage.ts';
-import { comparisonKey, lockDomainsOverlap } from './directoryIdentity.ts';
+import { comparisonKey, isSameOrAncestorPath, lockDomainsOverlap } from './directoryIdentity.ts';
+import { PhysicalWriteRootRegistry } from './admission.ts';
 import { listActiveLeases } from './workspaceLocks.ts';
 
 // ---------- 类型 ----------
@@ -145,6 +146,10 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
       preimageRoot: preimage.root,
       scopeKind: explicit ? 'explicit-paths' : 'directory-scan',
       truncated: scanned?.truncated ?? false,
+      scanFailedDirs: scanned?.failedDirs.length ?? 0,
+      scanRejected: scanned?.rejectedEntries.length ?? 0,
+      scanFailures: scanned?.failedDirs ?? [],
+      scanRejectedEntries: scanned?.rejectedEntries ?? [],
     }));
     insertPreimageRows(db, changeSetId, 'before', preimage.entries);
     emitChangesetEvent(db, input.projectId, input.taskId ?? null, input.runId ?? null, 'changeset.baselineCaptured', {
@@ -179,12 +184,12 @@ export function finalizeChangeset(
   const root = project.canonical_path;
   const storeDir = join(input.appDataDir, 'preimages', row.project_id);
   const beforeRows = loadFileRows(db, input.changeSetId, 'before');
-  if (beforeRows.length === 0) return domainErr('STALE_REVISION', `改动集缺少 before 前像：${input.changeSetId}`);
+  // 空目录是合法基线（扫描面 fileCount=0——由 manifest.scopeKind 证明确实捕获过，不因零行拒绝）。
   // after 捕获面：
   // - directory-scan（整目录语义）：重扫目录（任务新增文件须进捕获面）∪ before 路径
   //   （被删文件须仍被核对）——重扫截断与 before 截断同样如实记录；
   // - explicit-paths：变更面=基线声明的清单（含「将创建」的文件须在基线清单里声明）。
-  const manifest = safeParse(row.manifest_json ?? '{}') as { scopeKind?: string; truncated?: boolean };
+  const manifest = safeParse(row.manifest_json ?? '{}') as { scopeKind?: string; truncated?: boolean; scanFailedDirs?: number; scanRejected?: number };
   const isScan = manifest.scopeKind === 'directory-scan';
   const scanNow = isScan ? scanDirectoryFiles(root) : null;
   const afterPaths = isScan
@@ -192,7 +197,10 @@ export function finalizeChangeset(
     : beforeRows.map((r) => r.path);
   // 扫描面的基线事实补全：after 有而 before 无行 → 变更前不存在（整目录扫描完整时）；
   // 首扫/重扫截断 → unknown（不能断定变更前不存在，§三态纪律）。
-  const beforeTruncated = manifest.truncated === true || scanNow?.truncated === true;
+  // 扫描完整性（修复①）：截断/子树读取失败/物理路径拒绝——任一存在即不称完整，缺失基线判 unknown。
+  const beforeTruncated = manifest.truncated === true
+    || (manifest.scanFailedDirs ?? 0) > 0 || (manifest.scanRejected ?? 0) > 0
+    || scanNow?.truncated === true || (scanNow?.failedDirs.length ?? 0) > 0 || (scanNow?.rejectedEntries.length ?? 0) > 0;
   const beforeByPath = new Map(beforeRows.map((r) => [r.path, r]));
   const beforeEntries: PreimageEntry[] = beforeRows.map(rowToEntry);
   const synthesizedBefore: PreimageEntry[] = [];
@@ -269,11 +277,28 @@ export interface UndoInput {
   changeSetId: string;
   appDataDir: string;
   now?: number;
-  /** 测试注入：执行到第 N 个 pending 步后抛出（模拟中途失败/中断——恢复语义验证）。 */
+  /** 测试注入：执行到第 N 个 pending 步后停止并持久化 failed（模拟中途失败/中断——恢复语义验证）。 */
   failAfterSteps?: number;
+  /**
+   * 测试注入（DEV-12 修复③）：完成第 N 个**文件动作**（rename/delete 已成功）后、该步 done
+   * 尚未写库的同步点崩溃——直接返回（不持久化该步）。恢复时按三向判定区分
+   * 未执行 / 已执行未记账 / 后续外部修改。
+   */
+  crashAfterStepActions?: number;
 }
 
-/** 非破坏撤销（幂等可恢复）：已有进行中/失败的撤销记录 → 按持久化步骤续跑（不重算计划）。 */
+/**
+ * 非破坏撤销（幂等可恢复；第五轮四项修复）：
+ * - 续跑或新建：进行中/失败记录按持久化步骤恢复（**failed 步骤重置为 pending**——三向重验
+ *   保护下可恢复，不因只处理 pending 永远卡死）；已 succeeded 不重复执行。
+ * - 每步三向判定：当前==after（未执行→执行）/ 当前==撤销后预期（已执行未记账→标 done，
+ *   不重复执行、不误判用户冲突）/ 其他（后续外部修改→conflict 不覆盖）。
+ * - 三态探测（present/absent/unknown）：读取失败=unknown → 拒绝自动覆盖（原文件保持不变）。
+ * - 物理路径重核：对目标（及待创建目标的最近存在祖先）realpath 后核界内——基线后父目录
+ *   被换成 junction/symlink 即拒绝（不靠字符串前缀）。
+ * - 统一物理写入占位（PhysicalWriteRootRegistry）：撤销全程持有 writeRoot 占位（B6 派发
+ *   写档将共用同一约束点；完整接通前写档保持关闭）。
+ */
 export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainResult<UndoOutcome> {
   const row = loadChangeSet(db, input.changeSetId);
   if (row == null) return domainErr('RESOURCE_NOT_FOUND', `改动集不存在：${input.changeSetId}`);
@@ -282,6 +307,8 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
   if (project == null) return domainErr('RESOURCE_NOT_FOUND', `项目不存在：${row.project_id}`);
   const now = input.now ?? Date.now();
   const root = project.canonical_path;
+  const rootReal = (() => { try { return realpathSync(root); } catch { return null; } })();
+  if (rootReal == null) return domainErr('PROJECT_MISSING', `项目根无法解析：${root}`);
 
   // 单写者约束：重叠锁域存在活跃/过期租约 → 拒绝并列持有者（§14.1/RT-08；expired 同样阻塞，RT-07）。
   const lockCheck = checkNoOverlappingLease(db, root);
@@ -293,7 +320,7 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
   ).get(row.project_id, input.changeSetId) as { id: string } | undefined;
   if (activeOther != null) return domainErr('STALE_REVISION', `该项目已有进行中的撤销（${activeOther.id}）——单写者互斥`);
 
-  // 续跑或新建：进行中/失败的记录按持久化步骤恢复；已 succeeded 的撤销不重复执行。
+  // 续跑或新建。
   const existing = db.prepare(
     `SELECT * FROM change_set_undos WHERE change_set_id = ? ORDER BY created_at DESC LIMIT 1`,
   ).get(input.changeSetId) as { id: string; status: string; steps_json: string } | undefined;
@@ -302,79 +329,122 @@ export function undoChangeset(db: ZhongshuoDatabase, input: UndoInput): DomainRe
   if (existing != null && (existing.status === 'in_progress' || existing.status === 'failed')) {
     undoId = existing.id;
     steps = JSON.parse(existing.steps_json) as UndoStep[];
+    for (const s of steps) {
+      if (s.status === 'failed') { s.status = 'pending'; s.detail = `重试（此前失败：${s.detail ?? ''}）`.slice(0, 200); }
+    }
   } else if (existing != null && existing.status === 'succeeded') {
     return domainErr('STALE_REVISION', `改动集已撤销（${existing.id}）——不重复执行`);
   } else {
     const before = loadFileRows(db, input.changeSetId, 'before');
     const after = loadFileRows(db, input.changeSetId, 'after');
-    if (after.length === 0) return domainErr('STALE_REVISION', `改动集缺 after 前像行：${input.changeSetId}`);
+    if (after.length === 0 && (JSON.parse(row.manifest_json ?? '{}') as { scopeKind?: string }).scopeKind !== 'directory-scan') {
+      return domainErr('STALE_REVISION', `改动集缺 after 前像行：${input.changeSetId}`);
+    }
     steps = planUndoSteps(before, after);
     undoId = `undo_${randomUUID()}`;
     persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
   }
 
+  // 统一物理写入占位：全程持有（物理目录互斥；崩溃即随进程消亡——不跨进程残留）。
+  const writeRootKey = comparisonKey(rootReal);
+  const slot = writeRootRegistry.tryAcquire(writeRootKey, `undo:${undoId}`);
+  if (!slot.granted) {
+    return domainErr('WORKSPACE_BUSY', `物理写入目录被占用（${slot.holders.join('；')}）——单写者互斥（统一写入占位）`);
+  }
+
   const storeDir = join(input.appDataDir, 'preimages', row.project_id);
   let executed = 0;
-  for (const step of steps) {
-    if (step.status !== 'pending') continue;
-    if (input.failAfterSteps != null && executed >= input.failAfterSteps) {
-      persistUndo(db, undoId, input.changeSetId, steps, 'failed', now, { error: `注入中断（执行 ${executed} 步后）——步骤进度已持久化，可恢复续跑` });
-      return domainOk(summarize(undoId, 'failed', steps));
-    }
-    const abs = safeJoin(root, step.path);
-    if (abs == null) {
-      step.status = 'failed';
-      step.detail = '路径越出项目边界（拒绝执行）';
-      persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
-      continue;
-    }
-    // 执行前重验（幂等恢复的核心）：当前状态必须仍匹配 after——被后续修改即冲突，不覆盖。
-    const current = hashIfPresent(abs);
-    if (step.expectState === 'present') {
-      if (current == null) {
-        step.status = 'conflict';
-        step.detail = `期望仍存在（after hash=${step.expectSha256?.slice(0, 12) ?? '?'}）——当前已不存在`;
-      } else if (step.expectSha256 != null && current !== step.expectSha256) {
-        step.status = 'conflict';
-        step.detail = '当前内容已被后续修改（不匹配本次变更 after）——不覆盖，人工处理（§14.5）';
+  let actionsDone = 0;
+  let crashed = false;
+  try {
+    for (const step of steps) {
+      if (step.status !== 'pending') continue;
+      if (input.failAfterSteps != null && executed >= input.failAfterSteps) {
+        persistUndo(db, undoId, input.changeSetId, steps, 'failed', now, { error: `注入中断（执行 ${executed} 步后）——步骤进度已持久化，可恢复续跑` });
+        return domainOk(summarize(undoId, 'failed', steps));
       }
-    } else if (step.expectState === 'absent') {
-      if (current != null) {
-        step.status = 'conflict';
-        step.detail = '期望仍不存在（after=absent）——当前已有内容，不覆盖';
+      const abs = safeJoin(root, step.path);
+      if (abs == null) {
+        step.status = 'failed';
+        step.detail = '路径越出项目边界（拒绝执行）';
+        persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
+        continue;
       }
-    }
-    if (step.status === 'conflict') {
-      persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
-      executed += 1;
-      continue;
-    }
-    try {
-      if (step.action === 'delete-added') {
-        rmSync(abs, { force: false });
-      } else {
-        // restore-content / restore-removed：读受管理内容+核对 hash → 同目录临时文件 → rename。
-        const ref = step.contentRef!;
-        const stored = readStoredContent(storeDir, ref);
-        if (!stored.ok) throw new Error(stored.error);
-        mkdirSync(dirname(abs), { recursive: true });
-        const tmp = `${abs}.zs_undo_${randomUUID().slice(0, 8)}`;
-        writeFileSync(tmp, stored.content);
-        const written = readFileSync(tmp);
-        if (createHash('sha256').update(written).digest('hex') !== ref) {
-          rmSync(tmp, { force: true });
-          throw new Error('恢复内容写入核对失败（写坏不落位）');
+      // 物理路径重核（修复②）：目标（或待创建目标的最近存在祖先）realpath 后核界内——
+      // 基线后父目录被换成 junction/symlink 即拒绝（不靠字符串前缀）；核对失败=原文件不动。
+      const boundary = physicalPathWithinRoot(rootReal, abs);
+      if (!boundary.ok) {
+        step.status = 'failed';
+        step.detail = `物理路径核对失败：${boundary.error}（原文件不动）`;
+        persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
+        executed += 1;
+        continue;
+      }
+      // 三态探测（修复②）：unknown（读取失败/非普通文件）拒绝自动覆盖。
+      const probe = probeCurrent(abs);
+      if (probe.state === 'unknown') {
+        step.status = 'failed';
+        step.detail = `当前状态未知（${probe.error}）——拒绝自动覆盖，原文件不动`;
+        persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
+        executed += 1;
+        continue;
+      }
+      // 三向判定（修复③）：未执行 / 已执行未记账 / 后续外部修改。
+      const verdict = adjudicate(step, probe);
+      if (verdict === 'already-done') {
+        step.status = 'done';
+        step.detail = '恢复判定：动作已执行（崩溃窗口内完成、记账缺失）——补记不重执行';
+        persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
+        executed += 1;
+        continue;
+      }
+      if (verdict === 'conflict') {
+        step.status = 'conflict';
+        step.detail = step.expectState === 'present'
+          ? '当前内容与本次变更 after 及撤销后预期均不匹配（后续外部修改）——不覆盖，人工处理（§14.5）'
+          : '期望仍不存在但当前已有不同内容（后续外部修改）——不覆盖';
+        persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null);
+        executed += 1;
+        continue;
+      }
+      try {
+        if (step.action === 'delete-added') {
+          rmSync(abs, { force: false });
+        } else {
+          const ref = step.contentRef!;
+          const stored = readStoredContent(storeDir, ref);
+          if (!stored.ok) throw new Error(stored.error);
+          mkdirSync(dirname(abs), { recursive: true });
+          const tmp = `${abs}.zs_undo_${randomUUID().slice(0, 8)}`;
+          writeFileSync(tmp, stored.content);
+          const written = readFileSync(tmp);
+          if (createHash('sha256').update(written).digest('hex') !== ref) {
+            rmSync(tmp, { force: true });
+            throw new Error('恢复内容写入核对失败（写坏不落位）');
+          }
+          renameSync(tmp, abs);
         }
-        renameSync(tmp, abs);
+        actionsDone += 1;
+        if (input.crashAfterStepActions != null && actionsDone >= input.crashAfterStepActions) {
+          // 崩溃窗口注入：文件动作已成功、done 未写库——直接返回（步骤保持 pending）。
+          crashed = true;
+          break;
+        }
+        step.status = 'done';
+        step.detail = undefined;
+      } catch (error) {
+        step.status = 'failed';
+        step.detail = `执行失败：${error instanceof Error ? error.message : String(error)}`.slice(0, 200);
       }
-      step.status = 'done';
-      step.detail = undefined;
-    } catch (error) {
-      step.status = 'failed';
-      step.detail = `执行失败：${error instanceof Error ? error.message : String(error)}`.slice(0, 200);
+      executed += 1;
+      persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null); // 每步即时持久化（中断可恢复）
     }
-    executed += 1;
-    persistUndo(db, undoId, input.changeSetId, steps, 'in_progress', now, null); // 每步即时持久化（中断可恢复）
+  } finally {
+    writeRootRegistry.release(writeRootKey);
+  }
+  if (crashed) {
+    // 注入崩溃：不落任何状态（步骤进度=崩溃前最后持久化点）——恢复靠三向判定。
+    return domainOk({ ...summarize(undoId, 'failed', steps), status: 'failed', manualPaths: [...summarize(undoId, 'failed', steps).manualPaths, '(注入崩溃：动作已执行、记账缺失——恢复时三向判定)'] });
   }
 
   const anyFailed = steps.some((s) => s.status === 'failed');
@@ -524,15 +594,84 @@ function safeJoin(root: string, rel: string): string | null {
   }
 }
 
-function hashIfPresent(abs: string): string | null {
+/** 三态探测（修复②）：present（可读普通文件+hash）/ absent（确认不存在）/ unknown（读取失败、非普通文件）。 */
+type CurrentProbe = { state: 'present'; sha256: string } | { state: 'absent' } | { state: 'unknown'; error: string };
+function probeCurrent(abs: string): CurrentProbe {
+  let st;
   try {
-    const st = statSync(abs);
-    if (!st.isFile()) return null;
-    return createHash('sha256').update(readFileSync(abs)).digest('hex');
-  } catch {
-    return null; // 不存在或不可读（不可读在执行时报 failed/冲突——此处按「不在」处理会被 expectState 捕获差异）
+    st = statSync(abs);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { state: 'absent' };
+    return { state: 'unknown', error: `stat 失败：${String(error).slice(0, 100)}` };
+  }
+  if (!st.isFile()) return { state: 'unknown', error: `非普通文件（${st.isDirectory() ? '目录' : '特殊文件'}）——不当作不存在` };
+  try {
+    return { state: 'present', sha256: createHash('sha256').update(readFileSync(abs)).digest('hex') };
+  } catch (error) {
+    return { state: 'unknown', error: `读取失败：${String(error).slice(0, 100)}` };
   }
 }
+
+/**
+ * 物理路径重核（修复②）：对目标路径取**最近存在祖先**的 realpath 并核对在 root 真实路径内。
+ * 覆盖：基线后父目录被整体替换为指向外部的 junction/symlink；待创建目标的父链被换链。
+ * 只做判定不改动——失败时调用方保持原文件不变。
+ */
+function physicalPathWithinRoot(rootReal: string, abs: string): { ok: true } | { ok: false; error: string } {
+  try {
+    // 目标自身存在：直接核 realpath。
+    const st = statSync(abs, { throwIfNoEntry: false });
+    if (st != null) {
+      const real = realpathSync(abs);
+      if (!isSameOrAncestorPath(rootReal, real)) return { ok: false, error: `目标解析至界外（${real}）` };
+      return { ok: true };
+    }
+    // 目标不存在（待创建/待删除已删）：核最近存在祖先的真实路径。
+    let dir = dirname(abs);
+    for (;;) {
+      const dst = statSync(dir, { throwIfNoEntry: false });
+      if (dst != null) {
+        const real = realpathSync(dir);
+        if (!isSameOrAncestorPath(rootReal, real)) return { ok: false, error: `最近存在祖先解析至界外（${real}）` };
+        return { ok: true };
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return { ok: false, error: '向上未找到存在祖先' };
+      dir = parent;
+    }
+  } catch (error) {
+    return { ok: false, error: String(error).slice(0, 120) };
+  }
+}
+
+/**
+ * 三向判定（修复③）：probe=当前状态。
+ * - matches-after（未执行）→ 'execute'；
+ * - matches-post-undo（动作已执行、记账缺失——崩溃窗口）→ 'already-done'（补记不重执行，
+ *   不误判用户冲突）；
+ * - 其他 → 'conflict'（后续外部修改，不覆盖）。
+ */
+function adjudicate(step: UndoStep, probe: CurrentProbe): 'execute' | 'already-done' | 'conflict' {
+  const beforeHash = step.contentRef ?? undefined; // restore-* 的撤销后预期内容 hash（内容寻址=文件名）
+  if (step.action === 'delete-added') {
+    if (probe.state === 'absent') return 'already-done'; // 已删除（崩溃窗口）——补记
+    if (probe.state === 'present' && probe.sha256 === step.expectSha256) return 'execute';
+    return 'conflict';
+  }
+  if (step.action === 'restore-content') {
+    if (probe.state === 'present' && probe.sha256 === step.expectSha256) return 'execute'; // 仍是 after 内容
+    if (probe.state === 'present' && beforeHash != null && probe.sha256 === beforeHash) return 'already-done'; // 已还原
+    return 'conflict';
+  }
+  // restore-removed：after=absent；撤销后=以 beforeHash 存在。
+  if (probe.state === 'absent') return 'execute';
+  if (probe.state === 'present' && beforeHash != null && probe.sha256 === beforeHash) return 'already-done';
+  return 'conflict';
+}
+
+/** 统一物理写入占位注册表（进程级；lockDomainsOverlap 判重叠——junction/父子目录全覆盖）。 */
+const writeRootRegistry = new PhysicalWriteRootRegistry(lockDomainsOverlap);
 
 function emitChangesetEvent(
   db: ZhongshuoDatabase, projectId: string, taskId: string | null, runId: string | null,

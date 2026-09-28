@@ -93,36 +93,80 @@ export function captureFilePreimage(root: string, paths: string[], options: Capt
   return { captureId: `pre_${randomUUID()}`, capturedAt: now, root: resolve(root), entries };
 }
 
-/** 目录扫描捕获（非 Git 整目录语义，E15）：递归收集文件相对路径（排除 .git；上限如实计满即停并标记）。 */
-export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): { files: string[]; truncated: boolean } {
+/** 目录扫描完整性状态：完整 / 截断（达上限）/ 有失败（readdir/stat 失败——不能称完整）。 */
+export interface ScanResult {
+  files: string[];
+  truncated: boolean;
+  /** 读取失败的具体范围（目录级）——受影响子树的基线缺失只能判 unknown，不能推导 absent。 */
+  failedDirs: Array<{ dir: string; error: string }>;
+  /** 物理路径拒绝（进入前判定：越界 junction/symlink、复合链接环）——不进入即拒绝、零接触。 */
+  rejectedEntries: Array<{ entry: string; reason: string }>;
+}
+
+/**
+ * 目录扫描捕获（非 Git 整目录语义，E15；第五轮修复）：
+ * - **进入目录前**先核物理路径：realpath 后必须在 root 真实路径内（junction/symlink 越界
+ *   即拒绝并记录——不递归出去后才逐文件拒绝）；复合链接环（同一真实目录二次到达）终止该枝。
+ * - readdir/stat 失败**不静默跳过**：记入 failedDirs，完整性状态不再是「完整」——
+ *   finalize 据此把受影响路径的基线缺失判 unknown，不推导 absent。
+ * - 空目录是合法基线（files 可为空——由调用方按 scopeKind 判定，不因零文件拒绝）。
+ */
+export function scanDirectoryFiles(root: string, maxFiles = DEFAULT_MAX_FILES): ScanResult {
   const files: string[] = [];
+  const failedDirs: ScanResult['failedDirs'] = [];
+  const rejectedEntries: ScanResult['rejectedEntries'] = [];
   let truncated = false;
+  const rootReal = realpathSync(resolve(root));
+  const relOf = (p: string): string => p.slice(resolve(root).length + 1).replaceAll('\\', '/') || '.';
+  const visitedRealDirs = new Set<string>([comparisonKey(rootReal)]);
   const walk = (dir: string): void => {
     if (files.length >= maxFiles) { truncated = true; return; }
     let names: string[];
     try {
       names = readdirSync(dir);
-    } catch {
-      return; // 不可读目录：跳过（其中文件的捕获以 unknown 呈现需要显式路径；扫描模式如实截断）
+    } catch (error) {
+      failedDirs.push({ dir: relOf(dir), error: String(error).slice(0, 120) });
+      return; // 子树读取失败=完整性破口（如实记录——不称扫描完整）
     }
     for (const name of names) {
       if (DIRECTORY_SCAN_EXCLUDES.has(name)) continue;
       const full = join(dir, name);
+      let real: string;
+      try {
+        real = realpathSync(full);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') continue; // 扫描窗口内消失：captureOne 重读时按三态判定
+        failedDirs.push({ dir: relOf(full), error: `realpath 失败：${String(error).slice(0, 100)}` });
+        continue;
+      }
+      if (!isSameOrAncestorPath(rootReal, real)) {
+        rejectedEntries.push({ entry: relOf(full), reason: `symlink/junction 越界（解析至 ${real}）` });
+        continue;
+      }
       let st;
       try {
         st = statSync(full);
-      } catch {
+      } catch (error) {
+        failedDirs.push({ dir: relOf(full), error: `stat 失败：${String(error).slice(0, 100)}` });
         continue;
       }
-      if (st.isDirectory()) walk(full);
-      else if (st.isFile()) {
+      if (st.isDirectory()) {
+        const realKey = comparisonKey(real);
+        if (visitedRealDirs.has(realKey)) {
+          rejectedEntries.push({ entry: relOf(full), reason: `目录环（真实路径已访问：${real}）` });
+          continue;
+        }
+        visitedRealDirs.add(realKey);
+        walk(full);
+      } else if (st.isFile()) {
         files.push(full);
         if (files.length >= maxFiles) { truncated = true; return; }
       }
     }
   };
   walk(root);
-  return { files, truncated };
+  return { files, truncated, failedDirs, rejectedEntries };
 }
 
 function captureOne(root: string, userPath: string, storeDir: string | undefined, maxBytes: number): PreimageEntry {
