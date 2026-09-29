@@ -24,6 +24,8 @@ const TASK_TERMINAL = ['DONE', 'BLOCKED', 'FAILED', 'CANCELLED'];
 
 const state = {
   projectId: null,
+  /** 当前项目快照（project.open 结果：任务验收开关/revision 等——项目设置的读写来源）。 */
+  project: null,
   roomId: null,
   conversationId: null,
   members: [],
@@ -81,9 +83,11 @@ async function openFolder() {
 
 async function loadProject(path) {
   const data = await command('project.open', { path });
+  state.project = data.project; // 项目设置（任务验收开关）的 CAS revision/当前值来源
   state.projectId = data.project.id;
   localStorage.setItem('zs.lastProjectPath', path); // 重启后自动恢复上次项目
   el('project-name').textContent = `${data.project.displayName} · ${path}`;
+  renderProjectSettings();
   const rooms = await command('room.list', { projectId: state.projectId });
   const list = el('room-list');
   list.innerHTML = '';
@@ -431,10 +435,12 @@ function updateStopUi(snapshot) {
   const statusLine = el('thread-status');
   const acceptBtn = el('review-accept-btn');
   const rejectBtn = el('review-reject-btn');
+  const redispatchBtn = el('redispatch-btn');
   if (snapshot == null) {
     btn.classList.add('hidden');
     acceptBtn.classList.add('hidden');
     rejectBtn.classList.add('hidden');
+    redispatchBtn.classList.add('hidden');
     return;
   }
   const chip = taskChip(snapshot.status);
@@ -450,6 +456,10 @@ function updateStopUi(snapshot) {
   } else {
     btn.classList.add('hidden');
   }
+  // 追加执行（第十轮·三返工闭环）：任务 ACTIVE 且无在途执行时可用——经 task.redispatch
+  // 正式派发链（返工意见/跟进上下文由服务端组装注入），不是重跑开关。
+  const redispatchable = snapshot.status === 'ACTIVE' && (run == null || (!RUN_ACTIVE.includes(run.status) && run.status !== 'STOPPING'));
+  redispatchBtn.classList.toggle('hidden', !redispatchable);
   // 可选验收（RT-25，第九轮绑定版本）：REVIEW 且存在待验收交付——按钮带当时展示的
   // 版本号，提交时绑定该 deliveryId/revision（服务端条件更新校验，错稿/被替代均明确冲突）。
   const pending = snapshot.pendingDelivery ?? null;
@@ -460,22 +470,26 @@ function updateStopUi(snapshot) {
     acceptBtn.textContent = `验收通过（第 ${pending.revision} 版）`;
     rejectBtn.textContent = `要求修改（第 ${pending.revision} 版）`;
   }
+  // 返工意见行（第十轮·三）：无待验收交付时一并收起。
+  if (!reviewable) el('rework-note-row')?.classList.add('hidden');
 }
 
-/** 人工验收（task.review 正式命令，绑定展示时版本）：accept→DONE；changes_requested→ACTIVE。
- *  版本被替代/已处理/状态变化=明确冲突（不自动套用新交付）；失败如实展示在状态行。 */
-async function reviewTask(decision) {
+/** 人工验收（task.review 正式命令，绑定展示时版本）：accept→DONE；changes_requested→ACTIVE
+ * （意见必填——经返工意见行输入，注入后续派发输入）。返回后线程重渲染；按钮随 pendingDelivery 收起。 */
+async function reviewTask(decision, note) {
   const snap = state.openTaskSnapshot;
   const pending = snap?.pendingDelivery ?? null;
   if (snap == null || pending == null) return; // 无待验收版本（快照已过期——重渲染后按钮收起）
   try {
     const r = await command('task.review', {
       taskId: snap.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, decision,
+      ...(decision === 'changes_requested' && note != null ? { note } : {}),
     });
     el('thread-status').textContent = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
   } catch (error) {
     el('thread-status').textContent = `验收失败（第 ${pending.revision} 版）：${error.message}`;
   }
+  el('rework-note-row').classList.add('hidden');
   await renderThread();
 }
 
@@ -1314,7 +1328,73 @@ el('repo-status-toggle').onclick = () => void (async () => {
 })();
 void applyRepoStatusVisibility().catch(() => { /* 设置读取失败按缺省 */ });
 el('review-accept-btn').onclick = () => void reviewTask('accept');
-el('review-reject-btn').onclick = () => void reviewTask('changes_requested');
+// 要求修改：意见必填（§10.5-4）——展开返工意见行，确认后经正式命令提交。
+el('review-reject-btn').onclick = () => {
+  const pending = state.openTaskSnapshot?.pendingDelivery ?? null;
+  if (pending == null) return;
+  el('rework-note-revision').textContent = String(pending.revision);
+  el('rework-note-input').value = '';
+  el('rework-note-row').classList.remove('hidden');
+  el('rework-note-input').focus();
+};
+el('rework-note-confirm').onclick = () => {
+  const note = el('rework-note-input').value.trim();
+  if (note === '') { el('rework-note-input').focus(); return; }
+  void reviewTask('changes_requested', note);
+};
+el('rework-note-cancel').onclick = () => { el('rework-note-row').classList.add('hidden'); };
+
+// 追加执行（返工闭环）：正式派发链——服务端组装输入（返工意见经 latestReviewFeedback 注入）。
+el('redispatch-btn').onclick = () => void (async () => {
+  const snap = state.openTaskSnapshot;
+  if (snap == null) return;
+  try {
+    await command('task.redispatch', { taskId: snap.taskId, reason: '返工跟进（UI 追加执行）' });
+    el('thread-status').textContent = '已追加执行（经正式派发链；返工意见随输入注入）';
+  } catch (error) {
+    el('thread-status').textContent = `追加执行失败：${error.message}`;
+  }
+  await renderThread();
+})();
+
+// ---------- 项目设置（第十轮·三：任务验收开关，RT-25/§10.5） ----------
+
+/** 任务验收开关渲染：标签/说明随项目数据；CAS revision 来自 project.open 快照。 */
+function renderProjectSettings() {
+  const btn = el('task-review-toggle');
+  const note = el('task-review-note');
+  if (state.project == null) {
+    btn.textContent = '任务验收：—（未打开项目）';
+    btn.disabled = true;
+    note.textContent = '';
+    return;
+  }
+  btn.disabled = false;
+  const on = state.project.taskReviewEnabled === true;
+  btn.textContent = `任务验收：${on ? '开' : '关'}`;
+  note.textContent = on
+    ? '当前开启：新任务交付进入待验收（创建时快照）。已有任务保持创建时的策略。'
+    : '当前关闭：新任务满足交付要求即完成（无需验收）。关闭不授权自动提交或推送。';
+}
+
+el('task-review-toggle').onclick = () => void (async () => {
+  if (state.project == null) return;
+  const next = !(state.project.taskReviewEnabled === true);
+  try {
+    const r = await command('project.reviewPolicy.set', {
+      projectId: state.project.id, taskReviewEnabled: next, expectedRevision: state.project.revision,
+    });
+    state.project = { ...state.project, taskReviewEnabled: r.taskReviewEnabled, revision: r.revision };
+    renderProjectSettings();
+  } catch (error) {
+    if (error.code === 'STALE_REVISION') {
+      // 项目已被并发修改：重开项目取最新快照后提示重试（不盲目覆盖他人改动）。
+      const last = localStorage.getItem('zs.lastProjectPath');
+      if (last != null) await loadProject(last);
+    }
+    el('task-review-note').textContent = `设置失败：${error.message}`;
+  }
+})().catch((error) => { el('task-review-note').textContent = `设置失败：${error.message}`; });
 el('thread-back-btn').onclick = () => { showPool(); void renderPool().catch(showConnError); };
 el('composer-input').addEventListener('keydown', (ev) => {
   // IME 组合态（拼音候选未上屏）的 Enter 不发送：isComposing 或遗留 keyCode 229。
@@ -1334,6 +1414,7 @@ zs.onReconnected(() => {
 zs.onDemoStatus((status) => { el('conn-state').textContent = status; });
 
 // R5：重启后恢复上次项目（失败如实展示，不回退种子数据）。
+renderProjectSettings(); // 未打开项目时的初始态（loadProject 成功后随项目数据刷新）
 const lastProject = localStorage.getItem('zs.lastProjectPath');
 if (lastProject != null && lastProject.length > 0) {
   void loadProject(lastProject).catch((e) => {

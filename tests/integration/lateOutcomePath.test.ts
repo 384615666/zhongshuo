@@ -273,7 +273,10 @@ describe('迟到成果正式接收路径（实际派发→截止 UNKNOWN→迟�
     const turnId = (db.prepare('SELECT id FROM agent_turns WHERE dispatch_key = ?').get(`task:${taskId}:initial`) as { id: string }).id;
     const runId = (db.prepare('SELECT run_id FROM agent_turns WHERE id = ?').get(turnId) as { run_id: string }).run_id;
     expect(turnRow(db, turnId).status).toBe('UNKNOWN');
-    // 数据准备：任务已有其他 run 的交付（修复轮/redispatch 已交付新结果）。
+    // 数据准备：任务已有其他 run 的交付（修复轮/redispatch 已交付新结果）——新 run 行真实
+    // 存在且创建晚于旧 run（交付守卫按 run 创建先后判定，第十轮修正）。
+    const convId = (db.prepare('SELECT conversation_id FROM workflow_runs WHERE id = ?').get(runId) as { conversation_id: string }).conversation_id;
+    db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES ('run_newer', ?, ?, 'DIRECT', 0, 'SUCCEEDED')`).run(taskId, convId);
     db.prepare(
       `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
        VALUES ('dlv_newer', ?, 'run_newer', 1, 'h1', '[]', '[]', '[]', 'not_required')`,

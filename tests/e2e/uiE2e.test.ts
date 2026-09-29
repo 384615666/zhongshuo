@@ -69,6 +69,11 @@ window.__t = {
   gitCommitMsg: (text) => { const i = document.getElementById('git-commit-message'); if (i == null) return false; i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
   gitCommitPreviewText: () => document.getElementById('git-commit-preview')?.textContent ?? null,
   gitHistoryText: () => document.getElementById('git-history-block')?.textContent ?? null,
+  toggleTaskReview: () => { const d = document.getElementById('project-settings'); if (d != null) d.open = true; const b = document.getElementById('task-review-toggle'); if (b == null) return false; b.click(); return true; },
+  taskReviewToggleLabel: () => document.getElementById('task-review-toggle')?.textContent ?? null,
+  reworkRowVisible: () => !document.getElementById('rework-note-row')?.classList.contains('hidden'),
+  reworkFill: (note) => { const i = document.getElementById('rework-note-input'); if (i == null) return false; i.value = note; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
+  reworkConfirm: () => { const b = document.getElementById('rework-note-confirm'); if (b == null) return false; b.click(); return true; },
   runtimeStatusText: () => document.getElementById('runtime-status')?.textContent ?? null,
   helpVisible: () => !document.getElementById('recovery-help')?.classList.contains('hidden'),
   confirmYes: () => { window.confirm = () => true; return true; },
@@ -833,6 +838,59 @@ describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（f
     await waitFor(() => call<string>('repoStatusText').then((t) => (t ?? '').includes('未暂存 1')), 30_000, '回到未暂存');
     const porcelain = execFileSync('git', ['-C', projDir, 'status', '--porcelain'], { encoding: 'utf8' });
     expect(porcelain).toContain(' M feature.txt'); // 索引回退、工作区内容保留
+  }, 180_000);
+
+  it('正式验收闭环（RT-25，不经补库）：设置开 → 新任务 REVIEW → 返工（意见注入）→ 第 2 版 → 验收通过', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14e'), runtime: 'fake' });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    // 项目设置：任务验收开关（默认关）→ 开启（CAS+持久化走正式命令）。
+    expect(await call<string>('taskReviewToggleLabel')).toContain('关');
+    expect(await call<boolean>('toggleTaskReview')).toBe(true);
+    await waitFor(() => call<string>('taskReviewToggleLabel').then((t) => (t ?? '').includes('开')), 10_000, '开关切到开');
+    // 重开后设置保持（持久化）+ 新任务走创建时快照（user_review）。
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<string>('taskReviewToggleLabel').then((t) => (t ?? '').includes('开')), 30_000, '重开后设置保持（开）');
+    // 正式路径：发送任务 → fake 交付 → REVIEW（第 1 版待验收——无任何补库）。
+    await call('type', 'composer-input', '正式验收闭环任务');
+    await call('click', 'send');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'REVIEW',
+      60_000, '任务进入待验收（正式交付路径）',
+    );
+    await call('openCard', 0);
+    await waitFor(() => call<string>('reviewAcceptLabel').then((t) => (t ?? '').includes('第 1 版')), 30_000, '按钮显示第 1 版');
+    // 返工：要求修改 → 意见行展开（必填）→ 提交 → 任务回 ACTIVE。
+    await call('click', 'review-reject-btn');
+    await waitFor(() => call<boolean>('reworkRowVisible').then((v) => v === true), 10_000, '返工意见行展开');
+    expect(await call<boolean>('reworkFill', '清单缺少风险一节')).toBe(true);
+    expect(await call<boolean>('reworkConfirm')).toBe(true);
+    await waitFor(() => call<string>('threadStatus').then((t) => (t ?? '').includes('进行中')), 30_000, '返工后任务回 ACTIVE');
+    // 线程跟进（M0：落消息+待处理标记）→ 追加执行（task.redispatch 正式派发链，返工意见
+    // 注入输入）→ 新交付（第 2 版；旧版被替代）→ 验收通过 → DONE。
+    await call('type', 'composer-input', '已补充风险一节');
+    await call('click', 'send');
+    await waitFor(() => call<boolean>('hidden', 'redispatch-btn').then((h) => h === false), 30_000, '追加执行按钮出现');
+    await call('click', 'redispatch-btn');
+    await waitFor(() => call<string>('reviewAcceptLabel').then((t) => (t ?? '').includes('第 2 版')), 60_000, '返工后新交付绑定第 2 版');
+    expect(await call<boolean>('clickReview', 'accept')).toBe(true);
+    await waitFor(() => call<string>('threadStatus').then((t) => (t ?? '').includes('已完成')), 30_000, '验收后任务完成');
+    // DB 事实：v2 accepted、v1 superseded；返工意见已记录（注入后续输入在集成层已验）。
+    const dbFile = join(fixtureRoot, 'appdata-dev14e', 'state.sqlite');
+    const { openDatabase } = await import('../../src/persistence/db.ts');
+    const db = openDatabase(dbFile);
+    const deliveries = db.prepare('SELECT revision, review_status, review_note FROM task_deliveries ORDER BY revision').all() as Array<{ revision: number; review_status: string; review_note: string | null }>;
+    const task = db.prepare('SELECT status FROM tasks ORDER BY rowid DESC LIMIT 1').get() as { status: string };
+    db.close();
+    expect(deliveries).toEqual([
+      { revision: 1, review_status: 'changes_requested', review_note: '清单缺少风险一节' },
+      { revision: 2, review_status: 'accepted', review_note: null },
+    ]);
+    expect(task.status).toBe('DONE');
   }, 180_000);
 
   it('可选验收（RT-25）：REVIEW 任务验收通过 → 交付 accepted、任务 DONE；重复验收入口收起（Git 提交不等同验收）', async () => {

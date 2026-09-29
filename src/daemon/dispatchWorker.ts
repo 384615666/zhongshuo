@@ -1418,15 +1418,24 @@ export class DispatchWorker {
           this.casTurn(turnId, 'SUCCEEDED');
           this.db.prepare(`UPDATE workflow_runs SET status = 'SUCCEEDED' WHERE id = ?`).run(runId);
           this.settleBudget(runId);
-          // 旧 run 迟到输出不覆盖新 run 结果（第八轮）：任务已有**其他 run** 的交付（修复轮/
-          // redispatch 已完成）时，本输出收口事实（SUCCEEDED+结算）但不交付、不迁移任务
-          // 状态——用户可见结果保持最新交付，迟到材料以审计留痕（不自动重跑、不伪造覆盖）。
+          // 旧 run 迟到输出不覆盖新 run 结果（第八轮）：任务已有**更晚创建的 run** 的交付
+          // （修复轮/redispatch 已完成）时，本输出收口事实（SUCCEEDED+结算）但不交付、不迁
+          // 移任务状态——用户可见结果保持最新交付，迟到材料以审计留痕（不自动重跑、不伪造
+          // 覆盖）。
+          // 第十轮修正：判定按 run 创建先后（rowid）而非「存在任何其他 run 的交付」——返工
+          // 第二轮（新 run）不能被旧 run 的 v1 交付挡住：旧交付属于更早的 run，不是「更新
+          // 交付」，新输出应正常递增 revision 再交付（§10.5-5）。
           const newerDeliveries = (this.db
-            .prepare('SELECT count(*) c FROM task_deliveries WHERE task_id = ? AND run_id != ?')
-            .get(task.id, runId) as { c: number }).c;
+            .prepare(
+              `SELECT count(*) c FROM task_deliveries d
+               JOIN workflow_runs r ON r.id = d.run_id
+               WHERE d.task_id = ? AND d.run_id != ?
+                 AND r.rowid > (SELECT rowid FROM workflow_runs WHERE id = ?)`,
+            )
+            .get(task.id, runId, runId) as { c: number }).c;
           if (newerDeliveries > 0) {
             this.audit(task, runId, turnId, 'turn.lateCompletionSuperseded', {
-              note: '旧 run 的迟到输出：任务已有更新交付——不覆盖新结果，材料留痕',
+              note: '旧 run 的迟到输出：任务已有更晚 run 的交付——不覆盖新结果，材料留痕',
               finalText: (event.finalText ?? '').slice(0, 400),
               newerDeliveryCount: newerDeliveries,
             });

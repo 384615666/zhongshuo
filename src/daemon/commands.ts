@@ -998,6 +998,40 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           throw mapErr(error);
         }
       }
+      case 'project.reviewPolicy.set': {
+        // RT-25/§10.5/§15.2：项目级「任务验收」开关。CAS（expectedRevision）；只影响之后
+        // 创建的用户任务（创建时快照 Task.reviewPolicy）——已有任务策略不批量改写；
+        // 关闭不授权自动提交/推送，也不放宽 runtime 权限（RT-25①）。
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          taskReviewEnabled: z.boolean(),
+          expectedRevision: z.number().int().nonnegative(),
+        }).parse(env.params);
+        const result = run(() => {
+          const row = deps.db.prepare('SELECT id, revision, task_review_enabled FROM projects WHERE id = ?').get(params.projectId) as { id: string; revision: number; task_review_enabled: number } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          if (row.revision !== params.expectedRevision) {
+            throw new DaemonCommandError('STALE_REVISION', `项目 revision 已变化（期望 ${params.expectedRevision}，当前 ${row.revision}）——请刷新后重试`);
+          }
+          if ((row.task_review_enabled === 1) === params.taskReviewEnabled) {
+            return { projectId: params.projectId, taskReviewEnabled: params.taskReviewEnabled, revision: row.revision, unchanged: true };
+          }
+          const updated = deps.db
+            .prepare('UPDATE projects SET task_review_enabled = ?, revision = revision + 1 WHERE id = ? AND revision = ?')
+            .run(params.taskReviewEnabled ? 1 : 0, params.projectId, params.expectedRevision);
+          if (updated.changes !== 1) throw new DaemonCommandError('STALE_REVISION', '并发更新冲突（revision 条件更新未命中）——请刷新后重试');
+          appendDomainEvent(deps.db, {
+            schemaVersion: 1,
+            eventId: `evt_${randomUUID()}`,
+            projectId: params.projectId,
+            kind: 'project.reviewPolicyUpdated',
+            createdAt: Date.now(),
+            payload: { taskReviewEnabled: params.taskReviewEnabled, effect: '仅影响之后创建的用户任务；已有任务保持创建时策略快照' },
+          });
+          return { projectId: params.projectId, taskReviewEnabled: params.taskReviewEnabled, revision: params.expectedRevision + 1, unchanged: false };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);
@@ -1039,6 +1073,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           deliveryRevision: z.number().int().positive(),
           decision: z.enum(['accept', 'changes_requested']),
           note: z.string().min(1).max(500).optional(),
+        }).refine((p) => p.decision !== 'changes_requested' || (p.note != null && p.note.trim().length > 0), {
+          message: '要求修改必须填写意见（§10.5-4：意见进入正式任务记录并注入返工输入）',
+          path: ['note'],
         }).parse(env.params);
         const result = run(() => {
           const task = deps.db.prepare('SELECT id, status, review_policy FROM tasks WHERE id = ?').get(params.taskId) as { id: string; status: string; review_policy: string } | undefined;
