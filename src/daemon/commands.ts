@@ -24,6 +24,8 @@ import { readMemberRuntimeBinding } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
+import { checkProcessLiveness, type LivenessResult } from './processCheck.ts';
+import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ProbeOutcome } from './processRegistry.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -40,6 +42,11 @@ export interface DaemonCommandDeps {
    * 持久事实（租约/UNKNOWN/gate）不依赖内存账本。
    */
   releaseAdmission?: (turnId: string) => void;
+  /**
+   * 进程存活查询函数（DEV-13 第七轮：OS 退出证据服务端生成）。缺省=checkProcessLiveness
+   * （真实 OS 查询）；测试可注入故障（查询失败/PID 复用等场景仍走正式命令链）。
+   */
+  processQuery?: (pid: number) => LivenessResult;
 }
 
 export class DaemonCommandError extends Error {
@@ -441,6 +448,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // 只读恢复状态查询（修复轮 6）：禁止用「尝试恢复命令」探测门禁。
         // DEV-13 扩展：UNKNOWN turn 明细（对账入口）+ 上次 stop 记录 + 未收口撤销（DEV-12
         // 崩溃窗口续跑指引）+ 租约持有（daemon 死≠子进程死——身份核对如实，不假装可判活）。
+        // 第七轮：附每个 UNKNOWN turn 的进程登记与最近退出取证（程序观测事实，供 UI 与人工判断分层展示）。
         const { isDispatchGateHeld } = await import('../persistence/daemonState.ts');
         const held = isDispatchGateHeld(deps.db);
         const pending = deps.db.prepare(`SELECT dispatch_key FROM outbox WHERE status = 'pending'`).all() as Array<{ dispatch_key: string }>;
@@ -448,6 +456,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const unknownTurns = deps.db.prepare(
           `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.status = 'UNKNOWN'`,
         ).all();
+        const processRegistry = unknownTurns.length > 0
+          ? (deps.db.prepare(
+            `SELECT r.turn_id AS turnId, r.process_model AS processModel, r.pid, r.started_at_ms AS startedAtMs,
+                    r.identity_source AS identitySource, r.closed_at AS closedAt, r.adapter_kind AS adapterKind,
+                    (SELECT p.result FROM recovery_exit_probes p WHERE p.turn_id = r.turn_id ORDER BY p.observed_at DESC LIMIT 1) AS lastProbeResult,
+                    (SELECT p.detail FROM recovery_exit_probes p WHERE p.turn_id = r.turn_id ORDER BY p.observed_at DESC LIMIT 1) AS lastProbeDetail,
+                    (SELECT p.observed_at FROM recovery_exit_probes p WHERE p.turn_id = r.turn_id ORDER BY p.observed_at DESC LIMIT 1) AS lastProbeAt
+             FROM runtime_process_registry r`,
+          ).all())
+          : [];
         const stopRecordRow = deps.db.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string } | undefined;
         let stopRecord: unknown = null;
         if (stopRecordRow != null) { try { stopRecord = JSON.parse(stopRecordRow.value); } catch { stopRecord = null; } }
@@ -461,52 +479,55 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             pendingDispatchKeys: pending.map((p) => p.dispatch_key),
             interruptedRuns: interrupted,
             unknownTurns,
+            processRegistry,
             stopRecord,
             activeUndos,
             heldLeases,
-            leaseNote: 'daemon 退出不证明 runtime 子进程已退出（单实例锁≠进程树）；expired 租约仍阻塞新写者（RT-07），进程身份核对需 OS 层证据（DEV-05 supervisor 未完成——如实不可判）',
+            leaseNote: 'daemon 退出不证明 runtime 子进程已退出（单实例锁≠进程树）；expired 租约仍阻塞新写者（RT-07）。退出事实以服务端取证（recovery.probeProcess：按已登记进程身份做 OS 核对）为准——不接受调用方自报',
             undoNote: '未收口撤销：续跑走 changeset.undo（三向判定区分未执行/已执行未记账/外部修改），不清空占位后放行',
           },
         });
       }
+      case 'recovery.probeProcess': {
+        // DEV-13 第七轮：服务端退出取证（只读，不改 turn/租约/预算状态）。
+        // 按 turn 的**已登记身份**（runtime_process_registry——worker 启动时写入）做 OS 核对，
+        // 生成服务端证据记录（recovery_exit_probes）。错误 PID、其他 turn 证据、PID 复用、
+        // 缺失历史身份都不能冒充确认退出——各按结果枚举如实返回。
+        const params = z.strictObject({ turnId: z.string().min(1) }).parse(env.params);
+        const turn = deps.db.prepare('SELECT id FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string } | undefined;
+        if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
+        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe' });
+        return withCommandId({ ok: true, data: probe });
+      }
       case 'recovery.reconcile': {
-        // DEV-13（第六轮·下修订）：执行事实/退出事实/成果事实分离——执行过不等于已结束，
-        // 一段 evidence 文字不能同时证明两件事。
-        // - 执行事实 verdict：notStarted（确认未启动：退款 I、不计 U）|executed（确认执行：
-        //   结算 U+1）|keepUnknown（无法确认：全不动）。**仅 UNKNOWN turn 可对账**（含
-        //   keepUnknown——对成功 turn 产生对账记录是误导）。
-        // - 退出事实 exitFact（仅 executed 需要继续判定）：exited 须**结构化 OS 进程证据**
-        //   （osProcessCheck：pid+观测时刻+alive=false；userManual 人工备注只能作补充，
-        //   不能单独证明退出）；alive/缺省/unknown → **不释放租约与准入占位**（确认执行但
-        //   仍存活/退出未知=不提前放行、不宣称恢复完成）。
+        // DEV-13（第七轮重写）：执行事实/退出事实/成果事实分离——**退出证据由服务端生成与校验**。
+        // - 执行事实 verdict（人工判断，需留人工依据 note）：notStarted|executed|keepUnknown。
+        //   **仅 UNKNOWN turn 可对账**（含 keepUnknown）。
+        // - 退出事实：executed 时由 daemon 按已登记身份做 OS 核对（自动取证，或校验调用方
+        //   引用的此前服务端 probeId——校验 turn 归属/登记一致/观测新鲜）。调用方**不再能
+        //   自报 alive=false**（旧 exitEvidence 参数已删除）。alive/unknown/复用/身份缺失 →
+        //   保留租约与准入占位；exited（per-turn 专属进程退出；shared=共享载体退出，证据按
+        //   模型标注）→ 释放；no-os-process（无子进程模型=程序事实无 OS 遗留进程可能）→ 释放。
+        // - notStarted 人工分离：启动窗口崩溃的 UNKNOWN turn 无程序确认来源（确认未启动在
+        //   启动窗口内当场收口，不遗留 UNKNOWN）。人工声明须 manualRiskAck=true（独立语义）：
+        //   预算退款+turn FAILED，但**租约与准入保留**（存在未收口进程可能时不凭人工解除
+        //   物理写入保护），事件 recordedAs='manual-claim'——不伪装为程序已确认事实。
         // - 成果事实：确认执行不自动等于业务失败也不伪造成功交付——无已入库产物证据时
         //   turn 记 FAILED（reason=executed-no-recorded-outcome，留证可复核）。
-        // - 预算逐 turn 标记（agent_turns.budget_mark：settled/refunded）幂等防双算；
-        //   DELIB 尾部 turn（synthesis/ratify）退款同时恢复对应尾部预留。
-        // - 同 daemon 内存联动：对账事务成功后调用 releaseAdmission 钩子（entry 接线）——
-        //   DB 提交与内存更新间崩溃时，占位随进程消亡，持久状态（租约/UNKNOWN/gate）不受影响。
+        // - 预算逐 turn 标记（budget_mark）幂等防双算；DELIB 尾部 turn 退款同步恢复尾部预留。
+        // - 同 daemon 内存联动：对账事务成功后调用 releaseAdmission 钩子（entry 接线）。
         const params = z.strictObject({
           turnId: z.string().min(1),
           verdict: z.enum(['notStarted', 'executed', 'keepUnknown']),
-          evidence: z.strictObject({
-            source: z.string().min(1).max(200), // 证据来源（渠道账单/进程取证/用户人工核对）
-            at: z.number().int().nonnegative(),
-            runId: z.string().min(1).optional(),
-            ref: z.string().max(300).optional(), // 可复核引用（事件 id/账单条目等）
-          }),
-          exitFact: z.enum(['exited', 'alive', 'unknown']).optional(),
-          exitEvidence: z.strictObject({
-            kind: z.enum(['osProcessCheck', 'userManual']),
-            pid: z.number().int().positive().optional(),
-            observedAt: z.number().int().nonnegative(),
-            alive: z.boolean().optional(),
-          }).optional(),
+          /** 人工依据说明（所有 verdict 必填——人工判断留痕，不冒充程序事实）。 */
+          note: z.string().min(1).max(500),
+          /** notStarted 人工风险确认（UNKNOWN turn 无程序确认来源时必填）。 */
+          manualRiskAck: z.boolean().optional(),
+          /** 引用此前服务端 probe 证据（executed 可选；缺省自动取证）。 */
+          probeId: z.string().min(1).optional(),
         }).parse(env.params);
-        if (params.exitFact === 'exited') {
-          const ee = params.exitEvidence;
-          if (ee == null || ee.kind !== 'osProcessCheck' || ee.alive !== false || ee.pid == null) {
-            throw new DaemonCommandError('VALIDATION_INVALID', 'exitFact=exited 须结构化 OS 进程证据（osProcessCheck：pid+observedAt+alive=false）——人工备注不能单独证明退出');
-          }
+        if (params.verdict === 'notStarted' && params.manualRiskAck !== true) {
+          throw new DaemonCommandError('VALIDATION_INVALID', 'notStarted 对 UNKNOWN turn 无程序确认来源：人工声明须 manualRiskAck=true（独立语义——退款但保留租约保护，不伪装为程序已确认）');
         }
         const result = run(() => {
           const turn = deps.db.prepare('SELECT id, run_id, status, stage_key, budget_mark FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; stage_key: string; budget_mark: string | null } | undefined;
@@ -530,12 +551,28 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               schemaVersion: 1, eventId: `evt_${randomUUID()}`,
               projectId: projectId ?? 'unknown', taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
               kind: 'recovery.reconciled', createdAt: now,
-              payload: { ...payload, evidence: params.evidence, exitEvidence: params.exitEvidence ?? null },
+              payload: { ...payload, manualNote: params.note },
             });
           };
           if (params.verdict === 'keepUnknown') {
             emit({ verdict: 'keepUnknown', note: '维持不确定：占位/租约/预算/状态全不动，不因时间流逝清空' });
             return { turnId: turn.id, verdict: 'keepUnknown' as const, stateChanged: false as const };
+          }
+          // 服务端退出取证（executed；notStarted 不需要——保护保留）：
+          // probeId 引用则校验归属/登记一致/新鲜（≤10 分钟）；否则按登记身份自动取证。
+          let probe: ProbeOutcome | null = null;
+          if (params.verdict === 'executed') {
+            if (params.probeId != null) {
+              const referenced = getProbeRecord(deps.db, params.probeId);
+              if (referenced == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `引用的取证记录不存在：${params.probeId}`);
+              if (referenced.turnId !== turn.id) throw new DaemonCommandError('VALIDATION_INVALID', '取证记录不属于目标 turn（其他 turn 的证据不能冒充）');
+              const reg = getTurnProcessRegistration(deps.db, turn.id);
+              if (reg == null || referenced.registryId !== reg.id) throw new DaemonCommandError('STALE_REVISION', '取证记录与当前进程登记不一致（登记已更新）——请重新取证');
+              if (now - referenced.observedAt > 10 * 60 * 1000) throw new DaemonCommandError('STALE_REVISION', '取证记录已过期（>10 分钟）——请重新取证');
+              probe = referenced;
+            } else {
+              probe = probeTurnExit(deps.db, turn.id, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile' });
+            }
           }
           const releaseLeases = (): string[] => {
             const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
@@ -548,8 +585,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             let releasedLeases: string[] = [];
             let turnFinalStatus: string;
             let reason: string;
+            let protectionRetained = false;
             if (params.verdict === 'notStarted') {
-              // 执行事实=未启动：退款（I-1 不加 U；DELIB 尾部 turn 同步恢复尾部预留）。
+              // 人工声明未启动（独立语义）：退款（I-1；DELIB 尾部预留恢复）+ turn FAILED，
+              // 但**租约与准入保留**——存在未收口进程可能时不凭人工解除物理写入保护。
               if (run?.budget_json != null) {
                 const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number; runMaxTurns?: number; tailReservationByStage?: Record<string, number> };
                 const next = deliberationBudgetFns.refundReservedTurn(budget as never) as typeof budget;
@@ -560,41 +599,47 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                 deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
               }
               deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED', budget_mark = 'refunded' WHERE id = ?`).run(turn.id);
-              releasedLeases = releaseLeases(); // 未启动：无进程，写入保护可解除
-              turnFinalStatus = 'FAILED'; reason = 'reconcile-not-started';
-              emit({ verdict: 'notStarted', releasedLeases, turnFinalStatus, reason });
+              turnFinalStatus = 'FAILED'; reason = 'manual-not-started-risk-ack'; protectionRetained = true;
+              emit({ verdict: 'notStarted', recordedAs: 'manual-claim', protectionRetained, turnFinalStatus, reason, note: '人工声明（风险确认）：预算退款；租约/准入保留——程序未确认无遗留进程' });
             } else {
-              // 执行事实=已执行：结算（U+1）——首次结算（budget_mark 尚未 settled）；补交退出
-              // 证据的二次调用跳过（幂等，见上守卫注释）。
+              // 执行事实=已执行：结算（U+1）——首次结算；补交退出证据的二次调用跳过（幂等）。
               if (run?.budget_json != null && turn.budget_mark == null) {
                 const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number };
                 const next = deliberationBudgetFns.settleTurn(budget as never) as typeof budget;
                 deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
               }
               if (turn.budget_mark == null) deps.db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turn.id);
-              if (params.exitFact === 'exited') {
-                // 退出事实=已确认退出（OS 证据）：释放租约；成果事实=无已入库产物（不伪造成功，
+              const p = probe!;
+              if (p.result === 'exited') {
+                // 退出事实=服务端 OS 证据确认退出：释放租约；成果事实=无已入库产物（不伪造成功，
                 // 也不臆断业务失败——FAILED 仅记录「执行过且无可入库成果」这一证据内事实）。
                 releasedLeases = releaseLeases();
                 deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
-                turnFinalStatus = 'FAILED'; reason = 'executed-exited-no-recorded-outcome';
-                emit({ verdict: 'executed', exitFact: 'exited', releasedLeases, turnFinalStatus, reason });
+                turnFinalStatus = 'FAILED'; reason = `executed-exited-${p.processModel}`;
+                emit({ verdict: 'executed', exitFact: 'exited', probe: { probeId: p.probeId, result: p.result, processModel: p.processModel, pid: p.pid, observedAt: p.observedAt, detail: p.detail }, releasedLeases, turnFinalStatus, reason });
+              } else if (p.result === 'no-os-process') {
+                // 无子进程模型（程序事实）：无 OS 遗留进程可能——释放保护。
+                releasedLeases = releaseLeases();
+                deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
+                turnFinalStatus = 'FAILED'; reason = 'executed-no-os-process';
+                emit({ verdict: 'executed', exitFact: 'no-os-process', probe: { probeId: p.probeId, result: p.result, detail: p.detail }, releasedLeases, turnFinalStatus, reason });
               } else {
-                // 仍存活/退出未知：结算预算但**保留租约与准入占位**、turn 保持 UNKNOWN——
-                // 不提前放行、不宣称恢复完成（后续取得退出证据再对账——budget_mark 已防重复结算）。
-                turnFinalStatus = 'UNKNOWN'; reason = `executed-exit-${params.exitFact ?? 'unknown'}-protection-retained`;
-                emit({ verdict: 'executed', exitFact: params.exitFact ?? 'unknown', protectionRetained: true, reason });
+                // 仍存活/退出未知/身份缺失/复用：结算预算但**保留租约与准入占位**、turn 保持
+                // UNKNOWN——不提前放行（后续取得退出证据再对账；budget_mark 已防重复结算）。
+                turnFinalStatus = 'UNKNOWN'; reason = `executed-exit-${p.result}-protection-retained`; protectionRetained = true;
+                emit({ verdict: 'executed', exitFact: p.result, protectionRetained: true, probe: { probeId: p.probeId, result: p.result, processModel: p.processModel, pid: p.pid, observedAt: p.observedAt, detail: p.detail }, reason });
               }
             }
             return {
               turnId: turn.id, verdict: params.verdict, stateChanged: true as const,
-              releasedLeases, turnFinalStatus, reason,
-              admissionReleased: releasedLeases.length >= 0 && turnFinalStatus === 'FAILED', // 同 daemon 钩子依据
+              releasedLeases, turnFinalStatus, reason, protectionRetained,
+              admissionReleased: releasedLeases.length >= 0 && turnFinalStatus === 'FAILED' && reason !== 'manual-not-started-risk-ack',
             };
           });
           const out = tx();
           // 内存联动（DB 事务成功后）：释放该 turn 在 worker 准入账本的 UNKNOWN 保留占位。
-          if (out.turnFinalStatus === 'FAILED' && deps.releaseAdmission != null) {
+          // 人工 notStarted 不联动（保护保留语义与租约一致）。
+          if (out.admissionReleased && deps.releaseAdmission != null) {
             try { deps.releaseAdmission(params.turnId); } catch { /* 进程内钩子失败不回滚持久事实；重启后账本自然为空 */ }
           }
           return out;
@@ -749,26 +794,36 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               WHERE t.dispatch_key LIKE 'task:' || ? || ':%' AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`)
             .get(params.taskId) as { c: number };
           if (inFlight.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlight.c}）：不得并发追加`);
-          // formatRepair 守卫（第六轮·下：持久工作项+同轮精确绑定）：
+          // formatRepair 守卫（第七轮：按**根逻辑输出**限制一次——禁止修复套修复）：
           // - 源 turn=任务最后一个 turn 且 FAILED，且**其自身**存在 turn.outputInvalid 事件
           //   （turn_id 绑定——旧轮校验失败不给新轮提供修复资格）；
+          // - 根逻辑输出身份：源 turn 是修复轮（consumed_turn_id 指向它的工作项存在）则继承
+          //   该工作项的 logical_output_id；否则=源 turn 自身。初始输出与其修复尝试共享
+          //   逻辑输出身份——修复失败后不得把修复 turn 当作新的独立输出再修；
+          // - 每份逻辑输出最多一次：UNIQUE(task_id, logical_output_id)（迁移 010）——用户
+          //   后续正式发起的独立输出有自己的身份与修复资格（不靠生成新 turn ID 获得）；
+          // - 被拒的第二次修复不创建工作项/outbox/模型调用（守卫在 INSERT 前抛错回滚）；
           // - 源输出=该 turn 的实际完成输出（thread.replyAdded(turn_id=源) 最后一条消息），
           //   不用任务最后一条消息顶替；输出须为可解析 JSON（resultKey 可绑定）；
-          // - 每份逻辑输出最多一次：(task_id, source_turn_id) 唯一约束（迁移 008）——
-          //   后续独立输出有自己的修复资格，历史修复不永久禁用；
-          // - 三者一致性在工作项内固化（hash/事件 id/原文），worker 侧复核损坏。
+          // - 三者一致性在工作项内固化（hash/事件 id/原文），worker 侧复核损坏+授权链。
           if (params.formatRepair === true) {
+            // 源 turn=任务最后一个**有效** turn（豁免 refunded——确认未启动退款无逻辑输出，
+            // 不挡住更早有效输出的修复资格）且 FAILED，且**其自身**存在 turn.outputInvalid 事件。
             const sourceTurn = deps.db
-              .prepare(`SELECT id, status FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%' ORDER BY rowid DESC LIMIT 1`)
+              .prepare(`SELECT id, status FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%' AND (budget_mark IS NULL OR budget_mark != 'refunded') ORDER BY rowid DESC LIMIT 1`)
               .get(params.taskId) as { id: string; status: string } | undefined;
             if (sourceTurn == null || sourceTurn.status !== 'FAILED') {
               throw new DaemonCommandError('STALE_REVISION', `格式修复仅适用于最后一个 turn FAILED（实际：${sourceTurn?.status ?? '无 turn'}）`);
             }
+            const inherited = deps.db
+              .prepare(`SELECT logical_output_id FROM format_repair_workitems WHERE consumed_turn_id = ?`)
+              .get(sourceTurn.id) as { logical_output_id: string } | undefined;
+            const logicalOutputId = inherited?.logical_output_id ?? sourceTurn.id;
             const existing = deps.db
-              .prepare(`SELECT id, status FROM format_repair_workitems WHERE task_id = ? AND source_turn_id = ?`)
-              .get(params.taskId, sourceTurn.id) as { id: string; status: string } | undefined;
+              .prepare(`SELECT id, status FROM format_repair_workitems WHERE task_id = ? AND logical_output_id = ?`)
+              .get(params.taskId, logicalOutputId) as { id: string; status: string } | undefined;
             if (existing != null) {
-              throw new DaemonCommandError('STALE_REVISION', `该逻辑输出已创建修复工作项（${existing.id}，${existing.status}）——每份逻辑输出最多一次`);
+              throw new DaemonCommandError('STALE_REVISION', `该逻辑输出（${logicalOutputId}）已用过修复资格（工作项 ${existing.id}，${existing.status}）——修复尝试与初始输出共享身份，不得修复套修复`);
             }
             const invalid = deps.db
               .prepare(`SELECT event_id, payload_json FROM domain_events WHERE kind = 'turn.outputInvalid' AND turn_id = ? ORDER BY seq DESC LIMIT 1`)
@@ -798,7 +853,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                   budget_run_id, status, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
             ).run(
-              `frw_${randomUUID()}`, params.taskId, sourceTurn.id, sourceResultKey, sourceTurn.id, invalid.event_id,
+              `frw_${randomUUID()}`, params.taskId, sourceTurn.id, sourceResultKey, logicalOutputId, invalid.event_id,
               createHash('sha256').update(outputText, 'utf8').digest('hex'), outputText,
               JSON.stringify((JSON.parse(invalid.payload_json) as { issues: string[] }).issues),
               `task:${params.taskId}:repair:${sourceTurn.id}`, lastRun?.id ?? 'none', now2, now2,

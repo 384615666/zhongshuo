@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
+  AdapterProcessIdentity,
   NormalizedRuntimeEvent,
   OpenSessionInput,
   ProbeResult,
@@ -567,6 +568,11 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       this.child = null;
       await this.killAndWait(child);
     }
+  }
+
+  /** 常驻 App Server 子进程（多 turn 共享）——PID 不专属单一 turn（DEV-13 取证如实标注）。 */
+  processIdentity(session: SessionRef, turnId: string): AdapterProcessIdentity | null {
+    void session; void turnId; return { model: 'shared', pid: this.child?.pid ?? null };
   }
 
   async dispose(): Promise<void> {

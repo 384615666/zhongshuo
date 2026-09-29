@@ -34,6 +34,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
+import type { AdapterProcessIdentity } from '../../contracts/runtime.ts';
 import type {
   NormalizedRuntimeEvent,
   OpenSessionInput,
@@ -471,6 +472,14 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       await this.waitForTurnExit(session, state.active.turnId, 3_000);
     }
     this.sessions.delete(session.id);
+  }
+
+  /** 每 turn 独立子进程（startTurn spawn）——活动 turn 的 PID 专属该 turn（DEV-13 取证）。 */
+  processIdentity(session: SessionRef, turnId: string): AdapterProcessIdentity | null {
+    const state = this.sessions.get(session.id);
+    if (state == null) return null;
+    if (state.active?.turnId !== turnId) return null;
+    return { model: 'per-turn', pid: state.active.process.pid ?? null };
   }
 
   async respondApproval(_session: SessionRef, _approvalId: string, _choice: 'allow_once' | 'deny'): Promise<void> {

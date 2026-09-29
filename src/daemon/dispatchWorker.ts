@@ -39,6 +39,8 @@ import {
 } from './deliberationRunner.ts';
 import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
+import { checkProcessLiveness } from './processCheck.ts';
+import { closeTurnProcessRegistration, registerTurnProcess } from './processRegistry.ts';
 
 interface TaskRow {
   id: string;
@@ -329,13 +331,21 @@ export class DispatchWorker {
         .prepare(`SELECT count(*) c FROM domain_events WHERE event_id = ? AND kind = 'turn.outputInvalid' AND turn_id = ?`)
         .get(repairItem.invalid_event_id, repairItem.source_turn_id) as { c: number };
       const textHash = createHash('sha256').update(repairItem.source_output_text, 'utf8').digest('hex');
-      if (invalidStill.c !== 1 || textHash !== repairItem.source_output_hash) {
+      // 授权链校验（第七轮：budget_run_id 真正参与校验——它标识修复预算沿用的授权快照，
+      // 对应 run 必须存在且属于本任务；断裂=按损坏阻塞留证，不花调用）。
+      const budgetRun = this.db
+        .prepare(`SELECT task_id FROM workflow_runs WHERE id = ?`)
+        .get(repairItem.budget_run_id) as { task_id: string } | undefined;
+      if (invalidStill.c !== 1 || textHash !== repairItem.source_output_hash || budgetRun?.task_id !== task.id) {
         // 损坏/不一致：明确阻塞并留证——不忽略后继续花模型调用（不降级为普通重跑）。
         const tx = this.db.transaction(() => {
           this.db.prepare(`UPDATE format_repair_workitems SET status = 'blocked', note = ?, updated_at = ? WHERE id = ?`)
-            .run(`一致性复核失败（invalidEvent=${invalidStill.c === 1 ? '在' : '缺失'}，hashMatch=${textHash === repairItem.source_output_hash}）`, Date.now(), repairItem.id);
+            .run(
+              `一致性复核失败（invalidEvent=${invalidStill.c === 1 ? '在' : '缺失'}，hashMatch=${textHash === repairItem.source_output_hash}，budgetRunMatch=${budgetRun?.task_id === task.id}）`,
+              Date.now(), repairItem.id,
+            );
           this.transitionTask(task.id, 'BLOCKED');
-          this.audit(task, null, null, 'task.repairContextCorrupt', { workitemId: repairItem.id, sourceTurnId: repairItem.source_turn_id, reason: '修复上下文与源记录不一致——阻塞留证' });
+          this.audit(task, null, null, 'task.repairContextCorrupt', { workitemId: repairItem.id, sourceTurnId: repairItem.source_turn_id, reason: '修复上下文与源记录不一致或授权链断裂——阻塞留证' });
         });
         tx();
         failOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -343,11 +353,30 @@ export class DispatchWorker {
       }
     }
     const isRepairDispatch = repairItem != null && repairItem.status === 'pending';
-    // 修复轮预算沿用原授权：usedTurns=该任务既往 DIRECT run 的累计已用（不因新 run 重置绕过上限）。
-    const priorUsed = isRepairDispatch
-      ? (this.db.prepare(`SELECT budget_json FROM workflow_runs WHERE task_id = ? AND mode = 'DIRECT'`).all(task.id) as Array<{ budget_json: string }>)
-          .reduce((acc, r) => acc + (((JSON.parse(r.budget_json ?? '{}') as { usedTurns?: number }).usedTurns) ?? 0), 0)
+    // 修复轮预算沿用原授权（第七轮：统一授权账目——以**逐 turn 处置事实**为单一真源，
+    // 不累加各 run 的 usedTurns 快照[快照含播种历史值，SUM 会重复计]；不含其他任务）：
+    // 计入=本任务 DIRECT run 中一切非退款 turn——正常终态（settleBudget 已结算、无 mark）、
+    // 对账 settled（含 UNKNOWN 保留）、UNKNOWN 未收口（对账未定=额度仍被占用）；
+    // 唯一豁免=budget_mark='refunded'（确认未启动退款，额度归还）。在途=本 run 预占 1。
+    const settledCount = isRepairDispatch
+      ? (this.db.prepare(
+        `SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
+         WHERE r.task_id = ? AND r.mode = 'DIRECT' AND (t.budget_mark IS NULL OR t.budget_mark != 'refunded')`,
+      ).get(task.id) as { c: number }).c
       : 0;
+    if (isRepairDispatch && settledCount + 1 > this.maxTurns) {
+      // 授权额度已耗尽：修复资格被预算吞噬——如实收口（不绕过上限花调用）。
+      const tx = this.db.transaction(() => {
+        this.db.prepare(`UPDATE format_repair_workitems SET status = 'closed', note = ?, updated_at = ? WHERE id = ? AND status = 'pending'`)
+          .run(`修复预算耗尽（已用 ${settledCount}+1 > 上限 ${this.maxTurns}）——修复资格按统一授权账目收口`, Date.now(), repairItem!.id);
+        this.transitionTask(task.id, 'BLOCKED');
+        this.audit(task, null, null, 'task.repairBudgetExhausted', { workitemId: repairItem!.id, settledCount, maxTurns: this.maxTurns });
+      });
+      tx();
+      failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    const priorUsed = settledCount;
     const budget: BudgetState = {
       grantId: runId,
       maxTurns: this.maxTurns,
@@ -526,12 +555,17 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
       });
+      this.registerProcessIdentity(turnId, runId, member.id, adapter, session);
       await this.consumeTurn(task, runId, turnId, session.id, adapter, member.id, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
       // detached：consumeTurn 已登记消费器并返回（live/outbox 完结由消费器收尾）；
       // inline：此处返回时 turn 已终态、outbox 已完结。
     } catch (dispatchError) {
       // 启动失败统一收尾（第五轮：openSession/startTurn/记录写入全覆盖，两分类——
       // 确认未启动=清理+释放占位；不确定=UNKNOWN+保留占位+对账要求）。
+      if (startupPhase === 'startTurn' && openedSession != null) {
+        // startTurn 已过但抛错（请求可能已发出）：adapter 已知的进程身份尽力登记——UNKNOWN 对账增强。
+        this.registerProcessIdentity(turnId, runId, member.id, openedSession.adapter, openedSession.session);
+      }
       await this.settleStartupFailure(task, runId, turnId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
       throw dispatchError;
     } finally {
@@ -622,6 +656,7 @@ export class DispatchWorker {
         await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
       } finally {
         this.releaseAdmission(turnId); // 终态/失败/取消统一回收（UNKNOWN 不释放——对账未定不提前放行）
+        this.closeProcessRegistrationIfTerminal(turnId);
         await completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
       }
       return;
@@ -631,6 +666,7 @@ export class DispatchWorker {
       try { completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 已关库：恢复语义承载 */ }
       this.live.delete(turnId); // detached：live 由消费器收尾删（inline 已由调用方删，幂等）
       try { this.releaseAdmission(turnId); } catch { /* 已关库：准入账本随进程消亡 */ }
+      this.closeProcessRegistrationIfTerminal(turnId);
     };
     const promise = this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter)
       .then(() => undefined)
@@ -668,6 +704,44 @@ export class DispatchWorker {
   /** 成员绑定的 runtime kind（provider 维度准入键；未绑定回落默认 runtime 标识）。 */
   private providerKeyOf(memberId: string): string {
     return readMemberRuntimeBinding(this.db, memberId)?.kind ?? this.defaultProviderKey;
+  }
+
+  /**
+   * turn 进程身份登记（DEV-13 第七轮：OS 退出证据的事实锚点）——startTurn 成功后调用；
+   * startTurn 抛错但 adapter 已知进程身份时也尽力登记（UNKNOWN 对账增强）。
+   * 登记尽力而为：取证失败不阻断执行（对账时如实 identity-missing / pid-only 降级）。
+   * 启动时刻查询用短超时（3s）——启动路径不为取证付出长阻塞代价。
+   */
+  private registerProcessIdentity(
+    turnId: string, runId: string, memberId: string, adapter: RuntimeAdapter, session: SessionRef,
+  ): void {
+    try {
+      const identity = adapter.processIdentity?.(session, turnId) ?? null;
+      if (identity == null) return; // adapter 未上报：无登记（对账时如实 identity-missing）
+      let startedAtMs: number | null = null;
+      if (identity.model !== 'none' && identity.pid != null) {
+        const r = checkProcessLiveness(identity.pid, undefined, 3_000);
+        if (r.state === 'alive') startedAtMs = r.identity.startedAt;
+      }
+      registerTurnProcess(this.db, {
+        turnId, runId, memberId,
+        adapterKind: this.providerKeyOf(memberId),
+        processModel: identity.model,
+        pid: identity.pid,
+        startedAtMs,
+        identitySource: identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
+      });
+    } catch { /* 取证失败不阻断派发（登记缺失在对账侧如实降级） */ }
+  }
+
+  /** 进程登记收口：仅终态（非 UNKNOWN）turn 标 closed——UNKNOWN=崩溃遗留候选，保持开放待对账。 */
+  private closeProcessRegistrationIfTerminal(turnId: string): void {
+    try {
+      const s = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
+      if (s != null && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(s.status)) {
+        closeTurnProcessRegistration(this.db, turnId);
+      }
+    } catch { /* 簿记失败不影响执行（登记对账按 open 语义处理） */ }
   }
 
   /** 停止接新派发（退出状态机：drain 安全边界——正在执行的当前项继续，不再领取新项）。 */
@@ -925,8 +999,12 @@ export class DispatchWorker {
         taskRevision: 0,
         resultKey: `result_${turnId}`,
       });
+      this.registerProcessIdentity(turnId, run.id, step.memberId, adapter, session);
       await this.consumeTurn(task, run.id, turnId, session.id, adapter, step.memberId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
     } catch (dispatchError) {
+      if (startupPhase === 'startTurn' && openedSession != null) {
+        this.registerProcessIdentity(turnId, run.id, step.memberId, openedSession.adapter, openedSession.session);
+      }
       await this.settleDelibStartupFailure(task, run.id, turnId, step, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
       throw dispatchError;
     } finally {

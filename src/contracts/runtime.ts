@@ -75,6 +75,18 @@ export interface TurnRequest {
   resultKey?: string;
 }
 
+/**
+ * 底层子进程身份（DEV-13 恢复对账：OS 退出证据的事实来源；adapter 如实上报，不猜测）。
+ * - per-turn：每 turn 独立子进程（如 CLI 一次性调用）——PID 专属该 turn，退出证据最强；
+ * - shared：常驻进程（如 App Server 长连接）——PID 由多 turn 共享，不专属单一 turn，
+ *   其退出只证明「共享执行载体消失」，不能冒充该 turn 专属进程退出；
+ * - none：无子进程可观测（内联/模拟执行）——无 OS 遗留进程可能。
+ */
+export interface AdapterProcessIdentity {
+  model: 'per-turn' | 'shared' | 'none';
+  pid: number | null;
+}
+
 export interface ProbeResult {
   executable: string;
   version: string;
@@ -109,6 +121,11 @@ export interface RuntimeAdapter {
     choice: 'allow_once' | 'deny',
   ): Promise<void>;
   close(session: SessionRef): Promise<void>;
+  /**
+   * 该 turn 的底层子进程身份（可选能力——恢复对账取证）。turn 已结束后仍返回其进程身份
+   * （历史登记用途）；无子进程模型返回 { model: 'none', pid: null }；不实现则视为不可观测。
+   */
+  processIdentity?(session: SessionRef, turnId: string): AdapterProcessIdentity | null;
 }
 
 // ---------- §9.4 规范化事件 ----------

@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
+  AdapterProcessIdentity,
   NormalizedRuntimeEvent,
   OpenSessionInput,
   ProbeResult,
@@ -371,6 +372,11 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       state.active = null;
     }
     this.sessions.delete(session.id);
+  }
+
+  /** 无子进程（内联模拟执行）——无 OS 遗留进程可能（DEV-13 取证如实标注）。 */
+  processIdentity(session: SessionRef, turnId: string): AdapterProcessIdentity | null {
+    void session; void turnId; return { model: 'none', pid: null };
   }
 
   /** 测试清理：关闭全部会话（清空挂起的 stall 计时器，避免进程悬挂）。 */

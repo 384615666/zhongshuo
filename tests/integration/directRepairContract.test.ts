@@ -159,8 +159,8 @@ describe('formatRepair 修复绑定（命令守卫+上下文注入+耗尽收口�
     expect(capturedInput).toContain('Unrecognized key'); // 校验错误原文
     expect(capturedInput).toContain('结论二（依据 L5）'); // 原输出全文（不截短）
     expect(capturedInput).toContain('不要缩短或删除内容'); // 指引=搬字段，不是删短
-    // 每任务一次：再修被结构化拒绝。
-    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true })).rejects.toThrow(/已用过一次格式修复|已终态/);
+    // 每任务每逻辑输出一次：修复成功后任务 DONE，再修被终态守卫拒绝。
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true })).rejects.toThrow(/已终态/);
     db.close();
   }, 20_000);
 
@@ -212,53 +212,66 @@ describe('formatRepair 修复绑定（命令守卫+上下文注入+耗尽收口�
   }, 20_000);
 });
 
-describe('格式修复工作项（第六轮·下：持久绑定/预算沿用/区分普通重派/按逻辑输出限次）', () => {
-  it('同轮精确取证：源输出=源 turn 自己的完成消息（非任务最后一条）；预算沿用既往累计', async () => {
+describe('格式修复工作项（第六轮·下：持久绑定/预算沿用/区分普通重派；第七轮：按逻辑输出限次）', () => {
+  it('同轮精确取证+禁止修复套修复：修复轮失败后不得再修；正式独立输出有自己的资格', async () => {
     const { db } = rig([]);
     const taskId = makeTask(db, 6);
     let turnCount = 0;
+    const badJson = (key: string, tag: string) => JSON.stringify({ schemaVersion: 'task-complete-v1', resultKey: key, changeSummary: tag, files: [], executedVerifications: [], unexecutedVerifications: [], remainingIssues: [], conclusions: [tag] });
     const adapter = new FakeRuntimeAdapter({
       structuredFinal: false,
       turnScriptSequencer: (input) => {
         turnCount += 1;
         const m = input.text.match(/resultKey=([^；\n]+)/) ?? input.text.match(/"resultKey":"(result_[^"]+)"/);
         const key = m?.[1] ?? 'result_unknown';
-        if (turnCount <= 2) {
-          // 两轮失败：turn1=附加键；turn2=散文（任务最后一条 agent 消息=turn2 的——修复必须绑定 turn2）。
-          const out = turnCount === 1
-            ? JSON.stringify({ schemaVersion: 'task-complete-v1', resultKey: key, changeSummary: '第一轮', files: [], executedVerifications: [], unexecutedVerifications: [], remainingIssues: [], conclusions: ['第一轮的结论'] })
-            : '第二轮纯散文输出';
+        // turn1=附加键失败；turn2（修复轮）=散文失败；turn3（普通重派·独立输出）=散文失败；
+        // turn4（修复轮2）=通过。
+        if (turnCount === 1) {
           return [
-            { kind: 'event', event: { kind: 'message.completed', messageId: `m6_${turnCount}`, text: out } },
-            { kind: 'event', event: { kind: 'turn.completed', finalText: out } },
+            { kind: 'event', event: { kind: 'message.completed', messageId: `m6_${turnCount}`, text: badJson(key, '第一轮的结论') } },
+            { kind: 'event', event: { kind: 'turn.completed', finalText: badJson(key, '第一轮的结论') } },
+          ];
+        }
+        if (turnCount === 4) {
+          return [
+            { kind: 'event', event: { kind: 'message.completed', messageId: 'm6_ok', text: 'ok' } },
+            { kind: 'event', event: { kind: 'turn.completed', finalText: validComplete(key, '修复轮2 通过') } },
           ];
         }
         return [
-          { kind: 'event', event: { kind: 'message.completed', messageId: `m6_ok`, text: '修复轮通过' } },
-          { kind: 'event', event: { kind: 'turn.completed', finalText: validComplete(key, '修复轮通过') } },
+          { kind: 'event', event: { kind: 'message.completed', messageId: `m6_${turnCount}`, text: `第${turnCount}轮纯散文输出` } },
+          { kind: 'event', event: { kind: 'turn.completed', finalText: `第${turnCount}轮纯散文输出` } },
         ];
       },
     });
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-wi1', appDataDir: join(tmpRoot, 'wi-a') });
-    await worker.runOnce(); // turn1 失败
-    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '此刻源=turn1' })).resolves.toBeTruthy();
-    await worker.runOnce(); // turn2（修复轮1——也失败：散文）
-    const wi1 = db.prepare(`SELECT * FROM format_repair_workitems ORDER BY created_at ASC LIMIT 1`) as unknown as { source_output_text: string };
-    void wi1;
-    const row1 = db.prepare(`SELECT source_turn_id, source_output_text FROM format_repair_workitems ORDER BY created_at ASC LIMIT 1`).get() as { source_turn_id: string; source_output_text: string };
-    expect(row1.source_output_text).toContain('第一轮的结论'); // 第一个工作项绑定 turn1（自己的输出）
-    // turn2 失败后：新工作项必须绑定 turn2 的散文（不是任务里更早的 JSON）。
-    await cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '源=turn2' });
-    const row2 = db.prepare(`SELECT source_turn_id, source_output_text FROM format_repair_workitems ORDER BY created_at DESC LIMIT 1`).get() as { source_turn_id: string; source_output_text: string };
-    expect(row2.source_output_text).toBe('第二轮纯散文输出');
-    expect(row2.source_turn_id).not.toBe(row1.source_turn_id);
-    // 后续独立输出有自己的修复资格（同一输出第二次仍被拒——见下用例）。
-    await worker.runOnce(); // 修复轮2 → DONE
+    await worker.runOnce(); // turn1 失败（附加键）
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '源=turn1' })).resolves.toBeTruthy();
+    await worker.runOnce(); // turn2（修复轮）也失败（散文）
+    const wi1 = db.prepare(`SELECT source_turn_id, logical_output_id, source_output_text FROM format_repair_workitems ORDER BY created_at ASC LIMIT 1`).get() as { source_turn_id: string; logical_output_id: string; source_output_text: string };
+    expect(wi1.source_output_text).toContain('第一轮的结论'); // 工作项绑定 turn1（自己的输出）
+    expect(wi1.logical_output_id).toBe(wi1.source_turn_id); // 初始输出：逻辑输出身份=自身
+    const turnCountBefore = (db.prepare(`SELECT count(*) c FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%'`).get(taskId) as { c: number }).c;
+    expect(turnCountBefore).toBe(2);
+    // 禁止修复套修复：对修复轮 turn2 再 formatRepair → 拒绝（继承根逻辑输出身份=turn1，已用资格）。
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '源=turn2（修复轮）' })).rejects.toThrow(/不得修复套修复|已用过修复资格/);
+    // 被拒的第二次修复不创建工作项、不入队、实际启动计数不再增加。
+    expect((db.prepare(`SELECT count(*) c FROM format_repair_workitems`).get() as { c: number }).c).toBe(1);
+    expect((db.prepare(`SELECT count(*) c FROM outbox WHERE status != 'done'`).get() as { c: number }).c).toBe(0);
+    expect((db.prepare(`SELECT count(*) c FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%'`).get(taskId) as { c: number }).c).toBe(2);
+    // 正式独立输出（普通 redispatch——业务来源）→ turn3 失败 → 有自己的修复资格（新逻辑输出身份）。
+    await cmd(db, 'task.redispatch', { taskId, reason: '正式跟进（独立输出）' });
+    await worker.runOnce(); // turn3 失败（散文）
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '源=turn3（独立输出）' })).resolves.toBeTruthy();
+    const wi2 = db.prepare(`SELECT source_turn_id, logical_output_id, source_output_text FROM format_repair_workitems ORDER BY created_at DESC LIMIT 1`).get() as { source_turn_id: string; logical_output_id: string; source_output_text: string };
+    expect(wi2.source_output_text).toBe('第3轮纯散文输出');
+    expect(wi2.logical_output_id).toBe(wi2.source_turn_id); // 新独立输出=新身份（不靠生成 turn ID 绕过）
+    expect(wi2.logical_output_id).not.toBe(wi1.logical_output_id);
+    await worker.runOnce(); // turn4（修复轮2）→ DONE
     expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('DONE');
-    // 预算沿用：修复 run 的 usedTurns 起始=既往累计（run.created 审计可查 budgetCarryoverUsed）。
+    // 预算沿用（第七轮统一授权账目）：修复轮2 的 carryover=非退款 turn 计数（turn1+turn2+turn3=3）。
     const carry = db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'task.repairConsumed' ORDER BY seq DESC LIMIT 1`).get() as { payload_json: string };
-    const used = (JSON.parse(carry.payload_json) as { budgetCarryoverUsed: number }).budgetCarryoverUsed;
-    expect(used).toBeGreaterThanOrEqual(2); // turn1+turn2 各用过 1
+    expect((JSON.parse(carry.payload_json) as { budgetCarryoverUsed: number }).budgetCarryoverUsed).toBe(3);
     db.close();
   }, 25_000);
 
@@ -291,7 +304,7 @@ describe('格式修复工作项（第六轮·下：持久绑定/预算沿用/区
     await worker.runOnce(); // 失败
     // 第二次修复同一输出：先入队一次 pending，再建第二个工作项被 (task, source) 唯一约束+守卫拒绝。
     await cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '第一次' });
-    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '第二次' })).rejects.toThrow(/已创建修复工作项/);
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '第二次' })).rejects.toThrow(/已用过修复资格/);
     // 「重启」语义：不跑 worker，新开数据库连接（工作项持久）后再派——上下文完整。
     const worker2 = new DispatchWorker({ db, adapter, leaseOwner: 'w-wi2b', appDataDir: join(tmpRoot, 'wi-b2') });
     await worker2.runOnce();
@@ -299,7 +312,7 @@ describe('格式修复工作项（第六轮·下：持久绑定/预算沿用/区
     expect(capturedRepairInput).toContain('被拒字段内容七号'); // 修复上下文全文注入（重开连接后不丢）
     expect(capturedRepairInput).toContain('【格式修复轮】');
     // 已消费的工作项：再次对同一输出修复仍拒。
-    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '已消费后再修' })).rejects.toThrow(/已终态|已创建修复工作项/);
+    await expect(cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '已消费后再修' })).rejects.toThrow(/已终态|已用过修复资格/);
     db.close();
   }, 25_000);
 
