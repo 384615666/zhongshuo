@@ -6,6 +6,7 @@ import { ratifyPayloadHashMigration } from './004-ratify-payload-hash.ts';
 import { runStageStartedAtMigration } from './005-run-stage-started-at.ts';
 import { turnExecClockMigration } from './006-turn-exec-clock.ts';
 import { changesetPreimageMigration } from './007-changeset-preimage.ts';
+import { formatRepairWorkitemsMigration } from './008-format-repair-workitems.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -16,4 +17,5 @@ export const MIGRATIONS: readonly Migration[] = [
   runStageStartedAtMigration,
   turnExecClockMigration,
   changesetPreimageMigration,
+  formatRepairWorkitemsMigration,
 ];

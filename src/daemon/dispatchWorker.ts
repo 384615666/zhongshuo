@@ -311,25 +311,61 @@ export class DispatchWorker {
 
     const runId = `run_${randomUUID()}`;
     const turnId = `turn_${randomUUID()}`;
+
+    // 格式修复工作项（第六轮·下：结构化判定——不靠 dispatch_key 字符串后缀）。
+    // pending：本派发即修复轮——先做一致性复核（损坏→阻塞留证不花调用），上下文与预算
+    // 沿用从工作项读取；consumed（他 turn 已消费）：existingTurn 对账路径兜底。
+    const repairItem = this.db
+      .prepare(`SELECT * FROM format_repair_workitems WHERE target_dispatch_key = ? AND status IN ('pending','consumed') ORDER BY created_at DESC LIMIT 1`)
+      .get(claimed.dispatch_key) as {
+        id: string; source_turn_id: string; source_result_key: string; invalid_event_id: string;
+        source_output_hash: string; source_output_text: string; invalid_issues_json: string;
+        status: string; consumed_turn_id: string | null; budget_run_id: string;
+      } | undefined;
+    if (repairItem != null && repairItem.status === 'consumed' && repairItem.consumed_turn_id != null) {
+      // 已被其他 turn 消费（崩溃后重领等）：交由下方 existingTurn 对账纪律——不重复消费。
+    } else if (repairItem != null && repairItem.status === 'pending') {
+      const invalidStill = this.db
+        .prepare(`SELECT count(*) c FROM domain_events WHERE event_id = ? AND kind = 'turn.outputInvalid' AND turn_id = ?`)
+        .get(repairItem.invalid_event_id, repairItem.source_turn_id) as { c: number };
+      const textHash = createHash('sha256').update(repairItem.source_output_text, 'utf8').digest('hex');
+      if (invalidStill.c !== 1 || textHash !== repairItem.source_output_hash) {
+        // 损坏/不一致：明确阻塞并留证——不忽略后继续花模型调用（不降级为普通重跑）。
+        const tx = this.db.transaction(() => {
+          this.db.prepare(`UPDATE format_repair_workitems SET status = 'blocked', note = ?, updated_at = ? WHERE id = ?`)
+            .run(`一致性复核失败（invalidEvent=${invalidStill.c === 1 ? '在' : '缺失'}，hashMatch=${textHash === repairItem.source_output_hash}）`, Date.now(), repairItem.id);
+          this.transitionTask(task.id, 'BLOCKED');
+          this.audit(task, null, null, 'task.repairContextCorrupt', { workitemId: repairItem.id, sourceTurnId: repairItem.source_turn_id, reason: '修复上下文与源记录不一致——阻塞留证' });
+        });
+        tx();
+        failOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+    }
+    const isRepairDispatch = repairItem != null && repairItem.status === 'pending';
+    // 修复轮预算沿用原授权：usedTurns=该任务既往 DIRECT run 的累计已用（不因新 run 重置绕过上限）。
+    const priorUsed = isRepairDispatch
+      ? (this.db.prepare(`SELECT budget_json FROM workflow_runs WHERE task_id = ? AND mode = 'DIRECT'`).all(task.id) as Array<{ budget_json: string }>)
+          .reduce((acc, r) => acc + (((JSON.parse(r.budget_json ?? '{}') as { usedTurns?: number }).usedTurns) ?? 0), 0)
+      : 0;
     const budget: BudgetState = {
       grantId: runId,
       maxTurns: this.maxTurns,
-      usedTurns: 0,
+      usedTurns: priorUsed,
       inFlightReservedTurns: 1,
     };
 
     // 输入组装（DEV-21-M0）：必要材料缺失/敏感命中 → 组装失败，不建 run、不派发。
-    // 格式修复上下文（第六轮）：formatRepair redispatch 的修复前言（原输出+校验错误）随
-    // 组装注入；消费即删（一次修复一次生效——崩溃残留只会让幂等前言重复出现，不放大修复次数，
-    // 命令侧的结构化「每任务一次」守卫不变）。
-    const repairRaw = this.kvGet(`direct:repair:${taskId}`);
-    let repairContext: { originalTurnId: string; issues: string[]; originalText: string } | undefined;
-    if (repairRaw != null && claimed.dispatch_key.endsWith(':redispatch')) {
-      try {
-        repairContext = JSON.parse(repairRaw) as { originalTurnId: string; issues: string[]; originalText: string };
-        this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(`direct:repair:${taskId}`);
-      } catch { /* 损坏上下文不阻断派发——按普通 redispatch 执行并留原键待查 */ }
-    }
+    // 修复上下文来自持久工作项（组装失败/准入延期/崩溃重领不丢失——工作项保持 pending
+    // 直至 run/turn 创建同事务置 consumed）。
+    const repairContext = isRepairDispatch && repairItem != null
+      ? {
+          originalTurnId: repairItem.source_turn_id,
+          sourceResultKey: repairItem.source_result_key,
+          issues: JSON.parse(repairItem.invalid_issues_json) as string[],
+          originalText: repairItem.source_output_text,
+        }
+      : undefined;
     const assembled = assembleDirectTurn({
       db: this.db,
       repairContext,
@@ -405,6 +441,13 @@ export class DispatchWorker {
         ).run(assembled.value.bundleId, turnId, task.conversation_thread_id, JSON.stringify(assembled.value.envelope), assembled.value.hash);
         this.transitionTask(task.id, 'ACTIVE');
         this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
+        // 修复工作项原子消费：与 run/turn 创建同事务（崩溃时二者一致——要么都成、要么
+        // 工作项保持 pending 可重领，不丢失不降级）；resultKey 关联=consumed_turn_id 绑定。
+        if (isRepairDispatch && repairItem != null) {
+          this.db.prepare(`UPDATE format_repair_workitems SET status = 'consumed', consumed_turn_id = ?, updated_at = ? WHERE id = ? AND status = 'pending'`)
+            .run(turnId, Date.now(), repairItem.id);
+          this.audit(task, runId, turnId, 'task.repairConsumed', { workitemId: repairItem.id, sourceTurnId: repairItem.source_turn_id, sourceResultKey: repairItem.source_result_key, resultKey: assembled.value.resultKey, budgetCarryoverUsed: priorUsed });
+        }
       });
       createRun();
 
@@ -636,6 +679,17 @@ export class DispatchWorker {
   /** 中止全部消费器（强制退出路径专用）：循环内检测→按既有 UNKNOWN 语义收尾后退出。 */
   abortConsumers(): void {
     this.aborting = true;
+  }
+
+  /**
+   * 对账后内存联动（DEV-13，recovery.reconcile 钩子）：turn 已被对账置 FAILED（非 UNKNOWN）
+   * 时释放准入占位并解除排队 skip——DB 事务先于此调用，持久状态不受此失败影响。
+   */
+  reconcileRelease(turnId: string): void {
+    const st = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
+    if (st == null || st.status === 'UNKNOWN') return; // 双保险：仅持久状态确认后释放
+    this.admission.release(turnId);
+    this.blockedOutbox.clear();
   }
 
   /** 对全部在途 turn 发送停止请求（退出状态机第 4 步；只发送，不等退出确认/不挂起）。 */
@@ -1179,7 +1233,8 @@ export class DispatchWorker {
             this.casTurn(turnId, 'FAILED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
             this.settleBudget(runId);
-            const isRepairTurn = (this.db.prepare('SELECT dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { dispatch_key: string | null })?.dispatch_key?.endsWith(':redispatch') === true;
+            // 修复轮判定=本 turn 被修复工作项消费（结构化绑定——普通 redispatch 不受影响）。
+            const isRepairTurn = (this.db.prepare(`SELECT count(*) c FROM format_repair_workitems WHERE consumed_turn_id = ?`).get(turnId) as { c: number }).c > 0;
             if (isRepairTurn) {
               this.transitionTask(task.id, 'BLOCKED');
               this.audit(task, runId, turnId, 'task.statusChanged', { status: 'BLOCKED', reason: 'direct-repair-exhausted' });
@@ -1493,7 +1548,7 @@ export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): Ac
 
 function parseInitialTaskId(dispatchKey: string): string | null {
   // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）。
-  const m = dispatchKey.match(/^task:(.+):(?:initial|redispatch)$/);
+  const m = dispatchKey.match(/^task:(.+):(?:initial|redispatch|repair:[^:]+)$/);
   return m?.[1] ?? null;
 }
 

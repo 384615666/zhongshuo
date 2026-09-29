@@ -34,6 +34,12 @@ export interface DaemonCommandDeps {
   interruptTurn: (turnId: string) => Promise<void>;
   /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
   appDataDir?: string;
+  /**
+   * 同 daemon 内存联动钩子（DEV-13）：对账事务成功且 turn 已终态时释放 worker 准入账本中
+   * 该 turn 的 UNKNOWN 保留占位（entry 接线 worker.reconcileRelease）。缺省（测试直连）不调用——
+   * 持久事实（租约/UNKNOWN/gate）不依赖内存账本。
+   */
+  releaseAdmission?: (turnId: string) => void;
 }
 
 export class DaemonCommandError extends Error {
@@ -464,57 +470,134 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
       }
       case 'recovery.reconcile': {
-        // DEV-13：UNKNOWN turn 对账（三事实分别处置——不清空占位后放行）。
-        // verdict=notStarted（确认未执行：退款 I、不计 U、释放租约、turn FAILED 留证）
-        //        |executed（确认已执行：结算 U、释放租约、turn FAILED 留证）
-        //        |keepUnknown（保持不确定：仅记录意愿与依据，状态不动）。
-        // 证据要求：evidence 必填（渠道账单/进程取证/用户人工核对等来源说明）——审计可查。
+        // DEV-13（第六轮·下修订）：执行事实/退出事实/成果事实分离——执行过不等于已结束，
+        // 一段 evidence 文字不能同时证明两件事。
+        // - 执行事实 verdict：notStarted（确认未启动：退款 I、不计 U）|executed（确认执行：
+        //   结算 U+1）|keepUnknown（无法确认：全不动）。**仅 UNKNOWN turn 可对账**（含
+        //   keepUnknown——对成功 turn 产生对账记录是误导）。
+        // - 退出事实 exitFact（仅 executed 需要继续判定）：exited 须**结构化 OS 进程证据**
+        //   （osProcessCheck：pid+观测时刻+alive=false；userManual 人工备注只能作补充，
+        //   不能单独证明退出）；alive/缺省/unknown → **不释放租约与准入占位**（确认执行但
+        //   仍存活/退出未知=不提前放行、不宣称恢复完成）。
+        // - 成果事实：确认执行不自动等于业务失败也不伪造成功交付——无已入库产物证据时
+        //   turn 记 FAILED（reason=executed-no-recorded-outcome，留证可复核）。
+        // - 预算逐 turn 标记（agent_turns.budget_mark：settled/refunded）幂等防双算；
+        //   DELIB 尾部 turn（synthesis/ratify）退款同时恢复对应尾部预留。
+        // - 同 daemon 内存联动：对账事务成功后调用 releaseAdmission 钩子（entry 接线）——
+        //   DB 提交与内存更新间崩溃时，占位随进程消亡，持久状态（租约/UNKNOWN/gate）不受影响。
         const params = z.strictObject({
           turnId: z.string().min(1),
           verdict: z.enum(['notStarted', 'executed', 'keepUnknown']),
-          evidence: z.string().min(1).max(500),
+          evidence: z.strictObject({
+            source: z.string().min(1).max(200), // 证据来源（渠道账单/进程取证/用户人工核对）
+            at: z.number().int().nonnegative(),
+            runId: z.string().min(1).optional(),
+            ref: z.string().max(300).optional(), // 可复核引用（事件 id/账单条目等）
+          }),
+          exitFact: z.enum(['exited', 'alive', 'unknown']).optional(),
+          exitEvidence: z.strictObject({
+            kind: z.enum(['osProcessCheck', 'userManual']),
+            pid: z.number().int().positive().optional(),
+            observedAt: z.number().int().nonnegative(),
+            alive: z.boolean().optional(),
+          }).optional(),
         }).parse(env.params);
-        const result = run(() => {
-          const turn = deps.db.prepare('SELECT id, run_id, status FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string } | undefined;
-          if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
-          if (turn.status !== 'UNKNOWN' && params.verdict !== 'keepUnknown') {
-            throw new DaemonCommandError('STALE_REVISION', `仅 UNKNOWN turn 可对账（实际：${turn.status}）`);
+        if (params.exitFact === 'exited') {
+          const ee = params.exitEvidence;
+          if (ee == null || ee.kind !== 'osProcessCheck' || ee.alive !== false || ee.pid == null) {
+            throw new DaemonCommandError('VALIDATION_INVALID', 'exitFact=exited 须结构化 OS 进程证据（osProcessCheck：pid+observedAt+alive=false）——人工备注不能单独证明退出');
           }
+        }
+        const result = run(() => {
+          const turn = deps.db.prepare('SELECT id, run_id, status, stage_key, budget_mark FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; stage_key: string; budget_mark: string | null } | undefined;
+          if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
+          if (turn.status !== 'UNKNOWN') {
+            throw new DaemonCommandError('STALE_REVISION', `仅 UNKNOWN turn 可对账（实际：${turn.status}）——keepUnknown 亦不适用于非 UNKNOWN turn`);
+          }
+          if (turn.budget_mark === 'refunded' && params.verdict !== 'keepUnknown') {
+            throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', '该 turn 已按未启动退款：不得再按执行结算');
+          }
+          if (turn.budget_mark === 'settled' && params.verdict === 'notStarted') {
+            throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', '该 turn 已按执行结算：不得再改为未启动退款（事实矛盾）');
+          }
+          // budget_mark='settled' 且再次 executed=**补交退出证据**（首次退出未知时预算已结算、
+          // 保护保留）——跳过预算重算，仅推进退出事实；不构成双算。
           const run = deps.db.prepare('SELECT id, task_id, budget_json FROM workflow_runs WHERE id = ?').get(turn.run_id) as { id: string; task_id: string; budget_json: string | null } | undefined;
           const projectId = run != null ? (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(run.task_id) as { project_id: string } | undefined)?.project_id : undefined;
           const now = Date.now();
-          if (params.verdict === 'keepUnknown') {
+          const emit = (payload: Record<string, unknown>): void => {
             appendDomainEvent(deps.db, {
               schemaVersion: 1, eventId: `evt_${randomUUID()}`,
               projectId: projectId ?? 'unknown', taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
               kind: 'recovery.reconciled', createdAt: now,
-              payload: { verdict: 'keepUnknown', evidence: params.evidence, note: '维持不确定：占位/租约/预算保持，不因时间流逝清空' },
+              payload: { ...payload, evidence: params.evidence, exitEvidence: params.exitEvidence ?? null },
             });
+          };
+          if (params.verdict === 'keepUnknown') {
+            emit({ verdict: 'keepUnknown', note: '维持不确定：占位/租约/预算/状态全不动，不因时间流逝清空' });
             return { turnId: turn.id, verdict: 'keepUnknown' as const, stateChanged: false as const };
           }
-          const tx = deps.db.transaction(() => {
-            // 预算处置：notStarted=退款（I-1，不加 U）；executed=结算（U+1，I-1）。
-            if (run?.budget_json != null) {
-              const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number; runMaxTurns?: number; tailReservationByStage?: Record<string, number> };
-              const { refundReservedTurn, settleTurn } = deliberationBudgetFns;
-              const next = params.verdict === 'notStarted' ? refundReservedTurn(budget as never) : settleTurn(budget as never);
-              deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
-            }
-            // 租约释放（该 turn 持有的写租约）。
+          const releaseLeases = (): string[] => {
             const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
             for (const l of leases) {
               deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
             }
-            deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
-            appendDomainEvent(deps.db, {
-              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
-              projectId: projectId ?? 'unknown', taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
-              kind: 'recovery.reconciled', createdAt: now,
-              payload: { verdict: params.verdict, evidence: params.evidence, releasedLeases: leases.map((l) => l.lock_domain) },
-            });
-            return { turnId: turn.id, verdict: params.verdict, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain) };
+            return leases.map((l) => l.lock_domain);
+          };
+          const tx = deps.db.transaction(() => {
+            let releasedLeases: string[] = [];
+            let turnFinalStatus: string;
+            let reason: string;
+            if (params.verdict === 'notStarted') {
+              // 执行事实=未启动：退款（I-1 不加 U；DELIB 尾部 turn 同步恢复尾部预留）。
+              if (run?.budget_json != null) {
+                const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number; runMaxTurns?: number; tailReservationByStage?: Record<string, number> };
+                const next = deliberationBudgetFns.refundReservedTurn(budget as never) as typeof budget;
+                const tailStage = turn.stage_key?.startsWith('delib.synthesis') ? 'SYNTHESIS' : turn.stage_key?.startsWith('delib.ratify') ? 'RATIFY' : null;
+                if (tailStage != null && next.tailReservationByStage != null) {
+                  next.tailReservationByStage = { ...next.tailReservationByStage, [tailStage]: (next.tailReservationByStage[tailStage] ?? 0) + 1 };
+                }
+                deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
+              }
+              deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED', budget_mark = 'refunded' WHERE id = ?`).run(turn.id);
+              releasedLeases = releaseLeases(); // 未启动：无进程，写入保护可解除
+              turnFinalStatus = 'FAILED'; reason = 'reconcile-not-started';
+              emit({ verdict: 'notStarted', releasedLeases, turnFinalStatus, reason });
+            } else {
+              // 执行事实=已执行：结算（U+1）——首次结算（budget_mark 尚未 settled）；补交退出
+              // 证据的二次调用跳过（幂等，见上守卫注释）。
+              if (run?.budget_json != null && turn.budget_mark == null) {
+                const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number };
+                const next = deliberationBudgetFns.settleTurn(budget as never) as typeof budget;
+                deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
+              }
+              if (turn.budget_mark == null) deps.db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turn.id);
+              if (params.exitFact === 'exited') {
+                // 退出事实=已确认退出（OS 证据）：释放租约；成果事实=无已入库产物（不伪造成功，
+                // 也不臆断业务失败——FAILED 仅记录「执行过且无可入库成果」这一证据内事实）。
+                releasedLeases = releaseLeases();
+                deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
+                turnFinalStatus = 'FAILED'; reason = 'executed-exited-no-recorded-outcome';
+                emit({ verdict: 'executed', exitFact: 'exited', releasedLeases, turnFinalStatus, reason });
+              } else {
+                // 仍存活/退出未知：结算预算但**保留租约与准入占位**、turn 保持 UNKNOWN——
+                // 不提前放行、不宣称恢复完成（后续取得退出证据再对账——budget_mark 已防重复结算）。
+                turnFinalStatus = 'UNKNOWN'; reason = `executed-exit-${params.exitFact ?? 'unknown'}-protection-retained`;
+                emit({ verdict: 'executed', exitFact: params.exitFact ?? 'unknown', protectionRetained: true, reason });
+              }
+            }
+            return {
+              turnId: turn.id, verdict: params.verdict, stateChanged: true as const,
+              releasedLeases, turnFinalStatus, reason,
+              admissionReleased: releasedLeases.length >= 0 && turnFinalStatus === 'FAILED', // 同 daemon 钩子依据
+            };
           });
-          return tx();
+          const out = tx();
+          // 内存联动（DB 事务成功后）：释放该 turn 在 worker 准入账本的 UNKNOWN 保留占位。
+          if (out.turnFinalStatus === 'FAILED' && deps.releaseAdmission != null) {
+            try { deps.releaseAdmission(params.turnId); } catch { /* 进程内钩子失败不回滚持久事实；重启后账本自然为空 */ }
+          }
+          return out;
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
@@ -666,41 +749,69 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               WHERE t.dispatch_key LIKE 'task:' || ? || ':%' AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`)
             .get(params.taskId) as { c: number };
           if (inFlight.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlight.c}）：不得并发追加`);
-          const already = deps.db
-            .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
-            .get(`task:${params.taskId}:redispatch`) as { c: number };
-          if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
-          // formatRepair 守卫：上一 turn FAILED+outputInvalid 存在；每任务一次（结构化强制——
-          // 「每份逻辑输出最多一次修复」不再只靠调用方纪律）。
+          // formatRepair 守卫（第六轮·下：持久工作项+同轮精确绑定）：
+          // - 源 turn=任务最后一个 turn 且 FAILED，且**其自身**存在 turn.outputInvalid 事件
+          //   （turn_id 绑定——旧轮校验失败不给新轮提供修复资格）；
+          // - 源输出=该 turn 的实际完成输出（thread.replyAdded(turn_id=源) 最后一条消息），
+          //   不用任务最后一条消息顶替；输出须为可解析 JSON（resultKey 可绑定）；
+          // - 每份逻辑输出最多一次：(task_id, source_turn_id) 唯一约束（迁移 008）——
+          //   后续独立输出有自己的修复资格，历史修复不永久禁用；
+          // - 三者一致性在工作项内固化（hash/事件 id/原文），worker 侧复核损坏。
           if (params.formatRepair === true) {
-            const priorRepair = deps.db
-              .prepare(`SELECT count(*) c FROM domain_events WHERE kind = 'task.redispatchEnqueued' AND task_id = ? AND payload_json LIKE '%"formatRepair":true%'`)
-              .get(params.taskId) as { c: number };
-            if (priorRepair.c > 0) throw new DaemonCommandError('STALE_REVISION', '该任务已用过一次格式修复（每份逻辑输出最多一次）');
-            const lastTurn = deps.db
+            const sourceTurn = deps.db
               .prepare(`SELECT id, status FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%' ORDER BY rowid DESC LIMIT 1`)
               .get(params.taskId) as { id: string; status: string } | undefined;
-            if (lastTurn == null || lastTurn.status !== 'FAILED') {
-              throw new DaemonCommandError('STALE_REVISION', `格式修复仅适用于上一 turn FAILED（实际：${lastTurn?.status ?? '无 turn'}）`);
+            if (sourceTurn == null || sourceTurn.status !== 'FAILED') {
+              throw new DaemonCommandError('STALE_REVISION', `格式修复仅适用于最后一个 turn FAILED（实际：${sourceTurn?.status ?? '无 turn'}）`);
+            }
+            const existing = deps.db
+              .prepare(`SELECT id, status FROM format_repair_workitems WHERE task_id = ? AND source_turn_id = ?`)
+              .get(params.taskId, sourceTurn.id) as { id: string; status: string } | undefined;
+            if (existing != null) {
+              throw new DaemonCommandError('STALE_REVISION', `该逻辑输出已创建修复工作项（${existing.id}，${existing.status}）——每份逻辑输出最多一次`);
             }
             const invalid = deps.db
-              .prepare(`SELECT payload_json FROM domain_events WHERE kind = 'turn.outputInvalid' AND task_id = ? ORDER BY seq DESC LIMIT 1`)
-              .get(params.taskId) as { payload_json: string } | undefined;
-            if (invalid == null) throw new DaemonCommandError('STALE_REVISION', '未找到 outputInvalid 证据：不构成格式修复条件');
-            const lastAgentMsg = deps.db
-              .prepare(`SELECT body_json FROM messages WHERE task_id = ? AND author_type = 'agent' ORDER BY rowid DESC LIMIT 1`)
-              .get(params.taskId) as { body_json: string } | undefined;
-            // 修复上下文（组装侧注入下一 turn 输入）：原输出全文+校验错误——不截短、不删字段。
+              .prepare(`SELECT event_id, payload_json FROM domain_events WHERE kind = 'turn.outputInvalid' AND turn_id = ? ORDER BY seq DESC LIMIT 1`)
+              .get(sourceTurn.id) as { event_id: string; payload_json: string } | undefined;
+            if (invalid == null) throw new DaemonCommandError('STALE_REVISION', '源 turn 无自身 outputInvalid 事件：不构成格式修复条件（provider 失败等不适用）');
+            const replyEvt = deps.db
+              .prepare(`SELECT payload_json FROM domain_events WHERE kind = 'thread.replyAdded' AND turn_id = ? ORDER BY seq DESC LIMIT 1`)
+              .get(sourceTurn.id) as { payload_json: string } | undefined;
+            if (replyEvt == null) throw new DaemonCommandError('STALE_REVISION', '源 turn 无完成输出消息（不能以任务级最后消息顶替）');
+            const messageId = (JSON.parse(replyEvt.payload_json) as { messageId: string }).messageId;
+            const msg = deps.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(messageId) as { body_json: string } | undefined;
+            if (msg == null) throw new DaemonCommandError('STALE_REVISION', `源输出消息缺失：${messageId}`);
+            const outputText = (JSON.parse(msg.body_json) as { text?: string }).text ?? '';
+            // 源逻辑输出 resultKey=确定性约定 result_<turnId>（与该 turn 的 run.created 审计
+            // payload.resultKey 核对一致）——散文类失败同样可修复（原文全文入上下文）。
+            const sourceResultKey = `result_${sourceTurn.id}`;
+            const runCreated = deps.db
+              .prepare(`SELECT count(*) c FROM domain_events WHERE kind = 'run.created' AND turn_id = ? AND payload_json LIKE ?`)
+              .get(sourceTurn.id, `%${sourceResultKey}%`) as { c: number };
+            if (runCreated.c < 1) throw new DaemonCommandError('STALE_REVISION', `源 turn 的 run.created 审计与 ${sourceResultKey} 不一致：绑定失败`);
+            const lastRun = deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined;
+            const now2 = Date.now();
             deps.db.prepare(
-              `INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-            ).run(`direct:repair:${params.taskId}`, JSON.stringify({
-              originalTurnId: lastTurn.id,
-              issues: (JSON.parse(invalid.payload_json) as { issues: string[] }).issues,
-              originalText: lastAgentMsg != null ? (JSON.parse(lastAgentMsg.body_json) as { text?: string }).text ?? '' : '',
-            }), Date.now());
+              `INSERT INTO format_repair_workitems
+                 (id, task_id, source_turn_id, source_result_key, logical_output_id, invalid_event_id,
+                  source_output_hash, source_output_text, invalid_issues_json, target_dispatch_key,
+                  budget_run_id, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            ).run(
+              `frw_${randomUUID()}`, params.taskId, sourceTurn.id, sourceResultKey, sourceTurn.id, invalid.event_id,
+              createHash('sha256').update(outputText, 'utf8').digest('hex'), outputText,
+              JSON.stringify((JSON.parse(invalid.payload_json) as { issues: string[] }).issues),
+              `task:${params.taskId}:repair:${sourceTurn.id}`, lastRun?.id ?? 'none', now2, now2,
+            );
           }
-          deps.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(`task:${params.taskId}:redispatch`);
+          const dispatchKey = params.formatRepair === true
+            ? `task:${params.taskId}:repair:${(deps.db.prepare(`SELECT source_turn_id FROM format_repair_workitems WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId) as { source_turn_id: string }).source_turn_id}` // 按逻辑输出版本化——同任务多轮修复不撞唯一键
+            : `task:${params.taskId}:redispatch`;
+          const already = deps.db
+            .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
+            .get(dispatchKey) as { c: number };
+          if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
+          deps.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(dispatchKey);
           appendDomainEvent(deps.db, {
             schemaVersion: 1,
             eventId: `evt_${randomUUID()}`,
@@ -710,7 +821,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             createdAt: Date.now(),
             payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true },
           });
-          return { enqueued: true as const, dispatchKey: `task:${params.taskId}:redispatch`, formatRepair: params.formatRepair === true };
+          return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

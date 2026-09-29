@@ -18,7 +18,7 @@ import {
   turnBundleEnvelopeSchema,
 } from '../contracts/prompts.ts';
 import type { TurnBundleEnvelope } from '../contracts/prompts.ts';
-import { authorizedFileListing } from './fileDiscovery.ts';
+import { taskScopedFileListing } from './fileDiscovery.ts';
 import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
 export interface AssemblyTaskRef {
@@ -50,7 +50,7 @@ export interface AssembledTurnInput {
    * 格式修复上下文（第六轮，task.redispatch formatRepair:true）：原输出全文+校验错误注入
    * 下一 turn 输入附注——修复与原逻辑输出正确绑定（不是无反馈重跑）；不截短原内容。
    */
-  repairContext?: { originalTurnId: string; issues: string[]; originalText: string };
+  repairContext?: { originalTurnId: string; sourceResultKey: string; issues: string[]; originalText: string };
 }
 
 export interface AssembledTurn {
@@ -85,7 +85,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   }
 
   const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
-  const fileDiscovery = projectRoot != null ? authorizedFileListing(projectRoot) : null;
+  const fileDiscovery = projectRoot != null ? taskScopedFileListing(db, task.projectId, task.id, projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
   const history = db
@@ -174,7 +174,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       notes: [
         '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
         JSON.stringify(input.repairContext.issues),
-        `上一轮原始输出（turn=${input.repairContext.originalTurnId}，全文保留）：`,
+        `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
         input.repairContext.originalText,
         '修复要求：按输出契约重新提交完整 TaskComplete——分析结论/清单完整放入 changeSummary（不要缩短或删除内容）；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
       ],
