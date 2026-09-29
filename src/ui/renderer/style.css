@@ -33,6 +33,12 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .gate { width: 100%; background: #fff8c5; border-color: #d4a72c; text-align: left; }
 .resume-info { font-size: 12px; color: #57606a; white-space: pre-line; }
 .resume-info.hidden { display: none; }
+#recovery-panel .recovery-row { border-top: 1px solid #d8dee4; padding: 6px 0; }
+#recovery-panel .recovery-facts { font-size: 11px; color: #57606a; white-space: pre-line; margin: 4px 0; }
+#recovery-panel .recovery-probe-result { font-size: 11px; color: #1a7f37; margin: 2px 0; }
+#recovery-panel .recovery-note { font-size: 11px; width: 100%; margin: 2px 0; }
+#recovery-panel .recovery-error { font-size: 11px; color: #cf222e; margin: 2px 0; white-space: pre-wrap; }
+#recovery-panel button { font-size: 11px; margin-right: 4px; }
 .thread-status { font-size: 12px; color: #57606a; margin-left: 8px; }
 .thread-back { display: flex; align-items: center; gap: 8px; }
 .thread-back button { padding: 3px 10px; font-size: 12px; }

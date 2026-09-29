@@ -1,24 +1,34 @@
 /**
- * 文件发现能力（第六轮，后续版本——两模式一致规则）：
- * - DIRECT 信封注入经授权清单（排除 .git、截断/破口如实、渲染分节可见、hash 覆盖该事实）；
- * - DELIB IND 首轮输入含同款清单（分析入口一致）；CR 阶段不注入（各阶段材料由冻结清单承担）；
- * - 清单只含项目根内文件（不暴露其他任务/评分答案/越界链接——扫描物理拒绝沿用）；
- * - root 不存在/不可读 → 不加键不阻断派发。
+ * 项目范围文件发现清单（第七轮：回到既有授权合同——§13.4/§6.3/§13.2，零额度）：
+ * - 共享源码默认可读：其他任务 applied 修改过的文件仍可见（不再按 change_sets 归属排除——
+ *   归属是溯源维度不是可读性维度）；已撤销（reverted）改动集的文件按项目现状可见；
+ * - §6.3 默认排除（命名清单制，不按 "." 前缀一刀切）：VCS 内部/依赖缓存/构建产物目录段
+ *   + 常见凭据文件；.editorconfig/.gitignore/.env.example 等非凭据配置可见；
+ * - 大小写/别名：Node_Modules/DIST/.ENV 等变体同等排除（Windows 大小写不敏感）；
+ * - 上限按过滤后计数：排除项不占用合法文件名额（上限不被 node_modules 耗尽）；
+ * - DIRECT 信封注入与 DELIB IND 首轮一致规则（清单入输入、hash 覆盖该事实）；
+ * - 不夸大为文件沙箱认证（integrityNote 如实声明）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { projectScopedFileListing } from '../../src/daemon/fileDiscovery.ts';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
-import { authorizedFileListing } from '../../src/daemon/fileDiscovery.ts';
 import { seed as delibSeed, createDelibTask } from './deliberationFlow.test.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-file-disc-'));
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
+
+function makeProjectDir(n: number | string): string {
+  const dir = join(tmpRoot, `proj${n}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 function seedWithDir(db: ZhongshuoDatabase, dir: string): void {
   db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','d',?,?, '{}', 0)`).run(dir, dir);
@@ -28,46 +38,112 @@ function seedWithDir(db: ZhongshuoDatabase, dir: string): void {
   db.prepare(`INSERT INTO room_members (room_id, member_id) VALUES ('r1','mA')`).run();
 }
 
-function makeDirectTask(db: ZhongshuoDatabase, n: number): void {
-  createRoomRootTask(db, {
-    ids: { messageId: `fm${n}`, threadId: `fth${n}`, taskId: `ftk${n}`, taskEventId: `fe${n}`, threadEventId: `fh${n}` },
-    projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default',
-    title: `T${n}`, body: `B${n}`, mentions: [{ kind: 'member', memberId: 'mA' }],
-    author: { authorType: 'human', authorId: 'u' }, reviewPolicy: 'auto_deliver', sourceConnectionId: null,
-    route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mA', frozenMemberIds: ['mA'], initialWakeMemberIds: ['mA'] },
-    now: n,
+describe('项目范围授权清单（§13.4 项目源码默认可读 + §6.3 命名排除）', () => {
+  it('共享源码与资料默认可见：含其他任务修改过的文件与已撤销改动集的文件（不再按 change_sets 归属排除）', () => {
+    const dir = makeProjectDir(1);
+    // 共享源码（任意任务曾修改——文件系统现状即授权面，§13.4 跨任务=同项目可分析同一代码）。
+    writeFileSync(join(dir, 'src-main.ts'), '共享源码', 'utf8');
+    writeFileSync(join(dir, 'other-task-edited.md'), '其他任务 applied 修改过的共享文档', 'utf8');
+    writeFileSync(join(dir, 'reverted-change-file.md'), '已撤销改动集的 after 文件（撤销后仍在项目根=项目现状）', 'utf8');
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    writeFileSync(join(dir, 'logs', 'app-week.log'), '本周日志', 'utf8');
+    const listing = projectScopedFileListing(dir)!;
+    expect(listing.files).toContain('src-main.ts');
+    expect(listing.files).toContain('other-task-edited.md');
+    expect(listing.files).toContain('reverted-change-file.md'); // 撤销后=项目现状，可见
+    expect(listing.files).toContain('logs/app-week.log'); // 合法日志可发现（C 组修复目标）
+    expect(listing.integrityNote).toContain('§13.4');
+    expect(listing.integrityNote).toContain('不构成工具能力声明或文件沙箱认证'); // 不夸大
   });
-}
 
-describe('经授权文件发现清单（两模式一致规则）', () => {
-  it('authorizedFileListing：排除 .git、截断如实、完整性注记；root 不存在返回 null', () => {
-    const dir = join(tmpRoot, 'proj1');
-    mkdirSync(join(dir, 'sub', '.git'), { recursive: true });
-    writeFileSync(join(dir, 'notes.md'), 'a', 'utf8');
-    writeFileSync(join(dir, 'sub', 'app-week.log'), 'b', 'utf8');
-    writeFileSync(join(dir, 'sub', '.git', 'HEAD'), 'c', 'utf8');
-    const listing = authorizedFileListing(dir)!;
-    expect(listing.policy).toBe('authorized-listing');
-    expect(listing.files.sort()).toEqual(['notes.md', 'sub/app-week.log']); // C 组文件名现在可发现
+  it('§6.3 默认排除：VCS 内部/依赖缓存/构建产物目录段+常见凭据；非凭据隐藏配置可见', () => {
+    const dir = makeProjectDir(2);
+    mkdirSync(join(dir, '.git', 'objects'), { recursive: true });
+    mkdirSync(join(dir, 'node_modules', 'some-pkg'), { recursive: true });
+    mkdirSync(join(dir, 'dist'), { recursive: true });
+    writeFileSync(join(dir, '.git', 'HEAD'), 'ref', 'utf8');
+    writeFileSync(join(dir, 'node_modules', 'some-pkg', 'index.js'), 'x', 'utf8');
+    writeFileSync(join(dir, 'dist', 'bundle.js'), 'x', 'utf8');
+    // 凭据类（§6.3 常见凭据文件）。
+    writeFileSync(join(dir, '.env'), 'SECRET=1', 'utf8');
+    writeFileSync(join(dir, '.env.local'), 'SECRET=1', 'utf8');
+    writeFileSync(join(dir, 'server.key'), 'PRIVATE', 'utf8');
+    writeFileSync(join(dir, 'id_rsa'), 'PRIVATE', 'utf8');
+    // 非凭据隐藏配置/文档惯例：可见（不按 "." 前缀一刀切）。
+    writeFileSync(join(dir, '.editorconfig'), 'root=true', 'utf8');
+    writeFileSync(join(dir, '.gitignore'), 'node_modules', 'utf8');
+    writeFileSync(join(dir, '.env.example'), 'SECRET=', 'utf8');
+    writeFileSync(join(dir, 'README.md'), '项目说明', 'utf8');
+    const listing = projectScopedFileListing(dir)!;
+    expect(listing.files).toContain('.editorconfig');
+    expect(listing.files).toContain('.gitignore');
+    expect(listing.files).toContain('.env.example'); // 文档惯例非凭据
+    expect(listing.files).toContain('README.md');
+    for (const f of listing.files) {
+      expect(f.startsWith('.git/') || f.startsWith('node_modules/') || f.startsWith('dist/')).toBe(false);
+      expect(['.env', '.env.local', 'server.key', 'id_rsa']).not.toContain(f);
+    }
+    expect(listing.excludedInternal).toBeGreaterThanOrEqual(6); // .git 在扫描层已跳过（不计入过滤计数）
+    expect(listing.integrityNote).toContain('VCS 内部');
+  });
+
+  it('大小写/别名匹配：Node_Modules/BUILD/.ENV 同等排除（Windows 大小写不敏感）；正常文档可见', () => {
+    const dir = makeProjectDir(3);
+    mkdirSync(join(dir, 'Node_Modules'), { recursive: true });
+    mkdirSync(join(dir, 'BUILD'), { recursive: true });
+    mkdirSync(join(dir, 'dist'), { recursive: true });
+    mkdirSync(join(dir, 'Docs'), { recursive: true });
+    writeFileSync(join(dir, 'Node_Modules', 'x.js'), 'x', 'utf8');
+    writeFileSync(join(dir, 'BUILD', 'out.js'), 'x', 'utf8');
+    writeFileSync(join(dir, 'dist', 'a.js'), 'x', 'utf8');
+    writeFileSync(join(dir, '.ENV'), 'SECRET=1', 'utf8');
+    writeFileSync(join(dir, 'Docs', 'guide.md'), '文档', 'utf8');
+    const listing = projectScopedFileListing(dir)!;
+    expect(listing.files).toEqual(['Docs/guide.md']); // 大小写变体同等排除
+  });
+
+  it('上限按过滤后计数：排除项不耗尽名额（旧实现会被 node_modules 耗尽）；截断如实标注', () => {
+    const dir = makeProjectDir(4);
+    mkdirSync(join(dir, 'node_modules', 'pkg-heavy'), { recursive: true });
+    for (let i = 0; i < 240; i += 1) writeFileSync(join(dir, 'node_modules', 'pkg-heavy', `f${i}.js`), 'x', 'utf8');
+    for (let i = 0; i < 30; i += 1) writeFileSync(join(dir, `legal-${i}.md`), '合法文件', 'utf8');
+    const listing = projectScopedFileListing(dir, { maxEntries: 20 })!;
+    expect(listing.files.length).toBe(20); // 全是合法文件——排除项没占名额
+    expect(listing.files.every((f) => f.startsWith('legal-'))).toBe(true);
+    expect(listing.truncated).toBe(true); // 合法文件 30>20——如实标注
+    const full = projectScopedFileListing(dir, { maxEntries: 200 })!;
+    expect(full.files.length).toBe(30);
+    expect(full.truncated).toBe(false);
+  });
+
+  it('root 不存在 → null（不阻断组装）；空目录=合法空清单', () => {
+    expect(projectScopedFileListing(join(tmpRoot, 'missing'))).toBeNull();
+    const empty = makeProjectDir(5);
+    const listing = projectScopedFileListing(empty)!;
+    expect(listing.files).toEqual([]);
     expect(listing.truncated).toBe(false);
-    expect(listing.integrityNote).toContain('扫描完整');
-    const capped = authorizedFileListing(dir, { maxEntries: 1 })!;
-    expect(capped.truncated).toBe(true); // 上限如实
-    expect(authorizedFileListing(join(tmpRoot, 'missing-dir'))).toBeNull(); // 不存在不阻断
   });
+});
 
-  it('DIRECT：bundle 文本含清单分节；信封 hash 覆盖该事实（清单变更=不同输入）', async () => {
-    const dir = join(tmpRoot, 'proj2');
-    mkdirSync(dir, { recursive: true });
+describe('两模式输入链路一致（DIRECT 信封 + DELIB IND 首轮）', () => {
+  it('DIRECT：bundle 文本含清单分节；信封 hash 覆盖该事实', async () => {
+    const dir = makeProjectDir('p2');
     writeFileSync(join(dir, 'logs-app-week.log'), 'x', 'utf8');
     const db = openDatabase(':memory:');
     seedWithDir(db, dir);
-    makeDirectTask(db, 1);
+    const ids = { messageId: 'fm1', threadId: 'fth1', taskId: 'ftk1', taskEventId: 'fe1', threadEventId: 'fh1' };
+    createRoomRootTask(db, {
+      ids, projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default',
+      title: 'T1', body: 'B1', mentions: [{ kind: 'member', memberId: 'mA' }],
+      author: { authorType: 'human', authorId: 'u' }, reviewPolicy: 'auto_deliver', sourceConnectionId: null,
+      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mA', frozenMemberIds: ['mA'], initialWakeMemberIds: ['mA'] },
+      now: 1,
+    });
     const adapter = new FakeRuntimeAdapter();
     await new DispatchWorker({ db, adapter, leaseOwner: 'w-fd', appDataDir: join(tmpRoot, 'appdata') }).runOnce();
     expect(adapter.startTurnLog).toHaveLength(1);
     const text = adapter.startTurnLog[0]!.text;
-    expect(text).toContain('文件发现（经授权的清单，程序侧提供）');
+    expect(text).toContain('文件发现（项目范围清单，程序侧提供）');
     expect(text).toContain('logs-app-week.log');
     expect(text).toContain('清单完整性');
     const env = JSON.parse((db.prepare('SELECT included_refs_json FROM context_bundles').get() as { included_refs_json: string }).included_refs_json);
@@ -76,12 +152,10 @@ describe('经授权文件发现清单（两模式一致规则）', () => {
     db.close();
   }, 15_000);
 
-  it('DELIB：IND 输入含清单（分析入口一致规则）；root 缺失不阻断（无清单仍派发）', async () => {
-    const dir = join(tmpRoot, 'proj3');
-    mkdirSync(dir, { recursive: true });
+  it('DELIB：IND 输入含清单（分析入口一致规则）', async () => {
+    const dir = makeProjectDir('p3');
     writeFileSync(join(dir, 'data.txt'), 'y', 'utf8');
     const db = openDatabase(':memory:');
-    // 复用 deliberationFlow 的研讨种子 + 项目目录指向真实 dir。
     delibSeed(db, ['m1', 'm2']);
     db.prepare(`UPDATE projects SET canonical_path = ? WHERE id = 'p1'`).run(dir);
     createDelibTask(db, 7, ['m1', 'm2']);
@@ -95,61 +169,8 @@ describe('经授权文件发现清单（两模式一致规则）', () => {
     await worker.runOnce(); // IND 派发
     expect(adapter.startTurnLog.length).toBeGreaterThanOrEqual(1);
     const indText = adapter.startTurnLog[0]!.text;
-    expect(indText).toContain('文件发现（经授权的清单，程序侧提供）');
+    expect(indText).toContain('文件发现（项目范围清单，程序侧提供）');
     expect(indText).toContain('data.txt');
-    await adapter.closeAllSessions();
-    db.close();
-  }, 20_000);
-});
-
-describe('文件清单任务授权过滤（第六轮·下：物理边界≠可读范围）', () => {
-  it('其他任务变更归属与隐藏项不入清单与模型输入；本任务自己的变更可见；越界/截断如实', async () => {
-    const dir = join(tmpRoot, 'proj-scope');
-    mkdirSync(join(dir, 'logs'), { recursive: true });
-    writeFileSync(join(dir, 'logs', 'app-week.log'), '本周日志', 'utf8');
-    writeFileSync(join(dir, '.secret-config'), '内部配置', 'utf8');
-    writeFileSync(join(dir, 'taskX-output.md'), '其他任务的产物', 'utf8');
-    writeFileSync(join(dir, 'mine-output.md'), '本任务自己的产物', 'utf8');
-    const db = openDatabase(':memory:');
-    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pS','s',?,?, '{}', 0)`).run(dir, dir);
-    // 任务 X 曾修改 taskX-output.md（change_sets 归属=taskX，after=present）——本任务（taskY）不可见。
-    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mS','pS','甲','agent',1)`).run();
-    db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('r1','pS','大厅','mS')`).run();
-    db.prepare(`INSERT INTO room_members (room_id, member_id) VALUES ('r1','mS')`).run();
-    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('cS','pS','room','r1')`).run();
-    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title) VALUES ('taskX','pS','cS','room_task','r1','X')`).run();
-        db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES ('csX','pS','taskX','{}','{"k":1}','applied')`).run();
-    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csX','after','taskX-output.md','present')`).run();
-    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csX','before','taskX-output.md','present')`).run();
-    // 本任务自己的归属不排除（csY 归 taskY2——先建任务行再挂归属）。
-    createRoomRootTask(db, {
-      ids: { messageId: 'sm1', threadId: 'sth1', taskId: 'taskY2', taskEventId: 'se1', threadEventId: 'sh1' },
-      projectId: 'pS', conversationId: 'cS', roomId: 'r1', intent: 'default',
-      title: '分析日志', body: '分析 logs 一周日志', mentions: [{ kind: 'member', memberId: 'mS' }],
-      author: { authorType: 'human', authorId: 'u' }, reviewPolicy: 'auto_deliver', sourceConnectionId: null,
-      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mS', frozenMemberIds: ['mS'], initialWakeMemberIds: ['mS'] },
-      now: 1,
-    });
-    db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES ('csY','pS','taskY2','{}','{"k":1}','applied')`).run();
-    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csY','after','mine-output.md','present')`).run();
-
-    const { taskScopedFileListing } = await import('../../src/daemon/fileDiscovery.ts');
-    const listing = taskScopedFileListing(db, 'pS', 'taskY2', dir)!;
-    expect(listing.files.sort()).toEqual(['logs/app-week.log', 'mine-output.md']); // taskX-output.md 不在
-    expect(listing.excludedOtherTask).toBe(1);
-    expect(listing.excludedHidden).toBeGreaterThanOrEqual(1); // .secret-config 排除
-    expect(listing.integrityNote).toContain('其他任务变更归属 1 项');
-    expect(listing.integrityNote).toContain('不构成工具能力声明或文件沙箱认证');
-
-    // DIRECT 组装真实路径：本任务输入只含授权清单（其他任务产物不进模型输入）。
-    const adapter = new FakeRuntimeAdapter();
-    const w = new DispatchWorker({ db, adapter, leaseOwner: 'w-scope', appDataDir: join(tmpRoot, 'app-scope') });
-    await w.runOnce();
-    const text = adapter.startTurnLog[0]!.text;
-    expect(text).toContain('logs/app-week.log'); // 允许文件可发现（C 组场景修复）
-    expect(text).toContain('mine-output.md');
-    expect(text).not.toContain('taskX-output.md'); // 其他任务产物不入模型输入
-    expect(text).not.toContain('.secret-config'); // 隐藏项不入输入
     await adapter.closeAllSessions();
     db.close();
   }, 20_000);

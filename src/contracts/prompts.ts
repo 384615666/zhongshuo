@@ -214,18 +214,17 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     disabledReason: z.string(),
   }),
   /**
-   * 文件发现（第六轮，后续版本能力——不倒改已跑批次条件）：程序侧提供的**经授权文件清单**
-   * （受限范围：项目根下、排除 .git、条数上限、截断/扫描破口如实标注）。两模式在分析入口轮
-   * 采用一致规则——修复 C 组「文件名不可发现+工具面认知差」；不暴露其他任务成果/评分答案/
-   * 未授权文件（清单只含项目根内文件）。
+   * 文件发现（第七轮：按既有授权合同）：程序侧提供的**项目范围文件清单**——§13.4 项目源码
+   * 默认可读（同项目共享，含其他任务 applied 修改），§6.3 默认排除 VCS 内部/依赖缓存/构建
+   * 产物/常见凭据（命名清单制，不按 "." 前缀一刀切）；条数上限、截断/扫描破口如实标注。
+   * 两模式一致规则；清单只声明输入过滤范围，不构成 runtime 文件沙箱认证（§6.2）。
    */
   fileDiscovery: z.strictObject({
     policy: z.literal('authorized-listing'),
     files: z.array(z.string().min(1)),
     truncated: z.boolean(),
     integrityNote: z.string(),
-    excludedHidden: z.number().int().nonnegative(),
-    excludedOtherTask: z.number().int().nonnegative(),
+    excludedInternal: z.number().int().nonnegative(),
   }).optional(),
   notes: z.array(z.string()).optional(),
 });
@@ -293,8 +292,8 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   lines.push('严格 schema：除上述字段外不得新增任何字段（未知键将被拒绝）；resultKey 必须逐字使用上方给定值。');
   if (envelope.fileDiscovery != null) {
-    lines.push('── 文件发现（经授权的清单，程序侧提供）──');
-    lines.push(`项目工作目录内可按相对路径直接读取的文件（范围受限；排除 .git；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
+    lines.push('── 文件发现（项目范围清单，程序侧提供）──');
+    lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
     lines.push(envelope.fileDiscovery.files.join('\n'));
     lines.push(`清单完整性：${envelope.fileDiscovery.integrityNote}`);
   }

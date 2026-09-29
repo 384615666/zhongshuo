@@ -1,17 +1,22 @@
 /**
- * 经授权的文件发现清单（第六轮·下修订：任务作用域过滤——两模式遵循同一权限规则）。
+ * 项目范围文件发现清单（第七轮重写：回到既有授权合同，不自行新增产品权限规则）。
  *
- * 背景（value-abc-20260928 C 组观察）：任务目录内文件名不可猜 + 模型自述无目录枚举能力
- * → 两侧均无法定位 logs/app-week.log。修复方向=**程序侧提供受限清单**（不依赖模型对工具面
- * 的认知）。**任务实际允许的文件范围**（不止物理边界）：
- * - 项目根内 + 非隐藏文件（. 开头段与 .git 同口径排除——内部/配置项）；
- * - **其他任务变更归属文件**（change_sets 归属≠当前任务且 after=present——本产品写档溯源，
- *   DEV-12）不出现在清单——不因位于项目根内就可见；
- * - 评分答案/内部文件不在项目根内，天然不受影响；阶段不可读成果（DELIB 冻结材料）在
- *   appData 侧，同样不在项目根。
- * 截断与扫描破口如实标注（复用 scanDirectory 完整性语义）。清单进入输入信封（hash 校验
- * 覆盖）。**本过滤不构成 runtime 文件沙箱认证**（模型仍可按已知路径读取——工具面以运行时
- * 实际可用为准）；两模式一致性=同一授权规则，不是无条件看到整项目。
+ * 合同依据（主设计 v1）：
+ * - §13.4 任务上下文隔离矩阵第 1 行：项目源码/指定基线「当前任务默认可用，按权限读取；
+ *   跨任务=同项目可分析同一代码」——项目根内文件（含其他任务 applied 修改过的共享源码）
+ *   默认进入清单；**不再按 change_sets 归属排除**（第六轮·下的旧规则把其他任务改过的共享
+ *   源码永久藏起来，超出基线授权——改动归属与撤销是溯源维度，不是可读性维度；其他任务的
+ *   对话/摘要/报告按 §13.4 属"否"，但它们存 DB/appData 侧，不在项目根，天然不进清单）。
+ * - §6.3 分析基线默认排除：VCS 内部目录、依赖缓存、构建目录和常见凭据文件——按**命名
+ *   清单**排除（不按 "." 前缀一刀切：.editorconfig/.gitignore 等非凭据配置可见；
+ *   .env.example 是文档惯例，不排）。
+ * - §13.2 大项目处理：忽略依赖和构建目录；设上限并显示排除项。
+ * - §6.2 可实现隔离的边界：有广泛本机读取权限的 CLI 仍可能绕过应用接口——本清单只声明
+ *   **输入清单过滤范围**，不构成 runtime 文件沙箱认证。
+ *
+ * 路径匹配：段与文件名比较用小写（Windows 大小写不敏感；分隔符统一 '/'）——别名/大小写
+ * 变体（Node_Modules/DIST/.ENV）同等排除。上限按**过滤后**计数：扫描窗口放大，避免排除项
+ * 耗尽名额使合法文件不可发现；截断如实标注。
  */
 import { scanDirectoryFiles } from './preimage.ts';
 import { existsSync, statSync } from 'node:fs';
@@ -22,61 +27,62 @@ export interface AuthorizedFileListing {
   truncated: boolean;
   integrityNote: string;
   /** 范围过滤计数（如实）。 */
-  excludedHidden: number;
-  excludedOtherTask: number;
+  excludedInternal: number;
+}
+
+/** §6.3 默认排除目录段（VCS 内部/依赖缓存/构建产物；小写比较）。 */
+const EXCLUDED_DIR_SEGMENTS = new Set([
+  '.git', '.hg', '.svn',
+  'node_modules', '.pnpm-store', 'bower_components',
+  'dist', 'build', 'out', 'target', '.next', '.nuxt', '.turbo', '.cache', 'coverage',
+]);
+
+/** §6.3 常见凭据文件模式（文件名小写匹配；.example/.template 文档惯例与公钥不排）。 */
+function isCredentialFileName(lowerName: string): boolean {
+  if (lowerName === '.env') return true;
+  if (lowerName.startsWith('.env.')) return !(lowerName.endsWith('.example') || lowerName.endsWith('.template'));
+  if (lowerName.endsWith('.pem') || lowerName.endsWith('.key')) return true;
+  if (lowerName.startsWith('id_rsa') || lowerName.startsWith('id_ed25519') || lowerName.startsWith('id_ecdsa')) return !lowerName.endsWith('.pub');
+  if (lowerName.startsWith('credentials.') || lowerName.startsWith('secrets.')) return true;
+  return false;
 }
 
 export interface ListingScopeOptions {
   maxEntries?: number;
-  /** 其他任务变更归属路径（exclude 口径见 taskScopedFileListing）。 */
-  excludePaths?: Set<string>;
 }
 
-/** 生成经授权的文件清单（root 必须存在且为目录——否则返回 null，不阻断组装）。 */
-export function authorizedFileListing(root: string, options: ListingScopeOptions = {}): AuthorizedFileListing | null {
+/** 生成项目范围授权清单（root 必须存在且为目录——否则返回 null，不阻断组装）。 */
+export function projectScopedFileListing(root: string, options: ListingScopeOptions = {}): AuthorizedFileListing | null {
   const maxEntries = options.maxEntries ?? 200;
   try {
     if (!existsSync(root) || !statSync(root).isDirectory()) return null;
-    const scan = scanDirectoryFiles(root, maxEntries);
-    const excludePaths = options.excludePaths ?? new Set<string>();
-    let excludedHidden = 0;
-    let excludedOtherTask = 0;
+    // 扫描窗口放大：过滤后计数到 maxEntries——排除项不占用合法文件的名额。
+    const scan = scanDirectoryFiles(root, maxEntries * 3 + 128);
+    let excludedInternal = 0;
     const files: string[] = [];
     for (const f of scan.files) {
       const rel = f.slice(root.length + 1).replaceAll('\\', '/');
-      if (rel.split('/').some((seg) => seg.startsWith('.'))) { excludedHidden += 1; continue; }
-      if (excludePaths.has(rel)) { excludedOtherTask += 1; continue; }
+      const segments = rel.split('/');
+      const fileName = segments[segments.length - 1] ?? '';
+      if (segments.some((seg) => EXCLUDED_DIR_SEGMENTS.has((seg ?? '').toLowerCase()))) { excludedInternal += 1; continue; }
+      if (isCredentialFileName(fileName.toLowerCase())) { excludedInternal += 1; continue; }
       files.push(rel);
     }
+    const truncated = scan.truncated || files.length > maxEntries;
+    const listed = files.slice(0, maxEntries);
     const parts: string[] = [];
     if (scan.failedDirs.length > 0) parts.push(`子树读取失败 ${scan.failedDirs.length} 处（受影响文件不在清单内）`);
     if (scan.rejectedEntries.length > 0) parts.push(`物理路径拒绝 ${scan.rejectedEntries.length} 项（越界链接/环——不可读）`);
-    parts.push(scan.truncated ? `达清单上限（${maxEntries}）已截断` : '扫描完整');
-    if (excludedHidden > 0) parts.push(`隐藏项 ${excludedHidden} 项不在本任务清单`);
-    if (excludedOtherTask > 0) parts.push(`其他任务变更归属 ${excludedOtherTask} 项不在本任务清单`);
+    parts.push(truncated ? `达清单上限（${maxEntries}）已截断` : '扫描完整');
+    if (excludedInternal > 0) parts.push(`内部/凭据排除 ${excludedInternal} 项（VCS 内部·依赖缓存·构建产物·常见凭据）`);
     return {
       policy: 'authorized-listing',
-      files,
-      truncated: scan.truncated,
-      integrityNote: `${parts.join('；')}；任务可读范围=项目根内非隐藏文件（排除 .git/隐藏项/其他任务成果；评分答案与内部文件不在项目根内不受影响）；工具面以运行时实际可用为准（清单为程序侧授权补充，不构成工具能力声明或文件沙箱认证）`,
-      excludedHidden,
-      excludedOtherTask,
+      files: listed,
+      truncated,
+      integrityNote: `${parts.join('；')}；任务可读范围=项目根内文件（§13.4：项目源码默认可读，同项目共享；§6.3 默认排除 VCS 内部/依赖缓存/构建产物/常见凭据；其他任务对话/摘要/报告不在项目根，不进清单）；工具面以运行时实际可用为准（清单为程序侧授权补充，不构成工具能力声明或文件沙箱认证）`,
+      excludedInternal,
     };
   } catch {
     return null; // 清单生成失败不阻断任务派发（模型仍可按已知路径读取）
   }
-}
-
-/** 最小 DB 面（测试可注入；避免与 ZhongshuoDatabase 具体类型耦合）。 */
-interface ListingDb {
-  prepare(sql: string): { all(...args: unknown[]): unknown };
-}
-
-/** 任务作用域清单：物理边界内按当前任务授权过滤（其他任务 change_sets 归属排除）。 */
-export function taskScopedFileListing(db: ListingDb, projectId: string, taskId: string | null, root: string): AuthorizedFileListing | null {
-  const rows = db.prepare(
-    `SELECT DISTINCT csf.path FROM change_set_files csf JOIN change_sets cs ON cs.id = csf.change_set_id
-     WHERE cs.project_id = ? AND cs.task_id IS NOT NULL AND cs.task_id != ? AND csf.role = 'after' AND csf.state = 'present'`,
-  ).all(projectId, taskId ?? '') as Array<{ path: string }>;
-  return authorizedFileListing(root, { excludePaths: new Set(rows.map((r) => r.path)) });
 }

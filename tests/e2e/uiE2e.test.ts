@@ -44,6 +44,14 @@ window.__t = {
   stopVisible: () => !document.getElementById('stop-btn')?.classList.contains('hidden'),
   recoveryRows: () => [...document.querySelectorAll('#recovery-panel .recovery-row')].map((r) => ({ turnId: r.dataset.turnId ?? '', text: r.textContent ?? '' })),
   recoveryPanelVisible: () => !document.getElementById('recovery-panel')?.classList.contains('hidden'),
+  recoveryFacts: (turnId) => document.querySelector('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] .recovery-facts')?.textContent ?? null,
+  recoveryButtons: (turnId) => [...document.querySelectorAll('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] button')].map((b) => b.textContent),
+  recoverySetNote: (turnId, text) => { const i = document.querySelector('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] input.recovery-note'); if (i == null) return false; i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
+  recoveryClick: (turnId, label) => { const b = [...document.querySelectorAll('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] button')].find((x) => (x.textContent ?? '').includes(label)); if (b == null) return false; b.click(); return true; },
+  recoveryProbeResult: (turnId) => document.querySelector('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] .recovery-probe-result')?.textContent ?? null,
+  recoveryOrphan: () => [...document.querySelectorAll('#recovery-panel .recovery-facts')].map((e) => e.textContent ?? '').find((t) => t.includes('遗留保护')) ?? null,
+  recoveryError: () => document.querySelector('#recovery-panel .recovery-error')?.textContent ?? null,
+  confirmYes: () => { window.confirm = () => true; return true; },
   stopDisabled: () => document.getElementById('stop-btn')?.disabled ?? true,
   threadStatus: () => document.getElementById('thread-status')?.textContent ?? '',
   toolAudit: () => [...document.querySelectorAll('#thread-messages .tool-audit .tool-audit-row')].map((r) => ({ id: r.dataset.toolCallId ?? '', text: r.textContent ?? '' })),
@@ -482,7 +490,9 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
       async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'ACTIVE',
       30_000, '任务进入运行中',
     );
-    // 硬杀 daemon（SIGKILL=TerminateProcess：不走优雅 stop，模拟崩溃现场）。
+    // 等 startTurn 完成后进程身份登记落库（registerProcessIdentity 在 startTurn 成功后写）——
+    // 再硬杀，崩溃遗留的 UNKNOWN 才带有可对账的登记身份。
+    await new Promise((r) => setTimeout(r, 2000));
     const pid = Number(readFileSync(join(fixtureRoot, 'appdata-b', 'daemon.pid'), 'utf8').trim());
     process.kill(pid, 'SIGKILL');
     await waitFor(() => call<string>('conn').then((c) => c.includes('断开')), 30_000, '断连提示出现');
@@ -504,19 +514,112 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
     // renderer 重连后只读查询恢复状态 → 门禁入口出现且不自动续跑。
     await waitFor(() => call<boolean>('gateVisible'), 60_000, '恢复门禁入口出现');
     expect(await call<string>('gateInfo')).toMatch(/中断运行|待派发/);
-    // DEV-13·下：恢复面列出待对账 UNKNOWN（受影响任务/阶段+需人工判断动作）；
-    // 未确认退出不提供一键清空（文案明示；退出确认需 OS 证据）。
+    // DEV-13·下：恢复面列出待对账 UNKNOWN（受影响任务/阶段+需人工判断动作）。
     const rows = await waitFor(async () => {
       const r = await call<Array<{ turnId: string; text: string }>>('recoveryRows');
       return r.length > 0 ? r : null;
     }, 30_000, '恢复面列待对账 UNKNOWN');
-    expect(rows[0]!.text).toContain('状态未知（需对账）');
-    expect(rows[0]!.text).toContain('不提供一键清空');
+    expect(rows).not.toBeNull();
+    expect(rows![0]!.text).toContain('状态未知（需对账）');
     } catch (e) {
       console.error('[appB daemon/ui stderr tail]\n', app.stderr.slice(-2500));
       throw e;
     }
   }, 120_000);
+
+  it('恢复面对账反例：无登记 turn 服务端无法确认→人工声明后保护仍在（界面如实说明）；有登记（none）服务端核对后按条件收口', async () => {
+    try {
+      // 造第二个无登记 UNKNOWN 现场（身份缺失——崩溃发生在登记前的等价形态）+ 该 turn 持有租约：
+      // 直接写 fixture DB（测试准备，模拟崩溃遗留——不绕过被测对账链路）。
+      const { openDatabase } = await import('../../src/persistence/db.ts');
+      const dbFile = join(fixtureRoot, 'appdata-b', 'state.sqlite');
+      const db = openDatabase(dbFile);
+      const crashed = db.prepare(`SELECT t.id AS turnId, t.run_id AS runId FROM agent_turns t WHERE t.status = 'UNKNOWN' LIMIT 1`).get() as { turnId: string; runId: string } | undefined;
+      expect(crashed).toBeDefined(); // 崩溃用例遗留的 UNKNOWN（fake=none 登记）
+      const ghostRunId = 'run_e2e_ghost';
+      const ghostTurnId = 'turn_e2e_ghost_unknown';
+      const taskRow = db.prepare(`SELECT r.task_id, r.conversation_id, t.conversation_thread_id AS thread_id, ct.member_id FROM workflow_runs r JOIN tasks t ON t.id = r.task_id JOIN agent_turns ct ON ct.run_id = r.id WHERE r.id = ? LIMIT 1`).get(crashed!.runId) as { task_id: string; conversation_id: string; thread_id: string | null; member_id: string };
+      const e2eMemberId = taskRow.member_id;
+      const ghostConv = taskRow.conversation_id;
+      const ghostThread = taskRow.thread_id ?? 'th_ghost';
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json) VALUES (?, ?, ?, ?, 'DIRECT', 0, 'INTERRUPTED', ?)`)
+        .run(ghostRunId, taskRow.task_id, ghostConv, ghostThread, JSON.stringify({ runMaxTurns: 6, usedTurns: 0, inFlightReservedTurns: 1 }));
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, ?, ?, 'direct.work', 'UNKNOWN', 'task:ghost:initial', 1, 1)`)
+        .run(ghostTurnId, ghostRunId, ghostConv, ghostThread, e2eMemberId);
+      db.prepare(`INSERT INTO workspace_leases (lock_domain, owner_turn_id, epoch, heartbeat_at, status) VALUES ('d:/e2e-ghost', ?, 1, 0, 'active')`).run(ghostTurnId);
+      db.close();
+      // 恢复面列出两个 UNKNOWN：崩溃 turn（none 登记）+ ghost（无登记）——等待 ghost 行实际渲染。
+      const rows = await waitFor(async () => {
+        const r = await call<Array<{ turnId: string; text: string }>>('recoveryRows');
+        return r.some((x) => x.turnId === ghostTurnId) ? r : null;
+      }, 30_000, '恢复面列出 ghost 待对账行');
+      expect(rows).not.toBeNull();
+      const ghostFacts = await waitFor(async () => {
+        const t = await call<string>('recoveryFacts', ghostTurnId);
+        return t != null ? t : null;
+      }, 30_000, 'ghost 行的事实分层渲染');
+      expect(ghostFacts).toContain('无进程身份登记'); // 程序观测如实：身份缺失
+      expect(ghostFacts).toContain('写入租约 1 条'); // 保留保护可见
+      // 服务端取证（只读）：无法确认+原因如实。
+      await call('recoveryClick', ghostTurnId, '服务端取证');
+      await waitFor(async () => ((await call<string>('recoveryProbeResult', ghostTurnId)) ?? '').includes('identity-missing'), 30_000, '取证结果显示身份缺失');
+      // 人工声明未启动（风险确认）：confirm 桩 + note 必填。
+      await call('confirmYes');
+      expect(await call<boolean>('recoverySetNote', ghostTurnId, '任务管理器核对：无相关进程（e2e 人工声明）')).toBe(true);
+      await call('recoveryClick', ghostTurnId, '人工声明未启动');
+      // 对账收口：ghost 行消失（turn FAILED）；但**保护仍在**——遗留租约行如实说明原因。
+      await waitFor(async () => {
+        const r = await call<Array<{ turnId: string }>>('recoveryRows');
+        return !r.some((x) => x.turnId === ghostTurnId) ? ['gone'] : null;
+      }, 30_000, '人工声明后该 turn 收口（不再待对账）');
+      const orphan = await waitFor(async () => {
+        const t = await call<string>('recoveryOrphan');
+        return t != null ? t : null;
+      }, 30_000, '遗留保护行出现（人工声明不解除物理保护）');
+      expect(orphan).toContain(ghostTurnId);
+      expect(orphan).toContain('人工声明不解除');
+      // 服务端核对完成才按条件收口：崩溃 turn（fake=none 登记）→ 先取证（no-os-process
+      // 程序事实）→「对账：已执行」→ 该行按条件解除（消失）。
+      const crashedId = crashed!.turnId;
+      const crashedFacts = await call<string>('recoveryFacts', crashedId);
+      expect(crashedFacts).toContain('无子进程模型'); // 进程身份登记存活（startTurn 后、SIGKILL 前落库）
+      await call('recoveryClick', crashedId, '服务端取证');
+      await waitFor(async () => ((await call<string>('recoveryProbeResult', crashedId)) ?? '').includes('no-os-process'), 30_000, '取证结果显示 no-os-process');
+      await waitFor(async () => { const f = await call<string>('recoveryFacts', crashedId); return (f ?? '').includes('最近取证') ? f : null; }, 30_000, 'facts 含最近取证');
+      expect(await call<boolean>('recoverySetNote', crashedId, '渠道账单核对：请求已执行（e2e）')).toBe(true);
+      await call('recoveryClick', crashedId, '对账：已执行');
+      try {
+        await waitFor(async () => {
+          const r = await call<Array<{ turnId: string }>>('recoveryRows');
+          return !r.some((x) => x.turnId === crashedId) ? ['gone'] : null; // 非空数组（waitFor 视空数组为未就绪）
+        }, 30_000, '服务端核对（none 程序事实）后该 turn 收口');
+      } catch (e) {
+        const errText = await call<string>('recoveryError').catch(() => null);
+        throw new Error(`收口等待失败；恢复面错误行：${errText ?? '（无）'}；${(e as Error).message}`, { cause: e });
+      }
+      // 已执行但服务端无法确认（identity-missing）的反例：再造一个无登记 UNKNOWN 并选
+      // 「对账：已执行」→ 结算但保留保护——行**仍在**（不提前收口），界面说明保留原因。
+      const db2 = openDatabase(dbFile);
+      db2.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES ('turn_e2e_exec_unknown', ?, ?, ?, ?, 'direct.work', 'UNKNOWN', 'task:ghost2:initial', 2, 2)`)
+        .run(ghostRunId, ghostConv, ghostThread, e2eMemberId);
+      db2.close();
+      const row2 = await waitFor(async () => {
+        const r = await call<Array<{ turnId: string }>>('recoveryRows');
+        return r.some((x) => x.turnId === 'turn_e2e_exec_unknown') ? r : null;
+      }, 30_000, '第三个 UNKNOWN 出现');
+      expect(row2).not.toBeNull();
+      await call('recoverySetNote', 'turn_e2e_exec_unknown', '渠道账单：已执行但无进程身份（e2e）');
+      await call('recoveryClick', 'turn_e2e_exec_unknown', '对账：已执行');
+      await new Promise((r) => setTimeout(r, 2_000));
+      const rowsAfter = await call<Array<{ turnId: string }>>('recoveryRows');
+      expect(rowsAfter.some((x) => x.turnId === 'turn_e2e_exec_unknown')).toBe(true); // 保护保留：不提前收口
+      const factsAfter = await call<string>('recoveryFacts', 'turn_e2e_exec_unknown');
+      expect(factsAfter).toContain('保留保护'); // 界面如实说明原因
+    } catch (e) {
+      console.error('[appB daemon/ui stderr tail]\n', app.stderr.slice(-2500));
+      throw e;
+    }
+  }, 150_000);
 
   it('用户点击「确认继续」→ 开闸；中断任务不自动补跑（对账挂起）；新调度恢复可用', async () => {
     await call('click', 'resume-gate');

@@ -41,6 +41,8 @@ const state = {
   // @全体研讨（M1）：mentions=[{kind:'all'}] → 服务端 DELIBERATE 路由；一次性意图。
   deliberateAll: false,
   pollTimer: null,
+  /** 恢复面人工说明草稿（按 turnId）——周期重画不丢输入。 */
+  recoveryNotes: {},
   pollTick: 0,
   // 发送在途（R4 去重）：视图内单飞，双击/重复 Enter 直接忽略。
   inflightSend: null,
@@ -529,54 +531,144 @@ async function refreshGate() {
   gate.classList.remove('hidden');
 }
 
-/** 恢复面：待对账 UNKNOWN 明细+精确绑定操作。
- *  纪律：未确认退出时不提供「清空占位继续」；需人工判断的动作与程序已确认事实分行；
- *  操作只作用于该行绑定的 turnId（不因切线程漂移）。 */
+/** 恢复面（第七轮：事实分层——程序观测 / 人工说明 / 无法确认 / 保留保护）。
+ *  纪律：
+ *  - 退出事实只能由服务端取证（recovery.probeProcess：按已登记进程身份 OS 核对）产生；
+ *    界面不提供自报 alive=false 的入口；
+ *  - 「人工声明未启动」是独立人工语义（需说明+风险确认）：退款但**保留租约保护**——
+ *    不伪装为程序已确认，不成为绕过进程核对的一键释放入口；
+ *  - 操作只作用于该行绑定的 turnId（不因切线程漂移）。 */
 function renderRecoveryPanel(panel, data) {
   const unknown = (data.unknownTurns ?? []);
   const undos = (data.activeUndos ?? []);
-  if (unknown.length === 0 && undos.length === 0) {
+  // 遗留保护（如实）：对账已收口（人工声明等）但租约仍持有的 turn——人工路径不解除物理
+  // 写入保护，界面不得暗示已恢复完成。
+  const orphanLeases = (data.heldLeases ?? []).filter((l) => !unknown.some((t) => t.id === l.owner_turn_id));
+  if (unknown.length === 0 && undos.length === 0 && orphanLeases.length === 0) {
+    // 全部收口：清空并隐藏（保留旧 DOM 会让已收口 turn 仍被读到——表现为“行不消失”）。
+    panel.innerHTML = '';
     panel.classList.add('hidden');
     return;
   }
+  panel.classList.remove('hidden');
   panel.innerHTML = '';
   const head = document.createElement('div');
   head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项（续跑走撤销命令，三向判定）` : ''}`;
   panel.appendChild(head);
+  if (orphanLeases.length > 0) {
+    const orphan = document.createElement('div');
+    orphan.className = 'recovery-facts';
+    orphan.textContent = `遗留保护：${orphanLeases.map((l) => l.owner_turn_id).join('、')} 的写入租约仍持有（人工声明不解除物理保护——需 OS 退出证据或租约治理收口）`;
+    panel.appendChild(orphan);
+  }
   for (const t of unknown) {
     const row = document.createElement('div');
     row.className = 'recovery-row';
     row.dataset.turnId = t.id;
+
     const meta = document.createElement('span');
     meta.textContent = `任务 ${t.taskId ?? '?'} · ${t.stageKey ?? '?'} · 状态未知（需对账）`;
     row.appendChild(meta);
-    const mkBtn = (label, params) => {
+
+    // 程序观测事实（服务端登记与取证）与无法确认事项、保留保护——分行如实呈现。
+    const reg = (data.processRegistry ?? []).find((r) => r.turnId === t.id);
+    const leases = (data.heldLeases ?? []).filter((l) => l.owner_turn_id === t.id);
+    const facts = document.createElement('div');
+    facts.className = 'recovery-facts';
+    const factLines = [];
+    if (reg == null) {
+      factLines.push('程序观测：无进程身份登记（身份缺失——退出事实无从 OS 核对，只能维持保护）');
+    } else {
+      factLines.push(`程序观测：${reg.processModel === 'per-turn' ? '该 turn 专属子进程' : reg.processModel === 'shared' ? '共享常驻进程（PID 不专属本 turn）' : '无子进程模型（内联执行）'}${reg.pid != null ? ` PID ${reg.pid}` : ''}${reg.startedAtMs != null ? '（登记含启动时刻，可测复用）' : ''}`);
+      if (reg.lastProbeResult != null) {
+        factLines.push(`最近取证：${reg.lastProbeResult}${reg.lastProbeDetail ? `——${reg.lastProbeDetail}` : ''}`);
+      } else {
+        factLines.push('无法确认：退出事实尚未取证（点「服务端取证」）');
+      }
+    }
+    factLines.push(leases.length > 0 ? `保留保护：写入租约 ${leases.length} 条（未确认退出/无程序事实前不解除）` : '保留保护：无本 turn 租约（预算/准入占位仍按对账结果处理）');
+    facts.textContent = factLines.join('\n');
+    row.appendChild(facts);
+
+    // 人工说明（人工判断依据——必填留痕，不冒充程序事实；周期重画按草稿恢复）。
+    const noteInput = document.createElement('input');
+    noteInput.className = 'recovery-note';
+    noteInput.dataset.turnId = t.id;
+    noteInput.placeholder = '人工依据说明（必填）：如渠道账单已扣费 / 任务管理器亲见进程';
+    noteInput.value = state.recoveryNotes[t.id] ?? '';
+    noteInput.oninput = () => { state.recoveryNotes[t.id] = noteInput.value; };
+    row.appendChild(noteInput);
+
+    const noteOf = () => {
+      const v = noteInput.value.trim();
+      if (v.length === 0) throw new Error('人工依据说明必填（人工判断留痕，不冒充程序事实）');
+      return v;
+    };
+    const mkBtn = (label, action) => {
       const b = document.createElement('button');
       b.textContent = label;
-      b.onclick = () => void reconcileTurn(t.id, params);
+      b.onclick = () => { try { void action(); } catch (error) { showRecoveryError(error.message); } };
       return b;
     };
-    row.appendChild(mkBtn('确认未启动', { verdict: 'notStarted' }));
-    row.appendChild(mkBtn('确认已执行·退出未知（保留保护）', { verdict: 'executed' }));
-    const note = document.createElement('span');
-    note.textContent = ' 未确认退出时不释放写入保护；退出确认需 OS 进程证据（不提供一键清空）';
-    row.appendChild(note);
+    row.appendChild(mkBtn('服务端取证', () => probeTurn(t.id)));
+    row.appendChild(mkBtn('对账：已执行（按服务端取证收口）', () => reconcileTurn(t.id, { verdict: 'executed', note: noteOf() })));
+    row.appendChild(mkBtn('人工声明未启动（退款·保留租约）', () => {
+      const note = noteOf();
+      if (!window.confirm('程序无法确认未启动。人工声明将退款并把 turn 记为 FAILED，但写入租约保护保留（不解除）。确认继续？')) return;
+      void reconcileTurn(t.id, { verdict: 'notStarted', manualRiskAck: true, note });
+    }));
+    row.appendChild(mkBtn('维持不确定', () => reconcileTurn(t.id, { verdict: 'keepUnknown', note: noteOf() })));
     panel.appendChild(row);
   }
   panel.classList.remove('hidden');
 }
 
+/** 服务端 OS 取证（只读）：按该 turn 已登记身份核对，结果显示在该行并刷新状态。
+ *  refreshGate 会整面板重画（facts 中含「最近取证」）——结果元素在重画后补挂，避免被清。 */
+async function probeTurn(turnId) {
+  let r;
+  let failure = null;
+  try {
+    r = await command('recovery.probeProcess', { turnId });
+  } catch (error) {
+    failure = `取证失败：${error.message}`;
+  }
+  await refreshGate();
+  if (failure != null) { showRecoveryError(failure); return; }
+  const row = document.querySelector(`#recovery-panel .recovery-row[data-turn-id="${turnId}"]`);
+  if (row != null) {
+    const el = document.createElement('div');
+    el.className = 'recovery-probe-result';
+    el.textContent = `服务端取证结果：${r.result}${r.detail ? `——${r.detail}` : ''}（观测时刻 ${new Date(r.observedAt).toLocaleTimeString()}）`;
+    row.appendChild(el);
+  }
+}
+
+/** 恢复面错误行（非阻塞——不使用 alert：无人工处理时对话框会冻结页面）。 */
+function showRecoveryError(message) {
+  const panel = document.getElementById('recovery-panel');
+  if (panel == null) return;
+  let el = panel.querySelector('.recovery-error');
+  if (el == null) {
+    el = document.createElement('div');
+    el.className = 'recovery-error';
+    panel.insertBefore(el, panel.firstChild);
+  }
+  el.textContent = message;
+}
+
 async function reconcileTurn(turnId, base) {
+  let failure = null;
   try {
     await command('recovery.reconcile', {
       turnId,
       ...base,
-      evidence: { source: 'renderer 恢复面（用户操作）', at: Date.now() },
     });
   } catch (error) {
-    alert(`对账失败：${error.message}`);
+    failure = `对账失败：${error.message}`;
   }
   await refreshGate();
+  if (failure != null) showRecoveryError(failure);
 }
 
 async function resumeFromGate() {

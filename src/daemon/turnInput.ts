@@ -18,7 +18,7 @@ import {
   turnBundleEnvelopeSchema,
 } from '../contracts/prompts.ts';
 import type { TurnBundleEnvelope } from '../contracts/prompts.ts';
-import { taskScopedFileListing } from './fileDiscovery.ts';
+import { projectScopedFileListing } from './fileDiscovery.ts';
 import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
 export interface AssemblyTaskRef {
@@ -85,7 +85,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   }
 
   const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
-  const fileDiscovery = projectRoot != null ? taskScopedFileListing(db, task.projectId, task.id, projectRoot) : null;
+  const fileDiscovery = projectRoot != null ? projectScopedFileListing(projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
   const history = db
