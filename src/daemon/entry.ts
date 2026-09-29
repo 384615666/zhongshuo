@@ -195,6 +195,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           localUserId,
           interruptTurn: (turnId) => worker.interruptTurn(turnId),
           appDataDir: options.appDataDir,
+          releaseAdmission: (turnId) => worker.reconcileRelease(turnId), // DEV-13 对账→准入内存联动
         }, envelope),
       { authToken: credential.token },
     );
