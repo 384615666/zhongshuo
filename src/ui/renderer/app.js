@@ -961,10 +961,11 @@ async function renderGitOps(force = false) {
     doBtn.disabled = !p.canCommit;
     const stagedLines = p.staged.slice(0, 10).map((s) => `${s.xy} ${s.path}${s.renamedFrom != null ? `（← ${s.renamedFrom}）` : ''}`).join('\n');
     previewBox.textContent = [
-      `将提交（分支 ${p.branch}，HEAD ${p.head == null ? '空仓库' : p.head.slice(0, 8)}）：`,
+      `将提交（分支 ${p.branch ?? '（detached）'}，HEAD ${p.head == null ? '空仓库' : p.head.slice(0, 8)}，索引内容 tree ${p.indexTree == null ? '—' : p.indexTree.slice(0, 8)}）：`,
       stagedLines || '（暂存区为空）',
       p.staged.length > 10 ? `（另 ${p.staged.length - 10} 个）` : '',
-      p.canCommit ? '前置检查通过：可提交。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
+      p.canCommit ? '前置检查通过：可提交（提交内容绑定预览时的索引 tree；变化即拒绝）。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
+      ...p.notes.map((n) => `· ${n}`),
     ].filter((s) => s !== '').join('\n');
   })().catch((error) => { previewBox.textContent = `预览失败：${error.message}`; });
   if (savedMsg !== '') msgInput.value = savedMsg;
@@ -973,17 +974,20 @@ async function renderGitOps(force = false) {
     const message = msgInput.value.trim();
     if (message === '') { previewBox.textContent = '请填写提交说明。'; return; }
     const p = state.gitCommitPreview;
-    if (p == null) { previewBox.textContent = '请先预览提交（提交绑定预览时的内容）。'; return; }
+    if (p == null || p.indexTree == null || p.branch == null) { previewBox.textContent = '请先预览提交（提交绑定预览时的内容/分支）。'; return; }
     const taskId = taskBind.value === '' ? undefined : taskBind.value;
     const r = await command('git.commit', {
       projectId: state.projectId, message,
-      expectedHead: p.head, expectedIndexDigest: p.indexDigest,
+      expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch,
       ...(taskId != null ? { taskId } : {}),
     });
     state.gitCommitPreview = null;
     doBtn.disabled = true;
     await refreshGitViews();
-    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（崩溃恢复：核对到已存在的提交，未重复执行）' : r.replayed === true ? '（重放原回执）' : ''}`);
+    const verifyNote = r.consistent === false
+      ? `（警告：提交后核对不一致——本次提交对象 ${r.commit.slice(0, 8)} 已落库，但仓库当前 HEAD 为 ${(r.headAfterActual ?? '?').slice(0, 8)}（外部又推进）；不自动回滚，请人工核对）`
+      : '';
+    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（崩溃恢复：核对到已存在的提交，未重复执行）' : r.replayed === true ? '（重放原回执）' : ''}${verifyNote}`);
     msgInput.value = '';
   })().catch((error) => { previewBox.textContent = `提交失败：${error.message}`; });
   commitRow.append(previewBtn, doBtn);

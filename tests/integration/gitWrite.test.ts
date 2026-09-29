@@ -195,7 +195,7 @@ describe('第十轮·二：Git 写操作闭环', () => {
     await f.cmd('changeset.finalize', { changeSetId: base.changeSetId });
     f.db.prepare(`UPDATE change_sets SET application_status = 'applied' WHERE id = ?`).run(base.changeSetId);
 
-    const preview = await f.cmd<{ head: string | null; branch: string; staged: Array<{ path: string }>; indexDigest: string; canCommit: boolean; blockers: string[]; identity: { name: string | null; email: string | null } }>('git.commitPreview', { projectId: f.projectId });
+    const preview = await f.cmd<{ head: string | null; branch: string | null; staged: Array<{ path: string }>; indexTree: string | null; canCommit: boolean; blockers: string[]; identity: { name: string | null; email: string | null } }>('git.commitPreview', { projectId: f.projectId });
     expect(preview.canCommit).toBe(true);
     expect(preview.staged.map((s) => s.path)).toEqual(['a.txt']);
     expect(preview.head).toMatch(/^[0-9a-f]{40}$/);
@@ -203,7 +203,7 @@ describe('第十轮·二：Git 写操作闭环', () => {
 
     const cid = `commit-${randomUUID().slice(0, 10)}`;
     const c1 = await f.cmd<{ commit: string; headBefore: string | null; subject: string }>('git.commit', {
-      projectId: f.projectId, message: '任务改动提交', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest, taskId: 'tk3', changeSetIds: [base.changeSetId],
+      projectId: f.projectId, message: '任务改动提交', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, taskId: 'tk3', changeSetIds: [base.changeSetId],
     }, cid);
     expect(c1.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(c1.commit).not.toBe(preview.head);
@@ -213,7 +213,7 @@ describe('第十轮·二：Git 写操作闭环', () => {
     expect((f.db.prepare(`SELECT application_status FROM change_sets WHERE id = ?`).get(base.changeSetId) as { application_status: string }).application_status).toBe('applied');
     // 同号重放：原回执，不重复提交。
     const c2 = await f.cmd<{ commit: string; replayed?: boolean }>('git.commit', {
-      projectId: f.projectId, message: '任务改动提交', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest, taskId: 'tk3', changeSetIds: [base.changeSetId],
+      projectId: f.projectId, message: '任务改动提交', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, taskId: 'tk3', changeSetIds: [base.changeSetId],
     }, cid);
     expect(c2.replayed).toBe(true);
     expect(c2.commit).toBe(c1.commit);
@@ -234,19 +234,23 @@ describe('第十轮·二：Git 写操作闭环', () => {
     const f = makeFixture('stale', { 'a.txt': 'v1\n', 'b.txt': 'v1\n' });
     writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
     await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
-    const p1 = await f.cmd<{ head: string | null; indexDigest: string }>('git.commitPreview', { projectId: f.projectId });
-    // 场景①：预览后外部又产生提交 → HEAD 移动。
-    git(f.root, 'commit', '-q', '--allow-empty', '-m', 'someone else');
-    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p1.head, expectedIndexDigest: p1.indexDigest })).rejects.toThrow(/HEAD 已移动/);
-    // 场景②：重新预览后，暂存区又被加料 → 摘要不一致。
-    const p2 = await f.cmd<{ head: string | null; indexDigest: string }>('git.commitPreview', { projectId: f.projectId });
+    const p1 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    // 场景①：预览后外部又产生提交 → HEAD 移动。外部提交走 plumbing（保树推进 HEAD、
+    // 不消费索引）——等价于「别人在别处提交了同一分支」，不影响已暂存内容。
+    const headBefore = git(f.root, 'rev-parse', 'HEAD').trim();
+    const extOid = git(f.root, 'commit-tree', `${headBefore}^{tree}`, '-p', headBefore, '-m', 'someone else').trim();
+    git(f.root, 'update-ref', 'HEAD', extOid, headBefore);
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p1.head, expectedIndexTree: p1.indexTree, expectedBranch: p1.branch, })).rejects.toThrow(/HEAD 已移动/);
+    // 场景②：重新预览后，暂存区又被加料 → 内容 tree 不一致（同路径状态不变——内容级绑定）。
+    const p2 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    expect(p2.indexTree).toMatch(/^[0-9a-f]{40}$/);
     writeFileSync(join(f.root, 'b.txt'), 'v2\n', 'utf8');
     await f.cmd('git.stage', { projectId: f.projectId, paths: ['b.txt'] });
-    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p2.head, expectedIndexDigest: p2.indexDigest })).rejects.toThrow(/暂存区与预览时不一致/);
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p2.head, expectedIndexTree: p2.indexTree, expectedBranch: p2.branch, })).rejects.toThrow(/暂存区内容与预览时不一致/);
     // 用最新预览提交成功（正常闭环不被误伤）。
-    const p3 = await f.cmd<{ head: string | null; indexDigest: string; canCommit: boolean }>('git.commitPreview', { projectId: f.projectId });
+    const p3 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit: boolean }>('git.commitPreview', { projectId: f.projectId });
     expect(p3.canCommit).toBe(true);
-    const ok = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '包含 b 的提交', expectedHead: p3.head, expectedIndexDigest: p3.indexDigest });
+    const ok = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '包含 b 的提交', expectedHead: p3.head, expectedIndexTree: p3.indexTree, expectedBranch: p3.branch, });
     expect(ok.commit).toMatch(/^[0-9a-f]{40}$/);
     f.db.close();
   }, 30_000);
@@ -267,10 +271,10 @@ describe('第十轮·二：Git 写操作闭环', () => {
     expect(merge.status).not.toBe(0);
     const porcelain = git(f.root, 'status', '--porcelain');
     expect(porcelain).toContain('UU');
-    const p1 = await f.cmd<{ head: string | null; conflicts: string[]; canCommit: boolean; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
+    const p1 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; conflicts: string[]; canCommit: boolean; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
     expect(p1.conflicts).toEqual(['c.txt']);
     expect(p1.canCommit).toBe(false);
-    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p1.head, expectedIndexDigest: p1.indexDigest })).rejects.toThrow(/前置不满足|冲突未解决/);
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p1.head, expectedIndexTree: p1.indexTree, expectedBranch: p1.branch, })).rejects.toThrow(/前置不满足|冲突未解决/);
     // 身份缺失：仓库 unset + 屏蔽全局/系统配置（GIT_CONFIG_* 指向空文件）→ 预览阻塞 +
     // 提交拒绝；不代改用户配置。
     git(f.root, 'config', '--unset', 'user.name');
@@ -282,10 +286,10 @@ describe('第十轮·二：Git 写操作闭环', () => {
     process.env.GIT_CONFIG_GLOBAL = emptyCfg;
     process.env.GIT_CONFIG_SYSTEM = emptyCfg;
     try {
-      const p2 = await f.cmd<{ head: string | null; identity: { name: string | null; email: string | null }; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
+      const p2 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; identity: { name: string | null; email: string | null }; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
       expect(p2.identity.name).toBeNull();
       expect(p2.blockers.some((b) => b.includes('user.name'))).toBe(true);
-      await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p2.head, expectedIndexDigest: p2.indexDigest })).rejects.toThrow(/前置不满足/);
+      await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p2.head, expectedIndexTree: p2.indexTree, expectedBranch: p2.branch, })).rejects.toThrow(/前置不满足/);
     } finally {
       if (savedGlobal == null) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
       if (savedSystem == null) delete process.env.GIT_CONFIG_SYSTEM; else process.env.GIT_CONFIG_SYSTEM = savedSystem;
@@ -297,24 +301,24 @@ describe('第十轮·二：Git 写操作闭环', () => {
     const f = makeFixture('crash', { 'a.txt': 'v1\n' });
     writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
     await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
-    const preview = await f.cmd<{ head: string | null; indexDigest: string }>('git.commitPreview', { projectId: f.projectId });
+    const preview = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
     const cid = `crash-${randomUUID().slice(0, 10)}`;
-    const c1 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest }, cid);
+    const c1 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, }, cid);
     // 模拟崩溃窗口：git 提交已发生，但回执与操作日志均未落库（手工抹掉）。
     f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(cid);
     f.db.prepare(`DELETE FROM git_operations WHERE id = ?`).run(cid);
     const logBefore = git(f.root, 'rev-list', '--count', 'HEAD').trim();
-    const retry = await f.cmd<{ commit: string; recovered?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest }, cid);
+    const retry = await f.cmd<{ commit: string; recovered?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, }, cid);
     expect(retry.recovered).toBe(true);
     expect(retry.commit).toBe(c1.commit);
     expect(git(f.root, 'rev-list', '--count', 'HEAD').trim()).toBe(logBefore); // 未重复提交
     // 恢复后日志补记；再重试=正常回执重放。
     expect((f.db.prepare(`SELECT count(*) c FROM git_operations WHERE id = ?`).get(cid) as { c: number }).c).toBe(1);
-    const again = await f.cmd<{ commit: string; replayed?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest }, cid);
+    const again = await f.cmd<{ commit: string; replayed?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, }, cid);
     expect(again.replayed).toBe(true);
     // 仅日志幸存（回执被清理策略删除）的恢复路径。
     f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(cid);
-    const fromJournal = await f.cmd<{ commit: string; recovered?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexDigest: preview.indexDigest }, cid);
+    const fromJournal = await f.cmd<{ commit: string; recovered?: boolean }>('git.commit', { projectId: f.projectId, message: '崩溃演练', expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch, }, cid);
     expect(fromJournal.recovered).toBe(true);
     expect(fromJournal.commit).toBe(c1.commit);
     expect(git(f.root, 'rev-list', '--count', 'HEAD').trim()).toBe(logBefore);
@@ -329,6 +333,154 @@ describe('第十轮·二：Git 写操作闭环', () => {
     // 工作树相对路径 pkg/inside.txt 属于项目范围。
     const r = await f.cmd<{ staged: string[] }>('git.stage', { projectId: f.projectId, paths: ['pkg/inside.txt'] });
     expect(r.staged).toEqual(['pkg/inside.txt']);
+    f.db.close();
+  }, 30_000);
+});
+
+describe('第十一轮·一：提交内容绑定与操作保护', () => {
+  it('内容级绑定反例：暂存 A → 预览 → 同文件再暂存 B（路径/状态不变）→ 旧预览提交拒绝，HEAD 不变', async () => {
+    const f = makeFixture('treebind', { 'a.txt': 'base\n' });
+    writeFileSync(join(f.root, 'a.txt'), '内容A\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    expect(p.indexTree).toMatch(/^[0-9a-f]{40}$/);
+    // 同文件换内容再暂存——XY/路径完全不变，只有内容（tree）变化。
+    writeFileSync(join(f.root, 'a.txt'), '内容B（用户没在预览里看到）\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const headBefore = git(f.root, 'rev-parse', 'HEAD').trim();
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch })).rejects.toThrow(/暂存区内容与预览时不一致/);
+    expect(git(f.root, 'rev-parse', 'HEAD').trim()).toBe(headBefore); // HEAD 未变（未提交任何内容）
+    // 用新预览提交 B 内容成功（正常闭环）。
+    const p2 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    const ok = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '提交 B', expectedHead: p2.head, expectedIndexTree: p2.indexTree, expectedBranch: p2.branch });
+    expect(git(f.root, 'show', '-s', '--format=%B', ok.commit)).toContain('提交 B');
+    f.db.close();
+  }, 30_000);
+
+  it('目标分支绑定：同一 HEAD 切换分支后，旧预览提交拒绝（不把提交套到另一分支）', async () => {
+    const f = makeFixture('branchbind', { 'a.txt': 'v1\n' });
+    writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    expect(p.branch).toBe(git(f.root, 'symbolic-ref', '--short', 'HEAD').trim());
+    // 同一 HEAD 切到新分支（未提交内容随行）——HEAD 未变但提交目标分支变了。
+    git(f.root, 'checkout', '-q', '-b', 'other');
+    expect(git(f.root, 'rev-parse', 'HEAD').trim()).toBe(p.head);
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch })).rejects.toThrow(/目标分支已变化/);
+    expect(git(f.root, 'symbolic-ref', '--short', 'HEAD').trim()).toBe('other'); // 未误切回/未提交
+    f.db.close();
+  }, 30_000);
+
+  it('提交后核对：parent/tree/ref 与批准对象一致；CAS 后外部又推进 → consistent:false、不记录别人的 HEAD、不回滚', async () => {
+    const { execFileSync: ex } = await import('node:child_process');
+    const f = makeFixture('verify', { 'a.txt': 'v1\n' });
+    writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    // 正常提交：核对 parent/tree/HEAD/分支全部一致。
+    const ok = await f.cmd<{ commit: string; headBefore: string | null; consistent?: boolean; headAfterActual?: string }>('git.commit', { projectId: f.projectId, message: '核对提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
+    expect(ok.consistent).toBeUndefined(); // 一致
+    expect(git(f.root, 'rev-parse', `${ok.commit}^`).trim()).toBe(p.head);
+    expect(git(f.root, 'rev-parse', `${ok.commit}^{tree}`).trim()).toBe(p.indexTree);
+    expect(git(f.root, 'rev-parse', 'HEAD').trim()).toBe(ok.commit);
+
+    // CAS 成功后、核对读取前外部又推进（_between 测试接缝——正式命令不传）。
+    writeFileSync(join(f.root, 'b.txt'), 'n\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['b.txt'] });
+    const p2 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    const { gitCommit } = await import('../../src/daemon/gitWrite.ts');
+    const cid = `c-between-${randomUUID().slice(0, 8)}`;
+    const r = await gitCommit(f.db, {
+      projectId: f.projectId, projectRoot: f.root, message: '被超越的提交',
+      expectedHead: p2.head, expectedIndexTree: p2.indexTree!, expectedBranch: p2.branch!,
+      journal: { commandId: cid, scope: 'user:u_gitwrite', payloadHash: 'x'.repeat(8), now: Date.now() },
+      _between: async () => {
+        // 外部以「我们的新 HEAD」为父再推进一次（真实竞态：两边都成功，我们被超越）。
+        const headNow = ex('git', ['-C', f.root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+        const ext = ex('git', ['-C', f.root, 'commit-tree', `${headNow}^{tree}`, '-p', headNow, '-m', 'external raced'], { encoding: 'utf8' }).trim();
+        ex('git', ['-C', f.root, 'update-ref', 'HEAD', ext, headNow]);
+      },
+    });
+    expect(r.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(r.consistent).toBe(false); // 核对发现不一致
+    const headNow = git(f.root, 'rev-parse', 'HEAD').trim();
+    expect(headNow).not.toBe(r.commit); // 仓库现值=外部提交
+    expect(r.headAfterActual).toBe(headNow); // 结果如实记录实际 HEAD——不是别人的提交被记为本次
+    expect(git(f.root, 'log', '--format=%s', `${r.commit}..${headNow}`).trim()).toBe('external raced');
+    // 我们的对象仍在历史链上（父链可达）——没有回滚/改写。
+    expect(gitLax(f.root, 'merge-base', '--is-ancestor', r.commit, headNow).status).toBe(0);
+    // 审计事件留痕（不自动 reset——进入核对流程）。
+    const evt = f.db.prepare(`SELECT kind FROM domain_events WHERE kind = 'git.commitVerifyInconsistent' ORDER BY seq DESC LIMIT 1`).get() as { kind: string } | undefined;
+    expect(evt?.kind).toBe('git.commitVerifyInconsistent');
+    f.db.close();
+  }, 30_000);
+
+  it('仓库级写互斥：并发 stage/commit 不交错；同工作树两项目共用互斥；undo 活跃拒绝 Git 写；Git 写在途拒绝 undo；目录身份失败拒绝写', async () => {
+    // ① 互斥串行性：同工作树并发 6 个写操作，进入/退出不交错。
+    const { withRepoWriteLock, repoWriteBusy } = await import('../../src/daemon/gitWrite.ts');
+    const events: string[] = [];
+    const rootA = join(tmpRoot, `mutex-${++seq}`);
+    await Promise.all(Array.from({ length: 6 }, (_, i) => withRepoWriteLock(rootA, async () => {
+      events.push(`enter${i}`);
+      await new Promise((r) => setTimeout(r, 20));
+      events.push(`exit${i}`);
+    })));
+    // 串行判据：任意时刻已进入数 ≥ 已退出数，且每对 enter/exit 相邻（无交叉）。
+    let depth = 0;
+    for (const e of events) {
+      depth += e.startsWith('enter') ? 1 : -1;
+      expect(depth).toBeLessThanOrEqual(1); // 从未有两个同时在途
+    }
+    expect(events.filter((e) => e.startsWith('enter'))).toHaveLength(6);
+    expect(repoWriteBusy(rootA)).toBe(false); // 全部完成后不在途
+
+    // ② 同一工作树两个项目行：并发写经命令面不交错（一成一败或两成，索引状态一致）。
+    const f = makeFixture('twoproj', { 'a.txt': '1\n', 'b.txt': '1\n' });
+    f.db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pB','d2',?,?,'{}',0)`).run(f.root, f.root);
+    writeFileSync(join(f.root, 'a.txt'), '2\n', 'utf8');
+    writeFileSync(join(f.root, 'b.txt'), '2\n', 'utf8');
+    const [ra, rb] = await Promise.allSettled([
+      f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] }),
+      f.cmd<{ staged: string[] }>('git.stage', { projectId: 'pB', paths: ['b.txt'] }),
+    ]);
+    expect(ra.status).toBe('fulfilled');
+    expect(rb.status).toBe('fulfilled');
+    const porcelain = git(f.root, 'status', '--porcelain');
+    expect(porcelain).toContain('M  a.txt');
+    expect(porcelain).toContain('M  b.txt'); // 两个 stage 都生效且索引一致（无半途破坏）
+
+    // ③ undo 活跃（未收口）→ Git 写拒绝。
+    f.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title) VALUES ('tk_u', ?, 'c1', 'room_task', 'r1', 'u')`).run(f.projectId);
+    const csId = `cs_u${++seq}`;
+    f.db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES (?, ?, 'tk_u', '{}', '{}', 'applied')`).run(csId, f.projectId);
+    f.db.prepare(`INSERT INTO change_set_undos (id, change_set_id, status, steps_json, created_at, updated_at) VALUES ('u1', ?, 'in_progress', '[]', 0, 0)`).run(csId);
+    await expect(f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] })).rejects.toThrow(/撤销未收口/);
+
+    // ④ 目录身份解析失败 → 写拒绝（不放行）。
+    f.db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pGone','d3',?,?, '{}',0)`).run(join(tmpRoot, 'not-exist-dir'), join(tmpRoot, 'not-exist-dir'));
+    await expect(f.cmd('git.stage', { projectId: 'pGone', paths: ['x'] })).rejects.toThrow(/目录身份无法解析|不是 git 仓库/);
+    f.db.close();
+  }, 30_000);
+
+  it('空仓库首提交经 CAS（unborn 分支）；detached HEAD 拒绝产品内提交', async () => {
+    // 空仓库：makeFixture 无文件 → 无初始提交。
+    const f = makeFixture('empty', {});
+    writeFileSync(join(f.root, 'first.txt'), '1\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['first.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit: boolean }>('git.commitPreview', { projectId: f.projectId });
+    expect(p.head).toBeNull();
+    expect(p.branch).toMatch(/^(master|main)$/);
+    expect(p.canCommit).toBe(true);
+    const c1 = await f.cmd<{ commit: string; consistent?: boolean }>('git.commit', { projectId: f.projectId, message: '首提交', expectedHead: null, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
+    expect(c1.consistent).toBeUndefined();
+    expect(git(f.root, 'rev-list', '--count', 'HEAD').trim()).toBe('1');
+
+    // detached HEAD：预览 blocker + 提交拒绝。
+    git(f.root, 'checkout', '-q', '--detach');
+    const p2 = await f.cmd<{ branch: string | null; canCommit: boolean; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
+    expect(p2.branch).toBeNull();
+    expect(p2.canCommit).toBe(false);
+    expect(p2.blockers.some((b) => b.includes('detached'))).toBe(true);
     f.db.close();
   }, 30_000);
 });

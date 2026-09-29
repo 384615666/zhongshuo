@@ -827,8 +827,18 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'changeset.undo': {
         // 非破坏撤销（§14.5）：执行前逐文件重验当前==after；冲突不覆盖；逐步持久化可恢复续跑。
+        // 第十一轮：与产品内 Git 写操作互斥——撤销逐步恢复期间索引/工作区不得被 Git 写改。
         const params = z.strictObject({ changeSetId: z.string().min(1) }).parse(env.params);
         if (deps.appDataDir == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', 'daemon 未配置 appDataDir（内容前像存储不可用）');
+        const csRow = deps.db.prepare('SELECT project_id FROM change_sets WHERE id = ?').get(params.changeSetId) as { project_id: string } | undefined;
+        if (csRow == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `改动集不存在：${params.changeSetId}`);
+        const csProject = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(csRow.project_id) as { canonical_path: string } | undefined;
+        if (csProject != null) {
+          const { repoWriteBusy } = await import('./gitWrite.ts');
+          if (repoWriteBusy(csProject.canonical_path)) {
+            throw new DaemonCommandError('WORKSPACE_BUSY', '该项目的 Git 写操作正在进行——请等其完成后再撤销（两侧互斥，防止撤销期间索引被改写）');
+          }
+        }
         const { undoChangeset } = await import('./changeset.ts');
         const r = undoChangeset(deps.db, { changeSetId: params.changeSetId, appDataDir: deps.appDataDir, now: Date.now() });
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
@@ -977,14 +987,15 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               projectId: z.string().min(1),
               message: z.string().min(1).max(2000),
               expectedHead: z.string().min(4).max(64).nullable(),
-              expectedIndexDigest: z.string().min(16).max(128),
+              expectedIndexTree: z.string().regex(/^[0-9a-f]{40}$/).nullable(),
+              expectedBranch: z.string().min(1).max(200).nullable(),
               taskId: z.string().min(1).optional(),
               changeSetIds: z.array(z.string().min(1)).max(50).optional(),
             }).parse(env.params);
             const { gitCommit } = await import('./gitWrite.ts');
             const data = await gitCommit(deps.db, {
               projectId: params.projectId, projectRoot: gitProject.canonical_path, message: params.message,
-              expectedHead: params.expectedHead, expectedIndexDigest: params.expectedIndexDigest,
+              expectedHead: params.expectedHead, expectedIndexTree: params.expectedIndexTree, expectedBranch: params.expectedBranch,
               taskId: params.taskId ?? null, changeSetIds: params.changeSetIds,
               journal,
             });
