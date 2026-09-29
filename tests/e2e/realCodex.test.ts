@@ -92,7 +92,11 @@ function assertSandboxRejection(
   expect(diskAfter, `${label}: 磁盘状态变化即认证失败`).toBe(diskBefore);
 }
 
-describe('DEV-06 真实适配认证：Codex App Server（model=gpt-6-luna）', () => {
+
+// ===== 真实调用门禁（2026-09-29 核账后新增；双层第二层）=====
+// ZS_REAL_E2E 未显式设为 '1' 时整个文件 skip——不加载 App Server、不发任何请求。
+// 第一层=vitest.e2e.config.ts 按文件名排除（fake e2e 不收集本文件）；真实入口=vitest.real.e2e.config.ts。
+(process.env.ZS_REAL_E2E === '1' ? describe : describe.skip)('DEV-06 真实适配认证：Codex App Server（model=gpt-6-luna）', () => {
   it('C0：probe 版本与入口（无模型调用）；未认证能力保持 unverified', async () => {
     const probe = await adapter.probe();
     expect(probe.version).toMatch(new RegExp(`^codex-cli ${SUPPORTED_CODEX_VERSION_PREFIX.replace('.', '\\.')}`));

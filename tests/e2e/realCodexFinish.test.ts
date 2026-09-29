@@ -44,7 +44,11 @@ async function runTurn(session: SessionRef, text: string, timeoutMs = 240_000): 
   return { text: chunks.join(''), events, terminal: undefined };
 }
 
-describe('DEV-06 收尾：steer / resume / 审批桥（gpt-6-luna）', () => {
+
+// ===== 真实调用门禁（2026-09-29 核账后新增；双层第二层）=====
+// ZS_REAL_E2E 未显式设为 '1' 时整个文件 skip——不加载 App Server、不发任何请求。
+// 第一层=vitest.e2e.config.ts 按文件名排除（fake e2e 不收集本文件）；真实入口=vitest.real.e2e.config.ts。
+(process.env.ZS_REAL_E2E === '1' ? describe : describe.skip)('DEV-06 收尾：steer / resume / 审批桥（gpt-6-luna）', () => {
   it('steer：错误 expectedTurnId 被拒（无模型调用）', async () => {
     const session = await adapter.openSession({
       projectId: 'p', memberId: 'm', taskId: 't', threadId: 'th-steer',
