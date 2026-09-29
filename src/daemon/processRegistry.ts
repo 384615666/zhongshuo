@@ -19,29 +19,66 @@ export interface RegistryDb {
   prepare(sql: string): { get(...args: unknown[]): unknown; all(...args: unknown[]): unknown[]; run(...args: unknown[]): unknown };
 }
 
-/** turn 活跃期进程树快照（第八轮：持续归属登记——中间代际退出后历史父子边消失，
- *  退出时刻的现存树扫描不可见孙进程；快照是历史代际归属核对的唯一锚点）。
- *  每 turn 保留最新一代（事务内 DELETE+INSERT；写入方=worker 首拍+周期重拍）。 */
-export function saveProcessTreeSnapshot(
+export interface ProcessTreeIdentityRow {
+  id: number;
+  turn_id: string;
+  pid: number;
+  started_at_ms: number | null;
+  first_seen_at: number;
+  last_seen_alive_at: number;
+  exit_confirmed_at: number | null;
+  is_root: number;
+}
+
+/**
+ * 进程树观察记录（第九轮：**追加式历史身份登记**——按进程代次=pid+started_at_ms）。
+ *
+ * 旧 saveProcessTreeSnapshot（012 表 DELETE+INSERT 保留最新一代）的缺陷：后续快照从登记
+ * 根 BFS，根退出后只写占位——**父链已断但仍存活的后代从后续快照中消失**；新快照覆盖掉
+ * 尚未确认退出的身份。新语义：
+ * - 每个观察到的进程代次只 upsert（更新 last_seen_alive_at），**从不删除**；
+ * - 已确认退出（exit_confirmed_at）后同代次再次出现=防御性重开追踪（不该发生：同
+ *   pid+startedAt 即同进程；出现即先前确认有误）；
+ * - PID 脱离启动时间不构成身份：started_at_ms NULL 仍登记，但 probe 核对时无法与复用
+ *   区分——保守按不可确认处理。
+ * 退出确认（exit_confirmed_at）由 probeTurnExit 核对后写回。
+ */
+export function recordProcessTreeObservation(
   db: RegistryDb, turnId: string, rootPid: number, rows: Array<{ pid: number; ppid: number; startedAt: number | null }>, now = Date.now(),
 ): void {
   const tx = (db as unknown as { transaction(fn: () => void): () => void }).transaction(() => {
-    db.prepare('DELETE FROM process_tree_snapshots WHERE turn_id = ?').run(turnId);
-    const insert = db.prepare(
-      'INSERT INTO process_tree_snapshots (turn_id, root_pid, pid, ppid, started_at_ms, observed_at) VALUES (?, ?, ?, ?, ?, ?)',
+    const select = db.prepare(
+      'SELECT id, exit_confirmed_at FROM process_tree_identities WHERE turn_id = ? AND pid = ? AND started_at_ms IS ?',
     );
-    for (const r of rows) insert.run(turnId, rootPid, r.pid, r.ppid, r.startedAt, now);
+    const insert = db.prepare(
+      'INSERT INTO process_tree_identities (turn_id, pid, started_at_ms, first_seen_at, last_seen_alive_at, exit_confirmed_at, is_root) VALUES (?, ?, ?, ?, ?, NULL, ?)',
+    );
+    const touch = db.prepare('UPDATE process_tree_identities SET last_seen_alive_at = ? WHERE id = ?');
+    const reopen = db.prepare('UPDATE process_tree_identities SET exit_confirmed_at = NULL, last_seen_alive_at = ? WHERE id = ?');
+    const observed = new Map<string, { pid: number; startedAt: number | null }>();
+    observed.set(`${rootPid}`, { pid: rootPid, startedAt: rows.find((r) => r.pid === rootPid)?.startedAt ?? null });
+    for (const r of rows) observed.set(`${r.pid}`, { pid: r.pid, startedAt: r.startedAt });
+    for (const [key, o] of observed) {
+      void key;
+      const existing = select.get(turnId, o.pid, o.startedAt) as { id: number; exit_confirmed_at: number | null } | undefined;
+      if (existing == null) {
+        insert.run(turnId, o.pid, o.startedAt, now, now, o.pid === rootPid ? 1 : 0);
+      } else if (existing.exit_confirmed_at != null) {
+        reopen.run(now, existing.id); // 防御：先前确认有误，重开追踪
+      } else {
+        touch.run(now, existing.id);
+      }
+    }
   });
   tx();
 }
 
-export interface ProcessTreeSnapshot {
-  rootPid: number;
-  observedAt: number;
-  rows: ProcessTableRow[];
+export function getProcessTreeIdentities(db: RegistryDb, turnId: string): ProcessTreeIdentityRow[] {
+  return db.prepare('SELECT * FROM process_tree_identities WHERE turn_id = ? ORDER BY id').all(turnId) as ProcessTreeIdentityRow[];
 }
 
-export function getProcessTreeSnapshot(db: RegistryDb, turnId: string): ProcessTreeSnapshot | null {
+/** 兼容导出（第八轮快照表读取——已停写，probe 历史核对改走 identities 表）。 */
+export function getProcessTreeSnapshot(db: RegistryDb, turnId: string): { rootPid: number; observedAt: number; rows: ProcessTableRow[] } | null {
   const rows = db.prepare(
     'SELECT root_pid, pid, ppid, started_at_ms, observed_at FROM process_tree_snapshots WHERE turn_id = ? ORDER BY pid',
   ).all(turnId) as Array<{ root_pid: number; pid: number; ppid: number; started_at_ms: number | null; observed_at: number }>;
@@ -187,13 +224,48 @@ export function probeTurnExit(
     });
   }
   if (r.state === 'exited') {
-    // 全树归属分析（第八轮）：登记根 PID 退出**不证明**执行载体全部结束。退出事实
-    // =现存树 BFS 无存活后代 **且** 快照历史代际核对无遗留（中间代际已退出时其历史
-    // 父子边随进程消失——现存图不连通，靠活跃期快照锚定孙进程归属）。
-    // 无快照=中间代际遗留不可排除=unknown（未完整确认，保护保留）。
-    const snapshot = getProcessTreeSnapshot(db, turnId);
+    // 第九轮收紧：**周期快照不构成「全部受管执行已结束」的完整证明**——最后快照之后
+    // 派生且父链已断的深层链不可排除，扫描为空≠完整退出。对 per-turn/shared 一律不返回
+    // exited（该结果自本轮起不再产生；枚举值保留仅为兼容历史行）；观察事实进 detail。
+    // 核对分两层（都只产生观察，不产生释放依据）：
+    // ① 历史身份全集（014 追加式登记）：未确认身份逐代次核对存活/复用——发现存活=明确
+    //    执行载体遗留；已退出=写回确认（不丢身份）；
+    // ② 现存树扫描（BFS/历史挂靠）：抓快照间隔内派生且父链现存的进程（观察增强）。
+    const identities = getProcessTreeIdentities(db, turnId);
+    const confirm = db.prepare('UPDATE process_tree_identities SET exit_confirmed_at = ? WHERE id = ? AND exit_confirmed_at IS NULL');
+    const unconfirmed = identities.filter((row) => row.exit_confirmed_at == null);
+    let queryFailed: string | null = null;
+    for (const idRow of unconfirmed) {
+      if (idRow.pid === reg.pid && reg.started_at_ms != null && idRow.started_at_ms == null) continue; // 根身份以登记值为准（同 pid 行）
+      const li = queryFn(idRow.pid);
+      if (li.state === 'exited') {
+        confirm.run(now, idRow.id); // 该代次已退出：确认并保留（不删——后续仍可查证）
+        continue;
+      }
+      if (li.state === 'unknown') {
+        queryFailed = `PID ${idRow.pid} 查询不可确认（${li.error.slice(0, 60)}）`;
+        continue;
+      }
+      // alive：与登记代次做复用核对——同代次存活=执行载体仍在。
+      const reuse = sameProcessIdentity({ pid: idRow.pid, startedAt: idRow.started_at_ms }, li.identity);
+      if (reuse === 'same') {
+        return write({
+          turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+          result: 'unknown', startedAtMs: null, reuseCheck: null,
+          detail: `登记根进程已退出，但历史身份核对发现仍在运行的执行载体（PID ${idRow.pid}${idRow.is_root === 1 ? '（登记根代次）' : ''}）——保护保留`,
+        });
+      }
+      if (reuse === 'unknown') {
+        return write({
+          turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+          result: 'unknown', startedAtMs: null, reuseCheck: null,
+          detail: `历史身份 PID ${idRow.pid} 现仍存活但登记代次缺启动时间（无法与复用区分）——保守按执行载体可能仍在处理，保护保留`,
+        });
+      }
+      confirm.run(now, idRow.id); // different：该代次已退出（现存者为复用进程，不属本 turn）
+    }
     const historical = new Map<number, { pid: number; startedAt: number | null }>();
-    if (snapshot != null) for (const row of snapshot.rows) historical.set(row.pid, row);
+    for (const row of identities) historical.set(row.pid, { pid: row.pid, startedAt: row.started_at_ms });
     historical.set(reg.pid, { pid: reg.pid, startedAt: reg.started_at_ms });
     const scan = (options.treeScan ?? ((rootPid: number, hist: Array<{ pid: number; startedAt: number | null }>) => analyzeProcessTree(rootPid, hist)))(
       reg.pid,
@@ -205,30 +277,24 @@ export function probeTurnExit(
         turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
         result: 'unknown', startedAtMs: null, reuseCheck: null,
         detail: scan.via === 'historical-attachment'
-          ? `登记进程已退出，但活跃期快照的历史归属核对发现存活后代（PID ${pids}——中间代际已退出、现存父子图不连通）：执行载体未全部结束，保护保留`
-          : `登记进程已退出，但其子/派生进程仍在运行（PID ${pids}）——父退出不证明执行结束，保护保留`,
+          ? `登记根已退出，但历史归属核对发现存活后代（PID ${pids}——中间代际已退出、现存父子图不连通）：执行载体未全部结束，保护保留`
+          : `登记根已退出，但其子/派生进程仍在运行（PID ${pids}）——父退出不证明执行结束，保护保留`,
       });
     }
     if (scan.state === 'unsupported' || scan.state === 'failed') {
       return write({
         turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
         result: 'unknown', startedAtMs: null, reuseCheck: null,
-        detail: `登记进程已退出（OS 确认），但进程树${scan.state === 'unsupported' ? '枚举平台不支持' : `枚举查询失败（${scan.error.slice(0, 80)}）`}——未完整确认执行结束，保护保留`,
+        detail: `登记根已退出（OS 确认），但进程树${scan.state === 'unsupported' ? '枚举平台不支持' : `枚举查询失败（${scan.error.slice(0, 80)}）`}——未完整确认执行结束，保护保留`,
       });
     }
-    if (snapshot == null) {
-      return write({
-        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
-        result: 'unknown', startedAtMs: null, reuseCheck: null,
-        detail: '登记 PID 已退出且现存树无存活后代，但该 turn 无活跃期进程树快照——中间代际已退出的遗留（孙进程）不可排除：未完整确认，保护保留',
-      });
-    }
+    // 全部历史身份已确认退出+现存树无存活——**仍只是「未观察到存活后代」**：周期快照
+    // 机制无法排除最后快照之后派生且父链已断的执行载体。关闭该自动释放路径（用户令
+    // 第九轮一）；无子进程模型的程序事实（no-os-process）不受影响。
     return write({
       turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
-      result: 'exited', startedAtMs: null, reuseCheck: null,
-      detail: reg.process_model === 'per-turn'
-        ? `登记 PID 已退出；全树归属核对无存活后代（含活跃期快照 ${snapshot.rows.length} 个历史身份）——该 turn 专属进程树已完整退出`
-        : `登记 PID 已退出；全树归属核对无存活后代（含活跃期快照 ${snapshot.rows.length} 个历史身份）——共享进程树已完整退出（证据按 shared 标注）`,
+      result: 'unknown', startedAtMs: null, reuseCheck: null,
+      detail: `未观察到存活后代（登记根与 ${identities.length} 个历史身份均已确认退出、现存树为空）——但周期快照机制无法证明「最后快照之后无派生且父链已断」的执行载体不存在：未完整确认，保护保留（该 runtime 的服务端解除路径已关闭；无子进程模型的程序事实不受影响）${queryFailed != null ? `；另有 ${queryFailed}` : ''}`,
     });
   }
   // alive：与登记时历史身份做复用检测——different=PID 已被复用（不是原进程，不能当「仍存活」）。

@@ -23,7 +23,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
-import { registerTurnProcess, saveProcessTreeSnapshot, getTurnProcessRegistration, getProcessTreeSnapshot } from '../../src/daemon/processRegistry.ts';
+import { registerTurnProcess, recordProcessTreeObservation, getTurnProcessRegistration, getProcessTreeIdentities } from '../../src/daemon/processRegistry.ts';
 import { analyzeProcessTree, checkProcessLiveness, collectTreeRows, snapshotProcessTable, listLiveChildProcesses } from '../../src/daemon/processCheck.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
@@ -48,6 +48,15 @@ setInterval(()=>{},1000);`;
 writeFileSync(join(tmpRoot, 'gen3-parent.js'), GEN3_PARENT);
 writeFileSync(join(tmpRoot, 'gen3-child.js'), GEN3_CHILD);
 writeFileSync(join(tmpRoot, 'gen3-grandson.js'), GEN3_GRANDSON);
+
+// 盲区现场脚本：父启动即 spawn 子（detached）后 200ms 退出；子立即 spawn 孙（detached
+// 长活）后 150ms 退出——父/子/孙全部在观察②之前完成派生与中间代际退出（孙=盲区进程）。
+writeFileSync(join(tmpRoot, 'blind-parent.js'), `const{spawn}=require("child_process");
+const c=spawn(process.execPath,[${JSON.stringify(join(tmpRoot, 'blind-child.js'))}],{stdio:"ignore",detached:true});c.unref();
+setTimeout(()=>{},200);`);
+writeFileSync(join(tmpRoot, 'blind-child.js'), `const{spawn}=require("child_process");
+const g=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",detached:true});g.unref();
+setTimeout(()=>{},150);`);
 
 // 快照后派生现场：父直接派生两个孙——孙A 立即、孙B 延迟 1.6s（快照在两者之间拍）。
 writeFileSync(join(tmpRoot, 'late-parent.js'), [
@@ -101,17 +110,17 @@ function depsOf(db: ZhongshuoDatabase, overrides: Partial<DaemonCommandDeps> = {
   };
 }
 
-/** 模拟 worker 生产行为：活跃期拍进程树快照（同一生产函数链：全表快照→收集→落库）。 */
+/** 模拟 worker 生产行为：活跃期进程树观察（生产函数链：全表快照→收集→追加式身份登记）。 */
 function takeSnapshot(db: ZhongshuoDatabase, turnId: string, rootPid: number): void {
   const table = snapshotProcessTable();
-  if (table.state !== 'ok') throw new Error(`快照失败（测试前置）：${table.error}`);
-  saveProcessTreeSnapshot(db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
+  if (table.state !== 'ok') throw new Error(`观察失败（测试前置）：${table.error}`);
+  recordProcessTreeObservation(db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
 }
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃期快照登记）', () => {
-  it('三代现场：父子先退、孙继续运行 → probe/reconcile/releaseProtection 全部拒绝；孙结束后才 exited 并允许解除', async () => {
+  it('三代现场：父子先退、孙继续运行 → probe/reconcile/releaseProtection 全部拒绝；孙结束后也仅「未观察到存活后代」（周期快照≠完整退出，解除路径关闭）', async () => {
     const db = openDatabase(':memory:');
     seed(db);
     const { turnId, runId } = makeTurn(db);
@@ -133,7 +142,7 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 父退出不构成执行结束证据：现存树从死根只能抓到已退出的子——孙靠快照历史归属核对发现。
     const p1 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     expect(p1.result).toBe('unknown');
-    expect(p1.detail).toContain('历史归属核对');
+    expect(p1.detail).toContain('历史身份核对');
     // 对账 executed：退出未知 → 结算但保护保留。
     const rec = await cmd<{ turnFinalStatus: string; protectionRetained: boolean }>('recovery.reconcile', {
       turnId, verdict: 'executed', note: '三代现场：孙进程仍在运行',
@@ -143,15 +152,79 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 解除保护：拒绝（执行载体未全部结束）。
     await expect(cmd('recovery.releaseProtection', { turnId, note: '孙仍在运行，应拒绝' }))
       .rejects.toThrow('保护保留');
-    // 孙结束 → probe=exited（含快照 N 个历史身份的全树核对）→ 允许解除。
+    // 孙结束 → **仍不释放**（第九轮：周期快照不构成完整退出证明——「未观察到存活后代」
+    // ≠「已确认全部受管执行结束」；probe 报告观察事实但保持 unknown，解除路径关闭）。
     const grandsonPid = Number(readFileSync(join(tmpRoot, 'grandson.pid'), 'utf8'));
     try { process.kill(grandsonPid); } catch { /* 已退出 */ }
     await wait(1_200);
     const p2 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
-    expect(p2.result).toBe('exited');
-    expect(p2.detail).toContain('全树归属核对无存活后代');
-    const rel = await cmd<{ stateChanged: boolean; releasedLeases: string[] }>('recovery.releaseProtection', { turnId, note: '三代全部结束，服务端取证确认' });
-    expect(rel.stateChanged).toBe(true);
+    expect(p2.result).toBe('unknown');
+    expect(p2.detail).toContain('未观察到存活后代');
+    expect(p2.detail).toContain('未完整确认');
+    // 历史身份全集已确认退出（含孙——追加式登记不丢身份）。
+    const identities = getProcessTreeIdentities(db, turnId);
+    expect(identities.length).toBeGreaterThanOrEqual(3); // 父+子+孙
+    expect(identities.every((row) => row.exit_confirmed_at != null)).toBe(true);
+    await expect(cmd('recovery.releaseProtection', { turnId, note: '全部结束后尝试解除' }))
+      .rejects.toThrow('保护保留');
+    db.close();
+  }, 90_000);
+
+  it('历史身份不被后续快照覆盖（第一拍父→子→孙；父子退出后再观察只见占位；probe 仍发现孙——旧 DELETE+INSERT 会丢）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const { turnId, runId } = makeTurn(db);
+    const { cmd } = depsOf(db);
+    const parent = spawn(process.execPath, [join(tmpRoot, 'gen3-parent.js')], { stdio: 'ignore' });
+    const parentPid = parent.pid!;
+    await wait(900);
+    const liveness = checkProcessLiveness(parentPid);
+    if (liveness.state !== 'alive') throw new Error('前置失败');
+    registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: parentPid, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
+    takeSnapshot(db, turnId, parentPid); // 第一拍：三代全在（父+子+孙均登记身份）
+    await wait(1_600); // 父（1.5s）与子（~1.55s）退出，孙继续运行
+    // 后续周期观察（worker 生产行为）：根已退出 → BFS 只见占位行（孙在现存图不可达）。
+    takeSnapshot(db, turnId, parentPid);
+    const grandsonPid = Number(readFileSync(join(tmpRoot, 'grandson.pid'), 'utf8'));
+    // 追加式登记：孙身份保留自第一拍（不因后续观察缺席而丢失）。
+    const ids = getProcessTreeIdentities(db, turnId);
+    expect(ids.some((row) => row.pid === grandsonPid)).toBe(true);
+    const p = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
+    expect(p.result).toBe('unknown'); // 孙仍活——历史身份核对发现（保护保留）
+    expect(p.detail).toContain('仍在运行');
+    try { process.kill(grandsonPid); } catch { /* 已退出 */ }
+    db.close();
+  }, 90_000);
+
+  it('盲区如实（两次观察之间完成派生与中间父退出）：系统返回未完整确认，不凭空声称能发现', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const { turnId, runId } = makeTurn(db);
+    const { cmd } = depsOf(db);
+    // 现场：父存活期间观察①（只见父）；随后父 spawn 子、子 spawn 孙（观察②之前）且
+    // 父与子都在观察②之前退出——孙从未被任何观察登记（盲区进程）。
+    const parent = spawn(process.execPath, [join(tmpRoot, 'blind-parent.js')], { stdio: 'ignore' });
+    const parentPid = parent.pid!;
+    await wait(100); // 观察①窗口：父活着、子尚未派生（子 spawn 前拍）
+    const liveness = checkProcessLiveness(parentPid);
+    if (liveness.state !== 'alive') throw new Error('前置失败');
+    registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: parentPid, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
+    takeSnapshot(db, turnId, parentPid); // 观察①：只见父
+    await wait(1_500); // 父（200ms 后退）与子（父退前 spawn，150ms 后退）均已退出；孙（盲区）继续运行
+    takeSnapshot(db, turnId, parentPid); // 观察②：根死 → 占位（孙不可见）
+    const p = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
+    // 盲区进程不可发现——系统**不得**凭空声称能发现，也不得把「未观察到」冒充完整退出：
+    // 返回未完整确认（周期快照机制边界如实说明），保护保留。
+    expect(p.result).toBe('unknown');
+    expect(p.detail).toContain('未完整确认');
+    expect(p.detail).toContain('周期快照机制');
+    const recBlind = await cmd<{ turnFinalStatus: string; protectionRetained: boolean }>('recovery.reconcile', { turnId, verdict: 'executed', note: '盲区场景：观察完成但无法排除遗漏' });
+    expect(recBlind.protectionRetained).toBe(true);
+    await expect(cmd('recovery.releaseProtection', { turnId, note: '盲区场景尝试解除' }))
+      .rejects.toThrow('保护保留');
+    // 清理盲区孙：从观察①文件之外不可知——按 detached 孤儿扫尾（进程树枚举）。
+    const scan = listLiveChildProcesses(parentPid);
+    if (scan.state === 'live') for (const c of scan.children) { try { process.kill(c.pid); } catch { /* 已退出 */ } }
     db.close();
   }, 90_000);
 
@@ -204,9 +277,8 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     if (scan.state === 'live') for (const c of scan.children) { try { process.kill(c.pid); } catch { /* 已退出 */ } }
     await wait(900);
     const p3 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
-    console.log('[dbg-shared] p3 =', JSON.stringify(p3));
-    expect(p3.result).toBe('exited'); // 共享进程树完整退出（证据按 shared 标注）
-    expect(p3.detail).toContain('shared');
+    expect(p3.result).toBe('unknown'); // 第九轮：未观察到存活后代≠完整退出（解除路径关闭）
+    expect(p3.detail).toContain('未完整确认');
     db.close();
   }, 60_000);
 
@@ -220,7 +292,7 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     });
     const p = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     expect(p.result).toBe('unknown');
-    expect(p.detail).toContain('无活跃期进程树快照');
+    expect(p.detail).toContain('0 个历史身份'); // 无任何活跃期观察记录（如实）
     expect(p.detail).toContain('未完整确认');
     db.close();
   }, 30_000);
@@ -310,9 +382,8 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     expect((db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string }).status).toBe('UNKNOWN');
     const reg = getTurnProcessRegistration(db, turnId);
     expect(reg?.pid).toBe(fakeCli.pid!);
-    const snap = getProcessTreeSnapshot(db, turnId);
-    expect(snap).not.toBeNull();
-    expect(snap!.rows.some((r) => r.pid === fakeCli.pid)).toBe(true); // 根在快照内
+    const treeIds = getProcessTreeIdentities(db, turnId);
+    expect(treeIds.some((r) => r.pid === fakeCli.pid)).toBe(true); // 根身份已登记（追加式）
     const { cmd } = depsOf(db);
     // ① CLI 进程仍活（UNKNOWN 后运行载体还在）：alive——保护保留。
     const probe1 = await cmd<{ result: string }>('recovery.probeProcess', { turnId });
@@ -328,8 +399,8 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     if (scan.state === 'live') for (const c of scan.children) { try { process.kill(c.pid); } catch { /* 已退出 */ } }
     await wait(1_000);
     const probe2 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
-    expect(probe2.result).toBe('exited');
-    expect(probe2.detail).toContain('全树归属核对无存活后代');
+    expect(probe2.result).toBe('unknown'); // 第九轮：扫描为空≠完整退出（保护保留，路径关闭）
+    expect(probe2.detail).toContain('未完整确认');
     db.close();
   }, 60_000);
 });

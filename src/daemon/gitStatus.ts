@@ -87,3 +87,96 @@ export function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): GitRepoSt
   }
   return { ok: true, branch, staged, unstaged, untracked, truncated };
 }
+
+export interface GitDiffPatch {
+  path: string;
+  oldPath?: string;
+  /** 变更类型（git 名义：added/modified/deleted/renamed）。 */
+  change: 'added' | 'modified' | 'deleted' | 'renamed';
+  binary: boolean;
+  /** 输出超过上限（截断，完整差异走 git 客户端）。 */
+  truncated: boolean;
+  /** unified diff 正文（截断时含截断标记；二进制为空）。 */
+  text: string;
+}
+
+export type GitDiffResult =
+  | { ok: true; patches: GitDiffPatch[]; truncatedOverall: boolean }
+  | { ok: false; code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED' | 'PATH_OUT_OF_REPO'; message: string };
+
+const MAX_DIFF_BYTES = 64 * 1024;
+
+/**
+ * Git diff 正文（DEV-14/RT-24，第九轮）：区分暂存/未暂存（staged 开关）；重命名/删除标注；
+ * 二进制（numstat 为 '-'）与超限截断如实。路径校验：相对路径、不得含 ..（拒绝越界——
+ * 不依赖 git 的宽容）。只读：git diff 不改索引与工作区；未跟踪文件无 diff（走 status）。
+ */
+export function gitDiff(root: string, options: { staged?: boolean; path?: string } = {}): GitDiffResult {
+  try {
+    git(root, ['rev-parse', '--is-inside-work-tree']);
+  } catch (error) {
+    return { ok: false, code: 'NOT_A_GIT_REPO', message: `目录不是 git 仓库（${root}）：${error instanceof Error ? error.message.slice(0, 120) : String(error)}` };
+  }
+  let filterPath: string | undefined;
+  if (options.path != null) {
+    if (options.path.includes('\\') || /^[a-zA-Z]:/.test(options.path) || options.path.startsWith('/')) {
+      return { ok: false, code: 'PATH_OUT_OF_REPO', message: '只接受仓库内相对路径（拒绝绝对路径）' };
+    }
+    if (options.path.split('/').some((sg) => sg === '..')) {
+      return { ok: false, code: 'PATH_OUT_OF_REPO', message: '路径含 ..（拒绝仓库外越界）' };
+    }
+    filterPath = options.path;
+  }
+  const args = ['diff', '--no-color'];
+  if (options.staged === true) args.push('--cached');
+  if (filterPath != null) args.push('--', filterPath);
+  let raw: string;
+  try {
+    raw = git(root, args);
+  } catch (error) {
+    return { ok: false, code: 'GIT_COMMAND_FAILED', message: `git diff 失败：${error instanceof Error ? error.message.slice(0, 160) : String(error)}` };
+  }
+  // 二进制判定：numstat 的 add/del 为 '-'。
+  const binaries = new Set<string>();
+  try {
+    const numstatArgs = ['diff', '--numstat'];
+    if (options.staged === true) numstatArgs.push('--cached');
+    if (filterPath != null) numstatArgs.push('--', filterPath);
+    for (const line of git(root, numstatArgs).split('\n')) {
+      const m = line.trim().match(/^- - (.+)$/);
+      if (m != null) binaries.add(m[1]!.split('\t').pop()!.trim());
+    }
+  } catch { /* numstat 失败不阻断：按文本处理 */ }
+  const patches: GitDiffPatch[] = [];
+  let truncatedOverall = false;
+  const blocks = raw.split('\ndiff --git ').filter((b) => b.trim() !== '');
+  for (const block of blocks) {
+    const text0 = block.startsWith('diff --git ') ? block : `diff --git ${block}`;
+    const headerMatch = text0.match(/^diff --git a\/(.+) b\/(.+)$/m);
+    const aPath = headerMatch?.[1]?.trim() ?? '';
+    const bPath = headerMatch?.[2]?.trim() ?? '';
+    let change: GitDiffPatch['change'] = 'modified';
+    if (/^new file mode/m.test(text0)) change = 'added';
+    else if (/^deleted file mode/m.test(text0)) change = 'deleted';
+    else if (/^similarity index/m.test(text0)) change = 'renamed';
+    const displayPath = change === 'deleted' ? aPath : bPath;
+    const isBinary = binaries.has(displayPath) || /^Binary files .* differ$/m.test(text0);
+    let text = text0;
+    let truncated = false;
+    if (text.length > MAX_DIFF_BYTES) {
+      text = `${text.slice(0, MAX_DIFF_BYTES)}\n…（差异超限已截断：完整差异请用 git 客户端查看）`;
+      truncated = true;
+      truncatedOverall = true;
+    }
+    patches.push({
+      path: displayPath,
+      ...(change === 'renamed' && aPath !== bPath ? { oldPath: aPath } : {}),
+      change,
+      binary: isBinary,
+      truncated,
+      text: isBinary ? '' : text,
+    });
+  }
+  return { ok: true, patches, truncatedOverall };
+}
+

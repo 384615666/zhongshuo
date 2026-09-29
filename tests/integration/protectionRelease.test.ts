@@ -17,7 +17,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
-import { registerTurnProcess, saveProcessTreeSnapshot } from '../../src/daemon/processRegistry.ts';
+import { registerTurnProcess, recordProcessTreeObservation } from '../../src/daemon/processRegistry.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from '../../src/daemon/processCheck.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-prot-rel-'));
@@ -99,9 +99,9 @@ describe('保护收口：人工声明后按服务端证据解除（正式命令�
     expect(liveness.state).toBe('alive'); // 前置：真实子进程
     if (liveness.state === 'alive') {
       registerTurnProcess(h.db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: child.pid!, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
-      // 第八轮：worker 生产行为——startTurn 后首拍进程树快照（exited 判定须含历史代际核对）。
+      // 第九轮：worker 生产行为——startTurn 后进程树观察（追加式身份登记）。
       const table = snapshotProcessTable();
-      if (table.state === 'ok') saveProcessTreeSnapshot(h.db, turnId, child.pid!, collectTreeRows(table.rows, child.pid!));
+      if (table.state === 'ok') recordProcessTreeObservation(h.db, turnId, child.pid!, collectTreeRows(table.rows, child.pid!));
     }
     // ① 人工声明未启动：退款+FAILED，租约/准入保留。
     const r1 = await h.cmd<{ reason: string; releasedLeases: string[] }>('recovery.reconcile', { turnId, verdict: 'notStarted', manualRiskAck: true, note: '用户人工核对：无相关进程' });
@@ -113,29 +113,36 @@ describe('保护收口：人工声明后按服务端证据解除（正式命令�
     // ③ 顺序反例：另一未处置 UNKNOWN 直接解除 → 拒绝（先 reconcile）。
     const t2 = makeUnknownTurn(h.db);
     await expect(h.cmd('recovery.releaseProtection', { turnId: t2.turnId, note: '顺序错误' })).rejects.toThrow(/顺序错误/);
-    // ④ 服务端确认退出（真实子进程结束）→ probeProcess → 引用 probeId 正式解除。
+    // ④ 真实子进程结束后：周期快照机制不构成完整退出证明——probe 报告观察事实但保持
+    // unknown（第九轮：per-turn 的服务端解除路径已关闭），releaseProtection 拒绝且保护保留。
     child.kill();
-    await new Promise((r) => setTimeout(r, 800));
-    const probe = await h.cmd<{ probeId: string; result: string }>('recovery.probeProcess', { turnId });
-    expect(probe.result).toBe('exited');
+    await new Promise((r) => setTimeout(r, 900));
+    const probe = await h.cmd<{ probeId: string; result: string; detail: string }>('recovery.probeProcess', { turnId });
+    expect(probe.result).toBe('unknown');
+    expect(probe.detail).toContain('未完整确认');
     const budgetBefore = (h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string }).budget_json;
-    const r4 = await h.cmd<{ stateChanged: boolean; releasedLeases: string[]; probeResult: string }>('recovery.releaseProtection', { turnId, note: '服务端已确认退出，解除遗留保护', probeId: probe.probeId });
-    expect(r4.stateChanged).toBe(true);
-    expect(r4.releasedLeases).toEqual([leaseDomain]);
-    expect(r4.probeResult).toBe('exited');
-    expect(h.db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = ?`).get(leaseDomain) as { status: string }).toMatchObject({ status: 'released' });
+    // per-turn 解除路径已关闭：正式解除被拒（即使真实子进程已全部结束——观察≠完整证明）。
+    await expect(h.cmd('recovery.releaseProtection', { turnId, note: '尝试解除（子进程已全部结束）', probeId: probe.probeId }))
+      .rejects.toThrow('保护保留');
+    expect(h.db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = ?`).get(leaseDomain) as { status: string }).toMatchObject({ status: 'active' });
     // 预算处置与原声明不被改写：budget_json 不动、budget_mark 仍 refunded、manual-claim 事件保留。
     expect((h.db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string }).budget_json).toBe(budgetBefore);
     expect((h.db.prepare('SELECT budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { budget_mark: string }).budget_mark).toBe('refunded');
     const evt = h.db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'recovery.reconciled' AND turn_id = ?`).get(turnId) as { payload_json: string };
     expect(JSON.parse(evt.payload_json).recordedAs).toBe('manual-claim'); // 原声明保留
-    const relEvt = h.db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'recovery.protectionReleased' AND turn_id = ?`).get(turnId) as { payload_json: string };
-    expect(JSON.parse(relEvt.payload_json).released).toBe(true);
-    // 同 daemon 联动：解除后准入占位释放。
+    // 拒绝路径不触发准入联动。
+    expect(h.releasedTurns).toEqual([]);
+    // ⑤ 仍开放的服务端解除=程序事实（none 模型 no-os-process）：对同 turn 改按 none 程序
+    // 事实取证后可解除（登记为 none=无 OS 遗留进程可能——不依赖进程树观察）。
+    registerTurnProcess(h.db, { turnId, runId, memberId: 'mA', adapterKind: 'fake', processModel: 'none', pid: null, startedAtMs: null, identitySource: 'none' });
+    const r5 = await h.cmd<{ stateChanged: boolean; releasedLeases: string[]; probeResult: string }>('recovery.releaseProtection', { turnId, note: '无子进程模型程序事实解除' });
+    expect(r5.stateChanged).toBe(true);
+    expect(r5.releasedLeases).toEqual([leaseDomain]);
+    expect(r5.probeResult).toBe('no-os-process');
     expect(h.releasedTurns).toEqual([turnId]);
-    // ⑤ 重复提交：无未释放租约 → 幂等 no-op。
-    const r5 = await h.cmd<{ stateChanged: boolean }>('recovery.releaseProtection', { turnId, note: '重复提交' });
-    expect(r5.stateChanged).toBe(false);
+    // 幂等：无未释放租约 → no-op。
+    const r6 = await h.cmd<{ stateChanged: boolean }>('recovery.releaseProtection', { turnId, note: '重复提交' });
+    expect(r6.stateChanged).toBe(false);
     h.db.close();
   }, 45_000);
 

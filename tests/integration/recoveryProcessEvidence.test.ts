@@ -22,7 +22,7 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
-import { registerTurnProcess, saveProcessTreeSnapshot } from '../../src/daemon/processRegistry.ts';
+import { registerTurnProcess, recordProcessTreeObservation } from '../../src/daemon/processRegistry.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from '../../src/daemon/processCheck.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-probe7-'));
@@ -91,10 +91,10 @@ function makeHarness(overrides: Partial<DaemonCommandDeps> = {}): Harness {
   };
 }
 
-/** 模拟 worker 生产行为：startTurn 后首拍进程树快照（生产函数链）。 */
+/** 模拟 worker 生产行为：startTurn 后进程树观察（追加式身份登记，生产函数链）。 */
 function takeSnapshot(db: ZhongshuoDatabase, turnId: string, rootPid: number): void {
   const table = snapshotProcessTable();
-  if (table.state === 'ok') saveProcessTreeSnapshot(db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
+  if (table.state === 'ok') recordProcessTreeObservation(db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
 }
 
 function spawnAliveChild(): ChildProcess {
@@ -142,17 +142,19 @@ describe('DEV-13 第七轮：服务端退出取证与恢复对账（正式命令
       takeSnapshot(h.db, turnId, child.pid!); // 第八轮：worker 生产行为——startTurn 后首拍进程树快照
     }
     child.kill();
-    await new Promise((r) => setTimeout(r, 800));
-    const probe = await h.cmd<{ result: string }>('recovery.probeProcess', { turnId });
-    expect(probe.result).toBe('exited');
+    await new Promise((r) => setTimeout(r, 900));
+    const probe = await h.cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
+    // 第九轮：周期快照不构成完整退出证明——「未观察到存活后代」仍=unknown（路径关闭）。
+    expect(probe.result).toBe('unknown');
+    expect(probe.detail).toContain('未完整确认');
     // probe 只读：状态未变。
     expect((h.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string }).status).toBe('UNKNOWN');
-    const r = await h.cmd<{ turnFinalStatus: string; releasedLeases: string[]; reason: string }>('recovery.reconcile', { turnId, verdict: 'executed', note: 'OS 取证已确认退出（测试注入）' });
-    expect(r.turnFinalStatus).toBe('FAILED');
-    expect(r.releasedLeases).toEqual([leaseDomain]);
-    expect(r.reason).toBe('executed-exited-per-turn');
-    expect(h.db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = ?`).get(leaseDomain) as { status: string }).toMatchObject({ status: 'released' });
-    expect(h.releasedTurns).toEqual([turnId]); // 同 daemon 准入解除
+    const r = await h.cmd<{ turnFinalStatus: string; releasedLeases: string[]; reason: string }>('recovery.reconcile', { turnId, verdict: 'executed', note: 'OS 观察完成（周期快照机制边界内）' });
+    expect(r.turnFinalStatus).toBe('UNKNOWN'); // 结算但保护保留（解除路径关闭）
+    expect(r.releasedLeases).toEqual([]);
+    expect(r.reason).toBe('executed-exit-unknown-protection-retained');
+    expect(h.db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = ?`).get(leaseDomain) as { status: string }).toMatchObject({ status: 'active' });
+    expect(h.releasedTurns).toEqual([]); // 不触发准入解除
     h.db.close();
   }, 30_000);
 

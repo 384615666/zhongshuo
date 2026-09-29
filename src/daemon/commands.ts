@@ -62,7 +62,6 @@ export interface DaemonCommandDeps {
     turnStatus?: string;
     reason?: string;
     applied?: Array<{ eventKey: string; outcome: string }>;
-    releasedLeases?: string[];
   }>;
 }
 
@@ -327,7 +326,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const task = deps.db.prepare('SELECT id, title, status, room_id, conversation_thread_id, room_task_number, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
         const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
-        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null } });
+        // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
+        const pendingDelivery = deps.db.prepare(`SELECT id, revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number } | undefined;
+        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null } });
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
@@ -646,22 +647,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               }
               if (turn.budget_mark == null) deps.db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turn.id);
               const p = probe!;
-              if (p.result === 'exited') {
-                // 退出事实=服务端 OS 证据确认退出：释放租约；成果事实=无已入库产物（不伪造成功，
-                // 也不臆断业务失败——FAILED 仅记录「执行过且无可入库成果」这一证据内事实）。
-                releasedLeases = releaseLeases();
-                deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
-                turnFinalStatus = 'FAILED'; reason = `executed-exited-${p.processModel}`;
-                emit({ verdict: 'executed', exitFact: 'exited', probe: { probeId: p.probeId, result: p.result, processModel: p.processModel, pid: p.pid, observedAt: p.observedAt, detail: p.detail }, releasedLeases, turnFinalStatus, reason });
-              } else if (p.result === 'no-os-process') {
+              if (p.result === 'no-os-process') {
                 // 无子进程模型（程序事实）：无 OS 遗留进程可能——释放保护。
                 releasedLeases = releaseLeases();
                 deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
                 turnFinalStatus = 'FAILED'; reason = 'executed-no-os-process';
                 emit({ verdict: 'executed', exitFact: 'no-os-process', probe: { probeId: p.probeId, result: p.result, detail: p.detail }, releasedLeases, turnFinalStatus, reason });
               } else {
-                // 仍存活/退出未知/身份缺失/复用：结算预算但**保留租约与准入占位**、turn 保持
-                // UNKNOWN——不提前放行（后续取得退出证据再对账；budget_mark 已防重复结算）。
+                // alive/未完整确认（第九轮收紧：**周期快照不构成完整退出证明**——per-turn/
+                // shared 的 exited 自动释放路径已关闭，probe 不再产生 exited）：结算预算但
+                // **保留租约与准入占位**、turn 保持 UNKNOWN——观察事实见 probe.detail；
+                // budget_mark 已防重复结算；解除待受管生命周期机制（Job Object/ETW 等另批）。
                 turnFinalStatus = 'UNKNOWN'; reason = `executed-exit-${p.result}-protection-retained`; protectionRetained = true;
                 emit({ verdict: 'executed', exitFact: p.result, protectionRetained: true, probe: { probeId: p.probeId, result: p.result, processModel: p.processModel, pid: p.pid, observedAt: p.observedAt, detail: p.detail }, reason });
               }
@@ -717,10 +713,15 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               payload: { ...payload, manualNote: params.note, probe: { probeId: probe.probeId, result: probe.result, processModel: probe.processModel, pid: probe.pid, observedAt: probe.observedAt, detail: probe.detail } },
             });
           };
-          if (probe.result !== 'exited' && probe.result !== 'no-os-process') {
-            // 进程仍活/无法确认：拒绝释放——保护保留（如实记录拒绝原因，不改任何状态）。
+          if (probe.result !== 'no-os-process') {
+            // 第九轮收紧：释放只凭**程序事实**（none 模型 no-os-process）。alive/未完整确认
+            // 拒绝；**exited 观察同样不释放**（周期快照不构成完整退出证明——含升级前 ≤10min
+            // 的历史 exited 取证记录，防御性拒绝并说明原因）。
+            const detail = probe.result === 'exited'
+              ? '该取证结果（exited）为升级前观察——周期快照机制不能证明全部受管执行已结束，自本轮起不再作为释放依据'
+              : `${probe.result}：${probe.detail}`;
             emit({ released: false, reason: `release-denied-${probe.result}`, protectionRetained: true });
-            throw new DaemonCommandError('STALE_REVISION', `服务端取证未确认执行已结束（${probe.result}：${probe.detail}）——保护保留，不得释放`);
+            throw new DaemonCommandError('STALE_REVISION', `服务端取证未确认执行已结束（${detail}）——保护保留，不得释放`);
           }
           const tx = deps.db.transaction(() => {
             for (const l of leases) {
@@ -905,13 +906,62 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         if (!r.ok) throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
         return withCommandId({ ok: true, data: r });
       }
+      case 'git.diff': {
+        // DEV-14/RT-24（第九轮）：diff 正文只读视图——暂存/未暂存区分、重命名/删除标注、
+        // 二进制与超限截断如实；路径校验（拒绝绝对路径/..越界）；不改索引与用户工作区。
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          staged: z.boolean().optional(),
+          path: z.string().min(1).max(400).optional(),
+        }).parse(env.params);
+        const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(params.projectId) as { canonical_path: string } | undefined;
+        if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        const { gitDiff } = await import('./gitStatus.ts');
+        const r = gitDiff(project.canonical_path, { staged: params.staged, path: params.path });
+        if (!r.ok) {
+          throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : r.code === 'PATH_OUT_OF_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
+        }
+        return withCommandId({ ok: true, data: r });
+      }
+      case 'app.settings.get': {
+        // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
+        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);
+        const values: Record<string, string | null> = {};
+        for (const key of params.keys) {
+          const row = deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(`app:setting:${key}`) as { value: string } | undefined;
+          values[key] = row?.value ?? null;
+        }
+        return withCommandId({ ok: true, data: { values } });
+      }
+      case 'app.settings.set': {
+        const params = z.strictObject({
+          key: z.enum(['repoStatus.visible']),
+          value: z.string().min(1).max(100),
+        }).parse(env.params);
+        const result = run(() => {
+          const allowed: Record<string, string[]> = { 'repoStatus.visible': ['true', 'false'] };
+          if (!allowed[params.key]!.includes(params.value)) {
+            throw new DaemonCommandError('VALIDATION_INVALID', `设置 ${params.key} 不接受值 ${params.value}（允许：${allowed[params.key]!.join('/')}）`);
+          }
+          deps.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')
+            .run(`app:setting:${params.key}`, params.value, Date.now());
+          return { key: params.key, value: params.value };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'task.review': {
         // RT-25 可选任务验收（第八轮）：按任务创建时的策略快照（review_policy=user_review
         // 才有 pending 交付）处理唯一待验收交付。accept→任务 DONE；changes_requested→任务
         // 回 ACTIVE（返工经 redispatch 正式链）。**Git 提交不等同验收**——本命令只写
         // review 账本与任务状态，不触碰 git/changeset。
+        // 第九轮（验收绑定具体交付版本，防错稿）：提交须带 UI 展示时的 deliveryId+revision；
+        // 事务内条件更新并核对影响行数——已被新版本替代/已处理/状态变化各返回明确冲突，
+        // 不自动套用到新交付。同 commandId 重放=网关幂等原回执；不同 commandId 对已处理
+        // 版本不再次生效（条件更新 0 行=冲突）。
         const params = z.strictObject({
           taskId: z.string().min(1),
+          deliveryId: z.string().min(1),
+          deliveryRevision: z.number().int().positive(),
           decision: z.enum(['accept', 'changes_requested']),
           note: z.string().min(1).max(500).optional(),
         }).parse(env.params);
@@ -922,10 +972,20 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             throw new DaemonCommandError('STALE_REVISION', `任务策略为 ${task.review_policy}（非 user_review）：无待验收交付——验收状态与创建时策略快照一致`);
           }
           const delivery = deps.db.prepare(
-            `SELECT id, revision, run_id FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`,
-          ).get(params.taskId) as { id: string; revision: number; run_id: string | null } | undefined;
+            'SELECT id, revision, run_id, review_status FROM task_deliveries WHERE task_id = ? AND id = ?',
+          ).get(params.taskId, params.deliveryId) as { id: string; revision: number; run_id: string | null; review_status: string } | undefined;
           if (delivery == null) {
-            throw new DaemonCommandError('STALE_REVISION', '该任务没有待验收交付（已处理或未交付）——幂等拒绝');
+            throw new DaemonCommandError('RESOURCE_NOT_FOUND', `交付不存在或不属于该任务：${params.deliveryId}（验收不跨任务套用）`);
+          }
+          if (delivery.revision !== params.deliveryRevision) {
+            throw new DaemonCommandError('STALE_REVISION', `交付版本不符：提交第 ${params.deliveryRevision} 版，记录为第 ${delivery.revision} 版——版本绑定校验失败`);
+          }
+          if (delivery.review_status === 'superseded') {
+            const current = deps.db.prepare(`SELECT revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { revision: number } | undefined;
+            throw new DaemonCommandError('STALE_REVISION', `第 ${delivery.revision} 版交付已被新交付替代（当前待验收为第 ${current?.revision ?? '?'} 版）——验收不自动套用到新交付`);
+          }
+          if (delivery.review_status !== 'pending') {
+            throw new DaemonCommandError('STALE_REVISION', `第 ${delivery.revision} 版交付已处理（${delivery.review_status}）——不同命令号不重复生效`);
           }
           if (task.status !== 'REVIEW') {
             throw new DaemonCommandError('STALE_REVISION', `任务状态 ${task.status} 非 REVIEW：验收不适用于当前状态`);
@@ -933,12 +993,19 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           const now = Date.now();
           const projectId = (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(task.id) as { project_id: string }).project_id;
           const nextStatus = params.decision === 'accept' ? 'accepted' : 'changes_requested';
+          const taskNext = params.decision === 'accept' ? 'DONE' : 'ACTIVE';
           const tx = deps.db.transaction(() => {
-            deps.db.prepare(
-              `UPDATE task_deliveries SET review_status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ?`,
-            ).run(nextStatus, deps.localUserId, now, params.note ?? null, delivery.id);
-            const taskNext = params.decision === 'accept' ? 'DONE' : 'ACTIVE';
-            deps.db.prepare(`UPDATE tasks SET status = ?, revision = revision + 1 WHERE id = ? AND status = 'REVIEW'`).run(taskNext, task.id);
+            const updated = deps.db.prepare(
+              `UPDATE task_deliveries SET review_status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
+               WHERE id = ? AND task_id = ? AND revision = ? AND review_status = 'pending'`,
+            ).run(nextStatus, deps.localUserId, now, params.note ?? null, delivery.id, params.taskId, delivery.revision);
+            if (updated.changes !== 1) {
+              throw new DaemonCommandError('STALE_REVISION', '条件更新未命中（交付状态在事务内已变化）——验收不生效，请刷新后重试');
+            }
+            const taskUpdated = deps.db.prepare(`UPDATE tasks SET status = ?, revision = revision + 1 WHERE id = ? AND status = 'REVIEW'`).run(taskNext, task.id);
+            if (taskUpdated.changes !== 1) {
+              throw new DaemonCommandError('STALE_REVISION', '任务状态在事务内已变化——验收不生效，请刷新后重试');
+            }
             appendDomainEvent(deps.db, {
               schemaVersion: 1, eventId: `evt_${randomUUID()}`,
               projectId, taskId: task.id, runId: delivery.run_id ?? undefined,
@@ -948,6 +1015,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                 reviewedBy: deps.localUserId, note: params.note ?? null,
                 taskStatusAfter: taskNext,
                 gitCommitIsNotReview: 'Git 提交不等同验收（RT-25）：本记录只承载人工验收事实',
+                reworkNote: params.decision === 'changes_requested'
+                  ? '返工反馈将注入后续派发输入（明确关联被退回的交付版本）'
+                  : null,
               },
             });
           });

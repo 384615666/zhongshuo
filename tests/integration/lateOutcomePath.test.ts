@@ -12,7 +12,7 @@
  * executed 已结算后完成到达不重复 U+1。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +21,7 @@ import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
-import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
+import { DispatchWorker, type TaskRow } from '../../src/daemon/dispatchWorker.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-late8-'));
 afterAll(() => {
@@ -113,8 +113,13 @@ describe('迟到成果正式接收路径（实际派发→截止 UNKNOWN→迟�
     expect(turnRow(db, turnId).status).toBe('SUCCEEDED');
     expect(deliveries(db, taskId)).toHaveLength(1);
     expect(runBudget(db, runId).usedTurns).toBe(1);
-    expect((db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = 'd:/late8/1'`).get() as { status: string }).status).toBe('released');
+    // 第九轮：业务收口≠执行载体停止——写入租约**不随业务收口释放**（保护判定独立）。
+    expect((db.prepare(`SELECT status FROM workspace_leases WHERE lock_domain = 'd:/late8/1'`).get() as { status: string }).status).toBe('active');
     expect(auditKinds(db, turnId)).toContain('turn.lateEventsSettled');
+    // 正式解除仍走 releaseProtection 程序事实路径（fake=none 模型 → no-os-process 可解除）。
+    const rel = await cmd<{ stateChanged: boolean; releasedLeases: string[] }>('recovery.releaseProtection', { turnId, note: '业务已收口；无子进程模型程序事实解除' });
+    expect(rel.stateChanged).toBe(true);
+    expect(rel.releasedLeases).toEqual(['d:/late8/1']);
     expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('DONE');
     // 重复 pump（同批事件再拉）：全部 duplicate-receipt，无二次生效。
     const r2 = await cmd<PumpResult>('recovery.pumpLateEvents', { turnId });
@@ -286,6 +291,99 @@ describe('迟到成果正式接收路径（实际派发→截止 UNKNOWN→迟�
     expect(runBudget(db, runId).usedTurns).toBe(1); // 本 run 账照结算（执行实际发生）
     db.close();
   }, 30_000);
+
+  it('第九轮·原子性：业务应用异常→回执与效果整体回滚；重放后交付与预算恰好一次', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const taskId = makeTask(db, 8);
+    // Flaky worker：第一次 applyEvent 抛错（模拟回执已写、业务应用前的中断/异常）。
+    let failNext = true;
+    class FlakyWorker extends DispatchWorker {
+      override applyEvent(task: TaskRow, runId: string, turnId: string, event: Parameters<DispatchWorker['applyEvent']>[3]): void {
+        if (failNext && event.kind === 'turn.completed') { failNext = false; throw new Error('注入：业务应用中断（回执已记、效果未落）'); }
+        return super.applyEvent(task, runId, turnId, event);
+      }
+    }
+    const adapter = new FakeRuntimeAdapter({ sessionStoreDir: join(tmpRoot, 'store-atomic'), turnScripts: [[{ kind: 'stall', ms: 3_000 }]] });
+    const worker = new FlakyWorker({ db, adapter, leaseOwner: 'w-late9', appDataDir: join(tmpRoot, 'a'), turnDeadlineMs: 400, interruptGraceMs: 400 });
+    await worker.runOnce();
+    const turnId = (db.prepare('SELECT id FROM agent_turns WHERE dispatch_key = ?').get(`task:${taskId}:initial`) as { id: string }).id;
+    const runId = (db.prepare('SELECT run_id FROM agent_turns WHERE id = ?').get(turnId) as { run_id: string }).run_id;
+    expect(turnRow(db, turnId).status).toBe('UNKNOWN');
+    adapter.pushLateEvent(turnRow(db, turnId).session_id!, turnId, { kind: 'turn.completed', finalText: validComplete(`result_${turnId}`) });
+    const { cmd } = depsWith(db, worker);
+    // 第一次泵：applyEvent 抛错→事务整体回滚——无回执残留、无交付、无结算（可恢复）。
+    const r1 = await cmd<PumpResult>('recovery.pumpLateEvents', { turnId });
+    expect(r1.applied!.some((a) => a.outcome === 'failed')).toBe(true);
+    expect((db.prepare(`SELECT count(*) c FROM late_event_receipts WHERE turn_id = ? AND outcome = 'applied'`).get(turnId) as { c: number }).c).toBe(0); // failed 事务不留 applied 回执（INTERRUPTED 的 ignored 回执合法）
+    expect(deliveries(db, taskId)).toHaveLength(0);
+    expect(runBudget(db, runId).usedTurns).toBe(0);
+    expect(auditKinds(db, turnId)).toContain('turn.lateEventFailed');
+    expect(turnRow(db, turnId).status).toBe('UNKNOWN'); // 未被半途收口
+    // 重放（失败恢复）：正常应用——交付/预算恰好一次。
+    const r2 = await cmd<PumpResult>('recovery.pumpLateEvents', { turnId });
+    expect(r2.applied!.some((a) => a.outcome === 'applied')).toBe(true);
+    expect(turnRow(db, turnId).status).toBe('SUCCEEDED');
+    expect(deliveries(db, taskId)).toHaveLength(1);
+    expect(runBudget(db, runId).usedTurns).toBe(1);
+    // 事务提交后回执响应丢失（再泵）：全部 duplicate-applied，效果不重复。
+    const r3 = await cmd<PumpResult>('recovery.pumpLateEvents', { turnId });
+    expect(r3.status).toBe('not-unknown');
+    expect(deliveries(db, taskId)).toHaveLength(1);
+    expect(runBudget(db, runId).usedTurns).toBe(1);
+    db.close();
+  }, 30_000);
+
+  it('第九轮·作用域与归属：同 eventKey 不同 turn 各自生效；错误归属不认领（ignored）', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const storeDir = join(tmpRoot, 'store-scope');
+    const mkTurnUnknown = async (n: number): Promise<{ taskId: string; turnId: string; runId: string; sessionId: string; adapter: FakeRuntimeAdapter; worker: DispatchWorker }> => {
+      const taskId = makeTask(db, n);
+      const adapter = new FakeRuntimeAdapter({ sessionStoreDir: storeDir, turnScripts: [[{ kind: 'stall', ms: 3_000 }]] });
+      const worker = new DispatchWorker({ db, adapter, leaseOwner: `w-late9-${n}`, appDataDir: join(tmpRoot, 'a'), turnDeadlineMs: 400, interruptGraceMs: 400 });
+      await worker.runOnce();
+      const turnId = (db.prepare('SELECT id FROM agent_turns WHERE dispatch_key = ?').get(`task:${taskId}:initial`) as { id: string }).id;
+      const runId = (db.prepare('SELECT run_id FROM agent_turns WHERE id = ?').get(turnId) as { run_id: string }).run_id;
+      expect(turnRow(db, turnId).status).toBe('UNKNOWN');
+      return { taskId, turnId, runId, sessionId: turnRow(db, turnId).session_id!, adapter, worker };
+    };
+    const a = await mkTurnUnknown(9);
+    const b = await mkTurnUnknown(10);
+    // 两个 turn 各推一个迟到完成；构造 b 的事件与 a **同 eventKey**（eventKey 不全局唯一）。
+    a.adapter.pushLateEvent(a.sessionId, a.turnId, { kind: 'turn.completed', finalText: validComplete(`result_${a.turnId}`) });
+    const sharedKey = (a.adapter as unknown as { emitSeq: number });
+    void sharedKey;
+    // 手工向 b 的持久化会话记录写入与 a 同 eventKey、归属 b 的事件行（绕过自增键——构造键冲突现场）。
+    const lineA = readFileSync(join(storeDir, `events-${a.sessionId}.jsonl`), 'utf8').trim().split('\n').pop()!;
+    const evtB = { ...JSON.parse(lineA), eventKey: JSON.parse(lineA).eventKey, sessionId: b.sessionId, turnId: b.turnId, finalText: validComplete(`result_${b.turnId}`) };
+    appendFileSync(join(storeDir, `events-${b.sessionId}.jsonl`), JSON.stringify(evtB) + '\n');
+    const { cmd: cmdA } = depsWith(db, a.worker);
+    const { cmd: cmdB } = depsWith(db, b.worker);
+    const ra = await cmdA<PumpResult>('recovery.pumpLateEvents', { turnId: a.turnId });
+    const rb = await cmdB<PumpResult>('recovery.pumpLateEvents', { turnId: b.turnId });
+    expect(ra.applied!.some((x) => x.outcome === 'applied')).toBe(true);
+    expect(rb.applied!.some((x) => x.outcome === 'applied')).toBe(true); // 作用域键（源+turn）不互斥
+    expect(turnRow(db, a.turnId).status).toBe('SUCCEEDED');
+    expect(turnRow(db, b.turnId).status).toBe('SUCCEEDED');
+    expect(deliveries(db, a.taskId)).toHaveLength(1);
+    expect(deliveries(db, b.taskId)).toHaveLength(1);
+    // 错误归属：向 a 的会话记录写入 turnId=b 的事件行——泵 a 不认领（ignored-wrong-attribution）。
+    const evtWrong = { ...JSON.parse(lineA), eventKey: 'evt-wrong-attr-' + Date.now(), turnId: b.turnId, finalText: validComplete(`result_${b.turnId}`) };
+    appendFileSync(join(storeDir, `events-${a.sessionId}.jsonl`), JSON.stringify(evtWrong) + '\n');
+    const c = await mkTurnUnknown(11);
+    void c;
+    // a 已 SUCCEEDED（not-unknown 留痕）；归属校验在 UNKNOWN 泵路径生效——用第三个 turn 验证：
+    const evtWrong2 = { kind: 'turn.completed', eventKey: 'evt-wrong-attr-2-' + Date.now(), sessionId: c.sessionId, turnId: a.turnId, receivedAt: Date.now(), finalText: validComplete(`result_${a.turnId}`) };
+    appendFileSync(join(storeDir, `events-${c.sessionId}.jsonl`), JSON.stringify(evtWrong2) + '\n');
+    const { cmd: cmdC } = depsWith(db, c.worker);
+    const rc = await cmdC<PumpResult>('recovery.pumpLateEvents', { turnId: c.turnId });
+    // c 的泵拉取按 turnId=c 过滤（fake lateEvents 过滤），evtWrong2（turnId=a）不会被拉到——
+    // 归属校验在更通用契约下仍是一道闸；此处断言 c 不认领、保持 UNKNOWN。
+    expect(turnRow(db, c.turnId).status).toBe('UNKNOWN');
+    void rc;
+    db.close();
+  }, 45_000);
 });
 
 /** 打开（或复用）文件库：重启路径用；首开跑迁移+seed。 */

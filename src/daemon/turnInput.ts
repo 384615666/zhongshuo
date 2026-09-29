@@ -51,6 +51,11 @@ export interface AssembledTurnInput {
    * 下一 turn 输入附注——修复与原逻辑输出正确绑定（不是无反馈重跑）；不截短原内容。
    */
   repairContext?: { originalTurnId: string; sourceResultKey: string; issues: string[]; originalText: string };
+  /**
+   * 返工反馈（第九轮 RT-25 闭环）：最近一次人工验收为 changes_requested 时注入后续派发
+   * 输入——明确关联被退回的交付版本与验收说明（不是无反馈重跑）；新交付验收通过后消失。
+   */
+  reviewFeedback?: { deliveryRevision: number; note: string | null };
 }
 
 export interface AssembledTurn {
@@ -168,17 +173,28 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     },
     // 文件发现（经授权清单，第六轮）：项目根存在时注入；生成失败不加键（不阻断派发）。
     ...(fileDiscovery != null ? { fileDiscovery } : {}),
-    // 格式修复附注：仅在修复轮存在该键（显式 undefined 会改变 canonicalJson 键集——
-    // 非修复轮的信封必须与既有 hash 完全一致）。
-    ...(input.repairContext != null ? {
-      notes: [
-        '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
-        JSON.stringify(input.repairContext.issues),
-        `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
-        input.repairContext.originalText,
-        '修复要求：按输出契约重新提交完整 TaskComplete——分析结论/清单完整放入 changeSummary（不要缩短或删除内容）；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
-      ],
-    } : {}),
+    // 附注（仅在存在时加键——显式 undefined 会改变 canonicalJson 键集；非附注轮的信封
+    // 必须与既有 hash 完全一致）：格式修复轮 / 返工反馈（RT-25：关联被退回的交付版本）。
+    ...(() => {
+      const notes: string[] = [];
+      if (input.repairContext != null) {
+        notes.push(
+          '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
+          JSON.stringify(input.repairContext.issues),
+          `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
+          input.repairContext.originalText,
+          '修复要求：按输出契约重新提交完整 TaskComplete——分析结论/清单完整放入 changeSummary（不要缩短或删除内容）；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
+        );
+      }
+      if (input.reviewFeedback != null) {
+        notes.push(
+          `【返工】此前交付（第 ${input.reviewFeedback.deliveryRevision} 版）未通过人工验收（要求修改）。`,
+          `验收说明：${input.reviewFeedback.note ?? '（验收未附说明）'}`,
+          '要求：针对上述验收反馈修改后重新提交完整 TaskComplete。',
+        );
+      }
+      return notes.length > 0 ? { notes } : {};
+    })(),
     outputContract: {
       kind: 'TaskComplete',
       submitVia: 'final-result',

@@ -40,7 +40,7 @@ import {
 import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
-import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, saveProcessTreeSnapshot } from './processRegistry.ts';
+import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
 
 export interface TaskRow {
   id: string;
@@ -398,6 +398,8 @@ export class DispatchWorker {
     const assembled = assembleDirectTurn({
       db: this.db,
       repairContext,
+      // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
+      reviewFeedback: this.latestReviewFeedback(task.id),
       task: {
         id: task.id,
         projectId: task.project_id,
@@ -762,13 +764,27 @@ export class DispatchWorker {
    * 活跃期快照是「孙进程遗留」归属核对的唯一锚点。尽力而为：失败不阻断执行
    * （probe 侧无快照=未完整确认，保护保留——如实降级）。
    */
+  /** 最近一次人工验收结论为「要求修改」→ 返工反馈（新交付验收通过后自动消失）。 */
+  private latestReviewFeedback(taskId: string): { deliveryRevision: number; note: string | null } | undefined {
+    try {
+      const row = this.db
+        .prepare(`SELECT revision, review_status, review_note FROM task_deliveries WHERE task_id = ? AND review_status IN ('accepted','changes_requested') ORDER BY reviewed_at DESC, revision DESC LIMIT 1`)
+        .get(taskId) as { revision: number; review_status: string; review_note: string | null } | undefined;
+      if (row == null || row.review_status !== 'changes_requested') return undefined;
+      return { deliveryRevision: row.revision, note: row.review_note };
+    } catch {
+      return undefined; // 查询失败不阻断派发（无反馈注入）
+    }
+  }
+
   private snapshotProcessTree(turnId: string, rootPid: number): void {
     try {
       const table = snapshotProcessTable();
       if (table.state !== 'ok') return;
-      // 根已退出（消费窗口内退出）：占位快照——历史核对仍以登记身份为锚。
-      saveProcessTreeSnapshot(this.db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
-    } catch { /* 快照失败不阻断执行 */ }
+      // 追加式历史身份登记（第九轮）：不删旧——根退出后 BFS 只见占位，父链已断但仍存活
+      // 的后代必须靠先前观察保留身份；退出确认由 probe 核对后写回。
+      recordProcessTreeObservation(this.db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
+    } catch { /* 观察失败不阻断执行（probe 侧按身份缺失如实降级） */ }
   }
 
   /** pre-launch 登记：startTurn 前写入 unknown 模型占位（崩溃窗口可识别「请求可能已发出」）。 */
@@ -1478,7 +1494,6 @@ export class DispatchWorker {
     turnStatus?: string;
     reason?: string;
     applied?: Array<{ eventKey: string; outcome: string }>;
-    releasedLeases?: string[];
   }> {
     const turn = this.db
       .prepare('SELECT id, run_id, member_id, stage_key, status, session_id FROM agent_turns WHERE id = ?')
@@ -1532,43 +1547,93 @@ export class DispatchWorker {
 
     const run = this.db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(turn.run_id) as { task_id: string };
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(run.task_id) as TaskRow;
+    // 回执作用域键（第九轮）：adapter kind+会话——eventKey 不跨事件源全局唯一。
+    const sourceScope = `${this.providerKeyOf(turn.member_id)}:${sessionId}`;
+    const receiptSeen = this.db.prepare(
+      'SELECT outcome FROM late_event_receipts WHERE source_scope = ? AND turn_id = ? AND event_key = ?',
+    );
+    const recordReceipt = this.db.prepare(
+      'INSERT INTO late_event_receipts (source_scope, turn_id, event_key, outcome, note, received_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
     const applied: Array<{ eventKey: string; outcome: string }> = [];
     for (const event of pulled.events) {
-      const seen = (this.db.prepare('SELECT count(*) c FROM late_event_receipts WHERE event_key = ?').get(event.eventKey) as { c: number }).c;
-      if (seen > 0) {
-        applied.push({ eventKey: event.eventKey, outcome: 'duplicate-receipt' });
+      const seen = receiptSeen.get(sourceScope, turnId, event.eventKey) as { outcome: string } | undefined;
+      if (seen != null) {
+        // 已处理（applied/ignored）——效果已生效，跳过（「回执已存在」只表示**已处理完成**，
+        // 处理失败的事务整体回滚、回执不残留——不存在「有回执无效果」状态）。
+        applied.push({ eventKey: event.eventKey, outcome: `duplicate-${seen.outcome}` });
         continue;
       }
-      this.db.prepare('INSERT INTO late_event_receipts (event_key, turn_id, received_at) VALUES (?, ?, ?)').run(event.eventKey, turnId, this.clock());
+      // 归属校验（第九轮）：不替未归属事件强行认领——事件须声明且匹配本 turn/本会话。
+      if ((event.turnId != null && event.turnId !== turnId) || (event.sessionId != null && event.sessionId !== sessionId)) {
+        const tx = this.db.transaction(() => {
+          recordReceipt.run(sourceScope, turnId, event.eventKey, 'ignored', `归属不符：event.turnId=${event.turnId ?? 'null'} sessionId=${event.sessionId ?? 'null'}`, this.clock());
+          this.audit(task, turn.run_id, turnId, 'turn.lateEventIgnored', { eventKey: event.eventKey, kind: event.kind, reason: 'wrong-attribution' });
+        });
+        tx();
+        applied.push({ eventKey: event.eventKey, outcome: 'ignored-wrong-attribution' });
+        continue;
+      }
+      if (event.kind !== 'turn.completed' && event.kind !== 'turn.failed') {
+        const tx = this.db.transaction(() => {
+          recordReceipt.run(sourceScope, turnId, event.eventKey, 'ignored', '非终态事件不在泵范围', this.clock());
+        });
+        tx();
+        applied.push({ eventKey: event.eventKey, outcome: 'ignored-non-terminal' });
+        continue;
+      }
       const fresh = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
       if (fresh.status !== 'UNKNOWN') {
-        // 本轮已被前一个事件收口：后续事件只留痕（终态守卫在 applyEvent 内兜底）。
-        this.audit(task, turn.run_id, turnId, 'turn.lateEventSkippedTerminal', { eventKey: event.eventKey, kind: event.kind, turnStatus: fresh.status });
+        // 本轮已被前一个事件收口：后续事件回执（ignored）+审计，同一事务。
+        const tx = this.db.transaction(() => {
+          recordReceipt.run(sourceScope, turnId, event.eventKey, 'ignored', `turn 已 ${fresh.status}`, this.clock());
+          this.audit(task, turn.run_id, turnId, 'turn.lateEventSkippedTerminal', { eventKey: event.eventKey, kind: event.kind, turnStatus: fresh.status });
+        });
+        tx();
         applied.push({ eventKey: event.eventKey, outcome: 'skipped-terminal' });
         continue;
       }
       if (event.kind === 'turn.failed' && event.code === 'INTERRUPTED') {
         // 迟到的中断回执不是结果事实（用户停止语义由 stop 状态机承载）——不收口。
+        const tx = this.db.transaction(() => {
+          recordReceipt.run(sourceScope, turnId, event.eventKey, 'ignored', '迟到的中断回执不是结果事实', this.clock());
+        });
+        tx();
         applied.push({ eventKey: event.eventKey, outcome: 'skipped-interrupt-receipt' });
         continue;
       }
-      this.applyEvent(task, turn.run_id, turnId, event);
-      applied.push({ eventKey: event.eventKey, outcome: 'applied' });
-    }
-    // 收口后清理：执行已定（交付/失败），UNKNOWN 期间保留的准入占位与租约解除。
-    const after = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
-    const releasedLeases: string[] = [];
-    if (after.status !== 'UNKNOWN') {
-      const leases = this.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turnId) as Array<{ lock_domain: string }>;
-      for (const l of leases) {
-        this.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turnId);
-        releasedLeases.push(l.lock_domain);
+      // 回执+业务效果**同一事务**（第九轮）：applyEvent 抛错=整体回滚（无回执残留）——
+      // 重放重新处理，交付/预算恰好一次；失败留审计（事务外），可恢复不静默丢弃。
+      try {
+        const tx = this.db.transaction(() => {
+          recordReceipt.run(sourceScope, turnId, event.eventKey, 'applied', null, this.clock());
+          this.applyEvent(task, turn.run_id, turnId, event);
+        });
+        tx();
+        applied.push({ eventKey: event.eventKey, outcome: 'applied' });
+      } catch (error) {
+        this.audit(task, turn.run_id, turnId, 'turn.lateEventFailed', {
+          eventKey: event.eventKey,
+          message: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+          note: '回执与业务效果同事务整体回滚——重放将重新处理（不静默丢弃）',
+        });
+        applied.push({ eventKey: event.eventKey, outcome: 'failed' });
       }
+    }
+    // 业务收口（turn 终态）：释放准入占位与进程登记收口。**写入租约不随之释放**——业务
+    // 结果已确定与执行载体已停止是不同事实（第九轮二）：保护解除仍走 probe/releaseProtection
+    // 判定（none 程序事实可解除；有子进程模型路径已关闭）。
+    const after = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
+    if (after.status !== 'UNKNOWN') {
       this.releaseAdmission(turnId);
       this.closeProcessRegistrationIfTerminal(turnId);
-      this.audit(task, turn.run_id, turnId, 'turn.lateEventsSettled', { turnStatus: after.status, releasedLeases, events: applied });
+      this.audit(task, turn.run_id, turnId, 'turn.lateEventsSettled', {
+        turnStatus: after.status,
+        events: applied,
+        note: '写入租约保护不随业务收口解除——仍按进程保护判定处理（业务结果确定≠执行载体已停止）',
+      });
     }
-    return { status: 'pumped', applied, releasedLeases };
+    return { status: 'pumped', applied };
   }
 
   /** DELIBERATE 终态：完成→产物校验计入屏障（或一次格式修复）；失败/中断→缺席或停止语义。 */
