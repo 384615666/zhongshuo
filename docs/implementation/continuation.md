@@ -2,8 +2,54 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 第六轮·下，唯一权威快照）
+## 当前真实状态（2026-09-29 第七轮，唯一权威快照）
 
+- **OS 退出证据服务端化**（第七轮，迁移 009）：`RuntimeAdapter.processIdentity()`
+  可选能力（per-turn=Claude CLI 每 turn 独立子进程/shared=Codex App Server 常驻/none=
+  fake 内联）；worker startTurn 成功后登记 `runtime_process_registry`（PID+OS 启动时刻
+  3s 短超时；失败=pid-only 如实降级），终态非 UNKNOWN 标 closed；新命令
+  `recovery.probeProcess`（只读：按已登记身份 OS 核对→写 `recovery_exit_probes` 服务端
+  证据）；`recovery.reconcile` 参数重写——**调用方不能再自报 alive=false**（旧
+  exitEvidence 参数层删除），退出释放按 probe 结果矩阵（exited per-turn/shared、
+  no-os-process=none 程序事实→释放；alive/unknown/identity-missing/复用→保留）；
+  probeId 引用校验（turn 归属/登记一致/≤10min）；notStarted 人工分离（manualRiskAck
+  必填：退款+FAILED 但租约/准入保留、recordedAs=manual-claim）。Windows 查询错误分类
+  修复（仅 ObjectNotFound=exited；权限/StartTime 失败/解析失败=unknown）+epoch 计算修正。
+- **逻辑输出+预算授权账目**（第七轮，迁移 010）：`format_repair_workitems` 重建为
+  UNIQUE(task_id, logical_output_id)——修复轮继承根逻辑输出身份，**禁止修复套修复**
+  （被拒请求零副作用：无工作项/outbox/启动计数）；refunded turn 豁免（无逻辑输出不挡
+  资格）；预算单一真源=逐 turn 处置事实（非退款计数；旧 SUM 快照重复计反例已锁定）；
+  budget_run_id 参与授权链校验（断裂=损坏阻塞）；修复轮上限强制（超限=closed+
+  repair-budget-exhausted+BLOCKED）。
+- **文件清单回授权合同**（第七轮）：`projectScopedFileListing`（§13.4 项目源码默认可读
+  ——不再按 change_sets 归属排除[共享源码不永久隐藏]；§6.3 命名排除清单：VCS 内部/依赖
+  缓存/构建产物/常见凭据，.env.example/.editorconfig 等可见；大小写归一；上限按过滤后
+  计数——排除项不耗名额）；「评分答案在项目外」不再作为通用产品权限保证；两模式一致。
+- **恢复 UI 事实分层**（第七轮）：程序观测/人工说明（草稿不丢）/无法确认/保留保护四层；
+  「服务端取证」「人工声明未启动（退款·保留租约，confirm 风险确认）」操作精确绑定
+  turnId；人工声明后遗留租约行如实显示；alert→行内错误行。renderer e2e 新反例：人工声明
+  后保护仍在+界面说明原因；服务端核对完成才按条件收口；executed+identity-missing 不
+  提前收口。
+- **总账口径（用户已决定）**：价值评分=**用户决定暂缓**（待恢复与修复链稳定后再集中安排
+  一次，不再每轮列为阻塞项）；实验原始证据/评分包 v2/已知偏差保留不动；价值闸门未通过、
+  DEV-11 不开放；剩余 3 次保留，补证另批（优先 Claude Code+deepseek-flash）。
+- 数字：集成/单元 **451/451**、UI e2e **16/16**（+1 恢复面对账反例）、realCodex 4/4、
+  lint 0、零真实调用。报告：reports/round-20260929-process-evidence-repair-budget.md。
+  realCodex B6-2 曾在一次全量连跑中偶发失败（真实渠道计划档行为漂移），单跑/全文件/
+  改动前后均通过——既有真实认证偶发敏感，非回归。
+
+## 当前下一步（唯一）
+
+1. **无需等待直接开工**（用户已决定先工程后评分）：DEV-13 剩余（成果一致性专项用例；
+   进程身份与 DEV-05 supervisor 衔接——registry/probes 表已就绪可被 supervisor 消费）；
+   DEV-14 前置 UI 工作；按交付矩阵推进依赖已满足的工程包。
+2. **价值评价（暂缓中）**：等恢复与修复链稳定、具备可操作用户体验后**集中安排一次**
+   （评分包 v2 与证据保留现状，不重跑）；价值闸门未过 DEV-11 不开放；补证方案
+   （round-20260928-recovery-repair-final.md §4）待另批——本轮未自动执行。
+
+---
+
+## （上一轮快照，2026-09-28 第六轮·下）
 - **格式修复持久工作项**（`768b51a`，迁移 008）：修复用户指认四缺陷——kv 读后即删→
   pending/consumed 与 run/turn 创建同事务；任务级最后一条→同轮精确绑定（源 turn 自身
   outputInvalid+thread.replyAdded 消息+resultKey 与 run.created 核对）；每任务一次→每
@@ -22,21 +68,9 @@
 - **补证口径纠正**：旧批次 DIRECT 二次=无反馈重派——不能证明新修复机制相对效果；
   围栏规范化=1 次即验；修复全链≥2 次；文件发现=另一目标。最小方案上限 4-12 次**另行
   申请**（批次剩余 3 次只限价值对比，保留不动用）。
-- 数字：**435/435**、UI e2e **15/15**、lint 0、零真实调用。报告：
-  reports/round-20260928-recovery-repair-final.md。
-- 上半天（第六轮：台账/评分包 v2/修复链 v1/DEV-13 首片）快照见下节——其中修复链 v1 已被
-  本轮工作项化实现取代（行为兼容：formatRepair 命令参数不变）。
-
-## 当前下一步（唯一）
-
-1. **等待用户**：①评分包 v2 评价（已披露背景的人工可用性评价）→价值闸门结论；
-   ②补证方案批准（报告 §4：围栏 1 次/修复全链 2 次/文件发现 1-9 次——另批）。
-2. 无需等待直接开工：DEV-13 剩余（成果一致性专项用例；进程身份与 DEV-05 supervisor
-   衔接）；UI 恢复面退出取证入口（携带 processCheck 证据的对账操作）；DEV-14 前置。
-
----
-
-## （上一轮快照，2026-09-28 第六轮）
+- 数字：435/435、UI e2e 15/15、lint 0、零真实调用；报告
+  reports/round-20260928-recovery-repair-final.md。上半天（第六轮：台账/评分包 v2/
+  修复链 v1/DEV-13 首片）快照见再下一节。
 - **批次证据已修正（唯一台账=真源）**：`scripts/value-ledger.mjs` 从六侧原始库生成
   `evidence/value-batch/per-call-ledger.json`——全批 **30≤33**；**A-DELIB 10>9 单侧超限成立**
   （全批余额不抵销）；DELIB 合计 24（23 成功/1 失败）；**全批 FAILED=6**（初版报告「17/17」
