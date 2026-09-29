@@ -158,12 +158,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }
       const { resolveClaudeExecutable } = claudeCliMod;
       return (executable: string | undefined) => (args: string[], cwd: string) =>
-        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd, env: process.env }) as never;
+        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd }) as never; // env=继承父环境（受管路径受支持语义）
     })();
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
       const { spawnManagedBridge } = managedBridgeMod;
-      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, { env: process.env }) as never;
+      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env=继承父环境
     })();
     if (options.runtime === 'codex' && managedCodexSpawn != null) {
       adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });

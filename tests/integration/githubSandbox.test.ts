@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
@@ -20,10 +20,6 @@ const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-ghreal-'));
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', ['-C', root, ...args], { timeout: 60_000, encoding: 'utf8' });
-}
-function gitLax(root: string, ...args: string[]): { status: number; stdout: string; stderr: string } {
-  const r = spawnSync('git', ['-C', root, ...args], { timeout: 60_000, encoding: 'utf8' });
-  return { status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 /** 众说工作克隆（独立于 D:\zhongshuo 与环境准备克隆）。 */

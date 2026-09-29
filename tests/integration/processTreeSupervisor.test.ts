@@ -312,7 +312,9 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     await wait(900);
     const p3 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     expect(p3.result).toBe('unknown'); // 第九轮：未观察到存活后代≠完整退出（解除路径关闭）
-    expect(p3.detail).toContain('未完整确认');
+    // 满载时序下工具进程退出有先后：仍活→历史身份核对发现；已退→周期快照未完整确认。
+    // 两者都是保护保留的正确结果（进程退出竞态不是被测语义）。
+    expect(p3.detail).toMatch(/未完整确认|仍在运行的执行载体/);
     db.close();
   }, 60_000);
 
