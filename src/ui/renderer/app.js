@@ -513,6 +513,9 @@ async function refreshGate() {
     info.classList.add('hidden');
     return;
   }
+  // 恢复面（DEV-13·下）：受影响任务/运行+证据+未确认事项；操作精确绑定目标行。
+  const panel = el('recovery-panel');
+  renderRecoveryPanel(panel, data);
   if (!data.gateHeld) {
     gate.classList.add('hidden');
     info.classList.add('hidden');
@@ -524,6 +527,56 @@ async function refreshGate() {
   info.textContent = lines.length > 0 ? lines.join('\n') : '上次退出时有未完成工作';
   info.classList.remove('hidden');
   gate.classList.remove('hidden');
+}
+
+/** 恢复面：待对账 UNKNOWN 明细+精确绑定操作。
+ *  纪律：未确认退出时不提供「清空占位继续」；需人工判断的动作与程序已确认事实分行；
+ *  操作只作用于该行绑定的 turnId（不因切线程漂移）。 */
+function renderRecoveryPanel(panel, data) {
+  const unknown = (data.unknownTurns ?? []);
+  const undos = (data.activeUndos ?? []);
+  if (unknown.length === 0 && undos.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.innerHTML = '';
+  const head = document.createElement('div');
+  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项（续跑走撤销命令，三向判定）` : ''}`;
+  panel.appendChild(head);
+  for (const t of unknown) {
+    const row = document.createElement('div');
+    row.className = 'recovery-row';
+    row.dataset.turnId = t.id;
+    const meta = document.createElement('span');
+    meta.textContent = `任务 ${t.taskId ?? '?'} · ${t.stageKey ?? '?'} · 状态未知（需对账）`;
+    row.appendChild(meta);
+    const mkBtn = (label, params) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.onclick = () => void reconcileTurn(t.id, params);
+      return b;
+    };
+    row.appendChild(mkBtn('确认未启动', { verdict: 'notStarted' }));
+    row.appendChild(mkBtn('确认已执行·退出未知（保留保护）', { verdict: 'executed' }));
+    const note = document.createElement('span');
+    note.textContent = ' 未确认退出时不释放写入保护；退出确认需 OS 进程证据（不提供一键清空）';
+    row.appendChild(note);
+    panel.appendChild(row);
+  }
+  panel.classList.remove('hidden');
+}
+
+async function reconcileTurn(turnId, base) {
+  try {
+    await command('recovery.reconcile', {
+      turnId,
+      ...base,
+      evidence: { source: 'renderer 恢复面（用户操作）', at: Date.now() },
+    });
+  } catch (error) {
+    alert(`对账失败：${error.message}`);
+  }
+  await refreshGate();
 }
 
 async function resumeFromGate() {

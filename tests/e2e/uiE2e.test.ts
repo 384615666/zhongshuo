@@ -42,6 +42,8 @@ window.__t = {
   gateVisible: () => !document.getElementById('resume-gate')?.classList.contains('hidden'),
   gateInfo: () => document.getElementById('resume-info')?.textContent ?? '',
   stopVisible: () => !document.getElementById('stop-btn')?.classList.contains('hidden'),
+  recoveryRows: () => [...document.querySelectorAll('#recovery-panel .recovery-row')].map((r) => ({ turnId: r.dataset.turnId ?? '', text: r.textContent ?? '' })),
+  recoveryPanelVisible: () => !document.getElementById('recovery-panel')?.classList.contains('hidden'),
   stopDisabled: () => document.getElementById('stop-btn')?.disabled ?? true,
   threadStatus: () => document.getElementById('thread-status')?.textContent ?? '',
   toolAudit: () => [...document.querySelectorAll('#thread-messages .tool-audit .tool-audit-row')].map((r) => ({ id: r.dataset.toolCallId ?? '', text: r.textContent ?? '' })),
@@ -502,6 +504,14 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
     // renderer 重连后只读查询恢复状态 → 门禁入口出现且不自动续跑。
     await waitFor(() => call<boolean>('gateVisible'), 60_000, '恢复门禁入口出现');
     expect(await call<string>('gateInfo')).toMatch(/中断运行|待派发/);
+    // DEV-13·下：恢复面列出待对账 UNKNOWN（受影响任务/阶段+需人工判断动作）；
+    // 未确认退出不提供一键清空（文案明示；退出确认需 OS 证据）。
+    const rows = await waitFor(async () => {
+      const r = await call<Array<{ turnId: string; text: string }>>('recoveryRows');
+      return r.length > 0 ? r : null;
+    }, 30_000, '恢复面列待对账 UNKNOWN');
+    expect(rows[0]!.text).toContain('状态未知（需对账）');
+    expect(rows[0]!.text).toContain('不提供一键清空');
     } catch (e) {
       console.error('[appB daemon/ui stderr tail]\n', app.stderr.slice(-2500));
       throw e;

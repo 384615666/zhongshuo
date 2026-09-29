@@ -224,6 +224,8 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     files: z.array(z.string().min(1)),
     truncated: z.boolean(),
     integrityNote: z.string(),
+    excludedHidden: z.number().int().nonnegative(),
+    excludedOtherTask: z.number().int().nonnegative(),
   }).optional(),
   notes: z.array(z.string()).optional(),
 });

@@ -51,7 +51,7 @@ describe('经授权文件发现清单（两模式一致规则）', () => {
     expect(listing.files.sort()).toEqual(['notes.md', 'sub/app-week.log']); // C 组文件名现在可发现
     expect(listing.truncated).toBe(false);
     expect(listing.integrityNote).toContain('扫描完整');
-    const capped = authorizedFileListing(dir, 1)!;
+    const capped = authorizedFileListing(dir, { maxEntries: 1 })!;
     expect(capped.truncated).toBe(true); // 上限如实
     expect(authorizedFileListing(join(tmpRoot, 'missing-dir'))).toBeNull(); // 不存在不阻断
   });
@@ -97,6 +97,59 @@ describe('经授权文件发现清单（两模式一致规则）', () => {
     const indText = adapter.startTurnLog[0]!.text;
     expect(indText).toContain('文件发现（经授权的清单，程序侧提供）');
     expect(indText).toContain('data.txt');
+    await adapter.closeAllSessions();
+    db.close();
+  }, 20_000);
+});
+
+describe('文件清单任务授权过滤（第六轮·下：物理边界≠可读范围）', () => {
+  it('其他任务变更归属与隐藏项不入清单与模型输入；本任务自己的变更可见；越界/截断如实', async () => {
+    const dir = join(tmpRoot, 'proj-scope');
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    writeFileSync(join(dir, 'logs', 'app-week.log'), '本周日志', 'utf8');
+    writeFileSync(join(dir, '.secret-config'), '内部配置', 'utf8');
+    writeFileSync(join(dir, 'taskX-output.md'), '其他任务的产物', 'utf8');
+    writeFileSync(join(dir, 'mine-output.md'), '本任务自己的产物', 'utf8');
+    const db = openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pS','s',?,?, '{}', 0)`).run(dir, dir);
+    // 任务 X 曾修改 taskX-output.md（change_sets 归属=taskX，after=present）——本任务（taskY）不可见。
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mS','pS','甲','agent',1)`).run();
+    db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('r1','pS','大厅','mS')`).run();
+    db.prepare(`INSERT INTO room_members (room_id, member_id) VALUES ('r1','mS')`).run();
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('cS','pS','room','r1')`).run();
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title) VALUES ('taskX','pS','cS','room_task','r1','X')`).run();
+        db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES ('csX','pS','taskX','{}','{"k":1}','applied')`).run();
+    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csX','after','taskX-output.md','present')`).run();
+    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csX','before','taskX-output.md','present')`).run();
+    // 本任务自己的归属不排除（csY 归 taskY2——先建任务行再挂归属）。
+    createRoomRootTask(db, {
+      ids: { messageId: 'sm1', threadId: 'sth1', taskId: 'taskY2', taskEventId: 'se1', threadEventId: 'sh1' },
+      projectId: 'pS', conversationId: 'cS', roomId: 'r1', intent: 'default',
+      title: '分析日志', body: '分析 logs 一周日志', mentions: [{ kind: 'member', memberId: 'mS' }],
+      author: { authorType: 'human', authorId: 'u' }, reviewPolicy: 'auto_deliver', sourceConnectionId: null,
+      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mS', frozenMemberIds: ['mS'], initialWakeMemberIds: ['mS'] },
+      now: 1,
+    });
+    db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES ('csY','pS','taskY2','{}','{"k":1}','applied')`).run();
+    db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csY','after','mine-output.md','present')`).run();
+
+    const { taskScopedFileListing } = await import('../../src/daemon/fileDiscovery.ts');
+    const listing = taskScopedFileListing(db, 'pS', 'taskY2', dir)!;
+    expect(listing.files.sort()).toEqual(['logs/app-week.log', 'mine-output.md']); // taskX-output.md 不在
+    expect(listing.excludedOtherTask).toBe(1);
+    expect(listing.excludedHidden).toBeGreaterThanOrEqual(1); // .secret-config 排除
+    expect(listing.integrityNote).toContain('其他任务变更归属 1 项');
+    expect(listing.integrityNote).toContain('不构成工具能力声明或文件沙箱认证');
+
+    // DIRECT 组装真实路径：本任务输入只含授权清单（其他任务产物不进模型输入）。
+    const adapter = new FakeRuntimeAdapter();
+    const w = new DispatchWorker({ db, adapter, leaseOwner: 'w-scope', appDataDir: join(tmpRoot, 'app-scope') });
+    await w.runOnce();
+    const text = adapter.startTurnLog[0]!.text;
+    expect(text).toContain('logs/app-week.log'); // 允许文件可发现（C 组场景修复）
+    expect(text).toContain('mine-output.md');
+    expect(text).not.toContain('taskX-output.md'); // 其他任务产物不入模型输入
+    expect(text).not.toContain('.secret-config'); // 隐藏项不入输入
     await adapter.closeAllSessions();
     db.close();
   }, 20_000);
