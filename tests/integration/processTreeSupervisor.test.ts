@@ -52,8 +52,9 @@ writeFileSync(join(tmpRoot, 'gen3-grandson.js'), GEN3_GRANDSON);
 // 盲区现场脚本：父启动即 spawn 子（detached）后 200ms 退出；子立即 spawn 孙（detached
 // 长活）后 150ms 退出——父/子/孙全部在观察②之前完成派生与中间代际退出（孙=盲区进程）。
 writeFileSync(join(tmpRoot, 'blind-parent.js'), `const{spawn}=require("child_process");
+const fs=require("fs");fs.writeFileSync(${JSON.stringify(join(tmpRoot, 'blind-parent.pid'))},String(process.pid));
 const c=spawn(process.execPath,[${JSON.stringify(join(tmpRoot, 'blind-child.js'))}],{stdio:"ignore",detached:true});c.unref();
-setTimeout(()=>{},200);`);
+setTimeout(()=>{},1500);`);
 writeFileSync(join(tmpRoot, 'blind-child.js'), `const{spawn}=require("child_process");
 const g=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",detached:true});g.unref();
 setTimeout(()=>{},150);`);
@@ -119,6 +120,30 @@ function takeSnapshot(db: ZhongshuoDatabase, turnId: string, rootPid: number): v
 
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** 就绪文件轮询（子进程 ready 信号——替代固定 sleep 的启动等待）。 */
+async function waitForFile(path: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      readFileSync(path, 'utf8');
+      return;
+    } catch { /* 未就绪 */ }
+    await wait(50);
+  }
+  throw new Error(`就绪超时：${path}`);
+}
+
+/** 存活轮询（首次确认 alive 即返回——替代单次 liveness 检查的竞态）。 */
+async function waitAlive(pid: number, timeoutMs = 10_000): Promise<{ startedAt: number | null }> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const r = checkProcessLiveness(pid);
+    if (r.state === 'alive') return { startedAt: r.identity.startedAt };
+    if (Date.now() > deadline) throw new Error(`存活等待超时（pid=${pid}，state=${r.state}）`);
+    await wait(40);
+  }
+}
+
 describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃期快照登记）', () => {
   it('三代现场：父子先退、孙继续运行 → probe/reconcile/releaseProtection 全部拒绝；孙结束后也仅「未观察到存活后代」（周期快照≠完整退出，解除路径关闭）', async () => {
     const db = openDatabase(':memory:');
@@ -128,16 +153,24 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 父进程启动（父→子→孙三代链；父 200ms 后退出、子 ~600ms 后退出、孙长活）。
     const parent = spawn(process.execPath, [join(tmpRoot, 'gen3-parent.js')], { stdio: 'ignore' });
     const parentPid = parent.pid!;
-    await wait(900); // 等父登记窗口 + 子/孙已派生（孙此时在跑）
-    const liveness = checkProcessLiveness(parentPid);
-    expect(liveness.state).toBe('alive'); // 前置：登记时父仍活（模拟 startTurn 成功后登记）
-    if (liveness.state !== 'alive') throw new Error('前置失败');
+    const { startedAt } = await waitAlive(parentPid); // 就绪：登记时父仍活（替代 900ms 睡眠竞态）
+    // 孙就绪信号（grandson.pid 由孙进程自写）——三代链全部派生完成才拍首张快照。
+    await waitForFile(join(tmpRoot, 'grandson.pid'));
     registerTurnProcess(db, {
       turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn',
-      pid: parentPid, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime',
+      pid: parentPid, startedAtMs: startedAt, identitySource: 'os-starttime',
     });
-    takeSnapshot(db, turnId, parentPid); // worker 生产行为：startTurn 后首拍（此时父+子+孙均在表）
-    await wait(1_500); // 父（200ms）与子（~800ms）已退出，孙（detached 孤儿）继续运行
+    takeSnapshot(db, turnId, parentPid); // worker 生产行为：startTurn 后首拍
+    // ack：快照捕获三代（父+子+孙）——漏代=观察过早，重拍（生产=周期快照本就重拍）。
+    for (let attempts = 0; attempts < 20 && getProcessTreeIdentities(db, turnId).length < 3; attempts += 1) {
+      await wait(100);
+      takeSnapshot(db, turnId, parentPid);
+    }
+    expect(getProcessTreeIdentities(db, turnId).length).toBeGreaterThanOrEqual(3); // 快照已锚定三代
+    // 等父/子退出：轮询至登记根确已退出（孙 detached 孤儿继续跑）。
+    for (let attempts = 0; attempts < 100 && checkProcessLiveness(parentPid).state !== 'exited'; attempts += 1) {
+      await wait(100);
+    }
     expect(checkProcessLiveness(parentPid).state).toBe('exited'); // 前置：登记根确已退出
     // 父退出不构成执行结束证据：现存树从死根只能抓到已退出的子——孙靠快照历史归属核对发现。
     const p1 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
@@ -205,12 +238,13 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 父与子都在观察②之前退出——孙从未被任何观察登记（盲区进程）。
     const parent = spawn(process.execPath, [join(tmpRoot, 'blind-parent.js')], { stdio: 'ignore' });
     const parentPid = parent.pid!;
-    await wait(100); // 观察①窗口：父活着、子尚未派生（子 spawn 前拍）
-    const liveness = checkProcessLiveness(parentPid);
-    if (liveness.state !== 'alive') throw new Error('前置失败');
-    registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: parentPid, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
+    const { startedAt: blindStart } = await waitAlive(parentPid); // 观察①窗口：父刚活（轮询替代 100ms 睡眠+单次检查竞态）
+    registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: parentPid, startedAtMs: blindStart, identitySource: 'os-starttime' });
     takeSnapshot(db, turnId, parentPid); // 观察①：只见父
-    await wait(1_500); // 父（200ms 后退）与子（父退前 spawn，150ms 后退）均已退出；孙（盲区）继续运行
+    for (let attempts = 0; attempts < 100 && checkProcessLiveness(parentPid).state !== 'exited'; attempts += 1) {
+      await wait(100);
+    } // 父（1.5s 后退）与子（父退前 spawn，150ms 后退）均已退出；孙（盲区）继续运行
+    expect(checkProcessLiveness(parentPid).state).toBe('exited');
     takeSnapshot(db, turnId, parentPid); // 观察②：根死 → 占位（孙不可见）
     const p = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     // 盲区进程不可发现——系统**不得**凭空声称能发现，也不得把「未观察到」冒充完整退出：

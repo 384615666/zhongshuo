@@ -3,3 +3,4 @@ allowBuilds:
   better-sqlite3: true
   electron: true
   esbuild: true
+  koffi: false  # koffi 预编译二进制运行时加载，无需构建脚本（pnpm approve-builds 拒绝=明确记录该选择）

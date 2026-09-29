@@ -69,7 +69,7 @@ describe('真实 GitHub：众说 Git 命令链（授权沙盒仓）', () => {
   it('众说命令闭环：stage → commitPreview → commit（tree 绑定 CAS）→ remoteHead → push（两端头绑定）', async () => {
     writeFileSync(join(work, 'test', 'e2e-round12.txt'), `真实 GitHub 验证 ${new Date().toISOString()}\n`, 'utf8');
     await cmd('git.stage', { projectId: 'p1', paths: ['test/e2e-round12.txt'] });
-    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: 'p1' });
+    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit?: boolean }>('git.commitPreview', { projectId: 'p1' });
     expect(p.canCommit ?? true).toBe(true);
     const c = await cmd<{ commit: string; updatedRef: string }>('git.commit', { projectId: 'p1', message: 'test: 众说命令链真实推送（第十二轮）', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
     expect(c.updatedRef).toBe('refs/heads/main');
@@ -96,7 +96,7 @@ describe('真实 GitHub：众说 Git 命令链（授权沙盒仓）', () => {
     // 众说侧：本地新提交 → 以**过期的远端头确认值**推送 → 必须拒绝。
     writeFileSync(join(work, 'test', 'work-after-other.txt'), '众说侧提交\n', 'utf8');
     await cmd('git.stage', { projectId: 'p1', paths: ['test/work-after-other.txt'] });
-    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: 'p1' });
+    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit?: boolean }>('git.commitPreview', { projectId: 'p1' });
     const c = await cmd<{ commit: string }>('git.commit', { projectId: 'p1', message: 'test: 众说侧提交（远端已被他人推进）', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
     const url = git(work, 'remote', 'get-url', 'origin').trim();
     const staleRemoteHead = p.head; // 故意用过期值（=推送前本地 HEAD，远端实际已在他人提交上）
@@ -137,7 +137,7 @@ describe('真实 GitHub：众说 Git 命令链（授权沙盒仓）', () => {
     git(work, 'config', 'user.email', 'zhongshuo@users.noreply.github.com'); git(work, 'config', 'user.name', 'zhongshuo-e2e');
     writeFileSync(join(work, 'test', 'branch-round12.txt'), 'test/* 分支真实推送\n', 'utf8');
     await cmd('git.stage', { projectId: 'p1', paths: ['test/branch-round12.txt'] });
-    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: 'p1' });
+    const p = await cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit?: boolean }>('git.commitPreview', { projectId: 'p1' });
     const c = await cmd<{ commit: string }>('git.commit', { projectId: 'p1', message: 'test: round12 test/* 分支链路', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
     const rh = await cmd<{ head: string | null }>('git.remoteHead', { projectId: 'p1', remote: 'origin', branch: branchName });
     const url = git(work, 'remote', 'get-url', 'origin').trim();

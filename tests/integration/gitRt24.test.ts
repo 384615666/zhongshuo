@@ -335,7 +335,7 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     const hooksDir = join(f.root, '.git', 'hooks');
     const hookPath = join(hooksDir, 'pre-commit');
     writeFileSync(hookPath, '#!/bin/sh\necho hook-ran\n', 'utf8');
-    const p1 = await f.cmd<{ canCommit: boolean; blockers: string[]; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
+    const p1 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit: boolean; blockers: string[]; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
     expect(p1.canCommit).toBe(false);
     expect(p1.blockers.some((x) => x.includes('pre-commit 钩子'))).toBe(true);
     const cid = 'c-hooks-0001';
@@ -348,7 +348,7 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     expect(p2.blockers.some((x) => x.includes('commit.gpgsign'))).toBe(true);
     // ③ 清除后内置提交恢复（且预览 notes 始终如实描述实际执行路径）。
     git(f.root, 'config', '--unset', 'commit.gpgsign');
-    const p3 = await f.cmd<{ canCommit: boolean; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
+    const p3 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null; canCommit: boolean; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
     expect(p3.canCommit).toBe(true);
     expect(p3.notes.some((n) => n.includes('不执行 pre-commit/post-commit 钩子'))).toBe(true);
     const ok = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '无钩子提交', expectedHead: p3.head, expectedIndexTree: p3.indexTree, expectedBranch: p3.branch });
