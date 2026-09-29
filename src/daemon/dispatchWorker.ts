@@ -41,6 +41,7 @@ import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settle
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
+import { managedJobByPid } from './managed/bridge.ts';
 
 export interface TaskRow {
   id: string;
@@ -745,13 +746,16 @@ export class DispatchWorker {
         const r = checkProcessLiveness(identity.pid, undefined, 3_000);
         if (r.state === 'alive') startedAtMs = r.identity.startedAt;
       }
+      // REC-LIFE-1（第十二轮）：受管桥进程（bridge 按 pid 注册）→ 登记为 managed-job——
+      // releaseProtection 可按 pid 查 releaseEvidence（可证明完整结束）解除。
+      const isManaged = identity.pid != null && managedJobByPid(identity.pid) != null;
       registerTurnProcess(this.db, {
         turnId, runId, memberId,
         adapterKind: this.providerKeyOf(memberId),
         processModel: identity.model,
         pid: identity.pid,
         startedAtMs,
-        identitySource: identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
+        identitySource: isManaged ? 'managed-job' : identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
       });
       // 首张进程树快照（第八轮）：崩溃/截止窗口再短也有归属锚点（周期重拍在消费期间进行）。
       if (identity.model !== 'none' && identity.pid != null) this.snapshotProcessTree(turnId, identity.pid);

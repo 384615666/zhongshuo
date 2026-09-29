@@ -221,12 +221,16 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
   /** spawn 注入口（协议回放：换模拟进程工厂）。生产路径 shell:false + 解析后的入口。 */
   private readonly spawnFn: (args: string[], cwd: string) => ChildProcessWithoutNullStreams;
 
+  // REC-LIFE-1：受管运行时（Job Object）经 spawnFn 注入（daemon 层构造时提供）——
+  // adapter 边界不感知受管实现（§8.4：adapter 不 import daemon）。
   constructor(options: ClaudeCliAdapterOptions = {}, spawnFn?: (args: string[], cwd: string) => ChildProcessWithoutNullStreams) {
     this.options = options;
     this.spawnFn = spawnFn ?? this.productionSpawn(options);
   }
 
-  /** 生产 spawn：参数数组 + shell:false；prompt 不在 args（stdin 传递）。 */
+  /** 生产 spawn：参数数组 + shell:false；prompt 不在 args（stdin 传递）。
+   * REC-LIFE-1（第十二轮）：ZS_MANAGED_RUNTIME=1 时走受管桥（Job Object 挂起纳管）——
+   * 桥不可用直接抛错拒绝派发，**不降级为未受管运行**；未设变量维持既有 spawn 路径。 */
   private productionSpawn(options: ClaudeCliAdapterOptions): (args: string[], cwd: string) => ChildProcessWithoutNullStreams {
     const entry = resolveClaudeExecutable(options.executable);
     return (args, cwd) =>

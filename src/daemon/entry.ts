@@ -26,6 +26,8 @@ import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
+import * as managedBridgeMod from './managed/bridge.ts';
+import * as claudeCliMod from '../adapter/claude/cliAdapter.ts';
 import { ClaudeCliAdapter } from '../adapter/claude/cliAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
 import type { FakeTurnScript } from '../adapter/fake/script.ts';
@@ -142,18 +144,51 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
                     : undefined,
             );
 
+    // REC-LIFE-1（第十二轮·五）：受管运行时注入——ZS_MANAGED_RUNTIME=1 时生产 adapter 的
+    // spawn 走 Job Object 受管桥（挂起创建→纳管→恢复，KILL_ON_JOB_CLOSE 兜底）；桥不可用
+    // 直接抛错（daemon 启动失败），**不降级为未受管运行**。未设变量=维持既有路径与第九轮
+    // 保守解除口径（按部署节奏逐项目启用）。受管句柄按 pid 注册（bridge），dispatchWorker
+    // 登记 identity_source='managed-job'，releaseProtection 凭 releaseEvidence 解除。
+    const managedClaudeSpawn = (() => {
+      if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
+      const { managedBridgeAvailable, spawnManagedBridge } = managedBridgeMod;
+      const avail = managedBridgeAvailable();
+      if (!avail.ok) {
+        throw new Error(`受管运行时启用（ZS_MANAGED_RUNTIME=1）但不可用——拒绝启动，不降级为未受管执行：${avail.reason}`);
+      }
+      const { resolveClaudeExecutable } = claudeCliMod;
+      return (executable: string | undefined) => (args: string[], cwd: string) =>
+        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd, env: process.env }) as never;
+    })();
+    const managedCodexSpawn = (() => {
+      if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
+      const { spawnManagedBridge } = managedBridgeMod;
+      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, { env: process.env }) as never;
+    })();
+    if (options.runtime === 'codex' && managedCodexSpawn != null) {
+      adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });
+    } else if (options.runtime === 'claude' && managedClaudeSpawn != null) {
+      adapter = new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined));
+    }
+
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
     // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
     const claudePermissionOf = (mode: string | null): 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' | undefined =>
       mode === 'plan' || mode === 'manual' || mode === 'acceptEdits' || mode === 'auto' || mode === 'dontAsk' || mode === 'bypassPermissions' ? mode : undefined;
     const factories: Record<string, MemberAdapterFactory> = {
-      codex: (binding) => new CodexAppServerAdapter({ model: binding.model ?? process.env.ZS_E2E_MODEL }),
-      claude: (binding) => new ClaudeCliAdapter({
-        model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
-        executable: binding.executable ?? undefined,
-        permissionMode: claudePermissionOf(binding.permissionMode),
-        installationId: binding.installationId ?? undefined,
+      codex: (binding) => new CodexAppServerAdapter({
+        model: binding.model ?? process.env.ZS_E2E_MODEL,
+        ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
       }),
+      claude: (binding) => new ClaudeCliAdapter(
+        {
+          model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
+          executable: binding.executable ?? undefined,
+          permissionMode: claudePermissionOf(binding.permissionMode),
+          installationId: binding.installationId ?? undefined,
+        },
+        managedClaudeSpawn != null ? managedClaudeSpawn(binding.executable ?? undefined) : undefined,
+      ),
     };
     if (process.env.ZS_ALLOW_FAKE === '1') {
       // 成员级 fake 实例与默认实例同款编排（ZS_FAKE_DELIB=1 时按输入契约生成合法研讨

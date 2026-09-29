@@ -92,6 +92,9 @@ function resolveServerProbe(deps: DaemonCommandDeps, turnId: string, probeId: st
   return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile', treeScan: deps.processTree });
 }
 
+// REC-LIFE-1（第十二轮）：受管桥同步取用——releaseProtection 事务内按 pid 查受管证据。
+import { managedJobByPid } from './managed/bridge.ts';
+
 const localScope = (userId: string): string => `user:${userId}`;
 
 /** project.open 的默认引导（成员/房间/房间成员关系/会话；重复打开不重复创建）。 */
@@ -713,6 +716,28 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               payload: { ...payload, manualNote: params.note, probe: { probeId: probe.probeId, result: probe.result, processModel: probe.processModel, pid: probe.pid, observedAt: probe.observedAt, detail: probe.detail } },
             });
           };
+          // REC-LIFE-1（第十二轮）：受管执行（登记 identity_source='managed-job'）的解除证据
+          // ——releaseEvidence（根退出+本进程句柄已关+活跃计数 0）= 可证明完整结束；按 pid 查
+          // 受管句柄。未纳管/句柄不在本进程（重启后）→ 不追认，走既有保守口径或拒绝。
+          const reg = getTurnProcessRegistration(deps.db, turn.id);
+          if (reg?.pid != null && reg.identity_source === 'managed-job') {
+            const mp = managedJobByPid(reg.pid);
+            if (mp == null) {
+              throw new DaemonCommandError('STALE_REVISION', '该 turn 登记为受管执行，但本进程未持有其 job 句柄（daemon 重启或已释放）——无法核对完整结束，进入人工核对；「曾纳管」不追认为完整退出证据');
+            }
+            const evidence = mp.releaseEvidence();
+            if (!evidence.releasable) {
+              throw new DaemonCommandError('STALE_REVISION', `受管执行未完整结束（拒绝解除）：${evidence.reason}`);
+            }
+            const txm = deps.db.transaction(() => {
+              for (const l of leases) {
+                deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
+              }
+              emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence', managedEvidence: evidence });
+            });
+            txm();
+            return { turnId: turn.id, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence' };
+          }
           if (probe.result !== 'no-os-process') {
             // 第九轮收紧：释放只凭**程序事实**（none 模型 no-os-process）。alive/未完整确认
             // 拒绝；**exited 观察同样不释放**（周期快照不构成完整退出证明——含升级前 ≤10min

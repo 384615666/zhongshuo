@@ -99,7 +99,7 @@ export interface ProcessRegistryRow {
   process_model: 'per-turn' | 'shared' | 'none' | 'unknown';
   pid: number | null;
   started_at_ms: number | null;
-  identity_source: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch';
+  identity_source: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch' | 'managed-job';
   registered_at: number;
   closed_at: number | null;
   note: string | null;
@@ -123,7 +123,7 @@ export function registerTurnProcess(
   db: RegistryDb, input: {
     turnId: string; runId: string; memberId: string; adapterKind: string;
     processModel: 'per-turn' | 'shared' | 'none' | 'unknown'; pid: number | null;
-    startedAtMs: number | null; identitySource: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch';
+    startedAtMs: number | null; identitySource: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch' | 'managed-job';
     note?: string; now?: number;
   },
 ): void {

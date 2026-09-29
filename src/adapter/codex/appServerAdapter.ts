@@ -69,6 +69,8 @@ export interface CodexAdapterOptions {
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
   /** 测试注入：替换 spawn 的脚本入口（本地协议回放，不消耗额度）。 */
   mockEntry?: { executable: string; args?: string[] };
+  /** 生产 spawn 注入点（REC-LIFE-1：daemon 层注入 Job Object 受管桥；缺省=普通 spawn）。 */
+  spawnFn?: (cmd: string, args: string[]) => ChildProcessWithoutNullStreams;
 }
 
 export class CodexAppServerAdapter implements RuntimeAdapter {
@@ -82,7 +84,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry'] };
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
@@ -94,6 +96,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       model: options.model,
       approvalPolicy: options.approvalPolicy,
       mockEntry: options.mockEntry,
+      spawnFn: options.spawnFn,
     };
   }
 
@@ -108,10 +111,12 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     this.buffer = '';
     this.stderrTail = '';
     this.handshakeDone = false; // 新连接必须重新 initialize + initialized（修复轮）
-    const child = spawn(process.execPath, [entry.executable, ...entry.args, 'app-server'], {
+    // REC-LIFE-1：受管 spawn 经 spawnFn 注入（daemon 层提供 Job Object 桥；adapter 不感知）。
+    const spawnServer = this.options.spawnFn ?? ((cmd: string, args: string[]) => spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-    }) as ChildProcessWithoutNullStreams;
+    }) as ChildProcessWithoutNullStreams);
+    const child = spawnServer(process.execPath, [entry.executable, ...entry.args, 'app-server']);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.onStdout(chunk));

@@ -142,7 +142,7 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 父退出不构成执行结束证据：现存树从死根只能抓到已退出的子——孙靠快照历史归属核对发现。
     const p1 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     expect(p1.result).toBe('unknown');
-    expect(p1.detail).toContain('历史身份核对');
+    expect(p1.detail).toContain('历史身份核对发现仍在运行的执行载体'); // 孙存活——历史身份核对发现
     // 对账 executed：退出未知 → 结算但保护保留。
     const rec = await cmd<{ turnFinalStatus: string; protectionRetained: boolean }>('recovery.reconcile', {
       turnId, verdict: 'executed', note: '三代现场：孙进程仍在运行',
