@@ -1,0 +1,129 @@
+# B-DELIBERATE 材料（v2）
+
+模式：DELIBERATE（两成员研讨）；任务：对比 src-todo/ 下三个实现方案的优缺点，指出各自最可能出错的一处，并给出推荐与理由
+
+## A. 产品交付视角
+
+- 正式交付：有（最终报告 artifact，整体共识=qualified）
+- 用户在线程中实际看到的：0 条 agent 消息（全文见下）
+- 校验/预算/失败成本：调用 7/9；失败 turn 0 个
+
+## B. 原始内容诊断视角（完整保留，含被拒字段/围栏——不构成产品交付）
+
+### 最终报告（正式交付 artifact，程序矩阵生成）
+
+```json
+{
+  "claimResults": [
+    {
+      "claimId": "clm_1",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "src-todo/ 三份方案：A（plan-a.md）=周六凌晨维护窗内停写→40GB 全量 mysqldump（自估 15 分钟）→传输导入（自估 8 分钟）→02:25 切连接串，自称全程停机 30 分钟以内，回滚=切回旧库连接串；B（plan-b.md）=应用层双写新旧库（失败以旧库为准记日志）+DTS 全量与 binlog 增量追平，读灰度 5%→50%→100% 观察一周，约 3 周无停机，末态关闭双写、旧库保留 30 天后下线，回滚=读切回+关双写；C（plan-c.md）=存量按主键分批复制（约 2 天，不锁表）+binlog 增量（延迟≤5 秒），低峰期冻结写 5 分钟、每张核心表 COUNT(*) 行数相等即判一致后切换，同步任务保留 24 小时兜底，回滚=24 小时内反向同步（新→旧）后切回。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_10",
+      "conditionals": 1,
+      "confirms": 1,
+      "consensus": "qualified",
+      "missing": 0,
+      "objects": 0,
+      "statement": "综合排序与条件化推荐：在可接受分钟级冻结的前提下 C 最均衡（停机最短、校验可工程加固、属行业通用路线）；B 性价比最低（约 3 周成本只为消除 5 分钟停机，却引入双写一致性风险），仅在「绝对零停机」为硬约束且能落实对账补偿与写路径边界时值得；A 仅在 binlog/复制/DTS 能力不可用或团队无力维护同步链路且业务可接受 30 分钟级停机时被迫选用，须先演练并按实测放宽窗口。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_2",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "A 优点：流程简单、一次性完成、无需双写逻辑、时间点可控易与业务沟通；缺点（自述）：窗口内任何一步超时都直接影响恢复时间——无增量兜底，任一步失败或超时意味着停机延长甚至整包重做、另排窗口。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_3",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "A 最可能出错的一处是时间预算：文档时间线自相矛盾——01:50 冻结写入至 02:30 恢复实为 40 分钟，正文却称「全程 30 分钟以内」；02:00–02:25 仅 25 分钟须完成 40GB 的导出（自估 15 分钟）+传输导入（自估 8 分钟），23/30 分钟被塞满、几无缓冲，且「传输+导入=8 分钟」与导出 15 分钟的量级存疑（并行导入工具或可接近该预估，但总体仍属高危）；一旦某步变慢且无增量追赶，最可能结局是停机远超 30 分钟。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_4",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "B 优点：全程无停机、业务无感、灰度切读逐步验证、风险分散；缺点：双写期间两库可能不一致（新库写失败仅记日志后人工补）、需额外比对任务、开发运维成本最高、周期约 3 周。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_5",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "B 最可能出错的一处是双写一致性（两条写入新库路径未协调）：跨库写非原子，新库写失败被日志吞掉→静默漏写/部分写；同时「应用双写」与「旧库 binlog/DTS 订阅」并行会对同一条变更重复应用，非幂等写入（INSERT、计数器、UPDATE 叠加）导致重复/错值、乱序覆盖（丢更新），读到 100% 后才暴露；文档未约定过滤、幂等或停订阅边界。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_6",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "B 的附带硬伤：回滚承诺「任何阶段出问题切回旧库即可」在观察期结束、关闭双写后不成立——旧库自关闭双写起不再接收写入，若在 30 天保留期内才暴露问题，切回旧库将丢失此后产生的全部增量数据。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_7",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "C 优点：停机最短（仅冻结写入 5 分钟）、存量分批复制不锁表、有明确校验关卡而非盲切；缺点：组件最多（存量+增量+校验）链路复杂、binlog 订阅对数据库版本有要求。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_8",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "C 最可能出错的一处是校验关卡不可靠：以「每张核心表 COUNT(*) 新旧行数相等」判定一致属假阳性，掩盖改/删/插组合造成的行级差异（含抵消性误差），可不一致数据带过校验后切换；且 40GB 大表逐表 COUNT(*) 全扫很可能超出 5 分钟冻结窗（校验来不及或被迫延长停机）；另外回滚为反向同步（新→旧），存在把新库坏数据反灌旧库的风险，批量复制与 binlog 起点的快照/位点锚定方式也未写明。",
+      "unconfirmedExplicit": 0
+    },
+    {
+      "claimId": "clm_9",
+      "conditionals": 0,
+      "confirms": 2,
+      "consensus": "unanimous",
+      "missing": 0,
+      "objects": 0,
+      "statement": "三方案共同缺口：均未提及切换后的应用兼容性验证（字符集/sql_mode/数据库版本差异）、双写或同步延迟的监控告警、明确的失败判定与回退触发条件，以及上线前同规格演练实测。",
+      "unconfirmedExplicit": 0
+    }
+  ],
+  "disputedClaims": [],
+  "overallConsensus": "qualified",
+  "publishedAt": 1790612933965,
+  "schemaVersion": "final-report-v1",
+  "summary": "三份方案分别以「停机窗口一次迁完（A）/应用双写过渡（B）/存量复制+binlog 增量+校验后切换（C）」为主线。各自最可能出错的一处：A 时间预算不实（时间线 01:50→02:30 实为 40 分钟却称 30 分钟以内，02:00–02:25 仅 25 分钟要完成 40GB 库自估 15 分钟导出+8 分钟传输导入，几无缓冲、无增量兜底）；B 双写一致性（写失败被「以旧库为准记日志」吞掉成静默漏写，且与应用双写并行的 binlog/DTS 重放未界定边界，非幂等写入会重复应用/乱序覆盖，关闭双写后切回旧库的回滚承诺亦失效）；C 校验关卡（COUNT(*) 行数相等为假阳性、检不出行级差异，大表全扫还可能超出 5 分钟冻结窗，回滚反向同步有反灌风险）。综合推荐：以 C 为基线并升级校验与位点锚定；A 仅作无 binlog/DTS 能力且可接受 30 分钟级停机时的低配备选（须先演练+扩窗 2–3 倍）；B 仅在绝对零停机为硬约束且能落实写路径边界、对账补偿与幂等时才值其约 3 周成本。两份初稿及全部互评意见一致，无实质分歧。",
+  "synthesisRef": {
+    "artifactId": "art_turn_931b6557-d880-4136-9c19-22f0516cae71",
+    "revision": 1
+  }
+}
+```

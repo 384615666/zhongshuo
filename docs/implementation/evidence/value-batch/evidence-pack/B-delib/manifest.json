@@ -1,0 +1,89 @@
+{
+  "batch": {
+    "id": "value-abc-20260928",
+    "group": "B",
+    "side": "delib",
+    "authorizedCapTotal": 33,
+    "sideCap": 9
+  },
+  "rehearse": false,
+  "runtime": {
+    "kind": "claude",
+    "requestedModel": "deepseek-flash",
+    "adapterVersion": "claude-cli-2.1.283-adapter-0.3",
+    "fallbackRuntimeEnv": "claude",
+    "channelNote": "Claude Code CLI 渠道（用户 settings.json env）；响应模型以 result.model/assistant.message.model 双源取证"
+  },
+  "memberBindings": [
+    {
+      "memberId": "m_default_prj_768c7518-5e1f-42ac-b1a2-006c1317d2dd_0",
+      "displayName": "分析师甲",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    },
+    {
+      "memberId": "m_default_prj_768c7518-5e1f-42ac-b1a2-006c1317d2dd_1",
+      "displayName": "分析师乙",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    }
+  ],
+  "codeCommit": "915f0dbdc507c878824568026899680791838604",
+  "standingPromptVersion": "zs-standing-v0.1.1",
+  "permissionParams": {
+    "permissionMode": "plan",
+    "allowedTools": "Read,Glob,Grep",
+    "disallowed": "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*",
+    "extras": [
+      "--permission-prompts none",
+      "--strict-mcp-config",
+      "--bare",
+      "--disable-slash-commands"
+    ]
+  },
+  "fixture": {
+    "materialsDir": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\B\\materials",
+    "keyFile": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\B\\key.json",
+    "files": [
+      {
+        "path": "src-todo/plan-a.md",
+        "sha256": "db1597246456a0ae92bd2fb612f12c5d80b2f187693f2679c2f580cef1b000c3"
+      },
+      {
+        "path": "src-todo/plan-b.md",
+        "sha256": "c5f65be394bb0b5ba65bd95144ec789ff3cfea5f9072c54944469faf6a23d1f2"
+      },
+      {
+        "path": "src-todo/plan-c.md",
+        "sha256": "313c13b03ff4d10701e5b44a7a955fe3f4f6128620a81995c652cc506605f1a3"
+      }
+    ]
+  },
+  "taskText": "对比 src-todo/ 下三个实现方案的优缺点，指出各自最可能出错的一处，并给出推荐与理由",
+  "budget": {
+    "maxTurns": 9,
+    "normalPath": "IND2+CR2+SYN1+RAT2=7（无争议）",
+    "repairMargin": 2,
+    "disputeNote": "争议/修复/尾部在 9 内竞争，不另增调用"
+  },
+  "taskId": "task_8bf97fb2-a053-4b97-ba33-5458edd88378",
+  "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+  "electronPid": 14788,
+  "cdpPort": 9781,
+  "appData": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\B\\delib\\appdata",
+  "proj": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\B\\delib\\proj",
+  "submittedAt": 1790612583674,
+  "config": {
+    "model": "deepseek-flash",
+    "runtime": "claude",
+    "turnDeadlineMs": 420000,
+    "maxTurns": 9,
+    "runMaxMs": 2700000,
+    "absenceMs": 1200000,
+    "sideCap": 9
+  }
+}

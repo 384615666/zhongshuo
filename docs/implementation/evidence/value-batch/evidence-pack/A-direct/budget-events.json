@@ -1,0 +1,29 @@
+[
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        ": Unrecognized key: \"conclusions\""
+      ],
+      "rawLength": 1942
+    },
+    "createdAt": 1790608023501
+  },
+  {
+    "kind": "task.redispatchEnqueued",
+    "payload": {
+      "reason": "价值对比 DIRECT 格式修复（输出含未知键 conclusions——每份逻辑输出最多一次）"
+    },
+    "createdAt": 1790608640218
+  },
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        ": Unrecognized key: \"conclusions\""
+      ],
+      "rawLength": 1936
+    },
+    "createdAt": 1790608668514
+  }
+]

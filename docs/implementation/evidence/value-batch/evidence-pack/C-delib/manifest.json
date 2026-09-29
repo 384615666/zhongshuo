@@ -1,0 +1,81 @@
+{
+  "batch": {
+    "id": "value-abc-20260928",
+    "group": "C",
+    "side": "delib",
+    "authorizedCapTotal": 33,
+    "sideCap": 9
+  },
+  "rehearse": false,
+  "runtime": {
+    "kind": "claude",
+    "requestedModel": "deepseek-flash",
+    "adapterVersion": "claude-cli-2.1.283-adapter-0.3",
+    "fallbackRuntimeEnv": "claude",
+    "channelNote": "Claude Code CLI 渠道（用户 settings.json env）；响应模型以 result.model/assistant.message.model 双源取证"
+  },
+  "memberBindings": [
+    {
+      "memberId": "m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_0",
+      "displayName": "分析师甲",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    },
+    {
+      "memberId": "m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_1",
+      "displayName": "分析师乙",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    }
+  ],
+  "codeCommit": "915f0dbdc507c878824568026899680791838604",
+  "standingPromptVersion": "zs-standing-v0.1.1",
+  "permissionParams": {
+    "permissionMode": "plan",
+    "allowedTools": "Read,Glob,Grep",
+    "disallowed": "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*",
+    "extras": [
+      "--permission-prompts none",
+      "--strict-mcp-config",
+      "--bare",
+      "--disable-slash-commands"
+    ]
+  },
+  "fixture": {
+    "materialsDir": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\C\\materials",
+    "keyFile": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\C\\key.json",
+    "files": [
+      {
+        "path": "logs/app-week.log",
+        "sha256": "45ae6d2183a91fc609a104d8d932b006f35dfd9b9eef3bd0f8bf09ca4fe8b609"
+      }
+    ]
+  },
+  "taskText": "分析 logs/ 一周日志，找出异常模式并按严重度排序，给出需人工确认的清单",
+  "budget": {
+    "maxTurns": 9,
+    "normalPath": "IND2+CR2+SYN1+RAT2=7（无争议）",
+    "repairMargin": 2,
+    "disputeNote": "争议/修复/尾部在 9 内竞争，不另增调用"
+  },
+  "taskId": "task_5612f4c5-4513-4169-a650-f422708e3d53",
+  "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+  "electronPid": 15832,
+  "cdpPort": 9781,
+  "appData": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\C\\delib\\appdata",
+  "proj": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\C\\delib\\proj",
+  "submittedAt": 1790613713967,
+  "config": {
+    "model": "deepseek-flash",
+    "runtime": "claude",
+    "turnDeadlineMs": 420000,
+    "maxTurns": 9,
+    "runMaxMs": 2700000,
+    "absenceMs": 1200000,
+    "sideCap": 9
+  }
+}

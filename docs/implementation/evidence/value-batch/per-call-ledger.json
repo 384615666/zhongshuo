@@ -1,0 +1,755 @@
+{
+  "generatedAt": "2026-09-29T00:25:46.977Z",
+  "source": "per-side state.sqlite (原始记录)",
+  "sides": [
+    {
+      "group": "A",
+      "side": "direct",
+      "taskId": "task_11c223f9-15f3-4018-b547-f4235ea80b97",
+      "taskStatus": "ACTIVE",
+      "calls": 2,
+      "failedTurns": 2,
+      "succeededTurns": 0,
+      "sideCap": 2,
+      "sideCapExceeded": false,
+      "budgetObserved": null,
+      "budgetSkippedEvents": 0,
+      "repairTurns": 1,
+      "codeCommit": "6064529b8ef68309ca9a7eb9c44cff9887ae6a4b",
+      "turns": [
+        {
+          "turnId": "turn_76a97913-9367-4c18-ab4c-70f220791254",
+          "runId": "run_6d645fcb-6591-49d3-a214-719822975044",
+          "stage": "direct.work",
+          "isRepair": false,
+          "dispatchKeyTail": "initial",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1727,
+            "cached": 7680,
+            "output": 8215
+          },
+          "estimatedCostUsd": 0.21785,
+          "bundle": {
+            "id": "cb_28455a1cd9a2bba4aaed77f1",
+            "hash": "28455a1cd9a2bba4aaed77f11746be9c4e0ff4f1405918f2c5ad4215b93fd10a"
+          },
+          "outputInvalidIssues": [
+            ": Unrecognized key: \"conclusions\""
+          ]
+        },
+        {
+          "turnId": "turn_002a80c0-47c1-4003-9368-2f146c1f7fc3",
+          "runId": "run_db9c3332-bbee-4d0c-84f7-a122954b3ca1",
+          "stage": "direct.work",
+          "isRepair": true,
+          "dispatchKeyTail": "redispatch",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2992,
+            "cached": 7424,
+            "output": 6906
+          },
+          "estimatedCostUsd": 0.191322,
+          "bundle": {
+            "id": "cb_dbc4eab7d0f2da28d4a36d70",
+            "hash": "dbc4eab7d0f2da28d4a36d707c52f96664b86265cc0153f565530290206b10c8"
+          },
+          "outputInvalidIssues": [
+            ": Unrecognized key: \"conclusions\""
+          ]
+        }
+      ],
+      "note": null
+    },
+    {
+      "group": "A",
+      "side": "delib",
+      "taskId": "task_7325ddd6-4a45-4b05-bbf7-1b1d55156798",
+      "taskStatus": "DONE",
+      "calls": 10,
+      "failedTurns": 1,
+      "succeededTurns": 9,
+      "sideCap": 9,
+      "sideCapExceeded": true,
+      "budgetObserved": {
+        "usedTurnsSum": 10,
+        "runMaxTurns": [
+          9
+        ]
+      },
+      "budgetSkippedEvents": 2,
+      "repairTurns": 1,
+      "codeCommit": "6064529b8ef68309ca9a7eb9c44cff9887ae6a4b",
+      "turns": [
+        {
+          "turnId": "turn_6d7cb13d-7668-4e9f-b09f-6da489387148",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 997,
+            "cached": 768,
+            "output": 3764
+          },
+          "estimatedCostUsd": 0.09946899999999999,
+          "bundle": {
+            "id": "cb_564c9dd3-2995-4079-8a0b-ff809e6c00c0",
+            "hash": "587d9452c4e400f6d88eb928b85052aa82e1e05deb83deadb316788ded6f14eb"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_6d75ad98-ea23-497b-bc49-1be0cd729971",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1396,
+            "cached": 3328,
+            "output": 4585
+          },
+          "estimatedCostUsd": 0.12326900000000002,
+          "bundle": {
+            "id": "cb_a6f5134f-c5e6-47fb-8d53-782a6e85fd30",
+            "hash": "484e5811353e09251313800287fbd970729592c931a5667ef2760b790b8e8f25"
+          },
+          "outputInvalidIssues": [
+            "输出不是 JSON"
+          ]
+        },
+        {
+          "turnId": "turn_7700e44f-33b6-4a11-bbb3-3c3cf8b58f57",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.independent.fx",
+          "isRepair": true,
+          "dispatchKeyTail": "IND",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 944,
+            "cached": 896,
+            "output": 3434
+          },
+          "estimatedCostUsd": 0.091018,
+          "bundle": {
+            "id": "cb_37c351d2-ed4d-4ed4-95cc-4954715f75a9",
+            "hash": "275c92472f2fc18758d31d3c0a77c4de3e70706ac6525d79e3bf661a06b20ae3"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_505bb1b2-62b0-482d-bf31-768c2b935a4d",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2369,
+            "cached": 7808,
+            "output": 7773
+          },
+          "estimatedCostUsd": 0.21007399999999998,
+          "bundle": {
+            "id": "cb_fa4d1e42-8166-4646-9e5a-7c1b78136691",
+            "hash": "e27d622c86b2db60384052f4ce9c6aa018f3dc28810cd1e4036ff6d118d4c571"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_a44cd22f-9014-4c30-87ff-6394d5301604",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2392,
+            "cached": 7936,
+            "output": 21992
+          },
+          "estimatedCostUsd": 0.565728,
+          "bundle": {
+            "id": "cb_1a0a59f4-0589-41ed-8e01-f2d67bc0385f",
+            "hash": "c6fbf6005ceeaa8d207b2fc179d4c7b86503f9cf9d53428c3865d1090ac961c6"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_57ba4dbc-554b-4b89-806a-c5d3b6f0f809",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.issue_discussion.r1",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1167,
+            "cached": 1024,
+            "output": 2900
+          },
+          "estimatedCostUsd": 0.078847,
+          "bundle": {
+            "id": "cb_2175d282-4a93-4bbb-97d3-1fdf87d1f990",
+            "hash": "457fa2b1dfa2fda5c2d66536381a6fbb287ac5c4be261ade89690ed71e3587ca"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_e8e6a2d4-e002-4ebe-b3e3-d918a24fea54",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.issue_discussion.r1",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1129,
+            "cached": 1408,
+            "output": 2762
+          },
+          "estimatedCostUsd": 0.075399,
+          "bundle": {
+            "id": "cb_78c998f6-4b06-4934-9645-65414fb7bdb4",
+            "hash": "457fa2b1dfa2fda5c2d66536381a6fbb287ac5c4be261ade89690ed71e3587ca"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_bc57c62b-b81d-45c3-bd85-636b1a6db4f6",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.synthesis",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 5401,
+            "cached": 5376,
+            "output": 21909
+          },
+          "estimatedCostUsd": 0.5774180000000001,
+          "bundle": {
+            "id": "cb_d0d600b1-8a95-4761-a798-14da441cd504",
+            "hash": "3a213d5224c0b33c14b49507249b2209ade29f84354124418dcefdc97f545753"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_d62b6408-36aa-42ae-a193-9566d54eaab0",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1539,
+            "cached": 1408,
+            "output": 6086
+          },
+          "estimatedCostUsd": 0.16054900000000003,
+          "bundle": {
+            "id": "cb_1e468892-0157-4fe1-a335-d39f0115d67c",
+            "hash": "5a967830c2d7399548dc261bd6bd6af521888bf8dab5445e4e9d5a6a556c06a8"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_b06df82e-10f5-49cb-85b8-d3927a5a61e1",
+          "runId": "run_d19d5161-27e4-4946-a36a-94d1e79417c9",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1530,
+            "cached": 1408,
+            "output": 5704
+          },
+          "estimatedCostUsd": 0.150954,
+          "bundle": {
+            "id": "cb_1018daf7-4b29-4a1e-9402-bd34025809e7",
+            "hash": "5a967830c2d7399548dc261bd6bd6af521888bf8dab5445e4e9d5a6a556c06a8"
+          },
+          "outputInvalidIssues": null
+        }
+      ],
+      "note": "sideCapExceeded=true：A-DELIB 实发 10>9（预算执行缺陷，修复=915f0db；第 10 次调用如实入账）"
+    },
+    {
+      "group": "B",
+      "side": "direct",
+      "taskId": "task_9f578576-23ee-4cca-aef2-5b3896747a57",
+      "taskStatus": "ACTIVE",
+      "calls": 2,
+      "failedTurns": 2,
+      "succeededTurns": 0,
+      "sideCap": 2,
+      "sideCapExceeded": false,
+      "budgetObserved": null,
+      "budgetSkippedEvents": 0,
+      "repairTurns": 1,
+      "codeCommit": "915f0dbdc507c878824568026899680791838604",
+      "turns": [
+        {
+          "turnId": "turn_0a26cd3a-7c64-4e67-a3ea-2ea56534def3",
+          "runId": "run_de5c66a7-0ff2-4fce-8722-230f08811051",
+          "stage": "direct.work",
+          "isRepair": false,
+          "dispatchKeyTail": "initial",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2802,
+            "cached": 8064,
+            "output": 19929
+          },
+          "estimatedCostUsd": 0.5162669999999999,
+          "bundle": {
+            "id": "cb_e265bc5f579b9b8d78245211",
+            "hash": "e265bc5f579b9b8d782452119ba868bc8b24a0bdc490d1563ec59aeb2d03ba24"
+          },
+          "outputInvalidIssues": [
+            "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+          ]
+        },
+        {
+          "turnId": "turn_de6e5dae-3084-496b-9d93-73c5268be887",
+          "runId": "run_0d49081e-85c0-4119-89e7-51cd0b26b46e",
+          "stage": "direct.work",
+          "isRepair": true,
+          "dispatchKeyTail": "redispatch",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 4056,
+            "cached": 5504,
+            "output": 13499
+          },
+          "estimatedCostUsd": 0.36050699999999997,
+          "bundle": {
+            "id": "cb_9f86b78a111e59f55de58d18",
+            "hash": "9f86b78a111e59f55de58d18a50da754ae5ab9c9e82c6c6d75a3d7ccc3588e45"
+          },
+          "outputInvalidIssues": [
+            "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+          ]
+        }
+      ],
+      "note": null
+    },
+    {
+      "group": "B",
+      "side": "delib",
+      "taskId": "task_8bf97fb2-a053-4b97-ba33-5458edd88378",
+      "taskStatus": "DONE",
+      "calls": 7,
+      "failedTurns": 0,
+      "succeededTurns": 7,
+      "sideCap": 9,
+      "sideCapExceeded": false,
+      "budgetObserved": {
+        "usedTurnsSum": 7,
+        "runMaxTurns": [
+          9
+        ]
+      },
+      "budgetSkippedEvents": 0,
+      "repairTurns": 0,
+      "codeCommit": "915f0dbdc507c878824568026899680791838604",
+      "turns": [
+        {
+          "turnId": "turn_91e22b61-e531-47e6-abc7-785e4e257e76",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2719,
+            "cached": 7424,
+            "output": 9933
+          },
+          "estimatedCostUsd": 0.265632,
+          "bundle": {
+            "id": "cb_22943c2f-2028-439f-a045-eb8184f17f90",
+            "hash": "ecc865430fe1b2902b2e4b0a5461fd8f18630c7619e48878fe06a3cd3dbad2ac"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_3512aa37-00bd-48c5-81cc-cf99f9da79bc",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2980,
+            "cached": 12800,
+            "output": 12543
+          },
+          "estimatedCostUsd": 0.33487500000000003,
+          "bundle": {
+            "id": "cb_14aa7c44-b266-4987-ae54-987653580329",
+            "hash": "3d9c1c4ce6e26603c7bcd5ad58ca8e0b9211f113fb71adb0d423710809631735"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_ab2b5826-f4b3-483b-9c86-ed7f75542777",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 3112,
+            "cached": 2432,
+            "output": 14968
+          },
+          "estimatedCostUsd": 0.390976,
+          "bundle": {
+            "id": "cb_af7650f9-7157-47d5-b4e2-7aeea0e5509e",
+            "hash": "d52ee7683c3f8eebd9c8d106e00191be15003d37b659369ecfcebc93c78425e0"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_c55cfe1a-163e-4e90-a6ca-1e39e8dcff7a",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 3494,
+            "cached": 18432,
+            "output": 19380
+          },
+          "estimatedCostUsd": 0.5111859999999999,
+          "bundle": {
+            "id": "cb_753e21bf-2ae8-4df2-90d5-f8cd774c06a8",
+            "hash": "861a041327359d7d8ba4711a4c91c136602ef6bf021a760c1e58b639399d99a8"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_931b6557-d880-4136-9c19-22f0516cae71",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.synthesis",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 7027,
+            "cached": 16640,
+            "output": 21407
+          },
+          "estimatedCostUsd": 0.57863,
+          "bundle": {
+            "id": "cb_6b6b9b88-2081-4ab7-a1b7-2c8df79032a1",
+            "hash": "50d3a63d0b5c114690f2161198ce4e5ee2b4a0f3e6d6bb3147f2cb92575f1db9"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_a8ba2d0c-7f84-409f-bee6-2125df3196b2",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 4863,
+            "cached": 28288,
+            "output": 23161
+          },
+          "estimatedCostUsd": 0.617484,
+          "bundle": {
+            "id": "cb_14de03c3-1af6-47e4-9977-413a8d0a630d",
+            "hash": "0cb8df50cbcd5f5c11504bd32fa43ad8314e9e1da816ef194ce38f2d8704bc80"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_a6c516d5-ba2a-4d7b-8316-7bd42ac7691f",
+          "runId": "run_b8ce23ab-3562-43f5-9e06-1954c86130c4",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 3225,
+            "cached": 5888,
+            "output": 8686
+          },
+          "estimatedCostUsd": 0.236219,
+          "bundle": {
+            "id": "cb_917ec6ee-2513-4c84-a04b-f64963468aa3",
+            "hash": "0cb8df50cbcd5f5c11504bd32fa43ad8314e9e1da816ef194ce38f2d8704bc80"
+          },
+          "outputInvalidIssues": null
+        }
+      ],
+      "note": null
+    },
+    {
+      "group": "C",
+      "side": "direct",
+      "taskId": "task_0ff7b295-e285-4b09-8cab-f7252a63fc26",
+      "taskStatus": "DONE",
+      "calls": 2,
+      "failedTurns": 1,
+      "succeededTurns": 1,
+      "sideCap": 2,
+      "sideCapExceeded": false,
+      "budgetObserved": null,
+      "budgetSkippedEvents": 0,
+      "repairTurns": 1,
+      "codeCommit": "915f0dbdc507c878824568026899680791838604",
+      "turns": [
+        {
+          "turnId": "turn_481be54f-07f6-4052-8daa-68c475ea21db",
+          "runId": "run_67bfa40c-1afa-4779-a1f7-21955fdce525",
+          "stage": "direct.work",
+          "isRepair": false,
+          "dispatchKeyTail": "initial",
+          "status": "FAILED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1681,
+            "cached": 3968,
+            "output": 6572
+          },
+          "estimatedCostUsd": 0.17468899999999998,
+          "bundle": {
+            "id": "cb_b4c73bf28aadb5504e5e8709",
+            "hash": "b4c73bf28aadb5504e5e870995061fb34681a04f322533a4ee4a4d575b479977"
+          },
+          "outputInvalidIssues": [
+            "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+          ]
+        },
+        {
+          "turnId": "turn_db4a82ad-2ea4-482c-ba6c-5688c74aebb3",
+          "runId": "run_b20f2309-0687-4883-9eff-80a15d6ab5ce",
+          "stage": "direct.work",
+          "isRepair": true,
+          "dispatchKeyTail": "redispatch",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2296,
+            "cached": 17280,
+            "output": 9559
+          },
+          "estimatedCostUsd": 0.25909499999999996,
+          "bundle": {
+            "id": "cb_0a554c1938cfa7d88a38e9ca",
+            "hash": "0a554c1938cfa7d88a38e9cabc7c48e3539a119f32977d5b003821990d7c41e8"
+          },
+          "outputInvalidIssues": null
+        }
+      ],
+      "note": null
+    },
+    {
+      "group": "C",
+      "side": "delib",
+      "taskId": "task_5612f4c5-4513-4169-a650-f422708e3d53",
+      "taskStatus": "DONE",
+      "calls": 7,
+      "failedTurns": 0,
+      "succeededTurns": 7,
+      "sideCap": 9,
+      "sideCapExceeded": false,
+      "budgetObserved": {
+        "usedTurnsSum": 7,
+        "runMaxTurns": [
+          9
+        ]
+      },
+      "budgetSkippedEvents": 0,
+      "repairTurns": 0,
+      "codeCommit": "915f0dbdc507c878824568026899680791838604",
+      "turns": [
+        {
+          "turnId": "turn_6d6f75bd-6b5a-4658-9400-2589e91964b5",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 6430,
+            "cached": 96128,
+            "output": 12890
+          },
+          "estimatedCostUsd": 0.402464,
+          "bundle": {
+            "id": "cb_2d1a10dc-1832-4431-b0ab-96149808316c",
+            "hash": "0d0f3fc4394a678f8197c87debc7dc83b2bf6dfca1f74de9377c4e8ffcfaf53c"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_1890b89c-d019-4fc2-8ef8-05dda5be9e4e",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.independent",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 8831,
+            "cached": 127360,
+            "output": 14120
+          },
+          "estimatedCostUsd": 0.46083500000000005,
+          "bundle": {
+            "id": "cb_85d290a4-7e02-4b15-ae0b-17d02d25bbf3",
+            "hash": "ef22311b44c04f5fba2c9a9d8c739d88df82a42897ed513a3e73107c6100a592"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_05428490-2b03-4072-9392-387b6c4eebaf",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2024,
+            "cached": 7424,
+            "output": 4144
+          },
+          "estimatedCostUsd": 0.11743200000000001,
+          "bundle": {
+            "id": "cb_b08253b5-fd0d-4572-ae4d-c1f32207babb",
+            "hash": "0582e270da8207f6a8eed630e6ba0936de7b62b8c5956bcc8af7cc12b46f8639"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_ca9a57e3-642e-47c2-bd81-2dd6f16b268f",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.cross_review",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 2346,
+            "cached": 7168,
+            "output": 2633
+          },
+          "estimatedCostUsd": 0.08113899999999999,
+          "bundle": {
+            "id": "cb_6d0ff03a-f453-401d-b870-885c5923bdba",
+            "hash": "e4b06b728bef730e64445bda71e47f5928264b47d9ec28928d79c86755507df8"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_3caaeaaa-9a23-4d3f-85da-f5809d968a35",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.synthesis",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 3261,
+            "cached": 4480,
+            "output": 4260
+          },
+          "estimatedCostUsd": 0.12504500000000002,
+          "bundle": {
+            "id": "cb_acfc6b6b-cfeb-4f4f-b461-1ff2734d0928",
+            "hash": "9b4e2f0e0e4a94075c4b0ad55f67fe4065ed3d4243bc1cea27272bc2c000b49f"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_ad077a31-1c26-4d26-aa41-72dcda7919f1",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 14004,
+            "cached": 20224,
+            "output": 18399
+          },
+          "estimatedCostUsd": 0.540107,
+          "bundle": {
+            "id": "cb_68e4f142-1afe-4524-a224-cc5d02a62fe6",
+            "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017"
+          },
+          "outputInvalidIssues": null
+        },
+        {
+          "turnId": "turn_098c72c0-ab9d-46eb-9dd4-e4bf1f16373c",
+          "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+          "stage": "delib.ratify",
+          "isRepair": false,
+          "dispatchKeyTail": "w",
+          "status": "SUCCEEDED",
+          "reportedModel": "deepseek-flash",
+          "usageTokens": {
+            "input": 1503,
+            "cached": 3584,
+            "output": 5361
+          },
+          "estimatedCostUsd": 0.14333200000000001,
+          "bundle": {
+            "id": "cb_d925c57a-0ba4-4737-8ff2-1e417ab06bdb",
+            "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017"
+          },
+          "outputInvalidIssues": null
+        }
+      ],
+      "note": null
+    }
+  ],
+  "totals": {
+    "batchCalls": 30,
+    "batchCap": 33,
+    "batchWithinCap": true,
+    "directCalls": 6,
+    "delibCalls": 24,
+    "delibSucceeded": 23,
+    "delibFailed": 1,
+    "allFailedTurns": 6,
+    "estimatedCostUsdSum": 8.6578
+  },
+  "violations": [
+    "A? A-delib: 10 > 9（单侧超限——已如实标注）"
+  ]
+}

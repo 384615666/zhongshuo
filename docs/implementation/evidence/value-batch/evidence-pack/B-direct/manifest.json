@@ -1,0 +1,81 @@
+{
+  "batch": {
+    "id": "value-abc-20260928",
+    "group": "B",
+    "side": "direct",
+    "authorizedCapTotal": 33,
+    "sideCap": 2
+  },
+  "rehearse": false,
+  "runtime": {
+    "kind": "claude",
+    "requestedModel": "deepseek-flash",
+    "adapterVersion": "claude-cli-2.1.283-adapter-0.3",
+    "fallbackRuntimeEnv": "claude",
+    "channelNote": "Claude Code CLI 渠道（用户 settings.json env）；响应模型以 result.model/assistant.message.model 双源取证"
+  },
+  "memberBindings": [
+    {
+      "memberId": "m_default_prj_4b5a981e-18b5-44b7-85ea-3c6cad2ca12a_0",
+      "displayName": "执行成员",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    }
+  ],
+  "codeCommit": "915f0dbdc507c878824568026899680791838604",
+  "standingPromptVersion": "zs-standing-v0.1.1",
+  "permissionParams": {
+    "permissionMode": "plan",
+    "allowedTools": "Read,Glob,Grep",
+    "disallowed": "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*",
+    "extras": [
+      "--permission-prompts none",
+      "--strict-mcp-config",
+      "--bare",
+      "--disable-slash-commands"
+    ]
+  },
+  "fixture": {
+    "materialsDir": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\B\\materials",
+    "keyFile": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\B\\key.json",
+    "files": [
+      {
+        "path": "src-todo/plan-a.md",
+        "sha256": "db1597246456a0ae92bd2fb612f12c5d80b2f187693f2679c2f580cef1b000c3"
+      },
+      {
+        "path": "src-todo/plan-b.md",
+        "sha256": "c5f65be394bb0b5ba65bd95144ec789ff3cfea5f9072c54944469faf6a23d1f2"
+      },
+      {
+        "path": "src-todo/plan-c.md",
+        "sha256": "313c13b03ff4d10701e5b44a7a955fe3f4f6128620a81995c652cc506605f1a3"
+      }
+    ]
+  },
+  "taskText": "对比 src-todo/ 下三个实现方案的优缺点，指出各自最可能出错的一处，并给出推荐与理由",
+  "budget": {
+    "maxTurns": 6,
+    "normalPath": "1",
+    "repairMargin": 1,
+    "disputeNote": null
+  },
+  "taskId": "task_9f578576-23ee-4cca-aef2-5b3896747a57",
+  "runId": "run_de5c66a7-0ff2-4fce-8722-230f08811051",
+  "electronPid": 17280,
+  "cdpPort": 9781,
+  "appData": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\B\\direct\\appdata",
+  "proj": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\B\\direct\\proj",
+  "submittedAt": 1790610199827,
+  "config": {
+    "model": "deepseek-flash",
+    "runtime": "claude",
+    "turnDeadlineMs": 420000,
+    "maxTurns": 6,
+    "runMaxMs": 2700000,
+    "absenceMs": 1200000,
+    "sideCap": 2
+  }
+}

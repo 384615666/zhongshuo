@@ -1,0 +1,58 @@
+[
+  {
+    "turnId": "turn_6d6f75bd-6b5a-4658-9400-2589e91964b5",
+    "stage": "delib.independent",
+    "bundleId": "cb_2d1a10dc-1832-4431-b0ab-96149808316c",
+    "hash": "0d0f3fc4394a678f8197c87debc7dc83b2bf6dfca1f74de9377c4e8ffcfaf53c",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_1890b89c-d019-4fc2-8ef8-05dda5be9e4e",
+    "stage": "delib.independent",
+    "bundleId": "cb_85d290a4-7e02-4b15-ae0b-17d02d25bbf3",
+    "hash": "ef22311b44c04f5fba2c9a9d8c739d88df82a42897ed513a3e73107c6100a592",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_05428490-2b03-4072-9392-387b6c4eebaf",
+    "stage": "delib.cross_review",
+    "bundleId": "cb_b08253b5-fd0d-4572-ae4d-c1f32207babb",
+    "hash": "0582e270da8207f6a8eed630e6ba0936de7b62b8c5956bcc8af7cc12b46f8639",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_ca9a57e3-642e-47c2-bd81-2dd6f16b268f",
+    "stage": "delib.cross_review",
+    "bundleId": "cb_6d0ff03a-f453-401d-b870-885c5923bdba",
+    "hash": "e4b06b728bef730e64445bda71e47f5928264b47d9ec28928d79c86755507df8",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_3caaeaaa-9a23-4d3f-85da-f5809d968a35",
+    "stage": "delib.synthesis",
+    "bundleId": "cb_acfc6b6b-cfeb-4f4f-b461-1ff2734d0928",
+    "hash": "9b4e2f0e0e4a94075c4b0ad55f67fe4065ed3d4243bc1cea27272bc2c000b49f",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_ad077a31-1c26-4d26-aa41-72dcda7919f1",
+    "stage": "delib.ratify",
+    "bundleId": "cb_68e4f142-1afe-4524-a224-cc5d02a62fe6",
+    "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_098c72c0-ab9d-46eb-9dd4-e4bf1f16373c",
+    "stage": "delib.ratify",
+    "bundleId": "cb_d925c57a-0ba4-4737-8ff2-1e417ab06bdb",
+    "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017",
+    "envelopePresent": false,
+    "envelope": null
+  }
+]

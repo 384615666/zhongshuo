@@ -1,0 +1,62 @@
+[
+  {
+    "turnId": "turn_76a97913-9367-4c18-ab4c-70f220791254",
+    "runId": "run_6d645fcb-6591-49d3-a214-719822975044",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_11c223f9-15f3-4018-b547-f4235ea80b97:initial",
+    "status": "FAILED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 1727,
+      "cachedTokens": 7680,
+      "outputTokens": 8215,
+      "cost": 0.21785,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_2e6aecf117f22637677a",
+      "sessionId": "claude_sess_97b2e55a-c8a9-4d58-8b2d-e66a5a6f4755",
+      "turnId": "turn_76a97913-9367-4c18-ab4c-70f220791254",
+      "receivedAt": 1790608023464
+    },
+    "bundle": {
+      "id": "cb_28455a1cd9a2bba4aaed77f1",
+      "hash": "28455a1cd9a2bba4aaed77f11746be9c4e0ff4f1405918f2c5ad4215b93fd10a",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": [
+      ": Unrecognized key: \"conclusions\""
+    ]
+  },
+  {
+    "turnId": "turn_002a80c0-47c1-4003-9368-2f146c1f7fc3",
+    "runId": "run_db9c3332-bbee-4d0c-84f7-a122954b3ca1",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_11c223f9-15f3-4018-b547-f4235ea80b97:redispatch",
+    "status": "FAILED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 2992,
+      "cachedTokens": 7424,
+      "outputTokens": 6906,
+      "cost": 0.191322,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_592c018014f402d879aa",
+      "sessionId": "claude_sess_ab8d2007-b0d6-472f-9181-08dba429c628",
+      "turnId": "turn_002a80c0-47c1-4003-9368-2f146c1f7fc3",
+      "receivedAt": 1790608668415
+    },
+    "bundle": {
+      "id": "cb_dbc4eab7d0f2da28d4a36d70",
+      "hash": "dbc4eab7d0f2da28d4a36d707c52f96664b86265cc0153f565530290206b10c8",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": [
+      ": Unrecognized key: \"conclusions\""
+    ]
+  }
+]

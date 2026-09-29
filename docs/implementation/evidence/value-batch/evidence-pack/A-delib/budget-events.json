@@ -1,0 +1,30 @@
+[
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        "输出不是 JSON"
+      ],
+      "repairEnqueued": "task:task_7325ddd6-4a45-4b05-bbf7-1b1d55156798:delib:run_d19d5161-27e4-4946-a36a-94d1e79417c9:RPR:m_default_prj_53ed8d7a-0244-4e76-9dac-28abce743555_1:0:IND"
+    },
+    "createdAt": 1790609562531
+  },
+  {
+    "kind": "run.budgetSkipped",
+    "payload": {
+      "dispatchKey": "task:task_7325ddd6-4a45-4b05-bbf7-1b1d55156798:delib:run_d19d5161-27e4-4946-a36a-94d1e79417c9:ISS:m_default_prj_53ed8d7a-0244-4e76-9dac-28abce743555_0:2:w",
+      "stageAvailableTurns": 0,
+      "remaining": 2
+    },
+    "createdAt": 1790609695330
+  },
+  {
+    "kind": "run.budgetSkipped",
+    "payload": {
+      "dispatchKey": "task:task_7325ddd6-4a45-4b05-bbf7-1b1d55156798:delib:run_d19d5161-27e4-4946-a36a-94d1e79417c9:ISS:m_default_prj_53ed8d7a-0244-4e76-9dac-28abce743555_1:2:w",
+      "stageAvailableTurns": 0,
+      "remaining": 2
+    },
+    "createdAt": 1790609695332
+  }
+]

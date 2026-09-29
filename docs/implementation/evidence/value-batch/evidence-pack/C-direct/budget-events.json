@@ -1,0 +1,19 @@
+[
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+      ],
+      "rawLength": 1162
+    },
+    "createdAt": 1790613181704
+  },
+  {
+    "kind": "task.redispatchEnqueued",
+    "payload": {
+      "reason": "价值对比 C-DIRECT 格式修复（JSON 被围栏包裹——每份逻辑输出最多一次）"
+    },
+    "createdAt": 1790613659520
+  }
+]

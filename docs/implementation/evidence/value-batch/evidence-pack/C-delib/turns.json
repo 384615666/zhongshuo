@@ -1,0 +1,198 @@
+[
+  {
+    "turnId": "turn_6d6f75bd-6b5a-4658-9400-2589e91964b5",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.independent",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:IND:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_0:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 6430,
+      "cachedTokens": 96128,
+      "outputTokens": 12890,
+      "cost": 0.402464,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_2f826efc39894c23c192",
+      "sessionId": "claude_sess_e1497c90-f453-4870-9a14-a712cbf7d52c",
+      "turnId": "turn_6d6f75bd-6b5a-4658-9400-2589e91964b5",
+      "receivedAt": 1790613767932
+    },
+    "bundle": {
+      "id": "cb_2d1a10dc-1832-4431-b0ab-96149808316c",
+      "hash": "0d0f3fc4394a678f8197c87debc7dc83b2bf6dfca1f74de9377c4e8ffcfaf53c",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_1890b89c-d019-4fc2-8ef8-05dda5be9e4e",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.independent",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:IND:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_1:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 8831,
+      "cachedTokens": 127360,
+      "outputTokens": 14120,
+      "cost": 0.46083500000000005,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_353b1e4f75f04c2f28fd",
+      "sessionId": "claude_sess_b3418854-5858-436e-8988-cba27561fc54",
+      "turnId": "turn_1890b89c-d019-4fc2-8ef8-05dda5be9e4e",
+      "receivedAt": 1790613770483
+    },
+    "bundle": {
+      "id": "cb_85d290a4-7e02-4b15-ae0b-17d02d25bbf3",
+      "hash": "ef22311b44c04f5fba2c9a9d8c739d88df82a42897ed513a3e73107c6100a592",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_05428490-2b03-4072-9392-387b6c4eebaf",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.cross_review",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:CR:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_0:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 2024,
+      "cachedTokens": 7424,
+      "outputTokens": 4144,
+      "cost": 0.11743200000000001,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_08dc908179e967a6f478",
+      "sessionId": "claude_sess_4957b54c-44a1-4519-a6dc-57030929c976",
+      "turnId": "turn_05428490-2b03-4072-9392-387b6c4eebaf",
+      "receivedAt": 1790613790659
+    },
+    "bundle": {
+      "id": "cb_b08253b5-fd0d-4572-ae4d-c1f32207babb",
+      "hash": "0582e270da8207f6a8eed630e6ba0936de7b62b8c5956bcc8af7cc12b46f8639",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_ca9a57e3-642e-47c2-bd81-2dd6f16b268f",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.cross_review",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:CR:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_1:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 2346,
+      "cachedTokens": 7168,
+      "outputTokens": 2633,
+      "cost": 0.08113899999999999,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_83239547929e75d16624",
+      "sessionId": "claude_sess_f521a0cf-e115-4018-966b-42234d448103",
+      "turnId": "turn_ca9a57e3-642e-47c2-bd81-2dd6f16b268f",
+      "receivedAt": 1790613783106
+    },
+    "bundle": {
+      "id": "cb_6d0ff03a-f453-401d-b870-885c5923bdba",
+      "hash": "e4b06b728bef730e64445bda71e47f5928264b47d9ec28928d79c86755507df8",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_3caaeaaa-9a23-4d3f-85da-f5809d968a35",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.synthesis",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:SYN:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_0:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 3261,
+      "cachedTokens": 4480,
+      "outputTokens": 4260,
+      "cost": 0.12504500000000002,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_0a92e0549a2f30d3c554",
+      "sessionId": "claude_sess_d72fb76d-a605-4d6f-8b4f-6523a579589f",
+      "turnId": "turn_3caaeaaa-9a23-4d3f-85da-f5809d968a35",
+      "receivedAt": 1790613810338
+    },
+    "bundle": {
+      "id": "cb_acfc6b6b-cfeb-4f4f-b461-1ff2734d0928",
+      "hash": "9b4e2f0e0e4a94075c4b0ad55f67fe4065ed3d4243bc1cea27272bc2c000b49f",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_ad077a31-1c26-4d26-aa41-72dcda7919f1",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.ratify",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:RAT:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_0:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 14004,
+      "cachedTokens": 20224,
+      "outputTokens": 18399,
+      "cost": 0.540107,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_3e2cd387b7ac1203665c",
+      "sessionId": "claude_sess_f150baf7-52e3-4305-ad21-f3ee24e7f43b",
+      "turnId": "turn_ad077a31-1c26-4d26-aa41-72dcda7919f1",
+      "receivedAt": 1790613894204
+    },
+    "bundle": {
+      "id": "cb_68e4f142-1afe-4524-a224-cc5d02a62fe6",
+      "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  },
+  {
+    "turnId": "turn_098c72c0-ab9d-46eb-9dd4-e4bf1f16373c",
+    "runId": "run_11e79a53-0b1f-4dff-9777-40a7c8c173fc",
+    "stage": "delib.ratify",
+    "dispatchKey": "task:task_5612f4c5-4513-4169-a650-f422708e3d53:delib:run_11e79a53-0b1f-4dff-9777-40a7c8c173fc:RAT:m_default_prj_69fc82e4-73e4-4f98-a892-79a8dcb47fcf_1:0:w",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 1503,
+      "cachedTokens": 3584,
+      "outputTokens": 5361,
+      "cost": 0.14333200000000001,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_fe89b7a68f567e73d2c1",
+      "sessionId": "claude_sess_7ad81000-3cd4-4096-9703-c7379c691eaf",
+      "turnId": "turn_098c72c0-ab9d-46eb-9dd4-e4bf1f16373c",
+      "receivedAt": 1790613835371
+    },
+    "bundle": {
+      "id": "cb_d925c57a-0ba4-4737-8ff2-1e417ab06bdb",
+      "hash": "3c5002750520beebb6e5996c49bc1f893777c25a48f8e3d502d060751afb1017",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  }
+]

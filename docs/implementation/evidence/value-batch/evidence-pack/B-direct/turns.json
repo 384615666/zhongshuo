@@ -1,0 +1,62 @@
+[
+  {
+    "turnId": "turn_0a26cd3a-7c64-4e67-a3ea-2ea56534def3",
+    "runId": "run_de5c66a7-0ff2-4fce-8722-230f08811051",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_9f578576-23ee-4cca-aef2-5b3896747a57:initial",
+    "status": "FAILED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 2802,
+      "cachedTokens": 8064,
+      "outputTokens": 19929,
+      "cost": 0.5162669999999999,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_329b1f0f53903cc97d98",
+      "sessionId": "claude_sess_5ae32cde-2e26-4269-b15b-f42a63bf95ff",
+      "turnId": "turn_0a26cd3a-7c64-4e67-a3ea-2ea56534def3",
+      "receivedAt": 1790610299877
+    },
+    "bundle": {
+      "id": "cb_e265bc5f579b9b8d78245211",
+      "hash": "e265bc5f579b9b8d782452119ba868bc8b24a0bdc490d1563ec59aeb2d03ba24",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": [
+      "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+    ]
+  },
+  {
+    "turnId": "turn_de6e5dae-3084-496b-9d93-73c5268be887",
+    "runId": "run_0d49081e-85c0-4119-89e7-51cd0b26b46e",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_9f578576-23ee-4cca-aef2-5b3896747a57:redispatch",
+    "status": "FAILED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 4056,
+      "cachedTokens": 5504,
+      "outputTokens": 13499,
+      "cost": 0.36050699999999997,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_857280b339cf96be9c21",
+      "sessionId": "claude_sess_349d0e1a-34b6-4928-a74c-62908de079aa",
+      "turnId": "turn_de6e5dae-3084-496b-9d93-73c5268be887",
+      "receivedAt": 1790611489815
+    },
+    "bundle": {
+      "id": "cb_9f86b78a111e59f55de58d18",
+      "hash": "9f86b78a111e59f55de58d18a50da754ae5ab9c9e82c6c6d75a3d7ccc3588e45",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": [
+      "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+    ]
+  }
+]

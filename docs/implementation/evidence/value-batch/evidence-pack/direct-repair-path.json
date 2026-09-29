@@ -1,0 +1,132 @@
+{
+  "generatedAt": "2026-09-29T00:27:37.989Z",
+  "question": "DIRECT 第二次调用走了什么路径（正式格式修复/普通跟进/特殊重提）？",
+  "sides": [
+    {
+      "group": "A",
+      "initialTurn": {
+        "id": "turn_76a97913-9367-4c18-ab4c-70f220791254",
+        "dispatchKey": "task:task_11c223f9-15f3-4018-b547-f4235ea80b97:initial",
+        "status": "FAILED",
+        "resultKeyInOutput": null
+      },
+      "secondTurn": {
+        "id": "turn_002a80c0-47c1-4003-9368-2f146c1f7fc3",
+        "dispatchKey": "task:task_11c223f9-15f3-4018-b547-f4235ea80b97:redispatch",
+        "isRedispatchKey": true,
+        "newRun": true,
+        "newBundleHash": true,
+        "status": "FAILED"
+      },
+      "bindingEvidence": {
+        "priorOutputIncluded": false,
+        "validationIssuesIncluded": false,
+        "priorResultKeyReferenced": false
+      },
+      "budget": [
+        {
+          "runId": "run_6d645fcb-6591-49d3-a214-719822975044",
+          "budget": {
+            "grantId": "run_6d645fcb-6591-49d3-a214-719822975044",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        },
+        {
+          "runId": "run_db9c3332-bbee-4d0c-84f7-a122954b3ca1",
+          "budget": {
+            "grantId": "run_db9c3332-bbee-4d0c-84f7-a122954b3ca1",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        }
+      ]
+    },
+    {
+      "group": "B",
+      "initialTurn": {
+        "id": "turn_0a26cd3a-7c64-4e67-a3ea-2ea56534def3",
+        "dispatchKey": "task:task_9f578576-23ee-4cca-aef2-5b3896747a57:initial",
+        "status": "FAILED",
+        "resultKeyInOutput": null
+      },
+      "secondTurn": {
+        "id": "turn_de6e5dae-3084-496b-9d93-73c5268be887",
+        "dispatchKey": "task:task_9f578576-23ee-4cca-aef2-5b3896747a57:redispatch",
+        "isRedispatchKey": true,
+        "newRun": true,
+        "newBundleHash": true,
+        "status": "FAILED"
+      },
+      "bindingEvidence": {
+        "priorOutputIncluded": false,
+        "validationIssuesIncluded": false,
+        "priorResultKeyReferenced": false
+      },
+      "budget": [
+        {
+          "runId": "run_de5c66a7-0ff2-4fce-8722-230f08811051",
+          "budget": {
+            "grantId": "run_de5c66a7-0ff2-4fce-8722-230f08811051",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        },
+        {
+          "runId": "run_0d49081e-85c0-4119-89e7-51cd0b26b46e",
+          "budget": {
+            "grantId": "run_0d49081e-85c0-4119-89e7-51cd0b26b46e",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        }
+      ]
+    },
+    {
+      "group": "C",
+      "initialTurn": {
+        "id": "turn_481be54f-07f6-4052-8daa-68c475ea21db",
+        "dispatchKey": "task:task_0ff7b295-e285-4b09-8cab-f7252a63fc26:initial",
+        "status": "FAILED",
+        "resultKeyInOutput": null
+      },
+      "secondTurn": {
+        "id": "turn_db4a82ad-2ea4-482c-ba6c-5688c74aebb3",
+        "dispatchKey": "task:task_0ff7b295-e285-4b09-8cab-f7252a63fc26:redispatch",
+        "isRedispatchKey": true,
+        "newRun": true,
+        "newBundleHash": true,
+        "status": "SUCCEEDED"
+      },
+      "bindingEvidence": {
+        "priorOutputIncluded": false,
+        "validationIssuesIncluded": false,
+        "priorResultKeyReferenced": false
+      },
+      "budget": [
+        {
+          "runId": "run_67bfa40c-1afa-4779-a1f7-21955fdce525",
+          "budget": {
+            "grantId": "run_67bfa40c-1afa-4779-a1f7-21955fdce525",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        },
+        {
+          "runId": "run_b20f2309-0687-4883-9eff-80a15d6ab5ce",
+          "budget": {
+            "grantId": "run_b20f2309-0687-4883-9eff-80a15d6ab5ce",
+            "maxTurns": 6,
+            "usedTurns": 1,
+            "inFlightReservedTurns": 0
+          }
+        }
+      ]
+    }
+  ]
+}

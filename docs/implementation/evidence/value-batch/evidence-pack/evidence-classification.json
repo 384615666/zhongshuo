@@ -1,0 +1,22 @@
+{
+  "observed": [
+    "agent_turns/workflow_runs/tasks 表行",
+    "domain_events（含 turn.outputInvalid 的 issues、run.budgetSkipped、task.redispatchEnqueued）",
+    "usage_records 报文（tokens/cost=CLI 估算）",
+    "context_bundles hash",
+    "tool.started/tool.completed 审计",
+    "manifest（提交身份/版本/绑定/fixture hash）"
+  ],
+  "reported": [
+    "usage.model（result.model→assistant.message.model 双源）=响应模型自报"
+  ],
+  "claimed": [
+    "模型输出/自述正文（含「仅有 Read 能力」等工具面自述——不采信为事实，仅作 claimed 记录）"
+  ],
+  "unknown": [
+    "渠道实际计费（以账单为准）",
+    "Claude CLI 运行时实际启用的工具清单",
+    "CLI 发给模型的工具定义/系统提示",
+    "CLI 估算费用与渠道计费的差额构成"
+  ]
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+      ],
+      "rawLength": 2863
+    },
+    "createdAt": 1790610299932
+  },
+  {
+    "kind": "task.redispatchEnqueued",
+    "payload": {
+      "reason": "价值对比 B-DIRECT 格式修复（输出为散文非 JSON——每份逻辑输出最多一次）"
+    },
+    "createdAt": 1790611431292
+  },
+  {
+    "kind": "turn.outputInvalid",
+    "payload": {
+      "issues": [
+        "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+      ],
+      "rawLength": 3209
+    },
+    "createdAt": 1790611489909
+  }
+]

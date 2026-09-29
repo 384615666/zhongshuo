@@ -1,0 +1,60 @@
+[
+  {
+    "turnId": "turn_481be54f-07f6-4052-8daa-68c475ea21db",
+    "runId": "run_67bfa40c-1afa-4779-a1f7-21955fdce525",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_0ff7b295-e285-4b09-8cab-f7252a63fc26:initial",
+    "status": "FAILED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 1681,
+      "cachedTokens": 3968,
+      "outputTokens": 6572,
+      "cost": 0.17468899999999998,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_4e80586ed3478cbdb263",
+      "sessionId": "claude_sess_4eb6e498-7126-4501-855c-7084d33b01c1",
+      "turnId": "turn_481be54f-07f6-4052-8daa-68c475ea21db",
+      "receivedAt": 1790613181611
+    },
+    "bundle": {
+      "id": "cb_b4c73bf28aadb5504e5e8709",
+      "hash": "b4c73bf28aadb5504e5e870995061fb34681a04f322533a4ee4a4d575b479977",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": [
+      "finalText 不是 JSON（期望 TaskComplete 结构化输出）"
+    ]
+  },
+  {
+    "turnId": "turn_db4a82ad-2ea4-482c-ba6c-5688c74aebb3",
+    "runId": "run_b20f2309-0687-4883-9eff-80a15d6ab5ce",
+    "stage": "direct.work",
+    "dispatchKey": "task:task_0ff7b295-e285-4b09-8cab-f7252a63fc26:redispatch",
+    "status": "SUCCEEDED",
+    "usage": {
+      "kind": "usage.updated",
+      "accounting": "cumulative",
+      "inputTokens": 2296,
+      "cachedTokens": 17280,
+      "outputTokens": 9559,
+      "cost": 0.25909499999999996,
+      "currency": "USD",
+      "costQuality": "estimated",
+      "model": "deepseek-flash",
+      "eventKey": "cevt_fffe876bfeae25a6666c",
+      "sessionId": "claude_sess_4cb81e69-e7d9-4236-b624-48af64f5fa07",
+      "turnId": "turn_db4a82ad-2ea4-482c-ba6c-5688c74aebb3",
+      "receivedAt": 1790613702230
+    },
+    "bundle": {
+      "id": "cb_0a554c1938cfa7d88a38e9ca",
+      "hash": "0a554c1938cfa7d88a38e9cabc7c48e3539a119f32977d5b003821990d7c41e8",
+      "envelopeChars": null
+    },
+    "outputInvalidIssues": null
+  }
+]

@@ -1,0 +1,73 @@
+{
+  "batch": {
+    "id": "value-abc-20260928",
+    "group": "A",
+    "side": "direct",
+    "authorizedCapTotal": 33,
+    "sideCap": 2
+  },
+  "rehearse": false,
+  "runtime": {
+    "kind": "claude",
+    "requestedModel": "deepseek-flash",
+    "adapterVersion": "claude-cli-2.1.283-adapter-0.3",
+    "fallbackRuntimeEnv": "claude",
+    "channelNote": "Claude Code CLI 渠道（用户 settings.json env）；响应模型以 result.model/assistant.message.model 双源取证"
+  },
+  "memberBindings": [
+    {
+      "memberId": "m_default_prj_3bf11354-bccb-4650-b380-98bb4220a7b8_0",
+      "displayName": "执行成员",
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "permissionMode": "plan",
+      "capabilitiesRecorded": true
+    }
+  ],
+  "codeCommit": "6064529b8ef68309ca9a7eb9c44cff9887ae6a4b",
+  "standingPromptVersion": "zs-standing-v0.1.1",
+  "permissionParams": {
+    "permissionMode": "plan",
+    "allowedTools": "Read,Glob,Grep",
+    "disallowed": "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*",
+    "extras": [
+      "--permission-prompts none",
+      "--strict-mcp-config",
+      "--bare",
+      "--disable-slash-commands"
+    ]
+  },
+  "fixture": {
+    "materialsDir": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\A\\materials",
+    "keyFile": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\fixtures\\A\\key.json",
+    "files": [
+      {
+        "path": "notes.md",
+        "sha256": "74e296787b16c8be1119883883fa7b9c60a30a66003ba9d935979f05438b0af2"
+      }
+    ]
+  },
+  "taskText": "分析 notes.md 的内容要点与可疑之处，形成带依据的结论清单（不超过 8 条）",
+  "budget": {
+    "maxTurns": 6,
+    "normalPath": "1",
+    "repairMargin": 1,
+    "disputeNote": null
+  },
+  "taskId": "task_11c223f9-15f3-4018-b547-f4235ea80b97",
+  "runId": "run_6d645fcb-6591-49d3-a214-719822975044",
+  "electronPid": 4124,
+  "cdpPort": 9781,
+  "appData": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\A\\direct\\appdata",
+  "proj": "C:\\Users\\user\\AppData\\Local\\Temp\\zhongshuo-value\\A\\direct\\proj",
+  "submittedAt": 1790607985315,
+  "config": {
+    "model": "deepseek-flash",
+    "runtime": "claude",
+    "turnDeadlineMs": 420000,
+    "maxTurns": 6,
+    "runMaxMs": 2700000,
+    "absenceMs": 1200000,
+    "sideCap": 2
+  }
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "turnId": "turn_6d7cb13d-7668-4e9f-b09f-6da489387148",
+    "stage": "delib.independent",
+    "bundleId": "cb_564c9dd3-2995-4079-8a0b-ff809e6c00c0",
+    "hash": "587d9452c4e400f6d88eb928b85052aa82e1e05deb83deadb316788ded6f14eb",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_6d75ad98-ea23-497b-bc49-1be0cd729971",
+    "stage": "delib.independent",
+    "bundleId": "cb_a6f5134f-c5e6-47fb-8d53-782a6e85fd30",
+    "hash": "484e5811353e09251313800287fbd970729592c931a5667ef2760b790b8e8f25",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_7700e44f-33b6-4a11-bbb3-3c3cf8b58f57",
+    "stage": "delib.independent.fx",
+    "bundleId": "cb_37c351d2-ed4d-4ed4-95cc-4954715f75a9",
+    "hash": "275c92472f2fc18758d31d3c0a77c4de3e70706ac6525d79e3bf661a06b20ae3",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_505bb1b2-62b0-482d-bf31-768c2b935a4d",
+    "stage": "delib.cross_review",
+    "bundleId": "cb_fa4d1e42-8166-4646-9e5a-7c1b78136691",
+    "hash": "e27d622c86b2db60384052f4ce9c6aa018f3dc28810cd1e4036ff6d118d4c571",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_a44cd22f-9014-4c30-87ff-6394d5301604",
+    "stage": "delib.cross_review",
+    "bundleId": "cb_1a0a59f4-0589-41ed-8e01-f2d67bc0385f",
+    "hash": "c6fbf6005ceeaa8d207b2fc179d4c7b86503f9cf9d53428c3865d1090ac961c6",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_57ba4dbc-554b-4b89-806a-c5d3b6f0f809",
+    "stage": "delib.issue_discussion.r1",
+    "bundleId": "cb_2175d282-4a93-4bbb-97d3-1fdf87d1f990",
+    "hash": "457fa2b1dfa2fda5c2d66536381a6fbb287ac5c4be261ade89690ed71e3587ca",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_e8e6a2d4-e002-4ebe-b3e3-d918a24fea54",
+    "stage": "delib.issue_discussion.r1",
+    "bundleId": "cb_78c998f6-4b06-4934-9645-65414fb7bdb4",
+    "hash": "457fa2b1dfa2fda5c2d66536381a6fbb287ac5c4be261ade89690ed71e3587ca",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_bc57c62b-b81d-45c3-bd85-636b1a6db4f6",
+    "stage": "delib.synthesis",
+    "bundleId": "cb_d0d600b1-8a95-4761-a798-14da441cd504",
+    "hash": "3a213d5224c0b33c14b49507249b2209ade29f84354124418dcefdc97f545753",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_d62b6408-36aa-42ae-a193-9566d54eaab0",
+    "stage": "delib.ratify",
+    "bundleId": "cb_1e468892-0157-4fe1-a335-d39f0115d67c",
+    "hash": "5a967830c2d7399548dc261bd6bd6af521888bf8dab5445e4e9d5a6a556c06a8",
+    "envelopePresent": false,
+    "envelope": null
+  },
+  {
+    "turnId": "turn_b06df82e-10f5-49cb-85b8-d3927a5a61e1",
+    "stage": "delib.ratify",
+    "bundleId": "cb_1018daf7-4b29-4a1e-9402-bd34025809e7",
+    "hash": "5a967830c2d7399548dc261bd6bd6af521888bf8dab5445e4e9d5a6a556c06a8",
+    "envelopePresent": false,
+    "envelope": null
+  }
+]

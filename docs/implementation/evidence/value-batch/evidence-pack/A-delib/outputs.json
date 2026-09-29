@@ -1,0 +1,98 @@
+{
+  "taskId": "task_7325ddd6-4a45-4b05-bbf7-1b1d55156798",
+  "agentMessages": [],
+  "finalReport": {
+    "artifactId": "art_95723141-fe4e-445e-b133-14c9b30f464e",
+    "hash": "113afb4064d2333ac0936078fa068c8499c906220fd509006171f35d86b31f11",
+    "payload": {
+      "claimResults": [
+        {
+          "claimId": "clm_1",
+          "conditionals": 0,
+          "confirms": 2,
+          "consensus": "unanimous",
+          "missing": 0,
+          "objects": 0,
+          "statement": "迁移关键参数明确：旧机 10.0.0.11 已下线，新机 10.0.0.22 使用非标准 SSH 端口 2222（notes.md L3–L4）；但备忘未记录端口变更动机、SSH 认证方式与防火墙访问控制，非标准端口本身不构成安全加固，新机安全状态无法评估。",
+          "unconfirmedExplicit": 0
+        },
+        {
+          "claimId": "clm_2",
+          "conditionals": 0,
+          "confirms": 2,
+          "consensus": "unanimous",
+          "missing": 0,
+          "objects": 0,
+          "statement": "数据库备份仅记录为 /backup/db-20260920.sql.gz，且被显式标注为“未校验”（notes.md L5）；按文件名推算生成于 2026-09-20、距今约 8 天，备忘未记录其大小、校验和、保留周期、异地副本或任何更新的备份。",
+          "unconfirmedExplicit": 0
+        },
+        {
+          "claimId": "clm_3",
+          "conditionals": 0,
+          "confirms": 2,
+          "consensus": "unanimous",
+          "missing": 0,
+          "objects": 0,
+          "statement": "证书续期脚本每月 1 日运行、上次 9 月 1 日显示成功，下一次执行窗口为 10 月 1 日、距今约 3 天（notes.md L6）；“成功”缺少证书有效期与监控告警佐证，需在窗口前复核。",
+          "unconfirmedExplicit": 0
+        },
+        {
+          "claimId": "clm_4",
+          "conditionals": 1,
+          "confirms": 1,
+          "consensus": "qualified",
+          "missing": 0,
+          "objects": 0,
+          "statement": "备忘未说明续期脚本部署在哪台主机：若脚本随旧机 10.0.0.11 下线而失效，10 月 1 日的续期将不会执行——“旧机已下线”与“续期成功”之间存在需澄清的潜在矛盾，是本次交接中最直接的可用性风险点之一。",
+          "unconfirmedExplicit": 0
+        },
+        {
+          "claimId": "clm_5",
+          "conditionals": 0,
+          "confirms": 2,
+          "consensus": "unanimous",
+          "missing": 0,
+          "objects": 0,
+          "statement": "夜间 2 点存在约 5 分钟的日志空窗且原因不明，属已识别但未解决的遗留问题（notes.md L7）；备忘未注明是否每日发生、时区与观测范围，亦未说明空窗属采集缺失还是业务中断。",
+          "unconfirmedExplicit": 0
+        },
+        {
+          "claimId": "clm_6",
+          "conditionals": 0,
+          "confirms": 2,
+          "consensus": "unanimous",
+          "missing": 0,
+          "objects": 0,
+          "statement": "该备忘作为迁移交接材料完整性不足：缺作者与日期、迁移时间与执行人、服务连通性与流量/DNS 切换验收记录、回滚与恢复演练步骤、备份保留与异地策略、监控告警与时区说明，以及各条目最后更新时间。",
+          "unconfirmedExplicit": 0
+        }
+      ],
+      "disputedClaims": [
+        {
+          "disagreementSummary": "两稿均把“备份未校验”列为首要跟进事项，但对进一步的风险推断互有保留：初稿一“恢复能力不可证实、回滚存在实质缺口”被初稿二标注 needs_evidence（缺备份大小、校验和、保留策略等证据）；初稿二“以旧未验证备份兜底存在风险”同样被初稿一标注 needs_evidence（缺恢复演练与更新备份佐证）。双方可共识的仅是应尽快完成校验与恢复演练，风险是否已成立需以校验与演练结果为准。",
+          "sourceRefs": [
+            "c3",
+            "c5"
+          ],
+          "statement": "未校验的旧备份（约 8 天前生成、无更新备份与恢复演练记录）已足以判定迁移的数据恢复与回滚能力存在实质缺口。"
+        },
+        {
+          "disagreementSummary": "初稿一与初稿二均基于时间吻合提出定时任务类成因，但属相关性推测、无 cron/系统日志证据：初稿一评审对初稿二的成因清单标注 needs_evidence；初稿二评审对初稿一的空窗观测描述（“每日”“前后”等表述）标注 needs_evidence，要求补时区、观测周期与影响范围（采集缺失还是业务中断）。讨论阶段双方对该议题均持 needs_evidence，成因未定位，只能作为排查方向。",
+          "sourceRefs": [
+            "c6",
+            "c7"
+          ],
+          "statement": "夜间 2 点约 5 分钟日志空窗的成因可归因于周期性任务（定时备份、日志轮转、systemd timer、时钟同步等）。"
+        }
+      ],
+      "overallConsensus": "qualified",
+      "publishedAt": 1790609818692,
+      "schemaVersion": "final-report-v1",
+      "summary": "整合两份初稿与互评后，notes.md 的要点与可疑之处归并为 6 条共识结论与 2 条仍待补证的分歧结论。共识涵盖：迁移参数（旧机 10.0.0.11 下线、新机 10.0.0.22:2222，安全配置无从评估）、唯一且被标注“未校验”的数据库备份、每月 1 日的证书续期状态、续期脚本归属不明带来的执行隐患、夜间 2 点约 5 分钟的日志空窗、以及该备忘作为迁移交接材料的完整性不足。分歧集中在两处且双方均标注 needs_evidence：未校验旧备份是否已构成实质回滚缺口；2 点空窗能否归因于周期性任务。最需立即跟进：备份可恢复性验证（唯一备份且未校验），以及 10 月 1 日续期执行保障（距今约 3 天）。",
+      "synthesisRef": {
+        "artifactId": "art_turn_bc57c62b-b81d-45c3-bd85-636b1a6db4f6",
+        "revision": 1
+      }
+    }
+  }
+}
