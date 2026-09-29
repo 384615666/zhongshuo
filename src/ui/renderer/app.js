@@ -1075,7 +1075,7 @@ async function renderGitOps(force = false) {
     const b = await command('git.branch.list', { projectId: state.projectId });
     const head = await currentHeadOfRepo();
     const rh = await command('git.remoteHead', { projectId: state.projectId, remote, branch: b.current });
-    const r = await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head });
+    const r = await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
     say(`已推送 ${b.current}：${(r.from ?? '（空）').slice(0, 8)} → ${r.to.slice(0, 8)}（远端 ${remote}）`);
   });
   remoteBtn('拉取', '快进拉取当前分支（分叉时不自动合并——如实拒绝，请人工处理）', async () => {

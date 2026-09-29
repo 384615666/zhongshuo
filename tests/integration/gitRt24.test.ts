@@ -145,7 +145,8 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     makeBareRemote(f.root);
     const head0 = git(f.root, 'rev-parse', 'HEAD').trim();
     // 首推（远端分支不存在）→ expectedRemoteHead=null。
-    const push1 = await f.cmd<{ from: string | null; to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null });
+    const url0 = git(f.root, 'remote', 'get-url', 'origin').trim();
+    const push1 = await f.cmd<{ from: string | null; to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null, expectedRemoteUrl: url0 });
     expect(push1).toMatchObject({ from: null, to: head0 });
     // 本地新提交 → 推送（远端头=head0）。
     writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
@@ -153,16 +154,49 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
     const c1 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '推送用提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
     // 远端头报错（expectedRemoteHead 给 null 而实际是 head0）→ 拒绝。
-    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: null })).rejects.toThrow(/远端分支已被更新/);
-    const push2 = await f.cmd<{ from: string | null; to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0 });
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: null, expectedRemoteUrl: url0 })).rejects.toThrow(/远端分支已被更新/);
+    const push2 = await f.cmd<{ from: string | null; to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0, expectedRemoteUrl: url0 });
     expect(push2).toMatchObject({ from: head0, to: c1.commit });
     // 崩溃窗口：回执清理后同号重推 → 远端已=目标 → 既成事实恢复（不重复推送、不报错）。
     const pushCid = 'c-rt24-push-retry1';
-    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0 }, pushCid);
+    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0, expectedRemoteUrl: url0 }, pushCid);
     f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(pushCid);
-    const pushRetry = await f.cmd<{ to: string; recovered?: boolean; replayed?: boolean }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0 }, pushCid);
+    const pushRetry = await f.cmd<{ to: string; recovered?: boolean; replayed?: boolean }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1.commit, expectedRemoteHead: head0, expectedRemoteUrl: url0 }, pushCid);
     expect(pushRetry.recovered ?? pushRetry.replayed).toBeTruthy();
     expect(pushRetry.to).toBe(c1.commit);
+    f.db.close();
+  }, 30_000);
+
+  it('push 执行对象绑定（第十二轮二）：校验后本地分支前进→未确认提交不被推；远端地址变化拒；推 OID 而非分支名', async () => {
+    const f = makeFixture('remote3', { 'a.txt': 'v1\n' });
+    makeBareRemote(f.root);
+    const url0 = git(f.root, 'remote', 'get-url', 'origin').trim();
+    const head0 = git(f.root, 'rev-parse', 'HEAD').trim();
+    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null, expectedRemoteUrl: url0 });
+    // 造两个本地提交：确认的 c1 与未确认的 c2（校验后本地分支又前进）。
+    async function localCommit(msg: string): Promise<string> {
+      writeFileSync(join(f.root, `${msg}.txt`, ), `${msg}\n`, 'utf8');
+      const name = `${msg}.txt`;
+      await f.cmd('git.stage', { projectId: f.projectId, paths: [name] });
+      const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+      return (await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: msg, expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch })).commit;
+    }
+    const c1 = await localCommit('确认的提交');
+    const c2 = await localCommit('未确认的新提交'); // 本地分支已前进到 c2
+    // 推送绑定 c1：refspec 源=c1 OID——c2 不可能被发往远端。
+    const push = await f.cmd<{ from: string | null; to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1, expectedRemoteHead: head0, expectedRemoteUrl: url0 });
+    expect(push.to).toBe(c1);
+    const bare = git(f.root, 'remote', 'get-url', 'origin').trim();
+    expect(git(bare, 'rev-parse', 'refs/heads/main').trim()).toBe(c1); // 远端=c1，未含 c2
+    expect(git(bare, 'log', '--format=%s', 'refs/heads/main')).not.toContain('未确认的新提交');
+    // 远端地址变化（remote 指向别处）→ 拒绝执行（目的地与确认不符）。
+    const bare2 = mkdtempSync(join(tmpRoot, 'bare2-'));
+    git(bare2, 'init', '-q', '--bare', '-b', 'main');
+    git(f.root, 'remote', 'set-url', 'origin', bare2.replaceAll('\\', '/'));
+    const c3probe = await f.cmd<{ head: string | null }>('git.remoteHead', { projectId: f.projectId, remote: 'origin', branch: 'main' }).catch(() => null);
+    void c3probe;
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c2, expectedRemoteHead: c1, expectedRemoteUrl: url0 })).rejects.toThrow(/实际地址已变化/);
+    git(f.root, 'remote', 'set-url', 'origin', url0);
     f.db.close();
   }, 30_000);
 
@@ -170,7 +204,7 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     const f = makeFixture('remote2', { 'a.txt': 'v1\n' });
     const bare = makeBareRemote(f.root);
     const head0 = git(f.root, 'rev-parse', 'HEAD').trim();
-    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null });
+    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null, expectedRemoteUrl: git(f.root, 'remote', 'get-url', 'origin').trim() });
     // 远端被另一克隆推进（模拟他人提交）。
     const other = mkdtempSync(join(tmpRoot, 'other-'));
     git(other, 'clone', '-q', bare.replaceAll('\\', '/'), '.');
@@ -183,11 +217,11 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
     const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
     const cLocal = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '本地提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
-    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit, expectedRemoteHead: remoteNow })).rejects.toThrow(/不是快进/);
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit, expectedRemoteHead: remoteNow, expectedRemoteUrl: git(f.root, 'remote', 'get-url', 'origin').trim() })).rejects.toThrow(/不是快进/);
     // pull 分叉（ff-only）→ 拒绝（不自动合并提交）。
     await expect(f.cmd('git.pull', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: cLocal.commit })).rejects.toThrow(/不是快进|分叉/);
     // 本地回到远端（撤销本地提交）→ pull 快进成功。
-    const undo = await f.cmd<{ to: string; movedToUnstaged: number }>('git.commit.undo', { projectId: f.projectId, commitOid: cLocal.commit, expectedHead: cLocal.commit });
+    const undo = await f.cmd<{ to: string; updatedRef: string }>('git.commit.undo', { projectId: f.projectId, commitOid: cLocal.commit, expectedHead: cLocal.commit, expectedBranch: 'main' });
     expect(undo.to).toBe(p.head);
     git(f.root, 'checkout', '--', 'a.txt'); // 清掉未暂存差异（回到远端基线，等效干净）
     const pulled = await f.cmd<{ to: string; pulledCount: number }>('git.pull', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: undo.to });
@@ -229,29 +263,97 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     f.db.close();
   }, 30_000);
 
-  it('commit.undo 软回退：内容回工作区、文件不删；后续提交阻塞；根提交拒绝', async () => {
-    const f = makeFixture('undo', { 'a.txt': 'v1\n' });
-    writeFileSync(join(f.root, 'b.txt'), 'new\n', 'utf8');
-    await f.cmd('git.stage', { projectId: f.projectId, paths: ['b.txt'] });
+  it('commit.undo 软回退（第十二轮三）：索引 A 与工作区 B 均无损；重叠拒；merge 拒；崩溃重试不重复退', async () => {
+    const f = makeFixture('undo2', { 'base.txt': 'v0\n' });
+    // 先造一个待撤销提交（只涉及 c.txt）。
+    writeFileSync(join(f.root, 'c.txt'), 'commit 内容\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['c.txt'] });
     const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
     const c1 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '将被撤销', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
-    const undo = await f.cmd<{ undone: string; to: string; movedToUnstaged: number }>('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit });
+    // A/B 关键 fixture：a.txt 暂存内容 A（只存在于索引），工作区是 B——与提交文件不相交。
+    writeFileSync(join(f.root, 'a.txt'), 'A-暂存版本\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    writeFileSync(join(f.root, 'a.txt'), 'B-工作区版本\n', 'utf8');
+    const indexA = git(f.root, 'show', ':a.txt');
+    expect(indexA).toContain('A-暂存版本');
+    // 软撤销：仅目标 ref 回退（CAS）；索引与工作区不动。
+    const undo = await f.cmd<{ undone: string; to: string; updatedRef: string; returnedToStaged: number }>('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit, expectedBranch: 'main' });
     expect(undo.undone).toBe(c1.commit);
     expect(undo.to).toBe(p.head);
-    expect(git(f.root, 'rev-parse', 'HEAD').trim()).toBe(p.head);
-    // 内容回工作区：b.txt 存在且未暂存；文件不删。
-    expect(readFileSync(join(f.root, 'b.txt'), 'utf8')).toBe('new\n');
-    expect(git(f.root, 'status', '--porcelain')).toContain('?? b.txt');
-    // 后续提交阻塞：现在 HEAD 已不是 c1 → 再撤销 c1 拒绝。
-    await expect(f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit })).rejects.toThrow(/不是当前 HEAD/);
-    // 根提交拒绝（init 是根）。
-    await f.cmd('git.stage', { projectId: f.projectId, paths: ['b.txt'] });
-    const p2 = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
-    const c2 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: 'again', expectedHead: p2.head, expectedIndexTree: p2.indexTree, expectedBranch: p2.branch });
-    const undo2 = await f.cmd<{ to: string }>('git.commit.undo', { projectId: f.projectId, commitOid: c2.commit, expectedHead: c2.commit });
-    expect(undo2.to).toBe(p.head);
-    const rootOid = git(f.root, 'rev-list', '--max-parents=0', 'HEAD').trim();
-    await expect(f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: rootOid, expectedHead: rootOid })).rejects.toThrow(/根提交/);
+    expect(undo.updatedRef).toBe('refs/heads/main');
+    expect(undo.returnedToStaged).toBe(1);
+    expect(git(f.root, 'rev-parse', 'refs/heads/main').trim()).toBe(p.head);
+    // A 未丢失（索引原样）+ B 未丢失（工作区文件原样）——不只检查文件还在。
+    expect(git(f.root, 'show', ':a.txt')).toBe(indexA);
+    expect(readFileSync(join(f.root, 'a.txt'), 'utf8')).toBe('B-工作区版本\n');
+    // 提交内容 c.txt 回到暂存（soft 语义）；a.txt 的暂存+未暂存状态原样（MM）。
+    const porcelain = git(f.root, 'status', '--porcelain');
+    expect(porcelain).toContain('A  c.txt');
+    expect(porcelain).toContain('AM a.txt'); // 新文件：staged A + 工作区 B=AM（暂存与未暂存两态原样保留）
+    expect(readFileSync(join(f.root, 'c.txt'), 'utf8')).toBe('commit 内容\n');
+    // 后续提交阻塞（ref 已非 c1）。
+    await expect(f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit, expectedBranch: 'main' })).rejects.toThrow(/目标提交不是/);
+    // 崩溃重试：删回执 + 行退回 pending（模拟已回退但未落账）→ 同号重试按 ref=父 恢复，不重复退。
+    const cid = 'c-undo-retry-0001';
+    await f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit, expectedBranch: 'main' }, cid).catch(() => { /* 已撤销——首次调用在上一段，此处用同号补一条 pending 后重试 */ });
+    f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(cid);
+    f.db.prepare(`UPDATE git_operations SET status = 'pending' WHERE id = ?`).run(cid);
+    const retry = await f.cmd<{ to: string; recovered?: boolean }>('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit, expectedBranch: 'main' }, cid);
+    expect(retry.recovered).toBe(true);
+    expect(retry.to).toBe(p.head); // 仍是父——未重复退到更早
+    f.db.close();
+  }, 30_000);
+
+  it('commit.undo：重叠（提交文件∩当前暂存）明确拒绝；merge 提交拒绝', async () => {
+    const f = makeFixture('undo3', { 'a.txt': 'v0\n' });
+    // 重叠：提交涉及 a.txt，随后又暂存 a.txt 另一版本 → 撤销无法无损 → 拒绝。
+    writeFileSync(join(f.root, 'a.txt'), '提交版本\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    const c1 = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '重叠提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch });
+    writeFileSync(join(f.root, 'a.txt'), '撤销前又暂存\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    await expect(f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: c1.commit, expectedHead: c1.commit, expectedBranch: 'main' })).rejects.toThrow(/重叠/);
+    // merge 提交撤销 → 拒绝（语义未定义，不默认选第一个父）。
+    await f.cmd('git.unstage', { projectId: f.projectId, paths: ['a.txt'] });
+    git(f.root, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(f.root, 's.txt'), 's\n', 'utf8');
+    git(f.root, 'add', '-A'); git(f.root, 'commit', '-q', '-m', 'side');
+    git(f.root, 'checkout', '-q', 'main');
+    const mg = gitLax(f.root, 'merge', '--no-ff', '-m', 'merge side', 'side');
+    expect(mg.status).toBe(0);
+    const mergeOid = git(f.root, 'rev-parse', 'HEAD').trim();
+    await expect(f.cmd('git.commit.undo', { projectId: f.projectId, commitOid: mergeOid, expectedHead: mergeOid, expectedBranch: 'main' })).rejects.toThrow(/合并提交/);
+    f.db.close();
+  }, 30_000);
+
+  it('hooks/签名边界（第十二轮四）：检测到 pre-commit/gpgsign → 内置提交阻塞（不静默绕过）；移除后恢复', async () => {
+    const f = makeFixture('hooks', { 'a.txt': 'v1\n' });
+    writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    // ① pre-commit 钩子存在（标记脚本——检测只看存在性，不执行）。
+    const hooksDir = join(f.root, '.git', 'hooks');
+    const hookPath = join(hooksDir, 'pre-commit');
+    writeFileSync(hookPath, '#!/bin/sh\necho hook-ran\n', 'utf8');
+    const p1 = await f.cmd<{ canCommit: boolean; blockers: string[]; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
+    expect(p1.canCommit).toBe(false);
+    expect(p1.blockers.some((x) => x.includes('pre-commit 钩子'))).toBe(true);
+    const cid = 'c-hooks-0001';
+    await expect(f.cmd('git.commit', { projectId: f.projectId, message: 'x', expectedHead: p1.head, expectedIndexTree: p1.indexTree, expectedBranch: p1.branch }, cid)).rejects.toThrow(/pre-commit 钩子/);
+    // ② gpgsign=true（不调用真实签名——在检测层阻塞）。
+    rmSync(hookPath);
+    git(f.root, 'config', 'commit.gpgsign', 'true');
+    const p2 = await f.cmd<{ canCommit: boolean; blockers: string[] }>('git.commitPreview', { projectId: f.projectId });
+    expect(p2.canCommit).toBe(false);
+    expect(p2.blockers.some((x) => x.includes('commit.gpgsign'))).toBe(true);
+    // ③ 清除后内置提交恢复（且预览 notes 始终如实描述实际执行路径）。
+    git(f.root, 'config', '--unset', 'commit.gpgsign');
+    const p3 = await f.cmd<{ canCommit: boolean; notes: string[] }>('git.commitPreview', { projectId: f.projectId });
+    expect(p3.canCommit).toBe(true);
+    expect(p3.notes.some((n) => n.includes('不执行 pre-commit/post-commit 钩子'))).toBe(true);
+    const ok = await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: '无钩子提交', expectedHead: p3.head, expectedIndexTree: p3.indexTree, expectedBranch: p3.branch });
+    expect(git(f.root, 'rev-list', '--count', 'HEAD').trim()).toBe('2');
+    void ok;
     f.db.close();
   }, 30_000);
 });

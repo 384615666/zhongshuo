@@ -357,6 +357,35 @@ describe('第十一轮·一：提交内容绑定与操作保护', () => {
     f.db.close();
   }, 30_000);
 
+  it('同 OID 双分支竞态：预览后外部切到同 OID 分支 → 提交只更新批准的 ref，未批准分支绝不动', async () => {
+    const f = makeFixture('sameswap', { 'a.txt': 'v1\n' });
+    writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    // 预览检查通过后、CAS 执行前（_between 接缝）：外部建一个指向同一 OID 的分支并切过去——
+    // HEAD 符号引用已变；旧实现经 HEAD 解引用 update-ref 会把提交落到未批准的 other 分支上。
+    const { execFileSync: ex } = await import('node:child_process');
+    const { gitCommit } = await import('../../src/daemon/gitWrite.ts');
+    const targetRef = `refs/heads/${p.branch}`;
+    const commitResult = await gitCommit(f.db, {
+      projectId: f.projectId, projectRoot: f.root, message: '目标绑定提交',
+      expectedHead: p.head, expectedIndexTree: p.indexTree!, expectedBranch: p.branch!,
+      journal: { commandId: `c-swap-${randomUUID().slice(0, 8)}`, scope: 'user:u_gitwrite', payloadHash: 'x'.repeat(8), now: Date.now() },
+      _between: async () => {
+        ex('git', ['-C', f.root, 'branch', 'other-same', p.head!]);
+        ex('git', ['-C', f.root, 'checkout', '-q', 'other-same']); // 同 OID 切换——HEAD 指向 other-same
+      },
+    });
+    // 结果记录显式 ref（不依赖读 HEAD 猜）；副作用事实：批准的 ref 前进、未批准分支保持原 OID。
+    expect(commitResult.updatedRef).toBe(targetRef);
+    expect(ex('git', ['-C', f.root, 'rev-parse', targetRef]).toString('utf8').trim()).toBe(commitResult.commit);
+    expect(ex('git', ['-C', f.root, 'rev-parse', 'refs/heads/other-same']).toString('utf8').trim()).toBe(p.head);
+    // HEAD 仍指向外部选择的 other-same（我们没动它）；目标 ref 核对一致 → consistent。
+    expect(ex('git', ['-C', f.root, 'symbolic-ref', '--short', 'HEAD']).toString('utf8').trim()).toBe('other-same');
+    expect(commitResult.consistent).toBeUndefined();
+    f.db.close();
+  }, 30_000);
+
   it('目标分支绑定：同一 HEAD 切换分支后，旧预览提交拒绝（不把提交套到另一分支）', async () => {
     const f = makeFixture('branchbind', { 'a.txt': 'v1\n' });
     writeFileSync(join(f.root, 'a.txt'), 'v2\n', 'utf8');

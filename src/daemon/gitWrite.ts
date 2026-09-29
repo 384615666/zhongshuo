@@ -705,10 +705,12 @@ async function commitTreeOf(loc: RepoLocation, tree: string, parent: string | nu
  * - 旧值不匹配（外部已移动 HEAD/创建分支）→ 失败并返回当前实际值（调用方拒绝，不覆盖）。
  * HEAD 为符号引用时 update-ref 默认解引用更新其指向的分支（提交目标=用户批准的分支）。
  */
-async function updateHeadCas(loc: RepoLocation, newOid: string, expectedOld: string | null): Promise<{ ok: true } | { ok: false; current: string | null; stderr: string }> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'update-ref', 'HEAD', newOid, expectedOld ?? ZERO_OID], { capBytes: 8192 });
+async function updateRefCas(loc: RepoLocation, ref: string, newOid: string, expectedOld: string | null): Promise<{ ok: true } | { ok: false; current: string | null; stderr: string }> {
+  // **显式 ref 的比较交换**：不经可变的 HEAD 解引用（第十二轮一）——外部把 HEAD 切到同旧
+  // OID 的其他分支/删除重建目标 ref，都不会让本次更新落到未批准的目标上。
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'update-ref', ref, newOid, expectedOld ?? ZERO_OID], { capBytes: 8192 });
   if (cap.spawnError == null && cap.exitCode === 0) return { ok: true };
-  const cur = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+  const cur = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', ref], { capBytes: 4096 });
   return { ok: false, current: cur.exitCode === 0 && OID_RE.test(cur.stdout.toString('utf8').trim()) ? cur.stdout.toString('utf8').trim() : null, stderr: cap.stderr.trim().slice(0, 200) };
 }
 
@@ -717,6 +719,31 @@ async function currentBranchOf(loc: RepoLocation): Promise<string | null> {
   const cap = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--short', 'HEAD'], { capBytes: 4096 });
   if (cap.exitCode !== 0) return null;
   return cap.stdout.toString('utf8').trim() || null;
+}
+
+
+/** 内置提交路径（commit-tree）无法履行的仓库工作流要求（第十二轮四）——检测到即阻塞内置
+ * 提交并说明原因；不设置全局绕过、不改用户配置。长期方案差异记录于本轮报告。 */
+async function commitWorkflowConflicts(loc: RepoLocation): Promise<string[]> {
+  const conflicts: string[] = [];
+  const hooksPathCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'core.hooksPath'], { capBytes: 4096 });
+  const hooksPath = hooksPathCap.exitCode === 0 && hooksPathCap.stdout.toString('utf8').trim() !== ''
+    ? resolve(loc.worktreeRoot, hooksPathCap.stdout.toString('utf8').trim())
+    : join(loc.worktreeRoot, '.git', 'hooks');
+  for (const hook of ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit']) {
+    let present: boolean;
+    try {
+      present = statSync(join(hooksPath, hook)).isFile();
+    } catch { present = false; }
+    if (present) {
+      conflicts.push(`检测到 ${hook} 钩子（${hooksPath}）——内置提交经 commit-tree 构造，不执行任何钩子；为不静默绕过你的工作流，内置提交已阻塞。请用你自己的 git 客户端提交（钩子会正常执行），或临时移除钩子后再用内置提交`);
+    }
+  }
+  const gpgCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get', 'commit.gpgsign'], { capBytes: 4096 });
+  if (gpgCap.exitCode === 0 && gpgCap.stdout.toString('utf8').trim() === 'true') {
+    conflicts.push('commit.gpgsign=true——内置提交（commit-tree）不产生签名；为不静默降级签名要求，内置提交已阻塞。请用你自己的 git 客户端提交（签名正常执行）');
+  }
+  return conflicts;
 }
 
 export interface CommitPreview {
@@ -778,6 +805,7 @@ async function commitSnapshot(db: ZhongshuoDatabase, loc: RepoLocation, input: {
     if (treeError != null) blockers.push(treeError);
     if (identity.name == null || identity.email == null) blockers.push(`缺少 git 提交身份配置（user.name=${identity.name ?? '未配置'}，user.email=${identity.email ?? '未配置'}）——本产品不代改配置，请在仓库或全局配置后重试`);
     if (leaseHolders.length > 0) blockers.push(`任务执行保护生效中（租约持有者：${leaseHolders.map((h) => h.ownerTurnId).join('、')}）——保护期间不做提交`);
+    for (const conflict of await commitWorkflowConflicts(loc)) blockers.push(conflict);
     return {
       head,
       branch,
@@ -791,7 +819,7 @@ async function commitSnapshot(db: ZhongshuoDatabase, loc: RepoLocation, input: {
       canCommit: blockers.length === 0,
       blockers,
       notes: [
-        '产品内提交经「write-tree → commit-tree → update-ref（带期望旧值）」原子完成：提交对象由预览时的索引 tree 直接构造，HEAD 用比较交换推进——预览后内容或分支变化都会拒绝。',
+        '产品内提交经「write-tree → commit-tree → update-ref refs/heads/<分支>（带期望旧值）」原子完成：提交对象由预览时的索引 tree 直接构造，用户批准的分支 ref 用比较交换推进（不经可变的 HEAD 解引用）——预览后内容、分支或目标 ref 变化都会拒绝。',
         '该路径不执行 pre-commit/post-commit 钩子、不使用 commit 模板与 gpg 签名配置；需要钩子的提交请用你自己的 git 客户端。',
       ],
     };
@@ -801,6 +829,8 @@ async function commitSnapshot(db: ZhongshuoDatabase, loc: RepoLocation, input: {
 export interface CommitOutcome {
   /** 本次构造并落 ref 的提交对象（commit-tree 返回——我们自己知道的 oid）。 */
   commit: string;
+  /** 本次明确更新的分支 ref（refs/heads/<branch>）——结果不依赖事后读 HEAD。 */
+  updatedRef: string;
   headBefore: string | null;
   subject: string;
   /** 提交后核对的 HEAD；与 commit 不一致＝CAS 之后外部又推进了 HEAD——本次提交仍是 commit， */
@@ -847,7 +877,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
       if (head0 !== input.expectedHead) {
         const trailerHit = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
         if (trailerHit != null) {
-          const recoveredResult: CommitOutcome = { commit: trailerHit.oid, headBefore: input.expectedHead, subject: trailerHit.subject, recovered: true };
+          const recoveredResult: CommitOutcome = { commit: trailerHit.oid, updatedRef: `refs/heads/${input.expectedBranch ?? ''}`, headBefore: input.expectedHead, subject: trailerHit.subject, recovered: true };
           const persisted1 = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, result: recoveredResult, headBefore: input.expectedHead, headAfter: recoveredResult.commit, commitOid: recoveredResult.commit });
           return persisted1.data;
         }
@@ -862,7 +892,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
       if (headN !== input.expectedHead) {
         const trailerHitN = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
         if (trailerHitN != null) {
-          const recoveredN: CommitOutcome = { commit: trailerHitN.oid, headBefore: input.expectedHead, subject: trailerHitN.subject, recovered: true };
+          const recoveredN: CommitOutcome = { commit: trailerHitN.oid, updatedRef: `refs/heads/${input.expectedBranch ?? ''}`, headBefore: input.expectedHead, subject: trailerHitN.subject, recovered: true };
           const persistedN = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, result: recoveredN, headBefore: input.expectedHead, headAfter: recoveredN.commit, commitOid: recoveredN.commit });
           return persistedN.data;
         }
@@ -880,6 +910,9 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
     if (branchNow !== input.expectedBranch) {
       throw new GitWriteError('STALE_REVISION', `提交目标分支已变化（预览 ${input.expectedBranch} → 当前 ${branchNow ?? 'detached HEAD'}）——请重新预览；不把提交套到另一个分支`);
     }
+    for (const conflict of await commitWorkflowConflicts(loc)) {
+      throw new GitWriteError('VALIDATION_INVALID', `提交前置不满足：${conflict}`);
+    }
     const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
     const headNow = headCap.exitCode === 0 && OID_RE.test(headCap.stdout.toString('utf8').trim()) ? headCap.stdout.toString('utf8').trim() : null;
     if (headNow !== input.expectedHead) {
@@ -894,21 +927,27 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
     const fullMessage = `${input.message}\n\n${COMMIT_TRAILER_KEY}: ${input.journal.commandId}`;
     // 构造提交对象（对象库副作用可忽略：CAS 失败时为悬挂对象，gc 自清；不触碰任何 ref）。
     const ourOid = await commitTreeOf(loc, treeNow, input.expectedHead, fullMessage);
-    const cas = await updateHeadCas(loc, ourOid, input.expectedHead);
+    // 更新目标=用户批准的**显式分支 ref**（refs/heads/<branch>）——检查后外部 checkout 到同
+    // 旧 OID 的其他分支时，被更新的仍是批准的 ref，绝不经由 HEAD 误写当前分支。
+    const targetRef = `refs/heads/${input.expectedBranch}`;
+    const cas = await updateRefCas(loc, targetRef, ourOid, input.expectedHead);
     if (!cas.ok) {
-      throw new GitWriteError('STALE_REVISION', `HEAD 比较交换失败（外部已推进：当前 ${cas.current ?? '空'}）——本次提交未落 ref，未覆盖外部结果：${cas.stderr}`.slice(0, 300));
+      throw new GitWriteError('STALE_REVISION', `目标 ref ${targetRef} 比较交换失败（现值 ${cas.current ?? '（不存在）'}）——本次提交未落 ref，未覆盖任何外部结果：${cas.stderr}`.slice(0, 300));
     }
     if (input._between != null) await input._between();
-    // 提交后核对：HEAD/分支/tree 必须与批准对象一致；不一致＝外部又推进——如实记录并留痕，
-    // 不自动 reset、不撤销用户修改（进入核对流程）。
+    // 提交后核对（第十二轮一）：**目标 ref** 必须等于本次提交对象（不依赖事后读 HEAD 猜结果）；
+    // HEAD 只作附注记录（外部可能已切走——不影响本次副作用的事实认定）。
+    const verifyRef = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const refAfter = verifyRef.exitCode === 0 ? verifyRef.stdout.toString('utf8').trim() : null;
     const verifyHead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
     const headAfterActual = verifyHead.exitCode === 0 ? verifyHead.stdout.toString('utf8').trim() : null;
     const branchAfter = await currentBranchOf(loc);
     const treeVerify = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${ourOid}^{tree}`], { capBytes: 4096 });
     const treeOk = treeVerify.exitCode === 0 && treeVerify.stdout.toString('utf8').trim() === treeNow;
-    const consistent = headAfterActual === ourOid && branchAfter === input.expectedBranch && treeOk;
+    const consistent = refAfter === ourOid && treeOk;
     const result: CommitOutcome = {
       commit: ourOid,
+      updatedRef: targetRef,
       headBefore: input.expectedHead,
       subject,
       headAfterActual: headAfterActual ?? undefined,
@@ -925,7 +964,7 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
           projectId: input.projectId,
           kind: consistent ? 'git.committed' : 'git.commitVerifyInconsistent',
           createdAt: input.journal.now,
-          payload: { commit: ourOid, headAfterActual, branchAfter, taskId: input.taskId ?? null, subject, note: consistent ? undefined : 'CAS 后外部又推进 HEAD——本次提交对象为 commit 字段，仓库现值见 headAfterActual；不自动回滚，请人工核对' },
+          payload: { commit: ourOid, updatedRef: targetRef, refAfter, headAfterActual, branchAfter, taskId: input.taskId ?? null, subject, note: consistent ? undefined : 'CAS 后目标 ref 又被外部推进——本次提交对象为 commit 字段（已落库），目标 ref 现值见 refAfter；不自动回滚，请人工核对' },
         });
       },
     });
@@ -1169,6 +1208,22 @@ export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: s
   return { commit, patches };
 }
 
+/** URL/输出脱敏：scheme://user:pass@host 与 ?token=… 类凭据打码后才进消息/结果/日志。 */
+export function redactRemoteText(text: string): string {
+  return text
+    .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^@/\s]+@/g, '$1***@')
+    .replace(/([?&](token|password|access_token|oauth_token|api_key)=)[^&\s]+/gi, '$1***');
+}
+
+/** 远端名当前实际地址（remote get-url——推送目的地确认与执行前复核用）。 */
+export async function remoteUrl(loc: RepoLocation, remote: string): Promise<string> {
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'remote', 'get-url', remote], { capBytes: 4096 });
+  if (cap.exitCode !== 0) {
+    throw new GitWriteError('RESOURCE_NOT_FOUND', `远端 ${remote} 未配置（git remote get-url 失败）`);
+  }
+  return cap.stdout.toString('utf8').trim();
+}
+
 /** 远端分支当前头（ls-remote；无该分支=null）。AUTH 失败映射明确错误（不回显凭据）。 */
 export async function remoteHead(loc: RepoLocation, remote: string, branch: string): Promise<string | null> {
   const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', remote, `refs/heads/${branch}`], { capBytes: 16 * 1024 });
@@ -1185,7 +1240,7 @@ export async function remoteHead(loc: RepoLocation, remote: string, branch: stri
 
 export interface PushOutcome { remote: string; branch: string; from: string | null; to: string; replayed?: boolean; recovered?: boolean }
 
-export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; remote: string; branch: string; expectedHead: string; expectedRemoteHead: string | null; journal: JournalInput }): Promise<PushOutcome> {
+export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; remote: string; branch: string; expectedHead: string; expectedRemoteHead: string | null; expectedRemoteUrl: string; journal: JournalInput }): Promise<PushOutcome> {
   const replay = replayIfReceipted<PushOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
   const loc = await repoGuard(input.projectRoot);
@@ -1199,11 +1254,13 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
     } else {
       beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'push', request: { remote: input.remote, branch: input.branch, expectedHead: input.expectedHead, expectedRemoteHead: input.expectedRemoteHead } });
     }
-    const branchNow = await currentBranchOf(loc);
-    if (branchNow !== input.branch) throw new GitWriteError('STALE_REVISION', `当前分支 ${branchNow ?? 'detached'} ≠ 推送分支 ${input.branch}——推送绑定用户确认的目标，请刷新`);
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
-    const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
-    if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `本地 HEAD 已移动（期望 ${input.expectedHead} → ${head ?? '空'}）——推送内容须与用户确认的一致`);
+    // 推送源=确认的不可变提交 OID（refspec 直接用 expectedHead）——本地分支/HEAD 在确认后
+    // 前进不影响本次推送对象（第十二轮二）；不再要求本地 HEAD==确认值。
+    // 目的地复核先于远端头校验：remote 配置变化（改指向）是最根本的目的地不符。
+    const urlNow = await remoteUrl(loc, input.remote);
+    if (urlNow !== input.expectedRemoteUrl) {
+      throw new GitWriteError('STALE_REVISION', `远端 ${input.remote} 的实际地址已变化（确认 ${redactRemoteText(input.expectedRemoteUrl)} → 现在 ${redactRemoteText(urlNow)}）——推送目的地与确认不符，拒绝执行`);
+    }
     const remote = await remoteHead(loc, input.remote, input.branch);
     if (remote === input.expectedHead) {
       // 崩溃重试窗口：推送已生效（远端=目标）——按既成事实收口。
@@ -1220,13 +1277,23 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
         throw new GitWriteError('VALIDATION_INVALID', '推送不是快进（远端含本地没有的提交）——产品内不做强推（§14.6/RT-24）；请先拉取合并');
       }
     }
-    const push = await captureGit(['-C', loc.worktreeRoot, 'push', input.remote, `refs/heads/${input.branch}:refs/heads/${input.branch}`], { capBytes: 32 * 1024 });
+    // 执行对象绑定（第十二轮二）：refspec 源=用户确认的**不可变提交 OID**（不是可变本地分支）；
+    // --force-with-lease=目标:确认旧头 ⇒ 远端旧头必须严格等于确认值（机械约束，非仅前置
+    // ls-remote）；未确认的本地新提交不可能被发往远端。
+    const push = await captureGit(['-C', loc.worktreeRoot, 'push', `--force-with-lease=refs/heads/${input.branch}:${input.expectedRemoteHead ?? ''}`, input.remote, `${input.expectedHead}:refs/heads/${input.branch}`], { capBytes: 32 * 1024 });
     if (push.exitCode !== 0) {
-      throw new GitWriteError('GIT_COMMAND_FAILED', `推送失败：${push.stderr.trim().slice(0, 200)}`);
+      const stderr = push.stderr.trim();
+      if (/stale info|fetch first|rejected.*non-fast-forward|forced update/i.test(stderr)) {
+        throw new GitWriteError('STALE_REVISION', redactRemoteText(`远端旧头与确认值不符或非快进——推送被拒（不覆盖远端结果）：${stderr.slice(0, 160)}`));
+      }
+      if (/timed out|connection|network|reset|unreachable|unable to access/i.test(stderr)) {
+        throw new GitWriteError('STALE_REVISION', redactRemoteText(`推送网络失败——副作用不确定（远端可能已更新）：${stderr.slice(0, 120)}。同号重试将按远端现值核对（=目标则按既成事实收口；=确认旧值则重推；其他进人工核对）`));
+      }
+      throw new GitWriteError('GIT_COMMAND_FAILED', redactRemoteText(`推送失败：${stderr.slice(0, 200)}`));
     }
     const remoteAfter = await remoteHead(loc, input.remote, input.branch);
     if (remoteAfter !== input.expectedHead) {
-      throw new GitWriteError('GIT_COMMAND_FAILED', `推送后远端核对不符（期望 ${input.expectedHead}，实际 ${remoteAfter ?? '无'}）——如实失败，请人工核对远端`);
+      throw new GitWriteError('STALE_REVISION', redactRemoteText(`推送后远端核对不符（期望 ${input.expectedHead}，实际 ${remoteAfter ?? '无'}）——副作用不确定：同号重试按远端现值核对，不盲目重发`));
     }
     const result: PushOutcome = { remote: input.remote, branch: input.branch, from: input.expectedRemoteHead, to: input.expectedHead };
     const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'push', request: { remote: input.remote, branch: input.branch, expectedHead: input.expectedHead, expectedRemoteHead: input.expectedRemoteHead }, result, headBefore: input.expectedRemoteHead, headAfter: input.expectedHead });
@@ -1255,10 +1322,17 @@ export async function gitPull(db: ZhongshuoDatabase, input: { projectId: string;
     const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
     if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `本地 HEAD 已移动（期望 ${input.expectedHead} → ${head ?? '空'}）——请刷新后重试`);
     const fetch = await captureGit(['-C', loc.worktreeRoot, 'fetch', input.remote, input.branch], { capBytes: 32 * 1024 });
-    if (fetch.exitCode !== 0) throw new GitWriteError('GIT_COMMAND_FAILED', `fetch 失败：${fetch.stderr.trim().slice(0, 160)}`);
-    const merge = await captureGit(['-C', loc.worktreeRoot, 'merge', '--ff-only', 'FETCH_HEAD'], { capBytes: 32 * 1024 });
+    if (fetch.exitCode !== 0) throw new GitWriteError('GIT_COMMAND_FAILED', redactRemoteText(`fetch 失败：${fetch.stderr.trim().slice(0, 160)}`));
+    // 对象绑定（第十二轮二）：fetch 得到的对象先固化为 OID，合入执行用该 OID——不引用可变的
+    // FETCH_HEAD 符号（外部并发 fetch 不改变本次合入对象）。
+    const fetchedCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'FETCH_HEAD'], { capBytes: 4096 });
+    if (fetchedCap.exitCode !== 0 || !OID_RE.test(fetchedCap.stdout.toString('utf8').trim())) {
+      throw new GitWriteError('GIT_COMMAND_FAILED', 'fetch 后无法确定 FETCH_HEAD 对象——拒绝合入（不猜测）');
+    }
+    const fetchedOid = fetchedCap.stdout.toString('utf8').trim();
+    const merge = await captureGit(['-C', loc.worktreeRoot, 'merge', '--ff-only', fetchedOid], { capBytes: 32 * 1024 });
     if (merge.exitCode !== 0) {
-      throw new GitWriteError('VALIDATION_INVALID', `拉取不是快进（本地与远端分叉）：${merge.stderr.trim().slice(0, 160)}——产品内不自动产生合并提交；请先处理本地提交或用你自己的 git 客户端合并`);
+      throw new GitWriteError('VALIDATION_INVALID', redactRemoteText(`拉取不是快进（本地与远端分叉）：${merge.stderr.trim().slice(0, 160)}——产品内不自动产生合并提交；请先处理本地提交或用你自己的 git 客户端合并`));
     }
     const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
     const headAfter = headAfterCap.exitCode === 0 ? headAfterCap.stdout.toString('utf8').trim() : null;
@@ -1329,9 +1403,22 @@ function writeFileSyncGuarded(fsPath: string, content: string): void {
   renameSync(tmp, fsPath);
 }
 
-export interface CommitUndoOutcome { undone: string; to: string; movedToUnstaged: number; replayed?: boolean; recovered?: boolean }
 
-export async function gitCommitUndo(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; commitOid: string; expectedHead: string; journal: JournalInput }): Promise<CommitUndoOutcome> {
+export interface CommitUndoOutcome {
+  undone: string;
+  to: string;
+  /** 本次回退的显式分支 ref（refs/heads/<branch>）——不依赖读 HEAD 猜结果。 */
+  updatedRef: string;
+  /** 提交内容回到暂存区的文件数（soft 语义：ref 回退，索引/工作区未动）。 */
+  returnedToStaged: number;
+  replayed?: boolean;
+  recovered?: boolean;
+}
+
+export async function gitCommitUndo(db: ZhongshuoDatabase, input: {
+  projectId: string; projectRoot: string; commitOid: string; expectedHead: string; expectedBranch: string;
+  journal: JournalInput;
+}): Promise<CommitUndoOutcome> {
   const replay = replayIfReceipted<CommitUndoOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
   if (!OID_RE.test(input.commitOid)) throw new GitWriteError('VALIDATION_INVALID', `非法提交对象 id：${input.commitOid}`);
@@ -1341,34 +1428,84 @@ export async function gitCommitUndo(db: ZhongshuoDatabase, input: { projectId: s
     const existing = getOperationRow(db, input.journal.commandId);
     if (existing != null) {
       requirePendingHashMatch(db, input.journal, existing);
-      if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as CommitUndoOutcome), replayed: true, recovered: true };
+      if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as CommitUndoOutcome), replayed: true };
+      // pending 崩溃重试：按目标 ref 当前值核对已回退与否（不重复退到更早提交）。
     } else {
-      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'commit_undo', request: { commitOid: input.commitOid, expectedHead: input.expectedHead }, headBefore: input.expectedHead });
+      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'commit_undo', request: { commitOid: input.commitOid, expectedHead: input.expectedHead, expectedBranch: input.expectedBranch }, headBefore: input.expectedHead });
     }
     const branch = await currentBranchOf(loc);
     if (branch == null) throw new GitWriteError('VALIDATION_INVALID', 'detached HEAD——撤销提交要求分支上下文');
-    const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
-    const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
-    if (head !== input.commitOid || head !== input.expectedHead) {
-      throw new GitWriteError('STALE_REVISION', `目标提交不是当前 HEAD（存在后续提交或 HEAD 已移动：HEAD=${head ?? '空'}）——只允许撤销最近一次提交；不使用任何历史改写`);
+    if (branch !== input.expectedBranch) throw new GitWriteError('STALE_REVISION', `当前分支 ${branch} ≠ 批准分支 ${input.expectedBranch}——请刷新后重试`);
+    const targetRef = `refs/heads/${input.expectedBranch}`;
+    const refCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const refNow = refCap.exitCode === 0 && OID_RE.test(refCap.stdout.toString('utf8').trim()) ? refCap.stdout.toString('utf8').trim() : null;
+    if (existing != null && existing.status === 'pending') {
+      const parentProbe = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${input.commitOid}^`], { capBytes: 4096 });
+      const parentOid = parentProbe.exitCode === 0 ? parentProbe.stdout.toString('utf8').trim() : null;
+      if (refNow === parentOid) {
+        const result0 = { undone: input.commitOid, to: parentOid!, updatedRef: targetRef, returnedToStaged: 0 };
+        const persisted0 = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit_undo', request: { commitOid: input.commitOid, expectedHead: input.expectedHead, expectedBranch: input.expectedBranch }, result: result0, headAfter: parentOid });
+        return { ...persisted0.data, recovered: true };
+      }
+      if (refNow !== input.commitOid) {
+        throw new GitWriteError('STALE_REVISION', `中断重试核对：目标 ref 现值 ${refNow ?? '（不存在）'} 既非待撤销提交也非其父——进入人工核对，不重复回退`);
+      }
+      // refNow===commitOid：未回退——继续执行。
     }
-    const parentCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', `${input.commitOid}^`], { capBytes: 4096 });
-    if (parentCap.exitCode !== 0) {
-      throw new GitWriteError('VALIDATION_INVALID', '该提交没有父提交（根提交）——软回退到空仓库不被支持，请人工处理');
+    if (refNow !== input.commitOid || refNow !== input.expectedHead) {
+      throw new GitWriteError('STALE_REVISION', `目标提交不是 ${targetRef} 当前值（ref=${refNow ?? '空'}；存在后续提交/已回退/外部推进）——只允许撤销分支最新提交，不做任何历史改写`);
     }
-    const parent = parentCap.stdout.toString('utf8').trim();
-    // 软回退语义（§14.6）：内容回工作区、文件不删——reset --mixed 把提交差异放回未暂存区，
-    // 工作区文件保持；已有未暂存改动保留（git 语义：混合重置不触碰工作区）。
-    const reset = await captureGit(['-C', loc.worktreeRoot, 'reset', '--mixed', parent], { capBytes: 16 * 1024 });
-    if (reset.exitCode !== 0) {
-      throw new GitWriteError('GIT_COMMAND_FAILED', `撤销提交失败：${reset.stderr.trim().slice(0, 160)}`);
+    const metaCap = await captureGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%P', input.commitOid], { capBytes: 4096 });
+    const parents = metaCap.exitCode === 0 ? metaCap.stdout.toString('utf8').trim().split(' ').filter((x) => x !== '') : [];
+    if (parents.length > 1) {
+      throw new GitWriteError('VALIDATION_INVALID', '该提交是合并提交（多父）——软撤销语义未定义，不默认选第一个父提交；请人工处理或用你自己的 git 客户端');
     }
-    const headAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
-    const headAfter = headAfterCap.exitCode === 0 ? headAfterCap.stdout.toString('utf8').trim() : null;
-    if (headAfter !== parent) throw new GitWriteError('GIT_COMMAND_FAILED', `撤销后 HEAD 核对不符（期望 ${parent}，实际 ${headAfter ?? '空'}）——如实失败，请人工核对`);
-    const status = await currentStatus(loc);
-    const result: CommitUndoOutcome = { undone: input.commitOid, to: parent, movedToUnstaged: status.filter((e) => e.category === 'unstaged' || e.category === 'untracked').length };
-    const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit_undo', request: { commitOid: input.commitOid, expectedHead: input.expectedHead }, result, headBefore: input.expectedHead, headAfter });
+    if (parents.length === 0) throw new GitWriteError('VALIDATION_INVALID', '根提交不可软撤销——请人工处理');
+    const parent = parents[0]!;
+    // 操作前事实：索引 tree 身份 + porcelain 快照（撤销后必须逐一不变——A/B 无损证明）。
+    const indexTreeBefore = await writeTreeOf(loc);
+    const statusBefore = await currentStatus(loc);
+    // 重叠检测：提交涉及文件 ∩ 撤销前已暂存条目 ≠ ∅ → 无法无损区分（提交内容会与用户暂存
+    // 同处索引）——明确拒绝，不先执行再提示。
+    const commitFiles = new Set<string>();
+    const rawCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', input.commitOid], { capBytes: 256 * 1024 });
+    if (rawCap.exitCode === 0) {
+      const { parseRawZ } = await import('./gitStatus.ts');
+      for (const entry of parseRawZ(rawCap.stdout.toString('utf8'))) commitFiles.add(entry.path);
+    }
+    const stagedBefore = new Set(statusBefore.filter((e) => e.category === 'staged').map((e) => e.path));
+    const overlap = [...commitFiles].filter((f) => stagedBefore.has(f));
+    if (overlap.length > 0) {
+      throw new GitWriteError('VALIDATION_INVALID', `提交涉及文件与当前已暂存内容重叠（${overlap.slice(0, 5).join('、')}${overlap.length > 5 ? ' 等' : ''}）——软撤销无法无损保留你的暂存版本与提交内容；请先提交/取消暂存重叠文件，或用你自己的 git 客户端处理`);
+    }
+    // 执行：仅回退目标 ref（比较交换）——索引与工作区完全不动（soft 语义：提交差异相对新
+    // ref 呈现为已暂存）。无 reset --mixed（它会改写索引、丢失用户暂存内容）。
+    const cas = await updateRefCas(loc, targetRef, parent, input.commitOid);
+    if (!cas.ok) {
+      throw new GitWriteError('STALE_REVISION', `目标 ref ${targetRef} 比较交换失败（现值 ${cas.current ?? '（不存在）'}）——未回退任何对象：${cas.stderr}`.slice(0, 240));
+    }
+    // 核对：ref=parent；索引 tree 与 porcelain 与操作前逐一一致（A 与 B 均未丢失的直接证明）。
+    const refAfterCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', targetRef], { capBytes: 4096 });
+    const refAfter = refAfterCap.exitCode === 0 ? refAfterCap.stdout.toString('utf8').trim() : null;
+    if (refAfter !== parent) throw new GitWriteError('GIT_COMMAND_FAILED', `回退后目标 ref 核对不符（期望 ${parent}，实际 ${refAfter ?? '空'}）——如实失败，请人工核对`);
+    const indexTreeAfter = await writeTreeOf(loc);
+    if (indexTreeAfter !== indexTreeBefore) throw new GitWriteError('GIT_COMMAND_FAILED', '回退后索引内容身份变化（不应发生——软撤销不改索引）——如实失败，请人工核对');
+    const statusAfter = await currentStatus(loc);
+    // 核对语义（第十二轮三）：软回退后，porcelain 允许的变化**仅限提交涉及的文件**（其差异
+    // 以已暂存形式重现——soft 语义本身）；其余条目（用户已有暂存/未暂存内容）必须逐一不变。
+    const lineOf = (e: { xy: string; path: string; renamedFrom?: string }) => `${e.xy}\t${e.path}${e.renamedFrom != null ? `\t${e.renamedFrom}` : ''}`;
+    const beforeLines = new Set(statusBefore.map(lineOf));
+    const afterLines = new Set(statusAfter.map(lineOf));
+    const changedPaths = new Set<string>();
+    for (const line of [...beforeLines].filter((l) => !afterLines.has(l)).concat([...afterLines].filter((l) => !beforeLines.has(l)))) {
+      changedPaths.add(line.split('\t')[1] ?? line);
+    }
+    const unexpected = [...changedPaths].filter((f) => !commitFiles.has(f));
+    if (unexpected.length > 0) {
+      throw new GitWriteError('GIT_COMMAND_FAILED', `回退后工作区/暂存状态出现提交文件之外的变化（${unexpected.slice(0, 5).join('、')}）——软撤销不应触碰这些内容，如实失败请人工核对`);
+    }
+    const result: CommitUndoOutcome = { undone: input.commitOid, to: parent, updatedRef: targetRef, returnedToStaged: commitFiles.size };
+    const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit_undo', request: { commitOid: input.commitOid, expectedHead: input.expectedHead, expectedBranch: input.expectedBranch }, result, headBefore: input.expectedHead, headAfter: parent });
     return persisted.data;
   });
 }

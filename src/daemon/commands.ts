@@ -1013,12 +1013,11 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           }
           if (env.method === 'git.remoteHead') {
             const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200) }).parse(env.params);
-            const { remoteHead } = await import('./gitWrite.ts');
-            const locProj = { canonicalPath: gitProject.canonical_path };
+            const { remoteHead, remoteUrl, redactRemoteText } = await import('./gitWrite.ts');
             const { locateRepo } = await import('./gitStatus.ts');
-            const loc = await locateRepo(locProj.canonicalPath);
-            const head = await remoteHead(loc, params.remote, params.branch);
-            return withCommandId({ ok: true, data: { remote: params.remote, branch: params.branch, head } });
+            const loc = await locateRepo(gitProject.canonical_path);
+            const [head, url] = await Promise.all([remoteHead(loc, params.remote, params.branch), remoteUrl(loc, params.remote)]);
+            return withCommandId({ ok: true, data: { remote: params.remote, branch: params.branch, head, url: redactRemoteText(url) } });
           }
           if (env.method === 'git.branch.list') {
             const { gitBranchList } = await import('./gitWrite.ts');
@@ -1045,7 +1044,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           }
           if (env.method === 'git.push') {
             // 推送绑定用户确认的远端/分支/两端头（§14.6 风险告知；仅快进，不强推）。
-            const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200), expectedHead: z.string().regex(/^[0-9a-f]{40}$/), expectedRemoteHead: z.string().regex(/^[0-9a-f]{40}$/).nullable() }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200), expectedHead: z.string().regex(/^[0-9a-f]{40}$/), expectedRemoteHead: z.string().regex(/^[0-9a-f]{40}$/).nullable(), expectedRemoteUrl: z.string().min(1).max(2000) }).parse(env.params);
             const { gitPush } = await import('./gitWrite.ts');
             const data = await gitPush(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
@@ -1071,7 +1070,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           }
           if (env.method === 'git.commit.undo') {
             // reflog 软回退（§14.6）：内容回工作区、文件不删；只允许撤销当前 HEAD 提交。
-            const params = z.strictObject({ projectId: z.string().min(1), commitOid: z.string().regex(/^[0-9a-f]{40}$/), expectedHead: z.string().regex(/^[0-9a-f]{40}$/) }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), commitOid: z.string().regex(/^[0-9a-f]{40}$/), expectedHead: z.string().regex(/^[0-9a-f]{40}$/), expectedBranch: z.string().min(1).max(200) }).parse(env.params);
             const { gitCommitUndo } = await import('./gitWrite.ts');
             const data = await gitCommitUndo(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
