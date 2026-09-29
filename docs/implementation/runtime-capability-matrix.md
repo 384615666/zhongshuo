@@ -33,11 +33,11 @@
 | 父进程存活/退出+启动时刻（复用检测） | win32 实测 supported；非 win32 部分（无启动时刻） | PowerShell Get-Process+ErrorVariable 分类（仅 ObjectNotFound=exited）；本地真实子进程用例 |
 | 全表进程快照+现存树 BFS | **仅 win32 supported**（单次 CIM 全表，行标记协议；空输出/残缺行/CIM 错误=failed，不把查询失败当空结果） | 从登记根沿 PPID 边收集存活后代（覆盖父退子活、存活期间继续派生）；非 win32=未完整确认（保护保留） |
 | 历史身份登记（孙进程遗留核对） | supported（win32；迁移 014 **追加式** process_tree_identities） | 旧 012 快照表 DELETE+INSERT 会丢父链已断的后代——新表按进程代次（pid+startedAt_ms，PID 脱离启动时间不构成身份）追加登记、从不删除未确认身份；退出确认由 probe 写回；反例：第一拍三代→父子退→后续观察只见占位→probe 仍发现孙 |
-| 完整退出证明 | **不提供（第九轮收紧；第十轮定为工程欠项）**：周期快照只产生「未观察到存活后代」观察——**不构成完整退出证明**（最后快照之后派生且父链已断的深层链不可排除）。probe 对 per-turn/shared 不再返回 exited；释放保护仅凭程序事实（none 模型 no-os-process），有子进程 runtime 的自动解除路径**已关闭**。解除机制的工程路线已定（ADR-0010：Job Object 首选，承载 DEV-05 子项 REC-LIFE-1，全功能交付验收前完成）——实现落地前本行口径不变 | 三代 fixture：孙结束后仍拒绝解除（未完整确认）；盲区反例（两次观察之间派生+中间父退出）返回未完整确认、不凭空声称能发现 |
+| 完整退出证明 | **受管执行（win32，第十二轮落地）：提供**——Job Object releaseEvidence（根退出+句柄已关+活跃计数 0）可证明完整结束（releaseProtection 凭证解除）；未纳管执行维持不提供（第九轮口径：周期快照≠完整退出；自动解除路径关闭）；启用=ZS_MANAGED_RUNTIME=1（纳管失败拒绝派发不降级） | managedLifecycle 9/9（真实 node 进程：多代/detached/句柄语义/强杀兜底/重启不追认/shared 不误杀）；真实 CLI 实战与打包可加载性待补证（ADR-0010/rec-life-1-plan） |
 | per-turn 进程树（Claude CLI 每 turn 独立） | 本地 node 进程树 fixture 验证（含 worker 生产接线：fake 上报真实子进程身份→快照自动落库） | 父被杀+工具子进程孤儿仍跑→unknown；全树退出→exited |
 | shared 进程树（Codex App Server 常驻） | 本地 node 进程树 fixture 验证 | server 存活但 turn 执行状态未知（unknown 保留）；server 死+工具遗留→unknown |
 | pre-launch 崩溃窗口识别 | supported（迁移 011 pre-launch 登记） | openSession 后 startTurn 前登记占位（model=unknown/pid=null）——区分「请求可能已发出」与「从未启动」（identity-missing） |
-| 能力边界（如实收窄） | **最后快照之后新派生、且其父链在快照之后死去的深层链不可发现**（快照间隔 5s 内风险存在） | 等效完美方案需原生受管生命周期（**Job Object 首选候选已评估**，见 [adr-managed-process-lifecycle.md](adr-managed-process-lifecycle.md)：内核归属无盲区、挂 job 失败即拒绝派发、验收六条；ETW 为增强候选）；落地前快照间隔是唯一缓解 |
+| 能力边界（如实收窄） | 未纳管执行：**最后快照之后新派生、且其父链在快照之后死去的深层链不可发现**（受管路径已消除该窗口——挂起纳管零逃逸；jobManager 已实施，生产 runtime 启用按部署节奏） | 等效完美方案已落地（Job Object，REC-LIFE-1）；未纳管存量执行继续保守 |
 | 真实 CLI（claude/codex）崩溃现场进程树取证 | **未验证（真实样本未跑——零调用纪律）** | 本地 fixture 覆盖机制；真实 CLI 工具子进程行为随真实补证 |
 
 ## 迟到成果接收能力（第八轮 2026-09-29）
