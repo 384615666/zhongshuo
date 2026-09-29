@@ -63,6 +63,12 @@ window.__t = {
   helpPanelText: () => document.getElementById('help-panel')?.textContent ?? null,
   clickReview: (kind) => { const b = document.getElementById(kind === 'accept' ? 'review-accept-btn' : 'review-reject-btn'); if (b == null || b.classList.contains('hidden')) return false; b.click(); return true; },
   repoStatusText: () => document.getElementById('repo-status')?.textContent ?? null,
+  gitOpsText: () => document.getElementById('git-ops')?.textContent ?? null,
+  gitOpsClick: (labelPart) => { const btns = [...document.querySelectorAll('#git-ops button')]; const b = btns.find((x) => (x.textContent ?? '').trim() === labelPart) ?? btns.find((x) => (x.textContent ?? '').includes(labelPart)); if (b == null) return false; b.click(); return true; },
+  gitOpsSay: () => [...document.querySelectorAll('#git-ops .git-result')].map((e) => e.textContent ?? '').join('\\n---\\n'),
+  gitCommitMsg: (text) => { const i = document.getElementById('git-commit-message'); if (i == null) return false; i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
+  gitCommitPreviewText: () => document.getElementById('git-commit-preview')?.textContent ?? null,
+  gitHistoryText: () => document.getElementById('git-history-block')?.textContent ?? null,
   runtimeStatusText: () => document.getElementById('runtime-status')?.textContent ?? null,
   helpVisible: () => !document.getElementById('recovery-help')?.classList.contains('hidden'),
   confirmYes: () => { window.confirm = () => true; return true; },
@@ -780,6 +786,54 @@ describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（f
     // 恢复面随行帮助（START-07）：本档无遗留 → 收起。
     expect(await call<boolean>('helpVisible')).toBe(false);
   }, 150_000);
+
+  it('Git 写操作闭环：暂存 → 预览 → 提交 → 历史；取消暂存回退；提交不等同验收', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14c'), runtime: 'fake' });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    // fixture 建真实仓库（不触用户真实工作区）。
+    const g = (...args: string[]): void => { execFileSync('git', ['-C', projDir, ...args], { timeout: 15_000 }); };
+    g('init', '-q');
+    g('config', 'user.email', 'e2e@t'); g('config', 'user.name', 'e2e');
+    g('config', 'core.autocrlf', 'false');
+    writeFileSync(join(projDir, 'base.txt'), 'base\n', 'utf8');
+    g('add', '.'); g('commit', '-q', '-m', 'init');
+    writeFileSync(join(projDir, 'feature.txt'), 'feat\n', 'utf8');
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<string>('gitOpsText').then((t) => (t ?? '').includes('Git 操作')), 30_000, 'Git 操作区渲染');
+    // 暂存 feature.txt（按钮精确/包含匹配）→ 说明已暂存。
+    expect(await call<boolean>('gitOpsClick', '暂存 feature.txt')).toBe(true);
+    await waitFor(() => call<string>('gitOpsSay').then((t) => (t ?? '').includes('已暂存 1')), 30_000, '暂存反馈');
+    // 提交：填说明 → 预览（前置检查通过）→ 提交 → 已提交反馈。
+    expect(await call<boolean>('gitCommitMsg', 'e2e 功能提交')).toBe(true);
+    expect(await call<boolean>('gitOpsClick', '预览提交')).toBe(true);
+    await waitFor(() => call<string>('gitCommitPreviewText').then((t) => (t ?? '').includes('前置检查通过')), 30_000, '预览通过');
+    expect(await call<string>('gitCommitPreviewText')).toContain('feature.txt');
+    expect(await call<boolean>('gitOpsClick', '提交')).toBe(true);
+    await waitFor(() => call<string>('gitOpsSay').then((t) => (t ?? '').includes('已提交')), 30_000, '提交反馈');
+    // 历史：含本次提交（与 init）。
+    expect(await call<boolean>('gitOpsClick', '查看提交历史')).toBe(true);
+    await waitFor(() => call<string>('gitHistoryText').then((t) => (t ?? '').includes('e2e 功能提交')), 30_000, '历史含新提交');
+    expect(await call<string>('gitHistoryText')).toContain('init');
+    // 工作区事实：提交已入历史；feature.txt 已跟踪且干净。
+    const logHas = execFileSync('git', ['-C', projDir, 'log', '--format=%s'], { encoding: 'utf8' });
+    expect(logHas).toContain('e2e 功能提交');
+    // 取消暂存回退：新改动 → 暂存 → 取消暂存 → 状态回到未暂存。
+    writeFileSync(join(projDir, 'feature.txt'), 'feat2\n', 'utf8');
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<boolean>('gitOpsClick', '暂存 feature.txt').then((ok) => ok), 30_000, '暂存按钮出现');
+    await waitFor(() => call<string>('gitOpsSay').then((t) => (t ?? '').includes('已暂存 1')), 30_000, '暂存反馈');
+    expect(await call<boolean>('gitOpsClick', '取消暂存 feature.txt')).toBe(true);
+    await waitFor(() => call<string>('repoStatusText').then((t) => (t ?? '').includes('未暂存 1')), 30_000, '回到未暂存');
+    const porcelain = execFileSync('git', ['-C', projDir, 'status', '--porcelain'], { encoding: 'utf8' });
+    expect(porcelain).toContain(' M feature.txt'); // 索引回退、工作区内容保留
+  }, 180_000);
 
   it('可选验收（RT-25）：REVIEW 任务验收通过 → 交付 accepted、任务 DONE；重复验收入口收起（Git 提交不等同验收）', async () => {
     const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14b'), runtime: 'fake' });

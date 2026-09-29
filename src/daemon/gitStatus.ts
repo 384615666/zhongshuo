@@ -108,8 +108,11 @@ async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<
 }
 
 export class GitProtocolError extends Error {
-  constructor(public readonly code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED' | 'PATH_OUT_OF_REPO' | 'PATH_IS_DIRECTORY', message: string) {
+  readonly code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED' | 'PATH_OUT_OF_REPO' | 'PATH_IS_DIRECTORY';
+  constructor(code: 'NOT_A_GIT_REPO' | 'GIT_COMMAND_FAILED' | 'PATH_OUT_OF_REPO' | 'PATH_IS_DIRECTORY', message: string) {
     super(message);
+    this.name = 'GitProtocolError';
+    this.code = code;
   }
 }
 
@@ -124,7 +127,7 @@ export interface RepoLocation {
   projectRootOutsideWorktree: boolean;
 }
 
-async function locateRepo(projectRoot: string): Promise<RepoLocation> {
+export async function locateRepo(projectRoot: string): Promise<RepoLocation> {
   const inside = await captureGit(['-C', projectRoot, 'rev-parse', '--is-inside-work-tree'], { capBytes: 1024 });
   if (inside.spawnError != null || inside.exitCode !== 0 || !inside.stdout.toString('utf8').trim().endsWith('true')) {
     const detail = inside.spawnError ?? (inside.stderr.trim() !== '' ? inside.stderr.trim().slice(0, 160) : `exit=${inside.exitCode}`);
@@ -139,6 +142,41 @@ async function locateRepo(projectRoot: string): Promise<RepoLocation> {
   if (rel === '') return { worktreeRoot, projectPrefix: '', projectRootOutsideWorktree: false };
   if (rel.startsWith('..')) return { worktreeRoot, projectPrefix: '', projectRootOutsideWorktree: true };
   return { worktreeRoot, projectPrefix: rel.split(sep).join('/'), projectRootOutsideWorktree: false };
+}
+
+/**
+ * porcelain -z 记录解析（读/写共用的身份事实源）：每条以 NUL 结尾；重命名/复制
+ * "XY 新\0旧" 先新后旧（porcelain 语义；raw -z 才是先旧后新）。截断残段（末段无 NUL
+ * 终止）由调用方处理；此处假定输入为完整输出。
+ */
+export function parsePorcelainEntries(raw: string): GitStatusEntry[] {
+  const complete = raw.split('\0').slice(0, -1);
+  const entries: GitStatusEntry[] = [];
+  for (let i = 0; i < complete.length; i += 1) {
+    const record = complete[i]!;
+    if (record === '') continue;
+    const xy = record.slice(0, 2);
+    const path = record.slice(3);
+    let renamedFrom: string | undefined;
+    if (xy[0] === 'R' || xy[0] === 'C') {
+      renamedFrom = complete[i + 1];
+      i += 1;
+    }
+    const entry: GitStatusEntry = { xy, path, ...(renamedFrom != null ? { renamedFrom } : {}), category: 'staged' };
+    if (xy === '??') entry.category = 'untracked';
+    else {
+      if (xy[0] !== ' ' && xy[0] !== '?') entries.push({ ...entry, category: 'staged' });
+      if (xy[1] !== ' ' && xy[1] !== '?') entries.push({ ...entry, category: 'unstaged' });
+      continue;
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
+/** 未合并（冲突未解决）状态：两列任一为 U，或 AA/DD（双方增/删）。 */
+export function isUnmergedXy(xy: string): boolean {
+  return xy[0] === 'U' || xy[1] === 'U' || xy === 'AA' || xy === 'DD';
 }
 
 /** 校验仓库内相对路径：拒绝绝对路径/盘符/反斜杠/../控制字符。 */
@@ -213,34 +251,17 @@ export async function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): Pro
     if (loc.projectPrefix === '') return false;
     return !(path === loc.projectPrefix || path.startsWith(`${loc.projectPrefix}/`));
   };
+  // 采集截断时末条可能缺 NUL——只解析完整记录（残段丢弃；truncated 已如实标注）。
+  let truncated = porcelain.truncated;
+  const parsed = parsePorcelainEntries(porcelain.stdout.toString('utf8'));
   const staged: GitStatusEntry[] = [];
   const unstaged: GitStatusEntry[] = [];
   const untracked: GitStatusEntry[] = [];
-  let truncated = false;
-  // -z 格式：每条记录以 NUL 结尾；重命名/复制 "XY to\0from" 占两条。采集截断时末条可能
-  // 缺 NUL——只解析完整记录（split 尾段无 NUL 终止即为残段，丢弃；残段只在采集截断时出现）。
-  if (porcelain.truncated) truncated = true;
-  const raw = porcelain.stdout.toString('utf8');
-  const complete = raw.split('\0').slice(0, -1);
-  for (let i = 0; i < complete.length; i += 1) {
-    const record = complete[i]!;
-    if (record === '') continue;
-    const xy = record.slice(0, 2);
-    const path = record.slice(3);
-    let renamedFrom: string | undefined;
-    if (xy[0] === 'R' || xy[0] === 'C') {
-      renamedFrom = complete[i + 1];
-      i += 1;
-    }
-    const mark = outside(path);
-    const entry: GitStatusEntry = { xy, path, ...(renamedFrom != null ? { renamedFrom } : {}), category: 'staged', ...(mark ? { outsideProjectRoot: true } : {}) };
-    if (xy === '??') {
-      entry.category = 'untracked';
-      untracked.push(entry);
-    } else {
-      if (xy[0] !== ' ' && xy[0] !== '?') staged.push({ ...entry, category: 'staged' });
-      if (xy[1] !== ' ' && xy[1] !== '?') unstaged.push({ ...entry, category: 'unstaged' });
-    }
+  for (const entry of parsed) {
+    const marked = outside(entry.path) ? { ...entry, outsideProjectRoot: true } : entry;
+    if (marked.category === 'untracked') untracked.push(marked);
+    else if (marked.category === 'staged') staged.push(marked);
+    else unstaged.push(marked);
     if (staged.length + unstaged.length + untracked.length >= maxEntries) {
       truncated = true;
       break;
@@ -341,7 +362,7 @@ export function parseNumstatZ(text: string): NumstatEntry[] {
       i += 3;
       continue;
     }
-    entries.push({ path: pathField, added, deleted, binary: addedRaw === '-' });
+    entries.push({ path: pathField!, added, deleted, binary: addedRaw === '-' });
     i += 1;
   }
   return entries;

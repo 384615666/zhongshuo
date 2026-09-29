@@ -23,7 +23,7 @@
             <div><b>验收</b>：策略为「人工验收」的任务完成后进入待验收；按钮绑定展示时的交付版本（防错稿）；「要求修改」的说明会注入返工输入；Git 提交不等同验收。</div>
             <div><b>恢复与保护</b>：崩溃/截止后的「状态未知」不自动重跑；对账前先「服务端取证」；人工声明保留写入保护；周期快照只证明「未观察到存活后代」，不构成完整退出证明——有子进程 runtime 的自动解除路径已关闭。</div>
             <div><b>迟到成果</b>：截止后到达的输出经服务端事件通道接收（幂等、不复活已停止任务、不覆盖新交付）；回执与业务效果同事务。</div>
-            <div><b>仓库与变更</b>：主池顶部为仓库状态只读视图（暂存/未暂存/未跟踪区分，不改动你的工作区）；任务串变更记录含撤销进度与冲突原因；撤销续跑走恢复中心。</div>
+            <div><b>仓库与变更</b>：主池顶部为仓库状态只读视图（暂存/未暂存/未跟踪区分，不改动你的工作区）；Git 操作区支持暂存/取消暂存/按任务批量暂存（自动跳过任务开始前的用户原有改动，混合文件列为冲突不自动分离）与提交（预览绑定 HEAD 与暂存区，变化即拒绝）；提交不等同任务验收，也不会自动提交或推送；任务串变更记录含撤销进度与冲突原因；撤销续跑走恢复中心。</div>
             <div><b>未开放能力（如实）</b>：AUTO 自动分工未过价值闸门暂不开放；真实 CLI 迟到回放待补证（显示 unsupported）；并行写档增强延期中；恢复解除对有子进程 runtime 暂时只保留保护。</div>
           </div>
         </details>
@@ -49,6 +49,7 @@
         <span id="conn-state" class="conn"></span>
       </header>
       <section id="repo-status" class="repo-status hidden" data-section="repo"></section>
+      <section id="git-ops" class="git-ops hidden" data-section="gitops"></section>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">
         <div class="thread-back">

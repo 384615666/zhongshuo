@@ -924,6 +924,80 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         }
         return withCommandId({ ok: true, data: r });
       }
+      case 'git.stage':
+      case 'git.unstage':
+      case 'git.stageTask':
+      case 'git.commit':
+      case 'git.commitPreview':
+      case 'git.history': {
+        // 第十轮·二：Git 写操作闭环（RT-24/§14.6/§15.2）。自包幂等（git_operations 日志+
+        // 命令回执同事务；commit 另有尾部标记崩溃恢复），不经 run() 同步包装。
+        // 边界：不做 reset --hard/rebase/强推；批量暂存跳过 userPreExisting；提交不改
+        // ChangeSet/验收状态；保护租约生效时拒绝写操作；身份缺失如实报错不代改配置。
+        const gitProjectId = z.object({ projectId: z.string().min(1) }).parse(env.params).projectId;
+        const gitProject = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(gitProjectId) as { canonical_path: string } | undefined;
+        if (gitProject == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${gitProjectId}`);
+        const journal = { commandId: env.commandId, scope, payloadHash, now: Date.now() };
+        const { GitWriteError: GWE } = await import('./gitWrite.ts');
+        const mapErr = (error: unknown): DaemonCommandError => {
+          if (error instanceof DaemonCommandError) return error;
+          if (error instanceof GWE) return new DaemonCommandError(error.code, error.message);
+          return new DaemonCommandError('STORAGE_UNAVAILABLE', error instanceof Error ? error.message : String(error));
+        };
+        try {
+          if (env.method === 'git.stage') {
+            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1).max(100) }).parse(env.params);
+            const { gitStage } = await import('./gitWrite.ts');
+            const data = await gitStage(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.unstage') {
+            const params = z.strictObject({ projectId: z.string().min(1), paths: z.array(z.string().min(1).max(400)).min(1).max(100) }).parse(env.params);
+            const { gitUnstage } = await import('./gitWrite.ts');
+            const data = await gitUnstage(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.stageTask') {
+            const params = z.strictObject({
+              projectId: z.string().min(1),
+              taskId: z.string().min(1).optional(),
+              changeSetId: z.string().min(1).optional(),
+            }).refine((p) => (p.taskId != null) !== (p.changeSetId != null), { message: 'taskId 与 changeSetId 二选一' }).parse(env.params);
+            const { gitStageTask } = await import('./gitWrite.ts');
+            const data = await gitStageTask(deps.db, { projectId: params.projectId, projectRoot: gitProject.canonical_path, taskId: params.taskId, changeSetId: params.changeSetId, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.commitPreview') {
+            const { gitCommitPreview } = await import('./gitWrite.ts');
+            const data = await gitCommitPreview(deps.db, { projectId: (env.params as { projectId: string }).projectId, projectRoot: gitProject.canonical_path });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.commit') {
+            const params = z.strictObject({
+              projectId: z.string().min(1),
+              message: z.string().min(1).max(2000),
+              expectedHead: z.string().min(4).max(64).nullable(),
+              expectedIndexDigest: z.string().min(16).max(128),
+              taskId: z.string().min(1).optional(),
+              changeSetIds: z.array(z.string().min(1)).max(50).optional(),
+            }).parse(env.params);
+            const { gitCommit } = await import('./gitWrite.ts');
+            const data = await gitCommit(deps.db, {
+              projectId: params.projectId, projectRoot: gitProject.canonical_path, message: params.message,
+              expectedHead: params.expectedHead, expectedIndexDigest: params.expectedIndexDigest,
+              taskId: params.taskId ?? null, changeSetIds: params.changeSetIds,
+              journal,
+            });
+            return withCommandId({ ok: true, data });
+          }
+          const historyParams = z.strictObject({ projectId: z.string().min(1), limit: z.number().int().min(1).max(200).optional(), cursor: z.number().int().min(0).optional() }).parse(env.params);
+          const { gitHistory } = await import('./gitWrite.ts');
+          const data = await gitHistory(deps.db, { ...historyParams, projectRoot: gitProject.canonical_path });
+          return withCommandId({ ok: true, data });
+        } catch (error) {
+          throw mapErr(error);
+        }
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);

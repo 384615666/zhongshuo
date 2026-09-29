@@ -44,6 +44,10 @@ const state = {
   // 仓库状态缓存（DEV-14 git.status 只读视图）：projectId 切换时失效。
   repoStatusCache: null,
   repoStatusVisible: true,
+  /** 主池任务清单（第十轮：Git 按任务批量暂存的选择来源）。 */
+  poolTasks: [],
+  /** 提交预览快照（第十轮）：提交绑定预览时的 HEAD/暂存区摘要——变化即拒绝。 */
+  gitCommitPreview: null,
   /** 恢复面人工说明草稿（按 turnId）——周期重画不丢输入。 */
   recoveryNotes: {},
   pollTick: 0,
@@ -183,9 +187,14 @@ function taskChip(status) {
 
 async function renderPool() {
   if (state.openThreadId != null || state.projectId == null || state.roomId == null) return;
-  void renderRepoStatus().catch(() => { /* 仓库状态失败不阻断主池 */ });
+  void (async () => {
+    await renderRepoStatus().catch(() => { /* 仓库状态失败不阻断主池 */ });
+    await renderGitOps().catch(() => { /* Git 操作区失败不阻断主池 */ });
+  })();
   const pool = el('pool');
   const data = await command('room.pool', { roomId: state.roomId, limit: 50 });
+  // 任务清单缓存（第十轮：Git 按任务批量暂存的选择来源——不重复拉取）。
+  state.poolTasks = data.items.filter((i) => i.taskId != null).map((i) => ({ taskId: i.taskId, title: i.body.text, status: i.taskStatus }));
   pool.innerHTML = '';
   if (data.items.length === 0) {
     pool.innerHTML = '<div class="empty">主池暂无任务。发送一条消息开始。</div>';
@@ -787,6 +796,207 @@ function appendPatches(block, r) {
       pre.textContent = patch.text;
       block.appendChild(pre);
     }
+  }
+}
+
+// ---------- Git 写操作（第十轮·二：暂存/取消暂存/按任务批量/提交/历史） ----------
+
+/** 写操作后刷新（读视图+操作区一起重建；缓存失效强制重拉）。 */
+async function refreshGitViews() {
+  state.repoStatusCache = null;
+  await renderRepoStatus().catch(() => { /* 读失败不阻断操作区 */ });
+  await renderGitOps(true).catch(() => { /* 操作区失败不阻断主池 */ });
+}
+
+/** Git 操作区：暂存/取消暂存（普通按文件）+按任务批量+提交（预览绑定）+历史。
+ * 轮询不重复重建（按项目戳记）；写操作后 force 重建（重建保留提交说明/任务选择）。 */
+async function renderGitOps(force = false) {
+  const box = el('git-ops');
+  if (state.projectId == null) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.projectId = ''; return; }
+  if (!force && box.dataset.projectId === state.projectId) return; // 轮询不重建（预览文本/输入不丢）
+  const savedMsg = document.getElementById('git-commit-message')?.value ?? '';
+  const savedTask = document.getElementById('git-commit-task')?.value ?? '';
+  const savedHistory = document.getElementById('git-history-block')?.textContent ?? null;
+  box.dataset.projectId = state.projectId;
+  let status;
+  try {
+    status = state.repoStatusCache != null && state.repoStatusCache.projectId === state.projectId
+      ? state.repoStatusCache.data
+      : await command('git.status', { projectId: state.projectId });
+  } catch (error) {
+    box.classList.remove('hidden');
+    box.innerHTML = '';
+    const line = document.createElement('div');
+    line.className = 'meta';
+    line.textContent = `Git 操作：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 git 仓库' : `不可用（${error.message}）`}`;
+    box.appendChild(line);
+    return;
+  }
+  state.repoStatusCache ??= { at: Date.now(), projectId: state.projectId, data: status };
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'meta';
+  title.textContent = 'Git 操作（暂存/提交/历史 · 提交不等同任务验收，不会自动推送）';
+  box.appendChild(title);
+
+  const mkBtn = (label, titleText, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = label;
+    if (titleText != null) b.title = titleText;
+    b.onclick = () => void onClick().catch(showConnError);
+    box.appendChild(b);
+    return b;
+  };
+  const say = (text) => {
+    const line = document.createElement('div');
+    line.className = 'git-result';
+    line.textContent = text;
+    box.appendChild(line);
+  };
+  const wrapPath = (p) => (p.length > 42 ? `${p.slice(0, 18)}…${p.slice(-20)}` : p);
+
+  // 普通按文件：暂存（未暂存/未跟踪）、取消暂存（已暂存）。
+  const stagedTop = status.staged.slice(0, 15);
+  for (const entry of stagedTop) {
+    mkBtn(`取消暂存 ${wrapPath(entry.path)}`, '只改索引：该文件回到未暂存/未跟踪（工作区内容不动）', async () => {
+      const r = await command('git.unstage', { projectId: state.projectId, paths: [entry.path] });
+      await refreshGitViews();
+      say(`已取消暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}（${s.reason}）`).join('、')}` : ''}`);
+    });
+  }
+  for (const entry of [...status.unstaged, ...status.untracked].slice(0, 15)) {
+    mkBtn(`暂存 ${wrapPath(entry.path)}`, '把该文件当前内容加入暂存区（不动其他文件）', async () => {
+      const r = await command('git.stage', { projectId: state.projectId, paths: [entry.path] });
+      await refreshGitViews();
+      say(`已暂存 ${r.staged.length} 个文件${r.skipped.length > 0 ? `；跳过：${r.skipped.map((s) => `${s.path}（${s.reason}）`).join('、')}` : ''}`);
+    });
+  }
+
+  // 按任务批量暂存：任务选择（来源=主池任务卡）+ 执行（跳过 userPreExisting，冲突列出）。
+  const taskRow = document.createElement('div');
+  taskRow.className = 'git-row';
+  const taskSelect = document.createElement('select');
+  taskSelect.className = 'git-input';
+  taskSelect.id = 'git-task-select';
+  const emptyOpt = document.createElement('option');
+  emptyOpt.value = '';
+  emptyOpt.textContent = '按任务批量暂存：选择任务…';
+  taskSelect.appendChild(emptyOpt);
+  for (const t of (state.poolTasks ?? [])) {
+    const opt = document.createElement('option');
+    opt.value = t.taskId;
+    const label = t.title.length > 26 ? `${t.title.slice(0, 26)}…` : t.title;
+    opt.textContent = `${label}（${taskChip(t.status).text}）`;
+    taskSelect.appendChild(opt);
+  }
+  taskRow.appendChild(taskSelect);
+  const batchBtn = document.createElement('button');
+  batchBtn.className = 'chip';
+  batchBtn.textContent = '按任务暂存';
+  batchBtn.title = '暂存该任务改动面的文件；任务开始前已存在的用户改动默认跳过，用户改动+任务改动同文件列为冲突不自动分离';
+  batchBtn.onclick = () => void (async () => {
+    const taskId = taskSelect.value;
+    if (taskId === '') { say('请先选择任务（主池任务卡）——没有可选任务时，说明本项目还没有任务。'); return; }
+    const r = await command('git.stageTask', { projectId: state.projectId, taskId });
+    await refreshGitViews();
+    say(`按任务暂存完成：纳入 ${r.included.length} 个${r.included.length > 0 ? `（${r.included.map(wrapPath).join('、')}）` : ''}；跳过 ${r.skipped.length} 个${r.skipped.length > 0 ? `（${r.skipped.map((s) => `${wrapPath(s.path)}：${s.reason}`).join('；')}）` : ''}；冲突 ${r.conflicts.length} 个${r.conflicts.length > 0 ? `（${r.conflicts.map((c) => `${wrapPath(c.path)}：${c.reason}`).join('；')}）` : ''}`);
+  })().catch(showConnError);
+  taskRow.appendChild(batchBtn);
+  box.appendChild(taskRow);
+
+  // 提交：说明文字 → 预览 → 确认提交（绑定预览 HEAD/暂存区摘要）。
+  const commitRow = document.createElement('div');
+  commitRow.className = 'git-row';
+  const msgInput = document.createElement('input');
+  msgInput.className = 'git-input';
+  msgInput.id = 'git-commit-message';
+  msgInput.placeholder = '提交说明…';
+  msgInput.maxLength = 500;
+  commitRow.appendChild(msgInput);
+  const taskBind = document.createElement('select');
+  taskBind.className = 'git-input';
+  taskBind.id = 'git-commit-task';
+  const bindEmpty = document.createElement('option');
+  bindEmpty.value = '';
+  bindEmpty.textContent = '不关联任务';
+  taskBind.appendChild(bindEmpty);
+  for (const t of (state.poolTasks ?? [])) {
+    const opt = document.createElement('option');
+    opt.value = t.taskId;
+    opt.textContent = `关联任务：${(t.title.length > 22 ? `${t.title.slice(0, 22)}…` : t.title)}`;
+    taskBind.appendChild(opt);
+  }
+  commitRow.appendChild(taskBind);
+  const previewBtn = document.createElement('button');
+  previewBtn.className = 'chip';
+  previewBtn.textContent = '预览提交';
+  previewBtn.title = '展示真实索引内容与提交前置检查（冲突/身份/保护）；提交时绑定本次预览的 HEAD 与暂存区摘要';
+  const doBtn = document.createElement('button');
+  doBtn.className = 'chip';
+  doBtn.textContent = '提交';
+  doBtn.disabled = true;
+  doBtn.title = '按预览内容提交；预览后 HEAD 或暂存区变化会拒绝并要求重新预览';
+  const previewBox = document.createElement('div');
+  previewBox.className = 'git-result';
+  previewBox.id = 'git-commit-preview';
+  previewBtn.onclick = () => void (async () => {
+    const p = await command('git.commitPreview', { projectId: state.projectId });
+    state.gitCommitPreview = p;
+    doBtn.disabled = !p.canCommit;
+    const stagedLines = p.staged.slice(0, 10).map((s) => `${s.xy} ${s.path}${s.renamedFrom != null ? `（← ${s.renamedFrom}）` : ''}`).join('\n');
+    previewBox.textContent = [
+      `将提交（分支 ${p.branch}，HEAD ${p.head == null ? '空仓库' : p.head.slice(0, 8)}）：`,
+      stagedLines || '（暂存区为空）',
+      p.staged.length > 10 ? `（另 ${p.staged.length - 10} 个）` : '',
+      p.canCommit ? '前置检查通过：可提交。' : `暂不可提交：\n${p.blockers.map((b) => `· ${b}`).join('\n')}`,
+    ].filter((s) => s !== '').join('\n');
+  })().catch((error) => { previewBox.textContent = `预览失败：${error.message}`; });
+  if (savedMsg !== '') msgInput.value = savedMsg;
+  if (savedTask !== '') taskBind.value = savedTask;
+  doBtn.onclick = () => void (async () => {
+    const message = msgInput.value.trim();
+    if (message === '') { previewBox.textContent = '请填写提交说明。'; return; }
+    const p = state.gitCommitPreview;
+    if (p == null) { previewBox.textContent = '请先预览提交（提交绑定预览时的内容）。'; return; }
+    const taskId = taskBind.value === '' ? undefined : taskBind.value;
+    const r = await command('git.commit', {
+      projectId: state.projectId, message,
+      expectedHead: p.head, expectedIndexDigest: p.indexDigest,
+      ...(taskId != null ? { taskId } : {}),
+    });
+    state.gitCommitPreview = null;
+    doBtn.disabled = true;
+    await refreshGitViews();
+    say(`已提交 ${r.commit.slice(0, 8)}${r.recovered === true ? '（崩溃恢复：核对到已存在的提交，未重复执行）' : r.replayed === true ? '（重放原回执）' : ''}`);
+    msgInput.value = '';
+  })().catch((error) => { previewBox.textContent = `提交失败：${error.message}`; });
+  commitRow.append(previewBtn, doBtn);
+  box.append(commitRow, previewBox);
+
+  // 历史：按钮 + 列表（任务关联来自本产品操作日志——外部提交不虚构归属）。
+  mkBtn('查看提交历史', '最近提交与任务/改动集关联（只展示关联，不表示整提交已人工审阅）', async () => {
+    const existing = document.getElementById('git-history-block');
+    if (existing != null) { existing.remove(); return; }
+    const h = await command('git.history', { projectId: state.projectId, limit: 20 });
+    const block = document.createElement('div');
+    block.id = 'git-history-block';
+    block.className = 'git-result';
+    if (h.items.length === 0) {
+      block.textContent = '（无提交历史）';
+    } else {
+      const lines = h.items.map((item) => `${item.oid.slice(0, 8)} ${new Date(item.timestamp * 1000).toLocaleString()} ${item.subject}${item.taskIds.length > 0 ? `〔关联任务 ${item.taskIds.join('、')}〕` : ''}`);
+      block.textContent = lines.join('\n');
+    }
+    box.appendChild(block);
+  });
+  if (savedHistory != null) {
+    const block = document.createElement('div');
+    block.id = 'git-history-block';
+    block.className = 'git-result';
+    block.textContent = savedHistory;
+    box.appendChild(block);
   }
 }
 

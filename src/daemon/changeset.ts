@@ -28,6 +28,7 @@ import {
   captureFilePreimage, diffPreimages, readStoredContent, scanDirectoryFiles,
   type PreimageCapture, type PreimageEntry,
 } from './preimage.ts';
+import { parsePorcelainEntries } from './gitStatus.ts';
 import { comparisonKey, isSameOrAncestorPath, lockDomainsOverlap } from './directoryIdentity.ts';
 import { PhysicalWriteRootRegistry } from './admission.ts';
 import { listActiveLeases } from './workspaceLocks.ts';
@@ -38,8 +39,10 @@ export interface GitBaseline {
   isRepo: boolean;
   /** HEAD commit（40 位）；探测失败为 null 并如实记录 error。 */
   head: string | null;
-  /** 索引状态（porcelain 输出，截断保留；不是当前工作区 diff 的替代——内容前像另有）。 */
+  /** 索引状态（porcelain -z 原始输出，截断保留；不是当前工作区 diff 的替代——内容前像另有）。 */
   indexStatus: string | null;
+  /** 基线时已 dirty 的路径（含未跟踪；第十轮起写入——批量暂存的 userPreExisting 判定；旧捕获无此字段走回退核对）。 */
+  dirtyPaths?: string[] | null;
   error?: string;
 }
 
@@ -86,11 +89,23 @@ export function captureGitBaseline(root: string): GitBaseline {
     if (notRepo) return { isRepo: false, head: null, indexStatus: null };
     return { isRepo: true, head: null, indexStatus: null, error: `git rev-parse 失败：${String(head.stderr ?? head.error).slice(0, 160)}` };
   }
-  const porcelain = spawnSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  const porcelain = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  let dirtyPaths: string[] | null = null;
+  if (porcelain.status === 0 && porcelain.stdout.length < 64 * 1024) {
+    // -z 机器格式解析出基线 dirty 路径（含未跟踪与重命名两端）——供批量暂存跳过
+    // userPreExisting。输出触及 64KB 截断线时不解析（不完整的路径清单不落库）。
+    const paths = new Set<string>();
+    for (const entry of parsePorcelainEntries(porcelain.stdout)) {
+      paths.add(entry.path);
+      if (entry.renamedFrom != null) paths.add(entry.renamedFrom);
+    }
+    dirtyPaths = [...paths];
+  }
   return {
     isRepo: true,
     head: head.stdout.trim(),
     indexStatus: porcelain.status === 0 ? porcelain.stdout.slice(0, 64 * 1024) : null,
+    ...(dirtyPaths != null ? { dirtyPaths } : {}),
   };
 }
 

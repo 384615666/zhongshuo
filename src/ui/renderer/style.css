@@ -83,3 +83,14 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .diff-block { margin: 2px 0; }
 .diff-text { font-family: ui-monospace, Consolas, monospace; font-size: 11px; white-space: pre-wrap; background: #f7f9fa; border: 1px solid #e3e7eb; border-radius: 4px; padding: 4px; max-height: 260px; overflow: auto; }
 .recovery-undo-row button { margin: 2px 4px 2px 0; }
+
+/* 第十轮：Git 操作区（暂存/提交/历史） */
+.git-ops { padding: 4px 12px 8px; border-bottom: 1px solid var(--line-2, #e3e7eb); }
+.git-ops .meta { font-size: 12px; color: var(--ink-2, #5b6472); }
+.git-ops .chip { margin: 1px 2px 1px 0; }
+.git-ops .git-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 3px 0; }
+.git-ops input.git-input, .git-ops select.git-input {
+  font: inherit; font-size: 12px; border: 1px solid #cbd3db; border-radius: 4px;
+  padding: 3px 6px; min-width: 160px; background: #fff;
+}
+.git-ops .git-result { margin: 2px 0; font-size: 12px; color: #3d4757; white-space: pre-wrap; }

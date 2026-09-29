@@ -14,6 +14,7 @@ import { processTreeLateEventsMigration } from './012-process-tree-snapshots.ts'
 import { lateEventReceiptsMigration } from './013-late-event-receipts.ts';
 import { processTreeIdentitiesMigration } from './014-process-tree-identities.ts';
 import { lateReceiptScopeMigration } from './015-late-receipt-scope.ts';
+import { gitOperationsMigration } from './016-git-operations.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -32,4 +33,5 @@ export const MIGRATIONS: readonly Migration[] = [
   lateEventReceiptsMigration,
   processTreeIdentitiesMigration,
   lateReceiptScopeMigration,
+  gitOperationsMigration,
 ];
