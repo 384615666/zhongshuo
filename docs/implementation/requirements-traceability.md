@@ -97,7 +97,7 @@ CH-02 NOT_STARTED（M0/DEV-04/07）；CH-01/03 NOT_STARTED（M3/DEV-14/17）；C
 
 | 项 | 承载包 | 状态 | 备注 |
 |---|---|---|---|
-| Git 客户端 | DEV-12/14（RT-24） | **IN_PROGRESS（执行对象收口后）** | 第十二轮：提交=显式 refs/heads CAS（同 OID 竞态反例）；push=不可变 OID refspec+目的地三重绑定+严格旧头（force-with-lease）+脱敏+不确定三态；pull=固化 OID；commit.undo=ref 级软回退（索引无损证明）+重叠/merge 拒；hooks/gpgsign 检测阻塞；**真实 GitHub 沙盒仓 5/5**（授权 384615666/zhongshuo-git-e2e-sandbox，全经众说正式命令）。剩余=merge 多父 diff 视图（报告 round-20260929-round12） |
+| Git 客户端 | DEV-12/14（RT-24） | **IN_PROGRESS（执行对象收口后）** | 第十二轮：提交=显式 refs/heads CAS（同 OID 竞态反例）；push=不可变 OID refspec+目的地三重绑定+严格旧头（force-with-lease）+脱敏+不确定三态；pull=固化 OID；commit.undo=ref 级软回退（索引无损证明）+重叠/merge 拒；hooks/gpgsign 检测阻塞；**真实 GitHub 沙盒仓 5/5**（授权 384615666/zhongshuo-git-e2e-sandbox，全经众说正式命令）。第十三轮：push 目的地绑定（pushurl 优先/多目的地拒/insteadOf 拒/核对走显式 URL）。剩余=merge 多父 diff 视图（报告 round-20260929-round13） |
 | 可选任务验收 | DEV-14（RT-25） | **IN_PROGRESS（全链可用）** | 契约+DB 约束（第八轮）；版本绑定验收+返工注入（第九轮）；项目开关 project.reviewPolicy.set+持久化+仅影响新任务、要求修改必填意见、返工再执行 UI 入口（task.redispatch 按钮）、返工第二轮正常递增交付（第十轮交付守卫修正）；e2e 正式闭环不经补库 |
 | 共享预览 | DEV-24（WPV-01—36） | NOT_STARTED | |
 | MCP 预留（§31.1 五条） | DEV-01/02/05（MCP-BASE） | **IN_PROGRESS** | DEV-01 契约+纯逻辑；DEV-02 落 command_receipts 事务语义（重放/冲突/隔离/清理过期）；预算事务预占与协议本体待 DEV-05/FULL-11 |
