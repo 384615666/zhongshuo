@@ -159,7 +159,7 @@ describe('成果一致性八项（业务事实/预算/产物/事件/用户可见
   it('④ 交付已存在而 outbox 重领：标 failed 留审计、交付不重复', async () => {
     const db = openDatabase(':memory:');
     seed(db);
-    const { taskId, threadId } = makeTask(db);
+    const { taskId } = makeTask(db);
     const adapter = new FakeRuntimeAdapter();
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-oc4', appDataDir: join(tmpRoot, 'a4') });
     await worker.runOnce(); // 完成（SUCCEEDED+交付）
@@ -184,7 +184,6 @@ describe('成果一致性八项（业务事实/预算/产物/事件/用户可见
     const db = openDatabase(':memory:');
     seed(db);
     const { taskId, threadId } = makeTask(db);
-    void threadId;
     const adapter = new FakeRuntimeAdapter();
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-oc5', appDataDir: join(tmpRoot, 'a5') });
     await worker.runOnce(); // turn 完成（SUCCEEDED）——先拿到 run 上下文，再手工造两个 UNKNOWN turn 分别验证。

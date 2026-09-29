@@ -196,6 +196,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           interruptTurn: (turnId) => worker.interruptTurn(turnId),
           appDataDir: options.appDataDir,
           releaseAdmission: (turnId) => worker.reconcileRelease(turnId), // DEV-13 对账→准入内存联动
+          pumpLateEvents: (turnId) => worker.pumpLateEventsForTurn(turnId), // 第八轮：迟到成果正式接收（adapter lateEvents 通道）
         }, envelope),
       { authToken: credential.token },
     );

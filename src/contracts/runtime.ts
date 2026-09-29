@@ -126,6 +126,16 @@ export interface RuntimeAdapter {
    * （历史登记用途）；无子进程模型返回 { model: 'none', pid: null }；不实现则视为不可观测。
    */
   processIdentity?(session: SessionRef, turnId: string): AdapterProcessIdentity | null;
+  /**
+   * 拉取该 turn 截止/UNKNOWN 后到达的迟到事件（可选能力——第八轮迟到成果正式接收路径）。
+   * 返回事件须为 runtime 真实通道产出（持久化会话记录/重连后的存量流），**不是调用方注入**；
+   * eventKey 稳定（消费方按其幂等）。不支持（如 CLI 无会话持久化）返回 { supported: false }
+   * ——由能力矩阵/UI 如实标注，不靠直接调用处理函数冒充生产支持。
+   */
+  lateEvents?(session: { id: AdapterSessionId }, turnId: string): Promise<
+    | { supported: true; events: NormalizedRuntimeEvent[] }
+    | { supported: false; reason: string }
+  >;
 }
 
 // ---------- §9.4 规范化事件 ----------

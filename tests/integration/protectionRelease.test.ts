@@ -17,8 +17,8 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
-import { registerTurnProcess } from '../../src/daemon/processRegistry.ts';
-import { checkProcessLiveness } from '../../src/daemon/processCheck.ts';
+import { registerTurnProcess, saveProcessTreeSnapshot } from '../../src/daemon/processRegistry.ts';
+import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from '../../src/daemon/processCheck.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-prot-rel-'));
 afterAll(() => {
@@ -99,6 +99,9 @@ describe('保护收口：人工声明后按服务端证据解除（正式命令�
     expect(liveness.state).toBe('alive'); // 前置：真实子进程
     if (liveness.state === 'alive') {
       registerTurnProcess(h.db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: child.pid!, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
+      // 第八轮：worker 生产行为——startTurn 后首拍进程树快照（exited 判定须含历史代际核对）。
+      const table = snapshotProcessTable();
+      if (table.state === 'ok') saveProcessTreeSnapshot(h.db, turnId, child.pid!, collectTreeRows(table.rows, child.pid!));
     }
     // ① 人工声明未启动：退款+FAILED，租约/准入保留。
     const r1 = await h.cmd<{ reason: string; releasedLeases: string[] }>('recovery.reconcile', { turnId, verdict: 'notStarted', manualRiskAck: true, note: '用户人工核对：无相关进程' });

@@ -109,3 +109,165 @@ export function listLiveChildProcesses(pid: number, queryFn?: (pid: number) => s
     return { state: 'failed', error: `子进程枚举失败：${String(error).slice(0, 100)}` };
   }
 }
+
+// ---------- 第八轮：全表进程快照 + 进程树归属分析 ----------
+
+/**
+ * 全表进程查询协议（单次 PowerShell、行标记、错误显式传回）：
+ * - `T:<pid>:<ppid>:<epochms|null>` 每存活进程一行；
+ * - 脚本 `$ErrorActionPreference='Stop'` + try/catch → `E:<消息>` 行（CIM 非终止错误不静默）；
+ * - 解析侧：空输出、E: 行、任何无法识别的行 → failed（**不把查询失败当空结果**；
+ *   查询成功且该父无子=0 行 T:，与失败严格区分——第八轮用户指令）。
+ */
+const PS_TABLE_QUERY =
+  `$ErrorActionPreference='Stop'; try { Get-CimInstance Win32_Process | ForEach-Object { ` +
+  `'T:' + $_.ProcessId + ':' + $_.ParentProcessId + ':' + $(if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 'null' }) } } ` +
+  `catch { 'E:' + $_.Exception.Message }`;
+
+export interface ProcessTableRow {
+  pid: number;
+  ppid: number;
+  startedAt: number | null;
+}
+
+export type ProcessTableResult =
+  | { state: 'ok'; rows: ProcessTableRow[] }
+  | { state: 'unsupported' | 'failed'; error: string };
+
+/**
+ * 一次性全表进程快照（win32 CIM；其他平台 unsupported——树归属分析不可用）。
+ * 测试可注入 queryFn 返回上述协议文本（含 E:/malformed 行的故障注入）。
+ */
+export function snapshotProcessTable(
+  queryFn?: () => string,
+  timeoutMs = 12_000,
+): ProcessTableResult {
+  if (queryFn == null && !IS_WINDOWS) return { state: 'unsupported', error: '平台不支持全表进程枚举（仅 win32 CIM）' };
+  let raw: string;
+  try {
+    raw = (queryFn ?? ((): string => execFileSync('powershell', ['-NoProfile', '-Command', PS_TABLE_QUERY], { encoding: 'utf8', timeout: timeoutMs })))();
+  } catch (error) {
+    return { state: 'failed', error: `全表进程查询失败：${String(error).slice(0, 120)}` };
+  }
+  const rows: ProcessTableRow[] = [];
+  let malformed = 0;
+  for (const line of raw.split('\n')) {
+    const text = line.trim();
+    if (text === '') continue;
+    if (text.startsWith('E:')) return { state: 'failed', error: `CIM 查询错误：${text.slice(2, 120)}` };
+    const m = text.match(/^T:(\d+):(\d+):(null|\d+)$/);
+    if (m == null) {
+      malformed += 1;
+      continue;
+    }
+    rows.push({ pid: Number(m[1]), ppid: Number(m[2]), startedAt: m[3] === 'null' ? null : Number(m[3]) });
+  }
+  // 空输出或残缺行=输出损坏（win32 全表必有系统进程；任何残缺都不可信）——不是「无进程」。
+  if (rows.length === 0) return { state: 'failed', error: '全表进程查询返回空输出（输出损坏或被截断）——不能当作无存活进程' };
+  if (malformed > 0) return { state: 'failed', error: `全表进程输出含 ${malformed} 行无法解析的内容——结果不完整，不当作可用快照` };
+  return { state: 'ok', rows };
+}
+
+/** 从全表快照收集以 rootPid 为根的树行（worker 快照写入与测试共用；根不在表=已退出 → 占位行）。 */
+export function collectTreeRows(
+  rows: ProcessTableRow[], rootPid: number,
+): Array<{ pid: number; ppid: number; startedAt: number | null }> {
+  const root = rows.find((r) => r.pid === rootPid);
+  if (root == null) return [{ pid: rootPid, ppid: 0, startedAt: null }];
+  const out = [root];
+  const seen = new Set<number>([rootPid]);
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const r of rows) {
+      if (r.ppid === cur && !seen.has(r.pid)) {
+        seen.add(r.pid);
+        out.push(r);
+        queue.push(r.pid);
+      }
+    }
+  }
+  return out;
+}
+
+/** 进程树归属分析结果：全树无存活（含历史代际核对）/仍有存活后代/不可分析。 */
+export type TreeScan =
+  | { state: 'checked'; survivors: []; verifiedHistoricalPids: number[] }
+  | { state: 'live'; survivors: ProcessTableRow[]; via: 'live-tree' | 'historical-attachment'; note?: string }
+  | { state: 'unsupported' | 'failed'; error: string };
+
+/**
+ * 进程树归属分析（第八轮核心）——回答「该登记根 PID 之下是否还有**存活**的执行载体」：
+ *
+ * 1. 现存树 BFS：从现存活着的根/种子沿 PPID 边向下收集（覆盖：父退子活——孤儿的 PPID
+ *    仍指向死父；存活过程中继续派生的新进程挂在活节点下）。
+ * 2. 历史归属核对（覆盖：中间代际已退出、孙进程遗留——现存图上不连通）：对快照登记过的
+ *    历史 PID（含根），收集「以该 PID 为 PPID 的存活进程」，并用**创建时间**做归属核对：
+ *    - 该 PID 已死：存活子创建时间 ≥ 快照登记的启动时间（容差）→ 属于我们的后代；
+ *    - 该 PID 已被复用：存活子创建时间早于复用者启动时间 → 是我们树的后代（复用家庭
+ *      的孩子不会早于复用者本人）；否则排除。历史启动时间缺失 → 无法与复用家庭区分，
+ *      保守计入（保护保留，不猜测排除）。
+ * 能力边界（如实）：最后快照之后新派生、且其父链在快照之后死去的深层链不可发现——
+ * 快照间隔内该风险存在，由周期快照缩小；win32 之外=unsupported。
+ */
+export function analyzeProcessTree(
+  rootPid: number,
+  historical: Array<{ pid: number; startedAt: number | null }>,
+  queryFn?: () => string,
+): TreeScan {
+  const table = snapshotProcessTable(queryFn);
+  if (table.state !== 'ok') return { state: table.state, error: table.error };
+  const rows = table.rows;
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const survivors: ProcessTableRow[] = [];
+
+  // ① 现存树 BFS（根仍活着 → 结果本身即 alive 证据；根死了也从 PPID=根 抓存活孤儿子）。
+  const seen = new Set<number>([rootPid]);
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const r of rows) {
+      if (r.ppid === cur && !seen.has(r.pid)) {
+        seen.add(r.pid);
+        survivors.push(r);
+        queue.push(r.pid);
+      }
+    }
+  }
+  if (survivors.length > 0) return { state: 'live', survivors, via: 'live-tree' };
+
+  // ② 历史归属核对：快照登记过的每个 PID（根也在内；含已死中间代际）的存活子。
+  const verified: number[] = [];
+  for (const h of historical) {
+    verified.push(h.pid);
+    if (h.pid === rootPid && byPid.has(rootPid)) continue; // 根活着的情况由 probe 上层判 alive，不在此处理
+    const candidates = rows.filter((r) => r.ppid === h.pid);
+    if (candidates.length === 0) continue;
+    const liveNow = byPid.get(h.pid); // 该历史 PID 当前是否被复用成别的进程
+    for (const c of candidates) {
+      if (seen.has(c.pid)) continue;
+      if (h.startedAt == null) {
+        // 历史启动时间缺失：无法用创建时间排除复用家庭——保守计入（保护保留）。
+        survivors.push(c);
+        continue;
+      }
+      if (c.startedAt == null) {
+        survivors.push(c); // 子进程创建时间不可读：无法核对——保守计入
+        continue;
+      }
+      const childAfterOurProcess = c.startedAt >= h.startedAt - 1500; // 子不早于父（ms 精度容差）
+      if (!childAfterOurProcess) continue; // 早于我们进程启动：属于更早家庭（PID 边残留），排除
+      if (liveNow != null && liveNow.startedAt != null && c.startedAt >= liveNow.startedAt - 1500) {
+        continue; // 不早于复用者启动：属于复用后的新家庭，排除
+      }
+      survivors.push(c); // 创建时间在我们进程启动之后、复用者启动之前 → 我们的后代
+    }
+  }
+  if (survivors.length > 0) {
+    return {
+      state: 'live', survivors, via: 'historical-attachment',
+      note: '经活跃期快照的历史归属核对发现存活后代（中间代际已退出，现存父子图不连通）',
+    };
+  }
+  return { state: 'checked', survivors: [], verifiedHistoricalPids: verified };
+}

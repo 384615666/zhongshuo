@@ -24,7 +24,7 @@ import { readMemberRuntimeBinding } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
-import { checkProcessLiveness, type ChildScan, type LivenessResult } from './processCheck.ts';
+import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
 import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ProbeOutcome } from './processRegistry.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
@@ -47,8 +47,23 @@ export interface DaemonCommandDeps {
    * （真实 OS 查询）；测试可注入故障（查询失败/PID 复用等场景仍走正式命令链）。
    */
   processQuery?: (pid: number) => LivenessResult;
-  /** 子进程枚举注入（测试故障模拟）；缺省=真实 CIM 枚举。 */
-  childScan?: (pid: number) => ChildScan;
+  /**
+   * 进程树归属分析注入（第八轮：测试故障模拟）；缺省=真实 analyzeProcessTree
+   * （全表快照+现存树 BFS+活跃期快照历史代际核对）。
+   */
+  processTree?: (rootPid: number, historical: Array<{ pid: number; startedAt: number | null }>) => TreeScan;
+  /**
+   * 迟到成果泵（第八轮：entry 接线 worker.pumpLateEventsForTurn）。UNKNOWN turn 截止后
+   * 到达的终态事件经 adapter 正式通道（lateEvents）进入生产路径。缺省（测试直连）时命令
+   * 明确拒绝——不靠直调处理函数冒充生产支持。
+   */
+  pumpLateEvents?: (turnId: string) => Promise<{
+    status: 'pumped' | 'not-found' | 'not-unknown' | 'unsupported-mode' | 'no-session' | 'unsupported';
+    turnStatus?: string;
+    reason?: string;
+    applied?: Array<{ eventKey: string; outcome: string }>;
+    releasedLeases?: string[];
+  }>;
 }
 
 export class DaemonCommandError extends Error {
@@ -75,7 +90,7 @@ function resolveServerProbe(deps: DaemonCommandDeps, turnId: string, probeId: st
     if (now - referenced.observedAt > 10 * 60 * 1000) throw new DaemonCommandError('STALE_REVISION', '取证记录已过期（>10 分钟）——请重新取证');
     return referenced;
   }
-  return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile', childScan: deps.childScan });
+  return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile', treeScan: deps.processTree });
 }
 
 const localScope = (userId: string): string => `user:${userId}`;
@@ -527,7 +542,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const params = z.strictObject({ turnId: z.string().min(1) }).parse(env.params);
         const turn = deps.db.prepare('SELECT id FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string } | undefined;
         if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
-        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe', childScan: deps.childScan });
+        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe', treeScan: deps.processTree });
         return withCommandId({ ok: true, data: probe });
       }
       case 'recovery.reconcile': {
@@ -770,6 +785,18 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
+      case 'recovery.pumpLateEvents': {
+        // 第八轮：迟到成果正式接收入口——UNKNOWN turn 截止/重启后到达的终态事件，经
+        // adapter 正式通道（lateEvents：持久化会话记录/重连存量流）拉取并走 applyEvent
+        // 生产路径（身份/停止代次/重复终态/被替代 run/退款冲突守卫在 worker 侧统一承载）。
+        // 幂等=late_event_receipts（eventKey 回执）+ turn 终态 CAS；unsupported 各态如实返回。
+        const params = z.strictObject({ turnId: z.string().min(1) }).parse(env.params);
+        if (deps.pumpLateEvents == null) {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '该 daemon 未接线迟到事件泵（worker 不可达）——生产入口在 daemon entry');
+        }
+        const data = await deps.pumpLateEvents(params.turnId);
+        return withCommandId({ ok: true, data });
+      }
       case 'changeset.captureBaseline': {
         // DEV-12 正式命令：基线捕获（Git HEAD+索引状态+内容前像；变更归属 taskId/runId）。
         const params = z.strictObject({
@@ -813,27 +840,6 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const r = getChangeSet(deps.db, params.changeSetId);
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
         return withCommandId({ ok: true, data: r.value });
-      }
-      case 'changeset.listByTask': {
-        // DEV-14 前置（只读）：任务串的变更记录清单——application_status（applied/
-        // not_applied/reverted/partial）+撤销进度+文件级 state（恢复/撤销限制与当前状态的
-        // 用户可见来源）。不提供写操作（撤销走既有 changeset.undo 正式命令）。
-        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
-        const sets = deps.db.prepare(
-          `SELECT cs.id, cs.application_status AS applicationStatus,
-                  (SELECT count(*) FROM change_set_files f WHERE f.change_set_id = cs.id AND f.role = 'after') AS fileCount,
-                  (SELECT u.status FROM change_set_undos u WHERE u.change_set_id = cs.id ORDER BY u.id DESC LIMIT 1) AS undoStatus
-           FROM change_sets cs WHERE cs.task_id = ? ORDER BY cs.rowid DESC`,
-        ).all(params.taskId) as Array<{
-          id: string; applicationStatus: string; createdAt: number; fileCount: number; undoStatus: string | null;
-        }>;
-        const items = sets.map((cs) => ({
-          ...cs,
-          files: deps.db.prepare(
-            `SELECT role, path, state FROM change_set_files WHERE change_set_id = ? ORDER BY role, path`,
-          ).all(cs.id) as Array<{ role: string; path: string; state: string }>,
-        }));
-        return withCommandId({ ok: true, data: { taskId: params.taskId, items } });
       }
       case 'room.pool': {
         // 房间主池（修复轮 6）：room 限定的根消息+线程摘要——不用事件拼接、不混其他房间。

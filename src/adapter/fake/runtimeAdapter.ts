@@ -4,6 +4,8 @@
  * 六类 fixture 编排见 script.ts（成功/失败/审批/超时/停止不响应/迟到）。
  */
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
   AdapterProcessIdentity,
@@ -33,6 +35,14 @@ export interface FakeAdapterOptions {
   structuredFinal?: boolean;
   /** 全局脚本序列（跨会话按调用顺序取，M1 研讨编排测试用：每步骤一个新会话）；可按输入文本生成。 */
   turnScriptSequencer?: (input: { text: string }) => FakeTurnScript;
+  /**
+   * 会话持久化目录（第八轮迟到成果路径）：事件流追加写盘（模拟 CLI 会话文件），使
+   * lateEvents 可跨进程实例读取——重启/重连路径的本地演练基础。未设置则 lateEvents
+   * 返回 unsupported（无持久化=迟到回放不可用，如实标注）。
+   */
+  sessionStoreDir?: string;
+  /** processIdentity 覆盖（第八轮进程树快照接线：让 fake 上报真实 node 子进程身份）。 */
+  processIdentityOverride?: (session: SessionRef, turnId: string) => AdapterProcessIdentity | null;
 }
 
 type ApprovalChoice = 'allow_once' | 'deny' | 'interrupted';
@@ -376,7 +386,44 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
 
   /** 无子进程（内联模拟执行）——无 OS 遗留进程可能（DEV-13 取证如实标注）。 */
   processIdentity(session: SessionRef, turnId: string): AdapterProcessIdentity | null {
+    if (this.options.processIdentityOverride != null) return this.options.processIdentityOverride(session, turnId);
     void session; void turnId; return { model: 'none', pid: null };
+  }
+
+  /**
+   * 迟到事件拉取（第八轮）：从持久化会话记录（sessionStoreDir 的 events 文件）读该 turn
+   * 的迟到终态事件。重启后新实例同目录可读——重连/回放的本地演练形态（真实 CLI 的等价
+   * 通道是会话文件/重连存量流，其接入待真实补证；未配置目录=不可用，如实 unsupported）。
+   */
+  async lateEvents(
+    session: { id: string }, turnId: string,
+  ): Promise<{ supported: true; events: NormalizedRuntimeEvent[] } | { supported: false; reason: string }> {
+    if (this.options.sessionStoreDir == null) {
+      return { supported: false, reason: 'fake 未配置会话持久化目录（sessionStoreDir）——迟到回放不可用' };
+    }
+    const file = this.eventLogFile(session.id);
+    if (!existsSync(file)) return { supported: true, events: [] };
+    const events: NormalizedRuntimeEvent[] = [];
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      if (line.trim() === '') continue;
+      const event = JSON.parse(line) as NormalizedRuntimeEvent;
+      if (event.turnId === turnId && (event.kind === 'turn.completed' || event.kind === 'turn.failed')) {
+        events.push(event);
+      }
+    }
+    return { supported: true, events };
+  }
+
+  // ---------- 测试观测面（不属于 RuntimeAdapter 契约） ----------
+
+  /**
+   * 注入迟到事件（测试观测面）：模拟 runtime 在消费方截止判定**之后**才产出终态——
+   * 事件走真实通道（内存流+持久化记录），泵经 adapter.lateEvents 拉取，不是直调处理函数。
+   */
+  pushLateEvent(sessionId: string, turnId: string, spec: FakeEventSpec): void {
+    const state = this.sessions.get(sessionId);
+    if (state == null) throw new Error(`会话不存在或已关闭：${sessionId}`);
+    this.emit(state, spec, turnId);
   }
 
   /** 测试清理：关闭全部会话（清空挂起的 stall 计时器，避免进程悬挂）。 */
@@ -409,6 +456,17 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       receivedAt: Date.now(),
     } as NormalizedRuntimeEvent;
     state.stream.push(event);
+    // 持久化会话记录（第八轮）：模拟 CLI 会话文件——迟到回放/重启演练的数据通道。
+    if (this.options.sessionStoreDir != null) {
+      try {
+        mkdirSync(this.options.sessionStoreDir, { recursive: true });
+        appendFileSync(this.eventLogFile(state.ref.id), `${JSON.stringify(event)}\n`);
+      } catch { /* 持久化失败不阻断模拟执行 */ }
+    }
+  }
+
+  private eventLogFile(sessionId: string): string {
+    return join(this.options.sessionStoreDir ?? '.', `events-${sessionId}.jsonl`);
   }
 
   // ---------- 测试观测面（不属于 RuntimeAdapter 契约） ----------

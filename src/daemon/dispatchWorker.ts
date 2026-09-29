@@ -39,8 +39,8 @@ import {
 } from './deliberationRunner.ts';
 import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
-import { checkProcessLiveness } from './processCheck.ts';
-import { closeTurnProcessRegistration, registerTurnProcess } from './processRegistry.ts';
+import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
+import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, saveProcessTreeSnapshot } from './processRegistry.ts';
 
 export interface TaskRow {
   id: string;
@@ -559,6 +559,8 @@ export class DispatchWorker {
         resultKey: assembled.value.resultKey,
       });
       this.registerProcessIdentity(turnId, runId, member.id, adapter, session);
+      // 会话绑定（第八轮迟到成果泵：UNKNOWN turn 的 lateEvents 按 session 找回 adapter 通道）。
+      try { this.db.prepare('UPDATE agent_turns SET session_id = ? WHERE id = ?').run(session.id, turnId); } catch { /* 尽力而为 */ }
       await this.consumeTurn(task, runId, turnId, session.id, adapter, member.id, { id: claimed.id, attemptEpoch: claimed.attempt_epoch });
       // detached：consumeTurn 已登记消费器并返回（live/outbox 完结由消费器收尾）；
       // inline：此处返回时 turn 已终态、outbox 已完结。
@@ -653,44 +655,59 @@ export class DispatchWorker {
     task: TaskRow, runId: string, turnId: string, sessionId: string, adapter: RuntimeAdapter,
     memberId: string, outbox: { id: number; attemptEpoch: number },
   ): Promise<void> {
-    if (!this.detached) {
-      this.startingTurns.delete(turnId); // 启动窗口结束（inline 消费阻塞 drain——drainPending 兜底）
-      try {
-        await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
-      } finally {
-        this.releaseAdmission(turnId); // 终态/失败/取消统一回收（UNKNOWN 不释放——对账未定不提前放行）
-        this.closeProcessRegistrationIfTerminal(turnId);
-        await completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
+    // 进程树周期快照（第八轮）：捕获消费期间新派生的代际（工具子进程/孙进程），使退出
+    // 时刻的归属核对有历史锚点。仅真实子进程模型；none 无 OS 遗留可能、unknown 尚无 PID。
+    let treeKeeper: NodeJS.Timeout | null = null;
+    try {
+      const reg = getTurnProcessRegistration(this.db, turnId);
+      const rootPid = reg?.pid != null && reg.process_model !== 'none' && reg.process_model !== 'unknown' ? reg.pid : null;
+      if (rootPid != null) {
+        treeKeeper = setInterval(() => this.snapshotProcessTree(turnId, rootPid), 5_000);
+        treeKeeper.unref?.();
       }
-      return;
+    } catch { /* 登记读取失败不阻断消费 */ }
+    try {
+      if (!this.detached) {
+        this.startingTurns.delete(turnId); // 启动窗口结束（inline 消费阻塞 drain——drainPending 兜底）
+        try {
+          await this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter);
+        } finally {
+          this.releaseAdmission(turnId); // 终态/失败/取消统一回收（UNKNOWN 不释放——对账未定不提前放行）
+          this.closeProcessRegistrationIfTerminal(turnId);
+          await completeOutbox(this.db, outbox.id, outbox.attemptEpoch);
+        }
+        return;
+      }
+      const settle = (): void => {
+        // 关库后到达（强制退出路径残余消费者）不再抛——恢复语义由 UNKNOWN 审计承载。
+        try { completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 已关库：恢复语义承载 */ }
+        this.live.delete(turnId); // detached：live 由消费器收尾删（inline 已由调用方删，幂等）
+        try { this.releaseAdmission(turnId); } catch { /* 已关库：准入账本随进程消亡 */ }
+        this.closeProcessRegistrationIfTerminal(turnId);
+      };
+      const promise = this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter)
+        .then(() => undefined)
+        .catch((error) => {
+          process.stderr.write(`[zhongshuo-worker] turn 消费器异常（turnId=${turnId}）：${error instanceof Error ? error.stack : String(error)}\n`);
+        })
+        .finally(() => {
+          const entry = this.inFlightTurns.get(turnId);
+          if (entry?.leaseKeeper != null) clearInterval(entry.leaseKeeper);
+          this.inFlightTurns.delete(turnId);
+          settle();
+        });
+      // 租约续期：detached 消费可长于租约窗口；完结以 attemptEpoch fencing 保护。
+      const leaseKeeper = setInterval(() => {
+        this.db
+          .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND attempt_epoch = ? AND status = 'leased'`)
+          .run(this.clock() + this.leaseMs, outbox.id, outbox.attemptEpoch);
+      }, Math.max(1_000, Math.floor(this.leaseMs / 2)));
+      leaseKeeper.unref?.();
+      this.inFlightTurns.set(turnId, { memberId, promise, outbox, leaseKeeper });
+      this.startingTurns.delete(turnId); // 启动窗口结束（消费器已登记——stop 收敛改看 inFlightTurns）
+    } finally {
+      if (treeKeeper != null) clearInterval(treeKeeper);
     }
-    const settle = (): void => {
-      // 关库后到达（强制退出路径残余消费者）不再抛——恢复语义由 UNKNOWN 审计承载。
-      try { completeOutbox(this.db, outbox.id, outbox.attemptEpoch); } catch { /* 已关库：恢复语义承载 */ }
-      this.live.delete(turnId); // detached：live 由消费器收尾删（inline 已由调用方删，幂等）
-      try { this.releaseAdmission(turnId); } catch { /* 已关库：准入账本随进程消亡 */ }
-      this.closeProcessRegistrationIfTerminal(turnId);
-    };
-    const promise = this.consumeUntilTerminal(task, runId, turnId, sessionId, adapter)
-      .then(() => undefined)
-      .catch((error) => {
-        process.stderr.write(`[zhongshuo-worker] turn 消费器异常（turnId=${turnId}）：${error instanceof Error ? error.stack : String(error)}\n`);
-      })
-      .finally(() => {
-        const entry = this.inFlightTurns.get(turnId);
-        if (entry?.leaseKeeper != null) clearInterval(entry.leaseKeeper);
-        this.inFlightTurns.delete(turnId);
-        settle();
-      });
-    // 租约续期：detached 消费可长于租约窗口；完结以 attemptEpoch fencing 保护。
-    const leaseKeeper = setInterval(() => {
-      this.db
-        .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND attempt_epoch = ? AND status = 'leased'`)
-        .run(this.clock() + this.leaseMs, outbox.id, outbox.attemptEpoch);
-    }, Math.max(1_000, Math.floor(this.leaseMs / 2)));
-    leaseKeeper.unref?.();
-    this.inFlightTurns.set(turnId, { memberId, promise, outbox, leaseKeeper });
-    this.startingTurns.delete(turnId); // 启动窗口结束（消费器已登记——stop 收敛改看 inFlightTurns）
   }
 
   /**
@@ -734,7 +751,24 @@ export class DispatchWorker {
         startedAtMs,
         identitySource: identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
       });
+      // 首张进程树快照（第八轮）：崩溃/截止窗口再短也有归属锚点（周期重拍在消费期间进行）。
+      if (identity.model !== 'none' && identity.pid != null) this.snapshotProcessTree(turnId, identity.pid);
     } catch { /* 取证失败不阻断派发（登记缺失在对账侧如实降级） */ }
+  }
+
+  /**
+   * 进程树快照（第八轮：持续归属登记）——从登记根 BFS 收集当时的存活树（含根）。
+   * 中间代际退出后其历史父子边随进程消失，退出时刻的现存树扫描看不见孙进程；
+   * 活跃期快照是「孙进程遗留」归属核对的唯一锚点。尽力而为：失败不阻断执行
+   * （probe 侧无快照=未完整确认，保护保留——如实降级）。
+   */
+  private snapshotProcessTree(turnId: string, rootPid: number): void {
+    try {
+      const table = snapshotProcessTable();
+      if (table.state !== 'ok') return;
+      // 根已退出（消费窗口内退出）：占位快照——历史核对仍以登记身份为锚。
+      saveProcessTreeSnapshot(this.db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
+    } catch { /* 快照失败不阻断执行 */ }
   }
 
   /** pre-launch 登记：startTurn 前写入 unknown 模型占位（崩溃窗口可识别「请求可能已发出」）。 */
@@ -1295,14 +1329,21 @@ export class DispatchWorker {
       case 'turn.completed': {
         const turn = this.db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { status: string; budget_mark: string | null };
         const lateAfterStop = turn.status === 'STOPPING';
-        if (!lateAfterStop && (turn.status === 'FAILED' || turn.status === 'CANCELLED')) {
-          // 成果一致性（第七轮·专项）：已收口 turn（对账/停止/失败收尾）的迟到输出——
-          // **不复活、不交付**（与 RT-06 同型）；若输出可解析为合法合同且该 turn 已按
-          // 未启动退款（budget_mark=refunded），这是「声明未启动但输出到达」的事实矛盾信号
-          // ——留审计提示走 correctToExecuted 纠正流程，不自动改账。
+        // 停止代次守卫（第八轮）：用户停止已推进（stop_generation/CANCELLED）而 turn 尚未
+        // 收口（UNKNOWN 等非终态）时，迟到输出不复活已停止的任务——按取消收尾（与 STOPPING
+        // 同型）。停止意图由 tasks 表事实承载，不依赖事件顺序。
+        const taskNow = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
+        const stopGenerationInEffect = taskNow != null && (taskNow.stop_generation > 0 || taskNow.status === 'CANCELLED');
+        if (!lateAfterStop && !stopGenerationInEffect && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(turn.status)) {
+          // 成果一致性（第七轮·专项+第八轮补 SUCCEEDED）：已收口 turn（对账/停止/失败/成功
+          // 交付后）的迟到/重复完成——**不复活、不交付、不重复结算**（交付/预算/状态只生效
+          // 一次）；若输出可解析为合法合同且该 turn 已按未启动退款（budget_mark=refunded），
+          // 这是「声明未启动但输出到达」的事实矛盾信号——留审计提示走 correctToExecuted
+          // 纠正流程，不自动改账。
           this.audit(task, runId, turnId, 'turn.lateCompletion', {
             finalText: (event.finalText ?? '').slice(0, 200),
             turnStatus: turn.status,
+            eventKey: event.eventKey,
             factConflictHint: turn.budget_mark === 'refunded' ? 'refunded-turn-received-output——与「未启动」声明矛盾，走 recovery.correctToExecuted 纠正' : null,
           });
           break;
@@ -1314,13 +1355,13 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.lateOutputResolvesUnknown', { note: 'UNKNOWN 窗口收到完成输出——不确定收口为确定（走合同校验）' });
         }
         const tx = this.db.transaction(() => {
-          if (lateAfterStop) {
+          if (lateAfterStop || stopGenerationInEffect) {
             // 停止已生效：迟到完成不复活任务（RT-06 形态），按取消收尾并留审计。
             this.casTurn(turnId, 'CANCELLED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?`).run(runId);
             this.settleBudget(runId);
             this.transitionTask(task.id, 'CANCELLED');
-            this.audit(task, runId, turnId, 'turn.lateCompletion', { finalText: event.finalText ?? null });
+            this.audit(task, runId, turnId, 'turn.lateCompletion', { finalText: event.finalText ?? null, stopGeneration: taskNow?.stop_generation ?? null });
             this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: 'late-completion-after-stop' });
             return;
           }
@@ -1361,6 +1402,20 @@ export class DispatchWorker {
           this.casTurn(turnId, 'SUCCEEDED');
           this.db.prepare(`UPDATE workflow_runs SET status = 'SUCCEEDED' WHERE id = ?`).run(runId);
           this.settleBudget(runId);
+          // 旧 run 迟到输出不覆盖新 run 结果（第八轮）：任务已有**其他 run** 的交付（修复轮/
+          // redispatch 已完成）时，本输出收口事实（SUCCEEDED+结算）但不交付、不迁移任务
+          // 状态——用户可见结果保持最新交付，迟到材料以审计留痕（不自动重跑、不伪造覆盖）。
+          const newerDeliveries = (this.db
+            .prepare('SELECT count(*) c FROM task_deliveries WHERE task_id = ? AND run_id != ?')
+            .get(task.id, runId) as { c: number }).c;
+          if (newerDeliveries > 0) {
+            this.audit(task, runId, turnId, 'turn.lateCompletionSuperseded', {
+              note: '旧 run 的迟到输出：任务已有更新交付——不覆盖新结果，材料留痕',
+              finalText: (event.finalText ?? '').slice(0, 400),
+              newerDeliveryCount: newerDeliveries,
+            });
+            return;
+          }
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const manifestHash = createHash('sha256').update(finalText).digest('hex');
@@ -1415,6 +1470,105 @@ export class DispatchWorker {
       default:
         break; // delta/tool 事件 M0 不落库（流式与工具明细归 DEV-07/14 展示层）
     }
+  }
+
+  /** 迟到泵结果（recovery.pumpLateEvents 返回面；unsupported 各态如实标注）。 */
+  async pumpLateEventsForTurn(turnId: string): Promise<{
+    status: 'pumped' | 'not-found' | 'not-unknown' | 'unsupported-mode' | 'no-session' | 'unsupported';
+    turnStatus?: string;
+    reason?: string;
+    applied?: Array<{ eventKey: string; outcome: string }>;
+    releasedLeases?: string[];
+  }> {
+    const turn = this.db
+      .prepare('SELECT id, run_id, member_id, stage_key, status, session_id FROM agent_turns WHERE id = ?')
+      .get(turnId) as { id: string; run_id: string; member_id: string; stage_key: string; status: string; session_id: string | null } | undefined;
+    if (turn == null) return { status: 'not-found' };
+    if (turn.stage_key.startsWith('delib.')) {
+      return { status: 'unsupported-mode', reason: '研讨轮 UNKNOWN=成员缺席语义（E4）：迟到输出收口不在本轮处理范围' };
+    }
+    if (turn.status !== 'UNKNOWN') {
+      // 已收口 turn 的迟到材料：留痕不生效（refunded 冲突提示走 correctToExecuted 纠正）。
+      try {
+        const run0 = this.db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(turn.run_id) as { task_id: string } | undefined;
+        const task0 = run0 != null ? this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(run0.task_id) as TaskRow | undefined : undefined;
+        const mark = (this.db.prepare('SELECT budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { budget_mark: string | null }).budget_mark;
+        const adapter0 = this.adapterOf(turn.member_id);
+        if (task0 != null && adapter0.lateEvents != null && turn.session_id != null) {
+          const pulled0 = await adapter0.lateEvents({ id: turn.session_id }, turnId);
+          if (pulled0.supported) {
+            for (const e of pulled0.events) {
+              if (e.kind === 'turn.completed') {
+                this.audit(task0, turn.run_id, turnId, 'turn.lateCompletion', {
+                  turnStatus: turn.status,
+                  finalText: (e.finalText ?? '').slice(0, 200),
+                  factConflictHint: mark === 'refunded' ? 'refunded-turn-received-output——与「未启动」声明矛盾，走 recovery.correctToExecuted 纠正' : null,
+                });
+              }
+            }
+          }
+        }
+      } catch { /* 留痕尽力而为 */ }
+      return { status: 'not-unknown', turnStatus: turn.status };
+    }
+    // 会话定位：turn 启动时写入 session_id；旧数据回退最近同任务会话记录。
+    let sessionId = turn.session_id;
+    if (sessionId == null) {
+      const run = this.db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(turn.run_id) as { task_id: string } | undefined;
+      const taskRow = run != null ? this.db.prepare('SELECT conversation_thread_id FROM tasks WHERE id = ?').get(run.task_id) as { conversation_thread_id: string } | undefined : undefined;
+      if (run != null && taskRow != null) {
+        sessionId = (this.db
+          .prepare('SELECT id FROM runtime_sessions WHERE task_id = ? AND thread_id = ? ORDER BY rowid DESC LIMIT 1')
+          .get(run.task_id, taskRow.conversation_thread_id) as { id: string } | undefined)?.id ?? null;
+      }
+    }
+    if (sessionId == null) return { status: 'no-session', reason: '该 turn 无会话记录（无法定位 runtime 通道）' };
+    const adapter = this.adapterOf(turn.member_id);
+    if (adapter.lateEvents == null) {
+      return { status: 'unsupported', reason: '该 runtime 未实现迟到事件回放（lateEvents）——真实 CLI 会话文件接入待补证，如实标注' };
+    }
+    const pulled = await adapter.lateEvents({ id: sessionId }, turnId);
+    if (!pulled.supported) return { status: 'unsupported', reason: pulled.reason };
+
+    const run = this.db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(turn.run_id) as { task_id: string };
+    const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(run.task_id) as TaskRow;
+    const applied: Array<{ eventKey: string; outcome: string }> = [];
+    for (const event of pulled.events) {
+      const seen = (this.db.prepare('SELECT count(*) c FROM late_event_receipts WHERE event_key = ?').get(event.eventKey) as { c: number }).c;
+      if (seen > 0) {
+        applied.push({ eventKey: event.eventKey, outcome: 'duplicate-receipt' });
+        continue;
+      }
+      this.db.prepare('INSERT INTO late_event_receipts (event_key, turn_id, received_at) VALUES (?, ?, ?)').run(event.eventKey, turnId, this.clock());
+      const fresh = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
+      if (fresh.status !== 'UNKNOWN') {
+        // 本轮已被前一个事件收口：后续事件只留痕（终态守卫在 applyEvent 内兜底）。
+        this.audit(task, turn.run_id, turnId, 'turn.lateEventSkippedTerminal', { eventKey: event.eventKey, kind: event.kind, turnStatus: fresh.status });
+        applied.push({ eventKey: event.eventKey, outcome: 'skipped-terminal' });
+        continue;
+      }
+      if (event.kind === 'turn.failed' && event.code === 'INTERRUPTED') {
+        // 迟到的中断回执不是结果事实（用户停止语义由 stop 状态机承载）——不收口。
+        applied.push({ eventKey: event.eventKey, outcome: 'skipped-interrupt-receipt' });
+        continue;
+      }
+      this.applyEvent(task, turn.run_id, turnId, event);
+      applied.push({ eventKey: event.eventKey, outcome: 'applied' });
+    }
+    // 收口后清理：执行已定（交付/失败），UNKNOWN 期间保留的准入占位与租约解除。
+    const after = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
+    const releasedLeases: string[] = [];
+    if (after.status !== 'UNKNOWN') {
+      const leases = this.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turnId) as Array<{ lock_domain: string }>;
+      for (const l of leases) {
+        this.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turnId);
+        releasedLeases.push(l.lock_domain);
+      }
+      this.releaseAdmission(turnId);
+      this.closeProcessRegistrationIfTerminal(turnId);
+      this.audit(task, turn.run_id, turnId, 'turn.lateEventsSettled', { turnStatus: after.status, releasedLeases, events: applied });
+    }
+    return { status: 'pumped', applied, releasedLeases };
   }
 
   /** DELIBERATE 终态：完成→产物校验计入屏障（或一次格式修复）；失败/中断→缺席或停止语义。 */

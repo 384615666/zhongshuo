@@ -22,8 +22,8 @@ import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
-import { registerTurnProcess } from '../../src/daemon/processRegistry.ts';
-import { checkProcessLiveness } from '../../src/daemon/processCheck.ts';
+import { registerTurnProcess, saveProcessTreeSnapshot } from '../../src/daemon/processRegistry.ts';
+import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from '../../src/daemon/processCheck.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-probe7-'));
 afterAll(() => {
@@ -91,6 +91,12 @@ function makeHarness(overrides: Partial<DaemonCommandDeps> = {}): Harness {
   };
 }
 
+/** 模拟 worker 生产行为：startTurn 后首拍进程树快照（生产函数链）。 */
+function takeSnapshot(db: ZhongshuoDatabase, turnId: string, rootPid: number): void {
+  const table = snapshotProcessTable();
+  if (table.state === 'ok') saveProcessTreeSnapshot(db, turnId, rootPid, collectTreeRows(table.rows, rootPid));
+}
+
 function spawnAliveChild(): ChildProcess {
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
   child.on('error', () => { /* 测试进程管理 */ });
@@ -133,6 +139,7 @@ describe('DEV-13 第七轮：服务端退出取证与恢复对账（正式命令
     const liveness = checkProcessLiveness(child.pid!);
     if (liveness.state === 'alive') {
       registerTurnProcess(h.db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: child.pid!, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
+      takeSnapshot(h.db, turnId, child.pid!); // 第八轮：worker 生产行为——startTurn 后首拍进程树快照
     }
     child.kill();
     await new Promise((r) => setTimeout(r, 800));
