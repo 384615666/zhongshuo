@@ -23,6 +23,9 @@ import { openDispatchGate } from '../persistence/daemonState.ts';
 import { readMemberRuntimeBinding } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
+import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
+
+const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
 
 export interface DaemonCommandDeps {
@@ -430,10 +433,20 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'recovery.status': {
         // 只读恢复状态查询（修复轮 6）：禁止用「尝试恢复命令」探测门禁。
+        // DEV-13 扩展：UNKNOWN turn 明细（对账入口）+ 上次 stop 记录 + 未收口撤销（DEV-12
+        // 崩溃窗口续跑指引）+ 租约持有（daemon 死≠子进程死——身份核对如实，不假装可判活）。
         const { isDispatchGateHeld } = await import('../persistence/daemonState.ts');
         const held = isDispatchGateHeld(deps.db);
         const pending = deps.db.prepare(`SELECT dispatch_key FROM outbox WHERE status = 'pending'`).all() as Array<{ dispatch_key: string }>;
         const interrupted = deps.db.prepare(`SELECT id, task_id, status FROM workflow_runs WHERE status IN ('INTERRUPTED')`).all() as Array<{ id: string; task_id: string; status: string }>;
+        const unknownTurns = deps.db.prepare(
+          `SELECT t.id, t.run_id AS runId, t.stage_key AS stageKey, r.task_id AS taskId, t.status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.status = 'UNKNOWN'`,
+        ).all();
+        const stopRecordRow = deps.db.prepare(`SELECT value FROM daemon_state WHERE key = 'daemon:stop:last'`).get() as { value: string } | undefined;
+        let stopRecord: unknown = null;
+        if (stopRecordRow != null) { try { stopRecord = JSON.parse(stopRecordRow.value); } catch { stopRecord = null; } }
+        const activeUndos = deps.db.prepare(`SELECT id, change_set_id AS changeSetId, status FROM change_set_undos WHERE status IN ('in_progress','failed')`).all();
+        const heldLeases = deps.db.prepare(`SELECT lock_domain, owner_turn_id, status, heartbeat_at FROM workspace_leases WHERE status != 'released'`).all();
         return withCommandId({
           ok: true,
           data: {
@@ -441,8 +454,69 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             pendingDispatchCount: pending.length,
             pendingDispatchKeys: pending.map((p) => p.dispatch_key),
             interruptedRuns: interrupted,
+            unknownTurns,
+            stopRecord,
+            activeUndos,
+            heldLeases,
+            leaseNote: 'daemon 退出不证明 runtime 子进程已退出（单实例锁≠进程树）；expired 租约仍阻塞新写者（RT-07），进程身份核对需 OS 层证据（DEV-05 supervisor 未完成——如实不可判）',
+            undoNote: '未收口撤销：续跑走 changeset.undo（三向判定区分未执行/已执行未记账/外部修改），不清空占位后放行',
           },
         });
+      }
+      case 'recovery.reconcile': {
+        // DEV-13：UNKNOWN turn 对账（三事实分别处置——不清空占位后放行）。
+        // verdict=notStarted（确认未执行：退款 I、不计 U、释放租约、turn FAILED 留证）
+        //        |executed（确认已执行：结算 U、释放租约、turn FAILED 留证）
+        //        |keepUnknown（保持不确定：仅记录意愿与依据，状态不动）。
+        // 证据要求：evidence 必填（渠道账单/进程取证/用户人工核对等来源说明）——审计可查。
+        const params = z.strictObject({
+          turnId: z.string().min(1),
+          verdict: z.enum(['notStarted', 'executed', 'keepUnknown']),
+          evidence: z.string().min(1).max(500),
+        }).parse(env.params);
+        const result = run(() => {
+          const turn = deps.db.prepare('SELECT id, run_id, status FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string } | undefined;
+          if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
+          if (turn.status !== 'UNKNOWN' && params.verdict !== 'keepUnknown') {
+            throw new DaemonCommandError('STALE_REVISION', `仅 UNKNOWN turn 可对账（实际：${turn.status}）`);
+          }
+          const run = deps.db.prepare('SELECT id, task_id, budget_json FROM workflow_runs WHERE id = ?').get(turn.run_id) as { id: string; task_id: string; budget_json: string | null } | undefined;
+          const projectId = run != null ? (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(run.task_id) as { project_id: string } | undefined)?.project_id : undefined;
+          const now = Date.now();
+          if (params.verdict === 'keepUnknown') {
+            appendDomainEvent(deps.db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
+              projectId: projectId ?? 'unknown', taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
+              kind: 'recovery.reconciled', createdAt: now,
+              payload: { verdict: 'keepUnknown', evidence: params.evidence, note: '维持不确定：占位/租约/预算保持，不因时间流逝清空' },
+            });
+            return { turnId: turn.id, verdict: 'keepUnknown' as const, stateChanged: false as const };
+          }
+          const tx = deps.db.transaction(() => {
+            // 预算处置：notStarted=退款（I-1，不加 U）；executed=结算（U+1，I-1）。
+            if (run?.budget_json != null) {
+              const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number; runMaxTurns?: number; tailReservationByStage?: Record<string, number> };
+              const { refundReservedTurn, settleTurn } = deliberationBudgetFns;
+              const next = params.verdict === 'notStarted' ? refundReservedTurn(budget as never) : settleTurn(budget as never);
+              deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
+            }
+            // 租约释放（该 turn 持有的写租约）。
+            const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
+            for (const l of leases) {
+              deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
+            }
+            deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
+            appendDomainEvent(deps.db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
+              projectId: projectId ?? 'unknown', taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
+              kind: 'recovery.reconciled', createdAt: now,
+              payload: { verdict: params.verdict, evidence: params.evidence, releasedLeases: leases.map((l) => l.lock_domain) },
+            });
+            return { turnId: turn.id, verdict: params.verdict, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain) };
+          });
+          return tx();
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'changeset.captureBaseline': {
         // DEV-12 正式命令：基线捕获（Git HEAD+索引状态+内容前像；变更归属 taskId/runId）。

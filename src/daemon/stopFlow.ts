@@ -118,6 +118,10 @@ export interface RecoverySnapshot {
   heldLeases: Array<{ lockDomain: string; ownerTurnId: string; status: string }>;
   /** 上一次 daemon 停止记录（daemon:stop:last——上次退出未收口时的恢复依据，2026-09-28 第五轮）。 */
   stopRecord: { at: number; phase: string; reason?: string; drainPending?: boolean } | null;
+  /** UNKNOWN turn 明细（DEV-13：对账入口——须逐一 reconcile，不清空占位后放行）。 */
+  unknownTurnRows: Array<{ turnId: string; runId: string; taskId: string | null; stageKey: string | null; status: string }>;
+  /** 未收口撤销记录（DEV-12 崩溃窗口——续跑走 changeset.undo 三向判定）。 */
+  activeUndos: Array<{ undoId: string; changeSetId: string; status: string }>;
 }
 
 /**
@@ -163,7 +167,14 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
     const gateNeeded =
       interruptedRuns > 0 || unknownTurns > 0 || requeuedOutbox > 0 || heldLeases.length > 0 || pendingOutbox > 0;
     if (gateNeeded) holdDispatchGate(db, now);
-    return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases, stopRecord };
+    const unknownTurnRows = db
+      .prepare(`SELECT t.id AS turnId, t.run_id AS runId, r.task_id AS taskId, t.stage_key AS stageKey, t.status
+                FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.status = 'UNKNOWN'`)
+      .all() as RecoverySnapshot['unknownTurnRows'];
+    const activeUndos = db
+      .prepare(`SELECT id AS undoId, change_set_id AS changeSetId, status FROM change_set_undos WHERE status IN ('in_progress','failed')`)
+      .all() as RecoverySnapshot['activeUndos'];
+    return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases, stopRecord, unknownTurnRows, activeUndos };
   });
   return tx();
 }

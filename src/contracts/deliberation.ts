@@ -248,3 +248,12 @@ export function settleTurn(state: DeliberationBudgetState): DeliberationBudgetSt
     inFlightReservedTurns: Math.max(0, state.inFlightReservedTurns - 1),
   };
 }
+
+/**
+ * 确认未启动退款（DEV-13 recovery.reconcile verdict=notStarted）：仅释放在途预留
+ * （I 减 1、U 不加——调用未发生不计数）。与 settleTurn 对应；用于崩溃后确认该请求
+ * 从未到达 runtime 的占位回收。
+ */
+export function refundReservedTurn(state: DeliberationBudgetState): DeliberationBudgetState {
+  return { ...state, inFlightReservedTurns: Math.max(0, state.inFlightReservedTurns - 1) };
+}
