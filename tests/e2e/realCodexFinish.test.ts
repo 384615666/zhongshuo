@@ -8,17 +8,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
 import type { NormalizedRuntimeEvent, SessionRef } from '../../src/contracts/runtime.ts';
+import { RealCallGate, gatedStartTurn } from '../util/realCallGate.ts';
 
 const MODEL = process.env.ZS_E2E_MODEL ?? 'gpt-6-luna';
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev06b-'));
 let adapter: CodexAppServerAdapter;
+/** 真实调用硬上限（第八轮）：startTurn 前计数、超限请求前拦截；账本=文件级互斥。 */
+let gate: RealCallGate;
 
 beforeAll(() => {
   mkdirSync(join(fixtureRoot, 'proj'), { recursive: true });
   writeFileSync(join(fixtureRoot, 'proj', 'notes.md'), '# 备忘\n\n暗号：LUNA-RESUME-7\n', 'utf8');
   adapter = new CodexAppServerAdapter({ requestTimeoutMs: 120_000, model: MODEL });
+  // 预算护栏：配置不全（storeDir/model/上限）在 open 即拒绝——任何 startTurn 之前。
+  // 上限依据=本文件实际 startTurn 调用点数+1（不是用例数）；跨文件同批共享额度须
+  // 显式设同一 ZS_REAL_BUDGET_DIR（账本既定额度为准，后开者不得改限）。
+  gate = RealCallGate.open({
+    runtime: 'codex', model: MODEL,
+    maxStartTurns: Number(process.env.ZS_REAL_MAX_TURNS ?? 4),
+    budgetLabel: process.env.ZS_REAL_BUDGET_LABEL ?? 'realCodex-finish',
+    storeDir: process.env.ZS_REAL_BUDGET_DIR ?? join(fixtureRoot, 'budget'),
+  });
 });
 afterAll(async () => {
+  if (gate != null) console.log('[real-call-budget]', JSON.stringify(gate.summary()));
   await adapter?.dispose();
   for (let i = 0; i < 3; i += 1) {
     try {
@@ -31,7 +44,7 @@ afterAll(async () => {
 });
 
 async function runTurn(session: SessionRef, text: string, timeoutMs = 240_000): Promise<{ text: string; events: NormalizedRuntimeEvent[]; terminal: NormalizedRuntimeEvent | undefined }> {
-  await adapter.startTurn(session, { turnId: `turn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, dispatchKey: `dk-${Date.now()}`, inputBundleId: 'b', text, policyId: 'p', taskRevision: 0 });
+  await gatedStartTurn(gate, () => adapter.startTurn(session, { turnId: `turn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, dispatchKey: `dk-${Date.now()}`, inputBundleId: 'b', text, policyId: 'p', taskRevision: 0 }));
   const events: NormalizedRuntimeEvent[] = [];
   const chunks: string[] = [];
   const deadline = Date.now() + timeoutMs;
@@ -96,7 +109,7 @@ async function runTurn(session: SessionRef, text: string, timeoutMs = 240_000): 
       });
       // 发起带审批语义的 turn：让模型创建文件（会触发审批请求）。
       const turnP = (async () => {
-        await approvalAdapter.startTurn(session, { turnId: 'turn_appr', dispatchKey: 'dk-appr', inputBundleId: 'b', text: '请在当前目录创建文件 appr-probe.txt，内容 approval-test。必须实际执行。', policyId: 'p', taskRevision: 0 });
+        await gatedStartTurn(gate, () => approvalAdapter.startTurn(session, { turnId: 'turn_appr', dispatchKey: 'dk-appr', inputBundleId: 'b', text: '请在当前目录创建文件 appr-probe.txt，内容 approval-test。必须实际执行。', policyId: 'p', taskRevision: 0 }));
         const events: NormalizedRuntimeEvent[] = [];
         const chunks: string[] = [];
         const deadline = Date.now() + 240_000;

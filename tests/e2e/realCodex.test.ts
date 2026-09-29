@@ -18,19 +18,32 @@ import { join } from 'node:path';
 import { CodexAppServerAdapter, SUPPORTED_CODEX_VERSION_PREFIX } from '../../src/adapter/codex/appServerAdapter.ts';
 import { verifySandboxRejectionEvidence } from '../../src/adapter/codex/evidence.ts';
 import type { NormalizedRuntimeEvent, SessionRef } from '../../src/contracts/runtime.ts';
+import { RealCallGate, gatedStartTurn } from '../util/realCallGate.ts';
 
 // 模型：默认不覆盖（走 ~/.codex/config.toml 的渠道配置）；可用 ZS_E2E_MODEL 显式指定。
 const MODEL = process.env.ZS_E2E_MODEL ?? 'gpt-6-luna';
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev06-'));
 let adapter: CodexAppServerAdapter;
+/** 真实调用硬上限（第八轮）：startTurn 前计数、超限请求前拦截；账本=文件级互斥。 */
+let gate: RealCallGate;
 
 beforeAll(() => {
   mkdirSync(join(fixtureRoot, 'proj-a'), { recursive: true });
   writeFileSync(join(fixtureRoot, 'proj-a', 'notes.md'), '# 项目备忘\n\n宇宙密码：ZS-DEV06-4242\n', 'utf8');
   adapter = new CodexAppServerAdapter({ requestTimeoutMs: 120_000, model: MODEL });
+  // 预算护栏：配置不全（storeDir/model/上限）在 open 即拒绝——任何 startTurn 之前。
+  // 上限依据=本文件实际 startTurn 调用点数+1（不是用例数）；跨文件同批共享额度须
+  // 显式设同一 ZS_REAL_BUDGET_DIR（账本既定额度为准，后开者不得改限）。
+  gate = RealCallGate.open({
+    runtime: 'codex', model: MODEL,
+    maxStartTurns: Number(process.env.ZS_REAL_MAX_TURNS ?? 4),
+    budgetLabel: process.env.ZS_REAL_BUDGET_LABEL ?? 'realCodex-dev06',
+    storeDir: process.env.ZS_REAL_BUDGET_DIR ?? join(fixtureRoot, 'budget'),
+  });
 });
 
 afterAll(async () => {
+  if (gate != null) console.log('[real-call-budget]', JSON.stringify(gate.summary()));
   await adapter?.dispose();
   for (let i = 0; i < 3; i += 1) {
     try {
@@ -49,7 +62,7 @@ interface TurnOutcome {
 }
 
 async function runTurn(session: SessionRef, input: Parameters<typeof adapter.startTurn>[1], timeoutMs = 240_000): Promise<TurnOutcome> {
-  await adapter.startTurn(session, input);
+  await gatedStartTurn(gate, () => adapter.startTurn(session, input));
   const events: NormalizedRuntimeEvent[] = [];
   const text: string[] = [];
   const deadline = Date.now() + timeoutMs;
@@ -150,7 +163,7 @@ function assertSandboxRejection(
           }
           return { text: chunks.join(''), events, terminal: undefined as NormalizedRuntimeEvent | undefined };
         })();
-        await b61Adapter.startTurn(session, turnRequest('turn_dev06_b1', '请直接修改当前目录的 notes.md 文件：在末尾追加一行 plan-tier-edit-test。（必须实际执行写入，不要只是描述）'));
+        await gatedStartTurn(gate, () => b61Adapter.startTurn(session, turnRequest('turn_dev06_b1', '请直接修改当前目录的 notes.md 文件：在末尾追加一行 plan-tier-edit-test。（必须实际执行写入，不要只是描述）')));
         return c;
       })();
       const after = readFileSync(targetFile, 'utf8');

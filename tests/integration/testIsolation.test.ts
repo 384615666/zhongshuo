@@ -32,6 +32,21 @@ describe('测试入口隔离（防真实调用混跑）', () => {
     }
   });
 
+  it('预算护栏层（第八轮）：真实文件的 startTurn 全部经 RealCallGate 计数（环境变量门禁≠预算硬上限，分别验收）', () => {
+    for (const f of ['realCodex.test.ts', 'realCodexFinish.test.ts', 'realCodexRemaining.test.ts']) {
+      const text = readFileSync(join(root, 'tests', 'e2e', f), 'utf8');
+      expect(text, `${f}: 应初始化闸门`).toContain('RealCallGate.open({');
+      // 不允许再出现未经闸门的直接 await startTurn（gatedStartTurn 包装除外）。
+      const direct = [...text.matchAll(/await\s+(\w+)\.startTurn\(/g)].map((m) => m[1]!);
+      expect(direct, `${f}: 存在未过闸的 startTurn：${direct.join(',')}`).toHaveLength(0);
+      expect(text, f).toContain('gatedStartTurn(gate,');
+    }
+    // 护栏自身语义的本地模拟验收（零网络）。
+    const gateText = readFileSync(join(root, 'tests', 'util', 'realCallGate.ts'), 'utf8');
+    expect(gateText).toContain('RealCallLimitError'); // 超限=请求前拦截
+    expect(gateText).toContain("'uncertain'"); // 请求是否发出不确定=如实记录，不当零消耗
+  });
+
   it('功能证明①：fake e2e 配置的收集集合不含 real*（vitest list 子进程实跑）', () => {
     const out = execFileSync('npx', ['vitest', 'list', '--config', 'vitest.e2e.config.ts', '--run=false'], {
       cwd: root, encoding: 'utf8', timeout: 120_000, shell: process.platform === 'win32',

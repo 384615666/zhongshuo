@@ -12,10 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
 import type { NormalizedRuntimeEvent, SessionRef } from '../../src/contracts/runtime.ts';
+import { RealCallGate, gatedStartTurn } from '../util/realCallGate.ts';
 
 const MODEL = process.env.ZS_E2E_MODEL ?? 'gpt-6-luna';
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'zhongshuo-dev06c-'));
 let adapter: CodexAppServerAdapter;
+/** 真实调用硬上限（第八轮）：startTurn 前计数、超限请求前拦截；账本=文件级互斥。 */
+let gate: RealCallGate;
 /** 跨用例采集真实 usage 通知（usageTokens 口径验证）。 */
 const usageSamples: Array<{ turn: string; inputTokens?: number; cachedTokens?: number; outputTokens?: number }> = [];
 
@@ -23,8 +26,18 @@ beforeAll(() => {
   mkdirSync(join(fixtureRoot, 'proj'), { recursive: true });
   writeFileSync(join(fixtureRoot, 'proj', 'notes.md'), '# 备忘\n\n暗号：LUNA-7\n', 'utf8');
   adapter = new CodexAppServerAdapter({ requestTimeoutMs: 120_000, model: MODEL });
+  // 预算护栏：配置不全（storeDir/model/上限）在 open 即拒绝——任何 startTurn 之前。
+  // 上限依据=本文件实际 startTurn 调用点数+1（不是用例数）；跨文件同批共享额度须
+  // 显式设同一 ZS_REAL_BUDGET_DIR（账本既定额度为准，后开者不得改限）。
+  gate = RealCallGate.open({
+    runtime: 'codex', model: MODEL,
+    maxStartTurns: Number(process.env.ZS_REAL_MAX_TURNS ?? 6),
+    budgetLabel: process.env.ZS_REAL_BUDGET_LABEL ?? 'realCodex-remaining',
+    storeDir: process.env.ZS_REAL_BUDGET_DIR ?? join(fixtureRoot, 'budget'),
+  });
 });
 afterAll(async () => {
+  if (gate != null) console.log('[real-call-budget]', JSON.stringify(gate.summary()));
   await adapter?.dispose();
   for (let i = 0; i < 3; i += 1) {
     try {
@@ -73,7 +86,7 @@ async function readUntilTerminal(session: SessionRef, a: CodexAppServerAdapter, 
     });
     const turnId = 'turn_steer_ok';
     const collecting = readUntilTerminal(session, steerAdapter, 'steer-normal');
-    await steerAdapter.startTurn(session, mkTurn(turnId, '请读取当前目录 notes.md 并告诉我暗号，然后停下来等待我可能的补充。'));
+    await gatedStartTurn(gate, () => steerAdapter.startTurn(session, mkTurn(turnId, '请读取当前目录 notes.md 并告诉我暗号，然后停下来等待我可能的补充。')));
     // turn 进行中追加 steer（真实 expectedTurnId：内部→provider 映射）。
     await steerAdapter.steer(session, mkTurn(turnId, '补充要求：在回答的最末尾另起一行输出标记 STEERED-OK'));
     const result = await collecting;
@@ -98,7 +111,7 @@ async function readUntilTerminal(session: SessionRef, a: CodexAppServerAdapter, 
       });
       const target = join(fixtureRoot, 'proj', 'allow-probe.txt');
       const turnP = (async () => {
-        await approvalAdapter.startTurn(session, mkTurn('turn_appr_allow', '请在当前目录创建文件 allow-probe.txt，内容 approval-allow-test。必须实际执行。'));
+        await gatedStartTurn(gate, () => approvalAdapter.startTurn(session, mkTurn('turn_appr_allow', '请在当前目录创建文件 allow-probe.txt，内容 approval-allow-test。必须实际执行。')));
         const events: NormalizedRuntimeEvent[] = [];
         const chunks: string[] = [];
         let diskAtApproval: string | false | undefined;
@@ -141,7 +154,7 @@ async function readUntilTerminal(session: SessionRef, a: CodexAppServerAdapter, 
     });
     const first = await (async () => {
       const c = readUntilTerminal(session1, adapter, 'resume-ro-t1');
-      await adapter.startTurn(session1, mkTurn('turn_ro1', '请记住暗号 LUNA-7。只回复「已记住」。'));
+      await gatedStartTurn(gate, () => adapter.startTurn(session1, mkTurn('turn_ro1', '请记住暗号 LUNA-7。只回复「已记住」。')));
       return c;
     })();
     expect(first.terminal?.kind).toBe('turn.completed');
@@ -157,7 +170,7 @@ async function readUntilTerminal(session: SessionRef, a: CodexAppServerAdapter, 
     const target = join(fixtureRoot, 'proj', 'resume-write-probe.txt');
     const second = await (async () => {
       const c = readUntilTerminal(session2, adapter, 'resume-ro-t2');
-      await adapter.startTurn(session2, mkTurn('turn_ro2', '暗号是什么？另外请在当前目录创建文件 resume-write-probe.txt（内容 x）。必须实际执行写。'));
+      await gatedStartTurn(gate, () => adapter.startTurn(session2, mkTurn('turn_ro2', '暗号是什么？另外请在当前目录创建文件 resume-write-probe.txt（内容 x）。必须实际执行写。')));
       return c;
     })();
     expect(second.terminal?.kind).toBe('turn.completed');
@@ -174,7 +187,7 @@ async function readUntilTerminal(session: SessionRef, a: CodexAppServerAdapter, 
     });
     const turnId = 'turn_interrupt';
     const collecting = readUntilTerminal(session, adapter, 'interrupt', 120_000);
-    await adapter.startTurn(session, mkTurn(turnId, '请从 1 数到 50，每个数一行，然后说明完成。不要跳过。'));
+    await gatedStartTurn(gate, () => adapter.startTurn(session, mkTurn(turnId, '请从 1 数到 50，每个数一行，然后说明完成。不要跳过。')));
     // 等待 turn 真实开始（首个事件）后中断。
     // 等待真实的 turn.started 通知（活跃）后再中断——session.ready 在积压里立即可读，
     // 不能作为 turn 已活跃的证据。单个迭代器循环（每轮新建迭代器会重放积压并泄漏等待者）。
