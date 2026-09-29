@@ -2,8 +2,41 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-28 第六轮，唯一权威快照）
+## 当前真实状态（2026-09-28 第六轮·下，唯一权威快照）
 
+- **格式修复持久工作项**（`768b51a`，迁移 008）：修复用户指认四缺陷——kv 读后即删→
+  pending/consumed 与 run/turn 创建同事务；任务级最后一条→同轮精确绑定（源 turn 自身
+  outputInvalid+thread.replyAdded 消息+resultKey 与 run.created 核对）；每任务一次→每
+  逻辑输出一次（(task,source) 唯一+派发键 task:<id>:repair:<sourceTurn> 版本化）；
+  后缀判定→工作项结构化（普通 redispatch 失败=ACTIVE 非 BLOCKED）。损坏上下文→
+  blocked+审计不花调用；修复轮预算沿用任务既往累计（repairConsumed.budgetCarryoverUsed）。
+- **恢复事实分离**（`a4e8ada`）：reconcile 三事实（执行 notStarted 退款/executed 结算；
+  退出 exited 须 osProcessCheck 结构化证据——userManual 拒绝；alive/unknown 保留租约与
+  占位；executed 二次=补证不重算；settled→notStarted 矛盾拒绝）；budget_mark 逐 turn
+  幂等；keepUnknown 非 UNKNOWN 拒绝；同 daemon releaseAdmission 联动（全链验收：占位→
+  reconcile→解除→排队可派发；executed+alive 不放行反例）；processCheck.ts 真实进程
+  取证（alive/exited/unknown+PID 复用判 different）。
+- **文件授权过滤+恢复面 UI**（`f8f83b0`）：清单排除隐藏项与**其他任务 change_sets 归属**；
+  两模式同一规则；不构成沙箱认证如实。恢复中心面板（UNKNOWN 明细+精确绑定操作+
+  未确认退出无一键清空）；e2e 崩溃-重启链断言。
+- **补证口径纠正**：旧批次 DIRECT 二次=无反馈重派——不能证明新修复机制相对效果；
+  围栏规范化=1 次即验；修复全链≥2 次；文件发现=另一目标。最小方案上限 4-12 次**另行
+  申请**（批次剩余 3 次只限价值对比，保留不动用）。
+- 数字：**435/435**、UI e2e **15/15**、lint 0、零真实调用。报告：
+  reports/round-20260928-recovery-repair-final.md。
+- 上半天（第六轮：台账/评分包 v2/修复链 v1/DEV-13 首片）快照见下节——其中修复链 v1 已被
+  本轮工作项化实现取代（行为兼容：formatRepair 命令参数不变）。
+
+## 当前下一步（唯一）
+
+1. **等待用户**：①评分包 v2 评价（已披露背景的人工可用性评价）→价值闸门结论；
+   ②补证方案批准（报告 §4：围栏 1 次/修复全链 2 次/文件发现 1-9 次——另批）。
+2. 无需等待直接开工：DEV-13 剩余（成果一致性专项用例；进程身份与 DEV-05 supervisor
+   衔接）；UI 恢复面退出取证入口（携带 processCheck 证据的对账操作）；DEV-14 前置。
+
+---
+
+## （上一轮快照，2026-09-28 第六轮）
 - **批次证据已修正（唯一台账=真源）**：`scripts/value-ledger.mjs` 从六侧原始库生成
   `evidence/value-batch/per-call-ledger.json`——全批 **30≤33**；**A-DELIB 10>9 单侧超限成立**
   （全批余额不抵销）；DELIB 合计 24（23 成功/1 失败）；**全批 FAILED=6**（初版报告「17/17」
