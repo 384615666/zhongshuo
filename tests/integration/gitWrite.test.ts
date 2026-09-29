@@ -484,3 +484,118 @@ describe('第十一轮·一：提交内容绑定与操作保护', () => {
     f.db.close();
   }, 30_000);
 });
+
+describe('第十一轮·二：任务批量暂存双向保护与崩溃恢复', () => {
+  /** 建一个带定型改动集的任务 fixture（基线→任务改动→定型）。 */
+  async function makeChangeSet(f: Fixture, taskId: string, mutate: (root: string) => void): Promise<string> {
+    f.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title) VALUES (?, ?, 'c1', 'room_task', 'r1', '批量任务')`).run(taskId, f.projectId);
+    const base = await f.cmd<{ changeSetId: string }>('changeset.captureBaseline', { projectId: f.projectId, taskId });
+    mutate(f.root);
+    await f.cmd('changeset.finalize', { changeSetId: base.changeSetId });
+    return base.changeSetId;
+  }
+
+  it('after 冻结后被用户继续修改/新增被改/删除被重建 → 冲突，被保护内容不进索引', async () => {
+    const f = makeFixture('afterguard', { 'task-mod.txt': 't0\n', 'task-del.txt': 'd0\n' });
+    const csId = await makeChangeSet(f, 'tk_a1', (root) => {
+      writeFileSync(join(root, 'task-mod.txt'), 't1-任务\n', 'utf8');
+      writeFileSync(join(root, 'task-new.txt'), 'n1-任务\n', 'utf8');
+      rmSync(join(root, 'task-del.txt'));
+    });
+    // 定型后的用户修改：改任务产出文件、改任务新增文件、重建任务删除的文件。
+    writeFileSync(join(f.root, 'task-mod.txt'), 't1-任务+用户后来又改\n', 'utf8');
+    writeFileSync(join(f.root, 'task-new.txt'), 'n1-任务+用户后来又改\n', 'utf8');
+    writeFileSync(join(f.root, 'task-del.txt'), '用户重建\n', 'utf8');
+    const r = await f.cmd<{ included: string[]; conflicts: Array<{ path: string; reason: string }>; skipped: Array<{ path: string }> }>('git.stageTask', { projectId: f.projectId, changeSetId: csId });
+    expect(r.included).toEqual([]); // 全部冲突——无一纳入
+    const conflictPaths = r.conflicts.map((c) => c.path).sort();
+    expect(conflictPaths).toEqual(['task-del.txt', 'task-mod.txt', 'task-new.txt']);
+    expect(r.conflicts.find((c) => c.path === 'task-mod.txt')!.reason).toContain('任务定型（after 冻结）后该文件已被修改');
+    expect(r.conflicts.find((c) => c.path === 'task-new.txt')!.reason).toContain('内容与冻结 after 不一致');
+    expect(r.conflicts.find((c) => c.path === 'task-del.txt')!.reason).toContain('已重新存在');
+    // 被保护内容没有进入索引（porcelain 无任何 staged 条目）。
+    expect(git(f.root, 'status', '--porcelain')).not.toMatch(/^[MARD]/);
+    f.db.close();
+  }, 30_000);
+
+  it('多个改动集同路径：按最新定型裁决（非先遇到）；与所选 after 不符 → 冲突', async () => {
+    const f = makeFixture('multiset', { 'x.txt': 'v0\n' });
+    // cs1（先定型）：x=v1；cs2（后定型）：x=v2。
+    await makeChangeSet(f, 'tk_m1', (root) => { writeFileSync(join(root, 'x.txt'), 'v1\n', 'utf8'); });
+    await makeChangeSet(f, 'tk_m2', (root) => { writeFileSync(join(root, 'x.txt'), 'v2\n', 'utf8'); });
+    // 指定**旧集**（tk_m1 的集）：裁决以该集为准，但工作区是 v2 → 与该集 after 不符 → 冲突。
+    const cs1 = (f.db.prepare(`SELECT id FROM change_sets WHERE task_id = 'tk_m1'`).get() as { id: string }).id;
+    const r1 = await f.cmd<{ included: string[]; conflicts: Array<{ path: string; reason: string }> }>('git.stageTask', { projectId: f.projectId, changeSetId: cs1 });
+    expect(r1.included).toEqual([]);
+    expect(r1.conflicts[0]!.reason).toContain('内容与冻结 after 不一致');
+    expect(git(f.root, 'status', '--porcelain')).not.toMatch(/^[MARD]/); // 未纳入 v2
+    // 按任务（tk_m2）取最新定型：工作区 v2 与其 after 一致 → 纳入。
+    const r2 = await f.cmd<{ included: string[]; conflicts: Array<{ path: string; reason: string }> }>('git.stageTask', { projectId: f.projectId, taskId: 'tk_m2' });
+    expect(r2.included).toEqual(['x.txt']);
+    expect(git(f.root, 'status', '--porcelain')).toContain('M  x.txt');
+    f.db.close();
+  }, 30_000);
+
+  it('归属与集级门：跨项目改动集拒绝；已撤销集跳过；部分撤销集冲突', async () => {
+    const f = makeFixture('gates', { 'a.txt': '1\n' });
+    const csId = await makeChangeSet(f, 'tk_g1', (root) => { writeFileSync(join(root, 'a.txt'), '2\n', 'utf8'); });
+    // 跨项目：改动集挂到另一项目后，原项目不得引用。
+    f.db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pOther','d2',?,?,'{}',0)`).run(join(tmpRoot, `other-${++seq}`), join(tmpRoot, `other-${seq}`));
+    await expect(f.cmd('git.stageTask', { projectId: f.projectId, changeSetId: 'cs_nonexistent' })).rejects.toThrow(/不存在/);
+    f.db.prepare(`UPDATE change_sets SET project_id = 'pOther' WHERE id = ?`).run(csId);
+    await expect(f.cmd('git.stageTask', { projectId: f.projectId, changeSetId: csId })).rejects.toThrow(/不属于项目/);
+    f.db.prepare(`UPDATE change_sets SET project_id = ? WHERE id = ?`).run(f.projectId, csId);
+    // 部分撤销（application_status=partial）→ 冲突、不纳入。
+    f.db.prepare(`UPDATE change_sets SET application_status = 'partial' WHERE id = ?`).run(csId);
+    const r1 = await f.cmd<{ included: string[]; conflicts: Array<{ path: string; reason: string }> }>('git.stageTask', { projectId: f.projectId, changeSetId: csId });
+    expect(r1.included).toEqual([]);
+    expect(r1.conflicts[0]!.reason).toContain('部分撤销');
+    // 整体撤销（reverted）→ 跳过（内容已回基线，不再纳入）。
+    f.db.prepare(`UPDATE change_sets SET application_status = 'reverted' WHERE id = ?`).run(csId);
+    const r2 = await f.cmd<{ included: string[]; skipped: Array<{ path: string; reason: string }>; conflicts: unknown[] }>('git.stageTask', { projectId: f.projectId, changeSetId: csId });
+    expect(r2.included).toEqual([]);
+    expect(r2.conflicts).toEqual([]);
+    expect(r2.skipped[0]!.reason).toContain('已整体撤销');
+    f.db.close();
+  }, 30_000);
+
+  it('意图崩溃重试：stage 同号重试遇新内容拒绝/已达成恢复；commit pending 按事实裁决；同号异参数拒绝', async () => {
+    const f = makeFixture('intent', { 'a.txt': '1\n', 'b.txt': '1\n' });
+    const { beginPendingOperationForTest } = await import('../../src/daemon/gitWrite.ts');
+    // ① stage：回执清理后同号重试 → done 行重放（recovered）。
+    writeFileSync(join(f.root, 'a.txt'), '2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] }, 'c-intent-stage-0001');
+    f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run('c-intent-stage-0001');
+    const r1 = await f.cmd<{ staged: string[]; recovered?: boolean }>('git.stage', { projectId: f.projectId, paths: ['a.txt'] }, 'c-intent-stage-0001');
+    expect(r1.recovered).toBe(true);
+    expect(r1.staged).toEqual(['a.txt']);
+    // ② stage：把 done 行退回 pending（模拟「执行已发生、回执未落」窗口）+ 意图后又有新内容
+    //    → 同号重试拒绝（不能用同号把新内容暂存进去）。
+    writeFileSync(join(f.root, 'a.txt'), '3-新内容\n', 'utf8');
+    f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run('c-intent-stage-0001');
+    f.db.prepare(`UPDATE git_operations SET status = 'pending' WHERE id = ?`).run('c-intent-stage-0001');
+    await expect(f.cmd('git.stage', { projectId: f.projectId, paths: ['a.txt'] }, 'c-intent-stage-0001')).rejects.toThrow(/又出现未暂存改动/);
+    expect(git(f.root, 'status', '--porcelain')).toContain('MM a.txt'); // 暂存仍是旧 v2，新内容未进索引（MM＝staged v2 + unstaged v3）
+    // ③ commit：pending 行（未执行窗口，HEAD 未动）→ 重试执行成功，恰一次提交。
+    writeFileSync(join(f.root, 'b.txt'), '2\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['b.txt'] }, 'c-intent-stage-0002');
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    const cid = 'c-intent-commit-0001';
+    const commitParams = { projectId: f.projectId, message: '意图重试提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch };
+    const { computeCommandPayloadHash } = await import('../../src/domain/idempotency.ts');
+    const ph = computeCommandPayloadHash({ method: 'git.commit', target: null, params: commitParams, expectedRevision: null });
+    beginPendingOperationForTest(f.db, { commandId: cid, scope: 'user:u_gitwrite', payloadHash: ph, now: 1 }, { projectId: f.projectId, action: 'commit', request: {} });
+    const c1 = await f.cmd<{ commit: string }>('git.commit', commitParams, cid);
+    expect(git(f.root, 'rev-list', '--count', 'HEAD').trim()).toBe('2'); // init+本次——恰一次
+    void c1;
+    // ④ 同 commandId 异参数（日志有、回执无）→ 幂等冲突拒绝。
+    f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(cid);
+    const raw = await dispatchDaemonCommand({ db: f.db, localUserId: 'u_gitwrite', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'app') }, {
+      protocolVersion: 1, commandId: cid, method: 'git.commit',
+      params: { projectId: f.projectId, message: '异参数提交', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch },
+    }) as { ok: boolean; error?: { message: string } };
+    expect(raw.ok).toBe(false);
+    expect(raw.error?.message).toContain('参数不一致');
+    f.db.close();
+  }, 30_000);
+});

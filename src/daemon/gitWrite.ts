@@ -15,7 +15,8 @@
  * - 身份配置缺失如实报错，不代改用户全局 Git 配置；远端操作不在本模块（另批）。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { statSync, openSync, readSync, closeSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand, getReceipt } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -175,27 +176,73 @@ function replayIfReceipted<T>(db: ZhongshuoDatabase, journal: JournalInput): { r
   return { replayed: true, data: JSON.parse(existing.result_json) as T };
 }
 
-/** 操作日志落库 + 命令回执（同一事务；日志已存在时不重复插入；emit=同事务领域事件）。 */
+export type GitOpAction = 'stage' | 'unstage' | 'stage_task' | 'commit' | 'commit_undo';
+
+interface OperationRow {
+  projectId: string; action: GitOpAction; taskId?: string | null; changeSetIds?: string[];
+  request: unknown; /** 恢复核对所需的预期事实（commit: expectedHead/expectedTree/branch）。 */
+  headBefore?: string | null; headAfter?: string | null; commitOid?: string | null;
+}
+
+/** 副作用前写入持久意图（独立事务）：commandId/参数 hash/目标仓库与预期事实，status=pending。
+ * 崩溃后重试按 pending 行核对既成事实——不只凭提交尾标记与父提交（第十一轮三）。 */
+function beginPendingOperation(db: ZhongshuoDatabase, journal: JournalInput, row: OperationRow): void {
+  const tx = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO git_operations (id, project_id, action, task_id, change_set_ids_json, request_json, result_json, head_before, head_after, commit_oid, created_at, status, request_hash)
+       VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, 'pending', ?)`,
+    ).run(
+      journal.commandId, row.projectId, row.action, row.taskId ?? null,
+      row.changeSetIds != null ? JSON.stringify(row.changeSetIds) : null,
+      JSON.stringify(row.request), row.headBefore ?? null, row.headAfter ?? null, row.commitOid ?? null, journal.now, journal.payloadHash,
+    );
+  });
+  tx();
+}
+
+/** 已有 pending 行（同 commandId）核对：存在即校参数 hash（异参数=幂等冲突，含本分支）。 */
+function requirePendingHashMatch(db: ZhongshuoDatabase, journal: JournalInput, row: { request_hash: string | null }): void {
+  if (row.request_hash != null && row.request_hash !== journal.payloadHash) {
+    throw new GitWriteError('IDEMPOTENCY_CONFLICT', '同 commandId 参数不一致（日志有、回执无的恢复分支同样拒绝）——用新 commandId 重新提交');
+  }
+}
+
+/** 操作日志完成 + 命令回执（同一事务；pending 行升级 done、事实列补齐；emit=同事务领域事件）。 */
 function persistOperation<T extends object>(
   db: ZhongshuoDatabase,
   journal: JournalInput,
-  row: { projectId: string; action: 'stage' | 'unstage' | 'stage_task' | 'commit' | 'commit_undo'; taskId?: string | null; changeSetIds?: string[]; request: unknown; result: T; headBefore?: string | null; headAfter?: string | null; commitOid?: string | null; emit?: () => void },
+  row: { projectId: string; action: GitOpAction; taskId?: string | null; changeSetIds?: string[]; request: unknown; result: T; headBefore?: string | null; headAfter?: string | null; commitOid?: string | null; emit?: () => void },
 ): { replayed: boolean; data: T } {
   const outcome = runCommand<T>(db, { idempotencyScope: journal.scope, commandId: journal.commandId, payloadHash: journal.payloadHash, now: journal.now }, () => {
     db.prepare(
-      `INSERT OR IGNORE INTO git_operations (id, project_id, action, task_id, change_set_ids_json, request_json, result_json, head_before, head_after, commit_oid, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO git_operations (id, project_id, action, task_id, change_set_ids_json, request_json, result_json, head_before, head_after, commit_oid, created_at, status, request_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done', ?)`,
     ).run(
       journal.commandId, row.projectId, row.action, row.taskId ?? null,
       row.changeSetIds != null ? JSON.stringify(row.changeSetIds) : null,
       JSON.stringify(row.request), JSON.stringify(row.result),
-      row.headBefore ?? null, row.headAfter ?? null, row.commitOid ?? null, journal.now,
+      row.headBefore ?? null, row.headAfter ?? null, row.commitOid ?? null, journal.now, journal.payloadHash,
     );
+    db.prepare(
+      `UPDATE git_operations SET status = 'done', result_json = ?, head_before = COALESCE(?, head_before), head_after = COALESCE(?, head_after), commit_oid = COALESCE(?, commit_oid), request_hash = COALESCE(request_hash, ?) WHERE id = ?`,
+    ).run(JSON.stringify(row.result), row.headBefore ?? null, row.headAfter ?? null, row.commitOid ?? null, journal.payloadHash, journal.commandId);
     row.emit?.();
     return row.result;
   });
   if (!outcome.ok) throw new GitWriteError(outcome.error.code === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'STORAGE_UNAVAILABLE', outcome.error.message, { details: outcome.error.details });
   return { replayed: outcome.replayed, data: outcome.data };
+}
+
+/** 测试接缝：按给定 journal 上下文写一条 pending 意图行（模拟崩溃窗口；正式路径由各命令内部写入）。 */
+export function beginPendingOperationForTest(db: ZhongshuoDatabase, journal: JournalInput, row: OperationRow): void {
+  beginPendingOperation(db, journal, row);
+}
+
+/** 操作日志行读取（重试核对入口）。 */
+function getOperationRow(db: ZhongshuoDatabase, commandId: string): { status: string; request_hash: string | null; result_json: string | null; request_json: string | null } | undefined {
+  return db.prepare('SELECT status, request_hash, result_json, request_json FROM git_operations WHERE id = ?').get(commandId) as
+    | { status: string; request_hash: string | null; result_json: string | null; request_json: string | null }
+    | undefined;
 }
 
 // ---------- 暂存 / 取消暂存（单文件与普通按文件） ----------
@@ -215,6 +262,21 @@ export async function gitStage(db: ZhongshuoDatabase, input: { projectId: string
   const loc = await repoGuard(input.projectRoot, input.paths);
   return withRepoWriteLock(loc.worktreeRoot, async () => {
     assertWritable(db, input.projectId, input.projectRoot);
+    // 崩溃重试核对（日志有、回执无）：pending 行按当前事实裁决——不盲目同号重执行。
+    const existing = getOperationRow(db, input.journal.commandId);
+    if (existing != null) {
+      requirePendingHashMatch(db, input.journal, existing);
+      if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as StageOutcome), replayed: true, recovered: true };
+      const verdict = await adjudicatePendingStage(loc, input.paths);
+      if (verdict.kind === 'blocked') throw new GitWriteError('STALE_REVISION', verdict.message);
+      if (verdict.kind === 'satisfied') {
+        const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'stage', request: { paths: input.paths }, result: verdict.result });
+        return { ...persisted.data, recovered: true };
+      }
+      // not-executed：意图未生效——沿用 pending 行继续执行。
+    } else {
+      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'stage', request: { paths: input.paths } });
+    }
     const status = await currentStatus(loc);
     const dirtyByPath = new Map(status.map((e) => [e.path, e]));
     const toStage: string[] = [];
@@ -240,6 +302,21 @@ export async function gitStage(db: ZhongshuoDatabase, input: { projectId: string
   });
 }
 
+/** 中断的暂存意图重试裁决：全部「已暂存且无更新未暂存改动」=已达成；有新内容=拒绝同号重试。 */
+async function adjudicatePendingStage(loc: RepoLocation, paths: string[]): Promise<{ kind: 'satisfied'; result: StageOutcome } | { kind: 'not-executed' } | { kind: 'blocked'; message: string }> {
+  const status = await currentStatus(loc);
+  for (const path of paths) {
+    const entries = status.filter((e) => e.path === path);
+    if (entries.length === 0) {
+      return { kind: 'blocked', message: `中断重试核对：${path} 当前无任何未提交改动（外部已处理）——不盲目重试，请用新命令重新确认` };
+    }
+    if (entries.some((e) => e.category === 'unstaged')) {
+      return { kind: 'blocked', message: `中断重试核对：${path} 在意图之后又出现未暂存改动——不能用同号重试暂存新内容；请用新命令重新确认` };
+    }
+  }
+  return { kind: 'satisfied', result: { staged: [...paths], skipped: [] } };
+}
+
 export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; paths: string[]; journal: JournalInput }): Promise<StageOutcome> {
   const replay = replayIfReceipted<StageOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
@@ -249,6 +326,19 @@ export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: stri
   const loc = await repoGuard(input.projectRoot, input.paths);
   return withRepoWriteLock(loc.worktreeRoot, async () => {
     assertWritable(db, input.projectId, input.projectRoot);
+    const existing = getOperationRow(db, input.journal.commandId);
+    if (existing != null) {
+      requirePendingHashMatch(db, input.journal, existing);
+      if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as StageOutcome), replayed: true, recovered: true };
+      const verdict = await adjudicatePendingUnstage(loc, input.paths);
+      if (verdict.kind === 'satisfied') {
+        const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'unstage', request: { paths: input.paths }, result: verdict.result });
+        return { ...persisted.data, recovered: true };
+      }
+      // not-executed（仍暂存中）：restore --staged 只改索引、无内容风险——安全重执行。
+    } else {
+      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'unstage', request: { paths: input.paths } });
+    }
     const status = await currentStatus(loc);
     const stagedSet = new Set(status.filter((e) => e.category === 'staged').map((e) => e.path));
     const toUnstage: string[] = [];
@@ -270,17 +360,27 @@ export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: stri
   });
 }
 
+/** 中断的取消暂存意图裁决：路径已不在暂存=已达成；仍暂存=可安全重执行（只动索引）。 */
+async function adjudicatePendingUnstage(loc: RepoLocation, paths: string[]): Promise<{ kind: 'satisfied'; result: StageOutcome } | { kind: 'not-executed' }> {
+  const status = await currentStatus(loc);
+  const stagedSet = new Set(status.filter((e) => e.category === 'staged').map((e) => e.path));
+  if (paths.some((path) => stagedSet.has(path))) return { kind: 'not-executed' };
+  return { kind: 'satisfied', result: { staged: [], skipped: paths.map((path) => ({ path, reason: '该文件当前不在暂存区（意图已达成或外部已处理）' })) } };
+}
+
 // ---------- 按任务/改动集批量暂存（§14.2：跳过 userPreExisting） ----------
 
 interface ChangeSetRowInfo {
   id: string;
+  /** 定型顺序（change_sets.rowid）——多集同路径按此裁决版本关系。 */
+  rowidOrder: number;
   manifest: { scopeKind?: string; truncated?: boolean; scanFailedDirs?: number; scanRejected?: number; preimageRoot?: string; git?: { head?: string | null; dirtyPaths?: string[] | null } };
   beforeByPath: Map<string, { state: string; sha256: string | null; contentRef: string | null; contentUnavailable: string | null }>;
   afterByPath: Map<string, { state: string; sha256: string | null }>;
 }
 
 function loadChangeSetRows(db: ZhongshuoDatabase, changeSetId: string): ChangeSetRowInfo | null {
-  const row = db.prepare('SELECT id, manifest_json FROM change_sets WHERE id = ?').get(changeSetId) as { id: string; manifest_json: string | null } | undefined;
+  const row = db.prepare('SELECT id, manifest_json, rowid FROM change_sets WHERE id = ?').get(changeSetId) as { id: string; manifest_json: string | null; rowid: number } | undefined;
   if (row == null) return null;
   const manifest = JSON.parse(row.manifest_json ?? '{}') as ChangeSetRowInfo['manifest'];
   const mk = (role: 'before' | 'after') => new Map(
@@ -289,7 +389,7 @@ function loadChangeSetRows(db: ZhongshuoDatabase, changeSetId: string): ChangeSe
         ? { state: r.state, sha256: r.sha256, contentRef: r.content_ref, contentUnavailable: r.content_unavailable }
         : { state: r.state, sha256: r.sha256, contentRef: null, contentUnavailable: null }] as [string, { state: string; sha256: string | null; contentRef: string | null; contentUnavailable: string | null }]),
   );
-  return { id: row.id, manifest, beforeByPath: mk('before'), afterByPath: mk('after') };
+  return { id: row.id, rowidOrder: row.rowid, manifest, beforeByPath: mk('before'), afterByPath: mk('after') };
 }
 
 /** 单个改动集的任务改动面（before vs after），基线不完整/unknown 如实返回 undeterminable。 */
@@ -376,59 +476,199 @@ export async function gitStageTask(db: ZhongshuoDatabase, input: { projectId: st
   if ((input.taskId == null) === (input.changeSetId == null)) {
     throw new GitWriteError('VALIDATION_INVALID', 'taskId 与 changeSetId 二选一');
   }
-  const loc = await repoGuard(input.projectRoot);
-  assertNoActiveLeases(db, input.projectRoot);
-  // 目标改动集：指定 changeSetId，或该任务全部已定型（after_ref 非空）改动集，按 rowid 序。
-  const ids: string[] = input.changeSetId != null
-    ? [input.changeSetId]
-    : (db.prepare(`SELECT id FROM change_sets WHERE task_id = ? AND after_ref != '' ORDER BY rowid`).all(input.taskId!) as Array<{ id: string }>).map((r) => r.id);
-  if (ids.length === 0) throw new GitWriteError('RESOURCE_NOT_FOUND', input.taskId != null ? `任务 ${input.taskId} 没有已定型的改动集（无 after 前像）——先经正式链路定型` : `改动集不存在：${input.changeSetId}`);
-  const sets: ChangeSetRowInfo[] = [];
-  for (const id of ids) {
-    const cs = loadChangeSetRows(db, id);
-    if (cs == null) throw new GitWriteError('RESOURCE_NOT_FOUND', `改动集不存在：${id}`);
-    sets.push(cs);
+  // 归属校验（第十一轮二）：taskId/changeSetId 必须属于指定项目。
+  if (input.taskId != null) {
+    const taskRow = db.prepare('SELECT id, project_id FROM tasks WHERE id = ?').get(input.taskId) as { id: string; project_id: string } | undefined;
+    if (taskRow == null) throw new GitWriteError('RESOURCE_NOT_FOUND', `任务不存在：${input.taskId}`);
+    if (taskRow.project_id !== input.projectId) throw new GitWriteError('RESOURCE_NOT_FOUND', `任务 ${input.taskId} 不属于项目 ${input.projectId}（跨项目改动集不得批量暂存）`);
   }
-  const included: string[] = [];
-  const skipped: Array<{ path: string; reason: string }> = [];
-  const conflicts: Array<{ path: string; reason: string }> = [];
-  const decided = new Map<string, 'include' | 'skip' | 'conflict'>();
-  for (const cs of sets) {
-    const { changed, undeterminable } = taskChangedPathsOf(cs, loc);
-    for (const u of undeterminable) {
-      if (decided.get(u.path) !== 'conflict') { decided.set(u.path, 'conflict'); conflicts.push({ path: u.path, reason: `${u.reason}（改动集 ${cs.id}）` }); }
+  if (input.changeSetId != null) {
+    const csRow = db.prepare('SELECT id, project_id FROM change_sets WHERE id = ?').get(input.changeSetId) as { id: string; project_id: string } | undefined;
+    if (csRow == null) throw new GitWriteError('RESOURCE_NOT_FOUND', `改动集不存在：${input.changeSetId}`);
+    if (csRow.project_id !== input.projectId) throw new GitWriteError('RESOURCE_NOT_FOUND', `改动集 ${input.changeSetId} 不属于项目 ${input.projectId}（跨项目改动集不得批量暂存）`);
+  }
+  const loc = await repoGuard(input.projectRoot);
+  return withRepoWriteLock(loc.worktreeRoot, async () => {
+    assertWritable(db, input.projectId, input.projectRoot);
+    // 崩溃重试核对：批量暂存的归属需按当前工作区全量重验——pending 即安全重执行（执行体
+    // 自带 after 冻结核对与两遍裁决，部分已暂存的内容重验后仍一致才纳入）。
+    const existing = getOperationRow(db, input.journal.commandId);
+    if (existing != null) {
+      requirePendingHashMatch(db, input.journal, existing);
+      if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as StageTaskOutcome), replayed: true, recovered: true };
+      // pending → 重新执行（下方全量重验）。
+    } else {
+      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'stage_task', taskId: input.taskId ?? null, request: { taskId: input.taskId ?? null, changeSetId: input.changeSetId ?? null } });
     }
-    const { dirty, unverifiable } = await baselineDirtyPaths(cs, loc, changed);
-    for (const u of unverifiable) {
-      if (decided.get(u.path) !== 'conflict') { decided.set(u.path, 'conflict'); conflicts.push({ path: u.path, reason: `${u.reason}（改动集 ${cs.id}）` }); }
+    // 目标改动集：指定 changeSetId，或该任务全部已定型（after_ref 非空）改动集，按 rowid 定型序。
+    const ids: string[] = input.changeSetId != null
+      ? [input.changeSetId]
+      : (db.prepare(`SELECT id FROM change_sets WHERE task_id = ? AND project_id = ? AND after_ref != '' ORDER BY rowid`).all(input.taskId!, input.projectId) as Array<{ id: string }>).map((r) => r.id);
+    if (ids.length === 0) throw new GitWriteError('RESOURCE_NOT_FOUND', input.taskId != null ? `任务 ${input.taskId} 没有已定型的改动集（无 after 前像）——先经正式链路定型` : `改动集不存在：${input.changeSetId}`);
+    const sets: ChangeSetRowInfo[] = [];
+    for (const id of ids) {
+      const cs = loadChangeSetRows(db, id);
+      if (cs == null) throw new GitWriteError('RESOURCE_NOT_FOUND', `改动集不存在：${id}`);
+      sets.push(cs);
     }
-    for (const wt of changed) {
-      if (decided.has(wt)) continue;
-      if (dirty.has(wt)) {
-        // 用户原有改动 + 任务改动同文件：整文件暂存会把用户改动一并纳入——不自动代做（§14.2）。
-        decided.set(wt, 'conflict');
-        conflicts.push({ path: wt, reason: `任务开始前该文件已有用户未提交改动，与任务改动无法按文件分离——请单独确认（改动集 ${cs.id}）` });
+    // 集级门（第十一轮二）：已撤销/部分撤销/撤销未收口/归属无法核实的改动集不盲目批量暂存。
+    const setGate = new Map<string, { kind: 'reverted' | 'partial' | 'undo-active' | 'broken'; detail: string }>();
+    for (const cs of sets) {
+      const appStatus = (db.prepare('SELECT application_status FROM change_sets WHERE id = ?').get(cs.id) as { application_status: string }).application_status;
+      if (appStatus === 'reverted') { setGate.set(cs.id, { kind: 'reverted', detail: '该改动集已整体撤销（内容已恢复基线）——不再纳入' }); continue; }
+      if (appStatus === 'partial') { setGate.set(cs.id, { kind: 'partial', detail: '该改动集部分撤销（application_status=partial）——归属不可整体核实，不批量暂存' }); continue; }
+      const undoRow = db.prepare(`SELECT status FROM change_set_undos WHERE change_set_id = ? ORDER BY id DESC LIMIT 1`).get(cs.id) as { status: string } | undefined;
+      if (undoRow != null && undoRow.status !== 'succeeded') {
+        setGate.set(cs.id, { kind: 'undo-active', detail: `该改动集撤销未收口（${undoRow.status}）——不批量暂存` });
         continue;
       }
-      decided.set(wt, 'include');
-      included.push(wt);
-    }
-    for (const wt of dirty) {
-      if (!decided.has(wt)) {
-        decided.set(wt, 'skip');
-        skipped.push({ path: wt, reason: 'userPreExisting：任务开始前已存在的用户改动——批量暂存默认跳过，需用户显式操作' });
+      try {
+        JSON.parse(JSON.stringify(cs.manifest));
+      } catch {
+        setGate.set(cs.id, { kind: 'broken', detail: '改动集清单损坏（归属无法核实）——不批量暂存' });
       }
     }
-  }
-  if (included.length > 0) {
-    await mustGit(['-C', loc.worktreeRoot, 'add', '--', ...included], { env: writeEnv(true), what: 'add (batch)' });
-  }
-  const result: StageTaskOutcome = { changeSetIds: ids, included, skipped, conflicts };
-  const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'stage_task', taskId: input.taskId ?? null, changeSetIds: ids, request: { taskId: input.taskId ?? null, changeSetId: input.changeSetId ?? null }, result });
-  return persisted.data;
+
+    // ---- 第一遍：逐集原始判定（不写全局决定） ----
+    interface SetVerdict { changed: string[]; undeterminable: Array<{ path: string; reason: string }>; dirty: Set<string>; unverifiable: Array<{ path: string; reason: string }> }
+    const verdicts = new Map<string, SetVerdict>();
+    for (const cs of sets) {
+      // 门控集也计算变更面（其路径要在结果里列出并给出门控原因），只是不参与 include。
+      const { changed, undeterminable } = taskChangedPathsOf(cs, loc);
+      const { dirty, unverifiable } = await baselineDirtyPaths(cs, loc, changed);
+      verdicts.set(cs.id, { changed, undeterminable, dirty, unverifiable });
+    }
+
+    // ---- 第二遍：全局裁决（定型序=change_sets rowid；同路径后集覆盖前集，不“先遇到就决定”） ----
+    interface Decision { kind: 'include' | 'skip' | 'conflict'; fromCs: string; reason?: string; multiSet?: string[] }
+    const decisions = new Map<string, Decision>();
+    const multiSetPaths = new Map<string, Set<string>>();
+    const record = (wt: string, decision: Decision, csOrder: number): void => {
+      const seen = multiSetPaths.get(wt) ?? new Set<string>();
+      seen.add(decision.fromCs);
+      multiSetPaths.set(wt, seen);
+      const prev = decisions.get(wt);
+      if (prev != null && prev.fromCs === decision.fromCs) return;
+      decisions.set(wt, decision); // 后集覆盖前集（版本关系=定型顺序）
+      void csOrder;
+    };
+    for (const cs of sets) {
+      const gate = setGate.get(cs.id);
+      const v = verdicts.get(cs.id);
+      const scope = v != null ? [...v.changed, ...v.dirty] : [];
+      if (gate != null) {
+        for (const wt of new Set(scope)) {
+          // 已撤销→skip（内容已回基线）；其余门→conflict（保守，人工核实）。
+          record(wt, { kind: gate.kind === 'reverted' ? 'skip' : 'conflict', fromCs: cs.id, reason: `${gate.detail}（改动集 ${cs.id}）` }, 0);
+        }
+        continue;
+      }
+      if (v == null) continue;
+      for (const u of [...v.undeterminable, ...v.unverifiable]) {
+        record(u.path, { kind: 'conflict', fromCs: cs.id, reason: u.reason }, 0);
+      }
+      for (const wt of v.changed) {
+        if (v.dirty.has(wt)) {
+          // 链式归属（第十一轮二）：基线时的「dirty」若恰好等于**更早定型改动集的 after**
+          // （同项目任务链的未提交产出），归属是任务链而非用户——按版本关系纳入本集裁决，
+          // 不误判为用户改动；其余情况（真正的用户修改）保持冲突不自动分离。
+          const projectRel = loc.projectPrefix === '' || !wt.startsWith(`${loc.projectPrefix}/`) ? wt : wt.slice(loc.projectPrefix.length + 1);
+          const beforeSha = cs.beforeByPath.get(projectRel)?.sha256 ?? null;
+          const chained = beforeSha != null && chainedToPriorSet(db, input.projectId, cs.rowidOrder, projectRel, beforeSha);
+          if (chained) {
+            record(wt, { kind: 'include', fromCs: cs.id }, 0);
+            continue;
+          }
+          record(wt, { kind: 'conflict', fromCs: cs.id, reason: `任务开始前该文件已有用户未提交改动，与任务改动无法按文件分离——请单独确认（改动集 ${cs.id}）` }, 0);
+          continue;
+        }
+        record(wt, { kind: 'include', fromCs: cs.id }, 0);
+      }
+      for (const wt of v.dirty) {
+        if (!decisions.has(wt) || decisions.get(wt)!.fromCs === cs.id) {
+          record(wt, { kind: 'skip', fromCs: cs.id, reason: 'userPreExisting：任务开始前已存在的用户改动——批量暂存默认跳过，需用户显式操作' }, 0);
+        }
+      }
+    }
+
+    // ---- 第三遍：after 冻结核对（include 路径的当前工作区 == 所选改动集冻结 after） ----
+    const included: string[] = [];
+    const skipped: Array<{ path: string; reason: string }> = [];
+    const conflicts: Array<{ path: string; reason: string }> = [];
+    const finalDecisions = new Map<string, Decision>();
+    for (const [wt, decision] of decisions) {
+      if (decision.kind === 'include') {
+        const cs = sets.find((x) => x.id === decision.fromCs)!;
+        const projectRel = wt.startsWith(`${loc.projectPrefix}/`) && loc.projectPrefix !== '' ? wt.slice(loc.projectPrefix.length + 1) : wt;
+        const after = cs.afterByPath.get(loc.projectPrefix === '' ? wt : projectRel);
+        const verify = await worktreeMatchesAfter(loc, projectRel, after);
+        if (verify !== true) {
+          finalDecisions.set(wt, { ...decision, kind: 'conflict', reason: `任务定型（after 冻结）后该文件已被修改：${verify}——不把后续用户修改纳入（改动集 ${decision.fromCs}）` });
+          continue;
+        }
+        finalDecisions.set(wt, decision);
+        continue;
+      }
+      finalDecisions.set(wt, decision);
+    }
+    for (const [wt, decision] of finalDecisions) {
+      const multi = multiSetPaths.get(wt);
+      const multiNote = multi != null && multi.size > 1 ? `〔该路径出现于 ${multi.size} 个改动集，按最新定型 ${decision.fromCs} 裁决〕` : '';
+      if (decision.kind === 'include') included.push(wt);
+      else if (decision.kind === 'skip') skipped.push({ path: wt, reason: `${decision.reason ?? ''}${multiNote}` });
+      else conflicts.push({ path: wt, reason: `${decision.reason ?? ''}${multiNote}` });
+    }
+    if (included.length > 0) {
+      // include 路径已在构造上限定于项目前缀内（change_set 路径→worktree 前缀映射）。
+      await mustGit(['-C', loc.worktreeRoot, 'add', '--', ...included], { env: writeEnv(true), what: 'add (batch)' });
+    }
+    const result: StageTaskOutcome = { changeSetIds: ids, included, skipped, conflicts };
+    const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'stage_task', taskId: input.taskId ?? null, changeSetIds: ids, request: { taskId: input.taskId ?? null, changeSetId: input.changeSetId ?? null }, result });
+    return persisted.data;
+  });
 }
 
-// ---------- 提交预览 / 提交 ----------
+/**
+ * after 冻结核对（第十一轮二）：include 候选路径的当前工作区内容必须与所选改动集冻结的
+ * after 状态一致——任务定型后的用户/外部修改不得自动纳入索引。
+ */
+async function worktreeMatchesAfter(loc: RepoLocation, projectRel: string, after: { state: string; sha256: string | null } | undefined): Promise<true | string> {
+  const wtPath = loc.projectPrefix === '' ? projectRel : `${loc.projectPrefix}/${projectRel}`;
+  const fsPath = join(loc.worktreeRoot, ...wtPath.split('/'));
+  let st: { isFile: () => boolean; isDirectory: () => boolean } | null;
+  try {
+    st = statSync(fsPath);
+  } catch {
+    st = null;
+  }
+  if (after == null) return '改动集 after 无该路径记录（归属无法核实）';
+  if (after.state === 'absent') {
+    return st != null ? '任务删除的文件已重新存在（用户重建或类型变化）' : true;
+  }
+  if (after.state === 'unknown' || after.sha256 == null) return 'after 前像不可用（内容/状态 unknown）——无法核对';
+  if (st == null) return '任务产出的文件已不存在（任务后被删除/移走）';
+  if (st.isDirectory()) return '路径现为目录（文件类型变化）';
+  const fd = openSync(fsPath, 'r');
+  try {
+    const buf = Buffer.alloc(Math.min(8 * 1024 * 1024, 16 * 1024 * 1024));
+    const read = readSync(fd, buf, 0, buf.length, 0);
+    const actual = createHash('sha256').update(buf.subarray(0, read)).digest('hex');
+    if (actual !== after.sha256) return '内容与冻结 after 不一致（任务定型后又被修改）';
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** 基线内容与项目内任一**更早定型**改动集的 after 一致 → 该「dirty」是任务链产出而非用户改动。 */
+function chainedToPriorSet(db: ZhongshuoDatabase, projectId: string, rowidOrder: number, projectRel: string, beforeSha: string): boolean {
+  const rows = db.prepare(`SELECT id FROM change_sets WHERE project_id = ? AND after_ref != '' AND rowid < ?`).all(projectId, rowidOrder) as Array<{ id: string }>;
+  for (const r of rows) {
+    const after = db.prepare(`SELECT sha256 FROM change_set_files WHERE change_set_id = ? AND role = 'after' AND path = ? LIMIT 1`).get(r.id, projectRel) as { sha256: string | null } | undefined;
+    if (after?.sha256 === beforeSha) return true;
+  }
+  return false;
+}
 
 // ---------- 提交内容绑定（第十一轮一：tree 身份 + 原子 CAS） ----------
 
@@ -587,22 +827,49 @@ export async function gitCommit(db: ZhongshuoDatabase, input: {
   const replay = replayIfReceipted<CommitOutcome>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
   const loc = await repoGuard(input.projectRoot);
-  // 既成事实①：操作日志已记录（回执丢失场景）——按日志重放结果。
-  const journaled = db.prepare('SELECT result_json FROM git_operations WHERE id = ?').get(input.journal.commandId) as { result_json: string } | undefined;
-  if (journaled != null) {
-    const result = JSON.parse(journaled.result_json) as CommitOutcome;
-    const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: { message: input.message, expectedHead: input.expectedHead }, result, headBefore: input.expectedHead, headAfter: result.commit, commitOid: result.commit });
-    return { ...persisted.data, recovered: true };
-  }
-  // 既成事实②：提交尾部标记命中（git 提交已发生、日志与回执均未落库的崩溃窗口）。
-  const trailerHit = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
-  if (trailerHit != null) {
-    const result: CommitOutcome = { commit: trailerHit.oid, headBefore: input.expectedHead, subject: trailerHit.subject, recovered: true };
-    const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: { message: input.message, expectedHead: input.expectedHead }, result, headBefore: input.expectedHead, headAfter: result.commit, commitOid: result.commit });
-    return persisted.data;
-  }
-  // 执行链（全程持仓库写锁）：预览比对 → 冻结 tree 构造提交 → update-ref CAS → 提交后核对。
+  const opRequest = { message: input.message, expectedHead: input.expectedHead, expectedTree: input.expectedIndexTree, branch: input.expectedBranch };
+  // 执行链（全程持仓库写锁）：持久意图 → 预览比对 → 冻结 tree 构造提交 → update-ref CAS →
+  // 提交后核对。意图行在副作用前落库（status=pending）——崩溃后重试按 pending 行核对既成事实。
   return withRepoWriteLock(loc.worktreeRoot, async () => {
+    // 崩溃重试核对（日志有、回执无）：done=重放结果；pending=按 HEAD/标记裁决。
+    const existing = getOperationRow(db, input.journal.commandId);
+    if (existing != null) {
+      requirePendingHashMatch(db, input.journal, existing);
+      if (existing.status === 'done') {
+        const result0 = JSON.parse(existing.result_json ?? '{}') as CommitOutcome;
+        const persisted0 = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, result: result0, headBefore: input.expectedHead, headAfter: result0.commit, commitOid: result0.commit });
+        return { ...persisted0.data, recovered: true };
+      }
+      // pending：HEAD 仍在预期父上=未执行（对象可能已建但未落 ref，安全重执行）；
+      // 尾标记命中=已执行（恢复结果）；两者皆非=外部推进——进人工核对，不自动执行。
+      const headCap0 = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+      const head0 = headCap0.exitCode === 0 && OID_RE.test(headCap0.stdout.toString('utf8').trim()) ? headCap0.stdout.toString('utf8').trim() : null;
+      if (head0 !== input.expectedHead) {
+        const trailerHit = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
+        if (trailerHit != null) {
+          const recoveredResult: CommitOutcome = { commit: trailerHit.oid, headBefore: input.expectedHead, subject: trailerHit.subject, recovered: true };
+          const persisted1 = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, result: recoveredResult, headBefore: input.expectedHead, headAfter: recoveredResult.commit, commitOid: recoveredResult.commit });
+          return persisted1.data;
+        }
+        throw new GitWriteError('STALE_REVISION', `中断重试核对：HEAD 已被外部推进（当前 ${head0 ?? '空'}）且无本次操作标记——进入人工核对；不自动重试、不回滚`);
+      }
+      // head0 === expectedHead：未执行——沿用 pending 行继续。
+    } else {
+      // 无日志行（第十轮遗留崩溃窗口/外部推进）：HEAD 已离开预期父时先按尾标记核对——
+      // 命中=我们的提交已落 ref（恢复）；否则如实按 HEAD 移动拒绝。
+      const headCapN = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
+      const headN = headCapN.exitCode === 0 && OID_RE.test(headCapN.stdout.toString('utf8').trim()) ? headCapN.stdout.toString('utf8').trim() : null;
+      if (headN !== input.expectedHead) {
+        const trailerHitN = await findCommitByTrailer(loc, input.journal.commandId, input.expectedHead);
+        if (trailerHitN != null) {
+          const recoveredN: CommitOutcome = { commit: trailerHitN.oid, headBefore: input.expectedHead, subject: trailerHitN.subject, recovered: true };
+          const persistedN = persistOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, result: recoveredN, headBefore: input.expectedHead, headAfter: recoveredN.commit, commitOid: recoveredN.commit });
+          return persistedN.data;
+        }
+      }
+      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'commit', taskId: input.taskId ?? null, changeSetIds: input.changeSetIds, request: opRequest, headBefore: input.expectedHead });
+    }
+    // --- 原执行链 ---
     assertWritable(db, input.projectId, input.projectRoot);
     // 预览不可提交（tree/分支为 null：冲突/detached/身份缺失/空暂存）——取完整 blockers 拒绝。
     if (input.expectedIndexTree == null || input.expectedBranch == null) {
