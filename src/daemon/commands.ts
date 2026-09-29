@@ -939,7 +939,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       case 'git.stageTask':
       case 'git.commit':
       case 'git.commitPreview':
-      case 'git.history': {
+      case 'git.history':
+      case 'git.remoteHead':
+      case 'git.branch.list':
+      case 'git.branch.create':
+      case 'git.checkout':
+      case 'git.commitDiff':
+      case 'git.push':
+      case 'git.pull':
+      case 'git.conflict.content':
+      case 'git.conflict.resolve':
+      case 'git.commit.undo': {
         // 第十轮·二：Git 写操作闭环（RT-24/§14.6/§15.2）。自包幂等（git_operations 日志+
         // 命令回执同事务；commit 另有尾部标记崩溃恢复），不经 run() 同步包装。
         // 边界：不做 reset --hard/rebase/强推；批量暂存跳过 userPreExisting；提交不改
@@ -999,6 +1009,71 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               taskId: params.taskId ?? null, changeSetIds: params.changeSetIds,
               journal,
             });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.remoteHead') {
+            const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200) }).parse(env.params);
+            const { remoteHead } = await import('./gitWrite.ts');
+            const locProj = { canonicalPath: gitProject.canonical_path };
+            const { locateRepo } = await import('./gitStatus.ts');
+            const loc = await locateRepo(locProj.canonicalPath);
+            const head = await remoteHead(loc, params.remote, params.branch);
+            return withCommandId({ ok: true, data: { remote: params.remote, branch: params.branch, head } });
+          }
+          if (env.method === 'git.branch.list') {
+            const { gitBranchList } = await import('./gitWrite.ts');
+            const data = await gitBranchList({ projectId: gitProjectId, projectRoot: gitProject.canonical_path });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.branch.create') {
+            const params = z.strictObject({ projectId: z.string().min(1), name: z.string().min(1).max(200), expectedHead: z.string().min(4).max(64).nullable() }).parse(env.params);
+            const { gitBranchCreate } = await import('./gitWrite.ts');
+            const data = await gitBranchCreate(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.checkout') {
+            const params = z.strictObject({ projectId: z.string().min(1), branch: z.string().min(1).max(200), expectedHead: z.string().min(4).max(64).nullable(), expectedBranch: z.string().min(1).max(200) }).parse(env.params);
+            const { gitCheckout } = await import('./gitWrite.ts');
+            const data = await gitCheckout(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.commitDiff') {
+            const params = z.strictObject({ projectId: z.string().min(1), oid: z.string().regex(/^[0-9a-f]{40}$/) }).parse(env.params);
+            const { gitCommitDiff } = await import('./gitWrite.ts');
+            const data = await gitCommitDiff(deps.db, { ...params, projectRoot: gitProject.canonical_path });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.push') {
+            // 推送绑定用户确认的远端/分支/两端头（§14.6 风险告知；仅快进，不强推）。
+            const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200), expectedHead: z.string().regex(/^[0-9a-f]{40}$/), expectedRemoteHead: z.string().regex(/^[0-9a-f]{40}$/).nullable() }).parse(env.params);
+            const { gitPush } = await import('./gitWrite.ts');
+            const data = await gitPush(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.pull') {
+            const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200), expectedHead: z.string().regex(/^[0-9a-f]{40}$/) }).parse(env.params);
+            const { gitPull } = await import('./gitWrite.ts');
+            const data = await gitPull(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.conflict.content') {
+            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400) }).parse(env.params);
+            const { gitConflictContent } = await import('./gitWrite.ts');
+            const data = await gitConflictContent({ ...params, projectRoot: gitProject.canonical_path });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.conflict.resolve') {
+            // 三方内容+手动解决（§14.6：不提供整文件一键用某边覆盖——只接受用户提交的内容）。
+            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400), content: z.string().max(4 * 1024 * 1024) }).parse(env.params);
+            const { gitConflictResolve } = await import('./gitWrite.ts');
+            const data = await gitConflictResolve(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.commit.undo') {
+            // reflog 软回退（§14.6）：内容回工作区、文件不删；只允许撤销当前 HEAD 提交。
+            const params = z.strictObject({ projectId: z.string().min(1), commitOid: z.string().regex(/^[0-9a-f]{40}$/), expectedHead: z.string().regex(/^[0-9a-f]{40}$/) }).parse(env.params);
+            const { gitCommitUndo } = await import('./gitWrite.ts');
+            const data = await gitCommitUndo(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
           }
           const historyParams = z.strictObject({ projectId: z.string().min(1), limit: z.number().int().min(1).max(200).optional(), cursor: z.number().int().min(0).optional() }).parse(env.params);

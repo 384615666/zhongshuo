@@ -69,6 +69,9 @@ window.__t = {
   gitCommitMsg: (text) => { const i = document.getElementById('git-commit-message'); if (i == null) return false; i.value = text; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
   gitCommitPreviewText: () => document.getElementById('git-commit-preview')?.textContent ?? null,
   gitHistoryText: () => document.getElementById('git-history-block')?.textContent ?? null,
+  gitBranchFill: (name) => { const i = document.getElementById('git-branch-name'); if (i == null) return false; i.value = name; i.dispatchEvent(new Event('input', { bubbles: true })); return true; },
+  gitBranchSelect: (name) => { const sel = document.getElementById('git-branch-select'); if (sel == null) return false; sel.value = name; sel.dispatchEvent(new Event('change', { bubbles: true })); return sel.value === name; },
+  commitDiffText: () => document.querySelector('[id^="commitdiff-"]')?.textContent ?? null,
   toggleTaskReview: () => { const d = document.getElementById('project-settings'); if (d != null) d.open = true; const b = document.getElementById('task-review-toggle'); if (b == null) return false; b.click(); return true; },
   taskReviewToggleLabel: () => document.getElementById('task-review-toggle')?.textContent ?? null,
   reworkRowVisible: () => !document.getElementById('rework-note-row')?.classList.contains('hidden'),
@@ -892,6 +895,39 @@ describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（f
     ]);
     expect(task.status).toBe('DONE');
   }, 180_000);
+
+  it('RT-24 UI：建分支（HEAD 绑定）→ 切换（改动随行）→ 历史 diff 展开（parents/正文）', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14f'), runtime: 'fake' });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    const g = (...args: string[]): void => { execFileSync('git', ['-C', projDir, ...args], { timeout: 15_000 }); };
+    g('init', '-q');
+    g('config', 'user.email', 'e2e@t'); g('config', 'user.name', 'e2e');
+    g('config', 'core.autocrlf', 'false');
+    writeFileSync(join(projDir, 'base.txt'), 'base\n', 'utf8');
+    g('add', '.'); g('commit', '-q', '-m', 'init');
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<string>('gitOpsText').then((t) => (t ?? '').includes('Git 操作')), 30_000, 'Git 操作区渲染');
+    // 建分支（绑定当前 HEAD，不切换）。
+    expect(await call<boolean>('gitBranchFill', 'feature-e2e')).toBe(true);
+    expect(await call<boolean>('gitOpsClick', '建分支')).toBe(true);
+    await waitFor(() => call<string>('gitOpsSay').then((t) => (t ?? '').includes('已创建分支 feature-e2e')), 30_000, '分支创建反馈');
+    // 未提交改动 → 切换（不自动 stash，改动随行）。
+    writeFileSync(join(projDir, 'base.txt'), 'dirty\n', 'utf8');
+    expect(await call<boolean>('gitBranchSelect', 'feature-e2e')).toBe(true);
+    expect(await call<boolean>('gitOpsClick', '切换分支')).toBe(true);
+    await waitFor(() => call<string>('gitOpsSay').then((t) => (t ?? '').includes('未提交改动 1 项随行')), 30_000, '切换反馈（改动随行）');
+    // 历史 diff 展开：parents/正文。
+    expect(await call<boolean>('gitOpsClick', '查看提交历史')).toBe(true);
+    await waitFor(() => call<string>('gitHistoryText').then((t) => (t ?? '').includes('init')), 30_000, '历史渲染');
+    expect(await call<boolean>('gitOpsClick', 'diff')).toBe(true);
+    await waitFor(() => call<string>('commitDiffText').then((t) => (t ?? '').includes('parents:')), 30_000, 'diff 详情展开');
+    expect(await call<string>('commitDiffText')).toContain('diff --git'); // 共享 projDir：首条历史为最近提交（含正文）
+  }, 150_000);
 
   it('可选验收（RT-25）：REVIEW 任务验收通过 → 交付 accepted、任务 DONE；重复验收入口收起（Git 提交不等同验收）', async () => {
     const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14b'), runtime: 'fake' });

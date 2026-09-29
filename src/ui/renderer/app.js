@@ -822,6 +822,12 @@ async function refreshGitViews() {
   await renderGitOps(true).catch(() => { /* 操作区失败不阻断主池 */ });
 }
 
+/** 当前 HEAD（轻量：history limit=1 的 head 字段）。 */
+async function currentHeadOfRepo() {
+  const h = await command('git.history', { projectId: state.projectId, limit: 1 });
+  return h.head;
+}
+
 /** Git 操作区：暂存/取消暂存（普通按文件）+按任务批量+提交（预览绑定）+历史。
  * 轮询不重复重建（按项目戳记）；写操作后 force 重建（重建保留提交说明/任务选择）。 */
 async function renderGitOps(force = false) {
@@ -993,6 +999,147 @@ async function renderGitOps(force = false) {
   commitRow.append(previewBtn, doBtn);
   box.append(commitRow, previewBox);
 
+  // 分支（第十一轮·三）：列表/创建/切换——创建与切换绑定当前 HEAD（变化即拒绝）。
+  const branchRow = document.createElement('div');
+  branchRow.className = 'git-row';
+  const branchSelect = document.createElement('select');
+  branchSelect.className = 'git-input';
+  branchSelect.id = 'git-branch-select';
+  branchRow.appendChild(branchSelect);
+  const branchNameInput = document.createElement('input');
+  branchNameInput.className = 'git-input';
+  branchNameInput.id = 'git-branch-name';
+  branchNameInput.placeholder = '新分支名…';
+  branchRow.appendChild(branchNameInput);
+  const branchRefresh = async () => {
+    const b = await command('git.branch.list', { projectId: state.projectId });
+    branchSelect.innerHTML = '';
+    for (const item of b.branches) {
+      const opt = document.createElement('option');
+      opt.value = item.name;
+      opt.textContent = `${item.name}${item.name === b.current ? '（当前）' : ''}`;
+      branchSelect.appendChild(opt);
+    }
+    if (b.current != null) branchSelect.value = b.current;
+    return b;
+  };
+  await branchRefresh();
+  const mkRowBtn = (label, titleText, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = label;
+    if (titleText != null) b.title = titleText;
+    b.onclick = () => void onClick().catch((error) => { say(`${label}失败：${error.message}`); });
+    branchRow.appendChild(b);
+    return b;
+  };
+  mkRowBtn('建分支', '在当前 HEAD 创建分支（不切换；HEAD 与确认一致才创建）', async () => {
+    const name = branchNameInput.value.trim();
+    if (name === '') { say('请填写新分支名。'); return; }
+    const r = await command('git.branch.create', { projectId: state.projectId, name, expectedHead: await currentHeadOfRepo() });
+    await branchRefresh();
+    say(`已创建分支 ${r.name}（未切换）`);
+    branchNameInput.value = '';
+  });
+  mkRowBtn('切换分支', '切换到所选分支；未提交改动随行（不自动 stash，冲突时 git 拒绝并如实报错）', async () => {
+    const target = branchSelect.value;
+    if (target === '') { say('请选择目标分支。'); return; }
+    const b = await command('git.branch.list', { projectId: state.projectId });
+    if (b.current === target) { say(`当前就在 ${target}。`); return; }
+    const head = await currentHeadOfRepo();
+    const r = await command('git.checkout', { projectId: state.projectId, branch: target, expectedHead: head, expectedBranch: b.current });
+    await refreshGitViews();
+    say(`已切换到 ${r.branch}（未提交改动 ${r.carriedDirtyCount} 项随行——不自动 stash）`);
+  });
+  box.appendChild(branchRow);
+
+  // 远端（第十一轮·三）：推送/拉取绑定两端头（仅快进；凭据失败如实报错不改配置）。
+  const remoteRow = document.createElement('div');
+  remoteRow.className = 'git-row';
+  const remoteInput = document.createElement('input');
+  remoteInput.className = 'git-input';
+  remoteInput.id = 'git-remote-name';
+  remoteInput.value = 'origin';
+  remoteInput.title = '远端名（git remote 配置的名称）';
+  remoteRow.appendChild(remoteInput);
+  const remoteBtn = (label, titleText, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = label;
+    b.title = titleText;
+    b.onclick = () => void onClick().catch((error) => { say(`${label}失败：${error.message}`); });
+    remoteRow.appendChild(b);
+  };
+  remoteBtn('推送', '推送当前分支到远端（仅快进、不强推；绑定本地 HEAD 与远端当前头，任一变化即拒绝）', async () => {
+    const remote = remoteInput.value.trim();
+    const b = await command('git.branch.list', { projectId: state.projectId });
+    const head = await currentHeadOfRepo();
+    const rh = await command('git.remoteHead', { projectId: state.projectId, remote, branch: b.current });
+    const r = await command('git.push', { projectId: state.projectId, remote, branch: b.current, expectedHead: head, expectedRemoteHead: rh.head });
+    say(`已推送 ${b.current}：${(r.from ?? '（空）').slice(0, 8)} → ${r.to.slice(0, 8)}（远端 ${remote}）`);
+  });
+  remoteBtn('拉取', '快进拉取当前分支（分叉时不自动合并——如实拒绝，请人工处理）', async () => {
+    const remote = remoteInput.value.trim();
+    const b = await command('git.branch.list', { projectId: state.projectId });
+    const head = await currentHeadOfRepo();
+    const r = await command('git.pull', { projectId: state.projectId, remote, branch: b.current, expectedHead: head });
+    await refreshGitViews();
+    say(`已拉取 ${r.pulledCount} 个提交 → ${r.to.slice(0, 8)}（远端 ${remote}）`);
+  });
+  box.appendChild(remoteRow);
+
+  // 冲突解决（第十一轮·三）：未合并路径的三方查看+手动内容提交（无整文件一键覆盖）。
+  const conflicted = [...new Set((status.staged ?? []).filter((e) => (e.xy[0] === 'U' || e.xy[1] === 'U' || e.xy === 'AA' || e.xy === 'DD')).map((e) => e.path))];
+  if (conflicted.length > 0) {
+    const conTitle = document.createElement('div');
+    conTitle.className = 'meta';
+    conTitle.textContent = `冲突未解决（${conflicted.length} 个路径）——查看三方内容后手动提交解决文本：`;
+    box.appendChild(conTitle);
+    for (const path of conflicted) {
+      mkBtn(`三方内容 ${wrapPath(path)}`, 'base / ours / theirs 三方内容（只读）', async () => {
+        const tri = await command('git.conflict.content', { projectId: state.projectId, path });
+        const existing = document.getElementById(`conflict-block-${path}`);
+        if (existing != null) { existing.remove(); return; }
+        const block = document.createElement('div');
+        block.id = `conflict-block-${path}`;
+        block.className = 'diff-block';
+        const mkPart = (label, text) => {
+          const h = document.createElement('div');
+          h.className = 'meta';
+          h.textContent = `〔${label}〕${text == null ? '（该侧无内容）' : ''}`;
+          block.appendChild(h);
+          if (text != null) {
+            const pre = document.createElement('div');
+            pre.className = 'diff-text';
+            pre.textContent = text;
+            block.appendChild(pre);
+          }
+        };
+        mkPart('base 共同祖先', tri.base);
+        mkPart('ours 本方', tri.ours);
+        mkPart('theirs 对方', tri.theirs);
+        const area = document.createElement('textarea');
+        area.className = 'git-input';
+        area.id = `conflict-resolve-${path}`;
+        area.style.width = '100%';
+        area.rows = 4;
+        area.placeholder = '在此填写解决后的完整文件内容（手动合并；不提供整文件一键用某边覆盖）';
+        const submit = document.createElement('button');
+        submit.className = 'chip';
+        submit.textContent = `提交解决 ${wrapPath(path)}`;
+        submit.onclick = () => void (async () => {
+          const content = area.value;
+          if (content === '') { say('解决内容为空——如需删除该文件请用你自己的 git 客户端处理。'); return; }
+          await command('git.conflict.resolve', { projectId: state.projectId, path, content });
+          await refreshGitViews();
+          say(`已解决冲突：${path}（写入内容并暂存）`);
+        })().catch((error) => { say(`解决失败：${error.message}`); });
+        block.append(area, submit);
+        box.appendChild(block);
+      });
+    }
+  }
+
   // 历史：按钮 + 列表（任务关联来自本产品操作日志——外部提交不虚构归属）。
   mkBtn('查看提交历史', '最近提交与任务/改动集关联（只展示关联，不表示整提交已人工审阅）', async () => {
     const existing = document.getElementById('git-history-block');
@@ -1004,8 +1151,58 @@ async function renderGitOps(force = false) {
     if (h.items.length === 0) {
       block.textContent = '（无提交历史）';
     } else {
-      const lines = h.items.map((item) => `${item.oid.slice(0, 8)} ${new Date(item.timestamp * 1000).toLocaleString()} ${item.subject}${item.taskIds.length > 0 ? `〔关联任务 ${item.taskIds.join('、')}〕` : ''}`);
-      block.textContent = lines.join('\n');
+      block.innerHTML = '';
+      for (const item of h.items) {
+        const line = document.createElement('div');
+        line.className = 'git-row';
+        const label = document.createElement('span');
+        label.textContent = `${item.oid.slice(0, 8)} ${new Date(item.timestamp * 1000).toLocaleString()} ${item.subject}${item.taskIds.length > 0 ? `〔关联任务 ${item.taskIds.join('、')}〕` : ''}`;
+        line.appendChild(label);
+        const diffBtn = document.createElement('button');
+        diffBtn.className = 'chip';
+        diffBtn.textContent = 'diff';
+        diffBtn.title = '单提交聚合差异（parents/关联/正文；merge 提交只注记）';
+        diffBtn.onclick = () => void (async () => {
+          const ex = document.getElementById(`commitdiff-${item.oid}`);
+          if (ex != null) { ex.remove(); return; }
+          const d = await command('git.commitDiff', { projectId: state.projectId, oid: item.oid });
+          const sub = document.createElement('div');
+          sub.id = `commitdiff-${item.oid}`;
+          sub.className = 'diff-block';
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = `parents: ${d.commit.parents.map((p2) => p2.slice(0, 8)).join('、') || '（根提交）'} · ${d.commit.authorName}${d.mergeNote != null ? ` · ${d.mergeNote}` : ''}`;
+          sub.appendChild(meta);
+          const CHANGE = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名', copied: '复制' };
+          for (const patch of d.patches) {
+            const ph = document.createElement('div');
+            ph.className = 'meta';
+            ph.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+            sub.appendChild(ph);
+            if (!patch.binary && patch.text.length > 0) {
+              const pre = document.createElement('div');
+              pre.className = 'diff-text';
+              pre.textContent = patch.text;
+              sub.appendChild(pre);
+            }
+          }
+          box.appendChild(sub);
+        })().catch((error) => { say(`diff 查看失败：${error.message}`); });
+        line.appendChild(diffBtn);
+        if (item.oid === h.head) {
+          const undoBtn = document.createElement('button');
+          undoBtn.className = 'chip';
+          undoBtn.textContent = '撤销此提交（软回退）';
+          undoBtn.title = '仅限当前 HEAD 提交：内容回工作区、文件不删（reset --mixed 语义；不做任何历史改写/强推）';
+          undoBtn.onclick = () => void (async () => {
+            const r = await command('git.commit.undo', { projectId: state.projectId, commitOid: item.oid, expectedHead: item.oid });
+            await refreshGitViews();
+            say(`已软回退到 ${r.to.slice(0, 8)}（${r.movedToUnstaged} 项改动回到未暂存；文件未删除）`);
+          })().catch((error) => { say(`撤销失败：${error.message}`); });
+          line.appendChild(undoBtn);
+        }
+        block.appendChild(line);
+      }
     }
     box.appendChild(block);
   });
