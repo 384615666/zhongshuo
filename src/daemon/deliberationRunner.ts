@@ -11,6 +11,7 @@
  * 预算（E12）：派发前核对 stageAvailableTurns；尾部派发先占用 S/Q；
  * 结算/未启动取消退款走同一套账（budget_json 单一真源）；耗尽后不再调用模型。
  */
+import { authorizedFileListing } from './fileDiscovery.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -853,7 +854,7 @@ function renderStageBody(
   runId: string,
   taskId: string,
   step: DelibStep,
-  task: { id: string; title: string; objective: string | null; root_message_id: string | null },
+  task: { id: string; title: string; objective: string | null; root_message_id: string | null; project_id: string },
   roster: FrozenRoster,
 ): string {
   const rootText = task.root_message_id != null
@@ -861,8 +862,14 @@ function renderStageBody(
     : '';
   const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}`;
   if (step.stage === 'IND') {
-    // 隔离：不含任何他人草稿（此刻也不读取）。
-    return `${base}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
+    // 隔离：不含任何他人草稿（此刻也不读取）。文件发现=经授权清单（两模式一致规则，第六轮：
+    // 修复 C 组「文件名不可发现+工具面认知差」；清单只含项目根内文件，生成失败不阻断）。
+    const projectRootRow = db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.project_id) as { canonical_path: string } | undefined;
+    const listing = projectRootRow != null ? authorizedFileListing(projectRootRow.canonical_path) : null;
+    const listingBlock = listing != null
+      ? `\n\n【文件发现（经授权的清单，程序侧提供）】可直接按相对路径读取的文件（排除 .git；${listing.files.length} 项${listing.truncated ? '，达上限已截断' : ''}）：\n${listing.files.join('\n')}\n清单完整性：${listing.integrityNote}`
+      : '';
+    return `${base}${listingBlock}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
   }
   if (step.stage === 'CR') {
     // 冻结清单约束：只读 CROSS_REVIEW 冻结版本中的初稿（迟到初稿不改任何同轮成员材料）。

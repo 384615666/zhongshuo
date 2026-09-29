@@ -319,8 +319,20 @@ export class DispatchWorker {
     };
 
     // 输入组装（DEV-21-M0）：必要材料缺失/敏感命中 → 组装失败，不建 run、不派发。
+    // 格式修复上下文（第六轮）：formatRepair redispatch 的修复前言（原输出+校验错误）随
+    // 组装注入；消费即删（一次修复一次生效——崩溃残留只会让幂等前言重复出现，不放大修复次数，
+    // 命令侧的结构化「每任务一次」守卫不变）。
+    const repairRaw = this.kvGet(`direct:repair:${taskId}`);
+    let repairContext: { originalTurnId: string; issues: string[]; originalText: string } | undefined;
+    if (repairRaw != null && claimed.dispatch_key.endsWith(':redispatch')) {
+      try {
+        repairContext = JSON.parse(repairRaw) as { originalTurnId: string; issues: string[]; originalText: string };
+        this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(`direct:repair:${taskId}`);
+      } catch { /* 损坏上下文不阻断派发——按普通 redispatch 执行并留原键待查 */ }
+    }
     const assembled = assembleDirectTurn({
       db: this.db,
+      repairContext,
       task: {
         id: task.id,
         projectId: task.project_id,
@@ -1149,17 +1161,34 @@ export class DispatchWorker {
           }
           // 输出合同校验（修复轮）：finalText 必须是合法 TaskComplete 且 resultKey 匹配本 turn。
           // 非法输出（空/散文/缺项/错版本/错 resultKey）走 OUTPUT_INVALID：不产生交付、不 DONE/REVIEW，
-          // 原稿保留（消息已入库），任务回 ACTIVE；有限修复 turn 随调度器扩展（规格 §4.5）。
-          const finalText = event.finalText ?? '';
+          // 原稿保留（消息已入库）。首 turn 失败→任务回 ACTIVE（可有限修复）；**修复 turn
+          // （redispatch）再失败→BLOCKED（修复耗尽，预算不再允许派发——不能在界面持续表现为
+          // 可执行/正在执行，第六轮收口）**。
+          const finalTextRaw = event.finalText ?? '';
+          // 单层围栏规范化（第六轮，边界严格）：仅当围栏包裹**整个**文本（```json?\n…\n```）
+          // 才剥壳后走同一严格 schema；围栏外还有正文/截取首个 JSON 段/删未知字段一律不做。
+          const { text: finalText, normalized } = stripSingleJsonFence(finalTextRaw);
+          if (normalized) {
+            this.audit(task, runId, turnId, 'turn.outputNormalized', {
+              originalLength: finalTextRaw.length, normalizedLength: finalText.length,
+              rule: 'strip-single-fence-wrapping-entire-text; same strict schema after',
+            });
+          }
           const contract = this.validateTaskCompleteOutput(finalText, `result_${turnId}`);
           if (!contract.ok) {
             this.casTurn(turnId, 'FAILED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
             this.settleBudget(runId);
-            this.transitionTask(task.id, 'ACTIVE');
+            const isRepairTurn = (this.db.prepare('SELECT dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { dispatch_key: string | null })?.dispatch_key?.endsWith(':redispatch') === true;
+            if (isRepairTurn) {
+              this.transitionTask(task.id, 'BLOCKED');
+              this.audit(task, runId, turnId, 'task.statusChanged', { status: 'BLOCKED', reason: 'direct-repair-exhausted' });
+            } else {
+              this.transitionTask(task.id, 'ACTIVE');
+            }
             this.audit(task, runId, turnId, 'turn.outputInvalid', {
               issues: contract.issues,
-              rawLength: finalText.length,
+              rawLength: finalTextRaw.length,
             });
             return;
           }
@@ -1470,4 +1499,18 @@ function parseInitialTaskId(dispatchKey: string): string | null {
 
 function isTurnTerminalStatus(status: string): boolean {
   return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status);
+}
+
+/**
+ * 单层围栏规范化（第六轮）：仅当 **整个** 文本被一对 ```（或 ```json）围栏包裹时剥壳；
+ * 剥壳后走同一严格 schema 校验（不截取首个 JSON 段、不删未知字段、不伪造必填值、
+ * 不放松 resultKey）。其余形态（围栏外有正文、散文、多重包裹内容物）原样返回。
+ */
+export function stripSingleJsonFence(text: string): { text: string; normalized: boolean } {
+  const FENCE_RE = /^```[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```[ \t]*$/;
+  const m = FENCE_RE.exec(text);
+  if (m == null) return { text, normalized: false };
+  const inner = m[1] ?? '';
+  if (inner.includes('```')) return { text, normalized: false }; // 内部还有围栏=非单层包裹，不剥
+  return { text: inner, normalized: true };
 }

@@ -576,7 +576,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // DIRECT 追加 turn（跟进/格式修复）：经 outbox 正式编排（worker 领取→准入→成员绑定
         // adapter），不绕过产品链路直调 CLI。前置：任务存在、非终态、stop_generation=0、
         // 无在途 turn（防止并发双派）；同 (taskId, 在途) 语义下重复调用幂等拒绝。
-        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional() }).parse(env.params);
+        // formatRepair:true=**合同内一次格式修复**（第六轮）：仅当上一 turn FAILED 且存在
+        // turn.outputInvalid；每任务至多一次；修复上下文（原输出全文+校验错误）注入下一 turn
+        // 输入（组装侧），审计绑定原 turn——不是无反馈的"重跑"。
+        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional() }).parse(env.params);
         const result = run(() => {
           const task = deps.db
             .prepare('SELECT id, status, stop_generation FROM tasks WHERE id = ?')
@@ -593,6 +596,36 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
             .get(`task:${params.taskId}:redispatch`) as { c: number };
           if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
+          // formatRepair 守卫：上一 turn FAILED+outputInvalid 存在；每任务一次（结构化强制——
+          // 「每份逻辑输出最多一次修复」不再只靠调用方纪律）。
+          if (params.formatRepair === true) {
+            const priorRepair = deps.db
+              .prepare(`SELECT count(*) c FROM domain_events WHERE kind = 'task.redispatchEnqueued' AND task_id = ? AND payload_json LIKE '%"formatRepair":true%'`)
+              .get(params.taskId) as { c: number };
+            if (priorRepair.c > 0) throw new DaemonCommandError('STALE_REVISION', '该任务已用过一次格式修复（每份逻辑输出最多一次）');
+            const lastTurn = deps.db
+              .prepare(`SELECT id, status FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%' ORDER BY rowid DESC LIMIT 1`)
+              .get(params.taskId) as { id: string; status: string } | undefined;
+            if (lastTurn == null || lastTurn.status !== 'FAILED') {
+              throw new DaemonCommandError('STALE_REVISION', `格式修复仅适用于上一 turn FAILED（实际：${lastTurn?.status ?? '无 turn'}）`);
+            }
+            const invalid = deps.db
+              .prepare(`SELECT payload_json FROM domain_events WHERE kind = 'turn.outputInvalid' AND task_id = ? ORDER BY seq DESC LIMIT 1`)
+              .get(params.taskId) as { payload_json: string } | undefined;
+            if (invalid == null) throw new DaemonCommandError('STALE_REVISION', '未找到 outputInvalid 证据：不构成格式修复条件');
+            const lastAgentMsg = deps.db
+              .prepare(`SELECT body_json FROM messages WHERE task_id = ? AND author_type = 'agent' ORDER BY rowid DESC LIMIT 1`)
+              .get(params.taskId) as { body_json: string } | undefined;
+            // 修复上下文（组装侧注入下一 turn 输入）：原输出全文+校验错误——不截短、不删字段。
+            deps.db.prepare(
+              `INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+            ).run(`direct:repair:${params.taskId}`, JSON.stringify({
+              originalTurnId: lastTurn.id,
+              issues: (JSON.parse(invalid.payload_json) as { issues: string[] }).issues,
+              originalText: lastAgentMsg != null ? (JSON.parse(lastAgentMsg.body_json) as { text?: string }).text ?? '' : '',
+            }), Date.now());
+          }
           deps.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(`task:${params.taskId}:redispatch`);
           appendDomainEvent(deps.db, {
             schemaVersion: 1,
@@ -601,9 +634,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             taskId: params.taskId,
             kind: 'task.redispatchEnqueued',
             createdAt: Date.now(),
-            payload: { reason: params.reason ?? 'manual-redispatch' },
+            payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true },
           });
-          return { enqueued: true as const, dispatchKey: `task:${params.taskId}:redispatch` };
+          return { enqueued: true as const, dispatchKey: `task:${params.taskId}:redispatch`, formatRepair: params.formatRepair === true };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

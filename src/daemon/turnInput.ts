@@ -18,6 +18,7 @@ import {
   turnBundleEnvelopeSchema,
 } from '../contracts/prompts.ts';
 import type { TurnBundleEnvelope } from '../contracts/prompts.ts';
+import { authorizedFileListing } from './fileDiscovery.ts';
 import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
 export interface AssemblyTaskRef {
@@ -45,6 +46,11 @@ export interface AssembledTurnInput {
   identity: AssemblyIdentity;
   turnId: string;
   budget: BudgetState;
+  /**
+   * 格式修复上下文（第六轮，task.redispatch formatRepair:true）：原输出全文+校验错误注入
+   * 下一 turn 输入附注——修复与原逻辑输出正确绑定（不是无反馈重跑）；不截短原内容。
+   */
+  repairContext?: { originalTurnId: string; issues: string[]; originalText: string };
 }
 
 export interface AssembledTurn {
@@ -77,6 +83,9 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     return assemblyFailure('empty-root-message', '根消息正文为空');
   }
+
+  const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
+  const fileDiscovery = projectRoot != null ? authorizedFileListing(projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
   const history = db
@@ -157,6 +166,19 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       truncated: false,
       messages: historyTexts,
     },
+    // 文件发现（经授权清单，第六轮）：项目根存在时注入；生成失败不加键（不阻断派发）。
+    ...(fileDiscovery != null ? { fileDiscovery } : {}),
+    // 格式修复附注：仅在修复轮存在该键（显式 undefined 会改变 canonicalJson 键集——
+    // 非修复轮的信封必须与既有 hash 完全一致）。
+    ...(input.repairContext != null ? {
+      notes: [
+        '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
+        JSON.stringify(input.repairContext.issues),
+        `上一轮原始输出（turn=${input.repairContext.originalTurnId}，全文保留）：`,
+        input.repairContext.originalText,
+        '修复要求：按输出契约重新提交完整 TaskComplete——分析结论/清单完整放入 changeSummary（不要缩短或删除内容）；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
+      ],
+    } : {}),
     outputContract: {
       kind: 'TaskComplete',
       submitVia: 'final-result',

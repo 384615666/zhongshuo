@@ -213,6 +213,18 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     mentionEnabled: z.literal(false),
     disabledReason: z.string(),
   }),
+  /**
+   * 文件发现（第六轮，后续版本能力——不倒改已跑批次条件）：程序侧提供的**经授权文件清单**
+   * （受限范围：项目根下、排除 .git、条数上限、截断/扫描破口如实标注）。两模式在分析入口轮
+   * 采用一致规则——修复 C 组「文件名不可发现+工具面认知差」；不暴露其他任务成果/评分答案/
+   * 未授权文件（清单只含项目根内文件）。
+   */
+  fileDiscovery: z.strictObject({
+    policy: z.literal('authorized-listing'),
+    files: z.array(z.string().min(1)),
+    truncated: z.boolean(),
+    integrityNote: z.string(),
+  }).optional(),
   notes: z.array(z.string()).optional(),
 });
 
@@ -275,8 +287,15 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
   lines.push(
-    `最终结果必须是一个 JSON 对象（仅此对象，作为最后一条消息）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","changeSummary":"一句话说明完成了什么","files":["涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
+    `最终结果必须是一个 JSON 对象（仅此对象，作为最后一条消息，不要放进 Markdown 代码围栏）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","changeSummary":"完成内容摘要：分析类任务的全部结论/清单正文完整放在本字段（带依据逐条列出，不要为字段名或长度缩短内容）","files":["涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
   );
+  lines.push('严格 schema：除上述字段外不得新增任何字段（未知键将被拒绝）；resultKey 必须逐字使用上方给定值。');
+  if (envelope.fileDiscovery != null) {
+    lines.push('── 文件发现（经授权的清单，程序侧提供）──');
+    lines.push(`项目工作目录内可按相对路径直接读取的文件（范围受限；排除 .git；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
+    lines.push(envelope.fileDiscovery.files.join('\n'));
+    lines.push(`清单完整性：${envelope.fileDiscovery.integrityNote}`);
+  }
   lines.push('── 协作接口 ──');
   lines.push(`结构化 mention 未开放：${envelope.communicationContract.disabledReason}；可报告协作需求，不能宣称已唤醒`);
   if (envelope.notes != null && envelope.notes.length > 0) {
