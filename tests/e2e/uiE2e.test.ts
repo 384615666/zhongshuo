@@ -51,6 +51,10 @@ window.__t = {
   recoveryProbeResult: (turnId) => document.querySelector('#recovery-panel .recovery-row[data-turn-id="' + turnId + '"] .recovery-probe-result')?.textContent ?? null,
   recoveryOrphan: () => [...document.querySelectorAll('#recovery-panel .recovery-facts')].map((e) => e.textContent ?? '').find((t) => t.includes('遗留保护')) ?? null,
   recoveryError: () => document.querySelector('#recovery-panel .recovery-error')?.textContent ?? null,
+  orphanRows: () => [...document.querySelectorAll('#recovery-panel .recovery-orphan-row')].map((r) => ({ turnId: r.dataset.turnId ?? '', text: r.textContent ?? '' })),
+  orphanRelease: (turnId) => { const b = [...document.querySelectorAll('#recovery-panel .recovery-orphan-row[data-turn-id="' + turnId + '"] button')].find((x) => (x.textContent ?? '').includes('继续核对并解除')); if (b == null) return false; b.click(); return true; },
+  changeSetRows: () => [...document.querySelectorAll('#changeset-block .changeset-row')].map((r) => r.textContent ?? ''),
+  changeSetBlockVisible: () => document.getElementById('changeset-block') != null,
   confirmYes: () => { window.confirm = () => true; return true; },
   stopDisabled: () => document.getElementById('stop-btn')?.disabled ?? true,
   threadStatus: () => document.getElementById('thread-status')?.textContent ?? '',
@@ -615,11 +619,77 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
       expect(rowsAfter.some((x) => x.turnId === 'turn_e2e_exec_unknown')).toBe(true); // 保护保留：不提前收口
       const factsAfter = await call<string>('recoveryFacts', 'turn_e2e_exec_unknown');
       expect(factsAfter).toContain('保留保护'); // 界面如实说明原因
+      // 收口第三 turn（补交退出证据路径）：登记 none 模型后再次「对账：已执行」→
+      // 程序事实（无 OS 遗留进程）→ FAILED+占位解除——后续开闸用例的新调度可派发。
+      const dbFix = openDatabase(dbFile);
+      dbFix.prepare(`INSERT OR REPLACE INTO runtime_process_registry (turn_id, run_id, member_id, adapter_kind, process_model, pid, started_at_ms, identity_source, registered_at) VALUES (?, ?, ?, 'fake', 'none', NULL, NULL, 'none', ?)`)
+        .run('turn_e2e_exec_unknown', ghostRunId, e2eMemberId, Date.now());
+      dbFix.close();
+      await call('recoverySetNote', 'turn_e2e_exec_unknown', '补交退出证据（none 程序事实）');
+      await call('recoveryClick', 'turn_e2e_exec_unknown', '对账：已执行');
+      await waitFor(async () => {
+        const r = await call<Array<{ turnId: string }>>('recoveryRows');
+        return !r.some((x) => x.turnId === 'turn_e2e_exec_unknown') ? ['gone'] : null;
+      }, 30_000, '补交证据后第三 turn 收口');
+
+      // ===== 恢复面闭环（第七轮·补）：遗留保护「继续核对并解除」全链 =====
+      // ghost（无登记→identity-missing）：解除被拒——查询不可确认仍保留保护，界面如实说明。
+      expect(await call<boolean>('orphanRelease', ghostTurnId)).toBe(true);
+      const denied = await waitFor(async () => {
+        const t = await call<string>('recoveryError');
+        return t != null ? t : null;
+      }, 30_000, '解除被拒的错误行出现');
+      expect(denied).toContain('解除被拒');
+      expect(denied).toContain('identity-missing');
+      expect((await call<Array<{ turnId: string }>>('orphanRows')).some((r) => r.turnId === ghostTurnId)).toBe(true); // 行仍在
+      // 崩溃 turn（已 FAILED+settled=预算已处置）：补一条租约构成「保护待解除」样本，经正式入口解除。
+      const db3 = openDatabase(dbFile);
+      db3.prepare(`INSERT OR REPLACE INTO workspace_leases (lock_domain, owner_turn_id, epoch, heartbeat_at, status) VALUES ('d:/e2e-crashed-lease', ?, 1, 0, 'active')`).run(crashedId);
+      db3.close();
+      await waitFor(async () => {
+        const r = await call<Array<{ turnId: string }>>('orphanRows');
+        return r.some((x) => x.turnId === crashedId) ? r : null;
+      }, 30_000, 'crashed 遗留保护行出现（预算已处置、保护待解除）');
+      const orphanRowText = (await call<Array<{ turnId: string; text: string }>>('orphanRows')).find((r) => r.turnId === crashedId)?.text ?? '';
+      expect(orphanRowText).toContain('继续核对并解除'); // 正式入口可见（行文本含按钮）
+      expect(orphanRowText).toContain('预算处置=settled'); // 「预算已处置、保护待解除」状态
+      expect(await call<boolean>('orphanRelease', crashedId)).toBe(true);
+      // none 登记=程序事实（无 OS 遗留进程可能）→ 解除成功：遗留行消失。
+      await waitFor(async () => {
+        const r = await call<Array<{ turnId: string }>>('orphanRows');
+        return !r.some((x) => x.turnId === crashedId) ? ['gone'] : null;
+      }, 30_000, '服务端确认后正式解除（行消失）');
     } catch (e) {
       console.error('[appB daemon/ui stderr tail]\n', app.stderr.slice(-2500));
       throw e;
     }
-  }, 150_000);
+  }, 240_000);
+
+  it('DEV-14 前置：任务串变更记录区块（changeset.listByTask 只读——清单/状态/撤销限制）', async () => {
+    try {
+      // 在崩溃 fixture 的任务上落一组 change_sets（测试准备——UI 只读消费正式命令）。
+      const dbFile = join(fixtureRoot, 'appdata-b', 'state.sqlite');
+      const { openDatabase } = await import('../../src/persistence/db.ts');
+      const db = openDatabase(dbFile);
+      const taskRowDb = db.prepare(`SELECT id, project_id FROM tasks ORDER BY rowid DESC LIMIT 1`).get() as { id: string; project_id: string };
+      db.prepare(`INSERT INTO change_sets (id, project_id, task_id, before_ref, after_ref, application_status) VALUES ('csE2E1',?,?,'{}','{}','applied')`).run(taskRowDb.project_id, taskRowDb.id);
+      db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csE2E1','after','docs/report.md','present')`).run();
+      db.prepare(`INSERT INTO change_set_files (change_set_id, role, path, state) VALUES ('csE2E1','before','docs/report.md','absent')`).run();
+      db.close();
+      // 打开该任务线程 → 变更区块渲染（状态中文+文件级前像/后像+撤销限制说明）。
+      await call('openCard', 0);
+      await waitFor(async () => ((await call<string[]>('changeSetRows'))[0] ?? '').length > 0, 30_000, '变更记录区块渲染');
+      const csRows = await call<string[]>('changeSetRows');
+      expect(csRows[0]).toContain('已应用');
+      expect(csRows[0]).toContain('docs/report.md');
+      expect(csRows[0]).toContain('改后');
+      expect(csRows[0]).toContain('present');
+      await call('click', 'thread-back-btn');
+    } catch (e) {
+      console.error('[appB daemon/ui stderr tail]\n', app.stderr.slice(-2500));
+      throw e;
+    }
+  }, 120_000);
 
   it('用户点击「确认继续」→ 开闸；中断任务不自动补跑（对账挂起）；新调度恢复可用', async () => {
     await call('click', 'resume-gate');

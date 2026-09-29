@@ -65,3 +65,7 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .consensus.unconfirmed { background: #fff8c5; color: #9a6700; }
 .consensus.disputed { background: #ffebe9; color: #cf222e; }
 .delib-report .disputed-list { color: #cf222e; font-size: 12px; margin-top: 4px; }
+
+#recovery-panel .recovery-orphan-row { border-top: 1px dashed #d8dee4; padding: 6px 0; }
+.changeset-block { margin: 8px 0; padding: 6px; border: 1px solid #d8dee4; border-radius: 4px; }
+.changeset-block .changeset-row { font-size: 12px; padding: 2px 0; }

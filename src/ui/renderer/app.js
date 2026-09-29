@@ -330,6 +330,7 @@ async function renderThread() {
   box.scrollTop = box.scrollHeight;
   await renderToolCalls(box);
   await renderDeliberation();
+  await renderChangeSets();
   if (state.openTaskId != null) {
     // 任务串：拉取任务快照（状态行 + 停止按钮的 runId/停止代次来源）。
     try {
@@ -351,6 +352,45 @@ async function renderThread() {
     updateStopUi(null);
     el('thread-status').textContent = '讨论串（仅记录，不派发）';
   }
+}
+
+/** DEV-14 前置：任务串变更记录区块（changeset.listByTask 只读——变更清单/恢复撤销限制/当前状态）。
+ *  无变更不渲染（不占版面）；状态如实中文映射，不做任何写操作。 */
+async function renderChangeSets() {
+  if (state.openTaskId == null) return;
+  const box = el('thread-messages');
+  if (document.getElementById('changeset-block') != null) document.getElementById('changeset-block').remove();
+  let data;
+  try {
+    data = await command('changeset.listByTask', { taskId: state.openTaskId });
+  } catch {
+    return; // 查询失败不阻断消息渲染（区块缺席=无可见变更，不伪造）
+  }
+  if ((data.items ?? []).length === 0) return;
+  const APP_STATUS = { applied: '已应用', not_applied: '未应用', reverted: '已撤销', partial: '部分应用' };
+  const UNDO_STATUS = { in_progress: '撤销进行中（可续跑）', failed: '撤销中断（待恢复续跑）', succeeded: '已撤销' };
+  const block = document.createElement('div');
+  block.id = 'changeset-block';
+  block.className = 'changeset-block';
+  const head = document.createElement('div');
+  head.className = 'meta';
+  head.textContent = `变更记录 ${data.items.length} 组（只读；撤销经恢复面/命令续跑，不在此操作）`;
+  block.appendChild(head);
+  for (const cs of data.items) {
+    const row = document.createElement('div');
+    row.className = 'changeset-row';
+    row.dataset.changeSetId = cs.id;
+    const undoText = cs.undoStatus != null ? `；撤销=${UNDO_STATUS[cs.undoStatus] ?? cs.undoStatus}` : '';
+    const label = document.createElement('div');
+    label.textContent = `${cs.id.slice(0, 14)}… · ${APP_STATUS[cs.applicationStatus] ?? cs.applicationStatus} · ${cs.fileCount} 文件${undoText}`;
+    row.appendChild(label);
+    const files = document.createElement('div');
+    files.className = 'recovery-facts';
+    files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${f.state}）`).join(String.fromCharCode(10));
+    row.appendChild(files);
+    block.appendChild(row);
+  }
+  box.appendChild(block);
 }
 
 function updateStopUi(snapshot) {
@@ -556,10 +596,27 @@ function renderRecoveryPanel(panel, data) {
   head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项（续跑走撤销命令，三向判定）` : ''}`;
   panel.appendChild(head);
   if (orphanLeases.length > 0) {
-    const orphan = document.createElement('div');
-    orphan.className = 'recovery-facts';
-    orphan.textContent = `遗留保护：${orphanLeases.map((l) => l.owner_turn_id).join('、')} 的写入租约仍持有（人工声明不解除物理保护——需 OS 退出证据或租约治理收口）`;
-    panel.appendChild(orphan);
+    // 「预算已处置、保护待解除」遗留保护行（第七轮·补）：正式继续核对入口=服务端取证后
+    // 按条件解除（recovery.releaseProtection——拒绝时不解除并如实说明原因）。
+    const pendingMark = new Map((data.pendingRelease ?? []).map((r) => [r.turnId, r]));
+    for (const l of orphanLeases) {
+      const mark = pendingMark.get(l.owner_turn_id);
+      const row = document.createElement('div');
+      row.className = 'recovery-orphan-row';
+      row.dataset.turnId = l.owner_turn_id;
+      const facts = document.createElement('div');
+      facts.className = 'recovery-facts';
+      const conflictHint = mark?.budgetMark === 'refunded'
+        ? String.fromCharCode(10) + '（该 turn 已按未启动退款；若后来取得执行证据（账单/迟到产物），走 recovery.correctToExecuted 纠正账目——不自动改写）'
+        : '';
+      facts.textContent = `遗留保护：${l.owner_turn_id} 的写入租约仍持有（预算处置=${mark?.budgetMark ?? '已完成'}·${mark?.turnStatus ?? '?'}）——人工声明不解除物理保护；需服务端确认执行已结束（父进程+子进程）后按条件解除${conflictHint}`;
+      row.appendChild(facts);
+      const b = document.createElement('button');
+      b.textContent = '继续核对并解除（服务端取证）';
+      b.onclick = () => void releaseRetainedProtection(l.owner_turn_id);
+      row.appendChild(b);
+      panel.appendChild(row);
+    }
   }
   for (const t of unknown) {
     const row = document.createElement('div');
@@ -642,6 +699,18 @@ async function probeTurn(turnId) {
     el.textContent = `服务端取证结果：${r.result}${r.detail ? `——${r.detail}` : ''}（观测时刻 ${new Date(r.observedAt).toLocaleTimeString()}）`;
     row.appendChild(el);
   }
+}
+
+/** 遗留保护正式解除：服务端取证按条件（exited/no-os-process）——查询不可确认即拒绝并保留。 */
+async function releaseRetainedProtection(turnId) {
+  let failure = null;
+  try {
+    await command('recovery.releaseProtection', { turnId, note: '恢复面「继续核对并解除」（用户操作）' });
+  } catch (error) {
+    failure = `解除被拒（保护保留）：${error.message}`;
+  }
+  await refreshGate();
+  if (failure != null) showRecoveryError(failure);
 }
 
 /** 恢复面错误行（非阻塞——不使用 alert：无人工处理时对话框会冻结页面）。 */
