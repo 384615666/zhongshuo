@@ -97,7 +97,7 @@ CH-02 NOT_STARTED（M0/DEV-04/07）；CH-01/03 NOT_STARTED（M3/DEV-14/17）；C
 
 | 项 | 承载包 | 状态 | 备注 |
 |---|---|---|---|
-| Git 客户端 | DEV-12/14（RT-24） | **IN_PROGRESS（读面+写闭环主体）** | 只读 status/diff（第十轮协议重写：raw/numstat -z 机器身份、字面 pathspec、采集期容量控制、未跟踪内容视图、no-textconv/ext-diff 反例）；写闭环 stage/unstage/stageTask（跳过 userPreExisting）/commitPreview+commit（预览绑定 HEAD/索引摘要、尾标记崩溃恢复）/history（任务关联）；git_operations 日志。剩余=branch/checkout、push/pull（bare remote 验证）、conflict.resolve、commit.undo、单提交聚合 diff（报告 round-20260929-round10） |
+| Git 客户端 | DEV-12/14（RT-24） | **IN_PROGRESS（主体完成，剩余如实列项）** | 读面（第十轮协议重写）+写闭环（第十一轮收口：tree 内容绑定+CAS 提交、仓库级互斥、stageTask 双向归属保护、持久意图崩溃恢复）+分支/切换（不自动 stash）+单提交聚合 diff（关联不虚构）+push/pull（两端头绑定、快进 only、AUTH 语义；**本地 bare remote 验证，真实远端凭据路径未验**）+冲突三方/手动解决+commit.undo 软回退（RT-24①—⑩对应能力均已落地或保持禁令）。剩余=merge 多父 diff 视图、真实远端补证（报告 round-20260929-round11） |
 | 可选任务验收 | DEV-14（RT-25） | **IN_PROGRESS（全链可用）** | 契约+DB 约束（第八轮）；版本绑定验收+返工注入（第九轮）；项目开关 project.reviewPolicy.set+持久化+仅影响新任务、要求修改必填意见、返工再执行 UI 入口（task.redispatch 按钮）、返工第二轮正常递增交付（第十轮交付守卫修正）；e2e 正式闭环不经补库 |
 | 共享预览 | DEV-24（WPV-01—36） | NOT_STARTED | |
 | MCP 预留（§31.1 五条） | DEV-01/02/05（MCP-BASE） | **IN_PROGRESS** | DEV-01 契约+纯逻辑；DEV-02 落 command_receipts 事务语义（重放/冲突/隔离/清理过期）；预算事务预占与协议本体待 DEV-05/FULL-11 |
