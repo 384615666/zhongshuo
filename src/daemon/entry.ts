@@ -409,8 +409,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   }
 }
 
-/** 独立进程入口：node --experimental-strip-types src/daemon/entry.ts */
-if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts')) {
+/** 独立进程入口：源码=src/daemon/entry.ts 尾缀；打包产物=ZS_PACKED_ENTRY=1（DEV-15 早期打包验证）。 */
+if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || process.env.ZS_PACKED_ENTRY === '1') {
   const appDataDir = process.env.ZS_APP_DATA ?? defaultAppDataDir();
   const rawRuntime = process.env.ZS_RUNTIME ?? 'fake';
   const runtime = (rawRuntime === 'codex' || rawRuntime === 'claude' ? rawRuntime : 'fake') as 'fake' | 'codex' | 'claude';
