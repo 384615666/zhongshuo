@@ -75,3 +75,11 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .recovery-help div { margin-top: 2px; }
 .repo-status { padding: 4px 12px; border-bottom: 1px solid var(--line-2, #e3e7eb); }
 .repo-status .meta { font-size: 12px; color: var(--ink-2, #5b6472); }
+
+/* 第九轮：帮助面板（START-07/09 首版）+diff 正文+撤销入口 */
+.help-panel { font-size: 12px; margin-bottom: 4px; }
+.help-panel summary { cursor: pointer; color: #5b6472; }
+.help-panel .help-body { line-height: 1.5; color: #5b6472; padding-top: 4px; }
+.diff-block { margin: 2px 0; }
+.diff-text { font-family: ui-monospace, Consolas, monospace; font-size: 11px; white-space: pre-wrap; background: #f7f9fa; border: 1px solid #e3e7eb; border-radius: 4px; padding: 4px; max-height: 260px; overflow: auto; }
+.recovery-undo-row button { margin: 2px 4px 2px 0; }

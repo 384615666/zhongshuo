@@ -15,14 +15,28 @@
       <nav id="room-list" class="rooms"></nav>
       <button id="room-create" class="chip" title="新建房间（本项目成员默认全加入）">+ 建房</button>
       <div class="sidebar-foot">
+        <details id="help-panel" class="help-panel">
+          <summary>帮助与故障引导（START-07/09 首版）</summary>
+          <div class="help-body">
+            <div><b>发送与路由</b>：主池留空 @＝自动路由；@成员＝DIRECT 指派；「仅记录」＝一次性只保存不派发；线程内跟进不新建根任务。</div>
+            <div><b>研讨（@全体）</b>：成员独立分析→互评→（争议则讨论）→整合→逐结论确认；缺席成员如实标注，不用一句总结覆盖分歧。</div>
+            <div><b>验收</b>：策略为「人工验收」的任务完成后进入待验收；按钮绑定展示时的交付版本（防错稿）；「要求修改」的说明会注入返工输入；Git 提交不等同验收。</div>
+            <div><b>恢复与保护</b>：崩溃/截止后的「状态未知」不自动重跑；对账前先「服务端取证」；人工声明保留写入保护；周期快照只证明「未观察到存活后代」，不构成完整退出证明——有子进程 runtime 的自动解除路径已关闭。</div>
+            <div><b>迟到成果</b>：截止后到达的输出经服务端事件通道接收（幂等、不复活已停止任务、不覆盖新交付）；回执与业务效果同事务。</div>
+            <div><b>仓库与变更</b>：主池顶部为仓库状态只读视图（暂存/未暂存/未跟踪区分，不改动你的工作区）；任务串变更记录含撤销进度与冲突原因；撤销续跑走恢复中心。</div>
+            <div><b>未开放能力（如实）</b>：AUTO 自动分工未过价值闸门暂不开放；真实 CLI 迟到回放待补证（显示 unsupported）；并行写档增强延期中；恢复解除对有子进程 runtime 暂时只保留保护。</div>
+          </div>
+        </details>
+        <button id="repo-status-toggle" class="chip" title="显示/隐藏仓库状态区块（设置持久化，重开生效）">仓库状态：开</button>
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
         <div id="recovery-help" class="resume-info recovery-help hidden">
           <b>恢复与保护帮助（START-07 首版）</b>
           <div>·「状态未知」＝上次执行截止/崩溃时没等到终态回执，结果不确定——不自动重跑、不伪造成功/失败。</div>
           <div>· 对账前请先「服务端取证」：由 daemon 按登记的进程身份做 OS 核对（父进程＋其派生进程树＋活跃期快照的孙进程归属核对）。</div>
-          <div>· 「人工声明未启动」会退款但<b>保留写入保护</b>：程序未确认执行结束前，保护不解除；之后可「继续核对并解除」（仍按服务端取证放行）。</div>
-          <div>· 截止后到达的迟到成果经「服务端事件通道」接收（recovery.pumpLateEvents）：合同校验通过才交付；任务已停止/已有更新交付时不复活、不覆盖。</div>
+          <div>· 「人工声明未启动」会退款但<b>保留写入保护</b>：程序未确认执行结束前，保护不解除。</div>
+          <div>· 周期快照只能「未观察到存活后代」，<b>不构成完整退出证明</b>（快照间隔内派生且父链已断的执行载体不可排除）：有子进程 runtime 的服务端自动解除路径已关闭，保护保留并说明原因；仅无子进程模型（程序事实）可解除。</div>
+          <div>· 截止后到达的迟到成果经「服务端事件通道」接收（recovery.pumpLateEvents）：合同校验通过才交付；任务已停止/已有更新交付时不复活、不覆盖；回执与业务效果同事务、按事件源+turn 幂等。</div>
           <div>· 运行能力只显示实测结论：未验证项如实标注「unverified/待补证」，不用成功回复推断整体能力。</div>
         </div>
         <div id="runtime-status" class="resume-info hidden" data-section="runtime"></div>

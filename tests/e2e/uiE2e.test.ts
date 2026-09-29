@@ -56,6 +56,11 @@ window.__t = {
   changeSetRows: () => [...document.querySelectorAll('#changeset-block .changeset-row')].map((r) => r.textContent ?? ''),
   changeSetBlockVisible: () => document.getElementById('changeset-block') != null,
   reviewButtons: () => ({ accept: !document.getElementById('review-accept-btn')?.classList.contains('hidden'), reject: !document.getElementById('review-reject-btn')?.classList.contains('hidden') }),
+  reviewAcceptLabel: () => document.getElementById('review-accept-btn')?.textContent ?? null,
+  clickDiffButton: (labelPart) => { const b = [...document.querySelectorAll('#repo-status button')].find((x) => (x.textContent ?? '').includes(labelPart)); if (b == null) return false; b.click(); return true; },
+  diffText: () => document.querySelector('#repo-status .diff-text')?.textContent ?? null,
+  repoToggleLabel: () => document.getElementById('repo-status-toggle')?.textContent ?? null,
+  helpPanelText: () => document.getElementById('help-panel')?.textContent ?? null,
   clickReview: (kind) => { const b = document.getElementById(kind === 'accept' ? 'review-accept-btn' : 'review-reject-btn'); if (b == null || b.classList.contains('hidden')) return false; b.click(); return true; },
   repoStatusText: () => document.getElementById('repo-status')?.textContent ?? null,
   runtimeStatusText: () => document.getElementById('runtime-status')?.textContent ?? null,
@@ -750,9 +755,31 @@ describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（f
     const runtimeText = await call<string>('runtimeStatusText');
     expect(runtimeText).toContain('迟到成果接收');
     expect(runtimeText).toContain('执行成员：'); // 成员绑定（默认 runtime 如实显示）
-    // 帮助区块（START-07 首版）只在恢复面有内容时出现：本档无遗留 → 收起。
+    // diff 正文（第九轮）：展开未暂存差异——含 +/- 行；再点收起。
+    expect(await call<boolean>('clickDiffButton', '未暂存')).toBe(true);
+    await waitFor(() => call<string>('diffText').then((t) => (t ?? '').includes('+working change')), 30_000, 'diff 正文渲染');
+    const diffText = await call<string>('diffText');
+    expect(diffText).toContain('-base');
+    // 设置持久化：关闭仓库状态 → 重载 → 状态保持（app.settings.get/set 正式命令）。
+    expect(await call<string>('repoToggleLabel')).toContain('开');
+    await call('click', 'repo-status-toggle');
+    await waitFor(() => call<string>('repoToggleLabel').then((t) => (t ?? '').includes('关')), 10_000, '开关切到关');
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS);
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<string>('repoToggleLabel').then((t) => (t ?? '').includes('关')), 30_000, '重载后设置保持（关）');
+    expect(await call<boolean>('hidden', 'repo-status')).toBe(true);
+    // 恢复（还原缺省，避免影响后续用例）。
+    await call('click', 'repo-status-toggle');
+    // 帮助面板（START-07/09 首版常驻）：覆盖发送/验收/恢复/未开放边界等场景条目。
+    const helpText = await call<string>('helpPanelText');
+    expect(helpText).toContain('仅记录');
+    expect(helpText).toContain('验收');
+    expect(helpText).toContain('不构成完整退出证明');
+    expect(helpText).toContain('未开放');
+    // 恢复面随行帮助（START-07）：本档无遗留 → 收起。
     expect(await call<boolean>('helpVisible')).toBe(false);
-  }, 120_000);
+  }, 150_000);
 
   it('可选验收（RT-25）：REVIEW 任务验收通过 → 交付 accepted、任务 DONE；重复验收入口收起（Git 提交不等同验收）', async () => {
     const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14b'), runtime: 'fake' });
@@ -788,12 +815,26 @@ describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（f
     );
     await call('openCard', 0);
     await waitFor(() => call<{ accept: boolean; reject: boolean }>('reviewButtons').then((b) => b.accept && b.reject), 30_000, '验收按钮出现');
+    // 版本绑定（第九轮）：按钮带展示时的交付版本。
+    await waitFor(() => call<string>('reviewAcceptLabel').then((t) => (t ?? '').includes('第 1 版')), 30_000, '按钮显示第 1 版');
+    // 后台产生 v2（v1 被替代）：界面刷新后显示新验收对象（不继承旧按钮状态）。
+    const db3 = openDatabase(dbFile);
+    db3.prepare(`UPDATE task_deliveries SET review_status = 'superseded' WHERE id = 'dlv_e2e_review'`).run();
+    db3.prepare(
+      `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
+       VALUES ('dlv_e2e_review_v2', ?, ?, 2, 'h2', '[]', '[]', '[]', 'pending')`,
+    ).run(task.id, run.id);
+    db3.prepare(`UPDATE tasks SET current_delivery_id = 'dlv_e2e_review_v2' WHERE id = ?`).run(task.id);
+    db3.close();
+    await waitFor(() => call<string>('reviewAcceptLabel').then((t) => (t ?? '').includes('第 2 版')), 60_000, '新交付后按钮显示第 2 版');
     expect(await call<boolean>('clickReview', 'accept')).toBe(true);
     // 轮询会重写状态行：以任务终态为准（验收记录以 DB 事实断言）。
     await waitFor(() => call<string>('threadStatus').then((t) => (t ?? '').includes('已完成')), 30_000, '验收后任务完成');
     // 交付与任务状态一致（DB 事实）。
     const db2 = openDatabase(dbFile);
-    const delivery = db2.prepare(`SELECT review_status, reviewed_by FROM task_deliveries WHERE id = 'dlv_e2e_review'`).get() as { review_status: string; reviewed_by: string };
+    const delivery = db2.prepare(`SELECT review_status, reviewed_by FROM task_deliveries WHERE id = 'dlv_e2e_review_v2'`).get() as { review_status: string; reviewed_by: string };
+    const v1 = db2.prepare(`SELECT review_status FROM task_deliveries WHERE id = 'dlv_e2e_review'`).get() as { review_status: string };
+    expect(v1.review_status).toBe('superseded'); // v1 未被错写
     const taskAfter = db2.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string };
     db2.close();
     expect(delivery).toMatchObject({ review_status: 'accepted' });

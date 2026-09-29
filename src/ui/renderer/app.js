@@ -43,6 +43,7 @@ const state = {
   pollTimer: null,
   // 仓库状态缓存（DEV-14 git.status 只读视图）：projectId 切换时失效。
   repoStatusCache: null,
+  repoStatusVisible: true,
   /** 恢复面人工说明草稿（按 turnId）——周期重画不丢输入。 */
   recoveryNotes: {},
   pollTick: 0,
@@ -344,6 +345,7 @@ async function renderThread() {
         status: data.task.status,
         stopGeneration: data.task.stopGeneration,
         activeRun: data.activeRun,
+        pendingDelivery: data.pendingDelivery ?? null, // 验收操作绑定展示时版本（第九轮）
       };
       if (stillOpen) updateStopUi(state.openTaskSnapshot);
     } catch (taskError) {
@@ -391,6 +393,15 @@ async function renderChangeSets() {
     files.className = 'recovery-facts';
     files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${f.state}）`).join(String.fromCharCode(10));
     row.appendChild(files);
+    // 前像可用性（第九轮）：撤销/恢复依赖改前内容快照——不可得（unknown）的文件如实标注。
+    const beforeFiles = cs.files.filter((f) => f.role === 'before');
+    if (beforeFiles.length > 0) {
+      const available = beforeFiles.filter((f) => f.state === 'present').length;
+      const pre = document.createElement('div');
+      pre.className = 'recovery-facts';
+      pre.textContent = `前像可用：${available}/${beforeFiles.length}${available < beforeFiles.length ? '（部分改前内容不可得=unknown——对应文件撤销时将按冲突处理，不猜测恢复）' : ''}`;
+      row.appendChild(pre);
+    }
     // 撤销详情（第八轮）：恢复进度/冲突原因（不可撤销的具体说明）——只读呈现，续跑走撤销命令。
     if (cs.undo != null) {
       const undoDetail = document.createElement('div');
@@ -430,23 +441,31 @@ function updateStopUi(snapshot) {
   } else {
     btn.classList.add('hidden');
   }
-  // 可选验收（RT-25）：REVIEW＝待人工验收的唯一 pending 交付——按创建时策略快照处理；
-  // Git 提交不等同验收（这里只写 review 账本与任务状态）。
-  const reviewable = snapshot.status === 'REVIEW';
+  // 可选验收（RT-25，第九轮绑定版本）：REVIEW 且存在待验收交付——按钮带当时展示的
+  // 版本号，提交时绑定该 deliveryId/revision（服务端条件更新校验，错稿/被替代均明确冲突）。
+  const pending = snapshot.pendingDelivery ?? null;
+  const reviewable = snapshot.status === 'REVIEW' && pending != null;
   acceptBtn.classList.toggle('hidden', !reviewable);
   rejectBtn.classList.toggle('hidden', !reviewable);
+  if (reviewable) {
+    acceptBtn.textContent = `验收通过（第 ${pending.revision} 版）`;
+    rejectBtn.textContent = `要求修改（第 ${pending.revision} 版）`;
+  }
 }
 
-/** 人工验收（task.review 正式命令）：accept→DONE；changes_requested→ACTIVE（跟进走 redispatch）。
- *  操作绑定当前打开任务；失败/幂等拒绝如实展示在状态行。 */
+/** 人工验收（task.review 正式命令，绑定展示时版本）：accept→DONE；changes_requested→ACTIVE。
+ *  版本被替代/已处理/状态变化=明确冲突（不自动套用新交付）；失败如实展示在状态行。 */
 async function reviewTask(decision) {
   const snap = state.openTaskSnapshot;
-  if (snap == null) return;
+  const pending = snap?.pendingDelivery ?? null;
+  if (snap == null || pending == null) return; // 无待验收版本（快照已过期——重渲染后按钮收起）
   try {
-    const r = await command('task.review', { taskId: snap.taskId, decision });
+    const r = await command('task.review', {
+      taskId: snap.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, decision,
+    });
     el('thread-status').textContent = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
   } catch (error) {
-    el('thread-status').textContent = `验收失败：${error.message}`;
+    el('thread-status').textContent = `验收失败（第 ${pending.revision} 版）：${error.message}`;
   }
   await renderThread();
 }
@@ -624,7 +643,7 @@ async function renderRepoStatus() {
   try {
     data = await command('git.status', { projectId: state.projectId });
   } catch (error) {
-    box.classList.remove('hidden');
+    box.classList.toggle('hidden', !(state.repoStatusVisible ?? true)); // 尊重设置开关
     box.innerHTML = '';
     const line = document.createElement('div');
     line.className = 'meta';
@@ -634,7 +653,7 @@ async function renderRepoStatus() {
   }
   state.repoStatusCache = { at: now, projectId: state.projectId, data };
   const total = data.staged.length + data.unstaged.length + data.untracked.length;
-  box.classList.remove('hidden');
+  box.classList.toggle('hidden', !(state.repoStatusVisible ?? true)); // 尊重设置开关
   box.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'meta';
@@ -652,9 +671,61 @@ async function renderRepoStatus() {
   const lines = [];
   if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? `（← ${e.renamedFrom}）` : '')).join('、')}`);
   if (data.unstaged.length > 0) lines.push(`未暂存：${data.unstaged.map((e) => e.path).join('、')}`);
-  if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path).join('、')}`);
+  if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path).join('、')}（未跟踪文件无 diff）`);
   list.textContent = lines.join(String.fromCharCode(10));
   box.appendChild(list);
+  // diff 正文（第九轮 DEV-14）：分别查看暂存/未暂存差异——二进制/超限/重命名/删除如实标注。
+  const mkDiffBtn = (label, staged) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = label;
+    b.onclick = () => void toggleDiff(box, staged, b);
+    box.appendChild(b);
+  };
+  if (data.staged.length > 0) mkDiffBtn('查看已暂存差异', true);
+  if (data.unstaged.length > 0) mkDiffBtn('查看未暂存差异', false);
+}
+
+/** diff 展开/收起（git.diff 只读命令；重复点击收起）。 */
+async function toggleDiff(box, staged, btn) {
+  const id = `diff-block-${staged ? 'staged' : 'unstaged'}`;
+  const existing = document.getElementById(id);
+  if (existing != null) { existing.remove(); btn.textContent = btn.textContent.replace('收起', '查看'); return; }
+  btn.textContent = btn.textContent.replace('查看', '收起');
+  let r;
+  try {
+    r = await command('git.diff', { projectId: state.projectId, staged });
+  } catch (error) {
+    const err = document.createElement('div');
+    err.className = 'recovery-facts';
+    err.id = id;
+    err.textContent = `差异查询失败：${error.message}`;
+    box.appendChild(err);
+    return;
+  }
+  const block = document.createElement('div');
+  block.id = id;
+  block.className = 'diff-block';
+  if (r.patches.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'recovery-facts';
+    empty.textContent = '无差异（或仅未跟踪文件——未跟踪无 diff）';
+    block.appendChild(empty);
+  }
+  const CHANGE = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名' };
+  for (const patch of r.patches) {
+    const head = document.createElement('div');
+    head.className = 'meta';
+    head.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制文件，无文本差异）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+    block.appendChild(head);
+    if (!patch.binary && patch.text.length > 0) {
+      const pre = document.createElement('div');
+      pre.className = 'diff-text';
+      pre.textContent = patch.text;
+      block.appendChild(pre);
+    }
+  }
+  box.appendChild(block);
 }
 
 async function refreshGate() {
@@ -711,8 +782,25 @@ function renderRecoveryPanel(panel, data) {
   el('recovery-help').classList.remove('hidden'); // START-07 首版：恢复场景可读帮助随恢复面出现
   panel.innerHTML = '';
   const head = document.createElement('div');
-  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项（续跑走撤销命令，三向判定）` : ''}`;
+  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项` : ''}`;
   panel.appendChild(head);
+  // 未收口撤销行（第九轮）：in_progress/failed 可续跑（changeset.undo 逐步幂等重验，不覆盖
+  // 用户改动；conflict 不可自动继续——展示冲突原因，人工处置后重新发起）。
+  for (const u of undos) {
+    const row = document.createElement('div');
+    row.className = 'recovery-row recovery-undo-row';
+    row.dataset.changeSetId = u.changeSetId;
+    const meta = document.createElement('span');
+    meta.textContent = `未收口撤销：${u.changeSetId}（${u.status === 'failed' ? '中断——待恢复续跑' : '进行中'}；执行前逐文件重验 当前==改后，冲突不覆盖）`;
+    row.appendChild(meta);
+    if (u.status !== 'conflict') {
+      const b = document.createElement('button');
+      b.textContent = '继续撤销（幂等续跑）';
+      b.onclick = () => void resumeUndo(u.changeSetId);
+      row.appendChild(b);
+    }
+    panel.appendChild(row);
+  }
   if (orphanLeases.length > 0) {
     // 「预算已处置、保护待解除」遗留保护行（第七轮·补）：正式继续核对入口=服务端取证后
     // 按条件解除（recovery.releaseProtection——拒绝时不解除并如实说明原因）。
@@ -831,6 +919,22 @@ async function releaseRetainedProtection(turnId) {
   if (failure != null) showRecoveryError(failure);
 }
 
+/** 撤销续跑（changeset.undo 正式命令）：逐步幂等重验；结果/冲突如实展示并刷新恢复面。 */
+async function resumeUndo(changeSetId) {
+  let failure = null;
+  let outcome = null;
+  try {
+    outcome = await command('changeset.undo', { changeSetId });
+  } catch (error) {
+    failure = `撤销未完成：${error.message}`;
+  }
+  await refreshGate();
+  if (failure != null) { showRecoveryError(failure); return; }
+  if (outcome != null && outcome.status === 'conflict') {
+    showRecoveryError(`撤销冲突（不覆盖用户改动）：${JSON.stringify(outcome.failure ?? {}).slice(0, 200)}`);
+  }
+}
+
 /** 恢复面错误行（非阻塞——不使用 alert：无人工处理时对话框会冻结页面）。 */
 function showRecoveryError(message) {
   const panel = document.getElementById('recovery-panel');
@@ -912,6 +1016,31 @@ el('room-create').onclick = () => {
     .catch((e) => alert(`建房失败：${e.message}`));
 };
 el('stop-btn').onclick = () => void stopTask();
+// 仓库状态显隐（应用设置持久化，重开生效——app.settings.get/set 正式命令）。
+async function applyRepoStatusVisibility() {
+  let stored = null;
+  try {
+    const r = await command('app.settings.get', { keys: ['repoStatus.visible'] });
+    stored = r.values['repoStatus.visible'] ?? null;
+  } catch { /* 设置读取失败按缺省 */ }
+  const visible = stored !== 'false'; // 缺省开
+  state.repoStatusVisible = visible;
+  const btn = el('repo-status-toggle');
+  btn.textContent = `仓库状态：${visible ? '开' : '关'}`;
+  el('repo-status').classList.toggle('hidden', !visible);
+}
+el('repo-status-toggle').onclick = () => void (async () => {
+  const next = !(state.repoStatusVisible ?? true);
+  try {
+    await command('app.settings.set', { key: 'repoStatus.visible', value: String(next) });
+    state.repoStatusVisible = next;
+    el('repo-status-toggle').textContent = `仓库状态：${next ? '开' : '关'}`;
+    el('repo-status').classList.toggle('hidden', !next);
+  } catch (error) {
+    el('thread-status').textContent = `设置保存失败：${error.message}`;
+  }
+})();
+void applyRepoStatusVisibility().catch(() => { /* 设置读取失败按缺省 */ });
 el('review-accept-btn').onclick = () => void reviewTask('accept');
 el('review-reject-btn').onclick = () => void reviewTask('changes_requested');
 el('thread-back-btn').onclick = () => { showPool(); void renderPool().catch(showConnError); };
