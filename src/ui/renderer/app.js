@@ -659,6 +659,13 @@ async function renderRepoStatus() {
   head.className = 'meta';
   head.textContent = `仓库状态（只读·分支 ${data.branch}）：已暂存 ${data.staged.length} · 未暂存 ${data.unstaged.length} · 未跟踪 ${data.untracked.length}${data.truncated ? '（列表截断）' : ''}`;
   box.appendChild(head);
+  // 第十轮：项目根是仓库子目录时显式说明——范围不悄悄扩大到项目外（条目带（项目外）标注）。
+  if (data.projectRootIsWorktreeRoot === false) {
+    const scope = document.createElement('div');
+    scope.className = 'meta';
+    scope.textContent = `项目根是仓库子目录（仓库根 ${data.worktreeRoot}）：下列条目为整个工作树状态，标注（项目外）者在项目目录之外`;
+    box.appendChild(scope);
+  }
   if (total === 0) {
     const clean = document.createElement('div');
     clean.className = 'recovery-facts';
@@ -668,10 +675,11 @@ async function renderRepoStatus() {
   }
   const list = document.createElement('div');
   list.className = 'recovery-facts';
+  const markOutside = (e) => (e.outsideProjectRoot === true ? '（项目外）' : '');
   const lines = [];
-  if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? `（← ${e.renamedFrom}）` : '')).join('、')}`);
-  if (data.unstaged.length > 0) lines.push(`未暂存：${data.unstaged.map((e) => e.path).join('、')}`);
-  if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path).join('、')}（未跟踪文件无 diff）`);
+  if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? `（← ${e.renamedFrom}）` : '') + markOutside(e)).join('、')}`);
+  if (data.unstaged.length > 0) lines.push(`未暂存：${data.unstaged.map((e) => e.path + markOutside(e)).join('、')}`);
+  if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path + markOutside(e)).join('、')}`);
   list.textContent = lines.join(String.fromCharCode(10));
   box.appendChild(list);
   // diff 正文（第九轮 DEV-14）：分别查看暂存/未暂存差异——二进制/超限/重命名/删除如实标注。
@@ -684,6 +692,46 @@ async function renderRepoStatus() {
   };
   if (data.staged.length > 0) mkDiffBtn('查看已暂存差异', true);
   if (data.unstaged.length > 0) mkDiffBtn('查看未暂存差异', false);
+  // 未跟踪文件内容（第十轮）：按新增语义逐文件查看（Git diff 不含未跟踪——不只列文件名）。
+  const untrackedShown = data.untracked.slice(0, 10);
+  for (const entry of untrackedShown) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = `未跟踪内容：${entry.path}`;
+    b.title = '按新增文件语义查看内容（二进制/超限如实标注）';
+    b.onclick = () => void togglePathDiff(box, entry.path, b);
+    box.appendChild(b);
+  }
+  if (data.untracked.length > 10) {
+    const more = document.createElement('div');
+    more.className = 'meta';
+    more.textContent = `（未跟踪共 ${data.untracked.length} 个，仅列前 10 个内容入口）`;
+    box.appendChild(more);
+  }
+}
+
+/** 单路径差异/内容展开（第十轮）：未跟踪走内容视图；重复点击收起。 */
+async function togglePathDiff(box, path, btn) {
+  const id = `diff-path-${path}`;
+  const existing = document.getElementById(id);
+  if (existing != null) { existing.remove(); btn.classList.remove('active'); return; }
+  btn.classList.add('active');
+  let r;
+  try {
+    r = await command('git.diff', { projectId: state.projectId, path });
+  } catch (error) {
+    const err = document.createElement('div');
+    err.className = 'recovery-facts';
+    err.id = id;
+    err.textContent = `查看失败：${error.message}`;
+    box.appendChild(err);
+    return;
+  }
+  const block = document.createElement('div');
+  block.id = id;
+  block.className = 'diff-block';
+  appendPatches(block, r);
+  box.appendChild(block);
 }
 
 /** diff 展开/收起（git.diff 只读命令；重复点击收起）。 */
@@ -712,12 +760,27 @@ async function toggleDiff(box, staged, btn) {
     empty.textContent = '无差异（或仅未跟踪文件——未跟踪无 diff）';
     block.appendChild(empty);
   }
-  const CHANGE = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名' };
+  appendPatches(block, r);
+  box.appendChild(block);
+}
+
+/** 差异条目渲染（第十轮：统计 unknown/未跟踪内容语义如实标注；截断含说明）。 */
+function appendPatches(block, r) {
+  const CHANGE = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名', copied: '复制' };
   for (const patch of r.patches) {
     const head = document.createElement('div');
     head.className = 'meta';
-    head.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制文件，无文本差异）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+    const statNote = patch.stat === 'unknown' ? '（统计未知：numstat 不可用，未当作文本成功）' : patch.binary ? '（二进制文件，无文本差异）' : '';
+    const sourceNote = patch.source === 'worktree-content' ? '〔未跟踪文件内容·新增语义〕' : '';
+    const countNote = patch.source !== 'worktree-content' && patch.addedCount != null ? `（+${patch.addedCount}/-${patch.deletedCount ?? 0}）` : '';
+    head.textContent = `${sourceNote}${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${statNote}${countNote}${patch.truncated ? '（超限截断）' : ''}`;
     block.appendChild(head);
+    if (r.numstatError != null && patch.stat === 'unknown') {
+      const warn = document.createElement('div');
+      warn.className = 'meta';
+      warn.textContent = r.numstatError;
+      block.appendChild(warn);
+    }
     if (!patch.binary && patch.text.length > 0) {
       const pre = document.createElement('div');
       pre.className = 'diff-text';
@@ -725,7 +788,6 @@ async function toggleDiff(box, staged, btn) {
       block.appendChild(pre);
     }
   }
-  box.appendChild(block);
 }
 
 async function refreshGate() {

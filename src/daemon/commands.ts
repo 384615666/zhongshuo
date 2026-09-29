@@ -902,7 +902,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(params.projectId) as { canonical_path: string } | undefined;
         if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
         const { gitRepoStatus } = await import('./gitStatus.ts');
-        const r = gitRepoStatus(project.canonical_path);
+        const r = await gitRepoStatus(project.canonical_path);
         if (!r.ok) throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
         return withCommandId({ ok: true, data: r });
       }
@@ -917,9 +917,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(params.projectId) as { canonical_path: string } | undefined;
         if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
         const { gitDiff } = await import('./gitStatus.ts');
-        const r = gitDiff(project.canonical_path, { staged: params.staged, path: params.path });
+        const r = await gitDiff(project.canonical_path, { staged: params.staged, path: params.path });
         if (!r.ok) {
-          throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : r.code === 'PATH_OUT_OF_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
+          const code = r.code === 'NOT_A_GIT_REPO' || r.code === 'PATH_OUT_OF_REPO' || r.code === 'PATH_IS_DIRECTORY' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE';
+          throw new DaemonCommandError(code, r.message);
         }
         return withCommandId({ ok: true, data: r });
       }
