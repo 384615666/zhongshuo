@@ -42,7 +42,7 @@ import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { checkProcessLiveness } from './processCheck.ts';
 import { closeTurnProcessRegistration, registerTurnProcess } from './processRegistry.ts';
 
-interface TaskRow {
+export interface TaskRow {
   id: string;
   project_id: string;
   conversation_id: string;
@@ -545,6 +545,9 @@ export class DispatchWorker {
       }
 
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+      // pre-launch 登记（supervisor 衔接）：请求可能已发出的窗口可区分「从未启动」——
+      // startTurn 成功后由 registerProcessIdentity REPLACE 为完整身份。
+      this.preRegisterTurnProcess(turnId, runId, member.id);
       startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
@@ -732,6 +735,16 @@ export class DispatchWorker {
         identitySource: identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
       });
     } catch { /* 取证失败不阻断派发（登记缺失在对账侧如实降级） */ }
+  }
+
+  /** pre-launch 登记：startTurn 前写入 unknown 模型占位（崩溃窗口可识别「请求可能已发出」）。 */
+  private preRegisterTurnProcess(turnId: string, runId: string, memberId: string): void {
+    try {
+      registerTurnProcess(this.db, {
+        turnId, runId, memberId, adapterKind: this.providerKeyOf(memberId),
+        processModel: 'unknown', pid: null, startedAtMs: null, identitySource: 'pre-launch',
+      });
+    } catch { /* 登记失败不阻断派发（对账侧如实 identity-missing/降级） */ }
   }
 
   /** 进程登记收口：仅终态（非 UNKNOWN）turn 标 closed——UNKNOWN=崩溃遗留候选，保持开放待对账。 */
@@ -989,6 +1002,7 @@ export class DispatchWorker {
       }
 
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+      this.preRegisterTurnProcess(turnId, run.id, step.memberId);
       startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
@@ -1217,7 +1231,8 @@ export class DispatchWorker {
     }
   }
 
-  private applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
+  /** 事件应用（public：迟到输出一致性用例经生产方法定点注入——不绕过状态机）。 */
+  applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
     if (turnMeta?.stage_key != null && turnMeta.stage_key.startsWith('delib.')) {
@@ -1278,8 +1293,26 @@ export class DispatchWorker {
           .run(turnId, event.eventKey, JSON.stringify(event), JSON.stringify(event), event.costQuality);
         break;
       case 'turn.completed': {
-        const turn = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
+        const turn = this.db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { status: string; budget_mark: string | null };
         const lateAfterStop = turn.status === 'STOPPING';
+        if (!lateAfterStop && (turn.status === 'FAILED' || turn.status === 'CANCELLED')) {
+          // 成果一致性（第七轮·专项）：已收口 turn（对账/停止/失败收尾）的迟到输出——
+          // **不复活、不交付**（与 RT-06 同型）；若输出可解析为合法合同且该 turn 已按
+          // 未启动退款（budget_mark=refunded），这是「声明未启动但输出到达」的事实矛盾信号
+          // ——留审计提示走 correctToExecuted 纠正流程，不自动改账。
+          this.audit(task, runId, turnId, 'turn.lateCompletion', {
+            finalText: (event.finalText ?? '').slice(0, 200),
+            turnStatus: turn.status,
+            factConflictHint: turn.budget_mark === 'refunded' ? 'refunded-turn-received-output——与「未启动」声明矛盾，走 recovery.correctToExecuted 纠正' : null,
+          });
+          break;
+        }
+        if (!lateAfterStop && turn.status === 'UNKNOWN') {
+          // 不确定窗口的迟到合法输出=把不确定收口为确定：回迁 RUNNING 走正常合同校验/
+          // 交付/结算（casTurn 的终态保护不含 UNKNOWN 迁出——此处显式回迁并留审计）。
+          this.db.prepare(`UPDATE agent_turns SET status = 'RUNNING' WHERE id = ? AND status = 'UNKNOWN'`).run(turnId);
+          this.audit(task, runId, turnId, 'turn.lateOutputResolvesUnknown', { note: 'UNKNOWN 窗口收到完成输出——不确定收口为确定（走合同校验）' });
+        }
         const tx = this.db.transaction(() => {
           if (lateAfterStop) {
             // 停止已生效：迟到完成不复活任务（RT-06 形态），按取消收尾并留审计。

@@ -79,3 +79,33 @@ export function sameProcessIdentity(
   if (historical.startedAt == null || current.startedAt == null) return 'unknown';
   return Math.abs(historical.startedAt - current.startedAt) <= toleranceMs ? 'same' : 'different';
 }
+
+/** 子进程枚举结果：确认无子（checked）/有存活子（列表）/不可枚举（平台/查询失败——未完整确认）。 */
+export type ChildScan =
+  | { state: 'checked'; children: Array<{ pid: number; startedAt: number | null }> }
+  | { state: 'live'; children: Array<{ pid: number; startedAt: number | null }> }
+  | { state: 'unsupported' | 'failed'; error?: string };
+
+/**
+ * 列出以 pid 为父的存活子进程（工具/派生进程——父退出不证明它们已结束）。
+ * win32 走 CIM Win32_Process（ParentProcessId 过滤；孤儿进程的 PPID 保持死父 PID）；
+ * 其他平台无枚举能力=unsupported（未完整确认——按保守语义处理，不猜测）。
+ * 测试可注入 queryFn（返回标记行协议：C:<pid>:<epochms|null> 多行；空输出=无子）。
+ */
+export function listLiveChildProcesses(pid: number, queryFn?: (pid: number) => string): ChildScan {
+  if (queryFn == null && !IS_WINDOWS) return { state: 'unsupported', error: '平台不支持子进程枚举（仅 win32 CIM）' };
+  try {
+    const out = (queryFn ?? ((p: number): string => execFileSync('powershell', [
+      '-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${p}" | ForEach-Object { 'C:' + $_.ProcessId + ':' + $(if ($_.CreationDate) { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() } else { 'null' }) }`,
+    ], { encoding: 'utf8', timeout: 10_000 })))(pid);
+    const children: Array<{ pid: number; startedAt: number | null }> = [];
+    for (const line of out.split('\n')) {
+      const m = line.trim().match(/^C:(\d+):(null|\d+)$/);
+      if (m != null) children.push({ pid: Number(m[1]), startedAt: m[2] === 'null' ? null : Number(m[2]) });
+    }
+    return children.length > 0 ? { state: 'live', children } : { state: 'checked', children: [] };
+  } catch (error) {
+    return { state: 'failed', error: `子进程枚举失败：${String(error).slice(0, 100)}` };
+  }
+}

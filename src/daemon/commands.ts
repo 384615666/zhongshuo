@@ -24,7 +24,7 @@ import { readMemberRuntimeBinding } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
-import { checkProcessLiveness, type LivenessResult } from './processCheck.ts';
+import { checkProcessLiveness, type ChildScan, type LivenessResult } from './processCheck.ts';
 import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ProbeOutcome } from './processRegistry.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
@@ -47,6 +47,8 @@ export interface DaemonCommandDeps {
    * （真实 OS 查询）；测试可注入故障（查询失败/PID 复用等场景仍走正式命令链）。
    */
   processQuery?: (pid: number) => LivenessResult;
+  /** 子进程枚举注入（测试故障模拟）；缺省=真实 CIM 枚举。 */
+  childScan?: (pid: number) => ChildScan;
 }
 
 export class DaemonCommandError extends Error {
@@ -56,6 +58,24 @@ export class DaemonCommandError extends Error {
     this.name = 'DaemonCommandError';
     this.code = code;
   }
+}
+
+/**
+ * 服务端退出取证解析（reconcile / releaseProtection 共用）：probeId 引用则校验
+ * turn 归属/登记一致/新鲜（≤10 分钟）；否则按该 turn 已登记身份自动取证。
+ * 只接受服务端生成的证据记录——调用方自报结果无从进入。
+ */
+function resolveServerProbe(deps: DaemonCommandDeps, turnId: string, probeId: string | undefined, now: number): ProbeOutcome {
+  if (probeId != null) {
+    const referenced = getProbeRecord(deps.db, probeId);
+    if (referenced == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `引用的取证记录不存在：${probeId}`);
+    if (referenced.turnId !== turnId) throw new DaemonCommandError('VALIDATION_INVALID', '取证记录不属于目标 turn（其他 turn 的证据不能冒充）');
+    const reg = getTurnProcessRegistration(deps.db, turnId);
+    if (reg == null || referenced.registryId !== reg.id) throw new DaemonCommandError('STALE_REVISION', '取证记录与当前进程登记不一致（登记已更新）——请重新取证');
+    if (now - referenced.observedAt > 10 * 60 * 1000) throw new DaemonCommandError('STALE_REVISION', '取证记录已过期（>10 分钟）——请重新取证');
+    return referenced;
+  }
+  return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile', childScan: deps.childScan });
 }
 
 const localScope = (userId: string): string => `user:${userId}`;
@@ -471,6 +491,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         if (stopRecordRow != null) { try { stopRecord = JSON.parse(stopRecordRow.value); } catch { stopRecord = null; } }
         const activeUndos = deps.db.prepare(`SELECT id, change_set_id AS changeSetId, status FROM change_set_undos WHERE status IN ('in_progress','failed')`).all();
         const heldLeases = deps.db.prepare(`SELECT lock_domain, owner_turn_id, status, heartbeat_at FROM workspace_leases WHERE status != 'released'`).all();
+        // 「预算已处置、保护待解除」遗留保护（人工声明 notStarted 后可经 releaseProtection 收口）。
+        const pendingRelease = deps.db.prepare(
+          `SELECT l.owner_turn_id AS turnId, t.budget_mark AS budgetMark, t.status AS turnStatus,
+                  count(*) AS leaseCount, max(r.result) AS lastProbeResult
+           FROM workspace_leases l
+           JOIN agent_turns t ON t.id = l.owner_turn_id
+           LEFT JOIN recovery_exit_probes r ON r.turn_id = l.owner_turn_id
+           WHERE l.status != 'released'
+           GROUP BY l.owner_turn_id`,
+        ).all();
         return withCommandId({
           ok: true,
           data: {
@@ -480,10 +510,11 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             interruptedRuns: interrupted,
             unknownTurns,
             processRegistry,
+            pendingRelease,
             stopRecord,
             activeUndos,
             heldLeases,
-            leaseNote: 'daemon 退出不证明 runtime 子进程已退出（单实例锁≠进程树）；expired 租约仍阻塞新写者（RT-07）。退出事实以服务端取证（recovery.probeProcess：按已登记进程身份做 OS 核对）为准——不接受调用方自报',
+            leaseNote: 'daemon 退出不证明 runtime 子进程已退出（单实例锁≠进程树）；expired 租约仍阻塞新写者（RT-07）。退出事实以服务端取证（recovery.probeProcess：按已登记进程身份做 OS 核对）为准——不接受调用方自报；人工声明后的遗留保护经 recovery.releaseProtection 按服务端证据收口',
             undoNote: '未收口撤销：续跑走 changeset.undo（三向判定区分未执行/已执行未记账/外部修改），不清空占位后放行',
           },
         });
@@ -496,7 +527,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const params = z.strictObject({ turnId: z.string().min(1) }).parse(env.params);
         const turn = deps.db.prepare('SELECT id FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string } | undefined;
         if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
-        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe' });
+        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe', childScan: deps.childScan });
         return withCommandId({ ok: true, data: probe });
       }
       case 'recovery.reconcile': {
@@ -562,17 +593,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           // probeId 引用则校验归属/登记一致/新鲜（≤10 分钟）；否则按登记身份自动取证。
           let probe: ProbeOutcome | null = null;
           if (params.verdict === 'executed') {
-            if (params.probeId != null) {
-              const referenced = getProbeRecord(deps.db, params.probeId);
-              if (referenced == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `引用的取证记录不存在：${params.probeId}`);
-              if (referenced.turnId !== turn.id) throw new DaemonCommandError('VALIDATION_INVALID', '取证记录不属于目标 turn（其他 turn 的证据不能冒充）');
-              const reg = getTurnProcessRegistration(deps.db, turn.id);
-              if (reg == null || referenced.registryId !== reg.id) throw new DaemonCommandError('STALE_REVISION', '取证记录与当前进程登记不一致（登记已更新）——请重新取证');
-              if (now - referenced.observedAt > 10 * 60 * 1000) throw new DaemonCommandError('STALE_REVISION', '取证记录已过期（>10 分钟）——请重新取证');
-              probe = referenced;
-            } else {
-              probe = probeTurnExit(deps.db, turn.id, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile' });
-            }
+            probe = resolveServerProbe(deps, turn.id, params.probeId, now);
           }
           const releaseLeases = (): string[] => {
             const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
@@ -646,6 +667,109 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
+      case 'recovery.releaseProtection': {
+        // DEV-13（第七轮·补）：解除「预算已处置、保护未解除」的遗留保护（人工声明 notStarted
+        // 后租约保留——后续取得服务端退出证据时的正式收口入口）。
+        // - 前置：该 turn 存在未释放租约；预算处置必须已完成（budget_mark 非空）或 turn 已
+        //   终态——顺序错误（应先 reconcile）明确拒绝；无租约=幂等 no-op。
+        // - 只按服务端取证解除（exited/no-os-process）：alive/unknown/身份缺失/复用→拒绝并
+        //   保留保护；**不再退款、不再结算、不改写原人工声明**（budget_json/budget_mark 全不动）。
+        // - 同 daemon 联动 releaseAdmission；全部依据 DB——重启后可继续收口。
+        const params = z.strictObject({
+          turnId: z.string().min(1),
+          note: z.string().min(1).max(500),
+          probeId: z.string().min(1).optional(),
+        }).parse(env.params);
+        const result = run(() => {
+          const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null } | undefined;
+          if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
+          const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
+          if (leases.length === 0) {
+            return { turnId: turn.id, stateChanged: false as const, releasedLeases: [] as string[], note: '该 turn 无未释放租约（保护已收口）——幂等 no-op' };
+          }
+          if (turn.budget_mark == null && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(turn.status)) {
+            throw new DaemonCommandError('STALE_REVISION', `顺序错误：该 turn 仍 ${turn.status} 且预算未处置——先走 recovery.reconcile 对账，再解除保护`);
+          }
+          const now = Date.now();
+          const probe = resolveServerProbe(deps, turn.id, params.probeId, now);
+          const run = deps.db.prepare('SELECT id, task_id FROM workflow_runs WHERE id = ?').get(turn.run_id) as { id: string; task_id: string } | undefined;
+          const projectId = (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(run?.task_id ?? '') as { project_id: string } | undefined)?.project_id ?? 'unknown';
+          const emit = (payload: Record<string, unknown>): void => {
+            appendDomainEvent(deps.db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
+              projectId, taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
+              kind: 'recovery.protectionReleased', createdAt: now,
+              payload: { ...payload, manualNote: params.note, probe: { probeId: probe.probeId, result: probe.result, processModel: probe.processModel, pid: probe.pid, observedAt: probe.observedAt, detail: probe.detail } },
+            });
+          };
+          if (probe.result !== 'exited' && probe.result !== 'no-os-process') {
+            // 进程仍活/无法确认：拒绝释放——保护保留（如实记录拒绝原因，不改任何状态）。
+            emit({ released: false, reason: `release-denied-${probe.result}`, protectionRetained: true });
+            throw new DaemonCommandError('STALE_REVISION', `服务端取证未确认执行已结束（${probe.result}：${probe.detail}）——保护保留，不得释放`);
+          }
+          const tx = deps.db.transaction(() => {
+            for (const l of leases) {
+              deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
+            }
+            // 预算处置与原人工声明不动（budget_json/budget_mark 均不写）。
+            emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: `protection-released-${probe.result}` });
+          });
+          tx();
+          return { turnId: turn.id, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain), probeResult: probe.result };
+        });
+        const out = result.data as { stateChanged: boolean; releasedLeases: string[] };
+        if (out.stateChanged && deps.releaseAdmission != null) {
+          try { deps.releaseAdmission(params.turnId); } catch { /* 进程内钩子失败不回滚持久事实；重启后账本自然为空 */ }
+        }
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'recovery.correctToExecuted': {
+        // DEV-13（第七轮·补）：事实冲突纠正（人工声明未启动退款后，发现该 turn 实际执行过
+        // ——渠道账单/迟到产物等人工证据）。账目纠正：budget_mark refunded→settled、
+        // usedTurns 重记 U+1（退款已归还预留，不重复占用）；**原人工声明事件保留不改写**，
+        // 纠正以 fact-conflict-correction 事件叠加记录。保护处置独立走 releaseProtection。
+        const params = z.strictObject({
+          turnId: z.string().min(1),
+          note: z.string().min(1).max(500),
+          evidence: z.strictObject({
+            source: z.string().min(1).max(200), // 人工证据来源（渠道账单/迟到产物核对等）
+            at: z.number().int().nonnegative(),
+            ref: z.string().max(300).optional(),
+          }),
+        }).parse(env.params);
+        const result = run(() => {
+          const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null } | undefined;
+          if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
+          if (turn.budget_mark !== 'refunded') {
+            throw new DaemonCommandError('STALE_REVISION', `事实纠正仅适用于已按未启动退款的 turn（实际 budget_mark=${turn.budget_mark ?? 'null'}）——无冲突可纠正`);
+          }
+          const now = Date.now();
+          const run = deps.db.prepare('SELECT id, task_id, budget_json FROM workflow_runs WHERE id = ?').get(turn.run_id) as { id: string; task_id: string; budget_json: string | null } | undefined;
+          const projectId = (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(run?.task_id ?? '') as { project_id: string } | undefined)?.project_id ?? 'unknown';
+          const tx = deps.db.transaction(() => {
+            if (run?.budget_json != null) {
+              const budget = JSON.parse(run.budget_json) as { usedTurns: number; inFlightReservedTurns: number };
+              // 纠正重记：执行实际发生——U+1（预留已退款归还，不再重新占用 I）。
+              deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?')
+                .run(JSON.stringify({ ...budget, usedTurns: budget.usedTurns + 1 } as typeof budget), run.id);
+            }
+            deps.db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turn.id);
+            appendDomainEvent(deps.db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
+              projectId, taskId: run?.task_id, runId: turn.run_id, turnId: turn.id,
+              kind: 'recovery.factConflictCorrected', createdAt: now,
+              payload: {
+                recordedAs: 'fact-conflict-correction', fromBudgetMark: 'refunded', toBudgetMark: 'settled',
+                manualNote: params.note, evidence: params.evidence,
+                note: '人工声明未启动退款后取得执行证据——账目按实际事实纠正；原 manual-claim 声明事件保留不改写',
+              },
+            });
+          });
+          tx();
+          return { turnId: turn.id, corrected: true as const, budgetMark: 'settled' as const };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'changeset.captureBaseline': {
         // DEV-12 正式命令：基线捕获（Git HEAD+索引状态+内容前像；变更归属 taskId/runId）。
         const params = z.strictObject({
@@ -689,6 +813,27 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const r = getChangeSet(deps.db, params.changeSetId);
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
         return withCommandId({ ok: true, data: r.value });
+      }
+      case 'changeset.listByTask': {
+        // DEV-14 前置（只读）：任务串的变更记录清单——application_status（applied/
+        // not_applied/reverted/partial）+撤销进度+文件级 state（恢复/撤销限制与当前状态的
+        // 用户可见来源）。不提供写操作（撤销走既有 changeset.undo 正式命令）。
+        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        const sets = deps.db.prepare(
+          `SELECT cs.id, cs.application_status AS applicationStatus,
+                  (SELECT count(*) FROM change_set_files f WHERE f.change_set_id = cs.id AND f.role = 'after') AS fileCount,
+                  (SELECT u.status FROM change_set_undos u WHERE u.change_set_id = cs.id ORDER BY u.id DESC LIMIT 1) AS undoStatus
+           FROM change_sets cs WHERE cs.task_id = ? ORDER BY cs.rowid DESC`,
+        ).all(params.taskId) as Array<{
+          id: string; applicationStatus: string; createdAt: number; fileCount: number; undoStatus: string | null;
+        }>;
+        const items = sets.map((cs) => ({
+          ...cs,
+          files: deps.db.prepare(
+            `SELECT role, path, state FROM change_set_files WHERE change_set_id = ? ORDER BY role, path`,
+          ).all(cs.id) as Array<{ role: string; path: string; state: string }>,
+        }));
+        return withCommandId({ ok: true, data: { taskId: params.taskId, items } });
       }
       case 'room.pool': {
         // 房间主池（修复轮 6）：room 限定的根消息+线程摘要——不用事件拼接、不混其他房间。

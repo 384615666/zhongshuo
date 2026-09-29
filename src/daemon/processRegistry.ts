@@ -12,7 +12,7 @@
  * 冒充确认退出——各按 exited/alive/unknown/no-os-process/identity-missing 如实返回。
  */
 import { randomUUID } from 'node:crypto';
-import { sameProcessIdentity, type LivenessResult } from './processCheck.ts';
+import { listLiveChildProcesses, sameProcessIdentity, type ChildScan, type LivenessResult } from './processCheck.ts';
 
 /** 最小 DB 面（测试可注入；避免与 ZhongshuoDatabase 具体类型耦合）。 */
 export interface RegistryDb {
@@ -25,10 +25,10 @@ export interface ProcessRegistryRow {
   run_id: string;
   member_id: string;
   adapter_kind: string;
-  process_model: 'per-turn' | 'shared' | 'none';
+  process_model: 'per-turn' | 'shared' | 'none' | 'unknown';
   pid: number | null;
   started_at_ms: number | null;
-  identity_source: 'os-starttime' | 'pid-only' | 'none';
+  identity_source: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch';
   registered_at: number;
   closed_at: number | null;
   note: string | null;
@@ -38,7 +38,7 @@ export interface ProbeOutcome {
   probeId: string;
   turnId: string;
   registryId: number | null;
-  processModel: 'per-turn' | 'shared' | 'none' | null;
+  processModel: 'per-turn' | 'shared' | 'none' | 'unknown' | null;
   pid: number | null;
   observedAt: number;
   result: 'exited' | 'alive' | 'unknown' | 'no-os-process' | 'identity-missing';
@@ -51,8 +51,8 @@ export interface ProbeOutcome {
 export function registerTurnProcess(
   db: RegistryDb, input: {
     turnId: string; runId: string; memberId: string; adapterKind: string;
-    processModel: 'per-turn' | 'shared' | 'none'; pid: number | null;
-    startedAtMs: number | null; identitySource: 'os-starttime' | 'pid-only' | 'none';
+    processModel: 'per-turn' | 'shared' | 'none' | 'unknown'; pid: number | null;
+    startedAtMs: number | null; identitySource: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch';
     note?: string; now?: number;
   },
 ): void {
@@ -98,7 +98,7 @@ export type QueryFn = (pid: number) => LivenessResult;
  */
 export function probeTurnExit(
   db: RegistryDb, turnId: string, queryFn: QueryFn,
-  options: { createdBy: 'probe' | 'reconcile'; now?: number },
+  options: { createdBy: 'probe' | 'reconcile'; now?: number; childScan?: (pid: number) => ChildScan },
 ): ProbeOutcome {
   const now = options.now ?? Date.now();
   const write = (o: Omit<ProbeOutcome, 'probeId'>): ProbeOutcome => {
@@ -132,7 +132,9 @@ export function probeTurnExit(
     return write({
       turnId, registryId: reg.id, processModel: reg.process_model, pid: null, observedAt: now,
       result: 'unknown', startedAtMs: null, reuseCheck: null,
-      detail: `${reg.process_model} 登记但无 PID——无法做 OS 核对`,
+      detail: reg.identity_source === 'pre-launch'
+        ? '启动窗口身份未持久化（pre-launch 登记、请求可能已发出但 adapter 未及上报 PID）——退出事实无从核对，保护保留'
+        : `${reg.process_model} 登记但无 PID——无法做 OS 核对`,
     });
   }
   const r = queryFn(reg.pid);
@@ -143,12 +145,30 @@ export function probeTurnExit(
     });
   }
   if (r.state === 'exited') {
+    // 进程树证据（supervisor 衔接）：父进程退出**不证明**其工具/派生子进程已结束。
+    // 仅「父退出 + 子进程可枚举且无存活」才构成完整退出证据；有存活子→unknown（保护保留）；
+    // 枚举不可用（非 win32/查询失败）→unknown（未完整确认——能力矩阵如实，不猜测）。
+    const childScan = options.childScan != null ? options.childScan(reg.pid) : listLiveChildProcesses(reg.pid);
+    if (childScan.state === 'live') {
+      return write({
+        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+        result: 'unknown', startedAtMs: null, reuseCheck: null,
+        detail: `登记进程已退出，但其子进程仍在运行（PID ${childScan.children.map((c) => c.pid).join(', ')}）——父退出不证明执行结束，保护保留`,
+      });
+    }
+    if (childScan.state === 'unsupported' || childScan.state === 'failed') {
+      return write({
+        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+        result: 'unknown', startedAtMs: null, reuseCheck: null,
+        detail: `登记进程已退出（OS 确认），但子进程${childScan.state === 'unsupported' ? '枚举平台不支持' : '枚举查询失败'}——未完整确认执行结束，保护保留`,
+      });
+    }
     return write({
       turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
       result: 'exited', startedAtMs: null, reuseCheck: null,
       detail: reg.process_model === 'per-turn'
-        ? 'OS 报告该 PID 不存在（该 turn 专属进程已退出）'
-        : 'OS 报告该 PID 不存在（共享常驻进程已退出——该 turn 执行载体消失，证据按 shared 标注）',
+        ? 'OS 报告该 PID 不存在且无存活子进程（该 turn 专属进程树已完整退出）'
+        : 'OS 报告该 PID 不存在且无存活子进程（共享进程树已完整退出——证据按 shared 标注）',
     });
   }
   // alive：与登记时历史身份做复用检测——different=PID 已被复用（不是原进程，不能当「仍存活」）。
