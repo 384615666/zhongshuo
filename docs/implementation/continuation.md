@@ -2,7 +2,56 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-29 第七轮·补，唯一权威快照）
+## 当前真实状态（2026-09-29 第八轮，唯一权威快照）
+
+- **supervisor 进程树=全树归属分析**：单层 ParentProcessId 枚举不再是判定来源——单次
+  全表 CIM 快照（行标记协议；空输出/残缺行/CIM 错误=failed，**查询失败≠空结果**）+
+  现存树 BFS（父退子活/存活中派生）+**活跃期快照历史归属核对**（迁移 012：worker
+  startTurn 后首拍+消费期间 5s 周拍；中间代际退出后历史父子边消失，孙进程靠快照锚点+
+  创建时间时序核对——排除复用家庭、时间缺失保守计入）；exited=「根退出+现存树空+快照
+  代际核对无遗留」，**无快照=unknown（未完整确认）**。三代 fixture（父→子→孙，父子先退
+  孙活）经 probe/reconcile/releaseProtection 正式链全拒绝、孙结束后才放行；
+  processTreeSupervisor 9/9（含 worker 生产接线用例）。能力边界如实：最后快照之后新派生
+  且父链已死的深层链不可发现（能力矩阵已收窄）。
+- **迟到成果正式接收路径**：`RuntimeAdapter.lateEvents?`（事件来自 adapter 正式通道=
+  fake 持久化会话记录，**不是命令参数**）+`recovery.pumpLateEvents`（entry 接线
+  worker.pumpLateEventsForTurn；迁移 013 eventKey 回执）。「谁继续接收」=该泵（正常消费器
+  退出后的唯一入口；同 daemon 与**重启**（新实例读同一持久化记录）同实现）。applyEvent
+  新守卫：重复终态（含 SUCCEEDED 交付主键保护）/停止代次（stop_generation 事实承载，
+  不复活已停止任务）/refunded 冲突留痕（不自动改账，纠正走 correctToExecuted）/被替代
+  run 不覆盖新交付（superseded 留痕）；幂等=eventKey 回执+终态 CAS 双层闸。lateOutcomePath
+  7/7（实际派发→截止 UNKNOWN→迟到输出→正式泵→收口；含重启路径）。真实 CLI lateEvents
+  未实现=泵如实 unsupported（待补证）。
+- **真实测试预算护栏（机械硬上限）**：`tests/util/realCallGate.ts`——配置全必填（缺一
+  open 即拒）、超限**请求前拦截**、sent/failed/timeout/uncertain 如实落**文件账本**（跨
+  进程/跨文件共享额度，账本既定额度为准不得改限）；realCodex 三文件全部 startTurn 过闸
+  （gatedStartTurn）；「用例数≠startTurn 次数」旧口径废除（vitest.real.e2e.config 注释
+  重写）。realCallBudget 5/5（含跨进程并发子进程实跑）；testIsolation 增护栏层断言→5/5。
+  环境变量门禁≠预算硬上限，分别验收。
+- **DEV-14 主体起步闭环**：`git.status`（只读真实仓库数据，暂存/未暂存/未跟踪严格区分，
+  保留用户未提交内容；非 git 目录明确拒绝）/`task.review`（RT-25：按创建时策略快照处理
+  唯一 pending 交付；accept→DONE、changes_requested→ACTIVE；Git 提交不等同验收）/
+  `runtime.status`（运行能力真实状态，未验证项如实标注）/listByTask 撤销详情增强；UI：
+  主池仓库状态区块（30s 缓存）、REVIEW 验收操作（状态变更后入口收起）、恢复面帮助
+  （START-07 首版最小）+运行能力小节。dev14Commands 5/5（临时 git fixture）+uiE2e 新
+  2 用例（**19 过+2 skip**）。写档未认证入口保持关闭。
+- 数字：集成/单元 **493/493**、UI e2e **19+2skip**、lint 0、tsc 0、本轮零真实调用
+  （未运行任何 real* 测试）。报告：reports/round-20260929-supervisor-lateoutcome-dev14.md。
+  上轮 55 次意外调用偏差记录独立保留，不抵销不复证。
+
+## 当前下一步（唯一·第八轮）
+
+1. **无需等待直接开工**：按交付矩阵推进依赖已满足的工程包——DEV-14 继续（Git diff 正文
+   视图/写操作接入、设置页真实状态深化、START-07/09 完整帮助）；correctToExecuted 的
+   恢复面 UI 入口可选；研讨轮迟到输出收口待定义。
+2. **价值评价（暂缓中）**：恢复与修复链已稳定（本轮收口 supervisor+迟到链）——可提请
+   用户集中安排一次（不重跑实验、证据保留）；DEV-11 仍不开放。
+3. **补证方案（另批）**：真实 CLI lateEvents（会话文件回放）/真实崩溃现场进程树取证/
+   文件发现真实有效性——优先 Claude Code+deepseek-flash，Codex 专项单独列目标预算。
+
+---
+
+## （上一轮快照，2026-09-29 第七轮·补）
 
 - **上轮核账纠错（重要）**：上轮「零真实调用」声明**错误**——test:e2e 全量收集无门禁的
   realCodex*.test.ts，调试循环中实际发生 **45 会话/55 真实 turn（gpt-6-luna，token in
@@ -32,7 +81,7 @@
   报告：reports/round-20260929-isolation-protection-outcome.md（含上轮核账勘误与
   round-20260929-process-evidence-repair-budget.md 顶部勘误注记）。
 
-## 当前下一步（唯一·七补轮）
+## （七补轮下一步，已执行完毕）
 
 1. **无需等待直接开工**：按交付矩阵推进依赖已满足的工程包（DEV-13 剩余真实样本归补证
    窗口；DEV-14 前置已起步——变更记录区块可扩展 Git 视图/验收流；correctToExecuted 的

@@ -26,13 +26,25 @@
 |---|---|---|---|---|
 | better-sqlite3 | 13.0.3（prebuilds，SQLite 3.53.4） | Node 24.16.0（daemon 进程；renderer 不加载 native） | 真实执行 SQL 通过（`pnpm check` 151/151 含 24 集成用例）；Electron 场景 DEV-05/15 复验 | 2026-09-27 |
 
-## 进程树取证能力（DEV-13 恢复链路，2026-09-29 第七轮·补）
+## 进程树取证能力（DEV-13 恢复链路；第八轮 2026-09-29 全树归属分析修订）
 
 | 能力 | 状态 | 依据与限制 |
 |---|---|---|
 | 父进程存活/退出+启动时刻（复用检测） | win32 实测 supported；非 win32 部分（无启动时刻） | PowerShell Get-Process+ErrorVariable 分类（仅 ObjectNotFound=exited）；本地真实子进程用例 |
-| 存活子进程枚举（工具/派生进程） | **仅 win32 supported**（CIM Win32_Process ParentProcessId）；非 win32=未完整确认 | 父退出不证明执行结束：仅「父退出+子可枚举且无存活」构成完整退出证据；枚举失败/平台不支持→unknown（保护保留，不猜测） |
-| per-turn 进程树（Claude CLI 每 turn 独立） | 本地 node 进程树 fixture 验证 | 父被杀+工具子进程孤儿仍跑→unknown；全树退出→exited |
+| 全表进程快照+现存树 BFS | **仅 win32 supported**（单次 CIM 全表，行标记协议；空输出/残缺行/CIM 错误=failed，不把查询失败当空结果） | 从登记根沿 PPID 边收集存活后代（覆盖父退子活、存活期间继续派生）；非 win32=未完整确认（保护保留） |
+| 活跃期快照历史归属核对（孙进程遗留） | supported（win32；迁移 012 持续归属登记） | worker startTurn 后首拍+消费期间 5s 周拍；中间代际退出后其历史父子边消失——孙进程靠快照锚点+创建时间时序核对（排除复用家庭/PID 边残留；时间缺失保守计入） |
+| 完整退出证据（exited） | supported=「登记根退出+现存树无存活+快照历史代际核对无遗留」；**无快照=unknown（未完整确认）** | 三代 fixture（父→子→孙，父子先退孙活）实测：probe/reconcile/releaseProtection 全拒绝；孙结束后才 exited/允许解除 |
+| per-turn 进程树（Claude CLI 每 turn 独立） | 本地 node 进程树 fixture 验证（含 worker 生产接线：fake 上报真实子进程身份→快照自动落库） | 父被杀+工具子进程孤儿仍跑→unknown；全树退出→exited |
 | shared 进程树（Codex App Server 常驻） | 本地 node 进程树 fixture 验证 | server 存活但 turn 执行状态未知（unknown 保留）；server 死+工具遗留→unknown |
 | pre-launch 崩溃窗口识别 | supported（迁移 011 pre-launch 登记） | openSession 后 startTurn 前登记占位（model=unknown/pid=null）——区分「请求可能已发出」与「从未启动」（identity-missing） |
+| 能力边界（如实收窄） | **最后快照之后新派生、且其父链在快照之后死去的深层链不可发现**（快照间隔 5s 内风险存在） | 等效完美方案（Job Object/ETW 持续监听）需原生能力，列为后续可选；快照间隔是当前唯一缓解 |
 | 真实 CLI（claude/codex）崩溃现场进程树取证 | **未验证（真实样本未跑——零调用纪律）** | 本地 fixture 覆盖机制；真实 CLI 工具子进程行为随真实补证 |
+
+## 迟到成果接收能力（第八轮 2026-09-29）
+
+| 能力 | 状态 | 依据与限制 |
+|---|---|---|
+| 迟到成果泵（recovery.pumpLateEvents 正式命令） | supported（fake 双路径验证：同 daemon+重启回放） | 幂等双层闸=eventKey 回执（迁移 013）+turn 终态 CAS；守卫=重复终态/停止代次/refunded 冲突/被替代 run |
+| fake runtime 迟到回放（lateEvents） | supported（会话事件持久化文件，模拟 CLI 会话记录） | 重启后新实例同目录可读——重连/回放的本地演练形态 |
+| 真实 CLI 迟到回放（claude/codex lateEvents） | **unsupported（未实现——如实标注，不冒充）** | 会话文件/重连存量流解析待真实补证；泵对未实现 adapter 返回明确 unsupported |
+| 研讨轮（delib.*）UNKNOWN 迟到输出收口 | unsupported-mode（本轮范围外） | 研讨轮 UNKNOWN=成员缺席语义（E4）；处理归后续轮次 |
