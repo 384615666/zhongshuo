@@ -25,3 +25,14 @@
 | 模块 | 版本 | 运行环境 | 验证 | 日期 |
 |---|---|---|---|---|
 | better-sqlite3 | 13.0.3（prebuilds，SQLite 3.53.4） | Node 24.16.0（daemon 进程；renderer 不加载 native） | 真实执行 SQL 通过（`pnpm check` 151/151 含 24 集成用例）；Electron 场景 DEV-05/15 复验 | 2026-09-27 |
+
+## 进程树取证能力（DEV-13 恢复链路，2026-09-29 第七轮·补）
+
+| 能力 | 状态 | 依据与限制 |
+|---|---|---|
+| 父进程存活/退出+启动时刻（复用检测） | win32 实测 supported；非 win32 部分（无启动时刻） | PowerShell Get-Process+ErrorVariable 分类（仅 ObjectNotFound=exited）；本地真实子进程用例 |
+| 存活子进程枚举（工具/派生进程） | **仅 win32 supported**（CIM Win32_Process ParentProcessId）；非 win32=未完整确认 | 父退出不证明执行结束：仅「父退出+子可枚举且无存活」构成完整退出证据；枚举失败/平台不支持→unknown（保护保留，不猜测） |
+| per-turn 进程树（Claude CLI 每 turn 独立） | 本地 node 进程树 fixture 验证 | 父被杀+工具子进程孤儿仍跑→unknown；全树退出→exited |
+| shared 进程树（Codex App Server 常驻） | 本地 node 进程树 fixture 验证 | server 存活但 turn 执行状态未知（unknown 保留）；server 死+工具遗留→unknown |
+| pre-launch 崩溃窗口识别 | supported（迁移 011 pre-launch 登记） | openSession 后 startTurn 前登记占位（model=unknown/pid=null）——区分「请求可能已发出」与「从未启动」（identity-missing） |
+| 真实 CLI（claude/codex）崩溃现场进程树取证 | **未验证（真实样本未跑——零调用纪律）** | 本地 fixture 覆盖机制；真实 CLI 工具子进程行为随真实补证 |

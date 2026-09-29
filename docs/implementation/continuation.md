@@ -2,7 +2,47 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-29 第七轮，唯一权威快照）
+## 当前真实状态（2026-09-29 第七轮·补，唯一权威快照）
+
+- **上轮核账纠错（重要）**：上轮「零真实调用」声明**错误**——test:e2e 全量收集无门禁的
+  realCodex*.test.ts，调试循环中实际发生 **45 会话/55 真实 turn（gpt-6-luna，token in
+  4.80M/out 42K，费用=渠道账单 unknown）**；逐次登记+防复发见
+  reports/round-20260929-isolation-protection-outcome.md §一。防复发已实施：fake e2e 配置
+  排除 real*+独立 `npm run test:real` 入口+三文件 `ZS_REAL_E2E=1` 双层门禁+
+  testIsolation.test 4/4（子进程实跑证明隔离）。不从批次剩余 3 次抵销。
+- **保护收口**：`recovery.releaseProtection`（预算已处置+保护未解除的遗留租约按服务端
+  取证解除——alive/unknown/复用拒绝保留；不改预算/不改写人工声明；重启可续；钩子失败
+  DB 事实保持）+`recovery.correctToExecuted`（事实矛盾纠正 refunded→settled U+1，原声明
+  事件叠加不改写）；protectionRelease.test 4/4 全链。
+- **supervisor 进程树**：父 PID 退出**不再**单独构成完整退出证据——probe exited 追加存活
+  子进程枚举（win32 CIM；有子→unknown 保留；枚举不可用→未完整确认）；pre-launch 登记
+  （迁移 011：model=unknown/source=pre-launch——startTurn 前占位，崩溃窗口与「从未启动」
+  区分）；processTreeSupervisor.test 4/4（真实 node 进程树，工具子 detached 构造孤儿）。
+  能力矩阵新增「进程树取证能力」节（真实 CLI 崩溃现场=未验证）。
+- **成果一致性八项**（outcomeConsistency.test 7/7）：**发现并修复洞**——已收口
+  （FAILED/CANCELLED）turn 的迟到 completed 原会走交付路径复活任务；现改为不复活不交付
+  +lateCompletion（refunded 附 factConflictHint）；UNKNOWN 未收口=迟到合法输出收口为确定
+  成功（lateOutputResolvesUnknown）；回执丢失重放/交付重领不重复/resultKey 幂等与异载荷/
+  停止后不复活/DEV-12 半程续跑均复证。
+- **恢复 UI 闭环+DEV-14 前置**：遗留保护行（预算已处置·保护待解除）+「继续核对并解除
+  （服务端取证）」正式入口（拒绝行内如实+保留）；`changeset.listByTask` 只读命令+任务串
+  「变更记录」区块（状态中文+文件前像/后像+撤销进度；无变更不渲染；只读）。uiE2e 17/17
+  （反例全链扩展+DEV-14 前置新用例）。
+- 数字：集成/单元 **470/470**、UI e2e **17/17**、lint 0、零新增真实调用（隔离证明固化）。
+  报告：reports/round-20260929-isolation-protection-outcome.md（含上轮核账勘误与
+  round-20260929-process-evidence-repair-budget.md 顶部勘误注记）。
+
+## 当前下一步（唯一·七补轮）
+
+1. **无需等待直接开工**：按交付矩阵推进依赖已满足的工程包（DEV-13 剩余真实样本归补证
+   窗口；DEV-14 前置已起步——变更记录区块可扩展 Git 视图/验收流；correctToExecuted 的
+   UI 入口可选）。
+2. **价值评价（暂缓中）**与补证方案（另批）口径不变；真实补证优先 Claude Code+
+   deepseek-flash，Codex 专项单独列目标预算。
+
+---
+
+## （上一轮快照，2026-09-29 第七轮）
 
 - **OS 退出证据服务端化**（第七轮，迁移 009）：`RuntimeAdapter.processIdentity()`
   可选能力（per-turn=Claude CLI 每 turn 独立子进程/shared=Codex App Server 常驻/none=
