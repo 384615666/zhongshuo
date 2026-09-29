@@ -69,3 +69,9 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 #recovery-panel .recovery-orphan-row { border-top: 1px dashed #d8dee4; padding: 6px 0; }
 .changeset-block { margin: 8px 0; padding: 6px; border: 1px solid #d8dee4; border-radius: 4px; }
 .changeset-block .changeset-row { font-size: 12px; padding: 2px 0; }
+
+/* DEV-14（第八轮）：恢复帮助（START-07 首版）/运行能力/git 仓库状态只读区块 */
+.recovery-help { font-size: 12px; line-height: 1.5; color: var(--ink-2, #5b6472); border-top: 1px dashed var(--line-2, #d8dde3); padding-top: 6px; }
+.recovery-help div { margin-top: 2px; }
+.repo-status { padding: 4px 12px; border-bottom: 1px solid var(--line-2, #e3e7eb); }
+.repo-status .meta { font-size: 12px; color: var(--ink-2, #5b6472); }

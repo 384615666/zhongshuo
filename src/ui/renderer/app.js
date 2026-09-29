@@ -41,6 +41,8 @@ const state = {
   // @全体研讨（M1）：mentions=[{kind:'all'}] → 服务端 DELIBERATE 路由；一次性意图。
   deliberateAll: false,
   pollTimer: null,
+  // 仓库状态缓存（DEV-14 git.status 只读视图）：projectId 切换时失效。
+  repoStatusCache: null,
   /** 恢复面人工说明草稿（按 turnId）——周期重画不丢输入。 */
   recoveryNotes: {},
   pollTick: 0,
@@ -180,6 +182,7 @@ function taskChip(status) {
 
 async function renderPool() {
   if (state.openThreadId != null || state.projectId == null || state.roomId == null) return;
+  void renderRepoStatus().catch(() => { /* 仓库状态失败不阻断主池 */ });
   const pool = el('pool');
   const data = await command('room.pool', { roomId: state.roomId, limit: 50 });
   pool.innerHTML = '';
@@ -368,7 +371,6 @@ async function renderChangeSets() {
   }
   if ((data.items ?? []).length === 0) return;
   const APP_STATUS = { applied: '已应用', not_applied: '未应用', reverted: '已撤销', partial: '部分应用' };
-  const UNDO_STATUS = { in_progress: '撤销进行中（可续跑）', failed: '撤销中断（待恢复续跑）', succeeded: '已撤销' };
   const block = document.createElement('div');
   block.id = 'changeset-block';
   block.className = 'changeset-block';
@@ -380,7 +382,8 @@ async function renderChangeSets() {
     const row = document.createElement('div');
     row.className = 'changeset-row';
     row.dataset.changeSetId = cs.id;
-    const undoText = cs.undoStatus != null ? `；撤销=${UNDO_STATUS[cs.undoStatus] ?? cs.undoStatus}` : '';
+    const UNDO_LABEL = { in_progress: '撤销进行中', failed: '撤销中断（待恢复续跑）', succeeded: '已撤销', conflict: '撤销冲突（不可自动继续）' };
+    const undoText = cs.undoStatus != null ? `；撤销=${UNDO_LABEL[cs.undoStatus] ?? cs.undoStatus}` : '';
     const label = document.createElement('div');
     label.textContent = `${cs.id.slice(0, 14)}… · ${APP_STATUS[cs.applicationStatus] ?? cs.applicationStatus} · ${cs.fileCount} 文件${undoText}`;
     row.appendChild(label);
@@ -388,6 +391,16 @@ async function renderChangeSets() {
     files.className = 'recovery-facts';
     files.textContent = cs.files.map((f) => `${f.role === 'after' ? '改后' : '改前'} ${f.path}（${f.state}）`).join(String.fromCharCode(10));
     row.appendChild(files);
+    // 撤销详情（第八轮）：恢复进度/冲突原因（不可撤销的具体说明）——只读呈现，续跑走撤销命令。
+    if (cs.undo != null) {
+      const undoDetail = document.createElement('div');
+      undoDetail.className = 'recovery-facts';
+      const lines = [`撤销进度：${cs.undo.doneSteps}/${cs.undo.totalSteps} 步（${UNDO_LABEL[cs.undo.status] ?? cs.undo.status}）`];
+      if (cs.undo.failure != null) lines.push(`不可继续原因：${cs.undo.failure}`);
+      if (cs.undo.resumable) lines.push('恢复方式：中断后可续跑（逐步幂等重验，不覆盖用户改动）');
+      undoDetail.textContent = lines.join(String.fromCharCode(10));
+      row.appendChild(undoDetail);
+    }
     block.appendChild(row);
   }
   box.appendChild(block);
@@ -396,8 +409,12 @@ async function renderChangeSets() {
 function updateStopUi(snapshot) {
   const btn = el('stop-btn');
   const statusLine = el('thread-status');
+  const acceptBtn = el('review-accept-btn');
+  const rejectBtn = el('review-reject-btn');
   if (snapshot == null) {
     btn.classList.add('hidden');
+    acceptBtn.classList.add('hidden');
+    rejectBtn.classList.add('hidden');
     return;
   }
   const chip = taskChip(snapshot.status);
@@ -413,6 +430,25 @@ function updateStopUi(snapshot) {
   } else {
     btn.classList.add('hidden');
   }
+  // 可选验收（RT-25）：REVIEW＝待人工验收的唯一 pending 交付——按创建时策略快照处理；
+  // Git 提交不等同验收（这里只写 review 账本与任务状态）。
+  const reviewable = snapshot.status === 'REVIEW';
+  acceptBtn.classList.toggle('hidden', !reviewable);
+  rejectBtn.classList.toggle('hidden', !reviewable);
+}
+
+/** 人工验收（task.review 正式命令）：accept→DONE；changes_requested→ACTIVE（跟进走 redispatch）。
+ *  操作绑定当前打开任务；失败/幂等拒绝如实展示在状态行。 */
+async function reviewTask(decision) {
+  const snap = state.openTaskSnapshot;
+  if (snap == null) return;
+  try {
+    const r = await command('task.review', { taskId: snap.taskId, decision });
+    el('thread-status').textContent = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
+  } catch (error) {
+    el('thread-status').textContent = `验收失败：${error.message}`;
+  }
+  await renderThread();
 }
 
 async function stopTask() {
@@ -543,6 +579,84 @@ async function send() {
 
 // ---------- 恢复门禁（R2：只读查询 + 显式确认） ----------
 
+/** 运行能力真实状态（DEV-14/第八轮）：成员绑定+能力矩阵关键项+daemon 恢复能力——
+ *  未验证项如实标注，不因成功回复整体升级；查询失败隐藏（不伪造）。 */
+async function renderRuntimeStatus() {
+  const box = el('runtime-status');
+  let data;
+  try {
+    data = await command('runtime.status', {});
+  } catch {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  const head = document.createElement('div');
+  head.innerHTML = '<b>运行能力（当前 daemon·实测口径）</b>';
+  box.appendChild(head);
+  const facts = document.createElement('div');
+  facts.className = 'recovery-facts';
+  const lines = [];
+  for (const b of data.memberBindings ?? []) {
+    lines.push(`${b.displayName}：${b.kind}${b.model ? ` · ${b.model}` : ''}`);
+  }
+  lines.push(`进程树取证：${data.daemonRecovery?.processTreeEvidence ?? '?'}`);
+  lines.push(`迟到成果接收：${data.daemonRecovery?.lateEventPump ?? '?'}`);
+  const claudeCap = data.capabilities?.claude?.keyAbilities;
+  if (claudeCap != null) {
+    lines.push(`claude 能力（关键项）：结构化终态=${claudeCap.structuredFinal}；写入限制=${claudeCap.restrictWrites}；交互审批=${claudeCap.interactiveApprovals}`);
+  }
+  facts.textContent = lines.join(String.fromCharCode(10));
+  box.appendChild(facts);
+}
+
+/** 仓库状态只读视图（DEV-14/RT-24）：真实 git 数据——暂存/未暂存/未跟踪严格区分；
+ *  只读不改工作区（用户未提交内容保留）。非 git 仓库如实说明。30s 缓存防轮询抖动。 */
+async function renderRepoStatus() {
+  if (state.projectId == null) return;
+  const box = el('repo-status');
+  const now = Date.now();
+  if (state.repoStatusCache != null && state.repoStatusCache.projectId === state.projectId && now - state.repoStatusCache.at < 30_000) {
+    return; // 同项目缓存内：不重复拉取（git 子进程开销）
+  }
+  let data;
+  try {
+    data = await command('git.status', { projectId: state.projectId });
+  } catch (error) {
+    box.classList.remove('hidden');
+    box.innerHTML = '';
+    const line = document.createElement('div');
+    line.className = 'meta';
+    line.textContent = `仓库状态：${error.message.includes('不是 git 仓库') ? '当前项目目录不是 git 仓库' : `查询失败（${error.message}）`}`;
+    box.appendChild(line);
+    return;
+  }
+  state.repoStatusCache = { at: now, projectId: state.projectId, data };
+  const total = data.staged.length + data.unstaged.length + data.untracked.length;
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'meta';
+  head.textContent = `仓库状态（只读·分支 ${data.branch}）：已暂存 ${data.staged.length} · 未暂存 ${data.unstaged.length} · 未跟踪 ${data.untracked.length}${data.truncated ? '（列表截断）' : ''}`;
+  box.appendChild(head);
+  if (total === 0) {
+    const clean = document.createElement('div');
+    clean.className = 'recovery-facts';
+    clean.textContent = '工作区干净（相对最近提交无差异）';
+    box.appendChild(clean);
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'recovery-facts';
+  const lines = [];
+  if (data.staged.length > 0) lines.push(`已暂存：${data.staged.map((e) => e.path + (e.renamedFrom != null ? `（← ${e.renamedFrom}）` : '')).join('、')}`);
+  if (data.unstaged.length > 0) lines.push(`未暂存：${data.unstaged.map((e) => e.path).join('、')}`);
+  if (data.untracked.length > 0) lines.push(`未跟踪：${data.untracked.map((e) => e.path).join('、')}`);
+  list.textContent = lines.join(String.fromCharCode(10));
+  box.appendChild(list);
+}
+
 async function refreshGate() {
   const gate = el('resume-gate');
   const info = el('resume-info');
@@ -558,6 +672,8 @@ async function refreshGate() {
   // 恢复面（DEV-13·下）：受影响任务/运行+证据+未确认事项；操作精确绑定目标行。
   const panel = el('recovery-panel');
   renderRecoveryPanel(panel, data);
+  // 运行能力真实状态（DEV-14：只读、不 spawn 子进程；与恢复帮助同侧——故障排查入口）。
+  void renderRuntimeStatus().catch(() => { /* 状态查询失败不阻断恢复面 */ });
   if (!data.gateHeld) {
     gate.classList.add('hidden');
     info.classList.add('hidden');
@@ -588,9 +704,11 @@ function renderRecoveryPanel(panel, data) {
     // 全部收口：清空并隐藏（保留旧 DOM 会让已收口 turn 仍被读到——表现为“行不消失”）。
     panel.innerHTML = '';
     panel.classList.add('hidden');
+    el('recovery-help').classList.add('hidden');
     return;
   }
   panel.classList.remove('hidden');
+  el('recovery-help').classList.remove('hidden'); // START-07 首版：恢复场景可读帮助随恢复面出现
   panel.innerHTML = '';
   const head = document.createElement('div');
   head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项（续跑走撤销命令，三向判定）` : ''}`;
@@ -794,6 +912,8 @@ el('room-create').onclick = () => {
     .catch((e) => alert(`建房失败：${e.message}`));
 };
 el('stop-btn').onclick = () => void stopTask();
+el('review-accept-btn').onclick = () => void reviewTask('accept');
+el('review-reject-btn').onclick = () => void reviewTask('changes_requested');
 el('thread-back-btn').onclick = () => { showPool(); void renderPool().catch(showConnError); };
 el('composer-input').addEventListener('keydown', (ev) => {
   // IME 组合态（拼音候选未上屏）的 Enter 不发送：isComposing 或遗留 keyCode 229。

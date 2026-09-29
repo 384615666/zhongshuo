@@ -17,6 +17,15 @@
       <div class="sidebar-foot">
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
+        <div id="recovery-help" class="resume-info recovery-help hidden">
+          <b>恢复与保护帮助（START-07 首版）</b>
+          <div>·「状态未知」＝上次执行截止/崩溃时没等到终态回执，结果不确定——不自动重跑、不伪造成功/失败。</div>
+          <div>· 对账前请先「服务端取证」：由 daemon 按登记的进程身份做 OS 核对（父进程＋其派生进程树＋活跃期快照的孙进程归属核对）。</div>
+          <div>· 「人工声明未启动」会退款但<b>保留写入保护</b>：程序未确认执行结束前，保护不解除；之后可「继续核对并解除」（仍按服务端取证放行）。</div>
+          <div>· 截止后到达的迟到成果经「服务端事件通道」接收（recovery.pumpLateEvents）：合同校验通过才交付；任务已停止/已有更新交付时不复活、不覆盖。</div>
+          <div>· 运行能力只显示实测结论：未验证项如实标注「unverified/待补证」，不用成功回复推断整体能力。</div>
+        </div>
+        <div id="runtime-status" class="resume-info hidden" data-section="runtime"></div>
         <div id="recovery-panel" class="resume-info hidden" data-section="recovery"></div>
       </div>
     </aside>
@@ -25,12 +34,15 @@
         <span id="thread-title">主对话池</span>
         <span id="conn-state" class="conn"></span>
       </header>
+      <section id="repo-status" class="repo-status hidden" data-section="repo"></section>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">
         <div class="thread-back">
           <button id="thread-back-btn">← 返回主池</button>
           <span id="thread-status" class="thread-status"></span>
           <button id="stop-btn" class="danger hidden">停止任务</button>
+          <button id="review-accept-btn" class="primary hidden" title="通过验收：交付记 accepted，任务转 DONE（Git 提交不等同验收）">验收通过</button>
+          <button id="review-reject-btn" class="hidden" title="要求修改：交付记 changes_requested，任务回 ACTIVE 可追加跟进">要求修改</button>
         </div>
         <div id="delib-progress" class="delib-progress hidden"></div>
         <div id="delib-report" class="delib-report hidden"></div>

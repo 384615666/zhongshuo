@@ -841,6 +841,153 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
         return withCommandId({ ok: true, data: r.value });
       }
+      case 'changeset.listByTask': {
+        // DEV-14（第八轮增强）：任务串的变更记录清单——application_status+文件级 state
+        // +撤销进度/冲突原因（不可撤销与恢复进度的用户可见来源）。只读；撤销走
+        // changeset.undo 正式命令。
+        const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        const sets = deps.db.prepare(
+          `SELECT cs.id, cs.application_status AS applicationStatus, cs.before_ref, cs.after_ref,
+                  (SELECT count(*) FROM change_set_files f WHERE f.change_set_id = cs.id AND f.role = 'after') AS fileCount,
+                  (SELECT u.status FROM change_set_undos u WHERE u.change_set_id = cs.id ORDER BY u.id DESC LIMIT 1) AS undoStatus
+           FROM change_sets cs WHERE cs.task_id = ? ORDER BY cs.rowid DESC`,
+        ).all(params.taskId) as Array<{
+          id: string; applicationStatus: string; before_ref: string; after_ref: string;
+          fileCount: number; undoStatus: string | null;
+        }>;
+        const items = sets.map((cs) => {
+          const undoRow = deps.db.prepare(
+            `SELECT status, steps_json, failure_json, summary_json FROM change_set_undos WHERE change_set_id = ? ORDER BY id DESC LIMIT 1`,
+          ).get(cs.id) as { status: string; steps_json: string; failure_json: string | null; summary_json: string | null } | undefined;
+          let undoDetail: {
+            status: string;
+            totalSteps: number;
+            doneSteps: number;
+            /** 冲突/失败原因（不可继续撤销的具体说明——含冲突文件清单）。 */
+            failure: string | null;
+            /** 恢复进度说明：中断后可续跑（逐步幂等重验）。 */
+            resumable: boolean;
+          } | null = null;
+          if (undoRow != null) {
+            const steps = JSON.parse(undoRow.steps_json) as Array<{ state?: string }>;
+            undoDetail = {
+              status: undoRow.status,
+              totalSteps: steps.length,
+              doneSteps: steps.filter((st) => st.state === 'done').length,
+              failure: undoRow.failure_json != null ? String(undoRow.failure_json).slice(0, 300) : null,
+              resumable: undoRow.status === 'in_progress' || undoRow.status === 'failed',
+            };
+          }
+          return {
+            id: cs.id,
+            applicationStatus: cs.applicationStatus,
+            beforeRef: cs.before_ref,
+            afterRef: cs.after_ref,
+            fileCount: cs.fileCount,
+            undoStatus: cs.undoStatus,
+            undo: undoDetail,
+            files: deps.db.prepare(
+              `SELECT role, path, state FROM change_set_files WHERE change_set_id = ? ORDER BY role, path`,
+            ).all(cs.id) as Array<{ role: string; path: string; state: string }>,
+          };
+        });
+        return withCommandId({ ok: true, data: { taskId: params.taskId, items } });
+      }
+      case 'git.status': {
+        // DEV-14/RT-24（第八轮）：仓库状态只读视图——真实 git 数据（暂存/未暂存/未跟踪
+        // 严格区分），不改工作区（保留用户已有未提交内容）。Git 提交不等同任务验收
+        // （RT-25）；写操作不在本命令。
+        const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+        const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(params.projectId) as { canonical_path: string } | undefined;
+        if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        const { gitRepoStatus } = await import('./gitStatus.ts');
+        const r = gitRepoStatus(project.canonical_path);
+        if (!r.ok) throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
+        return withCommandId({ ok: true, data: r });
+      }
+      case 'task.review': {
+        // RT-25 可选任务验收（第八轮）：按任务创建时的策略快照（review_policy=user_review
+        // 才有 pending 交付）处理唯一待验收交付。accept→任务 DONE；changes_requested→任务
+        // 回 ACTIVE（返工经 redispatch 正式链）。**Git 提交不等同验收**——本命令只写
+        // review 账本与任务状态，不触碰 git/changeset。
+        const params = z.strictObject({
+          taskId: z.string().min(1),
+          decision: z.enum(['accept', 'changes_requested']),
+          note: z.string().min(1).max(500).optional(),
+        }).parse(env.params);
+        const result = run(() => {
+          const task = deps.db.prepare('SELECT id, status, review_policy FROM tasks WHERE id = ?').get(params.taskId) as { id: string; status: string; review_policy: string } | undefined;
+          if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
+          if (task.review_policy !== 'user_review') {
+            throw new DaemonCommandError('STALE_REVISION', `任务策略为 ${task.review_policy}（非 user_review）：无待验收交付——验收状态与创建时策略快照一致`);
+          }
+          const delivery = deps.db.prepare(
+            `SELECT id, revision, run_id FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`,
+          ).get(params.taskId) as { id: string; revision: number; run_id: string | null } | undefined;
+          if (delivery == null) {
+            throw new DaemonCommandError('STALE_REVISION', '该任务没有待验收交付（已处理或未交付）——幂等拒绝');
+          }
+          if (task.status !== 'REVIEW') {
+            throw new DaemonCommandError('STALE_REVISION', `任务状态 ${task.status} 非 REVIEW：验收不适用于当前状态`);
+          }
+          const now = Date.now();
+          const projectId = (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(task.id) as { project_id: string }).project_id;
+          const nextStatus = params.decision === 'accept' ? 'accepted' : 'changes_requested';
+          const tx = deps.db.transaction(() => {
+            deps.db.prepare(
+              `UPDATE task_deliveries SET review_status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ?`,
+            ).run(nextStatus, deps.localUserId, now, params.note ?? null, delivery.id);
+            const taskNext = params.decision === 'accept' ? 'DONE' : 'ACTIVE';
+            deps.db.prepare(`UPDATE tasks SET status = ?, revision = revision + 1 WHERE id = ? AND status = 'REVIEW'`).run(taskNext, task.id);
+            appendDomainEvent(deps.db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`,
+              projectId, taskId: task.id, runId: delivery.run_id ?? undefined,
+              kind: 'task.reviewRecorded', createdAt: now,
+              payload: {
+                decision: params.decision, deliveryId: delivery.id, deliveryRevision: delivery.revision,
+                reviewedBy: deps.localUserId, note: params.note ?? null,
+                taskStatusAfter: taskNext,
+                gitCommitIsNotReview: 'Git 提交不等同验收（RT-25）：本记录只承载人工验收事实',
+              },
+            });
+          });
+          tx();
+          return { taskId: task.id, decision: params.decision, deliveryId: delivery.id, deliveryRevision: delivery.revision, reviewStatus: nextStatus, taskStatusAfter: params.decision === 'accept' ? 'DONE' : 'ACTIVE' };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'runtime.status': {
+        // DEV-14（第八轮）：运行能力真实状态（只读、不 spawn 子进程）——成员绑定、静态
+        // 能力矩阵关键项、本 daemon 的恢复取证/迟到回放能力与真实性标注。
+        const installations = deps.db.prepare(
+          'SELECT id, kind, executable FROM runtime_installations ORDER BY kind',
+        ).all() as Array<{ id: string; kind: string; executable: string | null }>;
+        const bindings = deps.db.prepare(
+          `SELECT pm.id AS memberId, pm.display_name AS displayName, ri.kind AS kind, ap.settings_json AS settingsJson
+           FROM project_members pm
+           LEFT JOIN agent_profiles ap ON ap.id = pm.profile_id
+           LEFT JOIN runtime_installations ri ON ri.id = ap.runtime_installation_id
+           ORDER BY pm.id`,
+        ).all() as Array<{ memberId: string; displayName: string; kind: string | null; settingsJson: string | null }>;
+        const memberBindings = bindings.map((b) => {
+          let model: string | null = null;
+          try { model = b.settingsJson != null ? (JSON.parse(b.settingsJson) as { model?: string }).model ?? null : null; } catch { /* settings 解析失败=无模型 */ }
+          return { memberId: b.memberId, displayName: b.displayName, kind: b.kind ?? '(默认 runtime)', model };
+        });
+        return withCommandId({ ok: true, data: {
+          installations,
+          memberBindings,
+          capabilities: {
+            claude: { keyAbilities: { structuredFinal: 'supported', restrictWrites: 'unverified', interactiveApprovals: 'unverified' }, adapterVersion: CLAUDE_ADAPTER_VERSION },
+          },
+          daemonRecovery: {
+            processTreeEvidence: process.platform === 'win32' ? 'supported（全表 CIM+活跃期快照历史归属核对）' : 'unsupported（仅 win32——保护保留语义）',
+            lateEventPump: 'fake 已验证（同 daemon+重启演练）；真实 CLI 会话文件回放待补证（adapter.lateEvents 未实现=如实 unsupported）',
+            probeServerSideOnly: true,
+          },
+          note: '真实性口径：能力结论只适用于实测组合；未认证/未验证项如实标注（runtime-capability-matrix）',
+        } });
+      }
       case 'room.pool': {
         // 房间主池（修复轮 6）：room 限定的根消息+线程摘要——不用事件拼接、不混其他房间。
         const params = z.strictObject({ roomId: z.string().min(1), limit: z.number().int().min(1).max(100).optional() }).parse(env.params);

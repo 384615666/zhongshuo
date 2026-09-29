@@ -13,7 +13,7 @@
  * fake 档零额度；codex 档消耗真实 turn（ZS_G3_REAL=1 显式触发，预算受控）。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -55,6 +55,11 @@ window.__t = {
   orphanRelease: (turnId) => { const b = [...document.querySelectorAll('#recovery-panel .recovery-orphan-row[data-turn-id="' + turnId + '"] button')].find((x) => (x.textContent ?? '').includes('继续核对并解除')); if (b == null) return false; b.click(); return true; },
   changeSetRows: () => [...document.querySelectorAll('#changeset-block .changeset-row')].map((r) => r.textContent ?? ''),
   changeSetBlockVisible: () => document.getElementById('changeset-block') != null,
+  reviewButtons: () => ({ accept: !document.getElementById('review-accept-btn')?.classList.contains('hidden'), reject: !document.getElementById('review-reject-btn')?.classList.contains('hidden') }),
+  clickReview: (kind) => { const b = document.getElementById(kind === 'accept' ? 'review-accept-btn' : 'review-reject-btn'); if (b == null || b.classList.contains('hidden')) return false; b.click(); return true; },
+  repoStatusText: () => document.getElementById('repo-status')?.textContent ?? null,
+  runtimeStatusText: () => document.getElementById('runtime-status')?.textContent ?? null,
+  helpVisible: () => !document.getElementById('recovery-help')?.classList.contains('hidden'),
   confirmYes: () => { window.confirm = () => true; return true; },
   stopDisabled: () => document.getElementById('stop-btn')?.disabled ?? true,
   threadStatus: () => document.getElementById('thread-status')?.textContent ?? '',
@@ -704,6 +709,102 @@ describe('UI 端到端（运行中 SIGKILL daemon → 重启 → 恢复门禁 �
       async () => (await call<Array<{ status: string }>>('cards')).some((c) => c.status === 'DONE'),
       60_000, '新任务 DONE',
     );
+  }, 150_000);
+});
+
+// ---------- DEV-14 主体 UI（git 状态只读/可选验收/帮助与运行能力） ----------
+
+describe('UI DEV-14 主体：仓库状态/可选验收/帮助与运行能力（fake 档零额度）', () => {
+  it('git 状态只读视图：真实仓库的暂存/未暂存/未跟踪分组；运行能力如实标注；无恢复内容时帮助收起', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14'), runtime: 'fake' });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    // 打开后（projDir 尚非 git 仓库）：如实说明，不缓存错误态。
+    await waitFor(() => call<string>('repoStatusText').then((t) => (t ?? '').includes('不是 git 仓库')), 30_000, '非 git 仓库如实说明');
+    // fixture 建真实仓库：init+基线提交+三类改动（不触用户真实工作区）。
+    const g = (...args: string[]): void => { execFileSync('git', ['-C', projDir, ...args], { timeout: 15_000 }); };
+    g('init', '-q');
+    g('config', 'user.email', 'e2e@t'); g('config', 'user.name', 'e2e');
+    writeFileSync(join(projDir, 'committed.txt'), 'base\n', 'utf8');
+    g('add', '.'); g('commit', '-q', '-m', 'init');
+    writeFileSync(join(projDir, 'committed.txt'), 'working change\n', 'utf8');
+    writeFileSync(join(projDir, 'staged.txt'), 'staged\n', 'utf8');
+    writeFileSync(join(projDir, 'untracked.txt'), 'new\n', 'utf8');
+    g('add', 'staged.txt');
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS); // 新文档需重注入钩子
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(() => call<string>('repoStatusText').then((t) => (t ?? '').includes('已暂存 1')), 30_000, '仓库状态渲染');
+    const repoText = await call<string>('repoStatusText');
+    expect(repoText).toContain('未暂存 1');
+    expect(repoText).toContain('未跟踪 1');
+    expect(repoText).toContain('已暂存：staged.txt');
+    expect(repoText).toContain('未暂存：committed.txt');
+    expect(repoText).toContain('未跟踪：untracked.txt');
+    // 只读：三类改动原样保留（git.status 不改工作区/索引）。
+    expect(readFileSync(join(projDir, 'committed.txt'), 'utf8')).toContain('working change');
+    // 运行能力（runtime.status 只读）：恢复取证能力如实标注。
+    await waitFor(() => call<string>('runtimeStatusText').then((t) => (t ?? '').includes('进程树取证')), 30_000, '运行能力渲染');
+    const runtimeText = await call<string>('runtimeStatusText');
+    expect(runtimeText).toContain('迟到成果接收');
+    expect(runtimeText).toContain('执行成员：'); // 成员绑定（默认 runtime 如实显示）
+    // 帮助区块（START-07 首版）只在恢复面有内容时出现：本档无遗留 → 收起。
+    expect(await call<boolean>('helpVisible')).toBe(false);
+  }, 120_000);
+
+  it('可选验收（RT-25）：REVIEW 任务验收通过 → 交付 accepted、任务 DONE；重复验收入口收起（Git 提交不等同验收）', async () => {
+    const app = await launchUi({ appData: join(fixtureRoot, 'appdata-dev14b'), runtime: 'fake' });
+    apps.push(app);
+    const call = <T>(name: string, ...args: unknown[]) => app.page.call(name, ...args) as Promise<T>;
+    await call('click', 'open-folder');
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '项目加载');
+    await call('type', 'composer-input', '待验收任务');
+    await call('click', 'send');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'DONE',
+      60_000, '任务完成',
+    );
+    // 数据准备：任务改按 user_review 快照收口为 REVIEW+pending 交付（UI 只消费正式命令）。
+    const dbFile = join(fixtureRoot, 'appdata-dev14b', 'state.sqlite');
+    const { openDatabase } = await import('../../src/persistence/db.ts');
+    const db = openDatabase(dbFile);
+    const task = db.prepare('SELECT id FROM tasks ORDER BY rowid DESC LIMIT 1').get() as { id: string };
+    const run = db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(task.id) as { id: string };
+    db.prepare(`DELETE FROM task_deliveries WHERE task_id = ?`).run(task.id); // 数据准备：替换 auto_deliver 的 not_required 交付为待验收版本
+    db.prepare(`UPDATE tasks SET status = 'REVIEW', review_policy = 'user_review', current_delivery_id = 'dlv_e2e_review' WHERE id = ?`).run(task.id);
+    db.prepare(
+      `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
+       VALUES ('dlv_e2e_review', ?, ?, 1, 'h', '[]', '[]', '[]', 'pending')`,
+    ).run(task.id, run.id);
+    db.close();
+    await call('reload');
+    await app.page.eval(PAGE_HOOKS); // 新文档需重注入钩子
+    await waitFor(() => call<string>('projectName').then((n) => n.includes('proj')), 30_000, '重载后项目加载');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'REVIEW',
+      30_000, '任务显示待验收',
+    );
+    await call('openCard', 0);
+    await waitFor(() => call<{ accept: boolean; reject: boolean }>('reviewButtons').then((b) => b.accept && b.reject), 30_000, '验收按钮出现');
+    expect(await call<boolean>('clickReview', 'accept')).toBe(true);
+    // 轮询会重写状态行：以任务终态为准（验收记录以 DB 事实断言）。
+    await waitFor(() => call<string>('threadStatus').then((t) => (t ?? '').includes('已完成')), 30_000, '验收后任务完成');
+    // 交付与任务状态一致（DB 事实）。
+    const db2 = openDatabase(dbFile);
+    const delivery = db2.prepare(`SELECT review_status, reviewed_by FROM task_deliveries WHERE id = 'dlv_e2e_review'`).get() as { review_status: string; reviewed_by: string };
+    const taskAfter = db2.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string };
+    db2.close();
+    expect(delivery).toMatchObject({ review_status: 'accepted' });
+    expect(taskAfter.status).toBe('DONE');
+    await call('click', 'thread-back-btn');
+    await waitFor(
+      async () => ((await call<Array<{ status: string }>>('cards'))[0]?.status ?? '') === 'DONE',
+      30_000, '主池卡片 DONE',
+    );
+    // 验收入口随状态收起（重复验收由服务端幂等拒绝，界面不残留入口）。
+    expect((await call<{ accept: boolean }>('reviewButtons')).accept).toBe(false);
   }, 150_000);
 });
 
