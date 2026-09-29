@@ -1038,10 +1038,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           }
           if (env.method === 'git.remoteHead') {
             const params = z.strictObject({ projectId: z.string().min(1), remote: z.string().min(1).max(200), branch: z.string().min(1).max(200) }).parse(env.params);
-            const { remoteHead, remoteUrl, redactRemoteText } = await import('./gitWrite.ts');
+            const { remoteHead, pushUrl, redactRemoteText } = await import('./gitWrite.ts');
             const { locateRepo } = await import('./gitStatus.ts');
             const loc = await locateRepo(gitProject.canonical_path);
-            const [head, url] = await Promise.all([remoteHead(loc, params.remote, params.branch), remoteUrl(loc, params.remote)]);
+            const [head, url] = await Promise.all([remoteHead(loc, params.remote, params.branch), pushUrl(loc, params.remote)]);
             return withCommandId({ ok: true, data: { remote: params.remote, branch: params.branch, head, url: redactRemoteText(url) } });
           }
           if (env.method === 'git.branch.list') {

@@ -1215,13 +1215,56 @@ export function redactRemoteText(text: string): string {
     .replace(/([?&](token|password|access_token|oauth_token|api_key)=)[^&\s]+/gi, '$1***');
 }
 
-/** 远端名当前实际地址（remote get-url——推送目的地确认与执行前复核用）。 */
-export async function remoteUrl(loc: RepoLocation, remote: string): Promise<string> {
-  const cap = await captureGit(['-C', loc.worktreeRoot, 'remote', 'get-url', remote], { capBytes: 4096 });
-  if (cap.exitCode !== 0) {
-    throw new GitWriteError('RESOURCE_NOT_FOUND', `远端 ${remote} 未配置（git remote get-url 失败）`);
+/** 对**显式 URL** 查询分支头（推送链路核对——不经远端名二次解释 fetch/push 改写）。 */
+export async function remoteHeadAtUrl(loc: RepoLocation, url: string, branch: string): Promise<string | null> {
+  const cap = await captureGit(['-C', loc.worktreeRoot, 'ls-remote', url, `refs/heads/${branch}`], { capBytes: 16 * 1024 });
+  if (cap.spawnError != null || cap.exitCode !== 0) {
+    const stderr = cap.stderr.trim();
+    if (/authentication|permission|could not read Username|授权|凭据|403|access denied/i.test(stderr)) {
+      throw new GitWriteError('VALIDATION_INVALID', `目的地访问被拒（凭据/权限不足，AUTH_REQUIRED 语义；不修改任何全局配置、不回显凭据）：${stderr.slice(0, 120)}`);
+    }
+    throw new GitWriteError('GIT_COMMAND_FAILED', redactRemoteText(`ls-remote 失败（目的地 ${redactRemoteText(url)}）：${stderr.slice(0, 160)}`));
   }
-  return cap.stdout.toString('utf8').trim();
+  const line = cap.stdout.toString('utf8').split('	')[0]?.trim() ?? '';
+  return line === '' ? null : line;
+}
+
+/**
+ * 远端名当前**推送传输目的地**（第十三轮三）：
+ * - `remote get-url --push`（pushurl 优先于 url——git 推送实际使用面）；
+ * - `--all` 枚举：多 push URL **明确拒绝**（一次确认对应一个目的地——不静默向多个未确认
+ *   目的地发送；RT-24 推送风险告知口径）；
+ * - `--literal` 不在此用：我们核对的是**改写后**实际地址（url.<base>.pushInsteadOf/
+ *   insteadOf 生效面）——确认值与执行值取同一改写后目的地，改写变化→复核拒绝；
+ * - 返回值已脱敏（凭据不进结果/日志/回执）。
+ */
+export async function pushUrl(loc: RepoLocation, remote: string): Promise<string> {
+  const all = await captureGit(['-C', loc.worktreeRoot, 'remote', 'get-url', '--push', '--all', remote], { capBytes: 16 * 1024 });
+  if (all.exitCode !== 0) {
+    throw new GitWriteError('RESOURCE_NOT_FOUND', `远端 ${remote} 未配置或地址不可解析（git remote get-url --push 失败）：${redactRemoteText(all.stderr.trim().slice(0, 120))}`);
+  }
+  const urls = all.stdout.toString('utf8').split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  if (urls.length === 0) {
+    throw new GitWriteError('RESOURCE_NOT_FOUND', `远端 ${remote} 无推送地址`);
+  }
+  if (urls.length > 1) {
+    throw new GitWriteError('VALIDATION_INVALID', `远端 ${remote} 配置了 ${urls.length} 个推送地址（多 push URL 不受支持——一次确认只能对应一个目的地；请先合并配置）：${urls.map(redactRemoteText).join(' 、 ')}`);
+  }
+  const url = urls[0]!;
+  // URL 改写规则核对（第十三轮三）：get-url 返回**改写前**字面量（实测 pushInsteadOf 不在
+  // get-url 生效面），而实际推送走改写后地址——确认值与执行值将不一致。受管推送**明确拒绝**
+  // 受改写规则影响的目的地（不自行复刻 git 改写逻辑、不静默向不确定目的地发送）。
+  const rulesCap = await captureGit(['-C', loc.worktreeRoot, 'config', '--get-regexp', '^url[.].*[.][pP][uU][sS][hH]?[iI][nN][sS][tT][eE][aA][dD][oO][fF]$'], { capBytes: 16 * 1024 });
+  if (rulesCap.exitCode === 0) {
+    for (const line of rulesCap.stdout.toString('utf8').split('\n')) {
+      const m = /^url\.(.+)\.(push)?insteadof (.+)$/i.exec(line.trim());
+      if (m == null) continue;
+      if (url.startsWith(m[3]!)) {
+        throw new GitWriteError('VALIDATION_INVALID', `推送地址 ${redactRemoteText(url)} 受 url.${m[1]}.${m[2] ?? ''}insteadOf 改写规则影响（实际推送目的地为改写后值，与确认面不一致）——受管推送不支持改写目的地；请移除该规则或直接配置最终地址`);
+      }
+    }
+  }
+  return url;
 }
 
 /** 远端分支当前头（ls-remote；无该分支=null）。AUTH 失败映射明确错误（不回显凭据）。 */
@@ -1256,12 +1299,15 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
     }
     // 推送源=确认的不可变提交 OID（refspec 直接用 expectedHead）——本地分支/HEAD 在确认后
     // 前进不影响本次推送对象（第十二轮二）；不再要求本地 HEAD==确认值。
-    // 目的地复核先于远端头校验：remote 配置变化（改指向）是最根本的目的地不符。
-    const urlNow = await remoteUrl(loc, input.remote);
+    // 目的地复核先于远端头校验：remote 配置变化（改指向/pushurl 替换/insteadOf 改写变化）
+    // 是最根本的目的地不符。复核与确认取同一改写后推送目的地（get-url --push --all）。
+    const urlNow = await pushUrl(loc, input.remote);
     if (urlNow !== input.expectedRemoteUrl) {
-      throw new GitWriteError('STALE_REVISION', `远端 ${input.remote} 的实际地址已变化（确认 ${redactRemoteText(input.expectedRemoteUrl)} → 现在 ${redactRemoteText(urlNow)}）——推送目的地与确认不符，拒绝执行`);
+      throw new GitWriteError('STALE_REVISION', `远端 ${input.remote} 的实际推送地址已变化（确认 ${redactRemoteText(input.expectedRemoteUrl)} → 现在 ${redactRemoteText(urlNow)}）——推送目的地与确认不符，拒绝执行`);
     }
-    const remote = await remoteHead(loc, input.remote, input.branch);
+    // 远端头核验针对**已确认的推送目的地**（显式 URL）——ls-remote 经远端名读 fetch URL
+    // （url≠pushurl 时核对对象错误）；确认/旧头/推送/结果核对同一目的地。
+    const remote = await remoteHeadAtUrl(loc, input.expectedRemoteUrl, input.branch);
     if (remote === input.expectedHead) {
       // 崩溃重试窗口：推送已生效（远端=目标）——按既成事实收口。
       const result: PushOutcome = { remote: input.remote, branch: input.branch, from: input.expectedRemoteHead, to: input.expectedHead };
@@ -1291,7 +1337,7 @@ export async function gitPush(db: ZhongshuoDatabase, input: { projectId: string;
       }
       throw new GitWriteError('GIT_COMMAND_FAILED', redactRemoteText(`推送失败：${stderr.slice(0, 200)}`));
     }
-    const remoteAfter = await remoteHead(loc, input.remote, input.branch);
+    const remoteAfter = await remoteHeadAtUrl(loc, input.expectedRemoteUrl, input.branch);
     if (remoteAfter !== input.expectedHead) {
       throw new GitWriteError('STALE_REVISION', redactRemoteText(`推送后远端核对不符（期望 ${input.expectedHead}，实际 ${remoteAfter ?? '无'}）——副作用不确定：同号重试按远端现值核对，不盲目重发`));
     }

@@ -195,10 +195,58 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     git(f.root, 'remote', 'set-url', 'origin', bare2.replaceAll('\\', '/'));
     const c3probe = await f.cmd<{ head: string | null }>('git.remoteHead', { projectId: f.projectId, remote: 'origin', branch: 'main' }).catch(() => null);
     void c3probe;
-    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c2, expectedRemoteHead: c1, expectedRemoteUrl: url0 })).rejects.toThrow(/实际地址已变化/);
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c2, expectedRemoteHead: c1, expectedRemoteUrl: url0 })).rejects.toThrow(/实际推送地址已变化/);
     git(f.root, 'remote', 'set-url', 'origin', url0);
     f.db.close();
   }, 30_000);
+
+  it('push 目的地绑定（第十三轮三）：fetch=url/push=pushurl 分离；预览后替换 pushurl 拒；多 push URL 拒；insteadOf 改写核对', async () => {
+    const f = makeFixture('pushurl', { 'a.txt': 'v1\n' });
+    // fetch 地址 A（bare1），push 地址 B（bare2）——git 语义：pushurl 优先。
+    const bareA = mkdtempSync(join(tmpRoot, 'bareA-'));
+    const bareB = mkdtempSync(join(tmpRoot, 'bareB-'));
+    git(bareA, 'init', '-q', '--bare', '-b', 'main');
+    git(bareB, 'init', '-q', '--bare', '-b', 'main');
+    git(f.root, 'remote', 'add', 'origin', bareA.replaceAll('\\', '/'));
+    git(f.root, 'remote', 'set-url', '--push', 'origin', bareB.replaceAll('\\', '/'));
+    const head0 = git(f.root, 'rev-parse', 'HEAD').trim();
+    const urlB = git(f.root, 'remote', 'get-url', '--push', 'origin').trim();
+    expect(urlB).toBe(bareB.replaceAll('\\', '/')); // 确认面=push 侧（B）
+    // 首推：走 B（pushurl）——A 不接收任何提交。
+    await f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: head0, expectedRemoteHead: null, expectedRemoteUrl: urlB });
+    expect(git(bareB, 'rev-parse', 'refs/heads/main').trim()).toBe(head0);
+    expect(gitLax(bareA, 'rev-parse', 'refs/heads/main').status).not.toBe(0); // A 未收
+    // 预览后替换 pushurl → B'（目的地变化拒绝执行；B' 未收提交）。
+    const bareC = mkdtempSync(join(tmpRoot, 'bareC-'));
+    git(bareC, 'init', '-q', '--bare', '-b', 'main');
+    writeFileSync(join(f.root, 'n.txt'), 'n\n', 'utf8');
+    await f.cmd('git.stage', { projectId: f.projectId, paths: ['n.txt'] });
+    const p = await f.cmd<{ head: string | null; indexTree: string | null; branch: string | null }>('git.commitPreview', { projectId: f.projectId });
+    const c1 = (await f.cmd<{ commit: string }>('git.commit', { projectId: f.projectId, message: 'pushurl 替换用', expectedHead: p.head, expectedIndexTree: p.indexTree, expectedBranch: p.branch })).commit;
+    git(f.root, 'remote', 'set-url', '--push', 'origin', bareC.replaceAll('\\', '/'));
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1, expectedRemoteHead: head0, expectedRemoteUrl: urlB }))
+      .rejects.toThrow(/实际推送地址已变化/);
+    expect(gitLax(bareC, 'rev-parse', 'refs/heads/main').status).not.toBe(0); // C 未收
+    git(f.root, 'remote', 'set-url', '--push', 'origin', bareB.replaceAll('\\', '/'));
+    // 多 push URL：明确拒绝（一次确认只能对应一个目的地）。
+    git(f.root, 'remote', 'set-url', '--add', '--push', 'origin', bareC.replaceAll('\\', '/'));
+    await expect(f.cmd('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1, expectedRemoteHead: head0, expectedRemoteUrl: urlB }))
+      .rejects.toThrow(/推送地址/);
+    git(f.root, 'remote', 'set-url', '--delete', '--push', 'origin', bareC.replaceAll('\\', '/'));
+    // 改写规则核对（第十三轮三）：pushInsteadOf 使确认面（get-url 字面量）与实际推送目的地
+    // （改写后值）不一致——受管推送**明确拒绝**改写目的地（不静默向不确定目的地发送）。
+    git(f.root, 'config', `url.${bareB.replaceAll('\\', '/')}.pushInsteadOf`, 'zs-alias://push-target');
+    git(f.root, 'remote', 'set-url', '--push', 'origin', 'zs-alias://push-target');
+    await expect(f.cmd<{ to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1, expectedRemoteHead: head0, expectedRemoteUrl: 'zs-alias://push-target' }))
+      .rejects.toThrow(/insteadOf 改写规则影响/);
+    // 清规则后恢复直连目的地推送成功（最终态核对仍为 B）。
+    git(f.root, 'config', '--unset', `url.${bareB.replaceAll('\\', '/')}.pushInsteadOf`);
+    git(f.root, 'remote', 'set-url', '--push', 'origin', bareB.replaceAll('\\', '/'));
+    const push2 = await f.cmd<{ to: string }>('git.push', { projectId: f.projectId, remote: 'origin', branch: 'main', expectedHead: c1, expectedRemoteHead: head0, expectedRemoteUrl: bareB.replaceAll('\\', '/') });
+    expect(push2.to).toBe(c1);
+    expect(git(bareB, 'rev-parse', 'refs/heads/main').trim()).toBe(c1);
+    f.db.close();
+  }, 60_000);
 
   it('push 非快进拒绝；pull 快进拉取+分叉拒绝（bare remote 双侧）', async () => {
     const f = makeFixture('remote2', { 'a.txt': 'v1\n' });
