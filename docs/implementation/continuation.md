@@ -2,7 +2,54 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-29 第八轮，唯一权威快照）
+## 当前真实状态（2026-09-29 第九轮，唯一权威快照）
+
+> 恢复与修复链**不写「已收口稳定」总括**——按能力分列（用户令第九轮五）：
+> - **已实现+本地已验**：进程树观察/追加式历史身份/盲区如实（真实 node 子进程+正式命令链）；
+>   迟到泵同 daemon+重启双路径（fake 持久化会话记录）；版本绑定验收+返工输入注入；
+>   git.status/git.diff 只读；设置持久化（repoStatus.visible）；帮助面板（START-07/09 首版）。
+> - **未完整确认（设计边界）**：有子进程 runtime 的服务端解除路径**关闭**——周期快照只产生
+>   「未观察到存活后代」观察，不构成完整退出证明；受管生命周期机制（Job Object/ETW）另批评估。
+> - **真实 unsupported/未验证**：真实 CLI lateEvents 未实现（泵如实 unsupported）；真实 CLI
+>   崩溃现场进程树取证/文件发现真实有效性归补证窗口；研讨轮 UNKNOWN 迟到收口语义待定义。
+
+- **一（进程树保守判定）**：probe 对 per-turn/shared **不再返回 exited**（第八轮「全树核对
+  无存活=完整退出」表述撤回）；reconcile 的 exited 释放分支删除；releaseProtection 仅凭
+  no-os-process（升级前 exited 记录防御性拒绝）。历史身份修复（迁移 014 追加式
+  process_tree_identities：按 pid+started_at_ms 代次，从不删除未确认身份——旧 012 快照
+  DELETE+INSERT 会丢父链已断的后代）。反例×2：历史身份不覆盖（后续观察只见占位仍发现孙）；
+  盲区如实（两次观察之间派生+中间父退出→未完整确认，不凭空声称能发现）。测试
+  processTreeSupervisor 11/11+恢复三件套按新语义改写。
+- **二（迟到回执原子）**：迁移 015 重建回执表（作用域键 source_scope+turn+eventKey，
+  eventKey 不假设全局唯一；outcome applied/ignored 可区分）；**回执与 applyEvent 全部效果
+  同一事务**（失败整体回滚、无「有回执无效果」态、可恢复）；归属校验（不认领未归属事件）；
+  **泵收口不释放写入租约**（业务结果确定≠执行载体停止——仍走 probe/releaseProtection）。
+  lateOutcomePath 9/9（异常回滚→重放恰好一次/同键异 turn/错归属/响应丢失）。
+- **三（验收绑定版本）**：task.review 必带 deliveryId+deliveryRevision；事务内条件更新+影响
+  行数核对；冲突区分（被替代/已处理/版本不符/跨任务/事务内变化）；同 commandId 重放=原回执、
+  不同命令号不重复生效。UI：task.get.pendingDelivery 展示与提交同源、按钮带版本号、新交付
+  刷新新对象。返工闭环：changes_requested 说明注入后续派发输入（关联被退回版本；accepted 后
+  消失）；不自动派发。dev14Commands 10/10+uiE2e（v1→v2 错稿防护）。
+- **四（DEV-14 深化）**：git.diff 只读正文（暂存/未暂存、重命名/删除/二进制/超限截断、路径
+  越界拒绝、不改索引/工作区）；变更详情前像可用性汇总+恢复中心未收口撤销行+「继续撤销」
+  入口（changeset.undo）；app.settings.get/set（白名单 kv 持久化，重开生效）+仓库状态显隐
+  开关；常驻帮助面板（发送/仅记录/DIRECT/研讨/验收/恢复/迟到/Git/未开放边界）。AUTO 按
+  闸门未开放并如实标注。
+- 数字：**502/502**、uiE2e **19+2skip**、lint 0、tsc 0、零真实调用（未跑 real*）。报告：
+  reports/round-20260929-round9-conservative-late-review-dev14.md。
+
+## 当前下一步（唯一·第九轮）
+
+1. **无需等待直接开工**：交付矩阵依赖已满足项——DEV-14 剩余（Git 写操作接入按确认流基线、
+   设置页更多真实项）；受管生命周期机制方案（Job Object/ETW）列候选待评估；研讨轮迟到收口
+   语义待定义后实施。
+2. **价值评价（用户决定暂缓）**：不放回用户待办、不反复请求。
+3. **补证方案（另批）**：真实 CLI lateEvents/崩溃现场取证/文件发现有效性——优先 Claude
+   Code+deepseek-flash，单独列目标与实际调用上限；不动用剩余 3 次。
+
+---
+
+## （上一轮快照，2026-09-29 第八轮）
 
 - **supervisor 进程树=全树归属分析**：单层 ParentProcessId 枚举不再是判定来源——单次
   全表 CIM 快照（行标记协议；空输出/残缺行/CIM 错误=failed，**查询失败≠空结果**）+
@@ -39,7 +86,7 @@
   （未运行任何 real* 测试）。报告：reports/round-20260929-supervisor-lateoutcome-dev14.md。
   上轮 55 次意外调用偏差记录独立保留，不抵销不复证。
 
-## 当前下一步（唯一·第八轮）
+## （第八轮下一步，已执行完毕）
 
 1. **无需等待直接开工**：按交付矩阵推进依赖已满足的工程包——DEV-14 继续（Git diff 正文
    视图/写操作接入、设置页真实状态深化、START-07/09 完整帮助）；correctToExecuted 的

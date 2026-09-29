@@ -32,8 +32,8 @@
 |---|---|---|
 | 父进程存活/退出+启动时刻（复用检测） | win32 实测 supported；非 win32 部分（无启动时刻） | PowerShell Get-Process+ErrorVariable 分类（仅 ObjectNotFound=exited）；本地真实子进程用例 |
 | 全表进程快照+现存树 BFS | **仅 win32 supported**（单次 CIM 全表，行标记协议；空输出/残缺行/CIM 错误=failed，不把查询失败当空结果） | 从登记根沿 PPID 边收集存活后代（覆盖父退子活、存活期间继续派生）；非 win32=未完整确认（保护保留） |
-| 活跃期快照历史归属核对（孙进程遗留） | supported（win32；迁移 012 持续归属登记） | worker startTurn 后首拍+消费期间 5s 周拍；中间代际退出后其历史父子边消失——孙进程靠快照锚点+创建时间时序核对（排除复用家庭/PID 边残留；时间缺失保守计入） |
-| 完整退出证据（exited） | supported=「登记根退出+现存树无存活+快照历史代际核对无遗留」；**无快照=unknown（未完整确认）** | 三代 fixture（父→子→孙，父子先退孙活）实测：probe/reconcile/releaseProtection 全拒绝；孙结束后才 exited/允许解除 |
+| 历史身份登记（孙进程遗留核对） | supported（win32；迁移 014 **追加式** process_tree_identities） | 旧 012 快照表 DELETE+INSERT 会丢父链已断的后代——新表按进程代次（pid+startedAt_ms，PID 脱离启动时间不构成身份）追加登记、从不删除未确认身份；退出确认由 probe 写回；反例：第一拍三代→父子退→后续观察只见占位→probe 仍发现孙 |
+| 完整退出证明 | **不提供（第九轮收紧）**：周期快照只产生「未观察到存活后代」观察——**不构成完整退出证明**（最后快照之后派生且父链已断的深层链不可排除）。probe 对 per-turn/shared 不再返回 exited；释放保护仅凭程序事实（none 模型 no-os-process），有子进程 runtime 的自动解除路径**已关闭** | 三代 fixture：孙结束后仍拒绝解除（未完整确认）；盲区反例（两次观察之间派生+中间父退出）返回未完整确认、不凭空声称能发现 |
 | per-turn 进程树（Claude CLI 每 turn 独立） | 本地 node 进程树 fixture 验证（含 worker 生产接线：fake 上报真实子进程身份→快照自动落库） | 父被杀+工具子进程孤儿仍跑→unknown；全树退出→exited |
 | shared 进程树（Codex App Server 常驻） | 本地 node 进程树 fixture 验证 | server 存活但 turn 执行状态未知（unknown 保留）；server 死+工具遗留→unknown |
 | pre-launch 崩溃窗口识别 | supported（迁移 011 pre-launch 登记） | openSession 后 startTurn 前登记占位（model=unknown/pid=null）——区分「请求可能已发出」与「从未启动」（identity-missing） |
@@ -44,7 +44,7 @@
 
 | 能力 | 状态 | 依据与限制 |
 |---|---|---|
-| 迟到成果泵（recovery.pumpLateEvents 正式命令） | supported（fake 双路径验证：同 daemon+重启回放） | 幂等双层闸=eventKey 回执（迁移 013）+turn 终态 CAS；守卫=重复终态/停止代次/refunded 冲突/被替代 run |
+| 迟到成果泵（recovery.pumpLateEvents 正式命令） | supported（fake 双路径验证：同 daemon+重启回放） | **回执与业务效果同事务**（迁移 015：作用域键 source_scope+turn+eventKey，eventKey 不假设全局唯一；失败整体回滚可恢复）；归属校验（不认领未归属事件）；守卫=重复终态/停止代次/refunded 冲突/被替代 run；**收口不释放写入租约**（业务结果确定≠执行载体停止） |
 | fake runtime 迟到回放（lateEvents） | supported（会话事件持久化文件，模拟 CLI 会话记录） | 重启后新实例同目录可读——重连/回放的本地演练形态 |
 | 真实 CLI 迟到回放（claude/codex lateEvents） | **unsupported（未实现——如实标注，不冒充）** | 会话文件/重连存量流解析待真实补证；泵对未实现 adapter 返回明确 unsupported |
 | 研讨轮（delib.*）UNKNOWN 迟到输出收口 | unsupported-mode（本轮范围外） | 研讨轮 UNKNOWN=成员缺席语义（E4）；处理归后续轮次 |
