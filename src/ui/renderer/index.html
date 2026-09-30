@@ -21,6 +21,8 @@
             <div><b>任务验收</b>（§10.5，项目级开关）：开启后，任务交付需要你确认；关闭后，满足交付要求即完成。不会自动提交或推送 Git。</div>
             <button id="task-review-toggle" class="chip" title="只影响之后创建的任务；已有任务保持创建时的策略快照">任务验收：关</button>
             <div id="task-review-note" class="meta"></div>
+            <div><b>成员 runtime 绑定</b>（成员级设置）：为各 agent 成员选择 runtime 与模型（claude/codex 必须显式模型）；作用范围=该成员<b>之后派发</b>的任务（在途不变）；绑定持久化，重开生效。配置成功≠已认证——支持能力与认证状态分列显示，保存不触发探活、不读写凭据。</div>
+            <div id="member-runtime-list"></div>
             <div><b>写入并发</b>：单写者（同一物理目录同时只安排一个受管理写入任务；并行写入增强已延期，§14.7——未开放，不是可点开关）。</div>
           </div>
         </details>

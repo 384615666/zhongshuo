@@ -455,6 +455,19 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
         result = await daemon.stop({ force: true });
       }
       try { rmSync(pidPath, { force: true }); } catch { /* 退出路径不因此失败 */ }
+      // 结构化停机事实尾行（第十四轮三：宿主/UI 按事实呈现——强制≠优雅成功、未确认如实）。
+      process.stderr.write(`[zhongshuo-daemon] stop-result ${JSON.stringify({
+        complete: result.complete,
+        phase: result.phase,
+        exitCode: result.complete ? 0 : 3,
+        forced: result.phase === 'forced-closed',
+        stopRequestsSentTo: result.stopRequestsSentTo,
+        inFlightRemaining: result.inFlightRemaining ?? [],
+        startingRemaining: result.startingRemaining ?? [],
+        disposeUnconfirmed: result.disposeReport?.unconfirmed?.length ?? 0,
+        disposeFailed: result.disposeReport?.failed?.length ?? 0,
+        stopRecord: 'daemon_state[daemon:stop:last]（appData/state.sqlite）',
+      })}\n`);
       process.exit(result.complete ? 0 : 3);
     };
     requestShutdown = () => {

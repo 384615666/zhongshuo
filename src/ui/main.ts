@@ -60,9 +60,23 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  daemonProcess.stderr?.on('data', (d: Buffer) => process.stderr.write(`[daemon] ${d}`));
-  daemonProcess.once('exit', (code) => {
-    process.stderr.write(`[zhongshuo-ui] daemon 退出（code=${code}）\n`);
+  let stopResultLine: string | null = null;
+  daemonProcess.stderr?.on('data', (d: Buffer) => {
+    const text = d.toString('utf8');
+    process.stderr.write(`[daemon] ${text}`);
+    // daemon 结构化停机尾行（第十四轮三）：捕获进停机事实——未确认执行/收拢失败不因退出码 0 被掩盖。
+    const m = text.split('\n').find((l) => l.includes('stop-result '));
+    if (m != null) {
+      stopResultLine = m.slice(m.indexOf('stop-result ') + 'stop-result '.length).trim();
+      try {
+        const parsed = JSON.parse(stopResultLine) as DaemonShutdownFacts['daemonStopResult'];
+        daemonStopResult = parsed;
+      } catch { /* 残缺尾行不虚构 */ }
+    }
+  });
+  daemonProcess.once('exit', (code, signal) => {
+    daemonExitFacts = { code: code ?? null, signal: signal ?? null };
+    process.stderr.write(`[zhongshuo-ui] daemon 退出（code=${code}${signal != null ? ` signal=${signal}` : ''}）\n`);
     // 启动失败/异常退出（含受管依赖缺失的拒绝启动）：应用明确失败退出——不静默以未受管
     // 状态继续（空管道重连永远失败=挂死窗口，比明确退出更糟）。
     if (!daemonShuttingDown && code !== 0) {
@@ -72,23 +86,81 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
   });
 }
 
+/** daemon 停机结构化事实（第十四轮三：正常优雅/明确失败/超时未确认分开呈现，不隐藏失败）。 */
+export interface DaemonShutdownFacts {
+  requestDelivered: boolean;
+  requestError?: string;
+  exited: boolean;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  forceKilled: boolean;
+  alreadyExited: boolean;
+  daemonStopResult?: { complete?: boolean; phase?: string; exitCode?: number; forced?: boolean; inFlightRemaining?: string[]; disposeUnconfirmed?: number; disposeFailed?: number; stopRecord?: string };
+  stopRecordPath: string;
+}
+
+let daemonExitFacts: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+/** 经函数读取（exit 回调闭包写入后控制流收窄不可见）。 */
+function readDaemonExitFacts(): { code: number | null; signal: NodeJS.Signals | null } | null {
+  return daemonExitFacts;
+}
+let daemonStopResult: DaemonShutdownFacts['daemonStopResult'] | null = null;
+
 /**
- * 正式停机（DEV-15 第十四轮四）：daemon.shutdown IPC 命令（优雅：拒新命令→收拢→关库→
- * 退出 0）+ 有界等待；超时 kill 兜底。确认=子进程退出（响应只表示已调度）。
+ * 正式停机（DEV-15 第十四轮三/四）：daemon.shutdown IPC（优雅：拒新命令→收拢→关库→退出
+ * 0）+ 有界等待；超时 kill 兜底。全部入口（window-all-closed/演示结束/app 菜单）共用；重复
+ * 调用复用同一过程不重复发起。返回结构化事实并落盘 appData/desktop-shutdown.json——强制
+ * 终止不标为优雅成功，daemon 侧 stop-result 尾行（未确认执行/收拢失败）一并转写。
  */
-async function shutdownDaemon(): Promise<void> {
-  daemonShuttingDown = true;
-  try {
-    if (pipe != null && !pipe.closed) {
-      await pipe.send({ protocolVersion: 1, commandId: `ui-shutdown-${randomUUID()}`, method: 'daemon.shutdown', params: {} });
+let shutdownOnce: Promise<DaemonShutdownFacts> | null = null;
+function shutdownDaemon(): Promise<DaemonShutdownFacts> {
+  if (shutdownOnce != null) return shutdownOnce;
+  shutdownOnce = (async (): Promise<DaemonShutdownFacts> => {
+    daemonShuttingDown = true;
+    const stopRecordPath = join(appDataDir, 'state.sqlite');
+    const facts: DaemonShutdownFacts = {
+      requestDelivered: false, exited: false, exitCode: null, signal: null,
+      timedOut: false, forceKilled: false, alreadyExited: daemonExitFacts != null, stopRecordPath,
+    };
+    try {
+      if (pipe != null && !pipe.closed) {
+        await pipe.send({ protocolVersion: 1, commandId: `ui-shutdown-${randomUUID()}`, method: 'daemon.shutdown', params: {} });
+        facts.requestDelivered = true;
+      }
+    } catch (error) {
+      facts.requestError = error instanceof Error ? error.message : String(error);
     }
-  } catch { /* 连接已断——kill 兜底 */ }
-  const d = daemonProcess;
-  if (d == null) return;
-  const exited = new Promise<boolean>((r) => { d.once('exit', () => r(true)); });
-  const grace = (ms: number): Promise<boolean> => new Promise((r) => { const t = setTimeout(() => r(false), ms); t.unref?.(); });
-  if (!await Promise.race([exited, grace(10_000)])) d.kill();
-  await Promise.race([exited, grace(3_000)]);
+    const d = daemonProcess;
+    if (d != null) {
+      if (daemonExitFacts != null) {
+        facts.exited = true;
+        facts.exitCode = daemonExitFacts.code;
+        facts.signal = daemonExitFacts.signal;
+      } else {
+        const exited = new Promise<boolean>((r) => { d.once('exit', () => r(true)); });
+        const grace = (ms: number): Promise<boolean> => new Promise((r) => { const t = setTimeout(() => r(false), ms); t.unref?.(); });
+        if (!await Promise.race([exited, grace(10_000)])) {
+          facts.timedOut = true;
+          facts.forceKilled = true;
+          d.kill();
+          if (await Promise.race([exited, grace(3_000)])) facts.exited = true;
+        } else {
+          facts.exited = true;
+        }
+        // exit 回调（闭包）可能已写入——经函数读取避免控制流收窄。
+        const observed = readDaemonExitFacts();
+        if (observed != null) { facts.exitCode = observed.code; facts.signal = observed.signal; }
+      }
+      if (daemonStopResult != null) facts.daemonStopResult = daemonStopResult;
+    }
+    try {
+      writeFileSync(join(appDataDir, 'desktop-shutdown.json'), JSON.stringify({ at: Date.now(), ...facts }, null, 2), 'utf8');
+    } catch { /* 落盘尽力而为——事实已在 stderr */ }
+    process.stderr.write(`[zhongshuo-ui] 停机事实：${JSON.stringify(facts)}\n`);
+    return facts;
+  })();
+  return shutdownOnce;
 }
 
 let daemonPipe = '';
@@ -181,7 +253,8 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  pipe?.close();
+  // 停机命令须在关闭管道**之前**发出（shutdownDaemon 内部：daemon.shutdown→有界等待→
+  // kill 兜底→关管道）；此处不再先行 close（否则 requestDelivered 恒 false）。
   void shutdownDaemon().finally(() => app.quit());
 });
 

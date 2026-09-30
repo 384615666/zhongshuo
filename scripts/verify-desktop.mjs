@@ -15,6 +15,7 @@
  * 失败保留诊断目录与报告；成功按明确范围清理。
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -47,11 +48,26 @@ const record = (name, ok, detail) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const appendFile = (path, text) => { try { appendFileSync(path, text); } catch { /* 诊断尽力而为 */ } };
 
-/** 产物路径残留进程计数（electron.exe/node.exe 且命令行含安装根——精确到本产物）。 */
+/** 产物残留进程查询（第十五轮二修正）：QUERY-OK 尾标=查询成功（空结果=零行）；失败/超时/
+ * 非数字=ERR（不当 0）；排除查询进程自身；按安装根匹配**任意名称**执行载体（不限 node/electron）。
+ * 正常用例不得以「匹配不到」证明无残留——控制组 decoy 先证检测有效。 */
+const psQueryPath = join(installRoot, 'proc-query.ps1');
+writeFileSync(psQueryPath, [
+  '$Pattern = $env:ZS_PROC_PATTERN',
+  '$ErrorActionPreference = "Stop"',
+  'try {',
+  '  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { $_.CommandLine -like $Pattern -and $_.ProcessId -ne $PID }',
+  '  $p | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.Name }',
+  '  "QUERY-OK"',
+  '} catch { "ERR`t" + $_.Exception.Message }',
+].join('\n'), 'utf8');
 function leftoverProcesses() {
-  const r = spawnSync('powershell', ['-NoProfile', '-Command',
-    `(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${installRoot.replaceAll('\\', '\\\\').replaceAll("'", "''")}*' -and $_.Name -in @('node.exe','electron.exe') }).Count`], { encoding: 'utf8', timeout: 20_000 });
-  return Number((r.stdout ?? '').trim());
+  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: `*${installRoot}*` } });
+  let r = ask();
+  if (r.error != null || r.status !== 0) r = ask(); // 冷启动首查重试一次（失败不折算为零）
+  const out = (r.stdout ?? '').trim();
+  if (r.status !== 0 || r.error != null || !out.includes('QUERY-OK') || out.includes('ERR\t')) return 'ERR';
+  return out.split('\n').filter((l) => /^\d+\t/.test(l.trim())).length;
 }
 
 /** 启动产物并等待退出（严格分类：code/signal/超时分开，不把超时算成功）。 */
@@ -113,17 +129,35 @@ try {
     }
   }
 
-  // ② 重复启动（顺序；同安装目录不同 appData——单例锁随干净退出释放）。
+  // ② 重复启动（顺序·**同一 appData**——不换目录冒充锁释放验证；首轮历史仍在）。
   {
-    const appData = join(installRoot, '应用 数据', '实例二');
-    const r = await runDesktop(appData, {}, 240_000);
+    const appDataSame = join(installRoot, '应用 数据', '实例一'); // 与 ① 同目录
+    const r = await runDesktop(appDataSame, {}, 240_000);
     const demo = readResult(r.resultPath);
-    record('重复启动（第二次全链 DONE+正常退出——锁随首启干净退出释放）',
-      r.code === 0 && r.signal == null && !r.timedOut && demo?.ok === true && leftoverProcesses() === 0,
-      `exit=${r.code} demo=${demo == null ? '无结果' : demo.taskStatus}`);
+    // 同目录历史核对：首轮任务仍在库中（不同 appData 另列 ⑤，不与重开混同）。
+    const Database = createRequire(join(repo, 'node_modules', 'better-sqlite3'))('better-sqlite3');
+    const db = new Database(join(appDataSame, 'state.sqlite'), { readonly: true });
+    const taskCount = db.prepare('SELECT count(*) c FROM tasks').get().c;
+    db.close();
+    record('重复启动（同 appData 第二次全链 DONE+首轮历史仍在——锁随干净退出释放）',
+      r.code === 0 && r.signal == null && !r.timedOut && demo?.ok === true && taskCount >= 2 && leftoverProcesses() === 0,
+      `exit=${r.code} demo=${demo == null ? '无结果' : demo.taskStatus} tasks=${taskCount}`);
   }
 
-  // ③ 受管依赖缺失负例：精确移除产物内 koffi+@koromix → 明确失败退出（不降级）。
+  // ③ 并发启动（同一 appData）：第二实例 daemon 单例锁拒绝→应用明确失败退出；第一实例不受污染。
+  {
+    const appDataC = join(installRoot, '应用 数据', '并发实例');
+    const first = runDesktop(appDataC, { ZS_FAKE_STALL_MS: '20000' }, 240_000); // 长任务占住实例
+    await sleep(9000); // 等第一实例 daemon 完全就绪
+    const second = await runDesktop(appDataC, {}, 180_000);
+    const firstR = await first;
+    const d1 = readResult(firstR.resultPath);
+    const secondRefused = second.code === 1 && second.stderr.includes('daemon 异常退出');
+    record('并发启动（同 appData：第二实例明确失败 exit 1，不启动第二 daemon）', secondRefused, `exit2=${second.code}`);
+    record('第一实例不受污染（长任务照常 DONE+正常退出）', firstR.code === 0 && d1?.ok === true && d1?.taskStatus === 'DONE', `exit1=${firstR.code} demo=${d1?.taskStatus ?? '无'}`);
+  }
+
+  // ④ 受管依赖缺失负例：精确移除产物内 koffi+@koromix → 明确失败退出（不降级）。
   {
     const nm = join(appHome, 'resources', 'app', 'daemon', 'node_modules');
     rmSync(join(nm, 'koffi'), { recursive: true, force: true });

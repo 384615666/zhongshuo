@@ -1,0 +1,56 @@
+{
+  "batch": "R15-managed-claude-deepseek",
+  "createdAt": "2026-09-30T02:46:13.135Z",
+  "cap": 2,
+  "submissions": [
+    {
+      "at": "2026-09-30T02:46:14.061Z",
+      "purpose": "请读取当前目录 notes.md，并原样报出其中的暗号行。",
+      "requestModel": "deepseek-flash",
+      "status": "submitted",
+      "outcome": {
+        "status": "DONE",
+        "model": "deepseek-flash",
+        "inputTokens": 1601,
+        "outputTokens": 1231,
+        "cost": 0.039484
+      }
+    },
+    {
+      "at": "2026-09-30T02:46:22.203Z",
+      "purpose": "请从 1 缓慢枚举到 300，每行一个数字，不要省略。",
+      "requestModel": "deepseek-flash",
+      "status": "submitted",
+      "outcome": {
+        "status": "CANCELLED",
+        "turnStatus": "CANCELLED",
+        "deliveries": 0,
+        "stoppedAt": "2026-09-30T02:46:24.280Z"
+      }
+    }
+  ],
+  "accidentalPreBatch": [
+    {
+      "at": "2026-09-30T09:4x:00+08:00（renderer 验收事故）",
+      "turns": 2,
+      "purpose": "verify-desktop-renderer 首版会话 A/B：绑定持久化未隔离——发送经成员 claude 真实执行（教训：默认验收与真实入口必须隔离；已修复为 fake 场景前置+绑定后不发送+停止场景独立 appData）",
+      "requestModel": "deepseek-flash",
+      "responseModel": "deepseek-flash",
+      "outcome": [
+        {
+          "status": "SUCCEEDED",
+          "inputTokens": 1609,
+          "outputTokens": 1049,
+          "cost": 0.034974
+        },
+        {
+          "status": "SUCCEEDED",
+          "inputTokens": 1628,
+          "outputTokens": 4022,
+          "cost": 0.109522
+        }
+      ],
+      "note": "按持续授权记账；不追改旧价值批次（30/33 原样）"
+    }
+  ]
+}

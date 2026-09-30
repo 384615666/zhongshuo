@@ -88,6 +88,7 @@ async function loadProject(path) {
   localStorage.setItem('zs.lastProjectPath', path); // 重启后自动恢复上次项目
   el('project-name').textContent = `${data.project.displayName} · ${path}`;
   renderProjectSettings();
+  void renderMemberRuntimeSettings().catch(() => { /* 绑定读取失败按未绑定呈现——不阻断项目加载 */ });
   const rooms = await command('room.list', { projectId: state.projectId });
   const list = el('room-list');
   list.innerHTML = '';
@@ -113,6 +114,7 @@ async function selectRoom(roomId, conversationId, roomEl) {
   for (const item of document.querySelectorAll('.room-item')) item.classList.remove('active');
   if (roomEl != null) roomEl.classList.add('active');
   state.members = (await command('member.list', { projectId: state.projectId, roomId })).items;
+  void renderMemberRuntimeSettings().catch(() => { /* 绑定读取失败按未绑定呈现——不阻断房间切换 */ });
   const dl = el('member-list');
   dl.innerHTML = '';
   const enabledAgents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
@@ -1635,6 +1637,91 @@ el('redispatch-btn').onclick = () => void (async () => {
 })();
 
 // ---------- 项目设置（第十轮·三：任务验收开关，RT-25/§10.5） ----------
+
+// ---------- 成员 runtime 绑定设置（第十五轮四：member.runtime 读/member.setRuntime 写正式闭环） ----------
+
+/**
+ * 成员 runtime 绑定设置（设置组交付项之一）：
+ * - 读取=member.runtime（安装/支持能力/已验证能力分列——配置成功≠已认证，不探活）；
+ * - 保存=member.setRuntime（claude/codex 必填模型——服务端校验+客户端预检；fake 仅开发模式出现）；
+ * - 作用范围=该成员**之后派发**的 turn（在途不变）；失败就地显示；绑定持久化（重开项目即重读）。
+ */
+async function renderMemberRuntimeSettings() {
+  const box = el('member-runtime-list');
+  if (box == null) return;
+  box.textContent = '';
+  if (state.projectId == null) { box.textContent = '（未打开项目）'; return; }
+  const members = state.members ?? [];
+  const agents = members.filter((m) => m.principalType === 'agent');
+  if (agents.length === 0) { box.textContent = '（本项目无 agent 成员）'; return; }
+  for (const m of agents) {
+    const row = document.createElement('div');
+    row.className = 'meta';
+    let binding = null;
+    try {
+      binding = await command('member.runtime', { memberId: m.id });
+    } catch { /* 读取失败按未绑定展示 */ }
+    const kind = binding?.binding?.kind ?? null;
+    const model = binding?.binding?.model ?? null;
+    const caps = binding?.installation?.capabilities_json != null
+      ? (() => { try { return JSON.parse(binding.installation.capabilities_json); } catch { return null; } })()
+      : null;
+    const current = kind == null ? '未绑定（派发回落全局 runtime）' : `${kind}${model != null ? ` · ${model}` : ''}`;
+    const capNote = caps == null ? '' : ` ｜ 模型可用性：${caps.modelAvailability ?? '未记录'} · 权限认证：${caps.permissionAuth ?? '未记录'}（配置≠已认证，不自动探活）`;
+    const label = document.createElement('span');
+    label.textContent = `${m.displayName ?? m.id}：${current}${capNote}`;
+    row.appendChild(label);
+    const editBtn = document.createElement('button');
+    editBtn.className = 'chip';
+    editBtn.textContent = '绑定…';
+    editBtn.title = '成员 runtime 绑定：作用范围=该成员之后派发的 turn；claude/codex 必须显式模型';
+    editBtn.onclick = () => {
+      // 编辑行（每次一个成员）：kind 下拉+模型输入+保存/取消；错误就地显示。
+      for (const old of box.querySelectorAll('.member-runtime-edit')) old.remove();
+      const edit = document.createElement('div');
+      edit.className = 'member-runtime-edit meta';
+      const kinds = [['claude', 'claude（CLI 渠道）'], ['codex', 'codex（App Server）']]; // fake 不入产品设置面（仅开发模式命令面可用——daemon 侧门禁）
+      const sel = document.createElement('select');
+      for (const [v, text] of kinds) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = text;
+        if (v === kind) o.selected = true;
+        sel.appendChild(o);
+      }
+      const modelInput = document.createElement('input');
+      modelInput.placeholder = '模型（如 deepseek-flash）';
+      modelInput.value = model ?? '';
+      const save = document.createElement('button');
+      save.className = 'chip';
+      save.textContent = '保存';
+      const cancel = document.createElement('button');
+      cancel.className = 'chip';
+      cancel.textContent = '取消';
+      const err = document.createElement('span');
+      err.className = 'meta';
+      edit.append(sel, ' ', modelInput, ' ', save, ' ', cancel, ' ', err);
+      cancel.onclick = () => edit.remove();
+      save.onclick = () => void (async () => {
+        err.textContent = '';
+        const nextKind = sel.value;
+        const nextModel = modelInput.value.trim();
+        if (nextKind === 'claude' || nextKind === 'codex') {
+          if (nextModel.length === 0) { err.textContent = '校验失败：该 runtime 必须显式模型（不默认、不猜测）'; return; }
+          if (!/^[a-zA-Z0-9._-]+$/.test(nextModel)) { err.textContent = '校验失败：模型名含不接受的字符'; return; }
+        }
+        try {
+          await command('member.setRuntime', { memberId: m.id, kind: nextKind, ...(nextModel.length > 0 ? { model: nextModel } : {}) });
+          await renderMemberRuntimeSettings();
+        } catch (error) {
+          err.textContent = `保存失败：${error.message}`;
+        }
+      })();
+      row.after(edit);
+    };
+    row.appendChild(editBtn);
+    box.appendChild(row);
+  }
+}
 
 /** 任务验收开关渲染：标签/说明随项目数据；CAS revision 来自 project.open 快照。 */
 function renderProjectSettings() {
