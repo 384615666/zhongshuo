@@ -7,8 +7,8 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
@@ -18,33 +18,77 @@ import type { PipeClient } from '../contracts/daemonIpc.ts';
 // 进程加载，Electron 主进程仅经命名管道连接——不做 Electron ABI rebuild）。
 let daemonProcess: ChildProcess | null = null;
 let pipe: PipeClient | null = null;
+let daemonShuttingDown = false;
 
-/** 启动独立 daemon 子进程（Node 运行时；native 模块不进 Electron）。 */
+/**
+ * 打包形态（DEV-15）：resources/app 下自带 daemon.cjs+随包 Node（daemon/node/node.exe）
+ * ——运行不依赖开发机 PATH 上的 node；受管运行时默认开（REC-LIFE-1 产品立场：koffi 缺失
+ * =daemon 拒绝启动→本应用明确失败退出，不静默降级为未受管执行；ZS_MANAGED_RUNTIME=0 显式
+ * 关闭仅排障用）。开发/测试（node_modules/electron + dist/ui）维持源码 entry.ts+PATH node。
+ */
+const appRoot = resolve(__dirname, '..', '..'); // dist/ui/main.cjs → 应用根（打包=resources/app）
+const isPackagedUi = process.env.ZS_PACKAGED_UI === '1'
+  || existsSync(join(appRoot, 'daemon', 'daemon.cjs')); // 布局判定：便携 exe 未改名时 app.isPackaged=false，不可作依据
+
+/** 启动独立 daemon 子进程（打包=随包 Node+daemon.cjs；开发=PATH node+源码 entry）。 */
 async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'codex' | 'claude'): Promise<void> {
-  const entry = process.env.ZS_DAEMON_ENTRY ?? join(__dirname, '..', '..', 'src', 'daemon', 'entry.ts');
+  const entry = process.env.ZS_DAEMON_ENTRY ?? (isPackagedUi
+    ? join(appRoot, 'daemon', 'daemon.cjs')
+    : join(__dirname, '..', '..', 'src', 'daemon', 'entry.ts'));
   mkdirSync(appDataDirToUse, { recursive: true }); // 凭据/数据库目录可能尚不存在
   const credential = ensureLocalCredential(appDataDirToUse);
   // 管道名默认按本机用户（单实例语义）；显式 ZS_PIPE_NAME 供多实例/端到端隔离。
   daemonPipe = process.env.ZS_PIPE_NAME ?? daemonPipeNameFor(localUserId());
   daemonToken = credential.token;
-  // daemon 用系统 Node 运行（ELECTRON_RUN_AS_NODE 的 electron.exe 是 Electron ABI，
+  // daemon 用随包 Node 运行（ELECTRON_RUN_AS_NODE 的 electron.exe 是 Electron ABI，
   // better-sqlite3 原生模块按 Node ABI 预编译——混用即 NODE_MODULE_VERSION 不匹配）。
-  // 打包形态由 DEV-15 换绑随包 Node；开发/测试用 PATH 上的 node。
-  const nodeBin = process.env.ZS_NODE_BIN ?? 'node';
-  daemonProcess = spawn(nodeBin, ['--experimental-strip-types', entry], {
+  const nodeBin = process.env.ZS_NODE_BIN ?? (isPackagedUi
+    ? join(appRoot, 'daemon', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+    : 'node');
+  const daemonArgs = isPackagedUi ? [entry] : ['--experimental-strip-types', entry];
+  daemonProcess = spawn(nodeBin, daemonArgs, {
     env: {
       ...process.env,
       ZS_APP_DATA: appDataDirToUse,
       ZS_RUNTIME: runtime,
       ZS_ALLOW_FAKE: process.env.ZS_ALLOW_FAKE ?? '1',
       ZS_PIPE_NAME: daemonPipe,
+      ...(isPackagedUi ? {
+        ZS_PACKED_ENTRY: '1',
+        ZS_MANAGED_RUNTIME: process.env.ZS_MANAGED_RUNTIME ?? '1',
+      } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   daemonProcess.stderr?.on('data', (d: Buffer) => process.stderr.write(`[daemon] ${d}`));
   daemonProcess.once('exit', (code) => {
     process.stderr.write(`[zhongshuo-ui] daemon 退出（code=${code}）\n`);
+    // 启动失败/异常退出（含受管依赖缺失的拒绝启动）：应用明确失败退出——不静默以未受管
+    // 状态继续（空管道重连永远失败=挂死窗口，比明确退出更糟）。
+    if (!daemonShuttingDown && code !== 0) {
+      process.stderr.write('[zhongshuo-ui] daemon 异常退出——应用退出（明确失败，不降级）\n');
+      app.exit(1);
+    }
   });
+}
+
+/**
+ * 正式停机（DEV-15 第十四轮四）：daemon.shutdown IPC 命令（优雅：拒新命令→收拢→关库→
+ * 退出 0）+ 有界等待；超时 kill 兜底。确认=子进程退出（响应只表示已调度）。
+ */
+async function shutdownDaemon(): Promise<void> {
+  daemonShuttingDown = true;
+  try {
+    if (pipe != null && !pipe.closed) {
+      await pipe.send({ protocolVersion: 1, commandId: `ui-shutdown-${randomUUID()}`, method: 'daemon.shutdown', params: {} });
+    }
+  } catch { /* 连接已断——kill 兜底 */ }
+  const d = daemonProcess;
+  if (d == null) return;
+  const exited = new Promise<boolean>((r) => { d.once('exit', () => r(true)); });
+  const grace = (ms: number): Promise<boolean> => new Promise((r) => { const t = setTimeout(() => r(false), ms); t.unref?.(); });
+  if (!await Promise.race([exited, grace(10_000)])) d.kill();
+  await Promise.race([exited, grace(3_000)]);
 }
 
 let daemonPipe = '';
@@ -138,8 +182,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   pipe?.close();
-  daemonProcess?.kill();
-  app.quit();
+  void shutdownDaemon().finally(() => app.quit());
 });
 
 /** 自动化演示（G3 取证）：open → submit → 等待 → history → screenshot → 写结果退出。 */
@@ -213,6 +256,7 @@ async function runDemo(win: BrowserWindow, resultPath: string): Promise<void> {
     elapsedMs: Date.now() - t0,
     screenshot: shot,
   }, null, 2));
-  daemonProcess?.kill(); // 演示结束即回收 daemon 子进程，避免残留占用管道/数据库
-  app.quit();
+  // 演示结束：正式停机（daemon.shutdown→优雅收拢→退出 0；超时 kill 兜底）——正常退出
+  // 验收走同一路径，不因演示快捷方式绕过。
+  void shutdownDaemon().finally(() => app.quit());
 }

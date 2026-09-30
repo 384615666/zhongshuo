@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawnManagedBridge, managedJobByPid, managedJobById, managedJobsCount, managedActivePollers, disposeAllManagedJobs } from '../../src/daemon/managed/bridge.ts';
+import { spawnManagedBridge, managedJobByPid, managedJobsCount, managedActivePollers, disposeAllManagedJobs } from '../../src/daemon/managed/bridge.ts';
 import { registerTurnProcess } from '../../src/daemon/processRegistry.ts';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';

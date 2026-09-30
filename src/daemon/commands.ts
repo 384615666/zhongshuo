@@ -25,7 +25,7 @@ import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cl
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
-import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ProbeOutcome } from './processRegistry.ts';
+import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ManagedJobObservation, type ProbeOutcome } from './processRegistry.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -103,7 +103,7 @@ function resolveServerProbe(deps: DaemonCommandDeps, turnId: string, probeId: st
 }
 
 /** 受管 job 现场观察（probe/reconcile 注入——jobId 查找+PID 辅助核对，第十四轮二）。 */
-function managedJobObservation(jobId: string | null): import('./processRegistry.ts').ManagedJobObservation | null {
+function managedJobObservation(jobId: string | null): ManagedJobObservation | null {
   if (jobId == null) return { held: false, pid: null, rootExited: false, activeCount: null };
   const mp = managedJobById(jobId);
   if (mp == null) return { held: false, pid: null, rootExited: false, activeCount: null };
