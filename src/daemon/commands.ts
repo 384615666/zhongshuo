@@ -63,6 +63,12 @@ export interface DaemonCommandDeps {
     reason?: string;
     applied?: Array<{ eventKey: string; outcome: string }>;
   }>;
+  /**
+   * 正式关闭入口（DEV-15 第十四轮三：daemon.shutdown——IPC 驱动的优雅停机；安装产物
+   * 验证与 UI 宿主同路径）。注入方（standalone entry）自行调度实际 stop+退出（响应先于
+   * 关闭发出）。缺省（内嵌测试实例）=命令明确拒绝——不经命令面伪造进程管理。
+   */
+  scheduleShutdown?: () => void;
 }
 
 export class DaemonCommandError extends Error {
@@ -101,7 +107,10 @@ function managedJobObservation(jobId: string | null): import('./processRegistry.
   if (jobId == null) return { held: false, pid: null, rootExited: false, activeCount: null };
   const mp = managedJobById(jobId);
   if (mp == null) return { held: false, pid: null, rootExited: false, activeCount: null };
-  return { held: true, pid: mp.pid, rootExited: !mp.waitRootExit(0).timedOut, activeCount: mp.activeCount() };
+  // rootExited 先取生命周期备忘（bridge close 后进程句柄已释放——handle 查询恒败，
+  // 不能把「已完整结束」误报为「根仍存活」）；句柄在时以实时查询兜底。
+  const memo = mp.lifecycle();
+  return { held: true, pid: mp.pid, rootExited: memo.rootExited || !mp.waitRootExit(0).timedOut, activeCount: mp.activeCount() };
 }
 
 // REC-LIFE-1（第十四轮二）：受管证据按稳定身份（jobId）取用——PID 可复用，仅辅助核对。
@@ -1389,6 +1398,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           interruptTurn: deps.interruptTurn,
         });
         return withCommandId({ ok: true, data });
+      }
+      case 'daemon.shutdown': {
+        // DEV-15（第十四轮三）：正式关闭动作——IPC 命令驱动（打包产物验证/宿主停机同路径）。
+        // 响应=「关闭已调度」；**确认结果=进程退出码与 daemon:stop:last 记录**（关闭本身会断
+        // IPC，不在响应里声称完成）。内嵌实例未注入=拒绝（不经命令面伪造进程管理）。
+        z.strictObject({}).parse(env.params);
+        if (deps.scheduleShutdown == null) {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '该 daemon 未注入关闭入口（内嵌实例）——由宿主进程管理停止');
+        }
+        deps.scheduleShutdown();
+        return withCommandId({ ok: true, data: { accepted: true, note: '优雅关闭已调度（拒新命令→收拢→关库→退出 0；未收敛→强制→退出 3）——确认以进程退出码与 daemon:stop:last 为准' } });
       }
       case 'task.redispatch': {
         // DIRECT 追加 turn（跟进/格式修复）：经 outbox 正式编排（worker 领取→准入→成员绑定

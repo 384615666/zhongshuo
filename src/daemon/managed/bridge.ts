@@ -167,6 +167,10 @@ export function spawnManagedBridge(cmd: string, args: string[], options: { cwd?:
         if (!stdout.readableEnded) stdout.push(null);
         if (!stderr.readableEnded) stderr.push(null);
         mp.closeOutputPipes(); // 证据/查询走 job 句柄——不因关输出流而消失
+        // 根已退出+管道排空：进程/线程句柄不再需要（ActiveProcesses 归零的必要条件）——
+        // 此处释放，生产 releaseProtection 凭证据解除时无需外部手动放句柄（job 句柄保留
+        // 供 activeCount/证据查询；dispose 前证据不消失）。
+        mp.releaseRootHandles();
         stopPoller();
         setImmediate(() => {
           emitter.emit('close', exitCode, null);

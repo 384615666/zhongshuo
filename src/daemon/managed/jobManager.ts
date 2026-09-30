@@ -20,6 +20,21 @@
 import { platform } from 'node:process';
 import { createRequire } from 'node:module';
 
+// CJS 打包形态（esbuild format:cjs）下 import.meta.url 不可用（esbuild 置 undefined——
+// createRequire(undefined) 抛「filename must be…」）——按运行形态选锚点：
+// 源码 ESM（tsx/vitest）=import.meta.url；CJS bundle=__filename（require 解析从产物目录
+// 走 node_modules——安装目录 node_modules 生效的前提）。
+declare const __filename: string | undefined;
+
+function resolveNodeRequire(): ReturnType<typeof createRequire> {
+  if (typeof __filename === 'string') return createRequire(__filename);
+  try {
+    return createRequire(import.meta.url);
+  } catch {
+    return createRequire(process.argv[1] ?? process.execPath); // 兜底锚点（不期望到达）
+  }
+}
+
 interface KoffiLib {
   createProcessSuspended(cmdline: string, cwd: string | null, envBlock: string[] | null, stdio: { in: unknown; out: unknown; err: unknown }): { ok: true; hProcess: unknown; hThread: unknown; pid: number } | { ok: false; lastError: number };
   createJob(killOnClose: boolean): unknown;
@@ -109,7 +124,7 @@ export function buildEnvironmentBlockLines(env: Record<string, string>): string[
 function loadLib(): KoffiLib | { unavailable: string } {
   if (libCache != null) return libCache;
   try {
-    const nodeRequire = createRequire(import.meta.url);
+    const nodeRequire = resolveNodeRequire();
     const koffi = nodeRequire('koffi');
     const kernel32 = koffi.load('kernel32.dll');
 

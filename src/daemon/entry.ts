@@ -45,6 +45,11 @@ export interface DaemonOptions {
   drainSettleTimeoutMs?: number;
   /** 测试注入口：覆盖默认 adapter 构建（仅测试用——生产路径不传）。 */
   testAdapter?: RuntimeAdapter;
+  /**
+   * 正式关闭命令入口（DEV-15 第十四轮三：daemon.shutdown 经 IPC 驱动）。注入时命令面开放
+   * （standalone 进程入口）；内嵌实例（测试/UI 进程内）不注入——命令明确拒绝。
+   */
+  standaloneShutdown?: () => void;
 }
 
 /** 退出状态机结果：complete=全部收拢（关库+释放锁）；否则未完成，上层不得视为成功。 */
@@ -221,7 +226,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     const credential = ensureLocalCredential(options.appDataDir);
     const localUserId = options.localUserId ?? `local-${homedir().replaceAll('\\', '_').replaceAll(':', '_')}`;
-    const pipeName = options.pipeName ?? daemonPipeNameFor(localUserId);
+    // 管道名规范化：裸名字会被 node:net 当 TCP 主机名（EACCES）——统一补 \\.\pipe\ 前缀。
+    const normalizePipe = (name: string): string => (name.startsWith('\\\\.\\pipe\\') ? name : `\\\\.\\pipe\\${name}`);
+    const pipeName = options.pipeName != null ? normalizePipe(options.pipeName) : daemonPipeNameFor(localUserId);
     ipc = await startNamedPipeIpc(
       pipeName,
       async (envelope) =>
@@ -232,6 +239,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           appDataDir: options.appDataDir,
           releaseAdmission: (turnId) => worker.reconcileRelease(turnId), // DEV-13 对账→准入内存联动
           pumpLateEvents: (turnId) => worker.pumpLateEventsForTurn(turnId), // 第八轮：迟到成果正式接收（adapter lateEvents 通道）
+          ...(options.standaloneShutdown != null ? { scheduleShutdown: options.standaloneShutdown } : {}),
         }, envelope),
       { authToken: credential.token },
     );
@@ -428,11 +436,18 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
     // 只警告不退出：成员级绑定（agent_profiles.settings_json.model）可提供模型。
     process.stderr.write('[zhongshuo-daemon] ZS_CLAUDE_MODEL 未设置：全局 claude runtime 需显式模型（成员配置可按成员提供）\n');
   }
-  void startDaemon({ appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME }).then((daemon) => {
+  let requestShutdown: (() => void) | null = null;
+  void startDaemon({
+    appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME,
+    // daemon.shutdown（DEV-15 第十四轮三）：IPC 正式关闭——命令响应先发出（250ms 让路），
+    // 确认=进程退出码+daemon:stop:last 记录（关闭会断 IPC，响应不声称完成）。
+    standaloneShutdown: () => { requestShutdown?.(); },
+  }).then((daemon) => {
     process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
     // pid 落盘（诊断/UI 端到端定位子进程；正常退出删除——SIGKILL 残留即崩溃现场）。
     const pidPath = join(appDataDir, 'daemon.pid');
     writeFileSync(pidPath, String(process.pid), 'utf8');
+    let shutdownStarted = false;
     const shutdown = async () => {
       let result = await daemon.stop();
       if (!result.complete) {
@@ -442,7 +457,12 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
       try { rmSync(pidPath, { force: true }); } catch { /* 退出路径不因此失败 */ }
       process.exit(result.complete ? 0 : 3);
     };
-    process.on('SIGINT', () => void shutdown());
-    process.on('SIGTERM', () => void shutdown());
+    requestShutdown = () => {
+      if (shutdownStarted) return; // 重复 shutdown/信号=同一关闭过程（stop 本身幂等）
+      shutdownStarted = true;
+      setTimeout(() => { void shutdown(); }, 250).unref?.();
+    };
+    process.on('SIGINT', () => requestShutdown?.());
+    process.on('SIGTERM', () => requestShutdown?.());
   });
 }
