@@ -176,6 +176,8 @@ interface SessionState {
   active: ActiveTurn | null;
   /** 会话内完成的 provider session id（用于 --resume）。 */
   providerSessionId: string | null;
+  /** 请求续接的 ID（--resume 参数）——与 provider 实际上报 ID 分离（第二十一轮三）。 */
+  resumeRequested: string | null;
   closed: boolean;
   subscribers: QueuedEvent[];
 }
@@ -270,16 +272,19 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
     const id = `claude_sess_${randomUUID()}`;
+    // 续接事实分离（第二十一轮三）：resume 请求 ID 只进 state.resumeRequested（CLI 的
+    // --resume 参数），**不**填 providerSessionId——openSession 返回值不是 provider 已接受
+    // 续接的证据（真实 ID 由 init/result 事件上报后原地回填）。
     const ref: SessionRef = {
       id,
-      providerSessionId: input.resume?.providerSessionId ?? '',
+      providerSessionId: '',
       runtimeInstallationId: this.options.installationId ?? 'claude-cli-default',
       adapterVersion: CLAUDE_ADAPTER_VERSION,
       threadId: input.threadId,
       sessionGeneration: input.sessionGeneration,
       cwd: input.cwd,
     };
-    this.sessions.set(id, { ref, active: null, providerSessionId: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
+    this.sessions.set(id, { ref, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
     return ref;
   }
 
@@ -315,11 +320,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
-    if (state.providerSessionId != null) {
-      if (!PROVIDER_SESSION_ID_RE.test(state.providerSessionId)) {
-        throw new AdapterCallError('VALIDATION_INVALID', `provider session id 非法：${state.providerSessionId.slice(0, 20)}`);
+    const resumeId = state.providerSessionId ?? state.resumeRequested;
+    if (resumeId != null) {
+      if (!PROVIDER_SESSION_ID_RE.test(resumeId)) {
+        throw new AdapterCallError('VALIDATION_INVALID', `provider session id 非法：${resumeId.slice(0, 20)}`);
       }
-      args.push('--resume', state.providerSessionId);
+      args.push('--resume', resumeId);
     }
     args.push(...(this.options.extraArgs ?? []));
     const proc = this.spawnFn(args, session.cwd);
@@ -579,7 +585,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;
       if (sid != null) {
         state.providerSessionId = sid;
-        state.ref = { ...state.ref, providerSessionId: sid };
+        state.ref.providerSessionId = sid; // 原地回填（第二十一轮三）：worker 持有同一对象——终态结算可见
       }
       const usage = parsed['usage'] as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } | undefined;
       // 响应模型取证（用户令 2026-09-28）：优先 result.model；result 不带时用 assistant

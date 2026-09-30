@@ -601,10 +601,17 @@ export class DispatchWorker {
       // 续接判定挪到 turn 终态（见 settleDmSession）：以 provider 实际上报身份核对，终态回填
       // runtime_sessions。候选按成员当前 runtime 绑定与行内绑定快照（capabilities_json）校验
       // 兼容——runtime 切换不续接（新会话+历史重放）。房间会话维持任务隔离，不 resume。
+      // 快照=实际解析结果（第二十一轮三）：未绑定成员回落全局默认（runtime=process.env.ZS_RUNTIME
+      // 归一、model 按渠道默认）——默认切换后再派发即快照不符=不续接；含 cwd（工作目录变化不续接）。
       const dmBinding = isDm ? readMemberRuntimeBinding(this.db, member.id) : undefined;
-      const dmBindingSnap = dmBinding != null
-        ? JSON.stringify({ runtimeKind: dmBinding.kind, model: dmBinding.model ?? null, installationId: dmBinding.installationId ?? null })
-        : JSON.stringify({ runtimeKind: null, model: null, installationId: null });
+      const resolvedKind = dmBinding?.kind ?? (isDm ? (this.defaultKindOf() ?? null) : null);
+      const resolvedModel = dmBinding?.model ?? (resolvedKind === 'codex' ? (process.env.ZS_E2E_MODEL ?? null) : resolvedKind === 'claude' ? (process.env.ZS_CLAUDE_MODEL ?? null) : null);
+      const dmBindingSnap = JSON.stringify({
+        runtimeKind: resolvedKind,
+        model: resolvedModel,
+        installationId: dmBinding?.installationId ?? null,
+        cwd: project.canonical_path,
+      });
       const dmPrevSession = isDm
         ? this.db.prepare(
           "SELECT id, provider_session_id, session_generation, thread_id, member_id, cwd, capabilities_json FROM runtime_sessions WHERE conversation_id = ? AND member_id = ? AND scope_kind = 'dm' AND provider_session_id IS NOT NULL AND provider_session_id != '' ORDER BY rowid DESC LIMIT 1",
@@ -614,21 +621,26 @@ export class DispatchWorker {
       if (dmPrevSession != null) {
         // 绑定兼容：候选行的快照与当前绑定一致（无快照=历史行按兼容处理）。不一致=runtime
         // 切换 → 不 resume（新会话受限重放——事件如实）。
-        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null } | null = null;
-        try {
-          prevSnap = dmPrevSession.capabilities_json != null
-            ? JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null }
-            : null;
-        } catch { prevSnap = null; }
-        const compatible = prevSnap == null
-          || ((prevSnap.runtimeKind ?? null) === (dmBinding?.kind ?? null)
-            && (prevSnap.installationId ?? null) === (dmBinding?.installationId ?? null)
-            && (prevSnap.model ?? null) === (dmBinding?.model ?? null));
+        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; cwd?: string | null } | null = null;
+        let snapDamaged = false;
+        if (dmPrevSession.capabilities_json != null) {
+          try {
+            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; cwd?: string | null };
+            if (typeof prevSnap.runtimeKind !== 'string' && prevSnap.runtimeKind !== null) snapDamaged = true;
+          } catch { snapDamaged = true; }
+        }
+        // 缺失/损坏快照不默认兼容（第二十一轮三）：按不兼容处理——新会话+历史重放，不冒充续接。
+        const compatible = !snapDamaged
+          && prevSnap != null
+          && (prevSnap.runtimeKind ?? null) === resolvedKind
+          && (prevSnap.model ?? null) === resolvedModel
+          && (prevSnap.installationId ?? null) === (dmBinding?.installationId ?? null)
+          && (prevSnap.cwd ?? null) === project.canonical_path;
         if (compatible) {
           resumeRef = {
             id: dmPrevSession.id,
             providerSessionId: dmPrevSession.provider_session_id,
-            runtimeInstallationId: dmBinding?.installationId ?? 'unbound', // 实际安装身份（不用伪造常量）
+            runtimeInstallationId: dmBinding?.installationId ?? (resolvedKind != null ? `default:${resolvedKind}` : 'unbound'), // 实际解析身份（绑定或全局默认——不用伪造常量）
             adapterVersion: 'resume-of-record',
             threadId: dmPrevSession.thread_id ?? '',
             sessionGeneration: dmPrevSession.session_generation,
@@ -1940,6 +1952,12 @@ export class DispatchWorker {
     }
   }
 
+  /** 全局默认 runtime kind（未绑定成员回落；ZS_RUNTIME 归一——fake 限开发模式）。 */
+  private defaultKindOf(): 'fake' | 'codex' | 'claude' | null {
+    const raw = process.env.ZS_RUNTIME;
+    return raw === 'codex' || raw === 'claude' || raw === 'fake' ? raw : null;
+  }
+
   /** DM 会话终态结算（第二十轮二）：turnId → 会话身份待结算（终态时 provider 已实际上报）。 */
   private readonly dmPending = new Map<string, { task: TaskRow; session: SessionRef; resumeRef?: SessionRef; bindingSnap: string; cwd: string; generation: number; memberId: string; turnRequested: boolean }>();
 
@@ -1955,9 +1973,11 @@ export class DispatchWorker {
   private settleDmSession(turnId: string): void {
     const pending = this.dmPending.get(turnId);
     if (pending == null) return;
-    this.dmPending.delete(turnId);
     const key = `dm:sessionverdict:${turnId}`;
-    if (this.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key) != null) return;
+    if (this.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(key) != null) {
+      this.dmPending.delete(turnId); // 已结算（幂等重入）——清理登记
+      return;
+    }
     const { task, session, resumeRef, bindingSnap, cwd, generation, memberId } = pending;
     if (!pending.turnRequested) {
       // turn 从未请求（会话打开窗口被停止/取消）：无 provider 接触——不落会话行、不发判定事件
@@ -1995,7 +2015,19 @@ export class DispatchWorker {
         note: reported != null ? '受限历史重放：provider 换新会话（续接未被接受）——上下文经输入水位重放' : '受限历史重放：provider 未上报身份（续接结果不确定）——不回填候选',
       });
     });
-    try { tx(); } catch { /* 结算尽力而为（下一轮不重复：键已写入前不落——此处失败键也未写，可重试） */ }
+    try {
+      tx();
+      this.dmPending.delete(turnId); // 结算成功才清理（第二十一轮三：失败保留 pending=可恢复，不静默丢失）
+    } catch (error) {
+      // 身份持久化失败=可诊断可恢复：留审计 + 保留 pending（下次终态钩子重试）——不静默吞。
+      try {
+        this.audit(pending.task, null, turnId, 'dm.sessionSettleFailed', {
+          conversationId: pending.task.conversation_id, resumeRequested: pending.resumeRef?.providerSessionId ?? null,
+          error: String(error instanceof Error ? error.message : error).slice(0, 160),
+          note: '会话身份结算事务失败——保留待重试（pending 不清除）',
+        });
+      } catch { /* 审计尽力而为 */ }
+    }
   }
 
   /** DM 会话终态后的队列泵（DEV-22 串行）：run 状态已落定后调用——空闲则入队下一条排队消息。 */
