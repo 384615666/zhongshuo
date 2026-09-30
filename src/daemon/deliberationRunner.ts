@@ -160,6 +160,8 @@ function stageTurnPrefix(stage: string): string {
 
 /**
  * 逐成员缺席宽限判定（只标记，不杀 turn）：
+ * - 宽限取**该 turn 派发时快照**（collab_absence_ms——第十八轮四：执行中改项目配置不影响
+ *   在途 turn；快照缺失的历史行回落调用方传入的项目/全局值）；
  * - 有本阶段**在途** turn 且 有效执行时间(now-started-paused) ≥ grace → absent（basis=open-execution）；
  * - 无 turn（排队）→ 永不缺席；turn 未启动(exec_started_at 空) → 不计。
  * 单轮截止/UNKNOWN/失败等其他 basis 由 worker 终态路径处理（互不重复：此处只看在途）。
@@ -168,10 +170,10 @@ export function evaluateMemberAbsence(db: ZhongshuoDatabase, runId: string, stag
   const verdicts: MemberAbsenceVerdict[] = [];
   for (const memberId of expectedMemberIds) {
     const open = db.prepare(
-      `SELECT id, exec_started_at, exec_paused_ms FROM agent_turns
+      `SELECT id, exec_started_at, exec_paused_ms, collab_absence_ms FROM agent_turns
        WHERE run_id = ? AND member_id = ? AND stage_key LIKE ? AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')
        ORDER BY rowid DESC LIMIT 1`,
-    ).get(runId, memberId, `${stageTurnPrefix(stage)}%`) as { id: string; exec_started_at: number | null; exec_paused_ms: number } | undefined;
+    ).get(runId, memberId, `${stageTurnPrefix(stage)}%`) as { id: string; exec_started_at: number | null; exec_paused_ms: number; collab_absence_ms: number | null } | undefined;
     if (open == null) {
       // 无在途 turn：要么还没派发（排队），要么已终态（缺席/失败由终态路径负责）。
       const ever = db.prepare(
@@ -180,12 +182,13 @@ export function evaluateMemberAbsence(db: ZhongshuoDatabase, runId: string, stag
       verdicts.push({ memberId, markedAbsent: false, basis: ever == null ? 'queued' : 'no-stage-turn' });
       continue;
     }
+    const effectiveGrace = open.collab_absence_ms ?? graceMs; // 快照优先；历史行回落现行值
     if (open.exec_started_at == null) {
       verdicts.push({ memberId, markedAbsent: false, basis: 'within-grace' }); // 未收到 turn.started：不累计
       continue;
     }
     const effective = Math.max(0, now - open.exec_started_at - (open.exec_paused_ms ?? 0));
-    if (effective >= graceMs) {
+    if (effective >= effectiveGrace) {
       const changed = db.prepare("UPDATE run_participants SET status = 'absent' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, memberId).changes;
       if (changed > 0) {
         appendDomainEvent(db, {

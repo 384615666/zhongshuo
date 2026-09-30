@@ -184,6 +184,36 @@ export class DispatchWorker {
     }
   }
 
+  /**
+   * 派发时限快照（第十八轮四）：解析后的最终值（项目值或全局默认——NULL 回落也记最终解析值）
+   * + 配置版本（projects.revision）。与 turn 同事务写入：在途判定（单轮截止/缺席/暂停扣除）
+   * 全用快照；泵不再每次读最新项目配置——「新派发 turn 起生效（在途不变）」由数据承载，
+   * 重启沿持久快照恢复，不重新套当前配置。
+   */
+  private collabSnapshotFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number; configRevision: number } {
+    try {
+      const row = this.db.prepare('SELECT collab_absence_tolerance_ms, collab_turn_deadline_ms, revision FROM projects WHERE id = ?').get(projectId) as { collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null; revision: number } | undefined;
+      return {
+        absenceToleranceMs: row?.collab_absence_tolerance_ms ?? this.absenceToleranceMs,
+        turnDeadlineMs: row?.collab_turn_deadline_ms ?? this.turnDeadlineMs,
+        configRevision: row?.revision ?? 0,
+      };
+    } catch {
+      return { absenceToleranceMs: this.absenceToleranceMs, turnDeadlineMs: this.turnDeadlineMs, configRevision: 0 };
+    }
+  }
+
+  /** 在途 turn 的时限快照读取（消费/缺席判定用；快照前历史行回落现行配置）。 */
+  collabSnapshotOfTurn(turnId: string): { absenceToleranceMs: number; turnDeadlineMs: number; snapshotted: boolean } {
+    try {
+      const row = this.db.prepare('SELECT collab_absence_ms, collab_turn_deadline_ms FROM agent_turns WHERE id = ?').get(turnId) as { collab_absence_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
+      if (row != null && row.collab_absence_ms != null && row.collab_turn_deadline_ms != null) {
+        return { absenceToleranceMs: row.collab_absence_ms, turnDeadlineMs: row.collab_turn_deadline_ms, snapshotted: true };
+      }
+    } catch { /* 回落 */ }
+    return { absenceToleranceMs: this.absenceToleranceMs, turnDeadlineMs: this.turnDeadlineMs, snapshotted: false };
+  }
+
   private deliberationOptions(projectId?: string) {
     return { absenceToleranceMs: projectId != null ? this.collabFor(projectId).absenceToleranceMs : this.absenceToleranceMs, dispatchWaitDeadlineMs: this.dispatchWaitDeadlineMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
   }
@@ -474,6 +504,7 @@ export class DispatchWorker {
     let startupPhase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn' = 'records';
     let openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null;
     try {
+      const collabSnap = this.collabSnapshotFor(task.project_id);
       const createRun = this.db.transaction(() => {
         this.db.prepare(
           `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
@@ -483,9 +514,9 @@ export class DispatchWorker {
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
         this.db.prepare(
-          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch)
-           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1)`,
-        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key);
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision)
+           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1, ?, ?, ?)`,
+        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
         this.db.prepare(
@@ -1029,11 +1060,12 @@ export class DispatchWorker {
     try {
       const textHash = createHash('sha256').update(assembly.value.text, 'utf8').digest('hex');
       const bundleId = `cb_${randomUUID()}`;
+      const collabSnap = this.collabSnapshotFor(task.project_id);
       const createTurn = this.db.transaction(() => {
         this.db.prepare(
-          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1)`,
-        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key);
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1, ?, ?, ?)`,
+        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
         this.db.prepare(
@@ -1229,7 +1261,11 @@ export class DispatchWorker {
    *   回到主循环，宽限计时由主循环承担，不因 interrupt 挂起而失效。
    */
   private async consumeUntilTerminal(task: TaskRow, runId: string, turnId: string, sessionId: string, adapter: RuntimeAdapter = this.adapter): Promise<void> {
-    const deadline = Date.now() + this.collabFor(task.project_id).turnDeadlineMs;
+    // 时限快照（第十八轮四）：在途 turn 用派发时快照——执行中改配置不改变既有 turn；
+    // 快照前历史行（无快照列）回落现行项目配置。排队截止（dispatchWaitDeadline）是全局
+    // 调度资源观察线，与本执行截止分属不同机制，不混用。
+    const turnCollab = this.collabSnapshotOfTurn(turnId);
+    const deadline = Date.now() + turnCollab.turnDeadlineMs;
     const interruptDeadline = deadline + this.interruptGraceMs;
     const iterator = adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
     let interruptSent = false;
