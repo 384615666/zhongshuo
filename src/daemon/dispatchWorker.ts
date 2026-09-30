@@ -43,6 +43,7 @@ import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './p
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
+import { settleRealCall } from './realCallLedger.ts';
 
 export interface TaskRow {
   id: string;
@@ -1874,6 +1875,11 @@ export class DispatchWorker {
     this.db
       .prepare(`UPDATE agent_turns SET status = ? WHERE id = ? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`)
       .run(status, turnId);
+    // 真实调用护栏（第十七轮四）：终态在唯一收口点结算 startTurn 台账行（inflight→终态；
+    // 未知/中断如实保留——覆盖修复/重派/研讨/并发全部路径）。
+    if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
+      try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
+    }
   }
 
   private settleBudget(runId: string): void {

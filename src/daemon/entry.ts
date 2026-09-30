@@ -27,6 +27,7 @@ import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
 import { CodexAppServerAdapter } from '../adapter/codex/appServerAdapter.ts';
 import * as managedBridgeMod from './managed/bridge.ts';
+import { wrapRealCallLedger } from './realCallLedger.ts';
 import * as claudeCliMod from '../adapter/claude/cliAdapter.ts';
 import { ClaudeCliAdapter } from '../adapter/claude/cliAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
@@ -171,21 +172,22 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env 缺省=继承父环境
     })();
     if (options.runtime === 'codex' && managedCodexSpawn != null) {
-      adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });
+      adapter = wrapRealCallLedger(new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn }), 'codex', db);
     } else if (options.runtime === 'claude' && managedClaudeSpawn != null) {
-      adapter = new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined));
+      adapter = wrapRealCallLedger(new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined)), 'claude', db);
     }
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
     // claude（模型/权限档来自 agent_profiles.settings_json）；fake 工厂仅显式开发模式注册。
     const claudePermissionOf = (mode: string | null): 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' | undefined =>
       mode === 'plan' || mode === 'manual' || mode === 'acceptEdits' || mode === 'auto' || mode === 'dontAsk' || mode === 'bypassPermissions' ? mode : undefined;
+    const dbForLedger = db!; // 此处 db 必非空（上方已 open；供护栏台账闭包使用）
     const factories: Record<string, MemberAdapterFactory> = {
-      codex: (binding) => new CodexAppServerAdapter({
+      codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         model: binding.model ?? process.env.ZS_E2E_MODEL,
         ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
-      }),
-      claude: (binding) => new ClaudeCliAdapter(
+      }), 'codex', dbForLedger),
+      claude: (binding) => wrapRealCallLedger(new ClaudeCliAdapter(
         {
           model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
           executable: binding.executable ?? undefined,
@@ -193,7 +195,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           installationId: binding.installationId ?? undefined,
         },
         managedClaudeSpawn != null ? managedClaudeSpawn(binding.executable ?? undefined) : undefined,
-      ),
+      ), 'claude', dbForLedger),
     };
     if (process.env.ZS_ALLOW_FAKE === '1') {
       // 成员级 fake 实例与默认实例同款编排（ZS_FAKE_DELIB=1 时按输入契约生成合法研讨

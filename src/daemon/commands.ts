@@ -1245,6 +1245,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
+      case 'realCalls.summary': {
+        // 真实调用护栏台账查询（第十七轮四：startTurn 级实际请求边界——batchId/状态/归属分列；
+        // fake 不产生行）。只读诊断面，不用于绕过防护。
+        const params = z.strictObject({ batchId: z.string().min(1).max(100).optional() }).parse(env.params);
+        const { realCallSummary } = await import('./realCallLedger.ts');
+        return withCommandId({ ok: true, data: realCallSummary(deps.db, params.batchId) });
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);

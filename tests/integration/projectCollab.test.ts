@@ -68,7 +68,7 @@ describe('项目协作限制（project.collab）', () => {
     seed(db);
     const deps = { db, localUserId: 'u', interruptTurn: async () => {} };
     const setR = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `cb-${randomUUID()}`, method: 'project.collab.set', params: { projectId: 'p1', turnDeadlineMs: 10_000, expectedRevision: 0 } });
-    expect(setR.ok, JSON.stringify((setR as { error?: { message: string } }).error)).toBe(true); // 范围下限 10s（服务端校验）
+    expect((setR as { ok: boolean }).ok, JSON.stringify(setR).slice(0, 120)).toBe(true); // 范围下限 10s（服务端校验）
     createRoomRootTask(db, {
       ids: { messageId: 'm1', threadId: 'th1', taskId: 'tk1', taskEventId: 'e1', threadEventId: 'e2' },
       projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default', title: 'T', body: 'B',
