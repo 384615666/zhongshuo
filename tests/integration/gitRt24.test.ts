@@ -122,7 +122,7 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     const d2 = await f.cmd<{ commit: { taskIds: string[] }; patches: Array<{ path: string }> }>('git.commitDiff', { projectId: f.projectId, oid: extOid });
     expect(d2.commit.taskIds).toEqual([]);
     expect(d2.patches.map((x) => x.path)).toEqual(['ext.txt']);
-    // merge 提交：多父 → 注记 + 无虚构 diff。
+    // merge 提交：多父 → 父清单+注记（不虚构 diff）；选择比较父 → 差异绑定该父 OID。
     git(f.root, 'checkout', '-q', '-b', 'side');
     writeFileSync(join(f.root, 's.txt'), 's\n', 'utf8');
     git(f.root, 'add', '-A'); git(f.root, 'commit', '-q', '-m', 'side');
@@ -130,10 +130,27 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     const mg = gitLax(f.root, 'merge', '--no-ff', '-m', 'merge side', 'side');
     expect(mg.status).toBe(0);
     const mergeOid = git(f.root, 'rev-parse', 'HEAD').trim();
-    const d3 = await f.cmd<{ commit: { parents: string[] }; mergeNote?: string; patches: unknown[] }>('git.commitDiff', { projectId: f.projectId, oid: mergeOid });
+    type MergeDiff = { commit: { parents: string[] }; parentsMeta?: Array<{ oid: string; short: string; subject: string }>; comparedParent?: string; mergeNote?: string; patches: Array<{ path: string; text: string }> };
+    const d3 = await f.cmd<MergeDiff>('git.commitDiff', { projectId: f.projectId, oid: mergeOid });
     expect(d3.commit.parents).toHaveLength(2);
     expect(d3.mergeNote).toContain('合并提交');
+    expect(d3.mergeNote).toContain('选择比较父');
     expect(d3.patches).toEqual([]);
+    expect(d3.parentsMeta).toHaveLength(2);
+    expect(d3.parentsMeta!.map((x) => x.subject)).toContain('side');
+    // 对比父=第一父（main 侧）：side 的变更体现为相对该父的新增（逐父实际差异，非总览）。
+    const [pMain, pSide] = d3.commit.parents;
+    const d4 = await f.cmd<MergeDiff>('git.commitDiff', { projectId: f.projectId, oid: mergeOid, parentOid: pMain });
+    expect(d4.comparedParent).toBe(pMain);
+    expect(d4.patches.map((x) => x.path)).toEqual(['s.txt']);
+    expect(d4.patches[0]!.text).toContain('+s');
+    // 对比父=第二父（side 侧）：main 侧未前进 → 相对该父无差异（同提交换父=换结果，绑定生效）。
+    const d5 = await f.cmd<MergeDiff>('git.commitDiff', { projectId: f.projectId, oid: mergeOid, parentOid: pSide });
+    expect(d5.comparedParent).toBe(pSide);
+    expect(d5.patches).toEqual([]);
+    // 非父 oid（跨对象比较）/单父提交传非其父 → 拒绝。
+    await expect(f.cmd('git.commitDiff', { projectId: f.projectId, oid: mergeOid, parentOid: c1.commit })).rejects.toThrow(/不是该提交的父/);
+    await expect(f.cmd('git.commitDiff', { projectId: f.projectId, oid: extOid, parentOid: pMain })).rejects.toThrow(/不是该提交的父/);
     // 非法/不存在 oid 拒绝。
     await expect(f.cmd('git.commitDiff', { projectId: f.projectId, oid: 'nothash' })).rejects.toThrow();
     await expect(f.cmd('git.commitDiff', { projectId: f.projectId, oid: '0'.repeat(40) })).rejects.toThrow(/不存在/);

@@ -1161,7 +1161,7 @@ async function renderGitOps(force = false) {
         const diffBtn = document.createElement('button');
         diffBtn.className = 'chip';
         diffBtn.textContent = 'diff';
-        diffBtn.title = '单提交聚合差异（parents/关联/正文；merge 提交只注记）';
+        diffBtn.title = '单提交聚合差异（parents/关联/正文；merge 提交选择比较父——差异绑定所选父）';
         diffBtn.onclick = () => void (async () => {
           const ex = document.getElementById(`commitdiff-${item.oid}`);
           if (ex != null) { ex.remove(); return; }
@@ -1169,22 +1169,98 @@ async function renderGitOps(force = false) {
           const sub = document.createElement('div');
           sub.id = `commitdiff-${item.oid}`;
           sub.className = 'diff-block';
-          const meta = document.createElement('div');
-          meta.className = 'meta';
-          meta.textContent = `parents: ${d.commit.parents.map((p2) => p2.slice(0, 8)).join('、') || '（根提交）'} · ${d.commit.authorName}${d.mergeNote != null ? ` · ${d.mergeNote}` : ''}`;
-          sub.appendChild(meta);
           const CHANGE = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名', copied: '复制' };
-          for (const patch of d.patches) {
-            const ph = document.createElement('div');
-            ph.className = 'meta';
-            ph.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
-            sub.appendChild(ph);
-            if (!patch.binary && patch.text.length > 0) {
-              const pre = document.createElement('div');
-              pre.className = 'diff-text';
-              pre.textContent = patch.text;
-              sub.appendChild(pre);
+          const metaOf = () => {
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = `parents: ${d.commit.parents.map((p2) => p2.slice(0, 8)).join('、') || '（根提交）'} · ${d.commit.authorName}`;
+            return meta;
+          };
+          const renderPatches = (data) => {
+            for (const patch of data.patches) {
+              const ph = document.createElement('div');
+              ph.className = 'meta';
+              ph.textContent = `${CHANGE[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+              sub.appendChild(ph);
+              if (!patch.binary && patch.text.length > 0) {
+                const pre = document.createElement('div');
+                pre.className = 'diff-text';
+                pre.textContent = patch.text;
+                sub.appendChild(pre);
+              }
             }
+            if (data.patches.length === 0) {
+              const empty = document.createElement('div');
+              empty.className = 'meta';
+              empty.textContent = '（相对该父无差异）';
+              sub.appendChild(empty);
+            }
+          };
+          sub.appendChild(metaOf());
+          if (d.commit.parents.length > 1) {
+            // 多父（第十四轮五）：父选择行——点击按该父 OID 重新加载；数据与展示绑定所选父。
+            const note = document.createElement('div');
+            note.className = 'meta';
+            note.textContent = d.mergeNote ?? '合并提交：请选择比较父';
+            sub.appendChild(note);
+            const pickRow = document.createElement('div');
+            pickRow.className = 'meta';
+            pickRow.textContent = '比较父：';
+            const body = document.createElement('div');
+            body.className = 'meta';
+            const renderParents = (activeOid) => {
+              pickRow.textContent = '';
+              pickRow.append('比较父：');
+              for (const pm of d.parentsMeta ?? []) {
+                const b = document.createElement('button');
+                b.className = 'chip';
+                b.textContent = `${pm.short} ${pm.subject.slice(0, 24)}`;
+                if (pm.oid === activeOid) { b.disabled = true; b.title = '当前比较父'; }
+                else { b.title = '以该父为基准查看差异（差异=本提交相对该父的实际变更）'; }
+                b.onclick = () => void (async () => {
+                  const d2 = await command('git.commitDiff', { projectId: state.projectId, oid: item.oid, parentOid: pm.oid });
+                  body.textContent = '';
+                  const head = document.createElement('div');
+                  head.className = 'meta';
+                  head.textContent = `对比父 ${d2.comparedParent.slice(0, 8)}（${(d2.parentsMeta ?? []).find((x) => x.oid === d2.comparedParent)?.subject ?? ''}）——差异相对该父`;
+                  body.appendChild(head);
+                  renderPatchesInto(body, d2, CHANGE);
+                  renderParents(pm.oid);
+                })().catch((error) => { say(`父比较加载失败：${error.message}`); });
+                pickRow.appendChild(b);
+              }
+            };
+            const renderPatchesInto = (target, data, changeMap) => {
+              for (const patch of data.patches) {
+                const ph = document.createElement('div');
+                ph.className = 'meta';
+                ph.textContent = `${changeMap[patch.change] ?? patch.change} ${patch.path}${patch.oldPath != null ? `（← ${patch.oldPath}）` : ''}${patch.binary ? '（二进制）' : ''}${patch.truncated ? '（超限截断）' : ''}`;
+                target.appendChild(ph);
+                if (!patch.binary && patch.text.length > 0) {
+                  const pre = document.createElement('div');
+                  pre.className = 'diff-text';
+                  pre.textContent = patch.text;
+                  target.appendChild(pre);
+                }
+              }
+              if (data.patches.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'meta';
+                empty.textContent = '（相对该父无差异）';
+                target.appendChild(empty);
+              }
+            };
+            renderParents(null);
+            sub.appendChild(pickRow);
+            sub.appendChild(body);
+          } else {
+            if (d.mergeNote != null) {
+              const note = document.createElement('div');
+              note.className = 'meta';
+              note.textContent = d.mergeNote;
+              sub.appendChild(note);
+            }
+            renderPatches(d);
           }
           box.appendChild(sub);
         })().catch((error) => { say(`diff 查看失败：${error.message}`); });

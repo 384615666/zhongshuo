@@ -1165,7 +1165,10 @@ export interface CommitDiffMeta {
   taskIds: string[]; changeSetIds: string[];
 }
 
-export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; oid: string }): Promise<{ commit: CommitDiffMeta; patches: Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>; mergeNote?: string }> {
+/** 父提交元信息（多父 diff 的选择面——第十四轮五）。 */
+export interface CommitDiffParentMeta { oid: string; short: string; subject: string; timestamp: number }
+
+export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; oid: string; parentOid?: string }): Promise<{ commit: CommitDiffMeta; parentsMeta?: CommitDiffParentMeta[]; comparedParent?: string; patches: Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>; mergeNote?: string }> {
   if (!OID_RE.test(input.oid)) throw new GitWriteError('VALIDATION_INVALID', `非法提交对象 id：${input.oid}`);
   const loc = await repoGuard(input.projectRoot);
   const typeCap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', '-t', input.oid], { capBytes: 4096 });
@@ -1183,11 +1186,34 @@ export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: s
     try { changeSetIds = JSON.parse(opRow.change_set_ids_json) as string[]; } catch { /* 残缺不虚构 */ }
   }
   const commit: CommitDiffMeta = { oid: input.oid, parents, subject: (subject ?? '').trim(), authorName: an ?? '', authorEmail: ae ?? '', timestamp: Number(at ?? 0), taskIds, changeSetIds };
+  // 多父 diff（第十四轮五）：数据与展示绑定所选父 OID——未选=只给父清单与注记（不虚构单一
+  // “合并 diff”）；所选父必须是本提交的父（跨对象比较拒绝）。
   if (parents.length > 1) {
-    return { commit, patches: [], mergeNote: '合并提交：不展示单一差异（多父对比需逐父查看，产品内不虚构一个"合并 diff"）' };
+    const parentsMetaCap = await mustGit(['-C', loc.worktreeRoot, 'show', '-s', '--format=%H\x1f%h\x1f%s\x1f%at', ...parents], { capBytes: 16 * 1024, what: 'show -s parents' });
+    const parentsMeta = parentsMetaCap.stdout.toString('utf8').split('\n').filter((l) => l.includes('\x1f')).map((line) => {
+      const [pOid, pShort, pSubject, pAt] = line.split('\x1f');
+      return { oid: (pOid ?? '').trim(), short: (pShort ?? '').trim(), subject: (pSubject ?? '').trim(), timestamp: Number(pAt ?? 0) };
+    });
+    if (input.parentOid == null) {
+      return { commit, parentsMeta, patches: [], mergeNote: '合并提交：请选择比较父——差异=本提交相对所选父的实际变更（数据与展示绑定该父 OID）；不虚构单一"合并 diff"总览' };
+    }
+    if (!parents.includes(input.parentOid)) {
+      throw new GitWriteError('VALIDATION_INVALID', `parentOid(${input.parentOid.slice(0, 8)}) 不是该提交的父——多父比较只接受本提交的父，拒绝跨对象比较`);
+    }
+    const patches = await collectDiffPatches(loc, [input.parentOid, input.oid]);
+    return { commit, parentsMeta, comparedParent: input.parentOid, patches, mergeNote: `合并提交（对比父 ${input.parentOid.slice(0, 8)}）：差异=相对该父的实际变更——另一侧分支带来的变更会体现为相对此父的新增/修改，属预期语义` };
+  }
+  if (input.parentOid != null && input.parentOid !== parents[0]) {
+    throw new GitWriteError('VALIDATION_INVALID', `parentOid(${input.parentOid.slice(0, 8)}) 不是该提交的父（单父提交）——拒绝跨对象比较`);
   }
   // 单父/根提交：diff-tree -r -M（机器身份 raw -z 复用解析）+ 逐文件正文（cap 同读面）。
-  const rawCap = await mustGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', '--root', input.oid], { capBytes: 256 * 1024, what: 'diff-tree' });
+  const patches = await collectDiffPatches(loc, ['--root', input.oid]);
+  return { commit, patches };
+}
+
+/** diff-tree 逐文件聚合（treeRange：['--root', oid] 或 [parentOid, oid]——两形态同读面同容量）。 */
+async function collectDiffPatches(loc: RepoLocation, treeRange: string[]): Promise<Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>> {
+  const rawCap = await mustGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-z', '--no-commit-id', '--no-textconv', '--no-ext-diff', ...treeRange], { capBytes: 256 * 1024, what: 'diff-tree' });
   const { parseRawZ } = await import('./gitStatus.ts');
   const entries = parseRawZ(rawCap.stdout.toString('utf8'));
   const CHANGE: Record<string, string> = { A: 'added', C: 'copied', D: 'deleted', M: 'modified', T: 'modified', R: 'renamed' };
@@ -1198,14 +1224,14 @@ export async function gitCommitDiff(db: ZhongshuoDatabase, input: { projectId: s
       patches.push({ path: entry.path, ...(entry.origPath != null ? { oldPath: entry.origPath } : {}), change: CHANGE[entry.status[0]!] ?? 'modified', binary: false, truncated: true, text: '' });
       continue;
     }
-    const textCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-p', '--no-commit-id', '--no-textconv', '--no-ext-diff', '--unified=3', '--root', input.oid, '--', entry.path], { capBytes: Math.min(RT24_PER_FILE_CAP, budget) + 1, env: { ...process.env, GIT_LITERAL_PATHSPECS: '1', GIT_PAGER: 'cat' } });
+    const textCap = await captureGit(['-C', loc.worktreeRoot, 'diff-tree', '-r', '-M', '-p', '--no-commit-id', '--no-textconv', '--no-ext-diff', '--unified=3', ...treeRange, '--', entry.path], { capBytes: Math.min(RT24_PER_FILE_CAP, budget) + 1, env: { ...process.env, GIT_LITERAL_PATHSPECS: '1', GIT_PAGER: 'cat' } });
     const text = textCap.stdout.toString('utf8');
     const binary = /^Binary files .* differ$/m.test(text);
     const truncated = text.length > RT24_PER_FILE_CAP;
     budget -= Math.min(text.length, RT24_PER_FILE_CAP);
     patches.push({ path: entry.path, ...(entry.origPath != null ? { oldPath: entry.origPath } : {}), change: CHANGE[entry.status[0]!] ?? 'modified', binary, truncated: truncated || textCap.truncated, text: binary ? '' : truncated ? `${text.slice(0, RT24_PER_FILE_CAP)}\n…（超限截断）` : text });
   }
-  return { commit, patches };
+  return patches;
 }
 
 /** URL/输出脱敏：scheme://user:pass@host 与 ?token=… 类凭据打码后才进消息/结果/日志。 */

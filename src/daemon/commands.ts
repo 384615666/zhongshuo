@@ -1097,7 +1097,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             return withCommandId({ ok: true, data });
           }
           if (env.method === 'git.commitDiff') {
-            const params = z.strictObject({ projectId: z.string().min(1), oid: z.string().regex(/^[0-9a-f]{40}$/) }).parse(env.params);
+            // parentOid（第十四轮五）：merge 提交选择比较父——数据与展示绑定该父 OID；
+            // 非 merge 提交传非其父的值由 daemon 校验拒绝。
+            const params = z.strictObject({ projectId: z.string().min(1), oid: z.string().regex(/^[0-9a-f]{40}$/), parentOid: z.string().regex(/^[0-9a-f]{40}$/).optional() }).parse(env.params);
             const { gitCommitDiff } = await import('./gitWrite.ts');
             const data = await gitCommitDiff(deps.db, { ...params, projectRoot: gitProject.canonical_path });
             return withCommandId({ ok: true, data });
