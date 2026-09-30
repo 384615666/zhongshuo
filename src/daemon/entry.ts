@@ -22,6 +22,7 @@ import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
 import { MemberRuntimeRegistry, defaultModelOf, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
+import { ReminderScheduler } from './reminderScheduler.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
@@ -272,6 +273,17 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 修复轮 6：保存 drain Promise，stop 等待其收敛后才关库（数据库关闭后零业务写入）。
     let draining = false;
     let inFlightDrain: Promise<void> | null = null;
+    // DEV-23 首包：提醒调度器（15s 扫描；时钟=Date.now——假时钟只在测试注入）。
+    // 触发重查/合并/暂停/预算拒绝语义见 reminderScheduler.ts；ZS_REMINDER_DISABLED=1 可关。
+    const reminderTimer = process.env.ZS_REMINDER_DISABLED === '1'
+      ? null
+      : setInterval(() => {
+        try { new ReminderScheduler({ db: db! }).tick(); } catch (error) {
+          process.stderr.write(`[zhongshuo-daemon] reminder tick error: ${error instanceof Error ? error.message : String(error)}
+`);
+        }
+      }, 15_000);
+    reminderTimer?.unref?.();
     // 重启收案（第二十二轮三）：上次 daemon 未结算身份的已终态 dm turn——进程内身份已失，
     // 如实收案（审计+占位键），候选行保持原状。
     try { worker.recoverAbandonedDmVerdicts(); } catch (error) {
