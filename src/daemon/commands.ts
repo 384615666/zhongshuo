@@ -89,11 +89,24 @@ function resolveServerProbe(deps: DaemonCommandDeps, turnId: string, probeId: st
     if (now - referenced.observedAt > 10 * 60 * 1000) throw new DaemonCommandError('STALE_REVISION', '取证记录已过期（>10 分钟）——请重新取证');
     return referenced;
   }
-  return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'reconcile', treeScan: deps.processTree });
+  return probeTurnExit(deps.db, turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), {
+    createdBy: 'reconcile', treeScan: deps.processTree,
+    // 受管登记（第十四轮二）：按 managed_job_id 查现场——PID 复用/无句柄/错位不冒充证据。
+    managedJob: managedJobObservation,
+  });
 }
 
-// REC-LIFE-1（第十二轮）：受管桥同步取用——releaseProtection 事务内按 pid 查受管证据。
-import { managedJobByPid } from './managed/bridge.ts';
+/** 受管 job 现场观察（probe/reconcile 注入——jobId 查找+PID 辅助核对，第十四轮二）。 */
+function managedJobObservation(jobId: string | null): import('./processRegistry.ts').ManagedJobObservation | null {
+  if (jobId == null) return { held: false, pid: null, rootExited: false, activeCount: null };
+  const mp = managedJobById(jobId);
+  if (mp == null) return { held: false, pid: null, rootExited: false, activeCount: null };
+  return { held: true, pid: mp.pid, rootExited: !mp.waitRootExit(0).timedOut, activeCount: mp.activeCount() };
+}
+
+// REC-LIFE-1（第十四轮二）：受管证据按稳定身份（jobId）取用——PID 可复用，仅辅助核对。
+import { managedJobById } from './managed/bridge.ts';
+import { retireManagedJob } from './managedRetirement.ts';
 
 const localScope = (userId: string): string => `user:${userId}`;
 
@@ -546,7 +559,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const params = z.strictObject({ turnId: z.string().min(1) }).parse(env.params);
         const turn = deps.db.prepare('SELECT id FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string } | undefined;
         if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
-        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), { createdBy: 'probe', treeScan: deps.processTree });
+        const probe = probeTurnExit(deps.db, params.turnId, deps.processQuery ?? ((pid: number) => checkProcessLiveness(pid)), {
+          createdBy: 'probe', treeScan: deps.processTree,
+          managedJob: managedJobObservation,
+        });
         return withCommandId({ ok: true, data: probe });
       }
       case 'recovery.reconcile': {
@@ -716,14 +732,22 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               payload: { ...payload, manualNote: params.note, probe: { probeId: probe.probeId, result: probe.result, processModel: probe.processModel, pid: probe.pid, observedAt: probe.observedAt, detail: probe.detail } },
             });
           };
-          // REC-LIFE-1（第十二轮）：受管执行（登记 identity_source='managed-job'）的解除证据
-          // ——releaseEvidence（根退出+本进程句柄已关+活跃计数 0）= 可证明完整结束；按 pid 查
-          // 受管句柄。未纳管/句柄不在本进程（重启后）→ 不追认，走既有保守口径或拒绝。
+          // REC-LIFE-1（第十四轮二）：受管执行的解除证据——按登记的 managed_job_id（稳定
+          // 身份）查找并核对，PID 仅辅助属性：缺 jobId/无句柄（重启/已收尾）/PID 不一致/
+          // 其他 job 的证据一律拒绝自动解除。顺序：证据查询 → DB 事务（租约+事件）→
+          // markConsumed → 准入联动 → 收尾闸门（per-turn 且无共享者才 dispose——失败可重试，
+          // 证据不提前丢）。
           const reg = getTurnProcessRegistration(deps.db, turn.id);
-          if (reg?.pid != null && reg.identity_source === 'managed-job') {
-            const mp = managedJobByPid(reg.pid);
+          if (reg?.identity_source === 'managed-job') {
+            if (reg.managed_job_id == null) {
+              throw new DaemonCommandError('STALE_REVISION', '该 turn 登记为受管执行但缺受管稳定身份（managed_job_id）——登记不完整，拒绝自动解除，人工核对');
+            }
+            const mp = managedJobById(reg.managed_job_id);
             if (mp == null) {
-              throw new DaemonCommandError('STALE_REVISION', '该 turn 登记为受管执行，但本进程未持有其 job 句柄（daemon 重启或已释放）——无法核对完整结束，进入人工核对；「曾纳管」不追认为完整退出证据');
+              throw new DaemonCommandError('STALE_REVISION', '该 turn 登记为受管执行，但本进程未持有其 job 句柄（daemon 重启或已收尾）——无法核对完整结束，进入人工核对；「曾纳管」不追认为完整退出证据');
+            }
+            if (reg.pid != null && mp.pid !== reg.pid) {
+              throw new DaemonCommandError('STALE_REVISION', `登记 PID(${reg.pid}) 与 job 实际 PID(${mp.pid}) 不一致（PID 复用或登记错位）——该 job 的证据不属本 turn，拒绝解除`);
             }
             const evidence = mp.releaseEvidence();
             if (!evidence.releasable) {
@@ -733,10 +757,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               for (const l of leases) {
                 deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
               }
-              emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence', managedEvidence: evidence });
+              emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence', managedEvidence: evidence, managedJobId: reg.managed_job_id });
             });
             txm();
-            return { turnId: turn.id, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence' };
+            mp.markConsumed(); // DB 事务成功后才消费（失败可重试——证据不提前丢）
+            const retire = retireManagedJob(deps.db, turn.id); // 最后收尾：per-turn 且无共享者→dispose；shared/共享者→保留
+            return { turnId: turn.id, stateChanged: true as const, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence', managedRetire: retire };
           }
           if (probe.result !== 'no-os-process') {
             // 第九轮收紧：释放只凭**程序事实**（none 模型 no-os-process）。alive/未完整确认

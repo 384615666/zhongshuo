@@ -41,7 +41,8 @@ import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settle
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
-import { managedJobByPid } from './managed/bridge.ts';
+import { managedJobById } from './managed/bridge.ts';
+import { retireManagedJob } from './managedRetirement.ts';
 
 export interface TaskRow {
   id: string;
@@ -746,9 +747,11 @@ export class DispatchWorker {
         const r = checkProcessLiveness(identity.pid, undefined, 3_000);
         if (r.state === 'alive') startedAtMs = r.identity.startedAt;
       }
-      // REC-LIFE-1（第十二轮）：受管桥进程（bridge 按 pid 注册）→ 登记为 managed-job——
-      // releaseProtection 可按 pid 查 releaseEvidence（可证明完整结束）解除。
-      const isManaged = identity.pid != null && managedJobByPid(identity.pid) != null;
+      // REC-LIFE-1（第十四轮二）：受管身份正式绑定——adapter 上报 managedJobId（稳定身份）
+      // 随登记持久化（managed_job_id 列；PID 仅辅助）。标记 managed-job 的条件=上报身份
+      // **且**本进程受管注册表确有其 job（防 adapter 误报/已收尾的追认）。
+      const managedJobId = identity.managedJobId ?? null;
+      const isManaged = managedJobId != null && managedJobById(managedJobId) != null;
       registerTurnProcess(this.db, {
         turnId, runId, memberId,
         adapterKind: this.providerKeyOf(memberId),
@@ -756,6 +759,8 @@ export class DispatchWorker {
         pid: identity.pid,
         startedAtMs,
         identitySource: isManaged ? 'managed-job' : identity.model === 'none' ? 'none' : startedAtMs != null ? 'os-starttime' : 'pid-only',
+        managedJobId: isManaged ? managedJobId : null,
+        note: isManaged ? `job=${managedJobId}` : undefined,
       });
       // 首张进程树快照（第八轮）：崩溃/截止窗口再短也有归属锚点（周期重拍在消费期间进行）。
       if (identity.model !== 'none' && identity.pid != null) this.snapshotProcessTree(turnId, identity.pid);
@@ -801,12 +806,15 @@ export class DispatchWorker {
     } catch { /* 登记失败不阻断派发（对账侧如实 identity-missing/降级） */ }
   }
 
-  /** 进程登记收口：仅终态（非 UNKNOWN）turn 标 closed——UNKNOWN=崩溃遗留候选，保持开放待对账。 */
+  /** 进程登记收口：仅终态（非 UNKNOWN）turn 标 closed——UNKNOWN=崩溃遗留候选，保持开放待对账。
+   * 受管 job 收尾归属（第十四轮二）：per-turn job 在终态 settle 时经闸门收尾（shared/有共享
+   * 者时保留——闸门内部判定）；UNKNOWN 不收口（证据待 releaseProtection 消费）。 */
   private closeProcessRegistrationIfTerminal(turnId: string): void {
     try {
       const s = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
       if (s != null && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(s.status)) {
         closeTurnProcessRegistration(this.db, turnId);
+        retireManagedJob(this.db, turnId); // 尽力而为：失败不影响执行（下次收口/stop 全量兜底）
       }
     } catch { /* 簿记失败不影响执行（登记对账按 open 语义处理） */ }
   }

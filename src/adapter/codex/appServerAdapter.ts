@@ -577,7 +577,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   /** 常驻 App Server 子进程（多 turn 共享）——PID 不专属单一 turn（DEV-13 取证如实标注）。 */
   processIdentity(session: SessionRef, turnId: string): AdapterProcessIdentity | null {
-    void session; void turnId; return { model: 'shared', pid: this.child?.pid ?? null };
+    void session; void turnId;
+    // 受管桥进程对象携带稳定身份 managedJobId（结构化可选属性；未受管进程无此字段）。
+    return { model: 'shared', pid: this.child?.pid ?? null, managedJobId: (this.child as { managedJobId?: string } | null)?.managedJobId ?? null };
   }
 
   async dispose(): Promise<void> {

@@ -483,7 +483,8 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     const state = this.sessions.get(session.id);
     if (state == null) return null;
     if (state.active?.turnId !== turnId) return null;
-    return { model: 'per-turn', pid: state.active.process.pid ?? null };
+    // 受管桥进程对象携带稳定身份 managedJobId（结构化可选属性——契约允许，未受管进程无此字段）。
+    return { model: 'per-turn', pid: state.active.process.pid ?? null, managedJobId: (state.active.process as { managedJobId?: string }).managedJobId ?? null };
   }
 
   async respondApproval(_session: SessionRef, _approvalId: string, _choice: 'allow_once' | 'deny'): Promise<void> {

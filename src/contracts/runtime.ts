@@ -85,6 +85,12 @@ export interface TurnRequest {
 export interface AdapterProcessIdentity {
   model: 'per-turn' | 'shared' | 'none';
   pid: number | null;
+  /**
+   * 受管稳定身份（REC-LIFE-1 第十四轮二）：spawn 经受管桥时为该 job 的稳定 jobId
+   * （创建时刻+pid——PID 可复用，不构成唯一身份）；未受管/不可知=null。恢复链
+   * （probe/reconcile/releaseProtection）按它查找并核对受管证据，PID 仅辅助属性。
+   */
+  managedJobId?: string | null;
 }
 
 export interface ProbeResult {
