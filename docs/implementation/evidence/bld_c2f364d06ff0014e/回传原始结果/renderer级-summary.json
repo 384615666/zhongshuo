@@ -1,0 +1,19 @@
+{
+  "overall": true,
+  "expectedChecks": 9,
+  "executedChecks": 9,
+  "failed": [],
+  "notExecuted": [],
+  "exception": null,
+  "buildIdentity": {
+    "buildId": "bld_c2f364d06ff0014e",
+    "commit": "0b99979ea30fe719cc9584f04d4c8345de8ea55c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-09-30T03:25:55.472Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "resultDir": "C:\\Users\\Administrator\\Documents\\独立交付\\验证结果\\desktop-20260930052558-ce6e",
+  "generatedAt": "2026-09-30T05:26:11.863Z"
+}

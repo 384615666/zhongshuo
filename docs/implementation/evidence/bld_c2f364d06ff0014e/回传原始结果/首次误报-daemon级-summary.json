@@ -1,0 +1,37 @@
+{
+  "overall": false,
+  "expectedChecks": 11,
+  "executedChecks": 11,
+  "failed": [
+    {
+      "id": "decoy-off",
+      "message": "decoy 结束后仍检出 1 个"
+    },
+    {
+      "id": "residual-zero",
+      "message": "包路径残留 1 个（pid=40252）"
+    }
+  ],
+  "notExecuted": [],
+  "exception": null,
+  "environment": {
+    "osRelease": "10.0.26200",
+    "node": "v24.16.0",
+    "userAgent": "AMD64"
+  },
+  "buildIdentity": {
+    "buildId": "bld_c2f364d06ff0014e",
+    "commit": "0b99979ea30fe719cc9584f04d4c8345de8ea55c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-09-30T03:25:55.472Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "diagnostics": [
+    "临时现场保留：C:\\Users\\Administrator\\AppData\\Local\\Temp\\众说独立验证-YMBT0b"
+  ],
+  "resultDir": "C:\\Users\\Administrator\\Documents\\独立交付\\验证结果\\run-20260930051759-0ed6",
+  "generatedAt": "2026-09-30T05:18:08.685Z",
+  "note": "存在失败/未执行/异常——不得按通过采信；诊断位置见 resultDir"
+}

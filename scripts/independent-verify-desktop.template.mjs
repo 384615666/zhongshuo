@@ -176,12 +176,33 @@ try {
   }
   await check('residual-zero', async () => {
     await sleep(1500);
-    const q = spawnSync('powershell', ['-NoProfile', '-Command',
-      `(Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { ($_.CommandLine -like '*${tempRoot.replaceAll('\\', '/')}*' -or $_.CommandLine -like '*${pkgRoot.replaceAll('\\', '/')}*') -and $_.ProcessId -ne $PID }).Count`], { encoding: 'utf8', timeout: 60_000 });
-    const out = (q.stdout ?? '').trim();
-    assert(q.status === 0 && /^\d+$/.test(out), `查询无法确认（${out.slice(0, 60)}）`);
-    assert(Number(out) === 0, `残留 ${out} 个`);
-    return '零残留';
+    // 统一协议 v2：与独立本地验证同一 PS 查询（QUERY-OK 尾标+显式排除验证器自身/辅助/已跟踪
+    // 子进程——不靠相对路径"碰巧匹配不到"；第十八轮一 Git Bash 自身误报修正）。
+    const PROC_QUERY_PS = `$ErrorActionPreference = "Stop"
+$Pattern = $env:ZS_PROC_PATTERN
+$Alt = $env:ZS_PROC_PATTERN_ALT
+$Exclude = @($env:ZS_PROC_EXCLUDE -split ',' | Where-Object { $_ -ne '' })
+try {
+  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { (($_.CommandLine -like $Pattern) -or ($Alt -ne "" -and $_.CommandLine -like $Alt)) -and $_.ProcessId -ne $PID -and $Exclude -notcontains [string]$_.ProcessId }
+  $p | ForEach-Object { "$($_.ProcessId)" + [char]9 + "$($_.Name)" }
+  "QUERY-OK"
+} catch { "ERR" + [char]9 + $_.Exception.Message }
+`;
+    const psQueryPath = join(resultDir, 'proc-query.ps1');
+    writeFileSync(psQueryPath, PROC_QUERY_PS, 'utf8');
+    const exclude = [process.pid, process.ppid, ...kids.map((k) => k.pid)].filter((p) => p != null).join(',');
+    const query = (pattern) => {
+      const alt = pattern.replaceAll('\\', '/');
+      const q = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: pattern, ZS_PROC_PATTERN_ALT: alt !== pattern ? alt : '', ZS_PROC_EXCLUDE: exclude } });
+      const out = (q.stdout ?? '').trim();
+      if (q.status !== 0 || q.error != null || !out.includes('QUERY-OK') || out.includes('ERR\t')) throw new Error(`进程查询无法确认（${out.slice(0, 60) || '空'}）——按未验证处理`);
+      return out.split('\n').filter((l) => /^\d+\t/.test(l.trim())).length;
+    };
+    const tempCount = query(`*${tempRoot.replaceAll('\\', '/')}*`);
+    assert(tempCount === 0, `临时目录残留 ${tempCount} 个`);
+    const pkgCount = query(`*${pkgRoot.replaceAll('\\', '/')}*`);
+    assert(pkgCount === 0, `包路径残留 ${pkgCount} 个`);
+    return '零残留（自身/辅助/已收拢子进程显式排除）';
   });
 } catch (error) {
   state.exception = error instanceof Error ? `${error.message}` : String(error);

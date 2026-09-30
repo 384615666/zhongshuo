@@ -1,0 +1,26 @@
+{
+  "overall": true,
+  "expectedChecks": 11,
+  "executedChecks": 11,
+  "failed": [],
+  "notExecuted": [],
+  "exception": null,
+  "environment": {
+    "osRelease": "10.0.26200",
+    "node": "v24.16.0",
+    "userAgent": "AMD64"
+  },
+  "buildIdentity": {
+    "buildId": "bld_c2f364d06ff0014e",
+    "commit": "0b99979ea30fe719cc9584f04d4c8345de8ea55c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-09-30T03:25:55.472Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "diagnostics": [],
+  "resultDir": "C:\\Users\\Administrator\\Documents\\独立交付\\验证结果\\run-20260930052540-a838",
+  "generatedAt": "2026-09-30T05:25:49.350Z",
+  "note": "全部预期检查执行且通过"
+}

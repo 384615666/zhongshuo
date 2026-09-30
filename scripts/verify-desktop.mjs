@@ -48,21 +48,29 @@ const record = (name, ok, detail) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const appendFile = (path, text) => { try { appendFileSync(path, text); } catch { /* 诊断尽力而为 */ } };
 
-/** 产物残留进程查询（第十五轮二修正）：QUERY-OK 尾标=查询成功（空结果=零行）；失败/超时/
- * 非数字=ERR（不当 0）；排除查询进程自身；按安装根匹配**任意名称**执行载体（不限 node/electron）。
- * 正常用例不得以「匹配不到」证明无残留——控制组 decoy 先证检测有效。 */
+/** 产物残留进程查询（第十五轮二修正+第十八轮一 v2）：QUERY-OK 尾标=查询成功（空结果=零行）；
+ * 失败/超时/非数字=ERR（不当 0）；**显式排除验证器自身 PID（ZS_PROC_EXCLUDE）与查询辅助
+ * 进程（-ne $PID）**——不靠相对路径启动"碰巧匹配不到"（独立机 Git Bash 首启误报修正）；
+ * 按安装根匹配**任意名称**执行载体（不限 node/electron）。正常用例不得以「匹配不到」证明
+ * 无残留——控制组 decoy 先证检测有效。PS 文本与独立包两模板逐字一致
+ * （tests/integration/residualSelfExclude.test.ts 校验并做三壳回归）。 */
+const PROC_QUERY_PS = `$ErrorActionPreference = "Stop"
+$Pattern = $env:ZS_PROC_PATTERN
+$Alt = $env:ZS_PROC_PATTERN_ALT
+$Exclude = @($env:ZS_PROC_EXCLUDE -split ',' | Where-Object { $_ -ne '' })
+try {
+  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { (($_.CommandLine -like $Pattern) -or ($Alt -ne "" -and $_.CommandLine -like $Alt)) -and $_.ProcessId -ne $PID -and $Exclude -notcontains [string]$_.ProcessId }
+  $p | ForEach-Object { "$($_.ProcessId)" + [char]9 + "$($_.Name)" }
+  "QUERY-OK"
+} catch { "ERR" + [char]9 + $_.Exception.Message }
+`;
 const psQueryPath = join(installRoot, 'proc-query.ps1');
-writeFileSync(psQueryPath, [
-  '$Pattern = $env:ZS_PROC_PATTERN',
-  '$ErrorActionPreference = "Stop"',
-  'try {',
-  '  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { $_.CommandLine -like $Pattern -and $_.ProcessId -ne $PID }',
-  '  $p | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.Name }',
-  '  "QUERY-OK"',
-  '} catch { "ERR`t" + $_.Exception.Message }',
-].join('\n'), 'utf8');
+writeFileSync(psQueryPath, PROC_QUERY_PS, 'utf8');
 function leftoverProcesses() {
-  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: `*${installRoot}*` } });
+  const exclude = [process.pid, process.ppid].filter((p) => p != null).join(',');
+  const pattern = `*${installRoot}*`;
+  const alt = pattern.replaceAll('\\', '/');
+  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: pattern, ZS_PROC_PATTERN_ALT: alt !== pattern ? alt : '', ZS_PROC_EXCLUDE: exclude } });
   let r = ask();
   if (r.error != null || r.status !== 0) r = ask(); // 冷启动首查重试一次（失败不折算为零）
   const out = (r.stdout ?? '').trim();

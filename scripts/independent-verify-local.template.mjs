@@ -75,19 +75,29 @@ async function collectOwnProcesses(reason) {
   if (stillAlive.length > 0) state.diagnostics.push(`收拢后仍有 ${stillAlive.length} 个自启进程未确认退出（现场保留）——${reason}`);
 }
 
-// ---------- 残留检测（统一协议：QUERY-OK 成功标记；失败/超时/空=无法确认≠零） ----------
+// ---------- 残留检测（统一协议 v2：QUERY-OK 成功标记；失败/超时/空=无法确认≠零；
+// 显式排除验证器自身 PID 与查询辅助进程——不靠相对路径启动"碰巧匹配不到"（第十八轮一：
+// 独立机 Git Bash 首启误报的根因即自身主进程从未被排除）。三处实现逐字一致，
+// tests/integration/residualSelfExclude.test.ts 提取本段做 .cmd/PowerShell 绝对路径/Git Bash 回归。）
+const PROC_QUERY_PS = `$ErrorActionPreference = "Stop"
+$Pattern = $env:ZS_PROC_PATTERN
+$Alt = $env:ZS_PROC_PATTERN_ALT
+$Exclude = @($env:ZS_PROC_EXCLUDE -split ',' | Where-Object { $_ -ne '' })
+try {
+  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { (($_.CommandLine -like $Pattern) -or ($Alt -ne "" -and $_.CommandLine -like $Alt)) -and $_.ProcessId -ne $PID -and $Exclude -notcontains [string]$_.ProcessId }
+  $p | ForEach-Object { "$($_.ProcessId)" + [char]9 + "$($_.Name)" }
+  "QUERY-OK"
+} catch { "ERR" + [char]9 + $_.Exception.Message }
+`;
 const psQueryPath = join(resultDir, 'proc-query.ps1');
-writeFileSync(psQueryPath, [
-  '$Pattern = $env:ZS_PROC_PATTERN',
-  '$ErrorActionPreference = "Stop"',
-  'try {',
-  '  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { $_.CommandLine -like $Pattern -and $_.ProcessId -ne $PID }',
-  '  $p | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.Name }',
-  '  "QUERY-OK"',
-  '} catch { "ERR`t" + $_.Exception.Message }',
-].join('\n'), 'utf8');
+writeFileSync(psQueryPath, PROC_QUERY_PS, 'utf8');
 function listByPath(pathPattern) {
-  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: pathPattern } });
+  // 排除=验证器自身+父壳（cmd/bash/powershell 启动器——验证会话自身非残留）+查询辅助（-ne $PID）。
+  // 双形态匹配：MSYS/Git Bash 启动的进程命令行可能是正斜杠 Windows 路径（实测），只匹配反斜杠
+  // 形态会漏检（反向同理）——主模式+斜杠备选同时命中才算覆盖（第十八轮一）。
+  const exclude = [process.pid, process.ppid].filter((p) => p != null).join(',');
+  const alt = pathPattern.replaceAll('\\', '/');
+  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQueryPath], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: pathPattern, ZS_PROC_PATTERN_ALT: alt !== pathPattern ? alt : '', ZS_PROC_EXCLUDE: exclude } });
   let r = ask();
   if (r.error != null || r.status !== 0) r = ask(); // 冷启动重试一次
   const out = (r.stdout ?? '').trim();
