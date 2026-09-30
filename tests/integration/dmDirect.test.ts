@@ -512,7 +512,7 @@ describe('第二十轮二：DM 续接身份链（Claude 真实时序 fixture—�
     await worker.runOnce();
     const skipped = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumeSkipped'").get() as { payload_json: string } | undefined;
     expect(skipped).toBeTruthy();
-    expect(JSON.parse(skipped!.payload_json).note).toContain('runtime 绑定已变化');
+    expect(JSON.parse(skipped!.payload_json).note).toContain('runtime 解析已变化');
     expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(2); // 新会话行
     db.close();
   }, 60_000);
@@ -546,6 +546,141 @@ describe('第二十轮二：DM 续接身份链（Claude 真实时序 fixture—�
     expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(0); // 无会话行
     expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind LIKE 'dm.session%'").get() as { c: number }).c).toBe(0); // 无判定事件
     void deps;
+    db.close();
+  }, 60_000);
+});
+
+describe('第二十二轮三：身份冲突/结算重试/取消释放/重启收案', () => {
+  function makeConflictWorker(db: ZhongshuoDatabase, conflictIds: [string, string]) {
+    const adapter = new LocalProtocolAdapter({ noSpawn: true, providerIdLate: true, conflictIds, completeAfterMs: 200 });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-conflict', appDataDir: join(tmpRoot, 'app-conflict') });
+    return { worker, adapter };
+  }
+  function r22Db(file?: string): ZhongshuoDatabase {
+    const db = file != null ? openDatabase(file) : openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    return db;
+  }
+  const r22Cmd = (db: ZhongshuoDatabase) => async (m: string, p: unknown) => {
+    const r = await dispatchDaemonCommand({ db, localUserId: 'u_local', interruptTurn: async () => {} }, { protocolVersion: 1, commandId: `r22-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+    if (!r.ok) throw new Error(r.error?.message);
+    return r.data;
+  };
+
+  it('① 同轮身份冲突（init=Y、result=X、resume 请求=X）：最后值==resume 请求也不冒充续接——dm.sessionIdentityConflict+重放新行', async () => {
+    const db = r22Db();
+    const cmd = r22Cmd(db);
+    // 第一轮正常（providerIdLate+无冲突）：得到持久真实 ID=X。
+    const first = new LocalProtocolAdapter({ noSpawn: true, providerIdLate: true, completeAfterMs: 200 });
+    const firstWorker = new DispatchWorker({ db, adapter: first, leaseOwner: 'w-c1', appDataDir: join(tmpRoot, 'app-c1') });
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮', intent: 'default', mentions: [] });
+    await firstWorker.runOnce();
+    const x = (db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { provider_session_id: string }).provider_session_id;
+    // 第二轮：resume 请求 X；provider 先上报 Y（init）再上报 X（result）——观察序列两个不同值。
+    const second = makeConflictWorker(db, ['lp-Y-conflict', x]);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮（身份冲突）', intent: 'default', mentions: [] });
+    await second.worker.runOnce();
+    expect(second.adapter.openSessionLog[0]!.resumedFrom).toBe(x); // resume 请求仍是持久 X
+    const conflict = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionIdentityConflict'").get() as { payload_json: string } | undefined;
+    expect(conflict).toBeTruthy(); // 协议异常如实记录
+    const payload = JSON.parse(conflict!.payload_json);
+    expect(payload.observedSessionIds).toEqual(['lp-Y-conflict', x]);
+    expect(payload.lastReported).toBe(x);
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind='dm.sessionResumed'").get() as { c: number }).c).toBe(0); // 不冒充续接
+    const rows = db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm' ORDER BY rowid").all(conv.conversationId) as Array<{ provider_session_id: string }>;
+    expect(rows).toHaveLength(2); // 按重放落新行（最后上报值入库）
+    expect(rows[1]!.provider_session_id).toBe(x);
+    db.close();
+  }, 60_000);
+
+  it('② 结算事务失败 → 保留 pending；下一任一 DM 终态明确重试成功（retryFailedDmSettlements）', async () => {
+    const db = r22Db();
+    const cmd = r22Cmd(db);
+    const adapter = new LocalProtocolAdapter({ noSpawn: true, providerIdLate: true, completeAfterMs: 200 });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-r2', appDataDir: join(tmpRoot, 'app-r2') });
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    // 触发器注入：结算写 daemon_state 时 ABORT（第一次结算失败——失败路径可诊断）。
+    db.prepare(`CREATE TRIGGER fail_settle BEFORE INSERT ON daemon_state WHEN NEW.key LIKE 'dm:sessionverdict:%' BEGIN SELECT RAISE(ABORT, 'injected settle failure'); END`).run();
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮（结算将失败）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    const failed = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionSettleFailed'").get() as { payload_json: string } | undefined;
+    expect(failed).toBeTruthy(); // 失败审计如实
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(0); // 未落行
+    // 解除注入：下一个 DM 终态触发 retryFailedDmSettlements——第一轮结算重试成功。
+    db.prepare('DROP TRIGGER fail_settle').run();
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮（触发重试）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    for (let i = 0; i < 40; i += 1) { // 终态轮询（detached 消费——runOnce 不等终态）
+      const c = (db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c;
+      if (c >= 2) break;
+      await sleep(250);
+    }
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind='dm.sessionOpened'").get() as { c: number }).c).toBeGreaterThanOrEqual(1); // 第一轮补结算成功
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBeGreaterThanOrEqual(2); // 两轮会话行
+    expect((db.prepare("SELECT count(*) c FROM daemon_state WHERE key LIKE 'dm:sessionverdict:%'").get() as { c: number }).c).toBeGreaterThanOrEqual(2); // 两轮结算键
+    db.close();
+  }, 60_000);
+
+  it('③ 会话打开窗口取消：pending 即时释放（dm.sessionPendingReleased）+无会话行', async () => {
+    const db = r22Db();
+    const cmd = r22Cmd(db);
+    const adapter = new LocalProtocolAdapter({ noSpawn: true, providerIdLate: true, openSessionDelayMs: 400, completeAfterMs: 200 });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-r3', appDataDir: join(tmpRoot, 'app-r3') });
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '将被取消', intent: 'default', mentions: [] });
+    // openSession 挂起窗口（400ms）内停止任务（stop_generation>0 = 用户停止）——
+    // openSession 返回后复查 → 取消分支 → casTurn(CANCELLED) → settle：未请求 turn → 释放。
+    const runOncePromise = worker.runOnce();
+    for (let i = 0; i < 40; i += 1) {
+      const row = db.prepare("SELECT id FROM agent_turns LIMIT 1").get() as { id: string } | undefined;
+      if (row != null) {
+        const task = db.prepare('SELECT task_id FROM workflow_runs WHERE id = (SELECT run_id FROM agent_turns WHERE id = ?)').get(row.id) as { task_id: string } | undefined;
+        if (task != null) { db.prepare('UPDATE tasks SET stop_generation = 1 WHERE id = ?').run(task.task_id); break; }
+      }
+      await sleep(25);
+    }
+    await runOncePromise;
+    for (let i = 0; i < 20; i += 1) { if (db.prepare("SELECT count(*) c FROM domain_events WHERE kind='dm.sessionPendingReleased'").get() as { c: number }) break; await sleep(150); }
+    const released = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionPendingReleased'").get() as { payload_json: string } | undefined;
+    expect(released).toBeTruthy(); // 取消路径释放 pending（不再静默 return 泄漏）
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(0);
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind LIKE 'dm.sessionOpened'").get() as { c: number }).c).toBe(0); // 无身份结算
+    db.close();
+  }, 60_000);
+
+  it('④ 重启收案：终态 dm turn 无结算键（daemon 结算前重启）→ recoverAbandonedDmVerdicts 收案审计+占位键，不虚构身份', async () => {
+    const file = join(tmpRoot, 'r22-restart.sqlite');
+    let db = openDatabase(file);
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd = async (m: string, p: unknown): Promise<unknown> => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `r22b-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '结算前重启模拟', intent: 'default', mentions: [] });
+    const adapter = new LocalProtocolAdapter({ noSpawn: true, completeAfterMs: 200 });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-r4', appDataDir: join(tmpRoot, 'app-r4') });
+    await worker.runOnce();
+    // 制造「结算前重启」现场：删掉结算键（进程内身份已失的等价物——候选行保留）。
+    db.prepare("DELETE FROM daemon_state WHERE key LIKE 'dm:sessionverdict:%'").run();
+    db.close();
+    // 新进程（新 worker 实例）：启动收案扫描。
+    db = openDatabase(file);
+    const worker2 = new DispatchWorker({ db, adapter: new LocalProtocolAdapter({ noSpawn: true }), leaseOwner: 'w-r4b', appDataDir: join(tmpRoot, 'app-r4') });
+    worker2.recoverAbandonedDmVerdicts();
+    const abandoned = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionSettleAbandoned'").get() as { payload_json: string } | undefined;
+    expect(abandoned).toBeTruthy(); // 收案审计（不虚构身份——候选行不动）
+    expect(JSON.parse(abandoned!.payload_json).note).toContain('不虚构身份');
+    const placeholder = db.prepare("SELECT value FROM daemon_state WHERE key LIKE 'dm:sessionverdict:%'").get() as { value: string } | undefined;
+    expect(placeholder).toBeTruthy(); // 占位键（防重复扫描）
+    expect(JSON.parse(placeholder!.value).abandoned).toBe(true);
+    worker2.recoverAbandonedDmVerdicts(); // 幂等：重复扫描不再新增
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind='dm.sessionSettleAbandoned'").get() as { c: number }).c).toBe(1);
     db.close();
   }, 60_000);
 });

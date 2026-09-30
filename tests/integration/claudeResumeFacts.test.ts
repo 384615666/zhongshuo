@@ -104,4 +104,22 @@ describe('第二十一轮三：ClaudeCliAdapter 续接事实分离（协议回�
     expect(session.providerSessionId).toBe('PROV-RESULT-Y'); // 末次上报为准——≠请求的 X → resumed 判定不成立（replayed）
     await adapter.disposeAll();
   }, 30_000);
+
+  it('④ init=Y、result=X、resume 请求=X：末值恰==请求值——观察序列>1 揭示冲突，worker 不冒充续接', async () => {
+    // 反例（第二十二轮三）：provider 先报 Y（init）再报 X（result，恰等于 resume 请求）。
+    // 仅看末值会误判"原生续接"——observedSessionIds=[Y, X] 两个不同值=协议异常，终态结算
+    // 按 dm.sessionIdentityConflict 落重放行（settle 侧判定；本用例证 adapter 层事实完整）。
+    const { adapter } = adapterWith([{ lines: [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'PROV-INIT-Y' }),
+      JSON.stringify({ type: 'assistant', message: { model: 'deepseek-flash', content: [{ type: 'text', text: 'ok', id: 'm1' }] } }),
+      JSON.stringify({ type: 'result', subtype: 'success', session_id: 'PROV-INIT-X', is_error: false }),
+    ], exit: 0 }]);
+    const session = await adapter.openSession({ projectId: 'p', memberId: 'm', taskId: 't', threadId: 'th', sessionGeneration: 0, cwd, policyId: 'policy-analyze', resume: { id: 'prev', providerSessionId: 'PROV-INIT-X', runtimeInstallationId: 'ri', adapterVersion: 'v', threadId: 'th', sessionGeneration: 0, cwd } });
+    await adapter.startTurn(session, { turnId: 'turn4', dispatchKey: 'k', inputBundleId: 'b', text: 'x', policyId: 'p', taskRevision: 0 });
+    const events = await collect(adapter, session, 'turn4');
+    expect(events.some((e) => e.kind === 'turn.completed')).toBe(true);
+    expect(session.providerSessionId).toBe('PROV-INIT-X'); // 末值==resume 请求（若只看末值会误判 resumed）
+    expect(session.observedSessionIds).toEqual(['PROV-INIT-Y', 'PROV-INIT-X']); // 观察序列完整——>1=冲突可判定
+    await adapter.disposeAll();
+  }, 30_000);
 });

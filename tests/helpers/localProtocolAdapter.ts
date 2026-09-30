@@ -45,6 +45,12 @@ export interface LocalProtocolOptions {
   providerIdLate?: boolean;
   /** 配合 providerIdLate：provider 拒绝续接（回填全新 ID=换新会话——受限重放）。 */
   rejectResume?: boolean;
+  /** 身份冲突反例（第二十二轮三）：resume 请求 X 后 provider 先上报 [0]、再上报 [1]（如
+   * init=Y、result=X）——两次不同非空上报全入观察序列（终态判定不得冒充原生续接）。 */
+  conflictIds?: [string, string];
+  /** openSession 延迟（第二十二轮三）：制造"会话打开窗口"——期间停止/取消 → turn 未请求
+   * 路径（dm.sessionPendingReleased）的真实触发。 */
+  openSessionDelayMs?: number;
 }
 
 const LP_CAPS: RuntimeCapabilities = {
@@ -96,6 +102,9 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
     this.openSessionCalls += 1;
+    if (this.options.openSessionDelayMs != null && this.options.openSessionDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, this.options.openSessionDelayMs));
+    }
     const id = `lp-s-${this.builtSeq}-${this.openSessionCalls}`;
     this.streams.set(id, { backlog: [], waiters: [] });
     // 续接（第十九轮五）：传入 resume 且能力支持 → 返回同一 provider 会话身份（原生续接）；
@@ -106,13 +115,27 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
       id, providerSessionId: immediate, runtimeInstallationId: 'lp-install', adapterVersion: 'lp-1',
       threadId: input.threadId, sessionGeneration: input.resume?.sessionGeneration ?? input.sessionGeneration, cwd: input.cwd,
     };
+    // 观察序列与立即返回身份同源（immediate 非空=一次上报；延迟回填再记第二次——见下）。
+    if (immediate.trim().length > 0) (ref.observedSessionIds ?? (ref.observedSessionIds = [])).push(immediate);
     if (this.options.providerIdLate === true) {
       // 真实时序：provider 首事件才产生/确认身份——原地回填（拒绝续接=回填全新 ID）。
       const lateResume = input.resume;
+      const recordObserved = (sid: string): void => {
+        ref.providerSessionId = sid;
+        const list = ref.observedSessionIds ?? (ref.observedSessionIds = []);
+        if (!list.includes(sid)) list.push(sid); // 身份冲突反例基建：多次不同上报全记录
+      };
+      // 身份冲突反例：两次不同上报（先 [0] 再 [1]）——最终 providerSessionId=[1]。
+      if (this.options.conflictIds != null) {
+        const [firstId, secondId] = this.options.conflictIds;
+        setTimeout(() => recordObserved(firstId), 30).unref?.();
+        setTimeout(() => recordObserved(secondId), 60).unref?.();
+        return ref;
+      }
       setTimeout(() => {
-        ref.providerSessionId = lateResume != null && this.options.rejectResume === true
+        recordObserved(lateResume != null && this.options.rejectResume === true
           ? `lp-provider-rejected-${this.builtSeq}-${this.openSessionCalls}`
-          : (lateResume?.providerSessionId ?? `lp-provider-late-${this.builtSeq}-${this.openSessionCalls}`);
+          : (lateResume?.providerSessionId ?? `lp-provider-late-${this.builtSeq}-${this.openSessionCalls}`));
       }, 30).unref?.();
     }
     return ref;

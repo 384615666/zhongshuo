@@ -66,6 +66,42 @@ export function readMemberRuntimeBinding(db: ZhongshuoDatabase, memberId: string
 
 export type MemberAdapterFactory = (binding: MemberRuntimeBinding) => RuntimeAdapter;
 
+/** 渠道默认模型（与 adapter 实际口径同源：cliAdapter options.model ?? ZS_CLAUDE_MODEL）。
+ * 快照/台账/身份核对都从这里取——不在 worker 里再从环境变量拼第二套。 */
+export function defaultModelOf(kind: string | null): string | null {
+  if (kind === 'codex') return process.env.ZS_E2E_MODEL ?? null;
+  if (kind === 'claude') return process.env.ZS_CLAUDE_MODEL ?? null;
+  return null;
+}
+
+/** 统一解析结果（第二十二轮三）：成员 runtime 身份的一份事实——快照与 adapter 选择同源。
+ * bound=false（未绑定成员回落全局默认）时 installationId 如实 null（无持久安装身份）。 */
+export interface ResolvedRuntimeBinding {
+  memberId: string;
+  bound: boolean;
+  kind: string | null;
+  model: string | null;
+  installationId: string | null;
+  permissionMode: string | null;
+}
+
+/** 统一解析（纯函数）：成员绑定优先，未绑定回落全局默认 kind+渠道默认模型。
+ * MemberRuntimeRegistry.adapterFor 与 DispatchWorker 的 DM 兼容快照都调它——两处判定不再分叉。 */
+export function resolveMemberRuntime(db: ZhongshuoDatabase, memberId: string, defaultKind: string | null): ResolvedRuntimeBinding {
+  const binding = readMemberRuntimeBinding(db, memberId);
+  const unbound = binding == null || binding.installationId == null || binding.kind == null;
+  if (unbound) {
+    return { memberId, bound: false, kind: defaultKind, model: defaultModelOf(defaultKind), installationId: null, permissionMode: null };
+  }
+  const kind = binding!.kind!;
+  return {
+    memberId, bound: true, kind,
+    model: binding!.model ?? defaultModelOf(kind),
+    installationId: binding!.installationId,
+    permissionMode: binding!.permissionMode,
+  };
+}
+
 export interface MemberRuntimeRegistryOptions {
   /** 全局默认 adapter 的 runtime kind（ZS_RUNTIME 语义——防护判定用；缺省=不判定默认侧）。 */
   defaultKind?: string;
@@ -93,23 +129,29 @@ export class MemberRuntimeRegistry {
   }
 
   adapterFor(memberId: string): RuntimeAdapter {
-    const binding = readMemberRuntimeBinding(this.db, memberId);
-    const unbound = binding == null || binding.installationId == null || binding.kind == null;
-    const resolvedKind = unbound ? this.options?.defaultKind ?? null : binding.kind;
-    if (this.options?.realDispatchGuard === true && (resolvedKind === 'claude' || resolvedKind === 'codex')) {
-      throw new Error(`[验收防护] ZS_REAL_DISPATCH_GUARD=1：真实 runtime（${resolvedKind}）派发被拒绝（${unbound ? '全局默认' : `成员 ${memberId} 持久绑定`}）——模拟/验收环境不得发出真实模型请求；runtime 配置的保存与读取不受影响`);
+    const resolved = resolveMemberRuntime(this.db, memberId, this.options?.defaultKind ?? null);
+    const unbound = !resolved.bound;
+    if (this.options?.realDispatchGuard === true && (resolved.kind === 'claude' || resolved.kind === 'codex')) {
+      throw new Error(`[验收防护] ZS_REAL_DISPATCH_GUARD=1：真实 runtime（${resolved.kind}）派发被拒绝（${unbound ? '全局默认' : `成员 ${memberId} 持久绑定`}）——模拟/验收环境不得发出真实模型请求；runtime 配置的保存与读取不受影响`);
     }
     if (unbound) {
       return this.defaultAdapter; // 未绑定成员：全局默认（ZS_RUNTIME 语义保留）
     }
-    const factory = this.factories[binding.kind!];
+    const factory = this.factories[resolved.kind!];
     if (factory == null) {
-      throw new Error(`成员 ${memberId} 绑定的 runtime kind=${binding.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
+      throw new Error(`成员 ${memberId} 绑定的 runtime kind=${resolved.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
     }
-    const key = `${binding.installationId}|${binding.model ?? ''}|${binding.permissionMode ?? ''}`;
+    const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}`;
     let adapter = this.cache.get(key);
     if (adapter == null) {
-      adapter = factory(binding);
+      adapter = factory({
+        memberId,
+        installationId: resolved.installationId,
+        kind: resolved.kind,
+        executable: null, // 解析层不重查 executable（工厂按 installationId 自行取）；快照身份以本函数为准
+        model: resolved.model,
+        permissionMode: resolved.permissionMode,
+      });
       this.cache.set(key, adapter);
     }
     return adapter;

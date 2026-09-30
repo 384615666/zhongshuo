@@ -25,7 +25,7 @@ import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
 import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
-import { readMemberRuntimeBinding } from './memberRuntime.ts';
+import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
 import {
@@ -592,24 +592,30 @@ export class DispatchWorker {
       // 属「确认未启动」分类，不得按 openSession 不确定语义留 UNKNOWN）。
       const adapter = this.adapterOf(member.id);
       startupPhase = 'openSession';
-      const generation = this.db
+      // 代次=已落行数+在途未结算数（第二十二轮三）：行插入延迟到终态结算——上一轮结算失败时
+      // 行缺失，仅数行会让本轮与失败轮同代次，终态插入撞 dm_session_reuse_key 唯一键。
+      // dmPending 中的同会话条目（正常路径终态即清，失败留存重试）即在途未结算数。
+      const generation = (this.db
         .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
-        .get(member.id, task.conversation_id) as { c: number };
+        .get(member.id, task.conversation_id) as { c: number }).c
+        + [...this.dmPending.values()].filter((p) => p.memberId === member.id && p.task.conversation_id === task.conversation_id).length;
       // DM 会话续接（第十九轮五建立；第二十轮二改终态结算制）——resume 候选=同 conversation/
       // member 上一 provider 会话身份（**非空**：Claude 首开 openSession 返回空串，真实 ID 由
       // init/result 事件原地回填——openSession 返回值复制 resume 请求 ID ≠ provider 已接受）。
       // 续接判定挪到 turn 终态（见 settleDmSession）：以 provider 实际上报身份核对，终态回填
       // runtime_sessions。候选按成员当前 runtime 绑定与行内绑定快照（capabilities_json）校验
       // 兼容——runtime 切换不续接（新会话+历史重放）。房间会话维持任务隔离，不 resume。
-      // 快照=实际解析结果（第二十一轮三）：未绑定成员回落全局默认（runtime=process.env.ZS_RUNTIME
-      // 归一、model 按渠道默认）——默认切换后再派发即快照不符=不续接；含 cwd（工作目录变化不续接）。
-      const dmBinding = isDm ? readMemberRuntimeBinding(this.db, member.id) : undefined;
-      const resolvedKind = dmBinding?.kind ?? (isDm ? (this.defaultKindOf() ?? null) : null);
-      const resolvedModel = dmBinding?.model ?? (resolvedKind === 'codex' ? (process.env.ZS_E2E_MODEL ?? null) : resolvedKind === 'claude' ? (process.env.ZS_CLAUDE_MODEL ?? null) : null);
+      // 快照=统一解析层的实际结果（第二十二轮三：resolveMemberRuntime——kind/model/
+      // installationId/permissionMode/cwd 一份事实；adapter 选择（adapterFor）同源，不再由
+      // worker 从环境变量拼第二套身份）。
+      const dmResolved = isDm ? resolveMemberRuntime(this.db, member.id, this.defaultKindOf()) : null;
+      const resolvedKind = dmResolved?.kind ?? null;
+      const resolvedModel = dmResolved?.model ?? null;
       const dmBindingSnap = JSON.stringify({
         runtimeKind: resolvedKind,
         model: resolvedModel,
-        installationId: dmBinding?.installationId ?? null,
+        installationId: dmResolved?.installationId ?? null,
+        permissionMode: dmResolved?.permissionMode ?? null,
         cwd: project.canonical_path,
       });
       const dmPrevSession = isDm
@@ -619,13 +625,13 @@ export class DispatchWorker {
         : undefined;
       let resumeRef: SessionRef | undefined;
       if (dmPrevSession != null) {
-        // 绑定兼容：候选行的快照与当前绑定一致（无快照=历史行按兼容处理）。不一致=runtime
-        // 切换 → 不 resume（新会话受限重放——事件如实）。
-        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; cwd?: string | null } | null = null;
+        // 绑定兼容：候选行的快照与当前统一解析结果一致（无快照=历史行按兼容处理）。不一致=
+        // runtime 切换/权限档变化/工作目录变化 → 不 resume（新会话受限重放——事件如实）。
+        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; permissionMode?: string | null; cwd?: string | null } | null = null;
         let snapDamaged = false;
         if (dmPrevSession.capabilities_json != null) {
           try {
-            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; cwd?: string | null };
+            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; permissionMode?: string | null; cwd?: string | null };
             if (typeof prevSnap.runtimeKind !== 'string' && prevSnap.runtimeKind !== null) snapDamaged = true;
           } catch { snapDamaged = true; }
         }
@@ -634,13 +640,14 @@ export class DispatchWorker {
           && prevSnap != null
           && (prevSnap.runtimeKind ?? null) === resolvedKind
           && (prevSnap.model ?? null) === resolvedModel
-          && (prevSnap.installationId ?? null) === (dmBinding?.installationId ?? null)
+          && (prevSnap.installationId ?? null) === (dmResolved?.installationId ?? null)
+          && (prevSnap.permissionMode ?? null) === (dmResolved?.permissionMode ?? null)
           && (prevSnap.cwd ?? null) === project.canonical_path;
         if (compatible) {
           resumeRef = {
             id: dmPrevSession.id,
             providerSessionId: dmPrevSession.provider_session_id,
-            runtimeInstallationId: dmBinding?.installationId ?? (resolvedKind != null ? `default:${resolvedKind}` : 'unbound'), // 实际解析身份（绑定或全局默认——不用伪造常量）
+            runtimeInstallationId: dmResolved?.installationId ?? (resolvedKind != null ? `default:${resolvedKind}` : 'unbound'), // 实际解析身份（绑定或全局默认——不用伪造常量）
             adapterVersion: 'resume-of-record',
             threadId: dmPrevSession.thread_id ?? '',
             sessionGeneration: dmPrevSession.session_generation,
@@ -649,8 +656,9 @@ export class DispatchWorker {
         } else {
           this.audit(task, null, null, 'dm.sessionResumeSkipped', {
             conversationId: task.conversation_id, memberId: member.id,
-            prevSnapshot: prevSnap, currentBinding: dmBinding != null ? { kind: dmBinding.kind, model: dmBinding.model ?? null, installationId: dmBinding.installationId ?? null } : null,
-            note: 'runtime 绑定已变化：不跨 runtime 续接——新会话+历史重放（能力如实）',
+            prevSnapshot: prevSnap,
+            currentResolved: dmResolved != null ? { kind: dmResolved.kind, model: dmResolved.model, installationId: dmResolved.installationId, permissionMode: dmResolved.permissionMode, bound: dmResolved.bound } : null,
+            note: 'runtime 解析已变化（kind/model/installation/权限档/cwd 之一）：不续接——新会话+历史重放（能力如实）',
           });
         }
       }
@@ -659,7 +667,7 @@ export class DispatchWorker {
         memberId: member.id,
         taskId: task.id,
         threadId: task.conversation_thread_id,
-        sessionGeneration: generation.c,
+        sessionGeneration: generation,
         cwd: project.canonical_path,
         policyId: 'policy-analyze',
         ...(resumeRef != null ? { resume: resumeRef } : {}),
@@ -676,9 +684,9 @@ export class DispatchWorker {
         this.db.prepare(
           `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id)
            VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)`,
-        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation.c, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null);
+        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null);
       } else {
-        this.dmPending.set(turnId, { task, session, resumeRef, bindingSnap: dmBindingSnap, cwd: project.canonical_path, generation: generation.c, memberId: member.id, turnRequested: false });
+        this.dmPending.set(turnId, { task, session, resumeRef, bindingSnap: dmBindingSnap, cwd: project.canonical_path, generation, memberId: member.id, turnRequested: false });
       }
 
       // 会话打开竞态复查（修复轮）+ 关闭状态检查（第五轮）：停止/终态/daemon 关闭在
@@ -1968,7 +1976,11 @@ export class DispatchWorker {
    * - resume 请求 X 且上报==X：原生续接（不插行；回填候选行 provider id）+ dm.sessionResumed；
    * - resume 请求 X 且上报≠X/未上报：受限历史重放（插新行）+ dm.sessionReplayed（不冒充续接；
    *   provider 未上报时行 id 留空、不污染候选——下一轮不会拿空串 resume）。
-   * 幂等：每 turn 一次（daemon_state 键）。
+   * - 同轮多个不同非空上报（observedSessionIds>1）：协议异常——不取任何单值冒充原生续接（即便
+   *   最后值恰等于 resume 请求），按重放落新行（id=最后上报）+ dm.sessionIdentityConflict 如实。
+   * - turn 从未请求（会话打开窗口取消）：无 provider 接触——立即释放 pending + 审计（不泄漏）。
+   * 幂等：每 turn 一次（daemon_state 键）；结算失败保留 pending，由 retryFailedDmSettlements
+   *（每次终态后）与启动扫描 recoverAbandonedDmVerdicts（重启处理）明确重试/收案。
    */
   private settleDmSession(turnId: string): void {
     const pending = this.dmPending.get(turnId);
@@ -1981,13 +1993,35 @@ export class DispatchWorker {
     const { task, session, resumeRef, bindingSnap, cwd, generation, memberId } = pending;
     if (!pending.turnRequested) {
       // turn 从未请求（会话打开窗口被停止/取消）：无 provider 接触——不落会话行、不发判定事件
-      //（下一次派发重新按首开/续接候选处理）。
+      //（下一次派发重新按首开/续接候选处理）；及时释放 pending（第二十二轮三——此前 return 不删
+      // = Map 泄漏+重启扫描误判失败待重试）。
+      this.dmPending.delete(turnId);
+      this.audit(task, null, turnId, 'dm.sessionPendingReleased', {
+        conversationId: task.conversation_id, memberId,
+        note: 'turn 从未交给 runtime（会话打开窗口取消）——无身份结算，pending 已释放',
+      });
       return;
     }
     const raw = (session.providerSessionId ?? '').trim();
     const reported = raw.length > 0 ? raw : null;
+    const observedDistinct = [...new Set((session.observedSessionIds ?? []).map((x) => x.trim()).filter((x) => x.length > 0))];
+    const identityConflict = observedDistinct.length > 1;
     const tx = this.db.transaction(() => {
-      this.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify({ reported, resumed: resumeRef?.providerSessionId ?? null }), Date.now());
+      this.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify({ reported, observed: observedDistinct, resumed: resumeRef?.providerSessionId ?? null, identityConflict }), Date.now());
+      if (identityConflict) {
+        // 协议异常（第二十二轮三）：同轮 provider 报了多个不同身份——不可判定哪个真实；
+        // 按重放落新行（provider id=最后上报值），绝不因最后值==resume 请求而声称原生续接。
+        this.db.prepare(
+          `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id, capabilities_json)
+           VALUES (?, ?, ?, 'dm', NULL, ?, NULL, ?, ?, ?, ?)`,
+        ).run(session.id, task.project_id, task.conversation_id, memberId, generation, cwd, reported, bindingSnap);
+        this.audit(task, null, turnId, 'dm.sessionIdentityConflict', {
+          conversationId: task.conversation_id, resumeRequested: resumeRef?.providerSessionId ?? null,
+          observedSessionIds: observedDistinct, lastReported: reported, nativeResume: false,
+          note: '同轮 provider 上报多个不同 session_id（协议异常）——按受限重放落行，不冒充原生续接',
+        });
+        return;
+      }
       if (resumeRef == null) {
         this.db.prepare(
           `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id, capabilities_json)
@@ -2019,14 +2053,53 @@ export class DispatchWorker {
       tx();
       this.dmPending.delete(turnId); // 结算成功才清理（第二十一轮三：失败保留 pending=可恢复，不静默丢失）
     } catch (error) {
-      // 身份持久化失败=可诊断可恢复：留审计 + 保留 pending（下次终态钩子重试）——不静默吞。
+      // 身份持久化失败=可诊断可恢复：留审计 + 保留 pending——由 retryFailedDmSettlements 明确重试
+      //（每次任一 DM turn 终态后触发，不依赖同一终态偶然再来一次）。
       try {
         this.audit(pending.task, null, turnId, 'dm.sessionSettleFailed', {
           conversationId: pending.task.conversation_id, resumeRequested: pending.resumeRef?.providerSessionId ?? null,
           error: String(error instanceof Error ? error.message : error).slice(0, 160),
-          note: '会话身份结算事务失败——保留待重试（pending 不清除）',
+          note: '会话身份结算事务失败——保留待重试（pending 不清除；下次任一 DM 终态触发 retryFailedDmSettlements）',
         });
       } catch { /* 审计尽力而为 */ }
+    }
+  }
+
+  /**
+   * 失败结算的明确重试（第二十二轮三）：每次 DM turn 终态结算后调用——遍历 dmPending 中
+   * 尚未结算的条目重试（幂等键保证已结算的跳过）。与"同一终态再来一次"的偶然性解耦。
+   */
+  private retryFailedDmSettlements(): void {
+    for (const turnId of [...this.dmPending.keys()]) {
+      try { this.settleDmSession(turnId); } catch { /* 单条失败不阻断其余重试（下轮终态再试） */ }
+    }
+  }
+
+  /**
+   * 重启处理（第二十二轮三）：启动时扫描「已终态的 dm_turn 但无结算键」的 turn——进程内
+   * pending 身份已随进程丢失（无法恢复 provider 上报值），如实收案：落 abandoned 结算键
+   *（占位防重复扫描）+审计说明；不虚构身份、不冒充已结算。候选行保持原状——下一轮派发按
+   * 候选表处理，不丢失。
+   */
+  recoverAbandonedDmVerdicts(): void {
+    const rows = this.db.prepare(
+      `SELECT a.id AS turn_id, t.id AS task_id, t.project_id AS project_id, t.conversation_id AS conversation_id
+       FROM agent_turns a
+       JOIN workflow_runs r ON r.id = a.run_id
+       JOIN tasks t ON t.id = r.task_id AND t.kind = 'dm_turn'
+       WHERE a.status IN ('SUCCEEDED','FAILED','CANCELLED','INTERRUPTED')
+         AND NOT EXISTS (SELECT 1 FROM daemon_state ds WHERE ds.key = 'dm:sessionverdict:' || a.id)`,
+    ).all() as Array<{ turn_id: string; task_id: string; project_id: string; conversation_id: string }>;
+    for (const row of rows) {
+      const key = `dm:sessionverdict:${row.turn_id}`;
+      const tx = this.db.transaction(() => {
+        this.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify({ abandoned: true, reason: 'daemon-restart-before-settle' }), Date.now());
+        this.audit({ id: row.task_id, project_id: row.project_id, conversation_id: row.conversation_id } as TaskRow, null, row.turn_id, 'dm.sessionSettleAbandoned', {
+          conversationId: row.conversation_id, turnId: row.turn_id,
+          note: 'daemon 在结算前重启：进程内 provider 身份不可恢复——按收案处理（不虚构身份）；候选行保持原状，下一轮派发按候选表处理',
+        });
+      });
+      try { tx(); } catch { /* 收案失败下次启动再扫（幂等：已收案的不再命中） */ }
     }
   }
 
@@ -2127,6 +2200,7 @@ export class DispatchWorker {
       try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
       // DM 会话身份终态结算（第二十轮二）：所有终态路径统一在此核对 provider 上报身份。
       this.settleDmSession(turnId);
+      this.retryFailedDmSettlements(); // 明确重试触发（第二十二轮三）：每任一 DM 终态后全量重试失败结算
       // DM 停止语义（DEV-22）：取消=用户停止——队列挂起（paused，dm.resume 继续）。
       // 队列泵在消费器终态后/UNKNOWN 收尾后执行（此时 run 状态已落定——见 pumpDmAfterTerminal）。
       if (status === 'CANCELLED') {

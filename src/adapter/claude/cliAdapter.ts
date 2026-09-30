@@ -522,6 +522,17 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     return state;
   }
 
+  /** provider 身份上报的统一入口（第二十二轮三）：原地回填 + 观察序列（去重按上报顺序）。
+   * 同轮多个不同非空上报=协议异常——终态结算据此不冒充原生续接（worker 侧判定）。 */
+  private recordReportedId(state: SessionState, sid: string): void {
+    state.providerSessionId = sid;
+    state.ref.providerSessionId = sid;
+    const trimmed = sid.trim();
+    if (trimmed.length === 0) return; // 空串上报不入观察序列（空=未上报语义）
+    const list = state.ref.observedSessionIds ?? (state.ref.observedSessionIds = []);
+    if (!list.includes(trimmed)) list.push(trimmed);
+  }
+
   private onStdout(state: SessionState, turn: ActiveTurn, chunk: string): void {
     turn.buffer += chunk;
     let index = turn.buffer.indexOf('\n');
@@ -545,8 +556,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     if (type === 'system' && parsed['subtype'] === 'init') {
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;
       if (sid != null) {
-        state.providerSessionId = sid;
-        state.ref.providerSessionId = sid; // 原地更新：调用方持有的 SessionRef 可见
+        this.recordReportedId(state, sid); // 原地更新+观察序列（init 上报）
       }
       return; // init 不外发（合成 turn.started 以首条 assistant 消息为准）
     }
@@ -584,8 +594,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const isError = parsed['is_error'] === true;
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;
       if (sid != null) {
-        state.providerSessionId = sid;
-        state.ref.providerSessionId = sid; // 原地回填（第二十一轮三）：worker 持有同一对象——终态结算可见
+        this.recordReportedId(state, sid); // 原地回填+观察序列（result 上报——第二十一轮三原地语义保持）
       }
       const usage = parsed['usage'] as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } | undefined;
       // 响应模型取证（用户令 2026-09-28）：优先 result.model；result 不带时用 assistant

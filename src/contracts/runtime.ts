@@ -57,6 +57,12 @@ export interface SessionRef {
   /** 本产品 ID。 */
   id: AdapterSessionId;
   providerSessionId: string;
+  /**
+   * 同轮 provider 上报过的全部非空 session_id（第二十二轮三；adapter 维护，按上报顺序去重）。
+   * 长度>1 = 同轮身份冲突（协议异常）——终态结算不取任何单值冒充原生续接，如实记录。
+   * 可选=旧 adapter/测试基建不维护时视为单值（providerSessionId 即唯一上报）。
+   */
+  observedSessionIds?: string[];
   runtimeInstallationId: string;
   adapterVersion: string;
   threadId: string;
