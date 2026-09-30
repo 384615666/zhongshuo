@@ -1205,6 +1205,46 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
+      case 'project.collab.get':
+      case 'project.collab.set': {
+        // §17.8 协作限制（第十七轮三）：缺席等待（absenceTolerance）与单轮运行时限
+        //（turnDeadline）项目级配置。NULL=回落 daemon 全局默认；生效边界=新派发 turn 起
+        // 读取（在途不变）；CAS 沿用 projects.revision。并行写入策略（§14.7）延期——不在
+        // 本命令面（文件修改节=只读呈现，不伪造可配置）。
+        if (env.method === 'project.collab.get') {
+          const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+          const row = deps.db.prepare('SELECT revision, collab_absence_tolerance_ms, collab_turn_deadline_ms FROM projects WHERE id = ?').get(params.projectId) as { revision: number; collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          return withCommandId({ ok: true, data: { projectId: params.projectId, revision: row.revision, absenceToleranceMs: row.collab_absence_tolerance_ms, turnDeadlineMs: row.collab_turn_deadline_ms, scope: '新派发 turn 起生效（在途 turn 保持派发时的时限）；NULL=回落 daemon 全局默认' } });
+        }
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          absenceToleranceMs: z.number().int().min(10_000).max(86_400_000).nullable().optional(),
+          turnDeadlineMs: z.number().int().min(10_000).max(86_400_000).nullable().optional(),
+          expectedRevision: z.number().int().nonnegative(),
+        }).parse(env.params);
+        const result = run(() => {
+          const row = deps.db.prepare('SELECT id, revision FROM projects WHERE id = ?').get(params.projectId) as { id: string; revision: number } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          if (row.revision !== params.expectedRevision) {
+            throw new DaemonCommandError('STALE_REVISION', `配置版本冲突（期望 revision=${params.expectedRevision}，当前=${row.revision}）——请刷新后重试`);
+          }
+          const sets: string[] = [];
+          const vals: unknown[] = [];
+          if (params.absenceToleranceMs !== undefined) { sets.push('collab_absence_tolerance_ms = ?'); vals.push(params.absenceToleranceMs); }
+          if (params.turnDeadlineMs !== undefined) { sets.push('collab_turn_deadline_ms = ?'); vals.push(params.turnDeadlineMs); }
+          if (sets.length === 0) return { projectId: row.id, revision: row.revision, changed: false as const };
+          deps.db.prepare(`UPDATE projects SET ${sets.join(', ')}, revision = revision + 1 WHERE id = ? AND revision = ?`).run(...vals, row.id, params.expectedRevision);
+          const after = deps.db.prepare('SELECT revision, collab_absence_tolerance_ms, collab_turn_deadline_ms FROM projects WHERE id = ?').get(row.id) as { revision: number; collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null };
+          appendDomainEvent(deps.db, {
+            schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: row.id, conversationId: null, threadId: null, taskId: null, runId: null, turnId: null,
+            kind: 'project.collabUpdated', createdAt: Date.now(),
+            payload: { fromRevision: params.expectedRevision, toRevision: after.revision, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms, note: '协作限制更新：新派发 turn 起生效（在途不变）' },
+          });
+          return { projectId: row.id, revision: after.revision, changed: true as const, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);

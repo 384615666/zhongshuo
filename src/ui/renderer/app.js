@@ -88,6 +88,7 @@ async function loadProject(path) {
   localStorage.setItem('zs.lastProjectPath', path); // 重启后自动恢复上次项目
   el('project-name').textContent = `${data.project.displayName} · ${path}`;
   renderProjectSettings();
+  void renderCollabSettings().catch(() => { /* 读取失败已行内显示 */ });
   void renderMemberRuntimeSettings().catch(() => { /* 绑定读取失败按未绑定呈现——不阻断项目加载 */ });
   const rooms = await command('room.list', { projectId: state.projectId });
   const list = el('room-list');
@@ -1741,6 +1742,63 @@ async function renderMemberRuntimeSettings() {
 }
 
 /** 任务验收开关渲染：标签/说明随项目数据；CAS revision 来自 project.open 快照。 */
+// ---------- 协作限制设置（§17.8，第十七轮三：project.collab.get/set 项目级闭环） ----------
+/**
+ * 缺席等待/单轮运行时限（分钟）：即时保存（失焦/Enter 校验提交；空=回落全局默认）；
+ * 行内范围提示与失败原因；CAS 版本冲突提示刷新；新派发生效（在途不变）。projectId 绑定
+ * 当前打开项目——不从全局状态回退其他项目。
+ */
+async function renderCollabSettings() {
+  const box = el('collab-settings');
+  if (box == null) return;
+  box.textContent = '';
+  if (state.project == null) { box.textContent = '（未打开项目）'; return; }
+  let data;
+  try {
+    data = await command('project.collab.get', { projectId: state.projectId });
+  } catch (e) {
+    box.textContent = `读取失败：${e.message}`;
+    return;
+  }
+  const revision = data.revision;
+  const fields = [
+    { key: 'absenceToleranceMs', label: '缺席等待（分钟，E4：超时按缺席推进、不打断在途成员）', value: data.absenceToleranceMs },
+    { key: 'turnDeadlineMs', label: '单轮运行时限（分钟，硬保护：到点转状态未知不伪造结果）', value: data.turnDeadlineMs },
+  ];
+  for (const f of fields) {
+    const row = document.createElement('div');
+    row.className = 'meta';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.placeholder = '默认';
+    input.value = f.value != null ? String(Math.round(f.value / 60000)) : '';
+    input.title = '范围 1–1440 分钟；清空=回落 daemon 全局默认';
+    const err = document.createElement('span');
+    err.className = 'meta';
+    const submit = async () => {
+      err.textContent = '保存中…';
+      const raw = input.value.trim();
+      const ms = raw === '' ? null : Number(raw) * 60000;
+      if (ms != null && (!Number.isInteger(ms) || ms < 10_000 || ms > 86_400_000)) {
+        err.textContent = '范围要求：1–1440 分钟（整数）；未保存';
+        return;
+      }
+      try {
+        const r = await command('project.collab.set', { projectId: state.projectId, [f.key]: ms, expectedRevision: revision });
+        err.textContent = r.changed ? '已保存' : '无变更';
+        await renderCollabSettings(); // 重读 revision（后续保存用新版本）
+      } catch (e2) {
+        err.textContent = /版本冲突/.test(e2.message) ? `保存失败：${e2.message}（已刷新，请重试）` : `保存失败：${e2.message}`;
+        if (/版本冲突/.test(e2.message)) void renderCollabSettings();
+      }
+    };
+    input.onblur = () => void submit();
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); void submit(); } if (ev.key === 'Escape') { input.value = f.value != null ? String(Math.round(f.value / 60000)) : ''; err.textContent = ''; } };
+    row.append(`${f.label}：`, input, err);
+    box.appendChild(row);
+  }
+}
 function renderProjectSettings() {
   const btn = el('task-review-toggle');
   const note = el('task-review-note');

@@ -170,8 +170,21 @@ export class DispatchWorker {
     this.clock = options.clock ?? (() => Date.now());
   }
 
-  private deliberationOptions() {
-    return { absenceToleranceMs: this.absenceToleranceMs, dispatchWaitDeadlineMs: this.dispatchWaitDeadlineMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
+  /** 项目级协作限制（§17.8，第十七轮三）：项目列优先，NULL/查询失败回落全局默认。 */
+  private collabFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number } {
+    try {
+      const row = this.db.prepare('SELECT collab_absence_tolerance_ms, collab_turn_deadline_ms FROM projects WHERE id = ?').get(projectId) as { collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
+      return {
+        absenceToleranceMs: row?.collab_absence_tolerance_ms ?? this.absenceToleranceMs,
+        turnDeadlineMs: row?.collab_turn_deadline_ms ?? this.turnDeadlineMs,
+      };
+    } catch {
+      return { absenceToleranceMs: this.absenceToleranceMs, turnDeadlineMs: this.turnDeadlineMs };
+    }
+  }
+
+  private deliberationOptions(projectId?: string) {
+    return { absenceToleranceMs: projectId != null ? this.collabFor(projectId).absenceToleranceMs : this.absenceToleranceMs, dispatchWaitDeadlineMs: this.dispatchWaitDeadlineMs, runMaxTurns: this.deliberateMaxTurns, blobDir: join(this.appDataDir, 'artifacts') };
   }
 
   /** 成员级 adapter（DEV-10）：有成员绑定解析器时按成员选择，否则全局单 adapter。 */
@@ -204,7 +217,8 @@ export class DispatchWorker {
       .prepare("SELECT task_id FROM workflow_runs WHERE mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING')")
       .all() as Array<{ task_id: string }>;
     for (const r of runs) {
-      pumpDeliberation(this.db, r.task_id, this.deliberationOptions(), now);
+      const projOf = (this.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(r.task_id) as { project_id: string } | undefined)?.project_id;
+      pumpDeliberation(this.db, r.task_id, this.deliberationOptions(projOf), now);
     }
   }
 
@@ -272,7 +286,7 @@ export class DispatchWorker {
         this.db,
         { id: task.id, conversationId: task.conversation_id, threadId: task.conversation_thread_id ?? null },
         route,
-        this.deliberationOptions(),
+        this.deliberationOptions(task.project_id),
       );
       if (!prepared.ok) {
         await this.transitionTask(task.id, 'BLOCKED');
@@ -952,7 +966,7 @@ export class DispatchWorker {
         });
       }
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
     const repairError = isRepair ? this.kvGet(`delib:repair:${claimed.dispatch_key}`) : undefined;
@@ -972,7 +986,7 @@ export class DispatchWorker {
     if (acc.stageAvailableTurns < 1) {
       this.audit(task, run.id, null, 'run.budgetSkipped', { dispatchKey: claimed.dispatch_key, stageAvailableTurns: acc.stageAvailableTurns, remaining: acc.remainingTurns });
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
     // 前置派发也占用（I+1）：防并行领取读到旧账（A 组真实运行缺陷：双成员 DIS 并行
@@ -1139,7 +1153,7 @@ export class DispatchWorker {
       });
       tx();
       this.releaseAdmission(turnId);
-      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
     };
     const finishUncertain = (note: string): void => {
       // settleUnknown 的 delib.* 分支：成员 absent、run 继续、泵推进。
@@ -1214,7 +1228,7 @@ export class DispatchWorker {
    *   回到主循环，宽限计时由主循环承担，不因 interrupt 挂起而失效。
    */
   private async consumeUntilTerminal(task: TaskRow, runId: string, turnId: string, sessionId: string, adapter: RuntimeAdapter = this.adapter): Promise<void> {
-    const deadline = Date.now() + this.turnDeadlineMs;
+    const deadline = Date.now() + this.collabFor(task.project_id).turnDeadlineMs;
     const interruptDeadline = deadline + this.interruptGraceMs;
     const iterator = adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
     let interruptSent = false;
@@ -1312,7 +1326,7 @@ export class DispatchWorker {
         }
       });
       tx();
-      if (stageKey.startsWith('delib.')) pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      if (stageKey.startsWith('delib.')) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
     }
   }
 
@@ -1710,7 +1724,7 @@ export class DispatchWorker {
         step: baseStep,
         turnId,
         finalText: event.finalText ?? '',
-        options: this.deliberationOptions(),
+        options: this.deliberationOptions(task.project_id),
       });
       if (!out.ok) {
         const tx = this.db.transaction(() => {
@@ -1720,7 +1734,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'run.stepFailed', { stage: baseStep.stage, message: out.error.message });
         });
         tx();
-        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
         return;
       }
       if (out.value.counted) {
@@ -1730,7 +1744,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'run.stepArtifact', { stage: baseStep.stage, memberId: baseStep.memberId, roundNo: baseStep.roundNo });
         });
         tx();
-        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
         return;
       }
       if (out.value.lateRecorded === true) {
@@ -1742,7 +1756,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.lateRecorded', { stage: baseStep.stage, memberId: baseStep.memberId, roundNo: baseStep.roundNo });
         });
         tx();
-        pumpDeliberation(this.db, task.id, this.deliberationOptions());
+        pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
         return;
       }
       const repairKey = repairDispatchKey(baseStep);
@@ -1760,7 +1774,7 @@ export class DispatchWorker {
         }
       });
       tx();
-      pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
     if (event.kind === 'turn.failed') {
@@ -1782,7 +1796,7 @@ export class DispatchWorker {
         this.audit(task, runId, turnId, 'turn.statusChanged', { status: userStop ? 'CANCELLED' : 'FAILED', code: event.code, message: event.message, source: userStop ? 'user-stop' : 'member-terminal' });
       });
       tx();
-      if (!userStop) pumpDeliberation(this.db, task.id, this.deliberationOptions());
+      if (!userStop) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
     if (event.kind === 'usage.updated') {
