@@ -302,6 +302,11 @@ export class DispatchWorker {
       .prepare('SELECT id, project_id, display_name, enabled FROM project_members WHERE id = ?')
       .get(task.owner_member_id ?? '') as (MemberRow & { display_name: string }) | undefined;
     if (project == null || member == null || member.enabled !== 1) {
+      // 停用/缺失成员的已排队 DIRECT（第十七轮二）：阻塞留证（含修复/返工/重派同路径）——
+      // 重新启用后经 task.redispatch 正式续跑，不自动重放。
+      if (member != null && member.enabled !== 1) {
+        this.audit(task as TaskRow, null, null, 'task.memberDisabledBlocked', { memberId: member.id, note: '成员停用：已排队任务阻塞（不派发）；重新启用后经追加执行续跑' });
+      }
       await this.transitionTask(task.id, 'BLOCKED');
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
@@ -932,6 +937,22 @@ export class DispatchWorker {
     const run = activeDeliberationRun(this.db, step.taskId);
     if (run == null || ('runId' in step && step.runId != null && step.runId !== run.id)) {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    // 停用成员的冻结名单步骤（第十七轮二）：与 DIRECT/路由同口径——不 startTurn、不占预算，
+    // 按既有 unavailable 语义收口（屏障推进不占席位；后续阶段可恢复参与=重新启用后参与**新**
+    // 步骤；本步骤出队完结不重放）。在途 turn 不受停用影响（终态路径照常）。
+    const memberEnabledRow = this.db.prepare('SELECT enabled FROM project_members WHERE id = ?').get(step.memberId) as { enabled: number } | undefined;
+    if (memberEnabledRow == null || memberEnabledRow.enabled !== 1) {
+      const changed = this.db.prepare("UPDATE run_participants SET status = 'unavailable' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late','completed')").run(run.id, step.memberId).changes; // 含上一阶段 completed：停用覆盖（completed 非屏障终结，不覆盖会永远等待）
+      if (changed > 0) {
+        this.audit(task, run.id, null, 'run.memberDisabledSkip', {
+          memberId: step.memberId, stage: step.stage,
+          note: '成员停用：步骤按 unavailable 收口（不派发/不占预算；屏障推进；重新启用不重放本步骤）',
+        });
+      }
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      pumpDeliberation(this.db, task.id, this.deliberationOptions());
       return;
     }
     const repairError = isRepair ? this.kvGet(`delib:repair:${claimed.dispatch_key}`) : undefined;
