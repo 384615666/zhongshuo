@@ -1329,17 +1329,102 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: { messages: rows.reverse(), nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
       }
       case 'conversation.markRead': {
+        // DEV-18 首包：通用阅读水位（房间/线程/DM）——幂等（同水位重复=advanced:false；
+        // commandGateway 另有 commandId 级回执幂等）；**未来水位拒绝**（throughMessageSeq >
+        // conversations.last_message_seq = 不吞未来消息——读到的才是已读）；DM=双成员校验
+        // （不得替另一参与者标读），房间/线程=本地用户（projects 行存在即可达）。
         const params = z.strictObject({ conversationId: z.string().min(1), throughMessageSeq: z.number().int().min(0) }).parse(env.params);
-        if (dmLocalUserOf(deps.db, params.conversationId) !== deps.localUserId) throw new DaemonCommandError('FORBIDDEN', '不得替另一参与者标记已读');
-        const conv = dmConversationOf(deps.db, params.conversationId);
+        const conv = deps.db.prepare('SELECT id, project_id, kind, last_message_seq FROM conversations WHERE id = ?').get(params.conversationId) as { id: string; project_id: string; kind: string; last_message_seq: number } | undefined;
         if (conv == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在');
+        if (params.throughMessageSeq > conv.last_message_seq) {
+          throw new DaemonCommandError('VALIDATION_INVALID', `未来水位拒绝：throughMessageSeq=${params.throughMessageSeq} 超过会话最新消息序 ${conv.last_message_seq}（未读到的不算已读）`);
+        }
+        if (conv.kind === 'dm') {
+          if (dmLocalUserOf(deps.db, params.conversationId) !== deps.localUserId) throw new DaemonCommandError('FORBIDDEN', '不得替另一参与者标记已读');
+        } else if (deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(conv.project_id) == null) {
+          throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话所属项目不可达');
+        }
         const result = deps.db.transaction((): { advanced: boolean } => {
+          // UPSERT（DEV-18：房间/线程会话无预插 read_state 行——首标即插入；幂等=同水位不前进）。
+          deps.db.prepare('INSERT OR IGNORE INTO conversation_read_states (project_id, conversation_id, viewer_id, last_read_seq) VALUES (?, ?, ?, 0)').run(conv.project_id, params.conversationId, deps.localUserId);
           const changes = deps.db.prepare(
             'UPDATE conversation_read_states SET last_read_seq = MAX(last_read_seq, ?), revision = revision + 1 WHERE conversation_id = ? AND viewer_id = ? AND last_read_seq < ?',
           ).run(params.throughMessageSeq, params.conversationId, deps.localUserId, params.throughMessageSeq).changes;
           return { advanced: changes > 0 };
-        })();
-        return withCommandId({ ok: true, data: result });
+        });
+        // 经 commandGateway（DEV-18：commandId 级回执幂等——重试/重放同结果，与语义幂等双层）。
+        const r = run(result);
+        return withCommandId({ ok: true, data: r.data });
+      }
+      case 'mine.pending': {
+        // DEV-18 首包：待我处理=权威业务状态汇总（纯读——零新增运行/零预算）。覆盖全部项目
+        // 行（正式链无隐藏位——"含隐藏项目"=全部 projects）。逐项：
+        // - 待验收任务（tasks.status='REVIEW'，按任务逐条——同一会话多任务不因 conversation
+        //   级 LIMIT1 漏项），每条绑定当前交付（pending 优先，其次最新行）：
+        //   deliveryId/revision/manifestHash（验收按此核对——旧交付不能批准新版）；
+        // - DM 未读（agent 消息且 conversation_seq > last_read_seq 的条数+最新序）。
+        const projects = deps.db.prepare('SELECT id, display_name FROM projects ORDER BY rowid').all() as Array<{ id: string; display_name: string }>;
+        const out = projects.map((p) => {
+          const reviewTasks = (deps.db.prepare(
+            `SELECT t.id AS task_id, t.kind AS task_kind, t.conversation_id, t.status,
+                    d.id AS delivery_id, d.revision, d.manifest_hash
+             FROM tasks t
+             LEFT JOIN task_deliveries d ON d.task_id = t.id AND d.review_status = 'pending'
+             WHERE t.project_id = ? AND t.status = 'REVIEW'
+             ORDER BY t.rowid`,
+          ).all(p.id) as Array<{ task_id: string; task_kind: string; conversation_id: string | null; status: string; delivery_id: string | null; revision: number | null; manifest_hash: string | null }>).map((r) => {
+            // 无 pending 交付的 REVIEW 任务：绑定最新交付行（如实带版本；无任何交付=null——
+            // 验收入口据此区分"读卡片≠完成事项"）。
+            if (r.delivery_id != null) return r;
+            const latest = deps.db.prepare('SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(r.task_id) as { id: string; revision: number; manifest_hash: string } | undefined;
+            return { ...r, delivery_id: latest?.id ?? null, revision: latest?.revision ?? null, manifest_hash: latest?.manifest_hash ?? null };
+          });
+          const dmUnread = (deps.db.prepare(
+            `SELECT c.id AS conversation_id, c.title,
+                    (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.author_type = 'agent' AND m.conversation_seq > COALESCE((SELECT s.last_read_seq FROM conversation_read_states s WHERE s.conversation_id = c.id AND s.viewer_id = ?), 0)) AS unread,
+                    (SELECT max(m2.conversation_seq) FROM messages m2 WHERE m2.conversation_id = c.id AND m2.author_type = 'agent') AS last_agent_seq
+             FROM conversations c
+             WHERE c.project_id = ? AND c.kind = 'dm' AND c.archived_at IS NULL`,
+          ).all(deps.localUserId, p.id) as Array<{ conversation_id: string; title: string | null; unread: number; last_agent_seq: number | null }>).filter((r) => r.unread > 0);
+          return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread };
+        }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0);
+        return withCommandId({ ok: true, data: { projects: out, generatedAt: Date.now() } });
+      }
+      case 'deepLink.resolve': {
+        // DEV-18 首包：深链按实体真实归属定位（纯读——零新增运行/零预算）。失效/无权限/归属
+        // 矛盾明确报错（不静默跳转）。支持：#dm=/#task=/#delivery=/#msg=。
+        const params = z.strictObject({ hash: z.string().min(1).max(200) }).parse(env.params);
+        const m = /^#(dm|task|delivery|msg)=([A-Za-z0-9_:-]+)$/.exec(params.hash.trim());
+        if (m == null) throw new DaemonCommandError('VALIDATION_INVALID', `深链格式无效：${params.hash.slice(0, 60)}`);
+        const kind = m[1] as 'dm' | 'task' | 'delivery' | 'msg';
+        const id = m[2] as string;
+        const convOf = (conversationId: string): { projectId: string; kind: string } => {
+          const row = deps.db.prepare('SELECT project_id, kind FROM conversations WHERE id = ?').get(conversationId) as { project_id: string; kind: string } | undefined;
+          if (row == null) throw new DaemonCommandError('NOT_FOUND', `会话不存在或已删除：${conversationId}`);
+          return { projectId: row.project_id, kind: row.kind };
+        };
+        if (kind === 'dm') {
+          const conv = convOf(id);
+          if (conv.kind !== 'dm') throw new DaemonCommandError('LINK_TARGET_MISMATCH', `#${kind}=${id} 指向非私信会话（kind=${conv.kind}）——深链与实体归属矛盾`);
+          if (dmLocalUserOf(deps.db, id) !== deps.localUserId) throw new DaemonCommandError('FORBIDDEN', '深链指向的私信不属于当前用户');
+          return withCommandId({ ok: true, data: { kind: 'dm', projectId: conv.projectId, conversationId: id } });
+        }
+        if (kind === 'task') {
+          const row = deps.db.prepare('SELECT id, project_id, conversation_id, conversation_thread_id FROM tasks WHERE id = ?').get(id) as { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null } | undefined;
+          if (row == null) throw new DaemonCommandError('NOT_FOUND', `任务不存在或已删除：${id}`);
+          return withCommandId({ ok: true, data: { kind: 'task', projectId: row.project_id, conversationId: row.conversation_id, threadId: row.conversation_thread_id, taskId: row.id } });
+        }
+        if (kind === 'delivery') {
+          const row = deps.db.prepare(
+            'SELECT d.id, d.revision, d.manifest_hash, t.id AS task_id, t.project_id, t.conversation_id FROM task_deliveries d JOIN tasks t ON t.id = d.task_id WHERE d.id = ?',
+          ).get(id) as { id: string; revision: number; manifest_hash: string; task_id: string; project_id: string; conversation_id: string } | undefined;
+          if (row == null) throw new DaemonCommandError('NOT_FOUND', `交付不存在或已删除：${id}`);
+          return withCommandId({ ok: true, data: { kind: 'delivery', projectId: row.project_id, conversationId: row.conversation_id, taskId: row.task_id, deliveryId: row.id, revision: row.revision, manifestHash: row.manifest_hash } });
+        }
+        const msgRow = deps.db.prepare('SELECT id, conversation_id, conversation_seq, thread_id FROM messages WHERE id = ?').get(id) as { id: string; conversation_id: string; conversation_seq: number; thread_id: string | null } | undefined;
+        if (msgRow == null) throw new DaemonCommandError('NOT_FOUND', `消息不存在或已删除：${id}`);
+        const conv = convOf(msgRow.conversation_id);
+        return withCommandId({ ok: true, data: { kind: 'msg', projectId: conv.projectId, conversationId: msgRow.conversation_id, threadId: msgRow.thread_id, messageId: msgRow.id, messageSeq: msgRow.conversation_seq } });
       }
       case 'conversation.rename': {
         const params = z.strictObject({ conversationId: z.string().min(1), title: z.string().min(1).max(120), expectedRevision: z.number().int().min(0) }).parse(env.params);

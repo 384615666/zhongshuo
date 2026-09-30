@@ -239,20 +239,69 @@ async function openDm(conversationId) {
 
 /** 深链恢复：#dm=<conversationId> —— 项目加载后回到该会话（不存在则忽略）。 */
 async function restoreDmDeepLink() {
-  const m = /^dm=([\w-]+)$/.exec(decodeURIComponent(location.hash.slice(1)));
+  // DEV-18 首包：深链按实体真实归属定位（deepLink.resolve——纯读，零新增运行/零预算）。
+  // dm/task/delivery/msg 全形态；失效/无权限/归属矛盾由服务端明确报错——不静默跳转。
+  const hash = decodeURIComponent(location.hash.slice(1));
+  const m = /^(dm|task|delivery|msg)=([\w:-]+)$/.exec(hash);
   if (m == null || state.projectId == null) return;
   try {
-    await openDm(m[1]);
-  } catch { /* 会话不存在/已失效——留在主池（hash 保留不伪造） */ }
+    const r = await command('deepLink.resolve', { hash: `#${hash}` });
+    if (r.kind === 'dm') { await openDm(r.conversationId); return; }
+    if (r.kind === 'msg' || r.kind === 'task' || r.kind === 'delivery') {
+      // 消息/任务/交付：定位到所属会话（DM 会话→打开；房间任务→回主池打开线程卡片）。
+      const conv = ((await command('conversation.list', { projectId: r.projectId }).catch(() => ({ conversations: [] }))).conversations ?? []).find((c) => c.conversationId === r.conversationId);
+      if (conv != null && r.threadId == null && conv.conversationId != null) { await openDm(r.conversationId); return; } // DM 会话（无线程）
+      showPool();
+      await renderPool().catch(() => {});
+      showError(`深链已定位：${r.kind === 'msg' ? `消息 #${r.messageSeq}` : r.kind === 'task' ? '任务' : `交付（revision ${r.revision}）`} 在当前项目——请从任务池打开对应线程`);
+      return;
+    }
+  } catch (e) {
+    showError(`深链无法定位：${e.message}`);
+  }
+}
+
+/** 待我处理（DEV-18 首包）：权威业务状态汇总（mine.pending——纯读）。读卡片≠完成事项：
+ * 阅读不消掉待办；验收在对应视图按当前 deliveryId/revision 执行。 */
+async function renderPendingList() {
+  const nav = el('pending-list');
+  if (nav == null) return;
+  let data;
+  try { data = await command('mine.pending', {}); } catch { return; /* 通信异常由连接状态呈现 */ }
+  const rows = [];
+  for (const p of data.projects ?? []) {
+    for (const t of p.reviewTasks ?? []) {
+      rows.push({ label: `待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? `（v${t.revision}）` : ''}`, title: `验收绑定当前交付（revision=${t.revision ?? '无'}）`, conversationId: t.conversation_id, taskId: t.task_id, kind: 'task' });
+    }
+    for (const u of p.dmUnread ?? []) {
+      rows.push({ label: `未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话（读到的才算已读）', conversationId: u.conversation_id, kind: 'dm' });
+    }
+  }
+  nav.replaceChildren();
+  for (const r of rows.slice(0, 12)) {
+    const btn = document.createElement('button');
+    btn.className = 'room';
+    btn.textContent = r.label;
+    btn.title = r.title;
+    btn.onclick = () => {
+      if (r.kind === 'dm' && r.conversationId != null) void openDm(r.conversationId).catch((e) => showError(`打开失败：${e.message}`));
+      else if (r.conversationId != null) location.hash = `task=${r.taskId}`;
+    };
+    nav.append(btn);
+  }
 }
 
 async function renderDm() {
-  if (state.openDmId == null || state.projectId == null) return;
+  // 固定请求目标+导航代次防护（DEV-18 首包）：本轮渲染的全部请求与标读绑定发起时的会话
+  // （dmAtRender）——切换到会话 B 后，A 的迟到响应不得重绘视图、不得标读 B。
+  const dmAtRender = state.openDmId;
+  if (dmAtRender == null || state.projectId == null) return;
   // 执行态/排队数必须取实时值（第二十轮一：缓存由低频侧栏刷新——会话视图每次直查，
   // 不用过期缓存呈现运行/排队状态）。
-  const fresh = ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === state.openDmId);
+  const fresh = ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === dmAtRender);
+  if (state.openDmId !== dmAtRender) return; // 已切走：迟到响应不重绘（不覆盖 B 的视图/在途状态）
   if (fresh == null) { state.openDmId = null; showPool(); return; }
-  const history = await command('conversation.history', { conversationId: state.openDmId, limit: 100 });
+  const history = await command('conversation.history', { conversationId: dmAtRender, limit: 100 });
   const box = el('dm-messages');
   box.replaceChildren();
   for (const m of history.messages ?? []) {
@@ -271,7 +320,13 @@ async function renderDm() {
   box.scrollTop = box.scrollHeight;
   // 已读水位推进（只标记自己已看到的——服务端校验 viewer）。
   const lastSeq = history.messages?.length > 0 ? history.messages[history.messages.length - 1].conversation_seq : fresh.lastMessageSeq;
-  if (fresh.unread > 0) void command('conversation.markRead', { conversationId: state.openDmId, throughMessageSeq: lastSeq }).catch(() => {});
+  if (fresh.unread > 0) {
+    // 标读绑定发起时的会话+消息序（服务端另拒未来水位）：读到的才算已读——重绘/切换/轮询
+    // 不得自动读完未展示内容，也不得把别的会话标掉。
+    void command('conversation.markRead', { conversationId: dmAtRender, throughMessageSeq: lastSeq })
+      .then((r) => { if (r?.advanced && state.openDmId === dmAtRender) void renderDmSidebar().catch(() => {}); })
+      .catch(() => {});
+  }
   // 会话头：标题/执行态/操作（停止/继续队列/归档/取消归档）。
   el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}`;
   const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
@@ -1692,7 +1747,7 @@ function schedulePoll() {
       el('conn-state').textContent = '通信异常';
       el('conn-state').classList.add('err');
     });
-    if (state.pollTick % 4 === 0) void renderDmSidebar().catch(() => {}); // 侧栏未读/执行态低频刷新
+    if (state.pollTick % 4 === 0) { void renderDmSidebar().catch(() => {}); void renderPendingList().catch(() => {}); } // 侧栏未读/执行态+待我处理低频刷新（纯读）
     // 低频复查门禁（运行中新落门禁的场景极少；启动/重连另有触发）。
     if (state.pollTick % 8 === 0) void refreshGate().catch(() => {});
   }, 1500);
@@ -1700,6 +1755,10 @@ function schedulePoll() {
 
 // ---------- 事件绑定 ----------
 
+// 初始化即绪声明（第二十二轮一）：open-folder 在 HTML 里初始 disabled（未就绪可见——
+// 点击不静默丢失）；app.js 执行到此处=交互绑定完成，随即启用。此后点击必被处理。
+el('open-folder').disabled = false;
+el('open-folder').removeAttribute('title');
 el('open-folder').onclick = () => void openFolder().catch((e) => showError(`打开失败：${e.message}`));
 el('send').onclick = () => void send();
 el('record-toggle').onclick = () => {
@@ -2102,4 +2161,7 @@ if (lastProject != null && lastProject.length > 0) {
     el('project-name').textContent = `恢复项目失败：${e.message}`;
   });
 }
+// 页面可操作标志（第二十二轮一）：全部事件绑定完成——验证器/自动化以此为"点击必被处理"
+// 的判据（区别于 CDP target 出现：那只是导航开始，onclick 尚未绑定，早到点击会静默丢失）。
+window.__zsReady = true;
 })();

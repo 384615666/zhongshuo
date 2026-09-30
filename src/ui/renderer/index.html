@@ -10,13 +10,15 @@
   <div id="app">
     <aside class="sidebar">
       <div class="brand">众说</div>
-      <button id="open-folder" class="primary">打开本地文件夹…</button>
+      <button id="open-folder" class="primary" disabled title="正在初始化…">打开本地文件夹…</button>
       <div id="project-name" class="project-name">未打开项目</div>
       <nav id="room-list" class="rooms"></nav>
       <button id="room-create" class="chip" title="新建房间（本项目成员默认全加入）">+ 建房</button>
       <div class="sidebar-sec">私信（1 对 1）</div>
       <button id="dm-create" class="chip" title="与本项目 Agent 成员新建一对一私信（每个请求创建独立会话——同成员可有多条；打开已有会话点下方列表）">+ 新私信</button>
       <nav id="dm-list" class="rooms"></nav>
+      <div class="sidebar-sec">待我处理</div>
+      <nav id="pending-list" class="rooms" title="待我验收任务与未读私信（权威业务状态汇总——读卡片≠完成事项）"></nav>
       <div id="dm-member-picker" class="hidden"></div>
       <div class="sidebar-foot">
         <details id="project-settings" class="help-panel">

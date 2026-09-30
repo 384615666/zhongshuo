@@ -2,27 +2,46 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-09-30 第二十一轮，唯一权威快照）
+## 当前真实状态（2026-09-30 第二十二轮，唯一权威快照）
 
-> 本轮=就绪链真修复（IPC handler 先注册+**认证完成才算就绪**/并发共享连接/统一截止/
-> connectPipe 握手前失败立即 reject/spawn error 识别）+验证器真覆盖（D1=daemon listen 前
-> 延迟=真实未就绪窗口；D2=指定 project.open 方法延迟+回执恰 1；D3 含 forced≠优雅；CDP/
-> waitFor/exitWithGuard 全部有截止与失败语义）+Claude adapter 续接事实分离（resume 请求
-> ID 不进返回值/result 原地回填/快照含全局默认解析+cwd/损坏快照不兼容/settle 失败可恢复）
-> +r20-dm 批次脚本确定性修复（**零调用演练 11/11 全过**——A1 身份/A2 续接请求=上报/B 独立/
-> 重启 A3 resumed=2/优雅退出×2/护栏零 reserve）。
-> - **C 间歇仍未闭环**（根因未定，不预判环境性——阶段时间戳打点已就位待取证）；
-> **D 全绿未取得**；**真实批次未执行**（前置=三次冻结产物完整序列+D 全绿）。
-> - 下轮顺序：①冻结产物三次完整 A→B1→B2→C+D（逐次留档不拼绿）——C 若复现按 ready 打点
-> 定位最后完成阶段再判产品/验证器/环境；②真实批次 r20-dm（脚本已演练通过）；③DEV-18
-> 首包（markRead 幂等+未来水位+导航代次；待我处理从业务状态汇总/多交付不漏/绑
-> deliveryId；深链真实归属）；④DEV-23。
-> - 坑（第二十一轮）：mjs 里不可用 TS `as`；Windows 动态 import 必须 file:// URL；
-> python 行号替换优于字符串匹配（转义不一致静默 MISS）。
+> 本轮=**C/A 间歇根因闭环**（早到点击静默丢失：CDP target 出现≠页面可操作——onclick 未绑定期
+> 点击被丢弃；修=open-folder 初始 disabled+`window.__zsReady` 标志+验证器 waitInteractive；
+> 另修**管道名形态**：裸名 daemon listen 自动补 `\\.\pipe\` 而 UI connect 不补=永远连不上）+
+> 验证器重写（runId 目录留档=stderr 时间戳/截图/进程清单/元数据，报告永不覆盖；ZS_VDR_FROZEN=1
+> 冻结产物逐文件 SHA256 核对复用——**同一产物连续三次完整 A→B1→B2→C+D 全绿**：首跑 nji19t
+> 28/29（验证器探活时机缺陷，产品行为正确）→修复后 szzu9n/evqq6p/cur0jt 三连 29/29）+D 同步点
+> 真窗口（D1=真正 listen 之前延迟（beginStartup 重构）；D2=daemon 侧响应延迟钩子+ZS_DAEMON_
+> LOG_COMMANDS 按**实发 commandId** 核对回执恰 1（contextBridge 只读——页面 patch 不可行）；
+> D3=ZS_UI_SHUTDOWN_DELAY_MS 受控退出延迟+新旧实例共存探活）+HARNESS 零真实调用自检 12/12
+> （fetch/WS/evalJs 死循环全截止、exitWithGuard 已退出 child、三同步点时间线因果）+
+> **abort 语义修复**（readyAbort 认证后移除监听——关停不再销毁已建立连接=不再被迫强杀）+
+> DM 收口（统一解析层 resolveMemberRuntime：kind/model/installation/**permissionMode**/cwd 一
+> 份事实，worker 与 adapterFor 同源；身份冲突 observedSessionIds——init=Y/result=X/resume=X
+> 不冒充续接+dm.sessionIdentityConflict；settle 失败明确重试 retryFailedDmSettlements+重启收案
+> recoverAbandonedDmVerdicts+取消路径释放 pending；**generation 撞键修复**（结算失败轮行缺
+> 失→计数退化→唯一键冲突——代次=行数+在途未结算数））+批次脚本收口（spawn 引用+正式停止链+
+> 演练同款断言去 rehearsal||+B 独立性=身份+输入水位+输出归属+报告分列 r20-dm-ledger-{mode}+
+> 崩溃注入 a2mid 验证即停与收拢）+**DEV-18 首包落地**（markRead commandId 幂等+未来水位拒绝+
+> UPSERT 房间首标+固定目标防 A 迟到标 B；mine.pending 权威汇总——同会话多 REVIEW 逐任务不漏+
+> 交付绑定 deliveryId/revision/manifestHash（pending 优先/最新回退/null 如实）+DM 未读；
+> deepLink.resolve dm/task/delivery/msg 真实归属+矛盾明确报错；renderer 待我处理区+通用深链+
+> 导航代次防护——全部纯读零新增运行）。
+> - **真实批次 r20-dm 已执行：17/17 全部通过**（A1 暗号回流+真实 provider 身份持久→A2 原生
+> 续接（resume 请求=上报，真实 UUID 一致）→B 独立（身份互不相同+输入水位属 B+回复落 B+不含
+> A 暗号）→重启 A3 resumed=2；startTurn 恰 4 次全 succeeded、护栏 reserved=4 未触 cap=8、双
+> daemon 优雅退出 exit 0；台账 real-batches/r20-dm-ledger-real.json）。
+> - 测试：本地全量 **640/640**（+7 dev18ReadPending）；dmDirect 19/19；claudeResumeFacts 4/4；
+> 批次演练 15/15+崩溃注入即停收拢验证；全量首跑 1 失败复跑两次未复现（偶发，如实登记）。
+> - 下轮顺序：①DEV-18 首包 renderer 层验证（页面待我处理区/深链/阅读水位实测——本轮 daemon
+> 层 7/7 已过，页面层 e2e 待做）；②DEV-23 提醒首版；关注/搜索/收藏仍为 DEV-18 剩余项（不扩大
+> 完成声明）。
+> - 坑（第二十二轮）：contextBridge 注入对象只读（页面 patch 不可行——用 daemon 命令日志钩子
+> 取实发 commandId）；node `replaceAll` 不支持字符类正则语法；CDP target 出现≠load 完成；
+> SQL SUM 空集=null；冻结复用模式下验证器自身改动不影响冻结核对（核对的是产物文件）。
 
 ---
 
-## （上一轮快照，2026-09-30 第二十轮）
+## （上一轮快照，2026-09-30 第二十一轮）
 
 > 本轮=renderer 无反馈挂起根因修复（IPC handler 先注册+去 alert 阻塞+第十九轮静默丢失的
 > dm-create 成员选择器/dm-review 按钮绑定补齐；B2/C 从"验证器内打不开项目"到全链通过）
