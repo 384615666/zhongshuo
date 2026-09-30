@@ -21,6 +21,7 @@ import { managedJobIdentityMigration } from './019-managed-job-identity.ts';
 import { managedJobIdColumnMigration } from './020-managed-job-id-column.ts';
 import { projectCollabMigration } from './021-project-collab.ts';
 import { realCallsMigration } from './022-real-calls.ts';
+import { realCallsAttributionMigration } from './023-real-calls-attribution.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -46,4 +47,5 @@ export const MIGRATIONS: readonly Migration[] = [
   managedJobIdColumnMigration,
   projectCollabMigration,
   realCallsMigration,
+  realCallsAttributionMigration,
 ];

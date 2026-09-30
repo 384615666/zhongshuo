@@ -8,6 +8,7 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { holdDispatchGate } from '../persistence/daemonState.ts';
+import { settleRealCall } from './realCallLedger.ts';
 import { evaluateStopTarget } from '../domain/scope/stopTarget.ts';
 import type { TaskStopOutcome } from '../contracts/task.ts';
 import type { RunStatus } from '../contracts/run.ts';
@@ -132,6 +133,11 @@ export interface RecoverySnapshot {
  * （pending outbox 遗留）——两者都不得直接派发遗留工作。
  */
 export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnapshot {
+  // 真实调用台账（第十八轮二补漏）：恢复前先取将被标 UNKNOWN 的 turn 清单——崩溃现场的真实
+  // startTurn 台账行按「执行不确定」结算（不永久 inflight；崩溃≠请求未发出）。
+  const recoveringTurnIds = (db
+    .prepare(`SELECT id FROM agent_turns WHERE status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`)
+    .all() as Array<{ id: string }>).map((r) => r.id);
   const tx = db.transaction((): RecoverySnapshot => {
     const interruptedRuns = db
       .prepare(`UPDATE workflow_runs SET status = 'INTERRUPTED' WHERE status IN ('QUEUED','RUNNING','WAITING','STOPPING')`)
@@ -176,5 +182,9 @@ export function applyRecovery(db: ZhongshuoDatabase, now: number): RecoverySnaps
       .all() as RecoverySnapshot['activeUndos'];
     return { interruptedRuns, unknownTurns, requeuedOutbox, heldLeases, stopRecord, unknownTurnRows, activeUndos };
   });
-  return tx();
+  const snapshot = tx();
+  for (const turnId of recoveringTurnIds) {
+    try { settleRealCall(db, turnId, 'unknown', '恢复：崩溃现场 turn→UNKNOWN（执行不确定——是否发出不可考）'); } catch { /* 台账尽力而为 */ }
+  }
+  return snapshot;
 }

@@ -43,7 +43,7 @@ import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './p
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
-import { settleRealCall } from './realCallLedger.ts';
+import { settleRealCall, recordRealCallUsage } from './realCallLedger.ts';
 
 export interface TaskRow {
   id: string;
@@ -1327,6 +1327,9 @@ export class DispatchWorker {
         }
       });
       tx();
+      // 真实调用台账（第十八轮二补漏）：settleUnknown 直接 UPDATE 绕过 casTurn——UNKNOWN 路径
+      // （截止中断/强制中止/启动不确定）的 startTurn 台账行必须同样结算，不得永久 inflight。
+      try { settleRealCall(this.db, turnId, 'unknown', `turn UNKNOWN（${reason}）`); } catch { /* 台账尽力而为 */ }
       if (stageKey.startsWith('delib.')) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
     }
   }
@@ -1391,6 +1394,8 @@ export class DispatchWorker {
              VALUES (?, ?, ?, ?, ?) ON CONFLICT (turn_id, provider_event_id) DO NOTHING`,
           )
           .run(turnId, event.eventKey, JSON.stringify(event), JSON.stringify(event), event.costQuality);
+        // 真实调用台账（第十八轮三）：响应自报模型/用量引用真实事件原文——与请求模型分列，不猜测。
+        recordRealCallUsage(this.db, turnId, event);
         break;
       case 'turn.completed': {
         const turn = this.db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { status: string; budget_mark: string | null };

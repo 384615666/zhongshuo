@@ -21,7 +21,7 @@ import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
-import { MemberRuntimeRegistry, type MemberAdapterFactory, type MemberDisposeReport } from './memberRuntime.ts';
+import { MemberRuntimeRegistry, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
@@ -46,6 +46,12 @@ export interface DaemonOptions {
   drainSettleTimeoutMs?: number;
   /** 测试注入口：覆盖默认 adapter 构建（仅测试用——生产路径不传）。 */
   testAdapter?: RuntimeAdapter;
+  /**
+   * 测试注入口：成员 runtime 工厂覆盖（仅测试用）。注入工厂仍经 wrapRealCallLedger 包装
+   * （真实 kind）——正式链 entry→registry→包装器→adapter 可用本地协议进程完整验证生命周期
+   * （第十八轮二），不触真实 claude/codex 二进制。
+   */
+  testAdapterFactories?: Record<string, MemberAdapterFactory>;
   /**
    * 正式关闭命令入口（DEV-15 第十四轮三：daemon.shutdown 经 IPC 驱动）。注入时命令面开放
    * （standalone 进程入口）；内嵌实例（测试/UI 进程内）不注入——命令明确拒绝。
@@ -172,9 +178,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env 缺省=继承父环境
     })();
     if (options.runtime === 'codex' && managedCodexSpawn != null) {
-      adapter = wrapRealCallLedger(new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn }), 'codex', db);
+      adapter = wrapRealCallLedger(new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn }), 'codex', db, process.env.ZS_E2E_MODEL ?? null);
     } else if (options.runtime === 'claude' && managedClaudeSpawn != null) {
-      adapter = wrapRealCallLedger(new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined)), 'claude', db);
+      adapter = wrapRealCallLedger(new ClaudeCliAdapter({ model: process.env.ZS_CLAUDE_MODEL }, managedClaudeSpawn(undefined)), 'claude', db, process.env.ZS_CLAUDE_MODEL ?? null);
     }
 
     // 成员级 runtime 注册表（DEV-10）：同一项目允许成员 A 绑定 codex、成员 B 绑定
@@ -182,11 +188,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const claudePermissionOf = (mode: string | null): 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' | undefined =>
       mode === 'plan' || mode === 'manual' || mode === 'acceptEdits' || mode === 'auto' || mode === 'dontAsk' || mode === 'bypassPermissions' ? mode : undefined;
     const dbForLedger = db!; // 此处 db 必非空（上方已 open；供护栏台账闭包使用）
-    const factories: Record<string, MemberAdapterFactory> = {
+    // 请求模型归属按 kind 区分（第十八轮三）：codex=ZS_E2E_MODEL、claude=ZS_CLAUDE_MODEL——
+    // 成员级以 binding.model 优先；不把 ZS_CLAUDE_MODEL 记到 codex 台账上。
+    const defaultModelFor = (kind: 'codex' | 'claude'): string | null =>
+      (kind === 'codex' ? process.env.ZS_E2E_MODEL : process.env.ZS_CLAUDE_MODEL) ?? null;
+    const productionFactories: Record<string, MemberAdapterFactory> = {
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         model: binding.model ?? process.env.ZS_E2E_MODEL,
         ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
-      }), 'codex', dbForLedger),
+      }), 'codex', dbForLedger, binding.model ?? defaultModelFor('codex')),
       claude: (binding) => wrapRealCallLedger(new ClaudeCliAdapter(
         {
           model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
@@ -195,8 +205,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           installationId: binding.installationId ?? undefined,
         },
         managedClaudeSpawn != null ? managedClaudeSpawn(binding.executable ?? undefined) : undefined,
-      ), 'claude', dbForLedger),
+      ), 'claude', dbForLedger, binding.model ?? defaultModelFor('claude')),
     };
+    const factories: Record<string, MemberAdapterFactory> = options.testAdapterFactories != null
+      // 注入工厂仍按 kind 包装护栏（真实 kind 台账/上限/生命周期透传与生产同链）。
+      ? Object.fromEntries(Object.entries(options.testAdapterFactories).map(([kind, factory]) => [
+        kind,
+        (binding: MemberRuntimeBinding) => wrapRealCallLedger(factory(binding), kind, dbForLedger, binding.model ?? (kind === 'codex' || kind === 'claude' ? defaultModelFor(kind) : null)),
+      ]))
+      : productionFactories;
     if (process.env.ZS_ALLOW_FAKE === '1') {
       // 成员级 fake 实例与默认实例同款编排（ZS_FAKE_DELIB=1 时按输入契约生成合法研讨
       // 载荷——彩排/演练经成员绑定路径与真实链路一致，不因工厂实例缺编排而假失败）。

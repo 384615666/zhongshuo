@@ -19,7 +19,13 @@ import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-realguard-'));
-afterAll(() => { for (let i = 0; i < 3; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* retry */ } } });
+// 批次共享日志隔离到临时目录（第十八轮三：设置 batchId 即启用 journal——不污染用户主目录）。
+const batchDir = mkdtempSync(join(tmpdir(), 'zs-realguard-batch-'));
+process.env.ZS_REAL_BATCH_DIR = batchDir;
+afterAll(() => {
+  delete process.env.ZS_REAL_BATCH_DIR;
+  for (const dir of [tmpRoot, batchDir]) { for (let i = 0; i < 3; i += 1) { try { rmSync(dir, { recursive: true, force: true }); break; } catch { /* retry */ } } }
+});
 
 /** 可失败/可计数的假「真实」adapter：用 kind='claude' 包护栏（真实路径同款包装）。 */
 class FlakyClaude extends FakeRuntimeAdapter {
@@ -44,12 +50,13 @@ describe('真实调用护栏（realCallLedger）', () => {
     const raw = new FlakyClaude();
     const adapter = wrapRealCallLedger(raw, 'claude', db);
     const openS = () => raw.openSession({ projectId: 'p1', memberId: 'mA', taskId: 't1', threadId: 'th1', sessionGeneration: 0, cwd: tmpRoot, policyId: 'policy-analyze' }) as never;
-    // ① startTurn 抛错：占位行保留为 failed（是否发出不确定亦留记录）。
+    // ① startTurn 抛错：占位保留并按「不确定是否已发出」结算 unknown（第十八轮三更正：
+    //    抛错≠请求未发出——不得写 failed 冒充已知结果；调用结果由事件/终态另行记录）。
     raw.failNext = true;
     await expect(adapter.startTurn(await openS(), { turnId: 'turn_fail', dispatchKey: 'k', inputBundleId: 'b', text: 't', policyId: 'p', taskRevision: 0 })).rejects.toThrow('注入');
     let sum = realCallSummary(db, 'guard-test-1');
     expect(sum.total).toBe(1);
-    expect(sum.byStatus.failed).toBe(1);
+    expect(sum.byStatus.unknown).toBe(1);
     // ② 成功路径：占位 inflight → 终态结算 succeeded。
     raw.failNext = false;
     const p2 = adapter.startTurn(await openS(), { turnId: 'turn_ok', dispatchKey: 'k', inputBundleId: 'b', text: 't', policyId: 'p', taskRevision: 0 });
@@ -61,7 +68,7 @@ describe('真实调用护栏（realCallLedger）', () => {
     settleRealCall(db, 'turn_unk', 'unknown', 'turn 终态=UNKNOWN');
     sum = realCallSummary(db, 'guard-test-1');
     expect(sum.total).toBe(3);
-    expect(sum.byStatus).toMatchObject({ failed: 1, succeeded: 1, unknown: 1 });
+    expect(sum.byStatus).toMatchObject({ unknown: 2, succeeded: 1 });
     // ④ fake kind 不包装不产生行。
     const fake = wrapRealCallLedger(new FakeRuntimeAdapter({ turnScriptSequencer: () => successTurn() }), 'fake', db);
     await fake.startTurn(await fake.openSession({ projectId: 'p1', memberId: 'mA', taskId: 't1', threadId: 'th1', sessionGeneration: 0, cwd: tmpRoot, policyId: 'policy-analyze' }) as never, { turnId: 'turn_fake', dispatchKey: 'k', inputBundleId: 'b', text: 'p', policyId: 'p', taskRevision: 0 });
