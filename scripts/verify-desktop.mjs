@@ -81,6 +81,7 @@ function runDesktop(appData, extraEnv, timeoutMs) {
         ZS_APP_DATA: appData,
         ZS_RUNTIME: 'fake',
         ZS_ALLOW_FAKE: '1',
+      ZS_REAL_DISPATCH_GUARD: '1', // 第十六轮四：验收环境硬隔离——真实 runtime 派发在 spawn 前拒绝
         ZS_UI_DEMO: resultPath,
         ZS_DEMO_DIR: fixtureProj,
         ZS_DEMO_SHOTS: join(appData, 'shots'),

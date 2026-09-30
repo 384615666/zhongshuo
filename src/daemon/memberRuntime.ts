@@ -66,24 +66,43 @@ export function readMemberRuntimeBinding(db: ZhongshuoDatabase, memberId: string
 
 export type MemberAdapterFactory = (binding: MemberRuntimeBinding) => RuntimeAdapter;
 
+export interface MemberRuntimeRegistryOptions {
+  /** 全局默认 adapter 的 runtime kind（ZS_RUNTIME 语义——防护判定用；缺省=不判定默认侧）。 */
+  defaultKind?: string;
+  /**
+   * 真实派发防护（第十六轮四：ZS_REAL_DISPATCH_GUARD=1——模拟/验收/独立本地包环境）：
+   * 派发解析出真实 runtime（claude/codex）时在 adapter 构建（即 spawn/请求）**之前**拒绝——
+   * 全局 fake 默认不得被成员持久绑定绕过；**配置读写（member.setRuntime/member.runtime）不受
+   * 影响**（可测试真实配置的保存与回读）。正式部署不设该变量=真实 runtime 正常可用。
+   */
+  realDispatchGuard?: boolean;
+}
+
 export class MemberRuntimeRegistry {
   private readonly db: ZhongshuoDatabase;
   private readonly defaultAdapter: RuntimeAdapter;
   private readonly factories: Record<string, MemberAdapterFactory>;
+  private readonly options?: MemberRuntimeRegistryOptions;
   private readonly cache = new Map<string, RuntimeAdapter>();
 
-  constructor(db: ZhongshuoDatabase, defaultAdapter: RuntimeAdapter, factories: Record<string, MemberAdapterFactory>) {
+  constructor(db: ZhongshuoDatabase, defaultAdapter: RuntimeAdapter, factories: Record<string, MemberAdapterFactory>, options?: MemberRuntimeRegistryOptions) {
     this.db = db;
     this.defaultAdapter = defaultAdapter;
     this.factories = factories;
+    this.options = options;
   }
 
   adapterFor(memberId: string): RuntimeAdapter {
     const binding = readMemberRuntimeBinding(this.db, memberId);
-    if (binding == null || binding.installationId == null || binding.kind == null) {
+    const unbound = binding == null || binding.installationId == null || binding.kind == null;
+    const resolvedKind = unbound ? this.options?.defaultKind ?? null : binding.kind;
+    if (this.options?.realDispatchGuard === true && (resolvedKind === 'claude' || resolvedKind === 'codex')) {
+      throw new Error(`[验收防护] ZS_REAL_DISPATCH_GUARD=1：真实 runtime（${resolvedKind}）派发被拒绝（${unbound ? '全局默认' : `成员 ${memberId} 持久绑定`}）——模拟/验收环境不得发出真实模型请求；runtime 配置的保存与读取不受影响`);
+    }
+    if (unbound) {
       return this.defaultAdapter; // 未绑定成员：全局默认（ZS_RUNTIME 语义保留）
     }
-    const factory = this.factories[binding.kind];
+    const factory = this.factories[binding.kind!];
     if (factory == null) {
       throw new Error(`成员 ${memberId} 绑定的 runtime kind=${binding.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
     }

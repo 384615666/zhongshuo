@@ -204,7 +204,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           : undefined,
       );
     }
-    const memberRuntime = new MemberRuntimeRegistry(db, adapter, factories);
+    const memberRuntime = new MemberRuntimeRegistry(db, adapter, factories, {
+      defaultKind: options.runtime,
+      // 第十六轮四：验收/模拟/独立本地包环境（ZS_REAL_DISPATCH_GUARD=1）拒绝真实 runtime 派发
+      //（adapter 构建前——spawn/请求为零）；配置读写不受影响；正式部署不设=正常可用。
+      realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1',
+    });
     const worker = new DispatchWorker({
       db,
       adapter,

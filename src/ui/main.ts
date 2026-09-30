@@ -227,9 +227,16 @@ app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  // 模拟验证模式（第十六轮二/四：本地体验入口 ZS_APP_MODE=fake-sim）——窗口标题明示 +
+  // 日志说明：fake runtime+真实派发防护（保存真实绑定也不发真实请求）。
+  const simMode = process.env.ZS_APP_MODE === 'fake-sim';
+  if (simMode) {
+    process.stderr.write('[zhongshuo-ui] 模拟验证模式：ZS_RUNTIME=fake + 真实派发防护——即使保存了真实 runtime 绑定，派发也会在 spawn 前被拒绝（不发出真实模型请求）\n');
+  }
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    ...(simMode ? { title: '众说（模拟验证模式——真实派发已防护，不会发出真实模型请求）' } : {}),
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,

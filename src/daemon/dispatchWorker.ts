@@ -506,8 +506,10 @@ export class DispatchWorker {
       if (scanSensitivePatterns(standing.value.text).length > 0) throw new Error('sensitive-standing-prompt: 层 A 渲染命中敏感模式（PP-03）');
 
       // 会话：任务/成员/generation 维度（§13.4）；adapter 按成员 runtime 绑定选择（DEV-10）。
-      startupPhase = 'openSession';
+      // adapter 解析=runtime 调用**之前**（第十六轮四：真实派发防护在构建 adapter 前抛错——
+      // 属「确认未启动」分类，不得按 openSession 不确定语义留 UNKNOWN）。
       const adapter = this.adapterOf(member.id);
+      startupPhase = 'openSession';
       const generation = this.db
         .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
         .get(member.id, task.conversation_id) as { c: number };
