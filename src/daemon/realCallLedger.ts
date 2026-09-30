@@ -18,7 +18,7 @@
  */
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { NormalizedRuntimeEvent, RuntimeAdapter, SessionRef, TurnRequest } from '../contracts/runtime.ts';
-import { configuredBatchCap, reserveSlot, settleSlot, batchJournalStats, batchJournalExists } from './realBatchJournal.ts';
+import { configuredBatchCap, reserveSlot, settleSlot, batchJournalStats, batchJournalExists, BatchGuardError } from './realBatchJournal.ts';
 
 export interface RealCallRow {
   id: number;
@@ -61,15 +61,15 @@ function attributionFor(db: ZhongshuoDatabase, turnId: string): { memberId: stri
 export function wrapRealCallLedger(adapter: RuntimeAdapter, kind: string, db: ZhongshuoDatabase, model?: string | null): RuntimeAdapter {
   if (!REAL_KINDS.has(kind)) return adapter; // fake 不计（本地/回放零真实调用——不产生噪音行）
   const batchId = process.env.ZS_REAL_BATCH_ID ?? 'ad-hoc';
-  const cap = configuredBatchCap();
   const started = new Map<string, number>(); // turnId → real_calls.id（请求前占位）
   const interceptStartTurn = async (session: SessionRef, input: TurnRequest): Promise<void> => {
-    // ① 批次上限（实验批次配置时）：检查+预占原子完成；超限在底层调用前拒绝（零真实请求，
-    //    不产生台账行——被拒不是一次调用）。
+    // ① 批次护栏（第十九轮一/二：fail-closed）——cap 无效/日志损坏/范围不符/锁不可用均在
+    // 请求前抛错（底层 adapter 零调用、台账零行）；被拒=已知零请求（journal reject 条目留痕）。
     if (process.env.ZS_REAL_BATCH_ID != null) {
-      const r = await reserveSlot(batchId, cap, input.turnId);
+      const cap = configuredBatchCap(); // 无效配置抛 BATCH_CAP_INVALID——不回退为无上限
+      const r = reserveSlot({ batchId, cap, turnId: input.turnId, runtimeKind: kind, model: model ?? null });
       if (!r.ok) {
-        const error = new Error(`[真实调用护栏] 批次 ${batchId} 已达上限 ${r.cap}（已预占 ${r.reserved}）：第 ${r.reserved + 1} 次调用在请求前被拒——本次零真实请求；如需扩容请调整 ZS_REAL_BATCH_CAP 后重新立批`) as RealCallQuotaError;
+        const error = new Error(`[真实调用护栏] 批次 ${batchId} 已达上限 ${r.cap}（已预占 ${r.reserved}）：本次调用在请求前被拒——零真实请求；合法增额须显式 updateBatchCap 留痕`) as RealCallQuotaError;
         error.code = 'REAL_BATCH_CAP';
         throw error;
       }
@@ -85,7 +85,9 @@ export function wrapRealCallLedger(adapter: RuntimeAdapter, kind: string, db: Zh
       // 抛错≠请求未发出（可能在途失败）：结算 unknown=执行不确定；调用结果由事件/终态另行记录。
       db.prepare("UPDATE real_calls SET status = 'unknown', detail = ?, settled_at = ? WHERE id = ?").run(`startTurn 抛错（不确定是否已发出）：${String(error).slice(0, 140)}`, Date.now(), Number(info.lastInsertRowid));
       started.delete(input.turnId);
-      if (process.env.ZS_REAL_BATCH_ID != null) await settleSlot(batchId, input.turnId, `startTurn-thrown:${String(error).slice(0, 60)}`).catch(() => {});
+      if (process.env.ZS_REAL_BATCH_ID != null && !(error instanceof BatchGuardError)) {
+        try { settleSlot(batchId, input.turnId, `startTurn-thrown:${String(error).slice(0, 60)}`); } catch { /* 审计尽力而为（护栏类错误已由 reserve 路径留痕） */ }
+      }
       throw error;
     }
     db.prepare("UPDATE real_calls SET detail = 'startTurn 已发出（终态与用量见事件通道/usage_records）' WHERE id = ?").run(Number(info.lastInsertRowid));
@@ -105,7 +107,9 @@ export function wrapRealCallLedger(adapter: RuntimeAdapter, kind: string, db: Zh
 
 export function settleRealCall(db: ZhongshuoDatabase, turnId: string, status: RealCallRow['status'], detail: string): void {
   db.prepare('UPDATE real_calls SET status = ?, detail = ?, settled_at = ? WHERE turn_id = ? AND status = \'inflight\'').run(status, detail.slice(0, 200), Date.now(), turnId);
-  if (process.env.ZS_REAL_BATCH_ID != null) void settleSlot(process.env.ZS_REAL_BATCH_ID, turnId, `terminal:${status}`).catch(() => {});
+  if (process.env.ZS_REAL_BATCH_ID != null) {
+    try { settleSlot(process.env.ZS_REAL_BATCH_ID, turnId, `terminal:${status}`); } catch { /* 审计尽力而为 */ }
+  }
 }
 
 /** 响应自报模型与用量（usage.updated 事件原样引用——不猜测、不以请求模型冒充）。 */
@@ -120,7 +124,9 @@ export function realCallSummary(db: ZhongshuoDatabase, batchId?: string): {
   total: number;
   inflight: number;
   byStatus: Record<string, number>;
-  quota: { cap: number | null; journal: { reserved: number; settled: number; rejected: number } | null; note: string };
+  quota: { cap: number | null; journal: { reserved: number; settled: number; rejected: number; cap: number | null } | null; note: string };
+  /** 批次日志损坏/不可信时的诊断（fail-closed——不当零呈现）。 */
+  journalError: string | null;
   rows: RealCallRow[];
 } {
   const rows = (batchId != null
@@ -128,8 +134,15 @@ export function realCallSummary(db: ZhongshuoDatabase, batchId?: string): {
     : db.prepare('SELECT * FROM real_calls ORDER BY id').all()) as RealCallRow[];
   const byStatus: Record<string, number> = {};
   for (const r of rows) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
-  const cap = configuredBatchCap();
-  const journal = batchId != null && batchJournalExists(batchId) ? batchJournalStats(batchId) : null;
+  // cap/日志状态读取均不吞错（第十九轮一：损坏/无效配置在诊断面如实呈现，不当零/无上限）。
+  let cap: number | null = null;
+  let capError: string | null = null;
+  try { cap = configuredBatchCap(); } catch (error) { capError = error instanceof Error ? error.message : String(error); }
+  let journal: { reserved: number; settled: number; rejected: number; cap: number | null } | null = null;
+  let journalError: string | null = null;
+  if (batchId != null && batchJournalExists(batchId)) {
+    try { journal = batchJournalStats(batchId); } catch (error) { journalError = error instanceof Error ? error.message : String(error); }
+  }
   return {
     batchId: batchId ?? '(all)',
     total: rows.length,
@@ -138,8 +151,13 @@ export function realCallSummary(db: ZhongshuoDatabase, batchId?: string): {
     quota: {
       cap,
       journal,
-      note: cap == null ? '未配置批次上限（ZS_REAL_BATCH_CAP）——只记账不拦截' : `实验批次上限 ${cap}（共享日志预占；第 ${cap + 1} 次起请求前拒绝）`,
+      note: capError != null
+        ? `cap 配置错误（fail-closed）：${capError}`
+        : journalError != null
+          ? `批次日志不可信（fail-closed，拒绝发请求）：${journalError}`
+          : cap == null ? '未配置批次上限（ZS_REAL_BATCH_CAP）——只记账不拦截' : `实验批次上限 ${cap}（共享日志预占；第 ${cap + 1} 次起请求前拒绝；头绑定额度与 runtime/模型范围）`,
     },
+    journalError,
     rows,
   };
 }

@@ -25,6 +25,8 @@ export type ErrorCode =
   | 'CONTEXT_NOT_GRANTED'
   | 'ROOM_ARCHIVED'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'NOT_FOUND'
+  | 'REVISION_CONFLICT'
   | 'SNAPSHOT_REQUIRED'
   // 开工契约 §2/§3/§6 增补
   | 'CONVERSATION_SCOPE_MISMATCH'
@@ -51,7 +53,12 @@ export type ErrorCode =
   // DELIBERATE 成果发布协议（M1 修复轮：不可变版本/完整性）
   | 'ARTIFACT_CONFLICT'
   | 'ARTIFACT_BODY_MISSING'
-  | 'ARTIFACT_BODY_MISMATCH';
+  | 'ARTIFACT_BODY_MISMATCH'
+  // 实验批次护栏（第十九轮一/二：fail-closed 共享日志）
+  | 'BATCH_JOURNAL_CORRUPT'
+  | 'BATCH_CAP_INVALID'
+  | 'BATCH_BOUND_MISMATCH'
+  | 'BATCH_LOCK_BUSY';
 
 export interface CommandError {
   code: ErrorCode;
