@@ -295,6 +295,78 @@ function receiptByCommandId(dbFile, commandId) {
   }
 }
 
+/** E18 造数（daemon 停机后直写 state.sqlite）：项目 B（跨项目）+他人 DM（拒绝面）+
+ * 15 项 REVIEW（13+ 可达）+篡改 hash/重复验收对象。返回测试所需的 id/hash。 */
+function seedE18Data(dbFile) {
+  const req = createRequire(join(repo, 'package.json'));
+  const Database = req('better-sqlite3');
+  const db = new Database(dbFile);
+  const now = Date.now();
+  // 主项目（A）与房间会话 id 先查（显式变量——避免 SELECT 与占位混合）。
+  const projA = db.prepare(`SELECT id FROM projects WHERE display_name != 'E18项目B' LIMIT 1`).get() ?? { id: 'p1' };
+  const convARow = db.prepare(`SELECT id, room_id FROM conversations WHERE project_id = ? AND kind = 'room' LIMIT 1`).get(projA.id);
+  const convA = convARow?.id ?? 'conv_room';
+  const roomA = convARow?.room_id ?? 'room1';
+  const bDir = join(repo, 'dist', 'desktop', 'vdr-fixture-b');
+  try { mkdirSync(bDir, { recursive: true }); writeFileSync(join(bDir, 'notes.md'), '# E18B-nl', 'utf8'); } catch { /* 尽力 */ }
+  const tx = db.transaction(() => {
+    // ---- 项目 B（跨项目深链目标） ----
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('pB','E18项目B',?,?, '{}', ?)`).run(bDir, bDir, now);
+    const memberB = db.prepare(`SELECT id FROM project_members WHERE project_id = ? LIMIT 1`).get(projA.id);
+    db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('roomB','pB','B厅',?)`).run(memberB?.id ?? 'm1');
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('convB','pB','room','roomB')`).run();
+    db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES ('anchor_thB','pB','convB',1,'roomB',NULL,NULL,'human','u_local',?, 'final', ?)`).run('{"text":"B 任务锚"}', now);
+    db.prepare(`INSERT INTO conversation_threads (id, project_id, conversation_id, room_id, anchor_message_id, last_message_seq) VALUES ('thB','pB','convB','roomB','anchor_thB',1)`).run();
+    db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES ('reply_thB','pB','convB',2,'roomB','thB',1,'agent','agentB','{"text":"B 回复"}','final',?)`).run(now);
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, conversation_thread_id, title, status, review_policy) VALUES ('taskB','pB','convB','room_task','roomB','thB','B 项目任务','REVIEW','user_review')`).run();
+    // ---- 他人 DM（audience 拒绝面） ----
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_other_dm2',?,'dm',NULL)`).run(projA.id);
+    db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES (?,'conv_other_dm2','human','u_other')`).run(projA.id);
+    const agentMember = db.prepare(`SELECT principal_id FROM dm_participants WHERE principal_type='agent' LIMIT 1`).get();
+    db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES (?,'conv_other_dm2','agent',?)`).run(projA.id, agentMember?.principal_id ?? 'mA');
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status, review_policy) VALUES ('task_other_dm',?,'conv_other_dm2','dm_turn',NULL,'他人任务','REVIEW','user_review')`).run(projA.id);
+    // ---- 15 项 REVIEW（13+ 可达）+两特殊对象：挂 A 的房间会话（显式循环，一条模板） ----
+    const insThread = db.prepare(`INSERT INTO conversation_threads (id, project_id, conversation_id, room_id, anchor_message_id, last_message_seq) VALUES (?, ?, ?, ?, ?, 0)`);
+    const insMsg = db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, 'human', 'u_local', ?, 'final', ?)`);
+    const insTask = db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, conversation_thread_id, title, status, review_policy) VALUES (?, ?, ?, 'room_task', ?, ?, ?, 'REVIEW', 'user_review')`);
+    const insDlv = db.prepare(`INSERT INTO task_deliveries (id, task_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status) VALUES (?, ?, 1, ?, '[]', '[]', '[]', 'pending')`);
+    let seq = (db.prepare(`SELECT last_message_seq s FROM conversations WHERE id = ?`).get(convA))?.s ?? 0;
+    const addTodo = (taskId, hash) => {
+      seq += 1;
+      insMsg.run(`anchor_${taskId}`, projA.id, convA, seq, roomA, JSON.stringify({ text: `待办 ${taskId}` }), now);
+      insThread.run(`th_seed_${taskId}`, projA.id, convA, roomA, `anchor_${taskId}`);
+      insTask.run(taskId, projA.id, convA, roomA, `th_seed_${taskId}`, `待办任务 ${taskId}`);
+      insDlv.run(`dlv_${taskId}`, taskId, hash);
+    };
+    for (let i = 1; i <= 15; i += 1) addTodo(`e18_todo_${i}`, `mh-todo-${String(i).padStart(4, '0')}`);
+    addTodo('e18_tampered', 'mh-tampered-NEW');
+    addTodo('e18_dup', 'mh-dup-0001');
+    db.prepare(`UPDATE conversations SET last_message_seq = ? WHERE id = ?`).run(seq, convA);
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status) VALUES ('e18_a_room_task', ?, ?, 'room_task', ?, 'A 项目锚任务', 'DONE')`).run(projA.id, convA, roomA);
+  });
+  tx();
+  db.close();
+  return {
+    bProjectName: 'E18项目B', bTaskId: 'taskB',
+    otherDmConvId: 'conv_other_dm2', otherDmTaskId: 'task_other_dm',
+    tamperedTaskId: 'e18_tampered', tamperedDeliveryId: 'dlv_e18_tampered', originalHash: 'mh-tampered-OLD',
+    dupTaskId: 'e18_dup', dupDeliveryId: 'dlv_e18_dup', dupHash: 'mh-dup-0001',
+    aRoomTaskId: 'e18_a_room_task',
+  };
+}
+
+/** 读表行数（E18 零新增运行核对）。 */
+function countTable(dbFile, table) {
+  try {
+    const req = createRequire(join(repo, 'package.json'));
+    const Database = req('better-sqlite3');
+    const db = new Database(dbFile, { readonly: true });
+    const c = (db.prepare(`SELECT count(*) c FROM ${table}`).get() ?? { c: -1 }).c;
+    db.close();
+    return c;
+  } catch { return `ERR`; }
+}
+
 const waitFor = async (fn, timeoutMs, what) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -499,6 +571,156 @@ try {
       currentRun = null;
       await sleep(800);
       record('HARNESS·无残留（自检会话全部收拢）', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
+    }
+  }
+
+  // ---------- 会话 E18：DEV-18 页面验收（第二十三轮五——新 build 零真实调用） ----------
+  // 两段式：段 1=项目 A 页面操作（两线程未读/线程标读/双 DM 多待验收/A→B→A/后台不标读）；
+  // 停机后 SQL 造数（项目 B+他人 DM+15 项 REVIEW+篡改 hash）；段 2=同 appData 重启
+  //（水位保持/13+ 可达/错 hash/重复验收/跨项目深链/刷新/前进后退/他人 DM 拒/零新增运行）。
+  if (shouldRun('E18')) {
+    const appDataE = join(installRoot, '应用 数据', 'E18');
+    {
+      currentStep = 'E18-段1';
+      const app = await launchApp('e18a', 9337, { ZS_FAKE_STALL_MS: '1500' }, appDataE);
+      if (app.noPage) throw new Error('E18 段1：页面未就绪');
+      const page = await connectPage(9337);
+      await page.waitInteractive();
+      currentRun = { tag: 'e18a', child: app.child, page, stderrText: app.stderrText };
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, 'E18 项目打开');
+      await page.evalJs(`document.getElementById('task-review-toggle').click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('task-review-toggle').textContent.includes('开')`)).value === true, 10_000, 'E18 验收开关');
+      // E18-1 两线程未读：发两任务（各一条线程）→主池两卡片各显示未读。
+      for (const t of ['线程甲任务（读 notes 报暗号）', '线程乙任务（分析目录）']) {
+        await page.evalJs(`(() => { document.getElementById('composer-input').value = ${JSON.stringify(t)}; document.getElementById('send').click(); })()`);
+        await sleep(2200);
+      }
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length`)).value === 2, 30_000, '两任务卡片');
+      // 等两线程各有 agent 回复（卡片出现≠回复已落——未读以 agent 消息计）。
+      await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`)).value === 2, 30_000, '两线程未读出现');
+      const unreadBoth = await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`);
+      record('E18·两线程未读聚合（主池卡片各显示未读数）', unreadBoth.value === 2, `unreadCards=${unreadBoth.value}`);
+      // 读线程 A（点第一张卡）→thread.markRead→回主池→A 未读消失、B 保持（读 A 不影响 B）。
+      await page.evalJs(`document.querySelector('#pool .pool-card').click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.length > 0`)).value === true, 20_000, '线程视图打开');
+      await sleep(2600); // 贴底标读+轮询一轮
+      await page.evalJs(`document.getElementById('thread-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length`)).value === 2, 10_000, '回主池');
+      await sleep(2200); // 主池重绘
+      const afterRead = await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`);
+      record('E18·线程独立阅读（读 A 后 A 未读清、B 保持——打开房间不读全部线程）', afterRead.value === 1, `unreadAfter=${afterRead.value}`);
+      // E18-2 双 DM+同会话多待验收：两条 REVIEW（串行两轮，均 REVIEW 态）。
+      await page.evalJs(`document.getElementById('dm-create').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, '成员选择器');
+      await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, 'DM 视图');
+      await page.evalJs(`(() => { document.getElementById('dm-input').value = '第一轮（待验收）'; document.getElementById('dm-send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('dm-review-row').classList.contains('hidden') === false`)).value === true, 60_000, 'DM 第一轮 REVIEW');
+      await page.evalJs(`(() => { document.getElementById('dm-input').value = '第二轮（第二个待验收）'; document.getElementById('dm-send').click(); })()`);
+      await sleep(3000);
+      // 同会话两个待验收：fake 串行——第二条完成后同样 REVIEW。等待侧栏出现 2 条 review。
+      // 侧栏待验收=2 房间任务+2 DM 任务=4；本断言聚焦同会话两个 DM 待验收逐条列出。
+      await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pending-list button')].filter((b) => b.textContent.includes('待验收：私信任务')).length`)).value === 2, 90_000, '同会话两个 DM 待验收条目');
+      const pendingHead = await page.evalJs(`document.querySelector('#pending-list .sidebar-sec')?.textContent ?? ''`);
+      record('E18·同会话多待验收全部可达（待我处理逐任务列出+总数头）', pendingHead.value.includes('共 4'), `head=${String(pendingHead.value).slice(0, 20)}`);
+      // E18-3 A→B→A：新建第二 DM 会话→切换→切回→断言当前视图=会话 A（消息含第一轮文本）。
+      await page.evalJs(`document.getElementById('dm-create').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, '选择器再现');
+      await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-list button').length >= 2`)).value === true, 20_000, '两会话');
+      // 列表序=新会话在前：[0]=B（新建）、[1]=A（含第一轮文本）。A→B→A=[1]→[0]→[1]。
+      await page.evalJs(`[...document.querySelectorAll('#dm-list button')][1].click()`);
+      await sleep(400);
+      await page.evalJs(`[...document.querySelectorAll('#dm-list button')][0].click()`);
+      await sleep(400);
+      await page.evalJs(`[...document.querySelectorAll('#dm-list button')][1].click()`);
+      await sleep(1800); // 等任何迟到响应落地
+      const viewAfterABA = await page.evalJs(`document.getElementById('dm-messages').textContent`);
+      record('E18·A→B→A 代次防护（切回 A 后视图仍是 A——旧 A 迟到响应不覆盖）', String(viewAfterABA.value ?? '').includes('第一轮'), `len=${String(viewAfterABA.value ?? '').length}`);
+      // E18-4 后台窗口不标读：**先设 hidden**（前台等待会把回复标读=未读清零）→在 B 会话发消息
+      // →agent 回复在 hidden 中到达→轮询重绘但不推进水位→侧栏 B 保持未读。
+      await page.evalJs(`[...document.querySelectorAll('#dm-list button')][0].click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, '切到 B 会话');
+      await page.evalJs(`(() => { document.getElementById('dm-messages').textContent = document.getElementById('dm-messages').textContent; })()`);
+      await page.evalJs(`Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })`);
+      await page.evalJs(`(() => { document.getElementById('dm-input').value = '后台窗口测试消息'; document.getElementById('dm-send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`(() => { const msgs = [...document.querySelectorAll('#dm-messages .msg')]; return msgs.filter((m) => m.className.includes('agent')).length })()`)).value >= 1, 90_000, 'B 会话 agent 回复（hidden 中到达）');
+      await page.evalJs(`(() => { let unreadBefore = 0; for (const b of document.querySelectorAll('#dm-list button')) { if (b.textContent.includes('·')) unreadBefore += 1; } return unreadBefore; })()`);
+      await sleep(3500); // 轮询 2 轮（hidden 中不标读——水位不推进）
+      const hiddenStillUnread = await page.evalJs(`(() => { let n = 0; for (const b of document.querySelectorAll('#dm-list button')) { const t = b.textContent; const i = t.lastIndexOf('·'); if (i >= 0 && /^·[0-9]+$/.test(t.slice(i))) n += 1; } return n; })()`);
+      record('E18·后台窗口不自动标读（hidden 期间轮询不推进水位）', Number(hiddenStillUnread.value) >= 1, `unreadRows=${hiddenStillUnread.value}`);
+      await page.evalJs(`Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })`);
+      // 打开有未读的会话（贴底+前台）→标读→未读清。
+      await page.evalJs(`(() => { for (const b of document.querySelectorAll('#dm-list button')) { const t = b.textContent; const i = t.lastIndexOf('·'); if (i >= 0 && /^·[0-9]+$/.test(t.slice(i))) { b.click(); break; } } })()`);
+      await sleep(3200);
+      const afterOpenRead = await page.evalJs(`(() => { let n = 0; for (const b of document.querySelectorAll('#dm-list button')) { const t = b.textContent; const i = t.lastIndexOf('·'); if (i >= 0 && /^·[0-9]+$/.test(t.slice(i))) n += 1; } return n; })()`);
+      record('E18·前台贴底标读（恢复可见+打开会话→未读清）', Number(afterOpenRead.value) === 0, `unreadRows=${afterOpenRead.value}`);
+      page.close();
+      currentRun = null;
+      const exitE1 = await exitWithGuard(app.child);
+      const factsE1 = JSON.parse(readFileSync(join(appDataE, 'desktop-shutdown.json'), 'utf8'));
+      const gE1 = gracefulShutdownOk(exitE1, factsE1);
+      record('E18·段1 停机事实', gE1.ok, gE1.detail);
+    }
+    // ---- SQL 造数（停机后直写）：项目 B（跨项目深链）+他人 DM（拒绝面）+15 项 REVIEW+错 hash ----
+    const e18Seed = seedE18Data(join(appDataE, 'state.sqlite'));
+    {
+      currentStep = 'E18-段2';
+      const app = await launchApp('e18b', 9338, {}, appDataE);
+      if (app.noPage) throw new Error('E18 段2：页面未就绪');
+      const page = await connectPage(9338);
+      await page.waitInteractive();
+      currentRun = { tag: 'e18b', child: app.child, page, stderrText: app.stderrText };
+      // E18-5 重启水位保持：自动恢复项目 A；待我处理=15（SQL）+2（DM，若未验收）——至少 15+，全部渲染+第 13 条存在。
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, '段2 项目恢复');
+      await waitFor(async () => (await page.evalJs(`(() => { const h = document.querySelector('#pending-list .sidebar-sec')?.textContent ?? ''; return h.includes('共') && document.querySelectorAll('#pending-list button').length >= 15 })()`)).value === true, 30_000, '待办全量渲染（含总数头）');
+      const head13 = await page.evalJs(`(() => ({ head: document.querySelector('#pending-list .sidebar-sec')?.textContent ?? '', thirteenth: document.querySelectorAll('#pending-list button')[12]?.textContent ?? '' } })()`);
+      record('E18·第 13 项以后可达（无截断+总数头+第 13 条存在）', String(head13.value?.head ?? '').includes('共') && String(head13.value?.thirteenth ?? '').length > 0, `head=${String(head13.value?.head ?? '').slice(0, 16)} 13th=${String(head13.value?.thirteenth ?? '').slice(0, 14)}`);
+      // E18-6 错 hash 验收（经页面命令通道）：被篡改交付用旧 hash→明确拒绝。
+      const wrongHash = await page.evalJs(`window.zs.command({ protocolVersion: 1, commandId: 'e18-wrong-hash', method: 'task.review', params: { taskId: ${JSON.stringify(e18Seed.tamperedTaskId)}, deliveryId: ${JSON.stringify(e18Seed.tamperedDeliveryId)}, deliveryRevision: 1, manifestHash: ${JSON.stringify(e18Seed.originalHash)}, decision: 'accept' } }).then((r) => r, (e) => String(e))`);
+      const wrongOk = String(JSON.stringify(wrongHash.value ?? wrongHash)).includes('内容不符') || String(wrongHash.value?.error?.message ?? '').includes('内容不符') || String(wrongHash.value ?? '').includes('内容不符');
+      record('E18·错 hash 验收拒绝（manifestHash 三重绑定经页面通道）', wrongOk, String(JSON.stringify(wrongHash.value ?? wrongHash)).slice(0, 60));
+      // E18-7 重复验收：正确 hash accept 一次→再 accept→已处理。
+      const acc1 = await page.evalJs(`window.zs.command({ protocolVersion: 1, commandId: 'e18-acc-1', method: 'task.review', params: { taskId: ${JSON.stringify(e18Seed.dupTaskId)}, deliveryId: ${JSON.stringify(e18Seed.dupDeliveryId)}, deliveryRevision: 1, manifestHash: ${JSON.stringify(e18Seed.dupHash)}, decision: 'accept' } }).then((r) => r?.ok, (e) => String(e))`);
+      const acc2 = await page.evalJs(`window.zs.command({ protocolVersion: 1, commandId: 'e18-acc-2', method: 'task.review', params: { taskId: ${JSON.stringify(e18Seed.dupTaskId)}, deliveryId: ${JSON.stringify(e18Seed.dupDeliveryId)}, deliveryRevision: 1, manifestHash: ${JSON.stringify(e18Seed.dupHash)}, decision: 'accept' } }).then((r) => r?.error?.message ?? 'no-error', (e) => String(e))`);
+      record('E18·重复验收拒绝（首次成功+二次已处理）', acc1.value === true && String(acc2.value).includes('已处理'), `acc1=${acc1.value} acc2=${String(acc2.value).slice(0, 30)}`);
+      // E18-8 跨项目深链：#task=项目 B 的任务→hashchange→项目切换到 B+线程打开。
+      await page.evalJs(`location.hash = ${JSON.stringify(`task=${e18Seed.bTaskId}`)}`);
+      const crossErrText = await page.evalJs(`document.body.textContent.match(/深链无法定位[^"]{0,80}/)?.[0] ?? ''`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, `跨项目切换（页面错误=${String(crossErrText.value ?? '')}）`);
+      const bThread = await page.evalJs(`document.getElementById('thread-messages').textContent.length > 0`);
+      record('E18·跨项目深链（来源项目聚焦+线程打开——不回退当前项目同号任务）', bThread.value === true, `bProject=${e18Seed.bProjectName}`);
+      // E18-9 刷新（URL 目标保留）：reload→恢复后仍在 B 项目+线程。
+      await page.evalJs(`location.reload()`);
+      await sleep(2500);
+      const page2 = await connectPage(9338);
+      await page2.waitInteractive();
+      currentRun = { tag: 'e18b', child: app.child, page: page2, stderrText: app.stderrText };
+      await waitFor(async () => (await page2.evalJs(`document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, '刷新后项目恢复');
+      const reloadKept = await page2.evalJs(`document.getElementById('thread-messages').textContent.length > 0`);
+      record('E18·刷新保留（URL 深链优先于 localStorage 恢复）', reloadKept.value === true, '');
+      // E18-10 前进后退：hash 切到 A 项目 DM→导航响应；history.back() 回 B。
+      await page2.evalJs(`location.hash = ${JSON.stringify(`task=${e18Seed.aRoomTaskId}`)}`);
+      await waitFor(async () => (await page2.evalJs(`document.getElementById('project-name').textContent.includes('项目') && !document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, '后退到 A 项目');
+      await page2.evalJs(`history.back()`);
+      await waitFor(async () => (await page2.evalJs(`document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, '前进回 B 项目');
+      record('E18·前进后退可用（hash 变更双向导航）', true, '');
+      // E18-11 他人 DM 链接拒绝（全形态经页面通道）：#dm/#task/#delivery/#msg。
+      const deny1 = await page2.evalJs(`window.zs.command({ protocolVersion: 1, commandId: 'e18-deny-1', method: 'deepLink.resolve', params: { hash: ${JSON.stringify(`#dm=${e18Seed.otherDmConvId}`)} } }).then((r) => r?.error?.message ?? 'no-error')`);
+      const deny2 = await page2.evalJs(`window.zs.command({ protocolVersion: 1, commandId: 'e18-deny-2', method: 'deepLink.resolve', params: { hash: ${JSON.stringify(`#task=${e18Seed.otherDmTaskId}`)} } }).then((r) => r?.error?.message ?? 'no-error')`);
+      record('E18·他人 DM 链接拒绝（#dm/#task 全形态 audience）', String(deny1.value).includes('audience') && String(deny2.value).includes('audience'), `dm=${String(deny1.value).slice(0, 24)} task=${String(deny2.value).slice(0, 24)}`);
+      // E18-12 零新增运行/零预算。
+      const realCalls = countTable(join(appDataE, 'state.sqlite'), 'real_calls');
+      record('E18·零新增运行零真实调用（guard+fake 全程）', realCalls === 0, `real_calls=${realCalls}`);
+      page2.close();
+      currentRun = null;
+      const exitE2 = await exitWithGuard(app.child);
+      const factsE2 = JSON.parse(readFileSync(join(appDataE, 'desktop-shutdown.json'), 'utf8'));
+      const gE2 = gracefulShutdownOk(exitE2, factsE2);
+      record('E18·段2 停机事实', gE2.ok, gE2.detail);
+      await sleep(1000);
+      record('E18·无残留', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
     }
   }
 

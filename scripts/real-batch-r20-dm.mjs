@@ -296,6 +296,17 @@ try {
 } finally {
   // 正式收拢（第二十二轮四）：spawn 引用逐个正式停止（shutdown→有界等待→核实），强杀/未确认
   // 进报告（pid 文件缺失≠已退出）；证据先行（分列报告），随后才清理本批目录。
+  // 完整事实抓取（第二十三轮四：清理前保存——成功/失败路径都要；只读独立连接）。
+  let dbCalls = null; let callsDetail = null; let identities = null;
+  try {
+    const { pathToFileURL } = await import('node:url');
+    const { openDatabase } = await import(pathToFileURL(join(repoRoot, 'src', 'persistence', 'db.ts')).href);
+    const dbF = openDatabase(join(appData, 'state.sqlite'));
+    dbCalls = dbF.prepare('SELECT count(*) c FROM real_calls WHERE batch_id = ?').get(BATCH);
+    callsDetail = dbF.prepare('SELECT turn_id, status, request_model, response_model, usage_json, run_id FROM real_calls WHERE batch_id = ?').all(BATCH);
+    identities = dbF.prepare("SELECT conversation_id, provider_session_id, session_generation FROM runtime_sessions WHERE scope_kind='dm' ORDER BY rowid").all();
+    dbF.close();
+  } catch { /* 库不可读（启动即败等）——明细如实缺省，主结果以 results 为准 */ }
   const stopFacts = [];
   for (const entry of daemons) {
     if (entry.exit != null) { stopFacts.push({ seq: entry.seq, exit: entry.exit }); continue; }
@@ -310,7 +321,7 @@ try {
     writeFileSync(ledgerPath, JSON.stringify({
       batch: BATCH, mode: MODE, at: new Date().toISOString(), buildId, crashAt: CRASH_AT || null,
       results, cap: 8, expectedCalls: REHEARSAL ? 0 : 4,
-      actualCalls: null, // 主路径核对行已含（见 results）；失败路径 runRoot 保留可复查
+      actualCalls: dbCalls != null ? dbCalls.c : null, callsDetail, identities, // 清理前行级事实（第二十三轮四）
       daemonStopFacts: stopFacts, cleanupUnclean,
       evidence: { runRoot: cleanupUnclean || results.some((r) => !r.ok) ? runRoot : '(成功已清理)', ledger: ledgerPath },
     }, null, 2), 'utf8');
