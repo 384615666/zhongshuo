@@ -31,14 +31,21 @@ process.env.ZS_REAL_BATCH_CAP = '8';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
-const record = (name, ok, detail = '') => { results.push({ name, ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? `：${detail}` : ''}`); };
+const record = (name, ok, detail = '') => {
+  results.push({ name, ok });
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? `：${detail}` : ''}`);
+  if (!ok) throw new BatchStepFailed(name); // 即停：失败不继续后续调用（catch 收拢+留现场）
+};
+class BatchStepFailed extends Error { constructor(name) { super(`批次步骤失败即停：${name}`); this.name = 'BatchStepFailed'; } }
 
 function startDaemon(pipeName) {
   const child = spawn(nodeExe, [daemonCjs], {
     cwd: appHome,
     env: {
-      ...process.env, ZS_PACKED_ENTRY: '1', ZS_MANAGED_RUNTIME: '1', ZS_RUNTIME: 'claude',
-      ZS_CLAUDE_MODEL: 'deepseek-flash', ZS_APP_DATA: appData, ZS_PIPE_NAME: pipeName,
+      ...process.env, ZS_PACKED_ENTRY: '1', ZS_MANAGED_RUNTIME: '1',
+      ZS_RUNTIME: process.env.ZS_R20_REHEARSAL === '1' ? 'fake' : 'claude',
+      ...(process.env.ZS_R20_REHEARSAL === '1' ? { ZS_ALLOW_FAKE: '1' } : { ZS_CLAUDE_MODEL: 'deepseek-flash' }),
+      ZS_APP_DATA: appData, ZS_PIPE_NAME: pipeName,
       ZS_REAL_BATCH_ID: BATCH, ZS_REAL_BATCH_CAP: '8',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -62,12 +69,12 @@ function ipcCall(pipeName) {
     const token = readFileSync(join(appData, 'local.token'), 'utf8').trim();
     const sock = net.connect(`\\\\.\\pipe\\${pipeName}`);
     sock.setEncoding('utf8');
-    let buf = ''; let seq = 0; const pending = new Map();
+    let buf = ''; let seq = 0; const pending = new Map(); const connTag = randomUUID().slice(0, 6); // 每连接唯一前缀——重启后不与持久回执冲突
     const timer = setTimeout(() => rej(new Error('IPC 连接超时')), 15_000);
     sock.on('connect', () => { clearTimeout(timer); sock.write(JSON.stringify({ type: 'auth', token }) + '\n'); res({
       call(method, params, timeoutMs = 240_000) {
         return new Promise((res2, rej2) => {
-          const id = `r20-${seq++}`;
+          const id = `r20-${connTag}-${seq++}`;
           const t = setTimeout(() => { pending.delete(id); rej2(new Error(`IPC 超时 ${method}`)); }, timeoutMs);
           pending.set(id, (r) => { clearTimeout(t); if (r.ok !== true) rej2(new Error(`${method}:${r.error?.message ?? '?'}`)); else res2(r.data); });
           sock.write(JSON.stringify({ protocolVersion: 1, commandId: id, method, params }) + '\n');
@@ -106,19 +113,38 @@ try {
   // A1：会话 A 首轮（首开——provider ID 由 init 回填）。
   const convA = await c.call('conversation.create', { projectId: projId, peerMemberId: agent.id, title: '批次会话A' });
   const a1 = await c.call('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: convA.conversationId }, body: '请读取 notes.md 并在回复中报出其中的暗号原文（格式：暗号=…）。这是一对一会话的第一轮。', intent: 'default', mentions: [] });
-  const st1 = await waitTaskDone(c, a1.taskId);
+  const st1 = await waitTaskDone((m, p) => c.call(m, p), a1.taskId);
   record('A1 首轮执行（DONE/REVIEW）', ['DONE', 'REVIEW'].includes(st1), `status=${st1}`);
   const hist1 = await c.call('conversation.history', { conversationId: convA.conversationId, limit: 10 });
   const reply1 = (hist1.messages ?? []).filter((m) => m.author_type === 'agent').map((m) => JSON.parse(m.body_json).text).join('');
-  record('A1 回复到达（暗号回流=辅助证据）', reply1.includes('R20-DM-7735'), `len=${reply1.length} 含暗号=${reply1.includes('R20-DM-7735')}`);
+  const rehearsal = process.env.ZS_R20_REHEARSAL === '1';
+  record('A1 回复到达（暗号回流=辅助证据；演练=fake 回复）', rehearsal || reply1.includes('R20-DM-7735'), `len=${reply1.length} 含暗号=${reply1.includes('R20-DM-7735')}`);
+  // 逐步核对①（A1 后）：首开会话行已建立、provider 身份非空（后续步骤的前置）。
+  {
+    const { pathToFileURL } = await import('node:url');
+    const { openDatabase } = await import(pathToFileURL(join(repoRoot, 'src', 'persistence', 'db.ts')).href);
+    const db = openDatabase(join(appData, 'state.sqlite'));
+    const row = db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(convA.conversationId);
+    record('A1 后核对：会话身份已持久（非空）', row != null && String(row.provider_session_id ?? '').length > 0, `id=${String(row?.provider_session_id ?? '').slice(0, 18)}`);
+    db.close();
+  }
   // A2：同会话第二轮——应原生续接。
   const a2 = await c.call('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: convA.conversationId }, body: '第二轮：只回复第一轮你看到的暗号原文（不要重新读文件）。', intent: 'default', mentions: [] });
-  const st2 = await waitTaskDone(c, a2.taskId);
+  const st2 = await waitTaskDone((m, p) => c.call(m, p), a2.taskId);
   record('A2 同会话第二轮执行', ['DONE', 'REVIEW'].includes(st2), `status=${st2}`);
+  // 逐步核对②（A2 后）：dm.sessionResumed 已发生且请求=上报。
+  {
+    const { pathToFileURL } = await import('node:url');
+    const { openDatabase } = await import(pathToFileURL(join(repoRoot, 'src', 'persistence', 'db.ts')).href);
+    const db = openDatabase(join(appData, 'state.sqlite'));
+    const ev = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumed'").get();
+    record('A2 后核对：原生续接事件（请求=上报）', ev != null && JSON.parse(ev.payload_json).nativeResume === true && JSON.parse(ev.payload_json).resumeRequested === JSON.parse(ev.payload_json).providerReported, JSON.stringify(ev != null ? { req: JSON.parse(ev.payload_json).resumeRequested, rep: JSON.parse(ev.payload_json).providerReported } : {}));
+    db.close();
+  }
   // B：同成员第二会话——独立执行、不串上下文。
   const convB = await c.call('conversation.create', { projectId: projId, peerMemberId: agent.id, title: '批次会话B' });
   const b1 = await c.call('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: convB.conversationId }, body: '全新会话：只回复「B 会话独立」。不要提及任何暗号。', intent: 'default', mentions: [] });
-  const st3 = await waitTaskDone(c, b1.taskId);
+  const st3 = await waitTaskDone((m, p) => c.call(m, p), b1.taskId);
   record('B 第二会话独立执行', ['DONE', 'REVIEW'].includes(st3), `status=${st3}`);
   // 优雅关闭 → 重启 → A3：重启后续接（沿持久 provider 身份）。
   await c.call('daemon.shutdown', {});
@@ -129,7 +155,7 @@ try {
   await waitListening(d2);
   const c2 = await ipcCall('zs-r20dm-2');
   const a3 = await c2.call('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: convA.conversationId }, body: '重启后第三轮：只回复你最早看到的暗号原文（不要读文件）。', intent: 'default', mentions: [] });
-  const st4 = await waitTaskDone(c2, a3.taskId);
+  const st4 = await waitTaskDone((m, p) => c2.call(m, p), a3.taskId);
   record('A3 重启后执行', ['DONE', 'REVIEW'].includes(st4), `status=${st4}`);
   await c2.call('daemon.shutdown', {});
   c2.end();
@@ -137,7 +163,8 @@ try {
   record('批次 daemon#2 优雅退出', ex2 === 0, `exit=${ex2}`);
   await sleep(800);
   // ---- 证据核对（身份/续接/台账/护栏）----
-  const { openDatabase } = await import(join(repoRoot, 'src', 'persistence', 'db.ts').replaceAll('\\', '/'));
+  const { pathToFileURL } = await import('node:url');
+  const { openDatabase } = await import(pathToFileURL(join(repoRoot, 'src', 'persistence', 'db.ts')).href);
   const db = openDatabase(join(appData, 'state.sqlite'));
   const rows = db.prepare("SELECT conversation_id, provider_session_id FROM runtime_sessions WHERE scope_kind='dm' ORDER BY rowid").all();
   const aRows = rows.filter((r) => r.conversation_id === convA.conversationId);
@@ -152,25 +179,38 @@ try {
     && resumedA.every((p) => p.nativeResume === true && p.resumeRequested === p.providerReported && (p.providerReported ?? '') === aRows[0].provider_session_id),
     `resumed=${resumedA.length}`);
   const calls = db.prepare('SELECT count(*) c, sum(case when status=\'succeeded\' then 1 else 0 end) s FROM real_calls WHERE batch_id = ?').get(BATCH);
-  record('startTurn 计数=4 且全部 succeeded（A1/A2/B1/A3）', calls.c === 4 && calls.s === 4, `calls=${calls.c} succeeded=${calls.s}`);
+  const expectCalls = rehearsal ? 0 : 4;
+  record(`startTurn 计数=${expectCalls}（真实）且全部 succeeded`, rehearsal ? calls.c === 0 : (calls.c === 4 && calls.s === 4), `calls=${calls.c} succeeded=${calls.s}`);
   const rejects = db.prepare("SELECT count(*) c FROM domain_events WHERE kind='message.submitted' AND payload_json LIKE '%\"disposition\":\"dispatched\"%'").get();
   void rejects;
-  const { batchJournalStats } = await import(join(repoRoot, 'src', 'daemon', 'realBatchJournal.ts').replaceAll('\\', '/'));
+  const { batchJournalStats } = await import(pathToFileURL(join(repoRoot, 'src', 'daemon', 'realBatchJournal.ts')).href);
   const journal = batchJournalStats(BATCH);
-  record('批次护栏台账（journal reserved=4 未触上限；cap=8）', journal.reserved === 4 && journal.rejected === 0, `reserved=${journal.reserved} rejected=${journal.rejected}`);
+  record(`批次护栏台账（journal reserved=${rehearsal ? 0 : 4} 未触上限；cap=8）`, journal.reserved === (rehearsal ? 0 : 4) && journal.rejected === 0, `reserved=${journal.reserved} rejected=${journal.rejected}`);
   db.close();
 } catch (error) {
   stop = true;
   record('批次中止（身份/协议/预算问题即停）', false, String(error instanceof Error ? error.message : error).slice(0, 200));
 } finally {
-  // 台账先行（不动现场）；清理仅限本批目录（诊断保留由 results 决定）。
+  // 证据先行：台账落盘失败=交付不成立（不宣称成功）；随后才清理本批进程/目录。
+  let ledgerSaved = false;
   try {
     writeFileSync(join(repoRoot, 'docs', 'implementation', 'real-batches', 'r20-dm-ledger.json'), JSON.stringify({ batch: BATCH, at: new Date().toISOString(), results, cap: 8, expected: 4 }, null, 2), 'utf8');
-  } catch { /* 尽力 */ }
-  const ok = results.length > 0 && results.every((r) => r.ok);
+    ledgerSaved = true;
+  } catch (error) {
+    console.error(`台账保存失败（交付不成立）：${String(error instanceof Error ? error.message : error).slice(0, 120)}`);
+  }
+  // 本批 daemon 收拢（仅本脚本 spawn 的——daemon.pid 追踪；正常路径已 daemon.shutdown）。
+  try {
+    const pidRaw = readFileSync(join(appData, 'daemon.pid'), 'utf8').trim();
+    if (/^\d+$/.test(pidRaw)) {
+      spawnSync('taskkill', ['/PID', pidRaw, '/T', '/F'], { stdio: 'ignore' });
+      console.error(`收拢残留 daemon pid=${pidRaw}（taskkill 兜底——非优雅，仅现场收束）`);
+    }
+  } catch { /* pid 文件不存在=已正常退出 */ }
+  const ok = ledgerSaved && results.length > 0 && results.every((r) => r.ok);
   if (ok) { try { rmSync(runRoot, { recursive: true, force: true }); } catch { /* */ } }
   else console.error(`现场保留：${runRoot}`);
   console.log(`[real-batch-r20dm] ${ok ? '全部通过' : '存在失败（已停批）'}；台账 docs/implementation/real-batches/r20-dm-ledger.json`);
   process.exit(ok ? 0 : 1);
 }
-void spawnSync; void stop;
+void spawnSync;
