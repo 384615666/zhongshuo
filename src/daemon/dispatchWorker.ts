@@ -18,6 +18,7 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { claimNextOutbox, completeOutbox, failOutbox, releaseOutbox } from '../persistence/outbox.ts';
 import type { OutboxRow } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
+import { holdDmPauseGate, pumpDmQueue } from '../persistence/stores/dm.ts';
 import { isDispatchGateHeld } from '../persistence/daemonState.ts';
 import type { RuntimeAdapter, NormalizedRuntimeEvent, SessionRef } from '../contracts/runtime.ts';
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
@@ -49,6 +50,8 @@ export interface TaskRow {
   id: string;
   project_id: string;
   conversation_id: string;
+  /** room_task/dm_turn（DEV-22）；dm_turn 的 room_id/thread 各字段运行时为 NULL。 */
+  kind: string;
   room_id: string;
   conversation_thread_id: string;
   root_message_id: string | null;
@@ -536,23 +539,38 @@ export class DispatchWorker {
       createRun();
 
       // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
+      // DM（DEV-22）：私信模板——无房间/线程上下文，不填伪造 roomId。
       startupPhase = 'standing-prompt';
       const draftDir = join(this.appDataDir, 'drafts', task.project_id);
-      const standing = renderStandingPrompt({
-        conversationKind: conversationKind ?? 'room',
-        vars: {
-          memberId: member.id,
-          memberDisplayName: member.display_name,
-          projectId: project.id,
-          projectName: project.display_name,
-          roomId: task.room_id,
-          roomName: room?.name ?? '未命名房间',
-          threadId: task.conversation_thread_id,
-          taskId: task.id,
-          workspacePath: project.canonical_path,
-          draftDir,
-        },
-      });
+      const isDm = task.kind === 'dm_turn' || conversationKind === 'dm';
+      const standing = isDm
+        ? renderStandingPrompt({
+          conversationKind: 'dm',
+          vars: {
+            memberId: member.id,
+            memberDisplayName: member.display_name,
+            projectId: project.id,
+            projectName: project.display_name,
+            conversationId: task.conversation_id,
+            workspacePath: project.canonical_path,
+            draftDir,
+          },
+        })
+        : renderStandingPrompt({
+          conversationKind: conversationKind ?? 'room',
+          vars: {
+            memberId: member.id,
+            memberDisplayName: member.display_name,
+            projectId: project.id,
+            projectName: project.display_name,
+            roomId: task.room_id,
+            roomName: room?.name ?? '未命名房间',
+            threadId: task.conversation_thread_id,
+            taskId: task.id,
+            workspacePath: project.canonical_path,
+            draftDir,
+          },
+        });
       if (!standing.ok) throw new Error(`standing-prompt-render-failed: ${standing.error.message}`);
       if (scanSensitivePatterns(standing.value.text).length > 0) throw new Error('sensitive-standing-prompt: 层 A 渲染命中敏感模式（PP-03）');
 
@@ -577,12 +595,15 @@ export class DispatchWorker {
       });
       openedSession = { adapter, session };
       startupPhase = 'session-record';
+      // DM 会话（R4 §2.2）：scope_kind='dm'、task_id 空——按 project/conversation/member/
+      // generation 复用（同对话续接上文；不同 conversationId 永不共享 session）。
       this.db.prepare(
         `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
-         VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
-        session.id, task.project_id, task.conversation_id, task.conversation_thread_id,
-        member.id, task.id, generation.c, project.canonical_path,
+        session.id, task.project_id, task.conversation_id, isDm ? 'dm' : 'task',
+        isDm ? null : task.conversation_thread_id,
+        member.id, isDm ? null : task.id, generation.c, project.canonical_path,
       );
 
       // 会话打开竞态复查（修复轮）+ 关闭状态检查（第五轮）：停止/终态/daemon 关闭在
@@ -1337,7 +1358,10 @@ export class DispatchWorker {
       if (isTurnTerminalStatus(turnRow.status)) break;
 
       this.applyEvent(task, runId, turnId, event);
-      if (event.kind === 'turn.completed' || event.kind === 'turn.failed') return;
+      if (event.kind === 'turn.completed' || event.kind === 'turn.failed') {
+        this.pumpDmAfterTerminal(task);
+        return;
+      }
     }
 
     this.settleUnknown(task, runId, turnId);
@@ -1366,6 +1390,7 @@ export class DispatchWorker {
       // 真实调用台账（第十八轮二补漏）：settleUnknown 直接 UPDATE 绕过 casTurn——UNKNOWN 路径
       // （截止中断/强制中止/启动不确定）的 startTurn 台账行必须同样结算，不得永久 inflight。
       try { settleRealCall(this.db, turnId, 'unknown', `turn UNKNOWN（${reason}）`); } catch { /* 台账尽力而为 */ }
+      this.pumpDmAfterTerminal(task); // dm 会话空闲恢复（UNKNOWN=会话不再占用——泵下一条）
       if (stageKey.startsWith('delib.')) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
     }
   }
@@ -1849,9 +1874,24 @@ export class DispatchWorker {
     }
   }
 
+  /** DM 会话终态后的队列泵（DEV-22 串行）：run 状态已落定后调用——空闲则入队下一条排队消息。 */
+  private pumpDmAfterTerminal(task: TaskRow): void {
+    if (task.kind !== 'dm_turn') return;
+    try { pumpDmQueue(this.db, task.conversation_id); } catch { /* 泵尽力而为（下一次终态/提交重试） */ }
+  }
+
+  private dmConversationOfTurn(turnId: string): string | null {
+    const row = this.db.prepare(
+      `SELECT t.conversation_id AS cid FROM tasks t JOIN workflow_runs r ON r.task_id = t.id JOIN agent_turns a ON a.run_id = r.id
+       WHERE a.id = ? AND t.kind = 'dm_turn'`,
+    ).get(turnId) as { cid: string } | undefined;
+    return row?.cid ?? null;
+  }
+
   private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string): void {
     // 消息身份以 turn 为命名空间：同 turn 内重放去重（RT-05），跨 turn/会话的同名 provider id 不冲突。
     const rowId = `msg_${turnId}_${messageId}`;
+    const isDm = task.kind === 'dm_turn';
     const tx = this.db.transaction(() => {
       const existing = this.db
         .prepare('SELECT id FROM messages WHERE id = ?')
@@ -1860,12 +1900,21 @@ export class DispatchWorker {
       const convSeq = this.db
         .prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
         .get(task.conversation_id) as { last_message_seq: number };
-      const threadSeq = this.db
-        .prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
-        .get(task.conversation_thread_id) as { last_message_seq: number };
       const author = this.db
         .prepare('SELECT member_id FROM agent_turns WHERE id = ?')
         .get(turnId) as { member_id: string } | undefined;
+      if (isDm) {
+        // DM 回复落会话（无线程序号——R4 §2.2：DM 消息 thread 各字段为 NULL）。
+        this.db.prepare(
+          `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+             thread_message_seq, author_type, author_id, body_json, status, created_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, 'agent', ?, ?, 'final', ?)`,
+        ).run(rowId, task.project_id, task.conversation_id, convSeq.last_message_seq, task.id, author?.member_id ?? 'unknown_member', JSON.stringify({ text }), Date.now());
+        return;
+      }
+      const threadSeq = this.db
+        .prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
+        .get(task.conversation_thread_id) as { last_message_seq: number };
       this.db.prepare(
         `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
            thread_message_seq, author_type, author_id, body_json, status, created_at)
@@ -1920,6 +1969,14 @@ export class DispatchWorker {
     // 未知/中断如实保留——覆盖修复/重派/研讨/并发全部路径）。
     if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
       try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
+      // DM 停止语义（DEV-22）：取消=用户停止——队列挂起（paused，dm.resume 继续）。
+      // 队列泵在消费器终态后/UNKNOWN 收尾后执行（此时 run 状态已落定——见 pumpDmAfterTerminal）。
+      if (status === 'CANCELLED') {
+        try {
+          const dmConv = this.dmConversationOfTurn(turnId);
+          if (dmConv != null) holdDmPauseGate(this.db, dmConv, `dm run 取消（turn=${turnId}）——队列转 paused`);
+        } catch { /* 尽力而为 */ }
+      }
     }
   }
 
@@ -1983,7 +2040,8 @@ export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): Ac
 
 function parseInitialTaskId(dispatchKey: string): string | null {
   // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）。
-  const m = dispatchKey.match(/^task:(.+):(?:initial|redispatch|repair:[^:]+)$/);
+  // dmtask:=私信内部执行（DEV-22：dm_turn 同走 DIRECT 派发路径，key 前缀区分房间任务）。
+  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+)$/);
   return m?.[1] ?? null;
 }
 

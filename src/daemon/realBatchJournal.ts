@@ -67,7 +67,7 @@ async function withLock<T>(batchId: string, fn: () => Promise<T>): Promise<T> {
   const dir = batchJournalDir();
   for (let attempt = 0; ; attempt += 1) {
     try { mkdirSync(dir, { recursive: true }); break; } catch (error) {
-      if (attempt >= 8) throw new Error(`批次日志目录不可用（${dir}）：${error instanceof Error ? error.message : String(error)}`);
+      if (attempt >= 8) throw new Error(`批次日志目录不可用（${dir}）：${error instanceof Error ? error.message : String(error)}`, { cause: error });
       await sleep(50);
     }
   }

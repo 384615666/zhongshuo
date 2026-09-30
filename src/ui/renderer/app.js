@@ -57,11 +57,16 @@ const state = {
   inflightSend: null,
   // 传输层失败的待重试信封（同 commandId——服务端幂等重放/去重，不会重复执行）。
   pendingRetry: null,
+  // 私信（DEV-22）：当前打开会话 + 侧栏摘要缓存；dmRecordOnly 为私信自己的仅记录意图。
+  openDmId: null,
+  dmRecordOnly: false,
+  dmConversations: [],
 };
 
 const el = (id) => document.getElementById(id);
 const uuid = () => `ui-${crypto.randomUUID()}`;
-const currentView = () => (state.openThreadId == null ? 'pool' : 'thread');
+// 视图=pool/thread/dm（DEV-22：私信独立视图——不与房间输入区共享意图控件）。
+const currentView = () => (state.openDmId != null ? 'dm' : state.openThreadId == null ? 'pool' : 'thread');
 
 async function command(method, params) {
   const result = await zs.command({ protocolVersion: 1, commandId: uuid(), method, params });
@@ -105,6 +110,7 @@ async function loadProject(path) {
     const firstEl = list.querySelector('.room-item');
     await selectRoom(first.id, first.conversationId, firstEl);
   }
+  void renderDmSidebar().catch(() => { /* 私信侧栏失败不阻断项目加载 */ });
   await refreshGate();
 }
 
@@ -163,8 +169,10 @@ function showPool() {
   state.openTaskId = null;
   state.openTaskSnapshot = null;
   state.openAnchorText = null;
+  state.openDmId = null;
   updateStopUi(null);
   el('thread').classList.add('hidden');
+  el('dm').classList.add('hidden');
   el('pool').classList.remove('hidden');
   el('thread-title').textContent = '主对话池';
   restoreDraft();
@@ -173,14 +181,106 @@ function showPool() {
 async function openThread(threadId, taskId, anchorText) {
   saveDraft();
   state.openThreadId = threadId;
+  state.openDmId = null;
   state.openTaskId = taskId ?? null;
   state.openTaskSnapshot = null;
   state.openAnchorText = anchorText ?? null;
   el('pool').classList.add('hidden');
+  el('dm').classList.add('hidden');
   el('thread').classList.remove('hidden');
   el('thread-title').textContent = '任务回复串';
   restoreDraft();
   await renderThread();
+}
+
+// ---------- 私信（DEV-22：1 对 1 会话——conversation.* 命令面；无 @ 派工/无任务号） ----------
+
+const DM_STATE_TEXT = { idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）' };
+
+async function renderDmSidebar() {
+  if (state.projectId == null) return;
+  const data = await command('conversation.list', { projectId: state.projectId });
+  state.dmConversations = data.conversations ?? [];
+  const nav = el('dm-list');
+  nav.replaceChildren();
+  for (const c of state.dmConversations) {
+    const btn = document.createElement('button');
+    btn.className = 'room' + (c.conversationId === state.openDmId ? ' active' : '');
+    const stateText = c.archivedAt != null ? '（已归档）' : DM_STATE_TEXT[c.execState] ?? '';
+    btn.textContent = `${c.peerDisplayName}${stateText}${c.unread > 0 ? ` ·${c.unread}` : ''}`;
+    btn.title = c.archivedAt != null ? '已归档：只读（可取消归档）' : '一对一私信：发送即交给该成员';
+    btn.onclick = () => void openDm(c.conversationId).catch((e) => alert(`打开私信失败：${e.message}`));
+    nav.append(btn);
+  }
+}
+
+async function openDm(conversationId) {
+  state.openDmId = conversationId;
+  state.openThreadId = null;
+  el('pool').classList.add('hidden');
+  el('thread').classList.add('hidden');
+  el('dm').classList.remove('hidden');
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+}
+
+async function renderDm() {
+  if (state.openDmId == null || state.projectId == null) return;
+  const conv = state.dmConversations.find((c) => c.conversationId === state.openDmId);
+  const fresh = conv ?? ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === state.openDmId);
+  if (fresh == null) { state.openDmId = null; showPool(); return; }
+  const history = await command('conversation.history', { conversationId: state.openDmId, limit: 100 });
+  const box = el('dm-messages');
+  box.replaceChildren();
+  for (const m of history.messages ?? []) {
+    const div = document.createElement('div');
+    div.className = `msg ${m.author_type === 'human' ? 'mine' : 'agent'}`;
+    let text = '';
+    try { text = (JSON.parse(m.body_json) ?? {}).text ?? ''; } catch { text = String(m.body_json ?? ''); }
+    const who = document.createElement('div');
+    who.className = 'meta';
+    who.textContent = m.author_type === 'human' ? '我' : fresh.peerDisplayName;
+    const body = document.createElement('div');
+    body.textContent = text;
+    div.append(who, body);
+    box.append(div);
+  }
+  box.scrollTop = box.scrollHeight;
+  // 已读水位推进（只标记自己已看到的——服务端校验 viewer）。
+  const lastSeq = history.messages?.length > 0 ? history.messages[history.messages.length - 1].conversation_seq : fresh.lastMessageSeq;
+  if (fresh.unread > 0) void command('conversation.markRead', { conversationId: state.openDmId, throughMessageSeq: lastSeq }).catch(() => {});
+  // 会话头：标题/执行态/操作（停止/继续队列/归档/取消归档）。
+  el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}`;
+  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : DM_STATE_TEXT[fresh.execState] ?? '';
+  el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
+  el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
+  el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
+  el('dm-restore-btn').classList.toggle('hidden', fresh.archivedAt == null);
+  el('dm-input').disabled = fresh.archivedAt != null;
+  el('dm-send').disabled = fresh.archivedAt != null;
+  state.dmActive = fresh; // 停止按钮的 task/run 来源
+}
+
+async function sendDm() {
+  if (state.openDmId == null) return;
+  const input = el('dm-input');
+  const text = input.value.trim();
+  if (text.length === 0) return;
+  input.value = '';
+  try {
+    const r = await command('message.submit', {
+      target: { kind: 'dm', projectId: state.projectId, conversationId: state.openDmId },
+      body: text, intent: state.dmRecordOnly ? 'record_only' : 'default', mentions: [],
+    });
+    if (r.disposition === 'queued') el('dm-state').textContent = '已保存排队（当前运行结束后串行执行）';
+    if (state.dmRecordOnly) { state.dmRecordOnly = false; el('dm-record').classList.remove('on'); }
+  } catch (e) {
+    input.value = text; // 发送失败恢复草稿（不丢字）
+    el('dm-state').textContent = `发送失败：${e.message}`;
+    return;
+  }
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
 }
 
 // ---------- 主池（R5：room.pool 正式接口，房间限定） ----------
@@ -1554,10 +1654,12 @@ function schedulePoll() {
   if (state.pollTimer != null) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
     state.pollTick += 1;
-    void (state.openThreadId != null ? renderThread() : renderPool()).catch(() => {
+    const view = currentView();
+    void (view === 'dm' ? renderDm() : view === 'thread' ? renderThread() : renderPool()).catch(() => {
       el('conn-state').textContent = '通信异常';
       el('conn-state').classList.add('err');
     });
+    if (state.pollTick % 4 === 0) void renderDmSidebar().catch(() => {}); // 侧栏未读/执行态低频刷新
     // 低频复查门禁（运行中新落门禁的场景极少；启动/重连另有触发）。
     if (state.pollTick % 8 === 0) void refreshGate().catch(() => {});
   }, 1500);
@@ -1585,6 +1687,53 @@ el('room-create').onclick = () => {
     .catch((e) => alert(`建房失败：${e.message}`));
 };
 el('stop-btn').onclick = () => void stopTask();
+// 私信（DEV-22）：新建/返回/发送/仅记录/停止/继续队列/归档/取消归档。
+el('dm-create').onclick = () => void (async () => {
+  const agents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
+  if (agents.length === 0) { alert('本项目没有启用的 Agent 成员'); return; }
+  const pick = prompt(`与哪位成员开私信？输入序号：\n${agents.map((a, i) => `${i + 1}. ${a.displayName}`).join('\n')}`, '1');
+  if (pick == null) return;
+  const chosen = agents[Number(pick) - 1];
+  if (chosen == null) { alert('序号无效'); return; }
+  const r = await command('conversation.create', { projectId: state.projectId, peerMemberId: chosen.id });
+  await renderDmSidebar();
+  await openDm(r.conversationId);
+})().catch((e) => alert(`新建私信失败：${e.message}`));
+el('dm-back-btn').onclick = () => { showPool(); void renderPool().catch(() => {}); void renderDmSidebar().catch(() => {}); };
+el('dm-send').onclick = () => void sendDm();
+el('dm-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendDm(); } });
+el('dm-record').onclick = () => {
+  state.dmRecordOnly = !state.dmRecordOnly;
+  el('dm-record').classList.toggle('on', state.dmRecordOnly);
+};
+el('dm-stop-btn').onclick = () => void (async () => {
+  const active = state.dmActive;
+  if (active?.activeTaskId == null) return;
+  try {
+    await command('task.stop', { taskId: active.activeTaskId, targetRunId: active.activeRunId, expectedStopGeneration: active.activeStopGeneration ?? 0 });
+    el('dm-state').textContent = '停止请求已发（排队消息转暂停）';
+  } catch (e) { el('dm-state').textContent = `停止失败：${e.message}`; }
+  await renderDm();
+})().catch(() => {});
+el('dm-resume-btn').onclick = () => void (async () => {
+  await command('dm.resume', { conversationId: state.openDmId });
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+})().catch((e) => alert(`继续失败：${e.message}`));
+el('dm-archive-btn').onclick = () => void (async () => {
+  const active = state.dmActive;
+  if (active == null) return;
+  try {
+    await command('conversation.archive', { conversationId: active.conversationId, expectedRevision: active.revision });
+  } catch (e) { alert(`归档失败：${e.message}`); }
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+})();
+el('dm-restore-btn').onclick = () => void (async () => {
+  await command('conversation.restore', { conversationId: state.openDmId });
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+})().catch((e) => alert(`取消归档失败：${e.message}`));
 // 仓库状态显隐（应用设置持久化，重开生效——app.settings.get/set 正式命令）。
 async function applyRepoStatusVisibility() {
   let stored = null;

@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
-import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 

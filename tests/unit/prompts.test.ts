@@ -6,6 +6,7 @@ import {
   selectStageInstruction,
   STANDING_PROMPT_TEMPLATE,
   STANDING_PROMPT_VERSION,
+  DM_STANDING_PROMPT_VERSION,
   TASK_COMPLETE_SCHEMA_VERSION,
   taskCompleteSchema,
   TURN_BUNDLE_VERSION,
@@ -53,11 +54,24 @@ describe('层 A：常驻提示词渲染（规格 §3/§5.1）', () => {
     expect(extra).toMatchObject({ ok: false });
   });
 
-  it('DM 会话 → 明确拒绝（私信提示词契约未完成，不填伪造 roomId）', () => {
+  it('DM 会话 → 私信模板渲染（DEV-21-M3/DEV-22：无房间/线程变量；缺/多变量按启动失败）', () => {
+    // 房间变量（含 roomId/threadId）对 DM 是「多变量」——拒绝，不填伪造 roomId。
     const r = renderStandingPrompt({ vars: STANDING_VARS, conversationKind: 'dm' });
-    expect(r).toMatchObject({ ok: false, error: { code: 'CAPABILITY_UNSUPPORTED' } });
+    expect(r).toMatchObject({ ok: false, error: { code: 'VALIDATION_INVALID' } });
     if (r.ok) return;
-    expect(r.error.message).toContain('私信提示词契约未完成');
+    expect(r.error.message).toContain('私信常驻提示词变量白名单校验失败');
+    // DM 白名单变量齐全 → 渲染成功（版本=私信模板；文本含会话上下文、无房间语义）。
+    const dmVars = {
+      memberId: 'm1', memberDisplayName: '成员甲', projectId: 'p1', projectName: '项目甲',
+      conversationId: 'dm_1', workspacePath: 'D:/x', draftDir: 'D:/drafts',
+    };
+    const ok = renderStandingPrompt({ vars: dmVars, conversationKind: 'dm' });
+    expect(ok).toMatchObject({ ok: true });
+    if (!ok.ok) return;
+    expect(ok.value.version).toBe(DM_STANDING_PROMPT_VERSION);
+    expect(ok.value.text).toContain('一对一私信会话');
+    expect(ok.value.text).toContain('dm_1');
+    expect(ok.value.text).not.toContain('房间：');
   });
 
   it('模板源不可变检查：hash 稳定（改模板必须升版本）', () => {

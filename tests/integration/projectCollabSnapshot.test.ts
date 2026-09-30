@@ -48,7 +48,7 @@ function createDelibTaskIn(db: ZhongshuoDatabase, projectId: string, conversatio
 
 interface Rig { db: ZhongshuoDatabase; scripts: FakeTurnScript[]; adapter: FakeRuntimeAdapter; worker: DispatchWorker; taskId: string; runId: string }
 
-async function rig(db: ZhongshuoDatabase, n: number, members: string[], projectId = 'p1', convRoom = ['c1', 'r1'] as const): Promise<Rig> {
+async function rig(db: ZhongshuoDatabase, n: number, members: string[], projectId = 'p1', convRoom: readonly [string, string] = ['c1', 'r1']): Promise<Rig> {
   const taskId = createDelibTaskIn(db, projectId, convRoom[0], convRoom[1], n, members);
   const scripts: FakeTurnScript[] = [];
   const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
@@ -102,7 +102,6 @@ describe('第十八轮四：协作时限快照（在途不变/重启恢复/项�
     expect(db.prepare("SELECT status FROM run_participants WHERE run_id = ? AND member_id = 'm1'").get(r.runId)).toMatchObject({ status: 'absent' });
     // 后续新派发（屏障推进的 CR 步骤）用新值 1_000。
     pumpDeliberation(db, r.taskId, opts(500), started + 60_200);
-    const crTurn = db.prepare("SELECT member_id, collab_absence_ms FROM agent_turns WHERE stage_key = 'delib.cross_review' LIMIT 1").get() as { member_id: string; collab_absence_ms: number | null } | undefined;
     // CR 已入队（尚未领取——由 outbox 证明）；领取后快照=新值。此处直接断言队列入队+新值将生效。
     const crQueued = (db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ?`).get(`%${r.runId}:CR:%`) as { c: number }).c;
     expect(crQueued).toBe(2);

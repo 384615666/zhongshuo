@@ -15,7 +15,7 @@ import type {
 } from '../../src/contracts/runtime.ts';
 
 export interface MinimalProcess {
-  pid: number | null;
+  pid: number | null | undefined;
   exitCode: number | null;
   kill(signal?: string): boolean;
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): EventEmitter;
@@ -102,9 +102,10 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
     if (this.options.failStartTurnMessage != null) throw new Error(this.options.failStartTurnMessage);
     const marker = `lp-${input.turnId}`;
     if (!this.options.noSpawn) {
-      const child = this.options.spawnFn != null
+      const spawned = this.options.spawnFn != null
         ? this.options.spawnFn(process.execPath, ['-e', `setInterval(()=>{},30000) /* ${marker} */`], { cwd: process.cwd() })
         : spawn(process.execPath, ['-e', `setInterval(()=>{},30000) /* ${marker} */`], { stdio: 'ignore' });
+      const child: MinimalProcess = spawned as MinimalProcess;
       this.children.set(input.turnId, child);
       if (child.pid != null) this.spawnedPids.add(child.pid);
     }
@@ -209,7 +210,7 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
     for (const wake of st.waiters.splice(0)) wake();
   }
 
-  private event(sessionId: string, turnId: string, spec: Omit<NormalizedRuntimeEvent, 'eventKey' | 'sessionId' | 'turnId' | 'receivedAt'>): NormalizedRuntimeEvent {
-    return { ...spec, eventKey: `lp-${randomUUID()}`, sessionId: sessionId as never, turnId, receivedAt: Date.now() } as NormalizedRuntimeEvent;
+  private event(sessionId: string, turnId: string, spec: object): NormalizedRuntimeEvent {
+    return { ...spec, eventKey: `lp-${randomUUID()}`, sessionId: sessionId as never, turnId, receivedAt: Date.now() } as unknown as NormalizedRuntimeEvent;
   }
 }

@@ -55,8 +55,6 @@ async function rig(db: ZhongshuoDatabase, n: number, members: string[]): Promise
   await step(worker, scripts); // PREPARE
   return { db, scripts, adapter, worker, taskId, runId: runIdOf(db) };
 }
-const turnsOf = (db: ZhongshuoDatabase, memberId: string, stageLike: string) =>
-  (db.prepare(`SELECT t.id, t.status FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.member_id = ? AND t.stage_key LIKE ?`).all(memberId, `${stageLike}%`) as Array<{ id: string; status: string }>);
 const participant = (db: ZhongshuoDatabase, runId: string, memberId: string) =>
   db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(runId, memberId) as { status: string } | undefined;
 
@@ -124,7 +122,6 @@ describe('成员停用完整派发路径（第十七轮二）', () => {
     expect(skipAudited.c).toBeGreaterThanOrEqual(1);
     // 重新启用不重放：pump+runOnce 不为 m2 产生停用后新 turn。
     await setEnabled(db, 'm2', true);
-    const before = r.adapter.starts;
     let guard2 = 0;
     while (guard2 < 20) { guard2 += 1; if (!(await r.worker.runOnce())) break; }
     const m2After = db.prepare(`SELECT count(*) c FROM agent_turns WHERE member_id = 'm2'`).get() as { c: number };

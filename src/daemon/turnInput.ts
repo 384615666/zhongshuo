@@ -14,6 +14,7 @@ import {
   scanSensitivePatterns,
   selectStageInstruction,
   STANDING_PROMPT_VERSION,
+  DM_STANDING_PROMPT_VERSION,
   TURN_BUNDLE_VERSION,
   turnBundleEnvelopeSchema,
 } from '../contracts/prompts.ts';
@@ -69,8 +70,9 @@ export interface AssembledTurn {
 
 export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> {
   const { db, task } = input;
-  if (task.conversationKind === 'dm') {
-    return domainErr('CAPABILITY_UNSUPPORTED', 'DM turn 组装契约随 DEV-22（M0 不派发私信 turn）');
+  if (task.conversationKind === 'dm') return assembleDmTurn(input);
+  if (task.threadId == null) {
+    return assemblyFailure('missing-thread', '房间任务缺少线程引用');
   }
 
   // 必要材料 1：用户根消息（任务的原始工作请求）。
@@ -230,6 +232,111 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
 
 function messageTextOf(refId: string, rootText: string, history: Array<{ messageId: string; text: string }>): string {
   return history.find((h) => h.messageId === refId)?.text ?? rootText;
+}
+
+/** DM 会话历史窗口（续接上文=最近 N 条；截断如实标注）。 */
+const DM_HISTORY_LIMIT = 50;
+
+/**
+ * 私信 turn 组装（DEV-22；R4 §2.1/§2.2）：上下文=本会话消息（audience 推导，客户端不能扩展）；
+ * 无线程/房间/名单——roster 只含对端；promptVersion=私信模板；task.threadId=NULL。
+ */
+function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> {
+  const { db, task } = input;
+  if (task.rootMessageId == null) return assemblyFailure('missing-root-message', 'dm_turn 缺少根消息引用（本次用户消息）');
+  const root = db
+    .prepare('SELECT id, body_json, author_type FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string } | undefined;
+  if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
+  if (root.author_type !== 'human') return assemblyFailure('root-not-user-request', 'dm_turn 根消息作者不是用户');
+  const rootBody = JSON.parse(root.body_json) as { text: string };
+  if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
+    return assemblyFailure('empty-root-message', '根消息正文为空');
+  }
+  // 本会话历史（续接上文）：按 conversation_seq 取最近 N 条（截断如实标注）。
+  const history = db
+    .prepare('SELECT id, conversation_seq, body_json, author_id FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT ?')
+    .all(task.conversationId, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string }>;
+  history.reverse();
+  const historyTexts = history.map((h) => {
+    const body = JSON.parse(h.body_json) as { text: string };
+    return { messageId: h.id, author: h.author_id, text: body.text ?? '' };
+  });
+  const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
+  const envelope: TurnBundleEnvelope = {
+    bundleVersion: TURN_BUNDLE_VERSION,
+    promptVersion: DM_STANDING_PROMPT_VERSION,
+    turnId: input.turnId,
+    taskRevision: task.taskRevision,
+    mode: 'DIRECT',
+    stage: null,
+    turnPurpose: 'stage_work',
+    you: { memberId: input.identity.member.id, role: 'executor' },
+    roster: [{ memberId: input.identity.member.id, displayName: input.identity.member.displayName, status: 'expected' }],
+    budget: {
+      runMaxTurns: input.budget.maxTurns,
+      usedTurns: input.budget.usedTurns,
+      inFlightReservedTurns: input.budget.inFlightReservedTurns,
+      remainingTurns: remaining,
+      tailReserved: 0,
+      tailReservationByStage: {},
+      stageAvailableTurns: remaining,
+    },
+    permission: {
+      tier: 'plan',
+      intent: 'analyze',
+      policyId: 'policy-analyze',
+      modificationAuthorized: false,
+      allowedWriteRoots: [],
+    },
+    task: {
+      taskId: task.id,
+      threadId: null, // DM 无线程（R4 §2.2）
+      objective: task.objective ?? task.title,
+      userConstraints: [],
+    },
+    baseline: null,
+    materials: history.map((m) => ({
+      ref: m.id,
+      reason: m.id === root.id ? '用户本次消息' : '本会话历史（audience 推导——续接上文）',
+      hash: `sha256:${sha256(messageTextOf(m.id, rootBody.text, historyTexts))}`,
+    })),
+    threadDigest: {
+      rootMessageId: root.id,
+      rootText: rootBody.text,
+      fromSeq: history[0]?.conversation_seq ?? 0,
+      toSeq: history.length > 0 ? history[history.length - 1]!.conversation_seq : 0,
+      truncated: history.length >= DM_HISTORY_LIMIT,
+      messages: historyTexts,
+    },
+    outputContract: {
+      kind: 'TaskComplete',
+      submitVia: 'final-result',
+      resultKey: `result_${input.turnId}`,
+      progressAllowed: true,
+    },
+    communicationContract: {
+      mentionEnabled: false,
+      disabledReason: '私信 1 对 1（§4.6）：无 @ 派工与成员唤醒',
+    },
+  };
+  const parsed = turnBundleEnvelopeSchema.safeParse(envelope);
+  if (!parsed.success) {
+    return assemblyFailure('envelope-schema-invalid', `信封校验失败：${parsed.error.issues[0]?.path.join('.')} ${parsed.error.issues[0]?.message}`);
+  }
+  const text = renderTurnBundle(envelope);
+  const hits = scanSensitivePatterns(text);
+  if (hits.length > 0) {
+    return assemblyFailure('sensitive-content', '渲染输入含敏感模式（PP-03 零命中要求）', { hits });
+  }
+  const hash = computeTurnBundleHash(envelope);
+  return domainOk({
+    envelope,
+    text,
+    bundleId: `cb_${hash.slice(0, 24)}`,
+    hash,
+    resultKey: envelope.outputContract.resultKey,
+  });
 }
 
 function assemblyFailure(reason: string, message: string, details?: unknown): DomainResult<never> {

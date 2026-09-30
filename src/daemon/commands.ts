@@ -12,6 +12,10 @@ import { readFileSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
+import {
+  createDmConversation, listDmConversations, dmConversationOf, dmPeerOf, dmLocalUserOf,
+  releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn,
+} from '../persistence/stores/dm.ts';
 import { openProject } from './projectStore.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
@@ -163,6 +167,12 @@ const messageSubmitParams = z.strictObject({
       threadId: z.string().min(1),
       replyToMessageId: z.string().min(1).optional(),
     }),
+    // 私信（DEV-22；R4 §2.3）：目标是会话本身——无房间/线程/任务号语义。
+    z.strictObject({
+      kind: z.literal('dm'),
+      projectId: z.string().min(1),
+      conversationId: z.string().min(1),
+    }),
   ]),
   body: z.string().min(1),
   intent: z.enum(['default', 'record_only']),
@@ -170,6 +180,7 @@ const messageSubmitParams = z.strictObject({
     z.strictObject({ kind: z.literal('member'), memberId: z.string().min(1) }),
     z.strictObject({ kind: z.literal('all') }),
   ])),
+  attachmentRefs: z.array(z.string().min(1)).optional(),
 });
 
 function coordinatorOf(db: ZhongshuoDatabase, roomId: string): string {
@@ -426,6 +437,41 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             })();
           }
           const target = params.target;
+          if (target.kind === 'dm') {
+            // 私信发送（DEV-22；R4 §2.3/§4.6）：mentions 必空（无 @ 派工）；record_only 只保存；
+            // agent 对端=dm_turn 内部执行（串行/排队）；附件接口与 DEV-24 衔接——未实施前明确拒绝。
+            if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
+            if (params.attachmentRefs != null && params.attachmentRefs.length > 0) {
+              throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '私信附件随 DEV-24 实施（接口字段已预留）——当前明确拒绝，不以假数据冒充');
+            }
+            const conv = dmConversationOf(deps.db, target.conversationId);
+            if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
+              throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标不是该项目的私信会话');
+            }
+            if (conv.archived_at != null) {
+              throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑，保留历史（R4 §2.1）');
+            }
+            const peer = dmPeerOf(deps.db, target.conversationId);
+            if (peer == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '私信会话缺少 Agent 对端（数据不完整）');
+            return deps.db.transaction(() => {
+              const r = createDmTurn(deps.db, {
+                conversationId: target.conversationId,
+                projectId: target.projectId,
+                peerMemberId: peer.principal_id,
+                localUserId: deps.localUserId,
+                body: params.body,
+                intent: params.intent,
+                reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
+              });
+              appendDomainEvent(deps.db, {
+                schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
+                conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
+                turnId: null, kind: 'message.submitted', createdAt: Date.now(),
+                payload: { target: 'dm', disposition: r.disposition, intent: params.intent, taskId: r.taskId, note: r.note ?? null },
+              });
+              return { messageId: r.messageId, conversationId: target.conversationId, threadId: null, taskId: r.taskId, disposition: r.disposition, note: r.note ?? null };
+            })();
+          }
           if (target.kind !== 'room_root') throw new DaemonCommandError('VALIDATION_INVALID', '路由目标缺失');
           const route = resolveTopLevelRoute({
             intent: params.intent,
@@ -1244,6 +1290,93 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           return { projectId: row.id, revision: after.revision, changed: true as const, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'conversation.create': {
+        // 私信会话创建（DEV-22；R4 §2.3）：主体从 CallerContext 推导（本机用户）；同对端复用
+        // 现行会话；不按成员自动合并；commandId 幂等由 runCommand 承载。
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          peerMemberId: z.string().min(1),
+          title: z.string().min(1).max(120).optional(),
+        }).parse(env.params);
+        const project = deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(params.projectId) as { id: string } | undefined;
+        if (project == null) throw new DaemonCommandError('PROJECT_NOT_FOUND', '项目不存在');
+        const created = createDmConversation(deps.db, { projectId: params.projectId, peerMemberId: params.peerMemberId, title: params.title, localUserId: deps.localUserId });
+        if (!created.ok) throw new DaemonCommandError(created.code, created.message);
+        return withCommandId({ ok: true, data: { conversationId: created.conversationId, created: created.created } });
+      }
+      case 'conversation.list': {
+        const params = z.strictObject({ projectId: z.string().min(1).optional(), archived: z.boolean().optional() }).parse(env.params);
+        const all = listDmConversations(deps.db, deps.localUserId, params.projectId);
+        const rows = params.archived == null ? all : all.filter((c) => params.archived === (c.archivedAt != null));
+        return withCommandId({ ok: true, data: { conversations: rows } });
+      }
+      case 'conversation.history': {
+        const params = z.strictObject({ conversationId: z.string().min(1), beforeSeq: z.number().int().positive().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
+        if (dmLocalUserOf(deps.db, params.conversationId) !== deps.localUserId) {
+          throw new DaemonCommandError('FORBIDDEN', '仅该私信 audience 可读取（R4 §2.3）');
+        }
+        const limit = params.limit ?? 50;
+        const rows = (params.beforeSeq != null
+          ? deps.db.prepare('SELECT id, conversation_seq, author_type, author_id, body_json, status, created_at FROM messages WHERE conversation_id = ? AND conversation_seq < ? ORDER BY conversation_seq DESC LIMIT ?').all(params.conversationId, params.beforeSeq, limit)
+          : deps.db.prepare('SELECT id, conversation_seq, author_type, author_id, body_json, status, created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT ?').all(params.conversationId, limit)) as Array<Record<string, unknown>>;
+        return withCommandId({ ok: true, data: { messages: rows.reverse(), nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
+      }
+      case 'conversation.markRead': {
+        const params = z.strictObject({ conversationId: z.string().min(1), throughMessageSeq: z.number().int().min(0) }).parse(env.params);
+        if (dmLocalUserOf(deps.db, params.conversationId) !== deps.localUserId) throw new DaemonCommandError('FORBIDDEN', '不得替另一参与者标记已读');
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在');
+        const result = deps.db.transaction((): { advanced: boolean } => {
+          const changes = deps.db.prepare(
+            'UPDATE conversation_read_states SET last_read_seq = MAX(last_read_seq, ?), revision = revision + 1 WHERE conversation_id = ? AND viewer_id = ? AND last_read_seq < ?',
+          ).run(params.throughMessageSeq, params.conversationId, deps.localUserId, params.throughMessageSeq).changes;
+          return { advanced: changes > 0 };
+        })();
+        return withCommandId({ ok: true, data: result });
+      }
+      case 'conversation.rename': {
+        const params = z.strictObject({ conversationId: z.string().min(1), title: z.string().min(1).max(120), expectedRevision: z.number().int().min(0) }).parse(env.params);
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
+        if (conv.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${conv.revision}`);
+        deps.db.prepare('UPDATE conversations SET title = ?, revision = revision + 1 WHERE id = ?').run(params.title, params.conversationId);
+        return withCommandId({ ok: true, data: { conversationId: params.conversationId, revision: params.expectedRevision + 1 } });
+      }
+      case 'conversation.archive': {
+        // 归档=禁止新发/续跑/提醒，保留历史。活动 run 须先停止（第一包边界：不冒充自动停止；
+        // R4 完整语义=按停止流程收尾，后续包接通）。
+        const params = z.strictObject({ conversationId: z.string().min(1), expectedRevision: z.number().int().min(0) }).parse(env.params);
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
+        if (dmHasActiveRun(deps.db, params.conversationId)) {
+          throw new DaemonCommandError('CONVERSATION_BUSY', '会话有活动执行：先停止再归档（归档后禁止新发/续跑——DEV-22 第一包不自动代停，不冒充）');
+        }
+        if (conv.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${conv.revision}`);
+        deps.db.prepare('UPDATE conversations SET archived_at = ?, revision = revision + 1 WHERE id = ?').run(Date.now(), params.conversationId);
+        return withCommandId({ ok: true, data: { conversationId: params.conversationId, revision: params.expectedRevision + 1, archived: true } });
+      }
+      case 'conversation.restore': {
+        const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
+        if (conv.archived_at == null) return withCommandId({ ok: true, data: { conversationId: params.conversationId, restored: false } });
+        deps.db.prepare('UPDATE conversations SET archived_at = NULL, revision = revision + 1 WHERE id = ?').run(params.conversationId);
+        // restore 不自动续跑（R4）：清除停止挂起但不泵队列——排队消息保持排队等待发送或显式继续。
+        releaseDmPauseGate(deps.db, params.conversationId);
+        return withCommandId({ ok: true, data: { conversationId: params.conversationId, restored: true } });
+      }
+      case 'dm.resume': {
+        // 显式继续（R4：停止后队列 paused，需用户继续）：清挂起并泵一条排队消息。
+        const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
+        const conv = dmConversationOf(deps.db, params.conversationId);
+        if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
+        if (conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止续跑');
+        releaseDmPauseGate(deps.db, params.conversationId);
+        const pumped = pumpDmQueue(deps.db, params.conversationId);
+        return withCommandId({ ok: true, data: { conversationId: params.conversationId, enqueued: pumped.enqueued } });
       }
       case 'realCalls.summary': {
         // 真实调用护栏台账查询（第十七轮四：startTurn 级实际请求边界——batchId/状态/归属分列；

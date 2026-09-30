@@ -42,9 +42,9 @@ interface Rig {
 }
 
 /** stop 关库后的取证读取：重开 sqlite 文件（只读事实已持久化——不能凭内存断言）。 */
-function reopen(dbFile: string): { get<T>(sql: string, ...args: unknown[]): T | undefined; close(): void } {
+function reopen(dbFile: string): { get(sql: string, ...args: unknown[]): unknown; close(): void } {
   const db = openDatabase(dbFile);
-  return { get: (sql, ...args) => db.prepare(sql).get(...args) as T | undefined, close: () => db.close() };
+  return { get: (sql, ...args) => db.prepare(sql).get(...args), close: () => db.close() };
 }
 
 function makeRig(adapters: LocalProtocolAdapter[], opts?: { drainSettleTimeoutMs?: number; managed?: boolean }): Promise<Rig> {
@@ -152,8 +152,8 @@ describe('第十八轮二：护栏包装器生命周期透传（正式链）', (
     const after = reopen(join(rig.appDataDir, 'state.sqlite'));
     try {
       // 关闭路径 interrupt 未推进用户停止代次：turn=UNKNOWN（请求已发、退出确认前不冒充取消）。
-      expect(after.get<{ status: string }>('SELECT status FROM agent_turns WHERE id = ?', turn.id)?.status).toBe('UNKNOWN');
-      expect(after.get<{ status: string }>('SELECT status FROM real_calls WHERE turn_id = ?', turn.id)?.status).toBe('unknown');
+      expect((after.get('SELECT status FROM agent_turns WHERE id = ?', turn.id) as { status: string } | undefined)?.status).toBe('UNKNOWN');
+      expect((after.get('SELECT status FROM real_calls WHERE turn_id = ?', turn.id) as { status: string } | undefined)?.status).toBe('unknown');
     } finally {
       after.close();
     }
