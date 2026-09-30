@@ -361,6 +361,7 @@ async function renderThread() {
         stopGeneration: data.task.stopGeneration,
         activeRun: data.activeRun,
         pendingDelivery: data.pendingDelivery ?? null, // 验收操作绑定展示时版本（第九轮）
+        lastStartupFailureMessage: data.lastStartupFailureMessage ?? null, // 启动失败原因如实上屏（第十六轮四）
       };
       if (stillOpen) updateStopUi(state.openTaskSnapshot);
     } catch (taskError) {
@@ -449,7 +450,9 @@ function updateStopUi(snapshot) {
   const run = snapshot.activeRun;
   const runText = run != null ? ` · 运行 ${run.status}` : '';
   const stopping = run != null && run.status === 'STOPPING';
-  statusLine.textContent = `任务${chip.text}${runText}`;
+  // 启动失败原因如实上屏（第十六轮四：验收防护拒绝等——「待处理」无解释=用户不可知）。
+  const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${snapshot.lastStartupFailureMessage}` : '';
+  statusLine.textContent = `任务${chip.text}${runText}${failNote}`;
   const stoppable = snapshot.status === 'ACTIVE' && run != null && RUN_ACTIVE.includes(run.status);
   if (stoppable || stopping) {
     btn.classList.remove('hidden');
@@ -1669,8 +1672,22 @@ async function renderMemberRuntimeSettings() {
     const current = kind == null ? '未绑定（派发回落全局 runtime）' : `${kind}${model != null ? ` · ${model}` : ''}`;
     const capNote = caps == null ? '' : ` ｜ 模型可用性：${caps.modelAvailability ?? '未记录'} · 权限认证：${caps.permissionAuth ?? '未记录'}（配置≠已认证，不自动探活）`;
     const label = document.createElement('span');
-    label.textContent = `${m.displayName ?? m.id}：${current}${capNote}`;
+    label.textContent = `${m.displayName ?? m.id}：${current}${capNote}${m.enabled === false ? ' ｜ 已停用（不参与之后派发）' : ''}`;
     row.appendChild(label);
+    // 协作参与开关（第十六轮六）：停用=该成员不再参与之后派发（协调者不可停用——服务端校验）。
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'chip';
+    toggleBtn.textContent = m.enabled === false ? '启用' : '停用';
+    toggleBtn.title = '停用后该成员不再参与之后的任务派发（在途任务不受影响）；协调者不可停用';
+    toggleBtn.onclick = () => void (async () => {
+      try {
+        await command('member.setEnabled', { memberId: m.id, enabled: m.enabled === false });
+        await renderMemberRuntimeSettings();
+      } catch (error) {
+        el('thread-status').textContent = `成员状态保存失败：${error.message}`;
+      }
+    })();
+    row.appendChild(toggleBtn);
     const editBtn = document.createElement('button');
     editBtn.className = 'chip';
     editBtn.textContent = '绑定…';

@@ -14,8 +14,10 @@
  * 前置：node scripts/build-ui.mjs && node scripts/pack-daemon.mjs（缺产物明确报错退出）。
  * 验收：node scripts/verify-desktop.mjs（中文/空格安装目录/首启/重复启动/正常退出/受管缺失负例）。
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, realpathSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 const repo = resolve(import.meta.dirname, '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
@@ -85,5 +87,34 @@ for (const path of [
     process.exit(1);
   }
 }
+
+// ---------- 构建身份与全文件清单（第十六轮五：可追溯交付） ----------
+// buildId=源码身份（commit+dirty 差异哈希）与全部产物文件内容的联合哈希——重构建内容变则
+// buildId 变；报告/验证引用同一 buildId。清单覆盖**实际执行代码**（renderer JS/CSS、验证/
+// 启动入口由 make-independent-package 注入后由其另行补登——此处覆盖便携包全部文件含原生
+// 二进制），验证前逐文件核对（篡改/缺失=拒绝）。
+const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const walk = (dir) => {
+  const out = [];
+  for (const name of readdirSync(dir).sort()) {
+    if (name === 'MANIFEST-SHA256.json' || name === 'BUILD.json') continue;
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) out.push(...walk(p));
+    else out.push(p);
+  }
+  return out;
+};
+const files = walk(staging).map((p) => ({ path: relative(staging, p).replaceAll('\\', '/'), bytes: statSync(p).size, sha256: sha256(p) }));
+const commit = spawnSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+const dirtyState = spawnSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+const dirty = dirtyState.trim().length > 0;
+const dirtyDiffHash = dirty ? createHash('sha256').update(spawnSync('git', ['-C', repo, 'diff', 'HEAD'], { encoding: 'utf8' }).stdout + dirtyState).digest('hex') : null;
+const buildId = `bld_${createHash('sha256').update(JSON.stringify({ commit, dirty, dirtyDiffHash, files })).digest('hex').slice(0, 16)}`;
+writeFileSync(join(staging, 'BUILD.json'), JSON.stringify({
+  buildId, commit, dirty, dirtyDiffHash, builtAt: new Date().toISOString(),
+  manifest: 'MANIFEST-SHA256.json', manifestRoot: '清单相对本包根（=本文件所在目录）；hash=SHA256',
+}, null, 2), 'utf8');
+writeFileSync(join(staging, 'MANIFEST-SHA256.json'), JSON.stringify({ buildId, files }, null, 2), 'utf8');
 console.log(`[pack-desktop] 便携产物就绪：${staging}`);
-console.log('[pack-desktop] 审收：node scripts/verify-desktop.mjs');
+console.log(`[pack-desktop] buildId=${buildId} commit=${commit}${dirty ? ` dirty(diff=${dirtyDiffHash.slice(0, 12)})` : ' clean'}`);
+console.log('[pack-desktop] 审收：node scripts/verify-desktop.mjs（daemon 级）/ make-independent-package.mjs（独立交付）');

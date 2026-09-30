@@ -162,7 +162,7 @@ try {
     // 正常发送（真实按钮）→ 点进任务线程（池卡片）→ 线程回复 + 待验收。
     await page.evalJs(`(() => { document.getElementById('composer-input').value = '请读取 notes.md 报出暗号'; document.getElementById('send').click(); })()`);
     await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length > 0`)).value === true, 20_000, '主池出现任务卡片');
-    await page.evalJs(`(() => { const cards = document.querySelectorAll('#pool .pool-card'); cards[cards.length - 1].click(); })()`);
+    await page.evalJs(`(() => { document.querySelector('#pool .pool-card').click(); })()`);
     await waitFor(async () => (await page.evalJs(`document.getElementById('review-reject-btn').classList.contains('hidden') === false`)).value === true, 90_000, 'REVIEW 待验收（验收按钮出现）');
     const reply = await page.evalJs(`document.getElementById('thread-messages').textContent`);
     record('正常发送闭环（按钮提交→worker→线程回复→待验收）', String(reply.value ?? '').length > 0 && !String(reply.value ?? '').includes('错误'), `回复长度=${String(reply.value ?? '').length}`);
@@ -232,7 +232,7 @@ try {
     // 停止：发送→在途窗口点停止→CANCELLED。
     await page.evalJs(`(() => { document.getElementById('composer-input').value = '长驻任务（将被停止）'; document.getElementById('send').click(); })()`);
     await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length > 0`)).value === true, 20_000, '主池出现任务卡片');
-    await page.evalJs(`(() => { const cards = document.querySelectorAll('#pool .pool-card'); cards[cards.length - 1].click(); })()`);
+    await page.evalJs(`(() => { document.querySelector('#pool .pool-card').click(); })()`);
     await waitFor(async () => (await page.evalJs(`document.getElementById('stop-btn').classList.contains('hidden') === false`)).value === true, 20_000, '停止按钮出现（任务在途）');
     await page.evalJs(`document.getElementById('stop-btn').click()`);
     await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.includes('已停止') || document.getElementById('thread-status').textContent.includes('已停止')`)).value === true, 60_000, '任务 CANCELLED');

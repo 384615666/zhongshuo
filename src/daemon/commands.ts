@@ -284,6 +284,22 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           : (deps.db.prepare('SELECT id, display_name, principal_type, enabled FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>);
         return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1 })) } });
       }
+      case 'member.setEnabled': {
+        // 协作参与设置（第十六轮六）：停用成员=不再参与之后派发（enabledAgents 过滤已在生产链路）；
+        // 在途 turn 不受影响（派发时点读取）。协调者不可停用（AUTO 路由依赖，明确拒绝不静默换人）。
+        const params = z.strictObject({ memberId: z.string().min(1), enabled: z.boolean() }).parse(env.params);
+        // 校验在事务外（run 内抛领域错会被幂等网关包装成 STORAGE_UNAVAILABLE——丢失错误码）。
+        const member = deps.db.prepare('SELECT pm.id, pm.enabled, r.coordinator_member_id FROM project_members pm LEFT JOIN rooms r ON r.coordinator_member_id = pm.id WHERE pm.id = ? LIMIT 1').get(params.memberId) as { id: string; enabled: number; coordinator_member_id: string | null } | undefined;
+        if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
+        if (params.enabled === false && member.coordinator_member_id === member.id) {
+          throw new DaemonCommandError('VALIDATION_INVALID', '协调者不可停用（房间 AUTO 路由依赖协调者——如需更换请先调整协调者）');
+        }
+        const result = run(() => {
+          deps.db.prepare('UPDATE project_members SET enabled = ? WHERE id = ?').run(params.enabled ? 1 : 0, params.memberId);
+          return { memberId: params.memberId, enabled: params.enabled, scope: '该成员之后的派发（在途 turn 不受影响）' };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'member.setRuntime': {
         // 成员级 runtime 绑定（DEV-10）：成员→profile→installation 链落库；派发侧按此选 adapter。
         // fake 仅显式开发模式（ZS_ALLOW_FAKE=1）；claude 必须显式模型（默认配置不被 CLI 接受）。
@@ -353,7 +369,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
         // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
         const pendingDelivery = deps.db.prepare(`SELECT id, revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number } | undefined;
-        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null } });
+        // 最近一次启动失败原因（第十六轮四：验收防护拒绝等如实上屏——「待处理/失败」无解释=用户不可知）。
+        const lastStartupFailure = (deps.db.prepare(
+          `SELECT e.payload_json FROM domain_events e JOIN agent_turns t ON t.id = e.turn_id
+           WHERE e.kind = 'turn.startupFailed' AND t.run_id IN (SELECT id FROM workflow_runs WHERE task_id = ?)
+           ORDER BY e.seq DESC LIMIT 1`,
+        ).get(params.taskId) as { payload_json: string } | undefined);
+        let lastStartupFailureMessage: string | null = null;
+        if (lastStartupFailure != null) {
+          try { lastStartupFailureMessage = (JSON.parse(lastStartupFailure.payload_json) as { message?: string }).message?.slice(0, 200) ?? null; } catch { /* 残缺不虚构 */ }
+        }
+        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
