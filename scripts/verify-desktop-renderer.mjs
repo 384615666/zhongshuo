@@ -157,6 +157,7 @@ const SESSIONS = (process.env.ZS_VDR_SESSIONS ?? 'A,B1,B2,C,D').split(',').map((
 const shouldRun = (name) => SESSIONS.includes(name);
 
 let failed = false;
+let exitCFacts = null; // C 写/D 读（上一实例退出延迟同步点的事实载体）
 try {
   // ---------- 控制组：decoy 进程先证检测有效（正常用例不得以「匹配不到」充数） ----------
   {
@@ -330,7 +331,6 @@ try {
     page.close();
     // 同步点（第二十轮一）：上一实例退出延迟——C 关闭 fire-and-forget，D 立即启动（不同
     // appData 无锁冲突）；C 的停机事实延后到 D 结束后核对（同一次运行的进程树，不误杀他人）。
-    let exitCFacts = null;
     const exitCPromise = exitWithGuard(app.child).then(async (exitC) => {
       exitCFacts = { exit: exitC };
       try {
