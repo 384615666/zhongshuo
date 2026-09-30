@@ -22,6 +22,7 @@ import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
+import { LocalProtocolAdapter } from '../helpers/localProtocolAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { successTurn } from '../../src/adapter/fake/script.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
@@ -423,4 +424,128 @@ describe('第十九轮六：归档遵循合同（停止流程/队列暂停/停�
     expect(h2.adapter.startTurnLog.length).toBe(1); // 显式继续后执行
     db2.close();
   }, 90_000);
+});
+describe('第二十轮二：DM 续接身份链（Claude 真实时序 fixture——空 ID 事件回填/终态结算）', () => {
+  function makeLateWorker(db: ZhongshuoDatabase, opts: { rejectResume?: boolean } = {}) {
+    const adapter = new LocalProtocolAdapter({ noSpawn: true, providerIdLate: true, rejectResume: opts.rejectResume, completeAfterMs: 200 });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-late', appDataDir: join(tmpRoot, 'app-late') });
+    return { worker, adapter };
+  }
+  function lateDb(file?: string): ZhongshuoDatabase {
+    const db = file != null ? openDatabase(file) : openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    return db;
+  }
+  const lateCmd = (db: ZhongshuoDatabase) => async (m: string, p: unknown) => {
+    const r = await dispatchDaemonCommand({ db, localUserId: 'u_local', interruptTurn: async () => {} }, { protocolVersion: 1, commandId: `late-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+    if (!r.ok) throw new Error(r.error?.message);
+    return r.data;
+  };
+
+  it('① 首开空 ID：openSession 返回空串；终态回填真实 ID 入库（非空候选）+ dm.sessionOpened', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    const { worker, adapter } = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '首开（Claude 空 ID 时序）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    expect(adapter.openSessionLog[0]!.returned).toBe(''); // openSession 返回空——不是身份事实
+    const row = db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { provider_session_id: string | null };
+    expect(row).toBeTruthy();
+    expect(row.provider_session_id).toMatch(/^lp-provider-late-/); // 终态回填真实 ID（非空）
+    expect((db.prepare("SELECT kind FROM domain_events WHERE kind='dm.sessionOpened'").get() as { kind: string }).kind).toBe('dm.sessionOpened');
+    db.close();
+  }, 60_000);
+
+  it('② 同对话第二轮：resume=持久真实 ID；provider 上报一致 → dm.sessionResumed、不插新行', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    const { worker, adapter } = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    for (const body of ['第一轮', '第二轮（续接）']) {
+      await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body, intent: 'default', mentions: [] });
+      await worker.runOnce();
+    }
+    const firstId = (db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm' ORDER BY rowid LIMIT 1").get(conv.conversationId) as { provider_session_id: string }).provider_session_id;
+    expect(adapter.openSessionLog[1]!.resumedFrom).toBe(firstId); // resume 请求=持久真实 ID（非 openSession 空返回）
+    expect(adapter.openSessionLog[1]!.returned).toBe(''); // 返回仍空（复制≠接受）
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(1); // 续接不加行
+    const events = db.prepare("SELECT kind FROM domain_events WHERE kind LIKE 'dm.session%' ORDER BY rowid").all() as Array<{ kind: string }>;
+    expect(events.map((e) => e.kind)).toEqual(['dm.sessionOpened', 'dm.sessionResumed']);
+    const resumed = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumed'").get() as { payload_json: string };
+    expect(JSON.parse(resumed.payload_json).nativeResume).toBe(true); // 终态判定：resume 请求与 provider 上报一致
+    db.close();
+  }, 60_000);
+
+  it('③ provider 拒绝续接（上报全新 ID）→ dm.sessionReplayed+新行——不冒充续接', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    // 第一轮正常；第二轮换 rejectResume worker（provider 换新会话）。
+    const first = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮', intent: 'default', mentions: [] });
+    await first.worker.runOnce();
+    const second = makeLateWorker(db, { rejectResume: true });
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮（provider 拒绝续接）', intent: 'default', mentions: [] });
+    await second.worker.runOnce();
+    const rows = db.prepare("SELECT provider_session_id FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm' ORDER BY rowid").all(conv.conversationId) as Array<{ provider_session_id: string }>;
+    expect(rows).toHaveLength(2); // 拒绝→新会话行
+    expect(rows[1]!.provider_session_id).toMatch(/^lp-provider-rejected-/); // 上报的全新 ID 入库
+    const replayed = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionReplayed'").get() as { payload_json: string };
+    expect(JSON.parse(replayed.payload_json).nativeResume).toBe(false);
+    expect(JSON.parse(replayed.payload_json).note).toContain('受限历史重放');
+    db.close();
+  }, 60_000);
+
+  it('④ runtime 绑定切换：候选行快照与当前绑定不符 → 跳过 resume（dm.sessionResumeSkipped）+ 新会话', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    const { worker } = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮（未绑定→fake 默认）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    // 模拟 runtime 切换：把候选行快照改成 claude 绑定（当前成员仍未绑定→不符）。
+    db.prepare("UPDATE runtime_sessions SET capabilities_json = ? WHERE conversation_id = ? AND scope_kind='dm'")
+      .run(JSON.stringify({ runtimeKind: 'claude', model: 'deepseek-flash', installationId: 'ri_x' }), conv.conversationId);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮（绑定已切换）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    const skipped = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumeSkipped'").get() as { payload_json: string } | undefined;
+    expect(skipped).toBeTruthy();
+    expect(JSON.parse(skipped!.payload_json).note).toContain('runtime 绑定已变化');
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(2); // 新会话行
+    db.close();
+  }, 60_000);
+
+  it('⑤ 空串不作候选：历史行 provider id 为空串 → 第二轮按首开（不传空 resume）', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    const { worker, adapter } = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    // 人为制造旧缺陷现场：行 ID 为空串（旧版 openSession 空串直写）。
+    db.prepare("UPDATE runtime_sessions SET provider_session_id = '' WHERE conversation_id = ? AND scope_kind='dm'").run(conv.conversationId);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    expect(adapter.openSessionLog[1]!.resumedFrom).toBeNull(); // 空串未被选为 resume 候选
+    db.close();
+  }, 60_000);
+
+  it('⑥ 会话打开窗口取消（stop-during-session-open）：未请求 turn → 不落会话行、不发判定事件', async () => {
+    const db = lateDb();
+    const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd = lateCmd(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '将被取消', intent: 'default', mentions: [] });
+    // 领取前归档（领取窗口拦下——turn 行不会创建）：验证 dmPending 未结算也不泄漏。
+    const rev = (db.prepare('SELECT revision FROM conversations WHERE id = ?').get(conv.conversationId) as { revision: number }).revision;
+    await cmd('conversation.archive', { conversationId: conv.conversationId, expectedRevision: rev });
+    const { worker } = makeLateWorker(db);
+    await worker.runOnce();
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(0); // 无会话行
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind LIKE 'dm.session%'").get() as { c: number }).c).toBe(0); // 无判定事件
+    void deps;
+    db.close();
+  }, 60_000);
 });

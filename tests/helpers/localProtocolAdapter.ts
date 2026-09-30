@@ -40,6 +40,11 @@ export interface LocalProtocolOptions {
   selfReportedModel?: string;
   /** 不 spawn 真实子进程（护栏/配额单测——请求边界语义保留，无 OS 进程遗留）。 */
   noSpawn?: boolean;
+  /** Claude 真实时序（第二十轮二）：openSession 返回空 provider ID，真实 ID 由 provider 首个
+   * 事件（此处=startTurn 后异步）**原地回填** SessionRef——续接判定只能在终态核对。 */
+  providerIdLate?: boolean;
+  /** 配合 providerIdLate：provider 拒绝续接（回填全新 ID=换新会话——受限重放）。 */
+  rejectResume?: boolean;
 }
 
 const LP_CAPS: RuntimeCapabilities = {
@@ -95,12 +100,22 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
     this.streams.set(id, { backlog: [], waiters: [] });
     // 续接（第十九轮五）：传入 resume 且能力支持 → 返回同一 provider 会话身份（原生续接）；
     // 否则新身份（受限重放路径）。
-    const providerSessionId = input.resume != null ? input.resume.providerSessionId : `lp-provider-${this.builtSeq}-${this.openSessionCalls}`;
-    this.openSessionLog.push({ resumedFrom: input.resume?.providerSessionId ?? null, returned: providerSessionId });
-    return {
-      id, providerSessionId, runtimeInstallationId: 'lp-install', adapterVersion: 'lp-1',
+    const immediate = this.options.providerIdLate === true ? '' : (input.resume != null ? input.resume.providerSessionId : `lp-provider-${this.builtSeq}-${this.openSessionCalls}`);
+    this.openSessionLog.push({ resumedFrom: input.resume?.providerSessionId ?? null, returned: immediate });
+    const ref: SessionRef = {
+      id, providerSessionId: immediate, runtimeInstallationId: 'lp-install', adapterVersion: 'lp-1',
       threadId: input.threadId, sessionGeneration: input.resume?.sessionGeneration ?? input.sessionGeneration, cwd: input.cwd,
     };
+    if (this.options.providerIdLate === true) {
+      // 真实时序：provider 首事件才产生/确认身份——原地回填（拒绝续接=回填全新 ID）。
+      const lateResume = input.resume;
+      setTimeout(() => {
+        ref.providerSessionId = lateResume != null && this.options.rejectResume === true
+          ? `lp-provider-rejected-${this.builtSeq}-${this.openSessionCalls}`
+          : (lateResume?.providerSessionId ?? `lp-provider-late-${this.builtSeq}-${this.openSessionCalls}`);
+      }, 30).unref?.();
+    }
+    return ref;
   }
 
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
