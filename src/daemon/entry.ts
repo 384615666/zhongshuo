@@ -467,7 +467,17 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
     // 确认=进程退出码+daemon:stop:last 记录（关闭会断 IPC，响应不声称完成）。
     standaloneShutdown: () => { requestShutdown?.(); },
   }).then((daemon) => {
-    process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
+    // 受控同步点（第二十一轮二）：listen 前延迟——验证"页面已显示、daemon 管道未就绪"
+    //（区别于 spawn 前延迟：那在窗口创建时已结束）。测试专用，生产不设。
+    const listenDelay = Number(process.env.ZS_DAEMON_LISTEN_DELAY_MS ?? 0);
+    if (listenDelay > 0) {
+      process.stderr.write(`[zhongshuo-daemon] listen 受控延迟 ${listenDelay}ms（ZS_DAEMON_LISTEN_DELAY_MS）\n`);
+      setTimeout(() => {
+        process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
+      }, listenDelay).unref?.();
+    } else {
+      process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
+    }
     // pid 落盘（诊断/UI 端到端定位子进程；正常退出删除——SIGKILL 残留即崩溃现场）。
     const pidPath = join(appDataDir, 'daemon.pid');
     writeFileSync(pidPath, String(process.pid), 'utf8');

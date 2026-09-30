@@ -88,9 +88,16 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
     let closed = false;
     const pendingByCommandId = new Map<string, Pending>();
 
+    let settled = false;
     const failAll = (error: Error): void => {
       if (closed) return;
       closed = true;
+      // 握手完成前失败：连接 promise 也必须立即 reject（第二十一轮一：此前只挂 pending、
+      // resolveConnect 悬挂到 10s 握手超时——失败未及时结束）。
+      if (!authenticated && !settled) {
+        settled = true;
+        rejectConnect(error);
+      }
       for (const p of [...pendingByCommandId.values()]) {
         clearTimeout(p.timer);
         p.reject(error);
@@ -116,6 +123,8 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
       }
       const auth = parsed as { type?: string; error?: { message?: string } };
       if (auth?.type === 'auth.ok') {
+        if (settled) return true;
+        settled = true;
         authenticated = true;
         if (connectTimer != null) clearTimeout(connectTimer);
         resolveConnect({
@@ -187,7 +196,7 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
     // 连接+握手总时限（auth.ok 到达才清除）。
     connectTimer = setTimeout(() => {
       socket.destroy();
-      rejectConnect(new Error(`管道连接/握手超时：${pipeName}`));
+      if (!settled) { settled = true; rejectConnect(new Error(`管道连接/握手超时：${pipeName}`)); }
     }, options.connectTimeoutMs ?? 10_000);
     connectTimer.unref?.();
   });

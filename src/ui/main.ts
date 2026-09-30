@@ -74,6 +74,14 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
       } catch { /* 残缺尾行不虚构 */ }
     }
   });
+  daemonProcess.once('error', (error: Error) => {
+    spawnError = error.message;
+    process.stderr.write(`[zhongshuo-ui] daemon spawn 失败：${error.message}
+`);
+    app.exit(1); // 明确失败退出——不留静默未就绪窗口
+  });
+  process.stderr.write(`[zhongshuo-ui] ready: spawn ok（+${Date.now() - uiSpawnAt}ms，pid=${daemonProcess.pid}，pipe=${daemonPipe}）
+`);
   daemonProcess.once('exit', (code, signal) => {
     daemonExitFacts = { code: code ?? null, signal: signal ?? null };
     process.stderr.write(`[zhongshuo-ui] daemon 退出（code=${code}${signal != null ? ` signal=${signal}` : ''}）\n`);
@@ -171,22 +179,48 @@ let daemonToken = '';
 const appDataDir = process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo');
 app.setPath('userData', join(appDataDir, 'electron-user-data'));
 
+// 就绪链阶段（第二十一轮一）：spawnOk（进程已创建）→ pipeListening（daemon 侧 listen）→
+// authOk（首次 auth.ok=真正可用）→ failed/exit（spawn error/提前退出/截止超时——立即失败，
+// 不悬挂）。并发请求共享同一连接过程；统一次就绪截止（READY_DEADLINE_MS，覆盖重试+握手），
+// 超时明确反馈并结束本次尝试。
+const READY_DEADLINE_MS = Number(process.env.ZS_UI_READY_DEADLINE_MS ?? 90_000);
+const uiSpawnAt = Date.now();
+let daemonAuthed = false;
+let connectInFlight: Promise<void> | null = null;
+let spawnError: string | null = null;
+
 async function ensureConnection(): Promise<void> {
   if (pipe != null && !pipe.closed) return;
-  if (daemonPipe.length === 0) throw new Error('daemon 未启动');
-  // 重试连接（子进程启动与管道就绪有窗口）。
-  let lastError: unknown = null;
-  for (let i = 0; i < 40; i += 1) {
-    try {
-      pipe = await connectPipe(daemonPipe, { token: daemonToken });
-      pipeClosedCheck();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((r) => setTimeout(r, 500));
+  if (daemonPipe.length === 0) throw new Error('daemon 未启动（管道名未定）');
+  if (spawnError != null) throw new Error(`daemon 启动失败：${spawnError}`);
+  const exitFacts = readDaemonExitFacts();
+  if (exitFacts != null && !daemonShuttingDown) throw new Error(`daemon 已退出（code=${exitFacts.code}）——连接不可用`);
+  // 并发共享：同一段时间内所有请求等同一次连接过程（不各自重试放大负载）。
+  if (connectInFlight != null) return connectInFlight;
+  const deadline = Date.now() + READY_DEADLINE_MS;
+  connectInFlight = (async () => {
+    let lastError: unknown = null;
+    for (;;) {
+      if (Date.now() > deadline) break;
+      const ex = readDaemonExitFacts();
+      if (ex != null && !daemonShuttingDown) throw new Error(`daemon 启动中退出（code=${ex.code}）——连接中止`);
+      try {
+        pipe = await connectPipe(daemonPipe, { token: daemonToken });
+        if (!daemonAuthed) {
+          daemonAuthed = true;
+          process.stderr.write(`[zhongshuo-ui] ready: auth.ok（spawn→认证 ${Date.now() - uiSpawnAt}ms，pipe=${daemonPipe}）
+`);
+        }
+        pipeClosedCheck();
+        return;
+      } catch (error) {
+        lastError = error;
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
-  }
-  throw lastError instanceof Error ? lastError : new Error('daemon 连接失败');
+    throw lastError instanceof Error ? lastError : new Error(`daemon 连接截止超时（${READY_DEADLINE_MS}ms）`);
+  })().finally(() => { connectInFlight = null; });
+  return connectInFlight;
 }
 
 let closedNotified = false;
@@ -218,21 +252,19 @@ app.whenReady().then(async () => {
   // 启动完成时，命令在 handler 内有界等待就绪（不再 reject→renderer alert 阻塞挂死）；
   // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
   // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
-  let markDaemonReady: () => void = () => {};
-  const daemonReady = new Promise<void>((resolve) => { markDaemonReady = resolve; });
-  const boundedWait = (ms: number, what: string): Promise<void> => new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${what}等待超时（${ms}ms）——请重试或查看日志`)), ms);
-    t.unref?.();
-    daemonReady.then(() => { clearTimeout(t); resolve(); });
-  });
   let firstCommandDelayed = false;
   ipcMain.handle('zs:command', async (_event, envelope: unknown) => {
-    if (process.env.ZS_UI_FIRST_COMMAND_DELAY_MS != null && !firstCommandDelayed) {
-      firstCommandDelayed = true;
-      await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_FIRST_COMMAND_DELAY_MS) || 0));
+    // 指定方法延迟钩子（第二十一轮二：按方法定向——project.open 响应延迟同步点；app 设置
+    // 读取等先行的命令不再无谓消耗延迟）。
+    const delayEnv = process.env.ZS_UI_DELAY_METHOD_MS;
+    if (delayEnv != null && !firstCommandDelayed) {
+      const [method, ms] = delayEnv.split(':');
+      if (method === (envelope as { method?: string })?.method) {
+        firstCommandDelayed = true;
+        await new Promise((r) => setTimeout(r, Number(ms) || 0));
+      }
     }
-    await boundedWait(120_000, 'daemon 就绪');
-    await ensureConnection();
+    await ensureConnection(); // 就绪截止/并发共享/退出即败（见函数头）
     return pipe!.send(envelope);
   });
   ipcMain.handle('zs:pickFolder', async () => {
@@ -245,7 +277,12 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_DAEMON_DELAY_MS) || 0));
   }
   await startDaemonProcess(appDataDir, runtime);
-  markDaemonReady();
+  // 就绪不再以 spawn 返回为准（第二十一轮一）：认证完成（ensureConnection 内 auth.ok）才可用；
+  // 预热连接立即发起——首条命令与预热共享同一过程。
+  void ensureConnection().catch((error) => {
+    process.stderr.write(`[zhongshuo-ui] 预热连接失败（将由首条命令重试/报错）：${error instanceof Error ? error.message : String(error)}
+`);
+  });
 
   // 模拟验证模式（第十六轮二/四：本地体验入口 ZS_APP_MODE=fake-sim）——窗口标题明示 +
   // 日志说明：fake runtime+真实派发防护（保存真实绑定也不发真实请求）。

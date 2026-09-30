@@ -116,8 +116,12 @@ async function connectPage(port) {
   });
   const send = (method, params = {}) => new Promise((res) => { const id = ++seq; pending.set(id, res); ws.send(JSON.stringify({ id, method, params })); });
   await send('Runtime.enable');
+  const evalWithDeadline = (payload, timeoutMs = 20_000) => Promise.race([
+    send('Runtime.evaluate', payload),
+    new Promise((_, rej) => { const t = setTimeout(() => rej(new Error('CDP Runtime.evaluate 截止（页面阻塞/挂死）')), timeoutMs); t.unref?.(); }),
+  ]);
   const evalJs = async (expression) => {
-    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    const r = await evalWithDeadline({ expression, awaitPromise: true, returnByValue: true });
     if (r.error != null) return { error: r.error.message };
     const v = r.result?.result;
     if (v?.subtype === 'error') return { error: v.description?.slice(0, 200) ?? String(v.value) };
@@ -131,19 +135,47 @@ async function connectPage(port) {
  * /T /F 兜底（exit={code:null,signal:'KILLED-60s'}——强杀≠优雅成功，事实如实进入核对）。 */
 async function exitWithGuard(child, gracefulMs = 60_000) {
   const outcome = await new Promise((res) => {
-    child.once('exit', (c, s) => res({ code: c, signal: s }));
+    let done = false;
+    const settle = (r) => { if (!done) { done = true; clearTimeout(t); res(r); } };
+    child.once('exit', (c, s) => settle({ code: c, signal: s }));
     spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${child.pid}).CloseMainWindow()`], { timeout: 15_000 });
-    const t = setTimeout(() => { try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F']); } catch { /* 尽力 */ } }, gracefulMs);
+    const t = setTimeout(() => {
+      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F']); } catch { /* 尽力 */ }
+      // taskkill 兜底后仍需等 exit 事件；再宽限 10s，仍无事件按未确认收场（不冒充退出）。
+      setTimeout(() => settle({ code: null, signal: 'EXIT-UNCONFIRMED' }), 10_000).unref?.();
+    }, gracefulMs);
     t.unref?.();
   });
   await new Promise((r) => setTimeout(r, 800));
   return outcome;
 }
 
+
+/** 回执计数（D2 证据）：读 daemon 状态库 command_receipts（结果 JSON 内含 method 不可得——
+ *  以结果形状区分不可靠；改为统计成功 project.open 回执=result 含 project 键）。 */
+import { createRequire } from 'node:module';
+function countReceipts(dbFile, method) {
+  try {
+    const req = createRequire(join(repoRoot, 'package.json'));
+    const Database = req('better-sqlite3');
+    const db = new Database(dbFile, { readonly: true });
+    const rows = db.prepare('SELECT result_json FROM command_receipts').all();
+    db.close();
+    if (method === 'project.open') return rows.filter((r) => { try { return JSON.parse(r.result_json).outcome?.data?.project != null || JSON.parse(r.result_json).data?.project != null || JSON.parse(r.result_json).project != null; } catch { return false; } }).length;
+    return rows.length;
+  } catch (error) {
+    return `ERR:${String(error instanceof Error ? error.message : error).slice(0, 60)}`;
+  }
+}
+
 const waitFor = async (fn, timeoutMs, what) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const r = await fn();
+    // fn 每次调用受单步截止（20s）——页面挂死时 evalJs 拒绝路径生效，不绕过总截止。
+    const r = await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise((_, rej) => { const t = setTimeout(() => rej(new Error(`等待步骤截止：${what}`)), 20_000); t.unref?.(); }),
+    ]);
     if (r === true) return true;
     if (Date.now() > deadline) throw new Error(`等待超时：${what}`);
     await sleep(400);
@@ -352,48 +384,65 @@ try {
   }
 
 
-  // ---------- 会话 D：受控同步点（第二十轮一）——IPC 延迟就绪/首命令响应延迟/上一实例退出延迟 ----------
+  // ---------- 会话 D：受控同步点（第二十一轮二重做——覆盖真实窗口） ----------
   if (shouldRun('D')) {
-    // D1：daemon 启动延迟 5s + 页面就显示立即点击——命令应在 handler 内有界等待，项目最终打开。
+    // D1：daemon 管道 listen 延迟 8s + 页面出现立即点击——命令应在就绪截止内有界等待并完成
+    //（页面先显示、daemon 后就绪的真实窗口；用 commandId 往返与时间线证明，非固定 sleep）。
     {
       const port = 9335;
       const appDataD = join(installRoot, '应用 数据', '同步点D1');
-      const app = await launchApp(port, { ZS_UI_DAEMON_DELAY_MS: '5000' }, appDataD);
+      const t0 = Date.now();
+      const app = await launchApp(port, { ZS_DAEMON_LISTEN_DELAY_MS: '8000' }, appDataD);
       if (app.noPage) throw new Error('会话 D1：页面未就绪');
       const page = await connectPage(port);
-      await page.evalJs(`document.getElementById('open-folder').click()`); // 立即点击（不等就绪）
-      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 90_000, 'D1 daemon 延迟就绪下项目仍打开');
+      await page.evalJs(`document.getElementById('open-folder').click()`); // 页面刚显示即点击
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 60_000, 'D1 daemon 未就绪窗口下项目最终打开');
+      const openedAt = Date.now();
       const connErr = await page.evalJs(`document.getElementById('conn-state').classList.contains('err')`);
-      record('同步点·IPC 延迟就绪（daemon 延 5s+立即点击）：命令有界等待、项目打开、无错误残留', connErr.value !== true, `connErr=${connErr.value}`);
+      record('同步点·daemon 未就绪（listen 延 8s+立即点击）：有界等待后打开、无错误残留、耗时>8s',
+        connErr.value !== true && openedAt - t0 > 8000, `elapsed=${openedAt - t0}ms connErr=${connErr.value}`);
       page.close();
       await exitWithGuard(app.child);
       await sleep(800);
     }
-    // D2：首条命令响应延迟 3s——renderer 请求-响应不丢（同一点击最终完成）。
+    // D2：指定 project.open 响应延迟 3s——回执数量与 commandId 关联证明无重复无丢失。
     {
       const port = 9336;
       const appDataD = join(installRoot, '应用 数据', '同步点D2');
-      const app = await launchApp(port, { ZS_UI_FIRST_COMMAND_DELAY_MS: '3000' }, appDataD);
+      const app = await launchApp(port, { ZS_UI_DELAY_METHOD_MS: 'project.open:3000' }, appDataD);
       if (app.noPage) throw new Error('会话 D2：页面未就绪');
       const page = await connectPage(port);
       await page.evalJs(`document.getElementById('open-folder').click()`);
-      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 60_000, 'D2 首命令延迟下项目仍打开');
-      record('同步点·项目打开响应延迟（首命令延 3s）：响应回到原请求、无重复无丢失', true);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 60_000, 'D2 指定方法延迟下项目仍打开');
+      // 回执核对：project.open 恰好 1 条成功回执（重复点击不发生、响应回到原请求）。
+      const dbFile = join(appDataD, 'state.sqlite');
+      const receipts = countReceipts(dbFile, 'project.open');
+      record('同步点·project.open 响应延迟（指定方法延 3s）：打开完成且回执恰 1 条', receipts === 1, `receipts=${receipts}`);
       page.close();
       await exitWithGuard(app.child);
       await sleep(800);
     }
-    // 上一实例退出延迟已在 C→D 交接覆盖（C fire-and-forget 关闭、D 立即启动）；核对 C 的收口事实。
+    // D3：上一实例退出延迟（C 关闭 fire-and-forget、D 立即启动）：C 停机事实延后核对。
     for (let i = 0; i < 120; i += 1) { if (exitCFacts != null) break; await sleep(500); }
-    record('同步点·上一实例退出延迟（C 关闭不等完即启 D）：C 停机事实仍完整（退出 0+complete）',
-      exitCFacts?.exit?.code === 0 && exitCFacts?.facts?.daemonStopResult?.complete === true,
-      `exit=${exitCFacts?.exit?.code} stop=${exitCFacts?.facts?.daemonStopResult?.complete}`);
+    record('同步点·上一实例退出延迟（C 关闭不等完即启 D）：C 停机事实仍完整（退出 0+complete 且非 forced）',
+      exitCFacts?.exit?.code === 0 && exitCFacts?.facts?.daemonStopResult?.complete === true && exitCFacts?.facts?.daemonStopResult?.forced !== true,
+      `exit=${exitCFacts?.exit?.code} stop=${exitCFacts?.facts?.daemonStopResult?.complete} forced=${exitCFacts?.facts?.daemonStopResult?.forced}`);
     await sleep(1000);
     record('会话 D 无残留（含延迟退出的 C 进程树收口）', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
   }
+
 } catch (error) {
   failed = true;
   console.error(`中止：${error instanceof Error ? error.stack : String(error)}`);
+} finally {
+  // 本轮启动实例的兜底收拢（进程树级——仅本 verifier spawn 的 electron；诊断目录保留策略
+  // 不变：失败保留、成功清理）。残留计数只报告不冒充。
+  try {
+    const q = spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { $_.CommandLine -like '*${installRoot.replaceAll("'", "''")}*' } | ForEach-Object { $_.ProcessId }`], { encoding: 'utf8', timeout: 30_000 });
+    for (const pid of String(q.stdout ?? '').split(/\s+/).filter((x) => /^\d+$/.test(x))) {
+      try { spawnSync('taskkill', ['/PID', pid, '/T', '/F']); } catch { /* 尽力 */ }
+    }
+  } catch { /* 尽力 */ }
 }
 
 const allPassed = results.length > 0 && results.every((r) => r.ok) && !failed;
