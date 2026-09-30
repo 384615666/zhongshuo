@@ -12,6 +12,8 @@
  * - stdio：字节流 Buffer 传递（跨 chunk 增量解码由消费端处理）；父侧不再使用的子端句柄
  *   在 CreateProcess 成功后立即关闭；stdin.end() 关父侧写端=子进程收到 EOF。
  * - argv 编码：Windows 命令行引用规则（MSVCRT argv 解析约定）——非 shell 引号。
+ * - 环境：缺省=继承父环境；提供=完整替换（UTF-16 块+CREATE_UNICODE_ENVIRONMENT、
+ *   大小写不敏感去重、按名排序、双 NUL 终止——第十四轮一规范调用）。
  * - 同步 WriteFile 大输入阻塞：写入按 64KB 分片+批内让步（writeStdinChunked）。
  * - daemon 崩溃兜底：job 句柄仅在 daemon 进程（不被子继承）；KILL_ON_JOB_CLOSE。
  */
@@ -77,6 +79,33 @@ export function buildCmdline(cmd: string, args: string[]): string {
   return [quoteArg(cmd), ...args.map(quoteArg)].join(' ');
 }
 
+/**
+ * Windows 环境块行构造（第十四轮一，按官方环境块规范）：
+ * - 每行 "NAME=value"，调用处 join('\0')+末尾 NUL 构成双终止块；传块时必须带
+ *   CREATE_UNICODE_ENVIRONMENT（UTF-16 块——W 变体标志语义）；
+ * - 环境变量名大小写不敏感：Path/PATH 不产生冲突条目——按大写名去重，后写整行覆盖
+ *   （名字拼写与值都以后写为准）；
+ * - 按名字排序（大小写不敏感）——GetEnvironmentStrings 兼容约定；
+ * - value 含 '=' 合法（首个 '=' 为分隔）；value 空串=空值变量（合法，与删除可区分）；
+ *   value undefined=从环境删除（Node 语义——不进块）；
+ * - 空名字、名字含 '='、键值含 NUL 非法——显式报错（不静默丢弃）。
+ * 继承/覆盖/删除语义：env 缺省/null=继承父环境（lpEnvironment=NULL）；env 提供=完整
+ * 替换环境（Node child_process 语义）——覆盖与删除由调用方组合 {...process.env, KEY: v}
+ * 与排除键实现；父进程环境不被修改。
+ */
+export function buildEnvironmentBlockLines(env: Record<string, string>): string[] {
+  const byUpper = new Map<string, string>();
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) continue; // Node 语义：undefined=删除（不出现在子环境）
+    if (name === '' || name.includes('=') || name.includes('\0') || String(value).includes('\0')) {
+      throw new Error(`环境变量名/值非法（空名、名字含 "=" 或键值含 NUL）：${JSON.stringify(name).slice(0, 60)}`);
+    }
+    byUpper.set(name.toUpperCase(), `${name}=${value}`);
+  }
+  const nameOf = (line: string): string => line.slice(0, line.indexOf('='));
+  return [...byUpper.values()].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'en', { sensitivity: 'base' }));
+}
+
 function loadLib(): KoffiLib | { unavailable: string } {
   if (libCache != null) return libCache;
   try {
@@ -127,6 +156,7 @@ function loadLib(): KoffiLib | { unavailable: string } {
 
     const CREATE_SUSPENDED = 4;
     const CREATE_NO_WINDOW = 0x08000000;
+    const CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const STARTF_USESTDHANDLES = 0x100;
     const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
     const JobObjectExtendedLimitInformation = 9;
@@ -155,12 +185,17 @@ function loadLib(): KoffiLib | { unavailable: string } {
         const si: Record<string, unknown> = { cb: koffi.sizeof(STARTUPINFOW), flags: STARTF_USESTDHANDLES, hStdInput: stdio.in, hStdOutput: stdio.out, hStdError: stdio.err };
         const pi: { hProcess?: unknown; hThread?: unknown; dwProcessId?: number } = {};
         let envArg: unknown = null;
-        if (envLines != null) envArg = writeChar16Buf(`${envLines.join('\0')}\0\0`);
+        // 块=逐条 "NAME=value\0"+整体双 NUL 终止（writeChar16Buf 自带末尾 NUL——join 后补一个
+        // 即为双终止）；缓冲在同步调用返回前全程有效（koffi.alloc 生命周期覆盖调用窗口）。
+        if (envLines != null) envArg = writeChar16Buf(`${envLines.join('\0')}\0`);
         let cwdArg: unknown = null;
         if (cwd != null) cwdArg = writeChar16Buf(cwd);
         // lpCommandLine 须可写缓冲（koffi 字符串按 const 传递时实现自有副本）——显式构建。
         const cmdlinePtr = writeChar16Buf(cmdline);
-        const ok = CreateProcessW(null, cmdlinePtr, null, null, 1 /* bInheritHandles：stdio 管道 */, CREATE_SUSPENDED | CREATE_NO_WINDOW, envArg, cwdArg, si, pi);
+        // 传 UTF-16 块必须带 CREATE_UNICODE_ENVIRONMENT——否则系统按 ANSI 解释字节流
+        //（第十四轮一修正：第十三轮「非空块恒 87=FFI 缺陷」结论撤回，根因=缺本标志）。
+        const flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | (envArg != null ? CREATE_UNICODE_ENVIRONMENT : 0);
+        const ok = CreateProcessW(null, cmdlinePtr, null, null, 1 /* bInheritHandles：stdio 管道 */, flags, envArg, cwdArg, si, pi);
         if (ok === 0) return { ok: false, lastError: GetLastError() };
         return { ok: true, hProcess: pi.hProcess ?? null, hThread: pi.hThread ?? null, pid: pi.dwProcessId ?? 0 };
       },
@@ -264,6 +299,7 @@ export interface ManagedSpawnOptions {
   cmd: string;
   args: string[];
   cwd?: string;
+  /** 完整替换环境（Node child_process 语义：调用方组合覆盖/删除）；null/缺省=继承父环境。 */
   env?: Record<string, string> | null;
 }
 
@@ -347,18 +383,10 @@ export function spawnManagedProcess(options: ManagedSpawnOptions): ManagedProces
   lib.clearInherit(stderrParentRead);
 
   const cmdline = buildCmdline(options.cmd, options.args);
-  // 环境（第十三轮一实证）：koffi 的 CreateProcessW 对任何非空 lpEnvironment 恒返回
-  // ERROR_INVALID_PARAMETER(87)——同指针经 CreateProcessA 有效、GetEnvironmentStringsW 系统
-  // 原生块与 VirtualAlloc 页对齐块同样 87（位置无关：同值作 cwd=267 正常读取）。结论=FFI 层
-  // W 变体缺陷，非块构造问题。受支持路径=**继承父环境**（env=NULL，语义等价 {...process.env}）；
-  // 真实覆盖（与父环境不同的键值）显式报错——不静默错环境、不降级猜测。
-  const envOverrides = options.env != null
-    ? Object.entries(options.env).filter(([k, v]) => (process.env as Record<string, string | undefined>)[k] !== (v ?? ''))
-    : [];
-  if (envOverrides.length > 0) {
-    throw new Error(`受管环境覆盖暂不支持（koffi CreateProcessW lpEnvironment 缺陷：非空环境块恒 87——同指针 A 变体有效/系统原生块亦 87，实证见 managedBridge 测试与第十三轮报告）。请求覆盖 ${envOverrides.length} 项（${envOverrides.slice(0, 3).map(([k]) => k).join('、')}${envOverrides.length > 3 ? ' 等' : ''}）；当前受管路径继承父环境——如需覆盖请在受管开关关闭的部署上运行`);
-  }
-  const envLines: string[] | null = null; // 继承父环境（唯一受支持路径）
+  // 环境语义（第十四轮一修正）：缺省/null=继承父环境；提供=完整替换（UTF-16 环境块+
+  // CREATE_UNICODE_ENVIRONMENT——第十三轮「非空块恒 87=FFI 缺陷」结论撤回：当时缺标志，
+  // 系统按 ANSI 解释 UTF-16 字节流，失败源于本调用侧，非 koffi）。
+  const envLines: string[] | null = options.env != null ? buildEnvironmentBlockLines(options.env) : null;
 
   let hProcess: unknown = null;
   let hThread: unknown = null;

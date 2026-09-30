@@ -103,6 +103,8 @@ export interface ProcessRegistryRow {
   registered_at: number;
   closed_at: number | null;
   note: string | null;
+  /** 受管稳定身份（第十四轮二：jobId 正式列——PID 可复用不构成唯一身份；NULL=非受管/登记不完整）。 */
+  managed_job_id: string | null;
 }
 
 export interface ProbeOutcome {
@@ -124,17 +126,27 @@ export function registerTurnProcess(
     turnId: string; runId: string; memberId: string; adapterKind: string;
     processModel: 'per-turn' | 'shared' | 'none' | 'unknown'; pid: number | null;
     startedAtMs: number | null; identitySource: 'os-starttime' | 'pid-only' | 'none' | 'pre-launch' | 'managed-job';
-    note?: string; now?: number;
+    managedJobId?: string | null; note?: string; now?: number;
   },
 ): void {
   db.prepare(
     `INSERT OR REPLACE INTO runtime_process_registry
-       (turn_id, run_id, member_id, adapter_kind, process_model, pid, started_at_ms, identity_source, registered_at, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (turn_id, run_id, member_id, adapter_kind, process_model, pid, started_at_ms, identity_source, managed_job_id, registered_at, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.turnId, input.runId, input.memberId, input.adapterKind, input.processModel,
-    input.pid, input.startedAtMs, input.identitySource, input.now ?? Date.now(), input.note ?? null,
+    input.pid, input.startedAtMs, input.identitySource, input.managedJobId ?? null,
+    input.now ?? Date.now(), input.note ?? null,
   );
+}
+
+/** 同一受管 job 仍开放的登记（共享 job 收尾闸门：其他 turn 仍需证据/句柄时不 dispose）。 */
+export function openManagedJobRegistrations(
+  db: RegistryDb, jobId: string, excludeTurnId?: string,
+): ProcessRegistryRow[] {
+  return db.prepare(
+    `SELECT * FROM runtime_process_registry WHERE managed_job_id = ? AND closed_at IS NULL AND turn_id != ?`,
+  ).all(jobId, excludeTurnId ?? '') as ProcessRegistryRow[];
 }
 
 /** 正常终态收口（closed_at——区分崩溃遗留登记与已收口登记）。 */
@@ -163,9 +175,22 @@ export function getProbe(db: RegistryDb, probeId: string): (ProbeOutcome & { cre
 
 export type QueryFn = (pid: number) => LivenessResult;
 
+/** 受管 job 现场观察（第十四轮二：注入自受管桥——jobId 查找+PID 辅助核对）。 */
+export interface ManagedJobObservation {
+  /** 本进程是否持有该 job（false=无句柄：daemon 重启或已收尾）。 */
+  held: boolean;
+  /** job 根进程当前 PID（与登记 pid 核对——复用/错位即证据不属本 turn）。 */
+  pid: number | null;
+  rootExited: boolean;
+  activeCount: number | null;
+}
+
 /**
  * 服务端退出取证：查 turn 已登记身份 → OS 核对 → 写证据记录。
  * 不接受调用方自报结果；每一步无法确认都如实降级（不推断）。
+ *
+ * 受管登记（identity_source='managed-job'，第十四轮二）：核对以登记的 managed_job_id 为准
+ * （稳定身份），PID 仅辅助——无句柄/PID 不一致/其他 job 的现场都不冒充本 turn 的退出证据。
  *
  * 第八轮：exited（登记 PID 不存在）不再是完整退出证据——**父进程退出不证明其工具/
  * 派生子进程已结束**。退出事实=现存树 BFS 无存活后代 **且**（有活跃期快照时）快照
@@ -177,6 +202,8 @@ export function probeTurnExit(
     createdBy: 'probe' | 'reconcile'; now?: number;
     /** 树归属分析注入（测试故障模拟）；缺省=真实 analyzeProcessTree。 */
     treeScan?: (rootPid: number, historical: Array<{ pid: number; startedAt: number | null }>) => TreeScan;
+    /** 受管 job 现场注入（生产=受管桥；未注入=按 OS 路径核对——历史单测行为）。 */
+    managedJob?: (jobId: string | null) => ManagedJobObservation | null;
   },
 ): ProbeOutcome {
   const now = options.now ?? Date.now();
@@ -198,6 +225,39 @@ export function probeTurnExit(
       turnId, registryId: null, processModel: null, pid: null, observedAt: now,
       result: 'identity-missing', startedAtMs: null, reuseCheck: null,
       detail: '该 turn 无进程身份登记（崩溃发生在登记前或 adapter 未上报）——退出事实无从核对',
+    });
+  }
+  // 受管登记（第十四轮二）：以 managed_job_id 查找并核对——PID 仅辅助。无注入（历史单测）
+  // 时按 OS 路径核对。观察只产生 alive/unknown（释放依据独属 releaseProtection 的完整证据链）。
+  if (reg.identity_source === 'managed-job' && options.managedJob != null) {
+    const obs = options.managedJob(reg.managed_job_id);
+    if (obs == null || !obs.held) {
+      return write({
+        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+        result: 'unknown', startedAtMs: reg.started_at_ms, reuseCheck: null,
+        detail: '受管执行但本进程未持有其 job 句柄（daemon 重启或已收尾）——「曾纳管」不构成退出证据，人工核对',
+      });
+    }
+    if (obs.pid != null && reg.pid != null && obs.pid !== reg.pid) {
+      return write({
+        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+        result: 'unknown', startedAtMs: reg.started_at_ms, reuseCheck: 'different',
+        detail: `登记 PID(${reg.pid}) 与 job 实际 PID(${obs.pid}) 不一致（PID 复用或登记错位）——现场证据不属本 turn`,
+      });
+    }
+    if (!obs.rootExited || (obs.activeCount == null ? 1 : obs.activeCount) > 0) {
+      return write({
+        turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+        result: 'alive', startedAtMs: reg.started_at_ms, reuseCheck: 'same',
+        detail: !obs.rootExited
+          ? '受管 job 根进程仍存活'
+          : `受管 job 根已退出但仍有 ${obs.activeCount} 个活跃进程（后代存活）——执行载体未全部结束`,
+      });
+    }
+    return write({
+      turnId, registryId: reg.id, processModel: reg.process_model, pid: reg.pid, observedAt: now,
+      result: 'unknown', startedAtMs: reg.started_at_ms, reuseCheck: 'same',
+      detail: '受管 job 根已退出且活跃计数 0（观察）——完整释放依据以 recovery.releaseProtection 的受管证据链为准，probe 不直接释放',
     });
   }
   if (reg.process_model === 'none') {

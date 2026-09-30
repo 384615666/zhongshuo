@@ -158,12 +158,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }
       const { resolveClaudeExecutable } = claudeCliMod;
       return (executable: string | undefined) => (args: string[], cwd: string) =>
-        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd }) as never; // env=继承父环境（受管路径受支持语义）
+        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd }) as never; // env 缺省=继承父环境（与未受管 spawn 的 env:process.env 等价）
     })();
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
       const { spawnManagedBridge } = managedBridgeMod;
-      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env=继承父环境
+      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env 缺省=继承父环境
     })();
     if (options.runtime === 'codex' && managedCodexSpawn != null) {
       adapter = new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn });
@@ -333,6 +333,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           ].filter((x) => x != null) as string[];
           if (reasons.length === 0) {
             persistStopRecord({ at: Date.now(), phase: 'closed', stopRequestsSentTo });
+            // 受管 job 全量收尾（第十四轮二：stop 期间资源回收归属——runtime 已收拢、零后台
+            // 写库确认后；KILL_ON_JOB_CLOSE 兜底残留进程；幂等）。不完整路径不收尾（崩溃语义：
+            // 进程退出本身即关闭 job 句柄，现场随 WAL 保留）。
+            managedBridgeMod.disposeAllManagedJobs();
             db!.close();                  // 6) 关库（零后台写库已确认：drain/启动/消费器全收敛）
             lockHandle.release();         // 7) 释放锁
             return { complete: true, phase: 'closed', stopRequestsSentTo, disposeReport, inFlightRemaining: [], startingRemaining: [] };
@@ -384,6 +388,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               };
             }
             persistStopRecord({ at: Date.now(), phase: 'forced-closed', note: '强制路径已核对：进程收拢+消费器 UNKNOWN 落库+启动窗口收尾完成后关库', stopRequestsSentTo: gracefulResult.stopRequestsSentTo });
+            managedBridgeMod.disposeAllManagedJobs(); // 受管 job 全量收尾（同优雅完成路径；幂等）
             db!.close();
             lockHandle.release();
             return {

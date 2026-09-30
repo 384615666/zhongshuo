@@ -8,7 +8,8 @@
  * - 输出：大 stdout（~1.5MB 分次读）、中文跨字节边界——字节流不丢；exit 与 close 分开
  *   （close=排空后，含「末块数据与退出同拍到达」的终拍 push(null)）；
  * - argv：空参数/嵌入引号/引号前反斜杠/带空格+末尾反斜杠路径（经回读核对）；
- * - 环境合并：env 覆盖+继承父环境。
+ * - 环境块（第十四轮一规范调用）：完整替换 env 逐项回读——ASCII/中文/空值/带空格路径/
+ *   覆盖父值/删除变量/大块；Path/PATH 大小写不敏感去重；父进程环境不变。
  *
  * 二（正式链）：受管 spawn → 登记 identity_source='managed-job'（note=jobId 稳定身份）→
  * UNKNOWN/租约保留 → 后代结束 → recovery.probeProcess/releaseProtection 凭 releaseEvidence
@@ -111,28 +112,60 @@ describe('第十三轮一：受管桥 stdio/argv 生命周期', () => {
     expect(line).toContain('""'); // 空参数显式引用
   }, 60_000);
 
-  it('环境语义（第十三轮实证）：继承父环境=受支持路径；真实覆盖显式报错（FFI 缺陷不静默）', async () => {
-    // ① 继承：不传 env（或传与父环境一致的 env）→ 子进程可见父环境变量。
+  it('环境块规范调用（第十四轮一）：替换 env 回读——ASCII/中文/空值/空格/覆盖/删除/大块/大小写去重；父环境不变', async () => {
     const marker = `MG_${Date.now().toString(36)}`;
-    process.env[`${marker}_PARENT`] = 'from-parent';
-    const child = spawnManagedBridge(NODE, ['-e', `process.stdout.write(process.env['${marker}_PARENT'] || 'MISSING')`], { cwd: tmpRoot });
+    const k = {
+      ascii: `${marker}_ASCII`, cn: `${marker}_CN`, empty: `${marker}_EMPTY`,
+      space: `${marker}_SPACE`, override: `${marker}_OVERRIDE`, del: `${marker}_DEL`,
+      dup: `${marker}_DUP`, big: `${marker}_BIG`,
+    };
+    // 父环境预置（覆盖/删除语义的核对基准；spawn 后核对父环境原样）。
+    process.env[k.override] = 'old-from-parent';
+    process.env[k.del] = 'to-delete';
+    // ① 缺省 env=继承父环境（生产路径——与未受管 spawn 的 env:process.env 等价）。
+    const inheritChild = spawnManagedBridge(NODE, ['-e', `process.stdout.write(process.env[${JSON.stringify(k.override)}] || 'MISSING')`], { cwd: tmpRoot });
+    const inheritOut = (await readAll(inheritChild.stdout)).toString('utf8');
+    inheritChild.managed.dispose();
+    expect(inheritOut).toBe('old-from-parent');
+    const bigValue = 'x'.repeat(30_000) + 'y'.repeat(2_000); // 32K 单值（<32767 上限，跨多个写拍）
+    const env: Record<string, string | undefined> = {
+      ...process.env, // 完整替换（Node 语义）：由父环境组合——SystemRoot/PATH 等保留
+      [k.ascii]: 'hello-ascii',
+      [k.cn]: '中文值 ✓',
+      [k.empty]: '',
+      [k.space]: 'C:\\Program Files\\apps 测试\\',
+      [k.override]: 'new-value',
+      [k.dup]: 'one',
+      [k.dup.toLowerCase()]: 'two', // 同名大小写变体——去重后写整行覆盖（后写为准）
+      [k.big]: bigValue,
+    };
+    delete env[k.del]; // 删除：父环境有、传入环境无 → 子进程不可见
+    const script = `const r={a:process.env[${JSON.stringify(k.ascii)}],c:process.env[${JSON.stringify(k.cn)}]`
+      + `,e:process.env[${JSON.stringify(k.empty)}]===undefined?'MISSING':process.env[${JSON.stringify(k.empty)}]`
+      + `,s:process.env[${JSON.stringify(k.space)}],o:process.env[${JSON.stringify(k.override)}]`
+      + `,d:process.env[${JSON.stringify(k.del)}]===undefined?'MISSING':process.env[${JSON.stringify(k.del)}]`
+      + `,p:process.env[${JSON.stringify(k.dup)}],b:process.env[${JSON.stringify(k.big)}]};`
+      + `r.bl=r.b==null?null:r.b.length;r.bh=r.b==null?null:r.b.slice(0,3);r.bt=r.b==null?null:r.b.slice(-3);r.b=null;`
+      + `process.stdout.write(JSON.stringify(r))`;
+    const child = spawnManagedBridge(NODE, ['-e', script], { cwd: tmpRoot, env: env as unknown as NodeJS.ProcessEnv });
     const out = (await readAll(child.stdout)).toString('utf8');
     child.managed.dispose();
-    delete process.env[`${marker}_PARENT`];
-    expect(out).toBe('from-parent');
-    // ② 真实覆盖（与父环境不同）：显式报错并列出缺陷证据——不用错误环境静默替代。
-    expect(() => spawnManagedBridge(NODE, ['-e', ''], { env: { [`${marker}_X`]: 'override' } as unknown as NodeJS.ProcessEnv }))
-      .toThrow(/受管环境覆盖暂不支持.*CreateProcessW lpEnvironment 缺陷/);
-    // ③ 与父环境一致的 env（无实际覆盖）=继承，不报错（先设环境再 spawn——继承为 spawn 时快照）。
-    process.env[`${marker}_PARENT`] = 'from-parent';
-    const child3 = spawnManagedBridge(NODE, ['-e', `process.stdout.write(process.env['${marker}_PARENT'] || 'MISSING')`], {
-      cwd: tmpRoot,
-      env: { PATH: process.env.PATH } as unknown as NodeJS.ProcessEnv,
-    });
-    const out3 = (await readAll(child3.stdout)).toString('utf8');
-    child3.managed.dispose();
-    delete process.env[`${marker}_PARENT`];
-    expect(out3).toBe('from-parent');
+    // 父进程环境不被修改（替换语义只作用于子进程块）。
+    expect(process.env[k.override]).toBe('old-from-parent');
+    expect(process.env[k.del]).toBe('to-delete');
+    delete process.env[k.override];
+    delete process.env[k.del];
+    const r = JSON.parse(out) as { a: string; c: string; e: string; s: string; o: string; d: string; p: string; bl: number | null; bh: string | null; bt: string | null };
+    expect(r.a).toBe('hello-ascii');
+    expect(r.c).toBe('中文值 ✓');
+    expect(r.e).toBe('');           // 空值保留（与删除可区分）
+    expect(r.s).toBe('C:\\Program Files\\apps 测试\\');
+    expect(r.o).toBe('new-value');  // 覆盖父值
+    expect(r.d).toBe('MISSING');    // 删除变量
+    expect(r.p).toBe('two');        // Path/PATH 同名大小写不敏感去重——后写整行覆盖
+    expect(r.bl).toBe(32_000);      // 大环境块（UTF-16 64KB）完整到达
+    expect(r.bh).toBe('xxx');
+    expect(r.bt).toBe('yyy');
   }, 60_000);
 });
 
@@ -203,12 +236,11 @@ describe('第十三轮二：恢复证据正式链（spawn→登记→UNKNOWN→p
     db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch, budget_mark) VALUES (?, ?, 'c1', 'mA', 'direct.work', 'UNKNOWN', 'task:mg:initial', 1, 1, NULL)`).run(turnId, runId);
     const lockDomain = tmpRoot.toLowerCase();
     db.prepare(`INSERT INTO workspace_leases (lock_domain, owner_turn_id, epoch, heartbeat_at, status) VALUES (?, ?, 1, ?, 'active')`).run(lockDomain, turnId, Date.now());
-    // 登记生产口径：identity_source='managed-job'，note=受管稳定身份（jobId——非 PID 唯一）。
+    // 登记生产口径（第十四轮二）：identity_source='managed-job'+managed_job_id 正式列。
     registerTurnProcess(db, {
       turnId, runId, memberId: 'mA', adapterKind: 'fake',
       processModel: 'per-turn', pid: child.pid, startedAtMs: null,
-      identitySource: 'managed-job',
-      note: child.managedJobId,
+      identitySource: 'managed-job', managedJobId: child.managedJobId,
     });
     await sleep(500);
     const mp = managedJobById(child.managedJobId);

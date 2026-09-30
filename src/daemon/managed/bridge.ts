@@ -10,7 +10,9 @@
  * - 背压：Readable 高水位（1MB）满时暂停读取、水位回落继续；单次 FFI 读上限 1MB；
  * - 句柄/证据生命周期：ManagedProcess 注册到 managedJobs（键=jobId 稳定身份，非 PID）；
  *   根退出后**保留实例**（可查询证据）——releaseProtection 消费证据（markConsumed）后仍
- *   保留至 dispose（由持有者显式收尾）——证据不因关输出流而消失；dispose 移除记录防泄漏；
+ *   保留至 dispose（收尾归属，第十四轮二：per-turn=turn 终态 settle/证据消费后经
+ *   retireManagedJob；shared=daemon stop 全量收尾；轮询定时器 close/dispose 实际
+ *   clearInterval——managedActivePollers 可验证）——证据不因关输出流而消失；
  *   daemon 重启后无内存句柄→旧 turn 查不到→如实「无句柄，进入人工核对」（不追认）。
  * - 门禁：ZS_MANAGED_RUNTIME=1 时桥必须可用（不可用=拒绝派发不降级）；未设=既有路径。
  */
@@ -33,6 +35,7 @@ export interface ManagedChildProcess extends EventEmitter {
 
 const managedJobsByKey = new Map<string, ManagedProcess>();
 const pidIndex = new Map<number, string>(); // pid→jobId 注册期索引（dispose 移除；身份以 jobId 为准）
+let activePollers = 0; // 活跃轮询定时器计数（收尾归属验证——close/dispose 后必须归零）
 
 /** 按稳定身份取受管句柄（releaseProtection 联动：无=未纳管/已释放，走既有保守路径）。 */
 export function managedJobById(jobId: string): ManagedProcess | undefined {
@@ -48,6 +51,26 @@ export function managedJobByPid(pid: number | null | undefined): ManagedProcess 
 
 export function managedJobsCount(): number {
   return managedJobsByKey.size;
+}
+
+/** 活跃轮询定时器数（close/dispose 后必须递减——不永久保留只返回的定时回调）。 */
+export function managedActivePollers(): number {
+  return activePollers;
+}
+
+/** 按稳定身份收尾单个受管 job（幂等；不存在=false）。 */
+export function disposeManagedJob(jobId: string): boolean {
+  const mp = managedJobsByKey.get(jobId);
+  if (mp == null) return false;
+  mp.dispose(); // 包装版：停轮询+摘索引+原 dispose（句柄最终回收）
+  return true;
+}
+
+/** 全量收尾（daemon stop 完成路径专用：KILL_ON_JOB_CLOSE 兜底残留进程）。返回已收尾 jobId。 */
+export function disposeAllManagedJobs(): string[] {
+  const ids = [...managedJobsByKey.keys()];
+  for (const id of ids) disposeManagedJob(id);
+  return ids;
 }
 
 /** 受管桥是否可用（ZS_MANAGED_RUNTIME=1 且 koffi 可加载）。不可用时调用方必须拒绝派发。 */
@@ -77,6 +100,15 @@ export function spawnManagedBridge(cmd: string, args: string[], options: { cwd?:
   let exitCode: number | null = null;
   let exitEmitted = false;
   let polling = true;
+  let pollTimer: NodeJS.Timeout | null = null;
+  const stopPoller = (): void => {
+    polling = false;
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      activePollers -= 1;
+    }
+  };
 
   const stdout = new Readable({ highWaterMark: STREAM_HIGH_WATER, read() { /* 轮询驱动 */ } });
   const stderr = new Readable({ highWaterMark: STREAM_HIGH_WATER, read() { /* 同上 */ } });
@@ -129,20 +161,22 @@ export function spawnManagedBridge(cmd: string, args: string[], options: { cwd?:
       const outDone = mp.stdoutDrained() === true;
       const errDone = mp.stderrDrained() === true;
       if (outDone && errDone) {
-        polling = false;
         // 终拍：若末块数据与退出同拍到达，流尚未收到 EOF——补 push(null)（push-after-end 由
-        // readableEnded 守卫），否则消费者永等 'end'。
+        // readableEnded 守卫），否则消费者永等 'end'。排空完成即停轮询（clearInterval——
+        // 定时器不永久保留）。
         if (!stdout.readableEnded) stdout.push(null);
         if (!stderr.readableEnded) stderr.push(null);
         mp.closeOutputPipes(); // 证据/查询走 job 句柄——不因关输出流而消失
+        stopPoller();
         setImmediate(() => {
           emitter.emit('close', exitCode, null);
         });
       }
     }
   };
-  const pollTimer = setInterval(pump, POLL_INTERVAL_MS);
+  pollTimer = setInterval(pump, POLL_INTERVAL_MS);
   pollTimer.unref?.();
+  activePollers += 1;
 
   emitter.pid = mp.pid;
   emitter.managedJobId = mp.jobId;
@@ -155,11 +189,14 @@ export function spawnManagedBridge(cmd: string, args: string[], options: { cwd?:
     mp.terminateAll();
     return true;
   };
-  // dispose：从注册表移除（证据已消费后的收尾；防长期泄漏）。
+  // dispose（收尾归属：终态 settle/releaseProtection 消费/daemon stop）：停轮询+摘注册索引+
+  // 原 dispose（句柄最终回收，KILL_ON_JOB_CLOSE 兜底残留）。PID 复用守卫：pidIndex 只在仍指向
+  // 本 job 时删除——同 PID 新 job 的索引不被旧 job 收尾误删。
   const origDispose = mp.dispose.bind(mp);
   mp.dispose = () => {
+    stopPoller();
     managedJobsByKey.delete(mp.jobId);
-    pidIndex.delete(mp.pid);
+    if (pidIndex.get(mp.pid) === mp.jobId) pidIndex.delete(mp.pid);
     origDispose();
   };
   return emitter;
