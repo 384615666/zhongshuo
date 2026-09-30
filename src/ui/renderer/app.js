@@ -24,6 +24,11 @@ const TASK_TERMINAL = ['DONE', 'BLOCKED', 'FAILED', 'CANCELLED'];
 
 const state = {
   projectId: null,
+  /** 导航代次（第二十三轮一）：每次切换视图/会话/项目 +1——异步响应凭 (目标三元组+代次)
+   * 核对，A→B→A 时旧 A 的迟到响应不再被误当作当前。 */
+  navGeneration: 0,
+  /** 深链/待我处理定位焦点（一次性消费）：{ kind:'dm'|'msg'|'review'|'task', ... }。 */
+  pendingFocus: null,
   /** 当前项目快照（project.open 结果：任务验收开关/revision 等——项目设置的读写来源）。 */
   project: null,
   roomId: null,
@@ -174,6 +179,7 @@ function restoreDraft() {
 }
 
 function showPool() {
+  state.navGeneration += 1;
   if (state.openThreadId != null) saveDraft();
   state.openThreadId = null;
   state.openTaskId = null;
@@ -190,6 +196,7 @@ function showPool() {
 }
 
 async function openThread(threadId, taskId, anchorText) {
+  state.navGeneration += 1;
   saveDraft();
   state.openThreadId = threadId;
   state.openDmId = null;
@@ -227,6 +234,7 @@ async function renderDmSidebar() {
 }
 
 async function openDm(conversationId) {
+  state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
   el('pool').classList.add('hidden');
@@ -239,74 +247,140 @@ async function openDm(conversationId) {
 
 /** 深链恢复：#dm=<conversationId> —— 项目加载后回到该会话（不存在则忽略）。 */
 async function restoreDmDeepLink() {
-  // DEV-18 首包：深链按实体真实归属定位（deepLink.resolve——纯读，零新增运行/零预算）。
-  // dm/task/delivery/msg 全形态；失效/无权限/归属矛盾由服务端明确报错——不静默跳转。
+  // 统一导航（第二十三轮二）：解析并校验目标→聚焦来源项目（跨项目切换）→打开正确线程或
+  // DM→定位消息/交付版本。刷新、直接打开链接、前进后退（hashchange/popstate）共用本入口；
+  // URL 目标优先于旧 localStorage 恢复。
   const hash = decodeURIComponent(location.hash.slice(1));
+  if (hash.length === 0) return;
   const m = /^(dm|task|delivery|msg)=([\w:-]+)$/.exec(hash);
-  if (m == null || state.projectId == null) return;
+  if (m == null) return;
   try {
     const r = await command('deepLink.resolve', { hash: `#${hash}` });
-    if (r.kind === 'dm') { await openDm(r.conversationId); return; }
-    if (r.kind === 'msg' || r.kind === 'task' || r.kind === 'delivery') {
-      // 消息/任务/交付：定位到所属会话（DM 会话→打开；房间任务→回主池打开线程卡片）。
-      const conv = ((await command('conversation.list', { projectId: r.projectId }).catch(() => ({ conversations: [] }))).conversations ?? []).find((c) => c.conversationId === r.conversationId);
-      if (conv != null && r.threadId == null && conv.conversationId != null) { await openDm(r.conversationId); return; } // DM 会话（无线程）
-      showPool();
-      await renderPool().catch(() => {});
-      showError(`深链已定位：${r.kind === 'msg' ? `消息 #${r.messageSeq}` : r.kind === 'task' ? '任务' : `交付（revision ${r.revision}）`} 在当前项目——请从任务池打开对应线程`);
+    // 跨项目聚焦（第二十三轮二）：来源项目≠当前项目时切换（project.open 按 rootPath）；
+    // 本项目会话与可见项目顺序保留——不回退到当前项目同号任务。
+    const currentCanonical = state.project?.directoryIdentity?.canonicalPath;
+    if (r.rootPath != null && r.rootPath !== currentCanonical) {
+      await loadProject(r.rootPath);
+    }
+    if (r.kind === 'dm') {
+      state.pendingFocus = null;
+      await openDm(r.conversationId);
       return;
+    }
+    if (r.kind === 'msg') {
+      // 消息：DM 会话→打开+定位 seq；线程消息→打开线程后由线程视图置顶（锚点文本为根）。
+      const conv = ((await command('conversation.list', { projectId: r.projectId }).catch(() => ({ conversations: [] }))).conversations ?? []).find((c) => c.conversationId === r.conversationId);
+      if (conv != null && r.threadId == null) {
+        state.pendingFocus = { kind: 'msg', conversationId: r.conversationId, messageSeq: r.messageSeq };
+        await openDm(r.conversationId);
+        return;
+      }
+      if (r.threadId != null) { await openThread(r.threadId, null, ''); return; }
+      return;
+    }
+    if (r.kind === 'task' || r.kind === 'delivery') {
+      // 任务/交付：DM 会话→打开（交付经 pendingFocus 定位对应版本）；房间任务→打开线程。
+      const conv = ((await command('conversation.list', { projectId: r.projectId }).catch(() => ({ conversations: [] }))).conversations ?? []).find((c) => c.conversationId === r.conversationId);
+      if (conv != null && r.threadId == null) {
+        state.pendingFocus = r.kind === 'delivery'
+          ? { kind: 'review', conversationId: r.conversationId, taskId: r.taskId, deliveryId: r.deliveryId, revision: r.revision, manifestHash: r.manifestHash }
+          : null;
+        await openDm(r.conversationId);
+        return;
+      }
+      if (r.threadId != null) { await openThread(r.threadId, r.taskId ?? null, ''); return; }
+      showPool();
+      void renderPool().catch(() => {});
     }
   } catch (e) {
     showError(`深链无法定位：${e.message}`);
   }
 }
 
-/** 待我处理（DEV-18 首包）：权威业务状态汇总（mine.pending——纯读）。读卡片≠完成事项：
- * 阅读不消掉待办；验收在对应视图按当前 deliveryId/revision 执行。 */
+/** 待我处理（DEV-18 首包；第二十三轮二重写）：权威业务状态汇总（mine.pending——纯读）。
+ * 条目保留 project/task/conversation/delivery 身份并显示来源项目；**全部渲染**（无 slice
+ * 截断——第 13 项及以后同样可达），头部显示总数；同会话多待验收逐条可达（进入定位对应
+ * 交付版本）；读卡片≠完成事项：阅读/重绘不消待办。 */
 async function renderPendingList() {
   const nav = el('pending-list');
   if (nav == null) return;
   let data;
   try { data = await command('mine.pending', {}); } catch { return; /* 通信异常由连接状态呈现 */ }
+  const genAtRender = state.navGeneration;
   const rows = [];
   for (const p of data.projects ?? []) {
     for (const t of p.reviewTasks ?? []) {
-      rows.push({ label: `待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? `（v${t.revision}）` : ''}`, title: `验收绑定当前交付（revision=${t.revision ?? '无'}）`, conversationId: t.conversation_id, taskId: t.task_id, kind: 'task' });
+      rows.push({
+        label: `【${p.displayName}】待验收：${t.task_kind === 'dm_turn' ? '私信任务' : '任务'}${t.revision != null ? `（v${t.revision}）` : ''}${t.actionable === false ? '（无待验收交付——需检查状态）' : ''}`,
+        title: t.actionable === false
+          ? `任务处于 REVIEW 但无可验收交付（当前绑定=null）——诊断入口，验收将被拒绝`
+          : `验收绑定当前交付（revision=${t.revision}）`,
+        projectId: p.projectId, conversationId: t.conversation_id, taskId: t.task_id,
+        deliveryId: t.delivery_id, revision: t.revision, manifestHash: t.manifest_hash, kind: 'review',
+      });
     }
     for (const u of p.dmUnread ?? []) {
-      rows.push({ label: `未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话（读到的才算已读）', conversationId: u.conversation_id, kind: 'dm' });
+      rows.push({ label: `【${p.displayName}】未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话（读到的才算已读）', projectId: p.projectId, conversationId: u.conversation_id, kind: 'dm' });
+    }
+    for (const b of p.blockedTasks ?? []) {
+      rows.push({ label: `【${p.displayName}】被阻塞：${b.title}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
     }
   }
+  if (state.navGeneration !== genAtRender) return; // 迟到响应不覆盖当前视图的待办区
   nav.replaceChildren();
-  for (const r of rows.slice(0, 12)) {
+  const head = document.createElement('div');
+  head.className = 'sidebar-sec';
+  head.textContent = rows.length > 0 ? `共 ${rows.length} 项（全部显示）` : '暂无待办';
+  nav.append(head);
+  for (const r of rows) {
     const btn = document.createElement('button');
     btn.className = 'room';
     btn.textContent = r.label;
     btn.title = r.title;
     btn.onclick = () => {
-      if (r.kind === 'dm' && r.conversationId != null) void openDm(r.conversationId).catch((e) => showError(`打开失败：${e.message}`));
-      else if (r.conversationId != null) location.hash = `task=${r.taskId}`;
+      if (r.kind === 'dm' && r.conversationId != null) {
+        void openDm(r.conversationId).catch((e) => showError(`打开失败：${e.message}`));
+        return;
+      }
+      if (r.kind === 'review') {
+        // 定位对应交付（第二十三轮二）：pendingFocus 由 renderDm 消费——同会话多待验收不串。
+        state.pendingFocus = { kind: 'review', conversationId: r.conversationId, taskId: r.taskId, deliveryId: r.deliveryId, revision: r.revision, manifestHash: r.manifestHash };
+        location.hash = `delivery=${r.deliveryId}`;
+        return;
+      }
+      if (r.kind === 'blocked' && r.taskId != null) location.hash = `task=${r.taskId}`;
     };
     nav.append(btn);
   }
 }
 
 async function renderDm() {
-  // 固定请求目标+导航代次防护（DEV-18 首包）：本轮渲染的全部请求与标读绑定发起时的会话
-  // （dmAtRender）——切换到会话 B 后，A 的迟到响应不得重绘视图、不得标读 B。
+  // 固定请求目标+导航代次（第二十三轮一）：project+conversation+view 三元组在**每次 await
+  // 之后**核对——A→B 挡一次不够，A→B→A 时第一次核对（openDmId!==dmAtRender）会放行第二批
+  // 迟到响应，必须比对「代次」而非仅 conversationId。
   const dmAtRender = state.openDmId;
-  if (dmAtRender == null || state.projectId == null) return;
+  const projectAtRender = state.projectId;
+  const genAtRender = state.navGeneration;
+  if (dmAtRender == null || projectAtRender == null) return;
+  const stillCurrent = () => state.openDmId === dmAtRender && state.projectId === projectAtRender && state.navGeneration === genAtRender;
   // 执行态/排队数必须取实时值（第二十轮一：缓存由低频侧栏刷新——会话视图每次直查，
   // 不用过期缓存呈现运行/排队状态）。
-  const fresh = ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === dmAtRender);
-  if (state.openDmId !== dmAtRender) return; // 已切走：迟到响应不重绘（不覆盖 B 的视图/在途状态）
+  const fresh = ((await command('conversation.list', { projectId: projectAtRender })).conversations ?? []).find((c) => c.conversationId === dmAtRender);
+  if (!stillCurrent()) return; // 已切走（含 A→B→A：代次不等）：迟到响应不重绘
   if (fresh == null) { state.openDmId = null; showPool(); return; }
-  const history = await command('conversation.history', { conversationId: dmAtRender, limit: 100 });
   const box = el('dm-messages');
+  // 滚动位置保留（第二十三轮一）：用户滚离底部（>80px 视为在读历史）时不强制滚到底；
+  // 仅当原本就在底部（新消息跟随）或首次渲染才贴底。
+  const nearBottom = () => box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const wasNearBottom = nearBottom();
+  const prevScrollTop = box.scrollTop;
+  const history = await command('conversation.history', { conversationId: dmAtRender, limit: 100 });
+  if (!stillCurrent()) return; // history 期间切走：不重绘（滚动位置/在途状态不覆盖）
   box.replaceChildren();
   for (const m of history.messages ?? []) {
     const div = document.createElement('div');
     div.className = `msg ${m.author_type === 'human' ? 'mine' : 'agent'}`;
+    div.dataset.seq = String(m.conversation_seq); // 深链消息定位（scrollIntoView）
     let text = '';
     try { text = (JSON.parse(m.body_json) ?? {}).text ?? ''; } catch { text = String(m.body_json ?? ''); }
     const who = document.createElement('div');
@@ -317,14 +391,20 @@ async function renderDm() {
     div.append(who, body);
     box.append(div);
   }
-  box.scrollTop = box.scrollHeight;
-  // 已读水位推进（只标记自己已看到的——服务端校验 viewer）。
+  if (wasNearBottom) box.scrollTop = box.scrollHeight;
+  else box.scrollTop = prevScrollTop; // 读历史时轮询重绘不打断滚动位置
+  // 深链消息定位（第二十三轮二）：一次性消费 pendingFocus.messageId/seq。
+  if (state.pendingFocus?.messageSeq != null) {
+    const target = box.querySelector(`[data-seq="${state.pendingFocus.messageSeq}"]`);
+    if (target != null) target.scrollIntoView({ block: 'center' });
+    state.pendingFocus = null;
+  } else if (state.pendingFocus?.kind === 'dm') state.pendingFocus = null;
+  // 已读水位=**已展示且贴底**才推进（第二十三轮一）：后台窗口（document.hidden）、滚看历史、
+  // 已切走的会话不自动标读——服务端另拒未来水位。
   const lastSeq = history.messages?.length > 0 ? history.messages[history.messages.length - 1].conversation_seq : fresh.lastMessageSeq;
-  if (fresh.unread > 0) {
-    // 标读绑定发起时的会话+消息序（服务端另拒未来水位）：读到的才算已读——重绘/切换/轮询
-    // 不得自动读完未展示内容，也不得把别的会话标掉。
+  if (fresh.unread > 0 && !document.hidden && nearBottom()) {
     void command('conversation.markRead', { conversationId: dmAtRender, throughMessageSeq: lastSeq })
-      .then((r) => { if (r?.advanced && state.openDmId === dmAtRender) void renderDmSidebar().catch(() => {}); })
+      .then((r) => { if (r?.advanced && stillCurrent()) void renderDmSidebar().catch(() => {}); })
       .catch(() => {});
   }
   // 会话头：标题/执行态/操作（停止/继续队列/归档/取消归档）。
@@ -336,12 +416,17 @@ async function renderDm() {
   el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
   el('dm-restore-btn').classList.toggle('hidden', fresh.archivedAt == null);
   el('dm-rename-btn').classList.toggle('hidden', false); // 重命名随时可用（不换对端/不重置）
-  const review = fresh.pendingReview;
+  // 待验收定位（第二十三轮二）：从待我处理条目进入时优先显示对应交付（state.pendingFocus）；
+  // 默认=最新 pending；同会话多待验收时提示总数（全部经待我处理可达，不因单数行漏项）。
+  const review = (state.pendingFocus?.kind === 'review' && state.pendingFocus.conversationId === dmAtRender)
+    ? { taskId: state.pendingFocus.taskId, deliveryId: state.pendingFocus.deliveryId, revision: state.pendingFocus.revision, manifestHash: state.pendingFocus.manifestHash }
+    : fresh.pendingReview;
+  if (state.pendingFocus?.kind === 'review') state.pendingFocus = null; // 一次性消费
   el('dm-review-row').classList.toggle('hidden', review == null);
-  if (review != null) el('dm-review-revision').textContent = String(review.revision);
+  if (review != null) el('dm-review-revision').textContent = `${review.revision}${fresh.reviewCount > 1 ? `（共 ${fresh.reviewCount} 项待验收——见侧栏待我处理）` : ''}`;
   el('dm-input').disabled = fresh.archivedAt != null;
   el('dm-send').disabled = fresh.archivedAt != null;
-  state.dmActive = fresh; // 停止按钮的 task/run 来源
+  state.dmActive = { ...fresh, currentReview: review }; // 停止/验收按钮的 task/run/delivery 来源（review=当前定位交付）
 }
 
 async function sendDm() {
@@ -396,7 +481,7 @@ async function renderPool() {
     card.dataset.threadId = item.threadId;
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `我 · ${new Date(item.createdAt).toLocaleTimeString()}`;
+    meta.textContent = `我 · ${new Date(item.createdAt).toLocaleTimeString()}${item.unread > 0 ? ` · 未读 ${item.unread}` : ''}`;
     const chip = taskChip(item.taskStatus);
     const chipEl = document.createElement('span');
     chipEl.className = `task-chip ${chip.cls}`;
@@ -503,8 +588,14 @@ async function renderToolCalls(box) {
 
 async function renderThread() {
   if (state.openThreadId == null) return;
+  const threadAtRender = state.openThreadId;
+  const genAtRender = state.navGeneration;
+  const stillCurrent = () => state.openThreadId === threadAtRender && state.navGeneration === genAtRender;
   const box = el('thread-messages');
-  const history = await command('thread.history', { threadId: state.openThreadId, limit: 200 });
+  const nearBottomBefore = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const prevScrollTop = box.scrollTop;
+  const history = await command('thread.history', { threadId: threadAtRender, limit: 200 });
+  if (!stillCurrent()) return; // 切走线程/视图：迟到响应不重绘（第二十三轮一）
   box.innerHTML = '';
   // 根消息（锚点）是房间级消息、不在 thread 历史内——打开时从主池卡片携带置顶。
   if (state.openAnchorText != null && state.openAnchorText.length > 0) {
@@ -530,7 +621,13 @@ async function renderThread() {
     div.append(meta, body);
     box.appendChild(div);
   }
-  box.scrollTop = box.scrollHeight;
+  // 滚动保留（同 DM）：读历史时轮询重绘不打断；贴底+前台才推进线程水位（第二十三轮一）。
+  if (nearBottomBefore) box.scrollTop = box.scrollHeight;
+  else box.scrollTop = prevScrollTop;
+  const threadLastSeq = (history.items ?? []).length > 0 ? history.items[history.items.length - 1].seq : null;
+  if (threadLastSeq != null && !document.hidden && (box.scrollHeight - box.scrollTop - box.clientHeight < 80)) {
+    void command('thread.markRead', { threadId: threadAtRender, throughMessageSeq: threadLastSeq }).catch(() => {});
+  }
   await renderToolCalls(box);
   await renderDeliberation();
   await renderChangeSets();
@@ -1817,6 +1914,22 @@ el('dm-record').onclick = () => {
 // DM 版本验收（第二十轮一补齐绑定——第十九轮补丁静默丢失，按钮无 onclick）：accept 绑定
 // 展示时 deliveryId/revision；reject 意见必填（行内输入——不用 prompt，避免阻塞）。
 // 重命名（补齐绑定）：expectedRevision=展示时 revision；不换对端/不重置历史或 session。
+// DEV-23 首包最小入口：每日提醒（每天此刻唤醒该成员）——经 reminder.schedule 正式命令
+//（服务端算 next_at/UTC 存储；停止/归档/移出由调度器按合同暂停）。完整管理页（列表/
+// snooze/循环编辑）为 DEV-23 后续。
+el('dm-remind-btn').onclick = () => void (async () => {
+  if (state.projectId == null || state.openDmId == null || state.dmActive == null) return;
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  try {
+    const r = await command('reminder.schedule', {
+      projectId: state.projectId, conversationId: state.openDmId,
+      ownerMemberId: state.dmActive.peerMemberId, title: `每日提醒：${state.dmActive.peerDisplayName ?? '会话'}`,
+      schedule: { kind: 'daily', time },
+    });
+    showError(`已设每日提醒（${time} 本地时刻）——下次 ${new Date(r.nextAt).toLocaleString()}`);
+  } catch (e) { showError(`设置提醒失败：${e.message}`); }
+})().catch(() => {});
 el('dm-rename-btn').onclick = () => void (async () => {
   const active = state.dmActive;
   if (active == null) return;
@@ -1829,10 +1942,11 @@ el('dm-rename-btn').onclick = () => void (async () => {
   void renderDmSidebar().catch(() => {});
 })();
 el('dm-review-accept').onclick = () => void (async () => {
-  const review = state.dmActive?.pendingReview;
+  const review = state.dmActive?.currentReview ?? state.dmActive?.pendingReview;
   if (review == null) return;
   try {
-    await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, decision: 'accept' });
+    // 三重绑定（第二十三轮三）：id+revision+manifestHash——错稿防线最后一级。
+    await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, manifestHash: review.manifestHash, decision: 'accept' });
   } catch (e) { showError(`验收失败：${e.message}`); }
   await renderDm();
 })().catch(() => {});
@@ -2161,6 +2275,10 @@ if (lastProject != null && lastProject.length > 0) {
     el('project-name').textContent = `恢复项目失败：${e.message}`;
   });
 }
+// 深链导航事件（第二十三轮二）：刷新/直接打开/前进后退共用统一导航入口；导航代次防迟到。
+window.addEventListener('hashchange', () => { void restoreDmDeepLink().catch(() => {}); });
+window.addEventListener('popstate', () => { void restoreDmDeepLink().catch(() => {}); });
+
 // 页面可操作标志（第二十二轮一）：全部事件绑定完成——验证器/自动化以此为"点击必被处理"
 // 的判据（区别于 CDP target 出现：那只是导航开始，onclick 尚未绑定，早到点击会静默丢失）。
 window.__zsReady = true;

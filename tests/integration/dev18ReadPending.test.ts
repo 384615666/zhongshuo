@@ -139,7 +139,8 @@ describe('DEV-18 首包：待我处理（mine.pending）', () => {
     const byId = new Map(proj!.reviewTasks.map((t) => [t.task_id, t]));
     expect(byId.get('task_multi_1')!.delivery_id).toBe('dlv_task_multi_1_1'); // pending 绑定
     expect(byId.get('task_multi_2')!.revision).toBe(2); // 多版本取 pending（新版）
-    expect(byId.get('task_no_pending')!.revision).toBe(2); // 无 pending→最新行（旧交付与新版冲突时可核对）
+    expect(byId.get('task_no_pending')!.revision).toBeNull(); // 无 pending=不可批准对象（不因"最新回退"变成可验收——第二十三轮三）
+    expect((byId.get('task_no_pending') as unknown as { actionable: boolean }).actionable).toBe(false); // 如实非 actionable
     expect(byId.get('task_no_delivery')!.delivery_id).toBeNull(); // 无交付如实 null（读卡片≠完成事项）
     expect(byId.get('task_multi_1')!.manifest_hash).toBe('mh_task_multi_1_1');
     // 验收完成后（status 离开 REVIEW）：从汇总消失（阅读不消待办——状态才消）。
@@ -189,8 +190,104 @@ describe('DEV-18 首包：深链（deepLink.resolve）', () => {
     await expect(cmd('deepLink.resolve', { hash: '#dm=conv_room' })).rejects.toThrow(/矛盾/); // #dm 指向房间会话
     db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_dm_y','p1','dm',NULL)`).run();
     db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','conv_dm_y','human','u_other'),('p1','conv_dm_y','agent','mA')`).run();
-    await expect(cmd('deepLink.resolve', { hash: '#dm=conv_dm_y' })).rejects.toThrow(/不属于当前用户/); // 非本人 DM
+    await expect(cmd('deepLink.resolve', { hash: '#dm=conv_dm_y' })).rejects.toThrow(/audience 校验拒绝|不属于当前用户/); // 非本人 DM
     await expect(cmd('deepLink.resolve', { hash: '#bogus=1' })).rejects.toThrow(/格式无效/);
+    db.close();
+  });
+});
+
+describe('第二十三轮：线程水位/audience/交付绑定/不泄露', () => {
+  function r23Db(): { db: ZhongshuoDatabase; cmd: <T>(m: string, p: unknown, commandId?: string) => Promise<T> } {
+    const db = openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('room1','p1','大厅','mA')`).run();
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_room','p1','room','room1')`).run();
+    // 两线程 + 各自锚消息/回复（conversation_seq 会话级递增）。
+    let convSeq = 0;
+    for (const tid of ['thA', 'thB']) {
+      db.prepare(`INSERT INTO conversation_threads (id, project_id, conversation_id, room_id, anchor_message_id, last_message_seq) VALUES (?, 'p1', 'conv_room', 'room1', ?, 0)`).run(tid, `anchor_${tid}`);
+      db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES (?, 'p1', 'conv_room', ?, 'room1', NULL, NULL, 'human', 'u_local', '{}', 'final', 0)`).run(`anchor_${tid}`, ++convSeq);
+      const seq = (db.prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq').get(tid) as { last_message_seq: number }).last_message_seq;
+      db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES (?, 'p1', 'conv_room', ?, 'room1', ?, ?, 'agent', 'mA', '{}', 'final', 0)`).run(`reply_${tid}`, ++convSeq, tid, seq);
+    }
+    db.prepare(`UPDATE conversations SET last_message_seq = ? WHERE id = 'conv_room'`).run(convSeq);
+    const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd = async <T,>(method: string, params: unknown, commandId?: string): Promise<T> => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: commandId ?? `r23-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: T; error?: { code: string; message: string } };
+      if (!r.ok) throw Object.assign(new Error(r.error?.message), { code: r.error?.code });
+      return r.data as T;
+    };
+    return { db, cmd };
+  }
+
+  it('thread.markRead：首标（无预插行）+同序幂等+未来序拒绝+标 A 不影响 B；mine.pending 线程未读聚合', async () => {
+    const { db, cmd } = r23Db();
+    const before = await cmd<{ projects: Array<{ threadUnread: Array<{ thread_id: string; unread: number }> }> }>('mine.pending', {});
+    const tu = (before.projects[0]?.threadUnread ?? []);
+    expect(tu.map((x) => x.thread_id).sort()).toEqual(['thA', 'thB']); // 两线程各 1 条未读（打开房间不读线程）
+    const r1 = await cmd<{ advanced: boolean }>('thread.markRead', { threadId: 'thA', throughMessageSeq: 1 });
+    expect(r1.advanced).toBe(true); // 首标=UPSERT 插行推进
+    const r2 = await cmd<{ advanced: boolean }>('thread.markRead', { threadId: 'thA', throughMessageSeq: 1 });
+    expect(r2.advanced).toBe(false); // 同序幂等
+    await expect(cmd('thread.markRead', { threadId: 'thA', throughMessageSeq: 99 })).rejects.toThrow(/未来水位/); // 未来序拒绝
+    const mid = await cmd<{ projects: Array<{ threadUnread: unknown[] }> }>('mine.pending', {});
+    expect((mid.projects[0]?.threadUnread ?? []).map((x) => (x as { thread_id: string }).thread_id)).toEqual(['thB']); // 读 A 后 A 清、B 保持（互不影响）
+    db.close();
+  });
+
+  it('audience 不泄露：他人 DM 的 REVIEW 任务/未读/深链（#task/#delivery/#msg 全形态）与 task.review 均拒绝', async () => {
+    const { db, cmd } = r23Db();
+    // 他人 DM：任务+交付+消息齐全。
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_other_dm','p1','dm',NULL)`).run();
+    db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','conv_other_dm','human','u_other'),('p1','conv_other_dm','agent','mA')`).run();
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status, review_policy) VALUES ('task_other','p1','conv_other_dm','dm_turn',NULL,'他人任务','REVIEW','user_review')`).run();
+    db.prepare(`INSERT INTO task_deliveries (id, task_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status) VALUES ('dlv_other','task_other',1,'mh-other-0001','[]','[]','[]','pending')`).run();
+    const seq = (db.prepare(`UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = 'conv_other_dm' RETURNING last_message_seq`).get() as { last_message_seq: number }).last_message_seq;
+    db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, thread_message_seq, author_type, author_id, body_json, status, created_at) VALUES ('msg_other','p1','conv_other_dm',?,NULL,NULL,NULL,'agent','mA','{}','final',0)`).run(seq);
+    // 汇总不泄露：他人 DM 的任务与未读均不出现。
+    const pending = await cmd<{ projects: Array<{ reviewTasks: Array<{ task_id: string }>; dmUnread: unknown[] }> }>('mine.pending', {});
+    const proj = pending.projects[0] ?? { reviewTasks: [], dmUnread: [] };
+    expect(proj.reviewTasks.map((t) => t.task_id)).not.toContain('task_other');
+    expect((proj.dmUnread as Array<{ conversation_id: string }>).map((x) => x.conversation_id)).not.toContain('conv_other_dm');
+    // 深链全形态拒绝（链接形态不绕过私信限制）。
+    await expect(cmd('deepLink.resolve', { hash: '#task=task_other' })).rejects.toThrow(/audience 校验拒绝/);
+    await expect(cmd('deepLink.resolve', { hash: '#delivery=dlv_other' })).rejects.toThrow(/audience 校验拒绝/);
+    await expect(cmd('deepLink.resolve', { hash: '#msg=msg_other' })).rejects.toThrow(/audience 校验拒绝/);
+    // task.review 同一校验处：他人 DM 任务不能验收。
+    await expect(cmd('task.review', { taskId: 'task_other', deliveryId: 'dlv_other', deliveryRevision: 1, manifestHash: 'mh-other-0001', decision: 'accept' })).rejects.toThrow(/audience 校验拒绝/);
+    db.close();
+  });
+
+  it('task.review 三重绑定：manifestHash 错配拒绝；旧交付（superseded）不可验收；mine.pending actionable 区分', async () => {
+    const { db, cmd } = r23Db();
+    db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','conv_room','human','u_local')`).run(); // 房间无 DM 参与者概念——room 会话 audience=项目可达
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status, review_policy) VALUES ('task_mh','p1','conv_room','room_task','room1','hash 任务','REVIEW','user_review')`).run();
+    db.prepare(`INSERT INTO task_deliveries (id, task_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status) VALUES ('dlv_mh','task_mh',1,'mh-correct-01','[]','[]','[]','pending')`).run();
+    db.prepare(`INSERT INTO task_deliveries (id, task_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status) VALUES ('dlv_old','task_mh',2,'mh-superseded','[]','[]','[]','superseded')`).run();
+    // hash 错配（同版本号不同内容）：明确拒绝。
+    await expect(cmd('task.review', { taskId: 'task_mh', deliveryId: 'dlv_mh', deliveryRevision: 1, manifestHash: 'mh-wrong-9999', decision: 'accept' })).rejects.toThrow(/manifestHash 不匹配|交付内容不符/);
+    // 汇总：pending 绑定 actionable=true；旧交付不作为可批准对象。
+    const pending = await cmd<{ projects: Array<{ reviewTasks: Array<{ task_id: string; delivery_id: string | null; actionable: boolean }> }> }>('mine.pending', {});
+    const row = (pending.projects[0]?.reviewTasks ?? []).find((t) => t.task_id === 'task_mh');
+    expect(row?.delivery_id).toBe('dlv_mh');
+    expect(row?.actionable).toBe(true);
+    // 正确 hash 验收成功。
+    const ok = await cmd<{ reviewStatus: string }>('task.review', { taskId: 'task_mh', deliveryId: 'dlv_mh', deliveryRevision: 1, manifestHash: 'mh-correct-01', decision: 'accept' });
+    expect(ok.reviewStatus).toBe('accepted');
+    db.close();
+  });
+
+  it('blockedTasks 如实列出（可见≠审批）：房间 BLOCKED 任务出现、他人 DM BLOCKED 不泄露', async () => {
+    const { db, cmd } = r23Db();
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status) VALUES ('task_blk','p1','conv_room','room_task','room1','被阻塞任务','BLOCKED')`).run();
+    db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_dm2','p1','dm',NULL)`).run();
+    db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','conv_dm2','human','u_other'),('p1','conv_dm2','agent','mA')`).run();
+    db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status) VALUES ('task_blk_other','p1','conv_dm2','dm_turn',NULL,'他人阻塞','BLOCKED')`).run();
+    const pending = await cmd<{ projects: Array<{ blockedTasks: Array<{ task_id: string }> }> }>('mine.pending', {});
+    const ids = (pending.projects[0]?.blockedTasks ?? []).map((t) => t.task_id);
+    expect(ids).toContain('task_blk'); // 本项目可见 BLOCKED 如实列出
+    expect(ids).not.toContain('task_blk_other'); // 他人 DM 不泄露
     db.close();
   });
 });

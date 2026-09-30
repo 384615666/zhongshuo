@@ -111,6 +111,9 @@ describe('真实 GitHub：众说 Git 命令链（授权沙盒仓）', () => {
     // 重置本地到远端共同祖先前的状态：直接用第二克隆再推一个提交，本地保持不动。
     const other = join(tmpRoot, 'other');
     const remoteBefore = git(work, 'ls-remote', 'origin', 'refs/heads/main').split('\t')[0]!.trim();
+    // 自包含（第二十三轮）：远端历史形状不可依赖——此前克隆不一定带 test/ 目录（顺序依赖
+    // 真实仓累积状态曾致稳定 ENOENT，即第二十二轮全量"首跑失败复跑过"的真身）。
+    mkdirSync(join(other, 'test'), { recursive: true });
     writeFileSync(join(other, 'test', 'one-more.txt'), '再推一个（供快进拉取）\n', 'utf8');
     git(other, 'add', '-A'); git(other, 'commit', '-q', '-m', 'test: one more for ff pull');
     git(other, 'push', '-q', 'origin', 'main');

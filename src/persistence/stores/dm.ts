@@ -66,7 +66,7 @@ export interface DmConversationSummary {
   /** 排队中的消息数（运行中同时有排队时一并呈现——不吞掉排队事实）。 */
   queuedCount: number;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
-  pendingReview: { taskId: string; deliveryId: string; revision: number } | null;
+  pendingReview: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
 }
 
 export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, projectId?: string): DmConversationSummary[] {
@@ -91,11 +91,11 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND r.status IN ('RUNNING','WAITING','STOPPING') LIMIT 1`,
     ).get(row.id) as { taskId: string; runId: string; runStatus: string; stopGen: number } | undefined;
     const pendingReviewRow = db.prepare(
-      `SELECT t.id AS taskId, d.id AS deliveryId, d.revision AS revision FROM tasks t
+      `SELECT t.id AS taskId, d.id AS deliveryId, d.revision AS revision, d.manifest_hash AS manifestHash FROM tasks t
        JOIN task_deliveries d ON d.task_id = t.id AND d.review_status = 'pending'
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'REVIEW'
        ORDER BY d.revision DESC LIMIT 1`,
-    ).get(row.id) as { taskId: string; deliveryId: string; revision: number } | undefined;
+    ).get(row.id) as { taskId: string; deliveryId: string; revision: number; manifestHash: string } | undefined;
     out.push({
       conversationId: row.id,
       projectId: row.project_id,
@@ -113,7 +113,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       activeStopGeneration: activeRow?.stopGen ?? 0,
       stopPending: row.archived_at != null && activeRow != null, // 归档后停止未确认——如实呈现
       queuedCount: pending.c,
-      pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision } : null,
+      pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision, manifestHash: pendingReviewRow.manifestHash } : null,
     });
   }
   return out;

@@ -73,7 +73,7 @@ function stagePendingDelivery(db: ZhongshuoDatabase, taskId: string, runId: stri
   const deliveryId = `dlv_${randomUUID().slice(0, 8)}`;
   db.prepare(
     `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
-     VALUES (?, ?, ?, 1, 'h', '[]', '[]', '[]', 'pending')`,
+     VALUES (?, ?, ?, 1, 'manifest-h-1', '[]', '[]', '[]', 'pending')`,
   ).run(deliveryId, taskId, runId);
   db.prepare(`UPDATE tasks SET status = 'REVIEW', current_delivery_id = ? WHERE id = ?`).run(deliveryId, taskId);
   return deliveryId;
@@ -177,7 +177,7 @@ describe('DEV-14 主体命令', () => {
       db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json) VALUES (?, ?, 'c1', (SELECT conversation_thread_id FROM tasks WHERE id=?), 'DIRECT', 0, 'SUCCEEDED', '{}')`).run(runId, taskId, taskId);
       const deliveryId = stagePendingDelivery(db, taskId, runId);
       const { cmd } = depsOf(db);
-      const r = await cmd<{ reviewStatus: string; taskStatusAfter: string; deliveryRevision: number }>('task.review', { taskId, deliveryId, deliveryRevision: 1, decision: 'accept', note: '人工验收通过' });
+      const r = await cmd<{ reviewStatus: string; taskStatusAfter: string; deliveryRevision: number }>('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept', note: '人工验收通过' });
       expect(r.reviewStatus).toBe('accepted');
       expect(r.taskStatusAfter).toBe('DONE');
       expect(r.deliveryRevision).toBe(1);
@@ -186,9 +186,9 @@ describe('DEV-14 主体命令', () => {
       const evt = db.prepare(`SELECT payload_json FROM domain_events WHERE kind = 'task.reviewRecorded' AND task_id = ?`).get(taskId) as { payload_json: string };
       expect(JSON.parse(evt.payload_json).gitCommitIsNotReview).toContain('不等同验收');
       // 不同命令号对已处理版本：明确冲突（不重复生效）。
-      await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, decision: 'accept' })).rejects.toThrow('已处理');
+      await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept' })).rejects.toThrow('已处理');
       // 版本不符：拒绝。
-      await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 2, decision: 'accept' })).rejects.toThrow('版本不符');
+      await expect(cmd('task.review', { taskId, deliveryId, deliveryRevision: 2, manifestHash: 'manifest-h-1', decision: 'accept' })).rejects.toThrow('版本不符');
       db.close();
     }
     // changes_requested → ACTIVE（返工入口=redispatch 正式链）。
@@ -199,7 +199,7 @@ describe('DEV-14 主体命令', () => {
       db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json) VALUES (?, ?, 'c1', (SELECT conversation_thread_id FROM tasks WHERE id=?), 'DIRECT', 0, 'SUCCEEDED', '{}')`).run(runId, taskId, taskId);
       const dId = stagePendingDelivery(db, taskId, runId);
       const { cmd } = depsOf(db);
-      const r = await cmd<{ taskStatusAfter: string }>('task.review', { taskId, deliveryId: dId, deliveryRevision: 1, decision: 'changes_requested', note: '需要修正输出' });
+      const r = await cmd<{ taskStatusAfter: string }>('task.review', { taskId, deliveryId: dId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'changes_requested', note: '需要修正输出' });
       expect(r.taskStatusAfter).toBe('ACTIVE');
       expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('ACTIVE');
       db.close();
@@ -209,7 +209,7 @@ describe('DEV-14 主体命令', () => {
       const db = makeDb();
       const { taskId } = makeReviewTask(db, 'auto_deliver');
       const { cmd } = depsOf(db);
-      await expect(cmd('task.review', { taskId, deliveryId: 'dlv_any', deliveryRevision: 1, decision: 'accept' })).rejects.toThrow('非 user_review');
+      await expect(cmd('task.review', { taskId, deliveryId: 'dlv_any', deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept' })).rejects.toThrow('非 user_review');
       db.close();
     }
   }, 30_000);
@@ -244,17 +244,17 @@ describe('DEV-14 主体命令', () => {
     ).run(v1);
     db.prepare(
       `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
-       VALUES ('dlv_v2', ?, ?, 2, 'h2', '[]', '[]', '[]', 'pending')`,
+       VALUES ('dlv_v2', ?, ?, 2, 'manifest-h-2', '[]', '[]', '[]', 'pending')`,
     ).run(taskId, runId);
     const { cmd } = depsOf(db);
     // 提交 v1（用户界面看到的旧版本）：明确冲突——不自动套用到 v2。
-    await expect(cmd('task.review', { taskId, deliveryId: v1, deliveryRevision: 1, decision: 'accept' })).rejects.toThrow('已被新交付替代');
+    await expect(cmd('task.review', { taskId, deliveryId: v1, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept' })).rejects.toThrow('已被新交付替代');
     // v2 保持待验收；v1 仍是 superseded（未被错写）。
     expect((db.prepare(`SELECT review_status FROM task_deliveries WHERE id = 'dlv_v2'`).get() as { review_status: string }).review_status).toBe('pending');
     expect((db.prepare(`SELECT review_status FROM task_deliveries WHERE id = ?`).get(v1) as { review_status: string }).review_status).toBe('superseded');
     expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('REVIEW'); // 任务状态不被旧版本验收推动
     // v2 正常验收成功（版本绑定正确对象）。
-    const r2 = await cmd<{ reviewStatus: string; deliveryRevision: number }>('task.review', { taskId, deliveryId: 'dlv_v2', deliveryRevision: 2, decision: 'accept' });
+    const r2 = await cmd<{ reviewStatus: string; deliveryRevision: number }>('task.review', { taskId, deliveryId: 'dlv_v2', deliveryRevision: 2, manifestHash: 'manifest-h-2', decision: 'accept' });
     expect(r2).toMatchObject({ reviewStatus: 'accepted', deliveryRevision: 2 });
     db.close();
   }, 30_000);
@@ -269,7 +269,7 @@ describe('DEV-14 主体命令', () => {
     const { randomUUID: uuid } = await import('node:crypto');
     const envelope = (commandId: string): Parameters<typeof dispatchDaemonCommand>[1] => ({
       protocolVersion: 1, commandId, method: 'task.review',
-      params: { taskId, deliveryId, deliveryRevision: 1, decision: 'accept', note: '同号重放' },
+      params: { taskId, deliveryId, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept', note: '同号重放' },
     });
     const commandId = `rev-${uuid()}`;
     const r1 = await dispatchDaemonCommand(deps, envelope(commandId)) as { ok: boolean; data?: unknown; replayed?: boolean };
@@ -286,7 +286,7 @@ describe('DEV-14 主体命令', () => {
     const otherRun = `run_${randomUUID()}`;
     db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json) VALUES (?, ?, 'c1', (SELECT conversation_thread_id FROM tasks WHERE id=?), 'DIRECT', 0, 'SUCCEEDED', '{}')`).run(otherRun, other.taskId, other.taskId);
     const otherDelivery = stagePendingDelivery(db, other.taskId, otherRun);
-    await expect(cmd('task.review', { taskId, deliveryId: otherDelivery, deliveryRevision: 1, decision: 'accept' })).rejects.toThrow('不属于该任务');
+    await expect(cmd('task.review', { taskId, deliveryId: otherDelivery, deliveryRevision: 1, manifestHash: 'manifest-h-1', decision: 'accept' })).rejects.toThrow('不属于该任务');
     db.close();
   }, 30_000);
 
@@ -304,9 +304,9 @@ describe('DEV-14 主体命令', () => {
     await worker.runOnce(); // 派发 t1（fake 成功交付 pending）
     const t1Row = db.prepare('SELECT id, status FROM tasks WHERE id = ?').get(t1.taskId) as { id: string; status: string };
     expect(t1Row.status).toBe('REVIEW');
-    const pending = db.prepare(`SELECT id, revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`).get(t1.taskId) as { id: string; revision: number };
+    const pending = db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`).get(t1.taskId) as { id: string; revision: number; manifest_hash: string };
     const deps = { db, localUserId: 'u_dev14', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'app') } as never as DaemonCommandDeps;
-    const rr = await dc(deps, { protocolVersion: 1, commandId: `c-rev9-${Date.now()}`, method: 'task.review', params: { taskId: t1.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, decision: 'changes_requested', note: '清单缺少风险一节' } }) as { ok: boolean };
+    const rr = await dc(deps, { protocolVersion: 1, commandId: `c-rev9-${Date.now()}`, method: 'task.review', params: { taskId: t1.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, manifestHash: pending.manifest_hash, decision: 'changes_requested', note: '清单缺少风险一节' } }) as { ok: boolean };
     expect(rr.ok).toBe(true);
     await dc(deps, { protocolVersion: 1, commandId: `c-rd9-${Date.now()}`, method: 'task.redispatch', params: { taskId: t1.taskId, reason: '按验收反馈返工' } });
     await worker.runOnce(); // 返工派发
@@ -315,9 +315,9 @@ describe('DEV-14 主体命令', () => {
     expect(lastInput.text).toContain(`第 ${pending.revision} 版`);
     expect(lastInput.text).toContain('清单缺少风险一节');
     // 返工交付验收通过 → 最新结论=accepted → 再派发（另一任务/同任务再追加）反馈消失。
-    const pending2 = db.prepare(`SELECT id, revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`).get(t1.taskId) as { id: string; revision: number };
+    const pending2 = db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending'`).get(t1.taskId) as { id: string; revision: number; manifest_hash: string };
     if (pending2 != null) {
-      await dc(deps, { protocolVersion: 1, commandId: `c-acc9-${Date.now()}`, method: 'task.review', params: { taskId: t1.taskId, deliveryId: pending2.id, deliveryRevision: pending2.revision, decision: 'accept' } });
+      await dc(deps, { protocolVersion: 1, commandId: `c-acc9-${Date.now()}`, method: 'task.review', params: { taskId: t1.taskId, deliveryId: pending2.id, deliveryRevision: pending2.revision, manifestHash: pending2.manifest_hash, decision: 'accept' } });
     }
     const t2 = makeReviewTask(db, 'user_review');
     await worker.runOnce(); // 新任务派发：不含返工附注（最新验收结论已 accepted）
