@@ -126,6 +126,7 @@ function shutdownDaemon(): Promise<DaemonShutdownFacts> {
   if (shutdownOnce != null) return shutdownOnce;
   shutdownOnce = (async (): Promise<DaemonShutdownFacts> => {
     daemonShuttingDown = true;
+    readyAbort.abort(); // 收束在途就绪尝试（第二十二轮三）——关停后不再等待/重连。
     const stopRecordPath = join(appDataDir, 'state.sqlite');
     const facts: DaemonShutdownFacts = {
       requestDelivered: false, exited: false, exitCode: null, signal: null,
@@ -188,6 +189,9 @@ const uiSpawnAt = Date.now();
 let daemonAuthed = false;
 let connectInFlight: Promise<void> | null = null;
 let spawnError: string | null = null;
+// 就绪尝试取消（第二十二轮三）：退出/关停时收束在途握手——最后一次 connectPipe 的自身
+// 超时不再额外超出就绪截止（剩余时间传入），且 app 退出路径不再等待悬挂的连接尝试。
+const readyAbort = new AbortController();
 
 async function ensureConnection(): Promise<void> {
   if (pipe != null && !pipe.closed) return;
@@ -205,7 +209,12 @@ async function ensureConnection(): Promise<void> {
       const ex = readDaemonExitFacts();
       if (ex != null && !daemonShuttingDown) throw new Error(`daemon 启动中退出（code=${ex.code}）——连接中止`);
       try {
-        pipe = await connectPipe(daemonPipe, { token: daemonToken });
+        // 剩余时间传入连接/握手时限（第二十二轮三）：最后一次握手不额外超出截止。
+        pipe = await connectPipe(daemonPipe, {
+          token: daemonToken,
+          connectTimeoutMs: Math.max(1_000, deadline - Date.now()),
+          signal: readyAbort.signal,
+        });
         if (!daemonAuthed) {
           daemonAuthed = true;
           process.stderr.write(`[zhongshuo-ui] ready: auth.ok（spawn→认证 ${Date.now() - uiSpawnAt}ms，pipe=${daemonPipe}）
@@ -214,6 +223,7 @@ async function ensureConnection(): Promise<void> {
         pipeClosedCheck();
         return;
       } catch (error) {
+        if (readyAbort.signal.aborted) throw new Error(`daemon 连接已取消（应用退出/关停）：${error instanceof Error ? error.message : String(error)}`);
         lastError = error;
         await new Promise((r) => setTimeout(r, 250));
       }
@@ -319,7 +329,14 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   // 停机命令须在关闭管道**之前**发出（shutdownDaemon 内部：daemon.shutdown→有界等待→
   // kill 兜底→关管道）；此处不再先行 close（否则 requestDelivered 恒 false）。
-  void shutdownDaemon().finally(() => app.quit());
+  // 受控同步点（第二十二轮二）：关闭请求后延迟开始停机——制造"旧实例窗口已关、进程
+  // （含 daemon）仍在"的真实共存窗口，供下一实例启动时核对。测试专用，生产不设。
+  const shutdownDelay = Number(process.env.ZS_UI_SHUTDOWN_DELAY_MS ?? 0);
+  const beginShutdown = (): void => { void shutdownDaemon().finally(() => app.quit()); };
+  if (shutdownDelay > 0) {
+    process.stderr.write(`[zhongshuo-ui] shutdown 受控延迟 ${shutdownDelay}ms（ZS_UI_SHUTDOWN_DELAY_MS——窗口已关，进程仍在）\n`);
+    setTimeout(beginShutdown, shutdownDelay).unref?.();
+  } else beginShutdown();
 });
 
 /** 自动化演示（G3 取证）：open → submit → 等待 → history → screenshot → 写结果退出。 */

@@ -72,6 +72,26 @@ export function startNamedPipeIpc(
                 error: { code: 'VALIDATION_INVALID', message: error instanceof Error ? error.message : String(error), retryable: false },
               };
             }
+            // 命令日志钩子（第二十二轮二；测试专用，生产不设）：ZS_DAEMON_LOG_COMMANDS=1 时
+            // 打印每条命令的 method+commandId——验证器据此按**实发 commandId** 核对回执
+            //（renderer 的 contextBridge 对象只读，页面侧 patch 记录不可行）。
+            if (process.env.ZS_DAEMON_LOG_COMMANDS === '1') {
+              try {
+                const env = JSON.parse(requestLine) as { method?: string; commandId?: string };
+                process.stderr.write(`[zhongshuo-daemon] command ${env.method ?? '?'} id=${env.commandId ?? '?'}\n`);
+              } catch { /* 日志尽力而为 */ }
+            }
+            // 受控同步点（第二十二轮二）：指定方法**响应延迟**——命令已处理（handleLine 已
+            // 返回）、响应尚未写回的真实窗口（区别于 UI 侧发送前延迟：那在命令处理之前）。
+            // 测试专用，生产不设。
+            const respDelayEnv = process.env.ZS_DAEMON_RESPONSE_DELAY_METHOD_MS;
+            if (respDelayEnv != null) {
+              const [method, ms] = respDelayEnv.split(':');
+              if (method === (JSON.parse(requestLine) as { method?: string })?.method && Number(ms) > 0) {
+                process.stderr.write(`[zhongshuo-daemon] response-delay ${method} ${ms}ms（命令已处理，响应延迟写回）\n`);
+                await new Promise((r) => setTimeout(r, Number(ms)));
+              }
+            }
             socket.write(`${JSON.stringify(response)}\n`);
           });
         }

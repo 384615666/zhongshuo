@@ -64,6 +64,9 @@ export interface PipeClientOptions {
   token: string;
   requestTimeoutMs?: number;
   connectTimeoutMs?: number;
+  /** 外部取消（第二十二轮三）：abort 时连接尝试立即终止（socket 销毁+reject），不再等
+   * 自身超时——调用方（UI 就绪截止/退出路径）可随时收束在途握手。 */
+  signal?: AbortSignal;
 }
 
 export interface PipeClient {
@@ -127,6 +130,9 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
         settled = true;
         authenticated = true;
         if (connectTimer != null) clearTimeout(connectTimer);
+        // 认证完成=连接尝试收束：移除外部取消监听（abort 语义只覆盖握手期——已建立的连接
+        // 不因调用方后续 abort（如关停流程开始）被销毁，否则 shutdown 请求发不出=被迫强杀）。
+        if (abortListener != null) options.signal?.removeEventListener('abort', abortListener);
         resolveConnect({
           get closed() {
             return closed;
@@ -193,6 +199,22 @@ export function connectPipe(pipeName: string, options: PipeClientOptions): Promi
 
     socket.on('close', () => failAll(new Error('管道连接断开')));
     socket.on('error', (error: Error) => failAll(error));
+    // 外部取消（第二十二轮三）：abort 即销毁+reject——握手期间的等待可被调用方收束。
+    // 认证成功后监听移除（见 authenticate）——abort 只收束尝试，不销毁已建立连接。
+    let abortListener: (() => void) | null = null;
+    if (options.signal != null) {
+      if (options.signal.aborted) {
+        socket.destroy();
+        rejectConnect(new Error('管道连接已取消（abort 先于连接）'));
+        return;
+      }
+      abortListener = () => {
+        if (connectTimer != null) clearTimeout(connectTimer);
+        socket.destroy();
+        failAll(new Error('管道连接已取消（外部 abort）'));
+      };
+      options.signal.addEventListener('abort', abortListener, { once: true });
+    }
     // 连接+握手总时限（auth.ok 到达才清除）。
     connectTimer = setTimeout(() => {
       socket.destroy();

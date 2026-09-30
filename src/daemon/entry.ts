@@ -21,7 +21,7 @@ import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
-import { MemberRuntimeRegistry, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
+import { MemberRuntimeRegistry, defaultModelOf, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
 import { successTurn } from '../adapter/fake/script.ts';
 import { simulateDeliberationTurn } from '../adapter/fake/deliberationSim.ts';
@@ -190,8 +190,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dbForLedger = db!; // 此处 db 必非空（上方已 open；供护栏台账闭包使用）
     // 请求模型归属按 kind 区分（第十八轮三）：codex=ZS_E2E_MODEL、claude=ZS_CLAUDE_MODEL——
     // 成员级以 binding.model 优先；不把 ZS_CLAUDE_MODEL 记到 codex 台账上。
-    const defaultModelFor = (kind: 'codex' | 'claude'): string | null =>
-      (kind === 'codex' ? process.env.ZS_E2E_MODEL : process.env.ZS_CLAUDE_MODEL) ?? null;
+    // 渠道默认口径=memberRuntime.defaultModelOf（统一解析层——快照/台账/adapter 同源）。
+    const defaultModelFor = (kind: 'codex' | 'claude'): string | null => defaultModelOf(kind);
     const productionFactories: Record<string, MemberAdapterFactory> = {
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         model: binding.model ?? process.env.ZS_E2E_MODEL,
@@ -272,6 +272,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 修复轮 6：保存 drain Promise，stop 等待其收敛后才关库（数据库关闭后零业务写入）。
     let draining = false;
     let inFlightDrain: Promise<void> | null = null;
+    // 重启收案（第二十二轮三）：上次 daemon 未结算身份的已终态 dm turn——进程内身份已失，
+    // 如实收案（审计+占位键），候选行保持原状。
+    try { worker.recoverAbandonedDmVerdicts(); } catch (error) {
+      process.stderr.write(`[zhongshuo-daemon] dm 结算收案扫描失败（下次启动重试）：${error instanceof Error ? error.message : String(error)}\n`);
+    }
     const tick = setInterval(() => {
       if (draining) return;
       draining = true;
@@ -461,23 +466,23 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
     process.stderr.write('[zhongshuo-daemon] ZS_CLAUDE_MODEL 未设置：全局 claude runtime 需显式模型（成员配置可按成员提供）\n');
   }
   let requestShutdown: (() => void) | null = null;
-  void startDaemon({
-    appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME,
-    // daemon.shutdown（DEV-15 第十四轮三）：IPC 正式关闭——命令响应先发出（250ms 让路），
-    // 确认=进程退出码+daemon:stop:last 记录（关闭会断 IPC，响应不声称完成）。
-    standaloneShutdown: () => { requestShutdown?.(); },
-  }).then((daemon) => {
-    // 受控同步点（第二十一轮二）：listen 前延迟——验证"页面已显示、daemon 管道未就绪"
-    //（区别于 spawn 前延迟：那在窗口创建时已结束）。测试专用，生产不设。
-    const listenDelay = Number(process.env.ZS_DAEMON_LISTEN_DELAY_MS ?? 0);
+  // 受控同步点（第二十二轮二重定位）：真正 listen **之前**延迟——startDaemon 内部
+  // startNamedPipeIpc 已 listen 后再延迟只推迟日志，页面窗口内管道其实已可用。此处置于
+  // startDaemon 调用前，延迟期间管道不存在（连接被拒→UI 有界重试），才是"页面已显示、
+  // daemon 未就绪"的真实窗口。测试专用，生产不设。
+  const listenDelay = Number(process.env.ZS_DAEMON_LISTEN_DELAY_MS ?? 0);
+  const beginStartup = async (): Promise<void> => {
     if (listenDelay > 0) {
-      process.stderr.write(`[zhongshuo-daemon] listen 受控延迟 ${listenDelay}ms（ZS_DAEMON_LISTEN_DELAY_MS）\n`);
-      setTimeout(() => {
-        process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
-      }, listenDelay).unref?.();
-    } else {
-      process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
+      process.stderr.write(`[zhongshuo-daemon] listen 受控延迟 ${listenDelay}ms（ZS_DAEMON_LISTEN_DELAY_MS，真正 listen 之前）\n`);
+      await new Promise((r) => setTimeout(r, listenDelay));
     }
+    const daemon = await startDaemon({
+      appDataDir, runtime, pipeName: process.env.ZS_PIPE_NAME,
+      // daemon.shutdown（DEV-15 第十五轮三）：IPC 正式关闭——命令响应先发出（250ms 让路），
+      // 确认=进程退出码+daemon:stop:last 记录（关闭会断 IPC，响应不声称完成）。
+      standaloneShutdown: () => { requestShutdown?.(); },
+    });
+    process.stderr.write(`[zhongshuo-daemon] listening ${daemon.pipeName} runtime=${runtime}\n`);
     // pid 落盘（诊断/UI 端到端定位子进程；正常退出删除——SIGKILL 残留即崩溃现场）。
     const pidPath = join(appDataDir, 'daemon.pid');
     writeFileSync(pidPath, String(process.pid), 'utf8');
@@ -511,5 +516,9 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
     };
     process.on('SIGINT', () => requestShutdown?.());
     process.on('SIGTERM', () => requestShutdown?.());
+  };
+  void beginStartup().catch((error: unknown) => {
+    process.stderr.write(`[zhongshuo-daemon] 启动失败：${error instanceof Error ? error.stack : String(error)}\n`);
+    process.exit(1);
   });
 }
