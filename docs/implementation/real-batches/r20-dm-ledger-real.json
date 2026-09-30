@@ -1,0 +1,120 @@
+{
+  "batch": "r20-dm",
+  "mode": "real",
+  "at": "2026-09-30T14:51:22.074Z",
+  "buildId": "bld_3b44ff4aa4551e87",
+  "crashAt": null,
+  "results": [
+    {
+      "name": "A1 首轮执行（DONE/REVIEW）",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "A1 回复到达且归属正确（agent 作者+全部落会话 A+非空）",
+      "ok": true,
+      "detail": "agentMsgs=1 len=586"
+    },
+    {
+      "name": "A1 暗号回流（真实模式辅助证据）",
+      "ok": true,
+      "detail": "含暗号=true"
+    },
+    {
+      "name": "A1 后核对：会话身份已持久（非空）",
+      "ok": true,
+      "detail": "id=7895c042-c7e0-4079"
+    },
+    {
+      "name": "A2 同会话第二轮执行",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "A2 回复到达且归属正确（仍全部落会话 A）",
+      "ok": true,
+      "detail": "agentMsgs=2"
+    },
+    {
+      "name": "A2 后核对：原生续接事件（请求=上报）",
+      "ok": true,
+      "detail": "{\"req\":\"7895c042-c7e0-4079-b26b-198b36862a68\",\"rep\":\"7895c042-c7e0-4079-b26b-198b36862a68\"}"
+    },
+    {
+      "name": "B 第二会话独立执行",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "B 独立性：身份互不相同+输入水位属 B 会话+回复落 B 会话（非空）",
+      "ok": true,
+      "detail": "idsDisjoint=true watermark=1/2 agentMsgs=1"
+    },
+    {
+      "name": "B 独立性（真实模式辅助）：回复不含 A 暗号",
+      "ok": true,
+      "detail": "含暗号=false"
+    },
+    {
+      "name": "批次 daemon#1 优雅退出（exit 0）",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "A3 重启后执行",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "批次 daemon#2 优雅退出",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "身份持久：A/B 会话 provider ID 均非空且互不相同",
+      "ok": true,
+      "detail": "A 行数=1 B 行数=1"
+    },
+    {
+      "name": "原生续接证据：A 会话 dm.sessionResumed≥2（A2+重启后 A3），请求=上报",
+      "ok": true,
+      "detail": "resumed=2"
+    },
+    {
+      "name": "startTurn 计数=4 且全部 succeeded",
+      "ok": true,
+      "detail": "calls=4 succeeded=4"
+    },
+    {
+      "name": "批次护栏台账（journal reserved=4 未触上限；cap=8）",
+      "ok": true,
+      "detail": "reserved=4 rejected=0"
+    }
+  ],
+  "cap": 8,
+  "expectedCalls": 4,
+  "actualCalls": null,
+  "daemonStopFacts": [
+    {
+      "seq": 1,
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "at": 1790779876216
+      }
+    },
+    {
+      "seq": 2,
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "at": 1790779881254
+      }
+    }
+  ],
+  "cleanupUnclean": false,
+  "evidence": {
+    "runRoot": "(成功已清理)",
+    "ledger": "D:\\zhongshuo\\docs\\implementation\\real-batches\\r20-dm-ledger-real.json"
+  }
+}

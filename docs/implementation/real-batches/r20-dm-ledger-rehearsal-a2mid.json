@@ -1,0 +1,52 @@
+{
+  "batch": "r20-dm",
+  "mode": "rehearsal",
+  "at": "2026-09-30T14:38:22.422Z",
+  "buildId": "bld_adbf5637227896b1",
+  "crashAt": "a2mid",
+  "results": [
+    {
+      "name": "A1 首轮执行（DONE/REVIEW）",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "A1 回复到达且归属正确（agent 作者+全部落会话 A+非空）",
+      "ok": true,
+      "detail": "agentMsgs=1 len=4"
+    },
+    {
+      "name": "A1 后核对：会话身份已持久（非空）",
+      "ok": true,
+      "detail": "id=fake-provider-1"
+    },
+    {
+      "name": "崩溃注入（a2 在途强杀）：后续命令失败/超时被察觉（脚本即停）",
+      "ok": true,
+      "detail": "sawFailure=true"
+    },
+    {
+      "name": "批次中止（身份/协议/预算/崩溃问题即停）",
+      "ok": false,
+      "detail": "批次步骤失败即停：crash-inject-a2mid（预期失败路径——验证即停与收拢）"
+    }
+  ],
+  "cap": 8,
+  "expectedCalls": 0,
+  "actualCalls": null,
+  "daemonStopFacts": [
+    {
+      "seq": 1,
+      "exit": {
+        "code": 1,
+        "signal": null,
+        "at": 1790778861915
+      }
+    }
+  ],
+  "cleanupUnclean": false,
+  "evidence": {
+    "runRoot": "C:\\Users\\user\\AppData\\Local\\Temp\\zs-r20dm-da1ddb",
+    "ledger": "D:\\zhongshuo\\docs\\implementation\\real-batches\\r20-dm-ledger-rehearsal-a2mid.json"
+  }
+}
