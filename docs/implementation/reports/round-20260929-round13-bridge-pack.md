@@ -1,5 +1,7 @@
 # 第十三轮报告：受管桥完整化 · 恢复证据正式链 · push 目的地绑定 · DEV-15 早期打包（2026-09-29）
 
+> **〔2026-09-30 第十四轮撤回注记〕**本报告「一、受管桥」环境段的结论「koffi CreateProcessW 非空 lpEnvironment 恒 87=FFI 层 W 变体缺陷」**已撤回**：根因是本方调用缺 `CREATE_UNICODE_ENVIRONMENT` 标志（UTF-16 块被系统按 ANSI 解释）——调用侧实现错误，非 koffi 缺陷。第十四轮补标志后按规范构造环境块（大小写不敏感去重/排序/双 NUL 终止），真实子进程逐项回读（ASCII/中文/空值/空格路径/覆盖/删除/32K 大块）全过（见 round-20260930-round14 与 managedBridge 测试）。「需要覆盖环境请关闭受管开关」的绕行建议同轮删除。另：releaseProtection 按 pid 查受管句柄的口径当轮即与本报告「jobId 稳定身份」叙述不一致——第十四轮二已按 managed_job_id 正式列收口。
+
 > 分组提交：`736dddc`（工作区核对+flake 同步点修复）→ `1aec264`（桥 stdio/argv/证据生命周期+正式链验收）→ `3635a38`（push 目的地绑定）→ `58374bf`（DEV-15 早期打包）→ 本文档组。
 > 数字：**563/563**（单次全量含 githubSandbox 5/5；TLS 握手偶发失败为环境敏感——单跑即过）；managedBridge 6/6+managedLifecycle 9/9+gitRt24 10/10+pack 4/4；lint 0、tsc 0；**零模型调用**。
 
