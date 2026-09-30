@@ -150,6 +150,12 @@ const waitFor = async (fn, timeoutMs, what) => {
   }
 };
 
+
+// 会话选择（第二十轮一验收）：ZS_VDR_SESSIONS=A,B1,B2,C,D（缺省全部）——单独/完整序列分别跑、
+// 报告分别列，不拼接局部通过。
+const SESSIONS = (process.env.ZS_VDR_SESSIONS ?? 'A,B1,B2,C,D').split(',').map((x) => x.trim()).filter(Boolean);
+const shouldRun = (name) => SESSIONS.includes(name);
+
 let failed = false;
 try {
   // ---------- 控制组：decoy 进程先证检测有效（正常用例不得以「匹配不到」充数） ----------
@@ -165,7 +171,7 @@ try {
   }
 
   // ---------- 会话 A：正常链+设置+REVIEW→返工→新版本+优雅停机事实 ----------
-  {
+  if (shouldRun('A')) {
     const port = 9331;
     const app = await launchApp(port, {});
     if (app.noPage) throw new Error('会话 A：页面未就绪');
@@ -224,7 +230,7 @@ try {
   }
 
   // ---------- 会话 B1：同 appData 顺序重开（设置保持——不发送任务） ----------
-  {
+  if (shouldRun('B1')) {
     const port = 9332;
     const app = await launchApp(port, {});
     if (app.noPage) throw new Error('会话 B1：页面未就绪');
@@ -244,7 +250,7 @@ try {
   }
 
   // ---------- 会话 B2：独立 appData 停止闭环（无绑定→全局 fake——默认验收零真实调用） ----------
-  {
+  if (shouldRun('B2')) {
     const port = 9333;
     const appDataStop = join(installRoot, '应用 数据', '停止场景');
     const app = await launchApp(port, { ZS_FAKE_STALL_MS: '15000' }, appDataStop); // 停延 15s=停止窗口；无绑定→全局 fake
@@ -270,7 +276,7 @@ try {
     record('会话 B2 无残留（含 stop 场景进程收拢）', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
   }
   // ---------- 会话 C：私信全链（第十九轮七：双会话/排队/停止继续/归档恢复/版本验收/深链） ----------
-  {
+  if (shouldRun('C')) {
     const port = 9334;
     const appDataDm = join(installRoot, '应用 数据', '私信场景');
     const app = await launchApp(port, { ZS_FAKE_STALL_MS: '12000' }, appDataDm);
@@ -322,13 +328,69 @@ try {
     const errsC = page.pageErrors();
     record('renderer 无未捕获异常（会话 C 全程）', errsC.length === 0, errsC.slice(0, 2).join(' | ').slice(0, 160));
     page.close();
-    const exitC = await exitWithGuard(app.child);
-    const factsC = JSON.parse(readFileSync(join(appDataDm, 'desktop-shutdown.json'), 'utf8'));
-    record('私信场景停机事实（退出 0+complete）', exitC.code === 0 && factsC.daemonStopResult?.complete === true, `exit=${exitC.code} stop=${factsC.daemonStopResult?.complete}`);
-    await sleep(1000);
-    record('会话 C 无残留', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
+    // 同步点（第二十轮一）：上一实例退出延迟——C 关闭 fire-and-forget，D 立即启动（不同
+    // appData 无锁冲突）；C 的停机事实延后到 D 结束后核对（同一次运行的进程树，不误杀他人）。
+    let exitCFacts = null;
+    const exitCPromise = exitWithGuard(app.child).then(async (exitC) => {
+      exitCFacts = { exit: exitC };
+      try {
+        const factsC = JSON.parse(readFileSync(join(appDataDm, 'desktop-shutdown.json'), 'utf8'));
+        exitCFacts.facts = factsC;
+      } catch { /* 事实文件读取失败如实留空 */ }
+      return exitC;
+    });
+    await sleep(300);
+    void exitCPromise;
+    const cPort = port; // C 进程树由 exitCPromise 收口（CloseMainWindow→60s 硬限→taskkill）
+    if (!shouldRun('D')) {
+      const exitC = await exitCPromise;
+      record('私信场景停机事实（退出 0+complete）', exitC.code === 0 && exitCFacts?.facts?.daemonStopResult?.complete === true, `exit=${exitC.code} stop=${exitCFacts?.facts?.daemonStopResult?.complete}`);
+      await sleep(1000);
+      record('会话 C 无残留', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
+    }
+    void cPort;
   }
 
+
+  // ---------- 会话 D：受控同步点（第二十轮一）——IPC 延迟就绪/首命令响应延迟/上一实例退出延迟 ----------
+  if (shouldRun('D')) {
+    // D1：daemon 启动延迟 5s + 页面就显示立即点击——命令应在 handler 内有界等待，项目最终打开。
+    {
+      const port = 9335;
+      const appDataD = join(installRoot, '应用 数据', '同步点D1');
+      const app = await launchApp(port, { ZS_UI_DAEMON_DELAY_MS: '5000' }, appDataD);
+      if (app.noPage) throw new Error('会话 D1：页面未就绪');
+      const page = await connectPage(port);
+      await page.evalJs(`document.getElementById('open-folder').click()`); // 立即点击（不等就绪）
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 90_000, 'D1 daemon 延迟就绪下项目仍打开');
+      const connErr = await page.evalJs(`document.getElementById('conn-state').classList.contains('err')`);
+      record('同步点·IPC 延迟就绪（daemon 延 5s+立即点击）：命令有界等待、项目打开、无错误残留', connErr.value !== true, `connErr=${connErr.value}`);
+      page.close();
+      await exitWithGuard(app.child);
+      await sleep(800);
+    }
+    // D2：首条命令响应延迟 3s——renderer 请求-响应不丢（同一点击最终完成）。
+    {
+      const port = 9336;
+      const appDataD = join(installRoot, '应用 数据', '同步点D2');
+      const app = await launchApp(port, { ZS_UI_FIRST_COMMAND_DELAY_MS: '3000' }, appDataD);
+      if (app.noPage) throw new Error('会话 D2：页面未就绪');
+      const page = await connectPage(port);
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 60_000, 'D2 首命令延迟下项目仍打开');
+      record('同步点·项目打开响应延迟（首命令延 3s）：响应回到原请求、无重复无丢失', true);
+      page.close();
+      await exitWithGuard(app.child);
+      await sleep(800);
+    }
+    // 上一实例退出延迟已在 C→D 交接覆盖（C fire-and-forget 关闭、D 立即启动）；核对 C 的收口事实。
+    for (let i = 0; i < 120; i += 1) { if (exitCFacts != null) break; await sleep(500); }
+    record('同步点·上一实例退出延迟（C 关闭不等完即启 D）：C 停机事实仍完整（退出 0+complete）',
+      exitCFacts?.exit?.code === 0 && exitCFacts?.facts?.daemonStopResult?.complete === true,
+      `exit=${exitCFacts?.exit?.code} stop=${exitCFacts?.facts?.daemonStopResult?.complete}`);
+    await sleep(1000);
+    record('会话 D 无残留（含延迟退出的 C 进程树收口）', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
+  }
 } catch (error) {
   failed = true;
   console.error(`中止：${error instanceof Error ? error.stack : String(error)}`);

@@ -64,6 +64,15 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+/** 非阻塞错误呈现（第二十轮一）：alert() 会阻塞 renderer 主线程（自动化/无头环境永久挂死），
+ *  一切异步错误一律 conn-state 行内显示——不丢反馈也不挂页面。 */
+function showError(message) {
+  const box = el('conn-state');
+  box.textContent = message;
+  box.classList.add('err');
+}
+
 const uuid = () => `ui-${crypto.randomUUID()}`;
 // 视图=pool/thread/dm（DEV-22：私信独立视图——不与房间输入区共享意图控件）。
 const currentView = () => (state.openDmId != null ? 'dm' : state.openThreadId == null ? 'pool' : 'thread');
@@ -212,7 +221,7 @@ async function renderDmSidebar() {
     const stateText = c.archivedAt != null ? '（已归档）' : DM_STATE_TEXT[c.execState] ?? '';
     btn.textContent = `${c.peerDisplayName}${stateText}${c.unread > 0 ? ` ·${c.unread}` : ''}`;
     btn.title = c.archivedAt != null ? '已归档：只读（可取消归档）' : '一对一私信：发送即交给该成员';
-    btn.onclick = () => void openDm(c.conversationId).catch((e) => alert(`打开私信失败：${e.message}`));
+    btn.onclick = () => void openDm(c.conversationId).catch((e) => showError(`打开私信失败：${e.message}`));
     nav.append(btn);
   }
 }
@@ -239,8 +248,9 @@ async function restoreDmDeepLink() {
 
 async function renderDm() {
   if (state.openDmId == null || state.projectId == null) return;
-  const conv = state.dmConversations.find((c) => c.conversationId === state.openDmId);
-  const fresh = conv ?? ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === state.openDmId);
+  // 执行态/排队数必须取实时值（第二十轮一：缓存由低频侧栏刷新——会话视图每次直查，
+  // 不用过期缓存呈现运行/排队状态）。
+  const fresh = ((await command('conversation.list', { projectId: state.projectId })).conversations ?? []).find((c) => c.conversationId === state.openDmId);
   if (fresh == null) { state.openDmId = null; showPool(); return; }
   const history = await command('conversation.history', { conversationId: state.openDmId, limit: 100 });
   const box = el('dm-messages');
@@ -264,7 +274,8 @@ async function renderDm() {
   if (fresh.unread > 0) void command('conversation.markRead', { conversationId: state.openDmId, throughMessageSeq: lastSeq }).catch(() => {});
   // 会话头：标题/执行态/操作（停止/继续队列/归档/取消归档）。
   el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}`;
-  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : DM_STATE_TEXT[fresh.execState] ?? '';
+  const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
+  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}`;
   el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
   el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
   el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
@@ -1658,7 +1669,7 @@ async function resumeFromGate() {
   try {
     await command('dispatch.resume', { confirm: true });
   } catch (error) {
-    alert(`恢复失败：${error.message}`);
+    showError(`恢复失败：${error.message}`);
   }
   await refreshGate();
   void renderPool().catch(showConnError);
@@ -1689,7 +1700,7 @@ function schedulePoll() {
 
 // ---------- 事件绑定 ----------
 
-el('open-folder').onclick = () => void openFolder().catch((e) => alert(`打开失败：${e.message}`));
+el('open-folder').onclick = () => void openFolder().catch((e) => showError(`打开失败：${e.message}`));
 el('send').onclick = () => void send();
 el('record-toggle').onclick = () => {
   state.recordOnly = !state.recordOnly;
@@ -1706,27 +1717,87 @@ el('room-create').onclick = () => {
   if (name == null || name.trim().length === 0) return;
   void command('room.create', { projectId: state.projectId, name: name.trim() })
     .then(() => loadProject(localStorage.getItem('zs.lastProjectPath') ?? ''))
-    .catch((e) => alert(`建房失败：${e.message}`));
+    .catch((e) => showError(`建房失败：${e.message}`));
 };
 el('stop-btn').onclick = () => void stopTask();
 // 私信（DEV-22）：新建/返回/发送/仅记录/停止/继续队列/归档/取消归档。
+// 新建私信：DOM 成员选择器（第二十轮一正式落地——第十九轮补丁静默未生效，onclick 仍走
+// prompt()：原生对话框同样阻塞 renderer）。每个请求创建独立会话（同成员可多条）；打开已
+// 有会话点侧栏列表；成员清单在项目加载后半段才就绪——有界等待，不静默不出也不挂住。
 el('dm-create').onclick = () => void (async () => {
+  const box = el('dm-member-picker');
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  for (let i = 0; i < 40 && state.members.filter((x) => x.principalType === 'agent' && x.enabled).length === 0; i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
   const agents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
-  if (agents.length === 0) { alert('本项目没有启用的 Agent 成员'); return; }
-  const pick = prompt(`与哪位成员**新建**独立私信会话？（同成员可有多条互不串上下文的会话；输入序号）\n${agents.map((a, i) => `${i + 1}. ${a.displayName}`).join('\n')}`, '1');
-  if (pick == null) return;
-  const chosen = agents[Number(pick) - 1];
-  if (chosen == null) { alert('序号无效'); return; }
-  const r = await command('conversation.create', { projectId: state.projectId, peerMemberId: chosen.id });
-  await renderDmSidebar();
-  await openDm(r.conversationId);
-})().catch((e) => alert(`新建私信失败：${e.message}`));
+  box.replaceChildren();
+  if (agents.length === 0) { box.textContent = '（本项目没有启用的 Agent 成员）'; box.classList.remove('hidden'); return; }
+  for (const a of agents) {
+    const btn = document.createElement('button');
+    btn.className = 'chip';
+    btn.dataset.dmPeer = a.id;
+    btn.textContent = `与 ${a.displayName} 新建`;
+    btn.onclick = () => void (async () => {
+      box.classList.add('hidden');
+      const r = await command('conversation.create', { projectId: state.projectId, peerMemberId: a.id });
+      await renderDmSidebar();
+      await openDm(r.conversationId);
+    })().catch((e) => showError(`新建私信失败：${e.message}`));
+    box.append(btn);
+  }
+  box.classList.remove('hidden');
+})();
 el('dm-back-btn').onclick = () => { showPool(); void renderPool().catch(() => {}); void renderDmSidebar().catch(() => {}); };
 el('dm-send').onclick = () => void sendDm();
 el('dm-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendDm(); } });
 el('dm-record').onclick = () => {
   state.dmRecordOnly = !state.dmRecordOnly;
   el('dm-record').classList.toggle('on', state.dmRecordOnly);
+};
+// DM 版本验收（第二十轮一补齐绑定——第十九轮补丁静默丢失，按钮无 onclick）：accept 绑定
+// 展示时 deliveryId/revision；reject 意见必填（行内输入——不用 prompt，避免阻塞）。
+// 重命名（补齐绑定）：expectedRevision=展示时 revision；不换对端/不重置历史或 session。
+el('dm-rename-btn').onclick = () => void (async () => {
+  const active = state.dmActive;
+  if (active == null) return;
+  const title = prompt('会话名称：', active.title ?? active.peerDisplayName);
+  if (title == null || title.trim().length === 0) return;
+  try {
+    await command('conversation.rename', { conversationId: active.conversationId, title: title.trim(), expectedRevision: active.revision });
+  } catch (e) { showError(`重命名失败：${e.message}`); }
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+})();
+el('dm-review-accept').onclick = () => void (async () => {
+  const review = state.dmActive?.pendingReview;
+  if (review == null) return;
+  try {
+    await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, decision: 'accept' });
+  } catch (e) { showError(`验收失败：${e.message}`); }
+  await renderDm();
+})().catch(() => {});
+el('dm-review-reject').onclick = () => {
+  const row = el('dm-review-row');
+  if (row.querySelector('#dm-review-note-input') != null) return;
+  const input = document.createElement('input');
+  input.id = 'dm-review-note-input';
+  input.className = 'git-input';
+  input.placeholder = '要求修改的意见（必填——将注入返工输入）';
+  input.maxLength = 500;
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'danger';
+  confirmBtn.textContent = '提交返工意见';
+  confirmBtn.onclick = () => void (async () => {
+    const review = state.dmActive?.pendingReview;
+    const note = input.value.trim();
+    if (review == null || note.length === 0) { input.focus(); return; }
+    try {
+      await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, decision: 'changes_requested', note });
+    } catch (e) { showError(`提交返工意见失败：${e.message}`); }
+    await renderDm();
+  })().catch(() => {});
+  row.querySelector('.git-row').append(input, confirmBtn);
 };
 el('dm-stop-btn').onclick = () => void (async () => {
   const active = state.dmActive;
@@ -1741,13 +1812,13 @@ el('dm-resume-btn').onclick = () => void (async () => {
   await command('dm.resume', { conversationId: state.openDmId });
   await renderDm();
   void renderDmSidebar().catch(() => {});
-})().catch((e) => alert(`继续失败：${e.message}`));
+})().catch((e) => showError(`继续失败：${e.message}`));
 el('dm-archive-btn').onclick = () => void (async () => {
   const active = state.dmActive;
   if (active == null) return;
   try {
     await command('conversation.archive', { conversationId: active.conversationId, expectedRevision: active.revision });
-  } catch (e) { alert(`归档失败：${e.message}`); }
+  } catch (e) { showError(`归档失败：${e.message}`); }
   await renderDm();
   void renderDmSidebar().catch(() => {});
 })();
@@ -1755,7 +1826,7 @@ el('dm-restore-btn').onclick = () => void (async () => {
   await command('conversation.restore', { conversationId: state.openDmId });
   await renderDm();
   void renderDmSidebar().catch(() => {});
-})().catch((e) => alert(`取消归档失败：${e.message}`));
+})().catch((e) => showError(`取消归档失败：${e.message}`));
 // 仓库状态显隐（应用设置持久化，重开生效——app.settings.get/set 正式命令）。
 async function applyRepoStatusVisibility() {
   let stored = null;

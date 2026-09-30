@@ -214,9 +214,24 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  await startDaemonProcess(appDataDir, runtime);
-
+  // 就绪链（第二十轮一）：IPC handler **先注册**再等 daemon——renderer 加载/点击早于 daemon
+  // 启动完成时，命令在 handler 内有界等待就绪（不再 reject→renderer alert 阻塞挂死）；
+  // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
+  // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
+  let markDaemonReady: () => void = () => {};
+  const daemonReady = new Promise<void>((resolve) => { markDaemonReady = resolve; });
+  const boundedWait = (ms: number, what: string): Promise<void> => new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what}等待超时（${ms}ms）——请重试或查看日志`)), ms);
+    t.unref?.();
+    daemonReady.then(() => { clearTimeout(t); resolve(); });
+  });
+  let firstCommandDelayed = false;
   ipcMain.handle('zs:command', async (_event, envelope: unknown) => {
+    if (process.env.ZS_UI_FIRST_COMMAND_DELAY_MS != null && !firstCommandDelayed) {
+      firstCommandDelayed = true;
+      await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_FIRST_COMMAND_DELAY_MS) || 0));
+    }
+    await boundedWait(120_000, 'daemon 就绪');
     await ensureConnection();
     return pipe!.send(envelope);
   });
@@ -226,6 +241,11 @@ app.whenReady().then(async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
+  if (process.env.ZS_UI_DAEMON_DELAY_MS != null) {
+    await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_DAEMON_DELAY_MS) || 0));
+  }
+  await startDaemonProcess(appDataDir, runtime);
+  markDaemonReady();
 
   // 模拟验证模式（第十六轮二/四：本地体验入口 ZS_APP_MODE=fake-sim）——窗口标题明示 +
   // 日志说明：fake runtime+真实派发防护（保存真实绑定也不发真实请求）。

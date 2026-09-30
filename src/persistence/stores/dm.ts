@@ -63,6 +63,8 @@ export interface DmConversationSummary {
   activeStopGeneration: number;
   /** 归档后停止退出未确认（如实呈现——不伪称已停）。 */
   stopPending: boolean;
+  /** 排队中的消息数（运行中同时有排队时一并呈现——不吞掉排队事实）。 */
+  queuedCount: number;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
   pendingReview: { taskId: string; deliveryId: string; revision: number } | null;
 }
@@ -110,6 +112,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       activeRunId: activeRow?.runId ?? null,
       activeStopGeneration: activeRow?.stopGen ?? 0,
       stopPending: row.archived_at != null && activeRow != null, // 归档后停止未确认——如实呈现
+      queuedCount: pending.c,
       pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision } : null,
     });
   }
