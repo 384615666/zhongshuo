@@ -63,6 +63,8 @@ export interface DmConversationSummary {
   activeStopGeneration: number;
   /** 归档后停止退出未确认（如实呈现——不伪称已停）。 */
   stopPending: boolean;
+  /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
+  pendingReview: { taskId: string; deliveryId: string; revision: number } | null;
 }
 
 export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, projectId?: string): DmConversationSummary[] {
@@ -86,6 +88,12 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       `SELECT t.id AS taskId, r.id AS runId, r.status AS runStatus, t.stop_generation AS stopGen FROM workflow_runs r JOIN tasks t ON t.id = r.task_id
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND r.status IN ('RUNNING','WAITING','STOPPING') LIMIT 1`,
     ).get(row.id) as { taskId: string; runId: string; runStatus: string; stopGen: number } | undefined;
+    const pendingReviewRow = db.prepare(
+      `SELECT t.id AS taskId, d.id AS deliveryId, d.revision AS revision FROM tasks t
+       JOIN task_deliveries d ON d.task_id = t.id AND d.review_status = 'pending'
+       WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'REVIEW'
+       ORDER BY d.revision DESC LIMIT 1`,
+    ).get(row.id) as { taskId: string; deliveryId: string; revision: number } | undefined;
     out.push({
       conversationId: row.id,
       projectId: row.project_id,
@@ -102,6 +110,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       activeRunId: activeRow?.runId ?? null,
       activeStopGeneration: activeRow?.stopGen ?? 0,
       stopPending: row.archived_at != null && activeRow != null, // 归档后停止未确认——如实呈现
+      pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision } : null,
     });
   }
   return out;

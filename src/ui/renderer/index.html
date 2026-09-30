@@ -17,6 +17,7 @@
       <div class="sidebar-sec">私信（1 对 1）</div>
       <button id="dm-create" class="chip" title="与本项目 Agent 成员新建一对一私信（每个请求创建独立会话——同成员可有多条；打开已有会话点下方列表）">+ 新私信</button>
       <nav id="dm-list" class="rooms"></nav>
+      <div id="dm-member-picker" class="hidden"></div>
       <div class="sidebar-foot">
         <details id="project-settings" class="help-panel">
           <summary>项目设置</summary>
@@ -93,11 +94,19 @@
         <div class="thread-back">
           <button id="dm-back-btn">← 返回主池</button>
           <span id="dm-title" class="thread-status"></span>
+          <button id="dm-rename-btn" class="chip hidden" title="重命名会话（不换项目/对端、不重置历史或 session）">✏️ 重命名</button>
           <span id="dm-state" class="thread-status"></span>
           <button id="dm-stop-btn" class="danger hidden" title="停止当前运行（排队消息转暂停，需显式继续）">停止</button>
           <button id="dm-resume-btn" class="hidden" title="继续被停止后挂起的排队消息">继续队列</button>
-          <button id="dm-archive-btn" class="chip hidden" title="归档：禁止新发/续跑，保留历史（有活动执行须先停止）">归档</button>
+          <button id="dm-archive-btn" class="chip hidden" title="归档：禁止新发/新派发，活动运行按停止流程收尾，队列暂停，历史只读">归档</button>
           <button id="dm-restore-btn" class="chip hidden" title="取消归档（不自动续跑）">取消归档</button>
+        </div>
+        <div id="dm-review-row" class="git-ops hidden">
+          <div class="meta">本次交付待验收（第 <span id="dm-review-revision">?</span> 版）——验收绑定该版本；「要求修改」的意见必填并注入返工输入（Git 提交不等同验收）。</div>
+          <div class="git-row">
+            <button id="dm-review-accept" class="primary">验收通过</button>
+            <button id="dm-review-reject" class="danger">要求修改</button>
+          </div>
         </div>
         <div id="dm-messages"></div>
         <div class="composer-row">

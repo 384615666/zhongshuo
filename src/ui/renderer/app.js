@@ -111,6 +111,7 @@ async function loadProject(path) {
     await selectRoom(first.id, first.conversationId, firstEl);
   }
   void renderDmSidebar().catch(() => { /* 私信侧栏失败不阻断项目加载 */ });
+  void restoreDmDeepLink().catch(() => { /* 深链失效留在主池 */ });
   await refreshGate();
 }
 
@@ -175,6 +176,7 @@ function showPool() {
   el('dm').classList.add('hidden');
   el('pool').classList.remove('hidden');
   el('thread-title').textContent = '主对话池';
+  if (/^dm=/.test(decodeURIComponent(location.hash.slice(1)))) location.hash = '';
   restoreDraft();
 }
 
@@ -182,6 +184,7 @@ async function openThread(threadId, taskId, anchorText) {
   saveDraft();
   state.openThreadId = threadId;
   state.openDmId = null;
+  state.reviewConfirm = null; // 换线程清上一线程的验收回执
   state.openTaskId = taskId ?? null;
   state.openTaskSnapshot = null;
   state.openAnchorText = anchorText ?? null;
@@ -220,8 +223,18 @@ async function openDm(conversationId) {
   el('pool').classList.add('hidden');
   el('thread').classList.add('hidden');
   el('dm').classList.remove('hidden');
+  location.hash = `dm=${conversationId}`; // 会话深链（第十九轮七：恢复打开位置）
   await renderDm();
   void renderDmSidebar().catch(() => {});
+}
+
+/** 深链恢复：#dm=<conversationId> —— 项目加载后回到该会话（不存在则忽略）。 */
+async function restoreDmDeepLink() {
+  const m = /^dm=([\w-]+)$/.exec(decodeURIComponent(location.hash.slice(1)));
+  if (m == null || state.projectId == null) return;
+  try {
+    await openDm(m[1]);
+  } catch { /* 会话不存在/已失效——留在主池（hash 保留不伪造） */ }
 }
 
 async function renderDm() {
@@ -256,6 +269,10 @@ async function renderDm() {
   el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
   el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
   el('dm-restore-btn').classList.toggle('hidden', fresh.archivedAt == null);
+  el('dm-rename-btn').classList.toggle('hidden', false); // 重命名随时可用（不换对端/不重置）
+  const review = fresh.pendingReview;
+  el('dm-review-row').classList.toggle('hidden', review == null);
+  if (review != null) el('dm-review-revision').textContent = String(review.revision);
   el('dm-input').disabled = fresh.archivedAt != null;
   el('dm-send').disabled = fresh.archivedAt != null;
   state.dmActive = fresh; // 停止按钮的 task/run 来源
@@ -553,7 +570,10 @@ function updateStopUi(snapshot) {
   const stopping = run != null && run.status === 'STOPPING';
   // 启动失败原因如实上屏（第十六轮四：验收防护拒绝等——「待处理」无解释=用户不可知）。
   const failNote = snapshot.lastStartupFailureMessage != null ? ` · ${snapshot.lastStartupFailureMessage}` : '';
-  statusLine.textContent = `任务${chip.text}${runText}${failNote}`;
+  // 验收回执是用户操作的确认（第十九轮八：1.5s 轮询重绘不得瞬间抹掉）——保留展示，
+  // 换线程/新发送时清除。
+  const confirmNote = state.reviewConfirmFor === snapshot.taskId && state.reviewConfirm != null ? ` · ${state.reviewConfirm}` : '';
+  statusLine.textContent = `任务${chip.text}${runText}${failNote}${confirmNote}`;
   const stoppable = snapshot.status === 'ACTIVE' && run != null && RUN_ACTIVE.includes(run.status);
   if (stoppable || stopping) {
     btn.classList.remove('hidden');
@@ -591,7 +611,9 @@ async function reviewTask(decision, note) {
       taskId: snap.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, decision,
       ...(decision === 'changes_requested' && note != null ? { note } : {}),
     });
-    el('thread-status').textContent = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
+    state.reviewConfirm = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
+    state.reviewConfirmFor = snap.taskId;
+    el('thread-status').textContent = state.reviewConfirm;
   } catch (error) {
     el('thread-status').textContent = `验收失败（第 ${pending.revision} 版）：${error.message}`;
   }

@@ -35,19 +35,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** 进程残留查询（修正版）：按安装根字面量匹配命令行（PowerShell -like 不转义反斜杠）；查询失败/
  * 超时/非数字=ERR（不当 0）；覆盖任意名称的执行载体（不限 node/electron 名）。 */
 const psQuery = join(installRoot, 'proc-query.ps1');
-writeFileSync(psQuery, [
-  // pattern 经环境变量传入（-File 参数含空格/中文会被拆分——不可靠）
-  '$Pattern = $env:ZS_PROC_PATTERN',
-  '$ErrorActionPreference = "Stop"',
-  'try {',
-  '  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { $_.CommandLine -like $Pattern -and $_.ProcessId -ne $PID }',
-  '  $p | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.Name }',
-  '  "QUERY-OK"',
-  '} catch { "ERR`t" + $_.Exception.Message }',
-].join('\n'), 'utf8');
+// v2 统一协议（第十八轮一）：双形态匹配+排除验证器自身/父壳/查询辅助——与独立包两模板及
+// verify-desktop.mjs 逐字一致（tests/integration/residualSelfExclude.test.ts 校验一致性）。
+const PROC_QUERY_PS = `$ErrorActionPreference = "Stop"
+$Pattern = $env:ZS_PROC_PATTERN
+$Alt = $env:ZS_PROC_PATTERN_ALT
+$Exclude = @($env:ZS_PROC_EXCLUDE -split ',' | Where-Object { $_ -ne '' })
+try {
+  $p = Get-CimInstance Win32_Process -Filter "CommandLine != NULL" | Where-Object { (($_.CommandLine -like $Pattern) -or ($Alt -ne "" -and $_.CommandLine -like $Alt)) -and $_.ProcessId -ne $PID -and $Exclude -notcontains [string]$_.ProcessId }
+  $p | ForEach-Object { "$($_.ProcessId)" + [char]9 + "$($_.Name)" }
+  "QUERY-OK"
+} catch { "ERR" + [char]9 + $_.Exception.Message }
+`;
+writeFileSync(psQuery, PROC_QUERY_PS, 'utf8');
 function listInstallProcesses() {
   // 成功查询必有 QUERY-OK 尾标：空结果=零行；无尾标/错误/超时=ERR（不当 0）。
-  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQuery], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: `*${installRoot}*` } });
+  const pattern = `*${installRoot}*`;
+  const alt = pattern.replaceAll('\\', '/');
+  const exclude = [process.pid, process.ppid].filter((x) => x != null).join(',');
+  const ask = () => spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psQuery], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ZS_PROC_PATTERN: pattern, ZS_PROC_PATTERN_ALT: alt !== pattern ? alt : '', ZS_PROC_EXCLUDE: exclude } });
   let r = ask();
   if (r.error != null || r.status !== 0) r = ask(); // 冷启动/磁盘忙首查：重试一次（失败不折算为零）
   const out = (r.stdout ?? '').trim();
@@ -120,6 +126,20 @@ async function connectPage(port) {
   return { evalJs, pageErrors: () => pageErrors, close: () => ws.close() };
 }
 
+
+/** 退出等待（第十九轮八：挂起放大器修复）——CloseMainWindow 后 60s 硬限，超时 taskkill
+ * /T /F 兜底（exit={code:null,signal:'KILLED-60s'}——强杀≠优雅成功，事实如实进入核对）。 */
+async function exitWithGuard(child, gracefulMs = 60_000) {
+  const outcome = await new Promise((res) => {
+    child.once('exit', (c, s) => res({ code: c, signal: s }));
+    spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${child.pid}).CloseMainWindow()`], { timeout: 15_000 });
+    const t = setTimeout(() => { try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F']); } catch { /* 尽力 */ } }, gracefulMs);
+    t.unref?.();
+  });
+  await new Promise((r) => setTimeout(r, 800));
+  return outcome;
+}
+
 const waitFor = async (fn, timeoutMs, what) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -166,9 +186,12 @@ try {
     await waitFor(async () => (await page.evalJs(`document.getElementById('review-reject-btn').classList.contains('hidden') === false`)).value === true, 90_000, 'REVIEW 待验收（验收按钮出现）');
     const reply = await page.evalJs(`document.getElementById('thread-messages').textContent`);
     record('正常发送闭环（按钮提交→worker→线程回复→待验收）', String(reply.value ?? '').length > 0 && !String(reply.value ?? '').includes('错误'), `回复长度=${String(reply.value ?? '').length}`);
-    // 要求修改（真实按钮+意见必填）→ 返工 → 新版本待验收 → 验收通过 → DONE。
+    // 要求修改（真实按钮+意见必填）→ 显式追加执行（返工经 redispatch 正式链——意见注入输入）
+    // → 新版本待验收 → 验收通过 → DONE。
     await page.evalJs(`document.getElementById('review-reject-btn').click()`);
     await page.evalJs(`(() => { document.getElementById('rework-note-input').value = '请补充风险一节'; document.getElementById('rework-note-confirm').click(); })()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('redispatch-btn').classList.contains('hidden') === false`)).value === true, 30_000, '返工后追加执行可用（ACTIVE+无在途）');
+    await page.evalJs(`document.getElementById('redispatch-btn').click()`);
     await waitFor(async () => (await page.evalJs(`document.getElementById('review-accept-btn').classList.contains('hidden') === false && document.getElementById('review-reject-btn').classList.contains('hidden') === false`)).value === true, 120_000, '返工后新版本待验收（验收按钮复现）');
     await page.evalJs(`document.getElementById('review-accept-btn').click()`);
     await waitFor(async () => (await page.evalJs(`document.getElementById('thread-status').textContent.includes('验收已记录')`)).value === true, 60_000, '验收通过后 验收已记录');
@@ -191,7 +214,7 @@ try {
     record('renderer 无未捕获异常/console 错误（会话 A 全程）', errs.length === 0, errs.slice(0, 2).join(' | ').slice(0, 160));
     page.close();
     // 优雅停机：关窗（window-all-closed→daemon.shutdown）→ 事实核对（非仅 exit 0/pid 消失）。
-    const exitA = await new Promise((res) => { app.child.once('exit', (c, s) => res({ code: c, signal: s })); spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.child.pid}).CloseMainWindow()`], { timeout: 15_000 }); });
+    const exitA = await exitWithGuard(app.child);
     const facts = JSON.parse(readFileSync(join(appData, 'desktop-shutdown.json'), 'utf8'));
     record('优雅停机事实（desktop-shutdown.json：送达+退出 0+daemon stop-result complete）',
       exitA.code === 0 && facts.requestDelivered === true && facts.exitCode === 0 && facts.forceKilled === false && facts.daemonStopResult?.complete === true,
@@ -212,7 +235,7 @@ try {
     const reviewKept = await page.evalJs(`document.getElementById('task-review-toggle').textContent`);
     record('同 appData 顺序重开：绑定与验收开关保持（设置持久化；锁随首启干净退出释放）', String(reviewKept.value).includes('开'), `开关=${String(reviewKept.value).slice(0, 12)} 绑定=保持`);
     page.close();
-    const exitB = await new Promise((res) => { app.child.once('exit', (c, s) => res({ code: c, signal: s })); spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.child.pid}).CloseMainWindow()`], { timeout: 15_000 }); });
+    const exitB = await exitWithGuard(app.child);
     const factsB = JSON.parse(readFileSync(join(appData, 'desktop-shutdown.json'), 'utf8'));
     record('重开停机事实（同 appData 第二次优雅关闭：退出 0+complete）',
       exitB.code === 0 && factsB.exitCode === 0 && factsB.daemonStopResult?.complete === true,
@@ -238,7 +261,7 @@ try {
     await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.includes('已停止') || document.getElementById('thread-status').textContent.includes('已停止')`)).value === true, 60_000, '任务 CANCELLED');
     record('停止闭环（在途→stop-btn→CANCELLED）', true);
     page.close();
-    const exitB2 = await new Promise((res) => { app.child.once('exit', (c, s) => res({ code: c, signal: s })); spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.child.pid}).CloseMainWindow()`], { timeout: 15_000 }); });
+    const exitB2 = await exitWithGuard(app.child);
     const factsB2 = JSON.parse(readFileSync(join(appDataStop, 'desktop-shutdown.json'), 'utf8'));
     record('停止场景停机事实（受管 job 随优雅关闭收拢：退出 0+complete）',
       exitB2.code === 0 && factsB2.exitCode === 0 && factsB2.daemonStopResult?.complete === true,
@@ -246,6 +269,66 @@ try {
     await sleep(1000);
     record('会话 B2 无残留（含 stop 场景进程收拢）', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
   }
+  // ---------- 会话 C：私信全链（第十九轮七：双会话/排队/停止继续/归档恢复/版本验收/深链） ----------
+  {
+    const port = 9334;
+    const appDataDm = join(installRoot, '应用 数据', '私信场景');
+    const app = await launchApp(port, { ZS_FAKE_STALL_MS: '12000' }, appDataDm);
+    if (app.noPage) throw new Error('会话 C：页面未就绪');
+    const page = await connectPage(port);
+    await page.evalJs(`document.getElementById('open-folder').click()`);
+    await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 90_000, 'C 项目打开');
+    await page.evalJs(`document.getElementById('task-review-toggle').click()`); // 开验收——DM 交付走版本验收
+    await waitFor(async () => (await page.evalJs(`document.getElementById('task-review-toggle').textContent.includes('开')`)).value === true, 10_000, 'C 验收开关');
+    // 新建会话 A（DOM 成员选择器——非 prompt）。
+    await page.evalJs(`document.getElementById('dm-create').click()`);
+    await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, '成员选择器出现');
+    await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+    await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, '私信视图打开');
+    const hashA = await page.evalJs('location.hash');
+    record('DM 新建+打开（DOM 选择器→独立会话；深链 hash 落址）', String(hashA.value ?? '').startsWith('#dm=dm_'), `hash=${hashA.value}`);
+    // 会话 A：发送两条（第一条在途 stall→第二条排队）；停止→暂停→继续→完成→REVIEW 验收。
+    await page.evalJs(`(() => { document.getElementById('dm-input').value = '私信第一条（长任务）'; document.getElementById('dm-send').click(); })()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-state').textContent.includes('运行中')`)).value === true, 20_000, 'DM 运行中状态');
+    await page.evalJs(`(() => { document.getElementById('dm-input').value = '私信第二条（排队）'; document.getElementById('dm-send').click(); })()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-state').textContent.includes('排队')`)).value === true, 20_000, 'DM 排队状态');
+    await page.evalJs(`document.getElementById('dm-stop-btn').click()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-state').textContent.includes('暂停')`)).value === true, 60_000, 'DM 停止后队列暂停');
+    await page.evalJs(`document.getElementById('dm-resume-btn').click()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-review-row').classList.contains('hidden') === false`)).value === true, 120_000, 'DM 待验收（第二排队消息完成后）');
+    await page.evalJs(`document.getElementById('dm-review-accept').click()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-review-row').classList.contains('hidden')`)).value === true, 60_000, 'DM 验收通过后行收起');
+    record('DM 串行+停止继续+版本验收（排队→暂停→resume→REVIEW→accept 绑定版本）', true);
+    // 归档→只读；恢复→可发。
+    await page.evalJs(`document.getElementById('dm-archive-btn').click()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-input').disabled === true && document.getElementById('dm-state').textContent.includes('已归档')`)).value === true, 20_000, 'DM 归档只读');
+    await page.evalJs(`document.getElementById('dm-restore-btn').click()`);
+    await waitFor(async () => (await page.evalJs(`document.getElementById('dm-input').disabled === false`)).value === true, 20_000, 'DM 取消归档恢复可发');
+    record('DM 归档/恢复（只读→恢复不自动续跑）', true);
+    // 同成员第二条会话（新建分离）：侧栏两条、互不串。
+    await page.evalJs(`document.getElementById('dm-create').click()`);
+    await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, '成员选择器再现');
+    await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+    await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-list button').length >= 2`)).value === true, 20_000, '侧栏两会话');
+    await page.evalJs(`(() => { document.getElementById('dm-input').value = 'B 会话消息'; document.getElementById('dm-send').click(); })()`);
+    let replyB = '';
+    for (let i = 0; i < 60; i += 1) {
+      const t = await page.evalJs(`document.getElementById('dm-messages').textContent`);
+      replyB = String(t.value ?? '');
+      if (replyB.includes('分析完成')) break;
+      await sleep(500);
+    }
+    record('DM 同成员双会话（新建分离：侧栏两条；B 会话独立收发）', replyB.includes('分析完成'), `B 回复=${replyB.slice(0, 40)}`);
+    const errsC = page.pageErrors();
+    record('renderer 无未捕获异常（会话 C 全程）', errsC.length === 0, errsC.slice(0, 2).join(' | ').slice(0, 160));
+    page.close();
+    const exitC = await exitWithGuard(app.child);
+    const factsC = JSON.parse(readFileSync(join(appDataDm, 'desktop-shutdown.json'), 'utf8'));
+    record('私信场景停机事实（退出 0+complete）', exitC.code === 0 && factsC.daemonStopResult?.complete === true, `exit=${exitC.code} stop=${factsC.daemonStopResult?.complete}`);
+    await sleep(1000);
+    record('会话 C 无残留', leftoverCount() === 0, `count=${JSON.stringify(leftoverCount())}`);
+  }
+
 } catch (error) {
   failed = true;
   console.error(`中止：${error instanceof Error ? error.stack : String(error)}`);

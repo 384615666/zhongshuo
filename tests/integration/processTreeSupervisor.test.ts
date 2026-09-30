@@ -14,7 +14,7 @@
  * - 无活跃期快照 → 未完整确认（中间代际遗留不可排除）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -35,14 +35,16 @@ afterAll(() => {
   }
 });
 
-// 三代 fixture 脚本：父 spawn 子（detached 脱离父 Job），父 ~1.5s 后退出；子 ~1.5s 后退出；
-// 孙长活并把 PID 写文件（测试可精确收尾）。时序保证：快照时刻（父启动 ~0.9s）三代均在表。
+// 三代 fixture 脚本：父 spawn 子（detached 脱离父 Job），父/子各 ~4s 后退出（第十九轮八：
+// 全量并行负载下三代链启动可超旧 1.5s 寿命——快照①固定 900ms 等待会错过孙出现的窗口，
+// 表现为「历史身份不被覆盖」用例偶发；改为条件轮询+加宽寿命后窗口确定性成立）；
+// 孙长活并把 PID 写文件（测试可精确收尾）。
 const GEN3_PARENT = `const{spawn}=require("child_process");
 const c=spawn(process.execPath,[${JSON.stringify(join(tmpRoot, 'gen3-child.js'))}],{stdio:"ignore",detached:true});c.unref();
-setTimeout(()=>{},1500);`;
+setTimeout(()=>{},4000);`;
 const GEN3_CHILD = `const{spawn}=require("child_process");const fs=require("fs");
 const later=spawn(process.execPath,[${JSON.stringify(join(tmpRoot, 'gen3-grandson.js'))}],{stdio:"ignore",detached:true});later.unref();
-setTimeout(()=>{},1500);`;
+setTimeout(()=>{},4000);`;
 const GEN3_GRANDSON = `const fs=require("fs");fs.writeFileSync(${JSON.stringify(join(tmpRoot, 'grandson.pid'))},String(process.pid));
 setInterval(()=>{},1000);`;
 writeFileSync(join(tmpRoot, 'gen3-parent.js'), GEN3_PARENT);
@@ -210,15 +212,25 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     const { cmd } = depsOf(db);
     const parent = spawn(process.execPath, [join(tmpRoot, 'gen3-parent.js')], { stdio: 'ignore' });
     const parentPid = parent.pid!;
-    await wait(900);
+    // 快照①条件轮询（第十九轮八）：孙 PID 文件出现=三代链就绪——替代固定 900ms 睡眠
+    //（并行负载下链启动慢于固定窗口即偶发）；父 4s 寿命保证窗口内父仍活。
+    const grandsonFile = join(tmpRoot, 'grandson.pid');
+    for (let i = 0; i < 120; i += 1) {
+      if (existsSync(grandsonFile) && checkProcessLiveness(parentPid).state === 'alive') break;
+      await wait(100);
+    }
     const liveness = checkProcessLiveness(parentPid);
-    if (liveness.state !== 'alive') throw new Error('前置失败');
+    if (!existsSync(grandsonFile) || liveness.state !== 'alive') throw new Error('前置失败：三代链未在窗口内就绪');
     registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'claude', processModel: 'per-turn', pid: parentPid, startedAtMs: liveness.identity.startedAt, identitySource: 'os-starttime' });
     takeSnapshot(db, turnId, parentPid); // 第一拍：三代全在（父+子+孙均登记身份）
-    await wait(1_600); // 父（1.5s）与子（~1.55s）退出，孙继续运行
+    // 条件等待父退出（替代固定 1.6s——负载下退出时刻漂移）。
+    for (let i = 0; i < 150; i += 1) {
+      if (checkProcessLiveness(parentPid).state === 'exited') break;
+      await wait(100);
+    }
     // 后续周期观察（worker 生产行为）：根已退出 → BFS 只见占位行（孙在现存图不可达）。
     takeSnapshot(db, turnId, parentPid);
-    const grandsonPid = Number(readFileSync(join(tmpRoot, 'grandson.pid'), 'utf8'));
+    const grandsonPid = Number(readFileSync(grandsonFile, 'utf8'));
     // 追加式登记：孙身份保留自第一拍（不因后续观察缺席而丢失）。
     const ids = getProcessTreeIdentities(db, turnId);
     expect(ids.some((row) => row.pid === grandsonPid)).toBe(true);

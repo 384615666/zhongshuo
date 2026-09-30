@@ -170,14 +170,14 @@ describe('第十九轮一/二：批次护栏 fail-closed（每项断言底层零
     const { lp, wrapped } = wrap(db);
     const lockRootDir = join(journalDir, 'r19-quota.lockroot');
     const held = acquireSingletonLock(lockRootDir); // 本测试进程（活）持锁——模拟持锁者暂停
-    expect(held.ok).toBe(true);
+    if (!held.ok) throw new Error(`持锁失败：${held.error.message}`);
     const oldTime = new Date(Date.now() - 10 * 60_000);
     utimesSync(join(lockRootDir, 'daemon.lock.d'), oldTime, oldTime);
     utimesSync(join(lockRootDir, 'daemon.lock.d', 'owner.json'), oldTime, oldTime);
     await expect(wrapped.startTurn(session(), turnReq('l1'))).rejects.toThrow(/锁不可用|BUSY/);
     expect(lp.startTurnCalls).toBe(0); // 互斥被持 → fail-closed 拒绝
     expect((db.prepare('SELECT count(*) c FROM real_calls').get() as { c: number }).c).toBe(0);
-    held.value.release(); // 只释放自己的锁
+    if (held.ok) held.value.release(); // 只释放自己的锁
     await wrapped.startTurn(session(), turnReq('l2'));
     expect(lp.startTurnCalls).toBe(1);
   }, 60_000);
