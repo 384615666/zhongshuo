@@ -122,10 +122,14 @@ export interface ClaudeExecutableEntry {
  * - 默认：npm 全局原生 claude.exe（Windows）→ claude.cmd 解析 → 常见 Unix 路径 → PATH 兜底。
  */
 export function resolveClaudeExecutable(explicit?: string): ClaudeExecutableEntry {
+  // 显式路径=成员/安装绑定（第二十三轮四）：**一律按绑定执行，不静默回落全局默认**
+  //（路径无效=spawn ENOENT→RUNTIME_NOT_FOUND 明确失败——换路径必须显式换绑定，不能替用户猜）。
   if (explicit != null && explicit.length > 0 && !/^(claude|claude\.cmd)$/i.test(explicit)) {
     if (/\.(cmd|bat)$/i.test(explicit)) return parseWindowsShim(explicit);
-    if (process.platform === 'win32' && !/\.exe$/i.test(explicit)) {
-      return resolveDefaultClaudeEntry();
+    if (process.platform === 'win32') {
+      if (/\.exe$/i.test(explicit)) return { command: explicit, prefixArgs: [] };
+      if (/\.(js|cjs|mjs)$/i.test(explicit)) return { command: process.execPath, prefixArgs: [explicit] };
+      return { command: explicit, prefixArgs: [] }; // 无扩展等：字面 spawn——失败即 RUNTIME_NOT_FOUND
     }
     return { command: explicit, prefixArgs: [] };
   }

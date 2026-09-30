@@ -83,6 +83,9 @@ export interface ResolvedRuntimeBinding {
   model: string | null;
   installationId: string | null;
   permissionMode: string | null;
+  /** 实际可执行路径（runtime_installations.executable——第二十三轮四：回归修复。绑定成员
+   * 必须传真实路径到生产 spawn 链；null=未绑定/未登记，工厂自行按渠道默认解析）。 */
+  executable: string | null;
 }
 
 /** 统一解析（纯函数）：成员绑定优先，未绑定回落全局默认 kind+渠道默认模型。
@@ -91,7 +94,7 @@ export function resolveMemberRuntime(db: ZhongshuoDatabase, memberId: string, de
   const binding = readMemberRuntimeBinding(db, memberId);
   const unbound = binding == null || binding.installationId == null || binding.kind == null;
   if (unbound) {
-    return { memberId, bound: false, kind: defaultKind, model: defaultModelOf(defaultKind), installationId: null, permissionMode: null };
+    return { memberId, bound: false, kind: defaultKind, model: defaultModelOf(defaultKind), installationId: null, permissionMode: null, executable: null };
   }
   const kind = binding!.kind!;
   return {
@@ -99,6 +102,7 @@ export function resolveMemberRuntime(db: ZhongshuoDatabase, memberId: string, de
     model: binding!.model ?? defaultModelOf(kind),
     installationId: binding!.installationId,
     permissionMode: binding!.permissionMode,
+    executable: binding!.executable ?? null,
   };
 }
 
@@ -141,14 +145,14 @@ export class MemberRuntimeRegistry {
     if (factory == null) {
       throw new Error(`成员 ${memberId} 绑定的 runtime kind=${resolved.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
     }
-    const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}`;
+    const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}|${resolved.executable ?? ''}`;
     let adapter = this.cache.get(key);
     if (adapter == null) {
       adapter = factory({
         memberId,
         installationId: resolved.installationId,
         kind: resolved.kind,
-        executable: null, // 解析层不重查 executable（工厂按 installationId 自行取）；快照身份以本函数为准
+        executable: resolved.executable, // 实际可执行路径（第二十三轮四回归修复：绑定路径必须传到生产 spawn 链——不得置 null 让工厂回落全局默认）
         model: resolved.model,
         permissionMode: resolved.permissionMode,
       });
