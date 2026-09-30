@@ -14,7 +14,7 @@ import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
 import {
   createDmConversation, listDmConversations, dmConversationOf, dmPeerOf, dmLocalUserOf,
-  releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn,
+  releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate,
 } from '../persistence/stores/dm.ts';
 import { openProject } from './projectStore.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
@@ -1292,18 +1292,22 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'conversation.create': {
-        // 私信会话创建（DEV-22；R4 §2.3）：主体从 CallerContext 推导（本机用户）；同对端复用
-        // 现行会话；不按成员自动合并；commandId 幂等由 runCommand 承载。
+        // 私信会话创建（DEV-22；R4 §2.3；第十九轮三：新建/打开分离）——每个新的业务请求
+        // 创建独立 conversationId（同成员可多条独立私信）；同 commandId 重试经幂等网关返回
+        // 原创建结果；打开已有会话用 conversation.list/history + 明确 conversationId。
         const params = z.strictObject({
           projectId: z.string().min(1),
           peerMemberId: z.string().min(1),
           title: z.string().min(1).max(120).optional(),
         }).parse(env.params);
         const project = deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(params.projectId) as { id: string } | undefined;
-        if (project == null) throw new DaemonCommandError('PROJECT_NOT_FOUND', '项目不存在');
-        const created = createDmConversation(deps.db, { projectId: params.projectId, peerMemberId: params.peerMemberId, title: params.title, localUserId: deps.localUserId });
-        if (!created.ok) throw new DaemonCommandError(created.code, created.message);
-        return withCommandId({ ok: true, data: { conversationId: created.conversationId, created: created.created } });
+        if (project == null) throw new DaemonCommandError('PROJECT_MISSING', '项目不存在');
+        const result = run(() => {
+          const created = createDmConversation(deps.db, { projectId: params.projectId, peerMemberId: params.peerMemberId, title: params.title, localUserId: deps.localUserId });
+          if (!created.ok) throw new DaemonCommandError(created.code, created.message);
+          return { conversationId: created.conversationId };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'conversation.list': {
         const params = z.strictObject({ projectId: z.string().min(1).optional(), archived: z.boolean().optional() }).parse(env.params);
@@ -1346,17 +1350,39 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: { conversationId: params.conversationId, revision: params.expectedRevision + 1 } });
       }
       case 'conversation.archive': {
-        // 归档=禁止新发/续跑/提醒，保留历史。活动 run 须先停止（第一包边界：不冒充自动停止；
-        // R4 完整语义=按停止流程收尾，后续包接通）。
+        // 归档（第十九轮六：对齐基线 §2.1）——顺序：禁止新发/新派发（archived_at 事务内置位+
+        // 队列挂起）→ 活动运行按停止规则处理（requestStop 正式流程+协议中断）→ 历史只读。
+        // 停止退出无法确认时保留明确状态（stopPending——不伪称已停）；重复归档幂等返回。
         const params = z.strictObject({ conversationId: z.string().min(1), expectedRevision: z.number().int().min(0) }).parse(env.params);
         const conv = dmConversationOf(deps.db, params.conversationId);
         if (conv == null || conv.kind !== 'dm') throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不存在或非私信');
-        if (dmHasActiveRun(deps.db, params.conversationId)) {
-          throw new DaemonCommandError('CONVERSATION_BUSY', '会话有活动执行：先停止再归档（归档后禁止新发/续跑——DEV-22 第一包不自动代停，不冒充）');
+        if (conv.archived_at != null) {
+          return withCommandId({ ok: true, data: { conversationId: params.conversationId, archived: true, already: true, stopPending: dmHasActiveRun(deps.db, params.conversationId) } });
         }
         if (conv.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${conv.revision}`);
-        deps.db.prepare('UPDATE conversations SET archived_at = ?, revision = revision + 1 WHERE id = ?').run(Date.now(), params.conversationId);
-        return withCommandId({ ok: true, data: { conversationId: params.conversationId, revision: params.expectedRevision + 1, archived: true } });
+        const activeRuns = deps.db.prepare(
+          `SELECT t.id AS taskId, t.stop_generation AS stopGen, r.id AS runId FROM workflow_runs r JOIN tasks t ON t.id = r.task_id
+           WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND r.status IN ('RUNNING','WAITING','STOPPING')`,
+        ).all(params.conversationId) as Array<{ taskId: string; stopGen: number; runId: string }>;
+        const result = run(() => {
+          deps.db.prepare('UPDATE conversations SET archived_at = ?, revision = revision + 1 WHERE id = ?').run(Date.now(), params.conversationId);
+          holdDmPauseGate(deps.db, params.conversationId, '归档：队列暂停（恢复会话不自动续跑——继续由 dm.resume 显式控制）');
+          return { conversationId: params.conversationId, revision: params.expectedRevision + 1, archived: true, already: false, stopPending: activeRuns.length > 0 };
+        });
+        // 归档后对活动运行逐个走正式停止流程（请求≠退出确认；无法确认时状态如实保留）。
+        for (const active of activeRuns) {
+          try {
+            await requestStop(deps.db, {
+              taskId: active.taskId, targetRunId: active.runId, expectedStopGeneration: active.stopGen,
+              commandId: `${env.commandId}:stop:${active.runId}`, idempotencyScope: scope, payloadHash, now: Date.now(),
+              interruptTurn: deps.interruptTurn,
+            });
+          } catch (stopError) {
+            // 单个停止失败不回滚归档（已禁止新发/派发）；状态以 stopPending 如实呈现。
+            void stopError;
+          }
+        }
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'conversation.restore': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);

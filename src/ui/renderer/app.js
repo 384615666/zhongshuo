@@ -1691,7 +1691,7 @@ el('stop-btn').onclick = () => void stopTask();
 el('dm-create').onclick = () => void (async () => {
   const agents = state.members.filter((x) => x.principalType === 'agent' && x.enabled);
   if (agents.length === 0) { alert('本项目没有启用的 Agent 成员'); return; }
-  const pick = prompt(`与哪位成员开私信？输入序号：\n${agents.map((a, i) => `${i + 1}. ${a.displayName}`).join('\n')}`, '1');
+  const pick = prompt(`与哪位成员**新建**独立私信会话？（同成员可有多条互不串上下文的会话；输入序号）\n${agents.map((a, i) => `${i + 1}. ${a.displayName}`).join('\n')}`, '1');
   if (pick == null) return;
   const chosen = agents[Number(pick) - 1];
   if (chosen == null) { alert('序号无效'); return; }

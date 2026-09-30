@@ -87,13 +87,19 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
     return { executable: 'local-protocol://node', version: `lp-${this.builtSeq}`, capabilities: LP_CAPS };
   }
 
+  readonly openSessionLog: Array<{ resumedFrom: string | null; returned: string }> = [];
+
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
     this.openSessionCalls += 1;
     const id = `lp-s-${this.builtSeq}-${this.openSessionCalls}`;
     this.streams.set(id, { backlog: [], waiters: [] });
+    // 续接（第十九轮五）：传入 resume 且能力支持 → 返回同一 provider 会话身份（原生续接）；
+    // 否则新身份（受限重放路径）。
+    const providerSessionId = input.resume != null ? input.resume.providerSessionId : `lp-provider-${this.builtSeq}-${this.openSessionCalls}`;
+    this.openSessionLog.push({ resumedFrom: input.resume?.providerSessionId ?? null, returned: providerSessionId });
     return {
-      id, providerSessionId: id, runtimeInstallationId: 'lp-install', adapterVersion: 'lp-1',
-      threadId: input.threadId, sessionGeneration: input.sessionGeneration, cwd: input.cwd,
+      id, providerSessionId, runtimeInstallationId: 'lp-install', adapterVersion: 'lp-1',
+      threadId: input.threadId, sessionGeneration: input.resume?.sessionGeneration ?? input.sessionGeneration, cwd: input.cwd,
     };
   }
 

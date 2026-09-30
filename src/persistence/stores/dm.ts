@@ -15,25 +15,23 @@ export interface DmParticipantRow {
   principal_id: string;
 }
 
+/**
+ * 新建私信会话（第十九轮三：新建/打开分离——每个新的业务请求创建独立 conversationId；
+ * 打开已有会话用其明确 conversationId；不要求先归档旧会话）。同 commandId 重试的幂等
+ * 由命令网关（runCommand）承载——同号返回原创建结果，新号新建不同会话。
+ */
 export function createDmConversation(
   db: ZhongshuoDatabase,
   input: { projectId: string; peerMemberId: string; title?: string; localUserId: string },
-): { ok: true; conversationId: string; created: boolean } | { ok: false; code: string; message: string } {
+): { ok: true; conversationId: string } | { ok: false; code: string; message: string } {
   // 对端必须是本项目的启用 Agent 成员（v0.1：本机用户 × 项目 Agent）。
   const peer = db.prepare("SELECT principal_type, enabled FROM project_members WHERE id = ? AND project_id = ?").get(input.peerMemberId, input.projectId) as
     | { principal_type: string; enabled: number }
     | undefined;
   if (peer == null) return { ok: false, code: 'MEMBER_NOT_FOUND', message: '对端成员不存在或不属于该项目' };
   if (peer.principal_type !== 'agent' || peer.enabled !== 1) {
-    return { ok: false, code: 'DM_PEER_INVALID', message: 'v0.1 私信对端必须是本项目的启用 Agent 成员（人对人/Agent 对 Agent 的其他组合随 FULL-02）' };
+    return { ok: false, code: 'MEMBER_NOT_DISPATCHABLE', message: 'v0.1 私信对端必须是本项目的启用 Agent 成员（人对人/Agent 对 Agent 的其他组合随 FULL-02）' };
   }
-  const existing = db.prepare(
-    `SELECT c.id FROM conversations c
-     JOIN dm_participants a ON a.conversation_id = c.id AND a.principal_type = 'human' AND a.principal_id = ?
-     JOIN dm_participants b ON b.conversation_id = c.id AND b.principal_type = 'agent' AND b.principal_id = ?
-     WHERE c.project_id = ? AND c.kind = 'dm' AND c.archived_at IS NULL`,
-  ).get(input.localUserId, input.peerMemberId, input.projectId) as { id: string } | undefined;
-  if (existing != null) return { ok: true, conversationId: existing.id, created: false }; // 同对端复用现行会话（不按成员自动合并跨项目/归档）
   const conversationId = `dm_${randomUUID()}`;
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES (?, ?, 'dm', NULL)`).run(conversationId, input.projectId);
@@ -43,7 +41,7 @@ export function createDmConversation(
     db.prepare(`INSERT INTO conversation_read_states (project_id, conversation_id, viewer_id) VALUES (?, ?, ?)`).run(input.projectId, conversationId, input.localUserId);
   });
   tx();
-  return { ok: true, conversationId, created: true };
+  return { ok: true, conversationId };
 }
 
 export interface DmConversationSummary {
@@ -63,6 +61,8 @@ export interface DmConversationSummary {
   activeTaskId: string | null;
   activeRunId: string | null;
   activeStopGeneration: number;
+  /** 归档后停止退出未确认（如实呈现——不伪称已停）。 */
+  stopPending: boolean;
 }
 
 export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, projectId?: string): DmConversationSummary[] {
@@ -101,6 +101,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       activeTaskId: activeRow?.taskId ?? null,
       activeRunId: activeRow?.runId ?? null,
       activeStopGeneration: activeRow?.stopGen ?? 0,
+      stopPending: row.archived_at != null && activeRow != null, // 归档后停止未确认——如实呈现
     });
   }
   return out;
@@ -184,12 +185,13 @@ export function createDmTurn(db: ZhongshuoDatabase, input: CreateDmTurnInput): C
       return { messageId, disposition: 'none', taskId: null, note: 'record_only：只保存不建任务（意图一次性，不占预算）' };
     }
     db.prepare(
-      `INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, conversation_thread_id, root_message_id, room_task_number, owner_member_id, title, status, revision, review_policy, route_json)
-       VALUES (?, ?, ?, 'dm_turn', NULL, NULL, ?, NULL, ?, ?, 'ACTIVE', 0, ?, ?)`,
+      `INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, conversation_thread_id, root_message_id, room_task_number, owner_member_id, title, status, revision, review_policy, route_json, input_through_seq)
+       VALUES (?, ?, ?, 'dm_turn', NULL, NULL, ?, NULL, ?, ?, 'ACTIVE', 0, ?, ?, ?)`,
     ).run(
       taskId, input.projectId, input.conversationId, messageId, input.peerMemberId,
       input.body.slice(0, 60), input.reviewPolicy,
       JSON.stringify({ kind: 'dispatch', mode: 'DIRECT', targetMemberId: input.peerMemberId, frozenMemberIds: [input.peerMemberId], initialWakeMemberIds: [input.peerMemberId] }),
+      seq.last_message_seq, // 输入水位（第十九轮四）：本轮输入边界=本次用户消息的 seq
     );
     const busy = dmHasActiveRun(db, input.conversationId) || dmQueueBusy(db, input.conversationId) || dmPauseGateHeld(db, input.conversationId);
     if (busy) {
@@ -213,8 +215,14 @@ export function pumpDmQueue(db: ZhongshuoDatabase, conversationId: string): { en
   let enqueued = 0;
   for (const t of pending) {
     const key = `dmtask:${t.id}:initial`;
-    const exists = db.prepare('SELECT id FROM outbox WHERE dispatch_key = ?').get(key);
-    if (exists == null) {
+    const existing = db.prepare('SELECT id, status FROM outbox WHERE dispatch_key = ?').get(key) as { id: number; status: string } | undefined;
+    if (existing == null) {
+      db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(key);
+      enqueued += 1;
+    } else if (existing.status === 'done' || existing.status === 'failed') {
+      // 键回收（第十九轮六）：该派发曾被归档门/取消拦下而任务从未建 run——队列行可安全重建
+      //（dispatch_key 唯一约束；业务状态由 tasks/runs 承载，此处只重排）。
+      db.prepare('DELETE FROM outbox WHERE id = ?').run(existing.id);
       db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(key);
       enqueued += 1;
     }

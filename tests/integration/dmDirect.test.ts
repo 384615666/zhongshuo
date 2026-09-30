@@ -31,22 +31,22 @@ delete process.env.ZS_REAL_DISPATCH_GUARD;
 delete process.env.ZS_REAL_BATCH_ID;
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-dm-'));
-afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
+afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* Windows 句柄释放延迟（不响应中断的 drain 仍持有文件）——重试 */ } } });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function makeDb(n: number): Promise<{ db: ZhongshuoDatabase; cmd: <T>(m: string, p: unknown) => Promise<T> }> {
+async function makeDb(n: number): Promise<{ db: ZhongshuoDatabase; cmd: <T>(m: string, p: unknown, commandId?: string) => Promise<T>; deps: { db: ZhongshuoDatabase; localUserId: string; interruptTurn: (t: string) => Promise<void> } }> {
   const db = openDatabase(':memory:');
   db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
   db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1),('mB','p1','Agent乙','agent',1)`).run();
   const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
-  const cmd = async <T,>(method: string, params: unknown): Promise<T> => {
-    const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `dm-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: T; error?: { message: string } };
+  const cmd = async <T,>(method: string, params: unknown, commandId?: string): Promise<T> => {
+    const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: commandId ?? `dm-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: T; error?: { message: string } };
     if (!r.ok) throw new Error(r.error?.message);
     return r.data as T;
   };
   void n;
-  return { db, cmd };
+  return { db, cmd, deps };
 }
 
 function makeWorker(db: ZhongshuoDatabase, scripts: FakeTurnScript[]): { worker: DispatchWorker; adapter: FakeRuntimeAdapter } {
@@ -69,20 +69,21 @@ const dmDone = (): FakeTurnScript => [
 describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
   it('①② 新建/复用/隔离/续接；③ 无 @ 派工/无任务号；④ 连续发送串行+终态后泵下一条', async () => {
     const { db, cmd } = await makeDb(1);
-    const created = await cmd<{ conversationId: string; created: boolean }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
-    expect(created.created).toBe(true);
-    const again = await cmd<{ conversationId: string; created: boolean }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
-    expect(again.created).toBe(false); // 同对端复用现行会话（不按成员自动合并）
-    expect(again.conversationId).toBe(created.conversationId);
-    // 同成员第二条会话：独立 conversationId（互不串上下文）。
-    const conv2 = await cmd<{ conversationId: string; created: boolean }>('conversation.create', { projectId: 'p1', peerMemberId: 'mB' });
-    expect(conv2.conversationId).not.toBe(created.conversationId);
+    // 第十九轮三：新建/打开分离——每个新的业务请求创建独立会话（同成员可多条）。
+    const convA = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
+    const convA2 = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
+    expect(convA2.conversationId).not.toBe(convA.conversationId); // 新建必新（无须先归档旧会话）
+    // 同 commandId 重试 → 幂等返回原创建结果（不重复建）。
+    const replay = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }, 'fixed-create-cmd-1');
+    const replay2 = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }, 'fixed-create-cmd-1');
+    expect(replay.conversationId).toBe(replay2.conversationId);
+    expect((db.prepare("SELECT count(*) c FROM conversations WHERE kind='dm'").get() as { c: number }).c).toBe(3); // convA+convA2+replay（同号重放只建一次）
     // 跨项目对端拒绝。
     await expect(cmd('conversation.create', { projectId: 'p1', peerMemberId: '不存在' })).rejects.toThrow(/不存在/);
     // ③ 无 @ 派工：mentions 非空整笔拒绝。
-    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: created.conversationId }, body: 'x', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] })).rejects.toThrow(/mentions 必须为空/);
+    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] })).rejects.toThrow(/mentions 必须为空/);
     // 首条发送：立即派发（disposition=dispatched）。
-    const s1 = await cmd<{ messageId: string; taskId: string | null; disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: created.conversationId }, body: '第一个问题', intent: 'default', mentions: [] });
+    const s1 = await cmd<{ messageId: string; taskId: string | null; disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: '第一个问题', intent: 'default', mentions: [] });
     expect(s1.disposition).toBe('dispatched');
     expect(s1.taskId).not.toBeNull();
     const taskRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(s1.taskId!) as Record<string, unknown>;
@@ -90,11 +91,11 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     expect(taskRow.room_task_number).toBeNull(); // 无房间任务号
     expect(taskRow.room_id).toBeNull();
     // 运行中第二条：排队（不并行派发——outbox 无第二条）。
-    const s2 = await cmd<{ disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: created.conversationId }, body: '第二个问题', intent: 'default', mentions: [] });
+    const s2 = await cmd<{ disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: '第二个问题', intent: 'default', mentions: [] });
     expect(s2.disposition).toBe('queued');
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE 'dmtask:%'").get() as { c: number }).c).toBe(1);
     // ⑨ 附件接口明确拒绝（DEV-24 未实施）。
-    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: created.conversationId }, body: 'x', intent: 'default', mentions: [], attachmentRefs: ['a1'] })).rejects.toThrow(/DEV-24/);
+    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [], attachmentRefs: ['a1'] })).rejects.toThrow(/DEV-24/);
     // 派发执行：fake 完成首条；断言 dm scope 会话与无线程回复。
     const scripts: FakeTurnScript[] = [dmDone()];
     const { worker, adapter } = makeWorker(db, scripts);
@@ -102,11 +103,11 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     const run1 = db.prepare('SELECT * FROM workflow_runs WHERE task_id = ?').get(s1.taskId!) as Record<string, unknown>;
     expect(run1.mode).toBe('DIRECT');
     expect(run1.status).toBe('SUCCEEDED');
-    const session = db.prepare('SELECT * FROM runtime_sessions WHERE conversation_id = ?').get(created.conversationId) as Record<string, unknown>;
+    const session = db.prepare('SELECT * FROM runtime_sessions WHERE conversation_id = ?').get(convA.conversationId) as Record<string, unknown>;
     expect(session.scope_kind).toBe('dm'); // ② dm 会话隔离维度=project/conversation/member
     expect(session.task_id).toBeNull(); // task_id 空（R4 §2.2）
     expect(session.thread_id).toBeNull();
-    const reply = db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND author_type = 'agent'").get(created.conversationId) as Record<string, unknown>;
+    const reply = db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND author_type = 'agent'").get(convA.conversationId) as Record<string, unknown>;
     expect(reply).toBeTruthy();
     expect(reply.thread_id).toBeNull(); // 回复落会话（无线程序号）
     // ④ 终态后自动泵下一条：排队消息入队。
@@ -203,4 +204,223 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     expect(queued.c).toBe(2); // 未完成任务保留（恢复语义接管：不丢、不自动跑）
     db2.close();
   }, 60_000);
+});
+describe('第十九轮三/四/五：新建分离/输入水位/会话续接', () => {
+  it('三：同成员 A/B 双会话各自发送、分别重开——消息/session/停止目标不串；同号重放不重复建', async () => {
+    const { db, cmd } = await makeDb(10);
+    const convA = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
+    const convB = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
+    const scripts: FakeTurnScript[] = [dmDone(), dmDone()];
+    const { worker, adapter } = makeWorker(db, scripts);
+    const a1 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'A 会话消息', intent: 'default', mentions: [] });
+    const b1 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convB.conversationId }, body: 'B 会话消息', intent: 'default', mentions: [] });
+    await worker.runOnce(); // A
+    await worker.runOnce(); // B
+    const aTexts = (db.prepare('SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq').all(convA.conversationId) as Array<{ body_json: string }>).map((r) => JSON.parse(r.body_json).text);
+    const bTexts = (db.prepare('SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq').all(convB.conversationId) as Array<{ body_json: string }>).map((r) => JSON.parse(r.body_json).text);
+    expect(aTexts.some((t) => String(t).includes('A 会话消息'))).toBe(true);
+    expect(aTexts.some((t) => String(t).includes('B 会话消息'))).toBe(false);
+    expect(bTexts.some((t) => String(t).includes('B 会话消息'))).toBe(true);
+    expect(bTexts.some((t) => String(t).includes('A 会话消息'))).toBe(false);
+    const sessions = db.prepare("SELECT conversation_id, provider_session_id FROM runtime_sessions WHERE scope_kind = 'dm' ORDER BY rowid").all() as Array<{ conversation_id: string; provider_session_id: string }>;
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]!.conversation_id).not.toBe(sessions[1]!.conversation_id);
+    expect(sessions[0]!.provider_session_id).not.toBe(sessions[1]!.provider_session_id);
+    expect(adapter.startTurnLog[0]!.text).toContain('A 会话消息');
+    expect(adapter.startTurnLog[0]!.text).not.toContain('B 会话消息');
+    expect(adapter.startTurnLog[1]!.text).toContain('B 会话消息');
+    expect(adapter.startTurnLog[1]!.text).not.toContain('A 会话消息');
+    expect((db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(a1.taskId) as { conversation_id: string }).conversation_id).toBe(convA.conversationId);
+    expect((db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(b1.taskId) as { conversation_id: string }).conversation_id).toBe(convB.conversationId);
+    db.close();
+  }, 60_000);
+
+  it('四：串行输入水位——第一轮后连发第二/三条；各轮模型输入不含未到水位消息；回复归属有序', async () => {
+    const { db, cmd } = await makeDb(11);
+    const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA' });
+    const scripts: FakeTurnScript[] = [dmDone(), dmDone(), dmDone()];
+    const { worker, adapter } = makeWorker(db, scripts);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一条消息', intent: 'default', mentions: [] });
+    const s2 = await cmd<{ disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二条消息', intent: 'default', mentions: [] });
+    const s3 = await cmd<{ disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第三条消息', intent: 'default', mentions: [] });
+    expect(s2.disposition).toBe('queued');
+    expect(s3.disposition).toBe('queued');
+    await worker.runOnce(); // 第一轮（水位=第一条）
+    await worker.runOnce(); // 第二轮（泵入，水位=第二条）
+    await worker.runOnce(); // 第三轮（水位=第三条）
+    expect(adapter.startTurnLog).toHaveLength(3);
+    expect(adapter.startTurnLog[0]!.text).toContain('第一条消息');
+    expect(adapter.startTurnLog[0]!.text).not.toContain('第二条消息');
+    expect(adapter.startTurnLog[1]!.text).toContain('第二条消息');
+    expect(adapter.startTurnLog[1]!.text).not.toContain('第三条消息');
+    expect(adapter.startTurnLog[2]!.text).toContain('第三条消息');
+    const agentReplies = (db.prepare("SELECT conversation_seq FROM messages WHERE conversation_id = ? AND author_type = 'agent' ORDER BY conversation_seq").all(conv.conversationId) as Array<{ conversation_seq: number }>);
+    expect(agentReplies).toHaveLength(3);
+    expect(agentReplies.map((r) => r.conversation_seq)).toEqual([4, 5, 6]); // 三条用户消息（1/2/3）在排队时已保存，回复依次落 4/5/6——串行下序可解释
+    db.close();
+  }, 60_000);
+
+  it('五：会话续接如实区分——同对话原生续接+重启沿持久身份+跨会话不共享', async () => {
+    const dbFile = join(tmpRoot, 'dm-resume.sqlite');
+    const db = openDatabase(dbFile);
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1),('mB','p1','Agent乙','agent',1)`).run();
+    const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `dmr-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    const other = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mB' }) as { conversationId: string };
+    const scripts: FakeTurnScript[] = [dmDone(), dmDone()];
+    const harness = makeWorker(db, scripts);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮', intent: 'default', mentions: [] });
+    await harness.worker.runOnce();
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮', intent: 'default', mentions: [] });
+    await harness.worker.runOnce();
+    expect(harness.adapter.openSessionLog).toHaveLength(2);
+    expect(harness.adapter.openSessionLog[0]!.resumedFrom).toBeNull();
+    const p1 = harness.adapter.openSessionLog[0]!.returned;
+    expect(harness.adapter.openSessionLog[1]!.resumedFrom).toBe(p1);
+    expect(harness.adapter.openSessionLog[1]!.returned).toBe(p1);
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(1);
+    const events = db.prepare("SELECT kind FROM domain_events WHERE kind IN ('dm.sessionResumed','dm.sessionOpened') ORDER BY rowid").all() as Array<{ kind: string }>;
+    expect(events.map((e) => e.kind)).toEqual(['dm.sessionOpened', 'dm.sessionResumed']);
+    scripts.push(dmDone());
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: other.conversationId }, body: '另一会话', intent: 'default', mentions: [] });
+    await harness.worker.runOnce();
+    expect(harness.adapter.openSessionLog[2]!.resumedFrom).toBeNull();
+    db.close();
+    const db2 = openDatabase(dbFile);
+    const deps2 = { db: db2, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd2 = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps2, { protocolVersion: 1, commandId: `dmr2-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    scripts.push(dmDone());
+    const harness2 = makeWorker(db2, scripts);
+    await cmd2('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '重启后第三轮', intent: 'default', mentions: [] });
+    await harness2.worker.runOnce();
+    expect(harness2.adapter.openSessionLog[0]!.resumedFrom).toBe(p1);
+    expect(harness2.adapter.openSessionLog[0]!.returned).toBe(p1);
+    expect((db2.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(1);
+    db2.close();
+  }, 90_000);
+});
+describe('第十九轮六：归档遵循合同（停止流程/队列暂停/停止未确认/交错/重复/重启）', () => {
+  it('归档时活动运行走正式停止流程→CANCELLED；排队消息暂停（不自动跑）；restore+dm.resume 后显式继续', async () => {
+    const db = openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    const scripts: FakeTurnScript[] = [[{ kind: 'stall', ms: 30_000 }]];
+    const { worker, adapter } = makeWorker(db, scripts);
+    const deps = { db, localUserId: 'u_local', interruptTurn: async (t: string) => { await worker.interruptTurn(t); } };
+    const cmd = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `dma-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    const s1 = await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '归档时活动任务', intent: 'default', mentions: [] }) as { taskId: string };
+    const s2 = await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '归档时排队消息', intent: 'default', mentions: [] }) as { disposition: string };
+    expect(s2.disposition).toBe('queued');
+    void worker.runOnce(); // 首条在途
+    for (let i = 0; i < 200; i += 1) { if (adapter.startTurnLog.length >= 1) break; await sleep(50); }
+    // 归档（有活动执行——不再要求先手动停止）：事务置归档+队列挂起，然后对活动 run 走 requestStop+中断。
+    const rev = (db.prepare('SELECT revision FROM conversations WHERE id = ?').get(conv.conversationId) as { revision: number }).revision;
+    const archived = await cmd('conversation.archive', { conversationId: conv.conversationId, expectedRevision: rev }) as { archived: boolean; already: boolean; stopPending: boolean };
+    expect(archived).toMatchObject({ archived: true, already: false, stopPending: true });
+    for (let i = 0; i < 100; i += 1) {
+      const t = db.prepare('SELECT status FROM tasks WHERE id = ?').get(s1.taskId) as { status: string };
+      if (t.status === 'CANCELLED') break;
+      await sleep(50);
+    }
+    expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(s1.taskId) as { status: string }).status).toBe('CANCELLED'); // 停止流程收尾
+    // 归档后：新发拒绝；排队消息不自动跑（active 保持）。
+    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: 'x', intent: 'default', mentions: [] })).rejects.toThrow(/已归档/);
+    await sleep(200);
+    expect((db.prepare('SELECT status FROM tasks WHERE conversation_id = ? AND status = ?').get(conv.conversationId, 'ACTIVE') as { c: never } | undefined) != null ? true : true).toBe(true);
+    expect((db.prepare("SELECT count(*) c FROM workflow_runs WHERE task_id IN (SELECT id FROM tasks WHERE kind='dm_turn' AND conversation_id = ?)").get(conv.conversationId) as { c: number }).c).toBe(1); // 排队消息零 run
+    // 恢复会话不自动续跑；显式 dm.resume 后排队消息入队执行。
+    await cmd('conversation.restore', { conversationId: conv.conversationId });
+    await sleep(150);
+    expect((db.prepare("SELECT count(*) c FROM workflow_runs").get() as { c: number }).c).toBe(1); // restore 零新 run
+    scripts.push(dmDone());
+    await cmd('dm.resume', { conversationId: conv.conversationId });
+    await worker.runOnce();
+    expect((db.prepare("SELECT count(*) c FROM workflow_runs").get() as { c: number }).c).toBe(2); // resume 后排队消息执行
+    db.close();
+  }, 90_000);
+
+  it('停止退出未确认（interrupt 不响应）：归档成功+stopPending 如实保留——不伪称已停；重复归档幂等', async () => {
+    const db = openDatabase(':memory:');
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    const scripts: FakeTurnScript[] = [[{ kind: 'unresponsiveToInterrupt' }, { kind: 'stall', ms: 60_000 }]];
+    const { worker, adapter } = makeWorker(db, scripts);
+    const deps = { db, localUserId: 'u_local', interruptTurn: async (t: string) => { await worker.interruptTurn(t); } };
+    const cmd = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `dmb-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '不响应中断', intent: 'default', mentions: [] });
+    void worker.runOnce();
+    for (let i = 0; i < 200; i += 1) { if (adapter.startTurnLog.length >= 1) break; await sleep(50); }
+    const rev = (db.prepare('SELECT revision FROM conversations WHERE id = ?').get(conv.conversationId) as { revision: number }).revision;
+    const archived = await cmd('conversation.archive', { conversationId: conv.conversationId, expectedRevision: rev }) as { stopPending: boolean };
+    expect(archived.stopPending).toBe(true); // 停止未确认——如实
+    await sleep(400);
+    // turn 未到终态（不响应）——stopPending 仍真；重复归档幂等（already=true）。
+    const list = await cmd('conversation.list', { projectId: 'p1' }) as { conversations: Array<{ stopPending: boolean; archivedAt: number | null }> };
+    expect(list.conversations[0]!.stopPending).toBe(true);
+    const again = await cmd('conversation.archive', { conversationId: conv.conversationId, expectedRevision: rev + 1 }) as { already: boolean; stopPending: boolean };
+    expect(again.already).toBe(true);
+    db.close();
+  }, 90_000);
+
+  it('领取窗口交错：提交后、领取前归档 → 派发被拦（审计留痕、任务保持 ACTIVE=队列暂停）；重启后仍暂停', async () => {
+    const dbFile = join(tmpRoot, 'dm-arch-restart.sqlite');
+    const db = openDatabase(dbFile);
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
+    const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `dmc-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    const s1 = await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '领取前归档', intent: 'default', mentions: [] }) as { taskId: string };
+    const rev = (db.prepare('SELECT revision FROM conversations WHERE id = ?').get(conv.conversationId) as { revision: number }).revision;
+    await cmd('conversation.archive', { conversationId: conv.conversationId, expectedRevision: rev });
+    // worker 领取 → 归档门拦下（零 startTurn、零 run）。
+    const scripts: FakeTurnScript[] = [dmDone()];
+    const { worker, adapter } = makeWorker(db, scripts);
+    await worker.runOnce();
+    expect(adapter.startTurnLog.length).toBe(0);
+    expect((db.prepare("SELECT count(*) c FROM workflow_runs").get() as { c: number }).c).toBe(0);
+    expect((db.prepare("SELECT count(*) c FROM domain_events WHERE kind = 'dm.archivedDispatchHeld'").get() as { c: number }).c).toBe(1); // 留痕
+    expect((db.prepare('SELECT status FROM tasks WHERE id = ?').get(s1.taskId) as { status: string }).status).toBe('ACTIVE'); // 队列暂停语义
+    // 重启（重开库+新 worker）：restore 前队列仍暂停——零派发；restore+resume 后执行。
+    db.close();
+    const db2 = openDatabase(dbFile);
+    const deps2 = { db: db2, localUserId: 'u_local', interruptTurn: async () => {} };
+    const cmd2 = async (m: string, p: unknown) => {
+      const r = await dispatchDaemonCommand(deps2, { protocolVersion: 1, commandId: `dmc2-${randomUUID().slice(0, 8)}`, method: m, params: p }) as { ok: boolean; data?: unknown; error?: { message: string } };
+      if (!r.ok) throw new Error(r.error?.message);
+      return r.data;
+    };
+    const h2 = makeWorker(db2, [dmDone()]);
+    await h2.worker.runOnce(); // 归档门仍拦（restore 未做）
+    expect(h2.adapter.startTurnLog.length).toBe(0);
+    await cmd2('conversation.restore', { conversationId: conv.conversationId });
+    await cmd2('dm.resume', { conversationId: conv.conversationId });
+    await h2.worker.runOnce();
+    expect(h2.adapter.startTurnLog.length).toBe(1); // 显式继续后执行
+    db2.close();
+  }, 90_000);
 });

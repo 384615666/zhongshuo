@@ -62,6 +62,8 @@ export interface TaskRow {
   route_json: string | null;
   title: string;
   objective: string | null;
+  /** DM 输入水位（第十九轮四）：本轮用户消息的 conversation_seq——组装边界。 */
+  input_through_seq: number | null;
 }
 
 interface ProjectRow {
@@ -312,6 +314,16 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
+    // DM 归档门（第十九轮六）：归档即禁止新派发——领取/会话建立/startTurn 各窗口统一拦下
+    //（任务保持 ACTIVE=队列暂停语义，续跑由 restore 后 dm.resume 显式控制）。
+    if (task.kind === 'dm_turn') {
+      const convArchived = this.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(task.conversation_id) as { archived_at: number | null } | undefined;
+      if (convArchived?.archived_at != null) {
+        await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        this.audit(task, null, null, 'dm.archivedDispatchHeld', { conversationId: task.conversation_id, note: '会话已归档：不派发（队列暂停——restore+dm.resume 后方可继续）' });
+        return;
+      }
+    }
 
     const route = task.route_json != null ? (JSON.parse(task.route_json) as TopLevelRouteOutcome) : null;
     // DELIBERATE：编排开关开启时走 PREPARE（程序完成）；关闭时维持模式门禁 BLOCKED。
@@ -466,6 +478,7 @@ export class DispatchWorker {
         title: task.title,
         objective: task.objective,
         taskRevision: 0,
+        inputThroughSeq: task.input_through_seq,
       },
       identity: {
         member: { id: member.id, displayName: member.display_name },
@@ -582,6 +595,26 @@ export class DispatchWorker {
       const generation = this.db
         .prepare('SELECT count(*) c FROM runtime_sessions WHERE member_id = ? AND conversation_id = ?')
         .get(member.id, task.conversation_id) as { c: number };
+      // DM 会话续接（第十九轮五：续接/重放如实区分）——同 conversation 的上一 provider 会话
+      // 身份持久化（runtime_sessions.provider_session_id），作为 resume 依据传入；是否真续接
+      // 以 adapter 返回的 providerSessionId 核对（不因 scope_kind='dm' 推断复用）。房间会话
+      // 维持任务隔离（每任务独立会话，不 resume）。
+      const dmPrevSession = isDm
+        ? this.db.prepare(
+          "SELECT id, provider_session_id, session_generation, thread_id, member_id, cwd FROM runtime_sessions WHERE conversation_id = ? AND member_id = ? AND scope_kind = 'dm' AND provider_session_id IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+        ).get(task.conversation_id, member.id) as { id: string; provider_session_id: string; session_generation: number; thread_id: string | null; member_id: string; cwd: string } | undefined
+        : undefined;
+      const resumeRef = dmPrevSession != null
+        ? {
+          id: dmPrevSession.id,
+          providerSessionId: dmPrevSession.provider_session_id,
+          runtimeInstallationId: 'dm-resume',
+          adapterVersion: 'dm-resume',
+          threadId: dmPrevSession.thread_id ?? '',
+          sessionGeneration: dmPrevSession.session_generation,
+          cwd: dmPrevSession.cwd,
+        }
+        : undefined;
       const session = await adapter.openSession({
         projectId: task.project_id,
         memberId: member.id,
@@ -590,21 +623,36 @@ export class DispatchWorker {
         sessionGeneration: generation.c,
         cwd: project.canonical_path,
         policyId: 'policy-analyze',
+        ...(resumeRef != null ? { resume: resumeRef } : {}),
         developerInstructions: standing.value.text,
         promptVersion: standing.value.version,
       });
       openedSession = { adapter, session };
       startupPhase = 'session-record';
-      // DM 会话（R4 §2.2）：scope_kind='dm'、task_id 空——按 project/conversation/member/
-      // generation 复用（同对话续接上文；不同 conversationId 永不共享 session）。
-      this.db.prepare(
-        `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        session.id, task.project_id, task.conversation_id, isDm ? 'dm' : 'task',
-        isDm ? null : task.conversation_thread_id,
-        member.id, isDm ? null : task.id, generation.c, project.canonical_path,
-      );
+      // 续接判定（第十九轮五）：返回身份=resume 身份 → 原生续接（不新增会话行，事件留痕）；
+      // 否则=受限历史重放（新会话行 + provider_session_id 持久化，事件如实区分）。不支持原生
+      // 续接的 runtime 走重放路径——能力按各自 capability 矩阵呈现，不冒充续接。
+      const resumedNative = resumeRef != null && session.providerSessionId === resumeRef.providerSessionId;
+      if (!resumedNative) {
+        this.db.prepare(
+          `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          session.id, task.project_id, task.conversation_id, isDm ? 'dm' : 'task',
+          isDm ? null : task.conversation_thread_id,
+          member.id, isDm ? null : task.id, generation.c, project.canonical_path,
+          session.providerSessionId ?? null,
+        );
+      }
+      if (isDm) {
+        this.audit(task, runId, turnId, resumedNative ? 'dm.sessionResumed' : 'dm.sessionOpened', {
+          conversationId: task.conversation_id,
+          resumedProviderSessionId: resumeRef?.providerSessionId ?? null,
+          returnedProviderSessionId: session.providerSessionId ?? null,
+          nativeResume: resumedNative,
+          note: resumedNative ? '同对话原生续接（provider 身份一致）' : resumeRef != null ? '受限历史重放（provider 新会话——能力按矩阵如实呈现）' : '会话首开',
+        });
+      }
 
       // 会话打开竞态复查（修复轮）+ 关闭状态检查（第五轮）：停止/终态/daemon 关闭在
       // openSession await 期间生效 → 不启动 turn（情形①：turn 从未交给 runtime）。

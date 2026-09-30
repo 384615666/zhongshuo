@@ -114,6 +114,8 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
   private emitSeq = 0;
   /** 测试观测：startTurn 收到的输入（DEV-21 验证实际注入文本与 bundle 一致）。 */
   readonly startTurnLog: Array<{ turnId: string; inputBundleId: string; text: string; developerInstructions?: string; promptVersion?: string }> = [];
+  /** 会话续接观测（第十九轮五）：每次 openSession 的 resume 来源与返回的 provider 身份。 */
+  readonly openSessionLog: Array<{ resumedFrom: string | null; returned: string; generation: number }> = [];
 
   constructor(options: FakeAdapterOptions = {}) {
     this.options = options;
@@ -156,9 +158,11 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       runtimeInstallationId: input.resume?.runtimeInstallationId ?? 'fake-installation',
       adapterVersion: FAKE_VERSION,
       threadId: input.threadId,
-      sessionGeneration: input.sessionGeneration,
+      sessionGeneration: input.resume?.sessionGeneration ?? input.sessionGeneration,
       cwd: input.cwd,
     };
+    // 续接观测（第十九轮五测试）：resume 传入与返回的 provider 身份——原生续接=身份一致。
+    this.openSessionLog.push({ resumedFrom: input.resume?.providerSessionId ?? null, returned: ref.providerSessionId, generation: input.sessionGeneration });
     const state: SessionState = {
       ref,
       stream: new EventStream(),

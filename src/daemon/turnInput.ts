@@ -33,6 +33,8 @@ export interface AssemblyTaskRef {
   title: string;
   objective: string | null;
   taskRevision: number;
+  /** DM 输入水位（第十九轮四）：本轮用户消息 conversation_seq——历史边界（房间任务为 null）。 */
+  inputThroughSeq?: number | null;
 }
 
 export interface AssemblyIdentity {
@@ -238,25 +240,38 @@ function messageTextOf(refId: string, rootText: string, history: Array<{ message
 const DM_HISTORY_LIMIT = 50;
 
 /**
- * 私信 turn 组装（DEV-22；R4 §2.1/§2.2）：上下文=本会话消息（audience 推导，客户端不能扩展）；
- * 无线程/房间/名单——roster 只含对端；promptVersion=私信模板；task.threadId=NULL。
+ * 私信 turn 组装（DEV-22；R4 §2.1/§2.2；第十九轮四：输入水位）：上下文=本会话中
+ **≤ 本次用户消息 conversation_seq* 的消息（后续已保存但排队的消息不提前进入前一轮——
+ * 停止/重启/重领边界均可解释为"水位固定于任务创建事务"）；根消息按项目/会话/作者/归属
+ * 四重校验（不是 messageId 存在即接受）；无线程/房间/名单——roster 只含对端；
+ * promptVersion=私信模板；task.threadId=NULL。
  */
 function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> {
   const { db, task } = input;
   if (task.rootMessageId == null) return assemblyFailure('missing-root-message', 'dm_turn 缺少根消息引用（本次用户消息）');
   const root = db
-    .prepare('SELECT id, body_json, author_type FROM messages WHERE id = ?')
-    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string } | undefined;
+    .prepare('SELECT id, body_json, author_type, conversation_id, project_id, task_id FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; conversation_id: string; project_id: string; task_id: string | null } | undefined;
   if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
+  // 归属校验（第十九轮四）：项目/会话/作者/任务四重——防跨会话/跨项目/伪造归属的根消息进入本轮输入。
+  if (root.conversation_id !== task.conversationId || root.project_id !== task.projectId) {
+    return assemblyFailure('root-scope-mismatch', '根消息不属于本任务的项目/会话——拒绝组装');
+  }
   if (root.author_type !== 'human') return assemblyFailure('root-not-user-request', 'dm_turn 根消息作者不是用户');
+  if (root.task_id !== task.id) {
+    return assemblyFailure('root-scope-mismatch', `根消息任务归属不符（msg.task_id=${root.task_id ?? 'null'} ≠ 本任务）——拒绝组装`);
+  }
   const rootBody = JSON.parse(root.body_json) as { text: string };
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     return assemblyFailure('empty-root-message', '根消息正文为空');
   }
-  // 本会话历史（续接上文）：按 conversation_seq 取最近 N 条（截断如实标注）。
+  if (task.inputThroughSeq == null) {
+    return assemblyFailure('missing-input-boundary', 'dm_turn 缺少输入水位（input_through_seq）——拒绝组装（边界必须可解释）');
+  }
+  // 本会话历史（≤ 水位）：按 conversation_seq 取最近 N 条（截断如实标注）。
   const history = db
-    .prepare('SELECT id, conversation_seq, body_json, author_id FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT ?')
-    .all(task.conversationId, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string }>;
+    .prepare('SELECT id, conversation_seq, body_json, author_id FROM messages WHERE conversation_id = ? AND conversation_seq <= ? ORDER BY conversation_seq DESC LIMIT ?')
+    .all(task.conversationId, task.inputThroughSeq, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string }>;
   history.reverse();
   const historyTexts = history.map((h) => {
     const body = JSON.parse(h.body_json) as { text: string };
