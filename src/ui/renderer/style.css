@@ -140,3 +140,22 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .attach-comments { margin-top: 8px; border-top: 1px dashed #ccd; padding-top: 6px; }
 .attach-comment-input { flex: 2 1 240px; min-width: 160px; }
 .attach-comment-line { width: 64px; }
+
+/* ---------- 第二十九轮：PDF 视觉画布 / Office 预览 / 图片解码状态 / 能力门 ---------- */
+.pdf-visual-canvas { display: block; max-width: 100%; border: 1px solid var(--border, #d0d4dc); background: #fff; margin: 6px 0; }
+.attach-preview-nav { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+.pdf-zoom { font-size: 12px; padding: 2px 4px; }
+.img-decode-failed { color: #b3261e; }
+.office-docx-html { border: 1px solid var(--border, #d0d4dc); background: #fff; padding: 10px 14px; margin: 6px 0; max-height: 320px; overflow: auto; }
+.office-docx-html table { border-collapse: collapse; }
+.office-docx-html td, .office-docx-html th { border: 1px solid #c8ccd4; padding: 2px 8px; font-size: 12px; }
+.sheet-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.sheet-tabs .chip.on { background: #2563eb; color: #fff; }
+.sheet-grid { border-collapse: collapse; font-size: 12px; background: #fff; }
+.sheet-grid th, .sheet-grid td { border: 1px solid #c8ccd4; padding: 2px 8px; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.sheet-grid th { background: #eef0f4; color: #47506a; }
+.sheet-range-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.sheet-range-row input { flex: 1 1 240px; min-width: 200px; }
+.slides-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.slide-card { border: 1px solid var(--border, #d0d4dc); background: #fff; padding: 8px 10px; }
+.slide-card .attach-preview-text { max-height: 180px; }

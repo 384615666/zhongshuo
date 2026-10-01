@@ -6,13 +6,20 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, normalize } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
 import type { PipeClient } from '../contracts/daemonIpc.ts';
+
+// zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
+// file:// 源下 ES 模块被模块 CORS 拦截（Chromium 对 file 源互为 opaque）。standard+secure
+// 的特权 scheme 同源可加载模块/worker/fetch（cmaps）。必须在 app ready 前注册。
+protocol.registerSchemesAsPrivileged([{ scheme: 'zsres', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+const rendererRoot = resolve(__dirname, 'renderer');
 
 // daemon 独立进程承载（§8.3：界面与 daemon 进程分离；native 模块只在 Node
 // 进程加载，Electron 主进程仅经命名管道连接——不做 Electron ABI rebuild）。
@@ -251,6 +258,16 @@ function pipeClosedCheck(): void {
 }
 
 app.whenReady().then(async () => {
+  // zsres://app/<相对路径> → renderer 目录内文件（穿越拒绝）；页面自身经该协议加载（模块/
+  // worker/fetch 同源可用——见文件头注释）。
+  protocol.handle('zsres', (request) => {
+    const rel = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''));
+    const filePath = normalize(join(rendererRoot, rel));
+    if (filePath !== rendererRoot && !filePath.startsWith(rendererRoot + '\\') && !filePath.startsWith(rendererRoot + '/')) {
+      return new Response(null, { status: 403 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
   const rawRuntime = process.env.ZS_RUNTIME ?? 'fake';
   const runtime = (rawRuntime === 'codex' || rawRuntime === 'claude' ? rawRuntime : 'fake') as 'fake' | 'codex' | 'claude';
   if (runtime === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
@@ -320,7 +337,7 @@ app.whenReady().then(async () => {
   if (simMode) {
     win.on('page-title-updated', (event) => { event.preventDefault(); });
   }
-  await win.loadFile(join(__dirname, 'renderer', 'index.html'));
+  await win.loadURL('zsres://app/index.html');
 
   const demo = process.env.ZS_UI_DEMO;
   if (demo != null) {

@@ -177,9 +177,12 @@
           <button id="dm-send" class="primary">发送</button>
         </div>
         <div id="dm-attach-chips" class="meta"></div>
-        <div id="attach-preview" class="attach-preview hidden" data-section="attach-preview"></div>
-        <input id="dm-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.webp,.pdf" class="hidden" />
+        <div id="dm-gate" class="send-error hidden"></div><!-- 图片能力门（第二十九轮三：DM 区就地确认，不借用主池提示框） -->
+        <input id="dm-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx" class="hidden" />
       </section>
+      <!-- 共享预览面板（第二十九轮五）：视图全局——池/线程/DM 任何入口打开都实际可见
+           （此前埋在 DM 区内：池/线程视图下预览写入但不可见，属共享预览规格缺口）。 -->
+      <div id="attach-preview" class="attach-preview hidden" data-section="attach-preview"></div>
       <footer class="composer">
         <div id="send-error" class="send-error hidden"></div>
         <div class="composer-row">
@@ -194,7 +197,7 @@
           <button id="send" class="primary">发送</button>
         </div>
         <div id="composer-attach-chips" class="meta"></div>
-        <input id="composer-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.webp,.pdf" class="hidden" />
+        <input id="composer-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx" class="hidden" />
       </footer>
     </main>
   </div>

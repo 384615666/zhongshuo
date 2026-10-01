@@ -22,8 +22,27 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as craft from './lib/craftDocuments.mjs';
 
 const repo = resolve(import.meta.dirname, '..');
+
+// ---------- 第二十九轮验证助手：真实上传路径（DataTransfer→file input change）与预览关闭 ----------
+async function uploadViaInput(page, which, bytes, filename, mime) {
+  const b64 = Buffer.from(bytes).toString('base64');
+  await page.evalJs(`(() => {
+    const bin = atob(${JSON.stringify(b64)});
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const input = document.getElementById(${JSON.stringify(which === 'dm' ? 'dm-attach-file' : 'composer-attach-file')});
+    const dt = new DataTransfer();
+    dt.items.add(new File([u8], ${JSON.stringify(filename)}, { type: ${JSON.stringify(mime)} }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change'));
+  })()`);
+}
+async function closePreview(page) {
+  await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; btns.find((b) => b.textContent.includes('关闭预览'))?.click(); })()`);
+}
 
 // ---------- 冻结产物入口（第二十二轮一）：只构建一次，后续核对复用 ----------
 function verifyFrozenDir(dir) {
@@ -968,9 +987,11 @@ try {
       const imgToast = await page.readStrict(`document.getElementById('conn-state')?.textContent ?? ''`); // 上传回显（尺寸）在提示条
       record('ATT·图片上传（magic+IHDR 校验过+尺寸回显）', Number(imgChipOk) >= 2 && imgToast.includes('296×296'), imgToast.slice(0, 50));
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; const img = chips.find((c) => c.textContent.includes('合成 图')); if (img) img.click(); })()`);
-      await waitFor(async () => (await page.evalJs(`document.querySelector('#attach-preview img') != null`)).value === true, 20_000, 'ATT 图片 <img> 预览');
+      await waitFor(async () => (await page.evalJs(`document.querySelector('#attach-preview img') != null || document.querySelector('#attach-preview .img-decode-failed') != null`)).value === true, 20_000, 'ATT 图片 <img> 预览');
       const pvImg = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
-      record('ATT·图片预览（<img>+尺寸+OCR/模型输入如实标注）', pvImg.includes('296×296') && pvImg.includes('OCR 提取正文：未实现') && pvImg.includes('模型图片输入：未认证'), pvImg.slice(0, 70));
+      // 合成样本=头部+IEND 无 IDAT（像素不可解码）：头部尺寸回显 ✓ + 解码失败如实呈现（第二十九轮三：
+      // 格式头通过≠像素解码成功——不再以 <img> 元素存在冒充解码成功）。
+      record('ATT·图片预览（头部尺寸回显+解码结果如实+OCR/模型输入标注）', pvImg.includes('296×296') && pvImg.includes('OCR 提取正文：未实现') && pvImg.includes('模型图片输入：未认证'), pvImg.slice(0, 70));
       await page.evalJs(`document.getElementById('attach-preview').querySelector('.chip').click()`); // 关闭预览
       // PDF 附件页面闭环（第二十八轮五）：页面内合成合法双页 PDF（xref 偏移计算）→上传→
       // 分页文本预览（第 2 页定位+像素渲染/OCR 标注+页导航）。
@@ -978,10 +999,11 @@ try {
         const enc = new TextEncoder();
         const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
           '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>'];
-        const s1 = 'BT /F1 12 Tf 72 720 Td (PAGEUI-1-OK) Tj ET';
+        // 两页带不同色块（视觉渲染确定性差异——文本单字形差太弱，色块面积/颜色不同保证翻页指纹变化）。
+        const s1 = '1 0 0 rg 100 500 240 120 re f' + String.fromCharCode(10) + 'BT /F1 12 Tf 72 720 Td (PAGEUI-1-OK) Tj ET';
         objs.push('<< /Length ' + s1.length + ' >>' + String.fromCharCode(10) + 'stream' + String.fromCharCode(10) + s1 + String.fromCharCode(10) + 'endstream');
         objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>');
-        const s2 = 'BT /F1 12 Tf 72 720 Td (PAGEUI-2-OK) Tj ET';
+        const s2 = '0 0 1 rg 300 300 200 260 re f' + String.fromCharCode(10) + 'BT /F1 12 Tf 72 720 Td (PAGEUI-2-OK) Tj ET';
         objs.push('<< /Length ' + s2.length + ' >>' + String.fromCharCode(10) + 'stream' + String.fromCharCode(10) + s2 + String.fromCharCode(10) + 'endstream');
         let out = '%PDF-1.4' + String.fromCharCode(10); const offs = [];
         objs.forEach((b, i) => { offs.push(out.length); out += (i + 1) + ' 0 obj' + String.fromCharCode(10) + b + String.fromCharCode(10) + 'endobj' + String.fromCharCode(10); });
@@ -1005,7 +1027,137 @@ try {
       await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; const next = btns.find((b) => b.textContent.includes('后页')); if (next) next.click(); })()`);
       await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('PAGEUI-2-OK')`)) === true, 20_000, 'ATT PDF 第 2 页');
       const pvPdf = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
-      record('ATT·PDF 分页预览（第 2 页定位+页导航+像素渲染/OCR 标注）', pvPdf.includes('第 2 页') && pvPdf.includes('像素级页面渲染：未实施') && pvPdf.includes('OCR：未实现'), pvPdf.slice(0, 70));
+      record('ATT·PDF 分页预览（第 2 页定位+页导航+像素渲染/OCR 标注）', pvPdf.includes('第 2 页') && pvPdf.includes('视觉渲染：浏览器 canvas') && pvPdf.includes('OCR：未实现'), pvPdf.slice(0, 70));
+      // ---- 第二十九轮扩展（三/四/五）：视觉画布像素 / 真实中文 / 扫描件像素 / 图片门禁 /
+      // 真实 WebP 编解码对账 / Office 三类页面流 ----
+      // ① 视觉画布：zsres 特权协议加载随包 pdfjs ESM → canvas 渲染（非空白像素=真渲染，
+      // 不以元素存在冒充）；翻页像素指纹变化。
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('pdf-visual-canvas')?.dataset.state ?? 'none')`)) === 'rendered', 30_000, 'ATT PDF 视觉画布渲染');
+      const pixProbe = `(() => { const c = document.getElementById('pdf-visual-canvas'); if (c == null) return 'none'; const ctx = c.getContext('2d'); const d = ctx.getImageData(0, 0, c.width, c.height).data; let non = 0; let sum = 0; for (let i = 0; i < d.length; i += 40) { if (d[i] < 248 || d[i + 1] < 248 || d[i + 2] < 248) non++; sum += d[i] + d[i + 1] + d[i + 2]; } return non + '/' + sum + '/' + c.width + 'x' + c.height; })()`;
+      const pix1 = await page.readStrict(pixProbe);
+      record('ATT·PDF 视觉渲染（canvas 实际像素非空白）', Number(pix1.split('/')[0]) > 30, pix1.slice(0, 40));
+      // 色块交叠区指纹（构造性差异：页1=红块、页2=蓝块——同区不同色，逐通道必差）。
+      // 注意进入本段时已在第 2 页（上文文本翻页先发生）——先回第 1 页取指纹再前进。
+      const bandProbe = `(() => { const c = document.getElementById('pdf-visual-canvas'); if (c == null) return 'none'; const ctx = c.getContext('2d'); const sx = Math.floor(c.width * 0.50), sy = Math.floor(c.height * 0.30); const w = Math.floor(c.width * 0.12), h = Math.floor(c.height * 0.05); const d = ctx.getImageData(sx, sy, w, h).data; let r = 0; let g = 0; let b = 0; for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; } return r + ',' + g + ',' + b; })()`;
+      await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; btns.find((b) => b.textContent.includes('前页'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('pdf-visual-canvas')?.dataset.page ?? '') === '1' && document.getElementById('pdf-visual-canvas')?.dataset.state === 'rendered'`)) === true, 30_000, 'ATT 视觉画布回第 1 页渲染');
+      const band1 = await page.readStrict(bandProbe);
+      await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; btns.find((b) => b.textContent.includes('后页'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('pdf-visual-canvas')?.dataset.page ?? '') === '2' && document.getElementById('pdf-visual-canvas')?.dataset.state === 'rendered'`)) === true, 30_000, 'ATT 视觉画布第 2 页渲染');
+      const pix2 = await page.readStrict(pixProbe);
+      const band2 = await page.readStrict(bandProbe);
+      {
+        const [r1, , b1] = band1.split(',').map(Number);
+        const [r2, , b2] = band2.split(',').map(Number);
+        record('ATT·PDF 视觉翻页（页1红/页2蓝构造性指纹变化）', band1 !== band2 && r1 > r2 && b2 > b1 && Number(pix2.split('/')[0]) > 30, `${band1} → ${band2}`);
+      }
+      await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; btns.find((b) => b.textContent.includes('关闭预览'))?.click(); })()`);
+      // ② 真实中文 PDF（Identity-H+ToUnicode——此前 latin1 冒充样本已废）：Node 合成→真实上传
+      // 路径→分页预览逐字对上（服务端隔离解析提取）。
+      await uploadViaInput(page, 'composer', craft.makeCjkToUnicodePdf([['众说协作平台 验收页', '暗号 真实中文-6699'], ['第二页 尾注 — 2 —']]), '真实中文 报告.pdf', 'application/pdf');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('真实中文 报告.pdf')`)) === true, 30_000, 'ATT 真实中文芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('真实中文'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('真实中文-6699')`)) === true, 30_000, 'ATT 真实中文预览');
+      const pvCjk = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·真实中文 PDF（ToUnicode 提取逐字对上+页序）', pvCjk.includes('众说协作平台') && pvCjk.includes('真实中文-6699') && pvCjk.includes('第 1 页'), pvCjk.slice(0, 50));
+      await closePreview(page);
+      // ③ 扫描件（图像页零文本）：视觉像素可见+文本层如实空。
+      await uploadViaInput(page, 'composer', craft.makeImagePdf([{ w: 90, h: 60, color: [210, 40, 40] }]), '扫描件.pdf', 'application/pdf');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('扫描件.pdf')`)) === true, 30_000, 'ATT 扫描件芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('扫描件'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('pdf-visual-canvas')?.dataset.state ?? 'none')`)) === 'rendered', 30_000, 'ATT 扫描件视觉渲染');
+      const scanPix = await page.readStrict(pixProbe);
+      const scanText = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·扫描件（像素可见+文本如实空）', Number(scanPix.split('/')[0]) > 50 && scanText.includes('无文本层'), `${scanPix.slice(0, 20)} · ${scanText.includes('无文本层') ? '空文本标注' : '?'}`);
+      await closePreview(page);
+      // ④ 返回主池 → 真实 WebP（页面 canvas 编码——Chromium 原生）→ 上传→<img> 解码对账；
+      // 图片能力门（无确认不出门；确认后发送）。
+      await page.evalJs(`document.getElementById('thread-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('pool').classList.contains('hidden')`)).value === true, 10_000, 'ATT 返回主池（门禁段）');
+      await page.evalJs(`(() => { const c = document.createElement('canvas'); c.width = 220; c.height = 140; const g = c.getContext('2d'); g.fillStyle = '#2f6fe4'; g.fillRect(0, 0, 220, 140); g.fillStyle = '#ffffff'; g.font = '20px sans-serif'; g.fillText('WEBP-OK', 30, 80); const url = c.toDataURL('image/webp', 0.9); const bin = atob(url.split(',')[1]); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); const dt = new DataTransfer(); dt.items.add(new File([u8], '真实 编码.webp', { type: 'image/webp' })); const input = document.getElementById('composer-attach-file'); input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('真实 编码.webp')`)) === true, 30_000, 'ATT 真实 WebP 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('真实 编码'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('image-preview-img')?.dataset.decode ?? '')`)) === 'ok', 30_000, 'ATT WebP 浏览器解码');
+      const decodeState = await page.readStrict(`(() => { const i = document.getElementById('image-preview-img'); return i ? (i.dataset.decode + '|' + i.dataset.match + '|' + i.dataset.naturalWidth) : 'missing'; })()`);
+      record('ATT·真实 WebP（页面编码→上传→浏览器解码对账 naturalWidth=声明宽）', decodeState.startsWith('ok|true|'), decodeState);
+      await closePreview(page);
+      // 能力门：主池发送含图草稿 → 确认条（#image-gate-confirm）→ 确认后发送。
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '看图执行门禁流'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('image-gate-confirm') != null`)).value === true, 20_000, 'ATT 图片门禁确认条');
+      const gateShown = await page.readStrict(`document.getElementById('send-error')?.textContent ?? ''`);
+      record('ATT·图片能力门（未确认不出门——明确二选一）', gateShown.includes('模型图片输入能力未认证') && gateShown.includes('仅发送文字'), gateShown.slice(0, 50));
+      await page.evalJs(`document.getElementById('image-gate-confirm').click()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.querySelectorAll('button.chip').length ?? 9)`)) === 0, 20_000, 'ATT 门禁确认后草稿清空');
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#pool .pool-card').length`)) >= 2, 90_000, 'ATT 门禁确认后任务卡出现');
+      {
+        const Database = createRequire(join(repo, 'package.json'))('better-sqlite3');
+        await waitFor(async () => {
+          const dbG = new Database(join(appDataA, 'state.sqlite'), { readonly: true });
+          const bundleG = dbG.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get();
+          dbG.close();
+          return bundleG != null && String(bundleG.included_refs_json).includes('【图片附件未发送】');
+        }, 90_000, 'ATT 门禁任务 ContextBundle 注入说明');
+        const Database2 = createRequire(join(repo, 'package.json'))('better-sqlite3');
+        const dbG2 = new Database2(join(appDataA, 'state.sqlite'), { readonly: true });
+        const bundleG2 = dbG2.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get();
+        dbG2.close();
+        record('ATT·确认后注入「图片未发送+用户确认」（ContextBundle）', bundleG2 != null && bundleG2.included_refs_json.includes('【图片附件未发送】') && bundleG2.included_refs_json.includes('仅发送文字'), '');
+      }
+      // ⑤ 仅头 WebP（Node 合成头部——无数据体）：上传按头部过+像素解码失败如实呈现。
+      // 样本取 VP8L（无损位流截断——浏览器解码必失败；VP8 有损头截断 Chromium 可容错解码）。
+      await uploadViaInput(page, 'composer', craft.makeWebpVp8lHeaderOnly(180, 120), '仅头.webp', 'image/webp');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('仅头.webp')`)) === true, 30_000, 'ATT 仅头 WebP 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('仅头'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelector('#attach-preview .img-decode-failed') != null`)) === true, 30_000, 'ATT 仅头 WebP 解码失败标注');
+      record('ATT·仅头 WebP（头部通过≠像素可解码——失败如实呈现）', true, '格式头校验过、浏览器解码失败占位说明');
+      await closePreview(page);
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('清空附件'))?.click(); })()`);
+      // ⑥ Office 三类页面流（真实上传路径→预览→范围写回草稿→随发送持久）。
+      await uploadViaInput(page, 'composer', craft.makeDocx({ paras: ['DOCX 验收段落 甲', 'DOCX 第二段 乙'], table: [['列一', '列二'], ['甲值', '乙值']] }), '验收 文档.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('验收 文档.docx')`)) === true, 30_000, 'ATT DOCX 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('验收 文档'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('甲值')`)) === true, 30_000, 'ATT DOCX 预览');
+      const pvDocx = await page.readStrict(`(() => { const box = document.querySelector('#attach-preview .office-docx-html'); return (box ? (box.querySelectorAll('table').length + '|' + box.textContent.slice(0, 80)) : 'missing'); })()`);
+      const pvDocxNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·DOCX 预览（安全排版 HTML 表格+白名单零属性）', pvDocx.startsWith('1|') && pvDocx.includes('甲值') && pvDocxNote.includes('宏不执行'), pvDocx.slice(0, 40));
+      await closePreview(page);
+      await uploadViaInput(page, 'composer', craft.makeXlsx([{ name: '数据', rows: [['名称', '数量'], ['中文行一', 42, { formula: 'B2*2' }], ['带缓存', { formula: '5*2', cached: '10' }, '']], merges: ['A1:B1'] }]), '数据 表.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('数据 表.xlsx')`)) === true, 30_000, 'ATT XLSX 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('数据 表'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('中文行一')`)) === true, 30_000, 'ATT XLSX 预览');
+      const pvSheet = await page.readStrict(`(() => { const t = document.querySelector('#attach-preview .sheet-grid'); return t ? (t.querySelectorAll('tr').length + '|' + t.textContent.slice(0, 60)) : 'missing'; })()`);
+      const pvSheetNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·XLSX 预览（网格+公式无缓存值占位+合并标注）', pvSheet.startsWith('3|') && pvSheetNote.includes('公式无缓存值') && pvSheetNote.includes('合并单元格'), pvSheet.slice(0, 40));
+      await page.evalJs(`(() => { document.getElementById('sheet-range-input').value = '数据!A1:B2'; [...document.querySelectorAll('#attach-preview .chip')].forEach((b) => { if (b.textContent.includes('设为注入范围')) b.click(); }); })()`);
+      const rangeNote = await page.readStrict(`document.getElementById('sheet-range-note')?.textContent ?? ''`);
+      record('ATT·范围选择写回草稿（注入范围 UI）', rangeNote.includes('数据!A1:B2'), rangeNote.slice(0, 40));
+      await closePreview(page);
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '按表格范围执行'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#pool .pool-card').length`)) >= 3, 90_000, 'ATT 表格范围任务卡');
+      {
+        const Database = createRequire(join(repo, 'package.json'))('better-sqlite3');
+        const dbR = new Database(join(appDataA, 'state.sqlite'), { readonly: true });
+        const rangeRow = dbR.prepare("SELECT ma.range_spec FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE a.kind = 'sheet_file' ORDER BY ma.rowid DESC LIMIT 1").get();
+        dbR.close();
+        record('ATT·范围随消息持久（range_spec=数据!A1:B2）', rangeRow?.range_spec === '数据!A1:B2', String(rangeRow?.range_spec ?? ''));
+      }
+      await uploadViaInput(page, 'composer', craft.makePptx([{ texts: ['封面页 标题', '要点甲'], notes: '演讲备注 词' }, { texts: ['第二页 标题'], notes: null }]), '演示 幻灯.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('演示 幻灯.pptx')`)) === true, 30_000, 'ATT PPTX 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('要点甲')`)) === true, 30_000, 'ATT PPTX 预览');
+      const pvSlides = await page.readStrict(`(() => { const l = document.querySelector('#attach-preview .slides-list'); return l ? (l.querySelectorAll('.slide-card').length + '|' + l.textContent.slice(0, 60)) : 'missing'; })()`);
+      const pvSlidesNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·PPTX 预览（按页文字+备注；页图如实 unsupported）', pvSlides.startsWith('2|') && pvSlidesNote.includes('演讲备注') && pvSlidesNote.includes('页图渲染：unsupported'), pvSlides.slice(0, 40));
+      await closePreview(page);
+      // ⑦ CSV（编码/引号规则页面链）。
+      await uploadViaInput(page, 'composer', craft.makeCsvText([['名称', '备注'], ['中文单元格,逗号', '含"引号"'], ['行二', '值']], ','), '表格.csv', 'text/csv');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('表格.csv')`)) === true, 30_000, 'ATT CSV 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('表格.csv'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('中文单元格')`)) === true, 30_000, 'ATT CSV 预览');
+      const pvCsv = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·CSV 预览（UTF-8+引号逗号单元格如实）', pvCsv.includes('中文单元格,逗号') && pvCsv.includes('含"引号"') && pvCsv.includes('CSV · utf-8'), pvCsv.slice(0, 40));
+      await closePreview(page);
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('清空附件'))?.click(); })()`);
       const realCallsA = countTable(join(appDataA, 'state.sqlite'), 'real_calls');
       record('ATT·零真实调用（fake 注入链）', realCallsA === 0, `real_calls=${realCallsA}`);
       page.close();

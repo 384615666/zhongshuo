@@ -33,3 +33,6 @@ docs/.qoder/
 # 操作系统噪声
 .DS_Store
 Thumbs.db
+
+# 渲染器 vendored pdfjs 资产（build-ui 从 node_modules 同步——不入库）
+src/ui/renderer/assets/

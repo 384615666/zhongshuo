@@ -24,6 +24,8 @@ const TASK_TERMINAL = ['DONE', 'BLOCKED', 'FAILED', 'CANCELLED'];
 
 const state = {
   projectId: null,
+  /** 图片能力门一次性确认（第二十九轮三）：确认后随下一条消息消费（imageAck=omit-images）。 */
+  imageAckPending: false,
   /** 导航代次（第二十三轮一）：每次切换视图/会话/项目 +1——异步响应凭 (目标三元组+代次)
    * 核对，A→B→A 时旧 A 的迟到响应不再被误当作当前。 */
   navGeneration: 0,
@@ -359,6 +361,19 @@ function closeAttachPreview() {
   previewGeneration += 1; // 在途预览请求全部作废
   el('attach-preview')?.classList.add('hidden');
 }
+// PDF 视觉渲染（第二十九轮三）：渲染器受限预览侧加载随包 pdfjs ESM（zsres:// 特权协议下
+// 模块与 worker 可用——file:// 会被模块 CORS 拦截）；原件字节每附件取一次，翻页/缩放本地。
+const pdfBytesCache = new Map();
+let rendererPdfjsPromise = null;
+async function loadRendererPdfjs() {
+  if (rendererPdfjsPromise == null) {
+    rendererPdfjsPromise = import(new URL('assets/pdfjs/pdf.min.mjs', document.baseURI).href).then((lib) => {
+      lib.GlobalWorkerOptions.workerSrc = new URL('assets/pdfjs/pdf.worker.min.mjs', document.baseURI).href;
+      return lib;
+    });
+  }
+  return rendererPdfjsPromise;
+}
 /** 共享文本预览（草稿芯片与已发消息附件共用）：previewText 服务端已做 audience+完整性
  * （sha256 实际字节核对+实际存储根校验）+字节截断——这里只呈现原始大小/提取大小/截断事实
  * 与全文。附基础评论区（第二十七轮六；第二十八轮三版本绑定）：行号/选区/正文提交
@@ -370,18 +385,63 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   const alive = () => myGen === previewGeneration;
   const originView = currentView(); // 来源会话快照（受限资源标注）
   if (kindHint === 'pdf_file') {
-    // PDF 预览（第二十八轮五）：previewPdf 分页文本（提取缓存；扫描件无文本如实空页）；
-    // 像素级页面渲染/OCR=未实施（明确标注）；页导航（前/后页——代次保护沿用）。
-    const pdf = await command('attachment.previewPdf', { attachmentId, page: 1 });
+    // PDF 预览（第二十八轮五→第二十九轮三）：分页文本层 + **视觉页面渲染（受限预览侧
+    // 浏览器 canvas——zsres 特权协议下加载随包 pdfjs ESM；服务端零像素解码）**；扫描件
+    // 无文本=如实空页但**像素可见**；OCR 单列未实现。原件字节每次打开取一次（includeBytes），
+    // 翻页/缩放在渲染器本地完成（预览读操作零新增运行）。
+    const pdf = await command('attachment.previewPdf', { attachmentId, page: 1, includeBytes: true });
     if (!alive()) return;
     const pbox = el('attach-preview');
     if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——容器缺失`); return; }
     pbox.classList.remove('hidden');
+    const bytesKey = `${attachmentId}:${pdf.hash}:v${pdf.revision}`;
+    if (pdf.bytesBase64 != null) {
+      pdfBytesCache.set(bytesKey, pdf.bytesBase64); // 最近 2 份（内存有界）
+      for (const k of [...pdfBytesCache.keys()]) if (pdfBytesCache.size > 2 && k !== bytesKey) pdfBytesCache.delete(k);
+    }
+    let pdfDocPromise = null;
+    let zoomMode = 'fit';
+    const getPdfDoc = async () => {
+      if (pdfDocPromise == null) {
+        const b64 = pdfBytesCache.get(bytesKey);
+        if (b64 == null) throw new Error('原件字节不可用（includeBytes 未取到——重新打开预览）');
+        const lib = await loadRendererPdfjs();
+        const bin = atob(b64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i += 1) u8[i] = bin.charCodeAt(i);
+        pdfDocPromise = lib.getDocument({ data: u8, isEvalSupported: false }).promise;
+      }
+      return pdfDocPromise;
+    };
+    const renderVisual = async (pageNo, canvas) => {
+      canvas.dataset.state = 'pending';
+      canvas.dataset.page = String(pageNo);
+      try {
+        const doc = await getPdfDoc();
+        if (!alive()) return;
+        const pageNum = Math.min(Math.max(pageNo, 1), doc.numPages);
+        const page = await doc.getPage(pageNum);
+        if (!alive()) return;
+        const base = page.getViewport({ scale: 1 });
+        const scale = zoomMode === 'fit' ? Math.min(1.25, 680 / base.width) : Number(zoomMode);
+        const viewport = page.getViewport({ scale });
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        canvas.dataset.state = 'rendered';
+      } catch (e) {
+        canvas.dataset.state = 'failed';
+        canvas.dataset.error = String(e?.message ?? e).slice(0, 160);
+      }
+    };
     const renderPage = (pg) => {
       if (!alive()) return;
+      const wrapP = document.createElement('div');
       const head2 = document.createElement('div');
       head2.className = 'meta';
       head2.textContent = `📄 ${pdf.filename ?? filename} · 共 ${pdf.totalPages} 页 · 第 ${pg.page} 页 · sha256=${pdf.hash.slice(0, 12)}… · v${pdf.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+      const nav = document.createElement('div');
+      nav.className = 'attach-preview-nav';
       const prev = document.createElement('button');
       prev.className = 'chip';
       prev.textContent = '← 前页';
@@ -392,18 +452,31 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       next.textContent = '后页 →';
       next.disabled = pg.page >= pdf.totalPages;
       next.onclick = () => void refreshPdf(pg.page + 1);
+      const zoom = document.createElement('select');
+      zoom.className = 'pdf-zoom';
+      for (const [v, label] of [['fit', '适应宽'], ['1', '100%'], ['1.5', '150%']]) {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = label;
+        if (v === zoomMode) opt.selected = true;
+        zoom.append(opt);
+      }
+      zoom.onchange = () => { zoomMode = zoom.value; void renderVisual(pg.page, canvas); };
       const closeP = document.createElement('button');
       closeP.className = 'chip';
       closeP.textContent = '关闭预览';
       closeP.onclick = () => closeAttachPreview();
+      nav.append(prev, next, zoom, closeP);
+      const canvas = document.createElement('canvas');
+      canvas.id = 'pdf-visual-canvas';
+      canvas.className = 'pdf-visual-canvas';
+      void renderVisual(pg.page, canvas); // 视觉层异步（文本层先呈现——不互相阻塞）
       const pre = document.createElement('pre');
       pre.className = 'attach-preview-text';
-      pre.textContent = pg.text.length === 0 ? '（本页无文本层——可能是扫描件；OCR 未实现，如实呈现空页）' : pg.text;
+      pre.textContent = pg.text.length === 0 ? '（本页无文本层——可能是扫描件；OCR 未实现，如实空页；页面像素见上方视觉渲染）' : pg.text;
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `像素级页面渲染：未实施（文本层呈现） · OCR：未实现 · 截断：${pg.truncated ? `本页提取文本超 64KB 已截断` : '无'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
-      const wrapP = document.createElement('div');
-      wrapP.append(head2, prev, next, closeP, pre, note);
+      note.textContent = `视觉渲染：浏览器 canvas（受限预览侧——服务端零像素解码） · OCR：未实现 · 截断：${pg.truncated ? '本页提取文本超 64KB 已截断' : '无'} · 解析器：${pdf.parser ?? '?'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
+      wrapP.append(head2, nav, canvas, pre, note);
       pbox.replaceChildren(wrapP);
     };
     const refreshPdf = async (pageNo) => {
@@ -415,8 +488,9 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     return;
   }
   if (kindHint === 'image_file') {
-    // 图片预览（第二十八轮四）：previewImage（audience+实根+原件核对）→ <img> 渲染（浏览器
-    // 沙箱解码）；OCR=未实现、模型图片输入=未认证——如实标注，不以路径冒充模型已读。
+    // 图片预览（第二十八轮四→第二十九轮三）：previewImage（audience+实根+原件核对）→ <img>
+    // 渲染（浏览器沙箱解码）。**格式头通过≠像素解码成功**——解码结果如实记录（data-decode
+    // ok/failed + naturalWidth 与服务端头部宽高对账）；OCR=未实现、模型图片输入=未认证。
     const img = await command('attachment.previewImage', { attachmentId });
     if (!alive()) return;
     const ibox = el('attach-preview');
@@ -424,23 +498,170 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     ibox.classList.remove('hidden');
     const ihead = document.createElement('div');
     ihead.className = 'meta';
-    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.mime} · ${img.width}×${img.height} · 原件 ${img.bytes}B · sha256=${img.hash.slice(0, 12)}… · v${img.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.mime} · 声明 ${img.width}×${img.height} · 原件 ${img.bytes}B · sha256=${img.hash.slice(0, 12)}… · v${img.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
     const iclose = document.createElement('button');
     iclose.className = 'chip';
     iclose.textContent = '关闭预览';
     iclose.onclick = () => closeAttachPreview();
     const iel2 = document.createElement('img');
+    iel2.id = 'image-preview-img';
     iel2.src = img.dataUrl;
     iel2.alt = img.filename ?? '图片附件';
     iel2.style.maxWidth = '100%';
     iel2.style.maxHeight = '280px';
-    iel2.onerror = () => { showError(`图片渲染失败（${img.filename ?? filename}）——原件已按 hash 校验，像素解码失败请回传截图`); };
+    iel2.dataset.decode = 'pending';
+    iel2.dataset.declaredWidth = String(img.width);
+    iel2.onload = () => { iel2.dataset.naturalWidth = String(iel2.naturalWidth); iel2.dataset.match = String(iel2.naturalWidth === img.width); };
+    // 解码结果以 decode() Promise 为准（规范：不可解码即 reject——比 onerror/元素存在更可靠；
+    // 格式头通过≠像素可解码，第二十九轮三）。
+    iel2.decode().then(
+      () => { iel2.dataset.decode = 'ok'; },
+      (e) => {
+        iel2.dataset.decode = 'failed';
+        iel2.dataset.decodeError = String(e?.message ?? e).slice(0, 120);
+        const failNote = document.createElement('div');
+        failNote.className = 'meta img-decode-failed';
+        failNote.textContent = `像素解码失败（浏览器）——原件完整保存且 sha256 已核对，但格式头通过不等于像素可解码（截断/损坏体）；OCR 与模型图片输入均不可用`;
+        iel2.replaceWith(failNote);
+      },
+    );
+    iel2.onerror = () => { iel2.dataset.decode = 'failed'; };
     const inote = document.createElement('div');
     inote.className = 'meta';
-    inote.textContent = 'OCR 提取正文：未实现（明确不可用）· 模型图片输入：未认证（不发文件路径冒充模型已读——runtime 图片输入能力认证属后续批次）· 图片评论：随分批归属后续开放';
+    inote.textContent = 'OCR 提取正文：未实现（明确不可用）· 模型图片输入：未认证（发送需明确选择仅发送文字——程序不悄悄省略图片冒充已读）· 图片评论：随分批归属后续开放';
     const iwrap = document.createElement('div');
     iwrap.append(ihead, iclose, iel2, inote);
     ibox.replaceChildren(iwrap);
+    return;
+  }
+  if (kindHint === 'docx_file' || kindHint === 'sheet_file' || kindHint === 'slides_file') {
+    // Office 预览（第二十九轮四）：DOCX=服务端白名单净化 HTML（此处二次剥属性——纵深）；
+    // 表格=sheet 分页签+预览窗口表格+注入范围选择（写回草稿条目——发送随 attachmentRanges）；
+    // PPTX=按页文字+备注（页图=unsupported 如实）。宏不执行/公式只读缓存值/外部关系不加载。
+    const doc = await command('attachment.previewOffice', { attachmentId });
+    if (!alive()) return;
+    const obox = el('attach-preview');
+    if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——页面容器缺失`); return; }
+    obox.classList.remove('hidden');
+    const owrap = document.createElement('div');
+    const ohead = document.createElement('div');
+    ohead.className = 'meta';
+    const kindLabel = doc.kind === 'docx_file' ? 'DOCX 文档' : doc.kind === 'sheet_file' ? `表格（${doc.sourceFormat === 'csv' ? `CSV · ${doc.encoding}` : 'XLSX'}）` : 'PPTX 幻灯片';
+    ohead.textContent = `📘 ${doc.filename ?? filename} · ${kindLabel} · sha256=${doc.hash.slice(0, 12)}… · v${doc.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'} · 解析器 ${doc.parser}`;
+    const oclose = document.createElement('button');
+    oclose.className = 'chip';
+    oclose.textContent = '关闭预览';
+    oclose.onclick = () => closeAttachPreview();
+    owrap.append(ohead, oclose);
+    if (doc.kind === 'docx_file') {
+      const htmlBox = document.createElement('div');
+      htmlBox.className = 'office-docx-html';
+      htmlBox.innerHTML = doc.html; // 服务端白名单净化（无 href/无事件属性）；下面再剥一次属性
+      for (const elx of htmlBox.querySelectorAll('*')) {
+        for (const attr of [...elx.attributes]) {
+          if (!(elx.tagName === 'TD' && (attr.name === 'colspan' || attr.name === 'rowspan'))) elx.removeAttribute(attr.name);
+        }
+      }
+      const note = document.createElement('div');
+      note.className = 'meta';
+      note.textContent = `安全排版预览（白名单标记——外部关系不加载、嵌入图片不解码、宏不执行）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
+      owrap.append(htmlBox, note);
+    } else if (doc.kind === 'sheet_file') {
+      const tabs = document.createElement('div');
+      tabs.className = 'sheet-tabs';
+      const gridBox = document.createElement('div');
+      const drawSheet = (sheet) => {
+        const tbl = document.createElement('table');
+        tbl.className = 'sheet-grid';
+        const win = document.createElement('div');
+        win.className = 'meta';
+        win.textContent = `工作表「${sheet.name}」· 实际 ${sheet.rowCount}×${sheet.colCount} · 预览窗口 ${sheet.cells.length}×${sheet.cells[0]?.length ?? 0}${sheet.rowTruncated || sheet.colTruncated ? '（窗口外未呈现——不虚构成空表）' : ''}${sheet.merges.length > 0 ? ` · 合并单元格 ${sheet.merges.length} 处` : ''}${sheet.formulaMissing ? ' · ⚠ 存在无缓存值的公式格（公式不执行——如实占位）' : ''}`;
+        const cap = Math.ceil(sheet.colCount / 26) > 1 ? 'A' : 'A';
+        void cap;
+        for (let r = 0; r < sheet.cells.length; r += 1) {
+          const tr = document.createElement('tr');
+          const th = document.createElement('th');
+          th.textContent = String(r + 1);
+          tr.append(th);
+          for (const cell of sheet.cells[r]) {
+            const td = document.createElement('td');
+            td.textContent = cell;
+            tr.append(td);
+          }
+          tbl.append(tr);
+        }
+        gridBox.replaceChildren(win, tbl);
+      };
+      doc.sheets.forEach((sheet, idx) => {
+        const tab = document.createElement('button');
+        tab.className = 'chip';
+        tab.textContent = sheet.name;
+        if (idx === 0) tab.classList.add('on');
+        tab.onclick = () => { for (const t of tabs.children) t.classList.remove('on'); tab.classList.add('on'); drawSheet(sheet); };
+        tabs.append(tab);
+      });
+      drawSheet(doc.sheets[0]);
+      // 注入范围选择：写回草稿条目（仅该附件仍在当前草稿时可设）。
+      const rangeRow = document.createElement('div');
+      rangeRow.className = 'sheet-range-row';
+      const rangeInput = document.createElement('input');
+      rangeInput.id = 'sheet-range-input';
+      rangeInput.placeholder = '注入范围，如 Sheet1!A1:D20（留空=有界默认窗口）';
+      const rangeBtn = document.createElement('button');
+      rangeBtn.className = 'chip';
+      rangeBtn.textContent = '设为注入范围';
+      const rangeNote = document.createElement('span');
+      rangeNote.className = 'meta';
+      rangeNote.id = 'sheet-range-note';
+      const currentDraftEntry = () => {
+        for (const [, list] of draftAttachments) {
+          const hit = list.find((a) => a.attachmentId === attachmentId);
+          if (hit != null) return hit;
+        }
+        return null;
+      };
+      const existing = currentDraftEntry();
+      if (existing != null && existing.range != null) { rangeInput.value = existing.range; rangeNote.textContent = `当前注入范围：${existing.range}`; }
+      rangeBtn.onclick = () => {
+        const entry = currentDraftEntry();
+        const spec = rangeInput.value.trim();
+        if (entry == null) { rangeNote.textContent = '该附件不在当前草稿（已发送/其他会话）——范围仅对随消息发送的草稿附件生效'; return; }
+        if (spec.length === 0) { delete entry.range; rangeNote.textContent = '已清除范围（发送按有界默认窗口注入）'; }
+        else { entry.range = spec; rangeNote.textContent = `注入范围已设：${spec}（提交时服务端校验边界）`; }
+        renderAttachChips(state.openDmId != null && currentView() === 'dm' ? 'dm' : 'composer');
+      };
+      rangeRow.append(rangeInput, rangeBtn, rangeNote);
+      const note = document.createElement('div');
+      note.className = 'meta';
+      note.textContent = `公式不执行（仅缓存值，缺失如实占位）· 注入=范围窗口（默认首表 50×16——不把全部工作表无界发送）${doc.truncatedTotal ? ' · 提取超预算已截断' : ''}`;
+      owrap.append(tabs, gridBox, rangeRow, note);
+    } else {
+      const listBox = document.createElement('div');
+      listBox.className = 'slides-list';
+      for (const sl of doc.slides) {
+        const card = document.createElement('div');
+        card.className = 'slide-card';
+        const head3 = document.createElement('div');
+        head3.className = 'meta';
+        head3.textContent = `幻灯片 ${sl.slide}${sl.truncated ? '（本页文本超预算已截断）' : ''}`;
+        const body3 = document.createElement('pre');
+        body3.className = 'attach-preview-text';
+        body3.textContent = sl.text.length === 0 ? '（本页无文字）' : sl.text;
+        card.append(head3, body3);
+        if (sl.notes.trim().length > 0) {
+          const notes = document.createElement('div');
+          notes.className = 'meta';
+          notes.textContent = `备注：${sl.notes}`;
+          card.append(notes);
+        }
+        listBox.append(card);
+      }
+      const note = document.createElement('div');
+      note.className = 'meta';
+      note.textContent = `按页保留文字与备注（顺序=幻灯片编号）· 页图渲染：unsupported（页图与文本输入能力分别认证——不拿路径冒充已读）· 模型输入=提取文本`;
+      owrap.append(listBox, note);
+    }
+    obox.replaceChildren(owrap);
     return;
   }
   const r = await command('attachment.previewText', { attachmentId });
@@ -545,26 +766,37 @@ function wireAttach(kind) {
     if (convId == null) { showError('请先打开会话再附加文件'); return; }
     try {
       const buf = await file.arrayBuffer();
-      // 图片附件（第二十八轮四）：原件上传（服务端 magic 校验+头部分析限幅）；文本走 fatal
-      // UTF-8 严格解码。判型按**文件真实字节**（file.type 由浏览器按内容嗅探——非扩展名）。
+      // 判型按**文件真实字节**（file.type 由浏览器按内容嗅探——非扩展名；Office/zip 再核
+      // PK 头——扩展名不作依据，服务端 magic 终审）。图片/Office/PDF=原件上传；CSV=编码
+      // 探测解析；其余文本走 fatal UTF-8 严格解码（第二十九轮四扩 Office 三类与 CSV）。
+      const lower = file.name.toLowerCase();
       const isImage = (file.type || '').startsWith('image/');
-      const isPdf = file.type === 'application/pdf' || (/.pdf$/i.test(file.name) && file.type === ''); // 少数环境 type 空——按内容嗅探失败回落扩展名+服务端 magic 终审
+      const isPdf = file.type === 'application/pdf' || (lower.endsWith('.pdf') && file.type === '');
+      const head4 = new Uint8Array(buf.slice(0, 4));
+      const isZip = head4[0] === 0x50 && head4[1] === 0x4b;
+      const isOffice = isZip && (lower.endsWith('.docx') || lower.endsWith('.xlsx') || lower.endsWith('.pptx') || (file.type || '').includes('officedocument'));
+      const isCsv = lower.endsWith('.csv') && !isZip;
       let r;
-      if (isImage || isPdf) {
+      let kindHint = 'text_file';
+      if (isImage || isPdf || isOffice || isCsv) {
         let bin = '';
         const u8 = new Uint8Array(buf);
         for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
-        r = await command(isPdf ? 'attachment.uploadPdf' : 'attachment.uploadImage', { conversationId: convId, filename: file.name, contentBase64: btoa(bin) });
+        const method = isPdf ? 'attachment.uploadPdf' : isImage ? 'attachment.uploadImage' : isOffice ? 'attachment.uploadOffice' : 'attachment.uploadCsv';
+        r = await command(method, { conversationId: convId, filename: file.name, contentBase64: btoa(bin) });
+        kindHint = isPdf ? 'pdf_file' : isImage ? 'image_file' : isOffice ? (r.slides != null ? 'slides_file' : r.sheets != null || r.sourceFormat === 'csv' ? 'sheet_file' : 'docx_file') : 'sheet_file';
       } else {
         let content;
         try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-        catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本按明确规则拒绝（图片选 PNG/JPEG/GIF/WebP；其余二进制随后续批次）`); return; }
+        catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本按明确规则拒绝（图片选 PNG/JPEG/GIF/WebP；Office 选 .docx/.xlsx/.pptx；表格文本选 .csv）`); return; }
         r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
+        kindHint = 'text_file';
       }
       if (!draftAttachments.has(targetKey)) draftAttachments.set(targetKey, []);
-      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: isPdf ? 'pdf_file' : isImage ? 'image_file' : 'text_file' });
+      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: kindHint });
       if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : isPdf ? `（${r.pages} 页——提取文本已缓存）` : isImage ? `（${r.width}×${r.height}）` : ''}`);
+      const extra = r.pages != null ? `（${r.pages} 页——提取文本已缓存）` : r.width != null ? `（${r.width}×${r.height}）` : r.slides != null ? `（${r.slides} 页幻灯片）` : r.sheets != null ? `（${r.sheets} 个工作表${r.sourceFormat === 'csv' ? ` · ${r.encoding}` : ''}）` : r.paragraphCount != null ? `（${r.paragraphCount} 段）` : '';
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（超预算——预览/注入将按口径截断）' : extra}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
@@ -1247,15 +1479,27 @@ async function sendDm() {
   const input = el('dm-input');
   const text = input.value.trim();
   if (text.length === 0) return;
+  // 图片能力门（第二十九轮三）：默认意图（会派发）+草稿含图片 → 用户明确选择，不悄悄省略。
+  if (draftHasImage('dm') && !state.dmRecordOnly && !state.imageAckPending) {
+    showImageGate('dm', () => { state.imageAckPending = true; void sendDm(); });
+    return;
+  }
   // 发起时快照：目标键与要发送的附件 refs（响应前切会话不动另一键——失败保留正文与附件）。
   const dmKey = attachDraftKey('dm');
-  const sentRefs = attachDraft('dm').map((a) => a.attachmentId);
+  const dmAtts = attachDraft('dm');
+  const sentRefs = dmAtts.map((a) => a.attachmentId);
+  const ack = state.imageAckPending === true;
+  state.imageAckPending = false; // 一次性消费（失败重发会再过门）
+  const dmRanges = {};
+  for (const a of dmAtts) if (a.range != null && String(a.range).trim().length > 0) dmRanges[a.attachmentId] = String(a.range).trim();
   input.value = '';
   try {
     const r = await command('message.submit', {
       target: { kind: 'dm', projectId: state.projectId, conversationId: state.openDmId },
       body: text, intent: state.dmRecordOnly ? 'record_only' : 'default', mentions: [],
       ...(sentRefs.length > 0 ? { attachmentRefs: sentRefs } : {}),
+      ...(ack ? { imageAck: 'omit-images' } : {}),
+      ...(Object.keys(dmRanges).length > 0 ? { attachmentRanges: dmRanges } : {}),
     });
     // 成功只清**本次发送的 refs**（失败后新加的附件保留在草稿）。
     const remaining = (draftAttachments.get(dmKey) ?? []).filter((a) => !sentRefs.includes(a.attachmentId));
@@ -1650,6 +1894,32 @@ function clearSendError() {
   el('send-error').classList.add('hidden');
 }
 
+// ---------- 图片能力门（第二十九轮三）----------
+// 草稿含图片且本次会派发（DM 默认意图/主池派发路由）时，程序不悄悄省略图片后以任务成功
+// 冒充处理完成：用户明确二选一——仅发送文字（imageAck:"omit-images"——注入文本如实注明
+// 图片未发送及用户确认）或取消。record_only/线程跟进不派发=无门（保存/预览不受影响）。
+function draftHasImage(kind) {
+  return attachDraft(kind).some((a) => a.kind === 'image_file');
+}
+/** 图片能力门确认条（kind 决定容器：DM 区就地呈现——send-error 在主池 footer，DM 视图不可见）。 */
+function showImageGate(kind, onConfirm) {
+  const box = el(kind === 'dm' ? 'dm-gate' : 'send-error');
+  if (box == null) { onConfirm(); return; } // 容器缺失不阻断（服务端门仍在——这里只是无 UI）
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+  const text = document.createElement('span');
+  text.textContent = '模型图片输入能力未认证——图片不会发送给模型。请明确选择：';
+  const okBtn = document.createElement('button');
+  okBtn.id = 'image-gate-confirm';
+  okBtn.textContent = '仅发送文字（图片不发送，注入如实注明）';
+  okBtn.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; onConfirm(); };
+  const cancel = document.createElement('button');
+  cancel.id = 'image-gate-cancel';
+  cancel.textContent = '取消发送';
+  cancel.onclick = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  box.append(text, okBtn, cancel);
+}
+
 async function retrySend() {
   const envelope = state.pendingRetry;
   if (envelope == null) return;
@@ -1686,11 +1956,18 @@ function buildEnvelope() {
     target = { kind: 'thread', projectId: state.projectId, conversationId: state.conversationId, threadId: state.openThreadId };
   }
   const atts = attachDraft('composer'); // 发起时的目标键快照（响应前切视图不动另一键）
+  const ranges = {};
+  for (const a of atts) if (a.range != null && String(a.range).trim().length > 0) ranges[a.attachmentId] = String(a.range).trim();
   return {
     protocolVersion: 1,
     commandId: uuid(), // 去重锚点：在途重复触发被忽略；传输失败重试沿用同一 id
     method: 'message.submit',
-    params: { target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions, ...(atts.length > 0 ? { attachmentRefs: atts.map((a) => a.attachmentId) } : {}) },
+    params: {
+      target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions,
+      ...(atts.length > 0 ? { attachmentRefs: atts.map((a) => a.attachmentId) } : {}),
+      ...(state.imageAckPending === true ? { imageAck: 'omit-images' } : {}),
+      ...(Object.keys(ranges).length > 0 ? { attachmentRanges: ranges } : {}),
+    },
   };
 }
 
@@ -1724,11 +2001,18 @@ async function send() {
   if (state.inflightSend != null) return; // 双击/重复 Enter：在途即忽略（同 commandId 语义）
   const text = el('composer-input').value.trim();
   if (!text || state.conversationId == null) return;
+  // 图片能力门（第二十九轮三）：主池默认意图（派发路由）+草稿含图片 → 明确选择；线程跟进
+  // 与仅记录不派发=无门。
+  if (state.openThreadId == null && !state.recordOnly && draftHasImage('composer') && state.imageAckPending !== true) {
+    showImageGate('composer', () => { state.imageAckPending = true; void send(); });
+    return;
+  }
   // 发起时固定视图与「仅记录」意图（响应到达前用户可能切换视图）。
   const view = currentView();
   const recordIntent = state.recordOnly;
   const keyAtSend = draftKey(); // 发起时目标键快照（第二十八轮三：完整键——响应前切换线程不清错键）
   const envelope = buildEnvelope();
+  state.imageAckPending = false; // 一次性消费（随信封固化；失败重发会再过门）
   clearSendError();
   state.inflightSend = envelope.commandId;
   el('send').disabled = true;
