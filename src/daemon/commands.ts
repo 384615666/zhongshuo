@@ -37,7 +37,7 @@ import { join } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, kindForFilename, readVerifiedCopy } from './attachments.ts';
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer } from './attachments.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -220,7 +220,7 @@ function resolveAttachmentRefs(
       | { conversation_id: string; kind: string; source_name: string | null; hash: string }
       | undefined;
     if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
-    if (!(ATT_TEXT_KINDS as readonly string[]).includes(att.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/代码/Markdown 附件（首包+代码批）——${attId} 为 ${att.kind}`);
+    if (![...(ATT_TEXT_KINDS as readonly string[]), 'image_file'].includes(att.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/代码/Markdown/图片附件（首包+代码批+图片批）——${attId} 为 ${att.kind}`);
     if (att.conversation_id !== conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
     out.push({ artifactId: attId, displayName: att.source_name ?? attId, hash: att.hash });
   }
@@ -237,15 +237,15 @@ function attachMessageRefs(db: ZhongshuoDatabase, messageId: string, resolved: A
 
 /** 历史读取用：批量取消息附件摘要（artifactId/filename——点击预览经 attachment.previewText
  * 走 audience+完整性校验，此处只发 id 与名字不下发正文）。 */
-function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string }>> {
-  const out = new Map<string, Array<{ artifactId: string; filename: string }>>();
+function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string }>> {
+  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string }>>();
   if (messageIds.length === 0) return out;
   const rows = db.prepare(
-    `SELECT message_id, artifact_id, display_name FROM message_attachments WHERE message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY rowid`,
-  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null }>;
+    `SELECT ma.message_id, ma.artifact_id, ma.display_name, a.kind FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null; kind: string }>;
   for (const r of rows) {
     const list = out.get(r.message_id) ?? [];
-    list.push({ artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id });
+    list.push({ artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind });
     out.set(r.message_id, list);
   }
   return out;
@@ -1933,6 +1933,57 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
         const rows = deps.db.prepare('SELECT id, author_id, quote, line_from, line_to, body, artifact_hash, artifact_revision, created_at FROM attachment_comments WHERE artifact_id = ? ORDER BY created_at, rowid').all(params.attachmentId) as Array<{ id: string; author_id: string; quote: string | null; line_from: number | null; line_to: number | null; body: string; artifact_hash: string; artifact_revision: number; created_at: number }>;
         return withCommandId({ ok: true, data: { currentHash: row.hash, items: rows.map((c) => ({ commentId: c.id, authorId: c.author_id, quote: c.quote, lineFrom: c.line_from, lineTo: c.line_to, body: c.body, anchoredTo: { hash: c.artifact_hash, revision: c.artifact_revision }, stale: c.artifact_hash !== row.hash || c.artifact_revision !== row.revision, createdAt: c.created_at })) } });
+      }
+      case 'attachment.uploadImage': {
+        // 图片附件首包（第二十八轮四）——能力①保存原件：内容寻址落 {appData}/blobstore/
+        //{hash}.bin（二进制原件）；kind=image_file（hash/revision/来源/audience 同既有资源身份）；
+        // **内容类型按 magic bytes 校验**（PNG/JPEG/GIF/WebP——扩展名不作依据）；尺寸/面积按
+        // 格式头解析限幅；损坏/截断/超限明确拒绝（不静默缩放）。原件上限 8MB。
+        const params = z.strictObject({
+          conversationId: z.string().min(1),
+          filename: z.string().min(1).max(200),
+          contentBase64: z.string().min(1).max(12 * 1024 * 1024), // base64 膨胀裕量
+        }).parse(env.params);
+        const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+        if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
+        const raw = Buffer.from(params.contentBase64, 'base64');
+        if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '图片内容为空');
+        if (raw.length > ATT_IMAGE_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `图片原件 ${raw.length}B 超过上限 ${ATT_IMAGE_MAX_BYTES}B（明确规则：不静默压缩）`);
+        const meta = validateImageBuffer(raw);
+        if (!meta.ok) throw new DaemonCommandError('VALIDATION_INVALID', meta.message);
+        const hash = createHash('sha256').update(raw).digest('hex');
+        const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
+        mkdirSync(blobRoot, { recursive: true });
+        writeFileSync(join(blobRoot, `${hash}.bin`), raw); // 内容寻址原件（同内容不重复）
+        const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; width: number; height: number; mime: string } => {
+          const attachmentId = `art_${randomUUID()}`;
+          deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
+                           VALUES (?, ?, ?, ?, 'image_file', 1, ?, ?, ?, ?)`)
+            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, hash, join(blobRoot, `${hash}.bin`), params.filename, Date.now());
+          return { attachmentId, hash, bytes: raw.length, width: meta.meta.width, height: meta.meta.height, mime: meta.meta.mime };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'attachment.previewImage': {
+        // 能力②预览：audience+实根+sha256 原件核对；返回 mime/尺寸/原件字节+dataUrl（渲染
+        // 由 renderer <img>——浏览器沙箱解码；服务端零像素解码依赖）。能力③**OCR 提取正文=
+        // 未实现（如实 unsupported）**；能力④**模型图片输入=未认证**（注入链路只注文本——
+        // 不发文件路径冒充模型已读；runtime 图片输入能力认证属后续批次）。
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        if (row.kind !== 'image_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非图片附件范围`);
+        const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        const meta = validateImageBuffer(verified.raw);
+        if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'unverified-unsupported' } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK

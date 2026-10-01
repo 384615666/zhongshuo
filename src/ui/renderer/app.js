@@ -339,7 +339,7 @@ function renderAttachChips(kind) {
     chip.className = 'chip';
     chip.textContent = `📎 ${att.filename}（${att.hash.slice(0, 8)}…${att.truncated ? ' 截断' : ''}）`;
     chip.title = `点按预览副本（sha256=${att.hash}）——原文件修改不影响已发内容`;
-    chip.onclick = () => void previewAttachment(att.attachmentId, att.filename).catch((e) => showError(`预览失败：${e.message}`));
+    chip.onclick = () => void previewAttachment(att.attachmentId, att.filename, att.kind).catch((e) => showError(`预览失败：${e.message}`));
     frag.append(chip);
   }
   if (attachDraft(kind).length > 0) {
@@ -365,10 +365,39 @@ function closeAttachPreview() {
  * expectedHash/expectedRevision（**用户实际看到的版本**——服务端事务内核对，版本已变=
  * VERSION_CONFLICT 不悄悄锚最新）；资源已更新的旧评论明确标旧（stale 同比 hash 与 revision
  * ——行号锚点不漂移到新版）。 */
-async function previewAttachment(attachmentId, filename) {
+async function previewAttachment(attachmentId, filename, kindHint) {
   const myGen = ++previewGeneration;
   const alive = () => myGen === previewGeneration;
   const originView = currentView(); // 来源会话快照（受限资源标注）
+  if (kindHint === 'image_file') {
+    // 图片预览（第二十八轮四）：previewImage（audience+实根+原件核对）→ <img> 渲染（浏览器
+    // 沙箱解码）；OCR=未实现、模型图片输入=未认证——如实标注，不以路径冒充模型已读。
+    const img = await command('attachment.previewImage', { attachmentId });
+    if (!alive()) return;
+    const ibox = el('attach-preview');
+    if (ibox == null) { showError(`图片预览（${img.filename ?? filename}）：${img.width}×${img.height} ${img.bytes}B——页面容器缺失`); return; }
+    ibox.classList.remove('hidden');
+    const ihead = document.createElement('div');
+    ihead.className = 'meta';
+    ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.mime} · ${img.width}×${img.height} · 原件 ${img.bytes}B · sha256=${img.hash.slice(0, 12)}… · v${img.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+    const iclose = document.createElement('button');
+    iclose.className = 'chip';
+    iclose.textContent = '关闭预览';
+    iclose.onclick = () => closeAttachPreview();
+    const iel2 = document.createElement('img');
+    iel2.src = img.dataUrl;
+    iel2.alt = img.filename ?? '图片附件';
+    iel2.style.maxWidth = '100%';
+    iel2.style.maxHeight = '280px';
+    iel2.onerror = () => { showError(`图片渲染失败（${img.filename ?? filename}）——原件已按 hash 校验，像素解码失败请回传截图`); };
+    const inote = document.createElement('div');
+    inote.className = 'meta';
+    inote.textContent = 'OCR 提取正文：未实现（明确不可用）· 模型图片输入：未认证（不发文件路径冒充模型已读——runtime 图片输入能力认证属后续批次）· 图片评论：随分批归属后续开放';
+    const iwrap = document.createElement('div');
+    iwrap.append(ihead, iclose, iel2, inote);
+    ibox.replaceChildren(iwrap);
+    return;
+  }
   const r = await command('attachment.previewText', { attachmentId });
   if (!alive()) return; // 迟到作废：已关闭/被新预览取代/已切换会话——不重开不覆盖
   const box = el('attach-preview');
@@ -451,7 +480,7 @@ function appendSentAttachmentChips(div, attachments) {
     chip.className = 'chip';
     chip.textContent = `📎 ${a.filename ?? a.artifactId}`;
     chip.title = '点按预览已发副本';
-    chip.onclick = () => void previewAttachment(a.artifactId, a.filename).catch((e) => showError(`预览失败：${e.message}`));
+    chip.onclick = () => void previewAttachment(a.artifactId, a.filename, a.kind).catch((e) => showError(`预览失败：${e.message}`));
     row.append(chip);
   }
   div.append(row);
@@ -470,16 +499,26 @@ function wireAttach(kind) {
     const convId = kind === 'dm' ? state.openDmId : state.conversationId;
     if (convId == null) { showError('请先打开会话再附加文件'); return; }
     try {
-      // 真实文件字节编码校验（第二十七轮四）：fatal 严格解码——无效 UTF-8 明确失败。
       const buf = await file.arrayBuffer();
-      let content;
-      try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
-      catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本首包按明确规则拒绝（二进制类随后续批次）`); return; }
-      const r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
+      // 图片附件（第二十八轮四）：原件上传（服务端 magic 校验+头部分析限幅）；文本走 fatal
+      // UTF-8 严格解码。判型按**文件真实字节**（file.type 由浏览器按内容嗅探——非扩展名）。
+      const isImage = (file.type || '').startsWith('image/');
+      let r;
+      if (isImage) {
+        let bin = '';
+        const u8 = new Uint8Array(buf);
+        for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+        r = await command('attachment.uploadImage', { conversationId: convId, filename: file.name, contentBase64: btoa(bin) });
+      } else {
+        let content;
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+        catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本按明确规则拒绝（图片选 PNG/JPEG/GIF/WebP；其余二进制随后续批次）`); return; }
+        r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
+      }
       if (!draftAttachments.has(targetKey)) draftAttachments.set(targetKey, []);
-      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated });
+      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: isImage ? 'image_file' : 'text_file' });
       if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : ''}`);
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : isImage ? `（${r.width}×${r.height}）` : ''}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
