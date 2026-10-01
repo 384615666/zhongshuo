@@ -201,6 +201,15 @@ function readStoreBytes(
 
 /** 二进制获准副本读取（图片/PDF 原件——内容寻址 {hash}.bin）：实根+实身份+sha256 核对；
  * 无截断（原件全量——渲染由 renderer 完成）。 */
+/**
+ * 受控原始字节读取（第三十一轮一：导出随包拷贝用）——与 readVerifiedBlob 同链（实根/
+ * 实身份/受控句柄/实际字节 sha256），但按资源 kind 的实际存储扩展名（text_file/code_file
+ * ={hash}.txt；其余={hash}.bin）读取。失败三态同 readStoreBytes。
+ */
+export function readVerifiedStoreRaw(blobPath: string, expectedHash: string, ext: 'txt' | 'bin', storeRoot?: string): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
+  return readStoreBytes(blobPath, expectedHash, storeRoot, ext);
+}
+
 export function readVerifiedBlob(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
   const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'bin');
   if (!r.ok) {

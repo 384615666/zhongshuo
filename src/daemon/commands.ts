@@ -38,7 +38,8 @@ import { join, resolve, basename } from 'node:path';
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
 import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes } from './attachments.ts';
-import { writeExport, TEXT_PREVIEW_EXTENSIONS } from './exportWriter.ts';
+import { writeExport, TEXT_PREVIEW_EXTENSIONS, ExportWriterError } from './exportWriter.ts';
+import { readRemoteConfig, writeRemoteConfig, createPairingCode, listDevices, revokeDeviceInDb, lanIps } from './remoteServer.ts';
 import {
   PDF_MAX_BYTES, OFFICE_MAX_BYTES, CSV_MAX_BYTES, ARTIFACT_PARSE_KINDS,
   validateExtractCache, renderSheetWindow, parseSheetRangeSpec,
@@ -54,6 +55,17 @@ export interface DaemonCommandDeps {
   db: ZhongshuoDatabase;
   localUserId: string;
   interruptTurn: (turnId: string) => Promise<void>;
+  /**
+   * 远程访问服务控制（DEV-25 第三十一轮三；entry 注入——测试直连不注入时 remote.* 命令
+   * 明确拒绝）：本机可信入口专用（配对码创建/配置/吊销/设备清单）。HTTP 远程通道在
+   * remoteServer.REMOTE_BLOCKED_METHODS 拦截同名方法——「创建配对码仅本机可信 UI」。
+   */
+  remoteControl?: {
+    restart: (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => Promise<{ address: string; port: number; fingerprint: string } | { stopped: true }>;
+    stop: () => Promise<void>;
+    invalidateDevice: (deviceId: string) => void;
+    current: () => { address: string; port: number; fingerprint: string } | null;
+  };
   /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
   appDataDir?: string;
   /**
@@ -138,6 +150,25 @@ import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
 
 const localScope = (userId: string): string => `user:${userId}`;
+
+/**
+ * 用户可见项目集（第三十一轮二）：navigation_preferences.visibleProjectIds 的**最新一条**
+ * 偏好行（无偏好行=全量项目可见——向后兼容；损坏/非数组=空集如实，不猜测）。scope=all
+ * 的聚合面（看板/Activity）用它过滤；显式 projectId 查询不受限（query≠visible 既定区别）。
+ */
+function visibleProjectIdsOf(db: ZhongshuoDatabase, viewerId: string): string[] {
+  const row = db.prepare('SELECT visible_project_ids_json FROM navigation_preferences WHERE viewer_id = ? ORDER BY revision DESC LIMIT 1').get(viewerId) as { visible_project_ids_json: string } | undefined;
+  if (row == null) {
+    return (db.prepare('SELECT id FROM projects ORDER BY rowid').all() as Array<{ id: string }>).map((r) => r.id);
+  }
+  try {
+    const ids = JSON.parse(row.visible_project_ids_json) as unknown;
+    if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) return [];
+    return ids as string[];
+  } catch {
+    return [];
+  }
+}
 
 /** project.open 的默认引导（成员/房间/房间成员关系/会话；重复打开不重复创建）。 */
 function bootstrapProject(db: ZhongshuoDatabase, projectId: string, agentNames?: string[]): void {
@@ -299,16 +330,18 @@ async function uploadDocumentAttachment(
     parseKind: 'pdf' | 'csv' | 'office';
   },
 ): Promise<{ data: Record<string, unknown>; replayed: boolean }> {
-  // ① 回执预查（早于一切解析）。
+  // ① 归属+audience+归档先于回执（第三十一轮一：重放同样过当前权限——旧回执不绕过
+  // 会话归档/访问变化；同号同参仍回原结果、同号异参仍冲突）。
+  const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+  const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+  if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
+  // ② 回执预查（早于一切解析；归属已核）。
   const receipt = getReceipt(deps.db, ctx.scope, ctx.commandId);
   if (receipt != null) {
     if (receipt.payload_hash !== ctx.payloadHash) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', '同 commandId 携带不同参数——幂等键冲突拒绝');
     if (receipt.result_json == null) throw new DaemonCommandError('RESULT_EXPIRED', '回执正文已按清理策略删除：用新 commandId 重新提交');
     return { data: JSON.parse(receipt.result_json) as Record<string, unknown>, replayed: true };
   }
-  const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
-  const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
-  if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
   const raw = Buffer.from(params.contentBase64, 'base64');
   if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '文档内容为空');
   if (raw.length > params.byteCap) throw new DaemonCommandError('VALIDATION_INVALID', `文档原件 ${raw.length}B 超过上限 ${params.byteCap}B（明确规则拒绝）`);
@@ -523,8 +556,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
   const payloadHash = computeCommandPayloadHash({ method: env.method, target: null, params: env.params, expectedRevision: env.expectedRevision ?? null });
   const scope = localScope(deps.localUserId);
   // runCommand 为同步事务：handler 必须同步返回（异步命令自包 runCommand，如 task.stop）。
-  const run = <T>(handler: () => T): { data: T; replayed: boolean } => {
-    const outcome = runCommand<T>(deps.db, { idempotencyScope: scope, commandId: env.commandId, payloadHash, now: Date.now() }, handler);
+  // replayGuard（第三十一轮一）：重放返回持久结果前执行的纯校验——旧回执不绕过当前
+  // 权限变化（会话归档/audience 变化后重放同号同参请求=明确拒绝）。
+  const run = <T>(handler: () => T, replayGuard?: () => void): { data: T; replayed: boolean } => {
+    const outcome = runCommand<T>(deps.db, { idempotencyScope: scope, commandId: env.commandId, payloadHash, now: Date.now(), ...(replayGuard != null ? { replayGuard } : {}) }, handler);
     if (!outcome.ok) throw new DaemonCommandError(outcome.error.code, outcome.error.message);
     return { data: outcome.data, replayed: outcome.replayed };
   };
@@ -680,6 +715,19 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
+        // 重放守卫（第三十一轮一）：旧回执不绕过当前状态——重放同号同参请求时若目标
+        // 会话已归档/归属变化/audience 失效，明确拒绝。
+        const submitReplayGuard = (): void => {
+          const t = params.target as { kind: string; projectId: string; conversationId: string };
+          if (t.kind === 'thread') {
+            const th = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get((params.target as { threadId: string }).threadId) as { conversation_id: string; project_id: string } | undefined;
+            if (th == null || th.conversation_id !== t.conversationId || th.project_id !== t.projectId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '线程目标与项目/会话不一致（重放拒绝）');
+          }
+          const conv = deps.db.prepare('SELECT id, project_id, kind, archived_at FROM conversations WHERE id = ?').get(t.conversationId) as { id: string; project_id: string; kind: string; archived_at: number | null } | undefined;
+          if (conv == null || conv.project_id !== t.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标会话不存在或不属于该项目（重放拒绝）');
+          assertConversationAudience(deps.db, deps.localUserId, t.conversationId);
+          if (t.kind === 'dm' && conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑（重放拒绝）');
+        };
         const result = run(() => {
           if (params.target.kind === 'thread') {
             const target = params.target;
@@ -810,7 +858,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges);
             return created.value;
           })();
-        });
+        }, submitReplayGuard);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'thread.toolCalls': {
@@ -2379,9 +2427,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // 取最高 pending 一条）。
         const params = z.strictObject({ scope: z.enum(['project', 'all']).default('project'), projectId: z.string().min(1).optional() }).parse(env.params);
         if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        // 可见范围（第三十一轮二）：scope=all ≠ 全部项目——按用户可见项目集
+        // （navigation_preferences.visibleProjectIds，无偏好行=全量）过滤；scope=project 的
+        // 显式指定不受可见集限制（query 范围与 visible 范围的既定区别）。
         const projects = (params.scope === 'project'
           ? deps.db.prepare('SELECT id, display_name FROM projects WHERE id = ?').all(params.projectId)
-          : deps.db.prepare('SELECT id, display_name FROM projects ORDER BY rowid').all()) as Array<{ id: string; display_name: string }>;
+          : (deps.db.prepare('SELECT id, display_name FROM projects ORDER BY rowid').all() as Array<{ id: string; display_name: string }>).filter((p) => visibleProjectIdsOf(deps.db, deps.localUserId).includes(p.id))) as Array<{ id: string; display_name: string }>;
         const groups = projects.map((p) => {
           const rooms = (deps.db.prepare('SELECT id, name FROM rooms WHERE project_id = ? ORDER BY rowid').all(p.id) as Array<{ id: string; name: string }>).map((room) => {
             const cards = (deps.db.prepare(
@@ -2427,6 +2478,74 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           return { projectId: p.id, displayName: p.display_name, rooms };
         });
         return withCommandId({ ok: true, data: { groups, note: '只读聚合——不改变任何任务状态；动作走正式命令（停止/验收/追加执行）' } });
+      }
+      case 'remote.config.get': {
+        // 远程配置读取（本机可信入口——remoteServer.REMOTE_BLOCKED_METHODS 在 HTTP 面拒绝）。
+        const cfg = readRemoteConfig(deps.db);
+        const cur = deps.remoteControl?.current() ?? null;
+        return withCommandId({ ok: true, data: { ...cfg, ...(cur != null ? { running: true, address: cur.address, fingerprint: cur.fingerprint } : { running: false }), lanIps: lanIps(), note: '默认仅本机回环；启用 LAN 需显式配置监听地址——HTTPS/WSS 强制' } });
+      }
+      case 'remote.config.set': {
+        // 远程配置写入+服务生命周期联动（entry 注入 remoteControl；测试直连=明确拒绝）。
+        const params = z.strictObject({
+          enabled: z.boolean(),
+          listenHost: z.string().min(1).max(100),
+          port: z.number().int().min(0).max(65535),
+          allowLan: z.boolean(),
+        }).refine((p) => !p.allowLan || p.listenHost !== '127.0.0.1', { message: 'allowLan=true 不能用回环地址——配置 LAN 地址（如 0.0.0.0 或具体 IP）', path: ['listenHost'] }).parse(env.params);
+        if (deps.remoteControl == null) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '远程服务控制未接线（本命令由 UI 宿主注入执行）');
+        const result = run(() => writeRemoteConfig(deps.db, params, Date.now()));
+        const outcome = await deps.remoteControl.restart(params);
+        return withCommandId({ ok: true, data: { config: result.data, ...(outcome !== undefined && 'stopped' in (outcome as object) ? { stopped: true } : outcome) } });
+      }
+      case 'remote.pairing.create': {
+        // 配对码创建（仅本机可信 UI；HTTP 面不暴露）。码只在本响应出现一次（摘要落库）。
+        const params = z.strictObject({ code: z.string().min(8).max(64).optional(), ttlMs: z.number().int().min(1000).max(600_000).optional() }).parse(env.params);
+        const cur = deps.remoteControl?.current() ?? null;
+        const created = createPairingCode(deps.db, Date.now(), params);
+        if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
+        return withCommandId({ ok: true, data: { pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt, address: cur?.address ?? null, fingerprint: cur?.fingerprint ?? null, note: '配对码 5 分钟内一次有效；地址与证书 SHA-256 指纹在设备端核对后完成信任（不降级 HTTP）' } });
+      }
+      case 'remote.devices.list': {
+        const devices = listDevices(deps.db);
+        const cur = deps.remoteControl?.current() ?? null;
+        return withCommandId({ ok: true, data: { devices, running: cur != null } });
+      }
+      case 'remote.device.revoke': {
+        // 吊销：持久事实+服务端内存联动（token/票据/活连接全部失效——下一条请求/事件即拒）。
+        const params = z.strictObject({ deviceId: z.string().min(1) }).parse(env.params);
+        const result = run(() => revokeDeviceInDb(deps.db, params.deviceId, Date.now()));
+        if (result.data) deps.remoteControl?.invalidateDevice(params.deviceId);
+        return withCommandId({ ok: true, data: { deviceId: params.deviceId, revoked: result.data }, replayed: result.replayed });
+      }
+      case 'nav.preferences': {
+        // 侧栏可见项目偏好（第三十一轮二）：scope=all 聚合面（看板/Activity）的正式真源。
+        // set 为整体覆盖（visibleProjectIds 全量提交）；activeProjectId 为 UI 活动项目记录。
+        // 隐藏项目 ≠ 归档——项目数据与显式查询不受影响，只是不进「全部」聚合面。
+        const params = z.strictObject({
+          clientId: z.string().min(1).max(200),
+          visibleProjectIds: z.array(z.string().min(1)).optional(),
+          activeProjectId: z.string().min(1).nullable().optional(),
+        }).parse(env.params);
+        const result = run(() => {
+          const existing = deps.db.prepare('SELECT visible_project_ids_json, active_project_id, revision FROM navigation_preferences WHERE viewer_id = ? AND client_id = ?').get(deps.localUserId, params.clientId) as { visible_project_ids_json: string; active_project_id: string | null; revision: number } | undefined;
+          if (params.visibleProjectIds == null && params.activeProjectId === undefined) {
+            return { visibleProjectIds: JSON.parse(existing?.visible_project_ids_json ?? '[]') as string[], activeProjectId: existing?.active_project_id ?? null, revision: existing?.revision ?? 0, allWhenNoPreference: existing == null };
+          }
+          const known = new Set((deps.db.prepare('SELECT id FROM projects').all() as Array<{ id: string }>).map((r) => r.id));
+          const nextVisible = params.visibleProjectIds ?? JSON.parse(existing?.visible_project_ids_json ?? '[]') as string[];
+          const unknown = nextVisible.filter((id) => !known.has(id));
+          if (unknown.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', `未知项目不能进可见集：${unknown.slice(0, 3).join('、')}`);
+          const nextActive = params.activeProjectId !== undefined ? params.activeProjectId : existing?.active_project_id ?? null;
+          if (nextActive != null && !known.has(nextActive)) throw new DaemonCommandError('VALIDATION_INVALID', `活动项目不存在：${nextActive}`);
+          deps.db.prepare(
+            `INSERT INTO navigation_preferences (viewer_id, client_id, visible_project_ids_json, active_project_id, expanded_project_ids_json, revision)
+             VALUES (?, ?, ?, ?, '[]', 1)
+             ON CONFLICT(viewer_id, client_id) DO UPDATE SET visible_project_ids_json = excluded.visible_project_ids_json, active_project_id = excluded.active_project_id, revision = revision + 1`,
+          ).run(deps.localUserId, params.clientId, JSON.stringify(nextVisible), nextActive);
+          return { visibleProjectIds: nextVisible, activeProjectId: nextActive, revision: (existing?.revision ?? 0) + 1, allWhenNoPreference: false };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'files.view': {
         // DEV-19 Files 集合（第二十七轮五）：**纯读**四类分列——项目文件（用户项目目录本身，
@@ -2516,11 +2635,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // Activity 流（DEV-18 剩余，第三十轮六）：domain_events 只读聚合——可见性=房间事件随
         // 项目可达、DM 事件仅本人参与（他人 DM 不进流）；kind 中文映射+轻量摘要（payload 白
         // 名单提取）；分页 before 游标。零运行零唤醒。
-        const params = z.strictObject({ projectId: z.string().min(1).optional(), scope: z.enum(['project', 'all']).default('all'), limit: z.number().int().min(1).max(200).default(80), before: z.number().optional() }).parse(env.params);
+        // 稳定游标（第三十一轮二）：created_at 同毫秒多事件不漏——(created_at, seq) 双键
+        // 决定性排序；before/beforeSeq 成对（取上一页最后一条的 at/seq）。
+        const params = z.strictObject({ projectId: z.string().min(1).optional(), scope: z.enum(['project', 'all']).default('all'), limit: z.number().int().min(1).max(200).default(80), before: z.number().optional(), beforeSeq: z.number().int().optional() }).parse(env.params);
         if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
         const projectIds = params.scope === 'project'
           ? [params.projectId!]
-          : (deps.db.prepare('SELECT id FROM projects ORDER BY rowid').all() as Array<{ id: string }>).map((r) => r.id);
+          : visibleProjectIdsOf(deps.db, deps.localUserId);
         if (projectIds.length === 0) return withCommandId({ ok: true, data: { items: [], note: '暂无项目' } });
         const KIND_LABEL: Record<string, string> = {
           'message.submitted': '消息提交', 'task.created': '任务创建', 'task.dispatched': '任务派发', 'task.completed': '任务完成',
@@ -2529,16 +2650,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           'delivery.changes_requested': '验收退回', 'conversation.archived': '会话归档', 'message.recorded': '消息记录',
         };
         const rows = deps.db.prepare(
-          `SELECT e.event_id, e.kind, e.created_at, e.project_id, e.conversation_id, e.thread_id, e.task_id, e.payload_json,
+          `SELECT e.event_id, e.seq, e.kind, e.created_at, e.project_id, e.conversation_id, e.thread_id, e.task_id, e.payload_json,
                   p.display_name AS project_name, c.kind AS conversation_kind
            FROM domain_events e
            LEFT JOIN projects p ON p.id = e.project_id
            LEFT JOIN conversations c ON c.id = e.conversation_id
            WHERE e.project_id IN (${projectIds.map(() => '?').join(',')})
              AND (c.id IS NULL OR c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
-             ${params.before != null ? 'AND e.created_at < ?' : ''}
-           ORDER BY e.created_at DESC LIMIT ?`,
-        ).all(...projectIds, deps.localUserId, ...(params.before != null ? [params.before] : []), params.limit) as Array<{ event_id: string; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string | null; project_name: string | null; conversation_kind: string | null }>;
+             ${params.before != null ? (params.beforeSeq != null ? 'AND (e.created_at < ? OR (e.created_at = ? AND e.seq < ?))' : 'AND e.created_at < ?') : ''}
+           ORDER BY e.created_at DESC, e.seq DESC LIMIT ?`,
+        ).all(...projectIds, deps.localUserId, ...(params.before != null ? (params.beforeSeq != null ? [params.before, params.before, params.beforeSeq] : [params.before]) : []), params.limit) as Array<{ event_id: string; seq: number; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string | null; project_name: string | null; conversation_kind: string | null }>;
         const items = rows.map((e) => {
           let summary = '';
           try {
@@ -2547,7 +2668,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             summary = String(text).slice(0, 80);
           } catch { /* 残缺不虚构 */ }
           return {
-            eventId: e.event_id, kind: e.kind, kindLabel: KIND_LABEL[e.kind] ?? e.kind, at: e.created_at, summary,
+            eventId: e.event_id, seq: e.seq, kind: e.kind, kindLabel: KIND_LABEL[e.kind] ?? e.kind, at: e.created_at, summary,
             projectId: e.project_id, projectName: e.project_name ?? e.project_id,
             conversationId: e.conversation_id, threadId: e.thread_id, taskId: e.task_id,
             locate: e.thread_id != null ? `#task=${e.task_id ?? ''}` : e.conversation_id != null ? (e.conversation_kind === 'dm' ? `#dm=${e.conversation_id}` : `#conv=${e.conversation_id}`) : null,
@@ -2599,8 +2720,15 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, content: cut.text, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
       }
       case 'export.create': {
-        // 导出（第三十轮五）：范围快照+audience 逐项校验（导出不扩大私信范围）——md/html/docx
-        // 三格式；HTML 资源随导出包（离线可读）；失败清理半截产物；每次新 exportId 目录不覆盖。
+        // 导出（第三十轮五；第三十一轮一完整性收口）：
+        // - 归属先于回执：目标会话+线程真实归属（threadId 必须属于声明的 conversation/project——
+        //   「合法会话 A+其他会话线程 B」整笔拒绝零产物）与 audience 校验在回执预查**之前**
+        //   （重放同样过当前权限——旧回执不绕过权限变化）；
+        // - 快照在事务内核取（消息+附件一次固定）；附件逐项核对源会话（exportWriter）；
+        // - 拷贝走受控校验（readVerifiedBlob：实根/实身份/实际字节 sha256——blobRoot 参与）；
+        //   拷贝后事务复核归属/audience/引用版本（artifact id+revision+hash 不变——迟到变化
+        //   整笔失败清理，防以旧版本冒充新资源导出）；manifest 与最终 assets 字节一致；
+        // - 预算超限明确失败（提示收窄范围）不静默缩小；重活异步逐件让出不堵 daemon。
         const params = z.strictObject({
           target: z.discriminatedUnion('kind', [
             z.strictObject({ kind: z.literal('conversation'), projectId: z.string().min(1), conversationId: z.string().min(1) }),
@@ -2608,36 +2736,73 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           ]),
           format: z.enum(['md', 'html', 'docx']),
         }).parse(env.params);
-        // 幂等（第三十轮五）：同 commandId 重放返回持久结果——不重复生成新导出目录。
+        // ① 归属+audience（先于回执——重放也过当前权限）。
+        const conv = deps.db.prepare('SELECT id, project_id, kind, room_id, archived_at FROM conversations WHERE id = ?').get(params.target.conversationId) as { id: string; project_id: string; kind: string; room_id: string | null; archived_at: number | null } | undefined;
+        if (conv == null || conv.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出目标会话不存在或不属于该项目');
+        if (params.target.kind === 'thread') {
+          const th = deps.db.prepare('SELECT id, conversation_id, project_id FROM conversation_threads WHERE id = ?').get(params.target.threadId) as { id: string; conversation_id: string; project_id: string } | undefined;
+          if (th == null || th.conversation_id !== conv.id || th.project_id !== params.target.projectId) {
+            throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', `导出目标线程不存在或不属于声明的会话/项目（threadId=${params.target.threadId.slice(0, 12)}…）——整笔拒绝`);
+          }
+        }
+        assertConversationAudience(deps.db, deps.localUserId, conv.id); // audience 逐项（DM=本人参与）
+        // ② 回执预查（归属/权限已核——同号同参原结果、同号异参冲突）。
         const priorReceipt = getReceipt(deps.db, scope, env.commandId);
         if (priorReceipt != null) {
           if (priorReceipt.payload_hash !== payloadHash) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', '同 commandId 携带不同参数——幂等键冲突拒绝');
           if (priorReceipt.result_json == null) throw new DaemonCommandError('RESULT_EXPIRED', '回执正文已按清理策略删除：用新 commandId 重新提交');
           return withCommandId({ ok: true, data: JSON.parse(priorReceipt.result_json), replayed: true });
         }
-        const conv = deps.db.prepare('SELECT id, project_id, kind, room_id, archived_at FROM conversations WHERE id = ?').get(params.target.conversationId) as { id: string; project_id: string; kind: string; room_id: string | null; archived_at: number | null } | undefined;
-        if (conv == null || conv.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出目标会话不存在或不属于该项目');
-        assertConversationAudience(deps.db, deps.localUserId, conv.id); // audience 逐项（DM=本人参与）
         const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
         const exportId = `exp_${randomUUID().slice(0, 12)}`;
         const exportDir = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'exports', exportId);
-        const messages = (params.target.kind === 'thread'
-          ? deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq').all(params.target.threadId)
-          : deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq').all(conv.id)) as Array<{ id: string; conversation_id: string; thread_id: string | null; thread_message_seq: number | null; author_type: string; author_id: string; body_json: string; created_at: number }>;
-        const msgIds = messages.map((m) => m.id);
-        const attachments = msgIds.length === 0 ? [] : (deps.db.prepare(
-          `SELECT ma.message_id, ma.display_name, a.id AS artifact_id, a.kind, a.hash, a.revision, a.blob_path, a.source_name
-           FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
-           WHERE ma.message_id IN (${msgIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
-        ).all(...msgIds) as Array<{ message_id: string; display_name: string | null; artifact_id: string; kind: string; hash: string; revision: number; blob_path: string; source_name: string | null }>);
+        // ③ 快照事务内核：归属复检+消息/附件一次固定（读侧一致视图）。
+        const snapshot = deps.db.transaction(() => {
+          const c2 = deps.db.prepare('SELECT id, project_id FROM conversations WHERE id = ?').get(conv.id) as { id: string; project_id: string } | undefined;
+          if (c2 == null || c2.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出目标会话已不存在或归属变化——整笔拒绝');
+          if (params.target.kind === 'thread') {
+            const t2 = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get(params.target.threadId) as { conversation_id: string; project_id: string } | undefined;
+            if (t2 == null || t2.conversation_id !== conv.id || t2.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出目标线程归属变化——整笔拒绝');
+          }
+          assertConversationAudience(deps.db, deps.localUserId, conv.id);
+          const messages = (params.target.kind === 'thread'
+            ? deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE thread_id = ? AND conversation_id = ? ORDER BY thread_message_seq').all(params.target.threadId, conv.id)
+            : deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq').all(conv.id)) as Array<{ id: string; conversation_id: string; thread_id: string | null; thread_message_seq: number | null; author_type: string; author_id: string; body_json: string; created_at: number }>;
+          const msgIds = messages.map((m) => m.id);
+          const attachments = msgIds.length === 0 ? [] : (deps.db.prepare(
+            `SELECT ma.message_id, ma.display_name, a.id AS artifact_id, a.kind, a.hash, a.revision, a.blob_path, a.source_name, a.conversation_id
+             FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
+             WHERE ma.message_id IN (${msgIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+          ).all(...msgIds) as Array<{ message_id: string; display_name: string | null; artifact_id: string; kind: string; hash: string; revision: number; blob_path: string; source_name: string | null; conversation_id: string }>);
+          return { messages, attachments };
+        })();
         try {
-          const outcome = await writeExport({ conv, target: params.target, messages, attachments, format: params.format, exportDir, blobRoot });
-          const data = { exportId, dir: exportDir, ...outcome };
-          run(() => data); // 回执落库（重放幂等——不重复生成新目录）
-          return withCommandId({ ok: true, data, replayed: false });
+          const outcome = await writeExport({ conv, target: params.target, messages: snapshot.messages, attachments: snapshot.attachments, format: params.format, exportDir, blobRoot });
+          // 测试注入口（第三十一轮一：拷贝后/复核前窗口——模拟「复制期间引用版本变化」；
+          // 生产不设）。
+          const hook = (globalThis as { __zsTestExportHook?: () => void | Promise<void> }).__zsTestExportHook;
+          if (hook != null) await hook();
+          // ④ 拷贝后复核事务：归属/audience/引用版本（id+revision+hash）不变才落回执——
+          // 导出期间归档/资源变化=整笔失败清理（不留成功 artifact/半截导出/错误关联）。
+          const verify = deps.db.transaction((): { exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number; missing: number }; manifest: unknown } => {
+            const c3 = deps.db.prepare('SELECT project_id FROM conversations WHERE id = ?').get(conv.id) as { project_id: string } | undefined;
+            if (c3 == null || c3.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出完成时会话归属已变化——整笔拒绝（不留半截导出）');
+            assertConversationAudience(deps.db, deps.localUserId, conv.id);
+            for (const f of outcome.manifest.files) {
+              const row = deps.db.prepare('SELECT revision, hash FROM artifacts WHERE id = ?').get(f.artifactId) as { revision: number; hash: string } | undefined;
+              if (row == null || row.revision !== f.revision || row.hash !== f.sha256) {
+                throw new DaemonCommandError('EXPORT_CONFLICT', `导出期间附件引用版本变化（${f.sourceName ?? f.artifactId}：现 v${row?.revision ?? '?'} ≠ 快照 v${f.revision}）——整笔拒绝（半截产物已清理）`);
+              }
+            }
+            return { exportId, dir: exportDir, files: outcome.files, stats: outcome.stats, manifest: outcome.manifest };
+          });
+          const data = verify();
+          const receipt = run(() => data); // 回执落库（重放幂等——不重复生成新目录）
+          return withCommandId({ ok: true, data: receipt.data, replayed: receipt.replayed });
         } catch (error) {
           // 失败清理半截产物（不留半个导出目录）。
           try { rmSync(exportDir, { recursive: true, force: true }); } catch { /* 尽力 */ }
+          if (error instanceof ExportWriterError) throw new DaemonCommandError(error.code, error.message);
           if (error instanceof DaemonCommandError) throw error;
           throw new DaemonCommandError('STORAGE_UNAVAILABLE', `导出失败（已清理半截产物）：${error instanceof Error ? error.message : String(error)}`);
         }

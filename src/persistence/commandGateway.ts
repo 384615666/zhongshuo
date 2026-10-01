@@ -17,6 +17,12 @@ export interface CommandGatewayInput {
   commandId: string;
   payloadHash: string;
   now: number;
+  /**
+   * 重放授权重检（第三十一轮一）：重放返回持久结果**之前**执行的纯校验（抛 DaemonCommandError
+   * = 拒绝重放——旧回执不因权限变化绕过当前校验；不产生任何写入）。文件头「授权重检（含
+   * 重放）由入口在调用本网关前执行」的正式通道。
+   */
+  replayGuard?: () => void;
 }
 
 export type CommandOutcome<T> =
@@ -55,6 +61,7 @@ export function runCommand<T>(
           },
         };
       }
+      inp.replayGuard?.(); // 重放同样过当前授权（抛错=拒绝重放；事务无写入）
       return { ok: true, data: JSON.parse(existing.result_json) as T, replayed: true };
     }
 

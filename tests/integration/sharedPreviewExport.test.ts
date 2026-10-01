@@ -143,7 +143,7 @@ describe('export.create（md/html/docx）', () => {
     expect(data.stats.missing).toBe(1);
     expect(data.stats.attachments).toBe(0);
     const md = readFileSync(join(data.dir, 'index.md'), 'utf8');
-    expect(md).toContain('原件缺失');
+    expect(md).toContain('原件不可读');
     // 同 commandId 重放：回执预查（不重复生成新目录）。
     const commandId = `exp-replay-${randomUUID().slice(0, 8)}`;
     const first = await env.send('export.create', { target: { kind: 'conversation', projectId: 'p1', conversationId: 'dm_a' }, format: 'md' }, commandId);
