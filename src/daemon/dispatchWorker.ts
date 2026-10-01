@@ -385,21 +385,11 @@ export class DispatchWorker {
     const runId = `run_${randomUUID()}`;
     const turnId = `turn_${randomUUID()}`;
 
-    // 提醒调用格（第二十五轮一）：任务源于提醒→在**实际 startTurn 边界**统一检查+持久入账
-    //（初始/确认/跟进/修复/追加/重派全走此处——不能通过新 run 绕开）。已预占的派发挂钩本
-    // turn；无预占的新增 turn 需有空格。拒绝=不建 run/turn：任务 BLOCKED 留证+提醒 paused
-    // +审计（用户提高额度后经 task.redispatch 显式续跑）。
-    const slot = this.db.transaction(() => acquireReminderTurnSlot(this.db, task.id, turnId, claimed.dispatch_key))();
-    if (!slot.ok) {
-      const txHold = this.db.transaction(() => {
-        this.db.prepare("UPDATE reminders SET status = CASE WHEN status = 'done' THEN 'done' ELSE 'paused' END, paused_reason = ?, updated_at = ? WHERE id = ? AND status IN ('active','done')").run(slot.reason, Date.now(), slot.reminderId);
-        this.transitionTask(task.id, 'BLOCKED');
-        this.audit(task, null, null, 'reminder.budgetGateHeld', { reminderId: slot.reminderId, reason: slot.reason, dispatchKey: claimed.dispatch_key, note: '提醒调用额度已尽/损坏：不派发（提高额度后经追加执行续跑）' });
-      });
-      txHold();
-      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
-      return;
-    }
+    // 提醒调用格（第二十五轮一+第二十六轮一）：任务源于提醒→在**实际 startTurn 边界**统一
+    // 检查+持久入账（初始/确认/跟进/修复/追加/重派全走此处——不能通过新 run 绕开）。
+    // **原子收敛**：acquireReminderTurnSlot 在 createRun 事务内首句执行（挂钩与 run/turn
+    // 创建同事务——组装失败/创建前崩溃/重领不留下指向不存在 turn 的 inflight，亦不释放
+    // 可能已发出的调用）；hold=ReminderSlotHeldError 回滚后在 catch 内走 hold 路径。
 
     // 格式修复工作项（第六轮·下：结构化判定——不靠 dispatch_key 字符串后缀）。
     // pending：本派发即修复轮——先做一致性复核（损坏→阻塞留证不花调用），上下文与预算
@@ -542,6 +532,8 @@ export class DispatchWorker {
     try {
       const collabSnap = this.collabSnapshotFor(task.project_id);
       const createRun = this.db.transaction(() => {
+        // 调用格首句（原子收敛——第二十六轮一）：与 run/turn 创建同事务；hold=抛错整体回滚。
+        acquireReminderTurnSlot(this.db, turnId, claimed.dispatch_key);
         this.db.prepare(
           `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
            VALUES (?, ?, ?, ?, 'DIRECT', 0, 'RUNNING', ?)`,
@@ -569,7 +561,24 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'task.repairConsumed', { workitemId: repairItem.id, sourceTurnId: repairItem.source_turn_id, sourceResultKey: repairItem.source_result_key, resultKey: assembled.value.resultKey, budgetCarryoverUsed: priorUsed });
         }
       });
-      createRun();
+      try {
+        createRun();
+      } catch (slotError) {
+        // 提醒调用格 hold（原子收敛路径）：createRun 已回滚（无 run/turn/inflight）——走留证。
+        if ((slotError as { name?: unknown }).name === 'ReminderSlotHeld') {
+          const held = slotError as { reason: 'budget_exceeded' | 'budget_corrupt'; reminderId: string };
+          this.startingTurns.delete(turnId);
+          const txHold = this.db.transaction(() => {
+            this.db.prepare("UPDATE reminders SET status = CASE WHEN status = 'done' THEN 'done' ELSE 'paused' END, paused_reason = ?, updated_at = ? WHERE id = ? AND status IN ('active','done')").run(held.reason, Date.now(), held.reminderId);
+            this.transitionTask(task.id, 'BLOCKED');
+            this.audit(task, null, null, 'reminder.budgetGateHeld', { reminderId: held.reminderId, reason: held.reason, dispatchKey: claimed.dispatch_key, note: '提醒调用额度已尽/损坏：不派发（提高额度后经追加执行续跑）' });
+          });
+          txHold();
+          await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+          return;
+        }
+        throw slotError;
+      }
 
       // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
       // DM（DEV-22）：私信模板——无房间/线程上下文，不填伪造 roomId。
@@ -2293,10 +2302,10 @@ export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): Ac
 
 function parseInitialTaskId(dispatchKey: string): string | null {
   // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）；
-  // reminder:{occurrence}=提醒跟进派发（第二十五轮三：绑定 threadId/taskId 的提醒跟进既有任务
-  // ——occurrence 维度唯一键，不与手工 redispatch 撞）。
+  // reminder:{reminderId}:{occurrence}=提醒跟进派发（第二十六轮一：**完整身份键**——含
+  // reminderId（同任务可绑多提醒，同刻触发不撞唯一键），归属/预算沿键解析）。
   // dmtask:=私信内部执行（DEV-22：dm_turn 同走 DIRECT 派发路径，key 前缀区分房间任务）。
-  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+|reminder:[^:]+)$/);
+  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+|reminder:[^:]+:[^:]+)$/);
   return m?.[1] ?? null;
 }
 

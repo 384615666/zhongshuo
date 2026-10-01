@@ -223,7 +223,8 @@ describe('第二十五轮·三：目标与授权链（跟进既有任务，不�
     expect(followUp).toBeTruthy();
     expect(followUp.author_id).toBe(`reminder:${reminderId}`);
     expect(JSON.parse(followUp.body_json).text).toContain('【提醒触发】跟进提醒');
-    expect((db.prepare('SELECT dispatch_key FROM outbox WHERE dispatch_key = ?').get(`task:${taskId}:reminder:${at}`) as { dispatch_key: string }).dispatch_key).toBe(`task:${taskId}:reminder:${at}`);
+    const followDispatchKey = `task:${taskId}:reminder:${reminderId}:${at}`;
+    expect((db.prepare('SELECT dispatch_key FROM outbox WHERE dispatch_key = ?').get(followDispatchKey) as { dispatch_key: string }).dispatch_key).toBe(followDispatchKey);
     // worker 消费跟进派发 → 输入含提醒模板体；调用台账+1。
     const { worker: worker2, adapter: adapter2 } = makeWorker(db, [validDone('跟进完成')]);
     await worker2.runOnce();

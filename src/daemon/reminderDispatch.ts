@@ -75,10 +75,24 @@ export function insertReminderWakeMessage(db: ZhongshuoDatabase, input: Reminder
   return { messageId, existed: false };
 }
 
-/** 派发占用一格调用额度（持久预占——与派发创建同事务；tag 唯一锚=occurrence/派发键）。 */
-export function reserveReminderCall(db: ZhongshuoDatabase, input: { reminderId: string; taskId: string; tag: string; now: number }): void {
-  db.prepare('INSERT INTO reminder_calls (reminder_id, task_id, dispatch_tag, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(input.reminderId, input.taskId, input.tag, 'reserved', input.now, input.now);
+/** 派发占用一格调用额度（持久预占——与派发创建同事务；tag=完整 occurrence 身份
+ * `occ:{reminderId}:{scheduledAt}`（第二十六轮一：一个 task 可绑多提醒——身份含 rid，
+ * 同任务同刻两提醒不撞）；dispatch_key=创建该格的完整派发键（恢复/对账锚）。 */
+export function reserveReminderCall(db: ZhongshuoDatabase, input: { reminderId: string; taskId: string; tag: string; dispatchKey: string; now: number }): void {
+  db.prepare('INSERT INTO reminder_calls (reminder_id, task_id, dispatch_tag, dispatch_key, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(input.reminderId, input.taskId, input.tag, input.dispatchKey, 'reserved', input.now, input.now);
+}
+
+/** worker 侧 hold 信号（在 createRun 事务内抛出→回滚 run/turn/调用格——原子收敛）。 */
+export class ReminderSlotHeldError extends Error {
+  readonly reason: 'budget_exceeded' | 'budget_corrupt';
+  readonly reminderId: string;
+  constructor(reason: 'budget_exceeded' | 'budget_corrupt', reminderId: string) {
+    super(`reminder-slot-held:${reason}:${reminderId}`);
+    this.name = 'ReminderSlotHeld';
+    this.reason = reason;
+    this.reminderId = reminderId;
+  }
 }
 
 /** 调用额度占用数（保守口径：released 之外全部计入——含在途/未知/失败；重启不清零）。 */
@@ -86,34 +100,57 @@ export function reminderCallUsage(db: ZhongshuoDatabase, reminderId: string): nu
   return (db.prepare("SELECT count(*) c FROM reminder_calls WHERE reminder_id = ? AND status != 'released'").get(reminderId) as { c: number }).c;
 }
 
-/** 任务→提醒归属（occurrence.task_id 锚——派发与确认创建的任务都登记）。 */
+/** 任务→提醒归属（occurrence.task_id 锚）。**注意（第二十六轮一）**：绑定既有任务后一个
+ * task 可对应多个提醒——本函数只用于展示/汇总类"任一归属"场景，**预算与派发归属必须走
+ * reminderOwnershipOfDispatch（派发键/源 turn/最近调用行的准确来源）**，不得按任务唯一推断。 */
 export function reminderLinkageForTask(db: ZhongshuoDatabase, taskId: string): string | null {
   return (db.prepare('SELECT reminder_id FROM reminder_occurrences WHERE task_id = ? LIMIT 1').get(taskId) as { reminder_id: string } | undefined)?.reminder_id ?? null;
 }
 
-/** worker 建 turn 前统一领取调用格（在 createRun 同事务调用）：
+/** 派发键→(taskId, reminderId | null) 归属解析（第二十六轮一：**准确来源**——一个 task 可绑
+ * 多个提醒，不能按 task 唯一推断）：
+ * - `task:{id}:reminder:{rid}:{sat}` → 跟进派发，rid 从键直接解析（完整身份键）；
+ * - `task:{id}:repair:{sourceTurn}` → 修复沿**源 turn** 的调用行归属；
+ * - 其他（initial/redispatch）→ 返回 null（由调用格状态判定：initial=该任务未挂钩预占；
+ *   redispatch=该任务最近一条调用行的提醒——修复/追加/重派沿准确来源计数，不消耗另一提醒预占）。 */
+export function reminderOwnershipOfDispatch(db: ZhongshuoDatabase, dispatchKey: string): { taskId: string; reminderId: string | null } {
+  const follow = dispatchKey.match(/^(?:dm)?task:(.+):reminder:([^:]+):(\d+)$/);
+  if (follow != null) return { taskId: follow[1]!, reminderId: follow[2]! };
+  const taskId = (dispatchKey.match(/^(?:dm)?task:([^:]+):/) ?? [null, null])[1] ?? dispatchKey;
+  const repair = dispatchKey.match(/^task:([^:]+):repair:(.+)$/);
+  if (repair != null) {
+    const bySource = (db.prepare('SELECT reminder_id FROM reminder_calls WHERE turn_id = ? ORDER BY rowid DESC LIMIT 1').get(repair[2]) as { reminder_id: string } | undefined)?.reminder_id ?? null;
+    return { taskId, reminderId: bySource };
+  }
+  return { taskId, reminderId: null };
+}
+
+/** worker 建 turn 前统一领取调用格（**与 run/turn 创建同一事务**调用——第二十六轮一：原子
+ * 收敛，组装失败/创建前崩溃不留下指向不存在 turn 的 inflight）：
  * - 已有本任务的未挂钩预占（派发/确认时落）→ 挂钩本 turn（不重复计数）；
- * - 无预占（修复/追加/重派等新增 turn）→ 检查额度，允许则入账 inflight，拒绝则 fail。
- * 崩溃安全：与 run/turn 创建同事务（要么都落要么都不落）。 */
-export function acquireReminderTurnSlot(db: ZhongshuoDatabase, taskId: string, turnId: string, dispatchKey: string): { ok: true } | { ok: false; reason: 'budget_exceeded' | 'budget_corrupt'; reminderId: string } {
-  const reminderId = reminderLinkageForTask(db, taskId);
-  if (reminderId == null) return { ok: true }; // 非提醒派生任务——产品预算链自理
+ * - 无预占（修复/追加/重派等新增 turn）→ 按**准确归属**检查额度，允许则入账 inflight；
+ *   拒绝则 fail（不派发）。归属：跟进键从键解析；修复沿源 turn；追加=任务最近调用行。 */
+export function acquireReminderTurnSlot(db: ZhongshuoDatabase, turnId: string, dispatchKey: string): { ok: true } | { ok: false; reason: 'budget_exceeded' | 'budget_corrupt'; reminderId: string } {
+  const ownership = reminderOwnershipOfDispatch(db, dispatchKey);
+  let reminderId = ownership.reminderId;
+  if (reminderId == null) {
+    const pending = db.prepare("SELECT reminder_id FROM reminder_calls WHERE task_id = ? AND turn_id IS NULL AND status = 'reserved' LIMIT 1").get(ownership.taskId) as { reminder_id: string } | undefined;
+    if (pending != null) reminderId = pending.reminder_id; // 初始派发的预占即归属
+    else reminderId = (db.prepare('SELECT reminder_id FROM reminder_calls WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(ownership.taskId) as { reminder_id: string } | undefined)?.reminder_id ?? null; // 追加/修复兜底=任务最近调用行
+  }
+  if (reminderId == null) return { ok: true }; // 非提醒派生派发——产品预算链自理
   const budgetRow = db.prepare('SELECT budget_json FROM reminders WHERE id = ?').get(reminderId) as { budget_json: string | null } | undefined;
-  if (budgetRow == null) return { ok: true };
-  if (budgetRow.budget_json == null) return { ok: true };
-  let parsed: unknown;
-  try { parsed = JSON.parse(budgetRow.budget_json); } catch { return { ok: false, reason: 'budget_corrupt', reminderId }; }
-  const limit = parsed as { sum?: unknown };
-  if (limit == null || typeof limit !== 'object' || !Number.isInteger(limit.sum) || (limit.sum as number) < 0) return { ok: false, reason: 'budget_corrupt', reminderId };
-  const pending = db.prepare("SELECT id FROM reminder_calls WHERE reminder_id = ? AND task_id = ? AND turn_id IS NULL AND status = 'reserved' LIMIT 1").get(reminderId, taskId) as { id: number } | undefined;
+  const limit = budgetRow == null ? null : budgetLimitOf(budgetRow.budget_json);
+  if (limit === 'corrupt') throw new ReminderSlotHeldError('budget_corrupt', reminderId); // 无预算上限（null）=不设限但**仍入账**（归属审计）
+  const pending = db.prepare("SELECT id FROM reminder_calls WHERE reminder_id = ? AND task_id = ? AND turn_id IS NULL AND status = 'reserved' LIMIT 1").get(reminderId, ownership.taskId) as { id: number } | undefined;
   const now = Date.now();
   if (pending != null) {
-    db.prepare('UPDATE reminder_calls SET turn_id = ?, status = ?, updated_at = ? WHERE id = ?').run(turnId, 'inflight', now, pending.id);
+    db.prepare('UPDATE reminder_calls SET turn_id = ?, status = ?, dispatch_key = COALESCE(dispatch_key, ?), updated_at = ? WHERE id = ?').run(turnId, 'inflight', dispatchKey, now, pending.id);
     return { ok: true };
   }
-  if (reminderCallUsage(db, reminderId) >= (limit.sum as number)) return { ok: false, reason: 'budget_exceeded', reminderId };
-  db.prepare('INSERT INTO reminder_calls (reminder_id, task_id, turn_id, dispatch_tag, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(reminderId, taskId, turnId, dispatchKey, 'inflight', now, now);
+  if (limit != null && reminderCallUsage(db, reminderId) >= limit.sum) throw new ReminderSlotHeldError('budget_exceeded', reminderId); // null=无上限（仍入账）
+  db.prepare('INSERT INTO reminder_calls (reminder_id, task_id, turn_id, dispatch_tag, dispatch_key, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(reminderId, ownership.taskId, turnId, dispatchKey, dispatchKey, 'inflight', now, now);
   return { ok: true };
 }
 
@@ -149,7 +186,7 @@ export function dispatchReminderExecution(db: ZhongshuoDatabase, input: Reminder
       author,
     });
     if (r.taskId == null) throw new Error(`dispatch-failed:dm-task-not-created(${r.note ?? 'unknown'})`);
-    if (input.reminder.budget_json != null) reserveReminderCall(db, { reminderId: input.reminder.id, taskId: r.taskId, tag: `occ:${input.scheduledAt}`, now: input.now });
+    reserveReminderCall(db, { reminderId: input.reminder.id, taskId: r.taskId, tag: `occ:${input.reminder.id}:${input.scheduledAt}`, dispatchKey: `dmtask:${r.taskId}:initial`, now: input.now });
     return { taskId: r.taskId, messageId: r.messageId, conversationKind: 'dm', followUp: false };
   }
   if (conv.kind !== 'room' || conv.room_id == null) throw new Error(`dispatch-failed:conversation-kind(${conv.kind})`);
@@ -180,9 +217,10 @@ export function dispatchReminderExecution(db: ZhongshuoDatabase, input: Reminder
       conversationId: input.reminder.conversation_id, threadId, taskId: task.id,
       kind: 'thread.replyAdded', createdAt: input.now, payload: { messageId, reminderFollowUp: input.reminder.id },
     });
-    // 跟进派发键（occurrence 维度唯一——与手工 redispatch 键不撞）。
-    db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(`task:${task.id}:reminder:${input.scheduledAt}`);
-    if (input.reminder.budget_json != null) reserveReminderCall(db, { reminderId: input.reminder.id, taskId: task.id, tag: `occ:${input.scheduledAt}`, now: input.now });
+    // 跟进派发键（完整身份键——第二十六轮一：含 reminderId，同任务同刻两提醒不撞唯一键）。
+    const dispatchKey = `task:${task.id}:reminder:${input.reminder.id}:${input.scheduledAt}`;
+    db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(dispatchKey);
+    reserveReminderCall(db, { reminderId: input.reminder.id, taskId: task.id, tag: `occ:${input.reminder.id}:${input.scheduledAt}`, dispatchKey, now: input.now });
     return { taskId: task.id, messageId, conversationKind: 'room', followUp: true };
   }
   const ids = { messageId: `msg_${randomUUID()}`, threadId: `thread_${randomUUID()}`, taskId: `task_${randomUUID()}`, taskEventId: `evt_${randomUUID()}`, threadEventId: `evt_${randomUUID()}` };
@@ -202,7 +240,7 @@ export function dispatchReminderExecution(db: ZhongshuoDatabase, input: Reminder
     now: input.now,
   });
   if (!created.ok || created.value.taskId == null) throw new Error(`dispatch-failed:room-task(${created.ok ? 'no-task' : created.error.code})`);
-  if (input.reminder.budget_json != null) reserveReminderCall(db, { reminderId: input.reminder.id, taskId: created.value.taskId, tag: `occ:${input.scheduledAt}`, now: input.now });
+  reserveReminderCall(db, { reminderId: input.reminder.id, taskId: created.value.taskId, tag: `occ:${input.reminder.id}:${input.scheduledAt}`, dispatchKey: `task:${created.value.taskId}:initial`, now: input.now });
   return { taskId: created.value.taskId, messageId: created.value.messageId, conversationKind: 'room', followUp: false };
 }
 

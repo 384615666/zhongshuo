@@ -175,9 +175,9 @@ describe('DEV-23 正式合同：原子触发+正式派发链（第二十四轮�
     expect(wake.author_type).toBe('system');
     expect(JSON.parse(wake.body_json).text).toContain('待我处理'); // 确认入口指路
     // mine.pending：待确认触发=可行动项。
-    const pending = await h.cmd<{ projects: Array<{ reminderAwaits: Array<{ reminder_id: string; scheduled_at: number; title: string | null }> }> }>('mine.pending', {});
-    const entry = pending.projects.flatMap((p) => p.reminderAwaits).find((x) => x.reminder_id === reminderId);
-    expect(entry?.scheduled_at).toBe(at);
+    const pending = await h.cmd<{ projects: Array<{ reminderAwaits: Array<{ reminderId: string; scheduledAt: number; title: string | null }> }> }>('mine.pending', {});
+    const entry = pending.projects.flatMap((p) => p.reminderAwaits).find((x) => x.reminderId === reminderId);
+    expect(entry?.scheduledAt).toBe(at);
     expect(entry?.title).toBe('一次性提醒');
     // 正式确认→dispatched+任务。
     const confirmed = await h.cmd<{ taskId: string }>('reminder.confirm', { reminderId, scheduledAt: at });
