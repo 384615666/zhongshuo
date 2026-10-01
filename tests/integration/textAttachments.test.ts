@@ -23,10 +23,13 @@ import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 process.env.ZS_ALLOW_FAKE = '1';
 delete process.env.ZS_REAL_DISPATCH_GUARD;
 delete process.env.ZS_REAL_BATCH_ID;
+delete process.env.ZS_APP_DATA; // 显式临时 appData（deps.appDataDir 注入）——不回落环境/工程 cwd
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-att-'));
 const storeRoot = join(tmpRoot, 'blobstore');
+const appData = join(tmpRoot, 'app-data');
 mkdirSync(storeRoot, { recursive: true });
+mkdirSync(appData, { recursive: true });
 afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* Windows 句柄延迟 */ } } });
 
 const validDone = (): FakeTurnScript => [
@@ -45,7 +48,7 @@ function makeEnv() {
   db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','dm_a','human','u_local'),('p1','dm_a','agent','mA')`).run();
   db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('dm_b','p1','dm',NULL)`).run();
   db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','dm_b','human','u_local'),('p1','dm_b','agent','mA')`).run();
-  const deps = { db, localUserId: 'u_local', interruptTurn: async () => {} };
+  const deps = { db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData };
   const cmd = async <T,>(method: string, params: unknown, commandId?: string): Promise<T> => {
     const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: commandId ?? `att-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: T; error?: { code: string; message: string } };
     if (!r.ok) throw new Error(r.error?.message);
@@ -68,10 +71,10 @@ describe('DEV-24 首包：attachment.uploadText（保存副本+资源身份）',
     expect(a1.hash).toHaveLength(64);
     const a2 = await cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '会议 纪要.md', content: '# 纪要 v2\n\n内容乙' });
     expect(a2.hash).not.toBe(a1.hash); // 同名不同内容=不同资源版本
-    // 副本落应用数据区（blobstore——内容寻址），不在用户项目目录。
+    // 副本落应用数据区（blobstore——内容寻址），不在用户项目目录/工程 cwd。
     const row = db.prepare('SELECT blob_path, source_name, conversation_id, kind FROM artifacts WHERE id = ?').get(a1.attachmentId) as { blob_path: string; source_name: string; conversation_id: string; kind: string };
-    expect(row.blob_path.startsWith(storeRoot)).toBe(false); // blobstore 路径由 daemon 注入（此处断言非用户项目目录）
-    expect(row.blob_path.includes('zhongshuo')).toBe(true);
+    expect(row.blob_path.startsWith(join(appData, 'blobstore'))).toBe(true); // 显式临时 appData（第二十七轮四：不回落工程 cwd——旧断言 includes('zhongshuo') 在固化该缺陷）
+    expect(row.blob_path.includes('zhongshuo')).toBe(false);
     expect(row.source_name).toBe('会议 纪要.md');
     expect(row.conversation_id).toBe('dm_a');
     // 重启保持=行持久（新连接读取由 preview 验证）。

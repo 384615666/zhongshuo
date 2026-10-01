@@ -458,7 +458,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const items = rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at }));
         // 消息附件（第二十七轮三：已发消息附件可点击预览——能力②闭环到页面）。
         attachMessageSummaries(deps.db, items);
-        return withCommandId({ ok: true, data: { items } });
+        // 根消息（房间级锚消息——不在 thread 历史内）的附件摘要：线程视图锚块渲染芯片来源。
+        const anchorId = (deps.db.prepare('SELECT anchor_message_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { anchor_message_id: string | null } | undefined)?.anchor_message_id ?? null;
+        const rootAttachments = anchorId != null ? (messageAttachmentSummaries(deps.db, [anchorId]).get(anchorId) ?? []) : [];
+        return withCommandId({ ok: true, data: { items, rootAttachments } });
       }
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);

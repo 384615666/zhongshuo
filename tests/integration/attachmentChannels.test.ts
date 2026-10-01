@@ -71,7 +71,7 @@ function makeEnv(): Env {
 }
 
 const mattCount = (env: Env, messageId?: string): number => {
-  const db2 = openDatabase(env.dbPath, { readonly: true });
+  const db2 = openDatabase(env.dbPath);
   try {
     const row = messageId == null
       ? db2.prepare('SELECT count(*) c FROM message_attachments').get() as { c: number }
@@ -86,7 +86,7 @@ describe('四通道正式链：主池/线程（任务串+记录串）/DM', () =>
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'conv_room', filename: '需求 说明.md', content: '# 需求\n\n暗号 ROOM-5566' });
     const send = await env.cmd<{ taskId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body: '按附件需求执行', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }], attachmentRefs: [up.attachmentId] });
     expect(send.taskId).toBeTruthy();
-    const db2 = openDatabase(env.dbPath, { readonly: true });
+    const db2 = openDatabase(env.dbPath);
     const rootMsg = (db2.prepare('SELECT root_message_id FROM tasks WHERE id = ?').get(send.taskId) as { root_message_id: string }).root_message_id;
     db2.close();
     expect(mattCount(env, rootMsg)).toBe(1); // 主池通道不再静默丢附件
@@ -106,7 +106,7 @@ describe('四通道正式链：主池/线程（任务串+记录串）/DM', () =>
     db0.close();
     const { worker, adapter } = env.makeWorker();
     const send = await env.cmd<{ taskId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body: '首轮任务', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] });
-    const db2 = openDatabase(env.dbPath, { readonly: true });
+    const db2 = openDatabase(env.dbPath);
     const threadId = (db2.prepare('SELECT conversation_thread_id FROM tasks WHERE id = ?').get(send.taskId) as { conversation_thread_id: string }).conversation_thread_id;
     db2.close();
     await worker.runOnce(); // 第一轮完成（无附件）
@@ -174,7 +174,7 @@ describe('四通道正式链：主池/线程（任务串+记录串）/DM', () =>
     expect(cross.ok).toBe(false);
     expect(String(cross.error?.message)).toContain('audience');
     expect(mattCount(env)).toBe(before); // 拒绝=零残留（同事务回滚——消息与关联都不落）
-    const db2 = openDatabase(env.dbPath, { readonly: true });
+    const db2 = openDatabase(env.dbPath);
     const msgs = (db2.prepare("SELECT count(*) c FROM messages WHERE conversation_id = 'dm_b'").get() as { c: number }).c;
     db2.close();
     expect(msgs).toBe(0); // 被拒消息本身也不落库（不以部分成功冒充）
@@ -198,7 +198,7 @@ describe('完整性与截断（读取路径共享）', () => {
   it('副本损坏（字节被改写）：预览与组装都明确拒绝——不以旧 hash 注入新文本', async () => {
     const env = makeEnv();
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '会被改写.md', content: '原始内容 CORRUPT-4444' });
-    const db2 = openDatabase(env.dbPath, { readonly: true });
+    const db2 = openDatabase(env.dbPath);
     const blobPath = (db2.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(up.attachmentId) as { blob_path: string }).blob_path;
     db2.close();
     writeFileSync(blobPath, '被改写后的新内容（hash 不再匹配）', 'utf8');
@@ -248,11 +248,11 @@ describe('完整性与截断（读取路径共享）', () => {
   it('关闭再打开数据库（新连接）：副本可预览且内容一致；显式临时 appData（不落工程 cwd）', async () => {
     const env = makeEnv();
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '重开.md', content: '重开内容 REOPEN-5555' });
-    const db2 = openDatabase(env.dbPath, { readonly: true });
+    const db2 = openDatabase(env.dbPath);
     const row = db2.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(up.attachmentId) as { blob_path: string };
     db2.close();
     expect(row.blob_path.startsWith(appData)).toBe(true); // 副本在显式临时 appData（非工程 cwd）
-    const db3 = openDatabase(env.dbPath, { readonly: true });
+    const db3 = openDatabase(env.dbPath);
     db3.close();
     const pv = await env.cmd<{ text: string; hash: string }>('attachment.previewText', { attachmentId: up.attachmentId });
     expect(pv.text).toBe('重开内容 REOPEN-5555');

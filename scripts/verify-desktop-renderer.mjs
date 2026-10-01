@@ -853,10 +853,21 @@ try {
       await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#board-groups .board-card').length`)).value >= 1, 20_000, 'BOARD 卡片出现');
       const cardText = await page.readStrict(`document.querySelector('#board-groups .board-card')?.textContent ?? ''`);
       record('BOARD·卡片呈现（标题+列位）', cardText.includes('看板任务'), cardText.slice(0, 40));
+      // 状态映射修正（第二十七轮五）：已完成列在（DONE 不再落等待）。
+      const boardCols = await page.readStrict(`[...document.querySelectorAll('#board-groups .board-col .meta')].map((m) => m.textContent).join('|')`);
+      record('BOARD·列含「已完成」（终态分列如实）', boardCols.includes('已完成'), boardCols.slice(0, 60));
       // 卡片点击→#task= 定位原线程。
       await page.evalJs(`document.querySelector('#board-groups .board-card').click()`);
       await waitFor(async () => (await page.evalJs(`!document.getElementById('thread').classList.contains('hidden')`)).value === true, 20_000, 'BOARD 点击定位线程');
       record('BOARD·卡片点击定位原串（#task= 深链）', true, '');
+      // Files 集合（第二十七轮五）：回主池→Files 面板四类分列。
+      await page.evalJs(`document.getElementById('thread-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('pool').classList.contains('hidden')`)).value === true, 10_000, 'BOARD 返回主池');
+      await page.evalJs(`document.getElementById('files-toggle').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('files').classList.contains('hidden')`)).value === true, 10_000, 'BOARD Files 打开');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('files-groups')?.textContent ?? '').includes('项目文件')`)) === true, 20_000, 'BOARD Files 项目文件分列');
+      const filesText = await page.readStrict(`document.getElementById('files-groups')?.textContent ?? ''`);
+      record('BOARD·Files 集合四类分列（项目文件非空+分节呈现）', filesText.includes('项目文件'), filesText.slice(0, 60));
       // 打开看板零新运行（纯读）。
       const runsBefore = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'bd-r1', method: 'board.view', params: { scope: 'project', projectId: window.__zsProjId ?? '' } }).then(() => 1, () => 0)`);
       void runsBefore;
@@ -889,15 +900,20 @@ try {
       const convId = await page.readStrict(`location.hash.startsWith('#dm=') ? location.hash.slice(4) : ''`);
       const up = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-upload-1', method: 'attachment.uploadText', params: { conversationId: ${JSON.stringify(convId)}, filename: ${JSON.stringify('验收附件 空格.md')}, content: ('# 附件' + String.fromCharCode(10) + String.fromCharCode(10) + '暗号：ATT-PAGE-3358') } }).then((r) => (r && r.ok === false ? String(r.error && r.error.message) : (r && r.data ? r.data : String(r))), (e) => String(e))`);
       record('ATT·中文空格文件名上传（副本+hash）', up?.attachmentId != null && String(up?.hash ?? '').length === 64, `conv=${String(convId).slice(0, 14)} up=${String(JSON.stringify(up ?? '')).slice(0, 80)}`);
-      // 芯片渲染（draftAttachments 经 window 注入——页面文件输入无法驱动）。
-      await page.evalJs(`(() => { const chip = document.createElement('span'); chip.className = 'meta'; chip.textContent = '📎 ${'验收附件 空格.md'}（已保存副本）'; document.getElementById('dm-attach-chips').append(chip); })()`);
-      const chipOk = await page.readStrict(`(document.getElementById('dm-attach-chips')?.textContent ?? '').includes('验收附件')`);
-      record('ATT·草稿芯片呈现', chipOk === true, '');
-      // 发送（带附件引用）→ 模型输入注入副本文本（fake）。
-      // projectId 需真实——重试带真实项目。
-      const projId = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-project-1', method: 'deepLink.resolve', params: { hash: '#dm=' + ${JSON.stringify(convId)} } }).then((r) => (r && r.data ? r.data.projectId : ''), (e) => '')`);
-      const sendR = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-send-two', method: 'message.submit', params: { target: { kind: 'dm', projectId: ${JSON.stringify(String(projId))}, conversationId: ${JSON.stringify(convId)} }, body: '按附件执行', intent: 'default', mentions: [], attachmentRefs: [${JSON.stringify(up?.attachmentId ?? '')}] } }).then((r) => r?.data, (e) => String(e))`);
-      record('ATT·发送带附件引用（任务建立）', sendR?.taskId != null, String(JSON.stringify(sendR ?? '')).slice(0, 40));
+      // 芯片渲染（第二十七轮三：真实 UI 上传路径——DataTransfer 驱动 file input change 走
+      // wireAttach 全链：fatal UTF-8 解码+键控草稿。旧做法手插 DOM 芯片不算数）。
+      await page.evalJs(`(() => { const input = document.getElementById('dm-attach-file'); const dt = new DataTransfer(); dt.items.add(new File(['# 附件' + String.fromCharCode(10) + String.fromCharCode(10) + '暗号：ATT-PAGE-3358'], '验收附件 空格.md', { type: 'text/markdown' })); input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('dm-attach-chips')?.textContent ?? '').includes('验收附件')`)) === true, 20_000, 'ATT 草稿芯片（真实上传路径）');
+      record('ATT·草稿芯片呈现（DataTransfer→wireAttach 真实路径）', true, '');
+      // 非法 UTF-8 字节明确失败（fatal 解码——不上传替换字符）。
+      await page.evalJs(`(() => { const input = document.getElementById('dm-attach-file'); const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array([0x23, 0x20, 0xff, 0xfe, 0x0a])], '坏字节.txt', { type: 'text/plain' })); input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+      await waitFor(async () => (await page.readStrict(`document.getElementById('conn-state')?.textContent?.includes('UTF-8') ?? false`)) === true, 10_000, 'ATT 非法字节拒绝提示');
+      const chipCountStable = await page.readStrict(`document.getElementById('dm-attach-chips').querySelectorAll('button.chip').length`);
+      record('ATT·非法 UTF-8 字节明确拒绝（fatal 解码）', chipCountStable === 2, `chips=${chipCountStable}（1 附件+1 清空）`);
+      // 发送（带附件引用）→ 模型输入注入副本文本（fake）——经 UI 键控草稿（dm-send 真实按钮）。
+      await page.evalJs(`(() => { document.getElementById('dm-input').value = '按附件执行'; document.getElementById('dm-send').click(); })()`);
+      await waitFor(async () => (await page.readStrict(`document.getElementById('dm-attach-chips').querySelectorAll('button.chip').length`)) === 0, 20_000, 'ATT 发送后草稿清空（键控清算）');
+      record('ATT·UI 发送（键控草稿 refs→任务建立；发送后草稿恰清）', true, '');
       await waitFor(async () => (await page.evalJs(`(() => { const msgs = [...document.querySelectorAll('#dm-messages .msg')]; return msgs.filter((m) => m.className.includes('agent')).length })()`)).value >= 1, 90_000, 'ATT DM 回复（含附件注入）');
       // 注入断言以**服务端留档的 ContextBundle 全文**为准（fake 回复不引用暗号——不冒充）。
       {
@@ -907,6 +923,36 @@ try {
         dbA.close();
         record('ATT·模型输入含附件文本（ContextBundle 全文=副本实际文本+hash+截断说明）', bundle != null && bundle.included_refs_json.includes('ATT-PAGE-3358') && bundle.included_refs_json.includes('验收附件 空格.md'), String(bundle?.included_refs_json?.length ?? 0));
       }
+      // 已发消息附件芯片→点击预览（previewText 服务端 audience+完整性+字节截断）→评论区。
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-messages .attach-chips .chip').length`)).value >= 1, 20_000, 'ATT 已发消息附件芯片');
+      await page.evalJs(`document.querySelector('#dm-messages .attach-chips .chip').click()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('ATT-PAGE-3358')`)) === true, 20_000, 'ATT 预览正文');
+      const pvText = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·已发附件点击预览（正文+sha256+原始字节）', pvText.includes('ATT-PAGE-3358') && pvText.includes('sha256='), pvText.slice(0, 60));
+      // 基础评论（UI 表单：正文+行号）→ 列表呈现（锚定版本 v1）。
+      await page.evalJs(`(() => { const input = document.querySelector('#attach-preview .attach-comment-input'); input.value = '第 1 行标题建议更具体'; const lines = document.querySelectorAll('#attach-preview .attach-comment-line'); lines[0].value = '1'; document.querySelectorAll('#attach-preview .chip').forEach((b) => { if (b.textContent === '添加评论') b.click(); }); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('第 1 行标题建议更具体')`)) === true, 20_000, 'ATT 评论呈现');
+      const cmtText = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·基础评论（行号锚定 v1+列表呈现）', cmtText.includes('第 1 行') && cmtText.includes('v1'), '');
+      // 主池通道（第二十七轮二页面闭环）：真实上传→composer 芯片→UI 发送→线程已发芯片。
+      await page.evalJs(`document.getElementById('dm-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('pool').classList.contains('hidden')`)).value === true, 10_000, 'ATT 返回主池');
+      await page.evalJs(`(() => { const input = document.getElementById('composer-attach-file'); const dt = new DataTransfer(); dt.items.add(new File(['export function parse() { return "POOL-ATT-7788"; }' + String.fromCharCode(10)], '解析 器.ts', { type: 'text/plain' })); input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('解析 器.ts')`)) === true, 20_000, 'ATT 主池草稿芯片');
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '按解析器代码执行'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#pool .pool-card').length`)) >= 1, 90_000, 'ATT 主池任务卡出现');
+      const poolCardText = await page.readStrict(`document.querySelector('#pool .pool-card')?.textContent ?? ''`);
+      record('ATT·主池通道附件发送（UI 键控草稿→任务建立）', poolCardText.includes('按解析器代码执行'), poolCardText.slice(0, 30));
+      // 打开线程：已发消息附件芯片（thread.history attachments）+ 预览。
+      await page.evalJs(`document.querySelector('#pool .pool-card').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('thread').classList.contains('hidden')`)).value === true, 20_000, 'ATT 打开线程');
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#thread-messages .attach-chips .chip').length`)).value >= 1, 30_000, 'ATT 线程已发附件芯片');
+      const threadChip = await page.readStrict(`document.querySelector('#thread-messages .attach-chips .chip')?.textContent ?? ''`);
+      record('ATT·线程已发附件芯片（历史返回附件摘要）', threadChip.includes('解析 器.ts'), threadChip.slice(0, 30));
+      await page.evalJs(`document.querySelector('#thread-messages .attach-chips .chip').click()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('POOL-ATT-7788')`)) === true, 20_000, 'ATT 代码附件预览');
+      const pvCode = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·代码附件预览（code_file 标注+正文）', pvCode.includes('POOL-ATT-7788') && pvCode.includes('（代码）'), pvCode.slice(0, 50));
       const realCallsA = countTable(join(appDataA, 'state.sqlite'), 'real_calls');
       record('ATT·零真实调用（fake 注入链）', realCallsA === 0, `real_calls=${realCallsA}`);
       page.close();

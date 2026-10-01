@@ -1314,6 +1314,7 @@ async function renderThread() {
     const rootBody = document.createElement('div');
     rootBody.textContent = state.openAnchorText;
     root.append(rootMeta, rootBody);
+    appendSentAttachmentChips(root, history.rootAttachments); // 根消息附件芯片（thread.history rootAttachments——第二十七轮三）
     box.appendChild(root);
   }
   for (const m of history.items || []) {
