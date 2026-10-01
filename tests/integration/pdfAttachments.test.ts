@@ -101,7 +101,7 @@ describe('DEV-24 PDF 首包：保存+提取+预览', () => {
     expect(pv2.page).toBe(2);
     expect(pv2.totalPages).toBe(2);
     expect(pv2.text).toContain('PAGE2-2244');
-    expect(pv2.pixelRendering).toBe('unsupported');
+    expect(pv2.pixelRendering).toBe('renderer-canvas'); // 第二十九轮三：视觉渲染=渲染器受限预览侧 canvas
     expect(pv2.ocr).toBe('unsupported');
     // 原件改动 → 副本保持（用户源文件与本副本无关）；副本被改写 → 完整性拒绝。
     const blobPath = (env.db.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(up.attachmentId) as { blob_path: string }).blob_path;

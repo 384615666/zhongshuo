@@ -139,18 +139,30 @@ describe('DEV-24 图片首包：预览/OCR/模型输入如实分列', () => {
     expect(String(cross.error?.message)).toContain('audience');
     env.close();
   });
-  it('消息可带图引用（四通道沿用）+ 注入不含图片数据（模型输入未认证）；图片评论随分批归属拒绝', async () => {
+  it('消息可带图引用（四通道沿用）+ 能力门：无确认拒发；确认后注入「图片未发送」说明；图片评论随分批归属拒绝', async () => {
     const env = makeEnv();
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadImage', { conversationId: 'dm_a', filename: '带图执行.png', contentBase64: makePng(8, 8).toString('base64') });
-    const send = await env.cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
+    // 能力门（第二十九轮三）：未确认 → 拒发（不悄悄省略图片冒充成功）。
+    const blocked = await env.cmdRaw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
+    expect(blocked.ok).toBe(false);
+    expect(String(blocked.error?.message)).toContain('IMAGE_INPUT_UNVERIFIED');
+    // 确认仅发送文字 → 落库+派发；注入明示图片未发送（不含图片数据/hash）。
+    const send = await env.cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '看这张图', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId], imageAck: 'omit-images' });
     expect(send.taskId).toBeTruthy();
     const att = (env.db.prepare('SELECT count(*) c FROM message_attachments WHERE artifact_id = ?').get(up.attachmentId) as { c: number }).c;
     expect(att).toBe(1); // 消息-图片关联落库（四通道沿用）
     const { worker, adapter } = env.makeWorker();
     await worker.runOnce();
     expect(adapter.startTurnLog.length).toBe(1);
+    expect(adapter.startTurnLog[0]!.text).toContain('【图片附件未发送】'); // 明示未发送+用户确认
     expect(adapter.startTurnLog[0]!.text).not.toContain('data:image'); // 注入不含图片数据
-    expect(adapter.startTurnLog[0]!.text).not.toContain(up.hash.slice(0, 16)); // 也不含 hash 装饰（未认证=完全不入）
+    // hash 只随「未发送」附件条目出现一次（资源身份可追溯），不作为已读材料重复注入。
+    {
+      const t = adapter.startTurnLog[0]!.text;
+      const marker = up.hash.slice(0, 16);
+      const count = t.split(marker).length - 1;
+      expect(count).toBe(1);
+    }
     const fs = await import('node:fs');
     void fs;
     // 图片评论随分批归属——本批明确拒绝（文本/代码/Markdown 首批）。
