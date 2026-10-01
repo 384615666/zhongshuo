@@ -13,8 +13,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { unzipSync } from 'fflate';
+import { Unzip, UnzipInflate } from 'fflate';
 import {
+  CURRENT_PARSER_VERSIONS,
   PDF_MAX_BYTES, PDF_MAX_PAGES, PDF_PAGE_TEXT_MAX, PDF_TOTAL_TEXT_MAX,
   OFFICE_MAX_BYTES, CSV_MAX_BYTES, ZIP_MAX_ENTRIES, ZIP_ENTRY_MAX_BYTES, ZIP_TOTAL_MAX_BYTES,
   DOCX_PARAGRAPH_MAX, SLIDES_MAX_SLIDES, SHEET_MAX_SHEETS, SHEET_CELL_MAX_BYTES,
@@ -140,38 +141,63 @@ async function parsePdf(raw: Buffer, sourceHash: string): Promise<ExtractCache> 
   }
 }
 
-// ---------- zip 护栏（Office 共同：条目数/声明解压尺寸/路径穿越——declared 预检；
-// 声明尺寸说谎的压缩炸弹由子进程内存硬界（--max-old-space-size）+ 父进程墙钟截止兜底
-// （隔离内爆，不伤 daemon/不悬挂），如实分类失败） ----------
-function safeUnzip(raw: Buffer): Record<string, Uint8Array> {
-  const declared: string[] = [];
-  const filter = (f: { name: string; size: number; originalSize?: number }): boolean => {
-    if (declared.length + 1 > ZIP_MAX_ENTRIES) throw new ParseError('zip-entry-limit', `压缩包条目数超过上限 ${ZIP_MAX_ENTRIES}——资源限制明确拒绝`);
-    if (f.name.includes('..')) throw new ParseError('zip-corrupt', `压缩包含路径穿越条目：${f.name}`);
-    const size = f.originalSize ?? f.size ?? 0;
-    if (size > ZIP_ENTRY_MAX_BYTES) throw new ParseError('zip-size-limit', `条目 ${f.name} 声明解压 ${size}B 超上限 ${ZIP_ENTRY_MAX_BYTES}B`);
-    declared.push(f.name);
-    return true;
+// ---------- zip 护栏（第三十轮二重写）----------
+// 单次流式解包：**条目元数据预检**（onfile 即得名/声明尺寸——不解压先拒）+**受限解压过程
+// 中累计实际输出**（声明尺寸不可信——超限即停止收集只计数，内存不随炸弹膨胀；总量检查不
+// 等整包解完）。同一份解包结果供定类与逐格式解析复用（不再二次解压）。
+function safeUnzip(raw: Buffer): Record<string, Buffer> {
+  const out: Record<string, Buffer> = {};
+  let entryCount = 0;
+  let totalActual = 0;
+  let failure: { code: string; message: string } | null = null;
+  const fail = (code: string, message: string): void => { if (failure == null) failure = { code, message }; };
+  const uz = new Unzip();
+  uz.register(UnzipInflate);
+  uz.onfile = (f) => {
+    entryCount += 1;
+    if (entryCount > ZIP_MAX_ENTRIES) { fail('zip-entry-limit', `压缩包条目数超过上限 ${ZIP_MAX_ENTRIES}——资源限制明确拒绝`); }
+    if (f.name.includes('..')) { fail('zip-corrupt', `压缩包含路径穿越条目：${f.name}`); }
+    const declared = f.originalSize ?? f.size ?? 0;
+    if (declared > ZIP_ENTRY_MAX_BYTES) { fail('zip-size-limit', `条目 ${f.name} 声明解压 ${declared}B 超上限 ${ZIP_ENTRY_MAX_BYTES}B`); }
+    const skipCollection = failure != null;
+    const chunks: Buffer[] = [];
+    let actual = 0;
+    f.ondata = (e: Error | null, chunk: Uint8Array | null, final: boolean) => {
+      if (e != null) { fail('zip-corrupt', `条目 ${f.name} 解压失败（${e.message}）`); return; }
+      if (chunk != null) {
+        actual += chunk.length;
+        totalActual += chunk.length;
+        // 实际输出限制（声明不可信）：超限即丢弃后续块（内存不膨胀）。
+        if (actual > ZIP_ENTRY_MAX_BYTES) { fail('zip-size-limit', `条目 ${f.name} 实际解压输出超上限 ${ZIP_ENTRY_MAX_BYTES}B（声明尺寸不可信）`); return; }
+        if (totalActual > ZIP_TOTAL_MAX_BYTES) { fail('zip-size-limit', `解压实际总量超上限 ${ZIP_TOTAL_MAX_BYTES}B`); return; }
+        if (!skipCollection) chunks.push(Buffer.from(chunk));
+      }
+      if (final && failure == null) out[f.name] = Buffer.concat(chunks);
+    };
+    f.start(); // 恒启动（不启动会内部缓冲压缩数据）；超限路径只计数不收集
   };
   try {
-    unzipSync(raw, { filter: filter as never }); // 第一遍：预检（filter 全放行但抛越限错）
+    uz.push(new Uint8Array(raw), true);
   } catch (error) {
-    if (error instanceof ParseError) throw error;
+    const f1 = failure as { code: string; message: string } | null;
+    if (f1 != null) throw new ParseError(f1.code, f1.message);
     throw new ParseError('zip-corrupt', `不是可解析的 zip/Office 文档（${String((error as Error).message).slice(0, 100)}）`);
   }
-  const totalDeclared = raw.length; // 声明总量在第二遍解压后核对实际缓冲
-  if (totalDeclared > OFFICE_MAX_BYTES * 12) { /* 压缩比异常（>12:1）不单独拒——由尺寸上限+内存界兜底 */ }
-  try {
-    const allowed = new Set(declared);
-    const out = unzipSync(raw, { filter: ((f: { name: string }) => allowed.has(f.name)) as never }) as Record<string, Uint8Array>;
-    let actual = 0;
-    for (const k of Object.keys(out)) actual += out[k]!.byteLength;
-    if (actual > ZIP_TOTAL_MAX_BYTES) throw new ParseError('zip-size-limit', `解压总量 ${actual}B 超上限 ${ZIP_TOTAL_MAX_BYTES}B——压缩炸弹防护`);
-    return out;
-  } catch (error) {
-    if (error instanceof ParseError) throw error;
-    throw new ParseError('zip-corrupt', `解压失败（${String((error as Error).message).slice(0, 100)}）——损坏或非 zip`);
+  const finalFailure = failure as { code: string; message: string } | null; // 闭包写入——显式放宽收窄
+  if (finalFailure != null) throw new ParseError(finalFailure.code, finalFailure.message);
+  return out;
+}
+
+/** zip 关系 target 相对路径解析（../ 与 ./ 逐段归一——字符串 replace 会误伤 '../' 内的 './'）。 */
+function resolveZipTarget(baseFile: string, target: string): string {
+  const parts = target.startsWith('/') ? target.slice(1).split('/') : [...baseFile.split('/').slice(0, -1), ...target.split('/')];
+  const stack: string[] = [];
+  for (const seg of parts) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { stack.pop(); continue; }
+    stack.push(seg);
   }
+  return stack.join('/');
 }
 
 function requireEntry(files: Record<string, Uint8Array>, name: string): Uint8Array {
@@ -224,9 +250,9 @@ function sanitizeOfficeHtml(html: string): string {
 }
 
 // ---------- DOCX（mammoth：段落/表格有序提取；外部关系不加载、图片不解码、宏文档拒绝） ----------
-async function parseDocx(raw: Buffer, sourceHash: string): Promise<ExtractCache> {
+async function parseDocx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): Promise<ExtractCache> {
   const mammothPkg = (await import('mammoth/package.json', { with: { type: 'json' } })).default;
-  const files = safeUnzip(raw); // 护栏先于 mammoth（条目/尺寸/穿越）
+  const files = preUnzipped ?? safeUnzip(raw); // 护栏先于 mammoth（条目/尺寸/穿越）；office 路径复用同一解包
   const ct = requireEntry(files, '[Content_Types].xml');
   const ctText = Buffer.from(ct).toString('utf8');
   if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
@@ -266,9 +292,8 @@ async function parseDocx(raw: Buffer, sourceHash: string): Promise<ExtractCache>
 }
 
 // ---------- XLSX（SheetJS：**只读缓存值**——公式不执行；无缓存值如实占位） ----------
-async function parseXlsx(raw: Buffer, sourceHash: string): Promise<ExtractCache> {
-  const xlsxPkg = (await import('xlsx/package.json', { with: { type: 'json' } })).default;
-  const files = safeUnzip(raw);
+async function parseXlsx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): Promise<ExtractCache> {
+  const files = preUnzipped ?? safeUnzip(raw); // office 路径复用同一解包
   requireEntry(files, 'xl/workbook.xml');
   const XLSX = await import('xlsx');
   let wb: WorkBook;
@@ -294,7 +319,7 @@ async function parseXlsx(raw: Buffer, sourceHash: string): Promise<ExtractCache>
     if (seen.has(name)) continue;
     seen.add(name);
     const target = relOf.get(m[2]!);
-    if (target != null) sheetFileOf.push(target.startsWith('/') ? target.slice(1) : `xl/${target.replaceAll('./', '')}`);
+    if (target != null) sheetFileOf.push(resolveZipTarget('xl/workbook.xml', target));
   }
   const missingFormulaRefs = (sheetFile: string | undefined): Map<string, true> => {
     const out = new Map<string, true>();
@@ -353,7 +378,7 @@ async function parseXlsx(raw: Buffer, sourceHash: string): Promise<ExtractCache>
   }
   return {
     cacheSchema: 2, kind: 'sheet', sourceHash,
-    parserName: 'xlsx', parserVersion: String(xlsxPkg.version),
+    parserName: CURRENT_PARSER_VERSIONS.sheet.name, parserVersion: CURRENT_PARSER_VERSIONS.sheet.version,
     extractedAt: Date.now(), budgets: currentBudgetsFor('sheet'),
     totalTextBytes: totalBytes, truncatedTotal,
     sourceFormat: 'xlsx', encoding: 'internal', sheets,
@@ -428,35 +453,80 @@ function xmlTexts(xml: string): string[] {
   }
   return out;
 }
-function parsePptx(raw: Buffer, sourceHash: string): ExtractCache {
-  const files = safeUnzip(raw);
+/**
+ * PPTX 解析（第三十轮三重写）：页顺序以 **presentation.xml 的 sldIdLst** 为准（r:id→
+ * presentation rels→slides/slideN.xml——插页/重排/删除后编号不连续仍按真实顺序）；**备注沿
+ * 该页自己的关系表定位**（ppt/slides/_rels/slideN.xml.rels→notesSlide target——文件编号与
+ * 页号无假定对应）；未被 sldIdLst 引用的孤立页排除；**备注计入输出预算**（此前总量只计
+ * 正文——超长备注/总量截断如实标注）。
+ */
+function parsePptx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): ExtractCache {
+  const files = preUnzipped ?? safeUnzip(raw);
   requireEntry(files, 'ppt/presentation.xml');
-  const slideRe = /^ppt\/slides\/slide(\d+)\.xml$/;
-  const slideNumbers = Object.keys(files).map((k) => slideRe.exec(k)).filter((m) => m != null).map((m) => Number(m![1])).sort((a, b) => a - b);
-  if (slideNumbers.length === 0) throw new ParseError('slides-corrupt', '没有任何幻灯片（ppt/slides/slideN.xml）——不是 PPTX');
-  if (slideNumbers.length > SLIDES_MAX_SLIDES) throw new ParseError('slides-corrupt', `幻灯片数 ${slideNumbers.length} 超上限 ${SLIDES_MAX_SLIDES}`);
+  const presentationXml = Buffer.from(requireEntry(files, 'ppt/presentation.xml')).toString('utf8');
+  // presentation 关系：rId → target（相对 ppt/）。
+  const presRels: Record<string, string> = {};
+  if (files['ppt/_rels/presentation.xml.rels'] != null) {
+    const relsXml = Buffer.from(files['ppt/_rels/presentation.xml.rels']).toString('utf8');
+    for (const m of relsXml.matchAll(/<Relationship\b([^>]*)>/g)) {
+      const attrs = m[1] ?? '';
+      const id = /Id="([^"]+)"/.exec(attrs)?.[1];
+      const target = /Target="([^"]+)"/.exec(attrs)?.[1];
+      const type = /Type="([^"]+)"/.exec(attrs)?.[1] ?? '';
+      if (id != null && target != null && type.endsWith('/slide')) {
+        presRels[id] = resolveZipTarget('ppt/presentation.xml', target);
+      }
+    }
+  }
+  // sldIdLst 顺序（真实页序）。
+  const slideTargets: string[] = [];
+  const sldIdLst = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(presentationXml)?.[1] ?? '';
+  for (const m of sldIdLst.matchAll(/<p:sldId\b([^>]*)>/g)) {
+    const rid = /r:id="([^"]+)"/.exec(m[1] ?? '')?.[1];
+    if (rid == null) continue;
+    const target = presRels[rid];
+    if (target != null && !slideTargets.includes(target)) slideTargets.push(target);
+  }
+  if (slideTargets.length === 0) throw new ParseError('slides-corrupt', 'presentation.xml 的 sldIdLst 未引用任何幻灯片——不是 PPTX（不以孤立 slideN.xml 文件冒充）');
+  if (slideTargets.length > SLIDES_MAX_SLIDES) throw new ParseError('slides-corrupt', `幻灯片数 ${slideTargets.length} 超上限 ${SLIDES_MAX_SLIDES}`);
   const slides: Array<{ slide: number; text: string; notes: string; truncated: boolean }> = [];
   let totalBytes = 0;
   let truncatedTotal = false;
-  for (const n of slideNumbers) {
-    const slideXml = Buffer.from(files[`ppt/slides/slide${n}.xml`]!).toString('utf8');
-    const notesKey = `ppt/notesSlides/notesSlide${n}.xml`;
-    const notesXml = files[notesKey] != null ? Buffer.from(files[notesKey]!).toString('utf8') : '';
+  for (let idx = 0; idx < slideTargets.length; idx += 1) {
+    const slideFile = slideTargets[idx]!;
+    if (files[slideFile] == null) throw new ParseError('slides-corrupt', `sldIdLst 引用的幻灯片缺失：${slideFile}`);
+    const slideXml = Buffer.from(files[slideFile]!).toString('utf8');
+    // 备注沿该页自己的关系表（slideN.xml.rels→notesSlide target——不假定同号）。
+    let notesXml = '';
+    const slideRelsFile = slideFile.replace(/^ppt\/slides\//, 'ppt/slides/_rels/') + '.rels';
+    if (files[slideRelsFile] != null) {
+      const slideRelsXml = Buffer.from(files[slideRelsFile]!).toString('utf8');
+      for (const m of slideRelsXml.matchAll(/<Relationship\b([^>]*)>/g)) {
+        const attrs = m[1] ?? '';
+        const type = /Type="([^"]+)"/.exec(attrs)?.[1] ?? '';
+        const target = /Target="([^"]+)"/.exec(attrs)?.[1];
+        if (!type.endsWith('/notesSlide') || target == null) continue;
+        const notesFile = resolveZipTarget(slideFile, target);
+        if (files[notesFile] != null) notesXml = Buffer.from(files[notesFile]!).toString('utf8');
+      }
+    }
     let text = xmlTexts(slideXml).join('\n');
-    const notes = xmlTexts(notesXml).join('\n');
+    let notes = xmlTexts(notesXml).join('\n');
     let truncated = false;
     if (Buffer.byteLength(text, 'utf8') > PDF_PAGE_TEXT_MAX) { text = truncateUtf8(text, PDF_PAGE_TEXT_MAX).text; truncated = true; }
-    const textBytes = Buffer.byteLength(text, 'utf8');
+    if (Buffer.byteLength(notes, 'utf8') > PDF_PAGE_TEXT_MAX) { notes = truncateUtf8(notes, PDF_PAGE_TEXT_MAX).text; truncated = true; }
+    // 正文与备注都计入总量预算（第三十轮三：此前只计正文）。
+    const textBytes = Buffer.byteLength(text, 'utf8') + Buffer.byteLength(notes, 'utf8');
     if (textBytes > PARSE_TOTAL_TEXT_MAX - totalBytes) { truncatedTotal = true; break; }
     totalBytes += textBytes;
-    slides.push({ slide: n, text, notes, truncated });
+    slides.push({ slide: idx + 1, text, notes, truncated });
   }
   return {
     cacheSchema: 2, kind: 'slides', sourceHash,
-    parserName: 'zhongshuo-pptx', parserVersion: '1',
+    parserName: 'zhongshuo-pptx', parserVersion: '2',
     extractedAt: Date.now(), budgets: currentBudgetsFor('slides'),
     totalTextBytes: totalBytes, truncatedTotal,
-    totalSlides: slideNumbers.length, slides,
+    totalSlides: slideTargets.length, slides,
   };
 }
 
@@ -471,6 +541,12 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
     if (job.hooks?.busyMs != null && job.hooks.busyMs > 0) {
       // 受控故障：同步阻塞本进程（Atomics.wait 不让出事件循环）——父进程须仍可响应并按截止杀。
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, job.hooks.busyMs);
+    }
+    if (job.hooks?.allocMB != null && job.hooks.allocMB > 0) {
+      // 受控故障：外部 Buffer 大额分配（--max-old-space-size 不约束 Buffer——整进程提交内存
+      // 上限由 Job Object 承载；第三十轮二 OOM 反例）。
+      const sink = Buffer.alloc(job.hooks.allocMB * 1024 * 1024);
+      sink[0] = 1; // 触碰防消除
     }
     const raw = readFileSync(job.blobPath);
     const byteCap = job.kind === 'pdf' ? PDF_MAX_BYTES : job.kind === 'csv' ? CSV_MAX_BYTES : OFFICE_MAX_BYTES; // office/docx/xlsx/pptx 同限
@@ -487,15 +563,16 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
       case 'csv': result = parseCsv(raw, hash); break;
       case 'pptx': result = await parsePptx(raw, hash); break;
       case 'office': {
-        // 定类按解压后的 [Content_Types]（zip 条目已压缩——字面嗅探不可靠）；宏/模板变体在此拒。
+        // 定类按解压后的 [Content_Types]（zip 条目已压缩——字面嗅探不可靠）；**单次解包结果
+        // 供定类与逐格式解析复用**（第三十轮二：不再二次解压重复膨胀）；宏/模板变体在此拒。
         const sniffFiles = safeUnzip(raw);
         const ctText = Buffer.from(requireEntry(sniffFiles, '[Content_Types].xml')).toString('utf8');
         if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
           throw new ParseError('docx-macro', '宏/旧版二进制 Office 文档不支持（.docm/.xlsm/.pptm/.doc 明确拒绝——不执行宏）');
         }
-        if (ctText.includes('wordprocessingml')) result = await parseDocx(raw, hash);
-        else if (ctText.includes('spreadsheetml')) result = await parseXlsx(raw, hash);
-        else if (ctText.includes('presentationml')) result = parsePptx(raw, hash);
+        if (ctText.includes('wordprocessingml')) result = await parseDocx(raw, hash, sniffFiles);
+        else if (ctText.includes('spreadsheetml')) result = await parseXlsx(raw, hash, sniffFiles);
+        else if (ctText.includes('presentationml')) result = parsePptx(raw, hash, sniffFiles);
         else throw new ParseError('office-corrupt', '未知 Office 类型（[Content_Types] 不含 word/spreadsheet/presentation 主文档）——不以扩展名冒充');
         break;
       }

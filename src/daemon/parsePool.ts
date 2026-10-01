@@ -1,37 +1,39 @@
 /**
- * 文档解析子进程池（第二十九轮一）——解析执行边界：
- * - 每任务 fork 独立子进程（parseWorker.ts / 打包 parse-worker.mjs）——pdfjs/mammoth/
- *   xlsx 同步 CPU 阻塞被进程边界隔离，daemon 主线程的普通 IPC、停止与其他任务不受影响；
- * - 墙钟截止覆盖加载、逐页/逐项提取、结果传输与收拢：超时 SIGTERM→（宽限）SIGKILL，
- *   **exit 事件确认后才结算超时**（收拢确认，不虚报）；
- * - 并发=1（内存上限=单子进程 320MB）+等待队列 4：超队=parse-busy 明确拒绝（不悬挂）；
- * - 成功/失败路径统一 finally 清计时器/注销子进程——无悬挂句柄；dispose（daemon.stop）
- *   杀全部子进程并拒绝排队任务；
- * - 响应体积防御上限（worker 侧已限输出——此为第二道界）。
- *
- * 子进程脚本解析顺序：ZS_PARSE_WORKER 显式指定 → 打包同目录 parse-worker.mjs（daemon.cjs
- * 同目录）→ 源码形态按需 esbuild 产出 dist/dev-parse/parse-worker.mjs（每进程一次——
- * esbuild 为开发依赖，生产产物恒走第二分支不触达）。
+ * 文档解析子进程池（第二十九轮一→第三十轮一重写）——解析执行边界：
+ * - **完整 job 队列**：每个排队项自带 kind/blobPath/hash/options/入队时刻/截止与结算
+ *   （第三十轮一修复：此前 waiters 只存 resolve、finally 以当前任务参数出队——B 会被当
+ *   A 解析；且 finally 内 await 拖延原任务返回）。调度泵串行取件，A 的完成/失败/超时结算
+ *   后立即取 B（B 用自己的文件/格式/hash/故障配置）。
+ * - **响应与退出分别登记**：收到合法响应不立即结算——并发槽在子进程 **exit 确认收拢后**
+ *   才释放；非法 jobId/超预算响应触发 kill ladder 收拢后按错误结算；成功后子进程不退
+ *   （2s 宽限后 kill 收拢）；强杀后仍未确认退出=parse-kill-unconfirmed（如实，不宣称杀净）。
+ * - **排队等待纳入端到端截止**：总截止自入队起算；泵取件时剩余 ≤0 直接按超时结算（不启动）。
+ * - dispose（daemon.stop 同链）：排队即取消、在途 kill 收拢；启动准备期间 dispose 也取消。
+ * - dev/测试形态的 parse-worker 按源码指纹重建（parseWorker.ts+parseContracts.ts+parseJobObject.ts
+ *   内容哈希——旧产物不匹配即重建，防新源码测试继续跑旧 worker）；打包形态恒用同目录产物。
  */
 import { fork, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import {
   PARSE_CONCURRENCY, PARSE_QUEUE_MAX, PARSE_DEADLINE_MS, PARSE_KILL_GRACE_MS,
-  PARSE_MEMORY_LIMIT_MB, PARSE_RESPONSE_MAX_BYTES,
+  PARSE_MEMORY_LIMIT_MB, PARSE_RESPONSE_MAX_BYTES, PARSE_TOTAL_MEMORY_LIMIT_BYTES,
   type ExtractCache, type ParseJob, type ParseJobKind, type ParseResponse,
 } from './parseContracts.ts';
+import { attachMemoryJobObject } from './parseJobObject.ts';
 
 export type ParseRunResult =
   | { ok: true; result: ExtractCache & { artifactKind?: string } }
   | { ok: false; error: { code: string; message: string } };
 
 export interface ParseRunOptions {
+  /** 端到端截止（含排队等待；缺省 PARSE_DEADLINE_MS）。 */
   deadlineMs?: number;
   /** 受控故障注入（仅 ZS_TEST_PARSE_HOOKS=1 生效——生产不设即不可达）。 */
-  hooks?: { busyMs?: number; exitCode?: number };
+  hooks?: { busyMs?: number; exitCode?: number; allocMB?: number };
 }
 
 function scriptDir(): string {
@@ -40,18 +42,37 @@ function scriptDir(): string {
 }
 
 let cachedWorkerScript: string | null = null;
+/** 源码指纹（dev 产物按内容重建——源码变更后旧 dev worker 不再复用）。 */
+function devSourceFingerprint(): string {
+  const dir = scriptDir();
+  const h = createHash('sha256');
+  for (const f of ['parseWorker.ts', 'parseContracts.ts', 'parseJobObject.ts']) {
+    try { h.update(readFileSync(join(dir, f))); h.update(f); } catch { h.update(`missing:${f}`); }
+  }
+  return h.digest('hex');
+}
 async function resolveWorkerScript(): Promise<string> {
   // 环境显式指定恒优先（隔离副本/测试切换不被缓存覆盖）。
   const envOverride = process.env.ZS_PARSE_WORKER;
   if (envOverride != null && envOverride.length > 0) return envOverride;
-  if (cachedWorkerScript != null) return cachedWorkerScript;
+  // 仅打包形态缓存路径；dev 目录以 build-fingerprint.txt 存在与否判定——dev 每次核对源码指纹。
+  if (cachedWorkerScript != null && existsSync(cachedWorkerScript) && !existsSync(join(dirname(cachedWorkerScript), 'build-fingerprint.txt'))) {
+    return cachedWorkerScript;
+  }
   const bundled = join(scriptDir(), 'parse-worker.cjs');
   if (existsSync(bundled)) { cachedWorkerScript = bundled; return bundled; }
-  // 源码/测试形态：esbuild 即时产出（每进程一次；esbuild=开发依赖）。
-  const devOut = join(process.cwd(), 'dist', 'dev-parse', 'parse-worker.cjs');
-  if (!existsSync(devOut)) {
+  // 源码/测试形态：esbuild 产出——**每次调用核对源码指纹**（不匹配即重建；修复前只在
+  // 无缓存时检查，源码变更后的同进程测试会继续跑旧 worker）。
+  const devDir = join(process.cwd(), 'dist', 'dev-parse');
+  const devOut = join(devDir, 'parse-worker.cjs');
+  const fpFile = join(devDir, 'build-fingerprint.txt');
+  const fp = devSourceFingerprint();
+  const stale = (() => {
+    try { return readFileSync(fpFile, 'utf8').trim() !== fp; } catch { return true; }
+  })();
+  if (!existsSync(devOut) || stale) {
     const { build } = await import('esbuild');
-    mkdirSync(dirname(devOut), { recursive: true });
+    mkdirSync(devDir, { recursive: true });
     await build({
       entryPoints: [join(scriptDir(), 'parseWorker.ts')],
       bundle: true,
@@ -62,141 +83,194 @@ async function resolveWorkerScript(): Promise<string> {
       sourcemap: false,
       logLevel: 'silent',
     });
+    writeFileSync(fpFile, fp, 'utf8');
     // dev 产物对齐生产布局：同目录 cmaps/（打包形态的 CMap 依赖同目录解析）。
     const cmapsSrc = join(process.cwd(), 'node_modules', 'pdfjs-dist', 'cmaps');
-    if (existsSync(cmapsSrc) && !existsSync(join(dirname(devOut), 'cmaps'))) {
-      cpSync(cmapsSrc, join(dirname(devOut), 'cmaps'), { recursive: true });
+    if (existsSync(cmapsSrc) && !existsSync(join(devDir, 'cmaps'))) {
+      cpSync(cmapsSrc, join(devDir, 'cmaps'), { recursive: true });
     }
   }
   cachedWorkerScript = devOut;
   return devOut;
 }
 
+interface QueuedJob {
+  kind: ParseJobKind;
+  blobPath: string;
+  expectedHash: string;
+  opts: ParseRunOptions;
+  enqueuedAt: number;
+  totalDeadlineMs: number;
+  resolve: (r: ParseRunResult) => void;
+}
+
+const cancelledResult = (note: string): ParseRunResult => ({ ok: false, error: { code: 'parse-cancelled', message: `解析池已关闭（daemon 停机）——${note}` } });
+
 export class ParsePool {
-  private activeCount = 0;
-  private waiters: Array<(r: ParseRunResult) => void> = [];
-  private readonly live = new Set<ChildProcess>();
+  /** 调度泵互斥（单并发=至多一个在途子进程）。 */
+  private pumping = false;
+  private readonly queue: QueuedJob[] = [];
+  private readonly live = new Set<ChildProcess>(); // 已 fork 未确认 exit（收拢登记）
   private disposed = false;
-  /** 任务计数（completed 含成功+失败结算；解析不重复证明：同内容二次上传计数不增）。 */
+  /** 任务计数（成功+失败结算；解析不重复证明：同内容二次上传计数不增）。 */
   private completedCount = 0;
 
   stats(): { active: number; queued: number; liveChildren: number; completed: number } {
-    return { active: this.activeCount, queued: this.waiters.length, liveChildren: this.live.size, completed: this.completedCount };
+    return { active: this.pumping ? 1 : 0, queued: this.queue.length, liveChildren: this.live.size, completed: this.completedCount };
   }
 
   run(kind: ParseJobKind, blobPath: string, expectedHash: string, opts: ParseRunOptions = {}): Promise<ParseRunResult> {
     if (this.disposed) {
-      return Promise.resolve({ ok: false, error: { code: 'parse-cancelled', message: '解析池已关闭（daemon 停机）——任务取消' } });
+      return Promise.resolve(cancelledResult('任务取消'));
     }
-    if (this.activeCount >= PARSE_CONCURRENCY) {
-      if (this.waiters.length >= PARSE_QUEUE_MAX) {
-        return Promise.resolve({ ok: false, error: { code: 'parse-busy', message: `解析队列已满（并发 ${PARSE_CONCURRENCY}+等待 ${PARSE_QUEUE_MAX}）——请稍后重试（明确拒绝，不悬挂）` } });
-      }
-      return new Promise<ParseRunResult>((resolve) => {
-        if (this.disposed) {
-          resolve({ ok: false, error: { code: 'parse-cancelled', message: '解析池已关闭（daemon 停机）——任务取消' } });
-          return;
-        }
-        this.waiters.push(resolve);
-      });
-    }
-    return this.runNow(kind, blobPath, expectedHash, opts);
-  }
-
-  private async runNow(kind: ParseJobKind, blobPath: string, expectedHash: string, opts: ParseRunOptions): Promise<ParseRunResult> {
-    this.activeCount += 1;
-    try {
-      const script = await resolveWorkerScript();
-      const jobId = `pj_${randomUUID()}`;
-      // 受控故障钩子：仅 ZS_TEST_PARSE_HOOKS=1 可达；缺省回落环境变量（命令层上传无 hooks
-      // 入口——归档竞态等故障注入按环境给）。
-      const hooks = process.env.ZS_TEST_PARSE_HOOKS === '1'
-        ? { busyMs: Number(process.env.ZS_TEST_PARSE_BUSY_MS ?? 0) || opts.hooks?.busyMs, exitCode: opts.hooks?.exitCode }
-        : undefined;
-      const job: ParseJob = { jobId, kind, blobPath, expectedHash, ...(hooks != null ? { hooks } : {}) };
-      return await this.dispatch(script, job, opts.deadlineMs ?? PARSE_DEADLINE_MS);
-    } finally {
-      this.activeCount -= 1;
-      const next = this.waiters.shift();
-      if (next != null) next(this.disposed
-        ? { ok: false, error: { code: 'parse-cancelled', message: '解析池已关闭（daemon 停机）——排队任务取消' } }
-        : await this.runNow(kind, blobPath, expectedHash, opts));
-    }
-  }
-
-  private dispatch(script: string, job: ParseJob, deadlineMs: number): Promise<ParseRunResult> {
     return new Promise<ParseRunResult>((resolve) => {
-      let child: ChildProcess;
-      try {
-        child = fork(script, [], {
-          stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-          execArgv: [...process.execArgv, `--max-old-space-size=${PARSE_MEMORY_LIMIT_MB}`],
-        });
-      } catch (error) {
-        resolve({ ok: false, error: { code: 'parse-worker-failed', message: `解析子进程启动失败：${error instanceof Error ? error.message : String(error)}` } });
+      if (this.disposed) { resolve(cancelledResult('任务取消')); return; }
+      if (this.pumping && this.queue.length >= PARSE_QUEUE_MAX) {
+        resolve({ ok: false, error: { code: 'parse-busy', message: `解析队列已满（并发 ${PARSE_CONCURRENCY}+等待 ${PARSE_QUEUE_MAX}）——请稍后重试（明确拒绝，不悬挂）` } });
         return;
       }
-      this.live.add(child);
-      let settled = false;
-      let timedOut = false;
-      let killTimer: NodeJS.Timeout | null = null;
-      let stderrTail = '';
-      child.stderr?.setEncoding('utf8');
-      child.stderr?.on('data', (d: string) => { stderrTail = (stderrTail + d).slice(-500); });
-      const finish = (r: ParseRunResult): void => {
-        if (settled) return;
-        settled = true;
-        this.completedCount += 1;
-        if (killTimer != null) { clearTimeout(killTimer); killTimer = null; }
-        resolve(r);
-      };
-      // 截止：TERM→宽限→KILL；**exit 确认后**才结算超时（收拢确认）。
-      const deadlineTimer = setTimeout(() => {
-        timedOut = true;
-        try { child.kill(); } catch { /* 已退出 */ }
-        killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }, PARSE_KILL_GRACE_MS);
-      }, deadlineMs);
-      child.once('message', (raw: unknown) => {
-        clearTimeout(deadlineTimer);
-        const resp = raw as ParseResponse;
-        if (resp == null || resp.jobId !== job.jobId) {
-          finish({ ok: false, error: { code: 'parse-worker-failed', message: '解析子进程响应不合法（jobId 不符）' } });
-          return;
-        }
-        if (Buffer.byteLength(JSON.stringify(resp), 'utf8') > PARSE_RESPONSE_MAX_BYTES) {
-          finish({ ok: false, error: { code: 'parse-output-budget', message: `解析响应超防御上限 ${PARSE_RESPONSE_MAX_BYTES}B——输出预算拒绝` } });
-          return;
-        }
-        if (resp.ok && resp.result != null) finish({ ok: true, result: resp.result });
-        else finish({ ok: false, error: resp.error ?? { code: 'parse-worker-failed', message: '解析失败（无错误详情）' } });
-      });
-      child.once('exit', (code, signal) => {
-        clearTimeout(deadlineTimer);
-        if (killTimer != null) { clearTimeout(killTimer); killTimer = null; }
-        this.live.delete(child);
-        if (settled) return;
-        if (this.disposed) {
-          finish({ ok: false, error: { code: 'parse-cancelled', message: '解析池已关闭（daemon 停机）——在途任务取消并确认退出' } });
-        } else if (timedOut) {
-          finish({ ok: false, error: { code: `${job.kind}-timeout`, message: `解析超时（${deadlineMs}ms 截止，子进程已终止并确认退出 code=${code ?? '?'}${signal != null ? ` signal=${signal}` : ''}）——资源限制如实拒绝` } });
-        } else {
-          finish({ ok: false, error: { code: 'parse-worker-exited', message: `解析子进程未产出结果即退出（code=${code ?? '?'}${signal != null ? ` signal=${signal}` : ''}${stderrTail.length > 0 ? `；stderr 尾部：${stderrTail.slice(-160)}` : ''}）` } });
-        }
-      });
-      child.once('error', (error) => {
-        clearTimeout(deadlineTimer);
-        this.live.delete(child);
-        finish({ ok: false, error: { code: 'parse-worker-failed', message: `解析子进程错误：${error.message}` } });
-      });
-      child.send(job);
+      this.queue.push({ kind, blobPath, expectedHash, opts, enqueuedAt: Date.now(), totalDeadlineMs: opts.deadlineMs ?? PARSE_DEADLINE_MS, resolve });
+      void this.pump();
     });
   }
 
-  /** 关停（daemon.stop）：杀全部子进程、拒绝排队任务，exit 确认后返回（有界）。 */
+  /** 调度泵：串行取件；每件经 dispatchJob（含 exit 收拢）后才取下一件（槽在收拢后释放）。 */
+  private async pump(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (!this.disposed && this.queue.length > 0) {
+        const job = this.queue.shift()!;
+        // 排队等待纳入端到端截止：入队起算剩余时间；耗尽=按超时结算（不启动子进程）。
+        const remaining = job.totalDeadlineMs - (Date.now() - job.enqueuedAt);
+        if (remaining <= 0) {
+          this.completedCount += 1;
+          job.resolve({ ok: false, error: { code: `${job.kind}-timeout`, message: `解析端到端超时（排队等待耗尽 ${job.totalDeadlineMs}ms 截止——未启动子进程，不虚假占槽）` } });
+          continue;
+        }
+        const result = await this.dispatchJob(job, remaining);
+        this.completedCount += 1;
+        job.resolve(result); // A 结算立即循环取 B——不被 B 或 A 的后续等待拖延
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  private async dispatchJob(job: QueuedJob, deadlineMs: number): Promise<ParseRunResult> {
+    let script: string;
+    try {
+      script = await resolveWorkerScript();
+    } catch (error) {
+      return { ok: false, error: { code: 'parse-worker-failed', message: `解析 worker 解析失败：${error instanceof Error ? error.message : String(error)}` } };
+    }
+    if (this.disposed) return cancelledResult('启动准备期间任务取消');
+    const jobId = `pj_${randomUUID()}`;
+    const hooks = process.env.ZS_TEST_PARSE_HOOKS === '1'
+      ? {
+          busyMs: Number(process.env.ZS_TEST_PARSE_BUSY_MS ?? 0) || job.opts.hooks?.busyMs,
+          exitCode: job.opts.hooks?.exitCode,
+          allocMB: Number(process.env.ZS_TEST_PARSE_ALLOC_MB ?? 0) || job.opts.hooks?.allocMB,
+        }
+      : undefined;
+    const message: ParseJob & { hooks?: { busyMs?: number; exitCode?: number; allocMB?: number } } = { jobId, kind: job.kind, blobPath: job.blobPath, expectedHash: job.expectedHash, ...(hooks != null ? { hooks } : {}) };
+    let child: ChildProcess;
+    try {
+      child = fork(script, [], {
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        execArgv: [...process.execArgv, `--max-old-space-size=${PARSE_MEMORY_LIMIT_MB}`],
+      });
+    } catch (error) {
+      return { ok: false, error: { code: 'parse-worker-failed', message: `解析子进程启动失败：${error instanceof Error ? error.message : String(error)}` } };
+    }
+    this.live.add(child);
+    // 进程总内存硬界（第三十轮二：--max-old-space-size 只限 V8 老生代，外部 Buffer 不受其
+    // 约束——Job Object PROCESS_MEMORY 覆盖整进程提交内存）。Windows 之外无 Job Object——
+    // 回退仅 V8 上限（限制缺口如实呈现，不宣称整进程硬界）。
+    void attachMemoryJobObject(child, PARSE_TOTAL_MEMORY_LIMIT_BYTES).catch(() => { /* 附加失败不阻断解析；限制降级为仅 V8 上限 */ });
+    let stderrTail = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (d: string) => { stderrTail = (stderrTail + d).slice(-500); });
+    return await new Promise<ParseRunResult>((resolve) => {
+      let settled = false;
+      let exited = false;
+      let timedOut = false;
+      let invalidResponse: string | null = null;
+      let pendingResult: ParseRunResult | null = null;
+      let deadlineTimer: NodeJS.Timeout | null = null;
+      let killTimer: NodeJS.Timeout | null = null;
+      let unconfirmedTimer: NodeJS.Timeout | null = null;
+      let exitGraceTimer: NodeJS.Timeout | null = null;
+      const clearTimers = (): void => {
+        for (const t of [deadlineTimer, killTimer, unconfirmedTimer, exitGraceTimer]) if (t != null) clearTimeout(t);
+        deadlineTimer = killTimer = unconfirmedTimer = exitGraceTimer = null;
+      };
+      const killLadder = (): void => {
+        try { child.kill(); } catch { /* 已退出 */ }
+        if (killTimer == null) killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }, PARSE_KILL_GRACE_MS);
+      };
+      const finish = (r: ParseRunResult): void => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        resolve(r);
+      };
+      // 端到端墙钟截止（覆盖加载/逐项提取/传输；收拢经 exit 确认后才结算）。
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        killLadder();
+        // 强杀后仍未确认 exit（理论罕见：句柄悬挂等）——有界兜底，如实登记不宣称杀净。
+        if (unconfirmedTimer == null) {
+          unconfirmedTimer = setTimeout(() => {
+            if (!exited) finish({ ok: false, error: { code: 'parse-kill-unconfirmed', message: `解析超时（${deadlineMs}ms）且子进程终止未确认（SIGTERM→SIGKILL 后 ${PARSE_KILL_GRACE_MS + 5_000}ms 无 exit）——按未收拢登记，不宣称杀净` } });
+          }, PARSE_KILL_GRACE_MS + 5_000);
+        }
+      }, deadlineMs);
+      child.once('message', (raw: unknown) => {
+        // 响应登记（不立即结算——槽在 exit 收拢后释放）。
+        const resp = raw as ParseResponse;
+        if (resp == null || typeof resp !== 'object' || resp.jobId !== jobId) {
+          invalidResponse = '响应不合法（jobId 不符）';
+          killLadder(); // 非法响应必须收拢对应进程（不能 resolve 后只清截止）
+          return;
+        }
+        if (Buffer.byteLength(JSON.stringify(resp), 'utf8') > PARSE_RESPONSE_MAX_BYTES) {
+          invalidResponse = `解析响应超防御上限 ${PARSE_RESPONSE_MAX_BYTES}B`;
+          killLadder();
+          return;
+        }
+        if (resp.ok && resp.result != null) pendingResult = { ok: true, result: resp.result };
+        else pendingResult = { ok: false, error: resp.error ?? { code: 'parse-worker-failed', message: '解析失败（无错误详情）' } };
+        if (deadlineTimer != null) { clearTimeout(deadlineTimer); deadlineTimer = null; }
+        // 成功路径：子进程应即退；2s 内未退（挂起）→ kill 收拢（不无限等待释放槽）。
+        exitGraceTimer = setTimeout(() => { if (!exited) killLadder(); }, 2_000);
+      });
+      child.once('exit', (code, signal) => {
+        // 退出登记+槽释放点（本回调即收拢确认）。
+        exited = true;
+        this.live.delete(child);
+        if (settled) return;
+        if (this.disposed) finish(cancelledResult('在途任务取消并确认退出'));
+        else if (invalidResponse != null) finish({ ok: false, error: { code: 'parse-worker-failed', message: `解析子进程响应被拒（${invalidResponse}）——进程已收拢（code=${code ?? '?'}${signal != null ? ` signal=${signal}` : ''}）` } });
+        else if (pendingResult != null) finish(pendingResult);
+        else if (timedOut) finish({ ok: false, error: { code: `${message.kind}-timeout`, message: `解析超时（${deadlineMs}ms 截止，子进程已终止并确认退出 code=${code ?? '?'}${signal != null ? ` signal=${signal}` : ''}）——资源限制如实拒绝` } });
+        else finish({ ok: false, error: { code: 'parse-worker-exited', message: `解析子进程未产出结果即退出（code=${code ?? '?'}${signal != null ? ` signal=${signal}` : ''}${stderrTail.length > 0 ? `；stderr 尾部：${stderrTail.slice(-160)}` : ''}）` } });
+      });
+      child.once('error', (error) => {
+        this.live.delete(child);
+        finish({ ok: false, error: { code: 'parse-worker-failed', message: `解析子进程错误：${error.message}` } });
+      });
+      child.send(message);
+    });
+  }
+
+  /** 关停（daemon.stop）：排队即取消、在途 kill 收拢，exit 确认后返回（有界）。 */
   async dispose(): Promise<void> {
     this.disposed = true;
-    const cancelled: ParseRunResult = { ok: false, error: { code: 'parse-cancelled', message: '解析池已关闭（daemon 停机）——排队任务取消' } };
-    for (const w of this.waiters.splice(0)) w(cancelled); // 已排队任务以取消结算（不再启动）
+    for (const w of this.queue.splice(0)) {
+      this.completedCount += 1;
+      w.resolve(cancelledResult('排队任务取消'));
+    }
     const children = [...this.live];
     for (const c of children) { try { c.kill(); } catch { /* 已退出 */ } }
     const allExited = Promise.all(children.map((c) => new Promise<void>((r) => c.once('exit', () => r()))));
