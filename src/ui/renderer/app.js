@@ -374,6 +374,266 @@ async function loadRendererPdfjs() {
   }
   return rendererPdfjsPromise;
 }
+
+// ---------- 共享预览完善（第三十轮四/五）----------
+/** 项目文件只读快照（project.file.read：路径限项目根+实身份+文本白名单——非托管副本）。 */
+async function projectFilePreview(projectId, name) {
+  const myGen = ++previewGeneration;
+  const r = await command('project.file.read', { projectId, path: name });
+  if (myGen !== previewGeneration) return; // 迟到作废
+  const box = el('attach-preview');
+  if (box == null) { showError(`项目文件（${name}）：${r.bytes}B——容器缺失`); return; }
+  box.classList.remove('hidden');
+  const head = document.createElement('div');
+  head.className = 'meta';
+  head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes}B${r.truncated ? `（超 64KB 截断）` : ''} · 只读快照（非托管副本——源文件变化不追溯；不进模型输入）`;
+  const close = document.createElement('button');
+  close.className = 'chip';
+  close.textContent = '关闭预览';
+  close.onclick = () => closeAttachPreview();
+  const content = document.createElement('pre');
+  content.className = 'attach-preview-text';
+  content.textContent = r.content;
+  const wrap = document.createElement('div');
+  wrap.append(head, close, content);
+  wirePreviewTools(wrap, { filename: r.baseName, hash: `project-file:${projectId}/${name}`, revision: null, pre: content });
+  box.replaceChildren(wrap);
+}
+
+/** Markdown 安全转换（零依赖）：**先整体转义**再生成受控标签——脚本/事件属性无处出现；
+ * 远程图片不加载（自动网络访问禁止——占位文本）；链接仅 http(s) 且新窗口；代码只展示。 */
+function mdToSafeHtml(md) {
+  const escAll = (t) => t.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  const lines = md.split(String.fromCharCode(10));
+  let html = '';
+  let inCode = false;
+  let listOpen = false;
+  const closeList = () => { if (listOpen) { html += '</ul>'; listOpen = false; } };
+  const inline = (t) => {
+    let out = escAll(t);
+    out = out.replaceAll('`([^`]+)`', '$1'); // 占位防误配（下方用正则重做）
+    out = escAll(t);
+    out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/(^|\s)\*([^*]+)\*/g, '$1<em>$2</em>');
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[图片占位：$1（远程图片不加载——离线安全）]');
+    return out;
+  };
+  for (const raw of lines) {
+    if (/^```/.test(raw.trim())) {
+      closeList();
+      html += inCode ? '</code></pre>' : '<pre class="md-code"><code>';
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) { html += escAll(raw) + String.fromCharCode(10); continue; }
+    const line = raw.trimEnd();
+    if (/^#{1,3}\s/.test(line)) {
+      closeList();
+      const level = (line.match(/^#+/) ?? ['#'])[0].length;
+      html += `<h${level + 1}>${inline(line.replace(/^#+\s*/, ''))}</h${level + 1}>`;
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      if (!listOpen) { html += '<ul>'; listOpen = true; }
+      html += `<li>${inline(line.replace(/^[-*]\s+/, ''))}</li>`;
+      continue;
+    }
+    if (/^>\s?/.test(line)) { closeList(); html += `<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`; continue; }
+    if (/^\|.*\|$/.test(line)) { closeList(); html += `<div class="md-table-line">${inline(line)}</div>`; continue; }
+    closeList();
+    if (line.trim().length === 0) { html += '<div class="md-blank"></div>'; continue; }
+    html += `<p>${inline(line)}</p>`;
+  }
+  closeList();
+  if (inCode) html += '</code></pre>';
+  return html;
+}
+
+/** 预览工具条（共享规格：复制引用/预览内搜索/行引用入草稿——版本/hash 准确，不自动发送）。 */
+function wirePreviewTools(wrap, { filename, hash, revision, pre }) {
+  const tools = document.createElement('div');
+  tools.className = 'preview-tools';
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'chip';
+  copyBtn.textContent = '复制引用';
+  copyBtn.title = '复制资源身份引用（文件名+版本+hash——准确锚定所见资源）';
+  copyBtn.onclick = () => void (async () => {
+    const ref = revision != null ? `${filename} v${revision} sha256:${String(hash).slice(0, 12)}…` : `${filename}（${String(hash).slice(0, 40)}…）`;
+    await navigator.clipboard.writeText(ref);
+    showError(`已复制引用：${ref}`);
+  })().catch((e) => showError(`复制失败：${e.message}`));
+  tools.append(copyBtn);
+  if (pre != null) {
+    // 预览内搜索：定位首个匹配行并高亮（行号 = pre 内 data-line 序）。
+    const search = document.createElement('input');
+    search.className = 'preview-search';
+    search.placeholder = '预览内搜索…';
+    search.id = 'preview-search';
+    const hit = document.createElement('span');
+    hit.className = 'meta';
+    hit.id = 'preview-search-hit';
+    const doSearch = () => {
+      const q = search.value.trim();
+      for (const line of pre.querySelectorAll('.preview-line')) line.classList.remove('hit');
+      if (q.length === 0) { hit.textContent = ''; return; }
+      const target = [...pre.querySelectorAll('.preview-line')].find((l) => l.textContent.includes(q));
+      if (target == null) { hit.textContent = `无匹配`; return; }
+      target.classList.add('hit');
+      target.scrollIntoView({ block: 'center' });
+      hit.textContent = `第 ${target.dataset.line} 行命中`;
+    };
+    search.oninput = () => doSearch();
+    tools.append(search, hit);
+  }
+  wrap.prepend(tools);
+}
+
+/** 文本 pre 按行结构化（行号+行引用入草稿——点击行号把引用插入当前输入框，不发送）。 */
+function structurePreviewLines(pre, filename) {
+  const lines = pre.textContent.split(String.fromCharCode(10));
+  pre.textContent = '';
+  lines.forEach((text, i) => {
+    const row = document.createElement('div');
+    row.className = 'preview-line';
+    row.dataset.line = String(i + 1);
+    const no = document.createElement('span');
+    no.className = 'preview-line-no';
+    no.textContent = String(i + 1);
+    no.title = '点击把行引用插入当前输入框（仅草稿——不发送）';
+    no.onclick = () => {
+      const input = currentView() === 'dm' ? el('dm-input') : el('composer-input');
+      if (input == null) return;
+      const quote = `> ${filename}:L${i + 1} ${text.trim().slice(0, 60)}`;
+      input.value = input.value.length > 0 ? `${input.value}${String.fromCharCode(10)}${quote}` : quote;
+      input.focus();
+      showError(`已插入行引用（草稿）：${filename}:L${i + 1}`);
+    };
+    const span = document.createElement('span');
+    span.textContent = text.length === 0 ? ' ' : text;
+    row.append(no, span);
+    pre.append(row);
+  });
+}
+
+/** 消息操作组（第三十轮六）：复制/引用/表情（惰性拉取计数）+既有收藏。 */
+function attachMsgActions(div, message) {
+  const bodyText = (() => { try { return (JSON.parse(message.body_json) ?? {}).text ?? ''; } catch { return ''; } })();
+  const actions = document.createElement('span');
+  actions.className = 'msg-actions';
+  const mk = (label, title, onclick) => {
+    const b = document.createElement('button');
+    b.className = 'msg-action';
+    b.textContent = label;
+    b.title = title;
+    b.onclick = onclick;
+    return b;
+  };
+  actions.append(
+    mk('复制', '复制消息正文', () => void navigator.clipboard.writeText(bodyText).then(() => showError('已复制消息正文'), (e) => showError(`复制失败：${e.message}`))),
+    mk('引用', '把引用插入当前输入框（草稿——不发送）', () => {
+      const input = currentView() === 'dm' ? el('dm-input') : el('composer-input');
+      if (input == null) return;
+      const quote = `> ${bodyText.split(String.fromCharCode(10))[0]?.slice(0, 80) ?? ''}`;
+      input.value = input.value.length > 0 ? `${input.value}${String.fromCharCode(10)}${quote}` : quote;
+      input.focus();
+      showError('已插入引用（草稿）');
+    }),
+    mk('😊', '表情反应（点击拉取/切换——本地用户操作）', () => void (async () => {
+      let layer = div.querySelector('.msg-emoji-layer');
+      if (layer != null) { layer.classList.toggle('hidden'); return; }
+      layer = document.createElement('div');
+      layer.className = 'msg-emoji-layer';
+      const reactions = await command('message.reactions', { messageId: message.id }).catch(() => null);
+      for (const r of reactions?.items ?? []) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = `${r.emoji}${r.mine ? '（我）' : ''}`;
+        layer.append(chip);
+      }
+      for (const emoji of ['👍', '❤️', '😂', '🎉', '👀', '⚠️']) {
+        const b = document.createElement('button');
+        b.className = 'chip';
+        b.textContent = emoji;
+        b.onclick = () => void (async () => {
+          const r = await command('message.react', { messageId: message.id, emoji });
+          showError(r.reacted ? `已回应 ${emoji}` : `已取消 ${emoji}`);
+          layer?.remove();
+        })().catch((e) => showError(`回应失败：${e.message}`));
+        layer.append(b);
+      }
+      div.append(layer);
+    })().catch(() => {})),
+  );
+  div.prepend(actions);
+}
+
+// ---------- Activity 流（DEV-18 剩余，第三十轮六）----------
+let activityVisible = false;
+async function renderActivity() {
+  const box = el('activity-list');
+  if (box == null || !activityVisible) return;
+  const scope = el('activity-scope')?.value ?? 'all';
+  const data = await command('activity.list', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId, limit: 80 } : { scope: 'all', limit: 80 }).catch((e) => null);
+  if (data == null) { box.textContent = `Activity 读取失败：${scope}`; return; }
+  box.textContent = '';
+  if ((data.items ?? []).length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = '暂无动态。';
+    box.append(empty);
+    return;
+  }
+  for (const it of data.items) {
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+    const head = document.createElement('div');
+    head.className = 'meta';
+    head.textContent = `${new Date(it.at).toLocaleString()} · ${it.kindLabel} · ${it.projectName}`;
+    const body = document.createElement('div');
+    body.textContent = it.summary.length > 0 ? it.summary : '—';
+    row.append(head, body);
+    if (it.locate != null) {
+      const go = document.createElement('button');
+      go.className = 'chip';
+      go.textContent = '定位';
+      go.onclick = () => { location.hash = String(it.locate).slice(1); };
+      row.append(go);
+    }
+    box.append(row);
+  }
+}
+
+// ---------- 导出（第三十轮五）----------
+async function runExport(target, format, label) {
+  try {
+    const r = await command('export.create', { target, format });
+    showError(`导出完成（${label} · ${format}）：${(r.files ?? []).length} 个文件——${r.dir}`);
+    const open = el('export-open-last');
+    if (open != null) {
+      open.classList.remove('hidden');
+      open.onclick = () => void window.zs.openPath(r.dir).catch((e) => showError(`打开目录失败：${e.message}`));
+    }
+  } catch (e) { showError(`导出失败：${e.message}`); }
+}
+function wireExportControls() {
+  const threadBtn = el('thread-export-btn');
+  if (threadBtn != null) {
+    threadBtn.onclick = () => {
+      if (state.openThreadId == null || state.projectId == null || state.conversationId == null) { showError('仅线程视图可导出线程'); return; }
+      void runExport({ kind: 'thread', projectId: state.projectId, conversationId: state.conversationId, threadId: state.openThreadId }, (el('thread-export-format')?.value ?? 'md'), '线程');
+    };
+  }
+  const dmBtn = el('dm-export-btn');
+  if (dmBtn != null) {
+    dmBtn.onclick = () => {
+      if (state.openDmId == null || state.projectId == null) { showError('仅私信视图可导出会话'); return; }
+      void runExport({ kind: 'conversation', projectId: state.projectId, conversationId: state.openDmId }, (el('dm-export-format')?.value ?? 'md'), '私信会话');
+    };
+  }
+}
+
 /** 共享文本预览（草稿芯片与已发消息附件共用）：previewText 服务端已做 audience+完整性
  * （sha256 实际字节核对+实际存储根校验）+字节截断——这里只呈现原始大小/提取大小/截断事实
  * 与全文。附基础评论区（第二十七轮六；第二十八轮三版本绑定）：行号/选区/正文提交
@@ -681,6 +941,33 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   content.textContent = r.text;
   const wrap = document.createElement('div');
   wrap.append(head, close, content);
+  // Markdown 安全预览（第三十轮四）：先整体转义再生成受控标签——脚本/事件属性无处出现；
+  // 远程图片不加载；代码只展示。可切回纯文本。
+  const displayName = String(r.filename ?? filename ?? '');
+  const isMd = /\.(md|markdown)$/i.test(displayName);
+  if (isMd) {
+    const mdBox = document.createElement('div');
+    mdBox.className = 'office-docx-html md-preview';
+    mdBox.innerHTML = mdToSafeHtml(r.text);
+    const mdNote = document.createElement('div');
+    mdNote.className = 'meta';
+    mdNote.textContent = 'Markdown 安全预览（转义后受控标签——脚本/事件属性/远程图片不加载；代码只展示）';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'chip';
+    toggleBtn.textContent = '看原文';
+    toggleBtn.onclick = () => {
+      const showingMd = !mdBox.classList.contains('hidden');
+      mdBox.classList.toggle('hidden');
+      content.classList.toggle('hidden');
+      toggleBtn.textContent = showingMd ? '看渲染' : '看原文';
+    };
+    const mdWrap = document.createElement('div');
+    mdWrap.append(mdNote, toggleBtn, mdBox);
+    wrap.append(mdWrap);
+  } else {
+    structurePreviewLines(content, displayName); // 行号+行引用
+  }
+  wirePreviewTools(wrap, { filename: displayName, hash: r.hash, revision: r.revision, pre: content });
   // 评论区（列表 + 新增表单——expectedHash/expectedRevision 沿本次预览所见版本）。
   const comments = await command('attachment.comment.list', { attachmentId }).catch(() => null);
   if (!alive()) return; // 评论列表迟到同作废
@@ -946,7 +1233,21 @@ async function renderFiles() {
       wrapEl.append(head, ...rows);
       return wrapEl;
     };
-    const attRows = (g.attachments ?? []).map((a) => mkRow('托管附件', `📎 ${a.filename}（${a.hash.slice(0, 8)}… v${a.revision}${a.audience === 'dm' ? ' · 私信' : ''}）`, a.locate, `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'} · ${a.conversationId}`));
+    // 共享预览入口（第三十轮四）：托管附件点击→统一预览面板（previewAttachment 按 kind 分流——服务端 audience/实身份/hash 校验）。
+    const attRows = (g.attachments ?? []).map((a) => {
+      const row = document.createElement('button');
+      row.className = 'chip';
+      row.textContent = `📎 ${a.filename}（${a.hash.slice(0, 8)}… v${a.revision}${a.audience === 'dm' ? ' · 私信' : ''}）`;
+      row.title = `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'} · ${a.conversationId}——点击预览`;
+      row.onclick = () => void previewAttachment(a.attachmentId, a.filename, a.kind).catch((e) => showError(`预览失败：${e.message}`));
+      const wrap = document.createElement('div');
+      wrap.className = 'board-room';
+      const tag = document.createElement('span');
+      tag.className = 'meta';
+      tag.textContent = '托管附件';
+      wrap.append(tag, row);
+      return wrap;
+    });
     const draftRows = (g.drafts ?? []).map((d) => mkRow('Agent 草稿', `草稿 ${d.changeSetId.slice(0, 8)}…（${d.applicationStatus}）${d.taskTitle != null ? ` · ${d.taskTitle}` : ''}`, d.locate, `change_set：${d.beforeRef.slice(0, 8)}…→${d.afterRef.slice(0, 8)}…`));
     const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} v${d.revision}（${d.manifestHash.slice(0, 8)}…${d.audience === 'dm' ? ' · 私信' : ''}）`, d.locate, `交付 ${d.deliveryId}`));
     const pfRow = (() => {
@@ -957,6 +1258,15 @@ async function renderFiles() {
       const wrapEl = document.createElement('div');
       wrapEl.className = 'board-room';
       wrapEl.append(row);
+      for (const f of (g.projectFiles ?? []).slice(0, 40)) {
+        if (f.dir) continue;
+        const b = document.createElement('button');
+        b.className = 'chip';
+        b.textContent = f.name;
+        b.title = '点击读取只读快照（文本白名单——二进制走 Git/系统工具）';
+        b.onclick = () => void projectFilePreview(g.projectId, f.name).catch((e) => showError(`项目文件读取失败：${e.message}`));
+        wrapEl.append(b);
+      }
       return wrapEl;
     })();
     for (const s of [sec('托管附件', attRows), sec('Agent 草稿', draftRows), sec('交付成果', delRows), pfRow]) {
@@ -3078,6 +3388,21 @@ el('files-toggle').onclick = () => {
 };
 el('files-refresh').onclick = () => void renderFiles().catch(() => {});
 el('files-scope').addEventListener('change', () => void renderFiles().catch(() => {}));
+// Activity 流（第三十轮六）：工具区入口——只读聚合（零运行零唤醒）。
+el('activity-toggle').onclick = () => {
+  activityVisible = !activityVisible;
+  filesVisible = false;
+  boardVisible = false;
+  el('activity').classList.toggle('hidden', !activityVisible);
+  el('files').classList.add('hidden');
+  el('board').classList.add('hidden');
+  el('pool').classList.toggle('hidden', activityVisible);
+  if (activityVisible) { void renderActivity().catch(() => {}); el('thread-title').textContent = '动态'; }
+  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+};
+el('activity-refresh').onclick = () => void renderActivity().catch(() => {});
+el('activity-scope').addEventListener('change', () => void renderActivity().catch(() => {}));
+wireExportControls(); // 导出控件（线程/私信头部——第三十轮五）
 el('search-go').onclick = () => void doSearch(1).catch(() => {});
 el('search-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void doSearch(1).catch(() => {}); });
 el('search-prev').onclick = () => void doSearch(Math.max(1, searchState.page - 1)).catch(() => {});

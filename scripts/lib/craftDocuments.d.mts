@@ -8,6 +8,8 @@ export declare function makeDocx(input: { paras?: string[]; table?: string[][] }
 export type XlsxCell = string | number | null | { formula: string; cached?: string } | { date: number } | { formula?: undefined; cached?: undefined; date?: undefined };
 export declare function makeXlsx(sheets: Array<{ name: string; rows: XlsxCell[][]; merges?: string[] }>): Buffer;
 export declare function makePptx(slides: Array<{ texts?: string[]; notes?: string | null }>): Buffer;
+export declare function makePptxZipEntries(input: { presentationRids: Array<{ rid: string; target: string }>; slideFiles: Record<number, string[]>; notes?: Record<number, { no: number; text: string }> }): Record<string, Buffer>;
+export declare function makePptxSlides(input: { slides: Array<{ no: number; texts?: string[]; notes?: string | null; notesNo?: number }>; orphanSlides?: number[] }): Buffer;
 export declare function makeMacroDocx(): Buffer;
 export declare function makeTraversalZip(): Buffer;
 export declare function makeManyEntryZip(): Buffer;

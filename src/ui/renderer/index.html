@@ -87,6 +87,7 @@
         <button id="repo-status-toggle" class="chip" title="显示/隐藏仓库状态区块（设置持久化，重开生效）">仓库状态：开</button>
         <button id="board-toggle" class="chip" title="看板视图（DEV-19 首包）：只读聚合当前/全部可访问项目的任务状态——打开不唤醒成员、不创建运行">看板</button>
         <button id="files-toggle" class="chip" title="Files 集合（DEV-19）：项目文件/托管附件/Agent 草稿/交付成果四类分列——只读，逐项保留来源/版本/hash 与定位">Files</button>
+          <button id="activity-toggle" class="chip" title="Activity 流（DEV-18）：domain_events 只读聚合（DM 事件仅本人可见）——零运行零唤醒">动态</button>
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
         <div id="recovery-help" class="resume-info recovery-help hidden">
@@ -125,10 +126,20 @@
         </div>
         <div id="files-groups"></div>
       </section>
+      <section id="activity" class="files hidden">
+        <div class="board-toolbar">
+          <select id="activity-scope"><option value="all">全部可访问项目</option><option value="project">当前项目</option></select>
+          <button id="activity-refresh" class="chip">刷新</button>
+          <span class="meta">Activity 流（只读聚合——DM 事件仅本人参与可见；定位走深链）。</span>
+        </div>
+        <div id="activity-list"></div>
+      </section>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">
         <div class="thread-back">
           <button id="thread-back-btn">← 返回主池</button>
+          <select id="thread-export-format" class="export-format" title="导出本线程（范围快照——附件按 hash 拷入导出包）"><option value="md">Markdown</option><option value="html">HTML（离线包）</option><option value="docx">DOCX</option></select>
+          <button id="thread-export-btn" class="chip">⬇ 导出线程</button>
           <span id="thread-status" class="thread-status"></span>
           <button id="thread-follow-btn" class="chip" title="关注=我的阅读订阅（不改变任务执行与冻结参与者）；有新回复进「待我处理」">☆ 关注</button>
           <button id="thread-mute-btn" class="chip" title="静音=不进未读与通知聚合（卡片仍可见；可再取消静音）">静音</button>
@@ -156,6 +167,9 @@
           <span id="dm-title" class="thread-status"></span>
           <button id="dm-remind-btn" class="chip" title="设置每日提醒（DEV-23 首版：每天此刻唤醒该成员——经 reminder.schedule 正式命令）">⏰ 提醒</button>
       <button id="dm-rename-btn" class="chip hidden" title="重命名会话（不换项目/对端、不重置历史或 session）">✏️ 重命名</button>
+          <select id="dm-export-format" class="export-format hidden" title="导出本私信会话（范围快照——audience 逐项校验，不扩大范围）"><option value="md">Markdown</option><option value="html">HTML（离线包）</option><option value="docx">DOCX</option></select>
+          <button id="dm-export-btn" class="chip hidden" title="导出本私信会话">⬇ 导出会话</button>
+          <button id="export-open-last" class="chip hidden" title="在系统资源管理器打开上次导出目录">📂 打开导出目录</button>
           <span id="dm-state" class="thread-status"></span>
           <button id="dm-stop-btn" class="danger hidden" title="停止当前运行（排队消息转暂停，需显式继续）">停止</button>
           <button id="dm-resume-btn" class="hidden" title="继续被停止后挂起的排队消息">继续队列</button>

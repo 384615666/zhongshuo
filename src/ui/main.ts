@@ -8,7 +8,7 @@
  */
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, resolve, normalize } from 'node:path';
+import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -261,9 +261,21 @@ app.whenReady().then(async () => {
   // zsres://app/<相对路径> → renderer 目录内文件（穿越拒绝）；页面自身经该协议加载（模块/
   // worker/fetch 同源可用——见文件头注释）。
   protocol.handle('zsres', (request) => {
-    const rel = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''));
+    const url = new URL(request.url);
+    // host 白名单（第三十轮四：standard+secure 注册本身不是访问校验——跨 host/越界/编码穿越
+    // 均须拒绝；路径解码后按段拒绝 `..`，再 normalize 比对根前缀）。
+    if (url.hostname !== 'app') {
+      return new Response(`zsres host 不在白名单：${url.hostname}`, { status: 403 });
+    }
+    let rel: string;
+    try { rel = decodeURIComponent(url.pathname.replace(/^\/+/, '')); }
+    catch { return new Response('zsres 路径含非法编码', { status: 400 }); }
+    if (rel.split('/').some((seg) => seg === '..')) {
+      return new Response('zsres 路径越界拒绝', { status: 403 });
+    }
     const filePath = normalize(join(rendererRoot, rel));
-    if (filePath !== rendererRoot && !filePath.startsWith(rendererRoot + '\\') && !filePath.startsWith(rendererRoot + '/')) {
+    const rootSep = sep;
+    if (filePath !== rendererRoot && !filePath.startsWith(rendererRoot + rootSep)) {
       return new Response(null, { status: 403 });
     }
     return net.fetch(pathToFileURL(filePath).toString());
@@ -293,6 +305,19 @@ app.whenReady().then(async () => {
     }
     await ensureConnection(); // 就绪截止/并发共享/退出即败（见函数头）
     return pipe!.send(envelope);
+  });
+  ipcMain.handle('zs:openPath', async (_event, target: unknown) => {
+    // 导出目录打开（第三十轮五）：仅允许应用数据区 exports/ 内路径——外部任意路径不打开。
+    if (typeof target !== 'string' || target.length === 0) throw new Error('openPath 需要路径');
+    const resolved = resolve(String(target));
+    const exportsRoot = resolve(join(appDataDir, 'exports'));
+    const sep2 = sep;
+    if (resolved !== exportsRoot && !resolved.startsWith(exportsRoot + sep2)) {
+      throw new Error(`仅允许打开导出目录（${exportsRoot}）内的路径`);
+    }
+    const { shell } = await import('electron');
+    shell.showItemInFolder(join(resolved, '.'));
+    return resolved;
   });
   ipcMain.handle('zs:pickFolder', async () => {
     // 自动化测试钩子（仅显式 ZS_PICK_FOLDER 时替代原生对话框返回值；后续链路不变）。

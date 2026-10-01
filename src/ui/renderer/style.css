@@ -159,3 +159,22 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .slides-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
 .slide-card { border: 1px solid var(--border, #d0d4dc); background: #fff; padding: 8px 10px; }
 .slide-card .attach-preview-text { max-height: 180px; }
+
+/* ---------- 第三十轮：预览工具条/Markdown/消息操作/Activity/导出 ---------- */
+.preview-tools { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+.preview-search { flex: 0 1 200px; min-width: 140px; font-size: 12px; padding: 2px 6px; }
+.preview-line { display: flex; gap: 8px; }
+.preview-line.hit { background: #fff3c4; border-radius: 3px; }
+.preview-line-no { color: #8a92aa; min-width: 2.4em; text-align: right; cursor: pointer; user-select: none; font-size: 11px; }
+.preview-line-no:hover { color: #2563eb; text-decoration: underline; }
+.md-preview h2, .md-preview h3, .md-preview h4 { margin: 10px 0 4px; }
+.md-preview p { margin: 4px 0; }
+.md-preview ul { margin: 4px 0 4px 20px; }
+.md-preview .md-code { background: #eef0f4; padding: 8px 10px; border-radius: 6px; overflow: auto; }
+.md-blank { height: 6px; }
+.msg-actions { display: inline-flex; gap: 2px; margin-right: 6px; opacity: 0.55; }
+.msg:hover .msg-actions { opacity: 1; }
+.msg-action { border: none; background: none; cursor: pointer; font-size: 12px; padding: 0 3px; color: #47506a; }
+.msg-emoji-layer { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0; }
+.activity-row { border: 1px solid #e3e6ee; background: #fff; border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.export-format { font-size: 12px; padding: 2px 4px; }

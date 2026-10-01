@@ -261,28 +261,67 @@ export function makeXlsx(sheets) {
   return zipToBuffer(files);
 }
 
-/** PPTX：每页文字（a:t 按序）+备注页。 */
-export function makePptx(slides) {
+/** PPTX 顺序样本（第三十轮三）：sldIdLst 按数组顺序引用（rIdN→slides/slide{no}.xml——
+ * 支持编号不连续/重排）；备注经该页自己的关系表（slideN.xml.rels→notesSlide{notesNo}.xml
+ * ——**编号与页号无假定对应**）；orphanSlides=存在文件但未被引用（应被排除）。
+ * slides: [{ no: 5, texts: ['...'], notes: '...', notesNo: 3 }, ...] */
+export function makePptxSlides({ slides, orphanSlides = [] }) {
   const files = {
     '[Content_Types].xml': '',
     '_rels/.rels': `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>`,
     'ppt/presentation.xml': `${CT_HEADER}<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')}</p:sldIdLst></p:presentation>`,
   };
-  let overrides = '';
+  let overrides = '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>';
   let rels = '';
-  slides.forEach((s, i) => {
-    overrides += `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
-    rels += `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`;
-    const texts = (s.texts ?? []).map((t) => `<a:p><a:r><a:t>${escapeXml(t)}</a:t></a:r></a:p>`).join('');
-    files[`ppt/slides/slide${i + 1}.xml`] = `${CT_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>${texts}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
-    if (s.notes != null) {
-      overrides += `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`;
-      files[`ppt/notesSlides/notesSlide${i + 1}.xml`] = `${CT_HEADER}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${escapeXml(s.notes)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+  const allSlideNos = [...slides.map((x) => x.no), ...orphanSlides];
+  for (const no of allSlideNos) overrides += `<Override PartName="/ppt/slides/slide${no}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+  slides.forEach((sl, i) => {
+    rels += `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${sl.no}.xml"/>`;
+    const texts = (sl.texts ?? []).map((t) => `<a:p><a:r><a:t>${escapeXml(t)}</a:t></a:r></a:p>`).join('');
+    files[`ppt/slides/slide${sl.no}.xml`] = `${CT_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>${texts}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+    if (sl.notes != null) {
+      const notesNo = sl.notesNo ?? sl.no; // 缺省同号；样本可显式错开
+      overrides += `<Override PartName="/ppt/notesSlides/notesSlide${notesNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`;
+      files[`ppt/slides/_rels/slide${sl.no}.xml.rels`] = `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${notesNo}.xml"/></Relationships>`;
+      files[`ppt/notesSlides/notesSlide${notesNo}.xml`] = `${CT_HEADER}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${escapeXml(sl.notes)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
     }
   });
-  files['[Content_Types].xml'] = `${CT_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>${overrides}</Types>`;
+  files['[Content_Types].xml'] = `${CT_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`;
   files['ppt/_rels/presentation.xml.rels'] = `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`;
   return zipToBuffer(files);
+}
+
+/** PPTX 底层组装（孤立页等反例用）：presentationRids 定义 sldIdLst 顺序与目标；
+ * slideFiles={no:[texts]} 生成页文件（未被引用=孤立）；notes={slideNo:{no, text}} 经页关系表。 */
+export function makePptxZipEntries({ presentationRids, slideFiles, notes = {} }) {
+  const files = {
+    '[Content_Types].xml': '',
+    '_rels/.rels': `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>`,
+    'ppt/presentation.xml': `${CT_HEADER}<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst>${presentationRids.map((_, i) => `<p:sldId id="${256 + i}" r:id="${_.rid}"/>`).join('')}</p:sldIdLst></p:presentation>`,
+  };
+  let overrides = '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>';
+  let rels = '';
+  for (const r of presentationRids) rels += `<Relationship Id="${r.rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="${r.target}"/>`;
+  for (const [noStr, texts] of Object.entries(slideFiles)) {
+    const no = Number(noStr);
+    overrides += `<Override PartName="/ppt/slides/slide${no}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+    const body = texts.map((t) => `<a:p><a:r><a:t>${escapeXml(t)}</a:t></a:r></a:p>`).join('');
+    files[`ppt/slides/slide${no}.xml`] = `${CT_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>${body}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+    const note = notes[no];
+    if (note != null) {
+      overrides += `<Override PartName="/ppt/notesSlides/notesSlide${note.no}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`;
+      files[`ppt/slides/_rels/slide${no}.xml.rels`] = `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${note.no}.xml"/></Relationships>`;
+      files[`ppt/notesSlides/notesSlide${note.no}.xml`] = `${CT_HEADER}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${escapeXml(note.text)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+    }
+  }
+  files['[Content_Types].xml'] = `${CT_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`;
+  files['ppt/_rels/presentation.xml.rels'] = `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`;
+  return files;
+}
+
+/** PPTX 兼容旧签名（slides: [{texts, notes}]——编号 1..n、备注缺省同号，经页关系表定位）。 */
+export function makePptx(slides) {
+  return makePptxSlides({ slides: slides.map((s, i) => ({ no: i + 1, texts: s.texts, notes: s.notes })) });
 }
 
 /** 宏文档样本（macroEnabled 内容类型——.docm/.xlsm 形态）。 */
@@ -384,7 +423,7 @@ export function makeCsvText(rows, delim = ',') {
   return Buffer.from(rows.map((r) => r.map((c) => (/[",\n]/.test(String(c)) ? `"${String(c).replaceAll('"', '""')}"` : String(c))).join(delim)).join('\r\n'), 'utf8');
 }
 
-function zipToBuffer(files) {
+export function zipToBuffer(files) {
   const zipped = {};
   for (const [k, v] of Object.entries(files)) zipped[k] = typeof v === 'string' ? Buffer.from(v, 'utf8') : v;
   return Buffer.from(zipSync(zipped, { level: 6 })); // Buffer（.toString('base64') 语义正确）

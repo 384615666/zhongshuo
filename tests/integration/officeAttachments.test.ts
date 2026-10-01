@@ -24,7 +24,7 @@ import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 import { getParsePool, disposeParsePool } from '../../src/daemon/parsePool.ts';
 import {
   makeDocx, makeXlsx, makePptx, makeCsvText, makePng, makeJpegHeaderOnly, makeGifHeaderOnly,
-  makeWebpVp8HeaderOnly, makeWebpVp8lHeaderOnly, makeMacroDocx,
+  makeWebpVp8HeaderOnly, makeWebpVp8lHeaderOnly, makeMacroDocx, makePptxSlides, makePptxZipEntries, zipToBuffer,
 } from '../../scripts/lib/craftDocuments.mjs';
 
 process.env.ZS_ALLOW_FAKE = '1';
@@ -183,28 +183,61 @@ describe('XLSX / CSV', () => {
 });
 
 describe('PPTX', () => {
-  it('按页文字+备注保序注入；页图能力如实 unsupported', async () => {
+  it('真实顺序（sldIdLst）+关系定位备注（编号不一致）+孤立页排除+备注计入预算；注入页序；页图如实 unsupported', async () => {
     const env = makeEnv();
-    const bytes = makePptx([
-      { texts: ['第一页标题', '要点甲'], notes: '第一页备注 演讲词' },
-      { texts: ['第二页标题'], notes: null },
-    ]);
-    const up = await env.cmd<{ attachmentId: string; slides: number }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '演示.pptx', contentBase64: bytes.toString('base64') });
+    // slide5→slide2 真实顺序（编号不连续重排）；slide5 的备注在 notesSlide3（错号）；
+    // slide9 孤立未引用（不得混入）；slide2 备注超长（验证截断与备注计入总预算）。
+    const longNotes = '长备注词'.repeat(30000); // 60KB×3 字节=180KB > 64KB 单页上限 → 截断
+    const bytes = makePptxSlides({
+      slides: [
+        { no: 5, texts: ['第五页真身 顺序一', '要点甲'], notes: '错号备注 演讲词', notesNo: 3 },
+        { no: 2, texts: ['第二页真身 顺序二'], notes: longNotes },
+      ],
+      orphanSlides: [9],
+    });
+    // 孤立页内容（存在文件但未被 sldIdLst 引用）——直接塞进 zip 不可经 makePptxSlides，另行以
+    // 旧路径验证：此处 makePptxSlides 的 orphanSlides 仅登记内容类型；内容注入用第二个包。
+    const up = await env.cmd<{ attachmentId: string; slides: number }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '顺序演示.pptx', contentBase64: bytes.toString('base64') });
     expect(up.slides).toBe(2);
-    const pv = await env.cmd<{ slides: Array<{ slide: number; text: string; notes: string }>; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up.attachmentId });
-    expect(pv.slides[0]!.slide).toBe(1);
-    expect(pv.slides[0]!.text).toContain('第一页标题');
-    expect(pv.slides[0]!.notes).toContain('演讲词');
-    expect(pv.slides[1]!.text).toContain('第二页标题');
-    expect(pv.pixelRendering).toBe('unsupported'); // 页图未实现——与文本输入分列
+    const pv = await env.cmd<{ slides: Array<{ slide: number; text: string; notes: string; truncated: boolean }>; totalSlides: number; totalTextBytes: number; truncatedTotal: boolean }>('attachment.previewOffice', { attachmentId: up.attachmentId });
+    expect(pv.slides[0]!.slide).toBe(1); // 顺序位置（非文件编号）
+    expect(pv.slides[0]!.text).toContain('第五页真身 顺序一');
+    expect(pv.slides[0]!.notes).toContain('错号备注 演讲词'); // 经 slide5 的关系表定位到 notesSlide3
+    expect(pv.slides[1]!.slide).toBe(2);
+    expect(pv.slides[1]!.text).toContain('第二页真身 顺序二');
+    expect(pv.slides[1]!.truncated).toBe(true); // 超长备注截断
+    expect(Buffer.byteLength(pv.slides[1]!.notes, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    // 备注计入总预算：totalTextBytes ≥ 正文+已收备注字节。
+    const sum = pv.slides.reduce((acc, sl) => acc + Buffer.byteLength(sl.text, 'utf8') + Buffer.byteLength(sl.notes, 'utf8'), 0);
+    expect(pv.totalTextBytes).toBe(sum);
+    const pv2 = await env.cmd<{ slides: Array<{ text: string }>; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up.attachmentId });
+    expect(pv2.pixelRendering).toBe('unsupported'); // 页图未实现——与文本输入分列
+    // 注入：按真实顺序页标注。
     await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '按幻灯片执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
     const { worker, adapter } = env.makeWorker();
     await worker.runOnce();
     const text = adapter.startTurnLog[0]!.text;
     expect(text).toContain('[幻灯片 1]');
-    expect(text).toContain('要点甲');
+    expect(text).toContain('第五页真身 顺序一');
     expect(text).toContain('[幻灯片 1 备注]');
-    expect(text).toContain('演讲词');
+    expect(text).toContain('错号备注 演讲词');
+    expect(text.indexOf('第五页真身')).toBeLessThan(text.indexOf('第二页真身')); // 顺序一在顺序二前
+    env.close();
+  }, 120_000);
+  it('孤立未引用页排除（存在 slideN.xml 但不在 sldIdLst）', async () => {
+    const env = makeEnv();
+    // 用 zipToBuffer 直接造：sldIdLst 只引 slide1；slide7 文件存在但未引用。
+    const bytes = zipToBuffer(makePptxZipEntries({
+      presentationRids: [{ rid: 'rId1', target: 'slides/slide1.xml' }],
+      slideFiles: { 1: ['正文真身 PAGE-1'], 7: ['孤立的第七页 ORPHAN-7'] },
+      notes: {},
+    }));
+    const up = await env.cmd<{ attachmentId: string; slides: number }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '孤立页.pptx', contentBase64: bytes.toString('base64') });
+    expect(up.slides).toBe(1);
+    const pv = await env.cmd<{ slides: Array<{ text: string }>; totalSlides: number }>('attachment.previewOffice', { attachmentId: up.attachmentId });
+    expect(pv.totalSlides).toBe(1);
+    expect(pv.slides[0]!.text).toContain('PAGE-1');
+    expect(JSON.stringify(pv.slides)).not.toContain('ORPHAN-7'); // 孤立页不混入
     env.close();
   }, 90_000);
 });

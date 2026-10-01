@@ -8,7 +8,7 @@
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
@@ -33,11 +33,12 @@ import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } 
 import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
 import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ManagedJobObservation, type ProbeOutcome } from './processRegistry.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer } from './attachments.ts';
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes } from './attachments.ts';
+import { writeExport, TEXT_PREVIEW_EXTENSIONS } from './exportWriter.ts';
 import {
   PDF_MAX_BYTES, OFFICE_MAX_BYTES, CSV_MAX_BYTES, ARTIFACT_PARSE_KINDS,
   validateExtractCache, renderSheetWindow, parseSheetRangeSpec,
@@ -395,7 +396,7 @@ async function runOfficeSniff(blobPath: string, hash: string): Promise<{ ok: tru
  * 隔离重提并回写（事务内重检 audience）。失败=明确错误（不虚构缓存）。 */
 async function ensureDocumentCache(
   deps: DaemonCommandDeps,
-  row: { id: string; conversation_id: string; hash: string; blob_path: string; kind: string; extracted_text_json: string | null },
+  row: { id: string; conversation_id: string; hash: string; blob_path: string; kind: string; revision: number; extracted_text_json: string | null },
   cacheKind: ExtractCache['kind'],
 ): Promise<ExtractCache> {
   const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
@@ -405,11 +406,13 @@ async function ensureDocumentCache(
   const parseKind: ParseJobKind = cacheKind === 'sheet' ? 'xlsx' : cacheKind === 'slides' ? 'pptx' : cacheKind;
   const parsed = await getParsePool().run(parseKind, row.blob_path, row.hash);
   if (!parsed.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不可解析：[${parsed.error.code}] ${parsed.error.message}`);
-  const { artifactKind: _ak, ...cacheBody } = parsed.result as ExtractCache & { artifactKind?: string };
-  const cache = cacheBody as ExtractCache;
+  const cache = { ...(parsed.result as ExtractCache & { artifactKind?: string }) };
+  delete (cache as { artifactKind?: string }).artifactKind;
+  // 迟到结果防覆盖（第三十轮三）：重提是慢路径——期间资源可能被重传/更新（新 hash/revision）；
+  // 回写绑定读取时快照（id+hash+revision），受影响行=0 即放弃回写（本次预览用内存结果，不覆盖新资源缓存）。
   deps.db.transaction(() => {
     assertConversationAudience(deps.db, deps.localUserId, row.conversation_id); // 重提期间 audience 变化=不回写
-    deps.db.prepare('UPDATE artifacts SET extracted_text_json = ? WHERE id = ? AND hash = ?').run(JSON.stringify(cache), row.id, row.hash);
+    deps.db.prepare('UPDATE artifacts SET extracted_text_json = ? WHERE id = ? AND hash = ? AND revision = ?').run(JSON.stringify(cache), row.id, row.hash, row.revision);
   }).immediate();
   return cache;
 }
@@ -2291,7 +2294,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           case 'sheet':
             return withCommandId({ ok: true, data: { ...common, sourceFormat: cache.sourceFormat, encoding: cache.encoding, sheets: cache.sheets, pixelRendering: 'grid-preview', formulaExecution: 'never-cached-values-only', modelInput: 'range-window' } });
           case 'slides':
-            return withCommandId({ ok: true, data: { ...common, slides: cache.slides, totalSlides: cache.totalSlides, pixelRendering: 'unsupported', textInput: 'extracted-text', modelInput: 'extracted-text' } });
+            return withCommandId({ ok: true, data: { ...common, slides: cache.slides, totalSlides: cache.totalSlides, totalTextBytes: cache.totalTextBytes, truncatedTotal: cache.truncatedTotal, pixelRendering: 'unsupported', textInput: 'extracted-text', modelInput: 'extracted-text' } });
           default:
             throw new DaemonCommandError('STORAGE_UNAVAILABLE', '提取缓存类型不符——拒绝冒充');
         }
@@ -2482,6 +2485,162 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           return { projectId: p.id, displayName: p.display_name, projectFiles, ...(projectFilesNote != null ? { projectFilesNote } : {}), attachments, drafts, deliveries };
         });
         return withCommandId({ ok: true, data: { groups, note: 'Files 集合（只读四类分列：项目文件/托管附件/Agent 草稿/交付成果——逐项保留来源/版本/hash/定位；私信资源仅本人可见）' } });
+      }
+      case 'message.react': {
+        // 消息表情反应（第三十轮六，迁移 037）：本地用户操作（Agent 侧表情属 runtime 能力未开放）；
+        // toggle 语义（同消息同人同表情幂等切换）；消息 audience 校验（他人 DM 拒）。
+        const params = z.strictObject({ messageId: z.string().min(1), emoji: z.enum(['👍', '❤️', '😂', '🎉', '👀', '⚠️']) }).parse(env.params);
+        const msg = deps.db.prepare('SELECT id, conversation_id FROM messages WHERE id = ?').get(params.messageId) as { id: string; conversation_id: string } | undefined;
+        if (msg == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `消息不存在：${params.messageId}`);
+        assertConversationAudience(deps.db, deps.localUserId, msg.conversation_id);
+        const tx = deps.db.transaction((): { reacted: boolean; counts: Array<{ emoji: string; count: number }> } => {
+          const existing = deps.db.prepare('SELECT id FROM message_reactions WHERE message_id = ? AND reactor_id = ? AND emoji = ?').get(params.messageId, deps.localUserId, params.emoji) as { id: string } | undefined;
+          if (existing != null) deps.db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
+          else deps.db.prepare('INSERT INTO message_reactions (id, message_id, reactor_id, emoji, created_at) VALUES (?, ?, ?, ?, ?)').run(`mr_${randomUUID()}`, params.messageId, deps.localUserId, params.emoji, Date.now());
+          const counts = deps.db.prepare('SELECT emoji, count(*) c FROM message_reactions WHERE message_id = ? GROUP BY emoji ORDER BY c DESC, emoji').all(params.messageId) as Array<{ emoji: string; c: number }>;
+          return { reacted: existing == null, counts: counts.map((r) => ({ emoji: r.emoji, count: r.c })) };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'message.reactions': {
+        // 反应读取（惰性呈现——消息行点开才拉取）。
+        const params = z.strictObject({ messageId: z.string().min(1) }).parse(env.params);
+        const msg = deps.db.prepare('SELECT id, conversation_id FROM messages WHERE id = ?').get(params.messageId) as { id: string; conversation_id: string } | undefined;
+        if (msg == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `消息不存在：${params.messageId}`);
+        assertConversationAudience(deps.db, deps.localUserId, msg.conversation_id);
+        const rows = deps.db.prepare('SELECT emoji, reactor_id, created_at FROM message_reactions WHERE message_id = ? ORDER BY created_at').all(params.messageId) as Array<{ emoji: string; reactor_id: string; created_at: number }>;
+        return withCommandId({ ok: true, data: { messageId: params.messageId, items: rows.map((r) => ({ emoji: r.emoji, reactorId: r.reactor_id, mine: r.reactor_id === deps.localUserId, createdAt: r.created_at })) } });
+      }
+      case 'activity.list': {
+        // Activity 流（DEV-18 剩余，第三十轮六）：domain_events 只读聚合——可见性=房间事件随
+        // 项目可达、DM 事件仅本人参与（他人 DM 不进流）；kind 中文映射+轻量摘要（payload 白
+        // 名单提取）；分页 before 游标。零运行零唤醒。
+        const params = z.strictObject({ projectId: z.string().min(1).optional(), scope: z.enum(['project', 'all']).default('all'), limit: z.number().int().min(1).max(200).default(80), before: z.number().optional() }).parse(env.params);
+        if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        const projectIds = params.scope === 'project'
+          ? [params.projectId!]
+          : (deps.db.prepare('SELECT id FROM projects ORDER BY rowid').all() as Array<{ id: string }>).map((r) => r.id);
+        if (projectIds.length === 0) return withCommandId({ ok: true, data: { items: [], note: '暂无项目' } });
+        const KIND_LABEL: Record<string, string> = {
+          'message.submitted': '消息提交', 'task.created': '任务创建', 'task.dispatched': '任务派发', 'task.completed': '任务完成',
+          'task.stopped': '任务停止', 'task.reviewed': '人工验收', 'turn.started': '轮次开始', 'turn.completed': '轮次完成',
+          'reminder.fired': '提醒触发', 'reminder.confirmed': '提醒确认', 'delivery.pending': '交付待验收', 'delivery.accepted': '验收通过',
+          'delivery.changes_requested': '验收退回', 'conversation.archived': '会话归档', 'message.recorded': '消息记录',
+        };
+        const rows = deps.db.prepare(
+          `SELECT e.event_id, e.kind, e.created_at, e.project_id, e.conversation_id, e.thread_id, e.task_id, e.payload_json,
+                  p.display_name AS project_name, c.kind AS conversation_kind
+           FROM domain_events e
+           LEFT JOIN projects p ON p.id = e.project_id
+           LEFT JOIN conversations c ON c.id = e.conversation_id
+           WHERE e.project_id IN (${projectIds.map(() => '?').join(',')})
+             AND (c.id IS NULL OR c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
+             ${params.before != null ? 'AND e.created_at < ?' : ''}
+           ORDER BY e.created_at DESC LIMIT ?`,
+        ).all(...projectIds, deps.localUserId, ...(params.before != null ? [params.before] : []), params.limit) as Array<{ event_id: string; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string | null; project_name: string | null; conversation_kind: string | null }>;
+        const items = rows.map((e) => {
+          let summary = '';
+          try {
+            const payload = JSON.parse(e.payload_json ?? '{}') as Record<string, unknown>;
+            const text = (payload.note ?? payload.reason ?? payload.status ?? payload.disposition ?? '') as string;
+            summary = String(text).slice(0, 80);
+          } catch { /* 残缺不虚构 */ }
+          return {
+            eventId: e.event_id, kind: e.kind, kindLabel: KIND_LABEL[e.kind] ?? e.kind, at: e.created_at, summary,
+            projectId: e.project_id, projectName: e.project_name ?? e.project_id,
+            conversationId: e.conversation_id, threadId: e.thread_id, taskId: e.task_id,
+            locate: e.thread_id != null ? `#task=${e.task_id ?? ''}` : e.conversation_id != null ? (e.conversation_kind === 'dm' ? `#dm=${e.conversation_id}` : `#conv=${e.conversation_id}`) : null,
+          };
+        });
+        return withCommandId({ ok: true, data: { items, note: 'Activity 流（只读——domain_events 聚合；DM 事件仅本人参与可见）' } });
+      }
+      case 'project.file.read': {
+        // 共享预览（第三十轮四）：项目文件**只读快照**（来源=用户项目目录——非托管副本）：
+        // 路径限项目根内（resolve 边界+realpath 实身份——越界/链接拒）、≤256KB、文本白名单
+        // 扩展、fatal UTF-8（二进制拒绝）。不进模型输入、不建 artifact——预览与复制引用专用。
+        const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500) }).parse(env.params);
+        const proj = deps.db.prepare('SELECT id, canonical_path FROM projects WHERE id = ?').get(params.projectId) as { id: string; canonical_path: string } | undefined;
+        if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        const root = resolve(proj.canonical_path);
+        const target = resolve(root, params.path.replace(/^[/\\]+/, ''));
+        const rootSep = root.includes('/') ? '/' : '\\';
+        if (target !== root && !target.startsWith(root + rootSep)) {
+          throw new DaemonCommandError('FORBIDDEN', `项目文件路径越界：${params.path}——拒绝读取`);
+        }
+        let realTarget: string;
+        let realRoot: string;
+        try {
+          realTarget = realpathSync(target);
+          realRoot = realpathSync(root);
+        } catch {
+          throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件不存在或不可读：${params.path}`);
+        }
+        if (realTarget !== realRoot && !realTarget.startsWith(realRoot + rootSep)) {
+          throw new DaemonCommandError('FORBIDDEN', '项目文件路径含链接越界（realpath 实身份拒绝）');
+        }
+        const dot = realTarget.lastIndexOf('.');
+        const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
+        const textOk = [...(ATT_TEXT_KINDS as readonly string[]), 'text_file'].length >= 0 && (TEXT_PREVIEW_EXTENSIONS.has(ext));
+        if (!textOk) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本预览白名单——二进制/未知格式不执行不转码`);
+        let raw: Buffer;
+        try {
+          const st = statSync(realTarget);
+          if (st.size > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读预览上限 ${ATT_MAX_BYTES}B`);
+          raw = readFileSync(realTarget);
+        } catch (error) {
+          if (error instanceof DaemonCommandError) throw error;
+          throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件读取失败：${params.path}`);
+        }
+        let content: string;
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); }
+        catch { throw new DaemonCommandError('VALIDATION_INVALID', '项目文件不是有效 UTF-8 文本——只读预览拒绝（二进制走 Git/系统工具）'); }
+        const cut = truncateUtf8Bytes(content, ATT_EXCERPT_BYTES);
+        return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, content: cut.text, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
+      }
+      case 'export.create': {
+        // 导出（第三十轮五）：范围快照+audience 逐项校验（导出不扩大私信范围）——md/html/docx
+        // 三格式；HTML 资源随导出包（离线可读）；失败清理半截产物；每次新 exportId 目录不覆盖。
+        const params = z.strictObject({
+          target: z.discriminatedUnion('kind', [
+            z.strictObject({ kind: z.literal('conversation'), projectId: z.string().min(1), conversationId: z.string().min(1) }),
+            z.strictObject({ kind: z.literal('thread'), projectId: z.string().min(1), conversationId: z.string().min(1), threadId: z.string().min(1) }),
+          ]),
+          format: z.enum(['md', 'html', 'docx']),
+        }).parse(env.params);
+        // 幂等（第三十轮五）：同 commandId 重放返回持久结果——不重复生成新导出目录。
+        const priorReceipt = getReceipt(deps.db, scope, env.commandId);
+        if (priorReceipt != null) {
+          if (priorReceipt.payload_hash !== payloadHash) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', '同 commandId 携带不同参数——幂等键冲突拒绝');
+          if (priorReceipt.result_json == null) throw new DaemonCommandError('RESULT_EXPIRED', '回执正文已按清理策略删除：用新 commandId 重新提交');
+          return withCommandId({ ok: true, data: JSON.parse(priorReceipt.result_json), replayed: true });
+        }
+        const conv = deps.db.prepare('SELECT id, project_id, kind, room_id, archived_at FROM conversations WHERE id = ?').get(params.target.conversationId) as { id: string; project_id: string; kind: string; room_id: string | null; archived_at: number | null } | undefined;
+        if (conv == null || conv.project_id !== params.target.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '导出目标会话不存在或不属于该项目');
+        assertConversationAudience(deps.db, deps.localUserId, conv.id); // audience 逐项（DM=本人参与）
+        const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
+        const exportId = `exp_${randomUUID().slice(0, 12)}`;
+        const exportDir = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'exports', exportId);
+        const messages = (params.target.kind === 'thread'
+          ? deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq').all(params.target.threadId)
+          : deps.db.prepare('SELECT id, conversation_id, thread_id, thread_message_seq, author_type, author_id, body_json, created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq').all(conv.id)) as Array<{ id: string; conversation_id: string; thread_id: string | null; thread_message_seq: number | null; author_type: string; author_id: string; body_json: string; created_at: number }>;
+        const msgIds = messages.map((m) => m.id);
+        const attachments = msgIds.length === 0 ? [] : (deps.db.prepare(
+          `SELECT ma.message_id, ma.display_name, a.id AS artifact_id, a.kind, a.hash, a.revision, a.blob_path, a.source_name
+           FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
+           WHERE ma.message_id IN (${msgIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+        ).all(...msgIds) as Array<{ message_id: string; display_name: string | null; artifact_id: string; kind: string; hash: string; revision: number; blob_path: string; source_name: string | null }>);
+        try {
+          const outcome = await writeExport({ conv, target: params.target, messages, attachments, format: params.format, exportDir, blobRoot });
+          const data = { exportId, dir: exportDir, ...outcome };
+          run(() => data); // 回执落库（重放幂等——不重复生成新目录）
+          return withCommandId({ ok: true, data, replayed: false });
+        } catch (error) {
+          // 失败清理半截产物（不留半个导出目录）。
+          try { rmSync(exportDir, { recursive: true, force: true }); } catch { /* 尽力 */ }
+          if (error instanceof DaemonCommandError) throw error;
+          throw new DaemonCommandError('STORAGE_UNAVAILABLE', `导出失败（已清理半截产物）：${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       case 'thread.collaborators': {
         // DEV-19 协作视图首包（第二十六轮四）：四列分列——人的关注（thread_subscriptions）/        // Agent 跟进名单（thread_agent_followers）/冻结参与者（route_json.frozenMemberIds）/
