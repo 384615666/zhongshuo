@@ -23,7 +23,7 @@
  *    幂等 id 的消息、从未建立正式执行，不重发。
  */
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
-import { dispatchReminderExecution, dispatchedCountOf, insertReminderWakeMessage, parseSchedule } from './reminderDispatch.ts';
+import { dispatchReminderExecution, insertReminderWakeMessage, parseSchedule, reminderCallUsage, budgetLimitOf } from './reminderDispatch.ts';
 
 export interface ReminderSchedule {
   kind: 'once' | 'daily' | 'weekly';
@@ -162,18 +162,21 @@ interface ReminderRow {
   status: string;
   paused_reason: string | null;
   budget_json: string | null;
+  max_triggers: number | null;
+  bound_stop_generation: number;
   auto_dispatch: number;
   last_fired_at: number | null;
   created_at: number | null;
 }
 
-export type ReminderAuthorityRow = Pick<ReminderRow, 'conversation_id' | 'thread_id' | 'task_id' | 'owner_member_id'>;
+export type ReminderAuthorityRow = Pick<ReminderRow, 'conversation_id' | 'thread_id' | 'task_id' | 'owner_member_id' | 'bound_stop_generation'>;
 
 /** 触发时重查授权面（模块级——调度器与 reminder.confirm 共用同一判定）：会话归档/线程关闭/
- * 任务停止代次/owner 停用·移出/DM 非对端。 */
+ * 任务**新**停止（按绑定快照核对——历史 stop_generation 不永久禁止）/任务终态/owner 停用·
+ * 移出·不在房间跟进范围/绑定任务冻结名单不含 owner/DM 非对端。 */
 export function recheckReminderAuthority(db: ZhongshuoDatabase, reminder: ReminderAuthorityRow): { ok: true } | { ok: false; reason: string } {
-  const conv = db.prepare('SELECT project_id, kind, archived_at FROM conversations WHERE id = ?').get(reminder.conversation_id) as
-    | { project_id: string; kind: string; archived_at: number | null } | undefined;
+  const conv = db.prepare('SELECT project_id, kind, room_id, archived_at FROM conversations WHERE id = ?').get(reminder.conversation_id) as
+    | { project_id: string; kind: string; room_id: string | null; archived_at: number | null } | undefined;
   if (conv == null) return { ok: false, reason: 'conversation-missing' };
   if (conv.archived_at != null) return { ok: false, reason: 'conversation-archived' };
   if (reminder.thread_id != null) {
@@ -182,8 +185,23 @@ export function recheckReminderAuthority(db: ZhongshuoDatabase, reminder: Remind
     if (thread.status !== 'open') return { ok: false, reason: 'thread-closed' };
   }
   if (reminder.task_id != null) {
-    const task = db.prepare('SELECT status, stop_generation FROM tasks WHERE id = ?').get(reminder.task_id) as { status: string; stop_generation: number } | undefined;
-    if (task != null && (task.stop_generation > 0 || task.status === 'CANCELLED')) return { ok: false, reason: 'task-stopped' };
+    const task = db.prepare('SELECT status, stop_generation, conversation_id FROM tasks WHERE id = ?').get(reminder.task_id) as { status: string; stop_generation: number; conversation_id: string } | undefined;
+    if (task == null) return { ok: false, reason: 'task-missing' };
+    if (['DONE', 'CANCELLED'].includes(task.status)) return { ok: false, reason: 'task-terminal' };
+    // 停止代次按**保存的绑定事实**核对（第二十五轮三）：绑定后发生新停止才判停——
+    // bound=绑定时快照；历史停止（bound 时已存在）不永久禁止新合法提醒。
+    if (task.stop_generation > reminder.bound_stop_generation) return { ok: false, reason: 'task-stopped' };
+    if (task.conversation_id !== reminder.conversation_id) return { ok: false, reason: 'task-scope-mismatch' };
+    // 绑定任务的冻结参与者须含 owner（跟进范围——「成员启用且属于项目」不能代替）。
+    const routeRow = db.prepare('SELECT route_json FROM tasks WHERE id = ?').get(reminder.task_id) as { route_json: string | null } | undefined;
+    if (routeRow?.route_json != null) {
+      try {
+        const route = JSON.parse(routeRow.route_json) as { frozenMemberIds?: string[] };
+        if (Array.isArray(route.frozenMemberIds) && route.frozenMemberIds.length > 0 && !route.frozenMemberIds.includes(reminder.owner_member_id)) {
+          return { ok: false, reason: 'owner-not-in-frozen-scope' };
+        }
+      } catch { /* route 损坏不据此放行或拒绝——交由任务终态/停止事实判定 */ }
+    }
   }
   const member = db.prepare('SELECT enabled, project_id FROM project_members WHERE id = ?').get(reminder.owner_member_id) as
     | { enabled: number; project_id: string } | undefined;
@@ -192,21 +210,24 @@ export function recheckReminderAuthority(db: ZhongshuoDatabase, reminder: Remind
   if (conv.kind === 'dm') {
     const peer = db.prepare("SELECT 1 AS ok FROM dm_participants WHERE conversation_id = ? AND principal_type = 'agent' AND principal_id = ?").get(reminder.conversation_id, reminder.owner_member_id);
     if (peer == null) return { ok: false, reason: 'owner-not-peer' };
+  } else if (conv.room_id != null) {
+    // 房间跟进范围（第二十五轮三）：owner 必须仍是目标房间成员。
+    const inRoom = db.prepare('SELECT 1 AS ok FROM room_members WHERE room_id = ? AND member_id = ?').get(conv.room_id, reminder.owner_member_id);
+    if (inRoom == null) return { ok: false, reason: 'owner-not-in-room' };
   }
   return { ok: true };
 }
 
 export type ReminderBudgetRow = Pick<ReminderRow, 'id' | 'budget_json'>;
 
-/** 预算（fail-closed；模块级——调度器与 reminder.confirm 共用）：作用域=本提醒已派发
- * occurrence 数（每次派发恰一个任务=恰一次 startTurn 计数）。损坏 budget_json 一律拒绝。 */
+/** 预算（fail-closed；模块级——调度器与 reminder.confirm 共用）：口径=**模型调用数**
+ * （reminder_calls 台账非 released 行——修复/追加/重派全覆盖；触发上限另列 max_triggers）。
+ * 损坏 budget_json 一律拒绝。 */
 export function checkReminderBudget(db: ZhongshuoDatabase, reminder: ReminderBudgetRow): { ok: true } | { ok: false; reason: 'budget_exceeded' | 'budget_corrupt' } {
-  if (reminder.budget_json == null) return { ok: true };
-  let parsed: unknown;
-  try { parsed = JSON.parse(reminder.budget_json); } catch { return { ok: false, reason: 'budget_corrupt' }; }
-  const limit = parsed as { sum?: unknown };
-  if (limit == null || typeof limit !== 'object' || !Number.isInteger(limit.sum) || (limit.sum as number) < 0) return { ok: false, reason: 'budget_corrupt' };
-  return dispatchedCountOf(db, reminder.id) >= (limit.sum as number) ? { ok: false, reason: 'budget_exceeded' } : { ok: true };
+  const limit = budgetLimitOf(reminder.budget_json);
+  if (limit === 'corrupt') return { ok: false, reason: 'budget_corrupt' };
+  if (limit === null) return { ok: true };
+  return reminderCallUsage(db, reminder.id) >= limit.sum ? { ok: false, reason: 'budget_exceeded' } : { ok: true };
 }
 
 export interface ReminderSchedulerOptions {
@@ -301,13 +322,23 @@ export class ReminderScheduler {
           .run(reminder.id, dueAt, 'fired', `paused:${recheck.reason}`, missedCount, now);
         return { kind: 'paused', reason: recheck.reason };
       }
-      // 预算（fail-closed）：损坏=拒绝派发+暂停取证；超限=拒绝派发+暂停（作用域=本提醒）。
+      // 预算（fail-closed）：损坏=拒绝派发+暂停取证；超限=拒绝派发+暂停（口径=模型调用台账）。
       const budget = checkReminderBudget(this.db, reminder);
       if (!budget.ok) {
         this.db.prepare("UPDATE reminders SET status = 'paused', paused_reason = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(budget.reason, now, reminder.id);
         this.db.prepare('INSERT OR IGNORE INTO reminder_occurrences (reminder_id, scheduled_at, status, outcome, missed_count, fired_at) VALUES (?, ?, ?, ?, ?, ?)')
           .run(reminder.id, dueAt, 'fired', budget.reason, missedCount, now);
         return { kind: 'paused', reason: budget.reason };
+      }
+      // 触发次数上限（第二十五轮一：与模型调用预算分列——occurrence 口径）。
+      if (reminder.max_triggers != null) {
+        const fired = (this.db.prepare("SELECT count(*) c FROM reminder_occurrences WHERE reminder_id = ? AND status = 'fired'").get(reminder.id) as { c: number }).c;
+        if (fired >= reminder.max_triggers) {
+          this.db.prepare("UPDATE reminders SET status = 'paused', paused_reason = 'trigger_limit', updated_at = ? WHERE id = ? AND status = 'active'").run(now, reminder.id);
+          this.db.prepare('INSERT OR IGNORE INTO reminder_occurrences (reminder_id, scheduled_at, status, outcome, missed_count, fired_at) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(reminder.id, dueAt, 'fired', 'trigger_limit', missedCount, now);
+          return { kind: 'paused', reason: 'trigger_limit' };
+        }
       }
       // 历史 occurrence 已覆盖该时刻（首包遗留/极端恢复路径）：只推进计划，不重发。
       const existing = this.db.prepare('SELECT status FROM reminder_occurrences WHERE reminder_id = ? AND scheduled_at = ?').get(reminder.id, dueAt) as { status: string } | undefined;
@@ -322,15 +353,15 @@ export class ReminderScheduler {
       const claimed = this.db.prepare("UPDATE reminders SET next_at = ?, status = ?, last_fired_at = ?, updated_at = ? WHERE id = ? AND next_at = ? AND status = 'active'")
         .run(nextNext, nextNext == null ? 'done' : 'active', dueAt, now, reminder.id, dueAt).changes;
       if (claimed !== 1) return { kind: 'lost-race' };
-      // 派发意图（同事务）：获准=正式执行（任务+outbox）；未获准=唤醒消息（system）+待确认。
-      const dispatchedCount = dispatchedCountOf(this.db, reminder.id);
+      // 派发意图（同事务）：获准=正式执行（任务+outbox+调用预占）；未获准=唤醒消息（system）+待确认。
+      const callUsage = reminderCallUsage(this.db, reminder.id);
       if (reminder.auto_dispatch === 1) {
-        const d = this.execDispatch({ reminder, scheduledAt: dueAt, missedCount, dispatchedCount, now });
+        const d = this.execDispatch({ reminder, scheduledAt: dueAt, missedCount, dispatchedCount: callUsage, now });
         this.db.prepare('INSERT INTO reminder_occurrences (reminder_id, scheduled_at, status, outcome, missed_count, fired_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(reminder.id, dueAt, 'fired', 'dispatched', missedCount, now, d.taskId);
         return { kind: 'dispatched', scheduledAt: dueAt, missedCount, taskId: d.taskId };
       }
-      const wake = insertReminderWakeMessage(this.db, { reminder, scheduledAt: dueAt, missedCount, dispatchedCount, now });
+      const wake = insertReminderWakeMessage(this.db, { reminder, scheduledAt: dueAt, missedCount, dispatchedCount: callUsage, now });
       this.db.prepare('INSERT INTO reminder_occurrences (reminder_id, scheduled_at, status, outcome, missed_count, fired_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(reminder.id, dueAt, 'fired', 'awaiting_confirmation', missedCount, now);
       return { kind: 'awaiting', scheduledAt: dueAt, missedCount, messageId: wake.messageId };

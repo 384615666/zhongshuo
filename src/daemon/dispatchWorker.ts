@@ -40,6 +40,7 @@ import {
 } from './deliberationRunner.ts';
 import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
+import { acquireReminderTurnSlot, releaseUnlinkedReminderReservations, settleReminderCallForTurn } from './reminderDispatch.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
 import { managedJobById } from './managed/bridge.ts';
@@ -310,7 +311,9 @@ export class DispatchWorker {
 
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
     if (task == null || task.stop_generation > 0 || task.status === 'CANCELLED' || task.status === 'DONE') {
-      // 全停代次/终态阻止旧派发（§11.4）。
+      // 全停代次/终态阻止旧派发（§11.4）。提醒派生任务的未挂钩调用预占同步归还
+      //（第二十五轮一：任务未执行到 turn——预占未花，released；conservative 方向只在此归还）。
+      if (task != null) releaseUnlinkedReminderReservations(this.db, task.id);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
@@ -363,10 +366,11 @@ export class DispatchWorker {
       .get(task.owner_member_id ?? '') as (MemberRow & { display_name: string }) | undefined;
     if (project == null || member == null || member.enabled !== 1) {
       // 停用/缺失成员的已排队 DIRECT（第十七轮二）：阻塞留证（含修复/返工/重派同路径）——
-      // 重新启用后经 task.redispatch 正式续跑，不自动重放。
+      // 重新启用后经 task.redispatch 正式续跑，不自动重放。提醒调用预占归还（未花）。
       if (member != null && member.enabled !== 1) {
         this.audit(task as TaskRow, null, null, 'task.memberDisabledBlocked', { memberId: member.id, note: '成员停用：已排队任务阻塞（不派发）；重新启用后经追加执行续跑' });
       }
+      releaseUnlinkedReminderReservations(this.db, task.id);
       await this.transitionTask(task.id, 'BLOCKED');
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
@@ -380,6 +384,22 @@ export class DispatchWorker {
 
     const runId = `run_${randomUUID()}`;
     const turnId = `turn_${randomUUID()}`;
+
+    // 提醒调用格（第二十五轮一）：任务源于提醒→在**实际 startTurn 边界**统一检查+持久入账
+    //（初始/确认/跟进/修复/追加/重派全走此处——不能通过新 run 绕开）。已预占的派发挂钩本
+    // turn；无预占的新增 turn 需有空格。拒绝=不建 run/turn：任务 BLOCKED 留证+提醒 paused
+    // +审计（用户提高额度后经 task.redispatch 显式续跑）。
+    const slot = this.db.transaction(() => acquireReminderTurnSlot(this.db, task.id, turnId, claimed.dispatch_key))();
+    if (!slot.ok) {
+      const txHold = this.db.transaction(() => {
+        this.db.prepare("UPDATE reminders SET status = CASE WHEN status = 'done' THEN 'done' ELSE 'paused' END, paused_reason = ?, updated_at = ? WHERE id = ? AND status IN ('active','done')").run(slot.reason, Date.now(), slot.reminderId);
+        this.transitionTask(task.id, 'BLOCKED');
+        this.audit(task, null, null, 'reminder.budgetGateHeld', { reminderId: slot.reminderId, reason: slot.reason, dispatchKey: claimed.dispatch_key, note: '提醒调用额度已尽/损坏：不派发（提高额度后经追加执行续跑）' });
+      });
+      txHold();
+      await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
 
     // 格式修复工作项（第六轮·下：结构化判定——不靠 dispatch_key 字符串后缀）。
     // pending：本派发即修复轮——先做一致性复核（损坏→阻塞留证不花调用），上下文与预算
@@ -2198,6 +2218,7 @@ export class DispatchWorker {
     // 未知/中断如实保留——覆盖修复/重派/研讨/并发全部路径）。
     if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
       try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
+      try { settleReminderCallForTurn(this.db, turnId, status); } catch { /* 提醒调用台账跟随——尽力而为（UNKNOWN/CANCELLED=保守计数） */ }
       // DM 会话身份终态结算（第二十轮二）：所有终态路径统一在此核对 provider 上报身份。
       this.settleDmSession(turnId);
       this.retryFailedDmSettlements(); // 明确重试触发（第二十二轮三）：每任一 DM 终态后全量重试失败结算
@@ -2271,9 +2292,11 @@ export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): Ac
 }
 
 function parseInitialTaskId(dispatchKey: string): string | null {
-  // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）。
+  // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）；
+  // reminder:{occurrence}=提醒跟进派发（第二十五轮三：绑定 threadId/taskId 的提醒跟进既有任务
+  // ——occurrence 维度唯一键，不与手工 redispatch 撞）。
   // dmtask:=私信内部执行（DEV-22：dm_turn 同走 DIRECT 派发路径，key 前缀区分房间任务）。
-  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+)$/);
+  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+|reminder:[^:]+)$/);
   return m?.[1] ?? null;
 }
 

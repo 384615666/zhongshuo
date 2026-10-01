@@ -69,15 +69,31 @@ export function runCommand<T>(
     outcome = tx.immediate(input);
   } catch (error) {
     // 事务已回滚：无部分写入。向上暴露存储层错误，不伪装成功（§12.4）。
-    outcome = {
-      ok: false,
-      error: {
-        code: 'STORAGE_UNAVAILABLE',
-        message: `数据库事务失败：${error instanceof Error ? error.message : String(error)}`,
-        retryable: false,
-        details: { cause: error instanceof Error ? error.name : 'unknown' },
-      },
-    };
+    // 领域错误（带 code 的 DaemonCommandError 形状——第二十五轮二）保持原错误码透传：
+    // 事务内业务前置校验因此既能做并发安全的事务内重核对，又不退化成 STORAGE_UNAVAILABLE。
+    const domainCode = (error as { name?: unknown; code?: unknown }).name === 'DaemonCommandError' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : null;
+    if (domainCode != null) {
+      outcome = {
+        ok: false,
+        error: {
+          code: domainCode as CommandError['code'], // DaemonCommandError 的 code 属领域码集（commands 层字面量）
+          message: error instanceof Error ? error.message : String(error),
+          retryable: false,
+        },
+      };
+    } else {
+      outcome = {
+        ok: false,
+        error: {
+          code: 'STORAGE_UNAVAILABLE',
+          message: `数据库事务失败：${error instanceof Error ? error.message : String(error)}`,
+          retryable: false,
+          details: { cause: error instanceof Error ? error.name : 'unknown' },
+        },
+      };
+    }
   }
   return outcome;
 }

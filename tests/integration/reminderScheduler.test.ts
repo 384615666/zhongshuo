@@ -41,6 +41,8 @@ function seedBase(db: ZhongshuoDatabase): void {
   db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
   db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mB','p1','Agent乙','agent',1)`).run();
   db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('r0','p1','大厅','mA')`).run();
+  // 房间成员关系（第二十五轮三：owner 须在目标房间跟进范围——seed 对齐 bootstrapProject）。
+  db.prepare('INSERT INTO room_members (room_id, member_id) VALUES (?, ?), (?, ?)').run('r0', 'mA', 'r0', 'mB');
   db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_room','p1','room','r0')`).run();
   db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_dm1','p1','dm',NULL)`).run();
   db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','conv_dm1','human','u_local'),('p1','conv_dm1','agent','mA')`).run();
@@ -234,9 +236,11 @@ describe('DEV-23 正式合同：原子触发+正式派发链（第二十四轮�
   });
   it('授权重查：会话归档/线程关闭/任务停止/owner 停用/DM 非对端→suppressed+paused（不派发）', async () => {
     const h = makeHarness();
-    // 线程关闭（thread_id 挂靠）。
+    // 线程关闭（thread_id 挂靠——须为任务串：讨论串在 schedule 就被拒）。
     h.db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, author_type, author_id, body_json, status, created_at) VALUES ('m_anchor','p1','conv_room',1,'r0','human','u_local','{}','final',0)`).run();
     h.db.prepare(`INSERT INTO conversation_threads (id, project_id, conversation_id, room_id, anchor_message_id) VALUES ('th1','p1','conv_room','r0','m_anchor')`).run();
+    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, conversation_thread_id, title, status) VALUES ('t_th1','p1','conv_room','room_task','r0','th1','线程任务','ACTIVE')`).run();
+    h.db.prepare(`UPDATE conversation_threads SET root_task_id = 't_th1' WHERE id = 'th1'`).run();
     const at1 = h.clock.now + 60_000;
     const { reminderId: rid1 } = await scheduleOnce(h, at1, { threadId: 'th1' });
     h.db.prepare("UPDATE conversation_threads SET status = 'closed' WHERE id = 'th1'").run();
@@ -244,13 +248,22 @@ describe('DEV-23 正式合同：原子触发+正式派发链（第二十四轮�
     const out1 = h.scheduler.tick();
     expect(out1.paused[0]!.reason).toBe('thread-closed');
     expect((h.db.prepare('SELECT status FROM reminders WHERE id = ?').get(rid1) as { status: string }).status).toBe('paused');
-    // 任务停止代次。
+    // 任务停止代次：绑定后**新**停止才判停（快照核对）；绑定时已停止=历史事实不永久禁止。
     h.clock.now = Date.now();
     const at2 = h.clock.now + 60_000;
-    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status, stop_generation) VALUES ('t_stop','p1','conv_room','room_task','r0','已停','CANCELLED',1)`).run();
+    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status, stop_generation) VALUES ('t_stop','p1','conv_room','room_task','r0','已停一次','ACTIVE',1)`).run();
     const { reminderId: rid2 } = await scheduleOnce(h, at2, { taskId: 't_stop' });
+    expect((h.db.prepare('SELECT bound_stop_generation FROM reminders WHERE id = ?').get(rid2) as { bound_stop_generation: number }).bound_stop_generation).toBe(1); // 绑定快照=历史停止
+    h.db.prepare("UPDATE tasks SET stop_generation = 2 WHERE id = 't_stop'").run(); // 绑定后又停（新代次）
     h.clock.now = at2 + 1;
-    expect(h.scheduler.tick().paused[0]!.reason).toBe('task-stopped');
+    expect(h.scheduler.tick().paused.some((x) => x.reason === 'task-stopped')).toBe(true); // 2>1 → 判停
+    // 任务终态（CANCELLED）→ task-terminal。
+    h.clock.now = Date.now();
+    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, room_id, title, status) VALUES ('t_stop2','p1','conv_room','room_task','r0','终态','CANCELLED')`).run();
+    const at2c = h.clock.now + 60_000;
+    const { reminderId: rid2c } = await scheduleOnce(h, at2c, { taskId: 't_stop2' });
+    h.clock.now = at2c + 1;
+    expect(h.scheduler.tick().paused.some((x) => x.reason === 'task-terminal')).toBe(true);
     // owner 停用。
     h.clock.now = Date.now();
     const at3 = h.clock.now + 60_000;

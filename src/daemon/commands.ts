@@ -18,7 +18,7 @@ import {
 } from '../persistence/stores/dm.ts';
 import { openProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
-import { dispatchReminderExecution, dispatchedCountOf } from './reminderDispatch.ts';
+import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
@@ -1428,6 +1428,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           ]),
           budgetLimit: z.strictObject({ sum: z.number().int().min(0) }).optional(),
           autoDispatch: z.boolean().optional(),
+          maxTriggers: z.number().int().min(1).optional(),
         }).parse(env.params);
         const schedule = params.schedule as ReminderSchedule;
         const scheduleCheck = validateSchedule(schedule);
@@ -1451,17 +1452,22 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           if (task?.conversation_id !== params.conversationId) throw new DaemonCommandError('SCOPE_MISMATCH', '任务不属于目标会话');
         }
         if (params.threadId != null) {
-          const thread = deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string } | undefined;
+          const thread = deps.db.prepare('SELECT conversation_id, root_task_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string; root_task_id: string | null } | undefined;
           if (thread?.conversation_id !== params.conversationId) throw new DaemonCommandError('SCOPE_MISMATCH', '线程不属于目标会话');
+          if (thread.root_task_id == null) throw new DaemonCommandError('SCOPE_MISMATCH', '讨论串（无任务）不能作为提醒执行目标——请挂任务串或房间/私信会话');
         }
         const tx = deps.db.transaction((): { reminderId: string; nextAt: number } => {
           const reminderId = `rem_${randomUUID()}`;
           const now = Date.now();
-          deps.db.prepare(`INSERT INTO reminders (id, conversation_id, thread_id, task_id, owner_member_id, owner_user, title, source_ref, timezone, schedule_json, next_at, status, budget_json, auto_dispatch, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`)
+          // 任务停止代次绑定快照（第二十五轮三）：绑定后发生**新**停止才判停——历史停止不永久禁止。
+          const boundStopGeneration = params.taskId != null
+            ? (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0
+            : 0;
+          deps.db.prepare(`INSERT INTO reminders (id, conversation_id, thread_id, task_id, owner_member_id, owner_user, title, source_ref, timezone, schedule_json, next_at, status, budget_json, auto_dispatch, max_triggers, bound_stop_generation, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`)
             .run(reminderId, params.conversationId, params.threadId ?? null, params.taskId ?? null, params.ownerMemberId, deps.localUserId, params.title, params.sourceRef ?? null,
               schedule.tz ?? 'UTC', JSON.stringify(schedule), nextAt,
-              params.budgetLimit != null ? JSON.stringify(params.budgetLimit) : null, params.autoDispatch === true ? 1 : 0, now, now);
+              params.budgetLimit != null ? JSON.stringify(params.budgetLimit) : null, params.autoDispatch === true ? 1 : 0, params.maxTriggers ?? null, boundStopGeneration, now, now);
           return { reminderId, nextAt };
         });
         const r = run(tx);
@@ -1469,14 +1475,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'reminder.snooze': {
         const params = z.strictObject({ reminderId: z.string().min(1), until: z.number().int().positive() }).parse(env.params);
-        // 前置只读校验（网关外——正式错误码）：存在性/audience/状态/时刻。
-        const rowPre = deps.db.prepare('SELECT id, status, next_at, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; next_at: number; conversation_id: string } | undefined;
+        // 授权校验（每次——含重放）在网关外；状态类前置在事务内重读核对（第二十五轮二：
+        // 并发取消/触发不被旧快照放行；重放先命中回执——状态校验不阻塞同号重试）。
+        const rowPre = deps.db.prepare('SELECT id, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; conversation_id: string } | undefined;
         if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
-        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id); // REM-5：不能凭 reminderId 操作他人 DM 提醒
-        if (rowPre.status !== 'active') throw new DaemonCommandError('VALIDATION_INVALID', `仅 active 提醒可贪睡（当前 ${rowPre.status}）`);
-        if (params.until <= rowPre.next_at) throw new DaemonCommandError('VALIDATION_INVALID', '贪睡时刻必须晚于当前下次触发时刻');
+        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id);
         const tx = deps.db.transaction((): { snoozed: boolean } => {
-          const changed = deps.db.prepare(`UPDATE reminders SET next_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND next_at = ? AND status = 'active'`).run(params.until, Date.now(), rowPre.id, rowPre.next_at).changes;
+          const row = deps.db.prepare('SELECT id, status, next_at FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; next_at: number } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+          if (row.status !== 'active') throw new DaemonCommandError('VALIDATION_INVALID', `仅 active 提醒可贪睡（当前 ${row.status}）`);
+          if (params.until <= row.next_at) throw new DaemonCommandError('VALIDATION_INVALID', '贪睡时刻必须晚于当前下次触发时刻');
+          const changed = deps.db.prepare(`UPDATE reminders SET next_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND next_at = ? AND status = 'active'`).run(params.until, Date.now(), row.id, row.next_at).changes;
           return { snoozed: changed === 1 };
         });
         const r = run(tx);
@@ -1493,67 +1502,91 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           ]).optional(),
           autoDispatch: z.boolean().optional(),
         }).parse(env.params);
-        // 前置只读校验（网关外——正式错误码）。
-        const rowPre = deps.db.prepare('SELECT id, revision, schedule_json, status, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; revision: number; schedule_json: string; status: string; conversation_id: string } | undefined;
+        // 授权校验（网关外，每次）；revision/状态在事务内重读核对（并发安全+重放不阻塞）。
+        const rowPre = deps.db.prepare('SELECT id, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; conversation_id: string } | undefined;
         if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
         assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id);
-        if (rowPre.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${rowPre.revision}`);
-        if (rowPre.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '已取消的提醒不能更新复活——请重新创建（取消后不复活）');
-        const schedulePre = params.schedule != null ? (params.schedule as ReminderSchedule) : JSON.parse(rowPre.schedule_json) as ReminderSchedule;
-        const scheduleCheck = validateSchedule(schedulePre);
-        if (!scheduleCheck.ok) throw new DaemonCommandError('VALIDATION_INVALID', `新计划无效：${scheduleCheck.error}`);
-        const nextAtPre = computeNextAt(schedulePre, Date.now());
-        if (nextAtPre == null) throw new DaemonCommandError('VALIDATION_INVALID', '新计划无法产生未来触发时刻');
         const tx = deps.db.transaction((): { revision: number } => {
+          const row = deps.db.prepare('SELECT id, revision, schedule_json, status FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; revision: number; schedule_json: string; status: string } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+          if (row.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${row.revision}`);
+          if (row.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '已取消的提醒不能更新复活——请重新创建（取消后不复活）');
+          const schedule = params.schedule != null ? (params.schedule as ReminderSchedule) : JSON.parse(row.schedule_json) as ReminderSchedule;
+          const scheduleCheck = validateSchedule(schedule);
+          if (!scheduleCheck.ok) throw new DaemonCommandError('VALIDATION_INVALID', `新计划无效：${scheduleCheck.error}`);
+          const nextAt = computeNextAt(schedule, Date.now());
+          if (nextAt == null) throw new DaemonCommandError('VALIDATION_INVALID', '新计划无法产生未来触发时刻');
           // timezone 列与 schedule_json 保持一致（第二十四轮二修复：旧实现改计划不同步列）。
           // paused→active=显式继续（authority 类暂停在下次触发重查时如实再判定；恢复不自动补跑）。
           deps.db.prepare(`UPDATE reminders SET title = COALESCE(?, title), schedule_json = ?, timezone = ?, next_at = ?, auto_dispatch = COALESCE(?, auto_dispatch),
                            status = 'active', paused_reason = NULL, revision = revision + 1, updated_at = ? WHERE id = ?`)
-            .run(params.title ?? null, JSON.stringify(schedulePre), schedulePre.tz ?? 'UTC', nextAtPre, params.autoDispatch == null ? null : (params.autoDispatch ? 1 : 0), Date.now(), rowPre.id);
-          return { revision: rowPre.revision + 1 };
+            .run(params.title ?? null, JSON.stringify(schedule), schedule.tz ?? 'UTC', nextAt, params.autoDispatch == null ? null : (params.autoDispatch ? 1 : 0), Date.now(), row.id);
+          return { revision: row.revision + 1 };
         });
         const r = run(tx);
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.cancel': {
         const params = z.strictObject({ reminderId: z.string().min(1) }).parse(env.params);
-        const rowPre = deps.db.prepare('SELECT id, status, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; conversation_id: string } | undefined;
+        const rowPre = deps.db.prepare('SELECT id, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; conversation_id: string } | undefined;
         if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
         assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id);
-        const tx = deps.db.transaction((): { cancelled: boolean } => {
+        const tx = deps.db.transaction((): { cancelled: boolean; settledAwaiting: number } => {
+          const row = deps.db.prepare('SELECT id, status FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+          // once 到点后（done）仍有待确认触发→必须可取消（第二十五轮二：取消=结算待确认事项；
+          // 已开始执行的任务不在此处冒充停止——按正式停止入口处理）。
+          if (row.status === 'done') {
+            const settled = deps.db.prepare("UPDATE reminder_occurrences SET outcome = 'cancelled_by_user', fired_at = COALESCE(fired_at, ?) WHERE reminder_id = ? AND outcome = 'awaiting_confirmation' AND status = 'fired'")
+              .run(Date.now(), params.reminderId).changes;
+            if (settled > 0) {
+              deps.db.prepare("UPDATE reminders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'done'").run(Date.now(), params.reminderId);
+              return { cancelled: true, settledAwaiting: settled };
+            }
+            return { cancelled: false, settledAwaiting: 0 }; // done 且无可结算事项——如实无变化
+          }
           const changed = deps.db.prepare(`UPDATE reminders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('active','paused')`).run(Date.now(), params.reminderId).changes;
-          return { cancelled: changed === 1 };
+          if (changed === 1) {
+            // 同步结算待确认触发（active/paused 取消路径同样适用——待我处理不再出现）。
+            const settled = deps.db.prepare("UPDATE reminder_occurrences SET outcome = 'cancelled_by_user' WHERE reminder_id = ? AND outcome = 'awaiting_confirmation' AND status = 'fired'")
+              .run(params.reminderId).changes;
+            return { cancelled: true, settledAwaiting: settled };
+          }
+          return { cancelled: false, settledAwaiting: 0 };
         });
         const r = run(tx);
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.confirm': {
         // REM-8 正式确认入口：awaiting_confirmation 的 occurrence 经用户确认→正式执行派发
-        // （任务+outbox，author=system——不伪装人类）。确认时刻重查授权+预算（事实以当下为准）。
+        // （任务+outbox+调用预占，author=system——不伪装人类）。状态/授权/预算**事务内重读
+        // 核对**（并发取消/额度争用在提交前拦截——两条待确认争最后一格恰一条获准）；
+        // 重放先命中回执（网关）——首次成功后的状态变化不阻塞同号重试。
         const params = z.strictObject({ reminderId: z.string().min(1), scheduledAt: z.number().int().positive() }).parse(env.params);
-        // 前置只读校验（网关外——正式错误码）。
-        const row = deps.db.prepare('SELECT * FROM reminders WHERE id = ?').get(params.reminderId) as
-          | { id: string; conversation_id: string; thread_id: string | null; task_id: string | null; owner_member_id: string; owner_user: string | null; title: string | null; source_ref: string | null; timezone: string; schedule_json: string; budget_json: string | null; auto_dispatch: number; status: string }
-          | undefined;
-        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
-        assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
-        if (row.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '提醒已取消——不能确认执行');
-        const occ = deps.db.prepare('SELECT status, outcome, missed_count FROM reminder_occurrences WHERE reminder_id = ? AND scheduled_at = ?').get(params.reminderId, params.scheduledAt) as
-          | { status: string; outcome: string; missed_count: number } | undefined;
-        if (occ == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `触发记录不存在：${params.reminderId}@${params.scheduledAt}`);
-        if (occ.status !== 'fired' || occ.outcome !== 'awaiting_confirmation') {
-          throw new DaemonCommandError('VALIDATION_INVALID', `当前状态 ${occ.status}/${occ.outcome} 不可确认（仅待确认触发可确认）`);
-        }
-        const authority = recheckReminderAuthority(deps.db, row);
-        if (!authority.ok) throw new DaemonCommandError('FORBIDDEN', `授权重查未通过：${authority.reason}`);
-        const budget = checkReminderBudget(deps.db, row);
-        if (!budget.ok) throw new DaemonCommandError('BUDGET_EXCEEDED', budget.reason === 'budget_corrupt' ? '预算记录损坏——拒绝派发（fail-closed）' : '预算已用尽——拒绝派发');
+        const rowPre = deps.db.prepare('SELECT id, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; conversation_id: string } | undefined;
+        if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id); // 授权每次重检（含重放）
         const tx = deps.db.transaction((): { taskId: string; confirmedAt: number } => {
+          const row = deps.db.prepare('SELECT * FROM reminders WHERE id = ?').get(params.reminderId) as
+            | { id: string; conversation_id: string; thread_id: string | null; task_id: string | null; owner_member_id: string; owner_user: string | null; title: string | null; source_ref: string | null; timezone: string; schedule_json: string; budget_json: string | null; auto_dispatch: number; bound_stop_generation: number; status: string }
+            | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+          if (row.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '提醒已取消——不能确认执行（待确认事项已结算）');
+          const occ = deps.db.prepare('SELECT status, outcome, missed_count FROM reminder_occurrences WHERE reminder_id = ? AND scheduled_at = ?').get(params.reminderId, params.scheduledAt) as
+            | { status: string; outcome: string; missed_count: number } | undefined;
+          if (occ == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `触发记录不存在：${params.reminderId}@${params.scheduledAt}`);
+          if (occ.status !== 'fired' || occ.outcome !== 'awaiting_confirmation') {
+            throw new DaemonCommandError('VALIDATION_INVALID', `当前状态 ${occ.status}/${occ.outcome} 不可确认（仅待确认触发可确认）`);
+          }
+          const authority = recheckReminderAuthority(deps.db, row);
+          if (!authority.ok) throw new DaemonCommandError('FORBIDDEN', `授权重查未通过：${authority.reason}`);
+          const budget = checkReminderBudget(deps.db, row);
+          if (!budget.ok) throw new DaemonCommandError('BUDGET_EXCEEDED', budget.reason === 'budget_corrupt' ? '预算记录损坏——拒绝派发（fail-closed）' : '预算已用尽——拒绝派发');
           const dispatch = dispatchReminderExecution(deps.db, {
             reminder: row,
             scheduledAt: params.scheduledAt,
             missedCount: occ.missed_count ?? 0,
-            dispatchedCount: dispatchedCountOf(deps.db, row.id),
+            dispatchedCount: reminderCallUsage(deps.db, row.id),
             now: Date.now(),
           });
           const changed = deps.db.prepare(`UPDATE reminder_occurrences SET outcome = 'dispatched', task_id = ?, confirmed_at = ? WHERE reminder_id = ? AND scheduled_at = ? AND outcome = 'awaiting_confirmation'`)
@@ -1583,6 +1616,191 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           lastFiredAt: row.last_fired_at,
           occurrences: (deps.db.prepare(`SELECT scheduled_at, status, outcome, missed_count, fired_at, task_id, confirmed_at FROM reminder_occurrences WHERE reminder_id = ? ORDER BY scheduled_at DESC LIMIT 200`).all(row.id) as Array<{ scheduled_at: number; status: string; outcome: string | null; missed_count: number; fired_at: number | null; task_id: string | null; confirmed_at: number | null }>),
         }));
+        return withCommandId({ ok: true, data: { items } });
+      }
+      case 'thread.subscribe': {
+        // DEV-18 关注/静音（第二十五轮四）：**人的阅读订阅**（thread_subscriptions——与
+        // thread_agent_followers=Agent 执行跟进名单分列）。纯偏好写：不建运行/不停止任务/
+        // 不改冻结参与者；未读/通知聚合按 muted 排除、followed 进待我处理（另处消费）。
+        const params = z.strictObject({ threadId: z.string().min(1), follow: z.boolean().optional(), mute: z.boolean().optional() }).parse(env.params);
+        const thread = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string; project_id: string } | undefined;
+        if (thread == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `线程不存在：${params.threadId}`);
+        assertConversationAudience(deps.db, deps.localUserId, thread.conversation_id);
+        const tx = deps.db.transaction((): { followed: boolean; muted: boolean } => {
+          const cur = deps.db.prepare('SELECT followed, muted FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(params.threadId, deps.localUserId) as { followed: number; muted: number } | undefined;
+          const followed = params.follow ?? cur?.followed === 1;
+          const muted = params.mute ?? cur?.muted === 1;
+          deps.db.prepare(`INSERT INTO thread_subscriptions (thread_id, viewer_id, followed, muted) VALUES (?, ?, ?, ?)
+                           ON CONFLICT(thread_id, viewer_id) DO UPDATE SET followed = excluded.followed, muted = excluded.muted`)
+            .run(params.threadId, deps.localUserId, followed ? 1 : 0, muted ? 1 : 0);
+          return { followed, muted };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'thread.subscriptions': {
+        const params = z.strictObject({ projectId: z.string().min(1).optional() }).parse(env.params);
+        const rows = (params.projectId != null
+          ? deps.db.prepare(`SELECT s.thread_id, s.followed, s.muted, c.project_id, t.root_task_id FROM thread_subscriptions s JOIN conversation_threads t ON t.id = s.thread_id JOIN conversations c ON c.id = t.conversation_id WHERE c.project_id = ? AND s.viewer_id = ?`)
+          : deps.db.prepare(`SELECT s.thread_id, s.followed, s.muted, c.project_id, t.root_task_id FROM thread_subscriptions s JOIN conversation_threads t ON t.id = s.thread_id JOIN conversations c ON c.id = t.conversation_id WHERE s.viewer_id = ?`))
+          .all(...(params.projectId != null ? [params.projectId, deps.localUserId] : [deps.localUserId])) as Array<{ thread_id: string; followed: number; muted: number; project_id: string; root_task_id: string | null }>;
+        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ threadId: r.thread_id, followed: r.followed === 1, muted: r.muted === 1, projectId: r.project_id, taskId: r.root_task_id })) } });
+      }
+      case 'search.query': {
+        // DEV-18 搜索（第二十五轮四）：消息/线程锚文本/任务标题（附件**只随所在消息**检索
+        // ——附件名命中即该消息命中；正文提取未实施不冒充）。范围：project=当前项目 /
+        // all=全部可访问项目（同 mine.pending 口径——正式链无隐藏位）。audience：他人 DM
+        // 的消息/线程/任务与摘要一律不返回。确定性排序（created_at/seq+id）+分页。
+        const params = z.strictObject({
+          text: z.string().min(1).max(200),
+          scope: z.enum(['project', 'all']).default('project'),
+          projectId: z.string().min(1).optional(),
+          conversationId: z.string().min(1).optional(),
+          authorDisplayName: z.string().min(1).max(100).optional(),
+          fromDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          toDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          kind: z.enum(['all', 'message', 'thread', 'task']).default('all'),
+          page: z.number().int().min(1).default(1),
+          pageSize: z.number().int().min(1).max(50).default(20),
+        }).parse(env.params);
+        if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        const escapeLike = (raw: string): string => raw.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+        const pattern = `%${escapeLike(params.text)}%`;
+        const fromMs = params.fromDay != null ? Date.parse(`${params.fromDay}T00:00:00Z`) : null;
+        const toMs = params.toDay != null ? Date.parse(`${params.toDay}T00:00:00Z`) + 86_400_000 : null; // 含当日
+        if (fromMs != null && !Number.isFinite(fromMs)) throw new DaemonCommandError('VALIDATION_INVALID', 'fromDay 无法解析');
+        if (toMs != null && !Number.isFinite(toMs)) throw new DaemonCommandError('VALIDATION_INVALID', 'toDay 无法解析');
+        // 作者过滤：显示名→成员 id 集（跨项目同名都收——文本匹配如实）。
+        const authorIds = params.authorDisplayName != null
+          ? (deps.db.prepare('SELECT id FROM project_members WHERE display_name = ?').all(params.authorDisplayName) as Array<{ id: string }>).map((r) => r.id)
+          : null;
+        const audienceFilter = ` AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))`;
+        const scopeFilter = params.scope === 'project' ? ' AND m.project_id = ?' : '';
+        const convFilter = params.conversationId != null ? ' AND m.conversation_id = ?' : '';
+        const authorFilter = authorIds != null ? ` AND m.author_id IN (${authorIds.map(() => '?').join(',') || "''"})` : '';
+        const dateFilter = (fromMs != null ? ' AND m.created_at >= ?' : '') + (toMs != null ? ' AND m.created_at < ?' : '');
+        const bind = (m: boolean): unknown[] => {
+          const out: unknown[] = m ? [deps.localUserId] : [];
+          if (params.scope === 'project') out.push(params.projectId!);
+          if (params.conversationId != null) out.push(params.conversationId);
+          if (authorIds != null) out.push(...authorIds);
+          if (fromMs != null) out.push(fromMs);
+          if (toMs != null) out.push(toMs);
+          return out;
+        };
+        const pageSize = params.pageSize;
+        const offset = (params.page - 1) * pageSize;
+        const snippetOf = (text: string): string => {
+          const idx = text.indexOf(params.text);
+          if (idx < 0) return text.slice(0, 48);
+          return text.slice(Math.max(0, idx - 16), Math.min(text.length, idx + params.text.length + 24));
+        };
+        let messages: Array<Record<string, unknown>> = [];
+        let threads: Array<Record<string, unknown>> = [];
+        let tasks: Array<Record<string, unknown>> = [];
+        if (params.kind === 'all' || params.kind === 'message') {
+          messages = (deps.db.prepare(
+            `SELECT m.id, m.project_id, p.display_name AS project_name, m.conversation_id, m.thread_id, m.conversation_seq, m.created_at, m.author_type, m.author_id, json_extract(m.body_json, '$.text') AS text
+             FROM messages m JOIN conversations c ON c.id = m.conversation_id JOIN projects p ON p.id = m.project_id
+             WHERE (json_extract(m.body_json, '$.text') LIKE ? COLLATE NOCASE ESCAPE '\\'
+                    OR EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.display_name LIKE ? COLLATE NOCASE ESCAPE '\\'))${audienceFilter}${scopeFilter}${convFilter}${authorFilter}${dateFilter}
+             ORDER BY m.created_at DESC, m.id DESC LIMIT ? OFFSET ?`,
+          ).all(pattern, pattern, ...bind(true), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; thread_id: string | null; conversation_seq: number; created_at: number; author_type: string; author_id: string; text: string | null }>)
+            .map((r) => ({ kind: 'message', messageId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, threadId: r.thread_id, seq: r.conversation_seq, createdAt: r.created_at, authorType: r.author_type, authorId: r.author_id, snippet: snippetOf(String(r.text ?? '')), locate: `#msg=${r.id}` }));
+        }
+        if (params.kind === 'all' || params.kind === 'thread') {
+          const threadBind: unknown[] = [pattern, deps.localUserId];
+          if (params.scope === 'project') threadBind.push(params.projectId!);
+          if (fromMs != null) threadBind.push(fromMs);
+          if (toMs != null) threadBind.push(toMs);
+          threads = (deps.db.prepare(
+            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.root_task_id, m.created_at, json_extract(m.body_json, '$.text') AS text
+             FROM conversation_threads t JOIN messages m ON m.id = t.anchor_message_id JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
+             WHERE json_extract(m.body_json, '$.text') LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}${dateFilter}
+             ORDER BY m.created_at DESC, t.id DESC LIMIT ? OFFSET ?`,
+          ).all(...threadBind, pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; root_task_id: string | null; created_at: number; text: string | null }>)
+            .map((r) => ({ kind: 'thread', threadId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, taskId: r.root_task_id, createdAt: r.created_at, snippet: snippetOf(String(r.text ?? '')), locate: r.root_task_id != null ? `#task=${r.root_task_id}` : `#msg=${(deps.db.prepare('SELECT anchor_message_id FROM conversation_threads WHERE id = ?').get(r.id) as { anchor_message_id: string }).anchor_message_id}` }));
+        }
+        if (params.kind === 'all' || params.kind === 'task') {
+          tasks = (deps.db.prepare(
+            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.title, t.status, t.rowid
+             FROM tasks t JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
+             WHERE t.title LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}
+             ORDER BY t.rowid DESC LIMIT ? OFFSET ?`,
+          ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string }>)
+            .map((r) => ({ kind: 'task', taskId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, title: r.title, status: r.status, locate: `#task=${r.id}` }));
+        }
+        return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）' } });
+      }
+      case 'saved.add': {
+        // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK
+        // 专位保留）；重复收藏幂等（已存在=existed）；取消收藏不删原内容（saved.remove）。
+        const params = z.strictObject({
+          kind: z.enum(['message', 'link', 'task', 'delivery']),
+          ref: z.string().min(1).max(500),
+          title: z.string().max(200).optional(),
+          projectId: z.string().min(1).optional(),
+        }).parse(env.params);
+        if (params.kind === 'link' && !/^https?:\/\//i.test(params.ref)) throw new DaemonCommandError('VALIDATION_INVALID', '链接收藏需 http(s) URL');
+        const target = (() => {
+          if (params.kind === 'message') {
+            const row = deps.db.prepare('SELECT id, conversation_id FROM messages WHERE id = ?').get(params.ref) as { id: string; conversation_id: string } | undefined;
+            return row == null ? null : { conversationId: row.conversation_id };
+          }
+          if (params.kind === 'task') {
+            const row = deps.db.prepare('SELECT id, conversation_id, title FROM tasks WHERE id = ?').get(params.ref) as { id: string; conversation_id: string; title: string } | undefined;
+            return row == null ? null : { conversationId: row.conversation_id };
+          }
+          if (params.kind === 'delivery') {
+            const row = deps.db.prepare('SELECT d.id, t.conversation_id FROM task_deliveries d JOIN tasks t ON t.id = d.task_id WHERE d.id = ?').get(params.ref) as { id: string; conversation_id: string } | undefined;
+            return row == null ? null : { conversationId: row.conversation_id };
+          }
+          return { conversationId: null as string | null }; // link：无会话归属
+        })();
+        if (target == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `收藏目标不存在：${params.ref}`);
+        if (target.conversationId != null) assertConversationAudience(deps.db, deps.localUserId, target.conversationId);
+        const tx = deps.db.transaction((): { saved: boolean; existed: boolean } => {
+          const existing = deps.db.prepare('SELECT 1 AS ok FROM saved_refs WHERE viewer_id = ? AND kind = ? AND ref = ?').get(deps.localUserId, params.kind, params.ref);
+          if (existing != null) return { saved: true, existed: true };
+          deps.db.prepare('INSERT INTO saved_refs (viewer_id, kind, ref, title, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(deps.localUserId, params.kind, params.ref, params.title ?? null, params.projectId ?? null, Date.now());
+          return { saved: true, existed: false };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'saved.remove': {
+        const params = z.strictObject({ kind: z.enum(['message', 'link', 'task', 'delivery']), ref: z.string().min(1).max(500) }).parse(env.params);
+        const tx = deps.db.transaction((): { removed: boolean } => {
+          const changed = deps.db.prepare('DELETE FROM saved_refs WHERE viewer_id = ? AND kind = ? AND ref = ?').run(deps.localUserId, params.kind, params.ref).changes;
+          return { removed: changed === 1 }; // 只删收藏行——原内容不动
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'saved.list': {
+        // 逐条校验：目标存在+audience → ok/missing/forbidden（如实呈现；跳转复用正式深链）。
+        const rows = deps.db.prepare('SELECT kind, ref, title, project_id, created_at FROM saved_refs WHERE viewer_id = ? ORDER BY created_at DESC, rowid DESC').all(deps.localUserId) as Array<{ kind: string; ref: string; title: string | null; project_id: string | null; created_at: number }>;
+        const items = rows.map((row) => {
+          const base = { kind: row.kind, ref: row.ref, title: row.title, projectId: row.project_id, createdAt: row.created_at };
+          if (row.kind === 'link') return { ...base, status: 'ok', locate: null as string | null };
+          if (row.kind === 'message') {
+            const m = deps.db.prepare('SELECT conversation_id FROM messages WHERE id = ?').get(row.ref) as { conversation_id: string } | undefined;
+            if (m == null) return { ...base, status: 'missing', locate: null };
+            try { assertConversationAudience(deps.db, deps.localUserId, m.conversation_id); } catch { return { ...base, status: 'forbidden', locate: null }; }
+            return { ...base, status: 'ok', locate: `#msg=${row.ref}` };
+          }
+          if (row.kind === 'task') {
+            const t = deps.db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(row.ref) as { conversation_id: string } | undefined;
+            if (t == null) return { ...base, status: 'missing', locate: null };
+            try { assertConversationAudience(deps.db, deps.localUserId, t.conversation_id); } catch { return { ...base, status: 'forbidden', locate: null }; }
+            return { ...base, status: 'ok', locate: `#task=${row.ref}` };
+          }
+          const d = deps.db.prepare('SELECT t.conversation_id FROM task_deliveries d JOIN tasks t ON t.id = d.task_id WHERE d.id = ?').get(row.ref) as { conversation_id: string } | undefined;
+          if (d == null) return { ...base, status: 'missing', locate: null };
+          try { assertConversationAudience(deps.db, deps.localUserId, d.conversation_id); } catch { return { ...base, status: 'forbidden', locate: null }; }
+          return { ...base, status: 'ok', locate: `#delivery=${row.ref}` };
+        });
         return withCommandId({ ok: true, data: { items } });
       }
       case 'mine.pending': {
@@ -1618,14 +1836,25 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?)`,
           ).all(deps.localUserId, p.id, deps.localUserId) as Array<{ conversation_id: string; title: string | null; unread: number; last_agent_seq: number | null }>).filter((r) => r.unread > 0);
           // 线程未读（第二十三轮一）：主池聚合数据面——每线程 agent 回复 thread_message_seq >
-          // 水位的条数（打开房间≠读完线程；读线程 A 不影响 B）。
+          // 水位的条数（打开房间≠读完线程；读线程 A 不影响 B）。静音线程排除（第二十五轮四）。
           const threadUnread = (deps.db.prepare(
             `SELECT t.id AS thread_id,
                     (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.author_type = 'agent' AND m.thread_message_seq > COALESCE((SELECT s.last_read_message_seq FROM thread_read_states s WHERE s.thread_id = t.id AND s.viewer_id = ?), 0)) AS unread
              FROM conversation_threads t
              JOIN conversations c ON c.id = t.conversation_id
-             WHERE c.project_id = ? AND c.kind = 'room'`,
-          ).all(deps.localUserId, p.id) as Array<{ thread_id: string; unread: number }>).filter((r) => r.unread > 0);
+             WHERE t.project_id = ? AND c.kind = 'room'
+               AND NOT EXISTS (SELECT 1 FROM thread_subscriptions sub WHERE sub.thread_id = t.id AND sub.viewer_id = ? AND sub.muted = 1)`,
+          ).all(deps.localUserId, p.id, deps.localUserId) as Array<{ thread_id: string; unread: number }>).filter((r) => r.unread > 0);
+          // 关注线程（第二十五轮四）：人的阅读订阅（与 Agent 执行名单分列）——有未读时进
+          // 待我处理（muted 的关注仍排除未读——静音优先）。
+          const followedThreads = (deps.db.prepare(
+            `SELECT sub.thread_id, t.root_task_id, t.anchor_message_id,
+                    (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.author_type = 'agent' AND m.thread_message_seq > COALESCE((SELECT s.last_read_message_seq FROM thread_read_states s WHERE s.thread_id = t.id AND s.viewer_id = ?), 0)) AS unread
+             FROM thread_subscriptions sub
+             JOIN conversation_threads t ON t.id = sub.thread_id
+             JOIN conversations c ON c.id = t.conversation_id
+             WHERE sub.viewer_id = ? AND sub.followed = 1 AND sub.muted = 0 AND c.project_id = ? AND c.kind = 'room'`,
+          ).all(deps.localUserId, deps.localUserId, p.id) as Array<{ thread_id: string; root_task_id: string | null; anchor_message_id: string; unread: number }>).filter((r) => r.unread > 0);
           // 阻塞任务（第二十三轮三：如实列出——可见≠审批：不并入待验收，处理入口=线程本身；
           // 不把所有 BLOCKED 都当人工审批，授权请求（WAITING_APPROVAL）等其余未覆盖项见
           // continuation 登记范围）。
@@ -1647,8 +1876,8 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY ro.scheduled_at`,
           ).all(p.id, deps.localUserId) as Array<{ reminder_id: string; scheduled_at: number; missed_count: number; title: string | null; conversation_id: string; conversation_kind: string }>);
-          return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread, threadUnread, blockedTasks, reminderAwaits };
-        }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0 || p.threadUnread.length > 0 || p.blockedTasks.length > 0 || p.reminderAwaits.length > 0);
+          return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread, threadUnread, blockedTasks, reminderAwaits, followedThreads };
+        }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0 || p.threadUnread.length > 0 || p.blockedTasks.length > 0 || p.reminderAwaits.length > 0 || p.followedThreads.length > 0);
         return withCommandId({ ok: true, data: { projects: out, generatedAt: Date.now() } });
       }
       case 'deepLink.resolve': {
@@ -1924,13 +2153,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const items = [];
         for (const t of threads) {
           const replyCount = (deps.db.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get(t.id) as { c: number }).c;
+          // 静音尊重（第二十五轮四）：muted 线程未读恒 0（不进未读/通知聚合——卡片仍可见）。
+          const muted = (deps.db.prepare('SELECT muted FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(t.id, deps.localUserId) as { muted: number } | undefined)?.muted === 1;
           // 线程未读（第二十三轮一：主池聚合）——agent 回复 thread_message_seq > 水位的条数。
-          const unread = (deps.db.prepare(
+          const unread = muted ? 0 : (deps.db.prepare(
             `SELECT count(*) c FROM messages m WHERE m.thread_id = ? AND m.author_type = 'agent' AND m.thread_message_seq > COALESCE((SELECT s.last_read_message_seq FROM thread_read_states s WHERE s.thread_id = ? AND s.viewer_id = ?), 0)`,
           ).get(t.id, t.id, deps.localUserId) as { c: number }).c;
+          const followed = (deps.db.prepare('SELECT followed FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(t.id, deps.localUserId) as { followed: number } | undefined)?.followed === 1;
           const lastReply = deps.db.prepare('SELECT created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq DESC LIMIT 1').get(t.id) as { created_at: number } | undefined;
           items.push({
-            threadId: t.id, unread,
+            threadId: t.id, unread, muted, followed,
             anchorMessageId: t.anchor_message_id,
             body: JSON.parse(t.body_json) as { text: string },
             createdAt: t.created_at,
