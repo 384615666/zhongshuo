@@ -89,7 +89,7 @@
 > - **通知人工验收入口**：dist/desktop/通知人工验收/（新构建 buildId/独立 appData/合成
 >   项目/fake+ZS_REAL_DISPATCH_GUARD=1 **内置**——用户零配置零环境变量；seed 走正式
 >   daemon 管道；开发机自测通过（项目自动恢复+两条通知 created+shown+去重+guard）；
->   **Windows 通知中心送达/点击定位待用户人工复核**（验收步骤.txt+结果模板已备）。
+>   **人工复核已通过（第二十八轮归档 evidence/notify-manual-acceptance-20261001.md；范围仅该 build 与该机）**
 > - **搜索一致性**：线程/任务分支统一作者/会话/日期过滤（线程=锚消息列、任务=根消息
 >   LEFT JOIN——无根任务设日期过滤如实排除）；日期**本机时区**（北京凌晨边界用例）；
 >   dev18FollowSearch 7/7。
