@@ -5,6 +5,7 @@
  * - 层 C 事件注入：随 DEV-08/09/11 调度接入。
  * 程序边界（路由/隔离/预算/权限/停止）一律不依赖提示词；模板只让模型配合（规格 §6）。
  */
+const ATT_EXCERPT_BYTES = 64 * 1024; // 与 turnInput 一致
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { canonicalJson } from './common.ts';
@@ -267,6 +268,15 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     reason: z.string().optional(),
     hash: z.string().optional(),
   })),
+  attachments: z.array(z.strictObject({
+    ref: z.string().min(1),
+    filename: z.string().min(1),
+    hash: z.string().min(1),
+    revision: z.number().int().nonnegative(),
+    originalBytes: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    text: z.string(),
+  })).default([]), // DEV-24 文本附件（第二十六轮五）：获准副本实际文本+资源身份+截断说明
   threadDigest: z.strictObject({
     rootMessageId: z.string().min(1),
     rootText: z.string(),
@@ -330,6 +340,12 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   lines.push('── 任务 ──');
   lines.push(envelope.task.objective || '（见用户根消息）');
+  // DEV-24 文本附件（第二十六轮五）：获准副本实际文本注入模型输入——带 文件名/hash/
+  // revision/原始字节/截断说明（不拿路径冒充已读）。
+  for (const att of envelope.attachments ?? []) {
+    lines.push(`── 附件 ${att.filename}（${att.ref} rev=${att.revision} sha256=${att.hash.slice(0, 16)}… ${att.originalBytes}B${att.truncated ? `，超过 ${ATT_EXCERPT_BYTES}B 截断` : ''}）──`);
+    lines.push(att.text);
+  }
   if (envelope.task.userConstraints.length > 0) {
     lines.push(`用户约束：${envelope.task.userConstraints.join('；')}`);
   }

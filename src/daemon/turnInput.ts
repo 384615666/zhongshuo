@@ -4,6 +4,10 @@
  * 渲染全文敏感扫描零命中（PP-03）；信封与渲染文本、hash 由本函数一并产出（PP-04）。
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+/** DEV-24 文本附件注入的截断口径（与 commands.ts 一致——单一规则两处引用常量）。 */
+const ATT_EXCERPT_BYTES = 64 * 1024;
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
@@ -89,6 +93,23 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     return assemblyFailure('root-not-user-request', '根消息作者不是用户（任务原始请求缺失）');
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
+  // DEV-24 文本附件注入（第二十六轮五·能力④经授权交给模型）：根消息挂的 text_file 附件→
+  // 读**获准副本**（artifacts.blob_path——原文件变化不影响已保存版本）；带 文件名/hash/
+  // revision/原始字节/截断说明；副本不可读=组装失败（不以路径冒充已读）。
+  let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
+  const attRows = db.prepare(
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
+     WHERE ma.message_id = ? AND a.kind = 'text_file' ORDER BY ma.rowid`,
+  ).all(root.id) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+  for (const row of attRows) {
+    let attText: string;
+    try { attText = readFileSync(row.blob_path, 'utf8'); } catch {
+      return assemblyFailure('attachment-unreadable', `附件副本不可读（${row.source_name ?? row.id}）——拒绝组装，不以路径冒充已读`);
+    }
+    const originalBytes = Buffer.byteLength(attText, 'utf8');
+    const truncated = originalBytes > ATT_EXCERPT_BYTES;
+    rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes, truncated, text: truncated ? attText.slice(0, ATT_EXCERPT_BYTES) : attText });
+  }
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     return assemblyFailure('empty-root-message', '根消息正文为空');
   }
@@ -167,6 +188,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       reason: m.refId === root.id ? '用户根消息' : '本线程历史',
       hash: `sha256:${sha256(messageTextOf(m.refId, rootBody.text, historyTexts))}`,
     })),
+    attachments: rootAttachments,
     threadDigest: {
       rootMessageId: root.id,
       rootText: rootBody.text,
@@ -273,6 +295,20 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     return assemblyFailure('root-scope-mismatch', `根消息任务归属不符（msg.task_id=${root.task_id ?? 'null'} ≠ 本任务）——拒绝组装`);
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
+  let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
+  const dmAttRows = db.prepare(
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
+     WHERE ma.message_id = ? AND a.kind = 'text_file' ORDER BY ma.rowid`,
+  ).all(root.id) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+  for (const row of dmAttRows) {
+    let attText: string;
+    try { attText = readFileSync(row.blob_path, 'utf8'); } catch {
+      return assemblyFailure('attachment-unreadable', `附件副本不可读（${row.source_name ?? row.id}）——拒绝组装，不以路径冒充已读`);
+    }
+    const originalBytes = Buffer.byteLength(attText, 'utf8');
+    const truncated = originalBytes > ATT_EXCERPT_BYTES;
+    rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes, truncated, text: truncated ? attText.slice(0, ATT_EXCERPT_BYTES) : attText });
+  }
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     return assemblyFailure('empty-root-message', '根消息正文为空');
   }
@@ -327,6 +363,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
       reason: m.id === root.id ? '用户本次消息' : '本会话历史（audience 推导——续接上文）',
       hash: `sha256:${sha256(messageTextOf(m.id, rootBody.text, historyTexts))}`,
     })),
+    attachments: rootAttachments,
     threadDigest: {
       rootMessageId: root.id,
       rootText: rootBody.text,
