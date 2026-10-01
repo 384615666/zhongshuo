@@ -953,6 +953,59 @@ try {
       await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('POOL-ATT-7788')`)) === true, 20_000, 'ATT 代码附件预览');
       const pvCode = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
       record('ATT·代码附件预览（code_file 标注+正文）', pvCode.includes('POOL-ATT-7788') && pvCode.includes('（代码）'), pvCode.slice(0, 50));
+      // 图片附件页面闭环（第二十八轮四）：页面内合成 PNG（magic+IHDR——服务端校验头不验 CRC）→
+      // DataTransfer 真实上传→芯片→<img> 预览（尺寸+OCR/模型输入如实标注）。
+      await page.evalJs(`(() => {
+        const head = new Uint8Array([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a, 0,0,0,13, 0x49,0x48,0x44,0x52, 0,0,1,40, 0,0,1,40, 8,0,0,0,0, 0,0,0,0]);
+        const tail = new Uint8Array([0,0,0,0, 0x49,0x45,0x4e,0x44, 0xae,0x42,0x60,0x82]);
+        const input = document.getElementById('composer-attach-file');
+        const dt = new DataTransfer();
+        dt.items.add(new File([head, tail], '合成 图.png', { type: 'image/png' }));
+        input.files = dt.files; input.dispatchEvent(new Event('change'));
+      })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('合成 图.png')`)) === true, 20_000, 'ATT 图片草稿芯片');
+      const imgChipOk = await page.readStrict(`document.querySelectorAll('#composer-attach-chips button.chip').length`);
+      const imgToast = await page.readStrict(`document.getElementById('conn-state')?.textContent ?? ''`); // 上传回显（尺寸）在提示条
+      record('ATT·图片上传（magic+IHDR 校验过+尺寸回显）', Number(imgChipOk) >= 2 && imgToast.includes('296×296'), imgToast.slice(0, 50));
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; const img = chips.find((c) => c.textContent.includes('合成 图')); if (img) img.click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelector('#attach-preview img') != null`)).value === true, 20_000, 'ATT 图片 <img> 预览');
+      const pvImg = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·图片预览（<img>+尺寸+OCR/模型输入如实标注）', pvImg.includes('296×296') && pvImg.includes('OCR 提取正文：未实现') && pvImg.includes('模型图片输入：未认证'), pvImg.slice(0, 70));
+      await page.evalJs(`document.getElementById('attach-preview').querySelector('.chip').click()`); // 关闭预览
+      // PDF 附件页面闭环（第二十八轮五）：页面内合成合法双页 PDF（xref 偏移计算）→上传→
+      // 分页文本预览（第 2 页定位+像素渲染/OCR 标注+页导航）。
+      await page.evalJs(`(() => {
+        const enc = new TextEncoder();
+        const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+          '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>'];
+        const s1 = 'BT /F1 12 Tf 72 720 Td (PAGEUI-1-OK) Tj ET';
+        objs.push('<< /Length ' + s1.length + ' >>' + String.fromCharCode(10) + 'stream' + String.fromCharCode(10) + s1 + String.fromCharCode(10) + 'endstream');
+        objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>');
+        const s2 = 'BT /F1 12 Tf 72 720 Td (PAGEUI-2-OK) Tj ET';
+        objs.push('<< /Length ' + s2.length + ' >>' + String.fromCharCode(10) + 'stream' + String.fromCharCode(10) + s2 + String.fromCharCode(10) + 'endstream');
+        let out = '%PDF-1.4' + String.fromCharCode(10); const offs = [];
+        objs.forEach((b, i) => { offs.push(out.length); out += (i + 1) + ' 0 obj' + String.fromCharCode(10) + b + String.fromCharCode(10) + 'endobj' + String.fromCharCode(10); });
+        const x = out.length;
+        out += 'xref' + String.fromCharCode(10) + '0 ' + (objs.length + 1) + String.fromCharCode(10) + '0000000000 65535 f ' + String.fromCharCode(10);
+        for (const o of offs) out += String(o).padStart(10, '0') + ' 00000 n ' + String.fromCharCode(10);
+        out += 'trailer' + String.fromCharCode(10) + '<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>' + String.fromCharCode(10) + 'startxref' + String.fromCharCode(10) + x + String.fromCharCode(10) + '%%EOF';
+        const u8 = enc.encode(out); let bin = '';
+        for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+        window.__zsPdfB64 = btoa(bin);
+        const input = document.getElementById('composer-attach-file');
+        const dt = new DataTransfer();
+        dt.items.add(new File([u8], '页面 合成.pdf', { type: 'application/pdf' }));
+        input.files = dt.files; input.dispatchEvent(new Event('change'));
+      })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('页面 合成.pdf')`)) === true, 30_000, 'ATT PDF 草稿芯片');
+      const pdfToast = await page.readStrict(`document.getElementById('conn-state')?.textContent ?? ''`);
+      record('ATT·PDF 上传（隔离解析过+页数回显）', pdfToast.includes('2 页'), pdfToast.slice(0, 50));
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; const pdf = chips.find((c) => c.textContent.includes('页面 合成')); if (pdf) pdf.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('PAGEUI-1-OK')`)) === true, 30_000, 'ATT PDF 首页预览');
+      await page.evalJs(`(() => { const btns = [...document.querySelectorAll('#attach-preview .chip')]; const next = btns.find((b) => b.textContent.includes('后页')); if (next) next.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('PAGEUI-2-OK')`)) === true, 20_000, 'ATT PDF 第 2 页');
+      const pvPdf = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·PDF 分页预览（第 2 页定位+页导航+像素渲染/OCR 标注）', pvPdf.includes('第 2 页') && pvPdf.includes('像素级页面渲染：未实施') && pvPdf.includes('OCR：未实现'), pvPdf.slice(0, 70));
       const realCallsA = countTable(join(appDataA, 'state.sqlite'), 'real_calls');
       record('ATT·零真实调用（fake 注入链）', realCallsA === 0, `real_calls=${realCallsA}`);
       page.close();
