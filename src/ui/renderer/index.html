@@ -72,6 +72,28 @@
             <div><b>写入并发</b>：单写者（同一物理目录同时只安排一个受管理写入任务；并行写入增强已延期，§14.7——未开放，不是可点开关）。</div>
           </div>
         </details>
+        <details id="remote-settings" class="help-panel">
+          <summary>远程访问（DEV-25）</summary>
+          <div class="help-body">
+            <div><b>远程访问</b>（本机/LAN 浏览器）：默认<b>关闭</b>。启用后强制 HTTPS/WSS（自签证书）；配对设备与本机同等权限；吊销立即生效。LAN 需显式选择监听地址；地址与证书 SHA-256 指纹在配对码中一并给出，设备端核对后完成信任（不降级 HTTP）。</div>
+            <div id="remote-config-row" class="meta"></div>
+            <div>
+              <select id="remote-host-sel" title="监听地址：仅本机（127.0.0.1）或 LAN（0.0.0.0=所有网卡，需设备能访问本机）">
+                <option value="127.0.0.1">仅本机（127.0.0.1）</option>
+                <option value="0.0.0.0">局域网（0.0.0.0）</option>
+              </select>
+              <input id="remote-port-input" type="number" min="0" max="65535" placeholder="端口（0=自动）" style="width:110px">
+              <button id="remote-enable-btn" class="chip">启用</button>
+              <button id="remote-disable-btn" class="chip">停用</button>
+            </div>
+            <div>
+              <button id="remote-pair-btn" class="chip" title="生成 5 分钟内一次有效的配对码（仅本机可信入口）">生成配对码</button>
+              <div id="remote-pair-result" class="meta"></div>
+            </div>
+            <div><b>已配对设备</b>（吊销=凭据/会话/票据/事件流全部立即失效）：</div>
+            <div id="remote-device-list" class="meta"></div>
+          </div>
+        </details>
         <details id="help-panel" class="help-panel">
           <summary>帮助与故障引导（START-07/09 首版）</summary>
           <div class="help-body">

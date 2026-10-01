@@ -517,7 +517,11 @@ function structurePreviewLines(pre, filename) {
   });
 }
 
-/** 消息操作组（第三十轮六）：复制/引用/表情（惰性拉取计数）+既有收藏。 */
+/** 已打开表情层的消息集（第三十一轮二）：轮询重绘 replaceChildren 会拆层——以消息 id
+ * 记忆开层状态，重绘后自动重建（点击/刷新不丢交互层）。 */
+const openEmojiLayers = new Set();
+
+/** 消息操作组（第三十轮六；第三十一轮二接线渲染链）：复制/引用/表情（惰性拉取计数）。 */
 function attachMsgActions(div, message) {
   const bodyText = (() => { try { return (JSON.parse(message.body_json) ?? {}).text ?? ''; } catch { return ''; } })();
   const actions = document.createElement('span');
@@ -540,52 +544,72 @@ function attachMsgActions(div, message) {
       input.focus();
       showError('已插入引用（草稿）');
     }),
-    mk('😊', '表情反应（点击拉取/切换——本地用户操作）', () => void (async () => {
-      let layer = div.querySelector('.msg-emoji-layer');
-      if (layer != null) { layer.classList.toggle('hidden'); return; }
-      layer = document.createElement('div');
-      layer.className = 'msg-emoji-layer';
-      const reactions = await command('message.reactions', { messageId: message.id }).catch(() => null);
-      for (const r of reactions?.items ?? []) {
-        const chip = document.createElement('span');
-        chip.className = 'chip';
-        chip.textContent = `${r.emoji}${r.mine ? '（我）' : ''}`;
-        layer.append(chip);
-      }
-      for (const emoji of ['👍', '❤️', '😂', '🎉', '👀', '⚠️']) {
-        const b = document.createElement('button');
-        b.className = 'chip';
-        b.textContent = emoji;
-        b.onclick = () => void (async () => {
-          const r = await command('message.react', { messageId: message.id, emoji });
-          showError(r.reacted ? `已回应 ${emoji}` : `已取消 ${emoji}`);
-          layer?.remove();
-        })().catch((e) => showError(`回应失败：${e.message}`));
-        layer.append(b);
-      }
-      div.append(layer);
-    })().catch(() => {})),
+    mk('😊', '表情反应（点击拉取/切换——本地用户操作）', () => {
+      const existing = div.querySelector('.msg-emoji-layer');
+      if (existing != null && !existing.classList.contains('hidden')) { existing.classList.add('hidden'); openEmojiLayers.delete(message.id); return; }
+      openEmojiLayers.add(message.id);
+      void buildEmojiLayer(div, message);
+    }),
   );
   div.prepend(actions);
+  if (openEmojiLayers.has(message.id)) void buildEmojiLayer(div, message); // 重绘重建（轮询不拆交互层）
+}
+
+async function buildEmojiLayer(div, message) {
+  let layer = div.querySelector('.msg-emoji-layer');
+  if (layer == null) {
+    layer = document.createElement('div');
+    layer.className = 'msg-emoji-layer';
+    div.append(layer);
+  }
+  layer.classList.remove('hidden');
+  layer.textContent = '';
+  const reactions = await command('message.reactions', { messageId: message.id }).catch(() => null);
+  for (const r of reactions?.items ?? []) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = `${r.emoji}${r.mine ? '（我）' : ''}`;
+    layer.append(chip);
+  }
+  for (const emoji of ['👍', '❤️', '😂', '🎉', '👀', '⚠️']) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = emoji;
+    b.onclick = () => void (async () => {
+      const r = await command('message.react', { messageId: message.id, emoji });
+      showError(r.reacted ? `已回应 ${emoji}` : `已取消 ${emoji}`);
+      layer?.remove();
+      openEmojiLayers.delete(message.id);
+    })().catch((e) => showError(`回应失败：${e.message}`));
+    layer.append(b);
+  }
 }
 
 // ---------- Activity 流（DEV-18 剩余，第三十轮六）----------
 let activityVisible = false;
-async function renderActivity() {
+async function renderActivity(more = false) {
   const box = el('activity-list');
   if (box == null || !activityVisible) return;
   const scope = el('activity-scope')?.value ?? 'all';
-  const data = await command('activity.list', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId, limit: 80 } : { scope: 'all', limit: 80 }).catch((e) => null);
-  if (data == null) { box.textContent = `Activity 读取失败：${scope}`; return; }
-  box.textContent = '';
-  if ((data.items ?? []).length === 0) {
+  // 稳定游标（第三十一轮二）：加载更多带 (before, beforeSeq) 双键——同毫秒多事件不漏。
+  const cursor = more && box.dataset.cursor ? JSON.parse(box.dataset.cursor) : null;
+  if (more && cursor == null) return;
+  const base = scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' };
+  const data = await command('activity.list', { ...base, limit: 80, ...(cursor != null ? { before: cursor.at, beforeSeq: cursor.seq } : {}) }).catch((e) => null);
+  if (data == null) { if (!more) box.textContent = `Activity 读取失败：${scope}`; return; }
+  if (!more) box.textContent = '';
+  const items = data.items ?? [];
+  delete box.dataset.cursor;
+  box.querySelector('.activity-more')?.remove();
+  if (items.length === 0 && !more) {
     const empty = document.createElement('div');
     empty.className = 'meta';
     empty.textContent = '暂无动态。';
     box.append(empty);
     return;
   }
-  for (const it of data.items) {
+  const last = items.length > 0 ? items[items.length - 1] : null;
+  for (const it of items) {
     const row = document.createElement('div');
     row.className = 'activity-row';
     const head = document.createElement('div');
@@ -602,6 +626,16 @@ async function renderActivity() {
       row.append(go);
     }
     box.append(row);
+  }
+  if (last != null) {
+    box.dataset.cursor = JSON.stringify({ at: last.at, seq: last.seq });
+    if (items.length >= 80) {
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'chip activity-more';
+      moreBtn.textContent = '加载更早';
+      moreBtn.onclick = () => void renderActivity(true).catch(() => {});
+      box.append(moreBtn);
+    }
   }
 }
 
@@ -955,6 +989,15 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'chip';
     toggleBtn.textContent = '看原文';
+    toggleBtn.onclick = () => {
+      const showingMd = !mdBox.classList.contains('hidden');
+      mdBox.classList.toggle('hidden');
+      content.classList.toggle('hidden');
+      toggleBtn.textContent = showingMd ? '看渲染' : '看原文';
+    };
+    // 原文同样行结构化（第三十一轮二：md 的预览搜索/行号引用与纯文本一致——默认隐藏）。
+    content.classList.add('hidden');
+    structurePreviewLines(content, displayName);
     toggleBtn.onclick = () => {
       const showingMd = !mdBox.classList.contains('hidden');
       mdBox.classList.toggle('hidden');
@@ -1498,6 +1541,7 @@ function attachSaveButton(div, message) {
     } catch (e) { showError(`收藏失败：${e.message}`); }
   })().catch(() => {});
   div.prepend(star);
+  attachMsgActions(div, message); // 消息操作组（第三十一轮二接线：复制/引用/表情——所有消息渲染路径统一挂载）
 }
 
 /** 线程关注/静音（thread_subscriptions——人的阅读订阅，与执行名单分列；纯偏好零运行）。 */
@@ -3758,6 +3802,62 @@ zs.onReconnected(() => {
 zs.onDemoStatus((status) => { el('conn-state').textContent = status; });
 
 // R5：重启后恢复上次项目（失败如实展示，不回退种子数据）。
+// ---------- 远程访问设置（DEV-25 第三十一轮三/五：本机可信入口）----------
+async function renderRemoteSettings() {
+  const row = el('remote-config-row');
+  const deviceBox = el('remote-device-list');
+  if (row == null) return;
+  try {
+    const cfg = await command('remote.config.get', {});
+    row.textContent = `${cfg.running ? `运行中 ${cfg.address} · 指纹 ${String(cfg.fingerprint ?? '').slice(0, 16)}…` : '已停用'}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+    if (deviceBox != null) {
+      try {
+        const r = await command('remote.devices.list', {});
+        deviceBox.textContent = '';
+        if ((r.devices ?? []).length === 0) { deviceBox.textContent = '暂无设备。'; }
+        for (const d of r.devices) {
+          const line = document.createElement('div');
+          const name = document.createElement('span');
+          name.textContent = `${d.deviceName}（${d.deviceId.slice(0, 12)}… · ${d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}）`;
+          line.append(name);
+          if (d.revokedAt == null) {
+            const btn = document.createElement('button');
+            btn.className = 'chip';
+            btn.textContent = '吊销';
+            btn.onclick = () => void command('remote.device.revoke', { deviceId: d.deviceId }).then(() => renderRemoteSettings()).catch((e) => showError(`吊销失败：${e.message}`));
+            line.append(btn);
+          }
+          deviceBox.append(line);
+        }
+      } catch (e) { deviceBox.textContent = `设备清单读取失败：${e.message}`; }
+    }
+  } catch (e) { row.textContent = `远程配置读取失败：${e.message}`; }
+}
+function wireRemoteSettings() {
+  const apply = (enabled, allowLan) => void (async () => {
+    try {
+      const host = el('remote-host-sel')?.value ?? '127.0.0.1';
+      const port = Number(el('remote-port-input')?.value ?? '0') || 0;
+      await command('remote.config.set', { enabled, listenHost: host, port, allowLan });
+      showError(enabled ? `远程访问已启用（${host}:${port || '自动'}${allowLan ? ' · LAN' : ''}）` : '远程访问已停用');
+      await renderRemoteSettings();
+    } catch (e) { showError(`远程配置失败：${e.message}`); }
+  })();
+  el('remote-enable-btn').onclick = () => apply(true, (el('remote-host-sel')?.value ?? '127.0.0.1') !== '127.0.0.1');
+  el('remote-disable-btn').onclick = () => apply(false, false);
+  el('remote-pair-btn').onclick = () => void (async () => {
+    const out = el('remote-pair-result');
+    try {
+      const r = await command('remote.pairing.create', {});
+      out.textContent = `配对码：${r.pairingId} / ${r.code}（${new Date(r.expiresAt).toLocaleTimeString()} 前一次有效）${r.address != null ? ` · 地址 ${r.address}` : ' · 服务未启用'}${r.fingerprint != null ? ` · 证书指纹 ${String(r.fingerprint).slice(0, 24)}…` : ''}`;
+    } catch (e) { out.textContent = `配对码创建失败：${e.message}`; }
+  })();
+  const rs = el('remote-settings');
+  if (rs != null) rs.addEventListener('toggle', () => { if (rs.open) void renderRemoteSettings(); }); // 展开即刷新（配对后的设备清单可见）
+  void renderRemoteSettings();
+}
+wireRemoteSettings();
+
 renderProjectSettings(); // 未打开项目时的初始态（loadProject 成功后随项目数据刷新）
 const lastProject = localStorage.getItem('zs.lastProjectPath');
 if (lastProject != null && lastProject.length > 0) {

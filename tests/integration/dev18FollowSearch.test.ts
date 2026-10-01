@@ -116,7 +116,7 @@ describe('DEV-18 第二包：搜索（范围/过滤/分页/audience/定位）', 
     const byConv = await cmd<{ messages: any[] }>('search.query', { text: '整理季度报告', scope: 'all', conversationId: 'conv_pb' });
     expect(byConv.messages.length).toBe(1);
     expect(byConv.messages[0].projectId).toBe('pb');
-    const day = new Date().toISOString().slice(0, 10);
+    const day = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10); // 本地日期（服务端过滤语义=本机时区——UTC 写法在北京 00—08 点必错位）
     const inDay = await cmd<{ messages: any[] }>('search.query', { text: '整理季度报告', scope: 'all', fromDay: day, toDay: day });
     expect(inDay.messages.length).toBe(2); // 含当日
     const outDay = await cmd<{ messages: any[] }>('search.query', { text: '整理季度报告', scope: 'all', fromDay: '2020-01-01', toDay: '2020-01-02' });
