@@ -257,7 +257,26 @@ function pipeClosedCheck(): void {
   }
 }
 
+// 远程壳证书钉选（第三十一轮五）：必须在 Chromium 初始化（app ready）前 appendSwitch——
+// ready 后追加无效（实测 ERR_CERT_INVALID）。SPKI=证书公钥 SHA-256（标准 base64）。
+if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI != null && process.env.ZS_REMOTE_SHELL_SPKI.length > 0) {
+  app.commandLine.appendSwitch('ignore-certificate-errors-spki-list', process.env.ZS_REMOTE_SHELL_SPKI);
+}
+
 app.whenReady().then(async () => {
+  // 远程浏览器验收壳（第三十一轮五；仅显式 ZS_REMOTE_SHELL_URL）：复用本包 Chromium 打开
+  // 远程客户端页——**无 preload**（远程页不获本机桥）；证书以 SPKI 钉选信任（等价「用户核对
+  // 指纹后信任」，不关闭证书校验）。用于 DEV-25 本机浏览器闭环/双机验收的客户端侧。
+  const shellUrl = process.env.ZS_REMOTE_SHELL_URL;
+  if (shellUrl != null) {
+    const { BrowserWindow: ShellWindow } = await import('electron');
+    const shell = new ShellWindow({ width: 1100, height: 820, webPreferences: {} });
+    await shell.loadURL(shellUrl);
+    if (process.env.ZS_REMOTE_SHELL_READY != null) {
+      writeFileSync(process.env.ZS_REMOTE_SHELL_READY, JSON.stringify({ ok: true, url: shellUrl, at: Date.now() }));
+    }
+    return; // 不启动 daemon/主窗口——纯浏览器壳
+  }
   // zsres://app/<相对路径> → renderer 目录内文件（穿越拒绝）；页面自身经该协议加载（模块/
   // worker/fetch 同源可用——见文件头注释）。
   protocol.handle('zsres', (request) => {
@@ -292,7 +311,17 @@ app.whenReady().then(async () => {
   // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
   // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
   let firstCommandDelayed = false;
-  ipcMain.handle('zs:command', async (_event, envelope: unknown) => {
+  // 本机可信 UI 的 IPC sender 校验（第三十一轮三）：preload 桥（zs:command/openPath/pickFolder）
+  // 只接受**本应用窗口**（zsres://app/ 源）的帧——其他任何加载进该窗口的内容拿不到桥；
+  // 不以 loopback 地址替代来源校验（远程页面即使被误载也无法调用本机保留命令）。
+  const assertTrustedSender = (event: Electron.IpcMainInvokeEvent): void => {
+    const frameUrl = event.senderFrame?.url ?? '';
+    if (!frameUrl.startsWith('zsres://app/')) {
+      throw new Error(`IPC 来源不可信（${frameUrl.slice(0, 60) || '空'}）——本机桥仅限应用窗口`);
+    }
+  };
+  ipcMain.handle('zs:command', async (event, envelope: unknown) => {
+    assertTrustedSender(event);
     // 指定方法延迟钩子（第二十一轮二：按方法定向——project.open 响应延迟同步点；app 设置
     // 读取等先行的命令不再无谓消耗延迟）。
     const delayEnv = process.env.ZS_UI_DELAY_METHOD_MS;
@@ -306,7 +335,8 @@ app.whenReady().then(async () => {
     await ensureConnection(); // 就绪截止/并发共享/退出即败（见函数头）
     return pipe!.send(envelope);
   });
-  ipcMain.handle('zs:openPath', async (_event, target: unknown) => {
+  ipcMain.handle('zs:openPath', async (event, target: unknown) => {
+    assertTrustedSender(event);
     // 导出目录打开（第三十轮五）：仅允许应用数据区 exports/ 内路径——外部任意路径不打开。
     if (typeof target !== 'string' || target.length === 0) throw new Error('openPath 需要路径');
     const resolved = resolve(String(target));
@@ -319,7 +349,8 @@ app.whenReady().then(async () => {
     shell.showItemInFolder(join(resolved, '.'));
     return resolved;
   });
-  ipcMain.handle('zs:pickFolder', async () => {
+  ipcMain.handle('zs:pickFolder', async (event) => {
+    assertTrustedSender(event);
     // 自动化测试钩子（仅显式 ZS_PICK_FOLDER 时替代原生对话框返回值；后续链路不变）。
     if (process.env.ZS_PICK_FOLDER != null) return process.env.ZS_PICK_FOLDER;
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
@@ -362,6 +393,16 @@ app.whenReady().then(async () => {
   if (simMode) {
     win.on('page-title-updated', (event) => { event.preventDefault(); });
   }
+  // 外链与导航拦截（第三十一轮三）：携带高权 preload 桥的窗口不得加载/打开任何非
+  // zsres://app/ 内容（window.open 一律拒绝；外部浏览器打开由用户自行复制——不在本窗口）。
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('zsres://app/')) {
+      event.preventDefault();
+      process.stderr.write(`[zhongshuo-ui] 拦截窗口导航至非应用源：${url.slice(0, 80)}
+`);
+    }
+  });
   await win.loadURL('zsres://app/index.html');
 
   const demo = process.env.ZS_UI_DEMO;

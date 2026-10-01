@@ -34,6 +34,7 @@ import { ClaudeCliAdapter } from '../adapter/claude/cliAdapter.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
 import type { FakeTurnScript } from '../adapter/fake/script.ts';
 import { daemonPipeNameFor, ensureLocalCredential } from '../contracts/daemonIpc.ts';
+import { RemoteAccessServer, readRemoteConfig } from './remoteServer.ts';
 import type { LocalCredential } from '../contracts/daemonIpc.ts';
 
 export interface DaemonOptions {
@@ -254,20 +255,63 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 管道名规范化：裸名字会被 node:net 当 TCP 主机名（EACCES）——统一补 \\.\pipe\ 前缀。
     const normalizePipe = (name: string): string => (name.startsWith('\\\\.\\pipe\\') ? name : `\\\\.\\pipe\\${name}`);
     const pipeName = options.pipeName != null ? normalizePipe(options.pipeName) : daemonPipeNameFor(localUserId);
+    // DEV-25 远程访问服务端（第三十一轮三）：默认关闭；配置启用时启动 HTTPS/WSS。启动失败
+    // =远程面不可用（如实记录），不降级 HTTP、不拖垮 daemon 本机功能。
+    const remoteServer = new RemoteAccessServer({
+      db: db!,
+      localUserId,
+      appDataDir: options.appDataDir,
+      dispatch: (envelope: unknown): Promise<unknown> => dispatchDaemonCommand(makeCommandDeps(), envelope),
+      log: (line) => { process.stderr.write(`[zhongshuo-remote] ${line}
+`); },
+    });
+    const remoteControl = {
+      restart: async (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => {
+        await remoteServer.stop().catch(() => { /* 已停 */ });
+        if (!cfg.enabled) {
+          db!.prepare(`UPDATE remote_config SET port = ? WHERE id = 1`).run(cfg.port);
+          return { stopped: true as const };
+        }
+        const r = await remoteServer.start(cfg);
+        db!.prepare(`UPDATE remote_config SET port = ? WHERE id = 1`).run(r.port);
+        return r;
+      },
+      stop: async () => { await remoteServer.stop().catch(() => { /* 尽力 */ }); },
+      invalidateDevice: (deviceId: string) => remoteServer.invalidateDevice(deviceId),
+      current: () => remoteServer.currentAddress(),
+    };
+    const makeCommandDeps = (): Parameters<typeof dispatchDaemonCommand>[0] => ({
+      db: db!,
+      localUserId,
+      interruptTurn: (turnId: string) => worker.interruptTurn(turnId),
+      appDataDir: options.appDataDir,
+      releaseAdmission: (turnId: string) => worker.reconcileRelease(turnId), // DEV-13 对账→准入内存联动
+      pumpLateEvents: (turnId: string) => worker.pumpLateEventsForTurn(turnId), // 第八轮：迟到成果正式接收（adapter lateEvents 通道）
+      remoteControl,
+      ...(options.standaloneShutdown != null ? { scheduleShutdown: options.standaloneShutdown } : {}),
+    });
     ipc = await startNamedPipeIpc(
       pipeName,
-      async (envelope) =>
-        dispatchDaemonCommand({
-          db: db!,
-          localUserId,
-          interruptTurn: (turnId) => worker.interruptTurn(turnId),
-          appDataDir: options.appDataDir,
-          releaseAdmission: (turnId) => worker.reconcileRelease(turnId), // DEV-13 对账→准入内存联动
-          pumpLateEvents: (turnId) => worker.pumpLateEventsForTurn(turnId), // 第八轮：迟到成果正式接收（adapter lateEvents 通道）
-          ...(options.standaloneShutdown != null ? { scheduleShutdown: options.standaloneShutdown } : {}),
-        }, envelope),
+      async (envelope) => dispatchDaemonCommand(makeCommandDeps(), envelope),
       { authToken: credential.token },
     );
+    const remoteInitial = readRemoteConfig(db!);
+    if (remoteInitial.enabled) {
+      try {
+        const r = await remoteServer.start(remoteInitial);
+        db!.prepare('UPDATE remote_config SET port = ? WHERE id = 1').run(r.port);
+        process.stderr.write(`[zhongshuo-remote] listening ${r.address} fingerprint=${r.fingerprint}
+`);
+      } catch (error) {
+        // 远程面启动失败：不降级、不中断本机功能；记录失败供设置页呈现。
+        try {
+          db!.prepare(`INSERT INTO daemon_state (key, value, updated_at) VALUES ('remote:last-error', ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(JSON.stringify({ at: Date.now(), error: error instanceof Error ? error.message : String(error) }), Date.now());
+        } catch { /* 尽力 */ }
+        process.stderr.write(`[zhongshuo-remote] 启动失败（远程面不可用，不降级 HTTP）：${error instanceof Error ? error.message : String(error)}
+`);
+      }
+    }
 
     // drain 单飞（修复轮 5）：串行调度——上一轮未完成时跳过本 tick，不重入。
     // 修复轮 6：保存 drain Promise，stop 等待其收敛后才关库（数据库关闭后零业务写入）。
@@ -359,6 +403,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           clearInterval(tick);                     // 1) 拒新派发（停 tick）
           worker.stopAccepting();                  // 1b) drain 安全边界：拒新领取（在执行项继续）+ 启动窗口检查位
           await ipc!.close();                      // 2) 拒新命令（断开全部连接）
+          await remoteServer.stop().catch(() => { /* 尽力收拢（已停/未启） */ }); // 2b) 远程面：断 WS+关 HTTPS
           // 3) 等待在途 drain 收敛（不取消——当前项在安全边界内收尾）；超时不判定完成，
           //    最终 incomplete 判定（第 5 步后）复查 drain 是否仍挂起。
           if (inFlightDrain != null) {
