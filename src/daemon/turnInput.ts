@@ -103,7 +103,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
      FROM message_attachments ma
      JOIN artifacts a ON a.id = ma.artifact_id
      LEFT JOIN messages m ON m.id = ma.message_id
-     WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind = 'text_file'
+     WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file')
      ORDER BY ord, ma.rowid`,
   ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
   for (const row of attRows) {
@@ -325,7 +325,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
        FROM message_attachments ma
        JOIN artifacts a ON a.id = ma.artifact_id
        JOIN messages m ON m.id = ma.message_id
-       WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind = 'text_file'
+       WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind IN ('text_file','code_file')
        ORDER BY ord, ma.rowid`,
     ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
     for (const row of dmAttRows) {

@@ -135,3 +135,8 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 /* DEV-19 看板动作行+Files 集合（第二十七轮五） */
 .board-card-wrap { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
 .files .meta { display: block; }
+
+/* 附件评论区（第二十七轮六） */
+.attach-comments { margin-top: 8px; border-top: 1px dashed #ccd; padding-top: 6px; }
+.attach-comment-input { flex: 2 1 240px; min-width: 160px; }
+.attach-comment-line { width: 64px; }

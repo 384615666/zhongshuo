@@ -37,7 +37,7 @@ import { join } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, readVerifiedCopy } from './attachments.ts';
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, kindForFilename, readVerifiedCopy } from './attachments.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -220,7 +220,7 @@ function resolveAttachmentRefs(
       | { conversation_id: string; kind: string; source_name: string | null; hash: string }
       | undefined;
     if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
-    if (att.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/Markdown 附件（首包）——${attId} 为 ${att.kind}`);
+    if (!(ATT_TEXT_KINDS as readonly string[]).includes(att.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/代码/Markdown 附件（首包+代码批）——${attId} 为 ${att.kind}`);
     if (att.conversation_id !== conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
     out.push({ artifactId: attId, displayName: att.source_name ?? attId, hash: att.hash });
   }
@@ -1823,11 +1823,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）；日期按本机时区解释' } });
       }
       case 'attachment.uploadText': {
-        // DEV-24 文本/Markdown 首包（第二十六轮五）——能力①保存副本：内容寻址落应用数据区
-        //（{appData}/blobstore/{hash}.txt——不在用户项目目录生成副本）；artifacts 持久
-        // hash/版本（revision）/来源文件名/conversation audience；同文件不同内容=不同资源。
-        // 规则：utf-8（BOM 容忍）；含 NUL 控制字节=二进制拒绝；>256KB 拒绝；>64KB 保存全文
-        // 但预览/注入截断（truncated+originalBytes 如实注明）。
+        // DEV-24 文本/Markdown 首包（第二十六轮五；第二十七轮六扩代码类）——能力①保存副本：
+        // 内容寻址落应用数据区（{appData}/blobstore/{hash}.txt——不在用户项目目录生成副本）；
+        // artifacts 持久 hash/版本（revision）/来源文件名/conversation audience；同文件不同内容
+        // =不同资源。**kind 按扩展名推导**（kindForFilename：源代码扩展名=code_file，其余=
+        // text_file——同一读取/截断/完整性/注入链路）。规则：utf-8（BOM 容忍）；含 NUL 控制字节
+        // =二进制拒绝；>256KB 拒绝；>64KB 保存全文但预览/注入截断（truncated+originalBytes 如实
+        // 注明）。
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
@@ -1846,8 +1848,8 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; truncated: boolean; originalBytes: number } => {
           const attachmentId = `art_${randomUUID()}`;
           deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
-                           VALUES (?, ?, ?, ?, 'text_file', 1, ?, ?, ?, ?)`)
-            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, hash, join(blobRoot, `${hash}.txt`), params.filename, Date.now());
+                           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`)
+            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, kindForFilename(params.filename), hash, join(blobRoot, `${hash}.txt`), params.filename, Date.now());
           return { attachmentId, hash, bytes, truncated: bytes > ATT_EXCERPT_BYTES, originalBytes: bytes };
         });
         const r = run(tx);
@@ -1865,16 +1867,55 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const convId = params.conversationId ?? row.conversation_id;
         assertConversationAudience(deps.db, deps.localUserId, convId);
         if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
-        if (row.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本首包范围`);
+        if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本/代码附件范围`);
         const verified = readVerifiedCopy(row.blob_path, row.hash);
         if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
       }
       case 'attachment.listByConversation': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
         assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
-        const rows = deps.db.prepare(`SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.created_at FROM artifacts a WHERE a.conversation_id = ? AND a.kind = 'text_file' ORDER BY a.rowid DESC`).all(params.conversationId) as Array<{ id: string; source_name: string; hash: string; revision: number; kind: string; created_at: number }>;
-        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ attachmentId: r.id, filename: r.source_name, hash: r.hash, revision: r.revision, createdAt: r.created_at })) } });
+        const rows = deps.db.prepare(`SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.created_at FROM artifacts a WHERE a.conversation_id = ? AND a.kind IN ('text_file','code_file') ORDER BY a.rowid DESC`).all(params.conversationId) as Array<{ id: string; source_name: string; hash: string; revision: number; kind: string; created_at: number }>;
+        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ attachmentId: r.id, filename: r.source_name, kind: r.kind, hash: r.hash, revision: r.revision, createdAt: r.created_at })) } });
+      }
+      case 'attachment.comment.add': {
+        // 附件基础评论（第二十七轮六：文本/代码/Markdown）：行号/选区（quote 原文引用）+
+        // 正文；**锚定评论时资源版本**（artifact_hash/revision 快照入库）——资源后续更新时
+        // 旧评论标旧（list 比对当前 hash），行号/选区锚点不漂移不重算。audience=归属会话
+        //（跨会话/他人 DM 拒绝）。
+        const params = z.strictObject({
+          attachmentId: z.string().min(1),
+          body: z.string().min(1).max(2000),
+          quote: z.string().max(500).optional(),
+          lineFrom: z.number().int().min(1).optional(),
+          lineTo: z.number().int().min(1).optional(),
+        }).parse(env.params);
+        if (params.lineTo != null && params.lineFrom != null && params.lineTo < params.lineFrom) throw new DaemonCommandError('VALIDATION_INVALID', '行区间无效：lineTo < lineFrom');
+        const row = deps.db.prepare('SELECT id, conversation_id, kind, hash, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; kind: string; hash: string; revision: number } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
+        if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）不支持评论（文本/代码/Markdown 首批）`);
+        const tx = deps.db.transaction((): { commentId: string; anchoredRevision: number } => {
+          const commentId = `ac_${randomUUID()}`;
+          deps.db.prepare(`INSERT INTO attachment_comments (id, artifact_id, author_id, quote, line_from, line_to, body, artifact_hash, artifact_revision, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(commentId, row.id, deps.localUserId, params.quote ?? null, params.lineFrom ?? null, params.lineTo ?? null, params.body, row.hash, row.revision, Date.now());
+          return { commentId, anchoredRevision: row.revision };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'attachment.comment.list': {
+        // 评论列表（audience 同上）：逐条带 anchoredTo（锚定 hash/revision）+stale（当前资源
+        // hash ≠ 锚定 hash=资源已更新——旧评论明确标旧，不漂移到新版行号）。
+        const params = z.strictObject({ attachmentId: z.string().min(1) }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
+        const rows = deps.db.prepare('SELECT id, author_id, quote, line_from, line_to, body, artifact_hash, artifact_revision, created_at FROM attachment_comments WHERE artifact_id = ? ORDER BY created_at, rowid').all(params.attachmentId) as Array<{ id: string; author_id: string; quote: string | null; line_from: number | null; line_to: number | null; body: string; artifact_hash: string; artifact_revision: number; created_at: number }>;
+        return withCommandId({ ok: true, data: { currentHash: row.hash, items: rows.map((c) => ({ commentId: c.id, authorId: c.author_id, quote: c.quote, lineFrom: c.line_from, lineTo: c.line_to, body: c.body, anchoredTo: { hash: c.artifact_hash, revision: c.artifact_revision }, stale: c.artifact_hash !== row.hash, createdAt: c.created_at })) } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK

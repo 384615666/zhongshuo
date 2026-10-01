@@ -14,6 +14,17 @@ import { createHash } from 'node:crypto';
 export const ATT_MAX_BYTES = 256 * 1024; // 上传上限（明确规则：超限拒绝不静默截断）
 export const ATT_EXCERPT_BYTES = 64 * 1024; // 预览/注入截断预算（字节）
 
+/** 文本类附件的两种 kind（第二十七轮六：代码附件=文本链路的第二类）：text_file=文本/
+ * Markdown；code_file=源代码（按扩展名推导——同一读取/截断/完整性/注入链路，仅类别
+ * 与提示语义不同）。其余五类（图片/PDF/Office）仍随后续批次，不以本清单冒充支持。 */
+export const ATT_TEXT_KINDS = ['text_file', 'code_file'] as const;
+const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.rs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css', '.scss', '.vue', '.svelte', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lua', '.r', '.m', '.pl']);
+export function kindForFilename(filename: string): 'text_file' | 'code_file' {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+  return CODE_EXTENSIONS.has(ext) ? 'code_file' : 'text_file';
+}
+
 export type AttachmentReadError =
   | { code: 'attachment-out-of-store'; message: string }
   | { code: 'attachment-unreadable'; message: string }

@@ -345,7 +345,9 @@ function renderAttachChips(kind) {
   box.replaceChildren(frag);
 }
 /** 共享文本预览（草稿芯片与已发消息附件共用）：previewText 服务端已做 audience+完整性
- * （sha256 实际字节核对）+字节截断——这里只呈现原始大小/提取大小/截断事实与全文。 */
+ * （sha256 实际字节核对）+字节截断——这里只呈现原始大小/提取大小/截断事实与全文。
+ * 附基础评论区（第二十七轮六：文本/代码/Markdown）——行号/选区/正文，锚定评论时资源版本；
+ * 资源已更新的旧评论明确标旧（stale——行号锚点不漂移到新版）。 */
 async function previewAttachment(attachmentId, filename) {
   const r = await command('attachment.previewText', { attachmentId });
   const box = el('attach-preview');
@@ -353,7 +355,7 @@ async function previewAttachment(attachmentId, filename) {
   box.classList.remove('hidden');
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `📎 ${r.filename ?? filename} · sha256=${r.hash.slice(0, 12)}… · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'}`;
+  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · sha256=${r.hash.slice(0, 12)}… · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'}`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
@@ -363,6 +365,48 @@ async function previewAttachment(attachmentId, filename) {
   content.textContent = r.text;
   const wrap = document.createElement('div');
   wrap.append(head, close, content);
+  // 评论区（列表 + 新增表单）。
+  const comments = await command('attachment.comment.list', { attachmentId }).catch(() => null);
+  if (comments != null) {
+    const sec = document.createElement('div');
+    sec.className = 'attach-comments';
+    const secHead = document.createElement('div');
+    secHead.className = 'meta';
+    secHead.textContent = `评论（${(comments.items ?? []).length}）——锚定评论时资源版本；标旧=资源已更新（行号针对旧版）`;
+    sec.append(secHead);
+    for (const c of comments.items ?? []) {
+      const row = document.createElement('div');
+      row.className = 'meta';
+      const anchor = c.lineFrom != null ? `第 ${c.lineFrom}${c.lineTo != null ? `-${c.lineTo}` : ''} 行` : '';
+      row.textContent = `${c.authorId.slice(0, 8)} · v${c.anchoredTo.revision}${anchor ? ` · ${anchor}` : ''}${c.stale ? ' · 【旧版评论——资源已更新，行号针对 v' + c.anchoredTo.revision + '】' : ''}${c.quote != null ? ` · 引「${c.quote.slice(0, 40)}」` : ''}：${c.body}`;
+      sec.append(row);
+    }
+    const bodyInput = document.createElement('input');
+    bodyInput.placeholder = '评论正文…';
+    bodyInput.className = 'attach-comment-input';
+    const fromInput = document.createElement('input');
+    fromInput.placeholder = '行(起)';
+    fromInput.className = 'attach-comment-line';
+    const toInput = document.createElement('input');
+    toInput.placeholder = '行(止)';
+    toInput.className = 'attach-comment-line';
+    const add = document.createElement('button');
+    add.className = 'chip';
+    add.textContent = '添加评论';
+    add.onclick = () => void (async () => {
+      const body = bodyInput.value.trim();
+      if (body.length === 0) { showError('评论正文不能为空'); return; }
+      const num = (v) => { const n = Number(v); return v.trim() !== '' && Number.isInteger(n) && n >= 1 ? n : undefined; };
+      try {
+        await command('attachment.comment.add', { attachmentId, body, ...(num(fromInput.value) != null ? { lineFrom: num(fromInput.value) } : {}), ...(num(toInput.value) != null ? { lineTo: num(toInput.value) } : {}) });
+        await previewAttachment(attachmentId, filename).catch(() => {});
+      } catch (e) { showError(`评论失败：${e.message}`); }
+    })().catch(() => {});
+    const form = document.createElement('div');
+    form.append(bodyInput, fromInput, toInput, add);
+    sec.append(form);
+    wrap.append(sec);
+  }
   box.replaceChildren(wrap);
 }
 /** 已发消息附件芯片（thread.history/conversation.history 的 attachments 摘要）：点击走
