@@ -2,7 +2,68 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-01 第三十轮，唯一权威快照）
+## 当前真实状态（2026-10-01 第三十一轮，唯一权威快照）
+
+> 本轮=**导出目标与完整性收口**+**DOCX 真实 Word 布局验收**+**Activity 稳定游标/看板可见范围
+> /消息操作接线**+**DEV-25 远程访问服务端全量落地（HTTPS/WSS/配对/吊销/续传——LAN-01—08+RT-21
+> 全反例）**+**本机浏览器闭环（REMOTE 会话）+双机验收材料**。上一轮快照（第三十轮）紧随其后。
+> - **导出完整性（exportIntegrity 9/9）**：export.create 归属先于回执（「合法会话 A+其他会话/
+>   项目线程 B」整笔拒绝零产物；快照在事务内核取；拷贝后事务复核归属/audience/引用版本
+>   （id+revision+hash 不变——EXPORT_CONFLICT 清理））；**回执重放不绕过当前权限**
+>   （网关 runCommand 加 replayGuard——旧回执在会话归档/audience 失效后重放同号同参=明确
+>   拒绝；同号异参仍冲突；上传/导出/提交三入口接入）；附件不再裸 stat/copyFile——
+>   readVerifiedStoreRaw（实根/实身份/受控句柄/实际字节 sha256；**按 kind 区分 .txt/.bin
+>   扩展名——text_file 用 .bin 会误判越界的实测坑**）；out-of-store/损坏=整笔失败（不冒充
+>   随包也不冒充缺失）；manifest.json 与最终 assets 字节一致（写后重读 sha256 对账）；同内容
+>   多引用单随包文件；system 消息保留「系统」来源；预算（消息 2000/件数 200/总量 256MB）
+>   超限 EXPORT_TOO_LARGE 提示收窄不静默缩小；重活异步逐件让出。
+> - **DOCX 真实 Word 验收（docxWordValidation 5/5）**：OOXML 规范修复（`<w:color w:val=…>`
+>   替换非法 `<w color=…>`；表格补 tblPr+tblGrid；styles 关系移 word/_rels/document.xml.rels
+>   ——包级 .rels 只留 officeDocument；XML1.0 非法控制字符清洗）。**本机 Word COM 被 WPS 劫持
+>   且自动化崩溃不可用**——绕行：spawn 真 WINWORD.EXE /automation → ROT GetActiveObject 附身
+>   → 校验 app.Path 为真 Office（word-open-check.ps1）。固定样本实开：长中文 17 页/60 行表格
+>   不丢行/特殊字符（&<>"'+vtab 清洗+中文标点保留）/缺失附件 ⚠ 行——全部打开无修复提示+
+>   Word 导出 PDF 页图证据（tests/artifacts/docx-word-evidence/ 8 文件）。
+> - **Activity/看板/消息操作**：activity.list 稳定游标（(created_at,seq) 双键决定性排序——
+>   同毫秒 12 事件翻页无重无漏；渲染器「加载更早」带 beforeSeq）；nav.preferences 落地
+>   （navigation_preferences.visibleProjectIds 首次被消费——scope=all 聚合面按可见集过滤、
+>   显式 projectId 查询不受限；无偏好行=全量兼容）；**attachMsgActions 此前从未挂载渲染链
+>   （第三十轮声称的消息操作组实缺——本轮在 attachSaveButton 接线+表情层跨轮询重绘保持
+>   （openEmojiLayers 集合）+md 原文行结构化**；ATT 会话 36/36（新增 Markdown 恶意样本安全
+>   （脚本转义/javascript 链不落地/远程图占位）、预览搜索+行引用入正确草稿、三格式导出+
+>   打开目录、线程导出守卫、Activity 定位、表情刷新保持）。
+> - **DEV-25（remoteAccess 11/11 + REMOTE 页面会话 10/10）**：迁移 038（remote_devices/
+>   pairing_codes/config/attempts）；remoteIdentity（PowerShell New-SelfSignedCertificate→PFX
+>   +DER+SHA-256 指纹；SAN 覆盖检查复用、覆盖变化重新生成；TextExtension 不能与 -DnsName
+>   同用的坑）；remoteServer（HTTPS 强制；Host/Origin 白名单=本机配置推导；/pair 唯一免 token
+>   入口——原子消费+加盐摘要+5 次失效+限速 429+Retry-After；/session Device→15min token 仅
+>   内存；/ws-ticket 30s 单次票据；/cmd 同 dispatch 同权限同幂等+REMOTE_BLOCKED_METHODS
+>   （配对创建/配置/吊销/关停仅本机）；/export/:id/download zip 获准下载；**手写 WSS**
+>   （握手+掩码帧解析+分片+ping/pong——ws 包不在依赖；首帧认证 5s 窗口、未认证限额、仅事件
+>   与订阅控制、写走 HTTP；事件泵每批 audience 重查（他人 DM 不推）；lastSeq 续传+游标过期
+>   cursor-stale 走 HTTP 快照；吊销立即断流；**upgrade head 前导 CRLF 容错**）；命令面
+>   remote.config.get/set·pairing.create·devices.list·device.revoke+entry.ts 生命周期接线
+>   （配置启用才启动；启动失败=远程面不可用不降级不拖垮本机；stop 链收口）；**Electron 本机
+>   可信 UI**：IPC sender 校验（zs:* 仅 zsres://app/ 帧——不以 loopback 替代来源校验）+
+>   setWindowOpenHandler 全拒+will-navigate 非 zsres 拦截；设置面「远程访问」（启停/监听地址/
+>   配对码一次性展示+地址+指纹/设备清单+吊销；展开即刷新）；remoteClient（同源静态页+严格
+>   CSP 无内联脚本；IndexedDB 凭据+内存 token；消息/上传/任务停止验收/导出下载/WSS 订阅
+>   feed）；**本机浏览器闭环**：便携包 Chromium 作纯浏览器壳（ZS_REMOTE_SHELL_URL 钩子——
+>   无 preload+SPKI 钉选信任（appendSwitch 必须在 app ready 前+标准 base64——url-safe 无效
+>   两坑））——桌面造码→浏览器配对→仅记录发消息→事件流→导出下载→吊销拒绝 10/10。
+> - **双机材料**：docs/implementation/dev25-dual-machine-acceptance.md（服务机/客户端步骤、
+>   证书指纹核对、D1—D10 人工项、留档模板、移动端如实未测）。**用户已确认另一台 Windows
+>   同局域网可用**——下轮可执行双机实测。
+> - **验证数字**：本地 **797/797**（排除 githubSandbox——本机到 GitHub 网络不可达 schannel
+>   SEC_E_ILLEGAL_MESSAGE（直连 ls-remote 同败，疑本机代理环境波动）；网络层如实登记待恢复
+>   重跑；全量含之 800/802）；新增 exportIntegrity 9+docxWord 5+activityCursorScope 2+
+>   remoteAccess 11；ATT 会话 36/36；REMOTE 会话 10/10；**冻结三连 118/118×3**（新基线
+>   bld_fd894004ea2b7e91——created+reused×2 各 583 文件 SHA256 核对；旧 112/112 报告原样
+>   保留；+6 来自 ATT 扩项）；零新增真实模型调用。
+
+---
+
+## 上一轮快照（2026-10-01 第三十轮）
 
 > 本轮=**解析池队列身份与子进程生命周期修复**+**进程总内存硬界（Job Object）+流式 zip 护栏
 > +SheetJS 官方发行版**+**缓存强校验与 PPTX 真实性**+**共享预览完善/Markdown 安全预览/
