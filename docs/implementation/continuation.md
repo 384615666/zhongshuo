@@ -54,9 +54,9 @@
 > - **双机材料**：docs/implementation/dev25-dual-machine-acceptance.md（服务机/客户端步骤、
 >   证书指纹核对、D1—D10 人工项、留档模板、移动端如实未测）。**用户已确认另一台 Windows
 >   同局域网可用**——下轮可执行双机实测。
-> - **验证数字**：本地 **797/797**（排除 githubSandbox——本机到 GitHub 网络不可达 schannel
->   SEC_E_ILLEGAL_MESSAGE（直连 ls-remote 同败，疑本机代理环境波动）；网络层如实登记待恢复
->   重跑；全量含之 800/802）；新增 exportIntegrity 9+docxWord 5+activityCursorScope 2+
+> - **验证数字**：本地 **797/797**（排除 githubSandbox——本机到 GitHub TLS 间歇失败 schannel
+>   SEC_E_ILLEGAL_MESSAGE：波动 2/5→4/5、期间直连 ls-remote 亦败、同窗口 git push 正常——
+>   网络层间歇非代码层；待稳定重跑取 5/5）；新增 exportIntegrity 9+docxWord 5+activityCursorScope 2+
 >   remoteAccess 11；ATT 会话 36/36；REMOTE 会话 10/10；**冻结三连 118/118×3**（新基线
 >   bld_fd894004ea2b7e91——created+reused×2 各 583 文件 SHA256 核对；旧 112/112 报告原样
 >   保留；+6 来自 ATT 扩项）；零新增真实模型调用。
