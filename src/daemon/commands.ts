@@ -37,8 +37,7 @@ import { join } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-const ATT_MAX_BYTES = 256 * 1024;
-const ATT_EXCERPT_BYTES = 64 * 1024;
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, readVerifiedCopy } from './attachments.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -201,6 +200,61 @@ function enabledAgents(db: ZhongshuoDatabase, roomId: string): string[] {
 function reviewPolicyOf(db: ZhongshuoDatabase, projectId: string): 'auto_deliver' | 'user_review' {
   const row = db.prepare('SELECT task_review_enabled FROM projects WHERE id = ?').get(projectId) as { task_review_enabled: number } | undefined;
   return row?.task_review_enabled === 1 ? 'user_review' : 'auto_deliver';
+}
+
+/**
+ * 附件归属与能力校验（第二十七轮二：主池/任务线程/记录线程/DM 四通道共用）。
+ * ref=artifacts.id；上传侧（attachment.uploadText）已校验 audience/归档/大小——此处对每个
+ * 引用再核：存在、kind 支持、**归属会话与提交目标一致**（跨会话引用=audience 拒绝）。
+ * 不存在/不支持/跨会话都明确拒绝——绝不静默丢附件。
+ */
+function resolveAttachmentRefs(
+  db: ZhongshuoDatabase,
+  conversationId: string,
+  refs: string[] | undefined,
+): Array<{ artifactId: string; displayName: string; hash: string }> {
+  if (refs == null || refs.length === 0) return [];
+  const out: Array<{ artifactId: string; displayName: string; hash: string }> = [];
+  for (const attId of refs) {
+    const att = db.prepare('SELECT conversation_id, kind, source_name, hash FROM artifacts WHERE id = ?').get(attId) as
+      | { conversation_id: string; kind: string; source_name: string | null; hash: string }
+      | undefined;
+    if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
+    if (att.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/Markdown 附件（首包）——${attId} 为 ${att.kind}`);
+    if (att.conversation_id !== conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
+    out.push({ artifactId: attId, displayName: att.source_name ?? attId, hash: att.hash });
+  }
+  return out;
+}
+
+/** 消息-附件关联（与消息插入同一事务调用——消息落库与关联原子）。 */
+function attachMessageRefs(db: ZhongshuoDatabase, messageId: string, resolved: Array<{ artifactId: string; displayName: string; hash: string }>): void {
+  for (const a of resolved) {
+    db.prepare('INSERT INTO message_attachments (id, message_id, artifact_id, display_name, source_hash) VALUES (?, ?, ?, ?, ?)')
+      .run(`matt_${randomUUID()}`, messageId, a.artifactId, a.displayName, a.hash);
+  }
+}
+
+/** 历史读取用：批量取消息附件摘要（artifactId/filename——点击预览经 attachment.previewText
+ * 走 audience+完整性校验，此处只发 id 与名字不下发正文）。 */
+function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string }>> {
+  const out = new Map<string, Array<{ artifactId: string; filename: string }>>();
+  if (messageIds.length === 0) return out;
+  const rows = db.prepare(
+    `SELECT message_id, artifact_id, display_name FROM message_attachments WHERE message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY rowid`,
+  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null }>;
+  for (const r of rows) {
+    const list = out.get(r.message_id) ?? [];
+    list.push({ artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id });
+    out.set(r.message_id, list);
+  }
+  return out;
+}
+
+/** 就地为驼峰历史条目（thread.history items）填 attachments 摘要。 */
+function attachMessageSummaries(db: ZhongshuoDatabase, items: Array<{ id: string; attachments?: unknown }>): void {
+  const byMsg = messageAttachmentSummaries(db, items.map((i) => i.id));
+  for (const it of items) it.attachments = byMsg.get(it.id) ?? [];
 }
 
 /** 线程内插入一条消息（修复轮 6：thread 目标提交的持久化路径；会话/线程序号事务内分配）。 */
@@ -401,7 +455,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const rows = (params.beforeSeq != null
           ? deps.db.prepare('SELECT id, author_type, author_id, thread_message_seq, body_json, created_at FROM messages WHERE thread_id = ? AND thread_message_seq < ? ORDER BY thread_message_seq DESC LIMIT ?').all(params.threadId, params.beforeSeq, limit)
           : deps.db.prepare('SELECT id, author_type, author_id, thread_message_seq, body_json, created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq DESC LIMIT ?').all(params.threadId, limit)) as Array<{ id: string; author_type: string; author_id: string; thread_message_seq: number; body_json: string; created_at: number }>;
-        return withCommandId({ ok: true, data: { items: rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at })) } });
+        const items = rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at }));
+        // 消息附件（第二十七轮三：已发消息附件可点击预览——能力②闭环到页面）。
+        attachMessageSummaries(deps.db, items);
+        return withCommandId({ ok: true, data: { items } });
       }
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
@@ -438,7 +495,8 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               }
               if (thread.root_task_id == null) {
                 // 记录串（E1）：讨论线程永不唤醒 agent——默认仍是保存记录。
-                return insertThreadMessage(deps.db, {
+                const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
+                const saved = insertThreadMessage(deps.db, {
                   projectId: params.target.projectId,
                   conversationId: params.target.conversationId,
                   roomId: thread.room_id,
@@ -449,9 +507,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                   authorId: deps.localUserId,
                   taskId: null,
                 });
+                attachMessageRefs(deps.db, saved.messageId, resolvedAtts);
+                return saved;
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
+              const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
               const message = insertThreadMessage(deps.db, {
                 projectId: params.target.projectId,
                 conversationId: params.target.conversationId,
@@ -463,25 +524,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                 authorId: deps.localUserId,
                 taskId: thread.root_task_id,
               });
+              attachMessageRefs(deps.db, message.messageId, resolvedAtts);
               return { ...message, disposition: 'none' as const, taskId: thread.root_task_id, followUpRecorded: true };
             })();
           }
           const target = params.target;
           if (target.kind === 'dm') {
             // 私信发送（DEV-22；R4 §2.3/§4.6）：mentions 必空（无 @ 派工）；record_only 只保存；
-            // 附件=DEV-24 文本首包（第二十六轮五）：attachmentRefs=artifacts.id（上传时已校验
-            // audience+归档——此处再核归属会话一致），消息-附件关联同事务落 message_attachments。
+            // 附件=DEV-24 文本首包（第二十六轮五）：attachmentRefs=artifacts.id——归属/能力校验
+            // 走四通道共用 resolveAttachmentRefs（第二十七轮二），消息-附件关联同事务。
             if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
-            const attIds: string[] = [];
-            if (params.attachmentRefs != null && params.attachmentRefs.length > 0) {
-              for (const attId of params.attachmentRefs) {
-                const att = deps.db.prepare('SELECT conversation_id, kind FROM artifacts WHERE id = ?').get(attId) as { conversation_id: string; kind: string } | undefined;
-                if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
-                if (att.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本附件（首包）——${attId} 为 ${att.kind}`);
-                if (att.conversation_id !== target.conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
-                attIds.push(attId);
-              }
-            }
+            const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
             const conv = dmConversationOf(deps.db, target.conversationId);
             if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
               throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标不是该项目的私信会话');
@@ -501,12 +554,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                 intent: params.intent,
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
-              for (const attId of attIds) {
-                deps.db.prepare('INSERT INTO message_attachments (id, message_id, artifact_id, display_name, source_hash) VALUES (?, ?, ?, ?, ?)')
-                  .run(`matt_${randomUUID()}`, r.messageId, attId,
-                    (deps.db.prepare('SELECT source_name FROM artifacts WHERE id = ?').get(attId) as { source_name: string | null }).source_name ?? attId,
-                    (deps.db.prepare('SELECT hash FROM artifacts WHERE id = ?').get(attId) as { hash: string }).hash);
-              }
+              attachMessageRefs(deps.db, r.messageId, resolvedAtts);
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -517,6 +565,10 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             })();
           }
           if (target.kind !== 'room_root') throw new DaemonCommandError('VALIDATION_INVALID', '路由目标缺失');
+          // 附件（第二十七轮二：主池通道补齐——此前主池发送带 attachmentRefs 被后端静默忽略）：
+          // 归属/能力校验共用；关联与 createRoomRootTask 同事务（根消息 id=ids.messageId，
+          // record/dispatch 两类路由结果都挂——record_only 零派发只保存）。
+          const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
           const route = resolveTopLevelRoute({
             intent: params.intent,
             mentions: params.mentions as MentionNode[],
@@ -550,6 +602,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
+            attachMessageRefs(deps.db, ids.messageId, resolvedAtts);
             return created.value;
           })();
         });
@@ -1370,7 +1423,13 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const rows = (params.beforeSeq != null
           ? deps.db.prepare('SELECT id, conversation_seq, author_type, author_id, body_json, status, created_at FROM messages WHERE conversation_id = ? AND conversation_seq < ? ORDER BY conversation_seq DESC LIMIT ?').all(params.conversationId, params.beforeSeq, limit)
           : deps.db.prepare('SELECT id, conversation_seq, author_type, author_id, body_json, status, created_at FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT ?').all(params.conversationId, limit)) as Array<Record<string, unknown>>;
-        return withCommandId({ ok: true, data: { messages: rows.reverse(), nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
+        const messages = rows.reverse();
+        // 消息附件（第二十七轮三：已发消息附件可点击预览；raw 行补 attachments 键）。
+        const attByMsg = messageAttachmentSummaries(deps.db, messages.map((m) => String(m.id)));
+        for (const m of messages) {
+          (m as { attachments?: unknown }).attachments = attByMsg.get(String(m.id)) ?? [];
+        }
+        return withCommandId({ ok: true, data: { messages, nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
       }
       case 'conversation.markRead': {
         // DEV-18 首包：通用阅读水位（房间/线程/DM）——幂等（同水位重复=advanced:false；
@@ -1796,7 +1855,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'attachment.previewText': {
         // 能力②预览+③提取正文：读**获准副本**（blob_path——原文件变化不改变已保存版本）；
-        // audience：归属会话（或本地用户可达）——跨会话/他人 DM 拒绝。截断如实注明。
+        // audience：归属会话（或本地用户可达）——跨会话/他人 DM 拒绝。读取经共享完整性路径
+        //（第二十七轮四：路径限定托管存储+sha256 实际字节核对——损坏明确拒绝）；UTF-8 **字节**
+        // 截断（保留完整字符），原始大小/提取大小/截断事实分别注明。
         const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
         const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind FROM artifacts WHERE id = ?').get(params.attachmentId) as
           | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string; kind: string } | undefined;
@@ -1805,13 +1866,9 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         assertConversationAudience(deps.db, deps.localUserId, convId);
         if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
         if (row.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本首包范围`);
-        let text: string;
-        try { text = readFileSync(row.blob_path, 'utf8'); } catch {
-          throw new DaemonCommandError('STORAGE_UNAVAILABLE', `副本不可读（${row.blob_path}）——如实报错，不以路径冒充已读`);
-        }
-        const originalBytes = Buffer.byteLength(text, 'utf8');
-        const truncated = originalBytes > ATT_EXCERPT_BYTES;
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, hash: row.hash, text: truncated ? text.slice(0, ATT_EXCERPT_BYTES) : text, truncated, originalBytes, excerptBytes: ATT_EXCERPT_BYTES } });
+        const verified = readVerifiedCopy(row.blob_path, row.hash);
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
       }
       case 'attachment.listByConversation': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);

@@ -177,6 +177,7 @@ function restoreDraft() {
   const d = state.drafts[draftKey()] ?? { text: '', mention: '' };
   el('composer-input').value = d.text;
   el('mention-pick').value = d.mention;
+  renderAttachChips('composer'); // 附件草稿同键恢复（pool/thread 切换——A→B→A 恢复 A）
 }
 
 function showPool() {
@@ -235,13 +236,13 @@ async function renderDmSidebar() {
 }
 
 async function openDm(conversationId) {
-  draftAttachments.dm = []; renderAttachChips('dm'); // 切会话不串附件（第二十六轮五）
   state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
   el('pool').classList.add('hidden');
   el('thread').classList.add('hidden');
   el('dm').classList.remove('hidden');
+  renderAttachChips('dm'); // 按 dm:{conversationId} 键恢复（A→B→A 恢复 A——不清空）
   location.hash = `dm=${conversationId}`; // 会话深链（第十九轮七：恢复打开位置）
   await renderDm();
   void renderDmSidebar().catch(() => {});
@@ -303,29 +304,83 @@ async function restoreDmDeepLink() {
  * 条目保留 project/task/conversation/delivery 身份并显示来源项目；**全部渲染**（无 slice
  * 截断——第 13 项及以后同样可达），头部显示总数；同会话多待验收逐条可达（进入定位对应
  * 交付版本）；读卡片≠完成事项：阅读/重绘不消待办。 */
-// ---------- DEV-24 文本附件首包（第二十六轮五）：草稿附件（主池/线程共用 + DM 独立）----------
-// 上传=保存副本（attachment.uploadText——内容寻址落应用数据区）；草稿隔离（切会话不串）；
-// 发送随 attachmentRefs（record_only 不派发——发送时归档/audience 由服务端校验）。
-const draftAttachments = { composer: [], dm: [] }; // dm 列表在 openDm 时清空（切会话不串）
+// ---------- DEV-24 文本附件（第二十六轮五首包；第二十七轮三草稿键控+预览闭环）----------
+// 上传=保存副本（attachment.uploadText——内容寻址落应用数据区）；**草稿按目标键隔离**：
+// composer 键=room:view（与文本草稿同键空间）、DM 键=dm:{conversationId}——A→B→A 恢复 A
+// 的附件（不再全局数组/切 DM 清空）。上传异步回执**绑定发起时的目标键**（file.text/网络期间
+// 用户切换会话不会把 A 的附件追加进 B 的草稿）。真实文件字节编码校验：fatal 严格 UTF-8 解码
+// （File.text() 是有损解码——无效字节明确失败，不以替换字符冒充编码正确）。发送成功只清发起
+// 键的草稿；失败保留正文与附件。芯片点击=经 attachment.previewText（audience+完整性校验）
+// 共享文本预览；已发消息附件芯片同样可点（thread.history/conversation.history attachments）。
+const draftAttachments = new Map(); // 目标键 -> Array<{attachmentId, filename, hash, truncated}>
+function attachDraftKey(kind) {
+  if (kind === 'dm') return state.openDmId != null ? `dm:${state.openDmId}` : 'dm:none';
+  return draftKey();
+}
+function attachDraft(kind) {
+  const key = attachDraftKey(kind);
+  if (!draftAttachments.has(key)) draftAttachments.set(key, []);
+  return draftAttachments.get(key);
+}
 function renderAttachChips(kind) {
   const box = el(kind === 'dm' ? 'dm-attach-chips' : 'composer-attach-chips');
   if (box == null) return;
   const frag = document.createDocumentFragment();
-  for (const att of draftAttachments[kind]) {
-    const chip = document.createElement('span');
-    chip.className = 'meta';
+  for (const att of attachDraft(kind)) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
     chip.textContent = `📎 ${att.filename}（${att.hash.slice(0, 8)}…${att.truncated ? ' 截断' : ''}）`;
-    chip.title = `副本已保存（sha256=${att.hash}）——原文件修改不影响已发内容`;
+    chip.title = `点按预览副本（sha256=${att.hash}）——原文件修改不影响已发内容`;
+    chip.onclick = () => void previewAttachment(att.attachmentId, att.filename).catch((e) => showError(`预览失败：${e.message}`));
     frag.append(chip);
   }
-  if (draftAttachments[kind].length > 0) {
+  if (attachDraft(kind).length > 0) {
     const clear = document.createElement('button');
     clear.className = 'chip';
     clear.textContent = '清空附件';
-    clear.onclick = () => { draftAttachments[kind] = []; renderAttachChips(kind); };
+    clear.onclick = () => { draftAttachments.delete(attachDraftKey(kind)); renderAttachChips(kind); };
     frag.append(clear);
   }
   box.replaceChildren(frag);
+}
+/** 共享文本预览（草稿芯片与已发消息附件共用）：previewText 服务端已做 audience+完整性
+ * （sha256 实际字节核对）+字节截断——这里只呈现原始大小/提取大小/截断事实与全文。 */
+async function previewAttachment(attachmentId, filename) {
+  const r = await command('attachment.previewText', { attachmentId });
+  const box = el('attach-preview');
+  if (box == null) { showError(`附件预览（${filename}）：原文 ${r.originalBytes}B${r.truncated ? `——截断，提取前 ${r.excerptBytes}B` : ''}\n${r.text.slice(0, 2000)}`); return; }
+  box.classList.remove('hidden');
+  const head = document.createElement('div');
+  head.className = 'meta';
+  head.textContent = `📎 ${r.filename ?? filename} · sha256=${r.hash.slice(0, 12)}… · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'}`;
+  const close = document.createElement('button');
+  close.className = 'chip';
+  close.textContent = '关闭预览';
+  close.onclick = () => box.classList.add('hidden');
+  const content = document.createElement('pre');
+  content.className = 'attach-preview-text';
+  content.textContent = r.text;
+  const wrap = document.createElement('div');
+  wrap.append(head, close, content);
+  box.replaceChildren(wrap);
+}
+/** 已发消息附件芯片（thread.history/conversation.history 的 attachments 摘要）：点击走
+ * previewAttachment（正式 previewText——服务端 audience+完整性+截断，不拿摘要冒充已读）。 */
+function appendSentAttachmentChips(div, attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return;
+  const row = document.createElement('div');
+  row.className = 'attach-chips';
+  for (const a of attachments) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.textContent = `📎 ${a.filename ?? a.artifactId}`;
+    chip.title = '点按预览已发副本';
+    chip.onclick = () => void previewAttachment(a.artifactId, a.filename).catch((e) => showError(`预览失败：${e.message}`));
+    row.append(chip);
+  }
+  div.append(row);
 }
 function wireAttach(kind) {
   const btn = el(kind === 'dm' ? 'dm-attach' : 'composer-attach');
@@ -336,14 +391,21 @@ function wireAttach(kind) {
     const file = fileInput.files?.[0];
     fileInput.value = '';
     if (file == null) return;
+    // 目标先固定（发起时快照）：上传期间切换会话——回执只进发起键（第二十七轮三）。
+    const targetKey = attachDraftKey(kind);
+    const convId = kind === 'dm' ? state.openDmId : state.conversationId;
+    if (convId == null) { showError('请先打开会话再附加文件'); return; }
     try {
-      const content = await file.text();
-      const convId = kind === 'dm' ? state.openDmId : state.conversationId;
-      if (convId == null) { showError('请先打开会话再附加文件'); return; }
+      // 真实文件字节编码校验（第二十七轮四）：fatal 严格解码——无效 UTF-8 明确失败。
+      const buf = await file.arrayBuffer();
+      let content;
+      try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+      catch { showError(`「${file.name}」不是有效 UTF-8 文本——文本首包按明确规则拒绝（二进制类随后续批次）`); return; }
       const r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
-      draftAttachments[kind].push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated });
-      renderAttachChips(kind);
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将截断）' : ''}`);
+      if (!draftAttachments.has(targetKey)) draftAttachments.set(targetKey, []);
+      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated });
+      if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : ''}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
@@ -869,6 +931,7 @@ async function renderDm() {
     const body = document.createElement('div');
     body.textContent = text;
     div.append(who, body);
+    appendSentAttachmentChips(div, m.attachments); // 已发消息附件（点击预览——第二十七轮三）
     attachSaveButton(div, m); // 收藏入口（第二十五轮四——system 提醒消息同样可收藏）
     box.append(div);
   }
@@ -915,14 +978,20 @@ async function sendDm() {
   const input = el('dm-input');
   const text = input.value.trim();
   if (text.length === 0) return;
+  // 发起时快照：目标键与要发送的附件 refs（响应前切会话不动另一键——失败保留正文与附件）。
+  const dmKey = attachDraftKey('dm');
+  const sentRefs = attachDraft('dm').map((a) => a.attachmentId);
   input.value = '';
   try {
     const r = await command('message.submit', {
       target: { kind: 'dm', projectId: state.projectId, conversationId: state.openDmId },
       body: text, intent: state.dmRecordOnly ? 'record_only' : 'default', mentions: [],
-      ...(draftAttachments.dm.length > 0 ? { attachmentRefs: draftAttachments.dm.map((a) => a.attachmentId) } : {}),
+      ...(sentRefs.length > 0 ? { attachmentRefs: sentRefs } : {}),
     });
-    draftAttachments.dm = []; renderAttachChips('dm');
+    // 成功只清**本次发送的 refs**（失败后新加的附件保留在草稿）。
+    const remaining = (draftAttachments.get(dmKey) ?? []).filter((a) => !sentRefs.includes(a.attachmentId));
+    if (remaining.length === 0) draftAttachments.delete(dmKey); else draftAttachments.set(dmKey, remaining);
+    renderAttachChips('dm');
     if (r.disposition === 'queued') el('dm-state').textContent = '已保存排队（当前运行结束后串行执行）';
     if (state.dmRecordOnly) { state.dmRecordOnly = false; el('dm-record').classList.remove('on'); }
   } catch (e) {
@@ -1102,6 +1171,7 @@ async function renderThread() {
     const body = document.createElement('div');
     body.textContent = m.body.text;
     div.append(meta, body);
+    appendSentAttachmentChips(div, m.attachments); // 已发消息附件（点击预览——第二十七轮三）
     attachSaveButton(div, m); // 收藏入口（第二十五轮四）
     box.appendChild(div);
   }
@@ -1322,7 +1392,7 @@ async function retrySend() {
       showSendError(`发送失败：${result.error?.message ?? '未知错误'}`);
       return;
     }
-    afterSendSuccess(view, state.recordOnly);
+    afterSendSuccess(view, state.recordOnly, envelope.params?.attachmentRefs);
   } catch (transportError) {
     // 传输层仍失败：保留同 commandId 供再次重试。
     showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);
@@ -1342,19 +1412,24 @@ function buildEnvelope() {
     // 线程内：必须绑定当前线程（提交时固定；服务端校验 scope，不新建根任务）。
     target = { kind: 'thread', projectId: state.projectId, conversationId: state.conversationId, threadId: state.openThreadId };
   }
+  const atts = attachDraft('composer'); // 发起时的目标键快照（响应前切视图不动另一键）
   return {
     protocolVersion: 1,
     commandId: uuid(), // 去重锚点：在途重复触发被忽略；传输失败重试沿用同一 id
     method: 'message.submit',
-    params: { target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions, ...(draftAttachments.composer.length > 0 ? { attachmentRefs: draftAttachments.composer.map((a) => a.attachmentId) } : {}) },
+    params: { target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions, ...(atts.length > 0 ? { attachmentRefs: atts.map((a) => a.attachmentId) } : {}) },
   };
 }
 
-function afterSendSuccess(view, recordIntent) {
+function afterSendSuccess(view, recordIntent, sentRefs) {
   // 视图/意图在发起时固定（修复轮 6）：响应到达前用户可能已切换视图——
-  // 只清发起视图的草稿与输入框，不动另一视图。
+  // 只清发起视图的草稿与输入框，不动另一视图。附件草稿按**信封内实际发送的 refs**
+  // 清算（失败后新加的附件不在信封里——保留在草稿，不随重试成功丢掉）。
   const key = `${state.roomId ?? 'noroom'}:${view}`;
   state.drafts[key] = { text: '', mention: state.drafts[key]?.mention ?? '' };
+  const remaining = (draftAttachments.get(key) ?? []).filter((a) => !(sentRefs ?? []).includes(a.attachmentId));
+  if (remaining.length === 0) draftAttachments.delete(key); else draftAttachments.set(key, remaining);
+  renderAttachChips('composer');
   if (currentView() === view) el('composer-input').value = '';
   if (recordIntent) {
     // 「仅记录」是一次性意图：发送后复位，下一条默认交回路由。
@@ -1388,7 +1463,7 @@ async function send() {
       showSendError(`发送失败：${result.error?.message ?? '未知错误'}`); // 业务失败：保留草稿
       return;
     }
-    afterSendSuccess(view, recordIntent);
+    afterSendSuccess(view, recordIntent, envelope.params?.attachmentRefs);
   } catch (transportError) {
     // 传输层失败（超时/断连）：服务端可能已执行——保留同 commandId 重试，不自动改写文本重发。
     showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);

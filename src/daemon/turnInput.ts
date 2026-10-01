@@ -4,10 +4,8 @@
  * 渲染全文敏感扫描零命中（PP-03）；信封与渲染文本、hash 由本函数一并产出（PP-04）。
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readVerifiedCopy } from './attachments.ts';
 
-/** DEV-24 文本附件注入的截断口径（与 commands.ts 一致——单一规则两处引用常量）。 */
-const ATT_EXCERPT_BYTES = 64 * 1024;
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
 import type { DomainResult } from '../contracts/errors.ts';
@@ -93,22 +91,25 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     return assemblyFailure('root-not-user-request', '根消息作者不是用户（任务原始请求缺失）');
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
-  // DEV-24 文本附件注入（第二十六轮五·能力④经授权交给模型）：根消息挂的 text_file 附件→
-  // 读**获准副本**（artifacts.blob_path——原文件变化不影响已保存版本）；带 文件名/hash/
-  // revision/原始字节/截断说明；副本不可读=组装失败（不以路径冒充已读）。
+  // DEV-24 文本附件注入（第二十六轮五·能力④经授权交给模型；第二十七轮二扩展）：
+  // 根消息 + **线程跟进消息**挂的 text_file 附件都进入本轮输入（跟进附件不漏；均为组装时
+  // 已落库的消息=不提前读后续）。读**获准副本**（artifacts.blob_path——原文件变化不影响
+  // 已保存版本）经共享完整性路径（第二十七轮四：路径限定托管存储+sha256 实际字节核对——
+  // 损坏/越界拒绝组装，不以路径冒充已读）；UTF-8 字节截断保留完整字符。
   let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
   const attRows = db.prepare(
-    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
-     WHERE ma.message_id = ? AND a.kind = 'text_file' ORDER BY ma.rowid`,
-  ).all(root.id) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision,
+            CASE WHEN ma.message_id = ? THEN -1 ELSE COALESCE(m.thread_message_seq, 999999) END AS ord
+     FROM message_attachments ma
+     JOIN artifacts a ON a.id = ma.artifact_id
+     LEFT JOIN messages m ON m.id = ma.message_id
+     WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind = 'text_file'
+     ORDER BY ord, ma.rowid`,
+  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
   for (const row of attRows) {
-    let attText: string;
-    try { attText = readFileSync(row.blob_path, 'utf8'); } catch {
-      return assemblyFailure('attachment-unreadable', `附件副本不可读（${row.source_name ?? row.id}）——拒绝组装，不以路径冒充已读`);
-    }
-    const originalBytes = Buffer.byteLength(attText, 'utf8');
-    const truncated = originalBytes > ATT_EXCERPT_BYTES;
-    rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes, truncated, text: truncated ? attText.slice(0, ATT_EXCERPT_BYTES) : attText });
+    const verified = readVerifiedCopy(row.blob_path, row.hash);
+    if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
+    rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
   }
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
     return assemblyFailure('empty-root-message', '根消息正文为空');
@@ -295,22 +296,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     return assemblyFailure('root-scope-mismatch', `根消息任务归属不符（msg.task_id=${root.task_id ?? 'null'} ≠ 本任务）——拒绝组装`);
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
-  let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
-  const dmAttRows = db.prepare(
-    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
-     WHERE ma.message_id = ? AND a.kind = 'text_file' ORDER BY ma.rowid`,
-  ).all(root.id) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
-  for (const row of dmAttRows) {
-    let attText: string;
-    try { attText = readFileSync(row.blob_path, 'utf8'); } catch {
-      return assemblyFailure('attachment-unreadable', `附件副本不可读（${row.source_name ?? row.id}）——拒绝组装，不以路径冒充已读`);
-    }
-    const originalBytes = Buffer.byteLength(attText, 'utf8');
-    const truncated = originalBytes > ATT_EXCERPT_BYTES;
-    rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes, truncated, text: truncated ? attText.slice(0, ATT_EXCERPT_BYTES) : attText });
-  }
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
-    return assemblyFailure('empty-root-message', '根消息正文为空');
+    return assemblyFailure('empty-root-message', 'dm_turn 根消息正文为空');
   }
   if (task.inputThroughSeq == null) {
     return assemblyFailure('missing-input-boundary', 'dm_turn 缺少输入水位（input_through_seq）——拒绝组装（边界必须可解释）');
@@ -324,6 +311,29 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     const body = JSON.parse(h.body_json) as { text: string };
     return { messageId: h.id, author: h.author_id, text: body.text ?? '' };
   });
+  // DEV-24 附件注入（DM；第二十七轮二扩展到**水位内全部历史消息**）：排队消息的附件随其
+  // 消息进入正确一轮（该轮水位恰含此消息）；水位后（未来）消息的附件不提前读；根消息即使
+  // 滑出历史窗口也必含（本轮输入本体）。读取经共享完整性路径（第二十七轮四：路径限定托管
+  // 存储+sha256 实际字节核对——损坏/越界拒绝组装）；UTF-8 字节截断保留完整字符。
+  let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
+  const dmAttIds = history.map((h) => h.id);
+  if (!dmAttIds.includes(root.id)) dmAttIds.push(root.id);
+  if (dmAttIds.length > 0) {
+    const dmAttRows = db.prepare(
+      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision,
+              CASE WHEN ma.message_id = ? THEN -1 ELSE m.conversation_seq END AS ord
+       FROM message_attachments ma
+       JOIN artifacts a ON a.id = ma.artifact_id
+       JOIN messages m ON m.id = ma.message_id
+       WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind = 'text_file'
+       ORDER BY ord, ma.rowid`,
+    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+    for (const row of dmAttRows) {
+      const verified = readVerifiedCopy(row.blob_path, row.hash);
+      if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
+      rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
+    }
+  }
   const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
   const envelope: TurnBundleEnvelope = {
     bundleVersion: TURN_BUNDLE_VERSION,

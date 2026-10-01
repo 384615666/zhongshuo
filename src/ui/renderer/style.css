@@ -126,3 +126,8 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 
 /* DEV-24 文本附件（第二十六轮五） */
 #dm-attach-chips, #composer-attach-chips { margin: 2px 0; }
+
+/* DEV-24 附件预览浮层（第二十七轮三：草稿/已发消息芯片点击——共享文本预览） */
+.attach-preview { margin: 4px 0; padding: 8px; border: 1px solid #ccd; border-radius: 6px; background: #f7f8fa; max-height: 320px; overflow: auto; }
+.attach-preview .attach-preview-text { white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; font-size: 12px; max-height: 240px; overflow: auto; }
+.attach-chips { margin: 2px 0; display: flex; flex-wrap: wrap; gap: 4px; }
