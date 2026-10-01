@@ -191,7 +191,14 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // ≠「已确认全部受管执行结束」；probe 报告观察事实但保持 unknown，解除路径关闭）。
     const grandsonPid = Number(readFileSync(join(tmpRoot, 'grandson.pid'), 'utf8'));
     try { process.kill(grandsonPid); } catch { /* 已退出 */ }
-    await wait(1_200);
+    // 条件轮询（第二十五轮六：第二十四轮全量首跑失败的**具体条件**=此处原为 1.2s 固定等待——
+    // 高负载下周期快照滞后于孙退出，probe 读到的最新快照仍含孙→「未完整确认」断言失败；
+    // 复跑通过≠根因解决。改为等待孙身份的退出确认落库（快照周期无关），上限 10s。）
+    for (let i = 0; i < 100; i += 1) {
+      const ids = getProcessTreeIdentities(db, turnId);
+      if (ids.length >= 3 && ids.every((row) => row.exit_confirmed_at != null)) break;
+      await wait(100);
+    }
     const p2 = await cmd<{ result: string; detail: string }>('recovery.probeProcess', { turnId });
     expect(p2.result).toBe('unknown');
     expect(p2.detail).toContain('未观察到存活后代');

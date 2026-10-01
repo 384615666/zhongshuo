@@ -326,11 +326,22 @@ async function renderPendingList() {
       rows.push({ label: `【${p.displayName}】被阻塞：${b.title}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
     }
     // 待确认提醒触发（第二十四轮四）：正式确认入口——点击=reminder.confirm（经正式执行链派发）。
+    // 桌面系统通知（第二十五轮五）：新出现的待确认触发通知恰一次（去重/点击定位/失败退页内）。
+    notifyReminderAwaits(p.reminderAwaits);
     for (const w of p.reminderAwaits ?? []) {
       rows.push({
         label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminder_id}${w.missed_count > 0 ? `（合并 ${w.missed_count} 次错过）` : ''} → 确认执行`,
         title: '点击确认后经正式执行链派发（system 来源，不伪装人类发言）；不确认=暂不执行',
         projectId: p.projectId, conversationId: w.conversation_id, kind: 'reminder-await', reminderId: w.reminder_id, scheduledAt: w.scheduled_at,
+      });
+    }
+    // 关注线程有新回复（第二十五轮四）：人的阅读订阅（静音优先排除）——点击定位原串。
+    for (const f of p.followedThreads ?? []) {
+      rows.push({
+        label: `【${p.displayName}】关注的线程有 ${f.unread} 条新回复`,
+        title: '阅读订阅（非执行名单）——点击进入原线程',
+        projectId: p.projectId, conversationId: null, kind: 'followed',
+        locate: f.root_task_id != null ? `task=${f.root_task_id}` : `msg=${f.anchor_message_id}`,
       });
     }
   }
@@ -359,6 +370,7 @@ async function renderPendingList() {
         return;
       }
       if (r.kind === 'blocked' && r.taskId != null) location.hash = `task=${r.taskId}`;
+      if (r.kind === 'followed' && r.locate != null) location.hash = r.locate;
       if (r.kind === 'reminder-await' && r.reminderId != null) {
         void (async () => {
           try {
@@ -378,6 +390,164 @@ async function renderPendingList() {
  * 计划/时区/owner/预算/下次触发/暂停原因+最近 occurrence 历史；操作=编辑（revision CAS）/
  * 贪睡 1 天/取消/恢复（update 重算 next_at，错过的批不补跑）。纯管理面——执行经正式链。 */
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+// ---------- DEV-18 第二包（第二十五轮四）：搜索 / 收藏 / 关注·静音 ----------
+
+/** 搜索（search.query）：纯读零运行——范围/类型/作者/日期过滤+确定性分页；点击定位原消息/原串。 */
+const searchState = { page: 1, lastText: '', results: null };
+async function doSearch(page = 1) {
+  const text = el('search-input').value.trim();
+  if (text.length === 0) { showError('请输入搜索关键词'); return; }
+  const params = {
+    text, page,
+    scope: el('search-scope').value,
+    kind: el('search-kind').value,
+    ...(state.projectId != null ? { projectId: state.projectId } : {}),
+    ...(el('search-author').value.trim().length > 0 ? { authorDisplayName: el('search-author').value.trim() } : {}),
+    ...(el('search-from').value.length > 0 ? { fromDay: el('search-from').value } : {}),
+    ...(el('search-to').value.length > 0 ? { toDay: el('search-to').value } : {}),
+  };
+  try {
+    const r = await command('search.query', params);
+    searchState.page = page;
+    searchState.lastText = text;
+    searchState.results = r;
+    renderSearchResults();
+  } catch (e) { showError(`搜索失败：${e.message}`); }
+}
+function renderSearchResults() {
+  const box = el('search-results');
+  if (box == null || searchState.results == null) return;
+  const r = searchState.results;
+  const frag = document.createDocumentFragment();
+  const addRow = (label, title, locate) => {
+    const b = document.createElement('button');
+    b.className = 'room';
+    b.style.display = 'block';
+    b.textContent = label;
+    b.title = title;
+    if (locate != null) b.onclick = () => { location.hash = locate.startsWith('#') ? locate.slice(1) : locate; };
+    frag.append(b);
+  };
+  for (const m of r.messages ?? []) addRow(`【${m.projectName}】消息：${m.snippet}`, `${new Date(m.createdAt).toLocaleString()} · 作者 ${m.authorId}`, m.locate?.slice(1));
+  for (const t of r.threads ?? []) addRow(`【${t.projectName}】线程：${t.snippet}`, `锚于 ${new Date(t.createdAt).toLocaleString()}`, t.locate?.slice(1));
+  for (const t of r.tasks ?? []) addRow(`【${t.projectName}】任务：${t.title}（${t.status}）`, '点击定位原任务', t.locate?.slice(1));
+  if (frag.childElementCount === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = `无结果（第 ${r.page} 页）——他人私信不进入结果；附件按所在消息文件名检索`;
+    frag.append(empty);
+  }
+  box.replaceChildren(frag);
+  el('search-page-info').textContent = `第 ${r.page} 页（每页 ${r.pageSize}）`;
+}
+
+/** 收藏（saved_refs）：独立持久；取消不删原内容；失效/越权如实呈现；跳转复用正式深链。 */
+async function renderSaved() {
+  const nav = el('saved-list');
+  if (nav == null) return;
+  let data;
+  try { data = await command('saved.list', {}); } catch { return; }
+  const frag = document.createDocumentFragment();
+  if ((data.items ?? []).length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = '暂无收藏（消息行 ☆ 收藏）';
+    frag.append(empty);
+    nav.replaceChildren(frag);
+    return;
+  }
+  const KIND_LABEL = { message: '消息', task: '任务', delivery: '交付', link: '链接' };
+  const STATUS_LABEL = { ok: '', missing: '（目标已删除）', forbidden: '（无权限访问）' };
+  for (const it of data.items) {
+    const row = document.createElement('div');
+    row.className = 'room';
+    row.style.display = 'block';
+    const label = document.createElement('button');
+    label.className = 'chip';
+    label.style.marginRight = '6px';
+    label.textContent = it.status === 'ok' && it.locate != null ? `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? it.ref}` : `${KIND_LABEL[it.kind] ?? it.kind}：${it.title ?? String(it.ref).slice(0, 48)}${STATUS_LABEL[it.status] ?? ''}`;
+    label.title = it.kind === 'link' ? '链接收藏（点击复制地址）' : it.locate != null ? '点击定位（正式深链）' : '目标不可达——仅呈现';
+    label.disabled = !(it.status === 'ok');
+    label.onclick = () => {
+      if (it.kind === 'link') { void navigator.clipboard?.writeText(it.ref).then(() => showError('链接已复制')).catch(() => showError(`链接：${it.ref}`)); return; }
+      if (it.locate != null) location.hash = it.locate.slice(1);
+    };
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'danger';
+    removeBtn.textContent = '取消收藏';
+    removeBtn.onclick = () => void (async () => {
+      try { await command('saved.remove', { kind: it.kind, ref: it.ref }); } catch (e) { showError(`取消收藏失败：${e.message}`); }
+      await renderSaved();
+    })().catch(() => {});
+    row.append(label, removeBtn);
+    frag.append(row);
+  }
+  nav.replaceChildren(frag);
+}
+
+/** 消息行收藏按钮（线程+DM 共用）：saved.add 幂等。 */
+function attachSaveButton(div, message) {
+  const star = document.createElement('button');
+  star.className = 'msg-star';
+  star.textContent = '☆';
+  star.title = '收藏此消息（saved.add——独立保存，不改动原内容）';
+  star.onclick = () => void (async () => {
+    let text = '';
+    try { text = (JSON.parse(message.body_json) ?? {}).text ?? ''; } catch { text = ''; }
+    try {
+      const r = await command('saved.add', { kind: 'message', ref: message.id, title: text.slice(0, 60), ...(state.projectId != null ? { projectId: state.projectId } : {}) });
+      star.textContent = r.existed === true ? '★' : '★';
+      showError(r.existed === true ? '已在收藏中（幂等——不重复）' : '已收藏');
+      await renderSaved();
+    } catch (e) { showError(`收藏失败：${e.message}`); }
+  })().catch(() => {});
+  div.prepend(star);
+}
+
+/** 线程关注/静音（thread_subscriptions——人的阅读订阅，与执行名单分列；纯偏好零运行）。 */
+// ---------- 桌面系统通知（ATTN-05/06 首版矩阵——第二十五轮五）----------
+// 送达/点击定位/关闭/失败反馈/去重：同 occurrence 恰一次（本地去重集+系统 tag）；
+// 权限被拒或送达失败**不改变执行授权、不重复派发**（待我处理仍列出该事项）；
+// 静音线程不产生通知（服务端聚合已排除）。状态未变且无可行动项保持安静（无事项不通知）。
+const notifiedReminders = new Set(JSON.parse(localStorage.getItem('zs-notified-rem') ?? '[]'));
+function notifyReminderAwaits(awaits) {
+  for (const w of awaits ?? []) {
+    const key = `${w.reminder_id}@${w.scheduled_at}`;
+    if (notifiedReminders.has(key)) continue; // 去重：同 occurrence 恰一次
+    notifiedReminders.add(key);
+    try { localStorage.setItem('zs-notified-rem', JSON.stringify([...notifiedReminders].slice(-500))); } catch { /* 存不住则进程内去重 */ }
+    const body = `${w.title ?? '提醒'}${w.missed_count > 0 ? `（合并 ${w.missed_count} 次错过）` : ''}——到点待确认执行`;
+    try {
+      if (typeof Notification === 'undefined' || Notification.permission === 'denied') {
+        showError(`提醒待确认（系统通知不可用——待我处理仍列出）：${body}`);
+        continue;
+      }
+      const n = new Notification('众说：提醒待确认', { body, tag: key });
+      n.onclick = () => { window.focus(); if (w.conversation_id != null) location.hash = `dm=${w.conversation_id}`; }; // 点击准确定位（正式深链）
+      n.onerror = () => showError(`系统通知送达失败（执行不受影响）：${body}`);
+      // onclose=用户关闭：不重发（去重集已登记）——下次新 occurrence 才再通知。
+    } catch (e) { showError(`系统通知创建失败（待我处理仍列出）：${e instanceof Error ? e.message : String(e)}`); }
+  }
+}
+// 首次使用请求权限（Electron 通常默认授予；拒绝=退化为页内提示——不阻塞任何执行链）。
+try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission().catch(() => {}); } catch { /* 无通知 API */ }
+
+async function refreshThreadSubButtons() {  const followBtn = el('thread-follow-btn');
+  const muteBtn = el('thread-mute-btn');
+  if (followBtn == null || muteBtn == null) return;
+  if (state.openThreadId == null) { followBtn.classList.add('hidden'); muteBtn.classList.add('hidden'); return; }
+  followBtn.classList.remove('hidden');
+  muteBtn.classList.remove('hidden');
+  try {
+    const subs = await command('thread.subscriptions', state.projectId != null ? { projectId: state.projectId } : {});
+    const cur = (subs.items ?? []).find((x) => x.threadId === state.openThreadId);
+    followBtn.textContent = cur?.followed ? '★ 已关注' : '☆ 关注';
+    muteBtn.textContent = cur?.muted ? '取消静音' : '静音';
+    followBtn.dataset.followed = cur?.followed ? '1' : '0';
+    muteBtn.dataset.muted = cur?.muted ? '1' : '0';
+  } catch { /* 读取失败保持默认文案 */ }
+}
 async function renderReminderPanel() {
   const nav = el('reminder-list');
   if (nav == null) return;
@@ -555,6 +725,7 @@ async function renderDm() {
     const body = document.createElement('div');
     body.textContent = text;
     div.append(who, body);
+    attachSaveButton(div, m); // 收藏入口（第二十五轮四——system 提醒消息同样可收藏）
     box.append(div);
   }
   if (wasNearBottom) box.scrollTop = box.scrollHeight;
@@ -785,6 +956,7 @@ async function renderThread() {
     const body = document.createElement('div');
     body.textContent = m.body.text;
     div.append(meta, body);
+    attachSaveButton(div, m); // 收藏入口（第二十五轮四）
     box.appendChild(div);
   }
   // 滚动保留（同 DM）：读历史时轮询重绘不打断；贴底+前台才推进线程水位（第二十三轮一）。
@@ -820,6 +992,7 @@ async function renderThread() {
     updateStopUi(null);
     el('thread-status').textContent = '讨论串（仅记录，不派发）';
   }
+  void refreshThreadSubButtons().catch(() => {}); // 关注/静音按钮随线程刷新（第二十五轮四）
 }
 
 /** DEV-14 前置：任务串变更记录区块（changeset.listByTask 只读——变更清单/恢复撤销限制/当前状态）。
@@ -2007,12 +2180,14 @@ function schedulePoll() {
   if (state.pollTimer != null) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
     state.pollTick += 1;
+    window.__zsPollTick = state.pollTick; // 诊断探针（验证器只读——轮询存活证据）
+    window.__zsView = `${currentView()}|dm=${state.openDmId ?? '-'}|th=${state.openThreadId ?? '-'}`;
     const view = currentView();
     void (view === 'dm' ? renderDm() : view === 'thread' ? renderThread() : renderPool()).catch(() => {
       el('conn-state').textContent = '通信异常';
       el('conn-state').classList.add('err');
     });
-    if (state.pollTick % 4 === 0) { void renderDmSidebar().catch(() => {}); void renderPendingList().catch(() => {}); if (state.pollTick % 20 === 0) void renderReminderPanel().catch(() => {}); } // 侧栏未读/执行态+待我处理低频刷新+提醒面板更低频（纯读）
+    if (state.pollTick % 4 === 0) { void renderDmSidebar().catch(() => {}); void renderPendingList().catch(() => {}); if (state.pollTick % 20 === 0) { void renderReminderPanel().catch(() => {}); void renderSaved().catch(() => {}); } } // 侧栏未读/执行态+待我处理低频刷新+提醒/收藏面板更低频（纯读）
     // 低频复查门禁（运行中新落门禁的场景极少；启动/重连另有触发）。
     if (state.pollTick % 8 === 0) void refreshGate().catch(() => {});
   }, 1500);
@@ -2096,6 +2271,24 @@ el('dm-remind-btn').onclick = () => void (async () => {
     });
     showError(`已设每日提醒（${time} 本地时刻）——下次 ${new Date(r.nextAt).toLocaleString()}；到点后在「待我处理」确认执行`);
   } catch (e) { showError(`设置提醒失败：${e.message}`); }
+})().catch(() => {});
+// ---------- DEV-18 第二包绑定（第二十五轮四）：搜索/收藏/关注·静音（纯读+偏好写） ----------
+el('search-go').onclick = () => void doSearch(1).catch(() => {});
+el('search-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void doSearch(1).catch(() => {}); });
+el('search-prev').onclick = () => void doSearch(Math.max(1, searchState.page - 1)).catch(() => {});
+el('search-next').onclick = () => void doSearch(searchState.page + 1).catch(() => {});
+el('thread-follow-btn').onclick = () => void (async () => {
+  if (state.openThreadId == null) return;
+  const nextFollow = el('thread-follow-btn').dataset.followed !== '1';
+  try { await command('thread.subscribe', { threadId: state.openThreadId, follow: nextFollow }); } catch (e) { showError(`关注操作失败：${e.message}`); }
+  await refreshThreadSubButtons();
+  await renderPendingList();
+})().catch(() => {});
+el('thread-mute-btn').onclick = () => void (async () => {
+  if (state.openThreadId == null) return;
+  const nextMute = el('thread-mute-btn').dataset.muted !== '1';
+  try { await command('thread.subscribe', { threadId: state.openThreadId, mute: nextMute }); } catch (e) { showError(`静音操作失败：${e.message}`); }
+  await refreshThreadSubButtons();
 })().catch(() => {});
 el('dm-rename-btn').onclick = () => void (async () => {
   const active = state.dmActive;

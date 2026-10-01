@@ -22,8 +22,38 @@
       <details id="reminder-panel" class="help-panel">
         <summary>提醒管理</summary>
         <div class="help-body">
-          <div class="meta">一次/每日/每周计划、下次触发、暂停原因与历史触发（最近 5 条）；编辑/贪睡/取消/恢复。服务端按 audience 过滤——只显示可操作提醒。到点默认**待确认**（在「待我处理」确认后经正式执行链派发）；通知面=会话内系统消息+待我处理入口（应用内通知——不接桌面系统通知，如实）。状态未变且无可行动项保持安静。</div>
+          <div class="meta">一次/每日/每周计划、下次触发、暂停原因与历史触发（最近 5 条）；编辑/贪睡/取消/恢复。服务端按 audience 过滤——只显示可操作提醒。到点默认**待确认**（在「待我处理」确认后经正式执行链派发）；通知面=**桌面系统通知**（新待确认触发恰一次、点击定位、关闭/静音不再重复；权限被拒或送达失败退页内提示且不影响执行）+会话内系统消息+待我处理。Web Push 等远程通知属后续范围。</div>
           <nav id="reminder-list" class="rooms"></nav>
+        </div>
+      </details>
+      <details id="search-panel" class="help-panel">
+        <summary>搜索</summary>
+        <div class="help-body">
+          <div class="git-row">
+            <input id="search-input" class="git-input" placeholder="关键词（消息/线程/任务标题；中文可）" maxlength="200" />
+            <select id="search-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
+            <select id="search-kind"><option value="all">全部</option><option value="message">消息</option><option value="thread">线程</option><option value="task">任务</option></select>
+          </div>
+          <div class="git-row">
+            <input id="search-author" class="git-input" placeholder="作者名（可选）" maxlength="100" />
+            <input id="search-from" class="git-input" type="date" title="起始日（可选）" />
+            <input id="search-to" class="git-input" type="date" title="截止日（可选，含当日）" />
+            <button id="search-go" class="chip">搜索</button>
+          </div>
+          <div id="search-results"></div>
+          <div class="git-row">
+            <button id="search-prev" class="chip">上一页</button>
+            <span id="search-page-info" class="meta"></span>
+            <button id="search-next" class="chip">下一页</button>
+          </div>
+          <div class="meta">他人私信不进入任何结果；附件按所在消息的文件名检索（正文提取未实施）；点击结果定位原消息/原串。</div>
+        </div>
+      </details>
+      <details id="saved-panel" class="help-panel">
+        <summary>收藏</summary>
+        <div class="help-body">
+          <div class="meta">消息/任务/交付/链接引用（独立保存——取消收藏不删原内容；目标删除或权限变化如实标注）。</div>
+          <nav id="saved-list" class="rooms"></nav>
         </div>
       </details>
       <div id="dm-member-picker" class="hidden"></div>
@@ -82,6 +112,8 @@
         <div class="thread-back">
           <button id="thread-back-btn">← 返回主池</button>
           <span id="thread-status" class="thread-status"></span>
+          <button id="thread-follow-btn" class="chip" title="关注=我的阅读订阅（不改变任务执行与冻结参与者）；有新回复进「待我处理」">☆ 关注</button>
+          <button id="thread-mute-btn" class="chip" title="静音=不进未读与通知聚合（卡片仍可见；可再取消静音）">静音</button>
           <button id="stop-btn" class="danger hidden">停止任务</button>
           <button id="redispatch-btn" class="hidden" title="对当前任务追加一轮执行（经正式派发链；返工意见会注入输入）：适用于跟进消息已记录、任务无在途执行时">追加执行</button>
           <button id="review-accept-btn" class="primary hidden" title="通过验收：交付记 accepted，任务转 DONE（Git 提交不等同验收）">验收通过</button>

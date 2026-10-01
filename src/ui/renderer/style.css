@@ -98,3 +98,19 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
   padding: 3px 6px; min-width: 160px; background: #fff;
 }
 .git-ops .git-result { margin: 2px 0; font-size: 12px; color: #3d4757; white-space: pre-wrap; }
+
+/* DEV-18 第二包（第二十五轮四）：搜索/收藏/关注·静音 */
+.msg-star {
+  float: right;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 18px;
+  background: transparent;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.35;
+}
+.msg:hover .msg-star { opacity: 1; }
+#search-results button.room { text-align: left; }

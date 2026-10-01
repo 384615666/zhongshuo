@@ -611,7 +611,12 @@ try {
       }
       await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length`)).value === 2, 30_000, '两任务卡片');
       // 等两线程各有 agent 回复（卡片出现≠回复已落——未读以 agent 消息计）。
-      await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`)).value === 2, 30_000, '两线程未读出现');
+      try {
+        await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`)).value === 2, 30_000, '两线程未读出现');
+      } catch (e) {
+        const diag = await page.readStrict(`JSON.stringify({ poll: window.__zsPollTick ?? -1, view: window.__zsView ?? '?', conn: document.getElementById('conn-state').textContent, cards: [...document.querySelectorAll('#pool .pool-card')].map((c) => c.textContent.slice(0, 50)) })`);
+        throw new Error(`两线程未读出现超时（诊断：${String(diag)}）`);
+      }
       const unreadBoth = await page.readStrict(`[...document.querySelectorAll('#pool .pool-card')].filter((c) => c.textContent.includes('未读')).length`);
       record('E18·两线程未读聚合（主池卡片各显示未读数）', unreadBoth === 2, `unreadCards=${unreadBoth}`);
       // 读线程 A（点第一张卡）→thread.markRead→回主池→A 未读消失、B 保持（读 A 不影响 B）。
@@ -802,12 +807,96 @@ try {
       // ⑦ 零真实调用+优雅停机。
       const realCallsR = countTable(join(appDataR, 'state.sqlite'), 'real_calls');
       record('REM·零真实调用（fake 执行链）', realCallsR === 0, `real_calls=${realCallsR}`);
+      // 桌面系统通知（第二十五轮五）：权限可用+去重集恰一次（送达/点击定位的人工面留用户复核——如实标注）。
+      const notifPerm = await page.readStrict(`typeof Notification !== 'undefined' ? Notification.permission : 'no-api'`);
+      const notifDedup = await page.readStrict(`(JSON.parse(localStorage.getItem('zs-notified-rem') ?? '[]')).length`);
+      record('REM·桌面系统通知（权限+去重恰一次；送达/点击人工面）', notifPerm === 'granted' && notifDedup === 1, `perm=${notifPerm} dedup=${notifDedup}`);
       page.close();
       currentRun = null;
       const exitR = await exitWithGuard(app.child);
       const factsR = JSON.parse(readFileSync(join(appDataR, 'desktop-shutdown.json'), 'utf8'));
       const gR = gracefulShutdownOk(exitR, factsR);
       record('REM·停机事实', gR.ok, gR.detail);
+    }
+  }
+
+  // ---------- 会话 FS：DEV-18 第二包页面闭环（第二十五轮四：搜索/收藏/关注·静音）----------
+  if (shouldRun('FS')) {
+    const appDataF = join(installRoot, '应用 数据', 'FS');
+    {
+      currentStep = 'FS';
+      const app = await launchApp('fs', 9340, { ZS_FAKE_STALL_MS: '9000' }, appDataF); // 回复延迟窗：开线程关注+返回（~4s）须先于回复到达——否则开线程即标读、关注行永无未读
+      if (app.noPage) throw new Error('FS：页面未就绪');
+      const page = await connectPage(9340);
+      await page.waitInteractive();
+      currentRun = { tag: 'fs', child: app.child, page, stderrText: app.stderrText };
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, 'FS 项目打开');
+      // 主池任务（关注/静音素材——单 agent 项目 UI 自动预填 mention=DIRECT）。
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '主池任务：整理索引'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length`)).value === 1, 60_000, 'FS 主池任务卡片');
+      // 建 DM+一条消息（fake 回复）——搜索/收藏素材。
+      await page.evalJs(`document.getElementById('dm-create').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, 'FS 成员选择器');
+      await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, 'FS DM 视图');
+      await page.evalJs(`(() => { document.getElementById('dm-input').value = '搜索暗号：蓝鲸文档'; document.getElementById('dm-send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`(() => { const msgs = [...document.querySelectorAll('#dm-messages .msg')]; return msgs.filter((m) => m.className.includes('agent')).length })()`)).value >= 1, 90_000, 'FS DM 回复到达');
+      // ① 搜索：中文关键词（范围=当前项目）→结果含该消息；点击→定位（DM 视图打开）。
+      await page.evalJs(`(() => { document.getElementById('search-input').value = '蓝鲸文档'; document.getElementById('search-go').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#search-results button.room').length`)).value >= 1, 20_000, 'FS 搜索结果出现');
+      const hitText = await page.readStrict(`document.querySelector('#search-results button.room')?.textContent ?? ''`);
+      record('FS·中文搜索命中（当前项目范围）', hitText.includes('蓝鲸文档'), hitText.slice(0, 40));
+      await page.evalJs(`document.querySelector('#search-results button.room').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, 'FS 点击结果定位会话');
+      record('FS·点击结果定位（深链打开原会话）', true, '');
+      // 他人 DM 不进结果：伪造他人 DM 消息含同一暗号——走命令面已在 dev18FollowSearch 覆盖（页面断言范围=可见性）。
+      // ② 收藏：消息 ☆ →面板条目→取消→空。
+      await page.evalJs(`document.querySelector('#dm-messages .msg .msg-star').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#saved-list button.chip, #saved-list div.room').length >= 1`)).value === true, 20_000, 'FS 收藏面板条目');
+      const savedText = await page.readStrict(`document.querySelector('#saved-list')?.textContent ?? ''`);
+      record('FS·消息收藏（面板列出）', savedText.length > 0 && !savedText.includes('暂无收藏'), savedText.slice(0, 30));
+      await page.evalJs(`(() => { const btn = [...document.querySelectorAll('#saved-list button')].find((b) => b.textContent === '取消收藏'); if (btn) btn.click(); })()`);
+      await waitFor(async () => (await page.evalJs(`(document.querySelector('#saved-list')?.textContent ?? '').includes('暂无收藏')`)).value === true, 20_000, 'FS 取消收藏后清空');
+      record('FS·取消收藏（不删原消息——会话仍含暗号）', true, '');
+      const dmStill = await page.readStrict(`document.getElementById('dm-messages').textContent.includes('蓝鲸文档')`);
+      record('FS·取消收藏不删原内容', dmStill === true, '');
+      // ③ 关注/静音：素材线程**此刻才发**（stall 9s——搜索/收藏期间到达的旧回复会让开线程即标读，
+      // 关注行永无未读；关注须在回复到达前完成）→开线程→关注→回主池→回复到达=未读→待我处理
+      // 出现关注行→静音→主池未读清。
+      await page.evalJs(`(() => { let h = false; Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); window.__zsSetHidden = (v) => { h = !!v; }; })()`);
+      await page.evalJs(`document.getElementById('dm-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('pool').classList.contains('hidden')`)).value === true, 10_000, 'FS 返回主池（视图）');
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '关注素材任务：稍后回复'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#pool .pool-card').length`)).value >= 2, 30_000, 'FS 新任务卡片（第二张）');
+      const followCardIdx = await page.readStrict(`(() => { const cards = [...document.querySelectorAll('#pool .pool-card')]; return cards.findIndex((c) => c.textContent.includes('关注素材任务')) })()`);
+      await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')][${Number(followCardIdx)}].click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.length > 0`)).value === true, 20_000, 'FS 线程打开');
+      await page.evalJs(`document.getElementById('thread-follow-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread-follow-btn').textContent.includes('已关注')`)).value === true, 10_000, 'FS 关注生效');
+      record('FS·关注线程（阅读订阅——按钮态切换）', true, '');
+      await page.evalJs(`document.getElementById('thread-back-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread').classList.contains('hidden') && !document.getElementById('pool').classList.contains('hidden')`)).value === true, 10_000, 'FS 返回主池（视图真实切换——DOM 持久不以内容判）');
+      await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')][${Number(followCardIdx)}].textContent.includes('未读')`)).value === true, 60_000, 'FS 线程回复未读出现');
+      await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#pending-list button')].some((b) => b.textContent.includes('关注的线程'))`)).value === true, 30_000, 'FS 待我处理出现关注行');
+      record('FS·关注线程有未读进待我处理', true, '');
+      await page.evalJs(`[...document.querySelectorAll('#pool .pool-card')][${Number(followCardIdx)}].click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.length > 0`)).value === true, 20_000, 'FS 线程再开');
+      await page.evalJs(`document.getElementById('thread-mute-btn').click()`);
+      await waitFor(async () => (await page.evalJs(`document.getElementById('thread-mute-btn').textContent.includes('取消静音')`)).value === true, 10_000, 'FS 静音生效');
+      await page.evalJs(`document.getElementById('thread-back-btn').click()`);
+      await sleep(2500);
+      const poolMuted = await page.readStrict(`[...document.querySelectorAll('#pool .pool-card')][${Number(followCardIdx)}].textContent.includes('未读')`);
+      record('FS·静音后该卡未读聚合清零（卡片仍可见）', poolMuted === false, `cardUnread=${poolMuted}`);
+      // ④ 零新增运行零真实调用。
+      const realCallsF = countTable(join(appDataF, 'state.sqlite'), 'real_calls');
+      record('FS·零真实调用（纯读+偏好写）', realCallsF === 0, `real_calls=${realCallsF}`);
+      page.close();
+      currentRun = null;
+      const exitF = await exitWithGuard(app.child);
+      const factsF = JSON.parse(readFileSync(join(appDataF, 'desktop-shutdown.json'), 'utf8'));
+      const gF = gracefulShutdownOk(exitF, factsF);
+      record('FS·停机事实', gF.ok, gF.detail);
     }
   }
 
