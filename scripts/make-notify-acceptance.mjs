@@ -1,13 +1,16 @@
 /**
- * 通知人工验收独立入口（第二十六轮二）：一键启动、固定结果目录。
+ * 通知人工验收独立入口（第二十六轮二建立；第二十七轮一修启动器闭环）。
  * 产物：dist/desktop/通知人工验收/
- * - 应用/（当前源码**新构建**——BUILD.json 明确 buildId；不交付旧包）
- * - 应用数据/（独立——不碰真实数据）；合成项目/（fake 运行时）
- * - 验证结果/（seed-ok.txt+结果.txt 待人工回填+本目录即结果留档）
- * - 启动通知验收.cmd：①包内 node 跑 seed（正式 daemon 管道造数，fake+ZS_REAL_DISPATCH_GUARD=1
- *   内置——用户无需配任何环境变量）→ ②启动应用（首启经 ui.autoOpenProjectPath 自动恢复
- *   合成项目）→ ③约 90/95 秒两条系统通知（房间线程+私信各一）
- * - 验收步骤.txt：看到通知→点击回正确位置（只定位不确认）→重复轮询不重复→结果回填。
+ * - app/（当前源码**新构建**——BUILD.json 明确 buildId；不交付旧包）
+ * - app-data/（独立——不碰真实数据）；demo-project/（fake 运行时合成项目）
+ * - results/（seed-*.txt 每次运行留档 + result.txt 待人工回填 + seed 脚本随包）
+ * - 启动通知验收.cmd：**内容纯 ASCII**（第二十七轮实证：chcp 65001 下 cmd 解析含中文的
+ *   批处理行会字节错位——set 行被劈成 'APP_DATA' 不是命令、start 行被吞、应用从未启动；
+ *   第二十六轮自测走的是自设环境路径未运行本启动器，缺陷漏网）。目录名同步改 ASCII
+ *   （app/app-data/demo-project/results）；中文只保留在文件名与 txt 内容（node UTF-8 写出）。
+ *   隔离环境（fake/guard/独立 appData/完整前缀管道/fake-sim 标识）在 cmd 顶层显式设置——
+ *   seed 与 Electron 从同一环境继承（Node 子进程无法把环境传回父 cmd；上版 start electron
+ *   时这些配置全部丢失：干净环境 fake 门禁会退出、也不保证独立数据目录）。
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,42 +24,71 @@ for (const script of ['build-ui.mjs', 'pack-daemon.mjs', 'pack-desktop.mjs']) {
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
 const out = join(repo, 'dist', 'desktop', '通知人工验收');
 rmSync(out, { recursive: true, force: true });
-mkdirSync(join(out, '验证结果'), { recursive: true });
-mkdirSync(join(out, '应用数据'), { recursive: true });
-mkdirSync(join(out, '合成项目'), { recursive: true });
-cpSync(staging, join(out, '应用'), { recursive: true, dereference: true });
+mkdirSync(join(out, 'results'), { recursive: true });
+mkdirSync(join(out, 'app-data'), { recursive: true });
+mkdirSync(join(out, 'demo-project'), { recursive: true });
+cpSync(staging, join(out, 'app'), { recursive: true, dereference: true });
 const buildId = JSON.parse(readFileSync(join(staging, 'BUILD.json'), 'utf8')).buildId;
-writeFileSync(join(out, 'BUILD.json'), JSON.stringify({ buildId, purpose: '通知人工验收（fake+guard 内置）', createdAt: new Date().toISOString() }, null, 2), 'utf8');
-// seed 脚本随包（验证结果/ 目录=结果留档处；其相对布局 ..=包根）。
-cpSync(join(repo, 'scripts', 'notify-acceptance-seed.mjs'), join(out, '验证结果', 'notify-acceptance-seed.mjs'));
+writeFileSync(join(out, 'BUILD.json'), JSON.stringify({ buildId, purpose: '通知人工验收（fake+guard 内置；ASCII 启动器）', createdAt: new Date().toISOString() }, null, 2), 'utf8');
+// seed 脚本随包（results/ 目录=结果留档处；其相对布局 ..=包根）。
+cpSync(join(repo, 'scripts', 'notify-acceptance-seed.mjs'), join(out, 'results', 'notify-acceptance-seed.mjs'));
 
+// 纯 ASCII 启动器：中文只出现在变量值/文件名/txt 内容中，不出现在批处理行文本里。
 const cmdContent = [
   '@echo off',
   'chcp 65001 >nul',
   'setlocal',
   'set PKG=%~dp0',
-  'set NODEEXE=%PKG%应用\\resources\\app\\daemon\\node\\node.exe',
-  'echo [通知验收] buildId 见 BUILD.json；fake 运行时+真实派发防护已内置（无需任何配置）。',
-  'echo [通知验收] 第 1/2 步：准备合成数据（约 10-20 秒）...',
-  '"%NODEEXE%" "%PKG%验证结果\\notify-acceptance-seed.mjs"',
+  'set NODEEXE=%PKG%app\\resources\\app\\daemon\\node\\node.exe',
+  'rem isolation env - shared by seed and Electron (full-prefix pipe name; ASCII-only launcher content)',
+  'set "ZS_APP_DATA=%PKG%app-data"',
+  'set "ZS_RUNTIME=fake"',
+  'set "ZS_ALLOW_FAKE=1"',
+  'set "ZS_REAL_DISPATCH_GUARD=1"',
+  'set "ZS_PIPE_NAME=\\\\.\\pipe\\zs-notify-acceptance"',
+  'set "ZS_APP_MODE=fake-sim"',
+  'rem clear dev overrides possibly inherited from the calling terminal',
+  'set ZS_DAEMON_ENTRY=',
+  'set ZS_NODE_BIN=',
+  'set ZS_MANAGED_RUNTIME=',
+  'set ZS_PACKAGED_UI=',
+  'set ZS_UI_DEMO=',
+  'set ZS_DEMO_DIR=',
+  'set ZS_PICK_FOLDER=',
+  'set ZS_UI_DAEMON_DELAY_MS=',
+  'set ZS_UI_FIRST_COMMAND_DELAY_MS=',
+  'set ZS_UI_DELAY_METHOD_MS=',
+  'set ZS_UI_SHUTDOWN_DELAY_MS=',
+  'set ZS_UI_READY_DEADLINE_MS=',
+  'echo [notify-acceptance] buildId:',
+  'type "%PKG%BUILD.json"',
+  'echo [notify-acceptance] mode: fake runtime + real-dispatch guard + isolated data dir: %ZS_APP_DATA%',
+  'echo [notify-acceptance] step 1/2: preparing demo data (10-20s)...',
+  '"%NODEEXE%" "%PKG%results\\notify-acceptance-seed.mjs"',
   'if errorlevel 1 (',
-  '  echo [通知验收] 种子失败——请把上方错误截图回传，不要启动应用。',
-  '  pause & exit /b 1',
+  '  echo [notify-acceptance] seed FAILED - screenshot the error above. Do NOT start the app.',
+  '  if /i not "%~1"=="auto" pause',
+  '  exit /b 1',
   ')',
-  'echo [通知验收] 第 2/2 步：启动应用（保持窗口可见；约 90 秒后应出现两条系统通知）。',
-  'start "" "%PKG%应用\\electron.exe"',
-  'echo   - 点击通知应定位：①房间任务线程 ②私信会话（只定位，不确认执行）。',
-  'echo   - 再等约 2 分钟：同一事项不应重复通知。',
-  'echo   - 结果请写入 验证结果\\结果.txt（模板已备）。',
-  'pause',
+  'echo [notify-acceptance] step 2/2: starting app. Keep the window visible; two notifications due in ~90/95s.',
+  'start "" "%PKG%app\\electron.exe"',
+  'echo   - click each notification: (1) room task thread  (2) DM conversation. Locate-only, no confirm.',
+  'echo   - wait ~2 more minutes: the same item must NOT notify again.',
+  'if not exist "%PKG%results\\result.txt" copy /y "%PKG%results\\result-template.txt" "%PKG%results\\result.txt" >nul',
+  'echo   - write your results into results\\result.txt (seed facts per run: results\\seed-*.txt).',
+  'echo   - full steps in Chinese: open the guide txt file in this folder.',
+  'if /i not "%~1"=="auto" pause',
   'endlocal',
 ].join('\r\n');
 writeFileSync(join(out, '启动通知验收.cmd'), cmdContent, 'utf8');
 
-writeFileSync(join(out, '验收步骤.txt'), `通知人工验收步骤（第二十六轮二）
+writeFileSync(join(out, '验收步骤.txt'), `通知人工验收步骤（第二十七轮一修订）
 
 产物身份：BUILD.json（buildId——当前源码新构建，非旧包）。模式：fake 运行时 +
-ZS_REAL_DISPATCH_GUARD=1（两者内置——不会发起任何真实模型调用；不读取你的真实数据）。
+ZS_REAL_DISPATCH_GUARD=1 + 独立数据目录（app-data/）——启动器已内置全部隔离配置
+（不依赖任何外部环境变量；不会发起任何真实模型调用；不读取你的真实数据）。
+窗口标题带「模拟验证模式」标识。每次运行的 seed 事实（退出码/停机尾行/管道/目录）
+自动留档在 results\\seed-*.txt；你的回填写在 results\\result.txt（重复运行不覆盖回填）。
 
 你只需做：
 1. 双击「启动通知验收.cmd」（自动：造合成数据→启动应用→自动恢复合成项目）。
@@ -67,7 +99,7 @@ ZS_REAL_DISPATCH_GUARD=1（两者内置——不会发起任何真实模型调�
    点击只定位，不会确认执行。
 4. 再等约 2 分钟（应用每 6 秒轮询）：同一事项不应再次弹出系统通知。
 5. 可选：侧栏「提醒管理」对任一提醒点「取消」——其后不再有待确认通知。
-6. 把结果写入 验证结果\\结果.txt（模板见该文件）：
+6. 把结果写入 results\\result.txt：
    - 两条通知是否出现（各一行 是/否）
    - 点击定位是否正确（房间线程/私信各一行）
    - 是否出现重复通知（是/否）
@@ -77,7 +109,16 @@ ZS_REAL_DISPATCH_GUARD=1（两者内置——不会发起任何真实模型调�
 说明：应用内通知日志只记录客户端各相事件（权限/创建/送达事件/失败/关闭），
 不能证明 Windows 已显示——本人工验收即补此证据。等待你复核期间工程继续。
 `.trim(), 'utf8');
-writeFileSync(join(out, '验证结果', '结果.txt'), `通知人工验收结果（待回填——${new Date().toISOString()} 生成模板）
+writeFileSync(join(out, 'results', 'result-template.txt'), `通知人工验收结果（待回填——${new Date().toISOString()} 生成模板）
+1. 房间线程通知出现：是/否
+2. 私信通知出现：是/否
+3. 点击①定位房间任务线程正确：是/否
+4. 点击②定位私信会话正确：是/否
+5. 出现重复通知：是/否
+6. Windows 通知中心留有记录：是/否
+7. 异常描述：
+`, 'utf8');
+writeFileSync(join(out, 'results', 'result.txt'), `通知人工验收结果（待回填——${new Date().toISOString()} 生成模板）
 1. 房间线程通知出现：是/否
 2. 私信通知出现：是/否
 3. 点击①定位房间任务线程正确：是/否

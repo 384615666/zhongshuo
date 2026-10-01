@@ -309,8 +309,17 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // 后台/被遮挡窗口不被 Chromium 节流（第二十七轮一实证：提醒到点 2m11s 后才通知——
+      // renderer 的 1.5s 轮询 setInterval 被后台节流挂起，直到窗口被交互激活）。提醒通知是
+      // 本应用的核心交付通道，遮挡不得延迟。
+      backgroundThrottling: false,
     },
   });
+  // 模拟验证模式标题持久（页面 <title> 会在 loadFile 后覆盖 BrowserWindow title——标题是
+  // 用户识别"当前实例不发真实请求"的第一标识，不得被冲掉）。
+  if (simMode) {
+    win.on('page-title-updated', (event) => { event.preventDefault(); });
+  }
   await win.loadFile(join(__dirname, 'renderer', 'index.html'));
 
   const demo = process.env.ZS_UI_DEMO;
