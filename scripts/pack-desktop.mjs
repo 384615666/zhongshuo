@@ -55,6 +55,7 @@ cpSync(join(repo, 'dist', 'ui'), join(appDir, 'dist', 'ui'), { recursive: true }
 const daemonDir = join(appDir, 'daemon');
 mkdirSync(daemonDir);
 cpSync(daemonCjs, join(daemonDir, 'daemon.cjs'));
+cpSync(join(repo, 'dist', 'pack', 'pdf.worker.mjs'), join(daemonDir, 'pdf.worker.mjs')); // pdfjs worker 随包（第二十八轮五）
 mkdirSync(join(daemonDir, 'node'), { recursive: true });
 cpSync(process.execPath, join(daemonDir, 'node', process.platform === 'win32' ? 'node.exe' : 'node'));
 const nm = join(daemonDir, 'node_modules');

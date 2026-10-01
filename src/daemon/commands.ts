@@ -38,6 +38,7 @@ import { join } from 'node:path';
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
 import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer } from './attachments.ts';
+import { PDF_MAX_BYTES, extractPdfText, type PdfExtractResult } from './pdfText.ts';
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -220,7 +221,7 @@ function resolveAttachmentRefs(
       | { conversation_id: string; kind: string; source_name: string | null; hash: string }
       | undefined;
     if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
-    if (![...(ATT_TEXT_KINDS as readonly string[]), 'image_file'].includes(att.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/代码/Markdown/图片附件（首包+代码批+图片批）——${attId} 为 ${att.kind}`);
+    if (![...(ATT_TEXT_KINDS as readonly string[]), 'image_file', 'pdf_file'].includes(att.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本/代码/Markdown/图片/PDF 附件（首包+代码批+图片批+PDF 批）——${attId} 为 ${att.kind}`);
     if (att.conversation_id !== conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
     out.push({ artifactId: attId, displayName: att.source_name ?? attId, hash: att.hash });
   }
@@ -1984,6 +1985,68 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const meta = validateImageBuffer(verified.raw);
         if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
         return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'unverified-unsupported' } });
+      }
+      case 'attachment.uploadPdf': {
+        // PDF 附件首包（第二十八轮五）——能力①保存原件+%PDF- magic 校验+隔离解析验证
+        //（pdfjs legacy：不执行 PDF 脚本/不碰宿主字体/无 canvas）；加密/损坏/超页数/超大小
+        // 明确拒绝；提取文本随上传**同步缓存**（artifacts.extracted_text_json——同 hash 不
+        // 重复解析；受限注入与分页预览共用）。原件 {appData}/blobstore/{hash}.bin。
+        const params = z.strictObject({
+          conversationId: z.string().min(1),
+          filename: z.string().min(1).max(200),
+          contentBase64: z.string().min(1).max(28 * 1024 * 1024),
+        }).parse(env.params);
+        const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+        if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
+        const raw = Buffer.from(params.contentBase64, 'base64');
+        if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', 'PDF 内容为空');
+        if (raw.length > PDF_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `PDF 原件 ${raw.length}B 超过上限 ${PDF_MAX_BYTES}B（明确规则拒绝）`);
+        const hash = createHash('sha256').update(raw).digest('hex');
+        const extract = await extractPdfText(raw, hash);
+        if (!extract.ok) throw new DaemonCommandError('VALIDATION_INVALID', extract.error.message);
+        const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
+        mkdirSync(blobRoot, { recursive: true });
+        writeFileSync(join(blobRoot, `${hash}.bin`), raw);
+        const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; pages: number } => {
+          const attachmentId = `art_${randomUUID()}`;
+          deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at, extracted_text_json)
+                           VALUES (?, ?, ?, ?, 'pdf_file', 1, ?, ?, ?, ?, ?)`)
+            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, hash, join(blobRoot, `${hash}.bin`), params.filename, Date.now(), JSON.stringify(extract.result));
+          return { attachmentId, hash, bytes: raw.length, pages: extract.result.pages.length };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'attachment.previewPdf': {
+        // 能力②预览（文本层+页结构隔离呈现）+③提取正文：按页返回提取文本（缓存优先，
+        // 旧行无缓存按需提取回写）；页码/来源版本/hash/截断事实齐备。**扫描件无文本=如实
+        // 呈现空页（OCR 单列未实现）**；像素级页面渲染=未实施（canvas 原生依赖不随包——
+        // 明确 unsupported）。audience+实根+sha256 原件核对同既有路径。
+        const params = z.strictObject({ attachmentId: z.string().min(1), page: z.number().int().min(1).optional(), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision, extracted_text_json FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number; extracted_text_json: string | null } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        if (row.kind !== 'pdf_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非 PDF 附件范围`);
+        const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        let extract: PdfExtractResult | null = null;
+        if (row.extracted_text_json != null) {
+          try { const parsed = JSON.parse(row.extracted_text_json) as PdfExtractResult; if (parsed.sourceHash === row.hash) extract = parsed; } catch { /* 损坏缓存不虚构——按需重提 */ }
+        }
+        if (extract == null) {
+          const fresh = await extractPdfText(verified.raw, row.hash);
+          if (!fresh.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不可解析：${fresh.error.message}`);
+          extract = fresh.result;
+          deps.db.prepare('UPDATE artifacts SET extracted_text_json = ? WHERE id = ?').run(JSON.stringify(extract), row.id);
+        }
+        const totalPages = extract.pages.length;
+        const pageNo = Math.min(params.page ?? 1, Math.max(totalPages, 1));
+        const page = extract.pages.find((pg) => pg.page === pageNo) ?? null;
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, totalPages, page: pageNo, text: page?.text ?? '', truncated: page?.truncated ?? false, pixelRendering: 'unsupported', ocr: 'unsupported', extractedAt: extract.extractedAt } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK

@@ -7,6 +7,8 @@
  * 改由环境变量 ZS_PACKED_ENTRY=1 触发（entry.ts 内已加该分支）。
  */
 import { build } from 'esbuild';
+import { copyFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 await build({
   entryPoints: ['src/daemon/entry.ts'],
@@ -20,4 +22,6 @@ await build({
   minify: false,
   logLevel: 'info',
 });
-console.log('[pack] dist/pack/daemon.cjs 完成');
+// pdfjs worker 随包携带（第二十八轮五）：自包含 ESM——pdfText 在打包模式按同目录解析。
+copyFileSync(join(import.meta.dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'), join(import.meta.dirname, '..', 'dist', 'pack', 'pdf.worker.mjs'));
+console.log('[pack] dist/pack/daemon.cjs + pdf.worker.mjs 完成');

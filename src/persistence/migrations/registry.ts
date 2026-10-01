@@ -33,6 +33,7 @@ import { artifactSourceMigration } from './031-artifact-source.ts';
 import { migration032 } from './032-turn-stop-snapshot.ts';
 import { migration033 } from './033-attachment-comments.ts';
 import { migration034 } from './034-outbox-intent-generation.ts';
+import { migration035 } from './035-pdf-extract-cache.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -70,4 +71,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration032,
   migration033,
   migration034,
+  migration035,
 ];

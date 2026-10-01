@@ -4,7 +4,26 @@
  * 渲染全文敏感扫描零命中（PP-03）；信封与渲染文本、hash 由本函数一并产出（PP-04）。
  */
 import { createHash } from 'node:crypto';
-import { readVerifiedCopy } from './attachments.ts';
+import { readVerifiedCopy, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
+
+/** PDF 提取缓存 → 受限注入文本（页码标注+字节预算截断）。返回 string=失败原因（fail-closed）。 */
+function pdfExtractedTextForInput(
+  extractedJson: string | null,
+  expectedHash: string,
+  label: string,
+): { text: string; originalBytes: number; truncated: boolean } | string {
+  try {
+    const parsed = JSON.parse(extractedJson ?? '') as { sourceHash: string; pages: Array<{ page: number; text: string; truncated: boolean }> };
+    if (parsed.sourceHash !== expectedHash) return `PDF 提取缓存与原件不符（${label}）——拒绝组装`;
+    let joined = '';
+    for (const pg of parsed.pages ?? []) joined += `[第 ${pg.page} 页]${String.fromCharCode(10)}${pg.text}${String.fromCharCode(10)}`;
+    const originalBytes = Buffer.byteLength(joined, 'utf8');
+    const cut = truncateUtf8BytesInput(joined, ATT_EXCERPT_BYTES);
+    return { text: cut.text, originalBytes, truncated: cut.truncated };
+  } catch {
+    return `PDF 提取缓存缺失/损坏（${label}）——重新上传后重试`;
+  }
+}
 
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
@@ -100,15 +119,24 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   // 损坏/越界拒绝组装，不以路径冒充已读）；UTF-8 字节截断保留完整字符。
   let rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
   const attRows = db.prepare(
-    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision,
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json,
             CASE WHEN ma.message_id = ? THEN -1 ELSE COALESCE(m.thread_message_seq, 999999) END AS ord
      FROM message_attachments ma
      JOIN artifacts a ON a.id = ma.artifact_id
      LEFT JOIN messages m ON m.id = ma.message_id
-     WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file')
+     WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file','pdf_file')
      ORDER BY ord, ma.rowid`,
-  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null }>;
   for (const row of attRows) {
+    if (row.kind === 'pdf_file') {
+      // PDF 受限模型输入（第二十八轮五）：注入**提取文本缓存**（上传时隔离解析产出——页码
+      // 标注；字节预算内截断）。缓存缺失/损坏/与原件不符=组装失败（fail-closed——不以路径
+      // 冒充已读；提取由命令层异步完成，组装是同步路径不现场解析）。
+      const pdfText = pdfExtractedTextForInput(row.extracted_text_json, row.hash, row.source_name ?? row.id);
+      if (typeof pdfText === 'string') return assemblyFailure('attachment-unreadable', pdfText);
+      rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes: pdfText.originalBytes, truncated: pdfText.truncated, text: pdfText.text });
+      continue;
+    }
     const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
     if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
     rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
@@ -322,15 +350,22 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   if (!dmAttIds.includes(root.id)) dmAttIds.push(root.id);
   if (dmAttIds.length > 0) {
     const dmAttRows = db.prepare(
-      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision,
+      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json,
               CASE WHEN ma.message_id = ? THEN -1 ELSE m.conversation_seq END AS ord
        FROM message_attachments ma
        JOIN artifacts a ON a.id = ma.artifact_id
        JOIN messages m ON m.id = ma.message_id
-       WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind IN ('text_file','code_file')
+       WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind IN ('text_file','code_file','pdf_file')
        ORDER BY ord, ma.rowid`,
-    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
+    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null }>;
     for (const row of dmAttRows) {
+      if (row.kind === 'pdf_file') {
+        // PDF 受限模型输入（同房间装配——提取缓存页标注文本，预算内截断；fail-closed）。
+        const pdfText = pdfExtractedTextForInput(row.extracted_text_json, row.hash, row.source_name ?? row.id);
+        if (typeof pdfText === 'string') return assemblyFailure('attachment-unreadable', pdfText);
+        rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: row.hash, revision: row.revision, originalBytes: pdfText.originalBytes, truncated: pdfText.truncated, text: pdfText.text });
+        continue;
+      }
       const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
       if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
       rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });

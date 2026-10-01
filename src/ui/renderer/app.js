@@ -369,6 +369,51 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   const myGen = ++previewGeneration;
   const alive = () => myGen === previewGeneration;
   const originView = currentView(); // 来源会话快照（受限资源标注）
+  if (kindHint === 'pdf_file') {
+    // PDF 预览（第二十八轮五）：previewPdf 分页文本（提取缓存；扫描件无文本如实空页）；
+    // 像素级页面渲染/OCR=未实施（明确标注）；页导航（前/后页——代次保护沿用）。
+    const pdf = await command('attachment.previewPdf', { attachmentId, page: 1 });
+    if (!alive()) return;
+    const pbox = el('attach-preview');
+    if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——容器缺失`); return; }
+    pbox.classList.remove('hidden');
+    const renderPage = (pg) => {
+      if (!alive()) return;
+      const head2 = document.createElement('div');
+      head2.className = 'meta';
+      head2.textContent = `📄 ${pdf.filename ?? filename} · 共 ${pdf.totalPages} 页 · 第 ${pg.page} 页 · sha256=${pdf.hash.slice(0, 12)}… · v${pdf.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
+      const prev = document.createElement('button');
+      prev.className = 'chip';
+      prev.textContent = '← 前页';
+      prev.disabled = pg.page <= 1;
+      prev.onclick = () => void refreshPdf(pg.page - 1);
+      const next = document.createElement('button');
+      next.className = 'chip';
+      next.textContent = '后页 →';
+      next.disabled = pg.page >= pdf.totalPages;
+      next.onclick = () => void refreshPdf(pg.page + 1);
+      const closeP = document.createElement('button');
+      closeP.className = 'chip';
+      closeP.textContent = '关闭预览';
+      closeP.onclick = () => closeAttachPreview();
+      const pre = document.createElement('pre');
+      pre.className = 'attach-preview-text';
+      pre.textContent = pg.text.length === 0 ? '（本页无文本层——可能是扫描件；OCR 未实现，如实呈现空页）' : pg.text;
+      const note = document.createElement('div');
+      note.className = 'meta';
+      note.textContent = `像素级页面渲染：未实施（文本层呈现） · OCR：未实现 · 截断：${pg.truncated ? `本页提取文本超 64KB 已截断` : '无'} · 提取时刻：${new Date(pdf.extractedAt).toLocaleString()}`;
+      const wrapP = document.createElement('div');
+      wrapP.append(head2, prev, next, closeP, pre, note);
+      pbox.replaceChildren(wrapP);
+    };
+    const refreshPdf = async (pageNo) => {
+      const pg = await command('attachment.previewPdf', { attachmentId, page: pageNo }).catch(() => null);
+      if (pg == null || !alive()) return;
+      renderPage(pg);
+    };
+    renderPage(pdf);
+    return;
+  }
   if (kindHint === 'image_file') {
     // 图片预览（第二十八轮四）：previewImage（audience+实根+原件核对）→ <img> 渲染（浏览器
     // 沙箱解码）；OCR=未实现、模型图片输入=未认证——如实标注，不以路径冒充模型已读。
@@ -503,12 +548,13 @@ function wireAttach(kind) {
       // 图片附件（第二十八轮四）：原件上传（服务端 magic 校验+头部分析限幅）；文本走 fatal
       // UTF-8 严格解码。判型按**文件真实字节**（file.type 由浏览器按内容嗅探——非扩展名）。
       const isImage = (file.type || '').startsWith('image/');
+      const isPdf = file.type === 'application/pdf' || (/.pdf$/i.test(file.name) && file.type === ''); // 少数环境 type 空——按内容嗅探失败回落扩展名+服务端 magic 终审
       let r;
-      if (isImage) {
+      if (isImage || isPdf) {
         let bin = '';
         const u8 = new Uint8Array(buf);
         for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
-        r = await command('attachment.uploadImage', { conversationId: convId, filename: file.name, contentBase64: btoa(bin) });
+        r = await command(isPdf ? 'attachment.uploadPdf' : 'attachment.uploadImage', { conversationId: convId, filename: file.name, contentBase64: btoa(bin) });
       } else {
         let content;
         try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
@@ -516,9 +562,9 @@ function wireAttach(kind) {
         r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
       }
       if (!draftAttachments.has(targetKey)) draftAttachments.set(targetKey, []);
-      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: isImage ? 'image_file' : 'text_file' });
+      draftAttachments.get(targetKey).push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated, kind: isPdf ? 'pdf_file' : isImage ? 'image_file' : 'text_file' });
       if (attachDraftKey(kind) === targetKey) renderAttachChips(kind); // 仍在发起目标才重绘
-      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : isImage ? `（${r.width}×${r.height}）` : ''}`);
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将按字节截断）' : isPdf ? `（${r.pages} 页——提取文本已缓存）` : isImage ? `（${r.width}×${r.height}）` : ''}`);
     } catch (e) { showError(`附件上传失败：${e.message}`); }
   })().catch(() => {});
 }
