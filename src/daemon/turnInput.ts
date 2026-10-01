@@ -47,6 +47,8 @@ export interface AssemblyIdentity {
 
 export interface AssembledTurnInput {
   db: ZhongshuoDatabase;
+  /** 本次 appData 的托管存储根（{appData}/blobstore——第二十八轮三：附件读取按实际根校验路径越界）。 */
+  blobRoot?: string;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
   turnId: string;
@@ -107,7 +109,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
      ORDER BY ord, ma.rowid`,
   ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
   for (const row of attRows) {
-    const verified = readVerifiedCopy(row.blob_path, row.hash);
+    const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
     if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
     rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
   }
@@ -329,7 +331,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
        ORDER BY ord, ma.rowid`,
     ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number }>;
     for (const row of dmAttRows) {
-      const verified = readVerifiedCopy(row.blob_path, row.hash);
+      const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
       if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
       rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
     }

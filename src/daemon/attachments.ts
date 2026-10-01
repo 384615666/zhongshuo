@@ -8,7 +8,7 @@
  *   预算（64KB 规则原实现即此缺陷）。截断说明分别给出原始大小/提取大小。
  */
 import { readFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export const ATT_MAX_BYTES = 256 * 1024; // 上传上限（明确规则：超限拒绝不静默截断）
@@ -51,13 +51,19 @@ export function truncateUtf8Bytes(text: string, maxBytes: number): { text: strin
 
 /**
  * 读获准副本并核对完整性。expectedHash=artifacts.hash（上传时内容寻址写入）。
- * 失败三态：out-of-store（路径越界——basename/父目录与内容寻址布局不符）、
- * unreadable（读失败）、corrupted（字节的 sha256 ≠ 记录 hash——副本被改写）。
+ * storeRoot（可选，第二十八轮三）：**本次 appData 的实际托管根**（{appData}/blobstore）——
+ * 提供时路径必须 resolve 后落在该根内（外部同名 blobstore 目录与符号链接越界都检出——
+ * resolve 解析链接目标）；缺省降级为布局校验（父目录名 blobstore+内容寻址文件名）。
+ * 失败三态：out-of-store（路径越界）、unreadable（读失败）、corrupted（字节的 sha256 ≠
+ * 记录 hash——副本被改写）。
  */
-export function readVerifiedCopy(blobPath: string, expectedHash: string): { ok: true; copy: VerifiedCopy } | { ok: false; error: AttachmentReadError } {
+export function readVerifiedCopy(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; copy: VerifiedCopy } | { ok: false; error: AttachmentReadError } {
   const resolved = resolve(blobPath);
-  if (basename(resolved) !== `${expectedHash}.txt` || basename(dirname(resolved)) !== 'blobstore') {
-    return { ok: false, error: { code: 'attachment-out-of-store', message: `附件副本路径越出托管存储（${blobPath}）——拒绝读取` } };
+  const nameOk = basename(resolved) === `${expectedHash}.txt`;
+  const layoutOk = nameOk && basename(dirname(resolved)) === 'blobstore';
+  const rootOk = storeRoot == null ? true : resolved === resolve(join(storeRoot, `${expectedHash}.txt`));
+  if (!nameOk || !layoutOk || !rootOk) {
+    return { ok: false, error: { code: 'attachment-out-of-store', message: `附件副本路径越出托管存储（${blobPath}${storeRoot != null ? `；本次存储根=${storeRoot}` : ''}）——拒绝读取` } };
   }
   let raw: Buffer;
   try {

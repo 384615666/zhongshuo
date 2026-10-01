@@ -227,6 +227,23 @@ describe('完整性与截断（读取路径共享）', () => {
     env.close();
   });
 
+  it('外部同名 blobstore 目录（实根校验）：拒绝读取——不只看父目录名', async () => {
+    const env = makeEnv();
+    const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '实根.md', content: '内容 ROOT-9988' });
+    // 另一目录树下的「同名布局」blobstore/{hash}.txt（内容一致——hash 校验会过）：
+    // 实根校验（本次 appData/blobstore）必须拒绝——父目录名相同不算托管。
+    const outsideStore = join(tmpRoot, 'elsewhere', 'blobstore');
+    mkdirSync(outsideStore, { recursive: true });
+    writeFileSync(join(outsideStore, `${up.hash}.txt`), '内容 ROOT-9988', 'utf8');
+    const db2 = openDatabase(env.dbPath);
+    db2.prepare('UPDATE artifacts SET blob_path = ? WHERE id = ?').run(join(outsideStore, `${up.hash}.txt`), up.attachmentId);
+    db2.close();
+    const pv = await env.cmdRaw('attachment.previewText', { attachmentId: up.attachmentId });
+    expect(pv.ok).toBe(false);
+    expect(String(pv.error?.message)).toContain('越出托管存储');
+    expect(String(pv.error?.message)).toContain('本次存储根');
+    env.close();
+  });
   it('多字节字节截断：中文按 UTF-8 字节预算截断、保留完整字符、大小如实', async () => {
     const env = makeEnv();
     // 40000 个中文字符 = 120000 字节（>64KB 预算，<256KB 上限）；字符串 slice 到 ~21845 字符

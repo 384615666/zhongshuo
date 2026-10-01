@@ -58,7 +58,7 @@ function makeEnv() {
     await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `att-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: unknown; error?: { code: string; message: string } };
   const makeWorker = (): { worker: DispatchWorker; adapter: FakeRuntimeAdapter } => {
     const adapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => validDone() });
-    return { worker: new DispatchWorker({ db, adapter, leaseOwner: `w-${randomUUID().slice(0, 4)}`, appDataDir: join(tmpRoot, 'app') }), adapter };
+    return { worker: new DispatchWorker({ db, adapter, leaseOwner: `w-${randomUUID().slice(0, 4)}`, appDataDir: appData }), adapter };
   };
   return { db, cmd, cmdRaw, makeWorker };
 }

@@ -152,7 +152,7 @@ async function selectRoom(roomId, conversationId, roomEl) {
   if (enabledAgents.length === 1) {
     // 预填到「当前房间」的池/线程草稿键（建房轮：草稿按房间隔离）。
     for (const view of ['pool', 'thread']) {
-      const key = `${state.roomId ?? 'noroom'}:${view}`;
+      const key = `${state.projectId ?? 'p?'}:${state.roomId ?? 'noroom'}:${view === 'thread' ? (state.openThreadId ?? '-') : '-'}`;
       if ((state.drafts[key]?.mention ?? '') === '') {
         state.drafts[key] = { ...(state.drafts[key] ?? { text: '' }), mention: enabledAgents[0].displayName };
       }
@@ -166,7 +166,10 @@ async function selectRoom(roomId, conversationId, roomEl) {
 // ---------- 视图切换（R4：草稿独立） ----------
 
 function draftKey() {
-  return `${state.roomId ?? 'noroom'}:${currentView()}`;
+  // 完整目标键（第二十八轮三）：projectId+roomId+threadId——同房间线程 A/B 不再共用 'thread'
+  // 视图键（正文/mention/附件曾因此串草稿）；主池=thread 位 '-'。DM 键见 attachDraftKey
+  //（project/conversation 身份）——正文与附件同键空间。
+  return `${state.projectId ?? 'p?'}:${state.roomId ?? 'noroom'}:${state.openThreadId ?? '-'}`;
 }
 
 function saveDraft() {
@@ -181,6 +184,7 @@ function restoreDraft() {
 }
 
 function showPool() {
+  closeAttachPreview(); // 预览随会话切换失效（第二十八轮三）——在途代次作废
   state.navGeneration += 1;
   if (state.openThreadId != null) saveDraft();
   state.openThreadId = null;
@@ -198,6 +202,7 @@ function showPool() {
 }
 
 async function openThread(threadId, taskId, anchorText) {
+  closeAttachPreview(); // 同上：切线程/会话关预览
   state.navGeneration += 1;
   saveDraft();
   state.openThreadId = threadId;
@@ -236,6 +241,7 @@ async function renderDmSidebar() {
 }
 
 async function openDm(conversationId) {
+  closeAttachPreview(); // 跨私信切换：受限资源预览不留面
   state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
@@ -314,7 +320,8 @@ async function restoreDmDeepLink() {
 // 共享文本预览；已发消息附件芯片同样可点（thread.history/conversation.history attachments）。
 const draftAttachments = new Map(); // 目标键 -> Array<{attachmentId, filename, hash, truncated}>
 function attachDraftKey(kind) {
-  if (kind === 'dm') return state.openDmId != null ? `dm:${state.openDmId}` : 'dm:none';
+  // DM 键保留 project/conversation 身份（第二十八轮三）；composer 键=draftKey()（project+room+thread）。
+  if (kind === 'dm') return state.openDmId != null ? `dm:${state.projectId ?? 'p?'}:${state.openDmId}` : 'dm:none';
   return draftKey();
 }
 function attachDraft(kind) {
@@ -344,35 +351,50 @@ function renderAttachChips(kind) {
   }
   box.replaceChildren(frag);
 }
+/** 预览代次（第二十八轮三）：previewAttachment 两次 await（previewText+评论列表）——
+ * A/B 交错、关闭、切换会话后的迟到响应不得重开/覆盖面板。每次打开 +1；关闭/切会话再 +1
+ * 使在途代次全部作废（受限资源跨会话不留面：openDm/showPool/openThread 入口即关）。 */
+let previewGeneration = 0;
+function closeAttachPreview() {
+  previewGeneration += 1; // 在途预览请求全部作废
+  el('attach-preview')?.classList.add('hidden');
+}
 /** 共享文本预览（草稿芯片与已发消息附件共用）：previewText 服务端已做 audience+完整性
- * （sha256 实际字节核对）+字节截断——这里只呈现原始大小/提取大小/截断事实与全文。
- * 附基础评论区（第二十七轮六：文本/代码/Markdown）——行号/选区/正文，锚定评论时资源版本；
- * 资源已更新的旧评论明确标旧（stale——行号锚点不漂移到新版）。 */
+ * （sha256 实际字节核对+实际存储根校验）+字节截断——这里只呈现原始大小/提取大小/截断事实
+ * 与全文。附基础评论区（第二十七轮六；第二十八轮三版本绑定）：行号/选区/正文提交
+ * expectedHash/expectedRevision（**用户实际看到的版本**——服务端事务内核对，版本已变=
+ * VERSION_CONFLICT 不悄悄锚最新）；资源已更新的旧评论明确标旧（stale 同比 hash 与 revision
+ * ——行号锚点不漂移到新版）。 */
 async function previewAttachment(attachmentId, filename) {
+  const myGen = ++previewGeneration;
+  const alive = () => myGen === previewGeneration;
+  const originView = currentView(); // 来源会话快照（受限资源标注）
   const r = await command('attachment.previewText', { attachmentId });
+  if (!alive()) return; // 迟到作废：已关闭/被新预览取代/已切换会话——不重开不覆盖
   const box = el('attach-preview');
   if (box == null) { showError(`附件预览（${filename}）：原文 ${r.originalBytes}B${r.truncated ? `——截断，提取前 ${r.excerptBytes}B` : ''}\n${r.text.slice(0, 2000)}`); return; }
   box.classList.remove('hidden');
   const head = document.createElement('div');
   head.className = 'meta';
-  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · sha256=${r.hash.slice(0, 12)}… · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'}`;
+  head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · sha256=${r.hash.slice(0, 12)}… · v${r.revision} · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
   const close = document.createElement('button');
   close.className = 'chip';
   close.textContent = '关闭预览';
-  close.onclick = () => box.classList.add('hidden');
+  close.onclick = () => closeAttachPreview();
   const content = document.createElement('pre');
   content.className = 'attach-preview-text';
   content.textContent = r.text;
   const wrap = document.createElement('div');
   wrap.append(head, close, content);
-  // 评论区（列表 + 新增表单）。
+  // 评论区（列表 + 新增表单——expectedHash/expectedRevision 沿本次预览所见版本）。
   const comments = await command('attachment.comment.list', { attachmentId }).catch(() => null);
+  if (!alive()) return; // 评论列表迟到同作废
   if (comments != null) {
     const sec = document.createElement('div');
     sec.className = 'attach-comments';
     const secHead = document.createElement('div');
     secHead.className = 'meta';
-    secHead.textContent = `评论（${(comments.items ?? []).length}）——锚定评论时资源版本；标旧=资源已更新（行号针对旧版）`;
+    secHead.textContent = `评论（${(comments.items ?? []).length}）——锚定评论时资源版本（提交按所见 v${r.revision} 核对）；标旧=资源已更新（行号针对旧版）`;
     sec.append(secHead);
     for (const c of comments.items ?? []) {
       const row = document.createElement('div');
@@ -398,9 +420,17 @@ async function previewAttachment(attachmentId, filename) {
       if (body.length === 0) { showError('评论正文不能为空'); return; }
       const num = (v) => { const n = Number(v); return v.trim() !== '' && Number.isInteger(n) && n >= 1 ? n : undefined; };
       try {
-        await command('attachment.comment.add', { attachmentId, body, ...(num(fromInput.value) != null ? { lineFrom: num(fromInput.value) } : {}), ...(num(toInput.value) != null ? { lineTo: num(toInput.value) } : {}) });
+        // 版本绑定（第二十八轮三）：expectedHash/expectedRevision=用户实际看到的版本——
+        // 服务端事务内核对；版本已变=VERSION_CONFLICT（提示刷新预览，不悄悄锚到最新版）。
+        await command('attachment.comment.add', {
+          attachmentId, body, expectedHash: r.hash, expectedRevision: r.revision,
+          ...(num(fromInput.value) != null ? { lineFrom: num(fromInput.value) } : {}),
+          ...(num(toInput.value) != null ? { lineTo: num(toInput.value) } : {}),
+        });
         await previewAttachment(attachmentId, filename).catch(() => {});
-      } catch (e) { showError(`评论失败：${e.message}`); }
+      } catch (e) {
+        showError(e.message.includes('版本已变化') ? `评论未保存：${e.message}` : `评论失败：${e.message}`);
+      }
     })().catch(() => {});
     const form = document.createElement('div');
     form.append(bodyInput, fromInput, toInput, add);
@@ -1540,6 +1570,9 @@ async function retrySend() {
   if (envelope == null) return;
   // 视图从信封目标推导（重试时用户可能已切视图——不得动另一视图的草稿）。
   const view = envelope.params?.target?.kind === 'thread' ? 'thread' : 'pool';
+  // 键快照从信封目标推导（重试时用户可能已切线程——不得动另一键）。
+  const target = envelope.params?.target ?? {};
+  const keyAtSend = `${target.projectId ?? 'p?'}:${state.roomId ?? 'noroom'}:${target.threadId ?? '-'}`;
   clearSendError();
   try {
     const result = await zs.command(envelope); // 同 commandId：服务端幂等重放/去重
@@ -1547,7 +1580,7 @@ async function retrySend() {
       showSendError(`发送失败：${result.error?.message ?? '未知错误'}`);
       return;
     }
-    afterSendSuccess(view, state.recordOnly, envelope.params?.attachmentRefs);
+    afterSendSuccess(view, state.recordOnly, envelope.params?.attachmentRefs, keyAtSend);
   } catch (transportError) {
     // 传输层仍失败：保留同 commandId 供再次重试。
     showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);
@@ -1576,11 +1609,12 @@ function buildEnvelope() {
   };
 }
 
-function afterSendSuccess(view, recordIntent, sentRefs) {
-  // 视图/意图在发起时固定（修复轮 6）：响应到达前用户可能已切换视图——
-  // 只清发起视图的草稿与输入框，不动另一视图。附件草稿按**信封内实际发送的 refs**
-  // 清算（失败后新加的附件不在信封里——保留在草稿，不随重试成功丢掉）。
-  const key = `${state.roomId ?? 'noroom'}:${view}`;
+function afterSendSuccess(view, recordIntent, sentRefs, keyAtSend) {
+  // 视图/意图/目标键在发起时固定（修复轮 6；第二十八轮三：完整键快照——同房间线程 A/B
+  // 不再因视图同名串清算）：响应到达前用户可能已切换线程/视图——只清发起键的草稿与输入框，
+  // 不动另一键。附件草稿按**信封内实际发送的 refs** 清算（失败后新加的附件不在信封里——
+  // 保留在草稿，不随重试成功丢掉）。
+  const key = keyAtSend ?? `${state.projectId ?? 'p?'}:${state.roomId ?? 'noroom'}:-`;
   state.drafts[key] = { text: '', mention: state.drafts[key]?.mention ?? '' };
   const remaining = (draftAttachments.get(key) ?? []).filter((a) => !(sentRefs ?? []).includes(a.attachmentId));
   if (remaining.length === 0) draftAttachments.delete(key); else draftAttachments.set(key, remaining);
@@ -1608,6 +1642,7 @@ async function send() {
   // 发起时固定视图与「仅记录」意图（响应到达前用户可能切换视图）。
   const view = currentView();
   const recordIntent = state.recordOnly;
+  const keyAtSend = draftKey(); // 发起时目标键快照（第二十八轮三：完整键——响应前切换线程不清错键）
   const envelope = buildEnvelope();
   clearSendError();
   state.inflightSend = envelope.commandId;
@@ -1618,7 +1653,7 @@ async function send() {
       showSendError(`发送失败：${result.error?.message ?? '未知错误'}`); // 业务失败：保留草稿
       return;
     }
-    afterSendSuccess(view, recordIntent, envelope.params?.attachmentRefs);
+    afterSendSuccess(view, recordIntent, envelope.params?.attachmentRefs, keyAtSend);
   } catch (transportError) {
     // 传输层失败（超时/断连）：服务端可能已执行——保留同 commandId 重试，不自动改写文本重发。
     showSendError(`发送未确认（连接异常）：${transportError.message}`, envelope);

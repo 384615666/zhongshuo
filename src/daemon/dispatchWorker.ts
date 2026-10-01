@@ -499,6 +499,7 @@ export class DispatchWorker {
       : undefined;
     const assembled = assembleDirectTurn({
       db: this.db,
+      blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
       reviewFeedback: this.latestReviewFeedback(task.id),

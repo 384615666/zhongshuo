@@ -85,8 +85,22 @@ describe('附件基础评论（文本/代码/Markdown）', () => {
   it('行号/选区/正文锚定评论时版本；同名新内容=新资源→旧评论 stale（锚点不漂移）；跨会话拒绝；行区间校验', async () => {
     const env = makeEnv();
     const v1 = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '草稿 v1.md', content: '# 草稿\n第一行内容\n第二行内容\n' });
-    const c1 = await env.cmd<{ commentId: string; anchoredRevision: number }>('attachment.comment.add', { attachmentId: v1.attachmentId, body: '第 2 行建议改为要点式', lineFrom: 2, lineTo: 2, quote: '第一行内容' });
+    const c1 = await env.cmd<{ commentId: string; anchoredRevision: number }>('attachment.comment.add', { attachmentId: v1.attachmentId, body: '第 2 行建议改为要点式', lineFrom: 2, lineTo: 2, quote: '第一行内容', expectedHash: v1.hash, expectedRevision: 1 });
     expect(c1.anchoredRevision).toBe(1);
+    // 版本绑定（第二十八轮三）：expectedHash/expectedRevision 与当前不一致=VERSION_CONFLICT
+    //（不悄悄锚到最新版）。
+    const conflict = await env.cmdRaw('attachment.comment.add', { attachmentId: v1.attachmentId, body: '过期视图的评论', expectedHash: v1.hash, expectedRevision: 9 });
+    expect(conflict.ok).toBe(false);
+    expect(String(conflict.error?.code)).toBe('VERSION_CONFLICT');
+    expect(String(conflict.error?.message)).toContain('版本已变化');
+    // 行范围按**提取文本实际行数**校验（3 行内容——第 4 行越界）。
+    const overLine = await env.cmdRaw('attachment.comment.add', { attachmentId: v1.attachmentId, body: '越界行', lineFrom: 5, expectedHash: v1.hash, expectedRevision: 1 });
+    expect(overLine.ok).toBe(false);
+    expect(String(overLine.error?.message)).toContain('行锚点越界');
+    // 引用选区必须存在于提取文本——不实锚点拒绝。
+    const badQuote = await env.cmdRaw('attachment.comment.add', { attachmentId: v1.attachmentId, body: '假引用', quote: '这句话不在正文里', expectedHash: v1.hash, expectedRevision: 1 });
+    expect(badQuote.ok).toBe(false);
+    expect(String(badQuote.error?.message)).toContain('引用选区不存在');
     // 同名不同内容=不同资源（新 artifact 行）——原资源不变，评论仍锚 v1。
     const v2 = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '草稿 v1.md', content: '# 草稿 v2\n改写后的第一行\n' });
     expect(v2.hash).not.toBe(v1.hash);
@@ -101,6 +115,14 @@ describe('附件基础评论（文本/代码/Markdown）', () => {
     expect(item.quote).toBe('第一行内容');
     expect(item.anchoredTo.revision).toBe(1); // 锚定评论时版本（不漂移）
     expect(item.stale).toBe(true); // 资源已更新——旧评论明确标旧
+    // stale 同比 hash **与 revision**（第二十八轮三反例：同 hash 不同 revision 仍标旧——
+    // 版本前进即使内容未变，行号锚点针对旧版本快照）。
+    const sameHash = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '同内容升版.md', content: '一行内容' });
+    const c2 = await env.cmd<{ commentId: string }>('attachment.comment.add', { attachmentId: sameHash.attachmentId, body: '针对 v1 的评论', expectedHash: sameHash.hash, expectedRevision: 1 });
+    expect(c2.commentId).toBeTruthy();
+    env.db.prepare('UPDATE artifacts SET revision = revision + 1 WHERE id = ?').run(sameHash.attachmentId); // hash 不变、revision 前进
+    const list2 = await env.cmd<{ items: Array<{ commentId: string; stale: boolean }> }>('attachment.comment.list', { attachmentId: sameHash.attachmentId });
+    expect(list2.items[0]!.stale).toBe(true); // 旧口径只比 hash 会漏——同比两者才如实
     // 跨会话评论拒绝（**他人 DM** 的附件——audience：u_local 不是 dm_b 参与者）。
     env.db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('dm_b','p1','dm',NULL)`).run();
     env.db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','dm_b','human','u_other'),('p1','dm_b','agent','mA')`).run();
@@ -110,13 +132,13 @@ describe('附件基础评论（文本/代码/Markdown）', () => {
       if (!r.ok) throw new Error(r.error?.message);
       return r.data!;
     })();
-    const cross = await env.cmdRaw('attachment.comment.add', { attachmentId: otherAtt.attachmentId, body: '他人会话的附件评论' });
+    const cross = await env.cmdRaw('attachment.comment.add', { attachmentId: otherAtt.attachmentId, body: '他人会话的附件评论', expectedHash: '0'.repeat(64), expectedRevision: 1 });
     expect(cross.ok).toBe(false);
     expect(String(cross.error?.message)).toContain('audience');
     const crossList = await env.cmdRaw('attachment.comment.list', { attachmentId: otherAtt.attachmentId });
     expect(crossList.ok).toBe(false); // 列表同样拒绝
     // 行区间校验。
-    const badRange = await env.cmdRaw('attachment.comment.add', { attachmentId: v1.attachmentId, body: '区间反了', lineFrom: 5, lineTo: 2 });
+    const badRange = await env.cmdRaw('attachment.comment.add', { attachmentId: v1.attachmentId, body: '区间反了', lineFrom: 5, lineTo: 2, expectedHash: v1.hash, expectedRevision: 1 });
     expect(badRange.ok).toBe(false);
     expect(String(badRange.error?.message)).toContain('行区间');
     env.close();

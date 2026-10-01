@@ -1864,16 +1864,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         //（第二十七轮四：路径限定托管存储+sha256 实际字节核对——损坏明确拒绝）；UTF-8 **字节**
         // 截断（保留完整字符），原始大小/提取大小/截断事实分别注明。
         const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
-        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind FROM artifacts WHERE id = ?').get(params.attachmentId) as
-          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string; kind: string } | undefined;
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string; kind: string; revision: number } | undefined;
         if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
         const convId = params.conversationId ?? row.conversation_id;
         assertConversationAudience(deps.db, deps.localUserId, convId);
         if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
         if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本/代码附件范围`);
-        const verified = readVerifiedCopy(row.blob_path, row.hash);
+        const verified = readVerifiedCopy(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
         if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
       }
       case 'attachment.listByConversation': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
@@ -1892,19 +1892,33 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           quote: z.string().max(500).optional(),
           lineFrom: z.number().int().min(1).optional(),
           lineTo: z.number().int().min(1).optional(),
+          expectedHash: z.string().length(64),
+          expectedRevision: z.number().int().min(1),
         }).parse(env.params);
         if (params.lineTo != null && params.lineFrom != null && params.lineTo < params.lineFrom) throw new DaemonCommandError('VALIDATION_INVALID', '行区间无效：lineTo < lineFrom');
-        const row = deps.db.prepare('SELECT id, conversation_id, kind, hash, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
-          | { id: string; conversation_id: string; kind: string; hash: string; revision: number } | undefined;
+        const row = deps.db.prepare('SELECT id, conversation_id, kind, hash, revision, blob_path FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; kind: string; hash: string; revision: number; blob_path: string } | undefined;
         if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
         assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
         if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）不支持评论（文本/代码/Markdown 首批）`);
+        // 提取文本（共享完整性路径——损坏副本拒绝评论）：行范围/选区按用户可见范围校验。
+        const verified = readVerifiedCopy(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        const lineCount = verified.copy.text.split(String.fromCharCode(10)).length;
+        if (params.lineFrom != null && params.lineFrom > lineCount) throw new DaemonCommandError('VALIDATION_INVALID', `行锚点越界：lineFrom=${params.lineFrom} 超出提取文本实际行数 ${lineCount}（截断时以预览所见为准）`);
+        if (params.lineTo != null && params.lineTo > lineCount) throw new DaemonCommandError('VALIDATION_INVALID', `行锚点越界：lineTo=${params.lineTo} 超出提取文本实际行数 ${lineCount}`);
+        if (params.quote != null && !verified.copy.text.includes(params.quote)) throw new DaemonCommandError('VALIDATION_INVALID', '引用选区不存在于提取文本——不实锚点拒绝');
         const tx = deps.db.transaction((): { commentId: string; anchoredRevision: number } => {
+          // 事务内重读核对（第二十八轮三：并发版本变化不被外层旧快照放行）：用户看到的版本==当前版本才锚定。
+          const now = deps.db.prepare('SELECT hash, revision FROM artifacts WHERE id = ?').get(row.id) as { hash: string; revision: number } | undefined;
+          if (now == null || now.hash !== params.expectedHash || now.revision !== params.expectedRevision) {
+            throw new DaemonCommandError('VERSION_CONFLICT', `附件版本已变化（用户看到 v${params.expectedRevision}/${params.expectedHash.slice(0, 8)}…，当前 v${now?.revision ?? '?'}/${(now?.hash ?? '').slice(0, 8)}…）——刷新预览后针对新版本评论`);
+          }
           const commentId = `ac_${randomUUID()}`;
           deps.db.prepare(`INSERT INTO attachment_comments (id, artifact_id, author_id, quote, line_from, line_to, body, artifact_hash, artifact_revision, created_at)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(commentId, row.id, deps.localUserId, params.quote ?? null, params.lineFrom ?? null, params.lineTo ?? null, params.body, row.hash, row.revision, Date.now());
-          return { commentId, anchoredRevision: row.revision };
+            .run(commentId, row.id, deps.localUserId, params.quote ?? null, params.lineFrom ?? null, params.lineTo ?? null, params.body, now.hash, now.revision, Date.now());
+          return { commentId, anchoredRevision: now.revision };
         });
         const r = run(tx);
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
@@ -1913,12 +1927,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // 评论列表（audience 同上）：逐条带 anchoredTo（锚定 hash/revision）+stale（当前资源
         // hash ≠ 锚定 hash=资源已更新——旧评论明确标旧，不漂移到新版行号）。
         const params = z.strictObject({ attachmentId: z.string().min(1) }).parse(env.params);
-        const row = deps.db.prepare('SELECT id, conversation_id, hash FROM artifacts WHERE id = ?').get(params.attachmentId) as
-          | { id: string; conversation_id: string; hash: string } | undefined;
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; revision: number } | undefined;
         if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
         assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
         const rows = deps.db.prepare('SELECT id, author_id, quote, line_from, line_to, body, artifact_hash, artifact_revision, created_at FROM attachment_comments WHERE artifact_id = ? ORDER BY created_at, rowid').all(params.attachmentId) as Array<{ id: string; author_id: string; quote: string | null; line_from: number | null; line_to: number | null; body: string; artifact_hash: string; artifact_revision: number; created_at: number }>;
-        return withCommandId({ ok: true, data: { currentHash: row.hash, items: rows.map((c) => ({ commentId: c.id, authorId: c.author_id, quote: c.quote, lineFrom: c.line_from, lineTo: c.line_to, body: c.body, anchoredTo: { hash: c.artifact_hash, revision: c.artifact_revision }, stale: c.artifact_hash !== row.hash, createdAt: c.created_at })) } });
+        return withCommandId({ ok: true, data: { currentHash: row.hash, items: rows.map((c) => ({ commentId: c.id, authorId: c.author_id, quote: c.quote, lineFrom: c.line_from, lineTo: c.line_to, body: c.body, anchoredTo: { hash: c.artifact_hash, revision: c.artifact_revision }, stale: c.artifact_hash !== row.hash || c.artifact_revision !== row.revision, createdAt: c.created_at })) } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK
