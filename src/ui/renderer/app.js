@@ -325,13 +325,23 @@ async function renderPendingList() {
     for (const b of p.blockedTasks ?? []) {
       rows.push({ label: `【${p.displayName}】被阻塞：${b.title}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
     }
+    // 待确认提醒触发（第二十四轮四）：正式确认入口——点击=reminder.confirm（经正式执行链派发）。
+    for (const w of p.reminderAwaits ?? []) {
+      rows.push({
+        label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminder_id}${w.missed_count > 0 ? `（合并 ${w.missed_count} 次错过）` : ''} → 确认执行`,
+        title: '点击确认后经正式执行链派发（system 来源，不伪装人类发言）；不确认=暂不执行',
+        projectId: p.projectId, conversationId: w.conversation_id, kind: 'reminder-await', reminderId: w.reminder_id, scheduledAt: w.scheduled_at,
+      });
+    }
   }
   if (state.navGeneration !== genAtRender) return; // 迟到响应不覆盖当前视图的待办区
-  nav.replaceChildren();
+  // 原子替换（第二十四轮一）：先在离屏 fragment 组装完成，再一次 replaceChildren——
+  // 中间不产生「标题在、条目空」的过渡可见态（此前逐步 append 依赖绘制时序）。
+  const frag = document.createDocumentFragment();
   const head = document.createElement('div');
   head.className = 'sidebar-sec';
   head.textContent = rows.length > 0 ? `共 ${rows.length} 项（全部显示）` : '暂无待办';
-  nav.append(head);
+  frag.append(head);
   for (const r of rows) {
     const btn = document.createElement('button');
     btn.className = 'room';
@@ -349,10 +359,166 @@ async function renderPendingList() {
         return;
       }
       if (r.kind === 'blocked' && r.taskId != null) location.hash = `task=${r.taskId}`;
+      if (r.kind === 'reminder-await' && r.reminderId != null) {
+        void (async () => {
+          try {
+            await command('reminder.confirm', { reminderId: r.reminderId, scheduledAt: r.scheduledAt });
+            showError('已确认执行——经正式执行链派发（完成后回复落在目标会话）');
+          } catch (e) { showError(`确认执行失败：${e.message}`); }
+          await renderPendingList();
+        })().catch(() => {});
+      }
     };
-    nav.append(btn);
+    frag.append(btn);
   }
+  nav.replaceChildren(frag);
 }
+
+/** 提醒管理面板（DEV-23 第二包；第二十四轮四）：全部可操作提醒（服务端 audience 过滤）——
+ * 计划/时区/owner/预算/下次触发/暂停原因+最近 occurrence 历史；操作=编辑（revision CAS）/
+ * 贪睡 1 天/取消/恢复（update 重算 next_at，错过的批不补跑）。纯管理面——执行经正式链。 */
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+async function renderReminderPanel() {
+  const nav = el('reminder-list');
+  if (nav == null) return;
+  let data;
+  try { data = await command('reminder.list', {}); } catch { return; }
+  const frag = document.createDocumentFragment();
+  const items = data.items ?? [];
+  if (items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = '暂无提醒（在私信会话点 ⏰ 设置每日提醒）';
+    frag.append(empty);
+    nav.replaceChildren(frag);
+    return;
+  }
+  for (const it of items) {
+    const box = document.createElement('div');
+    box.className = 'room';
+    box.style.display = 'block';
+    const sched = it.schedule ?? {};
+    const planText = sched.kind === 'once'
+      ? `一次 · ${sched.at != null ? new Date(sched.at).toLocaleString() : '?'}`
+      : sched.kind === 'weekly'
+        ? `每周${WEEKDAY_LABELS[sched.weekday] ?? '?'} ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`
+        : `每天 ${sched.time ?? '?'}（${it.timezone ?? 'UTC'}）`;
+    const budgetText = it.budgetLimit != null ? `预算 ${it.budgetLimit.sum} 次执行` : '无预算上限';
+    const statusText = it.status === 'active' ? (it.autoDispatch ? 'active·自动执行' : 'active·待确认') : `${it.status}${it.pausedReason != null ? `（${it.pausedReason}）` : ''}`;
+    const head = document.createElement('div');
+    head.textContent = `${it.title ?? it.reminderId} · ${planText} · ${budgetText} · ${statusText} · 下次 ${it.nextAt != null ? new Date(it.nextAt).toLocaleString() : '—'}`;
+    box.append(head);
+    const actions = document.createElement('div');
+    actions.className = 'git-row';
+    const mkBtn = (text, cls, fn, title) => {
+      const b = document.createElement('button');
+      b.className = cls;
+      b.textContent = text;
+      if (title != null) b.title = title;
+      b.onclick = () => void fn().catch(() => {});
+      return b;
+    };
+    const refresh = async () => { await renderReminderPanel(); await renderPendingList(); };
+    if (it.status === 'active') {
+      actions.append(mkBtn('贪睡1天', 'chip', async () => {
+        try { await command('reminder.snooze', { reminderId: it.reminderId, until: (it.nextAt ?? Date.now()) + 86_400_000 }); } catch (e) { showError(`贪睡失败：${e.message}`); }
+        await refresh();
+      }, '下次触发推迟一天（revision+1）'));
+    }
+    if (it.status === 'paused') {
+      actions.append(mkBtn('恢复', 'chip', async () => {
+        try { await command('reminder.update', { reminderId: it.reminderId, expectedRevision: it.revision, schedule: it.schedule }); } catch (e) { showError(`恢复失败：${e.message}`); }
+        await refresh();
+      }, '显式继续：重算下次触发（错过的批次不补跑；授权类暂停会在下次触发重查时再判定）'));
+    }
+    if (it.status === 'active' || it.status === 'paused') {
+      actions.append(mkBtn('取消', 'danger', async () => {
+        try { await command('reminder.cancel', { reminderId: it.reminderId }); } catch (e) { showError(`取消失败：${e.message}`); }
+        await refresh();
+      }, '取消后不再触发（不可复活；待确认触发同时作废）'));
+    }
+    box.append(actions);
+    // 编辑表单（details 展开式——revision CAS；once/daily/weekly+任意分钟+时区+自动执行）。
+    const edit = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = '编辑';
+    edit.append(summary);
+    const form = document.createElement('div');
+    form.className = 'git-row';
+    const titleInput = document.createElement('input');
+    titleInput.className = 'git-input';
+    titleInput.value = it.title ?? '';
+    titleInput.maxLength = 200;
+    titleInput.placeholder = '标题';
+    const kindSel = document.createElement('select');
+    for (const [v, label] of [['once', '一次'], ['daily', '每天'], ['weekly', '每周']]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      kindSel.append(o);
+    }
+    kindSel.value = sched.kind ?? 'daily';
+    const timeInput = document.createElement('input');
+    timeInput.className = 'git-input';
+    timeInput.placeholder = 'HH:mm（如 09:17）';
+    timeInput.value = sched.time ?? '';
+    kindSel.onchange = () => { timeInput.placeholder = kindSel.value === 'once' ? '未来时刻（ISO，如 2026-10-02T09:00）' : 'HH:mm（如 09:17）'; };
+    const weekdaySel = document.createElement('select');
+    WEEKDAY_LABELS.forEach((label, i) => {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = label;
+      weekdaySel.append(o);
+    });
+    weekdaySel.value = String(sched.weekday ?? 1);
+    const tzInput = document.createElement('input');
+    tzInput.className = 'git-input';
+    tzInput.placeholder = 'IANA 时区（缺省 UTC）';
+    tzInput.value = sched.tz ?? '';
+    const autoChk = document.createElement('input');
+    autoChk.type = 'checkbox';
+    autoChk.checked = it.autoDispatch === true;
+    const autoLabel = document.createElement('label');
+    autoLabel.style.marginLeft = '6px';
+    autoLabel.append(autoChk, document.createTextNode('自动执行（不勾选=到点待我确认）'));
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = '保存（revision CAS）';
+    saveBtn.onclick = () => void (async () => {
+      const kind = kindSel.value;
+      let schedule;
+      if (kind === 'once') {
+        const atText = timeInput.value.trim();
+        const atMs = Date.parse(atText);
+        if (!Number.isFinite(atMs) || atMs <= Date.now()) { showError('一次性提醒需填未来时刻（编辑框填 ISO 时刻）'); return; }
+        schedule = { kind: 'once', at: atMs };
+      } else {
+        if (!/^\d{1,2}:\d{2}$/.test(timeInput.value.trim())) { showError('时刻需为 HH:mm'); return; }
+        schedule = kind === 'weekly' ? { kind, weekday: Number(weekdaySel.value), time: timeInput.value.trim() } : { kind, time: timeInput.value.trim() };
+        if (tzInput.value.trim().length > 0) schedule.tz = tzInput.value.trim();
+      }
+      try {
+        await command('reminder.update', { reminderId: it.reminderId, expectedRevision: it.revision, title: titleInput.value.trim().length > 0 ? titleInput.value.trim() : undefined, schedule, autoDispatch: autoChk.checked });
+        showError('已保存（下次触发已按新计划重算）');
+      } catch (e) { showError(`保存失败：${e.message}`); }
+      await refresh();
+    })().catch(() => {});
+    form.append(titleInput, kindSel, timeInput, weekdaySel, tzInput, autoLabel, saveBtn);
+    edit.append(form);
+    box.append(edit);
+    // 最近触发历史（occurrence——含合并/拒绝原因，如实呈现）。
+    const hist = it.occurrences ?? [];
+    if (hist.length > 0) {
+      const h = document.createElement('div');
+      h.className = 'meta';
+      h.textContent = `最近触发：${hist.slice(0, 5).map((o) => `${new Date(o.scheduled_at).toLocaleString()}→${o.outcome ?? o.status}${o.missed_count > 0 ? `（合并${o.missed_count}）` : ''}`).join('；')}`;
+      box.append(h);
+    }
+    frag.append(box);
+  }
+  nav.replaceChildren(frag);
+}
+
 
 async function renderDm() {
   // 固定请求目标+导航代次（第二十三轮一）：project+conversation+view 三元组在**每次 await
@@ -771,7 +937,9 @@ async function reviewTask(decision, note) {
   if (snap == null || pending == null) return; // 无待验收版本（快照已过期——重渲染后按钮收起）
   try {
     const r = await command('task.review', {
-      taskId: snap.taskId, deliveryId: pending.id, deliveryRevision: pending.revision, decision,
+      taskId: snap.taskId, deliveryId: pending.id, deliveryRevision: pending.revision,
+      manifestHash: pending.manifest_hash ?? pending.manifestHash ?? '', // 三重绑定（第二十三轮三）：服务端必填核对
+      decision,
       ...(decision === 'changes_requested' && note != null ? { note } : {}),
     });
     state.reviewConfirm = `验收已记录：交付 ${r.reviewStatus}（第 ${r.deliveryRevision} 版）· 任务 ${r.taskStatusAfter}`;
@@ -1844,7 +2012,7 @@ function schedulePoll() {
       el('conn-state').textContent = '通信异常';
       el('conn-state').classList.add('err');
     });
-    if (state.pollTick % 4 === 0) { void renderDmSidebar().catch(() => {}); void renderPendingList().catch(() => {}); } // 侧栏未读/执行态+待我处理低频刷新（纯读）
+    if (state.pollTick % 4 === 0) { void renderDmSidebar().catch(() => {}); void renderPendingList().catch(() => {}); if (state.pollTick % 20 === 0) void renderReminderPanel().catch(() => {}); } // 侧栏未读/执行态+待我处理低频刷新+提醒面板更低频（纯读）
     // 低频复查门禁（运行中新落门禁的场景极少；启动/重连另有触发）。
     if (state.pollTick % 8 === 0) void refreshGate().catch(() => {});
   }, 1500);
@@ -1914,9 +2082,8 @@ el('dm-record').onclick = () => {
 // DM 版本验收（第二十轮一补齐绑定——第十九轮补丁静默丢失，按钮无 onclick）：accept 绑定
 // 展示时 deliveryId/revision；reject 意见必填（行内输入——不用 prompt，避免阻塞）。
 // 重命名（补齐绑定）：expectedRevision=展示时 revision；不换对端/不重置历史或 session。
-// DEV-23 首包最小入口：每日提醒（每天此刻唤醒该成员）——经 reminder.schedule 正式命令
-//（服务端算 next_at/UTC 存储；停止/归档/移出由调度器按合同暂停）。完整管理页（列表/
-// snooze/循环编辑）为 DEV-23 后续。
+// DEV-23（第二十四轮四）：每日提醒入口——经 reminder.schedule 正式命令（任意分钟可靠；
+// 默认**不**自动执行：到点后在「待我处理」确认——autoDispatch 需在提醒管理里显式勾选）。
 el('dm-remind-btn').onclick = () => void (async () => {
   if (state.projectId == null || state.openDmId == null || state.dmActive == null) return;
   const now = new Date();
@@ -1927,7 +2094,7 @@ el('dm-remind-btn').onclick = () => void (async () => {
       ownerMemberId: state.dmActive.peerMemberId, title: `每日提醒：${state.dmActive.peerDisplayName ?? '会话'}`,
       schedule: { kind: 'daily', time },
     });
-    showError(`已设每日提醒（${time} 本地时刻）——下次 ${new Date(r.nextAt).toLocaleString()}`);
+    showError(`已设每日提醒（${time} 本地时刻）——下次 ${new Date(r.nextAt).toLocaleString()}；到点后在「待我处理」确认执行`);
   } catch (e) { showError(`设置提醒失败：${e.message}`); }
 })().catch(() => {});
 el('dm-rename-btn').onclick = () => void (async () => {

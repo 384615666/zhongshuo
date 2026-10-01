@@ -19,6 +19,13 @@
       <nav id="dm-list" class="rooms"></nav>
       <div class="sidebar-sec">待我处理</div>
       <nav id="pending-list" class="rooms" title="待我验收任务与未读私信（权威业务状态汇总——读卡片≠完成事项）"></nav>
+      <details id="reminder-panel" class="help-panel">
+        <summary>提醒管理</summary>
+        <div class="help-body">
+          <div class="meta">一次/每日/每周计划、下次触发、暂停原因与历史触发（最近 5 条）；编辑/贪睡/取消/恢复。服务端按 audience 过滤——只显示可操作提醒。到点默认**待确认**（在「待我处理」确认后经正式执行链派发）；通知面=会话内系统消息+待我处理入口（应用内通知——不接桌面系统通知，如实）。状态未变且无可行动项保持安静。</div>
+          <nav id="reminder-list" class="rooms"></nav>
+        </div>
+      </details>
       <div id="dm-member-picker" class="hidden"></div>
       <div class="sidebar-foot">
         <details id="project-settings" class="help-panel">
