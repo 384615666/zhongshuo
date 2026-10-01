@@ -508,6 +508,10 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
         // 优雅关闭未完成：走强制路径（恢复依据已持久化），退出码区分。
         result = await daemon.stop({ force: true });
       }
+      // 文档解析子进程池收拢（第二十九轮一：daemon.stop 同链——杀解析子进程+拒排队任务，
+      // exit 确认后才继续退出，不留孤儿解析进程）。
+      const { disposeParsePool } = await import('./parsePool.ts');
+      await disposeParsePool().catch(() => { /* 已收拢/未启动 */ });
       try { rmSync(pidPath, { force: true }); } catch { /* 退出路径不因此失败 */ }
       // 结构化停机事实尾行（第十四轮三：宿主/UI 按事实呈现——强制≠优雅成功、未确认如实）。
       process.stderr.write(`[zhongshuo-daemon] stop-result ${JSON.stringify({

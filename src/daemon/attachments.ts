@@ -7,7 +7,7 @@
  * - UTF-8 **字节**截断（保留完整字符）：中文 3 字节/字符，字符串 slice 按字符数截会远超字节
  *   预算（64KB 规则原实现即此缺陷）。截断说明分别给出原始大小/提取大小。
  */
-import { readFileSync } from 'node:fs';
+import { openSync, readSync, closeSync, fstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -88,11 +88,29 @@ export function parseImageMeta(buf: Buffer): ImageMeta | null {
   if (buf.slice(0, 4).toString('latin1') === 'GIF8' && (buf[4] === 0x37 || buf[4] === 0x39) && buf[5] === 0x61) {
     return { mime: 'image/gif', width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
   }
-  // WebP：RIFF....WEBP；VP8X（24bit 宽高-1 @24/@27）或 VP8/VP8L 简化取 VP8X，缺 VP8X=损坏（动画/基础帧至少有其一——首包按 VP8X 严格，简单帧回落 null）
+  // WebP：RIFF....WEBP——VP8X（扩展头 24bit 宽高-1 @24/@27）/ VP8（有损帧：帧头后同步码
+  // 0x9D012A，宽高 LE14 @26/@28）/ VP8L（无损：签名 0x2F 后 14bit 宽-1/高-1 位打包）。
+  // 三种首块都取宽高（第二十九轮三：VP8/VP8L 是有效 WebP——不因缺 VP8X 误报损坏）。
   if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') {
-    if (buf.slice(12, 16).toString('latin1') === 'VP8X' && buf.length >= 30) {
+    const chunk = buf.slice(12, 16).toString('latin1');
+    if (chunk === 'VP8X' && buf.length >= 30) {
       const w = 1 + ((buf[24]! | (buf[25]! << 8) | (buf[26]! << 16)) & 0xffffff);
       const h = 1 + ((buf[27]! | (buf[28]! << 8) | (buf[29]! << 16)) & 0xffffff);
+      return { mime: 'image/webp', width: w, height: h };
+    }
+    if (chunk === 'VP8 ' && buf.length >= 30) {
+      // VP8 未编码帧头：3 字节帧标签 + 3 字节同步码（0x9D 0x01 0x2A）+ 宽/高 LE14。
+      if (buf[23] !== 0x9d || buf[24] !== 0x01 || buf[25] !== 0x2a) return null; // 同步码缺失=损坏
+      const w = buf.readUInt16LE(26) & 0x3fff;
+      const h = buf.readUInt16LE(28) & 0x3fff;
+      if (w === 0 || h === 0) return null;
+      return { mime: 'image/webp', width: w, height: h };
+    }
+    if (chunk === 'VP8L' && buf.length >= 21) {
+      if (buf[20] !== 0x2f) return null; // 无损签名
+      const bits = buf.readUInt32LE(21);
+      const w = (bits & 0x3fff) + 1;
+      const h = ((bits >> 14) & 0x3fff) + 1;
       return { mime: 'image/webp', width: w, height: h };
     }
     return null;
@@ -110,56 +128,102 @@ export function validateImageBuffer(buf: Buffer): { ok: true; meta: ImageMeta } 
   return { ok: true, meta };
 }
 
-/** 二进制获准副本读取（图片原件——内容寻址 {hash}.bin）：实根+sha256 核对同文本路径；
- * 无截断（原件全量——渲染由 <img> 完成）。 */
-export function readVerifiedBlob(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
+// ---------- 托管副本读取核心（第二十九轮二加固）----------
+// 三层路径身份 + 受控句柄完整性读取：
+// 1) 字符串层：内容寻址文件名 + 父目录 blobstore + 落在本次 appData 托管根（resolve）；
+// 2) **实际文件身份层**：realpathSync 全程核对——路径任何组件是符号链接/junction（含
+//    blobstore 根本身被换成指向外部的 junction）都检出（resolve 只做字符串归一化，不解析
+//    链接——第二十九轮二修正）；realpath(resolved)≠resolved 或 realpath(根)≠resolve(根)
+//    =链接越界拒绝；
+// 3) **受控句柄层**：openSync 一次打开→fstat→从该 fd 读全部字节→hash **实际读到的字节**——
+//    读取期间路径被替换不影响本句柄内容（内容不符=corrupted 拒绝，绝不返回未核对数据）。
+const STORE_READ_MAX_BYTES = 64 * 1024 * 1024; // 单副本读取硬界（现有各 kind 上限远小于此）
+
+function readStoreBytes(
+  blobPath: string,
+  expectedHash: string,
+  storeRoot: string | undefined,
+  ext: 'txt' | 'bin',
+): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
   const resolved = resolve(blobPath);
-  const nameOk = basename(resolved) === `${expectedHash}.bin`;
+  const nameOk = basename(resolved) === `${expectedHash}.${ext}`;
   const layoutOk = nameOk && basename(dirname(resolved)) === 'blobstore';
-  const rootOk = storeRoot == null ? true : resolved === resolve(join(storeRoot, `${expectedHash}.bin`));
+  const rootOk = storeRoot == null ? true : resolved === resolve(join(storeRoot, `${expectedHash}.${ext}`));
   if (!nameOk || !layoutOk || !rootOk) {
-    return { ok: false, error: { code: 'attachment-out-of-store', message: `图片副本路径越出托管存储（${blobPath}${storeRoot != null ? `；本次存储根=${storeRoot}` : ''}）——拒绝读取` } };
+    return { ok: false, error: { code: 'attachment-out-of-store', message: `附件副本路径越出托管存储（${blobPath}${storeRoot != null ? `；本次存储根=${storeRoot}` : ''}）——拒绝读取` } };
   }
-  let raw: Buffer;
+  // 实际文件身份（第二十九轮二）：realpath 与字符串 resolve 必须一致——任何组件（含
+  // blobstore 根自身）是 symlink/junction 即检出（外部同名目录/链接越界不靠字符串可比对）。
+  if (storeRoot != null) {
+    let realStore: string;
+    let realBlob: string;
+    try {
+      realStore = realpathSync(resolve(storeRoot));
+      realBlob = realpathSync(resolved);
+    } catch {
+      return { ok: false, error: { code: 'attachment-unreadable', message: `附件副本不可读（${blobPath}）——如实报错，不以路径冒充已读` } };
+    }
+    if (realStore !== resolve(storeRoot) || realBlob !== resolved) {
+      return { ok: false, error: { code: 'attachment-out-of-store', message: `托管存储路径含符号链接/junction（realpath ${realBlob} ≠ ${resolved} 或存储根被链接）——按实际文件身份拒绝，不读链接目标` } };
+    }
+  }
+  // 受控句柄读取：open→fstat→读 fd→核对实际字节（读取期间被替换=内容不符拒绝）。
+  let fd: number;
   try {
-    raw = readFileSync(resolved);
+    fd = openSync(resolved, 'r');
   } catch {
-    return { ok: false, error: { code: 'attachment-unreadable', message: `图片副本不可读（${blobPath}）——如实报错，不以路径冒充已读` } };
+    return { ok: false, error: { code: 'attachment-unreadable', message: `附件副本不可读（${blobPath}）——如实报错，不以路径冒充已读` } };
   }
-  const actualHash = createHash('sha256').update(raw).digest('hex');
-  if (actualHash !== expectedHash) {
-    return { ok: false, error: { code: 'attachment-corrupted', message: `图片副本完整性不符（sha256 ${actualHash.slice(0, 12)}… ≠ 记录 ${expectedHash.slice(0, 12)}…）——副本可能被改写` } };
+  try {
+    const size = fstatSync(fd).size;
+    if (size > STORE_READ_MAX_BYTES) {
+      return { ok: false, error: { code: 'attachment-corrupted', message: `副本体积 ${size}B 超读取硬界 ${STORE_READ_MAX_BYTES}B——拒绝` } };
+    }
+    const raw = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const n = readSync(fd, raw, read, size - read, read);
+      if (n <= 0) break;
+      read += n;
+    }
+    if (read !== size) {
+      return { ok: false, error: { code: 'attachment-corrupted', message: `副本读取不完整（${read}/${size}B）——拒绝` } };
+    }
+    const actualHash = createHash('sha256').update(raw).digest('hex');
+    if (actualHash !== expectedHash) {
+      return { ok: false, error: { code: 'attachment-corrupted', message: `附件副本完整性不符（sha256 ${actualHash.slice(0, 12)}… ≠ 记录 ${expectedHash.slice(0, 12)}…）——副本可能被改写，拒绝以旧 hash 交付新内容` } };
+    }
+    return { ok: true, raw };
+  } finally {
+    try { closeSync(fd); } catch { /* 尽力关闭 */ }
   }
-  return { ok: true, raw };
+}
+
+/** 二进制获准副本读取（图片/PDF 原件——内容寻址 {hash}.bin）：实根+实身份+sha256 核对；
+ * 无截断（原件全量——渲染由 renderer 完成）。 */
+export function readVerifiedBlob(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
+  const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'bin');
+  if (!r.ok) {
+    // 图片类历史文案口径保留（消息含「图片」便于定位）。
+    const message = r.error.code === 'attachment-corrupted' ? r.error.message.replace('附件副本', '图片副本') : r.error.message;
+    return { ok: false, error: { ...r.error, message } };
+  }
+  return r;
 }
 
 /**
  * 读获准副本并核对完整性。expectedHash=artifacts.hash（上传时内容寻址写入）。
  * storeRoot（可选，第二十八轮三）：**本次 appData 的实际托管根**（{appData}/blobstore）——
- * 提供时路径必须 resolve 后落在该根内（外部同名 blobstore 目录与符号链接越界都检出——
- * resolve 解析链接目标）；缺省降级为布局校验（父目录名 blobstore+内容寻址文件名）。
- * 失败三态：out-of-store（路径越界）、unreadable（读失败）、corrupted（字节的 sha256 ≠
- * 记录 hash——副本被改写）。
+ * 提供时路径必须 resolve 后落在该根内；第二十九轮二再加 realpath 实际文件身份核对
+ * （symlink/junction 越界与「blobstore 根被换成外部目录的 junction」都按实际身份检出）
+ * 与受控句柄读取（fd 一次打开读全部字节——读取期间被替换=内容不符拒绝）。
+ * 失败三态：out-of-store（路径越界/链接越界）、unreadable（读失败）、corrupted（实际
+ * 读取字节的 sha256 ≠ 记录 hash——副本被改写）。
  */
 export function readVerifiedCopy(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; copy: VerifiedCopy } | { ok: false; error: AttachmentReadError } {
-  const resolved = resolve(blobPath);
-  const nameOk = basename(resolved) === `${expectedHash}.txt`;
-  const layoutOk = nameOk && basename(dirname(resolved)) === 'blobstore';
-  const rootOk = storeRoot == null ? true : resolved === resolve(join(storeRoot, `${expectedHash}.txt`));
-  if (!nameOk || !layoutOk || !rootOk) {
-    return { ok: false, error: { code: 'attachment-out-of-store', message: `附件副本路径越出托管存储（${blobPath}${storeRoot != null ? `；本次存储根=${storeRoot}` : ''}）——拒绝读取` } };
-  }
-  let raw: Buffer;
-  try {
-    raw = readFileSync(resolved);
-  } catch {
-    return { ok: false, error: { code: 'attachment-unreadable', message: `附件副本不可读（${blobPath}）——如实报错，不以路径冒充已读` } };
-  }
-  const actualHash = createHash('sha256').update(raw).digest('hex');
-  if (actualHash !== expectedHash) {
-    return { ok: false, error: { code: 'attachment-corrupted', message: `附件副本完整性不符（sha256 ${actualHash.slice(0, 12)}… ≠ 记录 ${expectedHash.slice(0, 12)}…）——副本可能被改写，拒绝以旧 hash 注入新文本` } };
-  }
-  const text = raw.toString('utf8');
+  const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'txt');
+  if (!r.ok) return r;
+  const text = r.raw.toString('utf8');
   const cut = truncateUtf8Bytes(text, ATT_EXCERPT_BYTES);
-  return { ok: true, copy: { text: cut.text, originalBytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, hash: expectedHash } };
+  return { ok: true, copy: { text: cut.text, originalBytes: r.raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, hash: expectedHash } };
 }

@@ -56,6 +56,9 @@ const daemonDir = join(appDir, 'daemon');
 mkdirSync(daemonDir);
 cpSync(daemonCjs, join(daemonDir, 'daemon.cjs'));
 cpSync(join(repo, 'dist', 'pack', 'pdf.worker.mjs'), join(daemonDir, 'pdf.worker.mjs')); // pdfjs worker 随包（第二十八轮五）
+// 文档解析子进程 + pdfjs CMap 资源随包（第二十九轮一/三：解析边界独立产物；CJK CMap 离线）。
+cpSync(join(repo, 'dist', 'pack', 'parse-worker.cjs'), join(daemonDir, 'parse-worker.cjs'));
+cpSync(join(repo, 'dist', 'pack', 'cmaps'), join(daemonDir, 'cmaps'), { recursive: true });
 mkdirSync(join(daemonDir, 'node'), { recursive: true });
 cpSync(process.execPath, join(daemonDir, 'node', process.platform === 'win32' ? 'node.exe' : 'node'));
 const nm = join(daemonDir, 'node_modules');

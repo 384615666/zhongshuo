@@ -1,0 +1,20 @@
+/** 共享 JS 样本工厂的宽松类型面（测试/验证器导入用——运行期无约束）。 */
+export declare function makeAsciiPdf(pages: string[][]): Buffer;
+export declare function makeCjkToUnicodePdf(pages: string[][]): Buffer;
+export declare function makeCmapPdf(pages: string[][]): Buffer;
+export declare function makeImagePdf(pages: Array<{ w: number; h: number; color: [number, number, number] }>): Buffer;
+export declare function makeEncryptedPdf(lines: string[], userPassword: string): Buffer;
+export declare function makeDocx(input: { paras?: string[]; table?: string[][] }): Buffer;
+export type XlsxCell = string | number | null | { formula: string; cached?: string } | { date: number } | { formula?: undefined; cached?: undefined; date?: undefined };
+export declare function makeXlsx(sheets: Array<{ name: string; rows: XlsxCell[][]; merges?: string[] }>): Buffer;
+export declare function makePptx(slides: Array<{ texts?: string[]; notes?: string | null }>): Buffer;
+export declare function makeMacroDocx(): Buffer;
+export declare function makeTraversalZip(): Buffer;
+export declare function makeManyEntryZip(): Buffer;
+export declare function makePng(w: number, h: number, rgb?: [number, number, number]): Buffer;
+export declare function makeJpegHeaderOnly(w: number, h: number): Buffer;
+export declare function makeGifHeaderOnly(w: number, h: number): Buffer;
+export declare function makeWebpVp8HeaderOnly(w: number, h: number): Buffer;
+export declare function makeWebpVp8lHeaderOnly(w: number, h: number): Buffer;
+export declare function makeCsvText(rows: unknown[][], delim?: string): Buffer;
+export declare function zipToBuffer(files: Record<string, Buffer | string>): Buffer;
