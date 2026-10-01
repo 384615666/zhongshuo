@@ -32,6 +32,13 @@ import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
 import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ManagedJobObservation, type ProbeOutcome } from './processRegistry.ts';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
+ * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
+const ATT_MAX_BYTES = 256 * 1024;
+const ATT_EXCERPT_BYTES = 64 * 1024;
 
 const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleTurn: _settleTurn };
 import { z } from 'zod';
@@ -462,10 +469,18 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           const target = params.target;
           if (target.kind === 'dm') {
             // 私信发送（DEV-22；R4 §2.3/§4.6）：mentions 必空（无 @ 派工）；record_only 只保存；
-            // agent 对端=dm_turn 内部执行（串行/排队）；附件接口与 DEV-24 衔接——未实施前明确拒绝。
+            // 附件=DEV-24 文本首包（第二十六轮五）：attachmentRefs=artifacts.id（上传时已校验
+            // audience+归档——此处再核归属会话一致），消息-附件关联同事务落 message_attachments。
             if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
+            const attIds: string[] = [];
             if (params.attachmentRefs != null && params.attachmentRefs.length > 0) {
-              throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '私信附件随 DEV-24 实施（接口字段已预留）——当前明确拒绝，不以假数据冒充');
+              for (const attId of params.attachmentRefs) {
+                const att = deps.db.prepare('SELECT conversation_id, kind FROM artifacts WHERE id = ?').get(attId) as { conversation_id: string; kind: string } | undefined;
+                if (att == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${attId}`);
+                if (att.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `仅文本附件（首包）——${attId} 为 ${att.kind}`);
+                if (att.conversation_id !== target.conversationId) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 拒绝）');
+                attIds.push(attId);
+              }
             }
             const conv = dmConversationOf(deps.db, target.conversationId);
             if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
@@ -486,6 +501,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                 intent: params.intent,
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
+              for (const attId of attIds) {
+                deps.db.prepare('INSERT INTO message_attachments (id, message_id, artifact_id, display_name, source_hash) VALUES (?, ?, ?, ?, ?)')
+                  .run(`matt_${randomUUID()}`, r.messageId, attId,
+                    (deps.db.prepare('SELECT source_name FROM artifacts WHERE id = ?').get(attId) as { source_name: string | null }).source_name ?? attId,
+                    (deps.db.prepare('SELECT hash FROM artifacts WHERE id = ?').get(attId) as { hash: string }).hash);
+              }
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -1664,18 +1685,22 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           pageSize: z.number().int().min(1).max(50).default(20),
         }).parse(env.params);
         if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        // 日期按**用户本地时区**解释（第二十六轮三：界面日期选择器即本地日——无 Z 后缀解析为
+        // 本地午夜；toDay 含当日。UTC 日边界不冒充用户「当日」——北京时间凌晨边界用例锁定）。
+        const localDayMs = (day: string, endExclusive = false): number => {
+          const t = new Date(`${day}T00:00:00`).getTime(); // 本地午夜（无 Z）
+          if (!Number.isFinite(t)) throw new DaemonCommandError('VALIDATION_INVALID', `日期无法解析：${day}`);
+          return endExclusive ? t + 86_400_000 : t;
+        };
         const escapeLike = (raw: string): string => raw.replace(/[\\%_]/g, (ch) => `\\${ch}`);
         const pattern = `%${escapeLike(params.text)}%`;
-        const fromMs = params.fromDay != null ? Date.parse(`${params.fromDay}T00:00:00Z`) : null;
-        const toMs = params.toDay != null ? Date.parse(`${params.toDay}T00:00:00Z`) + 86_400_000 : null; // 含当日
-        if (fromMs != null && !Number.isFinite(fromMs)) throw new DaemonCommandError('VALIDATION_INVALID', 'fromDay 无法解析');
-        if (toMs != null && !Number.isFinite(toMs)) throw new DaemonCommandError('VALIDATION_INVALID', 'toDay 无法解析');
+        const fromMs = params.fromDay != null ? localDayMs(params.fromDay) : null;
+        const toMs = params.toDay != null ? localDayMs(params.toDay, true) : null;
         // 作者过滤：显示名→成员 id 集（跨项目同名都收——文本匹配如实）。
         const authorIds = params.authorDisplayName != null
           ? (deps.db.prepare('SELECT id FROM project_members WHERE display_name = ?').all(params.authorDisplayName) as Array<{ id: string }>).map((r) => r.id)
           : null;
         const audienceFilter = ` AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))`;
-        const scopeFilter = params.scope === 'project' ? ' AND m.project_id = ?' : '';
         const convFilter = params.conversationId != null ? ' AND m.conversation_id = ?' : '';
         const authorFilter = authorIds != null ? ` AND m.author_id IN (${authorIds.map(() => '?').join(',') || "''"})` : '';
         const dateFilter = (fromMs != null ? ' AND m.created_at >= ?' : '') + (toMs != null ? ' AND m.created_at < ?' : '');
@@ -1698,39 +1723,101 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         let messages: Array<Record<string, unknown>> = [];
         let threads: Array<Record<string, unknown>> = [];
         let tasks: Array<Record<string, unknown>> = [];
+        // 过滤一致性（第二十六轮三）：作者/会话/日期过滤对**全部类型统一生效**（线程=锚消息
+        // 作者/会话/创建时刻；任务=根消息作者/会话/创建时刻——任务标题命中但锚消息不符筛选
+        // 时不混入 kind=all）。各类型 JOIN 根消息 m 统一承载过滤列。
+        const scopeOnJoin = params.scope === 'project' ? ' AND m.project_id = ?' : '';
         if (params.kind === 'all' || params.kind === 'message') {
           messages = (deps.db.prepare(
             `SELECT m.id, m.project_id, p.display_name AS project_name, m.conversation_id, m.thread_id, m.conversation_seq, m.created_at, m.author_type, m.author_id, json_extract(m.body_json, '$.text') AS text
              FROM messages m JOIN conversations c ON c.id = m.conversation_id JOIN projects p ON p.id = m.project_id
              WHERE (json_extract(m.body_json, '$.text') LIKE ? COLLATE NOCASE ESCAPE '\\'
-                    OR EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.display_name LIKE ? COLLATE NOCASE ESCAPE '\\'))${audienceFilter}${scopeFilter}${convFilter}${authorFilter}${dateFilter}
+                    OR EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.display_name LIKE ? COLLATE NOCASE ESCAPE '\\'))${audienceFilter}${scopeOnJoin}${convFilter}${authorFilter}${dateFilter}
              ORDER BY m.created_at DESC, m.id DESC LIMIT ? OFFSET ?`,
           ).all(pattern, pattern, ...bind(true), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; thread_id: string | null; conversation_seq: number; created_at: number; author_type: string; author_id: string; text: string | null }>)
             .map((r) => ({ kind: 'message', messageId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, threadId: r.thread_id, seq: r.conversation_seq, createdAt: r.created_at, authorType: r.author_type, authorId: r.author_id, snippet: snippetOf(String(r.text ?? '')), locate: `#msg=${r.id}` }));
         }
         if (params.kind === 'all' || params.kind === 'thread') {
-          const threadBind: unknown[] = [pattern, deps.localUserId];
-          if (params.scope === 'project') threadBind.push(params.projectId!);
-          if (fromMs != null) threadBind.push(fromMs);
-          if (toMs != null) threadBind.push(toMs);
           threads = (deps.db.prepare(
-            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.root_task_id, m.created_at, json_extract(m.body_json, '$.text') AS text
-             FROM conversation_threads t JOIN messages m ON m.id = t.anchor_message_id JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
-             WHERE json_extract(m.body_json, '$.text') LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}${dateFilter}
+            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.root_task_id, t.anchor_message_id, m.created_at, m.author_id, json_extract(m.body_json, '$.text') AS text
+             FROM conversation_threads t
+             JOIN messages m ON m.id = t.anchor_message_id
+             JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
+             WHERE json_extract(m.body_json, '$.text') LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${scopeOnJoin}${convFilter}${authorFilter}${dateFilter}
              ORDER BY m.created_at DESC, t.id DESC LIMIT ? OFFSET ?`,
-          ).all(...threadBind, pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; root_task_id: string | null; created_at: number; text: string | null }>)
-            .map((r) => ({ kind: 'thread', threadId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, taskId: r.root_task_id, createdAt: r.created_at, snippet: snippetOf(String(r.text ?? '')), locate: r.root_task_id != null ? `#task=${r.root_task_id}` : `#msg=${(deps.db.prepare('SELECT anchor_message_id FROM conversation_threads WHERE id = ?').get(r.id) as { anchor_message_id: string }).anchor_message_id}` }));
+          ).all(pattern, ...bind(true), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; root_task_id: string | null; anchor_message_id: string; created_at: number; author_id: string; text: string | null }>)
+            .map((r) => ({ kind: 'thread', threadId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, taskId: r.root_task_id, createdAt: r.created_at, snippet: snippetOf(String(r.text ?? '')), locate: r.root_task_id != null ? `#task=${r.root_task_id}` : `#msg=${r.anchor_message_id}` }));
         }
         if (params.kind === 'all' || params.kind === 'task') {
+          // 任务过滤统一（第二十六轮三）：范围/会话按任务自身列；作者/日期按**根消息**
+          // （LEFT JOIN——无根消息的任务仅在不设作者/日期过滤时可见；设过滤时无法匹配=如实排除）。
           tasks = (deps.db.prepare(
-            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.title, t.status, t.rowid
-             FROM tasks t JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
-             WHERE t.title LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}
+            `SELECT t.id, t.project_id, p.display_name AS project_name, t.conversation_id, t.title, t.status, m.created_at, m.author_id
+             FROM tasks t
+             LEFT JOIN messages m ON m.id = t.root_message_id
+             JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
+             WHERE t.title LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}${params.conversationId != null ? ' AND t.conversation_id = ?' : ''}${authorFilter}${dateFilter}
              ORDER BY t.rowid DESC LIMIT ? OFFSET ?`,
-          ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string }>)
-            .map((r) => ({ kind: 'task', taskId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, title: r.title, status: r.status, locate: `#task=${r.id}` }));
+          ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : []), ...(params.conversationId != null ? [params.conversationId] : []), ...(authorIds ?? []), ...(fromMs != null ? [fromMs] : []), ...(toMs != null ? [toMs] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string; created_at: number | null; author_id: string | null }>)
+            .map((r) => ({ kind: 'task', taskId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, title: r.title, status: r.status, createdAt: r.created_at, authorId: r.author_id, locate: `#task=${r.id}` }));
         }
-        return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）' } });
+        return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）；日期按本机时区解释' } });
+      }
+      case 'attachment.uploadText': {
+        // DEV-24 文本/Markdown 首包（第二十六轮五）——能力①保存副本：内容寻址落应用数据区
+        //（{appData}/blobstore/{hash}.txt——不在用户项目目录生成副本）；artifacts 持久
+        // hash/版本（revision）/来源文件名/conversation audience；同文件不同内容=不同资源。
+        // 规则：utf-8（BOM 容忍）；含 NUL 控制字节=二进制拒绝；>256KB 拒绝；>64KB 保存全文
+        // 但预览/注入截断（truncated+originalBytes 如实注明）。
+        const params = z.strictObject({
+          conversationId: z.string().min(1),
+          filename: z.string().min(1).max(200),
+          content: z.string().min(1).max(600_000),
+        }).parse(env.params);
+        const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        if (/[\u0000-\u0008\u000E-\u001F]/.test(params.content)) throw new DaemonCommandError('VALIDATION_INVALID', '内容含二进制控制字节——不是文本附件（七类二进制随后续批次）');
+        const bytes = Buffer.byteLength(params.content, 'utf8');
+        if (bytes > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `文件大小 ${bytes}B 超过文本附件上限 ${ATT_MAX_BYTES}B（明确规则：不静默截断保存）`);
+        const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+        if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
+        const hash = createHash('sha256').update(params.content, 'utf8').digest('hex');
+        const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
+        mkdirSync(blobRoot, { recursive: true });
+        writeFileSync(join(blobRoot, `${hash}.txt`), params.content, 'utf8'); // 副本（内容寻址——同内容不重复）
+        const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; truncated: boolean; originalBytes: number } => {
+          const attachmentId = `art_${randomUUID()}`;
+          deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
+                           VALUES (?, ?, ?, ?, 'text_file', 1, ?, ?, ?, ?)`)
+            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, hash, join(blobRoot, `${hash}.txt`), params.filename, Date.now());
+          return { attachmentId, hash, bytes, truncated: bytes > ATT_EXCERPT_BYTES, originalBytes: bytes };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'attachment.previewText': {
+        // 能力②预览+③提取正文：读**获准副本**（blob_path——原文件变化不改变已保存版本）；
+        // audience：归属会话（或本地用户可达）——跨会话/他人 DM 拒绝。截断如实注明。
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string; kind: string } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        if (row.kind !== 'text_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本首包范围`);
+        let text: string;
+        try { text = readFileSync(row.blob_path, 'utf8'); } catch {
+          throw new DaemonCommandError('STORAGE_UNAVAILABLE', `副本不可读（${row.blob_path}）——如实报错，不以路径冒充已读`);
+        }
+        const originalBytes = Buffer.byteLength(text, 'utf8');
+        const truncated = originalBytes > ATT_EXCERPT_BYTES;
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, hash: row.hash, text: truncated ? text.slice(0, ATT_EXCERPT_BYTES) : text, truncated, originalBytes, excerptBytes: ATT_EXCERPT_BYTES } });
+      }
+      case 'attachment.listByConversation': {
+        const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
+        assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        const rows = deps.db.prepare(`SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.created_at FROM artifacts a WHERE a.conversation_id = ? AND a.kind = 'text_file' ORDER BY a.rowid DESC`).all(params.conversationId) as Array<{ id: string; source_name: string; hash: string; revision: number; kind: string; created_at: number }>;
+        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ attachmentId: r.id, filename: r.source_name, hash: r.hash, revision: r.revision, createdAt: r.created_at })) } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK
@@ -1803,6 +1890,75 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: { items } });
       }
+      case 'board.view': {
+        // DEV-19 看板首包（第二十六轮四）：纯读聚合——复用正式任务/运行/交付数据（不建新表，
+        // 不改任务状态——已有动作只接正式命令，看板不可拖动改库）。卡片保留项目/房间/taskId/
+        // 线程身份（同名房间按 roomId 区分、同号任务按 taskId）；dm_turn 不进房间看板；
+        // 他人 DM 不泄露。状态分列如实：running/review/blocked（runStatus=UNKNOWN 标注退出
+        // 未确认）/stopped/waiting。子任务=根任务即卡片位（不重复计交付——pendingDelivery
+        // 取最高 pending 一条）。
+        const params = z.strictObject({ scope: z.enum(['project', 'all']).default('project'), projectId: z.string().min(1).optional() }).parse(env.params);
+        if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        const projects = (params.scope === 'project'
+          ? deps.db.prepare('SELECT id, display_name FROM projects WHERE id = ?').all(params.projectId)
+          : deps.db.prepare('SELECT id, display_name FROM projects ORDER BY rowid').all()) as Array<{ id: string; display_name: string }>;
+        const groups = projects.map((p) => {
+          const rooms = (deps.db.prepare('SELECT id, name FROM rooms WHERE project_id = ? ORDER BY rowid').all(p.id) as Array<{ id: string; name: string }>).map((room) => {
+            const cards = (deps.db.prepare(
+              `SELECT t.id, t.title, t.status, t.stop_generation, t.conversation_thread_id, t.owner_member_id,
+                      (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_status
+               FROM tasks t JOIN conversations c ON c.id = t.conversation_id
+               WHERE t.room_id = ? AND t.kind = 'room_task' AND c.project_id = ?
+               ORDER BY t.rowid DESC`,
+            ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; run_status: string | null }>).map((t) => {
+              const pendingDelivery = t.status === 'REVIEW'
+                ? (deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' ORDER BY revision DESC LIMIT 1`).get(t.id) as { id: string; revision: number; manifest_hash: string } | undefined) ?? null
+                : null;
+              const column = t.stop_generation > 0 ? 'stopped'
+                : t.status === 'REVIEW' ? 'review'
+                : t.status === 'BLOCKED' ? 'blocked'
+                : t.run_status === 'RUNNING' || t.run_status === 'WAITING' ? 'running'
+                : 'waiting';
+              return {
+                taskId: t.id, title: t.title, threadId: t.conversation_thread_id,
+                projectId: p.id, roomId: room.id, ownerMemberId: t.owner_member_id,
+                taskStatus: t.status, runStatus: t.run_status, column,
+                exitUnconfirmed: t.run_status === 'UNKNOWN',
+                pendingDelivery: pendingDelivery == null ? null : { deliveryId: pendingDelivery.id, revision: pendingDelivery.revision, manifestHash: pendingDelivery.manifest_hash },
+                locate: `#task=${t.id}`,
+              };
+            });
+            return { roomId: room.id, name: room.name, cards };
+          });
+          return { projectId: p.id, displayName: p.display_name, rooms };
+        });
+        return withCommandId({ ok: true, data: { groups, note: '只读聚合——不改变任何任务状态；动作走正式命令（停止/验收/追加执行）' } });
+      }
+      case 'thread.collaborators': {
+        // DEV-19 协作视图首包（第二十六轮四）：四列分列——人的关注（thread_subscriptions）/
+        // Agent 跟进名单（thread_agent_followers）/冻结参与者（route_json.frozenMemberIds）/
+        // 实时执行（run_participants）。纯读零运行。
+        const params = z.strictObject({ threadId: z.string().min(1) }).parse(env.params);
+        const thread = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string; project_id: string } | undefined;
+        if (thread == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `线程不存在：${params.threadId}`);
+        assertConversationAudience(deps.db, deps.localUserId, thread.conversation_id);
+        const humanFollowers = (deps.db.prepare('SELECT count(*) c FROM thread_subscriptions WHERE thread_id = ? AND followed = 1').get(params.threadId) as { c: number }).c;
+        const agentFollowers = (deps.db.prepare('SELECT member_id, status FROM thread_agent_followers WHERE thread_id = ? ORDER BY member_id').all(params.threadId) as Array<{ member_id: string; status: string }>).map((r) => ({ memberId: r.member_id, status: r.status }));
+        const task = deps.db.prepare('SELECT id, route_json FROM tasks WHERE conversation_thread_id = ? ORDER BY rowid DESC LIMIT 1').get(params.threadId) as { id: string; route_json: string | null } | undefined;
+        let frozenParticipants: string[] = [];
+        if (task?.route_json != null) {
+          try { const route = JSON.parse(task.route_json) as { frozenMemberIds?: string[] }; if (Array.isArray(route.frozenMemberIds)) frozenParticipants = route.frozenMemberIds; } catch { /* 损坏如实空列 */ }
+        }
+        const activeRun = task != null
+          ? (() => {
+            const run = deps.db.prepare("SELECT id, status FROM workflow_runs WHERE task_id = ? AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1").get(task.id) as { id: string; status: string } | undefined;
+            if (run == null) return null;
+            const participants = (deps.db.prepare('SELECT member_id, role, status FROM run_participants WHERE run_id = ? ORDER BY role, member_id').all(run.id) as Array<{ member_id: string; role: string; status: string }>).map((r) => ({ memberId: r.member_id, role: r.role, status: r.status }));
+            return { runId: run.id, participants };
+          })()
+          : null;
+        return withCommandId({ ok: true, data: { humanFollowers, agentFollowers, frozenParticipants, activeRun } });
+      }
       case 'mine.pending': {
         // DEV-18 首包：待我处理=权威业务状态汇总（纯读——零新增运行/零预算）。覆盖全部项目
         // 行（正式链无隐藏位——"含隐藏项目"=全部 projects）。逐项：
@@ -1865,17 +2021,29 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY t.rowid`,
           ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>);
-          // 待确认提醒触发（REM-8）：未授权自动派发的提醒到点后等待用户确认——正式确认入口
-          // （reminder.confirm）由此可达；他人 DM 的提醒不泄露（audience 同上）。
-          const reminderAwaits = (deps.db.prepare(
-            `SELECT ro.reminder_id, ro.scheduled_at, ro.missed_count, r.title, r.conversation_id, c.kind AS conversation_kind
+          // 待确认提醒触发（REM-8）：确认入口由此可达；他人 DM 不泄露。locate（第二十六轮二）：
+          // 服务端按目标实际形态构造准确深链——DM=#dm=；房间任务串=#task=；讨论串=#msg=锚。
+          // notifyMuted=目标**线程**静音（提醒通知过滤——不能用未读聚合过滤代替；待办保留仅禁通知）。
+          const reminderAwaitsRaw = (deps.db.prepare(
+            `SELECT ro.reminder_id, ro.scheduled_at, ro.missed_count, r.title, r.conversation_id, r.thread_id, r.task_id, c.kind AS conversation_kind,
+                    (SELECT t.root_task_id FROM conversation_threads t WHERE t.id = r.thread_id) AS root_task_id,
+                    (SELECT t.anchor_message_id FROM conversation_threads t WHERE t.id = r.thread_id) AS anchor_message_id,
+                    EXISTS(SELECT 1 FROM thread_subscriptions sub WHERE sub.thread_id = r.thread_id AND sub.viewer_id = ? AND sub.muted = 1) AS notify_muted
              FROM reminder_occurrences ro
              JOIN reminders r ON r.id = ro.reminder_id
              JOIN conversations c ON c.id = r.conversation_id
              WHERE c.project_id = ? AND ro.status = 'fired' AND ro.outcome = 'awaiting_confirmation'
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY ro.scheduled_at`,
-          ).all(p.id, deps.localUserId) as Array<{ reminder_id: string; scheduled_at: number; missed_count: number; title: string | null; conversation_id: string; conversation_kind: string }>);
+          ).all(deps.localUserId, p.id, deps.localUserId) as Array<{ reminder_id: string; scheduled_at: number; missed_count: number; title: string | null; conversation_id: string; thread_id: string | null; task_id: string | null; conversation_kind: string; root_task_id: string | null; anchor_message_id: string | null; notify_muted: number }>);
+          const reminderAwaits = reminderAwaitsRaw.map((row) => ({
+            reminderId: row.reminder_id, scheduledAt: row.scheduled_at, missedCount: row.missed_count, title: row.title,
+            conversationId: row.conversation_id,
+            locate: row.conversation_kind === 'dm'
+              ? `#dm=${row.conversation_id}`
+              : (row.task_id ?? row.root_task_id) != null ? `#task=${row.task_id ?? row.root_task_id}` : `#msg=${row.anchor_message_id}`,
+            notifyMuted: row.notify_muted === 1, // 点击定位不受影响——仅系统通知禁发
+          }));
           return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread, threadUnread, blockedTasks, reminderAwaits, followedThreads };
         }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0 || p.threadUnread.length > 0 || p.blockedTasks.length > 0 || p.reminderAwaits.length > 0 || p.followedThreads.length > 0);
         return withCommandId({ ok: true, data: { projects: out, generatedAt: Date.now() } });
@@ -1990,7 +2158,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
-        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible'])).min(1) }).parse(env.params);
+        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath'])).min(1) }).parse(env.params);
         const values: Record<string, string | null> = {};
         for (const key of params.keys) {
           const row = deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(`app:setting:${key}`) as { value: string } | undefined;
@@ -2000,12 +2168,12 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'app.settings.set': {
         const params = z.strictObject({
-          key: z.enum(['repoStatus.visible']),
-          value: z.string().min(1).max(100),
+          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath']),
+          value: z.string().min(1).max(600),
         }).parse(env.params);
         const result = run(() => {
           const allowed: Record<string, string[]> = { 'repoStatus.visible': ['true', 'false'] };
-          if (!allowed[params.key]!.includes(params.value)) {
+          if (allowed[params.key] != null && !allowed[params.key]!.includes(params.value)) {
             throw new DaemonCommandError('VALIDATION_INVALID', `设置 ${params.key} 不接受值 ${params.value}（允许：${allowed[params.key]!.join('/')}）`);
           }
           deps.db.prepare('INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at')

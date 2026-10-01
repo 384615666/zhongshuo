@@ -105,6 +105,7 @@ async function loadProject(path) {
   state.project = data.project; // 项目设置（任务验收开关）的 CAS revision/当前值来源
   state.projectId = data.project.id;
   localStorage.setItem('zs.lastProjectPath', path); // 重启后自动恢复上次项目
+  void command('app.settings.set', { key: 'ui.autoOpenProjectPath', value: path }).catch(() => { /* 服务端记忆尽力——localStorage 仍为主 */ });
   el('project-name').textContent = `${data.project.displayName} · ${path}`;
   renderProjectSettings();
   void renderCollabSettings().catch(() => { /* 读取失败已行内显示 */ });
@@ -234,6 +235,7 @@ async function renderDmSidebar() {
 }
 
 async function openDm(conversationId) {
+  draftAttachments.dm = []; renderAttachChips('dm'); // 切会话不串附件（第二十六轮五）
   state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
@@ -301,6 +303,126 @@ async function restoreDmDeepLink() {
  * 条目保留 project/task/conversation/delivery 身份并显示来源项目；**全部渲染**（无 slice
  * 截断——第 13 项及以后同样可达），头部显示总数；同会话多待验收逐条可达（进入定位对应
  * 交付版本）；读卡片≠完成事项：阅读/重绘不消待办。 */
+// ---------- DEV-24 文本附件首包（第二十六轮五）：草稿附件（主池/线程共用 + DM 独立）----------
+// 上传=保存副本（attachment.uploadText——内容寻址落应用数据区）；草稿隔离（切会话不串）；
+// 发送随 attachmentRefs（record_only 不派发——发送时归档/audience 由服务端校验）。
+const draftAttachments = { composer: [], dm: [] }; // dm 列表在 openDm 时清空（切会话不串）
+function renderAttachChips(kind) {
+  const box = el(kind === 'dm' ? 'dm-attach-chips' : 'composer-attach-chips');
+  if (box == null) return;
+  const frag = document.createDocumentFragment();
+  for (const att of draftAttachments[kind]) {
+    const chip = document.createElement('span');
+    chip.className = 'meta';
+    chip.textContent = `📎 ${att.filename}（${att.hash.slice(0, 8)}…${att.truncated ? ' 截断' : ''}）`;
+    chip.title = `副本已保存（sha256=${att.hash}）——原文件修改不影响已发内容`;
+    frag.append(chip);
+  }
+  if (draftAttachments[kind].length > 0) {
+    const clear = document.createElement('button');
+    clear.className = 'chip';
+    clear.textContent = '清空附件';
+    clear.onclick = () => { draftAttachments[kind] = []; renderAttachChips(kind); };
+    frag.append(clear);
+  }
+  box.replaceChildren(frag);
+}
+function wireAttach(kind) {
+  const btn = el(kind === 'dm' ? 'dm-attach' : 'composer-attach');
+  const fileInput = el(kind === 'dm' ? 'dm-attach-file' : 'composer-attach-file');
+  if (btn == null || fileInput == null) return;
+  btn.onclick = () => fileInput.click();
+  fileInput.onchange = () => void (async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file == null) return;
+    try {
+      const content = await file.text();
+      const convId = kind === 'dm' ? state.openDmId : state.conversationId;
+      if (convId == null) { showError('请先打开会话再附加文件'); return; }
+      const r = await command('attachment.uploadText', { conversationId: convId, filename: file.name, content });
+      draftAttachments[kind].push({ attachmentId: r.attachmentId, filename: file.name, hash: r.hash, truncated: r.truncated });
+      renderAttachChips(kind);
+      showError(`附件已保存副本：${file.name}${r.truncated ? '（超 64KB——预览/注入将截断）' : ''}`);
+    } catch (e) { showError(`附件上传失败：${e.message}`); }
+  })().catch(() => {});
+}
+
+// ---------- DEV-19 看板与协作视图首包（第二十六轮四）----------
+// 只读聚合：board.view——状态分列（waiting/running/review/blocked/stopped；退出未确认如实
+// 标注）；卡片点击 #task= 定位原串；打开看板零运行零唤醒。协作视图=thread.collaborators
+// 四列（人的关注/Agent 跟进/冻结参与者/实时执行）在线程头部行内呈现。
+const BOARD_COLUMNS = [
+  { key: 'waiting', label: '等待' },
+  { key: 'running', label: '执行中' },
+  { key: 'review', label: '待验收' },
+  { key: 'blocked', label: '阻塞' },
+  { key: 'stopped', label: '停止' },
+];
+let boardVisible = false;
+async function renderBoard() {
+  const box = el('board-groups');
+  if (box == null || !boardVisible) return;
+  const scope = el('board-scope')?.value ?? 'project';
+  let data;
+  try { data = await command('board.view', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' }); } catch (e) { showError(`看板读取失败：${e.message}`); return; }
+  const frag = document.createDocumentFragment();
+  for (const g of data.groups ?? []) {
+    const gEl = document.createElement('div');
+    gEl.className = 'board-group';
+    const gHead = document.createElement('div');
+    gHead.className = 'sidebar-sec';
+    gHead.textContent = `项目：${g.displayName}`;
+    gEl.append(gHead);
+    for (const room of g.rooms ?? []) {
+      const rEl = document.createElement('div');
+      rEl.className = 'board-room';
+      const rHead = document.createElement('div');
+      rHead.className = 'meta';
+      rHead.textContent = `房间：${room.name}（${room.roomId.slice(0, 8)}）`;
+      rEl.append(rHead);
+      const cols = document.createElement('div');
+      cols.className = 'board-cols';
+      for (const col of BOARD_COLUMNS) {
+        const colEl = document.createElement('div');
+        colEl.className = 'board-col';
+        const colHead = document.createElement('div');
+        colHead.className = 'meta';
+        const cards = (room.cards ?? []).filter((c) => c.column === col.key);
+        colHead.textContent = `${col.label}（${cards.length}）`;
+        colEl.append(colHead);
+        for (const c of cards) {
+          const card = document.createElement('button');
+          card.className = 'board-card' + (c.exitUnconfirmed ? ' exit-unknown' : '');
+          card.textContent = `${c.title}${c.exitUnconfirmed ? '（退出未确认）' : ''}${c.pendingDelivery != null ? `（待验收 v${c.pendingDelivery.revision}）` : ''}`;
+          card.title = `taskId=${c.taskId} · ${c.taskStatus}${c.runStatus != null ? ` · run=${c.runStatus}` : ''}——点击定位原串`;
+          card.onclick = () => { if (c.locate != null) location.hash = String(c.locate).slice(1); };
+          colEl.append(card);
+        }
+        cols.append(colEl);
+      }
+      rEl.append(cols);
+      gEl.append(rEl);
+    }
+    frag.append(gEl);
+  }
+  if (frag.childElementCount === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = '暂无任务卡。';
+    frag.append(empty);
+  }
+  box.replaceChildren(frag);
+}
+async function renderCollaborators() {
+  const box = el('thread-collab');
+  if (box == null || state.openThreadId == null) return;
+  let data;
+  try { data = await command('thread.collaborators', { threadId: state.openThreadId }); } catch { return; }
+  box.textContent = `协作：我的关注 ${data.humanFollowers} 人 · Agent 跟进 ${(data.agentFollowers ?? []).map((a) => `${a.memberId.slice(0, 6)}（${a.status}）`).join('、') || '无'} · 冻结参与 ${(data.frozenParticipants ?? []).map((m) => m.slice(0, 6)).join('、') || '无'} · 实时执行 ${data.activeRun != null ? (data.activeRun.participants ?? []).map((p) => `${p.memberId.slice(0, 6)}/${p.role}/${p.status}`).join('、') : '无'}`;
+  box.classList.remove('hidden');
+}
+
 async function renderPendingList() {
   const nav = el('pending-list');
   if (nav == null) return;
@@ -330,9 +452,9 @@ async function renderPendingList() {
     notifyReminderAwaits(p.reminderAwaits);
     for (const w of p.reminderAwaits ?? []) {
       rows.push({
-        label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminder_id}${w.missed_count > 0 ? `（合并 ${w.missed_count} 次错过）` : ''} → 确认执行`,
+        label: `【${p.displayName}】提醒待确认：${w.title ?? w.reminderId}${(w.missedCount ?? 0) > 0 ? `（合并 ${w.missedCount} 次错过）` : ''} → 确认执行`,
         title: '点击确认后经正式执行链派发（system 来源，不伪装人类发言）；不确认=暂不执行',
-        projectId: p.projectId, conversationId: w.conversation_id, kind: 'reminder-await', reminderId: w.reminder_id, scheduledAt: w.scheduled_at,
+        projectId: p.projectId, conversationId: w.conversationId, kind: 'reminder-await', reminderId: w.reminderId, scheduledAt: w.scheduledAt,
       });
     }
     // 关注线程有新回复（第二十五轮四）：人的阅读订阅（静音优先排除）——点击定位原串。
@@ -506,28 +628,50 @@ function attachSaveButton(div, message) {
 }
 
 /** 线程关注/静音（thread_subscriptions——人的阅读订阅，与执行名单分列；纯偏好零运行）。 */
-// ---------- 桌面系统通知（ATTN-05/06 首版矩阵——第二十五轮五）----------
-// 送达/点击定位/关闭/失败反馈/去重：同 occurrence 恰一次（本地去重集+系统 tag）；
-// 权限被拒或送达失败**不改变执行授权、不重复派发**（待我处理仍列出该事项）；
-// 静音线程不产生通知（服务端聚合已排除）。状态未变且无可行动项保持安静（无事项不通知）。
+// ---------- 桌面系统通知（ATTN-05/06 首版矩阵——第二十五轮五+第二十六轮二修复）----------
+// 定位=服务端返回的**准确 locate**（DM/房间线程/任务/讨论串区分——不再统一 #dm=）；点击只
+// 定位不确认执行；跨项目由统一深链处理；同窗口重复点击幂等（深链可重放）。
+// 事实留痕（zs-notify-log）：permission/created/shown/error/close 各相分别登记——本地日志
+// 只证明「已登记尝试/各相事件」，**不证明 Windows 已显示**（真机送达/点击由人工验收入口复核）。
+// 通知偏好：目标线程静音（notifyMuted——服务端按提醒实际线程过滤，非未读聚合）→ 不发系统
+// 通知（待办事项保留在待我处理）。权限被拒/创建失败/送达失败：页内如实提示，**不改变执行
+// 授权、不重复派发**；关闭（onclose）不重发——同 occurrence 去重恰一次。
 const notifiedReminders = new Set(JSON.parse(localStorage.getItem('zs-notified-rem') ?? '[]'));
+function notifyLog(key, phase, detail = '') {
+  try {
+    const log = JSON.parse(localStorage.getItem('zs-notify-log') ?? '[]');
+    log.push({ key, phase, detail, at: Date.now() });
+    localStorage.setItem('zs-notify-log', JSON.stringify(log.slice(-400)));
+  } catch { /* 存不住则内存事实仍在 dedup 集 */ }
+}
 function notifyReminderAwaits(awaits) {
   for (const w of awaits ?? []) {
-    const key = `${w.reminder_id}@${w.scheduled_at}`;
+    const key = `${w.reminderId}@${w.scheduledAt}`;
     if (notifiedReminders.has(key)) continue; // 去重：同 occurrence 恰一次
     notifiedReminders.add(key);
-    try { localStorage.setItem('zs-notified-rem', JSON.stringify([...notifiedReminders].slice(-500))); } catch { /* 存不住则进程内去重 */ }
-    const body = `${w.title ?? '提醒'}${w.missed_count > 0 ? `（合并 ${w.missed_count} 次错过）` : ''}——到点待确认执行`;
+    try { localStorage.setItem('zs-notified-rem', JSON.stringify([...notifiedReminders].slice(-500))); } catch { /* 进程内去重兜底 */ }
+    if (w.notifyMuted === true) { notifyLog(key, 'muted', '目标线程静音——不发系统通知（待办保留）'); continue; } // 提醒通知过滤（独立于未读聚合）
+    const body = `${w.title ?? '提醒'}${w.missedCount > 0 ? `（合并 ${w.missedCount} 次错过）` : ''}——到点待确认执行`;
+    const locate = typeof w.locate === 'string' && w.locate.startsWith('#') ? w.locate.slice(1) : null;
     try {
-      if (typeof Notification === 'undefined' || Notification.permission === 'denied') {
+      if (typeof Notification === 'undefined') {
+        notifyLog(key, 'error', '无 Notification API');
         showError(`提醒待确认（系统通知不可用——待我处理仍列出）：${body}`);
         continue;
       }
+      notifyLog(key, 'permission', Notification.permission);
+      if (Notification.permission === 'denied') {
+        notifyLog(key, 'error', 'permission denied');
+        showError(`提醒待确认（通知权限被拒——待我处理仍列出）：${body}`);
+        continue;
+      }
       const n = new Notification('众说：提醒待确认', { body, tag: key });
-      n.onclick = () => { window.focus(); if (w.conversation_id != null) location.hash = `dm=${w.conversation_id}`; }; // 点击准确定位（正式深链）
-      n.onerror = () => showError(`系统通知送达失败（执行不受影响）：${body}`);
-      // onclose=用户关闭：不重发（去重集已登记）——下次新 occurrence 才再通知。
-    } catch (e) { showError(`系统通知创建失败（待我处理仍列出）：${e instanceof Error ? e.message : String(e)}`); }
+      notifyLog(key, 'created');
+      n.onshow = () => notifyLog(key, 'shown'); // 送达事件（不等于 Windows 中心已显示的证明）
+      n.onerror = () => { notifyLog(key, 'error', 'delivery'); showError(`系统通知送达失败（执行不受影响）：${body}`); };
+      n.onclose = () => notifyLog(key, 'close'); // 用户关闭：不重发（去重集已登记）
+      n.onclick = () => { window.focus(); if (locate != null) location.hash = locate; }; // 只定位（准确深链）——不确认执行
+    } catch (e) { notifyLog(key, 'error', e instanceof Error ? e.message : String(e)); showError(`系统通知创建失败（待我处理仍列出）：${e instanceof Error ? e.message : String(e)}`); }
   }
 }
 // 首次使用请求权限（Electron 通常默认授予；拒绝=退化为页内提示——不阻塞任何执行链）。
@@ -715,7 +859,7 @@ async function renderDm() {
   box.replaceChildren();
   for (const m of history.messages ?? []) {
     const div = document.createElement('div');
-    div.className = `msg ${m.author_type === 'human' ? 'mine' : 'agent'}`;
+    div.className = `msg ${m.author_type === 'human' ? 'mine' : m.author_type === 'system' ? 'system' : 'agent'}`;
     div.dataset.seq = String(m.conversation_seq); // 深链消息定位（scrollIntoView）
     let text = '';
     try { text = (JSON.parse(m.body_json) ?? {}).text ?? ''; } catch { text = String(m.body_json ?? ''); }
@@ -776,7 +920,9 @@ async function sendDm() {
     const r = await command('message.submit', {
       target: { kind: 'dm', projectId: state.projectId, conversationId: state.openDmId },
       body: text, intent: state.dmRecordOnly ? 'record_only' : 'default', mentions: [],
+      ...(draftAttachments.dm.length > 0 ? { attachmentRefs: draftAttachments.dm.map((a) => a.attachmentId) } : {}),
     });
+    draftAttachments.dm = []; renderAttachChips('dm');
     if (r.disposition === 'queued') el('dm-state').textContent = '已保存排队（当前运行结束后串行执行）';
     if (state.dmRecordOnly) { state.dmRecordOnly = false; el('dm-record').classList.remove('on'); }
   } catch (e) {
@@ -993,6 +1139,7 @@ async function renderThread() {
     el('thread-status').textContent = '讨论串（仅记录，不派发）';
   }
   void refreshThreadSubButtons().catch(() => {}); // 关注/静音按钮随线程刷新（第二十五轮四）
+  void renderCollaborators().catch(() => {}); // 协作视图四列（第二十六轮四）
 }
 
 /** DEV-14 前置：任务串变更记录区块（changeset.listByTask 只读——变更清单/恢复撤销限制/当前状态）。
@@ -1199,7 +1346,7 @@ function buildEnvelope() {
     protocolVersion: 1,
     commandId: uuid(), // 去重锚点：在途重复触发被忽略；传输失败重试沿用同一 id
     method: 'message.submit',
-    params: { target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions },
+    params: { target, body: text, intent: state.recordOnly ? 'record_only' : 'default', mentions, ...(draftAttachments.composer.length > 0 ? { attachmentRefs: draftAttachments.composer.map((a) => a.attachmentId) } : {}) },
   };
 }
 
@@ -2273,6 +2420,17 @@ el('dm-remind-btn').onclick = () => void (async () => {
   } catch (e) { showError(`设置提醒失败：${e.message}`); }
 })().catch(() => {});
 // ---------- DEV-18 第二包绑定（第二十五轮四）：搜索/收藏/关注·静音（纯读+偏好写） ----------
+wireAttach('dm');
+wireAttach('composer');
+el('board-toggle').onclick = () => {
+  boardVisible = !boardVisible;
+  el('board').classList.toggle('hidden', !boardVisible);
+  el('pool').classList.toggle('hidden', boardVisible);
+  if (boardVisible) { void renderBoard().catch(() => {}); el('thread-title').textContent = '看板'; }
+  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+};
+el('board-refresh').onclick = () => void renderBoard().catch(() => {});
+el('board-scope').addEventListener('change', () => void renderBoard().catch(() => {}));
 el('search-go').onclick = () => void doSearch(1).catch(() => {});
 el('search-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void doSearch(1).catch(() => {}); });
 el('search-prev').onclick = () => void doSearch(Math.max(1, searchState.page - 1)).catch(() => {});
@@ -2634,6 +2792,17 @@ if (lastProject != null && lastProject.length > 0) {
   void loadProject(lastProject).catch((e) => {
     el('project-name').textContent = `恢复项目失败：${e.message}`;
   });
+} else {
+  // 服务端记忆回退（第二十六轮二）：清缓存/换机后 localStorage 为空——读 daemon 持久设置
+  //（ui.autoOpenProjectPath，loadProject 成功时写入）自动恢复上次项目。通知人工验收入口
+  //（合成项目）与正常使用同链路，不新增专用分支。
+  void (async () => {
+    try {
+      const r = await command('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
+      const remembered = r?.values?.['ui.autoOpenProjectPath'];
+      if (typeof remembered === 'string' && remembered.length > 0) await loadProject(remembered);
+    } catch { /* 无记忆——欢迎页 */ }
+  })();
 }
 // 深链导航事件（第二十三轮二）：刷新/直接打开/前进后退共用统一导航入口；导航代次防迟到。
 window.addEventListener('hashchange', () => { void restoreDmDeepLink().catch(() => {}); });

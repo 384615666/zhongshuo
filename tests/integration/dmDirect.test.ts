@@ -96,7 +96,7 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     expect(s2.disposition).toBe('queued');
     expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE 'dmtask:%'").get() as { c: number }).c).toBe(1);
     // ⑨ 附件接口明确拒绝（DEV-24 未实施）。
-    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [], attachmentRefs: ['a1'] })).rejects.toThrow(/DEV-24/);
+    await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [], attachmentRefs: ['a1'] })).rejects.toThrow(/附件不存在/); // 文本附件已实施（第二十六轮五）——不存在的附件引用按 RESOURCE_NOT_FOUND 拒绝
     // 派发执行：fake 完成首条；断言 dm scope 会话与无线程回复。
     const scripts: FakeTurnScript[] = [dmDone()];
     const { worker, adapter } = makeWorker(db, scripts);

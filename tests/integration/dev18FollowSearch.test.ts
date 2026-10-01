@@ -137,6 +137,36 @@ describe('DEV-18 第二包：搜索（范围/过滤/分页/audience/定位）', 
     expect(none.messages.length).toBe(0); // 正文提取未实施——不冒充
     expect(r.attachmentNote).toContain('正文提取未实施');
   });
+
+  it('第二十六轮三：日期按本机时区（北京时间凌晨边界）+混合类型过滤一致性+会话过滤', async () => {
+    const { db, cmd } = makeEnv();
+    // 构造本地凌晨边界消息：本地今日 00:30（北京时间凌晨——UTC 边界会把它归入前一 UTC 日）。
+    const local = new Date();
+    const todayLocal0030 = new Date(local.getFullYear(), local.getMonth(), local.getDate(), 0, 30, 0).getTime();
+    db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, author_type, author_id, body_json, status, created_at) VALUES ('msg_dawn','pa','conv_pa',9,'r_pa','human','u_local',?,'final',?)`)
+      .run(JSON.stringify({ text: '凌晨边界样本' }), todayLocal0030);
+    const todayStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+    // fromDay=toDay=今天（本地）→ 必含本地 00:30 的消息（旧 UTC 实现在东八区会漏）。
+    const inDay = await cmd<{ messages: any[] }>('search.query', { text: '凌晨边界样本', scope: 'all', fromDay: todayStr, toDay: todayStr });
+    expect(inDay.messages.length).toBe(1);
+    const beforeToday = await cmd<{ messages: any[] }>('search.query', { text: '凌晨边界样本', scope: 'all', toDay: todayStr, fromDay: '2000-01-01' });
+    expect(beforeToday.messages.length).toBe(1); // 长区间同样命中
+    // 混合类型一致性：会话过滤（conv_pb）下 kind=all——pa 的消息/线程/任务都不混入。
+    const mixed = await cmd<{ messages: any[]; threads: any[]; tasks: any[] }>('search.query', { text: '季度报告', scope: 'all', conversationId: 'conv_pb' });
+    expect(mixed.messages.every((x) => x.conversationId === 'conv_pb')).toBe(true);
+    expect(mixed.threads.every((x) => x.conversationId === 'conv_pb')).toBe(true);
+    expect(mixed.tasks.every((x) => x.conversationId === 'conv_pb')).toBe(true);
+    expect(mixed.messages.length).toBe(1); // 仅 pb 锚
+    // 作者过滤对线程统一：锚作者=执行成员（agent）的线程——seed 中锚是 u_local，agent 回复是成员写的锚？锚=u_local → 按作者「执行成员」过滤线程应为 0（锚作者不符——不混入）。
+    const threadsByHuman = await cmd<{ threads: any[] }>('search.query', { text: '整理季度报告', scope: 'all', kind: 'thread', authorDisplayName: '执行成员' });
+    expect(threadsByHuman.threads.length).toBe(0); // 锚作者是 u_local（human）——agent 名过滤不匹配（如实）
+    const threadsByAnchor = await cmd<{ threads: any[] }>('search.query', { text: '整理季度报告', scope: 'all', kind: 'thread', authorDisplayName: '非存在名字' });
+    expect(threadsByAnchor.threads.length).toBe(0);
+    // 日期过滤对任务：任务（无根消息直插）在设日期过滤时如实排除（不冒充可判）。
+    const tasksDated = await cmd<{ tasks: any[] }>('search.query', { text: '季度报告', scope: 'all', kind: 'task', fromDay: todayStr, toDay: todayStr });
+    expect(tasksDated.tasks.length).toBe(0); // 无根消息→无法归日（明确行为）
+    db.close();
+  });
 });
 
 describe('DEV-18 第二包：收藏（独立持久/幂等/失效呈现/深链）', () => {

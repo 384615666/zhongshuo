@@ -85,6 +85,7 @@
           </div>
         </details>
         <button id="repo-status-toggle" class="chip" title="显示/隐藏仓库状态区块（设置持久化，重开生效）">仓库状态：开</button>
+        <button id="board-toggle" class="chip" title="看板视图（DEV-19 首包）：只读聚合当前/全部可访问项目的任务状态——打开不唤醒成员、不创建运行">看板</button>
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
         <div id="recovery-help" class="resume-info recovery-help hidden">
@@ -107,6 +108,14 @@
       </header>
       <section id="repo-status" class="repo-status hidden" data-section="repo"></section>
       <section id="git-ops" class="git-ops hidden" data-section="gitops"></section>
+      <section id="board" class="board hidden">
+        <div class="board-toolbar">
+          <select id="board-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
+          <button id="board-refresh" class="chip">刷新</button>
+          <span class="meta">只读看板——不改变任务状态；动作走正式命令（停止/验收/追加执行经线程内按钮）。卡片点击定位原串/交付。</span>
+        </div>
+        <div id="board-groups"></div>
+      </section>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">
         <div class="thread-back">
@@ -129,6 +138,7 @@
         </div>
         <div id="delib-progress" class="delib-progress hidden"></div>
         <div id="delib-report" class="delib-report hidden"></div>
+        <div id="thread-collab" class="meta hidden"></div>
         <div id="thread-messages"></div>
       </section>
       <section id="dm" class="thread hidden">
@@ -153,9 +163,12 @@
         <div id="dm-messages"></div>
         <div class="composer-row">
           <textarea id="dm-input" rows="2" placeholder="发给这位成员的私信（同一会话一次执行一条，串行）"></textarea>
+          <button id="dm-attach" class="chip" title="附加文本/Markdown 文件（保存副本到应用数据——原文件修改不影响已发内容）">📎 附件</button>
           <button id="dm-record" class="chip" title="一次性意图：只保存不派发">仅记录</button>
           <button id="dm-send" class="primary">发送</button>
         </div>
+        <div id="dm-attach-chips" class="meta"></div>
+        <input id="dm-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log" class="hidden" />
       </section>
       <footer class="composer">
         <div id="send-error" class="send-error hidden"></div>
@@ -167,8 +180,11 @@
         </div>
         <div class="composer-row">
           <textarea id="composer-input" rows="2" placeholder="这条发给谁"></textarea>
+          <button id="composer-attach" class="chip" title="附加文本/Markdown 文件（保存副本到应用数据——原文件修改不影响已发内容）">📎 附件</button>
           <button id="send" class="primary">发送</button>
         </div>
+        <div id="composer-attach-chips" class="meta"></div>
+        <input id="composer-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log" class="hidden" />
       </footer>
     </main>
   </div>
