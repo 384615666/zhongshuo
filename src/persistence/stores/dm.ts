@@ -7,6 +7,7 @@
  * 不建任务卡。同一对话串行：活动 run 存在时保存并排队（disposition=queued）；用户停止
  * 后队列转 paused（dm.resume 显式继续）。人对人只投递保存。
  */
+import { stopGenerationOfTask } from '../outbox.ts';
 import { randomUUID } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../db.ts';
 
@@ -213,7 +214,7 @@ export function createDmTurn(db: ZhongshuoDatabase, input: CreateDmTurnInput): C
       // 排队：任务已建、消息已存；派发键不立即入队（dm 泵在会话空闲时入队——不偷偷并行）。
       return { messageId, disposition: 'queued', taskId, note: dmPauseGateHeld(db, input.conversationId) ? '会话队列已暂停（dm.resume 继续）' : '会话运行中：消息已保存排队，串行执行' };
     }
-    db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(`dmtask:${taskId}:initial`);
+    db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(`dmtask:${taskId}:initial`, stopGenerationOfTask(db, taskId)); // 意图入队代次（迁移 034）
     return { messageId, disposition: 'dispatched', taskId };
   });
   return tx();
@@ -232,13 +233,13 @@ export function pumpDmQueue(db: ZhongshuoDatabase, conversationId: string): { en
     const key = `dmtask:${t.id}:initial`;
     const existing = db.prepare('SELECT id, status FROM outbox WHERE dispatch_key = ?').get(key) as { id: number; status: string } | undefined;
     if (existing == null) {
-      db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(key);
+      db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(key, stopGenerationOfTask(db, t.id)); // 意图入队代次（迁移 034）
       enqueued += 1;
     } else if (existing.status === 'done' || existing.status === 'failed') {
       // 键回收（第十九轮六）：该派发曾被归档门/取消拦下而任务从未建 run——队列行可安全重建
       //（dispatch_key 唯一约束；业务状态由 tasks/runs 承载，此处只重排）。
       db.prepare('DELETE FROM outbox WHERE id = ?').run(existing.id);
-      db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(key);
+      db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(key, stopGenerationOfTask(db, t.id)); // 意图入队代次（迁移 034）
       enqueued += 1;
     }
     break; // 串行：一次只放一条（其 run 终态后再泵下一条）

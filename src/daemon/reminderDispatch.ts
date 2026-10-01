@@ -159,6 +159,17 @@ export function releaseUnlinkedReminderReservations(db: ZhongshuoDatabase, taskI
   db.prepare("UPDATE reminder_calls SET status = 'released', updated_at = ? WHERE task_id = ? AND turn_id IS NULL AND status = 'reserved'").run(Date.now(), taskId);
 }
 
+/**
+ * **精确绑定释放**（第二十八轮二）：被取消的派发只释放**归属该派发**的未挂钩预占——按
+ * 完整身份键解析 reminderId（同任务其他合法提醒的预占不动——不能按 task 一次释放）。
+ * 键不携带提醒身份且无法沿源 turn 解析（非提醒派生）→ 无预占可释放（no-op）。
+ */
+export function releaseUnlinkedReminderReservationsForDispatch(db: ZhongshuoDatabase, dispatchKey: string): void {
+  const ownership = reminderOwnershipOfDispatch(db, dispatchKey);
+  if (ownership.reminderId == null) return; // 非提醒派生派发：无预占（不按 task 扩大释放面）
+  db.prepare("UPDATE reminder_calls SET status = 'released', updated_at = ? WHERE reminder_id = ? AND turn_id IS NULL AND status = 'reserved'").run(Date.now(), ownership.reminderId);
+}
+
 /** turn 终态跟随（casTurn 统一收口点调用——尽力而为，不影响业务事务）。 */
 export function settleReminderCallForTurn(db: ZhongshuoDatabase, turnId: string, turnStatus: string): void {
   const mapped = turnStatus === 'SUCCEEDED' ? 'settled' : turnStatus === 'FAILED' ? 'failed' : 'unknown'; // CANCELLED/UNKNOWN=unknown（保守计数——无法证明未花）
@@ -219,7 +230,7 @@ export function dispatchReminderExecution(db: ZhongshuoDatabase, input: Reminder
     });
     // 跟进派发键（完整身份键——第二十六轮一：含 reminderId，同任务同刻两提醒不撞唯一键）。
     const dispatchKey = `task:${task.id}:reminder:${input.reminder.id}:${input.scheduledAt}`;
-    db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(dispatchKey);
+    db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034——领取判定按意图自身代次）
     reserveReminderCall(db, { reminderId: input.reminder.id, taskId: task.id, tag: `occ:${input.reminder.id}:${input.scheduledAt}`, dispatchKey, now: input.now });
     return { taskId: task.id, messageId, conversationKind: 'room', followUp: true };
   }

@@ -40,7 +40,7 @@ import {
 } from './deliberationRunner.ts';
 import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
-import { acquireReminderTurnSlot, releaseUnlinkedReminderReservations, settleReminderCallForTurn } from './reminderDispatch.ts';
+import { acquireReminderTurnSlot, releaseUnlinkedReminderReservations, releaseUnlinkedReminderReservationsForDispatch, settleReminderCallForTurn } from './reminderDispatch.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
 import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnProcess, recordProcessTreeObservation } from './processRegistry.ts';
 import { managedJobById } from './managed/bridge.ts';
@@ -156,6 +156,8 @@ export class DispatchWorker {
   }>();
   /** 成员在途期间暂不派发的 outbox 行（outboxId → memberId）。 */
   private readonly blockedOutbox = new Map<number, string>();
+  /** 任务忙碌而合法推迟的意图（第二十八轮二）：本轮 drain 跳过重领（防队首热转）——drain 开轮清空重试。 */
+  private readonly busyDeferrals = new Map<number, string>();
 
   constructor(options: DispatchWorkerOptions) {
     this.db = options.db;
@@ -242,7 +244,7 @@ export class DispatchWorker {
       leaseOwner: this.leaseOwner,
       leaseUntil: at + this.leaseMs,
       now: at,
-      skipIds: [...this.blockedOutbox.keys()],
+      skipIds: [...this.blockedOutbox.keys(), ...this.busyDeferrals.keys()],
     });
     if (claimed == null) return false;
     await this.dispatchClaimed(claimed);
@@ -261,8 +263,10 @@ export class DispatchWorker {
 
   /** 排空当前可领取的 outbox（门禁 held 时为 0）。 */
   async drain(): Promise<number> {
+    this.busyDeferrals.clear(); // 新一轮 drain 重试上轮忙碌项（前一轮 run 可能已终态）
     let processed = 0;
     while (await this.runOnce()) processed += 1;
+    this.busyDeferrals.clear();
     return processed;
   }
 
@@ -310,20 +314,32 @@ export class DispatchWorker {
     }
 
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
-    // 全停代次/终态阻止旧派发（§11.4）——但 stop_generation 是**代次**不是停止状态：停止已结算
-    //（无在途 run/turn）后的历史代次不得永久禁止新合法派发（第二十七轮五实证：停止不响应→
-    // 崩溃恢复 run INTERRUPTED/turn UNKNOWN、任务回 ACTIVE 后，绑定提醒到点的跟进意图被本检查
-    // **静默丢弃**——调度器侧第二十五轮已修，领取侧漏网同型）。生效判定=在途/停止中 run 或
-    // 非终态 turn 存在（此刻 stop_generation>0=旧意图确被停止超越）。
-    const stopInEffect = task != null && task.stop_generation > 0 && ((
+    // 意图代次判定（§11.4；第二十七轮五修历史代次误拦后第二十八轮二收口——不能以
+    // 「stop_generation>0 + 存在任意在途 run/turn」推断停止仍生效：历史停止已结算、合法新
+    // run 正在执行时，新到的合法提醒/跟进意图会被误杀静默丢弃）。判定按**派发意图自己的
+    // 入队代次**（迁移 034 outbox.stop_generation_at_enqueue）：
+    // - 入队后无新停止（task.stop_generation == 入队代次）=合法——忙碌（活跃 run/turn）时
+    //   沿既有串行等待（释放租约回 pending，周期 drain 重试），不丢弃；
+    // - 入队后被新停止超越（> 入队代次）=旧意图拒绝（completeOutbox 收口——不复活）；
+    // - 旧行无快照（-1，迁移前遗留）回落第二十七轮保守判定（在途即视为被超越）。
+    const intentGen0 = claimed.stop_generation_at_enqueue ?? -1;
+    const taskBusy = task != null && ((
       this.db.prepare(`SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('QUEUED','RUNNING','WAITING','STOPPING')`).get(taskId) as { c: number }).c > 0
       || (this.db.prepare(`SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE r.task_id = ? AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`).get(taskId) as { c: number }).c > 0
     );
-    if (task == null || stopInEffect || task.status === 'CANCELLED' || task.status === 'DONE') {
-      // 提醒派生任务的未挂钩调用预占同步归还（第二十五轮一：任务未执行到 turn——预占未花，
-      // released；conservative 方向只在此归还）。
-      if (task != null) releaseUnlinkedReminderReservations(this.db, task.id);
+    const superseded = task != null && task.stop_generation > 0 && (intentGen0 >= 0 ? task.stop_generation > intentGen0 : taskBusy);
+    if (task == null || superseded || task.status === 'CANCELLED' || task.status === 'DONE') {
+      // 被取消派发的调用预占**精确绑定释放**（第二十八轮二）：只放归属本派发键的提醒预占
+      //——同任务其他合法提醒（排队等待中）的预占不动，不按 task 一次释放。
+      releaseUnlinkedReminderReservationsForDispatch(this.db, claimed.dispatch_key);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      return;
+    }
+    if (taskBusy) {
+      // 合法意图 + 任务忙碌（活跃 run/turn 含停止中）：沿既有串行等待——释放租约回 pending，
+      // 周期 drain/事件重试（意图入队代次未变，重试判定不变）；本轮不执行也不收口。
+      releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
+      this.busyDeferrals.set(claimed.id, task.id); // 本轮 drain 跳过该 id（防队首热转）
       return;
     }
     // DM 归档门（第十九轮六）：归档即禁止新派发——领取/会话建立/startTurn 各窗口统一拦下
@@ -1972,7 +1988,7 @@ export class DispatchWorker {
         this.settleDelibBudget(runId);
         if (repairTurn == null && baseStep.stage !== 'RAT') {
           this.kvSet(`delib:repair:${repairKey}`, out.value.needsRepair ?? '格式无效');
-          this.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(repairKey);
+          this.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(repairKey, task.stop_generation); // 意图入队代次（迁移 034）
           this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairEnqueued: repairKey });
         } else {
           this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, baseStep.memberId);

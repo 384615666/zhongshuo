@@ -9,7 +9,7 @@ import type { DomainResult } from '../../contracts/errors.ts';
 import type { TopLevelRouteOutcome, MentionNode, SendIntent } from '../../contracts/routing.ts';
 import type { DispatchDisposition } from '../../contracts/conversation.ts';
 import { appendDomainEvent } from '../events.ts';
-import { enqueueOutbox } from '../outbox.ts';
+import { enqueueOutbox, stopGenerationOfTask } from '../outbox.ts';
 
 export interface CreateRoomRootTaskInput {
   ids: { messageId: string; threadId: string; taskId: string; taskEventId: string; threadEventId: string };
@@ -175,7 +175,7 @@ export function createRoomRootTask(
     });
 
     // 初始派发：outbox 与任务创建同事务（§11.2）。
-    enqueueOutbox(db, { dispatchKey: `task:${taskId}:initial` });
+    enqueueOutbox(db, { dispatchKey: `task:${taskId}:initial`, stopGenerationAtEnqueue: stopGenerationOfTask(db, taskId) }); // 意图入队代次（迁移 034）
     disposition = 'queued';
   }
 

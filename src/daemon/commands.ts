@@ -2667,7 +2667,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
             .get(dispatchKey) as { c: number };
           if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
-          deps.db.prepare('INSERT INTO outbox (dispatch_key) VALUES (?)').run(dispatchKey);
+          deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034）
           appendDomainEvent(deps.db, {
             schemaVersion: 1,
             eventId: `evt_${randomUUID()}`,

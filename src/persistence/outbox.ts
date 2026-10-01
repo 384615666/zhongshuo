@@ -14,23 +14,34 @@ export interface OutboxRow {
   lease_owner: string | null;
   lease_until: number | null;
   attempt_epoch: number;
+  /** 意图入队时的任务停止代次（迁移 034；-1=旧行无快照）。 */
+  stop_generation_at_enqueue?: number;
+}
+
+/** 任务的当前停止代次（无任务行=0——首派意图）。 */
+export function stopGenerationOfTask(db: ZhongshuoDatabase, taskId: string | null | undefined): number {
+  if (taskId == null) return 0;
+  const row = db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(taskId) as { stop_generation: number } | undefined;
+  return row?.stop_generation ?? 0;
 }
 
 /**
  * 入队：与业务写入同事务调用。重复 dispatchKey 幂等返回既有行
- * （RT-05：重复完成事件不二次派发）。
+ * （RT-05：重复完成事件不二次派发）。stopGenerationAtEnqueue=意图入队代次快照（迁移 034
+ * ——领取判定据此区分「合法等待」与「被新停止超越」；缺省读任务当前代次）。
  */
 export function enqueueOutbox(
   db: ZhongshuoDatabase,
-  item: { dispatchKey: string; turnId?: string | null },
+  item: { dispatchKey: string; turnId?: string | null; stopGenerationAtEnqueue?: number },
 ): OutboxRow {
   const existing = db
     .prepare('SELECT * FROM outbox WHERE dispatch_key = ?')
     .get(item.dispatchKey) as OutboxRow | undefined;
   if (existing != null) return existing;
+  const gen = item.stopGenerationAtEnqueue ?? -1;
   const info = db
-    .prepare('INSERT INTO outbox (dispatch_key, turn_id) VALUES (?, ?)')
-    .run(item.dispatchKey, item.turnId ?? null);
+    .prepare('INSERT INTO outbox (dispatch_key, turn_id, stop_generation_at_enqueue) VALUES (?, ?, ?)')
+    .run(item.dispatchKey, item.turnId ?? null, gen);
   return {
     id: Number(info.lastInsertRowid),
     dispatch_key: item.dispatchKey,
@@ -39,6 +50,7 @@ export function enqueueOutbox(
     lease_owner: null,
     lease_until: null,
     attempt_epoch: 0,
+    stop_generation_at_enqueue: gen,
   };
 }
 
