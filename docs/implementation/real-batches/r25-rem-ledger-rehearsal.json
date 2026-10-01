@@ -1,0 +1,129 @@
+{
+  "batch": "r25-rem",
+  "mode": "rehearsal",
+  "at": "2026-10-01T03:24:06.121Z",
+  "buildId": "bld_9cae907f2e568c36",
+  "results": [
+    {
+      "name": "① 提醒已建（获准自动派发）",
+      "ok": true,
+      "detail": "nextAt=1790825008546"
+    },
+    {
+      "name": "① 到点自动触发（occurrence dispatched + 任务已建）",
+      "ok": true,
+      "detail": "outcome=dispatched"
+    },
+    {
+      "name": "① 自动触发执行到达终态",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "① 正式链核对：owner=对端+任务落目标会话+system 来源+模板输入（DEV-21-M3 字段）",
+      "ok": true,
+      "detail": "owner=true conv=true tpl=true"
+    },
+    {
+      "name": "① 调用台账（一行且随终态结算）",
+      "ok": true,
+      "detail": "status=settled"
+    },
+    {
+      "name": "① 结果归属：回复落目标会话（agent 作者+非空）",
+      "ok": true,
+      "detail": "agentMsgs=1 len=4"
+    },
+    {
+      "name": "② 到点进入待确认（awaiting_confirmation，未执行）",
+      "ok": true,
+      "detail": "outcome=awaiting_confirmation"
+    },
+    {
+      "name": "② 待我处理列出待确认入口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "② 用户确认→正式派发（taskId 返回）",
+      "ok": true,
+      "detail": "taskId=task_e3da7318-"
+    },
+    {
+      "name": "② 确认后执行到达终态",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "② 结果归属：回复仍落目标会话",
+      "ok": true,
+      "detail": "agentMsgs=2"
+    },
+    {
+      "name": "daemon 优雅退出（exit 0）",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "护栏核对：实际调用恰 2（机械 cap=4 未触）",
+      "ok": true,
+      "detail": "calls=0 succeeded=null"
+    },
+    {
+      "name": "提醒调用台账：两提醒各恰一行（终态）",
+      "ok": true,
+      "detail": "[\"settled\",\"settled\"]"
+    }
+  ],
+  "cap": 4,
+  "expectedCalls": 0,
+  "actualCalls": 0,
+  "callsDetail": [],
+  "identities": [
+    {
+      "conversation_id": "dm_cf1a049a-1313-4660-a2b0-1968886a5127",
+      "provider_session_id": "fake-provider-1",
+      "session_generation": 0
+    }
+  ],
+  "reminderCalls": [
+    {
+      "reminder_id": "rem_ec95a232-48b7-442c-89c2-182b5240d6df",
+      "task_id": "task_5260c46b-95dc-44e0-b4d6-a1f4ae984f9a",
+      "turn_id": "turn_f5bc89e8-b866-46fb-a441-da191285a209",
+      "dispatch_tag": "occ:1790825008546",
+      "status": "settled",
+      "created_at": 1790825013469,
+      "updated_at": 1790825013801
+    },
+    {
+      "reminder_id": "rem_9816b097-63c3-4fd0-8746-6fadff76e854",
+      "task_id": "task_e3da7318-5ee6-440c-97fd-75c58cf14500",
+      "turn_id": "turn_0270e80d-b2f7-42cd-bf61-1e7cd81d9cae",
+      "dispatch_tag": "occ:1790825040721",
+      "status": "settled",
+      "created_at": 1790825043829,
+      "updated_at": 1790825044145
+    }
+  ],
+  "daemonStopFacts": [
+    {
+      "seq": 1,
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "at": 1790825046117
+      }
+    }
+  ],
+  "cleanupUnclean": false,
+  "stderrTails": [
+    {
+      "seq": 1,
+      "tail": [
+        "[zhongshuo-daemon] listening \\\\.\\pipe\\zs-r25rem-1 runtime=fake",
+        "[zhongshuo-daemon] stop-result {\"complete\":true,\"phase\":\"closed\",\"exitCode\":0,\"forced\":false,\"stopRequestsSentTo\":[],\"inFlightRemaining\":[],\"startingRemaining\":[],\"disposeUnconfirmed\":0,\"disposeFailed\":0,\"stopRecord\":\"daemon_state[daemon:stop:last]（appData/state.sqlite）\"}"
+      ]
+    }
+  ]
+}

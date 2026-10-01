@@ -1,0 +1,161 @@
+{
+  "batch": "r25-rem",
+  "mode": "real",
+  "at": "2026-10-01T03:26:39.277Z",
+  "buildId": "bld_fdd03631f2a63711",
+  "results": [
+    {
+      "name": "① 提醒已建（获准自动派发）",
+      "ok": true,
+      "detail": "nextAt=1790825116774"
+    },
+    {
+      "name": "① 到点自动触发（occurrence dispatched + 任务已建）",
+      "ok": true,
+      "detail": "outcome=dispatched"
+    },
+    {
+      "name": "① 自动触发执行到达终态",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "① 正式链核对：owner=对端+任务落目标会话+system 来源+模板输入（DEV-21-M3 字段）",
+      "ok": true,
+      "detail": "owner=true conv=true tpl=true"
+    },
+    {
+      "name": "① 调用台账（一行且随终态结算）",
+      "ok": true,
+      "detail": "status=settled"
+    },
+    {
+      "name": "① 结果归属：回复落目标会话（agent 作者+非空）",
+      "ok": true,
+      "detail": "agentMsgs=1 len=998"
+    },
+    {
+      "name": "① 真实模式辅助：暗号回流",
+      "ok": true,
+      "detail": "含暗号=true"
+    },
+    {
+      "name": "② 到点进入待确认（awaiting_confirmation，未执行）",
+      "ok": true,
+      "detail": "outcome=awaiting_confirmation"
+    },
+    {
+      "name": "② 待我处理列出待确认入口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "② 用户确认→正式派发（taskId 返回）",
+      "ok": true,
+      "detail": "taskId=task_31c6b4e4-"
+    },
+    {
+      "name": "② 确认后执行到达终态",
+      "ok": true,
+      "detail": "status=DONE"
+    },
+    {
+      "name": "② 结果归属：回复仍落目标会话",
+      "ok": true,
+      "detail": "agentMsgs=2"
+    },
+    {
+      "name": "② 真实模式辅助：暗号再次回流",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "daemon 优雅退出（exit 0）",
+      "ok": true,
+      "detail": "exit=0"
+    },
+    {
+      "name": "护栏核对：实际调用恰 2（机械 cap=4 未触）",
+      "ok": true,
+      "detail": "calls=2 succeeded=2"
+    },
+    {
+      "name": "模型核对：请求与响应自报一致（deepseek-flash）",
+      "ok": true,
+      "detail": "[\"deepseek-flash/deepseek-flash\",\"deepseek-flash/deepseek-flash\"]"
+    },
+    {
+      "name": "提醒调用台账：两提醒各恰一行（终态）",
+      "ok": true,
+      "detail": "[\"settled\",\"settled\"]"
+    }
+  ],
+  "cap": 4,
+  "expectedCalls": 2,
+  "actualCalls": 2,
+  "callsDetail": [
+    {
+      "turn_id": "turn_0102f073-9e5e-4ccf-8c65-585f403ea052",
+      "status": "succeeded",
+      "request_model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "usage_json": "{\"kind\":\"usage.updated\",\"accounting\":\"cumulative\",\"inputTokens\":2074,\"cachedTokens\":5504,\"outputTokens\":4883,\"cost\":0.135197,\"currency\":\"USD\",\"costQuality\":\"estimated\",\"model\":\"deepseek-flash\",\"eventKey\":\"cevt_d90b2d8eaf4b184ddbc8\",\"sessionId\":\"claude_sess_721f5bd8-e41f-4a0e-824f-197727253fb5\",\"turnId\":\"turn_0102f073-9e5e-4ccf-8c65-585f403ea052\",\"receivedAt\":1790825145339}",
+      "run_id": "run_5541ed0b-8bdf-4276-bc6a-75f4f82d4e64"
+    },
+    {
+      "turn_id": "turn_3ccc439c-4460-4aef-b236-f066c42c6550",
+      "status": "succeeded",
+      "request_model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "usage_json": "{\"kind\":\"usage.updated\",\"accounting\":\"cumulative\",\"inputTokens\":2349,\"cachedTokens\":16512,\"outputTokens\":2679,\"cost\":0.22217300000000004,\"currency\":\"USD\",\"costQuality\":\"estimated\",\"model\":\"deepseek-flash\",\"eventKey\":\"cevt_9f013a7192caed4b8284\",\"sessionId\":\"claude_sess_b6623ce6-5a88-4db7-9985-3272075dd80d\",\"turnId\":\"turn_3ccc439c-4460-4aef-b236-f066c42c6550\",\"receivedAt\":1790825197273}",
+      "run_id": "run_2fc265aa-bb03-484b-ba8a-822351b6ec91"
+    }
+  ],
+  "identities": [
+    {
+      "conversation_id": "dm_5debb2c1-0c68-4a0c-8ca5-2084c27d49f1",
+      "provider_session_id": "b86364a3-06f0-4c71-8be4-72e3963f527e",
+      "session_generation": 0
+    }
+  ],
+  "reminderCalls": [
+    {
+      "reminder_id": "rem_e354d99c-b9fc-44a9-98ca-cabd6aa6a09b",
+      "task_id": "task_d7950c76-5912-4e21-82a5-daf34a267f8f",
+      "turn_id": "turn_0102f073-9e5e-4ccf-8c65-585f403ea052",
+      "dispatch_tag": "occ:1790825116774",
+      "status": "settled",
+      "created_at": 1790825121621,
+      "updated_at": 1790825145440
+    },
+    {
+      "reminder_id": "rem_e7d37d8a-df33-4ae3-9f10-5231fbcceea2",
+      "task_id": "task_31c6b4e4-e25a-4f6b-a956-d80a814b06dd",
+      "turn_id": "turn_3ccc439c-4460-4aef-b236-f066c42c6550",
+      "dispatch_tag": "occ:1790825171778",
+      "status": "settled",
+      "created_at": 1790825182905,
+      "updated_at": 1790825197291
+    }
+  ],
+  "daemonStopFacts": [
+    {
+      "seq": 1,
+      "exit": {
+        "code": 0,
+        "signal": null,
+        "at": 1790825199272
+      }
+    }
+  ],
+  "cleanupUnclean": false,
+  "stderrTails": [
+    {
+      "seq": 1,
+      "tail": [
+        "[zhongshuo-daemon] listening \\\\.\\pipe\\zs-r25rem-1 runtime=claude",
+        "[zhongshuo-daemon] stop-result {\"complete\":true,\"phase\":\"closed\",\"exitCode\":0,\"forced\":false,\"stopRequestsSentTo\":[],\"inFlightRemaining\":[],\"startingRemaining\":[],\"disposeUnconfirmed\":0,\"disposeFailed\":0,\"stopRecord\":\"daemon_state[daemon:stop:last]（appData/state.sqlite）\"}"
+      ]
+    }
+  ]
+}
