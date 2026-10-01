@@ -310,9 +310,18 @@ export class DispatchWorker {
     }
 
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
-    if (task == null || task.stop_generation > 0 || task.status === 'CANCELLED' || task.status === 'DONE') {
-      // 全停代次/终态阻止旧派发（§11.4）。提醒派生任务的未挂钩调用预占同步归还
-      //（第二十五轮一：任务未执行到 turn——预占未花，released；conservative 方向只在此归还）。
+    // 全停代次/终态阻止旧派发（§11.4）——但 stop_generation 是**代次**不是停止状态：停止已结算
+    //（无在途 run/turn）后的历史代次不得永久禁止新合法派发（第二十七轮五实证：停止不响应→
+    // 崩溃恢复 run INTERRUPTED/turn UNKNOWN、任务回 ACTIVE 后，绑定提醒到点的跟进意图被本检查
+    // **静默丢弃**——调度器侧第二十五轮已修，领取侧漏网同型）。生效判定=在途/停止中 run 或
+    // 非终态 turn 存在（此刻 stop_generation>0=旧意图确被停止超越）。
+    const stopInEffect = task != null && task.stop_generation > 0 && ((
+      this.db.prepare(`SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('QUEUED','RUNNING','WAITING','STOPPING')`).get(taskId) as { c: number }).c > 0
+      || (this.db.prepare(`SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE r.task_id = ? AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`).get(taskId) as { c: number }).c > 0
+    );
+    if (task == null || stopInEffect || task.status === 'CANCELLED' || task.status === 'DONE') {
+      // 提醒派生任务的未挂钩调用预占同步归还（第二十五轮一：任务未执行到 turn——预占未花，
+      // released；conservative 方向只在此归还）。
       if (task != null) releaseUnlinkedReminderReservations(this.db, task.id);
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
@@ -542,9 +551,9 @@ export class DispatchWorker {
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
         this.db.prepare(
-          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision)
-           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1, ?, ?, ?)`,
-        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision);
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
+           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
+        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
         this.db.prepare(
@@ -1198,9 +1207,9 @@ export class DispatchWorker {
       const collabSnap = this.collabSnapshotFor(task.project_id);
       const createTurn = this.db.transaction(() => {
         this.db.prepare(
-          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1, ?, ?, ?)`,
-        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision);
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
+        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
         this.db.prepare(
@@ -1376,13 +1385,20 @@ export class DispatchWorker {
       .prepare('SELECT stop_generation, status FROM tasks WHERE id = ?')
       .get(taskId) as { stop_generation: number; status: string } | undefined;
     if (task == null) return true;
-    if (task.stop_generation > 0 || task.status === 'CANCELLED' || task.status === 'DONE') return true;
+    if (task.status === 'CANCELLED' || task.status === 'DONE') return true;
     const turn = this.db
-      .prepare('SELECT status FROM agent_turns WHERE id = ?')
-      .get(turnId) as { status: string } | undefined;
+      .prepare('SELECT status, stop_generation_snapshot FROM agent_turns WHERE id = ?')
+      .get(turnId) as { status: string; stop_generation_snapshot: number } | undefined;
     if (turn == null || ['STOPPING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(turn.status)) {
       return true;
     }
+    // 停止作用于本 turn=代次**已超越快照**（第二十七轮五：历史代次（==快照）不禁止新 turn
+    // ——停止结算后的合法跟进派发不再被误停）。旧行无快照（-1）沿用保守旧语义（>0 即停）。
+    const gen0 = turn.stop_generation_snapshot ?? -1;
+    if (gen0 >= 0 ? task.stop_generation > gen0 : task.stop_generation > 0) return true;
+    // run 级停止事实（用户停止把 run 置 STOPPING——本 turn 属于它即停）。
+    const runStatus = (this.db.prepare('SELECT r.status AS s FROM workflow_runs r JOIN agent_turns t ON t.run_id = r.id WHERE t.id = ?').get(turnId) as { s: string } | undefined)?.s;
+    if (runStatus === 'STOPPING') return true;
     return false;
   }
 
@@ -1576,11 +1592,14 @@ export class DispatchWorker {
       case 'turn.completed': {
         const turn = this.db.prepare('SELECT status, budget_mark FROM agent_turns WHERE id = ?').get(turnId) as { status: string; budget_mark: string | null };
         const lateAfterStop = turn.status === 'STOPPING';
-        // 停止代次守卫（第八轮）：用户停止已推进（stop_generation/CANCELLED）而 turn 尚未
-        // 收口（UNKNOWN 等非终态）时，迟到输出不复活已停止的任务——按取消收尾（与 STOPPING
-        // 同型）。停止意图由 tasks 表事实承载，不依赖事件顺序。
+        // 停止代次守卫（第八轮；第二十七轮五快照化）：用户停止已推进（**代次超越本 turn 快照**
+        // /CANCELLED）而 turn 尚未收口（UNKNOWN 等非终态）时，迟到输出不复活已停止的任务——按
+        // 取消收尾（与 STOPPING 同型）。历史代次（==快照，停止早已结算）不算——新 turn 的合法
+        // 输出不因历史停止被吞。旧行无快照（-1）沿用保守旧语义。
         const taskNow = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
-        const stopGenerationInEffect = taskNow != null && (taskNow.stop_generation > 0 || taskNow.status === 'CANCELLED');
+        const turnGen0 = (this.db.prepare('SELECT stop_generation_snapshot AS g FROM agent_turns WHERE id = ?').get(turnId) as { g: number } | undefined)?.g ?? -1;
+        const stopGenerationInEffect = taskNow != null && (taskNow.status === 'CANCELLED'
+          || (turnGen0 >= 0 ? taskNow.stop_generation > turnGen0 : taskNow.stop_generation > 0));
         if (!lateAfterStop && !stopGenerationInEffect && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(turn.status)) {
           // 成果一致性（第七轮·专项+第八轮补 SUCCEEDED）：已收口 turn（对账/停止/失败/成功
           // 交付后）的迟到/重复完成——**不复活、不交付、不重复结算**（交付/预算/状态只生效
@@ -1698,11 +1717,16 @@ export class DispatchWorker {
         break;
       }
       case 'turn.failed': {
-        // 用户停止判定（与 DELIB 口径一致）：INTERRUPTED + stop_generation 已推进/任务已
-        // CANCELLED。无用户停止的 INTERRUPTED=单轮截止中断——结果不确定（请求可能已发出），
-        // UNKNOWN 收尾，不伪造取消/失败。
+        // 用户停止判定（与 DELIB 口径一致；第二十七轮五快照化）：INTERRUPTED + 停止代次
+        // **超越本 turn 快照**/任务已 CANCELLED/本 run STOPPING。历史代次（==快照）不算——
+        // 否则停止结算后的新 turn 被 deadline 中断时误判为用户停止（实际是结果不确定，须 UNKNOWN
+        // 收尾不伪造取消）。无用户停止的 INTERRUPTED=单轮截止中断——结果不确定（请求可能已
+        // 发出），UNKNOWN 收尾，不伪造取消/失败。
         const taskNowStop = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
-        const userStop = event.code === 'INTERRUPTED' && (taskNowStop != null && (taskNowStop.stop_generation > 0 || taskNowStop.status === 'CANCELLED'));
+        const gen0f = (this.db.prepare('SELECT stop_generation_snapshot AS g FROM agent_turns WHERE id = ?').get(turnId) as { g: number } | undefined)?.g ?? -1;
+        const runStopping = (this.db.prepare('SELECT status AS s FROM workflow_runs WHERE id = ?').get(runId) as { s: string } | undefined)?.s === 'STOPPING';
+        const userStop = event.code === 'INTERRUPTED' && (runStopping
+          || (taskNowStop != null && (taskNowStop.status === 'CANCELLED' || (gen0f >= 0 ? taskNowStop.stop_generation > gen0f : taskNowStop.stop_generation > 0))));
         if (event.code === 'INTERRUPTED' && !userStop) {
           this.settleUnknown(task, runId, turnId, 'turn-deadline-interrupt');
           break;
@@ -1962,9 +1986,12 @@ export class DispatchWorker {
     if (event.kind === 'turn.failed') {
       const taskNow = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
       const runNow = this.db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(runId) as { status: string } | undefined;
-      // 用户停止 = stop_generation 已推进或 run 已 STOPPING；否则 INTERRUPTED 是
-      // 单轮截止中断（取证轮确认的误判源）——成员级缺席，运行继续。
-      const userStop = event.code === 'INTERRUPTED' && (taskNow != null && (taskNow.stop_generation > 0 || taskNow.status === 'CANCELLED') || runNow?.status === 'STOPPING');
+      // 用户停止 = 停止代次**超越本 turn 快照**（第二十七轮五快照化——历史代次不算，否则
+      // 停止结算后的新 turn 被 deadline 中断时误判用户停止）或 run 已 STOPPING；否则
+      // INTERRUPTED 是单轮截止中断（取证轮确认的误判源）——成员级缺席，运行继续。
+      const gen0d = (this.db.prepare('SELECT stop_generation_snapshot AS g FROM agent_turns WHERE id = ?').get(turnId) as { g: number } | undefined)?.g ?? -1;
+      const userStop = event.code === 'INTERRUPTED' && (runNow?.status === 'STOPPING'
+        || (taskNow != null && (taskNow.status === 'CANCELLED' || (gen0d >= 0 ? taskNow.stop_generation > gen0d : taskNow.stop_generation > 0))));
       const tx = this.db.transaction(() => {
         this.casTurn(turnId, userStop ? 'CANCELLED' : 'FAILED');
         this.settleDelibBudget(runId);

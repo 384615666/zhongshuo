@@ -86,6 +86,7 @@
         </details>
         <button id="repo-status-toggle" class="chip" title="显示/隐藏仓库状态区块（设置持久化，重开生效）">仓库状态：开</button>
         <button id="board-toggle" class="chip" title="看板视图（DEV-19 首包）：只读聚合当前/全部可访问项目的任务状态——打开不唤醒成员、不创建运行">看板</button>
+        <button id="files-toggle" class="chip" title="Files 集合（DEV-19）：项目文件/托管附件/Agent 草稿/交付成果四类分列——只读，逐项保留来源/版本/hash 与定位">Files</button>
         <button id="resume-gate" class="gate hidden">恢复待继续：点此确认继续</button>
         <div id="resume-info" class="resume-info hidden"></div>
         <div id="recovery-help" class="resume-info recovery-help hidden">
@@ -112,9 +113,17 @@
         <div class="board-toolbar">
           <select id="board-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
           <button id="board-refresh" class="chip">刷新</button>
-          <span class="meta">只读看板——不改变任务状态；动作走正式命令（停止/验收/追加执行经线程内按钮）。卡片点击定位原串/交付。</span>
+          <span class="meta">只读看板——不拖动改状态；动作走正式命令（卡片行内：停止/通过验收；返工需意见走线程内）。卡片点击定位原串/交付。</span>
         </div>
         <div id="board-groups"></div>
+      </section>
+      <section id="files" class="files hidden">
+        <div class="board-toolbar">
+          <select id="files-scope"><option value="project">当前项目</option><option value="all">全部可访问项目</option></select>
+          <button id="files-refresh" class="chip">刷新</button>
+          <span class="meta">Files 集合（只读四类分列：项目文件/托管附件/Agent 草稿/交付成果——逐项保留来源/版本/hash；私信资源仅本人可见）。</span>
+        </div>
+        <div id="files-groups"></div>
       </section>
       <section id="pool" class="pool"></section>
       <section id="thread" class="thread hidden">

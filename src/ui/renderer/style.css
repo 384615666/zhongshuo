@@ -131,3 +131,7 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .attach-preview { margin: 4px 0; padding: 8px; border: 1px solid #ccd; border-radius: 6px; background: #f7f8fa; max-height: 320px; overflow: auto; }
 .attach-preview .attach-preview-text { white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; font-size: 12px; max-height: 240px; overflow: auto; }
 .attach-chips { margin: 2px 0; display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* DEV-19 看板动作行+Files 集合（第二十七轮五） */
+.board-card-wrap { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
+.files .meta { display: block; }

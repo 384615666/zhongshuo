@@ -8,7 +8,7 @@
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
@@ -1963,24 +1963,38 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           const rooms = (deps.db.prepare('SELECT id, name FROM rooms WHERE project_id = ? ORDER BY rowid').all(p.id) as Array<{ id: string; name: string }>).map((room) => {
             const cards = (deps.db.prepare(
               `SELECT t.id, t.title, t.status, t.stop_generation, t.conversation_thread_id, t.owner_member_id,
+                      (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_id,
                       (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_status
                FROM tasks t JOIN conversations c ON c.id = t.conversation_id
                WHERE t.room_id = ? AND t.kind = 'room_task' AND c.project_id = ?
                ORDER BY t.rowid DESC`,
-            ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; run_status: string | null }>).map((t) => {
+            ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; run_id: string | null; run_status: string | null }>).map((t) => {
               const pendingDelivery = t.status === 'REVIEW'
                 ? (deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' ORDER BY revision DESC LIMIT 1`).get(t.id) as { id: string; revision: number; manifest_hash: string } | undefined) ?? null
                 : null;
-              const column = t.stop_generation > 0 ? 'stopped'
-                : t.status === 'REVIEW' ? 'review'
+              // 状态映射按**任务/run 状态机**（第二十七轮五修正）：任务终态如实分列（DONE/FAILED=
+              // 已完成、CANCELLED=已停止）；stop_generation 是代次不是停止证明——历史停止后
+              // 新运行照常按 run 状态列位（旧实现 stop_generation>0 恒落 stopped、DONE 落
+              // waiting 两缺陷同修）。STOPPING=停止中；INTERRUPTED=中断（列停止，恢复入口
+              // 另接——不冒充等待）。
+              const column = t.status === 'REVIEW' ? 'review'
                 : t.status === 'BLOCKED' ? 'blocked'
-                : t.run_status === 'RUNNING' || t.run_status === 'WAITING' ? 'running'
+                : t.status === 'DONE' || t.status === 'FAILED' ? 'done'
+                : t.status === 'CANCELLED' ? 'stopped'
+                : t.run_status === 'STOPPING' ? 'stopped'
+                : t.run_status === 'RUNNING' || t.run_status === 'WAITING' || t.run_status === 'QUEUED' ? 'running'
+                : t.run_status === 'INTERRUPTED' ? 'stopped'
                 : 'waiting';
+              // 退出未确认：来自 turn/恢复事实——run INTERRUPTED 且该 run 存在 UNKNOWN turn
+              // （不确定结局）。workflow_runs 状态机无 UNKNOWN（旧检查 run_status==='UNKNOWN'
+              // 恒假——那是 agent_turns 状态，已删）。
+              const exitUnconfirmed = t.run_status === 'INTERRUPTED' && t.run_id != null
+                && ((deps.db.prepare("SELECT count(*) c FROM agent_turns WHERE run_id = ? AND status = 'UNKNOWN'").get(t.run_id) as { c: number }).c > 0);
               return {
                 taskId: t.id, title: t.title, threadId: t.conversation_thread_id,
                 projectId: p.id, roomId: room.id, ownerMemberId: t.owner_member_id,
-                taskStatus: t.status, runStatus: t.run_status, column,
-                exitUnconfirmed: t.run_status === 'UNKNOWN',
+                taskStatus: t.status, runStatus: t.run_status, runId: t.run_id, stopGeneration: t.stop_generation, column,
+                exitUnconfirmed,
                 pendingDelivery: pendingDelivery == null ? null : { deliveryId: pendingDelivery.id, revision: pendingDelivery.revision, manifestHash: pendingDelivery.manifest_hash },
                 locate: `#task=${t.id}`,
               };
@@ -1991,9 +2005,66 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         });
         return withCommandId({ ok: true, data: { groups, note: '只读聚合——不改变任何任务状态；动作走正式命令（停止/验收/追加执行）' } });
       }
+      case 'files.view': {
+        // DEV-19 Files 集合（第二十七轮五）：**纯读**四类分列——项目文件（用户项目目录本身，
+        // 非托管副本）/托管附件（artifacts——audience 过滤：房间全量+**本地用户参与的** DM，
+        // 他人 DM 不进集合；私信资源标注 dm 不因聚合扩大可见性）/Agent 草稿（change_sets——
+        // 变更集与应用状态）/交付成果（task_deliveries——深链 #delivery=）。逐项保留来源
+        // （项目/会话/房间/任务）、版本、hash 与定位；不混成无来源文件列表。零运行零唤醒。
+        const params = z.strictObject({ scope: z.enum(['project', 'all']).default('project'), projectId: z.string().min(1).optional() }).parse(env.params);
+        if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        const projects = (params.scope === 'project'
+          ? deps.db.prepare('SELECT id, display_name, canonical_path FROM projects WHERE id = ?').all(params.projectId)
+          : deps.db.prepare('SELECT id, display_name, canonical_path FROM projects ORDER BY rowid').all()) as Array<{ id: string; display_name: string; canonical_path: string }>;
+        const groups = projects.map((p) => {
+          const attachments = (deps.db.prepare(
+            `SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.conversation_id, c.kind AS conversation_kind, c.room_id, a.created_at,
+                    (SELECT ma.message_id FROM message_attachments ma WHERE ma.artifact_id = a.id ORDER BY ma.rowid LIMIT 1) AS message_id
+             FROM artifacts a JOIN conversations c ON c.id = a.conversation_id
+             WHERE c.project_id = ? AND (
+               c.kind = 'room'
+               OR (c.kind = 'dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
+             ) ORDER BY a.rowid DESC LIMIT 200`,
+          ).all(p.id, deps.localUserId) as Array<{ id: string; source_name: string | null; hash: string; revision: number; kind: string; conversation_id: string; conversation_kind: string; room_id: string | null; created_at: number; message_id: string | null }>).map((a) => ({
+            attachmentId: a.id, filename: a.source_name ?? a.id, hash: a.hash, revision: a.revision, kind: a.kind,
+            conversationId: a.conversation_id, conversationKind: a.conversation_kind, roomId: a.room_id,
+            audience: a.conversation_kind === 'dm' ? 'dm' : 'room', createdAt: a.created_at,
+            locate: a.message_id != null ? `#msg=${a.message_id}` : a.conversation_kind === 'dm' ? `#dm=${a.conversation_id}` : null,
+          }));
+          const drafts = (deps.db.prepare(
+            `SELECT cs.id, cs.task_id, cs.application_status, cs.before_ref, cs.after_ref, t.title AS task_title
+             FROM change_sets cs LEFT JOIN tasks t ON t.id = cs.task_id
+             WHERE cs.project_id = ? ORDER BY cs.rowid DESC LIMIT 100`,
+          ).all(p.id) as Array<{ id: string; task_id: string | null; application_status: string; before_ref: string; after_ref: string; task_title: string | null }>).map((d) => ({
+            changeSetId: d.id, taskId: d.task_id, taskTitle: d.task_title, applicationStatus: d.application_status,
+            beforeRef: d.before_ref, afterRef: d.after_ref, locate: d.task_id != null ? `#task=${d.task_id}` : null,
+          }));
+          const deliveries = (deps.db.prepare(
+            `SELECT d.id, d.revision, d.manifest_hash, d.reviewed_at, t.id AS task_id, t.title, c.kind AS conversation_kind, t.conversation_thread_id
+             FROM task_deliveries d JOIN tasks t ON t.id = d.task_id JOIN conversations c ON c.id = t.conversation_id
+             WHERE t.project_id = ? AND (
+               c.kind = 'room'
+               OR (c.kind = 'dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
+             ) ORDER BY d.rowid DESC LIMIT 100`,
+          ).all(p.id, deps.localUserId) as Array<{ id: string; revision: number; manifest_hash: string; reviewed_at: number | null; task_id: string; title: string; conversation_kind: string }>).map((d) => ({
+            deliveryId: d.id, revision: d.revision, manifestHash: d.manifest_hash, taskId: d.task_id, title: d.title,
+            audience: d.conversation_kind === 'dm' ? 'dm' : 'room', reviewedAt: d.reviewed_at, locate: `#delivery=${d.id}`,
+          }));
+          // 项目文件：项目根一层条目（来源=用户项目目录；只列名——浏览走系统资源管理器/Git 页）。
+          let projectFiles: Array<{ name: string; dir: boolean }> = [];
+          let projectFilesNote: string | null = null;
+          try {
+            const entries = readdirSync(p.canonical_path, { withFileTypes: true }).slice(0, 100);
+            projectFiles = entries.map((e) => ({ name: e.name, dir: e.isDirectory() }));
+          } catch (error) {
+            projectFilesNote = `项目目录不可读：${error instanceof Error ? error.message : String(error)}`;
+          }
+          return { projectId: p.id, displayName: p.display_name, projectFiles, ...(projectFilesNote != null ? { projectFilesNote } : {}), attachments, drafts, deliveries };
+        });
+        return withCommandId({ ok: true, data: { groups, note: 'Files 集合（只读四类分列：项目文件/托管附件/Agent 草稿/交付成果——逐项保留来源/版本/hash/定位；私信资源仅本人可见）' } });
+      }
       case 'thread.collaborators': {
-        // DEV-19 协作视图首包（第二十六轮四）：四列分列——人的关注（thread_subscriptions）/
-        // Agent 跟进名单（thread_agent_followers）/冻结参与者（route_json.frozenMemberIds）/
+        // DEV-19 协作视图首包（第二十六轮四）：四列分列——人的关注（thread_subscriptions）/        // Agent 跟进名单（thread_agent_followers）/冻结参与者（route_json.frozenMemberIds）/
         // 实时执行（run_participants）。纯读零运行。
         const params = z.strictObject({ threadId: z.string().min(1) }).parse(env.params);
         const thread = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string; project_id: string } | undefined;

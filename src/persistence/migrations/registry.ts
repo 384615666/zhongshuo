@@ -30,6 +30,7 @@ import { remindersCallsMigration } from './028-reminders-calls.ts';
 import { savedRefsMigration } from './029-saved-refs.ts';
 import { reminderIdentityMigration } from './030-reminder-identity.ts';
 import { artifactSourceMigration } from './031-artifact-source.ts';
+import { migration032 } from './032-turn-stop-snapshot.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -64,4 +65,5 @@ export const MIGRATIONS: readonly Migration[] = [
   savedRefsMigration,
   reminderIdentityMigration,
   artifactSourceMigration,
+  migration032,
 ];

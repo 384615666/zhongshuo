@@ -420,6 +420,7 @@ const BOARD_COLUMNS = [
   { key: 'review', label: '待验收' },
   { key: 'blocked', label: '阻塞' },
   { key: 'stopped', label: '停止' },
+  { key: 'done', label: '已完成' },
 ];
 let boardVisible = false;
 async function renderBoard() {
@@ -436,36 +437,73 @@ async function renderBoard() {
     gHead.className = 'sidebar-sec';
     gHead.textContent = `项目：${g.displayName}`;
     gEl.append(gHead);
-    for (const room of g.rooms ?? []) {
-      const rEl = document.createElement('div');
-      rEl.className = 'board-room';
-      const rHead = document.createElement('div');
-      rHead.className = 'meta';
-      rHead.textContent = `房间：${room.name}（${room.roomId.slice(0, 8)}）`;
-      rEl.append(rHead);
-      const cols = document.createElement('div');
-      cols.className = 'board-cols';
-      for (const col of BOARD_COLUMNS) {
-        const colEl = document.createElement('div');
-        colEl.className = 'board-col';
-        const colHead = document.createElement('div');
-        colHead.className = 'meta';
-        const cards = (room.cards ?? []).filter((c) => c.column === col.key);
-        colHead.textContent = `${col.label}（${cards.length}）`;
-        colEl.append(colHead);
-        for (const c of cards) {
-          const card = document.createElement('button');
-          card.className = 'board-card' + (c.exitUnconfirmed ? ' exit-unknown' : '');
-          card.textContent = `${c.title}${c.exitUnconfirmed ? '（退出未确认）' : ''}${c.pendingDelivery != null ? `（待验收 v${c.pendingDelivery.revision}）` : ''}`;
-          card.title = `taskId=${c.taskId} · ${c.taskStatus}${c.runStatus != null ? ` · run=${c.runStatus}` : ''}——点击定位原串`;
-          card.onclick = () => { if (c.locate != null) location.hash = String(c.locate).slice(1); };
-          colEl.append(card);
+      for (const room of g.rooms ?? []) {
+        const rEl = document.createElement('div');
+        rEl.className = 'board-room';
+        const rHead = document.createElement('div');
+        rHead.className = 'meta';
+        rHead.textContent = `房间：${room.name}（${room.roomId.slice(0, 8)}）`;
+        rEl.append(rHead);
+        const cols = document.createElement('div');
+        cols.className = 'board-cols';
+        for (const col of BOARD_COLUMNS) {
+          const colEl = document.createElement('div');
+          colEl.className = 'board-col';
+          const colHead = document.createElement('div');
+          colHead.className = 'meta';
+          const cards = (room.cards ?? []).filter((c) => c.column === col.key);
+          colHead.textContent = `${col.label}（${cards.length}）`;
+          colEl.append(colHead);
+          for (const c of cards) {
+            // 卡片=定位；动作行=**已有正式命令**（第二十七轮五）：停止（task.stop——run 在途才
+            // 可用）/通过验收（task.review——绑定展示时 deliveryId/revision/manifestHash）。闭包
+            // 钉死卡片快照的 task/run/交付版本——刷新重绘换的是新节点，本按钮目标不变。未有
+            // 命令的动作不出现（不摆不可用按钮）；返工需意见——走线程内验收入口。
+            const wrap = document.createElement('div');
+            wrap.className = 'board-card-wrap';
+            const card = document.createElement('button');
+            card.className = 'board-card' + (c.exitUnconfirmed ? ' exit-unknown' : '');
+            card.textContent = `${c.title}${c.exitUnconfirmed ? '（退出未确认）' : ''}${c.pendingDelivery != null ? `（待验收 v${c.pendingDelivery.revision}）` : ''}`;
+            card.title = `taskId=${c.taskId} · ${c.taskStatus}${c.runStatus != null ? ` · run=${c.runStatus}` : ''}——点击定位原串`;
+            card.onclick = () => { if (c.locate != null) location.hash = String(c.locate).slice(1); };
+            wrap.append(card);
+            if (c.runId != null && ['RUNNING', 'WAITING', 'QUEUED'].includes(c.runStatus)) {
+              const stop = document.createElement('button');
+              stop.className = 'chip';
+              stop.textContent = '停止';
+              stop.title = `task.stop（run=${c.runId.slice(0, 8)}…，停止代次 ${c.stopGeneration ?? 0}）`;
+              stop.onclick = () => void (async () => {
+                stop.disabled = true;
+                try {
+                  await command('task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration ?? 0 });
+                  showError('停止请求已提交（终态由轮询推进）');
+                } catch (e) { showError(`停止失败：${e.message}`); stop.disabled = false; }
+                await renderBoard().catch(() => {});
+              })().catch(() => {});
+              wrap.append(stop);
+            }
+            if (c.taskStatus === 'REVIEW' && c.pendingDelivery != null) {
+              const accept = document.createElement('button');
+              accept.className = 'chip';
+              accept.textContent = '通过验收';
+              accept.title = `task.review accept（交付 ${c.pendingDelivery.deliveryId.slice(0, 8)}… v${c.pendingDelivery.revision}；返工需意见——线程内）`;
+              accept.onclick = () => void (async () => {
+                accept.disabled = true;
+                try {
+                  const r = await command('task.review', { taskId: c.taskId, deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash, decision: 'accept' });
+                  showError(`验收通过：交付 v${r.deliveryRevision ?? c.pendingDelivery.revision}——任务 ${r.taskStatusAfter ?? ''}`);
+                } catch (e) { showError(`验收失败：${e.message}`); accept.disabled = false; }
+                await renderBoard().catch(() => {});
+              })().catch(() => {});
+              wrap.append(accept);
+            }
+            colEl.append(wrap);
+          }
+          cols.append(colEl);
         }
-        cols.append(colEl);
+        rEl.append(cols);
+        gEl.append(rEl);
       }
-      rEl.append(cols);
-      gEl.append(rEl);
-    }
     frag.append(gEl);
   }
   if (frag.childElementCount === 0) {
@@ -476,8 +514,80 @@ async function renderBoard() {
   }
   box.replaceChildren(frag);
 }
+// ---------- DEV-19 Files 集合（第二十七轮五）：四类分列只读（files.view）----------
+let filesVisible = false;
+async function renderFiles() {
+  const box = el('files-groups');
+  if (box == null || !filesVisible) return;
+  const scope = el('files-scope')?.value ?? 'project';
+  let data;
+  try { data = await command('files.view', scope === 'project' && state.projectId != null ? { scope: 'project', projectId: state.projectId } : { scope: 'all' }); } catch (e) { showError(`Files 读取失败：${e.message}`); return; }
+  const frag = document.createDocumentFragment();
+  for (const g of data.groups ?? []) {
+    const gEl = document.createElement('div');
+    gEl.className = 'board-group';
+    const gHead = document.createElement('div');
+    gHead.className = 'sidebar-sec';
+    gHead.textContent = `项目：${g.displayName}`;
+    gEl.append(gHead);
+    const mkRow = (label, text, locate, title) => {
+      const row = document.createElement('button');
+      row.className = 'chip';
+      row.textContent = text;
+      row.title = title ?? text;
+      if (locate != null) row.onclick = () => { location.hash = String(locate).slice(1); };
+      else { row.disabled = true; row.title = `${title ?? ''}（无深链——从所属会话进入）`; }
+      const wrap = document.createElement('div');
+      wrap.className = 'board-room';
+      const tag = document.createElement('span');
+      tag.className = 'meta';
+      tag.textContent = label;
+      wrap.append(tag, row);
+      return wrap;
+    };
+    const sec = (title, rows) => {
+      if (rows.length === 0) return null;
+      const head = document.createElement('div');
+      head.className = 'meta';
+      head.textContent = `${title}（${rows.length}）`;
+      const wrapEl = document.createElement('div');
+      wrapEl.className = 'board-room';
+      wrapEl.append(head, ...rows);
+      return wrapEl;
+    };
+    const attRows = (g.attachments ?? []).map((a) => mkRow('托管附件', `📎 ${a.filename}（${a.hash.slice(0, 8)}… v${a.revision}${a.audience === 'dm' ? ' · 私信' : ''}）`, a.locate, `${a.audience === 'dm' ? '私信资源（仅本人可见）' : '房间会话'} · ${a.conversationId}`));
+    const draftRows = (g.drafts ?? []).map((d) => mkRow('Agent 草稿', `草稿 ${d.changeSetId.slice(0, 8)}…（${d.applicationStatus}）${d.taskTitle != null ? ` · ${d.taskTitle}` : ''}`, d.locate, `change_set：${d.beforeRef.slice(0, 8)}…→${d.afterRef.slice(0, 8)}…`));
+    const delRows = (g.deliveries ?? []).map((d) => mkRow('交付成果', `📦 ${d.title} v${d.revision}（${d.manifestHash.slice(0, 8)}…${d.audience === 'dm' ? ' · 私信' : ''}）`, d.locate, `交付 ${d.deliveryId}`));
+    const pfRow = (() => {
+      if ((g.projectFiles ?? []).length === 0 && g.projectFilesNote == null) return null;
+      const row = document.createElement('div');
+      row.className = 'meta';
+      row.textContent = g.projectFilesNote != null ? `项目文件：${g.projectFilesNote}` : `项目文件（根目录 ${g.projectFiles.length} 项——来源=用户项目目录本身）：${g.projectFiles.slice(0, 20).map((f) => f.dir ? `${f.name}/` : f.name).join('、')}${g.projectFiles.length > 20 ? ' …' : ''}`;
+      const wrapEl = document.createElement('div');
+      wrapEl.className = 'board-room';
+      wrapEl.append(row);
+      return wrapEl;
+    })();
+    for (const s of [sec('托管附件', attRows), sec('Agent 草稿', draftRows), sec('交付成果', delRows), pfRow]) {
+      if (s != null) gEl.append(s);
+    }
+    if (gEl.childElementCount === 1) {
+      const empty = document.createElement('div');
+      empty.className = 'meta';
+      empty.textContent = '（无附件/草稿/交付）';
+      gEl.append(empty);
+    }
+    frag.append(gEl);
+  }
+  if (frag.childElementCount === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = '暂无资源。';
+    frag.append(empty);
+  }
+  box.replaceChildren(frag);
+}
 async function renderCollaborators() {
-  const box = el('thread-collab');
   if (box == null || state.openThreadId == null) return;
   let data;
   try { data = await command('thread.collaborators', { threadId: state.openThreadId }); } catch { return; }
@@ -2499,13 +2609,26 @@ wireAttach('dm');
 wireAttach('composer');
 el('board-toggle').onclick = () => {
   boardVisible = !boardVisible;
+  filesVisible = false;
   el('board').classList.toggle('hidden', !boardVisible);
+  el('files').classList.add('hidden');
   el('pool').classList.toggle('hidden', boardVisible);
   if (boardVisible) { void renderBoard().catch(() => {}); el('thread-title').textContent = '看板'; }
   else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
 };
 el('board-refresh').onclick = () => void renderBoard().catch(() => {});
 el('board-scope').addEventListener('change', () => void renderBoard().catch(() => {}));
+el('files-toggle').onclick = () => {
+  filesVisible = !filesVisible;
+  boardVisible = false;
+  el('files').classList.toggle('hidden', !filesVisible);
+  el('board').classList.add('hidden');
+  el('pool').classList.toggle('hidden', filesVisible);
+  if (filesVisible) { void renderFiles().catch(() => {}); el('thread-title').textContent = 'Files'; }
+  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+};
+el('files-refresh').onclick = () => void renderFiles().catch(() => {});
+el('files-scope').addEventListener('change', () => void renderFiles().catch(() => {}));
 el('search-go').onclick = () => void doSearch(1).catch(() => {});
 el('search-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void doSearch(1).catch(() => {}); });
 el('search-prev').onclick = () => void doSearch(Math.max(1, searchState.page - 1)).catch(() => {});
