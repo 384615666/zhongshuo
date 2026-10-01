@@ -36,7 +36,7 @@ FULL-01 导航/频道/资料/Activity/Saved/Search；FULL-02 全部任务入口/
 ## 下一包建议（依赖已满足排序，第二十八轮修订）
 
 1. **DEV-24 完善面**：Markdown 安全预览（脚本不执行）、共享预览完善（搜索/引用锚）、导出、图片/PDF/Office 评论锚点（按分批归属）；
-2. **解析边界可移植复核**：便携包内 parse-worker/cmaps/cmaps 资源路径随 make-independent-package 独立机冒烟（本地打包冒烟已过）；
+2. **独立交付包（make-independent-package）随下轮重建**：本轮冻结三连（112/112×3）已在便携产物内经打包 daemon 的 parse-worker.cjs+cmaps 走通 Office/PDF 解析页面链（资源路径已证）；独立包重建随下次交付；
 3. DEV-18 剩余（Activity 流/消息操作全集/惰性表情）与 DEV-19 跨项目汇总视图（不做状态直改）；
 4. DEV-15：安装器与升级迁移设计（便携链已验，可做增量）。
    （DEV-16 排 M3 末尾集成验收；MCP/FULL-11 等 M3 命令面与 DEV-25/RT-21 满足后再排。看板动作/Files/停止代次修复/图片/PDF 首包已于第二十七—二十八轮交付；通知人工验收已通过归档。））
