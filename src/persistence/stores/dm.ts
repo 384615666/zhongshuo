@@ -172,6 +172,8 @@ export interface CreateDmTurnInput {
   body: string;
   intent: 'default' | 'record_only';
   reviewPolicy: string;
+  /** 作者（第二十四轮二：提醒派发=system——不伪装人类发言；缺省 human=本地用户）。 */
+  author?: { authorType: 'human' | 'system'; authorId: string };
 }
 
 export interface CreateDmTurnResult {
@@ -191,8 +193,9 @@ export function createDmTurn(db: ZhongshuoDatabase, input: CreateDmTurnInput): C
     const seq = db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq').get(input.conversationId) as { last_message_seq: number };
     db.prepare(
       `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id, thread_message_seq, author_type, author_id, body_json, status, created_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, 'human', ?, ?, 'saved', ?)`,
-    ).run(messageId, input.projectId, input.conversationId, seq.last_message_seq, dispatch ? taskId : null, input.localUserId, JSON.stringify({ text: input.body }), Date.now());
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, 'saved', ?)`,
+    ).run(messageId, input.projectId, input.conversationId, seq.last_message_seq, dispatch ? taskId : null,
+      input.author?.authorType ?? 'human', input.author?.authorId ?? input.localUserId, JSON.stringify({ text: input.body }), Date.now());
     if (!dispatch) {
       return { messageId, disposition: 'none', taskId: null, note: 'record_only：只保存不建任务（意图一次性，不占预算）' };
     }

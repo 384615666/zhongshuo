@@ -82,10 +82,10 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     return assemblyFailure('missing-root-message', '任务缺少根消息引用');
   }
   const root = db
-    .prepare('SELECT id, body_json, author_type FROM messages WHERE id = ?')
-    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string } | undefined;
+    .prepare('SELECT id, body_json, author_type, author_id FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string } | undefined;
   if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
-  if (root.author_type !== 'human') {
+  if (!isAcceptableRootAuthor(root.author_type, root.author_id)) {
     return assemblyFailure('root-not-user-request', '根消息作者不是用户（任务原始请求缺失）');
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
@@ -239,6 +239,13 @@ function messageTextOf(refId: string, rootText: string, history: Array<{ message
 /** DM 会话历史窗口（续接上文=最近 N 条；截断如实标注）。 */
 const DM_HISTORY_LIMIT = 50;
 
+/** 可接受的根消息作者（第二十四轮四）：用户原文，或提醒事件（DEV-23——system 来源
+ * +author_id=reminder:{id}，归属由 root.task_id===task.id 校验兜底）。 */
+function isAcceptableRootAuthor(authorType: string, authorId?: string): boolean {
+  if (authorType === 'human') return true;
+  return authorType === 'system' && (authorId ?? '').startsWith('reminder:');
+}
+
 /**
  * 私信 turn 组装（DEV-22；R4 §2.1/§2.2；第十九轮四：输入水位）：上下文=本会话中
  **≤ 本次用户消息 conversation_seq* 的消息（后续已保存但排队的消息不提前进入前一轮——
@@ -250,14 +257,18 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   const { db, task } = input;
   if (task.rootMessageId == null) return assemblyFailure('missing-root-message', 'dm_turn 缺少根消息引用（本次用户消息）');
   const root = db
-    .prepare('SELECT id, body_json, author_type, conversation_id, project_id, task_id FROM messages WHERE id = ?')
-    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; conversation_id: string; project_id: string; task_id: string | null } | undefined;
+    .prepare('SELECT id, body_json, author_type, author_id, conversation_id, project_id, task_id FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string; conversation_id: string; project_id: string; task_id: string | null } | undefined;
   if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
   // 归属校验（第十九轮四）：项目/会话/作者/任务四重——防跨会话/跨项目/伪造归属的根消息进入本轮输入。
   if (root.conversation_id !== task.conversationId || root.project_id !== task.projectId) {
     return assemblyFailure('root-scope-mismatch', '根消息不属于本任务的项目/会话——拒绝组装');
   }
-  if (root.author_type !== 'human') return assemblyFailure('root-not-user-request', 'dm_turn 根消息作者不是用户');
+  // 根消息作者=用户，或=提醒事件（DEV-23：system 来源+author_id=reminder:{id}——不伪装人类；
+  // 任务归属校验（下行 root.task_id）保证该根确实属于本任务）。
+  if (!isAcceptableRootAuthor(root.author_type, root.author_id)) {
+    return assemblyFailure('root-not-user-request', 'dm_turn 根消息作者不是用户');
+  }
   if (root.task_id !== task.id) {
     return assemblyFailure('root-scope-mismatch', `根消息任务归属不符（msg.task_id=${root.task_id ?? 'null'} ≠ 本任务）——拒绝组装`);
   }

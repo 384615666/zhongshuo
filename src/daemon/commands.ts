@@ -17,7 +17,8 @@ import {
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate,
 } from '../persistence/stores/dm.ts';
 import { openProject } from './projectStore.ts';
-import { computeNextAt, type ReminderSchedule } from './reminderScheduler.ts';
+import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
+import { dispatchReminderExecution, dispatchedCountOf } from './reminderDispatch.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
@@ -401,7 +402,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
         const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
         // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
-        const pendingDelivery = deps.db.prepare(`SELECT id, revision FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number } | undefined;
+        const pendingDelivery = deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number; manifest_hash: string } | undefined;
         // 最近一次启动失败原因（第十六轮四：验收防护拒绝等如实上屏——「待处理/失败」无解释=用户不可知）。
         const lastStartupFailure = (deps.db.prepare(
           `SELECT e.payload_json FROM domain_events e JOIN agent_turns t ON t.id = e.turn_id
@@ -1408,12 +1409,14 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: r.data });
       }
       case 'reminder.schedule': {
-        // DEV-23 首包（REM 合同）：一次/循环计划。scheduledAt/next_at 一律 UTC；时区只用于
-        // 服务端计算下一次（computeNextAt——不依赖模型）。ownerMemberId=被唤醒成员；来源
-        // sourceRef 继承（外部任务派生的提醒不从本地入口清空限制）。
+        // DEV-23（第二十四轮三——REM-5/6）：一次/循环计划。audience/owner 范围/DM 对端统一
+        // 校验；reminderId **事务内**生成、返回 r.data——同 commandId 重放返回原 ID 与计划
+        // （网关 run() 同事务存回执；同号异参被 payloadHash 拒绝）。autoDispatch=显式授权位
+        // （sourceRef 字符串不构成授权事实——授权只能来自本地入口的显式选择并落库冻结）。
         const params = z.strictObject({
           projectId: z.string().min(1),
-          conversationId: z.string().min(1).optional(),
+          conversationId: z.string().min(1),
+          threadId: z.string().min(1).optional(),
           taskId: z.string().min(1).optional(),
           ownerMemberId: z.string().min(1),
           title: z.string().min(1).max(200),
@@ -1424,36 +1427,60 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             z.strictObject({ kind: z.literal('weekly'), weekday: z.number().int().min(0).max(6), time: z.string().regex(/^\d{2}:\d{2}$/), tz: z.string().min(1).optional() }),
           ]),
           budgetLimit: z.strictObject({ sum: z.number().int().min(0) }).optional(),
+          autoDispatch: z.boolean().optional(),
         }).parse(env.params);
-        if (params.conversationId != null) assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
-        const nextAt = computeNextAt(params.schedule as ReminderSchedule, Date.now());
+        const schedule = params.schedule as ReminderSchedule;
+        const scheduleCheck = validateSchedule(schedule);
+        if (!scheduleCheck.ok) throw new DaemonCommandError('VALIDATION_INVALID', `提醒计划无效：${scheduleCheck.error}`);
+        const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        if (convInfo.projectId !== params.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不属于该项目');
+        const nextAt = computeNextAt(schedule, Date.now());
         if (nextAt == null) throw new DaemonCommandError('VALIDATION_INVALID', '计划无法产生未来触发时刻（once.at 已过或循环无解）——请提供未来时刻');
-        const reminderId = `rem_${randomUUID()}`;
-        const now = Date.now();
-        const tx = deps.db.transaction(() => {
-          const projRow = deps.db.prepare('SELECT project_id FROM conversations WHERE id = ?').get(params.conversationId ?? '') as { project_id: string } | undefined;
-          if (projRow == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '提醒必须挂有效会话（conversationId 缺失或不存在）');
-          if (projRow.project_id !== params.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '会话不属于该项目');
-          deps.db.prepare(`INSERT INTO reminders (id, conversation_id, thread_id, task_id, owner_member_id, owner_user, title, source_ref, timezone, schedule_json, next_at, status, budget_json, created_at, updated_at)
-                           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`)
-            .run(reminderId, params.conversationId, params.taskId ?? null, params.ownerMemberId, deps.localUserId, params.title, params.sourceRef ?? null,
-              (params.schedule as { tz?: string }).tz ?? 'UTC', JSON.stringify(params.schedule), nextAt,
-              params.budgetLimit != null ? JSON.stringify(params.budgetLimit) : null, now, now);
+        // owner 范围（REM-5，网关外只读校验——保住正式错误码，run() 内领域错会被包装
+        // STORAGE_UNAVAILABLE）：项目成员+启用；DM 会话只能唤醒该对话的 agent 对端。
+        const member = deps.db.prepare('SELECT id, enabled, project_id FROM project_members WHERE id = ?').get(params.ownerMemberId) as
+          | { id: string; enabled: number; project_id: string } | undefined;
+        if (member == null || member.project_id !== params.projectId) throw new DaemonCommandError('SCOPE_MISMATCH', 'owner 必须是该项目的成员');
+        if (member.enabled !== 1) throw new DaemonCommandError('VALIDATION_INVALID', 'owner 成员已停用——不能作为唤醒对象');
+        if (convInfo.kind === 'dm') {
+          const peer = deps.db.prepare("SELECT 1 AS ok FROM dm_participants WHERE conversation_id = ? AND principal_type = 'agent' AND principal_id = ?").get(params.conversationId, params.ownerMemberId);
+          if (peer == null) throw new DaemonCommandError('SCOPE_MISMATCH', '私信提醒只能唤醒该对话的 agent 对端');
+        }
+        if (params.taskId != null) {
+          const task = deps.db.prepare('SELECT conversation_id FROM tasks WHERE id = ?').get(params.taskId) as { conversation_id: string } | undefined;
+          if (task?.conversation_id !== params.conversationId) throw new DaemonCommandError('SCOPE_MISMATCH', '任务不属于目标会话');
+        }
+        if (params.threadId != null) {
+          const thread = deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { conversation_id: string } | undefined;
+          if (thread?.conversation_id !== params.conversationId) throw new DaemonCommandError('SCOPE_MISMATCH', '线程不属于目标会话');
+        }
+        const tx = deps.db.transaction((): { reminderId: string; nextAt: number } => {
+          const reminderId = `rem_${randomUUID()}`;
+          const now = Date.now();
+          deps.db.prepare(`INSERT INTO reminders (id, conversation_id, thread_id, task_id, owner_member_id, owner_user, title, source_ref, timezone, schedule_json, next_at, status, budget_json, auto_dispatch, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`)
+            .run(reminderId, params.conversationId, params.threadId ?? null, params.taskId ?? null, params.ownerMemberId, deps.localUserId, params.title, params.sourceRef ?? null,
+              schedule.tz ?? 'UTC', JSON.stringify(schedule), nextAt,
+              params.budgetLimit != null ? JSON.stringify(params.budgetLimit) : null, params.autoDispatch === true ? 1 : 0, now, now);
+          return { reminderId, nextAt };
         });
         const r = run(tx);
-        return withCommandId({ ok: true, data: { reminderId, nextAt, replayed: r.replayed } });
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.snooze': {
         const params = z.strictObject({ reminderId: z.string().min(1), until: z.number().int().positive() }).parse(env.params);
+        // 前置只读校验（网关外——正式错误码）：存在性/audience/状态/时刻。
+        const rowPre = deps.db.prepare('SELECT id, status, next_at, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; next_at: number; conversation_id: string } | undefined;
+        if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id); // REM-5：不能凭 reminderId 操作他人 DM 提醒
+        if (rowPre.status !== 'active') throw new DaemonCommandError('VALIDATION_INVALID', `仅 active 提醒可贪睡（当前 ${rowPre.status}）`);
+        if (params.until <= rowPre.next_at) throw new DaemonCommandError('VALIDATION_INVALID', '贪睡时刻必须晚于当前下次触发时刻');
         const tx = deps.db.transaction((): { snoozed: boolean } => {
-          const row = deps.db.prepare('SELECT id, status, next_at FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; next_at: number } | undefined;
-          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
-          if (params.until <= row.next_at) throw new DaemonCommandError('VALIDATION_INVALID', '贪睡时刻必须晚于当前下次触发时刻');
-          const changed = deps.db.prepare(`UPDATE reminders SET next_at = ?, updated_at = ? WHERE id = ? AND next_at = ?`).run(params.until, Date.now(), row.id, row.next_at).changes;
+          const changed = deps.db.prepare(`UPDATE reminders SET next_at = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND next_at = ? AND status = 'active'`).run(params.until, Date.now(), rowPre.id, rowPre.next_at).changes;
           return { snoozed: changed === 1 };
         });
         const r = run(tx);
-        return withCommandId({ ok: true, data: r.data });
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.update': {
         const params = z.strictObject({
@@ -1464,44 +1491,97 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
             z.strictObject({ kind: z.literal('daily'), time: z.string().regex(/^\d{2}:\d{2}$/), tz: z.string().min(1).optional() }),
             z.strictObject({ kind: z.literal('weekly'), weekday: z.number().int().min(0).max(6), time: z.string().regex(/^\d{2}:\d{2}$/), tz: z.string().min(1).optional() }),
           ]).optional(),
+          autoDispatch: z.boolean().optional(),
         }).parse(env.params);
+        // 前置只读校验（网关外——正式错误码）。
+        const rowPre = deps.db.prepare('SELECT id, revision, schedule_json, status, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; revision: number; schedule_json: string; status: string; conversation_id: string } | undefined;
+        if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id);
+        if (rowPre.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${rowPre.revision}`);
+        if (rowPre.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '已取消的提醒不能更新复活——请重新创建（取消后不复活）');
+        const schedulePre = params.schedule != null ? (params.schedule as ReminderSchedule) : JSON.parse(rowPre.schedule_json) as ReminderSchedule;
+        const scheduleCheck = validateSchedule(schedulePre);
+        if (!scheduleCheck.ok) throw new DaemonCommandError('VALIDATION_INVALID', `新计划无效：${scheduleCheck.error}`);
+        const nextAtPre = computeNextAt(schedulePre, Date.now());
+        if (nextAtPre == null) throw new DaemonCommandError('VALIDATION_INVALID', '新计划无法产生未来触发时刻');
         const tx = deps.db.transaction((): { revision: number } => {
-          const row = deps.db.prepare('SELECT id, revision, schedule_json, status FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; revision: number; schedule_json: string; status: string } | undefined;
-          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
-          if (row.revision !== params.expectedRevision) throw new DaemonCommandError('REVISION_CONFLICT', `期望 revision=${params.expectedRevision}，当前=${row.revision}`);
-          const schedule = params.schedule != null ? (params.schedule as ReminderSchedule) : JSON.parse(row.schedule_json) as ReminderSchedule;
-          const nextAt = computeNextAt(schedule, Date.now());
-          if (nextAt == null) throw new DaemonCommandError('VALIDATION_INVALID', '新计划无法产生未来触发时刻');
-          deps.db.prepare('UPDATE reminders SET title = COALESCE(?, title), schedule_json = ?, next_at = ?, status = CASE WHEN status = \'done\' THEN \'active\' ELSE status END, revision = revision + 1, updated_at = ? WHERE id = ?')
-            .run(params.title ?? null, JSON.stringify(schedule), nextAt, Date.now(), row.id);
-          return { revision: row.revision + 1 };
+          // timezone 列与 schedule_json 保持一致（第二十四轮二修复：旧实现改计划不同步列）。
+          // paused→active=显式继续（authority 类暂停在下次触发重查时如实再判定；恢复不自动补跑）。
+          deps.db.prepare(`UPDATE reminders SET title = COALESCE(?, title), schedule_json = ?, timezone = ?, next_at = ?, auto_dispatch = COALESCE(?, auto_dispatch),
+                           status = 'active', paused_reason = NULL, revision = revision + 1, updated_at = ? WHERE id = ?`)
+            .run(params.title ?? null, JSON.stringify(schedulePre), schedulePre.tz ?? 'UTC', nextAtPre, params.autoDispatch == null ? null : (params.autoDispatch ? 1 : 0), Date.now(), rowPre.id);
+          return { revision: rowPre.revision + 1 };
         });
         const r = run(tx);
-        return withCommandId({ ok: true, data: r.data });
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.cancel': {
         const params = z.strictObject({ reminderId: z.string().min(1) }).parse(env.params);
+        const rowPre = deps.db.prepare('SELECT id, status, conversation_id FROM reminders WHERE id = ?').get(params.reminderId) as { id: string; status: string; conversation_id: string } | undefined;
+        if (rowPre == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+        assertConversationAudience(deps.db, deps.localUserId, rowPre.conversation_id);
         const tx = deps.db.transaction((): { cancelled: boolean } => {
           const changed = deps.db.prepare(`UPDATE reminders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('active','paused')`).run(Date.now(), params.reminderId).changes;
           return { cancelled: changed === 1 };
         });
         const r = run(tx);
-        return withCommandId({ ok: true, data: r.data });
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
+      case 'reminder.confirm': {
+        // REM-8 正式确认入口：awaiting_confirmation 的 occurrence 经用户确认→正式执行派发
+        // （任务+outbox，author=system——不伪装人类）。确认时刻重查授权+预算（事实以当下为准）。
+        const params = z.strictObject({ reminderId: z.string().min(1), scheduledAt: z.number().int().positive() }).parse(env.params);
+        // 前置只读校验（网关外——正式错误码）。
+        const row = deps.db.prepare('SELECT * FROM reminders WHERE id = ?').get(params.reminderId) as
+          | { id: string; conversation_id: string; thread_id: string | null; task_id: string | null; owner_member_id: string; owner_user: string | null; title: string | null; source_ref: string | null; timezone: string; schedule_json: string; budget_json: string | null; auto_dispatch: number; status: string }
+          | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `提醒不存在：${params.reminderId}`);
+        assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
+        if (row.status === 'cancelled') throw new DaemonCommandError('VALIDATION_INVALID', '提醒已取消——不能确认执行');
+        const occ = deps.db.prepare('SELECT status, outcome, missed_count FROM reminder_occurrences WHERE reminder_id = ? AND scheduled_at = ?').get(params.reminderId, params.scheduledAt) as
+          | { status: string; outcome: string; missed_count: number } | undefined;
+        if (occ == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `触发记录不存在：${params.reminderId}@${params.scheduledAt}`);
+        if (occ.status !== 'fired' || occ.outcome !== 'awaiting_confirmation') {
+          throw new DaemonCommandError('VALIDATION_INVALID', `当前状态 ${occ.status}/${occ.outcome} 不可确认（仅待确认触发可确认）`);
+        }
+        const authority = recheckReminderAuthority(deps.db, row);
+        if (!authority.ok) throw new DaemonCommandError('FORBIDDEN', `授权重查未通过：${authority.reason}`);
+        const budget = checkReminderBudget(deps.db, row);
+        if (!budget.ok) throw new DaemonCommandError('BUDGET_EXCEEDED', budget.reason === 'budget_corrupt' ? '预算记录损坏——拒绝派发（fail-closed）' : '预算已用尽——拒绝派发');
+        const tx = deps.db.transaction((): { taskId: string; confirmedAt: number } => {
+          const dispatch = dispatchReminderExecution(deps.db, {
+            reminder: row,
+            scheduledAt: params.scheduledAt,
+            missedCount: occ.missed_count ?? 0,
+            dispatchedCount: dispatchedCountOf(deps.db, row.id),
+            now: Date.now(),
+          });
+          const changed = deps.db.prepare(`UPDATE reminder_occurrences SET outcome = 'dispatched', task_id = ?, confirmed_at = ? WHERE reminder_id = ? AND scheduled_at = ? AND outcome = 'awaiting_confirmation'`)
+            .run(dispatch.taskId, Date.now(), params.reminderId, params.scheduledAt).changes;
+          if (changed !== 1) throw new DaemonCommandError('REVISION_CONFLICT', '确认竞态：触发状态已变化');
+          return { taskId: dispatch.taskId, confirmedAt: Date.now() };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'reminder.list': {
+        // REM-5：audience 过滤——他人 DM 的提醒（标题/计划/occurrence）不因列表泄露。
         const params = z.strictObject({ projectId: z.string().min(1).optional() }).parse(env.params);
+        const audienceFilter = ' AND (c.kind != \'dm\' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = \'human\' AND dp.principal_id = ?))';
         const rows = (params.projectId != null
-          ? deps.db.prepare('SELECT r.id, r.conversation_id, c.project_id, r.task_id, r.owner_member_id, r.title, r.source_ref, r.timezone, r.schedule_json, r.next_at, r.status, r.paused_reason, r.budget_json, r.revision FROM reminders r JOIN conversations c ON c.id = r.conversation_id WHERE c.project_id = ? ORDER BY r.rowid DESC').all(params.projectId)
-          : deps.db.prepare('SELECT r.id, r.conversation_id, c.project_id, r.task_id, r.owner_member_id, r.title, r.source_ref, r.timezone, r.schedule_json, r.next_at, r.status, r.paused_reason, r.budget_json, r.revision FROM reminders r JOIN conversations c ON c.id = r.conversation_id ORDER BY r.rowid DESC').all()) as Array<Record<string, unknown>>;
+          ? deps.db.prepare(`SELECT r.*, c.project_id AS project_id_ FROM reminders r JOIN conversations c ON c.id = r.conversation_id WHERE c.project_id = ?${audienceFilter} ORDER BY r.rowid DESC`).all(params.projectId, deps.localUserId)
+          : deps.db.prepare(`SELECT r.*, c.project_id AS project_id_ FROM reminders r JOIN conversations c ON c.id = r.conversation_id WHERE 1=1${audienceFilter} ORDER BY r.rowid DESC`).all(deps.localUserId)) as Array<Record<string, unknown>>;
         const items = rows.map((row) => ({
-          reminderId: row.id, projectId: row.project_id, conversationId: row.conversation_id, taskId: row.task_id,
+          reminderId: row.id, projectId: row.project_id_, conversationId: row.conversation_id, threadId: row.thread_id, taskId: row.task_id,
           ownerMemberId: row.owner_member_id, title: row.title, sourceRef: row.source_ref,
           schedule: JSON.parse(row.schedule_json as string) as ReminderSchedule,
           timezone: row.timezone,
           nextAt: row.next_at, status: row.status, pausedReason: row.paused_reason,
           budgetLimit: row.budget_json != null ? JSON.parse(row.budget_json as string) : null,
           revision: row.revision,
-          pendingOccurrences: (deps.db.prepare(`SELECT scheduled_at, status, missed_count FROM reminder_occurrences WHERE reminder_id = ? AND status = 'pending' ORDER BY scheduled_at`).all(row.id) as Array<{ scheduled_at: number; status: string; missed_count: number }>),
+          autoDispatch: row.auto_dispatch === 1,
+          lastFiredAt: row.last_fired_at,
+          occurrences: (deps.db.prepare(`SELECT scheduled_at, status, outcome, missed_count, fired_at, task_id, confirmed_at FROM reminder_occurrences WHERE reminder_id = ? ORDER BY scheduled_at DESC LIMIT 200`).all(row.id) as Array<{ scheduled_at: number; status: string; outcome: string | null; missed_count: number; fired_at: number | null; task_id: string | null; confirmed_at: number | null }>),
         }));
         return withCommandId({ ok: true, data: { items } });
       }
@@ -1556,8 +1636,19 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY t.rowid`,
           ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>);
-          return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread, threadUnread, blockedTasks };
-        }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0 || p.threadUnread.length > 0 || p.blockedTasks.length > 0);
+          // 待确认提醒触发（REM-8）：未授权自动派发的提醒到点后等待用户确认——正式确认入口
+          // （reminder.confirm）由此可达；他人 DM 的提醒不泄露（audience 同上）。
+          const reminderAwaits = (deps.db.prepare(
+            `SELECT ro.reminder_id, ro.scheduled_at, ro.missed_count, r.title, r.conversation_id, c.kind AS conversation_kind
+             FROM reminder_occurrences ro
+             JOIN reminders r ON r.id = ro.reminder_id
+             JOIN conversations c ON c.id = r.conversation_id
+             WHERE c.project_id = ? AND ro.status = 'fired' AND ro.outcome = 'awaiting_confirmation'
+               AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
+             ORDER BY ro.scheduled_at`,
+          ).all(p.id, deps.localUserId) as Array<{ reminder_id: string; scheduled_at: number; missed_count: number; title: string | null; conversation_id: string; conversation_kind: string }>);
+          return { projectId: p.id, displayName: p.display_name, reviewTasks, dmUnread, threadUnread, blockedTasks, reminderAwaits };
+        }).filter((p) => p.reviewTasks.length > 0 || p.dmUnread.length > 0 || p.threadUnread.length > 0 || p.blockedTasks.length > 0 || p.reminderAwaits.length > 0);
         return withCommandId({ ok: true, data: { projects: out, generatedAt: Date.now() } });
       }
       case 'deepLink.resolve': {

@@ -273,12 +273,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 修复轮 6：保存 drain Promise，stop 等待其收敛后才关库（数据库关闭后零业务写入）。
     let draining = false;
     let inFlightDrain: Promise<void> | null = null;
-    // DEV-23 首包：提醒调度器（15s 扫描；时钟=Date.now——假时钟只在测试注入）。
-    // 触发重查/合并/暂停/预算拒绝语义见 reminderScheduler.ts；ZS_REMINDER_DISABLED=1 可关。
+    // DEV-23（第二十四轮三）：**单实例**调度器（15s 扫描——构造时收案首包遗留 pending
+    // occurrence）；stop() 第一步 close()=停止扫描与新派发入口。ZS_REMINDER_DISABLED=1 可关。
+    const reminderScheduler = new ReminderScheduler({ db: db! });
     const reminderTimer = process.env.ZS_REMINDER_DISABLED === '1'
       ? null
       : setInterval(() => {
-        try { new ReminderScheduler({ db: db! }).tick(); } catch (error) {
+        try { reminderScheduler.tick(); } catch (error) {
           process.stderr.write(`[zhongshuo-daemon] reminder tick error: ${error instanceof Error ? error.message : String(error)}
 `);
         }
@@ -353,6 +354,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           return stopPromise;
         };
         const runGraceful = async (): Promise<DaemonStopResult> => {
+          reminderScheduler.close();                  // 0) 提醒：关扫描与新派发入口（收拢/关库前不再触发）
+          if (reminderTimer != null) clearInterval(reminderTimer);
           clearInterval(tick);                     // 1) 拒新派发（停 tick）
           worker.stopAccepting();                  // 1b) drain 安全边界：拒新领取（在执行项继续）+ 启动窗口检查位
           await ipc!.close();                      // 2) 拒新命令（断开全部连接）
