@@ -114,3 +114,15 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 }
 .msg:hover .msg-star { opacity: 1; }
 #search-results button.room { text-align: left; }
+
+/* DEV-19 看板首包（第二十六轮四） */
+.board { padding: 8px 12px; overflow: auto; }
+.board-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.board-cols { display: flex; gap: 8px; }
+.board-col { flex: 1; min-width: 140px; border: 1px solid #d5dbe3; border-radius: 6px; padding: 6px; }
+.board-card { display: block; width: 100%; text-align: left; margin: 4px 0; padding: 5px 7px; font: inherit; font-size: 12px; border: 1px solid #cbd3db; border-radius: 5px; background: #fff; cursor: pointer; }
+.board-card.exit-unknown { border-color: #d99; background: #fdf6f6; }
+.board-room { margin: 8px 0; }
+
+/* DEV-24 文本附件（第二十六轮五） */
+#dm-attach-chips, #composer-attach-chips { margin: 2px 0; }

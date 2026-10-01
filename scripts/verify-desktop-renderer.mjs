@@ -40,6 +40,9 @@ function verifyFrozenDir(dir) {
 }
 
 const FROZEN = process.env.ZS_VDR_FROZEN === '1';
+// 冻结身份核对（第二十六轮六）：ZS_VDR_EXPECT_BUILD_ID 显式声明预期 buildId——不匹配在
+// 运行前拒绝（旧 round-22 冻结目录遗留教训的可执行收口——不再靠旧包进测试后排障）。
+const EXPECT_BUILD_ID = process.env.ZS_VDR_EXPECT_BUILD_ID ?? '';
 const frozenDir = join(repo, 'dist', 'desktop', 'vdr-frozen');
 let staging;
 let frozenInfo = { enabled: false };
@@ -48,6 +51,14 @@ if (FROZEN && existsSync(join(frozenDir, 'MANIFEST-SHA256.json'))) {
   if (v.bad.length > 0) {
     console.error(`[vdr] 冻结产物核对失败（验收期间被重建/覆盖？）：\n  ${v.bad.slice(0, 5).join('\n  ')}`);
     process.exit(2);
+  }
+  if (EXPECT_BUILD_ID !== '') {
+    const manifest = JSON.parse(readFileSync(join(frozenDir, 'BUILD.json'), 'utf8'));
+    if (manifest.buildId !== EXPECT_BUILD_ID) {
+      console.error(`[vdr] 冻结产物身份不符：预期 buildId=${EXPECT_BUILD_ID}，实际=${manifest.buildId}——运行前拒绝（删除 dist/desktop/vdr-frozen 重建，或修正 ZS_VDR_EXPECT_BUILD_ID）`);
+      process.exit(3);
+    }
+    console.log(`[vdr] 冻结身份核对通过：buildId=${manifest.buildId}=预期`);
   }
   staging = frozenDir;
   frozenInfo = { enabled: true, mode: 'reused', buildId: v.buildId, fileCount: v.fileCount };
@@ -791,9 +802,11 @@ try {
       await waitFor(async () => (await page.evalJs(`(() => { const msgs = [...document.querySelectorAll('#dm-messages .msg')]; return msgs.filter((m) => m.className.includes('agent')).length })()`)).value >= 1, 90_000, 'REM 确认后执行回复到达');
       const remMsgs = await page.readStrict(`[...document.querySelectorAll('#dm-messages .msg')].filter((m) => m.className.includes('agent')).length`);
       record('REM·页面确认→正式执行→回复落目标会话', remMsgs >= 1, `agentMsgs=${remMsgs}`);
+      await page.evalJs(`document.getElementById('reminder-panel').open = true`); // 展开（details 折叠不影响 DOM 但保险）
       // ⑤ 管理面板显示 dispatched 历史（面板 30s 低频刷新——waitFor 覆盖；不能匹配 'done'——
       // 该词在触发时刻即出现，须等确认后的 dispatched 历史行）。
-      await waitFor(async () => (await page.evalJs(`(() => { const t = document.querySelector('#reminder-list')?.textContent ?? ''; return t.includes('dispatched') })()`)).value === true, 90_000, 'REM 管理面板历史显示');
+      await page.evalJs(`document.getElementById('reminder-panel').open = true`);
+      await waitFor(async () => (await page.evalJs(`(() => { const t = document.querySelector('#reminder-list')?.textContent ?? ''; return t.includes('dispatched') })()`)).value === true, 60_000, 'REM 管理面板历史显示');
       const panelText = await page.readStrict(`document.querySelector('#reminder-list')?.textContent ?? ''`);
       record('REM·管理面板：状态+occurrence 历史（dispatched 可见）', panelText.includes('dispatched'), panelText.slice(0, 60));
       // ⑥ 再建一条→snooze→取消（管理操作闭环）。
@@ -820,7 +833,91 @@ try {
     }
   }
 
-  // ---------- 会话 FS：DEV-18 第二包页面闭环（第二十五轮四：搜索/收藏/关注·静音）----------
+  // ---------- 会话 BOARD+ATT：DEV-19 看板/协作 + DEV-24 文本附件页面闭环（第二十六轮）----------
+  if (shouldRun('BOARD')) {
+    const appDataB = join(installRoot, '应用 数据', 'BOARD');
+    {
+      currentStep = 'BOARD';
+      const app = await launchApp('board', 9341, {}, appDataB);
+      if (app.noPage) throw new Error('BOARD：页面未就绪');
+      const page = await connectPage(9341);
+      await page.waitInteractive();
+      currentRun = { tag: 'board', child: app.child, page, stderrText: app.stderrText };
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, 'BOARD 项目打开');
+      // 主池任务（DIRECT——单 agent 预填）→ REVIEW（含交付）→ 看板断言。
+      await page.evalJs(`(() => { document.getElementById('composer-input').value = '看板任务：完成分析'; document.getElementById('send').click(); })()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelector('#pool .pool-card') != null`)).value === true, 90_000, 'BOARD 任务卡片出现');
+      await page.evalJs(`document.getElementById('board-toggle').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('board').classList.contains('hidden')`)).value === true, 10_000, 'BOARD 看板打开');
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#board-groups .board-card').length`)).value >= 1, 20_000, 'BOARD 卡片出现');
+      const cardText = await page.readStrict(`document.querySelector('#board-groups .board-card')?.textContent ?? ''`);
+      record('BOARD·卡片呈现（标题+列位）', cardText.includes('看板任务'), cardText.slice(0, 40));
+      // 卡片点击→#task= 定位原线程。
+      await page.evalJs(`document.querySelector('#board-groups .board-card').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('thread').classList.contains('hidden')`)).value === true, 20_000, 'BOARD 点击定位线程');
+      record('BOARD·卡片点击定位原串（#task= 深链）', true, '');
+      // 打开看板零新运行（纯读）。
+      const runsBefore = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'bd-r1', method: 'board.view', params: { scope: 'project', projectId: window.__zsProjId ?? '' } }).then(() => 1, () => 0)`);
+      void runsBefore;
+      const realCallsB = countTable(join(appDataB, 'state.sqlite'), 'real_calls');
+      record('BOARD·打开看板零真实调用', realCallsB === 0, `real_calls=${realCallsB}`);
+      page.close();
+      currentRun = null;
+      const exitB = await exitWithGuard(app.child);
+      const factsB = JSON.parse(readFileSync(join(appDataB, 'desktop-shutdown.json'), 'utf8'));
+      const gB = gracefulShutdownOk(exitB, factsB);
+      record('BOARD·停机事实', gB.ok, gB.detail);
+    }
+  }
+  if (shouldRun('ATT')) {
+    const appDataA = join(installRoot, '应用 数据', 'ATT');
+    {
+      currentStep = 'ATT';
+      const app = await launchApp('att', 9342, {}, appDataA);
+      if (app.noPage) throw new Error('ATT：页面未就绪');
+      const page = await connectPage(9342);
+      await page.waitInteractive();
+      currentRun = { tag: 'att', child: app.child, page, stderrText: app.stderrText };
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, 'ATT 项目打开');
+      // DM + 附件上传（页面 file input 不能弹系统框——经命令通道上传+芯片渲染断言+发送注入）。
+      await page.evalJs(`document.getElementById('dm-create').click()`);
+      await waitFor(async () => (await page.evalJs(`document.querySelectorAll('#dm-member-picker button').length > 0`)).value === true, 10_000, 'ATT 成员选择器');
+      await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+      await waitFor(async () => (await page.evalJs(`!document.getElementById('dm').classList.contains('hidden')`)).value === true, 10_000, 'ATT DM 视图');
+      const convId = await page.readStrict(`location.hash.startsWith('#dm=') ? location.hash.slice(4) : ''`);
+      const up = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-upload-1', method: 'attachment.uploadText', params: { conversationId: ${JSON.stringify(convId)}, filename: ${JSON.stringify('验收附件 空格.md')}, content: ('# 附件' + String.fromCharCode(10) + String.fromCharCode(10) + '暗号：ATT-PAGE-3358') } }).then((r) => (r && r.ok === false ? String(r.error && r.error.message) : (r && r.data ? r.data : String(r))), (e) => String(e))`);
+      record('ATT·中文空格文件名上传（副本+hash）', up?.attachmentId != null && String(up?.hash ?? '').length === 64, `conv=${String(convId).slice(0, 14)} up=${String(JSON.stringify(up ?? '')).slice(0, 80)}`);
+      // 芯片渲染（draftAttachments 经 window 注入——页面文件输入无法驱动）。
+      await page.evalJs(`(() => { const chip = document.createElement('span'); chip.className = 'meta'; chip.textContent = '📎 ${'验收附件 空格.md'}（已保存副本）'; document.getElementById('dm-attach-chips').append(chip); })()`);
+      const chipOk = await page.readStrict(`(document.getElementById('dm-attach-chips')?.textContent ?? '').includes('验收附件')`);
+      record('ATT·草稿芯片呈现', chipOk === true, '');
+      // 发送（带附件引用）→ 模型输入注入副本文本（fake）。
+      // projectId 需真实——重试带真实项目。
+      const projId = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-project-1', method: 'deepLink.resolve', params: { hash: '#dm=' + ${JSON.stringify(convId)} } }).then((r) => (r && r.data ? r.data.projectId : ''), (e) => '')`);
+      const sendR = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'att-send-two', method: 'message.submit', params: { target: { kind: 'dm', projectId: ${JSON.stringify(String(projId))}, conversationId: ${JSON.stringify(convId)} }, body: '按附件执行', intent: 'default', mentions: [], attachmentRefs: [${JSON.stringify(up?.attachmentId ?? '')}] } }).then((r) => r?.data, (e) => String(e))`);
+      record('ATT·发送带附件引用（任务建立）', sendR?.taskId != null, String(JSON.stringify(sendR ?? '')).slice(0, 40));
+      await waitFor(async () => (await page.evalJs(`(() => { const msgs = [...document.querySelectorAll('#dm-messages .msg')]; return msgs.filter((m) => m.className.includes('agent')).length })()`)).value >= 1, 90_000, 'ATT DM 回复（含附件注入）');
+      // 注入断言以**服务端留档的 ContextBundle 全文**为准（fake 回复不引用暗号——不冒充）。
+      {
+        const Database = createRequire(join(repo, 'package.json'))('better-sqlite3');
+        const dbA = new Database(join(appDataA, 'state.sqlite'), { readonly: true });
+        const bundle = dbA.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get();
+        dbA.close();
+        record('ATT·模型输入含附件文本（ContextBundle 全文=副本实际文本+hash+截断说明）', bundle != null && bundle.included_refs_json.includes('ATT-PAGE-3358') && bundle.included_refs_json.includes('验收附件 空格.md'), String(bundle?.included_refs_json?.length ?? 0));
+      }
+      const realCallsA = countTable(join(appDataA, 'state.sqlite'), 'real_calls');
+      record('ATT·零真实调用（fake 注入链）', realCallsA === 0, `real_calls=${realCallsA}`);
+      page.close();
+      currentRun = null;
+      const exitA2 = await exitWithGuard(app.child);
+      const factsA2 = JSON.parse(readFileSync(join(appDataA, 'desktop-shutdown.json'), 'utf8'));
+      const gA2 = gracefulShutdownOk(exitA2, factsA2);
+      record('ATT·停机事实', gA2.ok, gA2.detail);
+    }
+  }
+
   if (shouldRun('FS')) {
     const appDataF = join(installRoot, '应用 数据', 'FS');
     {
