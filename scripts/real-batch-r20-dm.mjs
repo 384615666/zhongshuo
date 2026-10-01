@@ -303,7 +303,7 @@ try {
     const { openDatabase } = await import(pathToFileURL(join(repoRoot, 'src', 'persistence', 'db.ts')).href);
     const dbF = openDatabase(join(appData, 'state.sqlite'));
     dbCalls = dbF.prepare('SELECT count(*) c FROM real_calls WHERE batch_id = ?').get(BATCH);
-    callsDetail = dbF.prepare('SELECT turn_id, status, request_model, response_model, usage_json, run_id FROM real_calls WHERE batch_id = ?').all(BATCH);
+    callsDetail = dbF.prepare('SELECT turn_id, status, model AS request_model, response_model, usage_json, run_id FROM real_calls WHERE batch_id = ?').all(BATCH);
     identities = dbF.prepare("SELECT conversation_id, provider_session_id, session_generation FROM runtime_sessions WHERE scope_kind='dm' ORDER BY rowid").all();
     dbF.close();
   } catch { /* 库不可读（启动即败等）——明细如实缺省，主结果以 results 为准 */ }
