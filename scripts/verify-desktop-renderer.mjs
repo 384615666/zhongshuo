@@ -17,7 +17,7 @@
  *   再跑完整序列。
  */
 /* global fetch, WebSocket -- node>=21 原生（eslint 环境未声明） */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, execSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -207,9 +207,9 @@ async function launchApp(tag, port, extraEnv, appDataDirOverride) {
 }
 
 /** 极简 CDP 客户端：全截止（fetch/WS 握手/每条请求）；close/error 清理 pending 与 timer。 */
-async function connectPage(port, evalDeadlineMs = 20_000) {
+async function connectPage(port, evalDeadlineMs = 20_000, urlIncludes = 'index.html') {
   const list = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.json());
-  const target = list.find((t) => String(t.url).includes('index.html'));
+  const target = list.find((t) => String(t.url).includes(urlIncludes));
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   let seq = 0;
   const pending = new Map(); // id → { resolve, timer }
@@ -1158,6 +1158,79 @@ try {
       record('ATT·CSV 预览（UTF-8+引号逗号单元格如实）', pvCsv.includes('中文单元格,逗号') && pvCsv.includes('含"引号"') && pvCsv.includes('CSV · utf-8'), pvCsv.slice(0, 40));
       await closePreview(page);
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('清空附件'))?.click(); })()`);
+      // ---------- 第三十一轮二：新增页面会话（真实用户链路——不经 zs.command 直调替代）----------
+      // ① Markdown 恶意样本：脚本/危险链接/远程图片——安全渲染（转义+占位，不执行不请求）。
+      const NL31 = String.fromCharCode(10);
+      const evilMd = '<script>window.__evilRan=true</script> 恶意样本 EVIL-MD-771' + NL31 + NL31 + '[危险](javascript:alert(1)) 与 [正常](https://example.com/x)' + NL31 + NL31 + '![远程图](https://evil.example/x.png)';
+      await page.evalJs(`location.hash = '#dm=' + ${JSON.stringify(convId)}`);
+      await waitFor(async () => (await page.readStrict(`!document.getElementById('dm').classList.contains('hidden')`)) === true, 10_000, 'ATT 回到 DM 视图');
+      await uploadViaInput(page, 'dm', evilMd, '恶意样本.md', 'text/markdown');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('dm-attach-chips')?.textContent ?? '').includes('恶意样本.md')`)) === true, 30_000, 'ATT 恶意 md 芯片');
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#dm-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('恶意样本.md'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('EVIL-MD-771')`)) === true, 30_000, 'ATT 恶意 md 预览');
+      const evilRender = await page.readStrict(`(() => { const pv = document.getElementById('attach-preview'); return JSON.stringify({ evilRan: String(window.__evilRan ?? 'unset'), html: pv ? pv.innerHTML.slice(0, 1200) : '', text: pv ? pv.textContent.slice(0, 600) : '' }); })()`);
+      const evilParsed = JSON.parse(evilRender);
+      record('ATT·Markdown 安全渲染（脚本转义不执行/javascript 链不落地/远程图占位不请求）',
+        evilParsed.evilRan !== true && evilParsed.html.includes('&lt;script') && !evilParsed.html.includes('href="javascript') && evilParsed.text.includes('远程图片不加载'),
+        `evilRan=${evilParsed.evilRan} htmlHead=${evilParsed.html.slice(0, 60)}`);
+      // ② 预览搜索命中 + 行号引用进入正确草稿（DM 视图 → dm-input）。
+      await page.evalJs(`(() => { const q = document.getElementById('preview-search'); q.value = 'EVIL-MD-771'; q.dispatchEvent(new Event('input')); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('preview-search-hit')?.textContent ?? '').includes('命中')`)) === true, 10_000, 'ATT 预览搜索命中');
+      const hitLine = await page.readStrict(`document.querySelector('.preview-line.hit')?.dataset?.line ?? ''`);
+      await page.evalJs(`document.querySelector('.preview-line.hit .preview-line-no').click()`);
+      const draftAfterQuote = await page.readStrict(`document.getElementById('dm-input').value`);
+      record('ATT·预览搜索+行引用进入正确草稿（dm-input）', hitLine !== '' && draftAfterQuote.includes('恶意样本.md:L') && draftAfterQuote.includes('EVIL-MD-771'), `line=${hitLine} draft=${draftAfterQuote.slice(0, 50)}`);
+      await closePreview(page);
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#dm-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('清空附件'))?.click(); document.getElementById('dm-input').value = ''; })()`);
+      // ③ 三格式导出（md/html/docx）+ 打开导出目录 + 线程导出守卫（非线程视图明确拒绝）。
+      let exportOk3 = 0;
+      for (const fmt of ['md', 'html', 'docx']) {
+        await page.evalJs(`(() => { document.getElementById('dm-export-format').value = ${JSON.stringify(fmt)}; document.getElementById('dm-export-btn').click(); })()`);
+        // eslint-disable-next-line no-await-in-loop
+        await waitFor(async () => (await page.readStrict(`document.getElementById('conn-state').textContent.includes('导出完成') && document.getElementById('conn-state').textContent.includes(${JSON.stringify(fmt)})`)) === true, 30_000, `ATT 导出 ${fmt}`);
+        exportOk3 += 1;
+      }
+      const openShown = await page.readStrict(`!document.getElementById('export-open-last').classList.contains('hidden')`);
+      await page.evalJs(`document.getElementById('export-open-last').click()`);
+      await new Promise((r) => setTimeout(r, 600));
+      const openNoErr = await page.readStrict(`!document.getElementById('conn-state').textContent.includes('打开目录失败')`);
+      record('ATT·三格式导出（md/html/docx）+获准打开目录', exportOk3 === 3 && openShown && openNoErr, `formats=${exportOk3}`);
+      await page.evalJs(`document.getElementById('thread-export-btn').click()`);
+      const threadGuard = await page.readStrict(`document.getElementById('conn-state').textContent.includes('仅线程视图')`);
+      record('ATT·线程导出守卫（非线程视图明确拒绝）', threadGuard, '');
+      // ④ Activity 定位（点击定位 chip → hash 路由到对应会话）。
+      await page.evalJs(`document.getElementById('activity-toggle').click()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#activity-list .activity-row').length > 0`)) === true, 20_000, 'ATT Activity 行');
+      await page.evalJs(`(() => { const go = document.querySelector('#activity-list .activity-row button.chip'); if (go) go.click(); })()`);
+      const hash31 = await page.readStrict(`location.hash`);
+      record('ATT·Activity 点击定位（hash 路由）', hash31.length > 3, hash31.slice(0, 30));
+      await page.evalJs(`document.getElementById('activity-toggle').click()`);
+      // ⑤ 表情反应+刷新保持（真实消息操作：😊 层→👍→reload→仍（我））。
+      await page.evalJs(`(() => { const rows = [...document.querySelectorAll('#dm-list button')]; rows.find((r) => r.textContent.length > 0)?.click(); })()`);
+      try {
+        await waitFor(async () => (await page.readStrict(`!document.getElementById('dm').classList.contains('hidden') && document.querySelectorAll('#dm-messages .msg-actions').length > 0`)) === true, 20_000, 'ATT DM 消息操作组');
+      } catch (e) {
+        const st = await page.readStrict(`JSON.stringify({ hash: location.hash, dmHidden: document.getElementById('dm').className, threadHidden: document.getElementById('thread').className, dmListBtns: document.querySelectorAll('#dm-list button').length, dmMsgs: document.getElementById('dm-messages').children.length, conn: document.getElementById('conn-state').textContent.slice(0, 80) })`);
+        throw new Error(`DM 操作组等待失败（state=${st}）：${e.message}`);
+      }
+      await page.evalJs(`(() => { const a = document.querySelector('#dm-messages .msg-actions'); [...a.querySelectorAll('button.msg-action')].find((b) => b.textContent === '😊')?.click(); })()`);
+      try {
+        await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-messages .msg-emoji-layer button.chip').length >= 6`)) === true, 20_000, 'ATT 表情层');
+      } catch (e) {
+        const st = await page.readStrict(`JSON.stringify({ actions: document.querySelector('#dm-messages .msg-actions')?.textContent ?? null, layers: document.querySelectorAll('#dm-messages .msg-emoji-layer').length, conn: document.getElementById('conn-state').textContent.slice(0, 100) })`);
+        throw new Error(`表情层等待失败（state=${st}）：${e.message}`);
+      }
+      await page.evalJs(`(() => { const layer = document.querySelector('#dm-messages .msg-emoji-layer'); const b = [...layer.querySelectorAll('button.chip')].find((x) => x.textContent === '👍'); b.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.querySelector('#dm-messages .msg-emoji-layer')?.textContent ?? '').includes('👍')`)) === true, 20_000, 'ATT 表情已反应');
+      await page.evalJs(`location.reload()`);
+      await page.waitInteractive();
+      await waitFor(async () => (await page.readStrict(`!document.getElementById('project-name').textContent.includes('未打开项目')`)) === true, 30_000, 'ATT 刷新后项目恢复');
+      await page.evalJs(`(() => { const rows = [...document.querySelectorAll('#dm-list button')]; rows.find((r) => r.textContent.length > 0)?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-messages .msg-actions').length > 0`)) === true, 20_000, 'ATT 刷新后 DM 消息');
+      await page.evalJs(`(() => { const a = document.querySelector('#dm-messages .msg-actions'); [...a.querySelectorAll('button.msg-action')].find((b) => b.textContent === '😊')?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(document.querySelector('#dm-messages .msg-emoji-layer')?.textContent ?? '').includes('👍（我）')`)) === true, 20_000, 'ATT 刷新后表情保持');
+      record('ATT·表情反应刷新保持（👍（我）持久）', true, '');
+
       const realCallsA = countTable(join(appDataA, 'state.sqlite'), 'real_calls');
       record('ATT·零真实调用（fake 注入链）', realCallsA === 0, `real_calls=${realCallsA}`);
       page.close();
@@ -1166,6 +1239,107 @@ try {
       const factsA2 = JSON.parse(readFileSync(join(appDataA, 'desktop-shutdown.json'), 'utf8'));
       const gA2 = gracefulShutdownOk(exitA2, factsA2);
       record('ATT·停机事实', gA2.ok, gA2.detail);
+    }
+  }
+
+  // ---------- 会话 REMOTE：DEV-25 本机浏览器闭环（第三十一轮五）----------
+  // 桌面（本机可信 UI）启用远程+造配对码 → 便携包 Chromium 作纯浏览器壳（无 preload+SPKI
+  // 钉选信任）→ 真实页面链路：配对→会话列表→仅记录发消息→事件流（WSS）→导出下载链接→
+  // 吊销后命令拒绝（401 如实呈现）。零真实调用（fake+真实派发硬防护）。
+  if (shouldRun('REMOTE')) {
+    const appDataR = join(installRoot, '应用 数据', 'REMOTE');
+    {
+      currentStep = 'REMOTE';
+      const app = await launchApp('remote', 9371, {}, appDataR);
+      if (app.noPage) throw new Error('REMOTE：桌面页面未就绪');
+      const page = await connectPage(9371);
+      await page.waitInteractive();
+      currentRun = { tag: 'remote', child: app.child, page, stderrText: app.stderrText };
+      await page.evalJs(`document.getElementById('open-folder').click()`);
+      try {
+        await waitFor(async () => (await page.readStrict(`!document.getElementById('project-name').textContent.includes('未打开项目')`)) === true, 30_000, 'REMOTE 项目打开');
+      } catch (e) {
+        const st = await page.readStrict(`JSON.stringify({ name: document.getElementById('project-name').textContent, conn: document.getElementById('conn-state').textContent.slice(0,120), modalOpen: !!document.querySelector('.modal, dialog[open], #open-folder-modal') })`);
+        throw new Error(`REMOTE 项目打开失败（state=${st}）：${e.message}`);
+      }
+      await page.evalJs(`document.getElementById('dm-create').click()`);
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-member-picker button').length > 0`)) === true, 10_000, 'REMOTE 成员选择器');
+      await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
+      await waitFor(async () => (await page.readStrict(`!document.getElementById('dm').classList.contains('hidden')`)) === true, 10_000, 'REMOTE DM 视图');
+      await page.evalJs(`document.getElementById('remote-settings').open = true`);
+      await page.evalJs(`(() => { document.getElementById('remote-host-sel').value = '127.0.0.1'; document.getElementById('remote-enable-btn').click(); })()`);
+      let remoteAddress = '';
+      await waitFor(async () => {
+        const t = await page.readStrict(`document.getElementById('remote-config-row').textContent`);
+        const m = /https:\/\/127\.0\.0\.1:(\d+)/.exec(t);
+        if (m != null) { remoteAddress = `https://127.0.0.1:${m[1]}`; return true; }
+        return false;
+      }, 60_000, 'REMOTE 服务启用（运行中+地址）');
+      record('REMOTE·桌面启用远程访问（本机可信入口）', remoteAddress.length > 0, remoteAddress);
+      await page.evalJs(`document.getElementById('remote-pair-btn').click()`);
+      let pairingText = '';
+      await waitFor(async () => {
+        pairingText = await page.readStrict(`document.getElementById('remote-pair-result').textContent`);
+        return pairingText.includes('配对码：') && pairingText.includes('一次有效');
+      }, 30_000, 'REMOTE 配对码生成');
+      const pidM = /配对码：(pair_[A-Za-z0-9-]+) \/ ([A-Za-z0-9]{8,64})/.exec(pairingText);
+      if (pidM == null) throw new Error(`REMOTE：配对码文本解析失败：${pairingText.slice(0, 120)}`);
+      const fingerprintShown = /证书指纹 ([0-9a-f]{8,})/.exec(pairingText)?.[1] ?? '';
+      record('REMOTE·配对码+地址+指纹呈现（本机可信入口一次性展示）', fingerprintShown.length >= 8, pairingText.slice(0, 90));
+      const cerPath = join(appDataR, 'remote', 'identity.cer');
+      const spkiB64 = execSync(`openssl x509 -inform DER -in "${cerPath}" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary`, { timeout: 30_000 }).toString('base64');
+      const readyMarker = join(runDir, 'sessions', 'remote-shell-ready.json');
+      const shell = await launchApp('remote-shell', 9372, {
+        ZS_REMOTE_SHELL_URL: remoteAddress,
+        ZS_REMOTE_SHELL_SPKI: spkiB64.trim(), // 标准 base64（openssl 输出单行——Chromium 不认 url-safe）
+        ZS_REMOTE_SHELL_READY: readyMarker,
+      }, appDataR);
+      await waitFor(async () => existsSync(readyMarker), 30_000, 'REMOTE 壳窗口就绪');
+      const shellPage = await connectPage(9372, 30_000, 'https://');
+      // 壳页非桌面应用——无 __zsReady；等首个可交互元素（配对按钮）。
+      await waitFor(async () => (await shellPage.readStrict(`document.getElementById('pair-btn') != null`)) === true, 20_000, 'REMOTE 壳页可交互');
+      currentRun = { tag: 'remote', child: shell.child, page: shellPage, stderrText: shell.stderrText };
+      const shellTitle = await shellPage.readStrict(`document.title`);
+      record('REMOTE·壳浏览器加载远程客户端页（TLS 钉选信任）', shellTitle.includes('远程访问'), shellTitle);
+      await shellPage.evalJs(`(() => { document.getElementById('pairing-id').value = ${JSON.stringify(pidM[1])}; document.getElementById('pairing-code').value = ${JSON.stringify(pidM[2])}; document.getElementById('device-name').value = '验收浏览器'; document.getElementById('pair-btn').click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`!document.getElementById('main').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 浏览器配对成功进入主界面');
+      record('REMOTE·浏览器配对（IndexedDB 凭据+内存 token）', true, '');
+      await waitFor(async () => (await shellPage.readStrict(`document.querySelectorAll('#conversation-sel option').length > 0`)) === true, 20_000, 'REMOTE 会话列表');
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '浏览器端仅记录消息 REMOTE-BR-661'; document.getElementById('record-btn').click(); })()`);
+      try {
+        await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('REMOTE-BR-661')`)) === true, 30_000, 'REMOTE 浏览器消息往返');
+      } catch (e) {
+        const st = await shellPage.readStrict(`JSON.stringify({ feed: (document.getElementById('feed')?.textContent ?? '').slice(0, 200), msgs: (document.getElementById('messages')?.textContent ?? '').slice(0, 120), setup: (document.getElementById('setup-status')?.textContent ?? '').slice(0, 80) })`);
+        throw new Error(`消息往返失败（state=${st}）：${e.message}`);
+      }
+      record('REMOTE·浏览器仅记录发消息（同命令面 record_only）', true, '');
+      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('message.submitted')`)) === true, 30_000, 'REMOTE 事件流推送');
+      record('REMOTE·WSS 事件流（订阅+audience 过滤推送）', true, '');
+      await shellPage.evalJs(`document.getElementById('export-md').click()`);
+      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('export-link')?.textContent ?? '').includes('下载导出包')`)) === true, 30_000, 'REMOTE 导出链接');
+      record('REMOTE·浏览器导出（获准下载链接）', true, '');
+      await page.evalJs(`(() => { const d = document.getElementById('remote-settings'); d.open = false; d.open = true; })()`); // 重开面板刷新设备清单
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#remote-device-list button.chip').length > 0`)) === true, 20_000, 'REMOTE 设备清单');
+      await page.evalJs(`document.querySelector('#remote-device-list button.chip').click()`);
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('remote-device-list')?.textContent ?? '').includes('已吊销')`)) === true, 20_000, 'REMOTE 吊销落库');
+      await shellPage.evalJs(`(() => { document.getElementById('refresh-btn').click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('error') || (document.getElementById('setup-status')?.textContent ?? '').includes('不可用')`)) === true, 30_000, 'REMOTE 吊销后命令拒绝呈现');
+      record('REMOTE·吊销后浏览器端明确拒绝（凭据/会话/事件流全失效）', true, '');
+      shellPage.close();
+      page.close();
+      currentRun = null;
+      // 壳无 daemon/关停事实文件——直接确认进程退出（非应用停机链对象）。
+      const shellExit = await new Promise((resolve) => {
+        const t = setTimeout(() => resolve({ code: 'timeout' }), 15_000);
+        t.unref?.();
+        shell.child.once('exit', (code) => { clearTimeout(t); resolve({ code }); });
+        shell.child.kill();
+      });
+      record('REMOTE·壳退出（纯浏览器窗口——无停机链）', shellExit.code !== 'timeout', `exit=${String(shellExit.code)}`);
+      const exitR2 = await exitWithGuard(app.child);
+      const factsR = JSON.parse(readFileSync(join(appDataR, 'desktop-shutdown.json'), 'utf8'));
+      const gR = gracefulShutdownOk(exitR2, factsR);
+      record('REMOTE·桌面停机事实', gR.ok, gR.detail);
     }
   }
 
