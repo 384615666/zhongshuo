@@ -269,8 +269,28 @@ async function connectPage(port, evalDeadlineMs = 20_000, urlIncludes = 'index.h
     await send('Network.enable');
     await send('Network.emulateNetworkConditions', { offline: !!off, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   };
+  // 定点断响应（第三十四轮二：快照部分失败的确定性注入）——按请求体方法名打掉 /cmd 请求
+  //（首个匹配失败一次后自动解除；其余请求 continue——页面不受整体断网影响）。
+  const failCmdOnce = async (methodName) => {
+    await send('Fetch.enable', { patterns: [{ urlPattern: '*/cmd*', requestStage: 'Request' }] });
+    let armed = true;
+    ws.addEventListener('message', (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.method !== 'Fetch.requestPaused') return;
+        const req = msg.params?.request ?? {};
+        const body = typeof req.postData === 'string' ? req.postData : '';
+        if (armed && String(req.url).includes('/cmd') && body.includes(`"method":"${methodName}"`)) {
+          armed = false;
+          void send('Fetch.failRequest', { requestId: msg.params.requestId, errorReason: 'Failed' }).then(() => send('Fetch.disable')).catch(() => {});
+        } else {
+          void send('Fetch.continueRequest', { requestId: msg.params.requestId }).catch(() => {});
+        }
+      } catch { /* 拦截尽力——不打断页面 */ }
+    });
+  };
   return {
-    evalJs, readStrict, waitInteractive, offline, pageErrors: () => pageErrors,
+    evalJs, readStrict, waitInteractive, offline, failCmdOnce, pageErrors: () => pageErrors,
     screenshot: async (outPath) => {
       try {
         const r = await send('Page.captureScreenshot', { format: 'png' });
@@ -1521,50 +1541,61 @@ try {
       await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
       await waitFor(async () => (await shellPage2.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('REMOTE-SURVIVE-1')`)) === true, 60_000, 'REMOTE 重开后结果可见');
       record('REMOTE·重开后任务结果消息可见（刷新续传）', true, '');
-      // ---------- 游标过期快照恢复（快照→订阅重建→新事件继续经 WSS 到达）----------
-      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
-      const p2b = await connectPage(9373, 30_000, 'https://');
-      await waitFor(async () => (await p2b.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('snapshot-recovered')`)) === true, 40_000, 'REMOTE 快照恢复完成线（含订阅重建）');
-      const cursorState = await p2b.readStrict(`window.__cursorState`);
-      // 恢复后必须再提交一条新消息并核对**新的 WSS 事件**到达（feed 只能由 WSS 事件写行——
-      // 不以「消息框呈现」代替，那是 submit 响应也能驱动的）。
-      await p2b.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
-      const feedLinesBefore = await p2b.readStrict(`document.getElementById('feed').childElementCount`);
-      await p2b.evalJs(`(() => { document.getElementById('send-text').value = '快照恢复后新事件 REMOTE-POST-RECOVERY-1'; document.getElementById('record-btn').click(); })()`);
-      let newEventViaWs = false;
-      try {
+      // ---------- 快照恢复全口径（第三十四轮二）：部分失败→pending 不推游标→退避重试成功；
+      // 连续第二次 stale 同样完整恢复；每轮恢复后提交新消息核对**新的 WSS 事件**到达 ----------
+      const waitFeedHas = (pg, marker, timeout, label) => waitFor(async () => (await pg.readStrict(`(document.getElementById('feed')?.textContent ?? '')`).catch(() => '')).includes(marker), timeout, label);
+      const sendRecordAndWaitWsEvent = async (pg, marker) => {
+        const linesBefore = Number(await pg.readStrict(`document.getElementById('feed').childElementCount`));
+        await pg.evalJs(`(() => { document.getElementById('send-text').value = ${JSON.stringify(marker)}; document.getElementById('record-btn').click(); })()`);
         await waitFor(async () => {
-          const cnt = await p2b.readStrict(`document.getElementById('feed').childElementCount`);
-          const head = await p2b.readStrict(`(document.getElementById('feed').firstChild?.textContent ?? '')`);
-          return Number(cnt) > Number(feedLinesBefore) && head.includes('message.submitted');
-        }, 40_000, 'REMOTE 恢复后新事件经 WSS 到达');
-        newEventViaWs = true;
-      } catch (e) {
-        const feedTxt = await p2b.readStrict(`(document.getElementById('feed')?.textContent ?? '').slice(0, 300)`).catch(() => 'no-feed');
-        throw new Error(`快照恢复后新事件未到（cursorState=${String(cursorState)} feed=${String(feedTxt)}）：${e.message}`);
-      }
-      record('REMOTE·游标过期快照恢复（快照→订阅重建确认→新事件继续经 WSS 到达）', cursorState === 'recovered' && newEventViaWs, `cursorState=${cursorState} newEvent=${newEventViaWs}`);
+          const cnt = Number(await pg.readStrict(`document.getElementById('feed').childElementCount`).catch(() => -1));
+          const head = await pg.readStrict(`(document.getElementById('feed').firstChild?.textContent ?? '')`).catch(() => '');
+          return cnt > linesBefore && head.includes('message.submitted');
+        }, 40_000, `REMOTE 恢复后新事件经 WSS 到达（${marker.slice(0, 18)}…）`);
+        return true;
+      };
+      // 第 1 轮：定点断响应注入——activity.list 首枪失败（Fetch.failRequest 按 postData 匹配，
+      // 其余请求照常放行——不整体断网）。reload 前 armed（确定性，不靠时序）。
+      await shellPage2.failCmdOnce('activity.list');
+      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
+      await waitFeedHas(shellPage2, 'snapshot-pending', 45_000, 'REMOTE 快照部分失败→pending（注入命中）');
+      const pendingRaw = await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq') })`);
+      const ps = JSON.parse(String(pendingRaw));
+      await waitFeedHas(shellPage2, 'snapshot-recovered', 60_000, 'REMOTE 部分失败后退避重试恢复完成');
+      const recoveredRaw = await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq'), acks: window.__snapshotAcks ?? '' })`);
+      const r1 = JSON.parse(String(recoveredRaw));
+      await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
+      const ev1 = await sendRecordAndWaitWsEvent(shellPage2, '快照恢复1后新事件 REMOTE-POST-RECOVERY-1');
+      // 第 2 轮：连续第二次 stale（旧实现在 recovered 后直接 return——第二次 stale 完全不处理）。
+      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
+      await waitFeedHas(shellPage2, 'snapshot-recovered', 60_000, 'REMOTE 第二次 stale 完整恢复');
+      const recovered2Raw = await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq'), acks: window.__snapshotAcks ?? '' })`);
+      const r2 = JSON.parse(String(recovered2Raw));
+      await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
+      const ev2 = await sendRecordAndWaitWsEvent(shellPage2, '快照恢复2后新事件 REMOTE-POST-RECOVERY-2');
+      record('REMOTE·快照恢复全口径（部分失败 pending 检查点不推进→退避成功；连续两轮 stale；每轮后新事件经 WSS）',
+        ps.st === 'pending' && ps.ls === '0' && r1.st === 'recovered' && Number(r1.ls) > 0 && r2.st === 'recovered' && Number(r2.ls) > 0 && ev1 === true && ev2 === true,
+        `pending(st=${ps.st},ls=${ps.ls}) r1(ls=${r1.ls},acks=${r1.acks}) r2(acks=${r2.acks}) ev1=${ev1} ev2=${ev2}`);
       // ---------- token 到期自动续换（__tokenGen+__lastHttpOkAt 事实核对——非「下拉有选项」）----------
-      const tokenGenBefore = await p2b.readStrict(`window.__tokenGen`);
-      const okAtBefore = await p2b.readStrict(`window.__lastHttpOkAt`);
+      const tokenGenBefore = await shellPage2.readStrict(`window.__tokenGen`);
+      const okAtBefore = await shellPage2.readStrict(`window.__lastHttpOkAt`);
       // TTL 8s：从读取点起 ≤8s 必过期、其后一次命令/轮询即触发续换——轮询等增长（固定 9s
       // 等待曾在续换恰好发生在两次读取之间时错过窗口）。
       let genAfter = tokenGenBefore;
       try {
         await waitFor(async () => {
-          genAfter = Number(await p2b.readStrict(`window.__tokenGen`).catch(() => -1));
+          genAfter = Number(await shellPage2.readStrict(`window.__tokenGen`).catch(() => -1));
           return genAfter > tokenGenBefore;
         }, 30_000, 'REMOTE token 到期续换发生（__tokenGen 增长）');
       } catch (e) {
-        const feedTxt = await p2b.readStrict(`(document.getElementById('feed')?.textContent ?? '').slice(0, 240)`).catch(() => 'no-feed');
+        const feedTxt = await shellPage2.readStrict(`(document.getElementById('feed')?.textContent ?? '').slice(0, 240)`).catch(() => 'no-feed');
         throw new Error(`token 续换未发生（gen ${tokenGenBefore}->${genAfter} feed=${String(feedTxt)}）：${e.message}`);
       }
       // 续换后命令确在成功（新 HTTP 2xx+选项仍在）。
-      await p2b.evalJs(`document.getElementById('refresh-btn').click()`);
-      const renewStateRaw = await p2b.readStrict(`JSON.stringify({ gen: window.__tokenGen, okAt: window.__lastHttpOkAt, opts: (document.getElementById('conversation-sel')?.options?.length ?? 0) })`);
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
+      const renewStateRaw = await shellPage2.readStrict(`JSON.stringify({ gen: window.__tokenGen, okAt: window.__lastHttpOkAt, opts: (document.getElementById('conversation-sel')?.options?.length ?? 0) })`);
       const rs = JSON.parse(String(renewStateRaw));
       record('REMOTE·token 到期自动续换（续换计数增+续换后新 HTTP 2xx+命令成功）', rs.gen > tokenGenBefore && rs.okAt > okAtBefore && rs.opts >= 3, `gen ${tokenGenBefore}->${rs.gen} okAt=${okAtBefore}->${rs.okAt} opts=${rs.opts}`);
-      p2b.close();
       // ---------- 吊销终态 ----------
       await page.evalJs(`(() => { const d = document.getElementById('remote-settings'); d.open = false; d.open = true; })()`);
       await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#remote-device-list button.chip').length > 0`)) === true, 20_000, 'REMOTE 设备清单');

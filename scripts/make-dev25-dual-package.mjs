@@ -27,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 
+const randomIdSuffix = () => Math.random().toString(36).slice(2, 8);
+const launcherLogs = []; // 自测启动原始输出快照（证据归档用——runLauncher 写入/selfTest 归档）
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
 const frozenDefault = join(repo, 'dist', 'desktop', 'vdr-frozen');
@@ -364,7 +366,7 @@ async function runLauncher(pkg, debugPort, drill) {
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
   child.stdin.write('\r\n'); // pause 预供（到达即过）
-  return { child, getOut: () => out };
+  return { child, getOut: () => out, snapshotOut: () => { launcherLogs.push('===== ' + new Date().toISOString() + ' =====\n' + out); } };
 }
 
 async function selfTest() {
@@ -388,10 +390,29 @@ async function selfTest() {
   const pkg = join(tmp, 'dev25-dual-win');
   cpSync(outRoot, pkg, { recursive: true, dereference: true });
   const appData = join(pkg, 'server-data');
+  const evidenceDir = join(repo, 'dist', 'desktop', 'dev25-dual-evidence', new Date().toISOString().replace(/[:T]/g, '').slice(0, 14) + '-' + randomIdSuffix());
   const seedJson = () => {
     const p = join(pkg, 'RESULTS', 'seed.json');
     return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
   };
+  /** 证据归档（第三十四轮四.3）：原始启动输出/种子/停机事实/real_calls/保护结论——临时目录清理前落持久目录。 */
+  const archiveEvidence = (label) => {
+    try {
+      mkdirSync(evidenceDir, { recursive: true });
+      const runLog = join(evidenceDir, label + '-launcher-output.log');
+      writeFileSync(runLog, launcherLogs.join('\n'), 'utf8');
+      for (const [name, src] of [
+        [label + '-seed.json', join(pkg, 'RESULTS', 'seed.json')],
+        [label + '-desktop-shutdown.json', join(appData, 'desktop-shutdown.json')],
+      ]) {
+        if (existsSync(src)) writeFileSync(join(evidenceDir, name), readFileSync(src, 'utf8'), 'utf8');
+      }
+      const rc = realCallsCheck(pkg, appData);
+      writeFileSync(join(evidenceDir, label + '-real-calls.txt'), JSON.stringify({ checkedAt: new Date().toISOString(), childOk: rc.detail.startsWith('real_calls='), detail: rc.detail }), 'utf8');
+      console.log('[self-test] evidence -> ' + join(evidenceDir, label + '-*'));
+    } catch (e) { console.log('[self-test] evidence 尽力失败：' + (e && e.message)); }
+  };
+  let rc1Detail = 'not-reached';
   try {
     let facts1 = null;
     {
@@ -416,8 +437,11 @@ async function selfTest() {
       console.log('[self-test] graceful-stop 1 ' + (stop1.ok ? 'PASS' : 'FAIL') + '（' + stop1.detail + '）');
       if (!stop1.ok) throw new Error('优雅停机 1 失败（强杀兜底不参与成功路径——见事实）');
       const rc1 = realCallsCheck(pkg, appData);
+      rc1Detail = rc1.detail;
       console.log('[self-test] real_calls 1 ' + (rc1.ok ? 'PASS' : 'FAIL') + '（' + rc1.detail + '）');
       if (!rc1.ok) throw new Error('real_calls 核对失败：' + rc1.detail);
+      run.snapshotOut();
+      archiveEvidence('launch1');
       await sleep(2000); // 端口/句柄释放余量。
     }
     {
@@ -445,9 +469,22 @@ async function selfTest() {
       const stop2 = await gracefulStop(9392, pkg);
       console.log('[self-test] graceful-stop 2 ' + (stop2.ok ? 'PASS' : 'FAIL') + '（' + stop2.detail + '）');
       if (!stop2.ok) throw new Error('优雅停机 2 失败');
+      run2.snapshotOut();
+      archiveEvidence('launch2');
     }
     const rc = realCallsCheck(pkg, appData);
     const pass = rc.ok;
+    try {
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileSync(join(evidenceDir, 'summary.txt'), `buildId=${built.buildId}
+verified=${built.verified}
+launch1: seed+drill PASS, graceful-stop PASS, real_calls ${rc1Detail}
+launch2: idempotent PASS, graceful-stop PASS
+results-protection: PASS
+final: ${pass ? 'PASS' : 'FAIL'}
+at=${new Date().toISOString()}
+`, 'utf8');
+    } catch { /* 尽力 */ }
     writeFileSync(join(pkg, 'RESULTS', 'selftest-summary.txt'),
       `buildId=${built.buildId}\nverified=${built.verified}\nlaunch1: seed+drill PASS, graceful-stop PASS, real_calls ${rc.detail}\nlaunch2: idempotent PASS, graceful-stop PASS\nresults-protection: PASS\nat=${new Date().toISOString()}\n`, 'utf8');
     console.log('[self-test] ' + (pass ? 'PASS' : 'FAIL') + ' buildId=' + built.buildId + ' pkg=' + pkg);

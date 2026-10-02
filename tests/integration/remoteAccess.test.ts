@@ -12,7 +12,7 @@
  * 真实 TLS：证书经 PowerShell 生成一次（测试文件内复用），Node 客户端以该 DER 为信任锚。
  */
 import { describe, expect, it, afterAll, beforeAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import * as https from 'node:https';
 import * as tls from 'node:tls';
 import { tmpdir } from 'node:os';
@@ -712,6 +712,124 @@ async function bootWs32(h: Harness, _tag?: string): Promise<Awaited<ReturnType<t
   return ws;
 }
 
+describe('第三十四轮：跨项目检查点/自检不变性/同请求中途吊销', () => {
+  it('跨项目安全检查点：P2 1—301+P1 302、先订 P1、半批断线——重连后无漏无重（P2 的 301 补到）', async () => {
+    const h = await boot({ resumeWindow: 1_000_000 });
+    h.db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p2','项目2',?,?,'{}',0)`).run(tmpRoot, tmpRoot);
+    // 用户复现场景：P2 有 1—301；P1 随后 302；订阅顺序 P1、P2。
+    const p2Seqs: number[] = [];
+    for (let i = 0; i < 301; i += 1) p2Seqs.push(seedEventP2(h.db, `evt-cp-p2-${String(i).padStart(3, '0')}-${randomUUID().slice(0, 4)}`, 'dm_a'));
+    const p1Seq = seedEvent(h.db, `evt-cp-p1-302-${randomUUID().slice(0, 4)}`, 'dm_a');
+    const a = await bootAuth32(h, 'CPCHK34A');
+    const ws = await wsConnect(h);
+    ws.send({ type: 'authenticate', ticket: a.ticket, lastSeq: 0 });
+    await ws.waitFrame((f) => f.type === 'authenticated');
+    ws.send({ type: 'subscribe', projectId: 'p1' });
+    await ws.waitFrame((f) => f.type === 'subscribed');
+    ws.send({ type: 'subscribe', projectId: 'p2' });
+    await ws.waitFrame((f) => f.type === 'subscribed');
+    // 第一泵：先 P1 的 302，再 P2 前 300（单泵页 300）——等两者到齐后**半批断线**。
+    await ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === p1Seq, 6000);
+    await ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === p2Seqs[299], 8000);
+    expect(ws.frames.some((f) => f.type === 'event' && Number(f.seq) === p2Seqs[300])).toBe(false); // 301 未达（单泵页边界）
+    ws.closeSocket();
+    // 客户端持久水位（与 remoteClient 同法）：每项目取已投递最大，检查点=各跟踪项目 min。
+    const wmP1 = p1Seq;
+    const wmP2 = p2Seqs[299]!;
+    const checkpoint = Math.min(wmP1, wmP2);
+    expect(checkpoint).toBe(wmP2); // 复现要点：全局 max=302 会越过 P2 的 301；min=300 安全
+    // 断线重连：authenticate lastSeq=安全检查点。
+    const t2 = await httpsJson(h, 'POST', '/ws-ticket', {}, a.headers);
+    const ws2 = await wsConnect(h);
+    ws2.send({ type: 'authenticate', ticket: t2.json.ticket, lastSeq: checkpoint });
+    await ws2.waitFrame((f) => f.type === 'authenticated');
+    ws2.send({ type: 'subscribe', projectId: 'p1' });
+    ws2.send({ type: 'subscribe', projectId: 'p2' });
+    // P2 的 301 必须补到（旧全局 max 模型永远补不到）。
+    await ws2.waitFrame((f) => f.type === 'event' && Number(f.seq) === p2Seqs[300], 8000);
+    // 逐条核对无漏无重：两连接合并的 (project,seq) 键集==期望全量 302 条；呈现集（去重）无重复。
+    const counts = new Map<string, number>();
+    for (const f of [...ws.frames, ...ws2.frames]) {
+      if (f.type !== 'event') continue;
+      const key = `${String(f.projectId)}:${String(f.seq)}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    expect(counts.get(`p1:${p1Seq}`)).toBeGreaterThanOrEqual(1);
+    for (let i = 0; i <= 300; i += 1) expect(counts.get(`p2:${p2Seqs[i]}`)).toBeGreaterThanOrEqual(1);
+    expect(counts.size).toBe(302); // 无漏：恰好 P1×1+P2×301
+    // 无重（呈现语义）：去重后键数与总投递键数一致——服务端重投由 eventId 去重吸收。
+    const deliveredTwice = [...counts.entries()].filter(([, c]) => c > 1).map(([k]) => k);
+    expect(deliveredTwice.every((k) => k === `p1:${p1Seq}`)).toBe(true); // 允许的重投=检查点以下的 P1 302
+    ws2.closeSocket();
+    await h.close();
+  }, 150_000);
+
+  it('自检不动用户导航偏好/看板/设备/在途任务（成功+连续执行+失败路径；探针临时键清理）', async () => {
+    const prevScEnv = process.env.ZS_REMOTE_SELFCHECK;
+    process.env.ZS_REMOTE_SELFCHECK = '1'; // 隔离验收模式（自检命令面门禁）
+    try {
+    const h = await boot();
+    const depsLocal = { db: h.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData };
+    // 建立用户偏好（正式命令）：可见=['p1']——看板 scope=all 据此聚合。
+    await dispatchDaemonCommand(depsLocal, { protocolVersion: 1, commandId: 'r34-nav-user-01', method: 'nav.preferences', params: { clientId: 'user-ui', visibleProjectIds: ['p1'] } });
+    const navSnapshot = (): string => JSON.stringify(h.db.prepare('SELECT client_id, revision, visible_project_ids_json FROM navigation_preferences ORDER BY client_id').all());
+    const boardGroups = async (): Promise<number> => {
+      const r = await dispatchDaemonCommand(depsLocal, { protocolVersion: 1, commandId: 'r34-board-' + randomUUID().slice(0, 6), method: 'board.view', params: { scope: 'all' } }) as { ok: boolean; data?: { groups?: unknown[] } };
+      return Array.isArray(r.data?.groups) ? r.data.groups.length : -1;
+    };
+    const navBefore = navSnapshot();
+    const groupsBefore = await boardGroups();
+    expect(groupsBefore).toBeGreaterThanOrEqual(1); // 偏好生效（可见 p1→至少 1 组）
+    const r1 = await h.server.runSelfcheck();
+    for (const item of r1.items) expect({ name: item.name, ok: item.ok }).toEqual({ name: item.name, ok: true });
+    const r2 = await h.server.runSelfcheck(); // 连续执行（第二轮同样全过且不变）
+    for (const item of r2.items) expect({ name: item.name, ok: item.ok }).toEqual({ name: item.name, ok: true });
+    expect(navSnapshot()).toBe(navBefore); // 偏好行集不变（自检不写 navigation_preferences）
+    expect(await boardGroups()).toBe(groupsBefore); // 看板组数不变（不归零）
+    expect((h.db.prepare("SELECT count(*) c FROM daemon_state WHERE key LIKE 'selfcheck:probe:%'").get() as { c: number }).c).toBe(0); // 探针临时键清理
+    // 失败路径：停服后自检（前置失败）——偏好/看板仍不变。
+    await h.server.stop();
+    const r3 = await h.server.runSelfcheck();
+    expect(r3.ok).toBe(false);
+    expect(r3.items.some((i) => i.name.includes('导航偏好') && i.ok)).toBe(true); // 失败路径也登记不变性
+    expect(navSnapshot()).toBe(navBefore);
+    h.db.close();
+    } finally { if (prevScEnv == null) delete process.env.ZS_REMOTE_SELFCHECK; else process.env.ZS_REMOTE_SELFCHECK = prevScEnv; }
+  }, 120_000);
+
+  it('同一请求导出等待中吊销→提交拒绝且零业务提交（异步窗口内——非「吊销后再调用」）', async () => {
+    const h = await boot();
+    const a = await bootAuth32(h, 'MIDREV34');
+    await dispatchDaemonCommand({ db: h.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData }, { protocolVersion: 1, commandId: 'r34-mid-seed-01', method: 'message.submit', params: { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '中途吊销宿主 MID-REVOKE-771', intent: 'record_only', mentions: [] } });
+    const g = globalThis as { __zsTestExportHook?: () => void | Promise<void> };
+    const expRoot = join(appData, 'exports');
+    const dirsBefore = new Set(existsSync(expRoot) ? readdirSync(expRoot) : []);
+    // 导出等待窗口（writeExport 完成/复核前）内吊销——同一请求在途，不是吊销后再发新请求。
+    g.__zsTestExportHook = async () => {
+      revokeDeviceInDb(h.db, a.deviceId, Date.now());
+      h.server.invalidateDevice(a.deviceId);
+    };
+    try {
+      const r = await httpsJson(h, 'POST', '/cmd', { commandId: 'r34-mid-revoke-01', method: 'export.create', params: { target: { kind: 'conversation', projectId: 'p1', conversationId: 'dm_a' }, format: 'md' } }, a.headers);
+      expect(r.status).toBe(200); // HTTP 面正常应答
+      expect(r.json.ok).toBe(false); // 提交前门禁拒绝（run() 边界——异步等待结束后）
+      expect(r.json.error.code).toBe('DEVICE_REVOKED');
+      // 零业务提交：无回执、无导出目录（失败清理）。
+      expect((h.db.prepare('SELECT count(*) c FROM command_receipts WHERE command_id = ?').get('r34-mid-revoke-01') as { c: number }).c).toBe(0);
+      const dirsAfter = existsSync(expRoot) ? readdirSync(expRoot) : [];
+      const newDirs = dirsAfter.filter((n) => !dirsBefore.has(n)); // 共享 appData——只断言本次请求零新目录
+      expect(newDirs.length).toBe(0);
+      // 拒绝留审计（本次请求的设备+命令号+失败事实）。
+      const audit = h.db.prepare('SELECT ok FROM remote_audit_log WHERE command_id = ?').all('r34-mid-revoke-01') as Array<{ ok: number }>;
+      expect(audit.length).toBe(1);
+      expect(audit[0]!.ok).toBe(0);
+    } finally {
+      delete g.__zsTestExportHook;
+    }
+    await h.close();
+  }, 120_000);
+});
+
 describe('第三十三轮：设备级代次/限额/收拢/泵模型/下载门禁/自检', () => {
   it('设备级授权代次：吊销 A 不伤 B（B 现有 token/票据/WS 全部继续）', async () => {
     const h = await boot();
@@ -935,6 +1053,9 @@ describe('第三十三轮：设备级代次/限额/收拢/泵模型/下载门禁
   }, 90_000);
 
   it('进程内自检（隔离验收模式）：全项通过+事实文件无凭据+自检设备清理', async () => {
+    const prevScEnv33 = process.env.ZS_REMOTE_SELFCHECK;
+    process.env.ZS_REMOTE_SELFCHECK = '1';
+    try {
     const h = await boot();
     const report = await h.server.runSelfcheck();
     for (const item of report.items) {
@@ -957,6 +1078,7 @@ describe('第三十三轮：设备级代次/限额/收拢/泵模型/下载门禁
     expect(audit[0]!.replayed).toBe(0);
     expect(audit[1]!.replayed).toBe(1);
     await h.close();
+    } finally { if (prevScEnv33 == null) delete process.env.ZS_REMOTE_SELFCHECK; else process.env.ZS_REMOTE_SELFCHECK = prevScEnv33; }
   }, 90_000);
 });
 
