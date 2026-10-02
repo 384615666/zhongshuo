@@ -61,7 +61,7 @@ async function boot(testing?: Record<string, unknown>): Promise<Harness> {
     db,
     localUserId: 'u_local',
     appDataDir: appData,
-    dispatch: (envelope) => dispatchDaemonCommand(deps, envelope),
+    dispatch: (envelope, ctx) => dispatchDaemonCommand({ ...deps, ...(ctx != null ? { remoteAudit: ctx } : {}) }, envelope),
     log: (l) => logs.push(l),
     testing: { identity, pumpMs: 80, authWindowMs: 900, ticketTtlMs: 30_000, resumeWindow: 5000, perIpPerMin: 999, globalPerMin: 9999, ...(testing ?? {}) },
   });
@@ -109,12 +109,15 @@ interface WsClient {
   waitFrame: (predicate: (f: Record<string, unknown>) => boolean, ms?: number) => Promise<Record<string, unknown>>;
   closed: Promise<{ code: number | null }>;
   closeSocket: () => void;
+  sendRaw: (text: string) => void;
 }
-function wsConnect(h: Harness, headers: Record<string, string> = {}): Promise<WsClient> {
+function wsConnect(h: Harness, headers: Record<string, string> = {}, originOverride?: string): Promise<WsClient> {
   return new Promise((resolve, reject) => {
     const key = randomBytes(16).toString('base64');
     const socket = tls.connect({ host: '127.0.0.1', port: h.port, ca: CERT_PEM, servername: 'localhost', rejectUnauthorized: true }, () => {
-      socket.write(`GET /events HTTP/1.1\r\nHost: ${h.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${h.origin}\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`);
+      const CRLF = '\r\n';
+      const extraHeaders = Object.entries(headers).map(([k, v]) => `${k}: ${v}${CRLF}`).join('');
+      socket.write(`GET /events HTTP/1.1${CRLF}Host: ${h.host}${CRLF}Upgrade: websocket${CRLF}Connection: Upgrade${CRLF}Sec-WebSocket-Key: ${key}${CRLF}Sec-WebSocket-Version: 13${CRLF}Origin: ${originOverride ?? h.origin}${CRLF}${extraHeaders}${CRLF}`);
     });
     socket.on('error', reject);
     let buf = Buffer.alloc(0);
@@ -125,6 +128,17 @@ function wsConnect(h: Harness, headers: Record<string, string> = {}): Promise<Ws
     const closed = new Promise<{ code: number | null }>((r) => { closedResolve = r; });
     let closeCode: number | null = null;
     const client: WsClient = {
+      sendRaw: (text: string) => {
+        const data = Buffer.from(text, 'utf8');
+        const mask = randomBytes(4);
+        let header: Buffer;
+        if (data.length < 126) header = Buffer.from([0x81, 0x80 | data.length]);
+        else if (data.length < 65536) { header = Buffer.alloc(4); header[0] = 0x81; header[1] = 0x80 | 126; header.writeUInt16BE(data.length, 2); }
+        else { header = Buffer.alloc(10); header[0] = 0x81; header[1] = 0x80 | 127; header.writeBigUInt64BE(BigInt(data.length), 2); }
+        const masked = Buffer.from(data);
+        for (let i = 0; i < masked.length; i += 1) masked[i] = (masked[i] ?? 0) ^ (mask[i % 4] ?? 0);
+        socket.write(Buffer.concat([header, mask, masked]));
+      },
       send: (obj) => {
         const data = Buffer.from(JSON.stringify(obj), 'utf8');
         const mask = randomBytes(4);
@@ -493,5 +507,209 @@ describe('LAN-08 凭据脱敏', () => {
     await h.close();
   }, 60_000);
 });
+
+
+describe('第三十二轮：合同补齐反例', () => {
+  it('新 pairingId 复用近期码被拒（历史行 salt 核验）', async () => {
+    const db = openDatabase32();
+    const first = createPairingCode(db, Date.now(), { code: 'AUDITCODE8' });
+    expect(first.ok).toBe(true);
+    const second = createPairingCode(db, Date.now(), { code: 'AUDITCODE8' });
+    expect(second.ok).toBe(false); // 同明文码 24h 内不重复发放（旧实现两码都成功——已修）
+    if (!second.ok) expect(second.error).toContain('重复');
+    const third = createPairingCode(db, Date.now(), { code: 'OTHERCODE8' });
+    expect(third.ok).toBe(true); // 不同码不受影响
+    db.close();
+  }, 60_000);
+
+  it('票据从合法 Origin A 签发、在另一个合法 Origin B 使用 → 拒绝', async () => {
+    const h = await boot();
+    const cred = await bootPair32(h, 'ORIGTEST8');
+    // localhost 与 127.0.0.1 都在白名单（两个合法 Origin）。
+    const sess = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + cred });
+    const t = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + sess.json.accessToken });
+    expect(t.status).toBe(200);
+    const ws = await wsConnect(h, {}, 'https://localhost:' + h.port); // 合法 B 携 A 的票据
+    ws.send({ type: 'authenticate', ticket: t.json.ticket });
+    const closed = await ws.closed;
+    expect([1008]).toContain(closed.code); // origin 不匹配拒绝（不能只在白名单外拦）
+    await h.close();
+  }, 90_000);
+
+  it('null/数组/错误类型首帧只关该连接——其他客户端不受影响', async () => {
+    const h = await boot();
+    const good = await bootWs32(h, 'STRUCT8A');
+    for (const raw of ['null', '[1,2,3]', '"just-a-string"', '{"type":123}']) {
+      const bad = await wsConnect(h);
+      bad.sendRaw(raw);
+      // eslint-disable-next-line no-await-in-loop
+      const closed = await bad.closed;
+      expect([1008, 1002, 1011]).toContain(closed.code);
+    }
+    // 观察者仍活着且可交互（协议错误不拖垮 daemon/其他连接）。
+    good.send({ type: 'ping' });
+    const pong = await good.waitFrame((f) => f.type === 'pong', 3000);
+    expect(pong).toBeTruthy();
+    good.closeSocket();
+    await h.close();
+  }, 90_000);
+
+  it('超限帧（>64KB）被拒；订阅数量超限关闭', async () => {
+    const h = await boot();
+    const big = await wsConnect(h);
+    big.sendRaw('x'.repeat(200 * 1024));
+    const closed = await big.closed;
+    expect(closed.code).toBe(1009); // message too big（ws maxPayload）
+    const authed = await bootWs32(h, 'FRAME88B');
+    for (let i = 0; i < 205; i += 1) authed.send({ type: 'subscribe', projectId: 'p_' + i });
+    const closed2 = await authed.closed;
+    expect(closed2.code).toBe(1008); // too-many-subscriptions
+    await h.close();
+  }, 90_000);
+
+  it('events.list/task.get/task.stop 他人 DM 按 ID 直查拒绝；remote_audit_log 留痕（含重放）', async () => {
+    const h = await boot();
+    h.db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, author_type, author_id, body_json, status, created_at) VALUES ('m32','p1','dm_b',1,'human','u_other',?,'saved',1)`).run(JSON.stringify({ text: '他人 DM 32' }));
+    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, title, status, stop_generation, revision) VALUES ('task32','p1','dm_b','dm_turn','他人DM任务','ACTIVE',0,1)`).run();
+    h.db.prepare(`INSERT INTO domain_events (event_id, schema_version, project_id, conversation_id, kind, payload_json, created_at) VALUES ('evt32-a',1,'p1','dm_b','message.submitted','{}',10)`).run();
+    h.db.prepare(`INSERT INTO domain_events (event_id, schema_version, project_id, conversation_id, kind, payload_json, created_at) VALUES ('evt32-b',1,'p1','dm_a','message.submitted','{}',11)`).run();
+    const a = await bootAuth32(h, 'AUDT32C8');
+    // events.list：他人 DM 事件不可读（修复前按 projectId 全量泄出）。
+    const ev = await httpsJson(h, 'POST', '/cmd', { commandId: 'r32-events-list-01', method: 'events.list', params: { projectId: 'p1', limit: 50 } }, a.headers);
+    const evItems = (ev.json.data?.items ?? []) as Array<{ event_id: string }>;
+    expect(evItems.some((x) => x.event_id === 'evt32-a')).toBe(false);
+    expect(evItems.some((x) => x.event_id === 'evt32-b')).toBe(true); // 本人 DM 正常
+    // task.get / task.stop：他人 DM 任务按 ID 拒。
+    const tg = await httpsJson(h, 'POST', '/cmd', { commandId: 'r32-task-get-0001', method: 'task.get', params: { taskId: 'task32' } }, a.headers);
+    expect(tg.json.ok).toBe(false);
+    expect(tg.json.error.code).toBe('FORBIDDEN');
+    const ts = await httpsJson(h, 'POST', '/cmd', { commandId: 'r32-task-stop-01', method: 'task.stop', params: { taskId: 'task32', targetRunId: 'run_x', expectedStopGeneration: 0 } }, a.headers);
+    expect(ts.json.ok).toBe(false);
+    expect(ts.json.error.code).toBe('FORBIDDEN');
+    // 审计：写命令回执重放恰一次（读命令 events.list 无回执——每次都执行，各留一行审计）。
+    const subParams = { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '审计重放恰一次 AUDIT-REPLAY-551', intent: 'record_only', mentions: [] };
+    const sub1 = await httpsJson(h, 'POST', '/cmd', { commandId: 'r32-audit-submit-1', method: 'message.submit', params: subParams }, a.headers);
+    expect(sub1.json.ok).toBe(true);
+    const sub2 = await httpsJson(h, 'POST', '/cmd', { commandId: 'r32-audit-submit-1', method: 'message.submit', params: subParams }, a.headers);
+    expect(sub2.json.replayed).toBe(true); // 同号同参原结果——恰一次
+    const replay = { json: { replayed: true } };
+    void replay;
+    const auditRows = h.db.prepare('SELECT method, ok, replayed FROM remote_audit_log ORDER BY id').all() as Array<{ method: string; ok: number; replayed: number }>;
+    expect(auditRows.filter((r) => r.method === 'events.list').length).toBe(1); // 读命令每次执行各留一行
+    expect(auditRows.some((r) => r.method === 'task.stop' && r.ok === 0)).toBe(true);
+    const cnt = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id='dm_b'`).get() as { c: number }).c;
+    expect(cnt).toBe(1);
+    const cntA = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id='dm_a' AND body_json LIKE '%AUDIT-REPLAY-551%'`).get() as { c: number }).c;
+    expect(cntA).toBe(1); // 重放不重复执行
+    expect(auditRows.filter((r) => r.method === 'message.submit').length).toBe(2); // 首次+重放各一行审计
+    await h.close();
+  }, 90_000);
+
+  it('订阅未建立不推进游标（后订阅仍收到）；task_id 归属按任务会话过滤；未知归属不推', async () => {
+    const h = await boot();
+    const a = await bootAuth32(h, 'CURSOR8A');
+    const seqBefore = seedEvent32(h.db, 'evt-gate-open-' + randomUUID().slice(0, 6), 'dm_a');
+    const ws = await wsConnect(h);
+    ws.send({ type: 'authenticate', ticket: a.ticket, lastSeq: seqBefore - 1 });
+    await ws.waitFrame((f) => f.type === 'authenticated');
+    await sleep(400); // 泵跑了——未订阅不得推进游标吞事件
+    ws.send({ type: 'subscribe', projectId: 'p1' });
+    const ev = await ws.waitFrame((f) => f.type === 'event', 4000);
+    expect(Number(ev.seq)).toBe(seqBefore); // 事件未丢
+    h.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, title, status, stop_generation, revision) VALUES ('task-mine','p1','dm_a','dm_turn','我的','ACTIVE',0,1),('task-other','p1','dm_b','dm_turn','他人','ACTIVE',0,1)`).run();
+    const seqMine = seedEvent32(h.db, 'evt-task-mine-' + randomUUID().slice(0, 6), null, 'task-mine', null);
+    const seqOther = seedEvent32(h.db, 'evt-task-other-' + randomUUID().slice(0, 6), null, 'task-other', null);
+    const seqUnknown = seedEvent32(h.db, 'evt-unknown-' + randomUUID().slice(0, 6), null, null, null);
+    const gotMine = await ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqMine, 4000);
+    expect(gotMine).toBeTruthy();
+    await expect(ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqOther, 1200)).rejects.toThrow();
+    await expect(ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqUnknown, 1200)).rejects.toThrow();
+    ws.closeSocket();
+    await h.close();
+  }, 90_000);
+
+  it('大请求体读取期间吊销 → 派发前重查拒绝（不放过在途窗口）', async () => {
+    const h = await boot();
+    const a = await bootAuth32(h, 'SLOWBODY');
+    const bigBody = JSON.stringify({ commandId: 'r32-slow-cmd-001', method: 'message.submit', params: { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '慢体提交 SLOW-BODY-771 ' + 'x'.repeat(2 * 1024 * 1024), intent: 'record_only', mentions: [] } });
+    const result = await new Promise<{ status: number; body: string }>((resolve) => {
+      const req = https.request({ hostname: '127.0.0.1', port: h.port, path: '/cmd', method: 'POST', headers: { 'content-type': 'application/json', origin: h.origin, host: h.host, authorization: 'Bearer ' + a.token, 'content-length': String(Buffer.byteLength(bigBody)) }, ca: CERT_PEM, servername: 'localhost', rejectUnauthorized: true }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', () => resolve({ status: -1, body: '' }));
+      const half = Math.floor(bigBody.length / 2);
+      req.write(bigBody.slice(0, half));
+      setTimeout(() => {
+        revokeDeviceInDb(h.db, a.deviceId, Date.now());
+        h.server.invalidateDevice(a.deviceId);
+        req.write(bigBody.slice(half));
+        req.end();
+      }, 250);
+    });
+    expect(result.status).toBe(401); // 派发前重查——读取期间吊销不放过
+    const cnt = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id='dm_a' AND body_json LIKE '%SLOW-BODY-771%'`).get() as { c: number }).c;
+    expect(cnt).toBe(0); // 未派发（吊销≠停止——消息也没提交）
+    await h.close();
+  }, 90_000);
+
+  it('会话到期关闭连接；换新 token+新票据重连可用（自动续换链）', async () => {
+    const h = await boot({ tokenTtlMs: 1200 });
+    const cred = await bootPair32(h, 'SESSXP88');
+    const s1 = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + cred });
+    const t1 = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + s1.json.accessToken });
+    const ws = await wsConnect(h);
+    ws.send({ type: 'authenticate', ticket: t1.json.ticket });
+    await ws.waitFrame((f) => f.type === 'authenticated');
+    const closed = await ws.closed; // 会话到期（~1.2s）
+    expect([1008]).toContain(closed.code);
+    await sleep(50);
+    const s2 = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + cred });
+    const t2 = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + s2.json.accessToken });
+    const ws2 = await wsConnect(h);
+    ws2.send({ type: 'authenticate', ticket: t2.json.ticket });
+    const authed = await ws2.waitFrame((f) => f.type === 'authenticated');
+    expect(authed.type).toBe('authenticated');
+    ws2.closeSocket();
+    await h.close();
+  }, 90_000);
+});
+
+// ---------- 第三十二轮测试助手 ----------
+function openDatabase32() {
+  const db = openDatabase(':memory:');
+  return db;
+}
+function seedEvent32(db: import('../../src/persistence/db.ts').ZhongshuoDatabase, eventId: string, conversationId: string | null, taskId: string | null = null, threadId: string | null = null, at = Date.now()): number {
+  const r = db.prepare(`INSERT INTO domain_events (event_id, schema_version, project_id, conversation_id, thread_id, task_id, kind, payload_json, created_at) VALUES (?,1,'p1',?,?,?, 'message.submitted','{}',?)`).run(eventId, conversationId, threadId, taskId, at);
+  return Number(r.lastInsertRowid);
+}
+async function bootPair32(h: Harness, codeHint?: string): Promise<string> {
+  const code = codeHint ?? ('PAIR' + Math.random().toString(36).slice(2, 7).toUpperCase());
+  const created = createPairingCode(h.db, Date.now(), { code });
+  if (!created.ok) throw new Error('pairing create failed');
+  const paired = await httpsJson(h, 'POST', '/pair', { pairingId: created.pairingId, code: created.code, deviceName: 'r32', clientNonce: 'nn' });
+  expect(paired.status).toBe(200);
+  return paired.json.deviceCredential as string;
+}
+async function bootAuth32(h: Harness, codeHint?: string): Promise<{ token: string; ticket: string; deviceId: string; headers: Record<string, string> }> {
+  const cred = await bootPair32(h, codeHint);
+  const sess = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + cred });
+  expect(sess.status).toBe(200);
+  const tk = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + sess.json.accessToken });
+  expect(tk.status).toBe(200);
+  const deviceId = (h.db.prepare('SELECT device_id FROM remote_devices ORDER BY created_at DESC LIMIT 1').get() as { device_id: string }).device_id;
+  return { token: sess.json.accessToken, ticket: tk.json.ticket, deviceId, headers: { authorization: 'Bearer ' + sess.json.accessToken } };
+}
+async function bootWs32(h: Harness, _tag?: string): Promise<Awaited<ReturnType<typeof wsConnect>>> {
+  const a = await bootAuth32(h);
+  const ws = await wsConnect(h);
+  ws.send({ type: 'authenticate', ticket: a.ticket });
+  await ws.waitFrame((f) => f.type === 'authenticated');
+  ws.send({ type: 'subscribe', projectId: 'p1' });
+  await ws.waitFrame((f) => f.type === 'subscribed');
+  return ws;
+}
 
 void tls;

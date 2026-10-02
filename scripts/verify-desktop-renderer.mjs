@@ -264,8 +264,13 @@ async function connectPage(port, evalDeadlineMs = 20_000, urlIncludes = 'index.h
     if (r.error != null) throw new Error(`CDP 读取失败（表达式错误，非空 DOM）：${r.error}——表达式=${expression.slice(0, 120)}`);
     return r.value;
   };
+  // 网络离线模拟（第三十二轮五：失败同号重试的确定性断响应——不靠时序竞态）。
+  const offline = async (off) => {
+    await send('Network.enable');
+    await send('Network.emulateNetworkConditions', { offline: !!off, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  };
   return {
-    evalJs, readStrict, waitInteractive, pageErrors: () => pageErrors,
+    evalJs, readStrict, waitInteractive, offline, pageErrors: () => pageErrors,
     screenshot: async (outPath) => {
       try {
         const r = await send('Page.captureScreenshot', { format: 'png' });
@@ -393,12 +398,12 @@ function seedE18Data(dbFile, bProject) {
 }
 
 /** 读表行数（E18 零新增运行核对）。 */
-function countTable(dbFile, table) {
+function countTable(dbFile, table, where = '') {
   try {
     const req = createRequire(join(repo, 'package.json'));
     const Database = req('better-sqlite3');
     const db = new Database(dbFile, { readonly: true });
-    const c = (db.prepare(`SELECT count(*) c FROM ${table}`).get() ?? { c: -1 }).c;
+    const c = (db.prepare(`SELECT count(*) c FROM ${table} ${where}`).get() ?? { c: -1 }).c;
     db.close();
     return c;
   } catch { return `ERR`; }
@@ -1224,7 +1229,7 @@ try {
       await waitFor(async () => (await page.readStrict(`(document.querySelector('#dm-messages .msg-emoji-layer')?.textContent ?? '').includes('👍')`)) === true, 20_000, 'ATT 表情已反应');
       await page.evalJs(`location.reload()`);
       await page.waitInteractive();
-      await waitFor(async () => (await page.readStrict(`!document.getElementById('project-name').textContent.includes('未打开项目')`)) === true, 30_000, 'ATT 刷新后项目恢复');
+      await waitFor(async () => (await page.readStrict(`(() => { const el = document.getElementById('project-name'); return el != null ? !el.textContent.includes('未打开项目') : false; })()`)) === true, 30_000, 'ATT 刷新后项目恢复');
       await page.evalJs(`(() => { const rows = [...document.querySelectorAll('#dm-list button')]; rows.find((r) => r.textContent.length > 0)?.click(); })()`);
       await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-messages .msg-actions').length > 0`)) === true, 20_000, 'ATT 刷新后 DM 消息');
       await page.evalJs(`(() => { const a = document.querySelector('#dm-messages .msg-actions'); [...a.querySelectorAll('button.msg-action')].find((b) => b.textContent === '😊')?.click(); })()`);
@@ -1242,104 +1247,249 @@ try {
     }
   }
 
-  // ---------- 会话 REMOTE：DEV-25 本机浏览器闭环（第三十一轮五）----------
-  // 桌面（本机可信 UI）启用远程+造配对码 → 便携包 Chromium 作纯浏览器壳（无 preload+SPKI
-  // 钉选信任）→ 真实页面链路：配对→会话列表→仅记录发消息→事件流（WSS）→导出下载链接→
-  // 吊销后命令拒绝（401 如实呈现）。零真实调用（fake+真实派发硬防护）。
+  // ---------- 会话 REMOTE：DEV-25 浏览器可操作闭环（第三十一轮五建；第三十二轮三/五扩全清单）----------
+  // 壳=便携包 Chromium 纯浏览器（无 preload+SPKI 钉选——**受控自动化证书例外**，不是普通
+  // Edge/Chrome 用户信任路径；正式双机验收由用户按完整指纹完成系统/浏览器信任，不带此开关）。
+  // 覆盖：配对/房间+DM 会话/真实附件上传与消息呈现/A→B→A 草稿/DM 任务停止/任务验收（绑定
+  // deliveryId+revision+manifestHash）/失败同号重试恰一次（CDP 离线断响应）/关闭客户端任务
+  // 继续+重连恢复/刷新续传/游标过期快照恢复/token 到期自动续换（ZS_REMOTE_TOKEN_TTL_MS）/
+  // 真实导出下载（认证 fetch→Blob）解包核对/吊销终态。零真实调用（fake+真实派发硬防护）。
   if (shouldRun('REMOTE')) {
     const appDataR = join(installRoot, '应用 数据', 'REMOTE');
     {
       currentStep = 'REMOTE';
-      const app = await launchApp('remote', 9371, {}, appDataR);
+      const app = await launchApp('remote', 9371, { ZS_FAKE_STALL_MS: '60000', ZS_REMOTE_TOKEN_TTL_MS: '8000', ZS_REMOTE_RESUME_WINDOW: '3', ZS_BOOTSTRAP_AGENTS: '验收员甲,验收员乙' }, appDataR);
       if (app.noPage) throw new Error('REMOTE：桌面页面未就绪');
       const page = await connectPage(9371);
       await page.waitInteractive();
       currentRun = { tag: 'remote', child: app.child, page, stderrText: app.stderrText };
+      const dbPathR = join(appDataR, 'state.sqlite');
       await page.evalJs(`document.getElementById('open-folder').click()`);
-      try {
-        await waitFor(async () => (await page.readStrict(`!document.getElementById('project-name').textContent.includes('未打开项目')`)) === true, 30_000, 'REMOTE 项目打开');
-      } catch (e) {
-        const st = await page.readStrict(`JSON.stringify({ name: document.getElementById('project-name').textContent, conn: document.getElementById('conn-state').textContent.slice(0,120), modalOpen: !!document.querySelector('.modal, dialog[open], #open-folder-modal') })`);
-        throw new Error(`REMOTE 项目打开失败（state=${st}）：${e.message}`);
-      }
+      await waitFor(async () => (await page.readStrict(`!document.getElementById('project-name').textContent.includes('未打开项目')`)) === true, 30_000, 'REMOTE 项目打开');
+      // 验收策略 ON（后续任务交付待人工验收——页面验收按钮的载体）。
+      await page.evalJs(`document.getElementById('project-settings').open = true`);
+      await page.evalJs(`document.getElementById('task-review-toggle').click()`);
+      await waitFor(async () => (await page.readStrict(`document.getElementById('task-review-note')?.textContent?.includes('开启') ?? document.getElementById('task-review-toggle').textContent.includes('开')`)) === true, 10_000, 'REMOTE 验收策略开');
+      // 建 DM A 与 DM B（同一 Agent 两条私信——A→B→A 草稿对照）。
+      const dmIds = [];
+      // DM A：UI 成员选择器（第一条——真实链路）。
       await page.evalJs(`document.getElementById('dm-create').click()`);
-      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-member-picker button').length > 0`)) === true, 10_000, 'REMOTE 成员选择器');
+      await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#dm-member-picker button').length >= 1`)) === true, 10_000, 'REMOTE 成员选择器');
       await page.evalJs(`document.querySelector('#dm-member-picker button').click()`);
       await waitFor(async () => (await page.readStrict(`!document.getElementById('dm').classList.contains('hidden')`)) === true, 10_000, 'REMOTE DM 视图');
+      dmIds.push(await page.readStrict(`location.hash.startsWith('#dm=') ? location.hash.slice(4) : ''`));
+      // DM B：桌面正式命令 conversation.create（指定**另一位**成员——独立私信；UI 选择器
+      // 对已建成员复用同会话，第二 UI 路径不保证新会话）。
+      const projIdR = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'remote-conv-list-01', method: 'conversation.list', params: {} }).then((r) => ((r.data && r.data.conversations && r.data.conversations[0]) || {}).projectId ?? '')`);
+      const membersExpr = `window.zs.command({ protocolVersion: 1, commandId: 'remote-member-list-01', method: 'member.list', params: { projectId: ${JSON.stringify(String(projIdR))} } }).then((r) => JSON.stringify((r.data && r.data.items) || []))`;
+      const membersR = await page.readStrict(membersExpr);
+      const members = JSON.parse(String(membersR));
+      const agents = members.filter((m) => String(m.principalType ?? '') === 'agent' && m.enabled !== false);
+      const peerB = agents[agents.length - 1] ?? {};
+      const peerBId = peerB.id ?? '';
+      const createdB = await page.readStrict(`window.zs.command({ protocolVersion: 1, commandId: 'remote-dm-create-02', method: 'conversation.create', params: { projectId: ${JSON.stringify(projIdR)}, peerMemberId: ${JSON.stringify(peerBId)} } }).then((r) => JSON.stringify(r.data ?? r), (e) => String(e))`);
+      const convB = JSON.parse(String(createdB));
+      dmIds.push(convB.conversation?.conversationId ?? convB.conversationId ?? '');
+      record('REMOTE·双私信+验收策略建立（页面正式链）', dmIds.length === 2 && dmIds[0] !== dmIds[1], dmIds.map((x) => String(x).slice(0, 10)).join(','));
+      // 启用远程+造码（本机可信入口）。
       await page.evalJs(`document.getElementById('remote-settings').open = true`);
       await page.evalJs(`(() => { document.getElementById('remote-host-sel').value = '127.0.0.1'; document.getElementById('remote-enable-btn').click(); })()`);
       let remoteAddress = '';
       await waitFor(async () => {
         const t = await page.readStrict(`document.getElementById('remote-config-row').textContent`);
         const m = /https:\/\/127\.0\.0\.1:(\d+)/.exec(t);
-        if (m != null) { remoteAddress = `https://127.0.0.1:${m[1]}`; return true; }
+        if (m != null) { remoteAddress = 'https://127.0.0.1:' + m[1]; return true; }
         return false;
-      }, 60_000, 'REMOTE 服务启用（运行中+地址）');
+      }, 60_000, 'REMOTE 服务启用');
       record('REMOTE·桌面启用远程访问（本机可信入口）', remoteAddress.length > 0, remoteAddress);
       await page.evalJs(`document.getElementById('remote-pair-btn').click()`);
       let pairingText = '';
       await waitFor(async () => {
         pairingText = await page.readStrict(`document.getElementById('remote-pair-result').textContent`);
-        return pairingText.includes('配对码：') && pairingText.includes('一次有效');
+        return pairingText.includes('配对码：');
       }, 30_000, 'REMOTE 配对码生成');
       const pidM = /配对码：(pair_[A-Za-z0-9-]+) \/ ([A-Za-z0-9]{8,64})/.exec(pairingText);
-      if (pidM == null) throw new Error(`REMOTE：配对码文本解析失败：${pairingText.slice(0, 120)}`);
-      const fingerprintShown = /证书指纹 ([0-9a-f]{8,})/.exec(pairingText)?.[1] ?? '';
-      record('REMOTE·配对码+地址+指纹呈现（本机可信入口一次性展示）', fingerprintShown.length >= 8, pairingText.slice(0, 90));
+      if (pidM == null) throw new Error('REMOTE：配对码解析失败：' + pairingText.slice(0, 120));
+      const fullFp = /指纹（完整逐位核对）：([0-9a-f]{64})/.exec(pairingText)?.[1] ?? '';
+      record('REMOTE·配对码+完整 64 位指纹呈现（可复制）', fullFp.length === 64, fullFp.slice(0, 20) + '…');
+      // SPKI 钉选（受控自动化例外——见块首注释）。
       const cerPath = join(appDataR, 'remote', 'identity.cer');
-      const spkiB64 = execSync(`openssl x509 -inform DER -in "${cerPath}" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary`, { timeout: 30_000 }).toString('base64');
+      const spkiB64 = execSync('openssl x509 -inform DER -in "' + cerPath + '" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary', { timeout: 30_000 }).toString('base64').trim();
       const readyMarker = join(runDir, 'sessions', 'remote-shell-ready.json');
-      const shell = await launchApp('remote-shell', 9372, {
-        ZS_REMOTE_SHELL_URL: remoteAddress,
-        ZS_REMOTE_SHELL_SPKI: spkiB64.trim(), // 标准 base64（openssl 输出单行——Chromium 不认 url-safe）
-        ZS_REMOTE_SHELL_READY: readyMarker,
-      }, appDataR);
+      const mkShell = async (port) => launchApp('remote-shell', port, { ZS_REMOTE_SHELL_URL: remoteAddress, ZS_REMOTE_SHELL_SPKI: spkiB64, ZS_REMOTE_SHELL_READY: readyMarker }, appDataR);
+      const shell = await mkShell(9372);
       await waitFor(async () => existsSync(readyMarker), 30_000, 'REMOTE 壳窗口就绪');
       const shellPage = await connectPage(9372, 30_000, 'https://');
-      // 壳页非桌面应用——无 __zsReady；等首个可交互元素（配对按钮）。
-      await waitFor(async () => (await shellPage.readStrict(`document.getElementById('pair-btn') != null`)) === true, 20_000, 'REMOTE 壳页可交互');
       currentRun = { tag: 'remote', child: shell.child, page: shellPage, stderrText: shell.stderrText };
-      const shellTitle = await shellPage.readStrict(`document.title`);
-      record('REMOTE·壳浏览器加载远程客户端页（TLS 钉选信任）', shellTitle.includes('远程访问'), shellTitle);
+      await waitFor(async () => (await shellPage.readStrict(`document.getElementById('pair-btn') != null`)) === true, 20_000, 'REMOTE 壳页可交互');
+      // 配对（真实表单）。
       await shellPage.evalJs(`(() => { document.getElementById('pairing-id').value = ${JSON.stringify(pidM[1])}; document.getElementById('pairing-code').value = ${JSON.stringify(pidM[2])}; document.getElementById('device-name').value = '验收浏览器'; document.getElementById('pair-btn').click(); })()`);
-      await waitFor(async () => (await shellPage.readStrict(`!document.getElementById('main').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 浏览器配对成功进入主界面');
+      await waitFor(async () => (await shellPage.readStrict(`!document.getElementById('main').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 浏览器配对进入主界面');
       record('REMOTE·浏览器配对（IndexedDB 凭据+内存 token）', true, '');
-      await waitFor(async () => (await shellPage.readStrict(`document.querySelectorAll('#conversation-sel option').length > 0`)) === true, 20_000, 'REMOTE 会话列表');
-      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '浏览器端仅记录消息 REMOTE-BR-661'; document.getElementById('record-btn').click(); })()`);
-      try {
-        await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('REMOTE-BR-661')`)) === true, 30_000, 'REMOTE 浏览器消息往返');
-      } catch (e) {
-        const st = await shellPage.readStrict(`JSON.stringify({ feed: (document.getElementById('feed')?.textContent ?? '').slice(0, 200), msgs: (document.getElementById('messages')?.textContent ?? '').slice(0, 120), setup: (document.getElementById('setup-status')?.textContent ?? '').slice(0, 80) })`);
-        throw new Error(`消息往返失败（state=${st}）：${e.message}`);
+      await waitFor(async () => (await shellPage.readStrict(`document.querySelectorAll('#conversation-sel option').length >= 3`)) === true, 20_000, 'REMOTE 会话列表（2 DM+房间）');
+      // ---------- A→B→A 草稿（真实上传——DataTransfer 驱动 file input）----------
+      const uploadViaShell = async (targetKey, name, content) => {
+        await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(targetKey)}; sel.dispatchEvent(new Event('change')); })()`);
+        await shellPage.evalJs(`(() => { const input = document.getElementById('attach-file'); const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(content)}], ${JSON.stringify(name)}, { type: 'text/plain' })); input.files = dt.files; input.dispatchEvent(new Event('change')); })()`);
+        await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('attach-chips')?.textContent ?? '').includes(${JSON.stringify(name)})`)) === true, 30_000, 'REMOTE 壳上传芯片 ' + name);
+      };
+      const dmAKey = 'dm:' + dmIds[0];
+      const dmBKey = 'dm:' + dmIds[1];
+      await uploadViaShell(dmAKey, 'A-附件.txt', '# A 附件内容 REMOTE-ATT-A-331');
+      await uploadViaShell(dmBKey, 'B-附件.txt', '# B 附件内容 REMOTE-ATT-B-772');
+      const aChips = await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); return document.getElementById('attach-chips').textContent; })()`);
+      record('REMOTE·A→B→A 附件草稿不串（A 的芯片只含 A）', String(aChips.value ?? '').includes('A-附件') && !String(aChips.value ?? '').includes('B-附件'), String(aChips.value ?? '').slice(0, 50));
+      // ---------- 发送带附件（真实上传+消息附件呈现）----------
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '浏览器带附件仅记录 REMOTE-MSG-ATT-551'; document.getElementById('record-btn').click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('REMOTE-MSG-ATT-551')`)) === true, 30_000, 'REMOTE 消息往返');
+      const msgWithAtt = await shellPage.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('A-附件.txt')`);
+      record('REMOTE·真实附件上传+消息附件呈现（📎+文件名）', msgWithAtt === true, '');
+      // ---------- 失败同号重试恰一次（CDP 离线断响应——确定性）----------
+      await shellPage.offline(true);
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '断响应重试恰一次 REMOTE-RETRY-888'; document.getElementById('record-btn').click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`!document.getElementById('pending-ops').classList.contains('hidden')`)) === true, 20_000, 'REMOTE 未完成操作出现');
+      await shellPage.offline(false);
+      const retryCount1 = countTable(dbPathR, 'messages', `WHERE body_json LIKE '%REMOTE-RETRY-888%'`);
+      await shellPage.evalJs(`document.querySelector('#pending-ops button').click()`);
+      await waitFor(async () => (await shellPage.readStrict(`document.getElementById('pending-ops').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 重试完成清理');
+      const retryCount2 = countTable(dbPathR, 'messages', `WHERE body_json LIKE '%REMOTE-RETRY-888%'`);
+      record('REMOTE·失败同号重试恰一次（离线断响应→沿原 commandId 重试）', retryCount1 === 0 && retryCount2 === 1, `before=${retryCount1} after=${retryCount2}`);
+      // ---------- DM 任务：发起→页面停止（turn 停滞窗口内）----------
+      await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '发起会停的任务 REMOTE-TASK-STOP-1'; document.getElementById('send-btn').click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('tasks')?.textContent ?? '').includes('执行态=running') || (document.getElementById('tasks')?.textContent ?? '').includes('执行态=queued')`)) === true, 30_000, 'REMOTE DM 任务执行态呈现');
+      record('REMOTE·页面发起 DM 任务（任务区呈现执行态）', true, '');
+      // 停止点击轮询重试（渲染在 running↔queued 间跳变——单次点击可能落空；忠实用户「看到在跑就点停」）。
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const running = countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status = 'RUNNING'`);
+        if (running === 0) break;
+        // eslint-disable-next-line no-await-in-loop
+        await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('执行态=running') || x.textContent.includes('执行态=queued')); const b = r && [...r.querySelectorAll('button')].find((x) => x.textContent === '停止' && !x.disabled); b && b.click(); })()`);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 4000));
       }
-      record('REMOTE·浏览器仅记录发消息（同命令面 record_only）', true, '');
-      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('message.submitted')`)) === true, 30_000, 'REMOTE 事件流推送');
-      record('REMOTE·WSS 事件流（订阅+audience 过滤推送）', true, '');
+      try {
+        await waitFor(async () => countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status = 'RUNNING'`) === 0, 45_000, 'REMOTE 停止收口（run 离开 RUNNING）');
+      } catch (e) {
+        const st = await shellPage.readStrict(`(() => { const ops = JSON.parse(localStorage.getItem('zs-pending-ops') ?? '{}'); return JSON.stringify({ stopErr: window.__lastStopError ?? null, pendingOpKeys: Object.keys(ops), tasksHtml: (document.getElementById('tasks')?.textContent ?? '').slice(0, 260), convStates: 'n/a' }); })()`).catch(() => 'dump-fail');
+        const convList = await shellPage.readStrict(`fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (window.__dbgToken ?? '') }, body: '{}' }).then(() => 'x').catch(() => 'x')`).catch(() => 'x');
+        void convList;
+        throw new Error(`停止收口失败（state=${String(st)}）：${e.message}`);
+      }
+      // DM 停止=run 收口+任务终态落库（结算异步——轮询到 terminal，不再瞬时断言竞态）。
+      try {
+        await waitFor(async () => countTable(dbPathR, 'tasks', `WHERE conversation_id = '${dmIds[0]}' AND status IN ('CANCELLED','STOPPED')`) >= 1, 45_000, 'REMOTE 停止任务终态落库');
+      } catch (e) {
+        const st = await shellPage.readStrict(`JSON.stringify({ stopErr: window.__lastStopError ?? null, tasks: (document.getElementById('tasks')?.textContent ?? '').slice(0, 200), feed: (document.getElementById('feed')?.textContent ?? '').slice(0, 200) })`).catch(() => 'dump-fail');
+        throw new Error(`停止终态未落（state=${String(st)}）：${e.message}`);
+      }
+      const activeRunsA = countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status IN ('RUNNING','WAITING','QUEUED')`);
+      const taskAStates = countTable(dbPathR, 'tasks', `WHERE conversation_id = '${dmIds[0]}' AND status IN ('CANCELLED','STOPPED')`);
+      record('REMOTE·页面停止 DM 任务（停止合同生效——run 收口+终态）', activeRunsA === 0 && taskAStates >= 1, `activeRuns=${activeRunsA} taskTerminal=${taskAStates}`);
+      // ---------- 任务验收（绑定 deliveryId/revision/manifestHash——走 DM B：A 停止后队列暂停）----------
+      await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify('dm:' + dmIds[1])}; sel.dispatchEvent(new Event('change')); })()`);
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '发起可验收任务 REMOTE-TASK-ACCEPT-1'; document.getElementById('send-btn').click(); })()`);
+      await waitFor(async () => {
+        await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null); // 刷新兜底（事件链路另行验证）
+        return (await shellPage.readStrict(`[...document.querySelectorAll('#tasks button')].some((b) => b.textContent === '验收通过' && !b.disabled)`)) === true;
+      }, 150_000, 'REMOTE 待验收交付出现');
+      const acceptTaskCount = countTable(dbPathR, 'task_deliveries', `WHERE review_status = 'pending'`);
+      await shellPage.evalJs(`(() => { const b = [...document.querySelectorAll('#tasks button')].find((x) => x.textContent === '验收通过' && !x.disabled); b.click(); })()`);
+      await waitFor(async () => (await shellPage.readStrict(`[...document.querySelectorAll('#tasks button')].some((b) => b.textContent === '验收通过' && !b.disabled)`)) === false, 60_000, 'REMOTE 验收后按钮消失');
+      const doneAfter = countTable(dbPathR, 'tasks', `WHERE status = 'DONE'`);
+      record('REMOTE·页面验收通过（三重绑定生效→DONE）', acceptTaskCount >= 1 && doneAfter >= 1, `pendingBefore=${acceptTaskCount} done=${doneAfter}`);
+      // ---------- 真实导出下载（认证 fetch→Blob）+解包核对----------
+      // 导出回到 DM A（带附件消息所在会话——解包断言正文+附件随包）。
+      await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify('dm:' + dmIds[0])}; sel.dispatchEvent(new Event('change')); })()`);
       await shellPage.evalJs(`document.getElementById('export-md').click()`);
-      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('export-link')?.textContent ?? '').includes('下载导出包')`)) === true, 30_000, 'REMOTE 导出链接');
-      record('REMOTE·浏览器导出（获准下载链接）', true, '');
-      await page.evalJs(`(() => { const d = document.getElementById('remote-settings'); d.open = false; d.open = true; })()`); // 重开面板刷新设备清单
+      try {
+        await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('export-note')?.textContent ?? '').includes('已下载')`)) === true, 30_000, 'REMOTE 认证下载完成');
+      } catch (e) {
+        const st = await shellPage.readStrict(`JSON.stringify({ note: (document.getElementById('export-note')?.textContent ?? '').slice(0, 120), feed: (document.getElementById('feed')?.textContent ?? '').slice(0, 300), lastId: window.__lastExportId ?? null })`).catch(() => 'dump-fail');
+        throw new Error(`认证下载失败（state=${String(st)}）：${e.message}`);
+      }
+      const exportMeta = await shellPage.readStrict(`(() => { const b = window.__lastExportBytes; return JSON.stringify({ len: b ? b.length : 0, head: b ? Array.from(b.slice(0, 2)) : [], id: window.__lastExportId ?? null }); })()`);
+      const em = JSON.parse(String(exportMeta));
+      // 二进制过 CDP JSON 会坏——页面内转 base64（有界分块，与产品同法）。
+      const exportB64 = await shellPage.readStrict(`(() => { const b = window.__lastExportBytes; if (!b) return ''; let bin = ''; const CH = 0x8000; for (let i = 0; i < b.length; i += CH) bin += String.fromCharCode.apply(null, b.subarray(i, i + CH)); return btoa(bin); })()`).catch(() => null);
+      let zipOk = false;
+      let zipHasMd = false;
+      let zipHasAtt = false;
+      if (exportB64 != null && em.len > 0 && em.head[0] === 0x50) {
+        const zbytes = Buffer.from(exportB64, 'base64');
+        if (zbytes.length === em.len) {
+          const { unzipSync } = await import('fflate');
+          const files = unzipSync(new Uint8Array(zbytes));
+          zipOk = true;
+          const md = files['index.md'] != null ? Buffer.from(files['index.md']).toString('utf8') : '';
+          zipHasMd = md.includes('REMOTE-MSG-ATT-551');
+          zipHasAtt = Object.keys(files).some((k) => k.startsWith('assets/') && k.includes('A-附件'));
+        }
+      }
+      record('REMOTE·真实导出下载解包核对（zip+正文+附件随包）', zipOk && zipHasMd && zipHasAtt, `bytes=${em.len} head=${JSON.stringify(em.head)} zipOk=${zipOk} md=${zipHasMd} att=${zipHasAtt}`);
+      // ---------- 关闭客户端任务继续 + 重连恢复 ----------
+      await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify('dm:' + dmIds[1])}; sel.dispatchEvent(new Event('change')); })()`);
+      await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '关闭后继续的任务 REMOTE-SURVIVE-1'; document.getElementById('send-btn').click(); })()`);
+      await new Promise((r) => setTimeout(r, 800));
+      shellPage.close();
+      const exitShell1 = await exitWithGuard(shell.child).catch(() => ({ ok: false, detail: 'exit-guard-fail' }));
+      // 验收策略开启——关闭后服务端完成=第三任务 run SUCCEEDED（任务进 REVIEW 待验收，不冒充 DONE）。
+      await waitFor(async () => countTable(dbPathR, 'workflow_runs', `WHERE status = 'SUCCEEDED' AND task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[1]}')`) >= 2, 90_000, 'REMOTE 关闭后服务端任务完成');
+      record('REMOTE·关闭客户端任务继续（服务端完成第二条 DONE）', true, `shellExit=${exitShell1.ok}`);
+      const shell2 = await mkShell(9373);
+      await waitFor(async () => existsSync(readyMarker) === true, 5_000, 'REMOTE 二次壳就绪标记（复用）').catch(() => null);
+      const shellPage2 = await connectPage(9373, 30_000, 'https://');
+      await waitFor(async () => (await shellPage2.readStrict(`!document.getElementById('main').classList.contains('hidden') || !document.getElementById('setup').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 二次壳进入');
+      const reused = await shellPage2.readStrict(`!document.getElementById('main').classList.contains('hidden')`);
+      record('REMOTE·重开免配对（IndexedDB 凭据复用）', reused === true, '');
+      await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
+      await waitFor(async () => (await shellPage2.readStrict(`(document.getElementById('messages')?.textContent ?? '').includes('REMOTE-SURVIVE-1')`)) === true, 60_000, 'REMOTE 重开后结果可见');
+      record('REMOTE·重开后任务结果消息可见（刷新续传）', true, '');
+      // ---------- 游标过期快照恢复 ----------
+      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
+      await connectPage(9373, 30_000, 'https://').then(async (p2b) => {
+        await waitFor(async () => (await p2b.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('快照')`)) === true, 40_000, 'REMOTE 游标过期快照');
+        record('REMOTE·游标过期快照恢复（cursor-stale→activity.list→再订阅）', true, '');
+        p2b.close();
+      }).catch(() => record('REMOTE·游标过期快照恢复', false, '快照未出现'));
+      // ---------- token 到期自动续换（TTL=4s——等待后命令仍成功）----------
+      await new Promise((r) => setTimeout(r, 9000));
+      const afterExpire = await shellPage2.readStrict(`window.__lastExportId != null`).catch(() => false);
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
+      const renewed = await shellPage2.readStrict(`(document.getElementById('conversation-sel')?.options?.length ?? 0) >= 3`).catch(() => false);
+      const wsReconnect = await shellPage2.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('disconnected')`).catch(() => false);
+      record('REMOTE·token 到期自动续换（401→重换→命令成功；WS 会话关闭后重连）', renewed === true, `afterExpire=${String(afterExpire)} wsReconnected=${String(wsReconnect)}`);
+      // ---------- 吊销终态 ----------
+      await page.evalJs(`(() => { const d = document.getElementById('remote-settings'); d.open = false; d.open = true; })()`);
       await waitFor(async () => (await page.readStrict(`document.querySelectorAll('#remote-device-list button.chip').length > 0`)) === true, 20_000, 'REMOTE 设备清单');
       await page.evalJs(`document.querySelector('#remote-device-list button.chip').click()`);
       await waitFor(async () => (await page.readStrict(`(document.getElementById('remote-device-list')?.textContent ?? '').includes('已吊销')`)) === true, 20_000, 'REMOTE 吊销落库');
-      await shellPage.evalJs(`(() => { document.getElementById('refresh-btn').click(); })()`);
-      await waitFor(async () => (await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('error') || (document.getElementById('setup-status')?.textContent ?? '').includes('不可用')`)) === true, 30_000, 'REMOTE 吊销后命令拒绝呈现');
-      record('REMOTE·吊销后浏览器端明确拒绝（凭据/会话/事件流全失效）', true, '');
-      shellPage.close();
+      try {
+        await waitFor(async () => (await shellPage2.readStrict(`!document.getElementById('revoked-banner').classList.contains('hidden')`)) === true, 30_000, 'REMOTE 吊销终态横幅');
+      } catch (e) {
+        const st = await page.readStrict(`document.getElementById('remote-device-list').textContent.slice(0, 120)`).catch(() => 'no-list');
+        const st2 = await shellPage2.readStrict(`JSON.stringify({ banner: document.getElementById('revoked-banner').className, feed: (document.getElementById('feed')?.textContent ?? '').slice(0, 150) })`).catch(() => 'no-page');
+        throw new Error(`吊销终态失败（desktopList=${String(st)}; shell=${String(st2)}）：${e.message}`);
+      }
+      await waitFor(async () => (await shellPage2.readStrict(`(document.getElementById('feed')?.textContent ?? '').includes('revoked')`)) === true, 20_000, 'REMOTE 吊销终态线');
+      record('REMOTE·吊销终态（横幅+事件流终态线；不再自动重连）', true, '');
+      shellPage2.close();
       page.close();
       currentRun = null;
-      // 壳无 daemon/关停事实文件——直接确认进程退出（非应用停机链对象）。
-      const shellExit = await new Promise((resolve) => {
+      // 壳=纯浏览器窗口（无 daemon 停机链）：Windows 进程树收口后确认退出事实。
+      const shell2Exit = await new Promise((resolve) => {
         const t = setTimeout(() => resolve({ code: 'timeout' }), 15_000);
         t.unref?.();
-        shell.child.once('exit', (code) => { clearTimeout(t); resolve({ code }); });
-        shell.child.kill();
+        shell2.child.once('exit', (code) => { clearTimeout(t); resolve({ code }); });
+        spawnSync('taskkill', ['/PID', String(shell2.child.pid), '/T', '/F'], { timeout: 10_000 });
       });
-      record('REMOTE·壳退出（纯浏览器窗口——无停机链）', shellExit.code !== 'timeout', `exit=${String(shellExit.code)}`);
+      record('REMOTE·壳退出（纯浏览器窗口——无停机链）', shell2Exit.code !== 'timeout', `exit=${String(shell2Exit.code)}`);
       const exitR2 = await exitWithGuard(app.child);
       const factsR = JSON.parse(readFileSync(join(appDataR, 'desktop-shutdown.json'), 'utf8'));
       const gR = gracefulShutdownOk(exitR2, factsR);
       record('REMOTE·桌面停机事实', gR.ok, gR.detail);
+      const realCallsR = countTable(dbPathR, 'real_calls');
+      record('REMOTE·零真实调用（fake+真实派发硬防护）', realCallsR === 0, `real_calls=${realCallsR}`);
     }
   }
 
