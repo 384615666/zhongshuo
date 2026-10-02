@@ -2,7 +2,43 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-02 第三十六轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十七轮，唯一权威快照）
+
+> 本轮=**验收版本保持稳定+操作补充/Android 指南+PPT 静态页预览**。v2 包（dev25-dual-win-v2，
+> bld_4d7928368c7da46f）用户双机人工验收进行中——**不动该包/server-data/RESULTS**；回填后
+> 工程侧只读核对（未执行/失败/未确认分记，不代宣称通过）。上一轮快照（第三十六轮）紧随其后。
+> - **操作补充（dev25-dual-v2-addendum.md，不重建验收包）**：防火墙监听程序=
+>   ZhongshuoDual/resources/app/daemon/node/node.exe（**daemon 监听 HTTPS——不是 electron.exe**）；
+>   UI 仅「仅本机/局域网 0.0.0.0」两选项（无填具体 IP 入口）——多网卡从面板 **LAN 地址列表**选
+>   实际地址+端口；**CA 核对=ca.cer 文件 SHA-256**（`Get-FileHash -Algorithm SHA256`）与面板
+>   「信任根指纹」比较，服务证书指纹单独记录；**信任完成后再生成新配对码**（避免 5 分钟窗内
+>   过期）；结果模板追加行（两枚指纹/防火墙规则/使用的 LAN 地址）——不覆盖已有回填。
+> - **Android 指南（dev25-android-acceptance-guide.md）**：信任（设置→安全→加密与凭据→安装
+>   证书→CA 证书，先逐位核对 CA 指纹）→配对（触摸/上传——图片门提示用文本类）→后台恢复
+>   （切后台/锁屏 30—60s 回前台自动重连+检查点续传）→独立吊销（面板吊销手机设备→立即断流
+>   终态横幅）；系统与浏览器版本记录模板必填；**「证书格式已适配」与「该 Android 组合已实测」
+>   分开**——无任何 Android 实测记录前不记通过；私钥只留服务机/不用绕过开关；PWA/Push 后续。
+> - **PPT 静态页预览（attachment.previewSlidesPages，src/daemon/pptxPages.ts）**：slide XML→
+>   SVG **受控转换**——sldIdLst 真实页序（跳号正确）+当前页 SVG（形状 EMU→px/文本段落/图片
+>   base64 内联/备注页脚）+缩放（SVG 矢量客户端）；**缓存绑定版本**（daemon_state 键
+>   pages:slides:<artifactId>，值含 sourceHash——不符即弃；输入=readVerifiedBlob）；**与提取
+>   文本分列**（previewOffice slides 通道不变）；预算（60 页/单页 SVG 220KB/图片 2MB+总量
+>   6MB）超限 truncated 标注；版面近似如实（SmartArt/图表/主题样式不渲染）。UI 双通道+页导航
+>   +缩放。pptxPages 4/4（含版本绑定重传/缺图占位/超页数拒绝）。
+> - **工程坑**：①**zipGuard 迁出**——parseWorker 尾部 `process.on('message')+process.exit`
+>   入口曾被 commands.ts import 带入主进程（vitest 1538 个 unhandled「process.exit unexpectedly
+>   called」+全量 OOM）——safeUnzip 独立成 zipGuard.ts（参数化上限），worker 侧
+>   safeUnzipWith(常量)+**ZipGuardError code 透传映射**（parseLifecycle 炸弹用例核对 code——
+>   曾退化成 parse-worker-error）；②小盒子文本「装不下即跳过」是受控转换的真实行为——测试
+>   样本盒子要够大（10px 盒子文本被截断是如实语义）；③停止点击循环加**零到达守卫**（audit 零
+>   task.stop 立即失败留现场——不再空转 95s 等自然完成的假阴性）。
+> - **数字**：pptxPages **4/4**；本地全量 **831/831**；冻结三连 **142/142×3**（bld_ad0857541002b79c：
+>   created b2luaj+reused 4eovnu/xtpr0x；vcjtsv/0oyein 中止如实保留——旧 ATT 断言过时+停止
+>   点击零到达偶发）；零真实调用。
+> - **下一步**：①用户 D1—D10 回填→工程侧只读核对；②Android 实测（指南就绪）；③其余评论
+>   锚点按 FULL-03 后批；④DEV-25/G5 发布结论待双机人工验收通过后再出。
+
+## 上一轮快照（2026-10-02 第三十六轮）
 
 > 本轮=**真实双机验收入口受阻→修复+普通浏览器预检+v2 包重交**。D1—D10 未执行不记通过。
 > 上一轮快照（第三十五轮）紧随其后。
