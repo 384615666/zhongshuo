@@ -49,7 +49,7 @@ interface Harness {
   close: () => Promise<void>;
 }
 
-async function boot(testing?: Record<string, unknown>): Promise<Harness> {
+async function boot(testing?: Record<string, unknown>, dispatchWrap?: (envelope: unknown, next: (envelope: unknown) => Promise<unknown>) => Promise<unknown>): Promise<Harness> {
   const db = openDatabase(':memory:');
   db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目',?,?,'{}',0)`).run(tmpRoot, tmpRoot);
   db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Agent甲','agent',1)`).run();
@@ -61,7 +61,10 @@ async function boot(testing?: Record<string, unknown>): Promise<Harness> {
     db,
     localUserId: 'u_local',
     appDataDir: appData,
-    dispatch: (envelope, ctx) => dispatchDaemonCommand({ ...deps, ...(ctx != null ? { remoteAudit: { deviceId: ctx.deviceId, authEpoch: ctx.deviceEpoch }, remoteGate: ctx.gate } : {}) }, envelope),
+    dispatch: (envelope, ctx) => {
+      const next = (e: unknown): Promise<unknown> => dispatchDaemonCommand({ ...deps, ...(ctx != null ? { remoteAudit: { deviceId: ctx.deviceId, authEpoch: ctx.deviceEpoch }, remoteGate: ctx.gate } : {}) }, e);
+      return dispatchWrap != null ? dispatchWrap(envelope, next) : next(envelope);
+    },
     log: (l) => logs.push(l),
     testing: { identity, pumpMs: 80, authWindowMs: 900, ticketTtlMs: 30_000, resumeWindow: 5000, perIpPerMin: 999, globalPerMin: 9999, ...(testing ?? {}) },
   });
@@ -711,6 +714,66 @@ async function bootWs32(h: Harness, _tag?: string): Promise<Awaited<ReturnType<t
   await ws.waitFrame((f) => f.type === 'subscribed');
   return ws;
 }
+
+describe('第三十五轮：读取链贯通/自检看板真异步/空态对照', () => {
+  it('自检看板核验等待真实结果：非空看板真实组数（1->1，非 -1）；前置/结束查询失败均不计通过', async () => {
+    const prevScEnv = process.env.ZS_REMOTE_SELFCHECK;
+    process.env.ZS_REMOTE_SELFCHECK = '1';
+    try {
+      // ① 正常路径：可见=['p1'] → 1 组——detail 必须是真实数字（旧实现未 await 恒 -1->-1 假 PASS）。
+      const h = await boot();
+      const depsLocal = { db: h.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData };
+      await dispatchDaemonCommand(depsLocal, { protocolVersion: 1, commandId: 'r35-nav-01', method: 'nav.preferences', params: { clientId: 'user-ui', visibleProjectIds: ['p1'] } });
+      const r1 = await h.server.runSelfcheck();
+      expect(r1.ok).toBe(true);
+      const boardItem1 = r1.items.find((i) => i.name.includes('导航偏好与全项目看板'));
+      expect(boardItem1?.ok).toBe(true);
+      expect(boardItem1?.detail).toContain('boardGroups=1->1'); // 真实组数——不是 -1->-1
+      expect((h.db.prepare("SELECT count(*) c FROM daemon_state WHERE key LIKE 'selfcheck:probe:%'").get() as { c: number }).c).toBe(0);
+      await h.close();
+      // ② 前置查询失败：dispatch 对 board.view 恒抛 → 基线 null → 该项明确失败（不按前后一致通过）。
+      const h2 = await boot(undefined, async (envelope, next) => {
+        if ((envelope as { method?: string }).method === 'board.view') throw new Error('board view down (pre)');
+        return next(envelope);
+      });
+      const r2 = await h2.server.runSelfcheck();
+      expect(r2.ok).toBe(false);
+      const boardItem2 = r2.items.find((i) => i.name.includes('导航偏好与全项目看板'));
+      expect(boardItem2?.ok).toBe(false);
+      expect(boardItem2?.detail).toContain('看板查询失败/未覆盖');
+      await h2.close();
+      // ③ 结束查询失败：第一次 board.view（前基线）成功、之后（结束核验）失败 → 真实前值+null 后值 → 不计通过。
+      let boardCalls = 0;
+      const h3 = await boot(undefined, async (envelope, next) => {
+        if ((envelope as { method?: string }).method === 'board.view') {
+          boardCalls += 1;
+          if (boardCalls > 1) throw new Error('board view down (post)');
+        }
+        return next(envelope);
+      });
+      await dispatchDaemonCommand({ db: h3.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData }, { protocolVersion: 1, commandId: 'r35-nav-03', method: 'nav.preferences', params: { clientId: 'user-ui', visibleProjectIds: ['p1'] } });
+      const r3 = await h3.server.runSelfcheck();
+      expect(r3.ok).toBe(false);
+      const boardItem3 = r3.items.find((i) => i.name.includes('导航偏好与全项目看板'));
+      expect(boardItem3?.ok).toBe(false);
+      expect(boardItem3?.detail).toContain('boardGroups=1->null'); // 前值真实取得（await 生效）、后值失败如实 null
+      await h3.close();
+    } finally {
+      if (prevScEnv == null) delete process.env.ZS_REMOTE_SELFCHECK; else process.env.ZS_REMOTE_SELFCHECK = prevScEnv;
+    }
+  }, 120_000);
+
+  it('正常空数据对照：可见集为空 → board.view 成功返回 0 组（成功空响应≠读取失败）', async () => {
+    const h = await boot();
+    const depsLocal = { db: h.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData };
+    await dispatchDaemonCommand(depsLocal, { protocolVersion: 1, commandId: 'r35-nav-empty-01', method: 'nav.preferences', params: { clientId: 'user-ui', visibleProjectIds: [] } });
+    const r = await dispatchDaemonCommand(depsLocal, { protocolVersion: 1, commandId: 'r35-board-empty-01', method: 'board.view', params: { scope: 'all' } }) as { ok: boolean; data?: { groups?: unknown[] } };
+    expect(r.ok).toBe(true); // 成功响应（不是错误）
+    expect(Array.isArray(r.data?.groups)).toBe(true);
+    expect(r.data?.groups?.length).toBe(0); // 确实无可见项目——空态由成功响应承载
+    await h.close();
+  }, 60_000);
+});
 
 describe('第三十四轮：跨项目检查点/自检不变性/同请求中途吊销', () => {
   it('跨项目安全检查点：P2 1—301+P1 302、先订 P1、半批断线——重连后无漏无重（P2 的 301 补到）', async () => {

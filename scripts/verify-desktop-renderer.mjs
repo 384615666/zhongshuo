@@ -269,28 +269,39 @@ async function connectPage(port, evalDeadlineMs = 20_000, urlIncludes = 'index.h
     await send('Network.enable');
     await send('Network.emulateNetworkConditions', { offline: !!off, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   };
-  // 定点断响应（第三十四轮二：快照部分失败的确定性注入）——按请求体方法名打掉 /cmd 请求
-  //（首个匹配失败一次后自动解除；其余请求 continue——页面不受整体断网影响）。
-  const failCmdOnce = async (methodName) => {
+  // 定点断响应（第三十四轮二/第三十五轮一）：按请求体方法名打掉 /cmd 请求——
+  // failCmdNth(method, nth) 打掉**自 armed 起第 nth 个**匹配请求（boot 请求计数敏感命令可用
+  // nth=2 让 boot 放行、恢复链中招——如 conversation.history/room.list 这类 5s 轮询不碰的命令
+  // 计数确定）；命中后自动解除；其余请求 continue——页面不受整体断网影响。
+  // **每页单一守卫**：再次 arm 前先拆旧监听器（旧监听器会对新目标请求抢先 continue——
+  // 多轮注入竞态实证）。
+  let fetchGuard = null;
+  const failCmdNth = async (methodName, nth = 1) => {
+    if (fetchGuard != null) { try { ws.removeEventListener('message', fetchGuard.listener); await send('Fetch.disable'); } catch { /* 尽力 */ } fetchGuard = null; }
     await send('Fetch.enable', { patterns: [{ urlPattern: '*/cmd*', requestStage: 'Request' }] });
-    let armed = true;
-    ws.addEventListener('message', (ev) => {
+    let seen = 0;
+    const listener = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.method !== 'Fetch.requestPaused') return;
         const req = msg.params?.request ?? {};
         const body = typeof req.postData === 'string' ? req.postData : '';
-        if (armed && String(req.url).includes('/cmd') && body.includes(`"method":"${methodName}"`)) {
-          armed = false;
-          void send('Fetch.failRequest', { requestId: msg.params.requestId, errorReason: 'Failed' }).then(() => send('Fetch.disable')).catch(() => {});
-        } else {
-          void send('Fetch.continueRequest', { requestId: msg.params.requestId }).catch(() => {});
+        if (String(req.url).includes('/cmd') && body.includes(`"method":"${methodName}"`)) {
+          seen += 1;
+          if (seen === nth) {
+            void send('Fetch.failRequest', { requestId: msg.params.requestId, errorReason: 'Failed' }).then(() => send('Fetch.disable')).catch(() => {});
+            return;
+          }
         }
+        void send('Fetch.continueRequest', { requestId: msg.params.requestId }).catch(() => {});
       } catch { /* 拦截尽力——不打断页面 */ }
-    });
+    };
+    ws.addEventListener('message', listener);
+    fetchGuard = { listener };
   };
+  const failCmdOnce = async (methodName) => failCmdNth(methodName, 1);
   return {
-    evalJs, readStrict, waitInteractive, offline, failCmdOnce, pageErrors: () => pageErrors,
+    evalJs, readStrict, waitInteractive, offline, failCmdOnce, failCmdNth, pageErrors: () => pageErrors,
     screenshot: async (outPath) => {
       try {
         const r = await send('Page.captureScreenshot', { format: 'png' });
@@ -1413,13 +1424,20 @@ try {
       // 停止点击轮询重试（渲染在 running↔queued 间跳变——单次点击可能落空；忠实用户「看到在跑就点停」）。
       // 在途口径含 WAITING/QUEUED/STOPPING：run 排队（同成员前一 turn 未完）时 status 不是
       // RUNNING——只数 RUNNING 会在尚未点击前就 break（第三十三轮实证：任务跑完进 REVIEW）。
-      for (let attempt = 0; attempt < 12; attempt += 1) {
+      // 每次迭代先点刷新（TTL 断流使 5s 轮询的成功渲染稀疏——等待被动刷新会长时间无行可点），
+      // 稍候渲染再点停止；25 次×4s 覆盖整个 60s 停滞窗（第三十五轮冻结 run 实证：48s 窗内
+      // 一次可点行都没等到——remote_audit_log 零 task.stop）。
+      for (let attempt = 0; attempt < 25; attempt += 1) {
         const active = countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status IN ('RUNNING','WAITING','QUEUED','STOPPING')`);
         if (active === 0) break;
         // eslint-disable-next-line no-await-in-loop
+        await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 1500));
+        // eslint-disable-next-line no-await-in-loop
         await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('执行态=running') || x.textContent.includes('执行态=queued')); const b = r && [...r.querySelectorAll('button')].find((x) => x.textContent === '停止' && !x.disabled); b && b.click(); })()`);
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, 2500));
       }
       try {
         await waitFor(async () => countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status IN ('RUNNING','WAITING','STOPPING')`) === 0, 95_000, 'REMOTE 停止收口（run 离开在途）');
@@ -1573,9 +1591,60 @@ try {
       const r2 = JSON.parse(String(recovered2Raw));
       await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
       const ev2 = await sendRecordAndWaitWsEvent(shellPage2, '快照恢复2后新事件 REMOTE-POST-RECOVERY-2');
-      record('REMOTE·快照恢复全口径（部分失败 pending 检查点不推进→退避成功；连续两轮 stale；每轮后新事件经 WSS）',
-        ps.st === 'pending' && ps.ls === '0' && r1.st === 'recovered' && Number(r1.ls) > 0 && r2.st === 'recovered' && Number(r2.ls) > 0 && ev1 === true && ev2 === true,
-        `pending(st=${ps.st},ls=${ps.ls}) r1(ls=${r1.ls},acks=${r1.acks}) r2(acks=${r2.acks}) ev1=${ev1} ev2=${ev2}`);
+      // 第 3 轮（第三十五轮一：恢复链下游·当前会话事实）：conversation.history 第 2 次命中打掉
+      //（boot #1 放行、恢复链 loadMessages #2 中招——5s 轮询不碰该命令，计数确定）。
+      await shellPage2.failCmdNth('conversation.history', 2);
+      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
+      await waitFeedHas(shellPage2, 'snapshot-pending', 45_000, 'REMOTE 会话/线程读取失败→pending');
+      const ps3 = JSON.parse(String(await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq') })`)));
+      await waitFeedHas(shellPage2, 'snapshot-recovered', 60_000, 'REMOTE 会话读取失败退避重试恢复');
+      const r3 = JSON.parse(String(await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq') })`)));
+      await shellPage2.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`);
+      const ev3 = await sendRecordAndWaitWsEvent(shellPage2, '会话读取失败恢复后新事件 REMOTE-POST-RECOVERY-3');
+      // 第 4 轮（第三十五轮一：恢复链下游·房间列表）：room.list 第 2 次命中打掉
+      //（boot #1 放行、恢复链 refreshTargets #2 中招——轮询不碰）。
+      await shellPage2.failCmdNth('room.list', 2);
+      await shellPage2.evalJs(`(() => { localStorage.setItem('zs-last-seq', '0'); location.reload(); })()`);
+      await waitFeedHas(shellPage2, 'snapshot-pending', 45_000, 'REMOTE 目标/项目/房间读取失败→pending');
+      const ps4 = JSON.parse(String(await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq') })`)));
+      await waitFeedHas(shellPage2, 'snapshot-recovered', 60_000, 'REMOTE 房间列表失败退避重试恢复');
+      const r4 = JSON.parse(String(await shellPage2.readStrict(`JSON.stringify({ st: window.__cursorState, ls: localStorage.getItem('zs-last-seq') })`)));
+      const ev4 = await sendRecordAndWaitWsEvent(shellPage2, '房间列表失败恢复后新事件 REMOTE-POST-RECOVERY-4');
+      // ---------- 三态呈现（第三十五轮一：board.view/conversation.list 失败——保留旧快照，
+      // 不冒充「暂无任务」；解除后恢复。空态对照=集成级 board.view 0 组成功+本处互斥断言）。 ----------
+      const tasksChildrenBefore = Number(await shellPage2.readStrict(`document.getElementById('tasks').childElementCount`));
+      await shellPage2.failCmdNth('board.view', 1);
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
+      await waitFor(async () => (await shellPage2.readStrict(`(document.getElementById('tasks')?.textContent ?? '')`).catch(() => '')).includes('任务读取失败'), 20_000, 'REMOTE board.view 失败→任务面读取失败标注');
+      const triBoard = await shellPage2.readStrict(`JSON.stringify({ fail: (document.getElementById('tasks')?.textContent ?? '').includes('任务读取失败'), empty: (document.getElementById('tasks')?.textContent ?? '').includes('暂无任务'), kept: document.getElementById('tasks').childElementCount >= ${tasksChildrenBefore} })`);
+      const tb = JSON.parse(String(triBoard));
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`); // 解除后成功（Fetch 已 disable）
+      // 轮询等标注**消失**（成功重建+clearReadError；旧条件写反成等「出现」）。
+      let triBoardOkAfter = false;
+      try {
+        await waitFor(async () => (await shellPage2.readStrict(`(((document.getElementById('tasks')?.textContent ?? '').includes('任务读取失败')) || (document.getElementById('read-fail-note-tasks') != null))`).catch(() => true)) === false, 20_000, 'REMOTE board.view 恢复成功后标注消失');
+        triBoardOkAfter = true;
+      } catch (e) { void e; }
+      const optionsBefore = Number(await shellPage2.readStrict(`document.getElementById('conversation-sel').options.length`));
+      await shellPage2.failCmdNth('conversation.list', 1);
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
+      // 双面判定：5s 轮询的 refreshTasks 可能先消耗掉 #1 命中（错误呈现在任务面）——任一面
+      // 出现读取失败即证注入生效；目标面断言=选项列表保留。
+      await waitFor(async () => (await shellPage2.readStrict(`(((document.getElementById('messages')?.textContent ?? '').includes('会话/项目/房间读取失败')) || ((document.getElementById('tasks')?.textContent ?? '').includes('任务读取失败')))`).catch(() => false)) === true, 20_000, 'REMOTE conversation.list 失败→读取失败标注（目标面或任务面）');
+      const triConv = await shellPage2.readStrict(`JSON.stringify({ targetsFail: (document.getElementById('messages')?.textContent ?? '').includes('会话/项目/房间读取失败'), tasksFail: (document.getElementById('tasks')?.textContent ?? '').includes('任务读取失败'), kept: document.getElementById('conversation-sel').options.length === ${optionsBefore} })`);
+      const tc = JSON.parse(String(triConv));
+      await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
+      await new Promise((r) => setTimeout(r, 3000));
+      const triConvOkAfter = await shellPage2.readStrict(`(((document.getElementById('read-fail-note-targets') != null) || (document.getElementById('read-fail-note-tasks') != null) || (document.getElementById('messages')?.textContent ?? '').includes('会话/项目/房间读取失败') || (document.getElementById('tasks')?.textContent ?? '').includes('任务读取失败')) === false)`).catch(() => true);
+      record('REMOTE·快照恢复全口径（部分失败 pending 检查点不推进→退避成功；连续两轮 stale；恢复链下游 conversation.history/room.list 失败同样 pending；每轮后新事件经 WSS）',
+        ps.st === 'pending' && ps.ls === '0' && r1.st === 'recovered' && Number(r1.ls) > 0 && r2.st === 'recovered' && Number(r2.ls) > 0
+          && ps3.st === 'pending' && ps3.ls === '0' && r3.st === 'recovered' && Number(r3.ls) > 0
+          && ps4.st === 'pending' && ps4.ls === '0' && r4.st === 'recovered' && Number(r4.ls) > 0
+          && ev1 === true && ev2 === true && ev3 === true && ev4 === true,
+        `pending(ls=${ps.ls}) r1(ls=${r1.ls}) r2(acks=${r2.acks}) r3(ls=${r3.ls}) r4(ls=${r4.ls}) ev=${ev1}/${ev2}/${ev3}/${ev4}`);
+      record('REMOTE·读取三态呈现（board.view/conversation.list 失败保留旧快照不冒充空；解除后恢复）',
+        (tb.fail === true && tb.empty === false && tb.kept === true && triBoardOkAfter === true) && (tc.kept === true && (tc.targetsFail === true || tc.tasksFail === true) && triConvOkAfter === true),
+        `board(fail=${tb.fail},empty=${tb.empty},kept=${tb.kept},okAfter=${triBoardOkAfter}) conv(targetsFail=${tc.targetsFail},tasksFail=${tc.tasksFail},kept=${tc.kept},okAfter=${triConvOkAfter})`);
       // ---------- token 到期自动续换（__tokenGen+__lastHttpOkAt 事实核对——非「下拉有选项」）----------
       const tokenGenBefore = await shellPage2.readStrict(`window.__tokenGen`);
       const okAtBefore = await shellPage2.readStrict(`window.__lastHttpOkAt`);
@@ -1591,10 +1660,22 @@ try {
         const feedTxt = await shellPage2.readStrict(`(document.getElementById('feed')?.textContent ?? '').slice(0, 240)`).catch(() => 'no-feed');
         throw new Error(`token 续换未发生（gen ${tokenGenBefore}->${genAfter} feed=${String(feedTxt)}）：${e.message}`);
       }
-      // 续换后命令确在成功（新 HTTP 2xx+选项仍在）。
+      // 续换后命令确在成功（新 HTTP 2xx+选项仍在）——点击后轮询等 okAt 前进（立即读曾在
+      // 请求在途时读到旧值）。
       await shellPage2.evalJs(`document.getElementById('refresh-btn').click()`);
-      const renewStateRaw = await shellPage2.readStrict(`JSON.stringify({ gen: window.__tokenGen, okAt: window.__lastHttpOkAt, opts: (document.getElementById('conversation-sel')?.options?.length ?? 0) })`);
-      const rs = JSON.parse(String(renewStateRaw));
+      let rs = { gen: 0, okAt: 0, opts: 0 };
+      try {
+        await waitFor(async () => {
+          const raw = await shellPage2.readStrict(`JSON.stringify({ gen: window.__tokenGen, okAt: window.__lastHttpOkAt, opts: (document.getElementById('conversation-sel')?.options?.length ?? 0) })`).catch(() => '');
+          if (typeof raw !== 'string' || raw.length === 0) return false;
+          rs = JSON.parse(raw);
+          return rs.okAt > okAtBefore;
+        }, 20_000, 'REMOTE 续换后新 HTTP 2xx（okAt 前进）');
+      } catch (e) {
+        const raw2 = await shellPage2.readStrict(`JSON.stringify({ gen: window.__tokenGen, okAt: window.__lastHttpOkAt, opts: (document.getElementById('conversation-sel')?.options?.length ?? 0) })`).catch(() => '{}');
+        rs = JSON.parse(String(raw2));
+        void e;
+      }
       record('REMOTE·token 到期自动续换（续换计数增+续换后新 HTTP 2xx+命令成功）', rs.gen > tokenGenBefore && rs.okAt > okAtBefore && rs.opts >= 3, `gen ${tokenGenBefore}->${rs.gen} okAt=${okAtBefore}->${rs.okAt} opts=${rs.opts}`);
       // ---------- 吊销终态 ----------
       await page.evalJs(`(() => { const d = document.getElementById('remote-settings'); d.open = false; d.open = true; })()`);
