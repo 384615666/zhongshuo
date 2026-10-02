@@ -223,7 +223,7 @@ export function validateExtractCache(rawJson: string | null | undefined, expecte
 }
 
 // ---------- 任务/响应形状（父↔子） ----------
-export type ParseJobKind = 'pdf' | 'docx' | 'xlsx' | 'csv' | 'pptx' | 'office'; // office=由 worker 按解压后的 [Content_Types] 定类（zip 条目已压缩——字面嗅探不可靠）
+export type ParseJobKind = 'pdf' | 'docx' | 'xlsx' | 'csv' | 'pptx' | 'office' | 'pptx-pages'; // office=由 worker 按解压后的 [Content_Types] 定类（zip 条目已压缩——字面嗅探不可靠）；pptx-pages=静态页预览（第三十八轮：解压+SVG 转换重活进可终止子进程）
 
 export interface ParseJob {
   jobId: string;
@@ -231,6 +231,9 @@ export interface ParseJob {
   /** 托管副本绝对路径（worker 自读并核对 sha256——读取时点完整性）。 */
   blobPath: string;
   expectedHash: string;
+  /** pptx-pages 专用：pages JSON 输出文件（IPC 响应有 4MB 防御上限——大载荷走文件，
+   * 父进程在响应后读取并校验）。 */
+  outPath?: string;
   /** 受控故障注入（仅 ZS_TEST_PARSE_HOOKS=1 时由池附加——生产不设）。 */
   /** 受控故障注入（仅 ZS_TEST_PARSE_HOOKS=1 时由池附加——生产不设；allocMB=外部 Buffer 大额分配（整进程内存反例））。 */
   hooks?: { busyMs?: number; exitCode?: number; allocMB?: number };
@@ -240,6 +243,8 @@ export interface ParseResponse {
   jobId: string;
   ok: boolean;
   result?: ExtractCache & { artifactKind?: string };
+  /** pptx-pages 成功回执（小载荷摘要——完整 JSON 在 outPath 文件）。 */
+  pagesSummary?: { sourceHash: string; slides: number; pxW: number; pxH: number; truncatedPages: number; outBytes: number };
   error?: { code: string; message: string };
 }
 

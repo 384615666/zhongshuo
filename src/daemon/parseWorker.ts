@@ -9,12 +9,13 @@
  * 阻塞本进程（证明父进程仍可响应/截止可杀）；exitCode=不发响应直接退出（证明 worker 退出
  * 分类）。生产不设该环境变量=钩子不可达。
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { Unzip, UnzipInflate } from 'fflate';
 import { safeUnzipWith, ZipGuardError } from './zipGuard.ts';
+import { buildPptxPages, PPTX_PAGES_TOTAL_MAX_BYTES } from './pptxPages.ts';
 import {
   CURRENT_PARSER_VERSIONS,
   PDF_MAX_BYTES, PDF_MAX_PAGES, PDF_PAGE_TEXT_MAX, PDF_TOTAL_TEXT_MAX,
@@ -509,11 +510,30 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
       sink[0] = 1; // 触碰防消除
     }
     const raw = readFileSync(job.blobPath);
-    const byteCap = job.kind === 'pdf' ? PDF_MAX_BYTES : job.kind === 'csv' ? CSV_MAX_BYTES : OFFICE_MAX_BYTES; // office/docx/xlsx/pptx 同限
+    const byteCap = job.kind === 'pdf' ? PDF_MAX_BYTES : job.kind === 'csv' ? CSV_MAX_BYTES : OFFICE_MAX_BYTES; // office/docx/xlsx/pptx/pptx-pages 同限
     if (raw.length > byteCap) return { ...common, ok: false, error: { code: `${job.kind}-too-large`, message: `原件 ${raw.length}B 超过上限 ${byteCap}B（明确规则拒绝）` } };
     const hash = sha256(raw);
     if (hash !== job.expectedHash) {
       return { ...common, ok: false, error: { code: 'source-hash-mismatch', message: `托管副本读取时 sha256 与记录不符（${hash.slice(0, 12)}… ≠ ${job.expectedHash.slice(0, 12)}…）——原件已被改写，拒绝解析` } };
+    }
+    // PPTX 静态页（第三十八轮四：解压+SVG 转换重活进本可终止子进程——内存/截止/终止梯
+    // 全沿解析池；载荷走 outPath 文件，IPC 只回小摘要）。与文本提取分列：不产 ExtractCache。
+    if (job.kind === 'pptx-pages') {
+      if (job.outPath == null || job.outPath.length === 0) {
+        return { ...common, ok: false, error: { code: 'pptx-pages-config', message: '缺少输出文件路径' } };
+      }
+      const files = safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES });
+      const pages = buildPptxPages(files, (name) => files[name], hash);
+      const json = JSON.stringify(pages);
+      const outBytes = Buffer.byteLength(json, 'utf8');
+      if (outBytes > PPTX_PAGES_TOTAL_MAX_BYTES) {
+        return { ...common, ok: false, error: { code: 'pptx-pages-too-large', message: `静态页 JSON ${outBytes}B 超上限 ${PPTX_PAGES_TOTAL_MAX_BYTES}B（图片内联总量已限——该文件异常膨胀，拒绝输出）` } };
+      }
+      writeFileSync(job.outPath, json, 'utf8');
+      return {
+        ...common, ok: true,
+        pagesSummary: { sourceHash: hash, slides: pages.slides.length, pxW: pages.pxW, pxH: pages.pxH, truncatedPages: pages.slides.filter((s) => s.truncated).length, outBytes },
+      };
     }
     let result: ExtractCache;
     switch (job.kind) {

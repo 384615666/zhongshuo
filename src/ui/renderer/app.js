@@ -1070,7 +1070,9 @@ async function previewAttachment(attachmentId, filename, kindHint) {
             svgEl.setAttribute('height', String(Math.round(pages.pxH * zoom)));
           }
           stage.append(svgEl ?? Object.assign(document.createElement('div'), { textContent: '（本页无渲染内容）' }));
-          pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 缩放 ${Math.round(zoom * 100)}%${sl.truncated ? ' · 本页超静态预览预算（部分未渲染）' : ''} · 形状 ${sl.shapes}·图片 ${sl.images}`;
+          const degrade = (sl.unsupported ?? 0) > 0 ? ` · 未渲染对象 ${sl.unsupported}（${sl.unsupportedKinds || '未知类型'}）` : '';
+          const textCut = sl.textTruncated ? ' · 文本超预算已截断' : '';
+          pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 缩放 ${Math.round(zoom * 100)}%${sl.truncated ? ' · 本页超静态预览预算（部分未渲染）' : ''}${textCut} · 形状 ${sl.shapes}·图片 ${sl.images}${degrade}`;
         };
         const nav = (dir) => { const n = current + dir; if (n >= 0 && n < pages.slides.length) { current = n; draw(); } };
         prevBtn.onclick = () => nav(-1);
@@ -1083,7 +1085,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           const sl = pages.slides[i];
           const chip = document.createElement('button');
           chip.className = 'chip';
-          chip.textContent = `第 ${sl.slide} 页${sl.truncated ? '（部分未渲染）' : ''}`;
+          chip.textContent = `第 ${sl.slide} 页${sl.truncated ? '（部分未渲染）' : ''}${(sl.unsupported ?? 0) > 0 ? '（含未渲染对象）' : ''}`;
           chip.onclick = () => { current = i; draw(); };
           navList.append(chip);
         }

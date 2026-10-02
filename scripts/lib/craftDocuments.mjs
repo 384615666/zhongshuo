@@ -310,7 +310,16 @@ export function makePptxPagesSample({ slides }) {
       if (sh.kind === 'pic') {
         return `<p:pic><p:nvPicPr/><p:blipFill><a:blip r:embed="rIdImg1"/></p:blipFill><p:spPr>${geom}</p:spPr></p:pic>`;
       }
-      const texts = (sh.texts ?? []).map((t) => `<a:p><a:r><a:t>${escapeXml(t)}</a:t></a:r></a:p>`).join('');
+      if (sh.kind === 'chart') {
+        return `<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart1"/></a:graphicData></a:graphic></p:graphicFrame>`;
+      }
+      if (sh.kind === 'table') {
+        return `<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>${escapeXml((sh.texts ?? [''])[0] ?? '')}</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
+      }
+      if (sh.kind === 'grpSp') {
+        return `<p:grpSp><p:grpSpPr>${geom}</p:grpSpPr><p:sp><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp></p:grpSp>`;
+      }
+      const texts = (sh.texts ?? []).map((t) => `<a:p><a:r><a:t>${sh.rawText === true ? t : escapeXml(t)}</a:t></a:r></a:p>`).join('');
       return `<p:sp><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody>${texts}</p:txBody></p:sp>`;
     }).join('');
     files[`ppt/slides/slide${sl.no}.xml`] = `${CT_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree>${shapeXml}</p:spTree></p:cSld></p:sld>`;

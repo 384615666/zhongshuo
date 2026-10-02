@@ -29,9 +29,18 @@ export type ParseRunResult =
   | { ok: true; result: ExtractCache & { artifactKind?: string } }
   | { ok: false; error: { code: string; message: string } };
 
+/** pptx-pages 专用结果（第三十八轮四：大载荷走 outPath 文件——IPC 只回摘要）。 */
+export type ParsePagesResult =
+  | { ok: true; pagesSummary: { sourceHash: string; slides: number; pxW: number; pxH: number; truncatedPages: number; outBytes: number }; outPath: string }
+  | { ok: false; error: { code: string; message: string } };
+
+type SettleResult = ParseRunResult | ParsePagesResult;
+
 export interface ParseRunOptions {
   /** 端到端截止（含排队等待；缺省 PARSE_DEADLINE_MS）。 */
   deadlineMs?: number;
+  /** pptx-pages 输出文件（调用方管理生命周期——成功响应后由调用方读取并清理）。 */
+  outPath?: string;
   /** 受控故障注入（仅 ZS_TEST_PARSE_HOOKS=1 生效——生产不设即不可达）。 */
   hooks?: { busyMs?: number; exitCode?: number; allocMB?: number };
 }
@@ -46,7 +55,8 @@ let cachedWorkerScript: string | null = null;
 function devSourceFingerprint(): string {
   const dir = scriptDir();
   const h = createHash('sha256');
-  for (const f of ['parseWorker.ts', 'parseContracts.ts', 'parseJobObject.ts']) {
+  // pptxPages.ts 进 worker bundle（第三十八轮四）——变更必须触发重建，加入指纹。
+  for (const f of ['parseWorker.ts', 'parseContracts.ts', 'parseJobObject.ts', 'pptxPages.ts', 'zipGuard.ts']) {
     try { h.update(readFileSync(join(dir, f))); h.update(f); } catch { h.update(`missing:${f}`); }
   }
   return h.digest('hex');
@@ -98,10 +108,11 @@ interface QueuedJob {
   kind: ParseJobKind;
   blobPath: string;
   expectedHash: string;
+  outPath?: string;
   opts: ParseRunOptions;
   enqueuedAt: number;
   totalDeadlineMs: number;
-  resolve: (r: ParseRunResult) => void;
+  resolve: (r: SettleResult) => void;
 }
 
 const cancelledResult = (note: string): ParseRunResult => ({ ok: false, error: { code: 'parse-cancelled', message: `解析池已关闭（daemon 停机）——${note}` } });
@@ -120,16 +131,26 @@ export class ParsePool {
   }
 
   run(kind: ParseJobKind, blobPath: string, expectedHash: string, opts: ParseRunOptions = {}): Promise<ParseRunResult> {
+    // kind='pptx-pages' 只会以 pages 变体结算（worker 分支只回 pagesSummary）——断言安全。
+    return this.enqueue(kind, blobPath, expectedHash, opts) as Promise<ParseRunResult>;
+  }
+
+  /** pptx-pages 专用（第三十八轮四）：outPath 必填——完整 JSON 由 worker 写文件，IPC 只回摘要。 */
+  runPages(blobPath: string, expectedHash: string, outPath: string, opts: ParseRunOptions = {}): Promise<ParsePagesResult> {
+    return this.enqueue('pptx-pages', blobPath, expectedHash, { ...opts, outPath }) as Promise<ParsePagesResult>;
+  }
+
+  private enqueue(kind: ParseJobKind, blobPath: string, expectedHash: string, opts: ParseRunOptions): Promise<SettleResult> {
     if (this.disposed) {
       return Promise.resolve(cancelledResult('任务取消'));
     }
-    return new Promise<ParseRunResult>((resolve) => {
+    return new Promise<SettleResult>((resolve) => {
       if (this.disposed) { resolve(cancelledResult('任务取消')); return; }
       if (this.pumping && this.queue.length >= PARSE_QUEUE_MAX) {
         resolve({ ok: false, error: { code: 'parse-busy', message: `解析队列已满（并发 ${PARSE_CONCURRENCY}+等待 ${PARSE_QUEUE_MAX}）——请稍后重试（明确拒绝，不悬挂）` } });
         return;
       }
-      this.queue.push({ kind, blobPath, expectedHash, opts, enqueuedAt: Date.now(), totalDeadlineMs: opts.deadlineMs ?? PARSE_DEADLINE_MS, resolve });
+      this.queue.push({ kind, blobPath, expectedHash, outPath: opts.outPath, opts, enqueuedAt: Date.now(), totalDeadlineMs: opts.deadlineMs ?? PARSE_DEADLINE_MS, resolve });
       void this.pump();
     });
   }
@@ -157,7 +178,7 @@ export class ParsePool {
     }
   }
 
-  private async dispatchJob(job: QueuedJob, deadlineMs: number): Promise<ParseRunResult> {
+  private async dispatchJob(job: QueuedJob, deadlineMs: number): Promise<SettleResult> {
     let script: string;
     try {
       script = await resolveWorkerScript();
@@ -173,7 +194,7 @@ export class ParsePool {
           allocMB: Number(process.env.ZS_TEST_PARSE_ALLOC_MB ?? 0) || job.opts.hooks?.allocMB,
         }
       : undefined;
-    const message: ParseJob & { hooks?: { busyMs?: number; exitCode?: number; allocMB?: number } } = { jobId, kind: job.kind, blobPath: job.blobPath, expectedHash: job.expectedHash, ...(hooks != null ? { hooks } : {}) };
+    const message: ParseJob & { hooks?: { busyMs?: number; exitCode?: number; allocMB?: number } } = { jobId, kind: job.kind, blobPath: job.blobPath, expectedHash: job.expectedHash, ...(job.outPath != null ? { outPath: job.outPath } : {}), ...(hooks != null ? { hooks } : {}) };
     let child: ChildProcess;
     try {
       child = fork(script, [], {
@@ -191,12 +212,12 @@ export class ParsePool {
     let stderrTail = '';
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (d: string) => { stderrTail = (stderrTail + d).slice(-500); });
-    return await new Promise<ParseRunResult>((resolve) => {
+    return await new Promise<SettleResult>((resolve) => {
       let settled = false;
       let exited = false;
       let timedOut = false;
       let invalidResponse: string | null = null;
-      let pendingResult: ParseRunResult | null = null;
+      let pendingResult: SettleResult | null = null;
       let deadlineTimer: NodeJS.Timeout | null = null;
       let killTimer: NodeJS.Timeout | null = null;
       let unconfirmedTimer: NodeJS.Timeout | null = null;
@@ -209,7 +230,7 @@ export class ParsePool {
         try { child.kill(); } catch { /* 已退出 */ }
         if (killTimer == null) killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }, PARSE_KILL_GRACE_MS);
       };
-      const finish = (r: ParseRunResult): void => {
+      const finish = (r: SettleResult): void => {
         if (settled) return;
         settled = true;
         clearTimers();
@@ -240,6 +261,7 @@ export class ParsePool {
           return;
         }
         if (resp.ok && resp.result != null) pendingResult = { ok: true, result: resp.result };
+        else if (resp.ok && resp.pagesSummary != null && job.outPath != null) pendingResult = { ok: true, pagesSummary: resp.pagesSummary, outPath: job.outPath };
         else pendingResult = { ok: false, error: resp.error ?? { code: 'parse-worker-failed', message: '解析失败（无错误详情）' } };
         if (deadlineTimer != null) { clearTimeout(deadlineTimer); deadlineTimer = null; }
         // 成功路径：子进程应即退；2s 内未退（挂起）→ kill 收拢（不无限等待释放槽）。

@@ -2478,13 +2478,20 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
       }
       case 'attachment.previewSlidesPages': {
-        // PPTX 静态页预览（DEV-24 M3，第三十七轮四）：slide XML→SVG **受控转换**——真实幻灯片
-        // 列表（sldIdLst 顺序）+当前页 SVG（形状/文本/图片内联）+缩放（SVG 矢量，客户端侧）。
-        // **与提取文本预览分列**（previewOffice 的 slides 通道不变）；**绑定原件版本**：缓存键=
-        // artifact hash（daemons_state 键 `pages:slides:<artifactId>` 存 JSON；hash 不符即弃）；
-        // 输入=受控读取的原件字节（readVerifiedBlob 实根/实身份/sha256）；预算：页数 60/单页
-        // SVG 220KB/图片内联单图 2MB 总量 6MB——超限页明确 truncated 标注（不静默截断列表）。
-        // 版面近似（SmartArt/图表/主题样式/渐变不渲染——页面如实标注「未渲染」），不冒充像素级还原。
+        // PPTX 静态页预览（DEV-24 M3；第三十七轮四建立，第三十八轮四重写）：
+        // - **重活进可终止子进程**（此前 daemon 主进程内 safeUnzip+buildPptxPages——绕过解析池
+        //   的内存硬界/墙钟截止/终止梯）：kind='pptx-pages'，载荷经 outPath 文件（IPC 4MB 防御
+        //   上限不承载大 SVG），父进程读回后**严格校验**（validatePptxPagesCache——结构/页序/
+        //   尺寸/字节预算/SVG 白名单/转换器版本）再落缓存；
+        // - **缓存命中也核对原件**（第三十八轮：此前命中在 readVerifiedBlob 之前直接返回——
+        //   原件缺失/损坏/越界时仍返回旧预览）：先 readVerifiedBlob（实根/实身份/sha256），
+        //   再验缓存；
+        // - **绑定原件版本**：缓存键=`pages:slides:<artifactId>`，值内 sourceHash 必须等于当前
+        //   行 hash（schema 2 起转换器版本一并绑定——旧 schema 1 缓存全量作废）；
+        // - 写回前**重读 artifact 行**（迟到防覆盖从注释变为实现：行消失=跳过；hash 已变=按
+        //   行内新事实弃写——本轮回执仍返回本次构建结果）。
+        // - 与提取文本预览分列（previewOffice 的 slides 通道不变）；版面近似（图表/表格/
+        //   SmartArt/组合显式「不渲染」占位标注——不静默白页），不冒充像素级还原。
         const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
         const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
           | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number } | undefined;
@@ -2493,29 +2500,46 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         assertConversationAudience(deps.db, deps.localUserId, convId);
         if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
         if (row.kind !== 'slides_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非幻灯片附件`);
+        // 原件先行核对（缓存命中不豁免——hash/实根/身份三重）。
+        const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
         const cacheKey = `pages:slides:${row.id}`;
         const cachedRaw = (deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(cacheKey) as { value: string } | undefined)?.value ?? null;
         const cached = validatePptxPagesCache(cachedRaw, row.hash);
         if (cached != null) {
-          return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, cache: 'hit', pxW: cached.pxW, pxH: cached.pxH, totalSlides: cached.slides.length, slides: cached.slides.map((s) => ({ slide: s.slide, truncated: s.truncated, shapes: s.shapes, images: s.images, notes: s.notes, svg: s.svg })) } });
+          return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, cache: 'hit', pxW: cached.pxW, pxH: cached.pxH, totalSlides: cached.slides.length, slides: cached.slides.map((s) => ({ slide: s.slide, truncated: s.truncated, textTruncated: s.textTruncated, shapes: s.shapes, images: s.images, unsupported: s.unsupported, unsupportedKinds: s.unsupportedKinds, notes: s.notes, notesTruncated: s.notesTruncated, svg: s.svg })) } });
         }
-        const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
-        if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+        // 子进程转换：输出文件由本命令管理（成功读回/失败清理）。
+        const outDir = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'parse-out');
+        const outPath = join(outDir, `pages-${randomUUID()}.json`);
+        mkdirSync(outDir, { recursive: true });
         let pages: PptxPages;
         try {
-          const files = safeUnzip(verified.raw);
-          pages = buildPptxPages(files, (name) => files[name], row.hash);
+          const runResult = await getParsePool().runPages(row.blob_path, row.hash, outPath, { deadlineMs: 45_000 });
+          if (!runResult.ok) {
+            throw new DaemonCommandError('STORAGE_UNAVAILABLE', `静态页构建失败（${runResult.error.message}）——提取文本预览仍可用（分列）`);
+          }
+          const rawJson = readFileSync(outPath, 'utf8');
+          const validated = validatePptxPagesCache(rawJson, row.hash);
+          if (validated == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '静态页构建产物未过严格校验（结构/页序/预算/SVG 白名单）——拒绝缓存，提取文本预览仍可用');
+          pages = validated;
         } catch (error) {
+          if (error instanceof DaemonCommandError) throw error;
           throw new DaemonCommandError('STORAGE_UNAVAILABLE', `静态页构建失败（${error instanceof Error ? error.message : String(error)}）——提取文本预览仍可用（分列）`);
+        } finally {
+          try { rmSync(outPath, { force: true }); } catch { /* 清理尽力 */ }
         }
-        // 回写绑定读取时快照（迟到防覆盖——与 ensureDocumentCache 同口径）。
+        // 写回前重读 artifact（迟到保护实现化：行消失/会话变化=弃写；hash 变化=按新事实弃写——
+        // 下一次预览按新 hash 重建，不用本轮结果冒充）。
         deps.db.transaction(() => {
+          const nowRow = deps.db.prepare('SELECT id, hash FROM artifacts WHERE id = ?').get(row.id) as { id: string; hash: string } | undefined;
+          if (nowRow == null || nowRow.hash !== row.hash) return;
           assertConversationAudience(deps.db, deps.localUserId, row.conversation_id);
           deps.db.prepare(`INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)
                            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
             .run(cacheKey, JSON.stringify(pages), Date.now());
         }).immediate();
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, cache: 'built', pxW: pages.pxW, pxH: pages.pxH, totalSlides: pages.slides.length, slides: pages.slides.map((s) => ({ slide: s.slide, truncated: s.truncated, shapes: s.shapes, images: s.images, notes: s.notes, svg: s.svg })) } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, cache: 'built', pxW: pages.pxW, pxH: pages.pxH, totalSlides: pages.slides.length, slides: pages.slides.map((s) => ({ slide: s.slide, truncated: s.truncated, textTruncated: s.textTruncated, shapes: s.shapes, images: s.images, unsupported: s.unsupported, unsupportedKinds: s.unsupportedKinds, notes: s.notes, notesTruncated: s.notesTruncated, svg: s.svg })) } });
       }
       case 'saved.add': {
         // DEV-18 收藏（第二十五轮四）：独立持久（saved_refs——001 的 saved_items 为消息 FK
