@@ -2,7 +2,75 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-01 第三十一轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十二轮，唯一权威快照）
+
+> 本轮=**DEV-25 收口**：认证与权限补齐（重复码/审计穿透/直查漏口/异步期吊销重查）→WSS 换
+> 成熟库补完整合同→浏览器页可操作闭环（20 项页面验收）→设置面纠正→**双机包交付**。
+> 上一轮快照（第三十一轮）紧随其后。
+> - **认证与权限**：createPairingCode 近期重复检查修复（**用历史行自己的 salt 核验候选码**——
+>   旧实现拿新 salt 的 digest 与历史比较，同明文也永不相等，形同虚设；实测 AUDITCODE8 两发
+>   复现+修复反例）；迁移 039 remote_audit_log——dispatchDaemonCommand 包装层写审计
+>   （remoteAudit={deviceId,authEpoch} 由 remoteServer 服务端构造注入；失败也记；重放记一行
+>   不重复执行业务）；events.list（补 conversation_id 列）+task.get/task.stop 按 ID 直查
+>   audience 修复（assertTaskAudience——他人 DM 任务拒读拒停）；/cmd 大体（2MB）读取期间
+>   吊销→派发前重查 401（读取窗口不放过；吊销≠停止——消息零提交）。
+> - **WSS（ws 8.22 成熟库承接握手/帧；应用层合同自持）**：票据完整绑定（device+**origin
+>   消费比对**（合法 A 签发→合法 B 使用拒——不能只测白名单外）+sessionTokenHash+会话有效期
+>   +authEpoch 授权代次（吊销即全票据/连接失效））；连接保存会话有效期到期关闭→客户端换新
+>   token+新票据重连（协议级实测）；**消息结构验证**（null/数组/字符串/错型 type 只关该连接
+>   ——旧实现 null 首帧 TypeError 冒泡）；maxPayload=64KB（认证前小消息上限）+订阅上限 200
+>   +慢客户端 bufferedAmount>8MB 关闭 1013；**事件归属**：conversation_id 缺席沿 task_id/
+>   thread_id 反查真实会话（解析不出不推——不自动视为公开）；**游标按订阅门控**：未订阅项目
+>   事件不推进 nextSeq（订阅建立后仍可收到——不丢待续传）；每批 audience 重查不变。
+> - **浏览器客户端（remoteClient 重写）**：认证下载（export.create→**认证 fetch→Blob→
+>   objectURL 真实保存**——token 不进 URL；**下载端 origin 政策修正：同源 GET fetch 不带
+>   Origin 是规范行为——携带才核对，缺席凭 Authorization**）；下载服务端 audience 重查
+>   （manifest.conversationId）+realpath 实根+逐文件 sha256 对 manifest 双向对账+文件数超限
+>   413 不静默截断+fflate 异步 zip（重活不阻塞）；**房间+DM 任务面**（conversation.list 执行
+>   态+pendingReview 验收按钮（绑定 deliveryId/revision/manifestHash）+board.view 房间卡；
+>   任务状态事件驱动刷新——thread.replyAdded/message.submitted 也触发）；附件有界 base64
+>   （0x8000 分块——整份展开 RangeError）+**键控草稿**（A→B→A 不串；发送成功才清实际发送的
+>   正文与 refs——图片门拒绝保留）；**失败信封**（cmdOnce→localStorage pendingOps——响应
+>   丢失/刷新沿原 commandId 重试恰一次）；lastSeq/eventsSeen 持久+cursor-stale→activity.list
+>   快照→再订阅；token 到期 401 自动续换（**renewSession 内 CREDENTIAL_INVALID 也要进终态
+>   ——该路径不走 api 包装的漏修**）；吊销终态横幅（不重连）；history 渲染代次+会话核对。
+> - **设置面（四）**：完整 64 位指纹（可复制）+实际客户端地址（可复制）+证书有效期/LAN 地址
+>   列表；allowLan=false 拒非回环监听（反向 refine）；currentAddress 按实际监听事实（0.0.0.0
+>   给 LAN 地址；stop 清 boundPort——停用不再显示运行中）；「自检码→RESULTS」按钮
+>   （remote.pairing.selfcheckExport→daemon_state——双机包 self-check 读取）。
+> - **REMOTE 会话 20/20**（真实用户链路）：双私信+验收策略→启用远程+完整指纹→SPKI 钉选壳
+>   （**受控自动化证书例外——报告如实标注，正式双机入口不带此开关**）→配对→A→B→A 草稿→
+>   真实附件上传+消息📎呈现→**CDP 离线断响应同号重试恰一次（before=0 after=1）**→DM 任务
+>   发起/页面停止（run 收口）→页面验收（三重绑定→DONE）→**认证下载解包核对**（zip+正文+
+>   附件随包）→关闭客户端任务继续+重开免配对（IndexedDB 复用）→刷新续传→游标过期快照恢复
+>   （ZS_REMOTE_RESUME_WINDOW 钩子）→token 到期自动续换（ZS_REMOTE_TOKEN_TTL_MS=8s——
+>   **TTL=4s 会把 WS 变成断连风暴的教训**）→吊销终态→壳退出（taskkill /T——electron 多子
+>   进程 kill 不收树）→桌面停机+real_calls=0。会话清单含 REMOTE 纳入冻结序列。
+> - **双机包（六）**：`node scripts/make-dev25-dual-package.mjs [--self-test]`→
+>   dist/desktop/dev25-dual-win（ZhongshuoDual 拷贝+start-server.bat/run-self-check.bat
+>   ASCII 启动器+seed-client.cjs/self-check.cjs+RESULTS 模板/buildId+README 双机步骤）。
+>   内置 ZS_APP_DATA=server-data/ZS_RUNTIME=fake/ZS_ALLOW_FAKE=1/ZS_REAL_DISPATCH_GUARD=1/
+>   独立管道 zs-dev25-dual/两 Agent/首任务 60s 停滞窗（D4 停止演练）；seed 经**正式命令**建
+>   合成项目/房间×2/DM A（停止）+DM B（验收）/附件样本（**等 local.token 文件出现再读——
+>   seed 先于 daemon 生成 token 的时序坑**；conversation.create 返回 {conversationId} 扁平）；
+>   self-check 从 sqlite 读 remote_config/daemon_state 自检码执行错码/伪造 Host/伪造 Origin/
+>   无 token 负例（better-sqlite3 从包内 node_modules require）；**自测口径：父环境剔除全部
+>   ZS_*（全裸白名单 Electron 不稳——USERPROFILE 系变量必需要）+中文空格临时路径两连过**
+>   （seed→优雅退出→real_calls=0）。交付说明=README（服务机/客户端步骤、指纹核对、系统信任、
+>   D1—D10 模板；移动端按 R11 独立范围不混入）。
+> - **验证数字**：remoteAccess 19/19（11 旧+8 新协议反例）；REMOTE 会话 20/20；双机包自测
+>   两连过（清 ZS_* 环境+中文空格路径）；本地全量 **810/810**（githubSandbox 网络恢复 5/5——
+>   上一轮间歇失败记录保留）；**冻结三连 138/138×3**（新基线 bld_d96713369ac153d0——
+>   created v20261002042441-g3vcxy + reused v20261002043259-7thzqi/v20261002044114-p48rzw；
+>   会话清单=A,B1,B2,C,D,E18,REM,FS,BOARD,ATT,HARNESS,**REMOTE**；旧 118/118×3 原样保留）；
+>   零新增真实模型调用。
+> - **遗留（迭代中修的坑）**：页面任务区冻结在 queued 旧渲染（停滞期无事件）→5s 轮询兜底；
+>   fake 停滞脚本中断不推进脚本序（第二任务同停滞）→等待覆盖停滞窗；ATT 刷新后立即读
+>   DOM 的空引用→表达式空安全；同源 GET fetch 不带 Origin 属规范→下载端缺席凭 Authorization。
+
+---
+
+## 上一轮快照（2026-10-01 第三十一轮）
 
 > 本轮=**导出目标与完整性收口**+**DOCX 真实 Word 布局验收**+**Activity 稳定游标/看板可见范围
 > /消息操作接线**+**DEV-25 远程访问服务端全量落地（HTTPS/WSS/配对/吊销/续传——LAN-01—08+RT-21
