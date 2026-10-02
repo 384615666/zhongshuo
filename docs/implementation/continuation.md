@@ -2,7 +2,56 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-02 第三十三轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十四轮，唯一权威快照）
+
+> 本轮=**三问题收口+证据补强**：跨项目安全检查点/快照恢复去假成功/自检不动用户偏好+同请求
+> 中途吊销与崩溃/自测证据归档+冻结重交。上一轮快照（第三十三轮）紧随其后。
+> - **跨项目安全检查点（问题一）**：服务端按项目投递（projNext latch）+浏览器持久游标**一致**——
+>   持久游标=各跟踪项目水位 **min**（localStorage zs-proj-seq 存每项目水位；zs-last-seq=检查点）。
+>   根因复现：P2 1—301+P1 302、订阅序 P1→P2：首泵发 P1 302 再发 P2 前 300（单泵页 300），
+>   旧客户端存全局 max=302，断线重连后 P2 的 301 永远补不到。min 检查点重连从检查点续，
+>   检查点以下重投由 eventId 去重吸收；订阅时新项目水位初始化=连接基线（__connFromSeq）；
+>   事件先记水位再去重。反例集：交错/超单泵页/半批断线/重连逐条核对——合并 (project,seq)
+>   键集恰 302 条无漏，重投仅检查点以下（P1 302）。
+> - **快照恢复去假成功（问题二）**：轮次模型（snapshotRound/snapshotChain）——后续 stale 开
+>   新轮、同轮并发合流、旧轮/旧连接迟到结果不覆盖；refreshTargets/refreshTasks 失败**不吞**
+>   →pending；subscribeAll 重写：只数 subscribed（cursor-stale≠订阅成功，作为 needRecovery
+>   返回 staleFromSeq）、按项目去重（'ack:'+pid）、绑定发起连接（close/readyState 变化即失败）、
+>   确认不全即失败；全部确认+连接未换+轮次未过时才 recovered 并把**各跟踪项目水位**推进到
+>   已恢复范围（检查点不越过未恢复范围）；失败保留检查点+有界退避（≤10 次）。页面验收=
+>   **CDP Fetch.failRequest 按 postData 定点断响应**（activity.list 首枪失败——确定性非时序，
+>   其余请求放行）：pending 时 zs-last-seq 保持 0→退避重试成功（recovered ls=29 acks=1/1）→
+>   **连续第二次 stale** 同样完整恢复（旧实现在 recovered 后 return 不处理）→每轮恢复后提交
+>   新消息核对新的 WSS eventId 到达。恢复期间连接翻换（TTL 8s 自然 churn）由 wsAtStart+轮次
+>   守卫吸收。
+> - **自检不动用户偏好（问题三）**：根因=visibleProjectIdsOf 取 viewer **最新行**
+>   （ORDER BY revision DESC LIMIT 1——不分 client_id）→空 visibleProjectIds 探针行使全项目
+>   看板归零。探针改**独立测试对象** remote.pairing.selfcheckProbe：写 daemon_state 专用键
+>   selfcheck:probe:<commandId>（REMOTE_BLOCKED_METHODS 封 HTTP 面——runSelfcheck 经进程内
+>   dispatch 同一幂等网关+审计写入器调用），finally 清理临时键（审计行保留）；自检**任何退出
+>   路径**（成功/失败/中断——finishSelfcheck 统一收口）登记不变性：导航偏好行集/全项目看板
+>   组数（经 dispatch board.view）/已配对设备（自检一次性设备除外，原有设备 revokedAt 不变）/
+>   在途 run 数。实测：成功+连续执行+停服失败路径均不变、probe 键零残留。
+> - **交付证据（问题四）**：①同请求中途吊销反例——export.create 异步等待窗口
+>   （writeExport 后/复核前，__zsTestExportHook）内吊销：提交前 run() 门禁拒绝
+>   （ok:false DEVICE_REVOKED）+零回执+零新导出目录+拒绝留审计（区别于「吊销后再调用」）；
+>   **stopFlow(requestStop)/gitWrite(journal) 自包 runCommand 路径补 commitGate**（异步命令
+>   提交事务前同过远程门禁）。②created 轮（v20261002062722-1uolgd）REM 渲染进程中止证据归档
+>   crash-evidence/：stderr 零输出/无 Crashpad dump/无 WER(1000/1001)/无资源事件(2004)/daemon
+>   正常推进——**原因未能定位如实登记**；退出码未取得（验证器先于退出收账中止）已注明；
+>   完整三轮均为 reused（口径保持）。③包 selfTest 证据清理前归档
+>   dist/desktop/dev25-dual-evidence/<ts>/（launch1/2 原始启动输出+种子+停机事实+real_calls+
+>   summary）。
+> - **数字**：remoteAccess **29/29**（+3：跨项目检查点/自检不变性/中途吊销）；REMOTE **24/24**
+>   （快照恢复改全口径记录）；本地全量 **820/820**；**冻结三连 141/141×3**：新基线
+>   bld_19d8863a997c70af（created v20261002081030-0gk5lr 本次即完整通过 + reused d1vbiu/u7jnz1，
+>   各 583 文件核对）；**双机包=该冻结产物逐文件核对生成**（583/583+selfTest 实跑全链+证据归档
+>   dev25-dual-evidence/2026-10-020837-69k9b3/）。零真实模型调用。
+> - **下一步**：①用户双机 D1—D10 回填（工程侧只读核对）；②等待人工期间可推进 DEV-24 M3
+>   无依赖项（评论锚点按 FULL-03 分批、OCR/新视觉渠道先方案）；③移动浏览器组合（R11 独立
+>   范围——手机资源确认后）。
+
+## 上一轮快照（2026-10-02 第三十三轮）
 
 > 本轮=**第三十二轮定位缺口全收口+冻结同源双机包重交**：设备级授权代次/共享命令门禁/WSS
 > 限额与收拢实装/事件泵按项目游标/下载三修/自检去明文/浏览器信封与清算语义/双机包从最终
