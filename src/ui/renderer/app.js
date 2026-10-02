@@ -29,6 +29,9 @@ const state = {
   /** 导航代次（第二十三轮一）：每次切换视图/会话/项目 +1——异步响应凭 (目标三元组+代次)
    * 核对，A→B→A 时旧 A 的迟到响应不再被误当作当前。 */
   navGeneration: 0,
+  /** 项目装载代次（第三十八轮 #1）：每次 loadProject +1——并发的旧装载（深链/重试/用户操作）
+   * 在任何 await 之后核对，迟到者不落状态、不清侧栏。 */
+  projectLoadGen: 0,
   /** 深链/待我处理定位焦点（一次性消费）：{ kind:'dm'|'msg'|'review'|'task', ... }。 */
   pendingFocus: null,
   /** 当前项目快照（project.open 结果：任务验收开关/revision 等——项目设置的读写来源）。 */
@@ -95,6 +98,15 @@ async function command(method, params) {
 }
 
 // ---------- 项目与房间（R5：重启后恢复读取） ----------
+// 导航审计环（第三十八轮 #1：侧栏「闪现后清空」根因未定位——留现场取证）：记录每次
+// loadProject/renderDmSidebar 的发起与结果（代次/路径/项目/数量/错误），供调试端口核对；
+// 不含任何凭据。上限 60 条滚动覆盖。
+const navAudit = [];
+function navAuditPush(entry) {
+  navAudit.push({ t: new Date().toISOString(), ...entry });
+  if (navAudit.length > 60) navAudit.shift();
+  window.__zsNavAudit = navAudit;
+}
 
 async function openFolder() {
   const dir = await zs.pickFolder();
@@ -102,8 +114,23 @@ async function openFolder() {
   await loadProject(dir);
 }
 
-async function loadProject(path) {
-  const data = await command('project.open', { path });
+async function loadProject(path, opts) {
+  const gen = ++state.projectLoadGen;
+  navAuditPush({ what: 'loadProject.start', gen, path, from: opts?.from ?? 'user' });
+  let data;
+  try {
+    data = await command('project.open', { path });
+  } catch (e) {
+    navAuditPush({ what: 'loadProject.openFailed', gen, path, error: String(e.message).slice(0, 160) });
+    throw e;
+  }
+  if (gen !== state.projectLoadGen) {
+    // 迟到装载（第三十八轮 #1：深链/重试/用户操作并发打开另一项目）：不落任何状态、不碰侧栏
+    // ——晚到的旧装载不得清空或覆盖新项目的渲染。
+    navAuditPush({ what: 'loadProject.staleAborted', gen, path, projectId: data.project.id });
+    return;
+  }
+  const prevProjectId = state.projectId;
   state.project = data.project; // 项目设置（任务验收开关）的 CAS revision/当前值来源
   state.projectId = data.project.id;
   localStorage.setItem('zs.lastProjectPath', path); // 重启后自动恢复上次项目
@@ -113,21 +140,34 @@ async function loadProject(path) {
   void renderCollabSettings().catch(() => { /* 读取失败已行内显示 */ });
   void renderMemberRuntimeSettings().catch(() => { /* 绑定读取失败按未绑定呈现——不阻断项目加载 */ });
   const rooms = await command('room.list', { projectId: state.projectId });
-  const list = el('room-list');
-  list.innerHTML = '';
-  for (const room of rooms.items) {
-    const item = document.createElement('div');
-    item.className = 'room-item';
-    item.textContent = `# ${room.name}`;
-    item.onclick = () => void selectRoom(room.id, room.conversationId, item);
-    list.appendChild(item);
+  if (gen !== state.projectLoadGen) {
+    navAuditPush({ what: 'loadProject.staleAbortedAfterRooms', gen, path, rooms: rooms.items.length });
+    return;
   }
+  const list = el('room-list');
+  // 空结果保护（第三十八轮 #1：现场「闪现后被清空」）：同一项目此前渲染过非空房间列表，
+  // 本次却返回空——数据矛盾，保留旧列表+标注（不清空、不冒充空项目）；跨项目切换不受限。
+  if (rooms.items.length === 0 && prevProjectId === state.projectId && list.children.length > 0) {
+    navAuditPush({ what: 'loadProject.emptyRoomsRetained', gen, path, projectId: state.projectId, kept: list.children.length });
+    el('project-name').textContent = `${data.project.displayName} · ${path}（房间列表读取异常返回空——已保留原列表）`;
+  } else {
+    list.innerHTML = '';
+    for (const room of rooms.items) {
+      const item = document.createElement('div');
+      item.className = 'room-item';
+      item.textContent = `# ${room.name}`;
+      item.onclick = () => void selectRoom(room.id, room.conversationId, item);
+      list.appendChild(item);
+    }
+  }
+  navAuditPush({ what: 'loadProject.rooms', gen, path, projectId: state.projectId, count: rooms.items.length });
   const first = rooms.items[0];
-  if (first != null) {
+  if (first != null && gen === state.projectLoadGen) {
     const firstEl = list.querySelector('.room-item');
     await selectRoom(first.id, first.conversationId, firstEl);
   }
-  void renderDmSidebar().catch(() => { /* 私信侧栏失败不阻断项目加载 */ });
+  if (gen !== state.projectLoadGen) return;
+  void renderDmSidebar().catch((e) => navAuditPush({ what: 'renderDmSidebar.failed', gen, error: String(e.message).slice(0, 160) }));
   void restoreDmDeepLink().catch(() => { /* 深链失效留在主池 */ });
   await refreshGate();
 }
@@ -223,20 +263,44 @@ async function openThread(threadId, taskId, anchorText) {
 
 // ---------- 私信（DEV-22：1 对 1 会话——conversation.* 命令面；无 @ 派工/无任务号） ----------
 
-const DM_STATE_TEXT = { idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）' };
+const DM_STATE_TEXT = { idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务' };
 
 async function renderDmSidebar() {
   if (state.projectId == null) return;
-  const data = await command('conversation.list', { projectId: state.projectId });
-  state.dmConversations = data.conversations ?? [];
+  const gen = state.projectLoadGen;
+  const projectIdAtRender = state.projectId;
+  const data = await command('conversation.list', { projectId: projectIdAtRender }).catch((e) => {
+    // 读取失败保留旧列表（第三十八轮 #1：不清空、不冒充「无私信」——失败已入审计环）。
+    navAuditPush({ what: 'renderDmSidebar.readFailed', gen, projectId: projectIdAtRender, error: String(e.message).slice(0, 160) });
+    return null;
+  });
+  if (data == null) return;
+  if (gen !== state.projectLoadGen || state.projectId !== projectIdAtRender) {
+    navAuditPush({ what: 'renderDmSidebar.staleAborted', gen, projectId: projectIdAtRender, count: (data.conversations ?? []).length });
+    return; // 迟到重绘（项目已切走）：不覆盖新项目的侧栏
+  }
+  const conversations = data.conversations ?? [];
+  state.dmConversations = conversations;
   const nav = el('dm-list');
+  // 空结果保护：同项目此前非空、本次成功但空——数据矛盾，保留旧列表（与项目装载同规则）。
+  if (conversations.length === 0 && nav.children.length > 0) {
+    navAuditPush({ what: 'renderDmSidebar.emptyRetained', gen, projectId: projectIdAtRender, kept: nav.children.length });
+    return;
+  }
+  navAuditPush({ what: 'renderDmSidebar.render', gen, projectId: projectIdAtRender, count: conversations.length });
   nav.replaceChildren();
-  for (const c of state.dmConversations) {
+  for (const c of conversations) {
     const btn = document.createElement('button');
     btn.className = 'room' + (c.conversationId === state.openDmId ? ' active' : '');
     const stateText = c.archivedAt != null ? '（已归档）' : DM_STATE_TEXT[c.execState] ?? '';
-    btn.textContent = `${c.peerDisplayName}${stateText}${c.unread > 0 ? ` ·${c.unread}` : ''}`;
-    btn.title = c.archivedAt != null ? '已归档：只读（可取消归档）' : '一对一私信：发送即交给该成员';
+    // 同成员多会话区分（第三十八轮 #6）：会话标题（有则用）→最近消息预览——一串相同成员名
+    // 不可辨认是现场卡死路径之一（用户始终误入空白会话）。
+    const distinguish = c.title != null && c.title.length > 0
+      ? ` · ${c.title}`
+      : (c.lastMessagePreview != null && c.lastMessagePreview.length > 0 ? ` · ${c.lastMessagePreview}` : '');
+    btn.textContent = `${c.peerDisplayName}${distinguish}${stateText}${c.unread > 0 ? ` ·${c.unread}` : ''}`;
+    btn.title = c.archivedAt != null ? '已归档：只读（可取消归档）'
+      : (c.title != null && c.title.length > 0 ? c.title : '一对一私信：发送即交给该成员');
     btn.onclick = () => void openDm(c.conversationId).catch((e) => showError(`打开私信失败：${e.message}`));
     nav.append(btn);
   }
@@ -269,9 +333,11 @@ async function restoreDmDeepLink() {
     const r = await command('deepLink.resolve', { hash: `#${hash}` });
     // 跨项目聚焦（第二十三轮二）：来源项目≠当前项目时切换（project.open 按 rootPath）；
     // 本项目会话与可见项目顺序保留——不回退到当前项目同号任务。
-    const currentCanonical = state.project?.directoryIdentity?.canonicalPath;
-    if (r.rootPath != null && r.rootPath !== currentCanonical) {
-      await loadProject(r.rootPath);
+    // 第三十八轮 #1 修正：按**项目身份**（projectId）判定，不再比较路径字符串——canonical
+    // 大小写/分隔符/junction 形态差异曾使同项目被误判为跨项目，触发二次 loadProject（侧栏
+    // 「闪现后清空」的候选根因——路径等价≠字符串相等）。
+    if (r.projectId != null && r.projectId !== state.projectId) {
+      if (r.rootPath != null) await loadProject(r.rootPath, { from: 'deepLink' });
     }
     if (r.kind === 'dm') {
       state.pendingFocus = null;
@@ -1441,7 +1507,9 @@ async function renderPendingList() {
       rows.push({ label: `【${p.displayName}】未读私信：${u.title ?? u.conversation_id.slice(0, 8)} ·${u.unread}`, title: '点击进入会话（读到的才算已读）', projectId: p.projectId, conversationId: u.conversation_id, kind: 'dm' });
     }
     for (const b of p.blockedTasks ?? []) {
-      rows.push({ label: `【${p.displayName}】被阻塞：${b.title}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
+      // 受阻原因（第三十八轮 #4：无解释的「被阻塞」行——用户无法自助诊断；原因来自服务端
+      // 事件映射，null=无事件如实不显示）。
+      rows.push({ label: `【${p.displayName}】被阻塞：${b.title}${b.reason != null ? `——${b.reason}` : ''}`, title: '可见≠审批——处理入口为线程本身', projectId: p.projectId, conversationId: b.conversation_id, taskId: b.task_id, kind: 'blocked' });
     }
     // 待确认提醒触发（第二十四轮四）：正式确认入口——点击=reminder.confirm（经正式执行链派发）。
     // 桌面系统通知（第二十五轮五）：新出现的待确认触发通知恰一次（去重/点击定位/失败退页内）。
@@ -1886,12 +1954,16 @@ async function renderDm() {
       .then((r) => { if (r?.advanced && stillCurrent()) void renderDmSidebar().catch(() => {}); })
       .catch(() => {});
   }
-  // 会话头：标题/执行态/操作（停止/继续队列/归档/取消归档）。
-  el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}`;
+  // 会话头：标题/执行态/操作（停止/继续队列/恢复执行/归档/取消归档）。
+  el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}${fresh.title != null && fresh.title.length > 0 ? ` · ${fresh.title}` : ''}`;
   const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
-  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}`;
+  const interruptedNote = (fresh.interruptedTasks ?? []).length > 0
+    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行 ${(t.lastRunStatus ?? '未知').toLowerCase()}）`).join('；')}）`
+    : '';
+  el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}${interruptedNote}`;
   el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
   el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
+  el('dm-recover-btn').classList.toggle('hidden', fresh.archivedAt != null || (fresh.interruptedTasks ?? []).length === 0);
   el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
   el('dm-restore-btn').classList.toggle('hidden', fresh.archivedAt == null);
   el('dm-rename-btn').classList.toggle('hidden', false); // 重命名随时可用（不换对端/不重置）
@@ -3596,10 +3668,28 @@ el('dm-stop-btn').onclick = () => void (async () => {
   await renderDm();
 })().catch(() => {});
 el('dm-resume-btn').onclick = () => void (async () => {
-  await command('dm.resume', { conversationId: state.openDmId });
+  // 继续队列（#5 反馈：成功/泵出条数/无待处理分别可见——不再「点了没反应」）。
+  try {
+    const r = await command('dm.resume', { conversationId: state.openDmId });
+    const n = r?.enqueued ?? 0;
+    el('dm-state').textContent = n > 0 ? `已继续队列（泵出 ${n} 条排队消息——串行执行）` : '已继续：当前无待处理的排队消息';
+  } catch (e) { el('dm-state').textContent = `继续失败：${e.message}`; }
   await renderDm();
   void renderDmSidebar().catch(() => {});
-})().catch((e) => showError(`继续失败：${e.message}`));
+})().catch(() => {});
+// 恢复执行（第三十八轮 #7：中断待恢复任务=ACTIVE 但唯一 run 已终态——泵永不推进；经
+// task.redispatch 正式重派链（核对停止代次/在途/终态/幂等），不自动重放、不复活已取消任务）。
+el('dm-recover-btn').onclick = () => void (async () => {
+  const fresh = state.dmConversations?.find((c) => c.conversationId === state.openDmId);
+  const target = (fresh?.interruptedTasks ?? [])[0];
+  if (target == null) { el('dm-state').textContent = '无中断待恢复的任务'; return; }
+  try {
+    await command('task.redispatch', { taskId: target.taskId, reason: 'interrupted-recovery' });
+    el('dm-state').textContent = `恢复执行已入队（任务「${target.title}」——按原输入重新执行）`;
+  } catch (e) { el('dm-state').textContent = `恢复失败：${e.message}`; }
+  await renderDm();
+  void renderDmSidebar().catch(() => {});
+})().catch(() => {});
 el('dm-archive-btn').onclick = () => void (async () => {
   const active = state.dmActive;
   if (active == null) return;
@@ -3877,6 +3967,16 @@ zs.onReconnected(() => {
   el('conn-state').classList.remove('err');
   // daemon 可能已重启：复查门禁与当前视图（遗留中断由恢复入口接手，不自动续跑）。
   void refreshGate().catch(() => {});
+  // 项目缺失即补载（第三十八轮 #8：重启服务端后启动恢复常在 daemon 未就绪时失败，此前
+  // onReconnected 只重绘视图不重载项目——侧栏/房间保持空白直到手动 Reload）。侧栏与私信
+  // 列表随后由 loadProject 自行刷新。
+  if (state.projectId == null) {
+    const p = localStorage.getItem('zs.lastProjectPath');
+    if (p != null && p.length > 0) {
+      navAuditPush({ what: 'reconnect.reloadProject', path: p });
+      void loadProject(p, { from: 'reconnect' }).catch((e) => { el('project-name').textContent = `恢复项目失败：${e.message}`; });
+    }
+  }
   void (state.openThreadId != null ? renderThread() : renderPool()).catch(showConnError);
 });
 zs.onDemoStatus((status) => { el('conn-state').textContent = status; });
@@ -3912,8 +4012,33 @@ async function renderRemoteSettings() {
       row.append(caFp);
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `证书 Subject=${cfg.certSubject ?? '?'} · Issuer=${cfg.certIssuer ?? '?'} · 有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}${(cfg.lanAddresses ?? []).length > 0 ? ` · LAN 地址：${cfg.lanAddresses.join(' / ')}` : ''}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
+      meta.textContent = `证书 Subject=${cfg.certSubject ?? '?'} · Issuer=${cfg.certIssuer ?? '?'} · 有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
       row.append(meta);
+      // LAN 地址明细（第三十八轮：多网卡逐地址可复制+虚拟网卡标注——UI 监听选项只有回环与
+      // 0.0.0.0 两种，客户端实际访问哪个地址从这份列表选；虚拟段（198.18.x.x 等）明确标注
+      // 「不是其它设备可达的地址」，不再混在推荐里）。
+      const details = cfg.lanAddressDetails ?? [];
+      if (details.length > 0) {
+        for (const d of details) {
+          const b = document.createElement('button');
+          b.className = 'chip';
+          b.title = d.note != null ? d.note : '点击复制该地址（客户端浏览器访问）';
+          b.textContent = d.url;
+          b.onclick = () => void navigator.clipboard.writeText(d.url).then(() => showError(`已复制地址：${d.url}`), (e) => showError(`复制失败：${e.message}`));
+          row.append(b);
+          if (d.note != null) {
+            const n = document.createElement('div');
+            n.className = 'meta';
+            n.textContent = `${d.address}：${d.note}`;
+            row.append(n);
+          }
+        }
+      } else if ((cfg.lanAddresses ?? []).length > 0) {
+        const n = document.createElement('div');
+        n.className = 'meta';
+        n.textContent = `LAN 地址：${cfg.lanAddresses.join(' / ')}`;
+        row.append(n);
+      }
       // 分层核验（第三十六轮二）：仅本机明确提示；LAN 模式呈现本机经实际 LAN IP 的 HTTPS 自检。
       const lanNote = document.createElement('div');
       lanNote.className = 'meta';
@@ -4003,11 +4128,30 @@ function wireRemoteSettings() {
 wireRemoteSettings();
 
 renderProjectSettings(); // 未打开项目时的初始态（loadProject 成功后随项目数据刷新）
+// 启动恢复（第三十八轮 #8：有界重试——daemon 就绪竞态不再「失败一次即空白等手动 Reload」）：
+// 指数退避 500ms→8s，上限 6 次≈27s；每次失败都可见（project-name 如实呈现第 N 次与原因），
+// 成功即止。重连（onReconnected）兜底另接。
 const lastProject = localStorage.getItem('zs.lastProjectPath');
 if (lastProject != null && lastProject.length > 0) {
-  void loadProject(lastProject).catch((e) => {
-    el('project-name').textContent = `恢复项目失败：${e.message}`;
-  });
+  void (async () => {
+    const delays = [500, 1000, 2000, 4000, 8000, 8000];
+    let lastErr = null;
+    for (let i = 0; i <= delays.length; i += 1) {
+      try {
+        await loadProject(lastProject, { from: 'startup' });
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (i < delays.length) {
+          el('project-name').textContent = `恢复项目失败（第 ${i + 1} 次，${delays[i]}ms 后重试）：${e.message}`;
+          navAuditPush({ what: 'startup.retry', attempt: i + 1, error: String(e.message).slice(0, 160) });
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delays[i]));
+        }
+      }
+    }
+    el('project-name').textContent = `恢复项目失败（已重试 ${delays.length + 1} 次）：${lastErr?.message ?? '未知错误'}——服务重新就绪后会自动重试，或手动重开项目`;
+  })();
 } else {
   // 服务端记忆回退（第二十六轮二）：清缓存/换机后 localStorage 为空——读 daemon 持久设置
   //（ui.autoOpenProjectPath，loadProject 成功时写入）自动恢复上次项目。通知人工验收入口

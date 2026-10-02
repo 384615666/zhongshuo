@@ -402,7 +402,7 @@ export class RemoteAccessServer {
   }
 
   /** 实际监听事实（第三十二轮四：0.0.0.0 时给 LAN 地址；停用/未启动=null——不再恒回环）。 */
-  currentAddress(): { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string; certIssuer: string } | null {
+  currentAddress(): { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; lanAddressDetails: Array<{ address: string; url: string; note: string | null }>; certNotAfter: string; certSubject: string; certIssuer: string } | null {
     if (this.server == null || this.identity == null || this.boundPort === 0) return null; // 停用/未启动=null（不显示运行中）
     const displayHost = this.boundHost === '0.0.0.0' || this.boundHost === '::' ? (primaryLanIp() ?? '127.0.0.1') : this.boundHost;
     return {
@@ -411,6 +411,9 @@ export class RemoteAccessServer {
       fingerprint: this.identity.fingerprintSha256, // 服务证书完整 64 位（页面所见——逐位核对）
       caFingerprint: this.identity.caFingerprintSha256, // CA（信任根）完整 64 位——用户导入 ca.cer 时核对
       lanAddresses: this.boundHost === '0.0.0.0' || this.boundHost === '::' ? lanIps().map((ip) => `https://${ip}:${this.boundPort}`) : [],
+      // 地址明细（第三十八轮：多网卡逐地址可复制+虚拟网卡标注——不把 Meta Tunnel 的
+      // 198.18.0.1 当真实 LAN 推荐）。
+      lanAddressDetails: this.boundHost === '0.0.0.0' || this.boundHost === '::' ? lanAddressDetails(this.boundPort) : [],
       certNotAfter: this.identity.notAfter,
       certSubject: this.identity.subject,
       certIssuer: this.identity.issuer,
@@ -421,12 +424,14 @@ export class RemoteAccessServer {
    * LAN 绑定自检（第三十六轮二）：服务机本机经**实际 LAN IP** 发起 HTTPS（以本地 CA 为信任锚）
    * ——通过=证书链对 LAN 名称有效+监听真实可达；失败区分「本机 LAN 绑定/TLS」与「跨机防火墙」
    * 两层（跨机问题不在本函数断言范围——客户端错误码需另行取得，不预判定性）。
+   * 第三十八轮：优先无虚拟网卡疑点的地址（198.18.x.x 自检通过≠另一台机器可达）。
    */
   async verifyLanBinding(): Promise<{ ok: boolean; checkedUrl: string; error: string | null }> {
     if (this.server == null || this.identity == null || this.boundPort === 0) return { ok: false, checkedUrl: '', error: '服务未运行' };
     const lan = lanIps();
     if (lan.length === 0) return { ok: false, checkedUrl: '', error: '未发现非回环网络地址（仅本机模式？其它设备无法连接）' };
-    const url = `https://${lan[0]}:${this.boundPort}/`;
+    const preferred = lan.find((ip) => lanAddressNoteOf(ip) == null) ?? lan[0]!;
+    const url = `https://${preferred}:${this.boundPort}/`;
     const ac = new https.Agent({ ca: this.identity.caCertPem, servername: 'localhost' });
     const outcome = await new Promise<{ ok: boolean; error: string | null }>((resolveP) => {
       const req = https.request(url, { method: 'GET', agent: ac, timeout: 5000, rejectUnauthorized: true }, (res) => {
@@ -1113,7 +1118,24 @@ export function lanIps(): string[] {
   return out;
 }
 
+/** 地址分类（第三十八轮可用性：多网卡不能把虚拟网卡当 LAN 推荐——Meta Tunnel 等代理/加速器
+ * 常占 198.18.0.0/15 基准段；169.254 为链路本地；100.64/10 为 CGNAT）。返回 null=疑似真实 LAN。 */
+export function lanAddressNoteOf(ip: string): string | null {
+  if (/^198\.1[89]\./.test(ip)) return '虚拟网卡/隧道常见段（198.18.x.x——代理或加速器虚拟适配器，通常不是其它设备可达的地址）';
+  if (/^169\.254\./.test(ip)) return '链路本地（169.254.x.x——无 DHCP 自配地址，一般不可用于访问）';
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return 'CGNAT 段（100.64.x.x——运营商级 NAT，局域网内通常不可达）';
+  return null;
+}
+
+/** LAN 地址明细（UI 逐地址可复制+虚拟网卡标注）。 */
+export function lanAddressDetails(port: number): Array<{ address: string; url: string; note: string | null }> {
+  return lanIps().map((ip) => ({ address: ip, url: `https://${ip}:${port}`, note: lanAddressNoteOf(ip) }));
+}
+
 function primaryLanIp(): string | null {
+  // 推荐/展示优先「无虚拟网卡疑点」的地址（第三十八轮：198.18.0.1 的本机自检通过≠另一台
+  // 机器可达——不把 Meta Tunnel 地址当真实 LAN 推荐）。
   const ips = lanIps();
-  return ips.length > 0 ? ips[0]! : null;
+  const real = ips.find((ip) => lanAddressNoteOf(ip) == null);
+  return real ?? (ips.length > 0 ? ips[0]! : null);
 }

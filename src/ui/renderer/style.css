@@ -2,13 +2,19 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: #1f2328; background: #f6f8fa; height: 100vh; overflow: hidden; }
 #app { display: flex; height: 100vh; }
-.sidebar { width: 240px; background: #fff; border-right: 1px solid #e4e8ec; display: flex; flex-direction: column; padding: 12px; gap: 10px; }
+.sidebar { width: 240px; background: #fff; border-right: 1px solid #e4e8ec; display: flex; flex-direction: column; padding: 12px; gap: 10px; overflow-y: auto; }
+/* 第三十八轮可用性：settings 折叠区展开后 sidebar-foot 可超过视口——侧栏整体可滚（原内容
+   溢出无滚动条，设备列表在默认缩放下不可达，D8 现场实证）；房间区保留最小高度不被挤压为 0。 */
 .brand { font-size: 18px; font-weight: 600; }
 .project-name { color: #57606a; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rooms { flex: 1; overflow-y: auto; }
+.rooms { flex: 1 1 auto; min-height: 96px; overflow-y: auto; }
 .room-item { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .room-item.active { background: #e6f2ff; color: #0969da; }
 .sidebar-foot { border-top: 1px solid #e4e8ec; padding-top: 8px; }
+/* 64 位指纹/URL 芯片在 240px 侧栏内换行呈现（不横向溢出遮蔽设备区）。 */
+.sidebar-foot .chip { max-width: 100%; white-space: normal; word-break: break-all; text-align: left; }
+#remote-device-list { max-height: 200px; overflow-y: auto; word-break: break-all; }
+#remote-device-list > div { margin: 2px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .thread-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e4e8ec; font-weight: 600; }
 .conn { font-size: 12px; font-weight: 400; color: #57606a; }

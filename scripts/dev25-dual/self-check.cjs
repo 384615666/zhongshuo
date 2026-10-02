@@ -17,7 +17,7 @@ const args = process.argv.slice(2);
 const argOf = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 const appDataDir = argOf('--appdata');
 if (appDataDir == null) { console.error('usage: node self-check.cjs --appdata <dir>'); process.exit(2); }
-const pkgRoot = path.dirname(path.dirname(appDataDir)); // RESULTS 与 appData 同级
+const pkgRoot = path.dirname(appDataDir); // RESULTS 与 appData（server-data）同级（第三十八轮：原多取一层 dirname 导致输出落包外 dist/desktop/RESULTS）
 
 (async () => {
   const src = path.join(appDataDir, 'selfcheck-latest.json');
@@ -47,16 +47,23 @@ const pkgRoot = path.dirname(path.dirname(appDataDir)); // RESULTS 与 appData �
     console.error('[self-check] 结果文件疑似含凭据明文——拒绝导出（合同违约）');
     process.exit(1);
   }
-  // 证书指纹一致性（人工核对 UI 完整指纹）——identity.cer 为信任锚（与进程内自检同一证书）。
-  const cerPath = path.join(appDataDir, 'remote', 'identity.cer');
+  // 证书指纹一致性（人工核对 UI 完整指纹）——两层证书分别登记（第三十八轮：模板分别记录
+  // CA 与服务证书两枚指纹——identity.cer=服务证书；ca.cer=信任根，客户端导入信任时核对它）。
   let fingerprint = null;
+  let caFingerprint = null;
+  const cerPath = path.join(appDataDir, 'remote', 'identity.cer');
   if (fs.existsSync(cerPath)) {
     fingerprint = crypto.createHash('sha256').update(fs.readFileSync(cerPath)).digest('hex');
-    console.log('INFO  证书 SHA-256 指纹（人工核对 UI 完整 64 位一致）| ' + fingerprint);
+    console.log('INFO  服务证书 SHA-256 指纹（人工核对 UI 完整 64 位一致）| ' + fingerprint);
+  }
+  const caPath = path.join(appDataDir, 'remote', 'ca.cer');
+  if (fs.existsSync(caPath)) {
+    caFingerprint = crypto.createHash('sha256').update(fs.readFileSync(caPath)).digest('hex');
+    console.log('INFO  信任根（CA）SHA-256 指纹（客户端导入 ca.cer 时核对）| ' + caFingerprint);
   }
   const resultsDir = path.join(pkgRoot, 'RESULTS');
   fs.mkdirSync(resultsDir, { recursive: true });
-  const out = { at: new Date().toISOString(), source: src, fingerprint, pass: items.filter((i) => i.ok).length, total: items.length, items, secretsRedacted: true };
+  const out = { at: new Date().toISOString(), source: src, fingerprint, caFingerprint, pass: items.filter((i) => i.ok).length, total: items.length, items, secretsRedacted: true };
   fs.writeFileSync(path.join(resultsDir, 'self-check-' + Date.now() + '.json'), JSON.stringify(out, null, 2), 'utf8');
   console.log('[self-check] ' + out.pass + '/' + out.total + ' -> RESULTS/self-check-*.json');
   process.exit(out.pass === out.total ? 0 : 1);

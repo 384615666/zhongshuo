@@ -33,6 +33,15 @@ FULL-01 导航/频道/资料/Activity/Saved/Search；FULL-02 全部任务入口/
 - 写档入口：未认证维持关闭。
 - 真实迟到回放（lateEvents）真实 runtime 支持待补证；fake 链已验。
 
+## DEV-25 验收现场缺陷（2026-10-03 登记，排期待评审裁定）
+
+双机 v2 包 D7 验收过程中暴露 8+2 项可用性/恢复链缺陷，全量取证与修复方向见
+**docs/implementation/dev25-acceptance-defects-20261003.md**（自包含，可直接交评审）。
+要点：主根因=成员绑定 claude 后真实派发防护静默拒绝所有任务（无警示、无失败原因、审计缺事件）；
+远程页无「继续队列」入口+桌面侧栏列表闪现被清空（根因未定位，需 ZS_DEV25_DEBUG_PORT 取证），
+三者叠加曾使验收者完全卡死。现场已恢复（成员重设 fake、队列重泵；D7 用户回填通过；real_calls=0）。
+**缺陷修复合入前双机包不重交。**
+
 ## 下一包建议（依赖已满足排序，第二十八轮修订）
 
 1. **DEV-25 双机实测**（用户已确认另一台 Windows 同局域网）：按 docs/implementation/dev25-dual-machine-acceptance.md 执行 D1—D10 并留档；移动浏览器组合随后；

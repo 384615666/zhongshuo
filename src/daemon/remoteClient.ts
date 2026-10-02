@@ -70,6 +70,7 @@ button.primary{background:#2456d6;color:#fff;border-color:#2456d6}
     <div id="composer">
       <textarea id="send-text" placeholder="输入消息（默认交给 AI；房间消息进主池，私信按 1 对 1，线程内跟进串内）"></textarea>
       <div>
+        <select id="mention-sel" class="hidden" title="指派成员（DIRECT）：留空=自动路由——M0 模式下房间消息未指派会被门禁阻塞（如实标 BLOCKED，不冒充执行）"><option value="">不指派（自动路由）</option></select>
         <button id="send-btn" class="primary">发送</button>
         <button id="record-btn">仅记录</button>
         <label class="meta"><input type="file" id="attach-file"> 附件</label><span id="attach-name" class="meta"></span>
@@ -296,6 +297,14 @@ async function enterMain() {
  *   UI 侧保留旧 targets/选项并标注读取失败（不冒充空列表）；恢复链据此保持 pending+原检查点；
  * - 正常空数据（确实没有 DM/房间）照常渲染空列表——与读取失败分开。
  */
+/** DM 目标标签（第三十八轮 #6：同成员多会话区分——成员名+标题/最近预览）。 */
+function dmLabelOf(c) {
+  const peer = c.peerDisplayName || String(c.conversationId || c.id).slice(0, 10);
+  if (c.title != null && c.title !== '') return peer + '「' + c.title + '」';
+  if (c.lastMessagePreview != null && c.lastMessagePreview !== '') return peer + '（' + c.lastMessagePreview + '）';
+  return peer;
+}
+
 async function refreshTargets(initial) {
   let dms;
   let board;
@@ -325,7 +334,7 @@ async function refreshTargets(initial) {
     for (const room of rl) rooms.push({ kind: 'room', projectId: pid, roomId: room.id, conversationId: room.conversationId, label: '房间 ' + room.name + (room.conversationId == null ? '（无会话）' : '') });
   }
   targets = [
-    ...dms.map((c) => ({ kind: 'dm', key: 'dm:' + (c.conversationId || c.id), projectId: c.projectId || c.project_id, conversationId: c.conversationId || c.id, label: '私信 ' + (c.peerDisplayName || c.title || String(c.conversationId || c.id).slice(0, 10)) })),
+    ...dms.map((c) => ({ kind: 'dm', key: 'dm:' + (c.conversationId || c.id), projectId: c.projectId || c.project_id, conversationId: c.conversationId || c.id, label: '私信 ' + dmLabelOf(c) })),
     ...rooms.map((r) => ({ ...r, key: 'room:' + r.roomId })),
   ];
   const sel = document.getElementById('conversation-sel');
@@ -370,11 +379,43 @@ let restoring = false; // 恢复轮内抑制自动加载（第三十五轮一：
 function switchTarget(t) {
   currentTarget = t;
   currentThread = null; // 切目标回到线程列表
+  void refreshMentionPicker();
   if (t != null) {
     const d = draftOf(t.key);
     document.getElementById('send-text').value = d.text;
     renderChips();
     if (!restoring) void loadMessages().catch(() => {});
+  }
+}
+/** 房间 DIRECT 指派（第三十八轮 #3/#4：远程页此前固定 mentions=[]——房间消息 100% 被 M0
+ * 门禁 BLOCKED 且用户无从得知）。成员=当前房间启用的 agent（member.list 正式面）；私信目标
+ * 无此概念（1 对 1）。读取失败=选择器隐藏+提示（不冒充无成员）。 */
+async function refreshMentionPicker() {
+  const sel = document.getElementById('mention-sel');
+  const t = currentTarget;
+  if (sel == null) return;
+  if (t == null || t.kind !== 'room' || t.roomId == null) { sel.classList.add('hidden'); return; }
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '不指派（自动路由）';
+  sel.appendChild(placeholder);
+  try {
+    const r = await cmd('member.list', { projectId: t.projectId, roomId: t.roomId });
+    const agents = ((r.data && r.data.items) || []).filter((m) => m.principalType === 'agent' && m.enabled);
+    if (agents.length === 0) { sel.classList.add('hidden'); feedLine('warn', '该房间无启用 agent 成员——房间消息不会派发（用「仅记录」或去私信发任务）'); return; }
+    for (const m of agents) {
+      const o = document.createElement('option');
+      o.value = m.displayName;
+      o.textContent = '@ ' + m.displayName;
+      sel.appendChild(o);
+    }
+    if (prev != null && prev !== '' && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    sel.classList.remove('hidden');
+  } catch (e) {
+    sel.classList.add('hidden');
+    feedLine('warn', '房间成员读取失败（' + (e.message || e) + '）——本次发送将不指派成员；M0 下未指派的房间消息会被阻塞');
   }
 }
 /** 房间线程列表（第三十三轮四：正式读取入口；第三十五轮一：失败上抛——不再吞成空列表）。 */
@@ -531,7 +572,14 @@ async function send(intent) {
     : t.kind === 'dm'
       ? { kind: 'dm', projectId: t.projectId, conversationId: t.conversationId }
       : { kind: 'room_root', projectId: t.projectId, conversationId: t.conversationId, roomId: t.roomId };
-  const params = { target, body: text, intent, mentions: [] };
+  // 房间消息的 DIRECT 指派（第三十八轮：固定空 mentions 曾使远程房间消息 100% 被 M0 门禁
+  // BLOCKED——「远程发的房间任务必然阻塞」）。私信/线程目标无指派语义（1 对 1 / 串内跟进）。
+  const mentionSel = document.getElementById('mention-sel');
+  const mentionValue = t.kind === 'room' && mentionSel != null && !mentionSel.classList.contains('hidden')
+    ? String(mentionSel.value || '')
+    : '';
+  const mentions = mentionValue !== '' ? [mentionValue] : [];
+  const params = { target, body: text, intent, mentions };
   if (d.attachIds.length > 0) params.attachmentRefs = [...d.attachIds];
   try {
     await cmdOnce(opKey, 'message.submit', params);
@@ -585,29 +633,60 @@ async function refreshTasks() {
   }
   box.textContent = '';
   for (const g of (board.data && board.data.groups) || []) {
-      for (const room of g.rooms || []) {
-        for (const c of room.cards || []) {
-          const d = document.createElement('div');
-          d.textContent = '[' + g.displayName + '/' + room.name + '] ' + c.title + ' · ' + c.column + (c.exitUnconfirmed ? '（退出未确认）' : '');
-          const stop = document.createElement('button');
-          stop.textContent = '停止';
-          stop.disabled = c.runId == null;
-          // 操作键绑 run/停止代次（第三十三轮四）：旧失败操作不劫持新版本动作。
-          stop.onclick = () => cmdOnce('stop:' + c.taskId + ':' + c.runId + ':' + c.stopGeneration, 'task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration }).then(() => refreshTasks()).catch(showErr);
-          const accept = document.createElement('button');
-          accept.textContent = '验收通过';
-          accept.disabled = c.pendingDelivery == null;
-          accept.onclick = () => cmdOnce('accept:' + c.taskId + ':' + (c.pendingDelivery ? c.pendingDelivery.deliveryId + ':' + c.pendingDelivery.revision + ':' + c.pendingDelivery.manifestHash : ''), 'task.review', { taskId: c.taskId, decision: 'accept', deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash }).then(() => refreshTasks()).catch(showErr);
-          d.appendChild(stop); d.appendChild(accept);
-          box.appendChild(d);
-        }
+    for (const room of g.rooms || []) {
+      for (const c of room.cards || []) {
+        const d = document.createElement('div');
+        // 受阻/失败原因（第三十八轮 #4：无解释的「blocked」行——远程用户无法自助诊断）。
+        const reasonNote = c.statusReason != null ? '——' + c.statusReason : (c.exitUnconfirmed ? '（退出未确认）' : '');
+        d.textContent = '[' + g.displayName + '/' + room.name + '] ' + c.title + ' · ' + c.column + reasonNote;
+        const stop = document.createElement('button');
+        stop.textContent = '停止';
+        stop.disabled = c.runId == null;
+        // 操作键绑 run/停止代次（第三十三轮四）：旧失败操作不劫持新版本动作。
+        stop.onclick = () => cmdOnce('stop:' + c.taskId + ':' + c.runId + ':' + c.stopGeneration, 'task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration }).then(() => refreshTasks()).catch(showErr);
+        const accept = document.createElement('button');
+        accept.textContent = '验收通过';
+        accept.disabled = c.pendingDelivery == null;
+        accept.onclick = () => cmdOnce('accept:' + c.taskId + ':' + (c.pendingDelivery ? c.pendingDelivery.deliveryId + ':' + c.pendingDelivery.revision + ':' + c.pendingDelivery.manifestHash : ''), 'task.review', { taskId: c.taskId, decision: 'accept', deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash }).then(() => refreshTasks()).catch(showErr);
+        d.appendChild(stop); d.appendChild(accept);
+        box.appendChild(d);
       }
     }
+  }
     for (const c of ((dms.data && dms.data.conversations) || [])) {
       const state = c.execState;
-      if (state !== 'running' && state !== 'queued' && state !== 'paused') continue;
+      if (state !== 'running' && state !== 'queued' && state !== 'paused' && state !== 'interrupted') continue;
       const d = document.createElement('div');
-      d.textContent = '[私信 ' + (c.peerDisplayName || String(c.conversationId).slice(0, 8)) + '] 执行态=' + state + (c.activeTaskId ? ' · 任务 ' + String(c.activeTaskId).slice(0, 10) + '…' : '');
+      // 同成员多会话区分（第三十八轮 #6：标题→预览——一串相同成员名不可辨认）。
+      const label = '私信 ' + (c.peerDisplayName || String(c.conversationId).slice(0, 8))
+        + (c.title != null && c.title !== '' ? '「' + c.title + '」' : (c.lastMessagePreview != null && c.lastMessagePreview !== '' ? '（' + c.lastMessagePreview + '）' : ''));
+      if (state === 'interrupted') {
+        // 中断待恢复（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——此前只能回
+        // 服务机桌面恢复）。恢复走 task.redispatch 正式重派链（核对停止代次/在途/终态/幂等）。
+        for (const it of (c.interruptedTasks || [])) {
+          const r = document.createElement('div');
+          r.textContent = '[' + label + '] 中断待恢复：' + it.title + '（上次运行 ' + String(it.lastRunStatus || '未知').toLowerCase() + '）';
+          const recover = document.createElement('button');
+          recover.textContent = '恢复执行';
+          recover.onclick = () => cmdOnce('recover:' + it.taskId, 'task.redispatch', { taskId: it.taskId, reason: 'interrupted-recovery' })
+            .then((r2) => { feedLine('ok', '恢复执行已入队（' + (label) + '：' + it.title + '）' + ((r2.data && r2.data.dispatchKey) != null ? '——' + r2.data.dispatchKey : '')); return refreshTasks(); })
+            .catch((e) => { feedLine('error', '恢复失败：' + (e.message || e)); });
+          r.appendChild(recover);
+          box.appendChild(r);
+        }
+        continue;
+      }
+      d.textContent = '[' + label + '] 执行态=' + state + (c.activeTaskId ? ' · 任务 ' + String(c.activeTaskId).slice(0, 10) + '…' : '');
+      if (state === 'paused') {
+        // 继续队列（第三十八轮 #3：远程此前无 dm.resume 入口——停止后只能回服务机恢复；
+        // 成功/泵出数/无待处理均反馈）。
+        const resume = document.createElement('button');
+        resume.textContent = '继续队列';
+        resume.onclick = () => cmdOnce('dmresume:' + c.conversationId, 'dm.resume', { conversationId: c.conversationId })
+          .then((r2) => { const n = (r2.data && r2.data.enqueued) || 0; feedLine('ok', n > 0 ? '已继续队列（' + label + '：泵出 ' + n + ' 条）' : '已继续（' + label + '：当前无待处理的排队消息）'); return refreshTasks(); })
+          .catch((e) => { feedLine('error', '继续失败：' + (e.message || e)); });
+        d.appendChild(resume);
+      }
       const stop = document.createElement('button');
       stop.textContent = '停止';
       stop.disabled = c.activeRunId == null;

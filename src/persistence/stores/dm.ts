@@ -56,8 +56,9 @@ export interface DmConversationSummary {
   lastMessageSeq: number;
   lastReadSeq: number;
   unread: number;
-  /** 会话执行态：idle=无活动 run；running=活动 dm_turn；queued=有排队消息；paused=停止后队列挂起。 */
-  execState: 'idle' | 'running' | 'queued' | 'paused';
+  /** 会话执行态：idle=无活动 run；running=活动 dm_turn；queued=有排队消息；paused=停止后队列挂起；
+   * interrupted=有 ACTIVE 任务但其 run 全部终态（停机中断等——泵不再推进，需显式恢复）。 */
+  execState: 'idle' | 'running' | 'queued' | 'paused' | 'interrupted';
   /** 活动执行的 task/run（execState=running 时非空——UI 停止入口用）。 */
   activeTaskId: string | null;
   activeRunId: string | null;
@@ -66,6 +67,11 @@ export interface DmConversationSummary {
   stopPending: boolean;
   /** 排队中的消息数（运行中同时有排队时一并呈现——不吞掉排队事实）。 */
   queuedCount: number;
+  /** 中断待恢复的任务（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——如实呈现并给
+   * 正式重派入口 task.redispatch（核对停止代次/在途/终态/幂等），不自动重放）。 */
+  interruptedTasks: Array<{ taskId: string; title: string; lastRunStatus: string | null }>;
+  /** 最近一条消息文本预览（侧栏区分同成员多会话——第三十八轮 #6）。 */
+  lastMessagePreview: string | null;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
   pendingReview: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
 }
@@ -97,6 +103,30 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'REVIEW'
        ORDER BY d.revision DESC LIMIT 1`,
     ).get(row.id) as { taskId: string; deliveryId: string; revision: number; manifestHash: string } | undefined;
+    // 中断待恢复（第三十八轮 #7）：ACTIVE 且**已有 run 但全部终态**（无活动 run/排队派发时永远
+    // 不被泵——pumpDmQueue 只放行「无 run」的任务）。不自动重放：恢复经 task.redispatch 正式链
+    // （核对停止代次/在途/终态/幂等）。queuedCount 只数「无 run」的排队任务，与此分列。
+    const interrupted = db.prepare(
+      `SELECT t.id AS taskId, t.title AS title,
+              (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunStatus
+       FROM tasks t
+       WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE'
+         AND EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id)
+         AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id AND r.status IN ('RUNNING','WAITING','STOPPING'))
+         AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dispatch_key = 'dmtask:' || t.id || ':initial' AND o.status IN ('pending','leased'))
+       ORDER BY t.rowid`,
+    ).all(row.id) as Array<{ taskId: string; title: string; lastRunStatus: string | null }>;
+    const lastMsg = db.prepare(
+      `SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT 1`,
+    ).get(row.id) as { body_json: string } | undefined;
+    let lastMessagePreview: string | null = null;
+    if (lastMsg != null) {
+      try {
+        const body = JSON.parse(lastMsg.body_json) as { text?: string };
+        lastMessagePreview = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 40) : null;
+      } catch { /* 残缺消息不虚构预览 */ }
+    }
+    const freshPending = pending.c - interrupted.length; // 真·排队（从未派发）与中断分列
     out.push({
       conversationId: row.id,
       projectId: row.project_id,
@@ -108,12 +138,14 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       lastMessageSeq: row.last_message_seq,
       lastReadSeq: read?.last_read_seq ?? 0,
       unread: Math.max(0, row.last_message_seq - (read?.last_read_seq ?? 0)),
-      execState: paused ? 'paused' : activeRow != null ? 'running' : pending.c > 0 ? 'queued' : 'idle',
+      execState: paused ? 'paused' : activeRow != null ? 'running' : freshPending > 0 ? 'queued' : interrupted.length > 0 ? 'interrupted' : 'idle',
       activeTaskId: activeRow?.taskId ?? null,
       activeRunId: activeRow?.runId ?? null,
       activeStopGeneration: activeRow?.stopGen ?? 0,
       stopPending: row.archived_at != null && activeRow != null, // 归档后停止未确认——如实呈现
-      queuedCount: pending.c,
+      queuedCount: freshPending,
+      interruptedTasks: interrupted,
+      lastMessagePreview,
       pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision, manifestHash: pendingReviewRow.manifestHash } : null,
     });
   }

@@ -196,6 +196,7 @@
           <span id="dm-state" class="thread-status"></span>
           <button id="dm-stop-btn" class="danger hidden" title="停止当前运行（排队消息转暂停，需显式继续）">停止</button>
           <button id="dm-resume-btn" class="hidden" title="继续被停止后挂起的排队消息">继续队列</button>
+          <button id="dm-recover-btn" class="hidden" title="恢复中断的任务（经正式重派链 task.redispatch：核对停止代次/在途/终态后重新执行——不自动重放、不复活已取消任务）">恢复执行</button>
           <button id="dm-archive-btn" class="chip hidden" title="归档：禁止新发/新派发，活动运行按停止流程收尾，队列暂停，历史只读">归档</button>
           <button id="dm-restore-btn" class="chip hidden" title="取消归档（不自动续跑）">取消归档</button>
         </div>

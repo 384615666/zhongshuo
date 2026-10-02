@@ -79,7 +79,7 @@ export interface DaemonCommandDeps {
     restart: (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => Promise<{ address: string; port: number; fingerprint: string } | { stopped: true }>;
     stop: () => Promise<void>;
     invalidateDevice: (deviceId: string) => void;
-    current: () => { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string; certIssuer: string } | null;
+    current: () => { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; lanAddressDetails: Array<{ address: string; url: string; note: string | null }>; certNotAfter: string; certSubject: string; certIssuer: string } | null;
     /** LAN 绑定自检（第三十六轮二）：服务机本机经实际 LAN IP 的 HTTPS 探测（区分本机绑定/TLS 与跨机防火墙两层）。 */
     verifyLanBinding?: () => Promise<{ ok: boolean; checkedUrl: string; error: string | null }>;
     /** 隔离验收模式自检（ZS_REMOTE_SELFCHECK=1——双机包启动器注入；正式入口不带）。 */
@@ -573,6 +573,38 @@ function rootPathOf(db: ZhongshuoDatabase, projectId: string): string | null {
   return (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(projectId) as { canonical_path: string } | undefined)?.canonical_path ?? null;
 }
 
+/** 任务受阻/失败原因（第三十八轮 #4：BLOCKED/FAILED 行显示人话——不做无解释的「blocked」）。
+ * 取任务最近一条相关事件（turn.startupFailed / task.statusChanged BLOCKED / 准入拒绝），按事件
+ * reason/message 映射；无事件=如实 null（不虚构）。纯读。 */
+export function taskStatusReasonOf(db: ZhongshuoDatabase, taskId: string): string | null {
+  interface EvRow { kind: string; payload_json: string }
+  const rows = db.prepare(
+    `SELECT kind, payload_json FROM domain_events
+     WHERE task_id = ? AND kind IN ('turn.startupFailed', 'task.statusChanged', 'task.memberDisabledBlocked', 'task.deliberationPrepareFailed', 'task.contextAssemblyFailed')
+     ORDER BY seq DESC LIMIT 8`,
+  ).all(taskId) as EvRow[];
+  for (const r of rows) {
+    let p: Record<string, unknown> = {};
+    try { p = JSON.parse(r.payload_json) as Record<string, unknown>; } catch { continue; }
+    if (r.kind === 'turn.startupFailed') {
+      const m = typeof p.message === 'string' ? p.message : null;
+      return m == null ? null : m.slice(0, 200);
+    }
+    if (r.kind === 'task.statusChanged' && p.status === 'BLOCKED') {
+      const reason = typeof p.reason === 'string' ? p.reason : '';
+      if (reason === 'mode_unavailable_in_m0') return 'M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——重新发送并指派成员';
+      if (typeof p.message === 'string') return p.message.slice(0, 200);
+      return reason.length > 0 ? `受阻：${reason}` : '受阻（无原因事件——见活动页审计）';
+    }
+    if (r.kind === 'task.memberDisabledBlocked') return '成员已停用：任务阻塞（不派发）；重新启用后经「追加执行」续跑';
+    if (r.kind === 'task.deliberationPrepareFailed' || r.kind === 'task.contextAssemblyFailed') {
+      const m = typeof p.message === 'string' ? p.message : typeof p.reason === 'string' ? p.reason : null;
+      if (m != null) return m.slice(0, 200);
+    }
+  }
+  return null;
+}
+
 /** 远程通道审计写入（第三十二轮一）：HTTP /cmd 由服务端注入 remoteAudit（deviceId+authEpoch
  * ——服务端构造的可信上下文，业务作者仍为其代表的本机用户）。best-effort：审计失败不
  * 改变命令结果；不进命令事务（幂等语义不受影响——回执重放不重复执行业务）。 */
@@ -721,6 +753,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         if (params.kind === 'claude' && (params.model == null || params.model.length === 0)) {
           throw new DaemonCommandError('VALIDATION_INVALID', 'claude 绑定必须显式指定模型（如 deepseek-flash）');
+        }
+        // 真实派发防护下拒绝绑定真实 runtime（第三十八轮 #2——双机验收卡死主根因：用户在防护
+        // 包中绑定 claude 后所有任务派发被 adapterFor 拒绝，UI 无事前警示、任务静默 FAILED）。
+        // 派发侧硬防护保留（ZS_REAL_DISPATCH_GUARD 语义不变）；此处只是把「绑定后必死」提前为
+        // 「绑定时明确拒绝」——恢复路径 kind=fake 不受影响（可解绑回模拟）。正式部署不设该变量
+        // =真实绑定正常可用。
+        if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && (params.kind === 'claude' || params.kind === 'codex')) {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `验收防护模式（ZS_REAL_DISPATCH_GUARD=1）下不可绑定真实 runtime（${params.kind}）：绑定后该成员的所有任务派发都会被防护拒绝（零真实调用护栏）。本包用于模拟/验收——请保持 fake（member.setRuntime kind=fake，需 ZS_ALLOW_FAKE=1），或在正式部署环境（不设该变量）绑定真实渠道`);
         }
         const result = run(() => {
           const member = deps.db.prepare('SELECT id FROM project_members WHERE id = ?').get(params.memberId) as { id: string } | undefined;
@@ -2599,6 +2639,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 projectId: p.id, roomId: room.id, ownerMemberId: t.owner_member_id,
                 taskStatus: t.status, runStatus: t.run_status, runId: t.run_id, stopGeneration: t.stop_generation, column,
                 exitUnconfirmed,
+                // 受阻/失败原因（第三十八轮 #4）：BLOCKED/FAILED 卡片带人话——远程与桌面共用本聚合。
+                statusReason: t.status === 'BLOCKED' || t.status === 'FAILED' || t.run_status === 'FAILED' || t.run_status === 'INTERRUPTED'
+                  ? taskStatusReasonOf(deps.db, t.id)
+                  : null,
                 pendingDelivery: pendingDelivery == null ? null : { deliveryId: pendingDelivery.id, revision: pendingDelivery.revision, manifestHash: pendingDelivery.manifest_hash },
                 locate: `#task=${t.id}`,
               };
@@ -2622,7 +2666,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: {
           ...cfg,
           ...(cur != null
-            ? { running: true, address: cur.address, fingerprint: cur.fingerprint, caFingerprint: cur.caFingerprint, lanAddresses: cur.lanAddresses, certNotAfter: cur.certNotAfter, certSubject: cur.certSubject, certIssuer: cur.certIssuer }
+            ? { running: true, address: cur.address, fingerprint: cur.fingerprint, caFingerprint: cur.caFingerprint, lanAddresses: cur.lanAddresses, lanAddressDetails: cur.lanAddressDetails, certNotAfter: cur.certNotAfter, certSubject: cur.certSubject, certIssuer: cur.certIssuer }
             : { running: false }),
           ...(lanSelfCheck != null ? { lanSelfCheck } : {}),
           lanIps: lanIps(),
@@ -3072,7 +3116,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              WHERE t.project_id = ? AND t.status = 'BLOCKED'
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY t.rowid`,
-          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>);
+          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string }>)
+            .map((b) => ({ ...b, reason: taskStatusReasonOf(deps.db, b.task_id) }));
           // 待确认提醒触发（REM-8）：确认入口由此可达；他人 DM 不泄露。locate（第二十六轮二）：
           // 服务端按目标实际形态构造准确深链——DM=#dm=；房间任务串=#task=；讨论串=#msg=锚。
           // notifyMuted=目标**线程**静音（提醒通知过滤——不能用未读聚合过滤代替；待办保留仅禁通知）。

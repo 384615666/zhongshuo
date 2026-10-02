@@ -38,6 +38,24 @@
 > - **下一步**：①用户 D1—D10 回填→工程侧只读核对；②Android 实测（指南就绪）；③其余评论
 >   锚点按 FULL-03 后批；④DEV-25/G5 发布结论待双机人工验收通过后再出。
 
+## 验收支持事件（2026-10-02 深夜 D7，插记于第三十七轮快照后）
+
+> 用户 D7 验收中「任务一直不完成」连续受阻，工程侧只读诊断定位+最小现场恢复。**D7 用户回填
+> 通过；real_calls=0**。全量缺陷报告=**docs/implementation/dev25-acceptance-defects-20261003.md**
+> （8+2 项：主根因=成员被绑定 claude 后真实派发防护静默拒绝；远程无「继续队列」入口；桌面侧栏
+> 列表闪现被清空——根因未定位需 ZS_DEV25_DEBUG_PORT 取证；BLOCKED/失败无解释；继续成功无反馈；
+> 侧栏不显示会话标题；停机中断任务永久卡 ACTIVE；启动恢复不重试）。
+> - **现场已执行（走正式命令面，回执留 v2 包 RESULTS/）**：`member.setRuntime kind=fake`×2
+>   （Guide A/B 原绑定 ri_claude_89ade9281c/deepseek-flash——用户在设置中自绑，防护拒绝所有派发
+>   即「不完成」主因）；`dm.resume`×3（DM A 队列解锁重泵——「测试」SUCCEEDED、「测试A」FAILED
+>   于绑定恢复前；DM B 无待泵）。**v2 包 server-data 已被修改（绑定+队列状态），续后回填核对
+>   需以此为基线**；诊断脚本留 RESULTS/（diag-dm-state/diag-sidebar 只读；diag-resume-dma/
+>   assist-fix-runtime 含上述写操作）。
+> - **用户侧要点**：房间任务=远程页固定空 mentions→AUTO→M0 门禁 BLOCKED（预期，D 系操作走私信）；
+>   每任务 60s 停滞窗（ZS_FAKE_STALL_MS）内勿点停止；D7 关的是**客户端浏览器**（关服务端窗口=
+>   daemon 停机，任务 INTERRUPTED）。
+> - **约束**：缺陷修复合入前双机包不重交；缺陷排期由评审 AI 依据报告裁定（矩阵已加指针）。
+
 ## 上一轮快照（2026-10-02 第三十六轮）
 
 > 本轮=**真实双机验收入口受阻→修复+普通浏览器预检+v2 包重交**。D1—D10 未执行不记通过。
