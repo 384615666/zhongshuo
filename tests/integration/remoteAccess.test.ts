@@ -12,7 +12,7 @@
  * 真实 TLS：证书经 PowerShell 生成一次（测试文件内复用），Node 客户端以该 DER 为信任锚。
  */
 import { describe, expect, it, afterAll, beforeAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import * as https from 'node:https';
 import * as tls from 'node:tls';
 import { tmpdir } from 'node:os';
@@ -61,7 +61,7 @@ async function boot(testing?: Record<string, unknown>): Promise<Harness> {
     db,
     localUserId: 'u_local',
     appDataDir: appData,
-    dispatch: (envelope, ctx) => dispatchDaemonCommand({ ...deps, ...(ctx != null ? { remoteAudit: ctx } : {}) }, envelope),
+    dispatch: (envelope, ctx) => dispatchDaemonCommand({ ...deps, ...(ctx != null ? { remoteAudit: { deviceId: ctx.deviceId, authEpoch: ctx.deviceEpoch }, remoteGate: ctx.gate } : {}) }, envelope),
     log: (l) => logs.push(l),
     testing: { identity, pumpMs: 80, authWindowMs: 900, ticketTtlMs: 30_000, resumeWindow: 5000, perIpPerMin: 999, globalPerMin: 9999, ...(testing ?? {}) },
   });
@@ -710,6 +710,274 @@ async function bootWs32(h: Harness, _tag?: string): Promise<Awaited<ReturnType<t
   ws.send({ type: 'subscribe', projectId: 'p1' });
   await ws.waitFrame((f) => f.type === 'subscribed');
   return ws;
+}
+
+describe('第三十三轮：设备级代次/限额/收拢/泵模型/下载门禁/自检', () => {
+  it('设备级授权代次：吊销 A 不伤 B（B 现有 token/票据/WS 全部继续）', async () => {
+    const h = await boot();
+    const credA = await bootPair32(h, 'EPOCHDV8A');
+    const credB = await bootPair32(h, 'EPOCHDV8B');
+    const devA = (h.db.prepare("SELECT device_id FROM remote_devices WHERE revoked_at IS NULL ORDER BY created_at LIMIT 1 OFFSET 0").all() as Array<{ device_id: string }>);
+    const devs = h.db.prepare('SELECT device_id FROM remote_devices ORDER BY created_at').all() as Array<{ device_id: string }>;
+    expect(devs.length).toBe(2);
+    const idA = devA[0]!.device_id;
+    const idB = devs.find((d) => d.device_id !== idA)!.device_id;
+    const sessA = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + credA });
+    const sessB = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + credB });
+    expect(sessA.status).toBe(200);
+    expect(sessB.status).toBe(200);
+    // B 先建活连接（订阅 p1——事件推送路径）。
+    const tkB = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + sessB.json.accessToken });
+    const wsB = await wsConnect(h);
+    wsB.send({ type: 'authenticate', ticket: tkB.json.ticket });
+    await wsB.waitFrame((f) => f.type === 'authenticated');
+    wsB.send({ type: 'subscribe', projectId: 'p1' });
+    await wsB.waitFrame((f) => f.type === 'subscribed');
+    // A 的活连接。
+    const tkA = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + sessA.json.accessToken });
+    const wsA = await wsConnect(h);
+    wsA.send({ type: 'authenticate', ticket: tkA.json.ticket });
+    await wsA.waitFrame((f) => f.type === 'authenticated');
+    // 吊销 A（DB+内存联动）。
+    revokeDeviceInDb(h.db, idA, Date.now());
+    h.server.invalidateDevice(idA);
+    // A 全拒：token 401、活连接关闭。
+    const afterA = await httpsJson(h, 'POST', '/cmd', { commandId: 'r33-a-after-revoke', method: 'conversation.list', params: {} }, { authorization: 'Bearer ' + sessA.json.accessToken });
+    expect(afterA.status).toBe(401);
+    const closedA = await wsA.closed;
+    expect(closedA.code).toBe(1008);
+    // **B 不受影响**：现有 token 继续可用（无需重登录）。
+    const cmdB = await httpsJson(h, 'POST', '/cmd', { commandId: 'r33-b-token-alive', method: 'conversation.list', params: {} }, { authorization: 'Bearer ' + sessB.json.accessToken });
+    expect(cmdB.status).toBe(200);
+    expect(cmdB.json.ok).toBe(true);
+    // B 活连接继续收事件。
+    seedEvent(h.db, 'evt-epoch-b-' + randomUUID().slice(0, 6), 'dm_a');
+    const evB = await wsB.waitFrame((f) => f.type === 'event' && String(f.eventId).includes('epoch-b'), 6000);
+    expect(evB).toBeTruthy();
+    // B 还能换新 token（设备凭据未被全局代次误伤）。
+    const renewB = await httpsJson(h, 'POST', '/session', {}, { authorization: 'Device ' + credB });
+    expect(renewB.status).toBe(200);
+    // B 旧票据签发链路照常。
+    const tkB2 = await httpsJson(h, 'POST', '/ws-ticket', {}, { authorization: 'Bearer ' + sessB.json.accessToken });
+    expect(tkB2.status).toBe(200);
+    wsB.closeSocket();
+    await h.close();
+  }, 120_000);
+
+  it('WSS 每地址未认证限额：同源第 3 个拒绝；关闭后可再连；全局上限独立', async () => {
+    const h = await boot();
+    const c1 = await wsConnect(h);
+    const c2 = await wsConnect(h);
+    // 同地址第 3 个未认证连接：429（upgrade 拒绝）。
+    await expect(wsConnect(h)).rejects.toThrow();
+    // 关闭一个→释放→可再连。
+    c1.closeSocket();
+    await sleep(400);
+    const c3 = await wsConnect(h);
+    c3.closeSocket();
+    c2.closeSocket();
+    await h.close();
+    // 全局上限（与每地址独立——每地址放宽到 10、全局 2）。
+    const h2 = await boot({ unauthPerAddr: 10, unauthGlobal: 2 });
+    const g1 = await wsConnect(h2);
+    const g2 = await wsConnect(h2);
+    await expect(wsConnect(h2)).rejects.toThrow();
+    g1.closeSocket();
+    g2.closeSocket();
+    await h2.close();
+  }, 90_000);
+
+  it('有界关闭收拢：不回握的客户端宽限后 terminate；daemon.stop 有界完成', async () => {
+    const h = await boot({ closeGraceMs: 300, stopDeadlineMs: 500 });
+    const ws = await bootWs32(h, 'CLOSE33');
+    const t0 = Date.now();
+    // 吊销触发服务端关闭——测试客户端不回应关闭握手（不回 close 帧）。
+    const devRow = h.db.prepare('SELECT device_id FROM remote_devices ORDER BY created_at DESC LIMIT 1').get() as { device_id: string };
+    revokeDeviceInDb(h.db, devRow.device_id, Date.now());
+    h.server.invalidateDevice(devRow.device_id);
+    const closed = await ws.closed; // 宽限 300ms 后 terminate——closed 兑现（不无限等握手）
+    void closed;
+    expect(Date.now() - t0).toBeLessThan(3000);
+    // daemon.stop 有界：留一个不认证也不回握的连接——stop 在截止内完成（不悬挂）。
+    const stubborn = await wsConnect(h);
+    void stubborn;
+    const t1 = Date.now();
+    await h.server.stop();
+    expect(Date.now() - t1).toBeLessThan(5000);
+    h.db.close();
+  }, 90_000);
+
+  it('泵按项目游标：600 条未订阅 P1 不阻塞已订阅 P2；迟订阅/取消订阅/重连不漏不重扫', async () => {
+    const h = await boot({ resumeWindow: 1_000_000 });
+    h.db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p2','项目2',?,?,'{}',0)`).run(tmpRoot, tmpRoot);
+    // P1 600 条（未订阅）+ P2 1 条（将订阅）。
+    for (let i = 0; i < 600; i += 1) seedEvent(h.db, `evt-p1-${String(i).padStart(3, '0')}-${randomUUID().slice(0, 4)}`, 'dm_a');
+    const seqP2 = seedEventP2(h.db, 'evt-p2-marker-' + randomUUID().slice(0, 6), 'dm_a');
+    const a = await bootAuth32(h, 'PUMP3388');
+    const ws = await wsConnect(h);
+    ws.send({ type: 'authenticate', ticket: a.ticket, lastSeq: 0 });
+    await ws.waitFrame((f) => f.type === 'authenticated');
+    // 只订阅 P2——尽管 P1 有 600 条更早事件，P2 事件必须送达（旧全局 LIMIT 500 模型发不出）。
+    ws.send({ type: 'subscribe', projectId: 'p2' });
+    await ws.waitFrame((f) => f.type === 'subscribed');
+    const gotP2 = await ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqP2, 6000);
+    expect(gotP2).toBeTruthy();
+    // 迟后订阅 P1：600 条全量补发（分批 300/泵）——末条（seq=600）也到（不遗漏、不无限重扫）。
+    ws.send({ type: 'subscribe', projectId: 'p1' });
+    await ws.waitFrame((f) => f.type === 'subscribed' && f.projectId === 'p1');
+    await ws.waitFrame((f) => f.type === 'event' && f.projectId === 'p1' && Number(f.seq) === 600, 30_000); // 600 条全部到位（末条 seq=600）
+    const p1Count = ws.frames.filter((f) => f.type === 'event' && f.projectId === 'p1').length;
+    expect(p1Count).toBe(600);
+    // 取消订阅 P1：新 P1 事件不再推。
+    ws.send({ type: 'unsubscribe', projectId: 'p1' });
+    await ws.waitFrame((f) => f.type === 'unsubscribed');
+    seedEvent(h.db, 'evt-p1-after-unsub-' + randomUUID().slice(0, 6), 'dm_a');
+    await expect(ws.waitFrame((f) => f.type === 'event' && String(f.eventId).includes('after-unsub'), 1500)).rejects.toThrow();
+    // P2 照常。
+    const seqP2b = seedEventP2(h.db, 'evt-p2-second-' + randomUUID().slice(0, 6), 'dm_a');
+    const got2 = await ws.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqP2b, 6000);
+    expect(got2).toBeTruthy();
+    ws.closeSocket();
+    // 重连续传：断开后新事件，lastSeq 续传只补增量（去重按 eventId）。
+    const seqP2c = seedEventP2(h.db, 'evt-p2-third-' + randomUUID().slice(0, 6), 'dm_a');
+    const tk2 = await httpsJson(h, 'POST', '/ws-ticket', {}, a.headers);
+    const ws2 = await wsConnect(h);
+    ws2.send({ type: 'authenticate', ticket: tk2.json.ticket, lastSeq: seqP2b });
+    await ws2.waitFrame((f) => f.type === 'authenticated');
+    ws2.send({ type: 'subscribe', projectId: 'p2' });
+    await ws2.waitFrame((f) => f.type === 'subscribed');
+    const got3 = await ws2.waitFrame((f) => f.type === 'event' && Number(f.seq) === seqP2c, 6000);
+    expect(got3).toBeTruthy();
+    ws2.closeSocket();
+    await h.close();
+  }, 120_000);
+
+  it('主文件同长度篡改 → 410；资产额度与元文件分离（200 合法/201 明确拒绝）', async () => {
+    const h = await boot();
+    const a = await bootAuth32(h, 'TAMPER33');
+    await dispatchDaemonCommand({ db: h.db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: appData }, { protocolVersion: 1, commandId: 'r33-tamper-seed-01', method: 'message.submit', params: { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '主文件篡改宿主 TAMPER-MAIN-331', intent: 'record_only', mentions: [] } });
+    const exp = await httpsJson(h, 'POST', '/cmd', { commandId: 'r33-tamper-create', method: 'export.create', params: { target: { kind: 'conversation', projectId: 'p1', conversationId: 'dm_a' }, format: 'md' } }, a.headers);
+    expect(exp.json.ok).toBe(true);
+    const exportId: string = exp.json.data.exportId;
+    const dir = join(appData, 'exports', exportId);
+    // 主文件同长度篡改：改一个字符、字节长度不变——旧实现 bytes 后 continue 跳过哈希核验可过。
+    const idxPath = join(dir, 'index.md');
+    const original = readFileSync(idxPath, 'utf8');
+    const tampered = original.replace('TAMPER-MAIN-331', 'TAMPER-MAIN-33X');
+    expect(tampered.length).toBe(original.length); // 同长度
+    writeFileSync(idxPath, tampered, 'utf8');
+    const dl1 = await downloadZip(h, exportId, a.token);
+    expect(dl1.status).toBe(410);
+    expect(dl1.json.error.code).toBe('EXPORT_TAMPERED');
+    // 恢复后再验 200（结构未被破坏）。
+    writeFileSync(idxPath, original, 'utf8');
+    const dl2 = await downloadZip(h, exportId, a.token);
+    expect(dl2.status).toBe(200);
+    // 手工构造边界导出目录：200 件资产+正文+清单（=202 文件）合法；201 件资产明确 413。
+    const mkBoundary = (id: string, assetCount: number): string => {
+      const d = join(appData, 'exports', id);
+      mkdirSync(join(d, 'assets'), { recursive: true });
+      const files: Array<{ file: string; bytes: number; sha256: string }> = [];
+      for (let i = 0; i < assetCount; i += 1) {
+        const rel = `assets/att-${String(i).padStart(3, '0')}.txt`;
+        const content = Buffer.from(`BOUNDARY-ASSET-${id}-${i}\n`, 'utf8');
+        writeFileSync(join(d, rel.replaceAll('/', String.fromCharCode(92).repeat(1))), content);
+        files.push({ file: rel, bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') });
+      }
+      const primary = Buffer.from('# boundary primary\n', 'utf8');
+      writeFileSync(join(d, 'index.md'), primary);
+      writeFileSync(join(d, 'manifest.json'), JSON.stringify({ conversationId: 'dm_a', primary: { file: 'index.md', bytes: primary.length, sha256: createHash('sha256').update(primary).digest('hex') }, files }));
+      return d;
+    };
+    mkBoundary('exp_bound200ok', 200);
+    const ok200 = await downloadZip(h, 'exp_bound200ok', a.token);
+    expect(ok200.status).toBe(200);
+    if (ok200.status === 200) {
+      const { unzipSync } = await import('fflate');
+      const inner = unzipSync(new Uint8Array(ok200.body));
+      expect(Object.keys(inner).length).toBe(202); // 200 资产+index.md+manifest.json——元文件不截
+    }
+    mkBoundary('exp_bound201rej', 201);
+    const rej201 = await downloadZip(h, 'exp_bound201rej', a.token);
+    expect(rej201.status).toBe(413);
+    expect(rej201.json.error.code).toBe('EXPORT_TOO_LARGE');
+    await h.close();
+  }, 120_000);
+
+  it('共享命令门禁（提交前重查）：上下文有效→提交；吊销后同上下文→拒绝且零提交', async () => {
+    const h = await boot();
+    const a = await bootAuth32(h, 'GATE3388');
+    const epoch = (h.db.prepare('SELECT auth_epoch FROM remote_devices WHERE device_id = ?').get(a.deviceId) as { auth_epoch: number }).auth_epoch;
+    const deps = {
+      db: h.db,
+      localUserId: 'u_local',
+      interruptTurn: async () => {},
+      appDataDir: appData,
+      remoteAudit: { deviceId: a.deviceId, authEpoch: epoch },
+      remoteGate: (): { ok: true } | { ok: false; code: string; message: string } => h.server.deviceLive(a.deviceId, epoch, a.token),
+    };
+    const params = { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '门禁提交前重查 GATE-COMMIT-771', intent: 'record_only', mentions: [] };
+    const first = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: 'r33-gate-commit-01', method: 'message.submit', params }) as { ok: boolean };
+    expect(first.ok).toBe(true);
+    // 「请求体已读完→（异步/暂停后）提交」窗口内吊销：同上下文再提交→run() 边界拒绝、零提交。
+    revokeDeviceInDb(h.db, a.deviceId, Date.now());
+    h.server.invalidateDevice(a.deviceId);
+    const second = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: 'r33-gate-commit-02', method: 'message.submit', params }) as { ok: boolean; error?: { code: string } };
+    expect(second.ok).toBe(false);
+    expect(second.error?.code).toBe('DEVICE_REVOKED');
+    const cnt = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id='dm_a' AND body_json LIKE '%GATE-COMMIT-771%'`).get() as { c: number }).c;
+    expect(cnt).toBe(1); // 第二次零提交（吊销≠停止——已提交的第一条不受影响）
+    // 门禁拒绝也留审计（本次请求事实：设备+命令号+失败）。
+    const audit = h.db.prepare('SELECT ok FROM remote_audit_log WHERE command_id = ?').all('r33-gate-commit-02') as Array<{ ok: number }>;
+    expect(audit.length).toBe(1);
+    expect(audit[0]!.ok).toBe(0);
+    await h.close();
+  }, 90_000);
+
+  it('进程内自检（隔离验收模式）：全项通过+事实文件无凭据+自检设备清理', async () => {
+    const h = await boot();
+    const report = await h.server.runSelfcheck();
+    for (const item of report.items) {
+      expect({ name: item.name, ok: item.ok }).toEqual({ name: item.name, ok: true });
+    }
+    expect(report.ok).toBe(true);
+    expect(existsSync(report.file)).toBe(true);
+    const raw = readFileSync(report.file, 'utf8');
+    const parsed = JSON.parse(raw) as { items: Array<{ name: string; ok: boolean }>; pass: number; total: number };
+    expect(parsed.pass).toBe(parsed.total);
+    // 结果文件不含任何凭据明文（码/token/凭据）——只含结论事实。
+    expect(raw).not.toMatch(/zc_[A-Za-z0-9_-]+/);
+    expect(raw).not.toMatch(/"accessToken"/);
+    // 自检设备已清理（吊销）。
+    const leftover = h.db.prepare("SELECT count(*) c FROM remote_devices WHERE device_name = 'selfcheck-throwaway' AND revoked_at IS NULL").get() as { c: number };
+    expect(leftover.c).toBe(0);
+    // 审计事实：自检设备的恰一次命令留痕（replayed 0→1）。
+    const audit = h.db.prepare("SELECT command_id, ok, replayed FROM remote_audit_log WHERE device_id IN (SELECT device_id FROM remote_devices WHERE device_name = 'selfcheck-throwaway') AND command_id LIKE 'selfcheck-once-%' ORDER BY id").all() as Array<{ command_id: string; ok: number; replayed: number }>;
+    expect(audit.length).toBe(2);
+    expect(audit[0]!.replayed).toBe(0);
+    expect(audit[1]!.replayed).toBe(1);
+    await h.close();
+  }, 90_000);
+});
+
+function seedEventP2(db: import('../../src/persistence/db.ts').ZhongshuoDatabase, eventId: string, conversationId: string | null, at = Date.now()): number {
+  const r = db.prepare(`INSERT INTO domain_events (event_id, schema_version, project_id, conversation_id, kind, payload_json, created_at) VALUES (?,1,'p2',?,'message.submitted','{}',?)`).run(eventId, conversationId, at);
+  return Number(r.lastInsertRowid);
+}
+
+function downloadZip(h: Harness, exportId: string, token: string): Promise<{ status: number; body: Buffer; json: any }> {
+  return new Promise((resolve) => {
+    https.get({ hostname: '127.0.0.1', port: h.port, path: `/export/${exportId}/download`, ca: CERT_PEM, servername: 'localhost', rejectUnauthorized: true, headers: { authorization: `Bearer ${token}`, origin: h.origin, host: h.host } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks);
+        let json: any = null;
+        try { json = JSON.parse(body.toString('utf8')); } catch { json = null; }
+        resolve({ status: res.statusCode ?? 0, body, json });
+      });
+    }).on('error', () => resolve({ status: -1, body: Buffer.alloc(0), json: null }));
+  });
 }
 
 void tls;
