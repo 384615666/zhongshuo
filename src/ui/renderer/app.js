@@ -3868,10 +3868,17 @@ function wireRemoteSettings() {
   const scBtn = el('remote-pair-selfcheck-btn');
   if (scBtn != null) {
     scBtn.onclick = () => void (async () => {
+      const out = el('remote-pair-result');
       try {
-        await command('remote.pairing.selfcheckExport', {});
-        showError('自检码已写入本机状态——回到双机包目录运行 run-self-check.bat');
-      } catch (e) { showError(`自检码失败：${e.message}`); }
+        const r = await command('remote.pairing.selfcheck', {});
+        out.textContent = '';
+        const s = document.createElement('div');
+        s.textContent = `自检 ${r.pass}/${r.total}${r.ok ? '（全部通过）' : '（存在失败项——见明细）'}`;
+        const d = document.createElement('div');
+        d.className = 'meta';
+        d.textContent = (r.items ?? []).map((i) => `${i.ok ? '✓' : '✗'} ${i.name}`).join('；') + (r.resultsFile ? `——结果文件 ${r.resultsFile}` : '');
+        out.append(s, d);
+      } catch (e) { showError(`自检失败：${e.message}（仅隔离验收模式开放——正式入口不带）`); }
     })();
   }
   el('remote-pair-btn').onclick = () => void (async () => {

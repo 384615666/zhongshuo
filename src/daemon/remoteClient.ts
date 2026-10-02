@@ -1,19 +1,22 @@
 /**
- * 远程浏览器客户端（DEV-25 第三十一轮五建；第三十二轮三按可操作闭环重写）。
+ * 远程浏览器客户端（DEV-25 第三十一轮五建；第三十二轮三重写；第三十三轮四按缺口收口）。
  * 同源静态页（GET / + /app.js——script-src 'self' 严格 CSP，禁第三方脚本；无内联脚本）。
- * 第三十二轮三闭环：
- * - **认证下载**：导出=认证 fetch→Blob→临时 objectURL 触发真实下载（token 不进 URL；
- *   同源 fetch 自带合规 Origin）；页面保留本次字节供验收核对；
- * - **房间+DM 任务面**：会话选择器含房间（room.list→room_root 发送）与 DM；任务区合并
- *   board.view（房间任务）与 conversation.list 执行态（DM 任务）——页面发起的 DM 任务可
- *   停止/验收；任务状态事件触发刷新（不只新消息）；
- * - **附件与草稿**：有界 base64（分块转换——String.fromCharCode(...整份) 参数上限坑）；
- *   上传固定目标键+异步回执回原键（A→B→A 不串附件）；发送成功才清实际发送的正文与
- *   refs（失败/图片门拒绝保留草稿）；
- * - **重试与恢复**：写操作信封持久（localStorage pendingOps）——响应丢失/刷新后沿原
- *   commandId 重试（恰一次）；lastSeq 持久+cursor-stale 后拉 activity.list 同范围快照
- *   →再订阅+eventId 去重；token 到期自动续换（401 TOKEN_EXPIRED→重换→重发一次）；
- *   吊销明确终态（不再重连）；history 响应带目标/代次保护（迟到不重绘其他会话）。
+ * 第三十三轮四闭环：
+ * - **失败信封语义**：区分**明确拒绝**（服务端已应答领域错——信封即删，允许修正后新操作）
+ *   与**结果未知**（响应丢失/断网——信封保留，沿原 commandId 重试恰一次）；「重试原操作」
+ *   与「发送新草稿」不暗中混用——存在未知信封时发送键先收口原信封，新草稿保留不清；
+ * - **按实际提交信封清算**：成功后只清实际发送的正文与 refs——发送等待期间新输入的正文/
+ *   新上传的附件保留；切到 B 不清 B 的上传状态；
+ * - **操作键绑版本**：停止/验收键含 run/停止代次/delivery/revision/manifestHash——旧失败
+ *   操作不劫持新版本动作；
+ * - **房间线程读取闭环**：房间目标列出线程（room.pool）→ 点击线程经 thread.history 读取
+ *   消息（正式命令）→ 线程内发送（message.submit target=thread）——不再只有「选私信」提示；
+ * - **快照恢复闭环**：cursor-stale→activity.list 快照→**恢复订阅并等确认**→新事件继续经
+ *   WSS 到达；快照失败保留旧游标与待恢复状态（不冒充成功），有界退避重试；断网重连失败
+ *   持续按有界退避恢复（不只 onclose 一次）；
+ * - **续换事实**：token 每次成功续换记 __tokenGen、成功 HTTP 记 __lastHttpOkAt（页面验收
+ *   核对新请求事实，而非「下拉框有选项」）。
+ * 既有能力保留：认证下载（fetch→Blob）、有界 base64、键控草稿、吊销终态、history 代次保护。
  */
 export const REMOTE_CLIENT_HTML = `<!doctype html>
 <html lang="zh-CN">
@@ -41,6 +44,8 @@ button.primary{background:#2456d6;color:#fff;border-color:#2456d6}
 .hidden{display:none}
 #pending-ops .op{display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0}
 .chip{display:inline-block;border:1px solid #c9cfdd;border-radius:10px;padding:1px 8px;font-size:12px;background:#f2f4f9;margin:1px}
+.thread-row{border-top:1px dashed #e3e6ee;padding:6px 0;font-size:13px;cursor:pointer;color:#2456d6}
+#thread-list{margin:6px 0}
 </style>
 </head>
 <body>
@@ -60,9 +65,10 @@ button.primary{background:#2456d6;color:#fff;border-color:#2456d6}
   <div class="card">
     <h2>会话与消息</h2>
     <select id="conversation-sel"></select><button id="refresh-btn">刷新</button>
+    <div id="thread-list" class="meta"></div>
     <div id="messages" class="card"></div>
     <div id="composer">
-      <textarea id="send-text" placeholder="输入消息（默认交给 AI；房间消息进主池，私信按 1 对 1）"></textarea>
+      <textarea id="send-text" placeholder="输入消息（默认交给 AI；房间消息进主池，私信按 1 对 1，线程内跟进串内）"></textarea>
       <div>
         <button id="send-btn" class="primary">发送</button>
         <button id="record-btn">仅记录</button>
@@ -97,6 +103,7 @@ let accessToken = null; // 仅内存（到期自动续换——不撤销 deviceC
 let device = null;      // {deviceId, credential}（IndexedDB 同源持久）
 let targets = [];       // [{kind:'dm'|'room', key, projectId, conversationId, roomId?, label}]
 let currentTarget = null;
+let currentThread = null; // 房间目标当前打开的线程（threadId——读取与发送锚定）
 /** 键控草稿（第三十二轮三）：A→B→A 不串附件/正文——按目标键存 {text, attachIds, attachNames}。 */
 const drafts = new Map();
 const draftOf = (k) => { if (!drafts.has(k)) drafts.set(k, { text: '', attachIds: [], attachNames: [] }); return drafts.get(k); };
@@ -105,9 +112,14 @@ let ws = null;
 let wsRetry = 0;
 let eventsSeen = loadSeen();
 let historyGen = 0; // 迟到 history 响应代次保护
+let snapshotState = 'idle'; // idle | pending | recovered（页面验收核对——快照闭环事实）
+let snapshotRetry = 0;
+window.__tokenGen = 0;      // 成功续换次数（页面验收核对——新请求事实）
+window.__lastHttpOkAt = 0;  // 最近一次 HTTP 2xx 时刻（验收核对命令确在续换后成功）
+window.__cursorState = '';
 
 // ---------- 本地持久（localStorage——同源） ----------
-function loadSeen() { try { return new Set(JSON.parse(localStorage.getItem('zs-seen-events') ?? '[]')); } catch { return new Set(); } }
+function loadSeen() { try { return new Set(JSON.parse(localStorage.getItem('zs-seen-events') ?? '[]')); } catch { return []; } }
 function saveSeen() { try { const arr = [...eventsSeen]; if (arr.length > 500) arr.splice(0, arr.length - 500); localStorage.setItem('zs-seen-events', JSON.stringify(arr)); } catch (e) { void e; } }
 function loadPendingOps() { try { return JSON.parse(localStorage.getItem('zs-pending-ops') ?? '{}'); } catch { return {}; } }
 function savePendingOps(ops) { try { localStorage.setItem('zs-pending-ops', JSON.stringify(ops)); } catch (e) { void e; } }
@@ -131,6 +143,7 @@ async function renewSession() {
     throw Object.assign(new Error((data.error && data.error.message) || ('session ' + r.status)), { status: r.status, code: data.error && data.error.code });
   }
   accessToken = data.accessToken;
+  window.__tokenGen += 1; // 续换事实（验收核对——新 token 确实取得）
 }
 async function api(path, body, auth) {
   const headers = { 'content-type': 'application/json' };
@@ -144,6 +157,7 @@ async function api(path, body, auth) {
     r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body ?? {}) });
   }
   const data = await r.json().catch(() => ({}));
+  if (r.ok) window.__lastHttpOkAt = Date.now();
   if (data.error && (data.error.code === 'DEVICE_REVOKED' || data.error.code === 'CREDENTIAL_INVALID')) enterRevokedTerminal();
   if (!r.ok) throw Object.assign(new Error((data.error && data.error.message) || ('HTTP ' + r.status)), { status: r.status, code: data.error && data.error.code });
   return data;
@@ -151,10 +165,16 @@ async function api(path, body, auth) {
 async function cmd(method, params, commandId) {
   const cid = commandId || ('rc-' + crypto.randomUUID().slice(0, 12));
   const out = await api('/cmd', { commandId: cid, method, params: params || {} }, 'bearer');
-  if (out.ok === false) throw Object.assign(new Error((out.error && out.error.message) || '命令失败'), { code: out.error && out.error.code });
+  if (out.ok === false) throw Object.assign(new Error((out.error && out.error.message) || '命令失败'), { status: 200, code: out.error && out.error.code });
   return out;
 }
-/** 写操作：信封持久（第三十二轮三）——响应丢失/刷新后沿原 commandId 重试恰一次。 */
+/**
+ * 写操作信封（第三十三轮四语义收口）：
+ * - **结果未知**（响应丢失/断网——e.status == null）：信封保留，沿原 commandId 重试恰一次；
+ * - **明确拒绝**（服务端已应答——e.status != null，含领域错/403/401）：信封即删——允许用户
+ *   修正后发起新操作（新 commandId）。旧实现所有领域错也永久保留信封：首次 OLD+图片被
+ *   门禁拒绝后，改成 NEW 去掉图片再发送仍提交 OLD+图片。
+ */
 async function cmdOnce(opKey, method, params) {
   const ops = loadPendingOps();
   const existing = ops[opKey];
@@ -170,6 +190,12 @@ async function cmdOnce(opKey, method, params) {
     renderPendingOps();
     return out;
   } catch (e) {
+    if (e.status != null) {
+      // 明确拒绝：信封删除（可修正重发）；吊销终态另有横幅。
+      const ops2 = loadPendingOps();
+      delete ops2[opKey];
+      savePendingOps(ops2);
+    }
     renderPendingOps();
     throw e;
   }
@@ -185,10 +211,15 @@ function renderPendingOps() {
     const row = document.createElement('div');
     row.className = 'op';
     const label = document.createElement('span');
-    label.textContent = '未完成操作（' + op.method + '）——响应丢失或中断；重试沿原编号恰一次';
+    label.textContent = '结果未知的操作（' + op.method + '）——响应丢失或中断；重试沿原编号恰一次';
     const btn = document.createElement('button');
     btn.textContent = '重试';
-    btn.onclick = () => void cmdOnce(k, op.method, op.params).then(() => { if (currentTarget != null) void loadMessages().catch(() => {}); }).catch((e) => feedLine('error', '重试失败：' + e.message));
+    btn.onclick = () => void cmdOnce(k, op.method, op.params).then(() => {
+      // 发送类操作：成功后同样按**实际提交信封**清算草稿（与 send() 路径同一语义）。
+      if (op.method === 'message.submit' && k.startsWith('send:')) settleDraft(k.slice(5, k.lastIndexOf(':')), op.params);
+      if (currentTarget != null) void loadMessages().catch(() => {});
+      void refreshTasks().catch(() => {});
+    }).catch((e) => feedLine('error', '重试失败：' + e.message));
     row.append(label, btn);
     box.append(row);
   }
@@ -223,7 +254,7 @@ document.getElementById('pair-btn').onclick = async () => {
 };
 document.getElementById('forget-btn').onclick = async () => { await idbDel('device'); device = null; accessToken = null; location.reload(); };
 
-// ---------- 会话与消息（含房间——DM 任务操作面） ----------
+// ---------- 会话与消息（含房间线程——DM/房间任务操作面） ----------
 async function enterMain() {
   await renewSession();
   document.getElementById('setup').classList.add('hidden');
@@ -253,7 +284,7 @@ async function refreshTargets(initial) {
     ...rooms.map((r) => ({ ...r, key: 'room:' + r.roomId })),
   ];
   const sel = document.getElementById('conversation-sel');
-  const prev = initial ? null : sel.value;
+  const prev = initial ? (currentTarget == null ? null : currentTarget.key) : sel.value;
   sel.innerHTML = '';
   for (const t of targets) {
     const o = document.createElement('option');
@@ -268,6 +299,7 @@ async function refreshTargets(initial) {
 }
 function switchTarget(t) {
   currentTarget = t;
+  currentThread = null; // 切目标回到线程列表
   if (t != null) {
     const d = draftOf(t.key);
     document.getElementById('send-text').value = d.text;
@@ -275,27 +307,52 @@ function switchTarget(t) {
     void loadMessages().catch(() => {});
   }
 }
+/** 房间线程列表（第三十三轮四：正式读取入口——room.pool 线程行可点击）。 */
+async function renderThreadList() {
+  const box = document.getElementById('thread-list');
+  box.innerHTML = '';
+  if (currentTarget == null || currentTarget.kind !== 'room' || currentTarget.roomId == null) return;
+  const r = await cmd('room.pool', { roomId: currentTarget.roomId }).catch(() => null);
+  const threads = (r && r.data && (r.data.threads || r.data.items)) || [];
+  const head = document.createElement('div');
+  head.textContent = '房间线程 ' + threads.length + ' 条（点击读取——正式 thread.history 命令，零派发）：';
+  box.appendChild(head);
+  for (const th of threads.slice(0, 30)) {
+    const row = document.createElement('div');
+    row.className = 'thread-row';
+    const thId = th.threadId || th.id || th.thread_id || '';
+    row.textContent = '· ' + (th.title || th.rootTaskId || thId || JSON.stringify(th).slice(0, 60));
+    row.onclick = () => void openThread(thId).catch((e) => feedLine('error', '线程读取失败：' + e.message));
+    box.appendChild(row);
+  }
+  window.__roomThreadCount = threads.length;
+}
+async function openThread(threadId) {
+  if (currentTarget == null || threadId == null || threadId === '') return;
+  currentThread = threadId;
+  const gen = ++historyGen;
+  const r = await cmd('thread.history', { threadId, limit: 40 });
+  if (gen !== historyGen || currentThread !== threadId) return; // 迟到/切走：不重绘
+  renderMessageItems((r.data && r.data.items) || [], '线程 ' + String(threadId).slice(0, 14) + '…（thread.history 正式读取）');
+}
 async function loadMessages() {
   const box = document.getElementById('messages');
-  if (currentTarget == null || currentTarget.kind !== 'dm') {
-    if (currentTarget != null && currentTarget.kind === 'room' && currentTarget.conversationId != null) {
-      const gen = ++historyGen;
-      const r = await cmd('room.pool', { roomId: currentTarget.roomId }).catch(() => null);
-      if (gen !== historyGen) return; // 迟到保护
-      const threads = (r && r.data && (r.data.threads || r.data.items)) || [];
-      box.textContent = '房间主池按线程组织（线程 ' + threads.length + '）：';
-      for (const th of threads.slice(0, 20)) box.textContent += String.fromCharCode(10) + '· ' + (th.title || th.rootTaskId || th.threadId || JSON.stringify(th).slice(0, 60));
-    } else {
-      box.textContent = '请选择私信会话查看消息；房间消息按线程组织（列表见上）。';
-    }
+  await renderThreadList();
+  if (currentTarget == null) { box.textContent = ''; return; }
+  if (currentTarget.kind === 'room') {
+    if (currentThread != null) { await openThread(currentThread); return; }
+    box.textContent = '选择上方房间线程读取消息（发送默认进房间主池；打开线程后为线程内跟进）。';
     return;
   }
   const gen = ++historyGen;
   const convId = currentTarget.conversationId;
   const r = await cmd('conversation.history', { conversationId: convId, limit: 30 });
-  if (gen !== historyGen || currentTarget == null || currentTarget.conversationId !== convId) return; // 迟到/切走：不重绘另一会话
-  const items = (r.data && (r.data.messages || r.data.items)) || [];
-  box.textContent = '';
+  if (gen !== historyGen || currentTarget == null || currentTarget.kind !== 'dm' || currentTarget.conversationId !== convId) return; // 迟到/切走：不重绘另一会话
+  renderMessageItems((r.data && (r.data.messages || r.data.items)) || [], '');
+}
+function renderMessageItems(items, heading) {
+  const box = document.getElementById('messages');
+  box.textContent = heading;
   for (const m of items.slice().reverse()) {
     const d = document.createElement('div');
     d.className = 'msg';
@@ -305,7 +362,8 @@ async function loadMessages() {
     const body = document.createElement('div');
     body.className = 'body';
     const rawBody = m.body_json ?? m.body;
-    const bj = typeof rawBody === 'string' ? JSON.parse(rawBody) : (rawBody || {});
+    let bj;
+    try { bj = typeof rawBody === 'string' ? JSON.parse(rawBody) : (rawBody || {}); } catch (e) { bj = { text: String(rawBody ?? '') }; void e; }
     body.textContent = bj.text || '';
     d.appendChild(meta); d.appendChild(body);
     const atts = (m.attachments ?? m.attachmentSummaries) || [];
@@ -373,37 +431,63 @@ function renderChips() {
   });
 }
 
-// ---------- 发送（成功才清实际发送的内容；失败保留；同号重试） ----------
+// ---------- 发送（按实际提交信封清算；失败语义分明确拒绝/未知） ----------
 async function send(intent) {
   if (currentTarget == null) return;
   const t = currentTarget;
   const d = draftOf(t.key);
   const text = document.getElementById('send-text').value;
   if (text.trim().length === 0 && d.attachIds.length === 0) return;
-  const target = t.kind === 'dm'
-    ? { kind: 'dm', projectId: t.projectId, conversationId: t.conversationId }
-    : { kind: 'room_root', projectId: t.projectId, conversationId: t.conversationId, roomId: t.roomId };
+  const opKey = 'send:' + t.key + ':' + intent;
+  const pending = loadPendingOps()[opKey];
+  if (pending != null) {
+    // 结果未知的原操作未收口：先沿原信封重试恰一次（不与发送新草稿暗中混用——新草稿保留）。
+    feedLine('pending', '存在结果未知的发送——先重试原操作（原编号恰一次）；当前草稿保留');
+    try {
+      await cmdOnce(opKey, 'message.submit', pending.params);
+      settleDraft(t.key, pending.params);
+      await loadMessages();
+      return;
+    } catch (e) { showErr(e); return; }
+  }
+  const target = currentThread != null && t.kind === 'room'
+    ? { kind: 'thread', projectId: t.projectId, conversationId: t.conversationId, threadId: currentThread }
+    : t.kind === 'dm'
+      ? { kind: 'dm', projectId: t.projectId, conversationId: t.conversationId }
+      : { kind: 'room_root', projectId: t.projectId, conversationId: t.conversationId, roomId: t.roomId };
   const params = { target, body: text, intent, mentions: [] };
   if (d.attachIds.length > 0) params.attachmentRefs = [...d.attachIds];
   try {
-    await cmdOnce('send:' + t.key + ':' + intent, 'message.submit', params);
-    // 成功才清实际发送的正文与 refs（图片门拒绝/网络失败保留草稿）。
-    d.text = '';
-    d.attachIds = [];
-    d.attachNames = [];
-    if (currentTarget != null && currentTarget.key === t.key) { document.getElementById('send-text').value = ''; renderChips(); }
-    document.getElementById('attach-name').textContent = '';
+    await cmdOnce(opKey, 'message.submit', params);
+    settleDraft(t.key, params); // 按实际提交的信封清算（不是「全清」）
     await loadMessages();
   } catch (e) {
-    if (e.code === 'IMAGE_INPUT_UNVERIFIED') feedLine('gate', '图片输入能力未认证——请去掉图片附件或选「仅记录」（草稿与附件已保留）');
+    if (e.code === 'IMAGE_INPUT_UNVERIFIED') feedLine('gate', '图片输入能力未认证——请去掉图片附件或选「仅记录」（草稿与附件已保留，修正后可重发）');
     else showErr(e);
   }
+}
+/** 按实际提交信封清算（第三十三轮四）：只移除已发送 refs；正文被修改则保留；B 的上传不受 A 清算影响。 */
+function settleDraft(targetKey, submittedParams) {
+  const d = draftOf(targetKey);
+  const sentText = String((submittedParams && submittedParams.body) || '');
+  const sentRefs = new Set((submittedParams && submittedParams.attachmentRefs) || []);
+  if (d.text === sentText) d.text = ''; // 发送等待期间被修改的正文保留
+  const keepIds = [];
+  const keepNames = [];
+  d.attachIds.forEach((id, i) => { if (!sentRefs.has(id)) { keepIds.push(id); keepNames.push(d.attachNames[i]); } });
+  d.attachIds = keepIds;
+  d.attachNames = keepNames;
+  if (currentTarget != null && currentTarget.key === targetKey) {
+    document.getElementById('send-text').value = d.text;
+    renderChips();
+  }
+  if (keepIds.length === 0) document.getElementById('attach-name').textContent = '';
 }
 document.getElementById('send-btn').onclick = () => void send('default');
 document.getElementById('record-btn').onclick = () => void send('record_only');
 document.getElementById('send-text').oninput = (ev) => { if (currentTarget != null) draftOf(currentTarget.key).text = ev.target.value; };
 
-// ---------- 任务（房间看板+DM 执行态合并；状态事件驱动刷新） ----------
+// ---------- 任务（房间看板+DM 执行态合并；状态事件驱动刷新；操作键绑版本） ----------
 async function refreshTasks() {
   if (revoked) return;
   const box = document.getElementById('tasks');
@@ -421,11 +505,12 @@ async function refreshTasks() {
           const stop = document.createElement('button');
           stop.textContent = '停止';
           stop.disabled = c.runId == null;
-          stop.onclick = () => cmdOnce('stop:' + c.taskId, 'task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration }).then(() => refreshTasks()).catch(showErr);
+          // 操作键绑 run/停止代次（第三十三轮四）：旧失败操作不劫持新版本动作。
+          stop.onclick = () => cmdOnce('stop:' + c.taskId + ':' + c.runId + ':' + c.stopGeneration, 'task.stop', { taskId: c.taskId, targetRunId: c.runId, expectedStopGeneration: c.stopGeneration }).then(() => refreshTasks()).catch(showErr);
           const accept = document.createElement('button');
           accept.textContent = '验收通过';
           accept.disabled = c.pendingDelivery == null;
-          accept.onclick = () => cmdOnce('accept:' + c.taskId, 'task.review', { taskId: c.taskId, decision: 'accept', deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash }).then(() => refreshTasks()).catch(showErr);
+          accept.onclick = () => cmdOnce('accept:' + c.taskId + ':' + (c.pendingDelivery ? c.pendingDelivery.deliveryId + ':' + c.pendingDelivery.revision + ':' + c.pendingDelivery.manifestHash : ''), 'task.review', { taskId: c.taskId, decision: 'accept', deliveryId: c.pendingDelivery.deliveryId, deliveryRevision: c.pendingDelivery.revision, manifestHash: c.pendingDelivery.manifestHash }).then(() => refreshTasks()).catch(showErr);
           d.appendChild(stop); d.appendChild(accept);
           box.appendChild(d);
         }
@@ -439,7 +524,7 @@ async function refreshTasks() {
       const stop = document.createElement('button');
       stop.textContent = '停止';
       stop.disabled = c.activeRunId == null;
-      stop.onclick = () => cmdOnce('stopdm:' + c.activeTaskId, 'task.stop', { taskId: c.activeTaskId, targetRunId: c.activeRunId, expectedStopGeneration: c.activeStopGeneration }).then(() => refreshTasks()).catch((e) => { window.__lastStopError = e.code + ': ' + e.message; showErr(e); });
+      stop.onclick = () => cmdOnce('stopdm:' + c.activeTaskId + ':' + c.activeRunId + ':' + c.activeStopGeneration, 'task.stop', { taskId: c.activeTaskId, targetRunId: c.activeRunId, expectedStopGeneration: c.activeStopGeneration }).then(() => refreshTasks()).catch((e) => { window.__lastStopError = e.code + ': ' + e.message; showErr(e); });
       d.appendChild(stop);
       box.appendChild(d);
     }
@@ -450,7 +535,7 @@ async function refreshTasks() {
       d.textContent = '[私信 ' + (c.peerDisplayName || String(c.conversationId).slice(0, 8)) + '] 待验收交付 v' + c.pendingReview.revision;
       const accept = document.createElement('button');
       accept.textContent = '验收通过';
-      accept.onclick = () => cmdOnce('acceptdm:' + c.pendingReview.taskId, 'task.review', { taskId: c.pendingReview.taskId, decision: 'accept', deliveryId: c.pendingReview.deliveryId, deliveryRevision: c.pendingReview.revision, manifestHash: c.pendingReview.manifestHash }).then(() => refreshTasks()).catch(showErr);
+      accept.onclick = () => cmdOnce('acceptdm:' + c.pendingReview.taskId + ':' + c.pendingReview.deliveryId + ':' + c.pendingReview.revision + ':' + c.pendingReview.manifestHash, 'task.review', { taskId: c.pendingReview.taskId, decision: 'accept', deliveryId: c.pendingReview.deliveryId, deliveryRevision: c.pendingReview.revision, manifestHash: c.pendingReview.manifestHash }).then(() => refreshTasks()).catch(showErr);
       d.appendChild(accept);
       box.appendChild(d);
     }
@@ -494,7 +579,7 @@ document.getElementById('export-md').onclick = () => void runExport('md');
 document.getElementById('export-html').onclick = () => void runExport('html');
 document.getElementById('export-docx').onclick = () => void runExport('docx');
 
-// ---------- WSS 事件流（持久游标+快照恢复+去重+自动重连） ----------
+// ---------- WSS 事件流（持久游标+快照恢复+订阅恢复+去重+有界退避重连） ----------
 function feedLine(kind, text) {
   const f = document.getElementById('feed');
   const d = document.createElement('div');
@@ -502,15 +587,60 @@ function feedLine(kind, text) {
   f.insertBefore(d, f.firstChild);
   while (f.children.length > 60) f.removeChild(f.lastChild);
 }
+/** 恢复全部项目订阅并等确认（第三十三轮三：快照后必须恢复订阅——否则新事件不再经 WSS 到达）。 */
+function subscribeAll() {
+  return new Promise((resolve) => {
+    if (ws == null || ws.readyState !== 1 || targets.length === 0) { resolve(0); return; }
+    const seenP = new Set();
+    const pids = [];
+    for (const t of targets) { const pid = t.projectId; if (pid && !seenP.has(pid)) { seenP.add(pid); pids.push(pid); } }
+    let acked = 0;
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(acked); } };
+    const onMsg = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { void e; return; }
+      if ((m.type === 'subscribed' || m.type === 'cursor-stale') && m.projectId != null && seenP.has(m.projectId)) {
+        acked += 1;
+        if (acked >= pids.length) { cleanup(); finish(); }
+      }
+    };
+    const cleanup = () => { if (ws != null) ws.removeEventListener('message', onMsg); };
+    ws.addEventListener('message', onMsg);
+    for (const pid of pids) ws.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
+    setTimeout(() => { cleanup(); finish(); }, 8000); // 有界等待（全部确认或 8s 截止）
+  });
+}
+/**
+ * cursor-stale 同范围快照恢复（第三十三轮三收口）：
+ * - **失败保留旧游标与待恢复状态**（不 saveLastSeq、不宣称成功）——有界退避重试；
+ * - 成功：恢复**相同范围**的会话/任务事实（refreshTargets+refreshTasks——不只列 Activity 前 80 条），
+ *   保存新游标，**恢复订阅并等确认**，标记 recovered——新事件继续经 WSS 到达。
+ */
 async function snapshotFromStale(fromSeq) {
+  if (snapshotState === 'recovered') return;
+  snapshotState = 'pending';
+  window.__cursorState = 'pending';
   const r = await cmd('activity.list', { scope: 'all', limit: 80 }).catch(() => null);
-  const items = (r && r.data && r.data.items) || [];
+  if (r == null || r.ok === false) {
+    // 快照失败：旧游标保留、待恢复状态保留（不冒充成功）——有界退避重试。
+    snapshotRetry += 1;
+    feedLine('snapshot-pending', '快照拉取失败（第 ' + snapshotRetry + ' 次）——游标保持 ' + lastSeq + '，稍后重试');
+    if (snapshotRetry <= 10) setTimeout(() => { void snapshotFromStale(fromSeq).catch(() => {}); }, Math.min(2000 * snapshotRetry, 15_000));
+    return;
+  }
+  const items = (r.data && r.data.items) || [];
   for (const it of items.slice().reverse()) {
     if (!eventsSeen.has(it.eventId)) { eventsSeen.add(it.eventId); feedLine('快照', it.kindLabel + ' · ' + (it.projectName || '') + ' seq=' + (it.seq ?? '?')); }
   }
   saveSeen();
+  await refreshTargets(false).catch(() => {});
+  await refreshTasks().catch(() => {});
   saveLastSeq(fromSeq);
-  feedLine('snapshot', '游标过期——已拉同范围快照 ' + items.length + ' 条，新事件从 ' + fromSeq + ' 续');
+  const acked = await subscribeAll(); // 快照后恢复订阅（等确认——新事件继续经 WSS 到达）
+  snapshotRetry = 0;
+  snapshotState = 'recovered';
+  window.__cursorState = 'recovered';
+  feedLine('snapshot-recovered', '游标过期——同范围快照 ' + items.length + ' 条已恢复（会话+任务刷新），订阅已重建（确认 ' + acked + ' 项），新事件从 ' + fromSeq + ' 经事件流续');
 }
 async function connectEvents() {
   if (revoked) return;
@@ -527,16 +657,13 @@ async function connectEvents() {
         saveSeen();
         saveLastSeq(Math.max(lastSeq || 0, m.seq));
         feedLine(m.kind, (m.projectId || '') + ' seq=' + m.seq);
-        if (m.kind === 'message.submitted' || m.kind === 'message.recorded') void loadMessages().catch(() => {});
+        if (m.kind === 'message.submitted' || m.kind === 'message.recorded' || m.kind === 'thread.replyAdded') void loadMessages().catch(() => {});
         if (TASK_EVENT_KINDS.has(m.kind)) void refreshTasks().catch(() => {});
       } else if (m.type === 'authenticated') {
         wsRetry = 0; // 重连成功——重试计数重置
         if (m.fromSeq != null) saveLastSeq(Math.max(lastSeq || 0, m.fromSeq));
         feedLine('connected', 'from seq=' + m.fromSeq + (m.resume ? '（续传）' : ''));
-        if (ws && ws.readyState === 1) {
-          const seenP = new Set();
-          for (const t2 of targets) { const pid = t2.projectId; if (pid && !seenP.has(pid)) { seenP.add(pid); ws.send(JSON.stringify({ type: 'subscribe', projectId: pid })); } }
-        }
+        void subscribeAll();
       } else if (m.type === 'cursor-stale') { void snapshotFromStale(m.fromSeq).catch(() => {}); }
     };
     ws.onclose = (ev) => {
@@ -544,7 +671,12 @@ async function connectEvents() {
       feedLine('disconnected', '事件流断开 code=' + ev.code + '（服务器任务不受影响）——重连中');
       if (wsRetry < 30) { wsRetry += 1; setTimeout(() => void connectEvents(), Math.min(2000 * wsRetry, 15_000)); }
     };
-  } catch (e) { if (!revoked) feedLine('error', e.message); }
+  } catch (e) {
+    // 取票/建连失败（断网等）：持续有界退避恢复（第三十三轮三——不只 onclose 一次）。
+    if (revoked) return;
+    feedLine('error', '事件流建立失败：' + e.message + '——重试中');
+    if (wsRetry < 30) { wsRetry += 1; setTimeout(() => void connectEvents(), Math.min(2000 * wsRetry, 15_000)); }
+  }
 }
 
 function showErr(e) { feedLine('error', e.message); console.error(e); }
