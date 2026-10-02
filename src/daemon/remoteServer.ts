@@ -1,32 +1,41 @@
 /**
- * DEV-25 远程访问服务端（第三十一轮三/四建；第三十二轮一/二按定位缺口重写）。
- * 第三十二轮修复与合同补齐：
- * - **WSS 用成熟库（ws）承接握手与帧协议**：掩码/分片/UTF-8 边界/背压由库处理；应用层补
- *   认证前小消息上限（maxPayload 64KB）、完整消息结构验证（null/数组/错误类型只关该连接
- *   ——daemon 与其他客户端继续正常）、订阅数量上限、慢客户端（bufferedAmount 超限关闭）；
- * - **票据绑定完整**：device+origin（消费时比对——含「合法 Origin A 签发、合法 Origin B
- *   使用」拒绝）+会话 token 摘要与有效期+授权代次（authEpoch——吊销即全部票据/连接失效）；
- *   连接保存会话有效期，到期关闭→客户端换新 token→新票据重连；
- * - **事件归属**：缺 conversation_id 时沿 task/thread 真实归属解析（解析不出=不推——
- *   fail-closed 不自动视为公开）；**游标按订阅门控**（未订阅项目的事件不推进 nextSeq——
- *   订阅后仍可收到，不丢待续传事件）；
- * - **cmd 吊销重查（POST 路由）**：大请求体读取/解析完成后、派发前重查 token 与设备吊销（读取期间
- *   吊销不放过）；**授权运行中的任务不受吊销影响**——吊销只断通道，不冒充停止；
- * - **导出下载**：重查导出目标的 audience（manifest.conversationId→DM=本人参与）+实根
- *   （realpath）+逐文件 sha256 对 manifest 完整性核验；文件数/总量超限**明确 413**（不再
- *   walk 静默截断）；异步读取+fflate 异步 zip（重活不阻塞 daemon 停止与其他命令）；
- * - **审计**：dispatch 携带服务端构造的 remoteAudit（deviceId+authEpoch）→remote_audit_log
- *   （迁移 039）；业务作者恒为设备代表的本机用户；同 commandId 幂等语义不变；
- * - currentAddress 按实际监听事实返回（0.0.0.0 时给 LAN 地址）；stop 清运行态（停用不再
- *   显示运行中）。
+ * DEV-25 远程访问服务端（第三十一轮三/四建；第三十二轮重写；第三十三轮按定位缺口收口）。
+ * 第三十三轮修复与合同补齐：
+ * - **设备级授权代次（迁移 040 remote_devices.auth_epoch）**：吊销 A 只递增 A 的代次并撤销
+ *   A 的 token/票据/活连接——**B 的现有 token/票据/WS 不受影响**（第三十二轮全局 authEpoch
+ *   会把 B 一并 401——多设备互相误伤）。checkToken/票据消费按设备行核对 revoked_at+auth_epoch；
+ * - **remoteGate 共享命令门禁**：dispatch 收到服务端构造的可信上下文（deviceId+deviceEpoch+
+ *   gate 闭包）——命令面在**进入时**与**业务提交前**（commands.ts run() 边界）重查设备/会话
+ *   有效性与代次；异步工作（附件解析/导出）完成后提交前也走同一门禁。吊销≠停止——已授权
+ *   运行的任务按正式停止合同处理；
+ * - **WSS 每地址未认证限额**（WS_UNAUTH_PER_ADDR=2/地址+全局 32）：handleUpgrade 按真实
+ *   来源地址计数（第三十二轮取 addr 后 void 掉只查全局——限额形同虚设）；
+ * - **有界关闭收拢**：closeConn 发起关闭后宽限（默认 3s）内未收到关闭握手→terminate 强杀
+ *   并核实释放；连接从 conns 移除发生在**真正关闭后**（不再「先移除再 close 就当已退出」）；
+ *   daemon.stop 有界等待全部连接收拢后强制清场；
+ * - **事件泵按项目游标（projNext latch）**：每连接每项目独立水位，SQL 按订阅项目过滤——
+ *   **大量未订阅项目的事件不再阻塞已订阅项目**（第三十二轮全局 LIMIT 500 先取再跳过：前 500
+ *   条属未订阅 P1 时已订阅 P2 永远发不出）。迟后订阅从该项目水位续发；积压超续传窗口→
+ *   cursor-stale（客户端拉同范围快照）；
+ * - **导出下载**：主文件 sha256 核验可达（不再 bytes 后 continue 跳过）；**单次受控读取**的
+ *   已验证字节直接进 ZIP（不再句柄校验后再 readFile 重读——ZIP 字节=核验字节）；**资产额度与
+ *   必要元文件分离**（manifest.files 资产 ≤200；index/manifest 不占额度——合法 200 件附件+
+ *   元文件完整下载，201 件明确 413）；发送前重查下载权限；
+ * - **进程内自检（runSelfcheck）**：隔离验收模式（ZS_REMOTE_SELFCHECK=1——双机包启动器注入，
+ *   正式入口不带）下由可信本机 UI 触发：创建码→错码 401（核对 fail_count 递增）→伪造
+ *   Host/Origin 403→无 token 401→正码配对→session→同 commandId 恰一次（replayed=true+
+ *   remote_audit_log 本次设备/命令号/成败/重放事实核对）→自清理吊销。**明文码只在进程内使用、
+ *   结束失效，不落任何存储**；结果文件不含凭据。
+ * 第三十二轮既有合同保留：ws 库承接握手/帧（maxPayload 64KB、结构验证只关该连接）、票据完整
+ * 绑定（device+origin 消费比对+会话有效期+设备代次）、cmd 吊销重查、currentAddress 实际监听事实。
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import * as https from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { networkInterfaces } from 'node:os';
-import { readdirSync, readFileSync, statSync, realpathSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, realpathSync, writeFileSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
-import { createHash as nodeCreateHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { zip } from 'fflate';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
@@ -155,11 +164,23 @@ export function revokeDeviceInDb(db: ZhongshuoDatabase, deviceId: string, now: n
 }
 
 // ---------- 服务端 ----------
-/** 远程通道保留给本机可信入口的方法（配对码创建/服务配置/吊销/关停——R11 §1/§3）。 */
-export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.pairing.selfcheckExport', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
+/** 远程通道保留给本机可信入口的方法（配对码创建/服务配置/吊销/关停/隔离自检——R11 §1/§3）。 */
+export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.pairing.selfcheck', 'remote.pairing.selfcheckExport', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
 
-/** 服务端构造的远程调用上下文（审计用——业务作者仍为 localUserId，不信客户端自报）。 */
-export interface RemoteCallContext { deviceId: string; authEpoch: number }
+export type RemoteGateOutcome = { ok: true } | { ok: false; code: string; message: string };
+
+/**
+ * 服务端构造的远程调用上下文（第三十三轮二：从「事后审计」升级为**共享命令门禁**）：
+ * - deviceId/deviceEpoch：可信设备身份与**设备级**授权代次（不信客户端自报）；
+ * - gate：进入命令面与业务提交前（commands.ts run() 边界）重查设备吊销/代次/会话有效性——
+ *   异步工作（附件解析、导出）完成后提交前也走同一门禁。
+ * 业务作者恒为设备代表的本机用户（localUserId）——不影响幂等 scope/payloadHash。
+ */
+export interface RemoteCallContext {
+  deviceId: string;
+  deviceEpoch: number;
+  gate: () => RemoteGateOutcome;
+}
 
 export interface RemoteServerDeps {
   db: ZhongshuoDatabase;
@@ -170,36 +191,42 @@ export interface RemoteServerDeps {
   log?: (line: string) => void;
   now?: () => number;
   /** 测试钩子：时钟与窗口。 */
-  testing?: { tokenTtlMs?: number; ticketTtlMs?: number; authWindowMs?: number; pumpMs?: number; resumeWindow?: number; perIpPerMin?: number; globalPerMin?: number; identity?: RemoteServerIdentity };
+  testing?: { tokenTtlMs?: number; ticketTtlMs?: number; authWindowMs?: number; pumpMs?: number; resumeWindow?: number; perIpPerMin?: number; globalPerMin?: number; identity?: RemoteServerIdentity; closeGraceMs?: number; stopDeadlineMs?: number; unauthPerAddr?: number; unauthGlobal?: number };
 }
 
-interface TokenEntry { deviceId: string; expiresAt: number; authEpoch: number }
-/** 票据完整绑定（第三十二轮二）：设备+签发来源 Origin+会话 token 摘要+会话有效期+授权代次。 */
-interface TicketEntry { deviceId: string; origin: string; sessionTokenHash: string; sessionExpiresAt: number; authEpoch: number; expiresAt: number }
+interface TokenEntry { deviceId: string; expiresAt: number; deviceEpoch: number }
+/** 票据完整绑定：设备+签发来源 Origin（消费比对）+会话 token 摘要+会话有效期+**设备级**授权代次。 */
+interface TicketEntry { deviceId: string; origin: string; sessionTokenHash: string; sessionExpiresAt: number; deviceEpoch: number; expiresAt: number }
 interface WsConn {
   ws: WsSocket;
+  addr: string;
   origin: string;
   authed: boolean;
   deviceId: string | null;
   sessionExpiresAt: number;
   subs: Set<string>;
-  nextSeq: number;
+  /** 认证基线（全局 lastSeq/current）——迟后订阅的项目水位默认从此起。 */
+  authBase: number;
+  /** 每项目投递水位（latch 只前进；未订阅项目不推进——订阅后仍可收到）。 */
+  projNext: Map<string, number>;
   closed: boolean;
+  closing: boolean;
   authTimer: NodeJS.Timeout | null;
   sessionTimer: NodeJS.Timeout | null;
+  closeTimer: NodeJS.Timeout | null;
 }
 
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-void WS_GUID; // 握手由 ws 库承担（保留常量作协议出处标记）
 const BODY_CAP_CMD = 48 * 1024 * 1024; // /cmd 承载 base64 附件（图片上限 ~27MB base64）
 const BODY_CAP_SMALL = 8 * 1024;
-const EXPORT_MAX_FILES = 200;
+const EXPORT_MAX_ASSETS = 200; // 资产额度（manifest.files——必要元文件 index/manifest 不占）
 const EXPORT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 const WS_MAX_PAYLOAD = 64 * 1024; // 认证/订阅小消息上限（完整消息大小——ws maxPayload）
 const WS_MAX_SUBS = 200;
 const WS_SLOW_CLIENT_BYTES = 8 * 1024 * 1024; // 发送缓冲积压（慢客户端）——超限关闭
 const WS_UNAUTH_PER_ADDR = 2;
 const WS_UNAUTH_GLOBAL = 32;
+const CLOSE_GRACE_MS = 3000;
+const STOP_DEADLINE_MS = 5000;
 
 export class RemoteAccessServer {
   private readonly deps: RemoteServerDeps;
@@ -215,8 +242,6 @@ export class RemoteAccessServer {
   private boundPort = 0;
   private boundHost = '';
   private stopped = false;
-  /** 授权代次：吊销任一设备即 +1——票据/连接按代次失效（跨设备瞬时收口）。 */
-  private authEpoch = 0;
   private readonly now: () => number;
 
   constructor(deps: RemoteServerDeps) {
@@ -232,6 +257,11 @@ export class RemoteAccessServer {
 
   private maxEventSeq(): number {
     const r = this.deps.db.prepare('SELECT max(seq) m FROM domain_events').get() as { m: number | null };
+    return r.m ?? 0;
+  }
+
+  private maxEventSeqFor(projectId: string): number {
+    const r = this.deps.db.prepare('SELECT max(seq) m FROM domain_events WHERE project_id = ?').get(projectId) as { m: number | null };
     return r.m ?? 0;
   }
 
@@ -313,8 +343,17 @@ export class RemoteAccessServer {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.pumpTimer != null) { clearInterval(this.pumpTimer); this.pumpTimer = null; }
-    for (const c of this.conns) this.closeConn(c, 1001, 'server-stop');
-    this.conns.clear();
+    // 有界收拢（第三十三轮二）：先礼后兵——发起关闭，宽限内等真正关闭；到点 terminate 清场。
+    for (const c of [...this.conns]) this.closeConn(c, 1001, 'server-stop');
+    const deadline = this.now() + (this.deps.testing?.stopDeadlineMs ?? STOP_DEADLINE_MS);
+    while (this.conns.size > 0 && this.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    for (const c of [...this.conns]) {
+      try { c.ws.terminate(); } catch { /* 尽力 */ }
+      this.cleanupConn(c);
+    }
     this.tokens.clear();
     this.tickets.clear();
     const s = this.server;
@@ -323,18 +362,43 @@ export class RemoteAccessServer {
     this.wss = null;
     this.boundPort = 0; // 运行态清零——currentAddress 不再把停用显示成运行中
     this.boundHost = '';
-    if (wss != null) { try { wss.close(); } catch { /* 尽力 */ } }
+    if (wss != null) { try { await new Promise<void>((r) => { const t = setTimeout(r, 1000); wss.close(() => { clearTimeout(t); r(); }); }); } catch { /* 尽力 */ } }
     if (s != null) {
       await new Promise<void>((r) => { s.close(() => r()); s.closeAllConnections?.(); });
     }
   }
 
-  /** 吊销联动：授权代次+1、清 token/票据/活连接（HTTP 侧每次请求再核 revoked_at）。 */
+  /**
+   * 吊销联动（第三十三轮二：**设备级**）：递增该设备 auth_epoch（迁移 040）+撤销该设备的
+   * token/票据/活连接。**其他设备不受影响**（B 的 token/票据/WS 继续有效）。
+   */
   invalidateDevice(deviceId: string): void {
-    this.authEpoch += 1;
+    try {
+      this.deps.db.prepare('UPDATE remote_devices SET auth_epoch = auth_epoch + 1 WHERE device_id = ?').run(deviceId);
+    } catch { /* 持久事实以 revoked_at 为准（吊销命令已写）——代次递增尽力 */ }
     for (const [t, e] of this.tokens) if (e.deviceId === deviceId) this.tokens.delete(t);
     for (const [t, e] of this.tickets) if (e.deviceId === deviceId) this.tickets.delete(t);
-    for (const c of this.conns) if (c.deviceId === deviceId) this.closeConn(c, 1008, 'revoked');
+    for (const c of [...this.conns]) if (c.deviceId === deviceId) this.closeConn(c, 1008, 'revoked');
+  }
+
+  /**
+   * 共享命令门禁（第三十三轮二）：设备/代次/会话实时有效性核对——dispatch 进入时与业务
+   * 提交前（commands.ts run() 边界）调用。吊销≠停止：已授权运行中的任务不在此收口。
+   */
+  deviceLive(deviceId: string, deviceEpoch: number, token?: string | null): RemoteGateOutcome {
+    // 设备事实优先（吊销/代次变化是最强信号——不被 token 联动删除掩盖成 TOKEN_INVALID）。
+    const dev = this.deps.db.prepare('SELECT revoked_at, auth_epoch FROM remote_devices WHERE device_id = ?').get(deviceId) as { revoked_at: number | null; auth_epoch: number } | undefined;
+    if (dev == null || dev.revoked_at != null) return { ok: false, code: 'DEVICE_REVOKED', message: '设备已吊销（提交前重查拒绝）' };
+    if (dev.auth_epoch !== deviceEpoch) return { ok: false, code: 'DEVICE_REVOKED', message: '设备授权代次变化（提交前重查拒绝）' };
+    if (token != null) {
+      const entry = this.tokens.get(token);
+      if (entry == null) return { ok: false, code: 'TOKEN_INVALID', message: 'accessToken 无效或已吊销（提交前重查）' };
+      if (entry.expiresAt <= this.now()) {
+        this.tokens.delete(token);
+        return { ok: false, code: 'TOKEN_EXPIRED', message: 'accessToken 已过期（提交前重查）——用 deviceCredential 换新' };
+      }
+    }
+    return { ok: true };
   }
 
   /** 实际监听事实（第三十二轮四：0.0.0.0 时给 LAN 地址；停用/未启动=null——不再恒回环）。 */
@@ -441,7 +505,7 @@ export class RemoteAccessServer {
     return h.slice(7).trim();
   }
 
-  private checkToken(token: string | null): { deviceId: string; expiresAt: number } | { status: number; code: string; message: string } {
+  private checkToken(token: string | null): { deviceId: string; expiresAt: number; deviceEpoch: number } | { status: number; code: string; message: string } {
     if (token == null || token.length === 0) return { status: 401, code: 'UNAUTHENTICATED', message: '缺少 Bearer accessToken' };
     const entry = this.tokens.get(token);
     if (entry == null) return { status: 401, code: 'TOKEN_INVALID', message: 'accessToken 无效或已吊销' };
@@ -449,16 +513,12 @@ export class RemoteAccessServer {
       this.tokens.delete(token);
       return { status: 401, code: 'TOKEN_EXPIRED', message: 'accessToken 已过期——用 deviceCredential 换新' };
     }
-    if (entry.authEpoch !== this.authEpoch) {
+    const live = this.deviceLive(entry.deviceId, entry.deviceEpoch);
+    if (!live.ok) {
       this.tokens.delete(token);
-      return { status: 401, code: 'DEVICE_REVOKED', message: '授权代次变化（设备已吊销）' };
+      return { status: 401, code: live.code === 'TOKEN_EXPIRED' ? 'TOKEN_EXPIRED' : 'DEVICE_REVOKED', message: live.message };
     }
-    const dev = this.deps.db.prepare('SELECT revoked_at FROM remote_devices WHERE device_id = ?').get(entry.deviceId) as { revoked_at: number | null } | undefined;
-    if (dev == null || dev.revoked_at != null) {
-      this.tokens.delete(token);
-      return { status: 401, code: 'DEVICE_REVOKED', message: '设备已吊销' };
-    }
-    return { deviceId: entry.deviceId, expiresAt: entry.expiresAt };
+    return { deviceId: entry.deviceId, expiresAt: entry.expiresAt, deviceEpoch: entry.deviceEpoch };
   }
 
   /** /session：Device 凭据 → 15 分钟 accessToken（仅内存；轮换不撤销 deviceCredential）。 */
@@ -474,12 +534,13 @@ export class RemoteAccessServer {
     // 环境可调（第三十二轮五：打包形态的页面级到期续换验证；生产默认 15 分钟）。
     const envTtl = Number(process.env.ZS_REMOTE_TOKEN_TTL_MS);
     const ttl = this.deps.testing?.tokenTtlMs ?? (Number.isFinite(envTtl) && envTtl > 0 ? envTtl : 15 * 60_000);
-    this.tokens.set(token, { deviceId: dev.deviceId, expiresAt: now + ttl, authEpoch: this.authEpoch });
+    const epoch = (this.deps.db.prepare('SELECT auth_epoch FROM remote_devices WHERE device_id = ?').get(dev.deviceId) as { auth_epoch: number }).auth_epoch;
+    this.tokens.set(token, { deviceId: dev.deviceId, expiresAt: now + ttl, deviceEpoch: epoch });
     this.log(`[remote] session ok device=${dev.deviceId}`);
     this.reply(res, 200, { ok: true, accessToken: token, tokenType: 'bearer', expiresIn: Math.floor(ttl / 1000) });
   }
 
-  /** /ws-ticket：Bearer token → 30 秒单次票据（完整绑定 device+origin+会话+授权代次）。 */
+  /** /ws-ticket：Bearer token → 30 秒单次票据（完整绑定 device+origin+会话+设备代次）。 */
   private async handleWsTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.originAllowed(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
     const token = this.bearer(req);
@@ -493,7 +554,7 @@ export class RemoteAccessServer {
       origin,
       sessionTokenHash: digestOf('session', String(token)),
       sessionExpiresAt: check.expiresAt,
-      authEpoch: this.authEpoch,
+      deviceEpoch: check.deviceEpoch,
       expiresAt: this.now() + ttl,
     });
     this.reply(res, 200, { ok: true, ticket, expiresIn: Math.floor(ttl / 1000) });
@@ -502,7 +563,8 @@ export class RemoteAccessServer {
   /** /cmd：Bearer token → 同一命令面（同权限/同幂等 scope；阻断本机保留方法）。 */
   private async handleCmd(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.originAllowed(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
-    const check = this.checkToken(this.bearer(req));
+    const token = this.bearer(req);
+    const check = this.checkToken(token);
     if ('status' in check) { this.reply(res, check.status, { ok: false, error: { code: check.code, message: check.message } }); return; }
     let body: { commandId?: string; method?: string; params?: unknown; expectedRevision?: number };
     try {
@@ -518,7 +580,7 @@ export class RemoteAccessServer {
     }
     // **吊销重查（第三十二轮一）**：大请求体（附件 base64）读取/解析期间设备可能被吊销——
     // 派发前重查 token/代次/吊销事实，不放过在途窗口。
-    const recheck = this.checkToken(this.bearer(req));
+    const recheck = this.checkToken(token);
     if ('status' in recheck) { this.reply(res, recheck.status, { ok: false, error: { code: recheck.code, message: recheck.message } }); return; }
     if (REMOTE_BLOCKED_METHODS.has(body.method)) {
       this.reply(res, 403, { ok: false, error: { code: 'REMOTE_METHOD_BLOCKED', message: `远程通道不开放：${body.method}（仅本机可信 UI）` } });
@@ -527,8 +589,13 @@ export class RemoteAccessServer {
     }
     const envelope: Record<string, unknown> = { protocolVersion: 1, commandId: body.commandId, method: body.method, params: body.params ?? {} };
     if (body.expectedRevision != null) envelope.expectedRevision = body.expectedRevision;
-    // CallerContext 由服务端构造（deviceId+authEpoch 审计）——业务作者恒 localUserId。
-    const result = await this.deps.dispatch(envelope, { deviceId: recheck.deviceId, authEpoch: this.authEpoch });
+    // CallerContext 由服务端构造（deviceId+deviceEpoch+gate 提交前重查闭包）——业务作者恒 localUserId。
+    const ctx: RemoteCallContext = {
+      deviceId: recheck.deviceId,
+      deviceEpoch: recheck.deviceEpoch,
+      gate: (): RemoteGateOutcome => this.deviceLive(recheck.deviceId, recheck.deviceEpoch, token),
+    };
+    const result = await this.deps.dispatch(envelope, ctx);
     this.log(`[remote] cmd device=${recheck.deviceId} method=${body.method} ok=${(result as { ok?: boolean }).ok === true}`);
     this.reply(res, 200, result);
   }
@@ -536,7 +603,8 @@ export class RemoteAccessServer {
   /** /export/:id/download：获准下载——audience 重查+实根+逐文件完整性+明确限额+异步 zip。 */
   private async handleExportDownload(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
     if (!this.originAllowedForDownload(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
-    const check = this.checkToken(this.bearer(req));
+    const token = this.bearer(req);
+    const check = this.checkToken(token);
     if ('status' in check) { this.reply(res, check.status, { ok: false, error: { code: check.code, message: check.message } }); return; }
     const parts = path.split('/');
     const exportId = parts[2] ?? '';
@@ -561,7 +629,7 @@ export class RemoteAccessServer {
     if (!realDir.startsWith(realBase + sepCh)) { this.reply(res, 400, { ok: false, error: { code: 'BAD_REQUEST', message: '路径含链接越界（realpath 拒绝）' } }); return; }
     // audience 重查（第三十二轮三）：manifest 记录导出目标会话——DM=本人参与才可下载；
     // 清单缺失/损坏=不可核验归属，明确拒绝（不冒充可下载）。
-    let manifest: { conversationId?: string; files?: Array<{ file: string; bytes: number; sha256: string }> };
+    let manifest: { conversationId?: string; files?: Array<{ file: string; bytes: number; sha256: string }>; primary?: { file: string; bytes: number; sha256: string } };
     try {
       manifest = JSON.parse(readFileSync(join(realDir, 'manifest.json'), 'utf8')) as typeof manifest;
     } catch {
@@ -578,11 +646,17 @@ export class RemoteAccessServer {
       const inDm = this.deps.db.prepare("SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'human' AND dp.principal_id = ?").get(conv.id, this.deps.localUserId);
       if (inDm == null) { this.reply(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: '导出目标属他人私信会话——拒绝下载' } }); return; }
     }
-    // 收集全量条目：超限**明确 413**（不 walk 静默截断）。
+    // **资产额度与必要元文件分离（第三十三轮五）**：额度=manifest.files（资产附件）；
+    // index.md/index.html/export.docx 与 manifest.json 是必要元文件，不占资产额度——
+    // 合法的 200 件资产导出（+正文+清单=202 个文件）完整下载，201 件资产明确拒绝。
+    if (manifest.files.length > EXPORT_MAX_ASSETS) {
+      this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出资产 ${manifest.files.length} 件超上限 ${EXPORT_MAX_ASSETS}——明确拒绝（正文/清单等必要元文件不占额度）` } });
+      return;
+    }
+    // 收集全量条目（不提前 break——超限在资产额度上明确拒绝，不静默截断）。
     const entries: Array<{ rel: string; abs: string; size: number }> = [];
     const walk = (d: string, rel: string): void => {
       for (const e of readdirSync(d, { withFileTypes: true })) {
-        if (entries.length > EXPORT_MAX_FILES) break;
         const abs = join(d, e.name);
         const r = rel.length === 0 ? e.name : `${rel}/${e.name}`;
         if (e.isDirectory()) walk(abs, r);
@@ -593,59 +667,58 @@ export class RemoteAccessServer {
       this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '导出目录不可读' } });
       return;
     }
-    if (entries.length > EXPORT_MAX_FILES) {
-      this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出文件数 ${entries.length} 超上限 ${EXPORT_MAX_FILES}——明确拒绝（不静默截断）` } });
-      return;
-    }
     if (entries.length === 0) { this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '导出目录为空' } }); return; }
     const total = entries.reduce((s2, e) => s2 + e.size, 0);
     if (total > EXPORT_MAX_TOTAL_BYTES) { this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出包 ${total}B 超下载上限` } }); return; }
-    // 逐文件完整性（第三十二轮三）：实际字节 sha256 对 manifest 对账（200 件附件+正文/manifest
-    // 全量核验——下载端不截掉合法内容）。异步读取+分块 hash（重活不阻塞 daemon 停止/其他命令）。
+    // 逐文件完整性（第三十三轮五重做）：**单次受控读取**——同一句柄读出的字节先 sha256 对
+    // manifest 核验，**核验通过的字节直接保留进 ZIP**（不再校验后另读一次——ZIP 使用的恒为
+    // 已验证字节）；主文件（index/export.docx）哈希核验同样执行（旧实现 bytes 后 continue
+    // 使主文件核验不可达——同长度篡改正文曾可过）。
     const manifestByName = new Map(manifest.files.map((f) => [f.file, f]));
-    const primaryName = typeof (manifest as { primary?: { file?: unknown } }).primary?.file === 'string' ? (manifest as { primary: { file: string } }).primary.file : null;
+    const primaryName = typeof manifest.primary?.file === 'string' ? manifest.primary.file : null;
+    const verified: Record<string, Uint8Array> = {};
     try {
       // 反向核对：清单所列资产文件必须都在目录中（缺失=不完整——200 件附件不得被截）。
       const entryRels = new Set(entries.map((e) => e.rel));
       for (const f of manifest.files) {
         if (!entryRels.has(f.file)) throw new Error(`清单文件缺失：${f.file}`);
       }
+      if (primaryName != null && !entryRels.has(primaryName)) throw new Error(`导出主文件缺失：${primaryName}`);
       for (const e of entries) {
-        if (e.rel === 'manifest.json') continue; // 清单自身由上述结构校验承载
-        if (e.rel === primaryName) {
-          const pm = (manifest as { primary?: { bytes?: number; sha256?: string } }).primary;
-          if (pm != null && (pm.bytes !== e.size || typeof pm.sha256 !== 'string')) throw new Error(`导出主文件与清单不符：${e.rel}`);
-          continue; // 主文件哈希核对见下（与资产同链）
-        }
-        const m = manifestByName.get(e.rel);
-        if (m == null || m.bytes !== e.size) throw new Error(`导出内容与清单不符：${e.rel}`);
-        const h = nodeCreateHash('sha256');
+        if (e.rel === 'manifest.json') { verified[e.rel] = new Uint8Array(await fsp.readFile(e.abs)); continue; } // 清单自身由结构校验承载
+        const expect = e.rel === primaryName ? manifest.primary : manifestByName.get(e.rel);
+        if (expect == null) throw new Error(`目录存在清单未列文件：${e.rel}`);
+        if (expect.bytes !== e.size) throw new Error(`导出内容与清单不符：${e.rel}`);
         const fh = await fsp.open(e.abs, 'r');
+        let bytes: Buffer;
         try {
-          const chunk = Buffer.allocUnsafe(1024 * 1024);
-          for (;;) {
-            const { bytesRead } = await fh.read(chunk, 0, chunk.length, null);
+          bytes = Buffer.allocUnsafe(e.size);
+          let off = 0;
+          for (; off < e.size;) {
+            const { bytesRead } = await fh.read(bytes, off, e.size - off, null);
             if (bytesRead <= 0) break;
-            h.update(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead));
+            off += bytesRead;
           }
+          if (off !== e.size) throw new Error(`读取不完整：${e.rel}`);
         } finally { await fh.close().catch(() => { /* 尽力 */ }); }
-        const expectHash = e.rel === primaryName ? ((manifest as { primary?: { sha256?: string } }).primary?.sha256 ?? null) : m.sha256;
-        if (expectHash == null || h.digest('hex') !== expectHash) throw new Error(`导出文件完整性不符：${e.rel}`);
+        if (createHash('sha256').update(bytes).digest('hex') !== expect.sha256) throw new Error(`导出文件完整性不符：${e.rel}`);
+        verified[e.rel] = new Uint8Array(bytes); // 已验证字节直接进 ZIP
       }
     } catch (error) {
       this.reply(res, 410, { ok: false, error: { code: 'EXPORT_TAMPERED', message: `导出完整性核验失败（${error instanceof Error ? error.message : String(error)}）——拒绝下载` } });
       return;
     }
-    const zippable: Record<string, Uint8Array> = {};
-    for (const e of entries) zippable[e.rel] = new Uint8Array(await fsp.readFile(e.abs));
+    // 发送前重查下载权限（第三十三轮五）：异步核验期间 token 可能到期/设备被吊销。
+    const preSend = this.checkToken(token);
+    if ('status' in preSend) { this.reply(res, preSend.status, { ok: false, error: { code: preSend.code, message: preSend.message } }); return; }
     // fflate 异步 zip（worker 池承接 deflate——不阻塞事件循环）。
     const zipBytes = await new Promise<Uint8Array>((resolveZ, rejectZ) => {
-      zip(zippable, { level: 1 }, (err, data) => { if (err != null) rejectZ(err); else resolveZ(data); });
+      zip(verified, { level: 1 }, (err, data) => { if (err != null) rejectZ(err); else resolveZ(data); });
     });
     const zipBuf = Buffer.from(zipBytes);
     res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(zipBuf.length), 'content-disposition': `attachment; filename="${exportId}.zip"`, 'cache-control': 'no-store' });
     res.end(zipBuf);
-    this.log(`[remote] export download device=${check.deviceId} export=${exportId} files=${entries.length} bytes=${zipBuf.length}`);
+    this.log(`[remote] export download device=${check.deviceId} export=${exportId} files=${entries.length} assets=${manifest.files.length} bytes=${zipBuf.length}`);
   }
 
   // ---------- WSS（ws 库承接握手/帧；应用层合同在此） ----------
@@ -653,27 +726,34 @@ export class RemoteAccessServer {
     const path = (req.url ?? '').split('?')[0];
     if (path !== '/events') { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
     if (!this.hostAllowed(req) || !this.originAllowed(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
-    // 未认证连接限额（第三十二轮二）：全局 32（Duplex 无类型化 remoteAddress——从流上读）。
-    const addr = (socket as unknown as { remoteAddress?: string }).remoteAddress ?? 'unknown';
-    void addr;
+    // 未认证连接限额（第三十三轮二实装）：**按真实来源地址** 2 个+全局 32——第三十二轮取
+    // addr 后 void 掉只查全局，每地址限额形同虚设。
+    const addr = (socket as unknown as { remoteAddress?: string }).remoteAddress ?? (req.socket.remoteAddress ?? 'unknown');
+    const perAddr = this.deps.testing?.unauthPerAddr ?? WS_UNAUTH_PER_ADDR;
+    const global = this.deps.testing?.unauthGlobal ?? WS_UNAUTH_GLOBAL;
+    const unauthAddr = [...this.conns].filter((c) => !c.authed && !c.closed && c.addr === addr).length;
     const unauthTotal = [...this.conns].filter((c) => !c.authed && !c.closed).length;
-    if (unauthTotal >= WS_UNAUTH_GLOBAL) { socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n'); socket.destroy(); return; }
+    if (unauthAddr >= perAddr || unauthTotal >= global) { socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n'); socket.destroy(); return; }
     // ws 库校验 Sec-WebSocket-Key/版本并完成 101 应答；maxPayload 承接帧上限。
-    this.wss?.handleUpgrade(req, socket, head, (ws) => this.onWsConnection(ws, req));
+    this.wss?.handleUpgrade(req, socket, head, (ws) => this.onWsConnection(ws, req, addr));
   }
 
-  private onWsConnection(ws: WsSocket, req: IncomingMessage): void {
+  private onWsConnection(ws: WsSocket, req: IncomingMessage, addr: string): void {
     const conn: WsConn = {
       ws,
+      addr,
       origin: String(req.headers.origin ?? '').toLowerCase(),
       authed: false,
       deviceId: null,
       sessionExpiresAt: 0,
       subs: new Set(),
-      nextSeq: 0,
+      authBase: 0,
+      projNext: new Map(),
       closed: false,
+      closing: false,
       authTimer: null,
       sessionTimer: null,
+      closeTimer: null,
     };
     this.conns.add(conn);
     conn.authTimer = setTimeout(() => {
@@ -695,17 +775,33 @@ export class RemoteAccessServer {
     ws.on('close', () => this.cleanupConn(conn));
   }
 
+  /** 真正的清理：只在连接关闭（或强杀核实）后释放——计数（每地址/全局）随之准确。 */
   private cleanupConn(conn: WsConn): void {
+    if (conn.closed) return;
     conn.closed = true;
     if (conn.authTimer != null) { clearTimeout(conn.authTimer); conn.authTimer = null; }
     if (conn.sessionTimer != null) { clearTimeout(conn.sessionTimer); conn.sessionTimer = null; }
+    if (conn.closeTimer != null) { clearTimeout(conn.closeTimer); conn.closeTimer = null; }
     this.conns.delete(conn);
   }
 
+  /**
+   * 有界关闭收拢（第三十三轮二）：发起 close 握手→宽限（默认 3s）内等对端回应；到点
+   * terminate 强杀并核实释放（客户端不回应关闭握手也能收口）。连接在真正关闭前保持在
+   * conns（限额/计数不被提前释放）。
+   */
   private closeConn(conn: WsConn, code: number, reason: string): void {
-    if (conn.closed) return;
-    this.cleanupConn(conn);
-    try { conn.ws.close(code, reason); } catch { /* 尽力 */ }
+    if (conn.closed || conn.closing) return;
+    conn.closing = true;
+    const grace = this.deps.testing?.closeGraceMs ?? CLOSE_GRACE_MS;
+    conn.closeTimer = setTimeout(() => {
+      try { conn.ws.terminate(); } catch { /* 尽力 */ }
+      this.cleanupConn(conn);
+    }, grace);
+    conn.closeTimer.unref?.();
+    try { conn.ws.close(code, reason); } catch {
+      try { conn.ws.terminate(); } catch { /* 尽力 */ }
+    }
   }
 
   private sendJson(conn: WsConn, obj: unknown): void {
@@ -739,12 +835,11 @@ export class RemoteAccessServer {
         return;
       }
       // **消费核对（第三十二轮二）**：origin 必须与签发一致（含「合法 A 签发→合法 B 使用」
-      // 拒绝——两 Origin 都在白名单也不行）；授权代次与会话有效期必须仍有效。
+      // 拒绝——两 Origin 都在白名单也不行）；设备代次与会话有效期必须仍有效。
       if (ticket.origin !== conn.origin) { this.closeConn(conn, 1008, 'ticket-origin-mismatch'); this.log('[remote] ws ticket origin mismatch'); return; }
-      if (ticket.authEpoch !== this.authEpoch) { this.closeConn(conn, 1008, 'auth-epoch-stale'); return; }
       if (ticket.sessionExpiresAt <= this.now()) { this.closeConn(conn, 1008, 'session-expired'); return; }
-      const dev = this.deps.db.prepare('SELECT revoked_at FROM remote_devices WHERE device_id = ?').get(ticket.deviceId) as { revoked_at: number | null } | undefined;
-      if (dev == null || dev.revoked_at != null) { this.closeConn(conn, 1008, 'device-revoked'); return; }
+      const live = this.deviceLive(ticket.deviceId, ticket.deviceEpoch);
+      if (!live.ok) { this.closeConn(conn, 1008, live.code === 'TOKEN_EXPIRED' ? 'session-expired' : 'device-revoked'); return; }
       conn.authed = true;
       conn.deviceId = ticket.deviceId;
       conn.sessionExpiresAt = ticket.sessionExpiresAt;
@@ -761,13 +856,13 @@ export class RemoteAccessServer {
       const lastSeq = typeof m.lastSeq === 'number' && Number.isInteger(m.lastSeq) && m.lastSeq >= 0 ? m.lastSeq : null;
       const current = this.maxEventSeq();
       if (lastSeq == null) {
-        conn.nextSeq = current;
+        conn.authBase = current;
         this.sendJson(conn, { type: 'authenticated', fromSeq: current });
       } else if (current - lastSeq > this.resumeWindow()) {
-        conn.nextSeq = current; // 旧游标走同范围快照——客户端经 HTTP activity.list 拉取。
+        conn.authBase = current; // 旧游标走同范围快照——客户端经 HTTP activity.list 拉取。
         this.sendJson(conn, { type: 'cursor-stale', fromSeq: current, hint: 'activity.list' });
       } else {
-        conn.nextSeq = lastSeq;
+        conn.authBase = lastSeq;
         this.sendJson(conn, { type: 'authenticated', resume: true, fromSeq: lastSeq });
       }
       this.log(`[remote] ws authed device=${ticket.deviceId}`);
@@ -779,6 +874,15 @@ export class RemoteAccessServer {
         return;
       }
       conn.subs.add(m.projectId);
+      // 迟后订阅（第三十三轮三）：项目水位从 latch/authBase 续发；积压超续传窗口→
+      // cursor-stale（客户端拉同范围快照），水位跳到当前——不无限重扫。
+      const cur = this.maxEventSeqFor(m.projectId);
+      const latch = conn.projNext.get(m.projectId) ?? conn.authBase;
+      if (cur - latch > this.resumeWindow()) {
+        conn.projNext.set(m.projectId, cur);
+        this.sendJson(conn, { type: 'cursor-stale', fromSeq: cur, projectId: m.projectId, hint: 'activity.list' });
+        return;
+      }
       this.sendJson(conn, { type: 'subscribed', projectId: m.projectId });
       return;
     }
@@ -788,36 +892,127 @@ export class RemoteAccessServer {
   }
 
   /**
-   * 事件泵：每连接按订阅+audience 重查推送（连接断开不伪报任务状态——只断流）。
-   * **游标按订阅门控（第三十二轮二）**：未订阅项目的事件不推进 nextSeq——订阅建立后仍可
-   * 收到（不丢待续传事件）；已订阅项目中被 audience 过滤的事件照常推进（客户端永远不该收到）。
-   * **归属解析**：缺 conversation_id 时沿 task_id/thread_id 反查真实会话；解析不出=不推
-   * （fail-closed——不自动视为公开）。
+   * 事件泵（第三十三轮三重做：**按项目游标**）：每连接每项目独立 latch，SQL 直接按订阅项目
+   * 过滤——大量未订阅项目的事件不再阻塞已订阅项目（旧实现全局 LIMIT 500 先取再按订阅跳过：
+   * 前 500 条属未订阅 P1 时，已订阅 P2 的事件永远发不出、游标永远不动）。
+   * 未订阅项目不推进任何水位——迟后订阅仍从 latch/authBase 收到；已订阅项目中被 audience
+   * 过滤的事件照常推进（客户端永远不该收到）。归属解析：缺 conversation_id 时沿
+   * task/thread 反查真实会话；解析不出=不推（fail-closed——不自动视为公开）。
    */
   private pumpEvents(): void {
     if (this.stopped) return;
-    const stmt = this.deps.db.prepare('SELECT seq, event_id, kind, created_at, project_id, conversation_id, thread_id, task_id, payload_json FROM domain_events WHERE seq > ? ORDER BY seq ASC LIMIT 500');
+    const stmt = this.deps.db.prepare('SELECT seq, event_id, kind, created_at, project_id, conversation_id, thread_id, task_id, payload_json FROM domain_events WHERE project_id = ? AND seq > ? ORDER BY seq ASC LIMIT 300');
     const convKindStmt = this.deps.db.prepare('SELECT kind FROM conversations WHERE id = ?');
     const dmOkStmt = this.deps.db.prepare(`SELECT 1 FROM conversations c JOIN dm_participants dp ON dp.conversation_id = c.id WHERE c.id = ? AND c.kind = 'dm' AND dp.principal_type = 'human' AND dp.principal_id = ?`);
     const taskConvStmt = this.deps.db.prepare('SELECT conversation_id FROM tasks WHERE id = ?');
     const threadConvStmt = this.deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id = ?');
     for (const conn of this.conns) {
       if (!conn.authed || conn.closed) continue;
-      const rows = stmt.all(conn.nextSeq) as Array<{ seq: number; event_id: string; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string }>;
-      if (rows.length === 0) continue;
-      for (const e of rows) {
-        if (!conn.subs.has(e.project_id)) continue; // 未订阅：不推也不推进游标
-        conn.nextSeq = Math.max(conn.nextSeq, e.seq);
-        const taskConv = e.task_id != null ? (taskConvStmt.get(e.task_id) as { conversation_id: string | null } | undefined) : undefined;
-        const threadConv = e.thread_id != null ? (threadConvStmt.get(e.thread_id) as { conversation_id: string | null } | undefined) : undefined;
-        const conversationId = e.conversation_id ?? taskConv?.conversation_id ?? threadConv?.conversation_id ?? null;
-        if (conversationId == null) continue; // 归属解析不出：不推（fail-closed）
-        const ck = convKindStmt.get(conversationId) as { kind: string } | undefined;
-        if (ck == null) continue; // 会话已不存在：不推
-        if (ck.kind === 'dm' && dmOkStmt.get(conversationId, this.deps.localUserId) == null) continue; // 他人 DM 不推送
-        this.sendJson(conn, { type: 'event', seq: e.seq, eventId: e.event_id, kind: e.kind, at: e.created_at, projectId: e.project_id, conversationId, threadId: e.thread_id, taskId: e.task_id, payload: safePayload(e.payload_json) });
+      for (const pid of conn.subs) {
+        const rows = stmt.all(pid, conn.projNext.get(pid) ?? conn.authBase) as Array<{ seq: number; event_id: string; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string }>;
+        for (const e of rows) {
+          conn.projNext.set(pid, Math.max(conn.projNext.get(pid) ?? conn.authBase, e.seq));
+          const taskConv = e.task_id != null ? (taskConvStmt.get(e.task_id) as { conversation_id: string | null } | undefined) : undefined;
+          const threadConv = e.thread_id != null ? (threadConvStmt.get(e.thread_id) as { conversation_id: string | null } | undefined) : undefined;
+          const conversationId = e.conversation_id ?? taskConv?.conversation_id ?? threadConv?.conversation_id ?? null;
+          if (conversationId == null) continue; // 归属解析不出：不推（fail-closed）
+          const ck = convKindStmt.get(conversationId) as { kind: string } | undefined;
+          if (ck == null) continue; // 会话已不存在：不推
+          if (ck.kind === 'dm' && dmOkStmt.get(conversationId, this.deps.localUserId) == null) continue; // 他人 DM 不推送
+          this.sendJson(conn, { type: 'event', seq: e.seq, eventId: e.event_id, kind: e.kind, at: e.created_at, projectId: e.project_id, conversationId, threadId: e.thread_id, taskId: e.task_id, payload: safePayload(e.payload_json) });
+        }
       }
     }
+  }
+
+  // ---------- 进程内自检（隔离验收模式——第三十三轮六） ----------
+  /**
+   * 机械负例自动化（仅 ZS_REMOTE_SELFCHECK=1 隔离验收模式；正式产品代码不提供该入口——
+   * commands 层 remote.pairing.selfcheck 门禁）：对自身 HTTPS 监听执行——错码 401（核对
+   * pairing 行 fail_count 递增——证明请求真实命中该行）、伪造 Host/Origin 403、无 token 401、
+   * 正码配对→session→同 commandId 恰一次（replayed=true）+ **remote_audit_log 本次设备/
+   * 命令号/成败/重放事实核对**→自检设备吊销清理（后续 /cmd 401）。
+   * **明文码只在进程内使用、结束即失效，不落任何存储**（第三十二轮 selfcheckExport 曾把
+   * 明文码写入 daemon_state——与 R11「只持久化加盐摘要」冲突，已废）。结果文件不含凭据。
+   */
+  async runSelfcheck(): Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }> {
+    if (this.server == null || this.identity == null || this.boundPort === 0) {
+      return { ok: false, items: [{ name: '前置：远程服务运行中', ok: false, detail: '未启用——先在 UI 启用远程访问' }], file: '' };
+    }
+    const port = this.boundPort;
+    const ca = '-----BEGIN CERTIFICATE-----\n' + readFileSync(join(this.deps.appDataDir, 'remote', 'identity.cer')).toString('base64').replace(/(.{64})/g, '$1\n') + '\n-----END CERTIFICATE-----\n';
+    const origin = `https://127.0.0.1:${port}`;
+    const host = `127.0.0.1:${port}`;
+    const items: Array<{ name: string; ok: boolean; detail: string }> = [];
+    const record = (name: string, ok: boolean, detail: string): void => { items.push({ name, ok, detail }); this.log(`[selfcheck] ${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
+    const post = (path: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; json: any }> => new Promise((resolveP) => {
+      const payload = JSON.stringify(body);
+      const req = https.request({ hostname: '127.0.0.1', port, path, method: 'POST', headers: { 'content-type': 'application/json', origin, host, ...headers }, ca, servername: 'localhost', rejectUnauthorized: true, timeout: 15_000 }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          let json: any = null;
+          try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { json = null; }
+          resolveP({ status: res.statusCode ?? 0, json });
+        });
+      });
+      req.on('error', () => resolveP({ status: -1, json: null }));
+      req.on('timeout', () => { req.destroy(); resolveP({ status: -2, json: null }); });
+      req.write(payload);
+      req.end();
+    });
+    // 1) 错码 401 + fail_count 递增（请求真实命中配对行——不是泛 401）。
+    const created = createPairingCode(this.deps.db, this.now(), {});
+    if (!created.ok) { record('创建自检配对码', false, created.error); return this.finishSelfcheck(items); }
+    const failsBefore = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
+    const wrong = await post('/pair', { pairingId: created.pairingId, code: 'WRONGWRONG', deviceName: 'selfcheck', clientNonce: 'sc-wrong' }, {});
+    const failsAfter = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
+    record('错码 → 401（配对行 fail_count 递增）', wrong.status === 401 && failsAfter === failsBefore + 1, `status=${wrong.status} fails=${failsBefore}->${failsAfter}`);
+    // 2) 伪造 Host / Origin / 无 token。
+    const badHost = await post('/pair', { pairingId: 'pair_none', code: 'AAAAAAAA', deviceName: 'x', clientNonce: 'sc-h' }, { host: 'evil.example:1' });
+    record('伪造 Host → 403', badHost.status === 403, 'status=' + badHost.status);
+    const badOrigin = await post('/pair', { pairingId: 'pair_none', code: 'AAAAAAAA', deviceName: 'x', clientNonce: 'sc-o' }, { origin: 'https://evil.example' });
+    record('伪造 Origin → 403', badOrigin.status === 403, 'status=' + badOrigin.status);
+    const noToken = await post('/cmd', { commandId: 'selfcheck-no-token', method: 'nav.preferences', params: { clientId: 'selfcheck-no-token' } }, {});
+    record('无 token /cmd → 401', noToken.status === 401, 'status=' + noToken.status);
+    // 3) 正码配对 → session → 同 commandId 恰一次 + 审计事实核对（本次设备/命令号/成败/重放）。
+    const paired = await post('/pair', { pairingId: created.pairingId, code: created.code, deviceName: 'selfcheck-throwaway', clientNonce: 'sc-ok' }, {});
+    if (paired.status !== 200 || paired.json?.ok !== true) {
+      record('正码配对', false, `status=${paired.status}`);
+      return this.finishSelfcheck(items);
+    }
+    const deviceId: string = paired.json.deviceId;
+    const credential: string = paired.json.deviceCredential;
+    const sess = await post('/session', {}, { authorization: 'Device ' + credential });
+    if (sess.status !== 200) {
+      record('session 建立', false, `status=${sess.status}`);
+      return this.finishSelfcheck(items);
+    }
+    const token: string = sess.json.accessToken;
+    const auth = { authorization: 'Bearer ' + token };
+    const commandId = 'selfcheck-once-' + randomUUID().slice(0, 8);
+    const navParams = { clientId: 'selfcheck-once', visibleProjectIds: [] };
+    const first = await post('/cmd', { commandId, method: 'nav.preferences', params: navParams }, auth);
+    const replay = await post('/cmd', { commandId, method: 'nav.preferences', params: navParams }, auth);
+    record('同 commandId 恰一次（replayed=true）', first.json?.ok === true && replay.json?.replayed === true, `first=${String(first.json?.ok)} replayed=${String(replay.json?.replayed)}`);
+    const auditRows = this.deps.db.prepare('SELECT ok, replayed FROM remote_audit_log WHERE device_id = ? AND command_id = ? ORDER BY id').all(deviceId, commandId) as Array<{ ok: number; replayed: number }>;
+    record('remote_audit_log 本次请求事实（设备+命令号+成败+重放）', auditRows.length === 2 && auditRows[0]!.ok === 1 && auditRows[0]!.replayed === 0 && auditRows[1]!.replayed === 1, `rows=${auditRows.length} facts=${JSON.stringify(auditRows)}`);
+    // 4) 自检设备清理：吊销后 /cmd 401。
+    revokeDeviceInDb(this.deps.db, deviceId, this.now());
+    this.invalidateDevice(deviceId);
+    const afterRevoke = await post('/cmd', { commandId: 'selfcheck-after-revoke', method: 'nav.preferences', params: { clientId: 'selfcheck-after-revoke' } }, auth);
+    record('自检设备吊销后 /cmd → 401（通道终态；运行中任务不受影响）', afterRevoke.status === 401, 'status=' + afterRevoke.status);
+    return this.finishSelfcheck(items);
+  }
+
+  private finishSelfcheck(items: Array<{ name: string; ok: boolean; detail: string }>): { ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string } {
+    // 明文码在 runSelfcheck 栈内已消费/失效；结果文件只含结论事实（无码/凭据/token）。
+    const report = { at: new Date().toISOString(), items, pass: items.filter((i) => i.ok).length, total: items.length };
+    const file = join(this.deps.appDataDir, 'selfcheck-latest.json');
+    try {
+      writeFileSync(file, JSON.stringify(report, null, 2), 'utf8');
+    } catch { /* 尽力——返回值仍带全量事实 */ }
+    return { ok: report.pass === report.total && report.total > 0, items, file };
   }
 }
 

@@ -261,10 +261,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       db: db!,
       localUserId,
       appDataDir: options.appDataDir,
-      // ctx=服务端构造的远程上下文（deviceId+authEpoch——审计独立留痕；业务作者仍 localUserId，
-      // 不信客户端自报；不影响幂等 scope/payloadHash——同 commandId 恰一次语义不变）。
-      dispatch: (envelope: unknown, ctx: { deviceId: string; authEpoch: number } | null): Promise<unknown> =>
-        dispatchDaemonCommand({ ...makeCommandDeps(), ...(ctx != null ? { remoteAudit: ctx } : {}) }, envelope),
+      // ctx=服务端构造的可信上下文（deviceId+deviceEpoch+gate 提交前重查闭包——第三十三轮二
+      // 从「事后审计」升级为共享命令门禁；业务作者仍 localUserId，不信客户端自报；不影响幂等
+      // scope/payloadHash——同 commandId 恰一次语义不变）。
+      dispatch: (envelope: unknown, ctx: { deviceId: string; deviceEpoch: number; gate: () => { ok: true } | { ok: false; code: string; message: string } } | null): Promise<unknown> =>
+        dispatchDaemonCommand({ ...makeCommandDeps(), ...(ctx != null ? { remoteAudit: { deviceId: ctx.deviceId, authEpoch: ctx.deviceEpoch }, remoteGate: ctx.gate } : {}) }, envelope),
       log: (line) => { process.stderr.write(`[zhongshuo-remote] ${line}
 `); },
     });
@@ -282,6 +283,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       stop: async () => { await remoteServer.stop().catch(() => { /* 尽力 */ }); },
       invalidateDevice: (deviceId: string) => remoteServer.invalidateDevice(deviceId),
       current: () => remoteServer.currentAddress(),
+      selfcheck: () => remoteServer.runSelfcheck(),
     };
     const makeCommandDeps = (): Parameters<typeof dispatchDaemonCommand>[0] => ({
       db: db!,

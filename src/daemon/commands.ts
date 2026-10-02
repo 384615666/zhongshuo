@@ -61,16 +61,25 @@ export interface DaemonCommandDeps {
    * remoteServer.REMOTE_BLOCKED_METHODS 拦截同名方法——「创建配对码仅本机可信 UI」。
    */
   /**
-   * 远程通道上下文（第三十二轮一）：由 remoteServer 服务端构造（deviceId+authEpoch），
-   * 桌面管道不注入。仅用于请求审计（remote_audit_log）——业务作者恒为 localUserId，
+   * 远程通道上下文（第三十二轮一）：由 remoteServer 服务端构造（deviceId+设备级代次），
+   * 桌面管道不注入。用于请求审计（remote_audit_log）——业务作者恒为 localUserId，
    * 不信任客户端自报身份；不影响幂等 scope/payloadHash。
    */
   remoteAudit?: { deviceId: string; authEpoch: number };
+  /**
+   * 远程门禁（第三十三轮二）：服务端构造的重查闭包（remoteServer.deviceLive——设备吊销/
+   * 设备级代次/会话有效性实时核对）。dispatch 进入时与**业务提交前**（run() 边界）各核对
+   * 一次——异步工作（附件解析/导出）完成后提交前同走此门禁。失败=明确拒绝（不提交）；
+   * 吊销≠停止（已授权运行的任务按正式停止合同处理）。
+   */
+  remoteGate?: () => { ok: true } | { ok: false; code: string; message: string };
   remoteControl?: {
     restart: (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => Promise<{ address: string; port: number; fingerprint: string } | { stopped: true }>;
     stop: () => Promise<void>;
     invalidateDevice: (deviceId: string) => void;
     current: () => { address: string; port: number; fingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string } | null;
+    /** 隔离验收模式自检（ZS_REMOTE_SELFCHECK=1——双机包启动器注入；正式入口不带）。 */
+    selfcheck?: () => Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }>;
   };
   /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
   appDataDir?: string;
@@ -577,6 +586,16 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
   const method0 = (envelope as { method?: unknown })?.method;
   const commandId0 = (envelope as { commandId?: unknown })?.commandId;
   const started = Date.now();
+  // 远程门禁·进入时（第三十三轮二）：请求体已读完→设备吊销/代次变化/会话失效→进命令面前拒绝。
+  if (deps.remoteGate != null) {
+    const gate = deps.remoteGate();
+    if (!gate.ok) {
+      if (typeof method0 === 'string' && typeof commandId0 === 'string') {
+        writeRemoteAudit(deps, method0, commandId0, false, false);
+      }
+      return { commandId: commandId0, ok: false, error: { code: gate.code, message: gate.message, retryable: false } };
+    }
+  }
   let outcome: unknown;
   try {
     outcome = await dispatchDaemonCommandInner(deps, envelope);
@@ -609,6 +628,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
   // replayGuard（第三十一轮一）：重放返回持久结果前执行的纯校验——旧回执不绕过当前
   // 权限变化（会话归档/audience 变化后重放同号同参请求=明确拒绝）。
   const run = <T>(handler: () => T, replayGuard?: () => void): { data: T; replayed: boolean } => {
+    // 远程门禁·业务提交前（第三十三轮二）：异步工作（附件解析/导出等）完成后、进幂等事务
+    // 提交前重查设备/代次/会话——「请求体已读完→解析暂停→吊销→提交拒绝」在此收口。
+    if (deps.remoteGate != null) {
+      const gate = deps.remoteGate();
+      if (!gate.ok) throw new DaemonCommandError(gate.code, gate.message);
+    }
     const outcome = runCommand<T>(deps.db, { idempotencyScope: scope, commandId: env.commandId, payloadHash, now: Date.now(), ...(replayGuard != null ? { replayGuard } : {}) }, handler);
     if (!outcome.ok) throw new DaemonCommandError(outcome.error.code, outcome.error.message);
     return { data: outcome.data, replayed: outcome.replayed };
@@ -2566,17 +2591,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
         return withCommandId({ ok: true, data: { pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt, address: cur?.address ?? null, fingerprint: cur?.fingerprint ?? null, note: '配对码 5 分钟内一次有效；地址与证书 SHA-256 指纹在设备端核对后完成信任（不降级 HTTP）' } });
       }
-      case 'remote.pairing.selfcheckExport': {
-        // 自检专用配对码（第三十二轮六；仅本机可信入口）：创建新码并写入 daemon_state
-        //（remote:selfcheck:pairing）——双机包 run-self-check.bat 从 sqlite 读取执行错码负例；
-        // 不经任何网络返回给客户端面。码明文只存本机 appData（与 UI 展示同敏感级）。
-        const cur = deps.remoteControl?.current() ?? null;
-        const created = createPairingCode(deps.db, Date.now(), {});
-        if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
-        deps.db.prepare(`INSERT INTO daemon_state (key, value, updated_at) VALUES ('remote:selfcheck:pairing', ?, ?)
-                         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-          .run(JSON.stringify({ pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt }), Date.now());
-        return withCommandId({ ok: true, data: { pairingId: created.pairingId, expiresAt: created.expiresAt, note: '已写入自检状态（run-self-check.bat 读取）——不用于真机配对' } });
+      case 'remote.pairing.selfcheck': {
+        // 进程内自检（第三十三轮六重做）：**仅隔离验收模式**（ZS_REMOTE_SELFCHECK=1——双机包
+        // 启动器注入；正式产品/桌面默认不带该变量=明确拒绝，辅助能力不进正式路径）。
+        // 在 remoteServer 进程内创建码→执行机械负例→核对审计事实→吊销清理自检设备：
+        // **明文码只在进程内使用、结束即失效，不落任何存储**（第三十二轮 selfcheckExport
+        // 曾把明文码写 daemon_state——与 R11「只持久化加盐摘要」冲突，已废）。结果不含凭据。
+        if (process.env.ZS_REMOTE_SELFCHECK !== '1') {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '自检辅助能力仅在隔离验收模式开放（双机包启动器注入——正式入口不带）');
+        }
+        if (deps.remoteControl?.selfcheck == null) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '自检未接线（本命令由 UI 宿主注入执行）');
+        const report = await deps.remoteControl.selfcheck();
+        return withCommandId({ ok: true, data: { ok: report.ok, pass: report.items.filter((i) => i.ok).length, total: report.items.length, items: report.items, resultsFile: report.file, note: '机械负例已在服务进程内执行（错码/伪造 Host/Origin/无 token/同号恰一次/审计核对/吊销清理）——结果文件不含任何凭据' } });
       }
       case 'remote.devices.list': {
         const devices = listDevices(deps.db);
