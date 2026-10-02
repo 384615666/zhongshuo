@@ -77,7 +77,9 @@ export interface DaemonCommandDeps {
     restart: (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => Promise<{ address: string; port: number; fingerprint: string } | { stopped: true }>;
     stop: () => Promise<void>;
     invalidateDevice: (deviceId: string) => void;
-    current: () => { address: string; port: number; fingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string } | null;
+    current: () => { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string; certIssuer: string } | null;
+    /** LAN 绑定自检（第三十六轮二）：服务机本机经实际 LAN IP 的 HTTPS 探测（区分本机绑定/TLS 与跨机防火墙两层）。 */
+    verifyLanBinding?: () => Promise<{ ok: boolean; checkedUrl: string; error: string | null }>;
     /** 隔离验收模式自检（ZS_REMOTE_SELFCHECK=1——双机包启动器注入；正式入口不带）。 */
     selfcheck?: () => Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }>;
   };
@@ -2567,9 +2569,25 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'remote.config.get': {
         // 远程配置读取（本机可信入口——remoteServer.REMOTE_BLOCKED_METHODS 在 HTTP 面拒绝）。
+        // 第三十六轮二：**实际监听/绑定事实**分层呈现——running/address 来自实际监听（非配置
+        // 保存成功）；LAN 模式附本机经实际 LAN IP 的 HTTPS 自检；仅本机模式明确提示其它设备
+        // 无法连接；证书呈现服务证书指纹+CA（信任根）指纹+Subject/Issuer（两层证书）。
         const cfg = readRemoteConfig(deps.db);
         const cur = deps.remoteControl?.current() ?? null;
-        return withCommandId({ ok: true, data: { ...cfg, ...(cur != null ? { running: true, address: cur.address, fingerprint: cur.fingerprint, lanAddresses: cur.lanAddresses, certNotAfter: cur.certNotAfter, certSubject: cur.certSubject } : { running: false }), lanIps: lanIps(), note: '默认仅本机回环；启用 LAN 需显式配置监听地址——HTTPS/WSS 强制' } });
+        const lanSelfCheck = cur != null && cfg.allowLan && deps.remoteControl?.verifyLanBinding != null
+          ? await deps.remoteControl.verifyLanBinding()
+          : null;
+        return withCommandId({ ok: true, data: {
+          ...cfg,
+          ...(cur != null
+            ? { running: true, address: cur.address, fingerprint: cur.fingerprint, caFingerprint: cur.caFingerprint, lanAddresses: cur.lanAddresses, certNotAfter: cur.certNotAfter, certSubject: cur.certSubject, certIssuer: cur.certIssuer }
+            : { running: false }),
+          ...(lanSelfCheck != null ? { lanSelfCheck } : {}),
+          lanIps: lanIps(),
+          note: cfg.allowLan
+            ? '局域网模式：核对实际监听地址与 LAN 自检；跨机不通时先取客户端具体错误码，再分层定位（证书信任/防火墙——见 README 排查段），不预判定性'
+            : '仅本机模式：仅 127.0.0.1 可访问——其它设备无法连接；需要客户端访问请切换局域网模式并启用',
+        } });
       }
       case 'remote.config.set': {
         // 远程配置写入+服务生命周期联动（entry 注入 remoteControl；测试直连=明确拒绝）。

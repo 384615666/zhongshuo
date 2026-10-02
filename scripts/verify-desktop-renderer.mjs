@@ -782,9 +782,16 @@ try {
       record('E18·重复验收拒绝（首次成功+二次已处理）', acc1 === true && String(acc2).includes('已处理'), `acc1=${acc1} acc2=${String(acc2).slice(0, 30)}`);
       // E18-8 跨项目深链：#task=项目 B 的任务→hashchange→项目切换到 B+线程打开。
       await page.evalJs(`location.hash = ${JSON.stringify(`task=${e18Seed.bTaskId}`)}`);
-      const crossErrText = await page.evalJs(`document.body.textContent.match(/深链无法定位[^"]{0,80}/)?.[0] ?? ''`);
-      await waitFor(async () => (await page.evalJs(`document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, `跨项目切换（页面错误=${String(crossErrText.value ?? '')}）`);
-      const bThread = await page.readStrict(`document.getElementById('thread-messages').textContent.length > 0`);
+      // 线程打开与项目切换是两个异步阶段——项目名到达后再等线程消息渲染（曾单次读取竞态假阴）。
+      await waitFor(async () => (await page.evalJs(`document.getElementById('project-name').textContent.includes(${JSON.stringify(e18Seed.bProjectName)})`)).value === true, 30_000, '跨项目切换');
+      let bThread = false;
+      try {
+        await waitFor(async () => (await page.evalJs(`document.getElementById('thread-messages').textContent.length > 0`)).value === true, 30_000, '跨项目线程打开');
+        bThread = true;
+      } catch (e) {
+        const dump = await page.readStrict(`JSON.stringify({ proj: document.getElementById('project-name').textContent.slice(0, 40), th: (document.getElementById('thread-messages')?.textContent ?? '').slice(0, 60), hash: location.hash })`).catch(() => 'dump-fail');
+        throw new Error(`跨项目线程未打开（state=${String(dump)}）：${e.message}`);
+      }
       record('E18·跨项目深链（来源项目聚焦+线程打开——不回退当前项目同号任务）', bThread === true, `bProject=${e18Seed.bProjectName}`);
       // E18-9 刷新（URL 目标保留）：reload→恢复后仍在 B 项目+线程。
       await page.evalJs(`location.reload()`);

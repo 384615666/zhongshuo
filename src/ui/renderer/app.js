@@ -3823,10 +3823,27 @@ async function renderRemoteSettings() {
       fp.textContent = `指纹 ${String(cfg.fingerprint ?? '')}`;
       fp.onclick = () => void navigator.clipboard.writeText(String(cfg.fingerprint ?? '')).then(() => showError('已复制完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
       row.append(addr, fp);
+      // 信任根（CA）指纹+服务证书签发者（第三十六轮一：两层证书——用户导入 ca.cer 时核对 CA 指纹）。
+      const caFp = document.createElement('button');
+      caFp.className = 'chip';
+      caFp.title = '点击复制信任根（CA）完整 SHA-256 指纹——客户端导入 ca.cer 时逐位核对';
+      caFp.textContent = `信任根指纹 ${String(cfg.caFingerprint ?? '')}`;
+      caFp.onclick = () => void navigator.clipboard.writeText(String(cfg.caFingerprint ?? '')).then(() => showError('已复制 CA 完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      row.append(caFp);
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `证书有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}${(cfg.lanAddresses ?? []).length > 0 ? ` · LAN 地址：${cfg.lanAddresses.join(' / ')}` : ''}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
+      meta.textContent = `证书 Subject=${cfg.certSubject ?? '?'} · Issuer=${cfg.certIssuer ?? '?'} · 有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}${(cfg.lanAddresses ?? []).length > 0 ? ` · LAN 地址：${cfg.lanAddresses.join(' / ')}` : ''}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
       row.append(meta);
+      // 分层核验（第三十六轮二）：仅本机明确提示；LAN 模式呈现本机经实际 LAN IP 的 HTTPS 自检。
+      const lanNote = document.createElement('div');
+      lanNote.className = 'meta';
+      if (cfg.allowLan) {
+        const sc = cfg.lanSelfCheck;
+        lanNote.textContent = sc == null ? 'LAN 自检未取得（服务运行中稍候刷新）' : (sc.ok ? `LAN 自检通过（${sc.checkedUrl}——本机经实际 LAN IP 的 HTTPS/TLS 可达）` : `LAN 自检失败：${sc.error}（本机绑定/TLS 层——先修本机，再查跨机防火墙；跨机问题需客户端具体错误码定位）`);
+      } else {
+        lanNote.textContent = '仅本机模式：仅 127.0.0.1 可访问——其它设备无法连接；需要客户端访问请切换「局域网」并启用';
+      }
+      row.append(lanNote);
     } else {
       row.textContent = `已停用（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
     }

@@ -32,7 +32,9 @@ const launcherLogs = []; // 自测启动原始输出快照（证据归档用—�
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
 const frozenDefault = join(repo, 'dist', 'desktop', 'vdr-frozen');
-const outRoot = join(repo, 'dist', 'desktop', 'dev25-dual-win');
+// 独立版本目录（第三十六轮四：不覆盖正在运行的旧包——ZS_DEV25_OUT/--out= 覆盖默认名）。
+const outArg = process.argv.find((a) => a.startsWith('--out='));
+const outRoot = outArg != null ? resolve(repo, outArg.slice('--out='.length)) : join(repo, 'dist', 'desktop', process.env.ZS_DEV25_OUT ?? 'dev25-dual-win');
 
 const BAT_LAUNCHER = [
   '@echo off',
@@ -93,52 +95,58 @@ const BAT_SELFCHECK = [
 const README = `# DEV-25 双机验收包（Windows 服务机 + 同局域网客户端浏览器）
 
 包目录全 ASCII（中文/空格路径可用）；服务机自备**无需** Node/Git/模型账号；不包含任何私钥、
-local.token（首次启动生成于 server-data/）或真实工程数据。fake runtime + 真实派发硬防护——
+CA 私钥（首次启动生成于 server-data/remote/）或真实工程数据。fake runtime + 真实派发硬防护——
 零真实模型调用（RESULTS 会留 real_calls=0 证据）。
 
-**产物来源**：\`ZhongshuoDual/\` 由最终冻结产物（vdr-frozen，buildId 见 \`RESULTS/buildId.txt\`）
-逐文件 SHA256 核对后拷贝——\`RESULTS/frozen-manifest-check.json\` 留核对事实。本包与冻结基线
-同源（第三十三轮起强制逐文件核对，不再只对 buildId 文本）。
+**产物来源**：\`ZhongshuoDual/\` 由最终冻结产物逐文件 SHA256 核对后拷贝（buildId 见
+\`RESULTS/buildId.txt\`；核对事实 \`RESULTS/frozen-manifest-check.json\`）。
+**证书体系（v2）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ 由 CA 签发的服务证书
+（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。IP 变化只重签服务证书——**CA 不变，信任一次即可**。
 
 ## 服务机步骤
 
-1. 双击 \`start-server.bat\`（等控制台出现 "Seeded." 与应用窗口）。合成数据已建（重复启动幂等
-   ——不重造房间/私信）：项目「DEV25 双机验收」+ 两 Agent（Guide A/B）+ 房间×2 + 私信 DM A
-   （停止演练）与 DM B（验收演练）+ 附件样本与仅记录消息（seed 明细在 \`RESULTS/seed.json\`）。
-   窗口若停在欢迎页：点「打开本地文件夹…」选择包内 \`demo-project\` 文件夹，或重启应用
-   （种子已写服务端自动打开记忆——二次启动直接进入合成项目）。
+1. 双击 \`start-server.bat\`（等 "Seeded." 与应用窗口；重复启动幂等）。窗口若停在欢迎页：
+   点「打开本地文件夹…」选包内 \`demo-project\`，或重启（已写自动打开记忆）。
 2. 应用侧栏 →「远程访问（DEV-25）」面板：
-   - 监听地址选 **局域网（0.0.0.0）** → 点「启用」→ 面板给出 **实际地址** 与 **完整 64 位 SHA-256 指纹**
-     （两个按钮可一键复制）。记下两者交给客户端机。防火墙弹窗选「允许」。
-   - 点「生成配对码」→ 把 pairingId 与 8 位码交给客户端机（5 分钟内一次有效）。
-3. （可选，机械负例自动化）点「**自检（机械负例）**」→ 面板给出逐项结论（错码/伪造 Host/
-   Origin/无 token/同号恰一次+审计核对/吊销清理——进程内执行，结果不含任何凭据）→ 回本目录
-   双击 \`run-self-check.bat\` 把结论导出到 \`RESULTS/self-check-*.json\`。
-4. Windows 防火墙如未弹窗：放行面板显示的端口（专用网络）。
+   - 监听地址选 **局域网（0.0.0.0）** → 点「启用」→ 面板核对：
+     · **运行中 + 实际地址**（复制按钮）——**LAN 自检通过**（服务机本机经实际 LAN IP 的 HTTPS 可达；
+       失败=本机绑定/TLS 层问题，先修本机）；
+     · **两枚指纹**：服务证书指纹（页面所见）+ **信任根（CA）指纹**（导入 ca.cer 时逐位核对）。
+       多网卡机器若地址不是预期 LAN IP，换「监听地址」为具体 IP（如 192.168.1.100）重新启用。
+   - 点「生成配对码」→ pairingId + 8 位码交客户端（5 分钟一次有效）。
+   - （可选）点「自检（机械负例）」→ 回本目录双击 \`run-self-check.bat\` 导出结论。
+3. 防火墙（仅当客户端报超时/无法连接时）：Windows 防火墙 → 高级设置 → 入站规则 → 新建：
+   - 程序方式：\`ZhongshuoDual\electron.exe\`；或端口方式：面板显示的 TCP 端口；
+   - 作用域：专用网络（你的局域网通常是「专用」；不确定就在系统网络设置里把当前网络标为专用）；
+   - **不需要关闭整个防火墙**。
 
-## 客户端机步骤（Edge/Chrome，无需安装任何东西）
+## 客户端步骤（普通 Edge/Chrome，无需安装任何东西——不使用任何证书错误绕过开关）
 
-1. 浏览器打开服务机给的地址（如 \`https://192.168.x.x:端口\`）。
-2. **证书信任**：出现自签证书警告时，先展开证书详情核对 **SHA-256 指纹与服务机面板完全一致**
-   （逐位）；然后二选一：①把 server-data/remote/identity.cer 复制到客户端机双击导入
-   「受信任的根证书颁发机构」后重开页面；②仅在本次会话点「高级→继续前往」（信任失败即停——
-   程序不降级 HTTP、不关闭证书检查）。证书更换（如改监听地址重新生成）须重新核对。
-3. 配对页输入 pairingId + 配对码 + 设备名 →「配对并保存」→ 进入主界面。
-4. 按 \`RESULTS/RESULT-template.md\` 逐项执行 D1—D10 并回填（截图放 RESULTS/shots/）。
+1. 浏览器打开服务机地址（如 \`https://192.168.1.100:端口\`）。
+2. 首次会出现证书提示（连接不是专用连接）——**这是预期**（合法证书尚未授信）：
+   ① 把服务机 \`server-data/remote/ca.cer\` 复制到客户端机双击 → 安装证书 → 存储位置=当前用户
+   → 「将所有的证书都放入下列存储」→ 浏览 → **受信任的根证书颁发机构** → 完成；
+   ② 安装前展开证书详情核对 **SHA-256 指纹与服务机面板「信任根指纹」逐位一致**；
+   ③ 重开页面（必要时新开无痕窗口验证）。**信任失败即停**——不点「高级→继续前往」冒充通过
+   （那只是本次会话豁免）。证书更换（CA 重生成）须重新核对。
+   - Android：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书（同样先核对指纹）。
+3. 配对页输入 pairingId + 码 + 设备名 →「配对并保存」→ 主界面。
+4. 按 \`RESULTS/RESULT-template.md\` 执行 D1—D10 并回填。
 
-## 双机检查项（摘要——完整口径见模板）
+## 连接问题分层排查（先取客户端具体错误，再定位层——不预判）
 
-D1 同一数据可见 | D2 仅记录消息+事件流 | D3 上传附件并发送 | D4 DM A 发起任务→客户端停止 |
-D5 DM B 任务完成→客户端验收通过 | D6 断网/刷新后重试恰一次 | D7 关闭客户端任务继续+重开恢复 |
-D8 服务机吊销→立即断流+401 | D9（自动化——自检按钮+run-self-check）| D10 错码（自动化）
+| 客户端现象 | 层 | 下一步 |
+|---|---|---|
+| ERR_CERT_AUTHORITY_INVALID / 证书提示 | 信任层 | 按「客户端步骤 2」导入 ca.cer（核对指纹） |
+| ERR_CERT_COMMON_NAME_INVALID | 名称层 | 服务机面板地址与实际访问 IP 不一致 → 换具体 IP 监听重启用 |
+| ERR_CONNECTION_REFUSED / 超时 | 网络层 | 服务机面板 LAN 自检通过否？通过→防火墙规则（上）；客户端 ping 服务机 IP |
+| ERR_SSL_PROTOCOL_ERROR | 端口/协议层 | 核对地址端口与面板一致（https:// 前缀，不带尾部路径） |
 
 ## 结果与边界
 
-- 自动留档：\`RESULTS/seed.json\`（种子+演练）、\`RESULTS/self-check-*.json\`（协议负例）、
-  \`server-data/selfcheck-latest.json\`（自检报告）、应用退出时 \`server-data/desktop-shutdown.json\`
-  （停机事实）、real_calls=0（硬防护事实）。
-- RESULT-template.md 永不被程序覆盖——用户回填唯一真源；工程侧只读核对。
-- 手机/移动浏览器组合按 R11 属独立验收范围，本包不覆盖；PWA/Push 按后续归属排产。
+- 自动留档：\`RESULTS/seed.json\`、\`RESULTS/self-check-*.json\`、停机事实、real_calls=0、
+  逐文件核对报告；RESULT-template.md 永不被程序覆盖。
+- 手机/移动浏览器按 R11 属独立验收范围；PWA/Push 按后续归属排产。
 `;
 
 const RESULT_TEMPLATE = `# DEV-25 双机验收结果（用户回填——本文件不会被程序覆盖）
@@ -498,7 +506,7 @@ at=${new Date().toISOString()}
   }
 }
 
-const mode = process.argv[2] ?? '--build';
+const mode = process.argv.includes('--self-test') ? '--self-test' : (process.argv[2] ?? '--build');
 const frozenArg = process.argv.find((a) => a.startsWith('--frozen='));
 if (mode === '--self-test') {
   await selfTest();

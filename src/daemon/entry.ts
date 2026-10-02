@@ -283,6 +283,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       stop: async () => { await remoteServer.stop().catch(() => { /* 尽力 */ }); },
       invalidateDevice: (deviceId: string) => remoteServer.invalidateDevice(deviceId),
       current: () => remoteServer.currentAddress(),
+      verifyLanBinding: () => remoteServer.verifyLanBinding(),
       selfcheck: () => remoteServer.runSelfcheck(),
     };
     const makeCommandDeps = (): Parameters<typeof dispatchDaemonCommand>[0] => ({

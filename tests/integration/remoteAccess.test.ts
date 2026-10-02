@@ -215,8 +215,8 @@ function wsConnect(h: Harness, headers: Record<string, string> = {}, originOverr
 
 let CERT_PEM = '';
 beforeAll(() => {
-  const der = readFileSync(join(appData, 'remote', 'identity.cer'));
-  CERT_PEM = '-----BEGIN CERTIFICATE-----\n' + der.toString('base64').replace(/(.{64})/g, '$1\n') + '\n-----END CERTIFICATE-----\n';
+  // 信任锚=本地 CA（第三十六轮一：服务证书由 CA 签发——锚定叶子不再有效）。
+  CERT_PEM = readFileSync(join(appData, 'remote', 'ca-cert.pem'), 'utf8');
 });
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

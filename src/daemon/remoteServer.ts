@@ -316,7 +316,7 @@ export class RemoteAccessServer {
     if (!identity.ok) throw new Error(identity.error);
     this.identity = identity.identity;
     this.stopped = false;
-    this.server = createHttpsServer({ pfx: this.identity.pfx, passphrase: this.identity.passphrase }, (req, res) => { void this.handleHttp(req, res); });
+    this.server = createHttpsServer({ key: this.identity.keyPem, cert: this.identity.certChainPem }, (req, res) => { void this.handleHttp(req, res); });
     // WSS：握手与帧协议由 ws 库承担（掩码/分片/UTF-8/背压）；maxPayload=认证前小消息上限。
     this.wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
@@ -402,17 +402,42 @@ export class RemoteAccessServer {
   }
 
   /** 实际监听事实（第三十二轮四：0.0.0.0 时给 LAN 地址；停用/未启动=null——不再恒回环）。 */
-  currentAddress(): { address: string; port: number; fingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string } | null {
+  currentAddress(): { address: string; port: number; fingerprint: string; caFingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string; certIssuer: string } | null {
     if (this.server == null || this.identity == null || this.boundPort === 0) return null; // 停用/未启动=null（不显示运行中）
     const displayHost = this.boundHost === '0.0.0.0' || this.boundHost === '::' ? (primaryLanIp() ?? '127.0.0.1') : this.boundHost;
     return {
       address: `https://${displayHost}:${this.boundPort}`,
       port: this.boundPort,
-      fingerprint: this.identity.fingerprintSha256, // 完整 64 位十六进制（用户端逐位核对）
+      fingerprint: this.identity.fingerprintSha256, // 服务证书完整 64 位（页面所见——逐位核对）
+      caFingerprint: this.identity.caFingerprintSha256, // CA（信任根）完整 64 位——用户导入 ca.cer 时核对
       lanAddresses: this.boundHost === '0.0.0.0' || this.boundHost === '::' ? lanIps().map((ip) => `https://${ip}:${this.boundPort}`) : [],
       certNotAfter: this.identity.notAfter,
       certSubject: this.identity.subject,
+      certIssuer: this.identity.issuer,
     };
+  }
+
+  /**
+   * LAN 绑定自检（第三十六轮二）：服务机本机经**实际 LAN IP** 发起 HTTPS（以本地 CA 为信任锚）
+   * ——通过=证书链对 LAN 名称有效+监听真实可达；失败区分「本机 LAN 绑定/TLS」与「跨机防火墙」
+   * 两层（跨机问题不在本函数断言范围——客户端错误码需另行取得，不预判定性）。
+   */
+  async verifyLanBinding(): Promise<{ ok: boolean; checkedUrl: string; error: string | null }> {
+    if (this.server == null || this.identity == null || this.boundPort === 0) return { ok: false, checkedUrl: '', error: '服务未运行' };
+    const lan = lanIps();
+    if (lan.length === 0) return { ok: false, checkedUrl: '', error: '未发现非回环网络地址（仅本机模式？其它设备无法连接）' };
+    const url = `https://${lan[0]}:${this.boundPort}/`;
+    const ac = new https.Agent({ ca: this.identity.caCertPem, servername: 'localhost' });
+    const outcome = await new Promise<{ ok: boolean; error: string | null }>((resolveP) => {
+      const req = https.request(url, { method: 'GET', agent: ac, timeout: 5000, rejectUnauthorized: true }, (res) => {
+        res.resume();
+        resolveP({ ok: (res.statusCode ?? 0) < 500, error: null });
+      });
+      req.on('error', (e) => resolveP({ ok: false, error: e.message }));
+      req.on('timeout', () => { req.destroy(); resolveP({ ok: false, error: '本机经 LAN 地址 HTTPS 超时' }); });
+      req.end();
+    });
+    return { ok: outcome.ok, checkedUrl: url, error: outcome.error };
   }
 
   // ---------- HTTP ----------
@@ -948,7 +973,9 @@ export class RemoteAccessServer {
     }
     const record = (name: string, ok: boolean, detail: string): void => { items.push({ name, ok, detail }); this.log(`[selfcheck] ${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
     const port = this.boundPort;
-    const ca = '-----BEGIN CERTIFICATE-----\n' + readFileSync(join(this.deps.appDataDir, 'remote', 'identity.cer')).toString('base64').replace(/(.{64})/g, '$1\n') + '\n-----END CERTIFICATE-----\n';
+    // 信任锚=本地 CA（第三十六轮一：服务证书由 CA 签发——锚定叶子会被判
+    // 「self-signed certificate in certificate chain」）。
+    const ca = readFileSync(join(this.deps.appDataDir, 'remote', 'ca-cert.pem'), 'utf8');
     const origin = `https://127.0.0.1:${port}`;
     const host = `127.0.0.1:${port}`;
     const post = (path: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; json: any }> => new Promise((resolveP) => {
@@ -962,7 +989,7 @@ export class RemoteAccessServer {
           resolveP({ status: res.statusCode ?? 0, json });
         });
       });
-      req.on('error', () => resolveP({ status: -1, json: null }));
+      req.on('error', (e) => resolveP({ status: -1, json: { error: { message: e.message } } }));
       req.on('timeout', () => { req.destroy(); resolveP({ status: -2, json: null }); });
       req.write(payload);
       req.end();
@@ -973,7 +1000,7 @@ export class RemoteAccessServer {
     const failsBefore = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
     const wrong = await post('/pair', { pairingId: created.pairingId, code: 'WRONGWRONG', deviceName: 'selfcheck', clientNonce: 'sc-wrong' }, {});
     const failsAfter = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
-    record('错码 → 401（配对行 fail_count 递增）', wrong.status === 401 && failsAfter === failsBefore + 1, `status=${wrong.status} fails=${failsBefore}->${failsAfter}`);
+    record('错码 → 401（配对行 fail_count 递增）', wrong.status === 401 && failsAfter === failsBefore + 1, `status=${wrong.status} fails=${failsBefore}->${failsAfter}${wrong.status < 0 ? ' err=' + String(wrong.json?.error?.message ?? '?') : ''}`);
     // 2) 伪造 Host / Origin / 无 token。
     const badHost = await post('/pair', { pairingId: 'pair_none', code: 'AAAAAAAA', deviceName: 'x', clientNonce: 'sc-h' }, { host: 'evil.example:1' });
     record('伪造 Host → 403', badHost.status === 403, 'status=' + badHost.status);
