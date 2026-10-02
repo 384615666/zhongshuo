@@ -3809,7 +3809,27 @@ async function renderRemoteSettings() {
   if (row == null) return;
   try {
     const cfg = await command('remote.config.get', {});
-    row.textContent = `${cfg.running ? `运行中 ${cfg.address} · 指纹 ${String(cfg.fingerprint ?? '').slice(0, 16)}…` : '已停用'}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+    // 完整呈现（第三十二轮四）：完整 64 位指纹（逐位核对）+可复制地址+证书有效期/LAN 地址。
+    row.textContent = '';
+    if (cfg.running) {
+      const addr = document.createElement('button');
+      addr.className = 'chip';
+      addr.title = '点击复制客户端地址';
+      addr.textContent = `运行中 ${cfg.address}`;
+      addr.onclick = () => void navigator.clipboard.writeText(String(cfg.address)).then(() => showError(`已复制地址：${cfg.address}`), (e) => showError(`复制失败：${e.message}`));
+      const fp = document.createElement('button');
+      fp.className = 'chip';
+      fp.title = '点击复制完整证书 SHA-256 指纹（64 位十六进制——设备端逐位核对）';
+      fp.textContent = `指纹 ${String(cfg.fingerprint ?? '')}`;
+      fp.onclick = () => void navigator.clipboard.writeText(String(cfg.fingerprint ?? '')).then(() => showError('已复制完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      row.append(addr, fp);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `证书有效期至 ${cfg.certNotAfter ? new Date(cfg.certNotAfter).toLocaleString() : '?'}${(cfg.lanAddresses ?? []).length > 0 ? ` · LAN 地址：${cfg.lanAddresses.join(' / ')}` : ''}（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}）`;
+      row.append(meta);
+    } else {
+      row.textContent = `已停用（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+    }
     if (deviceBox != null) {
       try {
         const r = await command('remote.devices.list', {});
@@ -3845,11 +3865,31 @@ function wireRemoteSettings() {
   })();
   el('remote-enable-btn').onclick = () => apply(true, (el('remote-host-sel')?.value ?? '127.0.0.1') !== '127.0.0.1');
   el('remote-disable-btn').onclick = () => apply(false, false);
+  const scBtn = el('remote-pair-selfcheck-btn');
+  if (scBtn != null) {
+    scBtn.onclick = () => void (async () => {
+      try {
+        await command('remote.pairing.selfcheckExport', {});
+        showError('自检码已写入本机状态——回到双机包目录运行 run-self-check.bat');
+      } catch (e) { showError(`自检码失败：${e.message}`); }
+    })();
+  }
   el('remote-pair-btn').onclick = () => void (async () => {
     const out = el('remote-pair-result');
     try {
       const r = await command('remote.pairing.create', {});
-      out.textContent = `配对码：${r.pairingId} / ${r.code}（${new Date(r.expiresAt).toLocaleTimeString()} 前一次有效）${r.address != null ? ` · 地址 ${r.address}` : ' · 服务未启用'}${r.fingerprint != null ? ` · 证书指纹 ${String(r.fingerprint).slice(0, 24)}…` : ''}`;
+      out.textContent = '';
+      const line1 = document.createElement('div');
+      line1.textContent = `配对码：${r.pairingId} / ${r.code}（${new Date(r.expiresAt).toLocaleTimeString()} 前一次有效）${r.address != null ? ` · 地址 ${r.address}` : ' · 服务未启用'}`;
+      const fpLine = document.createElement('div');
+      fpLine.className = 'meta';
+      fpLine.textContent = r.fingerprint != null ? `证书 SHA-256 指纹（完整逐位核对）：${r.fingerprint}` : '';
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'chip';
+      copyBtn.textContent = '复制指纹';
+      copyBtn.onclick = () => void navigator.clipboard.writeText(String(r.fingerprint ?? '')).then(() => showError('已复制完整指纹（64 位）'), (e) => showError(`复制失败：${e.message}`));
+      out.append(line1, fpLine);
+      if (r.fingerprint != null) out.append(copyBtn);
     } catch (e) { out.textContent = `配对码创建失败：${e.message}`; }
   })();
   const rs = el('remote-settings');
