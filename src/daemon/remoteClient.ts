@@ -124,7 +124,25 @@ function saveSeen() { try { const arr = [...eventsSeen]; if (arr.length > 500) a
 function loadPendingOps() { try { return JSON.parse(localStorage.getItem('zs-pending-ops') ?? '{}'); } catch { return {}; } }
 function savePendingOps(ops) { try { localStorage.setItem('zs-pending-ops', JSON.stringify(ops)); } catch (e) { void e; } }
 let lastSeq = (() => { const n = Number(localStorage.getItem('zs-last-seq')); return Number.isInteger(n) && n >= 0 ? n : null; })();
-function saveLastSeq(n) { lastSeq = n; try { localStorage.setItem('zs-last-seq', String(n)); } catch (e) { void e; } }
+/**
+ * **安全检查点（第三十四轮一）**：持久游标=各跟踪项目水位的 **min**——不是收到的最大 seq。
+ * 服务端按项目分别投递（projNext latch），全局 max 会越过尚未投递的项目事件（复现：P2 1—301
+ * +P1 302，先订 P1：首泵发 P1 302 再发 P2 前 300，客户端存 302，断线重连后 P2 的 301 永远
+ * 补不到）。min 检查点保证「≤检查点的每个跟踪项目事件都已投递」，重连从检查点续——个别
+ * 已收事件重投由 eventId 去重吸收。
+ */
+let projWm = loadProjWm();
+function loadProjWm() { try { const o = JSON.parse(localStorage.getItem('zs-proj-seq') ?? '{}'); return o != null && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } }
+function persistCheckpoint() {
+  try { localStorage.setItem('zs-proj-seq', JSON.stringify(projWm)); } catch (e) { void e; }
+  const vals = Object.values(projWm);
+  const cp = vals.length === 0 ? null : Math.min(...vals.map((v) => Number(v) || 0));
+  lastSeq = cp;
+  if (cp != null) { try { localStorage.setItem('zs-last-seq', String(cp)); } catch (e) { void e; } }
+}
+function trackProject(pid, base) { if (pid != null && projWm[pid] == null) { projWm[pid] = base; persistCheckpoint(); } }
+function untrackProject(pid) { if (pid != null && projWm[pid] != null) { delete projWm[pid]; persistCheckpoint(); } }
+function noteEventSeq(pid, seq) { if (pid != null && Number.isInteger(seq)) { const cur = Number(projWm[pid] ?? 0); if (seq > cur) { projWm[pid] = seq; persistCheckpoint(); } } }
 
 // ---------- IndexedDB（deviceCredential 同源持久） ----------
 function idb() { return new Promise((res, rej) => { const q = indexedDB.open('zs-remote', 1); q.onupgradeneeded = () => q.result.createObjectStore('kv'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
@@ -587,60 +605,103 @@ function feedLine(kind, text) {
   f.insertBefore(d, f.firstChild);
   while (f.children.length > 60) f.removeChild(f.lastChild);
 }
-/** 恢复全部项目订阅并等确认（第三十三轮三：快照后必须恢复订阅——否则新事件不再经 WSS 到达）。 */
+/**
+ * 恢复全部跟踪项目订阅并等确认（第三十四轮二收口）：
+ * - **只数 subscribed 确认**（cursor-stale 不是订阅成功——该项目需走该范围恢复，作为
+ *   needRecovery 信号返回）；按项目去重；
+ * - 确认不全/超时→acked<total（调用方保持 pending，不推进游标）；
+ * - 绑定发起时的 ws：连接关闭/更换即失败（旧连接迟到确认不算数）。
+ */
 function subscribeAll() {
   return new Promise((resolve) => {
-    if (ws == null || ws.readyState !== 1 || targets.length === 0) { resolve(0); return; }
+    const wsAtStart = ws;
+    if (wsAtStart == null || wsAtStart.readyState !== 1 || targets.length === 0) { resolve({ acked: 0, total: 0, needRecovery: false, broken: true }); return; }
     const seenP = new Set();
     const pids = [];
     for (const t of targets) { const pid = t.projectId; if (pid && !seenP.has(pid)) { seenP.add(pid); pids.push(pid); } }
     let acked = 0;
+    let needRecovery = false;
+    let staleFromSeq = null;
     let settled = false;
-    const finish = () => { if (!settled) { settled = true; resolve(acked); } };
+    const finish = () => { if (!settled) { settled = true; cleanup(); resolve({ acked, total: pids.length, needRecovery, staleFromSeq, broken: ws !== wsAtStart || ws == null || ws.readyState !== 1 }); } };
     const onMsg = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { void e; return; }
-      if ((m.type === 'subscribed' || m.type === 'cursor-stale') && m.projectId != null && seenP.has(m.projectId)) {
+      if (m.type === 'subscribed' && m.projectId != null && seenP.has(m.projectId) && !seenP.has('ack:' + m.projectId)) {
+        seenP.add('ack:' + m.projectId); // 重复确认只计一次
         acked += 1;
-        if (acked >= pids.length) { cleanup(); finish(); }
+        if (acked >= pids.length) finish();
+      } else if (m.type === 'cursor-stale' && m.projectId != null && seenP.has(m.projectId)) {
+        needRecovery = true; // 该项目需快照恢复——不当作 subscribed
+        if (m.fromSeq != null) staleFromSeq = m.fromSeq;
+        finish();
       }
     };
-    const cleanup = () => { if (ws != null) ws.removeEventListener('message', onMsg); };
-    ws.addEventListener('message', onMsg);
-    for (const pid of pids) ws.send(JSON.stringify({ type: 'subscribe', projectId: pid }));
-    setTimeout(() => { cleanup(); finish(); }, 8000); // 有界等待（全部确认或 8s 截止）
+    const onClose = () => finish();
+    const cleanup = () => { wsAtStart.removeEventListener('message', onMsg); wsAtStart.removeEventListener('close', onClose); };
+    wsAtStart.addEventListener('message', onMsg);
+    wsAtStart.addEventListener('close', onClose);
+    const base = Number(window.__connFromSeq ?? 0);
+    for (const pid of pids) { trackProject(pid, base); wsAtStart.send(JSON.stringify({ type: 'subscribe', projectId: pid })); }
+    setTimeout(finish, 8000); // 有界等待（全部确认或 8s 截止——不全即失败）
   });
 }
 /**
- * cursor-stale 同范围快照恢复（第三十三轮三收口）：
- * - **失败保留旧游标与待恢复状态**（不 saveLastSeq、不宣称成功）——有界退避重试；
- * - 成功：恢复**相同范围**的会话/任务事实（refreshTargets+refreshTasks——不只列 Activity 前 80 条），
- *   保存新游标，**恢复订阅并等确认**，标记 recovered——新事件继续经 WSS 到达。
+ * cursor-stale 同范围快照恢复（第三十四轮二重写——消除假成功）：
+ * - **轮次模型**：新的 stale 开启新轮；同轮并发合流；旧轮/旧连接的迟到结果不覆盖新轮状态；
+ * - 快照拉取、会话/任务恢复（refreshTargets/refreshTasks）任一失败→保持 pending+保留安全
+ *   检查点（**不推进游标**）+有界退避重试——不冒充成功；
+ * - 订阅必须**全部项目 subscribed 确认**（去重后 acked===total 且连接未更换）才算成功；
+ *   cursor-stale 出现即按需新一轮恢复；
+ * - 成功才把各跟踪项目水位与检查点推进到已恢复范围。
  */
-async function snapshotFromStale(fromSeq) {
-  if (snapshotState === 'recovered') return;
-  snapshotState = 'pending';
-  window.__cursorState = 'pending';
-  const r = await cmd('activity.list', { scope: 'all', limit: 80 }).catch(() => null);
-  if (r == null || r.ok === false) {
-    // 快照失败：旧游标保留、待恢复状态保留（不冒充成功）——有界退避重试。
+let snapshotRound = 0;
+let snapshotChain = Promise.resolve();
+function snapshotFromStale(fromSeq) {
+  const round = ++snapshotRound;
+  const prev = snapshotChain;
+  let settle = null;
+  snapshotChain = new Promise((r) => { settle = r; });
+  void (async () => {
+    try { await prev; } catch (e) { void e; }
+    if (round !== snapshotRound) { settle(); return; } // 已被更新轮接管——让位
+    snapshotState = 'pending';
+    window.__cursorState = 'pending';
+    await runSnapshotRound(round, fromSeq);
+    settle();
+  })();
+  return snapshotChain;
+}
+async function runSnapshotRound(round, fromSeq) {
+  const wsAtStart = ws;
+  try {
+    const r = await cmd('activity.list', { scope: 'all', limit: 80 });
+    if (r == null || r.ok === false) throw new Error('activity.list 无结果');
+    const items = (r.data && r.data.items) || [];
+    for (const it of items.slice().reverse()) {
+      if (!eventsSeen.has(it.eventId)) { eventsSeen.add(it.eventId); feedLine('快照', it.kindLabel + ' · ' + (it.projectName || '') + ' seq=' + (it.seq ?? '?')); }
+    }
+    saveSeen();
+    await refreshTargets(false); // 失败即 throw→pending（不吞——第三十四轮二）
+    await refreshTasks();
+    const sub = await subscribeAll();
+    if (sub.needRecovery) throw new Error('订阅返回 cursor-stale——按需新一轮恢复');
+    if (sub.broken || ws !== wsAtStart || ws == null || ws.readyState !== 1) throw new Error('恢复期间连接关闭/更换——保持待恢复（新连接重连时再走恢复）');
+    if (sub.acked < sub.total) throw new Error('订阅确认不全（' + sub.acked + '/' + sub.total + '）');
+    if (round !== snapshotRound) return; // 旧轮让位——不提交
+    // 成功：全部跟踪项目水位推进到已恢复范围；检查点=新 min（不越过未恢复范围）。
+    for (const pid of Object.keys(projWm)) projWm[pid] = fromSeq;
+    persistCheckpoint();
+    snapshotRetry = 0;
+    snapshotState = 'recovered';
+    window.__cursorState = 'recovered';
+    window.__snapshotAcks = sub.acked + '/' + sub.total;
+    feedLine('snapshot-recovered', '游标过期——同范围快照 ' + items.length + ' 条已恢复（会话+任务刷新），订阅已重建（确认 ' + sub.acked + '/' + sub.total + '），新事件从 ' + fromSeq + ' 经事件流续');
+  } catch (e) {
+    if (round !== snapshotRound) return; // 旧轮让位
     snapshotRetry += 1;
-    feedLine('snapshot-pending', '快照拉取失败（第 ' + snapshotRetry + ' 次）——游标保持 ' + lastSeq + '，稍后重试');
-    if (snapshotRetry <= 10) setTimeout(() => { void snapshotFromStale(fromSeq).catch(() => {}); }, Math.min(2000 * snapshotRetry, 15_000));
-    return;
+    feedLine('snapshot-pending', '快照恢复未完成（第 ' + snapshotRetry + ' 次）：' + (e && e.message) + '——检查点保持 ' + lastSeq + '，稍后重试');
+    if (snapshotRetry <= 10) setTimeout(() => { if (round === snapshotRound && !revoked) void runSnapshotRound(round, fromSeq).catch(() => {}); }, Math.min(2000 * snapshotRetry, 15_000));
   }
-  const items = (r.data && r.data.items) || [];
-  for (const it of items.slice().reverse()) {
-    if (!eventsSeen.has(it.eventId)) { eventsSeen.add(it.eventId); feedLine('快照', it.kindLabel + ' · ' + (it.projectName || '') + ' seq=' + (it.seq ?? '?')); }
-  }
-  saveSeen();
-  await refreshTargets(false).catch(() => {});
-  await refreshTasks().catch(() => {});
-  saveLastSeq(fromSeq);
-  const acked = await subscribeAll(); // 快照后恢复订阅（等确认——新事件继续经 WSS 到达）
-  snapshotRetry = 0;
-  snapshotState = 'recovered';
-  window.__cursorState = 'recovered';
-  feedLine('snapshot-recovered', '游标过期——同范围快照 ' + items.length + ' 条已恢复（会话+任务刷新），订阅已重建（确认 ' + acked + ' 项），新事件从 ' + fromSeq + ' 经事件流续');
 }
 async function connectEvents() {
   if (revoked) return;
@@ -652,18 +713,22 @@ async function connectEvents() {
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { void e; return; }
       if (m.type === 'event') {
+        noteEventSeq(m.projectId, m.seq); // 每项目水位（先记——重复事件也算已投递）
         if (eventsSeen.has(m.eventId)) return; // 重复事件按 eventId 去重（持久）
         eventsSeen.add(m.eventId);
         saveSeen();
-        saveLastSeq(Math.max(lastSeq || 0, m.seq));
         feedLine(m.kind, (m.projectId || '') + ' seq=' + m.seq);
         if (m.kind === 'message.submitted' || m.kind === 'message.recorded' || m.kind === 'thread.replyAdded') void loadMessages().catch(() => {});
         if (TASK_EVENT_KINDS.has(m.kind)) void refreshTasks().catch(() => {});
       } else if (m.type === 'authenticated') {
         wsRetry = 0; // 重连成功——重试计数重置
-        if (m.fromSeq != null) saveLastSeq(Math.max(lastSeq || 0, m.fromSeq));
+        // 注意：fromSeq 是**本连接续传基线**——不推进检查点（快照恢复成功才推进；
+        // 新跟踪项目以此为初始水位）。
+        window.__connFromSeq = m.fromSeq;
         feedLine('connected', 'from seq=' + m.fromSeq + (m.resume ? '（续传）' : ''));
-        void subscribeAll();
+        void subscribeAll().then((sub) => {
+          if (sub != null && sub.needRecovery && sub.staleFromSeq != null) void snapshotFromStale(sub.staleFromSeq).catch(() => {});
+        });
       } else if (m.type === 'cursor-stale') { void snapshotFromStale(m.fromSeq).catch(() => {}); }
     };
     ws.onclose = (ev) => {

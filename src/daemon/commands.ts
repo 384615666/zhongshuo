@@ -1523,7 +1523,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const gitProjectId = z.object({ projectId: z.string().min(1) }).parse(env.params).projectId;
         const gitProject = deps.db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(gitProjectId) as { canonical_path: string } | undefined;
         if (gitProject == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${gitProjectId}`);
-        const journal = { commandId: env.commandId, scope, payloadHash, now: Date.now() };
+        // 提交前门禁（第三十四轮四）：git 写走 gitWrite 自包 runCommand——journal 注入
+        // commitGate（persistOperation 提交事务前重查设备/代次/会话）。
+        const journal = { commandId: env.commandId, scope, payloadHash, now: Date.now(), commitGate: (): void => { if (deps.remoteGate != null) { const g = deps.remoteGate(); if (!g.ok) throw new DaemonCommandError(g.code, g.message); } } };
         const { GitWriteError: GWE } = await import('./gitWrite.ts');
         const mapErr = (error: unknown): DaemonCommandError => {
           if (error instanceof DaemonCommandError) return error;
@@ -2591,6 +2593,26 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
         return withCommandId({ ok: true, data: { pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt, address: cur?.address ?? null, fingerprint: cur?.fingerprint ?? null, note: '配对码 5 分钟内一次有效；地址与证书 SHA-256 指纹在设备端核对后完成信任（不降级 HTTP）' } });
       }
+      case 'remote.pairing.selfcheckProbe': {
+        // 自检幂等探针（第三十四轮三）：**独立测试对象**——写 daemon_state 专用键
+        //（selfcheck:probe:<commandId>），不触碰任何用户可见状态（第三十三轮用
+        // nav.preferences 做探针——visibleProjectIdsOf 按 viewer 最新行（不分 client_id）
+        // 取可见集，空数组行会使全项目看板归零）。同 commandId 重放命中回执 replayed=true
+        // 不重复执行——与真实业务同一幂等网关；finally 由自检清理（审计行保留）。
+        // 仅隔离验收模式（与 remote.pairing.selfcheck 同门）；正式产品双保险拒绝。
+        if (process.env.ZS_REMOTE_SELFCHECK !== '1') {
+          throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '自检探针仅在隔离验收模式开放（双机包启动器注入——正式入口不带）');
+        }
+        const params = z.strictObject({ round: z.string().min(1).max(64) }).parse(env.params);
+        const result = run(() => {
+          const key = `selfcheck:probe:${env.commandId}`;
+          deps.db.prepare(`INSERT INTO daemon_state (key, value, updated_at) VALUES (?, ?, ?)
+                           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+            .run(key, JSON.stringify({ round: params.round, at: Date.now() }), Date.now());
+          return { probeKey: key, round: params.round };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'remote.pairing.selfcheck': {
         // 进程内自检（第三十三轮六重做）：**仅隔离验收模式**（ZS_REMOTE_SELFCHECK=1——双机包
         // 启动器注入；正式产品/桌面默认不带该变量=明确拒绝，辅助能力不进正式路径）。
@@ -3350,7 +3372,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'task.stop': {
         const params = z.strictObject({ taskId: z.string().min(1), targetRunId: z.string().min(1), expectedStopGeneration: z.number().int().nonnegative() }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 操作面同样不绕过（第三十二轮一）
-        // requestStop 内部自包 runCommand（含中断回调在外层执行）——此处不重复包裹。
+        // requestStop 内部自包 runCommand（含中断回调在外层执行）——此处不重复包裹；
+        // commitGate=提交事务前远程门禁重查（第三十四轮四：异步等待窗口内吊销→提交拒绝）。
         const data = await requestStop(deps.db, {
           taskId: params.taskId,
           targetRunId: params.targetRunId,
@@ -3360,6 +3383,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           payloadHash,
           now: Date.now(),
           interruptTurn: deps.interruptTurn,
+          commitGate: (): void => { if (deps.remoteGate != null) { const g = deps.remoteGate(); if (!g.ok) throw new DaemonCommandError(g.code, g.message); } },
         });
         return withCommandId({ ok: true, data });
       }

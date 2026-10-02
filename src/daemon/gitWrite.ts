@@ -161,7 +161,7 @@ async function currentStatus(loc: RepoLocation): Promise<GitStatusEntry[]> {
   return parsePorcelainEntries(cap.stdout.toString('utf8'));
 }
 
-interface JournalInput { commandId: string; scope: string; payloadHash: string; now: number }
+interface JournalInput { commandId: string; scope: string; payloadHash: string; now: number; /** 远程门禁·业务提交前（第三十四轮四）——commands.ts 注入。 */ commitGate?: () => void }
 
 /** 幂等预检：回执已存在 → 重放原结果（同号不同参=冲突；正文被清理=要求新号）。 */
 function replayIfReceipted<T>(db: ZhongshuoDatabase, journal: JournalInput): { replayed: true; data: T } | null {
@@ -213,6 +213,7 @@ function persistOperation<T extends object>(
   journal: JournalInput,
   row: { projectId: string; action: GitOpAction; taskId?: string | null; changeSetIds?: string[]; request: unknown; result: T; headBefore?: string | null; headAfter?: string | null; commitOid?: string | null; emit?: () => void },
 ): { replayed: boolean; data: T } {
+  if (journal.commitGate != null) journal.commitGate();
   const outcome = runCommand<T>(db, { idempotencyScope: journal.scope, commandId: journal.commandId, payloadHash: journal.payloadHash, now: journal.now }, () => {
     db.prepare(
       `INSERT OR IGNORE INTO git_operations (id, project_id, action, task_id, change_set_ids_json, request_json, result_json, head_before, head_after, commit_oid, created_at, status, request_hash)

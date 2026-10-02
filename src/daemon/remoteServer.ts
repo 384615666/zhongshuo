@@ -165,7 +165,7 @@ export function revokeDeviceInDb(db: ZhongshuoDatabase, deviceId: string, now: n
 
 // ---------- 服务端 ----------
 /** 远程通道保留给本机可信入口的方法（配对码创建/服务配置/吊销/关停/隔离自检——R11 §1/§3）。 */
-export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.pairing.selfcheck', 'remote.pairing.selfcheckExport', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
+export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.pairing.selfcheck', 'remote.pairing.selfcheckProbe', 'remote.pairing.selfcheckExport', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
 
 export type RemoteGateOutcome = { ok: true } | { ok: false; code: string; message: string };
 
@@ -925,26 +925,32 @@ export class RemoteAccessServer {
     }
   }
 
-  // ---------- 进程内自检（隔离验收模式——第三十三轮六） ----------
+  // ---------- 进程内自检（隔离验收模式——第三十三轮六；第三十四轮三探针改独立对象） ----------
   /**
    * 机械负例自动化（仅 ZS_REMOTE_SELFCHECK=1 隔离验收模式；正式产品代码不提供该入口——
    * commands 层 remote.pairing.selfcheck 门禁）：对自身 HTTPS 监听执行——错码 401（核对
    * pairing 行 fail_count 递增——证明请求真实命中该行）、伪造 Host/Origin 403、无 token 401、
-   * 正码配对→session→同 commandId 恰一次（replayed=true）+ **remote_audit_log 本次设备/
-   * 命令号/成败/重放事实核对**→自检设备吊销清理（后续 /cmd 401）。
-   * **明文码只在进程内使用、结束即失效，不落任何存储**（第三十二轮 selfcheckExport 曾把
-   * 明文码写入 daemon_state——与 R11「只持久化加盐摘要」冲突，已废）。结果文件不含凭据。
+   * 正码配对→session→同 commandId 恰一次（replayed=true，**独立探针对象** remote.pairing.
+   * selfcheckProbe——写 daemon_state 专用键，不触碰任何用户可见状态）+ **remote_audit_log
+   * 本次设备/命令号/成败/重放事实核对**→自检设备吊销清理（后续 /cmd 401）。
+   * **明文码只在进程内使用、结束即失效，不落任何存储**；探针临时键 finally 清理（审计行保留）。
+   * 第三十四轮三：自检前后核对**导航偏好/全项目看板组数/已配对设备/在途任务不变**——任何路径
+   * （成功/失败/中断）都登记不变性（第三十三轮 nav.preferences 探针会使用户看板归零——
+   * visibleProjectIdsOf 按 viewer 最新行不分 client_id 取可见集）。
    */
   async runSelfcheck(): Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }> {
+    const items: Array<{ name: string; ok: boolean; detail: string }> = [];
+    // 不变性基线（任何退出路径都在 finishSelfcheck 复核）。
+    const baseline = this.selfcheckBaseline();
     if (this.server == null || this.identity == null || this.boundPort === 0) {
-      return { ok: false, items: [{ name: '前置：远程服务运行中', ok: false, detail: '未启用——先在 UI 启用远程访问' }], file: '' };
+      items.push({ name: '前置：远程服务运行中', ok: false, detail: '未启用——先在 UI 启用远程访问' });
+      return this.finishSelfcheck(items, null, baseline);
     }
+    const record = (name: string, ok: boolean, detail: string): void => { items.push({ name, ok, detail }); this.log(`[selfcheck] ${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
     const port = this.boundPort;
     const ca = '-----BEGIN CERTIFICATE-----\n' + readFileSync(join(this.deps.appDataDir, 'remote', 'identity.cer')).toString('base64').replace(/(.{64})/g, '$1\n') + '\n-----END CERTIFICATE-----\n';
     const origin = `https://127.0.0.1:${port}`;
     const host = `127.0.0.1:${port}`;
-    const items: Array<{ name: string; ok: boolean; detail: string }> = [];
-    const record = (name: string, ok: boolean, detail: string): void => { items.push({ name, ok, detail }); this.log(`[selfcheck] ${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
     const post = (path: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; json: any }> => new Promise((resolveP) => {
       const payload = JSON.stringify(body);
       const req = https.request({ hostname: '127.0.0.1', port, path, method: 'POST', headers: { 'content-type': 'application/json', origin, host, ...headers }, ca, servername: 'localhost', rejectUnauthorized: true, timeout: 15_000 }, (res) => {
@@ -963,7 +969,7 @@ export class RemoteAccessServer {
     });
     // 1) 错码 401 + fail_count 递增（请求真实命中配对行——不是泛 401）。
     const created = createPairingCode(this.deps.db, this.now(), {});
-    if (!created.ok) { record('创建自检配对码', false, created.error); return this.finishSelfcheck(items); }
+    if (!created.ok) { record('创建自检配对码', false, created.error); return this.finishSelfcheck(items, null, baseline); }
     const failsBefore = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
     const wrong = await post('/pair', { pairingId: created.pairingId, code: 'WRONGWRONG', deviceName: 'selfcheck', clientNonce: 'sc-wrong' }, {});
     const failsAfter = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
@@ -973,39 +979,81 @@ export class RemoteAccessServer {
     record('伪造 Host → 403', badHost.status === 403, 'status=' + badHost.status);
     const badOrigin = await post('/pair', { pairingId: 'pair_none', code: 'AAAAAAAA', deviceName: 'x', clientNonce: 'sc-o' }, { origin: 'https://evil.example' });
     record('伪造 Origin → 403', badOrigin.status === 403, 'status=' + badOrigin.status);
-    const noToken = await post('/cmd', { commandId: 'selfcheck-no-token', method: 'nav.preferences', params: { clientId: 'selfcheck-no-token' } }, {});
+    const noToken = await post('/cmd', { commandId: 'selfcheck-no-token', method: 'conversation.list', params: {} }, {});
     record('无 token /cmd → 401', noToken.status === 401, 'status=' + noToken.status);
-    // 3) 正码配对 → session → 同 commandId 恰一次 + 审计事实核对（本次设备/命令号/成败/重放）。
+    // 3) 正码配对 → session → 同 commandId 恰一次（**独立探针对象**——不写用户可见状态）。
     const paired = await post('/pair', { pairingId: created.pairingId, code: created.code, deviceName: 'selfcheck-throwaway', clientNonce: 'sc-ok' }, {});
     if (paired.status !== 200 || paired.json?.ok !== true) {
       record('正码配对', false, `status=${paired.status}`);
-      return this.finishSelfcheck(items);
+      return this.finishSelfcheck(items, null, baseline);
     }
     const deviceId: string = paired.json.deviceId;
     const credential: string = paired.json.deviceCredential;
     const sess = await post('/session', {}, { authorization: 'Device ' + credential });
     if (sess.status !== 200) {
       record('session 建立', false, `status=${sess.status}`);
-      return this.finishSelfcheck(items);
+      return this.finishSelfcheck(items, deviceId, baseline);
     }
     const token: string = sess.json.accessToken;
     const auth = { authorization: 'Bearer ' + token };
+    // 同 commandId 恰一次+审计：探针经**进程内 dispatch**（同一幂等网关+审计写入器；
+    // remote.pairing.selfcheckProbe 在 HTTP 远程通道 REMOTE_BLOCKED——隔离验收模式外双保险拒绝）。
     const commandId = 'selfcheck-once-' + randomUUID().slice(0, 8);
-    const navParams = { clientId: 'selfcheck-once', visibleProjectIds: [] };
-    const first = await post('/cmd', { commandId, method: 'nav.preferences', params: navParams }, auth);
-    const replay = await post('/cmd', { commandId, method: 'nav.preferences', params: navParams }, auth);
-    record('同 commandId 恰一次（replayed=true）', first.json?.ok === true && replay.json?.replayed === true, `first=${String(first.json?.ok)} replayed=${String(replay.json?.replayed)}`);
+    const probeParams = { round: 'r' + Date.now() };
+    const ctx = { deviceId, deviceEpoch: (this.deps.db.prepare('SELECT auth_epoch FROM remote_devices WHERE device_id = ?').get(deviceId) as { auth_epoch: number }).auth_epoch, gate: (): RemoteGateOutcome => this.deviceLive(deviceId, (this.deps.db.prepare('SELECT auth_epoch FROM remote_devices WHERE device_id = ?').get(deviceId) as { auth_epoch: number }).auth_epoch) };
+    const first = await this.deps.dispatch({ protocolVersion: 1, commandId, method: 'remote.pairing.selfcheckProbe', params: probeParams }, ctx) as { ok?: boolean };
+    const replay = await this.deps.dispatch({ protocolVersion: 1, commandId, method: 'remote.pairing.selfcheckProbe', params: probeParams }, ctx) as { ok?: boolean; replayed?: boolean };
+    record('同 commandId 恰一次（replayed=true——独立探针对象）', first?.ok === true && replay?.replayed === true, `first=${String(first?.ok)} replayed=${String(replay?.replayed)}`);
     const auditRows = this.deps.db.prepare('SELECT ok, replayed FROM remote_audit_log WHERE device_id = ? AND command_id = ? ORDER BY id').all(deviceId, commandId) as Array<{ ok: number; replayed: number }>;
     record('remote_audit_log 本次请求事实（设备+命令号+成败+重放）', auditRows.length === 2 && auditRows[0]!.ok === 1 && auditRows[0]!.replayed === 0 && auditRows[1]!.replayed === 1, `rows=${auditRows.length} facts=${JSON.stringify(auditRows)}`);
     // 4) 自检设备清理：吊销后 /cmd 401。
     revokeDeviceInDb(this.deps.db, deviceId, this.now());
     this.invalidateDevice(deviceId);
-    const afterRevoke = await post('/cmd', { commandId: 'selfcheck-after-revoke', method: 'nav.preferences', params: { clientId: 'selfcheck-after-revoke' } }, auth);
+    const afterRevoke = await post('/cmd', { commandId: 'selfcheck-after-revoke', method: 'conversation.list', params: {} }, auth);
     record('自检设备吊销后 /cmd → 401（通道终态；运行中任务不受影响）', afterRevoke.status === 401, 'status=' + afterRevoke.status);
-    return this.finishSelfcheck(items);
+    return this.finishSelfcheck(items, deviceId, baseline);
   }
 
-  private finishSelfcheck(items: Array<{ name: string; ok: boolean; detail: string }>): { ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string } {
+  /** 自检不变性基线：导航偏好行集/全项目看板组数/设备清单/在途 run 数。 */
+  private selfcheckBaseline(): { nav: string; boardGroups: number; devices: string; activeRuns: number } {
+    const nav = JSON.stringify(this.deps.db.prepare('SELECT client_id, revision, visible_project_ids_json FROM navigation_preferences ORDER BY client_id').all());
+    const devices = JSON.stringify(listDevices(this.deps.db).map((d) => ({ id: d.deviceId, revokedAt: d.revokedAt })));
+    const activeRuns = (this.deps.db.prepare("SELECT count(*) c FROM workflow_runs WHERE status IN ('RUNNING','WAITING','QUEUED','STOPPING')").get() as { c: number }).c;
+    let boardGroups = -1;
+    try {
+      const r = this.deps.dispatch({ protocolVersion: 1, commandId: `selfcheck-board-${randomUUID().slice(0, 8)}`, method: 'board.view', params: { scope: 'all' } }, null) as unknown;
+      const groups = (r as { data?: { groups?: unknown[] } })?.data?.groups;
+      boardGroups = Array.isArray(groups) ? groups.length : -1;
+    } catch { /* 读失败如实 -1（前后一致即可） */ }
+    return { nav, boardGroups, devices, activeRuns };
+  }
+
+  private finishSelfcheck(items: Array<{ name: string; ok: boolean; detail: string }>, selfcheckDeviceId: string | null, baseline: { nav: string; boardGroups: number; devices: string; activeRuns: number }): { ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string } {
+    // finally：探针临时键清理（独立测试对象——不留业务状态；审计行保留为真实证据）。
+    try {
+      this.deps.db.prepare("DELETE FROM daemon_state WHERE key LIKE 'selfcheck:probe:%'").run();
+    } catch { /* 尽力 */ }
+    // 不变性核对（任何退出路径——成功/失败/中断都登记）。
+    const after = this.selfcheckBaseline();
+    const navUnchanged = after.nav === baseline.nav;
+    const boardUnchanged = after.boardGroups === baseline.boardGroups;
+    items.push({ name: '导航偏好与全项目看板不受影响（独立探针对象；成功/失败路径均不变）', ok: navUnchanged && boardUnchanged, detail: `navRowsEqual=${navUnchanged} boardGroups=${baseline.boardGroups}->${after.boardGroups}` });
+    let devicesBefore: Array<{ id: string; revokedAt: number | null }>;
+    let devicesAfter: Array<{ id: string; revokedAt: number | null }>;
+    try {
+      devicesBefore = JSON.parse(baseline.devices) as Array<{ id: string; revokedAt: number | null }>;
+      devicesAfter = JSON.parse(after.devices) as Array<{ id: string; revokedAt: number | null }>;
+    } catch { devicesBefore = []; devicesAfter = []; }
+    const beforeIds = new Set(devicesBefore.map((d) => d.id));
+    const afterIds = new Set(devicesAfter.map((d) => d.id));
+    const diff = [...afterIds].filter((id) => !beforeIds.has(id));
+    const selfcheckAdded = selfcheckDeviceId != null ? diff.every((id) => id === selfcheckDeviceId) && (diff.length === 0 || diff.length === 1) : diff.length === 0;
+    const priorUntouched = devicesBefore.every((b) => {
+      const a = devicesAfter.find((x) => x.id === b.id);
+      return a != null && a.revokedAt === b.revokedAt;
+    });
+    items.push({ name: '已配对设备不受影响（自检一次性设备除外——已吊销清理）', ok: selfcheckAdded && priorUntouched, detail: `new=${diff.join(',')} priorUntouched=${priorUntouched}` });
+    items.push({ name: '在途任务不受影响（自检零派发零运行）', ok: after.activeRuns === baseline.activeRuns, detail: `activeRuns=${baseline.activeRuns}->${after.activeRuns}` });
     // 明文码在 runSelfcheck 栈内已消费/失效；结果文件只含结论事实（无码/凭据/token）。
     const report = { at: new Date().toISOString(), items, pass: items.filter((i) => i.ok).length, total: items.length };
     const file = join(this.deps.appDataDir, 'selfcheck-latest.json');

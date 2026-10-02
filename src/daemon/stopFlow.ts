@@ -23,6 +23,9 @@ export interface RequestStopInput {
   now: number;
   /** worker 提供的在途 turn 中断回调（§16.3：先协议中断，确认退出才算停止）。 */
   interruptTurn: (turnId: string) => Promise<void>;
+  /** 远程门禁·业务提交前（第三十四轮四）：自包 runCommand 的异步命令同样过提交前重查
+   * （commands.ts 注入——设备吊销/代次变化/会话失效→提交拒绝，吊销≠停止语义不变）。 */
+  commitGate?: () => void;
 }
 
 export interface RequestStopResult {
@@ -31,6 +34,7 @@ export interface RequestStopResult {
 }
 
 export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput): Promise<RequestStopResult> {
+  if (input.commitGate != null) input.commitGate();
   const outcome = runCommand<RequestStopResult>(
     db,
     { idempotencyScope: input.idempotencyScope, commandId: input.commandId, payloadHash: input.payloadHash, now: input.now },
