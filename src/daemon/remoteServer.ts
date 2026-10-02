@@ -941,10 +941,10 @@ export class RemoteAccessServer {
   async runSelfcheck(): Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }> {
     const items: Array<{ name: string; ok: boolean; detail: string }> = [];
     // 不变性基线（任何退出路径都在 finishSelfcheck 复核）。
-    const baseline = this.selfcheckBaseline();
+    const baseline = await this.selfcheckBaseline();
     if (this.server == null || this.identity == null || this.boundPort === 0) {
       items.push({ name: '前置：远程服务运行中', ok: false, detail: '未启用——先在 UI 启用远程访问' });
-      return this.finishSelfcheck(items, null, baseline);
+      return await this.finishSelfcheck(items, null, baseline);
     }
     const record = (name: string, ok: boolean, detail: string): void => { items.push({ name, ok, detail }); this.log(`[selfcheck] ${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
     const port = this.boundPort;
@@ -969,7 +969,7 @@ export class RemoteAccessServer {
     });
     // 1) 错码 401 + fail_count 递增（请求真实命中配对行——不是泛 401）。
     const created = createPairingCode(this.deps.db, this.now(), {});
-    if (!created.ok) { record('创建自检配对码', false, created.error); return this.finishSelfcheck(items, null, baseline); }
+    if (!created.ok) { record('创建自检配对码', false, created.error); return await this.finishSelfcheck(items, null, baseline); }
     const failsBefore = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
     const wrong = await post('/pair', { pairingId: created.pairingId, code: 'WRONGWRONG', deviceName: 'selfcheck', clientNonce: 'sc-wrong' }, {});
     const failsAfter = (this.deps.db.prepare('SELECT fail_count f FROM remote_pairing_codes WHERE pairing_id = ?').get(created.pairingId) as { f: number }).f;
@@ -985,14 +985,14 @@ export class RemoteAccessServer {
     const paired = await post('/pair', { pairingId: created.pairingId, code: created.code, deviceName: 'selfcheck-throwaway', clientNonce: 'sc-ok' }, {});
     if (paired.status !== 200 || paired.json?.ok !== true) {
       record('正码配对', false, `status=${paired.status}`);
-      return this.finishSelfcheck(items, null, baseline);
+      return await this.finishSelfcheck(items, null, baseline);
     }
     const deviceId: string = paired.json.deviceId;
     const credential: string = paired.json.deviceCredential;
     const sess = await post('/session', {}, { authorization: 'Device ' + credential });
     if (sess.status !== 200) {
       record('session 建立', false, `status=${sess.status}`);
-      return this.finishSelfcheck(items, deviceId, baseline);
+      return await this.finishSelfcheck(items, deviceId, baseline);
     }
     const token: string = sess.json.accessToken;
     const auth = { authorization: 'Bearer ' + token };
@@ -1011,33 +1011,36 @@ export class RemoteAccessServer {
     this.invalidateDevice(deviceId);
     const afterRevoke = await post('/cmd', { commandId: 'selfcheck-after-revoke', method: 'conversation.list', params: {} }, auth);
     record('自检设备吊销后 /cmd → 401（通道终态；运行中任务不受影响）', afterRevoke.status === 401, 'status=' + afterRevoke.status);
-    return this.finishSelfcheck(items, deviceId, baseline);
+    return await this.finishSelfcheck(items, deviceId, baseline);
   }
 
-  /** 自检不变性基线：导航偏好行集/全项目看板组数/设备清单/在途 run 数。 */
-  private selfcheckBaseline(): { nav: string; boardGroups: number; devices: string; activeRuns: number } {
+  /** 自检不变性基线：导航偏好行集/全项目看板组数（**await 正式查询**——第三十五轮二：旧实现
+   * 未 await 直接读 Promise.data 恒 -1，前后 -1 相等被误判 PASS）/设备清单/在途 run 数。
+   * 看板查询失败/结构不符→boardGroups=null（**未取得数据不计通过**——结束核验明确失败）。 */
+  private async selfcheckBaseline(): Promise<{ nav: string; boardGroups: number | null; devices: string; activeRuns: number }> {
     const nav = JSON.stringify(this.deps.db.prepare('SELECT client_id, revision, visible_project_ids_json FROM navigation_preferences ORDER BY client_id').all());
     const devices = JSON.stringify(listDevices(this.deps.db).map((d) => ({ id: d.deviceId, revokedAt: d.revokedAt })));
     const activeRuns = (this.deps.db.prepare("SELECT count(*) c FROM workflow_runs WHERE status IN ('RUNNING','WAITING','QUEUED','STOPPING')").get() as { c: number }).c;
-    let boardGroups = -1;
+    let boardGroups: number | null = null;
     try {
-      const r = this.deps.dispatch({ protocolVersion: 1, commandId: `selfcheck-board-${randomUUID().slice(0, 8)}`, method: 'board.view', params: { scope: 'all' } }, null) as unknown;
-      const groups = (r as { data?: { groups?: unknown[] } })?.data?.groups;
-      boardGroups = Array.isArray(groups) ? groups.length : -1;
-    } catch { /* 读失败如实 -1（前后一致即可） */ }
+      const r = await this.deps.dispatch({ protocolVersion: 1, commandId: `selfcheck-board-${randomUUID().slice(0, 8)}`, method: 'board.view', params: { scope: 'all' } }, null) as { ok?: boolean; data?: { groups?: unknown } } | null;
+      if (r != null && r.ok === true && Array.isArray(r.data?.groups)) boardGroups = r.data.groups.length;
+    } catch { boardGroups = null; /* 查询失败如实 null——不计通过 */ }
     return { nav, boardGroups, devices, activeRuns };
   }
 
-  private finishSelfcheck(items: Array<{ name: string; ok: boolean; detail: string }>, selfcheckDeviceId: string | null, baseline: { nav: string; boardGroups: number; devices: string; activeRuns: number }): { ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string } {
+  private async finishSelfcheck(items: Array<{ name: string; ok: boolean; detail: string }>, selfcheckDeviceId: string | null, baseline: { nav: string; boardGroups: number | null; devices: string; activeRuns: number }): Promise<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; file: string }> {
     // finally：探针临时键清理（独立测试对象——不留业务状态；审计行保留为真实证据）。
     try {
       this.deps.db.prepare("DELETE FROM daemon_state WHERE key LIKE 'selfcheck:probe:%'").run();
     } catch { /* 尽力 */ }
-    // 不变性核对（任何退出路径——成功/失败/中断都登记）。
-    const after = this.selfcheckBaseline();
+    // 不变性核对（任何退出路径——成功/失败/中断都登记；**await 结束基线**——旧实现同步读
+    // Promise 恒 -1）。看板查询未取得数据（前/后任一 null）→明确失败（不按「前后一致」通过）。
+    const after = await this.selfcheckBaseline();
     const navUnchanged = after.nav === baseline.nav;
-    const boardUnchanged = after.boardGroups === baseline.boardGroups;
-    items.push({ name: '导航偏好与全项目看板不受影响（独立探针对象；成功/失败路径均不变）', ok: navUnchanged && boardUnchanged, detail: `navRowsEqual=${navUnchanged} boardGroups=${baseline.boardGroups}->${after.boardGroups}` });
+    const boardKnown = baseline.boardGroups != null && after.boardGroups != null;
+    const boardUnchanged = boardKnown && after.boardGroups === baseline.boardGroups;
+    items.push({ name: '导航偏好与全项目看板不受影响（独立探针对象；成功/失败路径均不变）', ok: navUnchanged && boardUnchanged, detail: `navRowsEqual=${navUnchanged} boardGroups=${baseline.boardGroups}->${after.boardGroups}${boardKnown ? '' : '（看板查询失败/未覆盖——不计通过）'}` });
     let devicesBefore: Array<{ id: string; revokedAt: number | null }>;
     let devicesAfter: Array<{ id: string; revokedAt: number | null }>;
     try {

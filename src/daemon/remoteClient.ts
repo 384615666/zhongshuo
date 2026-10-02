@@ -288,13 +288,40 @@ async function enterMain() {
     window.__tasksTimer = setInterval(() => { if (!revoked) void refreshTasks().catch(() => {}); }, 5000);
   }
 }
+/**
+ * 会话/项目/房间目标刷新（第三十五轮一：读取失败贯通）：
+ * - 项目集 = DM 项目 ∪ **看板获准项目**（board.view scope=all——纯读零派发；没有 DM 的项目
+ *   也能进入房间列表——旧实现只从 DM 推导，房间-only 项目永远不可见）；
+ * - 任一必需读取（conversation.list/board.view/room.list）失败→**上抛**（返回 {ok:false}）：
+ *   UI 侧保留旧 targets/选项并标注读取失败（不冒充空列表）；恢复链据此保持 pending+原检查点；
+ * - 正常空数据（确实没有 DM/房间）照常渲染空列表——与读取失败分开。
+ */
 async function refreshTargets(initial) {
-  const dms = await cmd('conversation.list', {}).then((r) => (r.data && r.data.conversations) || []).catch(() => []);
-  const projectIds = [...new Set(dms.map((c) => c.projectId || c.project_id))];
+  let dms;
+  let board;
+  try {
+    const dr = await cmd('conversation.list', {});
+    dms = (dr.data && dr.data.conversations) || [];
+    board = await cmd('board.view', { scope: 'all' });
+  } catch (e) {
+    renderReadError('targets', e);
+    return { ok: false, error: e };
+  }
+  const boardGroups = (board.data && board.data.groups) || [];
+  const projectIds = [...new Set([
+    ...dms.map((c) => c.projectId || c.project_id),
+    ...boardGroups.map((g) => g.projectId || g.project_id),
+  ])].filter((pid) => pid != null && pid !== '');
   const rooms = [];
   for (const pid of projectIds) {
-    // eslint-disable-next-line no-await-in-loop
-    const rl = await cmd('room.list', { projectId: pid }).then((r) => (r.data && r.data.items) || []).catch(() => []);
+    let rl;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      rl = (await cmd('room.list', { projectId: pid })).data?.items ?? [];
+    } catch (e) {
+      renderReadError('targets', e);
+      return { ok: false, error: e };
+    }
     for (const room of rl) rooms.push({ kind: 'room', projectId: pid, roomId: room.id, conversationId: room.conversationId, label: '房间 ' + room.name + (room.conversationId == null ? '（无会话）' : '') });
   }
   targets = [
@@ -313,8 +340,33 @@ async function refreshTargets(initial) {
   if (prev != null && targets.some((t) => t.key === prev)) sel.value = prev;
   sel.onchange = () => { const t = targets.find((x) => x.key === sel.value) || null; switchTarget(t); };
   const t = targets.find((x) => x.key === (prev ?? sel.value)) || targets[0] || null;
+  clearReadError('targets');
   switchTarget(t);
+  return { ok: true };
 }
+/** 读取失败呈现（第三十五轮一）：保留旧快照+顶部标注——不清空、不冒充空/「暂无任务」。 */
+function renderReadError(scope, e) {
+  const msg = (e && e.message) || String(e);
+  window.__lastReadError = scope + ': ' + msg;
+  feedLine('error', '读取失败（' + scope + '）：' + msg + '——保留上次快照（不冒充空数据）');
+  const host = scope === 'tasks' ? document.getElementById('tasks') : document.getElementById('messages');
+  if (host == null) return;
+  let note = document.getElementById('read-fail-note-' + scope);
+  if (note == null) {
+    note = document.createElement('div');
+    note.id = 'read-fail-note-' + scope;
+    note.className = 'warn';
+    host.insertBefore(note, host.firstChild);
+  }
+  note.textContent = (scope === 'tasks' ? '任务读取失败：' : '会话/项目/房间读取失败：') + msg + '——以上为上次快照（未冒充空数据）';
+}
+function clearReadError(scope) {
+  const note = document.getElementById('read-fail-note-' + scope);
+  if (note != null) note.remove();
+  if (window.__lastReadError != null && String(window.__lastReadError).startsWith(scope + ':')) window.__lastReadError = null;
+}
+let restoring = false; // 恢复轮内抑制自动加载（第三十五轮一：switchTarget 的 fire-and-forget
+// loadMessages 会吞掉失败并打乱「恢复链读取」次序——轮次内由显式 await 承载并上抛）
 function switchTarget(t) {
   currentTarget = t;
   currentThread = null; // 切目标回到线程列表
@@ -322,16 +374,16 @@ function switchTarget(t) {
     const d = draftOf(t.key);
     document.getElementById('send-text').value = d.text;
     renderChips();
-    void loadMessages().catch(() => {});
+    if (!restoring) void loadMessages().catch(() => {});
   }
 }
-/** 房间线程列表（第三十三轮四：正式读取入口——room.pool 线程行可点击）。 */
+/** 房间线程列表（第三十三轮四：正式读取入口；第三十五轮一：失败上抛——不再吞成空列表）。 */
 async function renderThreadList() {
   const box = document.getElementById('thread-list');
   box.innerHTML = '';
   if (currentTarget == null || currentTarget.kind !== 'room' || currentTarget.roomId == null) return;
-  const r = await cmd('room.pool', { roomId: currentTarget.roomId }).catch(() => null);
-  const threads = (r && r.data && (r.data.threads || r.data.items)) || [];
+  const r = await cmd('room.pool', { roomId: currentTarget.roomId });
+  const threads = (r.data && (r.data.threads || r.data.items)) || [];
   const head = document.createElement('div');
   head.textContent = '房间线程 ' + threads.length + ' 条（点击读取——正式 thread.history 命令，零派发）：';
   box.appendChild(head);
@@ -355,22 +407,28 @@ async function openThread(threadId) {
 }
 async function loadMessages() {
   const box = document.getElementById('messages');
-  await renderThreadList();
-  if (currentTarget == null) { box.textContent = ''; return; }
-  if (currentTarget.kind === 'room') {
-    if (currentThread != null) { await openThread(currentThread); return; }
-    box.textContent = '选择上方房间线程读取消息（发送默认进房间主池；打开线程后为线程内跟进）。';
-    return;
+  try {
+    await renderThreadList();
+    if (currentTarget == null) { box.textContent = ''; return; }
+    if (currentTarget.kind === 'room') {
+      if (currentThread != null) { await openThread(currentThread); return; }
+      box.textContent = '选择上方房间线程读取消息（发送默认进房间主池；打开线程后为线程内跟进）。';
+      return;
+    }
+    const gen = ++historyGen;
+    const convId = currentTarget.conversationId;
+    const r = await cmd('conversation.history', { conversationId: convId, limit: 30 });
+    if (gen !== historyGen || currentTarget == null || currentTarget.kind !== 'dm' || currentTarget.conversationId !== convId) return; // 迟到/切走：不重绘另一会话
+    renderMessageItems((r.data && (r.data.messages || r.data.items)) || [], '');
+  } catch (e) {
+    renderReadError('messages', e);
+    throw e; // 恢复链需要知道会话/线程读取失败（保持 pending）；UI 侧调用者 catch
   }
-  const gen = ++historyGen;
-  const convId = currentTarget.conversationId;
-  const r = await cmd('conversation.history', { conversationId: convId, limit: 30 });
-  if (gen !== historyGen || currentTarget == null || currentTarget.kind !== 'dm' || currentTarget.conversationId !== convId) return; // 迟到/切走：不重绘另一会话
-  renderMessageItems((r.data && (r.data.messages || r.data.items)) || [], '');
 }
 function renderMessageItems(items, heading) {
   const box = document.getElementById('messages');
   box.textContent = heading;
+  clearReadError('messages');
   for (const m of items.slice().reverse()) {
     const d = document.createElement('div');
     d.className = 'msg';
@@ -506,16 +564,27 @@ document.getElementById('record-btn').onclick = () => void send('record_only');
 document.getElementById('send-text').oninput = (ev) => { if (currentTarget != null) draftOf(currentTarget.key).text = ev.target.value; };
 
 // ---------- 任务（房间看板+DM 执行态合并；状态事件驱动刷新；操作键绑版本） ----------
+/**
+ * 任务面刷新（第三十五轮一：三态呈现）：成功（含**确实无任务**的空态「暂无任务。」）与
+ * **读取失败**分开——board.view/conversation.list 任一失败→{ok:false}上抛：保留旧卡片+顶部
+ * 标注读取失败（不清空、不冒充「暂无任务」）；恢复链据此保持 pending+原检查点。
+ */
 async function refreshTasks() {
-  if (revoked) return;
+  if (revoked) return { ok: true };
   const box = document.getElementById('tasks');
+  let board;
+  let dms;
   try {
-    const [board, dms] = await Promise.all([
-      cmd('board.view', { scope: 'all' }).catch(() => null),
-      cmd('conversation.list', {}).catch(() => ({ conversations: [] })),
+    [board, dms] = await Promise.all([
+      cmd('board.view', { scope: 'all' }),
+      cmd('conversation.list', {}),
     ]);
-    box.textContent = '';
-    for (const g of (board && board.data && board.data.groups) || []) {
+  } catch (e) {
+    renderReadError('tasks', e);
+    return { ok: false, error: e };
+  }
+  box.textContent = '';
+  for (const g of (board.data && board.data.groups) || []) {
       for (const room of g.rooms || []) {
         for (const c of room.cards || []) {
           const d = document.createElement('div');
@@ -557,8 +626,9 @@ async function refreshTasks() {
       d.appendChild(accept);
       box.appendChild(d);
     }
-    if (box.children.length === 0) box.textContent = '暂无任务。';
-  } catch (e) { if (!revoked) box.textContent = '任务读取失败：' + e.message; }
+    if (box.children.length === 0) box.textContent = '暂无任务。'; // 空态=成功响应确实无任务（与读取失败分开）
+    clearReadError('tasks');
+    return { ok: true };
 }
 const TASK_EVENT_KINDS = new Set(['task.dispatched', 'task.completed', 'task.stopped', 'task.reviewed', 'delivery.pending', 'delivery.accepted', 'delivery.changes_requested', 'turn.started', 'turn.completed', 'task.created', 'message.submitted', 'thread.replyAdded']);
 
@@ -673,6 +743,7 @@ function snapshotFromStale(fromSeq) {
 }
 async function runSnapshotRound(round, fromSeq) {
   const wsAtStart = ws;
+  restoring = true;
   try {
     const r = await cmd('activity.list', { scope: 'all', limit: 80 });
     if (r == null || r.ok === false) throw new Error('activity.list 无结果');
@@ -681,13 +752,18 @@ async function runSnapshotRound(round, fromSeq) {
       if (!eventsSeen.has(it.eventId)) { eventsSeen.add(it.eventId); feedLine('快照', it.kindLabel + ' · ' + (it.projectName || '') + ' seq=' + (it.seq ?? '?')); }
     }
     saveSeen();
-    await refreshTargets(false); // 失败即 throw→pending（不吞——第三十四轮二）
-    await refreshTasks();
+    // 下游读取链（第三十五轮一）：目标/项目/房间、任务面、当前会话/线程事实——任一失败
+    // （{ok:false} 或 throw）都保持 pending+原检查点，不冒充恢复完成。
+    const t = await refreshTargets(false);
+    if (t != null && t.ok === false) throw new Error('目标/项目/房间读取失败：' + ((t.error && t.error.message) || ''));
+    const k = await refreshTasks();
+    if (k != null && k.ok === false) throw new Error('任务面读取失败：' + ((k.error && k.error.message) || ''));
+    await loadMessages(); // 当前会话/线程事实（conversation.history/room.pool/thread.history——失败 throw→pending）
     const sub = await subscribeAll();
     if (sub.needRecovery) throw new Error('订阅返回 cursor-stale——按需新一轮恢复');
     if (sub.broken || ws !== wsAtStart || ws == null || ws.readyState !== 1) throw new Error('恢复期间连接关闭/更换——保持待恢复（新连接重连时再走恢复）');
     if (sub.acked < sub.total) throw new Error('订阅确认不全（' + sub.acked + '/' + sub.total + '）');
-    if (round !== snapshotRound) return; // 旧轮让位——不提交
+    if (round !== snapshotRound) { restoring = false; return; } // 旧轮让位——不提交
     // 成功：全部跟踪项目水位推进到已恢复范围；检查点=新 min（不越过未恢复范围）。
     for (const pid of Object.keys(projWm)) projWm[pid] = fromSeq;
     persistCheckpoint();
@@ -696,11 +772,13 @@ async function runSnapshotRound(round, fromSeq) {
     window.__cursorState = 'recovered';
     window.__snapshotAcks = sub.acked + '/' + sub.total;
     feedLine('snapshot-recovered', '游标过期——同范围快照 ' + items.length + ' 条已恢复（会话+任务刷新），订阅已重建（确认 ' + sub.acked + '/' + sub.total + '），新事件从 ' + fromSeq + ' 经事件流续');
+    restoring = false;
   } catch (e) {
-    if (round !== snapshotRound) return; // 旧轮让位
+    if (round !== snapshotRound) { restoring = false; return; } // 旧轮让位
     snapshotRetry += 1;
     feedLine('snapshot-pending', '快照恢复未完成（第 ' + snapshotRetry + ' 次）：' + (e && e.message) + '——检查点保持 ' + lastSeq + '，稍后重试');
     if (snapshotRetry <= 10) setTimeout(() => { if (round === snapshotRound && !revoked) void runSnapshotRound(round, fromSeq).catch(() => {}); }, Math.min(2000 * snapshotRetry, 15_000));
+    else restoring = false;
   }
 }
 async function connectEvents() {
