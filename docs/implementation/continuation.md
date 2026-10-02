@@ -2,7 +2,45 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-02 第三十四轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十五轮，唯一权威快照）
+
+> 本轮=**两类遗漏收口+数字口径更正**：恢复链读取贯通/自检看板真异步+冻结重交。上一轮快照
+> （第三十四轮）紧随其后。
+> - **恢复链读取贯通（问题一）**：refreshTargets/refreshTasks 返回 {ok}——conversation.list/
+>   board.view/room.list 任一失败上抛（UI 侧保留旧 targets/选项/卡片+顶部「读取失败」标注——
+>   不清空、不冒充「暂无任务」；空态「暂无任务。」=成功响应确实无任务，三态分开）；loadMessages
+>   包 try/catch→renderReadError+**rethrow**（room.pool 失败不再吞成空线程表）；runSnapshotRound
+>   检查 targets/tasks/loadMessages 全链——任一 {ok:false}/throw→pending+原检查点；**恢复轮内
+>   restoring=true 抑制 switchTarget 自动 loadMessages**（fire-and-forget 的 catch 曾吞失败并把
+>   恢复链的显式 await 挤成第 3 次——计数错位实证）；**项目枚举=DM ∪ board.view(scope=all) 获准
+>   项目**（纯读零派发——旧实现只从 DM 推导，房间-only 项目永远不可见）。
+> - **自检看板真异步（问题二）**：selfcheckBaseline/finishSelfcheck 改 async+await dispatch
+>   （旧实现同步读 Promise.data 恒 undefined→boardGroups=-1，前后 -1 相等被误判 PASS）；查询
+>   失败/结构不符→boardGroups=null——**未取得数据不计通过**（detail 标注「看板查询失败/未覆盖」）；
+>   反例：正常路径 detail=boardGroups=1->1（真实组数）；前置失败（dispatch 对 board.view 恒抛）
+>   与结束失败（首调成功后抛）均 ok=false（1->null / null->null）且整体失败；dispatch 不 reject
+>   （错误转结果对象）+try/catch——无未处理 rejection。
+> - **验证器（REMOTE）**：failCmdNth(method, nth) 第 N 次命中（boot 放行、恢复链中招——
+>   conversation.history/room.list 是 5s 轮询不碰的确定计数命令）；**每页单一 Fetch 守卫**
+>   （再 arm 先拆旧监听器——旧监听器会对新目标请求抢先 continueRequest 的多轮竞态实证）；
+>   双面判定（conversation.list 的 #1 可能被 5s 轮询的任务面抢走——错误呈现在 #tasks）。
+> - **数字口径**：三冻结 report（0gk5lr/d1vbiu/u7jnz1）REMOTE 条目均 **23**——第三十四轮报告
+>   写 24 系**报告数字错误**（独立开发运行同为 23 PASS；24 不存在任何统计范围）已更正；
+>   本轮 REMOTE=**24**（+1「读取三态呈现」新记录；快照全口径扩四轮）。
+> - **DEV-24 M3 盘点**（详见 remaining-matrix DEV-24 行）：已完成有证据=七类上传/解析/预览+
+>   文本/代码/Markdown 评论锚点+安全预览/导出；未实现=图片附件级锚点（区域模型留 FULL-03
+>   后批）/OCR（先方案）/PPTX 页图；**最小可交付项=提取文本类（pdf/docx/sheet/slides/csv）
+>   行评论**——第三十六轮编码。
+> - **数字**：remoteAccess **31/31**（+2：自检看板真异步/空态对照）；REMOTE **24/24**；本地全量
+>   **822/822**；**冻结三连 142/142×3**：新基线 bld_12d1f5aeeff6a37e（created pnyar8 + reused
+>   jjzix5/zd6ppj 各 583 文件核对；首次尝试 uz3rs8 在停止演练中止——TTL 断流下渲染稀疏，
+>   48s 点击窗无可点行（审计零 task.stop）——停止循环改「先刷新再点+25 次」后通过，中止
+>   记录保留）；**双机包=该冻结产物逐文件核对生成**（583/583+selfTest 实跑全链+证据归档
+>   dev25-dual-evidence/2026-10-021005-wc0av5/）。零真实模型调用。
+> - **下一步**：①用户双机 D1—D10 回填（工程侧只读核对）；②DEV-24 最小项编码（提取文本类行
+>   评论）；③移动浏览器组合（R11 独立范围——手机资源确认后）。
+
+## 上一轮快照（2026-10-02 第三十四轮）
 
 > 本轮=**三问题收口+证据补强**：跨项目安全检查点/快照恢复去假成功/自检不动用户偏好+同请求
 > 中途吊销与崩溃/自测证据归档+冻结重交。上一轮快照（第三十三轮）紧随其后。
