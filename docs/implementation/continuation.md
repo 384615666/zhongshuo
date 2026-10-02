@@ -2,7 +2,87 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-02 第三十二轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十三轮，唯一权威快照）
+
+> 本轮=**第三十二轮定位缺口全收口+冻结同源双机包重交**：设备级授权代次/共享命令门禁/WSS
+> 限额与收拢实装/事件泵按项目游标/下载三修/自检去明文/浏览器信封与清算语义/双机包从最终
+> 冻结产物逐文件核对重交。上一轮快照（第三十二轮）紧随其后。
+> - **设备级授权代次（迁移 040 remote_devices.auth_epoch）**：invalidateDevice 只递增该设备
+>   代次+撤销该设备 token/票据/活连接——**B 的现有 token/票据/WS 继续有效**（旧全局 authEpoch
+>   吊销 A 后 B 也 401——多设备互相误伤，双设备正反例实证）。checkToken/票据消费/deviceLive
+>   均按设备行核对 revoked_at+auth_epoch；**设备事实优先于 token 检查**（不被联动删除掩盖成
+>   TOKEN_INVALID）。
+> - **remoteGate 共享命令门禁**：RemoteCallContext={deviceId,deviceEpoch,gate}——dispatch 进入
+>   时+**run() 业务提交前**（commands.ts 共享 run——覆盖全部写提交）重查设备/代次/会话；拒绝
+>   返回 {ok:false,code:DEVICE_REVOKED} 且**留审计行**；「同上下文吊销后提交→零提交」反例。
+>   吊销≠停止（已授权运行任务不受影响）。
+> - **WSS 实装与收拢**：每地址未认证限额按**真实来源地址**（2/地址+全局 32——第三地址拒/关后
+>   可再连/全局独立小值反例）；closeConn=发起关闭→宽限（3s 可调）terminate→核实后释放计数
+>   （连接真正关闭前留在 conns——不「先移除再 close 当已退出」）；daemon.stop 有界等待收拢
+>   后强杀清场（不回握客户端+stop 截止均有界完成）。
+> - **事件泵按项目游标（projNext latch）**：SQL 直接 `WHERE project_id=? AND seq>?` 按订阅项目
+>   过滤（每项目每泵 LIMIT 300）——**600 条未订阅 P1 不再阻塞已订阅 P2**（旧全局 LIMIT 500
+>   先取再跳过=卡死）。迟订阅从 latch/authBase 续发；积压超 resumeWindow→按项目 cursor-stale
+>   +水位跳当前（不无限重扫）；取消订阅即停；重连续传只补增量。authBase=认证时全局水位。
+> - **下载三修**：①主文件 sha256 核验可达（旧实现 bytes 检查后 continue——同长度篡改正文可过，
+>   现 410 EXPORT_TAMPERED）；②**单次受控读取**：同句柄读出字节先核验再直接进 ZIP（不再校验
+>   后另 readFile——ZIP 字节恒为已验证字节）；③**资产额度与元文件分离**：额度=manifest.files
+>   （≤200），index/manifest 不占——200 件资产+正文+清单=202 文件完整下载、201 件明确 413；
+>   发送前重查下载权限。
+> - **自检去明文（第六组合同）**：remote.pairing.selfcheckExport **废除**（曾把配对码明文写
+>   daemon_state——违 R11）。新 remote.pairing.selfcheck 仅 **ZS_REMOTE_SELFCHECK=1 隔离验收
+>   模式**开放（双机包启动器注入；正式产品=CAPABILITY_UNSUPPORTED）：remoteServer.runSelfcheck
+>   **进程内**执行错码 401（核对配对行 fail_count 递增——证明命中真行）/伪造 Host 403/伪造
+>   Origin 403/无 token 401/正码配对→session→同 commandId 恰一次（replayed=true）+
+>   **remote_audit_log 本次设备/命令号/成败/重放事实核对**→自检设备吊销清理（后续 401）。
+>   明文码只在进程内使用结束即失效；appData/selfcheck-latest.json 无任何凭据（正则核对）；
+>   self-check.cjs 只导出结果+脱敏核对（无网络、无码）。
+> - **浏览器客户端语义收口**：cmdOnce 区分**明确拒绝**（e.status!=null——信封即删，允许修正后
+>   新 commandId 重发）与**结果未知**（响应丢失——信封保留沿原号重试恰一次）；存在未知信封时
+>   发送键先收口原信封（不与新草稿暗中混用——新草稿保留）。**按实际提交信封清算**（settleDraft）：
+>   正文被修改保留、只移除已发送 refs、B 的上传不受 A 清算影响（pending 按钮重试成功同清算）。
+>   停止/验收操作键绑 run/停止代次/delivery/revision/manifestHash（旧失败不劫持新版本）。
+>   **房间线程读取入口**：房间目标列线程（room.pool）→点击经 thread.history 正式命令读取→
+>   线程内发送（target=thread）。**快照恢复闭环**：cursor-stale→activity.list→refreshTargets+
+>   refreshTasks（同范围事实恢复）→saveLastSeq→**subscribeAll 等确认**→snapshot-recovered；
+>   失败保留旧游标+pending 态+有界退避重试（≤10 次）——不冒充成功；connectEvents 取票失败也
+>   持续有界退避（不只 onclose）。token 续换记 __tokenGen、成功 HTTP 记 __lastHttpOkAt（验收
+>   核对新请求事实）。
+> - **双机包重写（make-dev25-dual-package）**：**源=最终冻结产物 dist/desktop/vdr-frozen**，
+>   拷贝后**逐文件重算 SHA256 对冻结 MANIFEST 核对**（含 daemon.cjs——第三十二轮交付包系陈旧
+>   构建 bld_aeba86865045ebbf（daemon.cjs b7aa81dd）而冻结基线 bld_d96713369ac153d0
+>   （060e27ef）——「同源冻结产物」声明不实，已纠正；核对事实写 RESULTS/frozen-manifest-check.
+>   json）；**RESULTS 永不重建删除**（build 只重建 ZhongshuoDual/seed/selfcheck；模板只在缺失
+>   时写；自测含回填保护反例）；启动器管道名按数据根（server-data/pipe-name.txt 首启随机持久
+>   ——两份包互不撞）；ZS_REMOTE_SELFCHECK=1 内置；自测钩子 ZS_DEV25_DEBUG_PORT/ZS_DEV25_DRILL
+>   仅自测注入。**selfTest 实跑交付 .bat**（清父环境全部 ZS_*+中文空格路径）：窗口打开（CDP）/
+>   合成项目经 ui.autoOpenProjectPath 自动打开链 reload 可见/模拟模式 runtime.status=fake 明确/
+>   种子+**停止演练**（--drill 真发任务→轮询执行态→task.stop→run 收口）/优雅停机 Browser.close
+>   正式关窗链（requestDelivered+exitCode0+complete+非forced+无残留——taskkill 不参与成功路径）/
+>   real_calls 子进程成功+stdout 整数结构核验（空不当 0）/**二次启动幂等**（reused 标记+种子私信
+>   恰 2+零新 message.submit）。seed-client 幂等（revision 取 project.open 当前行——不固定 0；
+>   房间/私信按名查重；附件+种子消息仅首启；认证前 close 立即 reject；写 ui.autoOpenProjectPath）。
+> - **验证器坑（本轮四次迭代实证）**：①evalJs 返回 **{value} 包装**——布尔比较必须取 .value
+>   （包装对象恒!==true：点击已成功却判失败）；②验收等待只认 DM「待验收交付」行——房间任务
+>   看板卡验收按钮会提前满足 ANY 断言；③停止循环在途口径必须含 WAITING/QUEUED/STOPPING——
+>   run 排队（同成员前一 turn 未完）时只数 RUNNING 会**未点击先 break**（audit 零 task.stop 为
+>   证）；④房间宿主任务要与 DM A 错开成员（同成员串行拖结算）；⑤停止终态等待要覆盖整个 60s
+>   停滞窗（停滞脚本被中断不推进——结算等完剩余窗）；⑥任务区 5s 轮询清空重挂窗口内点击会
+>   落空（点击自带短重试+每试刷新）。
+> - **数字**：remoteAccess **26/26**（+7：设备级代次双设备/每地址限额/有界收拢/泵模型 600 条/
+>   主文件同长度篡改+200·201 边界/提交前门禁/进程内自检）；REMOTE 会话 **23/23**（+3 新记录：
+>   按实际信封清算·等待期编辑保留/门禁明确拒绝→修正重发·旧稿零提交/房间线程读取入口；快照
+>   恢复改「订阅重建确认+新事件经 WSS 到达」、token 续换改 __tokenGen/__lastHttpOkAt 事实）；
+>   本地全量 **817/817**（githubSandbox 同次 5/5）；**冻结三连 141/141×3**：新基线
+>   bld_412ace063c00ca39（created v20261002062722-1uolgd 轮 REM 渲染进程偶发崩溃中止——
+>   如实保留；完整三连 v20261002062951-61bdlm / v20261002063838-hl99h4 / v20261002064717-
+>   0vxmjj，各 583 文件核对）；**双机包 dev25-dual-win=冻结产物逐文件核对生成**（583/583+
+>   RESULTS 保护反例+selfTest 实跑 .bat 全链通过）。零真实模型调用。
+> - **下一步**：①用户按 README 执行双机 D1—D10 并回填 RESULTS/RESULT-template.md（工程侧只读
+>   核对——不代宣称通过）；②移动浏览器组合（R11 独立验收范围——手机资源另行确认）；③DEV-24
+>   M3 缺口推进（图片/PDF/Office 评论锚点按 FULL-03 分批、OCR/新视觉渠道先方案）。
+
+## 上一轮快照（2026-10-02 第三十二轮）
 
 > 本轮=**DEV-25 收口**：认证与权限补齐（重复码/审计穿透/直查漏口/异步期吊销重查）→WSS 换
 > 成熟库补完整合同→浏览器页可操作闭环（20 项页面验收）→设置面纠正→**双机包交付**。
