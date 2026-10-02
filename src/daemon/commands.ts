@@ -60,11 +60,17 @@ export interface DaemonCommandDeps {
    * 明确拒绝）：本机可信入口专用（配对码创建/配置/吊销/设备清单）。HTTP 远程通道在
    * remoteServer.REMOTE_BLOCKED_METHODS 拦截同名方法——「创建配对码仅本机可信 UI」。
    */
+  /**
+   * 远程通道上下文（第三十二轮一）：由 remoteServer 服务端构造（deviceId+authEpoch），
+   * 桌面管道不注入。仅用于请求审计（remote_audit_log）——业务作者恒为 localUserId，
+   * 不信任客户端自报身份；不影响幂等 scope/payloadHash。
+   */
+  remoteAudit?: { deviceId: string; authEpoch: number };
   remoteControl?: {
     restart: (cfg: { enabled: boolean; listenHost: string; port: number; allowLan: boolean }) => Promise<{ address: string; port: number; fingerprint: string } | { stopped: true }>;
     stop: () => Promise<void>;
     invalidateDevice: (deviceId: string) => void;
-    current: () => { address: string; port: number; fingerprint: string } | null;
+    current: () => { address: string; port: number; fingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string } | null;
   };
   /** 应用数据目录（changeset.* 的受管理内容存储位置；entry 注入）。 */
   appDataDir?: string;
@@ -156,6 +162,17 @@ const localScope = (userId: string): string => `user:${userId}`;
  * 偏好行（无偏好行=全量项目可见——向后兼容；损坏/非数组=空集如实，不猜测）。scope=all
  * 的聚合面（看板/Activity）用它过滤；显式 projectId 查询不受限（query≠visible 既定区别）。
  */
+/** 任务 audience（第三十二轮一）：DM 会话的任务仅该会话本人参与者可读/可操作；房间任务随
+ * 项目可达。按 ID 直查入口（task.get/task.stop/task.redispatch 等）统一走此校验——读取、
+ * 操作与回执重放不因「知道 ID」绕过私信边界。 */
+function assertTaskAudience(db: ZhongshuoDatabase, viewerId: string, taskId: string): void {
+  const row = db.prepare('SELECT t.conversation_id, c.kind AS conversation_kind FROM tasks t JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?').get(taskId) as { conversation_id: string | null; conversation_kind: string | null } | undefined;
+  if (row == null) return; // 不存在由各命令自身的 RESOURCE_NOT_FOUND 分支处理
+  if (row.conversation_kind !== 'dm') return;
+  const inDm = db.prepare("SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'human' AND dp.principal_id = ?").get(row.conversation_id, viewerId);
+  if (inDm == null) throw new DaemonCommandError('FORBIDDEN', '任务属于他人私信会话——按 ID 直查不绕过 audience');
+}
+
 function visibleProjectIdsOf(db: ZhongshuoDatabase, viewerId: string): string[] {
   const row = db.prepare('SELECT visible_project_ids_json FROM navigation_preferences WHERE viewer_id = ? ORDER BY revision DESC LIMIT 1').get(viewerId) as { visible_project_ids_json: string } | undefined;
   if (row == null) {
@@ -543,7 +560,40 @@ function rootPathOf(db: ZhongshuoDatabase, projectId: string): string | null {
   return (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(projectId) as { canonical_path: string } | undefined)?.canonical_path ?? null;
 }
 
+/** 远程通道审计写入（第三十二轮一）：HTTP /cmd 由服务端注入 remoteAudit（deviceId+authEpoch
+ * ——服务端构造的可信上下文，业务作者仍为其代表的本机用户）。best-effort：审计失败不
+ * 改变命令结果；不进命令事务（幂等语义不受影响——回执重放不重复执行业务）。 */
+function writeRemoteAudit(deps: DaemonCommandDeps, method: string, commandId: string, ok: boolean, replayed: boolean): void {
+  if (deps.remoteAudit == null) return;
+  try {
+    deps.db.prepare('INSERT INTO remote_audit_log (at, device_id, method, command_id, ok, replayed, auth_epoch) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(Date.now(), deps.remoteAudit.deviceId, method, commandId, ok ? 1 : 0, replayed ? 1 : 0, deps.remoteAudit.authEpoch);
+  } catch { /* 审计尽力——不改变业务结果 */ }
+}
+
 export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: unknown): Promise<unknown> {
+  // 远程审计包装（第三十二轮一）：请求事实（含重放）独立留痕；上下文由服务端注入——
+  // 不信客户端自报身份；同 commandId 幂等语义不变（重放不重复执行业务）。
+  const method0 = (envelope as { method?: unknown })?.method;
+  const commandId0 = (envelope as { commandId?: unknown })?.commandId;
+  const started = Date.now();
+  let outcome: unknown;
+  try {
+    outcome = await dispatchDaemonCommandInner(deps, envelope);
+  } catch (error) {
+    if (typeof method0 === 'string' && typeof commandId0 === 'string') {
+      writeRemoteAudit(deps, method0, commandId0, false, false);
+    }
+    throw error;
+  }
+  if (typeof method0 === 'string' && typeof commandId0 === 'string') {
+    writeRemoteAudit(deps, method0, commandId0, (outcome as { ok?: boolean })?.ok === true, (outcome as { replayed?: boolean })?.replayed === true);
+  }
+  void started;
+  return outcome;
+}
+
+async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unknown): Promise<unknown> {
   const parsedEnvelope = commandEnvelopeSchema(z.unknown()).safeParse(envelope);
   // 信封校验失败时 commandId 尽力取原始 envelope 的（可能缺失）——客户端丢弃无等待者响应。
   const fallbackCommandId = (envelope as { commandId?: string })?.commandId;
@@ -696,6 +746,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
+        assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 按 ID 直查不绕过私信边界（第三十二轮一）
         const task = deps.db.prepare('SELECT id, title, status, room_id, conversation_thread_id, room_task_number, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
         const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
@@ -923,9 +974,17 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         return withCommandId({ ok: true, data: { items } });
       }
       case 'events.list': {
+        // audience（第三十二轮一修复）：旧实现只按 projectId 查询——非参与者的 DM 事件可被
+        // 按 ID 读出（HTTP /cmd 同样可达）。与 activity.list 同口径：DM 事件仅本人参与可见。
         const params = z.strictObject({ projectId: z.string().min(1), afterSeq: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
-        const items = listEvents(deps.db, params.projectId, params.afterSeq ?? 0, params.limit ?? 100);
-        return withCommandId({ ok: true, data: { items, hasMore: items.length >= (params.limit ?? 100) } });
+        const raw = listEvents(deps.db, params.projectId, params.afterSeq ?? 0, Math.max((params.limit ?? 100) * 2, 100)) as unknown as Array<{ seq: number; event_id: string; kind: string; payload_json: string; conversation_id: string | null; thread_id: string | null; task_id: string | null }>;
+        const items = raw.filter((e: { conversation_id: string | null }) => {
+          if (e.conversation_id == null) return true;
+          const ck = deps.db.prepare('SELECT kind FROM conversations WHERE id = ?').get(e.conversation_id) as { kind: string } | undefined;
+          if (ck?.kind !== 'dm') return true;
+          return deps.db.prepare("SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'human' AND dp.principal_id = ?").get(e.conversation_id, deps.localUserId) != null;
+        }).slice(0, params.limit ?? 100);
+        return withCommandId({ ok: true, data: { items, hasMore: raw.length >= Math.max((params.limit ?? 100) * 2, 100) } });
       }
       case 'recovery.status': {
         // 只读恢复状态查询（修复轮 6）：禁止用「尝试恢复命令」探测门禁。
@@ -2483,7 +2542,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         // 远程配置读取（本机可信入口——remoteServer.REMOTE_BLOCKED_METHODS 在 HTTP 面拒绝）。
         const cfg = readRemoteConfig(deps.db);
         const cur = deps.remoteControl?.current() ?? null;
-        return withCommandId({ ok: true, data: { ...cfg, ...(cur != null ? { running: true, address: cur.address, fingerprint: cur.fingerprint } : { running: false }), lanIps: lanIps(), note: '默认仅本机回环；启用 LAN 需显式配置监听地址——HTTPS/WSS 强制' } });
+        return withCommandId({ ok: true, data: { ...cfg, ...(cur != null ? { running: true, address: cur.address, fingerprint: cur.fingerprint, lanAddresses: cur.lanAddresses, certNotAfter: cur.certNotAfter, certSubject: cur.certSubject } : { running: false }), lanIps: lanIps(), note: '默认仅本机回环；启用 LAN 需显式配置监听地址——HTTPS/WSS 强制' } });
       }
       case 'remote.config.set': {
         // 远程配置写入+服务生命周期联动（entry 注入 remoteControl；测试直连=明确拒绝）。
@@ -2492,7 +2551,8 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
           listenHost: z.string().min(1).max(100),
           port: z.number().int().min(0).max(65535),
           allowLan: z.boolean(),
-        }).refine((p) => !p.allowLan || p.listenHost !== '127.0.0.1', { message: 'allowLan=true 不能用回环地址——配置 LAN 地址（如 0.0.0.0 或具体 IP）', path: ['listenHost'] }).parse(env.params);
+        }).refine((p) => !p.allowLan || p.listenHost !== '127.0.0.1', { message: 'allowLan=true 不能用回环地址——配置 LAN 地址（如 0.0.0.0 或具体 IP）', path: ['listenHost'] })
+          .refine((p) => p.allowLan || p.listenHost === '127.0.0.1' || p.listenHost === 'localhost' || p.listenHost === '::1', { message: 'allowLan=false 时拒绝非回环监听地址（第三十二轮四）——选 LAN 需同时 allowLan=true', path: ['listenHost'] }).parse(env.params);
         if (deps.remoteControl == null) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', '远程服务控制未接线（本命令由 UI 宿主注入执行）');
         const result = run(() => writeRemoteConfig(deps.db, params, Date.now()));
         const outcome = await deps.remoteControl.restart(params);
@@ -2505,6 +2565,18 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
         const created = createPairingCode(deps.db, Date.now(), params);
         if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
         return withCommandId({ ok: true, data: { pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt, address: cur?.address ?? null, fingerprint: cur?.fingerprint ?? null, note: '配对码 5 分钟内一次有效；地址与证书 SHA-256 指纹在设备端核对后完成信任（不降级 HTTP）' } });
+      }
+      case 'remote.pairing.selfcheckExport': {
+        // 自检专用配对码（第三十二轮六；仅本机可信入口）：创建新码并写入 daemon_state
+        //（remote:selfcheck:pairing）——双机包 run-self-check.bat 从 sqlite 读取执行错码负例；
+        // 不经任何网络返回给客户端面。码明文只存本机 appData（与 UI 展示同敏感级）。
+        const cur = deps.remoteControl?.current() ?? null;
+        const created = createPairingCode(deps.db, Date.now(), {});
+        if (!created.ok) throw new DaemonCommandError('VALIDATION_INVALID', created.error);
+        deps.db.prepare(`INSERT INTO daemon_state (key, value, updated_at) VALUES ('remote:selfcheck:pairing', ?, ?)
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .run(JSON.stringify({ pairingId: created.pairingId, code: created.code, expiresAt: created.expiresAt }), Date.now());
+        return withCommandId({ ok: true, data: { pairingId: created.pairingId, expiresAt: created.expiresAt, note: '已写入自检状态（run-self-check.bat 读取）——不用于真机配对' } });
       }
       case 'remote.devices.list': {
         const devices = listDevices(deps.db);
@@ -3251,6 +3323,7 @@ export async function dispatchDaemonCommand(deps: DaemonCommandDeps, envelope: u
       }
       case 'task.stop': {
         const params = z.strictObject({ taskId: z.string().min(1), targetRunId: z.string().min(1), expectedStopGeneration: z.number().int().nonnegative() }).parse(env.params);
+        assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 操作面同样不绕过（第三十二轮一）
         // requestStop 内部自包 runCommand（含中断回调在外层执行）——此处不重复包裹。
         const data = await requestStop(deps.db, {
           taskId: params.taskId,

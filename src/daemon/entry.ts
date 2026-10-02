@@ -261,7 +261,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       db: db!,
       localUserId,
       appDataDir: options.appDataDir,
-      dispatch: (envelope: unknown): Promise<unknown> => dispatchDaemonCommand(makeCommandDeps(), envelope),
+      // ctx=服务端构造的远程上下文（deviceId+authEpoch——审计独立留痕；业务作者仍 localUserId，
+      // 不信客户端自报；不影响幂等 scope/payloadHash——同 commandId 恰一次语义不变）。
+      dispatch: (envelope: unknown, ctx: { deviceId: string; authEpoch: number } | null): Promise<unknown> =>
+        dispatchDaemonCommand({ ...makeCommandDeps(), ...(ctx != null ? { remoteAudit: ctx } : {}) }, envelope),
       log: (line) => { process.stderr.write(`[zhongshuo-remote] ${line}
 `); },
     });

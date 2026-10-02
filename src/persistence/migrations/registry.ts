@@ -37,6 +37,7 @@ import { migration035 } from './035-pdf-extract-cache.ts';
 import { migration036 } from './036-attachment-range-spec.ts';
 import { migration037 } from './037-message-reactions.ts';
 import { migration038 } from './038-remote-access.ts';
+import { migration039 } from './039-remote-audit-log.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -78,4 +79,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration036,
   migration037,
   migration038,
+  migration039,
 ];

@@ -18,11 +18,13 @@
     "build:ui": "node scripts/build-ui.mjs"
   },
   "dependencies": {
+    "@types/ws": "^8.18.2",
     "better-sqlite3": "^13.0.3",
     "fflate": "^0.8.3",
     "koffi": "^3.3.2",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "~4.10.38",
+    "ws": "^8.22.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.5"
   },

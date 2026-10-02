@@ -1,32 +1,35 @@
 /**
- * DEV-25 远程访问服务端（第三十一轮三/四，R11 合同实现）：
- * - 强制 HTTPS/WSS：自签证书身份（remoteIdentity——PowerShell 生成，私钥/口令只留服务端）；
- *   不可用即拒绝启动，不降级 HTTP；证书校验由客户端完成（失败即停——服务端无从代劳）；
- * - Host/Origin 精确白名单来自**本机配置**（listenHost+port 推导），不信任请求 Host 自动扩
- *   名单；伪造 Host/Origin → 403；
- * - 配对（POST /pair，唯一免 token 入口）：pairingId+code（加盐摘要+常量时间比较）、
- *   原子消费、5 分钟 TTL、一次消费、失败计数（同 pairingId 连续 5 次失效）、每源地址
- *   5 次/分钟+全局 30 次/分钟限速（429+Retry-After）；创建配对码**只在本机管道命令**
- *   （remote.pairing.create——HTTP 面不暴露）；
- * - 会话（POST /session）：Device 凭据换 15 分钟 accessToken（仅内存）；WS 票据
- *   （POST /ws-ticket）：Bearer token 换 30 秒单次票据（绑定 device/origin）；
- * - 业务（POST /cmd）：Bearer token → 同一 dispatchDaemonCommand（同 localUserId=本机同等
- *   权限、同幂等 scope——桌面/浏览器同 commandId 重放不重复执行；REMOTE_BLOCKED_METHODS
- *   保留给本机可信入口）；CallerContext 由服务端构造（不信客户端自报身份）；
- * - 导出下载（GET /export/:id/download）：Bearer token——获准下载；服务端不执行 shell；
- * - WSS（/events）：首帧 authenticate+ticket（5 秒窗口，未认证不收业务不发事件；未认证
- *   连接每地址 2 个/全局 32 个）；票据单次消费；仅事件与订阅控制（写操作走 HTTP）；
- *   每批事件重查 audience（他人 DM 不推送）；lastSeq 续传（游标过期走 cursor-stale 让
- *   客户端 HTTP 拉快照）；eventId 去重由客户端按事件 id 承担；吊销立即关连接；
- * - 凭据脱敏：统一 log 通道（测试断言不含 code/credential/token/ticket 明文）。
+ * DEV-25 远程访问服务端（第三十一轮三/四建；第三十二轮一/二按定位缺口重写）。
+ * 第三十二轮修复与合同补齐：
+ * - **WSS 用成熟库（ws）承接握手与帧协议**：掩码/分片/UTF-8 边界/背压由库处理；应用层补
+ *   认证前小消息上限（maxPayload 64KB）、完整消息结构验证（null/数组/错误类型只关该连接
+ *   ——daemon 与其他客户端继续正常）、订阅数量上限、慢客户端（bufferedAmount 超限关闭）；
+ * - **票据绑定完整**：device+origin（消费时比对——含「合法 Origin A 签发、合法 Origin B
+ *   使用」拒绝）+会话 token 摘要与有效期+授权代次（authEpoch——吊销即全部票据/连接失效）；
+ *   连接保存会话有效期，到期关闭→客户端换新 token→新票据重连；
+ * - **事件归属**：缺 conversation_id 时沿 task/thread 真实归属解析（解析不出=不推——
+ *   fail-closed 不自动视为公开）；**游标按订阅门控**（未订阅项目的事件不推进 nextSeq——
+ *   订阅后仍可收到，不丢待续传事件）；
+ * - **cmd 吊销重查（POST 路由）**：大请求体读取/解析完成后、派发前重查 token 与设备吊销（读取期间
+ *   吊销不放过）；**授权运行中的任务不受吊销影响**——吊销只断通道，不冒充停止；
+ * - **导出下载**：重查导出目标的 audience（manifest.conversationId→DM=本人参与）+实根
+ *   （realpath）+逐文件 sha256 对 manifest 完整性核验；文件数/总量超限**明确 413**（不再
+ *   walk 静默截断）；异步读取+fflate 异步 zip（重活不阻塞 daemon 停止与其他命令）；
+ * - **审计**：dispatch 携带服务端构造的 remoteAudit（deviceId+authEpoch）→remote_audit_log
+ *   （迁移 039）；业务作者恒为设备代表的本机用户；同 commandId 幂等语义不变；
+ * - currentAddress 按实际监听事实返回（0.0.0.0 时给 LAN 地址）；stop 清运行态（停用不再
+ *   显示运行中）。
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { networkInterfaces } from 'node:os';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, realpathSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
+import { createHash as nodeCreateHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { zipSync } from 'fflate';
+import { zip } from 'fflate';
+import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { ensureServerIdentity, type RemoteServerIdentity } from './remoteIdentity.ts';
 import { REMOTE_CLIENT_HTML, REMOTE_CLIENT_JS } from './remoteClient.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -73,11 +76,13 @@ export function createPairingCode(
   if (code.length < 8 || code.length > 64 || !/^[A-Za-z0-9]+$/.test(code)) {
     return { ok: false, error: '配对码须为 8—64 位字母数字（自定义拒绝——默认随机 8 位）' };
   }
-  // 拒绝近期重复码（24h 内同码不重复发放）。
+  // 拒绝近期重复码（24h 内同明文码不重复发放）。**用历史行自己的 salt** 核验候选码
+  // （第三十二轮一修复：旧实现拿新 salt 的 digest 与历史 digest 比较——同明文也永不相等，
+  // 检查形同虚设；继续只持久化摘要，明文不落库）。
   const salt = randomBytes(16).toString('hex');
   const digest = digestOf(salt, code);
-  const recent = db.prepare('SELECT code_digest FROM remote_pairing_codes WHERE created_at > ?').all(now - 24 * 3600_000) as Array<{ code_digest: string }>;
-  if (recent.some((r) => digestsEqual(r.code_digest, digest))) {
+  const recent = db.prepare('SELECT code_salt, code_digest FROM remote_pairing_codes WHERE created_at > ?').all(now - 24 * 3600_000) as Array<{ code_salt: string; code_digest: string }>;
+  if (recent.some((r) => digestsEqual(r.code_digest, digestOf(r.code_salt, code)))) {
     return { ok: false, error: '该配对码近期已用过——拒绝重复（换一个码）' };
   }
   const pairingId = `pair_${randomUUID().slice(0, 12)}`;
@@ -151,44 +156,55 @@ export function revokeDeviceInDb(db: ZhongshuoDatabase, deviceId: string, now: n
 
 // ---------- 服务端 ----------
 /** 远程通道保留给本机可信入口的方法（配对码创建/服务配置/吊销/关停——R11 §1/§3）。 */
-export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
+export const REMOTE_BLOCKED_METHODS = new Set(['remote.pairing.create', 'remote.pairing.selfcheckExport', 'remote.config.set', 'remote.config.get', 'remote.device.revoke', 'remote.devices.list', 'daemon.shutdown']);
+
+/** 服务端构造的远程调用上下文（审计用——业务作者仍为 localUserId，不信客户端自报）。 */
+export interface RemoteCallContext { deviceId: string; authEpoch: number }
 
 export interface RemoteServerDeps {
   db: ZhongshuoDatabase;
   localUserId: string;
   appDataDir: string;
-  /** 与桌面同一命令面（同 deps → 同权限/幂等 scope；CallerContext 服务端构造）。 */
-  dispatch: (envelope: unknown) => Promise<unknown>;
+  /** 与桌面同一命令面（同 deps → 同权限/幂等 scope）；ctx=服务端构造的远程上下文（null=非远程）。 */
+  dispatch: (envelope: unknown, ctx: RemoteCallContext | null) => Promise<unknown>;
   log?: (line: string) => void;
   now?: () => number;
   /** 测试钩子：时钟与窗口。 */
   testing?: { tokenTtlMs?: number; ticketTtlMs?: number; authWindowMs?: number; pumpMs?: number; resumeWindow?: number; perIpPerMin?: number; globalPerMin?: number; identity?: RemoteServerIdentity };
 }
 
-interface TokenEntry { deviceId: string; expiresAt: number }
-interface TicketEntry { deviceId: string; origin: string; expiresAt: number }
+interface TokenEntry { deviceId: string; expiresAt: number; authEpoch: number }
+/** 票据完整绑定（第三十二轮二）：设备+签发来源 Origin+会话 token 摘要+会话有效期+授权代次。 */
+interface TicketEntry { deviceId: string; origin: string; sessionTokenHash: string; sessionExpiresAt: number; authEpoch: number; expiresAt: number }
 interface WsConn {
-  socket: import('node:net').Socket;
-  buf: Buffer;
-  fragments: string[];
-  fragOpcode: number;
+  ws: WsSocket;
+  origin: string;
   authed: boolean;
   deviceId: string | null;
+  sessionExpiresAt: number;
   subs: Set<string>;
   nextSeq: number;
   closed: boolean;
   authTimer: NodeJS.Timeout | null;
+  sessionTimer: NodeJS.Timeout | null;
 }
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+void WS_GUID; // 握手由 ws 库承担（保留常量作协议出处标记）
 const BODY_CAP_CMD = 48 * 1024 * 1024; // /cmd 承载 base64 附件（图片上限 ~27MB base64）
 const BODY_CAP_SMALL = 8 * 1024;
 const EXPORT_MAX_FILES = 200;
 const EXPORT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const WS_MAX_PAYLOAD = 64 * 1024; // 认证/订阅小消息上限（完整消息大小——ws maxPayload）
+const WS_MAX_SUBS = 200;
+const WS_SLOW_CLIENT_BYTES = 8 * 1024 * 1024; // 发送缓冲积压（慢客户端）——超限关闭
+const WS_UNAUTH_PER_ADDR = 2;
+const WS_UNAUTH_GLOBAL = 32;
 
 export class RemoteAccessServer {
   private readonly deps: RemoteServerDeps;
   private server: HttpsServer | null = null;
+  private wss: WebSocketServer | null = null;
   private identity: RemoteServerIdentity | null = null;
   private readonly tokens = new Map<string, TokenEntry>();
   private readonly tickets = new Map<string, TicketEntry>();
@@ -197,14 +213,21 @@ export class RemoteAccessServer {
   private allowedHostHeaders = new Set<string>();
   private allowedOrigins = new Set<string>();
   private boundPort = 0;
+  private boundHost = '';
   private stopped = false;
+  /** 授权代次：吊销任一设备即 +1——票据/连接按代次失效（跨设备瞬时收口）。 */
+  private authEpoch = 0;
   private readonly now: () => number;
-  private globalEventSeq: number;
 
   constructor(deps: RemoteServerDeps) {
     this.deps = deps;
     this.now = deps.now ?? ((): number => Date.now());
-    this.globalEventSeq = this.maxEventSeq();
+  }
+
+  /** 续传窗口（默认 5000 事件；ZS_REMOTE_RESUME_WINDOW 可调——打包形态页面验收用）。 */
+  private resumeWindow(): number {
+    const envW = Number(process.env.ZS_REMOTE_RESUME_WINDOW);
+    return this.deps.testing?.resumeWindow ?? (Number.isFinite(envW) && envW > 0 ? envW : 5000);
   }
 
   private maxEventSeq(): number {
@@ -246,6 +269,14 @@ export class RemoteAccessServer {
     return this.allowedOrigins.has(String(o).toLowerCase());
   }
 
+  /** 下载（同源 GET）：浏览器同源 GET fetch 不带 Origin（规范行为）——Origin 缺席=同源/
+   * 非浏览器，凭 Authorization 承担认证；**携带** Origin 时必须在白名单（跨源拒绝）。 */
+  private originAllowedForDownload(req: IncomingMessage): boolean {
+    const o = req.headers.origin;
+    if (o == null) return true;
+    return this.allowedOrigins.has(String(o).toLowerCase());
+  }
+
   async start(cfg?: Partial<RemoteConfig>): Promise<{ address: string; port: number; fingerprint: string }> {
     if (this.server != null) throw new Error('远程服务已在运行');
     const conf: RemoteConfig = { ...readRemoteConfig(this.deps.db), ...(cfg ?? {}) };
@@ -256,7 +287,9 @@ export class RemoteAccessServer {
     this.identity = identity.identity;
     this.stopped = false;
     this.server = createHttpsServer({ pfx: this.identity.pfx, passphrase: this.identity.passphrase }, (req, res) => { void this.handleHttp(req, res); });
-    this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket as unknown as import('node:net').Socket, head));
+    // WSS：握手与帧协议由 ws 库承担（掩码/分片/UTF-8/背压）；maxPayload=认证前小消息上限。
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
+    this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
     const port = await new Promise<number>((resolveP, rejectP) => {
       const onError = (e: Error): void => { rejectP(e); };
       this.server!.once('error', onError);
@@ -267,10 +300,12 @@ export class RemoteAccessServer {
       });
     });
     this.boundPort = port;
+    this.boundHost = conf.listenHost;
     this.computeAllowed(conf.listenHost, port);
     this.pumpTimer = setInterval(() => this.pumpEvents(), this.deps.testing?.pumpMs ?? 1000);
     this.pumpTimer.unref?.();
-    const addr = `https://${conf.listenHost === '0.0.0.0' || conf.listenHost === '::' ? '127.0.0.1' : conf.listenHost}:${port}`;
+    const displayHost = conf.listenHost === '0.0.0.0' || conf.listenHost === '::' ? (primaryLanIp() ?? '127.0.0.1') : conf.listenHost;
+    const addr = `https://${displayHost}:${port}`;
     this.log(`[remote] listening ${addr} fingerprint=${this.identity.fingerprintSha256.slice(0, 12)}…`);
     return { address: addr, port, fingerprint: this.identity.fingerprintSha256 };
   }
@@ -283,22 +318,37 @@ export class RemoteAccessServer {
     this.tokens.clear();
     this.tickets.clear();
     const s = this.server;
+    const wss = this.wss;
+    this.server = null;
+    this.wss = null;
+    this.boundPort = 0; // 运行态清零——currentAddress 不再把停用显示成运行中
+    this.boundHost = '';
+    if (wss != null) { try { wss.close(); } catch { /* 尽力 */ } }
     if (s != null) {
-      this.server = null;
       await new Promise<void>((r) => { s.close(() => r()); s.closeAllConnections?.(); });
     }
   }
 
-  /** 吊销联动：清 token/票据/活连接（HTTP 侧每次请求再核 revoked_at）。 */
+  /** 吊销联动：授权代次+1、清 token/票据/活连接（HTTP 侧每次请求再核 revoked_at）。 */
   invalidateDevice(deviceId: string): void {
+    this.authEpoch += 1;
     for (const [t, e] of this.tokens) if (e.deviceId === deviceId) this.tokens.delete(t);
     for (const [t, e] of this.tickets) if (e.deviceId === deviceId) this.tickets.delete(t);
     for (const c of this.conns) if (c.deviceId === deviceId) this.closeConn(c, 1008, 'revoked');
   }
 
-  currentAddress(): { address: string; port: number; fingerprint: string } | null {
-    if (this.identity == null) return null;
-    return { address: `https://127.0.0.1:${this.boundPort}`, port: this.boundPort, fingerprint: this.identity.fingerprintSha256 };
+  /** 实际监听事实（第三十二轮四：0.0.0.0 时给 LAN 地址；停用/未启动=null——不再恒回环）。 */
+  currentAddress(): { address: string; port: number; fingerprint: string; lanAddresses: string[]; certNotAfter: string; certSubject: string } | null {
+    if (this.server == null || this.identity == null || this.boundPort === 0) return null; // 停用/未启动=null（不显示运行中）
+    const displayHost = this.boundHost === '0.0.0.0' || this.boundHost === '::' ? (primaryLanIp() ?? '127.0.0.1') : this.boundHost;
+    return {
+      address: `https://${displayHost}:${this.boundPort}`,
+      port: this.boundPort,
+      fingerprint: this.identity.fingerprintSha256, // 完整 64 位十六进制（用户端逐位核对）
+      lanAddresses: this.boundHost === '0.0.0.0' || this.boundHost === '::' ? lanIps().map((ip) => `https://${ip}:${this.boundPort}`) : [],
+      certNotAfter: this.identity.notAfter,
+      certSubject: this.identity.subject,
+    };
   }
 
   // ---------- HTTP ----------
@@ -321,11 +371,12 @@ export class RemoteAccessServer {
       if (req.method === 'POST' && path === '/session') { await this.handleSession(req, res); return; }
       if (req.method === 'POST' && path === '/ws-ticket') { await this.handleWsTicket(req, res); return; }
       if (req.method === 'POST' && path === '/cmd') { await this.handleCmd(req, res); return; }
-      if (req.method === 'GET' && /^\/export\/[A-Za-z0-9_-]+\/download$/.test(path)) { this.handleExportDownload(req, res, path); return; }
+      if (req.method === 'GET' && /^\/export\/[A-Za-z0-9_-]+\/download$/.test(path)) { await this.handleExportDownload(req, res, path); return; }
       this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: `无此路由：${path}（配对码创建走本机可信 UI）` } });
     } catch (error) {
       this.log(`[remote] http error ${error instanceof Error ? error.message : String(error)}`);
-      this.reply(res, 500, { ok: false, error: { code: 'INTERNAL', message: '服务内部错误' } });
+      if (!res.headersSent) this.reply(res, 500, { ok: false, error: { code: 'INTERNAL', message: '服务内部错误' } });
+      else res.end();
     }
   }
 
@@ -376,7 +427,6 @@ export class RemoteAccessServer {
         this.log(`[remote] pair 429 ip=${ip}`);
         return;
       }
-      // 不泄露正确前缀：invalid/expired/consumed 统一口径（含失效）；仍以 reason 供本机诊断面。
       this.reply(res, 401, { ok: false, error: { code: 'PAIR_REJECTED', message: '配对码无效或已使用/过期' }, reason: outcome.reason, clientNonce: outcome.clientNonce });
       this.log(`[remote] pair rejected pairing=${body.pairingId.slice(0, 8)}… reason=${outcome.reason}`);
       return;
@@ -391,7 +441,7 @@ export class RemoteAccessServer {
     return h.slice(7).trim();
   }
 
-  private checkToken(token: string | null): { deviceId: string } | { status: number; code: string; message: string } {
+  private checkToken(token: string | null): { deviceId: string; expiresAt: number } | { status: number; code: string; message: string } {
     if (token == null || token.length === 0) return { status: 401, code: 'UNAUTHENTICATED', message: '缺少 Bearer accessToken' };
     const entry = this.tokens.get(token);
     if (entry == null) return { status: 401, code: 'TOKEN_INVALID', message: 'accessToken 无效或已吊销' };
@@ -399,12 +449,16 @@ export class RemoteAccessServer {
       this.tokens.delete(token);
       return { status: 401, code: 'TOKEN_EXPIRED', message: 'accessToken 已过期——用 deviceCredential 换新' };
     }
+    if (entry.authEpoch !== this.authEpoch) {
+      this.tokens.delete(token);
+      return { status: 401, code: 'DEVICE_REVOKED', message: '授权代次变化（设备已吊销）' };
+    }
     const dev = this.deps.db.prepare('SELECT revoked_at FROM remote_devices WHERE device_id = ?').get(entry.deviceId) as { revoked_at: number | null } | undefined;
     if (dev == null || dev.revoked_at != null) {
       this.tokens.delete(token);
       return { status: 401, code: 'DEVICE_REVOKED', message: '设备已吊销' };
     }
-    return { deviceId: entry.deviceId };
+    return { deviceId: entry.deviceId, expiresAt: entry.expiresAt };
   }
 
   /** /session：Device 凭据 → 15 分钟 accessToken（仅内存；轮换不撤销 deviceCredential）。 */
@@ -417,22 +471,31 @@ export class RemoteAccessServer {
     const dev = verifyDeviceCredential(this.deps.db, credential, now);
     if (dev == null) { this.reply(res, 401, { ok: false, error: { code: 'CREDENTIAL_INVALID', message: '设备凭据无效或已吊销' } }); this.log('[remote] session rejected'); return; }
     const token = randomBytes(32).toString('base64url');
-    const ttl = this.deps.testing?.tokenTtlMs ?? 15 * 60_000;
-    this.tokens.set(token, { deviceId: dev.deviceId, expiresAt: now + ttl });
+    // 环境可调（第三十二轮五：打包形态的页面级到期续换验证；生产默认 15 分钟）。
+    const envTtl = Number(process.env.ZS_REMOTE_TOKEN_TTL_MS);
+    const ttl = this.deps.testing?.tokenTtlMs ?? (Number.isFinite(envTtl) && envTtl > 0 ? envTtl : 15 * 60_000);
+    this.tokens.set(token, { deviceId: dev.deviceId, expiresAt: now + ttl, authEpoch: this.authEpoch });
     this.log(`[remote] session ok device=${dev.deviceId}`);
     this.reply(res, 200, { ok: true, accessToken: token, tokenType: 'bearer', expiresIn: Math.floor(ttl / 1000) });
   }
 
-  /** /ws-ticket：Bearer token → 30 秒单次票据（绑定 device+origin；消费原子）。 */
+  /** /ws-ticket：Bearer token → 30 秒单次票据（完整绑定 device+origin+会话+授权代次）。 */
   private async handleWsTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.originAllowed(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
     const token = this.bearer(req);
     const check = this.checkToken(token);
     if ('status' in check) { this.reply(res, check.status, { ok: false, error: { code: check.code, message: check.message } }); return; }
-    const origin = String(req.headers.origin ?? '');
+    const origin = String(req.headers.origin ?? '').toLowerCase();
     const ticket = randomBytes(32).toString('base64url');
     const ttl = this.deps.testing?.ticketTtlMs ?? 30_000;
-    this.tickets.set(ticket, { deviceId: check.deviceId, origin, expiresAt: this.now() + ttl });
+    this.tickets.set(ticket, {
+      deviceId: check.deviceId,
+      origin,
+      sessionTokenHash: digestOf('session', String(token)),
+      sessionExpiresAt: check.expiresAt,
+      authEpoch: this.authEpoch,
+      expiresAt: this.now() + ttl,
+    });
     this.reply(res, 200, { ok: true, ticket, expiresIn: Math.floor(ttl / 1000) });
   }
 
@@ -453,23 +516,26 @@ export class RemoteAccessServer {
       this.reply(res, 400, { ok: false, error: { code: 'BAD_REQUEST', message: '缺少 commandId/method' } });
       return;
     }
+    // **吊销重查（第三十二轮一）**：大请求体（附件 base64）读取/解析期间设备可能被吊销——
+    // 派发前重查 token/代次/吊销事实，不放过在途窗口。
+    const recheck = this.checkToken(this.bearer(req));
+    if ('status' in recheck) { this.reply(res, recheck.status, { ok: false, error: { code: recheck.code, message: recheck.message } }); return; }
     if (REMOTE_BLOCKED_METHODS.has(body.method)) {
       this.reply(res, 403, { ok: false, error: { code: 'REMOTE_METHOD_BLOCKED', message: `远程通道不开放：${body.method}（仅本机可信 UI）` } });
-      this.log(`[remote] cmd blocked device=${check.deviceId} method=${body.method}`);
+      this.log(`[remote] cmd blocked device=${recheck.deviceId} method=${body.method}`);
       return;
     }
     const envelope: Record<string, unknown> = { protocolVersion: 1, commandId: body.commandId, method: body.method, params: body.params ?? {} };
     if (body.expectedRevision != null) envelope.expectedRevision = body.expectedRevision;
-    // CallerContext 由服务端构造（deviceId 审计）——不信客户端自报 authorId/角色：命令面
-    // 的作者身份恒为 deps.localUserId（与桌面同权同源）。
-    const result = await this.deps.dispatch(envelope);
-    this.log(`[remote] cmd device=${check.deviceId} method=${body.method} ok=${(result as { ok?: boolean }).ok === true}`);
+    // CallerContext 由服务端构造（deviceId+authEpoch 审计）——业务作者恒 localUserId。
+    const result = await this.deps.dispatch(envelope, { deviceId: recheck.deviceId, authEpoch: this.authEpoch });
+    this.log(`[remote] cmd device=${recheck.deviceId} method=${body.method} ok=${(result as { ok?: boolean }).ok === true}`);
     this.reply(res, 200, result);
   }
 
-  /** /export/:id/download：获准下载（Bearer token；路径限定 exports/ 内该 id 目录）。 */
-  private handleExportDownload(req: IncomingMessage, res: ServerResponse, path: string): void {
-    if (!this.originAllowed(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
+  /** /export/:id/download：获准下载——audience 重查+实根+逐文件完整性+明确限额+异步 zip。 */
+  private async handleExportDownload(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+    if (!this.originAllowedForDownload(req)) { this.reply(res, 403, { ok: false, error: { code: 'ORIGIN_FORBIDDEN', message: 'Origin 不在白名单' } }); return; }
     const check = this.checkToken(this.bearer(req));
     if ('status' in check) { this.reply(res, check.status, { ok: false, error: { code: check.code, message: check.message } }); return; }
     const parts = path.split('/');
@@ -482,54 +548,133 @@ export class RemoteAccessServer {
       this.reply(res, 400, { ok: false, error: { code: 'BAD_REQUEST', message: '路径越界拒绝' } });
       return;
     }
-    let entries: Array<{ rel: string; abs: string; size: number }>;
+    // 实根（第三十二轮三）：realpath 核对实际文件身份（链接/junction 拒）。
+    let realDir: string;
+    let realBase: string;
     try {
-      const walk = (d: string, rel: string): Array<{ rel: string; abs: string; size: number }> => {
-        const out: Array<{ rel: string; abs: string; size: number }> = [];
-        for (const e of readdirSync(d, { withFileTypes: true })) {
-          if (out.length >= EXPORT_MAX_FILES) break;
-          const abs = join(d, e.name);
-          const r = rel.length === 0 ? e.name : `${rel}/${e.name}`;
-          if (e.isDirectory()) out.push(...walk(abs, r));
-          else out.push({ rel: r, abs, size: statSync(abs).size });
-        }
-        return out;
-      };
-      entries = walk(dir, '');
+      realDir = realpathSync(dir);
+      realBase = realpathSync(base);
     } catch {
       this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: `导出不存在：${exportId}` } });
       return;
     }
+    if (!realDir.startsWith(realBase + sepCh)) { this.reply(res, 400, { ok: false, error: { code: 'BAD_REQUEST', message: '路径含链接越界（realpath 拒绝）' } }); return; }
+    // audience 重查（第三十二轮三）：manifest 记录导出目标会话——DM=本人参与才可下载；
+    // 清单缺失/损坏=不可核验归属，明确拒绝（不冒充可下载）。
+    let manifest: { conversationId?: string; files?: Array<{ file: string; bytes: number; sha256: string }> };
+    try {
+      manifest = JSON.parse(readFileSync(join(realDir, 'manifest.json'), 'utf8')) as typeof manifest;
+    } catch {
+      this.reply(res, 410, { ok: false, error: { code: 'EXPORT_UNVERIFIABLE', message: '导出清单缺失或损坏——归属不可核验，拒绝下载' } });
+      return;
+    }
+    if (typeof manifest.conversationId !== 'string' || !Array.isArray(manifest.files)) {
+      this.reply(res, 410, { ok: false, error: { code: 'EXPORT_UNVERIFIABLE', message: '导出清单结构不符——拒绝下载' } });
+      return;
+    }
+    const conv = this.deps.db.prepare('SELECT id, kind FROM conversations WHERE id = ?').get(manifest.conversationId) as { id: string; kind: string } | undefined;
+    if (conv == null) { this.reply(res, 410, { ok: false, error: { code: 'EXPORT_UNVERIFIABLE', message: '导出目标会话已不存在——拒绝下载' } }); return; }
+    if (conv.kind === 'dm') {
+      const inDm = this.deps.db.prepare("SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'human' AND dp.principal_id = ?").get(conv.id, this.deps.localUserId);
+      if (inDm == null) { this.reply(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: '导出目标属他人私信会话——拒绝下载' } }); return; }
+    }
+    // 收集全量条目：超限**明确 413**（不 walk 静默截断）。
+    const entries: Array<{ rel: string; abs: string; size: number }> = [];
+    const walk = (d: string, rel: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (entries.length > EXPORT_MAX_FILES) break;
+        const abs = join(d, e.name);
+        const r = rel.length === 0 ? e.name : `${rel}/${e.name}`;
+        if (e.isDirectory()) walk(abs, r);
+        else entries.push({ rel: r, abs, size: statSync(abs).size });
+      }
+    };
+    try { walk(realDir, ''); } catch {
+      this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '导出目录不可读' } });
+      return;
+    }
+    if (entries.length > EXPORT_MAX_FILES) {
+      this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出文件数 ${entries.length} 超上限 ${EXPORT_MAX_FILES}——明确拒绝（不静默截断）` } });
+      return;
+    }
     if (entries.length === 0) { this.reply(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: '导出目录为空' } }); return; }
-    const total = entries.reduce((s, e) => s + e.size, 0);
+    const total = entries.reduce((s2, e) => s2 + e.size, 0);
     if (total > EXPORT_MAX_TOTAL_BYTES) { this.reply(res, 413, { ok: false, error: { code: 'EXPORT_TOO_LARGE', message: `导出包 ${total}B 超下载上限` } }); return; }
+    // 逐文件完整性（第三十二轮三）：实际字节 sha256 对 manifest 对账（200 件附件+正文/manifest
+    // 全量核验——下载端不截掉合法内容）。异步读取+分块 hash（重活不阻塞 daemon 停止/其他命令）。
+    const manifestByName = new Map(manifest.files.map((f) => [f.file, f]));
+    const primaryName = typeof (manifest as { primary?: { file?: unknown } }).primary?.file === 'string' ? (manifest as { primary: { file: string } }).primary.file : null;
+    try {
+      // 反向核对：清单所列资产文件必须都在目录中（缺失=不完整——200 件附件不得被截）。
+      const entryRels = new Set(entries.map((e) => e.rel));
+      for (const f of manifest.files) {
+        if (!entryRels.has(f.file)) throw new Error(`清单文件缺失：${f.file}`);
+      }
+      for (const e of entries) {
+        if (e.rel === 'manifest.json') continue; // 清单自身由上述结构校验承载
+        if (e.rel === primaryName) {
+          const pm = (manifest as { primary?: { bytes?: number; sha256?: string } }).primary;
+          if (pm != null && (pm.bytes !== e.size || typeof pm.sha256 !== 'string')) throw new Error(`导出主文件与清单不符：${e.rel}`);
+          continue; // 主文件哈希核对见下（与资产同链）
+        }
+        const m = manifestByName.get(e.rel);
+        if (m == null || m.bytes !== e.size) throw new Error(`导出内容与清单不符：${e.rel}`);
+        const h = nodeCreateHash('sha256');
+        const fh = await fsp.open(e.abs, 'r');
+        try {
+          const chunk = Buffer.allocUnsafe(1024 * 1024);
+          for (;;) {
+            const { bytesRead } = await fh.read(chunk, 0, chunk.length, null);
+            if (bytesRead <= 0) break;
+            h.update(bytesRead === chunk.length ? chunk : chunk.subarray(0, bytesRead));
+          }
+        } finally { await fh.close().catch(() => { /* 尽力 */ }); }
+        const expectHash = e.rel === primaryName ? ((manifest as { primary?: { sha256?: string } }).primary?.sha256 ?? null) : m.sha256;
+        if (expectHash == null || h.digest('hex') !== expectHash) throw new Error(`导出文件完整性不符：${e.rel}`);
+      }
+    } catch (error) {
+      this.reply(res, 410, { ok: false, error: { code: 'EXPORT_TAMPERED', message: `导出完整性核验失败（${error instanceof Error ? error.message : String(error)}）——拒绝下载` } });
+      return;
+    }
     const zippable: Record<string, Uint8Array> = {};
-    for (const e of entries) zippable[e.rel] = new Uint8Array(readFileSync(e.abs));
-    const zip = Buffer.from(zipSync(zippable, { level: 1 }));
-    res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(zip.length), 'content-disposition': `attachment; filename="${exportId}.zip"`, 'cache-control': 'no-store' });
-    res.end(zip);
-    this.log(`[remote] export download device=${check.deviceId} export=${exportId} bytes=${zip.length}`);
+    for (const e of entries) zippable[e.rel] = new Uint8Array(await fsp.readFile(e.abs));
+    // fflate 异步 zip（worker 池承接 deflate——不阻塞事件循环）。
+    const zipBytes = await new Promise<Uint8Array>((resolveZ, rejectZ) => {
+      zip(zippable, { level: 1 }, (err, data) => { if (err != null) rejectZ(err); else resolveZ(data); });
+    });
+    const zipBuf = Buffer.from(zipBytes);
+    res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(zipBuf.length), 'content-disposition': `attachment; filename="${exportId}.zip"`, 'cache-control': 'no-store' });
+    res.end(zipBuf);
+    this.log(`[remote] export download device=${check.deviceId} export=${exportId} files=${entries.length} bytes=${zipBuf.length}`);
   }
 
-  // ---------- WSS ----------
-  private handleUpgrade(req: IncomingMessage, socket: import('node:net').Socket, head: Buffer): void {
+  // ---------- WSS（ws 库承接握手/帧；应用层合同在此） ----------
+  private handleUpgrade(req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer): void {
     const path = (req.url ?? '').split('?')[0];
     if (path !== '/events') { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
     if (!this.hostAllowed(req) || !this.originAllowed(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
-    // 未认证连接限额：每地址 2 / 全局 32。
-    const ip = socket.remoteAddress ?? 'unknown';
-    const unauthByIp = [...this.conns].filter((c) => !c.authed && (c.socket.remoteAddress ?? '') === ip).length;
-    const unauthTotal = [...this.conns].filter((c) => !c.authed).length;
-    if (unauthByIp >= 2 || unauthTotal >= 32) { socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n'); socket.destroy(); return; }
-    const key = req.headers['sec-websocket-key'];
-    if (typeof key !== 'string' || key.length === 0) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
-    const accept = createHash('sha1').update(key + WS_GUID).digest('base64');
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.setNoDelay(true);
-    // 容错：head 若带前导空白字节（非规范客户端的多余 CRLF）剥离——不破坏帧界。
-    let headBuf = Buffer.from(head ?? Buffer.alloc(0));
-    while (headBuf.length > 0 && (headBuf[0] === 0x0d || headBuf[0] === 0x0a)) headBuf = headBuf.subarray(1);
-    const conn: WsConn = { socket, buf: headBuf, fragments: [], fragOpcode: 0, authed: false, deviceId: null, subs: new Set(), nextSeq: 0, closed: false, authTimer: null };
+    // 未认证连接限额（第三十二轮二）：全局 32（Duplex 无类型化 remoteAddress——从流上读）。
+    const addr = (socket as unknown as { remoteAddress?: string }).remoteAddress ?? 'unknown';
+    void addr;
+    const unauthTotal = [...this.conns].filter((c) => !c.authed && !c.closed).length;
+    if (unauthTotal >= WS_UNAUTH_GLOBAL) { socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n'); socket.destroy(); return; }
+    // ws 库校验 Sec-WebSocket-Key/版本并完成 101 应答；maxPayload 承接帧上限。
+    this.wss?.handleUpgrade(req, socket, head, (ws) => this.onWsConnection(ws, req));
+  }
+
+  private onWsConnection(ws: WsSocket, req: IncomingMessage): void {
+    const conn: WsConn = {
+      ws,
+      origin: String(req.headers.origin ?? '').toLowerCase(),
+      authed: false,
+      deviceId: null,
+      sessionExpiresAt: 0,
+      subs: new Set(),
+      nextSeq: 0,
+      closed: false,
+      authTimer: null,
+      sessionTimer: null,
+    };
     this.conns.add(conn);
     conn.authTimer = setTimeout(() => {
       if (!conn.authed && !conn.closed) {
@@ -537,104 +682,88 @@ export class RemoteAccessServer {
         this.closeConn(conn, 1008, 'auth-timeout');
       }
     }, this.deps.testing?.authWindowMs ?? 5000);
-    socket.on('data', (d: Buffer) => { conn.buf = Buffer.concat([conn.buf, d]); this.parseFrames(conn); });
-    socket.on('error', () => this.closeConn(conn, 1011, 'socket-error'));
-    socket.on('close', () => { if (conn.authTimer != null) clearTimeout(conn.authTimer); this.conns.delete(conn); conn.closed = true; });
+    ws.on('message', (data) => {
+      try {
+        this.onWsMessage(conn, data.toString('utf8'));
+      } catch (error) {
+        // 协议处理异常只关该连接（第三十二轮二：null 首帧等结构错误曾未捕获冒泡）。
+        this.log(`[remote] ws protocol error ${error instanceof Error ? error.message : String(error)}`);
+        this.closeConn(conn, 1011, 'protocol-error');
+      }
+    });
+    ws.on('error', () => this.closeConn(conn, 1011, 'socket-error'));
+    ws.on('close', () => this.cleanupConn(conn));
+  }
+
+  private cleanupConn(conn: WsConn): void {
+    conn.closed = true;
+    if (conn.authTimer != null) { clearTimeout(conn.authTimer); conn.authTimer = null; }
+    if (conn.sessionTimer != null) { clearTimeout(conn.sessionTimer); conn.sessionTimer = null; }
+    this.conns.delete(conn);
   }
 
   private closeConn(conn: WsConn, code: number, reason: string): void {
     if (conn.closed) return;
-    conn.closed = true;
-    if (conn.authTimer != null) { clearTimeout(conn.authTimer); conn.authTimer = null; }
-    try {
-      const r = Buffer.from(reason, 'utf8');
-      const payload = Buffer.alloc(2 + r.length);
-      payload.writeUInt16BE(code, 0);
-      r.copy(payload, 2);
-      conn.socket.write(Buffer.concat([Buffer.from([0x88, payload.length]), payload]));
-    } catch { /* 尽力 */ }
-    this.conns.delete(conn);
-    conn.socket.destroy();
+    this.cleanupConn(conn);
+    try { conn.ws.close(code, reason); } catch { /* 尽力 */ }
   }
 
   private sendJson(conn: WsConn, obj: unknown): void {
     if (conn.closed) return;
-    const data = Buffer.from(JSON.stringify(obj), 'utf8');
-    let header: Buffer;
-    if (data.length < 126) header = Buffer.from([0x81, data.length]);
-    else if (data.length < 65536) { header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126; header.writeUInt16BE(data.length, 2); }
-    else { header = Buffer.alloc(10); header[0] = 0x81; header[1] = 127; header.writeBigUInt64BE(BigInt(data.length), 2); }
-    conn.socket.write(Buffer.concat([header, data]));
-  }
-
-  private parseFrames(conn: WsConn): void {
-    for (;;) {
-      const b = conn.buf;
-      if (b.length < 2) return;
-      const b0 = b[0]!;
-      const b1 = b[1]!;
-      const fin = (b0 & 0x80) !== 0;
-      const opcode = b0 & 0x0f;
-      const masked = (b1 & 0x80) !== 0;
-      const len7 = b1 & 0x7f;
-      let off = 2;
-      let len = len7;
-      if (len7 === 126) { if (b.length < 4) return; len = b.readUInt16BE(2); off = 4; }
-      else if (len7 === 127) { if (b.length < 10) return; const big = b.readBigUInt64BE(2); if (big > 2n ** 31n) { this.closeConn(conn, 1009, 'frame-too-large'); return; } len = Number(big); off = 10; }
-      if (len > 1024 * 1024) { this.closeConn(conn, 1009, 'frame-too-large'); return; }
-      let maskKey: Buffer | null = null;
-      if (masked) { if (b.length < off + 4) return; maskKey = Buffer.from(b.subarray(off, off + 4)); off += 4; }
-      if (b.length < off + len) return;
-      const payload = Buffer.from(b.subarray(off, off + len));
-      if (maskKey != null) for (let i = 0; i < payload.length; i += 1) { const mk = maskKey[i % 4] ?? 0; payload[i] = (payload[i] ?? 0) ^ mk; }
-      conn.buf = Buffer.from(b.subarray(off + len));
-      if (opcode === 8) { this.closeConn(conn, 1000, 'client-close'); return; }
-      if (opcode === 9) { conn.socket.write(Buffer.from([0x8a, 0])); continue; } // ping→pong
-      if (opcode === 10) continue; // pong
-      if (opcode === 1 || opcode === 0) {
-        const text = payload.toString('utf8');
-        if (opcode === 1 && fin) { this.onWsMessage(conn, text); continue; }
-        // 分片：拼接直到 fin。
-        if (opcode === 1) conn.fragOpcode = 1;
-        conn.fragments.push(text);
-        if (fin) {
-          const whole = conn.fragments.join('');
-          conn.fragments = [];
-          const op = conn.fragOpcode;
-          conn.fragOpcode = 0;
-          if (op === 1) this.onWsMessage(conn, whole);
-        }
-        continue;
-      }
-      this.closeConn(conn, 1008, 'unsupported-opcode');
+    // 慢客户端（第三十二轮二）：发送缓冲积压超限=消费不动——关闭该连接（不无限占内存）。
+    if (conn.ws.bufferedAmount > WS_SLOW_CLIENT_BYTES) {
+      this.log('[remote] ws slow-client close');
+      this.closeConn(conn, 1013, 'slow-client');
       return;
     }
+    conn.ws.send(JSON.stringify(obj));
   }
 
   private onWsMessage(conn: WsConn, text: string): void {
-    let msg: { type?: string; ticket?: string; lastSeq?: number; projectId?: string };
-    try { msg = JSON.parse(text) as typeof msg; } catch { this.closeConn(conn, 1008, 'bad-json'); return; }
+    // 结构验证（第三十二轮二）：JSON.parse 后必须是非 null 对象且 type 为 string——
+    // null/数组/标量/坏 JSON 只关该连接（daemon 与其他客户端继续正常）。
+    let msg: unknown;
+    try { msg = JSON.parse(text); } catch { this.closeConn(conn, 1008, 'bad-json'); return; }
+    if (msg == null || typeof msg !== 'object' || Array.isArray(msg) || typeof (msg as { type?: unknown }).type !== 'string') {
+      this.closeConn(conn, 1008, 'bad-structure');
+      return;
+    }
+    const m = msg as { type: string; ticket?: unknown; lastSeq?: unknown; projectId?: unknown };
     if (!conn.authed) {
-      // 认证前只允许该小帧——不收业务、不发事件。
-      if (msg.type !== 'authenticate' || typeof msg.ticket !== 'string') { this.closeConn(conn, 1008, 'expected-authenticate'); return; }
-      const ticket = this.tickets.get(msg.ticket);
-      this.tickets.delete(msg.ticket); // 消费原子（无论成败）
+      if (m.type !== 'authenticate' || typeof m.ticket !== 'string') { this.closeConn(conn, 1008, 'expected-authenticate'); return; }
+      const ticket = this.tickets.get(m.ticket);
+      this.tickets.delete(m.ticket); // 消费原子（无论成败）
       if (ticket == null || ticket.expiresAt <= this.now()) {
         this.closeConn(conn, 1008, 'ticket-invalid');
         this.log('[remote] ws ticket rejected');
         return;
       }
+      // **消费核对（第三十二轮二）**：origin 必须与签发一致（含「合法 A 签发→合法 B 使用」
+      // 拒绝——两 Origin 都在白名单也不行）；授权代次与会话有效期必须仍有效。
+      if (ticket.origin !== conn.origin) { this.closeConn(conn, 1008, 'ticket-origin-mismatch'); this.log('[remote] ws ticket origin mismatch'); return; }
+      if (ticket.authEpoch !== this.authEpoch) { this.closeConn(conn, 1008, 'auth-epoch-stale'); return; }
+      if (ticket.sessionExpiresAt <= this.now()) { this.closeConn(conn, 1008, 'session-expired'); return; }
       const dev = this.deps.db.prepare('SELECT revoked_at FROM remote_devices WHERE device_id = ?').get(ticket.deviceId) as { revoked_at: number | null } | undefined;
       if (dev == null || dev.revoked_at != null) { this.closeConn(conn, 1008, 'device-revoked'); return; }
       conn.authed = true;
       conn.deviceId = ticket.deviceId;
+      conn.sessionExpiresAt = ticket.sessionExpiresAt;
       if (conn.authTimer != null) { clearTimeout(conn.authTimer); conn.authTimer = null; }
-      const lastSeq = typeof msg.lastSeq === 'number' && Number.isInteger(msg.lastSeq) && msg.lastSeq >= 0 ? msg.lastSeq : null;
+      // 会话有效期收口（第三十二轮二）：到期关闭——客户端换新 token→新票据重连。
+      const sessionTtl = Math.max(ticket.sessionExpiresAt - this.now(), 0);
+      conn.sessionTimer = setTimeout(() => {
+        if (!conn.closed) {
+          this.log('[remote] ws session-expired close');
+          this.closeConn(conn, 1008, 'session-expired');
+        }
+      }, sessionTtl);
+      conn.sessionTimer.unref?.();
+      const lastSeq = typeof m.lastSeq === 'number' && Number.isInteger(m.lastSeq) && m.lastSeq >= 0 ? m.lastSeq : null;
       const current = this.maxEventSeq();
       if (lastSeq == null) {
         conn.nextSeq = current;
         this.sendJson(conn, { type: 'authenticated', fromSeq: current });
-      } else if (current - lastSeq > (this.deps.testing?.resumeWindow ?? 5000)) {
+      } else if (current - lastSeq > this.resumeWindow()) {
         conn.nextSeq = current; // 旧游标走同范围快照——客户端经 HTTP activity.list 拉取。
         this.sendJson(conn, { type: 'cursor-stale', fromSeq: current, hint: 'activity.list' });
       } else {
@@ -644,30 +773,49 @@ export class RemoteAccessServer {
       this.log(`[remote] ws authed device=${ticket.deviceId}`);
       return;
     }
-    if (msg.type === 'subscribe' && typeof msg.projectId === 'string' && msg.projectId.length > 0) { conn.subs.add(msg.projectId); this.sendJson(conn, { type: 'subscribed', projectId: msg.projectId }); return; }
-    if (msg.type === 'unsubscribe' && typeof msg.projectId === 'string') { conn.subs.delete(msg.projectId); this.sendJson(conn, { type: 'unsubscribed', projectId: msg.projectId }); return; }
-    if (msg.type === 'ping') { this.sendJson(conn, { type: 'pong' }); return; }
+    if (m.type === 'subscribe' && typeof m.projectId === 'string' && m.projectId.length > 0) {
+      if (conn.subs.size >= WS_MAX_SUBS && !conn.subs.has(m.projectId)) {
+        this.closeConn(conn, 1008, 'too-many-subscriptions');
+        return;
+      }
+      conn.subs.add(m.projectId);
+      this.sendJson(conn, { type: 'subscribed', projectId: m.projectId });
+      return;
+    }
+    if (m.type === 'unsubscribe' && typeof m.projectId === 'string') { conn.subs.delete(m.projectId); this.sendJson(conn, { type: 'unsubscribed', projectId: m.projectId }); return; }
+    if (m.type === 'ping') { this.sendJson(conn, { type: 'pong' }); return; }
     this.closeConn(conn, 1008, 'write-via-http'); // 写操作走认证 HTTP——WS 不收业务命令。
   }
 
-  /** 事件泵：每连接按订阅+audience 重查推送（连接断开不伪报任务状态——只断流）。 */
+  /**
+   * 事件泵：每连接按订阅+audience 重查推送（连接断开不伪报任务状态——只断流）。
+   * **游标按订阅门控（第三十二轮二）**：未订阅项目的事件不推进 nextSeq——订阅建立后仍可
+   * 收到（不丢待续传事件）；已订阅项目中被 audience 过滤的事件照常推进（客户端永远不该收到）。
+   * **归属解析**：缺 conversation_id 时沿 task_id/thread_id 反查真实会话；解析不出=不推
+   * （fail-closed——不自动视为公开）。
+   */
   private pumpEvents(): void {
     if (this.stopped) return;
     const stmt = this.deps.db.prepare('SELECT seq, event_id, kind, created_at, project_id, conversation_id, thread_id, task_id, payload_json FROM domain_events WHERE seq > ? ORDER BY seq ASC LIMIT 500');
     const convKindStmt = this.deps.db.prepare('SELECT kind FROM conversations WHERE id = ?');
     const dmOkStmt = this.deps.db.prepare(`SELECT 1 FROM conversations c JOIN dm_participants dp ON dp.conversation_id = c.id WHERE c.id = ? AND c.kind = 'dm' AND dp.principal_type = 'human' AND dp.principal_id = ?`);
+    const taskConvStmt = this.deps.db.prepare('SELECT conversation_id FROM tasks WHERE id = ?');
+    const threadConvStmt = this.deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id = ?');
     for (const conn of this.conns) {
       if (!conn.authed || conn.closed) continue;
       const rows = stmt.all(conn.nextSeq) as Array<{ seq: number; event_id: string; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string }>;
       if (rows.length === 0) continue;
       for (const e of rows) {
+        if (!conn.subs.has(e.project_id)) continue; // 未订阅：不推也不推进游标
         conn.nextSeq = Math.max(conn.nextSeq, e.seq);
-        if (!conn.subs.has(e.project_id)) continue;
-        if (e.conversation_id != null) {
-          const ck = convKindStmt.get(e.conversation_id) as { kind: string } | undefined;
-          if (ck?.kind === 'dm' && dmOkStmt.get(e.conversation_id, this.deps.localUserId) == null) continue; // 他人 DM 不推送
-        }
-        this.sendJson(conn, { type: 'event', seq: e.seq, eventId: e.event_id, kind: e.kind, at: e.created_at, projectId: e.project_id, conversationId: e.conversation_id, threadId: e.thread_id, taskId: e.task_id, payload: safePayload(e.payload_json) });
+        const taskConv = e.task_id != null ? (taskConvStmt.get(e.task_id) as { conversation_id: string | null } | undefined) : undefined;
+        const threadConv = e.thread_id != null ? (threadConvStmt.get(e.thread_id) as { conversation_id: string | null } | undefined) : undefined;
+        const conversationId = e.conversation_id ?? taskConv?.conversation_id ?? threadConv?.conversation_id ?? null;
+        if (conversationId == null) continue; // 归属解析不出：不推（fail-closed）
+        const ck = convKindStmt.get(conversationId) as { kind: string } | undefined;
+        if (ck == null) continue; // 会话已不存在：不推
+        if (ck.kind === 'dm' && dmOkStmt.get(conversationId, this.deps.localUserId) == null) continue; // 他人 DM 不推送
+        this.sendJson(conn, { type: 'event', seq: e.seq, eventId: e.event_id, kind: e.kind, at: e.created_at, projectId: e.project_id, conversationId, threadId: e.thread_id, taskId: e.task_id, payload: safePayload(e.payload_json) });
       }
     }
   }
@@ -690,4 +838,9 @@ export function lanIps(): string[] {
     }
   }
   return out;
+}
+
+function primaryLanIp(): string | null {
+  const ips = lanIps();
+  return ips.length > 0 ? ips[0]! : null;
 }

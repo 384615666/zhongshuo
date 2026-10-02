@@ -13,7 +13,7 @@
  *   不静默缩小导出范围；
  * - 重活异步分步：逐件 await 让出事件循环——复制/校验不长期堵 daemon IPC 与停止命令。
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -215,6 +215,8 @@ export interface ExportOutcome {
     targetKind: 'conversation' | 'thread';
     threadId: string | null;
     stats: { messages: number; attachments: number; missing: number };
+    /** 主输出文件（index.md/index.html/export.docx）——字节与哈希入清单（下载端完整性对账）。 */
+    primary: { file: string; bytes: number; sha256: string };
     files: Array<{ file: string; bytes: number; sha256: string; artifactId: string; kind: string; revision: number; sourceName: string | null }>;
   };
 }
@@ -248,6 +250,8 @@ export async function writeExport(input: ExportInput): Promise<ExportOutcome> {
     writeFileSync(join(input.exportDir, 'export.docx'), renderDocx(prepared, stats.missing));
     files.push('export.docx');
   }
+  const primaryName = input.format === 'md' ? 'index.md' : input.format === 'html' ? 'index.html' : 'export.docx';
+  const primaryBytes = readFileSync(join(input.exportDir, primaryName));
   const manifest: ExportOutcome['manifest'] = {
     generatedAt: new Date().toISOString(),
     format: input.format,
@@ -255,6 +259,7 @@ export async function writeExport(input: ExportInput): Promise<ExportOutcome> {
     targetKind: input.target.kind,
     threadId: input.target.threadId ?? null,
     stats,
+    primary: { file: primaryName, bytes: primaryBytes.length, sha256: createHash('sha256').update(primaryBytes).digest('hex') },
     files: manifestFiles,
   };
   writeFileSync(join(input.exportDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
