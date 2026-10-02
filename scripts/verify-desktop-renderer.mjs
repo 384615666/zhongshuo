@@ -1190,7 +1190,11 @@ try {
       await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('要点甲')`)) === true, 30_000, 'ATT PPTX 预览');
       const pvSlides = await page.readStrict(`(() => { const l = document.querySelector('#attach-preview .slides-list'); return l ? (l.querySelectorAll('.slide-card').length + '|' + l.textContent.slice(0, 60)) : 'missing'; })()`);
       const pvSlidesNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
-      record('ATT·PPTX 预览（按页文字+备注；页图如实 unsupported）', pvSlides.startsWith('2|') && pvSlidesNote.includes('演讲备注') && pvSlidesNote.includes('页图渲染：unsupported'), pvSlides.slice(0, 40));
+      // 第三十七轮四：静态页预览已实装（与提取文本分列）——断言两通道都在：提取文本卡片+
+      // 静态页预览区（幻灯片导航+当前页 SVG）。
+      const pvPages = await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '')`).catch(() => '');
+      const pvPagesSvg = await page.readStrict(`(document.getElementById('attach-preview')?.querySelector('svg') != null)`).catch(() => false);
+      record('ATT·PPTX 预览（提取文本按页+备注；静态页预览 SVG 分列实装）', pvSlides.startsWith('2|') && pvSlidesNote.includes('演讲备注') && pvPages.includes('静态页预览') && pvPagesSvg === true, `text=${pvSlides.slice(0, 24)} pages=${pvPagesSvg}`);
       await closePreview(page);
       // ⑦ CSV（编码/引号规则页面链）。
       await uploadViaInput(page, 'composer', craft.makeCsvText([['名称', '备注'], ['中文单元格,逗号', '含"引号"'], ['行二', '值']], ','), '表格.csv', 'text/csv');
@@ -1445,6 +1449,12 @@ try {
         await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('执行态=running') || x.textContent.includes('执行态=queued')); const b = r && [...r.querySelectorAll('button')].find((x) => x.textContent === '停止' && !x.disabled); b && b.click(); })()`);
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 2500));
+      }
+      const stopAuditCount = countTable(dbPathR, 'remote_audit_log', `WHERE method = 'task.stop'`);
+      if (stopAuditCount === 0) {
+        // 点击 100s 窗口零 task.stop 到达——继续等待只会等自然完成（假阴性）。立即失败并留现场。
+        const st0 = await shellPage.readStrict(`JSON.stringify({ tasks: (document.getElementById('tasks')?.textContent ?? '').slice(0, 200), lastErr: window.__lastReadError ?? null, lastStopErr: window.__lastStopError ?? null })`).catch(() => 'dump-fail');
+        throw new Error(`停止点击零到达（100s 窗内无可点行或点击丢失——state=${String(st0)}）`);
       }
       try {
         await waitFor(async () => countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status IN ('RUNNING','WAITING','STOPPING')`) === 0, 95_000, 'REMOTE 停止收口（run 离开在途）');

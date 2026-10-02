@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { Unzip, UnzipInflate } from 'fflate';
+import { safeUnzipWith, ZipGuardError } from './zipGuard.ts';
 import {
   CURRENT_PARSER_VERSIONS,
   PDF_MAX_BYTES, PDF_MAX_PAGES, PDF_PAGE_TEXT_MAX, PDF_TOTAL_TEXT_MAX,
@@ -145,48 +146,7 @@ async function parsePdf(raw: Buffer, sourceHash: string): Promise<ExtractCache> 
 // 单次流式解包：**条目元数据预检**（onfile 即得名/声明尺寸——不解压先拒）+**受限解压过程
 // 中累计实际输出**（声明尺寸不可信——超限即停止收集只计数，内存不随炸弹膨胀；总量检查不
 // 等整包解完）。同一份解包结果供定类与逐格式解析复用（不再二次解压）。
-function safeUnzip(raw: Buffer): Record<string, Buffer> {
-  const out: Record<string, Buffer> = {};
-  let entryCount = 0;
-  let totalActual = 0;
-  let failure: { code: string; message: string } | null = null;
-  const fail = (code: string, message: string): void => { if (failure == null) failure = { code, message }; };
-  const uz = new Unzip();
-  uz.register(UnzipInflate);
-  uz.onfile = (f) => {
-    entryCount += 1;
-    if (entryCount > ZIP_MAX_ENTRIES) { fail('zip-entry-limit', `压缩包条目数超过上限 ${ZIP_MAX_ENTRIES}——资源限制明确拒绝`); }
-    if (f.name.includes('..')) { fail('zip-corrupt', `压缩包含路径穿越条目：${f.name}`); }
-    const declared = f.originalSize ?? f.size ?? 0;
-    if (declared > ZIP_ENTRY_MAX_BYTES) { fail('zip-size-limit', `条目 ${f.name} 声明解压 ${declared}B 超上限 ${ZIP_ENTRY_MAX_BYTES}B`); }
-    const skipCollection = failure != null;
-    const chunks: Buffer[] = [];
-    let actual = 0;
-    f.ondata = (e: Error | null, chunk: Uint8Array | null, final: boolean) => {
-      if (e != null) { fail('zip-corrupt', `条目 ${f.name} 解压失败（${e.message}）`); return; }
-      if (chunk != null) {
-        actual += chunk.length;
-        totalActual += chunk.length;
-        // 实际输出限制（声明不可信）：超限即丢弃后续块（内存不膨胀）。
-        if (actual > ZIP_ENTRY_MAX_BYTES) { fail('zip-size-limit', `条目 ${f.name} 实际解压输出超上限 ${ZIP_ENTRY_MAX_BYTES}B（声明尺寸不可信）`); return; }
-        if (totalActual > ZIP_TOTAL_MAX_BYTES) { fail('zip-size-limit', `解压实际总量超上限 ${ZIP_TOTAL_MAX_BYTES}B`); return; }
-        if (!skipCollection) chunks.push(Buffer.from(chunk));
-      }
-      if (final && failure == null) out[f.name] = Buffer.concat(chunks);
-    };
-    f.start(); // 恒启动（不启动会内部缓冲压缩数据）；超限路径只计数不收集
-  };
-  try {
-    uz.push(new Uint8Array(raw), true);
-  } catch (error) {
-    const f1 = failure as { code: string; message: string } | null;
-    if (f1 != null) throw new ParseError(f1.code, f1.message);
-    throw new ParseError('zip-corrupt', `不是可解析的 zip/Office 文档（${String((error as Error).message).slice(0, 100)}）`);
-  }
-  const finalFailure = failure as { code: string; message: string } | null; // 闭包写入——显式放宽收窄
-  if (finalFailure != null) throw new ParseError(finalFailure.code, finalFailure.message);
-  return out;
-}
+export 
 
 /** zip 关系 target 相对路径解析（../ 与 ./ 逐段归一——字符串 replace 会误伤 '../' 内的 './'）。 */
 function resolveZipTarget(baseFile: string, target: string): string {
@@ -252,7 +212,7 @@ function sanitizeOfficeHtml(html: string): string {
 // ---------- DOCX（mammoth：段落/表格有序提取；外部关系不加载、图片不解码、宏文档拒绝） ----------
 async function parseDocx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): Promise<ExtractCache> {
   const mammothPkg = (await import('mammoth/package.json', { with: { type: 'json' } })).default;
-  const files = preUnzipped ?? safeUnzip(raw); // 护栏先于 mammoth（条目/尺寸/穿越）；office 路径复用同一解包
+  const files = preUnzipped ?? safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES }); // 护栏先于 mammoth（条目/尺寸/穿越）；office 路径复用同一解包
   const ct = requireEntry(files, '[Content_Types].xml');
   const ctText = Buffer.from(ct).toString('utf8');
   if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
@@ -293,7 +253,7 @@ async function parseDocx(raw: Buffer, sourceHash: string, preUnzipped?: Record<s
 
 // ---------- XLSX（SheetJS：**只读缓存值**——公式不执行；无缓存值如实占位） ----------
 async function parseXlsx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): Promise<ExtractCache> {
-  const files = preUnzipped ?? safeUnzip(raw); // office 路径复用同一解包
+  const files = preUnzipped ?? safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES }); // office 路径复用同一解包
   requireEntry(files, 'xl/workbook.xml');
   const XLSX = await import('xlsx');
   let wb: WorkBook;
@@ -461,7 +421,7 @@ function xmlTexts(xml: string): string[] {
  * 正文——超长备注/总量截断如实标注）。
  */
 function parsePptx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): ExtractCache {
-  const files = preUnzipped ?? safeUnzip(raw);
+  const files = preUnzipped ?? safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES });
   requireEntry(files, 'ppt/presentation.xml');
   const presentationXml = Buffer.from(requireEntry(files, 'ppt/presentation.xml')).toString('utf8');
   // presentation 关系：rId → target（相对 ppt/）。
@@ -565,7 +525,7 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
       case 'office': {
         // 定类按解压后的 [Content_Types]（zip 条目已压缩——字面嗅探不可靠）；**单次解包结果
         // 供定类与逐格式解析复用**（第三十轮二：不再二次解压重复膨胀）；宏/模板变体在此拒。
-        const sniffFiles = safeUnzip(raw);
+        const sniffFiles = safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES });
         const ctText = Buffer.from(requireEntry(sniffFiles, '[Content_Types].xml')).toString('utf8');
         if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
           throw new ParseError('docx-macro', '宏/旧版二进制 Office 文档不支持（.docm/.xlsm/.pptm/.doc 明确拒绝——不执行宏）');
@@ -580,7 +540,7 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
     const artifactKind = job.kind === 'pdf' ? 'pdf_file' : job.kind === 'docx' ? 'docx_file' : job.kind === 'pptx' ? 'slides_file' : 'sheet_file';
     return { ...common, ok: true, result: { ...result, artifactKind } };
   } catch (error) {
-    const code = error instanceof ParseError ? error.code : 'parse-worker-error';
+    const code = error instanceof ParseError ? error.code : error instanceof ZipGuardError ? error.code : 'parse-worker-error';
     return { ...common, ok: false, error: { code, message: error instanceof Error ? error.message : String(error) } };
   }
 }

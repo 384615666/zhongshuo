@@ -19,4 +19,5 @@ export declare function makeGifHeaderOnly(w: number, h: number): Buffer;
 export declare function makeWebpVp8HeaderOnly(w: number, h: number): Buffer;
 export declare function makeWebpVp8lHeaderOnly(w: number, h: number): Buffer;
 export declare function makeCsvText(rows: unknown[][], delim?: string): Buffer;
+export declare function makePptxPagesSample(input: { slides: Array<{ no: number; shapes?: Array<{ x: number; y: number; cx: number; cy: number; texts?: string[]; kind?: 'sp' | 'pic' }>; image?: { name: string; ext: string; mime: string; bytes: Buffer }; notes?: string; notesNo?: number }> }): Buffer;
 export declare function zipToBuffer(files: Record<string, Buffer | string>): Buffer;

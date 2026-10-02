@@ -930,6 +930,8 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       note.textContent = `公式不执行（仅缓存值，缺失如实占位）· 注入=范围窗口（默认首表 50×16——不把全部工作表无界发送）${doc.truncatedTotal ? ' · 提取超预算已截断' : ''}`;
       owrap.append(tabs, gridBox, rangeRow, note);
     } else {
+      // PPTX 双通道（第三十七轮四）：**提取文本**卡片列表（previewOffice——模型输入真源）+
+      // **静态页预览**（previewSlidesPages：幻灯片列表/当前页 SVG/缩放——版面近似）分列。
       const listBox = document.createElement('div');
       listBox.className = 'slides-list';
       for (const sl of doc.slides) {
@@ -952,8 +954,86 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `按页保留文字与备注（顺序=幻灯片编号）· 页图渲染：unsupported（页图与文本输入能力分别认证——不拿路径冒充已读）· 模型输入=提取文本`;
+      note.textContent = `按页保留文字与备注（顺序=幻灯片编号）· 提取文本=模型输入真源 · 模型输入=提取文本`;
       owrap.append(listBox, note);
+      // ---- 静态页预览（受控转换 slide XML→SVG；缓存绑定原件版本；缩放客户端矢量）----
+      try {
+        const pages = await command('attachment.previewSlidesPages', { attachmentId });
+        if (!alive()) return;
+        const pwrap = document.createElement('div');
+        pwrap.className = 'slides-pages';
+        const phead = document.createElement('div');
+        phead.className = 'meta';
+        phead.textContent = `🖼 静态页预览（受控转换·版面近似）· ${pages.totalSlides} 页 · ${pages.pxW}×${pages.pxH} · 缓存=${pages.cache === 'hit' ? '命中' : '新建'}（绑定 v${pages.revision}/${pages.hash.slice(0, 8)}…）`;
+        const zoomRow = document.createElement('div');
+        zoomRow.className = 'git-row';
+        const zoomIn = document.createElement('button');
+        zoomIn.className = 'chip';
+        zoomIn.textContent = '放大';
+        const zoomOut = document.createElement('button');
+        zoomOut.className = 'chip';
+        zoomOut.textContent = '缩小';
+        const zoomLabel = document.createElement('span');
+        zoomLabel.className = 'meta';
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'chip';
+        prevBtn.textContent = '◀ 上一页';
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'chip';
+        nextBtn.textContent = '下一页 ▶';
+        const pageLabel = document.createElement('span');
+        pageLabel.className = 'meta';
+        const navList = document.createElement('div');
+        navList.className = 'slides-list';
+        const stage = document.createElement('div');
+        stage.style.overflow = 'auto';
+        stage.style.border = '1px solid #e2e8f0';
+        stage.style.borderRadius = '6px';
+        stage.style.maxHeight = '560px';
+        let current = 0;
+        let zoom = 1;
+        const draw = () => {
+          const sl = pages.slides[current];
+          stage.replaceChildren();
+          if (sl == null) return;
+          const holder = document.createElement('div');
+          holder.innerHTML = sl.svg; // 服务端受控 SVG（仅白名单元素：rect/text/image/line——无 script/无外链）
+          const svgEl = holder.firstElementChild;
+          if (svgEl != null) {
+            svgEl.setAttribute('width', String(Math.round(pages.pxW * zoom)));
+            svgEl.setAttribute('height', String(Math.round(pages.pxH * zoom)));
+          }
+          stage.append(svgEl ?? Object.assign(document.createElement('div'), { textContent: '（本页无渲染内容）' }));
+          pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 缩放 ${Math.round(zoom * 100)}%${sl.truncated ? ' · 本页超静态预览预算（部分未渲染）' : ''} · 形状 ${sl.shapes}·图片 ${sl.images}`;
+        };
+        const nav = (dir) => { const n = current + dir; if (n >= 0 && n < pages.slides.length) { current = n; draw(); } };
+        prevBtn.onclick = () => nav(-1);
+        nextBtn.onclick = () => nav(1);
+        zoomIn.onclick = () => { zoom = Math.min(zoom * 1.25, 4); draw(); };
+        zoomOut.onclick = () => { zoom = Math.max(zoom / 1.25, 0.25); draw(); };
+        zoomLabel.textContent = '缩放 100%';
+        zoomRow.append(prevBtn, nextBtn, pageLabel, zoomOut, zoomIn);
+        for (let i = 0; i < pages.slides.length; i += 1) {
+          const sl = pages.slides[i];
+          const chip = document.createElement('button');
+          chip.className = 'chip';
+          chip.textContent = `第 ${sl.slide} 页${sl.truncated ? '（部分未渲染）' : ''}`;
+          chip.onclick = () => { current = i; draw(); };
+          navList.append(chip);
+        }
+        pwrap.append(phead, zoomRow, navList, stage);
+        const pnote = document.createElement('div');
+        pnote.className = 'meta';
+        pnote.textContent = '静态页预览=版面近似（文本框/图片/简单形状；SmartArt·图表·主题样式·渐变等未渲染项页内如实标注）· 图片内联有预算上限（超限占位标注）· 与像素级渲染分别认证';
+        pwrap.append(pnote);
+        owrap.append(pwrap);
+        draw();
+      } catch (e) {
+        const pnote = document.createElement('div');
+        pnote.className = 'meta warn';
+        pnote.textContent = `静态页预览不可用（${e.message}）——提取文本预览不受影响（分列）`;
+        owrap.append(pnote);
+      }
     }
     obox.replaceChildren(owrap);
     return;
