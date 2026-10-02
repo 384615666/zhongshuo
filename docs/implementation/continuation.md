@@ -2,7 +2,48 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-02 第三十五轮，唯一权威快照）
+## 当前真实状态（2026-10-02 第三十六轮，唯一权威快照）
+
+> 本轮=**真实双机验收入口受阻→修复+普通浏览器预检+v2 包重交**。D1—D10 未执行不记通过。
+> 上一轮快照（第三十五轮）紧随其后。
+> - **受阻登记**：docs/implementation/dev25-access-entry-blocked.md（用户原始描述逐字保留+
+>   开发机取证）。根因：旧证书生成 PowerShell New-SelfSignedCertificate 未传 -Subject——
+>   实际证书 Subject/Issuer 均空+SAN 非 critical（RFC 5280：空 DN 时 SAN 必须 critical）——
+>   普通 Chrome 证书查看/信任流程走不完。
+> - **证书两层（remoteIdentity.ts 重写，node-forge 纯 JS）**：本地 CA（CN=Zhongshuo Remote
+>   Access CA；CA:TRUE+keyCertSign critical；10 年）=用户导入的信任根（remote/ca.cer）；服务
+>   证书（CN=zhongshuo-remote；CA 签发；SAN **critical** 覆盖 DNS:localhost+IP:127.0.0.1/::1/
+>   实际 LAN IP——CN 不代替 IP SAN；EKU serverAuth；3 年）。**IP 变化只重签服务证书——CA
+>   不变（信任一次）**。复用按实际 DER 核验：空 DN/过期/SAN 不覆盖/非本 CA 签发（X509.verify
+>   CA 公钥验签）/证书私钥不配→重签重生成；旧文件入 remote/old-cert-diagnostics/<ts>/ 留
+>   诊断证据（业务数据/RESULTS 不动）。私钥/CA 私钥只留服务机；程序不自动安装信任根。
+>   **forge 三坑**：IP SAN 必须传二进制字节串（点分文本=畸形 SAN「invalid length=9」）；
+>   authorityKeyIdentifier 会被误写为**自身 SKI**（openssl 按 AKI/SKI 配链即「unable to get
+>   local issuer」——不设该扩展）；Node X509 把 IPv6 SAN 打印为全展开（canonicalIp 双侧归一）。
+> - **分层核验（remoteServer+commands+UI）**：仅本机模式提示「其它设备无法连接」；LAN 启用后
+>   remote.config.get 回**实际监听地址+服务证书指纹+CA 指纹+Subject/Issuer+lanSelfCheck**
+>   （verifyLanBinding：服务机本机经实际 LAN IP 的 HTTPS 探测——通过=绑定/TLS 层健康；跨机
+>   失败需客户端错误码再分层，不预判定性）。README：证书提示=信任层/ERR_CERT_COMMON_NAME_
+>   INVALID=名称层/超时=网络层+防火墙**程序或端口+专用网络**精准步骤（不关整墙）。
+> - **普通浏览器预检（scripts/dev25-browser-precheck.mjs）**：系统 Edge 无任何证书绕过开关
+>   （CDP 附着只读）。Phase A 未授信=net::ERR_CERT_AUTHORITY_INVALID 拦截（区别结构无效——
+>   openssl 验链+Subject/SAN 核验先行）；Phase B 工程侧临时装 CA 至 CurrentUser Root
+>   （thumbprint=CA DER SHA-1 留痕）→HTTPS 页面加载+配对+WSS 事件流；Phase C 卸载→回拦截态
+>   （证明通过确实来自该信任根）。**冻结产物上 8/8 PASS**（dev25-browser-precheck/
+>   2026-10-021242/evidence.json）。原自动化回归（remoteAccess 36/36 等）保留，但其证书信任
+>   覆盖范围（Node 显式 CA/SPKI 钉选壳）不再代表普通浏览器入口已通过。
+> - **v2 包**：dev25-dual-win-v2（**独立版本目录**，不覆盖正在运行的旧包）；README 重写信任/
+>   分层排查/防火墙步骤；自测实跑 .bat 全链（证据 dev25-dual-evidence/2026-10-021242-ejx5b5）。
+>   坑：--out= 与 --self-test 参数顺序（argv.includes 解析）；新 Edge profile 自带扩展欢迎页
+>   抢 CDP target（按 URL hint 选页面）。
+> - **数字**：remoteIdentity **5/5**+remoteAccess **36/36**（REMOTE 24/24 回归）；本地全量
+>   **827/827**；冻结三连 **142/142×3**（bld_4d7928368c7da46f：5wsc56/1hyhsk/niwrb0——
+>   63ztvw 的 E18 跨项目线程单项竞态中止如实保留，等待加固后过）；v2 包逐文件 583/583+
+>   selfTest 全链+预检 8/8。零真实调用。
+> - **下一步**：①用户用 v2 包执行 D1—D10 并回填（工程侧只读核对）；②Windows+Android 双端
+>   （资源已确认）；③DEV-24 最小项编码（提取文本类行评论）。
+
+## 上一轮快照（2026-10-02 第三十五轮）
 
 > 本轮=**两类遗漏收口+数字口径更正**：恢复链读取贯通/自检看板真异步+冻结重交。上一轮快照
 > （第三十四轮）紧随其后。
