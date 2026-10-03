@@ -2,6 +2,44 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-03 第三十八轮，唯一权威快照）
+
+> 本轮=**D1—D10 收案（v2 范围通过）+现场八缺陷修复+PPT 缺口收口+v3 修复包**。
+> 收案记录=docs/implementation/dev25-dual-acceptance-record-20261003.md（D7 支持事件与
+> 「编码阶段零改动」分列——server-data 曾被正式命令修改；Android/缺陷关闭/G5 分别登记不连带）。
+> - **现场修复（dev25FieldFixes 3/3+页面级）**：#2 防护拒绑真实 runtime（CAPABILITY_UNSUPPORTED
+>   正式错误）+设置 UI 防护包 fake 正路径（member.runtime 带 environment 标志——正式部署不出现
+>   该选项）；「审计缺事件」结论不实——turn.startupFailed 本就落库，缺口在呈现（三面上屏）；
+>   #7 interrupted 呈现+「恢复执行」=task.redispatch 正式重派链（幂等/不复活已停止——反例全过）；
+>   #1/#8 深链跨项目判定改 projectId（原路径字符串比较=二次 loadProject 候选根因）+渲染代次守卫
+>   +同项目空结果保留旧列表+审计环 window.__zsNavAudit+启动有界重试+重连补载；
+>   #3/#5/#6 远程继续队列+反馈+房间 DIRECT 指派（**mentions 合同={kind:'member',memberId}**——
+>   裸 displayName 被 zod 拒）+会话标题区分；#4 statusReason 人话（board.view+mine.pending）；
+>   可用性=侧栏可滚+设备列表限高+LAN 虚拟网卡段标注（198.18/169.254/100.64）不推荐+
+>   selfcheck pkgRoot 修正+CA 指纹。
+> - **PPT（pptxPages 9/9）**：重活进 parsePool（kind='pptx-pages'+outPath 文件——IPC 4MB 上限；
+>   **worker 源码指纹已含 pptxPages/zipGuard**）；缓存命中先核原件（篡改副本→命中路径拒绝——
+>   反例过）；写回前重读 artifact；五缺陷修+SVG 白名单 svgWellFormed+schema 2（旧缓存全废）；
+>   页面深检：首页内容/坐标/图片内联、翻页换内容+实体解码、缩放 width 实变、图表页降级标注、
+>   关闭后在途构建不复活、缓存命中复用。
+> - **工程坑（四连中止教训）**：①`(await rs(...).includes(X))` 的 await 组把 .includes 一起包住
+>   →落在 Promise 上——TypeError 文本会剥 await/括号，按括号计数脚本定位；②多段 python replace
+>   一处 assert 失败=整脚本不写盘（前面替换全回滚）；③heredoc 反斜杠折叠——String.fromCharCode(92)
+>   构造（JS 模板字面量内单反斜杠=
+/ 转义）；④构造中断形态的 agent_turns.member_id 有 FK——
+>   假成员使整事务回滚（execSql 要 throw 不吞）；⑤closeAttachPreview 只隐藏不清内容——「重开」
+>   断言须等重新可见+新内容标志；⑥ZS_VDR_SESSIONS 缺省只 A–D，全量=12 会话。
+> - **数字**：dev25FieldFixes 3/3；pptxPages 9/9；本地全量 **839/839**；冻结基线
+>   **bld_f4d26d38592bb521——154×3 全绿**（7opdi7/vrd0jb/lpngj8，REMOTE=28/轮+4 新记录；
+>   中止如实保留：bwxt1y=CDP 表达式瞬态/1lyo7m=停止点击零到达偶发（第三十五/三十七轮已知
+>   稀疏渲染窗）/m3j81g=HARNESS·D1 时序；旧产物 bld_6ca139d08a85bd7a 双绿后因 remoteClient
+>   mentions 合同修复重建）；零真实调用。**v3 包=dist/desktop/dev25-dual-win-v3**（README 已并入
+>   第三十七轮补充说明更正：防火墙=daemon node.exe/监听两选项+LAN 列表选址/配对码时机/
+>   ca.cer 文件哈希核对法；v2/server-data/RESULTS/截图原地保留）。
+> - **下一步**：①用户受影响项短回归（继续队列/中断恢复/侧栏恢复/防护拒绑提示/设备列表可达/
+>   PPT 页面行为）——不重复 D1—D10；②Android 实测按指南（适配≠实测）；③其余评论锚点 FULL-03
+>   后批；④DEV-25/G5 发布结论待用户短回归+Android 后再出。
+
 ## 当前真实状态（2026-10-02 第三十七轮，唯一权威快照）
 
 > 本轮=**验收版本保持稳定+操作补充/Android 指南+PPT 静态页预览**。v2 包（dev25-dual-win-v2，

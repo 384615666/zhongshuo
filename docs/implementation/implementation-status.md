@@ -147,6 +147,27 @@
 
 - 多 Agent 并行写入增强（write_intent、写范围校验、跨任务变更请求、整合闸门）、按任务 worktree（主设计 §14.7，2026-09-26 延期）。当前仅 `single_writer`；`parallel_writers` 在租约入口被拒绝（ADR-I19），契约类型保留待后续批准。
 
+## 最近更新
+
+**第三十八轮（收案+现场缺陷修复+PPT 缺口收口）**：
+①**D1—D10 收案**：用户确认 D3/D6/D7，按 v2 包（bld_4d7928368c7da46f）实测范围记录**通过**
+（dev25-dual-acceptance-record-20261003.md——16 截图+自检 10/10×2 指纹清单；D7 支持事件与
+「编码阶段零改动」分列——server-data 曾被正式命令修改：member.setRuntime fake×2+dm.resume×3；
+real_calls=0 全程未破；系统/浏览器版本等未回填字段如实保留；Android/缺陷关闭/G5 分别登记）。
+②**现场缺陷修复**（dev25-acceptance-defects-20261003.md 八项+可用性——dev25FieldFixes 3/3）：
+#2 防护拒绑+UI fake 正路径（member.runtime environment 标志）；#7 interrupted 呈现+task.redispatch
+正式恢复（幂等/不复活已停止）；#1/#8 深链 projectId 判定+渲染代次守卫+空结果保护+审计环+
+启动有界重试+重连补载；#3/#5/#6 远程继续队列+反馈+DIRECT 指派（mentions 正式合同）+会话标题
+区分；#4 statusReason 人话；设备列表滚动/LAN 虚拟网卡标注/selfcheck pkgRoot+CA 指纹。
+③**PPT 缺口收口**（pptxPages 9/9）：parsePool 子进程化+缓存命中先核原件+写回重读+五缺陷修
+（图表占位/截断标记/实体解码/字节预算/异常缓存拒）+SVG 白名单 svgWellFormed+schema 2。
+④页面深检（PPT 真实内容/翻页/缩放/降级/迟到保护/缓存复用+远程恢复链）。
+本地全量 **839/839**；冻结基线 **bld_f4d26d38592bb521（154 项×3 全绿**：7opdi7/vrd0jb/lpngj8
+——REMOTE=28/轮（+4 新记录）；created bwxt1y 中止于 CDP 表达式瞬态+1lyo7m 中止于停止点击零到达
+偶发（均 0 fail，与 m3j81g/58a94k/e742of/7mg83d 等迭代记录一并如实保留——旧产物
+bld_6ca139d08a85bd7a 亦有 e5jog9/bwyab4 双绿后因 remoteClient 合同修复重建）；**v3 修复包=
+dist/desktop/dev25-dual-win-v3**（独立目录；v2/server-data/RESULTS/截图原地保留）。零真实调用。
+
 ## 阻塞登记
 
 | 事项 | 影响范围 | 状态 |
