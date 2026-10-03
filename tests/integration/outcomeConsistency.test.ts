@@ -151,7 +151,8 @@ describe('成果一致性八项（业务事实/预算/产物/事件/用户可见
     expect(r2.replayed).toBe(true); // 重放（不重复执行 handler）
     // 副作用一次：幂等回执一条、outbox 该派发一条（不重复入队）。
     expect((db.prepare(`SELECT count(*) c FROM command_receipts WHERE command_id = ?`).get(commandId) as { c: number }).c).toBe(1);
-    expect((db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ?`).get(`task:${taskId}:redispatch`) as { c: number }).c).toBe(1);
+    // 第三十九轮 §2.2：非修复重派键版本化=task:<id>:redispatch:<sourceRunId>（同源幂等/新中断新意图）。
+    expect((db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ?`).get(`task:${taskId}:redispatch%`) as { c: number }).c).toBe(1);
     await adapter.closeAllSessions();
     db.close();
   }, 30_000);

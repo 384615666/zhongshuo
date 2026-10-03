@@ -68,8 +68,9 @@ export interface DmConversationSummary {
   /** 排队中的消息数（运行中同时有排队时一并呈现——不吞掉排队事实）。 */
   queuedCount: number;
   /** 中断待恢复的任务（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——如实呈现并给
-   * 正式重派入口 task.redispatch（核对停止代次/在途/终态/幂等），不自动重放）。 */
-  interruptedTasks: Array<{ taskId: string; title: string; lastRunStatus: string | null }>;
+   * 正式重派入口 task.redispatch。第三十九轮 §2：**可恢复性服务端分列**——前端不得仅凭
+   * INTERRUPTED run 显示可执行按钮；UNKNOWN 未对账/停止代次生效=不可恢复并给原因）。 */
+  interruptedTasks: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>;
   /** 最近一条消息文本预览（侧栏区分同成员多会话——第三十八轮 #6）。 */
   lastMessagePreview: string | null;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
@@ -106,8 +107,9 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
     // 中断待恢复（第三十八轮 #7）：ACTIVE 且**已有 run 但全部终态**（无活动 run/排队派发时永远
     // 不被泵——pumpDmQueue 只放行「无 run」的任务）。不自动重放：恢复经 task.redispatch 正式链
     // （核对停止代次/在途/终态/幂等）。queuedCount 只数「无 run」的排队任务，与此分列。
-    const interrupted = db.prepare(
-      `SELECT t.id AS taskId, t.title AS title,
+    const interruptedRaw = db.prepare(
+      `SELECT t.id AS taskId, t.title AS title, t.stop_generation AS stopGen,
+              (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunId,
               (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunStatus
        FROM tasks t
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE'
@@ -115,7 +117,23 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
          AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id AND r.status IN ('RUNNING','WAITING','STOPPING'))
          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dispatch_key = 'dmtask:' || t.id || ':initial' AND o.status IN ('pending','leased'))
        ORDER BY t.rowid`,
-    ).all(row.id) as Array<{ taskId: string; title: string; lastRunStatus: string | null }>;
+    ).all(row.id) as Array<{ taskId: string; title: string; stopGen: number; lastRunId: string | null; lastRunStatus: string | null }>;
+    // 可恢复性（与 task.redispatch 守卫同口径）：UNKNOWN 未对账（预算未结算/保护未解除）或停止
+    // 代次生效 → 不可恢复+原因；对账完成后（budget_mark 已置+租约已释放）方可重派。
+    const interrupted = interruptedRaw.map((t) => {
+      const unreconciled = t.lastRunId == null ? null
+        : (db.prepare(
+            `SELECT t2.id AS turnId FROM agent_turns t2 JOIN workflow_runs r ON r.id = t2.run_id
+             WHERE r.task_id = ? AND t2.status = 'UNKNOWN'
+               AND (t2.budget_mark IS NULL
+                    OR EXISTS (SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id = t2.id AND l.status != 'released'))
+             LIMIT 1`,
+          ).get(t.taskId) as { turnId: string } | undefined);
+      let blockReason: string | null = null;
+      if (t.stopGen > 0) blockReason = '停止代次已生效：不再追加执行';
+      else if (unreconciled != null) blockReason = '存在结果不确定且未对账的执行：先在桌面「恢复中心」完成取证/对账/保护解除（显式点击不构成已退出证明）';
+      return { taskId: t.taskId, title: t.title, lastRunStatus: t.lastRunStatus, lastRunId: t.lastRunId, recoverable: blockReason == null, blockReason };
+    });
     const lastMsg = db.prepare(
       `SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT 1`,
     ).get(row.id) as { body_json: string } | undefined;

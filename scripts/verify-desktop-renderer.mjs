@@ -1259,6 +1259,37 @@ try {
       await new Promise((r) => setTimeout(r, 1_500));
       const lateSnap2 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
       record('ATT·PPT 迟到预览不覆盖（在途构建被关闭后不复活不改写）', lateSnap1 === lateSnap2 && JSON.parse(lateSnap2).hidden === true, `${lateSnap1 === lateSnap2 ? 'unchanged' : 'CHANGED'} ${lateSnap2}`);
+      // 第三十九轮 §2：SVG 净化门反例（页面真实 DOM——DOMPurify 专用实例+钩子；经
+      // window.__zsSanitizeSvg 即渲染门本函数，非旁路副本）。无引号/单双引号外链、事件、脚本、
+      // foreignObject、data:text/html 伪装全拦；正常页（viewBox/坐标/中文/字体）完整保留。
+      const svgGateExpr = `(() => {
+        const Q = String.fromCharCode(39);
+        const evils = [
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="10" height="10"><image href=https://example.invalid/x.png x="0" y="0" width="5" height="5"/></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image xlink:href=' + Q + 'https://example.invalid/y.png' + Q + ' x="0" y="0" width="5" height="5"/></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><foreignObject onload="alert(1)"><div onclick="x()">evil</div></foreignObject></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><a href="javascript:alert(1)"><text x="1" y="5" font-size="4">t</text></a></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script><rect x="1" y="1" width="2" height="2" fill="#ffffff"/></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect x="1" y="1" width="2" height="2" fill="#ffffff" <text>broken',
+          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image xlink:href="data:text/html;base64,PHNjcmlwdD4=" x="0" y="0" width="5" height="5"/></svg>'
+        ].map((x) => window.__zsSanitizeSvg(x) ?? '');
+        const joined = evils.join('|');
+        const normal = window.__zsSanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1280 720" width="1280" height="720"><rect x="100" y="60" width="420" height="100" fill="#ffffff" stroke="#cbd5e1" rx="2"/><text x="105" y="78" font-size="13" fill="#1e293b">中文标题</text></svg>') ?? '';
+        return JSON.stringify({
+          noLeak: !(/https?:\/\/example\.invalid/i.test(joined) || /javascript:/i.test(joined) || /on[a-z]+=/i.test(joined) || /<script/i.test(joined) || /foreignObject/i.test(joined) || /data:text\/html/i.test(joined)),
+          normalKept: normal.includes('中文标题') && normal.includes('viewBox="0 0 1280 720"') && normal.includes('stroke="#cbd5e1"'),
+          dataImageKept: /data:image\/png;base64/.test(window.__zsSanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3" width="4" height="3"><image x="0" y="0" width="4" height="3" xlink:href="data:image/png;base64,iVBORw0KGgo="/></svg>') ?? '')
+        });
+      })()`;
+      const svgGate = await page.readStrict(svgGateExpr).catch((e) => JSON.stringify({ probeError: String((e && e.message) || e).slice(0, 140) }));
+      let gate = JSON.parse(svgGate);
+      if (gate.probeError != null) {
+        // 单次重试（CDP 瞬态——第三十八/三十九轮已证存在；仍败则如实落败并带原因）。
+        await new Promise((r) => setTimeout(r, 800));
+        const retry = await page.readStrict(svgGateExpr).catch((e) => JSON.stringify({ probeError: String((e && e.message) || e).slice(0, 140) }));
+        gate = JSON.parse(retry);
+      }
+      record('R39·SVG 净化门（DOMPurify 专用实例：无引号/单双引号外链·事件·脚本·foreignObject·data:text 伪装全拦；正常页与 data: 图片保留）', gate.noLeak === true && gate.normalKept === true && gate.dataImageKept === true, svgGate);
       // ⑥再开=缓存命中（子进程产物经严格校验后可复用）。
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
       await waitFor(async () => (await page.readStrict(`(() => { const pv = document.getElementById('attach-preview'); const st = [...pv.querySelectorAll('.slides-pages')].pop(); return !pv.classList.contains('hidden') && st != null && st.querySelector('svg') != null && (st.querySelector('svg')?.textContent ?? '').includes('甲页标题XYZ'); })()`)) === true, 30_000, 'ATT PPTX 重开（新内容渲染——静态页回到首页内容）');

@@ -468,56 +468,88 @@ async function projectFilePreview(projectId, name) {
   box.replaceChildren(wrap);
 }
 
-/** Markdown 安全转换（零依赖）：**先整体转义**再生成受控标签——脚本/事件属性无处出现；
- * 远程图片不加载（自动网络访问禁止——占位文本）；链接仅 http(s) 且新窗口；代码只展示。 */
-function mdToSafeHtml(md) {
-  const escAll = (t) => t.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-  const lines = md.split(String.fromCharCode(10));
-  let html = '';
-  let inCode = false;
-  let listOpen = false;
-  const closeList = () => { if (listOpen) { html += '</ul>'; listOpen = false; } };
-  const inline = (t) => {
-    let out = escAll(t);
-    out = out.replaceAll('`([^`]+)`', '$1'); // 占位防误配（下方用正则重做）
-    out = escAll(t);
-    out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
-    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    out = out.replace(/(^|\s)\*([^*]+)\*/g, '$1<em>$2</em>');
-    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '[图片占位：$1（远程图片不加载——离线安全）]');
-    return out;
+/**
+ * Markdown 安全渲染（第三十九轮 §3：markdown-it + DOMPurify 成熟组件——不再自写正则兜底）：
+ * - markdown-it html:false（原始 HTML 全转义）+ breaks；链接仅 http(s)/mailto 且新窗口
+ *   （renderer 覆写统一加 rel=noopener）；图片**不渲染**——占位文本「远程图片不加载」（离线
+ *   合同不变：页面零自动网络访问）；
+ * - 输出经 DOMPurify（ALLOWED_TAGS 受控集+ALLOWED_URI_REGEXP 协议白名单）二次收口——
+ *   双层（生成约束+净化）任一层都足以拦住恶意样本。
+ */
+const MD_URI_OK = /^(?:(?:https?|mailto):|[^:\w]*#)/i;
+const mdInstance = (() => {
+  if (typeof window.markdownit !== 'function') return null; // vendored 脚本未加载（异常环境）——调用方回退纯文本
+  const md = window.markdownit({ html: false, breaks: true, linkify: false, typographer: false });
+  const defLink = md.renderer.rules.link_open ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const hrefIdx = token.attrIndex('href');
+    if (hrefIdx >= 0 && !MD_URI_OK.test(String(token.attrs[hrefIdx][1] ?? ''))) {
+      token.attrs[hrefIdx][1] = '#'; // 非 http(s)/mailto 协议（javascript: 等）——锚化为不可导航
+    }
+    token.attrSet('rel', 'noopener noreferrer');
+    token.attrSet('target', '_blank');
+    return defLink(tokens, idx, options, env, self);
   };
-  for (const raw of lines) {
-    if (/^```/.test(raw.trim())) {
-      closeList();
-      html += inCode ? '</code></pre>' : '<pre class="md-code"><code>';
-      inCode = !inCode;
-      continue;
-    }
-    if (inCode) { html += escAll(raw) + String.fromCharCode(10); continue; }
-    const line = raw.trimEnd();
-    if (/^#{1,3}\s/.test(line)) {
-      closeList();
-      const level = (line.match(/^#+/) ?? ['#'])[0].length;
-      html += `<h${level + 1}>${inline(line.replace(/^#+\s*/, ''))}</h${level + 1}>`;
-      continue;
-    }
-    if (/^[-*]\s+/.test(line)) {
-      if (!listOpen) { html += '<ul>'; listOpen = true; }
-      html += `<li>${inline(line.replace(/^[-*]\s+/, ''))}</li>`;
-      continue;
-    }
-    if (/^>\s?/.test(line)) { closeList(); html += `<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`; continue; }
-    if (/^\|.*\|$/.test(line)) { closeList(); html += `<div class="md-table-line">${inline(line)}</div>`; continue; }
-    closeList();
-    if (line.trim().length === 0) { html += '<div class="md-blank"></div>'; continue; }
-    html += `<p>${inline(line)}</p>`;
+  md.renderer.rules.image = (tokens, idx) => {
+    const t = tokens[idx];
+    const alt = (t.content || '').slice(0, 60);
+    return `[图片占位：${alt}（远程图片不加载）]`;
+  };
+  return md;
+})();
+// 注意：不设自定义 ALLOWED_URI_REGEXP——DOMPurify 将该正则作用于**所有**属性值（几何值/rel
+// 值等非 URI 文本也过测），窄式正则会误剥正常属性（第三十九轮实测）；协议控制由 markdown-it
+// html:false + link_open 规则（非 http(s)/mailto 锚化）+ DOMPurify 默认 scheme 黑名单三层承担。
+const MD_SANITIZE_CONFIG = {
+  ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'h2', 'h3', 'h4', 'blockquote', 'span', 'div'],
+  ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+  FORBID_ATTR: ['style', 'srcset'],
+};
+function mdToSafeHtml(md) {
+  if (mdInstance == null || typeof window.DOMPurify !== 'function' || typeof window.DOMPurify.sanitize !== 'function') {
+    // 组件缺失（异常环境）——纯转义降级，不冒充渲染。
+    return `<pre>${String(md).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</pre>`;
   }
-  closeList();
-  if (inCode) html += '</code></pre>';
-  return html;
+  const raw = mdInstance.render(md);
+  return window.DOMPurify.sanitize(raw, MD_SANITIZE_CONFIG);
 }
+
+/**
+ * SVG 净化门（第三十九轮 §2：DOMPurify 在真实 DOM 上解析——无引号/单双引号/命名空间/畸形
+ * 标签一律按 HTML 解析器语义处理，不再靠正则枚举；图片仅 data:image base64（外链被剥除——
+ * 页面零自动网络请求）。服务端 svgWellFormed 保留为缓存结构第一层，不再扩张；本函数是渲染
+ * 前的安全边界。暴露 window.__zsSanitizeSvg 供页面级反例验证（同一函数，非旁路副本）。
+ */
+const SVG_SANITIZE_CONFIG = {
+  ALLOWED_TAGS: ['svg', 'rect', 'text', 'image', 'line'],
+  ALLOWED_ATTR: ['xmlns', 'xmlns:xlink', 'viewBox', 'width', 'height', 'x', 'y', 'x1', 'y1', 'x2', 'y2',
+    'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'rx', 'font-size', 'font-family',
+    'preserveAspectRatio', 'xlink:href', 'href'],
+  FORBID_ATTR: ['style', 'srcset'],
+};
+/** SVG 专用净化实例（DOMPurify(factory) 独立实例——钩子不影响 Markdown 共用的默认实例）：
+ * 钩子精确封 URI 属性（仅 data:image base64 保留——外链/无引号/单双引号一律剥除）与事件属性；
+ * 不用窄式 ALLOWED_URI_REGEXP（该正则会作用于全部属性值，几何值被误剥——第三十九轮实测）。 */
+const svgPurifier = (() => {
+  if (typeof window.DOMPurify !== 'function') return null; // 组件缺失=不渲染（fail-closed）
+  try {
+    const inst = window.DOMPurify(window);
+    inst.addHook('uponSanitizeAttribute', (_node, data) => {
+      const n = String(data.attrName ?? '').toLowerCase();
+      if (n === 'href' || n === 'xlink:href' || n === 'src') {
+        if (!/^data:image\/(?:png|jpeg|gif|webp|bmp);base64,[A-Za-z0-9+/=]*$/.test(String(data.attrValue ?? ''))) data.keepAttr = false;
+      }
+      if (/^on/.test(n)) data.keepAttr = false;
+    });
+    return inst;
+  } catch { return null; }
+})();
+function sanitizeSvg(svgText) {
+  if (svgPurifier == null) return null; // 组件缺失=不渲染（fail-closed）
+  return svgPurifier.sanitize(String(svgText), SVG_SANITIZE_CONFIG);
+}
+window.__zsSanitizeSvg = sanitizeSvg;
 
 /** 预览工具条（共享规格：复制引用/预览内搜索/行引用入草稿——版本/hash 准确，不自动发送）。 */
 function wirePreviewTools(wrap, { filename, hash, revision, pre }) {
@@ -1065,7 +1097,17 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           stage.replaceChildren();
           if (sl == null) return;
           const holder = document.createElement('div');
-          holder.innerHTML = sl.svg; // 服务端受控 SVG（仅白名单元素：rect/text/image/line——无 script/无外链）
+          // 第三十九轮 §2：渲染前经 DOMPurify 净化门（真实 DOM 解析——无引号/外链/畸形标签
+          // 由解析器语义拦截，不再依赖正则枚举；图片仅 data:image base64）。服务端 svgWellFormed
+          // 保留为缓存结构第一层；本门为渲染安全边界。净化失败/组件缺失=不渲染该页（fail-closed）。
+          const sanitized = sanitizeSvg(sl.svg);
+          if (sanitized == null || sanitized.trim().length === 0) {
+            stage.replaceChildren();
+            stage.append(Object.assign(document.createElement('div'), { textContent: '（本页 SVG 净化后为空——拒绝渲染）' }));
+            pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 净化后无有效内容`;
+            return;
+          }
+          holder.innerHTML = sanitized;
           const svgEl = holder.firstElementChild;
           if (svgEl != null) {
             svgEl.setAttribute('width', String(Math.round(pages.pxW * zoom)));
@@ -1135,7 +1177,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     mdBox.innerHTML = mdToSafeHtml(r.text);
     const mdNote = document.createElement('div');
     mdNote.className = 'meta';
-    mdNote.textContent = 'Markdown 安全预览（转义后受控标签——脚本/事件属性/远程图片不加载；代码只展示）';
+    mdNote.textContent = 'Markdown 安全预览（markdown-it html:false + DOMPurify 白名单——脚本/事件属性/远程图片不加载；代码只展示）';
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'chip';
     toggleBtn.textContent = '看原文';
@@ -1962,12 +2004,13 @@ async function renderDm() {
   el('dm-title').textContent = `私信 · ${fresh.peerDisplayName}${fresh.title != null && fresh.title.length > 0 ? ` · ${fresh.title}` : ''}`;
   const queueNote = fresh.queuedCount > 0 && fresh.archivedAt == null && fresh.execState !== 'queued' ? ` · 排队 ${fresh.queuedCount}` : '';
   const interruptedNote = (fresh.interruptedTasks ?? []).length > 0
-    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行 ${(t.lastRunStatus ?? '未知').toLowerCase()}）`).join('；')}）`
+    ? ` · 中断待恢复 ${fresh.interruptedTasks.length}（${fresh.interruptedTasks.map((t) => `${t.title}（上次运行 ${(t.lastRunStatus ?? '未知').toLowerCase()}${t.recoverable === false && t.blockReason != null ? `——${t.blockReason}` : ''}）`).join('；')}）`
     : '';
   el('dm-state').textContent = fresh.archivedAt != null ? '已归档（禁止新发/续跑）' : `${DM_STATE_TEXT[fresh.execState] ?? ''}${queueNote}${interruptedNote}`;
   el('dm-stop-btn').classList.toggle('hidden', fresh.execState !== 'running');
   el('dm-resume-btn').classList.toggle('hidden', fresh.execState !== 'paused');
-  el('dm-recover-btn').classList.toggle('hidden', fresh.archivedAt != null || (fresh.interruptedTasks ?? []).length === 0);
+  const anyRecoverable = (fresh.interruptedTasks ?? []).some((t) => t.recoverable !== false);
+  el('dm-recover-btn').classList.toggle('hidden', fresh.archivedAt != null || !anyRecoverable);
   el('dm-archive-btn').classList.toggle('hidden', fresh.archivedAt != null);
   el('dm-restore-btn').classList.toggle('hidden', fresh.archivedAt == null);
   el('dm-rename-btn').classList.toggle('hidden', false); // 重命名随时可用（不换对端/不重置）
@@ -3685,10 +3728,11 @@ el('dm-resume-btn').onclick = () => void (async () => {
 // task.redispatch 正式重派链（核对停止代次/在途/终态/幂等），不自动重放、不复活已取消任务）。
 el('dm-recover-btn').onclick = () => void (async () => {
   const fresh = state.dmConversations?.find((c) => c.conversationId === state.openDmId);
-  const target = (fresh?.interruptedTasks ?? [])[0];
+  const target = (fresh?.interruptedTasks ?? []).find((t) => t.recoverable !== false);
   if (target == null) { el('dm-state').textContent = '无中断待恢复的任务'; return; }
   try {
-    await command('task.redispatch', { taskId: target.taskId, reason: 'interrupted-recovery' });
+    // 恢复意图绑源执行（第三十九轮 §2.2：同源重试幂等/新中断=新源 run=新意图）。
+    await command('task.redispatch', { taskId: target.taskId, reason: 'interrupted-recovery', ...(target.lastRunId != null ? { sourceRunId: target.lastRunId } : {}) });
     el('dm-state').textContent = `恢复执行已入队（任务「${target.title}」——按原输入重新执行）`;
   } catch (e) { el('dm-state').textContent = `恢复失败：${e.message}`; }
   await renderDm();

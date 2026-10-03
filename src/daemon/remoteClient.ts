@@ -661,14 +661,25 @@ async function refreshTasks() {
       const label = '私信 ' + (c.peerDisplayName || String(c.conversationId).slice(0, 8))
         + (c.title != null && c.title !== '' ? '「' + c.title + '」' : (c.lastMessagePreview != null && c.lastMessagePreview !== '' ? '（' + c.lastMessagePreview + '）' : ''));
       if (state === 'interrupted') {
-        // 中断待恢复（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——此前只能回
-        // 服务机桌面恢复）。恢复走 task.redispatch 正式重派链（核对停止代次/在途/终态/幂等）。
+        // 中断待恢复（第三十八轮 #7/第三十九轮 §2）：**可恢复性服务端分列**（recoverable/
+        // blockReason——前端不自行判定）；不可恢复=呈现原因+回服务机恢复中心入口，不给按钮。
+        // 恢复意图绑源执行（sourceRunId——同源重试幂等/新中断=新意图）。
         for (const it of (c.interruptedTasks || [])) {
           const r = document.createElement('div');
           r.textContent = '[' + label + '] 中断待恢复：' + it.title + '（上次运行 ' + String(it.lastRunStatus || '未知').toLowerCase() + '）';
+          if (it.recoverable === false) {
+            r.textContent += '——' + (it.blockReason || '不可恢复');
+            const hint = document.createElement('button');
+            hint.textContent = '回服务机恢复中心核对';
+            hint.disabled = true; // 指引性呈现（远程面无恢复中心）——原因已就地显示
+            r.appendChild(hint);
+            box.appendChild(r);
+            continue;
+          }
           const recover = document.createElement('button');
           recover.textContent = '恢复执行';
-          recover.onclick = () => cmdOnce('recover:' + it.taskId, 'task.redispatch', { taskId: it.taskId, reason: 'interrupted-recovery' })
+          const opKey = 'recover:' + it.taskId + ':' + (it.lastRunId || 'none');
+          recover.onclick = () => cmdOnce(opKey, 'task.redispatch', { taskId: it.taskId, reason: 'interrupted-recovery', ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}) })
             .then((r2) => { feedLine('ok', '恢复执行已入队（' + (label) + '：' + it.title + '）' + ((r2.data && r2.data.dispatchKey) != null ? '——' + r2.data.dispatchKey : '')); return refreshTasks(); })
             .catch((e) => { feedLine('error', '恢复失败：' + (e.message || e)); });
           r.appendChild(recover);

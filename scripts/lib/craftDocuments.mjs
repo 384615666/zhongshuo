@@ -283,7 +283,7 @@ export function makePptxSlides({ slides, orphanSlides = [] }) {
       const notesNo = sl.notesNo ?? sl.no; // 缺省同号；样本可显式错开
       overrides += `<Override PartName="/ppt/notesSlides/notesSlide${notesNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`;
       files[`ppt/slides/_rels/slide${sl.no}.xml.rels`] = `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${notesNo}.xml"/></Relationships>`;
-      files[`ppt/notesSlides/notesSlide${notesNo}.xml`] = `${CT_HEADER}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${escapeXml(sl.notes)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+      files[`ppt/notesSlides/notesSlide${notesNo}.xml`] = `${CT_HEADER}<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="9" name="NotesPlaceholder"/><p:cNvSpPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN"/><a:t>${escapeXml(sl.notes)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
     }
   });
   files['[Content_Types].xml'] = `${CT_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`;
@@ -305,23 +305,41 @@ export function makePptxPagesSample({ slides }) {
   slides.forEach((sl, i) => {
     rels += `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${sl.no}.xml"/>`;
     overrides += `<Override PartName="/ppt/slides/slide${sl.no}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+    // 第三十九轮 §4.1：样本升级为规范有效 OOXML（LO 严格——缺 p:nvSpPr/a:bodyPr 时文本被丢）。
+    // 逐形状唯一 cNvPr id；txBody 带 bodyPr；chart 引用真实 chartSpace 部件（下方注入）；
+    // 表格带 tblGrid/gridCol/tcPr；组合带 chOff/chExt。
+    let shapeId = 1;
+    const nextId = () => shapeId++;
+    const hasChart = (sl.shapes ?? []).some((sh) => sh.kind === 'chart');
+    const chartRel = hasChart ? '<Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>' : '';
     const shapeXml = (sl.shapes ?? []).map((sh) => {
       const geom = `<a:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></a:xfrm>`;
       if (sh.kind === 'pic') {
-        return `<p:pic><p:nvPicPr/><p:blipFill><a:blip r:embed="rIdImg1"/></p:blipFill><p:spPr>${geom}</p:spPr></p:pic>`;
+        return `<p:pic><p:nvPicPr><p:cNvPr id="${nextId()}" name="Picture ${shapeId}"/><p:cNvPicPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImg1"/></p:blipFill><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
       }
       if (sh.kind === 'chart') {
-        return `<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart1"/></a:graphicData></a:graphic></p:graphicFrame>`;
+        return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${nextId()}" name="Chart ${shapeId}"/><p:cNvGraphicFramePr/></p:nvGraphicFramePr><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdChart1"/></a:graphicData></a:graphic></p:graphicFrame>`;
       }
       if (sh.kind === 'table') {
-        return `<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>${escapeXml((sh.texts ?? [''])[0] ?? '')}</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
+        const cells = (sh.texts ?? ['']);
+        const colW = Math.floor(sh.cx / Math.max(cells.length, 1));
+        return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${nextId()}" name="Table ${shapeId}"/><p:cNvGraphicFramePr/></p:nvGraphicFramePr><p:xfrm><a:off x="${sh.x}" y="${sh.y}"/><a:ext cx="${sh.cx}" cy="${sh.cy}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid>${cells.map(() => `<a:gridCol w="${colW}"/>`).join('')}</a:tblGrid><a:tr h="370840">${cells.map((t) => `<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>${sh.rawText === true ? t : escapeXml(t)}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>`).join('')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
       }
       if (sh.kind === 'grpSp') {
-        return `<p:grpSp><p:grpSpPr>${geom}</p:grpSpPr><p:sp><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp></p:grpSp>`;
+        return `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="${nextId()}" name="Group ${shapeId}"/><p:cNvGrpSpPr/></p:nvGrpSpPr><p:grpSpPr>${geom}<a:chOff x="${sh.x}" y="${sh.y}"/><a:chExt cx="${sh.cx}" cy="${sh.cy}"/></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="${nextId()}" name="GroupItem ${shapeId}"/><p:cNvSpPr/></p:nvSpPr><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp></p:grpSp>`;
       }
-      const texts = (sh.texts ?? []).map((t) => `<a:p><a:r><a:t>${sh.rawText === true ? t : escapeXml(t)}</a:t></a:r></a:p>`).join('');
-      return `<p:sp><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody>${texts}</p:txBody></p:sp>`;
+      const texts = (sh.texts ?? []).map((t) => `<a:p><a:r><a:rPr lang="zh-CN" sz="${sh.sz ?? 1600}"/><a:t>${sh.rawText === true ? t : escapeXml(t)}</a:t></a:r></a:p>`).join('');
+      return `<p:sp><p:nvSpPr><p:cNvPr id="${nextId()}" name="TextBox ${shapeId}"/><p:cNvSpPr/></p:nvSpPr><p:spPr>${geom}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square" lIns="91440" tIns="45720" rIns="91440" bIns="45720" anchor="t"/>${texts}</p:txBody></p:sp>`;
     }).join('');
+    if (hasChart) {
+      // 真实 chartSpace（barChart 单系列四值）——LO 渲染本体；自写路线按 unsupported 标注。
+      overrides += '<Override PartName="/ppt/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>';
+      files['ppt/charts/chart1.xml'] = `${CT_HEADER}<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>季度值（图表渲染核对）</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>系列</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>数值</c:v></c:pt></c:strCache></c:strRef></c:tx><c:dLbls><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/></c:dLbls><c:cat><c:strRef><c:f>类别</c:f><c:strCache><c:ptCount val="4"/><c:pt idx="0"><c:v>一</c:v></c:pt><c:pt idx="1"><c:v>二</c:v></c:pt><c:pt idx="2"><c:v>三</c:v></c:pt><c:pt idx="3"><c:v>四</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>值</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>5</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt><c:pt idx="3"><c:v>7</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:gapWidth val="150"/></c:barChart><c:valAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/></c:valAx><c:catAx><c:axId val="211111111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/></c:catAx></c:plotArea></c:chart></c:chartSpace>`;
+      const existingRels = files[`ppt/slides/_rels/slide${sl.no}.xml.rels`];
+      files[`ppt/slides/_rels/slide${sl.no}.xml.rels`] = existingRels != null
+        ? existingRels.replace('</Relationships>', chartRel + '</Relationships>')
+        : `${CT_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${chartRel}</Relationships>`;
+    }
     files[`ppt/slides/slide${sl.no}.xml`] = `${CT_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree>${shapeXml}</p:spTree></p:cSld></p:sld>`;
     if (sl.image != null) {
       overrides += `<Override PartName="/ppt/slides/slide${sl.no}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Default Extension="${sl.image.ext}" ContentType="${sl.image.mime}"/>`;

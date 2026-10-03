@@ -3530,13 +3530,24 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: { accepted: true, note: '优雅关闭已调度（拒新命令→收拢→关库→退出 0；未收敛→强制→退出 3）——确认以进程退出码与 daemon:stop:last 为准' } });
       }
       case 'task.redispatch': {
-        // DIRECT 追加 turn（跟进/格式修复）：经 outbox 正式编排（worker 领取→准入→成员绑定
-        // adapter），不绕过产品链路直调 CLI。前置：任务存在、非终态、stop_generation=0、
+        // DIRECT 追加 turn（跟进/格式修复/中断恢复）：经 outbox 正式编排（worker 领取→准入→
+        // 成员绑定 adapter），不绕过产品链路直调 CLI。前置：任务存在、非终态、stop_generation=0、
         // 无在途 turn（防止并发双派）；同 (taskId, 在途) 语义下重复调用幂等拒绝。
         // formatRepair:true=**合同内一次格式修复**（第六轮）：仅当上一 turn FAILED 且存在
         // turn.outputInvalid；每任务至多一次；修复上下文（原输出全文+校验错误）注入下一 turn
         // 输入（组装侧），审计绑定原 turn——不是无反馈的"重跑"。
-        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional() }).parse(env.params);
+        //
+        // 第三十九轮 §2（复核确认的入口放行缺口）：
+        // - **在途检查按真实归属**（workflow_runs.task_id）——旧查询按 dispatch_key 前缀 'task:'
+        //   匹配，漏掉 DM 初始键 dmtask:（旧 DM turn 仍 RUNNING 也放行）；现在覆盖 DM/房间/提醒/
+        //   修复/重派全部键形态，run 级在途一并核对。
+        // - **UNKNOWN 未对账拒绝**：显式点击不构成旧执行已退出的证明——预算未结算
+        //   （budget_mark IS NULL）或存在未释放 workspace_leases 的 UNKNOWN turn = 结果不确定，
+        //   先走恢复中心取证/对账/保护解除（RECONCILE_REQUIRED），不得新建派发或借新 run 绕预算。
+        // - **恢复意图绑定源执行**：非修复派发键=task:<id>:redispatch:<sourceRunId>（缺省取任务
+        //   最新 run；无 run 保持旧键）。同源重试在途=幂等冲突；同源已完成=STALE（该次恢复已
+        //   派发过——新一次合法中断产生新源 run=新意图）；不再撞固定唯一键。
+        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional(), sourceRunId: z.string().min(1).optional() }).parse(env.params);
         const result = run(() => {
           const task = deps.db
             .prepare('SELECT id, status, stop_generation FROM tasks WHERE id = ?')
@@ -3544,11 +3555,27 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
           if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
           if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加 turn');
-          const inFlight = deps.db
-            .prepare(`SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
-              WHERE t.dispatch_key LIKE 'task:' || ? || ':%' AND t.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN')`)
-            .get(params.taskId) as { c: number };
-          if (inFlight.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlight.c}）：不得并发追加`);
+          // 在途（run/turn 真实归属——不由键前缀推测）。
+          const inFlightRuns = deps.db.prepare(
+            `SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
+          ).get(params.taskId) as { c: number };
+          if (inFlightRuns.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途执行（run ${inFlightRuns.c} 个）：不得并发追加`);
+          const inFlightTurns = deps.db.prepare(
+            `SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
+             WHERE r.task_id = ? AND t.status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
+          ).get(params.taskId) as { c: number };
+          if (inFlightTurns.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlightTurns.c}）：不得并发追加`);
+          // UNKNOWN 未对账（预算未结算或保护未解除）→ 先走恢复合同，不放行。
+          const unreconciled = deps.db.prepare(
+            `SELECT t.id AS turnId FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
+             WHERE r.task_id = ? AND t.status = 'UNKNOWN'
+               AND (t.budget_mark IS NULL
+                    OR EXISTS (SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id = t.id AND l.status != 'released'))
+             LIMIT 1`,
+          ).get(params.taskId) as { turnId: string } | undefined;
+          if (unreconciled != null) {
+            throw new DaemonCommandError('RECONCILE_REQUIRED', `存在结果不确定且未对账的执行（turn ${unreconciled.turnId.slice(0, 14)}…）：先在桌面「恢复中心」完成服务端取证/对账/保护解除后再恢复执行——显式点击不构成旧执行已退出的证明，不自动重放`);
+          }
           // formatRepair 守卫（第七轮：按**根逻辑输出**限制一次——禁止修复套修复）：
           // - 源 turn=任务最后一个 turn 且 FAILED，且**其自身**存在 turn.outputInvalid 事件
           //   （turn_id 绑定——旧轮校验失败不给新轮提供修复资格）；
@@ -3614,13 +3641,26 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               `task:${params.taskId}:repair:${sourceTurn.id}`, lastRun?.id ?? 'none', now2, now2,
             );
           }
+          // 派发键（第三十九轮 §2.2：恢复意图绑定源执行+版本——非修复重派键=源 run 派生；
+          // 同源在途=幂等冲突，同源已完成=STALE（新中断=新源 run=新意图），不再撞固定唯一键）。
+          const sourceRunId = params.formatRepair === true
+            ? null
+            : params.sourceRunId ?? ((deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined)?.id ?? null);
           const dispatchKey = params.formatRepair === true
             ? `task:${params.taskId}:repair:${(deps.db.prepare(`SELECT source_turn_id FROM format_repair_workitems WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId) as { source_turn_id: string }).source_turn_id}` // 按逻辑输出版本化——同任务多轮修复不撞唯一键
-            : `task:${params.taskId}:redispatch`;
+            : sourceRunId != null ? `task:${params.taskId}:redispatch:${sourceRunId}` : `task:${params.taskId}:redispatch`;
           const already = deps.db
             .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
             .get(dispatchKey) as { c: number };
           if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
+          if (sourceRunId != null) {
+            const priorDone = deps.db
+              .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status = 'done'`)
+              .get(dispatchKey) as { c: number };
+            if (priorDone.c > 0) {
+              throw new DaemonCommandError('STALE_REVISION', `源执行（run ${sourceRunId.slice(0, 14)}…）的恢复派发已完成：不重复派发——若任务在此后再次中断，以新中断执行发起恢复（新意图）`);
+            }
+          }
           deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034）
           appendDomainEvent(deps.db, {
             schemaVersion: 1,
@@ -3629,9 +3669,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskId: params.taskId,
             kind: 'task.redispatchEnqueued',
             createdAt: Date.now(),
-            payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true },
+            payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey },
           });
-          return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true };
+          return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true, sourceRunId };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

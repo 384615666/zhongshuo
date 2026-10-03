@@ -88,69 +88,90 @@ describe('第三十八轮 #2：防护模式拒绑真实 runtime', () => {
 });
 
 describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () => {
-  it('ACTIVE+只有终态 run → interrupted 如实呈现；task.redispatch 恢复跑完；幂等；不复活已停止任务', async () => {
+  it('第三十九轮合同：UNKNOWN 未对账→RECONCILE_REQUIRED；对账后可恢复；同源幂等；新中断新意图；在途 DM 拒', async () => {
     const { db, cmd, cmdRaw } = await makeDb(join(tmpRoot, 'app7'));
     const { worker } = makeWorker(db);
     const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA', title: '中断恢复演练' });
     const c1 = await cmd<{ taskId: string; disposition: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '会中断的任务', intent: 'default', mentions: [] });
     expect(c1.disposition).toBe('dispatched');
     await worker.runOnce(); // 首条 → DONE（fake successTurn）
-    // 再构造停机中断形态：直接建第二个任务并手工落
-    // INTERRUPTED run+ACTIVE 任务（applyRecovery 同形态：服务停机时 run 中断、任务停留 ACTIVE）。
     await waitFor(() => (db.prepare("SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status = 'SUCCEEDED'").get(c1.taskId) as { c: number }).c >= 1, 20_000, '首任务完成');
+    // 构造停机中断形态（applyRecovery 同型）：初始 outbox 已完结、run INTERRUPTED、turn UNKNOWN
+    // **且未对账**（budget_mark IS NULL——服务停机时尚未结算）。
     const c2 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '停机中断的任务', intent: 'default', mentions: [] });
-    await waitFor(() => (db.prepare("SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status = 'SUCCEEDED'").get(c1.taskId) as { c: number }).c >= 1, 20_000, '首任务完成');
-    const t2row = db.prepare('SELECT id FROM tasks WHERE id = ?').get(c2.taskId) as { id: string };
-    // 停机中断形态（applyRecovery 同型）：run 已建（初始 outbox 已被领取完结）、turn UNKNOWN、
-    // 任务停留 ACTIVE——此后泵永不推进（pumpDmQueue 只放行「无 run」的任务）。
     db.prepare(`UPDATE outbox SET status = 'done' WHERE dispatch_key = ?`).run(`dmtask:${c2.taskId}:initial`);
-    const runId = `run_${randomUUID()}`;
-    const turnId = `turn_${randomUUID()}`;
+    const runId2 = `run_${randomUUID()}`;
+    const turnId2 = `turn_${randomUUID()}`;
     db.transaction(() => {
-      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId, t2row.id, conv.conversationId);
-      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:task-x:initial', 1, 1)`).run(turnId, runId, conv.conversationId);
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId2, c2.taskId, conv.conversationId);
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c2.taskId}:initial', 1, 1)`).run(turnId2, runId2, conv.conversationId);
     })();
-    // 呈现：execState=interrupted + interruptedTasks（标题+上次 run 状态）——不再永远「排队等待」。
-    const list = await cmd<{ conversations: Array<{ conversationId: string; execState: string; queuedCount: number; interruptedTasks: Array<{ taskId: string; title: string; lastRunStatus: string | null }>; title: string | null; lastMessagePreview: string | null }> }>('conversation.list', {});
-    const me = list.conversations.find((c) => c.conversationId === conv.conversationId)!;
-    expect(me.execState).toBe('interrupted');
-    expect(me.queuedCount).toBe(0);
-    expect(me.interruptedTasks.length).toBe(1);
-    expect(me.interruptedTasks[0]!.taskId).toBe(c2.taskId);
-    expect(me.interruptedTasks[0]!.lastRunStatus).toBe('INTERRUPTED');
-    expect(me.title).toBe('中断恢复演练');
-    expect(me.lastMessagePreview).toContain('停机中断');
-    // 恢复：task.redispatch（正式重派链——核对停止代次/在途/终态/幂等）。
-    const r1 = await cmd<{ enqueued: boolean; dispatchKey: string }>('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery' });
+    // ①呈现：interrupted+recoverable=false（UNKNOWN 未对账——服务端分列，前端不得给按钮）。
+    const list1 = await cmd<{ conversations: Array<{ execState: string; interruptedTasks: Array<{ taskId: string; recoverable: boolean; blockReason: string | null; lastRunId: string | null }> }> }>('conversation.list', {});
+    const me1 = list1.conversations.find((c) => c.conversationId === conv.conversationId)!;
+    expect(me1.execState).toBe('interrupted');
+    expect(me1.interruptedTasks.length).toBe(1);
+    expect(me1.interruptedTasks[0]!.recoverable).toBe(false);
+    expect(me1.interruptedTasks[0]!.blockReason).toContain('对账');
+    // ②命令面：未对账 UNKNOWN → RECONCILE_REQUIRED（不新建 outbox——零派发行）。
+    const rejected = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error?.code).toBe('RECONCILE_REQUIRED');
+    expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE 'task:%:redispatch%'").get() as { c: number }).c).toBe(0);
+    // ③对账收口（恢复中心语义：budget 结算+无未释放租约）→ 可恢复+重派入队（键绑源执行）。
+    db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turnId2);
+    const list2 = await cmd<{ conversations: Array<{ interruptedTasks: Array<{ recoverable: boolean; lastRunId: string | null }> }> }>('conversation.list', {});
+    const me2 = list2.conversations.find((c) => c.conversationId === conv.conversationId)!;
+    expect(me2.interruptedTasks[0]!.recoverable).toBe(true);
+    expect(me2.interruptedTasks[0]!.lastRunId).toBe(runId2);
+    const r1 = await cmd<{ enqueued: boolean; dispatchKey: string; sourceRunId: string | null }>('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
     expect(r1.enqueued).toBe(true);
-    // 重复点击：已在队列=幂等冲突（不重复 startTurn）。
-    const dup = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery' });
+    expect(r1.dispatchKey).toBe(`task:${c2.taskId}:redispatch:${runId2}`);
+    expect(r1.sourceRunId).toBe(runId2);
+    // ④双端/重复点击：同源在途=幂等冲突；同 commandId 重试=回执幂等（网关）。
+    const dup = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
     expect(dup.ok).toBe(false);
     expect(dup.error?.code).toBe('IDEMPOTENCY_CONFLICT');
-    // 恢复跑完：任务离开 ACTIVE（fake successTurn 终态）。redispatch 键由 worker 领取。
-    await new Promise((r) => setTimeout(r, 300)); // 首条收尾释放槽（dmDirect 同口径）
-    await worker.runOnce();
-    await waitFor(() => {
-      const st = db.prepare('SELECT status FROM tasks WHERE id = ?').get(c2.taskId) as { status: string };
-      return st.status === 'DONE' || st.status === 'REVIEW' || st.status === 'FAILED';
-    }, 30_000, '恢复任务终态');
-    // 恢复后 interrupted 归位。
-    const list2 = await cmd<{ conversations: Array<{ conversationId: string; execState: string; interruptedTasks: unknown[] }> }>('conversation.list', {});
-    const me2 = list2.conversations.find((c) => c.conversationId === conv.conversationId)!;
-    expect(me2.interruptedTasks.length).toBe(0);
-    expect(['idle', 'running', 'queued']).toContain(me2.execState);
-    // 已停止任务不复活：stop_generation>0 的 ACTIVE 中断任务拒绝 redispatch。
-    const c3 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '已停止的中断任务', intent: 'default', mentions: [] });
-    db.prepare('UPDATE tasks SET stop_generation = 1 WHERE id = ?').run(c3.taskId);
+    const replay = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 }, 'r39-recover-fixed-cmd');
+    const replay2 = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 }, 'r39-recover-fixed-cmd');
+    expect((replay as { ok: boolean }).ok).toBe((replay2 as { ok: boolean }).ok);
+    expect((db.prepare('SELECT count(*) c FROM outbox WHERE dispatch_key = ?').get(r1.dispatchKey) as { c: number }).c).toBe(1);
+    // ⑤同源 done 后再点=STALE（该次恢复已派发——不重复派发；不盲删旧行保审计）。
+    db.prepare(`UPDATE outbox SET status = 'done' WHERE dispatch_key = ?`).run(r1.dispatchKey);
+    const again = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
+    expect(again.ok).toBe(false);
+    expect(again.error?.code).toBe('STALE_REVISION');
+    // ⑥第二次中断（新 run）→ 新意图入队（不撞唯一键）。
     const runId3 = `run_${randomUUID()}`;
-    db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId3, c3.taskId, conv.conversationId);
-    const revive = await cmdRaw('task.redispatch', { taskId: c3.taskId, reason: 'interrupted-recovery' });
+    const turnId3 = `turn_${randomUUID()}`;
+    db.transaction(() => {
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId3, c2.taskId, conv.conversationId);
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch, budget_mark) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c2.taskId}:r3', 1, 1, 'settled')`).run(turnId3, runId3, conv.conversationId);
+    })();
+    const r3 = await cmd<{ enqueued: boolean; dispatchKey: string }>('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId3 });
+    expect(r3.enqueued).toBe(true);
+    expect(r3.dispatchKey).toBe(`task:${c2.taskId}:redispatch:${runId3}`);
+    // ⑦在途 DM（旧 turn 仍 RUNNING，dmtask: 键）→ 拒绝（复核 §2.1 第一反例——键前缀漏查已修）。
+    const c4 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '在途任务', intent: 'default', mentions: [] });
+    const runId4 = `run_${randomUUID()}`;
+    const turnId4 = `turn_${randomUUID()}`;
+    db.transaction(() => {
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'RUNNING')`).run(runId4, c4.taskId, conv.conversationId);
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'RUNNING', 'dmtask:${c4.taskId}:initial', 1, 1)`).run(turnId4, runId4, conv.conversationId);
+    })();
+    const inFlightReject = await cmdRaw('task.redispatch', { taskId: c4.taskId, reason: 'followup' });
+    expect(inFlightReject.ok).toBe(false);
+    expect(inFlightReject.error?.code).toBe('WORKER_STILL_RUNNING');
+    // ⑧已停止任务不复活（保留既有合同）。
+    const c5 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '已停止的中断任务', intent: 'default', mentions: [] });
+    db.prepare('UPDATE tasks SET stop_generation = 1 WHERE id = ?').run(c5.taskId);
+    const runId5 = `run_${randomUUID()}`;
+    db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId5, c5.taskId, conv.conversationId);
+    const revive = await cmdRaw('task.redispatch', { taskId: c5.taskId, reason: 'interrupted-recovery' });
     expect(revive.ok).toBe(false);
     expect(revive.error?.code).toBe('STALE_REVISION');
-  }, 120_000);
-});
+  }, 180_000);
 
-describe('第三十八轮 #4：受阻原因上屏（board.view/mine.pending）', () => {
   it('M0 房间 AUTO 任务 BLOCKED → 卡片 statusReason 与待办 reason 含「指派成员」人话', async () => {
     const { db, cmd } = await makeDb(join(tmpRoot, 'app4'));
     const { worker } = makeWorker(db);

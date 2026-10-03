@@ -2345,11 +2345,12 @@ export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): Ac
 }
 
 function parseInitialTaskId(dispatchKey: string): string | null {
-  // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0）；
+  // initial=根任务首派；redispatch=同任务追加 turn（跟进/重试，任务须非终态且 stop_generation=0；
+  // 第三十九轮 §2.2：恢复意图版本化 redispatch:<sourceRunId> 后缀——同源幂等/新中断新意图）；
   // reminder:{reminderId}:{occurrence}=提醒跟进派发（第二十六轮一：**完整身份键**——含
   // reminderId（同任务可绑多提醒，同刻触发不撞唯一键），归属/预算沿键解析）。
   // dmtask:=私信内部执行（DEV-22：dm_turn 同走 DIRECT 派发路径，key 前缀区分房间任务）。
-  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch|repair:[^:]+|reminder:[^:]+:[^:]+)$/);
+  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch(?::[^:]+)?|repair:[^:]+|reminder:[^:]+:[^:]+)$/);
   return m?.[1] ?? null;
 }
 
