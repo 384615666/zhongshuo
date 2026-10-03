@@ -1276,9 +1276,9 @@ try {
         const joined = evils.join('|');
         const normal = window.__zsSanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1280 720" width="1280" height="720"><rect x="100" y="60" width="420" height="100" fill="#ffffff" stroke="#cbd5e1" rx="2"/><text x="105" y="78" font-size="13" fill="#1e293b">中文标题</text></svg>') ?? '';
         return JSON.stringify({
-          noLeak: !(/https?:\/\/example\.invalid/i.test(joined) || /javascript:/i.test(joined) || /on[a-z]+=/i.test(joined) || /<script/i.test(joined) || /foreignObject/i.test(joined) || /data:text\/html/i.test(joined)),
+          noLeak: !(/https?:\\/\\/example\\.invalid/i.test(joined) || /javascript:/i.test(joined) || /on[a-z]+=/i.test(joined) || /<script/i.test(joined) || /foreignObject/i.test(joined) || /data:text\\/html/i.test(joined)),
           normalKept: normal.includes('中文标题') && normal.includes('viewBox="0 0 1280 720"') && normal.includes('stroke="#cbd5e1"'),
-          dataImageKept: /data:image\/png;base64/.test(window.__zsSanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3" width="4" height="3"><image x="0" y="0" width="4" height="3" xlink:href="data:image/png;base64,iVBORw0KGgo="/></svg>') ?? '')
+          dataImageKept: /data:image\\/png;base64/.test(window.__zsSanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3" width="4" height="3"><image x="0" y="0" width="4" height="3" xlink:href="data:image/png;base64,iVBORw0KGgo="/></svg>') ?? '')
         });
       })()`;
       const svgGate = await page.readStrict(svgGateExpr).catch((e) => JSON.stringify({ probeError: String((e && e.message) || e).slice(0, 140) }));
@@ -1595,8 +1595,9 @@ try {
       await waitFor(async () => ((await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '')`)).includes('已继续')) === true, 30_000, 'REMOTE 继续队列反馈');
       const rResumeNote = await shellPage.readStrict(`(() => { const f = (document.getElementById('feed')?.textContent ?? ''); const i = f.indexOf('已继续'); return i >= 0 ? f.slice(i, i + 60) : ''; })()`).catch(() => '');
       record('REMOTE·继续队列（成功/泵出数/无待处理均可见——不再「点了没反应」）', rResumeNote.length > 0, rResumeNote);
-      // ---------- 第三十八轮 #7 页面级：中断待恢复任务呈现+「恢复执行」正式入口 ----------
-      // 手工构造停机中断形态（applyRecovery 同型：ACTIVE+唯一 INTERRUPTED run+初始 outbox 已完结）。
+      // ---------- 第三十八轮 #7 页面级（第四十轮 §2 改两段式正式链）：中断呈现与恢复 ----------
+      // 阶段一（故障形态注入——applyRecovery 同型）：UNKNOWN 未对账 → 行呈现「中断待恢复」且
+      // **不可恢复**（对账原因就地显示、无「恢复执行」按钮——新守卫：显式点击不构成退出证明）。
       const r38TaskId = `task_r38page_${Date.now()}`;
       const r38RunId = `run_r38page_${Date.now()}`;
       const r38TurnId = `turn_r38page_${Date.now()}`;
@@ -1614,12 +1615,24 @@ try {
       if (r38Inserted !== true) throw new Error('R38 中断形态构造失败（execSql 事务回滚）');
       await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
       await waitFor(async () => ((await shellPage.readStrict(`(document.getElementById('tasks')?.textContent ?? '')`)).includes('中断待恢复')) === true, 30_000, 'REMOTE 中断待恢复行呈现');
-      const r38RowOk = await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); return r != null && [...r.querySelectorAll('button')].some((b) => b.textContent === '恢复执行') && r.textContent.includes('interrupted'); })()`).catch(() => false);
-      record('REMOTE·中断待恢复呈现（标题+上次运行状态+恢复执行入口——不再永远「排队等待」）', r38RowOk === true && r38Inserted, '');
+      const r38BlockedRow = JSON.parse(await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); return JSON.stringify({ hasRecoverBtn: r != null && [...r.querySelectorAll('button')].some((b) => b.textContent === '恢复执行'), hasReason: r != null && r.textContent.includes('对账'), text: r ? r.textContent.slice(0, 220) : '' }); })()`).catch(() => JSON.stringify({ hasRecoverBtn: null, hasReason: false, text: 'probe-fail' })));
+      record('REMOTE·中断未对账=不可恢复呈现（对账原因就地+无恢复按钮——不自动重放）', r38BlockedRow.hasRecoverBtn === false && r38BlockedRow.hasReason === true, r38BlockedRow.text);
+      // 阶段二（正式恢复链——不塞 settled 修绿，review-r39 §5）：fake 页测执行的诚实登记
+      // （none 模型=无 OS 子进程）→ recovery.reconcile(executed) 服务端 no-os-process 对账 →
+      // FAILED+释放 → 行转可恢复+恢复执行入口 → 点击 → 版本化意图入队（GLOB）。
+      execSql(dbPathR, [
+        `INSERT INTO runtime_process_registry (turn_id, run_id, member_id, adapter_kind, process_model, pid, started_at_ms, identity_source, managed_job_id, registered_at, note)
+         VALUES ('${r38TurnId}', '${r38RunId}', '${r38MemberId}', 'fake', 'none', NULL, NULL, 'none', NULL, ${Date.now()}, '验证器：fake 页测执行的诚实登记（无 OS 子进程——非身份伪造）')`,
+      ]);
+      const r38RecJson = await shellPage.readStrict(`fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (window.__dbgToken ?? '') }, body: JSON.stringify({ protocolVersion: 1, commandId: 'r40-verify-reconcile-${Date.now()}', method: 'recovery.reconcile', params: { turnId: '${r38TurnId}', verdict: 'executed', note: '验证器：第四十轮正式对账（none 模型 no-os-process 程序事实）' } }) }).then((r) => r.text()).catch((e) => JSON.stringify({ ok: false, error: { message: String(e) } }))`).catch((e) => JSON.stringify({ ok: false, error: { message: String(e) } }));
+      const r38Rec = JSON.parse(r38RecJson);
+      record('REMOTE·正式对账（recovery.reconcile executed+none 登记→no-os-process→FAILED）', r38Rec.ok === true && r38Rec.data != null && r38Rec.data.turnFinalStatus === 'FAILED', r38RecJson.slice(0, 200));
+      await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
+      await waitFor(async () => (await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); return r != null && [...r.querySelectorAll('button')].some((b) => b.textContent === '恢复执行'); })()`)) === true, 20_000, 'REMOTE 对账后恢复执行按钮出现');
       await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); [...r.querySelectorAll('button')].find((b) => b.textContent === '恢复执行')?.click(); })()`);
-      await waitFor(async () => countTable(dbPathR, 'outbox', `WHERE dispatch_key = 'task:${r38TaskId}:redispatch'`) >= 1, 20_000, 'REMOTE 恢复执行入队（task.redispatch）');
-      const r38RedispatchAudit = countTable(dbPathR, 'outbox', `WHERE dispatch_key = 'task:${r38TaskId}:redispatch'`);
-      record('REMOTE·恢复执行=正式重派链（task.redispatch 入队——非自动重放）', r38RedispatchAudit >= 1, `outbox=${r38RedispatchAudit}`);
+      await waitFor(async () => countTable(dbPathR, 'outbox', `WHERE dispatch_key GLOB 'task:${r38TaskId}:redispatch*'`) >= 1, 20_000, 'REMOTE 恢复执行入队（版本化键）');
+      const r38RedispatchAudit = countTable(dbPathR, 'outbox', `WHERE dispatch_key GLOB 'task:${r38TaskId}:redispatch*'`);
+      record('REMOTE·恢复执行=正式重派链（task.redispatch 版本化意图入队——非自动重放）', r38RedispatchAudit >= 1, `outbox=${r38RedispatchAudit}（GLOB task:${r38TaskId.slice(0, 16)}…:redispatch*）`);
       // ---------- 第三十八轮 #3/#4：远程房间显式 DIRECT 指派（不再固定空 mentions 100% 被拦） ----------
       const roomOptVal = await shellPage.readStrict(`(() => { const sel = document.getElementById('conversation-sel'); const o = [...sel.options].find((x) => x.value.startsWith('room:')); return o ? o.value : ''; })()`).catch(() => '');
       if (roomOptVal !== '') {
