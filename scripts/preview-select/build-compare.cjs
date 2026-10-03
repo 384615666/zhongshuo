@@ -52,6 +52,13 @@ const decks = [
       { label: 'B kit→PDF', dir: 'route-b/excel-sample' },
     ],
   },
+  {
+    name: 'pptxgenjs-tables', pages: 4,
+    cols: [
+      { label: 'REF PowerPoint', dir: 'ref/pptxgenjs-tables' },
+      { label: 'A pptx-renderer', dir: 'route-a/pptxgenjs-tables' },
+    ],
+  },
 ];
 
 async function main() {

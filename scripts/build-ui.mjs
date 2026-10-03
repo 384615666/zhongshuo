@@ -31,5 +31,21 @@ const pdfjsBuild = join(root, 'node_modules', 'pdfjs-dist', 'build');
 copyFileSync(join(pdfjsBuild, 'pdf.min.mjs'), join(assetsDir, 'pdf.min.mjs'));
 copyFileSync(join(pdfjsBuild, 'pdf.worker.min.mjs'), join(assetsDir, 'pdf.worker.min.mjs'));
 cpSync(join(root, 'node_modules', 'pdfjs-dist', 'cmaps'), join(assetsDir, 'cmaps'), { recursive: true });
+
+// 预览引擎 vendor（第四十轮·选型决定 A）：
+// - PPTX=pptx-renderer 1.3.0 浏览器 ESM 单文件——**受管 vendored 产物入库**
+//   （src/ui/vendor/pptx-renderer/，PROVENANCE.json 钉版本+sha256+许可；peerOptional
+//   pdfjs>=5 仅 EMF 回退用，产品显式 pdfjs:false 不升级既有 4.10 链）。
+// - Word=docx-preview 0.4.1 UMD + 其 peer JSZip 3.10.2——固定版本依赖，从 node_modules 同步。
+// 全部本地随包（不走 CDN）；构建后哈希核对与 PROVENANCE 一致性见 verify 脚本。
+const vendorDir = join(root, 'src', 'ui', 'renderer', 'assets', 'vendor');
+mkdirSync(vendorDir, { recursive: true });
+copyFileSync(join(root, 'src', 'ui', 'vendor', 'pptx-renderer', 'aiden0z-pptx-renderer.browser.es.js'), join(vendorDir, 'pptx-renderer.es.mjs')); // .mjs——zsres 下 ESM MIME 保证（与 pdfjs 同法）
+copyFileSync(join(root, 'node_modules', 'docx-preview', 'dist', 'docx-preview.min.js'), join(vendorDir, 'docx-preview.min.js'));
+copyFileSync(join(root, 'node_modules', 'jszip', 'dist', 'jszip.min.js'), join(vendorDir, 'jszip.min.js'));
+// 第三十九轮净化组件（DOMPurify/markdown-it）——此前手工拷贝未入构建，补同步（正式依赖）。
+copyFileSync(join(root, 'node_modules', 'dompurify', 'dist', 'purify.min.js'), join(vendorDir, 'purify.min.js'));
+copyFileSync(join(root, 'node_modules', 'markdown-it', 'dist', 'markdown-it.min.js'), join(vendorDir, 'markdown-it.min.js'));
+
 cpSync(join(root, 'src', 'ui', 'renderer'), join(root, 'dist', 'ui', 'renderer'), { recursive: true });
-process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs）\n');
+process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs + assets/vendor）\n');

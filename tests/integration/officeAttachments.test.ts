@@ -77,7 +77,7 @@ describe('DOCX', () => {
     expect(pv.html).toContain('<table');
     expect(pv.html).toContain('甲值');
     expect(pv.html).not.toMatch(/on\w+=|href=|<script/i); // 白名单零属性/无脚本
-    expect(pv.pixelRendering).toBe('safe-html');
+    expect(pv.pixelRendering).toBe('safe-html+docx-preview'); // 第四十轮：视觉=渲染器侧 docx-preview（净化 HTML 保留为回退）
     expect(pv.modelInput).toBe('extracted-text');
     // 注入：有序文本进模型输入（非路径冒充已读）。
     await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '按文档执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
@@ -211,7 +211,7 @@ describe('PPTX', () => {
     const sum = pv.slides.reduce((acc, sl) => acc + Buffer.byteLength(sl.text, 'utf8') + Buffer.byteLength(sl.notes, 'utf8'), 0);
     expect(pv.totalTextBytes).toBe(sum);
     const pv2 = await env.cmd<{ slides: Array<{ text: string }>; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up.attachmentId });
-    expect(pv2.pixelRendering).toBe('unsupported'); // 页图未实现——与文本输入分列
+    expect(pv2.pixelRendering).toBe('renderer-pptx-renderer'); // 第四十轮：视觉=渲染器侧 pptx-renderer——与文本输入分列
     // 注入：按真实顺序页标注。
     await env.cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '按幻灯片执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
     const { worker, adapter } = env.makeWorker();
@@ -296,4 +296,37 @@ describe('WebP/JPEG/GIF 头部样本（头部≠像素解码）', () => {
     expect(r.ok).toBe(false);
     env.close();
   }, 60_000);
+});
+
+describe('第四十轮·选型 A：previewOffice 视觉字节通道（includeBytes）', () => {
+  it('slides/docx 带核验字节（hash 与原件一致）；sheet 不带字节；缺参不带；超限明确分列', async () => {
+    const env = makeEnv();
+    // PPTX：includeBytes → bytesBase64 与上传字节逐字节一致；pixelRendering=渲染器侧。
+    const pptx = makePptx([{ texts: ['视觉字节通道 幻灯一'], notes: '备注一' }, { texts: ['幻灯二'] }]);
+    const up1 = await env.cmd<{ attachmentId: string }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '通道.pptx', contentBase64: pptx.toString('base64') });
+    const pv1 = await env.cmd<{ hash: string; bytesBase64?: string; visualBytesAvailable?: boolean; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up1.attachmentId, includeBytes: true });
+    expect(pv1.visualBytesAvailable).toBe(true);
+    expect(typeof pv1.bytesBase64).toBe('string');
+    const got = Buffer.from(pv1.bytesBase64!, 'base64');
+    expect(got.equals(pptx)).toBe(true); // 原件逐字节一致（readVerifiedBlob 核验后返回）
+    expect(pv1.pixelRendering).toBe('renderer-pptx-renderer');
+    // 同附件不带 includeBytes → 无字节字段（旧调用面不受影响）。
+    const pv1b = await env.cmd<{ bytesBase64?: string; visualBytesAvailable?: boolean }>('attachment.previewOffice', { attachmentId: up1.attachmentId });
+    expect(pv1b.bytesBase64).toBeUndefined();
+    expect(pv1b.visualBytesAvailable).toBeUndefined();
+    // DOCX：同通道。
+    const docx = makeDocx({ paras: ['视觉字节通道 Word'] });
+    const up2 = await env.cmd<{ attachmentId: string }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '通道.docx', contentBase64: docx.toString('base64') });
+    const pv2 = await env.cmd<{ bytesBase64?: string; visualBytesAvailable?: boolean }>('attachment.previewOffice', { attachmentId: up2.attachmentId, includeBytes: true });
+    expect(pv2.visualBytesAvailable).toBe(true);
+    expect(Buffer.from(pv2.bytesBase64!, 'base64').equals(docx)).toBe(true);
+    // XLSX（sheet）：视觉=网格分列，includeBytes 也不带字节。
+    const xlsx = makeXlsx([{ name: 'Sheet1', rows: [['a', '1']] }]);
+    const up3 = await env.cmd<{ attachmentId: string }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '通道.xlsx', contentBase64: xlsx.toString('base64') });
+    const pv3 = await env.cmd<{ bytesBase64?: string; visualBytesAvailable?: boolean; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up3.attachmentId, includeBytes: true });
+    expect(pv3.bytesBase64).toBeUndefined();
+    expect(pv3.visualBytesAvailable).toBeUndefined();
+    expect(pv3.pixelRendering).toBe('grid-preview');
+    env.close();
+  }, 120_000);
 });

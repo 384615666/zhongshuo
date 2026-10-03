@@ -135,7 +135,14 @@ async function main() {
   base();
 
   // --- main samples: first open (cold, pays module import), reopen (warm), slides, zoom
-  for (const sample of ['office-deck.pptx', 'dense-deck.pptx', 'rich-deck.pptx']) {
+  // 可用 argv 覆盖样本清单（块D：独立生成器样本——先拷进 samples/ 统一路由）。
+  const sampleArgs = process.argv.slice(2).filter((a) => a.endsWith('.pptx'));
+  for (const extra of sampleArgs) {
+    const src = path.resolve(process.cwd(), extra);
+    fs.copyFileSync(src, path.join(ROOT, 'samples', path.basename(extra)));
+  }
+  const sampleList = sampleArgs.length > 0 ? sampleArgs.map((a) => path.basename(a)) : ['office-deck.pptx', 'dense-deck.pptx', 'rich-deck.pptx'];
+  for (const sample of sampleList) {
     const url = 'http://127.0.0.1:' + PORT + '/samples/' + encodeURIComponent(sample);
     const rec = {};
     rec.first = await ex(`window.__zsOpen(${JSON.stringify(url)})`);

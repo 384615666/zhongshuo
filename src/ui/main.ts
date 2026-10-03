@@ -403,6 +403,17 @@ app.whenReady().then(async () => {
 `);
     }
   });
+  // 子资源零外联（第四十轮·选型 A 实测缺口）：导航拦截不覆盖 <img>/fetch 级请求——预览库
+  // 对文件中的外链目标（外链图片/超链接预取）会**尝试**发起 http(s) 加载。会话级拒绝全部
+  // 网络协议子资源（本地能力全走 zsres/data/blob——随包资产，无产品 http 需求）。
+  await win.webContents.session.webRequest.onBeforeRequest(
+    { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+    (details, callback) => {
+      callback({ cancel: true });
+      process.stderr.write(`[zhongshuo-ui] 拒绝渲染进程外部子资源请求：${details.url.slice(0, 100)}
+`);
+    },
+  );
   await win.loadURL('zsres://app/index.html');
 
   const demo = process.env.ZS_UI_DEMO;

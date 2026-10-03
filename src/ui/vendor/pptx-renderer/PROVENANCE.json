@@ -1,0 +1,11 @@
+{
+  "name": "@aiden0z/pptx-renderer",
+  "version": "1.3.0",
+  "entry": "dist/aiden0z-pptx-renderer.browser.es.js",
+  "sha256": "46b61afa1435de0c194f93324c9467ca392c891c6e07517727c8ffb5e51c376b",
+  "bytes": 1825514,
+  "license": "Apache-2.0",
+  "vendoredAt": "2026-10-03",
+  "source": "npm registry (@aiden0z/pptx-renderer@1.3.0 tarball)",
+  "note": "浏览器专用 ESM 单文件（内捆 JSZip+ECharts）。peerOptional pdfjs-dist>=5 仅用于 EMF 内嵌 PDF 回退——产品未提供该回退（renderer 显式 pdfjs:false），不升级既有 PDF.js 4.10 链。"
+}

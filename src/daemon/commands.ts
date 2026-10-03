@@ -16,6 +16,7 @@ import {
   createDmConversation, listDmConversations, dmConversationOf, dmPeerOf, dmLocalUserOf,
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate,
 } from '../persistence/stores/dm.ts';
+import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { openProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
 import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch.ts';
@@ -2453,10 +2454,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
       case 'attachment.previewOffice': {
-        // Office 预览（第二十九轮四）：DOCX=安全排版 HTML（白名单净化）；表格=sheet 分列+
-        // 预览窗口+合并单元格+公式缺失标注；PPTX=按页文字+备注。注入范围由 message.submit
-        // 的 attachmentRanges 承接（范围选择→有界注入）。OCR/页图能力如实分列。
-        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        // Office 预览（第二十九轮四；第四十轮·选型决定 A 增补视觉字节通道）：DOCX=安全排版
+        // HTML（白名单净化）+ 可选 docx-preview 视觉；表格=sheet 分列+预览窗口+合并单元格+
+        // 公式缺失标注；PPTX=按页文字+备注 + pptx-renderer 渲染器侧视觉。注入范围由
+        // message.submit 的 attachmentRanges 承接。OCR/页图能力如实分列。
+        // includeBytes（第四十轮）：docx/slides 原件字节经 readVerifiedBlob（实根+sha256 核验
+        // 后）一次性返回，供受限预览侧本地渲染（翻页/缩放零新增运行）；**字节上限在整份
+        // 缓冲进入 renderer 前检查**（OFFICE_MAX_BYTES 20MiB——上传链已限，此处双保险）；
+        // 超限/缺参=明确不带字节（visualBytesAvailable 如实分列，前端降级文字卡片）。
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional(), includeBytes: z.boolean().optional() }).parse(env.params);
         const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision, extracted_text_json FROM artifacts WHERE id = ?').get(params.attachmentId) as
           | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number; extracted_text_json: string | null } | undefined;
         if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
@@ -2468,13 +2474,32 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const cache = await ensureDocumentCache(deps, row, cacheKind);
         if (cache.kind !== cacheKind) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '提取缓存类型不符——拒绝冒充');
         const common = { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, extractedAt: cache.extractedAt, parser: `${cache.parserName}@${cache.parserVersion}`, truncatedTotal: cache.truncatedTotal };
+        // 视觉字节通道（第四十轮）：docx/slides 才有渲染器侧视觉；sheet 维持网格分列不带字节。
+        let visualBytesBase64: string | undefined;
+        let visualBytesAvailable = false;
+        let visualBytesReason: string | null = null;
+        if (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file')) {
+          const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+          if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
+          if (verified.raw.length > OFFICE_MAX_BYTES) {
+            visualBytesReason = `原件 ${verified.raw.length}B 超视觉通道上限（${OFFICE_MAX_BYTES}B）——视觉预览不可用，文字提取不受影响`;
+          } else {
+            visualBytesBase64 = verified.raw.toString('base64');
+            visualBytesAvailable = true;
+          }
+        }
+        const visualBytes = visualBytesAvailable
+          ? { visualBytesAvailable: true as const, bytesBase64: visualBytesBase64 }
+          : (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file')
+            ? { visualBytesAvailable: false as const, visualBytesReason }
+            : {});
         switch (cache.kind) {
           case 'docx':
-            return withCommandId({ ok: true, data: { ...common, html: cache.html, htmlTruncated: cache.htmlTruncated, paragraphCount: cache.paragraphCount, ocr: 'unsupported', pixelRendering: 'safe-html', modelInput: 'extracted-text' } });
+            return withCommandId({ ok: true, data: { ...common, html: cache.html, htmlTruncated: cache.htmlTruncated, paragraphCount: cache.paragraphCount, ocr: 'unsupported', pixelRendering: 'safe-html+docx-preview', modelInput: 'extracted-text', ...visualBytes } });
           case 'sheet':
             return withCommandId({ ok: true, data: { ...common, sourceFormat: cache.sourceFormat, encoding: cache.encoding, sheets: cache.sheets, pixelRendering: 'grid-preview', formulaExecution: 'never-cached-values-only', modelInput: 'range-window' } });
           case 'slides':
-            return withCommandId({ ok: true, data: { ...common, slides: cache.slides, totalSlides: cache.totalSlides, totalTextBytes: cache.totalTextBytes, truncatedTotal: cache.truncatedTotal, pixelRendering: 'unsupported', textInput: 'extracted-text', modelInput: 'extracted-text' } });
+            return withCommandId({ ok: true, data: { ...common, slides: cache.slides, totalSlides: cache.totalSlides, totalTextBytes: cache.totalTextBytes, truncatedTotal: cache.truncatedTotal, pixelRendering: 'renderer-pptx-renderer', textInput: 'extracted-text', modelInput: 'extracted-text', ...visualBytes } });
           default:
             throw new DaemonCommandError('STORAGE_UNAVAILABLE', '提取缓存类型不符——拒绝冒充');
         }
@@ -3555,26 +3580,21 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
           if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
           if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加 turn');
-          // 在途（run/turn 真实归属——不由键前缀推测）。
-          const inFlightRuns = deps.db.prepare(
-            `SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
-          ).get(params.taskId) as { c: number };
-          if (inFlightRuns.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途执行（run ${inFlightRuns.c} 个）：不得并发追加`);
-          const inFlightTurns = deps.db.prepare(
-            `SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
-             WHERE r.task_id = ? AND t.status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
-          ).get(params.taskId) as { c: number };
-          if (inFlightTurns.c > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `该任务已有在途/未收口 turn（${inFlightTurns.c}）：不得并发追加`);
-          // UNKNOWN 未对账（预算未结算或保护未解除）→ 先走恢复合同，不放行。
-          const unreconciled = deps.db.prepare(
-            `SELECT t.id AS turnId FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
-             WHERE r.task_id = ? AND t.status = 'UNKNOWN'
-               AND (t.budget_mark IS NULL
-                    OR EXISTS (SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id = t.id AND l.status != 'released'))
-             LIMIT 1`,
-          ).get(params.taskId) as { turnId: string } | undefined;
-          if (unreconciled != null) {
-            throw new DaemonCommandError('RECONCILE_REQUIRED', `存在结果不确定且未对账的执行（turn ${unreconciled.turnId.slice(0, 14)}…）：先在桌面「恢复中心」完成服务端取证/对账/保护解除后再恢复执行——显式点击不构成旧执行已退出的证明，不自动重放`);
+          // 恢复就绪=共享判定（第四十轮 §2 四分离：在途/保护未解除/UNKNOWN 未闭环——
+          // 与 dm.ts 可恢复性呈现同源；FAILED+未释放租约、settled 但无正式保护解除事件均拦）。
+          const blockedEarly = assessTaskRedispatchReadiness(deps.db, params.taskId);
+          if (blockedEarly != null) throw new DaemonCommandError(blockedEarly.code, blockedEarly.message);
+          // sourceRunId 归属校验（第四十轮 §3）：客户端来源只是引用，不替代服务端事实——
+          // 必须存在、属于本任务、且是任务当前最新执行（过时来源拒绝；新一次合法中断产生新源）。
+          if (params.formatRepair !== true && params.sourceRunId != null) {
+            const src = deps.db.prepare('SELECT id, task_id FROM workflow_runs WHERE id = ?').get(params.sourceRunId) as { id: string; task_id: string } | undefined;
+            if (src == null || src.task_id !== params.taskId) {
+              throw new DaemonCommandError('RESOURCE_NOT_FOUND', `恢复来源 run 不存在或不属于该任务：${params.sourceRunId}——来源以服务端事实为准，不得以任意号生成恢复意图`);
+            }
+            const latest = deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined;
+            if (latest == null || latest.id !== src.id) {
+              throw new DaemonCommandError('STALE_REVISION', `恢复来源 run（${params.sourceRunId.slice(0, 14)}…）不是该任务当前最新执行（过时来源）：若任务此后再次中断，以新中断执行发起恢复（新意图）`);
+            }
           }
           // formatRepair 守卫（第七轮：按**根逻辑输出**限制一次——禁止修复套修复）：
           // - 源 turn=任务最后一个 turn 且 FAILED，且**其自身**存在 turn.outputInvalid 事件
@@ -3649,10 +3669,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const dispatchKey = params.formatRepair === true
             ? `task:${params.taskId}:repair:${(deps.db.prepare(`SELECT source_turn_id FROM format_repair_workitems WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId) as { source_turn_id: string }).source_turn_id}` // 按逻辑输出版本化——同任务多轮修复不撞唯一键
             : sourceRunId != null ? `task:${params.taskId}:redispatch:${sourceRunId}` : `task:${params.taskId}:redispatch`;
-          const already = deps.db
-            .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
-            .get(dispatchKey) as { c: number };
-          if (already.c > 0) throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', 'redispatch 已在队列：不重复入队');
+          // 同任务在途恢复意图（第四十轮 §3：任务级核对——不只查客户端指定的键；双端同源
+          // 双击/异源并发=恰一个意图）。GLOB 而非 LIKE：任务号含 '_'（LIKE 通配符会误匹配）。
+          const pendingIntent = deps.db
+            .prepare(`SELECT dispatch_key FROM outbox WHERE dispatch_key GLOB ? AND status != 'done' LIMIT 1`)
+            .get(`task:${params.taskId}:redispatch*`) as { dispatch_key: string } | undefined;
+          if (pendingIntent != null) {
+            throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', `该任务已有在途恢复派发（${pendingIntent.dispatch_key}）：不重复入队——同源重试等待队列消化，新中断以新源执行发起新意图`);
+          }
           if (sourceRunId != null) {
             const priorDone = deps.db
               .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status = 'done'`)
@@ -3661,6 +3685,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               throw new DaemonCommandError('STALE_REVISION', `源执行（run ${sourceRunId.slice(0, 14)}…）的恢复派发已完成：不重复派发——若任务在此后再次中断，以新中断执行发起恢复（新意图）`);
             }
           }
+          // 提交前重查（review-r39 §2：可恢复性判定与提交同事务重查——formatRepair 长流程后
+          // 事实可能已变化，以 INSERT 前最终权威判定为准）。
+          const blockedFinal = assessTaskRedispatchReadiness(deps.db, params.taskId);
+          if (blockedFinal != null) throw new DaemonCommandError(blockedFinal.code, blockedFinal.message);
           deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034）
           appendDomainEvent(deps.db, {
             schemaVersion: 1,

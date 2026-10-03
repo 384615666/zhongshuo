@@ -425,8 +425,14 @@ function renderAttachChips(kind) {
  * A/B 交错、关闭、切换会话后的迟到响应不得重开/覆盖面板。每次打开 +1；关闭/切会话再 +1
  * 使在途代次全部作废（受限资源跨会话不留面：openDm/showPool/openThread 入口即关）。 */
 let previewGeneration = 0;
+// 第四十轮·选型 A：视觉预览生命周期——pptx-renderer viewer 与打开期 AbortController
+// 归属当前面板；关闭/切会话即 dispose+abort（在途解析中止；迟到结果不得重开/覆盖面板）。
+let activePptxViewer = null;
+let activePreviewAbort = null;
 function closeAttachPreview() {
   previewGeneration += 1; // 在途预览请求全部作废
+  if (activePreviewAbort != null) { try { activePreviewAbort.abort(new Error('preview-closed')); } catch (e) { /* 已中止 */ } activePreviewAbort = null; }
+  if (activePptxViewer != null) { try { activePptxViewer.dispose(); } catch (e) { /* 已释放 */ } activePptxViewer = null; }
   el('attach-preview')?.classList.add('hidden');
 }
 // PDF 视觉渲染（第二十九轮三）：渲染器受限预览侧加载随包 pdfjs ESM（zsres:// 特权协议下
@@ -441,6 +447,53 @@ async function loadRendererPdfjs() {
     });
   }
   return rendererPdfjsPromise;
+}
+
+// 第四十轮·选型决定 A：PPTX=pptx-renderer 1.3.0（受管 vendored ESM 单文件——PROVENANCE
+// 钉版本+sha256）；Word=docx-preview 0.4.1（UMD+JSZip 3.10.2）。全部本地随包（assets/vendor，
+// 不走 CDN）。EMF/内嵌 PDF 回退**显式关闭**（pdfjs:false——不升级既有 PDF.js 4.10 链）。
+let rendererPptxLibPromise = null;
+function loadRendererPptx() {
+  if (rendererPptxLibPromise == null) {
+    rendererPptxLibPromise = import(new URL('assets/vendor/pptx-renderer.es.mjs', document.baseURI).href);
+  }
+  return rendererPptxLibPromise;
+}
+function loadVendorScript(rel) {
+  const existing = document.querySelector(`script[data-zs-vendor="${rel}"]`);
+  if (existing != null) {
+    if (existing.dataset.loaded === 'true') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error(`vendor 脚本加载失败：${rel}`)));
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = new URL(rel, document.baseURI).href;
+    s.dataset.zsVendor = rel;
+    s.onload = () => { s.dataset.loaded = 'true'; resolve(); };
+    s.onerror = () => reject(new Error(`vendor 脚本加载失败：${rel}`));
+    document.head.append(s);
+  });
+}
+let rendererDocxPreviewPromise = null;
+function loadRendererDocxPreview() {
+  if (rendererDocxPreviewPromise == null) {
+    rendererDocxPreviewPromise = (async () => {
+      await loadVendorScript('assets/vendor/jszip.min.js');
+      await loadVendorScript('assets/vendor/docx-preview.min.js');
+      if (window.docx == null) throw new Error('docx-preview 全局未就绪');
+      return window.docx;
+    })();
+  }
+  return rendererDocxPreviewPromise;
+}
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) u8[i] = bin.charCodeAt(i);
+  return u8;
 }
 
 // ---------- 共享预览完善（第三十轮四/五）----------
@@ -929,10 +982,11 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     return;
   }
   if (kindHint === 'docx_file' || kindHint === 'sheet_file' || kindHint === 'slides_file') {
-    // Office 预览（第二十九轮四）：DOCX=服务端白名单净化 HTML（此处二次剥属性——纵深）；
-    // 表格=sheet 分页签+预览窗口表格+注入范围选择（写回草稿条目——发送随 attachmentRanges）；
-    // PPTX=按页文字+备注（页图=unsupported 如实）。宏不执行/公式只读缓存值/外部关系不加载。
-    const doc = await command('attachment.previewOffice', { attachmentId });
+    // Office 预览（第二十九轮四建立；第四十轮·选型决定 A 增视觉通道）：DOCX=docx-preview
+    // 视觉（失败回退白名单净化 HTML）；表格=sheet 分页签+预览窗口+注入范围；PPTX=按页文字
+    // 卡片（模型输入真源）+ pptx-renderer 渲染器侧视觉页。宏不执行/公式只读缓存值/外部关系
+    // 不加载；字节经 previewOffice includeBytes（audience+实根+sha256+20MiB 前置上限）。
+    const doc = await command('attachment.previewOffice', { attachmentId, includeBytes: true });
     if (!alive()) return;
     const obox = el('attach-preview');
     if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——页面容器缺失`); return; }
@@ -948,6 +1002,27 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     oclose.onclick = () => closeAttachPreview();
     owrap.append(ohead, oclose);
     if (doc.kind === 'docx_file') {
+      // 视觉预览（第四十轮·选型 A）：docx-preview 渲染器侧（多页/表格/图片/页眉页脚排版
+      // 尽力还原；样式注入限定在预览容器内）；失败回退既有白名单净化 HTML（通道保留）。
+      if (doc.visualBytesAvailable === true && doc.bytesBase64 != null) {
+        try {
+          const dx = await loadRendererDocxPreview();
+          if (!alive()) return;
+          const dvBox = document.createElement('div');
+          dvBox.className = 'docx-visual-box';
+          await dx.renderAsync(base64ToBytes(doc.bytesBase64), dvBox, dvBox, { inWrapper: true, ignoreWidth: false, ignoreHeight: false, ignoreFonts: false, breakPages: true, useBase64URL: true, experimental: true });
+          if (!alive()) return;
+          const dvHead = document.createElement('div');
+          dvHead.className = 'meta';
+          dvHead.textContent = `🖼 视觉预览（docx-preview 渲染器侧本地渲染）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
+          owrap.append(dvHead, dvBox);
+        } catch (e) {
+          const w = document.createElement('div');
+          w.className = 'meta warn';
+          w.textContent = `视觉预览不可用（${String(e?.message ?? e).slice(0, 160)}）——下方净化排版近似仍可用（分列）`;
+          owrap.append(w);
+        }
+      }
       const htmlBox = document.createElement('div');
       htmlBox.className = 'office-docx-html';
       htmlBox.innerHTML = doc.html; // 服务端白名单净化（无 href/无事件属性）；下面再剥一次属性
@@ -958,7 +1033,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `安全排版预览（白名单标记——外部关系不加载、嵌入图片不解码、宏不执行）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
+      note.textContent = `净化排版近似（白名单标记——上方视觉预览失败时的回退通道）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
       owrap.append(htmlBox, note);
     } else if (doc.kind === 'sheet_file') {
       const tabs = document.createElement('div');
@@ -1056,94 +1131,89 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       note.className = 'meta';
       note.textContent = `按页保留文字与备注（顺序=幻灯片编号）· 提取文本=模型输入真源 · 模型输入=提取文本`;
       owrap.append(listBox, note);
-      // ---- 静态页预览（受控转换 slide XML→SVG；缓存绑定原件版本；缩放客户端矢量）----
-      try {
-        const pages = await command('attachment.previewSlidesPages', { attachmentId });
-        if (!alive()) return;
-        const pwrap = document.createElement('div');
-        pwrap.className = 'slides-pages';
-        const phead = document.createElement('div');
-        phead.className = 'meta';
-        phead.textContent = `🖼 静态页预览（受控转换·版面近似）· ${pages.totalSlides} 页 · ${pages.pxW}×${pages.pxH} · 缓存=${pages.cache === 'hit' ? '命中' : '新建'}（绑定 v${pages.revision}/${pages.hash.slice(0, 8)}…）`;
-        const zoomRow = document.createElement('div');
-        zoomRow.className = 'git-row';
-        const zoomIn = document.createElement('button');
-        zoomIn.className = 'chip';
-        zoomIn.textContent = '放大';
-        const zoomOut = document.createElement('button');
-        zoomOut.className = 'chip';
-        zoomOut.textContent = '缩小';
-        const zoomLabel = document.createElement('span');
-        zoomLabel.className = 'meta';
-        const prevBtn = document.createElement('button');
-        prevBtn.className = 'chip';
-        prevBtn.textContent = '◀ 上一页';
-        const nextBtn = document.createElement('button');
-        nextBtn.className = 'chip';
-        nextBtn.textContent = '下一页 ▶';
-        const pageLabel = document.createElement('span');
-        pageLabel.className = 'meta';
-        const navList = document.createElement('div');
-        navList.className = 'slides-list';
-        const stage = document.createElement('div');
-        stage.style.overflow = 'auto';
-        stage.style.border = '1px solid #e2e8f0';
-        stage.style.borderRadius = '6px';
-        stage.style.maxHeight = '560px';
-        let current = 0;
-        let zoom = 1;
-        const draw = () => {
-          const sl = pages.slides[current];
-          stage.replaceChildren();
-          if (sl == null) return;
-          const holder = document.createElement('div');
-          // 第三十九轮 §2：渲染前经 DOMPurify 净化门（真实 DOM 解析——无引号/外链/畸形标签
-          // 由解析器语义拦截，不再依赖正则枚举；图片仅 data:image base64）。服务端 svgWellFormed
-          // 保留为缓存结构第一层；本门为渲染安全边界。净化失败/组件缺失=不渲染该页（fail-closed）。
-          const sanitized = sanitizeSvg(sl.svg);
-          if (sanitized == null || sanitized.trim().length === 0) {
-            stage.replaceChildren();
-            stage.append(Object.assign(document.createElement('div'), { textContent: '（本页 SVG 净化后为空——拒绝渲染）' }));
-            pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 净化后无有效内容`;
-            return;
+      // ---- 视觉页预览（第四十轮·选型决定 A）：pptx-renderer 渲染器侧本地渲染 ----
+      // 原件字节经 previewOffice includeBytes（audience+实根+sha256 核验+20MiB 前置上限）；
+      // RECOMMENDED_ZIP_LIMITS=不受信输入 ZIP 限额；EMF/内嵌 PDF 回退**显式关闭**（pdfjs:
+      // false——不升级既有 PDF.js 4.10 链）；打开期 AbortController+viewer 归属本面板
+      // （关闭/切会话即中止+dispose——迟到结果不重开面板）；页渲染失败如实标注不静默。
+      // 旧「静态 SVG 版面近似」通道已由本视觉通道替代（第三十八轮四的受控 SVG 预览退役，
+      // 后端 previewSlidesPages 命令保留供兼容）。
+      if (doc.visualBytesAvailable === true && doc.bytesBase64 != null) {
+        try {
+          const lib = await loadRendererPptx();
+          if (!alive()) return;
+          const ctl = new AbortController();
+          activePreviewAbort = ctl;
+          const stage = document.createElement('div');
+          stage.className = 'pptx-visual-stage';
+          const vwrap = document.createElement('div');
+          vwrap.className = 'slides-pages';
+          const vhead = document.createElement('div');
+          vhead.className = 'meta';
+          vhead.textContent = `🖼 视觉页预览（pptx-renderer 渲染器侧本地渲染）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
+          const zoomRow = document.createElement('div');
+          zoomRow.className = 'git-row';
+          const prevBtn = document.createElement('button');
+          prevBtn.className = 'chip';
+          prevBtn.textContent = '◀ 上一页';
+          const nextBtn = document.createElement('button');
+          nextBtn.className = 'chip';
+          nextBtn.textContent = '下一页 ▶';
+          const pageLabel = document.createElement('span');
+          pageLabel.className = 'meta';
+          const zoomSel = document.createElement('select');
+          zoomSel.className = 'pdf-zoom';
+          for (const [v, label] of [['fit', '适应'], ['1', '100%'], ['1.5', '150%'], ['2', '200%']]) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = label;
+            zoomSel.append(opt);
           }
-          holder.innerHTML = sanitized;
-          const svgEl = holder.firstElementChild;
-          if (svgEl != null) {
-            svgEl.setAttribute('width', String(Math.round(pages.pxW * zoom)));
-            svgEl.setAttribute('height', String(Math.round(pages.pxH * zoom)));
-          }
-          stage.append(svgEl ?? Object.assign(document.createElement('div'), { textContent: '（本页无渲染内容）' }));
-          const degrade = (sl.unsupported ?? 0) > 0 ? ` · 未渲染对象 ${sl.unsupported}（${sl.unsupportedKinds || '未知类型'}）` : '';
-          const textCut = sl.textTruncated ? ' · 文本超预算已截断' : '';
-          pageLabel.textContent = `第 ${sl.slide}/${pages.totalSlides} 页 · 缩放 ${Math.round(zoom * 100)}%${sl.truncated ? ' · 本页超静态预览预算（部分未渲染）' : ''}${textCut} · 形状 ${sl.shapes}·图片 ${sl.images}${degrade}`;
-        };
-        const nav = (dir) => { const n = current + dir; if (n >= 0 && n < pages.slides.length) { current = n; draw(); } };
-        prevBtn.onclick = () => nav(-1);
-        nextBtn.onclick = () => nav(1);
-        zoomIn.onclick = () => { zoom = Math.min(zoom * 1.25, 4); draw(); };
-        zoomOut.onclick = () => { zoom = Math.max(zoom / 1.25, 0.25); draw(); };
-        zoomLabel.textContent = '缩放 100%';
-        zoomRow.append(prevBtn, nextBtn, pageLabel, zoomOut, zoomIn);
-        for (let i = 0; i < pages.slides.length; i += 1) {
-          const sl = pages.slides[i];
-          const chip = document.createElement('button');
-          chip.className = 'chip';
-          chip.textContent = `第 ${sl.slide} 页${sl.truncated ? '（部分未渲染）' : ''}${(sl.unsupported ?? 0) > 0 ? '（含未渲染对象）' : ''}`;
-          chip.onclick = () => { current = i; draw(); };
-          navList.append(chip);
+          const viewer = await lib.PptxViewer.open(base64ToBytes(doc.bytesBase64), stage, {
+            renderMode: 'slide',
+            zipLimits: lib.RECOMMENDED_ZIP_LIMITS,
+            pdfjs: false,
+            signal: ctl.signal,
+          });
+          if (!alive()) { try { viewer.dispose(); } catch (e) { /* 已释放 */ } return; }
+          activePptxViewer = viewer;
+          activePreviewAbort = null;
+          viewer.addEventListener('slideerror', (ev) => {
+            const idx = (ev.detail?.index ?? 0) + 1;
+            pageLabel.textContent = `${pageLabel.textContent} · ⚠ 第 ${idx} 页渲染失败`;
+          });
+          let pageNo = 1;
+          const syncLabel = () => { pageLabel.textContent = `第 ${pageNo}/${viewer.slideCount} 页 · 缩放 ${viewer.zoomPercent}%`; };
+          const show = async (n) => {
+            const target = Math.min(Math.max(n, 1), viewer.slideCount);
+            await viewer.goToSlide(target - 1);
+            if (!alive()) return;
+            pageNo = target;
+            syncLabel();
+          };
+          prevBtn.onclick = () => void show(pageNo - 1);
+          nextBtn.onclick = () => void show(pageNo + 1);
+          zoomSel.onchange = () => {
+            if (zoomSel.value === 'fit') void viewer.setFitMode('contain').then(syncLabel).catch(() => {});
+            else void viewer.setZoom(Number(zoomSel.value) * 100).then(syncLabel).catch(() => {});
+          };
+          zoomRow.append(prevBtn, nextBtn, pageLabel, zoomSel);
+          const vnote = document.createElement('div');
+          vnote.className = 'meta';
+          vnote.textContent = '视觉=渲染器侧（版面/图表/表格尽力还原——图表几何与 Office 渲染存在已知近似）· SmartArt/EMF 内嵌 PDF 回退未启用（如实分列）· 外部关系不加载 · 宏不执行（宏容器在保存入口已拒）· 提取文本=模型输入真源（与视觉分列）';
+          vwrap.append(vhead, zoomRow, stage, vnote);
+          owrap.append(vwrap);
+          await show(1);
+        } catch (e) {
+          const pnote = document.createElement('div');
+          pnote.className = 'meta warn';
+          pnote.textContent = `视觉页预览不可用（${String(e?.message ?? e).slice(0, 200)}）——提取文本卡片不受影响（分列）`;
+          owrap.append(pnote);
         }
-        pwrap.append(phead, zoomRow, navList, stage);
-        const pnote = document.createElement('div');
-        pnote.className = 'meta';
-        pnote.textContent = '静态页预览=版面近似（文本框/图片/简单形状；SmartArt·图表·主题样式·渐变等未渲染项页内如实标注）· 图片内联有预算上限（超限占位标注）· 与像素级渲染分别认证';
-        pwrap.append(pnote);
-        owrap.append(pwrap);
-        draw();
-      } catch (e) {
+      } else {
         const pnote = document.createElement('div');
         pnote.className = 'meta warn';
-        pnote.textContent = `静态页预览不可用（${e.message}）——提取文本预览不受影响（分列）`;
+        pnote.textContent = `视觉页预览不可用（${doc.visualBytesReason ?? '未取到原件字节'}）——提取文本卡片不受影响（分列）`;
         owrap.append(pnote);
       }
     }

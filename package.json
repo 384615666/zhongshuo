@@ -20,8 +20,10 @@
   "dependencies": {
     "@types/ws": "^8.18.2",
     "better-sqlite3": "^13.0.3",
+    "docx-preview": "0.4.1",
     "dompurify": "^3.4.16",
     "fflate": "^0.8.3",
+    "jszip": "3.10.2",
     "koffi": "^3.3.2",
     "mammoth": "^1.13.0",
     "markdown-it": "^14.3.2",

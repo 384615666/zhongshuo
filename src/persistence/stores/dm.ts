@@ -10,6 +10,7 @@
 import { stopGenerationOfTask } from '../outbox.ts';
 import { randomUUID } from 'node:crypto';
 import type { ZhongshuoDatabase } from '../db.ts';
+import { assessTaskRedispatchReadiness } from './recoveryGuard.ts';
 
 export interface DmParticipantRow {
   principal_type: 'human' | 'agent';
@@ -118,20 +119,14 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dispatch_key = 'dmtask:' || t.id || ':initial' AND o.status IN ('pending','leased'))
        ORDER BY t.rowid`,
     ).all(row.id) as Array<{ taskId: string; title: string; stopGen: number; lastRunId: string | null; lastRunStatus: string | null }>;
-    // 可恢复性（与 task.redispatch 守卫同口径）：UNKNOWN 未对账（预算未结算/保护未解除）或停止
-    // 代次生效 → 不可恢复+原因；对账完成后（budget_mark 已置+租约已释放）方可重派。
+    // 可恢复性（第四十轮 §2：与 task.redispatch 守卫**共用服务端判定**——recoveryGuard
+    // 四分离：在途/保护未解除（FAILED+未释放租约同样拦）/UNKNOWN 未闭环（settled 但无
+    // 正式 protectionReleased 事件=退出未确认）；停止代次生效另行拦截。
     const interrupted = interruptedRaw.map((t) => {
-      const unreconciled = t.lastRunId == null ? null
-        : (db.prepare(
-            `SELECT t2.id AS turnId FROM agent_turns t2 JOIN workflow_runs r ON r.id = t2.run_id
-             WHERE r.task_id = ? AND t2.status = 'UNKNOWN'
-               AND (t2.budget_mark IS NULL
-                    OR EXISTS (SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id = t2.id AND l.status != 'released'))
-             LIMIT 1`,
-          ).get(t.taskId) as { turnId: string } | undefined);
+      const blocked = assessTaskRedispatchReadiness(db, t.taskId);
       let blockReason: string | null = null;
       if (t.stopGen > 0) blockReason = '停止代次已生效：不再追加执行';
-      else if (unreconciled != null) blockReason = '存在结果不确定且未对账的执行：先在桌面「恢复中心」完成取证/对账/保护解除（显式点击不构成已退出证明）';
+      else if (blocked != null) blockReason = blocked.message;
       return { taskId: t.taskId, title: t.title, lastRunStatus: t.lastRunStatus, lastRunId: t.lastRunId, recoverable: blockReason == null, blockReason };
     });
     const lastMsg = db.prepare(
