@@ -26,6 +26,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
+import * as craft from './lib/craftDocuments.mjs';
 
 const randomIdSuffix = () => Math.random().toString(36).slice(2, 8);
 const launcherLogs = []; // 自测启动原始输出快照（证据归档用——runLauncher 写入/selfTest 归档）
@@ -59,8 +60,8 @@ const BAT_LAUNCHER = [
   'set ZS_BOOTSTRAP_AGENTS=Guide A,Guide B',
   'set ZS_FAKE_STALL_MS=60000',
   'set ZS_REMOTE_SELFCHECK=1',
-  'set SEED_FLAGS=',
-  'if "%ZS_DEV25_DRILL%"=="1" set SEED_FLAGS=--drill',
+  'set SEED_FLAGS=--regression',
+  'if "%ZS_DEV25_DRILL%"=="1" set SEED_FLAGS=--regression --drill',
   'echo Starting Zhongshuo desktop (fake runtime + real-dispatch guard, zero real model calls)...',
   'if not "%ZS_DEV25_DEBUG_PORT%"=="" (',
   '  start "ZhongshuoDual" "%PKG%ZhongshuoDual\\electron.exe" --remote-debugging-port=%ZS_DEV25_DEBUG_PORT%',
@@ -92,71 +93,97 @@ const BAT_SELFCHECK = [
   '',
 ].join('\r\n');
 
-const README = `# DEV-25 双机验收包（Windows 服务机 + 同局域网客户端浏览器）
+const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v4 受影响项短回归结果（用户回填——本文件不会被程序覆盖）
 
-包目录全 ASCII（中文/空格路径可用）；服务机自备**无需** Node/Git/模型账号；不包含任何私钥、
-CA 私钥（首次启动生成于 server-data/remote/）或真实工程数据。fake runtime + 真实派发硬防护——
-零真实模型调用（RESULTS 会留 real_calls=0 证据）。
+- 日期/参与人：
+- 服务机（系统）/客户端（浏览器与版本）：
+- buildId（RESULTS/buildId.txt）：
+- 新信任根指纹（本包面板，64 位）：____（与 certutil 核对一致：是/否）
+
+| # | 项 | 结论（PASS/FAIL/BLOCKED） | 说明 | 截图文件名 |
+|---|---|---|---|---|
+| R1 | 恢复演练·恢复执行 | | | |
+| R2 | 队列演练·继续队列（桌面+远程） | | | |
+| R3 | 重启后侧栏/项目自动恢复 | | | |
+| R4 | 防护拒绑 claude（正式错误）/fake 可绑 | | | |
+| R5 | 设备列表可滚动可达+LAN 虚拟网卡标注 | | | |
+| R6 | PPT 预览（翻页/缩放/降级标注/缓存命中） | | | |
+
+异常与备注：
+`;
+
+const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服务机 + 同局域网客户端浏览器）
+
+本包为**修复候选包**：D1—D10 全套已按 v2 包收案（docs/implementation/dev25-dual-acceptance-record-20261003.md），
+本轮只做**受影响项短回归**（六项，见 \`SHORT-REGRESSION 指南\`——应用侧栏帮助或 docs 指南同文）。
+不需要 SQL、Node、开发者工具；全部操作=双击启动器+浏览器+截图。
 
 **产物来源**：\`ZhongshuoDual/\` 由最终冻结产物逐文件 SHA256 核对后拷贝（buildId 见
-\`RESULTS/buildId.txt\`；核对事实 \`RESULTS/frozen-manifest-check.json\`）。
-**证书体系（v2）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ 由 CA 签发的服务证书
-（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。IP 变化只重签服务证书——**CA 不变，信任一次即可**。
+\`RESULTS/buildId.txt\`；核对事实 \`RESULTS/frozen-manifest-check.json\`）。fake runtime + 真实派发
+硬防护——零真实模型调用（RESULTS 留 real_calls=0 证据）。
+
+**证书体系与⚠️新数据根声明（v4）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ CA 签发的
+服务证书（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。**v4 使用全新数据根——首次启动生成新 CA
+与新服务证书，两枚指纹与 v2/v3 均不同**：客户端必须重新导入**本包**的 \`ca.cer\` 并按下方步骤核对
+**本包面板**显示的新「信任根指纹」。「IP 变化只重签服务证书、CA 不变」仅适用于**同一数据根**，
+**不跨包/不跨数据根继承信任**——不要复用 v2/v3 时期导入的旧 CA。
 
 ## 服务机步骤
 
-1. 双击 \`start-server.bat\`（等 "Seeded." 与应用窗口；重复启动幂等）。窗口若停在欢迎页：
-   点「打开本地文件夹…」选包内 \`demo-project\`，或重启（已写自动打开记忆）。
+1. 双击 \`start-server.bat\`（等 "Seeded." 与应用窗口；重复启动幂等）。启动器自动准备**短回归
+   前置状态**（种子写入 RESULTS/seed.json 的 regression 段）：
+   - 会话「恢复演练」：含 1 个**中断待恢复**任务（合成停机中断形态——种子构造，非真实执行）；
+   - 会话「队列演练」：队列处于**暂停**态（正式停止合同产物）；
+   - 默认房间：一条带 \`回归幻灯.pptx\` 附件的仅记录消息（点击附件芯片即可预览）。
+   若窗口未自动进入「DEV25 双机验收」项目：侧栏「打开本地文件夹…」选包内 \`demo-project\` 或重启。
 2. 应用侧栏 →「远程访问（DEV-25）」面板：
-   - 监听地址选 **局域网（0.0.0.0）** → 点「启用」→ 面板核对：
-     · **运行中 + 实际地址**（复制按钮）——**LAN 自检通过**（服务机本机经实际 LAN IP 的 HTTPS 可达；
-       失败=本机绑定/TLS 层问题，先修本机）；
-     · **两枚指纹**：服务证书指纹（页面所见）+ **信任根（CA）指纹**（导入 ca.cer 时逐位核对）。
-   - **监听只有「仅本机」与「局域网（0.0.0.0）」两种选项**（没有「监听具体 IP」入口）——
-     客户端访问哪个地址从面板 **LAN 地址列表** 选：每行地址可点击复制；多网卡机器列表会标注
-     虚拟网卡段（198.18.x.x/169.254.x.x 等——「不是其它设备可达的地址」，别用它们）。
-     客户端浏览器打开的地址=列表里未标注警告的那一行+面板端口。
-   - **配对码时机**：先完成客户端证书信任（下节步骤 2），**再**回来点「生成配对码」
-     （5 分钟一次有效——避免信任操作期间过期重生成）。
-   - （可选）点「自检（机械负例）」→ 回本目录双击 \`run-self-check.bat\` 导出结论（输出在
-     本包 \`RESULTS/self-check-*.json\`——v3 修正：v2 曾输出到包外）。
-3. 防火墙（仅当客户端报超时/无法连接时）：Windows 防火墙 → 高级设置 → 入站规则 → 新建：
-   - 程序方式：**\`ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe\`**（是 daemon 的 node，
-     **不是 electron.exe**——v2 版 README 写错过）；或端口方式：面板显示的 TCP 端口；
-   - 作用域：专用网络（你的局域网通常是「专用」；不确定就在系统网络设置里把当前网络标为专用）；
-   - **不需要关闭整个防火墙**。
+   - 监听地址选 **局域网（0.0.0.0）** → 点「启用」→ 面板核对**运行中地址+两枚指纹**（服务证书/
+     信任根——都可点击复制）与 **LAN 自检**；
+   - **监听只有「仅本机」与「局域网 0.0.0.0」两种**（无「监听具体 IP」入口）——客户端访问哪个
+     地址从 **LAN 地址列表**选：每行可点击复制；多网卡机器会标注虚拟网卡段
+     （198.18.x.x/169.254.x.x 等——「不是其它设备可达的地址」，别用）；
+   - **配对码时机**：客户端完成证书信任（下节）**后**再点「生成配对码」（5 分钟一次有效）。
+3. 防火墙（仅当客户端报超时）：Windows 防火墙 → 高级设置 → 入站规则 → 新建：
+   - 程序方式：\`ZhongshuoDual\resources\app\daemon\node\node.exe\`（daemon 的 node，
+     **不是 electron.exe**）；或端口方式：面板显示的 TCP 端口；作用域=专用网络；
+     **不需要关闭整个防火墙**。
 
-## 客户端步骤（普通 Edge/Chrome，无需安装任何东西——不使用任何证书错误绕过开关）
+## 客户端步骤（普通 Edge/Chrome——不使用任何证书错误绕过开关）
 
-1. 浏览器打开服务机地址（如 \`https://192.168.1.100:端口\`）。
-2. 首次会出现证书提示（连接不是专用连接）——**这是预期**（合法证书尚未授信）：
-   ① 把服务机 \`server-data/remote/ca.cer\` 复制到客户端机双击 → 安装证书 → 存储位置=当前用户
-   → 「将所有的证书都放入下列存储」→ 浏览 → **受信任的根证书颁发机构** → 完成；
-   ② **指纹核对（两步）**：先在服务机用文件哈希核对——右键 \`ca.cer\` → 属性 → 详细信息 →
-   「哈希值」选 SHA-256，与服务机面板「**信任根指纹**」逐位一致（同一份文件的两种读法）；
-   安装时再展开证书详情核对同值。**服务证书指纹单独记录**（两枚指纹不要混用——信任根
-   才是导入核对对象）；
-   ③ 重开页面（必要时新开无痕窗口验证）。**信任失败即停**——不点「高级→继续前往」冒充通过
-   （那只是本次会话豁免）。证书更换（CA 重生成）须重新核对。
-   - Android：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书（同样先核对指纹）。
-3. 配对页输入 pairingId + 码 + 设备名 →「配对并保存」→ 主界面。
-4. 按 \`RESULTS/RESULT-template.md\` 执行 D1—D10 并回填。
+1. 浏览器打开服务机地址（从面板 LAN 地址列表选未标注警告的那行+端口）。
+2. 首次出现证书提示（预期——新 CA 尚未授信）：
+   ① 复制服务机 \`server-data/remote/ca.cer\` 到客户端机双击 → 安装证书 → 当前用户 →
+   「受信任的根证书颁发机构」→ 完成；
+   ② **指纹核对**：服务机上 \`certutil -hashfile server-data\\remote\\ca.cer SHA256\`
+   （在包目录右键「在终端中打开」后执行；或 PowerShell：
+   \`Get-FileHash server-data\\remote\\ca.cer -Algorithm SHA256\`）——输出须与面板
+   「**信任根指纹**」**逐位一致**；安装时展开证书详情再核一次同值。**服务证书指纹单独记录**
+   （两枚不要混用）；
+   ③ 重开页面。**信任失败即停**——不点「高级→继续前往」。
+   - Android：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书（先核对指纹）。
+3. **此时**回服务机生成配对码 → 客户端配对页输入 pairingId+码+设备名 → 主界面。
 
-## 连接问题分层排查（先取客户端具体错误，再定位层——不预判）
+## 连接问题分层排查（先取客户端具体错误，再定位层）
 
 | 客户端现象 | 层 | 下一步 |
 |---|---|---|
-| ERR_CERT_AUTHORITY_INVALID / 证书提示 | 信任层 | 按「客户端步骤 2」导入 ca.cer（核对指纹） |
-| ERR_CERT_COMMON_NAME_INVALID | 名称层 | 服务机面板地址与实际访问 IP 不一致 → 换具体 IP 监听重启用 |
-| ERR_CONNECTION_REFUSED / 超时 | 网络层 | 服务机面板 LAN 自检通过否？通过→防火墙规则（上）；客户端 ping 服务机 IP |
-| ERR_SSL_PROTOCOL_ERROR | 端口/协议层 | 核对地址端口与面板一致（https:// 前缀，不带尾部路径） |
+| ERR_CERT_AUTHORITY_INVALID / 证书提示 | 信任层 | 导入**本包** ca.cer（按上法核对指纹——旧包 CA 不通用） |
+| ERR_CONNECTION_REFUSED / 超时 | 网络层 | 面板 LAN 自检通过→防火墙规则（上）；客户端 ping 服务机 IP |
+| ERR_SSL_PROTOCOL_ERROR | 端口/协议 | 核对地址端口与面板一致（https:// 前缀） |
 
-## 结果与边界
+## 短回归与结果
 
-- 自动留档：\`RESULTS/seed.json\`、\`RESULTS/self-check-*.json\`、停机事实、real_calls=0、
-  逐文件核对报告；RESULT-template.md 永不被程序覆盖。
-- 手机/移动浏览器按 R11 属独立验收范围；PWA/Push 按后续归属排产。
-`;
+- 六项回归（R1 恢复执行/R2 继续队列/R3 侧栏恢复/R4 防护拒绑/R5 设备列表可达/R6 PPT 预览）：
+  按 \`RESULTS/SHORT-REGRESSION-template.md\` 执行并回填（每项 PASS/FAIL/BLOCKED+一句话+截图名）。
+- 机械负例自检保留（可选）：面板「自检（机械负例）」→ 双击 \`run-self-check.bat\` 导出
+  （输出在本包 \`RESULTS/self-check-*.json\`）。
+- **短回归通过 ≠ D 系全项重测**；Android 实测另按指南（适配≠实测）。
+- 工程侧只读核对截图/RESULTS/服务侧事实；未执行/失败/未确认分列，不代宣称通过。
+
+## 边界
+
+- 本包模拟运行（fake+真实派发硬防护）；私钥只留服务机；不降级 HTTP；凭据不落明文日志。
+- v2/v3 包与其数据/结果原地保留——本包独立目录、独立数据根，互不影响。`;
 
 const RESULT_TEMPLATE = `# DEV-25 双机验收结果（用户回填——本文件不会被程序覆盖）
 
@@ -211,6 +238,18 @@ async function build(frozenDir = frozenDefault) {
   writeFileSync(join(outRoot, 'start-server.bat'), BAT_LAUNCHER, 'ascii');
   writeFileSync(join(outRoot, 'run-self-check.bat'), BAT_SELFCHECK, 'ascii');
   writeFileSync(join(outRoot, 'README-双机验收.md'), README, 'utf8');
+  // 第三十九轮 §5：短回归前置材料——回归幻灯.pptx（规范 OOXML 样本：中文/图片/图表/表格/组合/
+  // 实体字符/跳号页序）随包，seed --regression 上传为房间仅记录消息附件。
+  writeFileSync(join(outRoot, 'seed', '回归幻灯.pptx'), craft.makePptxPagesSample({
+    slides: [
+      { no: 1, shapes: [{ x: 60 * 9525, y: 40 * 9525, cx: 520 * 9525, cy: 90 * 9525, texts: ['回归幻灯：短回归 R6 预览样本'], sz: 2000 }, { x: 60 * 9525, y: 150 * 9525, cx: 520 * 9525, cy: 40 * 9525, texts: ['第 1 页——翻页/缩放/缓存核对'] }], notes: '首页备注词' },
+      { no: 2, shapes: [{ x: 60 * 9525, y: 60 * 9525, cx: 480 * 9525, cy: 60 * 9525, texts: ['第 2 页：内容确实变化（实体字符 A & B 与 <标签>）'], rawText: false }] },
+      { no: 3, shapes: [{ x: 60 * 9525, y: 60 * 9525, cx: 480 * 9525, cy: 60 * 9525, texts: ['第 3 页：图表降级页'] }, { x: 60 * 9525, y: 130 * 9525, cx: 480 * 9525, cy: 280 * 9525, kind: 'chart' }] },
+    ],
+  }));
+  // 短回归模板与指南（不覆盖用户回填；指南同 docs/implementation/dev25-short-regression-guide.md）。
+  const shortTplPath = join(outRoot, 'RESULTS', 'SHORT-REGRESSION-template.md');
+  if (!existsSync(shortTplPath)) writeFileSync(shortTplPath, SHORT_REGRESSION_TEMPLATE, 'utf8');
   const tplPath = join(outRoot, 'RESULTS', 'RESULT-template.md');
   if (!existsSync(tplPath)) writeFileSync(tplPath, RESULT_TEMPLATE, 'utf8'); // 不覆盖用户回填
   writeFileSync(join(outRoot, 'RESULTS', 'buildId.txt'), String(buildId) + '\n', 'ascii');

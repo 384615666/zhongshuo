@@ -53,8 +53,16 @@ DIRECT 指派选择器（原固定空 mentions=100% 被 M0 门禁拦——获准
 #4 BLOCKED/失败行原因人话（taskStatusReasonOf 事件映射：M0 需指派/成员停用/启动失败消息）；
 可用性=侧栏可滚+设备列表限高滚动（默认缩放不可达修复）+指纹芯片换行、LAN 地址逐个可复制+
 虚拟网卡段（198.18/169.254/100.64）标注不推荐（primaryLanIp/verifyLanBinding 选真实段）、
-self-check.cjs pkgRoot 修正（输出回包内 RESULTS）+补 CA 指纹。**v3 修复包独立目录重交
-（v2/server-data/RESULTS/截图原地保留）。**
+self-check.cjs pkgRoot 修正（输出回包内 RESULTS）+补 CA 指纹。**v3 修复包独立目录重交（v2/server-data/RESULTS/截图原地保留）。**
+**第三十九轮（复核缺口收口+成熟组件+LO 原型）**：①恢复执行守卫（review-r38 确认入口放行）——
+在途检查改按 workflow_runs.task_id 真实归属（旧 'task:' 前缀漏 dmtask:）；UNKNOWN 未对账拒
+（RECONCILE_REQUIRED——先恢复中心对账）；意图版本化 task:<id>:redispatch:<sourceRunId>（同源
+幂等/新中断新意图——不撞唯一键）；可恢复性服务端分列（recoverable/blockReason——前端不凭
+INTERRUPTED 即给按钮）；②DOMPurify（SVG 专用实例+钩子封外链——无引号 href 漏口关）+markdown-it
+（vendored UMD）；③**LibreOffice 无界面转 PDF 原型已实跑**（dev25-pptx-lo-proto-report.md：
+14/14 页视觉判定可用；1.57GB/7s/500MB——不随包，取舍待用户）；④v4 修复候选包=短回归导向
+（README 六项+新数据根新 CA 声明+前置种子[中断任务/暂停会话/回归幻灯.pptx]+SHORT-REGRESSION
+模板；指南=dev25-short-regression-guide.md——用户零工具参与）。
 
 ## 下一包建议（依赖已满足排序，第二十八轮修订）
 

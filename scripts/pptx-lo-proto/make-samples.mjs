@@ -78,7 +78,7 @@ writeFileSync(join(samplesDir, 'rich-deck.pptx'), rich);
 const dense = craft.makePptxPagesSample({
   slides: Array.from({ length: 6 }, (_, i) => ({
     no: 100 + i,
-    shapes: [{ x: 50 * EMU, y: 50 * EMU, cx: 520 * EMU, cy: 360 * EMU, texts: [Array.from({ length: 14 }, (_, j) => `第${i + 1}页 第${j + 1}行：密排中文文本与数字 ${1000 + j * 7}`).join(' ')] }],
+    shapes: [{ x: 50 * EMU, y: 50 * EMU, cx: 520 * EMU, cy: 360 * EMU, sz: 1200, texts: Array.from({ length: 14 }, (_, j) => `第${i + 1}页 第${j + 1}行：密排中文文本与数字 ${1000 + j * 7}`) }],
     notes: i === 0 ? '密排样本首页备注' : null,
   })),
 });

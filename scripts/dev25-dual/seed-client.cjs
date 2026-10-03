@@ -27,9 +27,55 @@ const appDataDir = argOf('--appdata');
 const pipeName = argOf('--pipe');
 const demoRoot = argOf('--demo');
 const drill = args.includes('--drill');
+const regression = args.includes('--regression');
 if (appDataDir == null || pipeName == null || demoRoot == null) {
   console.error('usage: node seed-client.cjs --appdata <dir> --pipe <name> --demo <dir> [--drill]');
   process.exit(2);
+}
+
+// ---------- 第三十九轮 §5：短回归前置状态（--regression） ----------
+const path0 = require('node:path');
+const crypto0 = require('node:crypto');
+function openDb(appDataDir) {
+  // 包内 better-sqlite3（self-check 同法）；WAL 多进程写与 daemon 并存（短事务）。
+  const candidates = [
+    path0.join(path0.dirname(path0.dirname(process.argv[1] ?? '')), 'ZhongshuoDual', 'resources', 'app', 'daemon', 'node_modules', 'better-sqlite3'),
+  ];
+  for (const c of candidates) { try { return require(require('node:path').join(c)); } catch { /* 下一个 */ } }
+  return null;
+}
+/**
+ * 构造「停机中断待恢复」形态（与 applyRecovery 同型；dev25FieldFixes 集成测试同构造）：
+ * ACTIVE 任务+唯一 INTERRUPTED run+UNKNOWN turn（budget 已结算+无未释放租约=可恢复）+
+ * 初始 outbox 已完结。幂等：按任务标题查重。
+ */
+function seedInterruptedShape(appDataDir, dbFile, conversationId) {
+  const Database = openDb(appDataDir);
+  if (Database == null) return { ok: false, reason: 'better-sqlite3 不可达' };
+  const db = new Database(dbFile);
+  try {
+    const existing = db.prepare("SELECT id FROM tasks WHERE title = ? AND status = 'ACTIVE'").get('R39 短回归·中断恢复任务');
+    if (existing != null) return { ok: true, reused: true, taskId: existing.id };
+    const conv = db.prepare('SELECT project_id FROM conversations WHERE id = ?').get(conversationId);
+    const owner = db.prepare("SELECT dp.principal_id AS m FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'agent'").get(conversationId);
+    if (conv == null || owner == null) return { ok: false, reason: '会话/成员缺失' };
+    const taskId = 'task_r39seed_' + crypto0.randomUUID().slice(0, 8);
+    const runId = 'run_r39seed_' + crypto0.randomUUID().slice(0, 8);
+    const turnId = 'turn_r39seed_' + crypto0.randomUUID().slice(0, 8);
+    const now = Date.now();
+    db.transaction(() => {
+      db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, root_message_id, owner_member_id, title, status, revision, route_json, input_through_seq, created_at)
+        VALUES (?, ?, ?, 'dm_turn', NULL, ?, 'R39 短回归·中断恢复任务', 'ACTIVE', 0, '{"kind":"dispatch","mode":"DIRECT"}', 0, ?)`)
+        .run(taskId, conv.project_id, conversationId, owner.m, now);
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId, taskId, conversationId);
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch, budget_mark)
+        VALUES (?, ?, ?, ?, 'direct.work', 'UNKNOWN', ?, 1, 1, 'settled')`).run(turnId, runId, conversationId, owner.m, 'dmtask:' + taskId + ':initial');
+      db.prepare(`INSERT INTO outbox (dispatch_key, status, stop_generation_at_enqueue) VALUES (?, 'done', 0)`).run('dmtask:' + taskId + ':initial');
+      db.prepare(`INSERT INTO domain_events (event_id, project_id, task_id, run_id, turn_id, kind, created_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, 'task.r39SeedInterrupted', ?, ?)`).run('evt_' + crypto0.randomUUID(), conv.project_id, taskId, runId, turnId, now, JSON.stringify({ note: '短回归前置：合成停机中断形态（种子构造——非真实执行）' }));
+    })();
+    return { ok: true, reused: false, taskId };
+  } finally { db.close(); }
 }
 
 function connectOnce(token, timeoutMs) {
@@ -200,6 +246,64 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       }
       facts.drill = { taskId: state.activeTaskId, runId: state.activeRunId, stoppedAtExecState: settled ? 'terminal' : 'still-active', stopAccepted: stop != null, elapsedMs: Date.now() - drillStarted };
       if (!settled) throw new Error('drill: task did not settle after stop within 30s');
+    }
+    // ---------- 短回归前置（--regression）：恢复演练（中断任务）/队列演练（暂停）/PPT 附件 ----------
+    if (regression) {
+      const rg = { interrupted: null, pausedConv: null, pptAttachment: null };
+      // 恢复演练会话 + 合成中断任务（幂等按标题）。
+      const convs2 = await cmd(pipe, 'conversation.list', { projectId });
+      const l2 = convs2.conversations ?? [];
+      let dmR = l2.find((c) => c.title === '恢复演练');
+      if (dmR == null) {
+        const r = await cmd(pipe, 'conversation.create', { projectId, peerMemberId: agents[0].id, title: '恢复演练' });
+        dmR = { conversationId: r.conversationId ?? (r.conversation && r.conversation.conversationId) };
+      }
+      rg.interrupted = seedInterruptedShape(appDataDir, path.join(appDataDir, 'state.sqlite'), dmR.conversationId);
+      if (rg.interrupted.ok !== true) throw new Error('regression: 中断形态构造失败 ' + JSON.stringify(rg.interrupted));
+      // 队列演练会话：发任务→停滞窗内停止→队列暂停（正式命令链；幂等按标题+paused 态）。
+      let dmQ = l2.find((c) => c.title === '队列演练');
+      if (dmQ == null) {
+        const r = await cmd(pipe, 'conversation.create', { projectId, peerMemberId: agents[agents.length - 1].id, title: '队列演练' });
+        dmQ = { conversationId: r.conversationId ?? (r.conversation && r.conversation.conversationId) };
+      }
+      const cl2 = await cmd(pipe, 'conversation.list', { projectId });
+      const qNow = (cl2.conversations ?? []).find((c) => (c.conversationId ?? c.id) === dmQ.conversationId);
+      if (qNow != null && qNow.execState === 'paused') {
+        rg.pausedConv = { conversationId: dmQ.conversationId, reused: true };
+      } else {
+        await cmd(pipe, 'message.submit', { target: { kind: 'dm', projectId, conversationId: dmQ.conversationId }, body: 'R39 短回归·队列暂停演练', intent: 'default', mentions: [] });
+        let st2 = null;
+        for (let i = 0; i < 30; i += 1) {
+          await sleep(1000);
+          const cl3 = await cmd(pipe, 'conversation.list', { projectId });
+          const a = (cl3.conversations ?? []).find((c) => (c.conversationId ?? c.id) === dmQ.conversationId);
+          if (a != null && (a.execState === 'running' || a.execState === 'queued') && a.activeRunId != null) { st2 = a; break; }
+        }
+        if (st2 == null) throw new Error('regression: 队列演练任务未在 30s 内进入执行');
+        await cmd(pipe, 'task.stop', { taskId: st2.activeTaskId, targetRunId: st2.activeRunId, expectedStopGeneration: st2.activeStopGeneration ?? 0 });
+        for (let i = 0; i < 30; i += 1) {
+          await sleep(1000);
+          const cl4 = await cmd(pipe, 'conversation.list', { projectId });
+          const a = (cl4.conversations ?? []).find((c) => (c.conversationId ?? c.id) === dmQ.conversationId);
+          if (a != null && a.execState === 'paused') break;
+        }
+        rg.pausedConv = { conversationId: dmQ.conversationId, reused: false };
+      }
+      // PPT 附件：包内 seed/回归幻灯.pptx → 房间仅记录消息（芯片可点开预览——R6 用）。
+      const pptPath = path.join(path.dirname(process.argv[1] ?? ''), '回归幻灯.pptx');
+      if (fs.existsSync(pptPath)) {
+        const rooms0 = await cmd(pipe, 'room.list', { projectId });
+        const room0 = (rooms0.items ?? [])[0];
+        const pool = await cmd(pipe, 'room.pool', { projectId, roomId: room0 != null ? room0.id : undefined }).catch(() => null);
+        const alreadyPpt = pool != null && JSON.stringify(pool).includes('回归幻灯.pptx');
+        if (!alreadyPpt) {
+          const b64 = fs.readFileSync(pptPath).toString('base64');
+          const att0 = await cmd(pipe, 'attachment.uploadOffice', { conversationId: room0 != null ? room0.conversationId : undefined, filename: '回归幻灯.pptx', contentBase64: b64 });
+          await cmd(pipe, 'message.submit', { target: { kind: 'room_root', projectId, conversationId: room0.conversationId, roomId: room0.id }, body: 'R39 短回归·PPT 预览样本（点击附件芯片预览）', intent: 'record_only', mentions: [], attachmentRefs: [att0.attachmentId] });
+          rg.pptAttachment = att0.attachmentId;
+        } else rg.pptAttachment = 'reused';
+      }
+      facts.regression = rg;
     }
     const resultsDir = path.join(path.dirname(appDataDir), 'RESULTS');
     fs.mkdirSync(resultsDir, { recursive: true });

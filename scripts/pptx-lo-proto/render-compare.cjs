@@ -55,11 +55,20 @@ const PAGE_HTML = (modUrl, pdfHref, svgSrc, w, h) => {
 };
 
 async function shot(win, url, outPng, extraQuery = '') {
+  const capture = async () => {
+    await new Promise((rr) => setTimeout(rr, 400)); // 合成稳定（首页空白竞态——视觉复核第一轮实证）
+    const buf = await win.webContents.capturePage();
+    writeFileSync(outPng, buf.toPNG());
+    return buf.toPNG().length;
+  };
   await win.loadURL('file://' + url.replace(/\\/g, '/') + extraQuery);
   const r = await win.webContents.executeJavaScript('window.__renderDone');
   if (r !== 'ok') throw new Error('render ' + r);
-  const buf = await win.webContents.capturePage();
-  writeFileSync(outPng, buf.toPNG());
+  const size = await capture();
+  if (size < 11000) { // 与已知纯白截图同量级——重采一次（首渲染合成竞态）
+    await new Promise((rr) => setTimeout(rr, 600));
+    await capture();
+  }
 }
 
 app.whenReady().then(async () => {
