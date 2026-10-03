@@ -1033,7 +1033,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
       }
       const note = document.createElement('div');
       note.className = 'meta';
-      note.textContent = `净化排版近似（白名单标记——上方视觉预览失败时的回退通道）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
+      note.textContent = `净化排版近似（白名单标记——上方视觉预览失败时的回退通道）· 段落 ${doc.paragraphCount}${doc.htmlTruncated ? ' · HTML 超预算已截断' : ''}${doc.truncatedTotal ? ' · 提取文本超预算已截断（注入同口径）' : ''} · 外部关系不加载、嵌入图片不解码、宏不执行 · 版式丢失如实说明（不虚构分页） · 模型输入=提取文本`;
       owrap.append(htmlBox, note);
     } else if (doc.kind === 'sheet_file') {
       const tabs = document.createElement('div');

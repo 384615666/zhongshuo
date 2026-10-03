@@ -463,6 +463,46 @@ function execSql(dbFile, statements) {
   } catch { return false; }
 }
 
+/** 第四十轮：经本机 daemon 命名管道（正式命令面——与 UI 同链路：local.token 认证）发一条
+ * 命令。远程浏览器页的 accessToken 是闭包变量不可取——对账命令走本机面同样正式（同一 daemon）。 */
+async function localPipeCmd(pipeName, appDataDir, method, params) {
+  const net = await import('node:net');
+  const { randomUUID } = await import('node:crypto');
+  const token = readFileSync(join(appDataDir, 'local.token'), 'utf8').trim();
+  return await new Promise((resolve, reject) => {
+    const socket = net.connect(pipeName);
+    let buffer = '';
+    let authed = false;
+    const fail = (err) => { try { socket.destroy(); } catch { /* 已关 */ } reject(err); };
+    const timer = setTimeout(() => fail(new Error('localPipeCmd 握手/命令超时')), 20_000);
+    socket.setEncoding('utf8');
+    socket.on('error', (e) => { clearTimeout(timer); fail(e); });
+    socket.on('connect', () => socket.write(JSON.stringify({ type: 'auth', token }) + '\n'));
+    socket.on('close', () => { clearTimeout(timer); if (!authed) fail(new Error('pipe closed before auth')); });
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const idx = buffer.indexOf('\n');
+        if (idx < 0) break;
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (!authed) {
+          if (msg.type === 'auth.ok') {
+            authed = true;
+            socket.write(JSON.stringify({ protocolVersion: 1, commandId: `vdr-${randomUUID().slice(0, 8)}`, method, params }) + '\n');
+          } else { clearTimeout(timer); fail(new Error('auth failed: ' + line.slice(0, 120))); }
+          continue;
+        }
+        clearTimeout(timer);
+        try { socket.destroy(); } catch { /* 已关 */ }
+        resolve(msg);
+      }
+    });
+  });
+}
+
 const waitFor = async (fn, timeoutMs, what) => {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -1184,8 +1224,9 @@ try {
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('验收 文档'))?.click(); })()`);
       await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('甲值')`)) === true, 30_000, 'ATT DOCX 预览');
       const pvDocx = await page.readStrict(`(() => { const box = document.querySelector('#attach-preview .office-docx-html'); return (box ? (box.querySelectorAll('table').length + '|' + box.textContent.slice(0, 80)) : 'missing'); })()`);
+      const pvDocxVisual = await page.readStrict(`(() => { const v = document.querySelector('#attach-preview .docx-visual-box'); return JSON.stringify({ present: v != null, tables: v ? v.querySelectorAll('table').length : 0 }); })()`).catch(() => JSON.stringify({ present: false, tables: 0 }));
       const pvDocxNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
-      record('ATT·DOCX 预览（安全排版 HTML 表格+白名单零属性）', pvDocx.startsWith('1|') && pvDocx.includes('甲值') && pvDocxNote.includes('宏不执行'), pvDocx.slice(0, 40));
+      record('ATT·DOCX 预览（docx-preview 视觉+净化 HTML 回退：表格/白名单零属性/宏不执行声明）', pvDocx.startsWith('1|') && pvDocx.includes('甲值') && pvDocxNote.includes('宏不执行') && JSON.parse(pvDocxVisual).present === true, `html=${pvDocx.slice(0, 40)} visual=${pvDocxVisual}`);
       await closePreview(page);
       await uploadViaInput(page, 'composer', craft.makeXlsx([{ name: '数据', rows: [['名称', '数量'], ['中文行一', 42, { formula: 'B2*2' }], ['带缓存', { formula: '5*2', cached: '10' }, '']], merges: ['A1:B1'] }]), '数据 表.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('数据 表.xlsx')`)) === true, 30_000, 'ATT XLSX 芯片');
@@ -1625,9 +1666,8 @@ try {
         `INSERT INTO runtime_process_registry (turn_id, run_id, member_id, adapter_kind, process_model, pid, started_at_ms, identity_source, managed_job_id, registered_at, note)
          VALUES ('${r38TurnId}', '${r38RunId}', '${r38MemberId}', 'fake', 'none', NULL, NULL, 'none', NULL, ${Date.now()}, '验证器：fake 页测执行的诚实登记（无 OS 子进程——非身份伪造）')`,
       ]);
-      const r38RecJson = await shellPage.readStrict(`fetch('/cmd', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (window.__dbgToken ?? '') }, body: JSON.stringify({ protocolVersion: 1, commandId: 'r40-verify-reconcile-${Date.now()}', method: 'recovery.reconcile', params: { turnId: '${r38TurnId}', verdict: 'executed', note: '验证器：第四十轮正式对账（none 模型 no-os-process 程序事实）' } }) }).then((r) => r.text()).catch((e) => JSON.stringify({ ok: false, error: { message: String(e) } }))`).catch((e) => JSON.stringify({ ok: false, error: { message: String(e) } }));
-      const r38Rec = JSON.parse(r38RecJson);
-      record('REMOTE·正式对账（recovery.reconcile executed+none 登记→no-os-process→FAILED）', r38Rec.ok === true && r38Rec.data != null && r38Rec.data.turnFinalStatus === 'FAILED', r38RecJson.slice(0, 200));
+      const r38Rec = await localPipeCmd('\\\\.\\pipe\\zs-vdr-remote', appDataR, 'recovery.reconcile', { turnId: r38TurnId, verdict: 'executed', note: '验证器：第四十轮正式对账（none 模型 no-os-process 程序事实）' }).catch((e) => ({ ok: false, error: { message: String((e && e.message) || e) } }));
+      record('REMOTE·正式对账（recovery.reconcile executed+none 登记→no-os-process→FAILED）', r38Rec.ok === true && r38Rec.data != null && r38Rec.data.turnFinalStatus === 'FAILED', JSON.stringify(r38Rec).slice(0, 200));
       await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
       await waitFor(async () => (await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); return r != null && [...r.querySelectorAll('button')].some((b) => b.textContent === '恢复执行'); })()`)) === true, 20_000, 'REMOTE 对账后恢复执行按钮出现');
       await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); [...r.querySelectorAll('button')].find((b) => b.textContent === '恢复执行')?.click(); })()`);
