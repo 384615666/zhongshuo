@@ -1228,37 +1228,37 @@ try {
       await uploadViaInput(page, 'composer', pptx38, '演示 幻灯.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
       await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('演示 幻灯.pptx')`)) === true, 30_000, 'ATT PPTX 芯片');
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
-      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('静态页预览')`)) === true, 60_000, 'ATT PPTX 静态页区');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('视觉页预览')`)) === true, 60_000, 'ATT PPTX 视觉页预览区（第四十轮·pptx-renderer）');
       const pvSlides = await page.readStrict(`(() => { const l = document.querySelector('#attach-preview .slides-list'); return l ? (l.querySelectorAll('.slide-card').length + '|' + l.textContent.slice(0, 60)) : 'missing'; })()`);
       const pvPagesNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
       record('ATT·PPTX 预览（提取文本按页+备注——分列真源）', pvSlides.startsWith('3|') && pvSlides.includes('甲页标题XYZ') && pvPagesNote.includes('甲页备注词'), `text=${pvSlides.slice(0, 32)}`);
-      // ①当前页真实内容+位置（第三十八轮四：不只「存在 SVG」）——首页标记词在 SVG、坐标=EMU→px、图片 base64 内联。
-      const stage1 = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); const svg = st?.querySelector('svg'); if (svg == null) return JSON.stringify({ text: 'missing', pos: null, img: false }); return JSON.stringify({ text: svg.textContent.slice(0, 120), pos: svg.querySelector('text')?.getAttribute('x') ?? null, img: svg.querySelector('image') != null }); })()`);
+      // ①首页真实内容+图片内联（第四十轮视觉通道：pptx-renderer 渲染 HTML/SVG——文本在
+      // DOM、图片 base64 内联 data:/blob:，无外部加载）。
+      const stage1 = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); if (st == null) return JSON.stringify({ text: 'missing', img: false }); const html = st.innerHTML; return JSON.stringify({ text: st.textContent.slice(0, 140), img: /data:image\\/png;base64|blob:/.test(html) }); })()`);
       const s1 = JSON.parse(stage1);
-      record('ATT·PPT 首页内容与位置（文本+坐标+图片内联）', String(s1.text).includes('甲页标题XYZ') && s1.pos === '105' && s1.img === true, `pos=${s1.pos} img=${s1.img}`);
+      record('ATT·PPT 首页内容与图片内联（视觉通道文本+base64）', String(s1.text).includes('甲页标题XYZ') && s1.img === true, `img=${s1.img}`);
       // ②翻页确实换内容（实体页：textContent 解码后 A & B——不再双重转义）。
-      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('下一页'))?.click(); })()`);
-      await waitFor(async () => ((await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.textContent ?? ''; })()`)).includes('乙页特殊字符')) === true, 20_000, 'ATT PPT 翻到第 2 页');
-      const stage2text = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.textContent ?? ''; })()`);
+      await page.evalJs(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('下一页'))?.click(); })()`);
+      await waitFor(async () => ((await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return (st?.textContent ?? ''); })()`)).includes('乙页特殊字符')) === true, 20_000, 'ATT PPT 翻到第 2 页');
+      const stage2text = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return (st?.textContent ?? ''); })()`);
       record('ATT·PPT 翻页换内容+实体解码（A & B 单层）', stage2text.includes('A & B 乙页特殊字符') && !stage2text.includes('&amp;amp;'), stage2text.slice(0, 40));
-      // ③缩放：svg width 实际变化（矢量缩放不是按钮摆设）。
-      const zoomBefore = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.getAttribute('width') ?? ''; })()`);
-      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('放大'))?.click(); })()`);
-      const zoomAfter = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.getAttribute('width') ?? ''; })()`);
-      record('ATT·PPT 缩放生效（svg width 数值变化）', Number(zoomAfter) > Number(zoomBefore) && Number(zoomBefore) > 0, `${zoomBefore}→${zoomAfter}`);
-      // ④降级提示：纯图表页=显式「不渲染」占位（不再静默白页）。
-      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('第 3 页'))?.click(); })()`);
-      await waitFor(async () => ((await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return (st?.querySelector('svg')?.textContent ?? ''); })()`)).includes('图表（静态页不渲染）')) === true, 20_000, 'ATT PPT 图表降级页');
-      const degradeInfo = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return JSON.stringify({ svgNote: (st?.querySelector('svg')?.textContent ?? '').includes('图表（静态页不渲染）'), panelNote: (st?.textContent ?? '').includes('未渲染对象') }); })()`).catch(() => '{}');
-      const degrade = JSON.parse(degradeInfo);
-      record('ATT·PPT 图表页降级（页内占位+页签标注未渲染对象）', degrade.svgNote === true && degrade.panelNote === true, degradeInfo);
+      // ③缩放：下拉选 200% → 页码标签更新为「缩放 200%」（矢量/布局真实重排）。
+      await page.evalJs(`(() => { const wrap = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); const sel = wrap.querySelector('select.pdf-zoom'); sel.value = '2'; sel.dispatchEvent(new Event('change')); })()`);
+      const zoomLabel = await page.readStrict(`(() => { const wrap = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); const labels = [...wrap.querySelectorAll('span.meta')]; return labels.map((l) => l.textContent).find((t) => t.includes('缩放')) ?? ''; })()`);
+      record('ATT·PPT 缩放生效（标签=缩放 200%）', zoomLabel.includes('缩放 200%'), zoomLabel);
+      // ④图表页**真实渲染**（第四十轮：ECharts canvas——旧「图表不渲染」占位断言历史化）。
+      await page.evalJs(`(() => { const wrap = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); [...wrap.querySelectorAll('button.chip')].find((b) => b.textContent.includes('下一页'))?.click(); })()`);
+      const chartInfo = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return JSON.stringify({ canvas: st?.querySelectorAll('canvas').length ?? 0, err: (st?.textContent ?? '').includes('渲染失败') }); })()`);
+      const chart = JSON.parse(chartInfo);
+      record('ATT·PPT 图表页实际渲染（ECharts canvas 非占位）', chart.canvas >= 1 && chart.err === false, chartInfo);
       // ⑤迟到响应保护（previewGeneration 守卫）：面板**开着**时再次点击芯片（新预览在途——
-      // 服务端往返窗口），立即点「关闭预览」（代次+1）——迟到的构建响应不得复活/改写页面。
+      // 服务端往返+解析窗口），立即点「关闭预览」（代次+1+abort+dispose）——迟到的构建响应
+      // 不得复活/改写页面。
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); const p = document.getElementById('attach-preview'); const btns = [...p.querySelectorAll('.chip')]; btns.find((b) => b.textContent.includes('关闭预览'))?.click(); })()`);
       const lateSnap1 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
       await new Promise((r) => setTimeout(r, 1_500));
       const lateSnap2 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
-      record('ATT·PPT 迟到预览不覆盖（在途构建被关闭后不复活不改写）', lateSnap1 === lateSnap2 && JSON.parse(lateSnap2).hidden === true, `${lateSnap1 === lateSnap2 ? 'unchanged' : 'CHANGED'} ${lateSnap2}`);
+      record('ATT·PPT 迟到预览不覆盖（在途构建被关闭后不复活不改写——abort+dispose 收拢）', lateSnap1 === lateSnap2 && JSON.parse(lateSnap2).hidden === true, `${lateSnap1 === lateSnap2 ? 'unchanged' : 'CHANGED'} ${lateSnap2}`);
       // 第三十九轮 §2：SVG 净化门反例（页面真实 DOM——DOMPurify 专用实例+钩子；经
       // window.__zsSanitizeSvg 即渲染门本函数，非旁路副本）。无引号/单双引号外链、事件、脚本、
       // foreignObject、data:text/html 伪装全拦；正常页（viewBox/坐标/中文/字体）完整保留。
@@ -1290,11 +1290,12 @@ try {
         gate = JSON.parse(retry);
       }
       record('R39·SVG 净化门（DOMPurify 专用实例：无引号/单双引号外链·事件·脚本·foreignObject·data:text 伪装全拦；正常页与 data: 图片保留）', gate.noLeak === true && gate.normalKept === true && gate.dataImageKept === true, svgGate);
-      // ⑥再开=缓存命中（子进程产物经严格校验后可复用）。
+      // ⑥再开正常（第四十轮：视觉通道每次取原件字节重解析——「缓存=命中」断言随静态 SVG
+      // 通道退役历史化；重开=首页内容重新渲染、面板无残留）。
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
-      await waitFor(async () => (await page.readStrict(`(() => { const pv = document.getElementById('attach-preview'); const st = [...pv.querySelectorAll('.slides-pages')].pop(); return !pv.classList.contains('hidden') && st != null && st.querySelector('svg') != null && (st.querySelector('svg')?.textContent ?? '').includes('甲页标题XYZ'); })()`)) === true, 30_000, 'ATT PPTX 重开（新内容渲染——静态页回到首页内容）');
-      const cacheNote = await page.readStrict(`(() => { const t = document.getElementById('attach-preview')?.textContent ?? ''; const m = t.match(/缓存=(命中|新建)/); return m ? m[1] : 'none'; })()`);
-      record('ATT·PPT 缓存复用（命中=子进程产物经严格校验）', cacheNote === '命中', `cache=${cacheNote}`);
+      await waitFor(async () => (await page.readStrict(`(() => { const pv = document.getElementById('attach-preview'); const st = pv.querySelector('.pptx-visual-stage'); return !pv.classList.contains('hidden') && st != null && (st.textContent ?? '').includes('甲页标题XYZ'); })()`)) === true, 30_000, 'ATT PPTX 重开（视觉通道回到首页内容）');
+      const reopenStage = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return JSON.stringify({ len: (st?.textContent ?? '').length, hasHome: (st?.textContent ?? '').includes('甲页标题XYZ') }); })()`);
+      record('ATT·PPT 重开正常（视觉重渲染首页——无半开/残留）', JSON.parse(reopenStage).hasHome === true, reopenStage);
       await closePreview(page);
       // ⑦ CSV（编码/引号规则页面链）。
       await uploadViaInput(page, 'composer', craft.makeCsvText([['名称', '备注'], ['中文单元格,逗号', '含"引号"'], ['行二', '值']], ','), '表格.csv', 'text/csv');
