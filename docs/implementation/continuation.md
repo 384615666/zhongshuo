@@ -2,7 +2,37 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-03 第三十八轮，唯一权威快照）
+## 当前真实状态（2026-10-03 第四十一轮，唯一权威快照）
+
+> 本轮=**第四十轮复核三缺口修复**（review-r40-next-round-20261003.md）：恢复保护独立持久化+
+> 预览生命周期统一收拢+Word CSS 隔离（Shadow DOM）。预览选型已裁决并落地：**PPT=pptx-renderer
+> 1.3.0（vendored 入库）+Word=docx-preview 0.4.1；B（libreoffice-kit）首版不集成/不下载**；
+> Excel/PDF/Mammoth/模型输入链保持原合同。
+> - **P1 保护状态独立持久化（迁移 041 agent_turns.protection_state）**：无租约的 notStarted
+>   人工退款（FAILED/refunded+protectionRetained）不再凭「无 UNKNOWN+无租约」推导放行——
+>   retained 一律拦（呈现/守卫/准入同源）；releaseProtection 无租约不再 no-op 冒充闭环（须
+>   服务端证据，无登记=identity-missing 拒）；恢复中心 pendingRelease 改 protection_state 驱动
+>   +无租约保留项独立行；跨重启同判。无租约反例链 6/6（拦/零 outbox/恢复中心可见/无证据解除
+>   被拒/none 证据解除后恰一次恢复/文件库重开仍拦）。
+> - **P2 预览生命周期（产品函数级）**：previewAttachment 入口统一 releaseActivePreviewResources
+>   （abort+dispose——旧 viewer 不被新轮指针覆盖后遗失）；迟到首屏/最终 DOM 提交前代次门
+>   （迟到轮只清理自身不动新轮指针/面板）。verify-preview-lifecycle.cjs（原样抽取产品函数+
+>   受控延迟）S1 迟到首屏不覆盖 B/S2 打开中关闭不复活/S3 失败降级+指针空——allPass。
+> - **P2 Word 隔离**：docx-preview 渲染进 **Shadow DOM**（真正 CSS 边界——复核 styleId 含逗号
+>   选择器可命中预览外控件的反例收口）+显式 **renderAltChunks:false**（嵌入 HTML 首版不支持，
+>   不建无 sandbox iframe）。verify-word-isolation.cjs：哨兵色不变/W1-W4 allPass（含 Word 外部
+>   资源可达计数器零命中——不以 PPT 计数器泛化；word-rich 三节/表/图正例）。
+> - **冻结口径（review §5 更正）**：bld_a1fcfa390ddeec46 的 156×3 中 lo0vku/p1hq4y 为旧断言
+>   通过、gv7hdx 为修订后通过、an7ju9 失败留档——**不是最终验证器下连续三连**。本轮修复后
+>   以最终验证器在同一冻结产物重新取得连续三次完整通过（见 vdr-runs 新记录）。
+> - **v4 包事实**：增量 2.074MiB（588 文件字节总量差，vendor 五文件 2.053MiB）；启动器+种子
+>   幂等自测通过（二启 newMessages=0——room.pool strictObject 参数+正文标记修复）。**下一包=v5
+>   独立修复包**（含许可材料随包），不覆盖 v2/v3/v4 与任何用户回填。
+> - **用户操作**：v5 就绪后仅做 R1—R6 受影响项短回归（正常预置 PPT 视觉失败≠R6 通过——
+>   降级呈现另列），随后 Android；**不重复 v2 D1—D10（已收案）**。
+> - 零新增真实模型调用；价值评价/DEV-11/并行写入/G5 维持原约定（未开放/未宣布）。
+> 历史快照（第三十八轮起）见下文各节；工程坑与旧轮细节以各轮快照为准。
+## 上一轮快照（2026-10-03 第三十八轮）
 
 > 本轮=**D1—D10 收案（v2 范围通过）+现场八缺陷修复+PPT 缺口收口+v3 修复包**。
 > 收案记录=docs/implementation/dev25-dual-acceptance-record-20261003.md（D7 支持事件与

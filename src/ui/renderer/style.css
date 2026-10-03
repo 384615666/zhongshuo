@@ -166,13 +166,13 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .slide-card { border: 1px solid var(--border, #d0d4dc); background: #fff; padding: 8px 10px; }
 .slide-card .attach-preview-text { max-height: 180px; }
 
-/* ---------- 第四十轮·选型 A：渲染器侧视觉预览（pptx-renderer / docx-preview） ---------- */
+/* ---------- 第四十轮·选型 A：渲染器侧视觉预览（pptx-renderer / docx-preview） ----------
+   第四十一轮 §4：docx-preview 渲染进 Shadow DOM（.docx-visual-shadow-host 内 attachShadow）——
+   文档 CSS 与宿主互不可达；内层样式由 shadow 内 <style> 与库自带样式负责（外层选择器
+   无法跨入 shadow，不再在此维护内层规则）。 */
 .pptx-visual-stage { overflow: auto; border: 1px solid var(--border, #d0d4dc); border-radius: 6px; background: #fff; margin: 6px 0; max-height: 300px; }
 .docx-visual-box { overflow: auto; border: 1px solid var(--border, #d0d4dc); border-radius: 6px; background: #fff; margin: 6px 0; max-height: 300px; padding: 8px; }
-.docx-visual-box .docx-wrapper { background: #fff; padding: 0; }
-.docx-visual-box .docx-wrapper > section.docx { box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12); margin-bottom: 8px; padding: 10px 14px; }
-.docx-visual-box table { border-collapse: collapse; }
-.docx-visual-box td, .docx-visual-box th { border: 1px solid #c8ccd4; padding: 2px 8px; font-size: 12px; }
+.docx-visual-shadow-host { display: block; }
 
 /* ---------- 第三十轮：预览工具条/Markdown/消息操作/Activity/导出 ---------- */
 .preview-tools { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }

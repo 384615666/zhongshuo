@@ -107,7 +107,8 @@ const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v4 受影响项短回归结果（用
 | R3 | 重启后侧栏/项目自动恢复 | | | |
 | R4 | 防护拒绑 claude（正式错误）/fake 可绑 | | | |
 | R5 | 设备列表可滚动可达+LAN 虚拟网卡标注 | | | |
-| R6 | PPT 预览（翻页/缩放/降级标注/缓存命中） | | | |
+| R6 | PPT 视觉预览（图表/表格实际渲染·翻页/缩放生效；**正常预置样本视觉不可用≠通过**——降级呈现另记 FAIL 并截图原因） | | | |
+| R7 | Word 视觉预览（拖入任一 .docx→芯片点击：表格/图片/分页呈现+**聊天界面按钮颜色不变**[样式隔离]） | | | |
 
 异常与备注：
 `;
@@ -173,7 +174,7 @@ const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服
 
 ## 短回归与结果
 
-- 六项回归（R1 恢复执行/R2 继续队列/R3 侧栏恢复/R4 防护拒绑/R5 设备列表可达/R6 PPT 预览）：
+- 七项回归（R1 恢复执行/R2 继续队列/R3 侧栏恢复/R4 防护拒绑/R5 设备列表可达/R6 PPT 视觉预览[正常样本必须实际渲染]/R7 Word 预览+样式隔离）：
   按 \`RESULTS/SHORT-REGRESSION-template.md\` 执行并回填（每项 PASS/FAIL/BLOCKED+一句话+截图名）。
 - 机械负例自检保留（可选）：面板「自检（机械负例）」→ 双击 \`run-self-check.bat\` 导出
   （输出在本包 \`RESULTS/self-check-*.json\`）。
@@ -235,6 +236,25 @@ async function build(frozenDir = frozenDefault) {
   mkdirSync(join(outRoot, 'RESULTS', 'shots'), { recursive: true });
   cpSync(join(repo, 'scripts', 'dev25-dual', 'seed-client.cjs'), join(outRoot, 'seed', 'seed-client.cjs'));
   cpSync(join(repo, 'scripts', 'dev25-dual', 'self-check.cjs'), join(outRoot, 'selfcheck', 'self-check.cjs'));
+  // 第四十一轮 §5：预览 vendor 许可/来源材料随包（实际分发依赖逐项核对路径存在）。
+  const licDir = join(outRoot, 'licenses-preview-vendor');
+  mkdirSync(licDir, { recursive: true });
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'PROVENANCE.json'), join(licDir, 'pptx-renderer.PROVENANCE.json'));
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'LICENSE'), join(licDir, 'pptx-renderer.LICENSE'));
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'THIRD_PARTY_NOTICES.md'), join(licDir, 'pptx-renderer.THIRD_PARTY_NOTICES.md'));
+  cpSync(join(repo, 'node_modules', 'docx-preview', 'LICENSE'), join(licDir, 'docx-preview.LICENSE'));
+  cpSync(join(repo, 'node_modules', 'jszip', 'LICENSE.markdown'), join(licDir, 'jszip.LICENSE.markdown'));
+  cpSync(join(repo, 'node_modules', 'dompurify', 'LICENSE'), join(licDir, 'dompurify.LICENSE'));
+  cpSync(join(repo, 'node_modules', 'dompurify', 'LICENSE-MPL'), join(licDir, 'dompurify.LICENSE-MPL'));
+  cpSync(join(repo, 'node_modules', 'markdown-it', 'LICENSE'), join(licDir, 'markdown-it.LICENSE'));
+  writeFileSync(join(licDir, 'README.md'), [
+    '# 预览引擎随包材料（第四十一轮）',
+    '',
+    'pptx-renderer 1.3.0=受管 vendored 产物（PROVENANCE 钉版本+sha256；内捆 JSZip+ECharts——ECharts 为 Apache-2.0，其 notice 见 pptx-renderer.THIRD_PARTY_NOTICES.md）。',
+    'docx-preview 0.4.1（MIT）/JSZip 3.10.2（MIT）/DOMPurify（Apache-2.0 或 MPL-2.0 双许可）/markdown-it（MIT）从固定版本 node_modules 拷贝。',
+    '全部本地随包，无 CDN。嵌入 HTML（altChunks）首版不支持（renderAltChunks:false）。',
+    '',
+  ].join('\n'));
   writeFileSync(join(outRoot, 'start-server.bat'), BAT_LAUNCHER, 'ascii');
   writeFileSync(join(outRoot, 'run-self-check.bat'), BAT_SELFCHECK, 'ascii');
   writeFileSync(join(outRoot, 'README-双机验收.md'), README, 'utf8');

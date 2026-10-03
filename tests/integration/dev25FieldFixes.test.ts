@@ -129,7 +129,7 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
     const list2 = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>('conversation.list', {});
     const me2 = list2.conversations.find((c) => c.conversationId === conv.conversationId)!;
     expect(me2.interruptedTasks[0]!.recoverable).toBe(false);
-    expect(me2.interruptedTasks[0]!.blockReason).toContain('退出未确认');
+    expect(me2.interruptedTasks[0]!.blockReason).toContain('protection_state=retained'); // 第四十一轮：对账后保护=独立持久事实（无租约同样拦）
     const stillRejected = await cmdRaw('task.redispatch', { taskId: c2.taskId, reason: 'interrupted-recovery', sourceRunId: runId2 });
     expect(stillRejected.ok).toBe(false);
     expect(stillRejected.error?.code).toBe('RECONCILE_REQUIRED');
@@ -294,5 +294,94 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
     const mine = await cmd<{ projects: Array<{ blockedTasks: Array<{ task_id: string; reason: string | null }> }> }>('mine.pending', {});
     const b = mine.projects.flatMap((p) => p.blockedTasks).find((x) => x.task_id === r.taskId)!;
     expect(b.reason).toContain('指派成员');
+  }, 60_000);
+});
+
+describe('第四十一轮 §2（review-r40）：无租约人工退款——保护状态独立持久化', () => {
+  it('notStarted 无租约：retained 拦呈现与派发（零 outbox）→ 恢复中心可见 → 无证据解除被拒 → none 证据解除 → 恰一次恢复 → 跨重启同判', async () => {
+    const { db, cmd, cmdRaw } = await makeDb(join(tmpRoot, 'r41-noLease'));
+    const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p1', peerMemberId: 'mA', title: '无租约人工退款' });
+    const c1 = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '无租约中断任务', intent: 'default', mentions: [] });
+    db.prepare(`UPDATE outbox SET status = 'done' WHERE dispatch_key = ?`).run(`dmtask:${c1.taskId}:initial`);
+    const runId = `run_${randomUUID()}`;
+    const turnId = `turn_${randomUUID()}`;
+    db.transaction(() => {
+      db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId, c1.taskId, conv.conversationId);
+      db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c1.taskId}:initial', 1, 1)`).run(turnId, runId, conv.conversationId);
+    })();
+    // ① 对账前：UNKNOWN 未闭环拦。
+    const before = await cmdRaw('task.redispatch', { taskId: c1.taskId, reason: 'x' });
+    expect(before.error?.code).toBe('RECONCILE_REQUIRED');
+    // ② 正式人工退款（无租约、无登记——复核反例形态）：FAILED/refunded 且 protectionRetained。
+    const rec = await cmd<{ protectionRetained: boolean; turnFinalStatus: string }>('recovery.reconcile', { turnId, verdict: 'notStarted', note: '测试：无租约人工声明未启动', manualRiskAck: true });
+    expect(rec.turnFinalStatus).toBe('FAILED');
+    expect(rec.protectionRetained).toBe(true);
+    // ③ 呈现与守卫：protection_state=retained 拦（无租约不等于退出已确认）；恢复中心可见（leaseCount=0）。
+    const list = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>('conversation.list', {});
+    const me = list.conversations.find((c) => c.conversationId === conv.conversationId)!;
+    expect(me.interruptedTasks[0]!.recoverable).toBe(false);
+    expect(me.interruptedTasks[0]!.blockReason).toContain('protection_state=retained');
+    const status = await cmd<{ pendingRelease: Array<{ turnId: string; leaseCount: number; protectionState: string }> }>('recovery.status', {});
+    const row = status.pendingRelease.find((r) => r.turnId === turnId);
+    expect(row != null && row.leaseCount === 0 && row.protectionState === 'retained').toBe(true);
+    // ④ 派发准入：拒绝且零新增 outbox。
+    const rej = await cmdRaw('task.redispatch', { taskId: c1.taskId, reason: 'x' });
+    expect(rej.ok).toBe(false);
+    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
+    // ⑤ 无证据解除被拒（不再无租约 no-op 冒充已闭环）：无登记→identity-missing→STALE_REVISION。
+    const denied = await cmdRaw('recovery.releaseProtection', { turnId, note: '测试：无证据尝试解除' });
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.code).toBe('STALE_REVISION');
+    expect((db.prepare('SELECT protection_state p FROM agent_turns WHERE id = ?').get(turnId) as { p: string | null }).p).toBe('retained');
+    // ⑥ 正式证据解除（none 模型登记=诚实事实）：stateChanged + released；此后可恢复。
+    registerTurnProcess(db, { turnId, runId, memberId: 'mA', adapterKind: 'fake', processModel: 'none', pid: null, startedAtMs: null, identitySource: 'none' });
+    const rel = await cmd<{ stateChanged: boolean }>('recovery.releaseProtection', { turnId, note: '测试：none 模型程序事实解除' });
+    expect(rel.stateChanged).toBe(true);
+    expect((db.prepare('SELECT protection_state p FROM agent_turns WHERE id = ?').get(turnId) as { p: string | null }).p).toBe('released');
+    const list2 = await cmd<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean }> }> }>('conversation.list', {});
+    expect(list2.conversations.find((c) => c.conversationId === conv.conversationId)!.interruptedTasks[0]!.recoverable).toBe(true);
+    // ⑦ 恰一次恢复：入队 1 行；重复点击幂等冲突。
+    const r1 = await cmd<{ enqueued: boolean; dispatchKey: string }>('task.redispatch', { taskId: c1.taskId, reason: 'manual-recovery' });
+    expect(r1.enqueued).toBe(true);
+    expect((db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(1);
+    const dup = await cmdRaw('task.redispatch', { taskId: c1.taskId, reason: 'manual-recovery' });
+    expect(dup.ok).toBe(false);
+    expect(dup.error?.code).toBe('IDEMPOTENCY_CONFLICT');
+  }, 120_000);
+
+  it('跨重启同判：文件库重开后 retained 仍拦（protection_state 持久）', async () => {
+    const dbPath = join(tmpRoot, 'r41-restart', 'state.sqlite');
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const db = openDatabase(dbPath);
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','项目甲',?,?, '{}', 0)`).run(tmpRoot, tmpRoot);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','Guide A','agent',1)`).run();
+    const cmdOn = <T,>(target: ZhongshuoDatabase) => async (method: string, params: unknown): Promise<T> => {
+      const deps = { db: target, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'r41-restart', 'app') };
+      const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `r41x-${randomUUID().slice(0, 8)}`, method, params }) as unknown as { ok: boolean; data?: T; error?: { code: string; message: string } };
+      if (!r.ok) throw new Error(`${r.error?.code ?? ''}: ${r.error?.message ?? 'failed'}`);
+      return r.data as T;
+    };
+    const conv = await cmdOn<{ conversationId: string }>(db)('conversation.create', { projectId: 'p1', peerMemberId: 'mA', title: '跨重启无租约' });
+    const c = await cmdOn<{ taskId: string }>(db)('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '跨重启无租约中断', intent: 'default', mentions: [] });
+    const runId = `run_${randomUUID()}`;
+    const turnId = `turn_${randomUUID()}`;
+    db.prepare(`UPDATE outbox SET status = 'done' WHERE dispatch_key = ?`).run(`dmtask:${c.taskId}:initial`);
+    db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES (?, ?, ?, 'DIRECT', 0, 'INTERRUPTED')`).run(runId, c.taskId, conv.conversationId);
+    db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES (?, ?, ?, 'mA', 'direct.work', 'UNKNOWN', 'dmtask:${c.taskId}:initial', 1, 1)`).run(turnId, runId, conv.conversationId);
+    const rec = await cmdOn<{ protectionRetained: boolean }>(db)('recovery.reconcile', { turnId, verdict: 'notStarted', note: '跨重启前人工退款', manualRiskAck: true });
+    expect(rec.protectionRetained).toBe(true);
+    db.close();
+    // 「进程二」：重开同一库——retained 仍拦（呈现与命令面同源）。
+    const db2 = openDatabase(dbPath);
+    const list = await cmdOn<{ conversations: Array<{ conversationId: string; interruptedTasks: Array<{ recoverable: boolean; blockReason: string | null }> }> }>(db2)('conversation.list', {});
+    const me = list.conversations.find((x) => x.conversationId === conv.conversationId)!;
+    expect(me.interruptedTasks[0]!.recoverable).toBe(false);
+    
+    expect(me.interruptedTasks[0]!.blockReason).toContain('protection_state=retained');
+    const rej = await dispatchDaemonCommand({ db: db2, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'r41-restart', 'app') }, { protocolVersion: 1, commandId: `r41x-${randomUUID().slice(0, 8)}`, method: 'task.redispatch', params: { taskId: c.taskId, reason: 'x' } }) as unknown as { ok: boolean; error?: { code: string } };
+    expect(rej.ok).toBe(false);
+    expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    db2.close();
   }, 60_000);
 });

@@ -1085,15 +1085,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (stopRecordRow != null) { try { stopRecord = JSON.parse(stopRecordRow.value); } catch { stopRecord = null; } }
         const activeUndos = deps.db.prepare(`SELECT id, change_set_id AS changeSetId, status FROM change_set_undos WHERE status IN ('in_progress','failed')`).all();
         const heldLeases = deps.db.prepare(`SELECT lock_domain, owner_turn_id, status, heartbeat_at FROM workspace_leases WHERE status != 'released'`).all();
-        // 「预算已处置、保护待解除」遗留保护（人工声明 notStarted 后可经 releaseProtection 收口）。
+        // 「预算已处置、保护待解除」遗留保护（第四十一轮 §2：以 protection_state='retained'
+        // 为准——无租约的人工退款保留项不再从恢复中心消失；leaseCount 如实分列）。
         const pendingRelease = deps.db.prepare(
-          `SELECT l.owner_turn_id AS turnId, t.budget_mark AS budgetMark, t.status AS turnStatus,
-                  count(*) AS leaseCount, max(r.result) AS lastProbeResult
-           FROM workspace_leases l
-           JOIN agent_turns t ON t.id = l.owner_turn_id
-           LEFT JOIN recovery_exit_probes r ON r.turn_id = l.owner_turn_id
-           WHERE l.status != 'released'
-           GROUP BY l.owner_turn_id`,
+          `SELECT t.id AS turnId, t.budget_mark AS budgetMark, t.status AS turnStatus, t.protection_state AS protectionState,
+                  (SELECT count(*) FROM workspace_leases l WHERE l.owner_turn_id = t.id AND l.status != 'released') AS leaseCount,
+                  (SELECT p.result FROM recovery_exit_probes p WHERE p.turn_id = t.id ORDER BY p.observed_at DESC LIMIT 1) AS lastProbeResult
+           FROM agent_turns t
+           WHERE t.protection_state = 'retained'`,
         ).all();
         return withCommandId({
           ok: true,
@@ -1216,7 +1215,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 }
                 deps.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(next), run.id);
               }
-              deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED', budget_mark = 'refunded' WHERE id = ?`).run(turn.id);
+              deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED', budget_mark = 'refunded', protection_state = 'retained' WHERE id = ?`).run(turn.id);
               turnFinalStatus = 'FAILED'; reason = 'manual-not-started-risk-ack'; protectionRetained = true;
               emit({ verdict: 'notStarted', recordedAs: 'manual-claim', protectionRetained, turnFinalStatus, reason, note: '人工声明（风险确认）：预算退款；租约/准入保留——程序未确认无遗留进程' });
             } else {
@@ -1229,9 +1228,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               if (turn.budget_mark == null) deps.db.prepare(`UPDATE agent_turns SET budget_mark = 'settled' WHERE id = ?`).run(turn.id);
               const p = probe!;
               if (p.result === 'no-os-process') {
-                // 无子进程模型（程序事实）：无 OS 遗留进程可能——释放保护。
+                // 无子进程模型（程序事实）：无 OS 遗留进程可能——释放保护（041 权威状态=released）。
                 releasedLeases = releaseLeases();
-                deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED' WHERE id = ?`).run(turn.id);
+                deps.db.prepare(`UPDATE agent_turns SET status = 'FAILED', protection_state = 'released' WHERE id = ?`).run(turn.id);
                 turnFinalStatus = 'FAILED'; reason = 'executed-no-os-process';
                 emit({ verdict: 'executed', exitFact: 'no-os-process', probe: { probeId: p.probeId, result: p.result, detail: p.detail }, releasedLeases, turnFinalStatus, reason });
               } else {
@@ -1239,6 +1238,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 // shared 的 exited 自动释放路径已关闭，probe 不再产生 exited）：结算预算但
                 // **保留租约与准入占位**、turn 保持 UNKNOWN——观察事实见 probe.detail；
                 // budget_mark 已防重复结算；解除待受管生命周期机制（Job Object/ETW 等另批）。
+                // 041：保护保留=独立持久事实（无租约的 turn 同样不得因状态推导消失）。
+                deps.db.prepare(`UPDATE agent_turns SET protection_state = 'retained' WHERE id = ?`).run(turn.id);
                 turnFinalStatus = 'UNKNOWN'; reason = `executed-exit-${p.result}-protection-retained`; protectionRetained = true;
                 emit({ verdict: 'executed', exitFact: p.result, protectionRetained: true, probe: { probeId: p.probeId, result: p.result, processModel: p.processModel, pid: p.pid, observedAt: p.observedAt, detail: p.detail }, reason });
               }
@@ -1260,12 +1261,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'recovery.releaseProtection': {
-        // DEV-13（第七轮·补）：解除「预算已处置、保护未解除」的遗留保护（人工声明 notStarted
-        // 后租约保留——后续取得服务端退出证据时的正式收口入口）。
-        // - 前置：该 turn 存在未释放租约；预算处置必须已完成（budget_mark 非空）或 turn 已
-        //   终态——顺序错误（应先 reconcile）明确拒绝；无租约=幂等 no-op。
-        // - 只按服务端取证解除（exited/no-os-process）：alive/unknown/身份缺失/复用→拒绝并
-        //   保留保护；**不再退款、不再结算、不改写原人工声明**（budget_json/budget_mark 全不动）。
+        // DEV-13（第七轮·补；第四十一轮 §2 修订）：解除「预算已处置、保护未解除」的遗留保护。
+        // - 前置：该 turn 存在未释放租约**或 protection_state='retained'**（041 权威状态——
+        //   无租约但保护保留的 turn 不得因「无租约」直接 no-op 当已闭环，须走服务端证据链）；
+        //   预算处置必须已完成（budget_mark 非空）或 turn 已终态——顺序错误明确拒绝；
+        //   两者皆无=幂等 no-op。
+        // - 只按服务端取证解除（受管 Job 证据/no-os-process）：alive/unknown/身份缺失/复用→
+        //   拒绝并保留保护；**不再退款、不再结算、不改写原人工声明**（budget_json/budget_mark
+        //   全不动）；解除=protection_state='released'+事件（跨重启同判）。
         // - 同 daemon 联动 releaseAdmission；全部依据 DB——重启后可继续收口。
         const params = z.strictObject({
           turnId: z.string().min(1),
@@ -1273,11 +1276,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           probeId: z.string().min(1).optional(),
         }).parse(env.params);
         const result = run(() => {
-          const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null } | undefined;
+          const turn = deps.db.prepare('SELECT id, run_id, status, budget_mark, protection_state FROM agent_turns WHERE id = ?').get(params.turnId) as { id: string; run_id: string; status: string; budget_mark: string | null; protection_state: string | null } | undefined;
           if (turn == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `turn 不存在：${params.turnId}`);
           const leases = deps.db.prepare(`SELECT lock_domain FROM workspace_leases WHERE owner_turn_id = ? AND status != 'released'`).all(turn.id) as Array<{ lock_domain: string }>;
-          if (leases.length === 0) {
-            return { turnId: turn.id, stateChanged: false as const, releasedLeases: [] as string[], note: '该 turn 无未释放租约（保护已收口）——幂等 no-op' };
+          if (leases.length === 0 && turn.protection_state !== 'retained') {
+            return { turnId: turn.id, stateChanged: false as const, releasedLeases: [] as string[], note: '该 turn 无未释放租约且无保留保护（protection_state 非 retained）——幂等 no-op' };
           }
           if (turn.budget_mark == null && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(turn.status)) {
             throw new DaemonCommandError('STALE_REVISION', `顺序错误：该 turn 仍 ${turn.status} 且预算未处置——先走 recovery.reconcile 对账，再解除保护`);
@@ -1319,6 +1322,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               for (const l of leases) {
                 deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
               }
+              deps.db.prepare(`UPDATE agent_turns SET protection_state = 'released' WHERE id = ?`).run(turn.id);
               emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: 'protection-released-managed-job-evidence', managedEvidence: evidence, managedJobId: reg.managed_job_id });
             });
             txm();
@@ -1340,6 +1344,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             for (const l of leases) {
               deps.db.prepare(`UPDATE workspace_leases SET status = 'released' WHERE lock_domain = ? AND owner_turn_id = ?`).run(l.lock_domain, turn.id);
             }
+            deps.db.prepare(`UPDATE agent_turns SET protection_state = 'released' WHERE id = ?`).run(turn.id);
             // 预算处置与原人工声明不动（budget_json/budget_mark 均不写）。
             emit({ released: true, releasedLeases: leases.map((l) => l.lock_domain), reason: `protection-released-${probe.result}` });
           });

@@ -429,10 +429,16 @@ let previewGeneration = 0;
 // 归属当前面板；关闭/切会话即 dispose+abort（在途解析中止；迟到结果不得重开/覆盖面板）。
 let activePptxViewer = null;
 let activePreviewAbort = null;
+/** 释放当前轮持有的预览资源（第四十一轮 §3：不增代次、不藏面板）——新轮启动前调用：
+ * 在途 controller abort + viewer dispose，指针一并收回。旧轮资源不得被新轮指针覆盖后
+ * 遗失；迟到轮的清理只作用于自身（activePptxViewer 仍是本轮 viewer 时才动）。 */
+function releaseActivePreviewResources() {
+  if (activePreviewAbort != null) { try { activePreviewAbort.abort(new Error('preview-superseded')); } catch (e) { /* 已中止 */ } activePreviewAbort = null; }
+  if (activePptxViewer != null) { try { activePptxViewer.dispose(); } catch (e) { /* 已释放 */ } activePptxViewer = null; }
+}
 function closeAttachPreview() {
   previewGeneration += 1; // 在途预览请求全部作废
-  if (activePreviewAbort != null) { try { activePreviewAbort.abort(new Error('preview-closed')); } catch (e) { /* 已中止 */ } activePreviewAbort = null; }
-  if (activePptxViewer != null) { try { activePptxViewer.dispose(); } catch (e) { /* 已释放 */ } activePptxViewer = null; }
+  releaseActivePreviewResources();
   el('attach-preview')?.classList.add('hidden');
 }
 // PDF 视觉渲染（第二十九轮三）：渲染器受限预览侧加载随包 pdfjs ESM（zsres:// 特权协议下
@@ -829,6 +835,9 @@ function wireExportControls() {
  * ——行号锚点不漂移到新版）。 */
 async function previewAttachment(attachmentId, filename, kindHint) {
   const myGen = ++previewGeneration;
+  // 第四十一轮 §3：新轮启动即回收旧轮资源（在途 abort+viewer dispose）——旧 viewer 不得被
+  // 新轮指针覆盖后遗失；迟到旧轮只清理自身（见各 alive 门）。
+  releaseActivePreviewResources();
   const alive = () => myGen === previewGeneration;
   const originView = currentView(); // 来源会话快照（受限资源标注）
   if (kindHint === 'pdf_file') {
@@ -1002,19 +1011,29 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     oclose.onclick = () => closeAttachPreview();
     owrap.append(ohead, oclose);
     if (doc.kind === 'docx_file') {
-      // 视觉预览（第四十轮·选型 A）：docx-preview 渲染器侧（多页/表格/图片/页眉页脚排版
-      // 尽力还原；样式注入限定在预览容器内）；失败回退既有白名单净化 HTML（通道保留）。
+      // 视觉预览（第四十轮·选型 A；第四十一轮 §4 隔离修订）：docx-preview 渲染进 **Shadow DOM**
+      // （attachShadow open 根=真正的 CSS 边界——文档 <style> 的选择器无法越出 shadow，宿主
+      // 控件样式也不受文档 CSS 影响；「style 节点位于 div 内」不构成隔离——复核实证 styleId
+      // 含逗号可命中预览外控件）。嵌入 HTML（altChunks）首版不支持：显式 renderAltChunks:false
+      // （不创建无 sandbox 的 iframe.srcdoc）；失败回退白名单净化 HTML（通道保留）。
       if (doc.visualBytesAvailable === true && doc.bytesBase64 != null) {
         try {
           const dx = await loadRendererDocxPreview();
           if (!alive()) return;
           const dvBox = document.createElement('div');
           dvBox.className = 'docx-visual-box';
-          await dx.renderAsync(base64ToBytes(doc.bytesBase64), dvBox, dvBox, { inWrapper: true, ignoreWidth: false, ignoreHeight: false, ignoreFonts: false, breakPages: true, useBase64URL: true, experimental: true });
-          if (!alive()) return;
+          const shadowHost = document.createElement('div');
+          shadowHost.className = 'docx-visual-shadow-host';
+          dvBox.append(shadowHost);
+          const shadow = shadowHost.attachShadow({ mode: 'open' });
+          const shadowStyle = document.createElement('style');
+          shadowStyle.textContent = '.docx-wrapper{background:#fff;padding:0;}.docx-wrapper>section.docx{box-shadow:0 1px 4px rgba(15,23,42,.12);margin-bottom:8px;padding:10px 14px;}table{border-collapse:collapse;}td,th{border:1px solid #c8ccd4;padding:2px 8px;font-size:12px;}';
+          shadow.append(shadowStyle);
+          await dx.renderAsync(base64ToBytes(doc.bytesBase64), shadow, shadow, { inWrapper: true, ignoreWidth: false, ignoreHeight: false, ignoreFonts: false, breakPages: true, useBase64URL: true, experimental: true, renderAltChunks: false });
+          if (!alive()) { dvBox.remove(); return; }
           const dvHead = document.createElement('div');
           dvHead.className = 'meta';
-          dvHead.textContent = `🖼 视觉预览（docx-preview 渲染器侧本地渲染）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
+          dvHead.textContent = `🖼 视觉预览（docx-preview 渲染器侧本地渲染·Shadow DOM 隔离）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
           owrap.append(dvHead, dvBox);
         } catch (e) {
           const w = document.createElement('div');
@@ -1204,6 +1223,11 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           vwrap.append(vhead, zoomRow, stage, vnote);
           owrap.append(vwrap);
           await show(1);
+          // 迟到首屏（§3）：show 完成后代次已失——只清理自身 viewer（仍是本轮指针时），不改面板。
+          if (!alive()) {
+            if (activePptxViewer === viewer) { try { viewer.dispose(); } catch (e) { /* 已释放 */ } activePptxViewer = null; }
+            return;
+          }
         } catch (e) {
           const pnote = document.createElement('div');
           pnote.className = 'meta warn';
@@ -1217,6 +1241,10 @@ async function previewAttachment(attachmentId, filename, kindHint) {
         owrap.append(pnote);
       }
     }
+    // 最终 DOM 提交前代次门（第四十一轮 §3）：迟到的任何分支不得把根内容替换成旧轮。
+    // 迟到轮**不调用** releaseActivePreviewResources（那会回收新轮资源）——自身 viewer 已在
+    // 分支内按「仍是本轮指针」条件清理；新轮启动时的入口释放已覆盖更早的旧资源。
+    if (!alive()) return;
     obox.replaceChildren(owrap);
     return;
   }
@@ -3370,7 +3398,11 @@ function renderRecoveryPanel(panel, data) {
   // 遗留保护（如实）：对账已收口（人工声明等）但租约仍持有的 turn——人工路径不解除物理
   // 写入保护，界面不得暗示已恢复完成。
   const orphanLeases = (data.heldLeases ?? []).filter((l) => !unknown.some((t) => t.id === l.owner_turn_id));
-  if (unknown.length === 0 && undos.length === 0 && orphanLeases.length === 0) {
+  // 第四十一轮 §2：无租约的「保护保留」独立行（protection_state=retained——人工退款/取证
+  // 未确认退出的 turn 可能没有租约，但恢复必须经正式证据解除；不得从恢复中心消失）。
+  const shownTurnIds = new Set([...unknown.map((t) => t.id), ...orphanLeases.map((l) => l.owner_turn_id)]);
+  const retainedOnly = (data.pendingRelease ?? []).filter((r) => !shownTurnIds.has(r.turnId));
+  if (unknown.length === 0 && undos.length === 0 && orphanLeases.length === 0 && retainedOnly.length === 0) {
     // 全部收口：清空并隐藏（保留旧 DOM 会让已收口 turn 仍被读到——表现为“行不消失”）。
     panel.innerHTML = '';
     panel.classList.add('hidden');
@@ -3381,7 +3413,7 @@ function renderRecoveryPanel(panel, data) {
   el('recovery-help').classList.remove('hidden'); // START-07 首版：恢复场景可读帮助随恢复面出现
   panel.innerHTML = '';
   const head = document.createElement('div');
-  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项` : ''}`;
+  head.textContent = `恢复中心：待对账 ${unknown.length} 项${undos.length > 0 ? `；未收口撤销 ${undos.length} 项` : ''}${retainedOnly.length > 0 ? `；保留保护 ${retainedOnly.length} 项（无租约）` : ''}`;
   panel.appendChild(head);
   // 未收口撤销行（第九轮）：in_progress/failed 可续跑（changeset.undo 逐步幂等重验，不覆盖
   // 用户改动；conflict 不可自动继续——展示冲突原因，人工处置后重新发起）。
@@ -3422,6 +3454,20 @@ function renderRecoveryPanel(panel, data) {
       row.appendChild(b);
       panel.appendChild(row);
     }
+  }
+  for (const r of retainedOnly) {
+    const row = document.createElement('div');
+    row.className = 'recovery-orphan-row';
+    row.dataset.turnId = r.turnId;
+    const facts = document.createElement('div');
+    facts.className = 'recovery-facts';
+    facts.textContent = `保留保护：${r.turnId}（状态=${r.turnStatus ?? '?'}·预算处置=${r.budgetMark ?? '?'}·无未释放租约——无租约不等于退出已确认）——须服务端程序证据解除（recovery.releaseProtection）后任务才可恢复执行`;
+    row.appendChild(facts);
+    const b = document.createElement('button');
+    b.textContent = '继续核对并解除（服务端取证）';
+    b.onclick = () => void releaseRetainedProtection(r.turnId);
+    row.appendChild(b);
+    panel.appendChild(row);
   }
   for (const t of unknown) {
     const row = document.createElement('div');

@@ -19,6 +19,7 @@ import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
+import { registerTurnProcess } from '../../src/daemon/processRegistry.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-budget-grant-'));
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
@@ -178,6 +179,12 @@ describe('修复预算统一授权账目（两份独立逻辑输出及其修复�
     db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES ('turn_bg_refund', ?, 'c1', 'gth3', 'mA', 'direct.work', 'UNKNOWN', 'task:gtk3:crash', 2, 2)`).run(runId);
     await cmd(db, 'recovery.reconcile', { turnId: 'turn_bg_refund', verdict: 'notStarted', manualRiskAck: true, note: '退款豁免验证（测试注入）' });
     expect((db.prepare('SELECT budget_mark FROM agent_turns WHERE id = ?').get('turn_bg_refund') as { budget_mark: string }).budget_mark).toBe('refunded');
+    // 第四十一轮：对账后保护=独立持久事实（无租约也拦）——先以程序证据解除（none 模型登记=
+    // 诚实事实）再修复；解除前后保护状态断言。
+    expect((db.prepare('SELECT protection_state FROM agent_turns WHERE id = ?').get('turn_bg_refund') as { protection_state: string | null }).protection_state).toBe('retained');
+    registerTurnProcess(db, { turnId: 'turn_bg_refund', runId, memberId: 'mA', adapterKind: 'fake', processModel: 'none', pid: null, startedAtMs: null, identitySource: 'none' });
+    await cmd(db, 'recovery.releaseProtection', { turnId: 'turn_bg_refund', note: '退款豁免验证：程序证据解除（测试）' });
+    expect((db.prepare('SELECT protection_state FROM agent_turns WHERE id = ?').get('turn_bg_refund') as { protection_state: string | null }).protection_state).toBe('released');
     // 修复#1：carryover=非退款计数（turn1=1；refunded turn 豁免）。
     await cmd(db, 'task.redispatch', { taskId, formatRepair: true, reason: '修复' });
     await worker.runOnce(); // 修复通过 → DONE

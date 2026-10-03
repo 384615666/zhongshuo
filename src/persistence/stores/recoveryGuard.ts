@@ -20,7 +20,7 @@ export interface RecoveryBlockReason {
   code: 'WORKER_STILL_RUNNING' | 'RECONCILE_REQUIRED';
   message: string;
   /** 界定用事实（不进用户文案）：未释放租约数/未闭环 turn。 */
-  fact: { kind: 'in-flight-runs' | 'in-flight-turns' | 'held-lease' | 'unclosed-unknown'; count?: number; turnId?: string; lockDomain?: string };
+  fact: { kind: 'in-flight-runs' | 'in-flight-turns' | 'protection-retained' | 'held-lease' | 'unclosed-unknown'; count?: number; turnId?: string; lockDomain?: string };
 }
 
 /** 任务是否可新建派发（redispatch/恢复）：null=可；否则返回阻断原因。 */
@@ -38,7 +38,24 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
   if (inFlightTurns.c > 0) {
     return { code: 'WORKER_STILL_RUNNING', message: `该任务已有在途/未收口 turn（${inFlightTurns.c} 个）：不得并发追加`, fact: { kind: 'in-flight-turns', count: inFlightTurns.c } };
   }
-  // 保护未解除（§2.2）：未释放租约按任务全量核对——FAILED/refunded 的人工声明同样拦。
+  // 保护未解除（第四十一轮 §2 P1——权威持久事实）：对账明确保留（protectionRetained）的
+  // turn 一律拦——**无租约不能代表退出已确认**（复核反例：notStarted 人工退款后 FAILED/
+  // refunded 且保护保留，旧推导（UNKNOWN+租约）双源齐失而放行）。
+  const retained = db.prepare(
+    `SELECT t.id AS turnId FROM agent_turns t
+     JOIN workflow_runs r ON r.id = t.run_id
+     WHERE r.task_id = ? AND t.protection_state = 'retained'
+     LIMIT 1`,
+  ).get(taskId) as { turnId: string } | undefined;
+  if (retained != null) {
+    return {
+      code: 'RECONCILE_REQUIRED',
+      message: `存在对账后仍保留的保护（turn ${retained.turnId.slice(0, 14)}… protection_state=retained——人工退款/取证未确认退出时保护保留，无租约不等于退出已确认）——须先在桌面「恢复中心」以服务端程序证据解除（recovery.releaseProtection）再恢复执行`,
+      fact: { kind: 'protection-retained', turnId: retained.turnId },
+    };
+  }
+  // 保护未解除（§2.2）：未释放租约按任务全量核对——FAILED/refunded 的人工声明同样拦
+  // （旧数据/未走 041 语义路径的兜底——protection_state 为 NULL 但租约未释放）。
   const heldLease = db.prepare(
     `SELECT l.lock_domain AS lockDomain, t.id AS turnId FROM workspace_leases l
      JOIN agent_turns t ON t.id = l.owner_turn_id
