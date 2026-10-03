@@ -319,8 +319,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       if (fs.existsSync(pptPath)) {
         const rooms0 = await cmd(pipe, 'room.list', { projectId });
         const room0 = (rooms0.items ?? [])[0];
-        const pool = await cmd(pipe, 'room.pool', { projectId, roomId: room0 != null ? room0.id : undefined }).catch(() => null);
-        const alreadyPpt = pool != null && JSON.stringify(pool).includes('回归幻灯.pptx');
+        // 幂等查重：room.pool 只收 roomId（strictObject——多传 projectId 会被拒），且池=线程
+        // 摘要不含附件文件名——改查锚消息正文唯一标记（第四十轮自测暴露：旧文件名检查恒
+        // false→每启重传+重发）。
+        const pool = await cmd(pipe, 'room.pool', { roomId: room0 != null ? room0.id : undefined }).catch(() => null);
+        const alreadyPpt = pool != null && JSON.stringify(pool).includes('R40 短回归·PPT 预览样本');
         if (!alreadyPpt) {
           const b64 = fs.readFileSync(pptPath).toString('base64');
           const att0 = await cmd(pipe, 'attachment.uploadOffice', { conversationId: room0 != null ? room0.conversationId : undefined, filename: '回归幻灯.pptx', contentBase64: b64 });
