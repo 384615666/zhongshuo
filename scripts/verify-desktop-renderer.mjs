@@ -1288,8 +1288,15 @@ try {
       const zoomLabel = await page.readStrict(`(() => { const wrap = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); const labels = [...wrap.querySelectorAll('span.meta')]; return labels.map((l) => l.textContent).find((t) => t.includes('缩放')) ?? ''; })()`);
       record('ATT·PPT 缩放生效（标签=缩放 200%）', zoomLabel.includes('缩放 200%'), zoomLabel);
       // ④图表页**真实渲染**（第四十轮：ECharts canvas——旧「图表不渲染」占位断言历史化）。
+      // ECharts 挂载异步：有界等待 canvas 出现（run3 an7ju9 教训——即时读数会抢跑）。
       await page.evalJs(`(() => { const wrap = document.querySelector('#attach-preview .pptx-visual-stage').closest('.slides-pages'); [...wrap.querySelectorAll('button.chip')].find((b) => b.textContent.includes('下一页'))?.click(); })()`);
-      const chartInfo = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return JSON.stringify({ canvas: st?.querySelectorAll('canvas').length ?? 0, err: (st?.textContent ?? '').includes('渲染失败') }); })()`);
+      let chartCanvasCount = 0;
+      try {
+        await waitFor(async () => (await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return st ? st.querySelectorAll('canvas').length : 0; })()`)) >= 1, 12_000, 'ATT PPT 图表 canvas');
+        chartCanvasCount = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return st ? st.querySelectorAll('canvas').length : 0; })()`);
+      } catch { chartCanvasCount = 0; }
+      const chartErr = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return (st?.textContent ?? '').includes('渲染失败'); })()`);
+      const chartInfo = JSON.stringify({ canvas: chartCanvasCount, err: chartErr });
       const chart = JSON.parse(chartInfo);
       record('ATT·PPT 图表页实际渲染（ECharts canvas 非占位）', chart.canvas >= 1 && chart.err === false, chartInfo);
       // ⑤迟到响应保护（previewGeneration 守卫）：面板**开着**时再次点击芯片（新预览在途——
