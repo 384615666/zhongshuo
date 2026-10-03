@@ -797,7 +797,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
         const installation = binding.installationId == null ? null
           : (deps.db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
-        return withCommandId({ ok: true, data: { binding, installation } });
+        // 环境模式（第三十八轮 #2：验收防护包真实渠道被拒绑——设置 UI 据此提供 fake 正路径，
+        // 用户不再需要脚本自救；正式部署两标志皆 false=fake 不进产品设置面，原决策不变）。
+        return withCommandId({ ok: true, data: { binding, installation, environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);

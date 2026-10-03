@@ -407,7 +407,7 @@ async function refreshMentionPicker() {
     if (agents.length === 0) { sel.classList.add('hidden'); feedLine('warn', '该房间无启用 agent 成员——房间消息不会派发（用「仅记录」或去私信发任务）'); return; }
     for (const m of agents) {
       const o = document.createElement('option');
-      o.value = m.displayName;
+      o.value = m.id; // 提交按成员 id（mentions 合同={kind:'member',memberId}——displayName 仅展示）
       o.textContent = '@ ' + m.displayName;
       sel.appendChild(o);
     }
@@ -578,7 +578,7 @@ async function send(intent) {
   const mentionValue = t.kind === 'room' && mentionSel != null && !mentionSel.classList.contains('hidden')
     ? String(mentionSel.value || '')
     : '';
-  const mentions = mentionValue !== '' ? [mentionValue] : [];
+  const mentions = mentionValue !== '' ? [{ kind: 'member', memberId: mentionValue }] : [];
   const params = { target, body: text, intent, mentions };
   if (d.attachIds.length > 0) params.attachmentRefs = [...d.attachIds];
   try {

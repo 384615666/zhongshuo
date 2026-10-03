@@ -439,6 +439,29 @@ function countTable(dbFile, table, where = '') {
     return c;
   } catch { return `ERR`; }
 }
+/** 第三十八轮 #7 页面级：读取单值（成员 id 等构造参数）。 */
+function readField(dbFile, sql) {
+  try {
+    const req = createRequire(join(repo, 'package.json'));
+    const Database = req('better-sqlite3');
+    const db = new Database(dbFile, { readonly: true });
+    const v = (db.prepare(sql).get() ?? { v: null }).v;
+    db.close();
+    return v;
+  } catch { return null; }
+}
+/** 第三十八轮 #7 页面级：写入构造形态（中断任务/run/turn 行）——只用于页面行为验证的数据准备。 */
+function execSql(dbFile, statements) {
+  try {
+    const req = createRequire(join(repo, 'package.json'));
+    const Database = req('better-sqlite3');
+    const db = new Database(dbFile);
+    const tx = db.transaction(() => { for (const s of statements) db.exec(s); });
+    tx();
+    db.close();
+    return true;
+  } catch { return false; }
+}
 
 const waitFor = async (fn, timeoutMs, what) => {
   const deadline = Date.now() + timeoutMs;
@@ -1184,17 +1207,63 @@ try {
         dbR.close();
         record('ATT·范围随消息持久（range_spec=数据!A1:B2）', rangeRow?.range_spec === '数据!A1:B2', String(rangeRow?.range_spec ?? ''));
       }
-      await uploadViaInput(page, 'composer', craft.makePptx([{ texts: ['封面页 标题', '要点甲'], notes: '演讲备注 词' }, { texts: ['第二页 标题'], notes: null }]), '演示 幻灯.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      // 第三十八轮四：PPT 页面行为深检（不只「存在 SVG」）——真实内容/位置/翻页/缩放/降级提示/
+      // 中文与实体/迟到预览保护。样本：页 1 定位文本+图片、页 2 XML 实体、页 3 纯图表（降级）。
+      const emu38 = 9525;
+      const pptx38 = craft.makePptxPagesSample({
+        slides: [
+          {
+            no: 1,
+            shapes: [
+              { x: 100 * emu38, y: 60 * emu38, cx: 420 * emu38, cy: 100 * emu38, texts: ['甲页标题XYZ 定位词'] },
+              { x: 100 * emu38, y: 200 * emu38, cx: 160 * emu38, cy: 120 * emu38, kind: 'pic' },
+            ],
+            image: { name: 'img1.png', ext: 'png', mime: 'image/png', bytes: craft.makePng(6, 4) },
+            notes: '甲页备注词',
+          },
+          { no: 2, shapes: [{ x: 140 * emu38, y: 80 * emu38, cx: 460 * emu38, cy: 100 * emu38, texts: ['A &amp; B 乙页特殊字符'], rawText: true }] },
+          { no: 3, shapes: [{ x: 100 * emu38, y: 100 * emu38, cx: 500 * emu38, cy: 300 * emu38, kind: 'chart' }] },
+        ],
+      });
+      await uploadViaInput(page, 'composer', pptx38, '演示 幻灯.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
       await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('演示 幻灯.pptx')`)) === true, 30_000, 'ATT PPTX 芯片');
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
-      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('要点甲')`)) === true, 30_000, 'ATT PPTX 预览');
+      await waitFor(async () => (await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '').includes('静态页预览')`)) === true, 60_000, 'ATT PPTX 静态页区');
       const pvSlides = await page.readStrict(`(() => { const l = document.querySelector('#attach-preview .slides-list'); return l ? (l.querySelectorAll('.slide-card').length + '|' + l.textContent.slice(0, 60)) : 'missing'; })()`);
-      const pvSlidesNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
-      // 第三十七轮四：静态页预览已实装（与提取文本分列）——断言两通道都在：提取文本卡片+
-      // 静态页预览区（幻灯片导航+当前页 SVG）。
-      const pvPages = await page.readStrict(`(document.getElementById('attach-preview')?.textContent ?? '')`).catch(() => '');
-      const pvPagesSvg = await page.readStrict(`(document.getElementById('attach-preview')?.querySelector('svg') != null)`).catch(() => false);
-      record('ATT·PPTX 预览（提取文本按页+备注；静态页预览 SVG 分列实装）', pvSlides.startsWith('2|') && pvSlidesNote.includes('演讲备注') && pvPages.includes('静态页预览') && pvPagesSvg === true, `text=${pvSlides.slice(0, 24)} pages=${pvPagesSvg}`);
+      const pvPagesNote = await page.readStrict(`document.getElementById('attach-preview')?.textContent ?? ''`);
+      record('ATT·PPTX 预览（提取文本按页+备注——分列真源）', pvSlides.startsWith('3|') && pvSlides.includes('甲页标题XYZ') && pvPagesNote.includes('甲页备注词'), `text=${pvSlides.slice(0, 32)}`);
+      // ①当前页真实内容+位置（第三十八轮四：不只「存在 SVG」）——首页标记词在 SVG、坐标=EMU→px、图片 base64 内联。
+      const stage1 = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); const svg = st?.querySelector('svg'); if (svg == null) return JSON.stringify({ text: 'missing', pos: null, img: false }); return JSON.stringify({ text: svg.textContent.slice(0, 120), pos: svg.querySelector('text')?.getAttribute('x') ?? null, img: svg.querySelector('image') != null }); })()`);
+      const s1 = JSON.parse(stage1);
+      record('ATT·PPT 首页内容与位置（文本+坐标+图片内联）', String(s1.text).includes('甲页标题XYZ') && s1.pos === '105' && s1.img === true, `pos=${s1.pos} img=${s1.img}`);
+      // ②翻页确实换内容（实体页：textContent 解码后 A & B——不再双重转义）。
+      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('下一页'))?.click(); })()`);
+      await waitFor(async () => ((await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.textContent ?? ''; })()`)).includes('乙页特殊字符')) === true, 20_000, 'ATT PPT 翻到第 2 页');
+      const stage2text = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.textContent ?? ''; })()`);
+      record('ATT·PPT 翻页换内容+实体解码（A & B 单层）', stage2text.includes('A & B 乙页特殊字符') && !stage2text.includes('&amp;amp;'), stage2text.slice(0, 40));
+      // ③缩放：svg width 实际变化（矢量缩放不是按钮摆设）。
+      const zoomBefore = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.getAttribute('width') ?? ''; })()`);
+      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('放大'))?.click(); })()`);
+      const zoomAfter = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return st?.querySelector('svg')?.getAttribute('width') ?? ''; })()`);
+      record('ATT·PPT 缩放生效（svg width 数值变化）', Number(zoomAfter) > Number(zoomBefore) && Number(zoomBefore) > 0, `${zoomBefore}→${zoomAfter}`);
+      // ④降级提示：纯图表页=显式「不渲染」占位（不再静默白页）。
+      await page.evalJs(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); [...st.querySelectorAll('button.chip')].find((b) => b.textContent.includes('第 3 页'))?.click(); })()`);
+      await waitFor(async () => ((await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return (st?.querySelector('svg')?.textContent ?? ''); })()`)).includes('图表（静态页不渲染）')) === true, 20_000, 'ATT PPT 图表降级页');
+      const degradeInfo = await page.readStrict(`(() => { const st = [...document.querySelectorAll('#attach-preview .slides-pages')].pop(); return JSON.stringify({ svgNote: (st?.querySelector('svg')?.textContent ?? '').includes('图表（静态页不渲染）'), panelNote: (st?.textContent ?? '').includes('未渲染对象') }); })()`).catch(() => '{}');
+      const degrade = JSON.parse(degradeInfo);
+      record('ATT·PPT 图表页降级（页内占位+页签标注未渲染对象）', degrade.svgNote === true && degrade.panelNote === true, degradeInfo);
+      // ⑤迟到响应保护（previewGeneration 守卫）：面板**开着**时再次点击芯片（新预览在途——
+      // 服务端往返窗口），立即点「关闭预览」（代次+1）——迟到的构建响应不得复活/改写页面。
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); const p = document.getElementById('attach-preview'); const btns = [...p.querySelectorAll('.chip')]; btns.find((b) => b.textContent.includes('关闭预览'))?.click(); })()`);
+      const lateSnap1 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
+      await new Promise((r) => setTimeout(r, 1_500));
+      const lateSnap2 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
+      record('ATT·PPT 迟到预览不覆盖（在途构建被关闭后不复活不改写）', lateSnap1 === lateSnap2 && JSON.parse(lateSnap2).hidden === true, `${lateSnap1 === lateSnap2 ? 'unchanged' : 'CHANGED'} ${lateSnap2}`);
+      // ⑥再开=缓存命中（子进程产物经严格校验后可复用）。
+      await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
+      await waitFor(async () => (await page.readStrict(`(() => { const pv = document.getElementById('attach-preview'); const st = [...pv.querySelectorAll('.slides-pages')].pop(); return !pv.classList.contains('hidden') && st != null && st.querySelector('svg') != null && (st.querySelector('svg')?.textContent ?? '').includes('甲页标题XYZ'); })()`)) === true, 30_000, 'ATT PPTX 重开（新内容渲染——静态页回到首页内容）');
+      const cacheNote = await page.readStrict(`(() => { const t = document.getElementById('attach-preview')?.textContent ?? ''; const m = t.match(/缓存=(命中|新建)/); return m ? m[1] : 'none'; })()`);
+      record('ATT·PPT 缓存复用（命中=子进程产物经严格校验）', cacheNote === '命中', `cache=${cacheNote}`);
       await closePreview(page);
       // ⑦ CSV（编码/引号规则页面链）。
       await uploadViaInput(page, 'composer', craft.makeCsvText([['名称', '备注'], ['中文单元格,逗号', '含"引号"'], ['行二', '值']], ','), '表格.csv', 'text/csv');
@@ -1209,8 +1278,16 @@ try {
       // ① Markdown 恶意样本：脚本/危险链接/远程图片——安全渲染（转义+占位，不执行不请求）。
       const NL31 = String.fromCharCode(10);
       const evilMd = '<script>window.__evilRan=true</script> 恶意样本 EVIL-MD-771' + NL31 + NL31 + '[危险](javascript:alert(1)) 与 [正常](https://example.com/x)' + NL31 + NL31 + '![远程图](https://evil.example/x.png)';
+      // 第三十八轮 #1 页面级：同项目 dm 深链不清空侧栏（projectId 判定——原路径字符串比较曾使
+      // 等价路径触发二次 loadProject，侧栏「闪现后清空」候选根因）+导航审计环在位。
+      const roomsBefore38 = await page.readStrict(`document.querySelectorAll('#room-list .room-item').length`);
       await page.evalJs(`location.hash = '#dm=' + ${JSON.stringify(convId)}`);
       await waitFor(async () => (await page.readStrict(`!document.getElementById('dm').classList.contains('hidden')`)) === true, 10_000, 'ATT 回到 DM 视图');
+      await new Promise((r) => setTimeout(r, 1_200)); // 深链解析+潜在二次装载窗口
+      const roomsAfter38 = await page.readStrict(`document.querySelectorAll('#room-list .room-item').length`);
+      const navAudit38 = await page.readStrict(`(() => { const a = window.__zsNavAudit; return Array.isArray(a) && a.length > 0 && a.every((x) => x && typeof x.what === 'string'); })()`).catch(() => false);
+      const staleAborts = await page.readStrict(`(() => (window.__zsNavAudit ?? []).filter((x) => String(x.what).includes('staleAborted')).length)()`).catch(() => 0);
+      record('R38·同项目 dm 深链不清空侧栏（projectId 判定）+导航审计环在位', Number(roomsBefore38) > 0 && Number(roomsAfter38) === Number(roomsBefore38) && navAudit38 === true, `rooms ${roomsBefore38}→${roomsAfter38} auditRows=${staleAborts >= 0 ? 'ok' : 'missing'}`);
       await uploadViaInput(page, 'dm', evilMd, '恶意样本.md', 'text/markdown');
       await waitFor(async () => (await page.readStrict(`(document.getElementById('dm-attach-chips')?.textContent ?? '').includes('恶意样本.md')`)) === true, 30_000, 'ATT 恶意 md 芯片');
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#dm-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('恶意样本.md'))?.click(); })()`);
@@ -1475,6 +1552,58 @@ try {
       const activeRunsA = countTable(dbPathR, 'workflow_runs', `WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id = '${dmIds[0]}') AND status IN ('RUNNING','WAITING','QUEUED')`);
       const taskAStates = countTable(dbPathR, 'tasks', `WHERE conversation_id = '${dmIds[0]}' AND status IN ('CANCELLED','STOPPED')`);
       record('REMOTE·页面停止 DM 任务（停止合同生效——run 收口+终态）', activeRunsA === 0 && taskAStates >= 1, `activeRuns=${activeRunsA} taskTerminal=${taskAStates}`);
+      // ---------- 第三十八轮 #3/#5：远程「继续队列」入口+反馈（停止后队列 paused——此前只能回服务机恢复） ----------
+      await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
+      await new Promise((r) => setTimeout(r, 1500));
+      const resumeBtnPresent = await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; return rows.some((r) => r.textContent.includes('执行态=paused') && [...r.querySelectorAll('button')].some((b) => b.textContent === '继续队列')); })()`).catch(() => false);
+      if (resumeBtnPresent !== true) {
+        const stDump = await shellPage.readStrict(`(document.getElementById('tasks')?.textContent ?? '').slice(0, 260)`).catch(() => 'dump-fail');
+        throw new Error(`停止后 paused 行应带「继续队列」按钮（第三十八轮 #3——state=${String(stDump)}）`);
+      }
+      await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('执行态=paused')); [...r.querySelectorAll('button')].find((b) => b.textContent === '继续队列')?.click(); })()`);
+      await waitFor(async () => ((await shellPage.readStrict(`(document.getElementById('feed')?.textContent ?? '')`)).includes('已继续')) === true, 30_000, 'REMOTE 继续队列反馈');
+      const rResumeNote = await shellPage.readStrict(`(() => { const f = (document.getElementById('feed')?.textContent ?? ''); const i = f.indexOf('已继续'); return i >= 0 ? f.slice(i, i + 60) : ''; })()`).catch(() => '');
+      record('REMOTE·继续队列（成功/泵出数/无待处理均可见——不再「点了没反应」）', rResumeNote.length > 0, rResumeNote);
+      // ---------- 第三十八轮 #7 页面级：中断待恢复任务呈现+「恢复执行」正式入口 ----------
+      // 手工构造停机中断形态（applyRecovery 同型：ACTIVE+唯一 INTERRUPTED run+初始 outbox 已完结）。
+      const r38TaskId = `task_r38page_${Date.now()}`;
+      const r38RunId = `run_r38page_${Date.now()}`;
+      const r38TurnId = `turn_r38page_${Date.now()}`;
+      // owner/成员=该 DM 的真实 agent 对端（agent_turns.member_id 有 FK——假成员会使整事务回滚）。
+      const r38MemberId = readField(dbPathR, `SELECT dp.principal_id AS v FROM dm_participants dp WHERE dp.conversation_id = '${dmIds[0]}' AND dp.principal_type = 'agent' LIMIT 1`);
+      const r38Inserted = execSql(dbPathR, [
+        `INSERT INTO tasks (id, project_id, conversation_id, kind, root_message_id, owner_member_id, title, status, revision, route_json, input_through_seq)
+         SELECT '${r38TaskId}', c.project_id, c.id, 'dm_turn', NULL,
+                (SELECT dp.principal_id FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'agent'),
+                'R38 中断恢复页测', 'ACTIVE', 0, '{"kind":"dispatch","mode":"DIRECT"}', 0
+         FROM conversations c WHERE c.id = '${dmIds[0]}'`,
+        `INSERT INTO workflow_runs (id, task_id, conversation_id, mode, task_revision, status) VALUES ('${r38RunId}', '${r38TaskId}', '${dmIds[0]}', 'DIRECT', 0, 'INTERRUPTED')`,
+        `INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status, dispatch_key, attempt, epoch) VALUES ('${r38TurnId}', '${r38RunId}', '${dmIds[0]}', '${r38MemberId}', 'direct.work', 'UNKNOWN', 'dmtask:${r38TaskId}:initial', 1, 1)`,
+      ]);
+      if (r38Inserted !== true) throw new Error('R38 中断形态构造失败（execSql 事务回滚）');
+      await shellPage.evalJs(`document.getElementById('refresh-btn').click()`).catch(() => null);
+      await waitFor(async () => ((await shellPage.readStrict(`(document.getElementById('tasks')?.textContent ?? '')`)).includes('中断待恢复')) === true, 30_000, 'REMOTE 中断待恢复行呈现');
+      const r38RowOk = await shellPage.readStrict(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); return r != null && [...r.querySelectorAll('button')].some((b) => b.textContent === '恢复执行') && r.textContent.includes('interrupted'); })()`).catch(() => false);
+      record('REMOTE·中断待恢复呈现（标题+上次运行状态+恢复执行入口——不再永远「排队等待」）', r38RowOk === true && r38Inserted, '');
+      await shellPage.evalJs(`(() => { const rows = [...document.querySelectorAll('#tasks div')]; const r = rows.find((x) => x.textContent.includes('中断待恢复')); [...r.querySelectorAll('button')].find((b) => b.textContent === '恢复执行')?.click(); })()`);
+      await waitFor(async () => countTable(dbPathR, 'outbox', `WHERE dispatch_key = 'task:${r38TaskId}:redispatch'`) >= 1, 20_000, 'REMOTE 恢复执行入队（task.redispatch）');
+      const r38RedispatchAudit = countTable(dbPathR, 'outbox', `WHERE dispatch_key = 'task:${r38TaskId}:redispatch'`);
+      record('REMOTE·恢复执行=正式重派链（task.redispatch 入队——非自动重放）', r38RedispatchAudit >= 1, `outbox=${r38RedispatchAudit}`);
+      // ---------- 第三十八轮 #3/#4：远程房间显式 DIRECT 指派（不再固定空 mentions 100% 被拦） ----------
+      const roomOptVal = await shellPage.readStrict(`(() => { const sel = document.getElementById('conversation-sel'); const o = [...sel.options].find((x) => x.value.startsWith('room:')); return o ? o.value : ''; })()`).catch(() => '');
+      if (roomOptVal !== '') {
+        await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(roomOptVal)}; sel.dispatchEvent(new Event('change')); })()`);
+        await waitFor(async () => (await shellPage.readStrict(`(() => { const m = document.getElementById('mention-sel'); return !m.classList.contains('hidden') && m.options.length >= 2; })()`)) === true, 30_000, 'REMOTE 房间指派选择器');
+        await shellPage.evalJs(`(() => { const m = document.getElementById('mention-sel'); m.value = m.options[1].value; document.getElementById('send-text').value = 'R38 房间指派任务 DIRECT-ROOM-1'; document.getElementById('send-btn').click(); })()`);
+        await waitFor(async () => countTable(dbPathR, 'tasks', `WHERE title LIKE '%DIRECT-ROOM-1%'`) >= 1, 60_000, 'REMOTE 房间 DIRECT 任务建立');
+        await new Promise((r) => setTimeout(r, 6000)); // 派发领取窗口
+        const r38RoomBlocked = countTable(dbPathR, 'tasks', `WHERE title LIKE '%DIRECT-ROOM-1%' AND status = 'BLOCKED'`);
+        const r38RoomTotal = countTable(dbPathR, 'tasks', `WHERE title LIKE '%DIRECT-ROOM-1%'`);
+        record('REMOTE·房间 DIRECT 指派（获准成员选择器——M0 门禁不再必然拦截）', r38RoomTotal >= 1 && r38RoomBlocked === 0, `total=${r38RoomTotal} blocked=${r38RoomBlocked}`);
+        await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify(dmAKey)}; sel.dispatchEvent(new Event('change')); })()`).catch(() => null);
+      } else {
+        record('REMOTE·房间 DIRECT 指派（无房间目标——跳过）', true, 'no-room-target');
+      }
       // ---------- 任务验收（绑定 deliveryId/revision/manifestHash——走 DM B：A 停止后队列暂停）----------
       await shellPage.evalJs(`(() => { const sel = document.getElementById('conversation-sel'); sel.value = ${JSON.stringify('dm:' + dmIds[1])}; sel.dispatchEvent(new Event('change')); })()`);
       await shellPage.evalJs(`(() => { document.getElementById('send-text').value = '发起可验收任务 REMOTE-TASK-ACCEPT-1'; document.getElementById('send-btn').click(); })()`);
@@ -1846,8 +1975,17 @@ try {
     record('成员绑定校验失败提示（claude 空模型——客户端预检+服务端校验同口径）', String(negErr.value).includes('校验失败'), `msg=${String(negErr.value).slice(0, 50)}`);
     await page.evalJs(`document.querySelector('.member-runtime-edit input').value = 'deepseek-flash'`);
     await page.evalJs(`[...document.querySelectorAll('.member-runtime-edit button.chip')].find((b) => b.textContent === '保存').click()`);
-    await waitFor(async () => (await page.evalJs(`document.getElementById('member-runtime-list').textContent.includes('claude · deepseek-flash')`)).value === true, 20_000, '绑定保存回显');
-    record('成员 runtime 绑定保存+回显（member.setRuntime→member.runtime 重读；含能力分列）', true);
+    await sleep(800);
+    // 第三十八轮 #2：防护模式（ZS_REAL_DISPATCH_GUARD=1——本验证器恒设）下拒绑真实 runtime：
+    // 「绑定后任务全部静默 FAILED」提前为绑定时正式错误（双机验收卡死主根因）。
+    const guardErr = await page.evalJs(`document.querySelector('.member-runtime-edit span.meta')?.textContent ?? ''`);
+    record('R38·防护模式拒绑真实 runtime（正式错误上屏——不再无提示生效后静默死亡）', String(guardErr.value).includes('验收防护') && String(guardErr.value).includes('fake'), `msg=${String(guardErr.value).slice(0, 60)}`);
+    // 正路径（防护内合法）：fake 绑定保存+回显（配置读写合同沿 fake 保持）。断言只看**成员行
+    // 标签**（排除编辑框自身文本——select 选项/错误文案会假阳性）。
+    await page.evalJs(`(() => { const sel = document.querySelector('.member-runtime-edit select'); sel.value = 'fake'; sel.dispatchEvent(new Event('change')); })()`);
+    await page.evalJs(`[...document.querySelectorAll('.member-runtime-edit button.chip')].find((b) => b.textContent === '保存').click()`);
+    await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#member-runtime-list > div')].filter((d) => !d.classList.contains('member-runtime-edit')).some((d) => d.textContent.includes('fake'))`)).value === true, 20_000, '绑定保存回显（fake——防护内合法路径）');
+    record('成员 runtime 绑定保存+回显（member.setRuntime kind=fake→member.runtime 重读；含能力分列）', true);
 
     const errs = page.pageErrors();
     record('renderer 无未捕获异常/console 错误（会话 A 全程）', errs.length === 0, errs.slice(0, 2).join(' | ').slice(0, 160));
@@ -1871,7 +2009,7 @@ try {
     currentRun = { tag: 'b1', child: app.child, page, stderrText: app.stderrText };
     await waitFor(async () => (await page.evalJs(`!document.getElementById('project-name').textContent.includes('未打开项目')`)).value === true, 30_000, '重开自动恢复项目');
     await page.evalJs(`document.getElementById('project-settings').open = true`);
-    await waitFor(async () => (await page.evalJs(`document.getElementById('member-runtime-list').textContent.includes('claude · deepseek-flash')`)).value === true, 20_000, '绑定保持');
+    await waitFor(async () => (await page.evalJs(`[...document.querySelectorAll('#member-runtime-list > div')].some((d) => d.textContent.includes('fake'))`)).value === true, 20_000, '绑定保持（fake——第三十八轮防护合同下的正路径）');
     const reviewKept = await page.evalJs(`document.getElementById('task-review-toggle').textContent`);
     record('同 appData 顺序重开：绑定与验收开关保持（设置持久化；锁随首启干净退出释放）', String(reviewKept.value).includes('开'), `开关=${String(reviewKept.value).slice(0, 12)} 绑定=保持`);
     page.close();

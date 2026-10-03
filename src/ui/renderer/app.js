@@ -36,6 +36,8 @@ const state = {
   pendingFocus: null,
   /** 当前项目快照（project.open 结果：任务验收开关/revision 等——项目设置的读写来源）。 */
   project: null,
+  /** runtime 环境模式（第三十八轮 #2：验收防护包=拒绑真实渠道、设置面提供 fake 正路径）。 */
+  runtimeEnvironment: null,
   roomId: null,
   conversationId: null,
   members: [],
@@ -3786,6 +3788,7 @@ async function renderMemberRuntimeSettings() {
     try {
       binding = await command('member.runtime', { memberId: m.id });
     } catch { /* 读取失败按未绑定展示 */ }
+    if (binding?.environment != null) state.runtimeEnvironment = binding.environment; // 防护包模式标志（绑定对话框 fake 选项）
     const kind = binding?.binding?.kind ?? null;
     const model = binding?.binding?.model ?? null;
     const caps = binding?.installation?.capabilities_json != null
@@ -3814,12 +3817,16 @@ async function renderMemberRuntimeSettings() {
     editBtn.className = 'chip';
     editBtn.textContent = '绑定…';
     editBtn.title = '成员 runtime 绑定：作用范围=该成员之后派发的 turn；claude/codex 必须显式模型';
-    editBtn.onclick = () => {
+      editBtn.onclick = () => {
       // 编辑行（每次一个成员）：kind 下拉+模型输入+保存/取消；错误就地显示。
+      // 验收防护包（第三十八轮 #2）：真实渠道被拒绑——提供 fake 正路径（用户不再需要脚本自救）；
+      // 正式部署 environment 两标志皆 false=选项不出现（fake 不入产品设置面原决策不变）。
+      const runtimeEnv = state.runtimeEnvironment ?? { realDispatchGuard: false, allowFake: false };
       for (const old of box.querySelectorAll('.member-runtime-edit')) old.remove();
       const edit = document.createElement('div');
       edit.className = 'member-runtime-edit meta';
-      const kinds = [['claude', 'claude（CLI 渠道）'], ['codex', 'codex（App Server）']]; // fake 不入产品设置面（仅开发模式命令面可用——daemon 侧门禁）
+      const kinds = [['claude', 'claude（CLI 渠道）'], ['codex', 'codex（App Server）']];
+      if (runtimeEnv.realDispatchGuard === true && runtimeEnv.allowFake === true) kinds.push(['fake', 'fake（模拟——验收防护包唯一可绑定渠道）']);
       const sel = document.createElement('select');
       for (const [v, text] of kinds) {
         const o = document.createElement('option');
