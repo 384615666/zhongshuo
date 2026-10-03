@@ -1,0 +1,9 @@
+{
+  "name": "zs-preview-route-b",
+  "private": true,
+  "description": "选型验证工作区：路线B @deepseek-ai/libreoffice-kit（精简转换内核）——独立安装，不进产品依赖",
+  "version": "0.0.0",
+  "dependencies": {
+    "@deepseek-ai/libreoffice-kit": "^0.1.5"
+  }
+}
