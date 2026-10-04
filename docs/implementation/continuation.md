@@ -2,7 +2,53 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-03 第四十一轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十二轮，唯一权威快照）
+
+> 本轮=**review-r41 三块收口**（review-r41-next-round-20261004.md）：旧库升级 P1（迁移 042
+> 回填）+Word 验证支架负对照补强+操作材料与真实入口对齐。**v5 包/server-data/RESULTS/截图
+> 全部冻结不动**（用户以 v5 全新演练数据做 R1—R7）；工程修复全部在源码与独立目录完成，随
+> **下一候选包（v6，待用户回填后决定）**交付。PPT A+Word/B 不集成的决定不变。
+> - **P1 旧库升级回填（迁移 042 turn-protection-state-backfill）**：041 只加列不回填——旧库
+>   已明确「保护保留」的 FAILED/refunded 无租约 turn 升级后 protection_state=NULL→呈现可恢复、
+>   redispatch 放行、releaseProtection 无租约 no-op（复核反例已复现）。042 按
+>   recovery.reconciled/recovery.protectionReleased **事件顺序（seq）**继承 retained/released：
+>   只回填 NULL 行（041+ 正式写入的权威状态不改写）；keepUnknown 不产生事实；证据损坏/字段
+>   缺失/矛盾→retained（不默认安全）；no-os-process/历史 exited（≤第八轮旧全释放路径，忠实
+>   继承）/protectionReleased(released:true)→released；曾释放→更晚保留=按最新事实。不清预算、
+>   不删数据、不改审计。**tests/integration/legacyProtectionUpgrade.test.ts 3/3**：40→最新
+>   （文件库，七形态矩阵：保留/可靠释放/普通失败/executed 保留/keepUnknown/顺序反例/损坏——
+>   呈现+守卫+恢复中心+无证据解除拒+none 解除后恰一次恢复+数据预算审计逐字节不变+幂等+重开
+>   同判）+41→最新（先**复现漏洞**（redispatch enqueued=true）再同 row 收口）+分类纯函数
+>   12 分支。既有 dev25FieldFixes 6/6+budgetGrantAccounting 3/3 不受影响。
+> - **P2 Word 验证支架重写（verify-word-isolation.cjs，连续两次 allPass）**：W1 哨兵=实际泄漏
+>   目标 `#host-sentinel>span`+**旧非隔离实现负对照必须变红**（rgb(255,0,0) 实测——旧支架
+>   id=sentinel 裸按钮=假覆盖已修）+合法样式（zsred）shadow 内 **getComputedStyle 实测**变红；
+>   W2 **真实 altChunk**（aFChunk 关系+包内 HTML 部件）：开启对照产生 iframe+srcdoc 含载荷
+>   （消费证明）→产品 renderAltChunks:false 零 iframe+**产品 UI 如实标注**（app.js 新增
+>   「嵌入 HTML（altChunks）首版不支持」用户可见说明行）；W3 **完整 wp:inline/pic:pic 结构**
+>   +内嵌正对照（naturalWidth 320 实测=结构被消费）+外链**无拦截对照窗口**实测：组件把关系
+>   目标按**包内路径**解析→不形成网络 URL（可达计数器零命中；缺件产生 src="null" 同源伪影
+>   如实记录）；产品镜像窗口零命中+会话拦截兜底。W4 页眉文本实测（3 页眉含样本标记）+图片
+>   naturalWidth 实测。metrics=dist/desktop/word-isolation/metrics.json。
+> - **操作材料对齐（§5）**：指南/README 模板统一 **v5+七项**；R7 改真实入口「📎附件→选择
+>   文件→点击芯片」（产品无拖放上传——wireAttach 只接 fileInput.onchange）；项目名=「DEV25
+>   双机验收」；PPT=默认房间**已发仅记录消息**的附件芯片（非发送框）；README 防火墙路径
+>   （v5 内被模板转义打成多行坏路径——成因 `\r`/`\n` 转义）模板修复+**生成后字节断言**；
+>   R7 无隐私样本入库 scripts/dev25-dual/samples/word-r7-sample.docx（sha256 d66f6248…，W4
+>   验证）随下一包；NOTICE 相对引用三件源材料（mtx-decompressor MPL-2.0/ECMA copyright
+>   notice/ooxml source-manifest）自**同一钉版 tarball**（入口 sha256 与 PROVENANCE 核对一致
+>   后）vendor 入库+逐件 sha256 记录（PROVENANCE.noticesMaterial）+随包 licenses-preview-
+>   vendor/pptx-renderer-notices/。**更新说明=dev25-r42-materials-addendum.md（独立提供，
+>   不覆盖任何用户回填；不要求重新导入 CA 或重复已完成手测）**。
+> - **用户操作**：按更新后指南+补充说明对 **v5（全新演练数据）做 R1—R7**；通过后 Android
+>   （记录系统/浏览器版本、包身份、物理 LAN 地址）；不重复 D1—D10；**旧项目数据不迁入演练包**。
+> - **下一步（用户回填后）**：集中处理实际失败→决定下一候选包 v6（承载 042 迁移+材料修订+
+>   R7 样本+NOTICE 三件+README 修复）→冻结三连+自测后交付。
+> - 零新增真实模型调用；旧批次/通知/D1—D10 证据保留；价值评价/DEV-11/并行写入/G5 维持原
+>   约定；旧库升级/Android/G5 各自按实际范围收案（不连带宣称）。
+> 历史快照（第三十八轮起）见下文各节；工程坑与旧轮细节以各轮快照为准。
+
+## 上一轮快照（2026-10-03 第四十一轮）
 
 > 本轮=**第四十轮复核三缺口修复**（review-r40-next-round-20261003.md）：恢复保护独立持久化+
 > 预览生命周期统一收拢+Word CSS 隔离（Shadow DOM）。预览选型已裁决并落地：**PPT=pptx-renderer

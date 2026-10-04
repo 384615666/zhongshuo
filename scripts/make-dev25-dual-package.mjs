@@ -93,7 +93,7 @@ const BAT_SELFCHECK = [
   '',
 ].join('\r\n');
 
-const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v4 受影响项短回归结果（用户回填——本文件不会被程序覆盖）
+const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v5 受影响项短回归结果（用户回填——本文件不会被程序覆盖）
 
 - 日期/参与人：
 - 服务机（系统）/客户端（浏览器与版本）：
@@ -107,27 +107,27 @@ const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v4 受影响项短回归结果（用
 | R3 | 重启后侧栏/项目自动恢复 | | | |
 | R4 | 防护拒绑 claude（正式错误）/fake 可绑 | | | |
 | R5 | 设备列表可滚动可达+LAN 虚拟网卡标注 | | | |
-| R6 | PPT 视觉预览（图表/表格实际渲染·翻页/缩放生效；**正常预置样本视觉不可用≠通过**——降级呈现另记 FAIL 并截图原因） | | | |
-| R7 | Word 视觉预览（拖入任一 .docx→芯片点击：表格/图片/分页呈现+**聊天界面按钮颜色不变**[样式隔离]） | | | |
+| R6 | PPT 视觉预览（默认房间已发消息附件芯片：图表/表格实际渲染·翻页/缩放生效；**正常预置样本视觉不可用≠通过**——降级呈现另记 FAIL 并截图原因） | | | |
+| R7 | Word 视觉预览（📎附件→选择包内 samples/word-r7-sample.docx→点击芯片：表格/图片/分页呈现+**聊天界面按钮颜色不变**[样式隔离]） | | | |
 
 异常与备注：
 `;
 
-const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服务机 + 同局域网客户端浏览器）
+const README = `# DEV-25 v5 修复候选包·受影响项短回归（Windows 服务机 + 同局域网客户端浏览器）
 
 本包为**修复候选包**：D1—D10 全套已按 v2 包收案（docs/implementation/dev25-dual-acceptance-record-20261003.md），
-本轮只做**受影响项短回归**（六项，见 \`SHORT-REGRESSION 指南\`——应用侧栏帮助或 docs 指南同文）。
+本轮只做**受影响项短回归**（七项，见 \`SHORT-REGRESSION 指南\`——应用侧栏帮助或 docs 指南同文）。
 不需要 SQL、Node、开发者工具；全部操作=双击启动器+浏览器+截图。
 
 **产物来源**：\`ZhongshuoDual/\` 由最终冻结产物逐文件 SHA256 核对后拷贝（buildId 见
 \`RESULTS/buildId.txt\`；核对事实 \`RESULTS/frozen-manifest-check.json\`）。fake runtime + 真实派发
 硬防护——零真实模型调用（RESULTS 留 real_calls=0 证据）。
 
-**证书体系与⚠️新数据根声明（v4）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ CA 签发的
-服务证书（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。**v4 使用全新数据根——首次启动生成新 CA
-与新服务证书，两枚指纹与 v2/v3 均不同**：客户端必须重新导入**本包**的 \`ca.cer\` 并按下方步骤核对
+**证书体系与⚠️新数据根声明（v5）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ CA 签发的
+服务证书（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。**v5 使用全新数据根——首次启动生成新 CA
+与新服务证书，两枚指纹与 v2/v3/v4 均不同**：客户端必须重新导入**本包**的 \`ca.cer\` 并按下方步骤核对
 **本包面板**显示的新「信任根指纹」。「IP 变化只重签服务证书、CA 不变」仅适用于**同一数据根**，
-**不跨包/不跨数据根继承信任**——不要复用 v2/v3 时期导入的旧 CA。
+**不跨包/不跨数据根继承信任**——不要复用 v2/v3/v4 时期导入的旧 CA。
 
 ## 服务机步骤
 
@@ -145,8 +145,8 @@ const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服
      （198.18.x.x/169.254.x.x 等——「不是其它设备可达的地址」，别用）；
    - **配对码时机**：客户端完成证书信任（下节）**后**再点「生成配对码」（5 分钟一次有效）。
 3. 防火墙（仅当客户端报超时）：Windows 防火墙 → 高级设置 → 入站规则 → 新建：
-   - 程序方式：\`ZhongshuoDual\resources\app\daemon\node\node.exe\`（daemon 的 node，
-     **不是 electron.exe**）；或端口方式：面板显示的 TCP 端口；作用域=专用网络；
+   - 程序方式：\`ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe\`（daemon 的 node，
+     **不是 electron.exe**——完整路径为「本包目录\\ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe」）；或端口方式：面板显示的 TCP 端口；作用域=专用网络；
      **不需要关闭整个防火墙**。
 
 ## 客户端步骤（普通 Edge/Chrome——不使用任何证书错误绕过开关）
@@ -176,6 +176,9 @@ const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服
 
 - 七项回归（R1 恢复执行/R2 继续队列/R3 侧栏恢复/R4 防护拒绑/R5 设备列表可达/R6 PPT 视觉预览[正常样本必须实际渲染]/R7 Word 预览+样式隔离）：
   按 \`RESULTS/SHORT-REGRESSION-template.md\` 执行并回填（每项 PASS/FAIL/BLOCKED+一句话+截图名）。
+- R7 用包内样本 \`samples/word-r7-sample.docx\`（已验证的无隐私 Word 样本：3 页/表格/图片/页眉）：
+  打开任一会话 → 点发送框「📎附件」→ 选择该文件 → 点击出现的芯片预览——**产品无拖放上传入口**，
+  不用拖入；只预览即可，不要求发送或发起任务。
 - 机械负例自检保留（可选）：面板「自检（机械负例）」→ 双击 \`run-self-check.bat\` 导出
   （输出在本包 \`RESULTS/self-check-*.json\`）。
 - **短回归通过 ≠ D 系全项重测**；Android 实测另按指南（适配≠实测）。
@@ -184,7 +187,7 @@ const README = `# DEV-25 v4 修复候选包·受影响项短回归（Windows 服
 ## 边界
 
 - 本包模拟运行（fake+真实派发硬防护）；私钥只留服务机；不降级 HTTP；凭据不落明文日志。
-- v2/v3 包与其数据/结果原地保留——本包独立目录、独立数据根，互不影响。`;
+- v2/v3/v4 包与其数据/结果原地保留——本包独立目录、独立数据根，互不影响。`;
 
 const RESULT_TEMPLATE = `# DEV-25 双机验收结果（用户回填——本文件不会被程序覆盖）
 
@@ -247,17 +250,38 @@ async function build(frozenDir = frozenDefault) {
   cpSync(join(repo, 'node_modules', 'dompurify', 'LICENSE'), join(licDir, 'dompurify.LICENSE'));
   cpSync(join(repo, 'node_modules', 'dompurify', 'LICENSE-MPL'), join(licDir, 'dompurify.LICENSE-MPL'));
   cpSync(join(repo, 'node_modules', 'markdown-it', 'LICENSE'), join(licDir, 'markdown-it.LICENSE'));
+  // 第四十二轮 §5：NOTICE 相对引用的源材料随包（同一钉版 tarball 逐文件原样拷贝——
+  // PROVENANCE.noticesMaterial 记录各文件 sha256；引用路径真实可达，不以「九件存在」当闭环）。
+  const noticeDir = join(licDir, 'pptx-renderer-notices');
+  mkdirSync(noticeDir, { recursive: true });
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'licenses', 'mtx-decompressor-MPL-2.0.txt'), join(noticeDir, 'mtx-decompressor-MPL-2.0.txt'));
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'licenses', 'ECMA-text-copyright-notice.txt'), join(noticeDir, 'ECMA-text-copyright-notice.txt'));
+  cpSync(join(repo, 'src', 'ui', 'vendor', 'pptx-renderer', 'scripts', 'ooxml-geometry', 'source-manifest.json'), join(noticeDir, 'ooxml-geometry-source-manifest.json'));
   writeFileSync(join(licDir, 'README.md'), [
-    '# 预览引擎随包材料（第四十一轮）',
+    '# 预览引擎随包材料（第四十一轮建；第四十二轮补 NOTICE 引用源材料）',
     '',
     'pptx-renderer 1.3.0=受管 vendored 产物（PROVENANCE 钉版本+sha256；内捆 JSZip+ECharts——ECharts 为 Apache-2.0，其 notice 见 pptx-renderer.THIRD_PARTY_NOTICES.md）。',
     'docx-preview 0.4.1（MIT）/JSZip 3.10.2（MIT）/DOMPurify（Apache-2.0 或 MPL-2.0 双许可）/markdown-it（MIT）从固定版本 node_modules 拷贝。',
+    'pptx-renderer.THIRD_PARTY_NOTICES.md 相对引用的源材料在 pptx-renderer-notices/（同 tarball 原样拷贝，逐文件 sha256 见 pptx-renderer.PROVENANCE.json 的 noticesMaterial）。',
     '全部本地随包，无 CDN。嵌入 HTML（altChunks）首版不支持（renderAltChunks:false）。',
     '',
   ].join('\n'));
   writeFileSync(join(outRoot, 'start-server.bat'), BAT_LAUNCHER, 'ascii');
   writeFileSync(join(outRoot, 'run-self-check.bat'), BAT_SELFCHECK, 'ascii');
   writeFileSync(join(outRoot, 'README-双机验收.md'), README, 'utf8');
+  // 第四十二轮 §5（review-r41）：README 字节核验——模板字面量反斜杠转义曾把防火墙程序路径
+  // 打成含 CR/LF 的多行坏路径（v5 实测 \`ZhongshuoDual<CR>esourcesapp…\`）。生成后断言完整
+  // 单行路径存在且路径段内无 CR/LF，坏路径不再流向用户。
+  {
+    const readmeOut = readFileSync(join(outRoot, 'README-双机验收.md'), 'utf8');
+    const wantPath = 'ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe';
+    if (!readmeOut.includes(wantPath)) throw new Error(`README 防火墙路径核验失败：未找到完整单行路径 ${wantPath}`);
+    const seg = readmeOut.slice(readmeOut.indexOf(wantPath) - 1, readmeOut.indexOf(wantPath) + wantPath.length + 1);
+    if (/[\r\n]/.test(seg)) throw new Error('README 防火墙路径核验失败：路径段内含 CR/LF');
+  }
+  // R7 Word 回归样本随包（已验证无隐私：3 页/表格/图片/页眉——verify-word-isolation W4）。
+  mkdirSync(join(outRoot, 'samples'), { recursive: true });
+  cpSync(join(repo, 'scripts', 'dev25-dual', 'samples', 'word-r7-sample.docx'), join(outRoot, 'samples', 'word-r7-sample.docx'));
   // 第三十九轮 §5：短回归前置材料——回归幻灯.pptx（规范 OOXML 样本：中文/图片/图表/表格/组合/
   // 实体字符/跳号页序）随包，seed --regression 上传为房间仅记录消息附件。
   writeFileSync(join(outRoot, 'seed', '回归幻灯.pptx'), craft.makePptxPagesSample({

@@ -1034,7 +1034,12 @@ async function previewAttachment(attachmentId, filename, kindHint) {
           const dvHead = document.createElement('div');
           dvHead.className = 'meta';
           dvHead.textContent = `🖼 视觉预览（docx-preview 渲染器侧本地渲染·Shadow DOM 隔离）· sha256=${doc.hash.slice(0, 12)}… · v${doc.revision}（与提取文本同源核验）`;
-          owrap.append(dvHead, dvBox);
+          // 如实分列（第四十二轮 §4）：嵌入 HTML 首版不支持、外部资源不加载——呈现给用户，
+          // 不在验证报告里替产品声明未验证的能力。
+          const dvNote = document.createElement('div');
+          dvNote.className = 'meta';
+          dvNote.textContent = '嵌入 HTML（altChunks）首版不支持（renderAltChunks:false）· 外部图片/资源不加载（仅包内媒体）· 页眉页脚尽力还原';
+          owrap.append(dvHead, dvNote, dvBox);
         } catch (e) {
           const w = document.createElement('div');
           w.className = 'meta warn';
