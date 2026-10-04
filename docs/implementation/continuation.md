@@ -2,7 +2,37 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十九轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第五十轮，唯一权威快照）
+
+> R49=可短测首包 v2 交付（bbb6a2d）；R50=review-r49 四项收口：**去假阳性三连（独立副本
+> r50-20261004144010 allPass）+打包边界+H1 自检+H2 映射盘点**。用户可开始体验 v2；
+> H2 已可开工（映射见 hifi-h2-mapping-20261004.md）。v6/Android 不动。
+> - **[P1 验证器去假阳性]** verify-hifi-package-r50.cjs（独立副本 hifi-h1-verify-r50-copy，
+>   交付包零接触）：恒真 `||true` 删除；**房间指定 @Guide A 派发**经
+>   conversation_threads(anchor→root_task_id) 核任务+run/turn（房间根消息 messages.task_id
+>   本就不落任务号——旧断言口径错误）；**仅记录**核该消息 task NULL+runsDelta=0；lose-once
+>   移到房间步（先 banner→重发原信封→恰 1 条+无失败行内+锁释放后继续）；DM **新建空闲会话**
+>   （+Guide B）正常发送核本轮 commandId→message→task→run→turn→agent 回复身份；全部子项
+>   纳入 pass。旧 r49 run1/2/3 原样保留（覆盖范围已按复核更正）。
+> - **[P1 停机]** window.close()（用户同型）→ desktop-shutdown.json 存在（forced 非 true）
+>   → 副本路径进程树归零（CIM 按 CommandLine 匹配副本路径——**坑：junction 中文路径在 CIM
+>   返回 mojibake，须按 ASCII copyRoot 前缀匹配且排除 powershell 自身**）→ bat 退出码留档。
+> - **[口径]** 每轮记 launchDir（junction 成败如实+realpath）+BUILD/清单 SHA 前后一致
+>   （同产物声明落事实）；新 runId 不覆盖旧档。
+> - **[P2 打包/自检]** pack-desktop **退出码检查**（失败不拷旧产物）；模板 write-if-absent
+>   （不覆盖用户回填）；PPT 种子**入库**（scripts/dev25-dual/回归幻灯.pptx——不再依赖 v6
+>   目录）；随包自检=h1-self-check.cjs（文件+全量清单核对，替代旧远程导出脚本）；README/模板
+>   明确入口（T2 @Guide A 步骤、T3 +Guide B 新建空闲会话、T4 未触发记 NOT_RUN 勿断网）。
+> - **[三连事实]** r50-20261004144010：run1 junctionOk=true（中文+空格路径实跑）、buildId
+>   bld_f152ca66662dc4ab 前后一致；房间 taskId/runs=1/turns=1+mentions member；仅记录
+>   task NULL+runsDelta 0；DM 新会话回复带本轮 task/run/turn 身份；shutdown forced!=true；
+>   residualZero；real_calls=0；负对照留档。全量 854/854、typecheck×2。
+> - **[H2]** 映射盘点完成（hifi-h2-mapping-20261004.md）：回复串（thread.history/task.get/
+>   readGate 复用）、交付定位（deepLink.resolve+pendingDelivery）、附件草稿
+>   （uploadText/uploadOffice+信封 builder 扩展）、共享预览（PreviewPane+vendored 渲染器
+>   复用——不重做解析器）；首版落点 replies+task 两 tab，其余原界面定向。
+
+## 上一轮快照（2026-10-04 第四十九轮）
 
 > R47=H1 合同/异步/接管/类型门（0b8dacb）；R48=首包时序收口+hifi-h1-win-v1 工程候选
 > （b264a40——**复核认定未达交付门**：启动器缺 seed 依赖/未跑 bat/信封仍 UI 重造）；R49=

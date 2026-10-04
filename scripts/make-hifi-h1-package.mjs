@@ -22,7 +22,8 @@ const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
 const out = join(repo, 'dist', 'desktop', 'hifi-h1-win-v2');
 
 // 1) 便携产物（含 BUILD.json/MANIFEST——真实 commit/dirty 身份）
-spawnSync(process.execPath, [join(repo, 'scripts', 'pack-desktop.mjs')], { stdio: 'inherit', cwd: repo });
+const pack = spawnSync(process.execPath, [join(repo, 'scripts', 'pack-desktop.mjs')], { stdio: 'inherit', cwd: repo });
+if (pack.status !== 0) { console.error(`[hifi-pkg] pack-desktop 退出码 ${pack.status}——中止（不拷旧产物）`); process.exit(1); }
 if (!existsSync(join(staging, 'electron.exe'))) { console.error('[hifi-pkg] pack-desktop 产物缺失'); process.exit(1); }
 
 mkdirSync(out, { recursive: true });
@@ -35,8 +36,8 @@ catch (e) {
 }
 mkdirSync(join(out, 'seed'), { recursive: true });
 copyFileSync(join(repo, 'scripts', 'dev25-dual', 'seed-client.cjs'), join(out, 'seed', 'seed-client.cjs'));
-copyFileSync(join(repo, 'dist', 'desktop', 'dev25-dual-win-v6', 'seed', '回归幻灯.pptx'), join(out, 'seed', '回归幻灯.pptx')); // 房间样本附件（源=v6 包内种子件——只读拷贝；seed 按同目录查找，缺件会静默跳过导致主池空）
-copyFileSync(join(repo, 'scripts', 'dev25-dual', 'self-check.cjs'), join(out, 'seed', 'self-check.cjs'));
+copyFileSync(join(repo, 'scripts', 'dev25-dual', '回归幻灯.pptx'), join(out, 'seed', '回归幻灯.pptx')); // 房间样本附件（入库源——不依赖旧 v6 交付目录）
+copyFileSync(join(repo, 'scripts', 'h1-self-check.cjs'), join(out, 'seed', 'h1-self-check.cjs')); // 真正的 H1 清单自检（旧远程导出脚本不随包）
 mkdirSync(join(out, 'samples'), { recursive: true });
 copyFileSync(join(repo, 'scripts', 'dev25-dual', 'samples', 'word-r7-sample.docx'), join(out, 'samples', 'word-r7-sample.docx'));
 mkdirSync(join(out, 'RESULTS'), { recursive: true });
@@ -90,7 +91,7 @@ const BAT = ['@echo off',
 writeFileSync(join(out, 'start-server.bat'), BAT + '\r\n', 'utf8');
 
 const SELFCHECK = ['@echo off',
-  'rem Mechanical self-check (ASCII only): shipped files + manifest spot check.',
+  'rem H1 mechanical self-check (ASCII only): shipped files + full manifest verify.',
   'setlocal',
   'set PKG=%~dp0',
   '"%PKG%ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe" "%PKG%seed\\self-check.cjs" --pkg "%PKG%"',
@@ -99,7 +100,8 @@ const SELFCHECK = ['@echo off',
 writeFileSync(join(out, 'run-self-check.bat'), SELFCHECK + '\r\n', 'utf8');
 
 // 3) README-H1（准确 H1 口径）
-writeFileSync(join(out, 'README-H1.md'), `# 众说 H1 首包（新界面·可短测）
+const writeIfAbsent = (file, content) => { const p2 = join(out, file); if (!existsSync(p2)) writeFileSync(p2, content, 'utf8'); };
+writeIfAbsent('README-H1.md', `# 众说 H1 首包（新界面·可短测）
 
 **这是什么**：原型风格新界面接入正式客户端的首个可运行包（H1）。默认启动即新界面
 （侧栏/房间/私信/消息/输入区），数据与命令全部走正式链（fake 运行时+真实派发硬防护——
@@ -111,10 +113,15 @@ writeFileSync(join(out, 'README-H1.md'), `# 众说 H1 首包（新界面·可短
    - 首启约 1 分钟内自动进入「DEV25 双机验收」项目（新侧栏出现房间与私信）。
 2. 短测约 5–10 分钟：按 \`RESULTS/SHORT-TEST-template.md\` 的 5 项走，结果写回同目录。
 
-## 短测项（详见模板）
-T1 首启自动进入项目+侧栏真实房间/私信；T2 房间发送（指定成员/@全体）与仅记录；
-T3 私信发送与成员回复出现；T4 发送失败/未知时的草稿保留与「重发原内容」；
-T5 「原界面」定向接管与返回（样式互不污染）。
+## 短测项（详见模板；结论可填 PASS / FAIL / BLOCKED / NOT_RUN）
+- T1 首启自动进入项目：约 1 分钟内新侧栏出现「默认房间 / Lab Room」与「私信」。
+- T2 房间指定成员发送：打开「默认房间」→ 输入区点「@」→ 选 **Guide A** → 输入内容 →
+  「发送」→ 消息出现在主池；再从「⋯」选「仅记录」发一条（不派发）。
+- T3 私信：侧栏「私信」→ 点「+ Guide B」**新建一个空闲会话** → 发送 → 片刻后成员回复出现
+  （不要用种子自带的「恢复演练/队列演练」会话做本项）。
+- T4 草稿保护：**仅当你自然遇到**发送失败/结果未知提示时核对内容保留与「重发原内容」；
+  正常使用不会触发——未遇到请填 NOT_RUN，**不要**为此断网或制造故障。
+- T5 定向接管：侧栏点「任务看板」等未换装入口 → 原界面定位到对应面板 → 右上「⌂ 返回新界面」。
 
 ## 边界（如实）
 - 附件上传、权限/计划档位等未接通能力在输入区**点击前禁用并说明**，需使用时经「原界面」。
@@ -128,18 +135,18 @@ T5 「原界面」定向接管与返回（样式互不污染）。
 `.replaceAll('\n', '\r\n'), 'utf8');
 
 // 4) 结果模板（不覆盖用户结果）
-writeFileSync(join(out, 'RESULTS', 'SHORT-TEST-template.md'), `# H1 首包短测结果（用户回填——本文件不会被程序覆盖）
+writeIfAbsent(join('RESULTS', 'SHORT-TEST-template.md'), `# H1 首包短测结果（用户回填——本文件不会被程序覆盖）
 
 - 日期/参与人：
 - 包目录/buildId（ZhongshuoDual/BUILD.json）：
 
-| # | 项 | 结论（PASS/FAIL） | 一句话说明 |
+| # | 项 | 结论（PASS/FAIL/BLOCKED/NOT_RUN） | 一句话说明 |
 |---|---|---|---|
 | T1 | 首启自动进入项目：新侧栏出现房间（默认房间/Lab Room）与私信 | | |
-| T2 | 房间发送：输入→发送后消息出现在主池；「仅记录」保存且不派发 | | |
-| T3 | 私信：新建/打开会话→发送→成员回复在当前视图出现 | | |
-| T4 | 草稿保护：断网/失败时内容保留+行内错误；「重发原内容」可用（如未遇到可注“未触发”） | | |
-| T5 | 定向接管：点「任务看板」等进入原界面且落点正确；返回新界面正常 | | |
+| T2 | 房间指定成员：点「@」选 Guide A→发送→主池可见；「⋯→仅记录」发一条不派发 | | |
+| T3 | 私信新建空闲会话：「+ Guide B」新建→发送→成员回复出现（不用种子演练会话） | | |
+| T4 | 草稿保护：仅自然遇到失败/结果未知时核对保留+「重发原内容」；未遇到填 NOT_RUN（勿断网模拟） | | |
+| T5 | 定向接管：未换装入口进入原界面且落点正确；「⌂ 返回新界面」正常 | | |
 
 异常与备注：
 `.replaceAll('\n', '\r\n'), 'utf8');
