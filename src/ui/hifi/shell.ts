@@ -13,12 +13,14 @@ export { bootRemembered, openProjectByPath, pickAndOpenFolder, refreshMembers, r
 /** legacy 接管状态（记录原因，便于诊断；显示切换由 body.legacy-on CSS 承担）。 */
 export interface HifiUi {
   legacyEnter(reason: string): void;
+  legacyExit(): void;
   pickAndOpenFolder(): Promise<void>;
 }
 
 export function hifiUi(): HifiUi {
   return {
-    legacyEnter(reason) { setState((s) => ({ ...s, legacyActive: true, legacyReason: reason } as typeof s)); },
+    legacyEnter(reason) { setState((s) => ({ ...s, legacyActive: true, legacyReason: reason })); },
+    legacyExit() { setState((s) => ({ ...s, legacyActive: false })); },
     pickAndOpenFolder: () => pickAndOpenFolder(),
   };
 }

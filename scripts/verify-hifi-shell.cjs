@@ -1,9 +1,13 @@
 'use strict';
 /**
- * 第四十六轮 H1 冒烟：hifi 换装壳（原型组件+真实 store）在**实际打包页面**上的真实控制流
- * ——HTTP 服务 dist/ui/renderer + 传输桩（window.zs 命令面；DOM/CSS/React 控制流全真实）。
- * 断言：①侧栏=真实 room.list 数据 ②房间主池=真实 room.pool ③发送走真实 message.submit
- * （room_root/dm；default/record_only）④私信列表/历史真实 ⑤legacy 接管守卫（不双启动）。
+ * 第四十七轮 H1 冒烟（升级为**合同校验型组件控制流/信封冒烟**——review-r46 §3：传输桩
+ * 按正式 zod 合同严格校验参数，错误参数返回 VALIDATION_INVALID，不再无条件接受）：
+ * HTTP 服务 dist/ui/renderer + 传输桩（window.zs）。真实后台闭环另见
+ * tests/integration/hifiFirstPackage.test.ts（打包 UI→真实 dispatchDaemonCommand+worker）。
+ * 断言：①侧栏/主池/私信=真实命令形状数据（含房间名单→@ 候选）②发送信封过正式合同
+ * （room_root 带 roomId、mentions all→kind:all、intent default/record_only）③异步回执：
+ * 成功清已发内容且**保留等待期编辑**、确定失败保留草稿+行内错误 ④定向接管定位
+ * （任务看板→#board 可见；搜索→search-panel 打开）+样式隔离（hifi css disabled）+返回恢复。
  * 运行：./node_modules/.bin/electron scripts/verify-hifi-shell.cjs；产物 dist/desktop/hifi-shell/metrics.json。
  */
 const { app } = require('electron');
@@ -25,40 +29,86 @@ const server = http.createServer((req, res) => {
   res.end(fs.readFileSync(file));
 });
 
-const sent = []; // 桩进程侧命令日志（经 contextBridge 的 getSentLog 暴露给断言）
-const PRELOAD = `
-const { contextBridge } = require('electron');
-const log = [];
-const DATA = ${JSON.stringify({
+const DATA = {
   project: { id: 'p1', displayName: 'Hifi 冒烟项目' },
   rooms: [
     { id: 'roomA', name: '默认房间', conversationId: 'convRoomA' },
     { id: 'roomB', name: 'Lab Room', conversationId: 'convRoomB' },
   ],
-  members: { items: [{ id: 'mA', displayName: 'Guide A', principalType: 'agent', enabled: true }] },
+  projectMembers: [
+    { id: 'mA', displayName: 'Guide A', principalType: 'agent', enabled: true },
+    { id: 'mB', displayName: 'Guide B', principalType: 'agent', enabled: true },
+    { id: 'u1', displayName: '我', principalType: 'human', enabled: true },
+  ],
   pool: { items: [
-    { threadId: 'th1', taskId: 'task_1', body: { text: 'Hifi 主池样本消息（真实 room.pool 形状）' }, createdAt: Date.now(), replyCount: 2, unread: 0, taskStatus: 'ACTIVE' },
+    { threadId: 'th1', taskId: 'task_1', body: { text: 'Hifi 主池样本消息（真实 room.pool 形状）' }, createdAt: 1759500000000, replyCount: 2, unread: 0, taskStatus: 'ACTIVE' },
   ] },
   conversations: { conversations: [
-    { conversationId: 'convDm1', peerDisplayName: 'Guide A', title: '冒烟私信', execState: 'idle', unread: 1, archivedAt: null, lastMessagePreview: '私信样本' },
+    { conversationId: 'convDm1', peerDisplayName: 'Guide A', title: '冒烟私信', execState: 'idle', unread: 1, archivedAt: null, lastMessagePreview: '私信样本', projectId: 'p1' },
   ] },
   dmHistory: { messages: [
-    { id: 'dm1', createdAt: Date.now(), authorType: 'human', bodyJson: JSON.stringify({ text: '发给成员的私信样本' }), conversationSeq: 1 },
-    { id: 'dm2', createdAt: Date.now(), authorType: 'agent', authorId: 'mA', bodyJson: JSON.stringify({ text: '成员的回复样本' }), conversationSeq: 2 },
+    { id: 'dm1', created_at: 1759500001000, author_type: 'human', author_id: 'u_local', body_json: JSON.stringify({ text: '发给成员的私信样本' }), conversation_seq: 1 },
+    { id: 'dm2', created_at: 1759500002000, author_type: 'agent', author_id: 'mA', body_json: JSON.stringify({ text: '成员的回复样本' }), conversation_seq: 2 },
   ] },
-})};
+};
+
+/** 正式合同校验（messageSubmitParams/commands.ts:232 镜像子集——错误参数=VALIDATION_INVALID）。 */
+function validateMessageSubmit(p) {
+  if (p == null || typeof p !== 'object') return 'params 非对象';
+  const t = p.target;
+  if (t == null) return '缺 target';
+  if (t.kind === 'room_root') {
+    if (typeof t.projectId !== 'string' || !t.projectId || typeof t.conversationId !== 'string' || !t.conversationId || typeof t.roomId !== 'string' || !t.roomId) return 'room_root target 缺 projectId/conversationId/roomId';
+  } else if (t.kind === 'dm') {
+    if (typeof t.projectId !== 'string' || !t.projectId || typeof t.conversationId !== 'string' || !t.conversationId) return 'dm target 缺 projectId/conversationId';
+  } else return `未知 target.kind=${t.kind}`;
+  if (typeof p.body !== 'string' || p.body.length === 0) return '缺 body';
+  if (p.intent !== 'default' && p.intent !== 'record_only') return `intent 非法：${p.intent}`;
+  if (!Array.isArray(p.mentions)) return 'mentions 非数组';
+  for (const m of p.mentions) {
+    if (m == null || typeof m !== 'object') return 'mention 非对象';
+    if (m.kind === 'member') { if (typeof m.memberId !== 'string' || !m.memberId) return 'member mention 缺 memberId'; }
+    else if (m.kind === 'all') { if ('memberId' in m) return 'all mention 不应带 memberId'; }
+    else return `mention kind 非法：${m.kind}`;
+  }
+  for (const k of Object.keys(p)) if (!['target', 'body', 'intent', 'mentions', 'attachmentRefs', 'imageAck', 'attachmentRanges'].includes(k)) return `未知字段 ${k}`;
+  return null;
+}
+
+const PRELOAD = `
+const { contextBridge } = require('electron');
+const log = [];
+const DATA = ${JSON.stringify(DATA)};
+const invalid = (msg) => ({ ok: false, error: { code: 'VALIDATION_INVALID', message: msg } });
 const dispatch = (method, params) => {
   const D = DATA;
   switch (method) {
-    case 'app.settings.get': return { ok: true, data: { values: { 'ui.autoOpenProjectPath': 'D:\\\\zs-hifi-smoke\\\\proj' } } };
-    case 'project.open': return { ok: true, data: { project: D.project } };
+    case 'app.settings.get': {
+      const keys = (params && params.keys) || [];
+      if (!Array.isArray(keys)) return invalid('keys 非数组');
+      const values = {};
+      for (const k of keys) if (k === 'ui.autoOpenProjectPath' || k === 'repoStatus.visible') values[k] = k === 'ui.autoOpenProjectPath' ? 'D:\\\\zs-hifi-smoke\\\\proj' : '1';
+      return { ok: true, data: { values } };
+    }
+    case 'project.open': {
+      if (params == null || typeof params.path !== 'string' || params.path.length === 0) return invalid('project.open 要求 {path}（收到 ' + JSON.stringify(Object.keys(params || {})) + '）');
+      return { ok: true, data: { project: D.project } };
+    }
     case 'room.list': return { ok: true, data: { items: D.rooms } };
-    case 'member.list': return { ok: true, data: D.members };
+    case 'member.list': {
+      if (params != null && params.roomId === 'roomB') return { ok: true, data: { items: D.projectMembers.filter((m) => m.id === 'mB') } };
+      return { ok: true, data: { items: D.projectMembers } };
+    }
     case 'room.pool': return { ok: true, data: D.pool };
     case 'conversation.list': return { ok: true, data: D.conversations };
     case 'conversation.history': return { ok: true, data: D.dmHistory };
     case 'conversation.markRead': return { ok: true, data: { advanced: true } };
-    case 'message.submit': return { ok: true, data: { taskId: 'task_smoke', threadId: 'th_smoke', disposition: 'dispatched' } };
+    case 'message.submit': {
+      const problem = (${validateMessageSubmit.toString()})(params);
+      if (problem) return invalid('message.submit：' + problem);
+      if (params.body.startsWith('FAILME')) return { ok: false, error: { code: 'CONTROLLED_FAILURE', message: '受控失败（合同冒烟）' } };
+      return new Promise((resolve) => setTimeout(() => resolve({ ok: true, data: { taskId: 'task_smoke', threadId: 'th_smoke', disposition: 'dispatched' } }), 350));
+    }
     default: return { ok: true, data: {} };
   }
 };
@@ -84,6 +134,13 @@ async function waitForJs(win, iife, ms, label) {
     await sleep(150);
   }
 }
+async function getSent(win) { return await win.webContents.executeJavaScript('window.zs.getSentLog()', true).catch(() => null) ?? []; }
+async function typeAndSend(win, text, settleMs) {
+  await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, ${JSON.stringify(text)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`), true);
+  await sleep(150);
+  await win.webContents.executeJavaScript(probe(`(() => { const send = [...document.querySelectorAll('#hifi-root button')].find((b) => /发送|保存记录/.test(b.textContent) && b.textContent.length <= 6); if (send == null) return false; send.click(); return true; })()`), true);
+  if (settleMs) await sleep(settleMs);
+}
 
 async function main() {
   const preloadPath = path.join(OUT, 'stub-preload.cjs');
@@ -91,59 +148,103 @@ async function main() {
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
   const { BrowserWindow } = require('electron');
   const win = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true, webPreferences: { preload: preloadPath, contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false } });
-  const results = {};
+  const results = { scope: '组件控制流+信封冒烟（传输桩按正式 zod 合同校验参数）——真实后台闭环见 hifiFirstPackage.test.ts' };
   try {
     await win.loadURL(`http://127.0.0.1:${PORT}/index.html`);
     await waitForJs(win, `window.__zsReady === true ? 'ready' : null`, 10_000, '__zsReady(legacy 绑定)');
-    // ① hifi 壳挂载 + 侧栏真实数据（room.list 经真实 dispatch）
-    const sidebar = await waitForJs(win, probe(`(() => {
-      const labels = [...document.querySelectorAll('#hifi-root .sidebar .side-item-label')].map((e) => e.textContent.trim());
-      const ok = labels.includes('Hifi 冒烟项目') === false ? false : true;
-      return JSON.stringify({ labels, hasDefaultRoom: labels.some((t) => t.includes('默认房间')), hasLab: labels.some((t) => t.includes('Lab Room')), hasDm: labels.some((t) => t === '私信') });
-    })()`), 15_000, 'hifi 侧栏装载');
-    // ② 点默认房间 → 主池消息来自 room.pool
-    await win.webContents.executeJavaScript(probe(`(() => { const btn = [...document.querySelectorAll('#hifi-root .sidebar .side-item')].find((b) => b.textContent.includes('默认房间')); if (btn == null) return false; btn.click(); return true; })()`), true);
-    const pool = await waitForJs(win, probe(`(() => {
+    await waitForJs(win, `document.body.classList.contains('hifi-on') ? 'hifi' : null`, 10_000, 'hifi 壳挂载');
+
+    // ---------- P1 侧栏/主池/房间名单（@ 候选来自 member.list({roomId})） ----------
+    await win.webContents.executeJavaScript(probe(`(() => { const btn = [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间')); btn?.click(); return true; })()`), true);
+    const p1 = await waitForJs(win, probe(`(() => {
       const msgs = [...document.querySelectorAll('#hifi-root .msg-list .msg')].map((m) => m.textContent);
-      const composer = document.querySelector('#hifi-root .composer textarea') != null || document.querySelector('#hifi-root textarea') != null;
-      return msgs.some((t) => t.includes('Hifi 主池样本消息')) ? JSON.stringify({ msgs: msgs.length, composer }) : null;
+      return msgs.some((t) => t.includes('Hifi 主池样本消息')) ? JSON.stringify({ msgs: msgs.length, composer: document.querySelector('#hifi-root textarea') != null }) : null;
     })()`), 10_000, '房间主池+输入区');
-    // ③ 输入并发送（默认意图）——桩侧 __zsSentLog 断言真实 envelope
-    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, 'Hifi 冒烟：发送一条'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('Lab Room'))?.click(); return true; })()`), true);
+    await sleep(300);
+    await win.webContents.executeJavaScript(probe(`(() => { const atBtn = [...document.querySelectorAll('#hifi-root button')].find((b) => (b.title || '').includes('提及成员')); atBtn?.click(); return true; })()`), true);
+    await sleep(250); // React 状态更新后一帧再读候选
+    const roster = await win.webContents.executeJavaScript(probe(`(() => {
+      const items = [...document.querySelectorAll('#hifi-root .mention-pop .menu-item')].map((b) => b.textContent);
+      return JSON.stringify({ items });
+    })()`), true);
+    results.P1_shellRealData = {
+      pool: p1 != null ? JSON.parse(p1) : null,
+      roster: roster != null && roster.startsWith('{') ? JSON.parse(roster) : roster,
+      pass: p1 != null && (() => { try { const r = JSON.parse(String(roster)); return Array.isArray(r.items) && r.items.length === 2 && r.items.some((t) => t.includes('Guide B')) && !r.items.join().includes('Guide A'); } catch { return false; } })(),
+    };
+
+    // ---------- P2 发送合同：Lab Room 发送（含 @全体）→ 信封过合同 + 成功清已发内容且保留等待期编辑 ----------
+    await win.webContents.executeJavaScript(probe(`(() => { const atBtn = [...document.querySelectorAll('#hifi-root button')].find((b) => (b.title || '').includes('提及成员')); atBtn?.click(); const all = [...document.querySelectorAll('#hifi-root .mention-pop .menu-item')].find((b) => b.textContent.includes('全体')); all?.click(); return true; })()`), true);
+    await typeAndSend(win, '合同冒烟：给全体发一条', 120); // 发送在途 350ms——立即补打「等待期编辑」
+    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '等待期追加的内容'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`), true);
+    await sleep(900);
+    const p2sent = (await getSent(win)).filter((e) => e.method === 'message.submit');
+    const taAfter = await win.webContents.executeJavaScript(probe(`document.querySelector('#hifi-root textarea')?.value ?? null`), true);
+    const p2envelope = p2sent.find((e) => e.params?.target?.roomId === 'roomB') ?? null;
+    results.P2_sendContract = {
+      envelope: p2envelope, textareaAfter: taAfter,
+      pass: p2envelope != null && p2envelope.params.intent === 'default' && Array.isArray(p2envelope.params.mentions) && p2envelope.params.mentions.some((m) => m.kind === 'all') && taAfter === '等待期追加的内容',
+    };
+
+    // ---------- P3 仅记录：意图 record_only ----------
+    await win.webContents.executeJavaScript(probe(`(() => { const more = [...document.querySelectorAll('#hifi-root button')].find((b) => b.getAttribute('aria-label') === '本次运行设置'); more?.click(); return true; })()`), true);
     await sleep(200);
-    const sendClicked = await win.webContents.executeJavaScript(probe(`(() => { const area = [...document.querySelectorAll('#hifi-root .composer, #hifi-root form, #hifi-root .msg-list')].pop() || document.querySelector('#hifi-root'); const btns = [...document.querySelectorAll('#hifi-root button')].filter((b) => /发送|仅记录/.test(b.textContent)); const dump = btns.map((b) => b.textContent.trim()); const send = btns.find((b) => b.textContent.includes('发送')); if (send == null) return JSON.stringify({ dump }); send.click(); return JSON.stringify({ clicked: true, dump }); })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { const item = [...document.querySelectorAll('#hifi-root .menu-item')].find((b) => b.textContent.includes('仅记录')); item?.click(); return true; })()`), true);
+    await sleep(150);
+    await typeAndSend(win, '仅记录样本', 700);
+    const p3envelope = (await getSent(win)).find((e) => e.method === 'message.submit' && e.params?.body === '仅记录样本') ?? null;
+    results.P3_recordOnly = { envelope: p3envelope, pass: p3envelope != null && p3envelope.params.intent === 'record_only' };
+
+    // ---------- P4 确定失败：草稿保留+行内错误（受控 CONTROLLED_FAILURE） ----------
+    await typeAndSend(win, 'FAILME 这条会失败', 900);
+    const taFailed = await win.webContents.executeJavaScript(probe(`document.querySelector('#hifi-root textarea')?.value ?? null`), true);
+    const inlineErr = await win.webContents.executeJavaScript(probe(`[...document.querySelectorAll('#hifi-root .composer-draft.failed')].some((e) => e.textContent.includes('发送失败'))`), true);
+    const failedCalls = (await getSent(win)).filter((e) => e.method === 'message.submit' && String(e.params?.body ?? '').startsWith('FAILME'));
+    results.P4_failureKeepsDraft = { textareaAfter: taFailed, inlineError: inlineErr, failedCalls: failedCalls.length,
+      pass: taFailed === 'FAILME 这条会失败' && inlineErr === true && failedCalls.length === 1 };
+
+    // ---------- P5 定向接管 + 样式隔离 + 返回恢复 ----------
+    const cssBefore = await win.webContents.executeJavaScript(probe(`(() => { const l = document.querySelector('link[href="hifi/app.css"]'); return JSON.stringify({ disabled: l?.disabled ?? null, legacyOn: document.body.classList.contains('legacy-on'), board: getComputedStyle(document.getElementById('board')).display }); })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('任务看板'))?.click(); return true; })()`), true);
+    const takeover = await waitForJs(win, probe(`(() => {
+      const board = document.getElementById('board');
+      const l = document.querySelector('link[href="hifi/app.css"]');
+      const boardVisible = board != null && !board.classList.contains('hidden') && getComputedStyle(board).display !== 'none';
+      const cssDisabled = l != null && l.disabled === true;
+      const legacyStarted = window.__zsLegacyStarted === true;
+      return (boardVisible && cssDisabled && legacyStarted) ? JSON.stringify({ legacyOn: document.body.classList.contains('legacy-on'), boardDisplay: getComputedStyle(board).display, boardVisible, cssDisabled, legacyStarted }) : null;
+    })()`), 15_000, '定向接管定位（任务看板）');
+    await win.webContents.executeJavaScript(probe(`(() => { document.querySelector('.zs-legacy-exit')?.click(); return true; })()`), true);
     await sleep(400);
-    const sentLog = await win.webContents.executeJavaScript(`window.zs.getSentLog()`, true).catch(() => null);
-    results.P1_shellRealData = { sidebar: sidebar && JSON.parse(sidebar), pool: pool && JSON.parse(pool), sendClicked: sendClicked && (typeof sendClicked === 'string' ? JSON.parse(sendClicked) : sendClicked), sentLog,
-      pass: sidebar != null && JSON.parse(sidebar).hasDefaultRoom && JSON.parse(sidebar).hasDm && pool != null && Array.isArray(sentLog) && sentLog.some((e) => e.method === 'message.submit' && e.params?.target?.kind === 'room_root') };
-    // ④ 私信：列表+历史+发送
-    await win.webContents.executeJavaScript(probe(`(() => { const btn = [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.trim() === '私信'); btn?.click(); return true; })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('搜索与收藏'))?.click(); return true; })()`), true);
+    const searchLocated = await waitForJs(win, probe(`(() => { const d = document.getElementById('search-panel'); return (d != null && d.open === true && document.body.classList.contains('legacy-on')) ? JSON.stringify({ open: true, legacyOn: true }) : null; })()`), 15_000, '定向接管定位（搜索与收藏）');
+    await win.webContents.executeJavaScript(probe(`(() => { document.querySelector('.zs-legacy-exit')?.click(); return true; })()`), true);
+    await sleep(500);
+    const backState = await win.webContents.executeJavaScript(probe(`(() => { const l = document.querySelector('link[href="hifi/app.css"]'); return JSON.stringify({ legacyOn: document.body.classList.contains('legacy-on'), cssReenabled: l != null && l.disabled === false, legacyPaused: window.__zsLegacyPaused === true, hifiVisible: getComputedStyle(document.getElementById('hifi-root')).display !== 'none' }); })()`), true);
+    results.P5_targetedTakeover = {
+      cssBefore: JSON.parse(cssBefore), takeover: takeover != null ? JSON.parse(takeover) : null,
+      searchLocated: searchLocated != null ? JSON.parse(searchLocated) : null, back: JSON.parse(backState),
+      pass: takeover != null && (() => { const t = JSON.parse(takeover); return t.legacyOn === true && t.boardVisible === true && t.cssDisabled === true && t.legacyStarted === true; })()
+        && searchLocated != null && (() => { const b = JSON.parse(backState); return b.legacyOn === false && b.cssReenabled === true && b.legacyPaused === true && b.hifiVisible === true; })(),
+    };
+
+    // ---------- P6 私信：历史真实形状（snake_case 映射+作者）+ DM 发送合同 ----------
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.trim() === '私信')?.click(); return true; })()`), true);
     const dmView = await waitForJs(win, probe(`(() => {
-      const t = [...document.querySelectorAll('#hifi-root .msg-list .msg, #hifi-root .msg')].map((m) => m.textContent);
-      const side = [...document.querySelectorAll('#hifi-root .side-item-label')].some((e) => e.textContent.includes('Guide A'));
-      return t.some((x) => x.includes('成员的回复样本')) ? JSON.stringify({ msgs: t.length, side }) : null;
+      const msgs = [...document.querySelectorAll('#hifi-root .msg')].map((m) => m.textContent);
+      return msgs.some((x) => x.includes('成员的回复样本')) && msgs.some((x) => x.includes('Guide A')) ? JSON.stringify({ msgs: msgs.length }) : null;
     })()`), 10_000, '私信历史');
-    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '私信冒烟'); ta.dispatchEvent(new Event('input', { bubbles: true })); const send = [...document.querySelectorAll('#hifi-root button')].find((b) => b.textContent.includes('发送')); send?.click(); return true; })()`), true);
-    await sleep(400);
-    const sentLog2 = await win.webContents.executeJavaScript(`window.zs.getSentLog()`, true).catch(() => null);
-    results.P2_dmReal = { dmView: dmView && JSON.parse(dmView), sentLog2,
-      pass: dmView != null && Array.isArray(sentLog2) && sentLog2.some((e) => e.method === 'message.submit' && e.params?.target?.kind === 'dm') };
-    // ⑤ legacy 接管守卫：未点入口前 legacy 未启动；点「任务看板」→ legacy-on 且 __zsLegacyStart 已被调用
-    const legacyIdle = await win.webContents.executeJavaScript(probe(`JSON.stringify({ started: window.__zsLegacyStarted === true, shown: document.body.classList.contains('legacy-on') })`), true);
-    await win.webContents.executeJavaScript(probe(`(() => { const btn = [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('任务看板')); btn?.click(); return true; })()`), true);
-    await sleep(600);
-    const legacyOn = await win.webContents.executeJavaScript(probe(`(() => { const legacy = document.getElementById('legacy-root'); const cs = legacy ? getComputedStyle(legacy) : null; return JSON.stringify({ started: window.__zsLegacyStarted === true, bodyOn: document.body.classList.contains('legacy-on'), legacyVisible: cs ? cs.display !== 'none' : false, hifiHidden: getComputedStyle(document.getElementById('hifi-root')).display === 'none', exitBtn: document.querySelector('.zs-legacy-exit') != null }); })()`), true);
-    const back = await win.webContents.executeJavaScript(probe(`(() => { const b = document.querySelector('.zs-legacy-exit'); b?.click(); return true; })()`), true);
-    await sleep(200);
-    const backOk = await win.webContents.executeJavaScript(probe(`document.body.classList.contains('legacy-on') ? null : 'back'`), true);
-    results.P3_legacyTakeover = { legacyIdle: JSON.parse(legacyIdle), legacyOn: JSON.parse(legacyOn), back: backOk,
-      pass: JSON.parse(legacyIdle).started === false && JSON.parse(legacyOn).started === true && JSON.parse(legacyOn).bodyOn === true && JSON.parse(legacyOn).legacyVisible === true && JSON.parse(legacyOn).hifiHidden === true && backOk === 'back' };
+    await typeAndSend(win, '私信合同冒烟', 700);
+    const dmSent = (await getSent(win)).filter((e) => e.method === 'message.submit' && e.params?.body === '私信合同冒烟');
+    results.P6_dmContract = { dmView: dmView != null ? JSON.parse(dmView) : null, envelope: dmSent[0] ?? null,
+      pass: dmView != null && dmSent.length === 1 && dmSent[0].params.target.kind === 'dm' && dmSent[0].params.target.conversationId === 'convDm1' };
   } catch (e) {
     results.error = String(e.message);
   }
-  results.allPass = ['P1_shellRealData', 'P2_dmReal', 'P3_legacyTakeover'].every((k) => results[k]?.pass === true);
+  results.allPass = ['P1_shellRealData', 'P2_sendContract', 'P3_recordOnly', 'P4_failureKeepsDraft', 'P5_targetedTakeover', 'P6_dmContract'].every((k) => results[k]?.pass === true);
   fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify(results, null, 2));
-  console.log('[hifi-shell] allPass=' + results.allPass + ' ' + JSON.stringify(Object.fromEntries(Object.entries(results).filter(([k]) => k.startsWith('P')).map(([k, v]) => [k, v.pass]))));
+  console.log('[hifi-shell] allPass=' + results.allPass + ' ' + JSON.stringify(Object.fromEntries(Object.entries(results).filter(([k]) => /^P\d/.test(k)).map(([k, v]) => [k, v && v.pass]))));
   if (results.error) console.log('[hifi-shell] error=' + results.error);
   server.close(); win.destroy(); app.exit(results.allPass ? 0 : 4);
 }

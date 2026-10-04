@@ -1,168 +1,240 @@
 /**
- * 真实数据装载与写动作（H1 首包）：把正式命令响应映射为原型视图模型（types.ts 形状），
- * 写进真实 store。**只映射真实存在的字段；未接通集合保持空**。
+ * 真实数据装载与写动作（H1 首包，第四十七轮修订）：正式命令 → 原型视图模型映射。
  *
- * 命令面（均为既有正式合同，不新增）：app.settings.get / project.open / room.list /
- * member.list / room.pool / conversation.list / conversation.create / conversation.history /
- * conversation.markRead / message.submit（room_root / dm；intent=record_only）。
+ * 合同修正（review-r46 §3）：project.open 用 `{path}`；room_root target 带 `roomId`；
+ * 房间名单经 `member.list({projectId, roomId})` 装载（room.memberIds=@ 候选唯一来源）；
+ * mentions `all` → `{kind:'all'}`；历史 `created_at` 如实映射（不伪造当前时间）。
+ *
+ * 归属与水位（review-r46 §5）：装载代次+请求时项目身份双重门（迟到响应不误归新项目）；
+ * markRead 仅前台+贴底+当前路由；读取失败写入 readErrors（保留旧快照，不冒充空态）。
+ * 发送（review-r46 §4）：sendCommand 携带 Composer commandId，返回 ok/failed/unknown。
  */
-import { command, bridge } from './bridge';
+import { command, sendCommand, bridge } from './bridge';
+import type { BridgeOutcome } from './bridge';
 import { setState, getState, toast, recordWrite } from './data/store';
+import type { HifiState } from './data/store';
+import type { AppState, Message } from './data/types';
 
-/* ---------- 命令响应的最小类型（真实形状的字段子集） ---------- */
-interface ProjectOpenData { project: { id: string; displayName: string } }
+/* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
+interface ProjectOpenData { project: { id: string; displayName: string; revision?: number } }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string }> }
-interface MemberListData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
+interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; taskId?: string; body?: { text?: string }; createdAt?: number; replyCount?: number; unread?: number; taskStatus?: string }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string }> }
-interface HistoryData { messages: Array<{ id: string; createdAt?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number }> }
-export interface SendOutcome { taskId?: string; threadId?: string; disposition?: string }
+interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number }
+interface HistoryData { messages: HistoryMessage[] }
+export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
 
-const textOf = (m: HistoryData['messages'][number]): string => {
+const textOf = (m: HistoryMessage): string => {
   const raw = m.bodyJson ?? m.body_json;
   if (raw == null) return '';
   try { return ((JSON.parse(raw) ?? {}) as { text?: string }).text ?? ''; } catch { return String(raw); }
 };
+/** created_at 如实映射：响应没有则置 0（「未知」）并由呈现层标注，不用当前时间伪造。 */
+const createdAtOf = (m: HistoryMessage): number => m.createdAt ?? m.created_at ?? 0;
 
-/* ---------- 装载 ---------- */
+/** 归属门：请求发起时的 (gen, projectId) 与当前状态一致才落盘。 */
+function stillCurrent(gen: number, projectId: string): boolean {
+  const s = getState();
+  return s.loadGen === gen && s.activeProjectId === projectId;
+}
+
+/* ---------- 首启（有界等待，不靠 reload——review-r46 §5） ---------- */
 
 export async function bootRemembered(): Promise<void> {
-  try {
-    const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
-    const path = remembered?.values?.['ui.autoOpenProjectPath'];
-    if (typeof path === 'string' && path.length > 0) { await openProjectByPath(path); return; }
-    setState((s) => ({ ...s, ui: { ...s.ui, booted: true } } as typeof s));
-  } catch (e) {
-    setState((s) => ({ ...s, ui: { ...s.ui, booted: true, bootError: String((e as Error).message) } } as typeof s));
+  for (let i = 0; i < 60; i += 1) {
+    const s = getState();
+    if (s.boot === 'ready' || s.boot === 'failed') return; // 已装载/用户已手动打开
+    try {
+      const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
+      const path = remembered?.values?.['ui.autoOpenProjectPath'];
+      if (typeof path === 'string' && path.length > 0) {
+        if (getState().boot === 'ready' || getState().boot === 'failed') return;
+        await openProjectByPath(path);
+        return;
+      }
+    } catch { /* daemon 未就绪——继续有界轮询 */ }
+    await new Promise((r) => setTimeout(r, 1000));
   }
+  setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: '60 秒内未取得服务端项目记忆——可手动打开文件夹或重试' } : s));
 }
 
 export async function pickAndOpenFolder(): Promise<void> {
   const dir = await bridge().pickFolder();
   if (dir == null) return;
-  await openProjectByPath(dir);
+  await openProjectByPath(dir).catch((e) => {
+    toast(`打开项目失败：${(e as Error).message}`, 'error');
+    setState((s) => ({ ...s, boot: 'failed', bootError: (e as Error).message }));
+  });
 }
 
 export async function openProjectByPath(path: string): Promise<void> {
-  const data = await command<ProjectOpenData>('project.open', { rootPath: path });
+  const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
   const p = data.project;
   recordWrite('project.open', `打开项目「${p.displayName}」`);
+  const gen = getState().loadGen + 1;
   setState((s) => ({
     ...s,
-    projects: [p],
+    loadGen: gen,
+    projects: [{
+      id: p.id, displayName: p.displayName, rootPath: path, canonicalPath: path, directoryIdentity: '',
+      status: 'ok', revision: p.revision ?? 0, isGit: false,
+    }],
     activeProjectId: p.id,
     visibleProjectIds: [p.id],
     expandedProjectIds: [p.id],
-    ui: { ...s.ui, booted: true, bootError: null },
-  } as typeof s));
+    roomPool: {}, dmHistory: {}, readErrors: {},
+    boot: 'ready', bootError: null,
+  }));
   try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
   await Promise.all([refreshMembers(), refreshRooms(), refreshDms()]);
 }
 
 export async function refreshMembers(): Promise<void> {
-  const s = getState();
-  if (s.activeProjectId === '') return;
-  const data = await command<MemberListData>('member.list', { projectId: s.activeProjectId });
+  const gen = getState().loadGen;
+  const projectId = getState().activeProjectId;
+  if (projectId === '') return;
+  const data = await command<RoomMembersData>('member.list', { projectId });
+  if (!stillCurrent(gen, projectId)) return; // 迟到响应：项目已切走——丢弃（review-r46 §5 反例）
   setState((prev) => ({
     ...prev,
-    members: (data.items ?? []).filter((m) => m.enabled).map((m) => ({
-      id: m.id, displayName: m.displayName, principalType: m.principalType, enabled: true, projectId: prev.activeProjectId,
+    members: (data.items ?? []).map((m) => ({
+      id: m.id, projectId, profileId: '', displayName: m.displayName, enabled: m.enabled,
+      principalType: m.principalType,
+      workState: 'idle' as const, model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
     })),
-  } as typeof prev));
+  }));
 }
 
 export async function refreshRooms(): Promise<void> {
-  const s = getState();
-  if (s.activeProjectId === '') return;
-  const data = await command<RoomListData>('room.list', { projectId: s.activeProjectId });
+  const gen = getState().loadGen;
+  const projectId = getState().activeProjectId;
+  if (projectId === '') return;
+  const data = await command<RoomListData>('room.list', { projectId });
+  if (!stillCurrent(gen, projectId)) return;
+  const rooms = data.items ?? [];
+  // 房间名单（@ 候选唯一来源——review-r46 §3）：每房间 member.list({projectId, roomId})。
+  const rosters = await Promise.all(rooms.map(async (r) => {
+    const roster = await command<RoomMembersData>('member.list', { projectId, roomId: r.id }).catch(() => null);
+    return { roomId: r.id, memberIds: (roster?.items ?? []).filter((m) => m.enabled).map((m) => m.id) };
+  }));
+  if (!stillCurrent(gen, projectId)) return;
   setState((prev) => ({
     ...prev,
-    rooms: (data.items ?? []).map((r) => ({ id: r.id, name: r.name, conversationId: r.conversationId, projectId: prev.activeProjectId })),
-  } as typeof prev));
+    rooms: rooms.map((r, i) => ({
+      id: r.id, projectId, name: r.name, conversationId: r.conversationId,
+      coordinatorMemberId: rosters[i]?.memberIds[0] ?? '', memberIds: rosters[i]?.memberIds ?? [],
+      revision: 0, unread: 0,
+    })),
+  }));
 }
 
 export async function refreshDms(): Promise<void> {
-  const s = getState();
-  if (s.activeProjectId === '') return;
-  const data = await command<ConvListData>('conversation.list', { projectId: s.activeProjectId });
+  const gen = getState().loadGen;
+  const projectId = getState().activeProjectId;
+  if (projectId === '') return;
+  const data = await command<ConvListData>('conversation.list', { projectId });
+  if (!stillCurrent(gen, projectId)) return;
   setState((prev) => ({
     ...prev,
     dms: (data.conversations ?? []).map((c) => ({
-      id: c.conversationId, conversationId: c.conversationId, projectId: c.projectId ?? prev.activeProjectId,
-      peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? null, unread: c.unread ?? 0,
-      execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? null, lastMessagePreview: c.lastMessagePreview ?? null,
+      id: c.conversationId, projectId: c.projectId ?? projectId,
+      peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
+      memberIds: [], threadId: '', createdAt: 0, lastMessageAt: 0,
+      execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
     })),
-  } as typeof prev));
+  }));
 }
+
+/* ---------- 快照装载（读失败≠空态：保留旧快照+readErrors） ---------- */
 
 export async function loadRoomPool(roomId: string): Promise<void> {
+  const gen = getState().loadGen;
+  const projectId = getState().activeProjectId;
   const room = getState().rooms.find((r) => r.id === roomId);
   if (room == null) return;
-  const data = await command<PoolData>('room.pool', { roomId, limit: 50 });
-  setState((prev) => {
-    const msgs = (data.items ?? []).map((it, i) => ({
-      id: `root-${it.threadId}`, authorType: 'human', body: it.body?.text ?? '', createdAt: it.createdAt ?? Date.now() - i * 60_000,
-      roomId, threadId: it.threadId, taskId: it.taskId ?? null, replyCount: it.replyCount ?? 0, unread: it.unread ?? 0,
-      taskStatus: it.taskStatus ?? null, seq: i,
+  try {
+    const data = await command<PoolData>('room.pool', { roomId, limit: 50 });
+    if (!stillCurrent(gen, projectId)) return;
+    const msgs: Message[] = (data.items ?? []).map((it) => ({
+      id: `root-${it.threadId}`, projectId, roomId, threadId: it.threadId, taskId: it.taskId,
+      authorType: 'human', authorId: 'me', kind: 'text', body: it.body?.text ?? '',
+      createdAt: it.createdAt ?? 0, attachmentIds: [],
     }));
-    return { ...prev, roomPool: { ...prev.roomPool, [roomId]: msgs } } as typeof prev;
-  });
-}
-
-export async function loadDmHistory(conversationId: string): Promise<void> {
-  const data = await command<HistoryData>('conversation.history', { conversationId, limit: 100 });
-  const conv = getState().dms.find((d) => d.conversationId === conversationId);
-  setState((prev) => {
-    const msgs = (data.messages ?? []).map((m, i) => ({
-      id: m.id, authorType: (m.authorType ?? m.author_type ?? 'system') as string,
-      authorId: m.authorId ?? m.author_id ?? null,
-      body: textOf(m),
-      createdAt: m.createdAt ?? Date.now() - i * 60_000, dmId: conversationId,
-      seq: m.conversationSeq ?? m.conversation_seq ?? i,
-    }));
-    return { ...prev, dmHistory: { ...prev.dmHistory, [conversationId]: msgs } } as typeof prev;
-  });
-  // 已读水位（贴底读取即推进——与服务端合同一致；失败不阻塞呈现）
-  const lastSeq = (data.messages ?? []).length > 0
-    ? ((data.messages ?? [])[(data.messages ?? []).length - 1]!).conversationSeq ?? ((data.messages ?? [])[(data.messages ?? []).length - 1]!).conversation_seq
-    : undefined;
-  if (conv != null && (conv.unread ?? 0) > 0 && lastSeq != null) {
-    void command('conversation.markRead', { conversationId, throughMessageSeq: lastSeq })
-      .then(() => refreshDms())
-      .catch(() => { /* 已读推进失败下次再试 */ });
+    setState((prev) => {
+      const errors = { ...prev.readErrors }; delete errors[roomId];
+      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: msgs }, readErrors: errors };
+    });
+  } catch (e) {
+    if (!stillCurrent(gen, projectId)) return;
+    const msg = (e as Error).message;
+    setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [roomId]: msg } }));
   }
 }
 
-/* ---------- 写动作（真实命令；附件未接通——携带附件的提交明确拒绝） ---------- */
-
-function rejectAttachments(attachments: Array<{ name: string; size: number }>): boolean {
-  return attachments != null && attachments.length > 0;
+export async function loadDmHistory(conversationId: string, opts: { markRead?: boolean } = {}): Promise<void> {
+  const gen = getState().loadGen;
+  const projectId = getState().activeProjectId;
+  try {
+    const data = await command<HistoryData>('conversation.history', { conversationId, limit: 100 });
+    if (!stillCurrent(gen, projectId)) return;
+    const conv = getState().dms.find((d) => d.id === conversationId);
+    const msgs: Message[] = (data.messages ?? []).map((m, i) => ({
+      id: m.id, projectId, roomId: `dm:${conversationId}`,
+      authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
+      authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: textOf(m),
+      createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? i,
+      attachmentIds: [],
+    }));
+    setState((prev) => {
+      const errors = { ...prev.readErrors }; delete errors[conversationId];
+      return { ...prev, dmHistory: { ...prev.dmHistory, [conversationId]: msgs }, readErrors: errors };
+    });
+    // 已读水位（继承既有合同——仅前台+贴底由页面判定传入；失败不阻塞呈现）。
+    if (opts.markRead === true && conv != null && (conv.unread ?? 0) > 0) {
+      const last = (data.messages ?? [])[(data.messages ?? []).length - 1];
+      const lastSeq = last ? (last.conversationSeq ?? last.conversation_seq) : undefined;
+      if (lastSeq != null) {
+        void command('conversation.markRead', { conversationId, throughMessageSeq: lastSeq })
+          .then(() => { if (stillCurrent(gen, projectId)) void refreshDms(); })
+          .catch(() => { /* 下次进入再推进 */ });
+      }
+    }
+  } catch (e) {
+    if (!stillCurrent(gen, projectId)) return;
+    setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [conversationId]: (e as Error).message } }));
+  }
 }
 
-export async function sendRoomRoot(roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachments: Array<{ name: string; size: number }>): Promise<SendOutcome> {
-  if (rejectAttachments(attachments)) { toast('附件发送尚未接入正式链（H2）——本包请用纯文本发送', 'warn'); throw new Error('ATTACHMENTS_NOT_PORTED'); }
+/** 正式侧消息扩展说明：呈现用序号走原型 Message.threadMessageSeq；无额外下划线字段。 */
+
+/* ---------- 发送（正式异步合同：Composer commandId 贯通；ok/failed/unknown） ---------- */
+
+const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId: string } | { kind: 'all' }> =>
+  mentionIds.map((id) => (id === 'all' ? { kind: 'all' as const } : { kind: 'member' as const, memberId: id }));
+
+export async function sendRoomRoot(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): Promise<BridgeOutcome<SendResult>> {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
-  if (room == null) throw new Error('房间不存在');
-  const r = await command<SendOutcome>('message.submit', {
-    target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room.conversationId },
-    body, intent,
-    mentions: mentionIds.map((id) => ({ kind: 'member', memberId: id })),
+  if (room == null) return { status: 'failed', code: 'NO_ROOM', error: '房间不存在或尚未装载' };
+  if (room.memberIds.length === 0 && intent === 'default') {
+    return { status: 'failed', code: 'NO_MEMBERS', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
+  }
+  const r = await sendCommand<SendResult>(commandId, 'message.submit', {
+    target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room.conversationId, roomId }, // 正式合同：带 roomId
+    body, intent, mentions: mentionPayload(mentionIds),
   });
-  recordWrite('message.submit', `房间「${room.name}」${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
-  await loadRoomPool(roomId);
+  if (r.status === 'ok') recordWrite('message.submit', `房间「${room.name}」${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
   return r;
 }
 
-export async function sendDmMessage(conversationId: string, body: string, intent: 'default' | 'record_only', attachments: Array<{ name: string; size: number }>): Promise<SendOutcome> {
-  if (rejectAttachments(attachments)) { toast('附件发送尚未接入正式链（H2）——本包请用纯文本发送', 'warn'); throw new Error('ATTACHMENTS_NOT_PORTED'); }
+export async function sendDmMessage(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): Promise<BridgeOutcome<SendResult>> {
   const s = getState();
-  const r = await command<SendOutcome>('message.submit', {
+  const r = await sendCommand<SendResult>(commandId, 'message.submit', {
     target: { kind: 'dm', projectId: s.activeProjectId, conversationId },
     body, intent, mentions: [],
   });
-  recordWrite('message.submit', `私信 ${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
-  await loadDmHistory(conversationId);
+  if (r.status === 'ok') recordWrite('message.submit', `私信 ${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
   return r;
 }
 

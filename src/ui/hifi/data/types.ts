@@ -208,6 +208,8 @@ export interface ProjectMember {
   projectId: string;
   profileId: string;
   displayName: string;
+  /** 正式侧投影（第四十七轮）：member.list 的主体类型（human/agent）。 */
+  principalType?: string;
   /** 同一 runtime 的第二成员实例用序号消歧（§3.2） */
   ordinal?: number;
   enabled: boolean;
@@ -226,6 +228,8 @@ export interface Room {
   projectId: string;
   name: string;
   description?: string;
+  /** 正式侧投影（第四十七轮）：房间会话 id（room_root 发送目标）；原型种子经房间内消息间接取得。 */
+  conversationId?: string;
   /** E5：协调者是房间级字段 rooms.coordinator_member_id */
   coordinatorMemberId: string;
   memberIds: string[];
@@ -1022,6 +1026,10 @@ export interface AttentionItem {
 export interface DmConversation {
   id: string;
   projectId: string;
+  /** 正式侧投影（第四十七轮）：conversation.list 的执行态/对端名/预览（H1 呈现用）。 */
+  peerDisplayName?: string;
+  execState?: 'idle' | 'running' | 'queued' | 'paused' | 'interrupted' | string;
+  lastMessagePreview?: string;
   /** 会话标题：用户可改，默认取参与者名字 */
   title: string;
   /** 参与者（含 agent 成员；人类自己不入列） */

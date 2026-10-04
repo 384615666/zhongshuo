@@ -127,6 +127,19 @@ export interface ComposerTarget {
   showNewTask?: boolean;
 }
 
+/** 正式侧发送回执（第四十七轮）：onSend 可返回 Promise——成功才清空，失败/未知保留草稿。 */
+export type FormalSendOutcome =
+  | { status: 'ok' }
+  | { status: 'failed'; error: string }
+  | { status: 'unknown'; error: string };
+
+/** 正式侧能力锁定（第四十七轮）：未接通能力在点击前禁用并说明原因，不出现可选却被忽略。 */
+export interface FormalLimits {
+  attachments?: string;
+  method?: string;
+  access?: string;
+}
+
 export function Composer({
   target,
   draftKey,
@@ -141,6 +154,7 @@ export function Composer({
   recordThread,
   showMentions = true,
   extraAction,
+  formalLimits,
 }: {
   target: ComposerTarget;
   draftKey: string;
@@ -154,7 +168,7 @@ export function Composer({
     attachments: { name: string; size: number }[];
     commandId: string;
     target: ComposerTarget;
-  }) => void;
+  }) => void | Promise<FormalSendOutcome | void> | Promise<void>;
   onClearSubtask?: () => void;
   /** 从消息菜单插入引用或更正提示；只改变草稿，不直接派发任务。 */
   insertText?: { id: number; text: string };
@@ -226,6 +240,8 @@ export function Composer({
    * 放在输入区操作簇内，避免像以前那样在提示"取消归档后才能发送"却找不到入口。
    */
   extraAction?: ReactNode;
+  /** 正式侧能力锁定：给出原因的控件在点击前禁用（视觉保持，行为如实）。 */
+  formalLimits?: FormalLimits;
 }) {
   /**
    * 成员边界（§4.6）：房间/线程取房间名单，私信取该会话的 audience 名单。
@@ -270,6 +286,8 @@ export function Composer({
   const [access, setAccess] = useState<AccessMode>('plan');
   const [accessOpen, setAccessOpen] = useState(false);
   const [attachments, setAttachments] = useState<{ name: string; size: number }[]>([]);
+  /** 正式侧行内发送错误（异步回执失败/未知——第四十七轮；清空于下一次提交尝试） */
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   /** 「本次运行设置」弹层（低频选项的收纳处，§6） */
@@ -440,8 +458,12 @@ export function Composer({
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
+    setSendError(null);
+    const sentMentions = mentions;
+    const sentAttachments = attachments;
+    const sentAs = sendAs;
 
-    onSend({
+    const outcome = onSend({
       body: text,
       sendAs,
       mentionIds: mentions,
@@ -451,18 +473,44 @@ export function Composer({
       commandId: commandIdRef.current,
       target,
     });
-    // 发送成功后清空并换新的 commandId（下一次是新的命令）
-    setBody('');
-    setMentions([]);
-    setAttachments([]);
-    /**
-     * 「仅记录」是**一次性**意图：保存成功后回到该上下文的默认发送方式
-     * （记录串回到"保存记录"，其它回到"发送给 AI"）。
-     * 只有真正提交出去才复位 —— 否则用户在取消/未发送时会莫名丢掉选择。
-     */
-    setSendAs(recordThread ? 'record' : 'ai');
-    setMentionOpen(false);
-    commandIdRef.current = newId();
+
+    /** 确认成功才清空——且只清**本次发送的内容**：等待期间继续编辑的正文/新 @/新附件保留。 */
+    const clearSentContent = () => {
+      setBody((prev) => (prev.startsWith(text) ? prev.slice(text.length).replace(/^\s+/, '') : prev));
+      setMentions((prev) => (prev.length === sentMentions.length && prev.every((m, i) => m === sentMentions[i]) ? [] : prev));
+      setAttachments((prev) => (prev.length === sentAttachments.length && prev.every((a, i) => a.name === sentAttachments[i]!.name && a.size === sentAttachments[i]!.size) ? [] : prev));
+      /**
+       * 「仅记录」是**一次性**意图：确认提交成功后回到该上下文的默认发送方式。
+       * 失败/未知不清（重试仍是仅记录——用户意图不因故障被重置）。
+       */
+      if (sentAs === 'record') setSendAs(recordThread ? 'record' : 'ai');
+      setMentionOpen(false);
+      commandIdRef.current = newId(); // 成功后下一次是新的命令
+    };
+
+    // 正式异步合同（第四十七轮）：onSend 返回 Promise 时等待可判定结果——
+    // 确定失败/结果未知都保留正文/@/附件/意图并给行内错误；未知结果沿用同一 commandId 重试
+    // （后端幂等：同命令号恰一次）。未返回 Promise（原型同步调用形态）保持原行为。
+    if (outcome != null && typeof (outcome as Promise<unknown>).then === 'function') {
+      (outcome as Promise<FormalSendOutcome | void>).then((r) => {
+        if (r == null || r.status === 'ok') {
+          clearSentContent();
+        } else {
+          setSendError(r.status === 'unknown'
+            ? `发送结果未知（${r.error}）——内容已保留，可重试：沿用同一命令号，不会重复发送`
+            : `发送失败：${r.error}——内容已保留，修正后可重发`);
+          if (r.status === 'failed') commandIdRef.current = newId(); // 确定失败：新命令号重发
+        }
+      }).catch((e: unknown) => {
+        setSendError(`发送失败：${e instanceof Error ? e.message : String(e)}——内容已保留，修正后可重发`);
+        commandIdRef.current = newId();
+      }).finally(() => {
+        sendingRef.current = false;
+        setSending(false);
+      });
+      return;
+    }
+    clearSentContent();
     // 释放同步锁。放在微任务里，保证同一 tick 内的后续点击仍被挡住。
     queueMicrotask(() => {
       sendingRef.current = false;
@@ -719,7 +767,8 @@ export function Composer({
           {methodChip ? (
             <button
               className={`method-chip${methodChip.on ? ' on' : ''}`}
-              title={methodChip.hint}
+              title={formalLimits?.method ?? methodChip.hint}
+              disabled={Boolean(formalLimits?.method)}
               onClick={() => methodChip.set(!methodChip.on)}
             >
               <Icon name={methodChip.on ? 'check-circle' : 'circle'} size={11} />
@@ -732,11 +781,13 @@ export function Composer({
               还能往草稿里塞附件是自相矛盾的。 */}
           <button
             className="icon-btn sm"
-            disabled={Boolean(inputDisabledReason)}
+            disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.attachments)}
             title={
-              inputDisabledReason
-                ? `${inputDisabledReason}（只读中不能添加附件）`
-                : '添加附件（原型模拟：生成一份可渲染的模拟副本并挂到这条消息；真实文件选择与摄取未接通）'
+              formalLimits?.attachments
+                ? formalLimits.attachments
+                : inputDisabledReason
+                  ? `${inputDisabledReason}（只读中不能添加附件）`
+                  : '添加附件（原型模拟：生成一份可渲染的模拟副本并挂到这条消息；真实文件选择与摄取未接通）'
             }
             onClick={() => setAttachments((p) => [...p, mockAttachmentDescriptor(p.length)])}
           >
@@ -837,9 +888,9 @@ export function Composer({
               <div className="access-picker">
                 <button
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
-                  disabled={Boolean(inputDisabledReason)}
+                  disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.access)}
                   onClick={() => setAccessOpen((v) => !v)}
-                  title={inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
+                  title={formalLimits?.access ?? inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
                   {currentMode.label}
@@ -929,6 +980,18 @@ export function Composer({
               title="这段文字没有写进草稿存储：切走目标或刷新会丢失，请先发送或复制出来"
             >
               <Icon name="alert-triangle" size={11} /> 草稿未保存
+            </span>
+          ) : null}
+
+          {/* 正式侧行内发送错误（第四十七轮）：失败/未知都在输入区就地可见，不吞错。 */}
+          {sendError != null ? (
+            <span
+              className="composer-draft failed"
+              title={sendError}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setSendError(null)}
+            >
+              <Icon name="alert-triangle" size={11} /> {sendError.slice(0, 80)}（点击关闭）
             </span>
           ) : null}
           </div>

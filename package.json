@@ -11,8 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "typecheck:hifi": "tsc --noEmit -p tsconfig.hifi.json",
     "lint": "eslint .",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check": "pnpm typecheck && pnpm typecheck:hifi && pnpm lint && pnpm test",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:real": "vitest run --config vitest.real.e2e.config.ts",
     "build:ui": "node scripts/build-ui.mjs"

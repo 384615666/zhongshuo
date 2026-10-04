@@ -3659,6 +3659,9 @@ function showConnError(error) {
 function schedulePoll() {
   if (state.pollTimer != null) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(() => {
+    // 换装壳接管（第四十七轮）：hifi 显示期间暂停旧端轮询（返回 legacy 由
+    // __zsLegacySetVisible(true) 恢复）——避免双轮询/后台 markRead/项目漂移。
+    if (window.__zsLegacyPaused === true) return;
     state.pollTick += 1;
     window.__zsPollTick = state.pollTick; // 诊断探针（验证器只读——轮询存活证据）
     window.__zsView = `${currentView()}|dm=${state.openDmId ?? '-'}|th=${state.openThreadId ?? '-'}`;

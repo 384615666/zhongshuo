@@ -2,7 +2,43 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十六轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十七轮，唯一权威快照）
+
+> 本轮=**H1 首包收口（review-r45-r46 全部 P1/P2）**：正式命令合同、异步发送、能力如实、
+> 首启/归属/水位、定向接管、独立 hifi 类型门与真实链测试。R48 交默认新界面的可运行首包
+> （回归+打包身份+真实启动器证据）；Android 仍用 v6。
+> - **命令合同**：project.open `{path}`（反向对照 rootPath=VALIDATION_INVALID 已测）；
+>   room_root target 补 `roomId`；房间名单=`member.list({projectId,roomId})` 逐房间装载
+>   （room.memberIds=@ 候选唯一来源——Lab 式二成员名单不混项目全体）；mentions `all`→
+>   `{kind:'all'}`（DB 事实）；history `created_at` 如实映射（未知=0 呈现层标注，不伪造）。
+> - **异步发送（Composer 正式适配——保留视觉、行为走真）**：onSend 返回回执 Promise；
+>   **成功才清空且只清本次发送内容**（等待期编辑/新 @/新附件保留）；确定失败保留草稿+
+>   行内错误+换新命令号；**结果未知保留同 commandId 重试**（后端幂等恰一次）；同步锁到
+>   回执才释放（双击/Enter 并发防重）；bridge 区分服务拒绝(failed)/传输失败或超时(unknown，
+>   20s 窗)。Composer commandId 贯通信封（不再 Date.now 重造）。
+> - **能力如实（formalLimits）**：附件/计划开关/权限档位点击前禁用+原因（附件指向原界面）；
+>   仅记录入口保留可用；无成员房间派发前置拒绝（可仅记录）。
+> - **首启/归属/水位**：bootRemembered 有界 60×1s+失败可见+重试入口；装载代次+请求时项目
+>   双门（迟到响应丢弃——review 探针反例收口）；markRead 仅前台+贴底+页面判定；读取失败
+>   保留旧快照+readErrors 就地呈现（不冒充空态）；可见时 5s 轻量刷新（隐藏/接管暂停）。
+> - **定向接管**：takeLegacy(target) 按 legacy 既有控件定位（board/files toggle+复核、
+>   search/project-settings/help details、pending 滚动）——已可见不重复点击（toggle 竞态），
+>   连续 3 次稳定确认（boot 收起竞态）；接管时卸载 hifi/app.css（样式隔离）、返回恢复样式
+>   +暂停旧端轮询（__zsLegacySetVisible/schedulePoll 门）+刷新数据；ErrorBoundary+8s 看门狗
+>   （模块加载失败回退 legacy）。
+> - **验证**：hifi 独立 tsconfig（DOM/JSX/bundler+strict，具体投影类型 Room.conversationId/
+>   DmConversation.peerDisplayName/execState、ProjectMember.principalType）入 `check` 链；
+>   **hifiFirstPackage.test.ts 真实链 1/1**（esbuild 打包交付 loader/store×真实
+>   dispatchDaemonCommand×DispatchWorker：{path} 合同/房间名单/指定成员+@全体 DB 事实/仅记录
+>   零 run/DM 派发→worker 回复→created_at 如实+作者映射/传输拒绝=unknown→同号重试恰一次）；
+>   **verify-hifi-shell 升级为合同校验型 6/6**（桩按 zod 镜像严格校验+P1 房间名单 @ 候选/
+>   P2 成功清已发+保留等待期编辑/P3 record_only/P4 受控失败保留草稿+行内错误/P5 定向接管+
+>   样式隔离+返回恢复/P6 DM 合同）；ui-hidden-layout 7/7 不回退。
+> - 遗留（R48）：双击/IME 的 UI 级专项断言（同步锁已实现）；legacy 顶层杂项命令
+>   （renderRemoteSettings 等启动期单次读取）收口；msg-list 宽度/气泡与原型同窗对照截图；
+>   首包候选打包（默认 hifi、--no-hifi 仅对照）+冻结/启动器证据。
+
+## 上一轮快照（2026-10-04 第四十六轮）
 
 > 本轮=**主线切换：原型界面接入正式客户端（H1 首包开工）**（用户补充优先级+
 > hifi-integration-plan-20261004.md：接入顺序 H1 外壳/房间/私信/消息/输入（3 轮）→H2 线程/
