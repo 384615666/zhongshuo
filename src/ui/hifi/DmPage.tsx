@@ -10,8 +10,9 @@ import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope } from './loader';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft } from './loader';
 import { parkUnknownEnvelope } from './data/store';
+import type { HifiDraftAttachment } from './data/store';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
 const EXEC_TEXT: Record<string, string> = {
@@ -19,7 +20,6 @@ const EXEC_TEXT: Record<string, string> = {
 };
 const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
-  attachments: '附件上传 H2 接入——本包请用纯文本或「仅记录」；需要发文件请经「原界面」',
   access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——私信按成员默认权限执行',
 } as const;
 
@@ -123,6 +123,7 @@ export function DmPage() {
                 draftKey={`dm:${active.id}`}
                 showMentions={false}
                 formalLimits={FORMAL_LIMITS}
+                attachmentUpload={{ conversationId: active.id }}
                 onRetrySend={(env) => retryUnknownSend(env).then((r) => {
                   if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（原信封）', 'success'); }
                   return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
@@ -131,8 +132,10 @@ export function DmPage() {
                   // 发送前固化完整正式信封（dm 目标=projectId+conversationId——不带 UI 的
                   // roomId/dmId 私有字段，review-r48 §3）；unknown 冻结原信封。
                   const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+                  const refs = attachmentRefsFromDraft(p.attachments as HifiDraftAttachment[], intent);
+                  if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
                   const draftKey = `dm:${active.id}`;
-                  const env = buildDmEnvelope(p.commandId, active.id, p.body, intent);
+                  const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs);
                   env.revAtSend = p.draftRev;
                   const r = await sendEnvelope(env);
                   if (r.status === 'ok') {

@@ -816,6 +816,28 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const rootAttachments = anchorId != null ? (messageAttachmentSummaries(deps.db, [anchorId]).get(anchorId) ?? []) : [];
         return withCommandId({ ok: true, data: { items, rootAttachments } });
       }
+      case 'thread.get': {
+        // H2（第五十一轮）：线程实体+根消息投影——thread.history 只返回 items/rootAttachments，
+        // 线程实体（归属/根任务/水位）与根消息正文此前由旧界面从主池卡片随路携带，深链直达
+        // 线程时无来源。DTO 缺口正式补齐：只读、归属核验（线程→会话→audience），不猜字段。
+        const params = z.strictObject({ threadId: z.string().min(1) }).parse(env.params);
+        const th = deps.db.prepare(
+          'SELECT id, project_id, conversation_id, room_id, anchor_message_id, root_task_id, status, last_message_seq, revision FROM conversation_threads WHERE id = ?',
+        ).get(params.threadId) as
+          | { id: string; project_id: string; conversation_id: string; room_id: string; anchor_message_id: string; root_task_id: string | null; status: string; last_message_seq: number; revision: number }
+          | undefined;
+        if (th == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `线程不存在或已删除：${params.threadId}`);
+        assertConversationAudience(deps.db, deps.localUserId, th.conversation_id);
+        const anchorRow = deps.db.prepare('SELECT id, author_type, author_id, body_json, created_at, conversation_seq FROM messages WHERE id = ?').get(th.anchor_message_id) as
+          | { id: string; author_type: string; author_id: string; body_json: string; created_at: number; conversation_seq: number }
+          | undefined;
+        let anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number } | null = null;
+        if (anchorRow != null) {
+          try { anchor = { id: anchorRow.id, authorType: anchorRow.author_type, authorId: anchorRow.author_id, body: JSON.parse(anchorRow.body_json) as { text: string }, createdAt: anchorRow.created_at, conversationSeq: anchorRow.conversation_seq }; } catch { /* 残缺正文不虚构——anchor 置空由呈现层标注 */ }
+        }
+        const lastReadSeq = (deps.db.prepare('SELECT last_read_message_seq FROM thread_read_states WHERE thread_id = ? AND viewer_id = ?').get(params.threadId, deps.localUserId) as { last_read_message_seq: number } | undefined)?.last_read_message_seq ?? 0;
+        return withCommandId({ ok: true, data: { thread: { id: th.id, projectId: th.project_id, conversationId: th.conversation_id, roomId: th.room_id, anchorMessageId: th.anchor_message_id, rootTaskId: th.root_task_id, status: th.status, lastMessageSeq: th.last_message_seq, revision: th.revision }, anchor, lastReadSeq } });
+      }
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 按 ID 直查不绕过私信边界（第三十二轮一）

@@ -1,25 +1,32 @@
 /**
- * 房间主池页（H1 首包，第四十七轮修订）：真实 room.pool 根消息（MessageView 呈现）+
- * Composer 正式异步发送（message.submit room_root；意图 ai→default / record→record_only；
- * @ 候选=房间 memberIds 名单）。读取失败保留旧快照+就地错误（不冒充空态）；
- * 可见时轻量刷新（5s，仅当前房间——worker 回复不需重进可见）。
- * 线程/附件/预览属 H2——入口禁用并说明，不用假动作。
+ * 房间主池页（第五十一轮 H2 修订）：room.pool 线程卡（原型 root-card 形态——任务号/状态/
+ * 正文/回复数/未读；记录串如实无任务号）→ 点击进线程视图（/thread/:id）。Composer 正式
+ * 异步发送（room_root）+ 附件上传通道（uploadText/Office… 回执进不可变信封）。
+ * 读取失败保留旧快照+就地错误；可见时轻量刷新（5s，仅当前房间）。
  */
 import { useEffect, useMemo, useRef } from 'react';
-import { MessageView } from './components/MessageView';
+import { Icon } from './components/Icon';
+import { Tag } from './components/ui';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { useStore, loadRoomPool, retryUnknownSend, toast, setState } from './shell';
-import { buildRoomRootEnvelope, sendEnvelope } from './loader';
+import { buildRoomRootEnvelope, sendEnvelope, attachmentRefsFromDraft } from './loader';
 import { parkUnknownEnvelope } from './data/store';
+import type { HifiDraftAttachment } from './data/store';
+import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
 /** 正式侧能力锁定（第四十七轮）：未接通的能力点击前禁用并说明。 */
 const FORMAL_LIMITS = {
-  attachments: '附件上传 H2 接入——本包请用纯文本或「仅记录」；需要发文件请经「原界面」',
   method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链（H3）——当前按项目默认方式派发',
   access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——当前按成员默认权限执行',
 } as const;
+
+const TASK_STATUS: Record<string, { label: string; tone: 'success' | 'info' | 'neutral' | 'warning' }> = {
+  ACTIVE: { label: '执行中', tone: 'info' }, WAITING_USER: { label: '待你处理', tone: 'warning' },
+  BLOCKED: { label: '受阻', tone: 'warning' }, REVIEW: { label: '待验收', tone: 'info' },
+  DONE: { label: '已完成', tone: 'success' }, CANCELLED: { label: '已取消', tone: 'neutral' },
+};
 
 export function RoomPage({ roomId }: { roomId: string }) {
   // selector 必须返回稳定引用（useSyncExternalStore 契约）——过滤/派生放 useMemo。
@@ -30,7 +37,7 @@ export function RoomPage({ roomId }: { roomId: string }) {
   const rosterError = useStore((s) => s.readErrors[`roster:${roomId}`]);
   const room = useMemo(() => rooms.find((r) => r.id === roomId), [rooms, roomId]);
   const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent'), [membersAll]);
-  const msgs = poolMap[roomId] ?? EMPTY;
+  const cards = poolMap[roomId] ?? EMPTY;
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { void loadRoomPool(roomId); }, [roomId]);
@@ -53,19 +60,53 @@ export function RoomPage({ roomId }: { roomId: string }) {
       <div className="row tight wrap" style={{ padding: '10px 14px 0' }}>
         <span className="section-title">#{room.name}</span>
         <span className="faint small">{roomMembers.length > 0 ? `成员：${roomMembers.map((m) => m.displayName).join('、')}` : rosterError != null ? '成员名单读取失败（保留上次名单；重试=切换视图）' : '暂无启用成员（仅记录仍可保存；派发需先有成员）'}</span>
-        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在本房间的原界面打开：附件上传/任务停止/验收返工/线程与预览（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
+        <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在本房间的原界面打开：附件管理/任务停止/验收返工/成果与预览（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面打开本房间</button>
       </div>
       <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
         {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}
-        {msgs.length === 0 && readError == null ? <div className="panel info">主池暂无消息——发送第一条（或仅记录）。</div> : null}
-        {msgs.map((m) => (
-          <MessageView key={m.id} message={m} author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)} />
+        {cards.length === 0 && readError == null ? <div className="panel info">主池暂无线程——发送第一条（或仅记录）。</div> : null}
+        {cards.map((c) => (
+          <div
+            key={c.threadId}
+            className="root-card"
+            style={{ cursor: 'pointer' }}
+            title={c.taskId != null ? `打开回复串（任务 ${c.taskId}）` : '打开记录串（无任务——发送仅保存）'}
+            onClick={(e) => {
+              // 文本选择不算点击（拖选复制不进线程——原型同一保护）。
+              const sel = window.getSelection();
+              if (sel != null && !sel.isCollapsed && sel.toString().trim().length > 0) return;
+              void e;
+              navigate(`/thread/${c.threadId}`);
+            }}
+          >
+            <div className="root-card-head" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {c.taskId != null && c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : <Tag tone="neutral" icon="message-square">记录 · 无任务号</Tag>}
+              {c.taskId != null && c.taskStatus != null ? <Tag tone={TASK_STATUS[c.taskStatus]?.tone ?? 'neutral'} icon="activity">{TASK_STATUS[c.taskStatus]?.label ?? c.taskStatus}</Tag> : null}
+              {c.unread > 0 ? <Tag tone="info" icon="message-square">{c.unread} 条未读</Tag> : null}
+              <span style={{ flex: 1 }} />
+              <span className="small faint">{c.createdAt > 0 ? new Date(c.createdAt).toLocaleString() : '时间未知'}</span>
+            </div>
+            <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '（正文不可得——如实标注）'}</div>
+            <div className="root-foot" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+              <button
+                type="button"
+                className="btn ghost sm"
+                title={`打开回复串：${c.replyCount} 条回复${c.unread > 0 ? `，${c.unread} 条未读` : ''}`}
+                onClick={(e) => { e.stopPropagation(); navigate(`/thread/${c.threadId}`); }}
+              >
+                <Icon name="message-square" size={11} /> {c.replyCount} 条回复
+              </button>
+              {c.muted ? <span className="faint small">已静音</span> : null}
+              {c.lastReplyAt != null ? <span className="faint small">最后回复 {new Date(c.lastReplyAt).toLocaleString()}</span> : null}
+            </div>
+          </div>
         ))}
       </div>
       <Composer
         target={{ kind: 'room_root', roomId }}
         draftKey={`room:${roomId}`}
         formalLimits={FORMAL_LIMITS}
+        attachmentUpload={room.conversationId != null && room.conversationId !== '' ? { conversationId: room.conversationId } : undefined}
         onRetrySend={(env) => retryUnknownSend(env).then((r) => {
           if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（原信封）', 'success'); }
           return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
@@ -77,8 +118,10 @@ export function RoomPage({ roomId }: { roomId: string }) {
           if (roomMembers.length === 0 && intent === 'default') {
             return { status: 'failed', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
           }
+          const refs = attachmentRefsFromDraft(p.attachments as HifiDraftAttachment[], intent);
+          if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
           const draftKey = `room:${roomId}`;
-          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds);
+          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs);
           env.revAtSend = p.draftRev;
           const r = await sendEnvelope(env);
           if (r.status === 'ok') {

@@ -2,7 +2,53 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第五十轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十一轮，唯一权威快照）
+
+> R50=H1 证据收口（eecf0e2）；**R51=H2 开工（review-r50 四项全落）**：回复串真实页面链+
+> 附件信封/预览骨架+深链规范化入口+验证器五项取证修复+补证三连+v2 版本口径澄清。
+> v2（用户包）原地稳定；工程全部在源码/独立副本。Android 仍用 v6。
+> - **[§4 回复串]** ThreadPage（`/thread/:id`）：主池 ThreadCard（room.pool 全字段）→
+>   锚块（thread.get anchor）+回复（thread.history）+thread 目标发送（buildThreadEnvelope
+>   ——**不另建根任务**）；记录串默认仅记录；详情=任务概况+停止（绑定 run/代次）+交付验收
+>   （**打开即冻结三重身份**，目标变化作废）；关闭视图不停止执行；readGate=线程独立水位门
+>   （不混 DM conversationSeq）。DTO 缺口补齐：新只读命令 `thread.get`（audience 核验）。
+> - **[§4 附件/预览骨架]** 格式实际限幅（文本 256KB/图片 8MB/PDF、Office 20MiB/CSV 5MB——
+>   不统一 20MiB）；Composer 📎 真实上传（uploadText/Image/Pdf/Office/Csv，回执绑会话进
+>   HifiDraft.attachments）→ refs 进**不可变信封**（builder 可选字段）；成功只清已发资源；
+>   图片+派发=能力门拦截（二选一文案）；消息芯片=真实附件摘要，点击 previewText 真内联。
+> - **[§4 深链]** `lib/deepLink.ts`+App 分流：#dm=/#task=/#delivery=/#msg= → deepLink.resolve
+>   （真实命令）→ 跨项目先 openProjectByPath → 内部路由（task/delivery→thread?tab=task，
+>   msg→thread?message=）——刷新/前进后退走内部路由，实体身份保留。
+> - **[§2 验证器五修]** verify-hifi-package-r50.cjs：①procsOfCopy 真路径匹配（反斜杠不
+>   加倍——like 无转义义）+查询失败=未确认不冒充零+PID 身份捕获（procsBeforeClose≥1 才算
+>   对照、capturedPids 逐一核退出）；②batExit 启动时订阅+pause 周期喂入+exitCode 判定；
+>   ③负对照**实跑** waitFor 不可能条件（轮次/时长留档，不实跑则 exit5）；④run2/3 重启历史
+>   按上一轮 messageId+taskId（conversation_threads）+UI 标记可见（主池 DOM id=root-<threadId>
+>   非消息号——正文核对）；⑤仅记录核 thread.root_task_id NULL+outbox 前后差；DM 回复按
+>   reply.messageId（DOM id=msg-<id>）核可见。**坑：spawnSync options 误入参数数组→argv
+>   拼出 "[object Object]"（PS 位置参数绑定错误——逐字节比命令才发现）。**
+> - **[§2 补证三连]** **r50-20261004160543 allPass=true**（同 v2 产物 bld_f152ca66662dc4ab
+>   独立副本）：run1-3 各 batExit={code:0}+procsBeforeCloseConfirmed+capturedPidsGone+
+>   residualZero+shutdown forced!=true+realCalls=0；负对照**实跑**超时（6 轮/2036ms）；run2/3
+>   priorRunHistoryOk（上一轮 messageId+taskId+UI 可见）；仅记录 thread.root_task_id NULL+
+>   outbox/runs 双零差（详见 dist/desktop/hifi-h1-verify-r50/；旧 runId 原样保留）。
+> - **[§2/§3 边界]** 旧危险 verify-hifi-package.cjs 加硬拒绝守卫（默认 exit2，考古需显式
+>   ZS_ALLOW_DANGEROUS_LEGACY_VERIFIER=1）；make-hifi-h1-package.mjs：独立输出目录（默认
+>   hifi-h1-candidate-<stamp>，显式目录遇 RESULTS 用户回填=拒绝）、run-self-check.bat 改指
+>   随包 h1-self-check.cjs、清旧残留 self-check.cjs；v2 版本时间线澄清
+>   （dev25-h1-v2-version-note-20261004.md：bld_5f1b092fed6e6240→bld_f152ca66662dc4ab 原位
+>   重建于用户开测前+外围文件后补写入如实登记；「零接触」口径=591 清单范围）+ 包外说明
+>   （dist/desktop/README-v2-体验期间说明-r51.md）。
+> - **[证据]** tests/integration/hifiThreadRound51.test.ts（真实链 1/1：线程卡→thread.get→
+>   回复不另建根任务→记录串→水位门→验收三重绑定→附件信封+跨会话拒绝→深链映射）；scripts/
+>   verify-hifi-thread-r51.cjs=**实际 React 页面×正式 daemon×fake worker** 页面链 pass=true
+>   （T1 线程卡/T2 跟进/T3 记录串/T4 验收 DONE/T5 markRead 水位/T6 附件上传+挂载/T7 #task=
+>   深链）+同窗截图×2（CDP Page.captureScreenshot——**坑：隐藏窗口 capturePage 返回首帧**）
+>   视觉双 PASS。验证面：**全量 855/855**、typecheck+typecheck:hifi、hifi-shell 9/9（P1 选择
+>   器随 H2 线程卡更新）、ui-hidden-layout 7/7。
+> - **[R52 待做]** 共享预览完整版（PreviewPane+vendored 渲染器复用）、附件排队按消息输入
+>   水位、imageAck 显式确认 UI、H2 独立候选包（新验证器需随 H2 UI 选择器更新——主池已
+>   .root-card）。
 
 > R49=可短测首包 v2 交付（bbb6a2d）；R50=review-r49 四项收口：**去假阳性三连（独立副本
 > r50-20261004144010 allPass）+打包边界+H1 自检+H2 映射盘点**。用户可开始体验 v2；

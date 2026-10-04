@@ -9,16 +9,42 @@
  * 读取错误/接管状态）。未接通集合保持空值，由页面如实呈现；不伪造时间/成员/状态。
  */
 import { useSyncExternalStore } from 'react';
-import type { AppState } from './types';
+import type { AppState, Thread, ThreadCard } from './types';
+
+/** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
+ * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
+export interface ThreadTaskDetail {
+  id: string;
+  title: string;
+  status: string;
+  roomId: string;
+  threadId: string | null;
+  roomTaskNumber: number;
+  revision: number;
+  stopGeneration: number;
+  activeRun: { id: string; status: string } | null;
+  pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
+  lastStartupFailureMessage?: string | null;
+}
 
 /** 正式侧扩展状态（挂在 AppState 之上的真实投影层）。 */
 export interface HifiExtension {
   /** 装载代次：openProject +1；迟到的旧项目响应按代次+项目身份双重门丢弃（review-r46 §5）。 */
   loadGen: number;
-  /** 房间主池快照：roomId → 根消息（原型 Message 形状）。 */
-  roomPool: Record<string, AppState['messages']>;
+  /** 房间主池快照（第五十一轮起）：roomId → 线程卡（room.pool 真实投影）。 */
+  roomPool: Record<string, ThreadCard[]>;
   /** 私信历史快照：conversationId → 消息。 */
   dmHistory: Record<string, AppState['messages']>;
+  /** 线程实体（thread.get）：threadId → 实体（含 conversationId——发送目标用）。 */
+  threadEntities: Record<string, Thread>;
+  /** 线程根消息（thread.get anchor）：threadId → 根消息（缺失=null，呈现层标注）。 */
+  threadAnchors: Record<string, AppState['messages'][number] | null>;
+  /** 线程回复（thread.history items）：threadId → 回复列表（含附件摘要）。 */
+  threadMessages: Record<string, AppState['messages']>;
+  /** 线程任务详情（task.get）：threadId → 详情（记录串无任务则不写键）。 */
+  threadTasks: Record<string, ThreadTaskDetail>;
+  /** 线程阅读水位（thread.get lastReadSeq——首条未读分隔线用；服务端 thread_read_states 为准）。 */
+  threadReadSeq: Record<string, number>;
   /** 读取失败（区别于空态）：key 同上，值为错误消息——保留旧快照并就地呈现错误。 */
   readErrors: Record<string, string>;
   /** 结果未知的在途信封（review-r47 §2）：按目标草稿键持有**不可变原信封**——重试严格重发
@@ -27,6 +53,9 @@ export interface HifiExtension {
   /** 标读统一门（review-r47 §4）：页面注册——markRead 发起前**此刻**重查（当前会话/前台/
    * 贴底/接管）；缺省拒绝（安全侧）。 */
   readGate: ((conversationId: string) => boolean) | null;
+  /** 线程标读门（review-r50 §4）：**线程独立水位**（thread_message_seq 域）+当前导航代次/
+   * 前台/贴底/接管——不与 DM 的 conversationSeq 门混用；缺省拒绝。 */
+  threadReadGate: ((threadId: string) => boolean) | null;
   /** 「原界面」接管状态。 */
   legacyActive: boolean;
   legacyReason: string | null;
@@ -58,7 +87,8 @@ function makeEmptyState(): HifiState {
     ui: { theme: 'light', activeRoomId: '', writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0,
-    roomPool: {}, dmHistory: {}, readErrors: {}, pendingSends: {}, readGate: null,
+    roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadReadSeq: {},
+    readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null,
   };
@@ -75,13 +105,29 @@ export function useStore<T>(selector: (s: HifiState) => T): T {
 }
 
 /* ---------- 草稿（Composer 契约：按 draftKey 存整份草稿；缺省返回空草稿——原型 seeds 同形） ---------- */
-export interface HifiDraft { body: string; mentions: string[]; attachments: Array<{ name: string; size: number }>; access: string; sendAs: 'ai' | 'record'; rev?: number }
+
+/**
+ * 正式附件草稿（第五十一轮 H2 骨架）：上传回执绑定发起项目/会话/草稿键——attachmentId/
+ * hash/revision 只有在 attachment.upload* 明确成功后写入；status 如实（uploading/ready/
+ * failed），失败保留整份（可移除重选）。结算仍按 name+size 识别已发资源（原型契约不变）。
+ */
+export interface HifiDraftAttachment {
+  name: string;
+  size: number;
+  attachmentId?: string;
+  hash?: string;
+  revision?: number;
+  kind?: string;
+  status?: 'uploading' | 'ready' | 'failed';
+  error?: string;
+}
+export interface HifiDraft { body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number }
 
 /** 结果未知的在途信封（不可变快照——重试只发这一份）。 */
 export interface PendingSendEnvelope {
   commandId: string;
   method: 'message.submit';
-  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }> };
+  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[] };
   targetLabel: string;
   at: number;
   /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */
@@ -97,6 +143,17 @@ export function setReadGate(gate: ((conversationId: string) => boolean) | null):
 export function canMarkRead(conversationId: string): boolean {
   const gate = getState().readGate;
   try { return gate != null && gate(conversationId); } catch { return false; }
+}
+
+/** 线程独立水位门（review-r50 §4）：thread.markRead 发起前此刻重查——当前线程+前台/贴底/
+ * 接管状态由 ThreadPage 注册；与 DM 的 conversationSeq 门分开（打开房间≠读完线程）。 */
+export function setThreadReadGate(gate: ((threadId: string) => boolean) | null): void {
+  setState((s) => ({ ...s, threadReadGate: gate }));
+}
+
+export function canMarkThreadRead(threadId: string): boolean {
+  const gate = getState().threadReadGate;
+  try { return gate != null && gate(threadId); } catch { return false; }
 }
 
 export function parkUnknownEnvelope(draftKey: string, env: PendingSendEnvelope): void {

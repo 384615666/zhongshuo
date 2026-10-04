@@ -160,10 +160,11 @@ async function main() {
 
     // ---------- P1 侧栏/主池/房间名单（@ 候选来自 member.list({roomId})） ----------
     await win.webContents.executeJavaScript(probe(`(() => { const btn = [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间')); btn?.click(); return true; })()`), true);
+    // 第五十一轮 H2：主池条目=线程卡（.root-card——H1 的 .msg 形态已由 ThreadCard 取代）。
     const p1 = await waitForJs(win, probe(`(() => {
-      const msgs = [...document.querySelectorAll('#hifi-root .msg-list .msg')].map((m) => m.textContent);
-      return msgs.some((t) => t.includes('Hifi 主池样本消息')) ? JSON.stringify({ msgs: msgs.length, composer: document.querySelector('#hifi-root textarea') != null }) : null;
-    })()`), 10_000, '房间主池+输入区');
+      const cards = [...document.querySelectorAll('#hifi-root .msg-list .root-card')].map((m) => m.textContent);
+      return cards.some((t) => t.includes('Hifi 主池样本消息')) ? JSON.stringify({ cards: cards.length, composer: document.querySelector('#hifi-root textarea') != null }) : null;
+    })()`), 10_000, '房间主池（线程卡）+输入区');
     await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('Lab Room'))?.click(); return true; })()`), true);
     await sleep(300);
     await win.webContents.executeJavaScript(probe(`(() => { const atBtn = [...document.querySelectorAll('#hifi-root button')].find((b) => (b.title || '').includes('提及成员')); atBtn?.click(); return true; })()`), true);

@@ -242,12 +242,40 @@ export interface Thread {
   id: string;
   projectId: string;
   roomId: string;
+  /** 正式侧（第五十一轮）：thread.get 如实回填——thread 目标信封需要它；缺省时不发送。 */
+  conversationId?: string;
   anchorMessageId: string;
   /** E1：讨论串 root_task_id 为空 */
   rootTaskId?: string;
   status: 'open' | 'archived';
   lastMessageSeq: number;
   revision: number;
+}
+
+/** 主池线程卡（第五十一轮 H2）：room.pool 条目的真实投影——不混入伪造的任务标题/时间。 */
+export interface ThreadCard {
+  threadId: string;
+  projectId: string;
+  roomId: string;
+  anchorMessageId: string;
+  /** 记录串为 null（E1——卡片不显示任务号/状态，串内默认仅记录、永不唤醒 agent） */
+  taskId: string | null;
+  taskStatus: string | null;
+  roomTaskNumber: number | null;
+  body: string;
+  createdAt: number;
+  replyCount: number;
+  lastReplyAt: number | null;
+  unread: number;
+  muted: boolean;
+  followed: boolean;
+}
+
+/** 已落库附件摘要（thread.history/根附件真实形状：{artifactId, filename, kind}）。 */
+export interface FormalAttachmentSummary {
+  artifactId: string;
+  filename: string;
+  kind: string;
 }
 
 /* ---------- §17.9：线程内部视图键 ----------
@@ -288,6 +316,8 @@ export interface Message {
    * 不需要 taskId —— 这正是旧 Artifact 模型做不到的事。
    */
   attachmentIds?: string[];
+  /** 正式侧（第五十一轮）：真实附件摘要（message_attachments 投影）——优先于原型 resources 路径渲染。 */
+  formalAttachments?: FormalAttachmentSummary[];
   reactions?: { emoji: string; by: string[] }[];
   saved?: boolean;
   /** §17.3 结构化卡片载荷 */

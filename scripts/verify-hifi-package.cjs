@@ -11,6 +11,17 @@ const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+// 【已停用——review-r50 §2】下方实现含全机 taskkill /IM electron.exe 与清交付包 server-data
+// 两类危险动作（第四十九轮口径），不能再作为可运行验收入口（历史源码保留）。当前严格验收
+// 入口 = scripts/verify-hifi-package-r50.cjs（独立副本+独立数据根+本轮 PID/路径身份收拢+
+// window.close 正式停机）。考古复跑需显式 ZS_ALLOW_DANGEROUS_LEGACY_VERIFIER=1 并自负其责。
+if (process.env.ZS_ALLOW_DANGEROUS_LEGACY_VERIFIER !== '1') {
+  console.error('[refused] 本脚本已停用（全机 taskkill + 清交付包数据——review-r50 §2）。');
+  console.error('         请使用 scripts/verify-hifi-package-r50.cjs（独立副本严格三连）。');
+  console.error('         考古复跑需 ZS_ALLOW_DANGEROUS_LEGACY_VERIFIER=1，且不得指向用户交付目录。');
+  process.exit(2);
+}
+
 const repo = path.resolve(__dirname, '..');
 const pkgDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(repo, 'dist', 'desktop', 'hifi-h1-win-v2');
 const evidenceDir = path.join(repo, 'dist', 'desktop', 'hifi-h1-verify');

@@ -15,6 +15,7 @@ import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLab
 import type { Message, ProjectMember, RouteMode } from '../data/types';
 import { recordLocalOnly, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
+import type { FormalAttachmentSummary } from '../data/types';
 
 /* ---------------- 极简富文本：仅支持 `code` 与 **粗体** ---------------- */
 
@@ -43,13 +44,39 @@ function RichText({ text }: { text: string }) {
  * 现在附件经 `Message.attachmentIds` 关联到资源，chip 显示真实标题与版本。
  * 无 taskId 的主池消息同样渲染（§17.9 第 1 条）。
  */
+const KIND_LABEL: Record<string, string> = {
+  text_file: '文本', code_file: '代码', image_file: '图片', pdf_file: 'PDF',
+  docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯',
+};
+
 function MessageAttachments({
-  message, onOpen,
+  message, onOpen, onOpenAttachment,
 }: {
   message: Message;
   onOpen?: (resourceId: string, revision?: number) => void;
+  /** 正式侧（第五十一轮）：真实附件摘要芯片（message_attachments 投影）——优先渲染。 */
+  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
 }) {
   const s = useStore((x) => x);
+  // 正式摘要优先（真实 attachmentId/kind）；无正式数据才走原型 resources 路径。
+  if ((message.formalAttachments ?? []).length > 0) {
+    return (
+      <div className="msg-attach-row">
+        {(message.formalAttachments ?? []).map((a) => (
+          <button
+            key={a.artifactId}
+            className="msg-attach"
+            title={`打开 ${a.filename}（只读预览，不发送给 AI）`}
+            onClick={() => onOpenAttachment?.(a)}
+          >
+            <Icon name="file-text" size={12} />
+            <span className="truncate">{a.filename}</span>
+            <span className="msg-attach-kind">{KIND_LABEL[a.kind] ?? a.kind}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
   const links = attachmentsOfMessage(s, message.id);
   if (links.length === 0) return null;
 
@@ -105,6 +132,7 @@ export function MessageView({
   onQuote,
   onCorrection,
   onOpenResource,
+  onOpenAttachment,
 }: {
   message: Message;
   author?: ProjectMember;
@@ -116,6 +144,8 @@ export function MessageView({
   onOpenArtifact?: (artifactId: string) => void;
   /** UX-PREVIEW-01：打开消息携带的资源（主池与线程共用同一回调） */
   onOpenResource?: (resourceId: string, revision?: number) => void;
+  /** 正式侧（第五十一轮）：打开真实附件摘要芯片（attachment.preview* 通道）。 */
+  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
   onReact?: (emoji: string) => void;
   onSave?: () => void;
   onConvertToTask?: () => void;
@@ -186,7 +216,7 @@ export function MessageView({
             {/* 消息携带的资源（UX-PREVIEW-01 / §17.9）
                 这是"主池普通附件也能预览"的入口：附件挂在消息上，
                 **不要求 taskId**。点击打开共享预览，不发送、不执行。 */}
-            <MessageAttachments message={message} onOpen={onOpenResource} />
+            <MessageAttachments message={message} onOpen={onOpenResource} onOpenAttachment={onOpenAttachment} />
           </>
         )}
 

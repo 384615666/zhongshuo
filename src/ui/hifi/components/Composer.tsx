@@ -19,11 +19,11 @@ import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
 import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope } from '../data/store';
-import type { PendingSendEnvelope, HifiDraft } from '../data/store';
+import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment } from '../data/store';
 import { takePendingQuotes } from '../data/actions-preview';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
-import { mockAttachmentDescriptor } from '../data/attachments';
+import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
 
 /**
@@ -160,6 +160,7 @@ export function Composer({
   extraAction,
   formalLimits,
   onRetrySend,
+  attachmentUpload,
 }: {
   target: ComposerTarget;
   draftKey: string;
@@ -170,7 +171,7 @@ export function Composer({
     mentionIds: string[];
     method: { planFirst: boolean; skipFirstDraft: boolean; splitWork: boolean };
     access: AccessMode;
-    attachments: { name: string; size: number }[];
+    attachments: HifiDraftAttachment[];
     commandId: string;
     target: ComposerTarget;
     /** 发起时草稿编辑代次（页面冻结进信封——清算判定用）。 */
@@ -251,6 +252,11 @@ export function Composer({
   formalLimits?: FormalLimits;
   /** 结果未知信封的重发通道（review-r47 §2）：严格重发冻结原信封——由页面接正式命令。 */
   onRetrySend?: (env: PendingSendEnvelope) => Promise<FormalSendOutcome | void>;
+  /**
+   * 正式附件上传通道（第五十一轮 H2）：页面提供 {conversationId} 时 📎 走真实文件选择
+   * + attachment.upload*（回执绑定该会话）；未提供时维持 formalLimits 禁用——不 mock。
+   */
+  attachmentUpload?: { conversationId: string };
 }) {
   /**
    * 成员边界（§4.6）：房间/线程取房间名单，私信取该会话的 audience 名单。
@@ -294,7 +300,35 @@ export function Composer({
   const [splitWork, setSplitWork] = useState(false);
   const [access, setAccess] = useState<AccessMode>('plan');
   const [accessOpen, setAccessOpen] = useState(false);
-  const [attachments, setAttachments] = useState<{ name: string; size: number }[]>([]);
+  const [attachments, setAttachments] = useState<HifiDraftAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * 真实附件上传（第五十一轮 H2）：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office
+   * 20MiB/CSV 5MB——服务端为最终裁决），逐文件占位 uploading → attachment.upload* 回执
+   * （attachmentId/hash/revision/kind）写回芯片；失败保留整份（状态 failed+原因，可移除）。
+   */
+  const uploadPickedFiles = async (files: File[]): Promise<void> => {
+    if (attachmentUpload == null) return;
+    for (const f of files) {
+      const cls = classifyAttachmentFile(f.name, f.size);
+      if (cls.cls === 'unsupported') {
+        setAttachments((p) => [...p, { name: f.name, size: f.size, status: 'failed', error: cls.reason }]);
+        continue;
+      }
+      setAttachments((p) => [...p, { name: f.name, size: f.size, status: 'uploading' }]);
+      try {
+        const r = await uploadAttachmentFile(attachmentUpload.conversationId, f);
+        setAttachments((p) => p.map((a) => (a.name === f.name && a.status === 'uploading'
+          ? { ...a, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind, status: 'ready' }
+          : a)));
+      } catch (e) {
+        setAttachments((p) => p.map((a) => (a.name === f.name && a.status === 'uploading'
+          ? { ...a, status: 'failed', error: (e as Error).message }
+          : a)));
+      }
+    }
+  };
   /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
   const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string } | null>(null);
   const sendError = sendErrorFor != null && sendErrorFor.key === draftKey ? sendErrorFor.text : null;
@@ -729,15 +763,18 @@ export function Composer({
         </div>
       ) : null}
 
-      {/* 附件 */}
+      {/* 附件（正式回执芯片：uploading/ready/failed 如实——失败保留可移除） */}
       {attachments.length > 0 ? (
         <div className="composer-mentions">
           {attachments.map((a, i) => (
-            <span key={i} className="chip mono">
+            <span key={`${a.name}-${i}`} className="chip mono" title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
               <Icon name="paperclip" size={11} />
               {a.name}
               <span className="faint">{Math.round(a.size / 1024)}KB</span>
-              <button onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))}>
+              {a.status === 'uploading' ? <span className="faint">上传中…</span> : null}
+              {a.status === 'failed' ? <span style={{ color: 'var(--warning)' }}>失败</span> : null}
+              {a.status === 'ready' ? <span className="faint">v{a.revision}</span> : null}
+              <button onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))} title={a.status === 'failed' ? '移除失败的附件' : '移除附件（已上传的资源仍在会话附件列表中）'}>
                 <Icon name="x" size={11} />
               </button>
             </span>
@@ -866,21 +903,38 @@ export function Composer({
 
           {/* 附件与提及放在左侧，紧邻输入内容（原来在最右侧，够不着）。
               只读态（私信归档）下附件按钮一并禁用：输入框都写不了，
-              还能往草稿里塞附件是自相矛盾的。 */}
+              还能往草稿里塞附件是自相矛盾的。
+              正式通道（第五十一轮 H2）：页面给 attachmentUpload={conversationId} 时经真实
+              文件选择+attachment.upload*（格式实际限幅前置，服务端为最终裁决）；未给通道的
+              页面维持 formalLimits 禁用说明——不出现「看起来已附上」的 mock 成功。 */}
           <button
             className="icon-btn sm"
-            disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.attachments)}
+            disabled={Boolean(inputDisabledReason) || (attachmentUpload == null && Boolean(formalLimits?.attachments))}
             title={
-              formalLimits?.attachments
+              attachmentUpload == null && formalLimits?.attachments
                 ? formalLimits.attachments
                 : inputDisabledReason
                   ? `${inputDisabledReason}（只读中不能添加附件）`
-                  : '添加附件（原型模拟：生成一份可渲染的模拟副本并挂到这条消息；真实文件选择与摄取未接通）'
+                  : attachmentUpload != null
+                    ? '添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）'
+                    : '附件通道未接入本页'
             }
-            onClick={() => setAttachments((p) => [...p, mockAttachmentDescriptor(p.length)])}
+            onClick={() => fileInputRef.current?.click()}
           >
             <Icon name="paperclip" size={14} />
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              e.target.value = ''; // 允许再次选择同一文件
+              if (attachmentUpload == null || files.length === 0) return;
+              void uploadPickedFiles(files);
+            }}
+          />
 
           {showMentions ? (
             <button

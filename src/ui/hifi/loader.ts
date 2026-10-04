@@ -11,15 +11,16 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead } from './data/store';
-import type { HifiState } from './data/store';
-import type { AppState, Message } from './data/types';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead } from './data/store';
+import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
+import type { AppState, Message, Thread, ThreadCard } from './data/types';
+import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number } }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
-interface PoolData { items: Array<{ threadId: string; taskId?: string; body?: { text?: string }; createdAt?: number; replyCount?: number; unread?: number; taskStatus?: string }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number }
 interface HistoryData { messages: HistoryMessage[] }
@@ -175,20 +176,147 @@ export async function loadRoomPool(roomId: string): Promise<void> {
   try {
     const data = await command<PoolData>('room.pool', { roomId, limit: 50 });
     if (!stillCurrent(gen, projectId)) return;
-    const msgs: Message[] = (data.items ?? []).map((it) => ({
-      id: `root-${it.threadId}`, projectId, roomId, threadId: it.threadId, taskId: it.taskId,
-      authorType: 'human', authorId: 'me', kind: 'text', body: it.body?.text ?? '',
-      createdAt: it.createdAt ?? 0, attachmentIds: [],
+    // 主池条目=线程卡（第五十一轮 H2）：room.pool 的真实投影——记录串 taskId=null（E1），
+    // 不伪造任务标题；正文缺省空串由呈现层标注。
+    const cards: ThreadCard[] = (data.items ?? []).map((it) => ({
+      threadId: it.threadId, projectId, roomId,
+      anchorMessageId: it.anchorMessageId ?? '',
+      taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, roomTaskNumber: it.roomTaskNumber ?? null,
+      body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
+      replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
+      unread: it.unread ?? 0, muted: it.muted === true, followed: it.followed === true,
     }));
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[roomId];
-      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: msgs }, readErrors: errors };
+      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, readErrors: errors };
     });
   } catch (e) {
     if (!stillCurrent(gen, projectId)) return;
     const msg = (e as Error).message;
     setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [roomId]: msg } }));
   }
+}
+
+/* ---------- 线程视图（第五十一轮 H2：thread.get/thread.history/task.get 真实 DTO 适配） ---------- */
+
+interface ThreadGetData {
+  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
+  anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number } | null;
+  lastReadSeq: number;
+}
+interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text: string }; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
+interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
+interface TaskGetData {
+  task: { id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number };
+  activeRun: { id: string; status: string } | null;
+  pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
+  lastStartupFailureMessage?: string;
+}
+
+const msgOfReply = (projectId: string, roomId: string, threadId: string, it: ThreadHistoryItem): Message => ({
+  id: it.id, projectId, roomId, threadId, taskId: undefined,
+  authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
+  body: it.body?.text ?? '', createdAt: it.createdAt, threadMessageSeq: it.seq,
+  attachmentIds: [], formalAttachments: it.attachments ?? [],
+});
+
+/**
+ * 装载线程视图：thread.get（实体+根消息+水位）→ thread.history（回复+根附件）→
+ * task.get（有根任务才查）。readGate 独立水位：thread.markRead 只在**发起此刻**门通过才发
+ * （当前线程+前台/贴底/接管——ThreadPage 注册；与 DM conversationSeq 门分开，review-r50 §4）。
+ */
+export async function loadThread(threadId: string, opts: { markRead?: boolean } = {}): Promise<void> {
+  const gen = getState().loadGen;
+  try {
+    const got = await command<ThreadGetData>('thread.get', { threadId });
+    const projectId = got.thread.projectId;
+    if (!stillCurrent(gen, projectId)) return; // 项目已切走——丢弃迟到响应
+    const thread = {
+      id: got.thread.id, projectId, conversationId: got.thread.conversationId, roomId: got.thread.roomId,
+      anchorMessageId: got.thread.anchorMessageId, rootTaskId: got.thread.rootTaskId ?? undefined,
+      status: (got.thread.status === 'archived' ? 'archived' : 'open') as Thread['status'],
+      lastMessageSeq: got.thread.lastMessageSeq, revision: got.thread.revision,
+    };
+    const anchor: Message | null = got.anchor == null ? null : {
+      id: got.anchor.id, projectId, roomId: thread.roomId, threadId: undefined,
+      authorType: got.anchor.authorType as Message['authorType'], authorId: got.anchor.authorId,
+      kind: 'text', body: got.anchor.body?.text ?? '', createdAt: got.anchor.createdAt,
+      attachmentIds: [],
+    };
+    setState((prev) => {
+      const errors = { ...prev.readErrors }; delete errors[`thread:${threadId}`];
+      return {
+        ...prev,
+        threadEntities: { ...prev.threadEntities, [threadId]: thread },
+        threadAnchors: { ...prev.threadAnchors, [threadId]: anchor },
+        threadReadSeq: { ...prev.threadReadSeq, [threadId]: got.lastReadSeq },
+        readErrors: errors,
+      };
+    });
+    const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
+    if (!stillCurrent(gen, projectId)) return;
+    const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
+    setState((prev) => ({ ...prev, threadMessages: { ...prev.threadMessages, [threadId]: replies } }));
+    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
+    if ((hist.rootAttachments ?? []).length > 0 && anchor != null) {
+      setState((prev) => ({
+        ...prev,
+        threadAnchors: { ...prev.threadAnchors, [threadId]: { ...(prev.threadAnchors[threadId] ?? anchor), formalAttachments: hist.rootAttachments } },
+      }));
+    }
+    // 任务详情（记录串无根任务——不查不写键；「详情」分组如实显示记录串说明）。
+    if (thread.rootTaskId != null) {
+      const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
+      if (!stillCurrent(gen, projectId)) return;
+      const detail: ThreadTaskDetail = {
+        id: tg.task.id, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
+        threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
+        revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
+        activeRun: tg.activeRun, pendingDelivery: tg.pendingDelivery == null ? null
+          : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
+        lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
+      };
+      setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
+    } else {
+      setState((prev) => { const next = { ...prev.threadTasks }; delete next[threadId]; return { ...prev, threadTasks: next }; });
+    }
+    // 阅读水位（独立门）：最新回复 seq ≤ thread.lastMessageSeq（未来序号服务端拒绝）。
+    const lastSeq = replies.length > 0 ? (replies[replies.length - 1]?.threadMessageSeq ?? 0) : 0;
+    if (opts.markRead === true && lastSeq > got.lastReadSeq && canMarkThreadRead(threadId)) {
+      void command('thread.markRead', { threadId, throughMessageSeq: lastSeq })
+        .then(() => {
+          if (!stillCurrent(gen, projectId)) return;
+          setState((prev) => ({ ...prev, threadReadSeq: { ...prev.threadReadSeq, [threadId]: lastSeq } }));
+          void loadRoomPool(thread.roomId).catch(() => { /* 主池未读汇总下次刷新再对 */ });
+        })
+        .catch(() => { /* 下次进入再推进 */ });
+    }
+  } catch (e) {
+    const s = getState();
+    // 归属未变才记错（迟到失败不污染当前线程）。
+    if (s.threadEntities[threadId] == null || stillCurrent(gen, s.threadEntities[threadId]!.projectId)) {
+      setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [`thread:${threadId}`]: (e as Error).message } }));
+    }
+  }
+}
+
+/** 任务详情单项刷新（停止/验收后重查——绑定服务端当前事实）。 */
+export async function refreshThreadTask(threadId: string): Promise<void> {
+  const s = getState();
+  const thread = s.threadEntities[threadId];
+  if (thread?.rootTaskId == null) return;
+  const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
+  const projectId = s.activeProjectId;
+  if (!stillCurrent(s.loadGen, projectId)) return;
+  const detail: ThreadTaskDetail = {
+    id: tg.task.id, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
+    threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
+    revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
+    activeRun: tg.activeRun, pendingDelivery: tg.pendingDelivery == null ? null
+      : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
+    lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
+  };
+  setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
 }
 
 export async function loadDmHistory(conversationId: string, opts: { markRead?: boolean } = {}): Promise<void> {
@@ -237,8 +365,9 @@ const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId:
  * 唯一正式参数 builder（review-r48 §3）：发送前把**真正要发给 bridge 的完整请求**固化成
  * 不可变信封（原 commandId+完整 target（含 projectId/conversationId/roomId——不从 UI 目标
  * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
+ * 附件 refs（第五十一轮 H2）：只在 upload 回执明确成功后进入信封——信封不可变原则不变。
  */
-export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): import('./data/store').PendingSendEnvelope {
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   return {
@@ -247,21 +376,109 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
     params: {
       target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room?.conversationId ?? '', roomId },
       body, intent, mentions: mentionPayload(mentionIds),
+      ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
     },
     targetLabel: `room:${roomId}`,
     at: Date.now(),
   };
 }
 
-export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): import('./data/store').PendingSendEnvelope {
+export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
   const s = getState();
   return {
     commandId,
     method: 'message.submit',
-    params: { target: { kind: 'dm', projectId: s.activeProjectId, conversationId }, body, intent, mentions: [] },
+    params: {
+      target: { kind: 'dm', projectId: s.activeProjectId, conversationId }, body, intent, mentions: [],
+      ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+    },
     targetLabel: `dm:${conversationId}`,
     at: Date.now(),
   };
+}
+
+/** 线程跟进信封（第五十一轮 H2）：目标=打开的线程（projectId/conversationId/threadId 来自
+ * thread.get 实体——不从界面焦点重造）；记录串（rootTaskId 空）由服务端强制 record_only。 */
+export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
+  const s = getState();
+  const thread = s.threadEntities[threadId];
+  return {
+    commandId,
+    method: 'message.submit',
+    params: {
+      target: { kind: 'thread', projectId: thread?.projectId ?? s.activeProjectId, conversationId: thread?.conversationId ?? '', threadId },
+      body, intent, mentions: [],
+      ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+    },
+    targetLabel: `thread:${threadId}`,
+    at: Date.now(),
+  };
+}
+
+/**
+ * 草稿附件 → 正式 refs（第五十一轮 H2 骨架）：全部 ready 才允许带上；uploading 中=拦截并
+ * 说明；failed=拦截。**图片能力门沿用 legacy 同判**：图片附件+派发意图（default）→拦截并给
+ * 出二选一（仅记录，或 R52 的显式 omit-images 确认），不发「模型已读」的假图。
+ */
+export function attachmentRefsFromDraft(attachments: HifiDraftAttachment[], intent: 'default' | 'record_only'): { refs?: string[]; blockError?: string } {
+  if (attachments.length === 0) return {};
+  const uploading = attachments.filter((a) => a.status === 'uploading');
+  if (uploading.length > 0) return { blockError: `附件仍在上传（${uploading.map((a) => a.name).join('、')}）——完成后再发送` };
+  const failed = attachments.filter((a) => a.status === 'failed');
+  if (failed.length > 0) return { blockError: `有上传失败的附件（${failed.map((a) => a.name).join('、')}）——请移除或重选后再发送` };
+  const notReady = attachments.filter((a) => a.attachmentId == null);
+  if (notReady.length > 0) return { blockError: '附件缺少上传回执（未接入的类型）——请移除后发送' };
+  const images = attachments.filter((a) => a.kind === 'image_file');
+  if (images.length > 0 && intent === 'default') {
+    return { blockError: `图片能力门：${images.map((a) => a.name).join('、')} 的模型图片输入未认证——二选一：改为「仅记录」发送（不派发），或移除图片（R52 提供显式「仅发文字」确认）` };
+  }
+  return { refs: attachments.map((a) => a.attachmentId as string) };
+}
+
+/* ---------- 任务动作（第五十一轮 H2）：停止绑定 run/代次；验收绑定交付三重身份 ---------- */
+
+/** 停止任务：targetRunId/expectedStopGeneration 取自**已装载的任务详情**（服务端核对——
+ * 过时绑定会被正式链拒绝，不静默套用到新 run）。 */
+export async function stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }> {
+  const s = getState();
+  const detail = s.threadTasks[threadId];
+  if (detail == null) return { ok: false, error: '任务详情未装载——先打开详情刷新' };
+  if (['DONE', 'CANCELLED'].includes(detail.status)) return { ok: false, error: `任务已终态（${detail.status}）——无可停止的执行` };
+  if (detail.activeRun == null) return { ok: false, error: '当前没有活跃 run（任务可能已结束）' };
+  try {
+    await command('task.stop', { taskId: detail.id, targetRunId: detail.activeRun.id, expectedStopGeneration: detail.stopGeneration });
+    recordWrite('task.stop', `停止任务 #${detail.roomTaskNumber}（run ${detail.activeRun.id}）`);
+    await refreshThreadTask(threadId).catch(() => { /* 刷新失败保留旧详情并就地报错 */ });
+    return { ok: true };
+  } catch (e) {
+    await refreshThreadTask(threadId).catch(() => { /* 停止失败后重查事实 */ });
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** 验收/返工快照（页面打开意见/验收框时冻结——目标变化不悄悄换稿，review-r44/45 同判）。 */
+export interface ReviewSnapshot {
+  taskId: string;
+  deliveryId: string;
+  deliveryRevision: number;
+  manifestHash: string;
+}
+
+/** 提交验收：只带**冻结快照**的三重身份（id+revision+manifest_hash）——不重读当前 review；
+ * 冲突（STALE_REVISION 等）如实上屏并刷新详情。 */
+export async function submitTaskReview(snapshot: ReviewSnapshot, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('task.review', {
+      taskId: snapshot.taskId, deliveryId: snapshot.deliveryId, deliveryRevision: snapshot.deliveryRevision,
+      manifestHash: snapshot.manifestHash, decision, ...(decision === 'changes_requested' && note != null ? { note } : {}),
+    });
+    recordWrite('task.review', `${decision === 'accept' ? '验收通过' : '要求返工'}（交付 v${snapshot.deliveryRevision}）`);
+    if (threadIdForRefresh != null) await refreshThreadTask(threadIdForRefresh).catch(() => { /* 详情下次进入刷新 */ });
+    return { ok: true };
+  } catch (e) {
+    if (threadIdForRefresh != null) await refreshThreadTask(threadIdForRefresh).catch(() => { /* 冲突后重查事实 */ });
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 /** 发送不可变信封（正式管道——重试与首次共用，保证同号同参）。 */
@@ -295,4 +512,101 @@ export async function createDm(memberId: string): Promise<string> {
 /** 结果未知信封的严格重发（review-r47 §2/r48 §3）：原 commandId+原参数逐字重发——不重组。 */
 export async function retryUnknownSend(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
   return sendEnvelope(env);
+}
+
+/* ---------- 附件上传/预览适配（第五十一轮 H2 骨架——格式实际限制，服务端为最终裁决） ---------- */
+
+/** 格式上限与 daemon 常量同源核对（UI 只做前置拦截；正式校验在服务端）：文本 256KB、图片
+ * 8MB、PDF/Office 20MiB、CSV 5MB——不把 20MiB 当所有格式上限（review-r50 §4）。 */
+export const ATTACHMENT_LIMITS = {
+  text: 256 * 1024,
+  image: 8 * 1024 * 1024,
+  pdf: 20 * 1024 * 1024,
+  office: 20 * 1024 * 1024,
+  csv: 5 * 1024 * 1024,
+} as const;
+
+const TEXT_EXTS = /\.(txt|md|markdown|json|ya?ml|toml|ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|h|cpp|hpp|cs|rb|php|sh|ps1|sql|html|css|xml|log|ini|cfg)$/i;
+const OFFICE_EXTS = /\.(docx|xlsx|pptx)$/i;
+
+export type AttachmentClass = { cls: 'text' | 'image' | 'pdf' | 'office' | 'csv' | 'unsupported'; reason?: string };
+
+/** 分类+前置限幅（magic bytes 由服务端裁决——此处按扩展名给 UI 预判与说明）。 */
+export function classifyAttachmentFile(name: string, size: number): AttachmentClass {
+  const lower = name.toLowerCase();
+  if (TEXT_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.text ? { cls: 'unsupported', reason: `文本附件超过 ${ATTACHMENT_LIMITS.text / 1024}KB 上限` } : { cls: 'text' };
+  if (/\.(png|jpe?g|gif|webp)$/.test(lower)) return size > ATTACHMENT_LIMITS.image ? { cls: 'unsupported', reason: `图片原件超过 ${ATTACHMENT_LIMITS.image / 1024 / 1024}MB 上限` } : { cls: 'image' };
+  if (/\.(pdf)$/.test(lower)) return size > ATTACHMENT_LIMITS.pdf ? { cls: 'unsupported', reason: `PDF 超过 ${ATTACHMENT_LIMITS.pdf / 1024 / 1024}MiB 上限` } : { cls: 'pdf' };
+  if (/\.(csv|tsv)$/.test(lower)) return size > ATTACHMENT_LIMITS.csv ? { cls: 'unsupported', reason: `CSV 超过 ${ATTACHMENT_LIMITS.csv / 1024 / 1024}MB 上限` } : { cls: 'csv' };
+  if (OFFICE_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.office ? { cls: 'unsupported', reason: `Office 原件超过 ${ATTACHMENT_LIMITS.office / 1024 / 1024}MiB 上限` } : { cls: 'office' };
+  return { cls: 'unsupported', reason: '未接入的附件类型（文本/图片/PDF/Office/CSV 之外）' };
+}
+
+const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+  r.onerror = () => reject(new Error('读取文件失败'));
+  r.readAsDataURL(file);
+});
+
+export interface UploadReceipt { attachmentId: string; hash: string; revision: number; kind: string }
+
+/** 上传分类 → artifacts.kind（与 daemon kindForFilename 同口径的 UI 侧推导：code 扩展名=
+ * code_file，其余文本=text_file；Office 按扩展名三类——服务端按内容嗅探为准）。 */
+function kindOfClass(cls: AttachmentClass['cls'], name: string): string {
+  const lower = name.toLowerCase();
+  switch (cls) {
+    case 'image': return 'image_file';
+    case 'pdf': return 'pdf_file';
+    case 'csv': return 'sheet_file';
+    case 'office': return /\.(xlsx)$/.test(lower) ? 'sheet_file' : /\.(pptx)$/.test(lower) ? 'slides_file' : 'docx_file';
+    default: return /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|h|cpp|hpp|cs|rb|php|sh|ps1|sql)$/.test(lower) ? 'code_file' : 'text_file';
+  }
+}
+
+/**
+ * 上传一个附件到目标会话（回执绑定发起项目/会话——上传时 conversationId 必填，跨会话引用
+ * 由服务端 audience 拒绝）。分类→前置限幅→对应 upload 命令；失败原样抛出（页面保留草稿）。
+ * receipt.kind 为 UI 侧按同一分类推导（服务端按内容嗅探为准——门禁与展示用，不作归属事实）。
+ */
+export async function uploadAttachmentFile(conversationId: string, file: File): Promise<UploadReceipt> {
+  const cls = classifyAttachmentFile(file.name, file.size);
+  if (cls.cls === 'unsupported') throw new Error(cls.reason ?? '不支持的附件类型');
+  if (cls.cls === 'text') {
+    const content = await file.text();
+    const r = await command<Omit<UploadReceipt, 'kind'>>('attachment.uploadText', { conversationId, filename: file.name, content });
+    // uploadText 回执不含 revision——服务端事务固定首传 revision=1（artifacts 插入常量），
+    // 按合同事实补默认；不为其它 upload* 猜值（它们各自回执字段以实际为准）。
+    return { ...r, revision: r.revision ?? 1, kind: kindOfClass('text', file.name) };
+  }
+  const contentBase64 = await fileToBase64(file);
+  const method = cls.cls === 'image' ? 'attachment.uploadImage' : cls.cls === 'pdf' ? 'attachment.uploadPdf' : cls.cls === 'csv' ? 'attachment.uploadCsv' : 'attachment.uploadOffice';
+  const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number }>(method, { conversationId, filename: file.name, contentBase64 });
+  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: kindOfClass(cls.cls, file.name) };
+}
+
+/** 文本/代码附件预览（骨架：真实 attachment.previewText——其余类型如实分列到原界面）。 */
+export async function previewTextAttachment(attachmentId: string, conversationId: string): Promise<{ filename: string; kind: string; revision: number; text: string; truncated: boolean; originalBytes: number }> {
+  return command('attachment.previewText', { attachmentId, conversationId });
+}
+
+/* ---------- 深链规范化（review-r50 §4：#dm=/#task=/#delivery=/#msg= → 内部路由） ---------- */
+
+/**
+ * 解析外部深链族（与 daemon deepLink.resolve 同一 hash 形态）并规范化为内部路由：
+ * 跨项目先经 rootPath 打开真实项目（实体身份保留），再导航到对应页面；失败如实报错
+ * （不静默跳转、不猜实体）。刷新/前进后退走内部路由（斜杠形态），不再进本函数。
+ */
+export async function openExternalDeepLink(hash: string): Promise<void> {
+  const res = await command<ResolvedDeepLink>('deepLink.resolve', { hash });
+  const s = getState();
+  if (res.projectId !== s.activeProjectId) {
+    if (res.rootPath == null || res.rootPath.length === 0) throw new Error('深链指向其它项目但未返回项目路径——无法打开');
+    await openProjectByPath(res.rootPath); // 归属门+代次在 openProjectByPath 内
+  }
+  const route = routeForResolved(res, getState());
+  if (route == null) throw new Error(`深链解析成功但无对应界面落点（kind=${res.kind}）`);
+  const { navigate } = await import('./lib/router');
+  navigate(route);
+  recordWrite('deepLink.resolve', `深链 ${hash.slice(0, 40)} → ${route}`);
 }

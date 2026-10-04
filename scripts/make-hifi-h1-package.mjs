@@ -11,7 +11,7 @@
  *  - samples/：R7 Word 样本（经原界面预览用）。
  * 逐件文件清单核对：与 pack-desktop MANIFEST-SHA256.json 一致性由 self-check 抽验+全量核对脚本负责。
  */
-import { cpSync, mkdirSync, existsSync, writeFileSync, copyFileSync, readdirSync, statSync, readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, writeFileSync, copyFileSync, readdirSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -19,7 +19,18 @@ import { createHash } from 'node:crypto';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 const staging = join(repo, 'dist', 'desktop', '众说-便携-win-x64');
-const out = join(repo, 'dist', 'desktop', 'hifi-h1-win-v2');
+// 输出目录（review-r50 §3）：必须独立——默认带时间戳的新候选目录；不再固定原位覆盖 hifi-h1-win-v2。
+// 显式传目录时先核「用户回填保护」：RESULTS 内存在模板之外的文件=拒绝。
+const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+const outArg = process.argv[2];
+const out = outArg ? join(repo, outArg) : join(repo, 'dist', 'desktop', `hifi-h1-candidate-${stamp}`);
+if (existsSync(join(out, 'RESULTS'))) {
+  const userFills = readdirSync(join(out, 'RESULTS')).filter((f) => f !== 'SHORT-TEST-template.md');
+  if (userFills.length > 0) {
+    console.error(`[hifi-pkg] 拒绝：目标目录 RESULTS 含用户回填（${userFills.join('、')}）——独立目录输出，不覆盖用户结果。`);
+    process.exit(1);
+  }
+}
 
 // 1) 便携产物（含 BUILD.json/MANIFEST——真实 commit/dirty 身份）
 const pack = spawnSync(process.execPath, [join(repo, 'scripts', 'pack-desktop.mjs')], { stdio: 'inherit', cwd: repo });
@@ -38,6 +49,10 @@ mkdirSync(join(out, 'seed'), { recursive: true });
 copyFileSync(join(repo, 'scripts', 'dev25-dual', 'seed-client.cjs'), join(out, 'seed', 'seed-client.cjs'));
 copyFileSync(join(repo, 'scripts', 'dev25-dual', '回归幻灯.pptx'), join(out, 'seed', '回归幻灯.pptx')); // 房间样本附件（入库源——不依赖旧 v6 交付目录）
 copyFileSync(join(repo, 'scripts', 'h1-self-check.cjs'), join(out, 'seed', 'h1-self-check.cjs')); // 真正的 H1 清单自检（旧远程导出脚本不随包）
+// 旧构建残留清理（review-r50 §3）：旧远程导出 self-check.cjs 一度随包（bat 曾误指它——
+// 实测 usage+exit 1）。新候选不携带；对显式复用的目录也先移除该残留。
+const staleSelfCheck = join(out, 'seed', 'self-check.cjs');
+if (existsSync(staleSelfCheck)) { rmSync(staleSelfCheck, { force: true }); console.log('[hifi-pkg] 已移除旧残留 seed/self-check.cjs'); }
 mkdirSync(join(out, 'samples'), { recursive: true });
 copyFileSync(join(repo, 'scripts', 'dev25-dual', 'samples', 'word-r7-sample.docx'), join(out, 'samples', 'word-r7-sample.docx'));
 mkdirSync(join(out, 'RESULTS'), { recursive: true });
@@ -94,7 +109,7 @@ const SELFCHECK = ['@echo off',
   'rem H1 mechanical self-check (ASCII only): shipped files + full manifest verify.',
   'setlocal',
   'set PKG=%~dp0',
-  '"%PKG%ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe" "%PKG%seed\\self-check.cjs" --pkg "%PKG%"',
+  '"%PKG%ZhongshuoDual\\resources\\app\\daemon\\node\\node.exe" "%PKG%seed\\h1-self-check.cjs" --pkg "%PKG%"',
   'exit /b %errorlevel%',
   'endlocal'].join('\r\n');
 writeFileSync(join(out, 'run-self-check.bat'), SELFCHECK + '\r\n', 'utf8');

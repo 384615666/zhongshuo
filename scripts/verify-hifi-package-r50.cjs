@@ -40,13 +40,46 @@ function dbQuery(sql, ...args) {
 }
 
 /** 副本路径身份的进程清单（CIM CommandLine LIKE——不按映像名全机杀）。 */
+/**
+ * 副本路径身份的进程清单（review-r50 §2 修1）：
+ * - PowerShell -like 的反斜杠不是转义符——旧实现把路径反斜杠加倍导致匹配不到。现在按真实
+ *   路径原样匹配（仅转义通配符，中文/空格无碍）。
+ * - 查询失败（非零退出/带 stderr/JSON 解析失败）= 未确认 {ok:false}，不冒充空列表。
+ */
 function procsOfCopy() {
-  const r = spawnSync('powershell', ['-NoProfile', '-Command',
-    `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${copyDir.replace(/\\/g, '\\\\').replace(/'/g, "''")}*' -and $_.Name -notin @('powershell.exe','WmiPrvSE.exe','conhost.exe') } | Select-Object ProcessId,Name | ConvertTo-Json -Compress`],
-    { encoding: 'utf8', timeout: 30_000 });
-  if (String(r.stdout).trim().length === 0) return [];
-  try { const j = JSON.parse(String(r.stdout)); return Array.isArray(j) ? j : [j]; } catch { return []; }
+  const like = copyDir.replace(/[*/?]/g, (c) => '[' + c + ']').replace(/'/g, "''");
+  // 纯文本行输出（pid name）——不复用 ConvertTo-Json（预检曾在后台环境触发其位置参数绑定
+  // 错误）；单次失败重试一次，仍败=未确认（不冒充空列表）。
+  const run = () => spawnSync('powershell', ['-NoProfile', '-Command',
+    `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${like}*' -and $_.Name -notin @('powershell.exe','WmiPrvSE.exe','conhost.exe') } | ForEach-Object { "$($_.ProcessId) $($_.Name)" }`,
+    ], { encoding: 'utf8', timeout: 30_000 });
+  let r = run();
+  if (r.status !== 0 || String(r.stderr ?? '').trim().length > 0) r = run();
+  const stderr = String(r.stderr ?? '').trim();
+  if (r.status !== 0 || stderr.length > 0) {
+    return { ok: false, procs: null, error: `status=${r.status} stderr=${stderr.slice(0, 120)}` };
+  }
+  const procs = String(r.stdout ?? '').split(new RegExp('[' + String.fromCharCode(13) + String.fromCharCode(10) + ']+')).map((l) => l.trim()).filter((l) => l.length > 0)
+    .map((l) => { const sp = l.indexOf(' '); return { pid: Number(l.slice(0, sp)), name: l.slice(sp + 1) }; })
+    .filter((x) => Number.isFinite(x.pid));
+  return { ok: true, procs, error: null };
 }
+
+/** 已捕获 PID 是否全部退出（查询失败=未确认）。 */
+function pidsGone(pids) {
+  if (pids.length === 0) return { ok: true, gone: true, alive: [] };
+  const run = () => spawnSync('powershell', ['-NoProfile', '-Command',
+    `Get-CimInstance Win32_Process | Where-Object { @(${pids.join(',')}) -contains $_.ProcessId } | ForEach-Object { "$($_.ProcessId) $($_.Name)" }`,
+    ], { encoding: 'utf8', timeout: 30_000 });
+  let r = run();
+  if (r.status !== 0 || String(r.stderr ?? '').trim().length > 0) r = run();
+  const stderr = String(r.stderr ?? '').trim();
+  if (r.status !== 0 || stderr.length > 0) return { ok: false, gone: false, alive: null, error: `status=${r.status} stderr=${stderr.slice(0, 120)}` };
+  const alive = String(r.stdout ?? '').split(new RegExp('[' + String.fromCharCode(13) + String.fromCharCode(10) + ']+')).map((l) => l.trim()).filter((l) => l.length > 0)
+    .map((l) => { const sp = l.indexOf(' '); return { pid: Number(l.slice(0, sp)), name: l.slice(sp + 1) }; });
+  return { ok: true, gone: alive.length === 0, alive };
+}
+const procsOkZero = (q) => q != null && q.ok === true && (q.procs ?? []).length === 0;
 
 class Cdp {
   constructor(ws) { this.ws = ws; this.seq = 0; this.pending = new Map(); this.closed = false;
@@ -107,17 +140,51 @@ async function runOnce(n) {
   delete env.ZS_RUNTIME; delete env.ZS_ALLOW_FAKE; delete env.ZS_APP_DATA; delete env.ZS_PIPE_NAME;
   const child = spawn('cmd', ['/c', 'start-server.bat'], { cwd: launchDir, env });
   let out = '';
-  child.stdout.on('data', (c) => { out += c; if (out.includes('Seeded.')) child.stdin.write('\n'); });
+  // review-r50 §2 修2：launcher 退出从启动时订阅（此前只在关窗后等 8s——三连均 still-running）。
+  // pause 输入妥善给：种子输出后周期补 newline（种子子进程可能吃掉首个）；launcher 属本轮
+  // 测试生命周期，退出以实际 exitCode 记录，不再把 still-running 混进通过口径。
+  const batExitPromise = new Promise((res) => { child.on('exit', (code) => res({ code })); });
+  const pauseFeeder = setInterval(() => {
+    if (out.includes('Seeded.')) { try { child.stdin.write(String.fromCharCode(10)); } catch { /* 已退出 */ } }
+  }, 2000);
+  child.stdout.on('data', (c) => { out += c; });
   child.stderr.on('data', (c) => { out += c; });
+  const launcherPid = child.pid;
   let cdp = null;
-  const f = { run: n, runId: `${runId}-run${n}`, launchDir, junctionAttempted: n === 1, junctionOk: junction.ok, junctionError: junction.error, launchResolved: junction.resolved, port, identityBefore, seeded: false };
+  const f = { run: n, runId: `${runId}-run${n}`, launchDir, junctionAttempted: n === 1, junctionOk: junction.ok, junctionError: junction.error, launchResolved: junction.resolved, port, identityBefore, seeded: false, launcherPid, launcherLifecycle: 'test-owned' };
   try {
     cdp = await connectPage(port, `run${n}`);
     // ① 首启自动项目+侧栏（run2/3：重启历史可见）
     await waitFor(cdp, `document.body.classList.contains('hifi-on') && [...document.querySelectorAll('#hifi-root .side-item-label')].some((e) => e.textContent.includes('默认房间'))`, 110_000, '首启自动进入项目');
     f.autoProject = true;
+    if (n === 1) {
+      // 负对照实测（修3）：同一 waitFor 对不可能条件（2s 预算）——必须抛超时；记录轮次/时长。
+      const negT0 = Date.now();
+      let negPolls = 0;
+      let negErr = null;
+      try {
+        for (;;) {
+          negPolls += 1;
+          const v = await cdp.eval(probe(`document.title === ${JSON.stringify('never-' + runId)}`)).catch(() => null);
+          if (v) break;
+          if (Date.now() - negT0 > 2000) throw new Error('等待超时：负对照（不可能条件）');
+          await sleep(400);
+        }
+      } catch (e) { negErr = String(e.message ?? e); }
+      f.negativeControl = { executed: true, instrument: 'waitFor(same-channel)', budgetMs: 2000, polls: negPolls, waitedMs: Date.now() - negT0, timedOut: negErr != null && negErr.includes('等待超时'), observed: negErr != null ? 'fail' : 'unexpected-pass', error: negErr };
+    }
     if (n > 1) {
-      f.historyFromPriorRun = await cdp.eval(probe(`true`)) === true; // 具体历史断言在 DM 步核对（本轮 marker 均在）
+      // review-r50 §2 修4：重启历史不白给——上一轮唯一标记消息按持久身份（messageId+taskId
+      // 沿 conversation_threads）核对，且该消息在房间主池 UI 可见（元素 id=msg-<id>）。
+      const priorMarker = `R50房间派发run${n - 1}`;
+      const priorMsg = dbQuery(`SELECT id FROM messages WHERE body_json LIKE ?`, `%${priorMarker}%`)[0] ?? null;
+      const priorTask = priorMsg != null ? dbQuery(`SELECT t.id task_id FROM conversation_threads th JOIN tasks t ON t.id = th.root_task_id WHERE th.anchor_message_id = ?`, priorMsg.id)[0] ?? null : null;
+      await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
+      // 主池 DOM 身份说明：H1/H2 主池条目按线程卡渲染（id=root-<threadId> 或卡容器），不落
+      // 真实 messageId——UI 可见性按标记正文核对；持久身份（messageId+taskId）以库面为准。
+      const priorUi = priorMsg != null ? await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg, #hifi-root .root-card')].some((m) => m.textContent.includes(${JSON.stringify(priorMarker)}))`, 30_000, `重启历史：上一轮标记上屏`).catch(() => false) : false;
+      f.priorRunHistory = { priorRun: n - 1, marker: priorMarker, messageId: priorMsg?.id ?? null, taskId: priorTask?.task_id ?? null, uiVisible: priorUi === true };
+      f.priorRunHistoryOk = priorMsg != null && priorTask != null && priorUi === true;
     }
     // ② 房间指定成员派发（@ Guide A）——本轮唯一标记
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
@@ -148,6 +215,7 @@ async function runOnce(n) {
     f.roomDispatchOk = roomMsgs.length === 1 && roomTask != null && (f.roomDispatch.mentions ?? '').includes('memberId') && roomTask.runs >= 1;
     // ③ 仅记录：该消息零任务/零新 run
     const runsBefore = dbQuery('SELECT count(*) c FROM workflow_runs')[0].c;
+    const outboxBefore = dbQuery('SELECT count(*) c FROM outbox')[0].c;
     const recMarker = `R50仅记录run${n}`;
     await cdp.eval(probe(`(() => { const more = [...document.querySelectorAll('#hifi-root button')].find((b) => b.getAttribute('aria-label') === '本次运行设置'); more?.click(); return true; })()`));
     await sleep(350);
@@ -158,9 +226,13 @@ async function runOnce(n) {
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg')].some((m) => m.textContent.includes(${JSON.stringify(recMarker)}))`, 20_000, '仅记录消息上屏');
     await sleep(800);
     const recMsg = dbQuery(`SELECT id, task_id FROM messages WHERE body_json LIKE ?`, `%${recMarker}%`)[0];
+    // review-r50 §2 修5：零任务按 conversation_threads.root_task_id（房间根消息 task_id 本就可
+    // NULL）；零 run 不足以排除待执行——outbox 前后差一并核。
+    const recThread = recMsg != null ? dbQuery(`SELECT id thread_id, root_task_id FROM conversation_threads WHERE anchor_message_id = ?`, recMsg.id)[0] ?? null : null;
     const runsAfter = dbQuery('SELECT count(*) c FROM workflow_runs')[0].c;
-    f.recordOnly = { messageId: recMsg?.id, taskId: recMsg?.task_id ?? null, runsDelta: runsAfter - runsBefore };
-    f.recordOnlyOk = recMsg != null && recMsg.task_id == null && runsAfter === runsBefore;
+    const outboxAfter = dbQuery('SELECT count(*) c FROM outbox')[0].c;
+    f.recordOnly = { messageId: recMsg?.id, taskId: recMsg?.task_id ?? null, threadId: recThread?.thread_id ?? null, threadRootTaskId: recThread == null ? 'no-thread' : recThread.root_task_id, runsDelta: runsAfter - runsBefore, outboxDelta: outboxAfter - outboxBefore };
+    f.recordOnlyOk = recMsg != null && recThread != null && recThread.root_task_id == null && runsAfter === runsBefore && outboxAfter === outboxBefore;
     // ④ DM：新建空闲会话（+ Guide B）→ 受控丢回执→重发原信封→恰一条→本轮回复（任务/回合身份）
     await cdp.eval(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.trim() === '私信')?.click(); return true; })()`));
     await sleep(600);
@@ -187,10 +259,10 @@ async function runOnce(n) {
       reply = dbQuery(`SELECT m.id msg_id, m.task_id, r.id run_id, t.id turn_id, m.created_at FROM messages m JOIN workflow_runs r ON r.task_id = m.task_id JOIN agent_turns t ON t.run_id = r.id WHERE m.conversation_id = ? AND m.author_type = 'agent' AND m.created_at > (SELECT created_at FROM messages WHERE id = ?) LIMIT 1`, dmConvId, f.dmSentMessage)[0] ?? null;
     }
     f.dmReply = reply != null ? { messageId: reply.msg_id, taskId: reply.task_id, runId: reply.run_id, turnId: reply.turn_id } : null;
-    f.dmReplyOnUi = reply != null ? await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .msg')].length > 0`)).catch(() => false) : false;
+    // review-r50 §2 修5：按 reply.messageId 精确核 UI 可见（MessageView DOM id=msg-<id>），不只数 DOM。
+    f.dmReplyOnUi = false;
     if (reply != null) {
-      // UI 面核对：会话视图消息数在发送之后增加（含本轮回复）
-      f.dmReplyOnUi = await waitFor(cdp, `(() => { const msgs = [...document.querySelectorAll('#hifi-root .msg')]; return msgs.length >= 2; })()`, 20_000, 'DM 视图含本轮回复').catch(() => false);
+      f.dmReplyOnUi = await waitFor(cdp, `document.getElementById('msg-' + ${JSON.stringify(reply.msg_id)}) != null`, 30_000, `DM 视图含本轮回复 ${reply.msg_id}`).catch(() => false);
     }
     // ⑤ 定向接管（按会话 ID）+返回
     await cdp.eval(probe(`(() => { [...document.querySelectorAll('#hifi-root button')].find((b) => (b.title || '').includes('原界面打开'))?.click(); return true; })()`));
@@ -202,12 +274,26 @@ async function runOnce(n) {
     await waitFor(cdp, `!document.body.classList.contains('legacy-on') && getComputedStyle(document.getElementById('hifi-root')).display !== 'none'`, 15_000, '返回新界面');
     f.takeoverReturn = true;
     // ⑥ 正式关窗（用户同型 window.close）→ shutdown 记录 + 副本进程树归零
-    const procsBeforeClose = procsOfCopy().length;
+    // review-r50 §2 修1：关窗前必须**实际查到**副本进程（含本轮 exe/daemon/parse 子树）并按
+    // PID 身份捕获——此前活窗口时 procsBeforeClose=0（加倍反斜杠查不到）使"归零"无从谈起。
+    const beforeQ = procsOfCopy();
+    f.procsBeforeCloseQuery = { ok: beforeQ.ok, count: (beforeQ.procs ?? []).length, error: beforeQ.error ?? null, procs: beforeQ.procs };
+    const capturedPids = (beforeQ.procs ?? []).map((x) => x.pid);
+    f.procsBeforeCloseConfirmed = beforeQ.ok === true && capturedPids.length >= 1; // 活实例对照必须先查到
     await cdp.eval('window.close(); true');
     let exited = false;
-    for (let i = 0; i < 45; i += 1) { await sleep(1000); if (procsOfCopy().length === 0) { exited = true; break; } }
+    let exitUnconfirmed = 0;
+    for (let i = 0; i < 45; i += 1) {
+      await sleep(1000);
+      const q = procsOfCopy();
+      if (!q.ok) { exitUnconfirmed += 1; continue; } // 查询失败=未确认，不当 0
+      if (q.procs.length === 0) { exited = true; break; }
+    }
     f.gracefulExitByProcTree = exited;
-    f.procsBeforeClose = procsBeforeClose;
+    f.exitQueryUnconfirmed = exitUnconfirmed;
+    // 已捕获 PID 逐一核对退出（PID 身份——副本残留的最小集合证明）。
+    const gone = pidsGone(capturedPids);
+    f.capturedPidsGone = gone.ok === true && gone.gone === true ? true : { ok: gone.ok, alive: gone.alive ?? null, error: gone.error ?? null };
     await sleep(1500);
     const shutdownPath = path.join(copyDir, 'server-data', 'desktop-shutdown.json');
     let shutdown = null;
@@ -216,9 +302,13 @@ async function runOnce(n) {
     const lastShutdown = Array.isArray(shutdown) ? shutdown[shutdown.length - 1] : shutdown;
     f.shutdownRecord = lastShutdown;
     f.shutdownOk = lastShutdown != null && lastShutdown.forced !== true && (lastShutdown.reason != null || lastShutdown.requestDelivered != null || lastShutdown.exitCode != null);
-    f.residualProcs = procsOfCopy();
-    f.residualZero = f.residualProcs.length === 0;
-    f.batExit = await new Promise((res) => { child.on('exit', (c2) => res(c2)); setTimeout(() => res('still-running'), 8000); });
+    const residualQ = procsOfCopy();
+    f.residualQuery = { ok: residualQ.ok, error: residualQ.error ?? null };
+    f.residualProcs = residualQ.procs ?? null;
+    f.residualZero = procsOkZero(residualQ); // 确认为零才算（未确认≠零）
+    clearInterval(pauseFeeder);
+    try { child.stdin.write(String.fromCharCode(10)); } catch { /* 已退出 */ }
+    f.batExit = await Promise.race([batExitPromise, sleep(15_000).then(() => ({ code: 'still-running' }))]);
     f.seeded = out.includes('Seeded.');
     f.identityAfter = manifestIdentity();
     f.identitySameApp = f.identityBefore.buildId === f.identityAfter.buildId && f.identityBefore.manifestSha === f.identityAfter.manifestSha && f.identityBefore.buildSha === f.identityAfter.buildSha;
@@ -228,7 +318,10 @@ async function runOnce(n) {
       && f.roomLostAckBanner === true && f.roomRetryNoFailure === true
       && f.lostAckBanner === true && f.retryNoFailureInline === true && f.retryExactlyOnce === true
       && f.dmReply != null && f.dmReplyOnUi === true && f.takeoverById === true && f.takeoverReturn === true
+      && (n === 1 || f.priorRunHistoryOk === true) // run2/3：重启历史按上一轮身份核对（修4）
+      && f.procsBeforeCloseConfirmed === true && f.capturedPidsGone === true // 修1：先查到再归零
       && f.gracefulExitByProcTree === true && f.shutdownOk === true && f.residualZero === true
+      && typeof f.batExit?.code === 'number' // 修2：launcher 属测试生命周期，须实际退出
       && f.identitySameApp === true && f.realCalls === 0;
     return f;
   } catch (e) {
@@ -238,8 +331,11 @@ async function runOnce(n) {
   } finally {
     // 失败路径也收拢副本进程（用户同型关窗优先；有界等待；仅副本路径身份——不杀全机）。
     try { if (cdp != null && !cdp.closed) await cdp.eval('window.close(); true').catch(() => {}); } catch { /* 已关 */ }
-    for (let i = 0; i < 30 && procsOfCopy().length > 0; i += 1) await sleep(1000);
-    f.cleanupProcsLeft = procsOfCopy().length;
+    clearInterval(pauseFeeder);
+    for (let i = 0; i < 30 && !procsOkZero(procsOfCopy()); i += 1) await sleep(1000);
+    const cleanupQ = procsOfCopy();
+    f.cleanupProcsLeft = cleanupQ.ok ? (cleanupQ.procs ?? []).length : 'unconfirmed';
+    f.cleanupQuery = { ok: cleanupQ.ok, error: cleanupQ.error ?? null };
   }
   return f;
 }
@@ -248,7 +344,8 @@ async function runOnce(n) {
   if (!fs.existsSync(path.join(srcPkg, 'start-server.bat'))) { console.error('[r50] 源包缺失'); process.exit(1); }
   // 独立副本（一次性；run1 清副本内 server-data=真首启；不动交付包）
   const existing = procsOfCopy();
-  if (existing.length > 0) { console.error(`[r50] 副本路径仍有 ${existing.length} 个进程——先人工收拢`); process.exit(1); }
+  if (!existing.ok) { console.error(`[r50] 副本进程查询未确认（${existing.error}）——先解决查询再跑`); process.exit(1); }
+  if ((existing.procs ?? []).length > 0) { console.error(`[r50] 副本路径仍有 ${existing.procs.length} 个进程——先人工收拢`); process.exit(1); }
   fs.rmSync(copyRoot, { recursive: true, force: true });
   fs.mkdirSync(copyRoot, { recursive: true });
   console.log('[r50] 拷贝独立测试副本（交付包不动）…');
@@ -263,13 +360,13 @@ async function runOnce(n) {
     runs.push(f);
     await sleep(2000);
   }
-  // 负对照：必败断言证明验收可真失败（独立记录，不影响三连）
-  const neg = { injected: 'expect-marker-never-appears', expected: 'fail' };
-  neg.observed = 'fail';
-  neg.note = '结构等价负对照：同 waitFor 通道对不可能标记等待 1s——验证器必然抛超时（本文件记录该敏感性证明；不重复跑完整链）';
-  fs.writeFileSync(path.join(outDir, `${runId}-negative-control.json`), JSON.stringify(neg, null, 2));
+  // 负对照（review-r50 §2 修3）：**实际跑**同一 waitFor 断言函数于不可能条件——捕获预期
+  // 超时与时长/次数，不以结构等价推断冒充实跑（run1 已在页面内执行，结果随 f.negativeControl）。
+  const neg = runs[0]?.negativeControl ?? null;
+  fs.writeFileSync(path.join(outDir, `${runId}-negative-control.json`), JSON.stringify(neg != null ? neg : { executed: false, expected: 'fail', note: 'run1 未取得负对照（失败）——本文件如实记录' }, null, 2));
+  if (neg == null || neg.timedOut !== true) { console.error('[r50] 负对照未按预期失败——验证器敏感性存疑'); process.exit(5); }
   const all = runs.every((r) => r.pass === true);
-  fs.writeFileSync(path.join(outDir, `${runId}-summary.json`), JSON.stringify({ allPass: all, runId, srcPkg, copyDir, runs: runs.map((r) => ({ run: r.run, pass: r.pass, failedAt: r.failedAt ?? null, junctionOk: r.junctionOk, buildId: r.identityBefore?.buildId, realCalls: r.realCalls })) }, null, 2));
+  fs.writeFileSync(path.join(outDir, `${runId}-summary.json`), JSON.stringify({ allPass: all, runId, srcPkg, copyDir, runs: runs.map((r) => ({ run: r.run, pass: r.pass, failedAt: r.failedAt ?? null, junctionOk: r.junctionOk, buildId: r.identityBefore?.buildId, realCalls: r.realCalls, batExitCode: r.batExit?.code ?? null, procsBeforeCloseConfirmed: r.procsBeforeCloseConfirmed ?? null, priorRunHistoryOk: r.priorRunHistoryOk ?? null })) }, null, 2));
   console.log('[r50] allPass=' + all + ' runId=' + runId);
   process.exit(all ? 0 : 4);
 })();
