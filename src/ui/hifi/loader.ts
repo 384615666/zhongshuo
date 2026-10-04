@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead } from './data/store';
 import type { HifiState } from './data/store';
 import type { AppState, Message } from './data/types';
 
@@ -69,10 +69,14 @@ export async function pickAndOpenFolder(): Promise<void> {
 }
 
 export async function openProjectByPath(path: string): Promise<void> {
+  // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
+  // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
+  const gen = getState().loadGen + 1;
+  setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null }));
   const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
+  if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
   const p = data.project;
   recordWrite('project.open', `打开项目「${p.displayName}」`);
-  const gen = getState().loadGen + 1;
   setState((s) => ({
     ...s,
     loadGen: gen,
@@ -84,7 +88,6 @@ export async function openProjectByPath(path: string): Promise<void> {
     visibleProjectIds: [p.id],
     expandedProjectIds: [p.id],
     roomPool: {}, dmHistory: {}, readErrors: {},
-    boot: 'ready', bootError: null,
   }));
   try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
   await Promise.all([refreshMembers(), refreshRooms(), refreshDms()]);
@@ -114,18 +117,34 @@ export async function refreshRooms(): Promise<void> {
   if (!stillCurrent(gen, projectId)) return;
   const rooms = data.items ?? [];
   // 房间名单（@ 候选唯一来源——review-r46 §3）：每房间 member.list({projectId, roomId})。
+  // 读取失败**保留旧名单**并就地报错（review-r47 §5——不呈现成「暂无成员」）；协调者不伪造
+  // （取首个成员不是服务端事实——置空，呈现层不依赖）。
+  const rosterErrors: Record<string, string> = {};
   const rosters = await Promise.all(rooms.map(async (r) => {
-    const roster = await command<RoomMembersData>('member.list', { projectId, roomId: r.id }).catch(() => null);
-    return { roomId: r.id, memberIds: (roster?.items ?? []).filter((m) => m.enabled).map((m) => m.id) };
+    try {
+      const roster = await command<RoomMembersData>('member.list', { projectId, roomId: r.id });
+      return { roomId: r.id, memberIds: (roster.items ?? []).filter((m) => m.enabled).map((m) => m.id) };
+    } catch (e) {
+      rosterErrors[`roster:${r.id}`] = (e as Error).message;
+      const oldRoom = getState().rooms.find((x) => x.id === r.id);
+      return { roomId: r.id, memberIds: oldRoom?.memberIds ?? [] }; // 旧名单兜底
+    }
   }));
   if (!stillCurrent(gen, projectId)) return;
   setState((prev) => ({
     ...prev,
-    rooms: rooms.map((r, i) => ({
-      id: r.id, projectId, name: r.name, conversationId: r.conversationId,
-      coordinatorMemberId: rosters[i]?.memberIds[0] ?? '', memberIds: rosters[i]?.memberIds ?? [],
-      revision: 0, unread: 0,
-    })),
+    rooms: rooms.map((r, i) => {
+      const oldRoom = prev.rooms.find((x) => x.id === r.id);
+      const roster = rosters[i];
+      const failed = rosterErrors[`roster:${r.id}`] != null;
+      return {
+        id: r.id, projectId, name: r.name, conversationId: r.conversationId,
+        coordinatorMemberId: failed ? (oldRoom?.coordinatorMemberId ?? '') : '',
+        memberIds: roster?.memberIds ?? [],
+        revision: 0, unread: 0,
+      };
+    }),
+    readErrors: { ...prev.readErrors, ...rosterErrors },
   }));
 }
 
@@ -190,8 +209,9 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
       const errors = { ...prev.readErrors }; delete errors[conversationId];
       return { ...prev, dmHistory: { ...prev.dmHistory, [conversationId]: msgs }, readErrors: errors };
     });
-    // 已读水位（继承既有合同——仅前台+贴底由页面判定传入；失败不阻塞呈现）。
-    if (opts.markRead === true && conv != null && (conv.unread ?? 0) > 0) {
+    // 已读水位（统一门——review-r47 §4）：缓存写入与阅读水位分开；**发起点此刻**重查
+    // store.readGate（当前会话+前台/焦点+贴底+接管——页面注册，缺省拒绝），不信任请求前快照。
+    if (opts.markRead === true && conv != null && (conv.unread ?? 0) > 0 && canMarkRead(conversationId)) {
       const last = (data.messages ?? [])[(data.messages ?? []).length - 1];
       const lastSeq = last ? (last.conversationSeq ?? last.conversation_seq) : undefined;
       if (lastSeq != null) {
@@ -243,4 +263,9 @@ export async function createDm(memberId: string): Promise<string> {
   const r = await command<{ conversationId: string }>('conversation.create', { projectId: s.activeProjectId, peerMemberId: memberId });
   await refreshDms();
   return r.conversationId;
+}
+
+/** 结果未知信封的严格重发（review-r47 §2）：原 commandId+原参数逐字重发——不重组。 */
+export async function retryUnknownSend(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
+  return sendCommand<SendResult>(env.commandId, env.method, env.params);
 }

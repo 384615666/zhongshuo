@@ -21,6 +21,12 @@ export interface HifiExtension {
   dmHistory: Record<string, AppState['messages']>;
   /** 读取失败（区别于空态）：key 同上，值为错误消息——保留旧快照并就地呈现错误。 */
   readErrors: Record<string, string>;
+  /** 结果未知的在途信封（review-r47 §2）：按目标草稿键持有**不可变原信封**——重试严格重发
+   * 原内容；期间新编辑作为独立草稿保留（组件卸载/切目标不丢）。 */
+  pendingSends: Record<string, PendingSendEnvelope>;
+  /** 标读统一门（review-r47 §4）：页面注册——markRead 发起前**此刻**重查（当前会话/前台/
+   * 贴底/接管）；缺省拒绝（安全侧）。 */
+  readGate: ((conversationId: string) => boolean) | null;
   /** 「原界面」接管状态。 */
   legacyActive: boolean;
   legacyReason: string | null;
@@ -52,7 +58,7 @@ function makeEmptyState(): HifiState {
     ui: { theme: 'light', activeRoomId: '', writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0,
-    roomPool: {}, dmHistory: {}, readErrors: {},
+    roomPool: {}, dmHistory: {}, readErrors: {}, pendingSends: {}, readGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null,
   };
@@ -70,6 +76,32 @@ export function useStore<T>(selector: (s: HifiState) => T): T {
 
 /* ---------- 草稿（Composer 契约：按 draftKey 存整份草稿；缺省返回空草稿——原型 seeds 同形） ---------- */
 export interface HifiDraft { body: string; mentions: string[]; attachments: Array<{ name: string; size: number }>; access: string; sendAs: 'ai' | 'record' }
+
+/** 结果未知的在途信封（不可变快照——重试只发这一份）。 */
+export interface PendingSendEnvelope {
+  commandId: string;
+  method: 'message.submit';
+  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }> };
+  targetLabel: string;
+  at: number;
+}
+
+export function setReadGate(gate: ((conversationId: string) => boolean) | null): void {
+  setState((s) => ({ ...s, readGate: gate }));
+}
+
+export function canMarkRead(conversationId: string): boolean {
+  const gate = getState().readGate;
+  try { return gate != null && gate(conversationId); } catch { return false; }
+}
+
+export function parkUnknownEnvelope(draftKey: string, env: PendingSendEnvelope): void {
+  setState((s) => ({ ...s, pendingSends: { ...s.pendingSends, [draftKey]: env } }));
+}
+
+export function clearUnknownEnvelope(draftKey: string): void {
+  setState((s) => { const next = { ...s.pendingSends }; delete next[draftKey]; return { ...s, pendingSends: next }; });
+}
 const emptyDraft = (): HifiDraft => ({ body: '', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
 const drafts = new Map<string, HifiDraft>();
 export function getDraftFull(key: string): HifiDraft { return drafts.get(key) ?? emptyDraft(); }

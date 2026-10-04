@@ -78,9 +78,10 @@ function validateMessageSubmit(p) {
 const PRELOAD = `
 const { contextBridge } = require('electron');
 const log = [];
+const committed = {};
 const DATA = ${JSON.stringify(DATA)};
 const invalid = (msg) => ({ ok: false, error: { code: 'VALIDATION_INVALID', message: msg } });
-const dispatch = (method, params) => {
+const dispatch = (method, params, commandId) => {
   const D = DATA;
   switch (method) {
     case 'app.settings.get': {
@@ -107,13 +108,16 @@ const dispatch = (method, params) => {
       const problem = (${validateMessageSubmit.toString()})(params);
       if (problem) return invalid('message.submit：' + problem);
       if (params.body.startsWith('FAILME')) return { ok: false, error: { code: 'CONTROLLED_FAILURE', message: '受控失败（合同冒烟）' } };
-      return new Promise((resolve) => setTimeout(() => resolve({ ok: true, data: { taskId: 'task_smoke', threadId: 'th_smoke', disposition: 'dispatched' } }), 350));
+      if (params.body.startsWith('COMMITLOSE')) { committed[commandId] = JSON.parse(JSON.stringify(params)); return Promise.reject(new Error('TRANSPORT_LOST_AFTER_COMMIT')); }
+      if (committed[commandId] != null) return { ok: true, data: { taskId: 'task_smoke', threadId: 'th_smoke', disposition: 'replayed' } };
+      const delay = params.body.startsWith('共同前缀A') ? 1200 : 350;
+      return new Promise((resolve) => setTimeout(() => resolve({ ok: true, data: { taskId: 'task_smoke', threadId: 'th_smoke', disposition: 'dispatched' } }), delay));
     }
     default: return { ok: true, data: {} };
   }
 };
 contextBridge.exposeInMainWorld('zs', {
-  command: async (env) => { log.push({ method: env.method, params: env.params }); return dispatch(env.method, env.params); },
+  command: async (env) => { log.push({ method: env.method, params: env.params, commandId: env.commandId }); return dispatch(env.method, env.params, env.commandId); },
   getSentLog: async () => log.slice(),
   pickFolder: async () => null,
   openPath: async () => {},
@@ -239,10 +243,51 @@ async function main() {
     const dmSent = (await getSent(win)).filter((e) => e.method === 'message.submit' && e.params?.body === '私信合同冒烟');
     results.P6_dmContract = { dmView: dmView != null ? JSON.parse(dmView) : null, envelope: dmSent[0] ?? null,
       pass: dmView != null && dmSent.length === 1 && dmSent[0].params.target.kind === 'dm' && dmSent[0].params.target.conversationId === 'convDm1' };
+    // ---------- P7 结果未知：冻结原信封——新编辑=新信封；重发=原信封且服务重放幂等 ----------
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(); return true; })()`), true);
+    await sleep(400);
+    await typeAndSend(win, 'COMMITLOSE 原始内容', 800);
+    const p7banner1 = await win.webContents.executeJavaScript(probe(`[...document.querySelectorAll('#hifi-root .chip.record-chip')].some((e) => e.textContent.includes('结果未知'))`), true);
+    const p7ta1 = await win.webContents.executeJavaScript(probe(`document.querySelector('#hifi-root textarea')?.value ?? null`), true);
+    await typeAndSend(win, 'COMMITLOSE 原始内容＋新编辑的新信封', 800);
+    const p7sends = (await getSent(win)).filter((e) => e.method === 'message.submit');
+    const p7orig = p7sends.find((e) => e.params?.body === 'COMMITLOSE 原始内容');
+    const p7edited = p7sends.find((e) => e.params?.body === 'COMMITLOSE 原始内容＋新编辑的新信封');
+    const retryClicked = await win.webContents.executeJavaScript(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .chip.record-chip button')].find((x) => x.textContent.includes('重发原内容')); if (b == null) return false; b.click(); return true; })()`), true);
+    await sleep(700);
+    const p7retry = (await getSent(win)).filter((e) => e.method === 'message.submit' && e.commandId === p7orig?.commandId);
+    const p7bannerAfter = await win.webContents.executeJavaScript(probe(`[...document.querySelectorAll('#hifi-root .chip.record-chip')].some((e) => e.textContent.includes('结果未知'))`), true);
+    results.P7_unknownEnvelope = { bannerAtUnknown: p7banner1, textareaKept: p7ta1, origId: p7orig?.commandId, editedId: p7edited?.commandId, retryCount: p7retry.length, retryBody: p7retry[0]?.params?.body, bannerAfterRetry: p7bannerAfter,
+      pass: p7banner1 === true && p7ta1 === 'COMMITLOSE 原始内容' && p7orig != null && p7edited != null && p7orig.commandId !== p7edited.commandId && retryClicked === true && p7retry.length === 1 && p7retry[0].params.body === 'COMMITLOSE 原始内容' && p7bannerAfter === false };
+
+    // ---------- P8 迟到成功只清发起目标 ----------
+    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '共同前缀A'); ta.dispatchEvent(new Event('input', { bubbles: true })); [...document.querySelectorAll('#hifi-root button')].find((b) => b.textContent.trim() === '发送')?.click(); return true; })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('Lab Room'))?.click(); return true; })()`), true);
+    await sleep(300);
+    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, 'B 的独立草稿'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`), true);
+    await sleep(1400);
+    const p8b = await win.webContents.executeJavaScript(probe(`document.querySelector('#hifi-root textarea')?.value ?? null`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { [...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(); return true; })()`), true);
+    await sleep(400);
+    const p8a = await win.webContents.executeJavaScript(probe(`document.querySelector('#hifi-root textarea')?.value ?? null`), true);
+    results.P8_crossTargetSettle = { bDraftAfterLateAck: p8b, aDraftAfterReturn: p8a,
+      pass: p8b === 'B 的独立草稿' && (p8a === '' || p8a === null) };
+
+    // ---------- P9 双击恰一次 + IME 组合态 Enter 不发送 ----------
+    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '双击与输入法样本'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`), true);
+    await sleep(150);
+    const before9 = (await getSent(win)).filter((e) => e.method === 'message.submit').length;
+    await win.webContents.executeJavaScript(probe(`(() => { const send = [...document.querySelectorAll('#hifi-root button')].find((b) => b.textContent.trim() === '发送'); send.click(); send.click(); return true; })()`), true);
+    await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '输入法组合中'); ta.dispatchEvent(new Event('input', { bubbles: true })); const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }); Object.defineProperty(ev, 'isComposing', { value: true }); ta.dispatchEvent(ev); return true; })()`), true);
+    await sleep(800);
+    const after9 = (await getSent(win)).filter((e) => e.method === 'message.submit').length;
+    const imeSent = (await getSent(win)).some((e) => e.method === 'message.submit' && e.params?.body === '输入法组合中');
+    results.P9_doubleClickIme = { sendsByDoubleClicked: after9 - before9, imeSent,
+      pass: after9 - before9 === 1 && imeSent === false };
   } catch (e) {
     results.error = String(e.message);
   }
-  results.allPass = ['P1_shellRealData', 'P2_sendContract', 'P3_recordOnly', 'P4_failureKeepsDraft', 'P5_targetedTakeover', 'P6_dmContract'].every((k) => results[k]?.pass === true);
+  results.allPass = ['P1_shellRealData', 'P2_sendContract', 'P3_recordOnly', 'P4_failureKeepsDraft', 'P5_targetedTakeover', 'P6_dmContract', 'P7_unknownEnvelope', 'P8_crossTargetSettle', 'P9_doubleClickIme'].every((k) => results[k]?.pass === true);
   fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify(results, null, 2));
   console.log('[hifi-shell] allPass=' + results.allPass + ' ' + JSON.stringify(Object.fromEntries(Object.entries(results).filter(([k]) => /^P\d/.test(k)).map(([k, v]) => [k, v && v.pass]))));
   if (results.error) console.log('[hifi-shell] error=' + results.error);

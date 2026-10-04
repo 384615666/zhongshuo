@@ -8,20 +8,48 @@ import { Component, useEffect, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
 import { NavUnreadDot } from './components/NavMarks';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from './shell';
+import { getState } from './data/store';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 import { RoomPage } from './RoomPage';
 import { DmPage } from './DmPage';
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
 
-/** 定向接管目标 → legacy 既有控件/面板（review-r46 §6：切换后必须落在对应页面）。 */
+/** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
+let takeoverToken = 0;
+
+/** 定向接管目标 → legacy 既有控件/面板（review-r46 §6 / r47 §5：切换后落在对应页面与实体）。 */
 const LEGACY_TARGETS: Record<string, { label: string; locate: () => string | null }> = {
   search: { label: '搜索与收藏', locate: () => openDetails('search-panel') },
   git: { label: '文件与 Git', locate: () => togglePanel('files-toggle', 'files') },
   tasks: { label: '任务看板', locate: () => togglePanel('board-toggle', 'board') },
   members: { label: '成员管理', locate: () => openDetails('project-settings') },
-  pending: { label: '待我处理', locate: () => document.getElementById('pending-list')?.scrollIntoView({ block: 'start' }) ?? '未找到待我处理列表' },
-  settings: { label: '应用设置', locate: () => openDetails('help-panel') },
+  pending: {
+    label: '待我处理',
+    // scrollIntoView 正常返回 undefined——先判存在再滚动（review-r47 §5 反例）。
+    locate: () => {
+      const el = document.getElementById('pending-list');
+      if (el == null) return '未找到待我处理列表';
+      el.scrollIntoView({ block: 'start' });
+      return null;
+    },
+  },
+  settings: { label: '设置与帮助', locate: () => openDetails('help-panel') },
+  remote: { label: '远程访问设置', locate: () => openDetails('remote-settings') },
 };
+
+/** 按**名称**定位 legacy 侧栏目标（当前项目/会话身份携带——r47 §5：不让用户重找）。 */
+function locateLegacyRoom(name: string): string | null {
+  const btn = [...document.querySelectorAll('#room-list .room-item, #room-list button')].find((b) => (b.textContent ?? '').includes(name));
+  if (btn == null) return `原界面未找到房间「${name}」`;
+  (btn as HTMLElement).click();
+  return null;
+}
+function locateLegacyDm(peerOrTitle: string): string | null {
+  const btn = [...document.querySelectorAll('#dm-list button')].find((b) => (b.textContent ?? '').includes(peerOrTitle));
+  if (btn == null) return `原界面未找到私信「${peerOrTitle}」`;
+  (btn as HTMLElement).click();
+  return null;
+}
 
 function openDetails(id: string): string | null {
   const el = document.getElementById(id) as HTMLDetailsElement | null;
@@ -50,9 +78,24 @@ function togglePanel(toggleId: string, panelId?: string): string | null {
   return null;
 }
 
-/** 进入「原界面」（定向接管）：启动 legacy 一次→按目标定位→卸载 hifi 样式；返回时恢复。 */
+/** 进入「原界面」（定向接管）：启动 legacy 一次→按目标定位→卸载 hifi 样式；返回时恢复。
+ * targetKey 为 LEGACY_TARGETS 键或 'current-room'/'current-dm'（携带当前身份定位）。 */
 export function takeLegacy(targetKey: string): void {
-  const target = LEGACY_TARGETS[targetKey] ?? { label: targetKey, locate: () => null };
+  takeoverToken += 1;
+  const myToken = takeoverToken;
+  const state = getState();
+  let target: { label: string; locate: () => string | null };
+  if (targetKey === 'current-room') {
+    const currentRoomId = state.ui.activeRoomId || (state.rooms[0]?.id ?? '');
+    const room = state.rooms.find((r) => r.id === currentRoomId) ?? state.rooms[0];
+    target = room != null ? { label: `房间 ${room.name}`, locate: () => locateLegacyRoom(room.name) } : LEGACY_TARGETS.tasks!;
+  } else if (targetKey === 'current-dm') {
+    const dm = state.dms.find((d) => d.id === state.ui.activeThreadId) ?? state.dms[0];
+    const label = dm != null ? `${dm.peerDisplayName ?? ''}${dm.title != null && dm.title.length > 0 ? ` · ${dm.title}` : ''}` : '';
+    target = dm != null ? { label: `私信 ${label}`, locate: () => locateLegacyDm(label.split(' · ')[0] || dm.id) } : LEGACY_TARGETS.search;
+  } else {
+    target = LEGACY_TARGETS[targetKey] ?? { label: targetKey, locate: () => null };
+  }
   const w = window as unknown as { __zsLegacyStart?: () => void; __zsLegacyStarted?: boolean; __zsLegacySetVisible?: (v: boolean) => void };
   if (w.__zsLegacyStart != null && w.__zsLegacyStarted !== true) { w.__zsLegacyStart(); w.__zsLegacyStarted = true; }
   document.body.classList.add('legacy-on');
@@ -63,6 +106,7 @@ export function takeLegacy(targetKey: string): void {
   let tries = 0;
   let stable = 0;
   const tryLocate = () => {
+    if (takeoverToken !== myToken) return; // 已返回新界面/再次接管——取消旧定位重试
     const problem = target.locate();
     if (problem == null) {
       stable += 1;
@@ -98,6 +142,7 @@ class HifiErrorBoundary extends Component<{ children: ReactNode }, { failed: str
     const w = window as unknown as { __zsHifiFailed?: boolean; __zsLegacyStart?: () => void; __zsLegacyStarted?: boolean };
     w.__zsHifiFailed = true;
     document.body.classList.add('legacy-on');
+    hifiStyleLink()?.setAttribute('disabled', 'disabled'); // 回退时关闭 hifi 全局样式（r47 §5）
     if (w.__zsLegacyStart != null && w.__zsLegacyStarted !== true) { w.__zsLegacyStart(); w.__zsLegacyStarted = true; }
   }
   render() { return this.state.failed == null ? this.props.children : <div style={{ padding: 24 }}>界面渲染失败（{this.state.failed}）——已回退原界面。</div>; }
@@ -119,6 +164,7 @@ export default function App() {
     btn.textContent = '⌂ 返回新界面';
     btn.title = '回到换装壳（原型风格界面）——恢复样式并刷新数据';
     btn.onclick = () => {
+      takeoverToken += 1; // 取消在途定位重试
       document.body.classList.remove('legacy-on');
       (window as unknown as { __zsLegacySetVisible?: (v: boolean) => void }).__zsLegacySetVisible?.(false); // 暂停隐藏端轮询
       enableHifiStyles();
@@ -146,7 +192,7 @@ export default function App() {
           <aside className="sidebar">
             <div className="sidebar-top">
               {legacyItem('search', 'bookmark', '搜索与收藏', '搜索与收藏')}
-              {legacyItem('git', 'diff', '文件与 Git', '文件与 Git（H3 按原型归位——当前经原界面定位）')}
+              {legacyItem('git', 'diff', '文件与 Git', '文件与 Git（原界面 Files 集合；Git 操作在原界面仓库区）')}
               {legacyItem('tasks', 'list', '任务看板', '任务看板')}
               {legacyItem('members', 'users', '成员管理', '成员管理')}
               <button className={`side-item${path === '/dm' || path.startsWith('/dm/') ? ' active' : ''}`} title="私信：本项目一对一会话" onClick={() => navigate('/dm')}>
@@ -187,7 +233,7 @@ export default function App() {
             </div>
             <div className="sidebar-foot">
               {legacyItem('pending', 'inbox', '待我处理', '待我处理')}
-              {legacyItem('settings', 'settings', '设置', '应用设置')}
+              {legacyItem('settings', 'settings', '设置与帮助', '设置与帮助（原界面面板区——远程/提醒等项目设置在各自面板）')}
             </div>
           </aside>
 

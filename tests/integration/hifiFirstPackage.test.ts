@@ -71,9 +71,11 @@ interface LoaderApi {
   loadDmHistory(conversationId: string, opts?: { markRead?: boolean }): Promise<void>;
   sendRoomRoot(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): Promise<{ status: string; code?: string; error?: string }>;
   sendDmMessage(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): Promise<{ status: string; code?: string; error?: string }>;
+  retryUnknownSend(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
 }
 interface StoreApi {
-  getState(): { rooms: Array<{ id: string; memberIds: string[]; conversationId?: string }>; dmHistory: Record<string, Array<{ id: string; authorId: string; createdAt: number }>> };
+  getState(): { projects: Array<{ displayName: string }>; rooms: Array<{ id: string; memberIds: string[]; conversationId?: string }>; dmHistory: Record<string, Array<{ id: string; authorId: string; createdAt: number }>> };
+  setReadGate?(gate: ((conversationId: string) => boolean) | null): void;
 }
 interface Harness {
   bundle: { loader: LoaderApi; store: StoreApi };
@@ -112,6 +114,11 @@ async function makeHarness(): Promise<Harness> {
     worker: async () => { await new DispatchWorker({ db, adapter, leaseOwner: 'w-hifi', appDataDir: appDir }).runOnce(); },
     close: () => { void adapter.closeAllSessions().catch(() => {}); db.close(); },
   } as unknown as Harness;
+}
+
+/** 测试注入的门设置（bundle 的 store 模块导出 setReadGate——经 StoreApi 扩展暴露）。 */
+function setReadGateForTest(store: StoreApi, allow?: string): void {
+  if (typeof store.setReadGate === 'function') store.setReadGate(allow != null ? ((id: string) => id === allow) : null);
 }
 
 describe('第四十七轮 H1：打包 hifi 前端 × 正式 daemon × fake 库/worker（真实链）', () => {
@@ -202,4 +209,93 @@ describe('第四十七轮 H1：打包 hifi 前端 × 正式 daemon × fake 库/w
       h.close();
     }
   }, 120_000);
+
+  it('review-r47 反例组：提交后回执丢失的同号重放/改参冲突；迟到 project.open 归属；标读统一门', async () => {
+    await buildHifiBundle();
+    const h = await makeHarness();
+    const L = h.bundle.loader;
+    const store = h.bundle.store;
+    try {
+      const projDir = join(tmpRoot, 'proj2');
+      mkdirSync(projDir, { recursive: true });
+      writeFileSync(join(projDir, 'README.md'), '# r47\n', 'utf8');
+      await L.openProjectByPath(projDir);
+      const projId = (h.db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string }).id;
+      h.db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA',?,'Guide A','agent',1)`).run(projId);
+      const cv = await h.raw('conversation.create', { projectId: projId, peerMemberId: 'mA' });
+      const dmId = (cv.data as unknown as { conversationId: string }).conversationId;
+
+      // ---------- ① 提交已成功、回执丢失（review-r47 §2 危险窗口） ----------
+      const envBody = '提交后回执丢失的原文';
+      const first = await L.sendDmMessage('cmd-r47-win', dmId, envBody, 'default');
+      expect(first.status).toBe('ok'); // 服务端确实已保存
+      // 同号**改参**（模拟旧实现“重试时重组参数”）→ 服务幂等网关必须拒绝。
+      const changed = await h.raw('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: dmId }, body: `${envBody}＋等待期新编辑`, intent: 'default', mentions: [] }, 'cmd-r47-win');
+      expect(changed.ok).toBe(false);
+      expect((changed.error as { code: string }).code).toBe('IDEMPOTENCY_CONFLICT');
+      // 同号**原信封**重放 → 幂等回执 ok；消息恰一条。
+      const replay = await L.retryUnknownSend({ commandId: 'cmd-r47-win', method: 'message.submit', params: { target: { kind: 'dm', projectId: projId, conversationId: dmId }, body: envBody, intent: 'default', mentions: [] } });
+      expect(replay.status).toBe('ok');
+      const count = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id = ? AND body_json LIKE ?`).get(dmId, `%${envBody}%`) as { c: number }).c;
+      expect(count).toBe(1);
+
+      // 造真实未读：worker 完成 DM 任务（fake 成员回复）→ unread>0 才有水位可推进。
+      let agentReply = false;
+      for (let i = 0; i < 4 && !agentReply; i += 1) {
+        await h.worker();
+        agentReply = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id = ? AND author_type = 'agent'`).get(dmId) as { c: number }).c > 0;
+      }
+      expect(agentReply).toBe(true);
+
+      // ---------- ② 迟到 project.open 归属（review-r47 §4） ----------
+      const origCommand = h.raw; // 受控延迟：直接调 command 面而非 loader 的 openProjectByPath
+      // 用 loader 发起 A（慢）与 B（快）：A 的响应后到不得覆盖 B。
+      const dirA = join(tmpRoot, 'projA'); const dirB = join(tmpRoot, 'projB');
+      mkdirSync(dirA, { recursive: true }); mkdirSync(dirB, { recursive: true });
+      writeFileSync(join(dirA, 'README.md'), 'A\n', 'utf8'); writeFileSync(join(dirB, 'README.md'), 'B\n', 'utf8');
+      const globalWindow = (globalThis as unknown as { window: { zs: { command: (env: unknown) => Promise<unknown> } } }).window;
+      const realCommand = globalWindow.zs.command.bind(globalWindow.zs);
+      const slowA: Array<() => void> = [];
+      globalWindow.zs.command = (async (env: { commandId: string; method: string; params: unknown }) => {
+        if (env.method === 'project.open' && (env.params as { path: string }).path === dirA) {
+          await new Promise<void>((r) => { slowA.push(r); }); // 挂起 A 直到放行
+        }
+        return realCommand(env);
+      }) as typeof globalWindow.zs.command;
+      const pA = L.openProjectByPath(dirA);
+      await new Promise((r) => setTimeout(r, 50));
+      await L.openProjectByPath(dirB); // B 后发先至
+      expect(store.getState().projects[0]?.displayName).toBe('projB');
+      slowA.forEach((r) => r()); // 放行 A——旧响应必须被丢弃
+      await pA;
+      expect(store.getState().projects[0]?.displayName).toBe('projB');
+      globalWindow.zs.command = realCommand;
+
+      // ---------- ③ 标读统一门（review-r47 §4：发起点重查，不信请求前快照） ----------
+      await L.openProjectByPath(projDir); // ② 已切到 projB——回到本测项目并重载会话
+      await L.refreshDms();
+      // 页面未注册门（readGate=null）→ 即使 opts.markRead=true 也不得推进。
+      const markBefore = (h.db.prepare(`SELECT count(*) c FROM messages WHERE id = '__mark__'`).get() as { c: number }).c;
+      void markBefore;
+      await L.refreshDms(); // 会话列表入 store（unread>0 才会推进水位）
+      const convUnread = store.getState().dms.length;
+      const marked: string[] = [];
+      const origMark = globalWindow.zs.command.bind(globalWindow.zs);
+      globalWindow.zs.command = (async (env: { method: string; params: unknown }) => {
+        if (env.method === 'conversation.markRead') marked.push(JSON.stringify((env.params as { conversationId: string }).conversationId));
+        return origMark(env);
+      }) as typeof globalWindow.zs.command;
+      await L.loadDmHistory(dmId, { markRead: true }); // 无门（缺省拒绝）
+      expect(marked).toHaveLength(0);
+      void convUnread;
+      setReadGateForTest(store, dmId); // 门此刻放行（当前会话）
+      await L.loadDmHistory(dmId, { markRead: true });
+      expect(marked).toHaveLength(1);
+      setReadGateForTest(store, undefined);
+      globalWindow.zs.command = origMark;
+    } finally {
+      h.close();
+    }
+  }, 120_000);
 });
+

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
-import { useStore, loadDmHistory, sendDmMessage, createDm, refreshDms, toast } from './shell';
+import { useStore, loadDmHistory, sendDmMessage, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
 const EXEC_TEXT: Record<string, string> = {
@@ -33,6 +33,19 @@ export function DmPage() {
   const msgs = historyMap[activeId] ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  // 活动目标追踪（接管定位用）：当前会话写入 ui.activeThreadId。
+  useEffect(() => { if (activeId !== '') setState((st) => ({ ...st, ui: { ...st.ui, activeThreadId: activeId } })); }, [activeId]);
+
+  // 标读统一门（review-r47 §4）：页面注册——markRead 发起**此刻**重查（当前会话/前台/贴底/接管）。
+  useEffect(() => {
+    setReadGate((conversationId: string) =>
+      conversationId === activeId
+      && document.visibilityState === 'visible'
+      && !document.body.classList.contains('legacy-on')
+      && (() => { const box = listRef.current; return box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true; })());
+    return () => { setReadGate(null); };
+  }, [activeId]);
 
   // 历史装载+已读水位（前台+贴底才推进——装载前记录贴底状态）。
   useEffect(() => {
@@ -91,6 +104,7 @@ export function DmPage() {
               <span className="faint small">
                 {active.archivedAt != null ? '已归档（只读）' : EXEC_TEXT[active.execState ?? 'idle'] ?? ''}
               </span>
+              <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在本会话的原界面打开：附件/停止/继续队列/恢复执行/验收返工/归档（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-dm'))}>原界面打开本会话</button>
             </div>
             <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
               {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照）</div> : null}
@@ -107,6 +121,10 @@ export function DmPage() {
                 draftKey={`dm:${active.id}`}
                 showMentions={false}
                 formalLimits={FORMAL_LIMITS}
+                onRetrySend={(env) => retryUnknownSend(env).then((r) => {
+                  if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（原信封）', 'success'); }
+                  return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+                })}
                 onSend={(p): Promise<FormalSendOutcome> => (async () => {
                   const r = await sendDmMessage(p.commandId, active.id, p.body, p.sendAs === 'record' ? 'record_only' : 'default');
                   if (r.status === 'ok') {

@@ -12,6 +12,7 @@ function fallbackToLegacy(err: unknown): void {
   const w = window as unknown as { __zsHifiFailed?: boolean; __zsLegacyStart?: () => void; __zsLegacyStarted?: boolean };
   w.__zsHifiFailed = true;
   document.body.classList.add('legacy-on');
+  document.querySelector<HTMLLinkElement>('link[href="hifi/app.css"]')?.setAttribute('disabled', 'disabled');
   if (w.__zsLegacyStart != null && w.__zsLegacyStarted !== true) { w.__zsLegacyStart(); w.__zsLegacyStarted = true; }
 }
 

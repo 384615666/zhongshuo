@@ -18,7 +18,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull } from '../data/store';
+import { useStore, getDraftFull, setDraftFull, parkUnknownEnvelope, clearUnknownEnvelope } from '../data/store';
+import type { PendingSendEnvelope, HifiDraft } from '../data/store';
 import { takePendingQuotes } from '../data/actions-preview';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
@@ -155,6 +156,7 @@ export function Composer({
   showMentions = true,
   extraAction,
   formalLimits,
+  onRetrySend,
 }: {
   target: ComposerTarget;
   draftKey: string;
@@ -242,6 +244,8 @@ export function Composer({
   extraAction?: ReactNode;
   /** 正式侧能力锁定：给出原因的控件在点击前禁用（视觉保持，行为如实）。 */
   formalLimits?: FormalLimits;
+  /** 结果未知信封的重发通道（review-r47 §2）：严格重发冻结原信封——由页面接正式命令。 */
+  onRetrySend?: (env: PendingSendEnvelope) => Promise<FormalSendOutcome | void>;
 }) {
   /**
    * 成员边界（§4.6）：房间/线程取房间名单，私信取该会话的 audience 名单。
@@ -286,8 +290,17 @@ export function Composer({
   const [access, setAccess] = useState<AccessMode>('plan');
   const [accessOpen, setAccessOpen] = useState(false);
   const [attachments, setAttachments] = useState<{ name: string; size: number }[]>([]);
-  /** 正式侧行内发送错误（异步回执失败/未知——第四十七轮；清空于下一次提交尝试） */
-  const [sendError, setSendError] = useState<string | null>(null);
+  /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
+  const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string } | null>(null);
+  const sendError = sendErrorFor != null && sendErrorFor.key === draftKey ? sendErrorFor.text : null;
+  const setSendErrorFor = (key: string, text: string) => setSendErrorState({ key, text });
+  /** 当前挂载目标键（结算时核对——迟到回执只在同键在挂时同步当前输入）。 */
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  /** 按目标键的发送锁（同一目标在途挡双击；其它目标可独立发送）。 */
+  const sendingKeyRef = useRef<string | null>(null);
+  /** 本目标的结果未知信封（store 持有——切走/卸载不丢）。 */
+  const pendingEnv = useStore((st) => st.pendingSends[draftKey]);
   const [sending, setSending] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   /** 「本次运行设置」弹层（低频选项的收纳处，§6） */
@@ -452,13 +465,12 @@ export function Composer({
     const text = body.trim();
     if (!text) return;
     if (sendDisabledReason) return;
-    // 防重必须用 ref：setSending 是异步的，同一 tick 内两次 click（或 Enter+点击）
-    // 都会看到 sending === false，从而创建两个任务 —— §17.4 的不变量会失守。
-    // 实测同一 tick 双击会新增 2 个任务；这里用同步锁压成 1 个。
-    if (sendingRef.current) return;
-    sendingRef.current = true;
+    // 防重按**目标键**锁（review-r47 §3）：同一目标在途时挡双击/Enter 并发；其它目标不受牵连。
+    if (sendingKeyRef.current === draftKey) return;
+    sendingKeyRef.current = draftKey;
     setSending(true);
-    setSendError(null);
+    setSendErrorState(null);
+    const keyAtSend = draftKey;
     const sentMentions = mentions;
     const sentAttachments = attachments;
     const sentAs = sendAs;
@@ -474,46 +486,120 @@ export function Composer({
       target,
     });
 
-    /** 确认成功才清空——且只清**本次发送的内容**：等待期间继续编辑的正文/新 @/新附件保留。 */
-    const clearSentContent = () => {
-      setBody((prev) => (prev.startsWith(text) ? prev.slice(text.length).replace(/^\s+/, '') : prev));
-      setMentions((prev) => (prev.length === sentMentions.length && prev.every((m, i) => m === sentMentions[i]) ? [] : prev));
-      setAttachments((prev) => (prev.length === sentAttachments.length && prev.every((a, i) => a.name === sentAttachments[i]!.name && a.size === sentAttachments[i]!.size) ? [] : prev));
-      /**
-       * 「仅记录」是**一次性**意图：确认提交成功后回到该上下文的默认发送方式。
-       * 失败/未知不清（重试仍是仅记录——用户意图不因故障被重置）。
-       */
-      if (sentAs === 'record') setSendAs(recordThread ? 'record' : 'ai');
+    /** 按**发起目标键**结算 STORED 草稿（review-r47 §3：迟到回执只清发起目标的已发内容，
+     * 等待期/切目标后的其它草稿与编辑不动）；返回结算后的草稿供同键在挂时同步当前输入。 */
+    const settleForKey = (key: string): HifiDraft => {
+      const d = getDraftFull(key);
+      const nextBody = d.body.startsWith(text) ? d.body.slice(text.length).replace(/^\s+/, '') : d.body;
+      const mentionsClear = d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
+      const attClear = d.attachments.length === sentAttachments.length && d.attachments.every((a, i) => a.name === sentAttachments[i]!.name && a.size === sentAttachments[i]!.size);
+      const settled: HifiDraft = {
+        ...d,
+        body: nextBody,
+        mentions: mentionsClear ? [] : d.mentions,
+        attachments: attClear ? [] : d.attachments,
+        // 「仅记录」一次性：确认成功后回到默认发送方式（失败/未知不复位——重试仍是原意图）。
+        sendAs: sentAs === 'record' ? (recordThread ? 'record' : 'ai') : d.sendAs,
+      };
+      setDraftFull(key, settled);
+      return settled;
+    };
+    const syncIfMounted = (key: string, settled: HifiDraft) => {
+      if (draftKeyRef.current !== key) return; // 已切目标：不动当前输入（B 的草稿不受 A 回执影响）
+      setBody(settled.body);
+      setMentions(settled.mentions);
+      setAttachments(settled.attachments);
+      setSendAs(settled.sendAs);
       setMentionOpen(false);
-      commandIdRef.current = newId(); // 成功后下一次是新的命令
     };
 
-    // 正式异步合同（第四十七轮）：onSend 返回 Promise 时等待可判定结果——
-    // 确定失败/结果未知都保留正文/@/附件/意图并给行内错误；未知结果沿用同一 commandId 重试
-    // （后端幂等：同命令号恰一次）。未返回 Promise（原型同步调用形态）保持原行为。
+    // 正式异步合同：onSend 返回 Promise 时等待可判定结果——成功按发起键结算；确定失败保留
+    // 草稿+行内错误（按发起键）+换新命令号；**结果未知**：冻结完整原信封（commandId+target+
+    // body+mentions+intent）到 store，立即换新命令号（此后正常发送=新信封，不会同号改参触发
+    // IDEMPOTENCY_CONFLICT），重试走「重发原信封」。未返回 Promise（原型同步形态）保持原行为。
     if (outcome != null && typeof (outcome as Promise<unknown>).then === 'function') {
       (outcome as Promise<FormalSendOutcome | void>).then((r) => {
         if (r == null || r.status === 'ok') {
-          clearSentContent();
+          const settled = settleForKey(keyAtSend);
+          syncIfMounted(keyAtSend, settled);
+          commandIdRef.current = newId(); // 成功后下一次是新的命令
+        } else if (r.status === 'failed') {
+          commandIdRef.current = newId(); // 确定失败：新命令号重发
+          setSendErrorFor(keyAtSend, `发送失败：${r.error}——内容已保留，修正后可重发`);
         } else {
-          setSendError(r.status === 'unknown'
-            ? `发送结果未知（${r.error}）——内容已保留，可重试：沿用同一命令号，不会重复发送`
-            : `发送失败：${r.error}——内容已保留，修正后可重发`);
-          if (r.status === 'failed') commandIdRef.current = newId(); // 确定失败：新命令号重发
+          // 先冻结原信封（捕获当前命令号），再换新号——此后正常发送=新信封（不会同号改参）。
+          parkUnknownEnvelope(keyAtSend, envelopeOf(keyAtSend, text, sentMentions, sentAs));
+          commandIdRef.current = newId();
+          setSendErrorFor(keyAtSend, `发送结果未知（${r.error}）——原信封已保留，可「重发原内容」（同命令号不重复）`);
         }
       }).catch((e: unknown) => {
-        setSendError(`发送失败：${e instanceof Error ? e.message : String(e)}——内容已保留，修正后可重发`);
+        // 无明确业务回执的异常：按未知处理（review-r47 §2——不当确定失败新号重发）。
+        parkUnknownEnvelope(keyAtSend, envelopeOf(keyAtSend, text, sentMentions, sentAs));
         commandIdRef.current = newId();
+        setSendErrorFor(keyAtSend, `发送结果未知（${e instanceof Error ? e.message : String(e)}）——原信封已保留，可「重发原内容」`);
       }).finally(() => {
-        sendingRef.current = false;
+        sendingKeyRef.current = null;
         setSending(false);
       });
       return;
     }
-    clearSentContent();
-    // 释放同步锁。放在微任务里，保证同一 tick 内的后续点击仍被挡住。
+    const settled = settleForKey(keyAtSend);
+    syncIfMounted(keyAtSend, settled);
+    commandIdRef.current = newId();
+    // 释放目标键锁。放在微任务里，保证同一 tick 内的后续点击仍被挡住。
     queueMicrotask(() => {
-      sendingRef.current = false;
+      sendingKeyRef.current = null;
+      setSending(false);
+    });
+  }
+
+  /** 冻结完整原信封（结果未知时重试的唯一依据——严格重发这一份）。 */
+  function envelopeOf(key: string, text: string, sentMentions: string[], sentAs: 'ai' | 'record'): import('../data/store').PendingSendEnvelope {
+    return {
+      commandId: commandIdRef.current,
+      method: 'message.submit',
+      params: {
+        target: JSON.parse(JSON.stringify(target)) as Record<string, unknown>,
+        body: text,
+        intent: sentAs === 'record' ? 'record_only' : 'default',
+        mentions: sentMentions.map((id) => (id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id })),
+      },
+      targetLabel: key,
+      at: Date.now(),
+    };
+  }
+
+  /** 重发原信封（结果未知专用）：严格使用冻结参数；成功按发起键结算+清信封；确定失败清信封。 */
+  function retryUnknown(env: import('../data/store').PendingSendEnvelope): void {
+    if (onRetrySend == null) return;
+    if (sendingKeyRef.current === draftKey) return;
+    sendingKeyRef.current = draftKey;
+    setSending(true);
+    setSendErrorState(null);
+    const keyAtSend = draftKey;
+    void onRetrySend(env).then((r) => {
+      if (r == null || r.status === 'ok') {
+        clearUnknownEnvelope(keyAtSend);
+        const d = getDraftFull(keyAtSend);
+        const nextBody = d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
+        const settled: HifiDraft = { ...d, body: nextBody, sendAs: env.params.intent === 'record_only' ? (recordThread ? 'record' : 'ai') : d.sendAs };
+        setDraftFull(keyAtSend, settled);
+        if (draftKeyRef.current === keyAtSend) {
+          setBody(settled.body);
+          setSendAs(settled.sendAs);
+        }
+        return;
+      }
+      if (r.status === 'failed') {
+        clearUnknownEnvelope(keyAtSend); // 原信封被服务明确拒绝：信封作废
+        setSendErrorFor(keyAtSend, `重发失败：${r.error}`);
+        return;
+      }
+      setSendErrorFor(keyAtSend, `重发仍未知（${r.error}）——原信封继续保留，可再重试`);
+    }).catch((e: unknown) => {
+      setSendErrorFor(keyAtSend, `重发仍未知（${e instanceof Error ? e.message : String(e)}）——原信封继续保留`);
+    }).finally(() => {
+      sendingKeyRef.current = null;
       setSending(false);
     });
   }
@@ -669,7 +755,19 @@ export function Composer({
         </div>
       ) : null}
 
-      {/**
+            {/* 结果未知的在途信封（review-r47 §2）：与当前草稿分列——重试严格重发原信封。 */}
+      {pendingEnv != null ? (
+        <div className="composer-mentions">
+          <span className="chip record-chip" title={`结果未知的发送：${pendingEnv.params.body.slice(0, 40)}…（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
+            <Icon name="alert-triangle" size={11} />
+            上次发送结果未知：{pendingEnv.params.body.slice(0, 24)}…
+            <button title="严格重发原信封（同命令号——服务幂等，不会重复）" onClick={() => retryUnknown(pendingEnv)}>重发原内容</button>
+            <button title="放弃该信封（若服务实际已保存，消息会在下次刷新出现）" onClick={() => clearUnknownEnvelope(draftKey)}>放弃</button>
+          </span>
+        </div>
+      ) : null}
+
+{/**
        * 「仅记录」标记（一次性发送意图，2026-09-25）。
        *
        * 它表达的是**这一次**不会请求 AI 回复：
@@ -989,7 +1087,7 @@ export function Composer({
               className="composer-draft failed"
               title={sendError}
               style={{ cursor: 'pointer' }}
-              onClick={() => setSendError(null)}
+              onClick={() => setSendErrorState(null)}
             >
               <Icon name="alert-triangle" size={11} /> {sendError.slice(0, 80)}（点击关闭）
             </span>
