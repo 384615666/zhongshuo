@@ -41,6 +41,7 @@ import { migration039 } from './039-remote-audit-log.ts';
 import { migration040 } from './040-remote-device-epoch.ts';
 import { migration041 } from './041-turn-protection-state.ts';
 import { migration042 } from './042-turn-protection-state-backfill.ts';
+import { migration043 } from './043-turn-protection-release-evidence.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -86,4 +87,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration040,
   migration041,
   migration042,
+  migration043,
 ];

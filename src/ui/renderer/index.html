@@ -219,7 +219,12 @@
         <input id="dm-attach-file" type="file" accept=".txt,.md,.markdown,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx" class="hidden" />
       </section>
       <!-- 共享预览面板（第二十九轮五）：视图全局——池/线程/DM 任何入口打开都实际可见
-           （此前埋在 DM 区内：池/线程视图下预览写入但不可见，属共享预览规格缺口）。 -->
+           （此前埋在 DM 区内：池/线程视图下预览写入但不可见，属共享预览规格缺口）。
+           第四十三轮 UI-03：预览工具条（展开/收起）——与面板同显同隐。 -->
+      <div id="attach-preview-bar" class="attach-preview-bar hidden">
+        <button id="attach-preview-collapse" class="chip" title="收起预览（关闭面板并释放渲染资源）">✕ 关闭</button>
+        <button id="attach-preview-expand" class="chip" title="展开/收起预览高度（视觉预览区放大；可拖面板下缘调节）">⤢ 展开预览</button>
+      </div>
       <div id="attach-preview" class="attach-preview hidden" data-section="attach-preview"></div>
       <footer class="composer">
         <div id="send-error" class="send-error hidden"></div>

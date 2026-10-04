@@ -93,7 +93,7 @@ const BAT_SELFCHECK = [
   '',
 ].join('\r\n');
 
-const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v5 受影响项短回归结果（用户回填——本文件不会被程序覆盖）
+const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v6 受影响项短回归结果（用户回填——本文件不会被程序覆盖；追加勿覆盖 v5 记录）
 
 - 日期/参与人：
 - 服务机（系统）/客户端（浏览器与版本）：
@@ -107,32 +107,35 @@ const SHORT_REGRESSION_TEMPLATE = `# DEV-25 v5 受影响项短回归结果（用
 | R3 | 重启后侧栏/项目自动恢复 | | | |
 | R4 | 防护拒绑 claude（正式错误）/fake 可绑 | | | |
 | R5 | 设备列表可滚动可达+LAN 虚拟网卡标注 | | | |
-| R6 | PPT 视觉预览（默认房间已发消息附件芯片：图表/表格实际渲染·翻页/缩放生效；**正常预置样本视觉不可用≠通过**——降级呈现另记 FAIL 并截图原因） | | | |
-| R7 | Word 视觉预览（📎附件→选择包内 samples/word-r7-sample.docx→点击芯片：表格/图片/分页呈现+**聊天界面按钮颜色不变**[样式隔离]） | | | |
+| R6 | PPT 视觉预览（默认房间→打开回复串→根消息📎芯片：图表/表格实际渲染·翻页/缩放/**展开**生效·**关闭真正消失**；**正常预置样本视觉不可用≠通过**） | | | |
+| R7 | Word 视觉预览（📎附件→选择包内 samples/word-r7-sample.docx→点击芯片：分页/表格/图片/页眉呈现+**展开可读**+**聊天界面按钮颜色不变**[样式隔离]+关闭真正消失） | | | |
+| V1 | 相邻视图切换（房间↔私信↔线程：各自收起/恢复；私信消息区高度过半） | | | |
+| V2 | 监听显示（选择框=已应用配置；编辑不被刷新覆盖） | | | |
 
 异常与备注：
 `;
 
-const README = `# DEV-25 v5 修复候选包·受影响项短回归（Windows 服务机 + 同局域网客户端浏览器）
+const README = `# DEV-25 v6 修复候选包·受影响项短回归（Windows 服务机 + 同局域网客户端浏览器）
 
 本包为**修复候选包**：D1—D10 全套已按 v2 包收案（docs/implementation/dev25-dual-acceptance-record-20261003.md），
-本轮只做**受影响项短回归**（七项，见 \`SHORT-REGRESSION 指南\`——应用侧栏帮助或 docs 指南同文）。
-不需要 SQL、Node、开发者工具；全部操作=双击启动器+浏览器+截图。
+本轮只做**受影响项补测**（R6/R7+相邻视图切换+监听显示——v5 已按范围收案 R1—R5 不重复；见
+RESULTS/SHORT-REGRESSION-template.md 与 docs 指南）。不需要 SQL、Node、开发者工具；全部操作=双击启动器+浏览器+截图。
 
 **产物来源**：\`ZhongshuoDual/\` 由最终冻结产物逐文件 SHA256 核对后拷贝（buildId 见
 \`RESULTS/buildId.txt\`；核对事实 \`RESULTS/frozen-manifest-check.json\`）。fake runtime + 真实派发
 硬防护——零真实模型调用（RESULTS 留 real_calls=0 证据）。
 
-**证书体系与⚠️新数据根声明（v5）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ CA 签发的
-服务证书（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。**v5 使用全新数据根——首次启动生成新 CA
-与新服务证书，两枚指纹与 v2/v3/v4 均不同**：客户端必须重新导入**本包**的 \`ca.cer\` 并按下方步骤核对
+**证书体系与⚠️新数据根声明（v6）**：本地 CA（信任根，\`server-data/remote/ca.cer\`）+ CA 签发的
+服务证书（SAN 覆盖 127.0.0.1/localhost/实际 LAN IP）。**v6 使用全新数据根——首次启动生成新 CA
+与新服务证书，两枚指纹与 v2/v3/v4/v5 均不同**：客户端必须重新导入**本包**的 \`ca.cer\` 并按下方步骤核对
 **本包面板**显示的新「信任根指纹」。「IP 变化只重签服务证书、CA 不变」仅适用于**同一数据根**，
-**不跨包/不跨数据根继承信任**——不要复用 v2/v3/v4 时期导入的旧 CA。
+**不跨包/不跨数据根继承信任**——不要复用 v2/v3/v4/v5 时期导入的旧 CA。
 
 ## 服务机步骤
 
 1. 双击 \`start-server.bat\`（等 "Seeded." 与应用窗口；重复启动幂等）。启动器自动准备**短回归
    前置状态**（种子写入 RESULTS/seed.json 的 regression 段）：
+   - **首启自动装载**：不 reload、不手动打开，窗口约 1 分钟内自动进入本项目（v5 首启空白已修）；
    - 会话「恢复演练」：含 1 个**中断待恢复**任务（合成停机中断形态——种子构造，非真实执行）；
    - 会话「队列演练」：队列处于**暂停**态（正式停止合同产物）；
    - 默认房间：一条带 \`回归幻灯.pptx\` 附件的仅记录消息（点击附件芯片即可预览）。
@@ -187,7 +190,7 @@ const README = `# DEV-25 v5 修复候选包·受影响项短回归（Windows 服
 ## 边界
 
 - 本包模拟运行（fake+真实派发硬防护）；私钥只留服务机；不降级 HTTP；凭据不落明文日志。
-- v2/v3/v4 包与其数据/结果原地保留——本包独立目录、独立数据根，互不影响。`;
+- v2/v3/v4/v5 包与其数据/结果原地保留（v5 RESULTS 为正式回填记录）——本包独立目录、独立数据根，互不影响。`;
 
 const RESULT_TEMPLATE = `# DEV-25 双机验收结果（用户回填——本文件不会被程序覆盖）
 
@@ -366,7 +369,9 @@ async function cdpEvalPage(port, expr) {
   return out;
 }
 
-/** 等桌面页面就绪：窗口打开→种子完成（seed.json）→reload 走自动打开链→项目可见+模拟模式明确。 */
+/** 等桌面页面就绪：窗口打开→种子完成（seed.json）→**首启不 reload** 项目自动可见
+ * （第四十三轮 P0：renderer 首启服务端记忆有界轮询——v5 现场曾靠 reload 才可见，自测以
+ * reload 替代首启成功的口径已废）→模拟模式明确。 */
 async function assertAppFacts(port, appData) {
   const t0 = Date.now();
   let pageOk = false;
@@ -385,17 +390,31 @@ async function assertAppFacts(port, appData) {
     await sleep(3000);
   }
   if (!existsSync(seedPath)) throw new Error('种子未完成（150s 无 seed.json）');
-  // reload 走「服务端记忆回退」同链路（ui.autoOpenProjectPath）——合成项目实际可见。
-  await cdpEvalPage(port, 'location.reload()').catch(() => { /* 已导航 */ });
+  // 首启自动可见：**不 reload、不手动打开**——renderer 记忆轮询（60×1s）应自行装载。
+  // 等待窗给到种子完成后再 90s（轮询上限 60s + 装载余量）；超时即失败（不得用 reload 替代）。
   let projectName = '';
-  while (Date.now() - t0 < 210_000) {
+  const tAuto = Date.now();
+  while (Date.now() - tAuto < 90_000) {
     try {
       projectName = await cdpEvalPage(port, `(document.getElementById('project-name')?.textContent ?? '')`);
       if (String(projectName).includes('DEV25 双机验收')) break;
     } catch (e) { /* 页面切换中 */ }
     await sleep(2000);
   }
-  if (!String(projectName).includes('DEV25 双机验收')) throw new Error('合成项目不可见：project-name=' + String(projectName).slice(0, 80));
+  if (!String(projectName).includes('DEV25 双机验收')) {
+    throw new Error('首启项目未自动可见（90s，无 reload/手动打开）：project-name=' + String(projectName).slice(0, 80));
+  }
+  const autoVisibleMs = Date.now() - tAuto;
+  // 房间/私信侧栏同窗可见（首启不只是项目名——房间列表与「默认房间」在侧栏实际出现）。
+  let roomsText = '';
+  while (Date.now() - tAuto < 120_000) {
+    try {
+      roomsText = await cdpEvalPage(port, `(document.getElementById('room-list')?.textContent ?? '')`);
+      if (String(roomsText).includes('默认房间')) break;
+    } catch (e) { /* 未就绪 */ }
+    await sleep(2000);
+  }
+  if (!String(roomsText).includes('默认房间')) throw new Error('首启房间列表未自动可见（无 reload）');
   // 模拟模式明确：runtime.status 成员绑定无任何真实渠道（claude/codex），未绑定成员显示
   // 「(默认 runtime)」=走 daemon 默认（启动器内置 ZS_RUNTIME=fake）；真实渠道绑定出现即失败。
   const runtimeRaw = await cdpEvalPage(port, `window.zs && window.zs.command ? window.zs.command({ protocolVersion: 1, commandId: 'selftest-runtime-status-' + Math.floor(Math.random() * 1e6), method: 'runtime.status', params: {} }).then((r) => JSON.stringify((r.data && r.data.memberBindings) || [])) : 'no-bridge'`);
@@ -403,7 +422,7 @@ async function assertAppFacts(port, appData) {
   const bindings = JSON.parse(String(runtimeRaw));
   const fakeBinding = bindings.length > 0 && bindings.every((b) => String(b.kind ?? '') === 'fake' || String(b.kind ?? '') === '(默认 runtime)');
   if (!fakeBinding) throw new Error('模拟模式不明确（出现真实渠道绑定或无绑定）：' + String(runtimeRaw).slice(0, 200));
-  return { projectName: String(projectName).slice(0, 40), fakeBinding };
+  return { projectName: String(projectName).slice(0, 40), fakeBinding, firstAutoVisibleMs: autoVisibleMs };
 }
 
 /** 本包 electron 进程清单（按包路径过滤——不影响开发机其他实例）。 */
@@ -489,6 +508,12 @@ async function selfTest() {
   const tmp = mkdtempSync(join(tmpdir(), '双机 自测-'));
   const pkg = join(tmp, 'dev25-dual-win');
   cpSync(outRoot, pkg, { recursive: true, dereference: true });
+  // 第四十三轮自测修正：**全新数据根**——包本体 server-data 可能带历史自测残留项目（demo
+  // 项目随临时目录移动→路径身份变化→project.open 视为新项目），跨项目 conversation.list
+  // 计数会把旧项目的同名演练 DM 一并计入（scratch 探针实证：干净包两启恰 5 会话/0 重复创建
+  // ——产品种子幂等；失败是自测环境残留+断言未限定项目）。自测临时副本一律从零数据开始。
+  rmSync(join(pkg, 'server-data'), { recursive: true, force: true });
+  rmSync(join(pkg, 'RESULTS', 'seed.json'), { force: true }); // 陈旧种子事实不得冒充本次完成
   const appData = join(pkg, 'server-data');
   const evidenceDir = join(repo, 'dist', 'desktop', 'dev25-dual-evidence', new Date().toISOString().replace(/[:T]/g, '').slice(0, 14) + '-' + randomIdSuffix());
   const seedJson = () => {
@@ -527,7 +552,7 @@ async function selfTest() {
         if (facts1 != null && facts1.drill != null) break;
         await sleep(3000);
       }
-      if (facts1 == null || facts1.ids?.dmConversationA == null) throw new Error('种子失败：seed.json 缺失或不完整');
+      if (facts1 == null || facts1.ids?.dmConversationA == null || facts1.drill == null) throw new Error('种子失败：seed.json 缺失或不完整（drill 事实未落——等待 ' + Math.round((Date.now() - t0) / 1000) + 's）');
       if (facts1.drill.stopAccepted !== true || facts1.drill.stoppedAtExecState !== 'terminal') {
         throw new Error('停止演练未收口：' + JSON.stringify(facts1.drill));
       }
@@ -559,11 +584,16 @@ async function selfTest() {
         await sleep(3000);
       }
       if (facts2 == null) throw new Error('二次启动种子未完成');
-      // 事实核对：种子私信恰 2 条且标题命中（不重造）。
-      const dms = await cdpEvalPage(9392, `window.zs.command({ protocolVersion: 1, commandId: 'selftest-2nd-list-1', method: 'conversation.list', params: {} }).then((r) => JSON.stringify((r.data && r.data.conversations) || []))`);
+      // 事实核对：种子私信恰 2 条且标题命中（不重造）——**限定本项目**（无 projectId 的
+      // conversation.list 跨项目聚合，历史项目同名会话不得计入）。
+      const dms = await cdpEvalPage(9392, `window.zs.command({ protocolVersion: 1, commandId: 'selftest-2nd-list-1', method: 'conversation.list', params: { projectId: ${JSON.stringify(String(facts2.ids?.projectId ?? ''))} } }).then((r) => JSON.stringify((r.data && r.data.conversations) || []))`);
       const convList = JSON.parse(String(dms));
       const seededDmTitles = convList.filter((c) => c.title === 'DM A - stop drill' || c.title === 'DM B - accept drill').length;
       const seedMsgCount = facts2.commands?.['message.submit'] ?? 0;
+      if (facts2.reused !== true || seededDmTitles !== 2 || seedMsgCount !== 0) {
+        // 诊断（第四十三轮自测定位）：二次启动种子实际执行的命令面+全量会话标题。
+        console.log('[self-test] second-launch 诊断 commands=' + JSON.stringify(facts2.commands ?? {}) + ' convTitles=' + JSON.stringify(convList.map((c) => ({ t: c.title, p: c.peerDisplayName }))));
+      }
       console.log('[self-test] second-launch idempotent ' + (facts2.reused === true && seededDmTitles === 2 && seedMsgCount === 0 ? 'PASS' : 'FAIL') + `（reused=${String(facts2.reused)} seededDms=${seededDmTitles} newMessages=${seedMsgCount}）`);
       if (facts2.reused !== true || seededDmTitles !== 2 || seedMsgCount !== 0) throw new Error('二次启动种子不幂等（reused=' + String(facts2.reused) + ' dms=' + seededDmTitles + ' newMessages=' + seedMsgCount + '）');
       const stop2 = await gracefulStop(9392, pkg);

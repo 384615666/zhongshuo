@@ -2,7 +2,55 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十二轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十三轮，唯一权威快照）
+
+> 本轮=**v5 用户回填收案+四类现场缺陷修复**（review-r42-next-round-20261004.md）：统一隐藏
+> 契约（UI-01）·阅读空间与预览展开（UI-02/03）·监听显示（UI-04）+迁移 043 保守化+种子房间
+> 绑定+首启自动装载。交付 **v6 独立候选包**；用户只补测 R6/R7+相邻视图切换+监听显示，随后
+> Android。v5 包与其 RESULTS/截图=正式回填记录，原地保留。
+> - **用户结果收案（不再等待）**：R1/R2/R4 用户确认 PASS；R3 重启自动恢复 PASS（私信被挤
+>   细条的布局缺陷另列=UI-02）；R5 按已观察范围 PASS（监听选择框与运行事实不同步另列=UI-04）；
+>   **R6 FAIL**（关闭预览无反应——原包 CSS 反例：.pool/.composer/.attach-preview 加 hidden 后
+>   仍 flex/block 占位）；**R7 BLOCKED**（Word 内容已呈现但区域过小——max-height 300/320px
+>   嵌套滚动）。原件=v5 包 RESULTS/SHORT-REGRESSION.md+shots/（Codex 按授权代整理，未改模板）。
+> - **UI-01 隐藏契约**：style.css 全局 `.hidden{display:none!important}`（此前仅 .thread/.gate/
+>   #stop-btn/.resume-info/.send-error 有局部规则）；JS 侧资源释放/代次保护不变。
+> - **UI-02/03 阅读空间**：main[data-view=dm] 收起主池输入区（DM 自带输入行）+仓库/Git/看板/
+>   Files/Activity（偏好开关不动，返回恢复）；.main.preview-open 预览打开时收起仓库/Git 行；
+>   预览面板默认 max-height min(56vh,600px)+resize:vertical+「⤢ 展开预览」expanded 档
+>   （min(82vh,1000px)，docx/pptx 视觉区 calc(82vh-210px)）；打开分支统一 showAttachPreviewPanel
+>   （面板+工具条同显+preview-open）。
+> - **UI-04**：监听编辑控件与已应用配置分离——刷新同步已应用值（运行事实），dirty 编辑不被
+>   覆盖并标注「检测到未应用的编辑」；说明行新增「已应用配置：监听 …」。
+> - **P0 首启自动装载**：renderer 服务端记忆回退由单次读取改**有界轮询**（60×1s，欢迎页不
+>   阻塞、用户手动打开即停）——种子启动后才写记忆的窗口不再造成首启空白；启动器自测
+>   assertAppFacts **删除 location.reload()**，首启可见/房间可见改为硬断言（reload 替代首启
+>   成功的口径废止）。
+> - **迁移 043（review §4 纯函数反例）**：保守分类 classifyProtectionFactStrict——同体矛盾
+>   （released:true+protectionRetained:true）→retained；released:true 但证据不足（probe alive/
+>   unknown/identity-missing/exited、缺 probe）→retained（**审计曾写释放≠当前合同的完整退出
+>   证明**；reconciled executed+exitFact=exited 同不追认）；可信正例不误拦=managedEvidence
+>   受管 Job 完整结束/probe no-os-process（旧版缺 probe 字段时按服务端 reason 串）。**已应用
+>   042 的库**由 043 只降级 released→retained 修正（不动 retained/NULL/预算/审计；幂等）。
+>   legacyProtectionUpgrade 4/4（40→最新矩阵+41→最新复现收口+42→最新降级修正+纯函数 22 分支）。
+> - **种子房间绑定**：seed 显式选「默认房间」（找不到=失败不 fallback items[0]——v5 实际落
+>   Lab Room 的顺序漂移），房间/线程/附件身份写 seed.json（rg.pptRoom/pptThread）；指南改
+>   真实入口（默认房间→打开回复串→根消息📎芯片）。远程浏览器 openThread 补**根消息卡+
+>   rootAttachments 只读芯片**（此前只渲染 replies——读取呈现缺口；不扩为远程视觉预览）。
+> - **页面级验证**：新 verify-ui-hidden-layout.cjs（实际打包页面+传输桩——DOM/CSS/控制流全
+>   真实；**computedStyle+尺寸断言**，1280×800+1920×1080 双档）P0 首启轮询装载/U1 隐藏契约
+>   （pool/composer hidden 后 0 尺寸、DM 消息区≥55% 主高、返回恢复）/U2 关闭真正消失+工具行
+>   让位恢复/U3 Word·PPT 展开实测（docx 盒 353→448px、面板 658px、resize vertical）/U4 监听
+>   同步+dirty/U5 宽屏（DM 消息区 949×1680）——连续两次 allPass。lifecycle/word-isolation
+>   allPass 不回退。冻结验证器 ATT 新增 4 项 R43 断言（展开/关闭计算样式/视图切换/监听）。
+> - **v6 交付**：冻结三连（runId 见 vdr-runs 新记录）+同源核对+真实启动器自测（首启不 reload
+>   断言）；包含 042+043、R7 样本、NOTICE 三件、README 修复、材料修订。**用户操作：对 v6 只
+>   补测 R6/R7+相邻视图切换+监听显示**（R1—R5 按 v5 范围保留）；通过后 Android；不重复 D1—D10。
+> - 全量 847/847（原始日志按 runId 留存 dist/desktop/r43-test-logs/）；typecheck 干净；零新增
+>   真实模型调用；价值评价/DEV-11/并行写入/G5 维持原约定。
+> 历史快照（第三十八轮起）见下文各节；工程坑与旧轮细节以各轮快照为准。
+
+## 上一轮快照（2026-10-04 第四十二轮）
 
 > 本轮=**review-r41 三块收口**（review-r41-next-round-20261004.md）：旧库升级 P1（迁移 042
 > 回填）+Word 验证支架负对照补强+操作材料与真实入口对齐。**v5 包/server-data/RESULTS/截图

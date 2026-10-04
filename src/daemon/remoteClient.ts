@@ -433,17 +433,40 @@ async function renderThreadList() {
     row.className = 'thread-row';
     const thId = th.threadId || th.id || th.thread_id || '';
     row.textContent = '· ' + (th.title || th.rootTaskId || thId || JSON.stringify(th).slice(0, 60));
-    row.onclick = () => void openThread(thId).catch((e) => feedLine('error', '线程读取失败：' + e.message));
+    row.onclick = () => void openThread(thId, th.title).catch((e) => feedLine('error', '线程读取失败：' + e.message));
     box.appendChild(row);
   }
   window.__roomThreadCount = threads.length;
 }
-async function openThread(threadId) {
+async function openThread(threadId, anchorTitle) {
   if (currentTarget == null || threadId == null || threadId === '') return;
   currentThread = threadId;
   const gen = ++historyGen;
   const r = await cmd('thread.history', { threadId, limit: 40 });
   if (gen !== historyGen || currentThread !== threadId) return; // 迟到/切走：不重绘
+  // 第四十三轮 P0（v5 现场：浏览器远程线程只渲染 replies——根消息与根附件不呈现，PPT 等
+  // 锚点附件在远程不可见）：根消息卡（锚点标题自 room.pool 线程摘要携带）+ 根附件只读芯片
+  //（thread.history rootAttachments——与桌面同源）。只读呈现，不新增远程视觉预览。
+  const rootAtts = (r.data && r.data.rootAttachments) || [];
+  if (rootAtts.length > 0 || (typeof anchorTitle === 'string' && anchorTitle.length > 0)) {
+    const box = document.getElementById('messages');
+    box.textContent = '线程 ' + String(threadId).slice(0, 14) + '…（thread.history 正式读取）';
+    const root = document.createElement('div');
+    root.className = 'msg';
+    const rootMeta = document.createElement('div');
+    rootMeta.className = 'meta';
+    rootMeta.textContent = '根消息（锚点）' + (typeof anchorTitle === 'string' && anchorTitle.length > 0 ? '：' + anchorTitle : '');
+    root.appendChild(rootMeta);
+    for (const a of rootAtts) {
+      const att = document.createElement('div');
+      att.className = 'att';
+      att.textContent = '📎 ' + (a.displayName ?? a.display_name ?? a.filename ?? a.artifactId ?? '') + (a.hash != null ? '（sha256 ' + String(a.hash).slice(0, 12) + '…）' : '');
+      root.appendChild(att);
+    }
+    box.appendChild(root);
+    renderMessageItemsInto((r.data && r.data.items) || []);
+    return;
+  }
   renderMessageItems((r.data && r.data.items) || [], '线程 ' + String(threadId).slice(0, 14) + '…（thread.history 正式读取）');
 }
 async function loadMessages() {
@@ -470,6 +493,11 @@ function renderMessageItems(items, heading) {
   const box = document.getElementById('messages');
   box.textContent = heading;
   clearReadError('messages');
+  renderMessageItemsInto(items);
+}
+/** 追加消息项（不重建容器/不清标题——供根消息卡后的回复列表追加复用）。 */
+function renderMessageItemsInto(items) {
+  const box = document.getElementById('messages');
   for (const m of items.slice().reverse()) {
     const d = document.createElement('div');
     d.className = 'msg';

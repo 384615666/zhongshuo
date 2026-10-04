@@ -315,21 +315,36 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         }
       }
       // PPT 附件：包内 seed/回归幻灯.pptx → 房间仅记录消息（芯片可点开预览——R6 用）。
+      // 第四十三轮（review-r42 §5 / v5 现场）：**显式绑定「默认房间」身份**——旧实现取
+      // room.list.items[0]，v5 实际落到了 Lab Room（顺序漂移→指南入口与数据不符）。找不到
+      // 目标房间=失败退出（不静默 fallback 到任意房间）；最终房间/线程/附件身份写入 seed
+      // 事实（指南与自测按事实核对入口）。
       const pptPath = path.join(path.dirname(process.argv[1] ?? ''), '回归幻灯.pptx');
       if (fs.existsSync(pptPath)) {
         const rooms0 = await cmd(pipe, 'room.list', { projectId });
-        const room0 = (rooms0.items ?? [])[0];
+        const room0 = (rooms0.items ?? []).find((r) => r.name === '默认房间');
+        if (room0 == null) throw new Error('regression: 种子目标房间「默认房间」不存在（不回退任意房间——房间/线程身份须明确）');
+        rg.pptRoom = { roomId: room0.id, roomName: room0.name, conversationId: room0.conversationId };
         // 幂等查重：room.pool 只收 roomId（strictObject——多传 projectId 会被拒），且池=线程
         // 摘要不含附件文件名——改查锚消息正文唯一标记（第四十轮自测暴露：旧文件名检查恒
         // false→每启重传+重发）。
-        const pool = await cmd(pipe, 'room.pool', { roomId: room0 != null ? room0.id : undefined }).catch(() => null);
-        const alreadyPpt = pool != null && JSON.stringify(pool).includes('R40 短回归·PPT 预览样本');
-        if (!alreadyPpt) {
+        const pool = await cmd(pipe, 'room.pool', { roomId: room0.id }).catch(() => null);
+        const marker = 'R40 短回归·PPT 预览样本';
+        const hit = pool != null ? (pool.threads ?? pool.items ?? []).find((t) => (t.title ?? '').includes(marker) || (t.body?.text ?? '').includes(marker)) : null;
+        if (hit != null) {
+          rg.pptAttachment = 'reused';
+          rg.pptThread = { threadId: hit.threadId ?? hit.id, anchorText: hit.body?.text ?? hit.title };
+        } else {
           const b64 = fs.readFileSync(pptPath).toString('base64');
-          const att0 = await cmd(pipe, 'attachment.uploadOffice', { conversationId: room0 != null ? room0.conversationId : undefined, filename: '回归幻灯.pptx', contentBase64: b64 });
-          await cmd(pipe, 'message.submit', { target: { kind: 'room_root', projectId, conversationId: room0.conversationId, roomId: room0.id }, body: 'R40 短回归·PPT 预览样本（点击附件芯片预览）', intent: 'record_only', mentions: [], attachmentRefs: [att0.attachmentId] });
+          const att0 = await cmd(pipe, 'attachment.uploadOffice', { conversationId: room0.conversationId, filename: '回归幻灯.pptx', contentBase64: b64 });
+          const sent = await cmd(pipe, 'message.submit', { target: { kind: 'room_root', projectId, conversationId: room0.conversationId, roomId: room0.id }, body: 'R40 短回归·PPT 预览样本（点击附件芯片预览）', intent: 'record_only', mentions: [], attachmentRefs: [att0.attachmentId] });
           rg.pptAttachment = att0.attachmentId;
-        } else rg.pptAttachment = 'reused';
+          rg.pptMessageId = sent.messageId ?? null;
+          // 回读线程身份（指南「打开回复串→根消息芯片」的真实入口核对用）。
+          const pool2 = await cmd(pipe, 'room.pool', { roomId: room0.id }).catch(() => null);
+          const hit2 = pool2 != null ? (pool2.threads ?? pool2.items ?? []).find((t) => (t.title ?? '').includes(marker) || (t.body?.text ?? '').includes(marker)) : null;
+          if (hit2 != null) rg.pptThread = { threadId: hit2.threadId ?? hit2.id, anchorText: hit2.body?.text ?? hit2.title };
+        }
       }
       facts.regression = rg;
     }

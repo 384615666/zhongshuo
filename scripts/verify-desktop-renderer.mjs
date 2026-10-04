@@ -1302,7 +1302,11 @@ try {
       // ⑤迟到响应保护（previewGeneration 守卫）：面板**开着**时再次点击芯片（新预览在途——
       // 服务端往返+解析窗口），立即点「关闭预览」（代次+1+abort+dispose）——迟到的构建响应
       // 不得复活/改写页面。
+      // 第四十三轮：close 的 dispose 对**已提交旧内容**的清理（图表 canvas/ECharts 挂载收尾）
+      // 可能异步落在关闭后短窗内——属合法收尾（hidden 恒真），不是迟到覆盖。断言在 400ms
+      // 收尾窗后取基线，再核 1.5s 稳定不变+hidden 恒真（语义不变：不复活/不被新预览改写）。
       await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); const p = document.getElementById('attach-preview'); const btns = [...p.querySelectorAll('.chip')]; btns.find((b) => b.textContent.includes('关闭预览'))?.click(); })()`);
+      await new Promise((r) => setTimeout(r, 400)); // 关闭收尾窗（dispose 异步清理）
       const lateSnap1 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
       await new Promise((r) => setTimeout(r, 1_500));
       const lateSnap2 = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); return JSON.stringify({ hidden: p.classList.contains('hidden'), len: p.innerHTML.length }); })()`);
@@ -1345,6 +1349,54 @@ try {
       const reopenStage = await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return JSON.stringify({ len: (st?.textContent ?? '').length, hasHome: (st?.textContent ?? '').includes('甲页标题XYZ') }); })()`);
       record('ATT·PPT 重开正常（视觉重渲染首页——无半开/残留）', JSON.parse(reopenStage).hasHome === true, reopenStage);
       await closePreview(page);
+      // ---------- 第四十三轮（review-r42 §3 / v5 现场）：UI-01/02/03/04 页面级断言 ----------
+      // 隐藏契约·阅读空间·预览展开·监听同步——**computedStyle+getBoundingClientRect 实测**
+      // （不以 classList/DOM 存在替代——v5 原包 CSS 反例：.pool/.composer/.attach-preview 加
+      // hidden 后仍 flex/block 占位；R6「关闭没反应」、图1「私信细条」的直接路径）。
+      {
+        // ① 展开预览：面板与视觉区 max-height 放大（default→expanded）。
+        await page.evalJs(`(() => { const chips = [...document.querySelectorAll('#composer-attach-chips button.chip')]; chips.find((c) => c.textContent.includes('演示 幻灯'))?.click(); })()`);
+        await waitFor(async () => (await page.readStrict(`(() => { const st = document.querySelector('#attach-preview .pptx-visual-stage'); return st != null && !document.getElementById('attach-preview').classList.contains('hidden'); })()`)) === true, 30_000, 'R43 展开-重开预览');
+        const stageMax1 = await page.readStrict(`getComputedStyle(document.querySelector('#attach-preview .pptx-visual-stage')).maxHeight`);
+        const panelMax1 = await page.readStrict(`getComputedStyle(document.getElementById('attach-preview')).maxHeight`);
+        const resizeProp = await page.readStrict(`getComputedStyle(document.getElementById('attach-preview')).resize`);
+        await page.evalJs(`document.getElementById('attach-preview-expand')?.click()`);
+        await new Promise((r) => setTimeout(r, 300));
+        const stageMax2 = await page.readStrict(`getComputedStyle(document.querySelector('#attach-preview .pptx-visual-stage')).maxHeight`);
+        const panelMax2 = await page.readStrict(`getComputedStyle(document.getElementById('attach-preview')).maxHeight`);
+        record('R43·预览展开与可调（⤢ 工具条：面板/视觉区 max-height 放大；面板可拖拽）', parseFloat(panelMax2) > parseFloat(panelMax1) && parseFloat(stageMax2) > parseFloat(stageMax1) && resizeProp === 'vertical', `${panelMax1}→${panelMax2} stage ${stageMax1}→${stageMax2} resize=${resizeProp}`);
+        // ② 关闭真正消失（v5 现场 R6 FAIL）：computed none+零尺寸+工具条收起；预览开时工具行让位、关后恢复。
+        const repoWhileOpen = await page.readStrict(`getComputedStyle(document.getElementById('repo-status')).display`);
+        await page.evalJs(`document.getElementById('attach-preview-collapse')?.click()`);
+        const closeSnap = await page.readStrict(`(() => { const p = document.getElementById('attach-preview'); const cs = getComputedStyle(p); const r = p.getBoundingClientRect(); return JSON.stringify({ display: cs.display, h: Math.round(r.height), w: Math.round(r.width), bar: getComputedStyle(document.getElementById('attach-preview-bar')).display, repoAfter: getComputedStyle(document.getElementById('repo-status')).display }); })()`);
+        const cs2 = JSON.parse(closeSnap);
+        record('R43·关闭预览真正消失（display none+零尺寸+工具条收起+工具行让位恢复）', cs2.display === 'none' && cs2.h === 0 && cs2.w === 0 && cs2.bar === 'none' && repoWhileOpen === 'none' && cs2.repoAfter !== 'none', closeSnap);
+        // ③ 视图切换收起：切私信主池/主池输入区/工具行 none+零尺寸、消息区过半高；回主池恢复。
+        await page.evalJs(`(() => { document.querySelector('#dm-list button')?.click(); })()`);
+        await waitFor(async () => (await page.readStrict(`document.querySelector('main.main')?.getAttribute('data-view')`)) === 'dm', 10_000, 'R43 切私信');
+        const dmSnap = await page.readStrict(`(() => { const vis = (sel) => { const e = document.querySelector(sel); if (e == null) return null; const cs = getComputedStyle(e); const r = e.getBoundingClientRect(); return JSON.stringify({ d: cs.display, h: Math.round(r.height), w: Math.round(r.width) }); }; const mainH = document.querySelector('main.main').getBoundingClientRect().height; return JSON.stringify({ pool: vis('#pool'), composer: vis('footer.composer'), repo: vis('#repo-status'), dmMsgs: vis('#dm-messages'), mainH: Math.round(mainH) }); })()`);
+        const dmv = JSON.parse(dmSnap);
+        const poolDm = JSON.parse(dmv.pool); const compDm = JSON.parse(dmv.composer); const repoDm = JSON.parse(dmv.repo); const msgsDm = JSON.parse(dmv.dmMsgs);
+        record('R43·切私信收起（主池/输入区/工具行 none+零尺寸；消息区过半高）', poolDm.d === 'none' && poolDm.h === 0 && poolDm.w === 0 && compDm.d === 'none' && compDm.h === 0 && repoDm.d === 'none' && msgsDm.h >= 0.55 * dmv.mainH, dmSnap);
+        await page.evalJs(`(() => { document.querySelector('#room-list .room-item')?.click(); })()`);
+        await waitFor(async () => (await page.readStrict(`document.querySelector('main.main')?.getAttribute('data-view')`)) === 'pool', 10_000, 'R43 回主池');
+        const backSnap = await page.readStrict(`(() => JSON.stringify({ pool: getComputedStyle(document.getElementById('pool')).display, composer: getComputedStyle(document.querySelector('footer.composer')).display, repo: getComputedStyle(document.getElementById('repo-status')).display }))()`);
+        const bsv = JSON.parse(backSnap);
+        record('R43·回主池恢复（主池/输入区/工具行重现——偏好开关未动）', bsv.pool !== 'none' && bsv.composer !== 'none' && bsv.repo !== 'none', backSnap);
+        // ④ UI-04 监听同步（v5 图2：运行 LAN、选择框却「仅本机」）：LAN 启用后选择框=已应用
+        // 0.0.0.0+说明行「已应用配置」；用户编辑（dirty）后刷新不覆盖并标注。
+        await page.evalJs(`(() => { document.getElementById('remote-settings').open = true; const s = document.getElementById('remote-host-sel'); s.value = '0.0.0.0'; document.getElementById('remote-enable-btn').click(); })()`);
+        await waitFor(async () => { const t = await page.readStrict(`document.getElementById('remote-config-row').textContent`); return t.includes('已应用配置') && t.includes('局域网'); }, 60_000, 'R43 LAN 启用');
+        const selSynced = await page.readStrict(`(() => { const s = document.getElementById('remote-host-sel'); return JSON.stringify({ value: s.value, applied: document.getElementById('remote-config-row').textContent.includes('已应用配置'), lan: document.getElementById('remote-config-row').textContent.includes('局域网') }); })()`);
+        await page.evalJs(`(() => { const s = document.getElementById('remote-host-sel'); s.value = '127.0.0.1'; s.dispatchEvent(new Event('change')); const d = document.getElementById('remote-settings'); d.open = false; d.dispatchEvent(new Event('toggle')); d.open = true; d.dispatchEvent(new Event('toggle')); })()`);
+        await new Promise((r) => setTimeout(r, 800));
+        const selDirty = await page.readStrict(`(() => { const s = document.getElementById('remote-host-sel'); return JSON.stringify({ value: s.value, dirty: document.getElementById('remote-config-row').textContent.includes('未应用的编辑') }); })()`);
+        const ssv = JSON.parse(selSynced); const sdv = JSON.parse(selDirty);
+        record('R43·监听选择框=已应用配置（LAN 运行同步 0.0.0.0；编辑不被刷新覆盖）', ssv.value === '0.0.0.0' && ssv.applied === true && ssv.lan === true && sdv.value === '127.0.0.1' && sdv.dirty === true, `sync=${selSynced} dirty=${selDirty}`);
+        // 还原（停用远程——ATT 数据面不留运行服务）。
+        await page.evalJs(`(() => { document.getElementById('remote-disable-btn').click(); })()`);
+        await new Promise((r) => setTimeout(r, 1_200));
+      }
       // ⑦ CSV（编码/引号规则页面链）。
       await uploadViaInput(page, 'composer', craft.makeCsvText([['名称', '备注'], ['中文单元格,逗号', '含"引号"'], ['行二', '值']], ','), '表格.csv', 'text/csv');
       await waitFor(async () => (await page.readStrict(`(document.getElementById('composer-attach-chips')?.textContent ?? '').includes('表格.csv')`)) === true, 30_000, 'ATT CSV 芯片');

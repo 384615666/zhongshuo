@@ -39,7 +39,7 @@ function makeSandbox({ failOpenFor } = {}) {
   const gates = new Map(); // name -> resolve（受控延迟首屏）
   const context = {
     AbortController, console, Uint8Array, Buffer,
-    document: { createElement: (tag) => new Element(tag) },
+    document: { createElement: (tag) => new Element(tag), querySelector: () => null },
     el: () => box,
     currentView: () => 'dm',
     showError: () => {},

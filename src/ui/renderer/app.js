@@ -26,6 +26,8 @@ const state = {
   projectId: null,
   /** 图片能力门一次性确认（第二十九轮三）：确认后随下一条消息消费（imageAck=omit-images）。 */
   imageAckPending: false,
+  /** 首启服务端记忆轮询取消位（第四十三轮 P0）：用户手动打开项目后停轮询。 */
+  startupMemoryPollCancelled: false,
   /** 导航代次（第二十三轮一）：每次切换视图/会话/项目 +1——异步响应凭 (目标三元组+代次)
    * 核对，A→B→A 时旧 A 的迟到响应不再被误当作当前。 */
   navGeneration: 0,
@@ -111,6 +113,7 @@ function navAuditPush(entry) {
 }
 
 async function openFolder() {
+  state.startupMemoryPollCancelled = true; // 用户手动打开——停首启记忆轮询（第四十三轮 P0）
   const dir = await zs.pickFolder();
   if (dir == null) return;
   await loadProject(dir);
@@ -237,6 +240,8 @@ function showPool() {
   state.openAnchorText = null;
   state.openDmId = null;
   updateStopUi(null);
+  // 第四十三轮 UI-02：主视图标记（CSS 视图级收起——DM 视图收起主池输入区/工具面）。
+  document.querySelector('main.main')?.setAttribute('data-view', 'pool');
   el('thread').classList.add('hidden');
   el('dm').classList.add('hidden');
   el('pool').classList.remove('hidden');
@@ -255,6 +260,7 @@ async function openThread(threadId, taskId, anchorText) {
   state.openTaskId = taskId ?? null;
   state.openTaskSnapshot = null;
   state.openAnchorText = anchorText ?? null;
+  document.querySelector('main.main')?.setAttribute('data-view', 'thread');
   el('pool').classList.add('hidden');
   el('dm').classList.add('hidden');
   el('thread').classList.remove('hidden');
@@ -313,6 +319,7 @@ async function openDm(conversationId) {
   state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
+  document.querySelector('main.main')?.setAttribute('data-view', 'dm');
   el('pool').classList.add('hidden');
   el('thread').classList.add('hidden');
   el('dm').classList.remove('hidden');
@@ -440,6 +447,21 @@ function closeAttachPreview() {
   previewGeneration += 1; // 在途预览请求全部作废
   releaseActivePreviewResources();
   el('attach-preview')?.classList.add('hidden');
+  // 第四十三轮 UI-01/03：工具条与展开态一并收起；main 的 preview-open 移除——仓库/Git
+  // 工具行恢复呈现（其收起只随预览存在，不改用户偏好开关）。
+  el('attach-preview-bar')?.classList.add('hidden');
+  el('attach-preview')?.classList.remove('expanded');
+  const expandBtn = el('attach-preview-expand');
+  if (expandBtn != null) expandBtn.textContent = '⤢ 展开预览';
+  document.querySelector('main.main')?.classList.remove('preview-open');
+}
+/** 预览面板显示的唯一入口（第四十三轮 UI-03）：面板+工具条同显，并给 main 打 preview-open
+ * （收起仓库/Git 工具行，把高度让给预览）。所有打开分支（文本/PDF/图片/Office/项目文件）
+ * 统一走这里——此前各分支只 remove('hidden')，且 CSS 未生效（UI-01），工具行也不收起。 */
+function showAttachPreviewPanel() {
+  el('attach-preview')?.classList.remove('hidden');
+  el('attach-preview-bar')?.classList.remove('hidden');
+  document.querySelector('main.main')?.classList.add('preview-open');
 }
 // PDF 视觉渲染（第二十九轮三）：渲染器受限预览侧加载随包 pdfjs ESM（zsres:// 特权协议下
 // 模块与 worker 可用——file:// 会被模块 CORS 拦截）；原件字节每附件取一次，翻页/缩放本地。
@@ -510,7 +532,7 @@ async function projectFilePreview(projectId, name) {
   if (myGen !== previewGeneration) return; // 迟到作废
   const box = el('attach-preview');
   if (box == null) { showError(`项目文件（${name}）：${r.bytes}B——容器缺失`); return; }
-  box.classList.remove('hidden');
+  showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
   head.textContent = `🗂 项目文件 · ${r.baseName} · ${r.bytes}B${r.truncated ? `（超 64KB 截断）` : ''} · 只读快照（非托管副本——源文件变化不追溯；不进模型输入）`;
@@ -849,7 +871,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     if (!alive()) return;
     const pbox = el('attach-preview');
     if (pbox == null) { showError(`PDF 预览（${pdf.filename ?? filename}）：共 ${pdf.totalPages} 页——容器缺失`); return; }
-    pbox.classList.remove('hidden');
+    showAttachPreviewPanel();
     const bytesKey = `${attachmentId}:${pdf.hash}:v${pdf.revision}`;
     if (pdf.bytesBase64 != null) {
       pdfBytesCache.set(bytesKey, pdf.bytesBase64); // 最近 2 份（内存有界）
@@ -951,7 +973,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     if (!alive()) return;
     const ibox = el('attach-preview');
     if (ibox == null) { showError(`图片预览（${img.filename ?? filename}）：${img.width}×${img.height} ${img.bytes}B——页面容器缺失`); return; }
-    ibox.classList.remove('hidden');
+    showAttachPreviewPanel();
     const ihead = document.createElement('div');
     ihead.className = 'meta';
     ihead.textContent = `🖼 ${img.filename ?? filename} · ${img.mime} · 声明 ${img.width}×${img.height} · 原件 ${img.bytes}B · sha256=${img.hash.slice(0, 12)}… · v${img.revision} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
@@ -999,7 +1021,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
     if (!alive()) return;
     const obox = el('attach-preview');
     if (obox == null) { showError(`Office 预览（${doc.filename ?? filename}）——页面容器缺失`); return; }
-    obox.classList.remove('hidden');
+    showAttachPreviewPanel();
     const owrap = document.createElement('div');
     const ohead = document.createElement('div');
     ohead.className = 'meta';
@@ -1257,7 +1279,7 @@ async function previewAttachment(attachmentId, filename, kindHint) {
   if (!alive()) return; // 迟到作废：已关闭/被新预览取代/已切换会话——不重开不覆盖
   const box = el('attach-preview');
   if (box == null) { showError(`附件预览（${filename}）：原文 ${r.originalBytes}B${r.truncated ? `——截断，提取前 ${r.excerptBytes}B` : ''}\n${r.text.slice(0, 2000)}`); return; }
-  box.classList.remove('hidden');
+  showAttachPreviewPanel();
   const head = document.createElement('div');
   head.className = 'meta';
   head.textContent = `📎 ${r.filename ?? filename}${r.kind === 'code_file' ? '（代码）' : ''} · sha256=${r.hash.slice(0, 12)}… · v${r.revision} · 原始 ${r.originalBytes}B${r.truncated ? ` · 截断：提取前 ${r.excerptBytes}B（超 64KB 预算，按字节保留完整字符）` : ' · 全文'} · 来源：${originView === 'dm' ? '私信会话' : originView === 'thread' ? '任务线程' : '主池'}`;
@@ -4128,6 +4150,21 @@ el('task-review-toggle').onclick = () => void (async () => {
   }
 })().catch((error) => { el('task-review-note').textContent = `设置失败：${error.message}`; });
 el('thread-back-btn').onclick = () => { showPool(); void renderPool().catch(showConnError); };
+// 第四十三轮 UI-03：预览工具条——展开/收起（expanded 档放大视觉区，CSS max-height 联动）；
+// 关闭=统一收口（代次作废+资源释放+面板/工具条/工具行收起——与消息内「关闭预览」同链）。
+{
+  const expandBtn = el('attach-preview-expand');
+  if (expandBtn != null) {
+    expandBtn.onclick = () => {
+      const panel = el('attach-preview');
+      if (panel == null) return;
+      const expanded = panel.classList.toggle('expanded');
+      expandBtn.textContent = expanded ? '⤡ 收起预览' : '⤢ 展开预览';
+    };
+  }
+  const collapseBtn = el('attach-preview-collapse');
+  if (collapseBtn != null) collapseBtn.onclick = () => closeAttachPreview();
+}
 el('composer-input').addEventListener('keydown', (ev) => {
   // IME 组合态（拼音候选未上屏）的 Enter 不发送：isComposing 或遗留 keyCode 229。
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
@@ -4157,14 +4194,29 @@ zs.onDemoStatus((status) => { el('conn-state').textContent = status; });
 
 // R5：重启后恢复上次项目（失败如实展示，不回退种子数据）。
 // ---------- 远程访问设置（DEV-25 第三十一轮三/五：本机可信入口）----------
+// 第四十三轮 UI-04（v5 图2：实际监听 0.0.0.0/LAN，选择框却显示「仅本机」）：编辑控件与
+// 已应用配置分离——刷新把控件同步为**已应用值**（运行事实），正在编辑（dirty）时不覆盖；
+// 应用成功后清除 dirty 再刷新。禁止把 LAN 实际运行呈现成已应用回环配置。
+let remoteEditDirty = false;
+function syncRemoteEditControls(cfg) {
+  if (remoteEditDirty) return; // 刷新不覆盖正在编辑的值（未应用编辑）
+  const sel = el('remote-host-sel');
+  if (sel != null && (cfg.listenHost === '127.0.0.1' || cfg.listenHost === '0.0.0.0')) sel.value = cfg.listenHost;
+  const portInput = el('remote-port-input');
+  if (portInput != null && cfg.port > 0) portInput.value = String(cfg.port);
+}
 async function renderRemoteSettings() {
   const row = el('remote-config-row');
   const deviceBox = el('remote-device-list');
   if (row == null) return;
   try {
     const cfg = await command('remote.config.get', {});
-    // 完整呈现（第三十二轮四）：完整 64 位指纹（逐位核对）+可复制地址+证书有效期/LAN 地址。
-    row.textContent = '';
+    syncRemoteEditControls(cfg);
+    // 已应用配置事实行（与上方编辑下拉分列——下拉是「待应用编辑」，本行是服务端已生效值）。
+    const appliedNote = document.createElement('div');
+    appliedNote.className = 'meta';
+    appliedNote.textContent = `已应用配置：监听 ${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · 局域网' : ' · 仅本机'}${cfg.running ? '（运行中——上方下拉为待应用编辑，点「启用」生效）' : '（当前停用）'}${remoteEditDirty ? '；检测到未应用的编辑' : ''}`;
+    row.replaceChildren(appliedNote);
     if (cfg.running) {
       const addr = document.createElement('button');
       addr.className = 'chip';
@@ -4224,7 +4276,10 @@ async function renderRemoteSettings() {
       }
       row.append(lanNote);
     } else {
-      row.textContent = `已停用（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+      const stopped = document.createElement('div');
+      stopped.className = 'meta';
+      stopped.textContent = `已停用（监听=${cfg.listenHost}:${cfg.port}${cfg.allowLan ? ' · LAN' : ' · 仅本机'}${cfg.enabled && !cfg.running ? ' · 启用失败见 daemon 日志' : ''}）`;
+      row.append(stopped);
     }
     if (deviceBox != null) {
       try {
@@ -4250,11 +4305,15 @@ async function renderRemoteSettings() {
   } catch (e) { row.textContent = `远程配置读取失败：${e.message}`; }
 }
 function wireRemoteSettings() {
+  // 第四十三轮 UI-04：编辑 dirty 标记——用户改动下拉/端口后，刷新不再把控件拉回已应用值。
+  el('remote-host-sel')?.addEventListener('change', () => { remoteEditDirty = true; });
+  el('remote-port-input')?.addEventListener('input', () => { remoteEditDirty = true; });
   const apply = (enabled, allowLan) => void (async () => {
     try {
       const host = el('remote-host-sel')?.value ?? '127.0.0.1';
       const port = Number(el('remote-port-input')?.value ?? '0') || 0;
       await command('remote.config.set', { enabled, listenHost: host, port, allowLan });
+      remoteEditDirty = false; // 已应用：编辑值成为已应用配置——刷新可同步
       showError(enabled ? `远程访问已启用（${host}:${port || '自动'}${allowLan ? ' · LAN' : ''}）` : '远程访问已停用');
       await renderRemoteSettings();
     } catch (e) { showError(`远程配置失败：${e.message}`); }
@@ -4330,12 +4389,26 @@ if (lastProject != null && lastProject.length > 0) {
   // 服务端记忆回退（第二十六轮二）：清缓存/换机后 localStorage 为空——读 daemon 持久设置
   //（ui.autoOpenProjectPath，loadProject 成功时写入）自动恢复上次项目。通知人工验收入口
   //（合成项目）与正常使用同链路，不新增专用分支。
+  // 第四十三轮 P0（v5 首启现场：种子在应用启动后才写记忆路径，单次读取早于种子完成→侧栏
+  // 空白，用户被迫手动打开）：改**有界后台轮询**——欢迎页照常呈现不阻塞；记忆出现即自动
+  // 装载（全新数据首启自动可见，不靠 reload/手动打开）；用户手动打开项目或装载成功即停；
+  // 60×1s 上限。与 localStorage 主路径、重启恢复（R3）分别验证。
+  const pollCancelled = () => state.projectId != null || state.startupMemoryPollCancelled === true;
   void (async () => {
-    try {
-      const r = await command('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
-      const remembered = r?.values?.['ui.autoOpenProjectPath'];
-      if (typeof remembered === 'string' && remembered.length > 0) await loadProject(remembered);
-    } catch { /* 无记忆——欢迎页 */ }
+    for (let i = 0; i < 60; i += 1) {
+      if (pollCancelled()) return;
+      try {
+        const r = await command('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
+        const remembered = r?.values?.['ui.autoOpenProjectPath'];
+        if (typeof remembered === 'string' && remembered.length > 0) {
+          if (pollCancelled()) return;
+          await loadProject(remembered);
+          return;
+        }
+      } catch { /* daemon 未就绪/读取失败——继续轮询（有界） */ }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r2) => setTimeout(r2, 1000));
+    }
   })();
 }
 // 深链导航事件（第二十三轮二）：刷新/直接打开/前进后退共用统一导航入口；导航代次防迟到。
