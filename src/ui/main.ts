@@ -414,7 +414,9 @@ app.whenReady().then(async () => {
 `);
     },
   );
-  await win.loadURL('zsres://app/index.html');
+  // --no-hifi：工程逃生口（第四十六轮 H1）——legacy 专项验证器/对照运行时跳过换装壳，
+  // 直接呈现原界面（产品默认仍为 hifi 壳）。不面向最终用户文档。
+  await win.loadURL(process.argv.includes('--no-hifi') ? 'zsres://app/index.html?nohifi=1' : 'zsres://app/index.html');
 
   const demo = process.env.ZS_UI_DEMO;
   if (demo != null) {

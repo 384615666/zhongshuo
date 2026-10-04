@@ -3,7 +3,7 @@
  * .js 会被按 ESM 解析，ADR-I38 说明）；renderer 为静态文件直接拷贝。
  */
 import { build } from 'esbuild';
-import { cpSync, rmSync, copyFileSync, mkdirSync } from 'node:fs';
+import { cpSync, rmSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
@@ -22,6 +22,28 @@ for (const entry of ['main', 'preload']) {
     logLevel: 'info',
   });
 }
+
+// hifi 换装壳（第四十六轮 H1）：原型批准组件（src/ui/hifi 原样拷贝）+ 真实 store/桥——
+// esbuild 打包为 ESM（.mjs——zsres/HTTP 下模块 MIME 正确）。样式不在 JS 里 import：
+// 壳挂载时才注入 <link>（legacy 专项对照运行不加载——原型全局样式不污染原界面），
+// 此处把四份原型 CSS 汇成 hifi/app.css。
+await build({
+  entryPoints: [join(root, 'src', 'ui', 'hifi', 'main.tsx')],
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  jsx: 'automatic',
+  outfile: join(root, 'dist', 'ui', 'renderer', 'hifi', 'app.mjs'),
+  sourcemap: false,
+  logLevel: 'info',
+  loader: { '.tsx': 'tsx', '.ts': 'ts' },
+});
+mkdirSync(join(root, 'dist', 'ui', 'renderer', 'hifi'), { recursive: true });
+writeFileSync(
+  join(root, 'dist', 'ui', 'renderer', 'hifi', 'app.css'),
+  ['tokens.css', 'base.css', 'components.css', 'titlebar.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
+  'utf8',
+);
 
 // 渲染器 pdfjs 资产（第二十九轮三）：受限预览侧视觉渲染用——vendored（node_modules 拷贝，
 // 不入库；.gitignore 覆盖 src/ui/renderer/assets/）。先同步进 src 再整体拷贝 dist。

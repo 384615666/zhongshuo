@@ -223,3 +223,17 @@ button.chip.on { background: #ddf4ff; border-color: #0969da; color: #0969da; }
 .msg-emoji-layer { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0; }
 .activity-row { border: 1px solid #e3e6ee; background: #fff; border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
 .export-format { font-size: 12px; padding: 2px 4px; }
+
+
+/* ---------- 第四十六轮 H1：hifi 换装壳与 legacy 原界面共存 ----------
+   默认=原界面（#legacy-root display:contents 原样呈现，hifi 未挂载零影响）；
+   hifi 壳挂载时 body.hifi-on——legacy 隐藏、壳全屏；「原界面」接管 body.legacy-on 优先回归；
+   hifi 加载失败由 main.tsx 兜底（不挂 hifi-on）。 */
+#hifi-root { display: none; }
+#legacy-root { display: contents; }
+body.hifi-on #hifi-root { display: block; position: fixed; inset: 0; z-index: 5; background: var(--bg-base, #f5f6fa); }
+body.hifi-on:not(.legacy-on) #legacy-root { display: none; }
+body.legacy-on #hifi-root { display: none !important; }
+body.legacy-on #legacy-root { display: contents; }
+#hifi-root:empty { display: none !important; }
+.zs-legacy-exit { position: fixed; top: 8px; right: 12px; z-index: 999; }

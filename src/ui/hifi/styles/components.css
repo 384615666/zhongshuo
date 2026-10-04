@@ -1,0 +1,2924 @@
+/* ============================================================
+   Diff 视图
+   ============================================================ */
+
+.diff-view {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  overflow-x: auto;
+  background: var(--bg-sunken);
+  border-top: 1px solid var(--border);
+}
+.diff-hunk-head {
+  padding: 4px 12px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: pre;
+}
+.diff-line {
+  display: flex;
+  gap: 0;
+  white-space: pre;
+  min-width: max-content;
+}
+.diff-line.add {
+  background: var(--success-soft);
+}
+.diff-line.del {
+  background: var(--danger-soft);
+}
+.diff-no {
+  flex: none;
+  width: 42px;
+  text-align: right;
+  padding-right: 9px;
+  color: var(--text-3);
+  user-select: none;
+  border-right: 1px solid var(--border-subtle);
+}
+.diff-sign {
+  flex: none;
+  width: 20px;
+  text-align: center;
+  user-select: none;
+  color: var(--text-3);
+}
+.diff-line.add .diff-sign { color: var(--success); }
+.diff-line.del .diff-sign { color: var(--danger); }
+.diff-text {
+  flex: 1;
+  padding-right: 14px;
+  color: var(--text);
+}
+
+/* ============================================================
+   覆盖式查看面板（§17.1）
+   任务详情/研讨详情/运行详情/成果预览叠在房间之上，
+   房间本身不卸载，因此滚动位置、草稿与阅读位置都保留。
+   ============================================================ */
+
+.detail-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+
+/* 背板：点它关闭；半透明以表明是"叠在房间之上"而不是换页 */
+.detail-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-scrim);
+  animation: fade 0.12s ease-out;
+}
+
+.detail-panel {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 1080px;
+  margin: 14px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop 0.14s ease-out;
+  outline: none;
+}
+
+.detail-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.detail-panel-title {
+  font-size: var(--fs-13);
+  font-weight: 680;
+}
+
+.detail-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 面板里的视图不再自带页面外壳（背景/滚动交给面板容器） */
+.main.as-panel {
+  background: transparent;
+  overflow: visible;
+  flex: none;
+  min-height: 0;
+}
+.page.as-panel-page {
+  overflow: visible;
+  padding: 16px 20px 28px;
+  max-width: none;
+  margin: 0;
+}
+
+/* ---------- 第十五批：合页（文件 / Git）与文件树 ----------
+   合页把两个视图嵌进同一个页面壳：被嵌入者不能再次铺满、不能自带滚动，
+   否则会出现"页中页"两层滚动条与两层页头。 */
+.main.embedded {
+  background: transparent;
+  overflow: visible;
+  flex: none;
+}
+.main.embedded > .page {
+  padding: 0;
+  overflow: visible;
+}
+
+/*
+ * 合页改造后本页的两栏骨架由 .fg-body 承担（见文件末尾「文件与 Git 合页」一节），
+ * .files-layout 只作为同规格兜底保留（旧截图脚本 / 独立页仍可能命中）。
+ * 左栏宽度统一成 300px：文件页与 Git 页切换时左栏不跳动。
+ */
+.files-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.files-tree {
+  /*
+   * 原来这里写死 `max-height: 62vh; overflow-y: auto` —— 与右栏的高度体系
+   * 完全无关，于是滚右侧详情会带着左栏一起走。现在高度由所在 pane 的
+   * 剩余空间决定（.fg-pane > .fg-pane-scroll），不再写死视口比例。
+   */
+  padding: 10px;
+}
+.file-tree {
+  display: flex;
+  flex-direction: column;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.file-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.file-row.on {
+  /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0/§8 迁移专项） */
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+}
+/* 目录项没有展开箭头时保持对齐 */
+.file-row-gap {
+  width: 11px;
+  flex: none;
+}
+.file-row-size {
+  flex: none;
+  font-size: var(--fs-10);
+  color: var(--text-3);
+}
+.file-empty {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  padding: 3px 0;
+}
+/* 改动标记点：让"文件树"与"改动集"对得上 */
+.file-change-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning, #d08b1a);
+}
+.file-change-dot.added { background: var(--success, #2e9e5b); }
+.file-change-dot.deleted { background: var(--danger, #d0473f); }
+.file-change-dot.renamed { background: var(--accent); }
+
+/**
+ * 文件源码预览块（文件与 Git 页的内嵌 `<pre>`）。
+ *
+ * 规范 §6.1：代码块用 `--bg-sunken` + `--r-md` + mono 12px。
+ * 原来用 `--bg-surface-2` + `--r-sm` + 11px，字号偏小（规范要求 mono 12px）。
+ */
+.file-preview {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-sunken);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: 1.7;
+  color: var(--text-2);
+  overflow-x: auto;
+  max-height: 46vh;
+}
+
+/* 窄窗口：面板铺满 */
+@media (max-width: 900px) {
+  .detail-panel {
+    margin: 0;
+    max-width: none;
+    border-radius: 0;
+    border: none;
+  }
+}
+
+/* ============================================================
+   输入条（Composer）
+   ============================================================ */
+
+.composer {
+  flex: none;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  padding: 8px 14px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.composer-target,
+.composer-mentions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+}
+
+/**
+ * 「仅记录」标记（2026-09-25）。
+ *
+ * 它是一次性的发送意图，不是常驻模式，所以做成输入框上方一枚可取消的 chip：
+ * 用中性色 + 虚线边，与 @ 成员/附件（实线、强调色）区分开 —— 一眼能看出
+ * "这次不会请求 AI 回复"，但不会抢走发送按钮的注意力。
+ */
+.chip.record-chip {
+  border-style: dashed;
+  border-color: var(--border-strong, var(--border));
+  background: transparent;
+  color: var(--text-2);
+}
+
+.chip.record-chip button {
+  margin-left: 2px;
+}
+
+/**
+ * 目标摘要行（减负 §2.1/§6.2）。
+ *
+ * 顶部两行删掉后，这一行是输入区的**常驻身份**：
+ * 显示 `跟进 #12 · 简短标题`，输入文字后仍可见（placeholder 会消失，它不会），
+ * 窄窗与「串＋文件」布局下同样能辨认"我在对哪个任务说话"。
+ * 点击进入「详情 → 任务概况」看完整标题与原始要求。
+ */
+.composer-target-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-11);
+}
+.composer-target-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  text-align: left;
+}
+button.composer-target-summary {
+  cursor: pointer;
+}
+button.composer-target-summary:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.composer-target-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.composer-target-title {
+  min-width: 0;
+  color: var(--text-3);
+}
+
+/**
+ * 输入区容器（规范 §5.6）：--r-xl + --border + --shadow-sm ——
+ * **全场唯一轻浮起的静态容器**。聚焦时描边 --accent + --ring。
+ */
+.composer-box {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.12s, box-shadow 0.12s;
+  display: flex;
+  flex-direction: column;
+}
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+/**
+ * 输入本体 = **真实多行 textarea**（规范 §5.6）。
+ * 默认两行高（54px，房间与回复串等高），随内容增长到 200px 上限后内部滚动 ——
+ * 支持真实多行需求，不把长指令塞进一行胶囊。
+ * 视觉改造不得压缩它的高度或用工具条挤占输入空间。
+ */
+.composer-input {
+  border: none;
+  background: transparent;
+  resize: none;
+  padding: 9px 11px 3px;
+  font-size: var(--fs-13);
+  line-height: 1.65;
+  height: 54px;
+  min-height: 54px;
+  max-height: 200px;
+  outline: none;
+  font-family: var(--font);
+}
+
+/**
+ * 只读态（私信归档，`inputDisabledReason`）。
+ *
+ * 只加 disabled 属性、不给视觉反馈是不够的：实测截图里它与可写态**看起来一模一样**，
+ * 用户只能靠 placeholder 的文字才知道"这里写不了"。这里把文字压暗一档并给 not-allowed 光标，
+ * 让"不能写"扫一眼就能看出来（房间归档时整个输入条会被只读面板取代，同一口径）。
+ */
+.composer-input:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.composer-input:disabled::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+/**
+ * 只读态下同一条输入区里的其它控件（附件按钮、权限档位）也必须**看得出来**被禁用。
+ *
+ * 出处：视觉核对对比 d01（可写）与 d06（归档只读）时指出"回形针与计划模式按钮
+ * 在归档态下与可写态视觉一致"——虽然属性上已经是 disabled，但控件本身没有
+ * 任何禁用样式，用户扫一眼分不出。这里统一压暗并给出 not-allowed 光标；
+ * 只作用于**真正的 disabled 控件**，不影响房间/线程里的正常状态。
+ */
+.icon-btn:disabled,
+.access-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.access-trigger:disabled:hover {
+  /* 禁用时不给 hover 反馈，避免"看起来能点" */
+  background: transparent;
+}
+
+/**
+ * 工具条（规范 §5.6）：发送按钮在尾端，工具不挤占输入空间。
+ *
+ * 允许换行：窄容器下若强行 nowrap，工具会被压扁或把发送按钮挤出可视区；
+ * 规范 §5.6 明确"是否换行由实现按容器宽度决定，本文不作强制单行要求"。
+ * 低频项的**操作入口**可收进溢出菜单，但**当前状态**（发送目标、执行方式、
+ * 权限档位的有效值）必须仍能在工具条以紧凑摘要辨认。
+ */
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+  row-gap: 4px;
+}
+.composer-toolbar .seg {
+  padding: 2px;
+  flex: none;
+}
+.composer-toolbar .seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+/* 发送按钮必须始终在尾端且完整可见（不被工具挤掉） */
+.composer-toolbar .composer-send {
+  margin-left: 0;
+  flex: none;
+}
+/**
+ * 右侧操作簇：预算 / 停止 / 本次运行设置 / 权限档位 / 发送。
+ *
+ * 作为**一个 flex 项**参与换行（`flex: none` + 内部 nowrap），于是容器变窄时
+ * 整簇一起换到第二行，而不是把「发送」单独挤下去（用户反馈：并排预览时
+ * 发送会掉到下一排、位置不稳定）。`margin-left:auto` 让它在每一行都贴右端，
+ * 所以发送/停止的位置在两区并排时保持稳定。
+ */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  margin-left: auto;
+  min-width: 0;
+}
+
+/* 权限模式下拉（右对齐，菜单向上弹出） */
+.access-picker {
+  position: relative;
+  flex: none;
+}
+.access-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: var(--fs-12);
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.access-trigger:hover {
+  background: var(--bg-surface-3);
+}
+.access-trigger.open {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.access-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.access-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  width: 300px;
+  padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  animation: pop 0.12s ease-out;
+}
+
+.access-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border: none;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.access-item:hover {
+  background: var(--bg-hover);
+}
+.access-item > svg:first-child {
+  margin-top: 2px;
+  color: var(--text-3);
+  flex: none;
+}
+.access-item.on > svg:first-child {
+  color: var(--accent);
+}
+/* 首版兑现不了的档位：置灰且不可选，而不是选完再免责（E8、ADR-14） */
+.access-item.unavailable {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.access-item.unavailable:hover {
+  background: transparent;
+}
+.access-item.unavailable .access-item-label {
+  color: var(--text-3);
+}
+.access-item-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.access-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.access-item-label {
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.access-item-desc {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.access-item > svg:last-child {
+  color: var(--accent);
+  margin-top: 3px;
+  flex: none;
+}
+
+.access-note {
+  margin: 5px 4px 3px;
+  padding: 7px 9px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* 写入并发策略选项（设置页 → 文件写入安全） */
+.wpolicy {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  background: var(--bg-surface);
+}
+.wpolicy:hover {
+  border-color: var(--border-strong);
+}
+/**
+ * 项目设置的写入策略单选项（互斥单选）。
+ * 它是**选中态**，所以与导航项/页签用同一套语言：主题 --bg-surface 垫底渐变。
+ * 原来用 --accent-soft 平色 + --accent 描边，与全局选中态不一致。
+ */
+.wpolicy.on {
+  border-color: transparent;
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+}
+.wpolicy input {
+  margin-top: 3px;
+  flex: none;
+}
+
+/* ============================================================
+   项目设置单页（第十六批 §17.8）
+   ============================================================ */
+
+/**
+ * 内容宽度收在 800–960px（§17.8 表单与反馈）：
+ * 原来卡片横跨整屏，一行小开关配一整屏宽的大卡片，控件和说明形不成稳定排列。
+ */
+.pset {
+  max-width: 920px;
+}
+
+.pset-section {
+  margin-bottom: 22px;
+  scroll-margin-top: 12px;
+}
+.pset-section-title {
+  font-size: var(--fs-13);
+  font-weight: 700;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+/* 一行设置：**左侧名称与说明、右侧控件**（§17.8 明确要求的统一排列） */
+.pset-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 0;
+}
+.pset-row + .pset-row {
+  border-top: 1px solid var(--border);
+}
+.pset-row-label {
+  min-width: 0;
+  flex: 1;
+}
+.pset-row-name {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
+}
+.pset-row-hint {
+  margin-top: 3px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  line-height: 1.65;
+}
+.pset-row-error {
+  margin-top: 4px;
+  font-size: var(--fs-11);
+  color: var(--danger);
+}
+.pset-row-control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 1px;
+}
+
+/* 数字输入：固定宽度，不让它跟着卡片拉长 */
+.pset-number {
+  width: 84px;
+  text-align: right;
+}
+.pset-unit {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  flex: none;
+}
+
+/**
+ * 当前值列（§2.2）：值不再塞进 label 括号（如「深色外观（当前：浅色）」），
+ * 而是独立一列排在控件左边 —— 扫视时控件右对齐成一列，值也不会跟控件混在一起。
+ */
+.pset-value {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+/* 长值（成员名单、路径）：换行而不是截断（§2.1 不允许截到不可读） */
+.pset-value-wrap {
+  white-space: normal;
+  max-width: 260px;
+  text-align: right;
+  line-height: 1.6;
+}
+
+/**
+ * 控件列宽可变（§2.2 的例外条款）：路径输入、认证配置、授权范围表单
+ * 按内容需要占宽，不套用普通开关的窄列。
+ */
+.pset-row-control.wide {
+  /**
+   * `0 1 auto`：控件列**按内容占宽**，不参与拉伸。
+   *
+   * 原来写 `flex: 1 1 auto`，于是宽屏下标签列与控件列各分一半空白 ——
+   * 说明被挤成三行、中间还空一截（1920 档实测看到的）。改成不拉伸后，
+   * 剩余宽度全给标签列，说明少折行；路径与按钮仍靠右对齐。
+   * 仍然允许收缩（`1`）并在窄窗换行，不会溢出。
+   */
+  flex: 0 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* 行内"原型模拟"标记：跟在名称/按钮后面，不占一整行 */
+.pset-row-name .tag,
+.pset-row-control .tag {
+  vertical-align: middle;
+}
+
+/** 被禁用并被说明原因的控件（§2.4：禁用必须说明原因，不能只是变灰） */
+.pset-disabled {
+  display: inline-flex;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pset-row-blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--text-4);
+}
+
+/** 折叠区展开后的正文（技术详情 / 了解更多） */
+.settings-why-body {
+  margin-top: 10px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+/** 卡片级折叠组展开后的正文（原型工具 / 错误码速查） */
+.settings-collapse-body {
+  border-top: 1px solid var(--border);
+  padding: 4px 12px 12px;
+}
+
+/**
+ * 中性容器（原「高级操作」橙色分隔带，§2.6）：
+ * 危险色留给真正的危险按钮，普通说明不再占一整块警示面板 ——
+ * 大面积常驻橙色会让真正的风险提示失去分量。
+ */
+.settings-actions {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+}
+.settings-actions-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: var(--fs-12);
+  font-weight: 680;
+}
+.settings-actions-head .small {
+  font-weight: 400;
+}
+
+/** 就地权限说明（配对设备权限、MCP 未接入、故障处理）：简短、中性、不占整块 */
+.conn-perm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: 1.7;
+}
+.conn-perm svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+
+/** 数据目录树：等宽、可滚，不撑破正文宽度 */
+.data-tree {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  line-height: 1.9;
+  overflow-x: auto;
+}
+
+/** 免打扰时段的时间输入：窄，不跟着卡片拉长 */
+.dnd-time {
+  width: 106px;
+}
+
+/** 授权范围编辑器（MCP）：项目/房间/成员的勾选清单 */
+.scope-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+}
+.scope-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  cursor: pointer;
+  border-radius: var(--r-xs);
+}
+.scope-item:hover {
+  background: var(--bg-hover);
+}
+.scope-item input {
+  margin-top: 3px;
+  flex: none;
+}
+.scope-item .mono-sm {
+  margin-left: auto;
+  flex: none;
+  max-width: 55%;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.scope-item-sub {
+  padding-left: 26px;
+}
+
+/** 设置搜索：输入框 + 结果列表（§3.4 的追加项） */
+.settings-search {
+  margin-bottom: 4px;
+}
+.settings-search .row {
+  position: relative;
+}
+.settings-search .input {
+  width: 100%;
+  padding-left: 26px;
+}
+.settings-search > .row > svg {
+  position: absolute;
+  left: 8px;
+  pointer-events: none;
+}
+.settings-search-clear {
+  position: absolute;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.settings-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.settings-search-hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-search-hit:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-search-hit-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/**
+ * 搜索命中后的短暂高亮：告诉用户"就是这一项"。
+ * 用 outline（不改变布局），1.8s 后由 JS 摘掉类名。
+ */
+.settings-jump-flash {
+  animation: settings-flash 1.8s ease-out;
+  border-radius: var(--r-sm);
+}
+@keyframes settings-flash {
+  0%,
+  40% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent-border);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+.pset-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+/* 分节内的可点链接（如"查看待验收"） */
+.pset-link {
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  text-align: left;
+}
+.pset-link:hover {
+  text-decoration: underline;
+}
+
+/* 只读状态条：简短一句 + 链接，不铺一张只读大表 */
+.pset-status {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+.pset-status .pset-link {
+  margin-top: 0;
+  margin-left: 6px;
+}
+
+/* 常驻的一句话提示 */
+.pset-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.7;
+}
+
+/* 迁移说明：**中性、可关闭**，不用永久橙色警告（§17.8） */
+.pset-migration {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.65;
+}
+.pset-migration .pset-migration-close {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pset-migration .pset-migration-close:hover {
+  text-decoration: underline;
+}
+
+.pset-foot {
+  max-width: 920px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+/* 诊断与帮助里的可折叠错误码速查 */
+.settings-collapse-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-collapse-head:hover {
+  background: var(--bg-hover);
+}
+.settings-collapse-head .small {
+  font-weight: 400;
+}
+
+/* 侧栏项目行的「⋯」按钮（第十六批 §17.8）
+   默认半透明，hover / focus / 菜单打开 / 当前正在该项目设置时显形；
+   触屏设备没有 hover，用 @media (hover: none) 让它常驻可见。
+   键盘可 Tab 到，所以不能只靠鼠标发现。 */
+.side-project-more {
+  flex: none;
+  width: 22px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  opacity: 0;
+}
+.side-row:hover .side-project-more,
+.side-row:focus-within .side-project-more,
+.side-project-more:focus-visible,
+.side-project-more.open,
+.side-project-more.on {
+  opacity: 1;
+}
+.side-project-more:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.side-project-more.on {
+  color: var(--accent-text);
+}
+@media (hover: none) {
+  .side-project-more {
+    opacity: 1;
+  }
+}
+
+
+/* 仅供读屏的标签（如左栏项目选择器的说明） */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ============================================================
+   应用设置：左导航树 + 右内容区（第十五批重构；第十六批收窄为纯应用级）
+   ============================================================ */
+
+.settings-layout {
+  /**
+   * 正文宽度在这里定义，`.settings-body` 取它（同一个变量，避免两处各写一个数就对不上）。
+   * 见 `.settings-body` 与 §2.1 的例外条款。
+   */
+  /**
+   * 正文宽度**随窗口增长**（2026-09-26 用户反馈："全屏模型下，左右留空有点多"）。
+   *
+   * 原来固定 880px：1920 宽窗口下主内容区有 1668px，正文仍只占 880，两侧各空 ~300px。
+   * 现在下限 880（普通窗口的阅读宽度，也是实测最稳的一档），上限 1040（再宽一行的中文说明就拉成
+   * 八十多字，读起来累）。中间用 vw 过渡 —— 主侧栏是固定 246px，所以 56vw 约等于"主内容区的 62%"。
+   * 注意它只是**上限**：可用宽度不足时列宽照旧收缩（窄窗不会溢出）。
+   */
+  --settings-body-max: clamp(880px, 56vw, 1040px);
+  --settings-nav-w: 200px;
+  --settings-gap: 22px;
+  display: grid;
+  grid-template-columns: var(--settings-nav-w) minmax(0, 1fr);
+  gap: var(--settings-gap);
+  align-items: start;
+  /**
+   * 居中与最大宽度（§2.1，第二十八批）：
+   * 参照物是项目设置的 `.pset { max-width: 920px }` —— 应用设置此前**没有任何宽度约束**，
+   * 1440px 窗口下正文横跨整个主内容区，一行开关配一整屏宽的白卡。
+   *
+   * max-width 取「导航 + 间距 + 正文」的和：这样**看得见的内容**（导航到正文右缘）
+   * 在主内容区里正好居中，而不是"容器居中了但正文右边缘还空一大块"。
+   * 数值来自六档窗口实测（1920/1600/1440/1280/1100/900），见施工报告。
+   */
+  max-width: calc(var(--settings-nav-w) + var(--settings-gap) + var(--settings-body-max));
+  margin-inline: auto;
+}
+
+/* 常规设置正文的最大宽度（见 `.settings-body` 与 §2.1 的例外条款） */
+
+/* 嵌入的归档管理：日期/项目分组卡片按内容占宽 */
+/**
+ * 归档管理筛选行（§2.3）：搜索框与项目下拉**同高同宽基准**。
+ * 原实现搜索框很窄、项目下拉拉满全宽，同一行控件宽度不统一；窄窗下允许换行。
+ */
+.archive-filters .archive-filter-search {
+  flex: 0 1 260px;
+  min-width: 170px;
+}
+.archive-filters .archive-filter-project {
+  flex: 0 0 auto;
+  width: 180px;
+  min-width: 140px;
+  max-width: 100%;
+}
+@media (max-width: 620px) {
+  .archive-filters .archive-filter-search,
+  .archive-filters .archive-filter-project {
+    flex: 1 1 100%;
+    width: auto;
+  }
+}
+
+/* 左栏：分区导航。粘住顶部，内容长了也不用滚回去点分区 */
+.settings-nav {
+  position: sticky;
+  /**
+   * 贴合位 = 页面顶部留白（`--page-top-gap`，定义在 `.page` 上）。
+   *
+   * 原先是 `top: 0`：左栏自然位置比滚动容器内容盒低 20px，于是**一开始滚动它就往上跳 20px**
+   * 才吸住 —— 用户看到的是"滚动正文时左边目录跟着一起滚"（实测视口 top 58 → 38）。
+   * 对齐之后滚动全程停在原位（实测 58 → 58）。
+   */
+  top: var(--page-top-gap, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-self: start;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-label {
+  padding: 0 8px 4px;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+/* 项目选择器紧贴"当前项目"分组标题 */
+.settings-nav-project {
+  display: block;
+  padding: 0 0 6px;
+}
+.settings-nav-project .select {
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: var(--fs-12);
+}
+/* 导航项：整行可点，选中态有底色 + 左侧强调条，位置感明确 */
+.settings-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.settings-nav-item.on {
+  /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0/§8 迁移专项） */
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.settings-nav-item.on::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--accent);
+}
+.settings-nav-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-nav-foot {
+  padding: 8px;
+  font-size: var(--fs-11);
+  line-height: 1.6;
+  color: var(--text-3);
+  border-top: 1px solid var(--border);
+}
+
+.settings-body {
+  /**
+   * 常规设置正文的最大宽度（§2.1）：与项目设置的 `.pset { max-width: 920px }` 同量级，
+   * 窄窗下自动缩到可用宽度 —— 控件换行，标签不挤压。
+   * 表格、日志、运行记录、错误码表按 §2.1 的例外条款不受它约束（标 `.settings-wide`）。
+   */
+  min-width: 0;
+  max-width: var(--settings-body-max);
+}
+
+/**
+ * 宽表 / 长内容例外（§2.1）：表格与日志**保留自身横向滚动**，
+ * 不为了对齐而压缩正文，也不为了让正文变宽把表格挤成不可读。
+ */
+.settings-body .settings-wide {
+  overflow-x: auto;
+}
+
+/* 分区标题：一句话说明这一节是干什么的 */
+.settings-section-head {
+  margin-bottom: 14px;
+}
+.settings-section-title {
+  font-size: var(--fs-15);
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+.settings-section-sub {
+  margin-top: 3px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+/* 设计依据折叠块：编号与"为什么这么设计"收在这里，正文不出现 */
+.settings-why {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.settings-why > summary {
+  cursor: pointer;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  list-style: none;
+  user-select: none;
+}
+.settings-why > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-why > summary::before {
+  content: '▸ ';
+  color: var(--text-4);
+}
+.settings-why[open] > summary::before {
+  content: '▾ ';
+}
+.settings-why > summary:hover {
+  color: var(--text-2);
+}
+
+/* 高级操作分隔带：危险项集中在这里，用警示色与日常设置区分开 */
+.settings-advanced {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--r-md);
+  background: var(--warning-soft);
+}
+.settings-advanced-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-size: var(--fs-12);
+  font-weight: 680;
+}
+.settings-advanced-head .small {
+  font-weight: 400;
+}
+
+/* 窄窗：左栏导航改为横向排布，避免把内容挤成一条缝。
+   阈值 980px（第二十八批从 860 上调）：主内容区还要减去主侧栏约 250px，
+   所以"视口 900 时正文只剩 374px"，行内说明被挤成多行 —— 此时改单列，
+   正文拿到整个主内容区宽度（实测 900 档：单列后正文 606px）。 */
+@media (max-width: 980px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-nav-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+  .settings-nav-label {
+    padding: 0 4px 0 0;
+  }
+  .settings-nav-project {
+    padding: 0;
+  }
+  .settings-nav-project .select {
+    width: 140px;
+  }
+  .settings-nav-item.on::before {
+    display: none;
+  }
+  .settings-nav-foot {
+    display: none;
+  }
+  /* 单列时导航变成横向流：搜索框占满一整行，不然只剩一百多像素 */
+  .settings-search {
+    flex: 1 1 100%;
+  }
+}
+
+
+.method-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+.method-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/**
+ * 方式芯片（「先给方案」「跳过首稿」「分工执行」）。
+ *
+ * 它表达的是**这次输入的一个开关状态**，不是列表/页签式选中项，
+ * 所以保留 accent-soft 平色（规范 §2.4 第 2 条允许"链接、未读徽标、引用 chip"
+ * 用 accent-soft），不套渐变 —— 渐变留给"独立选中项"这一组。
+ */
+.method-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* 能力说明：默认收起，点 ⓘ 展开（E8） */
+.composer-info {
+  font-size: var(--fs-11);
+  line-height: 1.65;
+  color: var(--text-3);
+  background: var(--bg-surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
+}
+
+/* 解析结果预览：单行，不折行。 */
+.composer-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-height: 20px;
+  padding: 0 2px;
+  min-width: 0;
+}
+.composer-status-note {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.composer-status .spacer {
+  flex: 1 1 auto;
+  min-width: 6px;
+}
+.composer-keys {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* 直达链接定位到的高亮（§15.5）：短暂闪烁后自动褪去 */
+.msg.msg-highlight {
+  animation: msg-flash 2.4s ease-out;
+  border-radius: var(--r-md);
+}
+@keyframes msg-flash {
+  0%, 20% { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-border); }
+  100% { background: transparent; box-shadow: none; }
+}
+
+/* ============================================================
+   私信（决策 24，M3 批次）
+   ============================================================ */
+
+.dm-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.dm-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.dm-row:hover {
+  background: var(--bg-hover);
+}
+.dm-row.on {
+  /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0/§8 迁移专项）。
+     描边改为透明：渐变底 + accent-border 会显脏，选中已由渐变与文字色表达。 */
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  border-color: transparent;
+}
+.dm-row.on .dm-row-title {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.dm-row.archived {
+  opacity: 0.66;
+}
+
+.dm-row-avatars {
+  display: flex;
+  flex: none;
+}
+.dm-row-avatars .avatar + .avatar {
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px var(--bg-surface);
+}
+
+.dm-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.dm-row-title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.dm-row-meta {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.dm-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  text-align: left;
+}
+.dm-archived-toggle:hover {
+  color: var(--text);
+}
+
+/* 草稿提示（§6.2）：**只显示失败**。
+   普通保存成功不常驻占位 —— 那枚勾几乎永远为真，却没有信息量。 */
+.composer-draft {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-11);
+  color: var(--success);
+  white-space: nowrap;
+  flex: none;
+}
+.composer-draft.failed {
+  color: var(--danger);
+}
+
+/* 发送前的预算推导值（E12）：DELIBERATE 常驻；普通任务只在超限/接近上限时出现 */
+.composer-budget {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+  flex: none;
+  cursor: help;
+}
+/* 预算影响本次执行时不能再是灰色次要信息（§6.1） */
+.composer-budget.warn {
+  border-color: var(--warning-border, var(--warning));
+  background: var(--warning-soft, var(--bg-surface-2));
+  color: var(--warning);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  line-height: 1.6;
+}
+
+/* 停止任务（§2.3）：只在有活动任务时出现在输入区操作区 */
+.composer-stop {
+  flex: none;
+}
+.composer-stopping {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* 右栏较窄时，次要说明先让位，保证 发送 按钮不被挤走 */
+.col-thread .composer-status-note {
+  max-width: 40%;
+}
+.col-thread .composer-keys {
+  display: none;
+}
+
+/* @ 候选弹层 */
+.mention-pop {
+  position: absolute;
+  left: 8px;
+  bottom: calc(100% - 4px);
+  z-index: 40;
+  min-width: 258px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ============================================================
+   消息列表
+   ============================================================ */
+
+.msg-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  position: relative;
+}
+/**
+ * 消息气泡（规范 §5.3）。
+ *
+ * 用户反馈"气泡根本看不出层级" —— 原来 `.msg` 完全没有底色，
+ * 整列铺一层灰（`--bg-surface-2`）时，消息与背景无法区分，读起来是一片。
+ *
+ * 现在：两栏都是白底（见 `.col-thread`），消息**自身带底色**形成层级：
+ *   人类消息 = `--accent-soft`（"我说的"，与成员识别色分开）
+ *   agent 消息 = `--bg-surface-2` 中性底（比白略沉，成块可辨）
+ * 气泡只包住正文与卡片，头像与作者名留在气泡外 —— 这样"谁说的"仍由
+ * 头像/归属条表达，不会与"气泡底色"混淆。
+ */
+.msg-body {
+  flex: 1;
+  min-width: 0;
+  /* 气泡外观：圆角 + 内边距 + 最大宽度，与头像拉开 */
+  padding: 8px 12px;
+  border-radius: var(--r-lg);
+  background: var(--bg-surface-2);
+}
+/* 人类消息：浅蓝底，一眼看出"这是我说的" */
+.msg-body.is-human {
+  background: var(--accent-soft);
+}
+/* 系统消息不是"某人说的话"，不套气泡 */
+.msg.system .msg-body {
+  padding: 0;
+  background: transparent;
+}
+.msg.system {
+  gap: 8px;
+}
+.msg-avatar {
+  flex: none;
+  padding-top: 1px;
+}
+.msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+}
+.msg-author {
+  font-weight: 650;
+  font-size: var(--fs-13);
+}
+/**
+ * 时间戳是可读元信息 → `--text-3`（规范 §2.3/§5.3）。
+ * 原来用 `--text-4`，而 --text-4 只允许给纯装饰与禁用控件（对比度 3.47:1 不达 AA）。
+ */
+.msg-time {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.msg-seq {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xs);
+}
+/**
+ * 消息正文 = **主阅读面**（规范 §3.1/§5.3）：15px / 1.65 / --text。
+ *
+ * 限宽 76ch 是"大屏不被拉成通栏长行"的硬要求（规范 §3.1、§9.1）。
+ * 用 ch 单位而不是 px：它随字号与字体自动缩放，等价于"约 76 个字符"，
+ * 在中文环境下约合 38 个汉字，是舒适阅读行长。
+ */
+.msg-text {
+  font-size: var(--fs-15);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  max-width: 76ch;
+}
+.msg-text p + p {
+  margin-top: 8px;
+}
+.msg-text code {
+  background: var(--bg-surface-3);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+}
+.msg-actions {
+  display: flex;
+  gap: 3px;
+  margin-top: 5px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  align-items: center;
+}
+.msg:hover .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+.msg.mention-me .msg-body {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+  margin-left: -12px;
+}
+
+/* 流式 */
+.streaming-caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: blink 1s step-start infinite;
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* 系统卡 */
+.sys-card {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  padding: 9px 12px;
+  font-size: var(--fs-12);
+}
+.sys-card.info { border-left-color: var(--info); }
+.sys-card.warn { border-left-color: var(--warning); }
+.sys-card.error { border-left-color: var(--danger); }
+.sys-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  color: var(--text);
+}
+.sys-card-detail {
+  margin-top: 3px;
+  color: var(--text-2);
+  line-height: 1.7;
+  max-width: 84ch;
+}
+
+/* 卡片通用（分工/报告/争议/授权/结果） */
+/**
+ * 卡内容器（分工卡/报告/争议/授权/结果；规范 §5.4）。
+ *
+ * 规范要求"灰容器 + 白子卡"：容器降级为 `--bg-surface-2` **无底边** `--r-lg` 块，
+ * 内部子卡才是白底。这样"卡片套卡片"读起来是面差分层，而不是层层描边
+ * （规范 §9.3：卡内元素不另描边，嵌套 ≤2 层）。
+ */
+.msg-card {
+  border: none;
+  border-radius: var(--r-lg);
+  background: var(--bg-surface-2);
+  overflow: hidden;
+}
+.msg-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-12);
+  font-weight: 620;
+}
+.msg-card-body {
+  padding: 10px 11px;
+  font-size: var(--fs-12);
+}
+
+/* 分工卡 */
+.subtask-row {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.subtask-row:last-child {
+  border-bottom: none;
+}
+.subtask-clickable {
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  padding: 8px 8px;
+  margin: 0 -8px;
+  transition: background 0.12s;
+}
+.subtask-clickable:hover {
+  background: var(--bg-hover);
+}
+.subtask-title {
+  font-weight: 620;
+  font-size: var(--fs-12);
+}
+.subtask-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-top: 3px;
+}
+
+/* 报告卡 */
+.report-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+/* 争议卡 */
+.position-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 0;
+  border-top: 1px dashed var(--border);
+}
+.position-row:first-of-type {
+  border-top: none;
+}
+.position-stance {
+  flex: none;
+  width: 96px;
+}
+.position-reason {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  line-height: 1.65;
+}
+
+/* 授权卡 */
+.approval-card {
+  border-color: var(--warning-border);
+}
+.approval-card .msg-card-head {
+  background: var(--warning-soft);
+  border-bottom-color: var(--warning-border);
+}
+
+/* 结果卡 */
+.result-card .msg-card-head {
+  background: var(--bg-surface-3);
+}
+
+/* 主池顶部的写入提示：只占一行高度，不抢主池空间 */
+.lock-hint {
+  padding: var(--sp-2) var(--sp-3);
+  cursor: help;
+}
+.lock-hint .panel-title {
+  margin-bottom: 2px;
+}
+.lock-hint-line {
+  font-size: var(--fs-12);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   主池原消息卡
+   ============================================================ */
+
+.pool {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pool-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px 2px;
+}
+.pool-title {
+  font-size: var(--fs-15);
+  font-weight: 680;
+}
+.pool-sub {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+
+.root-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  padding: var(--sp-2) var(--sp-3);
+  /* 整卡可点（用户反馈："只能点 N 条回复太难命中"）。
+     误触由两处保证：嵌套控件各自 stopPropagation；文本选择在
+     `openFromPointer` 里被识别并忽略（拖选文字不算点击）。 */
+  cursor: pointer;
+  transition: border-color 0.12s;
+  position: relative;
+}
+/* 主池卡片要紧凑：一屏能看的任务数直接决定"我该处理哪个"的判断效率。
+   原实现单卡 223px、一屏只能看 2.85 张；收敛间距并压缩预览后约 130px。 */
+/**
+ * 静态卡片**不用阴影**（规范 §3.4/§5.2）：hover 只把描边转 --border-strong。
+ * 原来 hover 加 --shadow-sm，属于"用阴影表达可点"，与规范的
+ * "阴影只表达浮起来了"冲突 —— 卡片没有浮起。
+ */
+.root-card:hover {
+  border-color: var(--border-strong);
+}
+/**
+ * 选中/展开中的卡片：只允许 --grad-soft 底，**不加阴影**（规范 §8 第 3 步）。
+ * 原来用 --accent 描边 + --ring（那是一圈光晕，属阴影类），
+ * 会把"当前正在看哪张卡"表达得过重，且与页签/导航的渐变选中语言不一致。
+ */
+.root-card.selected {
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  border-color: transparent;
+}
+/**
+ * 卡片右上角的未读圆点**已移除**（减负 §3）。
+ *
+ * 同一张卡原来有两种未读表达：这个装饰性圆点 + 卡足里的「N 条未读」文字。
+ * 两者说的是同一件事，保留可读的那个（文字还能说"几条"）。
+ * 选中态 `.selected` 与未读是两件事，不受影响。
+ */
+
+.root-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  flex-wrap: wrap;
+}
+/**
+ * 任务号（规范 §5.2）：`--font-mono` `--fs-12` `--text-3`，**无容器**。
+ *
+ * 原实现是 accent 底 + accent 描边的小胶囊，把一个纯标识渲染成了强调色块；
+ * 规范要求"任务号永远 neutral"，且同屏语义色元素要克制。
+ */
+.root-task-no {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/**
+ * 任务标题必须可读（规范 §3.1/§5.2）：`--fs-14` / 650 / 行高 1.4。
+ *
+ * 长标题最多两行，超出用省略号；完整标题仍可通过卡片 title 属性查看。
+ * 原来 13px + 1.5 行高，在信息密度大的主池里偏小。
+ */
+.root-title {
+  font-size: var(--fs-14);
+  font-weight: 650;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 「现在发生了什么、要不要你动手」——比状态词更有用的一句话 */
+.root-next {
+  margin-top: 2px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.55;
+}
+.root-body {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.65;
+}
+
+/* 预览：默认只留 2 条，别让它把卡片撑高（详情在串里） */
+.root-preview {
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.root-preview-row {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: flex-start;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.root-preview-author {
+  flex: none;
+  font-weight: 620;
+  color: var(--text-2);
+  max-width: 78px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.root-preview-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.root-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  flex-wrap: wrap;
+}
+/**
+ * 卡足里的两个**入口按钮**（减负 §3）：回复数、卡片 ⋯。
+ *
+ * 回复数是显式打开入口（去掉了常驻的「打开回复串」按钮），
+ * 保留原来的 accent 文字观感；⋯ 是 `icon-btn`，不要被这条规则染色。
+ */
+.root-foot button:not(.icon-btn) {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+}
+.root-foot button:not(.icon-btn):hover {
+  background: var(--accent-soft);
+}
+
+/**
+ * 任务标题也是打开入口（§3）：标题优先完整识别，最多两行，完整值在 title。
+ * 视觉上仍是标题（不吃 accent 色），只有指针与 hover 下划线表达可点。
+ */
+.root-title-btn {
+  /* 必须保持 .root-title 的两行截断：写成 display:block 会覆盖 -webkit-box，
+     标题就会溢出（实测：长标题不再省略、直接把卡片撑高）。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-14);
+  font-weight: 650;
+  line-height: 1.4;
+  color: inherit;
+}
+.root-title-btn:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ============================================================
+   三栏：房间 + 主池 + 线程
+   ============================================================ */
+
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.col-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.col-thread {
+  flex: none;
+  /* 默认 620px：明显宽于原来的 480px，且可拖动（见 .splitter） */
+  width: 620px;
+  /* 兜底：即使存了超大宽度，也至少给中间主池留 420px
+     （JS 的 useThreadWidth 会再扣掉侧栏宽度做精确收敛） */
+  max-width: calc(100% - 420px);
+  display: flex;
+  flex-direction: column;
+  /**
+   * 回复串底色 = 白，与主池一致（用户明确要求）。
+   *
+   * 原来用 `--bg-surface-2`（#f7fafc）想"低半档分栏"，但实测效果是：
+   * 整列铺一层灰，而消息本身没有底色 → 灰底 + 无底消息 = **看不出任何层级**，
+   * 两栏之间也形成一条"灰色夹层"（规范 §4.1 明确禁止）。
+   * 现在两栏同为白底，靠**消息气泡底色**表达层级（见 .msg-body 相关规则），
+   * 分栏由 1px `--border-subtle` 竖线承担。
+   */
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
+  min-height: 0;
+  overflow: hidden;
+}
+.col-thread.narrow {
+  /* 窄窗口下线程占据 app-body 的剩余宽度。
+     不能写 width:100%：侧栏也在这个 flex 行里，100% 会把两者相加顶出视口。
+     **必须解除 max-width**：它是为"与主池并排"设计的兜底
+     （`calc(100% - 420px)` 给主池留位）。窄窗覆盖模式下主池是 `display: none`，
+     再留 420px 就会在右侧留下一大片空白 ——
+     实测 1100px 时线程只有 434px、右边空 420px（截图可证）。 */
+  width: auto;
+  max-width: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  border-left: none;
+}
+
+/* 左右拉伸分隔条 */
+.splitter {
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+  /* 覆盖在 col-thread 左边框上，避免占掉布局宽度 */
+  margin-left: -3px;
+  margin-right: -3px;
+  touch-action: none;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border);
+  transition: background 0.12s, width 0.12s;
+}
+.splitter:hover::after,
+.splitter:active::after {
+  width: 3px;
+  background: var(--accent);
+}
+
+/* 原消息的顶部摘要条样式**已删除**（减负 §2）：原消息完整内容现在在
+   「详情 → 任务概况」的 `.overview-anchor-body` 里，且不再需要展开/收起态。 */
+
+/* 串内嵌的任务/研讨详情：跟随分组区域滚动，不再自带页面外壳 */
+.thread-embed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.thread-embed .main.as-panel {
+  padding-bottom: 8px;
+}
+.thread-embed .page.as-panel-page {
+  padding: 12px 14px 20px;
+}
+
+/**
+ * `.thread-head` / `.thread-head-row`
+ *
+ * **房间回复串已不再使用这两个类**（2026-09-24 界面信息减负：顶部两行整体删除，
+ * 相关样式随之移除，避免以后"顺手恢复一下"）。但**私信页的会话头仍在用**
+ * （`Dm.tsx` 的 `.thread-head` / `.thread-head-row`），所以样式本身必须保留，
+ * 不能跟着房间线程一起删 —— 删掉会让私信头丢掉内边距与分隔线（实测回归）。
+ */
+.thread-head {
+  flex: none;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.thread-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.col-thread.narrow .thread-head-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.col-thread.narrow .thread-head-row::-webkit-scrollbar {
+  display: none;
+}
+.col-thread.narrow .thread-head-row > * {
+  flex: none;
+}
+.col-thread.narrow .thread-head-row .spacer {
+  flex: 1 1 auto;
+}
+
+/**
+ * 区域级「收起 / 返回」按钮（回复串与文件预览**共用同一个组件与样式**）。
+ *
+ * 统一到左边的理由见 `ui.tsx` 的 `PanelNavButton` 注释：两者是同一族动作
+ * （退出当前区域、回到上一层），左上角是"离开/返回"的通用位置；
+ * 右侧留给本区域的次级操作（⋯ / 已打开列表 / 还原）。
+ * 之前回复串是带文字的透明按钮、预览是纯图标 `icon-btn` 且排在最右端 ——
+ * 同一个"收起"两种位置两种样式，这里收成一个组件。
+ */
+.panel-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  padding: 5px 8px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.panel-nav-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.panel-nav-label {
+  white-space: nowrap;
+}
+/* 窄窗优先收文案（保留图标与可访问名称），绝不让返回/更多被裁切（§2.3） */
+.col-thread.narrow .panel-nav-label {
+  display: none;
+}
+/* 收起/返回：根据布局换图标与文案，但**始终是同一个按钮**（钩子类名保留，便于断言） */
+.thread-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.thread-nav-views {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+/* 窄窗收间距与文案，绝不让返回/更多被裁掉（§2.3） */
+.col-thread.narrow .thread-nav {
+  padding: 6px 8px 4px;
+  gap: 2px;
+}
+.col-thread.narrow .thread-tab {
+  padding: 5px 8px;
+  gap: 4px;
+}
+
+/* 待处理提示条（待验收 / 阻塞 / 运行失败）：只在真实存在时出现，不是常驻工具条 */
+.thread-pending {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+
+/**
+ * 「详情」：分组 chip 行 + 分组内容。
+ * 分组导航刻意比顶层页签**更轻**（小号、描边 chip、可换行），
+ * 避免把原来 8 个页签原样铺成第二条拥挤的常驻栏（§2.2）。
+ */
+.thread-details {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.details-subnav {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.details-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+.details-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.details-chip.on {
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释） */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.details-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 任务概况里的完整原消息：不裁剪、可选中，作为"原消息在哪"的唯一常驻答案 */
+.overview-anchor-body {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--fs-13);
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* 写入占用：正常一行，异常才升级为警告（减负 §3） */
+.write-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: 1.5;
+}
+.write-line.warn {
+  border-color: var(--warning-border, var(--warning));
+  background: var(--warning-soft, var(--bg-surface-2));
+  color: var(--warning);
+}
+
+/* 房间信息入口：协调者与成员数合成一个轻量入口（减负 §3） */
+.pool-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  min-width: 0;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pool-info:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* 13B 跟进名单 */
+.followers {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.followers-list {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/**
+ * 内容页签（房间视图 / 线程子视图；规范 §5.5）。
+ *
+ * **已由"下划线式"改为"独立圆润选中项"**（规范 §1.4 第 4 条：下划线 Tab 废止）。
+ * 关键差异：
+ *   · 去掉 `border-bottom` 与 `margin-bottom:-1px`（那是下划线的实现方式）；
+ *   · 容器**不套 --bg-surface-3 灰槽** —— 页签是独立项，不是分段控件；
+ *   · 激活项 = 主题 --bg-surface 垫底渐变 + --accent-text 600，观感对齐
+ *     approved-selected-gradient.png。
+ * 与分段控件（.seg，白底 + --shadow-sm，见 base.css）区分：**两者不共用样式**。
+ */
+.thread-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 6px;
+  /* 不再用整行下划线分隔；页签自身是独立圆润块，靠间距分组 */
+  border-bottom: none;
+  background: transparent;
+  align-items: center;
+}
+.thread-tab {
+  border: none;
+  background: transparent;
+  padding: 5px 11px;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-md);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.12s, color 0.12s;
+}
+.thread-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.thread-tab.on {
+  /* 分层写：底色与渐变各一条声明（理由同 base.css 选中态注释）——
+     简写一旦因 --grad-soft 失效被整条丢弃，选中态会变成"无底色"。 */
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* 滚动到底部提示（§17.5：不抢滚动位置）
+   它是**操作按钮**，不是选中态，所以用 --grad 深渐变 + 白字（规范 §5.3）。 */
+.new-msg-pill {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--r-full);
+  /* 与 .btn.primary 同款兜底：实色打底 + 渐变叠图。
+     用 `background` 简写时，--grad 一旦失效会整条丢弃 → 白底白字。 */
+  background-color: var(--accent);
+  background-image: var(--grad);
+  color: #fff;
+  border: none;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+/* 深色下 --grad 为亮渐变，白字不达标 → 深字（规范 §2.8） */
+:root[data-theme='dark'] .new-msg-pill {
+  color: var(--text-inverse);
+}
+
+.list-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   Git 页（用户要求新增）
+   ============================================================ */
+
+/* 待提交文件行：左侧一条竖线表明"这些都属于同一个任务" */
+.git-file-row {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.git-file-row:last-child {
+  border-bottom: none;
+}
+.git-file-row .diff-view {
+  margin: 6px -12px -8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* 提交信息输入：复用 composer-input 的样式但需要独立高度与字体 */
+.git-commit-input {
+  width: 100%;
+  min-height: 62px;
+  font-size: var(--fs-12);
+  font-family: var(--font-sans);
+}
+
+/* 冲突三方内容：等宽展示，保留缩进，不做折行美化 */
+.conflict-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  color: var(--text);
+}
+
+/* ============================================================
+   窄窗：右栏改为全屏覆盖（§17.1）
+   ============================================================ */
+
+@media (max-width: 1280px) {
+  /**
+   * 覆盖式线程面板**只用于"没有预览、线程接管房间"**的场景（§17.1）。
+   *
+   * 缺陷（用户实测）：在 ≤1280px 打开「回复串 + 附件预览」时，
+   * 线程命中 `:not(.narrow)` 分支被改成 `position: absolute; z-index: 30`，
+   * 而预览区仍在文档流里 —— 线程整块盖在预览上，
+   * 用户看到的就是"附件页只显示半个"（实测 1280px：线程 666..1280 绝对定位，
+   * 预览 246..825，两者重叠 159px）。
+   *
+   * 因此这里加上布局互斥：双区（context-preview）时线程必须留在文档流内。
+   */
+  .workspace:not([data-layout='context-preview']) .col-thread:not(.narrow) {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(720px, 100%);
+    z-index: 30;
+    box-shadow: var(--shadow-lg);
+    border-left: 1px solid var(--border);
+  }
+}
+
+/* ============================================================
+   打开 / 关闭回复串与附件预览的过渡
+   ============================================================
+   用户反馈："打开关闭串、附件缺少过渡动画"。
+   分两层：
+   1) **宽度过渡**：`flex-basis` / `width` 变化（拖动分隔条、开关预览、
+      窗口缩放）走缓动，不再瞬间跳到位；
+   2) **淡入**：面板挂载时淡入（由 `.entered` 类驱动，见 preview.css 的长注释：
+      页面 hidden 时 CSS 动画不推进，必须用过渡，且最终态必须写在基类之外，
+      否则会永久停在起始帧）。
+   刻意**不用 transform**：回复串内部有 `.access-scrim` 等 `position: fixed`
+   弹层，加 transform 会给它们新建包含块、导致遮罩与菜单定位跑偏。
+   附件预览没有 fixed 后代，所以在 preview.css 里额外做了位移滑入。 */
+.col-thread,
+.preview-pane,
+.col-main,
+.splitter {
+  transition: flex-basis 0.18s ease, width 0.18s ease, opacity 0.18s ease;
+}
+
+/* 回复串：**只做宽度过渡**，不做透明度入场。
+   原因：入场淡入需要在基类里写 `opacity: 0` 再由 `.entered` 抬到 1；
+   而 `.col-thread` 有多个渲染分支（窄窗覆盖、双区、L2），
+   只要漏掉任何一处加类，回复串就会**永久隐形** —— 风险远大于收益。
+   宽度过渡（打开附件时回复串 620→566 的对调）已经能看出动效。 */
+.col-thread {
+  transition: flex-basis 0.18s ease, width 0.18s ease, opacity 0.18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .col-thread,
+  .preview-pane,
+  .col-main,
+  .splitter {
+    transition: none;
+    animation: none;
+  }
+  /* 减少动效时直接给出最终态，避免停在起始帧 */
+  .workspace[data-layout='context-preview'] > .preview-pane {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================
+   文件与 Git 合页：状态条 + 左清单 / 右详情（本轮布局改造）
+
+   2026-09-26 交互收尾（滚动 / 选择 / diff 阅读 / 提交复核）：
+   本页**不再以"全页只有一条滚动条"为目标**。此页要的是"左边选对象、
+   右边看详情"互不干扰 —— 所以两栏各自一条纵向滚动条，滚一侧不动另一侧。
+
+   高度契约（不用 62vh 之类写死值）：
+     .main(overflow:hidden)
+       └ .page.fg-page        flex 列、**自身不滚动**、吃掉 .main 全部高度
+           ├ .page-head       flex:none
+           ├ .thread-tabs     flex:none
+           ├ .fg-statusbar    flex:none
+           └ .fg-body         flex:1; min-height:0 —— 剩余高度全给它
+               ├ .fg-pane（左）flex 列：.fg-pane-head 常驻 + .fg-pane-scroll 滚动
+               └ .fg-pane（右）同上
+   每个 flex 项都带 min-height:0，否则内容会把容器撑开、滚动条落在 .page 上。
+
+   原来这里有一处真实缺陷：.thread-tabs / .fg-statusbar / .git-prepare 三个元素
+   都用 `position: sticky; top: 0`，只是 z-index 不同 —— 它们会叠在同一条线上
+   互相遮挡。本轮不再靠"提高 z-index"或"再给一个 top 值"打补丁，
+   而是让页面本身不滚动：吸顶失去意义，三者各自在 flex 流里占自己的位置。
+   ============================================================ */
+
+/* 状态条：全页状态只在这一条里说一遍。
+   页面本身不再滚动，所以不需要 sticky —— 它就在自己的位置上一行。 */
+.fg-statusbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  line-height: 1.5;
+  flex: none;
+}
+.fg-sep {
+  width: 1px;
+  height: 11px;
+  background: var(--border);
+  flex: none;
+}
+
+/* 本页的 .page 变体：**只有**加了 .fg-page 的这一页不整体滚动。
+   房间 / 线程 / 私信 / 看板用的还是普通 .page，行为不受影响。 */
+.fg-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+.fg-page > * { flex: none; }
+.fg-page > .fg-body,
+.fg-page > .git-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 两栏骨架：左 300px 清单 + 右 1fr 详情。
+   文件页与 Git 页用同一套比例，切换顶层标签时左栏不跳动、分隔线位置一致。 */
+.fg-body,
+.git-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * 窄窗口：不再把完整长列表垂直堆在详情上方。
+ * 改为"列表 → 详情 → 返回列表"：一次只显示一栏，
+ * 选中项与列表滚动位置由 JS 记住（见 useNarrowPane）。
+ */
+.fg-body.narrow,
+.git-layout.narrow { grid-template-columns: 1fr; }
+.fg-body.narrow[data-pane='list'] > .fg-pane-detail,
+.git-layout.narrow[data-pane='list'] > .fg-pane-detail,
+.fg-body.narrow[data-pane='detail'] > .fg-pane-list,
+.git-layout.narrow[data-pane='detail'] > .fg-pane-list { display: none; }
+
+/* 一栏 = 一个 flex 列：头部常驻（视图切换不会被滚走），
+   下方 .fg-pane-scroll 吃掉剩余高度并独立滚动。 */
+.fg-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.fg-pane-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.fg-pane-head.row { flex-direction: row; align-items: center; }
+/* 右栏唯一的纵向滚动容器 —— 预览与 diff 不再各自再套一层 */
+.fg-pane-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain; /* 滚到底不把外层带着走 */
+  padding: 12px;
+}
+/* 共享预览直接当右栏滚动宿主：它内部的 .preview-body 才是那一条滚动条 */
+.fg-pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fg-pane-body > .preview-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-left: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.git-list {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.git-list-head { flex: none; padding: 10px 10px 0; }
+.git-list-body { display: flex; flex-direction: column; gap: 14px; }
+.git-list-sec { min-width: 0; }
+.git-list-sec .section-title { margin-bottom: 6px; }
+
+/* 左栏一行：状态点 + 路径（截断）+ 等宽数字右对齐 */
+.git-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+.git-list-row:hover { background: var(--bg-hover); color: var(--text); }
+.git-list-row.on {
+  background-color: var(--bg-surface);
+  background-image: var(--grad-soft);
+  color: var(--accent-text);
+}
+/*
+ * 带行内操作（取消暂存）的行：主区与操作区是**兄弟**元素，
+ * 点主区 = 选中该文件；点操作 = 取消暂存。
+ * 不能把按钮嵌在按钮里，也不能让"取消暂存"跟"选中"抢同一次点击。
+ */
+.git-list-row.wrap { padding: 0 4px 0 0; gap: 0; }
+.git-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-12);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-list-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-list-num {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--text-3);
+}
+.git-list-num.add { color: var(--success); }
+.git-list-num.del { color: var(--danger); }
+.git-row-act { padding: 0 4px; flex: none; }
+
+/* 状态点：形状相同、只靠颜色区分，配合 title 说明（不靠颜色单独表意） */
+.git-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-4);
+}
+.git-dot.modified { background: var(--warning); }
+.git-dot.added { background: var(--success); }
+.git-dot.deleted { background: var(--danger); }
+.git-dot.renamed { background: var(--info); }
+.git-dot.untracked { background: var(--text-4); }
+.git-dot.conflicted { background: var(--danger); }
+
+/* 任务分组头：标题一行、操作一行（按钮常驻，不靠悬浮才出现） */
+.git-task { margin-bottom: 8px; }
+.git-task-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 常驻的短说明（§14.2 那句不能跟着折叠收起） */
+.git-note {
+  margin: 2px 8px 4px;
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.git-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+.git-detail-scroll > .card { margin-bottom: 12px; }
+.git-detail-scroll > .card:last-child { margin-bottom: 0; }
+
+/*
+ * 准备提交：常驻右栏顶部（flex:none，不 sticky）。
+ * 它在 flex 流里占自己的位置，所以**不会盖住正文**，
+ * 也不需要靠 z-index 去压住谁；暂存区为空时整块收成一行提示。
+ */
+.git-prepare {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+}
+.git-prepare-idle { padding: 8px 12px; }
+
+/*
+ * 改动集详情里的次要引用区：小字、弱色、排在主信息之后。
+ * 不折叠 —— 前像口径是如实披露（§14.3 / RT-26⑫），藏起来会让人误以为没有前像。
+ */
+.cs-refs {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.cs-refs-title { font-size: var(--fs-11); color: var(--text-3); margin-bottom: 4px; }
+.cs-refs .kv { font-size: var(--fs-11); color: var(--text-3); }

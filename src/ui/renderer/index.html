@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="hifi-root"></div>
+  <div id="legacy-root">
   <div id="app">
     <aside class="sidebar">
       <div class="brand">众说</div>
@@ -244,9 +246,12 @@
       </footer>
     </main>
   </div>
+  </div><!-- /legacy-root -->
   <!-- 成熟组件（第三十九轮 §3：净化/Markdown 渲染不再自写正则兜底）——本地 vendored UMD，无网络。 -->
   <script src="assets/vendor/purify.min.js"></script>
   <script src="assets/vendor/markdown-it.min.js"></script>
+  <script src="hifi-flag.js"></script>
   <script src="app.js"></script>
+  <script type="module" src="hifi/app.mjs"></script>
 </body>
 </html>

@@ -4418,6 +4418,9 @@ renderProjectSettings(); // 未打开项目时的初始态（loadProject 成功�
 // 启动恢复（第三十八轮 #8：有界重试——daemon 就绪竞态不再「失败一次即空白等手动 Reload」）：
 // 指数退避 500ms→8s，上限 6 次≈27s；每次失败都可见（project-name 如实呈现第 N 次与原因），
 // 成功即止。重连（onReconnected）兜底另接。
+// 换装壳接管（第四十六轮 H1）：hifi 壳为默认界面时，legacy 的自动装载/首启轮询延迟到用户
+// 首次进入「原界面」才执行（避免双装载双轮询）；hifi 加载失败（__zsHifiFailed）自动回退启动。
+const startLegacyBoot = () => {
 const lastProject = localStorage.getItem('zs.lastProjectPath');
 if (lastProject != null && lastProject.length > 0) {
   void (async () => {
@@ -4465,6 +4468,9 @@ if (lastProject != null && lastProject.length > 0) {
     }
   })();
 }
+};
+window.__zsLegacyStart = startLegacyBoot;
+if (!window.__zsHifiWanted || window.__zsHifiFailed === true) startLegacyBoot();
 // 深链导航事件（第二十三轮二）：刷新/直接打开/前进后退共用统一导航入口；导航代次防迟到。
 window.addEventListener('hashchange', () => { void restoreDmDeepLink().catch(() => {}); });
 window.addEventListener('popstate', () => { void restoreDmDeepLink().catch(() => {}); });

@@ -164,7 +164,7 @@ async function launchApp(tag, port, extraEnv, appDataDirOverride) {
   // 管道名必须是完整 \\.\pipe\ 路径（与 daemonPipeNameFor 同形态）：daemon listen 会给裸名
   // 自动补前缀，而客户端 connect 不会——裸名=UI 永远连不上（H-D1 实测教训）。
   const pipeName = `\\\\.\\pipe\\zs-vdr-${tag}`;
-  const child = spawn(join(appHome, 'electron.exe'), [`--remote-debugging-port=${port}`], {
+  const child = spawn(join(appHome, 'electron.exe'), [`--remote-debugging-port=${port}`, '--no-hifi'], {
     cwd: installRoot,
     env: {
       ...process.env,

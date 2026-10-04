@@ -2,6 +2,32 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-04 第四十六轮，唯一权威快照）
+
+> 本轮=**主线切换：原型界面接入正式客户端（H1 首包开工）**（用户补充优先级+
+> hifi-integration-plan-20261004.md：接入顺序 H1 外壳/房间/私信/消息/输入（3 轮）→H2 线程/
+> 共享预览（2 轮）→H3 设置/看板/Files 归位+**Git 与诊断不再常驻挤占聊天区**（2 轮）→H4 收尾
+> （1–2 轮））。Android 仍用 v6 不重测；后端合同/用户数据/证据不动；未接能力如实呈现不 mock。
+> - **R46 已落地**：react@18.3.1 入根依赖；esbuild 打包 `src/ui/hifi`（原型组件**原样拷贝**：
+>   Icon/ui/NavMarks/MessageView/Composer+types/selectors/format/resource/router+四份 CSS）→
+>   `dist/ui/renderer/hifi/app.mjs+app.css`（样式**挂载时注入**——不污染 legacy）；真实侧新增
+>   `store.ts`（原型 store 同名 API：useStore/草稿/toast/recordLocalOnly——**无种子无 mock**）、
+>   `bridge.ts`（window.zs 类型化）、`loader.ts`（project.open/room.list/member.list/room.pool/
+>   conversation.list·create·history·markRead/message.submit 映射到原型视图模型；附件提交
+>   **明确拒绝**——H2 才接）、App/RoomPage/DmPage、main.tsx。
+> - **共存与接管**：默认 hifi 壳（body.hifi-on）；未换装入口（搜索/Git/看板/成员/待我处理/
+>   设置）→「原界面」整体接管（body.legacy-on+首次点击才启动 legacy boot——不双装载双轮询）；
+>   hifi 挂载失败自动回退；`?nohifi=1`/`--no-hifi`=工程逃生口（legacy 专项验证器用）。
+> - **验证**：新 verify-hifi-shell.cjs（实际打包页面+传输桩，断言真实 envelope）**3/3**——侧栏
+>   真实 room.list/主池真实 room.pool/房间+私信发送走真实 message.submit（room_root/dm）/
+>   legacy 接管守卫；verify-ui-hidden-layout **7/7 不回退**（P0—U6）；视觉子代理双截图
+>   **PASS**（三段式侧栏/消息卡片/输入区=原型样式；已修「未知成员」作者映射；输入区宽度
+>   对齐与仅记录入口位置 R47 对照原型收口）。
+> - R47 待办：仅记录意图真实闭环+mention 选择核实、房间/私信消息呈现与原型逐项对照
+>   （msg-list 宽度/气泡）、refresh 轮询节奏、种子/欢迎页空态；R48：去尾+页面级验证扩展+
+>   **首包交付候选**（含真实 daemon 冒烟）。tsconfig 暂排除 src/ui/hifi（esbuild 打包为主，
+>   H1 收口时补类型门——如实登记）。
+
 ## 当前真实状态（2026-10-04 第四十五轮，唯一权威快照）
 
 > 本轮=**v6 四项短回归收案+Android 就绪+两条工程边界**（review-r44-next-round-20261004.md、

@@ -150,7 +150,7 @@ async function main() {
     show: false, width: 1280, height: 800, useContentSize: true,
     webPreferences: { preload: preloadPath, contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false },
   });
-  await win.loadURL(`http://127.0.0.1:${PORT}/index.html`);
+  await win.loadURL(`http://127.0.0.1:${PORT}/index.html?nohifi=1`);
   await waitForJs(win, `window.__zsReady === true ? 'ready' : null`, 10_000, '__zsReady');
   // 首启记忆轮询装载（P0：不靠 reload/手动打开——记忆出现即自动可见）。
   const loaded = await waitForJs(win, probe(`document.querySelectorAll('#room-list .room-item').length >= 2 && document.querySelector('#project-name').textContent.includes('布局演练项目') ? document.querySelector('#project-name').textContent : null`), 20_000, '首启自动装载');

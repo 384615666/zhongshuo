@@ -19,5 +19,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
-  "exclude": ["tests/fixtures/**"]
+  "exclude": ["tests/fixtures/**", "src/ui/hifi/**"]
 }
