@@ -32,14 +32,16 @@
 - 真实元数据（`v6/ZhongshuoDual/BUILD.json` 原值保留，不改写为伪 clean）：
   commit=`8f49f5c5…`、**dirty=true**、dirtyDiffHash=`4fa3b1b0363c88c491b3fa6f44648e876dc
   ae899c141ae033c9e825c0bbdcbd0`、builtAt=2026-10-04T04:34:34Z。
-- 对应结论（证据 `dist/desktop/review-r44/build-dirty-correspondence.json`）：v6 构建时工作区
-  = `8f49f5c` + **ab89219 的全部变更内容**——只读重建核对：脏路径集 25=25（21 处修改+4 个
-  新增，与 ab89219 变更集完全一致，无杂散脏文件）；21 个文本文件的差异内容与
-  `git diff 8f49f5c ab89219` **逐字节一致**（cmp 首差异恰在二进制 fixture 段起点）。
-- dirtyDiffHash 不可事后完整重算：其中 10 件 `tests/artifacts/docx-word-evidence` 的
-  docx/pdf 为测试再生成的瞬时字节（git 按文本处理+autocrlf 检出转换，构建时真实字节已被
-  13:16 提交规范化吸收）——**这是哈希成分含不可重放字节，不是同源性反证**；同源性另有
-  renderer 三源逐字节一致、冻结清单 588/588、冻结三连同 buildId 三重独立佐证。
+- 对应结论（证据 `dist/desktop/review-r44/build-dirty-correspondence.json`，第四十五轮按
+  review-r44 §4 修订计数与措辞）：v6 构建时工作区 = `8f49f5c` + **ab89219 的全部变更内容
+  （25 文件=21 修改+4 新增；其中二进制 docx/pdf 8 件全部为修改，文本 17 件=13 修改+4 新增）**
+  ——只读重建核对：脏路径集 25=25（21 ' M' + 4 '??'，与 ab89219 变更集完全一致，无杂散脏
+  文件）；**13 个修改文本文件**的差异内容与 `git diff 8f49f5c ab89219` 同文件集**逐字节一致**
+  （cmp 首差异恰在二进制 fixture 段起点）；4 个新增文本文件构建时未跟踪（不在 diff HEAD，
+  仅 porcelain ?? 行）。
+- dirtyDiffHash 的完整成分**不能完全重建**：构建时的 diff/status 字节未单独留存，8 件二进制
+  fixture 的检出转换（git 按文本处理+autocrlf）不可逆推构建时字节——BUILD.json 留档值为唯一
+  真源；同源性另有 renderer 三源逐字节一致、冻结清单 588/588、冻结三连同 buildId 独立佐证。
 - 不为更换标签要求用户重复手测；v6 手测结果按其构建/设备范围保留。
 
 ## 5. 同轮工程收口（详见 continuation.md 第四十四轮快照）

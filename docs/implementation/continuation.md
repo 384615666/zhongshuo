@@ -2,7 +2,42 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十四轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十五轮，唯一权威快照）
+
+> 本轮=**v6 四项短回归收案+Android 就绪+两条工程边界**（review-r44-next-round-20261004.md、
+> dev25-v6-short-regression-record-20261004.md）：R6/R7/V1/V2 按用户报告与补确认收案
+> （正式记录 v6/RESULTS/SHORT-REGRESSION.md+七张原图；PPT 关闭重开/Word 关闭与颜色隔离/
+> 三向切换均确认）。**Android 用现有 v6 推进，不换包不清库**；工程修复在源码，随最终候选
+> 交付（Android 回填后一次必要的最终候选：冻结三连+清单+真实启动器+旧库升级验证；若复用
+> 演练数据与 CA 先在副本证明迁移/回退）。
+> - **Android 指南改实口径**（dev25-android-acceptance-guide.md 重写）：v6 运行中；前置=
+>   V2 收尾的仅本机恢复 **LAN（0.0.0.0）**+LAN 自检+实际地址（192.168.1.100，端口以当前
+>   面板为准）+**不用 198.18 虚拟网卡地址**；v6 CA SHA-256=`c7655e12c4102fad…`（已只读
+>   重算核实）；后台恢复=**桌面代发唯一标记「仅记录」消息**（不依赖已消耗的种子 60s 窗）；
+>   吊销放最后+其它设备顺带观察；手机/Android/浏览器版本必填模板。
+> - **迁移 045（review-r44 §2 纯函数反例）**：044 把「probe 字段在但损坏」（null/[]/false/
+>   字符串）折叠成「缺字段」→reason 兜底误放行。045=`classifyProtectionFactFinal`
+>   （045-turn-probe-field-integrity.ts）：`Object.hasOwn(p,'probe')` 分离**真缺字段**（受控
+>   旧兼容保留）与**结构损坏**（保守 retained）；完好对象 probe 按 result 判；完整 Job 证据
+>   仍优先（含损坏 probe）；只降级修正，已应用 044 的库兼容收口。legacyProtectionUpgrade
+>   **8/8**（44→最新含文件库重开同判；40→最新矩阵+corruptprobe1）。
+> - **DM 返工目标固定（review-r44 §3 探针反例）**：打开意见框时捕获**会话身份+task/
+>   delivery/revision/hash 快照**（旧残留输入框移除重建）；确认只审该快照——同会话刷新换
+>   目标不换稿；期间版本更新由后端 STALE_REVISION 拒（UI 标注快照版本）；**跨会话切换明确
+>   作废+零提交**。dmReviewContract 重写为五段真实 fake 链（常规/定位漂移诱饵/输入期间版本
+>   更新→第 4 版零误审/跨 DM 作废零提交/accept 快照语义；全链审计 3 次正式记录）。
+> - **材料纠正（review-r44 §4）**：dirty 对应计数更正（ab89219=21M+4A；二进制 docx/pdf
+>   **8 件**全 M、文本 **17=13M+4A**；已证=**13 个修改文本文件** diff 逐字节一致；4 新增
+>   构建时未跟踪无 diff 字节可比）+「不能完全重建」取代「差异仅可来自…」（appendix/
+>   continuation r44 快照/review-r44 JSON 三处同步修订）；短回归指南 R6 删「表格页显示
+>   网格」（随包样本 3 页无表格页——工程测试覆盖，不在样本中要求）。
+> - 全量 **852/852**（105 文件；原始日志按 runId 留存 dist/desktop/r45-test-logs/
+>   r45-20261004155706/full-suite.log）；typecheck 干净；零新增真实模型调用；**Android 期间
+>   v6 应用/数据/证书/
+>   既有结果稳定不动**；价值评价/DEV-11/并行写入维持原约定；**G5 按正式集成与兼容矩阵验收
+>   （当前不宣布）**。
+
+## 上一轮快照（2026-10-04 第四十四轮）
 
 > 本轮=**review-r43 三条确定性工程边界+共用 review 合同+材料收尾**（review-r43-next-round-20261004.md），
 > 用户同步以 v6 补测 R6/R7/V1/V2——**正在验收的 v6、数据与结果原件全程不动**，全部修复在源码
@@ -39,13 +74,15 @@
 >   四项化）；指南+模板补 **resize 手柄在面板右下角**（非任意下缘）与 **V2 收尾恢复 LAN**
 >   步骤；尺寸口径统一**宽×高、最大高度与实际高度分记**（本轮起报告与 metrics 均按此，
 >   R43 快照中「949×1680」已更正为宽×高=1680×949）。
-> - **构建 dirty 对应（review-r43 §6）**：v6 BUILD.json 真实元数据（commit=8f49f5c、dirty=true、
->   dirtyDiffHash=4fa3b1b0…）**原值保留不改写**。只读重建核对（dist/desktop/review-r44/
->   build-dirty-correspondence.json）：8f49f5c+ab89219 树内容重放=脏路径集 25=25（21 M+4 ??）
->   且 21 个文本文件 diff **逐字节一致**（cmp 首差异恰在二进制 fixture 段起点）；10 件
->   docx/pdf fixture 为测试再生成的瞬时字节（git 按文本处理+autocrlf 检出转换），不可事后
->   从 git 对象逐字节重导——dirtyDiffHash 不可完整重算属预期，非同源性反证；同源性另有
->   renderer 三源逐字节+冻结清单 588/588+三连 buildId 佐证。
+> - **构建 dirty 对应（review-r43 §6；计数与措辞按 review-r44 §4 于第四十五轮修订）**：v6
+>   BUILD.json 真实元数据（commit=8f49f5c、dirty=true、dirtyDiffHash=4fa3b1b0…）**原值保留
+>   不改写**。只读重建核对（dist/desktop/review-r44/build-dirty-correspondence.json）：
+>   ab89219 变更集=25（21 M+4 A；二进制 docx/pdf 8 件全为 M、文本 17=13 M+4 A）；重放脏路径
+>   集 25=25（21 ' M'+4 '??'）；**13 个修改文本文件** diff 逐字节一致（cmp 首差异恰在二进制
+>   fixture 段起点）；4 个新增文本文件构建时未跟踪（仅 ?? 行，无 diff 字节可比）。dirtyDiffHash
+>   完整成分**不能完全重建**（构建时 diff/status 字节未留存；二进制 fixture 检出转换不可逆推）
+>   ——「全部文本逐字节一致/差异仅来自二进制」不作已证结论；同源性另有 renderer 三源逐字节+
+>   冻结清单 588/588+三连 buildId 佐证。
 > - 全量 **850/850**（105 文件；原始日志按 runId 留存 dist/desktop/r44-test-logs/r44-20261004144908/
 >   full-suite.log）；typecheck 干净；零新增真实模型调用；v5/v6 包与既有证据原地保留；
 >   价值评价/DEV-11/并行写入/G5 维持原约定；**旧库兼容与正常操作合同收口前不宣 G5**。

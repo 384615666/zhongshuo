@@ -34,6 +34,8 @@ import { classifyProtectionFactStrict } from '../../src/persistence/migrations/0
 import { classifyProtectionFactComplete } from '../../src/persistence/migrations/044-turn-protection-evidence-complete.ts';
 import { migration042 } from '../../src/persistence/migrations/042-turn-protection-state-backfill.ts';
 import { migration043 } from '../../src/persistence/migrations/043-turn-protection-release-evidence.ts';
+import { classifyProtectionFactFinal, migration045 } from '../../src/persistence/migrations/045-turn-probe-field-integrity.ts';
+import { migration044 } from '../../src/persistence/migrations/044-turn-protection-evidence-complete.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-r43upg-'));
 afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* 句柄 */ } } });
@@ -186,6 +188,33 @@ describe('第四十四轮 §1：完整证据分类纯函数（classifyProtection
   });
 });
 
+describe('第四十五轮 §2：最终分类纯函数（classifyProtectionFactFinal）——probe 缺字段与结构损坏分离', () => {
+  it('probe 字段在但损坏（null/数组/false/字符串）→retained；真缺字段才 reason 兜底；完好 probe 按判定；完整 Job 仍优先', () => {
+    // review-r44 §2 反例组：044 曾把「字段损坏」折叠成「缺字段」→ reason 兜底误放行。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process', probe: null }))).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process', probe: [] }))).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process', probe: false }))).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process', probe: 'broken' }))).toBe('retained');
+    // 完好对象 probe 的 result 非字符串等形态：不等于 no-os-process——保守 retained。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, probe: { result: 1 } }))).toBe('retained');
+    // 真正缺 probe 字段：受控旧兼容正例保留。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process' }))).toBe('released');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, probe: { result: 'no-os-process' } }))).toBe('released');
+    // 完整 Job 证据优先于任何 probe 观察（含损坏 probe）。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, managedJobId: 'job_ok', managedEvidence: { releasable: true, rootExited: true, handlesReleased: true, activeCount: 0, reason: '受管执行完整结束' }, probe: null }))).toBe('released');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, managedJobId: 'job_ok', managedEvidence: { releasable: true, rootExited: true, handlesReleased: true, activeCount: 0, reason: 'x' }, probe: { result: 'alive' } }))).toBe('released');
+    // reason 兜底不覆盖已有（完好）相反 probe——044 已收紧，最终版维持。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, reason: 'protection-released-no-os-process', probe: { result: 'alive' } }))).toBe('retained');
+    // 残缺 Job 证据/矛盾/损坏 JSON/reconciled 分支与 044 同判。
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, managedJobId: 'job_x', managedEvidence: {}, probe: null }))).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', JSON.stringify({ released: true, protectionRetained: true, managedJobId: 'job_x', managedEvidence: { releasable: true, rootExited: true, handlesReleased: true, activeCount: 0, reason: 'x' } }))).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.protectionReleased', 'corrupt')).toBe('retained');
+    expect(classifyProtectionFactFinal('recovery.reconciled', JSON.stringify({ verdict: 'executed', exitFact: 'no-os-process' }))).toBe('released');
+    expect(classifyProtectionFactFinal('recovery.reconciled', JSON.stringify({ verdict: 'keepUnknown' }))).toBe(null);
+    expect(classifyProtectionFactFinal('task.review', JSON.stringify({}))).toBe(null);
+  });
+});
+
 /** 40→最新的形态矩阵（expectRecoverable/expectBlockSnippet 由 expectState 推导）。 */
 function seedAll(db: ZhongshuoDatabase, convId: string): { list: Array<{ key: string; taskId: string; runId: string; turnId: string; fixture: Fixture & { expectRecoverable: boolean; expectBlockSnippet?: string } }>; byKey: Record<string, { taskId: string; runId: string; turnId: string }> } {
   const defs: Array<Fixture> = [
@@ -201,6 +230,7 @@ function seedAll(db: ZhongshuoDatabase, convId: string): { list: Array<{ key: st
     { key: 'alive1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":9,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, reason: 'protection-released-alive', probe: { probeId: 'p_a', result: 'alive', detail: '受管 job 根进程仍存活' } } }], expectState: 'retained' }, // review-r42 反例②：released:true 但 probe alive
     { key: 'badmev1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":11,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, releasedLeases: [], reason: 'protection-released-managed-job-evidence', managedJobId: 'job_bad', managedEvidence: {}, probe: { probeId: 'p_m', result: 'unknown', detail: '残缺对象' } } }], expectState: 'retained' }, // review-r43 §3 反例：残缺 managedEvidence（042/043 曾判 released——044 修正）
     { key: 'reasonover1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":12,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, reason: 'protection-released-no-os-process', probe: { probeId: 'p_r', result: 'alive', detail: 'reason 覆盖相反 probe' } } }], expectState: 'retained' }, // review-r43 §3 反例：reason 覆盖已有 alive probe（042/043 曾判 released——044 修正）
+    { key: 'corruptprobe1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":13,"inFlightReservedTurns":0}', events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, releasedLeases: [], reason: 'protection-released-no-os-process', probe: null } }], expectState: 'retained' }, // review-r44 §2 反例：probe 字段在但损坏（044 曾折叠成缺字段放行——045 修正）
     { key: 'corrupt1', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":10,"inFlightReservedTurns":0}', events: [{ kind: 'recovery.reconciled', payload: 'not-json{' }], expectState: 'retained' }, // 证据损坏——不默认安全
   ];
   const list = defs.map((fixture) => {
@@ -228,8 +258,8 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
 
     const res = migrate(db);
     expect(res.fromVersion).toBe(40);
-    expect(res.applied).toEqual([41, 42, 43, 44]);
-    expect(db.pragma('user_version', { simple: true })).toBe(44);
+    expect(res.applied).toEqual([41, 42, 43, 44, 45]);
+    expect(db.pragma('user_version', { simple: true })).toBe(45);
 
     // ① 回填结果：事件顺序+保守分类推导的每 turn 最新保护事实。
     for (const f of fx.list) expect(protectionStateOf(db, f.turnId), f.fixture.key).toBe(f.fixture.expectState);
@@ -251,9 +281,9 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
         expect(row.blockReason, f.fixture.key).toContain(f.fixture.expectBlockSnippet!);
       }
     }
-    // ④ 准入：旧保留项（含第四十三/四十四轮新增形态）redispatch 拒绝且零新增派发行。
+    // ④ 准入：旧保留项（含第四十三/四十四/四十五轮新增形态）redispatch 拒绝且零新增派发行。
     const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg40', 'app'));
-    for (const key of ['keep1', 'exec1', 'exited1', 'order1', 'contra1', 'alive1', 'corrupt1', 'badmev1', 'reasonover1']) {
+    for (const key of ['keep1', 'exec1', 'exited1', 'order1', 'contra1', 'alive1', 'corrupt1', 'badmev1', 'reasonover1', 'corruptprobe1']) {
       const rej = await cmdRaw('task.redispatch', { taskId: fx.byKey[key]!.taskId, reason: 'x' });
       expect(rej.ok, key).toBe(false);
       expect(rej.error?.code, key).toBe('RECONCILE_REQUIRED');
@@ -263,7 +293,7 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
     const status = await cmd<{ pendingRelease: PendingRow[] }>('recovery.status', {});
     const pend = new Map<string, PendingRow>(status.pendingRelease.map((r) => [r.turnId, r] as [string, PendingRow]));
     expect(pend.get(fx.byKey.keep1!.turnId)!.leaseCount).toBe(0);
-    for (const key of ['exec1', 'exited1', 'order1', 'contra1', 'alive1', 'corrupt1', 'badmev1', 'reasonover1']) expect(pend.has(fx.byKey[key]!.turnId), key).toBe(true);
+    for (const key of ['exec1', 'exited1', 'order1', 'contra1', 'alive1', 'corrupt1', 'badmev1', 'reasonover1', 'corruptprobe1']) expect(pend.has(fx.byKey[key]!.turnId), key).toBe(true);
     expect(pend.has(fx.byKey.rel1!.turnId)).toBe(false);
     expect(pend.has(fx.byKey.managed1!.turnId)).toBe(false);
     expect(pend.has(fx.byKey.plain1!.turnId)).toBe(false);
@@ -319,7 +349,7 @@ describe('第四十三轮 §4：41→最新（内存库）——先复现漏洞�
     db.prepare(`DELETE FROM outbox WHERE dispatch_key GLOB 'task:${keep.taskId}:redispatch*'`).run();
 
     const res = migrate(db);
-    expect(res.applied).toEqual([42, 43, 44]);
+    expect(res.applied).toEqual([42, 43, 44, 45]);
     // 收口：retained 回填 → 呈现不可恢复、准入拒绝且零新派发、恢复中心可见。
     expect(protectionStateOf(db, keep.turnId)).toBe('retained');
     const cmd = cmdOn(db, join(tmpRoot, 'upg41', 'app'));
@@ -372,7 +402,7 @@ describe('第四十三轮 §4：42→最新——042 已按宽松判定误回填
     const before = snapshot(db);
 
     const res = migrate(db);
-    expect(res.applied).toEqual([43, 44]);
+    expect(res.applied).toEqual([43, 44, 45]);
     // 只降级修正：误回填行→retained；可靠释放行保持 released；预算/审计逐字节不变。
     expect(protectionStateOf(db, exited.turnId)).toBe('retained');
     expect(protectionStateOf(db, contra.turnId)).toBe('retained');
@@ -438,8 +468,8 @@ describe('第四十四轮 §1：43→最新（文件库）——043 已按残缺
     const before = snapshot(db);
 
     const res = migrate(db);
-    expect(res.applied).toEqual([44]);
-    expect(db.pragma('user_version', { simple: true })).toBe(44);
+    expect(res.applied).toEqual([44, 45]);
+    expect(db.pragma('user_version', { simple: true })).toBe(45);
     // 只降级修正：残缺证据行→retained；完整正例不动；预算/审计逐字节不变。
     expect(protectionStateOf(db, badmev.turnId)).toBe('retained');
     expect(protectionStateOf(db, reasonover.turnId)).toBe('retained');
@@ -472,6 +502,82 @@ describe('第四十四轮 §1：43→最新（文件库）——043 已按残缺
     expect(protectionStateOf(db2, reasonover.turnId)).toBe('retained');
     expect(protectionStateOf(db2, goodMev.turnId)).toBe('released');
     expect(assessTaskRedispatchReadiness(db2, badmev.taskId)?.fact.kind).toBe('protection-retained');
+    db2.close();
+  }, 120_000);
+});
+
+describe('第四十五轮 §2：44→最新（文件库）——044 已按「损坏 probe+reason 兜底」放行的库由 045 只降级修正', () => {
+  it('probe 字段在但损坏（null/数组）曾写 released → 045 降级 retained；真缺字段正例/完整 Job/完好 no-os probe 不动；预算审计不变；幂等；重开同判', async () => {
+    const dbPath = join(tmpRoot, 'upg44', 'state.sqlite');
+    mkdirSync(join(tmpRoot, 'upg44'), { recursive: true });
+    const db = openAtVersion(dbPath, 44);
+    seedBase(db, 'convUpg44');
+    const corruptNull = seedFixture(db, 'convUpg44', {
+      key: 'corruptnull', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":1,"inFlightReservedTurns":0}',
+      events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, releasedLeases: [], reason: 'protection-released-no-os-process', probe: null } }], expectState: 'retained',
+    });
+    const corruptArr = seedFixture(db, 'convUpg44', {
+      key: 'corruptarr', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":2,"inFlightReservedTurns":0}',
+      events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, reason: 'protection-released-no-os-process', probe: [] } }], expectState: 'retained',
+    });
+    const legacyNoProbe = seedFixture(db, 'convUpg44', {
+      key: 'legacynoprobe', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":3,"inFlightReservedTurns":0}',
+      events: [NOT_STARTED_AUDIT, { kind: 'recovery.protectionReleased', payload: { released: true, reason: 'protection-released-no-os-process' } }], expectState: 'released', // 真缺 probe 字段——受控旧兼容正例
+    });
+    const goodMev = seedFixture(db, 'convUpg44', {
+      key: 'goodmev', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":4,"inFlightReservedTurns":0}',
+      events: [NOT_STARTED_AUDIT, RELEASED_MANAGED_EVENT], expectState: 'released',
+    });
+    const goodNoOs = seedFixture(db, 'convUpg44', {
+      key: 'goodnoos', turnStatus: 'FAILED', budgetMark: 'refunded', budgetJson: '{"usedTurns":5,"inFlightReservedTurns":0}',
+      events: [NOT_STARTED_AUDIT, RELEASED_NO_OS_EVENT], expectState: 'released',
+    });
+    // 模拟「已应用 044 的库」：042 宽松回填全写 released，043/044 的 up（同一代码路径）对
+    // 「损坏 probe」行未降级——复核反例复现（probe 归一化把损坏折叠成缺字段→reason 兜底）。
+    migration042.up(db);
+    migration043.up(db);
+    migration044.up(db);
+    expect(protectionStateOf(db, corruptNull.turnId)).toBe('released'); // 044 未修正（缺口本体）
+    expect(protectionStateOf(db, corruptArr.turnId)).toBe('released'); // 044 未修正（缺口本体）
+    expect(protectionStateOf(db, legacyNoProbe.turnId)).toBe('released'); // 正例（044/045 同判）
+    expect(protectionStateOf(db, goodMev.turnId)).toBe('released');
+    expect(protectionStateOf(db, goodNoOs.turnId)).toBe('released');
+    const before = snapshot(db);
+
+    const res = migrate(db);
+    expect(res.applied).toEqual([45]);
+    expect(db.pragma('user_version', { simple: true })).toBe(45);
+    // 只降级修正：损坏 probe 行→retained；三类正例不动；预算/审计逐字节不变。
+    expect(protectionStateOf(db, corruptNull.turnId)).toBe('retained');
+    expect(protectionStateOf(db, corruptArr.turnId)).toBe('retained');
+    expect(protectionStateOf(db, legacyNoProbe.turnId)).toBe('released');
+    expect(protectionStateOf(db, goodMev.turnId)).toBe('released');
+    expect(protectionStateOf(db, goodNoOs.turnId)).toBe('released');
+    const after = snapshot(db);
+    expect(after.events).toBe(before.events);
+    expect(after.eventDigest).toBe(before.eventDigest);
+    expect(after.turns).toBe(before.turns);
+    expect(after.budgets).toBe(before.budgets);
+    // 修正后守卫重新拦截；正例不误拦。
+    expect(assessTaskRedispatchReadiness(db, corruptNull.taskId)?.fact.kind).toBe('protection-retained');
+    expect(assessTaskRedispatchReadiness(db, legacyNoProbe.taskId)).toBe(null);
+    const cmdRaw = cmdRawOn(db, join(tmpRoot, 'upg44', 'app'));
+    for (const t of [corruptNull, corruptArr]) {
+      const rej = await cmdRaw('task.redispatch', { taskId: t.taskId, reason: 'x' });
+      expect(rej.ok).toBe(false);
+      expect(rej.error?.code).toBe('RECONCILE_REQUIRED');
+    }
+    const okLegacy = await cmdRaw('task.redispatch', { taskId: legacyNoProbe.taskId, reason: 'x' });
+    expect(okLegacy.ok).toBe(true);
+    // 幂等：重跑无动作。
+    const again = migrate(db);
+    expect(again.applied).toEqual([]);
+    db.close();
+    // 文件库重开同判。
+    const db2 = openDatabase(dbPath);
+    expect(protectionStateOf(db2, corruptNull.turnId)).toBe('retained');
+    expect(protectionStateOf(db2, legacyNoProbe.turnId)).toBe('released');
+    expect(assessTaskRedispatchReadiness(db2, corruptArr.taskId)?.fact.kind).toBe('protection-retained');
     db2.close();
   }, 120_000);
 });

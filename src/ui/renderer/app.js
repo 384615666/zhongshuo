@@ -3867,7 +3867,13 @@ el('dm-review-accept').onclick = () => void (async () => {
 })().catch(() => {});
 el('dm-review-reject').onclick = () => {
   const row = el('dm-review-row');
-  if (row.querySelector('#dm-review-note-input') != null) return;
+  // 目标固定（第四十五轮·review-r44 §3）：**打开意见框时**捕获会话身份+三重绑定快照——
+  // 输入期间轮询刷新（currentReview 变化/定位消费）、甚至切换会话都不换稿；确认只审该快照。
+  // 上一目标的残留输入框一律移除后按当前展示重建（不再「已存在即返回」）。
+  const reviewAtOpen = state.dmActive?.currentReview ?? state.dmActive?.pendingReview;
+  if (reviewAtOpen == null) return;
+  const conversationAtOpen = state.openDmId;
+  row.querySelector('#dm-review-note-input')?.remove();
   const input = document.createElement('input');
   input.id = 'dm-review-note-input';
   input.className = 'git-input';
@@ -3876,18 +3882,25 @@ el('dm-review-reject').onclick = () => {
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'danger';
   confirmBtn.textContent = '提交返工意见';
+  const closeNoteRow = () => { input.remove(); confirmBtn.remove(); };
   confirmBtn.onclick = () => void (async () => {
-    // 第四十四轮：与 accept/展示行同一快照来源（currentReview=用户当前所见交付——待我处理
-    // 定位可能不等于 pendingReview），三重绑定补 manifestHash（此前漏传→服务端 VALIDATION_INVALID）。
-    const review = state.dmActive?.currentReview ?? state.dmActive?.pendingReview;
     const note = input.value.trim();
-    if (review == null || note.length === 0) { input.focus(); return; }
+    if (note.length === 0) { input.focus(); return; }
+    // 会话已切换：明确拒绝并作废——不能把旧意见提交到另一会话的当前交付。
+    if (state.openDmId !== conversationAtOpen) {
+      closeNoteRow();
+      showError('返工意见已作废：会话已切换——请在目标会话重新发起（意见不自动套用到其它交付）');
+      return;
+    }
+    // 同会话：只审打开时快照；期间版本更新由后端按 revision/hash 拒（STALE_REVISION）——不悄悄换稿。
     try {
-      await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, manifestHash: review.manifestHash, decision: 'changes_requested', note });
-    } catch (e) { showError(`提交返工意见失败：${e.message}`); }
+      await command('task.review', { taskId: reviewAtOpen.taskId, deliveryId: reviewAtOpen.deliveryId, deliveryRevision: reviewAtOpen.revision, manifestHash: reviewAtOpen.manifestHash, decision: 'changes_requested', note });
+      closeNoteRow();
+    } catch (e) { showError(`提交返工意见失败（第 ${reviewAtOpen.revision} 版快照）：${e.message}`); }
     await renderDm();
   })().catch(() => {});
   row.querySelector('.git-row').append(input, confirmBtn);
+  input.focus();
 };
 el('dm-stop-btn').onclick = () => void (async () => {
   const active = state.dmActive;
