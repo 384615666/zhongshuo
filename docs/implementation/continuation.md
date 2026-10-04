@@ -2,7 +2,55 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十三轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十四轮，唯一权威快照）
+
+> 本轮=**review-r43 三条确定性工程边界+共用 review 合同+材料收尾**（review-r43-next-round-20261004.md），
+> 用户同步以 v6 补测 R6/R7/V1/V2——**正在验收的 v6、数据与结果原件全程不动**，全部修复在源码
+> 与独立目录完成；无新包（用户回填后集中处理实际失败再定最终候选）。
+> - **迁移 044（review-r43 §3 纯函数反例）**：043 的 managedEvidence 只查「非空对象」、reason
+>   兜底可覆盖已有相反 probe——空对象/数组/releasable:false/activeCount>0/null/缺字段/缺
+>   managedJobId 的残缺证据都曾判 released。044 按真实 ReleaseEvidence 结构校验完整条件
+>   （releasable/rootExited/handlesReleased 全 true+activeCount 数值 0+同事件 managedJobId 稳定
+>   身份）；完整 Job 证据优先于落后的进程观察（probe alive 不否决）；**probe 存在时按 probe
+>   判定，reason 兜底仅限旧事件缺 probe 字段**。043 已随 v6 发布冻结不改写——044 只降级修正
+>   （V2 released ⊆ 043 released），不动 retained/NULL/预算/审计；幂等。legacyProtectionUpgrade
+>   **6/6**（40→最新[+badmev/reasonover 两形态]/41→最新/42→最新/43→最新[已应用 043 的库兼容
+>   修复+文件库重开同判]/043 纯函数/044 纯函数全分支）。
+> - **DM 返工合同（review-r43 §4）**：dm-review-reject 确认分支补 manifestHash（此前漏传→
+>   VALIDATION_INVALID）且改绑**用户所见快照**（currentReview 优先——待我处理定位时 pendingReview
+>   可能指向另一交付）。调用方盘点：线程 reviewTask（accept/reject 共用，已带 hash）✓、DM
+>   accept ✓、远程两处 accept ✓——唯一缺口即 DM reject，已修。新增
+>   tests/integration/dmReviewContract.test.ts：**原样抽取产品 accept/reject 处理器**（与 r43
+>   探针同锚点法——改源码即改测试对象）×真实 fake 链（message.submit→DispatchWorker→交付
+>   pending→task.review）——返工带 hash/任务回 ACTIVE/意见入账/快照绑定诱饵不误审/旧版本与
+>   错 hash 各返回 STALE_REVISION/redispatch 后第 2、3 版交付→accept DONE。
+> - **显式工具入口（review-r43 §5）**：DM 视图下点看板/Files/动态曾被
+>   `main[data-view=dm]>#board/#files/#activity{display:none!important}` 架空（handler 清
+>   hidden 但 data-view 仍 dm）。统一视图状态：showToolPanel/hideToolPanel/resetToolPanels 唯一
+>   维护三个布尔守卫+hidden 类+data-view；私信/线程视图下显式打开工具=暂离该视图（data-view
+>   切 pool 侧），关闭返回原视图——**会话/线程身份、草稿、导航代次全程不动**；openDm/
+>   showPool/openThread 入口一律归零（含修正此前「线程下开看板双区并显」的隐性不同步）。
+>   verify-ui-hidden-layout 新增 **U6**：DM→看板显式可见（computed display≠none+尺寸+内容
+>   渲染+DM 让位）→看板↔Files↔动态互斥切换→关闭返回 DM（视图身份+dm-input 草稿保留）→
+>   侧栏切房工具归零——**P0-U6 七场景 allPass**（桩补 board.view/files.view/activity.list
+>   最小数据）；lifecycle/word-isolation allPass 不回退。
+> - **材料口径（review-r43 §6）**：打包模板 SHORT_REGRESSION/README 尾部改**四项**（R1—R5
+>   沿用 v5 不重测、D1—D10 按 v2 收案）——随下一候选包生效，v6 包内 README 不动（指南已
+>   四项化）；指南+模板补 **resize 手柄在面板右下角**（非任意下缘）与 **V2 收尾恢复 LAN**
+>   步骤；尺寸口径统一**宽×高、最大高度与实际高度分记**（本轮起报告与 metrics 均按此，
+>   R43 快照中「949×1680」已更正为宽×高=1680×949）。
+> - **构建 dirty 对应（review-r43 §6）**：v6 BUILD.json 真实元数据（commit=8f49f5c、dirty=true、
+>   dirtyDiffHash=4fa3b1b0…）**原值保留不改写**。只读重建核对（dist/desktop/review-r44/
+>   build-dirty-correspondence.json）：8f49f5c+ab89219 树内容重放=脏路径集 25=25（21 M+4 ??）
+>   且 21 个文本文件 diff **逐字节一致**（cmp 首差异恰在二进制 fixture 段起点）；10 件
+>   docx/pdf fixture 为测试再生成的瞬时字节（git 按文本处理+autocrlf 检出转换），不可事后
+>   从 git 对象逐字节重导——dirtyDiffHash 不可完整重算属预期，非同源性反证；同源性另有
+>   renderer 三源逐字节+冻结清单 588/588+三连 buildId 佐证。
+> - 全量 **850/850**（105 文件；原始日志按 runId 留存 dist/desktop/r44-test-logs/r44-20261004144908/
+>   full-suite.log）；typecheck 干净；零新增真实模型调用；v5/v6 包与既有证据原地保留；
+>   价值评价/DEV-11/并行写入/G5 维持原约定；**旧库兼容与正常操作合同收口前不宣 G5**。
+
+## 上一轮快照（2026-10-04 第四十三轮）
 
 > 本轮=**v5 用户回填收案+四类现场缺陷修复**（review-r42-next-round-20261004.md）：统一隐藏
 > 契约（UI-01）·阅读空间与预览展开（UI-02/03）·监听显示（UI-04）+迁移 043 保守化+种子房间
@@ -40,8 +88,9 @@
 > - **页面级验证**：新 verify-ui-hidden-layout.cjs（实际打包页面+传输桩——DOM/CSS/控制流全
 >   真实；**computedStyle+尺寸断言**，1280×800+1920×1080 双档）P0 首启轮询装载/U1 隐藏契约
 >   （pool/composer hidden 后 0 尺寸、DM 消息区≥55% 主高、返回恢复）/U2 关闭真正消失+工具行
->   让位恢复/U3 Word·PPT 展开实测（docx 盒 353→448px、面板 658px、resize vertical）/U4 监听
->   同步+dirty/U5 宽屏（DM 消息区 949×1680）——连续两次 allPass。lifecycle/word-isolation
+>   让位恢复/U3 Word·PPT 展开实测（docx 视觉盒实际高度 353→448px；面板展开 maxHeight≈658px、
+>   实际 h≈595px；resize vertical）/U4 监听
+>   同步+dirty/U5 宽屏（DM 消息区宽×高=1680×949）——连续两次 allPass。lifecycle/word-isolation
 >   allPass 不回退。冻结验证器 ATT 新增 4 项 R43 断言（展开/关闭计算样式/视图切换/监听）。
 > - **v6 交付**：冻结三连（runId 见 vdr-runs 新记录）+同源核对+真实启动器自测（首启不 reload
 >   断言）；包含 042+043、R7 样本、NOTICE 三件、README 修复、材料修订。**用户操作：对 v6 只

@@ -2,6 +2,8 @@
 /**
  * 第四十三轮（review-r42 §3 / v5 现场 UI-01/02/03/04）：隐藏契约·阅读空间·预览展开·监听同步
  * ——**实际打包页面**（dist/ui/renderer，真实 style.css/index.html/app.js 产物）级验证。
+ * 第四十四轮 §3 增 U6：私信视图下显式打开看板/Files/动态必须可见（统一视图状态——
+ * 布尔守卫/hidden 类/data-view 三者不再互相矛盾），关闭返回原视图且草稿保留。
  * 只有传输层（window.zs 命令面）为确定性桩——DOM/CSS/布局/产品控制流全真实：
  * 启动→记忆轮询装载项目→侧栏点击切房/切私信/开线程→点附件芯片开预览→关/展开。
  * 全部断言用 **computedStyle + getBoundingClientRect 实际尺寸**（review：禁止以
@@ -63,6 +65,14 @@ const DATA = ${JSON.stringify({
   },
   remoteConfig: { running: true, address: 'https://192.168.1.100:52892', fingerprint: 'AB'.repeat(32), caFingerprint: 'CD'.repeat(32), certSubject: 'CN=zhongshuo', certIssuer: 'CN=zhongshuo-ca', certNotAfter: Date.now() + 90 * 86400_000, listenHost: '0.0.0.0', port: 52892, allowLan: true, lanAddressDetails: [], lanAddresses: ['192.168.1.100'] },
   devices: { devices: [] },
+  boardView: { groups: [{ projectId: 'p1', displayName: '布局演练项目', rooms: [{ roomId: 'roomA', name: '默认房间', cards: [
+    { taskId: 'task_1', title: '看板样本任务', column: 'running', taskStatus: 'ACTIVE', runStatus: 'RUNNING', runId: 'run_stub_1', stopGeneration: 0, exitUnconfirmed: false, pendingDelivery: null, locate: '#task=task_1' },
+  ] }] }], note: 'U6 桩' },
+  filesView: { groups: [{ projectId: 'p1', displayName: '布局演练项目', projectFilesNote: 'U6 桩数据根（工具入口可见性验证）', attachments: [], drafts: [], deliveries: [] }] },
+  activityList: { items: [
+    { at: Date.now(), seq: 2, kindLabel: '消息', projectName: '布局演练项目', summary: 'U6 动态样本行二', locate: null },
+    { at: Date.now(), seq: 1, kindLabel: '任务创建', projectName: '布局演练项目', summary: 'U6 动态样本行', locate: '#task=task_1' },
+  ] },
 })};
 const dispatch = (method, params) => {
   const D = DATA;
@@ -85,6 +95,9 @@ const dispatch = (method, params) => {
     case 'attachment.previewOffice': return { ok: true, data: D.previewOffice[(params && params.attachmentId)] || { ok: false } };
     case 'remote.config.get': return { ok: true, data: D.remoteConfig };
     case 'remote.devices.list': return { ok: true, data: D.devices };
+    case 'board.view': return { ok: true, data: D.boardView };
+    case 'files.view': return { ok: true, data: D.filesView };
+    case 'activity.list': return { ok: true, data: D.activityList };
     default: return { ok: true, data: {} };
   }
 };
@@ -247,7 +260,31 @@ async function main() {
     };
   }
 
-  results.allPass = ['P0_firstAutoLoad', 'U1_hiddenContract', 'U2_closePreview', 'U3_previewArea', 'U4_remoteSync', 'U5_widescreen'].every((k) => results[k].pass === true);
+  // ---------- U6 显式工具入口（第四十四轮 §3 / review-r43 §5 反例：DM 中点看板/Files/动态必须可见） ----------
+  {
+    // U5 结束态：宽屏 DM 视图。先在 DM 输入框留草稿（暂离工具返回后必须保留）。
+    await win.webContents.executeJavaScript(probe(`(() => { document.getElementById('dm-input').value = 'draft-U6'; return true; })()`), true);
+    await win.webContents.executeJavaScript(probe(`document.getElementById('board-toggle').click(); true`), true);
+    const openBoard = await waitForJs(win, probe(`(() => { const b = document.getElementById('board'); const dm = document.getElementById('dm'); const v = document.querySelector('main.main')?.getAttribute('data-view'); const cs = getComputedStyle(b); const r = b.getBoundingClientRect(); const cards = document.querySelectorAll('#board-groups .board-card').length; return v === 'pool' && cs.display !== 'none' && r.height > 80 && r.width > 200 && cards >= 1 && getComputedStyle(dm).display === 'none' ? JSON.stringify({ dataView: v, display: cs.display, w: Math.round(r.width), h: Math.round(r.height), cards, dmYields: true }) : null; })()`), 5000, 'DM→看板显式打开');
+    // 工具间直接切换（看板→Files→动态）：面板互斥、均有可见响应。
+    await win.webContents.executeJavaScript(probe(`document.getElementById('files-toggle').click(); true`), true);
+    const filesOpen = await waitForJs(win, probe(`(() => { const f = document.getElementById('files'); const b = document.getElementById('board'); const cs = getComputedStyle(f); const r = f.getBoundingClientRect(); const heads = [...document.querySelectorAll('#files-groups .sidebar-sec')].some((x) => x.textContent.includes('布局演练项目')); return cs.display !== 'none' && r.height > 80 && getComputedStyle(b).display === 'none' && heads ? JSON.stringify({ display: cs.display, w: Math.round(r.width), h: Math.round(r.height), groupRendered: true }) : null; })()`), 5000, '看板→Files 切换');
+    await win.webContents.executeJavaScript(probe(`document.getElementById('activity-toggle').click(); true`), true);
+    const activityOpen = await waitForJs(win, probe(`(() => { const a = document.getElementById('activity'); const f = document.getElementById('files'); const cs = getComputedStyle(a); const r = a.getBoundingClientRect(); const rows = document.querySelectorAll('#activity-list .activity-row').length; return cs.display !== 'none' && r.height > 80 && rows >= 2 && getComputedStyle(f).display === 'none' ? JSON.stringify({ display: cs.display, w: Math.round(r.width), h: Math.round(r.height), rows }) : null; })()`), 5000, 'Files→动态切换');
+    // 关闭工具→返回 DM：视图身份恢复、工具真正收起、草稿保留。
+    await win.webContents.executeJavaScript(probe(`document.getElementById('activity-toggle').click(); true`), true);
+    const backDm = await waitForJs(win, probe(`(() => { const dm = document.getElementById('dm'); const a = document.getElementById('activity'); const v = document.querySelector('main.main')?.getAttribute('data-view'); const cs = getComputedStyle(dm); const r = dm.getBoundingClientRect(); const draft = document.getElementById('dm-input').value; return v === 'dm' && cs.display !== 'none' && r.height > 100 && getComputedStyle(a).display === 'none' && draft === 'draft-U6' ? JSON.stringify({ dataView: v, dmDisplay: cs.display, dmH: Math.round(r.height), draft }) : null; })()`), 5000, '关闭工具返回 DM');
+    // 侧栏切房（视图入口归零）：工具不残留、主池恢复。
+    await win.webContents.executeJavaScript(probe(`(() => { const b = document.querySelector('#room-list .room-item'); b.click(); return true; })()`), true);
+    const backPool = await waitForJs(win, probe(`(() => { const p = document.getElementById('pool'); const a = document.getElementById('activity'); const v = document.querySelector('main.main')?.getAttribute('data-view'); return v === 'pool' && getComputedStyle(p).display !== 'none' && getComputedStyle(a).display === 'none' ? JSON.stringify({ dataView: v, poolDisplay: getComputedStyle(p).display }) : null; })()`), 5000, '回主池（工具归零）');
+    results.U6_explicitTools = {
+      boardFromDm: openBoard && JSON.parse(openBoard), filesSwitch: filesOpen && JSON.parse(filesOpen), activitySwitch: activityOpen && JSON.parse(activityOpen),
+      backToDm: backDm && JSON.parse(backDm), backToPool: backPool && JSON.parse(backPool),
+      pass: openBoard != null && filesOpen != null && activityOpen != null && backDm != null && backPool != null,
+    };
+  }
+
+  results.allPass = ['P0_firstAutoLoad', 'U1_hiddenContract', 'U2_closePreview', 'U3_previewArea', 'U4_remoteSync', 'U5_widescreen', 'U6_explicitTools'].every((k) => results[k].pass === true);
   fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify(results, null, 2));
   console.log('[ui-hidden-layout] allPass=' + results.allPass + ' ' + JSON.stringify(Object.fromEntries(Object.entries(results).filter(([k]) => k !== 'allPass').map(([k, v]) => [k, v.pass]))));
   server.close();

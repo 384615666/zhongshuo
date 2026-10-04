@@ -241,6 +241,7 @@ function showPool() {
   state.openDmId = null;
   updateStopUi(null);
   // 第四十三轮 UI-02：主视图标记（CSS 视图级收起——DM 视图收起主池输入区/工具面）。
+  resetToolPanels(); // 第四十四轮 §3：工具态随视图入口归零（布尔/hidden/data-view 不残留）
   document.querySelector('main.main')?.setAttribute('data-view', 'pool');
   el('thread').classList.add('hidden');
   el('dm').classList.add('hidden');
@@ -260,6 +261,7 @@ async function openThread(threadId, taskId, anchorText) {
   state.openTaskId = taskId ?? null;
   state.openTaskSnapshot = null;
   state.openAnchorText = anchorText ?? null;
+  resetToolPanels(); // 第四十四轮 §3：工具态随视图入口归零
   document.querySelector('main.main')?.setAttribute('data-view', 'thread');
   el('pool').classList.add('hidden');
   el('dm').classList.add('hidden');
@@ -319,6 +321,7 @@ async function openDm(conversationId) {
   state.navGeneration += 1;
   state.openDmId = conversationId;
   state.openThreadId = null;
+  resetToolPanels(); // 第四十四轮 §3：工具态随视图入口归零（DM 中显式打开的工具不再残留）
   document.querySelector('main.main')?.setAttribute('data-view', 'dm');
   el('pool').classList.add('hidden');
   el('thread').classList.add('hidden');
@@ -3752,39 +3755,75 @@ el('dm-remind-btn').onclick = () => void (async () => {
 // ---------- DEV-18 第二包绑定（第二十五轮四）：搜索/收藏/关注·静音（纯读+偏好写） ----------
 wireAttach('dm');
 wireAttach('composer');
-el('board-toggle').onclick = () => {
-  boardVisible = !boardVisible;
-  filesVisible = false;
-  el('board').classList.toggle('hidden', !boardVisible);
+// ---------- 工具面板统一视图状态（第四十四轮 §3，review-r43 §5 反例）----------
+// 看板/Files/动态与主内容区互斥呈现；工具可见性（三个布尔守卫）、hidden 类与 data-view
+// 三者由本组函数唯一维护，不再出现「handler 清了 hidden 但 data-view="dm" 强制隐藏」的
+// 架空态。私信/线程视图下显式打开工具=暂离该视图（data-view 切回 pool 侧，DM 收起规则
+// 不再适用）；关闭时返回原视图——会话/线程身份、草稿与导航代次全程不动。
+let toolActive = null; // 'board' | 'files' | 'activity' | null
+let toolReturn = null; // 'dm' | 'thread' | null（打开工具前的主视图——关闭时返回）
+function showToolPanel(which) {
+  if (toolActive == null) {
+    const view = document.querySelector('main.main')?.getAttribute('data-view');
+    toolReturn = view === 'dm' ? 'dm' : (view === 'thread' ? 'thread' : null);
+    if (toolReturn === 'dm') el('dm').classList.add('hidden');
+    if (toolReturn === 'thread') el('thread').classList.add('hidden');
+    if (toolReturn != null) document.querySelector('main.main')?.setAttribute('data-view', 'pool');
+  }
+  toolActive = which;
+  boardVisible = which === 'board'; filesVisible = which === 'files'; activityVisible = which === 'activity';
+  el('board').classList.toggle('hidden', which !== 'board');
+  el('files').classList.toggle('hidden', which !== 'files');
+  el('activity').classList.toggle('hidden', which !== 'activity');
+  el('pool').classList.add('hidden');
+}
+function hideToolPanel() {
+  const back = toolReturn;
+  toolActive = null; toolReturn = null;
+  boardVisible = false; filesVisible = false; activityVisible = false;
+  el('board').classList.add('hidden');
   el('files').classList.add('hidden');
-  el('pool').classList.toggle('hidden', boardVisible);
-  if (boardVisible) { void renderBoard().catch(() => {}); el('thread-title').textContent = '看板'; }
-  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+  el('activity').classList.add('hidden');
+  if (back === 'dm') { el('dm').classList.remove('hidden'); document.querySelector('main.main')?.setAttribute('data-view', 'dm'); }
+  else if (back === 'thread') { el('thread').classList.remove('hidden'); document.querySelector('main.main')?.setAttribute('data-view', 'thread'); }
+  else el('pool').classList.remove('hidden');
+  return back;
+}
+/** 视图入口归零（openDm/showPool/openThread）：工具态与主视图切换互不残留。 */
+function resetToolPanels() {
+  toolActive = null; toolReturn = null;
+  boardVisible = false; filesVisible = false; activityVisible = false;
+  el('board').classList.add('hidden');
+  el('files').classList.add('hidden');
+  el('activity').classList.add('hidden');
+}
+function closeToolReturn() {
+  const back = hideToolPanel();
+  el('thread-title').textContent = back === 'dm' ? '私信' : back === 'thread' ? '任务回复串' : '主对话池';
+  if (back == null) void renderPool().catch(() => {});
+}
+el('board-toggle').onclick = () => {
+  if (toolActive === 'board') { closeToolReturn(); return; }
+  showToolPanel('board');
+  void renderBoard().catch(() => {});
+  el('thread-title').textContent = '看板';
 };
 el('board-refresh').onclick = () => void renderBoard().catch(() => {});
 el('board-scope').addEventListener('change', () => void renderBoard().catch(() => {}));
 el('files-toggle').onclick = () => {
-  filesVisible = !filesVisible;
-  boardVisible = false;
-  el('files').classList.toggle('hidden', !filesVisible);
-  el('board').classList.add('hidden');
-  el('pool').classList.toggle('hidden', filesVisible);
-  if (filesVisible) { void renderFiles().catch(() => {}); el('thread-title').textContent = 'Files'; }
-  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+  if (toolActive === 'files') { closeToolReturn(); return; }
+  showToolPanel('files');
+  void renderFiles().catch(() => {});
+  el('thread-title').textContent = 'Files';
 };
 el('files-refresh').onclick = () => void renderFiles().catch(() => {});
 el('files-scope').addEventListener('change', () => void renderFiles().catch(() => {}));
 // Activity 流（第三十轮六）：工具区入口——只读聚合（零运行零唤醒）。
 el('activity-toggle').onclick = () => {
-  activityVisible = !activityVisible;
-  filesVisible = false;
-  boardVisible = false;
-  el('activity').classList.toggle('hidden', !activityVisible);
-  el('files').classList.add('hidden');
-  el('board').classList.add('hidden');
-  el('pool').classList.toggle('hidden', activityVisible);
-  if (activityVisible) { void renderActivity().catch(() => {}); el('thread-title').textContent = '动态'; }
-  else { el('thread-title').textContent = '主对话池'; void renderPool().catch(() => {}); }
+  if (toolActive === 'activity') { closeToolReturn(); return; }
+  showToolPanel('activity');
+  void renderActivity().catch(() => {});
+  el('thread-title').textContent = '动态';
 };
 el('activity-refresh').onclick = () => void renderActivity().catch(() => {});
 el('activity-scope').addEventListener('change', () => void renderActivity().catch(() => {}));
@@ -3838,11 +3877,13 @@ el('dm-review-reject').onclick = () => {
   confirmBtn.className = 'danger';
   confirmBtn.textContent = '提交返工意见';
   confirmBtn.onclick = () => void (async () => {
-    const review = state.dmActive?.pendingReview;
+    // 第四十四轮：与 accept/展示行同一快照来源（currentReview=用户当前所见交付——待我处理
+    // 定位可能不等于 pendingReview），三重绑定补 manifestHash（此前漏传→服务端 VALIDATION_INVALID）。
+    const review = state.dmActive?.currentReview ?? state.dmActive?.pendingReview;
     const note = input.value.trim();
     if (review == null || note.length === 0) { input.focus(); return; }
     try {
-      await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, decision: 'changes_requested', note });
+      await command('task.review', { taskId: review.taskId, deliveryId: review.deliveryId, deliveryRevision: review.revision, manifestHash: review.manifestHash, decision: 'changes_requested', note });
     } catch (e) { showError(`提交返工意见失败：${e.message}`); }
     await renderDm();
   })().catch(() => {});

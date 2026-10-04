@@ -66,7 +66,7 @@ INTERRUPTED 即给按钮）；②DOMPurify（SVG 专用实例+钩子封外链—
 
 ## 下一包建议（依赖已满足排序，第二十八轮修订）
 
-1. **DEV-25 收尾**：双机 D1—D10 已收案（不重复）；**第四十三轮已收案 v5 回填**（R1—R5 按范围过、R6 FAIL、R7 BLOCKED——原件 v5 包 RESULTS）并交付 **v6 候选包**（UI-01/02/03/04 现场缺陷修复+迁移 043 保守化+种子房间绑定+首启自动装载+冻结三连+启动器自测）；用户对 v6 只补测 **R6/R7+相邻视图切换+监听显示**，随后 Android；不重复 D1—D10；
+1. **DEV-25 收尾**：双机 D1—D10 已收案（不重复）；第四十三轮已收案 v5 回填并交付 v6 候选包；**第四十四轮已收口 review-r43 三边界**（迁移 044 完整释放证据+DM 返工 manifestHash/快照绑定[dmReviewContract 真实 fake 链]+DM 下显式工具入口统一视图态[U6]）+材料口径（四项模板/右下角手柄/V2 收尾恢复 LAN/尺寸宽×高分记/v6 构建 dirty↔ab89219 对应证据）；用户对 v6 只补测 **R6/R7+相邻视图切换+监听显示**，随后 Android；不重复 D1—D10；旧库兼容与正常操作合同收口前不宣 G5；
 2. **DEV-24 收尾**：图片/PDF/Office 评论锚点（按分批归属）、OCR（未实现——新增服务先方案后询问）；第三十一轮已补导出完整性（线程归属/重放后置/受控拷贝 manifest/预算/system 标注——exportIntegrity 9/9）与 DOCX 真实 Word 布局验收（w:color/tblGrid/styles 关系修复+控制字符清洗+长中文 17 页/60 行表格/特殊字符/缺失件——docxWordValidation 5/5，样本与 PDF 证据留 tests/artifacts/docx-word-evidence/）；DEV-18 Activity 稳定游标+nav.preferences/看板可见范围已落（activityCursorScope 2/2）；消息操作组接线产品修复（attachMsgActions 此前从未挂载——ATT 36/36）；独立交付包（make-independent-package）随下次交付重建；
 3. DEV-18 剩余（Activity 流/消息操作全集/惰性表情）与 DEV-19 跨项目汇总视图（不做状态直改）；
 4. DEV-15：安装器与升级迁移设计（便携链已验，可做增量）。
