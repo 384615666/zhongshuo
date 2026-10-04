@@ -160,6 +160,7 @@ async function loadProject(path, opts) {
     for (const room of rooms.items) {
       const item = document.createElement('div');
       item.className = 'room-item';
+      item.dataset.roomId = room.id; // 换装壳定向接管按机器身份定位（review-r48 §4——不用名称 includes）
       item.textContent = `# ${room.name}`;
       item.onclick = () => void selectRoom(room.id, room.conversationId, item);
       list.appendChild(item);
@@ -302,6 +303,7 @@ async function renderDmSidebar() {
   for (const c of conversations) {
     const btn = document.createElement('button');
     btn.className = 'room' + (c.conversationId === state.openDmId ? ' active' : '');
+    btn.dataset.conversationId = c.conversationId; // 换装壳定向接管按会话 ID 定位（review-r48 §4）
     const stateText = c.archivedAt != null ? '（已归档）' : DM_STATE_TEXT[c.execState] ?? '';
     // 同成员多会话区分（第三十八轮 #6）：会话标题（有则用）→最近消息预览——一串相同成员名
     // 不可辨认是现场卡死路径之一（用户始终误入空白会话）。

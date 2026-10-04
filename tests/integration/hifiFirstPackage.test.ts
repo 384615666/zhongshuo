@@ -68,13 +68,15 @@ export { loader, store };
 interface LoaderApi {
   openProjectByPath(path: string): Promise<void>;
   refreshRooms(): Promise<void>;
+  refreshDms(): Promise<void>;
   loadDmHistory(conversationId: string, opts?: { markRead?: boolean }): Promise<void>;
   sendRoomRoot(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): Promise<{ status: string; code?: string; error?: string }>;
   sendDmMessage(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): Promise<{ status: string; code?: string; error?: string }>;
   retryUnknownSend(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
+  buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): { commandId: string; method: 'message.submit'; params: Record<string, unknown> };
 }
 interface StoreApi {
-  getState(): { projects: Array<{ displayName: string }>; rooms: Array<{ id: string; memberIds: string[]; conversationId?: string }>; dmHistory: Record<string, Array<{ id: string; authorId: string; createdAt: number }>> };
+  getState(): { projects: Array<{ displayName: string }>; dms: Array<{ id: string; unread: number }>; rooms: Array<{ id: string; memberIds: string[]; conversationId?: string }>; dmHistory: Record<string, Array<{ id: string; authorId: string; createdAt: number }>> };
   setReadGate?(gate: ((conversationId: string) => boolean) | null): void;
 }
 interface Harness {
@@ -233,8 +235,11 @@ describe('第四十七轮 H1：打包 hifi 前端 × 正式 daemon × fake 库/w
       const changed = await h.raw('message.submit', { target: { kind: 'dm', projectId: projId, conversationId: dmId }, body: `${envBody}＋等待期新编辑`, intent: 'default', mentions: [] }, 'cmd-r47-win');
       expect(changed.ok).toBe(false);
       expect((changed.error as { code: string }).code).toBe('IDEMPOTENCY_CONFLICT');
-      // 同号**原信封**重放 → 幂等回执 ok；消息恰一条。
-      const replay = await L.retryUnknownSend({ commandId: 'cmd-r47-win', method: 'message.submit', params: { target: { kind: 'dm', projectId: projId, conversationId: dmId }, body: envBody, intent: 'default', mentions: [] } });
+      // 同号**原信封**重放 → 幂等回执 ok；消息恰一条。信封用**产品 builder** 生成（review-r48 §3：
+      // 不手工构造一份比产品更正确的参数）；参数与 builder 再生成结果逐字段一致。
+      const env = L.buildDmEnvelope('cmd-r47-win', dmId, envBody, 'default');
+      expect(env.params).toEqual({ target: { kind: 'dm', projectId: projId, conversationId: dmId }, body: envBody, intent: 'default', mentions: [] });
+      const replay = await L.retryUnknownSend(env);
       expect(replay.status).toBe('ok');
       const count = (h.db.prepare(`SELECT count(*) c FROM messages WHERE conversation_id = ? AND body_json LIKE ?`).get(dmId, `%${envBody}%`) as { c: number }).c;
       expect(count).toBe(1);

@@ -311,6 +311,7 @@ app.whenReady().then(async () => {
   // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
   // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
   let firstCommandDelayed = false;
+let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONCE）
   // 本机可信 UI 的 IPC sender 校验（第三十一轮三）：preload 桥（zs:command/openPath/pickFolder）
   // 只接受**本应用窗口**（zsres://app/ 源）的帧——其他任何加载进该窗口的内容拿不到桥；
   // 不以 loopback 地址替代来源校验（远程页面即使被误载也无法调用本机保留命令）。
@@ -331,6 +332,15 @@ app.whenReady().then(async () => {
         firstCommandDelayed = true;
         await new Promise((r) => setTimeout(r, Number(ms) || 0));
       }
+    }
+    // 受控丢回执（第四十九轮 H1 验证钩子，ZS_H1_LOSE_SUBMIT_ONCE=1）：丢弃**第一次**
+    // message.submit 的回执（不回 IPC——渲染层按结果未知处理）——用于在真实打包链上验证
+    // 「提交已成功、回执丢失」的原信封重试。命令仍会送达 daemon（业务恰一次由幂等保证）。
+    if (process.env.ZS_H1_LOSE_SUBMIT_ONCE === '1' && (envelope as { method?: string })?.method === 'message.submit' && !hifiLoseOnce) {
+      hifiLoseOnce = true;
+      await ensureConnection();
+      void pipe!.send(envelope).catch(() => { /* 送达失败同样表现为丢回执 */ });
+      return new Promise<never>(() => { /* 永不回执 */ });
     }
     await ensureConnection(); // 就绪截止/并发共享/退出即败（见函数头）
     return pipe!.send(envelope);

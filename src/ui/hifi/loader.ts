@@ -216,7 +216,7 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
       const lastSeq = last ? (last.conversationSeq ?? last.conversation_seq) : undefined;
       if (lastSeq != null) {
         void command('conversation.markRead', { conversationId, throughMessageSeq: lastSeq })
-          .then(() => { if (stillCurrent(gen, projectId)) void refreshDms(); })
+          .then(() => { if (stillCurrent(gen, projectId)) return refreshDms().catch(() => { /* 归属已变/库关闭——下次再进 */ }); })
           .catch(() => { /* 下次进入再推进 */ });
       }
     }
@@ -233,6 +233,44 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
 const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId: string } | { kind: 'all' }> =>
   mentionIds.map((id) => (id === 'all' ? { kind: 'all' as const } : { kind: 'member' as const, memberId: id }));
 
+/**
+ * 唯一正式参数 builder（review-r48 §3）：发送前把**真正要发给 bridge 的完整请求**固化成
+ * 不可变信封（原 commandId+完整 target（含 projectId/conversationId/roomId——不从 UI 目标
+ * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
+ */
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): import('./data/store').PendingSendEnvelope {
+  const s = getState();
+  const room = s.rooms.find((r) => r.id === roomId);
+  return {
+    commandId,
+    method: 'message.submit',
+    params: {
+      target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room?.conversationId ?? '', roomId },
+      body, intent, mentions: mentionPayload(mentionIds),
+    },
+    targetLabel: `room:${roomId}`,
+    at: Date.now(),
+  };
+}
+
+export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): import('./data/store').PendingSendEnvelope {
+  const s = getState();
+  return {
+    commandId,
+    method: 'message.submit',
+    params: { target: { kind: 'dm', projectId: s.activeProjectId, conversationId }, body, intent, mentions: [] },
+    targetLabel: `dm:${conversationId}`,
+    at: Date.now(),
+  };
+}
+
+/** 发送不可变信封（正式管道——重试与首次共用，保证同号同参）。 */
+export async function sendEnvelope(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
+  const r = await sendCommand<SendResult>(env.commandId, env.method, env.params);
+  if (r.status === 'ok') recordWrite('message.submit', `${env.params.target.kind === 'dm' ? '私信' : '房间'} ${env.params.intent === 'record_only' ? '仅记录' : '发送'}（${String(env.params.body).slice(0, 24)}…）`);
+  return r;
+}
+
 export async function sendRoomRoot(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): Promise<BridgeOutcome<SendResult>> {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
@@ -240,22 +278,11 @@ export async function sendRoomRoot(commandId: string, roomId: string, body: stri
   if (room.memberIds.length === 0 && intent === 'default') {
     return { status: 'failed', code: 'NO_MEMBERS', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
   }
-  const r = await sendCommand<SendResult>(commandId, 'message.submit', {
-    target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room.conversationId, roomId }, // 正式合同：带 roomId
-    body, intent, mentions: mentionPayload(mentionIds),
-  });
-  if (r.status === 'ok') recordWrite('message.submit', `房间「${room.name}」${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
-  return r;
+  return sendEnvelope(buildRoomRootEnvelope(commandId, roomId, body, intent, mentionIds));
 }
 
 export async function sendDmMessage(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): Promise<BridgeOutcome<SendResult>> {
-  const s = getState();
-  const r = await sendCommand<SendResult>(commandId, 'message.submit', {
-    target: { kind: 'dm', projectId: s.activeProjectId, conversationId },
-    body, intent, mentions: [],
-  });
-  if (r.status === 'ok') recordWrite('message.submit', `私信 ${intent === 'record_only' ? '仅记录' : '发送'}（${body.slice(0, 24)}…）`);
-  return r;
+  return sendEnvelope(buildDmEnvelope(commandId, conversationId, body, intent));
 }
 
 export async function createDm(memberId: string): Promise<string> {
@@ -265,7 +292,7 @@ export async function createDm(memberId: string): Promise<string> {
   return r.conversationId;
 }
 
-/** 结果未知信封的严格重发（review-r47 §2）：原 commandId+原参数逐字重发——不重组。 */
+/** 结果未知信封的严格重发（review-r47 §2/r48 §3）：原 commandId+原参数逐字重发——不重组。 */
 export async function retryUnknownSend(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
-  return sendCommand<SendResult>(env.commandId, env.method, env.params);
+  return sendEnvelope(env);
 }

@@ -9,7 +9,9 @@ import { useEffect, useMemo, useRef } from 'react';
 import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
-import { useStore, loadDmHistory, sendDmMessage, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
+import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
+import { buildDmEnvelope, sendEnvelope } from './loader';
+import { parkUnknownEnvelope } from './data/store';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
 const EXEC_TEXT: Record<string, string> = {
@@ -69,7 +71,7 @@ export function DmPage() {
 
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0, flex: 1 }}>
-      <div className="sidebar-scroll" style={{ width: 224, borderRight: '1px solid var(--border)', padding: 8, minHeight: 0, overflow: 'auto' }}>
+      <div className="sidebar-scroll" style={{ flex: '0 0 224px', width: 224, borderRight: '1px solid var(--border)', padding: 8, minHeight: 0, overflow: 'auto' }}>
         <div className="side-heading">私信</div>
         {dms.length === 0 ? <div className="side-empty">本项目暂无私信会话</div> : null}
         {dms.map((d) => (
@@ -126,13 +128,20 @@ export function DmPage() {
                   return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
                 })}
                 onSend={(p): Promise<FormalSendOutcome> => (async () => {
-                  const r = await sendDmMessage(p.commandId, active.id, p.body, p.sendAs === 'record' ? 'record_only' : 'default');
+                  // 发送前固化完整正式信封（dm 目标=projectId+conversationId——不带 UI 的
+                  // roomId/dmId 私有字段，review-r48 §3）；unknown 冻结原信封。
+                  const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+                  const draftKey = `dm:${active.id}`;
+                  const env = buildDmEnvelope(p.commandId, active.id, p.body, intent);
+                  env.revAtSend = p.draftRev;
+                  const r = await sendEnvelope(env);
                   if (r.status === 'ok') {
-                    void loadDmHistory(active.id, { markRead: true });
-                    void refreshDms();
-                    toast(p.sendAs === 'record' ? '已仅记录（不派发）' : '已发送', 'success');
+                    void loadDmHistory(active.id, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
+                    void refreshDms().catch(() => { /* 列表失败另有呈现 */ });
+                    toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
                     return { status: 'ok' };
                   }
+                  if (r.status === 'unknown') parkUnknownEnvelope(draftKey, env);
                   return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
                 })()}
               />

@@ -2,7 +2,45 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-04 第四十七轮，唯一权威快照）
+## 当前真实状态（2026-10-04 第四十九轮，唯一权威快照）
+
+> R47=H1 合同/异步/接管/类型门（0b8dacb）；R48=首包时序收口+hifi-h1-win-v1 工程候选
+> （b264a40——**复核认定未达交付门**：启动器缺 seed 依赖/未跑 bat/信封仍 UI 重造）；R49=
+> 按review-r48 五项收口并交 **hifi-h1-win-v2**（可短测首包）。H2/H3 未开始；Android 仍用 v6。
+> - **[P0 启动器]** make-hifi-h1-package.mjs 入库：pack-desktop 产物+seed（seed-client.cjs
+>   **+回归幻灯.pptx**——缺件会静默跳过导致主池空，v1 的根因）+self-check+README-H1+
+>   SHORT-TEST 模板（5 项约 5–10 分钟）+start-server.bat（**清父环境 ZS_\***，保留两个
+>   注明的工程直通：CDP 端口/受控丢回执；种子失败 exit /b 1；调试端口尊重直通变量）；
+>   清单逐件核对 591/591。
+> - **[P1 信封]** loader 唯一正式 builder（buildRoomRootEnvelope/buildDmEnvelope——
+>   projectId/conversationId 齐全，不从 ComposerTarget 重造）；页面**发送前**构建不可变
+>   信封+unknown 时页侧 park（不再回读 commandIdRef——A 切 B 换号反例收口）；
+>   retryUnknownSend=sendEnvelope（同号同参逐字重发）。
+> - **[P1 测试去假阳性]** 冒烟 P7：重试信封与原发**全参数 JSON 逐字节一致**+无失败行内
+>   错误+队列语义（第二条未知顶上属预期）；真实链用**产品 builder** 生成重放信封（不再
+>   手工构造比产品更正确的参数）。
+> - **[P2 生命周期]** 每键锁 Set（A 回执 finally 只删 A 键）；草稿编辑代次 rev（等待期
+>   有编辑→整份保留不剥离）；连续 unknown 排队不覆盖；标读/刷新浮promise 全 catch
+>   （未处理拒绝退出码 1 收口）。
+> - **[P2 接管身份]** legacy 侧栏按钮带 data-room-id/data-conversation-id；locate 按
+>   **机器身份**精确匹配（CSS.escape；房间缺属性才回退名称并标注）——同成员第二会话/
+>   同名房间不再错开。
+> - **受控丢回执钩子**：main.ts ipcMain `ZS_H1_LOSE_SUBMIT_ONCE=1` 丢弃首次
+>   message.submit 回执（命令仍送达）——真包上验证「提交已成功、回执丢失」重试链。
+> - **三连全链（最终冻结产物 bld_5f1b092fed6e6240，591/591 清单）allPass=true**：verify-hifi-package.cjs
+>   每轮实跑 bat（run1 预杀+清数据根真首启、经「H1 验证 副本」中文+空格 junction 路径）：
+>   首启自动项目→房间样本（150s 种子宽窗）→**丢回执→banner→重发原信封→消息恰一次**→
+>   跨目标草稿→仅记录→DM 发送+回复→按会话 ID 接管/返回（hash 归一断言）→Browser.close
+>   优雅退出→零残留→real_calls=0（直读包内 state.sqlite）。证据 hifi-h1-verify/run{1..3}.json+summary.json。
+> - **视觉对照（vision-tester）**：原型（03/01/07）vs H1 同窗对照——两项明显空间问题已修
+>   （h1-overrides.css 消息卡通栏对齐输入区；DmPage 会话列 flexBasis 224px 阅读区占 81%）
+>   复核双 PASS；顶栏/房间 tabs/composer 状态行/侧栏分区等为 H1 范围裁剪，登记非缺陷。
+> - 验证面全绿：全量 **854/854**、typecheck+typecheck:hifi、hifi-shell 9/9、ui-hidden-layout 7/7、
+>   hifiFirstPackage 2/2（无未处理拒绝）。
+> - **用户短测**：双击 hifi-h1-win-v2/start-server.bat → 按 RESULTS/SHORT-TEST-template.md
+>   五项（约 5–10 分钟）；v1=v1 工程候选保留未删。
+
+## 上一轮快照（2026-10-04 第四十七轮）
 
 > 本轮=**H1 首包收口（review-r45-r46 全部 P1/P2）**：正式命令合同、异步发送、能力如实、
 > 首启/归属/水位、定向接管、独立 hifi 类型门与真实链测试。R48 交默认新界面的可运行首包

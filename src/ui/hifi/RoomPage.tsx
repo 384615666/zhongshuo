@@ -9,7 +9,9 @@ import { useEffect, useMemo, useRef } from 'react';
 import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
-import { useStore, loadRoomPool, sendRoomRoot, retryUnknownSend, toast, setState } from './shell';
+import { useStore, loadRoomPool, retryUnknownSend, toast, setState } from './shell';
+import { buildRoomRootEnvelope, sendEnvelope } from './loader';
+import { parkUnknownEnvelope } from './data/store';
 
 const EMPTY: never[] = [];
 /** 正式侧能力锁定（第四十七轮）：未接通的能力点击前禁用并说明。 */
@@ -69,13 +71,22 @@ export function RoomPage({ roomId }: { roomId: string }) {
           return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
         })}
         onSend={(p): Promise<FormalSendOutcome> => (async () => {
-          // 正式异步合同：回执 ok 才清空（Composer 内部处理）；failed/unknown 行内呈现并保留草稿。
-          const r = await sendRoomRoot(p.commandId, roomId, p.body, p.sendAs === 'record' ? 'record_only' : 'default', p.mentionIds);
+          // 发送前用唯一正式 builder 固化完整信封（含 projectId/conversationId/roomId——
+          // 不从 UI 目标重造，review-r48 §3）；unknown 时按发起键冻结这份原信封。
+          const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+          if (roomMembers.length === 0 && intent === 'default') {
+            return { status: 'failed', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
+          }
+          const draftKey = `room:${roomId}`;
+          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds);
+          env.revAtSend = p.draftRev;
+          const r = await sendEnvelope(env);
           if (r.status === 'ok') {
-            void loadRoomPool(roomId);
-            toast(p.sendAs === 'record' ? '已仅记录（不派发）' : '已发送', 'success');
+            void loadRoomPool(roomId).catch(() => { /* 读取失败另有呈现 */ });
+            toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
             return { status: 'ok' };
           }
+          if (r.status === 'unknown') parkUnknownEnvelope(draftKey, env);
           return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
         })()}
       />

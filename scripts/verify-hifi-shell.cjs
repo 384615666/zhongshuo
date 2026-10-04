@@ -257,8 +257,11 @@ async function main() {
     await sleep(700);
     const p7retry = (await getSent(win)).filter((e) => e.method === 'message.submit' && e.commandId === p7orig?.commandId);
     const p7bannerAfter = await win.webContents.executeJavaScript(probe(`[...document.querySelectorAll('#hifi-root .chip.record-chip')].some((e) => e.textContent.includes('结果未知'))`), true);
-    results.P7_unknownEnvelope = { bannerAtUnknown: p7banner1, textareaKept: p7ta1, origId: p7orig?.commandId, editedId: p7edited?.commandId, retryCount: p7retry.length, retryBody: p7retry[0]?.params?.body, bannerAfterRetry: p7bannerAfter,
-      pass: p7banner1 === true && p7ta1 === 'COMMITLOSE 原始内容' && p7orig != null && p7edited != null && p7orig.commandId !== p7edited.commandId && retryClicked === true && p7retry.length === 1 && p7retry[0].params.body === 'COMMITLOSE 原始内容' && p7bannerAfter === false };
+    // 去假阳性（review-r48 §3）：完整参数逐字段一致（不只正文）+ 重试后无失败行内错误（ok 才清 banner）。
+    const paramsEqual = p7orig != null && p7retry.length >= 2 && p7retry.every((e) => JSON.stringify(e.params) === JSON.stringify(p7orig.params));
+    const noFailureAfterRetry = await win.webContents.executeJavaScript(probe(`![...document.querySelectorAll('#hifi-root .composer-draft.failed')].some((e) => e.textContent.includes('重发失败') || e.textContent.includes('发送失败'))`), true);
+    results.P7_unknownEnvelope = { diff: { orig: p7orig && JSON.stringify(p7orig.params), retry0: p7retry[0] && JSON.stringify(p7retry[0].params), retry1: p7retry[1] && JSON.stringify(p7retry[1].params) }, bannerAtUnknown: p7banner1, textareaKept: p7ta1, origId: p7orig?.commandId, editedId: p7edited?.commandId, retryCount: p7retry.length, retryBody: p7retry[p7retry.length - 1]?.params?.body, paramsEqual, noFailureAfterRetry, bannerAfterRetry: p7bannerAfter,
+      pass: p7banner1 === true && p7ta1 === 'COMMITLOSE 原始内容' && p7orig != null && p7edited != null && p7orig.commandId !== p7edited.commandId && retryClicked === true && p7retry.length === 2 && p7retry[0].params.body === 'COMMITLOSE 原始内容' && paramsEqual === true && noFailureAfterRetry === true };
 
     // ---------- P8 迟到成功只清发起目标 ----------
     await win.webContents.executeJavaScript(probe(`(() => { const ta = document.querySelector('#hifi-root textarea'); const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, '共同前缀A'); ta.dispatchEvent(new Event('input', { bubbles: true })); [...document.querySelectorAll('#hifi-root button')].find((b) => b.textContent.trim() === '发送')?.click(); return true; })()`), true);

@@ -37,18 +37,19 @@ const LEGACY_TARGETS: Record<string, { label: string; locate: () => string | nul
   remote: { label: '远程访问设置', locate: () => openDetails('remote-settings') },
 };
 
-/** 按**名称**定位 legacy 侧栏目标（当前项目/会话身份携带——r47 §5：不让用户重找）。 */
-function locateLegacyRoom(name: string): string | null {
-  const btn = [...document.querySelectorAll('#room-list .room-item, #room-list button')].find((b) => (b.textContent ?? '').includes(name));
-  if (btn == null) return `原界面未找到房间「${name}」`;
-  (btn as HTMLElement).click();
-  return null;
+/** 按机器身份定位 legacy 目标（review-r48 §4：名称 includes 会把同成员第二个会话/同名房间
+ * 打开成第一个——一律先 data-room-id/data-conversation-id 精确匹配，缺属性才回退名称并标注）。 */
+function locateLegacyRoom(roomId: string, name: string): string | null {
+  const byId = document.querySelector(`#room-list .room-item[data-room-id="${CSS.escape(roomId)}"]`) as HTMLElement | null;
+  if (byId != null) { byId.click(); return null; }
+  const byName = [...document.querySelectorAll('#room-list .room-item')].find((b) => (b.textContent ?? '').includes(name));
+  if (byName != null) { (byName as HTMLElement).click(); return `已按名称回退定位房间「${name}」（原界面缺 data-room-id——建议升级包）`; }
+  return `原界面未找到房间「${name}」（${roomId}）`;
 }
-function locateLegacyDm(peerOrTitle: string): string | null {
-  const btn = [...document.querySelectorAll('#dm-list button')].find((b) => (b.textContent ?? '').includes(peerOrTitle));
-  if (btn == null) return `原界面未找到私信「${peerOrTitle}」`;
-  (btn as HTMLElement).click();
-  return null;
+function locateLegacyDm(conversationId: string, fallbackLabel: string): string | null {
+  const byId = document.querySelector(`#dm-list button[data-conversation-id="${CSS.escape(conversationId)}"]`) as HTMLElement | null;
+  if (byId != null) { byId.click(); return null; }
+  return `原界面未找到私信会话 ${conversationId}（${fallbackLabel}）——不按名称猜测`;
 }
 
 function openDetails(id: string): string | null {
@@ -88,11 +89,11 @@ export function takeLegacy(targetKey: string): void {
   if (targetKey === 'current-room') {
     const currentRoomId = state.ui.activeRoomId || (state.rooms[0]?.id ?? '');
     const room = state.rooms.find((r) => r.id === currentRoomId) ?? state.rooms[0];
-    target = room != null ? { label: `房间 ${room.name}`, locate: () => locateLegacyRoom(room.name) } : LEGACY_TARGETS.tasks!;
+    target = room != null ? { label: `房间 ${room.name}`, locate: () => locateLegacyRoom(room.id, room.name) } : LEGACY_TARGETS.tasks!;
   } else if (targetKey === 'current-dm') {
     const dm = state.dms.find((d) => d.id === state.ui.activeThreadId) ?? state.dms[0];
     const label = dm != null ? `${dm.peerDisplayName ?? ''}${dm.title != null && dm.title.length > 0 ? ` · ${dm.title}` : ''}` : '';
-    target = dm != null ? { label: `私信 ${label}`, locate: () => locateLegacyDm(label.split(' · ')[0] || dm.id) } : LEGACY_TARGETS.search;
+    target = dm != null ? { label: `私信 ${label}`, locate: () => locateLegacyDm(dm.id, label) } : LEGACY_TARGETS.search;
   } else {
     target = LEGACY_TARGETS[targetKey] ?? { label: targetKey, locate: () => null };
   }

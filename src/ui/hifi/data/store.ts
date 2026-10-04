@@ -75,7 +75,7 @@ export function useStore<T>(selector: (s: HifiState) => T): T {
 }
 
 /* ---------- 草稿（Composer 契约：按 draftKey 存整份草稿；缺省返回空草稿——原型 seeds 同形） ---------- */
-export interface HifiDraft { body: string; mentions: string[]; attachments: Array<{ name: string; size: number }>; access: string; sendAs: 'ai' | 'record' }
+export interface HifiDraft { body: string; mentions: string[]; attachments: Array<{ name: string; size: number }>; access: string; sendAs: 'ai' | 'record'; rev?: number }
 
 /** 结果未知的在途信封（不可变快照——重试只发这一份）。 */
 export interface PendingSendEnvelope {
@@ -84,6 +84,10 @@ export interface PendingSendEnvelope {
   params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }> };
   targetLabel: string;
   at: number;
+  /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */
+  revAtSend?: number;
+  /** 同键连续未知（review-r48 §4）：先到先重试，不覆盖前一份未确认信封。 */
+  queued?: PendingSendEnvelope[];
 }
 
 export function setReadGate(gate: ((conversationId: string) => boolean) | null): void {
@@ -96,16 +100,32 @@ export function canMarkRead(conversationId: string): boolean {
 }
 
 export function parkUnknownEnvelope(draftKey: string, env: PendingSendEnvelope): void {
-  setState((s) => ({ ...s, pendingSends: { ...s.pendingSends, [draftKey]: env } }));
+  setState((s) => {
+    const cur = s.pendingSends[draftKey];
+    if (cur == null) return { ...s, pendingSends: { ...s.pendingSends, [draftKey]: env } };
+    // 已有未确认信封：排队（不覆盖前一份——review-r48 §4）。
+    return { ...s, pendingSends: { ...s.pendingSends, [draftKey]: { ...cur, queued: [...(cur.queued ?? []), env] } } };
+  });
 }
 
+/** 清除队首信封：有排队则下一条顶上（banner 连续重试），否则清空。 */
 export function clearUnknownEnvelope(draftKey: string): void {
-  setState((s) => { const next = { ...s.pendingSends }; delete next[draftKey]; return { ...s, pendingSends: next }; });
+  setState((s) => {
+    const cur = s.pendingSends[draftKey];
+    if (cur != null && (cur.queued ?? []).length > 0) {
+      const [head, ...rest] = cur.queued as PendingSendEnvelope[];
+      return { ...s, pendingSends: { ...s.pendingSends, [draftKey]: { ...head, queued: rest } } };
+    }
+    const next = { ...s.pendingSends }; delete next[draftKey];
+    return { ...s, pendingSends: next };
+  });
 }
 const emptyDraft = (): HifiDraft => ({ body: '', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
 const drafts = new Map<string, HifiDraft>();
+let draftRev = 0;
 export function getDraftFull(key: string): HifiDraft { return drafts.get(key) ?? emptyDraft(); }
-export function setDraftFull(key: string, draft: unknown): void { drafts.set(key, draft as HifiDraft); }
+/** 每次写入递增编辑代次（清算按代次判定——等待期编辑过则不剥离已发内容）。 */
+export function setDraftFull(key: string, draft: unknown): void { draftRev += 1; drafts.set(key, { ...(draft as HifiDraft), rev: draftRev }); }
 
 /* ---------- 提示与主题 ---------- */
 export type ToastTone = 'info' | 'warn' | 'error' | 'success';
