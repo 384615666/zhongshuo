@@ -680,6 +680,10 @@ export function Composer({
       const next = prev.filter((m) => m !== 'all');
       return next.includes(id) ? next : [...next, id];
     });
+    // 选中成员后清掉正文里遗留的触发字符「@」（用户短测 T2：芯片已选但正文仍留孤立 @——
+    // 指派事实在 mentions/信封里，但呈现上像没选上）。只剥最后一个孤立的 @（用户在其后
+    // 继续输入的正文不动）。
+    setBody((cur) => (/(^|\s)@$/.test(cur) ? cur.replace(/(^|\s)@$/, '$1') : cur));
     setMentionOpen(false);
     textareaRef.current?.focus();
   }

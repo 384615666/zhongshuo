@@ -45,8 +45,12 @@
 >   再 useMemo 过滤）；portal 不清容器（最小壳+React 栏叠加 6 键——挂载时移除非 React 兄弟）；
 >   http keep-alive 让 server.close() 永等（closeAllConnections+有界退出）；listen error 无处理
 >   =启动挂死（once('error',rej)）；⌂ 按钮挂 body 不在 #hifi-root；mine.pending 无任务标题字段。
-> - **[待办]** 用户 H2-v2 短测反馈（优先处理实际失败）+H3-v1 短测（README-H3 六项）；R55=
->   反馈处理+H3 收尾余项（搜索/收藏、活动流、成果列表归位评估）。
+> - **[用户 H2-v2 短测已回填]** `hifi-h2-v2-short-test-record-20261005.md`（T1/T3/T5/T6/T7
+>   PASS；T4 图片门 PASS+执行受阻=**M0 不支持未指派 AUTO 的模式边界**（mode_unavailable_in_m0，
+>   如实不记缺陷）；**T2 提及呈现缺陷**：选 Guide A 后正文残留孤立「@」——R54 已修
+>   （insertMention 剥离末尾孤立 @，仅 typecheck+构建验证，**页面级复证在 R55**）。
+> - **[待办]** R55=短测遗留复证（T2 修复页面级+T4 模式边界的界面说明评估）+H3-v1 短测
+>   （README-H3 六项）+H3 收尾余项（搜索/收藏、活动流、成果列表归位评估）。
 
 ## 上一轮快照（2026-10-05 第五十三轮）
 
