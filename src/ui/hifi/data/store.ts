@@ -24,8 +24,8 @@ export interface ThreadTaskDetail {
   stopGeneration: number;
   activeRun: { id: string; status: string } | null;
   pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
-  /** r58 返工待执行（验收与执行分离呈现：「意见已记录、尚未执行」/已入队）。 */
-  reworkPending: { deliveryRevision: number; note: string | null; queued: boolean } | null;
+  /** r58 返工待执行（验收与执行分离呈现）；r59 含完整执行身份（点击冻结快照）。 */
+  reworkPending: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
   lastStartupFailureMessage?: string | null;
 }
 

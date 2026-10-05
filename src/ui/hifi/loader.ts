@@ -21,7 +21,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryRevision: number; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
+interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
@@ -254,7 +254,7 @@ interface TaskGetData {
   task: { id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number };
   activeRun: { id: string; status: string } | null;
   pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
-  reworkPending?: { deliveryRevision: number; note: string | null; queued: boolean } | null;
+  reworkPending?: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
   lastStartupFailureMessage?: string;
 }
 
@@ -589,12 +589,13 @@ export async function submitTaskReview(snapshot: ReviewSnapshot, decision: 'acce
   }
 }
 
-/** 执行返工（r58，验收与执行分离）：意见已由 task.review 入账；本入口只传任务号——
- * 意见/版本以服务端事实为准。入队成功后由轮询自然推进（新交付→再次待验收）。 */
-export async function executeTaskRework(taskId: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }> {
+/** 执行返工（r58 验收与执行分离；r59 完整身份绑定）：意见已由 task.review 入账；本入口
+ * 传**点击时冻结的交付完整快照**（id/revision/manifestHash/sourceRunId）——服务端事务内核
+ * 核对当前返工事实，旧引用（页面未刷新、另一路已推进到新返工）STALE 拒绝不改绑。 */
+export async function executeTaskRework(snapshot: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string }, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    await command('task.executeRework', { taskId, reason: '用户点击「执行返工」' });
-    recordWrite('task.executeRework', `执行返工（任务 ${taskId.slice(0, 14)}…）`);
+    await command('task.executeRework', { taskId: snapshot.taskId, deliveryId: snapshot.deliveryId, deliveryRevision: snapshot.deliveryRevision, manifestHash: snapshot.manifestHash, sourceRunId: snapshot.sourceRunId, reason: '用户点击「执行返工」' });
+    recordWrite('task.executeRework', `执行返工（任务 ${snapshot.taskId.slice(0, 14)}… v${snapshot.deliveryRevision}）`);
     if (threadIdForRefresh != null) await refreshThreadTask(threadIdForRefresh).catch(() => { /* 详情下次进入刷新 */ });
     return { ok: true };
   } catch (e) {

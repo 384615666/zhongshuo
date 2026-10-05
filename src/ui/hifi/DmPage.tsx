@@ -196,16 +196,21 @@ export function DmPage() {
     } catch (e) { toast(`恢复被拒：${(e as Error).message}`, 'error'); }
     finally { setBusy(null); }
   };
-  /** 执行返工（r58 验收与执行分离）：意见已在 task.review 入账；此处只传任务号——
-   * 入队后由轮询推进（新交付 revision+1 → 再次待验收）。 */
-  const doExecuteRework = async (taskId: string) => {
-    setBusy(`rework:${taskId}`);
-    try {
-      const r = await executeTaskRework(taskId);
-      if (!r.ok) { toast(`执行返工被拒：${r.error}`, 'error'); await reloadAll(); return; }
-      toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
-      await reloadAll();
-    } finally { setBusy(null); }
+  /** 执行返工（r58 验收与执行分离；r59 完整身份）：点击时冻结 reworkPending 快照——
+   * 服务端核对当前返工事实，旧引用（数据已推进）STALE 拒绝不改绑。 */
+  const doExecuteRework = () => {
+    const rp = active?.reworkPending;
+    if (rp == null) return;
+    const snapshot = { taskId: rp.taskId, deliveryId: rp.deliveryId, deliveryRevision: rp.deliveryRevision, manifestHash: rp.manifestHash, sourceRunId: rp.sourceRunId };
+    setBusy(`rework:${rp.taskId}`);
+    void (async () => {
+      try {
+        const r = await executeTaskRework(snapshot);
+        if (!r.ok) { toast(`执行返工被拒：${r.error}——已刷新为当前返工事实`, 'error'); await reloadAll(); return; }
+        toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
+        await reloadAll();
+      } finally { setBusy(null); }
+    })();
   };
   const doExport = async (format: 'md' | 'html' | 'docx') => {
     if (active == null) return;
@@ -341,19 +346,19 @@ export function DmPage() {
                 ) : null}
               </div>
             ) : null}
-            {/* 返工待执行（r58 验收与执行分离）：意见已记录、尚未执行——明确入口续跑，
-                不自动执行、不等「出新稿」。执行中由队列/运行态呈现，新交付落回待验收面板。 */}
+            {/* 返工待执行（r58 验收与执行分离；r59 状态分列）：尚未执行/执行中按真实
+                事实作主标题（不再已入队仍称「尚未执行」），明确入口续跑、不自动执行。 */}
             {active.reworkPending != null ? (
-              <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-rework="hifi">
+              <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-rework="hifi" data-zs-dm-rework-state={active.reworkPending.queued ? 'executing' : 'recorded'}>
                 <div className="row tight wrap">
                   <Icon name="refresh" size={13} />
-                  <strong>返工意见已记录、尚未执行</strong>
+                  <strong>{active.reworkPending.queued ? '返工执行中（已入队/派发）' : '返工意见已记录、尚未执行'}</strong>
                   <Tag tone="warning">v{active.reworkPending.deliveryRevision} 被要求修改</Tag>
                   <span style={{ flex: 1 }} />
                   {active.reworkPending.queued ? (
-                    <span className="faint small">返工执行中（已入队/派发）——完成后交付升级为新待验收版本</span>
+                    <span className="faint small">完成后交付升级为新待验收版本</span>
                   ) : (
-                    <button className="btn sm" disabled={busy != null} data-zs-dm-rework-run="1" title="执行返工（task.executeRework——同任务新执行，意见注入模型输入）" onClick={() => void doExecuteRework(active.reworkPending!.taskId)}>执行返工</button>
+                    <button className="btn sm" disabled={busy != null} data-zs-dm-rework-run="1" title={`执行返工（task.executeRework——同任务新执行，意见注入模型输入；绑定 v${active.reworkPending.deliveryRevision} 完整身份）`} onClick={doExecuteRework}>执行返工</button>
                   )}
                 </div>
                 {active.reworkPending.note != null ? (

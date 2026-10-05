@@ -77,23 +77,27 @@ export interface DmConversationSummary {
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
   pendingReview: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离）：最近人工验收=要求修改、任务回 ACTIVE 且无更新交付
-   * ——「意见已记录、尚未执行」；queued=已入队（执行中）。意见文本来自服务端验收记录。 */
-  reworkPending: { taskId: string; deliveryRevision: number; note: string | null; queued: boolean } | null;
+   * ——「意见已记录、尚未执行」；queued=已入队（执行中）。意见文本来自服务端验收记录。
+   * r59（review-r58 §2）：补齐**完整执行身份**（deliveryId/manifestHash/sourceRunId）——
+   * 页面点击时冻结此快照，命令事务内核核对（旧引用 STALE，不改绑新返工）。 */
+  reworkPending: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
 }
 
 /**
  * r58（review-r57 §3）：任务级返工待执行事实（只读派生）——最近（最高版本）交付的验收
  * 结果=changes_requested 且任务 ACTIVE（无更新交付、停止未生效）→「意见已记录、尚未执行」。
  * 新交付产生（更高 revision）或任务终态后自然消失；queued=该任务已有在途恢复/返工意图。
+ * r59：返回完整执行身份（deliveryId/manifestHash/sourceRunId）供命令快照绑定。
  */
-export function reworkPendingOf(db: ZhongshuoDatabase, taskId: string): { deliveryRevision: number; note: string | null; queued: boolean } | null {
+export function reworkPendingOf(db: ZhongshuoDatabase, taskId: string): { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null {
   try {
     const task = db.prepare('SELECT status, stop_generation FROM tasks WHERE id = ?').get(taskId) as { status: string; stop_generation: number } | undefined;
     if (task == null || task.status !== 'ACTIVE' || task.stop_generation > 0) return null;
-    const last = db.prepare('SELECT revision, review_status, review_note FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(taskId) as { revision: number; review_status: string; review_note: string | null } | undefined;
+    const last = db.prepare('SELECT id, revision, manifest_hash, review_status, review_note, run_id FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(taskId) as { id: string; revision: number; manifest_hash: string; review_status: string; review_note: string | null; run_id: string | null } | undefined;
     if (last == null || last.review_status !== 'changes_requested') return null;
+    if (last.run_id == null) return null; // 来源 run 缺失=无法绑定执行快照（如实不呈现入口）
     const queued = (db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key GLOB ? AND status != 'done'`).get(`task:${taskId}:redispatch*`) as { c: number }).c > 0;
-    return { deliveryRevision: last.revision, note: last.review_note, queued };
+    return { deliveryId: last.id, deliveryRevision: last.revision, manifestHash: last.manifest_hash, sourceRunId: last.run_id, note: last.review_note, queued };
   } catch {
     return null; // 派生呈现失败=不显示（不阻塞会话列表），操作侧守卫仍以命令事实为准
   }
@@ -186,7 +190,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       interruptedTasks: interrupted,
       lastMessagePreview,
       pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision, manifestHash: pendingReviewRow.manifestHash } : null,
-      reworkPending: reworkDerived != null && reworkTaskRow != null ? { taskId: reworkTaskRow.taskId, deliveryRevision: reworkDerived.deliveryRevision, note: reworkDerived.note, queued: reworkDerived.queued } : null,
+      reworkPending: reworkDerived != null && reworkTaskRow != null ? { taskId: reworkTaskRow.taskId, deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued } : null,
     });
   }
   return out;
