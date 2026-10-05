@@ -190,8 +190,14 @@ export class DispatchWorker {
    * 联动照常收口（两个释放路径都有 retained/UNKNOWN 门控——notStarted→FAILED+refunded
    * 但 retained 期间继续占用，正式解除后释放）。
    * 只读档无 writeRoot 占位；已完成 turn 不占（其 dispatch 已收口）。
+   * 恢复读取失败=占用无法核实：**抛错拒绝启动**（r58，review-r57 §2）——不按空账本放行。
    */
   private restoreAdmissionFromDb(): void {
+    // r58（review-r57 §2 独立反例）：占位查询失败**不得按空账本启动**——UNKNOWN/retained
+    // 的占用是持久合同，未知占用≠零占用；吞错会让 dispatch.resume 后同成员新任务直接派发
+    //（租约/门禁都不代守无租约 retained）。无法核实即沿启动错误路径抛错拒绝启动，由
+    // daemon 重启显式重试；行级恢复（providerKeyOf 的成员绑定读）失败同网（部分恢复失败
+    // 同样拒绝——漏一行就是漏一个占用）。预算/保护/审计事实在库中，重读不改写。
     try {
       const rows = this.db.prepare(
         `SELECT t.id AS turnId, t.member_id AS memberId, tk.project_id AS projectId
@@ -210,8 +216,8 @@ export class DispatchWorker {
           writeRootKey: null,
         });
       }
-    } catch {
-      /* 库不可读=无法恢复——按空账本启动（不阻塞 daemon；持久保护仍由租约/门禁守） */
+    } catch (err) {
+      throw new Error(`准入占位恢复失败——拒绝按未核实账本启动派发（重启 daemon 重试）：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

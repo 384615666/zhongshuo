@@ -9,6 +9,9 @@
  *     recovery.releaseProtection 正式解除（no-os-process 服务端证据）后排队项**恰一次**续跑。
  *     （r56 版②曾把「旧 UNKNOWN 未收口时另一任务成功派发」当正例——独立复核
  *     queue-retained-result.json 证伪，本文件按修复后合同重写；历史报告保留。）
+ *  ④ 恢复读取失败防护（r58，review-r57 §2 独立反例）：占位 SELECT 失败或行级绑定读失败
+ *     （部分恢复）都**拒绝启动**——不吞错按空账本放行；重试成功后占位继承、正式解除恰一次、
+ *     预算/审计事实不被改写。
  *  ③ 同一 DM 连续消息：串行排队、恰一次派发/入库。
  */
 import { describe, expect, it, afterAll } from 'vitest';
@@ -54,7 +57,7 @@ function must<T>(v: T | undefined | null, label: string): T {
   return v;
 }
 
-function makeEnv(opts: { fileDb?: string; scripts?: FakeTurnScript[]; adapter?: FakeRuntimeAdapter } = {}) {
+function makeEnv(opts: { fileDb?: string; scripts?: FakeTurnScript[]; adapter?: FakeRuntimeAdapter; releaseAdmission?: (turnId: string) => void } = {}) {
   const db: ZhongshuoDatabase = opts.fileDb != null ? openDatabase(opts.fileDb) : openDatabase(':memory:');
   const fresh = (db.prepare('SELECT count(*) c FROM projects').get() as { c: number }).c === 0;
   if (fresh) {
@@ -64,7 +67,9 @@ function makeEnv(opts: { fileDb?: string; scripts?: FakeTurnScript[]; adapter?: 
     db.prepare('INSERT INTO room_members (room_id, member_id) VALUES (?, ?)').run('r0', 'mA');
     db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_room','p1','room','r0')`).run();
   }
-  const deps = { db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'app') };
+  // releaseAdmission=entry 同款进程内联动（对账/解除命令→worker 内存账本）；缺省不接
+  //（r57 ②等用「新 worker 构造即恢复」路径证明，不依赖钩子）。
+  const deps = { db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(tmpRoot, 'app'), ...(opts.releaseAdmission != null ? { releaseAdmission: opts.releaseAdmission } : {}) };
   const cmd = async <T,>(method: string, params: unknown): Promise<T> => {
     const r = await dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `mq57-${randomUUID().slice(0, 8)}`, method, params }) as { ok: boolean; data?: T; error?: { code: string; message: string } };
     if (!r.ok) throw new Error(`${r.error?.code}: ${r.error?.message}`);
@@ -187,6 +192,95 @@ describe('同成员任务排队合同（r57：准入继承+受控忙碌，不绕
     expect(env.turnRow(turn1.id).status).toBe('FAILED');
     await env.worker().runOnce();
     expect(env.adapter.startTurnLog).toHaveLength(2);
+  }, 60_000);
+
+  it('④ 恢复读取失败防护（r58）：SELECT 失败/部分恢复失败均拒绝启动不按空账本放行；重试成功后占位继承、正式解除恰一次、预算审计不改写', async () => {
+    // 文件库（真实关闭/重开；Proxy 只注入指定 SELECT 的失败，其余 DB 操作原样——对应
+    // review-r57 §2 独立反例的注入形态：仅占位恢复读失败一次，后续操作正常）。
+    const fileDb = join(tmpRoot, 'mq58-restore.sqlite');
+    rmSync(fileDb, { force: true });
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => scripts.shift() ?? validDone() });
+    // entry 同款进程内联动占位：worker 构造后接 reconcileRelease（对账/解除命令→内存账本）。
+    let releaseHook: (turnId: string) => void = () => {};
+    const openEnv = () => makeEnv({ fileDb, scripts, adapter, releaseAdmission: (turnId) => releaseHook(turnId) });
+    let env = openEnv();
+    scripts.push([{ kind: 'stall', ms: 120_000 }, ...validDone()]);
+    const t1 = await env.submit('R58 恢复失败·任务一（在途→UNKNOWN）');
+    void env.worker().runOnce();
+    await until(() => env.taskTurns(t1.taskId).length, (n) => n === 1, 8000, '任务一 turn 建立');
+    const t2 = await env.submit('R58 恢复失败·任务二（排队）');
+    const key2 = `task:${t2.taskId}:initial`;
+    const turn1 = must(env.taskTurns(t1.taskId)[0], 'turn1');
+    applyRecovery(env.db, Date.now());
+    expect(env.turnRow(turn1.id).status).toBe('UNKNOWN');
+
+    // 注入器：armed 时匹配 SQL 的 prepare 直接抛错（其余透传原库）。
+    const arm = { sql: '', hits: 0 };
+    const dbProxy = new Proxy(env.db, {
+      get(target, prop, _receiver) {
+        if (prop === 'prepare') {
+          return (sql: string, ...rest: unknown[]) => {
+            if (arm.sql !== '' && arm.hits > 0 && sql.includes(arm.sql)) {
+              arm.hits -= 1;
+              throw new Error(`R58 注入：恢复读失败（模拟瞬时库忙）SQL=${sql.slice(0, 40)}`);
+            }
+            return target.prepare(sql, ...(rest as []));
+          };
+        }
+        const v = Reflect.get(target, prop, target) as unknown;
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    }) as unknown as ZhongshuoDatabase;
+    const mkWorker = () => new DispatchWorker({ db: dbProxy, adapter, leaseOwner: `w58-${randomUUID().slice(0, 4)}`, appDataDir: join(tmpRoot, 'app') });
+    const factsSnapshot = () => ({
+      turn1: env.turnRow(turn1.id),
+      runs1: env.taskRuns(t1.taskId).length,
+      turns2: env.taskTurns(t2.taskId).length,
+      events: env.count('SELECT count(*) c FROM domain_events'),
+    });
+    const before = factsSnapshot();
+
+    // 负例A（占位 SELECT 失败）：构造器抛错拒绝启动——不按空账本放行；库事实零变化。
+    arm.sql = "t.status = 'UNKNOWN'";
+    arm.hits = 1;
+    expect(() => mkWorker()).toThrow(/准入占位恢复失败/);
+    expect(factsSnapshot()).toEqual(before);
+
+    // 负例B（部分恢复失败）：占位 SELECT 成功、行级成员绑定读失败——漏一行=漏一个占用，同样拒绝。
+    arm.sql = 'FROM project_members pm';
+    arm.hits = 1;
+    expect(() => mkWorker()).toThrow(/准入占位恢复失败/);
+    expect(factsSnapshot()).toEqual(before);
+    arm.sql = '';
+
+    // 正例：重试（新构造）成功 → 占位继承。确认继续≠退出证明：同成员任务二零新增 startTurn。
+    const w = mkWorker();
+    releaseHook = (turnId: string) => w.reconcileRelease(turnId);
+    await env.cmd('dispatch.resume', { confirm: true });
+    await w.runOnce();
+    expect(must(env.outbox(key2), 'outbox key2').status).toBe('pending');
+    const deferred = env.events('run.admissionDeferred');
+    expect(deferred.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.parse(must(deferred[deferred.length - 1], 'deferral').payload_json)).toMatchObject({ reason: 'member' });
+    expect(adapter.startTurnLog).toHaveLength(1); // 只有崩溃前的任务一
+
+    // 预算/审计不改写：对账（FAILED+refunded+retained——无租约 retained 仍占）后正式解除 → 排队项恰一次续跑；任务一不复活。
+    await env.cmd('recovery.reconcile', { turnId: turn1.id, verdict: 'notStarted', note: 'R58 测试：启动窗口外确认未启动', manualRiskAck: true });
+    expect(env.turnRow(turn1.id)).toMatchObject({ status: 'FAILED', budget_mark: 'refunded', protection_state: 'retained' });
+    await w.runOnce(); // retained 期间继续零新增（无租约占用同守）
+    expect(adapter.startTurnLog).toHaveLength(1);
+    await env.cmd('recovery.releaseProtection', { turnId: turn1.id, note: 'R58 测试：no-os-process 程序事实解除' });
+    expect(env.turnRow(turn1.id).protection_state).toBe('released');
+    scripts.push(validDone());
+    await w.runOnce();
+    await until(() => env.task(t2.taskId).status, (st) => st === 'REVIEW' || st === 'DONE', 8000, '任务二解除后恰一次续跑');
+    expect(adapter.startTurnLog).toHaveLength(2);
+    expect(env.taskRuns(t1.taskId)).toHaveLength(1);
+    expect(env.turnRow(turn1.id)).toMatchObject({ status: 'FAILED', budget_mark: 'refunded' });
+    await w.runOnce();
+    expect(adapter.startTurnLog).toHaveLength(2);
+    env.db.close();
   }, 60_000);
 
   it('③ 同一 DM 连续消息：串行排队、恰一次派发（同成员合同在 DM 面同样成立）', async () => {
