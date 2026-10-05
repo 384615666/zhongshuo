@@ -21,10 +21,10 @@ import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
-import { useStore, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
+import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
 import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
-import { command } from './bridge';
+import { command, openExportDir } from './bridge';
 import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
@@ -68,6 +68,11 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   /** 成果标签页数据（r55）：会话附件 + 本任务交付（files.view 过滤）——代次收口，迟到不污染。 */
   const [artifacts, setArtifacts] = useState<{ attachments: ConversationAttachment[]; attErr: string | null; deliveries: DeliveryRow[]; delErr: string | null } | null>(null);
   const artGenRef = useRef(0);
+  /** 人的阅读订阅（r56 H4：thread.subscribe 关注/静音——与 Agent 执行名单分列）。 */
+  const [sub, setSub] = useState<{ followed: boolean; muted: boolean } | null>(null);
+  /** 消息引用插入（r56：消息菜单「引用」→ 草稿追加引用块——只改草稿，不派发）。 */
+  const [insertText, setInsertText] = useState<{ id: number; text: string } | null>(null);
+  const [subBusy, setSubBusy] = useState(false);
   const isRecordThread = entity != null && entity.rootTaskId == null;
   const msgs = replies ?? EMPTY;
   const projectIdOfRoom = useMemo(() => allRooms.find((r) => r.id === entity?.roomId)?.projectId ?? null, [allRooms, entity?.roomId]);
@@ -76,6 +81,24 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   useEffect(() => {
     void loadThread(threadId, { markRead: true });
   }, [threadId]);
+  // 人的阅读订阅事实（r56）：thread.subscriptions 只读查询本线程行（读失败不显示状态，不冒充）。
+  useEffect(() => {
+    let done = false;
+    void command<{ items: Array<{ threadId: string; followed: boolean; muted: boolean }> }>('thread.subscriptions', {})
+      .then((r) => { if (!done) setSub(() => { const hit = r.items.find((x) => x.threadId === threadId); return hit != null ? { followed: hit.followed, muted: hit.muted } : { followed: false, muted: false }; }); })
+      .catch(() => { /* 读失败=不显示关注态（按钮仍可用，点击后按回执更新） */ });
+    return () => { done = true; };
+  }, [threadId]);
+  const toggleSub = async (patch: { follow?: boolean; mute?: boolean }) => {
+    setSubBusy(true);
+    try {
+      const r = await command<{ followed: boolean; muted: boolean }>('thread.subscribe', { threadId, ...patch });
+      setSub({ followed: r.followed, muted: r.muted });
+      recordWrite('thread.subscribe', `${patch.follow != null ? (patch.follow ? '关注' : '取消关注') : ''}${patch.mute != null ? (patch.mute ? '静音' : '取消静音') : ''}（人的阅读订阅——不改执行名单）`);
+      toast(patch.mute === true ? '已静音（未读/通知聚合排除；待办保留）' : patch.follow === true ? '已关注（有新回复进「待我处理」）' : '订阅已更新', 'success');
+    } catch (e) { toast(`订阅更新失败：${(e as Error).message}`, 'error'); }
+    finally { setSubBusy(false); }
+  };
   // 线程标读门注册（review-r51 §4 修复）：当前线程+**当前回复视图**+前台+非接管+贴底——
   // 滚动容器**必须实际存在**（详情视图/未挂载时 listRef 为 null → 一律拒绝，缺省不标读）。
   // 门在 markRead 发起时重查本闭包；tab 变化时重注册（gate 引用最新 tab）。
@@ -138,13 +161,14 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   }, [threadId]);
   // 活动目标追踪（接管定位用）。
   useEffect(() => { setState((st) => ({ ...st, ui: { ...st.ui, activeRoomId: entity?.roomId ?? st.ui.activeRoomId } })); }, [entity?.roomId]);
-  // 直达消息定位（review-r51 §3.2 修复）：等目标元素**实际存在**（回复装载并渲染后）再滚动
-  // +高亮——有界轮询而非固定 350ms；超窗未出现则如实说明（不冒充已定位）。
+  // 直达消息定位（review-r51 §3.2 修复 + r56 长历史补读）：等目标元素**实际存在**再滚动+高亮；
+  // 不在已装载窗口时按 beforeSeq 游标**补读**（每轮 100 条，至多 5 轮），仍未见才如实「未定位」
+  // ——不静默冒充，也不只改路由。
   useEffect(() => {
     if (highlightMessageId == null) return;
     setTab('replies');
     let cancelled = false;
-    let tries = 0;
+    let rounds = 0;
     const locate = () => {
       if (cancelled) return;
       const el = document.getElementById('msg-' + highlightMessageId);
@@ -154,16 +178,27 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         window.setTimeout(() => el.classList.remove('msg-highlight'), 2600);
         return;
       }
-      tries += 1;
-      if (tries >= 20) {
-        // 不在当前已装载回复窗口（最近 100 条）内——不静默冒充已定位。
-        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在最近回复范围内——未定位', 'warn');
+      rounds += 1;
+      if (rounds > 6) {
+        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在可补读范围（500 条）内——未定位', 'warn');
         return;
       }
-      window.setTimeout(locate, 300);
+      // 补读一轮更早历史（首条已装载回复的 seq 之前），到头（返回 0）即如实说明。
+      const first = (replies ?? [])[0];
+      if (first == null || (first.threadMessageSeq ?? 0) <= 1) {
+        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在本线程历史内——未定位', 'warn');
+        return;
+      }
+      void loadThreadOlder(threadId, first.threadMessageSeq ?? 1).then((added) => {
+        if (cancelled) return;
+        if (added === 0) { toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）已到历史尽头仍未见——未定位', 'warn'); return; }
+        window.setTimeout(locate, 300);
+      }).catch(() => { if (!cancelled) toast('补读历史失败——未定位（可稍后重试）', 'warn'); });
     };
     const t = window.setTimeout(locate, 200);
     return () => { cancelled = true; window.clearTimeout(t); };
+    // replies 引用变化不重跑（只按目标消息驱动——补读后由 locate 自轮询）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightMessageId, threadId]);
 
   // 贴底滚动推进水位（第五十二轮）：门在 markThreadReadIfAllowed 发起时重查——仅当前回复
@@ -228,6 +263,30 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     } catch (e) { toast(`收藏失败：${(e as Error).message}`, 'error'); }
   };
 
+  /** 消息引用（r56：插入草稿——只改变草稿，不直接派发）。 */
+  const quoteMessage = (m: { id: string; body: string }) => {
+    const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
+    setInsertText({ id: Date.now(), text: `> 引用消息（${m.id.slice(0, 10)}…）：${excerpt}` });
+    toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
+  };
+  /** 消息表情（r56：message.react 正式命令——toggle 幂等；本地用户操作，不作为共识）。 */
+  const reactMessage = async (m: { id: string }, emoji: string) => {
+    try {
+      await command('message.react', { messageId: m.id, emoji });
+      void loadThread(threadId).catch(() => { /* 刷新失败另有呈现 */ });
+    } catch (e) { toast(`表情失败：${(e as Error).message}`, 'error'); }
+  };
+  /** 导出本线程（r56：export.create thread 目标——快照事务固定消息+附件；打开导出目录走白名单）。 */
+  const exportThread = async (format: 'md' | 'html' | 'docx') => {
+    if (projectIdOfRoom == null || conversationId === '') { toast('线程归属未装载（项目/会话缺失）——稍后重试', 'error'); return; }
+    try {
+      const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number } }>('export.create', { target: { kind: 'thread', projectId: projectIdOfRoom, conversationId, threadId }, format });
+      recordWrite('export.create', `导出线程 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
+      toast(`已导出 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
+      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${(e as Error).message}（目录 ${r.dir}）`, 'error'));
+    } catch (e) { toast(`导出失败：${(e as Error).message}`, 'error'); }
+  };
+
   const openReview = (mode: 'accept' | 'rework') => {
     if (task?.pendingDelivery == null) return;
     // 打开即冻结三重身份（id+revision+manifestHash）——此后刷新出新交付也不悄悄换稿。
@@ -265,6 +324,27 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的会话附件（真实版本/hash，可预览）与本任务交付成果">
           <Icon name="file-text" size={13} /> 成果与附件
         </button>
+        {/* 人的阅读订阅（r56：thread.subscribe——与 Agent 执行名单分列；纯偏好写）。 */}
+        <button
+          className="btn ghost sm"
+          disabled={subBusy}
+          data-zs-thread-follow={sub?.followed ? '1' : '0'}
+          title={sub?.followed === true ? '已关注：有新回复进「待我处理」（点击取消）' : '关注本线程：有新回复进「待我处理」（人的阅读订阅——不改执行名单）'}
+          onClick={() => void toggleSub({ follow: !(sub?.followed ?? false) })}
+        >
+          <Icon name="star" size={13} />{sub?.followed === true ? '已关注' : '关注'}
+        </button>
+        <button
+          className="btn ghost sm"
+          disabled={subBusy}
+          data-zs-thread-mute={sub?.muted ? '1' : '0'}
+          title={sub?.muted === true ? '已静音：未读/通知聚合排除（待办保留）——点击取消' : '静音：未读/通知聚合排除，待办保留'}
+          onClick={() => void toggleSub({ mute: !(sub?.muted ?? false) })}
+        >
+          <Icon name={sub?.muted === true ? 'eye-off' : 'eye'} size={13} />{sub?.muted === true ? '已静音' : '静音'}
+        </button>
+        <button className="btn ghost sm" title="导出本线程 MD（export.create——快照事务固定消息+附件）" onClick={() => void exportThread('md')}>导出 MD</button>
+        <button className="btn ghost sm" title="导出本线程 DOCX" onClick={() => void exportThread('docx')}>DOCX</button>
         <div className="spacer" style={{ flex: 1 }} />
         {isRecordThread
           ? <Tag tone="neutral" icon="message-square">记录串 · 无任务号 · 发送仅保存</Tag>
@@ -305,6 +385,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
                     onOpenAttachment={(att) => openPreviewAtt(att)}
                     onSave={() => void saveMessage(m)}
+                    onQuote={() => quoteMessage(m)}
+                    onReact={(emoji) => void reactMessage(m, emoji)}
                   />
                 </div>
               </div>
@@ -315,6 +397,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             draftKey={`thread:${threadId}`}
             recordThread={isRecordThread}
             formalLimits={FORMAL_LIMITS}
+            insertText={insertText ?? undefined}
             attachmentUpload={conversationId !== '' ? { conversationId } : undefined}
             onRetrySend={(env) => retryUnknownSend(env).then((r) => {
               if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }

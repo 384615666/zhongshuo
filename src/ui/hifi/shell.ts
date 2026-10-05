@@ -4,11 +4,11 @@
 import { useStore, setState, getState, toast, clearToast, setTheme, recordWrite, recordLocalOnly, setReadGate, setThreadReadGate } from './data/store';
 import {
   bootRemembered, openProjectByPath, pickAndOpenFolder, refreshMembers, refreshRooms, refreshDms,
-  loadRoomPool, loadDmHistory, loadThread, refreshThreadTask, sendRoomRoot, sendDmMessage, createDm, retryUnknownSend,
+  loadRoomPool, loadDmHistory, loadThread, loadThreadOlder, refreshThreadTask, sendRoomRoot, sendDmMessage, createDm, retryUnknownSend,
 } from './loader';
 
 export { useStore, setState, getState, toast, clearToast, setTheme, recordWrite, recordLocalOnly, setReadGate, setThreadReadGate };
-export { bootRemembered, openProjectByPath, pickAndOpenFolder, refreshMembers, refreshRooms, refreshDms, loadRoomPool, loadDmHistory, loadThread, refreshThreadTask, sendRoomRoot, sendDmMessage, createDm, retryUnknownSend };
+export { bootRemembered, openProjectByPath, pickAndOpenFolder, refreshMembers, refreshRooms, refreshDms, loadRoomPool, loadDmHistory, loadThread, loadThreadOlder, refreshThreadTask, sendRoomRoot, sendDmMessage, createDm, retryUnknownSend };
 
 /** legacy 接管状态（记录原因，便于诊断；显示切换由 body.legacy-on CSS 承担）。 */
 export interface HifiUi {

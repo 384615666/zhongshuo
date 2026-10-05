@@ -1072,6 +1072,16 @@ export interface DmConversation {
   unread: number;
   /** 是否置顶（CH-06：自己可见的排序偏好） */
   pinned?: boolean;
+  /** 正式操作面（r56 H4）：会话 revision（rename/archive CAS）；活动执行三重绑定（停止用）；
+   * 中断待恢复（可恢复性服务端分列）；待验收交付三重身份；排队数与停止退出未确认。 */
+  revision?: number;
+  activeTaskId?: string | null;
+  activeRunId?: string | null;
+  activeStopGeneration?: number;
+  interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>;
+  pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
+  queuedCount?: number;
+  stopPending?: boolean;
 }
 
 export interface PendingReminder {  id: string;

@@ -3480,6 +3480,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: {
           installations,
           memberBindings,
+          dispatchGuard: {
+            // r56（review-r55 §5）：演练/正式包的派发防护状态自述（只读）——自绘标题栏的
+            // 「模拟/真实派发」标识取这里，不用系统原生标题文字替代可见标识。
+            fakeAllowed: process.env.ZS_ALLOW_FAKE === '1',
+            realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1',
+            note: 'fakeAllowed=允许 fake adapter（演练/测试）；realDispatchGuard=真实派发防护开启（fake 环境下真实 startTurn 会被拒）',
+          },
           capabilities: {
             claude: { keyAbilities: { structuredFinal: 'supported', restrictWrites: 'unverified', interactiveApprovals: 'unverified' }, adapterVersion: CLAUDE_ADAPTER_VERSION },
           },

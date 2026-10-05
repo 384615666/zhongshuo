@@ -4,11 +4,14 @@
  * 页面——不要求用户在旧界面再找一次）；接管期间卸载 hifi 样式（原型全局选择器不污染旧界面），
  * 返回时恢复样式与数据刷新；启动/渲染失败由 ErrorBoundary 与页面看门狗兜底回退。
  */
-import { Component, useEffect, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from './components/Icon';
 import { NavUnreadDot } from './components/NavMarks';
+import { CommandPalette } from './components/CommandPalette';
+import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from './shell';
 import { getState } from './data/store';
+import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
@@ -166,8 +169,51 @@ export default function App() {
   const s = useStore((x) => x);
   const path = pathOf(route);
   const legacyActive = useStore((x) => x.legacyActive === true);
+  /** 命令面板（r56 H4：Ctrl+K——仅 hifi 可见时响应；legacy 接管期不触发）。 */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  /** 恢复检查（r56 H4：recovery.status 事实——有注意项时侧栏带标记并首启自动弹一次）。 */
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryAttention, setRecoveryAttention] = useState(false);
+  const recoveryAutoShownRef = useRef(false);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
+
+  // 全局快捷键（r56）：Ctrl/Cmd+K 开命令面板。守卫：仅 hifi 可见（legacy 接管=旧界面自己管
+  // 自己的快捷键）；输入焦点在面板/正文里都只是「开面板+抢焦点」，不与窗口操作冲突。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (document.body.classList.contains('legacy-on') || !document.body.classList.contains('hifi-on')) return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // 恢复注意项（recovery.status 只读；boot ready 后查询+轻量轮询；读失败不冒充无事项）。
+  useEffect(() => {
+    if (s.boot !== 'ready') return;
+    let cancelled = false;
+    const check = () => {
+      if (cancelled || document.body.classList.contains('legacy-on')) return;
+      void command<{ gateHeld: boolean; unknownTurns: unknown[]; pendingRelease: unknown[]; activeUndos: unknown[]; interruptedRuns: unknown[]; pendingDispatchCount: number }>('recovery.status', {})
+        .then((r) => {
+          if (cancelled) return;
+          const attention = r.gateHeld || r.unknownTurns.length > 0 || r.pendingRelease.length > 0 || r.activeUndos.length > 0 || r.interruptedRuns.length > 0 || r.pendingDispatchCount > 0;
+          setRecoveryAttention(attention);
+          if (attention && !recoveryAutoShownRef.current) {
+            recoveryAutoShownRef.current = true; // 每次启动最多自动弹一次（关闭后仍有侧栏入口）
+            setRecoveryOpen(true);
+          }
+        })
+        .catch(() => { /* 读取失败：不显示标记也不自动弹——打开面板时如实报错 */ });
+    };
+    check();
+    const t = window.setInterval(check, 30_000);
+    return () => { cancelled = true; window.clearInterval(t); };
+  }, [s.boot]);
 
   // 外部深链族（#dm=/#task=/#delivery=/#msg=）规范化（review-r50 §4）：deepLink.resolve 服务端
   // 定位实体 → 跨项目先开真实项目 → 内部路由（斜杠形态，刷新/前进后退可再解析）。失败如实
@@ -293,6 +339,16 @@ export default function App() {
             </div>
             <div className="sidebar-foot">
               <button
+                className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
+                title={recoveryAttention ? '恢复检查：存在需要处理的事项（UNKNOWN/保护未解除/门禁）——点击查看与分列操作' : '恢复检查：查看恢复事实（无注意项时也可查看只读状态）'}
+                data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
+                onClick={() => setRecoveryOpen(true)}
+              >
+                <Icon name="shield" size={14} />
+                <span className="side-item-label">恢复检查</span>
+                {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title="有注意项" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
+              </button>
+              <button
                 className={`side-item${path === '/pending' ? ' active' : ''}`}
                 title="待我处理：权威业务状态汇总（待验收/未读/阻塞/待确认提醒——mine.pending）"
                 onClick={() => navigate('/pending')}
@@ -349,6 +405,8 @@ export default function App() {
         <PreviewPane />
       </div>
       </HifiErrorBoundary>
+      {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
+      {recoveryOpen ? <RecoveryPanel onClose={() => setRecoveryOpen(false)} /> : null}
     </>
   );
 }

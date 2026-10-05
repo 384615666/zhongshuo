@@ -1,17 +1,24 @@
 /**
- * 私信页（H1 首包，第四十七轮修订）：真实 conversation.list/history/create/markRead +
- * Composer 正式异步发送。已读水位继承既有合同——**前台+贴底+当前路由**才推进（页面判定）；
- * 读取失败保留旧快照+就地错误；可见时轻量刷新（会话列表+当前历史）。
- * 执行态按钮（停止/继续/恢复/取消归档）与验收/返工属 H2——本包如实显示 execState 文案与
- * 「未接通」说明，不放不可用按钮。
+ * 私信页（r56 H4 §5 扩展）：真实 conversation.list/history/create/markRead + Composer 正式
+ * 异步发送。已读水位继承既有合同——**前台+贴底+当前路由**才推进（页面判定）；读取失败保留
+ * 旧快照+就地错误；可见时轻量刷新（会话列表+当前历史）。
+ * 本批归位的正式操作（头部操作行，绑定服务端事实）：重命名（conversation.rename revision
+ * CAS）、归档/恢复（conversation.archive/restore——归档禁新发+活动运行走正式停止）、停止
+ * （task.stop 三重绑定 task/run/停止代次）、继续队列（dm.resume 显式泵一条）、待验收/返工
+ * （task.review 绑定交付三重身份快照——目标变化不悄悄换稿）、中断恢复（task.redispatch 绑
+ * 来源 run；不可恢复给服务端原因）、导出会话（export.create md/html/docx + 打开导出目录走
+ * exports/ 白名单）。跨会话切换目标不误操作（每按钮取当前 active 事实重发）。
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
+import { Icon } from './components/Icon';
+import { Tag } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
 import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft } from './loader';
-import { parkUnknownEnvelope, openPreview } from './data/store';
+import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
+import { command, openExportDir } from './bridge';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
 const EXEC_TEXT: Record<string, string> = {
@@ -34,6 +41,12 @@ export function DmPage() {
   const msgs = historyMap[activeId] ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
   const listRef = useRef<HTMLDivElement | null>(null);
+  /** 头部操作忙态（按动作名——同一时刻一个；失败原因走 toast 如实）。 */
+  const [busy, setBusy] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameText, setRenameText] = useState('');
+  /** 返工意见框（打开时冻结交付三重身份——提交只带这份）。 */
+  const [reviewBox, setReviewBox] = useState<{ mode: 'accept' | 'rework'; taskId: string; deliveryId: string; revision: number; manifestHash: string; note: string } | null>(null);
 
   // 活动目标追踪（接管定位用）：当前会话写入 ui.activeThreadId。
   useEffect(() => { if (activeId !== '') setState((st) => ({ ...st, ui: { ...st.ui, activeThreadId: activeId } })); }, [activeId]);
@@ -68,6 +81,104 @@ export function DmPage() {
     return () => { window.clearInterval(t); };
   }, [activeId]);
 
+  /** ── 头部正式操作（每项取当前 active 服务端事实；成功后刷新列表+历史；失败如实）。 ── */
+  const reloadAll = async () => { await refreshDms(); if (activeId !== '') await loadDmHistory(activeId); };
+  const doRename = async () => {
+    if (active == null || renameText.trim().length === 0) return;
+    setBusy('rename');
+    try {
+      await command('conversation.rename', { conversationId: active.id, title: renameText.trim(), expectedRevision: active.revision ?? 0 });
+      recordWrite('conversation.rename', `私信重命名 →「${renameText.trim()}」`);
+      toast('已重命名（revision CAS 通过）', 'success');
+      setRenaming(false);
+      await reloadAll();
+    } catch (e) { toast(`重命名失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const doArchive = async () => {
+    if (active == null) return;
+    setBusy('archive');
+    try {
+      const r = await command<{ archived: boolean; already: boolean; stopPending: boolean }>('conversation.archive', { conversationId: active.id, expectedRevision: active.revision ?? 0 });
+      recordWrite('conversation.archive', `归档私信（stopPending=${r.stopPending}——活动运行走正式停止）`);
+      toast(r.already ? '已归档（幂等）' : `已归档${r.stopPending ? '——活动运行停止请求已发（退出未确认会如实保留状态）' : ''}`, 'success');
+      await reloadAll();
+    } catch (e) { toast(`归档失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const doRestore = async () => {
+    if (active == null) return;
+    setBusy('restore');
+    try {
+      await command('conversation.restore', { conversationId: active.id });
+      recordWrite('conversation.restore', '恢复私信（不自动续跑——排队消息等待发送或 dm.resume）');
+      toast('已取消归档（不自动续跑——排队消息用「继续队列」显式推进）', 'success');
+      await reloadAll();
+    } catch (e) { toast(`恢复失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const doStop = async () => {
+    if (active?.activeTaskId == null || active.activeRunId == null) return;
+    setBusy('stop');
+    try {
+      await command('task.stop', { taskId: active.activeTaskId, targetRunId: active.activeRunId, expectedStopGeneration: active.activeStopGeneration ?? 0 });
+      recordWrite('task.stop', `停止私信执行（task ${active.activeTaskId.slice(0, 10)}… run ${active.activeRunId.slice(0, 10)}… 代次 ${active.activeStopGeneration ?? 0}）`);
+      toast('停止请求已提交（等活跃 turn 结束——队列进入暂停）', 'success');
+      await reloadAll();
+    } catch (e) { toast(`停止失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const doResume = async () => {
+    if (active == null) return;
+    setBusy('resume');
+    try {
+      const r = await command<{ enqueued: number | boolean }>('dm.resume', { conversationId: active.id });
+      recordWrite('dm.resume', `继续队列（泵 ${typeof r.enqueued === 'number' ? r.enqueued : Number(r.enqueued)} 条）`);
+      toast(`已继续队列（本次泵入 ${typeof r.enqueued === 'number' ? r.enqueued : r.enqueued ? 1 : 0} 条排队消息）`, 'success');
+      await reloadAll();
+    } catch (e) { toast(`继续失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const openReview = (mode: 'accept' | 'rework') => {
+    const p = active?.pendingReview;
+    if (p == null) return;
+    setReviewBox({ mode, taskId: p.taskId, deliveryId: p.deliveryId, revision: p.revision, manifestHash: p.manifestHash, note: '' });
+  };
+  const submitReview = async () => {
+    if (reviewBox == null) return;
+    if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) { toast('要求修改必须填写意见（进入正式任务记录并注入返工输入）', 'warn'); return; }
+    setBusy('review');
+    try {
+      await command('task.review', { taskId: reviewBox.taskId, deliveryId: reviewBox.deliveryId, deliveryRevision: reviewBox.revision, manifestHash: reviewBox.manifestHash, decision: reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', ...(reviewBox.mode === 'rework' ? { reviewComment: reviewBox.note.trim() } : {}) });
+      recordWrite('task.review', `私信交付${reviewBox.mode === 'accept' ? '验收通过' : '返工'}（v${reviewBox.revision} 三重身份）`);
+      toast(reviewBox.mode === 'accept' ? '已验收通过' : '已提交返工意见（任务回到执行）', 'success');
+      setReviewBox(null);
+      await reloadAll();
+    } catch (e) { toast(`提交失败：${(e as Error).message}——交付可能已更新，列表已刷新`, 'error'); setReviewBox(null); await reloadAll(); }
+    finally { setBusy(null); }
+  };
+  const doRecover = async (it: { taskId: string; lastRunId: string | null }) => {
+    setBusy(`recover:${it.taskId}`);
+    try {
+      await command('task.redispatch', { taskId: it.taskId, reason: '私信中断恢复（新界面显式发起）', ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}) });
+      recordWrite('task.redispatch', `私信中断恢复 task ${it.taskId.slice(0, 10)}…（来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`);
+      toast('恢复执行已提交（经 outbox 正式编排——不自动重放）', 'success');
+      await reloadAll();
+    } catch (e) { toast(`恢复被拒：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+  const doExport = async (format: 'md' | 'html' | 'docx') => {
+    if (active == null) return;
+    setBusy(`export:${format}`);
+    try {
+      const r = await command<{ exportId: string; dir: string; files: string[]; stats: { messages: number; attachments: number; missing: number } }>('export.create', { target: { kind: 'conversation', projectId: active.projectId, conversationId: active.id }, format });
+      recordWrite('export.create', `导出私信 ${format}（${r.stats.messages} 消息/${r.stats.attachments} 附件 → ${r.exportId}）`);
+      toast(`已导出 ${format.toUpperCase()}（${r.stats.messages} 消息 · ${r.files.length} 文件）`, 'success');
+      void openExportDir(r.dir).catch((e: unknown) => toast(`打开导出目录失败：${(e as Error).message}（目录 ${r.dir}）`, 'error'));
+    } catch (e) { toast(`导出失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(null); }
+  };
+
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0, flex: 1 }}>
       <div className="sidebar-scroll" style={{ flex: '0 0 224px', width: 224, borderRight: '1px solid var(--border)', padding: 8, minHeight: 0, overflow: 'auto' }}>
@@ -100,13 +211,99 @@ export function DmPage() {
           <div className="panel info" style={{ margin: 14 }}>选择或新建一个私信会话。</div>
         ) : (
           <>
-            <div className="row tight wrap" style={{ padding: '10px 14px 0' }}>
-              <span className="section-title">{active.peerDisplayName ?? '成员'}{active.title != null && active.title.length > 0 ? ` · ${active.title}` : ''}</span>
+            <div className="row tight wrap" style={{ padding: '10px 14px 0' }} data-zs-dm-ops="hifi">
+              {renaming ? (
+                <span className="row tight">
+                  <input
+                    className="composer-input" style={{ minWidth: 200 }}
+                    placeholder="会话标题（1–120 字）"
+                    value={renameText}
+                    onChange={(e) => setRenameText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void doRename(); } if (e.key === 'Escape') setRenaming(false); }}
+                  />
+                  <button className="btn sm" disabled={busy != null} onClick={() => void doRename()}>保存</button>
+                  <button className="btn ghost sm" onClick={() => setRenaming(false)}>取消</button>
+                </span>
+              ) : (
+                <span className="section-title">{active.peerDisplayName ?? '成员'}{active.title != null && active.title.length > 0 ? ` · ${active.title}` : ''}</span>
+              )}
               <span className="faint small">
                 {active.archivedAt != null ? '已归档（只读）' : EXEC_TEXT[active.execState ?? 'idle'] ?? ''}
+                {active.queuedCount != null && active.queuedCount > 0 ? ` · 排队 ${active.queuedCount} 条` : ''}
+                {active.stopPending === true ? ' · 停止退出未确认' : ''}
               </span>
-              <button className="btn ghost sm" style={{ marginLeft: 'auto' }} title="在本会话的原界面打开：附件/停止/继续队列/恢复执行/验收返工/归档（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-dm'))}>原界面打开本会话</button>
+              <span style={{ flex: 1 }} />
+              {/* 正式操作行（r56）：按服务端事实出现——不摆不可用按钮。 */}
+              <button className="btn ghost sm" disabled={busy != null} title="重命名会话（conversation.rename——revision CAS，他人改动会冲突如实报错）" onClick={() => { setRenameText(active.title ?? ''); setRenaming(true); }}>重命名</button>
+              {active.activeTaskId != null && active.activeRunId != null ? (
+                <button className="btn ghost sm" disabled={busy != null} title={`停止执行（task.run 三重绑定：代次 ${active.activeStopGeneration ?? 0}——过时绑定由服务端拒绝）`} onClick={() => void doStop()}>停止执行</button>
+              ) : null}
+              {active.execState === 'paused' || (active.queuedCount ?? 0) > 0 ? (
+                <button className="btn ghost sm" disabled={busy != null} title="继续队列（dm.resume——显式泵一条排队消息，不自动连发）" onClick={() => void doResume()}>继续队列</button>
+              ) : null}
+              {active.archivedAt != null ? (
+                <button className="btn ghost sm" disabled={busy != null} title="取消归档（conversation.restore——不自动续跑）" onClick={() => void doRestore()}>取消归档</button>
+              ) : (
+                <button className="btn ghost sm" disabled={busy != null} title="归档（禁新发/新派发；活动运行走正式停止；历史只读）" onClick={() => void doArchive()}>归档</button>
+              )}
+              <button className="btn ghost sm" disabled={busy != null} title="导出会话（export.create——快照事务内固定消息+附件；重放幂等）" onClick={() => void doExport('md')}>导出 MD</button>
+              <button className="btn ghost sm" disabled={busy != null} title="导出会话 HTML" onClick={() => void doExport('html')}>HTML</button>
+              <button className="btn ghost sm" disabled={busy != null} title="导出会话 DOCX" onClick={() => void doExport('docx')}>DOCX</button>
+              <button className="btn ghost sm" style={{ marginLeft: 4 }} title="在本会话的原界面打开（尚未换装的能力经此可达）" onClick={() => import('./App').then((m) => m.takeLegacy('current-dm'))}>原界面</button>
             </div>
+            {/* 待验收交付（三重身份冻结——提交只带打开时的这份）。 */}
+            {active.pendingReview != null ? (
+              <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-review="hifi">
+                <div className="row tight wrap">
+                  <Icon name="package" size={13} />
+                  <strong>待验收交付</strong>
+                  <Tag tone="info">v{active.pendingReview.revision} · manifest {active.pendingReview.manifestHash.slice(0, 10)}…</Tag>
+                  <span className="faint small">验收绑定打开时的三重身份——交付更新后本框作废重开</span>
+                  <span style={{ flex: 1 }} />
+                  <button className="btn ghost sm" disabled={busy != null || reviewBox != null} onClick={() => openReview('accept')}>验收通过</button>
+                  <button className="btn ghost sm" disabled={busy != null || reviewBox != null} onClick={() => openReview('rework')}>要求返工</button>
+                </div>
+                {reviewBox != null ? (
+                  <div className="page-stack" style={{ marginTop: 8 }}>
+                    {active.pendingReview.revision !== reviewBox.revision ? (
+                      <div className="panel warning">交付已更新（打开时 v{reviewBox.revision}，当前 v{active.pendingReview.revision}）——本框作废，请重新操作。</div>
+                    ) : reviewBox.mode === 'rework' ? (
+                      <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="返工意见（必填——进入正式任务记录并注入返工输入）" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
+                    ) : (
+                      <div className="faint small">将验收通过 v{reviewBox.revision}（manifest {reviewBox.manifestHash.slice(0, 10)}…）。</div>
+                    )}
+                    {active.pendingReview.revision === reviewBox.revision ? (
+                      <div className="row tight">
+                        <button className="btn sm" disabled={busy != null} onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认验收' : '提交返工意见'}</button>
+                        <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {/* 中断待恢复（服务端分列可恢复性——不可恢复给原因，不放按钮）。 */}
+            {(active.interruptedTasks ?? []).length > 0 ? (
+              <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-interrupted="hifi">
+                <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>中断待恢复</strong><span className="faint small">恢复执行经 outbox 正式编排（绑来源 run）；不自动重放</span></div>
+                {(active.interruptedTasks ?? []).map((it) => (
+                  <div key={it.taskId} className="row tight" style={{ marginTop: 6 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
+                    <span className="faint small">上次 run {it.lastRunStatus ?? '?'}</span>
+                    {it.recoverable ? (
+                      <button className="btn sm" disabled={busy != null} title={`恢复执行（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>恢复执行</button>
+                    ) : (
+                      <Tag tone="warning" icon="octagon" title={it.blockReason ?? '不可恢复'}>不可恢复</Tag>
+                    )}
+                  </div>
+                ))}
+                {(active.interruptedTasks ?? []).some((it) => !it.recoverable && it.blockReason != null) ? (
+                  <div className="faint small" style={{ marginTop: 4 }}>
+                    {(active.interruptedTasks ?? []).filter((it) => !it.recoverable && it.blockReason != null).map((it) => `· ${it.title}：${it.blockReason}`).join(' ')}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
               {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照）</div> : null}
               {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
@@ -115,7 +312,7 @@ export function DmPage() {
               ))}
             </div>
             {active.archivedAt != null ? (
-              <div className="panel info" style={{ margin: '0 14px 12px' }}>已归档会话禁止新发（取消归档入口 H2 接入——当前经「原界面」操作）。</div>
+              <div className="panel info" style={{ margin: '0 14px 12px' }}>已归档会话禁止新发——「取消归档」在上方操作行（恢复后排队消息用「继续队列」显式推进，不自动续跑）。</div>
             ) : (
               <Composer
                 target={{ kind: 'dm', roomId: `dm:${active.id}`, dmId: active.id }}

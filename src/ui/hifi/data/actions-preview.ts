@@ -12,3 +12,9 @@ export function takePendingQuotes(draftKey: string): DraftReference[] {
   setState((prev) => ({ ...prev, pendingQuotes: (prev.pendingQuotes ?? []).filter((q) => q.draftKey !== draftKey) } as typeof prev));
   return mine.map((q) => q.reference);
 }
+
+/** 共享预览「引用到输入框」（r56 H4）：入队引用（固定版本+摘录）——由目标 Composer 在
+ * zs:focus-composer 时消费；只改变草稿，不直接派发。 */
+export function addPendingQuote(draftKey: string, reference: DraftReference): void {
+  setState((prev) => ({ ...prev, pendingQuotes: [...(prev.pendingQuotes ?? []), { draftKey, reference }] } as typeof prev));
+}

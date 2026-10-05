@@ -9,7 +9,7 @@
  * 失败反馈真实：装载失败保留旧结果并上屏；空态与失败分开。请求代次收口：切标签/范围/
  * 项目的迟到响应不污染当前页。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, toast } from './shell';
@@ -42,10 +42,18 @@ const SAVED_KIND_LABEL: Record<string, string> = { message: '消息', task: '任
 
 export function LibraryPage() {
   const projectId = useStore((s) => s.activeProjectId);
+  const allRooms = useStore((s) => s.rooms);
+  const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const [tab, setTab] = useState<'search' | 'saved'>('search');
   const [scope, setScope] = useState<'project' | 'all'>('project');
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'message' | 'thread' | 'task'>('all');
+  /** 既有筛选（r56 H4 §5）：作者显示名/日期窗（本机时区）/会话（当前项目房间）——与
+   * search.query 正式参数一一对应；服务端对全部类型统一生效（线程=锚消息、任务=根消息）。 */
+  const [author, setAuthor] = useState('');
+  const [fromDay, setFromDay] = useState('');
+  const [toDay, setToDay] = useState('');
+  const [convId, setConvId] = useState('');
   const [page, setPage] = useState(1);
   const [result, setResult] = useState<SearchData | null>(null);
   const [searching, setSearching] = useState(false);
@@ -75,7 +83,13 @@ export function LibraryPage() {
     const gen = ++genRef.current;
     setSearching(true); setSearchErr(null);
     try {
-      const r = await command<SearchData>('search.query', { text, scope, ...(scope === 'project' ? { projectId } : {}), kind, page: nextPage, pageSize: 20 });
+      const r = await command<SearchData>('search.query', {
+        text, scope, ...(scope === 'project' ? { projectId } : {}), kind, page: nextPage, pageSize: 20,
+        ...(author.trim().length > 0 ? { authorDisplayName: author.trim() } : {}),
+        ...(fromDay !== '' ? { fromDay } : {}),
+        ...(toDay !== '' ? { toDay } : {}),
+        ...(convId !== '' ? { conversationId: convId } : {}),
+      });
       if (gen !== genRef.current) return;
       setResult(r); setPage(nextPage);
     } catch (e) {
@@ -83,7 +97,7 @@ export function LibraryPage() {
     } finally {
       if (gen === genRef.current) setSearching(false);
     }
-  }, [q, scope, projectId, kind]);
+  }, [q, scope, projectId, kind, author, fromDay, toDay, convId]);
 
   const loadSaved = useCallback(async () => {
     const gen = ++genRef.current;
@@ -102,8 +116,8 @@ export function LibraryPage() {
     else { void runSearch(1); }
   }, [tab, loadSaved, runSearch, scope, kind, projectId]);
 
-  // 范围/类型变化即回到第 1 页重新检索（依赖 runSearch 的变化触发）。
-  useEffect(() => { setPage(1); }, [scope, kind, q]);
+  // 范围/类型/筛选变化即回到第 1 页重新检索（依赖 runSearch 的变化触发）。
+  useEffect(() => { setPage(1); }, [scope, kind, q, author, fromDay, toDay, convId]);
 
   const locate = (link: string | null) => {
     if (link == null) return;
@@ -151,14 +165,33 @@ export function LibraryPage() {
                 {KIND_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
               </select>
             </label>
-            <div style={{ flex: '1 1 220px', minWidth: 180 }}>
+            <label className="field inline" title="按作者显示名过滤（跨项目同名都收——文本匹配如实）">
+              <span className="field-label">作者</span>
+              <input className="composer-input" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
+            </label>
+            <label className="field inline" title="日期按本机时区解释（toDay 含当日）">
+              <span className="field-label">日期</span>
+              <input className="composer-input" type="date" style={{ width: 128 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
+              <span className="faint small">至</span>
+              <input className="composer-input" type="date" style={{ width: 128 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
+            </label>
+            {scope === 'project' && rooms.length > 0 ? (
+              <label className="field inline" title="限定会话（当前项目的房间）——线程=锚消息、任务=根消息统一生效">
+                <span className="field-label">会话</span>
+                <select className="select" value={convId} onChange={(e) => setConvId(e.target.value)}>
+                  <option value="">全部会话</option>
+                  {rooms.map((r) => <option key={r.conversationId ?? r.id} value={r.conversationId ?? ''}>#{r.name}</option>)}
+                </select>
+              </label>
+            ) : null}
+            <div style={{ flex: '1 1 200px', minWidth: 160 }}>
               <input
                 className="composer-input"
                 style={{ width: '100%' }}
                 placeholder={scope === 'project' ? '在当前项目搜消息/线程/任务标题…（Enter 检索）' : '在全部可访问项目搜消息/线程/任务标题…（Enter 检索）'}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void runSearch(1); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void runSearch(1); } }}
               />
             </div>
             <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => void runSearch(1)}>{searching ? '检索中…' : '检索'}</button>

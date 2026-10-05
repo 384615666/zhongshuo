@@ -21,7 +21,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
-interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string }> }
+interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
@@ -162,6 +162,11 @@ export async function refreshDms(): Promise<void> {
       peerDisplayName: c.peerDisplayName ?? '成员', title: c.title ?? '', unread: c.unread ?? 0,
       memberIds: [], threadId: '', createdAt: 0, lastMessageAt: 0,
       execState: c.execState ?? 'idle', archivedAt: c.archivedAt ?? undefined, lastMessagePreview: c.lastMessagePreview ?? '',
+      // r56 H4 操作面投影：revision CAS/停止三重绑定/中断恢复/待验收/排队数。
+      revision: c.revision ?? 0,
+      activeTaskId: c.activeTaskId ?? null, activeRunId: c.activeRunId ?? null, activeStopGeneration: c.activeStopGeneration ?? 0,
+      interruptedTasks: c.interruptedTasks ?? [], pendingReview: c.pendingReview ?? null,
+      queuedCount: c.queuedCount ?? 0, stopPending: c.stopPending ?? false,
     })),
   }));
 }
@@ -256,8 +261,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
     if (!stillCurrent(gen, projectId)) return;
     const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
-    setState((prev) => ({ ...prev, threadMessages: { ...prev.threadMessages, [threadId]: replies } }));
-    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
+    setState((prev) => ({ ...prev, threadMessages: { ...prev.threadMessages, [threadId]: replies } }));    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
     if ((hist.rootAttachments ?? []).length > 0 && anchor != null) {
       setState((prev) => ({
         ...prev,
@@ -317,6 +321,26 @@ export async function markThreadReadIfAllowed(threadId: string): Promise<void> {
 }
 
 /** 任务详情单项刷新（停止/验收后重查——绑定服务端当前事实）。 */
+/** 长历史定位补读（r56 H4 §5）：thread.history beforeSeq 游标向前补一页（100 条），追加到
+ * 已装载回复**头部**（保持 seq 升序）。返回补入条数（0=已到头/迟到丢弃）——调用方按此决定
+ * 继续补读还是如实「未定位」。补读是纯读：不改水位（标读仍只在前台+贴底时发生）。 */
+export async function loadThreadOlder(threadId: string, beforeSeq: number): Promise<number> {
+  const gen = getState().loadGen;
+  const ent = getState().threadEntities[threadId];
+  if (ent == null) return 0;
+  const hist = await command<ThreadHistoryData>('thread.history', { threadId, beforeSeq, limit: 100 });
+  if (!stillCurrent(gen, ent.projectId)) return 0;
+  const older = (hist.items ?? []).map((it) => msgOfReply(ent.projectId, ent.roomId, threadId, it));
+  if (older.length === 0) return 0;
+  setState((prev) => {
+    const cur = prev.threadMessages[threadId] ?? [];
+    const known = new Set(cur.map((m) => m.id));
+    const fresh = older.filter((m) => !known.has(m.id));
+    return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: [...fresh, ...cur] } };
+  });
+  return older.length;
+}
+
 export async function refreshThreadTask(threadId: string): Promise<void> {
   const s = getState();
   const thread = s.threadEntities[threadId];

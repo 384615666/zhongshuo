@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 import { useStore } from '../data/store';
+import { command } from '../bridge';
 
 interface ZsWindowState { maximized: boolean; fullScreen: boolean; focused: boolean }
 type ZsWindowBridge = {
@@ -36,6 +37,8 @@ export function TitleBar() {
   // 首启 ready 不再永久等同在线；浏览器宿主收不到事件时保持 online 缺省（按 boot 呈现）。
   const conn = useStore((s) => s.conn);
   const connInfo = useStore((s) => s.connInfo);
+  /** 派发防护标识（r56：演练包自绘标题栏必须可见「模拟/真实派发」——runtime.status 自述）。 */
+  const [guard, setGuard] = useState<{ fakeAllowed: boolean; realDispatchGuard: boolean } | null>(null);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
   const d = bridge();
 
@@ -45,6 +48,14 @@ export function TitleBar() {
     void b.getState().then((r) => { if (r.ok && r.state != null) setState(r.state); }).catch(() => { /* 状态读取失败保持默认——按钮仍可用 */ });
     return b.onStateChange(setState);
   }, []);
+
+  // 派发防护状态只在连接就绪后取一次（daemon env 不随运行变化；读取失败不显示标识）。
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    void command<{ dispatchGuard?: { fakeAllowed: boolean; realDispatchGuard: boolean } }>('runtime.status', {})
+      .then((r) => { if (r.dispatchGuard != null) setGuard(r.dispatchGuard); })
+      .catch(() => { /* 旧 daemon 无该字段/读取失败——不显示标识 */ });
+  }, [boot]);
 
   // portal 不会清空容器——挂载时移除 hifi-flag.js 的最小壳兄弟节点（React 版接管）；
   // React 整体失败卸载时由看门狗 __zsTitlebarMinimal 重建（兜底合同不变）。
@@ -64,7 +75,6 @@ export function TitleBar() {
     ? `已断开——重连中${connInfo != null && connInfo.length > 0 ? `（${connInfo}）` : ''}`
     : boot === 'pending' ? '连接服务中…' : boot === 'failed' ? '服务连接失败' : '已连接';
   const connOff = conn === 'offline' || boot !== 'ready';
-
   return createPortal(
     <div className="zs-titlebar" data-zs-titlebar-rendered="react">
       <span className="zs-tb-name">众说</span>
@@ -72,6 +82,18 @@ export function TitleBar() {
         <span className={connOff ? 'dot-off' : 'dot'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 5, verticalAlign: 1, background: connOff ? '#c9312e' : '#22a55e' }} />
         {project != null ? `${project.displayName} · ${connLabel}` : connLabel}
       </span>
+      {guard != null ? (
+        <span
+          className="zs-tb-stat zs-tb-no-drag"
+          data-zs-dispatch-guard={guard.fakeAllowed ? 'fake' : 'real'}
+          title={guard.fakeAllowed
+            ? `演练模式：允许 fake adapter 模拟执行${guard.realDispatchGuard ? '；真实派发防护开启（真实 startTurn 会被拒）' : ''}——零真实模型调用`
+            : '正式模式：未启用 fake adapter；派发走真实 runtime 合同'}
+          style={{ fontSize: 11, padding: '1px 8px', borderRadius: 999, border: guard.fakeAllowed ? '1px solid var(--warning,#b45309)' : '1px solid var(--border,#dbe2ea)', color: guard.fakeAllowed ? 'var(--warning,#b45309)' : 'var(--text-2,#64748b)' }}
+        >
+          {guard.fakeAllowed ? '演练·模拟派发' : '真实派发'}
+        </span>
+      ) : null}
       <div
         className="zs-tb-drag"
         title="拖动窗口；双击最大化/还原"

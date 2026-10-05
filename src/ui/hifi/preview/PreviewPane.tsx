@@ -12,9 +12,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { command } from '../bridge';
-import { useStore, closePreview } from '../data/store';
+import { useStore, closePreview, toast, getState } from '../data/store';
 import { previewTextAttachment, setDraftAttachmentRange } from '../loader';
 import { getDraftFull } from '../data/store';
+import { addPendingQuote } from '../data/actions-preview';
 import { loadRendererPdfjs, loadRendererPptx, loadRendererDocxPreview, base64ToBytes, type PptxViewer } from './renderers';
 
 const KIND_LABEL: Record<string, string> = {
@@ -43,6 +44,11 @@ export function PreviewPane() {
    * revision/hash，头部优先用上报值、无上报才回落调用方 hint；目标切换即清。
    */
   const [identity, setIdentity] = useState<{ revision?: number | string; hash?: string } | null>(null);
+  /**
+   * 阅读宽度/展开（r56 H4 §5）：normal=min(560px,46vw)；wide=min(880px,74vw)——Word/表格
+   * 长内容横向可读；full=全屏展开（遮内容区，关闭即回）。会话级状态，不持久化。
+   */
+  const [widthMode, setWidthMode] = useState<'normal' | 'wide' | 'full'>('normal');
   const genRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const viewerRef = useRef<PptxViewer | null>(null);
@@ -63,14 +69,62 @@ export function PreviewPane() {
     releaseResources();
     setErr(null);
     setIdentity(null);
+    setWidthMode('normal'); // 换目标回默认宽度（r56）
   }
   useEffect(() => () => { genRef.current += 1; releaseResources(); }, []);
+
+  // 全屏展开时 Esc 先退出展开（不直接关预览——内容仍要读）；更上层弹窗（命令面板/恢复面板）
+  // 打开时让位——它们各自的 Esc 语义优先。
+  useEffect(() => {
+    if (widthMode !== 'full') return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[data-zs-palette=hifi], [data-zs-recovery=hifi]') != null) return;
+      e.preventDefault();
+      setWidthMode('normal');
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [widthMode]);
 
   if (!open || target == null) return null;
   const gen = genRef.current;
   const alive = () => gen === genRef.current;
   const onIdentity = (revision: number | string, hash: string): void => { if (alive()) setIdentity({ revision, hash }); };
   const idLine = `${KIND_LABEL[target.kind] ?? target.kind} · ${target.filename} · v${identity?.revision ?? target.revisionHint ?? '?'} · sha256=${String(identity?.hash ?? target.hashHint ?? '').slice(0, 12)}… · 来源：${target.origin ?? '会话'}`;
+
+  /**
+   * 引用到输入框（r56 H4 §5）：按**当前路由**定位在挂 Composer 的草稿键——预览浮层盖着的
+   * 就是当前页面，引用落在用户正看的目标里；找不到可引用目标（看板/设置等无输入页）如实
+   * 提示，不静默丢弃。摘要取预览当前可见文本（前 160 字——用户所见即所引）。
+   */
+  const quoteToComposer = (): void => {
+    const hash = location.hash ?? '';
+    let draftKey: string | null = null;
+    const th = /^#\/thread\/([^?]+)/.exec(hash);
+    const rm = /^#\/room\/([^?]+)/.exec(hash);
+    const dmM = /^#\/dm\/([^?]+)/.exec(hash);
+    if (th != null) draftKey = `thread:${decodeURIComponent(th[1])}`;
+    else if (rm != null) draftKey = `room:${decodeURIComponent(rm[1])}`;
+    else if (dmM != null) draftKey = `dm:${decodeURIComponent(dmM[1])}`;
+    else if (hash.startsWith('#/dm')) {
+      const st = getState();
+      const currentDm = st.dms.find((d) => d.id === st.ui.activeThreadId) ?? st.dms[0];
+      if (currentDm != null) draftKey = `dm:${currentDm.id}`;
+    }
+    if (draftKey == null) { toast('当前页面没有输入框可插入引用——回到房间/线程/私信后再引用', 'warn'); return; }
+    const visible = document.querySelector('[data-zs-preview=hifi] .page-stack')?.textContent ?? '';
+    const excerpt = visible.replace(/\s+/g, ' ').trim().slice(0, 160);
+    addPendingQuote(draftKey, {
+      resourceId: target.attachmentId,
+      revision: Number(identity?.revision ?? target.revisionHint ?? 0) || 0,
+      hash: String(identity?.hash ?? target.hashHint ?? ''),
+      title: target.filename,
+      excerpt,
+    });
+    window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: draftKey }));
+    toast(`已把「${target.filename}」引用插入输入框（引用不直接触发新任务）`, 'success');
+  };
 
   const body = (() => {
     if (target.kind === 'text_file' || target.kind === 'code_file') return <TextPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
@@ -82,11 +136,18 @@ export function PreviewPane() {
     return <div className="panel info">该类型（{target.kind}）的共享预览未接入——经「原界面」打开。</div>;
   })();
 
+  const paneWidth = widthMode === 'full' ? '100vw' : widthMode === 'wide' ? 'min(880px, 74vw)' : 'min(560px, 46vw)';
+
   return (
-    <aside className="preview-pane" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(560px, 46vw)', zIndex: 60, display: 'flex', flexDirection: 'column', background: 'var(--bg, #f8fafc)', borderLeft: '1px solid var(--border, #dbe2ea)', boxShadow: '-6px 0 24px rgba(15,23,42,.08)' }} data-zs-preview="hifi">
+    <aside className="preview-pane" data-zs-preview-width={widthMode} style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: paneWidth, zIndex: 60, display: 'flex', flexDirection: 'column', background: 'var(--bg, #f8fafc)', borderLeft: '1px solid var(--border, #dbe2ea)', boxShadow: '-6px 0 24px rgba(15,23,42,.08)' }} data-zs-preview="hifi">
       <div className="row tight" style={{ padding: '10px 14px', borderBottom: '1px solid var(--border,#dbe2ea)', alignItems: 'center' }}>
         <Icon name="file-text" size={14} />
         <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idLine}</span>
+        {/* 阅读宽度/展开（r56）：Word/表格长内容的横向阅读空间。 */}
+        <button className="btn ghost sm" title="收窄（默认 560px）" disabled={widthMode === 'normal'} onClick={() => setWidthMode('normal')}>窄</button>
+        <button className="btn ghost sm" title="加宽（880px——长行/宽表可读）" disabled={widthMode === 'wide'} onClick={() => setWidthMode('wide')}>宽</button>
+        <button className="btn ghost sm" title={widthMode === 'full' ? '退出全屏展开' : '全屏展开（遮内容区——Esc 或按钮恢复）'} onClick={() => setWidthMode((m) => (m === 'full' ? 'normal' : 'full'))}>{widthMode === 'full' ? '还原' : '展开'}</button>
+        <button className="btn ghost sm" title="把本预览（版本+可见摘录）引用到当前输入框——引用不直接触发新任务" onClick={quoteToComposer}>引用</button>
         <button className="btn ghost sm" title="关闭预览（中止在途解析并释放渲染器资源）" onClick={() => closePreview()}>关闭</button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack">

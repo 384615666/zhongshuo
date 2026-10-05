@@ -13,8 +13,15 @@ export interface ZsResult<T> { ok: boolean; data?: T; error?: { code: string; me
 export interface ZsBridge {
   command(envelope: ZsEnvelope): Promise<ZsResult<never>>;
   pickFolder(): Promise<string | null>;
+  /** 打开导出目录（main 侧白名单：仅应用数据区 exports/ 内路径——r56 H4 导出入口用）。 */
+  openPath(target: string): Promise<string>;
   onDisconnect(cb: () => void): void;
   onReconnected(cb: () => void): void;
+}
+
+/** 打开导出目录（窄权限：exports/ 白名单外的路径由 main 拒绝）。 */
+export async function openExportDir(dir: string): Promise<string> {
+  return bridge().openPath(dir);
 }
 
 export interface BridgeOk<T> { status: 'ok'; data: T }
