@@ -401,6 +401,16 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
       backgroundThrottling: false,
     },
   });
+  // renderer 故障恢复（r60 P3，review-r60 §2）：真实崩溃（Page.crash 级）此前留白屏——
+  // 用户只能重开应用。此处按「界面重载、daemon 不动」恢复：daemon/任务状态不受 renderer
+  // 故障影响（独立进程），重载后经既有装载链恢复项目/会话/历史；草稿为内存态按既有合同
+  // 不跨 renderer 崩溃恢复（持久项=localStorage 的 lastProjectPath 等）。cleanly-exited
+  // （正常关闭路径）不重载。
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'cleanly-exited') return;
+    process.stderr.write(`[zhongshuo-ui] renderer 进程异常退出（${details.reason}）——重载恢复界面（daemon 不重启，任务不重派）\n`);
+    try { win.webContents.reload(); } catch { /* 窗口已销毁——交由既有退出链 */ }
+  });
   // 窗口控制窄 IPC（第五十四轮 §3）：只接受枚举动作、只作用于本主窗口、与既有命令桥同判
   // senderFrame 来源（zsres://app/ 以外一律拒绝——不开放任意系统命令）。close 走 win.close()
   // → window-all-closed → shutdownDaemon() 既有优雅收口链（daemon.shutdown→有界等待→kill
