@@ -407,7 +407,7 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
   // 不跨 renderer 崩溃恢复（持久项=localStorage 的 lastProjectPath 等）。cleanly-exited
   // （正常关闭路径）不重载。
   win.webContents.on('render-process-gone', (_event, details) => {
-    if (details.reason === 'cleanly-exited') return;
+    if (details.reason === 'clean-exit') return;
     process.stderr.write(`[zhongshuo-ui] renderer 进程异常退出（${details.reason}）——重载恢复界面（daemon 不重启，任务不重派）\n`);
     try { win.webContents.reload(); } catch { /* 窗口已销毁——交由既有退出链 */ }
   });

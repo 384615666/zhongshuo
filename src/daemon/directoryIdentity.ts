@@ -4,7 +4,7 @@
  * - 不做无条件转小写：仅 win32 在「比较键」上做大小写折叠；存储的 rootPath/canonicalPath 保留原样。
  * - 不用简单字符串前缀判断包含：一律走「真实路径 + 路径边界」的祖先判定。
  */
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { sep } from 'node:path';
 import type { DirectoryIdentity } from '../contracts/project.ts';
@@ -19,7 +19,8 @@ export function comparisonKey(path: string): string {
 }
 
 /**
- * 解析目录身份。目录必须存在（PROJECT_MISSING 由调用方处理为重定位流程，§16.5）。
+ * 解析目录身份。目录必须存在且**是目录**（PROJECT_MISSING 由调用方处理为重定位流程，§16.5；
+ * r60 P4：文件路径此前被 realpath 通过并当成项目打开——文件 discovery/写入后续才坏，入口即拒）。
  */
 export function resolveDirectoryIdentity(rootPath: string): DomainResult<DirectoryIdentity> {
   if (!existsSync(rootPath)) {
@@ -28,6 +29,12 @@ export function resolveDirectoryIdentity(rootPath: string): DomainResult<Directo
     });
   }
   try {
+    const st = statSync(rootPath);
+    if (!st.isDirectory()) {
+      return domainErr('PROJECT_MISSING', `路径不是目录（不能作为项目打开）：${rootPath}`, {
+        details: { rootPath },
+      });
+    }
     const canonicalPath = realpathSync(rootPath);
     return domainOk({
       rootPath,
