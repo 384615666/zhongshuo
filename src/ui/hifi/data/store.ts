@@ -69,6 +69,9 @@ export interface HifiExtension {
   /** 首启装载（有界等待）状态。 */
   boot: 'pending' | 'ready' | 'failed';
   bootError: string | null;
+  /** 打开项目在途标记（r58 P4）：首启后台观察器据此让位——手动/显式打开优先于种子竞态
+   *（openProjectByPath 入口置位、收尾清除；避免「打开在途时观察器抢代次」覆盖用户选择）。 */
+  openInFlight: boolean;
   /**
    * daemon 实时连接态（r55：标题栏接真实断连/重连——首启 ready 不能永久等同在线）。
    * main 进程在管道关闭时发 zs:disconnect、重连成功后发 zs:reconnected；浏览器宿主
@@ -105,7 +108,7 @@ function makeEmptyState(): HifiState {
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
-    boot: 'pending', bootError: null,
+    boot: 'pending', bootError: null, openInFlight: false,
     conn: 'online', connInfo: null,
   };
 }

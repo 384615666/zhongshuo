@@ -165,24 +165,26 @@ export function DmPage() {
     // 提交前核对：当前会话必须还是框的归属会话（跨会话切换后 UI 已作废；此处双保险）。
     if (active?.id !== reviewBox.conversationId) { toast('验收目标已切换（框属其它会话）——作废零提交', 'warn'); setReviewBox(null); return; }
     setBusy('review');
-    // r57：复用正式适配器 submitTaskReview（返工 note 字段——旧实现误传 reviewComment 被拒）。
-    const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined);
-    if (r.ok) {
-      toast(reviewBox.mode === 'accept' ? '已验收通过' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success');
-      setReviewBox(null);
-      await reloadAll();
-      setBusy(null);
-      return;
+    try {
+      // r57：复用正式适配器 submitTaskReview（返工 note 字段——旧实现误传 reviewComment 被拒）。
+      const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined);
+      if (r.ok) {
+        toast(reviewBox.mode === 'accept' ? '已验收通过' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success');
+        setReviewBox(null);
+        await reloadAll().catch(() => { /* 刷新失败另有呈现——忙态必须释放（r58 P4：不锁死操作） */ });
+        return;
+      }
+      // 失败：原因准确呈现；保留意见文本可修正重提（不称「交付可能更新」一刀切丢文本）。
+      const stale = active?.pendingReview == null
+        || active.pendingReview.taskId !== reviewBox.snapshot.taskId
+        || active.pendingReview.deliveryId !== reviewBox.snapshot.deliveryId
+        || active.pendingReview.revision !== reviewBox.snapshot.deliveryRevision;
+      toast(`提交失败：${r.error}${stale ? '（交付已变化——本框作废，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
+      if (stale) setReviewBox(null);
+      await reloadAll().catch(() => { /* 同上：刷新失败不阻断忙态释放 */ });
+    } finally {
+      setBusy(null); // r58 P4：成功/失败/刷新异常统一释放——不锁死操作忙态
     }
-    // 失败：原因准确呈现；保留意见文本可修正重提（不称「交付可能更新」一刀切丢文本）。
-    const stale = active?.pendingReview == null
-      || active.pendingReview.taskId !== reviewBox.snapshot.taskId
-      || active.pendingReview.deliveryId !== reviewBox.snapshot.deliveryId
-      || active.pendingReview.revision !== reviewBox.snapshot.deliveryRevision;
-    toast(`提交失败：${r.error}${stale ? '（交付已变化——本框作废，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
-    if (stale) setReviewBox(null);
-    await reloadAll();
-    setBusy(null);
   };
   const doRecover = async (it: { taskId: string; lastRunId: string | null }) => {
     setBusy(`recover:${it.taskId}`);
@@ -382,7 +384,12 @@ export function DmPage() {
               </div>
             ) : null}
             <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
-              {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照）</div> : null}
+              {readError != null ? (
+                <div className="panel info" style={{ borderColor: 'var(--warning)' }} data-zs-dm-readerror="1">
+                  读取失败：{readError}（保留上次快照）
+                  <button className="btn ghost sm" style={{ marginLeft: 8 }} disabled={busy != null} title="立即重读本会话（后台 5s 轻量刷新也会自动重试）" onClick={() => { void loadDmHistory(activeId).catch(() => { /* 失败仍由面板呈现 */ }); }}>重试</button>
+                </div>
+              ) : null}
               {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
               {msgs.map((m) => (
                 <MessageView key={m.id} message={m} author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)} onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })} />

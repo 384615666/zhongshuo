@@ -70,7 +70,9 @@ export async function bootRemembered(): Promise<void> {
         for (let i = 0; i < 75; i += 1) {
           await new Promise((r) => setTimeout(r, 2000));
           const st = getState();
-          if (st.activeProjectId !== '' || st.boot === 'failed') return; // 用户已打开/已失败——停
+          // r58 P4：手动/显式打开在途同样让观察器停（不只看 activeProjectId——打开在途时
+          // 它尚未落位，观察器此刻抢 openProjectByPath 会拿更高代次覆盖用户选择）。
+          if (st.activeProjectId !== '' || st.boot === 'failed' || st.openInFlight) return; // 用户已打开/已失败/打开在途——停
           try {
             const again = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
             const p2 = again?.values?.['ui.autoOpenProjectPath'];
@@ -94,7 +96,9 @@ export async function pickAndOpenFolder(): Promise<void> {
   if (dir == null) return;
   await openProjectByPath(dir).catch((e) => {
     toast(`打开项目失败：${(e as Error).message}`, 'error');
-    setState((s) => ({ ...s, boot: 'failed', bootError: (e as Error).message }));
+    // r58 P4：已有项目在用时打开/切换失败**不降级启动态**——当前项目保持可用（错误走
+    // toast）；boot:failed 只描述「首启无项目」场景，避免误导性失败横幅。
+    setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: (e as Error).message } : s));
   });
 }
 
@@ -102,25 +106,30 @@ export async function openProjectByPath(path: string): Promise<void> {
   // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
   // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
   const gen = getState().loadGen + 1;
-  setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null }));
-  const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
-  if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
-  const p = data.project;
-  recordWrite('project.open', `打开项目「${p.displayName}」`);
-  setState((s) => ({
-    ...s,
-    loadGen: gen,
-    projects: [{
-      id: p.id, displayName: p.displayName, rootPath: path, canonicalPath: path, directoryIdentity: '',
-      status: 'ok', revision: p.revision ?? 0, isGit: false,
-    }],
-    activeProjectId: p.id,
-    visibleProjectIds: [p.id],
-    expandedProjectIds: [p.id],
-    roomPool: {}, dmHistory: {}, readErrors: {},
-  }));
-  try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
-  await Promise.all([refreshMembers(), refreshRooms(), refreshDms()]);
+  setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null, openInFlight: true }));
+  try {
+    const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
+    if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
+    const p = data.project;
+    recordWrite('project.open', `打开项目「${p.displayName}」`);
+    setState((s) => ({
+      ...s,
+      loadGen: gen,
+      projects: [{
+        id: p.id, displayName: p.displayName, rootPath: path, canonicalPath: path, directoryIdentity: '',
+        status: 'ok', revision: p.revision ?? 0, isGit: false,
+      }],
+      activeProjectId: p.id,
+      visibleProjectIds: [p.id],
+      expandedProjectIds: [p.id],
+      roomPool: {}, dmHistory: {}, readErrors: {},
+    }));
+    try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
+    await Promise.all([refreshMembers(), refreshRooms(), refreshDms()]);
+  } finally {
+    // 在途结束（成功/失败/被取代）——按代次条件清：旧调用的收尾不清掉更新调用的标记。
+    setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false } : s));
+  }
 }
 
 export async function refreshMembers(): Promise<void> {
