@@ -48,12 +48,15 @@
 >   视觉 PASS（欢迎/跨会话两张）。产物 dist/desktop/review-r57/。
 > - **[§7 交付 hifi-h4-win-v2]** buildId bld_cbd9f0c1cba4e22b（591/591）；README-H4 v2 短测
 >   指南重写（具体前置：H3=「+Guide A 新建空闲会话」避免种子忙碌链、H7 关注未读需**离开后**
->   新回复且无回复=NOT_RUN、H8 日期区分截止昨天/今天+关闭放最后）。verify-hifi-package-r57
->   三连验证（首启/复用/重启）——**过程记录**：首轮候选（bld_69c05a8bd26416f9）因欢迎分支
->   终止 bootRemembered 使包内「窗口先于种子」竞态下永不入项目（run1 失败 r57-20261005115629
->   保留）；补 150s 观察者后重建 bld_cbd9f0c1cba4e22b 重验。另：验证器 procsOfCopy 守卫会
->   误匹配**本会话 shell**（命令行含副本路径字样）——排除 bash.exe/cmd.exe（包只跑
->   bat/electron/node）。
+>   新回复且无回复=NOT_RUN、H8 日期区分截止昨天/今天+关闭放最后）。**verify-hifi-package-r57
+>   三连 allPass r57-20261005121618**（首启/复用/重启——重启轮按真实恢复流：逐 UNKNOWN 对账
+>   executed/no-os-process→确认继续派发→同成员排队意图按合同继续 runs≥1；bat=0×3、
+>   real_calls=0×3、优雅停机/PID 归零/身份不变）。**过程记录（失败保留）**：候选一
+>   bld_69c05a8bd26416f9 因欢迎分支终止 bootRemembered 使「窗口先于种子」竞态下永不入项目
+>   （run1 失败 r57-20261005115629）；候选二 bld_cbd9f0c1cba4e22b 首验 run2/3
+>   roomDispatch runs=0——**准入继承正确扣住重启后同成员派发**（r57-20261005120231），
+>   验证器补真实恢复流后三连全过。另：验证器 procsOfCopy 守卫会误匹配**本会话 shell**
+>   ——排除 bash.exe/cmd.exe（包只跑 bat/electron/node）。
 > - **[坑（本轮）]** ①python 直写大文件碰 CRLF/引号嵌套易碎（lateOutcomePath seed 曾错序
 >   FK+语法错——改用 Read+Edit 精准段）；②验证器 guard 自匹配会话 shell（见上）；③fixture
 >   必须等真实 worker 终态再注入（untilTaskSettled）；④TDM2 返工后注新交付需同时把任务
