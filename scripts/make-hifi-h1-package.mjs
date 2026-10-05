@@ -32,6 +32,14 @@ if (existsSync(join(out, 'RESULTS'))) {
   }
 }
 
+// 0) 构建门（review-r53 §5）：入口按 build-ui → pack-daemon → pack-desktop 顺序**自己重建**
+// UI 与 daemon 并核对退出码——pack-desktop 只验产物存在，证明不了它来自当前源码（R52 曾因此
+// 夹带缺 thread.get 的旧 daemon）。任一步非零即中止，绝不拷旧产物。
+for (const [label, script] of [['build:ui（渲染层+主进程壳）', 'build-ui.mjs'], ['pack-daemon（正式命令打包）', 'pack-daemon.mjs']]) {
+  const r = spawnSync(process.execPath, [join(repo, 'scripts', script)], { stdio: 'inherit', cwd: repo });
+  if (r.status !== 0) { console.error(`[hifi-pkg] ${label} 退出码 ${r.status}——中止（产物必须来自当前源码）`); process.exit(1); }
+}
+
 // 1) 便携产物（含 BUILD.json/MANIFEST——真实 commit/dirty 身份）
 const pack = spawnSync(process.execPath, [join(repo, 'scripts', 'pack-desktop.mjs')], { stdio: 'inherit', cwd: repo });
 if (pack.status !== 0) { console.error(`[hifi-pkg] pack-desktop 退出码 ${pack.status}——中止（不拷旧产物）`); process.exit(1); }
@@ -54,7 +62,10 @@ copyFileSync(join(repo, 'scripts', 'h1-self-check.cjs'), join(out, 'seed', 'h1-s
 const staleSelfCheck = join(out, 'seed', 'self-check.cjs');
 if (existsSync(staleSelfCheck)) { rmSync(staleSelfCheck, { force: true }); console.log('[hifi-pkg] 已移除旧残留 seed/self-check.cjs'); }
 mkdirSync(join(out, 'samples'), { recursive: true });
-copyFileSync(join(repo, 'scripts', 'dev25-dual', 'samples', 'word-r7-sample.docx'), join(out, 'samples', 'word-r7-sample.docx'));
+// H2 预览样本随包（第五十二轮 §6.5）：六类样本供一次性集中手测（📎 上传→预览）。
+for (const f of readdirSync(join(repo, 'scripts', 'dev25-dual', 'samples'))) {
+  copyFileSync(join(repo, 'scripts', 'dev25-dual', 'samples', f), join(out, 'samples', f));
+}
 mkdirSync(join(out, 'RESULTS'), { recursive: true });
 
 // 2) 启动器（ASCII only——代码页安全；父环境 ZS_* 清理；种子失败非零退出）
@@ -98,7 +109,7 @@ const BAT = ['@echo off',
   '  exit /b 1',
   ') else (echo Seeded. RESULTS\\seed.json written.)',
   'echo.',
-  'echo NEXT: the app window opens the new (prototype-style) UI. Short test ~5-10 min per README-H1.md.',
+  'echo NEXT: the app window opens the new UI (threads/attachments/preview). One focused test per README-H2.md.',
   'echo Mechanical self-check: run run-self-check.bat (optional).',
   'echo Keep this console open. Closing the app window exits the app.',
   'pause',
@@ -116,41 +127,56 @@ writeFileSync(join(out, 'run-self-check.bat'), SELFCHECK + '\r\n', 'utf8');
 
 // 3) README-H1（准确 H1 口径）
 const writeIfAbsent = (file, content) => { const p2 = join(out, file); if (!existsSync(p2)) writeFileSync(p2, content, 'utf8'); };
-writeIfAbsent('README-H1.md', `# 众说 H1 首包（新界面·可短测）
+writeIfAbsent('README-H2.md', `# 众说 H2 候选（新界面·回复串+附件+共享预览·可短测）
 
-**这是什么**：原型风格新界面接入正式客户端的首个可运行包（H1）。默认启动即新界面
-（侧栏/房间/私信/消息/输入区），数据与命令全部走正式链（fake 运行时+真实派发硬防护——
-**零真实模型调用**）。尚未换装的能力（线程/预览/设置/看板/Files/Git/附件/停止/验收等）
-经侧栏或房间/私信头部的「原界面」入口**定向**打开，不丢失落点。
-
+**这是什么**：原型风格新界面的 H2 修正候选（v2：修复 PPT 视觉预览宿主、移除附件后的真实
+引用、发送/重试成功后的附件清算）。在 H1（侧栏/房间/私信/消息/输入）之上新增**回复串**
+（主池卡片→线程→详情/停止/验收/复制定位链接）、**附件上传**（文本/图片/PDF/Word/PPT/CSV——
+格式实际限幅：文本 256KB、图片 8MB、PDF/Office 20MiB、CSV 5MB）、**共享预览**（六格式只读
+预览：来源/版本/hash/视觉与模型输入分列）、**图片能力门显式二选一**与**表格注入范围**。
+数据与命令全部走正式链（fake 运行时+真实派发硬防护——**零真实模型调用**）。尚未换装的能力
+（设置/看板/Files/Git/成果列表等）经侧栏或线程详情的「原界面」入口**定向**打开。
 ## 启动
 1. 双击 \`start-server.bat\`（等 "Seeded." 与应用窗口；重复启动幂等）。
    - 首启约 1 分钟内自动进入「DEV25 双机验收」项目（新侧栏出现房间与私信）。
-2. 短测约 5–10 分钟：按 \`RESULTS/SHORT-TEST-template.md\` 的 5 项走，结果写回同目录。
+2. 集中手测**仅一次**、约 10–15 分钟：按 \`RESULTS/SHORT-TEST-template.md\` 的 7 项走，结果写回同目录（样本文件在包内 \`samples/\`）。
 
 ## 短测项（详见模板；结论可填 PASS / FAIL / BLOCKED / NOT_RUN）
 - T1 首启自动进入项目：约 1 分钟内新侧栏出现「默认房间 / Lab Room」与「私信」。
-- T2 房间指定成员发送：打开「默认房间」→ 输入区点「@」→ 选 **Guide A** → 输入内容 →
-  「发送」→ 消息出现在主池；再从「⋯」选「仅记录」发一条（不派发）。
-- T3 私信：侧栏「私信」→ 点「+ Guide B」**新建一个空闲会话** → 发送 → 片刻后成员回复出现
-  （不要用种子自带的「恢复演练/队列演练」会话做本项）。
-- T4 草稿保护：**仅当你自然遇到**发送失败/结果未知提示时核对内容保留与「重发原内容」；
-  正常使用不会触发——未遇到请填 NOT_RUN，**不要**为此断网或制造故障。
-- T5 定向接管：侧栏点「任务看板」等未换装入口 → 原界面定位到对应面板 → 右上「⌂ 返回新界面」。
-
+- T2 回复串（**真实前置**）：干净种子里主池的 PPT 附件串是**记录串**（卡上标「记录 · 无任务
+  号」），不是任务卡。先在「默认房间」输入一句任务（如「整理 README 要点」）→ 点「@」选
+  **Guide A** →「发送」→ 稍候主池出现**新任务卡** → 点开 → 「详情」看到任务概况；在回复串
+  输入框发一条跟进（**不会另建任务**）。
+- T3 附件+共享预览（**先在输入框输入一句正文**——仅选附件不发任何东西）：点 📎 选
+  \`samples/preview-r52-样例.pptx\` → 芯片显示 v1 → 点芯片「预览」→ 右侧面板：上方提取文字
+  卡片 + 下方「🖼 视觉页预览」**真实幻灯片**（◀/▶ 可翻页）→「关闭」。（.docx/.pdf 同法。）
+- T4 图片能力门（**先输入一句正文**）：📎 选 \`samples/preview-r52-样例.png\` →「发送」→
+  出现**图片能力门**选择条 →「仅发送文字（图片不送模型）」→ 发送成功（消息带图片附件）。
+- T5 表格注入范围（**先输入一句正文**）：📎 选 \`samples/preview-r52-样例.csv\` → 芯片「预览」
+  → 表格下方输入 \`CSV!A1:B2\`（该 CSV 样式的工作表名就叫 **CSV**）→「设为注入范围」→ 关闭
+  预览 → ⋯ 菜单选「仅记录，不请求回复」→「保存记录」→ 消息上屏且带 csv 附件（范围随消息
+  冻结提交——服务端校验边界；只看「已设」提示不算完成）。
+- T6 定位链接：线程「详情」→ 点「**复制定位链接**」→ 粘贴到记事本核对格式 \`#task=task_…\`
+  （**实体 ID**——不是详情页的 #N 房间任务序号）。**桌面端没有地址栏**：跳转核验已由工程
+  验证完成；用户核对复制出的链接格式即可（不需要开发者工具/SQL/Node；不适用可填 NOT_RUN）。
+- T7 定向接管：侧栏点「任务看板」等未换装入口 → 原界面定位对应面板 → 「⌂ 返回新界面」。
 ## 边界（如实）
-- 附件上传、权限/计划档位等未接通能力在输入区**点击前禁用并说明**，需使用时经「原界面」。
+- 权限/计划档位等未接通能力在输入区**点击前禁用并说明**，需使用时经「原界面」。
+- 预览为只读：视觉尽力还原（图表几何与 Office 有已知近似）；OCR 未实现；模型输入=提取文本
+  （图片需显式选择「仅发送文字」——程序不冒充模型已读）。
+- 已移除的附件资源不再随任何后续消息发送（上传仍会产生会话附件文件——如实保留，但零消息
+  链接）；发送/重试成功后，已发附件自动从草稿剥离，等待期新增的附件保留。
 - \`--no-hifi\` 命令行参数为旧界面对照（工程验证用），正常使用不需要。
 - 机械自检（可选）：双击 \`run-self-check.bat\`。
 - 构建/清单身份：\`ZhongshuoDual/BUILD.json\`（真实 commit+dirty 记录）与
-  \`MANIFEST-SHA256.json\`（全文件 SHA-256）。
+  \`MANIFEST-SHA256.json\`（全文件 SHA-256）；打包入口先重建 UI/daemon（退出码门）。
 
 ## 保留
-- 旧包（v1 工程候选、v2—v6 双机验收包）与其数据/结果原地保留；本包独立目录、独立数据根。
+- 旧包（v1 工程候选、v2—v6 双机验收包、hifi-h2-win-v1）与其数据/结果原地保留；本包独立目录、独立数据根。
 `.replaceAll('\n', '\r\n'), 'utf8');
 
 // 4) 结果模板（不覆盖用户结果）
-writeIfAbsent(join('RESULTS', 'SHORT-TEST-template.md'), `# H1 首包短测结果（用户回填——本文件不会被程序覆盖）
+writeIfAbsent(join('RESULTS', 'SHORT-TEST-template.md'), `# H2 候选短测结果（用户回填——本文件不会被程序覆盖）
 
 - 日期/参与人：
 - 包目录/buildId（ZhongshuoDual/BUILD.json）：
@@ -158,10 +184,12 @@ writeIfAbsent(join('RESULTS', 'SHORT-TEST-template.md'), `# H1 首包短测结�
 | # | 项 | 结论（PASS/FAIL/BLOCKED/NOT_RUN） | 一句话说明 |
 |---|---|---|---|
 | T1 | 首启自动进入项目：新侧栏出现房间（默认房间/Lab Room）与私信 | | |
-| T2 | 房间指定成员：点「@」选 Guide A→发送→主池可见；「⋯→仅记录」发一条不派发 | | |
-| T3 | 私信新建空闲会话：「+ Guide B」新建→发送→成员回复出现（不用种子演练会话） | | |
-| T4 | 草稿保护：仅自然遇到失败/结果未知时核对保留+「重发原内容」；未遇到填 NOT_RUN（勿断网模拟） | | |
-| T5 | 定向接管：未换装入口进入原界面且落点正确；「⌂ 返回新界面」正常 | | |
+| T2 | 回复串（先 @Guide A 发一条任务→新任务卡）：详情/概况；跟进不另建任务；记录串默认仅记录 | | |
+| T3 | 附件+共享预览（先输入正文）：📎 pptx 样本→v1 芯片→预览（文字卡片+真实幻灯片可翻页）→关闭 | | |
+| T4 | 图片能力门（先输入正文）：png 发送→显式选择「仅发送文字」→消息带附件成功 | | |
+| T5 | 表格注入范围（先输入正文）：csv 预览→输入 CSV!A1:B2→设范围→仅记录发送→消息带 csv 附件 | | |
+| T6 | 定位链接：详情→「复制定位链接」→粘贴核对 #task=task_…（实体 ID；桌面无地址栏，跳转已工程验证） | | |
+| T7 | 定向接管：未换装入口进原界面落点正确；「⌂ 返回新界面」正常 | | |
 
 异常与备注：
 `.replaceAll('\n', '\r\n'), 'utf8');

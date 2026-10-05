@@ -51,17 +51,33 @@
 
 首包落点：M2=消息内附件芯片点击 → PreviewPane（文本/Office）；图片/PDF 同 legacy 分流。
 
-**实施快照（第五十二轮 R52 完整版）**：`preview/PreviewPane.tsx`+`renderers.ts`——右侧固定面板
+**实施快照（第五十二轮 R52 完整版——R53 更正）**：`preview/PreviewPane.tsx`+`renderers.ts`——右侧固定面板
 （头部身份行=类型/文件名/v/hash/来源+关闭），六格式真实渲染：文本（previewText）、图片
 （previewImage+decode 对账）、PDF（previewPdf includeBytes→pdfjs canvas+文本层+缩放翻页）、
 Word（docx-preview **Shadow DOM**+renderAltChunks:false+净化回退）、PPT（提取文本卡片+
 pptx-renderer 视觉页 RECOMMENDED_ZIP_LIMITS/pdfjs:false/Abort+dispose/withTimeout 有界）、表格
 （分页签+网格+公式缺失标注+**注入范围写回草稿**）。代次在渲染期推进；迟到不覆盖；关闭/切换
 即 abort+dispose。入口：消息芯片（线程回复/锚块/DM）、草稿 ready 芯片（带 draftKey）。
+**⚠ R53 更正（review-r52 §2）：上段「PPT 视觉页」在 R52 实际从未渲染**——视觉宿主只在
+rendering/done 态挂载、启动 effect 又要求宿主存在，形成死锁（页面取证：stageExists=false、
+rendererRequests=[]、面板显示「视觉页预览不可用」）；R52 验证器的 pptxVisual 谓词宽松（任意
+min-height 容器）误报 rendered。R53 已修（舞台常驻挂载+真实 abort/dispose+翻页断言）并以
+严格谓词+阻断负对照补证（dist/desktop/review-r53/，原 review-r52/ 结果原样保留）。
+
 **实施快照（第五十一轮 R51 骨架）**：消息芯片=真实附件摘要（thread.history items.attachments/
 rootAttachments→Message.formalAttachments，MessageView 优先渲染）；点击→`attachment.previewText`
 真实内联预览面板（ThreadPage 内）；非文本类型如实分列（toast+原界面指引，不复制未接服务的原型
 resources/actions）。完整 PreviewPane（tabs/分栏/收起放大、Office/PDF/图片渲染器）R52 接入。
+
+**实施快照（第五十三轮 R53 修订）**：PPT 舞台与控件行在 visualBytesAvailable 时常驻挂载
+（失败隐藏不卸载）；打开/首页失败真实 abort+dispose（含 goToSlide 超时场景）；PDF 渲染任务
+cancel+doc.destroy() 归属本面板；图片对账三态（ok/mismatch/failed，data-zs-image-decode）；
+验证挂钩 data-zs-pptx-stage/-visual-state/-slide-page/-slide-count/-docx-host/-pdf-canvas。
+页面审计 B1（真舞台子节点/页数 3/翻页签名变化/模块请求）+B2（503 阻断负对照：failed+舞台零
+子节点——判据不可被降级冒充）双 PASS；打包产物 verify-hifi-package-r53 强制 PPT 正常视觉链。
+附件结算同轮收口：settleUploadReady 原子结算（uploadId/removed/发起会话三核——已移除回执零
+草稿写入）；settleForKey 已发 refs 剥离独立于正文保护；retryUnknown 成功剥冻结 refs——页面
+B3/B4/B5 实证（信封+落库双面，详见 continuation R53 快照）。
 
 ## 5. 边界（不扩范围）
 

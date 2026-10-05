@@ -188,6 +188,44 @@ export function settleUpload(draftKey: string, uploadId: string, patch: Partial<
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
 }
+
+/**
+ * 上传成功回执的**原子结算**（review-r53 §3）：一次调用内同时核 (draftKey, uploadId) 项存在、
+ * 未被移除、发起会话一致——全部通过才把上传项置 ready **并把引用写进发起草稿**（两写在同一
+ * 同步事务里，JS 单线程下不存在中间被移除的窗口）。任何不通过：回执整体丢弃（移除项即行
+ * 清除），**不写任何草稿 ref**——已移除/取消/消失的资源不会经草稿进入下一条真实信封。
+ * 幂等：同 uploadId 二次回执或草稿已有同 attachmentId 引用时不再重复写。
+ * 返回 true=回执被接受（ready+草稿 ref 均已写）；false=已丢弃（调用方不得再写草稿）。
+ */
+export function settleUploadReady(draftKey: string, uploadId: string, conversationId: string, receipt: { name: string; size: number; attachmentId: string; hash?: string; revision?: number; kind?: string }): boolean {
+  const list = getState().uploadItems[draftKey] ?? [];
+  const cur = list.find((x) => x.uploadId === uploadId);
+  if (cur == null) return false; // 已消失（被清理）——不复活、不写草稿
+  if (cur.removed === true) {
+    // 上传中被移除：清项+丢弃回执——芯片已消失，草稿也不得出现该引用。
+    setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).filter((x) => x.uploadId !== uploadId) } }));
+    return false;
+  }
+  if (cur.conversationId !== conversationId) {
+    // 回执会话与发起会话不一致（跨会话串线）：按失败分列，不写草稿 ref。
+    setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).map((x) => (x.uploadId === uploadId ? { ...x, status: 'failed' as const, error: `回执会话不一致（${conversationId}）——已丢弃` } : x)) } }));
+    return false;
+  }
+  if (cur.status === 'ready' && cur.attachmentId === receipt.attachmentId) return true; // 已结算过的同一回执——幂等
+  setState((s) => {
+    const curList = s.uploadItems[draftKey] ?? [];
+    const idx = curList.findIndex((x) => x.uploadId === uploadId);
+    if (idx < 0) return s;
+    const next = [...curList];
+    next[idx] = { ...curList[idx]!, status: 'ready', attachmentId: receipt.attachmentId, hash: receipt.hash, revision: receipt.revision, kind: receipt.kind };
+    return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
+  });
+  const d = getDraftFull(draftKey);
+  if (!d.attachments.some((a) => a.attachmentId === receipt.attachmentId)) {
+    setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: receipt.name, size: receipt.size, attachmentId: receipt.attachmentId, hash: receipt.hash, revision: receipt.revision, kind: receipt.kind }] });
+  }
+  return true;
+}
 export function removeUploadItem(draftKey: string, uploadId: string): void {
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];

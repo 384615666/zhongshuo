@@ -123,7 +123,9 @@ function TextPreview({ target, alive, onErr }: { target: Target; alive: Alive; o
 
 function ImagePreview({ target, alive, onErr }: { target: Target; alive: Alive; onErr: (e: string) => void }) {
   const [d, setD] = useState<ImageData | null>(null);
-  const [decode, setDecode] = useState<'pending' | 'ok' | 'failed'>('pending');
+  // 像素对账三态（r53 §2 收紧）：ok=声明宽高逐项相等；mismatch=能解码但与声明不符（如实
+  // 报告，不再两边都写 'ok'）；failed=解码失败。验证器按 data-zs-image-decode 断言真值。
+  const [decode, setDecode] = useState<{ status: 'pending' | 'ok' | 'mismatch' | 'failed'; w?: number; h?: number }>({ status: 'pending' });
   useEffect(() => {
     let done = false;
     void command<ImageData>('attachment.previewImage', { attachmentId: target.attachmentId })
@@ -137,12 +139,18 @@ function ImagePreview({ target, alive, onErr }: { target: Target; alive: Alive; 
       <img
         src={d.dataUrl}
         alt={d.filename}
+        data-zs-image-preview="hifi"
         style={{ maxWidth: '100%', maxHeight: '56vh', display: 'block' }}
-        onLoad={(e) => { const img = e.currentTarget; setDecode(img.naturalWidth === d.width ? 'ok' : 'ok'); }}
-        onError={() => setDecode('failed')}
+        onLoad={(e) => {
+          const img = e.currentTarget;
+          setDecode(img.naturalWidth === d.width && img.naturalHeight === d.height
+            ? { status: 'ok', w: img.naturalWidth, h: img.naturalHeight }
+            : { status: 'mismatch', w: img.naturalWidth, h: img.naturalHeight });
+        }}
+        onError={() => setDecode({ status: 'failed' })}
       />
-      <div className="faint small" style={{ marginTop: 6 }}>
-        {d.mime} · 声明 {d.width}×{d.height} · 原件 {d.bytes}B · 像素解码：{decode === 'ok' ? `成功（naturalWidth 对账）` : decode === 'failed' ? '失败（原件完整保存但格式头通过≠像素可解码）' : '进行中…'}
+      <div className="faint small" data-zs-image-decode={decode.status} style={{ marginTop: 6 }}>
+        {d.mime} · 声明 {d.width}×{d.height} · 原件 {d.bytes}B · 像素解码：{decode.status === 'ok' ? `成功（${decode.w}×${decode.h} 逐项对账）` : decode.status === 'mismatch' ? `⚠ 已解码但与声明不符（实际 ${decode.w ?? '?'}×${decode.h ?? '?'}——如实分列）` : decode.status === 'failed' ? '失败（原件完整保存但格式头通过≠像素可解码）' : '进行中…'}
       </div>
       <div className="faint small">OCR 提取正文：未实现 · 模型图片输入：未认证（发送时显式选择「仅发送文字」或「仅记录」——不冒充模型已读）</div>
     </>
@@ -153,8 +161,9 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
   const [pg, setPg] = useState<PdfPageData | null>(null);
   const [zoom, setZoom] = useState<string>('fit');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pdfDocRef = useRef<{ numPages: number; getPage(n: number): Promise<{ getViewport(o: { scale: number }): { width: number; height: number }; render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void> } }> } | null>(null);
+  const pdfDocRef = useRef<{ numPages: number; destroy(): Promise<void>; getPage(n: number): Promise<{ getViewport(o: { scale: number }): { width: number; height: number }; render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void>; cancel(): void } }> } | null>(null);
   const bytesRef = useRef<string | null>(null);
+  const renderTaskRef = useRef<{ cancel(): void } | null>(null);
 
   useEffect(() => {
     let done = false;
@@ -169,6 +178,16 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);
+
+  // 卸载清理（r53 §6.1——渲染任务与文档归属本面板）：取消在途 render 任务 + 销毁 pdfjs
+  // 文档（worker 端资源）。迟到回调经 alive()/cancelled 双门不再写画布。
+  useEffect(() => () => {
+    try { renderTaskRef.current?.cancel(); } catch { /* 已结束 */ }
+    renderTaskRef.current = null;
+    const doc = pdfDocRef.current;
+    pdfDocRef.current = null;
+    if (doc != null) void doc.destroy().catch(() => { /* 已销毁 */ });
+  }, []);
 
   // 视觉层：pdfjs 渲染器侧 canvas（服务端零像素解码）；翻页/缩放本地。
   useEffect(() => {
@@ -186,6 +205,7 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
           pdfDocRef.current = await lib.getDocument({ data: base64ToBytes(b64), isEvalSupported: false }).promise;
         }
         const doc = pdfDocRef.current;
+        if (doc == null) return;
         const pageNum = Math.min(Math.max(pg.page, 1), doc.numPages);
         const page = await doc.getPage(pageNum);
         if (cancelled || !alive() || canvasRef.current == null) return;
@@ -194,12 +214,16 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
         const viewport = page.getViewport({ scale });
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
+        const task = page.render({ canvasContext: canvas.getContext('2d')!, viewport });
+        renderTaskRef.current = task; // 归属本面板——卸载/切换时取消，不让迟到的任务写旧画布
+        await task.promise;
       } catch (e) {
         if (!cancelled && alive()) onErr(`视觉页渲染失败：${String((e as Error).message).slice(0, 120)}`);
+      } finally {
+        if (renderTaskRef.current != null && !cancelled) renderTaskRef.current = null;
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; try { renderTaskRef.current?.cancel(); } catch { /* 已结束 */ } renderTaskRef.current = null; };
   }, [pg?.page, zoom, pg != null]);
 
   if (pg == null) return <div className="panel info">正在加载预览…</div>;
@@ -218,7 +242,7 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
         </select>
         <span className="faint small">第 {pg.page}/{pg.totalPages} 页</span>
       </div>
-      <canvas ref={canvasRef} style={{ maxWidth: '100%', border: '1px solid var(--border,#dbe2ea)', background: '#fff', display: 'block' }} />
+      <canvas ref={canvasRef} data-zs-pdf-canvas="hifi" style={{ maxWidth: '100%', border: '1px solid var(--border,#dbe2ea)', background: '#fff', display: 'block' }} />
       <pre className="panel info" style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: '8px 0 0' }}>{pg.text.length === 0 ? '（本页无文本层——可能是扫描件；OCR 未实现，如实空页；页面像素见上方视觉渲染）' : pg.text}</pre>
       <div className="faint small" style={{ marginTop: 6 }}>视觉渲染：浏览器 canvas（服务端零像素解码）· OCR：未实现 · 解析器：{pg.parser ?? '?'} · 模型输入=提取文本（与视觉分列）</div>
     </>
@@ -272,35 +296,49 @@ function OfficePreview({ target, alive, onErr, abortRef, viewerRef }: { target: 
   }, [d?.kind, d?.bytesBase64, shadowHostRef.current != null]);
 
   // PPTX 视觉：pptx-renderer viewer（打开期 Abort+dispose 归本面板；slideerror 如实标注）。
+  // r53 §2 死锁修复：舞台常驻挂载（见下方 JSX）——effect 不再因「宿主未挂载」直接 return。
+  // r53 §6.1 归属收紧：打开/首页失败→真实 abort 在途解析（signal 已传入 open）+dispose 已建
+  // viewer（含 goToSlide 超时场景）；对共享 abortRef/viewerRef 的清理只在「仍是本轮指针」时进行
+  // ——不误清新目标的资源。
   useEffect(() => {
     if (d?.kind !== 'slides_file' || d.visualBytesAvailable !== true || d.bytesBase64 == null || stageRef.current == null) return;
     let cancelled = false;
     setVisualState('rendering');
+    const ctl = new AbortController();
+    abortRef.current = ctl;
+    let viewer: PptxViewer | null = null;
     void (async () => {
       try {
         // 视觉渲染会让渲染线程忙碌一段——先让提取文本卡片绘制/断言有机会执行（分列合同：
         // 文本=模型输入真源，视觉慢/失败不影响文本），再启动重渲染。
         await new Promise((r) => window.setTimeout(r, 1200));
-        if (cancelled || !alive()) return;
+        if (cancelled || !alive() || stageRef.current == null) return;
         const lib = await loadRendererPptx();
         if (cancelled || !alive() || stageRef.current == null) return;
-        const ctl = new AbortController();
-        abortRef.current = ctl;
         const pptxBytes = d.bytesBase64 as string;
-        const viewer = await withTimeout(lib.PptxViewer.open(base64ToBytes(pptxBytes), stageRef.current, {
+        viewer = await withTimeout(lib.PptxViewer.open(base64ToBytes(pptxBytes), stageRef.current, {
           renderMode: 'slide', zipLimits: lib.RECOMMENDED_ZIP_LIMITS, pdfjs: false, signal: ctl.signal,
         }), 20_000, '视觉页打开');
         if (cancelled || !alive()) { try { viewer.dispose(); } catch { /* 已释放 */ } return; }
         viewerRef.current = viewer;
-        abortRef.current = null;
         await withTimeout(viewer.goToSlide(0), 15_000, '首页渲染');
         if (cancelled || !alive()) return;
+        if (abortRef.current === ctl) abortRef.current = null; // 打开期已结束；后续释放靠 dispose
         setVisualState('done');
       } catch (e) {
+        try { ctl.abort(new Error('visual-open-failed')); } catch { /* 已中止 */ }
+        if (viewer != null) {
+          try { viewer.dispose(); } catch { /* 已释放 */ }
+          if (viewerRef.current === viewer) viewerRef.current = null;
+        }
+        if (abortRef.current === ctl) abortRef.current = null;
         if (!cancelled && alive()) { setVisualState('failed'); setVisualErr(String((e as Error).message).slice(0, 200)); }
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      try { ctl.abort(new Error('preview-unmounted')); } catch { /* 已中止 */ }
+    };
   }, [d?.kind, d?.bytesBase64, stageRef.current != null]);
 
   // 翻页（viewer 已开）。
@@ -336,7 +374,7 @@ function OfficePreview({ target, alive, onErr, abortRef, viewerRef }: { target: 
               {visualState === 'done' ? <div className="faint small" style={{ marginTop: 6 }}>🖼 视觉预览（docx-preview 渲染器侧本地渲染 · Shadow DOM 隔离）——与提取文本同源核验</div> : null}
               {visualState === 'failed' ? <div className="panel info" style={{ borderColor: 'var(--warning)', marginTop: 6 }}>视觉预览不可用（{visualErr ?? '未知'}）——下方净化排版近似仍可用（分列）</div> : null}
               {/* 宿主常驻（渲染完成后填充；失败隐藏）——effect 依赖宿主存在，若只在 done 分支渲染会死锁。 */}
-              <div ref={shadowHostRef} style={{ display: visualState === 'failed' ? 'none' : 'block' }} />
+              <div ref={shadowHostRef} data-zs-docx-host="hifi" data-zs-visual-state={visualState} style={{ display: visualState === 'failed' ? 'none' : 'block' }} />
             </>
           ) : <div className="panel info" style={{ borderColor: 'var(--warning)' }}>视觉通道不可用（{d.visualBytesReason ?? '未取到原件字节'}）——净化排版近似如下（分列）</div>}
           {sanitizedHtml != null ? (
@@ -403,18 +441,21 @@ function OfficePreview({ target, alive, onErr, abortRef, viewerRef }: { target: 
             </div>
           ))}
           {d.visualBytesAvailable === true ? (
-            visualState === 'done' || visualState === 'rendering' ? (
-              <>
-                <div className="row tight" style={{ marginTop: 8 }}>
-                  <button className="btn ghost sm" onClick={() => setSlidePage((p) => Math.max(1, p - 1))}>◀ 上一页</button>
-                  <button className="btn ghost sm" onClick={() => setSlidePage((p) => Math.min(viewerRef.current?.slideCount ?? 1, p + 1))}>下一页 ▶</button>
-                  <span className="faint small">第 {slidePage}/{viewerRef.current?.slideCount ?? '?'} 页</span>
-                </div>
-                <div className="faint small">🖼 视觉页预览（pptx-renderer 渲染器侧本地渲染）· sha256={d.hash.slice(0, 12)}… · v{d.revision}（与提取文本同源核验）{visualState === 'rendering' ? ' · 渲染中…' : ''}</div>
-                <div ref={stageRef} style={{ minHeight: 200, border: '1px solid var(--border,#dbe2ea)', background: '#fff' }} />
-                <div className="faint small" style={{ marginTop: 4 }}>视觉=渲染器侧（版面/图表/表格尽力还原——图表几何与 Office 渲染存在已知近似）· SmartArt/EMF 内嵌 PDF 回退未启用 · 外部关系不加载 · 宏不执行 · 提取文本=模型输入真源（与视觉分列）</div>
-              </>
-            ) : <div className="panel info" style={{ borderColor: 'var(--warning)', marginTop: 8 }}>视觉页预览不可用（{visualErr ?? '未知'}）——提取文本卡片不受影响（分列）</div>
+            <>
+              {/* 视觉宿主常驻（r53 §2 死锁修复）：visualBytes 可用即挂载控件行与舞台——不再只在
+                  rendering/done 挂载（那形成「没宿主不启动→没启动不挂宿主」的环）。失败时舞台
+                  隐藏（display:none）但仍挂载，降级提示与提取文本分列。data-zs-* 为验证器精确
+                  挂钩——禁止把外层滚动容器当视觉舞台断言。 */}
+              <div className="row tight" style={{ marginTop: 8 }} data-zs-slide-controls="hifi">
+                <button className="btn ghost sm" onClick={() => setSlidePage((p) => Math.max(1, p - 1))}>◀ 上一页</button>
+                <button className="btn ghost sm" onClick={() => setSlidePage((p) => Math.min(viewerRef.current?.slideCount ?? 1, p + 1))}>下一页 ▶</button>
+                <span className="faint small" data-zs-slide-page={slidePage} data-zs-slide-count={viewerRef.current?.slideCount ?? ''}>第 {slidePage}/{viewerRef.current?.slideCount ?? '?'} 页</span>
+              </div>
+              <div className="faint small" data-zs-visual-state={visualState}>🖼 视觉页预览（pptx-renderer 渲染器侧本地渲染）· sha256={d.hash.slice(0, 12)}… · v{d.revision}（与提取文本同源核验）{visualState === 'rendering' ? ' · 渲染中…' : visualState === 'none' ? ' · 启动中…' : ''}</div>
+              {visualState === 'failed' ? <div className="panel info" style={{ borderColor: 'var(--warning)', marginTop: 6 }}>视觉页预览不可用（{visualErr ?? '未知'}）——提取文本卡片不受影响（分列）</div> : null}
+              <div ref={stageRef} data-zs-pptx-stage="hifi" style={{ minHeight: 200, border: '1px solid var(--border,#dbe2ea)', background: '#fff', display: visualState === 'failed' ? 'none' : 'block' }} />
+              {visualState !== 'failed' ? <div className="faint small" style={{ marginTop: 4 }}>视觉=渲染器侧（版面/图表/表格尽力还原——图表几何与 Office 渲染存在已知近似）· SmartArt/EMF 内嵌 PDF 回退未启用 · 外部关系不加载 · 宏不执行 · 提取文本=模型输入真源（与视觉分列）</div> : null}
+            </>
           ) : <div className="panel info" style={{ borderColor: 'var(--warning)', marginTop: 8 }}>视觉页预览不可用（{d.visualBytesReason ?? '未取到原件字节'}）——提取文本卡片不受影响（分列）</div>}
         </>
       )}

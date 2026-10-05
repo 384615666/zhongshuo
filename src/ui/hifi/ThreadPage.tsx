@@ -299,6 +299,20 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     </button>
                   ) : null}
                   <button className="btn ghost sm" title="刷新任务详情（绑定服务端当前事实）" onClick={() => void refreshThreadTask(threadId).catch((e: unknown) => toast(`刷新失败：${(e as Error).message}`, 'error'))}>刷新详情</button>
+                  {/* 定位链接（r53 §5/T6）：桌面端没有地址栏——给用户一个**可复制**的正式定位符
+                      （外部深链 #task=<实体ID>——不是房间任务序号 #N）。粘贴入口（打开定位）随
+                      H3 设置页归位；当前跳转核验由工程验证器执行，用户项只核对复制格式。 */}
+                  <button
+                    className="btn ghost sm"
+                    title={`复制本任务的正式定位链接（#task=${detail.id}——实体 ID，非房间序号；应用内深链，不是公网分享链接）`}
+                    onClick={() => {
+                      const link = `#task=${detail.id}`;
+                      void navigator.clipboard?.writeText(link).then(
+                        () => toast(`定位链接已复制：${link}`, 'success'),
+                        () => toast(`复制失败——定位链接：${link}`, 'error'),
+                      );
+                    }}
+                  >复制定位链接</button>
                   <span className="faint small">关闭本视图不会停止执行——执行属于任务，不属于页面。</span>
                 </div>
               </div>

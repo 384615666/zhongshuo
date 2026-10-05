@@ -2,14 +2,75 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十二轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十三轮，唯一权威快照）
+
+> R52=H2 完成但**三处 P1 被复核证伪**（review-r52-next-round-20261005.md）；**R53=三 P1 修复
+> +验证收紧+hifi-h2-win-v2 修正候选**。v2/v6/v1 原地稳定；Android 用 v6。
+> - **[R52 覆盖更正（保留原报告）]** R52 报告中「P 六格式真渲染含 pptxVisual=rendered」与
+>   「打包环境强制验证 PPT」**均不成立**：pptxVisual 用的宽松谓词（任意 min-height 容器）
+>   实际命中预览面板滚动正文容器——PPT 视觉从未渲染（宿主死锁：舞台只在 rendering/done 挂载
+>   而 effect 又等舞台存在才启动）；verify-hifi-package-r52.cjs **没有 PPT 视觉步骤**。
+>   原 thread-r52-result.json/截图原样保留（thread-with-preview.png 中的「视觉页预览不可用」
+>   框即死锁证据）；真实补证=**review-r53**（runId r53-20261005…，严格谓词）。
+> - **[§2 PPT 死锁修复]** 舞台与控件行在 visualBytesAvailable 时**常驻挂载**（失败 display:none
+>   但不卸载——同 Word 宿主策略）；打开/首页失败→真实 abort（signal 已传入 open）+dispose
+>   已建 viewer（含 goToSlide 超时）；对共享 abortRef/viewerRef 的清理带「仍是本轮指针」守卫。
+>   新增验证挂钩：data-zs-pptx-stage/data-zs-visual-state/data-zs-slide-page/count/controls、
+>   data-zs-docx-host、data-zs-pdf-canvas、data-zs-image-decode（值=ok/mismatch/failed——
+>   原 naturalWidth===d.width?'ok':'ok' 恒真已废）。PDF 补 render task cancel+doc.destroy()
+>   归属；图片对账逐项宽高+如实 mismatch。
+> - **[§3 移除幽灵引用]** store 新增 **settleUploadReady**（原子结算）：一次调用核
+>   (draftKey,uploadId) 存在+未 removed+发起会话一致→通过才置 ready **并写草稿 ref**（同一
+>   同步事务）；任何不通过=回执整体丢弃零草稿写入。Composer 不再自行写草稿（原无条件
+>   setDraftFull 是根因）。页面实证（B3）：芯片消失之外——下一条真实信封 refs=[]、
+>   message_attachments 零链接（artifact 保留=上传确实发生，如实）、切走再回不复活。
+> - **[§4 清算收口]** settleForKey 不再「rev 变→整份 return 跳过附件清算」：**已发 refs 剥离
+>   独立于正文保护**（无论等待期是否编辑，都只剥本次 sentIds 并 clearSettledUploads；正文/
+>   提及仍按代次门）；retryUnknown 成功分支补剥冻结 attachmentRefs+清 store。页面实证：
+>   B4（按住回执期间改正文+传新附件→放行：正文保留/旧芯片剥离/新芯片保留；下一条信封只带
+>   新资源；旧资源恰落库一次不重带）；B5（丢回执→unknown→等待期新附件→重发成功：冻结 refs
+>   剥离/新附件保留/下一条只带新资源/retry-1 恰一次）。
+> - **[§5 构建/材料]** make-hifi-h1-package.mjs **构建门**：入口先跑 build-ui→pack-daemon
+>   （退出码非零即中止，产物必须来自当前源码——R52 曾夹带缺 thread.get 的旧 daemon）。
+>   README-H2 v2：T2 真实前置（干净种子 PPT 串=记录串，先 @Guide A 发任务再点新任务卡）；
+>   T4/T5 先输入正文（仅附件不发送）；T5 真实表名 `CSV!A1:B2`+仅记录发送核落库；T6 改为
+>   「复制定位链接」按钮（ThreadPage 详情——`#task=<实体ID>`，桌面无地址栏，跳转=工程验证，
+>   用户核格式即可/NOT_RUN）。本轮把 make 脚本+r53 验证器+样本全部入库。
+> - **[§6 交付]** **hifi-h2-win-v2**（buildId bld_398c8b90476b0ef9，591/591 清单一致，独立
+>   目录）。verify-hifi-package-r53.cjs（独立副本双轮）在 r52 链上新增：PPT 视觉正常链
+>   （真舞台子节点>0+done+页数=3——打包环境强制）、未知重试成功清算（带附件派发丢回执→
+>   重发→芯片剥离+下一条只带新资源+恰一次）、就绪态移除负例（零链接+artifact 保留）。
+> - **[证据]** 全量 856→858（新增 hifiSettlementRound53 1 项+hifiThreadRound51 拆 2？——以
+>   本轮 vitest 实跑数为准）；verify-hifi-thread-r53.cjs 页面审计 **pass=true**（B1 死锁修复
+>   实证：舞台/翻页签名变化 2144→1263/页数 3/模块请求；**B2 阻断负对照**：503 掉 pptx 模块
+>   →failed+舞台零子节点——证明判据不能被降级冒充；截图 thread-pptx-visual-r53.png 经视觉
+>   核验 PASS=真实幻灯片+页码 2/3 无降级框）于 dist/desktop/review-r53/。
+> - **[H3 第一批已落地]** BoardPage（board.view 只读聚合：列位/退出未确认/受阻原因/待验收
+>   徽标；卡→#task= 定位详情）、FilesPage（文件标签=files.view 四类分列：项目文件/托管附件
+>   （→共享预览）/Agent 草稿/交付成果（→深链定位）；Git 标签=git.status 真实状态+git.diff
+>   只读——写操作明确留原界面）、SettingsPage（app.settings.get/set 真实往返+
+>   remote.config.get 实际事实只读+**打开定位粘贴入口**——T6 闭环；未换装项定向列出）。
+>   侧栏三入口换真路由（/board /files /settings）；「复制定位链接」（ThreadPage 详情）→
+>   「打开定位」（设置页）成对。探针 verify-hifi-h3-r53.cjs **pass=true**（真实命令计数+
+>   卡片定位+Files→预览真内容+Git 分支/未跟踪+设置往返+粘贴 #task=→线程详情；截图×3 视觉
+>   全 PASS：h3-board/h3-files/h3-settings-deeplink.png）。**无边框标题栏未动**（需改
+>   Electron 窗口配置+拖拽区+托盘评估——R54 专题，避免本轮在交付窗体上冒险）。
+
+## 上一轮快照（2026-10-05 第五十二轮——已按 review-r52 更正，原始结果文件未改动）
 
 > R51=H2 开工（e07186a）；**R52=H2 完成+独立候选包**（review-r51 四反例全修+共享预览全格式
 > +imageAck/ranges/重试冻结+**hifi-h2-win-v1** 交付）。v2/v6 原地稳定；Android 用 v6。
+> **⚠ 更正（R53）：下述「P 六格式真渲染含 pptxVisual=rendered」的 PPT 视觉与「打包环境强制
+> 验证 PPT」不成立（宽松谓词命中外层容器/打包验证器无 PPT 步骤）——真补证见 review-r53；
+> 「上传中移除→回执即弃不复活」当时只证了芯片消失，草稿仍被写入已移除引用（幽灵引用）；
+> 「成功清算按 refs 身份」在等待期编辑（rev 变）时被整份 return 跳过、重试成功分支完全不清
+> 附件——三处均已在 R53 修复并页面实证。其余事实（A/B 归属/阅读门/字节合同/深链三修）经复
+> 核保留。**
 > - **[§2 附件归属]** store.uploadItems（draftKey+**uploadId**+conversationId）为唯一真源：
 >   回执按 (draftKey,uploadId) 精确收敛——A/B 同名迟到回执不串（审计 A1 复证 copyText=B-ONLY）；
->   上传中移除→回执即弃不复活；A→B→A 芯片由 store 恢复；草稿只存 ready 引用；**成功清算按
->   refs 身份**（attachmentId 集合，不再 name/size 匹配）。Composer 附件区全部 store 驱动。
+>   上传中移除→回执即弃不复活（**R53 更正：芯片层面成立，草稿 ref 层面不成立**）；A→B→A
+>   芯片由 store 恢复；草稿只存 ready 引用；**成功清算按 refs 身份**（attachmentId 集合，
+>   不再 name/size 匹配；**R53 更正：rev 变时被跳过**）。Composer 附件区全部 store 驱动。
 > - **[§4 阅读门]** threadReadGate 要求 tab==='replies'+**容器实际存在**（缺容器=false）+
 >   前台+贴底；详情视图/迟到 history 一律不推进（审计 A3：markRead=0、水位不变）；新增贴底
 >   滚动主动推进（markThreadReadIfAllowed，节流 1.5s）。
@@ -26,24 +87,26 @@
 >   pptx=RECOMMENDED_ZIP_LIMITS+pdfjs:false+Abort/dispose+**withTimeout 有界**；代次在**渲染期**
 >   推进——父 effect 自增会让子组件闭包误判迟到（R52 实测首轮全丢）；六格式+来源/版本/hash+
 >   视觉与模型输入分列；表格注入范围写回草稿；消息芯片（线程+DM）/草稿芯片/锚块均可开。
+>   **R53 更正：PPT 视觉宿主存在挂载死锁（舞台只在 rendering/done 挂载），从未真实渲染。**
 > - **[§6.3]** imageAck=显式二选一 chip（仅发送文字/改仅记录——选择前不发送，一次性冻结进
 >   信封）；attachmentRanges 从预览面板写入草稿→builder 冻结；未知信封重试含 refs 逐字一致
 >   +恰一次（审计 A5 paramEqual/exactlyOnce）。各 upload* 首传 revision=1 合同事实补默认。
 > - **[§6.5 交付]** **hifi-h2-win-v1**（buildId bld_ce1c059ab99a1df6，独立目录；make 脚本改
 >   H2 文案+六类样本随包+README-H2/短测模板七项）。**坑：pack-desktop 用预构建 daemon 产物
 >   （pack-daemon.mjs）——不改 daemon 只跑 make 会装进旧 daemon（首验卡锚块=thread.get 缺失
->   抓到）**。verify-hifi-package-r52.cjs（独立副本双轮）：真 bat→自动项目→线程卡→@Guide A
->   派发+丢回执重发恰一次→线程跟进零新任务→附件真实上传+消息挂载→预览真内容→图片门
->   imageAck→#task= 深链详情实际选中→window.close 停机 forced!=true→PID 归零→batExit=0→
->   real_calls=0；run2 重启历史。原型同窗对照（阅读空间/预览布局）+视觉验收完成。
+>   抓到）**（**R53 已治：构建门入 make 入口**）。verify-hifi-package-r52.cjs（独立副本双轮）：
+>   真 bat→自动项目→线程卡→@Guide A 派发+丢回执重发恰一次→线程跟进零新任务→附件真实上传+
+>   消息挂载→预览真内容（**仅文本——无 PPT 视觉步骤，R53 更正**）→图片门 imageAck→#task=
+>   深链详情实际选中→window.close 停机 forced!=true→PID 归零→batExit=0→real_calls=0；
+>   run2 重启历史。原型同窗对照（阅读空间/预览布局）+视觉验收完成。
 > - **[证据]** 全量 **856/856**、typecheck×2；hifiUploadDeepLinkRound52 真实链 1/1（归属/坏
 >   字节/分列/冻结/imageAck 端到端/范围/重试）；verify-hifi-thread-r52.cjs 页面审计 pass=true
->   （A1–A5 反例复证+P 六格式真渲染含 pptxVisual=rendered+迟到覆盖+截图×2 于
->   dist/desktop/review-r52/）。
+>   （A1–A5 反例复证+P 六格式真渲染含 pptxVisual=rendered（**R53 更正：该字段谓词宽松，
+>   PPT 实际未渲染**）+迟到覆盖+截图×2 于 dist/desktop/review-r52/——**原样保留**）。
 > - **[R53 待做]** 打包验证器收尾结果落档（本轮后台运行中）+复核反馈；H3（设置/看板/Files
 >   归位、Git/诊断、无边框标题栏）按 hifi-integration-plan 排期。
 
-## 上一轮快照（2026-10-05 第五十一轮）
+## 上上轮快照（2026-10-05 第五十一轮）
 
 > R50=H1 证据收口（eecf0e2）；**R51=H2 开工（review-r50 四项全落）**：回复串真实页面链+
 > 附件信封/预览骨架+深链规范化入口+验证器五项取证修复+补证三连+v2 版本口径澄清。

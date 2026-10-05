@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview } from '../data/store';
+import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { takePendingQuotes } from '../data/actions-preview';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
@@ -315,8 +315,10 @@ export function Composer({
 
   /**
    * 真实附件上传：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office 20MiB/CSV 5MB——
-   * 服务端为最终裁决）；文本走 fatal UTF-8 解码（非法字节零上传）。回执/失败按 uploadId
-   * settle 到**发起草稿键**；ready 引用同时写入草稿（切回时 hydrate 恢复芯片）。
+   * 服务端为最终裁决）；文本走 fatal UTF-8 解码（非法字节零上传）。成功回执经
+   * settleUploadReady **原子结算**（r53 §3）：store 同时核 uploadId 存在/未移除/发起会话一致，
+   * 通过才置 ready 并写草稿 ref——上传中被移除的回执整体丢弃，组件不再自行写草稿（那正是
+   * 「芯片消失但草稿仍带已移除资源」的根因）。
    */
   const uploadPickedFiles = async (files: File[]): Promise<void> => {
     if (attachmentUpload == null) return;
@@ -330,11 +332,8 @@ export function Composer({
       addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'uploading' });
       try {
         const r = await uploadAttachmentFile(attachmentUpload.conversationId, f);
-        settleUpload(draftKey, uploadId, { status: 'ready', attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
-        const d = getDraftFull(draftKey);
-        if (!d.attachments.some((a) => a.attachmentId === r.attachmentId)) {
-          setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind }] });
-        }
+        const accepted = settleUploadReady(draftKey, uploadId, attachmentUpload.conversationId, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
+        void accepted; // 被丢弃=用户已在上传中移除——不写任何草稿 ref，芯片保持消失
       } catch (e) {
         settleUpload(draftKey, uploadId, { status: 'failed', error: (e as Error).message });
       }
@@ -561,15 +560,17 @@ export function Composer({
     });
 
     /** 按**发起目标键**结算 STORED 草稿（review-r47 §3：迟到回执只清发起目标的已发内容，
-     * 等待期/切目标后的其它草稿与编辑不动）；返回结算后的草稿供同键在挂时同步当前输入。 */
+     * 等待期/切目标后的其它草稿与编辑不动）；返回结算后的草稿供同键在挂时同步当前输入。
+     * r53 §4 收口：**已发 refs 清算独立于正文保护**——无论等待期是否编辑（代次变没变），
+     * 都只剥本次确实发送的 attachmentId 集合并清 store 已结算上传项；正文/提及剥离仍按
+     * 代次门（等待期编辑过则保留）。等待期新选的附件（新 attachmentId）不受影响；已发出
+     * 的资源不会默默留在草稿里进入下一条信封。 */
     const revAtSend = getDraftFull(keyAtSend).rev;
     const settleForKey = (key: string): HifiDraft => {
       const d = getDraftFull(key);
-      if (d.rev !== revAtSend) return d; // 等待期有编辑（代次已变）——不剥离，整份保留（r48 §4）
-      const nextBody = d.body.startsWith(text) ? d.body.slice(text.length).replace(/^\s+/, '') : d.body;
-      const mentionsClear = d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
-      // 成功清算按 **refs 身份**（attachmentId 集合）剥离已发资源（review-r51 §2：不再按文件名/
-      // 大小识别——等待期新选的附件/同名新文件不会被误清）；同步清 store 的已结算上传项。
+      const unchanged = d.rev === revAtSend;
+      const nextBody = unchanged && d.body.startsWith(text) ? d.body.slice(text.length).replace(/^\s+/, '') : d.body;
+      const mentionsClear = unchanged && d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
       const sentIds = new Set(sentAttachmentIds);
       const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
       const settled: HifiDraft = {
@@ -645,8 +646,14 @@ export function Composer({
         // 代次未变才剥离已发原文；等待期编辑过则整份保留（与 submit 成功清算同一规则）。
         const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
         const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
-        const settled: HifiDraft = { ...d, body: nextBody, sendAs: env.params.intent === 'record_only' ? (recordThread ? 'record' : 'ai') : d.sendAs };
+        // r53 §4：重试成功=该信封确实送达——剥其冻结的 attachmentRefs（本次确实发送的资源），
+        // 等待期新增的附件不动；同步清 store 已结算项。与 submit 成功清算同一规则——已发出
+        // 的 refs 不留在草稿里被下一条信封再次携带、再次落库。
+        const sentIds = new Set(env.params.attachmentRefs ?? []);
+        const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
+        const settled: HifiDraft = { ...d, body: nextBody, attachments: keptAttachments, sendAs: env.params.intent === 'record_only' ? (recordThread ? 'record' : 'ai') : d.sendAs };
         setDraftFull(keyAtSend, settled);
+        clearSettledUploads(keyAtSend, [...sentIds]);
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
           setSendAs(settled.sendAs);

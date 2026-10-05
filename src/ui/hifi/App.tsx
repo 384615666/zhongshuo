@@ -15,6 +15,9 @@ import { openExternalDeepLink } from './loader';
 import { RoomPage } from './RoomPage';
 import { DmPage } from './DmPage';
 import { ThreadPage } from './ThreadPage';
+import { BoardPage } from './BoardPage';
+import { FilesPage } from './FilesPage';
+import { SettingsPage } from './SettingsPage';
 import { PreviewPane } from './preview/PreviewPane';
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
 
@@ -210,8 +213,22 @@ export default function App() {
           <aside className="sidebar">
             <div className="sidebar-top">
               {legacyItem('search', 'bookmark', '搜索与收藏', '搜索与收藏')}
-              {legacyItem('git', 'diff', '文件与 Git', '文件与 Git（原界面 Files 集合；Git 操作在原界面仓库区）')}
-              {legacyItem('tasks', 'list', '任务看板', '任务看板')}
+              <button
+                className={`side-item${path === '/files' ? ' active' : ''}`}
+                title="文件与 Git：Files 集合四类分列（只读）+ Git 诊断（状态/diff——写操作经原界面）"
+                onClick={() => navigate('/files')}
+              >
+                <Icon name="diff" size={14} />
+                <span className="side-item-label">文件与 Git</span>
+              </button>
+              <button
+                className={`side-item${path === '/board' ? ' active' : ''}`}
+                title="任务看板：board.view 只读聚合——卡片定位线程详情后执行停止/验收"
+                onClick={() => navigate('/board')}
+              >
+                <Icon name="list" size={14} />
+                <span className="side-item-label">任务看板</span>
+              </button>
               {legacyItem('members', 'users', '成员管理', '成员管理')}
               <button className={`side-item${path === '/dm' || path.startsWith('/dm/') ? ' active' : ''}`} title="私信：本项目一对一会话" onClick={() => navigate('/dm')}>
                 <Icon name="message-square" size={14} />
@@ -251,7 +268,14 @@ export default function App() {
             </div>
             <div className="sidebar-foot">
               {legacyItem('pending', 'inbox', '待我处理', '待我处理')}
-              {legacyItem('settings', 'settings', '设置与帮助', '设置与帮助（原界面面板区——远程/提醒等项目设置在各自面板）')}
+              <button
+                className={`side-item${path === '/settings' ? ' active' : ''}`}
+                title="设置与帮助：应用设置/远程事实（只读）/打开定位；未换装项定向原界面"
+                onClick={() => navigate('/settings')}
+              >
+                <Icon name="settings" size={14} />
+                <span className="side-item-label">设置与帮助</span>
+              </button>
             </div>
           </aside>
 
@@ -267,6 +291,12 @@ export default function App() {
               })()
             ) : path.startsWith('/room/') ? (
               <RoomPage roomId={path.slice('/room/'.length)} />
+            ) : path === '/board' ? (
+              <BoardPage />
+            ) : path === '/files' ? (
+              <FilesPage />
+            ) : path === '/settings' ? (
+              <SettingsPage />
             ) : (
               <DmPage />
             )}

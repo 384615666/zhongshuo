@@ -14,7 +14,7 @@ export function base64ToBytes(b64: string): Uint8Array {
 
 type PdfjsLib = { getDocument: (opts: { data: Uint8Array; isEvalSupported?: boolean }) => { promise: Promise<PdfLikeDoc> }; GlobalWorkerOptions: { workerSrc: string } };
 let pdfjsPromise: Promise<PdfjsLib> | null = null;
-export interface PdfLikeDoc { numPages: number; getPage(n: number): Promise<{ getViewport(o: { scale: number }): { width: number; height: number }; render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void> } }> }
+export interface PdfLikeDoc { numPages: number; destroy(): Promise<void>; getPage(n: number): Promise<{ getViewport(o: { scale: number }): { width: number; height: number }; render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void>; cancel(): void } }> }
 export function loadRendererPdfjs() {
   if (pdfjsPromise == null) {
     pdfjsPromise = import(new URL('assets/pdfjs/pdf.min.mjs', document.baseURI).href).then((lib) => {
