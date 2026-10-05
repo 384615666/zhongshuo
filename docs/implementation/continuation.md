@@ -2,6 +2,56 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-05 第五十九轮长批次，唯一权威快照）
+
+> R59=版本绑定与证据收紧批次（review-r58 全项）：执行返工完整身份绑定+OS 证据判据收紧+
+> 手测依赖修正+验收矩阵准备，交候选 **hifi-h4-win-v4**。v3/用户数据/RESULTS 原地稳定。
+> - **[§1 执行返工版本绑定（review-r58 §2 反例 stale-rework-result.json）]** 事实：旧页面
+>   只传 taskId，另一路把返工推进到 v2 后，命令默默入队 v2 返工（outbox 2→3）。修复：
+>   task.executeRework 参数改为**完整快照**（deliveryId/deliveryRevision/manifestHash/
+>   sourceRunId 必填——r58 旧形态=VALIDATION_INVALID 安全拒）；事务内核核对归属+「当前最高
+>   版本=该 changes_requested」；旧 v1 引用面对 v2=STALE_REVISION、**零 outbox/run/审计
+>   副作用、不自动改绑**。意见正文仍取服务端记录；同号同参重放=网关幂等原回执；就绪/停止/
+>   在途/保护/预算守卫不变。reworkPendingOf/conversation.list/task.get 补完整执行身份；
+>   DmPage/ThreadPage 点击冻结快照。合同 reworkExecutionContract **5/5**：③两轮自然交付
+>   旧引用负例+合法 v2 恰一次（runs 1→3）；④同 revision 错 id（RESOURCE_NOT_FOUND）/错
+>   hash/错 sourceRun 归属/错 revision 全拒零副作用；⑤重放幂等不二次入队。
+> - **[§1b 探针 r59 27/27]** verify-hifi-h4-r59（r58 基线 26+TDM4）：**页面版本漂移反例**——
+>   探针转发层受控延迟 conversation.list 6s 冻结面板渲染（真实机制非 mock）→另一路执行 v1+
+>   对 v2 提交新意见→冻结面板点击仍携带 v1 完整身份（sentLog 实证四字段齐备）→服务端 STALE
+>   拒绝 toast、零 outbox、任务保持 ACTIVE→解除冻结后面板如实显示 v2 意见B→合法执行 v2→
+>   **executing 主标题分列**→自然 v3；跨视图一致性（task.get=REVIEW 与库同源）。返工面板
+>   状态分列（recorded/executing data 属性——review-r58 §4 文案收尾：已入队不再称「尚未执行」）。
+>   全量 **866/866**；主/hifi 双 typecheck 0 错。
+> - **[§2 OS 证据收紧（review-r58 §3 五缺口）]** verify-os-crash-restart-r59：①retained 观察
+>   窗口**结束后重读**任务二计数+turn 事实（不查等待前旧值）；②审计前缀**完整事件行**比对
+>   （SELECT * 全列 JSON 逐字——payload/关联身份/时间都在内）；③退出码**必须===0**+PID 实际
+>   退出实证（kill(pid,0) ESRCH——不再直写 pidReaped）；④失败分支先写报告再按**精确 PID**
+>   收拢自 spawn 进程；⑤负对照实跑：`--self-check`（8 项篡改全被集中判据 checkFacts 拒，
+>   exit 0）、`--negative-no-release`（真实流程跳过正式解除→恰一次判据拒 3 项+优雅停机
+>   +exit 7——总 pass 确会失败）。另记录 daemon.cjs sha256 与候选包内 daemon 对应（v3=
+>   R58 源码构建 sameBytes=false 如实）；覆盖边界分列：daemonCrash/pipeDisconnect=covered、
+>   rendererCrash/managedSubprocess=NOT covered（声明不扩张）。正式全链 exit 0：
+>   os-crash-r59-r59-oscrash-20261005144704（checkErrors 空）。
+> - **[§3 手测依赖修正（review-r58 §4）]** 包外补充说明已由评审入库
+>   （hifi-h4-v3-user-test-addendum-20261005.md）；make 模板同步吸收：G3 先做到 v2 出现→
+>   **G4 借用 v2 确认框**→回 G3 验收收尾；G6 起/至先留空→至=昨天→**清空「至」**→起=今天；
+>   G2 看 M0 提示前先移除芯片（不必发送）；G7 引用后切「回复」标签再核输入框；G10 只观察
+>   退出不查 PID；单项目当前/全部相同不算失败。
+> - **[§4 最终验收矩阵准备稿]** final-acceptance-matrix-r59-20261005.md：旧库升级与副本回退
+>   （001→045 保守回填链/backups+独立数据根）、源码与产物对应（构建门/BUILD 身份/591 清单/
+>   包根材料门/daemon hash 对应/三连）、能力分列（已认证/仅原界面/未开放）、G5 剩余条件
+>   （DEV-10/14/15 尾巴+G4 用户匿名评分+价值评价延期+用户回填待办+兼容矩阵未启动）——
+>   只列事实不代记 PASS，无变化认证矩阵不重跑。
+> - **[§5 交付 hifi-h4-win-v4]** buildId bld_c4eee31c1f63f0e2（commit 94ccbbd8，dirty=false；
+>   591/591+包根材料门 v4 期望全 true）。verify-hifi-package-r59 三连结果：
+>   **allPass r59-20261005145035**（run1/2/3 全 pass；首启/复用/重启、重启轮真实恢复流、
+>   bat=0×3、real_calls=0×3、优雅停机/PID 归零；包根材料 readmeH4/templateMerged/
+>   templateReworkStep 全 true）。v3 已测结论继承——v4 只需补测返工执行相关少量项（G3/G4）。
+> - **[坑（本轮）]** ①bash 管道吃退出码（`node x | tail` 后 $? 是 tail 的——负对照核退出码
+>   必须重定向后单跑）；②git add 混 2>/dev/null 会吞 pathspec 错误（review 文档实际名
+>   review-r58-long-batch）；③候选包 daemon 路径=ZhongshuoDual/resources/app/daemon/。
+
 ## 当前真实状态（2026-10-05 第五十八轮长批次，唯一权威快照）
 
 > R58=稳定性收口批次（review-r57 全项）：准入恢复失败防护+返工真实执行闭环+OS 级崩溃重启
