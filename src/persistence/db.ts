@@ -20,12 +20,19 @@ export function openDatabase(path: string, options: OpenOptions = {}): Zhongshuo
     mkdirSync(dirname(path), { recursive: true });
   }
   const db = new Database(path);
-  // §8.2：WAL + foreign_keys=ON；busy_timeout 容忍同机读者。
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-  migrate(db, options);
-  return db;
+  try {
+    // §8.2：WAL + foreign_keys=ON；busy_timeout 容忍同机读者。
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
+    migrate(db, options);
+    return db;
+  } catch (err) {
+    // r60（review-r59 §2）：任何打开/迁移失败（含更高版本拒绝、备份失败）都关闭句柄——
+    // 不留半开 WAL/锁占用；调用方（daemon entry）再释放单实例锁后拒绝启动。
+    try { db.close(); } catch { /* 关闭失败不掩盖原始错误 */ }
+    throw err;
+  }
 }
 
 export interface Migration {
@@ -42,9 +49,11 @@ export interface MigrateResult {
 
 /**
  * 迁移运行器：user_version 为当前 schema 版本；每条迁移与其审计记录同事务提交。
- * 已有数据（fromVersion>0）且有待应用迁移时，先执行一致性备份（SQLite backup API，
- * 非"复制主文件"，§12.5）。任一迁移失败：该事务回滚、user_version 不变、函数抛错——
- * 调用方（daemon 启动）据此拒绝启动写任务并保留备份。
+ * 入口先核版本范围：高于本程序支持的版本在**任何写入之前**拒绝（r60，review-r59 §2）。
+ * 已有数据（fromVersion>0）且存在待应用迁移且传入 backupDir 时，先做**迁移前一致性备份**
+ * （同步 VACUUM INTO——非复制活动主文件、非异步 backup API，§12.5；备份失败=拒绝启动写）。
+ * 任一迁移失败：该事务回滚、user_version 不变、函数抛错——调用方（daemon 启动）据此拒绝
+ * 启动写任务并保留备份；句柄由 openDatabase 统一关闭。
  */
 export function migrate(
   db: ZhongshuoDatabase,
@@ -52,6 +61,17 @@ export function migrate(
   migrations: readonly Migration[] = MIGRATIONS,
 ): MigrateResult {
   const fromVersion = db.pragma('user_version', { simple: true }) as number;
+  // r60（review-r59 §2 独立反例 future-schema-result.json）：不支持更高版本**先于任何写入**
+  // 拒绝（此前 pending 为空即放行——旧程序误指新库会照常 applyRecovery/接受命令写入）。
+  // 不降级版本号、不删除未识别的迁移记录；失败路径经 openDatabase 关闭句柄。
+  const latestSupported = migrations.reduce((max, m) => Math.max(max, m.id), 0);
+  if (fromVersion > latestSupported) {
+    throw new Error(
+      `SCHEMA_VERSION_UNSUPPORTED：库 schema 版本 ${fromVersion} 高于本程序支持的 ${latestSupported}` +
+      '——请使用对应更高版本的程序打开此数据根，或恢复升级前生成的匹配备份；' +
+      '本程序不降级版本号、不删除未识别的迁移记录后继续写入',
+    );
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
