@@ -2,6 +2,65 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-05 第六十轮收尾批次，唯一权威快照）
+
+> R60=升级/兼容/证据收尾批次（review-r60 全项）：版本门+升级回退演练+renderer 故障注入
+> +兼容性能实测+矩阵重核。**桌面手测基线固定 hifi-h4-win-v4**（用户 G1–G10 待执行/待回填，
+> Android v6 未收到回填）；本轮改动不影响 G1–G10 任何测试路径——**不交新候选**，r60 修复
+> 入库待下次打包（若用户反馈需修复，新候选集中带出）。
+> - **[§1 数据库版本门（review-r59 §2 反例 future-schema-result.json）]** migrate() 入口先核
+>   fromVersion≤支持上限：更高版本在任何写入前抛 SCHEMA_VERSION_UNSUPPORTED（提示用对应
+>   程序或恢复匹配备份）；不降版本号/不删未识别迁移记录；openDatabase 失败路径统一关句柄
+>   （entry 既有 catch 释放单实例锁）。schemaVersionGate 4/4：当前库重开零迁移不新建备份；
+>   子集前缀（1..44）旧库升级+迁移前 VACUUM INTO 备份恰一份；伪造 v46+记录拒写（版本与
+>   记录原样保留+零业务写入+一致复拒+**更旧程序同门**——已升 45 的库不能被子集程序打开）；
+>   备份目录不可写=安全拒启动（库未被改动）。已发布迁移 001–045 冻结未动。
+> - **[§2 升级/回退演练]** upgrade-drill-r60-…153359 全判据过：阶段 A=旧程序形态（子集迁移）
+>   建库+当前命令层 v44 真实写入（project.open[中文+空格]/message.submit/uploadText/task.review
+>   +保护事实种子：损坏 probe released+完好 probe released）；阶段 B=打包 daemon 同根启动即迁
+>   44→45：迁移前备份恰一份、七类事实逐项保持（身份/消息/线程/附件 blobstore hash/任务/预算
+>   标记/审计完整行 SELECT* 逐字）、**045 证据分类器实际生效（坏 probe→retained、好 probe→
+>   released 不动）**；阶段 C=回退=旧程序+升级前备份（复制快照至独立 restore-data）——事实与
+>   升级前一致+旧程序可继续正式写入+**旧程序直开升级库被版本门拒**；升级 daemon 退出码 0。
+> - **[§3 renderer 故障注入+产品修复]** 修复前真实崩溃（CDP Page.crash）留白屏——main.ts 补
+>   **render-process-gone→reload**（界面重载、daemon 不重启、任务不重派；clean-exit 不重载；
+>   枚举实名 'clean-exit' 非 cleanly-exited——typecheck 拦下笔误）。renderer-crash-r60-…155045
+>   全判据过：主进程+daemon（daemon.pid+kill(pid,0) 实证——命令行不含数据根，进程表匹配
+>   不可靠）存活、任务 runs 不变、门禁未落、自动重载后项目/会话/历史归属恢复（崩溃前标记
+>   可见）、内存草稿如实为空（合同=不跨崩溃恢复）、崩溃后可继续正式写入、优雅关窗退出码 0
+>   零残留、real_calls=0。dev 形态真实 Electron（electron.exe --remote-debugging-port+
+>   dist/ui/main.cjs——package.json 无 main 字段，electron . 非受支持路径；Chromium 开关须在
+>   入口路径之前）。
+> - **[§4 兼容/性能实测+产品修复]** 修复 project.open 接受文件路径（discovery/写入后续才坏）
+>   ——directoryIdentity 补 isDirectory→PROJECT_MISSING 入口即拒。local-compat-r60-…155927：
+>   冷启动 230ms/复用 215ms/daemon RSS 75.7MB；非Git 目录可开；文件/不存在路径→
+>   PROJECT_MISSING；icacls 拒写目录如实记录（读侧扫描不写该目录，打开成功）；DM 300 条
+>   record_only 369ms+history(limit100) 1–2ms×3；**v4 包内 node.exe+daemon.cjs 在 PATH 剥离至
+>   系统最小集下 220ms 就绪**（打包 Node/native 无开发 PATH 依赖）。中文+空格/小窗/长历史/
+>   预览/首启复用=继承既有认证不重跑。全量 869/870（唯一失败=githubSandbox 真实网络 TLS 波动
+>   ——git ls-remote 可用/curl 000，环境级如实登记）；双 typecheck 0 错。
+> - **[§5 验收矩阵重核修订]** final-acceptance-matrix-r59（同文件修订，git 历史留 R59 版）：
+>   备份条件（仅待迁移+传目录才产生——目录存在≠回退闭环，回退已由演练实证）；042=只回填
+>   NULL 与 043–045=证据降级**分列**；G4=授权上限 33/**实际 30**（$8.6578，3 次保留未用），
+>   延期维持不重开；M1 分列（DEV-08/09 既有真实证据/演练包 M0 限制/新界面未接入/价值闸门
+>   未结论）；DEV-10 按证据（剩余=resumeSession 真实续接+restrict* 拒写对照，不由 UI 入口
+>   位置代替）；**merge 多父 diff=gitWrite.ts parentsMeta+legacy 父选择按钮均已存在**（真实
+>   缺口=新界面未接入，非未实现）；用户状态=**v4 待执行/待回填、Android 未收到回填**。
+>   每行实际实现/已跑证据/尚未覆盖/外部依赖/下一动作。
+> - **[§6 发布准备]** operations-readiness-r60：启动形态×数据根×开关×认证边界四列表；
+>   备份/升级/回退**可执行步骤**（回退=旧程序+升级前备份，非旧程序直开升级库；无待迁移不
+>   新建备份的如实限制）；安装器（NSIS 双形态，工程 1 轮）/签名（OV≈$200–400/EV≈$300–700
+>   每年，需用户采购）/自动更新（electron-updater，依赖签名）方案与成本清单——**待用户
+>   决定，本轮不购买不发布**。
+> - **[坑（本轮）]** ①package.json 无 main 字段——dev 真实主进程=electron.exe 直跑
+>   dist/ui/main.cjs（electron . 非受支持路径）；②Chromium 开关须在入口路径之前（放后=应用
+>   参数，端口不监听）；③Page.crash 成功回执即 "Target crashed"；④electron.cmd 经 cmd /c
+>   相对路径不可用（绝对路径或直跑 dist/electron.exe）；⑤daemon 存活实证用 daemon.pid+
+>   kill(pid,0)（命令行不含数据根）；⑥pipex 上 spawn 的 daemon 就绪可晚于 renderer——管道
+>   连接必须带重试窗；⑦旧管道连接关后新实例必须重建 client；⑧conversation.history 为 DM
+>   专用（房间=room.pool/thread.history）；⑨bash 内联 node -e 的 $_/反斜杠必被吃——复杂
+>   探针一律写文件；⑩Electron 44 枚举='clean-exit'。
+
 ## 当前真实状态（2026-10-05 第五十九轮长批次，唯一权威快照）
 
 > R59=版本绑定与证据收紧批次（review-r58 全项）：执行返工完整身份绑定+OS 证据判据收紧+
