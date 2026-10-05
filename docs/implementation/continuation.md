@@ -2,7 +2,66 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十七轮长批次，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十八轮长批次，唯一权威快照）
+
+> R58=稳定性收口批次（review-r57 全项）：准入恢复失败防护+返工真实执行闭环+OS 级崩溃重启
+> 补证+稳定性收尾+材料修正，交最终候选 **hifi-h4-win-v3**。旧包/用户数据/RESULTS 原地稳定。
+> **[R57 覆盖声明纠正（review-r57 §3）]** R57 TDM2 的「第二交付」是夹具手工 INSERT/UPDATE——
+> 它只证明「意见记录与新交付可验收」，**不证明**「提交意见后真实续跑」。R58 已废除该注入并
+> 重写为真实链；R57 探针/报告原样保留。
+> - **[§1 恢复读取失败防护（review-r57 §2）]** restoreAdmissionFromDb 吞错按空账本启动=把
+>   未知占用当零（独立反例 restore-read-failure-result.json：注入一次 SELECT 失败后确认继续，
+>   同成员新任务 DONE、startTurn=2）。修复：占位 SELECT 失败或行级绑定读失败（部分恢复）
+>   均**抛错拒绝启动**（「准入占位恢复失败——拒绝按未核实账本启动派发（重启 daemon 重试）」）；
+>   预算/保护/审计事实在库中重读不改写。合同④（memberQueueContractR56）：负例 A/B 库事实
+>   零变化；重试成功→占位继承→resume 后零新增（member deferral）→retained 期间零新增→
+>   正式解除恰一次（startTurn 1→2，任务一恒 1 run）；makeEnv 补 entry 同款 releaseAdmission
+>   进程内联动钩子。
+> - **[§2 返工真实执行闭环（review-r57 §3 反例 rework-dispatch-result）]** 事实：task.review
+>   只写验收账本（意见入账/任务 ACTIVE/零 outbox——连续泵 false）。新增 **task.executeRework**
+>   命令：以**库内** changes_requested 验收事实为源（意见/版本服务端为准、客户端只传任务号），
+>   沿 task.redispatch 同守卫栈（就绪/在途/停止代次/幂等）与同键命名空间
+>   `task:<id>:redispatch:<sourceRunId>` 入队；负例全拒（重复=IDEMPOTENCY_CONFLICT、待新
+>   交付/终态=STALE）；domain_events 记 task.reworkEnqueued。**assembleDmTurn 补
+>   reviewFeedback 附注**（此前 DM 返工 turn 输入不含意见=无反馈重跑——仅房间路径渲染）。
+>   **reworkPendingOf** 派生「意见已记录、尚未执行/已入队」（conversation.list+task.get 暴露；
+>   DmPage/ThreadPage 面板+执行返工按钮+toast 文案纠正）。合同 reworkExecutionContract 2/2：
+>   DM 全链（意见→泵 false×2→执行→同 task 新 run 且**模型输入含【返工】注记+意见原文+v1
+>   版本号**→v2 自然产生（revision 递增、v1 验收记录保留不涂改）→验收 DONE；终态后执行=
+>   STALE）+负例（待验收/无返工事实拒）。探针 TDM2 重写（r58）：页面提交意见→「尚未执行」
+>   面板→**显式执行**→同 task runs 1→2→v2 自然上屏→验收 DONE——零 INSERT/UPDATE。
+> - **[§3 OS 级崩溃重启补证（review-r57 §6-2）]** verify-os-crash-restart-r58.cjs：**真实进程**
+>   （dist/pack/daemon.cjs 打包形态）独立数据根+独立管道名；ZS_FAKE_STALL_MS 受控在途→
+>   按精确 PID taskkill /F（只操作自 spawn 进程）→重启后 recovery.status 核：门禁 held+旧
+>   turn UNKNOWN（命令+直读库双核）→**dispatch.resume 后同成员任务二零新增**（member
+>   deferral 留证）→对账 FAILED+refunded+retained 期间零新增→正式解除→恰一次（t2 恰 1
+>   run/1 turn，t1 恒 1 run）→domain_events 崩溃前前缀**逐字保留**→renderer 断连/daemon
+>   故障分列（客户端关闭后 daemon 存活、事实不变、可重连）→优雅停机退出码 0→real_calls=0。
+>   证据 dist/desktop/os-crash-r58-r58-oscrash-20261005134222/result.json 全断言通过。
+> - **[§4 稳定性收尾（review-r57 §6-3/4）]** ①DmPage.submitReview 补 try/finally——成功路径
+>   reloadAll 抛错曾把 busy 永久卡 'review'（探针实证：执行返工按钮禁用、命令零发出——
+>   「不锁死操作忙态」）；②首启后台观察器增加 openInFlight 让位（打开在途时 activeProjectId
+>   尚未落位——观察器抢代次会覆盖用户选择；openProjectByPath 入口置位、按代次条件清除）；
+>   ③pickAndOpenFolder 失败只在无项目时降级 boot=failed（已有项目保持可用）；④DM 读取失败
+>   面板+重试按钮。探针 r58（r57 基线 25+TZ 预览连续开关×3/无叠加/关闭后 Ctrl+K 全局键存活）
+>   **26/26 PASS**；全量 **863/863**（含新增 3 项）；主/hifi 双 typecheck 0 错。
+> - **[§5 材料修正（review-r57 §4）]** 根因=R57 打包显式 outArg 复用 R56 目录+writeIfAbsent
+>   跳过已存在 README/模板→旧材料进新包。修复：README-H*改**总是写当前版**（工程件无用户
+>   回填；writeCurrent）；RESULTS 模板保持不覆盖（用户回填就填在模板上）。README-H4=v3 口径
+>   （返工两步走）；**H4-TEST-template 重写为 G1–G10 合并清单**（H3-v2 未回填项+H4 新操作一次
+>   短测，约 20–25 分钟；G3=返工显式执行步骤）。verify-hifi-package-r58 新增**包根材料门**
+>   （README/template 关键词核验，独立于应用 591 清单；不一致退出码 5 拒绝三连——首轮即
+>   拦下期望串笔误，门有效）。
+> - **[§6 交付 hifi-h4-win-v3]** buildId bld_1f8807e36da4d3af（591/591+包根材料门）。
+>   verify-hifi-package-r58 三连结果：**allPass r58-20261005140403**（run1/2/3 全 pass；首启/
+>   复用/重启三形态、重启轮真实恢复流、优雅停机/PID 归零/bat=0、real_calls=0×3；包根材料
+>   门 readmeH4/templateMerged/templateReworkStep 全 true）。
+> - **[坑（本轮）]** ①探针点按钮必须先等 disabled=false（忙态卡死+toast 替换双重教训）；
+>   ②recovery.status 字段=gateHeld/pendingDispatchCount（非 held/pending）；③daemon 信封
+>   commandId≥8 字符；④Esc 要派发在 document.activeElement 上；⑤预览 Esc 只退展开不关面板
+>   （关闭=按钮）；⑥验证器材料门期望串须与源码文案逐字对齐（不自动执行≠不会自动执行）。
+
+## 当前真实状态（2026-10-05 第五十七轮长批次）
 
 > R56=H4-v1；**R57=复误收口批次**：恢复准入继承（P1 缺口）+DM 返工正式链+跨会话操作框
 > +面板 DTO+首启欢迎，交独立候选 **hifi-h4-win-v2**。旧包/用户数据/RESULTS 原地稳定。

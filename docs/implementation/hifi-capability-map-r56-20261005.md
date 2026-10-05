@@ -13,7 +13,8 @@
 | @ 提及（触发位置消费） | mentions | Composer | 真实（T2 修复） |
 | 回复跟进（不另建任务） | message.submit（thread） | 线程 Composer | 真实 |
 | 停止任务 | task.stop（三重绑定） | 线程详情 | 真实 |
-| 验收/返工 | task.review（三重身份冻结） | 线程详情 / DM 头部 | 真实 |
+| 验收/返工 | task.review（三重身份冻结） | 线程详情 / DM 头部 | 真实（r58 修订：验收与执行分离——意见只入账零派发） |
+| 执行返工 | task.executeRework（同 redispatch 键命名空间+守卫栈；意见注入新 turn 输入） | 线程详情 / DM 返工待执行面板 | 真实（r58：reworkPending「尚未执行/已入队」派生） |
 | 复制定位链接 | deepLink 形态 | 线程详情 | 真实 |
 | 关注/静音（阅读订阅） | thread.subscribe / thread.subscriptions | 线程导航行 | 真实（r56） |
 | 消息引用 | （草稿动作） | 消息菜单→插入草稿 | 真实（r56） |
@@ -34,7 +35,8 @@
 | 归档/恢复 | conversation.archive / restore | 头部操作行 | 真实（r56） |
 | 停止执行 | task.stop（三重绑定） | 头部操作行 | 真实（r56） |
 | 继续队列 | dm.resume（显式泵一条） | 头部操作行 | 真实（r56） |
-| 待验收/返工 | task.review（三重身份） | 头部待验收面板 | 真实（r56） |
+| 待验收/返工 | task.review（三重身份） | 头部待验收面板 | 真实（r56；r58 与执行分离） |
+| 执行返工 | task.executeRework（守卫栈同 redispatch；意见入新 turn 输入——DM 组装 r58 补注入） | 头部返工待执行面板 | 真实（r58） |
 | 中断恢复 | task.redispatch（绑来源 run；可恢复性服务端分列） | 头部中断面板 | 真实（r56） |
 | 导出 MD/HTML/DOCX | export.create（conversation）+openPath | 头部操作行 | 真实（r56） |
 
@@ -56,7 +58,7 @@
 | 共享预览 | attachment.preview* | 全局预览面板 | 真实（r56 补窄/宽/全屏+引用） |
 | 标题栏窗口控制 | zs:window 窄 IPC | 标题栏 | 真实（关闭走既有优雅链） |
 | 派发防护标识 | runtime.status.dispatchGuard | 标题栏 | 真实（r56：演练·模拟派发/真实派发） |
-| 同成员排队合同 | admission(member)+applyRecovery+dispatch.resume | （产品行为） | 真实（memberQueueContractR56 ①②③；**r57 修订**：②已重写——跨重启准入继承=构造器按 UNKNOWN/retained/在途 持久恢复+retained 门控释放；R56 版「重启后另一任务照常派发」为缺陷已修，见 continuation R57） |
+| 同成员排队合同 | admission(member)+applyRecovery+dispatch.resume | （产品行为） | 真实（memberQueueContractR56 ①②③④；**r57 修订**：②重写——跨重启准入继承=构造器按 UNKNOWN/retained/在途 持久恢复+retained 门控释放；R56 版「重启后另一任务照常派发」为缺陷已修。**r58 修订**：④恢复读取失败（SELECT/行级绑定）拒绝启动不按空账本放行；**OS 级补证** os-crash-r58 真实进程 kill/重启全断言通过——resume 后同成员零新增、对账 retained 期间零新增、正式解除恰一次、审计前缀逐字保留 |
 
 ## 冻结/未开放（不放假按钮）
 
