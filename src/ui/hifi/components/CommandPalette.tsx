@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { Tag } from './ui';
-import { useStore } from '../data/store';
+import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { navigate } from '../lib/router';
 import { openExternalDeepLink } from '../loader';
@@ -34,13 +34,29 @@ const PAGES: PaletteItem[] = [
   { key: 'page-settings', section: '动作', label: '设置与帮助', icon: 'settings', hint: '页面', go: () => navigate('/settings') },
 ];
 
-const locateGo = (link: string) => () => { void openExternalDeepLink(link).catch(() => { /* 失败如实由全局 toast 呈现 */ }); };
+/** 任务状态用户文案（r57：board.view 真实 DTO=taskStatus/runStatus——旧实现读不存在的
+ *  status 字段显示「任务 · undefined」）。终态取任务状态，在途按 run 状态。 */
+const TASK_STATUS_LABEL: Record<string, string> = {
+  ACTIVE: '执行中', WAITING_USER: '待你处理', BLOCKED: '受阻', REVIEW: '待验收', DONE: '已完成',
+  CANCELLED: '已取消', FAILED: '失败', RUNNING: '运行中', WAITING: '排队中', QUEUED: '排队中', STOPPING: '停止中',
+  INTERRUPTED: '中断待恢复',
+};
+const taskStatusLabel = (t: { taskStatus: string; runStatus: string | null }): string =>
+  TASK_STATUS_LABEL[t.taskStatus] ?? (t.runStatus != null ? TASK_STATUS_LABEL[t.runStatus] ?? t.runStatus : t.taskStatus);
+
+const locateGo = (link: string) => () => {
+  void openExternalDeepLink(link).catch((e: unknown) => {
+    // r57：定位失败明确反馈（openExternalDeepLink 只抛错不自带 toast——旧实现静默吞掉）。
+    toast(`面板定位失败：${(e as Error).message}`, 'error');
+  });
+};
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const s = useStore((x) => x);
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
-  const [tasks, setTasks] = useState<Array<{ taskId: string; title: string; status: string; locate: string }>>([]);
+  const [tasks, setTasks] = useState<Array<{ taskId: string; title: string; taskStatus: string; runStatus: string | null; locate: string }>>([]);
+  const [tasksErr, setTasksErr] = useState<string | null>(null);
   const [searchRows, setSearchRows] = useState<Array<{ kind: 'message' | 'thread'; snippet: string; locate: string; projectName: string }>>([]);
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -48,15 +64,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // 任务事实（board.view scope=all——只读聚合；失败如实，不冒充空态为零任务）。
+  // 任务事实（board.view scope=all——只读聚合；失败**明确显示**错误行，不冒充「没有任务」）。
   useEffect(() => {
     let done = false;
-    void command<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskId: string; title: string; status: string; locate: string }> }> }> }>('board.view', { scope: 'all' })
-      .then((r) => {
-        if (done) return;
-        setTasks(r.groups.flatMap((g) => g.rooms.flatMap((room) => room.cards)));
-      })
-      .catch(() => { /* 任务面失败=面板仍有房间/私信/动作可用；不伪零 */ });
+    void command<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskId: string; title: string; taskStatus: string; runStatus: string | null; locate: string }> }> }> }>('board.view', { scope: 'all' })
+      .then((r) => { if (!done) { setTasks(r.groups.flatMap((g) => g.rooms.flatMap((room) => room.cards))); setTasksErr(null); } })
+      .catch((e: unknown) => { if (!done) setTasksErr((e as Error).message); });
     return () => { done = true; };
   }, []);
 
@@ -83,7 +96,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     for (const r of s.rooms) if (query.length === 0 || hit(r.name)) out.push({ key: `room-${r.id}`, section: '房间', label: r.name, icon: 'message-circle', hint: `房间 · ${s.projects.find((p) => p.id === r.projectId)?.displayName ?? ''}`, go: () => navigate(`/room/${r.id}`) });
     for (const d of s.dms) if (query.length === 0 || hit(`${d.peerDisplayName ?? ''} ${d.title ?? ''}`)) out.push({ key: `dm-${d.id}`, section: '私信', label: `${d.peerDisplayName ?? '成员'}${d.title != null && d.title.length > 0 ? ` · ${d.title}` : ''}`, icon: 'message-square', hint: d.archivedAt != null ? '私信 · 已归档' : '私信', go: () => navigate(`/dm/${d.id}`) });
     for (const m of s.members) if (query.length === 0 || hit(m.displayName)) out.push({ key: `member-${m.id}`, section: '成员', label: m.displayName, icon: 'sparkles', hint: `成员 · ${m.enabled ? '启用' : '停用'}`, go: () => navigate('/members') });
-    for (const t of tasks) if (query.length === 0 || hit(t.title)) out.push({ key: `task-${t.taskId}`, section: '任务', label: t.title, icon: 'list', hint: `任务 · ${t.status}`, go: locateGo(t.locate) });
+    for (const t of tasks) if (query.length === 0 || hit(t.title)) out.push({ key: `task-${t.taskId}`, section: '任务', label: t.title, icon: 'list', hint: `任务 · ${taskStatusLabel(t)}`, go: locateGo(t.locate) });
     for (const [i, r] of searchRows.entries()) out.push({ key: `sr-${i}`, section: r.kind === 'message' ? '消息' : '线程', label: r.snippet.slice(0, 60), icon: r.kind === 'message' ? 'message-square' : 'message-circle', hint: `${r.projectName} · 检索命中`, go: locateGo(r.locate) });
     return out.slice(0, 24);
   }, [query, s.rooms, s.dms, s.members, s.projects, tasks, searchRows]);
@@ -125,6 +138,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <span className="kbd">Esc</span>
         </div>
         <div className="overlay-body" style={{ padding: 8, overflow: 'auto', minHeight: 120 }}>
+          {tasksErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>任务聚合读取失败：{tasksErr}（房间/私信/成员/动作仍可用——不冒充没有任务）</div> : null}
           {searchErr != null ? <div className="panel warning" style={{ margin: 4, padding: 8 }}>检索失败：{searchErr}（房间/私信/任务/动作仍可用）</div> : null}
           {items.length === 0 && query.length > 0 ? <div className="panel info" style={{ margin: 4, padding: 8 }}>没有匹配结果（消息/线程走服务端检索，其余按已装载事实过滤）。</div> : null}
           {items.map((it, i) => (

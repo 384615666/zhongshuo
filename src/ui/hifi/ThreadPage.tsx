@@ -62,8 +62,10 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const allRooms = useStore((s) => s.rooms);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<'replies' | 'task' | 'artifacts'>(initialTab === 'task' ? 'task' : initialTab === 'artifacts' ? 'artifacts' : 'replies');
-  /** 验收/返工框打开时冻结的交付快照（deliveryId/revision/manifestHash——提交只带这份）。 */
-  const [reviewBox, setReviewBox] = useState<{ mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
+  /** 验收/返工框打开时冻结的交付快照（deliveryId/revision/manifestHash——提交只带这份）。
+   *  r57：切线程即作废（同 DM 跨会话修复）；作废判定含完整身份（同 revision 不同交付也作废）。 */
+  const [reviewBox, setReviewBox] = useState<{ threadId: string; mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
+  useEffect(() => { setReviewBox(null); }, [threadId]);
   const [stopping, setStopping] = useState(false);
   /** 成果标签页数据（r55）：会话附件 + 本任务交付（files.view 过滤）——代次收口，迟到不污染。 */
   const [artifacts, setArtifacts] = useState<{ attachments: ConversationAttachment[]; attErr: string | null; deliveries: DeliveryRow[]; delErr: string | null } | null>(null);
@@ -289,24 +291,28 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
 
   const openReview = (mode: 'accept' | 'rework') => {
     if (task?.pendingDelivery == null) return;
-    // 打开即冻结三重身份（id+revision+manifestHash）——此后刷新出新交付也不悄悄换稿。
+    // 打开即冻结三重身份（id+revision+manifestHash）——此后刷新出新交付也不悄悄换稿；绑定线程。
     const d = task.pendingDelivery;
-    setReviewBox({ mode, snapshot: { taskId: task.id, deliveryId: d.id, deliveryRevision: d.revision, manifestHash: d.manifestHash }, note: '' });
+    setReviewBox({ threadId, mode, snapshot: { taskId: task.id, deliveryId: d.id, deliveryRevision: d.revision, manifestHash: d.manifestHash }, note: '' });
   };
   const submitReview = async () => {
     if (reviewBox == null) return;
+    if (reviewBox.threadId !== threadId) { toast('验收目标已切换（框属其它线程）——作废零提交', 'warn'); setReviewBox(null); return; }
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) {
       toast('要求修改必须填写意见（意见进入正式任务记录并注入返工输入）', 'warn');
       return;
     }
-    const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.note.trim().length > 0 ? reviewBox.note.trim() : undefined, threadId);
+    const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
     if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '已提交返工意见（任务回到执行）', 'success'); setReviewBox(null); void loadThread(threadId); }
-    else { toast(`提交失败：${r.error}——交付可能已更新，详情已刷新`, 'error'); setReviewBox(null); }
+    else { toast(`提交失败：${r.error}——意见已保留可修正重提；若交付已变化本框将作废`, 'error'); }
   };
 
   const detail = task;
   const pendingDeliveryStale = reviewBox != null && detail?.pendingDelivery != null
-    && (detail.pendingDelivery.id !== reviewBox.snapshot.deliveryId || detail.pendingDelivery.revision !== reviewBox.snapshot.deliveryRevision);
+    && (detail.pendingDelivery.id !== reviewBox.snapshot.deliveryId
+      || detail.pendingDelivery.revision !== reviewBox.snapshot.deliveryRevision
+      || detail.pendingDelivery.manifestHash !== reviewBox.snapshot.manifestHash
+      || reviewBox.threadId !== threadId);
 
   return (
     <div className="page-stack" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>

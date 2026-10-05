@@ -311,14 +311,14 @@ export default function App() {
               <div className="side-heading">项目</div>
               {project == null ? (
                 <div className="side-empty">
-                  {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `启动失败：${s.bootError ?? '未知'}` : '尚未打开项目'}
+                  {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}` : '尚未打开项目'}
                   <button className="btn ghost sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开文件夹</button>
                   {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
                 </div>
               ) : (
                 <div className="side-project">
                   <div className="side-row context-active">
-                    <button className="side-item-label-btn" title={`项目：${project.displayName}`}>
+                    <button className="side-item-label-btn" title={`项目：${project.displayName}（${project.rootPath}）`}>
                       <Icon name="folder" size={13} />
                       <span className="side-item-label">{project.displayName}</span>
                     </button>
@@ -334,6 +334,16 @@ export default function App() {
                       <span className="side-item-label">{room.name}</span>
                     </button>
                   ))}
+                  {/* r57：打开/切换项目常驻入口（原型口径）——已打开项目后也可换，不靠手填启动设置重启。 */}
+                  <button
+                    className="side-item"
+                    data-zs-open-project="hifi"
+                    title="打开/切换项目：选择另一个文件夹作为当前项目（独立临时目录验证；草稿按房间/线程保留）"
+                    onClick={() => void hifiUi().pickAndOpenFolder()}
+                  >
+                    <Icon name="folder" size={13} />
+                    <span className="side-item-label">打开/切换项目</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -367,8 +377,24 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="workspace">
-            {path.startsWith('/thread/') ? (
+          <main className="workspace" data-zs-boot={s.boot}>
+            {s.boot === 'ready' && project == null ? (
+              /* r57 首次使用欢迎：成功读到空记忆=正常无项目状态——立即给打开入口（不再等 60s 报失败）。
+               * 区分：连接中（boot pending）/ 服务失败（boot failed——侧栏给重试）/ 路径失效
+               * （openProjectByPath 失败→boot failed 带真实原因）。 */
+              <div className="page-stack" style={{ padding: 24, maxWidth: 560, margin: '0 auto' }} data-zs-welcome="hifi">
+                <div className="panel info" style={{ textAlign: 'center', padding: 24 }}>
+                  <div style={{ fontSize: 28, marginBottom: 6 }}>众说</div>
+                  <div className="faint" style={{ marginBottom: 14 }}>本地多智能体协作工作台</div>
+                  <div className="small" style={{ lineHeight: 1.8, marginBottom: 16 }}>
+                    还没有打开项目。选择一个文件夹作为项目根目录开始——房间、任务、附件与导出
+                    都保存在你指定的目录与应用数据区；不打开项目也可以先浏览帮助说明。
+                  </div>
+                  <button className="btn primary sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开项目文件夹</button>
+                  <div className="faint small" style={{ marginTop: 10 }}>之后可随时从侧栏「打开/切换项目」更换</div>
+                </div>
+              </div>
+            ) : path.startsWith('/thread/') ? (
               (() => {
                 // 从**完整 route**（含 query）解析线程参数——path 已被 pathOf 去掉查询串，
                 // 此前 ?tab=/?message= 永远取不到（review-r51 §3.2）。

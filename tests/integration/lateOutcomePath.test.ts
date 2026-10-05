@@ -33,18 +33,24 @@ afterAll(() => {
 function seed(db: ZhongshuoDatabase): void {
   db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at) VALUES ('p1','d','D:/x','D:/x','{}',0)`).run();
   db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mA','p1','执行成员','agent',1)`).run();
+  // r57（准入继承）：同成员在途/UNKNOWN turn 占用持久化——本测试要并行构造多个 UNKNOWN turn，
+  // 补两个同项目成员让每个 turn 走真实派发（不同成员不冲突；project 限额 2 恰好覆盖 9/10）。
+  db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mB','p1','执行成员B','agent',1)`).run();
+  db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled) VALUES ('mC','p1','执行成员C','agent',1)`).run();
   db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('r1','p1','大厅','mA')`).run();
   db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('c1','p1','room','r1')`).run();
-  db.prepare(`INSERT INTO room_members (room_id, member_id) VALUES ('r1','mA')`).run();
+  db.prepare('INSERT INTO room_members (room_id, member_id) VALUES (?, ?)').run('r1', 'mA');
+  db.prepare('INSERT INTO room_members (room_id, member_id) VALUES (?, ?)').run('r1', 'mB');
+  db.prepare('INSERT INTO room_members (room_id, member_id) VALUES (?, ?)').run('r1', 'mC');
 }
 
-function makeTask(db: ZhongshuoDatabase, n: number, reviewPolicy: 'auto_deliver' | 'user_review' = 'auto_deliver'): string {
+function makeTask(db: ZhongshuoDatabase, n: number, reviewPolicy: 'auto_deliver' | 'user_review' = 'auto_deliver', memberId = 'mA'): string {
   const ids = { messageId: `lm${n}`, threadId: `lth${n}`, taskId: `ltk${n}`, taskEventId: `le${n}`, threadEventId: `lh${n}` };
   createRoomRootTask(db, {
     ids, projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default',
-    title: `T${n}`, body: `B${n}`, mentions: [{ kind: 'member', memberId: 'mA' }],
+    title: `T${n}`, body: `B${n}`, mentions: [{ kind: 'member', memberId }],
     author: { authorType: 'human', authorId: 'u' }, reviewPolicy, sourceConnectionId: null,
-    route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mA', frozenMemberIds: ['mA'], initialWakeMemberIds: ['mA'] },
+    route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: memberId, frozenMemberIds: [memberId], initialWakeMemberIds: [memberId] },
     now: n,
   });
   return ids.taskId;
@@ -342,7 +348,8 @@ describe('迟到成果正式接收路径（实际派发→截止 UNKNOWN→迟�
     seed(db);
     const storeDir = join(tmpRoot, 'store-scope');
     const mkTurnUnknown = async (n: number): Promise<{ taskId: string; turnId: string; runId: string; sessionId: string; adapter: FakeRuntimeAdapter; worker: DispatchWorker }> => {
-      const taskId = makeTask(db, n);
+      const memberOf = { 9: 'mA', 10: 'mB', 11: 'mC' } as Record<number, string>;
+      const taskId = makeTask(db, n, 'auto_deliver', memberOf[n] ?? 'mA');
       const adapter = new FakeRuntimeAdapter({ sessionStoreDir: storeDir, turnScripts: [[{ kind: 'stall', ms: 3_000 }]] });
       const worker = new DispatchWorker({ db, adapter, leaseOwner: `w-late9-${n}`, appDataDir: join(tmpRoot, 'a'), turnDeadlineMs: 400, interruptGraceMs: 400 });
       await worker.runOnce();

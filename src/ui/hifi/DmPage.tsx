@@ -16,7 +16,7 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft } from './loader';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate, pathOf, useHashRoute } from './lib/router';
@@ -43,10 +43,16 @@ export function DmPage() {
   const listRef = useRef<HTMLDivElement | null>(null);
   /** 头部操作忙态（按动作名——同一时刻一个；失败原因走 toast 如实）。 */
   const [busy, setBusy] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState(false);
+  /**
+   * 编辑框目标快照（r57，review-r56 §4 跨会话误提交修复）：打开时捕获 conversationId（+
+   * 重命名的 revision / 验收框的交付三重身份）。切换会话即作废（effect 清除）；提交前再核对
+   * 当前归属——不符=零提交。同会话交付更新按完整身份（task/delivery/revision/hash）判定。
+   */
+  const [renaming, setRenaming] = useState<{ conversationId: string; revision: number } | null>(null);
   const [renameText, setRenameText] = useState('');
-  /** 返工意见框（打开时冻结交付三重身份——提交只带这份）。 */
-  const [reviewBox, setReviewBox] = useState<{ mode: 'accept' | 'rework'; taskId: string; deliveryId: string; revision: number; manifestHash: string; note: string } | null>(null);
+  const [reviewBox, setReviewBox] = useState<{ conversationId: string; mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
+  // 切换会话：编辑框一律作废关闭（零提交、零串扰）——A 打开的框不会作用于 B。
+  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); }, [activeId]);
 
   // 活动目标追踪（接管定位用）：当前会话写入 ui.activeThreadId。
   useEffect(() => { if (activeId !== '') setState((st) => ({ ...st, ui: { ...st.ui, activeThreadId: activeId } })); }, [activeId]);
@@ -81,19 +87,27 @@ export function DmPage() {
     return () => { window.clearInterval(t); };
   }, [activeId]);
 
-  /** ── 头部正式操作（每项取当前 active 服务端事实；成功后刷新列表+历史；失败如实）。 ── */
+  /** ── 头部正式操作（每项取打开时的目标快照+提交前重核当前归属；失败如实）。 ── */
   const reloadAll = async () => { await refreshDms(); if (activeId !== '') await loadDmHistory(activeId); };
   const doRename = async () => {
-    if (active == null || renameText.trim().length === 0) return;
+    if (renaming == null || renameText.trim().length === 0) return;
+    // 提交前核对：框属于哪个会话就用哪个会话的快照（捕获的 conversationId/revision）——
+    // 切走后当前 active 不是目标=作废零提交（r57 跨会话误提交修复）。
+    const target = dms.find((d) => d.id === renaming.conversationId);
+    if (target == null) { toast('重命名目标已不可用（会话已切换或移除）——框已作废', 'warn'); setRenaming(null); return; }
     setBusy('rename');
     try {
-      await command('conversation.rename', { conversationId: active.id, title: renameText.trim(), expectedRevision: active.revision ?? 0 });
+      await command('conversation.rename', { conversationId: renaming.conversationId, title: renameText.trim(), expectedRevision: renaming.revision });
       recordWrite('conversation.rename', `私信重命名 →「${renameText.trim()}」`);
       toast('已重命名（revision CAS 通过）', 'success');
-      setRenaming(false);
+      setRenaming(null);
       await reloadAll();
-    } catch (e) { toast(`重命名失败：${(e as Error).message}`, 'error'); }
-    finally { setBusy(null); }
+    } catch (e) {
+      toast(`重命名失败：${(e as Error).message}`, 'error');
+      // CAS 冲突=列表里有更新版本——保留文本关闭框（重开取新 revision），不静默丢弃输入。
+      setRenaming(null);
+      await refreshDms();
+    } finally { setBusy(null); }
   };
   const doArchive = async () => {
     if (active == null) return;
@@ -141,21 +155,34 @@ export function DmPage() {
   };
   const openReview = (mode: 'accept' | 'rework') => {
     const p = active?.pendingReview;
-    if (p == null) return;
-    setReviewBox({ mode, taskId: p.taskId, deliveryId: p.deliveryId, revision: p.revision, manifestHash: p.manifestHash, note: '' });
+    if (p == null || active == null) return;
+    // 快照=当前会话+交付三重身份（r57）：此后切走/更版都按完整身份判定作废。
+    setReviewBox({ conversationId: active.id, mode, snapshot: { taskId: p.taskId, deliveryId: p.deliveryId, deliveryRevision: p.revision, manifestHash: p.manifestHash }, note: '' });
   };
   const submitReview = async () => {
     if (reviewBox == null) return;
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) { toast('要求修改必须填写意见（进入正式任务记录并注入返工输入）', 'warn'); return; }
+    // 提交前核对：当前会话必须还是框的归属会话（跨会话切换后 UI 已作废；此处双保险）。
+    if (active?.id !== reviewBox.conversationId) { toast('验收目标已切换（框属其它会话）——作废零提交', 'warn'); setReviewBox(null); return; }
     setBusy('review');
-    try {
-      await command('task.review', { taskId: reviewBox.taskId, deliveryId: reviewBox.deliveryId, deliveryRevision: reviewBox.revision, manifestHash: reviewBox.manifestHash, decision: reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', ...(reviewBox.mode === 'rework' ? { reviewComment: reviewBox.note.trim() } : {}) });
-      recordWrite('task.review', `私信交付${reviewBox.mode === 'accept' ? '验收通过' : '返工'}（v${reviewBox.revision} 三重身份）`);
+    // r57：复用正式适配器 submitTaskReview（返工 note 字段——旧实现误传 reviewComment 被拒）。
+    const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined);
+    if (r.ok) {
       toast(reviewBox.mode === 'accept' ? '已验收通过' : '已提交返工意见（任务回到执行）', 'success');
       setReviewBox(null);
       await reloadAll();
-    } catch (e) { toast(`提交失败：${(e as Error).message}——交付可能已更新，列表已刷新`, 'error'); setReviewBox(null); await reloadAll(); }
-    finally { setBusy(null); }
+      setBusy(null);
+      return;
+    }
+    // 失败：原因准确呈现；保留意见文本可修正重提（不称「交付可能更新」一刀切丢文本）。
+    const stale = active?.pendingReview == null
+      || active.pendingReview.taskId !== reviewBox.snapshot.taskId
+      || active.pendingReview.deliveryId !== reviewBox.snapshot.deliveryId
+      || active.pendingReview.revision !== reviewBox.snapshot.deliveryRevision;
+    toast(`提交失败：${r.error}${stale ? '（交付已变化——本框作废，请对新版本重新操作）' : '（意见已保留，可修正后重提）'}`, 'error');
+    if (stale) setReviewBox(null);
+    await reloadAll();
+    setBusy(null);
   };
   const doRecover = async (it: { taskId: string; lastRunId: string | null }) => {
     setBusy(`recover:${it.taskId}`);
@@ -212,17 +239,17 @@ export function DmPage() {
         ) : (
           <>
             <div className="row tight wrap" style={{ padding: '10px 14px 0' }} data-zs-dm-ops="hifi">
-              {renaming ? (
+              {renaming != null ? (
                 <span className="row tight">
                   <input
                     className="composer-input" style={{ minWidth: 200 }}
                     placeholder="会话标题（1–120 字）"
                     value={renameText}
                     onChange={(e) => setRenameText(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void doRename(); } if (e.key === 'Escape') setRenaming(false); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void doRename(); } if (e.key === 'Escape') setRenaming(null); }}
                   />
                   <button className="btn sm" disabled={busy != null} onClick={() => void doRename()}>保存</button>
-                  <button className="btn ghost sm" onClick={() => setRenaming(false)}>取消</button>
+                  <button className="btn ghost sm" onClick={() => setRenaming(null)}>取消</button>
                 </span>
               ) : (
                 <span className="section-title">{active.peerDisplayName ?? '成员'}{active.title != null && active.title.length > 0 ? ` · ${active.title}` : ''}</span>
@@ -234,7 +261,7 @@ export function DmPage() {
               </span>
               <span style={{ flex: 1 }} />
               {/* 正式操作行（r56）：按服务端事实出现——不摆不可用按钮。 */}
-              <button className="btn ghost sm" disabled={busy != null} title="重命名会话（conversation.rename——revision CAS，他人改动会冲突如实报错）" onClick={() => { setRenameText(active.title ?? ''); setRenaming(true); }}>重命名</button>
+              <button className="btn ghost sm" disabled={busy != null} title="重命名会话（conversation.rename——revision CAS，他人改动会冲突如实报错）" onClick={() => { setRenameText(active.title ?? ''); setRenaming({ conversationId: active.id, revision: active.revision ?? 0 }); }}>重命名</button>
               {active.activeTaskId != null && active.activeRunId != null ? (
                 <button className="btn ghost sm" disabled={busy != null} title={`停止执行（task.run 三重绑定：代次 ${active.activeStopGeneration ?? 0}——过时绑定由服务端拒绝）`} onClick={() => void doStop()}>停止执行</button>
               ) : null}
@@ -265,19 +292,38 @@ export function DmPage() {
                 </div>
                 {reviewBox != null ? (
                   <div className="page-stack" style={{ marginTop: 8 }}>
-                    {active.pendingReview.revision !== reviewBox.revision ? (
-                      <div className="panel warning">交付已更新（打开时 v{reviewBox.revision}，当前 v{active.pendingReview.revision}）——本框作废，请重新操作。</div>
-                    ) : reviewBox.mode === 'rework' ? (
-                      <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="返工意见（必填——进入正式任务记录并注入返工输入）" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
-                    ) : (
-                      <div className="faint small">将验收通过 v{reviewBox.revision}（manifest {reviewBox.manifestHash.slice(0, 10)}…）。</div>
-                    )}
-                    {active.pendingReview.revision === reviewBox.revision ? (
-                      <div className="row tight">
-                        <button className="btn sm" disabled={busy != null} onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认验收' : '提交返工意见'}</button>
-                        <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
-                      </div>
-                    ) : null}
+                    {/* 作废判定按**完整身份**（会话+task/delivery/revision/hash）——同 revision 不同
+                        交付（A→B 反例）也作废；作废框保留关闭入口（r57）。 */}
+                    {(() => {
+                      const p = active.pendingReview;
+                      const stale = p == null
+                        || p.taskId !== reviewBox.snapshot.taskId
+                        || p.deliveryId !== reviewBox.snapshot.deliveryId
+                        || p.revision !== reviewBox.snapshot.deliveryRevision
+                        || p.manifestHash !== reviewBox.snapshot.manifestHash;
+                      return stale ? (
+                        <>
+                          <div className="panel warning">交付已变化（打开时 v{reviewBox.snapshot.deliveryRevision}，当前 {p != null ? `v${p.revision}` : '无待验收交付'}）——本框作废。</div>
+                          <div className="row tight">
+                            <button className="btn ghost sm" onClick={() => setReviewBox(null)}>关闭作废框</button>
+                          </div>
+                        </>
+                      ) : reviewBox.mode === 'rework' ? (
+                        <textarea className="composer-input" style={{ width: '100%', minHeight: 56 }} placeholder="返工意见（必填——进入正式任务记录并注入返工输入）" value={reviewBox.note} onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })} />
+                      ) : (
+                        <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}（manifest {reviewBox.snapshot.manifestHash.slice(0, 10)}…）。</div>
+                      );
+                    })()}
+                    {(() => {
+                      const p = active.pendingReview;
+                      const stillValid = p != null && p.taskId === reviewBox.snapshot.taskId && p.deliveryId === reviewBox.snapshot.deliveryId && p.revision === reviewBox.snapshot.deliveryRevision && p.manifestHash === reviewBox.snapshot.manifestHash;
+                      return stillValid ? (
+                        <div className="row tight">
+                          <button className="btn sm" disabled={busy != null} onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认验收' : '提交返工意见'}</button>
+                          <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                 ) : null}
               </div>

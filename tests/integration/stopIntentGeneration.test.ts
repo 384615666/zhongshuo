@@ -87,6 +87,11 @@ async function settleStop(env: Env, taskId: string): Promise<void> {
   await env.cmd('task.stop', { taskId, targetRunId: runId, expectedStopGeneration: gen(env, taskId) });
   applyRecovery(env.db, Date.now());
   openDispatchGate(env.db, Date.now());
+  // r57（准入继承）：停止中断的 turn 现为 UNKNOWN 且**持久占用成员准入**——「停止结算」语义
+  // 必须含正式收口（对账 executed→服务端 no-os-process 取证→释放），否则后续同成员意图按
+  // 新合同正确地等待（不再是旧「新 worker 清空账本照常派发」）。
+  const turnId = (env.db.prepare('SELECT id FROM agent_turns WHERE run_id = ?').get(runId) as { id: string }).id;
+  await env.cmd('recovery.reconcile', { turnId, verdict: 'executed', note: '测试停止结算：程序事实收口（no-os-process）' });
 }
 
 async function fireReminder(env: Env, clock: { now: number }, title: string, threadId: string, budget = 3): Promise<void> {

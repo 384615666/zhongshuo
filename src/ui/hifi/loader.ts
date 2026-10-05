@@ -50,14 +50,24 @@ export async function bootRemembered(): Promise<void> {
       const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
       const path = remembered?.values?.['ui.autoOpenProjectPath'];
       if (typeof path === 'string' && path.length > 0) {
-        if (getState().boot === 'ready' || getState().boot === 'failed') return;
-        await openProjectByPath(path);
+        try {
+          if (getState().boot === 'ready' || getState().boot === 'failed') return;
+          await openProjectByPath(path);
+        } catch (e) {
+          // r57：记忆路径失效≠服务未就绪——如实报错并保持可操作（选择其它目录/重试），
+          // 不再被外层 catch 归类成「连接中」空转 60 秒。
+          setState((st) => ({ ...st, boot: 'failed', bootError: `记忆的项目路径无法打开：${(e as Error).message}——可打开其它文件夹或修改「启动时打开的项目」` }));
+        }
         return;
       }
-    } catch { /* daemon 未就绪——继续有界轮询 */ }
+      // r57：成功读到**空记忆**=正常无项目状态——立即就绪并显示欢迎/打开入口，
+      // 不再继续等 60 秒后误报「启动失败」（空项目≠失败）。
+      setState((st) => (st.activeProjectId === '' && st.boot === 'pending' ? { ...st, boot: 'ready' } : st));
+      return;
+    } catch { /* 服务未就绪——有界重试；真不可达在窗口尽后如实报告 */ }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: '60 秒内未取得服务端项目记忆——可手动打开文件夹或重试' } : s));
+  setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: '服务在 60 秒内未就绪——可重试，或直接打开文件夹' } : s));
 }
 
 export async function pickAndOpenFolder(): Promise<void> {

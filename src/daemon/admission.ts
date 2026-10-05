@@ -70,6 +70,17 @@ export class DispatchAdmission {
     return this.held.delete(turnId);
   }
 
+  /**
+   * 从持久事实恢复占位（r57，review-r56 §2）：重启后 admission 内存清空，但 UNKNOWN/
+   * retained/在途 turn 的占用是**持久合同**（对账未定不提前放行；确认继续≠退出证明）。
+   * 恢复不查限额——持久事实是既成占用（超限如实，不静默丢弃）；同 turnId 幂等。
+   * 释放仍走既有路径（recovery.reconcile/releaseProtection → releaseAdmission 联动）。
+   */
+  restore(turnId: string, dims: AdmissionDimensions): void {
+    if (this.held.has(turnId)) return;
+    this.held.set(turnId, dims);
+  }
+
   /** 强制释放（stop 收敛/强制退出路径专用——恢复语义由调用方记录）。 */
   forceReleaseAll(): Array<{ turnId: string; dims: AdmissionDimensions }> {
     const all = [...this.held.entries()].map(([turnId, dims]) => ({ turnId, dims }));

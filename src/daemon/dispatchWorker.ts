@@ -177,6 +177,42 @@ export class DispatchWorker {
     this.dispatchWaitDeadlineMs = options.dispatchWaitDeadlineMs;
     this.deliberateMaxTurns = options.deliberateMaxTurns;
     this.clock = options.clock ?? (() => Date.now());
+    this.restoreAdmissionFromDb();
+  }
+
+  /**
+   * 按持久事实恢复准入占位（r57，review-r56 §2 独立反例）：新 worker 的 admission 内存
+   * 为空，但「UNKNOWN（结局不确定）/ protection_state='retained'（保护未解除）/ 非终态在途」
+   * 的 turn 占用是**持久合同**——否则 dispatch.resume{confirm:true} 后同成员另一任务会被
+   * 新实例派发（确认继续≠退出证明；旧任务 redispatch 被拒不覆盖此路径）。
+   *
+   * 恢复的占用带真实 turnId：后续 recovery.reconcile/releaseProtection 的 releaseAdmission
+   * 联动照常收口（两个释放路径都有 retained/UNKNOWN 门控——notStarted→FAILED+refunded
+   * 但 retained 期间继续占用，正式解除后释放）。
+   * 只读档无 writeRoot 占位；已完成 turn 不占（其 dispatch 已收口）。
+   */
+  private restoreAdmissionFromDb(): void {
+    try {
+      const rows = this.db.prepare(
+        `SELECT t.id AS turnId, t.member_id AS memberId, tk.project_id AS projectId
+         FROM agent_turns t
+         JOIN workflow_runs r ON r.id = t.run_id
+         JOIN tasks tk ON tk.id = r.task_id
+         WHERE t.status = 'UNKNOWN'
+            OR t.protection_state = 'retained'
+            OR t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`,
+      ).all() as Array<{ turnId: string; memberId: string; projectId: string }>;
+      for (const row of rows) {
+        this.admission.restore(row.turnId, {
+          memberId: row.memberId,
+          projectId: row.projectId,
+          providerKey: this.providerKeyOf(row.memberId),
+          writeRootKey: null,
+        });
+      }
+    } catch {
+      /* 库不可读=无法恢复——按空账本启动（不阻塞 daemon；持久保护仍由租约/门禁守） */
+    }
   }
 
   /** 项目级协作限制（§17.8，第十七轮三）：项目列优先，NULL/查询失败回落全局默认。 */
@@ -931,10 +967,12 @@ export class DispatchWorker {
   /**
    * 准入占位释放 + 解除排队 skip（终态时保守清全部——skip 项下一轮重试判定）。
    * UNKNOWN 不释放：结果不确定（对账未定）不提前放行——由恢复/强制退出路径收口。
+   * r57：protection_state='retained' 同样不释放（预算已处置但保护未解除的遗留保护——
+   * 正式解除 recovery.releaseProtection 后经同钩子释放，与重启恢复的占位口径一致）。
    */
   private releaseAdmission(turnId: string): void {
-    const st = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
-    if (st?.status === 'UNKNOWN') return;
+    const st = this.db.prepare('SELECT status, protection_state FROM agent_turns WHERE id = ?').get(turnId) as { status: string; protection_state: string | null } | undefined;
+    if (st?.status === 'UNKNOWN' || st?.protection_state === 'retained') return;
     this.admission.release(turnId);
     this.blockedOutbox.clear();
   }
@@ -1049,8 +1087,10 @@ export class DispatchWorker {
    * 时释放准入占位并解除排队 skip——DB 事务先于此调用，持久状态不受此失败影响。
    */
   reconcileRelease(turnId: string): void {
-    const st = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined;
-    if (st == null || st.status === 'UNKNOWN') return; // 双保险：仅持久状态确认后释放
+    const st = this.db.prepare('SELECT status, protection_state FROM agent_turns WHERE id = ?').get(turnId) as { status: string; protection_state: string | null } | undefined;
+    // 双保险：仅持久状态确认后释放；r57——retained 期间不释放（与重启恢复口径一致，
+    // recovery.releaseProtection 解除后经同钩子放行）。
+    if (st == null || st.status === 'UNKNOWN' || st.protection_state === 'retained') return;
     this.admission.release(turnId);
     this.blockedOutbox.clear();
   }

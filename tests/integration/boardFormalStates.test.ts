@@ -122,6 +122,10 @@ describe('看板状态映射（正式链六形态）', () => {
     await env.cmd('task.stop', { taskId: t.taskId, targetRunId: runId, expectedStopGeneration: 0 });
     applyRecovery(env.db, Date.now()); // 停止不响应→UNKNOWN/INTERRUPTED；任务仍 ACTIVE；stop_generation=1
     openDispatchGate(env.db, Date.now()); // 用户确认继续（恢复门禁）
+    // r57（准入继承）：UNKNOWN turn 持久占用成员准入——确认继续≠退出证明。跟进派发前先正式
+    // 收口旧 turn（对账 executed→no-os-process 服务端取证→释放），新运行才可启动。
+    const stoppedTurn = (env.db.prepare('SELECT id FROM agent_turns WHERE run_id = ?').get(runId) as { id: string }).id;
+    await env.cmd('recovery.reconcile', { turnId: stoppedTurn, verdict: 'executed', note: '测试：停止中断的跟进前置对账（no-os-process）' });
     // 合法新派发：绑定线程的提醒到点自动跟进（第二十五轮三：历史停止代次不永久禁止）。
     const clock = { now: Date.now() };
     await env.cmd('reminder.schedule', { projectId: 'p1', conversationId: 'conv_room', threadId: t.threadId, ownerMemberId: 'mA', title: '跟进唤醒', schedule: { kind: 'once', at: clock.now + 60_000 }, autoDispatch: true });
