@@ -261,7 +261,15 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
     if (!stillCurrent(gen, projectId)) return;
     const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
-    setState((prev) => ({ ...prev, threadMessages: { ...prev.threadMessages, [threadId]: replies } }));    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
+    // r56：**合并**而非整表替换——可见期轻量刷新（5s）会把补读出的更早历史整页冲掉
+    //（长历史定位后元素消失）。按 id 去重合并、seq 升序，保留已补读窗口。
+    setState((prev) => {
+      const cur = prev.threadMessages[threadId] ?? [];
+      const byId = new Map(cur.map((m) => [m.id, m]));
+      for (const m of replies) byId.set(m.id, m);
+      const merged = [...byId.values()].sort((a, b) => (a.threadMessageSeq ?? 0) - (b.threadMessageSeq ?? 0));
+      return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: merged } };
+    });    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
     if ((hist.rootAttachments ?? []).length > 0 && anchor != null) {
       setState((prev) => ({
         ...prev,

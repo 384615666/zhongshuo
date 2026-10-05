@@ -25,7 +25,7 @@ const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const outArg = process.argv[2];
 const out = outArg ? join(repo, outArg) : join(repo, 'dist', 'desktop', `hifi-h1-candidate-${stamp}`);
 if (existsSync(join(out, 'RESULTS'))) {
-  const userFills = readdirSync(join(out, 'RESULTS')).filter((f) => f !== 'SHORT-TEST-template.md' && f !== 'H3-TEST-template.md');
+  const userFills = readdirSync(join(out, 'RESULTS')).filter((f) => f !== 'SHORT-TEST-template.md' && f !== 'H3-TEST-template.md' && f !== 'H4-TEST-template.md');
   if (userFills.length > 0) {
     console.error(`[hifi-pkg] 拒绝：目标目录 RESULTS 含用户回填（${userFills.join('、')}）——独立目录输出，不覆盖用户结果。`);
     process.exit(1);
@@ -217,7 +217,45 @@ writeIfAbsent(join('RESULTS', 'H3-TEST-template.md'), `# H3-v2 候选短测结�
 异常与备注（没有待确认提醒时 H5 相关子项记 NOT_RUN 即可，不需要造数据）：
 `.replaceAll('\n', '\r\n'), 'utf8');
 
-// 4) 结果模板（不覆盖用户结果）
+// 3c) README-H4（r56 H4 候选：H3-v2 全部+命令面板/恢复界面/日常操作/预览阅读/筛选补读）
+writeIfAbsent('README-H4.md', `# 众说 H4 候选（新界面·命令面板+恢复界面+日常操作收口·可短测）
+
+**这是什么**：H4 = H3-v2 全部能力 + 本批归位的日常工作流：
+- **命令面板**：Ctrl+K 全局打开（仅新界面可见时响应）——搜页面/房间/私信/成员/任务（真实
+  事实）+ 消息/线程服务端检索；↑↓ 选择、Enter 打开、Esc 关闭；输入法组合态不误触。面板只做
+  导航定位，不承担确认执行/验收/解除保护。
+- **恢复检查**：侧栏常驻入口（有注意项自动弹一次）——门禁/UNKNOWN turn/待解除保护/中断
+  执行分列；确认继续派发、对账（人工依据必填）、解除保护、定位四类动作分开，不自动重放。
+- **私信操作行**：重命名/归档恢复/停止执行/继续队列/待验收·返工/中断恢复/导出
+  MD·HTML·DOCX（自动打开导出目录）。
+- **线程**：关注/静音（阅读订阅）、消息引用与表情、导出 MD/DOCX；预览支持 窄/宽/全屏
+  展开与「引用到输入框」。
+- **搜索**：作者/日期/会话筛选；长历史定位自动补读（旧消息真实滚动到位，不再「未定位」）。
+- 标题栏新增「演练·模拟派发/真实派发」防护标识；同成员任务排队合同有专项工程验证。
+
+本包短测项 H1–H8 见 RESULTS/H4-TEST-template.md（**结果填 H4-TEST-template.md**）。旧 H2 七项/
+H3 六项不必重测。边界（如实）：Git 写操作在原界面（直达按钮）；runtime 绑定在原界面项目
+设置；搜索/活动流/看板为只读聚合；恢复对账/解除保护需人工依据；零真实模型调用。
+旧包与数据原地保留；本包独立目录、独立数据根。
+`.replaceAll('\n', '\r\n'), 'utf8');
+writeIfAbsent(join('RESULTS', 'H4-TEST-template.md'), `# H4 候选短测结果（用户回填——本文件不会被程序覆盖）
+
+- 日期/参与人：
+- 包目录/buildId（ZhongshuoDual/BUILD.json）：
+
+| # | 项 | 结论（PASS/FAIL/BLOCKED/NOT_RUN） | 一句话说明 |
+|---|---|---|---|
+| H1 | 命令面板：Ctrl+K 打开→输入房间名→Enter 跳转；Esc 关闭；旧界面接管时 Ctrl+K 不弹 | | |
+| H2 | 恢复检查：侧栏入口可见；无注意项时显示"没有需要处理的恢复事项" | | 有注意项时会自动弹一次（演练包正常启动通常无） |
+| H3 | 私信操作：重命名生效；发送一条→等回复→「验收通过/确认验收」任务完成；导出 MD 自动打开目录 | | |
+| H4 | 私信归档→只读+禁发→取消归档恢复 | | |
+| H5 | 线程：关注后「待我处理」出现关注线程有新回复；消息菜单「引用」插入输入框；👍 表情可点 | | |
+| H6 | 预览：窄/宽/全屏展开切换；Esc 退出展开；「引用」把预览插入当前输入框 | | 用任意文本附件即可 |
+| H7 | 搜索筛选：日期设为昨天→无结果；改回今天→有结果；会话选默认房间→只搜该房间 | | 关键词用「待验收」或任意已有词 |
+| H8 | 标题栏「演练·模拟派发」标识可见；窗口缩放（Ctrl+加减/系统缩放）下三键与标识不遮挡 | | 关闭窗口仍是最后一步（本项不含关闭） |
+
+异常与备注（最后再关窗口；不需要开发者工具/SQL/造故障）：
+`.replaceAll('\n', '\r\n'), 'utf8');
 writeIfAbsent(join('RESULTS', 'SHORT-TEST-template.md'), `# H2 候选短测结果（用户回填——本文件不会被程序覆盖）
 
 - 日期/参与人：

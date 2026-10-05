@@ -2,7 +2,69 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十五轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十六轮长批次，唯一权威快照）
+
+> R55=反馈合并修复+三页归位+hifi-h3-win-v2；**R56=H4 收口长批次**：两确认缺陷修复+同成员排队
+> 合同核清+命令面板/恢复界面/H4 外围+日常操作归位+独立候选 **hifi-h4-win-v1**。旧包
+> （H2-v2/v6/H3-v1/H3-v2）与用户数据原地稳定；Android 用 v6。能力↔入口↔状态对应清单见
+> `hifi-capability-map-r56-20261005.md`。
+> - **[§1 两确认缺陷（review-r55 §2）]** ①搜索清空倒灌：runSearch 对空关键词/无效范围**先作废
+>   在途代次**（genRef++）再 return——迟到旧响应不再写屏，同时清结果/错误/加载态；②收藏
+>   「当前项目」范围：按收藏行 projectId 过滤生效；链接收藏（无项目关联）给「复制链接」动
+>   作+计数说明（收窄时不静默消失）。
+> - **[§2 同成员排队合同核清（review-r55 §3，换种子成员不能替代）]** 新增
+>   `tests/integration/memberQueueContractR56.test.ts`（**受控短暂忙碌 600ms，不增并行/不绕
+>   租约**）：①同 Agent 两房间任务——忙时第二项 `run.admissionDeferred{reason:'member'}` 留证
+>   +outbox 回 pending+零 run/turn+startTurn 恰 1（真实等待非沉默）；释放后同 worker 领取续跑
+>   （恰 2 次、两键各 done 一次、再泵零新增）；②「崩溃」重启（applyRecovery 同款）——在途
+>   turn→UNKNOWN/run→INTERRUPTED/门禁落下，门禁期新 worker runOnce 返回 false 零领取，
+>   `dispatch.resume{confirm:true}` 后排队意图继续，`task.redispatch` 对未对账旧意图按
+>   RECONCILE 拒（不复活），UNKNOWN 不在派发路径改写；③同 DM 连续消息串行+恰一次入库。**机制
+>   结论**：成员串行=DispatchAdmission 进程内存（生产单 worker 实例）；跨重启保护=UNKNOWN+
+>   门禁+对账（不靠 admission 记忆）——r55 的「永久挂起」实为停机落停滞窗留 UNKNOWN→恢复
+>   门禁等用户确认（合同行为），非排队缺陷；测试曾用「新 worker 实例」模拟重启反而绕开了
+>   admission——以生产单实例+applyRecovery 组合验证为准。
+> - **[§3 命令面板+快捷键]** 复用原型布局，正式数据：页面动作+房间/私信/成员（store）+任务
+>   （board.view scope=all）+消息/线程（search.query 防抖 260ms，清空作废在途）；↑↓/Enter/Esc，
+>   IME 组合态不触发（compositionStart/End+isComposing 双门）；Ctrl+K 仅 hifi 可见响应
+>   （legacy-on 守卫）；**面板只导航/定位**（locate 深链），不承担确认执行/验收/解除保护。
+> - **[§4 恢复检查界面]** recovery.status 只读事实（门禁+排队键/UNKNOWN turn 明细/待解除保护
+>   retained/中断 run/未收口撤销/租约/上次停止记录）四类动作**分列**：确认继续=dispatch.resume
+>   {confirm:true}（不接受空参）、对账=recovery.reconcile（verdict+note 必填+notStarted 风险
+>   确认——租约保留）、解除保护=recovery.releaseProtection（服务端取证拒活体）、定位=深链；
+>   侧栏常驻入口+有注意项首启自动弹一次（每启动一次）；中断恢复执行（task.redispatch）留在
+>   任务自身上下文与对账分离。探针 TRC 全链（fabricated 崩溃→门禁→notStarted 对账 turn
+>   FAILED→确认继续 gate open）。
+> - **[§5 日常操作归位]** ①DM 头部操作行（重命名 revision CAS/归档恢复/停止三重绑定/继续队列
+>   dm.resume 泵一条/待验收返工三重身份冻结框/中断恢复绑来源 run+不可恢复原因/导出
+>   MD·HTML·DOCX+openPath exports 白名单开目录）；②线程关注/静音（thread.subscribe 人的阅读
+>   订阅）+消息引用插入草稿（insertText）+表情 message.react toggle+导出 MD/DOCX；③预览
+>   窄/宽(880px)/全屏展开（Esc 退出、面板/恢复弹窗打开时让位）+「引用到输入框」（按当前路由
+>   定草稿键+固定版本+可见摘录，无输入页如实提示）；④搜索补作者/日期窗/会话筛选
+>   （search.query 参数一一对应）+长历史定位补读（thread.history beforeSeq 每轮 100 至多 5 轮
+>   ——**发现并修复：5s 刷新整表替换会冲掉补读历史，loadThread 改按 id 合并+seq 排序**）；
+>   ⑤标题栏防护标识（runtime.status 扩 dispatchGuard 只读自述：fakeAllowed/realDispatchGuard
+>   →「演练·模拟派发/真实派发」徽章 data-zs-dispatch-guard）。
+> - **[§6 交付 hifi-h4-win-v1]** buildId bld_9505e0b4e980e83c（591/591）；范围=H3-v2 全部+本批
+>   全部（README-H4+H4-TEST-template 入 make 脚本与白名单）。**探针 verify-hifi-h4-r56.cjs
+>   22/22 pass**（r55 基线 15+TGU 防护标识/TPA 面板四态/TLS 筛选含确定性负例/TLL 补读定位/
+>   TTH 关注静音引用表情/TDM 重命名→验收→导出→归档恢复全链/TRC 恢复全链/T8 宽度展开引用）；
+>   全量 **857/857+3**（新增 memberQueueContractR56）+typecheck×2；视觉核验：13 张 PASS
+>   （恢复弹窗截图=对账后 retained+解除保护状态——合同正确的分列中间态；设置双反斜杠=探针
+>   夹具写入字面值非产品问题）。**verify-hifi-package-r56.cjs 三次运行 allPass
+>   r56-20261005102739**（首启/复用/重启分列，在 r55 全链上新增：防护标识/面板开-选-关/
+>   恢复入口；real_calls=0、优雅停机、run2/3 重启历史）。
+> - **[坑（本轮）]** ①**probe 的 daemon.command 返回原始 envelope**（{ok,data}——不自动解包
+>   ；conversation.create 取 conversationId 要 .data）；②toast 会顶掉前一条——验收 toast 出现
+>   ≠busy 复位（finally 在 reloadAll 后）——探针等按钮 disabled=false 再点；③CompositionEvent/
+>   Escape 须派发在焦点元素（window 派发到不了 React 目标）；④Electron probe 焦点键顺序：
+>   palette 打开后 activeElement=输入框；⑤loadThread 整表替换冲掉补读（已改合并）；
+>   ⑥TLL 目标要排除锚消息（锚块 id 同为 msg-<id>，初始可见≠补读证明）。
+> - **[待办（R57）]** 用户 hifi-h4-win-v1 集中短测（README-H4 H1–H8，约 15–20 分钟；旧项不重测）
+>   ；收到反馈优先处理实际失败。余项：原型设置/成员视觉细化、多尺寸/缩放截图对照补充（本轮
+>   以 1440×900+900×620 为主）、G4/DEV-10/11/并行写入/价值评价按既定延期；Android v6 独立。
+
+## 上一轮快照（2026-10-05 第五十五轮，唯一权威快照）
 
 > R54=无边框标题栏+H3 收尾+hifi-h3-win-v1；**R55=合并用户短测反馈修复（T2 完整版/T4 发送前
 > 提示/设置显示同步/附件呈现）+搜索与收藏/活动流/线程成果标签三处归位+独立候选
