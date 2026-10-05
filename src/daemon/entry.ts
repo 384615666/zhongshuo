@@ -219,6 +219,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (process.env.ZS_ALLOW_FAKE === '1') {
       // 成员级 fake 实例与默认实例同款编排（ZS_FAKE_DELIB=1 时按输入契约生成合法研讨
       // 载荷——彩排/演练经成员绑定路径与真实链路一致，不因工厂实例缺编排而假失败）。
+      // 停延工具统一走默认实例的 ZS_FAKE_STALL_MS（上方 adapter 构建处——成员绑定路径
+      // 不重复实现，避免两套旋钮漂移）。
       factories.fake = () => new FakeRuntimeAdapter(
         process.env.ZS_FAKE_DELIB === '1'
           ? { structuredFinal: false, turnScriptSequencer: (input) => simulateDeliberationTurn(input.text) }
