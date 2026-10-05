@@ -25,7 +25,7 @@ const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const outArg = process.argv[2];
 const out = outArg ? join(repo, outArg) : join(repo, 'dist', 'desktop', `hifi-h1-candidate-${stamp}`);
 if (existsSync(join(out, 'RESULTS'))) {
-  const userFills = readdirSync(join(out, 'RESULTS')).filter((f) => f !== 'SHORT-TEST-template.md');
+  const userFills = readdirSync(join(out, 'RESULTS')).filter((f) => f !== 'SHORT-TEST-template.md' && f !== 'H3-TEST-template.md');
   if (userFills.length > 0) {
     console.error(`[hifi-pkg] 拒绝：目标目录 RESULTS 含用户回填（${userFills.join('、')}）——独立目录输出，不覆盖用户结果。`);
     process.exit(1);
@@ -173,6 +173,34 @@ writeIfAbsent('README-H2.md', `# 众说 H2 候选（新界面·回复串+附件+
 
 ## 保留
 - 旧包（v1 工程候选、v2—v6 双机验收包、hifi-h2-win-v1）与其数据/结果原地保留；本包独立目录、独立数据根。
+`.replaceAll('\n', '\r\n'), 'utf8');
+
+// 3b) README-H3（第五十四轮 H3 候选口径：窗口外壳+五页归位——与 H2 模板分列）
+writeIfAbsent('README-H3.md', `# 众说 H3 候选（新界面·窗口外壳+五页归位·可短测）
+
+**这是什么**：H3 候选 = H2 全部能力 + 无边框自绘标题栏（拖动/最小化/最大化还原/关闭走既有
+优雅停机链；--no-hifi 保留原生框）+ 五页归位（看板/文件与 Git/成员管理/待我处理/设置——正式
+命令接线）+ 定位链接闭环（详情「复制定位链接」↔ 设置「打开定位」）。
+H2 七项（见 hifi-h2-win-v2 的 README）如已测过不必重测；本包短测项（H1–H6：标题栏/看板/
+文件与 Git/成员/待我处理/设置——含保存回读与打开定位）见 RESULTS/H3-TEST-template.md。
+边界（如实）：Git 写操作在原界面仓库区（直达按钮）；runtime 绑定在原界面项目设置；看板/
+Files/待我处理为只读聚合；零真实模型调用。旧包原地保留；本包独立目录、独立数据根。
+`.replaceAll('\n', '\r\n'), 'utf8');
+writeIfAbsent(join('RESULTS', 'H3-TEST-template.md'), `# H3 候选短测结果（用户回填——本文件不会被程序覆盖）
+
+- 日期/参与人：
+- 包目录/buildId（ZhongshuoDual/BUILD.json）：
+
+| # | 项 | 结论（PASS/FAIL/BLOCKED/NOT_RUN） | 一句话说明 |
+|---|---|---|---|
+| H1 | 标题栏：拖动/双击最大化/最小化/关闭=优雅停机 | | |
+| H2 | 看板：范围切换+卡片→线程详情 | | |
+| H3 | 文件与 Git：项目文件快照预览+Git 状态+原界面直达 | | |
+| H4 | 成员：停用⇄启用；协调者拒绝如实 | | |
+| H5 | 待我处理：定位与确认执行分离 | | |
+| H6 | 设置：保存回读一致+打开定位 | | |
+
+异常与备注：
 `.replaceAll('\n', '\r\n'), 'utf8');
 
 // 4) 结果模板（不覆盖用户结果）

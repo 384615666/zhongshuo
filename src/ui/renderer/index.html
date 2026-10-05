@@ -7,6 +7,11 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- 自绘标题栏挂载点（第五十四轮 H3）：在 #hifi-root/#legacy-root 之外——legacy 接管
+       （body.legacy-on 只隐藏 #hifi-root）与 hifi 样式禁用都不影响它；样式由 hifi-flag.js
+       注入的 <style data-zs-titlebar> 承担（独立于 hifi/app.css）。--no-hifi 时窗口保留
+       原生框，本节点保持空且无 body.zs-frameless 偏移。 -->
+  <div id="zs-titlebar"></div>
   <div id="hifi-root"></div>
   <div id="legacy-root">
   <div id="app">

@@ -708,10 +708,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'room.list': {
         const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
-        const rooms = deps.db.prepare('SELECT id, name, archived_at FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null }>;
+        const rooms = deps.db.prepare('SELECT id, name, archived_at, coordinator_member_id FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null; coordinator_member_id: string | null }>;
         const items = rooms.map((r) => {
           const conversation = deps.db.prepare('SELECT id FROM conversations WHERE room_id = ? LIMIT 1').get(r.id) as { id: string } | undefined;
-          return { id: r.id, name: r.name, archived: r.archived_at != null, conversationId: conversation?.id ?? null };
+          return { id: r.id, name: r.name, archived: r.archived_at != null, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null };
         });
         return withCommandId({ ok: true, data: { items } });
       }

@@ -18,6 +18,9 @@ import { ThreadPage } from './ThreadPage';
 import { BoardPage } from './BoardPage';
 import { FilesPage } from './FilesPage';
 import { SettingsPage } from './SettingsPage';
+import { MembersPage } from './MembersPage';
+import { PendingPage } from './PendingPage';
+import { TitleBar } from './components/TitleBar';
 import { PreviewPane } from './preview/PreviewPane';
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
 
@@ -207,8 +210,12 @@ export default function App() {
   );
 
   return (
-    <HifiErrorBoundary>
-      <div className="app">
+    <>
+      {/* 标题栏（portal 到 #zs-titlebar，错误边界之外）：子树渲染失败时窗口控制仍在；
+          React 整体失败由 hifi-flag.js 看门狗重建最小壳兜底。 */}
+      <TitleBar />
+      <HifiErrorBoundary>
+        <div className="app">
         <div className="app-body">
           <aside className="sidebar">
             <div className="sidebar-top">
@@ -229,7 +236,14 @@ export default function App() {
                 <Icon name="list" size={14} />
                 <span className="side-item-label">任务看板</span>
               </button>
-              {legacyItem('members', 'users', '成员管理', '成员管理')}
+              <button
+                className={`side-item${path === '/members' ? ' active' : ''}`}
+                title="成员管理：项目成员/房间名单/协调者与启用状态（正式命令）"
+                onClick={() => navigate('/members')}
+              >
+                <Icon name="users" size={14} />
+                <span className="side-item-label">成员管理</span>
+              </button>
               <button className={`side-item${path === '/dm' || path.startsWith('/dm/') ? ' active' : ''}`} title="私信：本项目一对一会话" onClick={() => navigate('/dm')}>
                 <Icon name="message-square" size={14} />
                 <span className="side-item-label">私信</span>
@@ -267,7 +281,14 @@ export default function App() {
               )}
             </div>
             <div className="sidebar-foot">
-              {legacyItem('pending', 'inbox', '待我处理', '待我处理')}
+              <button
+                className={`side-item${path === '/pending' ? ' active' : ''}`}
+                title="待我处理：权威业务状态汇总（待验收/未读/阻塞/待确认提醒——mine.pending）"
+                onClick={() => navigate('/pending')}
+              >
+                <Icon name="inbox" size={14} />
+                <span className="side-item-label">待我处理</span>
+              </button>
               <button
                 className={`side-item${path === '/settings' ? ' active' : ''}`}
                 title="设置与帮助：应用设置/远程事实（只读）/打开定位；未换装项定向原界面"
@@ -297,6 +318,10 @@ export default function App() {
               <FilesPage />
             ) : path === '/settings' ? (
               <SettingsPage />
+            ) : path === '/members' ? (
+              <MembersPage />
+            ) : path === '/pending' ? (
+              <PendingPage />
             ) : (
               <DmPage />
             )}
@@ -308,6 +333,7 @@ export default function App() {
         ) : null}
         <PreviewPane />
       </div>
-    </HifiErrorBoundary>
+      </HifiErrorBoundary>
+    </>
   );
 }

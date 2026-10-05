@@ -19,3 +19,19 @@ contextBridge.exposeInMainWorld('zs', {
     ipcRenderer.on('zs:demo-status', (_e, status) => cb(status));
   },
 });
+
+/**
+ * 窗口控制窄桥（第五十四轮 H3 §3）：仅枚举动作，经 main 侧 zs:window 校验（senderFrame
+ * zsres://app/ 白名单+枚举拒绝+只作用于可信主窗口）。close 沿既有优雅收口链。
+ */
+contextBridge.exposeInMainWorld('zsWindow', {
+  minimize: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:window', 'minimize'),
+  toggleMaximize: (): Promise<{ ok: boolean; maximized?: boolean }> => ipcRenderer.invoke('zs:window', 'toggleMaximize'),
+  close: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:window', 'close'),
+  getState: (): Promise<{ ok: boolean; state?: { maximized: boolean; fullScreen: boolean; focused: boolean } }> => ipcRenderer.invoke('zs:window', 'getState'),
+  onStateChange: (cb: (s: { maximized: boolean; fullScreen: boolean; focused: boolean }) => void): (() => void) => {
+    const listener = (_e: unknown, s: { maximized: boolean; fullScreen: boolean; focused: boolean }): void => cb(s);
+    ipcRenderer.on('zs:window-state', listener);
+    return () => ipcRenderer.removeListener('zs:window-state', listener);
+  },
+});

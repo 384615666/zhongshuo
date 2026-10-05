@@ -386,6 +386,9 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
+    // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。
+    frame: process.argv.includes('--no-hifi'),
     ...(simMode ? { title: '众说（模拟验证模式——真实派发已防护，不会发出真实模型请求）' } : {}),
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -398,6 +401,33 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
       backgroundThrottling: false,
     },
   });
+  // 窗口控制窄 IPC（第五十四轮 §3）：只接受枚举动作、只作用于本主窗口、与既有命令桥同判
+  // senderFrame 来源（zsres://app/ 以外一律拒绝——不开放任意系统命令）。close 走 win.close()
+  // → window-all-closed → shutdownDaemon() 既有优雅收口链（daemon.shutdown→有界等待→kill
+  // 兜底→desktop-shutdown.json）——不为无边框改用 app.exit/直接销毁。
+  ipcMain.handle('zs:window', (event, action: unknown) => {
+    assertTrustedSender(event);
+    if (action === 'minimize') { win.minimize(); return { ok: true }; }
+    if (action === 'toggleMaximize') {
+      if (win.isMaximized()) win.unmaximize(); else win.maximize();
+      return { ok: true, maximized: win.isMaximized() };
+    }
+    if (action === 'close') { win.close(); return { ok: true }; }
+    if (action === 'getState') {
+      return { ok: true, state: { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused() } };
+    }
+    throw new Error(`未知窗口操作：${String(action)}`);
+  });
+  const pushWindowState = (): void => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('zs:window-state', { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused() });
+  };
+  win.on('maximize', pushWindowState);
+  win.on('unmaximize', pushWindowState);
+  win.on('enter-full-screen', pushWindowState);
+  win.on('leave-full-screen', pushWindowState);
+  win.on('focus', pushWindowState);
+  win.on('blur', pushWindowState);
   // 模拟验证模式标题持久（页面 <title> 会在 loadFile 后覆盖 BrowserWindow title——标题是
   // 用户识别"当前实例不发真实请求"的第一标识，不得被冲掉）。
   if (simMode) {

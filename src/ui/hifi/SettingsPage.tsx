@@ -1,64 +1,79 @@
 /**
- * 设置与帮助（H3 第一批，第五十三轮）：应用/项目/远程按原型设置导航归位——首版接**真实**
- * 只读写通道：
- *  - 应用：`app.settings.get/set`（ui.autoOpenProjectPath 可编辑保存——daemon 白名单键；
- *    repoStatus.visible 如实展示）。
- *  - 远程：`remote.config.get` 实际监听事实分层呈现（running/address/指纹/LAN 自检——只读，
- *    变更经原界面远程面板：remote.config.set 在本页不接写，避免双入口口径漂移）。
- *  - 打开定位：粘贴 #task=/#delivery=/#msg=/#dm= 深链 → 正式 deepLink.resolve 定位（桌面端
- *    没有地址栏——这是「复制定位链接」的配套粘贴入口，r53 §5/T6）。
- *  未换装项（成员管理/提醒/搜索等）如实列出并给「原界面」定向入口。
+ * 设置与帮助（第五十四轮 §4 重组）：按批准原型的「应用 / 项目」分区组织，**用户能理解的
+ * 名称**承载操作；底层设置键/命令细节收进「诊断信息」折叠层（工程键不进操作面）。
+ *  - 应用：启动时打开的项目（ui.autoOpenProjectPath——保存后**回读核对**）、显示仓库状态
+ *    （repoStatus.visible——legacy 主池仓库条开关；true/false 白名单）。
+ *  - 项目：当前项目事实（名称/路径）+ 任务验收策略只读（变更在原界面项目设置——实际入口
+ *    按钮直达，不是一句说明）。
+ *  - 远程访问：remote.config.get 实际监听事实（只读；变更给原界面直达入口）。
+ *  - 打开定位：#task=… 深链粘贴（「复制定位链接」的配套入口——桌面端没有地址栏）。
+ * 保存走正式 app.settings.set；失败真实上屏，不伪成功。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink } from './loader';
 import { isExternalDeepLink } from './lib/deepLink';
 import { takeLegacy } from './App';
+import { recordWrite } from './data/store';
 
-interface RemoteCfg { enabled?: boolean; allowLan: boolean; port?: number; running?: boolean; address?: string; fingerprint?: string; caFingerprint?: string; lanAddresses?: string[]; certNotAfter?: number; certSubject?: string; certIssuer?: string; lanSelfCheck?: { ok: boolean; detail?: string } | null; note: string }
+interface RemoteCfg { allowLan: boolean; running?: boolean; address?: string; fingerprint?: string; caFingerprint?: string; certNotAfter?: number; lanSelfCheck?: { ok: boolean; detail?: string } | null; note: string }
 
 export function SettingsPage() {
   const projectId = useStore((s) => s.activeProjectId);
+  const project = useStore((s) => s.projects.find((p) => p.id === s.activeProjectId) ?? null);
   const [autoOpen, setAutoOpen] = useState<string>('');
+  const [autoOpenSaved, setAutoOpenSaved] = useState<string | null>(null);
   const [repoVisible, setRepoVisible] = useState<string>('');
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [remote, setRemote] = useState<RemoteCfg | null>(null);
   const [remoteErr, setRemoteErr] = useState<string | null>(null);
   const [deepLinkInput, setDeepLinkInput] = useState('');
+  const [diagOpen, setDiagOpen] = useState(false);
+  const genRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const gen = ++genRef.current;
     try {
       const r = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath', 'repoStatus.visible'] });
+      if (gen !== genRef.current) return;
       setAutoOpen(r.values['ui.autoOpenProjectPath'] ?? '');
+      setAutoOpenSaved(r.values['ui.autoOpenProjectPath'] ?? '');
       setRepoVisible(r.values['repoStatus.visible'] ?? '');
-    } catch (e) { toast(`应用设置读取失败：${(e as Error).message}`, 'error'); }
+    } catch (e) { if (gen === genRef.current) toast(`应用设置读取失败：${(e as Error).message}`, 'error'); }
     try {
-      setRemote(await command<RemoteCfg>('remote.config.get'));
-      setRemoteErr(null);
-    } catch (e) { setRemoteErr((e as Error).message); }
+      const rc = await command<RemoteCfg>('remote.config.get');
+      if (gen !== genRef.current) return;
+      setRemote(rc); setRemoteErr(null);
+    } catch (e) { if (gen === genRef.current) setRemoteErr((e as Error).message); }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
-  const saveAutoOpen = async () => {
-    const v = autoOpen.trim();
-    if (v.length === 0) { toast('路径为空——如需清除自动打开请填一个有效目录（daemon 白名单不接受空值）', 'warn'); return; }
-    setSaving(true);
+  /** 保存+回读核对（§4：实际 UI 保存要核回读——设置成功以读回的值为准）。 */
+  const saveSetting = async (key: 'ui.autoOpenProjectPath' | 'repoStatus.visible', value: string, label: string) => {
+    if (value.trim().length === 0) { toast('值不能为空（此键不接受空串——如需默认行为请保持原值）', 'warn'); return; }
+    setBusy(true);
     try {
-      await command('app.settings.set', { key: 'ui.autoOpenProjectPath', value: v });
-      toast('已保存（重启后生效）', 'success');
-    } catch (e) { toast(`保存失败：${(e as Error).message}`, 'error'); }
-    finally { setSaving(false); }
+      await command('app.settings.set', { key, value });
+      const back = await command<{ values: Record<string, string | null> }>('app.settings.get', { keys: [key] });
+      const readBack = back.values[key] ?? '';
+      if (readBack !== value) { toast(`${label}：保存后回读不一致（读到「${readBack}」）——未伪成功`, 'error'); return; }
+      recordWrite('app.settings.set', `${label} = ${value}（已回读核对）`);
+      if (key === 'ui.autoOpenProjectPath') setAutoOpenSaved(readBack);
+      toast(`${label}已保存（回读一致${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : ''}）`, 'success');
+    } catch (e) {
+      toast(`${label}保存失败：${(e as Error).message}`, 'error');
+    } finally { setBusy(false); }
   };
   const openDeepLink = async () => {
     const raw = deepLinkInput.trim();
     if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
-    try {
-      await openExternalDeepLink(raw);
-      toast('已定位', 'success');
-    } catch (e) { toast(`定位失败：${(e as Error).message}`, 'error'); }
+    try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
+    catch (e) { toast(`定位失败：${(e as Error).message}`, 'error'); }
   };
+
+  const dirty = autoOpen.trim() !== (autoOpenSaved ?? '');
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-settings="hifi">
@@ -66,6 +81,54 @@ export function SettingsPage() {
         <Icon name="settings" size={14} />
         <strong>设置与帮助</strong>
         <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
+      </div>
+
+      <div className="panel info">
+        <div className="row tight"><strong>应用</strong></div>
+        <div style={{ marginTop: 6 }}>
+          <div className="faint small">启动时打开的项目（留空=上次状态；填写项目文件夹的完整路径）</div>
+          <div className="row tight" style={{ marginTop: 4 }}>
+            <input className="composer-input" style={{ flex: 1, minWidth: 160 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\\项目\\我的项目（保存后重启生效）" />
+            <button className="btn ghost sm" disabled={busy || !dirty} title={dirty ? '保存并回读核对' : '没有修改'} onClick={() => void saveSetting('ui.autoOpenProjectPath', autoOpen.trim(), '「启动时打开的项目」')}>保存</button>
+          </div>
+          <div className="faint small" style={{ marginTop: 4 }}>当前生效值：{autoOpenSaved != null && autoOpenSaved !== '' ? autoOpenSaved : '（未设置）'}</div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <div className="faint small">主池顶部的仓库状态条（原界面「仓库状态」开关）</div>
+          <div className="row tight" style={{ marginTop: 4 }}>
+            <button className="btn ghost sm" disabled={busy || repoVisible === 'true'} onClick={() => void saveSetting('repoStatus.visible', 'true', '「显示仓库状态」')}>显示</button>
+            <button className="btn ghost sm" disabled={busy || repoVisible === 'false'} onClick={() => void saveSetting('repoStatus.visible', 'false', '「显示仓库状态」')}>隐藏</button>
+            <span className="faint small">当前：{repoVisible === 'false' ? '隐藏' : repoVisible === 'true' ? '显示' : '（未设置=默认显示）'}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel info">
+        <div className="row tight"><strong>项目</strong></div>
+        <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
+          <div>当前项目：{project != null ? `${project.displayName}` : '（未打开）'}{project != null && (project.rootPath ?? '') !== '' ? <span className="faint small">（{project.rootPath}）</span> : null}</div>
+          <div className="faint small">任务验收策略、成员 runtime 绑定、协作限制等**项目级**设置在原界面「项目设置」面板：</div>
+          <div className="row tight" style={{ marginTop: 4 }}>
+            <button className="btn ghost sm" onClick={() => takeLegacy('members')}>打开原界面·项目设置</button>
+            <span className="faint small">（定向定位到成员管理/项目设置面板——「⌂ 返回新界面」可回）</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel info">
+        <div className="row tight"><strong>远程访问</strong><span className="faint small">（实际监听事实——只读）</span></div>
+        {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{remoteErr}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
+          <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
+            <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
+            {remote.fingerprint != null ? <div className="mono faint small">服务证书指纹 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · CA ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
+            {remote.certNotAfter != null ? <div className="faint small">证书有效期至 {new Date(remote.certNotAfter).toLocaleDateString()}</div> : null}
+            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'panel warning'}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
+            <div className="faint small">{remote.note}</div>
+            <div className="row tight" style={{ marginTop: 4 }}>
+              <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>变更远程设置（原界面）</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="panel info">
@@ -77,41 +140,21 @@ export function SettingsPage() {
         <div className="faint small" style={{ marginTop: 4 }}>经正式 deepLink.resolve 服务端定位（跨项目自动打开）——未知归属如实报错，不静默跳转。</div>
       </div>
 
-      <div className="panel info">
-        <div className="row tight"><strong>应用</strong></div>
-        <div style={{ marginTop: 6 }}>
-          <div className="faint small">启动时自动打开的项目目录（daemon 白名单键 ui.autoOpenProjectPath）</div>
-          <div className="row tight" style={{ marginTop: 4 }}>
-            <input className="composer-input" style={{ flex: 1, minWidth: 160 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="D:\\path\\to\\project" />
-            <button className="btn ghost sm" disabled={saving} onClick={() => void saveAutoOpen()}>{saving ? '保存中…' : '保存'}</button>
-          </div>
-          <div className="faint small" style={{ marginTop: 4 }}>repoStatus.visible（原界面仓库条常驻开关）当前值：{repoVisible === '' ? '（未设置=默认）' : repoVisible}</div>
+      <details className="panel info" open={diagOpen} onToggle={(e) => setDiagOpen((e.target as HTMLDetailsElement).open)}>
+        <summary style={{ cursor: 'pointer' }}><strong>诊断信息</strong><span className="faint small">（工程键名与底层事实——排障用，不是操作面）</span></summary>
+        <div className="mono faint small" style={{ marginTop: 6, lineHeight: 1.8 }}>
+          <div>app.settings 键：ui.autoOpenProjectPath={autoOpenSaved ?? ''} · repoStatus.visible={repoVisible === '' ? '(未设置)' : repoVisible}</div>
+          <div>projectId={projectId ?? '（未打开）'}</div>
+          <div>命令面：app.settings.get/set · remote.config.get · deepLink.resolve · mine.pending · board.view · files.view · git.status/diff</div>
         </div>
-      </div>
-
-      <div className="panel info">
-        <div className="row tight"><strong>远程访问</strong><span className="faint small">（实际监听事实——只读；变更经原界面远程面板）</span></div>
-        {remoteErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>远程配置读取失败：{remoteErr}</div> : remote == null ? <div className="faint small" style={{ marginTop: 4 }}>读取中…</div> : (
-          <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
-            <div>模式：{remote.allowLan ? '局域网' : '仅本机'} · 状态：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.fingerprint != null ? <div className="mono faint small">服务证书指纹 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · CA ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
-            {remote.certNotAfter != null ? <div className="faint small">证书有效期至 {new Date(remote.certNotAfter).toLocaleDateString()}</div> : null}
-            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'panel warning'}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
-            <div className="faint small">{remote.note}</div>
-          </div>
-        )}
-      </div>
+      </details>
 
       <div className="panel info">
         <div className="row tight"><strong>未换装项（如实）</strong></div>
-        <div className="faint small" style={{ marginTop: 4 }}>以下能力仍在原界面（定向打开，不丢失落点）：</div>
         <div className="row tight wrap" style={{ marginTop: 6 }}>
-          <button className="btn ghost sm" onClick={() => takeLegacy('members')}>成员管理</button>
           <button className="btn ghost sm" onClick={() => takeLegacy('search')}>搜索与收藏</button>
-          <button className="btn ghost sm" onClick={() => takeLegacy('pending')}>待我处理</button>
-          <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问设置（变更）</button>
+          <button className="btn ghost sm" onClick={() => takeLegacy('members')}>成员 runtime 绑定（原界面项目设置）</button>
         </div>
-        <div className="faint small" style={{ marginTop: 6 }}>当前项目：{projectId != null && projectId !== '' ? projectId : '（未打开）'} · 数据与命令全部走正式链。</div>
       </div>
     </div>
   );

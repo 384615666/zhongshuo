@@ -18,7 +18,7 @@ import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number } }
-interface RoomListData { items: Array<{ id: string; name: string; conversationId: string }> }
+interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string }> }
@@ -140,7 +140,7 @@ export async function refreshRooms(): Promise<void> {
       const failed = rosterErrors[`roster:${r.id}`] != null;
       return {
         id: r.id, projectId, name: r.name, conversationId: r.conversationId,
-        coordinatorMemberId: failed ? (oldRoom?.coordinatorMemberId ?? '') : '',
+        coordinatorMemberId: r.coordinatorMemberId ?? (failed ? (oldRoom?.coordinatorMemberId ?? '') : ''),
         memberIds: roster?.memberIds ?? [],
         revision: 0, unread: 0,
       };

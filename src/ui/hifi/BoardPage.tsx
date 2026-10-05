@@ -4,7 +4,7 @@
  * 状态机修正）；退出未确认（exitUnconfirmed）与受阻原因（statusReason）如实标注；待验收
  * 交付带三重身份徽标。同名房间按 roomId 分组、同号任务按 taskId——不按名称猜测。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, toast } from './shell';
@@ -28,22 +28,28 @@ const COLUMN_ORDER: BoardCard['column'][] = ['running', 'waiting', 'review', 'bl
 
 export function BoardPage() {
   const projectId = useStore((s) => s.activeProjectId);
+  const [scope, setScope] = useState<'project' | 'all'>('project');
   const [data, setData] = useState<BoardData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const genRef = useRef(0);
 
   const reload = useCallback(async () => {
     if (projectId == null || projectId === '') { setData(null); return; }
+    const gen = ++genRef.current;
     setLoading(true); setErr(null);
     try {
-      const r = await command<BoardData>('board.view', { scope: 'project', projectId });
+      // scope=all ≠ 全部项目：服务端按用户可见项目集（navigation_preferences.visibleProjectIds）
+      // 过滤——与合同一致；scope=project 为显式指定。
+      const r = await command<BoardData>('board.view', { scope, ...(scope === 'project' ? { projectId } : {}) });
+      if (gen !== genRef.current) return; // 已切换范围/页面——迟到响应不污染
       setData(r);
     } catch (e) {
-      setErr((e as Error).message);
+      if (gen === genRef.current) setErr((e as Error).message);
     } finally {
-      setLoading(false);
+      if (gen === genRef.current) setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, scope]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -52,18 +58,23 @@ export function BoardPage() {
   };
 
   const group = data?.groups.find((g) => g.projectId === projectId) ?? data?.groups[0];
+  const groups = scope === 'all' ? (data?.groups ?? []) : group != null ? [group] : [];
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-board="hifi">
       <div className="row tight" style={{ marginBottom: 8 }}>
         <Icon name="list" size={14} />
         <strong>任务看板</strong>
-        <span className="faint small">只读聚合（服务端 board.view）——动作在卡片定位的线程详情里（停止/验收/追加）</span>
+        <select className="pdf-zoom" value={scope} onChange={(e) => setScope(e.target.value === 'all' ? 'all' : 'project')} title="范围：当前项目（显式指定）或全部可访问项目（按你的可见项目集过滤）">
+          <option value="project">当前项目</option>
+          <option value="all">全部可访问项目</option>
+        </select>
+        <span className="faint small">只读聚合（board.view）——动作在卡片定位的线程详情里（停止/验收/追加）</span>
         <button className="btn ghost sm" onClick={() => void reload()} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
       </div>
       {err != null ? <div className="panel warning">看板装载失败：{err}（可刷新重试）</div> : null}
       {group == null && err == null ? <div className="panel info">{loading ? '正在装载…' : '当前项目没有任务。'}</div> : null}
-      {(group?.rooms ?? []).map((room) => {
+      {groups.map((group) => group.rooms.map((room) => {
         const byColumn = new Map<BoardCard['column'], BoardCard[]>(COLUMN_ORDER.map((c) => [c, []]));
         for (const c of room.cards) byColumn.get(c.column)?.push(c);
         if (room.cards.length === 0) return null;
@@ -109,7 +120,7 @@ export function BoardPage() {
             </div>
           </div>
         );
-      })}
+      }))}
       <div className="faint small" style={{ marginTop: 10 }}>{data?.note ?? ''} · 停止/验收等动作经卡片进入线程详情执行（绑定 run/代次/三重身份——过时会被服务端拒绝）。</div>
     </div>
   );

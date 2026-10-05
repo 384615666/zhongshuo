@@ -2,7 +2,53 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十三轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十四轮，唯一权威快照）
+
+> R53=三 P1 修复+h2-win-v2（复核确认收口，**用户集中短测进行中、结果未回填——不代记 PASS**）；
+> **R54=无边框标题栏+H3 收尾+hifi-h3-win-v1 独立候选**。H2-v2/v6/v1 原地稳定；Android 用 v6。
+> - **[§2 范围分清（复核 §2）]** H2-v2 的 renderer **不含** H3 三页/标题栏（其 T7 与该版本相
+>   符）；H3 源码推进+截图材料=「源码已接入、随 hifi-h3-win-v1 交付」，不并称已随 H2-v2 发给
+>   用户。
+> - **[§3 无边框标题栏]** 主窗 frame:false（--no-hifi 保留原生框对照）；**窄 IPC zs:window**
+>   （枚举动作+assertTrustedSender 同判+只作用可信主窗+状态推送 zs:window-state）；preload 暴露
+>   zsWindow；关闭=标题栏关闭键→win.close()→window-all-closed→shutdownDaemon **既有优雅链**
+>   （无 app.exit 绕过）。标题栏=**#zs-titlebar 独立挂载点**（index.html，在 #hifi-root/
+>   #legacy-root 之外——legacy 接管不隐藏、样式由 hifi-flag.js 注入 <style data-zs-titlebar>
+>   承担不随 app.css 禁用）；hifi-flag 先装**最小壳**（React 失败/看门狗兜底可重建——
+>   __zsTitlebarMinimal），React TitleBar 经 portal 挂载后移除非 React 兄弟（portal 不清容器）。
+>   状态行只用真实事实：项目名+daemon 连接态（boot）——原型种子计数不接。布局偏移：
+>   body.zs-frameless 下 hifi-root/#app 下移 38px、preview-pane/.zs-legacy-exit 让位。
+> - **[§4 H3 收尾]** MembersPage（member.list 项目/房间两级+coordinatorMemberId——**daemon
+>   room.list DTO 补该字段**；setEnabled 往返+协调者正式链拒绝如实；member.runtime 绑定/认证
+>   分列）、PendingPage（mine.pending 权威汇总：待验收三重身份/无交付如实禁用+定位**与验收
+>   分离**/未读/阻塞/**待确认提醒确认执行**=reminder.confirm 正式链 occurrence→dispatched）、
+>   SettingsPage 重组（应用/项目分区+「启动时打开的项目」「显示仓库状态」用户名称+**保存回读
+>   核对**+诊断信息折叠层放工程键）、FilesPage（项目文本=**project.file.read 只读快照**；Git
+>   标签 patch 全事实 change/stat binary·unknown/renamed/truncated/source/filesOmitted+
+>   显示区截断显式标注+「在原界面执行 Git 操作」**直达按钮**）、BoardPage（范围 当前/全部
+>   可访问项目+visibleProjectIds 合同）。全部页面**请求代次收口**（genRef——迟到响应不污染）。
+> - **[§4 布局对照]** 原型同窗对照（hifi-prototype/dist 经本机 http 同尺寸截图 proto-tasks/
+>   members/settings）：视觉核验结论=**同一布局语言/同一信息架构**（侧栏 IA 逐项对应、页面
+>   头部三段式同构、密度正常）；可接受简化（看板一级范围选择/成员页无添加成员/38px 桌面壳）
+>   已记录；原型截图含恢复检查模态遮挡两处（对照局限如实）。
+> - **[§5 交付]** **hifi-h3-win-v1**（buildId bld_2e3982c95dba211f，591/591；README-H3+H3 模板
+>   入 make 脚本与包；make 用户回填白名单补 H3 模板名）。verify-hifi-package-r54.cjs 双轮
+>   allPass（在 r53 全链上新增：标题栏 React 版三键/拖动区/38px 偏移/真窄 IPC、**关闭走标题栏
+>   关闭键→优雅停机链**、看板页 board.view 真内容；run2 重启历史）。h3 探针
+>   verify-hifi-h3-r54.cjs **pass=true**（T1 标题栏+zsWindow 桩/T2 900×620 缩放/T3 成员往返+协调
+>   者拒/T4 待办定位+确认执行 dispatched/T5 设置保存回读/T6 快照+Git 事实+直达/T7 scope=all/
+>   T8 preview-pane top=38/T9 legacy 接管标题栏仍在+⌂可回；截图×6+原型×3 于 review-r54/）。
+> - **[证据]** 全量 **857/857**、typecheck×2；**坑（本轮）**：bash heredoc 再次吃反斜杠
+>   （join('
+')→真换行=整文件语法错——frameless 一度未生效；改 String.fromCharCode(10)）；
+>   **selector 返回新数组=useSyncExternalStore 死循环**（MembersPage 崩到 legacy——先取整份
+>   再 useMemo 过滤）；portal 不清容器（最小壳+React 栏叠加 6 键——挂载时移除非 React 兄弟）；
+>   http keep-alive 让 server.close() 永等（closeAllConnections+有界退出）；listen error 无处理
+>   =启动挂死（once('error',rej)）；⌂ 按钮挂 body 不在 #hifi-root；mine.pending 无任务标题字段。
+> - **[待办]** 用户 H2-v2 短测反馈（优先处理实际失败）+H3-v1 短测（README-H3 六项）；R55=
+>   反馈处理+H3 收尾余项（搜索/收藏、活动流、成果列表归位评估）。
+
+## 上一轮快照（2026-10-05 第五十三轮）
 
 > R52=H2 完成但**三处 P1 被复核证伪**（review-r52-next-round-20261005.md）；**R53=三 P1 修复
 > +验证收紧+hifi-h2-win-v2 修正候选**。v2/v6/v1 原地稳定；Android 用 v6。
