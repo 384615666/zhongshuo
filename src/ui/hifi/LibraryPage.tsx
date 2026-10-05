@@ -57,8 +57,21 @@ export function LibraryPage() {
 
   const runSearch = useCallback(async (nextPage: number) => {
     const text = q.trim();
-    if (text.length === 0) { setResult(null); setSearchErr(null); return; }
-    if (scope === 'project' && (projectId == null || projectId === '')) { setSearchErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」'); return; }
+    if (text.length === 0) {
+      // r56（review-r55 §2）：清空关键词必须**作废在途请求**——旧实现直接 return，清空前发出
+      // 的合法旧响应回来时 q 已空，6 条旧结果倒灌回页面。同时结束旧加载态、清结果与错误。
+      genRef.current += 1;
+      setResult(null);
+      setSearchErr(null);
+      setSearching(false);
+      return;
+    }
+    if (scope === 'project' && (projectId == null || projectId === '')) {
+      genRef.current += 1; // 同判：切换到无效范围也作废在途（迟到结果不归属新上下文）
+      setSearching(false);
+      setSearchErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」');
+      return;
+    }
     const gen = ++genRef.current;
     setSearching(true); setSearchErr(null);
     try {
@@ -155,8 +168,7 @@ export function LibraryPage() {
 
       {tab === 'search' ? (
         <>
-          {searchErr != null ? <div className="panel warning">搜索失败：{searchErr}——结果保持上次事实（可重试）</div> : null}
-          {result == null && searchErr == null ? (
+          {searchErr != null ? <div className="panel warning">搜索失败：{searchErr}——结果保持上次事实（可重试）</div> : null}          {result == null && searchErr == null ? (
             <div className="panel info">{q.trim().length === 0 ? '输入关键词后检索——消息正文/线程锚文本/任务标题（附件按所在消息的文件名检索）。' : '正在检索…'}</div>
           ) : null}
           {result != null ? (
@@ -187,28 +199,50 @@ export function LibraryPage() {
           ) : null}
         </>
       ) : (
-        <>
-          {savedErr != null ? <div className="panel warning">收藏读取失败：{savedErr}——列表保持上次事实（可刷新重试）</div> : null}
-          {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
-          {saved != null && saved.length === 0 ? <div className="panel info">还没有收藏——在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容）。</div> : null}
-          {saved != null && saved.length > 0 ? saved.map((it) => (
-            <div key={`${it.kind}:${it.ref}`} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }}>
-              <Icon name="bookmark" size={13} />
-              <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
-              <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
-              {it.status === 'ok' ? (
-                <button className="btn ghost sm" title={`定位：${it.locate}`} onClick={() => locate(it.locate)}>定位</button>
-              ) : it.status === 'missing' ? (
-                <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
-              ) : (
-                <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
-              )}
-              <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（只删收藏行——原内容不动）">取消收藏</button>
-            </div>
-          )) : null}
-          {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>missing=收藏目标已被删除；forbidden=会话归属/可见性变化——均如实呈现，不伪装可点。</div> : null}
-        </>
+        (() => {
+          // r56（review-r55 §2）：收藏「当前项目」范围此前不生效（saved.list 后不按 projectId
+          // 过滤——别的项目的收藏仍显示）。按收藏行的 projectId 过滤；无项目关联的链接不属
+          // 任何项目，收窄范围时明确计数说明（不静默消失），并给「复制链接」可用动作（定位
+          // 按钮对链接本来就无落点——不再无声）。
+          const inScope = scope === 'project' && projectId != null && projectId !== ''
+            ? (saved ?? []).filter((it) => it.projectId === projectId)
+            : saved ?? [];
+          const linksHidden = scope === 'project' ? (saved ?? []).filter((it) => it.projectId == null).length : 0;
+          const otherHidden = scope === 'project' ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length : 0;
+          return (
+            <>
+              {savedErr != null ? <div className="panel warning">收藏读取失败：{savedErr}——列表保持上次事实（可刷新重试）</div> : null}
+              {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
+              {saved != null && saved.length === 0 ? <div className="panel info">还没有收藏——在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容）。</div> : null}
+              {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) ? (
+                <div className="panel info">当前项目没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
+              ) : null}
+              {inScope.map((it) => (
+                <div key={`${it.kind}:${it.ref}`} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }}>
+                  <Icon name="bookmark" size={13} />
+                  <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
+                  <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
+                  {it.kind === 'link' ? (
+                    <button
+                      className="btn ghost sm"
+                      title={`复制链接（${it.ref}）——应用内不自动打开外部网址`}
+                      onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}
+                    >复制链接</button>
+                  ) : it.status === 'ok' ? (
+                    <button className="btn ghost sm" title={`定位：${it.locate}`} onClick={() => locate(it.locate)}>定位</button>
+                  ) : it.status === 'missing' ? (
+                    <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
+                  ) : (
+                    <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
+                  )}
+                  <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（只删收藏行——原内容不动）">取消收藏</button>
+                </div>
+              ))}
+              {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>missing=收藏目标已被删除；forbidden=会话归属/可见性变化——均如实呈现，不伪装可点。</div> : null}
+            </>
+          );
+        })()
       )}
     </div>
   );
