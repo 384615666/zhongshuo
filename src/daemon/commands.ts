@@ -3249,12 +3249,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return withCommandId({ ok: true, data: { kind: 'task', projectId: conv.projectId, conversationId: row.conversation_id, threadId: row.conversation_thread_id, taskId: row.id, rootPath: rootPathOf(deps.db, conv.projectId) } });
         }
         if (kind === 'delivery') {
+          // 第五十二轮（review-r51 §3.1）：SELECT 补 t.conversation_thread_id——交付深链此前缺
+          // threadId，前端把房间任务交付错误落到 /dm/<房间会话>（空私信页）。归属按真实线程返回。
           const row = deps.db.prepare(
-            'SELECT d.id, d.revision, d.manifest_hash, t.id AS task_id, t.project_id, t.conversation_id FROM task_deliveries d JOIN tasks t ON t.id = d.task_id WHERE d.id = ?',
-          ).get(id) as { id: string; revision: number; manifest_hash: string; task_id: string; project_id: string; conversation_id: string } | undefined;
+            'SELECT d.id, d.revision, d.manifest_hash, t.id AS task_id, t.project_id, t.conversation_id, t.conversation_thread_id FROM task_deliveries d JOIN tasks t ON t.id = d.task_id WHERE d.id = ?',
+          ).get(id) as { id: string; revision: number; manifest_hash: string; task_id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null } | undefined;
           if (row == null) throw new DaemonCommandError('NOT_FOUND', `交付不存在或已删除：${id}`);
           const conv = assertConversationAudience(deps.db, deps.localUserId, row.conversation_id); // 交付经会话核 audience
-          return withCommandId({ ok: true, data: { kind: 'delivery', projectId: conv.projectId, conversationId: row.conversation_id, taskId: row.task_id, deliveryId: row.id, revision: row.revision, manifestHash: row.manifest_hash, rootPath: rootPathOf(deps.db, conv.projectId) } });
+          return withCommandId({ ok: true, data: { kind: 'delivery', projectId: conv.projectId, conversationId: row.conversation_id, threadId: row.conversation_thread_id, taskId: row.task_id, deliveryId: row.id, revision: row.revision, manifestHash: row.manifest_hash, rootPath: rootPathOf(deps.db, conv.projectId) } });
         }
         const msgRow = deps.db.prepare('SELECT id, conversation_id, conversation_seq, thread_id FROM messages WHERE id = ?').get(id) as { id: string; conversation_id: string; conversation_seq: number; thread_id: string | null } | undefined;
         if (msgRow == null) throw new DaemonCommandError('NOT_FOUND', `消息不存在或已删除：${id}`);

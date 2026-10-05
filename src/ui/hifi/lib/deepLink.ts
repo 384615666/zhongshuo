@@ -32,19 +32,27 @@ export function isExternalDeepLink(hash: string): boolean {
 /**
  * 解析结果 → 内部路由。只读服务端事实+已装载状态；无落点返回 null（调用方如实报错，
  * 不静默跳转）。任务/交付定位到线程「详情」（任务概况+交付与验收——R51 首版落点）。
+ * 归属分列（review-r51 §3.1 修复）：DM 任务（无线程）只落 DM；房间会话按 conversationId
+ * 匹配已装载房间落主池——**未知归属不得默认当 DM**（此前房间交付被错送到空私信页）。
  */
 export function routeForResolved(res: ResolvedDeepLink, s: HifiState): string | null {
   if (res.kind === 'dm') return `/dm/${res.conversationId}`;
+  const roomOf = (conversationId: string) => s.rooms.find((r) => r.conversationId === conversationId);
+  const isDmConversation = (conversationId: string) => s.dms.some((d) => d.id === conversationId);
   if (res.kind === 'task' || res.kind === 'delivery') {
     if (res.threadId != null && res.threadId.length > 0) return `/thread/${res.threadId}?tab=task`;
-    // DM 任务（dm_turn）无线程——落回会话本身。
-    return `/dm/${res.conversationId}`;
+    // 无线程：DM 任务（dm_turn）落会话；房间会话（异常形态）落主池；都查不到=无落点。
+    if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}`;
+    const room = roomOf(res.conversationId);
+    if (room != null) return `/room/${room.id}`;
+    return null;
   }
-  // msg：线程内消息 → 线程回复视图+定位；顶层消息 → 所属房间主池或私信会话。
+  // msg：线程内消息 → 线程回复视图+定位；顶层消息 → 所属房间主池或私信会话（同上分列）。
   if (res.threadId != null && res.threadId.length > 0) {
     return `/thread/${res.threadId}${res.messageId != null ? `?message=${res.messageId}` : ''}`;
   }
-  const room = s.rooms.find((r) => r.conversationId === res.conversationId);
+  const room = roomOf(res.conversationId);
   if (room != null) return `/room/${room.id}`;
-  return `/dm/${res.conversationId}`;
+  if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}`;
+  return null;
 }

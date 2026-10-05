@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Thread, ThreadCard } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
@@ -22,7 +22,7 @@ interface RoomListData { items: Array<{ id: string; name: string; conversationId
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string }> }
-interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number }
+interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
 
@@ -300,6 +300,22 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
   }
 }
 
+/** 显式推进线程阅读水位（ThreadPage 贴底滚动时调用——发起此刻重查独立门；未来序号服务端拒）。 */
+export async function markThreadReadIfAllowed(threadId: string): Promise<void> {
+  const { canMarkThreadRead } = await import('./data/store');
+  const s = getState();
+  if (s.threadEntities[threadId] == null) return;
+  const replies = s.threadMessages[threadId] ?? [];
+  const lastSeq = replies.length > 0 ? (replies[replies.length - 1]?.threadMessageSeq ?? 0) : 0;
+  const known = s.threadReadSeq[threadId] ?? 0;
+  if (lastSeq > known && canMarkThreadRead(threadId)) {
+    try {
+      await command('thread.markRead', { threadId, throughMessageSeq: lastSeq });
+      setState((prev) => ({ ...prev, threadReadSeq: { ...prev.threadReadSeq, [threadId]: lastSeq } }));
+    } catch { /* 未来序号/门关——下次再推进 */ }
+  }
+}
+
 /** 任务详情单项刷新（停止/验收后重查——绑定服务端当前事实）。 */
 export async function refreshThreadTask(threadId: string): Promise<void> {
   const s = getState();
@@ -331,7 +347,7 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
       authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
       authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: textOf(m),
       createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? i,
-      attachmentIds: [],
+      attachmentIds: [], formalAttachments: m.attachments ?? [],
     }));
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[conversationId];
@@ -367,7 +383,7 @@ const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId:
  * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
  * 附件 refs（第五十一轮 H2）：只在 upload 回执明确成功后进入信封——信封不可变原则不变。
  */
-export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   return {
@@ -377,13 +393,15 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
       target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room?.conversationId ?? '', roomId },
       body, intent, mentions: mentionPayload(mentionIds),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
+      ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `room:${roomId}`,
     at: Date.now(),
   };
 }
 
-export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
+export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
   const s = getState();
   return {
     commandId,
@@ -391,6 +409,8 @@ export function buildDmEnvelope(commandId: string, conversationId: string, body:
     params: {
       target: { kind: 'dm', projectId: s.activeProjectId, conversationId }, body, intent, mentions: [],
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
+      ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `dm:${conversationId}`,
     at: Date.now(),
@@ -399,7 +419,7 @@ export function buildDmEnvelope(commandId: string, conversationId: string, body:
 
 /** 线程跟进信封（第五十一轮 H2）：目标=打开的线程（projectId/conversationId/threadId 来自
  * thread.get 实体——不从界面焦点重造）；记录串（rootTaskId 空）由服务端强制 record_only。 */
-export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): import('./data/store').PendingSendEnvelope {
+export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
   const s = getState();
   const thread = s.threadEntities[threadId];
   return {
@@ -409,6 +429,8 @@ export function buildThreadEnvelope(commandId: string, threadId: string, body: s
       target: { kind: 'thread', projectId: thread?.projectId ?? s.activeProjectId, conversationId: thread?.conversationId ?? '', threadId },
       body, intent, mentions: [],
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
+      ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
+      ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
     },
     targetLabel: `thread:${threadId}`,
     at: Date.now(),
@@ -416,23 +438,35 @@ export function buildThreadEnvelope(commandId: string, threadId: string, body: s
 }
 
 /**
- * 草稿附件 → 正式 refs（第五十一轮 H2 骨架）：全部 ready 才允许带上；uploading 中=拦截并
- * 说明；failed=拦截。**图片能力门沿用 legacy 同判**：图片附件+派发意图（default）→拦截并给
- * 出二选一（仅记录，或 R52 的显式 omit-images 确认），不发「模型已读」的假图。
+ * 草稿附件 → 正式 refs（第五十二轮修订，review-r51 §2）：上传中/失败项拦截（store.uploadItems
+ * 为真源）；refs 取**草稿里已就绪的 attachmentId 引用**（上传回执写入）。图片+派发意图不再硬拦
+ * ——由 Composer 显式二选一（imageAck='omit-images' 一次性冻结进信封，或改仅记录）。
  */
-export function attachmentRefsFromDraft(attachments: HifiDraftAttachment[], intent: 'default' | 'record_only'): { refs?: string[]; blockError?: string } {
-  if (attachments.length === 0) return {};
-  const uploading = attachments.filter((a) => a.status === 'uploading');
-  if (uploading.length > 0) return { blockError: `附件仍在上传（${uploading.map((a) => a.name).join('、')}）——完成后再发送` };
-  const failed = attachments.filter((a) => a.status === 'failed');
-  if (failed.length > 0) return { blockError: `有上传失败的附件（${failed.map((a) => a.name).join('、')}）——请移除或重选后再发送` };
-  const notReady = attachments.filter((a) => a.attachmentId == null);
-  if (notReady.length > 0) return { blockError: '附件缺少上传回执（未接入的类型）——请移除后发送' };
-  const images = attachments.filter((a) => a.kind === 'image_file');
-  if (images.length > 0 && intent === 'default') {
-    return { blockError: `图片能力门：${images.map((a) => a.name).join('、')} 的模型图片输入未认证——二选一：改为「仅记录」发送（不派发），或移除图片（R52 提供显式「仅发文字」确认）` };
-  }
-  return { refs: attachments.map((a) => a.attachmentId as string) };
+export function attachmentRefsFromDraft(draftKey: string, intent: 'default' | 'record_only'): { refs?: string[]; hasImages?: boolean; blockError?: string } {
+  const s = getState();
+  const items = (s.uploadItems[draftKey] ?? []).filter((x) => x.removed !== true);
+  const uploading = items.filter((x) => x.status === 'uploading');
+  if (uploading.length > 0) return { blockError: `附件仍在上传（${uploading.map((x) => x.name).join('、')}）——完成后再发送` };
+  const failed = items.filter((x) => x.status === 'failed');
+  if (failed.length > 0) return { blockError: `有上传失败的附件（${failed.map((x) => x.name).join('、')}）——请移除或重选后再发送` };
+  const d = getDraftFull(draftKey);
+  const ready = d.attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
+  if (ready.length === 0) return {};
+  return { refs: ready.map((a) => a.attachmentId), hasImages: intent === 'default' && ready.some((a) => a.kind === 'image_file') };
+}
+
+/** 表格注入范围（第五十二轮 §6.3）：草稿内已选范围 → attachmentRanges；缺省=服务端有界默认窗。 */
+export function attachmentRangesFromDraft(draftKey: string): Record<string, string> | undefined {
+  const d = getDraftFull(draftKey);
+  const out: Record<string, string> = {};
+  for (const a of d.attachments) if (a.range != null && a.range.length > 0) out[a.attachmentId] = a.range;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** 为草稿内某附件设定注入范围（预览面板「用此窗口作注入范围」——只写草稿，信封在发送时冻结）。 */
+export function setDraftAttachmentRange(draftKey: string, attachmentId: string, range: string): void {
+  const d = getDraftFull(draftKey);
+  setDraftFullShim(draftKey, { ...d, attachments: d.attachments.map((a) => (a.attachmentId === attachmentId ? { ...a, range } : a)) });
 }
 
 /* ---------- 任务动作（第五十一轮 H2）：停止绑定 run/代次；验收绑定交付三重身份 ---------- */
@@ -542,12 +576,13 @@ export function classifyAttachmentFile(name: string, size: number): AttachmentCl
   return { cls: 'unsupported', reason: '未接入的附件类型（文本/图片/PDF/Office/CSV 之外）' };
 }
 
-const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
-  const r = new FileReader();
-  r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
-  r.onerror = () => reject(new Error('读取文件失败'));
-  r.readAsDataURL(file);
-});
+/** File→base64（arrayBuffer+btoa——Electron renderer 与 Node 测试环境双兼容，不依赖 FileReader）。 */
+const fileToBase64 = async (file: File): Promise<string> => {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+};
 
 export interface UploadReceipt { attachmentId: string; hash: string; revision: number; kind: string }
 
@@ -573,7 +608,17 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
   const cls = classifyAttachmentFile(file.name, file.size);
   if (cls.cls === 'unsupported') throw new Error(cls.reason ?? '不支持的附件类型');
   if (cls.cls === 'text') {
-    const content = await file.text();
+    // 字节合同（review-r51 §5 修复）：不能用 File.text()——它把非法 UTF-8 字节替换成 U+FFFD
+    // 后照样上传，服务端持久化有损副本（旧界面第 27 轮已修，换装不得回退）。读真实字节 +
+    // fatal 解码：非法字节在此明确失败（零上传命令/零 artifact，草稿保留可换文件）。
+    const buf = await file.arrayBuffer();
+    let content: string;
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    } catch {
+      throw new Error('内容不是合法 UTF-8 文本（检测到损坏字节）——请修正文件后重选（未上传任何内容）');
+    }
+    if (content.length === 0) throw new Error('文本内容为空——未上传');
     const r = await command<Omit<UploadReceipt, 'kind'>>('attachment.uploadText', { conversationId, filename: file.name, content });
     // uploadText 回执不含 revision——服务端事务固定首传 revision=1（artifacts 插入常量），
     // 按合同事实补默认；不为其它 upload* 猜值（它们各自回执字段以实际为准）。
@@ -582,7 +627,8 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
   const contentBase64 = await fileToBase64(file);
   const method = cls.cls === 'image' ? 'attachment.uploadImage' : cls.cls === 'pdf' ? 'attachment.uploadPdf' : cls.cls === 'csv' ? 'attachment.uploadCsv' : 'attachment.uploadOffice';
   const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number }>(method, { conversationId, filename: file.name, contentBase64 });
-  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: kindOfClass(cls.cls, file.name) };
+  // 各 upload* 首传均为 artifacts 插入 revision=1（响应不带回执字段——按合同事实补默认，不为重传猜值）。
+  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass(cls.cls, file.name) };
 }
 
 /** 文本/代码附件预览（骨架：真实 attachment.previewText——其余类型如实分列到原界面）。 */

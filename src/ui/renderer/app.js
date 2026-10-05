@@ -335,10 +335,22 @@ async function openDm(conversationId) {
 }
 
 /** 深链恢复：#dm=<conversationId> —— 项目加载后回到该会话（不存在则忽略）。 */
+/** 导航所有权门（第五十二轮，review-r51 §4）：只有**当前可见客户端**处理导航。
+ * 新界面在位（hifi 想要且未失败、未进入原界面接管）时，隐藏的 legacy 不得执行深链恢复/
+ * openThread/markRead——此前隐藏端仍沿 hashchange/popstate 推进线程打开与标读，与新界面
+ * 双重处理同一导航。接管（legacy-on）、hifi 失败回退、?nohifi 时 legacy 重新拥有导航。 */
+function legacyOwnsNavigation() {
+  const hifiActive = window.__zsHifiWanted === true
+    && window.__zsHifiFailed !== true
+    && !document.body.classList.contains('legacy-on');
+  return !hifiActive;
+}
+
 async function restoreDmDeepLink() {
   // 统一导航（第二十三轮二）：解析并校验目标→聚焦来源项目（跨项目切换）→打开正确线程或
   // DM→定位消息/交付版本。刷新、直接打开链接、前进后退（hashchange/popstate）共用本入口；
   // URL 目标优先于旧 localStorage 恢复。
+  if (!legacyOwnsNavigation()) return; // 新界面可见时旧端不处理导航（含隐藏期标读）
   const hash = decodeURIComponent(location.hash.slice(1));
   if (hash.length === 0) return;
   const m = /^(dm|task|delivery|msg)=([\w:-]+)$/.exec(hash);
@@ -4477,8 +4489,8 @@ if (lastProject != null && lastProject.length > 0) {
 window.__zsLegacyStart = startLegacyBoot;
 if (!window.__zsHifiWanted || window.__zsHifiFailed === true) startLegacyBoot();
 // 深链导航事件（第二十三轮二）：刷新/直接打开/前进后退共用统一导航入口；导航代次防迟到。
-window.addEventListener('hashchange', () => { void restoreDmDeepLink().catch(() => {}); });
-window.addEventListener('popstate', () => { void restoreDmDeepLink().catch(() => {}); });
+window.addEventListener('hashchange', () => { if (!legacyOwnsNavigation()) return; void restoreDmDeepLink().catch(() => {}); });
+window.addEventListener('popstate', () => { if (!legacyOwnsNavigation()) return; void restoreDmDeepLink().catch(() => {}); });
 
 // 页面可操作标志（第二十二轮一）：全部事件绑定完成——验证器/自动化以此为"点击必被处理"
 // 的判据（区别于 CDP target 出现：那只是导航开始，onclick 尚未绑定，早到点击会静默丢失）。

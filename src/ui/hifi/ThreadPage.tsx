@@ -17,9 +17,8 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
-import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, attachmentRefsFromDraft, previewTextAttachment, type ReviewSnapshot } from './loader';
-import { parkUnknownEnvelope } from './data/store';
-import type { HifiDraftAttachment } from './data/store';
+import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
+import { parkUnknownEnvelope, openPreview } from './data/store';
 import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
@@ -55,7 +54,6 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   /** 验收/返工框打开时冻结的交付快照（deliveryId/revision/manifestHash——提交只带这份）。 */
   const [reviewBox, setReviewBox] = useState<{ mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [preview, setPreview] = useState<{ filename: string; text: string; truncated: boolean } | { error: string } | { loading: true } | null>(null);
   const isRecordThread = entity != null && entity.rootTaskId == null;
   const msgs = replies ?? EMPTY;
 
@@ -63,16 +61,23 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   useEffect(() => {
     void loadThread(threadId, { markRead: true });
   }, [threadId]);
-  // 线程标读门注册：当前线程+前台+非接管+贴底（滚动容器**此刻**判定——门在 markRead 发起
-  // 时重查本闭包，不信任装载前的快照；review-r50 §4 线程独立水位门）。
+  // 线程标读门注册（review-r51 §4 修复）：当前线程+**当前回复视图**+前台+非接管+贴底——
+  // 滚动容器**必须实际存在**（详情视图/未挂载时 listRef 为 null → 一律拒绝，缺省不标读）。
+  // 门在 markRead 发起时重查本闭包；tab 变化时重注册（gate 引用最新 tab）。
   useEffect(() => {
     setThreadReadGate((tid: string) =>
       tid === threadId
+      && tab === 'replies'
       && document.visibilityState === 'visible'
       && !document.body.classList.contains('legacy-on')
-      && (() => { const box = listRef.current; return box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true; })());
+      && (() => { const box = listRef.current; return box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : false; })());
     return () => { setThreadReadGate(null); };
-  }, [threadId]);
+  }, [threadId, tab]);
+  // 同线程的 query 参数变化（?tab= 深链/前进后退）同步视图——初始 useState 只吃首帧（review-r51 §3.2）。
+  useEffect(() => {
+    const next = initialTab === 'task' ? 'task' : 'replies';
+    setTab((cur) => (cur === next ? cur : next));
+  }, [initialTab]);
   // 可见时轻量刷新（回复/任务状态可见；隐藏/接管暂停——关闭视图不停止执行，只停轮询）。
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -82,20 +87,46 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   }, [threadId]);
   // 活动目标追踪（接管定位用）。
   useEffect(() => { setState((st) => ({ ...st, ui: { ...st.ui, activeRoomId: entity?.roomId ?? st.ui.activeRoomId } })); }, [entity?.roomId]);
-  // 直达消息定位：滚到该处并短暂高亮（只定位已有记录，不执行命令）。
+  // 直达消息定位（review-r51 §3.2 修复）：等目标元素**实际存在**（回复装载并渲染后）再滚动
+  // +高亮——有界轮询而非固定 350ms；超窗未出现则如实说明（不冒充已定位）。
   useEffect(() => {
     if (highlightMessageId == null) return;
     setTab('replies');
-    const t = window.setTimeout(() => {
-      const el = document.getElementById(`msg-${highlightMessageId}`);
+    let cancelled = false;
+    let tries = 0;
+    const locate = () => {
+      if (cancelled) return;
+      const el = document.getElementById('msg-' + highlightMessageId);
       if (el != null) {
         el.scrollIntoView({ block: 'center', behavior: 'smooth' });
         el.classList.add('msg-highlight');
         window.setTimeout(() => el.classList.remove('msg-highlight'), 2600);
+        return;
       }
-    }, 350);
-    return () => { window.clearTimeout(t); };
+      tries += 1;
+      if (tries >= 20) {
+        // 不在当前已装载回复窗口（最近 100 条）内——不静默冒充已定位。
+        toast('目标消息（' + highlightMessageId.slice(0, 14) + '…）不在最近回复范围内——未定位', 'warn');
+        return;
+      }
+      window.setTimeout(locate, 300);
+    };
+    const t = window.setTimeout(locate, 200);
+    return () => { cancelled = true; window.clearTimeout(t); };
   }, [highlightMessageId, threadId]);
+
+  // 贴底滚动推进水位（第五十二轮）：门在 markThreadReadIfAllowed 发起时重查——仅当前回复
+  // 视图+实际容器+前台+贴底才推进；节流 1.5s。
+  const lastMarkRef = useRef(0);
+  const onListScroll = () => {
+    const box = listRef.current;
+    if (box == null) return;
+    if (box.scrollHeight - box.scrollTop - box.clientHeight > 80) return;
+    const now = Date.now();
+    if (now - lastMarkRef.current < 1500) return;
+    lastMarkRef.current = now;
+    void markThreadReadIfAllowed(threadId);
+  };
 
   const memberById = useMemo(() => new Map(membersAll.map((m) => [m.id, m])), [membersAll]);
   const firstUnreadSeq = useMemo(() => {
@@ -124,17 +155,9 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const stoppable = task != null && ['ACTIVE', 'WAITING_USER', 'BLOCKED'].includes(task.status);
   const runStopping = task?.activeRun?.status === 'STOPPING';
 
-  const openPreview = (att: { artifactId: string; filename: string; kind: string }) => {
-    // 共享预览骨架（R51）：文本/代码=真实 previewText 内联面板；其余类型如实分列——
-    // 不复制未接真实服务的原型 resources/actions 冒充实现（review-r50 §4）。
-    if (att.kind !== 'text_file' && att.kind !== 'code_file') {
-      toast(`「${att.filename}」（${att.kind}）的共享预览 R52 接入——当前可经「原界面」打开`, 'info');
-      return;
-    }
-    setPreview({ loading: true });
-    void previewTextAttachment(att.artifactId, conversationId)
-      .then((r) => setPreview({ filename: r.filename, text: r.text, truncated: r.truncated }))
-      .catch((e: unknown) => setPreview({ error: (e as Error).message }));
+  const openPreviewAtt = (att: { artifactId: string; filename: string; kind: string }) => {
+    // 共享预览（第五十二轮 §6.1）：全类型经 PreviewPane（正式 preview* 命令+随包渲染器）。
+    openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId, origin: '任务线程' });
   };
 
   const doStop = async () => {
@@ -192,7 +215,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
 
       {tab === 'replies' ? (
         <>
-          <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
+          <div className="msg-list" ref={listRef} onScroll={onListScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
             {/* 根消息（房间级锚消息——不在 thread 历史内；thread.get anchor 提供） */}
             <div className="panel info" style={{ marginBottom: 8 }} id={`msg-${anchor?.id ?? 'anchor'}`}>
               <div className="row tight">
@@ -202,7 +225,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               {(anchor?.formalAttachments ?? []).length > 0 ? (
                 <div className="msg-attach-row">
                   {(anchor?.formalAttachments ?? []).map((a) => (
-                    <button key={a.artifactId} className="msg-attach" title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreview(a)}>
+                    <button key={a.artifactId} className="msg-attach" title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreviewAtt(a)}>
                       <Icon name="file-text" size={12} />
                       <span className="truncate">{a.filename}</span>
                       <span className="msg-attach-kind">{a.kind === 'code_file' ? '代码' : '文本'}</span>
@@ -219,23 +242,11 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                   <MessageView
                     message={m}
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
-                    onOpenAttachment={(att) => openPreview(att)}
+                    onOpenAttachment={(att) => openPreviewAtt(att)}
                   />
                 </div>
               </div>
             ))}
-            {preview != null ? (
-              <div className="panel info" style={{ marginTop: 10 }}>
-                {'loading' in preview ? <span>正在加载预览…</span> : 'error' in preview
-                  ? <span style={{ color: 'var(--warning)' }}>预览失败：{preview.error}</span>
-                  : (
-                    <>
-                      <div className="row tight"><strong>{preview.filename}</strong>{preview.truncated ? <span className="faint small">（内容过长已截断）</span> : null}<button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => setPreview(null)}>关闭</button></div>
-                      <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', maxHeight: 260, overflow: 'auto', fontSize: 12 }}>{preview.text}</pre>
-                    </>
-                  )}
-              </div>
-            ) : null}
           </div>
           <Composer
             target={{ kind: 'thread', roomId: entity.roomId, threadId }}
@@ -250,10 +261,11 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             onSend={(p): Promise<FormalSendOutcome> => (async () => {
               const intent = p.sendAs === 'record' ? 'record_only' : 'default';
               const draftKey = `thread:${threadId}`;
-              const refs = attachmentRefsFromDraft(p.attachments as HifiDraftAttachment[], intent);
+              const refs = attachmentRefsFromDraft(draftKey, intent);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
+              if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs);
+              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
               env.revAtSend = p.draftRev;
               const r = await sendEnvelope(env);
               if (r.status === 'ok') {

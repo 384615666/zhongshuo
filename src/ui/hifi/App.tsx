@@ -15,6 +15,7 @@ import { openExternalDeepLink } from './loader';
 import { RoomPage } from './RoomPage';
 import { DmPage } from './DmPage';
 import { ThreadPage } from './ThreadPage';
+import { PreviewPane } from './preview/PreviewPane';
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
@@ -163,14 +164,15 @@ export default function App() {
   // 外部深链族（#dm=/#task=/#delivery=/#msg=）规范化（review-r50 §4）：deepLink.resolve 服务端
   // 定位实体 → 跨项目先开真实项目 → 内部路由（斜杠形态，刷新/前进后退可再解析）。失败如实
   // 报错，不静默跳转；legacy 接管期间由旧界面处理（本入口不抢导航）。
+  // 注意用**完整 route**（含 query）判深链族——path 是 pathOf 去过 query 的（review-r51 §3.2）。
   useEffect(() => {
-    if (!isExternalDeepLink(`#${path}`)) return;
+    if (!isExternalDeepLink(`#${route}`)) return;
     if (document.body.classList.contains('legacy-on')) return;
     let cancelled = false;
-    void openExternalDeepLink(`#${path}`)
+    void openExternalDeepLink(`#${route}`)
       .catch((e: unknown) => { if (!cancelled) toast(`深链打开失败：${(e as Error).message}`, 'error'); });
     return () => { cancelled = true; };
-  }, [path]);
+  }, [route]);
 
   // legacy 接管时的「返回新界面」：恢复样式、暂停旧端轮询、刷新当前数据。
   useEffect(() => {
@@ -256,7 +258,9 @@ export default function App() {
           <main className="workspace">
             {path.startsWith('/thread/') ? (
               (() => {
-                const idAndQuery = path.slice('/thread/'.length);
+                // 从**完整 route**（含 query）解析线程参数——path 已被 pathOf 去掉查询串，
+                // 此前 ?tab=/?message= 永远取不到（review-r51 §3.2）。
+                const idAndQuery = route.slice('/thread/'.length);
                 const q = parseQuery(idAndQuery);
                 const id = pathOf(idAndQuery);
                 return <ThreadPage threadId={decodeURIComponent(id)} initialTab={q.tab} highlightMessageId={q.message} />;
@@ -272,6 +276,7 @@ export default function App() {
         {s.ui.toast != null ? (
           <div className="toast" onClick={() => clearToast()}>{s.ui.toast.text}</div>
         ) : null}
+        <PreviewPane />
       </div>
     </HifiErrorBoundary>
   );

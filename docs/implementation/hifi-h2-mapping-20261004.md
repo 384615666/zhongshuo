@@ -51,6 +51,13 @@
 
 首包落点：M2=消息内附件芯片点击 → PreviewPane（文本/Office）；图片/PDF 同 legacy 分流。
 
+**实施快照（第五十二轮 R52 完整版）**：`preview/PreviewPane.tsx`+`renderers.ts`——右侧固定面板
+（头部身份行=类型/文件名/v/hash/来源+关闭），六格式真实渲染：文本（previewText）、图片
+（previewImage+decode 对账）、PDF（previewPdf includeBytes→pdfjs canvas+文本层+缩放翻页）、
+Word（docx-preview **Shadow DOM**+renderAltChunks:false+净化回退）、PPT（提取文本卡片+
+pptx-renderer 视觉页 RECOMMENDED_ZIP_LIMITS/pdfjs:false/Abort+dispose/withTimeout 有界）、表格
+（分页签+网格+公式缺失标注+**注入范围写回草稿**）。代次在渲染期推进；迟到不覆盖；关闭/切换
+即 abort+dispose。入口：消息芯片（线程回复/锚块/DM）、草稿 ready 芯片（带 draftKey）。
 **实施快照（第五十一轮 R51 骨架）**：消息芯片=真实附件摘要（thread.history items.attachments/
 rootAttachments→Message.formalAttachments，MessageView 优先渲染）；点击→`attachment.previewText`
 真实内联预览面板（ThreadPage 内）；非文本类型如实分列（toast+原界面指引，不复制未接服务的原型

@@ -2,7 +2,48 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十一轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十二轮，唯一权威快照）
+
+> R51=H2 开工（e07186a）；**R52=H2 完成+独立候选包**（review-r51 四反例全修+共享预览全格式
+> +imageAck/ranges/重试冻结+**hifi-h2-win-v1** 交付）。v2/v6 原地稳定；Android 用 v6。
+> - **[§2 附件归属]** store.uploadItems（draftKey+**uploadId**+conversationId）为唯一真源：
+>   回执按 (draftKey,uploadId) 精确收敛——A/B 同名迟到回执不串（审计 A1 复证 copyText=B-ONLY）；
+>   上传中移除→回执即弃不复活；A→B→A 芯片由 store 恢复；草稿只存 ready 引用；**成功清算按
+>   refs 身份**（attachmentId 集合，不再 name/size 匹配）。Composer 附件区全部 store 驱动。
+> - **[§4 阅读门]** threadReadGate 要求 tab==='replies'+**容器实际存在**（缺容器=false）+
+>   前台+贴底；详情视图/迟到 history 一律不推进（审计 A3：markRead=0、水位不变）；新增贴底
+>   滚动主动推进（markThreadReadIfAllowed，节流 1.5s）。
+> - **[§5 字节合同]** 文本上传=File.arrayBuffer+**TextDecoder('utf-8',{fatal:true})**——坏
+>   字节明确失败零上传零 artifact（审计 A4：uploadDelta=0/artifactsDelta=0/失败芯片）；
+>   File.text() 有损路径废弃。fileToBase64=arrayBuffer+btoa（双环境）。
+> - **[§3 深链三修]** daemon `#delivery=` SELECT 补 conversation_thread_id；routeForResolved
+>   未知归属不默认 DM（房间→/room/:id、DM 任务→/dm、查无→null 报错）；App 用完整 route 解析
+>   query（此前 pathOf 已剥 query——tab/message 永远取不到）；ThreadPage 同线程 query 变化
+>   同步（?tab= 深链/前进后退）+消息定位有界轮询（超窗如实说明）；**legacy 导航所有权门**
+>   （legacyOwnsNavigation——hifi 在位时旧端 hashchange/popstate/深链恢复/标读全停）。
+> - **[§6.1 共享预览]** preview/PreviewPane.tsx+renderers.ts（与旧界面同一随包渲染器与合同：
+>   pdfjs ESM/pptx-renderer/docx-preview+JSZip；Shadow DOM+renderAltChunks:false+净化回退；
+>   pptx=RECOMMENDED_ZIP_LIMITS+pdfjs:false+Abort/dispose+**withTimeout 有界**；代次在**渲染期**
+>   推进——父 effect 自增会让子组件闭包误判迟到（R52 实测首轮全丢）；六格式+来源/版本/hash+
+>   视觉与模型输入分列；表格注入范围写回草稿；消息芯片（线程+DM）/草稿芯片/锚块均可开。
+> - **[§6.3]** imageAck=显式二选一 chip（仅发送文字/改仅记录——选择前不发送，一次性冻结进
+>   信封）；attachmentRanges 从预览面板写入草稿→builder 冻结；未知信封重试含 refs 逐字一致
+>   +恰一次（审计 A5 paramEqual/exactlyOnce）。各 upload* 首传 revision=1 合同事实补默认。
+> - **[§6.5 交付]** **hifi-h2-win-v1**（buildId bld_ce1c059ab99a1df6，独立目录；make 脚本改
+>   H2 文案+六类样本随包+README-H2/短测模板七项）。**坑：pack-desktop 用预构建 daemon 产物
+>   （pack-daemon.mjs）——不改 daemon 只跑 make 会装进旧 daemon（首验卡锚块=thread.get 缺失
+>   抓到）**。verify-hifi-package-r52.cjs（独立副本双轮）：真 bat→自动项目→线程卡→@Guide A
+>   派发+丢回执重发恰一次→线程跟进零新任务→附件真实上传+消息挂载→预览真内容→图片门
+>   imageAck→#task= 深链详情实际选中→window.close 停机 forced!=true→PID 归零→batExit=0→
+>   real_calls=0；run2 重启历史。原型同窗对照（阅读空间/预览布局）+视觉验收完成。
+> - **[证据]** 全量 **856/856**、typecheck×2；hifiUploadDeepLinkRound52 真实链 1/1（归属/坏
+>   字节/分列/冻结/imageAck 端到端/范围/重试）；verify-hifi-thread-r52.cjs 页面审计 pass=true
+>   （A1–A5 反例复证+P 六格式真渲染含 pptxVisual=rendered+迟到覆盖+截图×2 于
+>   dist/desktop/review-r52/）。
+> - **[R53 待做]** 打包验证器收尾结果落档（本轮后台运行中）+复核反馈；H3（设置/看板/Files
+>   归位、Git/诊断、无边框标题栏）按 hifi-integration-plan 排期。
+
+## 上一轮快照（2026-10-05 第五十一轮）
 
 > R50=H1 证据收口（eecf0e2）；**R51=H2 开工（review-r50 四项全落）**：回复串真实页面链+
 > 附件信封/预览骨架+深链规范化入口+验证器五项取证修复+补证三连+v2 版本口径澄清。

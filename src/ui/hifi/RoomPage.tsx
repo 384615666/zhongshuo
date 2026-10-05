@@ -10,9 +10,8 @@ import { Tag } from './components/ui';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { useStore, loadRoomPool, retryUnknownSend, toast, setState } from './shell';
-import { buildRoomRootEnvelope, sendEnvelope, attachmentRefsFromDraft } from './loader';
+import { buildRoomRootEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft } from './loader';
 import { parkUnknownEnvelope } from './data/store';
-import type { HifiDraftAttachment } from './data/store';
 import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
@@ -118,10 +117,11 @@ export function RoomPage({ roomId }: { roomId: string }) {
           if (roomMembers.length === 0 && intent === 'default') {
             return { status: 'failed', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
           }
-          const refs = attachmentRefsFromDraft(p.attachments as HifiDraftAttachment[], intent);
-          if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
           const draftKey = `room:${roomId}`;
-          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs);
+          const refs = attachmentRefsFromDraft(draftKey, intent);
+          if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
+          if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
+          const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
           const r = await sendEnvelope(env);
           if (r.status === 'ok') {

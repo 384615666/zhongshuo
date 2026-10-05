@@ -18,8 +18,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope } from '../data/store';
-import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment } from '../data/store';
+import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview } from '../data/store';
+import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { takePendingQuotes } from '../data/actions-preview';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
@@ -130,6 +130,8 @@ export interface ComposerTarget {
 
 /** 每键发送锁（review-r48 §4）：多目标在途互不解除——A 回执的 finally 只清 A 的键。 */
 const sendingKeys = new Set<string>();
+/** 附件上传项的稳定空集（selector 引用稳定——useSyncExternalStore 契约）。 */
+const EMPTY_UPLOADS: UploadItem[] = [];
 
 /** 正式侧发送回执（第四十七轮）：onSend 可返回 Promise——成功才清空，失败/未知保留草稿。 */
 export type FormalSendOutcome =
@@ -172,6 +174,8 @@ export function Composer({
     method: { planFirst: boolean; skipFirstDraft: boolean; splitWork: boolean };
     access: AccessMode;
     attachments: HifiDraftAttachment[];
+    /** 图片能力门显式选择（一次性）：'omit-images'=仅发送文字（图片不送模型并如实注明）。 */
+    imageAck?: 'omit-images';
     commandId: string;
     target: ComposerTarget;
     /** 发起时草稿编辑代次（页面冻结进信封——清算判定用）。 */
@@ -300,33 +304,49 @@ export function Composer({
   const [splitWork, setSplitWork] = useState(false);
   const [access, setAccess] = useState<AccessMode>('plan');
   const [accessOpen, setAccessOpen] = useState(false);
-  const [attachments, setAttachments] = useState<HifiDraftAttachment[]>([]);
+  // 附件真源=store.uploadItems（review-r51 §2 反例修复）：每笔上传绑定发起草稿键+独立
+  // uploadId——迟到回执按 (draftKey, uploadId) 精确收敛；切走/卸载/同名文件/上传中移除都
+  // 不串到其它草稿、不复活已移除项；A→B→A 回来芯片由 store 恢复。本地不再持有附件状态。
+  const uploadItemsRaw = useStore((st) => st.uploadItems[draftKey] ?? EMPTY_UPLOADS);
+  const attachments = useMemo(() => uploadItemsRaw.filter((x) => x.removed !== true), [uploadItemsRaw]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  /** 图片能力门待选（第五十二轮：显式二选一，不再硬拦——发送暂停在选择上）。 */
+  const [imageGate, setImageGate] = useState<{ names: string[] } | null>(null);
 
   /**
-   * 真实附件上传（第五十一轮 H2）：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office
-   * 20MiB/CSV 5MB——服务端为最终裁决），逐文件占位 uploading → attachment.upload* 回执
-   * （attachmentId/hash/revision/kind）写回芯片；失败保留整份（状态 failed+原因，可移除）。
+   * 真实附件上传：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office 20MiB/CSV 5MB——
+   * 服务端为最终裁决）；文本走 fatal UTF-8 解码（非法字节零上传）。回执/失败按 uploadId
+   * settle 到**发起草稿键**；ready 引用同时写入草稿（切回时 hydrate 恢复芯片）。
    */
   const uploadPickedFiles = async (files: File[]): Promise<void> => {
     if (attachmentUpload == null) return;
     for (const f of files) {
       const cls = classifyAttachmentFile(f.name, f.size);
+      const uploadId = `upl_${Math.random().toString(36).slice(2, 10)}`;
       if (cls.cls === 'unsupported') {
-        setAttachments((p) => [...p, { name: f.name, size: f.size, status: 'failed', error: cls.reason }]);
+        addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'failed', error: cls.reason });
         continue;
       }
-      setAttachments((p) => [...p, { name: f.name, size: f.size, status: 'uploading' }]);
+      addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'uploading' });
       try {
         const r = await uploadAttachmentFile(attachmentUpload.conversationId, f);
-        setAttachments((p) => p.map((a) => (a.name === f.name && a.status === 'uploading'
-          ? { ...a, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind, status: 'ready' }
-          : a)));
+        settleUpload(draftKey, uploadId, { status: 'ready', attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
+        const d = getDraftFull(draftKey);
+        if (!d.attachments.some((a) => a.attachmentId === r.attachmentId)) {
+          setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind }] });
+        }
       } catch (e) {
-        setAttachments((p) => p.map((a) => (a.name === f.name && a.status === 'uploading'
-          ? { ...a, status: 'failed', error: (e as Error).message }
-          : a)));
+        settleUpload(draftKey, uploadId, { status: 'failed', error: (e as Error).message });
       }
+    }
+  };
+  /** 移除上传项：在途→标记（回执到达即弃，不复活）；已就绪→连同草稿引用一并移除（不再随发送携带）。 */
+  const removeAttachment = (uploadId: string): void => {
+    const it = uploadItemsRaw.find((x) => x.uploadId === uploadId);
+    removeUploadItem(draftKey, uploadId);
+    if (it != null && it.attachmentId != null) {
+      const d = getDraftFull(draftKey);
+      setDraftFull(draftKey, { ...d, attachments: d.attachments.filter((a) => a.attachmentId !== it.attachmentId) });
     }
   };
   /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
@@ -372,7 +392,8 @@ export function Composer({
     const saved = getDraftFull(draftKey);
     setBody(saved.body);
     setMentions(saved.mentions);
-    setAttachments(saved.attachments);
+    // 附件芯片由 store.uploadItems 提供（真源）；已存草稿引用 hydrate 重建（切回/重启恢复）。
+    if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
     setAccess(saved.access as AccessMode);
     /*
      * 意图的恢复规则（2026-09-25）：
@@ -396,12 +417,14 @@ export function Composer({
     }
     // 保存失败必须显示；成功不占位（§6.2）
     try {
-      setDraftFull(draftKey, { body, mentions, attachments, access, sendAs });
+      // 附件引用由上传/移除动作维护（防串写），这里只落正文/提及/意图/权限——读取现草稿合并。
+      const cur = getDraftFull(draftKey);
+      setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs });
       setDraftFailed(false);
     } catch {
       setDraftFailed(true);
     }
-  }, [draftKey, body, mentions, attachments, access, sendAs]);
+  }, [draftKey, body, mentions, access, sendAs]);
 
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
@@ -498,19 +521,30 @@ export function Composer({
     return `cmd_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function submit() {
+  function submit(imageAck?: 'omit-images') {
     const text = body.trim();
     if (!text) return;
     if (sendDisabledReason) return;
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
     // 独立可发；A 的回执 finally 只删 A 的键（不清 B 的锁）。
     if (sendingKeys.has(draftKey)) return;
+    // 图片能力门（第五十二轮，§6.3）：图片附件+派发意图→**显式二选一**（仅发送文字=图片不送
+    // 模型并如实注明；或改为仅记录），选择前不发送；选择结果一次性冻结进信封（imageAck）。
+    const draftRefs = getDraftFull(draftKey).attachments;
+    const imageNames = draftRefs.filter((a) => a.kind === 'image_file').map((a) => a.name);
+    if (imageNames.length > 0 && sendAs === 'ai' && imageAck !== 'omit-images') {
+      setImageGate({ names: imageNames });
+      return;
+    }
     sendingKeys.add(draftKey);
     setSending(true);
     setSendErrorState(null);
+    setImageGate(null);
     const keyAtSend = draftKey;
     const sentMentions = mentions;
-    const sentAttachments = attachments;
+    /** 本次实际发送的附件引用（refs 身份——不再按文件名/大小识别，review-r51 §2）。 */
+    const sentAttachmentIds = draftRefs.map((a) => a.attachmentId);
+    const sentAttachments = draftRefs;
     const sentAs = sendAs;
 
     const outcome = onSend({
@@ -519,10 +553,11 @@ export function Composer({
       mentionIds: mentions,
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
-      attachments,
+      attachments: sentAttachments,
       commandId: commandIdRef.current,
       target,
       draftRev: getDraftFull(draftKey).rev,
+      ...(imageAck === 'omit-images' ? { imageAck: 'omit-images' as const } : {}),
     });
 
     /** 按**发起目标键**结算 STORED 草稿（review-r47 §3：迟到回执只清发起目标的已发内容，
@@ -533,23 +568,27 @@ export function Composer({
       if (d.rev !== revAtSend) return d; // 等待期有编辑（代次已变）——不剥离，整份保留（r48 §4）
       const nextBody = d.body.startsWith(text) ? d.body.slice(text.length).replace(/^\s+/, '') : d.body;
       const mentionsClear = d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
-      const attClear = d.attachments.length === sentAttachments.length && d.attachments.every((a, i) => a.name === sentAttachments[i]!.name && a.size === sentAttachments[i]!.size);
+      // 成功清算按 **refs 身份**（attachmentId 集合）剥离已发资源（review-r51 §2：不再按文件名/
+      // 大小识别——等待期新选的附件/同名新文件不会被误清）；同步清 store 的已结算上传项。
+      const sentIds = new Set(sentAttachmentIds);
+      const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
       const settled: HifiDraft = {
         ...d,
         body: nextBody,
         mentions: mentionsClear ? [] : d.mentions,
-        attachments: attClear ? [] : d.attachments,
+        attachments: keptAttachments,
         // 「仅记录」一次性：确认成功后回到默认发送方式（失败/未知不复位——重试仍是原意图）。
         sendAs: sentAs === 'record' ? (recordThread ? 'record' : 'ai') : d.sendAs,
       };
       setDraftFull(key, settled);
+      clearSettledUploads(key, sentAttachmentIds);
       return settled;
     };
     const syncIfMounted = (key: string, settled: HifiDraft) => {
       if (draftKeyRef.current !== key) return; // 已切目标：不动当前输入（B 的草稿不受 A 回执影响）
       setBody(settled.body);
       setMentions(settled.mentions);
-      setAttachments(settled.attachments);
+      // 附件芯片由 store 驱动（clearSettledUploads 已按 refs 清）——不同步本地状态。
       setSendAs(settled.sendAs);
       setMentionOpen(false);
     };
@@ -763,22 +802,39 @@ export function Composer({
         </div>
       ) : null}
 
-      {/* 附件（正式回执芯片：uploading/ready/failed 如实——失败保留可移除） */}
+      {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败保留可移除；按 uploadId 移除
+          ——上传中移除=回执到达即弃，不复活。review-r51 §2） */}
       {attachments.length > 0 ? (
         <div className="composer-mentions">
-          {attachments.map((a, i) => (
-            <span key={`${a.name}-${i}`} className="chip mono" title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
+          {attachments.map((a) => (
+            <span key={a.uploadId} className="chip mono" title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…（可移除——回执到达即弃）' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
               <Icon name="paperclip" size={11} />
               {a.name}
               <span className="faint">{Math.round(a.size / 1024)}KB</span>
               {a.status === 'uploading' ? <span className="faint">上传中…</span> : null}
               {a.status === 'failed' ? <span style={{ color: 'var(--warning)' }}>失败</span> : null}
               {a.status === 'ready' ? <span className="faint">v{a.revision}</span> : null}
-              <button onClick={() => setAttachments((p) => p.filter((_, j) => j !== i))} title={a.status === 'failed' ? '移除失败的附件' : '移除附件（已上传的资源仍在会话附件列表中）'}>
+              {a.status === 'ready' && attachmentUpload != null ? (
+                <button title="打开共享预览（只读——来源/版本/hash；表格可设注入范围）" onClick={() => openPreview({ attachmentId: a.attachmentId ?? '', filename: a.name, kind: a.kind ?? 'text_file', conversationId: attachmentUpload.conversationId, origin: '草稿附件', draftKey, hashHint: a.hash, revisionHint: a.revision })}>预览</button>
+              ) : null}
+              <button onClick={() => removeAttachment(a.uploadId)} title={a.status === 'failed' ? '移除失败的附件' : '移除附件（已上传的资源仍在会话附件列表中，不再随发送携带）'}>
                 <Icon name="x" size={11} />
               </button>
             </span>
           ))}
+        </div>
+      ) : null}
+
+      {/* 图片能力门（第五十二轮 §6.3）：显式二选一——选择前不发送；结果一次性冻结进信封。 */}
+      {imageGate != null ? (
+        <div className="composer-mentions">
+          <span className="chip record-chip" title="模型图片输入能力未认证（IMAGE_INPUT_UNVERIFIED）——图片不会作为模型输入；两种选择都会如实注明">
+            <Icon name="image" size={11} />
+            图片能力门：{imageGate.names.join('、')}
+            <button title="仅发送文字：图片随消息保存给用户看，但注入文本将如实注明「图片未送给模型」" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
+            <button title="本次改为仅记录：不派发、不注入，图片只作为记录保存" onClick={() => { setImageGate(null); setSendAs('record'); }}>改为仅记录</button>
+            <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
+          </span>
         </div>
       ) : null}
 
@@ -1090,7 +1146,7 @@ export function Composer({
 
           <button
             className="btn primary sm composer-send"
-            onClick={submit}
+            onClick={() => submit()}
             disabled={!body.trim() || sending || Boolean(sendDisabledReason)}
             title={
               !body.trim() || sending || Boolean(sendDisabledReason)

@@ -10,9 +10,8 @@ import { MessageView } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft } from './loader';
-import { parkUnknownEnvelope } from './data/store';
-import type { HifiDraftAttachment } from './data/store';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft } from './loader';
+import { parkUnknownEnvelope, openPreview } from './data/store';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
 const EXEC_TEXT: Record<string, string> = {
@@ -112,7 +111,7 @@ export function DmPage() {
               {readError != null ? <div className="panel info" style={{ borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照）</div> : null}
               {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
               {msgs.map((m) => (
-                <MessageView key={m.id} message={m} author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)} />
+                <MessageView key={m.id} message={m} author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)} onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })} />
               ))}
             </div>
             {active.archivedAt != null ? (
@@ -132,10 +131,11 @@ export function DmPage() {
                   // 发送前固化完整正式信封（dm 目标=projectId+conversationId——不带 UI 的
                   // roomId/dmId 私有字段，review-r48 §3）；unknown 冻结原信封。
                   const intent = p.sendAs === 'record' ? 'record_only' : 'default';
-                  const refs = attachmentRefsFromDraft(p.attachments as HifiDraftAttachment[], intent);
-                  if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
                   const draftKey = `dm:${active.id}`;
-                  const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs);
+                  const refs = attachmentRefsFromDraft(draftKey, intent);
+                  if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
+                  if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
+                  const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
                   env.revAtSend = p.draftRev;
                   const r = await sendEnvelope(env);
                   if (r.status === 'ok') {
