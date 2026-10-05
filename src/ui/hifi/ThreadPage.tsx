@@ -1,6 +1,7 @@
 /**
- * 线程视图（第五十一轮 H2 首版）：主池线程卡 → 回复串页面——回复 + 详情（任务概况/交付
- * 验收）两个可达视图；成果/成员/活动/运行/研讨未换装，经「原界面」定向并如实标注。
+ * 线程视图（第五十一轮 H2 首版；r55 增「成果与附件」真实标签页）：主池线程卡 → 回复串页面
+ * ——回复 / 详情（任务概况/交付验收）/ 成果与附件 三个可达视图；活动/成员/运行/研讨未换装，
+ * 经「原界面」定向并如实标注。
  *
  * 正式链（review-r50 §4 修正后的 DTO 适配）：thread.get（实体+根消息+水位）→
  * thread.history（items+rootAttachments）→ task.get（pendingDelivery 只有 id/revision/
@@ -9,16 +10,21 @@
  * 代次（过时绑定由服务端拒绝）；验收/返工在打开意见框时**冻结交付三重身份快照**（目标
  * 变化不悄悄换稿，review-r44/45 同判）。readGate=线程独立水位+当前导航/前台/贴底/接管
  * （不与 DM conversationSeq 门混用）。**关闭视图不停止执行**——卸载只清定时器/门。
+ * r55：成果标签=attachment.listByConversation（会话附件，带真实版本/hash——预览头身份
+ * 同源）+ files.view 交付成果按本任务过滤（#delivery= 深链定位）；回复消息收藏接
+ * saved.add（独立保存，不改动原内容）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageView } from './components/MessageView';
+import { ATTACHMENT_KIND_LABEL } from './components/MessageView';
 import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
 import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
-import { parkUnknownEnvelope, openPreview } from './data/store';
+import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
+import { command } from './bridge';
 import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
@@ -32,14 +38,18 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: '已取消', FAILED: '失败', RUNNING: '运行中', WAITING: '排队中', STOPPING: '停止中',
 };
 
-/** 详情里未换装的分组——定向原界面（同房间），如实标注而非隐藏。 */
+/** 详情里未换装的分组——定向原界面（同房间），如实标注而非隐藏（r55：成果与附件已换装
+ *  为本页真实标签，从本列表移除；文案不再写「R52 后接入」这类过期承诺）。 */
 const LEGACY_SECTIONS: Array<{ key: string; label: string; note: string }> = [
-  { key: 'artifacts', label: '成果与附件', note: '成果列表/线程附件管理在原界面（共享预览 R52 接入后开放本页）' },
-  { key: 'activity', label: '活动与进展', note: '过程说明/程序校验记录在原界面' },
-  { key: 'members', label: '参与成员', note: '参与者名单与关注状态在原界面' },
+  { key: 'activity', label: '活动与进展', note: '过程说明/程序校验记录在原界面（聚合活动流在新界面「活动流」页）' },
+  { key: 'members', label: '参与成员', note: '参与者名单与关注状态在原界面（成员管理在新界面侧栏）' },
   { key: 'run', label: '运行详情', note: '运行/轮次明细在原界面' },
   { key: 'deliberation', label: '研讨详情', note: '研讨进度在原界面' },
 ];
+
+/** 成果标签页的数据形态（attachment.listByConversation / files.view.deliveries）。 */
+interface ConversationAttachment { attachmentId: string; filename: string; kind: string; hash: string; revision: number; createdAt: number }
+interface DeliveryRow { deliveryId: string; revision: number; manifestHash: string; taskId: string; title: string; audience: 'dm' | 'room'; reviewedAt: number | null; locate: string }
 
 export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threadId: string; initialTab?: string; highlightMessageId?: string }) {
   const entity = useStore((s) => s.threadEntities[threadId]);
@@ -49,13 +59,18 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const readSeq = useStore((s) => s.threadReadSeq[threadId]);
   const readError = useStore((s) => s.readErrors[`thread:${threadId}`]);
   const membersAll = useStore((s) => s.members);
+  const allRooms = useStore((s) => s.rooms);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<'replies' | 'task'>(initialTab === 'task' ? 'task' : 'replies');
+  const [tab, setTab] = useState<'replies' | 'task' | 'artifacts'>(initialTab === 'task' ? 'task' : initialTab === 'artifacts' ? 'artifacts' : 'replies');
   /** 验收/返工框打开时冻结的交付快照（deliveryId/revision/manifestHash——提交只带这份）。 */
   const [reviewBox, setReviewBox] = useState<{ mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
   const [stopping, setStopping] = useState(false);
+  /** 成果标签页数据（r55）：会话附件 + 本任务交付（files.view 过滤）——代次收口，迟到不污染。 */
+  const [artifacts, setArtifacts] = useState<{ attachments: ConversationAttachment[]; attErr: string | null; deliveries: DeliveryRow[]; delErr: string | null } | null>(null);
+  const artGenRef = useRef(0);
   const isRecordThread = entity != null && entity.rootTaskId == null;
   const msgs = replies ?? EMPTY;
+  const projectIdOfRoom = useMemo(() => allRooms.find((r) => r.id === entity?.roomId)?.projectId ?? null, [allRooms, entity?.roomId]);
 
   // 装载（含任务详情）+ 阅读水位（门在发起此刻重查——ThreadPage 注册的独立线程门）。
   useEffect(() => {
@@ -75,9 +90,45 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   }, [threadId, tab]);
   // 同线程的 query 参数变化（?tab= 深链/前进后退）同步视图——初始 useState 只吃首帧（review-r51 §3.2）。
   useEffect(() => {
-    const next = initialTab === 'task' ? 'task' : 'replies';
+    const next = initialTab === 'task' ? 'task' : initialTab === 'artifacts' ? 'artifacts' : 'replies';
     setTab((cur) => (cur === next ? cur : next));
   }, [initialTab]);
+
+  // 成果标签页装载（r55）：会话附件=attachment.listByConversation（真实版本/hash→预览头同源）；
+  // 本任务交付=files.view(scope=project) 按 taskId 过滤（复用既有只读聚合，不另开命令面）。
+  // 代次收口：切线程/切标签的迟到响应丢弃；失败分列如实（附件失败不掩盖交付失败）。
+  useEffect(() => {
+    if (tab !== 'artifacts' || entity == null) return;
+    const gen = ++artGenRef.current;
+    const conversationId = entity.conversationId ?? '';
+    let cancelled = false;
+    void (async () => {
+      const next: { attachments: ConversationAttachment[]; attErr: string | null; deliveries: DeliveryRow[]; delErr: string | null } = { attachments: [], attErr: null, deliveries: [], delErr: null };
+      if (conversationId !== '') {
+        try {
+          const r = await command<{ items: ConversationAttachment[] }>('attachment.listByConversation', { conversationId });
+          if (gen !== artGenRef.current) return;
+          next.attachments = r.items ?? [];
+        } catch (e) { if (gen === artGenRef.current) next.attErr = (e as Error).message; }
+      } else {
+        next.attErr = '线程归属会话未知（conversationId 缺失）';
+      }
+      if (!cancelled && gen === artGenRef.current) setArtifacts({ ...next }); // 先上附件（交付慢不阻塞）
+      if (task?.id != null && projectIdOfRoom != null) {
+        try {
+          const r = await command<{ groups: Array<{ projectId: string; deliveries: DeliveryRow[] }> }>('files.view', { scope: 'project', projectId: projectIdOfRoom });
+          if (gen !== artGenRef.current) return;
+          next.deliveries = (r.groups.find((g) => g.projectId === projectIdOfRoom)?.deliveries ?? []).filter((d) => d.taskId === task.id);
+        } catch (e) { if (gen === artGenRef.current) next.delErr = (e as Error).message; }
+      } else if (task == null) {
+        next.delErr = null; // 记录串无任务——没有交付是事实，不是错误
+      } else {
+        next.delErr = '所属项目未知（无法按任务过滤交付）';
+      }
+      if (!cancelled && gen === artGenRef.current) setArtifacts({ ...next });
+    })();
+    return () => { cancelled = true; };
+  }, [tab, entity?.conversationId, task?.id, projectIdOfRoom]);
   // 可见时轻量刷新（回复/任务状态可见；隐藏/接管暂停——关闭视图不停止执行，只停轮询）。
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -168,6 +219,15 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     else toast(`停止失败：${r.error}`, 'error');
   };
 
+  /** 收藏回复消息（r55：saved.add 正式命令——独立保存不改动原内容；幂等；「搜索与收藏」页可见）。 */
+  const saveMessage = async (m: { id: string; body: string }) => {
+    try {
+      const r = await command<{ existed: boolean }>('saved.add', { kind: 'message', ref: m.id, title: m.body.slice(0, 60), ...(projectIdOfRoom != null ? { projectId: projectIdOfRoom } : {}) });
+      recordWrite('saved.add', `收藏消息 ${m.id.slice(0, 12)}…${r.existed === true ? '（已收藏——幂等）' : ''}`);
+      toast(r.existed === true ? '这条消息已在收藏里（幂等——不重复保存）' : '已收藏（独立保存，不改动原内容——侧栏「搜索与收藏」页可见）', 'success');
+    } catch (e) { toast(`收藏失败：${(e as Error).message}`, 'error'); }
+  };
+
   const openReview = (mode: 'accept' | 'rework') => {
     if (task?.pendingDelivery == null) return;
     // 打开即冻结三重身份（id+revision+manifestHash）——此后刷新出新交付也不悄悄换稿。
@@ -202,8 +262,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <button role="tab" aria-selected={tab === 'task'} className="btn ghost sm" style={tab === 'task' ? { fontWeight: 600 } : undefined} onClick={() => setTab('task')}>
           <Icon name="list" size={13} /> 详情
         </button>
-        <button className="btn ghost sm" disabled title="成果与附件视图随共享预览（R52）接入——当前经「详情 → 原界面」可达">
-          <Icon name="file-text" size={13} /> 成果（R52）
+        <button role="tab" aria-selected={tab === 'artifacts'} className="btn ghost sm" style={tab === 'artifacts' ? { fontWeight: 600 } : undefined} onClick={() => setTab('artifacts')} title="本线程的会话附件（真实版本/hash，可预览）与本任务交付成果">
+          <Icon name="file-text" size={13} /> 成果与附件
         </button>
         <div className="spacer" style={{ flex: 1 }} />
         {isRecordThread
@@ -228,7 +288,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     <button key={a.artifactId} className="msg-attach" title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreviewAtt(a)}>
                       <Icon name="file-text" size={12} />
                       <span className="truncate">{a.filename}</span>
-                      <span className="msg-attach-kind">{a.kind === 'code_file' ? '代码' : '文本'}</span>
+                      {/* r55：与回复芯片同一 kind 映射（此前只认 code/text——PPT 显示成「文本」）。 */}
+                      <span className="msg-attach-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
                     </button>
                   ))}
                 </div>
@@ -243,6 +304,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     message={m}
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
                     onOpenAttachment={(att) => openPreviewAtt(att)}
+                    onSave={() => void saveMessage(m)}
                   />
                 </div>
               </div>
@@ -278,7 +340,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             })()}
           />
         </>
-      ) : (
+      ) : tab === 'task' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack">
           {isRecordThread || detail == null ? (
             <div className="panel info">这是记录串（无根任务）：没有任务概况与交付——回复仅保存，不派发、不唤醒 agent。</div>
@@ -330,7 +392,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     <div className="row tight" style={{ marginTop: 8 }}>
                       <button className="btn ghost sm" disabled={reviewBox != null} onClick={() => openReview('accept')} title="验收当前版本（任务→已完成）">验收通过</button>
                       <button className="btn ghost sm" disabled={reviewBox != null} onClick={() => openReview('rework')} title="要求返工（须填意见——任务回到执行）">要求返工</button>
-                      <button className="btn ghost sm" title="在原界面查看交付内容（预览 R52 接入）" onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>原界面查看交付</button>
+                      <button className="btn ghost sm" title="查看本任务的交付成果与附件（本页「成果与附件」标签）" onClick={() => setTab('artifacts')}>查看成果与附件</button>
                     </div>
                     {reviewBox != null ? (
                       <div style={{ marginTop: 8 }}>
@@ -375,6 +437,68 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               ))}
             </div>
           </div>
+        </div>
+      ) : (
+        /* 成果与附件（r55 真实标签——替换原「R52 后接入」占位）：会话附件带真实版本/hash
+           （预览头身份同源）；本任务交付来自 files.view 只读聚合。失败分列如实，不伪空态。 */
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack" data-zs-thread-artifacts="hifi">
+          <div className="panel info" style={{ marginTop: 0 }}>
+            <div className="row tight">
+              <strong>会话附件</strong>
+              <span className="faint small">（attachment.listByConversation——本会话全部托管资源，含房间根消息与回复携带；点击只读预览）</span>
+            </div>
+            {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : artifacts.attErr != null ? (
+              <div className="panel warning" style={{ marginTop: 6 }}>附件列表读取失败：{artifacts.attErr}（可切回其它标签再进重试）</div>
+            ) : artifacts.attachments.length === 0 ? (
+              <div className="faint small" style={{ marginTop: 6 }}>本会话暂无托管附件。</div>
+            ) : (
+              <div className="msg-attach-row" style={{ marginTop: 6 }}>
+                {artifacts.attachments.map((a) => (
+                  <button
+                    key={a.attachmentId}
+                    className="msg-attach"
+                    title={`预览 ${a.filename}——${ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · sha256=${a.hash.slice(0, 12)}… · 上传于 ${new Date(a.createdAt).toLocaleString()}`}
+                    onClick={() => openPreview({ attachmentId: a.attachmentId, filename: a.filename, kind: a.kind, conversationId, origin: '成果与附件', hashHint: a.hash, revisionHint: a.revision })}
+                  >
+                    <Icon name="file-text" size={12} />
+                    <span className="truncate">{a.filename}</span>
+                    <span className="msg-attach-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
+                    <span className="msg-attach-kind mono-sm" data-zs-artifact-rev={`v${a.revision}`}>v{a.revision}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="panel info">
+            <div className="row tight">
+              <strong>本任务交付</strong>
+              <span className="faint small">（files.view 只读聚合按本任务过滤——验收/返工在「详情」按冻结三重身份执行）</span>
+            </div>
+            {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : isRecordThread ? (
+              <div className="faint small" style={{ marginTop: 6 }}>记录串没有任务与交付——回复仅保存。</div>
+            ) : artifacts.delErr != null ? (
+              <div className="panel warning" style={{ marginTop: 6 }}>交付列表读取失败：{artifacts.delErr}</div>
+            ) : artifacts.deliveries.length === 0 ? (
+              <div className="faint small" style={{ marginTop: 6 }}>本任务暂无交付记录（交付产生后在此列出各版本）。</div>
+            ) : (
+              <div style={{ marginTop: 6 }}>
+                {artifacts.deliveries.map((d) => (
+                  <div key={d.deliveryId} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }}>
+                    <Icon name="package" size={13} />
+                    <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
+                    <Tag tone="info">v{d.revision} · manifest {d.manifestHash.slice(0, 8)}…</Tag>
+                    <span className="faint small">{d.reviewedAt != null ? `已复核 ${new Date(d.reviewedAt).toLocaleString()}` : '待验收'}{d.audience === 'dm' ? ' · 私信交付' : ''}</span>
+                    <button
+                      className="btn ghost sm"
+                      title="定位到线程「详情」的交付与验收（#delivery= 深链——验收绑定具体版本）"
+                      onClick={() => setTab('task')}
+                    >查看验收</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="faint small">附件=会话级托管资源（房间根消息与本线程回复共用一个会话）；交付=任务级成果版本。两者都只读呈现——写操作（上传/移除/验收）走各自正式入口。</div>
         </div>
       )}
     </div>

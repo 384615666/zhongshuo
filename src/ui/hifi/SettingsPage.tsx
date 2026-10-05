@@ -50,7 +50,9 @@ export function SettingsPage() {
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
-  /** 保存+回读核对（§4：实际 UI 保存要核回读——设置成功以读回的值为准）。 */
+  /** 保存+回读核对（§4：实际 UI 保存要核回读——设置成功以读回的值为准）。r55：成功后
+   * **立即用回读值更新对应控件/显示**（此前 repoStatus.visible 只写库不更新页面——按钮与
+   * 「当前」文字停在旧值，要手动刷新才一致，用户短测确认的缺陷）；失败保留编辑与真实错误。 */
   const saveSetting = async (key: 'ui.autoOpenProjectPath' | 'repoStatus.visible', value: string, label: string) => {
     if (value.trim().length === 0) { toast('值不能为空（此键不接受空串——如需默认行为请保持原值）', 'warn'); return; }
     setBusy(true);
@@ -60,7 +62,9 @@ export function SettingsPage() {
       const readBack = back.values[key] ?? '';
       if (readBack !== value) { toast(`${label}：保存后回读不一致（读到「${readBack}」）——未伪成功`, 'error'); return; }
       recordWrite('app.settings.set', `${label} = ${value}（已回读核对）`);
+      // 成功即同步页面状态：显示文字与按钮可用性当场反映新值，不需要用户刷新。
       if (key === 'ui.autoOpenProjectPath') setAutoOpenSaved(readBack);
+      if (key === 'repoStatus.visible') setRepoVisible(readBack);
       toast(`${label}已保存（回读一致${key === 'ui.autoOpenProjectPath' ? '，重启后生效' : ''}）`, 'success');
     } catch (e) {
       toast(`${label}保存失败：${(e as Error).message}`, 'error');
@@ -152,9 +156,10 @@ export function SettingsPage() {
       <div className="panel info">
         <div className="row tight"><strong>未换装项（如实）</strong></div>
         <div className="row tight wrap" style={{ marginTop: 6 }}>
-          <button className="btn ghost sm" onClick={() => takeLegacy('search')}>搜索与收藏</button>
           <button className="btn ghost sm" onClick={() => takeLegacy('members')}>成员 runtime 绑定（原界面项目设置）</button>
+          <button className="btn ghost sm" onClick={() => takeLegacy('remote')}>远程访问变更（原界面）</button>
         </div>
+        <div className="faint small" style={{ marginTop: 4 }}>搜索与收藏、活动流已在新界面侧栏（r55 归位）；线程「成果与附件」为线程内真实标签。</div>
       </div>
     </div>
   );

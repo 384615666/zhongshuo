@@ -359,6 +359,15 @@ export function Composer({
   const pendingEnv = useStore((st) => st.pendingSends[draftKey]);
   const [sending, setSending] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  /**
+   * @ 触发位置（r55 T2 完整修复）：记录**本次打开候选框的那个 @ 的下标**。选中成员后只
+   * 消费这一处触发字符——中文紧邻（「整理任务要点@」）、行首/空白、光标处触发全部覆盖；
+   * 不再对正文做全局正则替换（旧实现只匹配行首/空白后的末尾 @，中文紧邻反例即由此残留）。
+   * 工具栏 @ 按钮打开=无触发字符（null，选人不动正文）；取消/切草稿/草稿被引用插入等
+   * 外部变更都会清掉——正文里其它合法 @/邮箱文本永不被触碰。draftKey 一起记录：迟到
+   * 的选择不跨草稿消费。
+   */
+  const [mentionTrigger, setMentionTrigger] = useState<{ index: number; draftKey: string } | null>(null);
   /** 「本次运行设置」弹层（低频选项的收纳处，§6） */
   const [runSettingsAnchor, setRunSettingsAnchor] = useState<{ x: number; y: number } | null>(null);
   /**
@@ -403,6 +412,7 @@ export function Composer({
      */
     setSendAs(recordThread ? 'record' : saved.sendAs);
     setMentionOpen(false);
+    setMentionTrigger(null); // 切草稿即取消：旧触发位置对新草稿无意义
     setAccessOpen(false);
     commandIdRef.current = newId();
     skipSaveRef.current = draftKey;
@@ -428,6 +438,8 @@ export function Composer({
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
     appliedInsertRef.current = insertText.id;
+    setMentionOpen(false); // 正文被外部插入——打开中的候选框触发位置已失效
+    setMentionTrigger(null);
     setBody((current) => {
       const next = current.trim() ? `${current}\n\n${insertText.text}` : insertText.text;
       return next;
@@ -446,6 +458,8 @@ export function Composer({
       if ((e as CustomEvent<string>).detail !== draftKey) return;
       const quotes = takePendingQuotes(draftKey);
       if (quotes.length > 0) {
+        setMentionOpen(false); // 正文被引用插入——打开中的候选框触发位置已失效
+        setMentionTrigger(null);
         setBody((current) => {
           const block = quotes
             .map((q) =>
@@ -680,19 +694,39 @@ export function Composer({
       const next = prev.filter((m) => m !== 'all');
       return next.includes(id) ? next : [...next, id];
     });
-    // 选中成员后清掉正文里遗留的触发字符「@」（用户短测 T2：芯片已选但正文仍留孤立 @——
-    // 指派事实在 mentions/信封里，但呈现上像没选上）。只剥最后一个孤立的 @（用户在其后
-    // 继续输入的正文不动）。
-    setBody((cur) => (/(^|\s)@$/.test(cur) ? cur.replace(/(^|\s)@$/, '$1') : cur));
+    // 只消费**本次触发位置**的 @（r55 T2）：记录下标处仍为 @ 才删那一个字符——中文紧邻
+    // 「整理任务要点@」、行首/空白、光标处触发全覆盖；工具栏打开（无触发）不动正文；
+    // 正文其它合法 @/邮箱文本不被替换。指派事实仍在 mentions/信封（memberId 结构化保留）。
+    const trig = mentionTrigger;
+    setMentionTrigger(null);
+    if (trig != null && trig.draftKey === draftKey) {
+      setBody((cur) => (cur.charAt(trig.index) === '@' ? cur.slice(0, trig.index) + cur.slice(trig.index + 1) : cur));
+    }
     setMentionOpen(false);
     textareaRef.current?.focus();
   }
 
-  // 检测输入中的 @ 触发候选
-  function onInput(v: string) {
-    setBody(v);
-    const at = v.lastIndexOf('@');
-    setMentionOpen(at >= 0 && at === v.length - 1);
+  /**
+   * @ 触发检测（r55 T2）：以**光标位置**为准——光标前一位是 @ 即打开候选并记录该下标
+   * （不再只认「正文末尾的 @」，光标处/中文紧邻触发同判）；IME 组合中不触发（组合结束
+   * 再判定一次——输入法过程不被打断，结束时若光标前恰为 @ 候选照常打开）。
+   */
+  function detectMentionTrigger(ta: HTMLTextAreaElement | null): void {
+    if (ta == null || composingRef.current) return;
+    const v = ta.value;
+    const cur = ta.selectionStart ?? v.length;
+    if (cur > 0 && v.charAt(cur - 1) === '@') {
+      setMentionOpen(true);
+      setMentionTrigger({ index: cur - 1, draftKey });
+    } else {
+      setMentionOpen(false);
+      setMentionTrigger(null);
+    }
+  }
+
+  function onInput(ta: HTMLTextAreaElement) {
+    setBody(ta.value);
+    detectMentionTrigger(ta);
   }
 
   /** 参与者名：用于 @ 按钮的 tooltip，让发送前能看到这次会叫上谁 */
@@ -813,6 +847,24 @@ export function Composer({
         </div>
       ) : null}
 
+      {/* M0 发送前提示（r55 T4）：当前包只开放 @ 指定成员的 DIRECT 派发——未指派（AUTO）与
+          @全体/多人（DELIBERATE）发送后任务会立即受阻（服务端同文案 mode_unavailable_in_m0，
+          任务与消息保留、可补发指派）。发送前就说清楚并给可用动作：不静默改目标、不禁发送、
+          不开放 AUTO 来消除受阻——模式边界保持。 */}
+      {target.kind === 'room_root' && sendAs === 'ai' && route.mode !== 'DIRECT' && inputDisabledReason == null ? (
+        <div className="composer-mentions" data-zs-m0-hint={route.mode}>
+          <span
+            className="chip record-chip"
+            title="M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——发送后任务会立即受阻（消息与任务保留）；@ 单个成员即走 DIRECT 派发，或本次选择仅记录"
+          >
+            <Icon name="alert-triangle" size={11} />
+            M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——本次推导为{route.mode === 'AUTO' ? '未指派（AUTO）' : '全体/多人（DELIBERATE）'}，发送后任务会立即受阻
+            <button title="打开 @ 候选：选择一个成员即走 DIRECT 派发（不会自动替你选——目标不静默改变）" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>@ 指定成员</button>
+            <button title="本次只保存内容、不派发（一次性意图——不受模式边界影响）" onClick={() => setSendAs('record')}>本次仅记录</button>
+          </span>
+        </div>
+      ) : null}
+
       {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败保留可移除；按 uploadId 移除
           ——上传中移除=回执到达即弃，不复活。review-r51 §2） */}
       {attachments.length > 0 ? (
@@ -913,14 +965,23 @@ export function Composer({
                     : `跟进当前任务，可 @ 指定成员…`
           }
           value={body}
-          onChange={(e) => onInput(e.target.value)}
+          onChange={(e) => onInput(e.target)}
           onCompositionStart={() => {
             composingRef.current = true;
           }}
           onCompositionEnd={() => {
             composingRef.current = false;
+            // 组合结束再判一次（IME：组合过程不触发，提交后光标前恰为 @ 照常打开候选）。
+            detectMentionTrigger(textareaRef.current);
           }}
           onKeyDown={(e) => {
+            if (e.key === 'Escape' && mentionOpen) {
+              // 取消候选（r55）：只关框清触发位置——正文与已选芯片都不动。
+              setMentionOpen(false);
+              setMentionTrigger(null);
+              e.preventDefault();
+              return;
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               // 中文输入法组合态的 Enter 不发送（§17.4）
               if (composingRef.current || e.nativeEvent.isComposing) return;
@@ -1011,7 +1072,11 @@ export function Composer({
                   ? `提及成员（也可以直接打 @）· 当前将叫上：${participantNames}`
                   : '提及成员（也可以直接在输入框里打 @）'
               }
-              onClick={() => setMentionOpen((v) => !v)}
+              onClick={() => {
+                // 工具栏打开=无触发字符可消费（选人不动正文）；关闭=取消（同样清触发位置）。
+                setMentionTrigger(null);
+                setMentionOpen((v) => !v);
+              }}
             >
               <Icon name="at-sign" size={14} />
             </button>

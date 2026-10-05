@@ -67,6 +67,14 @@ export interface HifiExtension {
   /** 首启装载（有界等待）状态。 */
   boot: 'pending' | 'ready' | 'failed';
   bootError: string | null;
+  /**
+   * daemon 实时连接态（r55：标题栏接真实断连/重连——首启 ready 不能永久等同在线）。
+   * main 进程在管道关闭时发 zs:disconnect、重连成功后发 zs:reconnected；浏览器宿主
+   * （探针/无 preload）收不到事件，保持 'online' 缺省并按 boot 呈现。connInfo 为断线
+   * 时 main 给出的说明（原样透传，不虚构）。
+   */
+  conn: 'online' | 'offline';
+  connInfo: string | null;
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -96,6 +104,7 @@ function makeEmptyState(): HifiState {
     readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null,
+    conn: 'online', connInfo: null,
   };
 }
 

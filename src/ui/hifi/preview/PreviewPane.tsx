@@ -37,6 +37,12 @@ export function PreviewPane() {
   const open = useStore((s) => s.previewPane != null);
   const target = useStore((s) => s.previewPane?.target ?? null);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 头部身份行的**真实版本/hash**（r55：已发消息打开的预览此前头部显示 v?/空 hash——
+   * 调用方没带 hint，而真实值其实已在预览命令响应里）。各格式子组件取到数据后上报
+   * revision/hash，头部优先用上报值、无上报才回落调用方 hint；目标切换即清。
+   */
+  const [identity, setIdentity] = useState<{ revision?: number | string; hash?: string } | null>(null);
   const genRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const viewerRef = useRef<PptxViewer | null>(null);
@@ -56,20 +62,22 @@ export function PreviewPane() {
     genRef.current += 1;
     releaseResources();
     setErr(null);
+    setIdentity(null);
   }
   useEffect(() => () => { genRef.current += 1; releaseResources(); }, []);
 
   if (!open || target == null) return null;
   const gen = genRef.current;
   const alive = () => gen === genRef.current;
-  const idLine = `${KIND_LABEL[target.kind] ?? target.kind} · ${target.filename} · v${target.revisionHint ?? '?'} · sha256=${String(target.hashHint ?? '').slice(0, 12)}… · 来源：${target.origin ?? '会话'}`;
+  const onIdentity = (revision: number | string, hash: string): void => { if (alive()) setIdentity({ revision, hash }); };
+  const idLine = `${KIND_LABEL[target.kind] ?? target.kind} · ${target.filename} · v${identity?.revision ?? target.revisionHint ?? '?'} · sha256=${String(identity?.hash ?? target.hashHint ?? '').slice(0, 12)}… · 来源：${target.origin ?? '会话'}`;
 
   const body = (() => {
-    if (target.kind === 'text_file' || target.kind === 'code_file') return <TextPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} />;
-    if (target.kind === 'image_file') return <ImagePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} />;
-    if (target.kind === 'pdf_file') return <PdfPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} />;
+    if (target.kind === 'text_file' || target.kind === 'code_file') return <TextPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
+    if (target.kind === 'image_file') return <ImagePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
+    if (target.kind === 'pdf_file') return <PdfPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
     if (target.kind === 'docx_file' || target.kind === 'sheet_file' || target.kind === 'slides_file') {
-      return <OfficePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} abortRef={abortRef} viewerRef={viewerRef} />;
+      return <OfficePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} abortRef={abortRef} viewerRef={viewerRef} onIdentity={onIdentity} />;
     }
     return <div className="panel info">该类型（{target.kind}）的共享预览未接入——经「原界面」打开。</div>;
   })();
@@ -101,12 +109,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 type Target = { attachmentId: string; filename: string; kind: string; conversationId?: string; origin?: string; draftKey?: string; hashHint?: string; revisionHint?: number | string };
 type Alive = () => boolean;
 
-function TextPreview({ target, alive, onErr }: { target: Target; alive: Alive; onErr: (e: string) => void }) {
+function TextPreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
   const [d, setD] = useState<TextData | null>(null);
   useEffect(() => {
     let done = false;
     void previewTextAttachment(target.attachmentId, target.conversationId ?? '')
-      .then((r) => { if (!done && alive()) setD(r as TextData); })
+      .then((r) => { if (!done && alive()) { setD(r as TextData); onIdentity((r as TextData).revision, (r as TextData).hash); } })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);
@@ -121,7 +129,7 @@ function TextPreview({ target, alive, onErr }: { target: Target; alive: Alive; o
   );
 }
 
-function ImagePreview({ target, alive, onErr }: { target: Target; alive: Alive; onErr: (e: string) => void }) {
+function ImagePreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
   const [d, setD] = useState<ImageData | null>(null);
   // 像素对账三态（r53 §2 收紧）：ok=声明宽高逐项相等；mismatch=能解码但与声明不符（如实
   // 报告，不再两边都写 'ok'）；failed=解码失败。验证器按 data-zs-image-decode 断言真值。
@@ -129,7 +137,7 @@ function ImagePreview({ target, alive, onErr }: { target: Target; alive: Alive; 
   useEffect(() => {
     let done = false;
     void command<ImageData>('attachment.previewImage', { attachmentId: target.attachmentId })
-      .then((r) => { if (!done && alive()) setD(r); })
+      .then((r) => { if (!done && alive()) { setD(r); onIdentity(r.revision, r.hash); } })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);
@@ -157,7 +165,7 @@ function ImagePreview({ target, alive, onErr }: { target: Target; alive: Alive; 
   );
 }
 
-function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; onErr: (e: string) => void }) {
+function PdfPreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
   const [pg, setPg] = useState<PdfPageData | null>(null);
   const [zoom, setZoom] = useState<string>('fit');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -173,6 +181,7 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
           if (r.bytesBase64 != null) bytesRef.current = r.bytesBase64;
           pdfDocRef.current = null;
           setPg(r);
+          onIdentity(r.revision, r.hash);
         }
       })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
@@ -249,7 +258,7 @@ function PdfPreview({ target, alive, onErr }: { target: Target; alive: Alive; on
   );
 }
 
-function OfficePreview({ target, alive, onErr, abortRef, viewerRef }: { target: Target; alive: Alive; onErr: (e: string) => void; abortRef: React.MutableRefObject<AbortController | null>; viewerRef: React.MutableRefObject<PptxViewer | null> }) {
+function OfficePreview({ target, alive, onErr, abortRef, viewerRef, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; abortRef: React.MutableRefObject<AbortController | null>; viewerRef: React.MutableRefObject<PptxViewer | null>; onIdentity: (revision: number | string, hash: string) => void }) {
   const [d, setD] = useState<OfficeData | null>(null);
   const [visualState, setVisualState] = useState<'none' | 'rendering' | 'done' | 'failed'>('none');
   const [visualErr, setVisualErr] = useState<string | null>(null);
@@ -264,7 +273,7 @@ function OfficePreview({ target, alive, onErr, abortRef, viewerRef }: { target: 
     let done = false;
     setVisualState('none'); setVisualErr(null);
     void command<OfficeData>('attachment.previewOffice', { attachmentId: target.attachmentId, includeBytes: true })
-      .then((r) => { if (!done && alive()) setD(r); })
+      .then((r) => { if (!done && alive()) { setD(r); onIdentity(r.revision, r.hash); } })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);

@@ -2950,6 +2950,19 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           'task.stopped': '任务停止', 'task.reviewed': '人工验收', 'turn.started': '轮次开始', 'turn.completed': '轮次完成',
           'reminder.fired': '提醒触发', 'reminder.confirmed': '提醒确认', 'delivery.pending': '交付待验收', 'delivery.accepted': '验收通过',
           'delivery.changes_requested': '验收退回', 'conversation.archived': '会话归档', 'message.recorded': '消息记录',
+          // r55 视觉核对补全：派发/线程/恢复/项目这些高频事件此前落到 kindLabel 兜底=英文原键
+          //（显示层映射，不影响 DTO 形状；未知 kind 仍按原键如实透传）。
+          'task.statusChanged': '任务状态变化', 'task.reviewRecorded': '验收记录', 'task.redispatchEnqueued': '重新派发入队',
+          'task.memberDisabledBlocked': '成员停用受阻', 'task.deliberationPrepareFailed': '研讨准备失败', 'task.contextAssemblyFailed': '上下文组装失败',
+          'turn.statusChanged': '轮次状态变化', 'turn.startupFailed': '轮次启动失败', 'turn.lateCompletion': '迟到完成',
+          'run.created': '运行创建', 'run.prepared': '运行就绪', 'run.statusChanged': '运行状态变化', 'run.stageAdvanced': '阶段推进',
+          'run.stepArtifact': '阶段产物', 'run.stepFailed': '阶段失败', 'run.finalReportPublished': '最终报告发布',
+          'run.participantAbsent': '参与者缺席', 'run.dispatchWaitExceeded': '派发等待超时', 'run.admissionDeferred': '准入延后',
+          'run.deliberationBlocked': '研讨受阻', 'run.reconcileRequired': '需对账恢复',
+          'thread.created': '线程创建', 'thread.replyAdded': '线程新回复', 'thread.collaborators': '线程名单更新',
+          'reminder.budgetGateHeld': '预算门暂缓', 'recovery.reconciled': '恢复对账完成', 'recovery.protectionReleased': '保护已解除',
+          'recovery.factConflictCorrected': '事实冲突已纠正', 'project.collabUpdated': '协作限制更新', 'project.reviewPolicyUpdated': '验收策略更新',
+          'tool.started': '工具调用开始', 'tool.completed': '工具调用完成', 'usage.updated': '用量更新',
         };
         const rows = deps.db.prepare(
           `SELECT e.event_id, e.seq, e.kind, e.created_at, e.project_id, e.conversation_id, e.thread_id, e.task_id, e.payload_json,

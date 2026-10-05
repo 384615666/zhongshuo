@@ -44,7 +44,12 @@ function RichText({ text }: { text: string }) {
  * 现在附件经 `Message.attachmentIds` 关联到资源，chip 显示真实标题与版本。
  * 无 taskId 的主池消息同样渲染（§17.9 第 1 条）。
  */
-const KIND_LABEL: Record<string, string> = {
+/**
+ * 附件 kind → 中文标签（导出共享，r55）：回复芯片与根消息（线程锚消息）独立渲染路径
+ * 用同一映射——此前锚消息路径只认 code/text，PPT（幻灯）/CSV（表格→sheet_file）都
+ * 显示成「文本」（用户短测 T5 确认的呈现缺陷）。
+ */
+export const ATTACHMENT_KIND_LABEL: Record<string, string> = {
   text_file: '文本', code_file: '代码', image_file: '图片', pdf_file: 'PDF',
   docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯',
 };
@@ -71,7 +76,7 @@ function MessageAttachments({
           >
             <Icon name="file-text" size={12} />
             <span className="truncate">{a.filename}</span>
-            <span className="msg-attach-kind">{KIND_LABEL[a.kind] ?? a.kind}</span>
+            <span className="msg-attach-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
           </button>
         ))}
       </div>

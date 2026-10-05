@@ -34,6 +34,10 @@ export function MembersPage() {
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [roomMembers, setRoomMembers] = useState<Record<string, MemberRow[]>>({});
   const [runtimes, setRuntimes] = useState<Record<string, RuntimeInfo>>({});
+  /** runtime/房间名单的逐项读取失败（r55，review-r54 §5：查询失败≠未绑定——分列如实，
+   *  读失败的已有事实保留，不把 installationId=null 显示成「已绑定」）。 */
+  const [runtimeErrs, setRuntimeErrs] = useState<Record<string, string>>({});
+  const [roomMemberErrs, setRoomMemberErrs] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const genRef = useRef(0);
@@ -47,23 +51,31 @@ export function MembersPage() {
       if (gen !== genRef.current) return; // 已切换——迟到响应不污染
       setMembers(r.items);
       const rt: Record<string, RuntimeInfo> = {};
+      const rtErr: Record<string, string> = {};
       await Promise.all(r.items.map(async (m) => {
         try {
           const info = await command<RuntimeInfo>('member.runtime', { memberId: m.id });
           if (gen === genRef.current) rt[m.id] = info;
-        } catch { /* 未绑定/查询失败如实缺省——不阻塞列表 */ }
+        } catch (e) {
+          if (gen === genRef.current) rtErr[m.id] = (e as Error).message; // 查询失败如实记录
+        }
       }));
       if (gen !== genRef.current) return;
       setRuntimes(rt);
+      setRuntimeErrs(rtErr);
       const perRoom: Record<string, MemberRow[]> = {};
+      const roomErr: Record<string, string> = {};
       await Promise.all(rooms.map(async (room) => {
         try {
           const rr = await command<{ items: MemberRow[] }>('member.list', { projectId, roomId: room.id });
           if (gen === genRef.current) perRoom[room.id] = rr.items;
-        } catch { /* 房间名单失败如实缺省 */ }
+        } catch (e) {
+          if (gen === genRef.current) roomErr[room.id] = (e as Error).message; // 房间名单失败≠装载中
+        }
       }));
       if (gen !== genRef.current) return;
       setRoomMembers(perRoom);
+      setRoomMemberErrs(roomErr);
     } catch (e) {
       if (gen === genRef.current) setErr((e as Error).message);
     }
@@ -85,11 +97,24 @@ export function MembersPage() {
     }
   };
 
-  const runtimeLabel = (m: MemberRow): string => {
+  /**
+   * runtime 档位四态分列（r55）：查询失败≠未绑定≠已绑定·安装缺失≠正常——
+   *  · 查询失败：保留上一次已有事实，显示失败原因（可刷新重试）；
+   *  · binding.installationId=null：**未绑定**（此前被显示成「已绑定」——与事实相反）；
+   *  · installation=null：绑定在但安装信息缺失（runtime 安装被移除/不可读）；
+   *  · 正常：kind + 能力认证状态（配置成功≠已认证）。
+   */
+  const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean } => {
     const rt = runtimes[m.id];
-    if (rt == null || rt.binding == null) return '未绑定';
-    if (rt.installation == null) return '已绑定（安装信息缺失）';
-    return `${rt.installation.kind} · ${runtimeAuthOf(rt.installation.capabilities_json)}`;
+    if (rt == null) {
+      const failure = runtimeErrs[m.id];
+      if (failure != null) return { text: `查询失败（${failure}）——保留上次事实`, problem: true };
+      return { text: '读取中…' };
+    }
+    if (rt.binding == null) return { text: '绑定信息缺失（member.runtime 响应异常）', problem: true };
+    if (rt.binding.installationId == null || rt.binding.installationId === '') return { text: '未绑定（原界面项目设置里选择 runtime）' };
+    if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
+    return { text: `${rt.installation.kind} · ${runtimeAuthOf(rt.installation.capabilities_json)}` };
   };
 
   const coordinatorIds = new Set(rooms.map((r) => r.coordinatorMemberId).filter((x): x is string => x != null));
@@ -107,34 +132,38 @@ export function MembersPage() {
       {members != null ? (
         <div className="panel info">
           <div className="row tight"><strong>项目成员</strong><span className="faint small">{members.length} 位</span></div>
-          {members.map((m) => (
-            <div key={m.id} className="row tight" style={{ marginTop: 8, padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
-              <Icon name={m.principalType === 'agent' ? 'sparkles' : 'users'} size={13} />
-              <span style={{ fontWeight: 600, minWidth: 90 }}>{m.displayName}</span>
-              <Tag tone="neutral">{m.principalType === 'agent' ? 'Agent' : '人类'}</Tag>
-              {coordinatorIds.has(m.id) ? <Tag tone="info" icon="star">协调者</Tag> : null}
-              <span className="faint small">runtime：{runtimeLabel(m)}</span>
-              <span style={{ flex: 1 }} />
-              {m.principalType === 'agent' ? (
-                <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
-                  title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
-                  {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
-                </button>
-              ) : <span className="faint small">（本地用户——不可停用）</span>}
-            </div>
-          ))}
+          {members.map((m) => {
+            const rt = runtimeLabel(m);
+            return (
+              <div key={m.id} className="row tight" style={{ marginTop: 8, padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
+                <Icon name={m.principalType === 'agent' ? 'sparkles' : 'users'} size={13} />
+                <span style={{ fontWeight: 600, minWidth: 90 }}>{m.displayName}</span>
+                <Tag tone="neutral">{m.principalType === 'agent' ? 'Agent' : '人类'}</Tag>
+                {coordinatorIds.has(m.id) ? <Tag tone="info" icon="star">协调者</Tag> : null}
+                <span className="faint small" style={rt.problem ? { color: 'var(--warning,#b45309)' } : undefined}>runtime：{rt.text}</span>
+                <span style={{ flex: 1 }} />
+                {m.principalType === 'agent' ? (
+                  <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
+                    title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
+                    {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
+                  </button>
+                ) : <span className="faint small">（本地用户——不可停用）</span>}
+              </div>
+            );
+          })}
         </div>
       ) : null}
       <div className="panel info">
         <div className="row tight"><strong>房间名单</strong><span className="faint small">（成员参与派发的实际边界；建房默认全加入）</span></div>
         {rooms.map((room) => {
           const list = roomMembers[room.id];
+          const failure = roomMemberErrs[room.id];
           return (
             <div key={room.id} style={{ marginTop: 8 }}>
               <div className="row tight">
                 <Icon name="message-circle" size={12} />
                 <span className="small" style={{ fontWeight: 600 }}>{room.name}</span>
-                <span className="faint small">{list == null ? '（装载中/失败）' : `${list.length} 位`}</span>
+                <span className="faint small">{failure != null ? `名单读取失败（${failure}——保留上次事实，可刷新重试）` : list == null ? '（装载中…）' : `${list.length} 位`}</span>
               </div>
               {list != null ? (
                 <div className="row tight wrap" style={{ marginTop: 4 }}>

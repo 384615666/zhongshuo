@@ -20,6 +20,8 @@ import { FilesPage } from './FilesPage';
 import { SettingsPage } from './SettingsPage';
 import { MembersPage } from './MembersPage';
 import { PendingPage } from './PendingPage';
+import { LibraryPage } from './LibraryPage';
+import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
 import { PreviewPane } from './preview/PreviewPane';
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
@@ -202,12 +204,6 @@ export default function App() {
   const project = s.projects.find((p) => p.id === s.activeProjectId);
   const rooms = project ? roomsOfProject(s, project.id) : [];
   const dmUnread = dmUnreadTotal(s);
-  const legacyItem = (key: string, icon: Parameters<typeof Icon>[0]['name'], label: string, title: string) => (
-    <button className="side-item" title={`${title}（尚未换装——进入原界面并定位）`} onClick={() => takeLegacy(key)}>
-      <Icon name={icon} size={14} />
-      <span className="side-item-label">{label}</span>
-    </button>
-  );
 
   return (
     <>
@@ -219,7 +215,22 @@ export default function App() {
         <div className="app-body">
           <aside className="sidebar">
             <div className="sidebar-top">
-              {legacyItem('search', 'bookmark', '搜索与收藏', '搜索与收藏')}
+              <button
+                className={`side-item${path === '/library' ? ' active' : ''}`}
+                title="搜索与收藏：消息/线程/任务标题检索（search.query——附件随所在消息）+ 收藏列表（saved.list）"
+                onClick={() => navigate('/library')}
+              >
+                <Icon name="bookmark" size={14} />
+                <span className="side-item-label">搜索与收藏</span>
+              </button>
+              <button
+                className={`side-item${path === '/activity' ? ' active' : ''}`}
+                title="活动流：domain_events 只读聚合（全部可访问项目/当前项目）——定位任务/会话"
+                onClick={() => navigate('/activity')}
+              >
+                <Icon name="activity" size={14} />
+                <span className="side-item-label">活动流</span>
+              </button>
               <button
                 className={`side-item${path === '/files' ? ' active' : ''}`}
                 title="文件与 Git：Files 集合四类分列（只读）+ Git 诊断（状态/diff——写操作经原界面）"
@@ -316,6 +327,10 @@ export default function App() {
               <BoardPage />
             ) : path === '/files' ? (
               <FilesPage />
+            ) : path === '/library' ? (
+              <LibraryPage />
+            ) : path === '/activity' ? (
+              <ActivityPage />
             ) : path === '/settings' ? (
               <SettingsPage />
             ) : path === '/members' ? (

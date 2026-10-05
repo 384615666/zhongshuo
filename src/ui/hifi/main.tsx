@@ -6,6 +6,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { bootRemembered } from './shell';
+import { setState } from './data/store';
 
 function fallbackToLegacy(err: unknown): void {
   console.error('[hifi] 换装壳启动失败，回退原界面：', err);
@@ -14,6 +15,18 @@ function fallbackToLegacy(err: unknown): void {
   document.body.classList.add('legacy-on');
   document.querySelector<HTMLLinkElement>('link[href="hifi/app.css"]')?.setAttribute('disabled', 'disabled');
   if (w.__zsLegacyStart != null && w.__zsLegacyStarted !== true) { w.__zsLegacyStart(); w.__zsLegacyStarted = true; }
+}
+
+/**
+ * 实时连接态（r55：标题栏接真实断连/重连）：main 在 daemon 管道关闭时发 zs:disconnect、
+ * 重连成功后发 zs:reconnected——首启 ready 不能永久等同在线。浏览器宿主（探针 http 环境）
+ * 无 preload 桥：注册失败保持缺省，状态行按 boot 呈现，不假装收得到事件。
+ */
+function watchConnection(): void {
+  const zs = (window as unknown as { zs?: { onDisconnect?: (cb: (info: string) => void) => void; onReconnected?: (cb: () => void) => void } }).zs;
+  if (zs == null || typeof zs.onDisconnect !== 'function' || typeof zs.onReconnected !== 'function') return;
+  zs.onDisconnect((info) => setState((s) => ({ ...s, conn: 'offline', connInfo: String(info ?? '') })));
+  zs.onReconnected(() => setState((s) => ({ ...s, conn: 'online', connInfo: null })));
 }
 
 /** 样式由壳**挂载时**注入（legacy 专项对照/未挂壳时不加载——原型全局样式不污染原界面）。 */
@@ -33,6 +46,7 @@ try {
     loadHifiStyles();
     document.body.classList.add('hifi-on'); // 共存 CSS 钩子：壳接管显示、legacy 隐藏
     createRoot(rootEl).render(<App />);
+    watchConnection();
     void bootRemembered();
   }
 } catch (e) {

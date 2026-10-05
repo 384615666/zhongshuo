@@ -40,7 +40,13 @@ export function PendingPage() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const [data, setData] = useState<PendingData | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** 确认忙锁按**完整 occurrence 身份**（reminderId+scheduledAt——同提醒多项待确认分别可点，
+   *  r55：只按 reminderId 会把同提醒的其它 occurrence 一并锁成「确认中」）。 */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** 范围显式分列（r55，review-r54 §5）：服务返回**全部可访问项目**的汇总，此前本页静默过滤
+   *  当前项目——其它项目的待办无提示消失。默认仍按 §17.7=全部可访问项目（不因切项目丢待办），
+   *  「当前项目」是显式收窄，页头写明范围。 */
+  const [scope, setScope] = useState<'all' | 'project'>('all');
   const genRef = useRef(0);
 
   const reload = useCallback(async () => {
@@ -59,8 +65,10 @@ export function PendingPage() {
   const locate = (link: string) => {
     void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
   };
+  /** occurrence 身份键：同 reminderId 不同 scheduledAt 是两行待确认——key/忙锁同键。 */
+  const occKey = (r: { reminderId: string; scheduledAt: number }): string => `${r.reminderId}:${r.scheduledAt}`;
   const confirmReminder = async (r: { reminderId: string; scheduledAt: number; title: string | null }) => {
-    setConfirming(r.reminderId);
+    setConfirming(occKey(r));
     try {
       await command('reminder.confirm', { reminderId: r.reminderId, scheduledAt: r.scheduledAt });
       recordWrite('reminder.confirm', `确认提醒「${r.title ?? r.reminderId}」→ 正式执行派发`);
@@ -73,19 +81,37 @@ export function PendingPage() {
     }
   };
 
-  const sections = data?.projects.filter((p) => p.projectId === activeProjectId) ?? data?.projects ?? [];
+  const sections = scope === 'project' && activeProjectId !== ''
+    ? (data?.projects.filter((p) => p.projectId === activeProjectId) ?? [])
+    : (data?.projects ?? []);
+  const omittedProjects = scope === 'project' && data != null
+    ? data.projects.filter((p) => p.projectId !== activeProjectId)
+    : [];
   const empty = sections.every((p) => p.reviewTasks.length === 0 && p.dmUnread.length === 0 && p.threadUnread.length === 0 && p.blockedTasks.length === 0 && p.reminderAwaits.length === 0 && p.followedThreads.length === 0);
+  const totalCount = (sections: PendingData['projects']): number =>
+    sections.reduce((n, p) => n + p.reviewTasks.length + p.dmUnread.length + p.threadUnread.length + p.blockedTasks.length + p.reminderAwaits.length + p.followedThreads.length, 0);
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-pending="hifi">
-      <div className="row tight" style={{ marginBottom: 8 }}>
+      <div className="row tight wrap" style={{ marginBottom: 8 }}>
         <Icon name="inbox" size={14} />
         <strong>待我处理</strong>
         <span className="faint small">权威业务状态汇总（mine.pending 纯读）——读卡片≠完成事项；确认执行/验收与定位分开</span>
+        <div className="row tight" style={{ marginLeft: 'auto' }} data-zs-pending-scope={scope}>
+          <button className="btn ghost sm" style={scope === 'all' ? { fontWeight: 700 } : undefined} onClick={() => setScope('all')} title="§17.7：汇总当前用户全部可访问项目——项目隐藏只收起导航，不清待办">
+            全部可访问项目{data != null ? `（${totalCount(data.projects)}）` : ''}
+          </button>
+          <button className="btn ghost sm" style={scope === 'project' ? { fontWeight: 700 } : undefined} onClick={() => setScope('project')} title="只看当前项目——其它项目的待办仍在（切回全部可见）">
+            当前项目{scope === 'project' && data != null ? `（${totalCount(sections)}）` : ''}
+          </button>
+        </div>
         <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
       </div>
+      {scope === 'project' && omittedProjects.length > 0 ? (
+        <div className="faint small">范围=当前项目——另有 {omittedProjects.length} 个项目的待办未显示（切「全部可访问项目」可见，不会因此清掉）。</div>
+      ) : null}
       {err != null ? <div className="panel warning">装载失败：{err}——列表保持上次事实，不伪清（可刷新重试）</div> : null}
-      {data != null && empty ? <div className="panel info">当前没有待处理事项。</div> : null}
+      {data != null && empty ? <div className="panel info">{scope === 'project' ? '当前项目没有待处理事项。' : '全部可访问项目都没有待处理事项。'}</div> : null}
       {sections.map((p) => (
         <div key={p.projectId}>
           <div className="faint small" style={{ marginTop: 6 }}>项目：{p.displayName}</div>
@@ -99,11 +125,11 @@ export function PendingPage() {
             </Row>
           ))}
           {p.reminderAwaits.map((r) => (
-            <Row key={r.reminderId}>
+            <Row key={occKey(r)}>
               <Icon name="clock" size={13} />
               <span style={{ flex: 1 }}>待确认提醒{r.title != null ? `：「${r.title}」` : ''}<span className="faint small">（{new Date(r.scheduledAt).toLocaleString()}{r.missedCount > 0 ? ` · 错过 ${r.missedCount} 次` : ''}{r.notifyMuted ? ' · 通知已静音（待办保留）' : ''}）</span></span>
               <button className="btn ghost sm" onClick={() => locate(r.locate)}>定位</button>
-              <button className="btn sm" disabled={confirming === r.reminderId} title="确认执行：经正式执行链派发（状态/授权/预算事务内核对——author=system）" onClick={() => void confirmReminder(r)}>{confirming === r.reminderId ? '确认中…' : '确认执行'}</button>
+              <button className="btn sm" disabled={confirming === occKey(r)} title="确认执行：经正式执行链派发（状态/授权/预算事务内核对——author=system）；同提醒多次待确认按本次时间分别确认" onClick={() => void confirmReminder(r)}>{confirming === occKey(r) ? '确认中…' : '确认执行'}</button>
             </Row>
           ))}
           {p.dmUnread.map((d) => (

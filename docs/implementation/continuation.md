@@ -2,7 +2,89 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十四轮，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十五轮，唯一权威快照）
+
+> R54=无边框标题栏+H3 收尾+hifi-h3-win-v1；**R55=合并用户短测反馈修复（T2 完整版/T4 发送前
+> 提示/设置显示同步/附件呈现）+搜索与收藏/活动流/线程成果标签三处归位+独立候选
+> hifi-h3-win-v2**。H2-v2/v6/v1/H3-v1 原地稳定（不重建）；Android 用 v6。
+> - **[§1 T2 完整修复（页面级复证过）]** 旧正则只覆盖行首/空白后的末尾 @（用户实测「整理任务
+>   要点@」中文紧邻残留）。新实现**按触发位置消费**：`mentionTrigger={index,draftKey}` 在
+>   detectMentionTrigger（**光标前一位是 @** 即开候选并记下标——不再只认正文末尾）时记录；
+>   insertMention 只删该下标处仍为 @ 的那一个字符；工具栏 @ 打开=null（选人不动正文）；Esc=
+>   取消（保留 @）；IME 组合中不触发（composingRef 早退）、组合结束重判；切草稿/引用插入/
+>   insertText 都清触发；正文其它 @/邮箱永不被全局替换。探针 TM 五例全过（中文邻接/工具栏/
+>   Esc/IME 组合中关+结束开/邮箱不触发）；**包级**（真 app bundle）同样复证（t2m0Real）。
+> - **[§2 T4 发送前提示（不开放 AUTO）]** M0 边界保持（mode_unavailable_in_m0 服务端合同不
+>   动）；UI 在 room_root+ai+**route.mode≠DIRECT**（AUTO 未指派 / DELIBERATE 全体·多人）时
+>   输入区上方常驻提示（`data-zs-m0-hint`，文案=服务端同款「M0 模式下房间任务需 @ 指定成员
+>   （AUTO/DELIBERATE 未开放）——发送后任务会立即受阻」）+「@ 指定成员」「本次仅记录」两个
+>   动作；**不禁发送、不静默改目标**；DIRECT 后提示消失、移除指派回来（探针 TH 三态全过）。
+> - **[§3 附件呈现三修]** ①线程锚消息（根消息）附件芯片 kind 标签复用 MessageView 的
+>   ATTACHMENT_KIND_LABEL（导出共享——此前只认 code/text，PPT/CSV 显示成「文本」）；
+>   ②**预览头真实身份**：PreviewPane 新增 identity 状态，各格式子组件取到数据后上报
+>   revision/hash，头部优先用上报值（已发消息无 hint 打开也显示 v1/sha256 真值，不再 v?/空
+>   hash——探针 TA 断言头部含 v1 且无 v?/sha256=…）；③过期「R52」文案清除（ThreadPage 占位
+>   按钮与 LEGACY_SECTIONS 重写——成果标签成真）。
+> - **[§4 设置显示同步+标题栏断连]** saveSetting 成功回读后**当场更新对应控件**
+>   （repoStatus.visible→setRepoVisible——此前只写库不更新页面，按钮/「当前」文字停旧值需手
+>   动刷新，用户短测确认）；探针 TS 双向（显示→当前：显示+按钮互换；隐藏→复原）+库里
+>   true/false 全过。标题栏连接态：store 新增 conn/connInfo，main.tsx 注册 zs.onDisconnect/
+>   onReconnected（main 进程管道关闭/重连推送——既有事件，hifi 此前零消费，首启 ready 永远
+>   「已连接」）；TitleBar 断线=「已断开——重连中」红点 data-zs-conn=offline，重连恢复（探针
+>   TC 注入事件验证）；浏览器宿主收不到事件保持缺省（不假装）。
+> - **[§5 review-r54 §5 收尾]** PendingPage 范围显式分列（默认**全部可访问项目**=§17.7 旧判，
+>   「当前项目」为显式收窄+省略说明——此前静默 filter 当前项目，其它项目待办无提示消失）；
+>   提醒行 key+确认忙锁=**occurrence 身份**（reminderId+scheduledAt——同提醒多项待确认分别
+>   可见/可锁）；MembersPage runtime 四态分列（查询失败（留上次事实+原因）≠未绑定≠已绑定·
+>   安装缺失≠正常——**installationId=null 不再显示「已绑定」**；房间名单失败≠装载中）。
+> - **[§6 三处归位（真实接线）]** ①**LibraryPage 搜索与收藏**（/library，侧栏入口替换 legacy
+>   项）：search.query（范围 当前项目/全部可访问项目、类型过滤、分页——附件随所在消息检索
+>   如实注明；结果行=正式 locate 深链，「定位 ↗」可视提示）+saved.list（missing/forbidden
+>   如实、取消收藏 saved.remove 原内容不动）+**线程回复书签→saved.add**（幂等，ThreadPage
+>   onSave 接线）；②**ActivityPage 活动流**（/activity）：activity.list（默认全部可访问项目）
+>   (created_at,seq) 双键游标「加载更早」、定位分列（task→#task= 服务端解析/DM→#dm=/房间无
+>   任务→本地房间导航——**#conv= 不在深链族不用**、空 id locate 按长度过滤）；③**ThreadPage
+>   「成果与附件」真标签**（替换 R52 占位）：会话附件=attachment.listByConversation（带真实
+>   v/hash→预览头同源）+本任务交付=files.view 按 taskId 过滤（v2 待验收等）；「查看成果与
+>   附件」从详情可达。**daemon 活动流 kindLabel 映射补全**（视觉核对发现 12/14 英文原键——
+>   补 task.statusChanged/turn.statusChanged/run.created/thread.created 等约 30 条，纯显示层，
+>   DTO 形状不变）。
+> - **[§7 H3 短测前置（review-r54 §6）]** ①**种子房间任务卡**：seed-client.cjs regression 段
+>   新增幂等种子（member.list 房间名单取**非 agents[0]** 的启用 agent=Guide B→message.submit
+>   mentions=[{kind:'member',memberId}]——**必须是对象形状**，纯 id 串会被 discriminatedUnion
+>   拒；只等线程出现（≤20s）不等终态；无合适成员=skipped 如实）；README-H3 v2：H1 **关闭放
+>   最后一步**、H2 直接点种子卡（R55 短回归·看板房间任务样本）不需自建、H5 无待确认提醒记
+>   NOT_RUN、H6 用「显示仓库状态」开关测保存回读（可恢复）+不要求填任意路径、结果明确填
+>   **H3-TEST-template.md**。
+> - **[§8 交付 hifi-h3-win-v2]** buildId bld_4658299eb53861b8（清单 591/591）；范围=H3-v1 全部
+>   +本轮修复与三新页+种子任务卡（README-H3 列明）。verify-hifi-h3-r55.cjs **15/15 pass**
+>   （T1 标题栏/TC 断连重连/T2 缩放/TM 提及五例/TH M0 提示三态/T3 成员/TP 待办范围/T5 设置
+>   同步/T6 Files+Git/T7 看板 scope=all/TA 成果+预览头身份/TL 搜索收藏全链（saved.add→列表→
+>   remove→原消息在）/TY 活动流/T8 预览 38px/T9 legacy；截图×10+原型×5 于 review-r55/，视觉
+>   核验 PASS——首轮两 warn 已修：活动流中文映射、搜索行「定位 ↗」提示）。全量 **857/857**
+>   +typecheck×2。**verify-hifi-package-r55.cjs 双轮 allPass（r55-20261005090723）**（在 r54
+>   全链上新增：种子任务卡在板、真包 T2/M0 复证、搜索命中、活动流条目；run2 重启历史）。
+> - **[证据/坑（本轮）]** 探针坑：**CompositionEvent 不冒泡=React onCompositionStart 收不到**
+>   （组合态守卫假失败——bubbles:true 修复）；cpSync 参数序（recursive 是 options 不是目标）；
+>   r54 复制时漏带第二无交付任务夹具/已补。**包验证坑（最重要）**：bat 的
+>   ZS_FAKE_STALL_MS=60000 让每个 fake turn 先停 60s——种子房间任务若给 agents[0]（=恢复/远程
+>   演练 owner+UI 短测 @Guide A 派发对象），其停滞 turn 会**按成员级互斥挂起同成员后续派发**
+>   （验证器自己的派发 OPEN 永不领取），停机再落在停滞窗内还留下 UNKNOWN turn（run2 起被恢复
+>   守卫按成员持有——outbox 永久 pending）。修复=种子选非 agents[0] 成员+不等终态（任务在种子
+>   退出后 ~60s 自行 REVIEW）。诊断路径：outbox 表 pending 行+agent_turns UNKNOWN+workflow_runs
+>   INTERRUPTED 三件套=成员持有。UI 坑：LibraryPage 搜索结果整卡可点但无可视提示（视觉核验
+>   抓到——补「定位 ↗」）。
+> - **[证据/坑（本轮）]** 探针坑：**CompositionEvent 不冒泡=React onCompositionStart 收不到**
+>   （组合态守卫假失败——bubbles:true 修复）；cpSync 参数序（recursive 是 options 不是目标）；
+>   r54 复制时漏带第二无交付任务夹具/已补。UI 坑：portal 静态（沿用）；LibraryPage 搜索结果
+>   整卡可点但无可视提示（视觉核验抓到——补「定位 ↗」）。
+> - **[用户手测状态]** H2-v2 七项已测（T2 修复入 v2 待用户顺手复证——探针已页面级+真包双证）；
+>   **hifi-h3-win-v2 待一次集中短测**（README-H3 H1–H6 新六项，约 10–15 分钟；H2 七项与 H3-v1
+>   六项不重测）。收到结果优先处理实际失败，不重复旧验收；用户结果不代记 PASS。
+> - **[待办（R56）]** 用户 H3-v2 短测结果收案；原型设置/成员页视觉细化余项；G4 用户评分、
+>   DEV-10/DEV-11、并行写入、价值评价与 G5 按既定延期；Android 继续 v6 独立推进。
+
+## 上一轮快照（2026-10-05 第五十四轮，唯一权威快照）
 
 > R53=三 P1 修复+h2-win-v2（复核确认收口，**用户集中短测进行中、结果未回填——不代记 PASS**）；
 > **R54=无边框标题栏+H3 收尾+hifi-h3-win-v1 独立候选**。H2-v2/v6/v1 原地稳定；Android 用 v6。

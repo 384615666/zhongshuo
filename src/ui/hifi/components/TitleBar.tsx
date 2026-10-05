@@ -32,6 +32,10 @@ export function TitleBar() {
   const mount = typeof document !== 'undefined' ? document.getElementById('zs-titlebar') : null;
   const project = useStore((s) => s.projects.find((p) => p.id === s.activeProjectId) ?? null);
   const boot = useStore((s) => s.boot);
+  // 实时连接态（r55）：注册 zs:disconnect/zs:reconnected（main 在管道关闭/重连时推送）——
+  // 首启 ready 不再永久等同在线；浏览器宿主收不到事件时保持 online 缺省（按 boot 呈现）。
+  const conn = useStore((s) => s.conn);
+  const connInfo = useStore((s) => s.connInfo);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
   const d = bridge();
 
@@ -54,13 +58,17 @@ export function TitleBar() {
 
   if (mount == null) return null; // --no-hifi（原生框）或挂载点缺失——不自绘
 
-  const connLabel = boot === 'pending' ? '连接服务中…' : boot === 'failed' ? '服务连接失败' : '已连接';
-  const connOff = boot !== 'ready';
+  // 连接态合成（r55）：断线优先于 boot（首启后掉线不再显示「已连接」）；重连由 main 负责，
+  // 恢复即回到在线。connInfo 为 main 给的断线说明（原样透传）。
+  const connLabel = conn === 'offline'
+    ? `已断开——重连中${connInfo != null && connInfo.length > 0 ? `（${connInfo}）` : ''}`
+    : boot === 'pending' ? '连接服务中…' : boot === 'failed' ? '服务连接失败' : '已连接';
+  const connOff = conn === 'offline' || boot !== 'ready';
 
   return createPortal(
     <div className="zs-titlebar" data-zs-titlebar-rendered="react">
       <span className="zs-tb-name">众说</span>
-      <span className="zs-tb-stat zs-tb-no-drag" title={project != null ? `当前项目：${project.displayName}` : '尚未打开项目'}>
+      <span className="zs-tb-stat zs-tb-no-drag" data-zs-conn={conn === 'offline' ? 'offline' : 'online'} title={conn === 'offline' ? `连接已断开，主进程正在重连${connInfo != null && connInfo.length > 0 ? `：${connInfo}` : ''}——命令会以「结果未知」回执，草稿与信封保留` : project != null ? `当前项目：${project.displayName}` : '尚未打开项目'}>
         <span className={connOff ? 'dot-off' : 'dot'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 5, verticalAlign: 1, background: connOff ? '#c9312e' : '#22a55e' }} />
         {project != null ? `${project.displayName} · ${connLabel}` : connLabel}
       </span>

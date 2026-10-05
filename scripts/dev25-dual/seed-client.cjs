@@ -314,6 +314,55 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           rg.pausedRemoteConv = { conversationId: dmRC.conversationId, reused: false };
         }
       }
+      // 房间任务卡样本（r55，review-r54 §6：干净种子的房间看板没有可点击任务卡——其它任务
+      // 都在 DM。H3 短测 H2 需要一张真实房间任务卡）。走正式链（@ 启用成员 DIRECT——M0 只
+      // 开放 DIRECT，未指派会受阻，不种 BLOCKED 样本）。**成员选择与等待边界（r55 二修）**：
+      //  ① bat 的 ZS_FAKE_STALL_MS=60000 让每个 fake turn 先停 60s——种子任务必须给
+      //    **非 agents[0]** 的成员（agents[0]=恢复/远程演练 owner，也是 UI 短测/@Guide A 派发
+      //    的对象）：同成员在途 turn 会被成员级互斥挂起后续派发（首轮跑挂根因——种子任务占
+      //    住 m_0，验证器自己的派发 OPEN 永不领取；停机落在停滞窗内还留下 UNKNOWN turn，
+      //    run2 被恢复守卫按成员持有）。选房间名单里非 agents[0] 的启用 agent（演示项目=
+      //    Guide B）；没有则如实跳过。
+      //  ② 不等终态（60s 停滞必然超窗）——只等线程/任务出现在 room.pool（≤20s）；任务会在
+      //    种子退出后 ~60s 自行完成（REVIEW），远早于任何停机点——终态留证由 UI 阶段核。
+      if (regression) {
+        try {
+          const rooms0b = await cmd(pipe, 'room.list', { projectId });
+          const room0b = (rooms0b.items ?? []).find((r) => r.name === '默认房间');
+          if (room0b == null) throw new Error('regression: 房间任务样本目标房间「默认房间」不存在');
+          const markerTask = 'R55 短回归·看板房间任务样本';
+          const pool0 = await cmd(pipe, 'room.pool', { roomId: room0b.id }).catch(() => null);
+          const hit0 = pool0 != null ? (pool0.threads ?? pool0.items ?? []).find((t) => (t.title ?? '').includes(markerTask) || (t.body?.text ?? '').includes(markerTask)) : null;
+          if (hit0 != null) {
+            rg.roomTask = 'reused';
+            rg.roomTaskThread = { threadId: hit0.threadId ?? hit0.id, taskId: hit0.taskId ?? null };
+          } else {
+            const roster = await cmd(pipe, 'member.list', { projectId, roomId: room0b.id });
+            const pick = (roster.items ?? []).find((m) => m.principalType === 'agent' && m.enabled !== false && m.id !== agents[0].id);
+            if (pick == null) {
+              rg.roomTask = 'skipped-no-non-first-agent-member'; // 房间只有 agents[0]——占用会阻塞演练/短测派发，如实跳过
+            } else {
+              await cmd(pipe, 'message.submit', {
+                target: { kind: 'room_root', projectId, conversationId: room0b.conversationId, roomId: room0b.id },
+                body: `${markerTask}（@成员 DIRECT——看板可点击任务卡）`, intent: 'default', mentions: [{ kind: 'member', memberId: pick.id }],
+              });
+              // 只等线程出现（任务创建同步于 submit；60s 停滞窗口内状态=进行中，终态自然到达）。
+              let info = null;
+              for (let i = 0; i < 20; i += 1) {
+                await sleep(1000);
+                const poolX = await cmd(pipe, 'room.pool', { roomId: room0b.id }).catch(() => null);
+                const hitX = poolX != null ? (poolX.threads ?? poolX.items ?? []).find((t) => (t.title ?? '').includes(markerTask) || (t.body?.text ?? '').includes(markerTask)) : null;
+                if (hitX != null) { info = { taskId: hitX.taskId ?? null, threadId: hitX.threadId ?? hitX.id }; break; }
+              }
+              rg.roomTask = info != null ? 'dispatched' : 'submitted-thread-not-visible';
+              rg.roomTaskThread = info;
+              rg.roomTaskMember = pick.id;
+            }
+          }
+        } catch (e) {
+          rg.roomTask = `failed: ${(e && e.message) || String(e)}`; // 种子失败不阻断其余自测——如实记录
+        }
+      }
       // PPT 附件：包内 seed/回归幻灯.pptx → 房间仅记录消息（芯片可点开预览——R6 用）。
       // 第四十三轮（review-r42 §5 / v5 现场）：**显式绑定「默认房间」身份**——旧实现取
       // room.list.items[0]，v5 实际落到了 Lab Room（顺序漂移→指南入口与数据不符）。找不到
