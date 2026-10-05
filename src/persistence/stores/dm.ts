@@ -76,6 +76,27 @@ export interface DmConversationSummary {
   lastMessagePreview: string | null;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
   pendingReview: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
+  /** r58 返工待执行（验收与执行分离）：最近人工验收=要求修改、任务回 ACTIVE 且无更新交付
+   * ——「意见已记录、尚未执行」；queued=已入队（执行中）。意见文本来自服务端验收记录。 */
+  reworkPending: { taskId: string; deliveryRevision: number; note: string | null; queued: boolean } | null;
+}
+
+/**
+ * r58（review-r57 §3）：任务级返工待执行事实（只读派生）——最近（最高版本）交付的验收
+ * 结果=changes_requested 且任务 ACTIVE（无更新交付、停止未生效）→「意见已记录、尚未执行」。
+ * 新交付产生（更高 revision）或任务终态后自然消失；queued=该任务已有在途恢复/返工意图。
+ */
+export function reworkPendingOf(db: ZhongshuoDatabase, taskId: string): { deliveryRevision: number; note: string | null; queued: boolean } | null {
+  try {
+    const task = db.prepare('SELECT status, stop_generation FROM tasks WHERE id = ?').get(taskId) as { status: string; stop_generation: number } | undefined;
+    if (task == null || task.status !== 'ACTIVE' || task.stop_generation > 0) return null;
+    const last = db.prepare('SELECT revision, review_status, review_note FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(taskId) as { revision: number; review_status: string; review_note: string | null } | undefined;
+    if (last == null || last.review_status !== 'changes_requested') return null;
+    const queued = (db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key GLOB ? AND status != 'done'`).get(`task:${taskId}:redispatch*`) as { c: number }).c > 0;
+    return { deliveryRevision: last.revision, note: last.review_note, queued };
+  } catch {
+    return null; // 派生呈现失败=不显示（不阻塞会话列表），操作侧守卫仍以命令事实为准
+  }
 }
 
 export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, projectId?: string): DmConversationSummary[] {
@@ -105,6 +126,11 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'REVIEW'
        ORDER BY d.revision DESC LIMIT 1`,
     ).get(row.id) as { taskId: string; deliveryId: string; revision: number; manifestHash: string } | undefined;
+    // r58 返工待执行（同会话最近一个 ACTIVE dm_turn 的派生事实——通常即待验收任务的后续）。
+    const reworkTaskRow = db.prepare(
+      `SELECT t.id AS taskId FROM tasks t WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE' ORDER BY t.rowid DESC LIMIT 1`,
+    ).get(row.id) as { taskId: string } | undefined;
+    const reworkDerived = reworkTaskRow != null ? reworkPendingOf(db, reworkTaskRow.taskId) : null;
     // 中断待恢复（第三十八轮 #7）：ACTIVE 且**已有 run 但全部终态**（无活动 run/排队派发时永远
     // 不被泵——pumpDmQueue 只放行「无 run」的任务）。不自动重放：恢复经 task.redispatch 正式链
     // （核对停止代次/在途/终态/幂等）。queuedCount 只数「无 run」的排队任务，与此分列。
@@ -160,6 +186,7 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       interruptedTasks: interrupted,
       lastMessagePreview,
       pendingReview: pendingReviewRow != null ? { taskId: pendingReviewRow.taskId, deliveryId: pendingReviewRow.deliveryId, revision: pendingReviewRow.revision, manifestHash: pendingReviewRow.manifestHash } : null,
+      reworkPending: reworkDerived != null && reworkTaskRow != null ? { taskId: reworkTaskRow.taskId, deliveryRevision: reworkDerived.deliveryRevision, note: reworkDerived.note, queued: reworkDerived.queued } : null,
     });
   }
   return out;

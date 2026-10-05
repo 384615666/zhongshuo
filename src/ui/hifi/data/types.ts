@@ -1080,6 +1080,8 @@ export interface DmConversation {
   activeStopGeneration?: number;
   interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>;
   pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
+  /** r58 返工待执行（验收与执行分离）：意见已记录、任务回 ACTIVE 且无更新交付；queued=已入队执行。 */
+  reworkPending?: { taskId: string; deliveryRevision: number; note: string | null; queued: boolean } | null;
   queuedCount?: number;
   stopPending?: boolean;
 }

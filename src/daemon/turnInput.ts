@@ -449,6 +449,20 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
       truncated: history.length >= DM_HISTORY_LIMIT,
       messages: historyTexts,
     },
+    // 附注（r58，review-r57 §3：DM 返工执行同样注入反馈——此前仅房间路径渲染，DM 返工
+    // turn 的模型输入不含意见=无反馈重跑）：返工轮关联被退回的交付版本与验收说明；仅在
+    // 存在时加键（非返工轮信封与既有 hash 完全一致）。
+    ...(() => {
+      const notes: string[] = [];
+      if (input.reviewFeedback != null) {
+        notes.push(
+          `【返工】此前交付（第 ${input.reviewFeedback.deliveryRevision} 版）未通过人工验收（要求修改）。`,
+          `验收说明：${input.reviewFeedback.note ?? '（验收未附说明）'}`,
+          '要求：针对上述验收反馈修改后重新提交完整 TaskComplete。',
+        );
+      }
+      return notes.length > 0 ? { notes } : {};
+    })(),
     outputContract: {
       kind: 'TaskComplete',
       submitVia: 'final-result',

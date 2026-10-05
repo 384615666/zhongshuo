@@ -22,7 +22,7 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
-import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
+import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate } from './lib/router';
@@ -65,6 +65,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   /** 验收/返工框打开时冻结的交付快照（deliveryId/revision/manifestHash——提交只带这份）。
    *  r57：切线程即作废（同 DM 跨会话修复）；作废判定含完整身份（同 revision 不同交付也作废）。 */
   const [reviewBox, setReviewBox] = useState<{ threadId: string; mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
+  /** 执行返工忙态（r58：与其它操作分列——面板独立呈现）。 */
+  const [busyRework, setBusyRework] = useState(false);
   useEffect(() => { setReviewBox(null); }, [threadId]);
   const [stopping, setStopping] = useState(false);
   /** 成果标签页数据（r55）：会话附件 + 本任务交付（files.view 过滤）——代次收口，迟到不污染。 */
@@ -303,8 +305,19 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
       return;
     }
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
-    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '已提交返工意见（任务回到执行）', 'success'); setReviewBox(null); void loadThread(threadId); }
+    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success'); setReviewBox(null); void loadThread(threadId); }
     else { toast(`提交失败：${r.error}——意见已保留可修正重提；若交付已变化本框将作废`, 'error'); }
+  };
+  /** 执行返工（r58 验收与执行分离）：同任务新执行，意见注入模型输入；完成后交付升级。 */
+  const doExecuteRework = async () => {
+    if (task == null) return;
+    setBusyRework(true);
+    try {
+      const r = await executeTaskRework(task.id, threadId);
+      if (!r.ok) { toast(`执行返工被拒：${r.error}`, 'error'); void loadThread(threadId); return; }
+      toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
+      void loadThread(threadId);
+    } finally { setBusyRework(false); }
   };
 
   const detail = task;
@@ -511,6 +524,21 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                     ) : null}
                   </>
                 )}
+                {/* 返工待执行（r58 验收与执行分离）：意见已记录、尚未执行——明确入口续跑。 */}
+                {detail.reworkPending != null ? (
+                  <div className="row tight wrap" style={{ marginTop: 8 }} data-zs-thread-rework="1">
+                    <Icon name="refresh" size={13} />
+                    <strong>返工意见已记录、尚未执行</strong>
+                    <Tag tone="warning">v{detail.reworkPending.deliveryRevision} 被要求修改</Tag>
+                    <span style={{ flex: 1 }} />
+                    {detail.reworkPending.queued ? (
+                      <span className="faint small">返工执行中（已入队/派发）——完成后交付升级为新待验收版本</span>
+                    ) : (
+                      <button className="btn sm" disabled={busyRework} title="执行返工（task.executeRework——同任务新执行，意见注入模型输入）" onClick={() => void doExecuteRework()}>执行返工</button>
+                    )}
+                    {detail.reworkPending.note != null ? <div className="faint small" style={{ width: '100%' }}>验收意见：{detail.reworkPending.note}</div> : null}
+                  </div>
+                ) : null}
               </div>
             </>
           )}

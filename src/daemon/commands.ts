@@ -14,7 +14,7 @@ import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
 import {
   createDmConversation, listDmConversations, dmConversationOf, dmPeerOf, dmLocalUserOf,
-  releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate,
+  releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate, reworkPendingOf,
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { openProject } from './projectStore.ts';
@@ -856,7 +856,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (lastStartupFailure != null) {
           try { lastStartupFailureMessage = (JSON.parse(lastStartupFailure.payload_json) as { message?: string }).message?.slice(0, 200) ?? null; } catch { /* 残缺不虚构 */ }
         }
-        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
+        // r58 返工待执行（验收与执行分离呈现：「意见已记录、尚未执行」/已入队）。
+        const reworkDerived = reworkPendingOf(deps.db, params.taskId);
+        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryRevision: reworkDerived.deliveryRevision, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
@@ -2952,7 +2954,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           'delivery.changes_requested': '验收退回', 'conversation.archived': '会话归档', 'message.recorded': '消息记录',
           // r55 视觉核对补全：派发/线程/恢复/项目这些高频事件此前落到 kindLabel 兜底=英文原键
           //（显示层映射，不影响 DTO 形状；未知 kind 仍按原键如实透传）。
-          'task.statusChanged': '任务状态变化', 'task.reviewRecorded': '验收记录', 'task.redispatchEnqueued': '重新派发入队',
+          'task.statusChanged': '任务状态变化', 'task.reviewRecorded': '验收记录', 'task.redispatchEnqueued': '重新派发入队', 'task.reworkEnqueued': '返工执行入队',
           'task.memberDisabledBlocked': '成员停用受阻', 'task.deliberationPrepareFailed': '研讨准备失败', 'task.contextAssemblyFailed': '上下文组装失败',
           'turn.statusChanged': '轮次状态变化', 'turn.startupFailed': '轮次启动失败', 'turn.lateCompletion': '迟到完成',
           'run.created': '运行创建', 'run.prepared': '运行就绪', 'run.statusChanged': '运行状态变化', 'run.stageAdvanced': '阶段推进',
@@ -3749,6 +3751,76 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             payload: { reason: params.reason ?? 'manual-redispatch', formatRepair: params.formatRepair === true, sourceRunId, dispatchKey },
           });
           return { enqueued: true as const, dispatchKey, formatRepair: params.formatRepair === true, sourceRunId };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'task.executeRework': {
+        // r58（review-r57 §3）：返工**执行**闭环——验收与执行分离合同的另一半。task.review
+        //（changes_requested）只写验收事实（意见入账、任务回 ACTIVE、零派发）；本命令=明确
+        // 的「执行返工」入口：以**库内**最近一次 changes_requested 验收事实为源（意见/版本以
+        // 服务端记录为准——客户端只传任务号与审计 reason，不重传意见文本），绑定原任务/会话/
+        // 来源 run，沿 task.redispatch 同一守卫栈（就绪/在途/停止代次/幂等）与同键命名空间
+        // task:<id>:redispatch:<sourceRunId> 入队正式派发。不自动执行、不借普通 DM 新消息
+        // 另建新任务冒充同任务返工；新交付由 worker 完成路径自然产生（revision 递增、旧
+        // pending 置 superseded、user_review 回 REVIEW——无任何人工 INSERT/UPDATE）。
+        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional() }).parse(env.params);
+        const result = run(() => {
+          const task = deps.db
+            .prepare('SELECT id, status, stop_generation, conversation_id FROM tasks WHERE id = ?')
+            .get(params.taskId) as { id: string; status: string; stop_generation: number; conversation_id: string } | undefined;
+          if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
+          assertConversationAudience(deps.db, deps.localUserId, task.conversation_id);
+          if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：无返工可执行`);
+          if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加执行');
+          if (task.status !== 'ACTIVE') throw new DaemonCommandError('STALE_REVISION', `任务状态 ${task.status} 非 ACTIVE：返工执行要求「意见已记录、任务回到执行」状态（先经 task.review 提交返工意见）`);
+          // 源事实：最高版本交付=最近人工验收结果，且必须是「要求修改」——accepted=无返工；
+          // pending=有更新交付待验收（对新交付操作）；superseded 不该为最高版（防御如实拒）。
+          const last = deps.db
+            .prepare('SELECT id, revision, review_status, review_note, run_id FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1')
+            .get(params.taskId) as { id: string; revision: number; review_status: string; review_note: string | null; run_id: string | null } | undefined;
+          if (last == null) throw new DaemonCommandError('STALE_REVISION', '任务无交付记录：无返工可执行');
+          if (last.review_status === 'pending') throw new DaemonCommandError('STALE_REVISION', `第 ${last.revision} 版交付待验收：请先对新交付验收（不自动执行旧返工）`);
+          if (last.review_status !== 'changes_requested') throw new DaemonCommandError('STALE_REVISION', `最近交付验收结果为 ${last.review_status}：无「要求修改」返工可执行`);
+          // 恢复就绪（与 task.redispatch 共用服务端判定：在途/保护未解除/UNKNOWN 未闭环）。
+          const blockedEarly = assessTaskRedispatchReadiness(deps.db, params.taskId);
+          if (blockedEarly != null) throw new DaemonCommandError(blockedEarly.code, blockedEarly.message);
+          // 来源 run=被退回交付的执行（服务端事实绑定；缺失回落任务最新 run 并如实标注）。
+          const sourceRunId = last.run_id
+            ?? (deps.db.prepare('SELECT id FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string } | undefined)?.id
+            ?? null;
+          if (sourceRunId == null) throw new DaemonCommandError('STALE_REVISION', '返工来源 run 缺失（交付与任务均无执行记录）：无法绑定返工执行——请核对任务事实');
+          const dispatchKey = `task:${params.taskId}:redispatch:${sourceRunId}`;
+          // 幂等与在途（同 redispatch 键命名空间——双入口一意图）。
+          const pendingIntent = deps.db
+            .prepare(`SELECT dispatch_key FROM outbox WHERE dispatch_key GLOB ? AND status != 'done' LIMIT 1`)
+            .get(`task:${params.taskId}:redispatch*`) as { dispatch_key: string } | undefined;
+          if (pendingIntent != null) {
+            throw new DaemonCommandError('IDEMPOTENCY_CONFLICT', `该任务已有在途恢复/返工派发（${pendingIntent.dispatch_key}）：不重复入队`);
+          }
+          const priorDone = deps.db
+            .prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key = ? AND status = 'done'`)
+            .get(dispatchKey) as { c: number };
+          if (priorDone.c > 0) {
+            throw new DaemonCommandError('STALE_REVISION', `该返工（第 ${last.revision} 版·run ${sourceRunId.slice(0, 14)}…）已执行过：其交付应已生成——请刷新后对新交付验收`);
+          }
+          const blockedFinal = assessTaskRedispatchReadiness(deps.db, params.taskId);
+          if (blockedFinal != null) throw new DaemonCommandError(blockedFinal.code, blockedFinal.message);
+          deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0);
+          appendDomainEvent(deps.db, {
+            schemaVersion: 1,
+            eventId: `evt_${randomUUID()}`,
+            projectId: (deps.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(params.taskId) as { project_id: string }).project_id,
+            taskId: params.taskId,
+            runId: sourceRunId,
+            kind: 'task.reworkEnqueued',
+            createdAt: Date.now(),
+            payload: {
+              deliveryId: last.id, deliveryRevision: last.revision, reviewNote: last.review_note,
+              sourceRunId, dispatchKey, reason: params.reason ?? 'user-execute-rework',
+              note: '返工执行入队：验收与执行分离——意见已记录（task.review），本次为用户明确执行的续跑',
+            },
+          });
+          return { enqueued: true as const, dispatchKey, deliveryRevision: last.revision, sourceRunId };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }

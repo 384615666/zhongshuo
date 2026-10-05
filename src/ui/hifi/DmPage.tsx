@@ -16,7 +16,7 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, type ReviewSnapshot } from './loader';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate, pathOf, useHashRoute } from './lib/router';
@@ -168,7 +168,7 @@ export function DmPage() {
     // r57：复用正式适配器 submitTaskReview（返工 note 字段——旧实现误传 reviewComment 被拒）。
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined);
     if (r.ok) {
-      toast(reviewBox.mode === 'accept' ? '已验收通过' : '已提交返工意见（任务回到执行）', 'success');
+      toast(reviewBox.mode === 'accept' ? '已验收通过' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success');
       setReviewBox(null);
       await reloadAll();
       setBusy(null);
@@ -193,6 +193,17 @@ export function DmPage() {
       await reloadAll();
     } catch (e) { toast(`恢复被拒：${(e as Error).message}`, 'error'); }
     finally { setBusy(null); }
+  };
+  /** 执行返工（r58 验收与执行分离）：意见已在 task.review 入账；此处只传任务号——
+   * 入队后由轮询推进（新交付 revision+1 → 再次待验收）。 */
+  const doExecuteRework = async (taskId: string) => {
+    setBusy(`rework:${taskId}`);
+    try {
+      const r = await executeTaskRework(taskId);
+      if (!r.ok) { toast(`执行返工被拒：${r.error}`, 'error'); await reloadAll(); return; }
+      toast('返工执行已入队（同任务新执行——完成后交付升级为新待验收版本）', 'success');
+      await reloadAll();
+    } finally { setBusy(null); }
   };
   const doExport = async (format: 'md' | 'html' | 'docx') => {
     if (active == null) return;
@@ -325,6 +336,26 @@ export function DmPage() {
                       ) : null;
                     })()}
                   </div>
+                ) : null}
+              </div>
+            ) : null}
+            {/* 返工待执行（r58 验收与执行分离）：意见已记录、尚未执行——明确入口续跑，
+                不自动执行、不等「出新稿」。执行中由队列/运行态呈现，新交付落回待验收面板。 */}
+            {active.reworkPending != null ? (
+              <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-rework="hifi">
+                <div className="row tight wrap">
+                  <Icon name="refresh" size={13} />
+                  <strong>返工意见已记录、尚未执行</strong>
+                  <Tag tone="warning">v{active.reworkPending.deliveryRevision} 被要求修改</Tag>
+                  <span style={{ flex: 1 }} />
+                  {active.reworkPending.queued ? (
+                    <span className="faint small">返工执行中（已入队/派发）——完成后交付升级为新待验收版本</span>
+                  ) : (
+                    <button className="btn sm" disabled={busy != null} data-zs-dm-rework-run="1" title="执行返工（task.executeRework——同任务新执行，意见注入模型输入）" onClick={() => void doExecuteRework(active.reworkPending!.taskId)}>执行返工</button>
+                  )}
+                </div>
+                {active.reworkPending.note != null ? (
+                  <div className="faint small" style={{ marginTop: 6 }}>验收意见：{active.reworkPending.note}</div>
                 ) : null}
               </div>
             ) : null}
