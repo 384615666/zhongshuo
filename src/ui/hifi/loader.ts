@@ -63,6 +63,25 @@ export async function bootRemembered(): Promise<void> {
       // r57：成功读到**空记忆**=正常无项目状态——立即就绪并显示欢迎/打开入口，
       // 不再继续等 60 秒后误报「启动失败」（空项目≠失败）。
       setState((st) => (st.activeProjectId === '' && st.boot === 'pending' ? { ...st, boot: 'ready' } : st));
+      // 演练包竞态兜底：启动器窗口先于种子打开（种子晚写 autoOpen）——欢迎态下留一个
+      // **有界后台观察**（不阻塞欢迎交互；用户手动打开后 watcher 自停）。真实新装环境
+      // 种子不写该键，观察窗口自然结束、欢迎保持——不冒充失败。
+      void (async () => {
+        for (let i = 0; i < 75; i += 1) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const st = getState();
+          if (st.activeProjectId !== '' || st.boot === 'failed') return; // 用户已打开/已失败——停
+          try {
+            const again = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
+            const p2 = again?.values?.['ui.autoOpenProjectPath'];
+            if (typeof p2 === 'string' && p2.length > 0) {
+              if (getState().activeProjectId !== '') return;
+              await openProjectByPath(p2).catch(() => { /* 种子写入的路径异常：保持欢迎+如实控制台 */ });
+              return;
+            }
+          } catch { /* 服务暂不可达——继续观察 */ }
+        }
+      })();
       return;
     } catch { /* 服务未就绪——有界重试；真不可达在窗口尽后如实报告 */ }
     await new Promise((r) => setTimeout(r, 1000));

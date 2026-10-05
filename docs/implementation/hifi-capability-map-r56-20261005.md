@@ -56,7 +56,7 @@
 | 共享预览 | attachment.preview* | 全局预览面板 | 真实（r56 补窄/宽/全屏+引用） |
 | 标题栏窗口控制 | zs:window 窄 IPC | 标题栏 | 真实（关闭走既有优雅链） |
 | 派发防护标识 | runtime.status.dispatchGuard | 标题栏 | 真实（r56：演练·模拟派发/真实派发） |
-| 同成员排队合同 | admission(member)+applyRecovery+dispatch.resume | （产品行为） | 真实（memberQueueContractR56 ①②③） |
+| 同成员排队合同 | admission(member)+applyRecovery+dispatch.resume | （产品行为） | 真实（memberQueueContractR56 ①②③；**r57 修订**：②已重写——跨重启准入继承=构造器按 UNKNOWN/retained/在途 持久恢复+retained 门控释放；R56 版「重启后另一任务照常派发」为缺陷已修，见 continuation R57） |
 
 ## 冻结/未开放（不放假按钮）
 

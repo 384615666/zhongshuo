@@ -2,7 +2,67 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-05 第五十六轮长批次，唯一权威快照）
+## 当前真实状态（2026-10-05 第五十七轮长批次，唯一权威快照）
+
+> R56=H4-v1；**R57=复误收口批次**：恢复准入继承（P1 缺口）+DM 返工正式链+跨会话操作框
+> +面板 DTO+首启欢迎，交独立候选 **hifi-h4-win-v2**。旧包/用户数据/RESULTS 原地稳定。
+> **[R56 结论纠正（review-r56 §2）]** R56 的「跨重启同成员保护已核清」声明**不成立**——独立
+> 复核 queue-retained-result.json 证实：UNKNOWN+retained 旧 turn 下 dispatch.resume 后
+> 新 worker（空 admission 内存）照常派发同成员另一任务（startTurn=2）。R56 测试②当时把该
+> 行为当正例，恰好漏掉此层。R57 已修复并重写合同测试；R56 历史报告原样保留。
+> - **[§1 恢复准入继承（review-r56 §2）]** `DispatchAdmission.restore(turnId,dims)`+DispatchWorker
+>   **构造器**按持久事实恢复占位（UNKNOWN / protection_state='retained' / 非终态在途——
+>   恢复不查限额：既成占用如实）；`releaseAdmission`/`reconcileRelease` 增加 **retained 门控**
+>   （notStarted→FAILED+refunded 但 retained 期间继续占用；recovery.releaseProtection 解除后
+>   经同钩子放行）。memberQueueContractR56 ②重写：dispatch.resume 后同成员**零新增
+>   startTurn**（文件库关闭重开+全新 worker 双重证明——同进程共享 adapter 连续计数）→
+>   notStarted 对账（FAILED+refunded+retained）继续占用 → 正式解除（no-os-process 服务端
+>   证据）后**恰一次**续跑+任务一零新 run。**声明边界**：fresh-worker+恢复库状态模拟（进程内
+>   文件库重开），非真实 OS 崩溃重启——后者留待后续批次补证。三个旧测试文件按新合同更新：
+>   stopIntentGeneration/boardFormalStates 的「停止结算」（settleStop/恢复后跟进）补
+>   recovery.reconcile executed 收口（确认继续≠退出证明，对账后才派发）；lateOutcomePath
+>   并行 UNKNOWN 构造改用不同成员（mA/mB/mC 真实派发）。**860/860+主/hifi 双 typecheck 0 错**
+>   （R56 的主 typecheck 4 错已随测试重写消除——此前「双干净」声明不实，已纠正）。
+> - **[§2 DM 返工正式链（review-r56 §3）]** 旧实现返工传 `reviewComment`（服务端只收 `note`
+>   →VALIDATION_INVALID 恒拒）。改为复用 `submitTaskReview` 适配器（note 字段）；失败原因
+>   准确呈现+**意见文本保留**可修正重提（不再一律「交付可能更新」丢文本；真更版才作废）。
+>   探针 TDM2 全链：返工意见入 domain_events（note 原文可查）→任务回 ACTIVE→新交付 v2
+>   （fixture 注入+任务回 REVIEW）→再次验收 DONE。
+> - **[§3 跨会话操作框（review-r56 §4）]** DmPage 重命名/验收框捕获**目标快照**
+>   （conversationId+revision / 三重身份），切会话 effect 即作废+提交前双核对=零提交；
+>   作废判定按**完整身份**（同 revision 不同交付也作废）+作废框可关闭重开。ThreadPage 验收框
+>   同判（threadId 绑定+manifestHash 全比较+切线程作废）。探针 TDM3 双侧 DB 反例：A 开验收框+
+>   重命名框→切 B→两框消失+**task.review/conversation.rename 命令零发出**+A/B 状态与标题两侧
+>   DB 不变（不止断言弹框消失）。
+> - **[§4 面板 DTO+失败反馈（review-r56 §5）]** 任务项 hint 映射 board.view 真实
+>   taskStatus/runStatus 中文（探针断言无 undefined）；board.view 聚合失败显示错误行（不冒充
+>   零任务）；locate 失败 toast 明确反馈（旧注释「全局 toast」不实已改）。
+> - **[§5 首启（review-r56 §6.1/6.2）]** bootRemembered 成功读到**空记忆**=立即 boot ready+
+>   欢迎面板（data-zs-welcome——探针 TW1：0ms 出现、侧栏无「失败」字样）；**演练包竞态兜底**：
+>   欢迎态下 150s 有界后台观察（种子晚写 autoOpen 时自动进入，真实新装环境自然结束不冒充）；
+>   记忆路径失效与未就绪分列（真实原因+可操作；不再被外层 catch 归类「连接中」空转）。侧栏
+>   常驻「打开/切换项目」入口（folder 图标）。
+> - **[§6 探针 r57 25 段 pass]** verify-hifi-h4-r57.cjs（r56 基线 22+TW1 欢迎/TPA 状态核/
+>   TDM2 返工链/TDM3 跨会话反例）；**TA 时序修复**（v5 审计失败根因=fake turn 异步收口与夹具
+>   UPDATE/INSERT 竞态——新增 untilTaskSettled 等真实终态后再注入，r0/r1 双夹具）；新截图
+>   视觉 PASS（欢迎/跨会话两张）。产物 dist/desktop/review-r57/。
+> - **[§7 交付 hifi-h4-win-v2]** buildId bld_cbd9f0c1cba4e22b（591/591）；README-H4 v2 短测
+>   指南重写（具体前置：H3=「+Guide A 新建空闲会话」避免种子忙碌链、H7 关注未读需**离开后**
+>   新回复且无回复=NOT_RUN、H8 日期区分截止昨天/今天+关闭放最后）。verify-hifi-package-r57
+>   三连验证（首启/复用/重启）——**过程记录**：首轮候选（bld_69c05a8bd26416f9）因欢迎分支
+>   终止 bootRemembered 使包内「窗口先于种子」竞态下永不入项目（run1 失败 r57-20261005115629
+>   保留）；补 150s 观察者后重建 bld_cbd9f0c1cba4e22b 重验。另：验证器 procsOfCopy 守卫会
+>   误匹配**本会话 shell**（命令行含副本路径字样）——排除 bash.exe/cmd.exe（包只跑
+>   bat/electron/node）。
+> - **[坑（本轮）]** ①python 直写大文件碰 CRLF/引号嵌套易碎（lateOutcomePath seed 曾错序
+>   FK+语法错——改用 Read+Edit 精准段）；②验证器 guard 自匹配会话 shell（见上）；③fixture
+>   必须等真实 worker 终态再注入（untilTaskSettled）；④TDM2 返工后注新交付需同时把任务
+>   回 REVIEW（pendingReview 只看 REVIEW 态）。
+> - **[待办（R58）]** 用户 hifi-h4-win-v2 集中短测（README-H4 v2 H1–H8）收案；**真实 OS 崩溃
+>   重启**的准入继承补证（进程树级）；多尺寸/缩放截图对照补充；G4/DEV-10/11/并行写入/价值
+>   评价延期保持；Android v6 独立。
+
+## 上一轮快照（2026-10-05 第五十六轮长批次，唯一权威快照）
 
 > R55=反馈合并修复+三页归位+hifi-h3-win-v2；**R56=H4 收口长批次**：两确认缺陷修复+同成员排队
 > 合同核清+命令面板/恢复界面/H4 外围+日常操作归位+独立候选 **hifi-h4-win-v1**。旧包
