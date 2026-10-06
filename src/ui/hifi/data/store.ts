@@ -741,7 +741,11 @@ function recoverLedgerToPending(): void {
 /* ---------- 导航偏好持久化（R64：原型 actions-nav 同名 API——正式侧复用） ---------- */
 import { saveNavPrefs } from './navPrefs';
 
-/** 把当前导航偏好写回 localStorage（导航类动作统一走这里；与原型 store.persistNav 同形）。 */
+/**
+ * 把当前导航偏好写回 localStorage（快速镜像）+ 服务端 navigation_preferences（跨机权威，
+ * board.view scope=all 的可见集读本表——review-r64 §4A：不能只写本地叫正式 navigation 命令）。
+ * 服务端写为 fire-and-forget（失败不阻塞导航；下次导航动作重写）。
+ */
 export function persistNav(s: HifiState): void {
   try {
     saveNavPrefs({
@@ -753,6 +757,19 @@ export function persistNav(s: HifiState): void {
       fileGitTabs: s.fileGitTabs,
     });
   } catch { /* localStorage 不可用：偏好仅内存态 */ }
+  void (async () => {
+    try {
+      const { command } = await import('../bridge');
+      await command('navigation.set', {
+        clientId: 'desktop-hifi',
+        activeProjectId: s.activeProjectId === '' ? null : s.activeProjectId,
+        visibleProjectIds: s.visibleProjectIds,
+        expandedProjectIds: s.expandedProjectIds,
+        pinnedProjectIds: s.pinnedProjectIds,
+        fileGitTabs: s.fileGitTabs,
+      });
+    } catch { /* 服务端偏好写入失败：本地已生效，下次导航动作重试 */ }
+  })();
 }
 
 /* ---------- 提示与主题 ---------- */

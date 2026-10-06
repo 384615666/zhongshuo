@@ -17,7 +17,9 @@ import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from '.
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
-interface ProjectOpenData { project: { id: string; displayName: string; revision?: number } }
+interface ProjectOpenData { project: { id: string; displayName: string; revision?: number; rootPath?: string; canonicalPath?: string }; created?: boolean }
+/** R65：注册表条目（project.list——多项目前端集合的事实源）。 */
+interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
@@ -63,6 +65,10 @@ export async function bootRemembered(): Promise<void> {
     try {
       const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
       await initDraftPersistenceFromIdentity();
+      // R65：注册表+服务端导航偏好（无行=本地/全量默认）。欢迎页「最近项目」来自真实注册表；
+      // 偏好中的有效 id 才采用（已移除/归档项目自动清出，不猜）。
+      await loadProjectRegistry();
+      await applyServerNavPrefs();
       const path = remembered?.values?.['ui.autoOpenProjectPath'];
       if (typeof path === 'string' && path.length > 0) {
         try {
@@ -106,6 +112,28 @@ export async function bootRemembered(): Promise<void> {
   setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: '服务在 60 秒内未就绪——可重试，或直接打开文件夹' } : s));
 }
 
+/** R65：服务端导航偏好（navigation_preferences by viewer+client）→ 本地状态合并。
+ * 服务端无行=null（保持本地/默认）；无效 id（已移除项目）被过滤；active 不在有效集则忽略。 */
+export async function applyServerNavPrefs(): Promise<void> {
+  try {
+    const r = await command<{ prefs: { activeProjectId: string | null; visibleProjectIds: string[]; expandedProjectIds: string[]; pinnedProjectIds: string[]; fileGitTabs: Record<string, string>; revision: number } | null }>('navigation.get', { clientId: 'desktop-hifi' });
+    if (r.prefs == null) return;
+    const prefs = r.prefs;
+    const valid = new Set(getState().projects.map((p) => p.id));
+    const visible = prefs.visibleProjectIds.filter((id) => valid.has(id));
+    const expanded = prefs.expandedProjectIds.filter((id) => valid.has(id));
+    const pinned = (prefs.pinnedProjectIds ?? []).filter((id) => valid.has(id));
+    setState((s) => ({
+      ...s,
+      visibleProjectIds: visible.length > 0 ? visible : s.visibleProjectIds,
+      expandedProjectIds: expanded.length > 0 ? expanded : s.expandedProjectIds,
+      pinnedProjectIds: pinned.length > 0 ? pinned : s.pinnedProjectIds,
+      fileGitTabs: Object.keys(prefs.fileGitTabs ?? {}).length > 0 ? (prefs.fileGitTabs as Record<string, 'files' | 'git'>) : s.fileGitTabs,
+      activeProjectId: prefs.activeProjectId != null && valid.has(prefs.activeProjectId) ? prefs.activeProjectId : s.activeProjectId,
+    }));
+  } catch { /* 服务端偏好读取失败：保持本地（不阻塞启动） */ }
+}
+
 export async function pickAndOpenFolder(): Promise<void> {
   const dir = await bridge().pickFolder();
   if (dir == null) return;
@@ -126,30 +154,135 @@ export async function openProjectByPath(path: string): Promise<void> {
     const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
     if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
     const p = data.project;
-    recordWrite('project.open', `打开项目「${p.displayName}」`);
-    setState((s) => ({
-      ...s,
-      loadGen: gen,
-      projects: [{
-        id: p.id, displayName: p.displayName, rootPath: path, canonicalPath: path, directoryIdentity: '',
-        status: 'ok', revision: p.revision ?? 0, isGit: false,
-      }],
-      activeProjectId: p.id,
-      visibleProjectIds: [p.id],
-      expandedProjectIds: [p.id],
-      roomPool: {}, dmHistory: {}, readErrors: {},
-    }));
+    recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已注册·幂等重开）'}`);
+    // R65（review-r64 §1A/§4A）：**合并不替换**——B 打开后 A 仍在侧栏/注册表；焦点/可见/展开
+    // 各自 upsert（不覆盖其它项目的显示偏好）；旧项目的房间/主池缓存保留为事实，重进即用。
+    setState((s) => {
+      const others = s.projects.filter((x) => x.id !== p.id);
+      const known = s.projects.find((x) => x.id === p.id);
+      return {
+        ...s,
+        loadGen: gen,
+        projects: [...others, {
+          id: p.id, displayName: p.displayName, rootPath: p.rootPath ?? path, canonicalPath: p.canonicalPath ?? path,
+          directoryIdentity: known?.directoryIdentity ?? '', status: 'ok', revision: p.revision ?? 0,
+          isGit: known?.isGit ?? false, gitBranch: known?.gitBranch,
+          description: known?.description, taskReviewEnabled: known?.taskReviewEnabled,
+        }],
+        activeProjectId: p.id,
+        visibleProjectIds: [...new Set([...s.visibleProjectIds, p.id])],
+        expandedProjectIds: [...new Set([...s.expandedProjectIds, p.id])],
+      };
+    });
     try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
-    await Promise.all([refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
+    await Promise.all([loadProjectRegistry(), refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
+    const { persistNav } = await import('./data/store');
+    persistNav(getState()); // R65：服务端导航偏好同步（跨机权威；本地 localStorage 为快速镜像）
   } finally {
     // 在途结束（成功/失败/被取代）——按代次条件清：旧调用的收尾不清掉更新调用的标记。
     setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false } : s));
   }
 }
 
-export async function refreshMembers(): Promise<void> {
+/**
+ * R65（review-r64 §1A/§4A）：装载真实注册表（project.list）。**合并不替换**——打开 B 不再
+ * 让 A 从侧栏消失；保留已习得的 isGit 事实。status 映射：directory_missing→missing、
+ * archived/removed→archivedAt/removedAt 标记位（选择器按真值过滤，不用假时间戳）。
+ */
+export async function loadProjectRegistry(): Promise<void> {
+  try {
+    const data = await command<{ items: RegistryItem[] }>('project.list', {});
+    setState((prev) => {
+      const byIdMap = new Map(prev.projects.map((pr) => [pr.id, pr]));
+      const next = (data.items ?? []).map((it) => {
+        const known = byIdMap.get(it.id);
+        return {
+          id: it.id, displayName: it.displayName, rootPath: it.rootPath, canonicalPath: it.canonicalPath,
+          directoryIdentity: it.directoryIdentity,
+          status: it.status === 'directory_missing' ? ('missing' as const) : ('ok' as const),
+          revision: it.revision,
+          isGit: known?.isGit ?? false,
+          gitBranch: known?.gitBranch,
+          description: it.description ?? undefined,
+          archivedAt: it.status === 'archived' ? 1 : undefined,
+          removedAt: it.status === 'removed' ? 1 : undefined,
+          taskReviewEnabled: it.taskReviewEnabled,
+        };
+      });
+      return { ...prev, projects: next };
+    });
+  } catch { /* 注册表读取失败：保持旧集合（当前项目仍可用），不冒充空 */ }
+}
+
+/** R65：项目属性真实保存（displayName/description；expectedRevision 乐观锁——A 的编辑不写进 B）。 */
+export async function updateProjectReal(projectId: string, expectedRevision: number, patch: { displayName?: string; description?: string }): Promise<{ ok: boolean; error?: string; project?: { id: string; displayName: string; description: string | null; revision: number } }> {
+  try {
+    const r = await command<{ project: { id: string; displayName: string; description: string | null; revision: number } }>('project.update', { projectId, expectedRevision, ...patch });
+    recordWrite('project.update', `项目属性已保存（revision ${r.project.revision}，回读一致由服务端事务保证）`);
+    await loadProjectRegistry();
+    return { ok: true, project: r.project };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** R65：项目生命周期（archive/unarchive/remove/restore/relocate）——真实命令+注册表刷新。 */
+export async function projectLifecycleReal(projectId: string, expectedRevision: number, action: 'archive' | 'unarchive' | 'remove' | 'restore' | 'relocate', newRootPath?: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('project.lifecycle', { projectId, expectedRevision, action, ...(action === 'relocate' && newRootPath != null ? { newRootPath } : {}) });
+    recordWrite('project.lifecycle', `${action}（revision ${expectedRevision} 基线）`);
+    await loadProjectRegistry();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/** R65：房间属性/归档/成员真实命令（乐观锁+守卫由服务端裁决，UI 保留输入并如实报错）。 */
+export async function updateRoomReal(roomId: string, expectedRevision: number, patch: { name?: string; description?: string; coordinatorMemberId?: string }): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('room.update', { roomId, expectedRevision, ...patch });
+    recordWrite('room.update', `房间属性已保存（revision ${expectedRevision} 基线）`);
+    await refreshRooms().catch(() => { /* 名单下次刷新 */ });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+export async function roomArchiveReal(roomId: string, expectedRevision: number, action: 'archive' | 'unarchive'): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('room.archive', { roomId, expectedRevision, action });
+    recordWrite('room.archive', action === 'archive' ? '房间已归档（历史保留·只读）' : '房间已取消归档');
+    await refreshRooms().catch(() => { /* 下次刷新 */ });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+export async function roomMembersSetReal(roomId: string, memberId: string, action: 'add' | 'remove'): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('room.members.set', { roomId, memberId, action });
+    recordWrite('room.members.set', `${action === 'add' ? '加入' : '移出'}房间（新增只对后续新任务生效——运行中研讨名单冻结）`);
+    await refreshRooms().catch(() => { /* 下次刷新 */ });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+/** R65：焦点切换（不重开目录）——切 activeProjectId 并刷新该项目的房间/成员/私信投影。
+ * 已打开项目的房间事实在库里，无需 project.open；未注册 id 返回 false（调用方如实提示）。 */
+export async function switchFocusProject(projectId: string): Promise<boolean> {
+  const s = getState();
+  const p = s.projects.find((x) => x.id === projectId);
+  if (p == null) return false;
+  if (s.activeProjectId === projectId) return true;
+  setState((st) => ({ ...st, activeProjectId: projectId, visibleProjectIds: [...new Set([...st.visibleProjectIds, projectId])], expandedProjectIds: [...new Set([...st.expandedProjectIds, projectId])] }));
+  await Promise.all([refreshRooms(projectId), refreshMembers(projectId), refreshDms(projectId)]);
+  const { persistNav } = await import('./data/store');
+  persistNav(getState());
+  return true;
+}
+
+export async function refreshMembers(projectIdArg?: string): Promise<void> {
   const gen = getState().loadGen;
-  const projectId = getState().activeProjectId;
+  const projectId = projectIdArg ?? getState().activeProjectId;
   if (projectId === '') return;
   const data = await command<RoomMembersData>('member.list', { projectId });
   if (!stillCurrent(gen, projectId)) return; // 迟到响应：项目已切走——丢弃（review-r46 §5 反例）
@@ -173,9 +306,9 @@ export async function refreshMembers(): Promise<void> {
   }));
 }
 
-export async function refreshRooms(): Promise<void> {
+export async function refreshRooms(projectIdArg?: string): Promise<void> {
   const gen = getState().loadGen;
-  const projectId = getState().activeProjectId;
+  const projectId = projectIdArg ?? getState().activeProjectId;
   if (projectId === '') return;
   const data = await command<RoomListData>('room.list', { projectId });
   if (!stillCurrent(gen, projectId)) return;
@@ -251,8 +384,8 @@ export async function toggleSavedMessage(m: { id: string; body: string }, projec
   }
 }
 
-export async function refreshDms(): Promise<void> {  const gen = getState().loadGen;
-  const projectId = getState().activeProjectId;
+export async function refreshDms(projectIdArg?: string): Promise<void> {  const gen = getState().loadGen;
+  const projectId = projectIdArg ?? getState().activeProjectId;
   if (projectId === '') return;
   const data = await command<ConvListData>('conversation.list', { projectId });
   if (!stillCurrent(gen, projectId)) return;
