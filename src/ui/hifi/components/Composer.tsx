@@ -18,9 +18,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview } from '../data/store';
+import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
-import { takePendingQuotes } from '../data/actions-preview';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
 import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
@@ -416,6 +415,9 @@ export function Composer({
     setAccessOpen(false);
     commandIdRef.current = newId();
     skipSaveRef.current = draftKey;
+    // r61 G7：目标未挂载期间排队的摘录/正文插入在此消费（一次性取走——旧队列不在后续
+    // 新点击时批量灌入；每条插入恰好一次落正文）。
+    applyDraftInserts(takeDraftInserts(draftKey));
   }, [draftKey, recordThread]);
 
   // 正文与结构化选择变化即写入草稿（草稿不是命令，commandId 保持不变）
@@ -447,28 +449,22 @@ export function Composer({
     textareaRef.current?.focus();
   }, [insertText]);
 
+  /** 正文插入应用（r61 G7：摘录等文本块——一次一条，正文保持用户文字，新插入追加不覆盖）。 */
+  const applyDraftInserts = (items: Array<{ id: number; text: string }>): void => {
+    if (items.length === 0) return;
+    setMentionOpen(false);
+    setMentionTrigger(null);
+    setBody((current) => items.reduce((acc, it) => (acc.trim() ? `${acc}\n\n${it.text}` : it.text), current));
+  };
+
   /**
-   * 文件预览「引用到」（§7.2）：PreviewPane 派发 zs:focus-composer 并
-   * 把固定版本引用排入 pendingQuotes；这里消费入草稿并聚焦。
-   * 此前 Composer 没有监听该事件、takePendingQuotes 零消费 ——
-   * 引用按钮点击后草稿不变、焦点不动（引用行为核验抓到的真回归）。
+   * zs:focus-composer（r56 起；r61 G7 修订）：预览「摘录」/「引用文件」后由 PreviewPane
+   * 派发——这里消费该目标的待插入文本并聚焦输入框（文件引用卡本身由 store 驱动，无需消费）。
    */
   useEffect(() => {
     const onFocusComposer = (e: Event) => {
       if ((e as CustomEvent<string>).detail !== draftKey) return;
-      const quotes = takePendingQuotes(draftKey);
-      if (quotes.length > 0) {
-        setMentionOpen(false); // 正文被引用插入——打开中的候选框触发位置已失效
-        setMentionTrigger(null);
-        setBody((current) => {
-          const block = quotes
-            .map((q) =>
-              `> 引用「${q.title}」v${q.revision}${q.excerpt ? `\n${q.excerpt}` : ''}`,
-            )
-            .join('\n\n');
-          return current.trim() ? `${current}\n\n${block}` : block;
-        });
-      }
+      applyDraftInserts(takeDraftInserts(draftKey));
       textareaRef.current?.focus();
     };
     window.addEventListener('zs:focus-composer', onFocusComposer);
@@ -873,7 +869,7 @@ export function Composer({
             <span key={a.uploadId} className="chip mono" title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…（可移除——回执到达即弃）' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
               <Icon name="paperclip" size={11} />
               {a.name}
-              <span className="faint">{Math.round(a.size / 1024)}KB</span>
+              {a.size > 0 ? <span className="faint">{Math.round(a.size / 1024)}KB</span> : null}
               {a.status === 'uploading' ? <span className="faint">上传中…</span> : null}
               {a.status === 'failed' ? <span style={{ color: 'var(--warning)' }}>失败</span> : null}
               {a.status === 'ready' ? <span className="faint">v{a.revision}</span> : null}

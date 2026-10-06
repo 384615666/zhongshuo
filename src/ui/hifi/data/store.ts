@@ -83,6 +83,8 @@ export interface HifiExtension {
   /** r61 G6：本用户 message 类收藏事实（saved_refs 投影）——消息行书签按钮的已收藏状态
    * 与收藏页取消后的行内同步共用这一份；项目打开时刷新，切换成功即更新。 */
   savedMessageRefs: Record<string, boolean>;
+  /** r61 G7：待插入草稿的正文文本（摘录等）——目标 Composer 未挂载时排队，挂载即消费。 */
+  draftInserts: Record<string, Array<{ id: number; text: string }>>;
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -114,6 +116,7 @@ function makeEmptyState(): HifiState {
     boot: 'pending', bootError: null, openInFlight: false,
     conn: 'online', connInfo: null,
     savedMessageRefs: {},
+    draftInserts: {},
   };
 }
 
@@ -125,6 +128,66 @@ export function setState(updater: (prev: HifiState) => HifiState) { state = upda
 function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 export function useStore<T>(selector: (s: HifiState) => T): T {
   return useSyncExternalStore(subscribe, () => selector(state), () => selector(state));
+}
+
+/* ---------- 引用与摘录（r61 G7：引用=文件/版本引用卡直写草稿；摘录=内容文本插入队列） ---------- */
+
+/**
+ * 文件引用直写草稿（r61 G7 重做）：预览「引用文件」把**资源引用卡**写进目标草稿的
+ * attachments（同上传附件同一正式链路——发送时进 attachmentRefs，服务端按 ID 做
+ * audience/完整性/范围/图片门；正文保持用户文字，全文不自动粘贴）。
+ * - 原子：ready 芯片（uploadItems）与草稿 ref 在同一次调用内写入（JS 单线程无中间窗口）；
+ * - 去重：同 attachmentId+revision 已在草稿→existed（同文件同版本不积压；新版本=新行）；
+ * - 失败零写入：目标缺失/参数非法返回错误，不产生幽灵芯片或幽灵 ref。
+ */
+export function addFileRefToDraft(draftKey: string, conversationId: string, ref: { attachmentId: string; name: string; kind: string; revision?: number; hash?: string }): { ok: boolean; existed?: boolean; error?: string } {
+  if (draftKey.length === 0) return { ok: false, error: '目标草稿未知' };
+  if (ref.attachmentId == null || ref.attachmentId.length === 0) return { ok: false, error: '资源身份缺失（attachmentId）——不凭文件名猜身份' };
+  const d = getDraftFull(draftKey);
+  if (d.attachments.some((a) => a.attachmentId === ref.attachmentId && (a.revision ?? 0) === (ref.revision ?? 0))) {
+    return { ok: true, existed: true };
+  }
+  const item: UploadItem = {
+    uploadId: `ref_${Math.random().toString(36).slice(2, 10)}`,
+    draftKey, conversationId,
+    name: ref.name, size: 0,
+    status: 'ready',
+    attachmentId: ref.attachmentId, hash: ref.hash, revision: ref.revision, kind: ref.kind,
+  };
+  setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: [...(s.uploadItems[draftKey] ?? []), item] } }));
+  setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: ref.name, size: 0, attachmentId: ref.attachmentId, hash: ref.hash, revision: ref.revision, kind: ref.kind }] });
+  return { ok: true, existed: false };
+}
+
+/**
+ * 摘录/正文插入队列（r61 G7）：目标 Composer 未挂载（成果/详情标签）时先入队，挂载时
+ * 消费——不再出现「旧队列无人消费、后续新点击批量灌入」。同文本去重（防双击重复入队）。
+ */
+export function queueDraftInsert(draftKey: string, text: string): { ok: boolean; queued?: boolean; error?: string } {
+  if (draftKey.length === 0) return { ok: false, error: '目标草稿未知' };
+  if (text.trim().length === 0) return { ok: false, error: '插入内容为空' };
+  const cur = getState().draftInserts[draftKey] ?? [];
+  if (cur.some((x) => x.text === text)) return { ok: true, queued: false };
+  setState((s) => ({ ...s, draftInserts: { ...s.draftInserts, [draftKey]: [...(s.draftInserts[draftKey] ?? []), { id: Date.now() + Math.floor(Math.random() * 1000), text }] } }));
+  return { ok: true, queued: true };
+}
+
+/** Composer 挂载/zs:focus-composer 时取走并清空该目标的待插入文本（一次性消费）。 */
+export function takeDraftInserts(draftKey: string): Array<{ id: number; text: string }> {
+  const cur = getState().draftInserts[draftKey];
+  if (cur == null || cur.length === 0) return [];
+  setState((s) => { const next = { ...s.draftInserts }; delete next[draftKey]; return { ...s, draftInserts: next }; });
+  return cur;
+}
+
+/** 草稿目标的正式会话身份（r61 G7 跨会话引用边界）：thread→threadEntities、room→rooms、
+ * dm→会话 id。未知返回 null（调用方按「无法核对」如实处理——服务端仍按 audience 终审）。 */
+export function conversationOfDraftKey(draftKey: string): string | null {
+  const s = getState();
+  if (draftKey.startsWith('thread:')) return s.threadEntities[draftKey.slice('thread:'.length)]?.conversationId ?? null;
+  if (draftKey.startsWith('room:')) return s.rooms.find((r) => r.id === draftKey.slice('room:'.length))?.conversationId ?? null;
+  if (draftKey.startsWith('dm:')) return draftKey.slice('dm:'.length);
+  return null;
 }
 
 /* ---------- 草稿（Composer 契约：按 draftKey 存整份草稿；缺省返回空草稿——原型 seeds 同形） ---------- */

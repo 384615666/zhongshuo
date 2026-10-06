@@ -121,6 +121,15 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     const next = initialTab === 'task' ? 'task' : initialTab === 'artifacts' ? 'artifacts' : 'replies';
     setTab((cur) => (cur === next ? cur : next));
   }, [initialTab]);
+  // r61 G7：在成果/详情标签下从预览「引用文件/摘录」——切回回复标签让输入区立即可见
+  //（引用直写草稿不依赖此切换，但用户必须能看见落点，不要求先手动切回复再点）。
+  useEffect(() => {
+    const onFocus = (e: Event): void => {
+      if ((e as CustomEvent<string>).detail === `thread:${threadId}`) setTab('replies');
+    };
+    window.addEventListener('zs:focus-composer', onFocus);
+    return () => window.removeEventListener('zs:focus-composer', onFocus);
+  }, [threadId]);
 
   // 成果标签页装载（r55）：会话附件=attachment.listByConversation（真实版本/hash→预览头同源）；
   // 本任务交付=files.view(scope=project) 按 taskId 过滤（复用既有只读聚合，不另开命令面）。

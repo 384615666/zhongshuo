@@ -12,10 +12,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { command } from '../bridge';
-import { useStore, closePreview, toast, getState } from '../data/store';
+import { useStore, closePreview, toast, getState, addFileRefToDraft, queueDraftInsert, conversationOfDraftKey } from '../data/store';
 import { previewTextAttachment, setDraftAttachmentRange } from '../loader';
 import { getDraftFull } from '../data/store';
-import { addPendingQuote } from '../data/actions-preview';
 import { loadRendererPdfjs, loadRendererPptx, loadRendererDocxPreview, base64ToBytes, type PptxViewer } from './renderers';
 
 const KIND_LABEL: Record<string, string> = {
@@ -38,6 +37,13 @@ export function PreviewPane() {
   const open = useStore((s) => s.previewPane != null);
   const target = useStore((s) => s.previewPane?.target ?? null);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 摘录的内容真源（r61 G7）：各格式子组件按数据源上报当前主文本（文本=提取文本、PDF=当前页
+   * 文本层、Word=净化 HTML 文本、表格=当前表窗口、幻灯=当前页文字+备注）——摘录只来自内容，
+   * 不再从 .page-stack DOM 抓取（那会把解析器/模型输入说明等界面文案混进正文）。
+   * 目标切换即清（src 绑定 attachmentId+版本，迟到上报不串目标）。
+   */
+  const [contentText, setContentText] = useState<{ src: string; text: string } | null>(null);
   /**
    * 头部身份行的**真实版本/hash**（r55：已发消息打开的预览此前头部显示 v?/空 hash——
    * 调用方没带 hint，而真实值其实已在预览命令响应里）。各格式子组件取到数据后上报
@@ -69,6 +75,7 @@ export function PreviewPane() {
     releaseResources();
     setErr(null);
     setIdentity(null);
+    setContentText(null);
     setWidthMode('normal'); // 换目标回默认宽度（r56）
   }
   useEffect(() => () => { genRef.current += 1; releaseResources(); }, []);
@@ -93,45 +100,79 @@ export function PreviewPane() {
   const onIdentity = (revision: number | string, hash: string): void => { if (alive()) setIdentity({ revision, hash }); };
   const idLine = `${KIND_LABEL[target.kind] ?? target.kind} · ${target.filename} · v${identity?.revision ?? target.revisionHint ?? '?'} · sha256=${String(identity?.hash ?? target.hashHint ?? '').slice(0, 12)}… · 来源：${target.origin ?? '会话'}`;
 
-  /**
-   * 引用到输入框（r56 H4 §5）：按**当前路由**定位在挂 Composer 的草稿键——预览浮层盖着的
-   * 就是当前页面，引用落在用户正看的目标里；找不到可引用目标（看板/设置等无输入页）如实
-   * 提示，不静默丢弃。摘要取预览当前可见文本（前 160 字——用户所见即所引）。
-   */
-  const quoteToComposer = (): void => {
+  /** 按当前路由解析引用落点（草稿键）——预览盖着的就是用户正看的目标。 */
+  const draftKeyFromRoute = (): string | null => {
     const hash = location.hash ?? '';
-    let draftKey: string | null = null;
     const th = /^#\/thread\/([^?]+)/.exec(hash);
     const rm = /^#\/room\/([^?]+)/.exec(hash);
     const dmM = /^#\/dm\/([^?]+)/.exec(hash);
-    if (th != null) draftKey = `thread:${decodeURIComponent(th[1])}`;
-    else if (rm != null) draftKey = `room:${decodeURIComponent(rm[1])}`;
-    else if (dmM != null) draftKey = `dm:${decodeURIComponent(dmM[1])}`;
-    else if (hash.startsWith('#/dm')) {
+    if (th != null) return `thread:${decodeURIComponent(th[1])}`;
+    if (rm != null) return `room:${decodeURIComponent(rm[1])}`;
+    if (dmM != null) return `dm:${decodeURIComponent(dmM[1])}`;
+    if (hash.startsWith('#/dm')) {
       const st = getState();
       const currentDm = st.dms.find((d) => d.id === st.ui.activeThreadId) ?? st.dms[0];
-      if (currentDm != null) draftKey = `dm:${currentDm.id}`;
+      if (currentDm != null) return `dm:${currentDm.id}`;
     }
+    return null;
+  };
+
+  /**
+   * 引用文件（r61 G7 重做，默认动作）：把**文件/版本引用卡**直写目标草稿（正文保持用户
+   * 文字——全文/界面说明不自动粘贴）。一次点击一次落账：同文件同版本已在草稿=如实提示
+   * 已引用（不积压）；跨会话资源在写入前拒绝（服务端仍按 audience 终审）；找不到输入
+   * 目标如实提示、零写入。写入成功才提示成功——不出现「提示成功但输入区没有」的假成功。
+   */
+  const quoteFileToComposer = (): void => {
+    const draftKey = draftKeyFromRoute();
     if (draftKey == null) { toast('当前页面没有输入框可插入引用——回到房间/线程/私信后再引用', 'warn'); return; }
-    const visible = document.querySelector('[data-zs-preview=hifi] .page-stack')?.textContent ?? '';
-    const excerpt = visible.replace(/\s+/g, ' ').trim().slice(0, 160);
-    addPendingQuote(draftKey, {
-      resourceId: target.attachmentId,
-      revision: Number(identity?.revision ?? target.revisionHint ?? 0) || 0,
-      hash: String(identity?.hash ?? target.hashHint ?? ''),
-      title: target.filename,
-      excerpt,
+    const draftConv = conversationOfDraftKey(draftKey);
+    if (target.conversationId != null && target.conversationId.length > 0 && draftConv != null && draftConv.length > 0 && target.conversationId !== draftConv) {
+      toast('该文件属于其它会话——不能引用到当前输入框（跨会话复制受 audience 边界限制）', 'warn');
+      return;
+    }
+    const r = addFileRefToDraft(draftKey, target.conversationId ?? draftConv ?? '', {
+      attachmentId: target.attachmentId,
+      name: target.filename,
+      kind: target.kind,
+      revision: Number(identity?.revision ?? target.revisionHint ?? 0) || undefined,
+      hash: String(identity?.hash ?? target.hashHint ?? '') || undefined,
     });
+    if (!r.ok) { toast(`引用失败：${r.error ?? '未知错误'}（未写入）`, 'error'); return; }
     window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: draftKey }));
-    toast(`已把「${target.filename}」引用插入输入框（引用不直接触发新任务）`, 'success');
+    toast(r.existed === true
+      ? `「${target.filename}」已在输入区引用（同文件同版本不重复）——输入区可见引用卡，发送时携带该资源`
+      : `已引用「${target.filename}」到输入区（引用卡可移除；发送时按正式附件合同携带版本/hash——正文保持你的文字）`, 'success');
+  };
+
+  /**
+   * 摘录到正文（r61 G7：与「引用文件」分列的独立动作）：只取**内容真源**当前文本前 160 字
+   * （不含解析器/模型输入说明等界面文案），插入目标草稿正文；内容未装载/无文本层如实提示。
+   */
+  const excerptToComposer = (): void => {
+    const draftKey = draftKeyFromRoute();
+    if (draftKey == null) { toast('当前页面没有输入框可插入摘录——回到房间/线程/私信后再操作', 'warn'); return; }
+    if (contentText == null || contentText.text.trim().length === 0) { toast('本预览还没有可摘录的内容文本（未装载或无文本层——OCR 未实现）', 'warn'); return; }
+    const rev = String(identity?.revision ?? target.revisionHint ?? '?');
+    const excerpt = contentText.text.replace(/\s+/g, ' ').trim().slice(0, 160);
+    const r = queueDraftInsert(draftKey, `> 摘录「${target.filename}」v${rev}：${excerpt}`);
+    if (!r.ok) { toast(`摘录失败：${r.error ?? '未知错误'}`, 'error'); return; }
+    window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: draftKey }));
+    toast(r.queued === false ? '相同摘录已在待插入队列（不重复）' : '已摘录内容前 160 字到输入框正文（引用不直接触发新任务）', 'success');
+  };
+
+  /** 内容上报（各格式子组件→摘录真源）；src 绑定目标附件身份，迟到/异目标上报丢弃。 */
+  const onContent = (src: string, text: string): void => {
+    if (!alive() || !src.startsWith(`${target.attachmentId}:`)) return;
+    setContentText({ src, text });
   };
 
   const body = (() => {
-    if (target.kind === 'text_file' || target.kind === 'code_file') return <TextPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
+    if (target.kind === 'text_file' || target.kind === 'code_file') return <TextPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} onContent={onContent} />;
     if (target.kind === 'image_file') return <ImagePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
-    if (target.kind === 'pdf_file') return <PdfPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} />;
+    if (target.kind === 'pdf_file') return <PdfPreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} onIdentity={onIdentity} onContent={onContent} />;
     if (target.kind === 'docx_file' || target.kind === 'sheet_file' || target.kind === 'slides_file') {
-      return <OfficePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} abortRef={abortRef} viewerRef={viewerRef} onIdentity={onIdentity} />;
+      return <OfficePreview key={target.attachmentId} target={target} alive={alive} onErr={setErr} abortRef={abortRef} viewerRef={viewerRef} onIdentity={onIdentity} onContent={onContent} />;
     }
     return <div className="panel info">该类型（{target.kind}）的共享预览未接入——经「原界面」打开。</div>;
   })();
@@ -147,7 +188,8 @@ export function PreviewPane() {
         <button className="btn ghost sm" title="收窄（默认 560px）" disabled={widthMode === 'normal'} onClick={() => setWidthMode('normal')}>窄</button>
         <button className="btn ghost sm" title="加宽（880px——长行/宽表可读）" disabled={widthMode === 'wide'} onClick={() => setWidthMode('wide')}>宽</button>
         <button className="btn ghost sm" title={widthMode === 'full' ? '退出全屏展开' : '全屏展开（遮内容区——Esc 或按钮恢复）'} onClick={() => setWidthMode((m) => (m === 'full' ? 'normal' : 'full'))}>{widthMode === 'full' ? '还原' : '展开'}</button>
-        <button className="btn ghost sm" title="把本预览（版本+可见摘录）引用到当前输入框——引用不直接触发新任务" onClick={quoteToComposer}>引用</button>
+        <button className="btn ghost sm" title="把本文件作为资源引用卡加入当前输入框（保留版本/hash，发送时按正式附件合同携带——正文保持你的文字，不自动粘贴全文）" onClick={quoteFileToComposer}>引用文件</button>
+        <button className="btn ghost sm" title="把当前内容文本的前 160 字摘录到输入框正文（独立于文件引用——只来自内容，不含界面说明）" onClick={excerptToComposer}>摘录</button>
         <button className="btn ghost sm" title="关闭预览（中止在途解析并释放渲染器资源）" onClick={() => closePreview()}>关闭</button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack">
@@ -170,12 +212,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 type Target = { attachmentId: string; filename: string; kind: string; conversationId?: string; origin?: string; draftKey?: string; hashHint?: string; revisionHint?: number | string };
 type Alive = () => boolean;
 
-function TextPreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
+function TextPreview({ target, alive, onErr, onIdentity, onContent }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void; onContent?: (src: string, text: string) => void }) {
   const [d, setD] = useState<TextData | null>(null);
   useEffect(() => {
     let done = false;
     void previewTextAttachment(target.attachmentId, target.conversationId ?? '')
-      .then((r) => { if (!done && alive()) { setD(r as TextData); onIdentity((r as TextData).revision, (r as TextData).hash); } })
+      .then((r) => { if (!done && alive()) { setD(r as TextData); onIdentity((r as TextData).revision, (r as TextData).hash); onContent?.(`${target.attachmentId}:${(r as TextData).revision}`, (r as TextData).text); } })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);
@@ -226,7 +268,7 @@ function ImagePreview({ target, alive, onErr, onIdentity }: { target: Target; al
   );
 }
 
-function PdfPreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
+function PdfPreview({ target, alive, onErr, onIdentity, onContent }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void; onContent?: (src: string, text: string) => void }) {
   const [pg, setPg] = useState<PdfPageData | null>(null);
   const [zoom, setZoom] = useState<string>('fit');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -243,6 +285,7 @@ function PdfPreview({ target, alive, onErr, onIdentity }: { target: Target; aliv
           pdfDocRef.current = null;
           setPg(r);
           onIdentity(r.revision, r.hash);
+          onContent?.(`${target.attachmentId}:${r.revision}`, r.text);
         }
       })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
@@ -299,7 +342,7 @@ function PdfPreview({ target, alive, onErr, onIdentity }: { target: Target; aliv
   if (pg == null) return <div className="panel info">正在加载预览…</div>;
   const goPage = (n: number) => {
     void command<PdfPageData>('attachment.previewPdf', { attachmentId: target.attachmentId, page: n })
-      .then((r) => { if (alive()) setPg(r); })
+      .then((r) => { if (alive()) { setPg(r); onContent?.(`${target.attachmentId}:${r.revision}`, r.text); } })
       .catch((e: unknown) => { if (alive()) onErr(String((e as Error).message)); });
   };
   return (
@@ -319,7 +362,7 @@ function PdfPreview({ target, alive, onErr, onIdentity }: { target: Target; aliv
   );
 }
 
-function OfficePreview({ target, alive, onErr, abortRef, viewerRef, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; abortRef: React.MutableRefObject<AbortController | null>; viewerRef: React.MutableRefObject<PptxViewer | null>; onIdentity: (revision: number | string, hash: string) => void }) {
+function OfficePreview({ target, alive, onErr, abortRef, viewerRef, onIdentity, onContent }: { target: Target; alive: Alive; onErr: (e: string) => void; abortRef: React.MutableRefObject<AbortController | null>; viewerRef: React.MutableRefObject<PptxViewer | null>; onIdentity: (revision: number | string, hash: string) => void; onContent?: (src: string, text: string) => void }) {
   const [d, setD] = useState<OfficeData | null>(null);
   const [visualState, setVisualState] = useState<'none' | 'rendering' | 'done' | 'failed'>('none');
   const [visualErr, setVisualErr] = useState<string | null>(null);
@@ -334,10 +377,33 @@ function OfficePreview({ target, alive, onErr, abortRef, viewerRef, onIdentity }
     let done = false;
     setVisualState('none'); setVisualErr(null);
     void command<OfficeData>('attachment.previewOffice', { attachmentId: target.attachmentId, includeBytes: true })
-      .then((r) => { if (!done && alive()) { setD(r); onIdentity(r.revision, r.hash); } })
+      .then((r) => { if (!done && alive()) { setD(r); onIdentity(r.revision, r.hash); reportContentOf(r); } })
       .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
     return () => { done = true; };
   }, [target.attachmentId]);
+
+  /** 内容真源上报（r61 摘录）：Word=净化 HTML 的文本；表格=当前表窗口单元格；幻灯=当前页
+   *  文字+备注。切表/翻页时重报——摘录始终取用户当前所见内容，不含界面说明。 */
+  const reportContentOf = (data: OfficeData): void => {
+    const src = `${target.attachmentId}:${data.revision}`;
+    if (data.kind === 'docx_file') {
+      if (data.html != null) {
+        const box = document.createElement('div');
+        box.innerHTML = data.html;
+        onContent?.(src, box.textContent ?? '');
+      }
+      return;
+    }
+    if (data.kind === 'sheet_file') {
+      const sh = (data.sheets ?? [])[sheetIdx] ?? (data.sheets ?? [])[0];
+      if (sh != null) onContent?.(src, sh.cells.map((row) => row.map((c) => String(c ?? '')).join('\t')).join('\n'));
+      return;
+    }
+    const sl = (data.slides ?? [])[slidePage - 1];
+    if (sl != null) onContent?.(src, `${sl.text}${sl.notes.trim().length > 0 ? `\n${sl.notes}` : ''}`);
+  };
+  // 切表/翻页重报当前内容（数据已在——只重组当前窗口文本）。
+  useEffect(() => { if (d != null) reportContentOf(d); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [sheetIdx, slidePage]);
 
   // Word 视觉：docx-preview 渲染进 Shadow DOM（CSS 边界）+ renderAltChunks:false。
   useEffect(() => {
