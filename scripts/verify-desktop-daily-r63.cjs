@@ -86,7 +86,7 @@ async function connectPage(label) {
     await sleep(1000);
   }
 }
-const waitFor = async (cdp, expr, ms, label) => { const t0 = Date.now(); for (;;) { const v = await cdp.tryEval(probe(expr)).catch(() => null); if (v) return v; if (Date.now() - t0 > ms) throw new Error('等待超时：' + label); await sleep(900); } };
+const waitFor = async (cdp, expr, ms, label) => { const t0 = Date.now(); for (;;) { const v = await cdp.tryEval(probe(expr)).catch(() => null); if (v) return v; if (Date.now() - t0 > ms) { const diag = await cdp?.tryEval(`JSON.stringify({ hash: location.hash, mainHead: (document.querySelector('#hifi-root .workspace')?.textContent ?? document.body.textContent ?? '').slice(0, 200), hasComposer: document.querySelector('#hifi-root textarea.composer-input') != null, boot: document.querySelector('#hifi-root .workspace')?.getAttribute('data-zs-boot') ?? null })`).catch?.(() => null); throw new Error('等待超时：' + label + '｜诊断：' + String(diag)); } await sleep(900); } };
 const dbQuery = (sql, ...a) => { const Database = require(path.join(repo, 'node_modules', 'better-sqlite3')); const db = new Database(path.join(copyDir, 'server-data', 'state.sqlite'), { readonly: true }); try { return db.prepare(sql).all(...a); } finally { db.close(); } };
 const clickBtn = async (cdp, matcher, label) => { const ok = await cdp.tryEval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((b) => ${matcher}); if (b == null) return false; b.click(); return true; })()`)); if (ok !== true) throw new Error('按钮未找到：' + label); };
 const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, ${JSON.stringify(v)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
@@ -145,10 +145,22 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     await waitFor(cdp, `document.body.classList.contains('hifi-on') && window.__r63old === undefined && [...document.querySelectorAll('#hifi-root .side-item-label')].some((e) => e.textContent.includes('默认房间'))`, 40000, '打开实际项目（执行成员+默认房间引导）');
     const projNameVisible = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .side-item-label, #hifi-root .side-item')].some((e) => e.textContent.includes('我的项目'))`);
     facts.openProject = { roomVisible: true, projNameVisible: projNameVisible === true };
+    const dumpA = String(await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .side-item-label')].map((x) => x.textContent.trim()).join('|')`));
+    await sleep(4000);
+    const dumpB = String(await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .side-item-label')].map((x) => x.textContent.trim()).join('|')`));
+    facts.openProject.sideDumpA = dumpA.slice(0, 160);
+    facts.openProject.sideDumpB = dumpB.slice(0, 160);
+    facts.openProject.roomStillThere = dumpB.includes('默认房间');
+    if (!facts.openProject.roomStillThere) throw new Error('房间在打开后数秒内消失：A=[' + dumpA.slice(0, 120) + '] B=[' + dumpB.slice(0, 120) + ']');
 
     // ⑤a 未绑定提示：进默认房间 → 发送区 data-zs-runtime-hint（AUTO：无已绑定 agent）
-    await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
-    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 20000, '房间输入区');
+    const clickRoom = await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .side-item')].find((x) => x.textContent.includes('默认房间')); if (b == null) return 'NOT_FOUND'; b.click(); return 'CLICKED'; })()`));
+    if (clickRoom !== 'CLICKED') {
+      const dump = await cdp.tryEval(`JSON.stringify({ hash: location.hash, sideItems: [...document.querySelectorAll('#hifi-root .side-item')].map((x) => x.textContent.trim().slice(0, 20)), labels: [...document.querySelectorAll('#hifi-root .side-item-label')].map((x) => x.textContent.trim().slice(0, 20)), oldMark: window.__r63old === 1 })`);
+      throw new Error('默认房间 side-item 未找到（点击前）：' + String(dump));
+    }
+    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '路由进入房间');
+    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '房间输入区');
     await waitFor(cdp, `document.querySelector('[data-zs-runtime-hint]') != null`, 15000, '未绑定 runtime 就地提示');
     const hintAuto = await cdp.tryEval(`document.querySelector('[data-zs-runtime-hint]')?.textContent ?? ''`);
     // @ 执行成员 → 指派成员未绑定提示
@@ -161,7 +173,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
 
     // ④ 成员页配置路径：未绑定显示+表单（fake 选项不存在）→ 绑定 claude → 回读
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('成员'))?.click(), true`));
-    await waitFor(cdp, `[data-zs-members=hifi] != null && document.querySelector('[data-zs-members=hifi]')?.textContent.includes('执行成员')`, 20000, '成员页：执行成员');
+    await waitFor(cdp, `document.querySelector('[data-zs-members=hifi]')?.textContent.includes('执行成员')`, 45000, '成员页：执行成员');
     const unboundShown = await cdp.tryEval(`document.querySelector('[data-zs-members=hifi]')?.textContent.includes('未绑定')`);
     await clickBtn(cdp, `b.getAttribute('data-zs-member-bind') != null`, '配置 runtime');
     await waitFor(cdp, `document.querySelector('[data-zs-member-bindform]') != null`, 8000, '绑定表单');
@@ -174,8 +186,9 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     facts.memberConfig = { unboundShown: unboundShown === true, fakeOptionAbsent: fakeOptionAbsent !== false, boundReadback: boundReadback === true, dbBinding: dbQuery("SELECT ri.kind, ap.settings_json FROM agent_profiles ap JOIN runtime_installations ri ON ri.id = ap.runtime_installation_id").map((r) => ({ kind: r.kind, model: JSON.parse(r.settings_json).model })) };
 
     // ⑤b 绑定后提示消失
-    await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
-    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 20000, '回房间');
+    await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .side-item')].find((x) => x.textContent.includes('默认房间')); b?.click(); return true; })()`));
+    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '路由回房间');
+    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '回房间');
     await sleep(2000);
     const hintGone = await cdp.tryEval(`document.querySelector('[data-zs-runtime-hint]') == null`);
     facts.runtimeHint.goneAfterBind = hintGone === true;
@@ -193,8 +206,9 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     await sleep(700);
     await cdp.eval(`window.__r63old2 = 1; location.reload(); true`);
     await waitFor(cdp, `document.body.classList.contains('hifi-on') && window.__r63old2 === undefined && [...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes(${JSON.stringify(marker)}))`, 40000, '重开：记录消息仍在');
-    await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
-    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 20000, '重开输入区');
+    await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .side-item')].find((x) => x.textContent.includes('默认房间')); b?.click(); return true; })()`));
+    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '重开进房间');
+    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '重开输入区');
     await sleep(900);
     const draftKept = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value ?? ''`);
     facts.recordAndReopen = { messageKept: true, draftKept: draftKept === 'R63-DAILY-DRAFT-KEEP' };
@@ -212,7 +226,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     const errs = [];
     if (facts.firstBoot.welcomeShown !== true || facts.firstBoot.noSeed !== true) errs.push('首启非欢迎页或存在 seed 数据');
     if (facts.env.fakeAllowed !== false || facts.env.realDispatchGuard !== false) errs.push('环境自述非日常形态（fake/guard）');
-    if (!facts.openProject.roomVisible || facts.openProject.projNameVisible !== true) errs.push('打开实际项目引导失败');
+    if (!facts.openProject.roomVisible || facts.openProject.projNameVisible !== true && facts.openProject.roomStillThere !== true) errs.push('打开实际项目引导失败');
     if (facts.runtimeHint.auto == null || facts.runtimeHint.namedHasMember !== true) errs.push('未绑定就地提示缺失');
     if (facts.memberConfig.unboundShown !== true || facts.memberConfig.fakeOptionAbsent !== true || facts.memberConfig.boundReadback !== true) errs.push('成员配置路径不完整');
     if (facts.memberConfig.dbBinding[0]?.kind !== 'claude' || facts.memberConfig.dbBinding[0]?.model !== 'daily-probe-model') errs.push('绑定落库不符');

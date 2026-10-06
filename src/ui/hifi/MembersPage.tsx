@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, toast } from './shell';
+import { refreshMembers } from './loader';
 import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
@@ -129,6 +130,7 @@ export function MembersPage() {
       toast(`已保存 ${m.displayName} 的 runtime 绑定（${bindForm.kind}${bindForm.model ? ' · ' + bindForm.model : ''}）——能力认证状态以成员页回读为准`, 'success');
       setEditAt(null);
       await reload();
+      void refreshMembers().catch(() => { /* 投影刷新失败=发送区提示按旧事实多显示一轮，下次装载自对 */ });
     } catch (e) {
       toast(`绑定失败：${(e as Error).message}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
     } finally { setBindBusy(false); }
