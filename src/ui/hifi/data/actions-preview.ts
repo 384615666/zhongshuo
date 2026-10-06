@@ -522,3 +522,61 @@ export function activeResource(): PreviewResource | undefined {
 }
 
 export { tabKeyFor };
+
+/** 打开标签的短别名（预览壳桥接/页面用——openPreview 的资源版）。 */
+export const openPreviewTab = openPreview;
+
+/* ============================================================
+   评论提交桥（§7.4 正式落点：向源会话仅记录提交，携带引用卡）
+   ============================================================ */
+
+import { stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './store';
+import type { PendingSendEnvelope } from './store';
+
+/**
+ * 文件评论正式提交：向**源会话**（thread/room/dm 由资源归属决定）发一条 record_only
+ * message.submit，并把该附件作为 attachmentRefs 引用卡随信封携带——不触发模型派发、
+ * 不串会话（PV-20）、版本锚定在引用卡内。出站账本管线与普通发送一致（r62 P1）。
+ */
+export async function createFileCommentBridge(resourceId: string, body: string): Promise<{ ok: boolean; error?: string }> {
+  const target = fileCommentTarget(resourceId);
+  if (!target.ok) return { ok: false, error: target.error ?? '无法确定评论归属' };
+  const s = getState();
+  const projectId = s.activeProjectId;
+  let env: PendingSendEnvelope;
+  const commandId = `cmd_comment_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  if (target.kind === 'thread' && target.threadId != null) {
+    const thread = s.threadEntities[target.threadId];
+    env = {
+      commandId, method: 'message.submit',
+      params: {
+        target: { kind: 'thread', projectId: thread?.projectId ?? projectId, conversationId: thread?.conversationId ?? '', threadId: target.threadId ?? '' },
+        body, intent: 'record_only', mentions: [], attachmentRefs: [target.attachmentId ?? resourceId],
+      },
+      targetLabel: `thread:${target.threadId}`, at: Date.now(),
+    };
+  } else if (target.kind === 'dm' && target.conversationId != null) {
+    env = {
+      commandId, method: 'message.submit',
+      params: { target: { kind: 'dm', projectId, conversationId: target.conversationId ?? '' }, body, intent: 'record_only', mentions: [], attachmentRefs: [target.attachmentId ?? resourceId] },
+      targetLabel: `dm:${target.conversationId}`, at: Date.now(),
+    };
+  } else {
+    const room = s.rooms.find((r) => r.id === target.roomId);
+    if (room == null) return { ok: false, error: '源房间未装载——无法提交评论' };
+    env = {
+      commandId, method: 'message.submit',
+      params: { target: { kind: 'room_root', projectId, conversationId: room.conversationId ?? '', roomId: room.id }, body, intent: 'record_only', mentions: [], attachmentRefs: [target.attachmentId ?? resourceId] },
+      targetLabel: `room:${room.id}`, at: Date.now(),
+    };
+  }
+  const draftKey = `comment:${resourceId}`;
+  const staged = stageOutbound(draftKey, env);
+  if (staged.ok !== true) return { ok: false, error: staged.error ?? '原信封未能耐久保存' };
+  const { sendEnvelope } = await import('../loader');
+  const r = await sendEnvelope(env);
+  if (r.status === 'ok') { settleOutbound(draftKey, env, { recordThread: true }); return { ok: true }; }
+  if (r.status === 'failed') { dropOutbound(draftKey, env); return { ok: false, error: `${r.code}: ${r.error}` }; }
+  confirmOutboundUnknown(draftKey, env);
+  return { ok: false, error: `结果未知（${r.error ?? ''}）——可在输入区横幅人工确认，评论不会重复提交` };
+}

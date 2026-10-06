@@ -26,7 +26,22 @@ import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
-import { PreviewPane } from './preview/PreviewPane';
+import { PreviewPane, contextFromRoute as previewContextFromRoute } from './preview/PreviewPane';
+import { getState as previewGetState } from './data/store';
+
+/** 预览引用目标（旧壳兜底）：按当前路由推当前输入目标草稿。 */
+function previewQuoteTargetFromRoute(): { draftKey: string; label: string } {
+  const hash = (location.hash ?? '').replace(/^#/, '');
+  const th = /^#\/thread\/([^/?]+)/.exec(hash);
+  if (th != null) { const t = previewGetState().threadTasks[th[1]]; return { draftKey: `thread:${th[1]}`, label: t ? `任务 #${t.roomTaskNumber}` : '此线程' }; }
+  const rm = /^#\/room\/([^/?]+)/.exec(hash);
+  if (rm != null) { const r = previewGetState().rooms.find((x) => x.id === rm[1]); return { draftKey: `room:${rm[1]}`, label: r?.name ?? '房间' }; }
+  const dm = /^#\/dm\/([^/?]+)/.exec(hash);
+  if (dm != null) { const d = previewGetState().dms.find((x) => x.id === dm[1]); return { draftKey: `dm:${dm[1]}`, label: d?.title || d?.peerDisplayName || '私信' }; }
+  const pr = /^#\/project\/([^/]+)\/room\/([^/?]+)/.exec(hash);
+  if (pr != null) { const r = previewGetState().rooms.find((x) => x.id === pr[2]); return { draftKey: `room:${pr[2]}`, label: r?.name ?? '房间' }; }
+  return { draftKey: '', label: '当前输入区' };
+}
 import { dmUnreadTotal, roomsOfProject } from './data/selectors';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
@@ -428,7 +443,10 @@ export default function App() {
         {s.ui.toast != null ? (
           <div className="toast" onClick={() => clearToast()}>{s.ui.toast.text}</div>
         ) : null}
-        <PreviewPane />
+        <PreviewPane
+          context={previewContextFromRoute(s.activeProjectId)}
+          quoteTarget={previewQuoteTargetFromRoute()}
+        />
       </div>
       </HifiErrorBoundary>
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
