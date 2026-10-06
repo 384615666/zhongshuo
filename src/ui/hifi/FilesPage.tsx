@@ -8,7 +8,12 @@
  *    正文、截断含标记；显示区截断显式标注，不把未呈现正文当完整差异）。写操作（stage/
  *    commit/push…）本批仍留旧界面——给**实际定向入口按钮**（takeLegacy('git')），不是一句
  *    「经原界面」的说明。
- * 请求代次收口：切换项目/标签时迟到响应不污染当前页。
+ *  - r62 P6 Git 只读历史（DEV-14 既定）：git.history（根/普通/双父 merge 全列，双父带
+ *    merge 标）+ git.commitDiff(parentOid)——多父提交先选比较父（parentsMeta 芯片），差异
+ *    与所选父 OID 绑定（comparedParent 回显）；binary/truncated/超限占位如实呈现。只读
+ *    复用既有后端，不新增 Git 写能力；非 Git 目录沿用 git.status 的如实失败分列。
+ * 请求代次收口：切换项目/标签时迟到响应不污染当前页；历史/差异各有独立代次（快切提交/父/
+ *    项目不被迟到结果污染）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
@@ -33,6 +38,17 @@ interface GitStatusEntry { path: string; status?: string; label?: string; rename
 type GitStatus = { ok: true; branch: string; worktreeRoot: string; projectRootIsWorktreeRoot: boolean; staged: GitStatusEntry[]; unstaged: GitStatusEntry[]; untracked: GitStatusEntry[]; truncated: boolean } | { ok: false; code: string; message: string };
 interface GitDiffPatch { path: string; oldPath?: string; change: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied'; stat: 'text' | 'binary' | 'unknown'; binary: boolean; truncated: boolean; source: 'diff' | 'worktree-content'; text: string; addedCount?: number | null; deletedCount?: number | null }
 interface GitDiff { patches: GitDiffPatch[]; truncatedOverall: boolean; filesOmitted?: number }
+/** r62 P6：git.history 条目（parents 全列——双父=merge）。 */
+interface GitHistoryItem { oid: string; parent: string; parents: string[]; authorName: string; authorEmail: string; timestamp: number; subject: string }
+interface GitHistory { items: GitHistoryItem[]; head: string | null; hasMore: boolean }
+interface CommitDiffParentMeta { oid: string; shortOid: string; subject: string; timestamp: number }
+interface GitCommitDiff {
+  commit: { oid: string; parents: string[]; subject: string; authorName: string; authorEmail: string; timestamp: number };
+  parentsMeta?: CommitDiffParentMeta[];
+  comparedParent?: string;
+  patches: Array<{ path: string; oldPath?: string; change: string; binary: boolean; truncated: boolean; text: string }>;
+  mergeNote?: string;
+}
 
 const KIND_LABEL: Record<string, string> = { text_file: '文本', image_file: '图片', pdf_file: 'PDF', docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯片' };
 /** 与 daemon TEXT_PREVIEW_EXTENSIONS 同源核对（白名单外不显示预览按钮——点击前如实禁用）。 */
@@ -49,7 +65,16 @@ export function FilesPage() {
   const [busy, setBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<{ name: string; bytes: number; truncated: boolean; content: string } | null>(null);
   const [snapshotErr, setSnapshotErr] = useState<string | null>(null);
+  /** r62 P6 历史/提交差异：独立状态+独立代次（与 status/diff 的 genRef 分开——快切提交/父
+   *  /项目时各自收口迟到响应；父 OID 与显示绑定=请求参数带回执 comparedParent 核对）。 */
+  const [history, setHistory] = useState<GitHistory | null>(null);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
+  const [commitDiff, setCommitDiff] = useState<GitCommitDiff | null>(null);
+  const [commitDiffErr, setCommitDiffErr] = useState<string | null>(null);
+  const [selectedOid, setSelectedOid] = useState<string | null>(null);
   const genRef = useRef(0);
+  const histGenRef = useRef(0);
+  const cdGenRef = useRef(0);
 
   const reloadFiles = useCallback(async () => {
     if (projectId == null || projectId === '') return;
@@ -72,7 +97,6 @@ export function FilesPage() {
     finally { if (gen === genRef.current) setBusy(false); }
   }, [projectId]);
 
-  useEffect(() => { setSnapshot(null); setSnapshotErr(null); setDiff(null); if (tab === 'files') void reloadFiles(); else void reloadGit(); }, [tab, reloadFiles, reloadGit]);
   useEffect(() => closePreview, []);
 
   const locate = (link: string | null) => {
@@ -90,6 +114,28 @@ export function FilesPage() {
       setSnapshotErr(`${name}：${(e as Error).message}`); // 越界/二进制/超限/非 UTF-8 如实
     } finally { setBusy(false); }
   };
+  const loadHistory = useCallback(async () => {
+    if (projectId == null || projectId === '') return;
+    const gen = ++histGenRef.current;
+    try {
+      const r = await command<GitHistory>('git.history', { projectId, limit: 50 });
+      if (gen !== histGenRef.current) return;
+      setHistory(r); setHistoryErr(null);
+    } catch (e) { if (gen === histGenRef.current) setHistoryErr((e as Error).message); }
+  }, [projectId]);
+  const loadCommitDiff = useCallback(async (oid: string, parentOid?: string) => {
+    if (projectId == null || projectId === '') return;
+    const gen = ++cdGenRef.current;
+    setCommitDiffErr(null);
+    try {
+      const r = await command<GitCommitDiff>('git.commitDiff', { projectId, oid, ...(parentOid != null ? { parentOid } : {}) });
+      if (gen !== cdGenRef.current) return; // 快切提交/父/项目：迟到响应丢弃
+      if (parentOid != null && r.comparedParent != null && r.comparedParent !== parentOid) return; // 绑定核对：回执父≠请求父=迟到串线
+      setCommitDiff(r);
+      setSelectedOid(oid);
+    } catch (e) { if (gen === cdGenRef.current) { setCommitDiff(null); setCommitDiffErr((e as Error).message); } }
+  }, [projectId]);
+
   const loadDiff = async (staged: boolean) => {
     if (projectId == null || projectId === '') return;
     const gen = genRef.current;
@@ -101,6 +147,14 @@ export function FilesPage() {
     } catch (e) { toast(`diff 失败：${(e as Error).message}`, 'error'); }
     finally { if (gen === genRef.current) setBusy(false); }
   };
+
+  useEffect(() => {
+    setSnapshot(null); setSnapshotErr(null); setDiff(null);
+    histGenRef.current += 1; cdGenRef.current += 1; // 项目/标签切换：历史与差异在途请求全部作废
+    setHistory(null); setHistoryErr(null); setCommitDiff(null); setCommitDiffErr(null); setSelectedOid(null);
+    if (tab === 'files') void reloadFiles();
+    else { void reloadGit(); void loadHistory(); }
+  }, [tab, projectId, reloadFiles, reloadGit, loadHistory]);
 
   const group = files?.groups.find((g) => g.projectId === projectId) ?? files?.groups[0];
   const diffTextLen = diff != null ? diff.patches.reduce((n, p) => n + p.text.length, 0) : 0;
@@ -247,7 +301,76 @@ export function FilesPage() {
                   {diff.patches.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
                 </div>
               ) : null}
-              <div className="faint small">Git 诊断只读（RT-24：不改工作区，保留未提交内容）；提交/推送在原界面仓库区执行（上方直达按钮）。Git 提交不等同任务验收（RT-25）。</div>
+              <div className="panel info" data-zs-git-history="hifi">
+                <div className="row tight">
+                  <strong>提交历史</strong>
+                  <span className="faint small">（git.history 只读——双父提交带 merge 标；点「对比」看该提交相对所选父的差异）</span>
+                  <span className="spacer" style={{ flex: 1 }} />
+                  <button className="btn ghost sm" disabled={busy} onClick={() => void loadHistory()}>刷新历史</button>
+                </div>
+                {historyErr != null ? <div className="panel warning" style={{ marginTop: 6 }}>历史读取失败：{historyErr}（非 Git 目录如实分列，不伪空态）</div> : null}
+                {history == null && historyErr == null ? <div className="faint small" style={{ marginTop: 6 }}>正在读取历史…</div> : null}
+                {history != null && history.items.length === 0 ? <div className="faint small" style={{ marginTop: 6 }}>（空历史——尚无提交）</div> : null}
+                {history != null && history.items.length > 0 ? (
+                  <div style={{ marginTop: 6, maxHeight: 260, overflow: 'auto' }}>
+                    {history.items.map((h) => (
+                      <div key={h.oid} className="row tight" style={{ padding: '4px 2px', borderBottom: '1px solid var(--border,#eef2f7)' }} data-zs-git-commit={h.oid.slice(0, 8)}>
+                        <span className="mono small" style={{ color: 'var(--text-3)' }}>{h.oid.slice(0, 8)}</span>
+                        {h.parents.length > 1 ? <Tag tone="info">merge {h.parents.length} 父</Tag> : null}
+                        {history.head === h.oid ? <Tag tone="success">HEAD</Tag> : null}
+                        <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.subject}</span>
+                        <span className="faint small">{h.authorName} · {new Date(h.timestamp * 1000).toLocaleDateString()}</span>
+                        <button className="btn ghost sm" data-zs-git-diffbtn={h.oid.slice(0, 8)} title="看该提交相对所选父的差异（git.commitDiff——只读）" onClick={() => void loadCommitDiff(h.oid)}>对比</button>
+                      </div>
+                    ))}
+                    {history.hasMore ? <div className="faint small" style={{ marginTop: 4 }}>（仅列最近 {history.items.length} 条——更多历史走 git 客户端）</div> : null}
+                  </div>
+                ) : null}
+              </div>
+              {commitDiffErr != null ? <div className="panel warning" data-zs-git-cd-err="1">提交差异读取失败：{commitDiffErr}</div> : null}
+              {commitDiff != null ? (
+                <div className="panel info" data-zs-git-commitdiff="hifi">
+                  <div className="row tight">
+                    <strong>提交差异</strong>
+                    <span className="mono small">{commitDiff.commit.oid.slice(0, 8)}</span>
+                    <span className="small" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{commitDiff.commit.subject}</span>
+                    {commitDiff.comparedParent != null ? <Tag tone="neutral">相对父 {commitDiff.comparedParent.slice(0, 8)}</Tag> : null}
+                  </div>
+                  {(commitDiff.parentsMeta ?? []).length > 1 ? (
+                    <div className="row tight wrap" style={{ marginTop: 6 }} data-zs-git-parents="1">
+                      <span className="faint small">合并提交——选择比较父（差异与所选父 OID 绑定，不虚构单一「合并 diff」总览）：</span>
+                      {(commitDiff.parentsMeta ?? []).map((pm) => (
+                        <button
+                          key={pm.oid}
+                          className={`chip mono${commitDiff.comparedParent === pm.oid ? ' on' : ''}`}
+                          style={commitDiff.comparedParent === pm.oid ? { borderColor: 'var(--accent,#2563eb)', fontWeight: 600 } : undefined}
+                          data-zs-git-parent={pm.oid.slice(0, 8)}
+                          title={`父 ${pm.oid.slice(0, 8)} · ${pm.subject}`}
+                          onClick={() => void loadCommitDiff(commitDiff.commit.oid, pm.oid)}
+                        >
+                          {pm.oid.slice(0, 8)} {pm.subject.slice(0, 24)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {commitDiff.mergeNote != null ? <div className="panel warning" style={{ marginTop: 6 }} data-zs-git-mergenote="1">{commitDiff.mergeNote}</div> : null}
+                  {commitDiff.patches.map((p) => (
+                    <div key={p.path + p.change} style={{ marginTop: 8 }}>
+                      <div className="row tight">
+                        <Tag tone="neutral">{p.change}</Tag>
+                        <span className="mono small" style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.oldPath != null ? `${p.oldPath} → ${p.path}` : p.path}</span>
+                        {p.binary ? <Tag tone="info">二进制（无文本差异）</Tag> : null}
+                        {p.truncated ? <Tag tone="warning">截断/超限占位</Tag> : null}
+                      </div>
+                      {!p.binary && p.text.length > 0 ? (
+                        <pre className="attach-preview-text" style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 240, overflow: 'auto', marginTop: 4, border: '1px solid var(--border,#dbe2ea)', padding: 6, background: '#fff' }}>{p.text.slice(0, DIFF_DISPLAY_CAP)}</pre>
+                      ) : null}
+                    </div>
+                  ))}
+                  {commitDiff.patches.length === 0 && commitDiff.mergeNote == null ? <div className="faint small" style={{ marginTop: 6 }}>（无差异条目）</div> : null}
+                </div>
+              ) : null}
+              <div className="faint small">Git 诊断与历史只读（RT-24：不改工作区，保留未提交内容）；提交/推送在原界面仓库区执行（上方直达按钮）。Git 提交不等同任务验收（RT-25）。</div>
             </>
           )}
         </>

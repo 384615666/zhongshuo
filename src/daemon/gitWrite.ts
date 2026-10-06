@@ -1000,6 +1000,8 @@ async function findCommitByTrailer(loc: RepoLocation, commandId: string, expecte
 export interface HistoryItem {
   oid: string;
   parent: string;
+  /** r62：全部父 OID（首父=parent 保持兼容；双父=merge——新界面历史列表/父选择用，只读加性）。 */
+  parents: string[];
   authorName: string;
   authorEmail: string;
   timestamp: number;
@@ -1029,7 +1031,7 @@ export async function gitHistory(db: ZhongshuoDatabase, input: { projectId: stri
     const [oid, parents, an, ae, at, subject] = fields;
     oids.push(oid!.trim());
     items.push({
-      oid: oid!.trim(), parent: (parents ?? '').trim().split(' ')[0] ?? '',
+      oid: oid!.trim(), parent: (parents ?? '').trim().split(' ')[0] ?? '', parents: (parents ?? '').trim().split(' ').filter((x) => x !== ''),
       authorName: an ?? '', authorEmail: ae ?? '',
       timestamp: Number(at ?? 0), subject: subject ?? '',
       taskIds: [], changeSetIds: [],
