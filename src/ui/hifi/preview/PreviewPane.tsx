@@ -80,10 +80,12 @@ export function PreviewPane() {
   }
   useEffect(() => () => { genRef.current += 1; releaseResources(); }, []);
 
-  // 全屏展开时 Esc 先退出展开（不直接关预览——内容仍要读）；更上层弹窗（命令面板/恢复面板）
-  // 打开时让位——它们各自的 Esc 语义优先。
+  // Esc 退出展开/加宽（r61 P4 语义补齐）：full 或 wide 下 Esc 都回到 normal——「恢复默认阅读
+  // 宽度」，**永不关闭预览**（内容仍要读；关闭走按钮）；更上层弹窗（命令面板/恢复面板）打开
+  // 时让位——它们各自的 Esc 语义优先。此前 Esc 只认 full，wide 下无动作（v4 手测用户「Esc
+  // 不能退出展开」的最可能形态——交付形态四焦点位原生键演练见 review-r61 §4，未复现失败）。
   useEffect(() => {
-    if (widthMode !== 'full') return;
+    if (widthMode === 'normal') return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
       if (document.querySelector('[data-zs-palette=hifi], [data-zs-recovery=hifi]') != null) return;
@@ -186,8 +188,8 @@ export function PreviewPane() {
         <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idLine}</span>
         {/* 阅读宽度/展开（r56）：Word/表格长内容的横向阅读空间。 */}
         <button className="btn ghost sm" title="收窄（默认 560px）" disabled={widthMode === 'normal'} onClick={() => setWidthMode('normal')}>窄</button>
-        <button className="btn ghost sm" title="加宽（880px——长行/宽表可读）" disabled={widthMode === 'wide'} onClick={() => setWidthMode('wide')}>宽</button>
-        <button className="btn ghost sm" title={widthMode === 'full' ? '退出全屏展开' : '全屏展开（遮内容区——Esc 或按钮恢复）'} onClick={() => setWidthMode((m) => (m === 'full' ? 'normal' : 'full'))}>{widthMode === 'full' ? '还原' : '展开'}</button>
+        <button className="btn ghost sm" title="加宽（880px——长行/宽表可读；Esc 恢复默认宽度）" disabled={widthMode === 'wide'} onClick={() => setWidthMode('wide')}>宽</button>
+        <button className="btn ghost sm" title={widthMode === 'full' ? '退出全屏展开（Esc 同效）' : '全屏展开（遮内容区——Esc 或本按钮恢复，不关闭预览）'} onClick={() => setWidthMode((m) => (m === 'full' ? 'normal' : 'full'))}>{widthMode === 'full' ? '还原' : '展开'}</button>
         <button className="btn ghost sm" title="把本文件作为资源引用卡加入当前输入框（保留版本/hash，发送时按正式附件合同携带——正文保持你的文字，不自动粘贴全文）" onClick={quoteFileToComposer}>引用文件</button>
         <button className="btn ghost sm" title="把当前内容文本的前 160 字摘录到输入框正文（独立于文件引用——只来自内容，不含界面说明）" onClick={excerptToComposer}>摘录</button>
         <button className="btn ghost sm" title="关闭预览（中止在途解析并释放渲染器资源）" onClick={() => closePreview()}>关闭</button>

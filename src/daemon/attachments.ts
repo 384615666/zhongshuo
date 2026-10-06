@@ -145,12 +145,21 @@ function readStoreBytes(
   storeRoot: string | undefined,
   ext: 'txt' | 'bin',
 ): { ok: true; raw: Buffer } | { ok: false; error: AttachmentReadError } {
-  const resolved = resolve(blobPath);
-  const nameOk = basename(resolved) === `${expectedHash}.${ext}`;
+  const expectedName = `${expectedHash}.${ext}`;
+  let resolved = resolve(blobPath);
+  const nameOk = basename(resolved) === expectedName;
   const layoutOk = nameOk && basename(dirname(resolved)) === 'blobstore';
-  const rootOk = storeRoot == null ? true : resolved === resolve(join(storeRoot, `${expectedHash}.${ext}`));
-  if (!nameOk || !layoutOk || !rootOk) {
+  if (!nameOk || !layoutOk) {
     return { ok: false, error: { code: 'attachment-out-of-store', message: `附件副本路径越出托管存储（${blobPath}${storeRoot != null ? `；本次存储根=${storeRoot}` : ''}）——拒绝读取` } };
+  }
+  // r61 位置无关重定位：上传时内容寻址写入的是**当时数据根的绝对路径**——数据根/交付包整体
+  // 搬移或复制后，记录的绝对位置不再等于当前存储根（旧实现一律 out-of-store，包挪个目录所有
+  // 附件预览即失效）。重定位规则：文件名必须本就是 {hash}.{ext} 且父层为 blobstore（上面已核），
+  // 记录位置不在当前根时改读**当前存储根**下的同名文件，随后走同一套 realpath 实际文件身份 +
+  // 受控句柄 + 实际字节 sha256 校验——校验强度不变（绝不读越出当前根的文件），只消除对旧
+  // 绝对位置的依赖。
+  if (storeRoot != null && resolved !== resolve(join(storeRoot, expectedName))) {
+    resolved = resolve(join(storeRoot, expectedName));
   }
   // 实际文件身份（第二十九轮二）：realpath 与字符串 resolve 必须一致——任何组件（含
   // blobstore 根自身）是 symlink/junction 即检出（外部同名目录/链接越界不靠字符串可比对）。

@@ -101,3 +101,53 @@ describe('readVerified*：实链接身份核对', () => {
     db.close();
   });
 });
+
+describe('readVerified*：位置无关重定位（r61——数据根/交付包整体搬移）', () => {
+  it('记录的绝对路径属旧数据根 → 当前存储根同名文件可读且校验全过', () => {
+    const oldRoot = join(tmpRoot, `old-${randomUUID().slice(0, 6)}`, 'server-data');
+    const newRoot = join(tmpRoot, `new-${randomUUID().slice(0, 6)}`, 'server-data');
+    mkdirSync(join(oldRoot, 'blobstore'), { recursive: true });
+    mkdirSync(join(newRoot, 'blobstore'), { recursive: true });
+    const content = Buffer.from('relocation-probe 整体搬移探针', 'utf8');
+    const hash = sha(content);
+    const oldPath = join(oldRoot, 'blobstore', `${hash}.txt`);
+    writeFileSync(oldPath, content, 'utf8');
+    // 「整体搬移」：旧根整个挪到新位置（包目录复制/移动后 state.sqlite 仍记录旧绝对路径）。
+    writeFileSync(join(newRoot, 'blobstore', `${hash}.txt`), content, 'utf8');
+    const r = readVerifiedCopy(oldPath, hash, join(newRoot, 'blobstore'));
+    expect(r.ok).toBe(true);
+    if (r.ok === true) { expect(r.copy.text).toBe(content.toString('utf8')); expect(r.copy.originalBytes).toBe(content.length); }
+  });
+  it('重定位后当前根文件被改写 → corrupted 拒绝（校验强度不因重定位放松）', () => {
+    const oldRoot = join(tmpRoot, `old2-${randomUUID().slice(0, 6)}`, 'server-data');
+    const newRoot = join(tmpRoot, `new2-${randomUUID().slice(0, 6)}`, 'server-data');
+    mkdirSync(join(oldRoot, 'blobstore'), { recursive: true });
+    mkdirSync(join(newRoot, 'blobstore'), { recursive: true });
+    const content = Buffer.from('relocation-tamper 探针', 'utf8');
+    const hash = sha(content);
+    writeFileSync(join(oldRoot, 'blobstore', `${hash}.txt`), content, 'utf8');
+    writeFileSync(join(newRoot, 'blobstore', `${hash}.txt`), '被改写的内容——hash 不符', 'utf8');
+    const r = readVerifiedCopy(join(oldRoot, 'blobstore', `${hash}.txt`), hash, join(newRoot, 'blobstore'));
+    expect(r.ok).toBe(false);
+    if (r.ok === false) expect(r.error.code).toBe('attachment-corrupted');
+  });
+  it('重定位目标缺失（当前根没有该 hash 文件）→ unreadable 如实报错', () => {
+    const oldRoot = join(tmpRoot, `old3-${randomUUID().slice(0, 6)}`, 'server-data');
+    const newRoot = join(tmpRoot, `new3-${randomUUID().slice(0, 6)}`, 'server-data');
+    mkdirSync(join(oldRoot, 'blobstore'), { recursive: true });
+    mkdirSync(join(newRoot, 'blobstore'), { recursive: true });
+    const content = Buffer.from('relocation-missing 探针', 'utf8');
+    const hash = sha(content);
+    writeFileSync(join(oldRoot, 'blobstore', `${hash}.txt`), content, 'utf8');
+    const r = readVerifiedCopy(join(oldRoot, 'blobstore', `${hash}.txt`), hash, join(newRoot, 'blobstore'));
+    expect(r.ok).toBe(false);
+    if (r.ok === false) expect(r.error.code).toBe('attachment-unreadable');
+  });
+  it('文件名/布局不是托管形态 → 仍按 out-of-store 拒绝（重定位只认 {hash}.{ext}）', () => {
+    const newRoot = join(tmpRoot, `new4-${randomUUID().slice(0, 6)}`, 'server-data');
+    mkdirSync(join(newRoot, 'blobstore'), { recursive: true });
+    const r = readVerifiedBlob(join(newRoot, 'elsewhere', 'evil.exe'), '0'.repeat(64), join(newRoot, 'blobstore'));
+    expect(r.ok).toBe(false);
+    if (r.ok === false) expect(r.error.code).toBe('attachment-out-of-store');
+  });
+});
