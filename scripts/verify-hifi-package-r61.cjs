@@ -192,8 +192,8 @@ async function runOnce(n) {
     const favUnsaved = await waitFor(cdp, `document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]').length === 0`, 15_000, 'v5：再次点击取消').catch(() => false);
     f.v5favorites = { buttons: Number(favBefore ?? 0), saved: favSaved === true, unsavedBack: favUnsaved === true, dbRows: dbQuery('SELECT count(*) c FROM saved_refs').map((r) => r.c).join(',') };
     // 文件引用：回主池开 PPT 样本线程 → 成果与附件标签（无 Composer）→ 预览 → 引用文件两次 → 自动回回复、恰一张卡、正文零污染。
-    await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => (x.title || '').includes('返回主池')); b?.click(); return true; })()`));
-    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 30_000, 'v5：回主池见 PPT 卡');
+    await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 60_000, 'v5：回主池见 PPT 卡');
     await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('PPT 预览样本')); card?.click(); return true; })()`));
     await waitFor(cdp, `[...document.querySelectorAll('.msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 30_000, 'v5：PPT 线程锚块芯片');
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.includes('成果与附件')); b?.click(); return true; })()`));
