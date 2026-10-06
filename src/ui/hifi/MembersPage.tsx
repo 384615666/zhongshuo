@@ -186,8 +186,11 @@ export function MembersPage() {
           <button className="btn ghost sm" onClick={() => void reload()} title="重新装载成员/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
         </div>
 
+        {projectId == null || projectId === '' ? (
+          <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>
+        ) : null}
         {err != null ? <div className="panel warning">成员装载失败：{err}（可刷新重试）</div> : null}
-        {members == null && err == null ? <div className="panel info">正在装载…</div> : null}
+        {members == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
         {members != null && members.length === 0 ? (
           <div className="panel info">这个项目还没有成员。成员在项目注册时建立；添加新成员的界面入口属后续批次（不放假成功按钮）。</div>
