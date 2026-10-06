@@ -430,6 +430,15 @@ export function Composer({
     }
     // 附件引用由上传/移除动作维护（防串写），这里只落正文/提及/意图/权限——读取现草稿合并。
     const cur = getDraftFull(draftKey);
+    // r61：内容未变不重写——重挂载（切页签回来/崩溃恢复重载）会先 setBody(草稿值)再触发本
+    // 效应；若照写一遍会把编辑代次无谓 +1，未知信封重试清算的「代次未变才剥离已发正文」
+    // 判定随即失效（发送成功后正文残留）。同内容跳写=代次只在真实编辑时递增。
+    const same = cur.body === body
+      && cur.mentions.length === mentions.length
+      && cur.mentions.every((m, i) => m === mentions[i])
+      && cur.access === access
+      && cur.sendAs === sendAs;
+    if (same) return;
     setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs });
   }, [draftKey, body, mentions, access, sendAs]);
 
