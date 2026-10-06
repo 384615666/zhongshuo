@@ -117,7 +117,15 @@ export async function bootRemembered(): Promise<void> {
 export async function applyServerNavPrefs(): Promise<void> {
   try {
     const r = await command<{ prefs: { activeProjectId: string | null; visibleProjectIds: string[]; expandedProjectIds: string[]; pinnedProjectIds: string[]; fileGitTabs: Record<string, string>; revision: number } | null }>('navigation.get', { clientId: 'desktop-hifi' });
-    if (r.prefs == null) return;
+    if (r.prefs == null) {
+      // 无偏好行=全量可见（原型/board.view 同口径）：注册表里的日常项目默认进侧栏（首个展开）。
+      setState((s) => (s.visibleProjectIds.length > 0 ? s : {
+        ...s,
+        visibleProjectIds: s.projects.filter((p) => p.removedAt == null).map((p) => p.id),
+        expandedProjectIds: s.projects.filter((p) => p.removedAt == null).slice(0, 1).map((p) => p.id),
+      }));
+      return;
+    }
     const prefs = r.prefs;
     const valid = new Set(getState().projects.map((p) => p.id));
     const visible = prefs.visibleProjectIds.filter((id) => valid.has(id));

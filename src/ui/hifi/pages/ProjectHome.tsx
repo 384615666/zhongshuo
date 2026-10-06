@@ -206,6 +206,11 @@ export function RelocateButton({ projectId }: { projectId: string }) {
 
 export function ProjectHomePage({ projectId }: { projectId: string }) {
   const s = useStore((x) => x);
+  const activeId = useStore((x) => x.activeProjectId);
+  useEffect(() => {
+    // 深链/直开项目主页=聚焦该项目（原型语义：项目页上下文即该项目；已聚焦则不重复刷新）。
+    if (activeId !== projectId) void switchFocusProject(projectId);
+  }, [projectId, activeId]);
   const p = s.projects.find((x) => x.id === projectId);
   const rooms = roomsOfProject(s, projectId);
   const members = s.members.filter((m) => m.projectId === projectId);

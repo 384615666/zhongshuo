@@ -3258,6 +3258,8 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
 export function CreateRoomModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const s = useStore((x) => x);
   const [name, setName] = useState('');
+  /** 在途锁：创建期间按钮禁用——连点恰一次；失败保留输入（不 onClose 清掉）。 */
+  const [busy, setBusy] = useState(false);
   const project = s.projects.find((p) => p.id === projectId);
   const members = s.members.filter((m) => m.projectId === projectId);
 
@@ -3272,16 +3274,18 @@ export function CreateRoomModal({ projectId, onClose }: { projectId: string; onC
           <button className="btn" onClick={onClose}>取消</button>
           <button
             className="btn primary"
-            disabled={!name.trim()}
+            disabled={busy || !name.trim()}
             onClick={() => {
+              if (busy) return;
+              setBusy(true);
               void createRoomReal(projectId, name.trim()).then((id) => {
-                onClose();
-                // 创建后落点与项目页一致：直接进这个新房间（真实 roomId——失败时留在原页）
-                if (id != null) navigate(`/project/${projectId}/room/${id}`);
+                setBusy(false);
+                if (id != null) { onClose(); navigate(`/project/${projectId}/room/${id}`); }
+                // 失败：toast 已由 createRoomReal 给出——弹窗与输入保留可改可重试
               });
             }}
           >
-            创建
+            {busy ? '创建中…' : '创建'}
           </button>
         </>
       }
