@@ -176,9 +176,11 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     await waitFor(cdp, `document.querySelector('[data-zs-members=hifi]')?.textContent.includes('执行成员')`, 45000, '成员页：执行成员');
     const unboundShown = await cdp.tryEval(`document.querySelector('[data-zs-members=hifi]')?.textContent.includes('未绑定')`);
     await clickBtn(cdp, `b.getAttribute('data-zs-member-bind') != null`, '配置 runtime');
-    await waitFor(cdp, `document.querySelector('[data-zs-member-bindform]') != null`, 8000, '绑定表单');
-    const fakeOptionAbsent = await cdp.tryEval(`![...document.querySelectorAll('[data-zs-member-bindform] option')].some((o) => o.value === 'fake')`);
-    await cdp.eval(probe(`(() => { const sel = document.querySelector('[data-zs-member-bindform] select'); const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; setter.call(sel, 'claude'); sel.dispatchEvent(new Event('change', { bubbles: true })); const inp = [...document.querySelectorAll('[data-zs-member-bindform] input')].find((i) => (i.placeholder || '').includes('deepseek')); if (inp != null) { const is = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; is.call(inp, 'daily-probe-model'); inp.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`));
+    // R66：绑定表单收进弹窗（BindRuntimeModal）——表单元素仍在 data-zs-member-bind 容器语义下：
+    // 弹窗 .modal 内的 select/input；旧行内 data-zs-member-bindform 形态已撤。
+    await waitFor(cdp, `document.querySelector('.modal select') != null && document.querySelector('[data-zs-member-bindsave]') != null`, 8000, '绑定弹窗表单');
+    const fakeOptionAbsent = await cdp.tryEval(`![...document.querySelectorAll('.modal select option')].some((o) => o.value === 'fake')`);
+    await cdp.eval(probe(`(() => { const sel = document.querySelector('.modal select'); const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set; setter.call(sel, 'claude'); sel.dispatchEvent(new Event('change', { bubbles: true })); const inp = [...document.querySelectorAll('.modal input')].find((i) => (i.placeholder || '').includes('deepseek')); if (inp != null) { const is = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; is.call(inp, 'daily-probe-model'); inp.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`));
     await clickBtn(cdp, `b.getAttribute('data-zs-member-bindsave') != null`, '保存绑定');
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .toast')].some((t) => (t.textContent || '').includes('已保存'))`, 15000, '绑定保存回执');
     await sleep(1500);

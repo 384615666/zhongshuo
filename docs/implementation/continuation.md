@@ -2,6 +2,40 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-06 第六十六轮，唯一权威快照）
+
+> R66=桌面前端修复长批次（用户八项反馈+文件-only 决定）。**主交付=desktop-daily-win-v4**
+> `bld_bfeb48c4bb82b07b`（commit 6536301，dirty=false，591/591，verify-desktop-daily 全绿）；
+> 交互门 `verify-parity-r66.cjs` **全绿**（G1–G8）；视觉门 `visual-pairs-r66.cjs` 10 组同视口
+> 成对（1280×800@1）+vision 复核 19/19+重拍 9/9；升级演练 `verify-upgrade-r66.cjs` 全绿
+> （**用户 v3 真实数据根全量副本** 46→47+备份+回退+原根 hash 不变）；全量 899/899+双类型门 0 错。
+> - **迁移 047=R65 真实遗留缺陷修复**：navigation_preferences.pinned_project_ids_json 列从未被
+>   创建——navigation.get 恒抛 no such column→applyServerNavPrefs 恒失败→重开侧栏按空集隐藏
+>   （R65 门未察：persistNav 服务端写也同因静默失败，仅 localStorage 镜像生效）。047 后
+>   服务端导航偏好/重开侧栏装载恢复正常；persistNav 加「空可见集不落服务端」防首启毒化。
+> - **八项反馈全闭**（详见 prototype-parity-matrix-r66-20261006.md）：白屏根因（唯一一处内联
+>   filter selector 违反快照稳定）+TitleBarBoundary/MenuBoundary 双层隔离+原型形态项目入口；
+>   MD 排版阅读/HTML 隔离页（sandbox=""+CSP+base）/阅读源码切换入实际分支/readFull 全文与
+>   64KB 提取窗分列/技术说明入文件信息；DM 320/440/480 降级+列表收起+单区切换（自渲染
+>   PreviewPane，挂载判定与布局判定分离——否则首个标签永死锁）；文件-only 发送（body 可空
+>   superRefine+标题📎文件名+未知信封完整意图身份比较+图片门空正文 EMPTY_MODEL_INPUT 双端）；
+>   导出收 ⋯ 菜单命名「导出会话记录」；恢复三态（启动已有/运行中新增 toast 不弹遮挡/普通排队
+>   中性分节）；member.runtime.effective（未绑定→全局默认 ZS_RUNTIME 如实分列）；下载原文件
+>   （attachment.originalFile+zs:saveAs 窄桥——路径用户选/renderer 不可指定）。
+> - **P4 页面**：成员（卡片+筛选行+绑定弹窗+房间名单+不设假「添加成员」）/搜索收藏/活动/待办/
+>   归档（新路由 /archive+设置嵌入，恢复=project.lifecycle/room.archive 真命令——纠正此前
+>   「未接入」误标）/看板统一 `.page-filters`+seg+EmptyState+card 外壳。
+> - **坑（本轮新增）**：①PreviewPane dlBusy useState 加在早退后=hooks 顺序崩（点附件白屏，
+>   ErrorBoundary 吞掉无 console——诊断钩子+Runtime.enable 才现形）；②探针管道直注册不经 UI
+>   →需 reload 让注册表装载；③房间派发需 @成员（mentions 空→AUTO→BLOCKED 无 run——G7 首次
+>   pending 造不出来）；④outbox pending 会被 worker 即租（lease 不看未来租约）——排队 UI 正例
+>   须真实占用 worker（stall 任务 A leased+任务 B pending）；⑤打包 daemon 需 ZS_PACKED_ENTRY=1
+>   否则静默 exit 0；⑥CDP eval 响应形态 d.result.result.value（r65 门 resolve(d.result)——
+>   自写 makeCdp 勿再踩）；⑦vite dev 绑 ::1——探针需 --host 127.0.0.1。
+> - **R66 后续（不阻塞用户使用）**：视觉门数据密度对齐（正式侧目前夹具单项目——manifest 已
+>   标注）；HTML 交互网页/搜索「侧栏可见」范围档/添加成员（DEV-10）如实限制；R64 遗留
+>   project.open 响应 rootPath 等小项不变。
+
 ## 当前真实状态（2026-10-06 第六十五轮，唯一权威快照）
 
 > R65=完整桌面前端逐项检查与修复长任务（用户反馈：项目按钮/属性/添加房间/看板/添加项目有缺陷；
