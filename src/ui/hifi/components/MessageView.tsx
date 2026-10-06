@@ -374,6 +374,12 @@ function MessageBody({
           <RichText text={message.body} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
+      ) : (message.formalAttachments ?? []).length > 0 ? (
+        /* R66 P3：文件-only 消息（用户已批准的发送语义）——正文为空不是缺陷：
+           用一行**界面说明**标注（不是合成正文），文件芯片在下方正常呈现。 */
+        <div className="small faint" style={{ marginTop: 2, marginBottom: 2 }}>
+          仅文件，无正文（{(message.formalAttachments ?? []).length} 个附件见下方）
+        </div>
       ) : null}
 
       {message.kind === 'progress' ? (

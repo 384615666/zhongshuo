@@ -13,6 +13,7 @@ import { recordWrite, retryDraftPersistence, setTheme } from '../data/store';
 import { command } from '../bridge';
 import { navigate } from '../lib/router';
 import { refreshMembers } from '../loader';
+import { ArchiveManager } from './ArchivePage';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -394,7 +395,16 @@ function SectionData() {
       </SettingsRow>
       {cleared != null ? <div className="small faint" style={{ padding: '0 14px 6px' }}>{cleared}</div> : null}
       <NotConnectedRow label="备份与恢复（SQLite 快照）" hint="备份命令面尚未接入本包（升级回退演练已验证 VACUUM INTO 路径——正式入口未接）" />
-      <NotConnectedRow label="归档管理 / 已移除项目" hint="项目归档/移除命令面尚未接入本包" />
+      {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
+          「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
+      <SettingsRow label="归档管理" hint="已归档项目与房间的查看历史 + 恢复（project.lifecycle / room.archive 正式命令；不动磁盘文件与历史）">
+        <div style={{ marginTop: 6 }}>
+          <ArchiveManager embedded />
+        </div>
+      </SettingsRow>
+      <SettingsRow label="已移除的项目" hint="移除=只在应用里解除关联（磁盘与历史不动）——在欢迎页「打开本地文件夹」重新打开同目录即恢复原 projectId">
+        <button className="btn sm" onClick={() => navigate('/welcome')}>去欢迎页重新关联…</button>
+      </SettingsRow>
     </div>
   );
 }

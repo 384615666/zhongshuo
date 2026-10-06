@@ -28,6 +28,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ProjectHomePage, WelcomePage, OpenFolderModal } from './pages/ProjectHome';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { TasksBoardPage } from './pages/TasksBoard';
+import { ArchivePage } from './pages/ArchivePage';
 import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
 import { toggleProjectPinned } from './data/actions-nav';
 import { Menu, MenuItem, Modal, Tag } from './components/ui';
@@ -177,7 +178,16 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryAttention, setRecoveryAttention] = useState(false);
+  /** 恢复三态（R66 P5，review-r65 §F：启动已有 vs 运行中新增 vs 普通排队）——
+   *  · 启动已有异常：首次检查即存在 → 自动开一次面板（既有合同）；
+   *  · 运行中新失败：首次检查之后才出现 → **就地 toast** 提醒 + 侧栏标记，不再突然弹遮挡
+   *    输入的通用弹窗（原会话/任务自身的状态面板是主反馈位）；
+   *  · 普通排队（仅 pendingDispatch>0，无任何恢复类事项）：不是故障——中性展示，不标警示色。 */
+  const [recoveryOrigin, setRecoveryOrigin] = useState<'startup' | 'runtime' | null>(null);
+  const [pendingWaitCount, setPendingWaitCount] = useState(0);
   const recoveryAutoShownRef = useRef(false);
+  const firstCheckRef = useRef(true);
+  const hadRealAttentionRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   /* R65：侧栏项目 ⋯ 菜单与其弹窗（编辑信息/归档/移除）+ 项目行 + 建房。 */
   const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null);
@@ -200,7 +210,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 恢复注意项（recovery.status 只读轮询）
+  // 恢复注意项（recovery.status 只读轮询；R66 P5 三态分类）
   useEffect(() => {
     if (s.boot !== 'ready') return;
     let cancelled = false;
@@ -209,9 +219,26 @@ export default function App() {
       void command<{ gateHeld: boolean; unknownTurns: unknown[]; pendingRelease: unknown[]; activeUndos: unknown[]; interruptedRuns: unknown[]; pendingDispatchCount: number }>('recovery.status', {})
         .then((r) => {
           if (cancelled) return;
-          const attention = r.gateHeld || r.unknownTurns.length > 0 || r.pendingRelease.length > 0 || r.activeUndos.length > 0 || r.interruptedRuns.length > 0 || r.pendingDispatchCount > 0;
-          setRecoveryAttention(attention);
-          if (attention && !recoveryAutoShownRef.current) { recoveryAutoShownRef.current = true; setRecoveryOpen(true); }
+          const realAttention = r.gateHeld || r.unknownTurns.length > 0 || r.pendingRelease.length > 0 || r.activeUndos.length > 0 || r.interruptedRuns.length > 0;
+          const isFirstCheck = firstCheckRef.current;
+          firstCheckRef.current = false;
+          setRecoveryAttention(realAttention);
+          setPendingWaitCount(!realAttention && r.pendingDispatchCount > 0 ? r.pendingDispatchCount : 0);
+          if (realAttention) {
+            if (isFirstCheck || hadRealAttentionRef.current) {
+              // 启动时已存在（或已处理过的持续事项）：沿用一次自动打开合同
+              setRecoveryOrigin('startup');
+              if (!recoveryAutoShownRef.current) { recoveryAutoShownRef.current = true; setRecoveryOpen(true); }
+            } else {
+              // 本次运行新出现：就地提醒，不弹遮挡弹窗（原会话/任务面板是主反馈位）
+              setRecoveryOrigin('runtime');
+              toast('刚刚出现需要处理的新事项（未知结果/中断/保护）——侧栏「恢复检查」已标记，点击查看', 'warn');
+            }
+            hadRealAttentionRef.current = true;
+          } else {
+            hadRealAttentionRef.current = false;
+            setRecoveryOrigin(null);
+          }
         })
         .catch(() => { /* 读取失败不冒充 */ });
     };
@@ -428,13 +455,20 @@ export default function App() {
             <div className="sidebar-foot">
               <button
                 className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
-                title={recoveryAttention ? '恢复检查：存在需要处理的事项——点击查看与分列操作' : '恢复检查：查看恢复事实'}
+                title={recoveryAttention
+                  ? recoveryOrigin === 'runtime'
+                    ? `恢复检查：本次运行新出现需要处理的事项（未知/中断/保护）——点击查看与分列操作`
+                    : `恢复检查：存在需要处理的事项——点击查看与分列操作`
+                  : pendingWaitCount > 0
+                    ? `恢复检查：${pendingWaitCount} 条排队意图等待派发（普通排队，非故障）`
+                    : '恢复检查：查看恢复事实'}
                 data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
                 onClick={() => setRecoveryOpen(true)}
               >
                 <Icon name="shield" size={14} />
                 <span className="side-item-label">恢复检查</span>
-                {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title="有注意项" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
+                {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title={recoveryOrigin === 'runtime' ? '本次运行新出现' : '启动时已有'} style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
+                {!recoveryAttention && pendingWaitCount > 0 ? <span className="side-marks"><span className="nav-dot" title="普通排队（非故障）" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--text-4,#98a0ad)', display: 'inline-block' }} /></span> : null}
               </button>
               <button
                 className={`side-item${navActive.pending ? ' active' : ''}`}
@@ -483,6 +517,8 @@ export default function App() {
               <MenuItem icon="archive" title="归档：退出日常列表、历史保留只读（有未结束工作会被拒绝）" onClick={() => { setArchiveProjFor(p.id); close(); }}>归档项目…</MenuItem>
             )}
             <MenuItem icon="trash" title="移除：只在应用里解除关联，不删除磁盘文件与历史（可在欢迎页重新打开）" onClick={() => { setRemoveProjFor(p.id); close(); }}>移除项目…</MenuItem>
+            <div className="menu-sep" />
+            <MenuItem icon="archive" title="查看已归档的项目与房间（查看历史 + 恢复——不动磁盘文件与历史）" onClick={() => { navigate('/archive'); close(); }}>归档管理</MenuItem>
           </Menu>
         );
       })() : null}
@@ -501,7 +537,7 @@ export default function App() {
             size="sm"
             title={`归档项目「${p.displayName}」`}
             onClose={() => setArchiveProjFor(null)}
-            footer={<><div className="spacer" /><button className="btn" onClick={() => setArchiveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="archive" onDone={() => setArchiveProjFor(null)} /></>}
+            footer={<><div className="spacer" /><button className="btn" onClick={() => setArchiveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="archive" onDone={() => { setArchiveProjFor(null); navigate(`/archive?project=${p.id}`); }} /></>}
           >
             <div className="small muted" style={{ lineHeight: 1.75 }}>
               归档后项目退出日常项目列表、历史保留只读；恢复不重放旧任务。磁盘文件不受影响。存在未结束任务时服务端拒绝（不自动停止/派发）。
@@ -534,7 +570,7 @@ export default function App() {
       {openFolder ? <OpenFolderModal autoPick onClose={() => setOpenFolder(false)} /> : null}
 
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
-      {recoveryOpen ? <RecoveryPanel onClose={() => setRecoveryOpen(false)} /> : null}
+      {recoveryOpen ? <RecoveryPanel origin={recoveryOrigin} onClose={() => setRecoveryOpen(false)} /> : null}
       {s.ui.toast != null ? (
         <div className="toast-host" role="status" aria-live="polite">
           <button className={`toast ${s.ui.toast.tone}`} onClick={() => clearToast()}>
@@ -571,6 +607,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
 
   if (path === '/' || path === '/welcome' || path === '') return <WelcomePage />;
   if (path === '/dm' || path.startsWith('/dm/')) return <DmPage />;
+  if (path === '/archive') return <ArchivePage query={query} />;
   if (path === '/board') return <TasksBoardPage query={query} />;
   if (path === '/library') return <LibraryPage />;
   if (path === '/activity') return <ActivityPage />;

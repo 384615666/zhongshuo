@@ -31,7 +31,7 @@ interface RecoveryStatus {
 
 const fmtAt = (at?: number) => (at != null ? new Date(at).toLocaleString() : '—');
 
-export function RecoveryPanel({ onClose }: { onClose: () => void }) {
+export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin?: 'startup' | 'runtime' | null }) {
   const [data, setData] = useState<RecoveryStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -92,7 +92,10 @@ export function RecoveryPanel({ onClose }: { onClose: () => void }) {
   };
   const locate = (link: string) => { void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); };
 
-  const attention = data != null && (data.gateHeld || data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 || data.interruptedRuns.length > 0 || data.pendingDispatchCount > 0);
+  const realAttention = data != null && (data.gateHeld || data.unknownTurns.length > 0 || data.pendingRelease.length > 0 || data.activeUndos.length > 0 || data.interruptedRuns.length > 0);
+  /** 仅普通排队（无任何恢复类事项）——不是故障（R66 P5 三态分类之一）。 */
+  const pendingOnly = data != null && !realAttention && data.pendingDispatchCount > 0;
+  const attention = realAttention || pendingOnly;
 
   return (
     <div className="scrim center" onClick={onClose} style={{ zIndex: 92 }} data-zs-recovery="hifi">
@@ -100,6 +103,9 @@ export function RecoveryPanel({ onClose }: { onClose: () => void }) {
         <div className="row tight" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
           <Icon name="shield" size={15} />
           <strong>恢复检查</strong>
+          {realAttention && origin === 'startup' ? <Tag tone="warning" icon="clock">启动时已有</Tag> : null}
+          {realAttention && origin === 'runtime' ? <Tag tone="warning" icon="zap">本次运行新出现</Tag> : null}
+          {pendingOnly ? <Tag plain icon="clock">普通排队（非故障）</Tag> : null}
           <span className="faint small">recovery.status 只读事实——确认继续/对账/解除保护/定位分列，不自动重放</span>
           <span style={{ flex: 1 }} />
           <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
@@ -108,7 +114,24 @@ export function RecoveryPanel({ onClose }: { onClose: () => void }) {
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
           {err != null ? <div className="panel warning">恢复状态读取失败：{err}（可刷新重试）</div> : null}
           {data == null && err == null ? <div className="panel info">正在读取恢复事实…</div> : null}
-          {data != null && !attention ? <div className="panel info">没有需要处理的恢复事项（门禁开放、无 UNKNOWN turn、无未解除保护/未收口撤销）。</div> : null}
+          {data != null && !attention ? <div className="panel info">没有需要处理的恢复事项（门禁开放、无 UNKNOWN turn、无未解除保护/未收口撤销、队列空闲）。</div> : null}
+          {pendingOnly ? (
+            <div className="panel info">
+              <div className="row tight">
+                <Icon name="clock" size={13} />
+                <strong>普通排队（{data?.pendingDispatchCount ?? 0} 条）——不是恢复故障</strong>
+              </div>
+              <div className="small muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
+                这些是等待派发的排队意图（串行执行/会话队列的正常等待），不是未知结果或中断——
+                无需对账或确认；队列会按合同继续推进。
+              </div>
+              {data != null && data.pendingDispatchKeys.length > 0 ? (
+                <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
+                  {data.pendingDispatchKeys.map((k) => <div key={k}>{k}</div>)}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {data != null && data.gateHeld ? (
             <div className="panel info" style={{ borderColor: 'var(--warning)' }}>
               <div className="row tight">

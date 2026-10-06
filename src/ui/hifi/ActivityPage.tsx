@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { Tag } from './components/ui';
+import { EmptyState, Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink } from './loader';
@@ -75,46 +75,54 @@ export function ActivityPage() {
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-activity="hifi">
-      <div className="row tight wrap" style={{ marginBottom: 8 }}>
-        <Icon name="activity" size={14} />
-        <strong>活动流</strong>
-        <span className="faint small">domain_events 只读聚合——DM 事件仅本人参与可见；读活动≠执行动作</span>
-        <label className="field inline" style={{ marginLeft: 'auto' }}>
-          <span className="field-label">范围</span>
-          <select className="select" value={scope} onChange={(e) => setScope(e.target.value as 'all' | 'project')}>
-            <option value="all">全部可访问项目</option>
-            <option value="project">当前项目</option>
-          </select>
-        </label>
-        <button className="btn ghost sm" onClick={() => void load('reset')}>刷新</button>
+    <div className="main" style={{ overflow: 'auto' }} data-zs-activity="hifi">
+      <div className="page">
+        {/* 筛选行（R66 P4：与其他页同一套控件——范围显式呈现，控件在内容区左上角）。 */}
+        <div className="page-filters">
+          <label className="field inline">
+            <span className="field-label">范围</span>
+            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as 'all' | 'project')}>
+              <option value="all">全部可访问项目</option>
+              <option value="project">当前项目</option>
+            </select>
+          </label>
+          <span className="filter-note">domain_events 只读聚合——DM 事件仅本人参与可见；读活动≠执行动作</span>
+          <div className="spacer" />
+          <button className="btn ghost sm" onClick={() => void load('reset')}>刷新</button>
+        </div>
+        {err != null ? <div className="panel warning">活动流读取失败：{err}——已加载内容保持（可刷新重试）</div> : null}
+        {items == null && err == null ? <div className="panel info">正在装载…</div> : null}
+        {items != null && items.length === 0 && err == null ? (
+          <EmptyState icon="activity" title="当前范围内还没有活动事件" detail="任务派发、交付、恢复等事件会按时间倒序出现在这里（零运行零唤醒的只读聚合）。" />
+        ) : null}
+        {items != null && items.length > 0 ? (
+          <>
+            <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {items.length} 条 · 按发生时间倒序（同毫秒按 seq 决定性排序——不漏同刻事件）</div>
+            <div className="col" style={{ gap: 6 }}>
+              {items.map((it) => {
+                const loc = locateOf(it);
+                return (
+                  <div key={`${it.eventId}:${it.seq}`} className="card tight" data-zs-activity-item={it.kind}>
+                    <div className="row tight wrap">
+                      <Tag tone="neutral" icon="clock">{it.kindLabel}</Tag>
+                      <Tag tone="accent" icon="folder">{it.projectName}</Tag>
+                      <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.summary.length > 0 ? it.summary : `（无摘要事件 ${it.eventId.slice(0, 10)}…）`}</span>
+                      <span className="faint small">{new Date(it.at).toLocaleString()}</span>
+                      {loc != null ? <button className="btn ghost sm" onClick={loc.go}>{loc.label}</button> : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="row tight" style={{ marginTop: 10 }}>
+              <button className="btn ghost sm" disabled={!hasMore || loading} onClick={() => void load('more')}>
+                {loading ? '加载中…' : hasMore ? '加载更早' : '没有更早的事件了'}
+              </button>
+            </div>
+            <div className="faint small" style={{ marginTop: 6 }}>游标分页 (created_at, seq) 双键——同毫秒多条不漏；事件正文摘要来自服务端白名单字段（残缺不虚构）。</div>
+          </>
+        ) : null}
       </div>
-      {err != null ? <div className="panel warning">活动流读取失败：{err}——已加载内容保持（可刷新重试）</div> : null}
-      {items == null && err == null ? <div className="panel info">正在装载…</div> : null}
-      {items != null && items.length === 0 && err == null ? <div className="panel info">当前范围内还没有活动事件。</div> : null}
-      {items != null && items.length > 0 ? (
-        <>
-          <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {items.length} 条 · 按发生时间倒序（同毫秒按 seq 决定性排序——不漏同刻事件）</div>
-          {items.map((it) => {
-            const loc = locateOf(it);
-            return (
-              <div key={`${it.eventId}:${it.seq}`} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }} data-zs-activity-item={it.kind}>
-                <Tag tone="neutral" icon="clock">{it.kindLabel}</Tag>
-                <span className="faint small">{it.projectName}</span>
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.summary.length > 0 ? it.summary : `（无摘要事件 ${it.eventId.slice(0, 10)}…）`}</span>
-                <span className="faint small">{new Date(it.at).toLocaleString()}</span>
-                {loc != null ? <button className="btn ghost sm" onClick={loc.go}>{loc.label}</button> : null}
-              </div>
-            );
-          })}
-          <div className="row tight" style={{ marginTop: 8 }}>
-            <button className="btn ghost sm" disabled={!hasMore || loading} onClick={() => void load('more')}>
-              {loading ? '加载中…' : hasMore ? '加载更早' : '没有更早的事件了'}
-            </button>
-          </div>
-          <div className="faint small" style={{ marginTop: 6 }}>游标分页 (created_at, seq) 双键——同毫秒多条不漏；事件正文摘要来自服务端白名单字段（残缺不虚构）。</div>
-        </>
-      ) : null}
     </div>
   );
 }

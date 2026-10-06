@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { Tag } from './components/ui';
+import { EmptyState, Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink, refreshSavedMessageRefs } from './loader';
@@ -141,65 +141,72 @@ export function LibraryPage() {
   const total = rows.length;
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }} className="page-stack" data-zs-library="hifi">
-      <div className="thread-tabs" style={{ marginBottom: 10 }}>
-        <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
-          <Icon name="search" size={13} /> 搜索
-        </button>
-        <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
-          <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
-        </button>
-      </div>
+    <div className="main" style={{ overflow: 'auto' }} data-zs-library="hifi">
+      <div className="page">
+        {/* 标签在上、一个筛选行在下（原型 §17.7：范围对两个标签都生效；关键词/类型/作者/
+            日期/会话只对搜索生效——同一行里各自可辨，控件样式与看板/成员/归档同套）。 */}
+        <div className="thread-tabs" style={{ marginBottom: 12 }}>
+          <button role="tab" aria-selected={tab === 'search'} className={`thread-tab${tab === 'search' ? ' on' : ''}`} onClick={() => setTab('search')}>
+            <Icon name="search" size={13} /> 搜索
+          </button>
+          <button role="tab" aria-selected={tab === 'saved'} className={`thread-tab${tab === 'saved' ? ' on' : ''}`} onClick={() => setTab('saved')}>
+            <Icon name="bookmark" size={13} /> 收藏 {saved != null ? <span className="faint">{saved.length}</span> : null}
+          </button>
+        </div>
 
-      <div className="row tight wrap" style={{ marginBottom: 10 }}>
-        <label className="field inline" title="范围：当前项目 / 全部可访问项目（同 mine.pending 口径——正式链无隐藏位）">
-          <span className="field-label">范围</span>
-          <select className="select" value={scope} onChange={(e) => setScope(e.target.value as 'project' | 'all')}>
-            <option value="project">当前项目</option>
-            <option value="all">全部可访问项目</option>
-          </select>
-        </label>
-        {tab === 'search' ? (
-          <>
-            <label className="field inline">
-              <span className="field-label">类型</span>
-              <select className="select" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-                {KIND_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-              </select>
-            </label>
-            <label className="field inline" title="按作者显示名过滤（跨项目同名都收——文本匹配如实）">
-              <span className="field-label">作者</span>
-              <input className="composer-input" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
-            </label>
-            <label className="field inline" title="日期按本机时区解释（toDay 含当日）">
-              <span className="field-label">日期</span>
-              <input className="composer-input" type="date" style={{ width: 128 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
-              <span className="faint small">至</span>
-              <input className="composer-input" type="date" style={{ width: 128 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
-            </label>
-            {scope === 'project' && rooms.length > 0 ? (
-              <label className="field inline" title="限定会话（当前项目的房间）——线程=锚消息、任务=根消息统一生效">
-                <span className="field-label">会话</span>
-                <select className="select" value={convId} onChange={(e) => setConvId(e.target.value)}>
-                  <option value="">全部会话</option>
-                  {rooms.map((r) => <option key={r.conversationId ?? r.id} value={r.conversationId ?? ''}>#{r.name}</option>)}
+        <div className="page-filters">
+          <label className="field inline" title="范围：当前项目 / 全部可访问项目（同 mine.pending 口径——正式链无隐藏位）">
+            <span className="field-label">范围</span>
+            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as 'project' | 'all')}>
+              <option value="project">当前项目</option>
+              <option value="all">全部可访问项目</option>
+            </select>
+          </label>
+          {tab === 'search' ? (
+            <>
+              <label className="field inline">
+                <span className="field-label">类型</span>
+                <select className="select" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+                  {KIND_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
                 </select>
               </label>
-            ) : null}
-            <div style={{ flex: '1 1 200px', minWidth: 160 }}>
-              <input
-                className="composer-input"
-                style={{ width: '100%' }}
-                placeholder={scope === 'project' ? '在当前项目搜消息/线程/任务标题…（Enter 检索）' : '在全部可访问项目搜消息/线程/任务标题…（Enter 检索）'}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void runSearch(1); } }}
-              />
-            </div>
-            <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => void runSearch(1)}>{searching ? '检索中…' : '检索'}</button>
-          </>
-        ) : null}
-      </div>
+              <div className="row tight" style={{ flex: '1 1 220px', minWidth: 180, border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)' }}>
+                <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
+                <input
+                  className="input"
+                  style={{ border: 'none', boxShadow: 'none', flex: 1, minWidth: 0, background: 'transparent' }}
+                  placeholder={scope === 'project' ? '在当前项目搜消息/线程/任务标题…（Enter 检索）' : '在全部可访问项目搜消息/线程/任务标题…（Enter 检索）'}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void runSearch(1); } }}
+                />
+              </div>
+              <label className="field inline" title="按作者显示名过滤（跨项目同名都收——文本匹配如实）">
+                <span className="field-label">作者</span>
+                <input className="input sm" style={{ width: 110 }} placeholder="显示名" value={author} onChange={(e) => setAuthor(e.target.value)} />
+              </label>
+              <label className="field inline" title="日期按本机时区解释（toDay 含当日）">
+                <span className="field-label">日期</span>
+                <input className="input sm" type="date" style={{ width: 132 }} value={fromDay} onChange={(e) => setFromDay(e.target.value)} />
+                <span className="faint small">至</span>
+                <input className="input sm" type="date" style={{ width: 132 }} value={toDay} onChange={(e) => setToDay(e.target.value)} />
+              </label>
+              {scope === 'project' && rooms.length > 0 ? (
+                <label className="field inline" title="限定会话（当前项目的房间）——线程=锚消息、任务=根消息统一生效">
+                  <span className="field-label">会话</span>
+                  <select className="select" value={convId} onChange={(e) => setConvId(e.target.value)}>
+                    <option value="">全部会话</option>
+                    {rooms.map((r) => <option key={r.conversationId ?? r.id} value={r.conversationId ?? ''}>#{r.name}</option>)}
+                  </select>
+                </label>
+              ) : null}
+              <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => void runSearch(1)}>{searching ? '检索中…' : '检索'}</button>
+            </>
+          ) : null}
+          <span className="filter-note">
+            {tab === 'search' ? '搜索不覆盖文件正文，附件按所在消息的文件名检索' : `收藏共 ${saved?.length ?? 0} 条`}
+          </span>
+        </div>
 
       {tab === 'search' ? (
         <>
@@ -208,23 +215,27 @@ export function LibraryPage() {
           ) : null}
           {result != null ? (
             <>
-              {total === 0 ? <div className="panel info">本页没有命中（第 {result.page} 页）——换关键词或范围再试；没有结果不等于内容不存在（附件正文提取未实施）。</div> : null}
-              {rows.map((r) => (
-                <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="root-card" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: 8 }} onClick={() => locate(r.locate)} title={`定位：${r.locate}`}>
-                  <div className="row tight">
-                    <Tag tone={r.kind === 'task' ? 'info' : r.kind === 'thread' ? 'neutral' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
-                      {r.kind === 'message' ? '消息' : r.kind === 'thread' ? '线程' : '任务'}
-                    </Tag>
-                    <span className="faint small">{r.projectName}</span>
-                    {r.kind === 'task' && r.status != null ? <span className="faint small">· {r.status}</span> : null}
-                    <span style={{ flex: 1 }} />
-                    <span className="faint small">{r.createdAt != null ? new Date(r.createdAt).toLocaleString() : ''}</span>
-                    <span className="faint small" style={{ color: 'var(--accent,#2563eb)' }}>定位 ↗</span>
-                  </div>
-                  <div className="small" style={{ marginTop: 4 }}>{r.kind === 'task' ? r.title : r.snippet}</div>
-                </button>
-              ))}
-              <div className="row tight" style={{ marginTop: 8 }}>
+              {total === 0 ? (
+                <EmptyState icon="search" title="本页没有命中" detail={`第 ${result.page} 页——换关键词或范围再试；没有结果不等于内容不存在（附件正文提取未实施）。`} />
+              ) : null}
+              <div className="col" style={{ gap: 8 }}>
+                {rows.map((r) => (
+                  <button key={`${r.kind}-${r.messageId ?? r.threadId ?? r.taskId}`} className="card tight" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => locate(r.locate)} title={`定位：${r.locate}`}>
+                    <div className="row tight wrap">
+                      <Tag tone="accent" icon="folder">{r.projectName}</Tag>
+                      <Tag tone={r.kind === 'task' ? 'info' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
+                        {r.kind === 'message' ? '消息' : r.kind === 'thread' ? '线程' : '任务'}
+                      </Tag>
+                      {r.kind === 'task' && r.status != null ? <span className="faint small">{r.status}</span> : null}
+                      <div className="spacer" />
+                      <span className="faint small">{r.createdAt != null ? new Date(r.createdAt).toLocaleString() : ''}</span>
+                      <span className="faint small" style={{ color: 'var(--accent,#2563eb)' }}>回原处 ↗</span>
+                    </div>
+                    <div className="small" style={{ marginTop: 4, lineHeight: 1.65 }}>{r.kind === 'task' ? r.title : r.snippet}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="row tight" style={{ marginTop: 10 }}>
                 <button className="btn ghost sm" disabled={result.page <= 1 || searching} onClick={() => void runSearch(result.page - 1)}>上一页</button>
                 <span className="faint small">第 {result.page} 页（本页 {total} 条 · 每页 {result.pageSize}）</span>
                 <button className="btn ghost sm" disabled={total < result.pageSize || searching} onClick={() => void runSearch(result.page + 1)}>下一页</button>
@@ -248,37 +259,45 @@ export function LibraryPage() {
             <>
               {savedErr != null ? <div className="panel warning">收藏读取失败：{savedErr}——列表保持上次事实（可刷新重试）</div> : null}
               {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
-              {saved != null && saved.length === 0 ? <div className="panel info">还没有收藏——在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容）。</div> : null}
+              {saved != null && saved.length === 0 ? (
+                <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容；收藏本身不把内容共享给其他成员）。" />
+              ) : null}
               {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) ? (
                 <div className="panel info">当前项目没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
               ) : null}
-              {inScope.map((it) => (
-                <div key={`${it.kind}:${it.ref}`} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }}>
-                  <Icon name="bookmark" size={13} />
-                  <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
-                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
-                  <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
-                  {it.kind === 'link' ? (
-                    <button
-                      className="btn ghost sm"
-                      title={`复制链接（${it.ref}）——应用内不自动打开外部网址`}
-                      onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}
-                    >复制链接</button>
-                  ) : it.status === 'ok' ? (
-                    <button className="btn ghost sm" title={`定位：${it.locate}`} onClick={() => locate(it.locate)}>定位</button>
-                  ) : it.status === 'missing' ? (
-                    <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
-                  ) : (
-                    <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
-                  )}
-                  <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（只删收藏行——原内容不动）">取消收藏</button>
-                </div>
-              ))}
+              <div className="col" style={{ gap: 8 }}>
+                {inScope.map((it) => (
+                  <div key={`${it.kind}:${it.ref}`} className="card tight">
+                    <div className="row tight wrap">
+                      <Icon name="bookmark" size={13} />
+                      <Tag tone="neutral">{SAVED_KIND_LABEL[it.kind] ?? it.kind}</Tag>
+                      <span className="small strong" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title ?? it.ref}>{it.title ?? it.ref}</span>
+                      <div className="spacer" />
+                      <span className="faint small">{new Date(it.createdAt).toLocaleString()}</span>
+                      {it.kind === 'link' ? (
+                        <button
+                          className="btn ghost sm"
+                          title={`复制链接（${it.ref}）——应用内不自动打开外部网址`}
+                          onClick={() => { void navigator.clipboard?.writeText(it.ref).then(() => toast('链接已复制', 'success'), () => toast('复制失败——链接见按钮提示', 'error')); }}
+                        >复制链接</button>
+                      ) : it.status === 'ok' ? (
+                        <button className="btn ghost sm" title={`定位：${it.locate}`} onClick={() => locate(it.locate)}>回原处</button>
+                      ) : it.status === 'missing' ? (
+                        <Tag tone="warning" icon="alert-triangle">目标已不存在</Tag>
+                      ) : (
+                        <Tag tone="danger" icon="eye-off">当前无权访问</Tag>
+                      )}
+                      <button className="btn ghost sm" disabled={busyRef != null} onClick={() => void removeSaved(it)} title="取消收藏（只删收藏行——原内容不动）">取消收藏</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
               {saved != null && saved.some((x) => x.status !== 'ok') ? <div className="faint small" style={{ marginTop: 6 }}>missing=收藏目标已被删除；forbidden=会话归属/可见性变化——均如实呈现，不伪装可点。</div> : null}
             </>
           );
         })()
       )}
+      </div>
     </div>
   );
 }
