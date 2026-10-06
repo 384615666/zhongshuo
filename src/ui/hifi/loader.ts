@@ -153,6 +153,16 @@ export async function refreshMembers(): Promise<void> {
   if (projectId === '') return;
   const data = await command<RoomMembersData>('member.list', { projectId });
   if (!stillCurrent(gen, projectId)) return; // 迟到响应：项目已切走——丢弃（review-r46 §5 反例）
+  // r63：runtime 绑定投影（一次 runtime.status 拿全量 memberBindings+防护自述——失败=unknown
+  // 不冒充，成员页/发送区共用；不计成员页局部回读）。
+  void command<{ memberBindings: Array<{ memberId: string; kind: string | null; model: string | null }>; dispatchGuard: { fakeAllowed: boolean; realDispatchGuard: boolean } }>('runtime.status', {})
+    .then((rt) => {
+      if (!stillCurrent(gen, projectId)) return;
+      const map: Record<string, { kind: string | null; model: string | null; status: 'bound' | 'unbound' | 'unknown' }> = {};
+      for (const b of rt.memberBindings ?? []) map[b.memberId] = { kind: b.kind ?? null, model: b.model ?? null, status: b.kind != null && b.kind !== '(默认 runtime)' ? 'bound' : 'unbound' };
+      setState((prev) => ({ ...prev, memberRuntimes: map, dispatchGuard: rt.dispatchGuard ?? null }));
+    })
+    .catch(() => { if (stillCurrent(gen, projectId)) setState((prev) => ({ ...prev, dispatchGuard: prev.dispatchGuard })); });
   setState((prev) => ({
     ...prev,
     members: (data.items ?? []).map((m) => ({

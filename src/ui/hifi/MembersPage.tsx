@@ -10,12 +10,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, toast } from './shell';
+import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 
 interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean }
 /** member.runtime DTO：{ binding: { installationId|null, … }, installation: { kind, capabilities_json }|null, environment } */
-interface RuntimeInfo { binding?: { installationId?: string | null }; installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null; environment?: { realDispatchGuard?: boolean; allowFake?: boolean } }
+interface RuntimeInfo { binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null }; installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null; environment?: { realDispatchGuard?: boolean; allowFake?: boolean } }
 
 const runtimeAuthOf = (raw: string | null): string => {
   if (raw == null) return '未认证';
@@ -97,6 +98,42 @@ export function MembersPage() {
     }
   };
 
+  /** r63：绑定编辑行（member.setRuntime——正式命令；fake 仅在环境显式允许时可选）。 */
+  const guard = useStore((st) => st.dispatchGuard);
+  const storeRuntimes = useStore((st) => st.memberRuntimes);
+  const [editAt, setEditAt] = useState<string | null>(null);
+  const [bindBusy, setBindBusy] = useState(false);
+  const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
+  const openBind = (m: MemberRow) => {
+    const cur = runtimes[m.id];
+    const curKind = cur?.installation?.kind;
+    setBindForm({
+      kind: curKind === 'codex' || curKind === 'fake' ? curKind : 'claude',
+      model: cur?.binding?.model ?? '',
+      executable: cur?.installation?.executable ?? '',
+      permissionMode: cur?.binding?.permissionMode ?? '',
+    });
+    setEditAt(m.id);
+  };
+  const saveBind = async (m: MemberRow) => {
+    if (bindForm.kind === 'claude' && bindForm.model.trim().length === 0) { toast('claude 绑定必须显式指定模型（服务端同判）', 'warn'); return; }
+    setBindBusy(true);
+    try {
+      await command('member.setRuntime', {
+        memberId: m.id, kind: bindForm.kind,
+        ...(bindForm.model.trim().length > 0 ? { model: bindForm.model.trim() } : {}),
+        ...(bindForm.executable.trim().length > 0 ? { executable: bindForm.executable.trim() } : {}),
+        ...(bindForm.permissionMode.length > 0 ? { permissionMode: bindForm.permissionMode } : {}),
+      });
+      recordWrite('member.setRuntime', `${m.displayName} → ${bindForm.kind}${bindForm.model ? `（${bindForm.model}）` : ''}——配置成功≠能力已认证`);
+      toast(`已保存 ${m.displayName} 的 runtime 绑定（${bindForm.kind}${bindForm.model ? ' · ' + bindForm.model : ''}）——能力认证状态以成员页回读为准`, 'success');
+      setEditAt(null);
+      await reload();
+    } catch (e) {
+      toast(`绑定失败：${(e as Error).message}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
+    } finally { setBindBusy(false); }
+  };
+
   /**
    * runtime 档位四态分列（r55）：查询失败≠未绑定≠已绑定·安装缺失≠正常——
    *  · 查询失败：保留上一次已有事实，显示失败原因（可刷新重试）；
@@ -112,7 +149,7 @@ export function MembersPage() {
       return { text: '读取中…' };
     }
     if (rt.binding == null) return { text: '绑定信息缺失（member.runtime 响应异常）', problem: true };
-    if (rt.binding.installationId == null || rt.binding.installationId === '') return { text: '未绑定（原界面项目设置里选择 runtime）' };
+    if (rt.binding.installationId == null || rt.binding.installationId === '') return { text: '未绑定（点「配置 runtime」选择渠道与模型）', problem: true };
     if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
     return { text: `${rt.installation.kind} · ${runtimeAuthOf(rt.installation.capabilities_json)}` };
   };
@@ -135,7 +172,8 @@ export function MembersPage() {
           {members.map((m) => {
             const rt = runtimeLabel(m);
             return (
-              <div key={m.id} className="row tight" style={{ marginTop: 8, padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
+              <div key={m.id} style={{ marginTop: 8, padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }}>
+              <div className="row tight">
                 <Icon name={m.principalType === 'agent' ? 'sparkles' : 'users'} size={13} />
                 <span style={{ fontWeight: 600, minWidth: 90 }}>{m.displayName}</span>
                 <Tag tone="neutral">{m.principalType === 'agent' ? 'Agent' : '人类'}</Tag>
@@ -143,11 +181,54 @@ export function MembersPage() {
                 <span className="faint small" style={rt.problem ? { color: 'var(--warning,#b45309)' } : undefined}>runtime：{rt.text}</span>
                 <span style={{ flex: 1 }} />
                 {m.principalType === 'agent' ? (
-                  <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
-                    title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
-                    {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
-                  </button>
+                  <>
+                    <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
+                      title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
+                      {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
+                    </button>
+                    <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的 runtime 与模型（member.setRuntime——配置成功≠能力已认证）" onClick={() => (editAt === m.id ? setEditAt(null) : openBind(m))}>
+                      配置 runtime
+                    </button>
+                  </>
                 ) : <span className="faint small">（本地用户——不可停用）</span>}
+              </div>
+              {editAt === m.id && m.principalType === 'agent' ? (
+                <div className="row tight wrap" style={{ marginTop: 4, padding: '6px 8px', background: 'var(--bg-surface-2,#f1f5f9)', borderRadius: 6 }} data-zs-member-bindform={m.id}>
+                  <label className="field inline" title="runtime 渠道（派发侧按此选 adapter）">
+                    <span className="field-label">渠道</span>
+                    <select className="select" value={bindForm.kind} onChange={(e) => setBindForm((f) => ({ ...f, kind: e.target.value as typeof f.kind }))}>
+                      <option value="claude">claude（CLI）</option>
+                      <option value="codex">codex</option>
+                      {guard?.fakeAllowed === true ? <option value="fake">fake（仅演练环境）</option> : null}
+                    </select>
+                  </label>
+                  {bindForm.kind === 'claude' ? (
+                    <label className="field inline" title="claude 必须显式指定模型（服务端同判拒绝空模型）">
+                      <span className="field-label">模型（必填）</span>
+                      <input className="composer-input" style={{ width: 160 }} placeholder="如 deepseek-flash" value={bindForm.model} onChange={(e) => setBindForm((f) => ({ ...f, model: e.target.value }))} />
+                    </label>
+                  ) : null}
+                  <label className="field inline" title="可执行文件（留空=渠道默认名：claude/codex）">
+                    <span className="field-label">可执行文件</span>
+                    <input className="composer-input" style={{ width: 180 }} placeholder="留空=默认（claude/codex）" value={bindForm.executable} onChange={(e) => setBindForm((f) => ({ ...f, executable: e.target.value }))} />
+                  </label>
+                  <label className="field inline" title="权限模式（可选——默认按 runtime 自身配置）">
+                    <span className="field-label">权限模式</span>
+                    <select className="select" value={bindForm.permissionMode} onChange={(e) => setBindForm((f) => ({ ...f, permissionMode: e.target.value }))}>
+                      <option value="">（默认）</option>
+                      <option value="plan">plan</option>
+                      <option value="manual">manual</option>
+                      <option value="acceptEdits">acceptEdits</option>
+                      <option value="auto">auto</option>
+                      <option value="dontAsk">dontAsk</option>
+                      <option value="bypassPermissions">bypassPermissions</option>
+                    </select>
+                  </label>
+                  <button className="btn sm" disabled={bindBusy} data-zs-member-bindsave={m.id} onClick={() => void saveBind(m)}>{bindBusy ? '保存中…' : '保存绑定'}</button>
+                  <button className="btn ghost sm" onClick={() => setEditAt(null)}>取消</button>
+                  <span className="faint small">{guard?.realDispatchGuard === true ? '（当前为验收防护环境：真实渠道绑定会被拒绝）' : '保存后回读显示能力状态；配置成功≠已认证'}</span>
+                </div>
+              ) : null}
               </div>
             );
           })}
@@ -179,7 +260,7 @@ export function MembersPage() {
         })}
         {rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
       </div>
-      <div className="faint small">runtime 绑定与模型配置在「原界面 → 项目设置」（正式命令 member.setRuntime；配置成功≠已认证——能力状态分列如实）。人的关注（阅读订阅）在「待我处理」。</div>
+      <div className="faint small">runtime 绑定/模型在本页「配置 runtime」（member.setRuntime；配置成功≠已认证——能力状态以回读分列如实）；fake 渠道仅演练环境可选。人的关注（阅读订阅）在「待我处理」。</div>
     </div>
   );
 }

@@ -88,6 +88,11 @@ export interface HifiExtension {
   /** r62 P1 出站账本：交给 bridge **之前**耐久落盘的完整发送意图（stage=sending）——按
    * ok/failed/unknown 收口；重载时全部转 pendingSends（recovered，人工同号确认）。 */
   outboundLedger: Record<string, OutboundLedgerEntry[]>;
+  /** r63：成员 runtime 绑定投影（runtime.status memberBindings——kind=null 未绑定；
+   * 'unknown'=读取失败不冒充）。发送区未绑定提示与成员页共用。 */
+  memberRuntimes: Record<string, { kind: string | null; model: string | null; status: 'bound' | 'unbound' | 'unknown' }>;
+  /** r63：本环境派发防护自述（runtime.status dispatchGuard——日常包 fakeAllowed=false）。 */
+  dispatchGuard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   /**
    * r61 P5 草稿/未知信封持久化状态：mode=on（identity 就绪、localStorage 可写）时每次草稿/
    * 信封/上传项变更即快照落盘；error 非空=最近一次持久化失败（内存仍生效，UI 如实提示
@@ -128,6 +133,8 @@ function makeEmptyState(): HifiState {
     savedMessageRefs: {},
     draftInserts: {},
     outboundLedger: {},
+    memberRuntimes: {},
+    dispatchGuard: null,
     draftPersist: { mode: 'off', error: null, recoveryNote: null },
   };
 }

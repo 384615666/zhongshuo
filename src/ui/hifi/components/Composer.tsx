@@ -272,6 +272,7 @@ export function Composer({
     [target.kind, dm, room],
   );
   const allMembers = useStore((s) => s.members);
+  const memberRuntimes = useStore((s) => s.memberRuntimes);
   const profiles = useStore((s) => s.profiles);
   const runtimes = useStore((s) => s.runtimeInstallations);
 
@@ -779,6 +780,32 @@ export function Composer({
     return null;
   }, [sendAs, runBudget]);
 
+  /**
+   * r63：runtime 未绑定提示（发送区就地）——@ 指派成员未绑定（或未指派且项目无任何已绑定
+   * agent）时给出原因与直达入口（成员页「配置 runtime」）；能力未认证不在发送前硬拦（派发侧
+   * 按认证边界处理），未绑定是明确的配置缺失。
+   */
+  const navigateToMembers = (): void => { void import('../lib/router').then((m) => m.navigate('/members')); };
+  const runtimeHint = useMemo(() => {
+    if (sendAs !== 'ai' || target.kind === 'dm') return null; // DM 走成员自身绑定链；仅记录不派发
+    const bound = (id: string) => memberRuntimes[id]?.status === 'bound';
+    const agentIds = memberIds.filter((id) => allMembers.find((m) => m.id === id)?.principalType === 'agent');
+    const unbound = agentIds.filter((id) => memberRuntimes[id] == null || memberRuntimes[id].status !== 'bound');
+    if (agentIds.length === 0) return null;
+    const named = route.resolvedMemberIds.filter((id) => id !== 'all');
+    if (named.length > 0) {
+      const namedUnbound = named.filter((id) => !bound(id));
+      if (namedUnbound.length === 0) return null;
+      const names = namedUnbound.map((id) => allMembers.find((m) => m.id === id)?.displayName ?? id).join('、');
+      return { text: `已 @ 的成员（${names}）未绑定 runtime——派发前请先在成员页配置渠道与模型`, who: namedUnbound.length };
+    }
+    if (route.resolvedMemberIds.includes('all') || named.length === 0) {
+      // AUTO/全体：项目内没有任何已绑定 agent 时提示（有部分可用即不拦 AUTO 语义之外的行为）
+      if (!agentIds.some((id) => bound(id))) return { text: '项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型', who: agentIds.length };
+    }
+    return null;
+  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.resolvedMemberIds]);
+
   return (
     <div className="composer">
       {/**
@@ -854,6 +881,15 @@ export function Composer({
           @全体/多人（DELIBERATE）发送后任务会立即受阻（服务端同文案 mode_unavailable_in_m0，
           任务与消息保留、可补发指派）。发送前就说清楚并给可用动作：不静默改目标、不禁发送、
           不开放 AUTO 来消除受阻——模式边界保持。 */}
+      {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
+        <div className="composer-mentions" data-zs-runtime-hint="1">
+          <span className="chip record-chip" title={runtimeHint.text}>
+            <Icon name="alert-triangle" size={11} />
+            {runtimeHint.text}
+            <button title="打开成员页配置 runtime（渠道/模型/权限模式）" onClick={() => { navigateToMembers(); }}>去成员页配置</button>
+          </span>
+        </div>
+      ) : null}
       {target.kind === 'room_root' && sendAs === 'ai' && route.mode !== 'DIRECT' && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-m0-hint={route.mode}>
           <span
