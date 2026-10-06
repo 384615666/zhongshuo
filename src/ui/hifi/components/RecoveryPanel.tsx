@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { Tag } from './ui';
+import { Select, Tag } from './ui';
 import { command } from '../bridge';
 import { toast } from '../shell';
 import { openExternalDeepLink } from '../loader';
@@ -168,11 +168,16 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
                   {recon?.turnId === t.id ? (
                     <div className="page-stack" style={{ marginTop: 8 }}>
                       <div className="row tight wrap">
-                        <select className="select" value={recon.verdict} onChange={(e) => setRecon({ ...recon, verdict: e.target.value as typeof recon.verdict })}>
-                          <option value="executed">executed（已执行——服务端自动做退出取证）</option>
-                          <option value="notStarted">notStarted（未启动——人工分离，预算退款但租约保留）</option>
-                          <option value="keepUnknown">keepUnknown（维持不确定）</option>
-                        </select>
+                        <Select
+                          value={recon.verdict}
+                          ariaLabel="对账判定"
+                          onChange={(v) => setRecon({ ...recon, verdict: v as typeof recon.verdict })}
+                          options={[
+                            { value: 'executed', label: 'executed（已执行——服务端自动做退出取证）' },
+                            { value: 'notStarted', label: 'notStarted（未启动——人工分离，预算退款但租约保留）' },
+                            { value: 'keepUnknown', label: 'keepUnknown（维持不确定）' },
+                          ]}
+                        />
                         {recon.verdict === 'notStarted' ? (
                           <label className="row tight small"><input type="checkbox" checked={recon.manualRiskAck} onChange={(e) => setRecon({ ...recon, manualRiskAck: e.target.checked })} />风险确认：存在未收口进程可能时不凭人工解除写入保护</label>
                         ) : null}

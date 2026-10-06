@@ -499,6 +499,43 @@ export function MenuItem({
 export type DetailHost = 'page' | 'panel';
 
 /** 生成详情视图的外层 className */
+/**
+ * R67 P4：**共享 Select**——全软件筛选/下拉统一入口（用户图 1 诉求的收口：不是各页散写
+ * `<select className="select">`，而是同一组件保证 className/尺寸（sm 可选）/禁用/加载/
+ * aria 语义一致；键盘/IME/Esc 行为沿用原生 select 本身——与批准原型一致的原生形态）。
+ * `loading` 时显示占位项并禁点（查询失败/装载中如实，不冒充可选）。
+ */
+export function Select({
+  value, onChange, options, size, loading, loadingLabel = '装载中…', disabled, title, ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  size?: 'sm';
+  loading?: boolean;
+  loadingLabel?: string;
+  disabled?: boolean;
+  title?: string;
+  ariaLabel?: string;
+}) {
+  return (
+    <select
+      className={`select${size === 'sm' ? ' sm' : ''}`}
+      value={value}
+      disabled={disabled === true || loading === true}
+      title={title}
+      aria-label={ariaLabel}
+      data-zs-select={loading === true ? 'loading' : 'ready'}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {loading === true ? <option value={value}>{loadingLabel}</option> : null}
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  );
+}
+
 export function hostClass(host: DetailHost | undefined, base: 'main' | 'page') {
   if (base === 'main') return host === 'panel' ? 'main as-panel' : 'main';
   return host === 'panel' ? 'page as-panel-page' : 'page';

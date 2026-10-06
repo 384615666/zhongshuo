@@ -448,6 +448,8 @@ const PERSIST_VERSION = 1;
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 let persistKey: string | null = null;
 let persistNs: string | null = null;
+/** R67：当前逻辑根 id（v2 命名空间时随快照落盘——跨目录继承可离线自证，不依赖旧路径存在）。 */
+let persistRootId: string | null = null;
 /**
  * r63 P2（review-r62 §3 反例）：快照不可恢复且**隔离写失败**（典型=配额将满：新增大键失败、
  * 覆盖已有键可成）时，原实现仍无条件 persistSnapshot——唯一原件被空快照覆盖、未确认信封
@@ -504,7 +506,7 @@ function persistSnapshot(): void {
     const draftsOut: Record<string, HifiDraft> = {};
     const now = Date.now();
     for (const [k, v] of drafts) draftsOut[k] = v.updatedAt != null ? v : { ...v, updatedAt: now };
-    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger });
+    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, ...(persistRootId != null ? { dataRootId: persistRootId } : {}), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger });
     localStorage.setItem(persistKey, payload);
     if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote } }));
   } catch (e) {
@@ -520,17 +522,20 @@ function persistSnapshot(): void {
  * 有效部分；能恢复/不能恢复事实经 recoveryNote 分列；隔离件内未确认账本不解析不派发。
  * 普通草稿按批准约定 24h 过期（updatedAt 缺失回退快照 savedAt）；未确认发送账本不清理。
  */
-export function initDraftPersistence(ns: string): void {
+export function initDraftPersistence(ns: string, rootId?: string | null): boolean {
   persistNs = ns;
+  persistRootId = rootId ?? null;
   persistLocked = false; // 每次初始化重判（重启/显式重试=隔离重试路径）
   persistKey = `zs.hifi.persist.${ns}`;
   let raw: string | null;
+  let hadKey = false;
   try {
     raw = localStorage.getItem(persistKey);
+    hadKey = raw != null;
   } catch (e) {
     persistKey = null;
     setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效`, recoveryNote: null } }));
-    return;
+    return false;
   }
   let recoveryNote: string | null = null;
   if (raw != null) {
@@ -586,7 +591,7 @@ export function initDraftPersistence(ns: string): void {
         persistLocked = true;
         recoveryNote = `草稿快照无法恢复且隔离写入失败（存储空间/配额不足？）——**主键原件已保全锁定**（逐字保持，含未确认发送账本，不覆盖）；本轮草稿与发送账本仅内存态，发送将被要求先恢复存储；释放空间后重启应用或到「设置 → 草稿存储」点重试`;
         setState((s) => ({ ...s, draftPersist: { mode: 'locked', error: `草稿快照保全锁定：原件未隔离成功，主键保持原样（未覆盖）；新写入仅内存态`, recoveryNote: null } }));
-        return; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
+        return hadKey; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
       }
       if (wholeUnrecoverable) {
         recoveryNote = `草稿快照无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `逐字隔离于 ${qKey}（含未确认发送账本，不自动派发；如需人工核对请勿编辑该键）` : '无法隔离（localStorage 拒写）——主键保留原样，本轮草稿仅内存态'}，新快照从空态开始`;
@@ -603,6 +608,79 @@ export function initDraftPersistence(ns: string): void {
   persistSnapshot(); // 可写性确认+把「仅有效部分」落为新快照（原件已在隔离键保全）
   recoverLedgerToPending(); // r62 P1：在途发送恢复为未确认横幅（人工同号确认，不自动发送）
   setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
+  return hadKey;
+}
+
+/**
+ * R67 P1-B：**可信继承合并**——把已验证同属当前逻辑数据根的旧命名空间快照合并进当前状态
+ * 并立即落盘（新键此前不存在=首次复制后启动；此处合并后写入即建立新键，下次启动直接读新键，
+ * 旧键不再参与）。合并语义：
+ *  - pendingSends：按目标键**保留较新**（savedAt/at 比较；继承件无 TTL——未知信封原
+ *    commandId/参数/恢复状态逐字保留，不自动发送、不换号）；
+ *  - outboundLedger：按 commandId 并集去重（同号保留现存的；继承件 stage 重置 sending 走
+ *    既有 recoverLedgerToPending 收口）；
+ *  - drafts/uploadItems：按目标键保留 updatedAt 较新者；普通草稿沿用 24h TTL（过期不继承）。
+ * 损坏条目沿用 validateDraft/validateEnvelope 校验（不恢复、不派发），并在 recoveryNote 中
+ * 如实分列；旧键原件不动（本函数只读入，不写旧键）。
+ */
+export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir: string }>, note: string): void {
+  if (persistKey == null) return;
+  let mergedDrafts = 0; let mergedSends = 0; let mergedLedger = 0; let dropped = 0; let expired = 0;
+  for (const src of sources) {
+    if (src.raw.length === 0) continue;
+    let data: unknown = null;
+    try { data = JSON.parse(src.raw); } catch { dropped += 1; continue; }
+    if (!isPlainObject(data)) { dropped += 1; continue; }
+    const snapAt = typeof data.savedAt === 'number' ? data.savedAt : 0;
+    const now = Date.now();
+    // 草稿：按键保留较新（同键现存在且更新则不动）。
+    for (const [k, d] of Object.entries((data.drafts ?? {}) as Record<string, unknown>)) {
+      if (!validateDraft(d)) { dropped += 1; continue; }
+      const age = now - (d.updatedAt ?? snapAt);
+      if (age > DRAFT_TTL_MS) { expired += 1; continue; }
+      const cur = drafts.get(k);
+      if (cur != null && (cur.updatedAt ?? 0) >= (d.updatedAt ?? snapAt)) continue;
+      drafts.set(k, d.updatedAt != null ? d : { ...d, updatedAt: snapAt });
+      if (typeof d.rev === 'number' && d.rev > draftRev) draftRev = d.rev;
+      mergedDrafts += 1;
+    }
+    // 未确认信封：按键保留较新（at 比较）。
+    for (const [k, e] of Object.entries((data.pendingSends ?? {}) as Record<string, unknown>)) {
+      if (!validateEnvelope(e)) { dropped += 1; continue; }
+      const cur = state.pendingSends[k];
+      if (cur != null && (cur.at ?? 0) >= (e.at ?? 0)) continue;
+      state.pendingSends[k] = e;
+      mergedSends += 1;
+    }
+    // 出站账本：commandId 并集（同号保留现存；继承件并入后统一经 recover 收口）。
+    for (const [k, list] of Object.entries((data.outboundLedger ?? {}) as Record<string, unknown>)) {
+      if (!Array.isArray(list)) { dropped += 1; continue; }
+      const existing = state.outboundLedger[k] ?? [];
+      const ids = new Set(existing.map((x) => x.commandId));
+      for (const x of list) {
+        if (!validateEnvelope(x) || ids.has(x.commandId)) continue;
+        existing.push({ ...x, stage: 'sending' as const });
+        ids.add(x.commandId);
+        mergedLedger += 1;
+      }
+      state.outboundLedger[k] = existing;
+    }
+    // 上传项：仅当对应草稿被继承时并入（ready 项）。
+    for (const [k, list] of Object.entries((data.uploadItems ?? {}) as Record<string, unknown>)) {
+      if (!Array.isArray(list)) continue;
+      if (!drafts.has(k)) continue;
+      const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'uploading');
+      if (kept.length === 0) continue;
+      const cur = state.uploadItems[k] ?? [];
+      const ids = new Set(cur.map((u) => u.uploadId));
+      for (const u of kept) if (!ids.has(u.uploadId)) cur.push(u);
+      state.uploadItems[k] = cur;
+    }
+  }
+  persistSnapshot();
+  recoverLedgerToPending();
+  const detail = `跨目录继承完成：草稿 ${mergedDrafts} 条、未确认信封 ${mergedSends} 条、账本 ${mergedLedger} 条${expired > 0 ? `、过期草稿 ${expired} 条（按 24h 约定不继承）` : ''}${dropped > 0 ? `、损坏条目 ${dropped} 条（不恢复不派发）` : ''}。${note}`;
+  setState((s) => ({ ...s, draftPersist: { mode: 'on', error: s.draftPersist.error, recoveryNote: detail } }));
 }
 
 /**

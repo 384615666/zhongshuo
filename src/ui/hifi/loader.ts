@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
@@ -45,17 +45,81 @@ function stillCurrent(gen: number, projectId: string): boolean {
 /* ---------- 首启（有界等待，不靠 reload——review-r46 §5） ---------- */
 
 /**
- * 草稿持久化初始化（r61 P5）：app.identity（数据根+本地用户）就绪即载入上次快照——
- * 必须发生在任何带 Composer 的页面挂载之前（bootRemembered 在打开项目/标记 ready 前调用）。
- * identity 不可用（服务未起/浏览器宿主）→ 降级为内存态并如实标注，不阻塞启动。
+ * 草稿持久化初始化（r61 P5 → R67 P1-B 跨目录继承）：
+ *  - 命名空间 **v2=稳定逻辑根身份**：`v2.<dataRootId>|<localUserId>`（app.identity 懒建
+ *    {appData}/root-identity.json，随目录复制原样带走）——目录换路径/换盘后界面仍能找到
+ *    同一逻辑根的快照。dataRootId 不可用（内存库测试/旧 daemon）→ 回退 v1 绝对路径形态。
+ *  - **可信继承**：v2 键不存在（=复制后的首次启动）时，收集 localStorage 里的 v1 旧键
+ *    （仅同 localUserId），把旧键声明的**绝对目录**清单交 daemon `app.rootIdentityOf` 只读
+ *    核对 root-identity.json 的逻辑 id——**与当前根 id 相同**的旧键才被继承（无关数据根/
+ *    别的机器/任意目录不混入；不盲扫合并）。合并后立即写 v2 新键；旧键原样保留（原件保全，
+ *    不删除不改写）。继承的未知信封/出站账本原 commandId/参数/阶段完整保留（无 TTL、不自动
+ *    发送、不换号）；普通草稿沿用 24h TTL。
  */
 async function initDraftPersistenceFromIdentity(): Promise<void> {
   try {
-    const id = await command<{ localUserId: string; appDataDir: string }>('app.identity', {});
-    initDraftPersistence(`${id.appDataDir}|${id.localUserId}`);
+    const id = await command<{ localUserId: string; appDataDir: string; dataRootId: string | null }>('app.identity', {});
+    const ns = id.dataRootId != null ? `v2.${id.dataRootId}|${id.localUserId}` : `${id.appDataDir}|${id.localUserId}`;
+    const inherited = initDraftPersistence(ns, id.dataRootId);
+    if (!inherited && id.dataRootId != null) {
+      // v2 键不存在且逻辑身份可用 → 尝试一次性继承（异步失败不阻塞启动；结果经 recoveryNote
+      // 如实分列，绝不把「读不到旧键」写成「全部延续」）。
+      try {
+        const candidates = collectLegacyPersistKeys(id.localUserId, id.appDataDir);
+        if (candidates.length > 0) {
+          // 双通道验证：① 新格式快照**内嵌 dataRootId**——本地比对即同根自证（目录已改名/
+          //  移动后旧路径不存在也可继承）；② 旧格式（无内嵌 id）交 daemon 只读核对旧目录
+          //  root-identity.json（旧路径必须仍存在且 id 相同）。两通道都不符=不合并。
+          const validated: Array<{ raw: string; sourceDir: string }> = [];
+          const needDirCheck: Array<{ key: string; dir: string; raw: string }> = [];
+          for (const c of candidates) {
+            const raw = localStorage.getItem(c.key) ?? '';
+            let embedded: unknown = null;
+            try { embedded = (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { embedded = null; }
+            if (typeof embedded === 'string' && embedded.length >= 8) {
+              if (embedded === id.dataRootId) validated.push({ raw, sourceDir: c.dir });
+            } else {
+              needDirCheck.push({ key: c.key, dir: c.dir, raw });
+            }
+          }
+          if (needDirCheck.length > 0) {
+            try {
+              const r = await command<{ ids: Record<string, string | null> }>('app.rootIdentityOf', { appDataDirs: needDirCheck.map((c) => c.dir) });
+              for (const c of needDirCheck) if (r.ids[c.dir] === id.dataRootId) validated.push({ raw: c.raw, sourceDir: c.dir });
+            } catch { /* 目录校验不可用：仅内嵌自证部分继承，其余如实不合并 */ }
+          }
+          if (validated.length > 0) {
+            mergeInheritedSnapshots(validated, `已从旧数据目录继承草稿/未确认发送账本（${validated.map((c) => c.sourceDir).join('、')}；旧键原样保留）`);
+          } else {
+            recordWrite('draft.inherit', `发现 ${candidates.length} 个旧命名空间键但无一同属当前逻辑数据根——不合并（无关根/他机数据不混入）`);
+          }
+        }
+      } catch (e) {
+        recordWrite('draft.inherit', `旧命名空间继承校验失败（${e instanceof Error ? e.message : String(e)}）——保持新键现状，不猜合并`);
+      }
+    }
   } catch (e) {
     markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
   }
+}
+
+/** 收集候选 v1 旧键（同用户、非当前绝对目录、非隔离件）。返回 [{key, dir}]。 */
+function collectLegacyPersistKeys(localUserId: string, currentAppDataDir: string): Array<{ key: string; dir: string }> {
+  const out: Array<{ key: string; dir: string }> = [];
+  try {
+    for (const key of Object.keys(localStorage)) {
+      const m = /^zs\.hifi\.persist\.(.+\|.+)$/.exec(key);
+      if (m == null) continue;
+      const sep = m[1].lastIndexOf('|');
+      const dir = m[1].slice(0, sep);
+      const user = m[1].slice(sep + 1);
+      if (user !== localUserId) continue; // 别的用户不混入
+      if (dir === currentAppDataDir) continue; // 当前目录的 v1 键（正常路径已由 init 读过）
+      if (dir.startsWith('v2.')) continue; // v2 键非本函数职责
+      out.push({ key, dir });
+    }
+  } catch { /* localStorage 不可枚举：如实无候选 */ }
+  return out.slice(0, 16);
 }
 
 export async function bootRemembered(): Promise<void> {

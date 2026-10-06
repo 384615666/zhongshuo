@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { EmptyState, Tag } from './components/ui';
+import { EmptyState, Select, Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
 import { openExternalDeepLink, refreshSavedMessageRefs } from './loader';
@@ -45,7 +45,7 @@ export function LibraryPage() {
   const allRooms = useStore((s) => s.rooms);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const [tab, setTab] = useState<'search' | 'saved'>('search');
-  const [scope, setScope] = useState<'project' | 'all'>('project');
+  const [scope, setScope] = useState<'project' | 'visible' | 'all'>('project');
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'message' | 'thread' | 'task'>('all');
   /** 既有筛选（r56 H4 §5）：作者显示名/日期窗（本机时区）/会话（当前项目房间）——与
@@ -155,20 +155,24 @@ export function LibraryPage() {
         </div>
 
         <div className="page-filters">
-          <label className="field inline" title="范围：当前项目 / 全部可访问项目（同 mine.pending 口径——正式链无隐藏位）">
+          <label className="field inline" title="范围：当前项目 / 侧栏可见项目（navigation 偏好，无偏好=全部）/ 全部可访问项目">
             <span className="field-label">范围</span>
-            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as 'project' | 'all')}>
-              <option value="project">当前项目</option>
-              <option value="all">全部可访问项目</option>
-            </select>
+            <Select
+              value={scope}
+              ariaLabel="搜索范围"
+              onChange={(v) => setScope(v as 'project' | 'visible' | 'all')}
+              options={[
+                { value: 'project', label: '当前项目' },
+                { value: 'visible', label: '侧栏可见项目' },
+                { value: 'all', label: '全部可访问项目' },
+              ]}
+            />
           </label>
           {tab === 'search' ? (
             <>
               <label className="field inline">
                 <span className="field-label">类型</span>
-                <select className="select" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-                  {KIND_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-                </select>
+                <Select value={kind} ariaLabel="类型" onChange={(v) => setKind(v as typeof kind)} options={KIND_FILTERS.map((f) => ({ value: f.value, label: f.label }))} />
               </label>
               <div className="row tight" style={{ flex: '1 1 220px', minWidth: 180, border: '1px solid var(--border)', borderRadius: 7, padding: '0 8px', background: 'var(--bg-surface)' }}>
                 <Icon name="search" size={13} className="faint" style={{ flex: 'none' }} />
@@ -194,10 +198,7 @@ export function LibraryPage() {
               {scope === 'project' && rooms.length > 0 ? (
                 <label className="field inline" title="限定会话（当前项目的房间）——线程=锚消息、任务=根消息统一生效">
                   <span className="field-label">会话</span>
-                  <select className="select" value={convId} onChange={(e) => setConvId(e.target.value)}>
-                    <option value="">全部会话</option>
-                    {rooms.map((r) => <option key={r.conversationId ?? r.id} value={r.conversationId ?? ''}>#{r.name}</option>)}
-                  </select>
+                  <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
                 </label>
               ) : null}
               <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => void runSearch(1)}>{searching ? '检索中…' : '检索'}</button>
@@ -210,8 +211,11 @@ export function LibraryPage() {
 
       {tab === 'search' ? (
         <>
-          {searchErr != null ? <div className="panel warning">搜索失败：{searchErr}——结果保持上次事实（可重试）</div> : null}          {result == null && searchErr == null ? (
-            <div className="panel info">{q.trim().length === 0 ? '输入关键词后检索——消息正文/线程锚文本/任务标题（附件按所在消息的文件名检索）。' : '正在检索…'}</div>
+          {searchErr != null ? <div className="panel warning">搜索失败：{searchErr}——结果保持上次事实（可重试）</div> : null}          {result == null && searchErr == null && q.trim().length === 0 && !searching ? (
+            <EmptyState icon="search" title="输入关键词开始搜索" detail="结果会标出来源项目与房间，点击回原处并聚焦该项目；附件按所在消息的文件名检索（正文提取未实施——如实）。" />
+          ) : null}
+          {result == null && searchErr == null && (q.trim().length > 0 || searching) ? (
+            <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
           ) : null}
           {result != null ? (
             <>

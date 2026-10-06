@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { Avatar, Modal, Tag, memberColor } from './components/ui';
+import { Avatar, Modal, Select, Tag, memberColor } from './components/ui';
 import { useStore, toast } from './shell';
 import { refreshMembers } from './loader';
 import { navigate } from './lib/router';
@@ -117,6 +117,8 @@ export function MembersPage() {
   /** r63→R66：绑定编辑弹窗（member.setRuntime——正式命令；fake 仅环境显式允许时可选）。 */
   const guard = useStore((st) => st.dispatchGuard);
   const [bindFor, setBindFor] = useState<MemberRow | null>(null);
+  /** R67：添加成员（member.create 正式合同——已批准原型入口，无用户延期依据）。 */
+  const [addOpen, setAddOpen] = useState(false);
   const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
   const openBind = (m: MemberRow) => {
     const cur = runtimes[m.id];
@@ -148,8 +150,11 @@ export function MembersPage() {
     if (rt.binding.installationId == null || rt.binding.installationId === '') {
       const eff = rt.effective;
       if (eff != null && eff.source === 'global-default' && eff.kind != null) {
+        // R67：全局默认 **claude 未配置模型名**（ZS_CLAUDE_MODEL 缺省——CLI 拒绝默认配置，
+        // 用户 v3 实测 startupFailed 根因）时必须明示发送会失败及解法，不等到派发失败。
+        const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
         return {
-          text: `未绑定 → 实际用全局默认（${eff.kind}${eff.model != null ? ` · ${eff.model}` : ''}${eff.defaultKindEnv != null ? `，ZS_RUNTIME=${eff.defaultKindEnv}` : ''}）`,
+          text: `未绑定 → 实际用全局默认（${eff.kind}${eff.model != null && eff.model.length > 0 ? ` · ${eff.model}` : ''}${eff.defaultKindEnv != null ? `，ZS_RUNTIME=${eff.defaultKindEnv}` : ''}）${noModel ? '——全局默认未配置模型名（ZS_CLAUDE_MODEL），发送会启动失败：请为本成员「配置 runtime」并填模型名' : ''}`,
           problem: true,
           effective: eff.kind,
         };
@@ -168,22 +173,22 @@ export function MembersPage() {
         <div className="page-filters">
           <label className="field inline">
             <span className="field-label">项目</span>
-            <select
-              className="select"
+            <Select
               value={projectId}
+              ariaLabel="成员所属项目"
               title="成员是项目级实例：同一个渠道/模型在不同项目里是不同成员，身份与会话不合并"
-              onChange={(e) => { const next = e.target.value; if (next !== projectId) { void import('./loader').then((m) => m.switchFocusProject(next)); navigate(`/project/${next}/members`); } }}
-            >
-              {projects.filter((p) => p.removedAt == null).map((p) => (
-                <option key={p.id} value={p.id}>{p.displayName}</option>
-              ))}
-            </select>
+              onChange={(next) => { if (next !== projectId) { void import('./loader').then((m) => m.switchFocusProject(next)); navigate(`/project/${next}/members`); } }}
+              options={projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
+            />
           </label>
           <span className="filter-note">
             {members?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
           </span>
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void reload()} title="重新装载成员/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
+          <button className="btn primary sm" onClick={() => setAddOpen(true)} title="添加成员实例（member.create——自动加入未归档房间；不自动成为协调者；runtime 绑定随后配置）">
+            <Icon name="user-plus" size={12} /> 添加成员
+          </button>
         </div>
 
         {projectId == null || projectId === '' ? (
@@ -276,6 +281,18 @@ export function MembersPage() {
         </div>
       </div>
 
+      {addOpen ? (
+        <AddMemberModal
+          projectName={projects.find((x) => x.id === projectId)?.displayName ?? projectId}
+          onClose={() => setAddOpen(false)}
+          onCreated={async (memberId) => {
+            setAddOpen(false);
+            toast(`已添加成员（自动加入未归档房间；协调者与 runtime 不变——随后可「配置 runtime」）`, 'success');
+            await reload();
+          }}
+        />
+      ) : null}
+
       {/* 配置 runtime 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变） */}
       {bindFor != null && bindFor.principalType === 'agent' ? (
         <BindRuntimeModal
@@ -334,11 +351,16 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
       <div className="col" style={{ gap: 10 }}>
         <label className="field" title="runtime 渠道（派发侧按此选 adapter）">
           <span className="field-label">渠道</span>
-          <select className="select" value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value as typeof f.kind }))}>
-            <option value="claude">claude（CLI）</option>
-            <option value="codex">codex</option>
-            {guard?.fakeAllowed === true ? <option value="fake">fake（仅演练环境）</option> : null}
-          </select>
+          <Select
+            value={form.kind}
+            ariaLabel="runtime 渠道"
+            onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind }))}
+            options={[
+              { value: 'claude', label: 'claude（CLI）' },
+              { value: 'codex', label: 'codex' },
+              ...(guard?.fakeAllowed === true ? [{ value: 'fake', label: 'fake（仅演练环境）' }] : []),
+            ]}
+          />
         </label>
         {form.kind === 'claude' ? (
           <label className="field" title="claude 必须显式指定模型（服务端同判拒绝空模型）">
@@ -352,16 +374,83 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
         </label>
         <label className="field" title="权限模式（可选——默认按 runtime 自身配置）">
           <span className="field-label">权限模式</span>
-          <select className="select" value={form.permissionMode} onChange={(e) => setForm((f) => ({ ...f, permissionMode: e.target.value }))}>
-            <option value="">（默认）</option>
-            <option value="plan">plan</option>
-            <option value="manual">manual</option>
-            <option value="acceptEdits">acceptEdits</option>
-            <option value="auto">auto</option>
-            <option value="dontAsk">dontAsk</option>
-            <option value="bypassPermissions">bypassPermissions</option>
-          </select>
+          <Select
+            value={form.permissionMode}
+            ariaLabel="权限模式"
+            onChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}
+            options={[
+              { value: '', label: '（默认）' },
+              { value: 'plan', label: 'plan' },
+              { value: 'manual', label: 'manual' },
+              { value: 'acceptEdits', label: 'acceptEdits' },
+              { value: 'auto', label: 'auto' },
+              { value: 'dontAsk', label: 'dontAsk' },
+              { value: 'bypassPermissions', label: 'bypassPermissions' },
+            ]}
+          />
         </label>
+      </div>
+    </Modal>
+  );
+}
+
+/** R67 P4：添加成员（原型 AddMemberDialog 的正式接线版——member.create；同名可重复=项目级
+ * 实例；说明=成员卡展示；「添加后会怎样」如实三条：加入未归档房间/不自动协调者/不进在途研讨）。 */
+function AddMemberModal({ projectName, onClose, onCreated }: { projectName: string; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
+  const [name, setName] = useState('');
+  const [desc, setDesc] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const projectId = useStore((s) => s.activeProjectId);
+  const rooms = useStore((s) => s.rooms);
+  const joinable = rooms.filter((r) => r.projectId === projectId && r.archivedAt == null);
+  const submit = async () => {
+    if (name.trim().length === 0) { setErr('请填写成员名称'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await command<{ memberId: string; roomsJoined: number }>('member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}) });
+      recordWrite('member.create', `添加成员「${name.trim()}」（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
+      await onCreated(r.memberId);
+    } catch (e) {
+      setErr(`添加失败：${(e as Error).message}`);
+    } finally { setBusy(false); }
+  };
+  return (
+    <Modal
+      size="md"
+      title="添加成员"
+      subtitle={`添加到 ${projectName}（成员是项目级实例，同名成员不合并——runtime 绑定随后在卡片「配置 runtime」设置）`}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="small faint">名称可重复；创建后自动加入 {joinable.length} 个未归档房间{joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}</span>
+          <div className="spacer" />
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn primary sm" disabled={busy} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
+        </>
+      }
+    >
+      <div className="col" style={{ gap: 12 }}>
+        <div className="field">
+          <label className="field-label">成员名称</label>
+          <input className="input" value={name} autoFocus placeholder="例如 审查者、实现者" onChange={(e) => { setName(e.target.value); if (err != null) setErr(null); }} />
+          <div className="field-hint">稳定 ID 与显示名分开——改名不断历史引用；同名时界面按实例区分。</div>
+        </div>
+        <div className="field">
+          <label className="field-label">说明（它会做什么）</label>
+          <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
+          <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
+        </div>
+        <div className="panel">
+          <div className="panel-title"><Icon name="info" size={13} /> 添加后会怎样</div>
+          <div className="col small" style={{ gap: 5, marginTop: 4, lineHeight: 1.6 }}>
+            <div>· 自动加入本项目 <strong>{joinable.length}</strong> 个未归档房间；归档房间保持只读不复活。</div>
+            <div>· <strong>不会</strong>自动成为协调者（房间级设置，需在房间设置显式指定）。</div>
+            <div>· <strong>不会</strong>加入正在运行的研讨：新成员只影响之后的派发。</div>
+            <div className="faint">· runtime 未配置时派发回落全局默认渠道；全局默认缺模型名会启动失败——建好后请「配置 runtime」。</div>
+          </div>
+        </div>
+        {err != null ? <div className="panel warning">{err}</div> : null}
       </div>
     </Modal>
   );

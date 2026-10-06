@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { EmptyState, Tag, TaskStatusTag } from '../components/ui';
+import { Select, EmptyState, Tag, TaskStatusTag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { switchFocusProject } from '../loader';
@@ -81,47 +81,44 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
         <div className="page-filters">
           <label className="field inline">
             <span className="field-label">范围</span>
-            <select
-              className="select"
+            <Select
               value={scope}
-              onChange={(e) => {
-                const next = e.target.value as BoardScope;
+              ariaLabel="看板范围"
+              onChange={(v) => {
+                const next = v as BoardScope;
                 if (next === 'project') void switchFocusProject(scopeProjectId);
                 setParam({ scope: next, roomId: 'all' });
                 setGen((v) => v + 1);
               }}
-            >
-              <option value="project">当前项目</option>
-              <option value="all">侧栏可见项目</option>
-            </select>
+              options={[
+                { value: 'project', label: '当前项目' },
+                { value: 'all', label: '侧栏可见项目' },
+              ]}
+            />
           </label>
           {scope === 'project' ? (
             <label className="field inline">
               <span className="field-label">项目</span>
-              <select
-                className="select"
+              <Select
                 value={scopeProjectId}
-                onChange={(e) => {
-                  const next = e.target.value;
+                ariaLabel="看板项目"
+                onChange={(next) => {
                   void switchFocusProject(next);
                   setParam({ projectId: next, roomId: 'all' });
                   setGen((v) => v + 1);
                 }}
-              >
-                {s.projects.filter((p) => p.removedAt == null).map((p) => (
-                  <option key={p.id} value={p.id}>{p.displayName}</option>
-                ))}
-              </select>
+                options={s.projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
+              />
             </label>
           ) : null}
           <label className="field inline">
             <span className="field-label">房间</span>
-            <select className="select" value={roomFilter} onChange={(e) => setRoomFilter(e.target.value)}>
-              <option value="all">当前范围全部房间</option>
-              {scopeRooms.map((r) => (
-                <option key={r.roomId} value={r.roomId}>{r.projectName} · {r.name}</option>
-              ))}
-            </select>
+            <Select
+              value={roomFilter}
+              ariaLabel="房间筛选"
+              onChange={setRoomFilter}
+              options={[{ value: 'all', label: '当前范围全部房间' }, ...scopeRooms.map((r) => ({ value: r.roomId, label: `${r.projectName} · ${r.name}` }))]}
+            />
           </label>
           <span className="filter-note">共 {totalCount} 项 · board.view 只读聚合（操作走线程内正式命令）</span>
         </div>

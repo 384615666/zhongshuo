@@ -11,7 +11,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { EmptyState, Tag } from '../components/ui';
+import { EmptyState, Select, Tag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { projectLifecycleReal, roomArchiveReal } from '../loader';
 import { navigate } from '../lib/router';
@@ -102,17 +102,13 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
             onChange={(e) => setKeyword(e.target.value)}
           />
         </div>
-        <select
-          className="select"
+        <Select
           value={projectFilter ?? 'all'}
+          ariaLabel="归档项目筛选"
           title="按项目筛选归档内容"
-          onChange={(e) => setProject(e.target.value)}
-        >
-          <option value="all">全部项目</option>
-          {[...archivedProjects, ...activeWithArchivedRooms].map((p) => (
-            <option key={p.id} value={p.id}>{p.displayName}</option>
-          ))}
-        </select>
+          onChange={setProject}
+          options={[{ value: 'all', label: '全部项目' }, ...[...archivedProjects, ...activeWithArchivedRooms].map((p) => ({ value: p.id, label: p.displayName }))]}
+        />
         {projectFilter ? (
           <button className="btn sm" onClick={() => setProject('all')} title="清除项目筛选，查看全部归档内容">
             <Icon name="x" size={12} /> {embedded ? '清除项目筛选' : '返回全部归档'}

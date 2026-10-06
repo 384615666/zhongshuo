@@ -335,11 +335,14 @@ export function PreviewPane({
         contentBase64 = r.bytesBase64;
         fact = `原件 ${r.bytes}B · sha256 ${r.hash.slice(0, 12)}…（服务端核验一致）`;
       } else if (isWorktree) {
-        const wt = resource.formalWorktree!;
-        const r = await command<{ content: string; sha256: string; bytes: number }>('project.file.read', { projectId: wt.projectId, path: wt.path });
-        const enc = new TextEncoder().encode(r.content);
-        contentBase64 = bytesToBase64(enc);
-        fact = `工作区原文件 ${r.bytes}B · sha256 ${r.sha256.slice(0, 12)}…（读取快照同源）`;
+        // R67 P1-A：保存=**读取时快照字节**（readFull includeBytes 捕获的原字节——BOM/行尾
+        // 保持，不重编码文本、不点击时重读）。磁盘已更新（pendingRevision）时拦截：先重新
+        // 加载再保存——旧标签不静默另存新字节。
+        const snap = worktreeSnapshots.get(`${resource.id}:${active.revision}`);
+        if (snap == null) { toast('这份工作区文件的读取快照不可用（重新打开文件后再保存）', 'warn'); return; }
+        if (resource.mutable && active.pendingRevision) { toast('磁盘上的文件已更新——请先点上方「重新加载」再保存（不静默另存新字节）', 'warn'); return; }
+        contentBase64 = snap.bytesBase64;
+        fact = `工作区原文件 ${snap.bytes}B · sha256 ${snap.sha256.slice(0, 12)}…（读取时快照）`;
       } else {
         toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
         return;
@@ -656,6 +659,13 @@ const scrollTimer = { current: 0 as number | undefined };
    正文渲染 A：会话附件/成果——正式渲染器（attachment.preview* 异步装载）
    ============================================================ */
 
+/**
+ * R67 P1-A：工作区文件**读取时快照**（原字节+sha256）——「下载原文件」用这里的字节，
+ * 不在点击时重读磁盘（源文件后来变化不静默另存新字节；界面另有「磁盘已更新·重新加载」
+ * 提示链）。键=resourceId:revision（重新加载 bump 后新快照替换）。
+ */
+const worktreeSnapshots = new Map<string, { bytesBase64: string; sha256: string; bytes: number; mtimeMs: number }>();
+
 /** 各格式子组件装载后上报的摘录文本（src=resourceId——仅当前资源生效）。 */
 const excerptReports = new Map<string, string>();
 function reportExcerpt(resourceId: string, text: string): void { excerptReports.set(resourceId, text); }
@@ -835,7 +845,7 @@ function HtmlPageView({ html, filename }: { html: string; filename: string }) {
    正文渲染 B：工作区文件——project.file.read 实际读取后按内容 kind 渲染
    ============================================================ */
 
-interface FileReadData { projectId: string; path: string; content: string; bytes: number; sha256: string; excerpted: boolean }
+interface FileReadFullData { projectId: string; path: string; baseName: string; bytes: number; sha256: string; content: string; truncated: false; mtimeMs: number; bytesBase64?: string; note: string }
 
 function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resource: PreviewResource; viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void }) {
   const wt = resource.formalWorktree!;
@@ -846,16 +856,19 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
     let done = false;
     setErr(null);
     const marker = `${wt.projectId}:${wt.path}:${rev?.revision ?? 0}`;
-    void command<FileReadData>('project.file.read', { projectId: wt.projectId, path: wt.path })
+    void command<FileReadFullData>('project.file.readFull', { projectId: wt.projectId, path: wt.path, includeBytes: true })
       .then((r) => {
         if (done) return;
+        if (r.bytesBase64 != null) {
+          worktreeSnapshots.set(`${resource.id}:${rev?.revision ?? 0}`, { bytesBase64: r.bytesBase64, sha256: r.sha256, bytes: r.bytes, mtimeMs: r.mtimeMs });
+        }
         setLoadedFor(marker);
         applyWorktreeRead(resource.id, { text: r.content, hash: r.sha256, sizeBytes: r.bytes });
         reportExcerpt(resource.id, r.content);
       })
       .catch((e: unknown) => { if (!done) setErr(String((e as Error).message)); });
     return () => { done = true; };
-    // 读取按 (project, path, revision)——重新加载 bump revision 后重读。
+    // 读取按 (project, path, revision)——重新加载 bump revision 后重读（快照键同步替换）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wt.projectId, wt.path, rev?.revision]);
   if (err != null) {
@@ -865,7 +878,7 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
         <div className="strong" style={{ marginTop: 8 }}>这份文件当前不能预览</div>
         <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>{err}</div>
         <div className="small faint" style={{ marginTop: 8 }}>
-          只读预览白名单=文本类（≤256KB、合法 UTF-8）；二进制/未知格式请用系统工具打开。
+          完整阅读/原件保存白名单=文本类（≤256KB、合法 UTF-8）；二进制/超限请用系统工具打开。
           打开文件不会把内容发送给 AI。
         </div>
         <div className="panel-actions">
@@ -874,12 +887,23 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
       </div>
     );
   }
-  if (loadedFor === '') return <div className="panel info">正在读取文件（只读快照）…</div>;
+  if (loadedFor === '') return <div className="panel info">正在读取文件全文（只读快照）…</div>;
   const c = rev?.content;
   if (c == null || c.kind === 'unsupported') return <div className="panel info">正在装载内容…</div>;
-  return (
-    <ResourceBodyContent content={c} viewMode={viewMode} wrapSource={wrapSource} zoom={0} onOpenComment={onOpenComment} />
-  );
+  // R67 P2-B：工作区与上传/正式成果**共用同一风味分发**——MD 排版阅读、HTML 隔离页面预览，
+  // 其余（csv/code/text）沿用源码/表格视图；阅读/源码切换经 viewMode 进入实际分支。
+  const flavor = flavorByExt(resource.relativePath ?? resource.title, '');
+  if (flavor === 'markdown' && viewMode === 'preview') {
+    return (
+      <div className="preview-read-doc">
+        <MarkdownView text={c.kind === 'markdown' || c.kind === 'text' || c.kind === 'code' ? c.text : ''} />
+      </div>
+    );
+  }
+  if (flavor === 'html' && viewMode === 'preview') {
+    return <HtmlPageView html={c.kind === 'text' || c.kind === 'code' || c.kind === 'markdown' ? c.text : ''} filename={resource.title} />;
+  }
+  return <ResourceBodyContent content={c} viewMode={viewMode} wrapSource={wrapSource} zoom={0} onOpenComment={onOpenComment} />;
 }
 
 /** 工作区「重新加载」：bump 读取代次（触发 WorktreeBody 重读）。 */
@@ -1222,7 +1246,7 @@ function PdfPreview({ target, alive, onErr, onIdentity, onContent }: { target: T
       <div className="row tight">
         <button className="btn ghost sm" disabled={pg.page <= 1} onClick={() => goPage(pg.page - 1)}>← 前页</button>
         <button className="btn ghost sm" disabled={pg.page >= pg.totalPages} onClick={() => goPage(pg.page + 1)}>后页 →</button>
-        <select className="pdf-zoom" value={zoom} onChange={(e) => setZoom(e.target.value)}>
+        <select className="select sm" aria-label="PDF 缩放" value={zoom} onChange={(e) => setZoom(e.target.value)}>
           <option value="fit">适应宽</option><option value="1">100%</option><option value="1.5">150%</option>
         </select>
         <span className="faint small">第 {pg.page}/{pg.totalPages} 页</span>

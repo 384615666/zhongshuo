@@ -186,8 +186,19 @@ export default function App() {
   const [recoveryOrigin, setRecoveryOrigin] = useState<'startup' | 'runtime' | null>(null);
   const [pendingWaitCount, setPendingWaitCount] = useState(0);
   const recoveryAutoShownRef = useRef(false);
-  const firstCheckRef = useRef(true);
-  const hadRealAttentionRef = useRef(false);
+  /**
+   * R67 P2-A（review-r66 §2P2-A 反例）：**启动来源按首次成功快照的异常实体签名固定**——
+   * `startupSignatureRef` 在第一次成功 recovery.status 时记录当时全部异常实体 id（UNKNOWN
+   * turns/中断 runs/待解除保护/未收口撤销/门禁）。此后任何轮询：
+   *  - 实体全部 ⊆ 启动签名 → origin=startup（同一运行中**永不**改判、永不再自动弹窗——
+   *    反例根因是旧判据 `isFirstCheck || hadRealAttention` 在第二次轮询把 runtime 倒退成
+   *    startup 并弹遮挡窗）；
+   *  - 出现签名外**新实体** → origin=runtime：就地 toast（每个新实体集只提醒一次）+侧栏
+   *    标记，不自动弹窗；
+   *  - 全部消失 → origin=null；之后再出现（即便实体同旧）=运行中新失败（toast，不弹窗）。
+   */
+  const startupSignatureRef = useRef<Set<string> | null>(null);
+  const lastNotifiedSignatureRef = useRef<string>('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   /* R65：侧栏项目 ⋯ 菜单与其弹窗（编辑信息/归档/移除）+ 项目行 + 建房。 */
   const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null);
@@ -210,33 +221,47 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 恢复注意项（recovery.status 只读轮询；R66 P5 三态分类）
+  // 恢复注意项（recovery.status 只读轮询；R66 P5 三态 + R67 P2-A 来源稳定）
   useEffect(() => {
     if (s.boot !== 'ready') return;
     let cancelled = false;
     const check = () => {
       if (cancelled || document.body.classList.contains('legacy-on')) return;
-      void command<{ gateHeld: boolean; unknownTurns: unknown[]; pendingRelease: unknown[]; activeUndos: unknown[]; interruptedRuns: unknown[]; pendingDispatchCount: number }>('recovery.status', {})
+      void command<{ gateHeld: boolean; unknownTurns: Array<{ id: string }>; pendingRelease: Array<{ turnId: string }>; activeUndos: Array<{ id: string }>; interruptedRuns: Array<{ id: string }>; pendingDispatchCount: number }>('recovery.status', {})
         .then((r) => {
           if (cancelled) return;
-          const realAttention = r.gateHeld || r.unknownTurns.length > 0 || r.pendingRelease.length > 0 || r.activeUndos.length > 0 || r.interruptedRuns.length > 0;
-          const isFirstCheck = firstCheckRef.current;
-          firstCheckRef.current = false;
+          const entities: string[] = [];
+          if (r.gateHeld) entities.push('gate:held');
+          for (const x of r.unknownTurns) entities.push(`turn:${x.id}`);
+          for (const x of r.pendingRelease) entities.push(`release:${x.turnId}`);
+          for (const x of r.activeUndos) entities.push(`undo:${x.id}`);
+          for (const x of r.interruptedRuns) entities.push(`run:${x.id}`);
+          const signature = [...entities].sort().join('|');
+          const realAttention = entities.length > 0;
+          // 首次成功快照：固定启动签名（此后同一运行内不再重判 startup）。
+          const isFirstSnapshot = startupSignatureRef.current == null;
+          if (isFirstSnapshot) startupSignatureRef.current = new Set(entities);
           setRecoveryAttention(realAttention);
           setPendingWaitCount(!realAttention && r.pendingDispatchCount > 0 ? r.pendingDispatchCount : 0);
           if (realAttention) {
-            if (isFirstCheck || hadRealAttentionRef.current) {
-              // 启动时已存在（或已处理过的持续事项）：沿用一次自动打开合同
+            const startupSet = startupSignatureRef.current ?? new Set<string>();
+            const allFromStartup = entities.every((e) => startupSet.has(e));
+            if (isFirstSnapshot) {
+              // 启动时已有：沿用一次自动打开合同（仅此一次）。
               setRecoveryOrigin('startup');
               if (!recoveryAutoShownRef.current) { recoveryAutoShownRef.current = true; setRecoveryOpen(true); }
+            } else if (allFromStartup) {
+              // 持续的启动既有事项：保持 startup 分类，**不再自动弹窗**（面板开着也不动）。
+              setRecoveryOrigin('startup');
             } else {
-              // 本次运行新出现：就地提醒，不弹遮挡弹窗（原会话/任务面板是主反馈位）
+              // 运行中新失败（签名外新实体）：就地 toast（同一实体集只提醒一次）+侧栏标记。
               setRecoveryOrigin('runtime');
-              toast('刚刚出现需要处理的新事项（未知结果/中断/保护）——侧栏「恢复检查」已标记，点击查看', 'warn');
+              if (lastNotifiedSignatureRef.current !== signature) {
+                lastNotifiedSignatureRef.current = signature;
+                toast('刚刚出现需要处理的新事项（未知结果/中断/保护）——侧栏「恢复检查」已标记，点击查看', 'warn');
+              }
             }
-            hadRealAttentionRef.current = true;
           } else {
-            hadRealAttentionRef.current = false;
             setRecoveryOrigin(null);
           }
         })
