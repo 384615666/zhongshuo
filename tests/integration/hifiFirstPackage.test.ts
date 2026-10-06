@@ -67,6 +67,7 @@ export { loader, store };
 /** loader 的正式面（测试所用子集——类型化，不用 any）。 */
 interface LoaderApi {
   openProjectByPath(path: string): Promise<void>;
+  loadProjectRegistry(): Promise<void>;
   refreshRooms(): Promise<void>;
   refreshDms(): Promise<void>;
   loadDmHistory(conversationId: string, opts?: { markRead?: boolean }): Promise<void>;
