@@ -132,6 +132,41 @@ const sendingKeys = new Set<string>();
 /** 附件上传项的稳定空集（selector 引用稳定——useSyncExternalStore 契约）。 */
 const EMPTY_UPLOADS: UploadItem[] = [];
 
+/**
+ * 未知信封的**完整意图身份**比较（R66 P3）：文件-only 发送的 body 都为空——r62 的
+ * 「正文逐字相等」判据会把两条不同文件的发送误判为同一草稿。身份=正文+意图+@提及+
+ * 附件引用集合（排序后比较——同一身份换新号必重复；任一不同=新草稿，允许新号发送）。
+ */
+function pendingIdentityMatches(
+  env: PendingSendEnvelope,
+  text: string,
+  mentionIds: string[],
+  sendAs: 'ai' | 'record',
+  readyAttachmentIds: string[],
+): boolean {
+  const p = env.params as {
+    body?: string; intent?: string; mentions?: Array<{ kind: string; memberId?: string }>;
+    attachmentRefs?: string[];
+  };
+  if ((p.body ?? '') !== text) return false;
+  if ((p.intent === 'record_only' ? 'record' : 'ai') !== sendAs) return false;
+  const envRefs = [...(p.attachmentRefs ?? [])].sort().join('|');
+  const curRefs = [...readyAttachmentIds].sort().join('|');
+  if (envRefs !== curRefs) return false;
+  const envMentions = (p.mentions ?? []).map((m) => (m.kind === 'all' ? 'all' : m.memberId ?? '')).sort().join('|');
+  const curMentions = [...mentionIds].sort().join('|');
+  return envMentions === curMentions;
+}
+
+/** 未知信封摘要（文件-only：正文空→按附件数呈现，不显示空洞的「…」）。 */
+function pendingEnvSummary(env: PendingSendEnvelope): string {
+  const p = env.params as { body?: string; attachmentRefs?: string[] };
+  const body = p.body ?? '';
+  if (body.trim().length > 0) return body.slice(0, 60);
+  const n = p.attachmentRefs?.length ?? 0;
+  return n > 0 ? `仅文件发送（${n} 个附件）` : '（空内容）';
+}
+
 /** 正式侧发送回执（第四十七轮）：onSend 可返回 Promise——成功才清空，失败/未知保留草稿。 */
 export type FormalSendOutcome =
   | { status: 'ok' }
@@ -309,6 +344,8 @@ export function Composer({
   // 不串到其它草稿、不复活已移除项；A→B→A 回来芯片由 store 恢复。本地不再持有附件状态。
   const uploadItemsRaw = useStore((st) => st.uploadItems[draftKey] ?? EMPTY_UPLOADS);
   const attachments = useMemo(() => uploadItemsRaw.filter((x) => x.removed !== true), [uploadItemsRaw]);
+  /** 就绪附件数（R66 P3 文件-only 发送判据：只有 ready 状态才是可发送附件——上传中/失败不算）。 */
+  const readyAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'ready').length, [attachments]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   /** 图片能力门待选（第五十二轮：显式二选一，不再硬拦——发送暂停在选择上）。 */
   const [imageGate, setImageGate] = useState<{ names: string[] } | null>(null);
@@ -538,11 +575,15 @@ export function Composer({
 
   function submit(imageAck?: 'omit-images') {
     const text = body.trim();
-    if (!text) return;
+    // R66 P3（用户已批准）：没有正文但有**就绪附件**也可发送（默认发 AI；仅记录只保存）——
+    // 草稿 refs 只含已就绪 attachmentId；真正空白（无正文且无可发送附件）仍拒绝。
+    const refsAtGuard = getDraftFull(draftKey).attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
+    if (text.length === 0 && refsAtGuard.length === 0) return;
     if (sendDisabledReason) return;
-    // r62 P1 防重复守卫：存在未确认信封且正文与之逐字相同（未编辑）时，换新号发送必然是
-    // 重复风险——只允许同号「重发原内容」（幂等）或显式「放弃」后再发新内容。
-    if (pendingEnv != null && text === pendingEnv.params.body) {
+    // r62 P1 防重复守卫（R66 P3 修订）：文件-only 的 body 都为空——不能只比 body，须比**完整
+    // 意图身份**（正文+意图+@提及+附件引用集合）。同一身份=换新号必重复，只允许同号重发或
+    // 显式放弃；等待期改了正文/附件/提及=不同身份，允许新号发送（未知信封仍保留）。
+    if (pendingEnv != null && pendingIdentityMatches(pendingEnv, text, mentions, sendAs, refsAtGuard.map((a) => a.attachmentId!))) {
       setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
       return;
     }
@@ -551,10 +592,16 @@ export function Composer({
     if (sendingKeys.has(draftKey)) return;
     // 图片能力门（第五十二轮，§6.3）：图片附件+派发意图→**显式二选一**（仅发送文字=图片不送
     // 模型并如实注明；或改为仅记录），选择前不发送；选择结果一次性冻结进信封（imageAck）。
+    // R66 P3：选了「仅发送文字」但正文为空且**其余附件也全是图片**→会形成空模型输入——
+    // 服务端同判拒绝；此处提前给出可行选择（添加文字/改仅记录），不发出必失败的请求。
     const draftRefs = getDraftFull(draftKey).attachments;
     const imageNames = draftRefs.filter((a) => a.kind === 'image_file').map((a) => a.name);
     if (imageNames.length > 0 && sendAs === 'ai' && imageAck !== 'omit-images') {
       setImageGate({ names: imageNames });
+      return;
+    }
+    if (imageAck === 'omit-images' && text.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
+      setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）——请先添加文字、改为「仅记录」，或换非图片附件');
       return;
     }
     sendingKeys.add(draftKey);
@@ -940,12 +987,13 @@ export function Composer({
         </div>
       ) : null}
 
-            {/* 结果未知的在途信封（review-r47 §2）：与当前草稿分列——重试严格重发原信封。 */}
+      {/* 结果未知的在途信封（review-r47 §2）：与当前草稿分列——重试严格重发原信封。
+          R66 P3：文件-only 信封 body 为空——摘要显示附件数而不是空正文。 */}
       {pendingEnv != null ? (
         <div className="composer-mentions">
-          <span className="chip record-chip" title={`结果未知的发送：${pendingEnv.params.body.slice(0, 40)}…（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
+          <span className="chip record-chip" title={`结果未知的发送：${pendingEnvSummary(pendingEnv)}（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
             <Icon name="alert-triangle" size={11} />
-            上次发送结果未知：{pendingEnv.params.body.slice(0, 24)}…
+            上次发送结果未知：{pendingEnvSummary(pendingEnv).slice(0, 24)}…
             <button title="严格重发原信封（同命令号——服务幂等，不会重复）" onClick={() => retryUnknown(pendingEnv)}>重发原内容</button>
             <button title="放弃该信封（若服务实际已保存，消息会在下次刷新出现）" onClick={() => clearUnknownEnvelope(draftKey)}>放弃</button>
           </span>
@@ -1262,11 +1310,11 @@ export function Composer({
           <button
             className="btn primary sm composer-send"
             onClick={() => submit()}
-            disabled={!body.trim() || sending || Boolean(sendDisabledReason)}
+            disabled={(body.trim().length === 0 && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)}
             title={
-              !body.trim() || sending || Boolean(sendDisabledReason)
-                ? sendDisabledReason ?? (sending ? '正在发送…' : '输入内容后可发送')
-                : 'Enter 发送，Shift+Enter 换行'
+              (body.trim().length === 0 && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)
+                ? sendDisabledReason ?? (sending ? '正在发送…' : '输入内容、或添加就绪附件后可发送（只有文件也可以发送）')
+                : 'Enter 发送，Shift+Enter 换行（没有正文但有就绪附件时也可发送）'
             }
           >
             <Icon name="send" size={12} />

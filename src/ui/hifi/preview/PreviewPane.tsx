@@ -206,10 +206,14 @@ export function PreviewPane({
   }, [active?.key]);
 
   const activeKind = revision?.content.kind;
+  const activeFlavor = resource != null && active != null
+    ? flavorOf(resource.title, resource.formalAttachment?.kind ?? '', activeKind)
+    : null;
   useEffect(() => {
-    setViewMode(activeKind === 'code' || activeKind === 'text' ? 'source' : 'preview');
+    // 默认视图（R66 P2）：MD/HTML/CSV 默认阅读（排版/页面/表格），代码与纯文本默认源码。
+    setViewMode(activeFlavor === 'markdown' || activeFlavor === 'html' || activeFlavor === 'csv' ? 'preview' : 'source');
     setSelection('');
-  }, [active?.key, activeKind]);
+  }, [active?.key, activeFlavor]);
 
   useEffect(() => {
     const strip = tabStripRef.current;
@@ -282,11 +286,12 @@ export function PreviewPane({
   const url = resource.relativePath ?? resource.title;
   const isFormalAttachment = resource.formalAttachment != null;
   const isWorktree = resource.formalWorktree != null;
-  const canChooseReading = isWorktree || isFormalAttachment
-    ? ['text_file', 'code_file', 'sheet_file', 'csv'].includes(resource.formalAttachment?.kind ?? '') || ['markdown', 'csv', 'code', 'text'].includes(revision.content.kind)
-    : ['markdown', 'csv', 'code', 'text'].includes(revision.content.kind);
+  /** 文件风味（R66 P2）：同一文件无论来自上传/工作区/正式交付都按此选渲染器——
+   *  md=排版阅读、html=隔离页面预览、csv=表格、code=源码（带行号）、text=纯文本。 */
+  const flavor = flavorOf(resource.title, isFormalAttachment ? resource.formalAttachment?.kind ?? '' : '', revision.content.kind);
+  const canChooseReading = flavor === 'markdown' || flavor === 'html' || flavor === 'csv' || flavor === 'code' || flavor === 'text';
   const canWrap = canChooseReading;
-  const supportsRendered = revision.content.kind === 'markdown' || revision.content.kind === 'csv';
+  const supportsRendered = flavor === 'markdown' || flavor === 'csv' || flavor === 'html';
 
   /** 引用到目标（r61 合同：引用卡直写；focus-composer）。 */
   const doQuote = (excerpt?: string) => {
@@ -303,6 +308,58 @@ export function PreviewPane({
     if (r.ok) {
       window.dispatchEvent(new CustomEvent('zs:focus-composer', { detail: quoteTarget.draftKey }));
       toast(r.queued === false ? '相同摘录已在待插入队列（不重复）' : '已摘录内容前 160 字到输入框正文', 'success');
+    }
+  };
+
+  /**
+   * 下载原文件/另存为（R66 P5）：保存**当前预览这份文件的原件字节**——
+   *  · 正式附件：attachment.originalFile（audience+实根+sha256 核验的原件字节）；
+   *  · 工作区文件：project.file.read（文本白名单——读到的就是原文件内容）；
+   * 落盘经主进程「另存为」对话框（路径由用户选择——renderer 不能指定路径）；保存后按
+   * 服务端返回的 bytes/hash 对账，不用提取窗或会话导出冒充当前文件。浏览器宿主回退
+   * <a download>（data: URL——探针环境可用；桌面端优先窄桥）。
+   */
+  const [dlBusy, setDlBusy] = useState(false);
+  const doDownloadOriginal = async () => {
+    if (dlBusy) return;
+    setDlBusy(true);
+    try {
+      let name = resource.title;
+      let contentBase64 = '';
+      let fact = '';
+      if (isFormalAttachment) {
+        const fa = resource.formalAttachment!;
+        const r = await command<{ filename: string | null; hash: string; bytes: number; bytesBase64: string }>('attachment.originalFile', { attachmentId: fa.attachmentId, conversationId: fa.conversationId ?? '' });
+        name = r.filename ?? resource.title;
+        contentBase64 = r.bytesBase64;
+        fact = `原件 ${r.bytes}B · sha256 ${r.hash.slice(0, 12)}…（服务端核验一致）`;
+      } else if (isWorktree) {
+        const wt = resource.formalWorktree!;
+        const r = await command<{ content: string; sha256: string; bytes: number }>('project.file.read', { projectId: wt.projectId, path: wt.path });
+        const enc = new TextEncoder().encode(r.content);
+        contentBase64 = bytesToBase64(enc);
+        fact = `工作区原文件 ${r.bytes}B · sha256 ${r.sha256.slice(0, 12)}…（读取快照同源）`;
+      } else {
+        toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
+        return;
+      }
+      const dl = (window as unknown as { zsDownload?: { saveAs(p: { suggestedName: string; contentBase64: string }): Promise<{ ok: boolean; cancelled?: boolean; path?: string; bytes?: number }> } }).zsDownload;
+      if (dl != null) {
+        const r = await dl.saveAs({ suggestedName: name, contentBase64 });
+        if (r.cancelled === true) { toast('已取消另存为', 'info'); return; }
+        if (!r.ok || r.path == null) { toast('另存为失败（主进程拒绝）', 'error'); return; }
+        toast(`已保存原文件：${r.path}（${fact}）`, 'success');
+      } else {
+        const a = document.createElement('a');
+        a.href = `data:application/octet-stream;base64,${contentBase64}`;
+        a.download = name;
+        a.click();
+        toast(`已触发浏览器下载「${name}」（${fact}）`, 'success');
+      }
+    } catch (e: unknown) {
+      toast(`保存原文件失败：${(e as Error).message}`, 'error');
+    } finally {
+      setDlBusy(false);
     }
   };
 
@@ -422,7 +479,7 @@ export function PreviewPane({
           <div className="menu-label">阅读方式</div>
           {supportsRendered ? (
             <>
-              <MenuItem icon="eye" title="把 Markdown / CSV 渲染成排版后的样子" hint={viewMode === 'preview' ? '当前' : undefined} onClick={() => { setViewMode('preview'); setReadAt(null); }}>阅读视图</MenuItem>
+              <MenuItem icon="eye" title={flavor === 'html' ? '隔离页面预览：脚本禁用、外部资源不加载（保留可支持的页面结构与样式）' : '把 Markdown / CSV 渲染成排版后的样子'} hint={viewMode === 'preview' ? '当前' : undefined} onClick={() => { setViewMode('preview'); setReadAt(null); }}>{flavor === 'html' ? '页面视图（隔离预览）' : '阅读视图'}</MenuItem>
               <MenuItem icon="align-left" title="按原始文本显示（保留空白，带行号）" hint={viewMode === 'source' ? '当前' : undefined} onClick={() => { setViewMode('source'); setReadAt(null); }}>源码视图</MenuItem>
             </>
           ) : (
@@ -470,6 +527,8 @@ export function PreviewPane({
           <FormalAttachmentBody
             key={`${resource.id}:${active.revision}`}
             resource={resource}
+            viewMode={viewMode}
+            wrapSource={wrapSource}
             onOpenComment={() => setCommentOpen(true)}
           />
         ) : isWorktree ? (
@@ -533,6 +592,14 @@ export function PreviewPane({
           >
             复制路径与版本
           </MenuItem>
+          <MenuItem
+            icon="download"
+            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? 'project.file.read：工作区原文件读取快照' : '当前来源'}）；路径经系统另存为对话框由你选择`}
+            disabled={dlBusy}
+            onClick={() => { void doDownloadOriginal(); setMoreAt(null); }}
+          >
+            {dlBusy ? '正在取原件…' : '下载原文件 / 另存为…'}
+          </MenuItem>
           <MenuItem icon="message-square" title="以这份文件的当前版本为锚点发一条仅记录评论到源会话（不触发模型）" onClick={() => { setCommentOpen(true); setMoreAt(null); }}>评论此文件</MenuItem>
           <MenuItem icon={session.maximized ? 'copy' : 'maximize'} title={session.maximized ? '回到与对话并排的大小' : '临时占满内容区，便于细读长文件'} onClick={() => { togglePreviewMaximized(); setMoreAt(null); }}>
             {session.maximized ? '还原预览大小' : '放大预览'}
@@ -564,6 +631,12 @@ export function PreviewPane({
             <dd>
               {resource.audience.kind === 'room' ? '本房间成员' : resource.audience.kind === 'dm' ? '仅这条私信的参与者' : '项目成员'}
             </dd>
+            {isFormalAttachment && ['text_file', 'code_file'].includes(resource.formalAttachment?.kind ?? '') ? (
+              <>
+                <dt>屏幕阅读 / 模型注入</dt>
+                <dd>屏幕阅读=托管副本<strong>全文</strong>（完整文件，≤256KB 上传上限）；模型注入=前 64KB <strong>提取窗</strong>（预算合同）——两者分列，预览内容不等于发给模型的范围</dd>
+              </>
+            ) : null}
             <dt>本次打开位置</dt><dd>{openedFromLabel(s, active.openedFrom)}</dd>
           </dl>
         </Modal>
@@ -587,7 +660,7 @@ const excerptReports = new Map<string, string>();
 function reportExcerpt(resourceId: string, text: string): void { excerptReports.set(resourceId, text); }
 function excerptTextOf(resourceId: string): string | null { return excerptReports.get(resourceId) ?? null; }
 
-function FormalAttachmentBody({ resource, onOpenComment }: { resource: PreviewResource; onOpenComment: () => void }) {
+function FormalAttachmentBody({ resource, viewMode, wrapSource, onOpenComment }: { resource: PreviewResource; viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void }) {
   const fa = resource.formalAttachment!;
   const [err, setErr] = useState<string | null>(null);
   const genRef = useRef(0);
@@ -607,7 +680,6 @@ function FormalAttachmentBody({ resource, onOpenComment }: { resource: PreviewRe
   const alive = () => true;
   const onErr = (e: string) => setErr(e);
   const onIdentity = () => undefined;
-  const onContent = (_src: string, text: string) => reportExcerpt(fa.attachmentId, text);
 
   if (err != null) {
     return (
@@ -621,11 +693,26 @@ function FormalAttachmentBody({ resource, onOpenComment }: { resource: PreviewRe
       </div>
     );
   }
-  if (fa.kind === 'text_file' || fa.kind === 'code_file') return <TextPreview target={target} alive={alive} onErr={onErr} onIdentity={onIdentity} onContent={onContent} />;
+  if (fa.kind === 'text_file' || fa.kind === 'code_file') {
+    // R66 P2：文本/代码类附件走**完整文件阅读器**（attachment.readFull 全文——与 64KB
+    // 模型提取窗分列）：MD 默认排版阅读、HTML 默认隔离页面预览、代码/纯文本源码视图；
+    // 阅读/源码切换经 viewMode 进入实际组件分支。
+    return (
+      <FullTextReader
+        attachmentId={fa.attachmentId}
+        filename={resource.title}
+        conversationId={fa.conversationId ?? ''}
+        viewMode={viewMode}
+        wrapSource={wrapSource}
+        onErr={onErr}
+        onOpenComment={onOpenComment}
+      />
+    );
+  }
   if (fa.kind === 'image_file') return <ImagePreview target={target} alive={alive} onErr={onErr} onIdentity={onIdentity} />;
-  if (fa.kind === 'pdf_file') return <PdfPreview target={target} alive={alive} onErr={onErr} onIdentity={onIdentity} onContent={onContent} />;
+  if (fa.kind === 'pdf_file') return <PdfPreview target={target} alive={alive} onErr={onErr} onIdentity={onIdentity} onContent={() => undefined} />;
   if (fa.kind === 'docx_file' || fa.kind === 'sheet_file' || fa.kind === 'slides_file') {
-    return <OfficePreview target={target} alive={alive} onErr={onErr} abortRef={abortRef} viewerRef={viewerRef} onIdentity={onIdentity} onContent={onContent} />;
+    return <OfficePreview target={target} alive={alive} onErr={onErr} abortRef={abortRef} viewerRef={viewerRef} onIdentity={onIdentity} onContent={() => undefined} />;
   }
   return (
     <div className="preview-unsupported">
@@ -636,6 +723,108 @@ function FormalAttachmentBody({ resource, onOpenComment }: { resource: PreviewRe
       </div>
       <div className="panel-actions">
         <button className="btn sm" onClick={onOpenComment}><Icon name="message-square" size={12} /> 评论此文件（文件级锚点）</button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   完整文件阅读器（R66 P2）：attachment.readFull 全文 + 按风味渲染。
+   屏幕阅读=托管副本全文（≤256KB 有界）；模型注入仍走 64KB 提取窗（预算合同不变，
+   技术说明收进「文件信息」——不占据阅读主体）。
+   ============================================================ */
+
+type FileFlavor = 'markdown' | 'html' | 'csv' | 'code' | 'text' | 'binary';
+
+const CODE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.rs', '.rb', '.php', '.swift', '.kt', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css', '.scss', '.vue', '.svelte', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lua', '.r', '.m', '.pl']);
+
+/** 文件风味：revision 内容 kind（工作区/已装载）优先，否则按文件名扩展名 + 附件 kind 推导。 */
+function flavorOf(filename: string, formalKind: string, contentKind: string | undefined): FileFlavor {
+  if (contentKind === 'markdown') return 'markdown';
+  if (contentKind === 'csv') return 'csv';
+  if (contentKind === 'code') return 'code';
+  if (contentKind === 'text') {
+    // 内容层只知「纯文本」——具体风味按文件名分（.md/.html 上传件走这里）。
+    return flavorByExt(filename, formalKind);
+  }
+  return flavorByExt(filename, formalKind);
+}
+function flavorByExt(filename: string, formalKind: string): FileFlavor {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.csv') return 'csv';
+  if (CODE_EXTS.has(ext)) return 'code';
+  if (formalKind === 'code_file') return 'code';
+  if (formalKind === 'text_file' || formalKind === '') return 'text';
+  return 'binary';
+}
+
+function FullTextReader({ attachmentId, filename, conversationId, viewMode, wrapSource, onErr, onOpenComment }: {
+  attachmentId: string; filename: string; conversationId: string;
+  viewMode: 'preview' | 'source'; wrapSource: boolean;
+  onErr: (e: string) => void; onOpenComment: () => void;
+}) {
+  const flavor = flavorByExt(filename, '');
+  const [d, setD] = useState<{ text: string; originalBytes: number; hash: string; revision: number } | null>(null);
+  useEffect(() => {
+    let done = false;
+    void command<{ text: string; originalBytes: number; hash: string; revision: number }>('attachment.readFull', { attachmentId, conversationId })
+      .then((r) => { if (!done) { setD(r); reportExcerpt(attachmentId, r.text); } })
+      .catch((e: unknown) => { if (!done) onErr(String((e as Error).message)); });
+    return () => { done = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachmentId, conversationId]);
+  if (d == null) return <div className="panel info">正在读取文件全文（只读）…</div>;
+  if (flavor === 'markdown' && viewMode === 'preview') {
+    return (
+      <div className="preview-read-doc">
+        <MarkdownView text={d.text} />
+      </div>
+    );
+  }
+  if (flavor === 'html' && viewMode === 'preview') {
+    return <HtmlPageView html={d.text} filename={filename} />;
+  }
+  if (flavor === 'text' || flavor === 'binary') {
+    return (
+      <>
+        <SourceView text={d.text} language="text" wrap={wrapSource} />
+        {flavor === 'binary' ? null : null}
+      </>
+    );
+  }
+  return <SourceView text={d.text} language={flavor === 'code' ? 'code' : flavor} wrap={wrapSource} />;
+}
+
+/**
+ * HTML 隔离页面预览（R66 P2）：sandbox iframe（**无** allow-scripts/allow-same-origin/
+ * allow-popups——文件脚本不执行、与应用 DOM/IPC/Node 隔离）+ 注入 CSP（default-src 'none'
+ * ——外部资源不加载、不联网；内联样式可用以保留页面观感）+ base target=_blank（链接点击
+ * 被沙箱拦截——不导航不弹窗）。交互网页暂不支持，如实说明（不退回整页源码）。
+ */
+function HtmlPageView({ html, filename }: { html: string; filename: string }) {
+  const srcDoc = useMemo(() => {
+    const guard = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\' data:; img-src data: blob:; font-src data:; media-src data:"><base target="_blank">';
+    const headIdx = html.search(/<head[^>]*>/i);
+    if (headIdx >= 0) {
+      const insertAt = headIdx + html.slice(headIdx).indexOf('>') + 1;
+      return `${html.slice(0, insertAt)}${guard}${html.slice(insertAt)}`;
+    }
+    return `${guard}${html}`;
+  }, [html]);
+  return (
+    <div className="preview-html-host">
+      <iframe
+        title={`HTML 页面预览：${filename}`}
+        sandbox=""
+        srcDoc={srcDoc}
+        className="preview-html-frame"
+        data-zs-html-frame="1"
+      />
+      <div className="preview-html-note small faint">
+        静态页面预览：脚本已禁用、外部资源不加载（隔离渲染）；链接与交互暂不支持——切「源码视图」可看原文。
       </div>
     </div>
   );
@@ -910,28 +1099,18 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+/** Uint8Array → base64（分块拼接——大文件不用 String.fromCharCode 一次性展开）。 */
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let out = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(out);
+}
+
 type Target = { attachmentId: string; filename: string; kind: string; conversationId?: string; origin?: string; draftKey?: string; hashHint?: string; revisionHint?: number | string };
 type Alive = () => boolean;
-
-function TextPreview({ target, alive, onErr, onIdentity, onContent }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void; onContent?: (src: string, text: string) => void }) {
-  const [d, setD] = useState<{ revision: number; hash: string; text: string; truncated: boolean; originalBytes: number; excerptBytes?: number } | null>(null);
-  useEffect(() => {
-    let done = false;
-    void command<{ filename: string; kind: string; revision: number; hash: string; text: string; truncated: boolean; originalBytes: number; excerptBytes?: number }>('attachment.previewText', { attachmentId: target.attachmentId, conversationId: target.conversationId ?? '' })
-      .then((r) => { if (!done && alive()) { setD(r); onIdentity(r.revision, r.hash); onContent?.(`${target.attachmentId}:${r.revision}`, r.text); } })
-      .catch((e: unknown) => { if (!done && alive()) onErr(String((e as Error).message)); });
-    return () => { done = true; };
-  }, [target.attachmentId]);
-  if (d == null) return <div className="panel info">正在加载预览…</div>;
-  return (
-    <>
-      <pre className="panel info" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, maxHeight: '60vh', overflow: 'auto' }}>{d.text}</pre>
-      <div className="faint small" style={{ marginTop: 6 }}>
-        原文 {d.originalBytes}B{d.truncated ? ` · 预览/注入截断至 ${d.excerptBytes ?? 64 * 1024}B` : ''} · 模型输入=提取文本（与显示同源）
-      </div>
-    </>
-  );
-}
 
 function ImagePreview({ target, alive, onErr, onIdentity }: { target: Target; alive: Alive; onErr: (e: string) => void; onIdentity: (revision: number | string, hash: string) => void }) {
   const [d, setD] = useState<{ filename: string; mime: string; width: number; height: number; bytes: number; hash: string; revision: number; dataUrl: string } | null>(null);

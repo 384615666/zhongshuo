@@ -681,3 +681,33 @@
 .preview-tools .seg.tiny button {
   white-space: nowrap;
 }
+
+/* ---------- R66 P2：完整文件阅读器 ---------- */
+
+/* MD 排版阅读（MarkdownView）：像文档一样留合适页宽与呼吸，不用 pre 满铺 */
+.preview-read-doc {
+  max-width: 82ch;
+  margin: 0 auto;
+  padding: 4px 6px 32px;
+}
+
+/* HTML 隔离页面预览：iframe 占满正文高（页面自身滚动），说明行固定在下方 */
+.preview-html-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+.preview-html-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.preview-html-note {
+  flex: none;
+  line-height: 1.5;
+}

@@ -21,21 +21,6 @@ import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
-import { getState as previewGetState } from './data/store';
-
-/** 预览引用目标（旧壳兜底）：按当前路由推当前输入目标草稿。 */
-function previewQuoteTargetFromRoute(): { draftKey: string; label: string } {
-  const hash = (location.hash ?? '').replace(/^#/, '');
-  const th = /^#\/thread\/([^/?]+)/.exec(hash);
-  if (th != null) { const t = previewGetState().threadTasks[th[1]]; return { draftKey: `thread:${th[1]}`, label: t ? `任务 #${t.roomTaskNumber}` : '此线程' }; }
-  const rm = /^#\/room\/([^/?]+)/.exec(hash);
-  if (rm != null) { const r = previewGetState().rooms.find((x) => x.id === rm[1]); return { draftKey: `room:${rm[1]}`, label: r?.name ?? '房间' }; }
-  const dm = /^#\/dm\/([^/?]+)/.exec(hash);
-  if (dm != null) { const d = previewGetState().dms.find((x) => x.id === dm[1]); return { draftKey: `dm:${dm[1]}`, label: d?.title || d?.peerDisplayName || '私信' }; }
-  const pr = /^#\/project\/([^/]+)\/room\/([^/?]+)/.exec(hash);
-  if (pr != null) { const r = previewGetState().rooms.find((x) => x.id === pr[2]); return { draftKey: `room:${pr[2]}`, label: r?.name ?? '房间' }; }
-  return { draftKey: '', label: '当前输入区' };
-}
 import { dmUnreadTotal, navTaskStateOfRoom, roomUnread, roomsOfProject } from './data/selectors';
 import { RoomPage, CreateRoomModal } from './pages/Room';
 import { FilesGitPage } from './pages/pages-misc';
@@ -46,7 +31,6 @@ import { TasksBoardPage } from './pages/TasksBoard';
 import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
 import { toggleProjectPinned } from './data/actions-nav';
 import { Menu, MenuItem, Modal, Tag } from './components/ui';
-import { PreviewPane, contextFromRoute as previewContextFromRoute } from './preview/PreviewPane';
 import { toggleProjectExpanded } from './data/actions-nav';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
@@ -586,7 +570,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   }
 
   if (path === '/' || path === '/welcome' || path === '') return <WelcomePage />;
-  if (path === '/dm' || path.startsWith('/dm/')) return <DmWithPreview />;
+  if (path === '/dm' || path.startsWith('/dm/')) return <DmPage />;
   if (path === '/board') return <TasksBoardPage query={query} />;
   if (path === '/library') return <LibraryPage />;
   if (path === '/activity') return <ActivityPage />;
@@ -665,20 +649,8 @@ function LocateThread({ threadId, messageId, tab }: { threadId: string; messageI
   }, [threadId]);
   return null;
 }
-
-/** DM/聚合页的共享预览兜底（房间/文件页自渲染预览——这里补其余路由）。 */
-function DmWithPreview() {
-  const projectId = useStore((s) => s.activeProjectId);
-  return (
-    <>
-      <DmPage />
-      <PreviewPane
-        context={previewContextFromRoute(projectId)}
-        quoteTarget={previewQuoteTargetFromRoute()}
-      />
-    </>
-  );
-}
+/* DM 页自渲染共享预览（R66 P2：原型 320/440/480 宽度降级 + 列表收起 + 单区切换在
+   DmPage 内实现——App 不再相邻拼一个无宽度规则的 PreviewPane）。 */
 
 /* ---------------- 项目生命周期/信息编辑弹窗按钮（真实命令） ---------------- */
 
