@@ -58,7 +58,10 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
       ...process.env,
       ZS_APP_DATA: appDataDirToUse,
       ZS_RUNTIME: runtime,
-      ZS_ALLOW_FAKE: process.env.ZS_ALLOW_FAKE ?? '1',
+      // r63（review-r62 §4）：fake 许可**打包形态不缺省注入**——此前 `?? '1'` 让日常/正式
+      // 包永远 fakeAllowed=true（dev 便利泄漏进生产形态，runtime.status 自述与真实意图相反）。
+      // dev 形态（源码运行）保持缺省放开；打包形态只透传显式设置（演练包启动器自设）。
+      ...(process.env.ZS_ALLOW_FAKE != null || !isPackagedUi ? { ZS_ALLOW_FAKE: process.env.ZS_ALLOW_FAKE ?? '1' } : {}),
       ZS_PIPE_NAME: daemonPipe,
       ...(isPackagedUi ? {
         ZS_PACKED_ENTRY: '1',
