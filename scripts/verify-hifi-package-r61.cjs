@@ -168,10 +168,10 @@ async function runOnce(n) {
     await waitFor(cdp, `(() => { const p = document.querySelector('[data-zs-board=hifi]'); return p != null && !p.textContent.includes('正在装载'); })()`, 30_000, '看板内容落定');
     const boardText = await cdp.tryEval(probe(`document.querySelector('[data-zs-board=hifi]')?.innerText.slice(0, 400) ?? ''`));
     const boardLoadedOk = boardText != null && !String(boardText).includes('装载失败');
-    if (!boardLoadedOk) console.log('[r59] 看板装载失败文本：' + String(boardText).slice(0, 160));
+    if (!boardLoadedOk) console.log('[r61] 看板装载失败文本：' + String(boardText).slice(0, 160));
     // r55：种子房间任务卡（H3 短测前置——干净种子的看板必须有可点击房间任务卡；幂等，run2 复用）。
     const seededCardOk = String(boardText ?? '').includes('看板房间任务样本');
-    if (!seededCardOk) console.log('[r59] 种子任务卡未见：' + String(boardText).slice(0, 200));
+    if (!seededCardOk) console.log('[r61] 种子任务卡未见：' + String(boardText).slice(0, 200));
     f.h3Board = { titlebarOk: tbPkg === true, boardContentLoaded: boardLoadedOk, seededRoomTaskCard: seededCardOk, boardText: String(boardText ?? '').slice(0, 120) };
     // r55：搜索与收藏（真 app bundle——search.query 命中）与活动流（activity.list 条目）。
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('搜索与收藏'))?.click(), true`));
@@ -452,7 +452,7 @@ async function runOnce(n) {
 }
 
 (async () => {
-  if (!fs.existsSync(path.join(srcPkg, 'start-server.bat'))) { console.error('[r59] 源包缺失：' + srcPkg); process.exit(1); }
+  if (!fs.existsSync(path.join(srcPkg, 'start-server.bat'))) { console.error('[r61] 源包缺失：' + srcPkg); process.exit(1); }
   // r58 P5：**包根材料单独核验**（独立于应用 591 清单——review-r57 §4：包内 README/模板
   // 与源码新文案不一致是既有反例）。核当前源包根：README-H4=v3 口径（含返工显式执行）、
   // H4-TEST-template=合并 G1–G10 清单（含「执行返工」「尚未执行」步骤）。
@@ -462,31 +462,31 @@ async function runOnce(n) {
     mat.readmeH4 = rd.includes('H4 收尾候选 v5') && rd.includes('收藏可切换') && rd.includes('文件引用重做') && rd.includes('草稿与未知信封保持');
     const tp = fs.readFileSync(path.join(srcPkg, 'RESULTS', 'H4-TEST-template.md'), 'utf8');
     mat.templateMerged = tp.includes('R1 收藏切换') && tp.includes('R2 文件引用与 Esc') && tp.includes('H4-v5 补测清单') && tp.includes('引用文件');
-    mat.templateReworkStep = tp.includes('摘录') && tp.includes('继承说明') && tp.includes('不再自动粘贴') && tp.includes('关闭窗口放最后');
+    mat.templateReworkStep = tp.includes('摘录') && tp.includes('继承说明') && tp.includes('未自动粘贴') && tp.includes('关闭窗口放最后');
   } catch (e) { mat.error = String(e.message ?? e); }
-  console.log('[r59] 包根材料核验：' + JSON.stringify(mat));
+  console.log('[r61] 包根材料核验：' + JSON.stringify(mat));
   if (!(mat.readmeH4 && mat.templateMerged && mat.templateReworkStep)) {
-    console.error('[r59] 包根材料与当前源码文案不一致——拒绝三连（先修材料再打包）');
+    console.error('[r61] 包根材料与当前源码文案不一致——拒绝三连（先修材料再打包）');
     process.exit(5);
   }
   const existing = procsOfCopy();
-  if (!existing.ok) { console.error(`[r59] 副本进程查询未确认（${existing.error}）`); process.exit(1); }
-  if ((existing.procs ?? []).length > 0) { console.error(`[r59] 副本路径仍有 ${existing.procs.length} 个进程`); process.exit(1); }
+  if (!existing.ok) { console.error(`[r61] 副本进程查询未确认（${existing.error}）`); process.exit(1); }
+  if ((existing.procs ?? []).length > 0) { console.error(`[r61] 副本路径仍有 ${existing.procs.length} 个进程`); process.exit(1); }
   fs.rmSync(copyRoot, { recursive: true, force: true });
   fs.mkdirSync(copyRoot, { recursive: true });
-  console.log('[r59] 拷贝独立测试副本（交付包不动）…');
+  console.log('[r61] 拷贝独立测试副本（交付包不动）…');
   fs.cpSync(srcPkg, copyDir, { recursive: true });
   fs.rmSync(path.join(copyDir, 'server-data'), { recursive: true, force: true });
   const runs = [];
   for (let n = 1; n <= (process.env.R59_RUNS ? Number(process.env.R59_RUNS) : 3); n += 1) {
     const f = await runOnce(n);
     fs.writeFileSync(path.join(outDir, `${f.runId}.json`), JSON.stringify(f, null, 2));
-    console.log(`[r59] run${n} pass=${f.pass} ${f.failedAt ?? ''} realCalls=${f.realCalls} pptxVisual=${f.pptxVisualOk} retrySettle=${f.retrySettlementOk} removeGhost=${f.removeGhostOk} residual=${f.residualZero}`);
+    console.log(`[r61] run${n} pass=${f.pass} ${f.failedAt ?? ''} realCalls=${f.realCalls} pptxVisual=${f.pptxVisualOk} retrySettle=${f.retrySettlementOk} removeGhost=${f.removeGhostOk} residual=${f.residualZero}`);
     runs.push(f);
     await sleep(2000);
   }
   const all = runs.every((r) => r.pass === true);
   fs.writeFileSync(path.join(outDir, `${runId}-summary.json`), JSON.stringify({ allPass: all, runId, srcPkg, copyDir, packageRootMaterials: mat, runs: runs.map((r) => ({ run: r.run, pass: r.pass, failedAt: r.failedAt ?? null, buildId: r.identityBefore?.buildId, realCalls: r.realCalls, batExitCode: r.batExit?.code ?? null, attachmentLinks: r.attachmentSend?.messageAttachmentLinks ?? null, imageLinks: r.imageGate?.messageImageLinks ?? null, pptxVisual: r.pptxVisual ?? null, retrySettlement: r.retrySettlement ?? null, removeGhost: r.removeGhost ?? null })) }, null, 2));
-  console.log('[r59] allPass=' + all + ' runId=' + runId);
+  console.log('[r61] allPass=' + all + ' runId=' + runId);
   process.exit(all ? 0 : 4);
 })();
