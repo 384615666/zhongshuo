@@ -126,6 +126,27 @@ const msgLinks = (bodyLike) => {
 const artifactId = (name) => dbQuery('SELECT id FROM artifacts WHERE source_name = ?', name)[0]?.id ?? null;
 const linkCount = (artId) => dbQuery('SELECT count(*) c FROM message_attachments WHERE artifact_id = ?', artId)[0]?.c ?? 0;
 
+// r62 P4：聚合门函数化——runOnce 与 --self-check-negatives 共用同一实现（负对照变异的
+// 就是这条真实聚合链，不是复制品）。任何新判据必须加进来，缺项/undefined 一律不放行。
+function aggregatePass(f, runNo) {
+  return f.autoProject === true && (runNo === 1 || f.priorRunHistoryOk === true) && f.poolCards === true
+    && f.h4shell?.guardBadge === true && f.h4shell?.palette === true && f.h4shell?.recovery === true && f.h4shell?.restartRecoveryHeal === true
+    && f.roomDispatchOk === true && f.lostAckBanner === true && f.retrySettlementOk === true
+    && f.threadAnchor === true && f.threadFollowUpOk === true
+    && f.attachmentSendOk === true && f.pptxVisualOk === true && f.imageGateShown === true && f.imageGateOk === true
+    && f.removeGhostOk === true && f.deepLinkDetail === true
+    && f.h3Board?.titlebarOk === true && f.h3Board?.boardContentLoaded === true && f.h3Board?.seededRoomTaskCard === true
+    && f.librarySearch?.hit === true && f.activityList?.items === true && f.t2m0Real?.m0HintAuto === true
+    && f.t2m0Real?.bodyClean === true && f.t2m0Real?.chipKept === true && f.t2m0Real?.hintGoneDirect === true
+    && f.closedViaTitlebar === true
+    && f.procsBeforeCloseConfirmed === true && f.capturedPidsGone === true && f.gracefulExitByProcTree === true
+    && f.shutdownOk === true && f.residualZero === true && f.batExit?.code === 0
+    && f.identitySameApp === true && f.realCalls === 0
+    // r62 P4（review-r61 §4）：r61 新增的收藏/引用两门已计算但未纳入总 pass——独立负对照
+    // 证明两项分别置 false 或 bat 退出码 7 时原聚合仍 true。现纳入总门，缺项/undefined 一律不放行。
+    && f.v5favoritesOk === true && f.v5quoteOk === true;;
+}
+
 async function runOnce(n) {
   const port = 9494 + n;
   const identityBefore = manifestIdentity();
@@ -185,12 +206,19 @@ async function runOnce(n) {
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('看板房间任务样本'))`, 60_000, 'v5：种子任务卡');
     await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('看板房间任务样本')); card?.click(); return true; })()`));
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg')].some((m) => m.querySelector('[data-zs-saved]') != null)`, 90_000, 'v5：回复消息书签按钮');
-    const favBefore = await cdp.tryEval(probe(`document.querySelectorAll('#hifi-root .msg [data-zs-saved]').length`));
+    // r62 P4（review-r61 §4）：收藏断言绑定**具体消息 id + 该消息的 saved_refs 行**（不用
+    // 全库总行数代证）。msgOfButton 从 DOM 容器 #msg-<id> 取真实消息实体 id。
+    const favMsgIdBefore = await cdp.tryEval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .msg [data-zs-saved]')][0]; const m = b?.closest('.msg'); return m == null ? null : (m.id || '').replace(/^msg-/, '') || null; })()`));
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .msg [data-zs-saved]')][0]; b?.click(); return true; })()`));
     const favSaved = await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]')].length > 0`, 15_000, 'v5：已收藏态').catch(() => false);
+    await sleep(400);
+    const favRowAfterAdd = favMsgIdBefore != null ? dbQuery('SELECT viewer_id, kind, ref FROM saved_refs WHERE ref = ?', favMsgIdBefore) : [];
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]')][0]; b?.click(); return true; })()`));
     const favUnsaved = await waitFor(cdp, `document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]').length === 0`, 15_000, 'v5：再次点击取消').catch(() => false);
-    f.v5favorites = { buttons: Number(favBefore ?? 0), saved: favSaved === true, unsavedBack: favUnsaved === true, dbRows: dbQuery('SELECT count(*) c FROM saved_refs').map((r) => r.c).join(',') };
+    await sleep(400);
+    const favRowAfterRemove = favMsgIdBefore != null ? dbQuery('SELECT viewer_id, kind, ref FROM saved_refs WHERE ref = ?', favMsgIdBefore) : [];
+    const favViewerIds = dbQuery('SELECT DISTINCT viewer_id v FROM saved_refs').map((r) => r.v);
+    f.v5favorites = { msgId: favMsgIdBefore, saved: favSaved === true, unsavedBack: favUnsaved === true, rowAfterAdd: favRowAfterAdd, rowAfterRemove: favRowAfterRemove, viewerIds: favViewerIds };
     // 文件引用：回主池开 PPT 样本线程 → 成果与附件标签（无 Composer）→ 预览 → 引用文件两次 → 自动回回复、恰一张卡、正文零污染。
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 60_000, 'v5：回主池见 PPT 卡');
@@ -207,15 +235,23 @@ async function runOnce(n) {
     const backAtReplies = await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 15_000, 'v5：自动切回回复').catch(() => false);
     const quoteChips = await cdp.tryEval(probe(`[...document.querySelectorAll('#hifi-root .composer-mentions .chip')].filter((c) => c.querySelector('svg[data-icon=paperclip]')).length`));
     const bodyAfterQuote = await cdp.tryEval(probe(`document.querySelector('#hifi-root textarea.composer-input')?.value ?? ''`));
+    // r62 P4：绑定目标（当前路由=线程草稿）与真实资源身份——引用卡 title 须含 PPT 的
+    // artifacts.id（DB 事实），而非仅统计芯片个数。
+    const pptArtifactRow = dbQuery("SELECT id, hash, source_name FROM artifacts WHERE source_name = '回归幻灯.pptx'")[0] ?? null;
+    const chipTitles = await cdp.tryEval(probe(`[...document.querySelectorAll('#hifi-root .composer-mentions .chip')].filter((c) => c.querySelector('svg[data-icon=paperclip]')).map((c) => c.title ?? '')`));
+    const chipHashBound = pptArtifactRow != null && Array.isArray(chipTitles) && chipTitles.some((t) => String(t).includes(String(pptArtifactRow.hash).slice(0, 8)));
     // 摘录：等文本卡片装载后点摘录 → 正文只含内容（PPT 文本层第一页）。
     const slideTextReady = await waitFor(cdp, `document.querySelector('[data-zs-preview=hifi]')?.textContent.includes('回归幻灯')`, 20_000, 'v5：PPT 提取文本').catch(() => false);
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('[data-zs-preview=hifi] button')].find((x) => x.textContent.trim() === '摘录'); b?.click(); return true; })()`));
     await sleep(700);
     const bodyAfterExcerpt = await cdp.tryEval(probe(`document.querySelector('#hifi-root textarea.composer-input')?.value ?? ''`));
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('[data-zs-preview=hifi] button')].find((x) => (x.title || '').includes('关闭预览')); b?.click(); return true; })()`));
-    f.v5quote = { backAtReplies: backAtReplies === true, chips: Number(quoteChips ?? -1), bodyAfterQuoteClean: String(bodyAfterQuote ?? '').trim().length === 0, slideTextReady: slideTextReady === true, excerptHasMark: String(bodyAfterExcerpt ?? '').includes('> 摘录「回归幻灯.pptx」'), excerptNoUiNoise: !String(bodyAfterExcerpt ?? '').includes('模型输入') && !String(bodyAfterExcerpt ?? '').includes('原文 ') };
-    f.v5favoritesOk = f.v5favorites.saved === true && f.v5favorites.unsavedBack === true;
-    f.v5quoteOk = f.v5quote.backAtReplies === true && f.v5quote.chips === 1 && f.v5quote.bodyAfterQuoteClean === true && f.v5quote.excerptHasMark === true && f.v5quote.excerptNoUiNoise === true;
+    f.v5quote = { backAtReplies: backAtReplies === true, chips: Number(quoteChips ?? -1), chipHashBound, bodyAfterQuoteClean: String(bodyAfterQuote ?? '').trim().length === 0, slideTextReady: slideTextReady === true, excerptHasMark: String(bodyAfterExcerpt ?? '').includes('> 摘录「回归幻灯.pptx」'), excerptHasSlideContent: String(bodyAfterExcerpt ?? '').includes('短回归 R6 预览样本'), excerptNoUiNoise: !String(bodyAfterExcerpt ?? '').includes('模型输入') && !String(bodyAfterExcerpt ?? '').includes('原文 ') };
+    f.v5favoritesOk = f.v5favorites.saved === true && f.v5favorites.unsavedBack === true
+      && f.v5favorites.msgId != null
+      && f.v5favorites.rowAfterAdd.length === 1 && f.v5favorites.rowAfterAdd[0].ref === f.v5favorites.msgId && f.v5favorites.rowAfterAdd[0].kind === 'message'
+      && f.v5favorites.rowAfterRemove.length === 0; // 具体消息行消长——非全库计数
+    f.v5quoteOk = f.v5quote.backAtReplies === true && f.v5quote.chips === 1 && f.v5quote.chipHashBound === true && f.v5quote.bodyAfterQuoteClean === true && f.v5quote.slideTextReady === true && f.v5quote.excerptHasMark === true && f.v5quote.excerptHasSlideContent === true && f.v5quote.excerptNoUiNoise === true;
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('活动流'))?.click(), true`));
     const activityOk = await waitFor(cdp, `(() => { const p = document.querySelector('[data-zs-activity=hifi]'); return p != null && p.querySelectorAll('[data-zs-activity-item]').length > 0; })()`, 20_000, '活动流条目').catch(() => false);
     f.activityList = { items: activityOk === true };
@@ -428,19 +464,7 @@ async function runOnce(n) {
     f.identitySameApp = f.identityBefore.buildId === f.identityAfter.buildId && f.identityBefore.manifestSha === f.identityAfter.manifestSha && f.identityBefore.buildSha === f.identityAfter.buildSha;
     f.realCalls = (() => { try { return dbQuery('SELECT count(*) c FROM real_calls')[0].c; } catch { return -1; } })();
     f.consoleTail = out.slice(-300);
-    f.pass = f.autoProject === true && (n === 1 || f.priorRunHistoryOk === true) && f.poolCards === true
-      && f.h4shell?.guardBadge === true && f.h4shell?.palette === true && f.h4shell?.recovery === true && f.h4shell?.restartRecoveryHeal === true
-      && f.roomDispatchOk === true && f.lostAckBanner === true && f.retrySettlementOk === true
-      && f.threadAnchor === true && f.threadFollowUpOk === true
-      && f.attachmentSendOk === true && f.pptxVisualOk === true && f.imageGateShown === true && f.imageGateOk === true
-      && f.removeGhostOk === true && f.deepLinkDetail === true
-      && f.h3Board?.titlebarOk === true && f.h3Board?.boardContentLoaded === true && f.h3Board?.seededRoomTaskCard === true
-      && f.librarySearch?.hit === true && f.activityList?.items === true && f.t2m0Real?.m0HintAuto === true
-      && f.t2m0Real?.bodyClean === true && f.t2m0Real?.chipKept === true && f.t2m0Real?.hintGoneDirect === true
-      && f.closedViaTitlebar === true
-      && f.procsBeforeCloseConfirmed === true && f.capturedPidsGone === true && f.gracefulExitByProcTree === true
-      && f.shutdownOk === true && f.residualZero === true && typeof f.batExit?.code === 'number'
-      && f.identitySameApp === true && f.realCalls === 0;
+    f.pass = aggregatePass(f, n);
     return f;
   } catch (e) {
     f.failedAt = e.message;
@@ -463,7 +487,26 @@ async function runOnce(n) {
   // H4-TEST-template=合并 G1–G10 清单（含「执行返工」「尚未执行」步骤）。
   const mat = { readmeH4: false, templateMerged: false, templateReworkStep: false };
   try {
-    const rd = fs.readFileSync(path.join(srcPkg, 'README-H4.md'), 'utf8');
+    // r62 P4：--self-check-negatives——对真实聚合函数做逐项变异负对照：每个新门被置
+  // false（或 bat 退出码 7）都必须让 aggregatePass=false；任何变异仍 true=漏判，非零退出。
+  if (process.argv.includes('--self-check-negatives')) {
+    const base = { autoProject: true, priorRunHistoryOk: true, poolCards: true, h4shell: { guardBadge: true, palette: true, recovery: true, restartRecoveryHeal: true }, roomDispatchOk: true, lostAckBanner: true, retrySettlementOk: true, threadAnchor: true, threadFollowUpOk: true, attachmentSendOk: true, pptxVisualOk: true, imageGateShown: true, imageGateOk: true, removeGhostOk: true, deepLinkDetail: true, h3Board: { titlebarOk: true, boardContentLoaded: true, seededRoomTaskCard: true }, librarySearch: { hit: true }, activityList: { items: true }, t2m0Real: { m0HintAuto: true, bodyClean: true, chipKept: true, hintGoneDirect: true }, closedViaTitlebar: true, procsBeforeCloseConfirmed: true, capturedPidsGone: true, gracefulExitByProcTree: true, shutdownOk: true, residualZero: true, batExit: { code: 0 }, identitySameApp: true, realCalls: 0, v5favoritesOk: true, v5quoteOk: true };
+    const cases = [
+      { label: '原样（应通过）', mutate: (x) => x, expect: true },
+      { label: 'v5favoritesOk=false', mutate: (x) => ({ ...x, v5favoritesOk: false }), expect: false },
+      { label: 'v5quoteOk=false', mutate: (x) => ({ ...x, v5quoteOk: false }), expect: false },
+      { label: 'batExit.code=7', mutate: (x) => ({ ...x, batExit: { code: 7 } }), expect: false },
+      { label: 'batExit.code=undefined', mutate: (x) => ({ ...x, batExit: {} }), expect: false },
+      { label: 'v5favoritesOk 缺项（undefined）', mutate: (x) => { const y = { ...x }; delete y.v5favoritesOk; return y; }, expect: false },
+      { label: 'pptxVisualOk=false（受控正对照）', mutate: (x) => ({ ...x, pptxVisualOk: false }), expect: false },
+    ];
+    const results = cases.map((c) => { const verdict = aggregatePass(c.mutate({ ...base }), 1); return { label: c.label, verdict, expect: c.expect, ok: verdict === c.expect }; });
+    const allOk = results.every((r) => r.ok);
+    console.log(JSON.stringify({ selfCheck: 'negative-controls', allOk, results }, null, 2));
+    process.exit(allOk ? 0 : 8);
+  }
+
+  const rd = fs.readFileSync(path.join(srcPkg, 'README-H4.md'), 'utf8');
     mat.readmeH4 = rd.includes('H4 收尾候选 v5') && rd.includes('收藏可切换') && rd.includes('文件引用重做') && rd.includes('草稿与未知信封保持');
     const tp = fs.readFileSync(path.join(srcPkg, 'RESULTS', 'H4-TEST-template.md'), 'utf8');
     mat.templateMerged = tp.includes('R1 收藏切换') && tp.includes('R2 文件引用与 Esc') && tp.includes('H4-v5 补测清单') && tp.includes('引用文件');
@@ -478,6 +521,7 @@ async function runOnce(n) {
   if (!existing.ok) { console.error(`[r61] 副本进程查询未确认（${existing.error}）`); process.exit(1); }
   if ((existing.procs ?? []).length > 0) { console.error(`[r61] 副本路径仍有 ${existing.procs.length} 个进程`); process.exit(1); }
   fs.rmSync(copyRoot, { recursive: true, force: true });
+
   fs.mkdirSync(copyRoot, { recursive: true });
   console.log('[r61] 拷贝独立测试副本（交付包不动）…');
   fs.cpSync(srcPkg, copyDir, { recursive: true });
@@ -491,7 +535,7 @@ async function runOnce(n) {
     await sleep(2000);
   }
   const all = runs.every((r) => r.pass === true);
-  fs.writeFileSync(path.join(outDir, `${runId}-summary.json`), JSON.stringify({ allPass: all, runId, srcPkg, copyDir, packageRootMaterials: mat, runs: runs.map((r) => ({ run: r.run, pass: r.pass, failedAt: r.failedAt ?? null, buildId: r.identityBefore?.buildId, realCalls: r.realCalls, batExitCode: r.batExit?.code ?? null, attachmentLinks: r.attachmentSend?.messageAttachmentLinks ?? null, imageLinks: r.imageGate?.messageImageLinks ?? null, pptxVisual: r.pptxVisual ?? null, retrySettlement: r.retrySettlement ?? null, removeGhost: r.removeGhost ?? null })) }, null, 2));
+  fs.writeFileSync(path.join(outDir, `${runId}-summary.json`), JSON.stringify({ allPass: all, runId, srcPkg, copyDir, packageRootMaterials: mat, runs: runs.map((r) => ({ run: r.run, pass: r.pass, failedAt: r.failedAt ?? null, buildId: r.identityBefore?.buildId, realCalls: r.realCalls, batExitCode: r.batExit?.code ?? null, v5favoritesOk: r.v5favoritesOk ?? null, v5quoteOk: r.v5quoteOk ?? null, attachmentLinks: r.attachmentSend?.messageAttachmentLinks ?? null, imageLinks: r.imageGate?.messageImageLinks ?? null, pptxVisual: r.pptxVisual ?? null, retrySettlement: r.retrySettlement ?? null, removeGhost: r.removeGhost ?? null })) }, null, 2));
   console.log('[r61] allPass=' + all + ' runId=' + runId);
   process.exit(all ? 0 : 4);
 })();
