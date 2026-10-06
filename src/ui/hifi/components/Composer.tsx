@@ -370,11 +370,12 @@ export function Composer({
   /** 「本次运行设置」弹层（低频选项的收纳处，§6） */
   const [runSettingsAnchor, setRunSettingsAnchor] = useState<{ x: number; y: number } | null>(null);
   /**
-   * 草稿保存失败必须可见（§6.2）。
+   * 草稿保存失败必须可见（§6.2；r61 P5 改接持久化状态位）。
    * 普通保存成功**不作常驻提示**：原来那枚"草稿已保存"的勾一直占位，
-   * 而它几乎永远为真，属于无信息的常驻状态。
+   * 而它几乎永远为真，属于无信息的常驻状态。持久化失败/身份不可用时如实提示
+   * 「未持久化」及其后果（刷新/崩溃会丢），不静默。
    */
-  const [draftFailed, setDraftFailed] = useState(false);
+  const draftPersist = useStore((st) => st.draftPersist);
   // commandId 在"发送中"保持不变：重复点击不会创建多个任务（RT-01）
   const commandIdRef = useRef<string>(newId());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -420,21 +421,16 @@ export function Composer({
     applyDraftInserts(takeDraftInserts(draftKey));
   }, [draftKey, recordThread]);
 
-  // 正文与结构化选择变化即写入草稿（草稿不是命令，commandId 保持不变）
+  // 正文与结构化选择变化即写入草稿（草稿不是命令，commandId 保持不变）；持久化状态由
+  // store.draftPersist 统一呈现（内存写不失败——失败的是 localStorage 快照，见 persistence 注释）。
   useEffect(() => {
     if (skipSaveRef.current === draftKey) {
       skipSaveRef.current = null;
       return;
     }
-    // 保存失败必须显示；成功不占位（§6.2）
-    try {
-      // 附件引用由上传/移除动作维护（防串写），这里只落正文/提及/意图/权限——读取现草稿合并。
-      const cur = getDraftFull(draftKey);
-      setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs });
-      setDraftFailed(false);
-    } catch {
-      setDraftFailed(true);
-    }
+    // 附件引用由上传/移除动作维护（防串写），这里只落正文/提及/意图/权限——读取现草稿合并。
+    const cur = getDraftFull(draftKey);
+    setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs });
   }, [draftKey, body, mentions, access, sendAs]);
 
   useEffect(() => {
@@ -1242,14 +1238,14 @@ export function Composer({
 
           {/**
            * 草稿：成功不作常驻提示（它几乎永远为真，占位却没有信息量），
-           * 只有**保存失败**才显示，并按真实原因说明后果（§6.2）。
+           * 只有**持久化失败/不可用**才显示，并按真实原因说明后果（§6.2；r61 P5）。
            */}
-          {draftFailed ? (
+          {draftPersist.error != null ? (
             <span
               className="composer-draft failed"
-              title="这段文字没有写进草稿存储：切走目标或刷新会丢失，请先发送或复制出来"
+              title={draftPersist.error}
             >
-              <Icon name="alert-triangle" size={11} /> 草稿未保存
+              <Icon name="alert-triangle" size={11} /> 草稿未持久化
             </span>
           ) : null}
 

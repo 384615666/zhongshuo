@@ -3349,6 +3349,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const { realCallSummary } = await import('./realCallLedger.ts');
         return withCommandId({ ok: true, data: realCallSummary(deps.db, params.batchId) });
       }
+      case 'app.identity': {
+        // r61（review-r60 §6）：稳定身份（只读）——renderer 草稿/未知信封持久化的命名空间
+        // 用（数据根+本地用户），不使用显示名或每次启动变化的实例标识。无写入、无敏感扩展。
+        return withCommandId({ ok: true, data: { localUserId: deps.localUserId, appDataDir: deps.appDataDir ?? '' } });
+      }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
         const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath'])).min(1) }).parse(env.params);

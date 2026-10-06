@@ -85,6 +85,13 @@ export interface HifiExtension {
   savedMessageRefs: Record<string, boolean>;
   /** r61 G7：待插入草稿的正文文本（摘录等）——目标 Composer 未挂载时排队，挂载即消费。 */
   draftInserts: Record<string, Array<{ id: number; text: string }>>;
+  /**
+   * r61 P5 草稿/未知信封持久化状态：mode=on（identity 就绪、localStorage 可写）时每次草稿/
+   * 信封/上传项变更即快照落盘；error 非空=最近一次持久化失败（内存仍生效，UI 如实提示
+   * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
+   * ——退回内存态，如实标注。
+   */
+  draftPersist: { mode: 'on' | 'off'; error: string | null };
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -117,6 +124,7 @@ function makeEmptyState(): HifiState {
     conn: 'online', connInfo: null,
     savedMessageRefs: {},
     draftInserts: {},
+    draftPersist: { mode: 'off', error: null },
   };
 }
 
@@ -252,6 +260,7 @@ export function closePreview(): void {
 /** 上传项操作（store 层——回执按 draftKey+uploadId 精确收敛，绝不按文件名匹配）。 */
 export function addUploadItem(item: UploadItem): void {
   setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [item.draftKey]: [...(s.uploadItems[item.draftKey] ?? []), item] } }));
+  persistSnapshot();
 }
 export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error'>>): void {
   setState((s) => {
@@ -268,6 +277,7 @@ export function settleUpload(draftKey: string, uploadId: string, patch: Partial<
     next[idx] = { ...cur, ...patch };
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
+  persistSnapshot();
 }
 
 /**
@@ -285,11 +295,13 @@ export function settleUploadReady(draftKey: string, uploadId: string, conversati
   if (cur.removed === true) {
     // 上传中被移除：清项+丢弃回执——芯片已消失，草稿也不得出现该引用。
     setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).filter((x) => x.uploadId !== uploadId) } }));
+    persistSnapshot();
     return false;
   }
   if (cur.conversationId !== conversationId) {
     // 回执会话与发起会话不一致（跨会话串线）：按失败分列，不写草稿 ref。
     setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).map((x) => (x.uploadId === uploadId ? { ...x, status: 'failed' as const, error: `回执会话不一致（${conversationId}）——已丢弃` } : x)) } }));
+    persistSnapshot();
     return false;
   }
   if (cur.status === 'ready' && cur.attachmentId === receipt.attachmentId) return true; // 已结算过的同一回执——幂等
@@ -317,6 +329,7 @@ export function removeUploadItem(draftKey: string, uploadId: string): void {
       : list.filter((x) => x.uploadId !== uploadId); // 已结算：直接清
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
+  persistSnapshot();
 }
 /** 草稿就绪引用并入上传项（切回草稿时按草稿恢复的 ready 项重建芯片；已存在同 attachmentId 不重复）。 */
 export function hydrateUploadRefs(draftKey: string, conversationId: string, refs: HifiDraftAttachment[]): void {
@@ -328,6 +341,7 @@ export function hydrateUploadRefs(draftKey: string, conversationId: string, refs
     if (add.length === 0) return s;
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: [...list, ...add] } };
   });
+  persistSnapshot();
 }
 /** 清空已结算项（发送成功按 refs 清——保留仍在途/失败的）。 */
 export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[]): void {
@@ -338,6 +352,7 @@ export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[
     if (next.length === list.length) return s;
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
+  persistSnapshot();
 }
 
 /** 结果未知的在途信封（不可变快照——重试只发这一份）。 */
@@ -380,6 +395,7 @@ export function parkUnknownEnvelope(draftKey: string, env: PendingSendEnvelope):
     // 已有未确认信封：排队（不覆盖前一份——review-r48 §4）。
     return { ...s, pendingSends: { ...s.pendingSends, [draftKey]: { ...cur, queued: [...(cur.queued ?? []), env] } } };
   });
+  persistSnapshot(); // r61 P5：完整未知信封（含 queued）跨崩溃保留——同号同参重试、业务恰一次
 }
 
 /** 清除队首信封：有排队则下一条顶上（banner 连续重试），否则清空。 */
@@ -393,13 +409,82 @@ export function clearUnknownEnvelope(draftKey: string): void {
     const next = { ...s.pendingSends }; delete next[draftKey];
     return { ...s, pendingSends: next };
   });
+  persistSnapshot();
 }
 const emptyDraft = (): HifiDraft => ({ body: '', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
 const drafts = new Map<string, HifiDraft>();
 let draftRev = 0;
 export function getDraftFull(key: string): HifiDraft { return drafts.get(key) ?? emptyDraft(); }
 /** 每次写入递增编辑代次（清算按代次判定——等待期编辑过则不剥离已发内容）。 */
-export function setDraftFull(key: string, draft: unknown): void { draftRev += 1; drafts.set(key, { ...(draft as HifiDraft), rev: draftRev }); }
+export function setDraftFull(key: string, draft: unknown): void { draftRev += 1; drafts.set(key, { ...(draft as HifiDraft), rev: draftRev }); persistSnapshot(); }
+
+/* ---------- 草稿/未知信封持久化（r61 P5，review-r60 §6） ----------
+ * 批准原型 brief §3.3「版本化草稿、localStorage、刷新保持」：正文/提及/意图/已就绪引用与
+ * **完整未知信封**跨 reload/renderer 崩溃保留；重载不自动发送、仅记录意图不因重载变 AI、
+ * 未对账未知信封不设 TTL（不因普通过期静默降为普通草稿；普通草稿沿既有约定亦无过期）。
+ * 命名空间=数据根+本地用户（app.identity）——不同数据根/用户互不串，不用显示名或每次启动
+ * 变化的实例 id。在途上传不持久化（恢复=可理解的重新选择状态，回执不会跨进程到达）；
+ * ready/failed 项随草稿保留；removed 项不落盘（不复活已移除资源）。
+ * 持久化失败：内存仍生效 + draftPersist.error 如实提示，不静默丢也不阻塞输入。 */
+
+const PERSIST_VERSION = 1;
+let persistKey: string | null = null;
+
+function persistSnapshot(): void {
+  if (persistKey == null) return; // 未初始化（identity 未就绪/浏览器宿主）——内存态
+  try {
+    const uploadsOut: Record<string, UploadItem[]> = {};
+    for (const [k, list] of Object.entries(state.uploadItems)) {
+      const kept = list.filter((x) => x.removed !== true && x.status !== 'uploading');
+      if (kept.length > 0) uploadsOut[k] = kept;
+    }
+    const draftsOut: Record<string, HifiDraft> = {};
+    for (const [k, v] of drafts) draftsOut[k] = v;
+    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: Date.now(), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut });
+    localStorage.setItem(persistKey, payload);
+    if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null } }));
+  } catch (e) {
+    const msg = `草稿持久化失败：${e instanceof Error ? e.message : String(e)}——本次进程内仍有效，刷新或崩溃会丢失未发送内容`;
+    setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { mode: 'on', error: msg } }));
+  }
+}
+
+/** 初始化（identity 就绪后调用一次）：按命名空间载入上次快照（草稿 Map+未知信封+ready/failed
+ * 上传项），并立即写一次确认可写性。快照损坏=作废从空态开始（随后一次成功写入覆盖，不半恢复）；
+ * localStorage 整体不可读（私有模式等）=降级内存态并如实标注。 */
+export function initDraftPersistence(ns: string): void {
+  persistKey = `zs.hifi.persist.${ns}`;
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(persistKey);
+  } catch (e) {
+    persistKey = null;
+    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效` } }));
+    return;
+  }
+  if (raw != null) {
+    try {
+      const data = JSON.parse(raw) as { v?: number; drafts?: Record<string, HifiDraft>; pendingSends?: Record<string, PendingSendEnvelope>; uploadItems?: Record<string, UploadItem[]> };
+      if (data.v === PERSIST_VERSION) {
+        let maxRev = 0;
+        for (const [k, d] of Object.entries(data.drafts ?? {})) { drafts.set(k, d); if (typeof d.rev === 'number' && d.rev > maxRev) maxRev = d.rev; }
+        draftRev = Math.max(draftRev, maxRev);
+        setState((s) => ({
+          ...s,
+          pendingSends: { ...(data.pendingSends ?? {}), ...s.pendingSends },
+          uploadItems: { ...(data.uploadItems ?? {}), ...s.uploadItems },
+        }));
+      }
+    } catch { /* 快照损坏：作废（不半恢复）——下方首次写入建立新快照 */ }
+  }
+  persistSnapshot(); // 可写性确认；失败由 persistSnapshot 内部如实置 error（内存仍生效）
+  if (getState().draftPersist.error == null) setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null } }));
+}
+
+/** identity 不可用（服务未就绪/浏览器宿主）：内存态+如实标注（不冒充已持久化）。 */
+export function markPersistenceDegraded(reason: string): void {
+  setState((s) => (s.draftPersist.mode === 'off' ? s : { ...s, draftPersist: { mode: 'off', error: reason } }));
+}
 
 /* ---------- 提示与主题 ---------- */
 export type ToastTone = 'info' | 'warn' | 'error' | 'success';

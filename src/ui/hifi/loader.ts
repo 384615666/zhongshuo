@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Thread, ThreadCard } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
@@ -42,12 +42,27 @@ function stillCurrent(gen: number, projectId: string): boolean {
 
 /* ---------- 首启（有界等待，不靠 reload——review-r46 §5） ---------- */
 
+/**
+ * 草稿持久化初始化（r61 P5）：app.identity（数据根+本地用户）就绪即载入上次快照——
+ * 必须发生在任何带 Composer 的页面挂载之前（bootRemembered 在打开项目/标记 ready 前调用）。
+ * identity 不可用（服务未起/浏览器宿主）→ 降级为内存态并如实标注，不阻塞启动。
+ */
+async function initDraftPersistenceFromIdentity(): Promise<void> {
+  try {
+    const id = await command<{ localUserId: string; appDataDir: string }>('app.identity', {});
+    initDraftPersistence(`${id.appDataDir}|${id.localUserId}`);
+  } catch (e) {
+    markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
+  }
+}
+
 export async function bootRemembered(): Promise<void> {
   for (let i = 0; i < 60; i += 1) {
     const s = getState();
     if (s.boot === 'ready' || s.boot === 'failed') return; // 已装载/用户已手动打开
     try {
       const remembered = await command<{ values: Record<string, string> }>('app.settings.get', { keys: ['ui.autoOpenProjectPath'] });
+      await initDraftPersistenceFromIdentity();
       const path = remembered?.values?.['ui.autoOpenProjectPath'];
       if (typeof path === 'string' && path.length > 0) {
         try {
