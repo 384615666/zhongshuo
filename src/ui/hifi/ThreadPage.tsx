@@ -454,7 +454,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               const staged = stageOutbound(draftKey, env);
               if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
               const r = await sendEnvelope(env);
-              if (r.status === 'ok') settleOutbound(draftKey, env);
+              if (r.status === 'ok') settleOutbound(draftKey, env, { recordThread: isRecordThread });
               else if (r.status === 'failed') dropOutbound(draftKey, env);
               else confirmOutboundUnknown(draftKey, env);
               if (r.status === 'ok') {

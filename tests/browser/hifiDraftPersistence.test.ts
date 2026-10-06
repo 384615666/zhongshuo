@@ -300,3 +300,57 @@ describe('出站信封账本（r62 P1——review-r61 §2 早崩重复发送）'
     expect((s.getState().outboundLedger['thread:t3'] ?? []).length).toBe(0); // 内存回滚
   });
 });
+
+describe('统一成功清算（r63 P1——review-r62 §2 双重结算反例）', () => {
+  const mkEnv2 = (cmd: string, body: string, mentions: Array<{ kind: string; memberId?: string }>, opts?: { refs?: string[]; intent?: 'default' | 'record_only'; target?: { kind: string; threadId?: string; roomId?: string } }) => ({
+    commandId: cmd, method: 'message.submit' as const,
+    params: { target: opts?.target ?? { kind: 'room_root' as const, roomId: 'r1' }, body, intent: opts?.intent ?? 'default', mentions, ...(opts?.refs != null ? { attachmentRefs: opts.refs } : {}) },
+    targetLabel: 'room:r1', at: Date.now(),
+  });
+
+  it('未编辑成功：正文剥离+已发 mentions 清空（payload member 映射）+refs 剥离+意图复位', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsS|u');
+    s.setDraftFull('room:r1', { body: '正文与指派', mentions: ['mA'], attachments: [{ name: 'a.md', size: 3, attachmentId: 'attS' }], access: 'default', sendAs: 'ai' });
+    const d0 = s.getDraftFull('room:r1');
+    const env = { ...mkEnv2('cmd_s1', '正文与指派', [{ kind: 'member', memberId: 'mA' }], ['attS']), revAtSend: d0.rev };
+    s.stageOutbound('room:r1', env);
+    const settled = s.settleOutbound('room:r1', env);
+    expect(settled.body).toBe('');
+    expect(settled.mentions).toEqual([]); // 反例闭拢：已发 @ 不再残留
+    expect(settled.attachments.length).toBe(0);
+    expect(s.getDraftFull('room:r1').mentions).toEqual([]);
+  });
+
+  it('等待期新增 @/附件：保留（revAtSend 门）', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsS|u');
+    s.setDraftFull('room:r1', { body: '原正文', mentions: ['mA'], attachments: [], access: 'default', sendAs: 'ai' });
+    const d0 = s.getDraftFull('room:r1');
+    const env = { ...mkEnv2('cmd_s2', '原正文', [{ kind: 'member', memberId: 'mA' }]), revAtSend: d0.rev };
+    s.stageOutbound('room:r1', env);
+    // 等待期：换指派 + 加附件 + 改正文尾
+    s.setDraftFull('room:r1', { body: '原正文+补充', mentions: ['mB'], attachments: [{ name: 'new.md', size: 5, attachmentId: 'attN' }], access: 'default', sendAs: 'ai' });
+    const settled = s.settleOutbound('room:r1', env);
+    expect(settled.body).toBe('原正文+补充');
+    expect(settled.mentions).toEqual(['mB']);
+    expect(settled.attachments.map((a) => a.attachmentId)).toEqual(['attN']);
+  });
+
+  it('record_only 一次性复位：记录串回 record、非记录串回 ai；all 映射清理', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsS|u');
+    s.setDraftFull('thread:t4', { body: '记录串消息', mentions: ['all'], attachments: [], access: 'default', sendAs: 'record' });
+    const d0 = s.getDraftFull('thread:t4');
+    const env = { ...mkEnv2('cmd_s3', '记录串消息', [{ kind: 'all' }], { intent: 'record_only', target: { kind: 'thread', threadId: 't4' } }), revAtSend: d0.rev };
+    s.stageOutbound('thread:t4', env);
+    const settledR = s.settleOutbound('thread:t4', env, { recordThread: true });
+    expect(settledR.sendAs).toBe('record'); // 记录串保持仅记录语义
+    expect(settledR.mentions).toEqual([]); // all 映射同清
+    s.setDraftFull('room:r2', { body: '普通仅记录', mentions: [], attachments: [], access: 'default', sendAs: 'record' });
+    const d1 = s.getDraftFull('room:r2');
+    const env2 = { ...mkEnv2('cmd_s4', '普通仅记录', [], { intent: 'record_only' }), revAtSend: d1.rev };
+    s.stageOutbound('room:r2', env2);
+    expect(s.settleOutbound('room:r2', env2).sendAs).toBe('ai'); // 一次性复位
+  });
+});

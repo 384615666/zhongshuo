@@ -615,13 +615,31 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
 }
 
 /** ok 结算：先剥已发内容（持久化），最后删账（顺序即崩溃安全——见块注释）。 */
-export function settleOutbound(draftKey: string, env: PendingSendEnvelope): void {
+/**
+ * 统一成功清算（r63 P1——review-r62 §2 双重结算反例收口）：**唯一**的发送成功结算源，一次
+ * 写处理正文剥离/mentions 清理/已发 refs 剥离/一次性意图复位/上传项清理（先剥内容并持久化、
+ * 最后删账——顺序即崩溃安全）。Composer 成功分支与未知重试成功分支只读结算结果同步 UI，
+ * 不再各自 setDraftFull（双结算递增代次会使 revAtSend 门失效，已发 @ 指派残留）。
+ * 语义：revAtSend 未变（等待期未编辑）→ 剥本次已发正文、清本次 mentions（payload {member/all}
+ * ↔ 草稿 id 串映射）、剥本次 refs、record_only 一次性复位（记录串回 record、其余回 ai）；
+ * 等待期新编辑/新 @/新附件保留。返回结算后的草稿（现挂目标 UI 同步用）。
+ */
+export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?: { recordThread?: boolean }): HifiDraft {
   const d = getDraftFull(draftKey);
   const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
   const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
+  const sentMentionKeys = env.params.mentions.map((m) => (m.kind === 'all' ? 'all' : m.memberId ?? ''));
+  const mentionsClear = unchanged && d.mentions.length === sentMentionKeys.length && d.mentions.every((m, i) => m === sentMentionKeys[i]);
   const sentIds = new Set(env.params.attachmentRefs ?? []);
   const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
-  setDraftFull(draftKey, { ...d, body: nextBody, attachments: keptAttachments, sendAs: env.params.intent === 'record_only' ? 'ai' : d.sendAs });
+  const settled: HifiDraft = {
+    ...d,
+    body: nextBody,
+    mentions: mentionsClear ? [] : d.mentions,
+    attachments: keptAttachments,
+    sendAs: env.params.intent === 'record_only' ? (opts?.recordThread === true ? 'record' : 'ai') : d.sendAs,
+  };
+  setDraftFull(draftKey, settled);
   clearSettledUploads(draftKey, [...sentIds]);
   setState((s) => {
     const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
@@ -639,6 +657,7 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope): void
     return { ...s, outboundLedger: nextLedger, pendingSends: sends };
   });
   persistSnapshot();
+  return settled;
 }
 
 /** 明确拒绝：删账本条目（草稿保留）。 */

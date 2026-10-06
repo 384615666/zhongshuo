@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts } from '../data/store';
+import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
@@ -609,7 +609,7 @@ export function Composer({
     const syncIfMounted = (key: string, settled: HifiDraft) => {
       if (draftKeyRef.current !== key) return; // 已切目标：不动当前输入（B 的草稿不受 A 回执影响）
       setBody(settled.body);
-      setMentions(settled.mentions);
+      setMentions(settled.mentions); // r63：已发 @ 的清理结果随统一清结算同步（此前不同步=芯片残留）
       // 附件芯片由 store 驱动（clearSettledUploads 已按 refs 清）——不同步本地状态。
       setSendAs(settled.sendAs);
       setMentionOpen(false);
@@ -622,8 +622,10 @@ export function Composer({
     if (outcome != null && typeof (outcome as Promise<unknown>).then === 'function') {
       (outcome as Promise<FormalSendOutcome | void>).then((r) => {
         if (r == null || r.status === 'ok') {
-          const settled = settleForKey(keyAtSend);
-          syncIfMounted(keyAtSend, settled);
+          // r63 P1（review-r62 §2）：成功清算是**页面在 store 层的 settleOutbound 单一来源**
+          //（正文/mentions/refs/一次性意图/账本一次写，先剥内容后删账）。此处只读结算后的草稿
+          // 同步现挂 UI——不再二次 setDraftFull（双结算递增代次→revAtSend 门失效→已发 @ 残留）。
+          syncIfMounted(keyAtSend, getDraftFull(keyAtSend));
           commandIdRef.current = newId(); // 成功后下一次是新的命令
         } else if (r.status === 'failed') {
           commandIdRef.current = newId(); // 确定失败：新命令号重发
@@ -643,6 +645,8 @@ export function Composer({
       });
       return;
     }
+    // 原型同步形态（onSend 不返回 Promise）兼容分支——正式三页均异步并已在 store 层走
+    // settleOutbound 统一清算；此分支不构成第二结算源（r63 P1）。
     const settled = settleForKey(keyAtSend);
     syncIfMounted(keyAtSend, settled);
     commandIdRef.current = newId();
@@ -662,24 +666,13 @@ export function Composer({
     const keyAtSend = draftKey;
     void onRetrySend(env).then((r) => {
       if (r == null || r.status === 'ok') {
-        // r62 P1 清算顺序：**先剥已发内容并持久化，最后清信封**——反序存在「信封已清、
-        // 正文仍在」的崩溃窗口（换号重发=重复）。新序中途崩溃=横幅仍在→同号重发→幂等 ok
-        //→再次走本清算，不暴露可重复发送内容。
-        const d = getDraftFull(keyAtSend);
-        // 代次未变才剥离已发原文；等待期编辑过则整份保留（与 submit 成功清算同一规则）。
-        const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
-        const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
-        // r53 §4 收口：重试成功=该信封确实送达——剥其冻结的 attachmentRefs（本次确实发送的资源），
-        // 等待期新增的附件不动；同步清 store 已结算项。与 submit 成功清算同一规则——已发出
-        // 的 refs 不留在草稿里被下一条信封再次携带、再次落库。
-        const sentIds = new Set(env.params.attachmentRefs ?? []);
-        const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
-        const settled: HifiDraft = { ...d, body: nextBody, attachments: keptAttachments, sendAs: env.params.intent === 'record_only' ? (recordThread ? 'record' : 'ai') : d.sendAs };
-        setDraftFull(keyAtSend, settled);
-        clearSettledUploads(keyAtSend, [...sentIds]);
-        clearUnknownEnvelope(keyAtSend); // 有排队则下一条顶上（banner 继续）——内容已剥，最后清
+        // r63 P1：重试成功与普通成功共用 settleOutbound 统一清算（正文/mentions/refs/一次性
+        // 意图/账本+pendingSends 同号收口与队首顶替；先剥内容后删账的崩溃安全顺序不变）。
+        settleOutbound(keyAtSend, env, { recordThread });
+        const settled = getDraftFull(keyAtSend);
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
+          setMentions(settled.mentions);
           setSendAs(settled.sendAs);
         }
         return;
