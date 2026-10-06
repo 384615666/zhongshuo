@@ -10,7 +10,8 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": []
   },
-  "include": ["src/ui/hifi"]
+  "include": ["src/ui/hifi", "tests/browser"]
 }
