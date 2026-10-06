@@ -80,18 +80,23 @@
 | 成员页 | pages-misc MembersPage | r63 MembersPage（绑定表单） | 已还原（r63 表单放原型卡片结构——用户批准路径） |
 | 任务详情/研讨/运行页 | pages-task | 线程详情分组内嵌 | 已还原(线程内嵌形态=原型 §8 定案) |
 
-## 2. 施工日志（分小提交）
+## 2. 施工日志（分小提交，全部完成）
 
 - [x] 差异矩阵基线（本文件）
-- [ ] lib 移植（layout/threadNav/panels）+ actions-preview 正式化 + 资源登记表
-- [ ] loader 水合（threads/messages/tasks/readStates/subscriptions ← roomPool/threadEntities/threadMessages/threadTasks/threadReadSeq）+ room.pool 补 taskTitle 只读投影
-- [ ] Room.tsx 移植（含窄窗/分隔条/L3L4）
-- [ ] PreviewPane 合并（原型壳+正式渲染体）
-- [ ] daemon `project.files` 只读投影 + FilesGitPage 移植（真实树+Git 真实入口）
-- [ ] Settings 七分区移植（r63 真实配置归位）
-- [ ] App 壳移植（boot/接管/正式路由合并）
-- [ ] 交互门脚本 verify-parity-r64.cjs + 视觉门成对截图
-- [ ] desktop-daily-win-v2 + 全量回归 + 交付
+- [x] lib 移植（layout/threadNav/panels/navPrefs/actions-nav）+ actions-preview 正式化（引用=r61 引用卡/摘录独立/评论=源会话仅记录真实提交/工作区资源登记）
+- [x] loader 水合（threads/messages/tasks/readStates/subscriptions/taskDeliveries/runs ← roomPool/thread 快照）+ room.pool 补 taskTitle；selectors 未装载线程按卡片兜底
+- [x] Room.tsx 原样移植（宽窗 L2 并列/房间三页签/线程三视图+详情分组/次级菜单/窄窗/分隔条/L3L4；正式链=出站账本/停止三重绑定/验收返工/关注静音/收藏/表情/导出/room.create；未接命令禁用说明）。**修：装载 effect 移回 early-return 前（重开即崩溃反例）**
+- [x] PreviewPane 合并（原型壳+正式渲染体+legacy 单目标桥接；工作区文件=project.file.read）
+- [x] daemon project.files.list 只读投影 + FilesGitPage 真实目录懒装载 + GitPage 全真接线（status/branch/history/commitDiff 选父/stage/stageTask/unstage/commit/commitPreview/undo/push/pull/checkout/branch.create/conflict.*）
+- [x] Settings 七分区（壳=原型导航+搜索+SettingsRow；真实=启动项目回读/主题/runtime 绑定+派发防护/数据根+草稿快照+清理/远程监听/诊断）。**修：SettingsRuntime selector 稳定引用（useSyncExternalStore 契约）**
+- [x] App 壳移植（原型侧栏三段式+路由表 /project/:id/room/:id?thread=；boot 三态/接管/深链/恢复面板保留；旧路由归一；.app 带 data-zs-boot）
+- [x] 交互门 verify-parity-r64.cjs **ok=true**（房间页签/L2 并列/双输入区/详情分组/线程菜单/收起/真实树 4 条目/工作区预览装载/真实 git 历史/七导航/runtime 分区；real_calls=0、优雅退出、零残留）
+- [x] 视觉门 dist/desktop/visual-gate-r64/（原型×正式成对 7 场景 + manifest 记录视口/DPR/主题与边界说明）
+- [x] desktop-daily-win-v2 = bld_33e7c538c32dfa09（commit 4218a360，dirty=false，清单 591/591）——verify-desktop-daily 全绿（欢迎无 seed/绑定表单/提示消失/仅记录+草稿重开/realCalls=0）
+- [x] 全量回归 894/894 + 主/hifi 双类型门 0 错
+
+### F 节修订（Git 矩阵升级）
+矩阵 D 节初稿把 Git 状态/提交/推送标为「真实能力限制」——实际 daemon 命令面完整（gitWrite 全链），本批已全真接线并经交互门验证（真实 git 历史 + fixture 提交可见）。状态=**已还原（读+写全真；ahead/behind 与 upstream 跟踪、remotes 列表投影未装载——状态条如实显示「没有上游分支/没有配置远端」）**。
 
 ## 3. 验收门
 

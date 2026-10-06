@@ -2,7 +2,36 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-06 第六十三轮，唯一权威快照）
+## 当前真实状态（2026-10-06 第六十四轮，唯一权威快照）
+
+> R64=**按已批准原型还原前端**（用户明确拒绝「只学会配色」的简化界面；R63 首用 PASS 收案但
+> 原型一致性未过）。**主交付=desktop-daily-win-v2** `bld_33e7c538c32dfa09`（commit 4218a360，
+> dirty=false，591/591，verify-desktop-daily 全绿）。完整差异矩阵与施工日志=
+> `prototype-parity-matrix-r64-20261006.md`（必读）。用户下次只看三处点名场景（回复串/文件
+> 与Git/设置）是否回到原型体验。
+> - **架构**：AppState 视图模型=唯一边界（原型页面组件原样移植；loader 水合层把 roomPool/
+>   thread 快照→threads/messages/tasks/readStates/subscriptions/taskDeliveries/runs；selectors
+>   对未装载线程按卡片兜底）；lib layout/threadNav/panels/actions-nav/actions-preview 原样移植
+>   （引用=r61 引用卡+摘录独立+评论=源会话仅记录真实提交）；正式产品零依赖原型模块/seeds/
+>   mock-tree。
+> - **已还原**：Room.tsx（宽窗 L2 主池+context-thread 并列/房间三页签/线程三视图+详情分组/
+>   次级菜单/窄窗/分隔条/L3L4 预览并排——出站账本/停止/验收返工/关注静音/收藏/表情/导出/
+>   room.create 全真）；PreviewPane 合并（原型壳+正式渲染体+legacy 桥接）；FilesGitPage（真实
+>   目录懒装载 project.files.list+工作区 project.file.read 预览）；GitPage 全真（daemon gitWrite
+>   全链接回原型入口）；Settings 七分区（真实=启动项目/主题/runtime 绑定+派发防护/数据根+草稿
+>   快照+清理/远程监听/诊断；未接命令禁用说明）；App 壳（原型侧栏+路由表 /project/:id/room/
+>   :id?thread=，boot/接管/深链/恢复面板保留，旧 /room=/thread= 归一）。
+> - **两门全绿**：交互门 verify-parity-r64.cjs ok=true（real_calls=0/优雅退出/零残留）；视觉门
+>   dist/desktop/visual-gate-r64/（原型×正式成对 7 场景+manifest）。全量 894/894+双类型门 0 错。
+> - **坑（本轮实证）**：①RoomPage 装载 effect 误插 early-return 之后=重开即崩（Rendered more
+>   hooks）；②useStore selector 返回新数组（.filter）=useSyncExternalStore 契约违反整树崩——
+>   必须 useMemo；③daemon DTO 无 sha256 于 project.file.read（hash 占位如实）；④git 命令面
+>   完整存在（gitWrite 全链）——矩阵初稿误标能力限制；⑤heredoc 长脚本会被截断——用 Write 落
+>   .py 再执行。
+> - **待续（R65+）**：DM/看板/活动/收藏/归档/项目设置页按矩阵 F 节逐页还原；upstream/ahead/
+>   behind/remotes 投影补齐；研讨/运行详情只读投影；v2 用户反馈优先。
+
+## 前轮快照（2026-10-06 第六十三轮）
 
 > R63=日常桌面使用批次（review-r62-next-round 全项；主线转用户日常使用，复用已认证 runtime/
 > 配置）。**用户收案**：R1/R2 **PASS 继承不再重测**；Android 除发送失败就地提示缺口外报正常
