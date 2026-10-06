@@ -96,9 +96,10 @@ async function main() {
   try {
     cdp = await connectPage(port, 'esc');
     await waitFor(cdp, `document.body.classList.contains('hifi-on') && [...document.querySelectorAll('#hifi-root .side-item-label')].some((e) => e.textContent.includes('默认房间'))`, 110_000, '首启自动进入项目');
-    // 种子 PPT：进默认房间 → 打开「PPT 预览样本」线程卡 → 点锚块 PPT 芯片。
+    // 种子 PPT：进默认房间 → 打开「PPT 预览样本」线程卡 → 点锚块 PPT 芯片（首启种子宽窗——与包验证器同口径 150s+60s）。
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
-    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 30_000, '主池 PPT 样本卡');
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].length > 0`, 150_000, '主池线程卡（种子宽窗）');
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 60_000, '主池 PPT 样本卡');
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('PPT 预览样本'))?.click(), true`));
     await waitFor(cdp, `document.querySelector('[data-zs-preview=hifi]') == null && [...document.querySelectorAll('.msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 30_000, '线程锚块 PPT 芯片');
     await cdp.eval(probe(`[...document.querySelectorAll('.msg-attach')].find((b) => b.textContent.includes('回归幻灯'))?.click(), true`));
@@ -152,6 +153,24 @@ async function main() {
     const dlgAfterEsc2 = JSON.parse(await widthState());
     report.positions.push({ position: 'upper-dialog', before: dlgBefore, afterFirstEsc: dlgAfterEsc1, dialogClosedFirst: dlgClosed === true, afterSecondEsc: dlgAfterEsc2, exitedOnSecond: dlgAfterEsc1.mode === 'full' && dlgAfterEsc2.mode === 'normal', exited: dlgClosed === true && dlgAfterEsc2.mode === 'normal' });
 
+    // —— 宽模式位（r62 P5——review-r61 §5：宽语义新增不能仅按 full 正例泛化）：进入宽→
+    //    实际矩形加宽（介于 normal 与 full）→原生 Esc→回 normal 且矩形回落。
+    await cdp.eval(probe(`[...document.querySelectorAll('[data-zs-preview=hifi] button')].find((b) => b.title.includes('加宽'))?.click(), true`));
+    const wideOk = await waitFor(cdp, `document.querySelector('[data-zs-preview=hifi]')?.getAttribute('data-zs-preview-width') === 'wide'`, 8000, '进入宽').catch(() => false);
+    let wideCase = null;
+    if (wideOk === true) {
+      const wBefore = JSON.parse(await widthState());
+      await cdp.eval(`window.__escLog = []; true`);
+      await cdp.esc();
+      await sleep(450);
+      const wAfter = JSON.parse(await widthState());
+      const wLog = await cdp.tryEval(`window.__escLog.slice()`);
+      wideCase = { before: wBefore, after: wAfter, receivedKeys: Array.isArray(wLog) ? wLog : [], exited: wBefore.mode === 'wide' && wAfter.mode === 'normal' && wAfter.rect < wBefore.rect && wAfter.rect < wBefore.vw };
+      report.positions.push({ position: 'wide', ...wideCase });
+    } else {
+      report.positions.push({ position: 'wide', exited: false, note: '未进入宽模式' });
+    }
+
     // —— 缩放变体：Ctrl+= 实际放大（visualViewport.scale 记录；未生效如实记录）后一键位复测。
     const scaleBefore = await cdp.tryEval(`window.visualViewport?.scale ?? null`);
     for (let i = 0; i < 3; i += 1) { await cdp.nativeKey('+', 'Equal', 187, 2); await sleep(200); }
@@ -165,7 +184,7 @@ async function main() {
     report.zoom = { scaleBefore, scaleAfter, applied: zoomCase != null, case: zoomCase };
 
     report.overall = report.pptVisual.done === true
-      && report.positions.slice(0, 3).every((p) => p.exited === true)
+      && report.positions.filter((p) => p.position !== 'upper-dialog' && p.position !== 'zoomed-slide-content').every((p) => p.exited === true)
       && (report.positions[3] != null && report.positions[3].exited === true)
       && (report.zoom.case == null || report.zoom.case.exited === true);
   } finally {
