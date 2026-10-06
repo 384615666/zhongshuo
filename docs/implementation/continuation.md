@@ -2,7 +2,34 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-06 第六十四轮，唯一权威快照）
+## 当前真实状态（2026-10-06 第六十五轮，唯一权威快照）
+
+> R65=完整桌面前端逐项检查与修复长任务（用户反馈：项目按钮/属性/添加房间/看板/添加项目有缺陷；
+> 不再只修点名三页）。**主交付=desktop-daily-win-v3** `bld_cdc7ef00dabddccd`（commit 368ebf05，
+> dirty=false，591/591，verify-desktop-daily 全绿）；交互门 `verify-parity-r65.cjs` **全绿**；
+> 全量 894/894+双类型门 0 错。v2/用户数据/草稿/CA 稳定保留。
+> - **项目与房间闭环（复核 §1A/§4 反例全闭）**：迁移046（projects.description+navigation.pinned）；
+>   daemon 增量 project.list/update(CAS)/lifecycle(archive/unarchive/remove/restore/relocate+未结束守卫)、
+>   room.update/archive/members.set、navigation.get/set（服务端导航偏好）；前端=注册表合并不替换
+>   （开 B 不丢 A）、TitleBar 项目管理菜单（勾选可见/点名切换/搜索）、侧栏 ⋯（置顶/编辑/主页/成员/
+>   设置/归档/移除）+「+」建房（在途锁连点恰一次）、项目主页（挂载聚焦+最近项目+重新定位）、
+>   项目设置页（信息 CAS/验收开关/协作限制/归档/全停=board.view→逐任务三重绑定停止）、
+>   欢迎页真实注册表+OpenFolderModal 真实 pickFolder 幂等注册。
+> - **看板还原**：TasksBoardPage 同源（范围/房间筛选/项目×状态分组/待验收版本/退出未确认标注），
+>   数据=board.view 权威聚合（+room_task_number 投影）。
+> - **Git 合同级**：branch.list 真 upstream/ahead/behind（null=未知不冒充 0——复核 §1 反例闭）；
+>   git.remote.list 真清单；owner 字符串批量暂存不再降级全路径；写动作经交互门 UI 实证（暂存→提交
+>   →bare origin 收到推送）+STALE 负对照拒绝。
+> - **R64 声明纠正**：visual-gate-r64 不能称「七组同尺寸成对全绿」（4 张原型图+视口不同）——
+>   visual-gate-r65/manifest.json 已如实登记；本批新场景成对原型图**待补拍**（不冒充成对）。
+> - **坑**：daemon 管道单实例——探针第二客户端 ENOENT（改走渲染进程 window.zs=真实用户路径）；
+>   暂存后 s.git 投影 10s 轮询才见提交表单（gate 需等 textarea）；applyServerNavPrefs 无偏好=全量可见；
+>   房间状态投影缺 description/revision 曾导致设置无锁（room.list 已补）。
+> - **待续 R66+**：视觉门成对原型图补拍（同 CSS 视口/DPR/主题）；活动/搜索收藏/待办/归档管理/DM/
+>     成员页原型结构逐页核对（现为功能完整但非原型布局——矩阵 F 节待修不因本批收口）；
+>     project.open 响应补 rootPath/canonicalPath；upstream/计数在 remotes 多远端场景复核。
+
+## 前轮快照（2026-10-06 第六十四轮）
 
 > R64=**按已批准原型还原前端**（用户明确拒绝「只学会配色」的简化界面；R63 首用 PASS 收案但
 > 原型一致性未过）。**主交付=desktop-daily-win-v2** `bld_33e7c538c32dfa09`（commit 4218a360，
