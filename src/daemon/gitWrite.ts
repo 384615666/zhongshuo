@@ -1069,22 +1069,58 @@ export function validateBranchName(name: string): void {
   }
 }
 
-export interface BranchItem { name: string; oid: string; lastCommitTs: number }
+
+/**
+ * R65：upstream/ahead/behind 真实事实（review-r64 §1 反例：投影曾以 undefined/0 冒充
+ * 「没有上游/与远端一致」）。每分支一条 `rev-list --left-right --count`（upstream 缺失时
+ * upstream=null、ahead/behind=null=**未知/无上游**，不是 0）；upstream 跟踪关系来自
+ * for-each-ref 的 upstream:short。远端 URL 另见 gitRemoteList。
+ */
+export interface BranchItem { name: string; oid: string; lastCommitTs: number; upstream: string | null; ahead: number | null; behind: number | null }
 
 export async function gitBranchList(input: { projectId: string; projectRoot: string }): Promise<{ current: string | null; branches: BranchItem[]; dirtyCount: number }> {
   const loc = await repoGuard(input.projectRoot);
-  const cap = await mustGit(['-C', loc.worktreeRoot, 'for-each-ref', 'refs/heads', '--format=%(refname:short)\x1f%(objectname)\x1f%(committerdate:unix)'], { capBytes: 64 * 1024, what: 'for-each-ref' });
+  const cap = await mustGit(['-C', loc.worktreeRoot, 'for-each-ref', 'refs/heads', '--format=%(refname:short)\x1f%(objectname)\x1f%(committerdate:unix)\x1f%(upstream:short)'], { capBytes: 64 * 1024, what: 'for-each-ref' });
   const branches: BranchItem[] = [];
   for (const line of cap.stdout.toString('utf8').split('\n')) {
     if (line.trim() === '') continue;
-    const [name, oid, ts] = line.split('\x1f');
-    if (name == null || oid == null) throw new GitWriteError('GIT_COMMAND_FAILED', `for-each-ref 输出无法解析：${line.slice(0, 60)}`);
-    branches.push({ name, oid, lastCommitTs: Number(ts ?? 0) });
+    const parts = line.split('\x1f');
+    const name = parts[0] ?? '';
+    const oid = parts[1] ?? '';
+    const ts = parts[2] ?? '0';
+    const upstream = parts[3] ?? '';
+    if (name.length === 0 || oid.length === 0) throw new GitWriteError('GIT_COMMAND_FAILED', `for-each-ref 输出无法解析：${line.slice(0, 60)}`);
+    branches.push({ name, oid, lastCommitTs: Number(ts), upstream: upstream.length > 0 ? upstream : null, ahead: null, behind: null });
+  }
+  for (const b of branches) {
+    if (b.upstream == null) continue;
+    const rv = await mustGit(['-C', loc.worktreeRoot, 'rev-list', '--left-right', '--count', `${b.upstream}...${b.name}`], { capBytes: 1024, what: 'rev-list' });
+    const m = /^(\d+)\s+(\d+)\s*$/.exec(rv.stdout.toString('utf8').trim());
+    if (m != null) { b.behind = Number(m[1]); b.ahead = Number(m[2]); }
   }
   const current = await currentBranchOf(loc);
   const status = await currentStatus(loc);
   const dirty = new Set(status.filter((e) => e.category === 'unstaged' || e.category === 'untracked').map((e) => e.path));
   return { current, branches, dirtyCount: dirty.size };
+}
+
+/** R65：远端真实清单（git remote -v push 侧去重；URL 原样——不做凭据推断）。 */
+export async function gitRemoteList(input: { projectRoot: string }): Promise<{ remotes: Array<{ name: string; url: string }> }> {
+  const loc = await repoGuard(input.projectRoot);
+  const cap = await mustGit(['-C', loc.worktreeRoot, 'remote', '-v'], { capBytes: 64 * 1024, what: 'remote -v' });
+  const remotes: Array<{ name: string; url: string }> = [];
+  const seen = new Set<string>();
+  for (const line of cap.stdout.toString('utf8').split('\n')) {
+    const m = /^(\S+)\s+(\S+)\s+\(push\)$/.exec(line.trim());
+    if (m == null) continue;
+    const rName = m[1] ?? '';
+    const rUrl = m[2] ?? '';
+    if (rName.length === 0) continue;
+    if (seen.has(rName)) continue;
+    seen.add(rName);
+    remotes.push({ name: rName, url: rUrl });
+  }
+  return { remotes };
 }
 
 export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; name: string; expectedHead: string | null; journal: JournalInput }): Promise<{ name: string; oid: string; replayed?: boolean }> {

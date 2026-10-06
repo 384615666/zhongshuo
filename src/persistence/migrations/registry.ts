@@ -44,6 +44,7 @@ import { migration042 } from './042-turn-protection-state-backfill.ts';
 import { migration043 } from './043-turn-protection-release-evidence.ts';
 import { migration044 } from './044-turn-protection-evidence-complete.ts';
 import { migration045 } from './045-turn-probe-field-integrity.ts';
+import { migration046 } from './046-project-description.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -92,4 +93,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration043,
   migration044,
   migration045,
+  migration046,
 ];

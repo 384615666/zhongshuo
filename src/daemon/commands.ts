@@ -678,6 +678,202 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
 
   try {
     switch (env.method) {
+      case 'project.list': {
+        // R65（review-r64 §1A）：注册表只读——多项目前端集合的事实源（此前 UI 只装当前单个，
+        // 误标「无多项目注册表」）。status 原样（active/archived/directory_missing/removed）；
+        // 目录可访问性按 canonical_path existsSync 快检（不可访问=directory_missing 融合显示，
+        // 不改库）。含已移除/归档（前端按生命周期过滤呈现）。
+        z.strictObject({}).parse(env.params);
+        const rows = deps.db.prepare('SELECT id, display_name, root_path, canonical_path, directory_identity, status, revision, description, task_review_enabled, created_at FROM projects ORDER BY created_at, rowid').all() as Array<{
+          id: string; display_name: string; root_path: string; canonical_path: string; directory_identity: string;
+          status: string; revision: number; description: string | null; task_review_enabled: number; created_at: number;
+        }>;
+        const items = rows.map((r) => ({
+          id: r.id, displayName: r.display_name, rootPath: r.root_path, canonicalPath: r.canonical_path,
+          directoryIdentity: r.directory_identity,
+          status: r.status === 'active' && !existsSync(r.canonical_path) ? 'directory_missing' : r.status,
+          revision: r.revision, description: r.description ?? null,
+          taskReviewEnabled: r.task_review_enabled === 1, createdAt: r.created_at,
+        }));
+        return withCommandId({ ok: true, data: { items } });
+      }
+      case 'project.update': {
+        // R65（review-r64 §4B）：项目属性真实写——displayName/description（描述=migration 046 列；
+        // 不重命名磁盘目录）。expectedRevision 乐观锁（A 的编辑不写进 B；过时=STALE_REVISION）。
+        const params = z.strictObject({
+          projectId: z.string().min(1), expectedRevision: z.number().int().nonnegative(),
+          displayName: z.string().min(1).max(120).optional(), description: z.string().max(2000).optional(),
+        }).refine((p2) => p2.displayName != null || p2.description != null, { message: '无更新字段' }).parse(env.params);
+        const result = run(() => {
+          const cur = deps.db.prepare('SELECT revision, status FROM projects WHERE id = ?').get(params.projectId) as { revision: number; status: string } | undefined;
+          if (cur == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          if (cur.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `项目已变更（当前 revision ${cur.revision}，请求按 ${params.expectedRevision}）——请刷新后重试`);
+          if (cur.status === 'removed') throw new DaemonCommandError('FORBIDDEN', '已移除的项目不可编辑（恢复后再改）');
+          deps.db.prepare('UPDATE projects SET display_name = COALESCE(?, display_name), description = COALESCE(?, description), revision = revision + 1 WHERE id = ?')
+            .run(params.displayName ?? null, params.description ?? null, params.projectId);
+          const after = deps.db.prepare('SELECT id, display_name, description, revision FROM projects WHERE id = ?').get(params.projectId) as { id: string; display_name: string; description: string | null; revision: number };
+          return { project: { id: after.id, displayName: after.display_name, description: after.description, revision: after.revision } };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'project.lifecycle': {
+        // R65（review-r64 §4B）：归档/恢复/移除/重新关联——沿 001 schema 的 status 机：
+        //  archive=保留历史退出日常树（房间只读）；remove=仅解除应用关联，不删磁盘文件/历史；
+        //  restore=移除→active（归档房不跟着恢复）；relocate=目录失效后的重新定位（改路径身份）。
+        // 归档/移除在有未结束工作时拒绝（不借生命周期操作自动停止/派发——确认框给去停止入口）。
+        const params = z.strictObject({
+          projectId: z.string().min(1), expectedRevision: z.number().int().nonnegative(),
+          action: z.enum(['archive', 'unarchive', 'remove', 'restore', 'relocate']),
+          newRootPath: z.string().min(1).max(1000).optional(),
+        }).parse(env.params);
+        const result = run(() => {
+          const cur = deps.db.prepare('SELECT revision, status, root_path, canonical_path, directory_identity FROM projects WHERE id = ?').get(params.projectId) as { revision: number; status: string; root_path: string; canonical_path: string; directory_identity: string } | undefined;
+          if (cur == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          if (cur.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `项目已变更（当前 revision ${cur.revision}）——请刷新后重试`);
+          const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks WHERE project_id = ? AND status IN ('ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.projectId) as { c: number }).c;
+          if ((params.action === 'archive' || params.action === 'remove') && unfinished > 0) {
+            throw new DaemonCommandError('WORKER_STILL_RUNNING', `项目还有 ${unfinished} 个未结束的任务——先在房间/看板处理（停止或等完成）；归档/移除不会自动停止或派发`);
+          }
+          let nextStatus = cur.status;
+          if (params.action === 'archive') nextStatus = 'archived';
+          if (params.action === 'unarchive' || params.action === 'restore') nextStatus = 'active';
+          if (params.action === 'remove') nextStatus = 'removed';
+          if (params.action === 'relocate') {
+            if (params.newRootPath == null) throw new DaemonCommandError('VALIDATION_INVALID', 'relocate 需要 newRootPath');
+            if (!existsSync(params.newRootPath)) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `新目录不存在：${params.newRootPath}`);
+          }
+          if (params.action === 'relocate') {
+            const newPath = resolve(params.newRootPath ?? '');
+            deps.db.prepare('UPDATE projects SET root_path = ?, canonical_path = ?, directory_identity = ?, status = ?, revision = revision + 1 WHERE id = ?')
+              .run(newPath, newPath, `dir:${newPath}`, 'active', params.projectId);
+          } else {
+            deps.db.prepare('UPDATE projects SET status = ?, revision = revision + 1 WHERE id = ?').run(nextStatus, params.projectId);
+          }
+          const after = deps.db.prepare('SELECT id, status, revision FROM projects WHERE id = ?').get(params.projectId) as { id: string; status: string; revision: number };
+          return { project: after };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'navigation.get': {
+        // R65（review-r64 §4A）：服务端导航偏好（001 navigation_preferences 表——按 viewer+client）。
+        // 无行=null（前端回落本地/全量默认）；列校验+去重在写入侧做，读取侧原样+投影有效 id。
+        const params = z.strictObject({ clientId: z.string().min(1).max(120) }).parse(env.params);
+        const row = deps.db.prepare('SELECT active_project_id, visible_project_ids_json, expanded_project_ids_json, pinned_project_ids_json, file_git_tabs_json, revision FROM navigation_preferences WHERE viewer_id = ? AND client_id = ?').get(deps.localUserId, params.clientId) as
+          | { active_project_id: string | null; visible_project_ids_json: string; expanded_project_ids_json: string; pinned_project_ids_json: string | null; file_git_tabs_json: string | null; revision: number }
+          | undefined;
+        if (row == null) return withCommandId({ ok: true, data: { prefs: null } });
+        const parseIds = (raw: string | null): string[] => {
+          if (raw == null) return [];
+          try { const a = JSON.parse(raw); return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+        };
+        return withCommandId({ ok: true, data: { prefs: {
+          activeProjectId: row.active_project_id,
+          visibleProjectIds: parseIds(row.visible_project_ids_json),
+          expandedProjectIds: parseIds(row.expanded_project_ids_json),
+          pinnedProjectIds: parseIds(row.pinned_project_ids_json),
+          fileGitTabs: (() => { try { const o = row.file_git_tabs_json == null ? null : JSON.parse(row.file_git_tabs_json); return o != null && typeof o === 'object' ? o as Record<string, string> : {}; } catch { return {}; } })(),
+          revision: row.revision,
+        } } });
+      }
+      case 'navigation.set': {
+        // R65：服务端导航偏好写入（upsert by viewer+client；json 字段白名单校验——只收 string 数组
+        // 与 files/git 二值表；active 可为 null）。前端本地 localStorage 仍作快速镜像，服务端为
+        // 跨机权威；board.view scope=all 的可见集即读本表（无行=全量）。
+        const params = z.strictObject({
+          clientId: z.string().min(1).max(120),
+          activeProjectId: z.string().min(1).nullable(),
+          visibleProjectIds: z.array(z.string().min(1)).max(500),
+          expandedProjectIds: z.array(z.string().min(1)).max(500),
+          pinnedProjectIds: z.array(z.string().min(1)).max(500).optional(),
+          fileGitTabs: z.record(z.string().min(1), z.enum(['files', 'git'])).optional(),
+        }).parse(env.params);
+        const dedup = (a: string[]): string[] => [...new Set(a)];
+        const result = run(() => {
+          deps.db.prepare(`INSERT INTO navigation_preferences (viewer_id, client_id, active_project_id, visible_project_ids_json, expanded_project_ids_json, pinned_project_ids_json, file_git_tabs_json, revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+             ON CONFLICT(viewer_id, client_id) DO UPDATE SET
+               active_project_id = excluded.active_project_id,
+               visible_project_ids_json = excluded.visible_project_ids_json,
+               expanded_project_ids_json = excluded.expanded_project_ids_json,
+               pinned_project_ids_json = COALESCE(excluded.pinned_project_ids_json, navigation_preferences.pinned_project_ids_json),
+               file_git_tabs_json = COALESCE(excluded.file_git_tabs_json, navigation_preferences.file_git_tabs_json),
+               revision = navigation_preferences.revision + 1`)
+            .run(deps.localUserId, params.clientId, params.activeProjectId,
+              JSON.stringify(dedup(params.visibleProjectIds)), JSON.stringify(dedup(params.expandedProjectIds)),
+              params.pinnedProjectIds != null ? JSON.stringify(dedup(params.pinnedProjectIds)) : null,
+              params.fileGitTabs != null ? JSON.stringify(params.fileGitTabs) : null);
+          return { saved: true };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'room.update': {
+        // R65（review-r64 §4C）：房间属性真实写——名称/描述（settings_json.description）/协调者
+        //（须为房间成员）。expectedRevision 乐观锁；协调者移出前须先换（room.members.remove 另守）。
+        const params = z.strictObject({
+          roomId: z.string().min(1), expectedRevision: z.number().int().nonnegative(),
+          name: z.string().min(1).max(60).optional(),
+          description: z.string().max(1000).optional(),
+          coordinatorMemberId: z.string().min(1).optional(),
+        }).refine((p2) => p2.name != null || p2.description != null || p2.coordinatorMemberId != null, { message: '无更新字段' }).parse(env.params);
+        const result = run(() => {
+          const room = deps.db.prepare('SELECT id, project_id, name, settings_json, coordinator_member_id, revision, archived_at FROM rooms WHERE id = ?').get(params.roomId) as { id: string; project_id: string; name: string; settings_json: string | null; coordinator_member_id: string; revision: number; archived_at: number | null } | undefined;
+          if (room == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `房间不存在：${params.roomId}`);
+          if (room.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `房间已变更（当前 revision ${room.revision}）——请刷新后重试`);
+          if (room.archived_at != null) throw new DaemonCommandError('FORBIDDEN', '已归档房间只读——取消归档后再修改');
+          if (params.coordinatorMemberId != null) {
+            const inRoom = (deps.db.prepare('SELECT count(*) c FROM room_members WHERE room_id = ? AND member_id = ?').get(params.roomId, params.coordinatorMemberId) as { c: number }).c;
+            const sameProject = (deps.db.prepare('SELECT count(*) c FROM project_members WHERE id = ? AND project_id = ?').get(params.coordinatorMemberId, room.project_id) as { c: number }).c;
+            if (inRoom === 0 || sameProject === 0) throw new DaemonCommandError('VALIDATION_INVALID', '协调者必须是本房间的本项目成员');
+          }
+          const settings = room.settings_json == null ? {} : JSON.parse(room.settings_json) as Record<string, unknown>;
+          if (params.description != null) settings.description = params.description;
+          deps.db.prepare('UPDATE rooms SET name = COALESCE(?, name), coordinator_member_id = COALESCE(?, coordinator_member_id), settings_json = ?, revision = revision + 1 WHERE id = ?')
+            .run(params.name ?? null, params.coordinatorMemberId ?? null, JSON.stringify(settings), params.roomId);
+          const after = deps.db.prepare('SELECT id, name, settings_json, coordinator_member_id, revision FROM rooms WHERE id = ?').get(params.roomId) as { id: string; name: string; settings_json: string | null; coordinator_member_id: string; revision: number };
+          return { room: { id: after.id, name: after.name, description: ((JSON.parse(after.settings_json ?? '{}') as { description?: string }).description) ?? null, coordinatorMemberId: after.coordinator_member_id, revision: after.revision } };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'room.archive': {
+        // R65（review-r64 §4C）：房间归档/取消归档——archived_at 置位/清空（历史保留；归档=只读、
+        // 不再接收新消息/建任务）。归档前真实检查：本房间存在未结束任务则拒绝（不自动停止）。
+        const params = z.strictObject({ roomId: z.string().min(1), expectedRevision: z.number().int().nonnegative(), action: z.enum(['archive', 'unarchive']) }).parse(env.params);
+        const result = run(() => {
+          const room = deps.db.prepare('SELECT revision, archived_at FROM rooms WHERE id = ?').get(params.roomId) as { revision: number; archived_at: number | null } | undefined;
+          if (room == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `房间不存在：${params.roomId}`);
+          if (room.revision !== params.expectedRevision) throw new DaemonCommandError('STALE_REVISION', `房间已变更（当前 revision ${room.revision}）——请刷新后重试`);
+          if (params.action === 'archive') {
+            if (room.archived_at != null) return { room: { id: params.roomId, archivedAt: room.archived_at } };
+            const unfinished = (deps.db.prepare("SELECT count(*) c FROM tasks t JOIN conversations c2 ON c2.id = t.conversation_id WHERE t.room_id = ? AND t.kind = 'room_task' AND t.status IN ('ACTIVE','WAITING_USER','BLOCKED','REVIEW')").get(params.roomId) as { c: number }).c;
+            if (unfinished > 0) throw new DaemonCommandError('WORKER_STILL_RUNNING', `房间还有 ${unfinished} 个未结束的任务——先处理（停止/验收/等待完成）；归档不会自动停止`);
+            const now = Date.now();
+            deps.db.prepare('UPDATE rooms SET archived_at = ?, revision = revision + 1 WHERE id = ?').run(now, params.roomId);
+            return { room: { id: params.roomId, archivedAt: now } };
+          }
+          deps.db.prepare('UPDATE rooms SET archived_at = NULL, revision = revision + 1 WHERE id = ?').run(params.roomId);
+          return { room: { id: params.roomId, archivedAt: null } };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'room.members.set': {
+        // R65（review-r64 §4C）：房间成员增删——add=项目成员入房（幂等）；remove=移出（协调者
+        // 须先换人；正在运行研讨不悄悄改冻结名单——新增只对后续新任务生效，语义在界面注明）。
+        const params = z.strictObject({ roomId: z.string().min(1), memberId: z.string().min(1), action: z.enum(['add', 'remove']) }).parse(env.params);
+        const result = run(() => {
+          const room = deps.db.prepare('SELECT project_id, coordinator_member_id FROM rooms WHERE id = ?').get(params.roomId) as { project_id: string; coordinator_member_id: string } | undefined;
+          if (room == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `房间不存在：${params.roomId}`);
+          const member = deps.db.prepare('SELECT id, project_id, principal_type FROM project_members WHERE id = ?').get(params.memberId) as { id: string; project_id: string; principal_type: string } | undefined;
+          if (member == null || member.project_id !== room.project_id) throw new DaemonCommandError('VALIDATION_INVALID', '成员不属于本项目');
+          if (params.action === 'add') {
+            deps.db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) VALUES (?, ?)').run(params.roomId, params.memberId);
+            return { roomId: params.roomId, memberId: params.memberId, inRoom: true };
+          }
+          if (room.coordinator_member_id === params.memberId) throw new DaemonCommandError('VALIDATION_INVALID', '协调者不能移出——先在房间设置更换协调者');
+          deps.db.prepare('DELETE FROM room_members WHERE room_id = ? AND member_id = ?').run(params.roomId, params.memberId);
+          return { roomId: params.roomId, memberId: params.memberId, inRoom: false };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
       case 'project.open': {
         const params = z.strictObject({ path: z.string().min(1), displayName: z.string().optional(), agentNames: z.array(z.string().min(1)).optional() }).parse(env.params);
         const result = run(() => {
@@ -1577,6 +1773,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         return withCommandId({ ok: true, data: r });
       }
+      case 'git.remote.list':
       case 'git.stage':
       case 'git.unstage':
       case 'git.stageTask':
@@ -1667,6 +1864,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (env.method === 'git.branch.list') {
             const { gitBranchList } = await import('./gitWrite.ts');
             const data = await gitBranchList({ projectId: gitProjectId, projectRoot: gitProject.canonical_path });
+            return withCommandId({ ok: true, data });
+          }
+          if (env.method === 'git.remote.list') {
+            // R65：远端真实清单（只读——repoGuard 同写路径；URL 原样，不做凭据推断）。
+            const { gitRemoteList } = await import('./gitWrite.ts');
+            const data = await gitRemoteList({ projectRoot: gitProject.canonical_path });
             return withCommandId({ ok: true, data });
           }
           if (env.method === 'git.branch.create') {
