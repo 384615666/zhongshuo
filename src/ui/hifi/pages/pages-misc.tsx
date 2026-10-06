@@ -229,11 +229,11 @@ export function FilesGitPage({ projectId, query }: { projectId: string; query: R
                 </button>
                 <button
                   className="btn sm"
-                  title={`真实 git.push（仅快进、不强推；expectedHead+远端头+URL 三重绑定）`}
+                  title={`真实 git.push（仅快进、不强推；expectedHead+远端头+URL 三重绑定）${curBranch?.ahead != null && curBranch.ahead > 0 ? `——本地领先 ${curBranch.ahead}` : ''}`}
                   onClick={() => void push(projectId)}
                   disabled={!curBranch}
                 >
-                  <Icon name="upload" size={12} /> 推送
+                  <Icon name="upload" size={12} /> 推送{curBranch?.ahead != null && curBranch.ahead > 0 ? ` (${curBranch.ahead})` : ''}
                 </button>
                 {/* 「分支」→「新建分支」：这个按钮是**创建**动作，
                     左栏的「分支」是**查看**视图，两个不能同名。
@@ -275,14 +275,16 @@ export function FilesGitPage({ projectId, query }: { projectId: string; query: R
                   原来写成三元的 if/else，落后的时候就把领先吃掉（反之亦然），
                   于是"既领先 2 又落后 3"被显示成"领先 2"。 */}
               <span>
-                {curBranch?.upstream
-                  ? (() => {
-                    const parts: string[] = [];
-                    if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
-                    if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
-                    return parts.length > 0 ? parts.join(' · ') : '与远端一致';
-                  })()
-                  : '没有上游分支'}
+                {curBranch?.upstream == null
+                  ? (git?.remotes.length ?? 0) > 0 ? '没有上游分支（远端已配置，可推送/拉取）' : '没有上游分支'
+                  : curBranch.ahead == null || curBranch.behind == null
+                    ? `${curBranch.upstream}（领先/落后未知——rev-list 未取得）`
+                    : (() => {
+                      const parts: string[] = [];
+                      if (curBranch.ahead > 0) parts.push(`领先 ${curBranch.ahead}`);
+                      if (curBranch.behind > 0) parts.push(`落后 ${curBranch.behind}`);
+                      return parts.length > 0 ? parts.join(' · ') : '与远端一致';
+                    })()}
               </span>
               <span className="fg-sep" />
               <span title="工作区改动文件数">{git.status.length} 个未提交改动</span>

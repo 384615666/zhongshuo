@@ -20,8 +20,9 @@ interface RepoStatusData {
   untracked: Array<{ xy: string; path: string }>;
   truncated: boolean;
 }
-interface BranchListData { current: string | null; branches: Array<{ name: string; oid: string; lastCommitTs: number }>; dirtyCount: number }
-interface BranchItem { name: string; oid: string; lastCommitTs: number }
+interface BranchListData { current: string | null; branches: Array<{ name: string; oid: string; lastCommitTs: number; upstream: string | null; ahead: number | null; behind: number | null }>; dirtyCount: number }
+interface RemoteListData { remotes: Array<{ name: string; url: string }> }
+interface BranchItem { name: string; oid: string; lastCommitTs: number; upstream: string | null; ahead: number | null; behind: number | null }
 interface HistoryItem { oid: string; parent: string; parents: string[]; authorName: string; authorEmail: string; timestamp: number; subject: string; taskIds: string[]; changeSetIds: string[] }
 interface CommitPreviewData {
   head: string | null; branch: string | null;
@@ -57,10 +58,11 @@ export async function refreshGitState(projectId: string): Promise<void> {
   };
   try {
     const status = await command<RepoStatusData>('git.status', { projectId });
-    const box: { branches: BranchListData | null; history: HistoryData | null } = { branches: null, history: null };
+    const box: { branches: BranchListData | null; history: HistoryData | null; remotes: RemoteListData | null } = { branches: null, history: null, remotes: null };
     await Promise.all([
       command<BranchListData>('git.branch.list', { projectId }).then((r) => { box.branches = r; }).catch(() => { box.branches = null; }),
       command<HistoryData>('git.history', { projectId, limit: 50 }).then((r) => { box.history = r; }).catch(() => { box.history = null; }),
+      command<RemoteListData>('git.remote.list', { projectId }).then((r) => { box.remotes = r; }).catch(() => { box.remotes = null; }),
     ]);
     const cur = getState().git[projectId] ?? emptyGit();
     const statusEntries: GitStatusEntry[] = [
@@ -69,10 +71,13 @@ export async function refreshGitState(projectId: string): Promise<void> {
       ...status.untracked.map((e) => ({ ...entryOf(e, false), state: 'untracked' as const })),
     ];
     const branchList: GitBranch[] = (box.branches?.branches ?? []).map((b: BranchItem) => ({
-      name: b.name, head: b.oid, upstream: undefined,
-      ahead: 0, behind: 0, isCurrent: b.name === status.branch,
+      name: b.name, head: b.oid,
+      upstream: b.upstream,
+      ahead: b.ahead, behind: b.behind,
+      isCurrent: b.name === status.branch,
       updatedAt: b.lastCommitTs,
     }));
+    const remotes: import('./types').GitRemote[] = (box.remotes?.remotes ?? []).map((r) => ({ name: r.name, url: r.url, authState: 'unknown' as const }));
     const commits: GitCommit[] = (box.history?.items ?? []).map((c: HistoryItem) => ({
       hash: c.oid, shortHash: c.oid.slice(0, 8), subject: c.subject, body: undefined,
       authorName: c.authorName, authorEmail: c.authorEmail,
@@ -84,7 +89,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
       ...cur,
       currentBranch: status.branch,
       branches: branchList,
-      remotes: [],
+      remotes,
       commits,
       status: statusEntries,
       commitMessage: cur.commitMessage,
@@ -193,14 +198,10 @@ export async function stageByOwner(projectId: string, owner: 'agent' | 'user' | 
       return;
     } catch (e) { gitFail(projectId, 'git.stageTask', e); return; }
   }
-  const g = getGit(projectId);
-  const paths = (g?.status ?? []).filter((x) => !x.staged && x.state !== 'untracked').map((x) => x.path);
-  if (paths.length === 0) { toast('没有可暂存的改动', 'info'); return; }
-  toast(`状态条目不带归属标注（RT-10 归属在改动集侧）——将暂存全部 ${paths.length} 个已跟踪改动；按任务暂存经任务分组按钮（git.stageTask）`, 'warn');
-  try {
-    await command('git.stage', { projectId, paths });
-    await afterWrite(projectId, 'git.stage', `已暂存 ${paths.length} 个文件（owner=${owner}：按路径全集，归属不虚构）`);
-  } catch (e) { gitFail(projectId, 'git.stage', e); }
+  // R65（review §6）：owner 字符串形态**不再降级为全部路径**——状态条目无归属标注，
+  // 全量暂存会绕开「按任务/改动集」与用户改动保护语义。明确拒绝并指路真实通道。
+  toast('状态条目不带归属标注——不按 owner 全量暂存。请用任务分组的「暂存本任务改动」（git.stageTask，服务端按改动集圈定并跳过你的既有改动）或逐文件「暂存」', 'warn');
+  void owner;
 }
 
 /* ---------- 冲突（三方内容如实；不做一键覆盖） ---------- */

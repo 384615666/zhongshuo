@@ -972,9 +972,11 @@ export interface GitBranch {
   name: string;
   /** 分支尖端提交 hash */
   head: string;
-  upstream?: string;
-  ahead: number;
-  behind: number;
+  /** 上游跟踪分支；null=无上游（真实事实，不是「未查询」） */
+  upstream?: string | null;
+  /** 领先上游的提交数；null=未知（无上游或未查询——不冒充 0） */
+  ahead?: number | null;
+  behind?: number | null;
   isCurrent: boolean;
   /** 是否为本产品创建的隔离分支（§14.4 worktree 方向） */
   createdByZhongshuo?: boolean;
@@ -984,8 +986,8 @@ export interface GitBranch {
 export interface GitRemote {
   name: string;
   url: string;
-  /** 未配置凭据时明确显示，不假装能推送 */
-  authState: 'ok' | 'missing' | 'expired';
+  /** 未配置凭据时明确显示，不假装能推送；unknown=未做凭据探测（真实清单来自 git remote -v） */
+  authState: 'ok' | 'missing' | 'expired' | 'unknown';
 }
 
 export interface GitState {

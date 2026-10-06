@@ -556,8 +556,8 @@ export function GitPage({
                     <ListRow key={b.name} active={activeBranch?.name === b.name} onClick={() => pick(b.name)} title={b.name}>
                       <Icon name={b.isCurrent ? 'check-circle' : 'git-branch'} size={12} className={b.isCurrent ? '' : 'faint'} />
                       <span className="git-list-path">{b.name}</span>
-                      {b.ahead > 0 ? <span className="git-list-num add">↑{b.ahead}</span> : null}
-                      {b.behind > 0 ? <span className="git-list-num del">↓{b.behind}</span> : null}
+                      {b.ahead != null && b.ahead > 0 ? <span className="git-list-num add">↑{b.ahead}</span> : null}
+                      {b.behind != null && b.behind > 0 ? <span className="git-list-num del">↓{b.behind}</span> : null}
                     </ListRow>
                   ))}
                   <div className="small faint" style={{ padding: '4px 8px 2px' }}>
@@ -872,8 +872,8 @@ export function GitPage({
                     <div className="row tight wrap small faint" style={{ marginTop: 8 }}>
                       <span className="mono-sm">{activeBranch.head}</span>
                       {activeBranch.upstream ? <span>上游 {activeBranch.upstream}</span> : <span>没有上游</span>}
-                      {activeBranch.ahead > 0 ? <span>领先 {activeBranch.ahead}</span> : null}
-                      {activeBranch.behind > 0 ? <span>落后 {activeBranch.behind}</span> : null}
+                      {activeBranch.ahead != null && activeBranch.ahead > 0 ? <span>领先 {activeBranch.ahead}</span> : null}
+                      {activeBranch.behind != null && activeBranch.behind > 0 ? <span>落后 {activeBranch.behind}</span> : null}
                       <span>{relTime(activeBranch.updatedAt)}</span>
                     </div>
                     {!activeBranch.isCurrent ? (
