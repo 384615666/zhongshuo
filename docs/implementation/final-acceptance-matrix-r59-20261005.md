@@ -32,7 +32,7 @@
 |---|---|
 | **已认证（真实链）** | 房间主池/线程卡、任务派发（DIRECT/M0 门禁）、@提及、回复跟进、停止、验收/返工+**执行返工（完整身份绑定 r59）**、复制定位、关注/静音、消息引用/表情、收藏、成果与附件（预览）、导出 MD/HTML/DOCX、长历史定位补读、DM 全操作行、搜索筛选、活动流、看板、命令面板、恢复检查、标题栏防护标识、首启欢迎/打开切换项目；**renderer 故障自动重载（r60）** |
 | **仅原界面（可用，直达入口）** | Git 写操作（commit/push/pull/undo——DEV-14 主体已验）；**Git 读视图（含 merge 多父 diff+父选择——gitWrite.ts parentsMeta+legacy 父选择按钮均已存在，非未实现）**；runtime 绑定（DEV-10 生产接线）；子任务定向 E3；远程访问变更入口 |
-| **未开放（如实）** | 新界面 Git 读视图接入（未列入本批——不重复实现已有接口）；DELIBERATE 编排（M1 显式 opt-in）；B=LO 预览（不集成）；并行写入；DEV-11；远程访问默认关 |
+| **未开放（如实）** | ~~新界面 Git 读视图接入~~（**r62 已接**：git.status/diff+新增历史/commitDiff/merge 父选择——verify-git-history-r62 fixture 全绿；**剩余=Git 写操作仍经原界面直达入口**）；DELIBERATE 编排（M1 显式 opt-in）；B=LO 预览（不集成）；并行写入；DEV-11；远程访问默认关 |
 
 ### M1/DELIBERATE 分列（纠正 R59 笼统表述）
 
@@ -46,7 +46,7 @@
 | 场景 | 状态 | 证据 |
 |---|---|---|
 | daemon 崩溃（精确 PID kill /F）→重启恢复链 | **已实证**（OS 级，收紧判据+双负对照） | os-crash-r59-…14704 |
-| renderer 真实崩溃（CDP Page.crash）→主进程/daemon 存活+自动重载+归属恢复+任务不重派+草稿按合同不跨崩溃 | **已实证（r60 新增）** | renderer-crash-r60-…155045 |
+| renderer 真实崩溃（CDP Page.crash）→主进程/daemon 存活+自动重载+归属恢复+任务不重派 | **已实证（r60 新增）** | renderer-crash-r60-…155045（原「草稿不跨崩溃」判据 r61 起作废——草稿/未知信封按批准约定恢复；r62 再扩至 20s 未知窗口前崩溃：预 bridge 出站账本+同号恰一次，dev/交付双形态全绿 early-crash-r62/early-crash-pkg-r62） |
 | 管道客户端断连（连接级） | 已实证（同上 OS 证据内分列） | 同上 |
 | 受管模型子进程崩溃窗口（koffi 桥/Job） | **未覆盖**（fake 无 OS 子进程；ZS_MANAGED_RUNTIME=0 排障口径）——真实受管崩溃窗口属 DEV-13 既有证据范围 | — |
 | Electron 主进程崩溃 | 未单独注入（renderer 已覆盖进程分离事实；主进程崩溃=应用退出链，verify-desktop 已有正常退出/无残留） | — |
@@ -72,7 +72,13 @@
 - **修复候选**：`dist/desktop/hifi-h4-win-v5`，buildId `bld_292768533f1c899c`（commit `978c8527`，dirty=false，清单 591/591）——合并 R60 三修（版本门/renderer 重载/路径拒收）+ R61 用户反馈修复（收藏切换/文件引用重做/摘录/Esc 补全/草稿与未知信封持久化/附件存储位置无关重定位）。包验证器三连 **allPass** `r61-20261006023342`（real_calls=0）；交付副本 PPT Esc 演练 **overall=true**（四焦点位原生键；缩放 Ctrl+= 在 frameless 宿主不生效=如实边界）。
 - **草稿/未知信封恢复**（纠正 R60 判据，原报告保留）：`draft-recovery-r61-*` 全绿——回执丢失→完整原信封冻结（含 commandId）→Page.crash→自动重载恢复（草稿+仅记录意图+横幅同号）→重发恰一次+正文剥离+record_only 零新 run；R60「崩溃后草稿为空」判据作废。
 - **回退演练外部资源**：`upgrade-drill-r61-*` 阶段 D 全绿——blobstore manifest（hash 复算）→恢复根拷贝完整→恢复库附件实读（previewText）→导出含附件 missing=0→local.token 不变；边界：旧程序=当前源码+子集迁移形态（含 r61 重定位），真实已发布旧 binary 不代宣布。
-- **性能分项**（不互相冒充）：daemon 就绪 179ms（spawn 打包 daemon→首条命令 ok）；conversation.history(limit=100, 300 样本)×3=2/2/1ms；桌面 UI（spawn dev electron→hifi 挂载 454ms→项目可操作 455ms，daemon 已就绪前置）。
+- **性能分项**（不互相冒充）：daemon 就绪 179ms（spawn 打包 daemon→首条命令 ok）；conversation.history(limit=100, 300 样本)×3=2/2/1ms；桌面 UI（spawn dev electron→hifi 挂载 454ms→项目可操作 455ms，**dev Electron+daemon 已就绪前置——非便携启动器整体冷启动**，r62 注记）。
+
+## 5c. r62 增量证据（v6 修复候选随附）
+
+- **修复候选**：`dist/desktop/hifi-h4-win-v6`，buildId `bld_9f70ef7f6d48ff8d`（commit `4c1888a4`，dirty=false，591/591）——含 v5 全部修复 + R62：①预 bridge 出站信封账本（20s 未知窗口前崩溃不丢原信封/不换号重发；重载=未确认横幅人工同号确认；同内容换新号被守卫拦截；清算先剥内容后删账）；②草稿快照防护（版本/字段校验+原件隔离保全+24h TTL 按批准约定；未确认账本独立无 TTL）；③包验证器聚合门修复（v5 两门纳入总 pass+bat===0+断言绑定具体消息/资源 hash+负对照矩阵 7/7）；④Git 只读历史/提交差异/merge 父选择接入新界面。包验证器三连 **allPass** `r61-20261006034542`；交付形态早崩专项全绿（账本 4ms 落盘/同号恰一次/参数逐字）；Esc 演练 overall=true（四焦点位+**宽模式矩形+原生键**）；全量 **889/889**、主+hifi 双类型门 0 错（浏览器测试移入 tests/browser 由 hifi 门承接）。
+- **回退凭据闭环**：upgrade-drill-r62 全绿——演练根 remote CA/服务证书生成（纯 fs，不触用户 v6 CA）→local.token 基线**前置**→升级前后/恢复根三点 CA 指纹（identity.json caFingerprint）与五凭据文件哈希一致；服务证书 SAN 重签与 CA 更换分列注明。
+- **用户状态（r62）**：v5 R1/R2 与 Android v6 回填均未收到；当前桌面基线=**v6**（R1/R2 两组，v5 已测则继承）。
 
 ## 6. 结论口径
 

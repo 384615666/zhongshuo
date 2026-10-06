@@ -2,6 +2,54 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-06 第六十二轮，唯一权威快照）
+
+> R62=复核缺口收口+Git 只读入口批次（review-r61-next-round 全项）。**新基线
+> hifi-h4-win-v6** `bld_9f70ef7f6d48ff8d`（commit 4c1888a4，dirty=false，591/591，三连
+> allPass r61-20261006034542）。v5 R1/R2 与 Android v6 回填仍未收到——用户仍只需 R1/R2
+> 两组（v5 已测则继承）；G9 无自然新回复维持 NOT_RUN。v4/v5/旧包/回填原地保留。
+> - **[§1 出站信封账本（review-r61 §2 早崩反例闭拢）]** store 出站账本在**交给 bridge 之前**
+>   耐久落盘完整信封（stage=sending；落盘失败=取消发送+内存回滚，不冒充已保存）；三态收口
+>   ok=settleOutbound（**先剥已发正文/refs/上传项并持久化、最后删账**——中途崩溃=账本仍在→
+>   重载横幅→同号重发幂等→再结算）/failed=drop（草稿保留）/unknown=confirm（转 pendingSends
+>   横幅）；重载=账本全转 pendingSends（recovered 标记，人工同号确认，不自动发送不退普通
+>   草稿）；Composer 守卫=未确认信封存在且正文逐字未改时阻止换新号发送；retryUnknown 清算
+>   改先剥内容后清信封。房间/私信/线程三目标共用。**dev 演练 early-crash-r62 全绿**（账本
+>   3ms 落盘/同号恢复/守卫拦截/恰一次）+**交付形态 early-crash-pkg-r62 全绿**（v6 包×真实
+>   启动器×丢回执：账本 4ms/崩溃自动重载（文档新鲜度证——bat 管道不透传 stderr）/同号恰
+>   一次/参数逐字 status=saved）；r61 崩溃演练复跑无回归；浏览器门 15/15。
+> - **[§2 快照防护+TTL（review-r61 §3）]** initDraftPersistence：JSON/版本/逐条字段校验
+>   （draft/envelope/upload 三类）——不支持版本/整体损坏=**原件逐字隔离** `<键>.quarantine-
+>   <ts>` 后才新空态（v2/损坏 JSON 反例闭拢：不覆写唯一原件不伪正常）；部分损坏=恢复有效
+>   条目+隔离+recoveryNote 计数；**普通草稿 updatedAt+24h 过期**（批准 brief §3.3——r61
+>   注释「亦无过期」系误写并更正；无戳回退 savedAt）；未确认账本独立无 TTL；过期草稿上传项
+>   不复活。测试 10/10（未来版本/损坏/部分损坏/TTL 边界+账本超龄/盖戳）。
+> - **[§3 类型门（review-r61 §4 前半）]** 主门 22 错清零：浏览器型测试移入 `tests/browser/`
+>   （主门 NodeNext/无DOM 排除；hifi 门 DOM+bundler 纳入并开 allowImportingTsExtensions；
+>   vitest include 纳入）——双门 0 错，非移出门外伪绿。
+> - **[§4 包验证器聚合门（review-r61 §4）]** aggregatePass 函数化；v5favoritesOk/v5quoteOk
+>   纳入总 pass；bat 退出码严格 ===0；收藏断言绑定具体消息 id×saved_refs 行消长×kind/viewer
+>   （非全库计数）；引用断言绑定线程草稿+引用卡含 artifact hash 前 8 位+摘录含真实幻灯文本；
+>   --self-check-negatives 7 例变异矩阵全捕获（两门 false/bat=7/bat 缺项/门缺项/正对照）。
+>   重启轮坑：草稿跨重启保留（合同）→引用判据前须显式清残留正文。
+> - **[§5 回退凭据闭环（review-r61 §5）]** upgrade-drill-r62：凭据基线**前置**；演练根
+>   ensureServerIdentity 生成 CA/服务证书（纯 fs 不触用户 v6）；升级前/后/恢复根三点 CA 指纹
+>   （identity.json **caFingerprint** 字段——坑：不是 fingerprint）+五文件哈希一致；token
+>   全程保持；SAN 重签与 CA 更换分列注明。宽模式 Esc 补实际矩形+原生键断言位（v6 演练
+>   overall=true 含 wide 位）。
+> - **[§6 Git 只读入口（review-r61 §6）]** FilesPage Git 标签新增提交历史（git.history；
+>   后端加性 HistoryItem.parents 全列）+提交差异（git.commitDiff(parentOid)）+merge 父选择
+>   （parentsMeta 芯片+mergeNote；comparedParent 回显+请求参数回执核对）；独立代次快切
+>   防污染；非 Git 目录如实失败。fixture 探针全绿：root/normal/side/--no-ff 双父/binary/
+>   截断(2 万行)/超限省略(55 文件>50 上限)；**坑：fixture 目录必须在任意 git 仓库之外**
+>   （OUT 在 zhongshuo 仓库内会被当工作树子目录）；spawnSync git 提交中文 message 直接可用。
+> - **坑（本轮新增）**：探针 heredoc 反斜杠续坑（用 chr(92)/chr(10) 构造）；electron 探针须
+>   await app.whenReady()（r61 靠构建耗时碰运气）；fixture 残留目录删不掉（EPERM）→时间戳
+>   唯一目录；打包 DB messages 列=status（record_only→'saved'），无 intent/disposition 列；
+>   材料门串要与模板实际文案逐字对齐（'未自动粘贴' vs '不再自动粘贴'）；聚合函数引用 runOnce
+>   局部 n 会 ReferenceError（参数化 runNo）。
+> - 全量 **889/889**（含 githubSandbox）；主+hifi 双类型门 0 错；v6 Esc 演练 overall=true
+>  （toolbar/slide/input/upper-dialog/wide 五位；zoom Ctrl+= frameless 宿主不生效=如实边界）。
 ## 当前真实状态（2026-10-06 第六十一轮，唯一权威快照）
 
 > R61=用户反馈修复批次（review-r60-next-round 全项，用户 v4 G1–G10 手测反馈优先）。
