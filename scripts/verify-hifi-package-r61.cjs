@@ -507,9 +507,9 @@ async function runOnce(n) {
   }
 
   const rd = fs.readFileSync(path.join(srcPkg, 'README-H4.md'), 'utf8');
-    mat.readmeH4 = rd.includes('H4 收尾候选 v5') && rd.includes('收藏可切换') && rd.includes('文件引用重做') && rd.includes('草稿与未知信封保持');
+    mat.readmeH4 = rd.includes('H4 修复候选 v6') && rd.includes('发送防重复') && rd.includes('草稿快照防护') && rd.includes('Git 只读历史');
     const tp = fs.readFileSync(path.join(srcPkg, 'RESULTS', 'H4-TEST-template.md'), 'utf8');
-    mat.templateMerged = tp.includes('R1 收藏切换') && tp.includes('R2 文件引用与 Esc') && tp.includes('H4-v5 补测清单') && tp.includes('引用文件');
+    mat.templateMerged = tp.includes('R1 收藏切换') && tp.includes('R2 文件引用与 Esc') && tp.includes('H4-v6 补测清单') && tp.includes('引用文件');
     mat.templateReworkStep = tp.includes('摘录') && tp.includes('继承说明') && tp.includes('未自动粘贴') && tp.includes('关闭窗口放最后');
   } catch (e) { mat.error = String(e.message ?? e); }
   console.log('[r61] 包根材料核验：' + JSON.stringify(mat));
