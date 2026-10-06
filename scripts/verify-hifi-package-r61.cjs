@@ -180,17 +180,22 @@ async function runOnce(n) {
     const libraryHit = await waitFor(cdp, `(() => { const p = document.querySelector('[data-zs-library]'); return p != null && p.querySelectorAll('.root-card').length > 0; })()`, 20_000, '搜索命中（种子回归样本）').catch(() => false);
     f.librarySearch = { hit: libraryHit === true };
     // r61 v5：收藏切换（按钮态×saved_refs）与文件引用重做（引用卡+正文零污染+摘录内容源）打包形态冒烟。
+    // 收藏用**种子任务线程**（有 agent 回复——书签只在回复消息上；PPT 样本是记录串无回复）。
     await cdp.eval(probe(`[...document.querySelectorAll('#hifi-root .side-item')].find((b) => b.textContent.includes('默认房间'))?.click(), true`));
-    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 60_000, 'v5：PPT 样本卡');
-    await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('PPT 预览样本')); card?.click(); return true; })()`));
-    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg')].some((m) => m.querySelector('[data-zs-saved]') != null)`, 30_000, 'v5：回复消息书签按钮');
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('看板房间任务样本'))`, 60_000, 'v5：种子任务卡');
+    await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('看板房间任务样本')); card?.click(); return true; })()`));
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg')].some((m) => m.querySelector('[data-zs-saved]') != null)`, 90_000, 'v5：回复消息书签按钮');
     const favBefore = await cdp.tryEval(probe(`document.querySelectorAll('#hifi-root .msg [data-zs-saved]').length`));
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .msg [data-zs-saved]')][0]; b?.click(); return true; })()`));
     const favSaved = await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]')].length > 0`, 15_000, 'v5：已收藏态').catch(() => false);
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]')][0]; b?.click(); return true; })()`));
     const favUnsaved = await waitFor(cdp, `document.querySelectorAll('#hifi-root .msg [data-zs-saved="1"]').length === 0`, 15_000, 'v5：再次点击取消').catch(() => false);
     f.v5favorites = { buttons: Number(favBefore ?? 0), saved: favSaved === true, unsavedBack: favUnsaved === true, dbRows: dbQuery('SELECT count(*) c FROM saved_refs').map((r) => r.c).join(',') };
-    // 文件引用：成果与附件标签（无 Composer）→ 预览 → 引用文件两次 → 自动回回复、恰一张卡、正文零污染。
+    // 文件引用：回主池开 PPT 样本线程 → 成果与附件标签（无 Composer）→ 预览 → 引用文件两次 → 自动回回复、恰一张卡、正文零污染。
+    await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => (x.title || '').includes('返回主池')); b?.click(); return true; })()`));
+    await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 30_000, 'v5：回主池见 PPT 卡');
+    await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('PPT 预览样本')); card?.click(); return true; })()`));
+    await waitFor(cdp, `[...document.querySelectorAll('.msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 30_000, 'v5：PPT 线程锚块芯片');
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.includes('成果与附件')); b?.click(); return true; })()`));
     await waitFor(cdp, `[...document.querySelectorAll('[data-zs-thread-artifacts=hifi] .msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 25_000, 'v5：成果页 PPT 芯片');
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('[data-zs-thread-artifacts=hifi] .msg-attach')].find((x) => x.textContent.includes('回归幻灯')); b?.click(); return true; })()`));
