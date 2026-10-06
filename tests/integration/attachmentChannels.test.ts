@@ -227,21 +227,26 @@ describe('完整性与截断（读取路径共享）', () => {
     env.close();
   });
 
-  it('外部同名 blobstore 目录（实根校验）：拒绝读取——不只看父目录名', async () => {
+  it('外部同名 blobstore 目录（r61 位置无关重定位）：绝不读外部文件——当前根可核则读当前根，否则如实不可读', async () => {
     const env = makeEnv();
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'dm_a', filename: '实根.md', content: '内容 ROOT-9988' });
-    // 另一目录树下的「同名布局」blobstore/{hash}.txt（内容一致——hash 校验会过）：
-    // 实根校验（本次 appData/blobstore）必须拒绝——父目录名相同不算托管。
+    // 另一目录树下的「同名布局」blobstore/{hash}.txt（内容被换成不同文本——若被读即泄露）。
+    // r61 合同：记录位置不在当前根→重定位到**当前存储根**同名文件（realpath+sha256 全套
+    // 校验照走）；外部路径永不读取。当前根文件在且 hash 核对过→预览成功且内容=当前根内容。
     const outsideStore = join(tmpRoot, 'elsewhere', 'blobstore');
     mkdirSync(outsideStore, { recursive: true });
-    writeFileSync(join(outsideStore, `${up.hash}.txt`), '内容 ROOT-9988', 'utf8');
+    writeFileSync(join(outsideStore, `${up.hash}.txt`), '内容 EXTERNAL-绝对不要读我', 'utf8');
     const db2 = openDatabase(env.dbPath);
     db2.prepare('UPDATE artifacts SET blob_path = ? WHERE id = ?').run(join(outsideStore, `${up.hash}.txt`), up.attachmentId);
     db2.close();
     const pv = await env.cmdRaw('attachment.previewText', { attachmentId: up.attachmentId });
-    expect(pv.ok).toBe(false);
-    expect(String(pv.error?.message)).toContain('越出托管存储');
-    expect(String(pv.error?.message)).toContain('本次存储根');
+    expect(pv.ok).toBe(true);
+    expect(String(JSON.stringify(pv)).includes('EXTERNAL')).toBe(false); // 外部内容绝不返回
+    // 当前根没有该文件（重定位目标缺失）：外部同名文件同样不被读——如实不可读。
+    rmSync(join(appData, 'blobstore', `${up.hash}.txt`), { force: true });
+    const pv2 = await env.cmdRaw('attachment.previewText', { attachmentId: up.attachmentId });
+    expect(pv2.ok).toBe(false);
+    expect(String(pv2.error?.message)).toContain('不可读');
     env.close();
   });
   it('多字节字节截断：中文按 UTF-8 字节预算截断、保留完整字符、大小如实', async () => {
