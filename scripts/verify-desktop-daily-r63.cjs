@@ -215,7 +215,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
 
     // ⑦ 收尾：零模型调用 + 优雅关闭 + 进程归零
     facts.realCalls = dbQuery('SELECT count(*) c FROM real_calls')[0].c;
-    await cdp.eval(probe(`window.zsWindow?.close(), true`));
+    await cdp.tryEval(probe(`window.zsWindow?.close(), true`)); // 关窗后页面销毁——eval 无响应属预期，以退出/进程归零为准
     const exitInfo = await new Promise((res) => { const t = setTimeout(() => res('timeout'), 30000); child.on('exit', (code) => { clearTimeout(t); res(code); }); });
     await sleep(2500);
     const like = copyDir.replace(/[*/?]/g, (c) => '[' + c + ']').replace(/'/g, "''");
