@@ -1247,7 +1247,8 @@ export function Composer({
 
           {/**
            * 草稿：成功不作常驻提示（它几乎永远为真，占位却没有信息量），
-           * 只有**持久化失败/不可用**才显示，并按真实原因说明后果（§6.2；r61 P5）。
+           * 只有**持久化失败/不可用**或**快照恢复有丢弃**才显示，并按真实原因说明后果
+           *（§6.2；r61 P5；r62 P2 恢复说明分列）。
            */}
           {draftPersist.error != null ? (
             <span
@@ -1255,6 +1256,15 @@ export function Composer({
               title={draftPersist.error}
             >
               <Icon name="alert-triangle" size={11} /> 草稿未持久化
+            </span>
+          ) : null}
+          {draftPersist.error == null && draftPersist.recoveryNote != null ? (
+            <span
+              className="composer-draft failed"
+              title={draftPersist.recoveryNote}
+              data-zs-draft-recovery="1"
+            >
+              <Icon name="alert-triangle" size={11} /> 草稿快照部分未恢复（原件已隔离）
             </span>
           ) : null}
 

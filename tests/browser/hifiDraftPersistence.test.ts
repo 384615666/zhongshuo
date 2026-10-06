@@ -28,16 +28,17 @@ async function freshStore() {
   return store;
 }
 
+beforeEach(() => {
+  stub.clear();
+  stub.failing = false;
+  vi.stubGlobal('localStorage', stub);
+  vi.stubGlobal('window', { setTimeout: (fn: () => void, _ms: number) => { fn(); return 0; } });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('hifi 草稿/未知信封持久化与文件引用（r61）', () => {
-  beforeEach(() => {
-    stub.clear();
-    stub.failing = false;
-    vi.stubGlobal('localStorage', stub);
-    vi.stubGlobal('window', { setTimeout: (fn: () => void, _ms: number) => { fn(); return 0; } });
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
 
   it('文件引用：一次落账、同文件同版本去重、新版本加行、身份缺失零写入', async () => {
     const s = await freshStore();
@@ -130,5 +131,93 @@ describe('hifi 草稿/未知信封持久化与文件引用（r61）', () => {
     // identity 不可用（服务未起/浏览器宿主）：显式降级 off
     s.markPersistenceDegraded('持久化身份不可用（服务未就绪）——草稿仅本次进程内有效');
     expect(s.getState().draftPersist.mode).toBe('off');
+  });
+});
+
+describe('快照防护与 TTL（r62 P2——review-r61 §3）', () => {
+  const rawEnv = (v: number, body: string, cmd: string): string => JSON.stringify({
+    v,
+    savedAt: Date.now(),
+    drafts: { 'thread:t9': { body, mentions: [], attachments: [], access: 'default', sendAs: 'record', rev: 3 } },
+    pendingSends: { 'thread:t9': { commandId: cmd, method: 'message.submit', params: { target: { kind: 'thread' }, body: 'already-committed', intent: 'record_only', mentions: [] }, targetLabel: 'thread:t9', at: 123 } },
+    uploadItems: {},
+  });
+
+  it('未来版本 v2：原件逐字隔离、不覆写、不自动派发、恢复说明如实', async () => {
+    const s1 = await freshStore();
+    const original = rawEnv(2, 'v2-body', 'cmd_v2_must_not_be_lost');
+    stub.store.set('zs.hifi.persist.nsX|u', original);
+    s1.initDraftPersistence('nsX|u');
+    const qKeys = Array.from(stub.store.keys()).filter((k: string) => k.includes('.quarantine-'));
+    expect(qKeys.length).toBe(1);
+    expect(stub.store.get(qKeys[0]!)).toBe(original); // 原件逐字保全
+    expect(s1.getDraftFull('thread:t9').body).toBe(''); // 不从未知版本恢复
+    expect(s1.getState().pendingSends['thread:t9']).toBeUndefined(); // 不解析不派发
+    const note = s1.getState().draftPersist.recoveryNote ?? '';
+    expect(note).toContain('不受本程序支持');
+    expect(note).toContain('隔离');
+    expect(s1.getState().draftPersist.error).toBeNull(); // 写入本身正常——与恢复说明分列
+  });
+
+  it('损坏 JSON（缺右括号）：同样隔离+空态+说明', async () => {
+    const s1 = await freshStore();
+    stub.store.set('zs.hifi.persist.nsY|u', rawEnv(1, 'x', 'cmd_corrupt').slice(0, -1));
+    s1.initDraftPersistence('nsY|u');
+    const qKeys = Array.from(stub.store.keys()).filter((k: string) => k.includes('.quarantine-'));
+    expect(qKeys.length).toBe(1);
+    expect(s1.getDraftFull('thread:t9').body).toBe('');
+    expect((s1.getState().draftPersist.recoveryNote ?? '')).toContain('JSON 损坏');
+  });
+
+  it('部分条目损坏：有效条目恢复、损坏计数说明、原件隔离', async () => {
+    const s1 = await freshStore();
+    const mixed = JSON.stringify({
+      v: 1, savedAt: Date.now(),
+      drafts: {
+        'room:r1': { body: 'good-body', mentions: [], attachments: [], access: 'default', sendAs: 'ai' },
+        'room:r2': { body: 123, mentions: [], attachments: [], access: 'default', sendAs: 'ai' }, // body 非串=损坏
+      },
+      pendingSends: { 'room:r1': { commandId: 'cmd_ok', method: 'message.submit', params: { target: { kind: 'room_root' }, body: 'b', intent: 'default', mentions: [] }, targetLabel: 'room:r1', at: 1 } },
+      uploadItems: {},
+    });
+    stub.store.set('zs.hifi.persist.nsZ|u', mixed);
+    s1.initDraftPersistence('nsZ|u');
+    expect(s1.getDraftFull('room:r1').body).toBe('good-body');
+    expect(s1.getDraftFull('room:r2').body).toBe('');
+    expect(s1.getState().pendingSends['room:r1']?.commandId).toBe('cmd_ok'); // 有效账本恢复（无 TTL）
+    const note = s1.getState().draftPersist.recoveryNote ?? '';
+    expect(note).toContain('损坏草稿 1 条');
+    expect(note).toContain('有效部分');
+  });
+
+  it('普通草稿 24h 过期（批准约定）：过期不恢复、未过期恢复、未确认账本超龄仍在、过期草稿上传项一并不恢复', async () => {
+    const s1 = await freshStore();
+    const now = Date.now();
+    stub.store.set('zs.hifi.persist.nsT|u', JSON.stringify({
+      v: 1, savedAt: now,
+      drafts: {
+        'dm:old': { body: 'old-draft', mentions: [], attachments: [], access: 'default', sendAs: 'ai', updatedAt: now - 25 * 3600_000 },
+        'dm:fresh': { body: 'fresh-draft', mentions: [], attachments: [], access: 'default', sendAs: 'ai', updatedAt: now - 23 * 3600_000 },
+        'dm:noStamp': { body: 'fallback-stamp', mentions: [], attachments: [], access: 'default', sendAs: 'ai' }, // 无 updatedAt→回退快照 savedAt=新鲜
+      },
+      pendingSends: { 'dm:old': { commandId: 'cmd_old_unconfirmed', method: 'message.submit', params: { target: { kind: 'dm' }, body: 'b', intent: 'default', mentions: [] }, targetLabel: 'dm:old', at: now - 48 * 3600_000 } },
+      uploadItems: { 'dm:old': [{ uploadId: 'u9', draftKey: 'dm:old', conversationId: 'c', name: 'f.md', size: 10, status: 'ready', attachmentId: 'att9' }] },
+    }));
+    s1.initDraftPersistence('nsT|u');
+    expect(s1.getDraftFull('dm:old').body).toBe(''); // 过期
+    expect(s1.getDraftFull('dm:fresh').body).toBe('fresh-draft');
+    expect(s1.getDraftFull('dm:noStamp').body).toBe('fallback-stamp');
+    expect(s1.getState().pendingSends['dm:old']?.commandId).toBe('cmd_old_unconfirmed'); // 未确认账本不受 TTL
+    expect((s1.getState().uploadItems['dm:old'] ?? []).length).toBe(0); // 过期草稿的上传项不复活
+    expect((s1.getState().draftPersist.recoveryNote ?? '')).toContain('24 小时过期草稿 1 条');
+  });
+
+  it('setDraftFull 盖 updatedAt 戳（新快照可判龄）', async () => {
+    const s1 = await freshStore();
+    s1.initDraftPersistence('nsW|u');
+    const t0 = Date.now();
+    s1.setDraftFull('dm:c1', { body: '新鲜', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
+    const snap = JSON.parse(stub.store.get('zs.hifi.persist.nsW|u')!);
+    expect(snap.drafts['dm:c1'].updatedAt).toBeGreaterThanOrEqual(t0);
   });
 });

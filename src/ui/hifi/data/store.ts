@@ -91,7 +91,7 @@ export interface HifiExtension {
    * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
    * ——退回内存态，如实标注。
    */
-  draftPersist: { mode: 'on' | 'off'; error: string | null };
+  draftPersist: { mode: 'on' | 'off'; error: string | null; /** r62 P2：快照恢复说明（版本/损坏隔离、TTL 过期计数）——与写入失败 error 分列。 */ recoveryNote: string | null };
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -124,7 +124,7 @@ function makeEmptyState(): HifiState {
     conn: 'online', connInfo: null,
     savedMessageRefs: {},
     draftInserts: {},
-    draftPersist: { mode: 'off', error: null },
+    draftPersist: { mode: 'off', error: null, recoveryNote: null },
   };
 }
 
@@ -214,7 +214,7 @@ export interface HifiDraftAttachment {
   /** 表格注入范围（第五十二轮：从预览面板选定——缺省=服务端有界默认窗口）。 */
   range?: string;
 }
-export interface HifiDraft { body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number }
+export interface HifiDraft { body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number; /** r62：普通草稿 24h 过期的时间戳（批准 brief §3.3）；未确认发送账本不适用。 */ updatedAt?: number }
 
 /**
  * 上传项（review-r51 §2 反例修复）：每笔上传绑定**发起草稿键+独立 uploadId+会话**——
@@ -416,19 +416,59 @@ const drafts = new Map<string, HifiDraft>();
 let draftRev = 0;
 export function getDraftFull(key: string): HifiDraft { return drafts.get(key) ?? emptyDraft(); }
 /** 每次写入递增编辑代次（清算按代次判定——等待期编辑过则不剥离已发内容）。 */
-export function setDraftFull(key: string, draft: unknown): void { draftRev += 1; drafts.set(key, { ...(draft as HifiDraft), rev: draftRev }); persistSnapshot(); }
+export function setDraftFull(key: string, draft: unknown): void { draftRev += 1; drafts.set(key, { ...(draft as HifiDraft), rev: draftRev, updatedAt: Date.now() }); persistSnapshot(); }
 
-/* ---------- 草稿/未知信封持久化（r61 P5，review-r60 §6） ----------
- * 批准原型 brief §3.3「版本化草稿、localStorage、刷新保持」：正文/提及/意图/已就绪引用与
- * **完整未知信封**跨 reload/renderer 崩溃保留；重载不自动发送、仅记录意图不因重载变 AI、
- * 未对账未知信封不设 TTL（不因普通过期静默降为普通草稿；普通草稿沿既有约定亦无过期）。
- * 命名空间=数据根+本地用户（app.identity）——不同数据根/用户互不串，不用显示名或每次启动
- * 变化的实例 id。在途上传不持久化（恢复=可理解的重新选择状态，回执不会跨进程到达）；
- * ready/failed 项随草稿保留；removed 项不落盘（不复活已移除资源）。
- * 持久化失败：内存仍生效 + draftPersist.error 如实提示，不静默丢也不阻塞输入。 */
+/* ---------- 草稿/未知信封持久化（r61 P5 起；r62 P2 快照防护修订） ----------
+ * 批准原型 brief §3.3「版本化草稿、localStorage、刷新保持；updatedAt + 普通草稿 24 小时
+ * 过期」：正文/提及/意图/已就绪引用跨 reload/renderer 崩溃保留；重载不自动发送、仅记录
+ * 意图不因重载变 AI。**未确认发送账本（pendingSends/staged）独立保存，不受普通草稿 TTL
+ * 清理**（r61 注释把「普通草稿亦无过期」当既定约定系误写，r62 按批准约定落实 24h）。
+ * 命名空间=数据根+本地用户（app.identity）；在途上传不持久化（恢复=重新选择状态）；
+ * ready/failed 项随草稿保留（草稿过期则一并不恢复）；removed 项不落盘。
+ * 快照防护（r62）：读入先做 schema/版本/逐条字段校验——不支持版本或整体损坏时**原件逐字
+ * 隔离**到 `<key>.quarantine-<ts>` 后才从新空态开始（不覆写唯一原件、不伪正常）；部分条目
+ * 损坏时恢复有效条目、隔离原件并经 recoveryNote 如实说明丢弃计数；隔离件中的未确认账本
+ * 不解析不自动派发。持久化写入失败：内存仍生效 + draftPersist.error 如实提示。 */
 
 const PERSIST_VERSION = 1;
+/** 普通草稿过期（批准 brief §3.3：updatedAt + 24h）。未确认发送账本不适用。 */
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 let persistKey: string | null = null;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** 草稿条目字段校验（r62 P2）：结构不符=损坏（不恢复该条；原件进隔离）。 */
+function validateDraft(d: unknown): d is HifiDraft {
+  if (!isPlainObject(d)) return false;
+  if (typeof d.body !== 'string' || !Array.isArray(d.mentions) || d.mentions.some((m) => typeof m !== 'string')) return false;
+  if (!Array.isArray(d.attachments) || d.attachments.some((a) => !isPlainObject(a) || typeof a.attachmentId !== 'string' || typeof a.name !== 'string')) return false;
+  if (typeof d.access !== 'string' || (d.sendAs !== 'ai' && d.sendAs !== 'record')) return false;
+  if (d.rev != null && typeof d.rev !== 'number') return false;
+  if (d.updatedAt != null && typeof d.updatedAt !== 'number') return false;
+  return true;
+}
+
+/** 未确认信封字段校验：commandId/method/params.body/intent/target 逐项——损坏=不恢复（原件隔离，
+ * 不自动派发）。queued 递归同判。 */
+function validateEnvelope(e: unknown): e is PendingSendEnvelope {
+  if (!isPlainObject(e)) return false;
+  if (typeof e.commandId !== 'string' || e.commandId.length === 0 || e.method !== 'message.submit') return false;
+  const p = e.params;
+  if (!isPlainObject(p) || typeof p.body !== 'string' || (p.intent !== 'default' && p.intent !== 'record_only') || !isPlainObject(p.target)) return false;
+  if (e.at != null && typeof e.at !== 'number') return false;
+  if (e.queued != null && (!Array.isArray(e.queued) || e.queued.some((q) => !validateEnvelope(q)))) return false;
+  return true;
+}
+
+function validateUploadItem(u: unknown): u is UploadItem {
+  if (!isPlainObject(u)) return false;
+  if (typeof u.uploadId !== 'string' || typeof u.draftKey !== 'string' || typeof u.conversationId !== 'string' || typeof u.name !== 'string') return false;
+  if (u.status !== 'uploading' && u.status !== 'ready' && u.status !== 'failed') return false;
+  if (typeof u.size !== 'number') return false;
+  return true;
+}
 
 function persistSnapshot(): void {
   if (persistKey == null) return; // 未初始化（identity 未就绪/浏览器宿主）——内存态
@@ -439,19 +479,24 @@ function persistSnapshot(): void {
       if (kept.length > 0) uploadsOut[k] = kept;
     }
     const draftsOut: Record<string, HifiDraft> = {};
-    for (const [k, v] of drafts) draftsOut[k] = v;
-    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: Date.now(), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut });
+    const now = Date.now();
+    for (const [k, v] of drafts) draftsOut[k] = v.updatedAt != null ? v : { ...v, updatedAt: now };
+    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut });
     localStorage.setItem(persistKey, payload);
-    if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null } }));
+    if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote } }));
   } catch (e) {
     const msg = `草稿持久化失败：${e instanceof Error ? e.message : String(e)}——本次进程内仍有效，刷新或崩溃会丢失未发送内容`;
-    setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { mode: 'on', error: msg } }));
+    setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'on', error: msg } }));
   }
 }
 
-/** 初始化（identity 就绪后调用一次）：按命名空间载入上次快照（草稿 Map+未知信封+ready/failed
- * 上传项），并立即写一次确认可写性。快照损坏=作废从空态开始（随后一次成功写入覆盖，不半恢复）；
- * localStorage 整体不可读（私有模式等）=降级内存态并如实标注。 */
+/**
+ * 初始化（identity 就绪后调用一次）：载入上次快照并立即写一次确认可写性。
+ * r62 快照防护：不支持版本/整体损坏/部分条目损坏——**原件逐字隔离**到
+ * `<key>.quarantine-<ts>`（localStorage 尽力；失败时至少不覆盖主键并如实说明），恢复
+ * 有效部分；能恢复/不能恢复事实经 recoveryNote 分列；隔离件内未确认账本不解析不派发。
+ * 普通草稿按批准约定 24h 过期（updatedAt 缺失回退快照 savedAt）；未确认发送账本不清理。
+ */
 export function initDraftPersistence(ns: string): void {
   persistKey = `zs.hifi.persist.${ns}`;
   let raw: string | null;
@@ -459,31 +504,69 @@ export function initDraftPersistence(ns: string): void {
     raw = localStorage.getItem(persistKey);
   } catch (e) {
     persistKey = null;
-    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效` } }));
+    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效`, recoveryNote: null } }));
     return;
   }
+  let recoveryNote: string | null = null;
   if (raw != null) {
-    try {
-      const data = JSON.parse(raw) as { v?: number; drafts?: Record<string, HifiDraft>; pendingSends?: Record<string, PendingSendEnvelope>; uploadItems?: Record<string, UploadItem[]> };
-      if (data.v === PERSIST_VERSION) {
-        let maxRev = 0;
-        for (const [k, d] of Object.entries(data.drafts ?? {})) { drafts.set(k, d); if (typeof d.rev === 'number' && d.rev > maxRev) maxRev = d.rev; }
-        draftRev = Math.max(draftRev, maxRev);
-        setState((s) => ({
-          ...s,
-          pendingSends: { ...(data.pendingSends ?? {}), ...s.pendingSends },
-          uploadItems: { ...(data.uploadItems ?? {}), ...s.uploadItems },
-        }));
+    let data: unknown = null;
+    let parseOk = true;
+    try { data = JSON.parse(raw); } catch { parseOk = false; }
+    const wholeUnrecoverable = !parseOk || !isPlainObject(data) || data.v !== PERSIST_VERSION;
+    let restoredDrafts = 0; let expiredDrafts = 0; let droppedDrafts = 0; let droppedSends = 0; let droppedUploads = 0; let restoredSends = 0;
+    let maxRev = 0;
+    if (!wholeUnrecoverable && isPlainObject(data)) {
+      const snapAt = typeof data.savedAt === 'number' ? data.savedAt : Date.now();
+      const now = Date.now();
+      for (const [k, d] of Object.entries((data.drafts ?? {}) as Record<string, unknown>)) {
+        if (!validateDraft(d)) { droppedDrafts += 1; continue; }
+        const age = now - (d.updatedAt ?? snapAt);
+        if (age > DRAFT_TTL_MS) { expiredDrafts += 1; continue; } // 普通草稿 24h 过期（批准约定）
+        drafts.set(k, d.updatedAt != null ? d : { ...d, updatedAt: snapAt });
+        restoredDrafts += 1;
+        if (typeof d.rev === 'number' && d.rev > maxRev) maxRev = d.rev;
       }
-    } catch { /* 快照损坏：作废（不半恢复）——下方首次写入建立新快照 */ }
+      const sends: Record<string, PendingSendEnvelope> = {};
+      for (const [k, e] of Object.entries((data.pendingSends ?? {}) as Record<string, unknown>)) {
+        if (!validateEnvelope(e)) { droppedSends += 1; continue; }
+        sends[k] = e; restoredSends += 1; // 未确认账本：无 TTL（不因普通草稿过期清理）
+      }
+      const uploads: Record<string, UploadItem[]> = {};
+      for (const [k, list] of Object.entries((data.uploadItems ?? {}) as Record<string, unknown>)) {
+        if (!Array.isArray(list)) { droppedUploads += 1; continue; }
+        const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'uploading' && drafts.has(k));
+        if (kept.length !== list.length) droppedUploads += list.length - kept.length;
+        if (kept.length > 0) uploads[k] = kept;
+      }
+      draftRev = Math.max(draftRev, maxRev);
+      setState((s) => ({ ...s, pendingSends: { ...sends, ...s.pendingSends }, uploadItems: { ...uploads, ...s.uploadItems } }));
+    }
+    // 任一不可恢复/丢弃/过期：原件逐字隔离（先隔离后覆写——不销毁唯一原件；隔离尽力而为，
+    // 失败时保留主键原样并说明，本轮内存态照常可用）。隔离件中的未确认账本不解析不派发。
+    const anythingDropped = wholeUnrecoverable || droppedDrafts + droppedSends + droppedUploads > 0;
+    if (anythingDropped) {
+      const qKey = `${persistKey}.quarantine-${Date.now()}`;
+      let quarantined = false;
+      try { localStorage.setItem(qKey, raw); quarantined = true; } catch { quarantined = false; }
+      if (wholeUnrecoverable) {
+        recoveryNote = `草稿快照无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `逐字隔离于 ${qKey}（含未确认发送账本，不自动派发；如需人工核对请勿编辑该键）` : '无法隔离（localStorage 拒写）——主键保留原样，本轮草稿仅内存态'}，新快照从空态开始`;
+      } else {
+        const parts: string[] = [];
+        if (droppedDrafts > 0) parts.push(`损坏草稿 ${droppedDrafts} 条`);
+        if (droppedSends > 0) parts.push(`损坏未确认信封 ${droppedSends} 条（不自动派发）`);
+        if (droppedUploads > 0) parts.push(`损坏/悬空上传项 ${droppedUploads} 项`);
+        if (expiredDrafts > 0) parts.push(`超过 24 小时过期草稿 ${expiredDrafts} 条（按约定不恢复）`);
+        recoveryNote = `草稿快照部分无法恢复：${parts.join('、')}——原件已${quarantined ? `隔离于 ${qKey}` : '无法隔离（主键保留原样）'}；有效部分（草稿 ${restoredDrafts} 条/未确认信封 ${restoredSends} 条）已恢复`;
+      }
+    }
   }
-  persistSnapshot(); // 可写性确认；失败由 persistSnapshot 内部如实置 error（内存仍生效）
-  if (getState().draftPersist.error == null) setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null } }));
+  persistSnapshot(); // 可写性确认+把「仅有效部分」落为新快照（原件已在隔离键保全）
+  setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
 }
 
 /** identity 不可用（服务未就绪/浏览器宿主）：内存态+如实标注（不冒充已持久化）。 */
 export function markPersistenceDegraded(reason: string): void {
-  setState((s) => (s.draftPersist.mode === 'off' ? s : { ...s, draftPersist: { mode: 'off', error: reason } }));
+  setState((s) => (s.draftPersist.mode === 'off' ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'off', error: reason } }));
 }
 
 /* ---------- 提示与主题 ---------- */
