@@ -124,6 +124,10 @@ export function DmPage() {
   const dmShowContext = !dmSingle || dmRegion === 'context';
   const dmShowPreview = dmHasPreview && (!dmSingle || dmRegion === 'preview');
   const dmShowList = !dmHasPreview || dmKeepList;
+  /** 挂载判定与布局判定分离：存在待归一的 legacy 单目标（首个预览）时也要挂载——
+   *  组件内部 effect 完成归一后 dmHasPreview 才会为真（否则首个标签永远不出现）。 */
+  const st2 = useStore((x) => x.previewPane?.target ?? null);
+  const dmMountPreview = active != null && (dmShowPreview || st2 != null);
 
   const dailyDms = useMemo(() => dms.filter((d) => d.archivedAt == null), [dms]);
   const archivedDms = useMemo(() => dms.filter((d) => d.archivedAt != null), [dms]);
@@ -580,8 +584,11 @@ export function DmPage() {
           </div>
         ) : null}
 
-        {/* 私信预览：dm audience 隔离；两区并排时吃余量（≥480 下限），单区域占满。 */}
-        {active != null && dmShowPreview ? (
+        {/* 私信预览：dm audience 隔离；两区并排时吃余量（≥480 下限），单区域占满。
+            挂载不依赖 dmHasPreview：首个标签经 legacy 桥接（store.openPreview 单目标→
+            PreviewPane 内 effect 归一为标签）产生——若只在有标签时挂载会形成死锁
+            （标签永远不出现）。零标签时组件自身渲染 null（不占宽）。 */}
+        {active != null && dmMountPreview ? (
           <PreviewPane
             context={{ kind: 'dm', projectId: active.projectId, conversationId: active.id, threadId: active.threadId }}
             quoteTarget={{ draftKey: `dm:${active.id}`, label: `与 ${dmTitle} 的私信` }}

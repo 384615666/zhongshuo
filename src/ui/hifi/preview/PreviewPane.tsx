@@ -157,6 +157,8 @@ export function PreviewPane({
   const [infoOpen, setInfoOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [wrapSource, setWrapSource] = useState(false);
+  /** 下载原文件忙态（R66 P5——顶部声明：hooks 顺序不随后续早退分支变化）。 */
+  const [dlBusy, setDlBusy] = useState(false);
   const [zoom, setZoom] = useState<number>(0);
   const [selection, setSelection] = useState('');
   const [tabsOverflow, setTabsOverflow] = useState(false);
@@ -319,7 +321,6 @@ export function PreviewPane({
    * 服务端返回的 bytes/hash 对账，不用提取窗或会话导出冒充当前文件。浏览器宿主回退
    * <a download>（data: URL——探针环境可用；桌面端优先窄桥）。
    */
-  const [dlBusy, setDlBusy] = useState(false);
   const doDownloadOriginal = async () => {
     if (dlBusy) return;
     setDlBusy(true);
