@@ -115,7 +115,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     cdp = await connectPage('首启');
     // ① 欢迎页（无 seed——不自动打开项目）
     await waitFor(cdp, `document.body.classList.contains('hifi-on')`, 60000, 'hifi 壳挂载');
-    const welcome = await waitFor(cdp, `document.querySelector('[data-zs-welcome=hifi]') != null && document.querySelector('#hifi-root .workspace')?.getAttribute('data-zs-boot') === 'ready'`, 30000, '首启=欢迎页（无自动项目）');
+    const welcome = await waitFor(cdp, `document.querySelector('[data-zs-welcome=hifi]') != null && (document.querySelector('#hifi-root .app')?.getAttribute('data-zs-boot') ?? document.querySelector('#hifi-root .workspace')?.getAttribute('data-zs-boot')) === 'ready'`, 30000, '首启=欢迎页（无自动项目）');
     await sleep(1200);
     const dbSeedFacts = {
       projects: dbQuery('SELECT count(*) c FROM projects')[0].c,

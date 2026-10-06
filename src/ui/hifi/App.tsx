@@ -274,7 +274,7 @@ export default function App() {
     <>
       <TitleBar />
       <HifiErrorBoundary>
-        <div className="app">
+        <div className="app" data-zs-boot={s.boot}>
         <div className="app-body">
           {sidebarOpen && !s.layout.navAutoHidden ? (
           <aside className="sidebar">
