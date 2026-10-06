@@ -224,6 +224,10 @@ async function runOnce(n) {
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes('PPT 预览样本'))`, 60_000, 'v5：回主池见 PPT 卡');
     await cdp.eval(probe(`(() => { const card = [...document.querySelectorAll('#hifi-root .root-card')].find((c) => c.textContent.includes('PPT 预览样本')); card?.click(); return true; })()`));
     await waitFor(cdp, `[...document.querySelectorAll('.msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 30_000, 'v5：PPT 线程锚块芯片');
+    // r62：重启轮沿用同一数据根——上一轮的线程草稿（含摘录正文）按合同跨重启保留；引用
+    // 检查前显式清空正文，使「引用不污染正文」的判据确定性成立（不依赖历史轮次残留）。
+    await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); if (ta == null) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; setter.call(ta, ''); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
+    await sleep(400);
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.includes('成果与附件')); b?.click(); return true; })()`));
     await waitFor(cdp, `[...document.querySelectorAll('[data-zs-thread-artifacts=hifi] .msg-attach')].some((b) => b.textContent.includes('回归幻灯'))`, 25_000, 'v5：成果页 PPT 芯片');
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('[data-zs-thread-artifacts=hifi] .msg-attach')].find((x) => x.textContent.includes('回归幻灯')); b?.click(); return true; })()`));
