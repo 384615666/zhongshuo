@@ -16,7 +16,7 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
-import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, type ReviewSnapshot } from './loader';
+import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate, pathOf, useHashRoute } from './lib/router';
@@ -51,8 +51,11 @@ export function DmPage() {
   const [renaming, setRenaming] = useState<{ conversationId: string; revision: number } | null>(null);
   const [renameText, setRenameText] = useState('');
   const [reviewBox, setReviewBox] = useState<{ conversationId: string; mode: 'accept' | 'rework'; snapshot: ReviewSnapshot; note: string } | null>(null);
+  /** 消息引用插入（r61：与线程同判——只写草稿，不派发；id 驱动 Composer 去重应用）。 */
+  const [insertText, setInsertText] = useState<{ id: number; text: string } | null>(null);
+  const savedRefs = useStore((s) => s.savedMessageRefs);
   // 切换会话：编辑框一律作废关闭（零提交、零串扰）——A 打开的框不会作用于 B。
-  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); }, [activeId]);
+  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); }, [activeId]);
 
   // 活动目标追踪（接管定位用）：当前会话写入 ui.activeThreadId。
   useEffect(() => { if (activeId !== '') setState((st) => ({ ...st, ui: { ...st.ui, activeThreadId: activeId } })); }, [activeId]);
@@ -397,7 +400,23 @@ export function DmPage() {
               ) : null}
               {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
               {msgs.map((m) => (
-                <MessageView key={m.id} message={m} author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)} onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })} />
+                <MessageView
+                  key={m.id}
+                  message={{ ...m, saved: savedRefs[m.id] === true }}
+                  author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
+                  onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })}
+                  onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
+                    if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }
+                    if (r.busy === true) return;
+                    toast(`收藏操作失败：${r.error ?? '未知错误'}（状态未变）`, 'error');
+                  })}
+                  onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${(e as Error).message}`, 'error')); }}
+                  onQuote={() => {
+                    const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
+                    setInsertText({ id: Date.now(), text: `> 引用消息（${m.id.slice(0, 10)}…）：${excerpt}` });
+                    toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
+                  }}
+                />
               ))}
             </div>
             {active.archivedAt != null ? (
@@ -408,6 +427,7 @@ export function DmPage() {
                 draftKey={`dm:${active.id}`}
                 showMentions={false}
                 formalLimits={FORMAL_LIMITS}
+                insertText={insertText ?? undefined}
                 attachmentUpload={{ conversationId: active.id }}
                 onRetrySend={(env) => retryUnknownSend(env).then((r) => {
                   if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（原信封）', 'success'); }

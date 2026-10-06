@@ -80,6 +80,9 @@ export interface HifiExtension {
    */
   conn: 'online' | 'offline';
   connInfo: string | null;
+  /** r61 G6：本用户 message 类收藏事实（saved_refs 投影）——消息行书签按钮的已收藏状态
+   * 与收藏页取消后的行内同步共用这一份；项目打开时刷新，切换成功即更新。 */
+  savedMessageRefs: Record<string, boolean>;
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -110,6 +113,7 @@ function makeEmptyState(): HifiState {
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null, openInFlight: false,
     conn: 'online', connInfo: null,
+    savedMessageRefs: {},
   };
 }
 

@@ -14,7 +14,7 @@ import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
-import { openExternalDeepLink } from './loader';
+import { openExternalDeepLink, refreshSavedMessageRefs } from './loader';
 import { recordWrite } from './data/store';
 
 interface SearchRow {
@@ -127,9 +127,11 @@ export function LibraryPage() {
     setBusyRef(`${it.kind}:${it.ref}`);
     try {
       await command('saved.remove', { kind: it.kind, ref: it.ref });
-      recordWrite('saved.remove', `取消收藏${SAVED_KIND_LABEL[it.kind] ?? it.kind}「${it.title ?? it.ref.slice(0, 16)}…」（原内容不动）`);
+      recordWrite('saved.remove', `取消收藏${SAVED_KIND_LABEL[it.kind] ?? it.kind}「${it.title ?? it.ref.slice(0, 16)}…」（原消息不动）`);
       toast('已取消收藏（原内容不受影响）', 'success');
       await loadSaved();
+      // r61 G6：消息行书签按钮与收藏页同步——取消后线程/私信里的已收藏标记同批消失。
+      if (it.kind === 'message') void refreshSavedMessageRefs();
     } catch (e) { toast(`取消收藏失败：${(e as Error).message}`, 'error'); }
     finally { setBusyRef(null); }
   };

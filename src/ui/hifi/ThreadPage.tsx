@@ -22,7 +22,7 @@ import type { FormalSendOutcome } from './components/Composer';
 import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
-import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, type ReviewSnapshot } from './loader';
+import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, toggleSavedMessage, type ReviewSnapshot } from './loader';
 import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate } from './lib/router';
@@ -58,6 +58,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const task = useStore((s) => s.threadTasks[threadId]);
   const readSeq = useStore((s) => s.threadReadSeq[threadId]);
   const readError = useStore((s) => s.readErrors[`thread:${threadId}`]);
+  const savedRefs = useStore((s) => s.savedMessageRefs);
   const membersAll = useStore((s) => s.members);
   const allRooms = useStore((s) => s.rooms);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -258,13 +259,16 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
     else toast(`停止失败：${r.error}`, 'error');
   };
 
-  /** 收藏回复消息（r55：saved.add 正式命令——独立保存不改动原内容；幂等；「搜索与收藏」页可见）。 */
+  /** 收藏切换（r61 G6：按钮按正式收藏事实显示已收藏状态——再次点击取消；连点互斥由
+   * toggleSavedMessage 按 in-flight 忽略，第一笔回执决定状态；失败如实提示且状态不变）。 */
   const saveMessage = async (m: { id: string; body: string }) => {
-    try {
-      const r = await command<{ existed: boolean }>('saved.add', { kind: 'message', ref: m.id, title: m.body.slice(0, 60), ...(projectIdOfRoom != null ? { projectId: projectIdOfRoom } : {}) });
-      recordWrite('saved.add', `收藏消息 ${m.id.slice(0, 12)}…${r.existed === true ? '（已收藏——幂等）' : ''}`);
-      toast(r.existed === true ? '这条消息已在收藏里（幂等——不重复保存）' : '已收藏（独立保存，不改动原内容——侧栏「搜索与收藏」页可见）', 'success');
-    } catch (e) { toast(`收藏失败：${(e as Error).message}`, 'error'); }
+    const r = await toggleSavedMessage(m, projectIdOfRoom);
+    if (r.ok) {
+      toast(r.saved ? '已收藏（独立保存，不改动原内容——侧栏「搜索与收藏」页可见）' : '已取消收藏（原消息不受影响）', 'success');
+      return;
+    }
+    if (r.busy === true) return; // 快速连点：忽略后到点击——第一笔在途，回执后再看状态
+    toast(`收藏操作失败：${r.error ?? '未知错误'}（状态未变）`, 'error');
   };
 
   /** 消息引用（r56：插入草稿——只改变草稿，不直接派发）。 */
@@ -405,7 +409,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                 {m.threadMessageSeq === firstUnreadSeq ? <div className="unread-divider" style={{ borderTop: '1px solid var(--accent, #2563eb)', margin: '8px 0', fontSize: 11, color: 'var(--accent, #2563eb)', textAlign: 'center' }}>以上未读之后的新回复</div> : null}
                 <div id={`msg-${m.id}`}>
                   <MessageView
-                    message={m}
+                    message={{ ...m, saved: savedRefs[m.id] === true }}
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
                     onOpenAttachment={(att) => openPreviewAtt(att)}
                     onSave={() => void saveMessage(m)}

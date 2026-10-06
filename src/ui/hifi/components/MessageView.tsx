@@ -137,6 +137,7 @@ export function MessageView({
   onQuote,
   onCorrection,
   onOpenResource,
+  // onCorrection（r61）：正式命令未接入——保留 prop 供后续接线，当前无调用方传入。
   onOpenAttachment,
 }: {
   message: Message;
@@ -225,18 +226,31 @@ export function MessageView({
           </>
         )}
 
-        {/* 表情与操作 */}
+        {/* 表情与操作（r61 G6：无正式处理器的动作不渲染入口——表情/引用仅在页面提供处理器时
+            出现；书签按钮按正式收藏事实显示已收藏状态，再次点击=取消）。 */}
         {!isSystem ? (
           <div className="msg-actions">
-            <button className="icon-btn sm" title="表情：轻量反馈，不是授权或共识票" onClick={() => onReact?.('👍')}>
-              <span style={{ fontSize: 12 }}>👍</span>
-            </button>
-            <button className="icon-btn sm" title="表情" onClick={() => onReact?.('👀')}>
-              <span style={{ fontSize: 12 }}>👀</span>
-            </button>
-            <button className="icon-btn sm" title="收藏（不把内容共享给其他成员）" onClick={onSave}>
-              <Icon name="bookmark" size={13} />
-            </button>
+            {onReact != null ? (
+              <>
+                <button className="icon-btn sm" title="表情：轻量反馈，不是授权或共识票" onClick={() => onReact('👍')}>
+                  <span style={{ fontSize: 12 }}>👍</span>
+                </button>
+                <button className="icon-btn sm" title="表情" onClick={() => onReact('👀')}>
+                  <span style={{ fontSize: 12 }}>👀</span>
+                </button>
+              </>
+            ) : null}
+            {onSave != null ? (
+              <button
+                className="icon-btn sm"
+                title={message.saved ? '已收藏——再次点击取消收藏（只删收藏行，不改动原内容）' : '收藏（不把内容共享给其他成员）'}
+                aria-pressed={message.saved === true}
+                data-zs-saved={message.saved === true ? '1' : '0'}
+                onClick={onSave}
+              >
+                <Icon name="bookmark" size={13} />
+              </button>
+            ) : null}
             {onOpenThread ? (
               <button className="icon-btn sm" title="在回复串中打开 / 定位" onClick={onOpenThread}>
                 <Icon name="message-square" size={13} />
@@ -299,19 +313,19 @@ export function MessageView({
           >
             复制应用内链接
           </MenuItem>
-          <MenuItem
-            icon="corner-down-right"
-            onClick={() => {
-              if (onQuote) onQuote(message);
-              else recordLocalOnly('message.quote', `message=${message.id} → 引用插入输入框（引用不直接触发新任务）`);
-              setMenuAt(null);
-            }}
-          >
-            引用
-          </MenuItem>
-          <MenuItem icon="bookmark" onClick={() => { onSave?.(); setMenuAt(null); }}>
-            {message.saved ? '取消收藏' : '收藏'}
-          </MenuItem>
+          {onQuote != null ? (
+            <MenuItem
+              icon="corner-down-right"
+              onClick={() => { onQuote(message); setMenuAt(null); }}
+            >
+              引用
+            </MenuItem>
+          ) : null}
+          {onSave != null ? (
+            <MenuItem icon="bookmark" onClick={() => { onSave(); setMenuAt(null); }}>
+              {message.saved ? '取消收藏' : '收藏'}
+            </MenuItem>
+          ) : null}
           <div className="menu-sep" />
           {/* 「转为任务」只对顶层消息有意义：串内回复不可直接转（§27.12 TASK-01） */}
           <MenuItem
@@ -322,16 +336,7 @@ export function MessageView({
           >
             转为任务
           </MenuItem>
-          <MenuItem
-            icon="terminal"
-            onClick={() => {
-              if (onCorrection) onCorrection(message);
-              else recordLocalOnly('message.correction', `message=${message.id} → 追加 correction（已发消息不覆盖已执行依据）`);
-              setMenuAt(null);
-            }}
-          >
-            追加更正
-          </MenuItem>
+          {/* 追加更正：正式命令未接入前不出现入口（r61——不以本地日志冒充功能）。 */}
         </Menu>
       ) : null}
     </div>

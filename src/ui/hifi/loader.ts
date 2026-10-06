@@ -125,7 +125,7 @@ export async function openProjectByPath(path: string): Promise<void> {
       roomPool: {}, dmHistory: {}, readErrors: {},
     }));
     try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
-    await Promise.all([refreshMembers(), refreshRooms(), refreshDms()]);
+    await Promise.all([refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
   } finally {
     // 在途结束（成功/失败/被取代）——按代次条件清：旧调用的收尾不清掉更新调用的标记。
     setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false } : s));
@@ -187,8 +187,46 @@ export async function refreshRooms(): Promise<void> {
   }));
 }
 
-export async function refreshDms(): Promise<void> {
-  const gen = getState().loadGen;
+/* ---------- 收藏（r61 G6：可切换——按正式收藏事实显示已收藏状态，再点取消；页面/列表同步） ---------- */
+
+/** 刷新 message 类收藏投影（saved.list 全量拉取后按 kind 过滤）。读取失败保持旧投影——
+ * 按钮仍可用，点击后按回执更新（不因投影过期把用户锁死）。 */
+export async function refreshSavedMessageRefs(): Promise<void> {
+  try {
+    const r = await command<{ items: Array<{ kind: string; ref: string }> }>('saved.list', {});
+    const next: Record<string, boolean> = {};
+    for (const it of r.items ?? []) if (it.kind === 'message') next[it.ref] = true;
+    setState((s) => ({ ...s, savedMessageRefs: next }));
+  } catch { /* 保持旧投影 */ }
+}
+
+/** 收藏切换：已收藏→saved.remove（只删收藏行，原内容不动）；未收藏→saved.add（幂等）。
+ * 同消息在途互斥（快速连点：后到点击直接忽略，第一笔的回执决定最终状态——不交错覆盖、
+ * 不伪成功）；成功才更新投影；失败如实返回错误且状态不变。 */
+const savedToggling = new Set<string>();
+export async function toggleSavedMessage(m: { id: string; body: string }, projectId: string | null): Promise<{ ok: boolean; saved: boolean; busy?: boolean; error?: string }> {
+  if (savedToggling.has(m.id)) return { ok: false, saved: getState().savedMessageRefs[m.id] === true, busy: true };
+  savedToggling.add(m.id);
+  try {
+    const wasSaved = getState().savedMessageRefs[m.id] === true;
+    if (wasSaved) {
+      await command<{ removed: boolean }>('saved.remove', { kind: 'message', ref: m.id });
+      setState((s) => { const next = { ...s.savedMessageRefs }; delete next[m.id]; return { ...s, savedMessageRefs: next }; });
+      recordWrite('saved.remove', `取消收藏消息 ${m.id.slice(0, 12)}…（只删收藏行，原内容不动）`);
+      return { ok: true, saved: false };
+    }
+    const r = await command<{ existed: boolean }>('saved.add', { kind: 'message', ref: m.id, title: m.body.slice(0, 60), ...(projectId != null ? { projectId } : {}) });
+    setState((s) => ({ ...s, savedMessageRefs: { ...s.savedMessageRefs, [m.id]: true } }));
+    recordWrite('saved.add', `收藏消息 ${m.id.slice(0, 12)}…${r.existed === true ? '（已收藏——幂等）' : ''}`);
+    return { ok: true, saved: true };
+  } catch (e) {
+    return { ok: false, saved: getState().savedMessageRefs[m.id] === true, error: (e as Error).message };
+  } finally {
+    savedToggling.delete(m.id);
+  }
+}
+
+export async function refreshDms(): Promise<void> {  const gen = getState().loadGen;
   const projectId = getState().activeProjectId;
   if (projectId === '') return;
   const data = await command<ConvListData>('conversation.list', { projectId });
