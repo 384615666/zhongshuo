@@ -431,6 +431,34 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
     }
     throw new Error(`未知窗口操作：${String(action)}`);
   });
+  // 「另存为」窄桥（R66 P5：预览当前文件的下载原文件/另存为）——renderer 只能提交
+  // { suggestedName, contentBase64 }：**路径永远由系统另存为对话框的用户选择决定**
+  //（renderer 不能指定路径/命令）；来源与 zs:window 同判（senderFrame 白名单）；
+  // 大小上限 64MB 与托管存储读取硬界一致；用户取消=ok:false cancelled（不是错误）。
+  // 字节来源=daemon 正式只读范围命令（attachment.originalFile / project.file.read——
+  // 主进程不做内容推断，只落盘 renderer 已从服务端取到的原件字节）。
+  ipcMain.handle('zs:saveAs', async (event, payload: unknown) => {
+    assertTrustedSender(event);
+    const p = payload as { suggestedName?: unknown; contentBase64?: unknown };
+    if (typeof p?.suggestedName !== 'string' || p.suggestedName.length === 0 || p.suggestedName.length > 200) {
+      throw new Error('另存为参数无效（suggestedName 必须是 1–200 字符）');
+    }
+    if (typeof p?.contentBase64 !== 'string' || p.contentBase64.length === 0) {
+      throw new Error('另存为参数无效（contentBase64 为空）');
+    }
+    // suggestedName 只作默认文件名：取 basename（剥离任何路径成分——不接受路径注入）。
+    const safeName = p.suggestedName.split(/[\\/]/).pop() ?? 'file';
+    const raw = Buffer.from(p.contentBase64, 'base64');
+    if (raw.length === 0) throw new Error('另存为内容为空');
+    if (raw.length > 64 * 1024 * 1024) throw new Error(`另存为内容超限（${raw.length}B > 64MB）`);
+    const picked = await dialog.showSaveDialog(win, {
+      title: '另存为',
+      defaultPath: safeName,
+    });
+    if (picked.canceled || picked.filePath == null || picked.filePath.length === 0) return { ok: false, cancelled: true };
+    writeFileSync(picked.filePath, raw);
+    return { ok: true, path: picked.filePath, bytes: raw.length };
+  });
   const pushWindowState = (): void => {
     if (win.isDestroyed()) return;
     win.webContents.send('zs:window-state', { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused() });

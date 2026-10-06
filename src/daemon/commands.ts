@@ -27,7 +27,7 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
-import { readMemberRuntimeBinding } from './memberRuntime.ts';
+import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
@@ -38,7 +38,7 @@ import { join, resolve, basename } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes } from './attachments.ts';
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedFullText, readVerifiedBlob, readVerifiedStoreRaw, validateImageBuffer, truncateUtf8Bytes } from './attachments.ts';
 import { writeExport, TEXT_PREVIEW_EXTENSIONS, ExportWriterError } from './exportWriter.ts';
 import { readRemoteConfig, writeRemoteConfig, createPairingCode, listDevices, revokeDeviceInDb, lanIps } from './remoteServer.ts';
 import {
@@ -252,7 +252,10 @@ const messageSubmitParams = z.strictObject({
       conversationId: z.string().min(1),
     }),
   ]),
-  body: z.string().min(1),
+  // R66 P3（用户已批准的发送语义：只有文件也沿用当前模式——默认发 AI，仅记录只保存）：
+  // 正文允许为空，但**必须**携带至少一个附件引用——真正空白（无正文且无可发送附件）仍拒绝，
+  // 不合成占位正文、不静默改为记录。上限同前（正文 20K 语义不变）。
+  body: z.string().max(20_000),
   intent: z.enum(['default', 'record_only']),
   mentions: z.array(z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('member'), memberId: z.string().min(1) }),
@@ -263,7 +266,23 @@ const messageSubmitParams = z.strictObject({
   imageAck: z.literal('omit-images').optional(),
   // 表格注入范围（第二十九轮四）：artifactId → "Sheet1!A1:D20"；缺省=有界默认窗口（非全量）。
   attachmentRanges: z.record(z.string().min(1), z.string().min(1).max(200)).optional(),
+}).superRefine((p, ctx) => {
+  if (p.body.trim().length === 0 && (p.attachmentRefs == null || p.attachmentRefs.length === 0)) {
+    ctx.addIssue({ code: 'custom', message: '正文与附件不能同时为空（没有正文时须携带至少一个可发送的附件引用；上传中/失败资源不算就绪附件）' });
+  }
 });
+
+/**
+ * R66 P3：任务标题推导（正文为空的文件-only 发送）——标题是**界面/列表标签**而非模型
+ * 输入：正文非空沿用正文前 60 字；正文为空用**附件文件名**（用户决定的合法呈现——不合成
+ * 假用户正文，不把界面说明当模型文件内容）。
+ */
+function taskTitleOf(body: string, attachmentNames: string[]): string {
+  const trimmed = body.trim();
+  if (trimmed.length > 0) return body.slice(0, 60);
+  const fromNames = attachmentNames.filter((n) => n != null && n.length > 0).join('、');
+  return fromNames.length > 0 ? `📎 ${fromNames}`.slice(0, 60) : '（无正文）';
+}
 
 function coordinatorOf(db: ZhongshuoDatabase, roomId: string): string {
   return (db.prepare('SELECT coordinator_member_id c FROM rooms WHERE id = ?').get(roomId) as { c: string } | undefined)?.c ?? '';
@@ -313,11 +332,21 @@ function assertImageGate(
   resolved: Array<{ artifactId: string; displayName: string; kind: string }>,
   willDispatch: boolean,
   imageAck: string | undefined,
+  /** R66 P3：正文（文件-only 语义下可为空）——仅图片+「继续文字」+空正文会形成**空模型输入**。 */
+  bodyForModel?: string,
 ): void {
   if (!willDispatch) return; // record_only/记录串/无派发路由：不进模型，无门禁
   const images = resolved.filter((a) => a.kind === 'image_file');
   if (images.length === 0) return;
-  if (imageAck === 'omit-images') return; // 用户明确选择仅发送文字（组装侧如实注入说明）
+  if (imageAck === 'omit-images') {
+    // 「仅发送文字」但没有任何可用文字（正文空且其余附件也全是图片——其余 kind 均有文本
+    // 提取注入，不在此列）：不得形成空模型输入，给出可行选择（加文字或改仅记录）。
+    const nonImages = resolved.filter((a) => a.kind !== 'image_file');
+    if ((bodyForModel ?? '').trim().length === 0 && nonImages.length === 0) {
+      throw new DaemonCommandError('VALIDATION_INVALID', 'EMPTY_MODEL_INPUT：已选择「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）。请先添加文字，或改为「仅记录」（intent:"record_only"——只保存消息与文件，不派发不扣预算），或选择其他附件。');
+    }
+    return; // 用户明确选择仅发送文字（组装侧如实注入说明）
+  }
   throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `IMAGE_INPUT_UNVERIFIED：目标成员的模型图片输入能力未认证，不能发送图片后宣称模型已读。请明确选择其一：仅发送文字（imageAck:"omit-images"——消息与注入文本将注明图片未发送及用户确认）或仅记录（intent:"record_only"，不派发）。${images.map((i) => i.displayName).join('、')}`);
 }
 
@@ -997,9 +1026,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
         const installation = binding.installationId == null ? null
           : (deps.db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
+        // R66 P5：**有效派发来源**分列（R65 反例：界面显示「未绑定」，实际未绑定成员回落到
+        // 全局默认渠道 ZS_RUNTIME=claude——两件不同事实）。与派发侧 MemberRuntimeRegistry
+        // 同一解析（resolveMemberRuntime：未绑定→defaultKind+默认模型），defaultKind 与
+        // entry.ts 的 options.runtime 同源（ZS_RUNTIME）。
+        const effective = resolveMemberRuntime(deps.db, params.memberId, process.env.ZS_RUNTIME ?? null);
         // 环境模式（第三十八轮 #2：验收防护包真实渠道被拒绑——设置 UI 据此提供 fake 正路径，
         // 用户不再需要脚本自救；正式部署两标志皆 false=fake 不进产品设置面，原决策不变）。
-        return withCommandId({ ok: true, data: { binding, installation, environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
+        return withCommandId({ ok: true, data: { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved', kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null }, environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
@@ -1131,7 +1165,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             // 走四通道共用 resolveAttachmentRefs（第二十七轮二），消息-附件关联同事务。
             if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
             const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
-            assertImageGate(resolvedAtts, params.intent === 'default', params.imageAck); // 默认意图=派发（能力门先于落库）
+            assertImageGate(resolvedAtts, params.intent === 'default', params.imageAck, params.body); // 默认意图=派发（能力门先于落库；空正文+仅图片+仅文字=空模型输入拒）
             assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
             const conv = dmConversationOf(deps.db, target.conversationId);
             if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
@@ -1150,6 +1184,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 localUserId: deps.localUserId,
                 body: params.body,
                 intent: params.intent,
+                title: taskTitleOf(params.body, resolvedAtts.map((a) => a.displayName)),
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
               attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges);
@@ -1176,7 +1211,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck); // 派发路由才设门（record_only 零派发）
+          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
           return deps.db.transaction(() => {
             const ids = {
@@ -1192,7 +1227,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               conversationId: target.conversationId,
               roomId: target.roomId,
               intent: params.intent,
-              title: params.body.slice(0, 60),
+              title: taskTitleOf(params.body, resolvedAtts.map((a) => a.displayName)),
               body: params.body,
               mentions: params.mentions as MentionNode[],
               author: { authorType: 'human', authorId: deps.localUserId },
@@ -2493,6 +2528,39 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const verified = readVerifiedCopy(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
         if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
         return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.copy.hash, text: verified.copy.text, truncated: verified.copy.truncated, originalBytes: verified.copy.originalBytes, excerptBytes: verified.copy.excerptBytes } });
+      }
+      case 'attachment.readFull': {
+        // R66 P2：完整文件读取（屏幕阅读通道）——与 previewText（64KB 提取窗=模型注入同源）
+        // 分列：返回托管副本**全文**（无截断）。audience/完整性链与 previewText 完全一致；
+        // 模型注入预算合同不变（仍走提取窗——不把整份文件无界发给模型）。
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string; kind: string; revision: number } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本/代码附件范围（完整读取面向文本类）`);
+        const full = readVerifiedFullText(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!full.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', full.error.message);
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, text: full.text, originalBytes: full.originalBytes, complete: true, note: '屏幕阅读=托管副本全文；模型注入仍走 64KB 提取窗（预算合同不变）' } });
+      }
+      case 'attachment.originalFile': {
+        // R66 P5：下载原文件/另存为——按资源 kind 的实际存储扩展名读**原件字节**
+        //（文本类={hash}.txt；其余={hash}.bin——与导出随包拷贝同链 readVerifiedStoreRaw：
+        // 实根/实身份/受控句柄/实际字节 sha256）。audience 同 previewText。仅返回字节与
+        // 身份；落盘由主进程「另存为」对话框完成（用户显式选路径——renderer 不能指定路径）。
+        const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
+        const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
+          | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number } | undefined;
+        if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `附件不存在：${params.attachmentId}`);
+        const convId = params.conversationId ?? row.conversation_id;
+        assertConversationAudience(deps.db, deps.localUserId, convId);
+        if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
+        const ext = (ATT_TEXT_KINDS as readonly string[]).includes(row.kind) ? 'txt' as const : 'bin' as const;
+        const raw = readVerifiedStoreRaw(row.blob_path, row.hash, ext, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
+        if (!raw.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', raw.error.message);
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, bytes: raw.raw.length, bytesBase64: raw.raw.toString('base64') } });
       }
       case 'attachment.listByConversation': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);

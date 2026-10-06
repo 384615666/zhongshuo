@@ -35,3 +35,13 @@ contextBridge.exposeInMainWorld('zsWindow', {
     return () => ipcRenderer.removeListener('zs:window-state', listener);
   },
 });
+
+/**
+ * 「另存为」窄桥（R66 P5：预览当前文件的下载原文件/另存为）——renderer 只提交建议文件名与
+ * 已从 daemon 正式只读命令取得的原件字节；**保存路径由系统对话框的用户选择决定**（renderer
+ * 不能指定路径）。main 侧 senderFrame 白名单+64MB 上限+basename 归一（zs:saveAs）。
+ */
+contextBridge.exposeInMainWorld('zsDownload', {
+  saveAs: (payload: { suggestedName: string; contentBase64: string }): Promise<{ ok: boolean; cancelled?: boolean; path?: string; bytes?: number }> =>
+    ipcRenderer.invoke('zs:saveAs', payload),
+});

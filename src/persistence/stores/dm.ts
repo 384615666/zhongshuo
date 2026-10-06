@@ -249,6 +249,8 @@ export interface CreateDmTurnInput {
   body: string;
   intent: 'default' | 'record_only';
   reviewPolicy: string;
+  /** 任务标题（R66 P3：文件-only 发送正文为空时由调用方按附件文件名推导——不合成假正文）。 */
+  title?: string;
   /** 作者（第二十四轮二：提醒派发=system——不伪装人类发言；缺省 human=本地用户）。 */
   author?: { authorType: 'human' | 'system'; authorId: string };
 }
@@ -281,7 +283,7 @@ export function createDmTurn(db: ZhongshuoDatabase, input: CreateDmTurnInput): C
        VALUES (?, ?, ?, 'dm_turn', NULL, NULL, ?, NULL, ?, ?, 'ACTIVE', 0, ?, ?, ?)`,
     ).run(
       taskId, input.projectId, input.conversationId, messageId, input.peerMemberId,
-      input.body.slice(0, 60), input.reviewPolicy,
+      input.title ?? input.body.slice(0, 60), input.reviewPolicy,
       JSON.stringify({ kind: 'dispatch', mode: 'DIRECT', targetMemberId: input.peerMemberId, frozenMemberIds: [input.peerMemberId], initialWakeMemberIds: [input.peerMemberId] }),
       seq.last_message_seq, // 输入水位（第十九轮四）：本轮输入边界=本次用户消息的 seq
     );

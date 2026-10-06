@@ -245,3 +245,20 @@ export function readVerifiedCopy(blobPath: string, expectedHash: string, storeRo
   const cut = truncateUtf8Bytes(text, ATT_EXCERPT_BYTES);
   return { ok: true, copy: { text: cut.text, originalBytes: r.raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, hash: expectedHash } };
 }
+
+/**
+ * R66 P2：**完整文件读取**（屏幕阅读通道）——与 readVerifiedCopy（64KB 提取窗=模型注入
+ * 同源）分列：本函数返回托管副本的**全文**（无截断），供预览排版阅读/HTML 页面渲染/源码
+ * 浏览。同一完整性链（实根/实身份/受控句柄/实际字节 sha256）。文本附件上传上限
+ * ATT_MAX_BYTES=256KB，全量读取天然有界；模型注入仍走提取窗（预算合同不变——不把
+ * 整份文件无界发给模型）。
+ */
+export function readVerifiedFullText(
+  blobPath: string,
+  expectedHash: string,
+  storeRoot?: string,
+): { ok: true; text: string; originalBytes: number } | { ok: false; error: AttachmentReadError } {
+  const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'txt');
+  if (!r.ok) return r;
+  return { ok: true, text: r.raw.toString('utf8'), originalBytes: r.raw.length };
+}
