@@ -95,7 +95,7 @@ export function WelcomePage() {
   const s = useStore((x) => x);
   const [openFolder, setOpenFolder] = useState(false);
   return (
-    <div className="main">
+    <div className="main" data-zs-welcome="hifi">
       <div className="page narrow">
         <div style={{ textAlign: 'center', padding: '38px 0 26px' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
