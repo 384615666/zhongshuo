@@ -1141,6 +1141,7 @@ export function Composer({
           <input
             ref={fileInputRef}
             type="file"
+            data-zs-file-input="1"
             multiple
             style={{ display: 'none' }}
             onChange={(e) => {

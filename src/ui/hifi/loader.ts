@@ -147,7 +147,10 @@ export async function bootRemembered(): Promise<void> {
       }
       // r57：成功读到**空记忆**=正常无项目状态——立即就绪并显示欢迎/打开入口，
       // 不再继续等 60 秒后误报「启动失败」（空项目≠失败）。
-      setState((st) => (st.activeProjectId === '' && st.boot === 'pending' ? { ...st, boot: 'ready' } : st));
+      // R67 修复：ready 只看 boot 本身——原条件还要求 activeProjectId===''，但
+      // applyServerNavPrefs 可能已按服务端偏好设置了 activeProjectId（保存过导航偏好的
+      // 用户），导致「无记忆路径」启动永远停在 pending（恢复轮询等所有 boot 依赖全挂）。
+      setState((st) => (st.boot === 'pending' ? { ...st, boot: 'ready' } : st));
       // 演练包竞态兜底：启动器窗口先于种子打开（种子晚写 autoOpen）——欢迎态下留一个
       // **有界后台观察**（不阻塞欢迎交互；用户手动打开后 watcher 自停）。真实新装环境
       // 种子不写该键，观察窗口自然结束、欢迎保持——不冒充失败。
