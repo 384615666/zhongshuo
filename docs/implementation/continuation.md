@@ -2,6 +2,68 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-06 第六十一轮，唯一权威快照）
+
+> R61=用户反馈修复批次（review-r60-next-round 全项，用户 v4 G1–G10 手测反馈优先）。
+> **用户结果已回填**：G1/G3/G4/G5/G8/G10 PASS、G2 正常观察、G6 PARTIAL（收藏不能取消）、
+> G7 FAIL（Esc+引用）、G9 NOT_RUN（无新回复——不造数据）、Android 仍未回填。
+> **新基线=hifi-h4-win-v5** `bld_292768533f1c899c`（commit 978c8527，dirty=false，591/591，
+> 三连 allPass r61-20261006023342，real_calls=0）——用户只补 R1 收藏切换/R2 文件引用与 Esc
+> （约 5–10 分钟），v4 通过项继承；G9 无自然新回复仍 NOT_RUN。v4 与用户回填原地保留。
+> - **[§1 G6 收藏切换]** savedMessageRefs 投影（saved.list→message 类，项目打开刷新）+
+>   toggleSavedMessage（已收藏→saved.remove 原内容不动/未收藏→saved.add；同消息在途互斥，
+>   连点忽略后到点击；失败如实提示状态不变）；MessageView 书签 aria-pressed+data-zs-saved+
+>   填充样式；**无处理器入口不渲染**（表情/引用/追加更正——不以本地日志冒充功能）；DmPage
+>   补 onSave/onReact/onQuote；收藏页取消→消息行同步。探针 TG6 全绿（按钮态×DB 双断言/
+>   reload/收藏页同步/注入失败/连点）。
+> - **[§2 G7 文件引用重做]** 「引用文件」=资源引用卡直写目标草稿 attachments（与上传附件
+>   同一正式链路：发送进 attachmentRefs，服务端 audience/完整性/范围/图片门终审）——正文
+>   保持用户文字；同文件同版本去重；跨会话写入前拒；成果/详情标签引用直落草稿+zs:focus-
+>   composer 自动切回回复（消除「无可见结果/回回复才插入/第三次批量灌入」根因——
+>   pendingQuotes 队列删除）；「摘录」独立动作：内容真源由各格式子组件上报（文本/PDF 当前页/
+>   Word HTML 文本/表格当前窗口/幻灯当前页），不再从 page-stack DOM 抓取。queueDraftInserts/
+>   takeDraftInserts 一次性消费。探针 TG7 全绿（成果页连点两次→恰一卡正文零污染/第三击去重/
+>   同名不同文件两卡/移除/发送 refs 落库恰一条/注入丢回执→原信封重发恰一次+只清本次引用/
+>   摘录不含「模型输入/原文」界面文案）。
+> - **[§3 Esc 查明]** v4 交付副本×随包种子 PPT×CDP 原生键×四焦点位（工具栏/幻灯内容/输入框/
+>   上层弹窗）**全部正常退出展开**（键真实到达 __escLog）——用户报告未在交付形态复现；缩放
+>   Ctrl+= 在 frameless 宿主不生效（scale 恒 1，如实边界）。**语义补全**：wide 下 Esc 也回
+>   normal（用户最可能形态=按了「宽」后按 Esc 无动作）；Esc 永不关预览、上层弹窗优先。
+>   v5 副本复跑 overall=true（PPT 视觉页真实装载 1/3 页）。
+> - **[§4 附件存储位置无关重定位（新发现缺陷）]** v4 副本演练暴露：种子附件 blob_path 记录
+>   打包时绝对路径——**包目录复制/搬移后所有附件预览报「路径越出托管存储」**。修复：
+>   readStoreBytes 记录位置不在当前根时按当前存储根 {hash}.{ext} 重定位，realpath/受控句柄/
+>   实际字节 sha256 校验全保持（绝不读越出当前根的文件）。storeLinks 4 新测试+attachmentChannels
+>   旧断言按新合同更新（外部同 hash 名内容不同→返回当前根内容；当前根缺失→如实不可读）。
+> - **[§5 草稿/未知信封持久化（纠正 R60 判据——原报告保留）]** store 持久化层：正文/提及/
+>   意图/已就绪引用/完整未知信封（含 queued）随变更快照 localStorage；命名空间=数据根+本地
+>   用户（新 app.identity 只读命令）；在途上传不落盘（恢复=重新选择）；removed 不复活；持久化
+>   失败内存仍生效+「草稿未持久化」如实提示；未知信封不设 TTL；重载不自动发送、仅记录不变 AI。
+>   bootRemembered 在打开项目前初始化。**同内容不重写修复**（真缺陷：重挂载照写草稿把代次+1
+>   →重试清算「代次未变」判定失效→已发正文残留）。集成测试 5/5+崩溃演练全绿：回执丢失→
+>   完整原信封冻结（含 commandId）→Page.crash→自动重载恢复草稿+仅记录意图+横幅（同号）→
+>   重发恰一次+正文剥离+record_only 零新 run（draft-recovery-r61-…021136）。
+> - **[§6 G9 工程正例]** M0 合同=任务串人类跟进只记录不派发（followUpRecorded）——真实新
+>   agent 回复经正式返工链（task.review changes_requested+task.executeRework 完整身份）产生。
+>   TG9 全绿：关注→离开→水位不动→真实新回复→待我处理出现→阅读消失；静音排除（daemon
+>   mine.pending 真值+UI 双断言）。夹具坑：task_review_enabled 是项目开关、tasks.review_policy
+>   是创建时快照（两者都要设）；task_deliveries 部分唯一索引=每任务仅一条 pending（先置
+>   superseded）；reworkPending 派生要求 delivery.run_id 非空。
+> - **[§7 回退演练外部资源]** upgrade-drill-r61 阶段 D：blobstore manifest（hash 复算+文件名
+>   形态）→恢复根逐文件拷贝完整→恢复库附件实读（previewText）→export.create 含附件
+>   missing=0→local.token 不变；边界=旧程序系当前源码+子集迁移形态（含 §4 重定位），真实
+>   已发布旧 binary 不代宣布。阶段 A 补：附件挂正式消息（导出含附件前提）。
+> - **[§8 性能分项+githubSandbox]** 分层实测：daemon 就绪 179ms / history 2/2/1ms / 桌面 UI
+>   454→455ms（各自成行不互相冒充）。githubSandbox 复跑 **5/5 全过**（62s）——R60 唯一失败
+>   证实瞬时 TLS 抖动，原报告保留。全量 **879/879**。
+> - **坑（本轮新增）**：工具层 heredoc 吃反斜杠（python 字符串 
+ 变换行——用 chr(92) 构造）；
+>   CDP Input.dispatchKeyEvent 带 nativeVirtualKeyCode 会 Invalid parameters（去掉即可）；
+>   preview visual-state 是 slide-controls 的**兄弟**节点非子节点（选择器写错=60s 假超时）；
+>   waitForJs 用 document.querySelector 只看第一个 chip（some() 才对）；CDP 轮询粒度计入 UI
+>   耗时；收藏按钮只在**回复**消息上（锚块不是 MessageView）；打包 daemon localUserId=homedir
+>   派生（夹具直插 dm_participants 要用 app.identity 真值）；docx-word-evidence 二进制 fixtures
+>   每次全量测试再生成（打包前 git checkout -- 恢复可得 dirty=false）。
 ## 当前真实状态（2026-10-05 第六十轮收尾批次，唯一权威快照）
 
 > R60=升级/兼容/证据收尾批次（review-r60 全项）：版本门+升级回退演练+renderer 故障注入
