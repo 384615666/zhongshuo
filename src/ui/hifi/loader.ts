@@ -13,14 +13,14 @@ import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
 import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
-import type { AppState, Message, Thread, ThreadCard } from './data/types';
+import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number } }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
@@ -289,6 +289,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       threadId: it.threadId, projectId, roomId,
       anchorMessageId: it.anchorMessageId ?? '',
       taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, roomTaskNumber: it.roomTaskNumber ?? null,
+      taskTitle: it.taskTitle ?? null,
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
       unread: it.unread ?? 0, muted: it.muted === true, followed: it.followed === true,
@@ -297,6 +298,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       const errors = { ...prev.readErrors }; delete errors[roomId];
       return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, readErrors: errors };
     });
+    hydrateRoomFromPool(getState(), projectId, roomId, cards);
   } catch (e) {
     if (!stillCurrent(gen, projectId)) return;
     const msg = (e as Error).message;
@@ -304,10 +306,123 @@ export async function loadRoomPool(roomId: string): Promise<void> {
   }
 }
 
-/* ---------- 线程视图（第五十一轮 H2：thread.get/thread.history/task.get 真实 DTO 适配） ---------- */
+/* ---------- AppState 视图模型水合（R64 原型还原：真实数据 → 原型页面消费的字段） ----------
+ * 原型页面（Room/FilesGit/Settings…）经 selectors 读 AppState.threads/messages/tasks 等；
+ * 正式真实数据住在 HifiExtension（roomPool/threadEntities/threadMessages/threadTasks）。
+ * 水合层把真实投影同步进 AppState 视图模型——原型组件零改动运行；真实事实源不变
+ *（每次快照装载后重放本房间/本线程的水合，切项目由 openProjectByPath 清空）。 */
 
-interface ThreadGetData {
-  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
+/**
+ * room.pool 卡片 → AppState：threads（线程实体）、messages（根锚消息）、tasks（最小任务
+ * 投影：真实 id/标题/状态/号）、subscriptions（muted/followed 只读事实——切换走 thread.subscribe）。
+ * 未装载回复的线程其 unread/replyCount 由 selectors 兜底读卡片（见 selectors.ts R64 注）。
+ */
+function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string, cards: ThreadCard[]): void {
+  const room = prev.rooms.find((r) => r.id === roomId);
+  const convId = room?.conversationId ?? '';
+  const threads = cards.map((c) => ({
+    id: c.threadId, projectId, roomId, conversationId: convId,
+    anchorMessageId: c.anchorMessageId, rootTaskId: c.taskId ?? undefined,
+    status: 'open' as const, lastMessageSeq: 0, revision: 0,
+  }));
+  const roots = cards.filter((c) => c.body.length > 0 || c.createdAt > 0).map((c) => ({
+    id: c.anchorMessageId || `anchor:${c.threadId}`, projectId, roomId, threadId: undefined,
+    authorType: 'human' as const, authorId: 'you', kind: 'text' as const,
+    body: c.body, createdAt: c.createdAt,
+  }));
+  const tasks = cards.filter((c) => c.taskId != null).map((c) => ({
+    id: c.taskId as string, projectId, roomId, conversationThreadId: c.threadId,
+    roomTaskNumber: c.roomTaskNumber ?? 0, title: c.taskTitle ?? '',
+    objective: '', status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: 0,
+    reviewPolicy: 'user_review' as const, mode: 'AUTO' as const, displayNumber: c.roomTaskNumber ?? 0,
+  }));
+  const subscriptions: Record<string, { followed: boolean; muted: boolean }> = {};
+  for (const c of cards) subscriptions[c.threadId] = { followed: c.followed, muted: c.muted };
+  setState((s) => ({
+    ...s,
+    threads: [...s.threads.filter((t) => t.roomId !== roomId), ...threads],
+    messages: [...s.messages.filter((m) => m.roomId !== roomId || m.threadId != null), ...roots],
+    tasks: [...s.tasks.filter((t) => t.roomId !== roomId), ...tasks],
+    subscriptions: { ...s.subscriptions, ...subscriptions },
+  }));
+}
+
+/**
+ * thread.get/history/task.get 快照 → AppState：threads 实体（含 conversationId）、锚消息、
+ * 回复消息、完整任务投影（title/status/号 + pendingDelivery/reworkPending → taskDeliveries/
+ * runs 最小投影）、readStates（threadReadSeq 同步——首条未读分隔线用真实水位）。
+ */
+function hydrateThreadFromSnapshots(threadId: string): void {
+  const s = getState();
+  const thread = s.threadEntities[threadId];
+  if (thread == null) return;
+  const anchor = s.threadAnchors[threadId] ?? null;
+  const replies = s.threadMessages[threadId] ?? [];
+  const detail = s.threadTasks[threadId];
+  const readSeq = s.threadReadSeq[threadId] ?? 0;
+  setState((prev) => {
+    const otherThreads = prev.threads.filter((t) => t.id !== threadId);
+    const otherMessages = prev.messages.filter((m) => m.threadId !== threadId && m.id !== anchor?.id);
+    const anchorMsg = anchor == null ? [] : [{
+      id: anchor.id, projectId: thread.projectId, roomId: thread.roomId, threadId: undefined,
+      authorType: anchor.authorType, authorId: anchor.authorId, kind: 'text' as const,
+      body: anchor.body, createdAt: anchor.createdAt,
+      formalAttachments: (anchor as Message & { formalAttachments?: unknown }).formalAttachments,
+    }];
+    const nextTasks = [...prev.tasks];
+    const nextDeliveries = [...prev.taskDeliveries];
+    const nextRuns = [...prev.runs];
+    if (detail != null) {
+      const idx = nextTasks.findIndex((t) => t.id === detail.id);
+      const taskView = {
+        id: detail.id, projectId: thread.projectId, roomId: thread.roomId,
+        conversationThreadId: threadId, roomTaskNumber: detail.roomTaskNumber,
+        title: detail.title, objective: '', status: detail.status as Task['status'],
+        revision: detail.revision, reviewPolicy: 'user_review' as const,
+        currentDeliveryId: detail.pendingDelivery?.id,
+        mode: 'AUTO' as const, displayNumber: detail.roomTaskNumber,
+      };
+      if (idx >= 0) nextTasks[idx] = taskView; else nextTasks.push(taskView);
+      if (detail.pendingDelivery != null) {
+        const dIdx = nextDeliveries.findIndex((d) => d.id === detail.pendingDelivery?.id);
+        const dv = {
+          id: detail.pendingDelivery.id, taskId: detail.id, runId: '',
+          revision: detail.pendingDelivery.revision, manifestHash: detail.pendingDelivery.manifestHash,
+          status: 'pending' as const, summary: '', verification: [], residuals: [], artifactRefs: [], changeSetRefs: [],
+          createdAt: 0,
+        };
+        if (dIdx >= 0) nextDeliveries[dIdx] = dv; else nextDeliveries.push(dv);
+      }
+      if (detail.activeRun != null) {
+        const rIdx = nextRuns.findIndex((r) => r.id === detail.activeRun?.id);
+        const rv = {
+          id: detail.activeRun.id, taskId: detail.id, threadId, mode: 'AUTO' as const,
+          taskRevision: detail.revision, status: detail.activeRun.status as WorkflowRun['status'],
+          stage: 'PREPARE' as const, roundNo: 0, rosterRevision: 0,
+          budget: { maxAgentTurns: 0, usedAgentTurns: 0, formula: '', reservedTail: 0 },
+        };
+        if (rIdx >= 0) nextRuns[rIdx] = rv; else nextRuns.push(rv);
+      } else {
+        // 无活跃 run：清掉此前水合的同任务 run（避免停止后仍显示执行中）。
+        const runIds = nextRuns.filter((r) => r.taskId === detail.id).map((r) => r.id);
+        for (const rid of runIds) { const i = nextRuns.findIndex((r) => r.id === rid); if (i >= 0) nextRuns.splice(i, 1); }
+      }
+    }
+    return {
+      ...prev,
+      threads: [...otherThreads, thread],
+      messages: [...otherMessages, ...anchorMsg, ...replies],
+      tasks: nextTasks,
+      taskDeliveries: nextDeliveries,
+      runs: nextRuns,
+      readStates: { ...prev.readStates, [threadId]: readSeq },
+    };
+  });
+}
+
+
+
+interface ThreadGetData {  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
   anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number } | null;
   lastReadSeq: number;
 }
@@ -396,6 +511,8 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     } else {
       setState((prev) => { const next = { ...prev.threadTasks }; delete next[threadId]; return { ...prev, threadTasks: next }; });
     }
+    // R64：真实快照 → AppState 视图模型水合（原型线程面板消费 threads/messages/tasks/readStates）。
+    hydrateThreadFromSnapshots(threadId);
     // 阅读水位（独立门）：最新回复 seq ≤ thread.lastMessageSeq（未来序号服务端拒绝）。
     const lastSeq = replies.length > 0 ? (replies[replies.length - 1]?.threadMessageSeq ?? 0) : 0;
     if (opts.markRead === true && lastSeq > got.lastReadSeq && canMarkThreadRead(threadId)) {
@@ -450,6 +567,7 @@ export async function loadThreadOlder(threadId: string, beforeSeq: number): Prom
     const fresh = older.filter((m) => !known.has(m.id));
     return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: [...fresh, ...cur] } };
   });
+  hydrateThreadFromSnapshots(threadId);
   return older.length;
 }
 

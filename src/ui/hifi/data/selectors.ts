@@ -114,11 +114,22 @@ export const processNotesOfThread = (s: AppState, threadId: string): Message[] =
 
 export const anchorOf = (s: AppState, thread: Thread) => byId(s.messages, thread.anchorMessageId);
 
-/** 回复数只统计人类与 agent 的回复；系统/工具事件不计入（TH-10） */
+/** 未装载回复的线程 → room.pool 卡片真实聚合（R64：水合层只装根锚，回复按需装载）。 */
+function poolCardOf(s: AppState, threadId: string): { unread: number; replyCount: number } | undefined {
+  const pool = (s as import('./store').HifiState).roomPool ?? {};
+  for (const cards of Object.values(pool)) {
+    const c = cards.find((x) => x.threadId === threadId);
+    if (c != null) return c;
+  }
+  return undefined;
+}
+
+/** 回复数只统计人类与 agent 的回复；系统/工具事件不计入（TH-10）。
+ *  R64：未装载回复的线程按 room.pool 卡片 replyCount（服务端真实计数）。 */
 export function replyCount(s: AppState, threadId: string): number {
-  return s.messages.filter(
-    (m) => m.threadId === threadId && (m.authorType === 'human' || m.authorType === 'agent'),
-  ).length;
+  const loaded = s.messages.filter((m) => m.threadId === threadId);
+  if (loaded.length === 0) return poolCardOf(s, threadId)?.replyCount ?? 0;
+  return loaded.filter((m) => m.authorType === 'human' || m.authorType === 'agent').length;
 }
 
 /** 主池卡片上的 2—3 条预览：线程消息的投影，不是副本（§3.4） */
@@ -132,9 +143,11 @@ export function replyPreview(s: AppState, threadId: string, limit = 3): Message[
 export function unreadCount(s: AppState, threadId: string): number {
   const thread = threadOf(s, threadId);
   if (!thread) return 0;
+  const loaded = s.messages.filter((m) => m.threadId === threadId);
+  if (loaded.length === 0) return poolCardOf(s, threadId)?.unread ?? 0; // R64：未装载线程按卡片未读
   const watermark = s.readStates[threadId] ?? 0;
-  return s.messages.filter(
-    (m) => m.threadId === threadId && (m.threadMessageSeq ?? 0) > watermark && m.authorType !== 'system',
+  return loaded.filter(
+    (m) => (m.threadMessageSeq ?? 0) > watermark && m.authorType !== 'system',
   ).length;
 }
 

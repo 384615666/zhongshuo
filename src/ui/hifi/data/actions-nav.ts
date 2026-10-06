@@ -13,9 +13,9 @@
  */
 
 import { getState, setState, recordWrite, recordLocalOnly, persistNav, toast } from './store';
-import type { AppState } from './types';
+import type { HifiState } from './store';
 
-function commitNav(s: AppState, detail: string, api: string) {
+function commitNav(s: HifiState, detail: string, api: string) {
   persistNav(s);
   recordWrite(api, detail);
 }
@@ -39,7 +39,7 @@ export function focusProject(projectId: string, opts?: { announce?: boolean }): 
 
   const wasVisible = s0.visibleProjectIds.includes(projectId);
   const visible = ensureVisible(s0.visibleProjectIds, projectId);
-  const next: AppState = {
+  const next: HifiState = {
     ...s0,
     activeProjectId: projectId,
     visibleProjectIds: visible,
@@ -69,7 +69,7 @@ export function toggleProjectVisible(projectId: string): void {
   const visible = isVisible
     ? s0.visibleProjectIds.filter((id) => id !== projectId)
     : [...s0.visibleProjectIds, projectId];
-  const next: AppState = {
+  const next: HifiState = {
     ...s0,
     visibleProjectIds: visible,
     // 新显示的项目**同时展开**：菜单上写的是"显示在侧栏"，
@@ -89,7 +89,7 @@ export function toggleProjectVisible(projectId: string): void {
 export function toggleProjectExpanded(projectId: string): void {
   const s0 = getState();
   const isOpen = s0.expandedProjectIds.includes(projectId);
-  const next: AppState = {
+  const next: HifiState = {
     ...s0,
     expandedProjectIds: isOpen
       ? s0.expandedProjectIds.filter((id) => id !== projectId)
@@ -107,7 +107,7 @@ export function toggleProjectExpanded(projectId: string): void {
 export function rememberFileGitTab(projectId: string, tab: 'files' | 'git'): void {
   const s0 = getState();
   if (s0.fileGitTabs[projectId] === tab) return;
-  const next: AppState = { ...s0, fileGitTabs: { ...s0.fileGitTabs, [projectId]: tab } };
+  const next: HifiState = { ...s0, fileGitTabs: { ...s0.fileGitTabs, [projectId]: tab } };
   setState(() => next);
   persistNav(next);
   recordLocalOnly('nav.fileGitTab', `projectId=${projectId} tab=${tab}`);
@@ -132,7 +132,7 @@ export function revealProjectForDeepLink(projectId: string, opts?: { announce?: 
   if (!p) return false;
   const wasVisible = s0.visibleProjectIds.includes(projectId);
   const visible = ensureVisible(s0.visibleProjectIds, projectId);
-  const next: AppState = {
+  const next: HifiState = {
     ...s0,
     activeProjectId: projectId,
     visibleProjectIds: visible,
