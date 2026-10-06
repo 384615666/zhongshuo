@@ -145,3 +145,15 @@ export function revealProjectForDeepLink(projectId: string, opts?: { announce?: 
   }
   return true;
 }
+
+/** 置顶项目（R65——只影响排列顺序，不复制入口；随导航偏好持久化）。 */
+export function toggleProjectPinned(projectId: string): void {
+  const s0 = getState();
+  const pinned = s0.pinnedProjectIds.includes(projectId)
+    ? s0.pinnedProjectIds.filter((id) => id !== projectId)
+    : [...s0.pinnedProjectIds, projectId];
+  const next: HifiState = { ...s0, pinnedProjectIds: pinned };
+  setState(() => next);
+  persistNav(next);
+  recordLocalOnly('nav.project.pin', `projectId=${projectId} ${pinned.includes(projectId) ? '置顶' : '取消置顶'}（只影响顺序）`);
+}

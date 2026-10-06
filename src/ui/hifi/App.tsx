@@ -38,9 +38,14 @@ function previewQuoteTargetFromRoute(): { draftKey: string; label: string } {
   return { draftKey: '', label: '当前输入区' };
 }
 import { dmUnreadTotal, navTaskStateOfRoom, roomUnread, roomsOfProject } from './data/selectors';
-import { RoomPage } from './pages/Room';
+import { RoomPage, CreateRoomModal } from './pages/Room';
 import { FilesGitPage } from './pages/pages-misc';
 import { SettingsPage } from './pages/SettingsPage';
+import { ProjectHomePage, WelcomePage, OpenFolderModal } from './pages/ProjectHome';
+import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
+import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
+import { toggleProjectPinned } from './data/actions-nav';
+import { Menu, MenuItem, Modal, Tag } from './components/ui';
 import { PreviewPane, contextFromRoute as previewContextFromRoute } from './preview/PreviewPane';
 import { toggleProjectExpanded } from './data/actions-nav';
 
@@ -190,6 +195,14 @@ export default function App() {
   const [recoveryAttention, setRecoveryAttention] = useState(false);
   const recoveryAutoShownRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  /* R65：侧栏项目 ⋯ 菜单与其弹窗（编辑信息/归档/移除）+ 项目行 + 建房。 */
+  const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null);
+  const [projectMenuAt, setProjectMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [editInfoFor, setEditInfoFor] = useState<string | null>(null);
+  const [archiveProjFor, setArchiveProjFor] = useState<string | null>(null);
+  const [removeProjFor, setRemoveProjFor] = useState<string | null>(null);
+  const [createRoomFor, setCreateRoomFor] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useState(false);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
@@ -336,57 +349,97 @@ export default function App() {
               {project == null ? (
                 <div className="side-empty">
                   {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}` : '尚未打开项目'}
-                  <button className="btn ghost sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开文件夹</button>
+                  <button className="btn ghost sm" onClick={() => setOpenFolder(true)}>打开文件夹</button>
                   {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
                 </div>
-              ) : (
-                <div className="side-project">
-                  <div className="side-row context-active">
-                    <button
-                      className="side-caret"
-                      title={expanded ? '收起房间列表' : '展开房间列表'}
-                      aria-expanded={expanded}
-                      onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(project.id); }}
-                    >
-                      <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
-                    </button>
-                    <button className="side-item-label-btn" title={`项目：${project.displayName}（${project.rootPath}）`} onClick={() => toggleProjectExpanded(project.id)}>
-                      <Icon name={project.isGit ? 'git-branch' : 'folder'} size={13} />
-                      <span className="side-item-label">{project.displayName}</span>
-                    </button>
-                  </div>
-                  {expanded ? rooms.map((room) => {
-                    const rState = navTaskStateOfRoom(s, room.id);
-                    const rUnread = roomUnread(s, room.id);
-                    return (
-                      <button
-                        key={room.id}
-                        className={`side-item sub${room.id === activeRoomId ? ' active' : ''}`}
-                        onClick={() => navigate(`/project/${project.id}/room/${room.id}`)}
-                      >
-                        {rState.state ? (
-                          <span className="side-icon-slot" title={`房间任务状态：${rState.state}（${rState.total} 个未结束）`}>
-                            <Icon name={rState.state === 'BLOCKED' ? 'octagon' : rState.state === 'WAITING_USER' ? 'hand' : rState.state === 'REVIEW' ? 'eye' : 'play'} size={12} style={{ color: 'var(--warning,#b45309)' }} />
-                          </span>
-                        ) : (
-                          <span className="side-icon-slot" aria-hidden="true" />
-                        )}
-                        <span className="side-item-label" title={room.name}>{room.name}</span>
-                        <span className="side-marks"><NavUnreadDot count={rUnread} where={room.name} /></span>
-                      </button>
-                    );
-                  }) : null}
-                  <button
-                    className="side-item"
-                    data-zs-open-project="hifi"
-                    title="打开/切换项目：选择另一个文件夹作为当前项目"
-                    onClick={() => void hifiUi().pickAndOpenFolder()}
-                  >
-                    <Icon name="folder" size={13} />
-                    <span className="side-item-label">打开/切换项目</span>
-                  </button>
-                </div>
-              )}
+              ) : null}
+              {(() => {
+                const daily = s.projects.filter((p) => p.removedAt == null);
+                const dailyIds = new Set(daily.map((p) => p.id));
+                const visibleProjects = [
+                  ...s.pinnedProjectIds.filter((id) => dailyIds.has(id)),
+                  ...s.visibleProjectIds.filter((id) => dailyIds.has(id) && !s.pinnedProjectIds.includes(id)),
+                ].map((id) => daily.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => p != null);
+                return visibleProjects.map((p) => {
+                  const isCurrent = p.id === s.activeProjectId;
+                  const expanded = s.expandedProjectIds.includes(p.id);
+                  const rooms = roomsOfProject(s, p.id);
+                  return (
+                    <div key={p.id} className="side-project">
+                      <div className={`side-row${isCurrent ? ' context-active' : ''}`}>
+                        <button
+                          className="side-caret"
+                          title={expanded ? '收起房间列表' : '展开房间列表'}
+                          aria-expanded={expanded}
+                          onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(p.id); }}
+                        >
+                          <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
+                        </button>
+                        <button
+                          className="side-item-label-btn"
+                          title={`${p.displayName} · ${p.rootPath}${p.archivedAt != null ? '（已归档·只读）' : ''}`}
+                          onClick={() => toggleProjectExpanded(p.id)}
+                        >
+                          <Icon name={p.status === 'missing' ? 'alert-triangle' : p.isGit ? 'git-branch' : 'folder'} size={13} className={p.status === 'missing' ? 'warn-icon' : 'faint'} />
+                          <span className="side-item-label">{p.displayName}</span>
+                        </button>
+                        <span className="side-row-actions">
+                          <button
+                            className={`side-row-act${projectMenuFor === p.id ? ' on' : ''}`}
+                            title={`「${p.displayName}」的更多操作`}
+                            aria-haspopup="menu"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setProjectMenuFor(projectMenuFor === p.id ? null : p.id);
+                              setProjectMenuAt({ x: r.right + 4, y: r.bottom + 4 });
+                            }}
+                          >
+                            <Icon name="more-horizontal" size={14} />
+                          </button>
+                          <button
+                            className="side-row-act"
+                            title={`在「${p.displayName}」中新建房间（真实 room.create）`}
+                            onClick={(e) => { e.stopPropagation(); setCreateRoomFor(p.id); }}
+                          >
+                            <Icon name="plus" size={14} />
+                          </button>
+                        </span>
+                      </div>
+                      {expanded ? rooms.filter((r) => r.archivedAt == null).map((room) => {
+                        const rState = navTaskStateOfRoom(s, room.id);
+                        const rUnread = roomUnread(s, room.id);
+                        return (
+                          <button
+                            key={room.id}
+                            className={`side-item sub${room.id === activeRoomId ? ' active' : ''}`}
+                            onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/room/${room.id}`); }}
+                          >
+                            {rState.state ? (
+                              <span className="side-icon-slot" title={`房间任务状态：${rState.state}（${rState.total} 个未结束）`}>
+                                <Icon name={rState.state === 'BLOCKED' ? 'octagon' : rState.state === 'WAITING_USER' ? 'hand' : rState.state === 'REVIEW' ? 'eye' : 'play'} size={12} style={{ color: 'var(--warning,#b45309)' }} />
+                              </span>
+                            ) : (
+                              <span className="side-icon-slot" aria-hidden="true" />
+                            )}
+                            <span className="side-item-label" title={room.name}>{room.name}</span>
+                            <span className="side-marks"><NavUnreadDot count={rUnread} where={room.name} /></span>
+                          </button>
+                        );
+                      }) : null}
+                    </div>
+                  );
+                });
+              })()}
+              <button
+                className="side-item"
+                data-zs-open-project="hifi"
+                title="打开/注册项目：选择一个文件夹（已注册则幂等重开并切换焦点；其它项目保留在侧栏）"
+                onClick={() => setOpenFolder(true)}
+              >
+                <Icon name="folder" size={13} />
+                <span className="side-item-label">打开/切换项目</span>
+              </button>
             </div>
             <div className="sidebar-foot">
               <button
@@ -423,6 +476,79 @@ export default function App() {
         </div>
         </div>
       </HifiErrorBoundary>
+      {projectMenuFor != null && projectMenuAt != null ? (() => {
+        const p = s.projects.find((x) => x.id === projectMenuFor);
+        if (p == null) return null;
+        const close = () => { setProjectMenuFor(null); setProjectMenuAt(null); };
+        const pinned = s.pinnedProjectIds.includes(p.id);
+        return (
+          <Menu anchor={projectMenuAt} onClose={close}>
+            <div className="menu-label">{p.displayName}</div>
+            <MenuItem icon="pin" hint={pinned ? '已置顶' : undefined} title={pinned ? '取消置顶：恢复按侧栏顺序排列' : '置顶：排到项目列表前部'} onClick={() => { toggleProjectPinned(p.id); close(); }}>
+              {pinned ? '取消置顶' : '置顶项目'}
+            </MenuItem>
+            <MenuItem icon="edit" title="编辑显示名称与描述（project.update 乐观锁——不重命名磁盘目录）" onClick={() => { setEditInfoFor(p.id); close(); }}>编辑项目信息…</MenuItem>
+            <div className="menu-sep" />
+            <MenuItem icon="folder" title="打开项目主页（房间/成员/活跃任务概览）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}`); close(); }}>项目主页</MenuItem>
+            <MenuItem icon="users" title="成员管理（含 runtime 绑定）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/members`); close(); }}>成员管理</MenuItem>
+            <MenuItem icon="settings" title="项目设置（信息/交付/协作限制/高级操作）" onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/settings`); close(); }}>项目设置</MenuItem>
+            <div className="menu-sep" />
+            {p.archivedAt != null ? (
+              <MenuItem icon="refresh" title="恢复为日常项目（原归档房不跟着恢复）" onClick={() => { void projectLifecycleReal(p.id, p.revision, 'unarchive').then((r) => { toast(r.ok ? '项目已恢复' : `恢复失败：${r.error}`, r.ok ? 'success' : 'error'); }); close(); }}>恢复项目</MenuItem>
+            ) : (
+              <MenuItem icon="archive" title="归档：退出日常列表、历史保留只读（有未结束工作会被拒绝）" onClick={() => { setArchiveProjFor(p.id); close(); }}>归档项目…</MenuItem>
+            )}
+            <MenuItem icon="trash" title="移除：只在应用里解除关联，不删除磁盘文件与历史（可在欢迎页重新打开）" onClick={() => { setRemoveProjFor(p.id); close(); }}>移除项目…</MenuItem>
+          </Menu>
+        );
+      })() : null}
+
+      {editInfoFor != null ? (() => {
+        const p = s.projects.find((x) => x.id === editInfoFor);
+        if (p == null) return null;
+        return <EditProjectInfoModal key={p.id} projectId={p.id} onClose={() => setEditInfoFor(null)} />;
+      })() : null}
+
+      {archiveProjFor != null ? (() => {
+        const p = s.projects.find((x) => x.id === archiveProjFor);
+        if (p == null) return null;
+        return (
+          <Modal
+            size="sm"
+            title={`归档项目「${p.displayName}」`}
+            onClose={() => setArchiveProjFor(null)}
+            footer={<><div className="spacer" /><button className="btn" onClick={() => setArchiveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="archive" onDone={() => setArchiveProjFor(null)} /></>}
+          >
+            <div className="small muted" style={{ lineHeight: 1.75 }}>
+              归档后项目退出日常项目列表、历史保留只读；恢复不重放旧任务。磁盘文件不受影响。存在未结束任务时服务端拒绝（不自动停止/派发）。
+            </div>
+          </Modal>
+        );
+      })() : null}
+
+      {removeProjFor != null ? (() => {
+        const p = s.projects.find((x) => x.id === removeProjFor);
+        if (p == null) return null;
+        return (
+          <Modal
+            size="sm"
+            title={`移除项目「${p.displayName}」`}
+            onClose={() => setRemoveProjFor(null)}
+            footer={<><div className="spacer" /><button className="btn" onClick={() => setRemoveProjFor(null)}>取消</button><ProjectLifecycleButton projectId={p.id} revision={p.revision} action="remove" danger onDone={() => setRemoveProjFor(null)} /></>}
+          >
+            <div className="col" style={{ gap: 10 }}>
+              <div className="small muted" style={{ lineHeight: 1.75 }}>
+                「移除」= 从应用的项目列表解除关联：**不删除磁盘文件、不删除历史记录**（重新打开同一目录即恢复，projectId 不变）。
+              </div>
+              <div className="small faint">目录：{p.rootPath}</div>
+            </div>
+          </Modal>
+        );
+      })() : null}
+
+      {createRoomFor != null ? <CreateRoomModal projectId={createRoomFor} onClose={() => setCreateRoomFor(null)} /> : null}
+      {openFolder ? <OpenFolderModal autoPick onClose={() => setOpenFolder(false)} /> : null}
+
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
       {recoveryOpen ? <RecoveryPanel onClose={() => setRecoveryOpen(false)} /> : null}
       {s.ui.toast != null ? (
@@ -459,7 +585,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     );
   }
 
-  if (path === '/' || path === '/welcome' || path === '') return <Welcome />;
+  if (path === '/' || path === '/welcome' || path === '') return <WelcomePage />;
   if (path === '/dm' || path.startsWith('/dm/')) return <DmWithPreview />;
   if (path === '/board') return <BoardPage />;
   if (path === '/library') return <LibraryPage />;
@@ -471,11 +597,11 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   let m = path.match(/^\/room\/([^/?]+)$/);
   if (m != null) {
     const pid = s.activeProjectId;
-    return pid !== '' ? <RedirectTo to={`/project/${pid}/room/${m[1]}`} /> : <Welcome />;
+    return pid !== '' ? <RedirectTo to={`/project/${pid}/room/${m[1]}`} /> : <WelcomePage />;
   }
   if (path === '/files') {
     const pid = s.activeProjectId;
-    return pid !== '' ? <RedirectTo to={`/project/${pid}/files`} /> : <Welcome />;
+    return pid !== '' ? <RedirectTo to={`/project/${pid}/files`} /> : <WelcomePage />;
   }
 
   m = path.match(/^\/project\/([^/]+)\/room\/([^/?]+)$/);
@@ -493,16 +619,16 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   m = path.match(/^\/project\/([^/]+)\/files$/);
   if (m != null) return <FilesGitPage projectId={m[1] ?? ''} query={query} />;
 
+  m = path.match(/^\/project\/([^/]+)\/settings$/);
+  if (m != null) return <ProjectSettingsPage projectId={m[1] ?? ''} query={query} />;
+
   m = path.match(/^\/project\/([^/]+)\/members$/);
   if (m != null) return <MembersPage />;
 
   m = path.match(/^\/project\/([^/]+)$/);
-  if (m != null) {
-    const first = s.rooms.find((r) => r.projectId === m[1] && !r.archivedAt) ?? s.rooms.find((r) => r.projectId === m[1]);
-    return first != null ? <RedirectTo to={`/project/${m[1]}/room/${first.id}`} /> : <Welcome />;
-  }
+  if (m != null) return <ProjectHomePage projectId={m[1] ?? ''} />;
 
-  return <Welcome />;
+  return <WelcomePage />;
 }
 
 function isThreadTab(v: string | undefined): v is 'replies' | 'artifacts' | 'activity' | 'members' | 'task' | 'delivery' | 'deliberation' | 'run' {
@@ -554,30 +680,76 @@ function DmWithPreview() {
   );
 }
 
-/* ---------------- 首启欢迎（boot 三态 + 打开项目） ---------------- */
+/* ---------------- 项目生命周期/信息编辑弹窗按钮（真实命令） ---------------- */
 
-function Welcome() {
-  const s = useStore((x) => x);
-  if (s.boot === 'ready' && s.projects.length > 0) {
-    const first = s.rooms.find((r) => r.projectId === s.activeProjectId);
-    if (first != null) return <RedirectTo to={`/project/${s.activeProjectId}/room/${first.id}`} />;
-  }
+function ProjectLifecycleButton({ projectId, revision, action, danger, onDone }: { projectId: string; revision: number; action: 'archive' | 'remove'; danger?: boolean; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <div className="main">
-      <div className="page">
-        <div className="panel info" style={{ textAlign: 'center', padding: 24, maxWidth: 560, margin: '0 auto' }} data-zs-welcome="hifi">
-          <div style={{ fontSize: 28, marginBottom: 6 }}>众说</div>
-          <div className="faint" style={{ marginBottom: 14 }}>本地多智能体协作工作台</div>
-          <div className="small" style={{ lineHeight: 1.8, marginBottom: 16 }}>
-            {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}——可重试或直接打开文件夹` : '还没有打开项目。选择一个文件夹作为项目根目录开始。'}
-          </div>
-          <div className="row tight" style={{ justifyContent: 'center' }}>
-            <button className="btn primary sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开项目文件夹</button>
-            {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
-          </div>
-          <div className="faint small" style={{ marginTop: 10 }}>之后可随时从侧栏「打开/切换项目」更换</div>
+    <button
+      className={danger === true ? 'btn danger' : 'btn primary'}
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        void projectLifecycleReal(projectId, revision, action).then((r) => {
+          setBusy(false);
+          onDone();
+          if (r.ok) toast(action === 'archive' ? '项目已归档（历史保留只读）' : '项目已移除关联（磁盘与历史不动；重新打开同目录即恢复）', 'success');
+          else toast(`${action === 'archive' ? '归档' : '移除'}被拒：${r.error}`, 'error');
+        });
+      }}
+    >
+      {action === 'archive' ? '归档项目' : '移除项目'}
+    </button>
+  );
+}
+
+function EditProjectInfoModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const s = useStore((x) => x);
+  const p = s.projects.find((x) => x.id === projectId);
+  const [name, setName] = useState(p?.displayName ?? '');
+  const [desc, setDesc] = useState(p?.description ?? '');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (p == null) return null;
+  return (
+    <Modal
+      size="sm"
+      title="编辑项目信息"
+      onClose={onClose}
+      footer={
+        <>
+          <div className="spacer" />
+          <button className="btn" onClick={onClose}>取消</button>
+          <button
+            className="btn primary"
+            disabled={busy || !name.trim()}
+            onClick={() => {
+              setBusy(true); setErr(null);
+              void updateProjectReal(projectId, p.revision, { displayName: name.trim(), description: desc }).then((r) => {
+                setBusy(false);
+                if (r.ok) { toast('已保存（revision 乐观锁通过，回读一致）', 'success'); onClose(); }
+                else { setErr(r.error ?? '未知错误'); toast(`保存失败：${r.error}（输入保留）`, 'error'); }
+              });
+            }}
+          >
+            保存
+          </button>
+        </>
+      }
+    >
+      <div className="col" style={{ gap: 12 }}>
+        <div className="field">
+          <label className="field-label">显示名称</label>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="项目显示名" />
+          <div className="field-hint">只改应用里的显示名称，**不会**重命名磁盘目录。</div>
         </div>
+        <div className="field">
+          <label className="field-label">描述（可选）</label>
+          <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="例如：订单表回填与数据修复" />
+        </div>
+        {err != null ? <div className="panel warning">保存失败：{err}（若项目已被他端修改请刷新重试）</div> : null}
+        <div className="small faint">目录：{p.rootPath} · revision {p.revision}</div>
       </div>
-    </div>
+    </Modal>
   );
 }

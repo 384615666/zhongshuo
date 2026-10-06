@@ -13,8 +13,11 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import { useStore } from '../data/store';
+import { useStore, toast } from '../data/store';
 import { command } from '../bridge';
+import { switchFocusProject } from '../loader';
+import { toggleProjectVisible } from '../data/actions-nav';
+import { navigate } from '../lib/router';
 
 interface ZsWindowState { maximized: boolean; fullScreen: boolean; focused: boolean }
 type ZsWindowBridge = {
@@ -39,6 +42,7 @@ export function TitleBar() {
   const connInfo = useStore((s) => s.connInfo);
   /** 派发防护标识（r56：演练包自绘标题栏必须可见「模拟/真实派发」——runtime.status 自述）。 */
   const [guard, setGuard] = useState<{ fakeAllowed: boolean; realDispatchGuard: boolean } | null>(null);
+  const [pmAt, setPmAt] = useState<{ x: number; y: number } | null>(null);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
   const d = bridge();
 
@@ -94,6 +98,16 @@ export function TitleBar() {
           {guard.fakeAllowed ? '演练·模拟派发' : '真实派发'}
         </span>
       ) : null}
+      <button
+        className="zs-tb-stat zs-tb-no-drag"
+        title="项目管理：显示在侧栏 / 切换当前项目 / 打开文件夹（新项目注册幂等——已有项目保留在侧栏）"
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setPmAt((prev) => (prev == null ? { x: Math.max(8, r.left), y: r.bottom + 6 } : null));
+        }}
+      >
+        <Icon name="folder" size={12} /> 项目
+      </button>
       <div
         className="zs-tb-drag"
         title="拖动窗口；双击最大化/还原"
@@ -109,7 +123,73 @@ export function TitleBar() {
       <button className="zs-winbtn close" title="关闭窗口（经既有优雅停机链：daemon 收拢后退出）" onClick={() => { void d?.close(); }}>
         <Icon name="x" size={12} />
       </button>
+      {pmAt != null ? (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 290 }} onClick={() => setPmAt(null)} />
+          <ProjectMenu anchor={pmAt} onClose={() => setPmAt(null)} />
+        </>
+      ) : null}
     </div>,
     mount,
+  );
+}
+
+/** 项目管理下拉（原型 projectMenu：勾选=显示在侧栏；点名=切换当前项目；+打开文件夹）。 */
+function ProjectMenu({ anchor, onClose }: { anchor: { x: number; y: number }; onClose: () => void }) {
+  const projects = useStore((s) => s.projects.filter((p) => p.removedAt == null));
+  const activeId = useStore((s) => s.activeProjectId);
+  const visible = useStore((s) => s.visibleProjectIds);
+  const [filter, setFilter] = useState('');
+  const list = projects.filter((p) => filter.length === 0 || p.displayName.toLowerCase().includes(filter.toLowerCase()));
+  return (
+    <div className="menu" style={{ position: 'fixed', left: anchor.x, top: anchor.y, zIndex: 300, minWidth: 300 }} role="menu">
+      <div className="menu-label">项目管理 · 显示在侧栏 / 切换当前项目</div>
+      <div className="menu-search">
+        <Icon name="search" size={12} className="faint" />
+        <input className="menu-search-input" placeholder="搜索项目…" value={filter} onChange={(e) => setFilter(e.target.value)} autoFocus />
+      </div>
+      <div className="menu-head row">
+        <span className="small faint">显示在侧栏</span>
+        <div className="spacer" />
+        <span className="small faint">项目</span>
+      </div>
+      {list.map((p) => {
+        const isVisible = visible.includes(p.id);
+        const isCurrent = p.id === activeId;
+        return (
+          <div key={p.id} className="menu-project-row">
+            <button
+              className={`menu-check${isVisible ? ' on' : ''}${isCurrent ? ' locked' : ''}`}
+              aria-pressed={isVisible}
+              title={isCurrent ? '当前项目不能隐藏，切换到其他项目后可隐藏' : isVisible ? '从侧栏隐藏（只影响显示）' : '显示在侧栏'}
+              onClick={(e) => { e.stopPropagation(); toggleProjectVisible(p.id); }}
+            >
+              <Icon name={isVisible ? 'check-square' : 'square'} size={13} />
+            </button>
+            <button
+              className="menu-project-name"
+              title={p.rootPath}
+              onClick={() => {
+                void switchFocusProject(p.id).then((ok) => {
+                  if (!ok) { toast('切换失败（未注册）', 'error'); return; }
+                  navigate(`/project/${p.id}`);
+                });
+                onClose();
+              }}
+            >
+              <Icon name={p.status === 'missing' ? 'alert-triangle' : 'folder'} size={13} />
+              <span className="truncate">{p.displayName}</span>
+              {isCurrent ? <span className="tag accent">当前</span> : null}
+              {p.status === 'missing' ? <span className="tag danger">目录失效</span> : null}
+            </button>
+          </div>
+        );
+      })}
+      {list.length === 0 ? <div className="side-empty" style={{ padding: '6px 10px' }}>没有匹配的项目</div> : null}
+      <div className="menu-sep" />
+      <button className="menu-item" onClick={() => { onClose(); navigate('/welcome'); }}>
+        <Icon name="plus" size={13} /> 打开本地文件夹…
+      </button>
+    </div>
   );
 }

@@ -134,6 +134,58 @@ export async function applyServerNavPrefs(): Promise<void> {
   } catch { /* 服务端偏好读取失败：保持本地（不阻塞启动） */ }
 }
 
+/** R65：项目全停（无独立批量命令——按 board.view 权威清单逐任务 task.get→task.stop，
+ * 每次停止绑定该任务的 run+停止代次（三重绑定合同不变）；失败逐条收集，不静默跳过）。 */
+export async function stopAllProjectReal(projectId: string): Promise<{ stopped: number; failed: string[] }> {
+  const failed: string[] = [];
+  let stopped = 0;
+  try {
+    const b = await command<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskId: string; title: string; taskStatus: string; runStatus: string | null }> }> }> }>('board.view', { scope: 'project', projectId });
+    const cards = (b.groups ?? []).flatMap((g) => (g.rooms ?? []).flatMap((r) => r.cards ?? []));
+    const stoppable = cards.filter((c) => ['ACTIVE', 'WAITING_USER', 'BLOCKED'].includes(c.taskStatus));
+    for (const c of stoppable) {
+      try {
+        const tg = await command<{ task: { id: string; stopGeneration: number }; activeRun: { id: string } | null }>('task.get', { taskId: c.taskId });
+        if (tg.activeRun == null) { failed.push(`#${c.title}：无活跃 run（可能已结束）`); continue; }
+        await command('task.stop', { taskId: tg.task.id, targetRunId: tg.activeRun.id, expectedStopGeneration: tg.task.stopGeneration });
+        stopped += 1;
+      } catch (e) {
+        failed.push(`${c.title}：${(e as Error).message}`);
+      }
+    }
+    recordWrite('project.stopAll', `项目全停：停止 ${stopped} 个任务${failed.length > 0 ? `，失败 ${failed.length} 个（逐条列出）` : ''}`);
+  } catch (e) {
+    failed.push(`看板清单读取失败：${(e as Error).message}`);
+  }
+  return { stopped, failed };
+}
+
+/** R65：任务验收开关（project.reviewPolicy.set——CAS；只影响新任务）。 */
+export async function setTaskReviewReal(projectId: string, enabled: boolean, expectedRevision: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('project.reviewPolicy.set', { projectId, taskReviewEnabled: enabled, expectedRevision });
+    recordWrite('project.reviewPolicy.set', `任务交付验收=${enabled ? '开启' : '关闭'}（仅影响新任务）`);
+    await loadProjectRegistry();
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+/** R65：协作限制（project.collab.get/set——缺席容忍与单轮时限，ms；NULL=服务端默认）。 */
+export async function collabGet(projectId: string): Promise<{ absenceToleranceMs: number | null; turnDeadlineMs: number | null; revision: number } | null> {
+  try {
+    const r = await command<{ absenceToleranceMs: number | null; turnDeadlineMs: number | null; revision: number }>('project.collab.get', { projectId });
+    return { absenceToleranceMs: r.absenceToleranceMs, turnDeadlineMs: r.turnDeadlineMs, revision: r.revision };
+  } catch { return null; }
+}
+
+export async function collabSet(projectId: string, patch: { absenceToleranceMs?: number | null; turnDeadlineMs?: number | null }, expectedRevision: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await command('project.collab.set', { projectId, ...patch, expectedRevision });
+    recordWrite('project.collab.set', `协作限制已保存（新派发 turn 起生效；在途不变）`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
 export async function pickAndOpenFolder(): Promise<void> {
   const dir = await bridge().pickFolder();
   if (dir == null) return;

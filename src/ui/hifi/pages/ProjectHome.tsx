@@ -1,0 +1,326 @@
+/**
+ * 项目主页 / 欢迎页 / 打开文件夹弹窗（R65 原型还原·pages-secondary 同源）：
+ * 数据=真实注册表（project.list）与已装载房间/成员/任务；打开文件夹=真实 pickFolder+
+ * project.open（注册幂等·合并不替换）；最近项目卡片点击=焦点切换（不重开目录）。
+ * 目录失效卡给「重新定位」（project.lifecycle relocate——保留 projectId/历史）。
+ */
+import { useEffect, useState } from 'react';
+import { Icon } from '../components/Icon';
+import { EmptyState, ErrorState, Modal, Tag, TaskStatusTag, Avatar, memberColor } from '../components/ui';
+import { useStore, toast } from '../shell';
+import { activeTasksOfProject, coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
+import { switchFocusProject, projectLifecycleReal, openProjectByPath } from '../loader';
+import { relTime } from '../lib/format';
+import { navigate } from '../lib/router';
+import { CreateRoomModal } from './Room';
+
+/* ============================================================
+   打开文件夹（真实：pickFolder → project.open 注册/幂等重开）
+   ============================================================ */
+
+export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => void; autoPick?: boolean }) {
+  const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const [pickReason, setPickReason] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const doPick = async () => {
+    const { bridge } = await import('../bridge');
+    const dir = await bridge().pickFolder();
+    if (dir != null && dir.length > 0) { setPickedPath(dir); setPickReason(null); return; }
+    setPickReason(dir == null ? '已取消选择。' : '当前宿主没有系统目录选择器。');
+  };
+  useEffect(() => {
+    if (autoPick) void doPick();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const open = async () => {
+    if (pickedPath == null) return;
+    setBusy(true);
+    try {
+      await openProjectByPath(pickedPath);
+      onClose();
+      // 落点：新（或重开）项目的第一个房间
+      const st = (await import('../data/store')).getState();
+      const first = st.rooms.find((r) => r.projectId === st.activeProjectId);
+      if (first != null) navigate(`/project/${st.activeProjectId}/room/${first.id}`);
+    } catch (e) {
+      toast(`打开项目失败：${(e as Error).message}（选择保留，可重试或换目录）`, 'error');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal
+      size="sm"
+      title="打开文件夹"
+      subtitle="选择一个本地目录作为项目（已打开过则幂等重开——不会重复注册）"
+      onClose={onClose}
+      footer={
+        <>
+          <div className="spacer" />
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn primary" disabled={busy} onClick={pickedPath != null ? () => void open() : () => void doPick()}>
+            <Icon name="folder" size={12} />
+            {pickedPath != null ? (busy ? '正在打开…' : '打开这个目录') : '浏览…'}
+          </button>
+        </>
+      }
+    >
+      <div className="field">
+        <label className="field-label">目录路径</label>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <input className="input mono" style={{ flex: '1 1 260px' }} value={pickedPath ?? ''} readOnly placeholder="点「浏览…」调用系统目录选择器" />
+          <button className="btn" onClick={() => void doPick()}><Icon name="folder" size={12} /> 浏览…</button>
+        </div>
+        {pickReason != null ? <div className="panel warning" style={{ marginTop: 8 }}>{pickReason}</div> : null}
+        <div className="field-hint">
+          打开后自动创建默认房间与执行成员；不写项目目录配置文件、不自动 git init、不自动调用模型。
+          再次打开同一目录按目录身份幂等识别（不产生第二个项目）。
+        </div>
+      </div>
+      <div className="panel success">
+        <div className="panel-title"><Icon name="check-circle" size={13} /> 正在桌面客户端中运行</div>
+        「浏览…」调起系统目录选择器；选定后解析目录身份用于识别重复打开与移动后重新定位。
+        打开失败（目录无效等）会如实报错并保留你的选择。
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================================================
+   欢迎页（真实注册表最近项目 + 打开文件夹）
+   ============================================================ */
+
+export function WelcomePage() {
+  const s = useStore((x) => x);
+  const [openFolder, setOpenFolder] = useState(false);
+  return (
+    <div className="main">
+      <div className="page narrow">
+        <div style={{ textAlign: 'center', padding: '38px 0 26px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+            <span className="brand-mark" style={{ width: 46, height: 46, fontSize: 22, borderRadius: 12 }}>众</span>
+          </div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>打开一个本地文件夹，让多个 agent 在这里协作</h1>
+          <p className="muted" style={{ marginTop: 10, fontSize: 13, maxWidth: '62ch', marginInline: 'auto', lineHeight: 1.75 }}>
+            不需要复制路径、不需要开多个终端、不需要手动转发报告。每次协作都有明确的参与者、执行状态、文件依据和最终成果。
+          </p>
+          <div className="row" style={{ justifyContent: 'center', marginTop: 18, gap: 10 }}>
+            <button className="btn primary lg" onClick={() => setOpenFolder(true)}>
+              <Icon name="folder" size={14} /> 打开文件夹
+            </button>
+          </div>
+        </div>
+
+        <div className="section-title">最近项目<span className="count">{s.projects.filter((p) => !p.removedAt).length}</span></div>
+        {s.projects.filter((p) => !p.removedAt).length === 0 ? (
+          <div className="panel">还没有注册的项目——点上面「打开文件夹」选择一个目录开始。</div>
+        ) : (
+          <div className="grid grid-auto">
+            {s.projects.filter((p) => !p.removedAt).map((p) => {
+              const rooms = roomsOfProject(s, p.id);
+              const active = activeTasksOfProject(s, p.id).length;
+              return (
+                <div
+                  key={p.id}
+                  className="card"
+                  style={{ cursor: p.status === 'missing' ? 'default' : 'pointer' }}
+                  onClick={() => {
+                    if (p.status === 'missing') return;
+                    void switchFocusProject(p.id).then((ok) => {
+                      if (!ok) { toast('项目不可用（未注册？）——重新打开', 'error'); return; }
+                      const first = rooms.find((r) => !r.archivedAt);
+                      navigate(first != null ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`);
+                    });
+                  }}
+                >
+                  <div className="row tight">
+                    <Icon name={p.status === 'missing' ? 'alert-triangle' : p.isGit ? 'git-branch' : 'folder'} size={15} className={p.status === 'missing' ? '' : 'faint'} />
+                    <span className="strong">{p.displayName}</span>
+                    {p.archivedAt != null ? <Tag tone="neutral" icon="archive">已归档</Tag> : null}
+                    <div className="spacer" />
+                  </div>
+                  <div className="mono-sm" style={{ marginTop: 6, overflowWrap: 'anywhere' }}>{p.rootPath}</div>
+                  <div className="row tight wrap" style={{ marginTop: 9 }}>
+                    {p.status === 'missing' ? (
+                      <Tag tone="danger" icon="alert-triangle">目录失效 · 需重新定位</Tag>
+                    ) : (
+                      <>
+                        <Tag plain icon="hash">{rooms.length} 房间</Tag>
+                        <Tag plain icon="activity">{active} 活跃任务</Tag>
+                        {p.isGit ? <Tag plain icon="git-branch">Git</Tag> : null}
+                      </>
+                    )}
+                  </div>
+                  {p.status === 'missing' ? (
+                    <div className="panel-actions" style={{ marginTop: 10 }}>
+                      <RelocateButton projectId={p.id} />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="panel" style={{ marginTop: 20 }}>
+          <div className="panel-title"><Icon name="info" size={13} /> 关于项目边界</div>
+          一个本地目录就是一个项目；同一物理目录重复打开按目录身份幂等识别。同一目录同时只有一个受管理写入者（单写者锁域）。
+        </div>
+      </div>
+      {openFolder ? <OpenFolderModal onClose={() => setOpenFolder(false)} /> : null}
+    </div>
+  );
+}
+
+/** 重新定位（目录失效后）：真实 project.lifecycle relocate——threadId/任务号/成果引用不变。 */
+export function RelocateButton({ projectId }: { projectId: string }) {
+  const s = useStore((x) => x);
+  const [busy, setBusy] = useState(false);
+  const p = s.projects.find((x) => x.id === projectId);
+  return (
+    <button
+      className="btn sm"
+      disabled={busy}
+      onClick={() => {
+        void (async () => {
+          const { bridge } = await import('../bridge');
+          const d = await bridge().pickFolder();
+          if (d == null || d.length === 0) { toast('已取消重新定位', 'info'); return; }
+          setBusy(true);
+          const r = await projectLifecycleReal(projectId, p?.revision ?? 0, 'relocate', d);
+          setBusy(false);
+          if (r.ok) toast('已重新定位（projectId 与历史保持不变）', 'success');
+          else toast(`重新定位失败：${r.error}`, 'error');
+        })();
+      }}
+    >
+      <Icon name="refresh" size={12} /> 重新定位
+    </button>
+  );
+}
+
+/* ============================================================
+   项目主页（§17.2：房间/成员/活跃任务概览 + 新建房间 + 文件与改动入口）
+   ============================================================ */
+
+export function ProjectHomePage({ projectId }: { projectId: string }) {
+  const s = useStore((x) => x);
+  const p = s.projects.find((x) => x.id === projectId);
+  const rooms = roomsOfProject(s, projectId);
+  const members = s.members.filter((m) => m.projectId === projectId);
+  const tasks = activeTasksOfProject(s, projectId);
+  const [createRoom, setCreateRoom] = useState(false);
+
+  if (p == null) {
+    return (
+      <div className="main"><div className="page">
+        <ErrorState code="PROJECT_NOT_FOUND" detail={`项目不存在或不可访问：${projectId}。不回退到其它项目。`} />
+      </div></div>
+    );
+  }
+  if (p.status === 'missing') {
+    return (
+      <div className="main">
+        <div className="page narrow">
+          <div className="page-head">
+            <div>
+              <div className="page-title">{p.displayName}</div>
+              <div className="page-sub mono">{p.rootPath}</div>
+            </div>
+          </div>
+          <ErrorState
+            code="PROJECT_MISSING"
+            detail="磁盘上找不到这个目录。历史任务、成果与报告都还在，重新定位会保留原 projectId。"
+            actions={<RelocateButton projectId={p.id} />}
+          />
+          <div className="panel" style={{ marginTop: 14 }}>
+            不会因为在错误目录运行而丢数据：定位失败时保持暂停派发；重新定位后所有 threadId、任务号与成果引用保持不变。
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="main">
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <div className="row tight wrap">
+              {p.isGit ? <Tag plain icon="git-branch">Git 仓库</Tag> : <Tag plain icon="folder">普通目录</Tag>}
+              <Tag plain icon="layers">{rooms.length} 个房间</Tag>
+              <Tag plain icon="users">{members.length} 名成员</Tag>
+              <Tag plain icon="activity">{tasks.length} 个活跃任务</Tag>
+              <span className="small faint">revision {p.revision}</span>
+            </div>
+          </div>
+          <div className="page-head-actions">
+            <button className="btn primary sm" onClick={() => setCreateRoom(true)}>
+              <Icon name="plus" size={12} /> 新建房间
+            </button>
+            <button className="btn sm" onClick={() => navigate(`/project/${projectId}/files`)}>
+              <Icon name="diff" size={12} /> 文件与改动
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-2">
+          <div>
+            <div className="section-title">房间<span className="count">{rooms.length}</span></div>
+            {rooms.length === 0 ? <EmptyState icon="hash" title="还没有房间" detail="点右上「新建房间」创建第一个对话池。" /> : rooms.map((r) => {
+              const coord = coordinatorOfRoom(s, r);
+              return (
+                <div key={r.id} className="card tight" style={{ marginBottom: 8, cursor: 'pointer' }} onClick={() => navigate(`/project/${projectId}/room/${r.id}`)}>
+                  <div className="row tight">
+                    <Icon name={r.archivedAt ? 'archive' : 'hash'} size={14} className="faint" />
+                    <span className="strong">{r.name}</span>
+                    {r.archivedAt ? <Tag tone="neutral" icon="archive">已归档</Tag> : null}
+                    <div className="spacer" />
+                    <Icon name="chevron-right" size={13} className="faint" />
+                  </div>
+                  <div className="row tight wrap small faint" style={{ marginTop: 6 }}>
+                    <span>协调者 {coord != null ? memberLabel(coord) : '（未设置——首个成员接单）'}</span>
+                    <span>· {r.memberIds.length} 名成员</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div>
+            <div className="section-title">活跃任务<span className="count">{tasks.length}</span></div>
+            {tasks.length === 0 ? (
+              <div className="panel">当前没有活跃任务。房间里的任务看板会保留已完成与已取消的记录。</div>
+            ) : (
+              tasks.map((t) => (
+                <div
+                  key={t.id}
+                  className="card tight"
+                  style={{ marginBottom: 8, cursor: 'pointer' }}
+                  onClick={() => navigate(`/project/${t.projectId}/room/${t.roomId}?thread=${t.conversationThreadId}&tab=task`)}
+                >
+                  <div className="row tight wrap">
+                    <span className="root-task-no">#{t.roomTaskNumber}</span>
+                    <TaskStatusTag status={t.status} />
+                    <div className="spacer" />
+                  </div>
+                  <div className="strong" style={{ marginTop: 5, fontSize: 12.5 }}>{t.title || t.objective || '（标题未装载——进线程查看）'}</div>
+                </div>
+              ))
+            )}
+
+            <div className="section-title" style={{ marginTop: 18 }}>成员<span className="count">{members.length}</span></div>
+            {members.map((m) => (
+              <div key={m.id} className="member-row" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
+                <Avatar name={m.displayName} color={memberColor(m.id)} size={22} />
+                <span className="member-row-name">{memberLabel(m)}</span>
+                <span className="member-row-state">{m.model || ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {createRoom ? <CreateRoomModal projectId={projectId} onClose={() => setCreateRoom(false)} /> : null}
+    </div>
+  );
+}
