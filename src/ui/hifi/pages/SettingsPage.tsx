@@ -276,7 +276,8 @@ function SectionNotifications() {
 /* ============================================================ 分区：AI 工具 ============================================================ */
 
 function SectionRuntime() {
-  const members = useStore((s) => s.members.filter((m) => m.principalType === 'agent'));
+  const membersAll = useStore((s) => s.members);
+  const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent'), [membersAll]);
   const runtimes = useStore((s) => s.memberRuntimes);
   const guard = useStore((s) => s.dispatchGuard);
   const projectId = useStore((s) => s.activeProjectId);
