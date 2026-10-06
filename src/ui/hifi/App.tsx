@@ -15,18 +15,13 @@ import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
-import { RoomPage } from './RoomPage';
 import { DmPage } from './DmPage';
-import { ThreadPage } from './ThreadPage';
 import { BoardPage } from './BoardPage';
-import { FilesPage } from './FilesPage';
-import { SettingsPage } from './SettingsPage';
 import { MembersPage } from './MembersPage';
 import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
 import { TitleBar } from './components/TitleBar';
-import { PreviewPane, contextFromRoute as previewContextFromRoute } from './preview/PreviewPane';
 import { getState as previewGetState } from './data/store';
 
 /** 预览引用目标（旧壳兜底）：按当前路由推当前输入目标草稿。 */
@@ -42,7 +37,12 @@ function previewQuoteTargetFromRoute(): { draftKey: string; label: string } {
   if (pr != null) { const r = previewGetState().rooms.find((x) => x.id === pr[2]); return { draftKey: `room:${pr[2]}`, label: r?.name ?? '房间' }; }
   return { draftKey: '', label: '当前输入区' };
 }
-import { dmUnreadTotal, roomsOfProject } from './data/selectors';
+import { dmUnreadTotal, navTaskStateOfRoom, roomUnread, roomsOfProject } from './data/selectors';
+import { RoomPage } from './pages/Room';
+import { FilesGitPage } from './pages/pages-misc';
+import { SettingsPage } from './pages/SettingsPage';
+import { PreviewPane, contextFromRoute as previewContextFromRoute } from './preview/PreviewPane';
+import { toggleProjectExpanded } from './data/actions-nav';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
 let takeoverToken = 0;
@@ -183,31 +183,27 @@ export default function App() {
   const route = useHashRoute();
   const s = useStore((x) => x);
   const path = pathOf(route);
+  const query = parseQuery(route);
   const legacyActive = useStore((x) => x.legacyActive === true);
-  /** 命令面板（r56 H4：Ctrl+K——仅 hifi 可见时响应；legacy 接管期不触发）。 */
   const [paletteOpen, setPaletteOpen] = useState(false);
-  /** 恢复检查（r56 H4：recovery.status 事实——有注意项时侧栏带标记并首启自动弹一次）。 */
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryAttention, setRecoveryAttention] = useState(false);
   const recoveryAutoShownRef = useRef(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
-  // 全局快捷键（r56）：Ctrl/Cmd+K 开命令面板。守卫：仅 hifi 可见（legacy 接管=旧界面自己管
-  // 自己的快捷键）；输入焦点在面板/正文里都只是「开面板+抢焦点」，不与窗口操作冲突。
+  // Ctrl/Cmd+K 命令面板（仅 hifi 可见时响应）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.body.classList.contains('legacy-on') || !document.body.classList.contains('hifi-on')) return;
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPaletteOpen((v) => !v); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 恢复注意项（recovery.status 只读；boot ready 后查询+轻量轮询；读失败不冒充无事项）。
+  // 恢复注意项（recovery.status 只读轮询）
   useEffect(() => {
     if (s.boot !== 'ready') return;
     let cancelled = false;
@@ -218,42 +214,35 @@ export default function App() {
           if (cancelled) return;
           const attention = r.gateHeld || r.unknownTurns.length > 0 || r.pendingRelease.length > 0 || r.activeUndos.length > 0 || r.interruptedRuns.length > 0 || r.pendingDispatchCount > 0;
           setRecoveryAttention(attention);
-          if (attention && !recoveryAutoShownRef.current) {
-            recoveryAutoShownRef.current = true; // 每次启动最多自动弹一次（关闭后仍有侧栏入口）
-            setRecoveryOpen(true);
-          }
+          if (attention && !recoveryAutoShownRef.current) { recoveryAutoShownRef.current = true; setRecoveryOpen(true); }
         })
-        .catch(() => { /* 读取失败：不显示标记也不自动弹——打开面板时如实报错 */ });
+        .catch(() => { /* 读取失败不冒充 */ });
     };
     check();
     const t = window.setInterval(check, 30_000);
     return () => { cancelled = true; window.clearInterval(t); };
   }, [s.boot]);
 
-  // 外部深链族（#dm=/#task=/#delivery=/#msg=）规范化（review-r50 §4）：deepLink.resolve 服务端
-  // 定位实体 → 跨项目先开真实项目 → 内部路由（斜杠形态，刷新/前进后退可再解析）。失败如实
-  // 报错，不静默跳转；legacy 接管期间由旧界面处理（本入口不抢导航）。
-  // 注意用**完整 route**（含 query）判深链族——path 是 pathOf 去过 query 的（review-r51 §3.2）。
+  // 外部深链族（#dm=/#task=/#delivery=/#msg=）规范化
   useEffect(() => {
     if (!isExternalDeepLink(`#${route}`)) return;
     if (document.body.classList.contains('legacy-on')) return;
     let cancelled = false;
-    void openExternalDeepLink(`#${route}`)
-      .catch((e: unknown) => { if (!cancelled) toast(`深链打开失败：${(e as Error).message}`, 'error'); });
+    void openExternalDeepLink(`#${route}`).catch((e: unknown) => { if (!cancelled) toast(`深链打开失败：${(e as Error).message}`, 'error'); });
     return () => { cancelled = true; };
   }, [route]);
 
-  // legacy 接管时的「返回新界面」：恢复样式、暂停旧端轮询、刷新当前数据。
+  // legacy 接管的「返回新界面」
   useEffect(() => {
     if (!legacyActive) return;
     const btn = document.createElement('button');
     btn.className = 'btn ghost sm zs-legacy-exit';
     btn.textContent = '⌂ 返回新界面';
-    btn.title = '回到换装壳（原型风格界面）——恢复样式并刷新数据';
+    btn.title = '回到换装壳（原型还原界面）——恢复样式并刷新数据';
     btn.onclick = () => {
-      takeoverToken += 1; // 取消在途定位重试
+      takeoverToken += 1;
       document.body.classList.remove('legacy-on');
-      (window as unknown as { __zsLegacySetVisible?: (v: boolean) => void }).__zsLegacySetVisible?.(false); // 暂停隐藏端轮询
+      (window as unknown as { __zsLegacySetVisible?: (v: boolean) => void }).__zsLegacySetVisible?.(false);
       enableHifiStyles();
       hifiUi().legacyExit();
       void refreshRooms(); void refreshDms();
@@ -265,58 +254,78 @@ export default function App() {
   const project = s.projects.find((p) => p.id === s.activeProjectId);
   const rooms = project ? roomsOfProject(s, project.id) : [];
   const dmUnread = dmUnreadTotal(s);
+  const expanded = project != null && s.expandedProjectIds.includes(project.id);
+  /** 房间路由匹配（项目路径形态 + 换装期旧 /room/:id）。 */
+  const roomMatch = path.match(/^\/project\/([^/]+)\/room\/([^/]+)$/);
+  const activeRoomId = roomMatch?.[2] ?? (path.startsWith('/room/') ? path.slice('/room/'.length) : undefined);
+
+  const navActive = {
+    library: path === '/library',
+    activity: path === '/activity',
+    files: /^\/project\/[^/]+\/files$/.test(path) || path === '/files',
+    tasks: path === '/board',
+    members: /^\/project\/[^/]+\/members$/.test(path) || path === '/members',
+    settings: path === '/settings',
+    dm: path === '/dm' || path.startsWith('/dm/') || /^\/project\/[^/]+\/dm$/.test(path),
+    pending: path === '/pending',
+  };
 
   return (
     <>
-      {/* 标题栏（portal 到 #zs-titlebar，错误边界之外）：子树渲染失败时窗口控制仍在；
-          React 整体失败由 hifi-flag.js 看门狗重建最小壳兜底。 */}
       <TitleBar />
       <HifiErrorBoundary>
         <div className="app">
         <div className="app-body">
+          {sidebarOpen && !s.layout.navAutoHidden ? (
           <aside className="sidebar">
             <div className="sidebar-top">
+              <div className="side-row-flat">
+                <button
+                  className={`side-item${navActive.library ? ' active' : ''}`}
+                  title="搜索与收藏：消息/线程/任务标题检索 + 收藏列表"
+                  onClick={() => navigate(project != null ? `/library?scope=project&projectId=${project.id}` : '/library')}
+                >
+                  <Icon name="bookmark" size={14} />
+                  <span className="side-item-label">搜索与收藏</span>
+                </button>
+                <button
+                  className="side-icon-btn"
+                  title="全局搜索（Ctrl+K）：跨项目搜消息、任务、成果"
+                  onClick={() => setPaletteOpen(true)}
+                >
+                  <Icon name="search" size={14} />
+                  <span className="visually-hidden">全局搜索</span>
+                </button>
+              </div>
               <button
-                className={`side-item${path === '/library' ? ' active' : ''}`}
-                title="搜索与收藏：消息/线程/任务标题检索（search.query——附件随所在消息）+ 收藏列表（saved.list）"
-                onClick={() => navigate('/library')}
-              >
-                <Icon name="bookmark" size={14} />
-                <span className="side-item-label">搜索与收藏</span>
-              </button>
-              <button
-                className={`side-item${path === '/activity' ? ' active' : ''}`}
-                title="活动流：domain_events 只读聚合（全部可访问项目/当前项目）——定位任务/会话"
-                onClick={() => navigate('/activity')}
-              >
-                <Icon name="activity" size={14} />
-                <span className="side-item-label">活动流</span>
-              </button>
-              <button
-                className={`side-item${path === '/files' ? ' active' : ''}`}
-                title="文件与 Git：Files 集合四类分列（只读）+ Git 诊断（状态/diff——写操作经原界面）"
-                onClick={() => navigate('/files')}
+                className={`side-item${navActive.files ? ' active' : ''}`}
+                title="文件与 Git：同一项目页内两个标签（真实目录树 + Git 全链）"
+                onClick={() => navigate(project != null ? `/project/${project.id}/files` : '/files')}
               >
                 <Icon name="diff" size={14} />
                 <span className="side-item-label">文件与 Git</span>
               </button>
               <button
-                className={`side-item${path === '/board' ? ' active' : ''}`}
-                title="任务看板：board.view 只读聚合——卡片定位线程详情后执行停止/验收"
+                className={`side-item${navActive.tasks ? ' active' : ''}`}
+                title="任务看板：全部可访问项目聚合"
                 onClick={() => navigate('/board')}
               >
                 <Icon name="list" size={14} />
                 <span className="side-item-label">任务看板</span>
               </button>
               <button
-                className={`side-item${path === '/members' ? ' active' : ''}`}
-                title="成员管理：项目成员/房间名单/协调者与启用状态（正式命令）"
-                onClick={() => navigate('/members')}
+                className={`side-item${navActive.members ? ' active' : ''}`}
+                title="成员管理：成员名单与 runtime 绑定（正式命令）"
+                onClick={() => navigate(project != null ? `/project/${project.id}/members` : '/members')}
               >
                 <Icon name="users" size={14} />
                 <span className="side-item-label">成员管理</span>
               </button>
-              <button className={`side-item${path === '/dm' || path.startsWith('/dm/') ? ' active' : ''}`} title="私信：本项目一对一会话" onClick={() => navigate('/dm')}>
+              <button
+                className={`side-item${navActive.dm ? ' active' : ''}`}
+                title="私信：本项目一对一会话"
+                onClick={() => navigate('/dm')}
+              >
                 <Icon name="message-square" size={14} />
                 <span className="side-item-label">私信</span>
                 <span className="side-marks"><NavUnreadDot count={dmUnread} where="私信" /></span>
@@ -333,27 +342,44 @@ export default function App() {
               ) : (
                 <div className="side-project">
                   <div className="side-row context-active">
-                    <button className="side-item-label-btn" title={`项目：${project.displayName}（${project.rootPath}）`}>
-                      <Icon name="folder" size={13} />
+                    <button
+                      className="side-caret"
+                      title={expanded ? '收起房间列表' : '展开房间列表'}
+                      aria-expanded={expanded}
+                      onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(project.id); }}
+                    >
+                      <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={11} />
+                    </button>
+                    <button className="side-item-label-btn" title={`项目：${project.displayName}（${project.rootPath}）`} onClick={() => toggleProjectExpanded(project.id)}>
+                      <Icon name={project.isGit ? 'git-branch' : 'folder'} size={13} />
                       <span className="side-item-label">{project.displayName}</span>
                     </button>
                   </div>
-                  {rooms.map((room) => (
-                    <button
-                      key={room.id}
-                      className={`side-item side-room${path === `/room/${room.id}` ? ' active' : ''}`}
-                      title={`房间：${room.name}`}
-                      onClick={() => navigate(`/room/${room.id}`)}
-                    >
-                      <Icon name="message-circle" size={14} />
-                      <span className="side-item-label">{room.name}</span>
-                    </button>
-                  ))}
-                  {/* r57：打开/切换项目常驻入口（原型口径）——已打开项目后也可换，不靠手填启动设置重启。 */}
+                  {expanded ? rooms.map((room) => {
+                    const rState = navTaskStateOfRoom(s, room.id);
+                    const rUnread = roomUnread(s, room.id);
+                    return (
+                      <button
+                        key={room.id}
+                        className={`side-item sub${room.id === activeRoomId ? ' active' : ''}`}
+                        onClick={() => navigate(`/project/${project.id}/room/${room.id}`)}
+                      >
+                        {rState.state ? (
+                          <span className="side-icon-slot" title={`房间任务状态：${rState.state}（${rState.total} 个未结束）`}>
+                            <Icon name={rState.state === 'BLOCKED' ? 'octagon' : rState.state === 'WAITING_USER' ? 'hand' : rState.state === 'REVIEW' ? 'eye' : 'play'} size={12} style={{ color: 'var(--warning,#b45309)' }} />
+                          </span>
+                        ) : (
+                          <span className="side-icon-slot" aria-hidden="true" />
+                        )}
+                        <span className="side-item-label" title={room.name}>{room.name}</span>
+                        <span className="side-marks"><NavUnreadDot count={rUnread} where={room.name} /></span>
+                      </button>
+                    );
+                  }) : null}
                   <button
                     className="side-item"
                     data-zs-open-project="hifi"
-                    title="打开/切换项目：选择另一个文件夹作为当前项目（独立临时目录验证；草稿按房间/线程保留）"
+                    title="打开/切换项目：选择另一个文件夹作为当前项目"
                     onClick={() => void hifiUi().pickAndOpenFolder()}
                   >
                     <Icon name="folder" size={13} />
@@ -365,7 +391,7 @@ export default function App() {
             <div className="sidebar-foot">
               <button
                 className={`side-item${recoveryAttention ? ' zs-recovery-attention' : ''}`}
-                title={recoveryAttention ? '恢复检查：存在需要处理的事项（UNKNOWN/保护未解除/门禁）——点击查看与分列操作' : '恢复检查：查看恢复事实（无注意项时也可查看只读状态）'}
+                title={recoveryAttention ? '恢复检查：存在需要处理的事项——点击查看与分列操作' : '恢复检查：查看恢复事实'}
                 data-zs-recovery-attention={recoveryAttention ? '1' : '0'}
                 onClick={() => setRecoveryOpen(true)}
               >
@@ -374,83 +400,184 @@ export default function App() {
                 {recoveryAttention ? <span className="side-marks"><span className="nav-dot" title="有注意项" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--warning,#b45309)', display: 'inline-block' }} /></span> : null}
               </button>
               <button
-                className={`side-item${path === '/pending' ? ' active' : ''}`}
-                title="待我处理：权威业务状态汇总（待验收/未读/阻塞/待确认提醒——mine.pending）"
+                className={`side-item${navActive.pending ? ' active' : ''}`}
+                title="待我处理：权威业务状态汇总"
                 onClick={() => navigate('/pending')}
               >
                 <Icon name="inbox" size={14} />
                 <span className="side-item-label">待我处理</span>
               </button>
               <button
-                className={`side-item${path === '/settings' ? ' active' : ''}`}
-                title="设置与帮助：应用设置/远程事实（只读）/打开定位；未换装项定向原界面"
-                onClick={() => navigate('/settings')}
+                className={`side-item${navActive.settings ? ' active' : ''}`}
+                title="应用设置：七项导航（原型布局）——通用/外观/通知/AI 工具/连接与设备/数据与存储/帮助与关于"
+                onClick={() => navigate('/settings?section=general')}
               >
                 <Icon name="settings" size={14} />
-                <span className="side-item-label">设置与帮助</span>
+                <span className="side-item-label">设置</span>
               </button>
             </div>
           </aside>
+          ) : null}
 
-          <main className="workspace" data-zs-boot={s.boot}>
-            {s.boot === 'ready' && project == null ? (
-              /* r57 首次使用欢迎：成功读到空记忆=正常无项目状态——立即给打开入口（不再等 60s 报失败）。
-               * 区分：连接中（boot pending）/ 服务失败（boot failed——侧栏给重试）/ 路径失效
-               * （openProjectByPath 失败→boot failed 带真实原因）。 */
-              <div className="page-stack" style={{ padding: 24, maxWidth: 560, margin: '0 auto' }} data-zs-welcome="hifi">
-                <div className="panel info" style={{ textAlign: 'center', padding: 24 }}>
-                  <div style={{ fontSize: 28, marginBottom: 6 }}>众说</div>
-                  <div className="faint" style={{ marginBottom: 14 }}>本地多智能体协作工作台</div>
-                  <div className="small" style={{ lineHeight: 1.8, marginBottom: 16 }}>
-                    还没有打开项目。选择一个文件夹作为项目根目录开始——房间、任务、附件与导出
-                    都保存在你指定的目录与应用数据区；不打开项目也可以先浏览帮助说明。
-                  </div>
-                  <button className="btn primary sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开项目文件夹</button>
-                  <div className="faint small" style={{ marginTop: 10 }}>之后可随时从侧栏「打开/切换项目」更换</div>
-                </div>
-              </div>
-            ) : path.startsWith('/thread/') ? (
-              (() => {
-                // 从**完整 route**（含 query）解析线程参数——path 已被 pathOf 去掉查询串，
-                // 此前 ?tab=/?message= 永远取不到（review-r51 §3.2）。
-                const idAndQuery = route.slice('/thread/'.length);
-                const q = parseQuery(idAndQuery);
-                const id = pathOf(idAndQuery);
-                return <ThreadPage threadId={decodeURIComponent(id)} initialTab={q.tab} highlightMessageId={q.message} />;
-              })()
-            ) : path.startsWith('/room/') ? (
-              <RoomPage roomId={path.slice('/room/'.length)} />
-            ) : path === '/board' ? (
-              <BoardPage />
-            ) : path === '/files' ? (
-              <FilesPage />
-            ) : path === '/library' ? (
-              <LibraryPage />
-            ) : path === '/activity' ? (
-              <ActivityPage />
-            ) : path === '/settings' ? (
-              <SettingsPage />
-            ) : path === '/members' ? (
-              <MembersPage />
-            ) : path === '/pending' ? (
-              <PendingPage />
-            ) : (
-              <DmPage />
-            )}
-          </main>
+          <Routes path={path} route={route} query={query} />
         </div>
-
-        {s.ui.toast != null ? (
-          <div className="toast" onClick={() => clearToast()}>{s.ui.toast.text}</div>
-        ) : null}
-        <PreviewPane
-          context={previewContextFromRoute(s.activeProjectId)}
-          quoteTarget={previewQuoteTargetFromRoute()}
-        />
-      </div>
+        </div>
       </HifiErrorBoundary>
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
       {recoveryOpen ? <RecoveryPanel onClose={() => setRecoveryOpen(false)} /> : null}
+      {s.ui.toast != null ? (
+        <div className="toast-host" role="status" aria-live="polite">
+          <button className={`toast ${s.ui.toast.tone}`} onClick={() => clearToast()}>
+            <Icon name={s.ui.toast.tone === 'success' ? 'check-circle' : s.ui.toast.tone === 'warn' || s.ui.toast.tone === 'error' ? 'alert-triangle' : 'info'} size={13} className="faint" />
+            <span>{s.ui.toast.text}</span>
+          </button>
+        </div>
+      ) : null}
     </>
+  );
+}
+
+/* ---------------- 路由分派（原型路由表 + 换装期旧路由归一） ---------------- */
+
+function Routes({ path, route, query }: { path: string; route: string; query: Record<string, string> }) {
+  const s = useStore((x) => x);
+  void route;
+
+  // 线程直达链接 #/thread/:id?message=:mid → 所属房间 + 线程面板（§15.5）
+  const threadDirect = path.match(/^\/thread\/([^/?]+)$/);
+  if (threadDirect != null) {
+    const tid = decodeURIComponent(threadDirect[1] ?? '');
+    const ent = (s as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[tid];
+    if (ent != null) {
+      return <RoomPage roomId={ent.roomId} threadId={tid} highlightMessageId={query.message} tab={isThreadTab(query.tab) ? query.tab : undefined} />;
+    }
+    return (
+      <div className="main"><div className="page">
+        <div className="panel info">正在定位线程（thread.get 装载后自动进入所属房间）…</div>
+        <LocateThread threadId={tid} messageId={query.message} tab={query.tab} />
+      </div></div>
+    );
+  }
+
+  if (path === '/' || path === '/welcome' || path === '') return <Welcome />;
+  if (path === '/dm' || path.startsWith('/dm/')) return <DmWithPreview />;
+  if (path === '/board') return <BoardPage />;
+  if (path === '/library') return <LibraryPage />;
+  if (path === '/activity') return <ActivityPage />;
+  if (path === '/pending') return <PendingPage />;
+  if (path === '/settings') return <SettingsPage query={query} />;
+  if (path === '/members') return <MembersPage />;
+
+  let m = path.match(/^\/room\/([^/?]+)$/);
+  if (m != null) {
+    const pid = s.activeProjectId;
+    return pid !== '' ? <RedirectTo to={`/project/${pid}/room/${m[1]}`} /> : <Welcome />;
+  }
+  if (path === '/files') {
+    const pid = s.activeProjectId;
+    return pid !== '' ? <RedirectTo to={`/project/${pid}/files`} /> : <Welcome />;
+  }
+
+  m = path.match(/^\/project\/([^/]+)\/room\/([^/?]+)$/);
+  if (m != null) {
+    return (
+      <RoomPage
+        roomId={m[2] ?? ''}
+        threadId={query.thread}
+        tab={isThreadTab(query.tab) ? query.tab : undefined}
+        artifactId={query.artifact}
+      />
+    );
+  }
+
+  m = path.match(/^\/project\/([^/]+)\/files$/);
+  if (m != null) return <FilesGitPage projectId={m[1] ?? ''} query={query} />;
+
+  m = path.match(/^\/project\/([^/]+)\/members$/);
+  if (m != null) return <MembersPage />;
+
+  m = path.match(/^\/project\/([^/]+)$/);
+  if (m != null) {
+    const first = s.rooms.find((r) => r.projectId === m[1] && !r.archivedAt) ?? s.rooms.find((r) => r.projectId === m[1]);
+    return first != null ? <RedirectTo to={`/project/${m[1]}/room/${first.id}`} /> : <Welcome />;
+  }
+
+  return <Welcome />;
+}
+
+function isThreadTab(v: string | undefined): v is 'replies' | 'artifacts' | 'activity' | 'members' | 'task' | 'delivery' | 'deliberation' | 'run' {
+  return v === 'replies' || v === 'artifacts' || v === 'activity' || v === 'members' || v === 'task' || v === 'delivery' || v === 'deliberation' || v === 'run';
+}
+
+function RedirectTo({ to }: { to: string }) {
+  useEffect(() => { navigate(to, { replace: true }); }, [to]);
+  return <div className="main"><div className="page"><div className="small faint">正在打开…</div></div></div>;
+}
+
+/** 旧线程路由的装载定位（thread.get 完成后跳所属房间）。 */
+function LocateThread({ threadId, messageId, tab }: { threadId: string; messageId?: string; tab?: string }) {
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { loadThread } = await import('./shell');
+      await loadThread(threadId).catch(() => undefined);
+      if (cancelled) return;
+      const ent = (getState() as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[threadId];
+      if (ent != null) {
+        const q = new URLSearchParams();
+        q.set('thread', threadId);
+        if (tab != null && tab !== 'replies') q.set('tab', tab);
+        if (messageId != null) q.set('message', messageId);
+        navigate(`/project/${ent.projectId}/room/${ent.roomId}?${q.toString()}`, { replace: true });
+      } else {
+        toast('链接指向的回复串不存在或不可访问', 'error');
+        navigate('/', { replace: true });
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+  return null;
+}
+
+/** DM/聚合页的共享预览兜底（房间/文件页自渲染预览——这里补其余路由）。 */
+function DmWithPreview() {
+  const projectId = useStore((s) => s.activeProjectId);
+  return (
+    <>
+      <DmPage />
+      <PreviewPane
+        context={previewContextFromRoute(projectId)}
+        quoteTarget={previewQuoteTargetFromRoute()}
+      />
+    </>
+  );
+}
+
+/* ---------------- 首启欢迎（boot 三态 + 打开项目） ---------------- */
+
+function Welcome() {
+  const s = useStore((x) => x);
+  if (s.boot === 'ready' && s.projects.length > 0) {
+    const first = s.rooms.find((r) => r.projectId === s.activeProjectId);
+    if (first != null) return <RedirectTo to={`/project/${s.activeProjectId}/room/${first.id}`} />;
+  }
+  return (
+    <div className="main">
+      <div className="page">
+        <div className="panel info" style={{ textAlign: 'center', padding: 24, maxWidth: 560, margin: '0 auto' }} data-zs-welcome="hifi">
+          <div style={{ fontSize: 28, marginBottom: 6 }}>众说</div>
+          <div className="faint" style={{ marginBottom: 14 }}>本地多智能体协作工作台</div>
+          <div className="small" style={{ lineHeight: 1.8, marginBottom: 16 }}>
+            {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}——可重试或直接打开文件夹` : '还没有打开项目。选择一个文件夹作为项目根目录开始。'}
+          </div>
+          <div className="row tight" style={{ justifyContent: 'center' }}>
+            <button className="btn primary sm" onClick={() => void hifiUi().pickAndOpenFolder()}>打开项目文件夹</button>
+            {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
+          </div>
+          <div className="faint small" style={{ marginTop: 10 }}>之后可随时从侧栏「打开/切换项目」更换</div>
+        </div>
+      </div>
+    </div>
   );
 }
