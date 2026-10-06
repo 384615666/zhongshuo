@@ -313,7 +313,7 @@ describe('统一成功清算（r63 P1——review-r62 §2 双重结算反例）'
     s.initDraftPersistence('nsS|u');
     s.setDraftFull('room:r1', { body: '正文与指派', mentions: ['mA'], attachments: [{ name: 'a.md', size: 3, attachmentId: 'attS' }], access: 'default', sendAs: 'ai' });
     const d0 = s.getDraftFull('room:r1');
-    const env = { ...mkEnv2('cmd_s1', '正文与指派', [{ kind: 'member', memberId: 'mA' }], ['attS']), revAtSend: d0.rev };
+    const env = { ...mkEnv2('cmd_s1', '正文与指派', [{ kind: 'member', memberId: 'mA' }], { refs: ['attS'] }), revAtSend: d0.rev };
     s.stageOutbound('room:r1', env);
     const settled = s.settleOutbound('room:r1', env);
     expect(settled.body).toBe('');
