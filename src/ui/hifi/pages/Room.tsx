@@ -34,6 +34,7 @@ import {
 import {
   toggleThreadSubscription, markThreadReadReal, reactMessageReal, createRoomReal, exportThreadReal,
 } from '../data/actions-room';
+import { updateRoomReal, roomArchiveReal, roomMembersSetReal } from '../loader';
 import { formatBytes, formatDuration, fullTime, relTime, routeModeCopy, stageLabel } from '../lib/format';
 import { navigate } from '../lib/router';
 import { type ThreadTabKey } from '../lib/threadNav';
@@ -615,10 +616,15 @@ export function RoomPage({
             {room.archivedAt ? (
               <MenuItem
                 icon="refresh"
-                title="房间取消归档命令尚未接入本包（真实能力限制）"
-                onClick={() => { setRoomMenuAnchor(null); toast('房间取消归档尚未接入——历史仍可读', 'warn'); }}
+                title="取消归档后可继续发任务；旧的待派发任务不会自动重放（room.archive unarchive）"
+                onClick={() => {
+                  setRoomMenuAnchor(null);
+                  void roomArchiveReal(room.id, room.revision, 'unarchive').then((r) => {
+                    toast(r.ok ? '已取消归档' : `取消归档失败：${r.error}`, r.ok ? 'success' : 'error');
+                  });
+                }}
               >
-                取消归档（未接入）
+                取消归档
               </MenuItem>
             ) : (
               <MenuItem
@@ -3042,6 +3048,7 @@ function RoomFiles({
 function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void }) {
   const s = useStore((x) => x);
   const room = roomOf(s, roomId)!;
+  const [saveBusy, setSaveBusy] = useState(false);
   const [name, setName] = useState(room.name);
   const [desc, setDesc] = useState(room.description ?? '');
   const [coordinator, setCoordinator] = useState(room.coordinatorMemberId);
@@ -3063,19 +3070,39 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
         <>
           <button
             className="btn danger"
-            disabled
-            title="房间归档命令尚未接入本包（真实能力限制）——归档语义（只读/保留历史）在正式命令接入后启用"
+            disabled={saveBusy}
+            title="归档=只读保留历史（room.archive；有未结束任务时服务端拒绝，给出去停止的入口）"
+            onClick={() => {
+              setSaveBusy(true);
+              void roomArchiveReal(room.id, room.revision, 'archive').then((r) => {
+                setSaveBusy(false);
+                if (r.ok) { toast('房间已归档（历史保留·只读）——可在房间 ⋯ 菜单取消归档', 'success'); onClose(); }
+                else toast(`归档被拒：${r.error}`, 'error');
+              });
+            }}
           >
-            <Icon name="archive" size={12} /> 归档房间（未接入）
+            <Icon name="archive" size={12} /> 归档房间
           </button>
           <div className="spacer" />
-          <button className="btn" onClick={onClose}>关闭</button>
+          <button className="btn" onClick={onClose}>取消</button>
           <button
-            className="btn"
-            disabled
-            title="房间名称/描述/协调者的修改命令尚未接入本包（真实能力限制）——当前仅可查看；新建房间经侧栏项目行的 + 走真实 room.create"
+            className="btn primary"
+            disabled={saveBusy || !name.trim() || (name === room.name && desc === (room.description ?? '') && coordinator === room.coordinatorMemberId)}
+            title="保存（room.update 乐观锁：名称/描述/协调者——协调者须为房间成员）"
+            onClick={() => {
+              setSaveBusy(true);
+              void updateRoomReal(room.id, room.revision, {
+                name: name.trim(),
+                description: desc,
+                ...(coordinator !== room.coordinatorMemberId ? { coordinatorMemberId: coordinator } : {}),
+              }).then((r) => {
+                setSaveBusy(false);
+                if (r.ok) { toast('房间设置已保存（回读一致；revision 已推进）', 'success'); onClose(); }
+                else { toast(`保存失败：${r.error}（输入已保留）`, 'error'); }
+              });
+            }}
           >
-            保存（未接入）
+            保存
           </button>
         </>
       }
@@ -3135,10 +3162,17 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
               </span>
               <button
                 className="btn sm"
-                disabled
-                title="房间成员增删命令尚未接入本包（真实能力限制）——当前名单为服务端事实（member.list）"
+                disabled={saveBusy || isCoord}
+                title={isCoord ? '协调者不能移出——先在上方更换协调者' : '移出本房间（room.members.set；新增/移出只对后续新任务生效——运行中研讨名单冻结）'}
+                onClick={() => {
+                  setSaveBusy(true);
+                  void roomMembersSetReal(room.id, m.id, 'remove').then((r) => {
+                    setSaveBusy(false);
+                    if (!r.ok) toast(`移出失败：${r.error}`, 'error');
+                  });
+                }}
               >
-                移出（未接入）
+                移出
               </button>
             </div>
           );
@@ -3158,11 +3192,18 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
                   <span className="strong">{memberLabel(m)}</span>
                 </span>
                 <button
-                  className="btn sm"
-                  disabled
-                  title="房间成员增删命令尚未接入本包（真实能力限制）——需要时在串里 @ 该成员（真实派发）"
+                  className="btn sm primary"
+                  disabled={saveBusy}
+                  title="加入本房间（room.members.set——新增只对后续新任务生效，正在运行的研讨沿用冻结名单）"
+                  onClick={() => {
+                    setSaveBusy(true);
+                    void roomMembersSetReal(room.id, m.id, 'add').then((r) => {
+                      setSaveBusy(false);
+                      if (!r.ok) toast(`加入失败：${r.error}`, 'error');
+                    });
+                  }}
                 >
-                  加入（未接入）
+                  加入
                 </button>
               </div>
             ))}

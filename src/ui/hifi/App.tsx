@@ -16,7 +16,6 @@ import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
 import { DmPage } from './DmPage';
-import { BoardPage } from './BoardPage';
 import { MembersPage } from './MembersPage';
 import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
@@ -43,6 +42,7 @@ import { FilesGitPage } from './pages/pages-misc';
 import { SettingsPage } from './pages/SettingsPage';
 import { ProjectHomePage, WelcomePage, OpenFolderModal } from './pages/ProjectHome';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
+import { TasksBoardPage } from './pages/TasksBoard';
 import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
 import { toggleProjectPinned } from './data/actions-nav';
 import { Menu, MenuItem, Modal, Tag } from './components/ui';
@@ -587,7 +587,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
 
   if (path === '/' || path === '/welcome' || path === '') return <WelcomePage />;
   if (path === '/dm' || path.startsWith('/dm/')) return <DmWithPreview />;
-  if (path === '/board') return <BoardPage />;
+  if (path === '/board') return <TasksBoardPage query={query} />;
   if (path === '/library') return <LibraryPage />;
   if (path === '/activity') return <ActivityPage />;
   if (path === '/pending') return <PendingPage />;

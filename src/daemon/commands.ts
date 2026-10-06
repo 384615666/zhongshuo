@@ -904,10 +904,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'room.list': {
         const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
-        const rooms = deps.db.prepare('SELECT id, name, archived_at, coordinator_member_id FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null; coordinator_member_id: string | null }>;
+        // R65：补 description（settings_json）与 revision（房间属性乐观锁用）+ archivedAt 时间戳。
+        const rooms = deps.db.prepare('SELECT id, name, archived_at, coordinator_member_id, settings_json, revision FROM rooms WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; name: string; archived_at: number | null; coordinator_member_id: string | null; settings_json: string | null; revision: number }>;
         const items = rooms.map((r) => {
           const conversation = deps.db.prepare('SELECT id FROM conversations WHERE room_id = ? LIMIT 1').get(r.id) as { id: string } | undefined;
-          return { id: r.id, name: r.name, archived: r.archived_at != null, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null };
+          let description: string | null = null;
+          try { description = ((JSON.parse(r.settings_json ?? '{}') as { description?: string }).description) ?? null; } catch { description = null; }
+          return { id: r.id, name: r.name, archived: r.archived_at != null, archivedAt: r.archived_at, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null, description, revision: r.revision };
         });
         return withCommandId({ ok: true, data: { items } });
       }
@@ -2890,13 +2893,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const groups = projects.map((p) => {
           const rooms = (deps.db.prepare('SELECT id, name FROM rooms WHERE project_id = ? ORDER BY rowid').all(p.id) as Array<{ id: string; name: string }>).map((room) => {
             const cards = (deps.db.prepare(
-              `SELECT t.id, t.title, t.status, t.stop_generation, t.conversation_thread_id, t.owner_member_id,
+              `SELECT t.id, t.title, t.status, t.stop_generation, t.conversation_thread_id, t.owner_member_id, t.room_task_number,
                       (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_id,
                       (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_status
                FROM tasks t JOIN conversations c ON c.id = t.conversation_id
                WHERE t.room_id = ? AND t.kind = 'room_task' AND c.project_id = ?
                ORDER BY t.rowid DESC`,
-            ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; run_id: string | null; run_status: string | null }>).map((t) => {
+            ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; room_task_number: number | null; run_id: string | null; run_status: string | null }>).map((t) => {
               const pendingDelivery = t.status === 'REVIEW'
                 ? (deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' ORDER BY revision DESC LIMIT 1`).get(t.id) as { id: string; revision: number; manifest_hash: string } | undefined) ?? null
                 : null;
@@ -2919,7 +2922,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               const exitUnconfirmed = t.run_status === 'INTERRUPTED' && t.run_id != null
                 && ((deps.db.prepare("SELECT count(*) c FROM agent_turns WHERE run_id = ? AND status = 'UNKNOWN'").get(t.run_id) as { c: number }).c > 0);
               return {
-                taskId: t.id, title: t.title, threadId: t.conversation_thread_id,
+                taskId: t.id, title: t.title, roomTaskNumber: t.room_task_number, threadId: t.conversation_thread_id,
                 projectId: p.id, roomId: room.id, ownerMemberId: t.owner_member_id,
                 taskStatus: t.status, runStatus: t.run_status, runId: t.run_id, stopGeneration: t.stop_generation, column,
                 exitUnconfirmed,

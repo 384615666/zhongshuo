@@ -20,7 +20,7 @@ import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number; rootPath?: string; canonicalPath?: string }; created?: boolean }
 /** R65：注册表条目（project.list——多项目前端集合的事实源）。 */
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
-interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null }> }
+interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
@@ -390,7 +390,10 @@ export async function refreshRooms(projectIdArg?: string): Promise<void> {
         id: r.id, projectId, name: r.name, conversationId: r.conversationId,
         coordinatorMemberId: r.coordinatorMemberId ?? (failed ? (oldRoom?.coordinatorMemberId ?? '') : ''),
         memberIds: roster?.memberIds ?? [],
-        revision: 0, unread: 0,
+        description: r.description ?? undefined,
+        archivedAt: r.archivedAt ?? undefined,
+        revision: r.revision ?? oldRoom?.revision ?? 0,
+        unread: 0,
       };
     }),
     readErrors: { ...prev.readErrors, ...rosterErrors },
