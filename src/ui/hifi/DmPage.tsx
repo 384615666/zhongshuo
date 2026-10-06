@@ -17,7 +17,7 @@ import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadDmHistory, createDm, refreshDms, retryUnknownSend, setReadGate, toast, setState } from './shell';
 import { buildDmEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft, submitTaskReview, executeTaskRework, toggleSavedMessage, type ReviewSnapshot } from './loader';
-import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
+import { openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate, pathOf, useHashRoute } from './lib/router';
 
@@ -443,14 +443,18 @@ export function DmPage() {
                   if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
                   const env = buildDmEnvelope(p.commandId, active.id, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
                   env.revAtSend = p.draftRev;
+                  const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）
+                  if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
                   const r = await sendEnvelope(env);
+                  if (r.status === 'ok') settleOutbound(draftKey, env);
+                  else if (r.status === 'failed') dropOutbound(draftKey, env);
+                  else confirmOutboundUnknown(draftKey, env);
                   if (r.status === 'ok') {
                     void loadDmHistory(active.id, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
                     void refreshDms().catch(() => { /* 列表失败另有呈现 */ });
                     toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
                     return { status: 'ok' };
                   }
-                  if (r.status === 'unknown') parkUnknownEnvelope(draftKey, env);
                   return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
                 })()}
               />

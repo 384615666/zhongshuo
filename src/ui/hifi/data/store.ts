@@ -85,6 +85,9 @@ export interface HifiExtension {
   savedMessageRefs: Record<string, boolean>;
   /** r61 G7：待插入草稿的正文文本（摘录等）——目标 Composer 未挂载时排队，挂载即消费。 */
   draftInserts: Record<string, Array<{ id: number; text: string }>>;
+  /** r62 P1 出站账本：交给 bridge **之前**耐久落盘的完整发送意图（stage=sending）——按
+   * ok/failed/unknown 收口；重载时全部转 pendingSends（recovered，人工同号确认）。 */
+  outboundLedger: Record<string, OutboundLedgerEntry[]>;
   /**
    * r61 P5 草稿/未知信封持久化状态：mode=on（identity 就绪、localStorage 可写）时每次草稿/
    * 信封/上传项变更即快照落盘；error 非空=最近一次持久化失败（内存仍生效，UI 如实提示
@@ -124,6 +127,7 @@ function makeEmptyState(): HifiState {
     conn: 'online', connInfo: null,
     savedMessageRefs: {},
     draftInserts: {},
+    outboundLedger: {},
     draftPersist: { mode: 'off', error: null, recoveryNote: null },
   };
 }
@@ -366,6 +370,8 @@ export interface PendingSendEnvelope {
   revAtSend?: number;
   /** 同键连续未知（review-r48 §4）：先到先重试，不覆盖前一份未确认信封。 */
   queued?: PendingSendEnvelope[];
+  /** r62 P1：重载收口标记——出站账本恢复为「结果未知」人工同号确认项。 */
+  recovered?: boolean;
 }
 
 export function setReadGate(gate: ((conversationId: string) => boolean) | null): void {
@@ -481,7 +487,7 @@ function persistSnapshot(): void {
     const draftsOut: Record<string, HifiDraft> = {};
     const now = Date.now();
     for (const [k, v] of drafts) draftsOut[k] = v.updatedAt != null ? v : { ...v, updatedAt: now };
-    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut });
+    const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger });
     localStorage.setItem(persistKey, payload);
     if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote } }));
   } catch (e) {
@@ -538,8 +544,15 @@ export function initDraftPersistence(ns: string): void {
         if (kept.length !== list.length) droppedUploads += list.length - kept.length;
         if (kept.length > 0) uploads[k] = kept;
       }
+      const ledger: Record<string, OutboundLedgerEntry[]> = {};
+      for (const [k, list] of Object.entries((data.outboundLedger ?? {}) as Record<string, unknown>)) {
+        if (!Array.isArray(list)) { droppedSends += 1; continue; }
+        const kept = list.filter((x): x is OutboundLedgerEntry => validateEnvelope(x));
+        if (kept.length !== list.length) droppedSends += list.length - kept.length;
+        if (kept.length > 0) ledger[k] = kept.map((x) => ({ ...x, stage: 'sending' as const }));
+      }
       draftRev = Math.max(draftRev, maxRev);
-      setState((s) => ({ ...s, pendingSends: { ...sends, ...s.pendingSends }, uploadItems: { ...uploads, ...s.uploadItems } }));
+      setState((s) => ({ ...s, pendingSends: { ...sends, ...s.pendingSends }, uploadItems: { ...uploads, ...s.uploadItems }, outboundLedger: ledger }));
     }
     // 任一不可恢复/丢弃/过期：原件逐字隔离（先隔离后覆写——不销毁唯一原件；隔离尽力而为，
     // 失败时保留主键原样并说明，本轮内存态照常可用）。隔离件中的未确认账本不解析不派发。
@@ -561,12 +574,108 @@ export function initDraftPersistence(ns: string): void {
     }
   }
   persistSnapshot(); // 可写性确认+把「仅有效部分」落为新快照（原件已在隔离键保全）
+  recoverLedgerToPending(); // r62 P1：在途发送恢复为未确认横幅（人工同号确认，不自动发送）
   setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
 }
 
 /** identity 不可用（服务未就绪/浏览器宿主）：内存态+如实标注（不冒充已持久化）。 */
 export function markPersistenceDegraded(reason: string): void {
   setState((s) => (s.draftPersist.mode === 'off' ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'off', error: reason } }));
+}
+
+/* ---------- 出站信封账本（r62 P1，review-r61 §2） ----------
+ * 独立反例（early-crash-result.json）：信封只在 sendEnvelope 返回 unknown 后才 park——
+ * 「服务已提交→回执未达→20s 超时前 renderer 崩溃」窗口内完整信封只在内存，重载后无原
+ * commandId，再次发送换新号→消息 1→2。本账本把**完整发送意图在交给 bridge 之前耐久落盘**
+ *（stage=sending），并按结果收口：
+ *  - ok → settleOutbound：**先剥已发草稿内容并持久化**（revAtSend 门——等待期编辑保留）、
+ *    剥本信封 attachmentRefs、清已结算上传项，**最后**才删账本条目——中途任何崩溃=账本仍在
+ *    →重载转未确认横幅→同号重发→daemon 幂等 replayed ok→再次结算，不暴露可重复发送内容；
+ *  - failed（明确拒绝）→ dropOutbound：删账本条目（草稿保留——用户改后重发走新号是预期）；
+ *  - unknown → confirmOutboundUnknown：转 pendingSends（横幅=人工同号同参确认）。
+ * 重载（initDraftPersistence）：账本条目全部转 pendingSends（recovered 标记）——不自动发送、
+ * 不静默退回普通草稿；Composer 在「正文与横幅信封一致且未改」时阻止新号发送（防重复）。
+ * 存储失败：stageOutbound 返回 ok=false，调用方**取消发送**并如实报错——不以「已安全保存
+ * 原信封」的假象继续。 */
+
+/** 出站账本条目（persist 面向未知信封同构，附阶段标记）。 */
+export interface OutboundLedgerEntry extends PendingSendEnvelope { stage: 'sending' }
+
+export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok: boolean; error?: string } {
+  const entry: OutboundLedgerEntry = { ...env, stage: 'sending' };
+  setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: [...(s.outboundLedger[draftKey] ?? []), entry] } }));
+  persistSnapshot();
+  const err = getState().draftPersist.error;
+  if (err != null) {
+    // 落盘失败=账本不可靠：回滚内存条目并取消发送（不冒充已保存原信封）。
+    setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId) } }));
+    return { ok: false, error: `原信封未能耐久保存（${err}）——本次未发送；存储恢复后重试即自动可用` };
+  }
+  return { ok: true };
+}
+
+/** ok 结算：先剥已发内容（持久化），最后删账（顺序即崩溃安全——见块注释）。 */
+export function settleOutbound(draftKey: string, env: PendingSendEnvelope): void {
+  const d = getDraftFull(draftKey);
+  const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
+  const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
+  const sentIds = new Set(env.params.attachmentRefs ?? []);
+  const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
+  setDraftFull(draftKey, { ...d, body: nextBody, attachments: keptAttachments, sendAs: env.params.intent === 'record_only' ? 'ai' : d.sendAs });
+  clearSettledUploads(draftKey, [...sentIds]);
+  setState((s) => {
+    const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
+    const nextLedger = { ...s.outboundLedger };
+    if (ledger.length > 0) nextLedger[draftKey] = ledger; else delete nextLedger[draftKey];
+    // 同 commandId 的 parked 条目一并清（同号确认后的收口；跨键不动）。
+    const cur = s.pendingSends[draftKey];
+    const strip = (e: PendingSendEnvelope): PendingSendEnvelope => (e.queued != null && e.queued.length > 0 ? { ...e, queued: e.queued.filter((q) => q.commandId !== env.commandId) } : e);
+    let sends = s.pendingSends;
+    if (cur != null) {
+      if (cur.commandId === env.commandId && (cur.queued ?? []).length === 0) { const n = { ...s.pendingSends }; delete n[draftKey]; sends = n; }
+      else if (cur.commandId === env.commandId && (cur.queued ?? []).length > 0) { const [head, ...rest] = cur.queued as PendingSendEnvelope[]; sends = { ...s.pendingSends, [draftKey]: { ...head, queued: rest } }; }
+      else if (cur.queued != null && cur.queued.some((q) => q.commandId === env.commandId)) sends = { ...s.pendingSends, [draftKey]: strip(cur) };
+    }
+    return { ...s, outboundLedger: nextLedger, pendingSends: sends };
+  });
+  persistSnapshot();
+}
+
+/** 明确拒绝：删账本条目（草稿保留）。 */
+export function dropOutbound(draftKey: string, env: PendingSendEnvelope): void {
+  setState((s) => {
+    const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
+    const nextLedger = { ...s.outboundLedger };
+    if (ledger.length > 0) nextLedger[draftKey] = ledger; else delete nextLedger[draftKey];
+    return { ...s, outboundLedger: nextLedger };
+  });
+  persistSnapshot();
+}
+
+/** 结果未知：账本条目转 pendingSends（横幅=人工同号同参确认；排队语义沿用 park）。 */
+export function confirmOutboundUnknown(draftKey: string, env: PendingSendEnvelope): void {
+  setState((s) => {
+    const ledger = (s.outboundLedger[draftKey] ?? []).filter((x) => x.commandId !== env.commandId);
+    const nextLedger = { ...s.outboundLedger };
+    if (ledger.length > 0) nextLedger[draftKey] = ledger; else delete nextLedger[draftKey];
+    const cur = s.pendingSends[draftKey];
+    const pendingSends = cur == null
+      ? { ...s.pendingSends, [draftKey]: env }
+      : { ...s.pendingSends, [draftKey]: { ...cur, queued: [...(cur.queued ?? []), env] } };
+    return { ...s, outboundLedger: nextLedger, pendingSends };
+  });
+  persistSnapshot();
+}
+
+/** 重载收口（initDraftPersistence 调用）：账本条目全部转 pendingSends（recovered 标记——
+ * 结果未知的在途发送，人工同号确认，不自动发送）。 */
+function recoverLedgerToPending(): void {
+  const ledgerNow = getState().outboundLedger;
+  const keys = Object.keys(ledgerNow);
+  if (keys.length === 0) return;
+  for (const k of keys) {
+    for (const entry of ledgerNow[k] ?? []) confirmOutboundUnknown(k, { ...entry, recovered: true });
+  }
 }
 
 /* ---------- 提示与主题 ---------- */

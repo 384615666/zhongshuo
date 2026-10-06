@@ -221,3 +221,82 @@ describe('快照防护与 TTL（r62 P2——review-r61 §3）', () => {
     expect(snap.drafts['dm:c1'].updatedAt).toBeGreaterThanOrEqual(t0);
   });
 });
+
+describe('出站信封账本（r62 P1——review-r61 §2 早崩重复发送）', () => {
+  const mkEnv = (cmd: string, body: string, refs?: string[]) => ({
+    commandId: cmd, method: 'message.submit' as const,
+    params: { target: { kind: 'thread' as const, threadId: 't1' }, body, intent: 'record_only' as const, mentions: [], ...(refs != null ? { attachmentRefs: refs } : {}) },
+    targetLabel: 'thread:t1', at: Date.now(),
+  });
+
+  it('stage→ok settle：先剥内容后删账；refs/上传项一并清', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsL|u');
+    s.setDraftFull('thread:t1', { body: '要发的内容', mentions: [], attachments: [{ name: 'a.md', size: 5, attachmentId: 'attX' }], access: 'default', sendAs: 'record' });
+    const d0 = s.getDraftFull('thread:t1');
+    const env = { ...mkEnv('cmd_ok1', '要发的内容', ['attX']), revAtSend: d0.rev };
+    const st = s.stageOutbound('thread:t1', env);
+    expect(st.ok).toBe(true);
+    expect((s.getState().outboundLedger['thread:t1'] ?? []).length).toBe(1); // 交给 bridge 前已落账
+    s.settleOutbound('thread:t1', env);
+    expect(s.getDraftFull('thread:t1').body).toBe(''); // 已发正文剥离
+    expect(s.getDraftFull('thread:t1').attachments.length).toBe(0); // 已发 refs 剥离
+    expect(s.getState().outboundLedger['thread:t1']).toBeUndefined(); // 账清（最后）
+    expect(s.getState().pendingSends['thread:t1']).toBeUndefined();
+  });
+
+  it('stage→明确拒绝 drop：账清、草稿保留（用户改后重发走新号是预期）', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsL|u');
+    s.setDraftFull('thread:t1', { body: '被拒内容', mentions: [], attachments: [], access: 'default', sendAs: 'record' });
+    const env = mkEnv('cmd_fail1', '被拒内容');
+    expect(s.stageOutbound('thread:t1', env).ok).toBe(true);
+    s.dropOutbound('thread:t1', env);
+    expect(s.getState().outboundLedger['thread:t1']).toBeUndefined();
+    expect(s.getDraftFull('thread:t1').body).toBe('被拒内容');
+  });
+
+  it('stage→unknown confirm：转 pendingSends（同号横幅）；第二封排队不覆盖', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsL|u');
+    const e1 = mkEnv('cmd_u1', '第一封');
+    const e2 = mkEnv('cmd_u2', '第二封');
+    s.stageOutbound('thread:t1', e1);
+    s.confirmOutboundUnknown('thread:t1', e1);
+    s.stageOutbound('thread:t1', e2);
+    s.confirmOutboundUnknown('thread:t1', e2);
+    const pend = s.getState().pendingSends['thread:t1'];
+    expect(pend?.commandId).toBe('cmd_u1');
+    expect((pend?.queued ?? []).map((q) => q.commandId)).toEqual(['cmd_u2']);
+    expect(s.getState().outboundLedger['thread:t1']).toBeUndefined();
+  });
+
+  it('重载收口：账本条目→pendingSends（recovered）——人工同号确认，不自动发送，不静默退普通草稿', async () => {
+    const s1 = await freshStore();
+    s1.initDraftPersistence('nsM|u');
+    s1.setDraftFull('thread:t2', { body: '早崩窗口正文', mentions: [], attachments: [], access: 'default', sendAs: 'record' });
+    const env = mkEnv('cmd_early_crash', '早崩窗口正文');
+    expect(s1.stageOutbound('thread:t2', env).ok).toBe(true);
+    // 「renderer 崩溃重载」=新模块实例同命名空间：账本条目恢复为未确认横幅（同号）
+    const s2 = await freshStore();
+    s2.initDraftPersistence('nsM|u');
+    const pend = s2.getState().pendingSends['thread:t2'];
+    expect(pend?.commandId).toBe('cmd_early_crash');
+    expect(pend?.recovered).toBe(true);
+    expect(pend?.params.body).toBe('早崩窗口正文');
+    expect(s2.getDraftFull('thread:t2').body).toBe('早崩窗口正文'); // 正文保留（横幅同号确认入口）
+    expect(s2.getState().outboundLedger['thread:t2']).toBeUndefined(); // 已转未确认
+  });
+
+  it('stage 落盘失败：ok=false+内存回滚——调用方取消发送，不冒充已保存', async () => {
+    const s = await freshStore();
+    s.initDraftPersistence('nsN|u');
+    stub.failing = true;
+    const env = mkEnv('cmd_stg_fail', 'x');
+    const st = s.stageOutbound('thread:t3', env);
+    expect(st.ok).toBe(false);
+    expect(st.error).toContain('未能耐久保存');
+    stub.failing = false;
+    expect((s.getState().outboundLedger['thread:t3'] ?? []).length).toBe(0); // 内存回滚
+  });
+});

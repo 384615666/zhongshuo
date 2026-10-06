@@ -539,6 +539,12 @@ export function Composer({
     const text = body.trim();
     if (!text) return;
     if (sendDisabledReason) return;
+    // r62 P1 防重复守卫：存在未确认信封且正文与之逐字相同（未编辑）时，换新号发送必然是
+    // 重复风险——只允许同号「重发原内容」（幂等）或显式「放弃」后再发新内容。
+    if (pendingEnv != null && text === pendingEnv.params.body) {
+      setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
+      return;
+    }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
     // 独立可发；A 的回执 finally 只删 A 的键（不清 B 的锁）。
     if (sendingKeys.has(draftKey)) return;
@@ -656,12 +662,14 @@ export function Composer({
     const keyAtSend = draftKey;
     void onRetrySend(env).then((r) => {
       if (r == null || r.status === 'ok') {
-        clearUnknownEnvelope(keyAtSend); // 有排队则下一条顶上（banner 继续）
+        // r62 P1 清算顺序：**先剥已发内容并持久化，最后清信封**——反序存在「信封已清、
+        // 正文仍在」的崩溃窗口（换号重发=重复）。新序中途崩溃=横幅仍在→同号重发→幂等 ok
+        //→再次走本清算，不暴露可重复发送内容。
         const d = getDraftFull(keyAtSend);
         // 代次未变才剥离已发原文；等待期编辑过则整份保留（与 submit 成功清算同一规则）。
         const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
         const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
-        // r53 §4：重试成功=该信封确实送达——剥其冻结的 attachmentRefs（本次确实发送的资源），
+        // r53 §4 收口：重试成功=该信封确实送达——剥其冻结的 attachmentRefs（本次确实发送的资源），
         // 等待期新增的附件不动；同步清 store 已结算项。与 submit 成功清算同一规则——已发出
         // 的 refs 不留在草稿里被下一条信封再次携带、再次落库。
         const sentIds = new Set(env.params.attachmentRefs ?? []);
@@ -669,6 +677,7 @@ export function Composer({
         const settled: HifiDraft = { ...d, body: nextBody, attachments: keptAttachments, sendAs: env.params.intent === 'record_only' ? (recordThread ? 'record' : 'ai') : d.sendAs };
         setDraftFull(keyAtSend, settled);
         clearSettledUploads(keyAtSend, [...sentIds]);
+        clearUnknownEnvelope(keyAtSend); // 有排队则下一条顶上（banner 继续）——内容已剥，最后清
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
           setSendAs(settled.sendAs);

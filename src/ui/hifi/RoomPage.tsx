@@ -11,7 +11,7 @@ import { Composer } from './components/Composer';
 import type { FormalSendOutcome } from './components/Composer';
 import { useStore, loadRoomPool, retryUnknownSend, toast, setState } from './shell';
 import { buildRoomRootEnvelope, sendEnvelope, attachmentRefsFromDraft, attachmentRangesFromDraft } from './loader';
-import { parkUnknownEnvelope } from './data/store';
+import { stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
 import { navigate } from './lib/router';
 
 const EMPTY: never[] = [];
@@ -123,13 +123,17 @@ export function RoomPage({ roomId }: { roomId: string }) {
           if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
           const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
+          const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）
+          if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
           const r = await sendEnvelope(env);
+          if (r.status === 'ok') settleOutbound(draftKey, env);
+          else if (r.status === 'failed') dropOutbound(draftKey, env);
+          else confirmOutboundUnknown(draftKey, env);
           if (r.status === 'ok') {
             void loadRoomPool(roomId).catch(() => { /* 读取失败另有呈现 */ });
             toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
             return { status: 'ok' };
           }
-          if (r.status === 'unknown') parkUnknownEnvelope(draftKey, env);
           return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
         })()}
       />

@@ -23,7 +23,7 @@ import { Icon } from './components/Icon';
 import { Tag } from './components/ui';
 import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
 import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, toggleSavedMessage, type ReviewSnapshot } from './loader';
-import { parkUnknownEnvelope, openPreview, recordWrite } from './data/store';
+import { openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
 import { command, openExportDir } from './bridge';
 import { navigate } from './lib/router';
 
@@ -449,13 +449,19 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
               const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
               env.revAtSend = p.draftRev;
+              // r62 P1：完整信封在交给 bridge 之前耐久落账；ok/failed/unknown 三态收口
+              //（unknown→pendingSends 横幅=人工同号确认；崩溃窗口见 store 出站账本注释）。
+              const staged = stageOutbound(draftKey, env);
+              if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
               const r = await sendEnvelope(env);
+              if (r.status === 'ok') settleOutbound(draftKey, env);
+              else if (r.status === 'failed') dropOutbound(draftKey, env);
+              else confirmOutboundUnknown(draftKey, env);
               if (r.status === 'ok') {
                 void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
                 toast(intent === 'record_only' ? '已保存记录（不唤醒）' : '已跟进（延续当前任务）', 'success');
                 return { status: 'ok' };
               }
-              if (r.status === 'unknown') parkUnknownEnvelope(draftKey, env);
               return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
             })()}
           />
