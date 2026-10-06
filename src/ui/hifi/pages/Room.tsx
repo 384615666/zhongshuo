@@ -318,6 +318,17 @@ export function RoomPage({
    * 整棵树白屏（实测：打开一个不存在的房间链接后，侧栏与顶栏一起消失）。
    * 第十七批顺手修掉：把它挪到 Hook 之后。
    */
+  /* ---------- 正式装载链（R64）：主池快照 + 活动目标 + 可见时轻量刷新 ----------
+   * room.pool 拉取后经水合层供本页 selectors；线程装载在 ThreadPanel 挂载时触发。 */
+  useEffect(() => { void loadRoomPool(roomId); }, [roomId]);
+  useEffect(() => { setState((st) => ({ ...st, ui: { ...st.ui, activeRoomId: roomId } })); }, [roomId]);
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) void loadRoomPool(roomId);
+    }, 5000);
+    return () => { window.clearInterval(t); };
+  }, [roomId]);
+
   if (!room) {
     return (
       <div className="main">
@@ -466,17 +477,6 @@ export function RoomPage({
    */
   const poolCollapsedByFile = hasPreview && showContextRegion && !showMainPool && Boolean(threadId);
 
-
-  /* ---------- 正式装载链（R64）：主池快照 + 活动目标 + 可见时轻量刷新 ----------
-   * room.pool 拉取后经水合层供本页 selectors；线程装载在 ThreadPanel 挂载时触发。 */
-  useEffect(() => { void loadRoomPool(roomId); }, [roomId]);
-  useEffect(() => { setState((st) => ({ ...st, ui: { ...st.ui, activeRoomId: roomId } })); }, [roomId]);
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) void loadRoomPool(roomId);
-    }, 5000);
-    return () => { window.clearInterval(t); };
-  }, [roomId]);
 
   /**
    * 回复串「收起/返回」在 RoomPage 层的动作。

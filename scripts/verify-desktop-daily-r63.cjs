@@ -159,7 +159,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
       const dump = await cdp.tryEval(`JSON.stringify({ hash: location.hash, sideItems: [...document.querySelectorAll('#hifi-root .side-item')].map((x) => x.textContent.trim().slice(0, 20)), labels: [...document.querySelectorAll('#hifi-root .side-item-label')].map((x) => x.textContent.trim().slice(0, 20)), oldMark: window.__r63old === 1 })`);
       throw new Error('默认房间 side-item 未找到（点击前）：' + String(dump));
     }
-    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '路由进入房间');
+    await waitFor(cdp, `location.hash.startsWith('#/room/') || (location.hash.startsWith('#/project/') && location.hash.includes('/room/'))`, 15000, '路由进入房间');
     await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '房间输入区');
     await waitFor(cdp, `document.querySelector('[data-zs-runtime-hint]') != null`, 15000, '未绑定 runtime 就地提示');
     const hintAuto = await cdp.tryEval(`document.querySelector('[data-zs-runtime-hint]')?.textContent ?? ''`);
@@ -187,7 +187,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
 
     // ⑤b 绑定后提示消失
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .side-item')].find((x) => x.textContent.includes('默认房间')); b?.click(); return true; })()`));
-    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '路由回房间');
+    await waitFor(cdp, `location.hash.startsWith('#/room/') || (location.hash.startsWith('#/project/') && location.hash.includes('/room/'))`, 15000, '路由回房间');
     await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '回房间');
     await sleep(2000);
     const hintGone = await cdp.tryEval(`document.querySelector('[data-zs-runtime-hint]') == null`);
@@ -207,7 +207,7 @@ const setArea = (cdp, v) => cdp.eval(probe(`(() => { const ta = document.querySe
     await cdp.eval(`window.__r63old2 = 1; location.reload(); true`);
     await waitFor(cdp, `document.body.classList.contains('hifi-on') && window.__r63old2 === undefined && [...document.querySelectorAll('#hifi-root .root-card')].some((c) => c.textContent.includes(${JSON.stringify(marker)}))`, 40000, '重开：记录消息仍在');
     await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .side-item')].find((x) => x.textContent.includes('默认房间')); b?.click(); return true; })()`));
-    await waitFor(cdp, `location.hash.startsWith('#/room/')`, 15000, '重开进房间');
+    await waitFor(cdp, `location.hash.startsWith('#/room/') || (location.hash.startsWith('#/project/') && location.hash.includes('/room/'))`, 15000, '重开进房间');
     await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, '重开输入区');
     await sleep(900);
     const draftKept = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value ?? ''`);
