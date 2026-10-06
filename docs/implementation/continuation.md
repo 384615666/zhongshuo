@@ -2,6 +2,40 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-06 第六十七轮，唯一权威快照）
+
+> R67=日常使用与数据继承收口（R66 独立复核四反例+升级门修正+控件/原型补齐）。**主交付=
+> desktop-daily-win-v5** `bld_fd6a5557b37a5bb9`（591/591，verify-desktop-daily 绿）；交互门
+> `verify-daily-r67.cjs` **G1–G6 全绿**；视觉门 `visual-pairs-r67.cjs` 非空密度 10 场景+vision 10/10；
+> 升级门 `verify-upgrade-r67.cjs` 全绿（基线先存/全树对照/负对照 4 实跑拒/回退=完整根/版本门拒/
+> guard=1+real_calls=0）；全量 905/905+r67Contracts 6/6+双类型门 0 错。
+> - **跨目录继承（P1-B）**：root-identity.json 逻辑身份（app.identity 懒建）+持久化 v2 键+
+>   双通道验证（快照内嵌 dataRootId 本地自证——目录改名/移动可继承；旧格式经 app.rootIdentityOf
+>   只读核对旧目录标记）；merge=pendingSends 按键取新/账本 commandId 并集/草稿 24h；旧键保留。
+>   G1=真实完整目录复制+真实启动器：未知横幅+commandId 逐字恢复、同号重试 0 重复。
+> - **工作区完整阅读/原件保存（P1-A/P2-B）**：project.file.readFull（全文+sha256+includeBytes）/
+>   originalFile（原字节）；WorktreeBody 三源同风味（MD 排版/HTML 隔离 iframe/源码）+读取时快照
+>   字节保存；保存链经 ZS_SAVEAS_AUTO_DIR 测试钩子实际落盘 sha256 逐字核验（不检测桥存在）。
+> - **恢复来源稳定（P2-A）**：首次成功快照实体签名固定 startup；同运行新实体=runtime（toast+侧栏
+>   永不弹窗/不改判）；G4 六态含真实重启 startup 自动弹一次+关闭不重开。
+> - **衍生真缺陷两枚**：①文件-only AI 派发在 turnInput empty-root-message 恒 BLOCKED（R66 只证
+>   建卡——复核原话的实证）→允许空正文+附件（无附件仍拒）；②保存过导航偏好+无记忆路径→boot
+>   永远 pending（applyServerNavPrefs 已设 activeProjectId 而 ready 条件误要求空）——G4 调试中
+>   「direct=true 但 attr=0」定位。
+> - **P4**：共享 Select 全页接入（含 pdf-zoom/恢复对账/绑定弹窗）；member.create+迁移 048+
+>   AddMemberModal（无用户延期依据的既定原型功能补齐）；search.query scope=visible；搜索空态
+>   EmptyState；成员页全局默认缺模型名提示（startupFailed 根因界面正解：claude 未配 ZS_CLAUDE_MODEL，
+>   pre-launch 失败——脱敏只读诊断完成）。
+> - **坑**：①bash 内联 python 补丁转义反噬多次（正则/引号）——复杂补丁一律 Write .py 文件执行；
+>   ②runDaemonOnce 短命模式不能用于需管道命令的阶段（startDaemon 持久+显式 kill）；③`, token)`
+>   全局替换会把 pipeConnect 的 token 参数也剥掉（auth 静默失败表现为「已连接未获 auth.ok」）；
+>   ④DOM.setFileInputFiles 在 React 重渲染后节点失效——页内 DataTransfer+File 构造直设 input.files
+>   同走 onChange；⑤zip：切回预览标签=WorktreeBody 重挂=重读磁盘（新快照新显示）——「保存读取时
+>   快照」语义按挂载期理解，断言应核「落盘==保存时刻显示」而非旧字节；⑥原生 select 展开为系统层
+>   不可截图——统一性以收起态+aria/键盘断言。
+> - **待续 R68+**：HTML 交互网页（如实不支持）；R64 遗留小项（project.open 响应 rootPath）；多远端
+>   upstream 复核；正式 AI 成果（自然交付件）三源阅读的第三源 UI 场景（合同层已覆盖注入）。
+
 ## 当前真实状态（2026-10-06 第六十六轮，唯一权威快照）
 
 > R66=桌面前端修复长批次（用户八项反馈+文件-only 决定）。**主交付=desktop-daily-win-v4**
