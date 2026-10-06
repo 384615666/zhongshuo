@@ -14,10 +14,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 class MemoryLocalStorage {
   store = new Map<string, string>();
   failing = false;
+  /** r63 P2 分离负例形态：配额将满——**新增**键写入失败、覆盖**已有**键可成功。 */
+  failIfNew = false;
+  keysArr(): string[] { return [...this.store.keys()]; }
   getItem(k: string): string | null { return this.store.has(k) ? this.store.get(k)! : null; }
-  setItem(k: string, v: string): void { if (this.failing) throw new Error('QuotaExceededError: mock'); this.store.set(k, String(v)); }
+  setItem(k: string, v: string): void {
+    if (this.failing) throw new Error('QuotaExceededError: mock');
+    if (this.failIfNew && !this.store.has(k)) throw new Error('QuotaExceededError: mock-create-new');
+    this.store.set(k, String(v));
+  }
   removeItem(k: string): void { this.store.delete(k); }
-  clear(): void { this.store.clear(); }
+  clear(): void { this.store.clear(); this.failIfNew = false; }
 }
 
 const stub = new MemoryLocalStorage();
@@ -352,5 +359,52 @@ describe('统一成功清算（r63 P1——review-r62 §2 双重结算反例）'
     const env2 = { ...mkEnv2('cmd_s4', '普通仅记录', [], { intent: 'record_only' }), revAtSend: d1.rev };
     s.stageOutbound('room:r2', env2);
     expect(s.settleOutbound('room:r2', env2).sendAs).toBe('ai'); // 一次性复位
+  });
+});
+
+describe('主键保全锁定（r63 P2——review-r62 §3 分离负例：隔离新增键失败但覆盖主键可成）', () => {
+  const v2Raw = (cmd: string): string => JSON.stringify({
+    v: 2, savedAt: Date.now(),
+    drafts: { 'thread:t6': { body: 'v2-body', mentions: [], attachments: [], access: 'default', sendAs: 'record' } },
+    pendingSends: { 'thread:t6': { commandId: cmd, method: 'message.submit', params: { target: { kind: 'thread' }, body: 'unconfirmed-in-original', intent: 'record_only', mentions: [] }, targetLabel: 'thread:t6', at: 1 } },
+    uploadItems: {},
+  });
+
+  it('隔离写失败：主键逐字保持（含未确认信封）·不建新快照·锁定态如实·发送被拒·零误发', async () => {
+    const original = v2Raw('cmd_lock_keep');
+    stub.store.set('zs.hifi.persist.nsK|u', original);
+    stub.failIfNew = true; // quarantine 新键写失败；主键已存在→覆盖可成功（反例条件）
+    const s = await freshStore();
+    s.initDraftPersistence('nsK|u');
+    expect(stub.store.get('zs.hifi.persist.nsK|u')).toBe(original); // 主键逐字保持——未被空快照覆盖（R62 反例闭拢）
+    expect(Array.from(stub.store.keys()).some((k: string) => k.includes('.quarantine-'))).toBe(false);
+    const st = s.getState().draftPersist;
+    expect(st.mode).toBe('locked');
+    expect(st.error).toContain('保全锁定');
+    // 内存态仍可编辑，但主键不被覆盖
+    s.setDraftFull('room:r9', { body: '锁定期编辑', mentions: [], attachments: [], access: 'default', sendAs: 'ai' });
+    expect(stub.store.get('zs.hifi.persist.nsK|u')).toBe(original);
+    // 发送拒绝（不冒充已耐久落账）——调用方据此取消，服务命令零误发
+    const staged = s.stageOutbound('room:r9', { commandId: 'cmd_locked_send', method: 'message.submit', params: { target: { kind: 'room_root', roomId: 'r9' }, body: 'x', intent: 'default', mentions: [] }, targetLabel: 'room:r9', at: Date.now() });
+    expect(staged.ok).toBe(false);
+    expect(staged.error ?? '').toContain('保全锁定');
+    expect((s.getState().outboundLedger['room:r9'] ?? []).length).toBe(0); // 未入账
+  });
+
+  it('恢复路径：存储释放后 retryDraftPersistence → 隔离成功 → 解锁 → 新快照/发送恢复可用', async () => {
+    const original = v2Raw('cmd_lock_retry');
+    stub.store.set('zs.hifi.persist.nsR|u', original);
+    stub.failIfNew = true;
+    const s = await freshStore();
+    s.initDraftPersistence('nsR|u');
+    expect(s.getState().draftPersist.mode).toBe('locked');
+    stub.failIfNew = false; // 用户释放了存储
+    s.retryDraftPersistence();
+    const qKeys = Array.from(stub.store.keys()).filter((k: string) => k.includes('.quarantine-'));
+    expect(qKeys.length).toBe(1);
+    expect(stub.store.get(qKeys[0]!)).toBe(original); // 原件终于入隔离键（逐字）
+    expect(s.getState().draftPersist.mode).toBe('on');
+    const staged = s.stageOutbound('room:r10', { commandId: 'cmd_unlocked_send', method: 'message.submit', params: { target: { kind: 'room_root', roomId: 'r10' }, body: 'y', intent: 'default', mentions: [] }, targetLabel: 'room:r10', at: Date.now() });
+    expect(staged.ok).toBe(true); // 解锁后发送可耐久落账
   });
 });

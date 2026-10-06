@@ -94,7 +94,7 @@ export interface HifiExtension {
    * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
    * ——退回内存态，如实标注。
    */
-  draftPersist: { mode: 'on' | 'off'; error: string | null; /** r62 P2：快照恢复说明（版本/损坏隔离、TTL 过期计数）——与写入失败 error 分列。 */ recoveryNote: string | null };
+  draftPersist: { mode: 'on' | 'off' | 'locked'; error: string | null; /** r62 P2：快照恢复说明（版本/损坏隔离、TTL 过期计数）——与写入失败 error 分列。 */ recoveryNote: string | null };
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -440,6 +440,15 @@ const PERSIST_VERSION = 1;
 /** 普通草稿过期（批准 brief §3.3：updatedAt + 24h）。未确认发送账本不适用。 */
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 let persistKey: string | null = null;
+let persistNs: string | null = null;
+/**
+ * r63 P2（review-r62 §3 反例）：快照不可恢复且**隔离写失败**（典型=配额将满：新增大键失败、
+ * 覆盖已有键可成）时，原实现仍无条件 persistSnapshot——唯一原件被空快照覆盖、未确认信封
+ * 销毁，提示却称「主键保留原样」。锁定后：主键永不覆盖（原件逐字保全）、所有草稿/账本
+ * 编辑仅内存态、stageOutbound 拒绝发送（不冒充已耐久落账）；释放存储后重启或显式重试
+ * （retryDraftPersistence）→ 隔离成功才解除并允许建立新快照。
+ */
+let persistLocked = false;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v != null && typeof v === 'object' && !Array.isArray(v);
@@ -478,6 +487,7 @@ function validateUploadItem(u: unknown): u is UploadItem {
 
 function persistSnapshot(): void {
   if (persistKey == null) return; // 未初始化（identity 未就绪/浏览器宿主）——内存态
+  if (persistLocked) return; // 主键保全锁定：原件未隔离前禁止覆盖唯一原键（r63 P2）
   try {
     const uploadsOut: Record<string, UploadItem[]> = {};
     for (const [k, list] of Object.entries(state.uploadItems)) {
@@ -504,6 +514,8 @@ function persistSnapshot(): void {
  * 普通草稿按批准约定 24h 过期（updatedAt 缺失回退快照 savedAt）；未确认发送账本不清理。
  */
 export function initDraftPersistence(ns: string): void {
+  persistNs = ns;
+  persistLocked = false; // 每次初始化重判（重启/显式重试=隔离重试路径）
   persistKey = `zs.hifi.persist.${ns}`;
   let raw: string | null;
   try {
@@ -561,6 +573,14 @@ export function initDraftPersistence(ns: string): void {
       const qKey = `${persistKey}.quarantine-${Date.now()}`;
       let quarantined = false;
       try { localStorage.setItem(qKey, raw); quarantined = true; } catch { quarantined = false; }
+      if (!quarantined) {
+        // r63 P2：原件未成功保全→锁定主键（禁止任何后续写路径覆盖唯一原键），所有编辑仅
+        // 内存态；发送（stageOutbound）拒绝——不冒充已耐久落账。释放存储后重启/显式重试。
+        persistLocked = true;
+        recoveryNote = `草稿快照无法恢复且隔离写入失败（存储空间/配额不足？）——**主键原件已保全锁定**（逐字保持，含未确认发送账本，不覆盖）；本轮草稿与发送账本仅内存态，发送将被要求先恢复存储；释放空间后重启应用或到「设置 → 草稿存储」点重试`;
+        setState((s) => ({ ...s, draftPersist: { mode: 'locked', error: `草稿快照保全锁定：原件未隔离成功，主键保持原样（未覆盖）；新写入仅内存态`, recoveryNote: null } }));
+        return; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
+      }
       if (wholeUnrecoverable) {
         recoveryNote = `草稿快照无法恢复（${parseOk ? `版本 v${String((data as { v?: unknown })?.v ?? '?')} 不受本程序支持` : 'JSON 损坏'}）——原件已${quarantined ? `逐字隔离于 ${qKey}（含未确认发送账本，不自动派发；如需人工核对请勿编辑该键）` : '无法隔离（localStorage 拒写）——主键保留原样，本轮草稿仅内存态'}，新快照从空态开始`;
       } else {
@@ -576,6 +596,15 @@ export function initDraftPersistence(ns: string): void {
   persistSnapshot(); // 可写性确认+把「仅有效部分」落为新快照（原件已在隔离键保全）
   recoverLedgerToPending(); // r62 P1：在途发送恢复为未确认横幅（人工同号确认，不自动发送）
   setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
+}
+
+/**
+ * 显式重试（r63 P2 恢复路径）：重新初始化=重读主键→再试隔离。隔离成功（存储已释放）→
+ * 解除锁定、原件入隔离键、从恢复出的有效部分建立新快照；仍失败→继续锁定。设置页按钮用。
+ */
+export function retryDraftPersistence(): void {
+  if (persistNs == null) return;
+  initDraftPersistence(persistNs);
 }
 
 /** identity 不可用（服务未就绪/浏览器宿主）：内存态+如实标注（不冒充已持久化）。 */
@@ -602,6 +631,11 @@ export function markPersistenceDegraded(reason: string): void {
 export interface OutboundLedgerEntry extends PendingSendEnvelope { stage: 'sending' }
 
 export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok: boolean; error?: string } {
+  if (persistLocked || getState().draftPersist.mode === 'locked') {
+    // r63 P2：主键保全锁定中——发送前无法耐久落账原信封，若继续发送则崩溃窗口的重复发送
+    // 防护失效。拒绝发送并给出恢复路径（不冒充已保存）。
+    return { ok: false, error: '草稿快照保全锁定中（原件未隔离成功，主键不可覆盖）——发送已取消；请先释放存储空间并到「设置 → 草稿存储」重试，恢复后再发送' };
+  }
   const entry: OutboundLedgerEntry = { ...env, stage: 'sending' };
   setState((s) => ({ ...s, outboundLedger: { ...s.outboundLedger, [draftKey]: [...(s.outboundLedger[draftKey] ?? []), entry] } }));
   persistSnapshot();
