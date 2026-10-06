@@ -946,9 +946,35 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'member.list': {
         const params = z.strictObject({ projectId: z.string().min(1), roomId: z.string().min(1).optional() }).parse(env.params);
         const rows = params.roomId != null
-          ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? ORDER BY pm.id`).all(params.roomId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>)
-          : (deps.db.prepare('SELECT id, display_name, principal_type, enabled FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number }>);
-        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1 })) } });
+          ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled, pm.description FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? ORDER BY pm.id`).all(params.roomId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null }>)
+          : (deps.db.prepare('SELECT id, display_name, principal_type, enabled, description FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null }>);
+        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1, description: r.description ?? undefined })) } });
+      }
+      case 'member.create': {
+        // R67 P4（review-r66 §4：已批准原型有成员添加/实例配置入口——无用户延期依据，补正式合同）：
+        // 成员=项目级实例（同名不合并，displayName 可重复——前端按 ordinal 区分由 UI 层处理）。
+        // 分配边界沿用原型「添加后会怎样」：自动加入本项目全部**未归档**房间的名单；**不**自动
+        // 成为协调者（房间级字段）；**不**加入正在运行研讨（只影响之后派发）。runtime 绑定不在
+        // 本命令（沿既有 member.setRuntime——配置成功≠已认证）；不新增真实认证调用。
+        const params = z.strictObject({
+          projectId: z.string().min(1),
+          displayName: z.string().min(1).max(60),
+          description: z.string().max(200).optional(),
+        }).parse(env.params);
+        const proj = deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(params.projectId) as { id: string } | undefined;
+        if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        const result = run(() => {
+          const memberId = `m_${randomUUID()}`;
+          deps.db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled, description)
+                           VALUES (?, ?, ?, 'agent', 1, ?)`)
+            .run(memberId, params.projectId, params.displayName, params.description ?? null);
+          const roomsJoined = (deps.db.prepare(`INSERT INTO room_members (room_id, member_id)
+                                                SELECT r.id, ? FROM rooms r WHERE r.project_id = ? AND r.archived_at IS NULL
+                                                  AND NOT EXISTS (SELECT 1 FROM room_members rm WHERE rm.room_id = r.id AND rm.member_id = ?)`)
+            .run(memberId, params.projectId, memberId).changes);
+          return { memberId, roomsJoined, coordinator: false, note: '已加入全部未归档房间；不自动成为协调者；不影响在途研讨（只影响之后派发）' };
+        });
+        return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'member.setEnabled': {
         // 协作参与设置（第十六轮六）：停用成员=不再参与之后派发（enabledAgents 过滤已在生产链路）；
@@ -2390,7 +2416,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 的消息/线程/任务与摘要一律不返回。确定性排序（created_at/seq+id）+分页。
         const params = z.strictObject({
           text: z.string().min(1).max(200),
-          scope: z.enum(['project', 'all']).default('project'),
+          scope: z.enum(['project', 'visible', 'all']).default('project'),
           projectId: z.string().min(1).optional(),
           conversationId: z.string().min(1).optional(),
           authorDisplayName: z.string().min(1).max(100).optional(),
@@ -2401,6 +2427,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           pageSize: z.number().int().min(1).max(50).default(20),
         }).parse(env.params);
         if (params.scope === 'project' && params.projectId == null) throw new DaemonCommandError('VALIDATION_INVALID', 'scope=project 需要 projectId');
+        // R67 P4：scope=visible（侧栏可见集）——与 board.view 同口径：navigation_preferences
+        //（当前 viewer+client）的 visible 集；无偏好行=全部可访问项目（缺省不隐藏）；ACL
+        // 语义不变（他人 DM 仍一律不返回；不可访问项目即便出现在偏好里也不返回）。
+        let visibleProjectFilter: string[] | null = null;
+        if (params.scope === 'visible') {
+          const prefs = visibleProjectIdsOf(deps.db, deps.localUserId) as string[];
+          const visibleIds = prefs;
+          if (visibleIds != null && visibleIds.length >= 0) {
+            const accessible = new Set((deps.db.prepare('SELECT id FROM projects WHERE status != ?').all('removed') as Array<{ id: string }>).map((r: { id: string }) => r.id));
+            visibleProjectFilter = visibleIds.filter((id) => accessible.has(id));
+          }
+        }
         // 日期按**用户本地时区**解释（第二十六轮三：界面日期选择器即本地日——无 Z 后缀解析为
         // 本地午夜；toDay 含当日。UTC 日边界不冒充用户「当日」——北京时间凌晨边界用例锁定）。
         const localDayMs = (day: string, endExclusive = false): number => {
@@ -2423,6 +2461,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const bind = (m: boolean): unknown[] => {
           const out: unknown[] = m ? [deps.localUserId] : [];
           if (params.scope === 'project') out.push(params.projectId!);
+          if (visibleProjectFilter != null) out.push(...visibleProjectFilter);
           if (params.conversationId != null) out.push(params.conversationId);
           if (authorIds != null) out.push(...authorIds);
           if (fromMs != null) out.push(fromMs);
@@ -2442,7 +2481,17 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 过滤一致性（第二十六轮三）：作者/会话/日期过滤对**全部类型统一生效**（线程=锚消息
         // 作者/会话/创建时刻；任务=根消息作者/会话/创建时刻——任务标题命中但锚消息不符筛选
         // 时不混入 kind=all）。各类型 JOIN 根消息 m 统一承载过滤列。
-        const scopeOnJoin = params.scope === 'project' ? ' AND m.project_id = ?' : '';
+        const scopeOnJoin = params.scope === 'project'
+          ? ' AND m.project_id = ?'
+          : visibleProjectFilter != null
+            ? ` AND m.project_id IN (${visibleProjectFilter.map(() => '?').join(',') || "''"})`
+            : '';
+        // 任务分支按任务自身 project_id 过滤（同一可见集口径）。
+        const scopeOnTask = params.scope === 'project'
+          ? ' AND t.project_id = ?'
+          : visibleProjectFilter != null
+            ? ` AND t.project_id IN (${visibleProjectFilter.map(() => '?').join(',') || "''"})`
+            : '';
         if (params.kind === 'all' || params.kind === 'message') {
           messages = (deps.db.prepare(
             `SELECT m.id, m.project_id, p.display_name AS project_name, m.conversation_id, m.thread_id, m.conversation_seq, m.created_at, m.author_type, m.author_id, json_extract(m.body_json, '$.text') AS text
@@ -2472,9 +2521,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              FROM tasks t
              LEFT JOIN messages m ON m.id = t.root_message_id
              JOIN conversations c ON c.id = t.conversation_id JOIN projects p ON p.id = t.project_id
-             WHERE t.title LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${params.scope === 'project' ? ' AND t.project_id = ?' : ''}${params.conversationId != null ? ' AND t.conversation_id = ?' : ''}${authorFilter}${dateFilter}
+             WHERE t.title LIKE ? COLLATE NOCASE ESCAPE '\\'${audienceFilter}${scopeOnTask}${params.conversationId != null ? ' AND t.conversation_id = ?' : ''}${authorFilter}${dateFilter}
              ORDER BY t.rowid DESC LIMIT ? OFFSET ?`,
-          ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : []), ...(params.conversationId != null ? [params.conversationId] : []), ...(authorIds ?? []), ...(fromMs != null ? [fromMs] : []), ...(toMs != null ? [toMs] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string; created_at: number | null; author_id: string | null }>)
+          ).all(pattern, deps.localUserId, ...(params.scope === 'project' ? [params.projectId!] : (visibleProjectFilter ?? [])), ...(params.conversationId != null ? [params.conversationId] : []), ...(authorIds ?? []), ...(fromMs != null ? [fromMs] : []), ...(toMs != null ? [toMs] : []), pageSize, offset) as Array<{ id: string; project_id: string; project_name: string; conversation_id: string; title: string; status: string; created_at: number | null; author_id: string | null }>)
             .map((r) => ({ kind: 'task', taskId: r.id, projectId: r.project_id, projectName: r.project_name, conversationId: r.conversation_id, title: r.title, status: r.status, createdAt: r.created_at, authorId: r.author_id, locate: `#task=${r.id}` }));
         }
         return withCommandId({ ok: true, data: { page: params.page, pageSize, scope: params.scope, messages, threads, tasks, attachmentNote: '附件按所在消息的文件名检索；正文提取未实施（不冒充支持）；日期按本机时区解释' } });
@@ -3363,6 +3412,37 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const cut = truncateUtf8Bytes(content, ATT_EXCERPT_BYTES);
         return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, content: cut.text, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
       }
+      case 'project.file.readFull': {
+        // R67 P1-A/P2-B：工作区**完整文件读取**（屏幕阅读通道）——与 project.file.read
+        //（64KB 提取窗，沿用）分列：本命令返回**全文**（≤256KB 有界）+ 实际字节 sha256 +
+        // includeBytes 时原字节（renderer 保存原件用**读取时快照**——源文件后来变化不静默
+        // 换字节）。路径安全链（resolve 边界+realpath 实身份+文本白名单+fatal UTF-8+大小
+        // 上限）与 project.file.read 完全一致；不进模型输入（注入窗合同不变）。
+        const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500), includeBytes: z.boolean().optional() }).parse(env.params);
+        const safe = resolveProjectTextFile(deps, params.projectId, params.path);
+        let content: string;
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(safe.raw); }
+        catch { throw new DaemonCommandError('VALIDATION_INVALID', '项目文件不是有效 UTF-8 文本——完整阅读拒绝（二进制走 Git/系统工具）'); }
+        return withCommandId({ ok: true, data: {
+          projectId: safe.projectId, path: params.path, baseName: safe.baseName, bytes: safe.raw.length, sha256: safe.sha256,
+          content, truncated: false, mtimeMs: safe.mtimeMs,
+          ...(params.includeBytes === true ? { bytesBase64: safe.raw.toString('base64') } : {}),
+          note: '完整文件只读快照（屏幕阅读全文；模型注入仍走 64KB 提取窗——分列）',
+        } });
+      }
+      case 'project.file.originalFile': {
+        // R67 P1-A：工作区**原文件字节**（保存原件通道）——同一路径安全链+文本白名单+
+        // ≤256KB；返回原字节（不重编码：BOM/行尾保持）与实际 sha256。落盘由主进程「另存为」
+        // 对话框完成（renderer 不能指定路径）；保存=读取时快照字节，源文件变化由界面另行
+        // 提示重新加载（不静默另存新字节）。
+        const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500) }).parse(env.params);
+        const safe = resolveProjectTextFile(deps, params.projectId, params.path);
+        return withCommandId({ ok: true, data: {
+          projectId: safe.projectId, path: params.path, filename: safe.baseName, bytes: safe.raw.length, sha256: safe.sha256,
+          bytesBase64: safe.raw.toString('base64'), mtimeMs: safe.mtimeMs,
+          note: '工作区原文件字节（读取快照；非托管副本）',
+        } });
+      }
       case 'export.create': {
         // 导出（第三十轮五；第三十一轮一完整性收口）：
         // - 归属先于回执：目标会话+线程真实归属（threadId 必须属于声明的 conversation/project——
@@ -3678,7 +3758,45 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'app.identity': {
         // r61（review-r60 §6）：稳定身份（只读）——renderer 草稿/未知信封持久化的命名空间
         // 用（数据根+本地用户），不使用显示名或每次启动变化的实例标识。无写入、无敏感扩展。
-        return withCommandId({ ok: true, data: { localUserId: deps.localUserId, appDataDir: deps.appDataDir ?? '' } });
+        // R67 P1-B：新增 **dataRootId**（稳定逻辑数据根身份）：{appData}/root-identity.json
+        // 首次读取时懒创建（仅当缺失才写——一次 UUID，随目录复制原样带走）。绝对路径键由此
+        // 升级为逻辑身份键：换目录/换盘/复制整个 server-data 后，界面能按同一 dataRootId
+        // 找到旧草稿与未知账本（继承见 app.rootIdentityOf + renderer v2 命名空间迁移）。
+        // appDataDir 不可用（内存库测试/浏览器宿主）→ dataRootId=null（renderer 回退旧形态）。
+        let dataRootId: string | null = null;
+        const appData = deps.appDataDir;
+        if (appData != null && appData.length > 0) {
+          const marker = join(appData, 'root-identity.json');
+          try {
+            if (existsSync(marker)) {
+              const parsed = JSON.parse(readFileSync(marker, 'utf8')) as { id?: unknown };
+              if (typeof parsed.id === 'string' && parsed.id.length >= 8) dataRootId = parsed.id;
+            }
+            if (dataRootId == null) {
+              dataRootId = `dri_${randomUUID()}`;
+              mkdirSync(appData, { recursive: true });
+              writeFileSync(marker, JSON.stringify({ id: dataRootId, createdAt: Date.now() }, null, 2), 'utf8');
+            }
+          } catch { dataRootId = null; /* 拒写/损坏：如实回 null，不虚构稳定身份 */ }
+        }
+        return withCommandId({ ok: true, data: { localUserId: deps.localUserId, appDataDir: deps.appDataDir ?? '', dataRootId } });
+      }
+      case 'app.rootIdentityOf': {
+        // R67 P1-B（继承身份校验，只读）：renderer 持久化命名空间迁移时，把候选旧目录清单
+        // 交来核对——daemon 只读各目录 root-identity.json 的 id（无写入；目录缺失/无标记/
+        // 损坏= null）。renderer 仅当旧键所属目录的逻辑 id == **当前**数据根 id 时才继承其
+        // 快照：无关数据根/别的用户/任意目录不因发现旧键而混入（不盲扫合并）。
+        const params = z.strictObject({ appDataDirs: z.array(z.string().min(1).max(400)).min(1).max(16) }).parse(env.params);
+        const ids: Record<string, string | null> = {};
+        for (const dir of params.appDataDirs) {
+          try {
+            const marker = join(resolve(dir), 'root-identity.json');
+            if (!existsSync(marker)) { ids[dir] = null; continue; }
+            const parsed = JSON.parse(readFileSync(marker, 'utf8')) as { id?: unknown };
+            ids[dir] = typeof parsed.id === 'string' && parsed.id.length >= 8 ? parsed.id : null;
+          } catch { ids[dir] = null; }
+        }
+        return withCommandId({ ok: true, data: { ids } });
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
@@ -4194,4 +4312,53 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     // 不吞异常假装成功（§16.5）。
     return withCommandId({ ok: false, error: { code: 'STORAGE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error), retryable: false } });
   }
+}
+
+/**
+ * R67 P1-A：项目文本文件**共享路径安全读取**（project.file.read / readFull / originalFile
+ * 同链）：resolve 边界 + realpath 实身份（链接越界拒）+ 文本白名单扩展 + fatal UTF-8 决定由
+ * 调用方做（originalFile 保留原字节不解码）+ 大小上限（ATT_MAX_BYTES）。返回原字节与
+ * 实际 sha256（读取快照身份）。
+ */
+function resolveProjectTextFile(
+  deps: { db: ZhongshuoDatabase; appDataDir?: string },
+  projectId: string,
+  path: string,
+): { projectId: string; baseName: string; raw: Buffer; sha256: string; mtimeMs: number } {
+  const proj = deps.db.prepare('SELECT id, canonical_path FROM projects WHERE id = ?').get(projectId) as { id: string; canonical_path: string } | undefined;
+  if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${projectId}`);
+  const root = resolve(proj.canonical_path);
+  const target = resolve(root, path.replace(/^[/\\]+/, ''));
+  const rootSep = root.includes('/') ? '/' : '\\';
+  if (target !== root && !target.startsWith(root + rootSep)) {
+    throw new DaemonCommandError('FORBIDDEN', `项目文件路径越界：${path}——拒绝读取`);
+  }
+  let realTarget: string;
+  let realRoot: string;
+  try {
+    realTarget = realpathSync(target);
+    realRoot = realpathSync(root);
+  } catch {
+    throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件不存在或不可读：${path}`);
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + rootSep)) {
+    throw new DaemonCommandError('FORBIDDEN', '项目文件路径含链接越界（realpath 实身份拒绝）');
+  }
+  const dot = realTarget.lastIndexOf('.');
+  const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
+  if (!TEXT_PREVIEW_EXTENSIONS.has(ext)) {
+    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本白名单——二进制/未知格式不执行不转码`);
+  }
+  let raw: Buffer;
+  let mtimeMs: number;
+  try {
+    const st = statSync(realTarget);
+    if (st.size > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读上限 ${ATT_MAX_BYTES}B（完整阅读/原件保存拒绝——不静默截断）`);
+    raw = readFileSync(realTarget);
+    mtimeMs = st.mtimeMs;
+  } catch (error) {
+    if (error instanceof DaemonCommandError) throw error;
+    throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件读取失败：${path}`);
+  }
+  return { projectId: proj.id, baseName: basename(realTarget), raw, sha256: createHash('sha256').update(raw).digest('hex'), mtimeMs };
 }
