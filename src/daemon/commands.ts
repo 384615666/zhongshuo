@@ -2994,6 +2994,58 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         });
         return withCommandId({ ok: true, data: { items, note: 'Activity 流（只读——domain_events 聚合；DM 事件仅本人参与可见）' } });
       }
+      case 'project.files.list': {
+        // R64 原型还原（最小安全只读投影）：目录树懒装载——列出项目内某目录的直接子项
+        //（名称/类型/大小/mtime）。同 project.file.read 的边界纪律：resolve 越界拒、realpath
+        // 链接越界拒；不读文件内容、不进模型输入、不建 artifact。每目录最多 500 项（truncated
+        // 如实标注）——排序目录在前、名称序，供树形 UI 直接呈现。
+        const params = z.strictObject({ projectId: z.string().min(1), path: z.string().max(500).optional() }).parse(env.params);
+        const proj = deps.db.prepare('SELECT id, canonical_path FROM projects WHERE id = ?').get(params.projectId) as { id: string; canonical_path: string } | undefined;
+        if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        const root = resolve(proj.canonical_path);
+        const rel = (params.path ?? '').replace(/^[/\\]+/, '');
+        const target = resolve(root, rel);
+        const rootSep = root.includes('/') ? '/' : '\\';
+        if (target !== root && !target.startsWith(root + rootSep)) {
+          throw new DaemonCommandError('FORBIDDEN', `目录路径越界：${params.path ?? ''}——拒绝读取`);
+        }
+        let realTarget: string;
+        let realRoot: string;
+        try {
+          realTarget = realpathSync(target);
+          realRoot = realpathSync(root);
+        } catch {
+          throw new DaemonCommandError('RESOURCE_NOT_FOUND', `目录不存在或不可读：${params.path ?? '.'}`);
+        }
+        if (realTarget !== realRoot && !realTarget.startsWith(realRoot + rootSep)) {
+          throw new DaemonCommandError('FORBIDDEN', '目录路径含链接越界（realpath 实身份拒绝）');
+        }
+        let dirents: import('node:fs').Dirent[];
+        try {
+          dirents = readdirSync(realTarget, { withFileTypes: true });
+        } catch {
+          throw new DaemonCommandError('RESOURCE_NOT_FOUND', `目录列举失败：${params.path ?? '.'}`);
+        }
+        const MAX_ENTRIES = 500;
+        const sorted = dirents
+          .filter((d) => d.name !== '.' && d.name !== '..')
+          .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name, 'zh-CN') : a.isDirectory() ? -1 : 1));
+        const truncated = sorted.length > MAX_ENTRIES;
+        const entries = sorted.slice(0, MAX_ENTRIES).map((d) => {
+          let sizeBytes: number | null = null;
+          let modifiedAt: number | null = null;
+          if (!d.isDirectory()) {
+            try {
+              const st = statSync(resolve(realTarget, d.name));
+              sizeBytes = st.size;
+              modifiedAt = st.mtimeMs;
+            } catch { /* 单项 stat 失败=未知（null），不影响整目录列举 */
+            }
+          }
+          return { name: d.name, kind: d.isDirectory() ? 'dir' as const : 'file' as const, sizeBytes, modifiedAt };
+        });
+        return withCommandId({ ok: true, data: { path: rel, entries, truncated } });
+      }
       case 'project.file.read': {
         // 共享预览（第三十轮四）：项目文件**只读快照**（来源=用户项目目录——非托管副本）：
         // 路径限项目根内（resolve 边界+realpath 实身份——越界/链接拒）、≤256KB、文本白名单
@@ -3513,7 +3565,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const threads = deps.db.prepare(
           `SELECT t.id, t.anchor_message_id, t.root_task_id, t.last_message_seq, t.revision,
                   m.body_json, m.created_at,
-                  tk.status AS task_status, tk.room_task_number
+                  tk.status AS task_status, tk.room_task_number, tk.title AS task_title
            FROM conversation_threads t
            JOIN messages m ON m.id = t.anchor_message_id
            LEFT JOIN tasks tk ON tk.id = t.root_task_id
@@ -3521,7 +3573,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
            ORDER BY m.created_at DESC LIMIT ?`,
         ).all(params.roomId, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
-          body_json: string; created_at: number; task_status: string | null; room_task_number: number | null;
+          body_json: string; created_at: number; task_status: string | null; room_task_number: number | null; task_title: string | null;
         }>;
         const items = [];
         for (const t of threads) {
@@ -3544,6 +3596,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskId: t.root_task_id,
             taskStatus: t.task_status,
             roomTaskNumber: t.room_task_number,
+            taskTitle: t.task_title,
           });
         }
         return withCommandId({ ok: true, data: { items } });

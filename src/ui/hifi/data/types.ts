@@ -669,6 +669,13 @@ export interface PreviewResource {
   mutable?: boolean;
   createdAt: number;
   authorId?: string;
+  /**
+   * R64 正式侧装载通道（可选——原型无此字段）：附件/成果资源=经 attachment.preview* 按需
+   * 装载（真实 attachmentId+来源会话）；工作区文件=经 project.file.read 实际读取。
+   * content 里的占位 unsupported 只表示"尚未装载"，预览面板装载后回填真实内容。
+   */
+  formalAttachment?: { attachmentId: string; kind: string; conversationId?: string };
+  formalWorktree?: { projectId: string; path: string };
 }
 
 export type ResourceOrigin =

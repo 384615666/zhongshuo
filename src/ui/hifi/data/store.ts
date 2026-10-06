@@ -738,6 +738,23 @@ function recoverLedgerToPending(): void {
   }
 }
 
+/* ---------- 导航偏好持久化（R64：原型 actions-nav 同名 API——正式侧复用） ---------- */
+import { saveNavPrefs } from './navPrefs';
+
+/** 把当前导航偏好写回 localStorage（导航类动作统一走这里；与原型 store.persistNav 同形）。 */
+export function persistNav(s: HifiState): void {
+  try {
+    saveNavPrefs({
+      version: 1,
+      activeProjectId: s.activeProjectId,
+      visibleProjectIds: s.visibleProjectIds,
+      expandedProjectIds: s.expandedProjectIds,
+      pinnedProjectIds: s.pinnedProjectIds,
+      fileGitTabs: s.fileGitTabs,
+    });
+  } catch { /* localStorage 不可用：偏好仅内存态 */ }
+}
+
 /* ---------- 提示与主题 ---------- */
 export type ToastTone = 'info' | 'warn' | 'error' | 'success';
 export function toast(text: string, tone: ToastTone = 'info') {
