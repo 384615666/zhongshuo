@@ -24,6 +24,7 @@ import { Tag } from './components/ui';
 import { useStore, loadThread, loadThreadOlder, refreshThreadTask, retryUnknownSend, setThreadReadGate, toast, setState } from './shell';
 import { buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview, executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed, toggleSavedMessage, type ReviewSnapshot } from './loader';
 import { openPreview, recordWrite, stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from './data/store';
+import { registerDeliveryResource, openPreviewTab } from './data/actions-preview';
 import { command, openExportDir } from './bridge';
 import { navigate } from './lib/router';
 
@@ -258,6 +259,19 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const openPreviewAtt = (att: { artifactId: string; filename: string; kind: string }) => {
     // 共享预览（第五十二轮 §6.1）：全类型经 PreviewPane（正式 preview* 命令+随包渲染器）。
     openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId, origin: '任务线程' });
+  };
+
+  /** R68 §6：打开交付文档（共享预览第三来源）——登记 delivery 资源并开标签；版本=交付
+   *  revision、hash=manifest（不可变快照；正文经 delivery.document 按需装载并核对 hash）。 */
+  const openDeliveryDoc = (d: { deliveryId: string; revision: number; manifestHash: string; taskId: string; title: string; audience: 'dm' | 'room' }) => {
+    const target = { kind: 'thread' as const, projectId: entity.projectId, roomId: entity.roomId, threadId, tab: 'artifacts' as const };
+    const rid = registerDeliveryResource({
+      deliveryId: d.deliveryId, revision: d.revision, manifestHash: d.manifestHash,
+      conversationId, threadId, taskTitle: d.title, audience: d.audience, roomId: entity.roomId,
+      openedFrom: target,
+    });
+    openPreviewTab(rid, d.revision, { target });
+    recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（manifest ${d.manifestHash.slice(0, 8)}…）`);
   };
 
   const doStop = async () => {
@@ -624,11 +638,16 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             ) : (
               <div style={{ marginTop: 6 }}>
                 {artifacts.deliveries.map((d) => (
-                  <div key={d.deliveryId} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }}>
+                  <div key={d.deliveryId} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }} data-zs-delivery-row={d.deliveryId}>
                     <Icon name="package" size={13} />
                     <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                     <Tag tone="info">v{d.revision} · manifest {d.manifestHash.slice(0, 8)}…</Tag>
                     <span className="faint small">{d.reviewedAt != null ? `已复核 ${new Date(d.reviewedAt).toLocaleString()}` : '待验收'}{d.audience === 'dm' ? ' · 私信交付' : ''}</span>
+                    <button
+                      className="btn ghost sm"
+                      title="在共享预览打开交付文档（delivery.document——正文 hash 与 manifest 核对；阅读/源码切换、另存、引用均可用）"
+                      onClick={() => openDeliveryDoc(d)}
+                    >打开文档</button>
                     <button
                       className="btn ghost sm"
                       title="定位到线程「详情」的交付与验收（#delivery= 深链——验收绑定具体版本）"

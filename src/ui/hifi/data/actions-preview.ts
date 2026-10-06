@@ -179,6 +179,49 @@ export function registerWorktreeResource(projectId: string, relativePath: string
   return resourceId;
 }
 
+/**
+ * R68 §6：登记一个**正式 AI 交付文档**资源（共享预览第三来源）。版本=交付 revision、
+ * hash=manifestHash（不可变快照）；内容经 delivery.document 按需装载（自然链持久化的
+ * turn 最终输出，hash 与 manifest 核对）。audience 按交付所属会话（房间/私信）。
+ */
+export function registerDeliveryResource(input: {
+  deliveryId: string; revision: number; manifestHash: string; conversationId: string;
+  threadId: string | null; taskTitle: string; audience: 'room' | 'dm'; roomId?: string;
+  openedFrom: ContextTarget;
+}): string {
+  const resourceId = `dlv_${input.deliveryId}`;
+  setState((prev) => {
+    if (prev.resources.some((r) => r.id === resourceId)) return prev;
+    const res: PreviewResource = {
+      id: resourceId,
+      projectId: input.openedFrom.projectId,
+      kind: 'attachment',
+      title: `${input.taskTitle || '交付文档'} v${input.revision}.md`,
+      mimeType: 'text/markdown',
+      origin: input.audience === 'dm'
+        ? { kind: 'dm', conversationId: input.conversationId }
+        : { kind: 'task', taskId: '', threadId: input.threadId ?? '', roomId: input.roomId ?? '' },
+      audience: input.audience === 'dm'
+        ? { kind: 'dm', conversationId: input.conversationId, memberIds: [] }
+        : { kind: 'room', roomId: input.roomId ?? '' },
+      revisions: [{
+        revision: input.revision,
+        hash: input.manifestHash,
+        sizeBytes: 0,
+        createdAt: Date.now(),
+        content: { kind: 'unsupported', reason: 'not_connected', note: '交付文档由共享预览按需装载' },
+      }],
+      createdAt: Date.now(),
+      formalDelivery: {
+        deliveryId: input.deliveryId, revision: input.revision, manifestHash: input.manifestHash,
+        conversationId: input.conversationId, threadId: input.threadId, taskTitle: input.taskTitle, audience: input.audience,
+      },
+    };
+    return { ...prev, resources: [...prev.resources, res] };
+  });
+  return resourceId;
+}
+
 /* ============================================================
    打开资源
    ============================================================ */
@@ -324,10 +367,22 @@ export function applyWorktreeRead(
   }));
 }
 
+/** R68 §6：交付文档装载回填——内容按 markdown（turn 最终输出的阅读风味）；hash 保持
+ *  manifest（交付身份），sizeBytes 用 delivery.document 的真实字节数。不可变快照（无重载链）。 */
+export function applyDeliveryRead(resourceId: string, data: { text: string; bytes: number; revision: number }): void {
+  setState((prev) => ({
+    ...prev,
+    resources: prev.resources.map((r) => (r.id !== resourceId ? r : {
+      ...r,
+      revisions: r.revisions.map((rev) => (rev.revision === data.revision
+        ? { ...rev, sizeBytes: data.bytes, content: { kind: 'markdown' as const, text: data.text } }
+        : rev)),
+    })),
+  }));
+}
+
 /** 磁盘已更新：新增读取版本但**不自动切换**（用户点"重新加载"才切）。 */
-export function markResourceUpdated(resourceId: string) {
-  const s = getState();
-  const res = resourceOf(s, resourceId);
+export function markResourceUpdated(resourceId: string) {  const s = getState();  const res = resourceOf(s, resourceId);
   if (!res) return;
   const latest = latestRevisionOf(res);
   if (!latest) return;
@@ -394,6 +449,21 @@ export function quoteResource(
   if (res.formalWorktree != null) {
     toast('工作区文件未上传为会话附件——不能直接引用进草稿（打开只是只读预览；需要引用请先把文件拖入输入区上传）', 'warn');
     return false;
+  }
+  if (res.formalDelivery != null) {
+    // R68 §6：交付文档引用=**结构化文字引用**（版本+manifest 绑定进正文）——交付不是会话
+    // 托管附件，不存在可携带的 attachmentId；不伪造附件引用合同。摘录来自已装载正文。
+    const fd = res.formalDelivery;
+    const revText = rev.content.kind === 'text' || rev.content.kind === 'markdown' || rev.content.kind === 'code' || rev.content.kind === 'csv'
+      ? rev.content.text : '';
+    const body = revText.replace(/\s+/g, ' ').trim().slice(0, 160);
+    const line = `> 引用交付「${fd.taskTitle || res.title}」v${fd.revision}（manifest ${fd.manifestHash.slice(0, 12)}…）${body.length > 0 ? `：${body}` : ''}`;
+    const r = queueDraftInsert(targetDraftKey, line);
+    if (r.ok) {
+      recordWrite('preview.quote', `交付 ${fd.deliveryId} v${fd.revision} → 目标草稿 ${targetDraftKey}（文字引用：版本+manifest 绑定；交付非会话附件，不伪造附件引用）`);
+      toast(r.queued === false ? '相同交付引用已在待插入队列（不重复）' : `已引用交付 v${fd.revision}（manifest ${fd.manifestHash.slice(0, 8)}…）到「${targetLabel}」——文字引用带版本绑定`, 'success');
+    }
+    return r.ok;
   }
   const attachmentId = res.formalAttachment?.attachmentId ?? res.id;
   const conversationId = conversationOfDraftKey(targetDraftKey) ?? res.formalAttachment?.conversationId ?? '';

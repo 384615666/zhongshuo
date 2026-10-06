@@ -40,6 +40,16 @@ const KIND_FILTERS: Array<{ value: 'all' | 'message' | 'thread' | 'task'; label:
 ];
 const SAVED_KIND_LABEL: Record<string, string> = { message: '消息', task: '任务', delivery: '交付', link: '链接' };
 
+/** R68 §6：任务状态中文口径（与看板 STATUS_GROUPS 同义）——检索结果不把原始 DONE 当
+ * 最终用户呈现；未知状态原样显示（不猜）。 */
+const TASK_STATUS_ZH: Record<string, string> = {
+  OPEN: '待开始', ACTIVE: '执行中', WAITING_USER: '等我处理', BLOCKED: '阻塞',
+  REVIEW: '待审阅', DONE: '已完成', FAILED: '失败', CANCELLED: '已停止',
+};
+function taskStatusZh(status: string): string {
+  return TASK_STATUS_ZH[status] ?? status;
+}
+
 export function LibraryPage() {
   const projectId = useStore((s) => s.activeProjectId);
   const allRooms = useStore((s) => s.rooms);
@@ -230,7 +240,7 @@ export function LibraryPage() {
                       <Tag tone={r.kind === 'task' ? 'info' : 'neutral'} icon={r.kind === 'task' ? 'list' : r.kind === 'thread' ? 'message-circle' : 'message-square'}>
                         {r.kind === 'message' ? '消息' : r.kind === 'thread' ? '线程' : '任务'}
                       </Tag>
-                      {r.kind === 'task' && r.status != null ? <span className="faint small">{r.status}</span> : null}
+                      {r.kind === 'task' && r.status != null ? <span className="faint small">{taskStatusZh(r.status)}</span> : null}
                       <div className="spacer" />
                       <span className="faint small">{r.createdAt != null ? new Date(r.createdAt).toLocaleString() : ''}</span>
                       <span className="faint small" style={{ color: 'var(--accent,#2563eb)' }}>回原处 ↗</span>

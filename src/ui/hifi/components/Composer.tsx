@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
-import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
+import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, memberShortId, Tag } from './ui';
 import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
@@ -912,9 +912,9 @@ export function Composer({
               const m = allMembers.find((x) => x.id === id);
               if (!m) return null;
               return (
-                <span key={id} className="chip">
+                <span key={id} className="chip" title={`成员实例 ${m.displayName}（完整 ID ${m.id}）`}>
                   <Icon name="at-sign" size={11} />
-                  {memberLabel(m)}
+                  {memberLabel(m)}<span className="mono-sm faint">#{memberShortId(m.id)}</span>
                   <button onClick={() => setMentions((p) => p.filter((x) => x !== id))}>
                     <Icon name="x" size={11} />
                   </button>
@@ -1088,9 +1088,9 @@ export function Composer({
             </button>
             <div className="menu-sep" />
             {members.map((m) => (
-              <button key={m.id} className="menu-item" onClick={() => insertMention(m.id)} disabled={!m.enabled}>
+              <button key={m.id} className="menu-item" onClick={() => insertMention(m.id)} disabled={!m.enabled} data-zs-mention-option={m.id} title={`成员实例 ${m.displayName}（完整 ID ${m.id}）`}>
                 <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={16} />
-                <span style={{ flex: 1 }}>{memberLabel(m)}</span>
+                <span style={{ flex: 1 }}>{memberLabel(m)}<span className="mono-sm faint"> #{memberShortId(m.id)}</span></span>
                 <span className="hint">{runtimeLabelOf(m)}</span>
               </button>
             ))}

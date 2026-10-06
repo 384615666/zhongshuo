@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
 import { getProbe as getProbeRecord, getTurnProcessRegistration, probeTurnExit, type ManagedJobObservation, type ProbeOutcome } from './processRegistry.ts';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
@@ -168,6 +168,7 @@ function managedJobObservation(jobId: string | null): ManagedJobObservation | nu
 // REC-LIFE-1（第十四轮二）：受管证据按稳定身份（jobId）取用——PID 可复用，仅辅助核对。
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
+import { stripSingleJsonFence } from './dispatchWorker.ts';
 
 const localScope = (userId: string): string => `user:${userId}`;
 
@@ -961,6 +962,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           displayName: z.string().min(1).max(60),
           description: z.string().max(200).optional(),
         }).parse(env.params);
+        if (params.displayName.trim().length === 0) {
+          throw new DaemonCommandError('VALIDATION_INVALID', '成员名称不能为空白（全空格）');
+        }
+        // R68 §5A：项目状态守卫——归档=只读（保留历史）、移除=仅解除关联；新增实体不得绕过
+        // 状态边界（独立反例：archived 项目 member.create 仍成功，成员 1→2）。
+        const assertProjectOpen = (): void => {
+          const row = deps.db.prepare('SELECT status FROM projects WHERE id = ?').get(params.projectId) as { status: string } | undefined;
+          if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+          if (row.status === 'archived') throw new DaemonCommandError('VALIDATION_INVALID', `项目已归档（只读——历史保留）：不能新增成员；如需继续协作请先恢复项目（project.lifecycle unarchive）`);
+          if (row.status === 'removed') throw new DaemonCommandError('VALIDATION_INVALID', `项目已移除（仅解除关联）：不能新增成员；如需继续使用请先恢复项目（project.lifecycle restore）`);
+        };
+        assertProjectOpen();
         const proj = deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(params.projectId) as { id: string } | undefined;
         if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
         const result = run(() => {
@@ -973,7 +986,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                                                   AND NOT EXISTS (SELECT 1 FROM room_members rm WHERE rm.room_id = r.id AND rm.member_id = ?)`)
             .run(memberId, params.projectId, memberId).changes);
           return { memberId, roomsJoined, coordinator: false, note: '已加入全部未归档房间；不自动成为协调者；不影响在途研讨（只影响之后派发）' };
-        });
+        }, assertProjectOpen); // 重放守卫：旧回执重放同样受**当前**项目状态约束（归档/移除后拒绝）
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'member.setEnabled': {
@@ -2614,8 +2627,75 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'attachment.listByConversation': {
         const params = z.strictObject({ conversationId: z.string().min(1) }).parse(env.params);
         assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
-        const rows = deps.db.prepare(`SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.created_at FROM artifacts a WHERE a.conversation_id = ? AND a.kind IN ('text_file','code_file','image_file','pdf_file','docx_file','sheet_file','slides_file') ORDER BY a.rowid DESC`).all(params.conversationId) as Array<{ id: string; source_name: string; hash: string; revision: number; kind: string; created_at: number }>;
+        const rows = deps.db.prepare(`SELECT a.id, a.source_name, a.hash, a.revision, a.kind, a.created_at FROM artifacts a WHERE a.conversation_id = ? AND a.kind IN ('text_file','code_file','image_file','pdf_file','docx_file','sheet_file','slides_file') ORDER BY a.rowid DESC`).all(params.conversationId) as Array<{ id: string; source_name: string | null; hash: string; revision: number; kind: string; created_at: number }>;
         return withCommandId({ ok: true, data: { items: rows.map((r) => ({ attachmentId: r.id, filename: r.source_name, kind: r.kind, hash: r.hash, revision: r.revision, createdAt: r.created_at })) } });
+      }
+      case 'delivery.document': {
+        // R68 §6：正式 AI 交付文档的只读通道（共享预览第三来源）。交付本体=turn 最终输出
+        //（artifact_refs 'turn:<id>:final'——manifest_hash 即其 sha256）；文本经自然链持久化
+        // 为线程回复消息（dispatchWorker insertThreadReply：msg_<turnId>_<messageId>、
+        // author=agent、status='final'）。本命令按交付引用定位该消息并**核对 hash**——
+        // hashMatch=false / 找不到消息时如实返回（text=null + reason），不伪造文档。
+        // audience 同 attachment.*（DM 双成员/房间项目可达）；版本绑定=交付 revision+manifestHash。
+        const params = z.strictObject({ deliveryId: z.string().min(1) }).parse(env.params);
+        const d = deps.db.prepare(
+          `SELECT d.id, d.revision, d.manifest_hash, d.artifact_refs_json, t.title, t.conversation_id, t.conversation_thread_id, c.kind AS conv_kind
+           FROM task_deliveries d JOIN tasks t ON t.id = d.task_id JOIN conversations c ON c.id = t.conversation_id WHERE d.id = ?`,
+        ).get(params.deliveryId) as
+          | { id: string; revision: number; manifest_hash: string; artifact_refs_json: string; title: string; conversation_id: string; conversation_thread_id: string | null; conv_kind: string }
+          | undefined;
+        if (d == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `交付不存在：${params.deliveryId}`);
+        assertConversationAudience(deps.db, deps.localUserId, d.conversation_id);
+        let turnRef: string | null = null;
+        try {
+          const refs = JSON.parse(d.artifact_refs_json) as unknown;
+          if (Array.isArray(refs)) {
+            const hit = refs.find((r) => typeof r === 'string' && r.startsWith('turn:') && r.endsWith(':final'));
+            if (typeof hit === 'string') turnRef = hit.slice('turn:'.length, -':final'.length);
+          }
+        } catch { /* refs 损坏：按无引用处理（如实说明） */ }
+        let text: string | null = null;
+        let hashMatch: boolean | null = null;
+        let note: string | null = null;
+        if (turnRef == null) {
+          note = '交付没有 turn:…:final 引用（非标准交付形态）——文档不可读';
+        } else {
+          const rows = deps.db.prepare(
+            `SELECT id, body_json FROM messages WHERE id GLOB ? AND author_type = 'agent' AND status = 'final' ORDER BY rowid`,
+          ).all(`msg_${turnRef}_*`) as Array<{ id: string; body_json: string }>;
+          let chosen: { id: string; text: string } | null = null;
+          let chosenMatch = false;
+          for (const row of rows) {
+            let text: string | null = null;
+            try {
+              const parsedText = ((JSON.parse(row.body_json ?? '{}') ?? {}) as { text?: unknown }).text;
+              text = typeof parsedText === 'string' ? parsedText : null;
+            } catch { text = null; }
+            if (text == null) continue;
+            // 优先取与 manifest hash 核对一致的候选（该 turn 可能先发进度消息再发最终输出）；
+            // 无一致者取最后一条（如实报 hashMatch=false——正文仅供阅读，验收身份仍是 manifest）。
+            const match = createHash('sha256').update(stripSingleJsonFence(text).text).digest('hex') === d.manifest_hash;
+            if (match) { chosen = { id: row.id, text }; chosenMatch = true; break; }
+            chosen = { id: row.id, text };
+          }
+          if (chosen == null) {
+            note = rows.length === 0
+              ? '该交付的最终输出消息未持久化（早期版本/被清理）——文档不可读，交付身份（版本/manifest）仍有效'
+              : '该交付的最终输出消息正文不可解析——文档不可读';
+          } else {
+            text = chosen.text;
+            hashMatch = chosenMatch;
+          }
+        }
+        return withCommandId({
+          ok: true,
+          data: {
+            deliveryId: d.id, revision: d.revision, manifestHash: d.manifest_hash, taskIdTitle: d.title,
+            conversationId: d.conversation_id, threadId: d.conversation_thread_id, audience: d.conv_kind === 'dm' ? 'dm' : 'room',
+            text, hashMatch, bytes: text != null ? Buffer.byteLength(text, 'utf8') : 0,
+            ...(note != null ? { note } : {}),
+          },
+        });
       }
       case 'attachment.comment.add': {
         // 附件基础评论（第二十七轮六：文本/代码/Markdown）：行号/选区（quote 原文引用）+
@@ -3756,47 +3836,79 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: realCallSummary(deps.db, params.batchId) });
       }
       case 'app.identity': {
-        // r61（review-r60 §6）：稳定身份（只读）——renderer 草稿/未知信封持久化的命名空间
-        // 用（数据根+本地用户），不使用显示名或每次启动变化的实例标识。无写入、无敏感扩展。
-        // R67 P1-B：新增 **dataRootId**（稳定逻辑数据根身份）：{appData}/root-identity.json
-        // 首次读取时懒创建（仅当缺失才写——一次 UUID，随目录复制原样带走）。绝对路径键由此
-        // 升级为逻辑身份键：换目录/换盘/复制整个 server-data 后，界面能按同一 dataRootId
-        // 找到旧草稿与未知账本（继承见 app.rootIdentityOf + renderer v2 命名空间迁移）。
+        // r61（review-r60 §6）：稳定身份——renderer 草稿/未知信封持久化的命名空间用。
+        // R67 P1-B：**dataRootId**（稳定逻辑数据根身份）={appData}/root-identity.json 首次懒建
+        // （随目录复制原样带走）。R68 §3B：标记**已存在但无效**（JSON 损坏/id 字段不合法）时
+        // **不覆写、不生成新随机 ID**——同一数据根静默换 ID 会让旧 v2 键永久失联。此时返回
+        // rootIdentityHealth='invalid-marker'（原件逐字保全；renderer 退回绝对路径键并给出显式
+        // 恢复指引），只有标记确实不存在才创建（temp+rename 原子落盘——崩溃中断不产生半个标记）。
         // appDataDir 不可用（内存库测试/浏览器宿主）→ dataRootId=null（renderer 回退旧形态）。
         let dataRootId: string | null = null;
+        let rootIdentityHealth: 'ok' | 'invalid-marker' | 'unavailable' = 'ok';
+        let rootIdentityProblem: string | null = null;
         const appData = deps.appDataDir;
         if (appData != null && appData.length > 0) {
           const marker = join(appData, 'root-identity.json');
           try {
             if (existsSync(marker)) {
-              const parsed = JSON.parse(readFileSync(marker, 'utf8')) as { id?: unknown };
-              if (typeof parsed.id === 'string' && parsed.id.length >= 8) dataRootId = parsed.id;
+              let parsed: unknown = null;
+              try {
+                parsed = JSON.parse(readFileSync(marker, 'utf8'));
+              } catch (e) {
+                rootIdentityProblem = `root-identity.json 不是合法 JSON（${e instanceof Error ? e.message : String(e)}）`;
+              }
+              const id = parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)
+                && typeof (parsed as { id?: unknown }).id === 'string' && ((parsed as { id: string }).id.length >= 8)
+                ? (parsed as { id: string }).id : null;
+              if (id != null) dataRootId = id;
+              else {
+                // 无效/未知格式标记：原件保全 + 如实健康状态（不覆写、不换 ID）。
+                rootIdentityHealth = 'invalid-marker';
+                rootIdentityProblem ??= 'root-identity.json 缺少合法 id 字段（期望 {"id":"dri_…"} 形状）';
+              }
+            } else {
+              try {
+                dataRootId = `dri_${randomUUID()}`;
+                mkdirSync(appData, { recursive: true });
+                const tmp = `${marker}.tmp-${process.pid}-${Date.now()}`;
+                writeFileSync(tmp, JSON.stringify({ id: dataRootId, createdAt: Date.now() }, null, 2), 'utf8');
+                renameSync(tmp, marker); // 原子落盘：崩溃中断不产生半个标记（tmp 残留不参与读取）
+              } catch {
+                dataRootId = null;
+                rootIdentityHealth = 'unavailable';
+                rootIdentityProblem = '数据根身份标记写入失败（目录拒写/权限）——本会话无稳定逻辑根身份；重启后会重试创建';
+              }
             }
-            if (dataRootId == null) {
-              dataRootId = `dri_${randomUUID()}`;
-              mkdirSync(appData, { recursive: true });
-              writeFileSync(marker, JSON.stringify({ id: dataRootId, createdAt: Date.now() }, null, 2), 'utf8');
-            }
-          } catch { dataRootId = null; /* 拒写/损坏：如实回 null，不虚构稳定身份 */ }
+          } catch (e) {
+            dataRootId = null;
+            rootIdentityHealth = 'unavailable';
+            rootIdentityProblem = `数据根身份标记不可读（${e instanceof Error ? e.message : String(e)}）`;
+          }
         }
-        return withCommandId({ ok: true, data: { localUserId: deps.localUserId, appDataDir: deps.appDataDir ?? '', dataRootId } });
+        return withCommandId({ ok: true, data: { localUserId: deps.localUserId, appDataDir: deps.appDataDir ?? '', dataRootId, rootIdentityHealth, rootIdentityProblem } });
       }
       case 'app.rootIdentityOf': {
         // R67 P1-B（继承身份校验，只读）：renderer 持久化命名空间迁移时，把候选旧目录清单
         // 交来核对——daemon 只读各目录 root-identity.json 的 id（无写入；目录缺失/无标记/
         // 损坏= null）。renderer 仅当旧键所属目录的逻辑 id == **当前**数据根 id 时才继承其
         // 快照：无关数据根/别的用户/任意目录不因发现旧键而混入（不盲扫合并）。
+        // R68 §2：旧 v3/v4 目录**没有**标记（id=null）——这些候选不自动继承，转交用户在
+        // 「设置 → 草稿存储」显式确认导入；hasStateDb（目录里是否有 state.sqlite）帮助用户
+        // 核对这确实是自己的旧数据根（辅助信息，不构成信任证明——导入决定权在用户）。
         const params = z.strictObject({ appDataDirs: z.array(z.string().min(1).max(400)).min(1).max(16) }).parse(env.params);
         const ids: Record<string, string | null> = {};
+        const hasStateDb: Record<string, boolean> = {};
         for (const dir of params.appDataDirs) {
           try {
-            const marker = join(resolve(dir), 'root-identity.json');
+            const rdir = resolve(dir);
+            hasStateDb[dir] = existsSync(join(rdir, 'state.sqlite'));
+            const marker = join(rdir, 'root-identity.json');
             if (!existsSync(marker)) { ids[dir] = null; continue; }
             const parsed = JSON.parse(readFileSync(marker, 'utf8')) as { id?: unknown };
             ids[dir] = typeof parsed.id === 'string' && parsed.id.length >= 8 ? parsed.id : null;
-          } catch { ids[dir] = null; }
+          } catch { ids[dir] = null; hasStateDb[dir] = false; }
         }
-        return withCommandId({ ok: true, data: { ids } });
+        return withCommandId({ ok: true, data: { ids, hasStateDb } });
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。

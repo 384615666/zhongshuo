@@ -9,7 +9,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, SwitchRow, ReadOnlyRow, DetailFold } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme } from '../data/store';
+import { recordWrite, retryDraftPersistence, setTheme, clearPersistedSnapshot, importLegacySnapshot } from '../data/store';
+import { rescanLegacyImport } from '../loader';
 import { command } from '../bridge';
 import { navigate } from '../lib/router';
 import { refreshMembers } from '../loader';
@@ -354,23 +355,31 @@ function SectionData() {
   const draftPersist = useStore((st) => st.draftPersist);
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
   const [cleared, setCleared] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState<string | null>(null);
   useEffect(() => {
     let done = false;
     void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch(() => { /* 不显示 */ });
     return () => { done = true; };
   }, []);
   const clearDrafts = () => {
-    if (identity == null) { toast('数据根身份未就绪——无法定位草稿存储键', 'error'); return; }
-    const key = `zs.hifi.persist.${identity.appDataDir}|${identity.localUserId}`;
-    let removed = 0;
+    const r = clearPersistedSnapshot();
+    if (!r.ok) { toast(r.error ?? '清理失败', 'error'); return; }
+    if (!r.hadKey) { setCleared('没有已保存的草稿快照（活动键不存在）'); toast('没有已保存的草稿快照', 'info'); return; }
+    recordWrite('drafts.clear', `清空本地草稿快照键 ${r.key?.slice(0, 40)}…（未确认发送账本一并清除——当前页面内存态保留至关闭）`);
+    setCleared(`${new Date().toLocaleTimeString()} 已清除活动命名空间键（重新写入将建立新快照）`);
+    toast('本地草稿快照已清除', 'success');
+  };
+  const legacy = draftPersist.legacyImport;
+  const doImport = async (key: string, dir: string) => {
+    setImportBusy(key);
     try {
-      removed = localStorage.getItem(key) == null ? 0 : 1;
-      localStorage.removeItem(key);
-      recordWrite('drafts.clear', `清空本地草稿快照键 ${key.slice(0, 40)}…（未确认发送账本一并清除——当前页面内存态保留至关闭）`);
-      setCleared(`${new Date().toLocaleTimeString()} 已清除（重新写入将建立新快照）`);
-      toast('本地草稿快照已清除', 'success');
-    } catch (e) { toast(`清除失败：${(e as Error).message}`, 'error'); }
-    if (removed === 0) { setCleared('没有已保存的草稿快照（键不存在）'); toast('没有已保存的草稿快照', 'info'); }
+      const r = importLegacySnapshot(key, dir);
+      if (!r.ok) { toast(r.error ?? '导入失败', 'error'); return; }
+      const o = r.outcome;
+      const refusedCount = o?.refusedVersions.length ?? 0;
+      toast(`已导入 ${dir} 的旧键：草稿 ${o?.mergedDrafts ?? 0} 条、未确认信封 ${o?.mergedSends ?? 0} 条${refusedCount > 0 ? `、拒收不支持版本来源 ${refusedCount} 个（原件保持）` : ''}——旧键原样保留`, 'success');
+      recordWrite('draft.inherit', `用户确认导入旧目录 ${dir}（结果见恢复说明；原件保留）`);
+    } finally { setImportBusy(null); }
   };
   return (
     <div>
@@ -387,13 +396,50 @@ function SectionData() {
       {draftPersist.recoveryNote != null ? (
         <div className="small faint" style={{ padding: '0 14px 6px' }} data-zs-draft-recovery-note="1">{draftPersist.recoveryNote}</div>
       ) : null}
-      <SettingsRow label="重试 / 清理" hint="锁定后释放存储可重试初始化；清理=删除本地草稿快照键（不可恢复）">
+      <SettingsRow label="重试 / 清理" hint="锁定后释放存储可重试初始化；清理=删除当前活动命名空间的草稿快照键（不可恢复）">
         <div className="row tight">
           <button className="btn sm" data-zs-draft-retry="1" onClick={() => { retryDraftPersistence(); toast('已重试草稿快照初始化——状态按上方显示为准', 'info'); }}>重试快照</button>
           <button className="btn sm" onClick={clearDrafts}>清理本地草稿</button>
         </div>
       </SettingsRow>
       {cleared != null ? <div className="small faint" style={{ padding: '0 14px 6px' }}>{cleared}</div> : null}
+      <SettingsRow
+        label="旧数据目录继承"
+        hint="首次从 v3/v4 升级或整目录复制后，旧草稿/未确认发送账本的导入入口（旧数据根没有身份标记——不能自动确认同根，由你逐键确认）"
+      >
+        <div className="small" style={{ lineHeight: 1.7, minWidth: 320 }}>
+          <div className="row tight">
+            <button className="btn sm" data-zs-legacy-rescan="1" onClick={() => { void rescanLegacyImport().then(() => toast('已重扫旧命名空间键——结果按下方候选为准', 'info')); }}>重扫旧目录</button>
+          </div>
+          {legacy == null || legacy.candidates.length === 0 ? (
+            <div className="faint" style={{ marginTop: 4 }}>当前没有待确认的旧目录候选（自动继承通道：同目录升级/逻辑身份同根——无需人工确认）。</div>
+          ) : (
+            <div className="col" style={{ gap: 6, marginTop: 6 }} data-zs-legacy-candidates="1">
+              {legacy.error != null ? <div style={{ color: 'var(--warning,#b45309)' }}>上次扫描：{legacy.error}</div> : null}
+              {legacy.candidates.map((c) => (
+                <div key={c.key} className="row tight" style={{ padding: '4px 6px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6 }} data-zs-legacy-candidate={c.dir}>
+                  <Icon name="folder" size={12} />
+                  <span className="mono-sm" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.key}>{c.dir}</span>
+                  {c.hasStateDb === true ? <Tag tone="info">含数据根</Tag> : c.hasStateDb === false ? <Tag tone="neutral">目录无 state.sqlite</Tag> : null}
+                  {c.importedAt != null ? (
+                    <Tag tone="success" icon="check">已导入 {new Date(c.importedAt).toLocaleTimeString()}</Tag>
+                  ) : (
+                    <button
+                      className="btn primary sm"
+                      data-zs-legacy-import={c.dir}
+                      disabled={importBusy === c.key}
+                      title={`导入该目录旧键的草稿与未确认发送账本（版本门同判；旧键原样保留；未确认信封导入后显示横幅——同号重试由你决定）`}
+                      onClick={() => void doImport(c.key, c.dir)}
+                    >
+                      {importBusy === c.key ? '导入中…' : '确认导入'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </SettingsRow>
       <NotConnectedRow label="备份与恢复（SQLite 快照）" hint="备份命令面尚未接入本包（升级回退演练已验证 VACUUM INTO 路径——正式入口未接）" />
       {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
           「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}

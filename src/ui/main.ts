@@ -7,7 +7,7 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron';
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -314,7 +314,7 @@ app.whenReady().then(async () => {
   // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
   // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
   let firstCommandDelayed = false;
-let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONCE）
+let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / ZS_H1_LOSE_SUBMIT_TIMES=N）
   // 本机可信 UI 的 IPC sender 校验（第三十一轮三）：preload 桥（zs:command/openPath/pickFolder）
   // 只接受**本应用窗口**（zsres://app/ 源）的帧——其他任何加载进该窗口的内容拿不到桥；
   // 不以 loopback 地址替代来源校验（远程页面即使被误载也无法调用本机保留命令）。
@@ -326,6 +326,13 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
   };
   ipcMain.handle('zs:command', async (event, envelope: unknown) => {
     assertTrustedSender(event);
+    // 工程观测钩子（R68 §4，ZS_COMMAND_LOG_FILE——仅显式设置的测试/演练环境）：把**实际
+    // 送达管道的完整信封**（commandId/method/params）逐条追加到日志文件——同号重试验收需要
+    // 证明第二次命令确实发出且参数逐字一致。产品默认不设该变量，不产生任何文件。
+    const cmdLogPath = process.env.ZS_COMMAND_LOG_FILE;
+    if (cmdLogPath != null && cmdLogPath.length > 0) {
+      try { appendFileSync(cmdLogPath, `${JSON.stringify({ at: Date.now(), ...envelope as Record<string, unknown> })}\n`, 'utf8'); } catch { /* 观测失败不影响命令 */ }
+    }
     // 指定方法延迟钩子（第二十一轮二：按方法定向——project.open 响应延迟同步点；app 设置
     // 读取等先行的命令不再无谓消耗延迟）。
     const delayEnv = process.env.ZS_UI_DELAY_METHOD_MS;
@@ -336,11 +343,14 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
         await new Promise((r) => setTimeout(r, Number(ms) || 0));
       }
     }
-    // 受控丢回执（第四十九轮 H1 验证钩子，ZS_H1_LOSE_SUBMIT_ONCE=1）：丢弃**第一次**
-    // message.submit 的回执（不回 IPC——渲染层按结果未知处理）——用于在真实打包链上验证
-    // 「提交已成功、回执丢失」的原信封重试。命令仍会送达 daemon（业务恰一次由幂等保证）。
-    if (process.env.ZS_H1_LOSE_SUBMIT_ONCE === '1' && (envelope as { method?: string })?.method === 'message.submit' && !hifiLoseOnce) {
-      hifiLoseOnce = true;
+    // 受控丢回执（第四十九轮 H1 验证钩子）：丢弃**前 N 次** message.submit 的回执（不回
+    // IPC——渲染层按结果未知处理）——用于在真实打包链上验证「提交已成功、回执丢失」的原
+    // 信封重试/多次未知并存。ZS_H1_LOSE_SUBMIT_ONCE=1 保留（=N 1 语义）；R68 增
+    // ZS_H1_LOSE_SUBMIT_TIMES=N（多次丢失：验证重试再次未知、同目标多命令未知并存）。
+    // 命令仍会送达 daemon（业务恰一次由幂等保证）。
+    const loseTimes = Number(process.env.ZS_H1_LOSE_SUBMIT_TIMES ?? (process.env.ZS_H1_LOSE_SUBMIT_ONCE === '1' ? '1' : '0'));
+    if (Number.isFinite(loseTimes) && loseTimes > hifiLoseCount && (envelope as { method?: string })?.method === 'message.submit') {
+      hifiLoseCount += 1;
       await ensureConnection();
       void pipe!.send(envelope).catch(() => { /* 送达失败同样表现为丢回执 */ });
       return new Promise<never>(() => { /* 永不回执 */ });
@@ -443,13 +453,14 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
     if (typeof p?.suggestedName !== 'string' || p.suggestedName.length === 0 || p.suggestedName.length > 200) {
       throw new Error('另存为参数无效（suggestedName 必须是 1–200 字符）');
     }
-    if (typeof p?.contentBase64 !== 'string' || p.contentBase64.length === 0) {
-      throw new Error('另存为参数无效（contentBase64 为空）');
+    if (typeof p?.contentBase64 !== 'string') {
+      throw new Error('另存为参数无效（contentBase64 缺失）');
     }
     // suggestedName 只作默认文件名：取 basename（剥离任何路径成分——不接受路径注入）。
     const safeName = p.suggestedName.split(/[\\/]/).pop() ?? 'file';
+    // R68 §6：**空文件按原件语义保存**（0 字节是合法原文件——工作区空文件读取通道可读 0B；
+    // 空串 base64 解码即 0 字节）。仅保留 64MB 上限。
     const raw = Buffer.from(p.contentBase64, 'base64');
-    if (raw.length === 0) throw new Error('另存为内容为空');
     if (raw.length > 64 * 1024 * 1024) throw new Error(`另存为内容超限（${raw.length}B > 64MB）`);
     // 工程验证钩子（ZS_SAVEAS_AUTO_DIR，仅显式设置的测试/演练环境）：跳过对话框直写指定
     // 目录（同名自动加序号）——使保存链的**落盘字节**可被自动化逐字核验；产品默认不设该

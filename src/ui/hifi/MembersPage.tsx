@@ -15,8 +15,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
-import { Avatar, Modal, Select, Tag, memberColor } from './components/ui';
-import { useStore, toast } from './shell';
+import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
+import { useStore, toast, getState } from './shell';
 import { refreshMembers } from './loader';
 import { navigate } from './lib/router';
 import { command } from './bridge';
@@ -117,8 +117,10 @@ export function MembersPage() {
   /** r63→R66：绑定编辑弹窗（member.setRuntime——正式命令；fake 仅环境显式允许时可选）。 */
   const guard = useStore((st) => st.dispatchGuard);
   const [bindFor, setBindFor] = useState<MemberRow | null>(null);
-  /** R67：添加成员（member.create 正式合同——已批准原型入口，无用户延期依据）。 */
-  const [addOpen, setAddOpen] = useState(false);
+  /** R67：添加成员（member.create 正式合同——已批准原型入口，无用户延期依据）。
+   * R68 §5B：捕获**打开时**的 projectId（addFor）——弹窗存续期间全局项目切换（标题栏菜单/
+   * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。 */
+  const [addFor, setAddFor] = useState<string | null>(null);
   const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
   const openBind = (m: MemberRow) => {
     const cur = runtimes[m.id];
@@ -133,6 +135,10 @@ export function MembersPage() {
   };
 
   const coordinatorIds = new Set(rooms.map((r) => r.coordinatorMemberId).filter((x): x is string => x != null));
+  /** R68 §5A：当前项目归档/移除——添加入口禁用+说明（服务端同判拒绝，双保险）。 */
+  const projState = projects.find((x) => x.id === projectId);
+  const projArchived = projState?.archivedAt != null;
+  const projRemoved = projState?.removedAt != null;
 
   /**
    * runtime 分列（R66 P5 修订）：查询失败 / 未绑定（有效=全局默认）/ 已绑定·安装缺失 / 正常。
@@ -185,10 +191,17 @@ export function MembersPage() {
             {members?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
           </span>
           <div className="spacer" />
-          <button className="btn ghost sm" onClick={() => void reload()} title="重新装载成员/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
-          <button className="btn primary sm" onClick={() => setAddOpen(true)} title="添加成员实例（member.create——自动加入未归档房间；不自动成为协调者；runtime 绑定随后配置）">
-            <Icon name="user-plus" size={12} /> 添加成员
-          </button>
+          <button
+            className="btn ghost sm" onClick={() => void reload()} title="重新装载成员/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
+          {projArchived ? (
+            <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已归档（只读）——不能添加成员</span>
+          ) : projRemoved ? (
+            <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已移除——不能添加成员</span>
+          ) : (
+            <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加成员实例（member.create——自动加入未归档房间；不自动成为协调者；runtime 绑定随后配置；归档/移除项目服务端同判拒绝）">
+              <Icon name="user-plus" size={12} /> 添加成员
+            </button>
+          )}
         </div>
 
         {projectId == null || projectId === '' ? (
@@ -207,12 +220,13 @@ export function MembersPage() {
             const rt = runtimeLabel(m);
             const running = tasks.filter((t) => t.ownerMemberId === m.id && ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(t.status));
             return (
-              <div key={m.id} className="card" data-zs-member-card={m.id}>
+              <div key={m.id} className="card" data-zs-member-card={m.id} title={`成员实例 ${m.displayName}（完整 ID ${m.id}）`}>
                 <div className="row tight">
                   <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="row tight">
                       <span className="strong">{m.displayName}</span>
+                      <span className="mono-sm faint" data-zs-member-short={m.id}>#{memberShortId(m.id)}</span>
                       {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                       {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
                       {!m.enabled ? <Tag tone="neutral" icon="slash">已停用</Tag> : null}
@@ -258,8 +272,8 @@ export function MembersPage() {
                 {list != null ? (
                   <div className="row tight wrap" style={{ marginTop: 4 }}>
                     {list.map((m) => (
-                      <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
-                        {m.displayName}{room.coordinatorMemberId === m.id ? ' ★' : ''}
+                      <span key={m.id} className="chip" title={`${m.displayName} #${memberShortId(m.id)}（完整 ID ${m.id}）${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
+                        {m.displayName}<span className="mono-sm faint">#{memberShortId(m.id)}</span>{room.coordinatorMemberId === m.id ? ' ★' : ''}
                       </span>
                     ))}
                   </div>
@@ -281,14 +295,18 @@ export function MembersPage() {
         </div>
       </div>
 
-      {addOpen ? (
+      {addFor != null ? (
         <AddMemberModal
-          projectName={projects.find((x) => x.id === projectId)?.displayName ?? projectId}
-          onClose={() => setAddOpen(false)}
+          projectId={addFor}
+          projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
+          activeProjectId={projectId}
+          onClose={() => setAddFor(null)}
           onCreated={async (memberId) => {
-            setAddOpen(false);
+            setAddFor(null);
             toast(`已添加成员（自动加入未归档房间；协调者与 runtime 不变——随后可「配置 runtime」）`, 'success');
-            await reload();
+            // 迟到回执：只刷新**提交目标项目**的名单（当前焦点若已切到别的项目，不覆盖其视图）。
+            if (getState().activeProjectId === addFor) await reload();
+            else await refreshMembers(addFor).catch(() => { /* 焦点已切走——store 投影按目标项目刷新即可 */ });
           }}
         />
       ) : null}
@@ -336,8 +354,8 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
   return (
     <Modal
       size="md"
-      title={`配置 runtime · ${member.displayName}`}
-      subtitle="member.setRuntime——配置成功≠能力已认证；未绑定时该成员派发用全局默认渠道"
+      title={`配置 runtime · ${member.displayName} #${memberShortId(member.id)}`}
+      subtitle={`member.setRuntime——配置成功≠能力已认证；未绑定时该成员派发用全局默认渠道（实例 ${member.id}）`}
       onClose={onClose}
       footer={
         <>
@@ -394,25 +412,27 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
   );
 }
 
-/** R67 P4：添加成员（原型 AddMemberDialog 的正式接线版——member.create；同名可重复=项目级
- * 实例；说明=成员卡展示；「添加后会怎样」如实三条：加入未归档房间/不自动协调者/不进在途研讨）。 */
-function AddMemberModal({ projectName, onClose, onCreated }: { projectName: string; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
+/** R67 P4 → R68 §5B：添加成员（member.create——同名可重复=项目级实例）。弹窗**捕获打开时的
+ * projectId**：存续期间全局项目切换（标题栏/深链/受控事件）→ 表单作废（提交禁用+可见说明），
+ * 提交前再核对一次；迟到回执只刷新提交目标项目（onCreated 侧门控）。 */
+function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCreated }: { projectId: string; projectName: string; activeProjectId: string; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const projectId = useStore((s) => s.activeProjectId);
   const rooms = useStore((s) => s.rooms);
   const joinable = rooms.filter((r) => r.projectId === projectId && r.archivedAt == null);
+  const stale = activeProjectId !== projectId; // 打开后全局项目被切走——旧表单作废
   const submit = async () => {
-    if (name.trim().length === 0) { setErr('请填写成员名称'); return; }
+    if (stale) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
+    if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
     setBusy(true); setErr(null);
     try {
       const r = await command<{ memberId: string; roomsJoined: number }>('member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}) });
-      recordWrite('member.create', `添加成员「${name.trim()}」（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
+      recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
       await onCreated(r.memberId);
     } catch (e) {
-      setErr(`添加失败：${(e as Error).message}`);
+      setErr(`添加失败：${(e as Error).message}`); // 归档/移除守卫等真实原因上屏
     } finally { setBusy(false); }
   };
   return (
@@ -423,18 +443,21 @@ function AddMemberModal({ projectName, onClose, onCreated }: { projectName: stri
       onClose={onClose}
       footer={
         <>
-          <span className="small faint">名称可重复；创建后自动加入 {joinable.length} 个未归档房间{joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}</span>
+          <span className="small faint">{stale ? '项目已切换——表单作废' : `名称可重复；创建后自动加入 ${joinable.length} 个未归档房间${joinable.length > 0 ? `（${joinable.map((r) => r.name).join('、')}）` : ''}`}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary sm" disabled={busy} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
+          <button className="btn primary sm" disabled={busy || stale} data-zs-member-addsave={projectId} onClick={() => void submit()}>{busy ? '创建中…' : '添加成员'}</button>
         </>
       }
     >
       <div className="col" style={{ gap: 12 }}>
+        {stale ? (
+          <div className="panel warning" data-zs-member-addstale={projectId}>项目已切换（当前焦点不再是 {projectName}）——本表单已作废：为避免把旧输入写进别的项目，提交已禁用。请关闭后在新项目重新「添加成员」。</div>
+        ) : null}
         <div className="field">
           <label className="field-label">成员名称</label>
           <input className="input" value={name} autoFocus placeholder="例如 审查者、实现者" onChange={(e) => { setName(e.target.value); if (err != null) setErr(null); }} />
-          <div className="field-hint">稳定 ID 与显示名分开——改名不断历史引用；同名时界面按实例区分。</div>
+          <div className="field-hint">稳定 ID 与显示名分开——改名不断历史引用；同名成员按实例短标识区分（卡片/名单/@/配置处都带 #短标识）。</div>
         </div>
         <div className="field">
           <label className="field-label">说明（它会做什么）</label>

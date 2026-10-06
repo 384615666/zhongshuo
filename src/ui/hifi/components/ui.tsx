@@ -200,6 +200,13 @@ export function memberColor(memberId: string, ordinal?: number): string {
   return 'var(--neutral)';
 }
 
+/** R68 §6：实例短标识（成员 id 尾 4 位）——同名成员在卡片/名单/@/配置入口的可见区分
+ *（数据库 ID 不同≠用户能辨认；稳定不随改名漂移）。全站唯一口径。 */
+export function memberShortId(id: string): string {
+  const hex = id.replace(/-/g, '').slice(-4).toLowerCase();
+  return /^[0-9a-f]{4}$/.test(hex) ? hex : id.slice(-4).toLowerCase();
+}
+
 /* ---------------- 开关 ---------------- */
 
 export function Switch({
@@ -505,6 +512,13 @@ export type DetailHost = 'page' | 'panel';
  * aria 语义一致；键盘/IME/Esc 行为沿用原生 select 本身——与批准原型一致的原生形态）。
  * `loading` 时显示占位项并禁点（查询失败/装载中如实，不冒充可选）。
  */
+/**
+ * 统一下拉（R66 抽象 → R68 §6 组件更换）：**自绘 listbox**——原生 <select> 的展开态由
+ * 系统渲染，无法统一设计语言/无法截图验收（用户图 1 的诉求）。实现沿既有 Menu 的弹出
+ * 模式（.select-pop / .select-option，键盘可达：↑↓ 移动、Enter/Space 选中、Esc/Home/End、
+ * 点击外部关闭；focus 管理=按钮持有焦点，aria-activedescendant 指向活动项）。
+ * API 与原生包装版完全一致（value/onChange/options/size/loading/disabled/title/ariaLabel）。
+ */
 export function Select({
   value, onChange, options, size, loading, loadingLabel = '装载中…', disabled, title, ariaLabel,
 }: {
@@ -518,22 +532,104 @@ export function Select({
   title?: string;
   ariaLabel?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const isDisabled = disabled === true || loading === true;
+  const shownOptions = loading === true ? [{ value, label: loadingLabel }] : options;
+  const selectedIdx = Math.max(0, shownOptions.findIndex((o) => o.value === value));
+  const selectedLabel = shownOptions[selectedIdx]?.label ?? value;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocPointer = (e: PointerEvent): void => {
+      if (rootRef.current != null && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDocPointer, true);
+    return () => { document.removeEventListener('pointerdown', onDocPointer, true); };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && listRef.current != null) {
+      const el = listRef.current.querySelector<HTMLElement>(`[data-idx="${activeIdx}"]`);
+      el?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [open, activeIdx]);
+
+  const pick = (v: string): void => {
+    setOpen(false);
+    if (v !== value) onChange(v);
+  };
+  const onBtnKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (isDisabled) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!open) { setOpen(true); setActiveIdx(selectedIdx); return; }
+      if (e.key === 'Enter' || e.key === ' ') { pick(shownOptions[activeIdx]?.value ?? value); return; }
+      setActiveIdx((i) => {
+        const n = shownOptions.length;
+        if (n === 0) return i;
+        return e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n;
+      });
+      return;
+    }
+    if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); return; }
+    if (!open) return;
+    if (e.key === 'Home') { e.preventDefault(); setActiveIdx(0); return; }
+    if (e.key === 'End') { e.preventDefault(); setActiveIdx(Math.max(0, shownOptions.length - 1)); return; }
+    if (e.key === 'Tab') setOpen(false);
+  };
+
+  const listId = useSelectListId();
   return (
-    <select
-      className={`select${size === 'sm' ? ' sm' : ''}`}
-      value={value}
-      disabled={disabled === true || loading === true}
-      title={title}
-      aria-label={ariaLabel}
-      data-zs-select={loading === true ? 'loading' : 'ready'}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {loading === true ? <option value={value}>{loadingLabel}</option> : null}
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
+    <div className={`select-wrap${size === 'sm' ? ' sm' : ''}`} ref={rootRef} data-zs-select={loading === true ? 'loading' : 'ready'} data-zs-select-open={open ? '1' : undefined}>
+      <button
+        type="button"
+        className={`select${size === 'sm' ? ' sm' : ''}${open ? ' open' : ''}`}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label={ariaLabel}
+        aria-activedescendant={open ? `${listId}-opt-${activeIdx}` : undefined}
+        title={title}
+        disabled={isDisabled}
+        onClick={() => { if (!isDisabled) { setOpen((o) => !o); setActiveIdx(selectedIdx); } }}
+        onKeyDown={onBtnKeyDown}
+      >
+        <span className="select-value truncate">{selectedLabel}</span>
+        <Icon name="chevron-down" size={11} />
+      </button>
+      {open ? (
+        <div className="select-pop" role="listbox" id={listId} ref={listRef} aria-label={ariaLabel ?? title ?? '选项'}>
+          {shownOptions.map((o, i) => (
+            <div
+              key={o.value}
+              id={`${listId}-opt-${i}`}
+              role="option"
+              aria-selected={o.value === value}
+              data-idx={i}
+              data-zs-option={o.value}
+              className={`select-option${o.value === value ? ' selected' : ''}${i === activeIdx ? ' active' : ''}`}
+              onPointerEnter={() => setActiveIdx(i)}
+              onClick={() => pick(o.value)}
+            >
+              <span className="truncate">{o.label}</span>
+              {o.value === value ? <Icon name="check" size={11} /> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+let selectSeq = 0;
+function useSelectListId(): string {
+  const ref = useRef<string | null>(null);
+  if (ref.current == null) { selectSeq += 1; ref.current = `zs-select-list-${selectSeq}`; }
+  return ref.current;
 }
 
 export function hostClass(host: DetailHost | undefined, base: 'main' | 'page') {

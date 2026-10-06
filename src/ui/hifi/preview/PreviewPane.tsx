@@ -18,7 +18,7 @@ import {
   activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge,
   hidePreview, quoteResource, reloadResource, rememberScroll, showPreview,
   togglePreviewMaximized, registerAttachmentResource, openPreviewTab,
-  applyWorktreeRead, markResourceUpdated,
+  applyWorktreeRead, markResourceUpdated, applyDeliveryRead,
 } from '../data/actions-preview';
 import {
   audienceAllows, openedFromAddsInfo, openedFromLabel, originLabel,
@@ -288,6 +288,7 @@ export function PreviewPane({
   const url = resource.relativePath ?? resource.title;
   const isFormalAttachment = resource.formalAttachment != null;
   const isWorktree = resource.formalWorktree != null;
+  const isDelivery = resource.formalDelivery != null;
   /** 文件风味（R66 P2）：同一文件无论来自上传/工作区/正式交付都按此选渲染器——
    *  md=排版阅读、html=隔离页面预览、csv=表格、code=源码（带行号）、text=纯文本。 */
   const flavor = flavorOf(resource.title, isFormalAttachment ? resource.formalAttachment?.kind ?? '' : '', revision.content.kind);
@@ -343,6 +344,18 @@ export function PreviewPane({
         if (resource.mutable && active.pendingRevision) { toast('磁盘上的文件已更新——请先点上方「重新加载」再保存（不静默另存新字节）', 'warn'); return; }
         contentBase64 = snap.bytesBase64;
         fact = `工作区原文件 ${snap.bytes}B · sha256 ${snap.sha256.slice(0, 12)}…（读取时快照）`;
+      } else if (isDelivery) {
+        // R68 §6：交付文档另存=已装载的正文按 UTF-8 编码落盘（文档本体即 turn 最终输出文本；
+        // 身份以 manifest 呈现——正文 hash 与 manifest 的核对结果同时说明）。
+        const fd = resource.formalDelivery!;
+        const doc = deliveryDocs.get(`${resource.id}:${active.revision}`);
+        if (doc == null || doc.text == null) { toast('这份交付没有可读文档（无正文可保存）', 'warn'); return; }
+        const bytes = new TextEncoder().encode(doc.text);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]!);
+        contentBase64 = btoa(bin);
+        name = resource.title.endsWith('.md') ? resource.title : `${resource.title}.md`;
+        fact = `交付文档 v${fd.revision} · ${doc.bytes}B · manifest ${fd.manifestHash.slice(0, 12)}…${doc.hashMatch === false ? '（正文 hash 与 manifest 不一致——以 manifest 为验收身份）' : ''}`;
       } else {
         toast('这种来源暂不支持保存原文件（会话导出在会话头部菜单）', 'warn');
         return;
@@ -508,8 +521,8 @@ export function PreviewPane({
           </>
         ) : null}
         <span className="faint">·</span>
-        <span title={isWorktree ? '项目工作区文件——只读快照（project.file.read，安全根内）' : '会话附件/成果——服务端托管（audience 校验）'}>
-          <Tag plain>{isWorktree ? '工作区只读' : '会话资源'}</Tag>
+        <span title={isWorktree ? '项目工作区文件——只读快照（project.file.read，安全根内）' : isDelivery ? '正式 AI 交付文档——不可变快照（delivery.document，版本=交付 revision、hash=manifest）' : '会话附件/成果——服务端托管（audience 校验）'}>
+          <Tag plain>{isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}</Tag>
         </span>
       </div>
 
@@ -537,6 +550,14 @@ export function PreviewPane({
           />
         ) : isWorktree ? (
           <WorktreeBody
+            key={`${resource.id}:${active.revision}`}
+            resource={resource}
+            viewMode={viewMode}
+            wrapSource={wrapSource}
+            onOpenComment={() => setCommentOpen(true)}
+          />
+        ) : isDelivery ? (
+          <DeliveryBody
             key={`${resource.id}:${active.revision}`}
             resource={resource}
             viewMode={viewMode}
@@ -598,7 +619,7 @@ export function PreviewPane({
           </MenuItem>
           <MenuItem
             icon="download"
-            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? 'project.file.read：工作区原文件读取快照' : '当前来源'}）；路径经系统另存为对话框由你选择`}
+            title={`保存当前这份文件的原件字节（${isFormalAttachment ? 'attachment.originalFile：服务端 sha256 核验' : isWorktree ? 'project.file.read：工作区原文件读取快照' : isDelivery ? 'delivery.document：交付文档正文（UTF-8）' : '当前来源'}）；路径经系统另存为对话框由你选择`}
             disabled={dlBusy}
             onClick={() => { void doDownloadOriginal(); setMoreAt(null); }}
           >
@@ -910,6 +931,120 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
 function worktreeReadBump(resourceId: string): void {
   // reloadResource 已把 tab.revision 指向 pendingRevision；资源侧补一个新读取版本
   markResourceUpdated(resourceId);
+}
+
+/* ============================================================
+   正文渲染 B2：正式 AI 交付文档（R68 §6 第三来源）——delivery.document 按需装载。
+   文档=turn 最终输出（manifestHash 即其 sha256）——hashMatch 如实显示；不可变快照
+   （无工作区「重新加载」链），阅读/源码切换与上传/工作区同一风味分发。
+   ============================================================ */
+
+interface DeliveryDocData {
+  deliveryId: string; revision: number; manifestHash: string; taskIdTitle: string;
+  conversationId: string; threadId: string | null; audience: 'dm' | 'room';
+  text: string | null; hashMatch: boolean | null; bytes: number; note?: string;
+}
+
+/** 交付文档装载缓存（resourceId:revision → 文档）——下载原文件用同一份文本，不二次请求。 */
+const deliveryDocs = new Map<string, DeliveryDocData>();
+
+/** TaskComplete 输出合同（自然交付的最终 JSON——阅读视图按字段结构呈现）。 */
+interface TaskCompleteDoc {
+  schemaVersion?: string;
+  resultKey?: string;
+  changeSummary?: string;
+  files?: string[];
+  executedVerifications?: string[];
+  unexecutedVerifications?: Array<{ item?: string; reason?: string }>;
+  remainingIssues?: string[];
+}
+
+function DeliveryBody({ resource, viewMode, wrapSource, onOpenComment }: { resource: PreviewResource; viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void }) {
+  const fd = resource.formalDelivery!;
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  const rev = resource.revisions[0];
+  useEffect(() => {
+    let done = false;
+    setErr(null);
+    void command<DeliveryDocData>('delivery.document', { deliveryId: fd.deliveryId })
+      .then((r) => {
+        if (done) return;
+        deliveryDocs.set(`${resource.id}:${rev?.revision ?? 0}`, r);
+        if (r.text != null) {
+          applyDeliveryRead(resource.id, { text: r.text, bytes: r.bytes, revision: rev?.revision ?? 1 });
+          reportExcerpt(resource.id, r.text);
+        }
+        setLoaded(true);
+      })
+      .catch((e: unknown) => { if (!done) setErr(String((e as Error).message)); });
+    return () => { done = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fd.deliveryId, rev?.revision, nonce]);
+  if (err != null) {
+    return (
+      <div className="panel warning">
+        <div className="panel-title"><Icon name="alert-triangle" size={13} /> 交付文档读取失败</div>
+        {err}
+        <div className="panel-actions">
+          <button className="btn sm" onClick={() => { setErr(null); setLoaded(false); setNonce((n) => n + 1); }}>重试</button>
+        </div>
+      </div>
+    );
+  }
+  if (!loaded) return <div className="panel info">正在读取交付文档（只读）…</div>;
+  const doc = deliveryDocs.get(`${resource.id}:${rev?.revision ?? 0}`);
+  if (doc == null || doc.text == null) {
+    return (
+      <div className="preview-unsupported">
+        <Icon name="file-text" size={20} className="faint" />
+        <div className="strong" style={{ marginTop: 8 }}>这份交付没有可读文档</div>
+        <div className="small muted" style={{ marginTop: 6, maxWidth: 440, lineHeight: 1.7 }}>
+          {doc?.note ?? '交付的最终输出未持久化为可读文档'}——交付身份仍有效：v{fd.revision} · manifest {fd.manifestHash.slice(0, 12)}…（验收/引用按「详情」与引用通道进行）。
+        </div>
+        <div className="panel-actions">
+          <button className="btn sm" onClick={onOpenComment}>评论此交付（会话锚点）</button>
+        </div>
+      </div>
+    );
+  }
+  const c = rev?.content;
+  if (c == null || c.kind === 'unsupported') return <div className="panel info">正在装载内容…</div>;
+  const rawText = c.kind === 'markdown' || c.kind === 'text' || c.kind === 'code' ? c.text : '';
+  // 自然交付的最终输出=TaskComplete JSON（dispatchWorker 输出合同校验）——阅读视图按其
+  // 字段结构呈现（changeSummary 为主体）；解析失败（非自然链/历史数据）回退原文显示。
+  let tc: TaskCompleteDoc | null = null;
+  try {
+    const parsed = JSON.parse(rawText) as Partial<TaskCompleteDoc>;
+    if (parsed != null && typeof parsed === 'object' && typeof parsed.schemaVersion === 'string' && parsed.schemaVersion.startsWith('task-complete')) tc = parsed as TaskCompleteDoc;
+  } catch { tc = null; }
+  return (
+    <>
+      {viewMode === 'preview' && tc != null ? (
+        <div className="preview-read-doc" data-zs-delivery-doc="1">
+          <MarkdownView text={tc.changeSummary ?? '（changeSummary 缺失）'} />
+          {tc.files != null && tc.files.length > 0 ? (
+            <div className="small" style={{ marginTop: 10 }}><strong>涉及文件</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => <li key={i} className="mono-sm">{f}</li>)}</ul></div>
+          ) : null}
+          {tc.executedVerifications != null && tc.executedVerifications.length > 0 ? (
+            <div className="small" style={{ marginTop: 8 }}><strong>已执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.executedVerifications.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
+          ) : null}
+          {tc.unexecutedVerifications != null && tc.unexecutedVerifications.length > 0 ? (
+            <div className="small" style={{ marginTop: 8 }}><strong>未执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.unexecutedVerifications.map((v, i) => <li key={i}>{v.item ?? ''}{v.reason != null ? `——${v.reason}` : ''}</li>)}</ul></div>
+          ) : null}
+          {tc.remainingIssues != null && tc.remainingIssues.length > 0 ? (
+            <div className="small" style={{ marginTop: 8 }}><strong>遗留问题</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.remainingIssues.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
+          ) : null}
+          <div className="small faint" style={{ marginTop: 10, borderTop: '1px solid var(--border,#dbe2ea)', paddingTop: 8 }}>
+            交付文档 v{fd.revision} · {doc.bytes}B · manifest {fd.manifestHash.slice(0, 12)}…{doc.hashMatch === true ? '（正文 hash 与 manifest 核对一致）' : doc.hashMatch === false ? '（**正文 hash 与 manifest 不一致**——以 manifest 为验收身份，正文仅供阅读）' : ''}；「源码视图」查看原始 JSON。
+          </div>
+        </div>
+      ) : (
+        <SourceView text={rawText} language="json" wrap={wrapSource} />
+      )}
+    </>
+  );
 }
 
 /* ============================================================

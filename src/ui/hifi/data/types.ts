@@ -678,6 +678,9 @@ export interface PreviewResource {
    */
   formalAttachment?: { attachmentId: string; kind: string; conversationId?: string };
   formalWorktree?: { projectId: string; path: string };
+  /** R68 §6：正式 AI 交付文档（共享预览第三来源）——delivery.document 按需装载；版本绑定=
+   *  delivery revision + manifestHash（不可变快照，非工作区可变文件）。 */
+  formalDelivery?: { deliveryId: string; revision: number; manifestHash: string; conversationId: string; threadId: string | null; taskTitle: string; audience: 'room' | 'dm' };
 }
 
 export type ResourceOrigin =

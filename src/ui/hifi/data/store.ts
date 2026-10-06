@@ -99,7 +99,10 @@ export interface HifiExtension {
    * 「未持久化——刷新/崩溃会丢」，不静默）。mode=off=身份不可用（浏览器宿主/服务未就绪）
    * ——退回内存态，如实标注。
    */
-  draftPersist: { mode: 'on' | 'off' | 'locked'; error: string | null; /** r62 P2：快照恢复说明（版本/损坏隔离、TTL 过期计数）——与写入失败 error 分列。 */ recoveryNote: string | null };
+  draftPersist: { mode: 'on' | 'off' | 'locked'; error: string | null; /** r62 P2：快照恢复说明（版本/损坏隔离、TTL 过期计数）——与写入失败 error 分列。 */ recoveryNote: string | null;
+    /** R68 §2：旧命名空间导入候选（未自动继承的旧 v1 键——真实 v3/v4 目录无标记，需用户显式确认）。
+     * 状态可见 + 可重试（重扫）；空=null（无候选或已全部处理）。 */
+    legacyImport: { candidates: Array<{ key: string; dir: string; hasStateDb: boolean | null; importedAt?: number | null }>; lastScanAt: number | null; error: string | null } | null };
 }
 
 export type HifiState = AppState & HifiExtension;
@@ -135,7 +138,7 @@ function makeEmptyState(): HifiState {
     outboundLedger: {},
     memberRuntimes: {},
     dispatchGuard: null,
-    draftPersist: { mode: 'off', error: null, recoveryNote: null },
+    draftPersist: { mode: 'off', error: null, recoveryNote: null, legacyImport: null },
   };
 }
 
@@ -508,7 +511,7 @@ function persistSnapshot(): void {
     for (const [k, v] of drafts) draftsOut[k] = v.updatedAt != null ? v : { ...v, updatedAt: now };
     const payload = JSON.stringify({ v: PERSIST_VERSION, savedAt: now, ...(persistRootId != null ? { dataRootId: persistRootId } : {}), drafts: draftsOut, pendingSends: state.pendingSends, uploadItems: uploadsOut, outboundLedger: state.outboundLedger });
     localStorage.setItem(persistKey, payload);
-    if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote } }));
+    if (state.draftPersist.error != null || state.draftPersist.mode === 'off') setState((s) => ({ ...s, draftPersist: { mode: 'on', error: null, recoveryNote: s.draftPersist.recoveryNote, legacyImport: s.draftPersist.legacyImport } }));
   } catch (e) {
     const msg = `草稿持久化失败：${e instanceof Error ? e.message : String(e)}——本次进程内仍有效，刷新或崩溃会丢失未发送内容`;
     setState((s) => (s.draftPersist.error === msg ? s : { ...s, draftPersist: { ...s.draftPersist, mode: 'on', error: msg } }));
@@ -534,7 +537,7 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
     hadKey = raw != null;
   } catch (e) {
     persistKey = null;
-    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效`, recoveryNote: null } }));
+    setState((s) => ({ ...s, draftPersist: { mode: 'off', error: `草稿持久化不可读：${e instanceof Error ? e.message : String(e)}——草稿仅本次进程内有效`, recoveryNote: null, legacyImport: s.draftPersist.legacyImport } }));
     return false;
   }
   let recoveryNote: string | null = null;
@@ -590,7 +593,7 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
         // 内存态；发送（stageOutbound）拒绝——不冒充已耐久落账。释放存储后重启/显式重试。
         persistLocked = true;
         recoveryNote = `草稿快照无法恢复且隔离写入失败（存储空间/配额不足？）——**主键原件已保全锁定**（逐字保持，含未确认发送账本，不覆盖）；本轮草稿与发送账本仅内存态，发送将被要求先恢复存储；释放空间后重启应用或到「设置 → 草稿存储」点重试`;
-        setState((s) => ({ ...s, draftPersist: { mode: 'locked', error: `草稿快照保全锁定：原件未隔离成功，主键保持原样（未覆盖）；新写入仅内存态`, recoveryNote: null } }));
+        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'locked', error: `草稿快照保全锁定：原件未隔离成功，主键保持原样（未覆盖）；新写入仅内存态`, recoveryNote: null } }));
         return hadKey; // 不 persistSnapshot——覆盖即销毁原件（review-r62 §3 反例）
       }
       if (wholeUnrecoverable) {
@@ -607,61 +610,90 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
   }
   persistSnapshot(); // 可写性确认+把「仅有效部分」落为新快照（原件已在隔离键保全）
   recoverLedgerToPending(); // r62 P1：在途发送恢复为未确认横幅（人工同号确认，不自动发送）
-  setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
+  setState((s) => (s.draftPersist.error == null ? { ...s, draftPersist: { ...s.draftPersist, mode: 'on', error: null, recoveryNote } } : { ...s, draftPersist: { ...s.draftPersist, recoveryNote } }));
   return hadKey;
 }
 
 /**
- * R67 P1-B：**可信继承合并**——把已验证同属当前逻辑数据根的旧命名空间快照合并进当前状态
- * 并立即落盘（新键此前不存在=首次复制后启动；此处合并后写入即建立新键，下次启动直接读新键，
- * 旧键不再参与）。合并语义：
- *  - pendingSends：按目标键**保留较新**（savedAt/at 比较；继承件无 TTL——未知信封原
- *    commandId/参数/恢复状态逐字保留，不自动发送、不换号）；
+ * R67 P1-B → R68 §2/§3A：**可信继承合并**——把已验证同属当前逻辑数据根的旧命名空间快照合并
+ * 进当前状态并立即落盘。所有继承入口（loader 自动继承 / 设置页用户确认导入）统一走本函数，
+ * 版本与保全规则与直接初始化路径**同判**：
+ *  - **版本门（R68 §3A）**：`data.v !== PERSIST_VERSION` 的来源**整体拒收**（未来版本不恢复、
+ *    不重发其未知信封；原件在旧键里逐字保持——本函数从不写旧键）。不支持版本计入
+ *    refusedVersions 并在说明中列出，不冒充已消费。
+ *  - pendingSends：**按 commandId 并集**（R68 §2——同目标多个不同命令的未知信封全部保留，
+ *    进 queued 队列；同 commandId 保留较新；无 TTL、不自动发送、不换号）。
  *  - outboundLedger：按 commandId 并集去重（同号保留现存的；继承件 stage 重置 sending 走
  *    既有 recoverLedgerToPending 收口）；
  *  - drafts/uploadItems：按目标键保留 updatedAt 较新者；普通草稿沿用 24h TTL（过期不继承）。
  * 损坏条目沿用 validateDraft/validateEnvelope 校验（不恢复、不派发），并在 recoveryNote 中
  * 如实分列；旧键原件不动（本函数只读入，不写旧键）。
  */
-export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir: string }>, note: string): void {
-  if (persistKey == null) return;
-  let mergedDrafts = 0; let mergedSends = 0; let mergedLedger = 0; let dropped = 0; let expired = 0;
+export interface InheritOutcome {
+  mergedDrafts: number;
+  mergedSends: number;
+  mergedLedger: number;
+  dropped: number;
+  expired: number;
+  refusedVersions: Array<{ sourceDir: string; v: string }>;
+}
+export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir: string }>, note: string): InheritOutcome {
+  const out: InheritOutcome = { mergedDrafts: 0, mergedSends: 0, mergedLedger: 0, dropped: 0, expired: 0, refusedVersions: [] };
+  if (persistKey == null) return out;
   for (const src of sources) {
     if (src.raw.length === 0) continue;
     let data: unknown = null;
-    try { data = JSON.parse(src.raw); } catch { dropped += 1; continue; }
-    if (!isPlainObject(data)) { dropped += 1; continue; }
+    try { data = JSON.parse(src.raw); } catch { out.dropped += 1; continue; }
+    if (!isPlainObject(data)) { out.dropped += 1; continue; }
+    // 版本门：与 initDraftPersistence 同判（v2 是命名空间编号，快照格式版本仍是 PERSIST_VERSION=1）。
+    if (data.v !== PERSIST_VERSION) {
+      out.refusedVersions.push({ sourceDir: src.sourceDir, v: String((data as { v?: unknown }).v ?? '?') });
+      continue;
+    }
     const snapAt = typeof data.savedAt === 'number' ? data.savedAt : 0;
     const now = Date.now();
     // 草稿：按键保留较新（同键现存在且更新则不动）。
     for (const [k, d] of Object.entries((data.drafts ?? {}) as Record<string, unknown>)) {
-      if (!validateDraft(d)) { dropped += 1; continue; }
+      if (!validateDraft(d)) { out.dropped += 1; continue; }
       const age = now - (d.updatedAt ?? snapAt);
-      if (age > DRAFT_TTL_MS) { expired += 1; continue; }
+      if (age > DRAFT_TTL_MS) { out.expired += 1; continue; }
       const cur = drafts.get(k);
       if (cur != null && (cur.updatedAt ?? 0) >= (d.updatedAt ?? snapAt)) continue;
       drafts.set(k, d.updatedAt != null ? d : { ...d, updatedAt: snapAt });
       if (typeof d.rev === 'number' && d.rev > draftRev) draftRev = d.rev;
-      mergedDrafts += 1;
+      out.mergedDrafts += 1;
     }
-    // 未确认信封：按键保留较新（at 比较）。
+    // 未确认信封：**commandId 并集**——同号保留较新；不同号进 queued（同目标多命令全部保留）。
     for (const [k, e] of Object.entries((data.pendingSends ?? {}) as Record<string, unknown>)) {
-      if (!validateEnvelope(e)) { dropped += 1; continue; }
+      if (!validateEnvelope(e)) { out.dropped += 1; continue; }
       const cur = state.pendingSends[k];
-      if (cur != null && (cur.at ?? 0) >= (e.at ?? 0)) continue;
-      state.pendingSends[k] = e;
-      mergedSends += 1;
+      if (cur == null) { state.pendingSends[k] = e; out.mergedSends += 1; continue; }
+      if (cur.commandId === e.commandId) {
+        if ((cur.at ?? 0) >= (e.at ?? 0)) continue;
+        const queued = (cur.queued ?? []).filter((q) => q.commandId !== e.commandId);
+        state.pendingSends[k] = { ...e, queued: [...queued, ...(e.queued ?? [])] };
+        out.mergedSends += 1;
+        continue;
+      }
+      // 不同命令：并入 queued（按 commandId 去重——与 parkUnknownEnvelope 同构，全部可同号重试）。
+      const queued = cur.queued ?? [];
+      if (queued.some((q) => q.commandId === e.commandId)) continue;
+      const inheritedQueued = e.queued ?? [];
+      const merged = [...queued, e];
+      for (const q of inheritedQueued) if (!merged.some((m) => m.commandId === q.commandId)) merged.push(q);
+      state.pendingSends[k] = { ...cur, queued: merged };
+      out.mergedSends += 1;
     }
     // 出站账本：commandId 并集（同号保留现存；继承件并入后统一经 recover 收口）。
     for (const [k, list] of Object.entries((data.outboundLedger ?? {}) as Record<string, unknown>)) {
-      if (!Array.isArray(list)) { dropped += 1; continue; }
+      if (!Array.isArray(list)) { out.dropped += 1; continue; }
       const existing = state.outboundLedger[k] ?? [];
       const ids = new Set(existing.map((x) => x.commandId));
       for (const x of list) {
         if (!validateEnvelope(x) || ids.has(x.commandId)) continue;
         existing.push({ ...x, stage: 'sending' as const });
         ids.add(x.commandId);
-        mergedLedger += 1;
+        out.mergedLedger += 1;
       }
       state.outboundLedger[k] = existing;
     }
@@ -679,17 +711,57 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
   }
   persistSnapshot();
   recoverLedgerToPending();
-  const detail = `跨目录继承完成：草稿 ${mergedDrafts} 条、未确认信封 ${mergedSends} 条、账本 ${mergedLedger} 条${expired > 0 ? `、过期草稿 ${expired} 条（按 24h 约定不继承）` : ''}${dropped > 0 ? `、损坏条目 ${dropped} 条（不恢复不派发）` : ''}。${note}`;
-  setState((s) => ({ ...s, draftPersist: { mode: 'on', error: s.draftPersist.error, recoveryNote: detail } }));
+  const refused = out.refusedVersions.length > 0 ? `、拒收不支持版本来源 ${out.refusedVersions.length} 个（${out.refusedVersions.map((r) => `${r.sourceDir} v${r.v} 不受本程序支持——原件在旧键逐字保持，未消费未派发`).join('；')}）` : '';
+  const detail = `继承完成：草稿 ${out.mergedDrafts} 条、未确认信封 ${out.mergedSends} 条、账本 ${out.mergedLedger} 条${out.expired > 0 ? `、过期草稿 ${out.expired} 条（按 24h 约定不继承）` : ''}${out.dropped > 0 ? `、损坏条目 ${out.dropped} 条（不恢复不派发）` : ''}${refused}。${note}`;
+  setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, mode: 'on', recoveryNote: detail } }));
+  return out;
 }
 
-/**
- * 显式重试（r63 P2 恢复路径）：重新初始化=重读主键→再试隔离。隔离成功（存储已释放）→
- * 解除锁定、原件入隔离键、从恢复出的有效部分建立新快照；仍失败→继续锁定。设置页按钮用。
- */
+/** R68 §2：用户显式确认导入单个旧键（设置 → 草稿存储）。版本门/保全规则与自动继承同判；
+ * 导入后从候选清单移除（importedAt 记录来源与时间），旧键原样保留。 */
+export function importLegacySnapshot(key: string, dir: string): { ok: boolean; error?: string; outcome?: InheritOutcome } {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(key); } catch (e) { return { ok: false, error: `旧键读取失败：${e instanceof Error ? e.message : String(e)}` }; }
+  if (raw == null) return { ok: false, error: '旧键不存在（可能已被清除）' };
+  const outcome = mergeInheritedSnapshots([{ raw, sourceDir: dir }], `用户确认导入旧目录 ${dir} 的键 ${key}（原件保留）`);
+  setState((s) => ({
+    ...s,
+    draftPersist: {
+      ...s.draftPersist,
+      legacyImport: s.draftPersist.legacyImport == null ? null : {
+        ...s.draftPersist.legacyImport,
+        candidates: s.draftPersist.legacyImport.candidates.map((c) => (c.key === key ? { ...c, importedAt: Date.now() } : c)),
+      },
+    },
+  }));
+  return { ok: true, outcome };
+}
+
+/** R68 §2：登记/更新未自动继承的旧键候选（loader 扫描结果）。hasStateDb=null 表示未探测。 */
+export function setLegacyImportCandidates(candidates: Array<{ key: string; dir: string; hasStateDb: boolean | null }>, scanError: string | null = null): void {
+  setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, legacyImport: { candidates, lastScanAt: Date.now(), error: scanError } } }));
+}
+
+/** 显式重试（r63 P2 恢复路径）：重新初始化=重读主键→再试隔离。隔离成功（存储已释放）→
+ * 解除锁定、原件入隔离键、从恢复出的有效部分建立新快照；仍失败→继续锁定。设置页按钮用。 */
 export function retryDraftPersistence(): void {
   if (persistNs == null) return;
   initDraftPersistence(persistNs);
+}
+
+/** R68：清理**当前活动命名空间**的草稿快照键（设置页「清理本地草稿」）。R67 起 v2 逻辑身份
+ * 键与旧绝对路径键并存——必须清活动键（store 记录的 persistKey），不能按绝对路径拼键
+ * （旧拼法清的是已不使用的 v1 键，活动键原样保留=清理无效）。内存态照旧保留至页面关闭。 */
+export function clearPersistedSnapshot(): { ok: boolean; hadKey: boolean; key: string | null; error?: string } {
+  if (persistKey == null) return { ok: false, hadKey: false, key: null, error: '草稿持久化未初始化（身份未就绪/浏览器宿主）——没有活动键可清理' };
+  let hadKey = false;
+  try {
+    hadKey = localStorage.getItem(persistKey) != null;
+    if (hadKey) localStorage.removeItem(persistKey);
+  } catch (e) {
+    return { ok: false, hadKey, key: persistKey, error: `快照键清除失败：${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { ok: true, hadKey, key: persistKey };
 }
 
 /** identity 不可用（服务未就绪/浏览器宿主）：内存态+如实标注（不冒充已持久化）。 */

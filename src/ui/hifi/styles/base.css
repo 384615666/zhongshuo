@@ -1387,7 +1387,8 @@ code, pre, .mono {
   font-size: var(--fs-12);
 }
 /* 下拉按内容宽（覆盖 .select 的 width:100%），不被拉满 */
-.page-filters .field.inline .select {
+.page-filters .field.inline .select,
+.page-filters .field.inline .select-wrap {
   width: auto;
   min-width: 132px;
   max-width: 260px;
@@ -1451,6 +1452,87 @@ code, pre, .mono {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--ring);
+}
+
+/* ---------------- 自绘 Select（R68 §6：统一展开态——原生 select 展开由系统渲染，无法
+   统一设计语言/无法验收截图。按钮=组合框，弹出=.select-pop 列表，键盘可达。） ---------------- */
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+}
+.select-wrap .select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: var(--bg-surface);
+}
+.select-wrap .select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.select-wrap .select .select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-wrap .select .icon {
+  flex: none;
+  transition: transform 0.12s ease;
+}
+.select-wrap .select.open .icon {
+  transform: rotate(180deg);
+}
+.select-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-width: min(360px, 90vw);
+  max-height: 264px;
+  overflow-y: auto;
+  z-index: 60; /* 与 .access-menu 同层（组件弹出最高层——模态之下、页面内容之上） */
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--r-xs, 4px);
+  font-size: var(--fs-13);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.select-option.active {
+  background: var(--bg-surface-2);
+}
+.select-option.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+.select-option .icon {
+  flex: none;
+  color: var(--accent);
+}
+.select-wrap.sm .select {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: var(--fs-12);
 }
 .textarea {
   resize: vertical;

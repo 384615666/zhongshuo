@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
@@ -45,81 +45,143 @@ function stillCurrent(gen: number, projectId: string): boolean {
 /* ---------- 首启（有界等待，不靠 reload——review-r46 §5） ---------- */
 
 /**
- * 草稿持久化初始化（r61 P5 → R67 P1-B 跨目录继承）：
+ * 草稿持久化初始化（r61 P5 → R67 P1-B → R68 §2 真实旧版继承）：
  *  - 命名空间 **v2=稳定逻辑根身份**：`v2.<dataRootId>|<localUserId>`（app.identity 懒建
- *    {appData}/root-identity.json，随目录复制原样带走）——目录换路径/换盘后界面仍能找到
- *    同一逻辑根的快照。dataRootId 不可用（内存库测试/旧 daemon）→ 回退 v1 绝对路径形态。
- *  - **可信继承**：v2 键不存在（=复制后的首次启动）时，收集 localStorage 里的 v1 旧键
- *    （仅同 localUserId），把旧键声明的**绝对目录**清单交 daemon `app.rootIdentityOf` 只读
- *    核对 root-identity.json 的逻辑 id——**与当前根 id 相同**的旧键才被继承（无关数据根/
- *    别的机器/任意目录不混入；不盲扫合并）。合并后立即写 v2 新键；旧键原样保留（原件保全，
- *    不删除不改写）。继承的未知信封/出站账本原 commandId/参数/阶段完整保留（无 TTL、不自动
- *    发送、不换号）；普通草稿沿用 24h TTL。
+ *    {appData}/root-identity.json，随目录复制原样带走）。dataRootId 不可用（内存库测试/旧
+ *    daemon）→ 回退 v1 绝对路径形态。
+ *  - **身份标记无效（R68 §3B）**：root-identity.json 已存在但不合法时 daemon 不覆写不换 ID
+ *    （rootIdentityHealth='invalid-marker'）——本侧退回绝对路径键并给出可见健康状态与显式
+ *    恢复路径，不静默换身份。
+ *  - **真实旧版首次继承（R68 §2）**：v3/v4 没有逻辑身份标记，旧快照也没有内嵌 dataRootId。
+ *    继承判定与「v2 键是否存在」**解耦**（空新键不再是「迁移完成」证据）——用独立继承标记
+ *    `zs.hifi.inherit.<ns>` 记录结论：标记缺失=未判定，每次启动重试（旧键原样保留，重试安全）：
+ *    ① 旧键目录==当前 appDataDir（同目录升级）——目录即同一物理根，构造性可信，自动继承；
+ *    ② 新格式快照内嵌 dataRootId==当前——本地自证（目录改名/移动后仍可继承）；
+ *    ③ 旧格式（无内嵌 id）目录≠当前——daemon app.rootIdentityOf 只读核对旧目录标记；
+ *    ④ 旧格式且旧目录无标记（真实 v3/v4 就是这样）——**不自动继承也不静默丢弃**：登记到
+ *    draftPersist.legacyImport（设置 → 草稿存储 可见 + 重扫 + 用户逐键确认导入；不盲扫合并、
+ *    无关根不混入，导入决定权在用户）。
+ *  - 继承的未知信封/出站账本原 commandId/参数/阶段完整保留（无 TTL、不自动发送、不换号）；
+ *    普通草稿沿用 24h TTL；未来版本来源整体拒收（mergeInheritedSnapshots 版本门同判）。
  */
 async function initDraftPersistenceFromIdentity(): Promise<void> {
   try {
-    const id = await command<{ localUserId: string; appDataDir: string; dataRootId: string | null }>('app.identity', {});
-    const ns = id.dataRootId != null ? `v2.${id.dataRootId}|${id.localUserId}` : `${id.appDataDir}|${id.localUserId}`;
-    const inherited = initDraftPersistence(ns, id.dataRootId);
-    if (!inherited && id.dataRootId != null) {
-      // v2 键不存在且逻辑身份可用 → 尝试一次性继承（异步失败不阻塞启动；结果经 recoveryNote
-      // 如实分列，绝不把「读不到旧键」写成「全部延续」）。
-      try {
-        const candidates = collectLegacyPersistKeys(id.localUserId, id.appDataDir);
-        if (candidates.length > 0) {
-          // 双通道验证：① 新格式快照**内嵌 dataRootId**——本地比对即同根自证（目录已改名/
-          //  移动后旧路径不存在也可继承）；② 旧格式（无内嵌 id）交 daemon 只读核对旧目录
-          //  root-identity.json（旧路径必须仍存在且 id 相同）。两通道都不符=不合并。
-          const validated: Array<{ raw: string; sourceDir: string }> = [];
-          const needDirCheck: Array<{ key: string; dir: string; raw: string }> = [];
-          for (const c of candidates) {
-            const raw = localStorage.getItem(c.key) ?? '';
-            let embedded: unknown = null;
-            try { embedded = (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { embedded = null; }
-            if (typeof embedded === 'string' && embedded.length >= 8) {
-              if (embedded === id.dataRootId) validated.push({ raw, sourceDir: c.dir });
-            } else {
-              needDirCheck.push({ key: c.key, dir: c.dir, raw });
-            }
-          }
-          if (needDirCheck.length > 0) {
-            try {
-              const r = await command<{ ids: Record<string, string | null> }>('app.rootIdentityOf', { appDataDirs: needDirCheck.map((c) => c.dir) });
-              for (const c of needDirCheck) if (r.ids[c.dir] === id.dataRootId) validated.push({ raw: c.raw, sourceDir: c.dir });
-            } catch { /* 目录校验不可用：仅内嵌自证部分继承，其余如实不合并 */ }
-          }
-          if (validated.length > 0) {
-            mergeInheritedSnapshots(validated, `已从旧数据目录继承草稿/未确认发送账本（${validated.map((c) => c.sourceDir).join('、')}；旧键原样保留）`);
-          } else {
-            recordWrite('draft.inherit', `发现 ${candidates.length} 个旧命名空间键但无一同属当前逻辑数据根——不合并（无关根/他机数据不混入）`);
-          }
-        }
-      } catch (e) {
-        recordWrite('draft.inherit', `旧命名空间继承校验失败（${e instanceof Error ? e.message : String(e)}）——保持新键现状，不猜合并`);
+    const id = await command<{ localUserId: string; appDataDir: string; dataRootId: string | null; rootIdentityHealth?: 'ok' | 'invalid-marker' | 'unavailable'; rootIdentityProblem?: string | null }>('app.identity', {});
+    if (id.dataRootId == null || id.rootIdentityHealth === 'invalid-marker') {
+      // 绝对路径命名空间（内存库/旧 daemon/标记无效）。标记无效：身份健康问题必须可见——
+      // 不冒充逻辑身份可用，也不静默换 ID（旧 v2 键仍指向原 ID，等用户修复标记）。
+      const ns = `${id.appDataDir}|${id.localUserId}`;
+      initDraftPersistence(ns);
+      if (id.rootIdentityHealth === 'invalid-marker') {
+        recordWrite('app.identity', `数据根身份标记无效（${id.rootIdentityProblem ?? '未知原因'}）——原件未改动；本会话草稿按绝对路径键读写，逻辑身份继承暂停`);
+        setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, recoveryNote: `数据根身份标记 root-identity.json 无效（${id.rootIdentityProblem ?? '未知原因'}）——**原件逐字保全，未换 ID**；本会话按绝对路径键读写（同目录内正常）。修复方法：人工核对 ${id.appDataDir}\\root-identity.json（内容应为 {"id":"dri_…","createdAt":…}），修正或删除该文件后重启应用——逻辑身份与跨目录继承即恢复。` } }));
       }
+      return;
     }
+    const ns = `v2.${id.dataRootId}|${id.localUserId}`;
+    initDraftPersistence(ns, id.dataRootId);
+    // 继承标记门：与 v2 键存在与否解耦（先写空新键不再导致永久跳过继承）。
+    const markerKey = `zs.hifi.inherit.${ns}`;
+    let markerDone = false;
+    try {
+      const m = localStorage.getItem(markerKey);
+      markerDone = m != null && (() => { try { return (JSON.parse(m) as { state?: unknown }).state === 'done'; } catch { return false; } })();
+    } catch { markerDone = false; /* 不可读=未判定，重试 */ }
+    if (markerDone) return;
+    await attemptLegacyInheritance(ns, { localUserId: id.localUserId, appDataDir: id.appDataDir, dataRootId: id.dataRootId });
   } catch (e) {
     markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
   }
 }
 
-/** 收集候选 v1 旧键（同用户、非当前绝对目录、非隔离件）。返回 [{key, dir}]。 */
-function collectLegacyPersistKeys(localUserId: string, currentAppDataDir: string): Array<{ key: string; dir: string }> {
+/** 一次继承判定（自动通道 ①②③ + 用户导入候选登记 ④）。结论写继承标记；失败不写（下次重试）。 */
+async function attemptLegacyInheritance(ns: string, id: { localUserId: string; appDataDir: string; dataRootId: string }): Promise<void> {
+  const markerKey = `zs.hifi.inherit.${ns}`;
+  const candidates = collectLegacyPersistKeys(id.localUserId);
+  const validated: Array<{ raw: string; sourceDir: string }> = [];
+  const importable: Array<{ key: string; dir: string; hasStateDb: boolean | null }> = [];
+  let scanError: string | null = null;
+  // 通道①：同目录 v1 键（目录==当前 appDataDir——同一物理根，构造性可信；不依赖旧程序从未
+  // 生成过的标记）。R67 反例：此键曾被跳过，同目录升级丢失草稿/未知账本。
+  for (const c of candidates.filter((c) => c.dir === id.appDataDir)) {
+    const raw = localStorage.getItem(c.key) ?? '';
+    if (raw.length > 0) validated.push({ raw, sourceDir: `${c.dir}（同目录）` });
+  }
+  // 通道②③：跨目录候选——内嵌 dataRootId 自证，或交 daemon 只读核对旧目录标记。
+  const crossDir = candidates.filter((c) => c.dir !== id.appDataDir);
+  const needDirCheck: Array<{ key: string; dir: string; raw: string }> = [];
+  for (const c of crossDir) {
+    const raw = localStorage.getItem(c.key) ?? '';
+    if (raw.length === 0) continue;
+    let embedded: unknown = null;
+    try { embedded = (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { embedded = null; }
+    if (typeof embedded === 'string' && embedded.length >= 8) {
+      if (embedded === id.dataRootId) validated.push({ raw, sourceDir: `${c.dir}（内嵌同根）` });
+      // 内嵌异根：不合并、不导入（明确属于其它逻辑根）。
+    } else {
+      needDirCheck.push({ key: c.key, dir: c.dir, raw });
+    }
+  }
+  if (needDirCheck.length > 0) {
+    try {
+      const r = await command<{ ids: Record<string, string | null>; hasStateDb: Record<string, boolean> }>('app.rootIdentityOf', { appDataDirs: needDirCheck.map((c) => c.dir) });
+      for (const c of needDirCheck) {
+        if (r.ids[c.dir] === id.dataRootId) validated.push({ raw: c.raw, sourceDir: `${c.dir}（标记同根）` });
+        else {
+          // 旧目录无标记/异根：真实 v3/v4 旧根没有标记——登记为用户导入候选（hasStateDb 帮助
+          // 核对，不构成信任证明；不自动合并无关根）。
+          importable.push({ key: c.key, dir: c.dir, hasStateDb: r.hasStateDb?.[c.dir] ?? null });
+        }
+      }
+    } catch (e) {
+      // 目录校验不可用：仅已验证部分继承；未验证候选下次启动重试（标记不写 done）。
+      scanError = `旧目录身份核对不可用（${e instanceof Error ? e.message : String(e)}）——未验证候选保留，下次启动自动重试`;
+    }
+  }
+  if (validated.length > 0) {
+    mergeInheritedSnapshots(validated, `已从旧命名空间自动继承（${validated.map((c) => c.sourceDir).join('、')}；旧键原样保留）`);
+  }
+  setLegacyImportCandidates(importable, scanError);
+  if (importable.length > 0) {
+    recordWrite('draft.inherit', `发现 ${importable.length} 个未验证旧目录的草稿键（${importable.map((c) => c.dir).join('、')}）——真实 v3/v4 旧数据根没有身份标记，不能自动确认同根；如属你的旧数据根，请到「设置 → 草稿存储」逐键确认导入（未确认前不合并、不派发）`);
+  } else if (validated.length === 0 && candidates.length > 0) {
+    recordWrite('draft.inherit', `发现 ${candidates.length} 个旧命名空间键但无一同属当前数据根（内嵌异根/标记异根）——不合并（无关根/他机数据不混入）`);
+  }
+  if (scanError == null) {
+    // 全部候选已有结论（继承/登记/明确异根）——写 done；此后不再扫描（用户导入/重扫走设置页）。
+    try { localStorage.setItem(markerKey, JSON.stringify({ state: 'done', at: Date.now(), auto: validated.length, importable: importable.length })); } catch { /* 标记写失败：下次启动重扫（旧键原样保留，安全） */ }
+  }
+}
+
+/** 设置页「重扫旧目录」：重跑一次继承判定（用户修复标记/插入新复制后用）。 */
+export async function rescanLegacyImport(): Promise<void> {
+  try {
+    const id = await command<{ localUserId: string; appDataDir: string; dataRootId: string | null }>('app.identity', {});
+    if (id.dataRootId == null) { setLegacyImportCandidates([], '当前无逻辑数据根身份（标记无效/不可用）——先修复 root-identity.json 再重扫'); return; }
+    await attemptLegacyInheritance(`v2.${id.dataRootId}|${id.localUserId}`, { localUserId: id.localUserId, appDataDir: id.appDataDir, dataRootId: id.dataRootId });
+  } catch (e) {
+    setLegacyImportCandidates([], `重扫失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** 收集候选 v1 旧键（同用户、非隔离件；**含当前目录**——同目录升级的构造性可信来源）。
+ * 返回 [{key, dir}]。 */
+function collectLegacyPersistKeys(localUserId: string): Array<{ key: string; dir: string }> {
   const out: Array<{ key: string; dir: string }> = [];
   try {
     for (const key of Object.keys(localStorage)) {
       const m = /^zs\.hifi\.persist\.(.+\|.+)$/.exec(key);
       if (m == null) continue;
+      if (key.includes('.quarantine-')) continue; // 隔离件不参与继承（保全原件，不二次消费）
       const sep = m[1].lastIndexOf('|');
       const dir = m[1].slice(0, sep);
       const user = m[1].slice(sep + 1);
       if (user !== localUserId) continue; // 别的用户不混入
-      if (dir === currentAppDataDir) continue; // 当前目录的 v1 键（正常路径已由 init 读过）
       if (dir.startsWith('v2.')) continue; // v2 键非本函数职责
       out.push({ key, dir });
     }
   } catch { /* localStorage 不可枚举：如实无候选 */ }
-  return out.slice(0, 16);
+  return out.slice(0, 32);
 }
 
 export async function bootRemembered(): Promise<void> {
