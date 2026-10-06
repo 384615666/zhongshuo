@@ -2,6 +2,46 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-06 第六十三轮，唯一权威快照）
+
+> R63=日常桌面使用批次（review-r62-next-round 全项；主线转用户日常使用，复用已认证 runtime/
+> 配置）。**用户收案**：R1/R2 **PASS 继承不再重测**；Android 除发送失败就地提示缺口外报正常
+> （不补造细节，低优先级）；G9 维持 NOT_RUN。**主交付=日常桌面便携包
+> `desktop-daily-win-v1`** `bld_b285020fd554bda1`（commit 850240f，dirty=false，591/591，
+> 验证全绿 r63-daily-20261006043816，real_calls=0）。用户下一步只有**首次使用检查三步**
+> （打开自己的项目/成员配置/仅记录保存一条重开可见）——不再有 G/R 清单。v6 及演练包保留作
+> 工程验证形态。
+> - **[§1 统一成功清算（review-r62 §2 反例）]** settleOutbound 扩为唯一成功结算源（正文/
+>   mentions（payload member/all↔id 串映射）/refs/一次性意图（记录串回 record）/上传项/删账
+>   一次写）；Composer 成功分支只读结算结果同步 UI；retryUnknown 成功走同一函数；原型同步
+>   分支注明非第二源。反例（发送成功旧 @ 芯片残留）闭拢：浏览器门 18/18。
+> - **[§2 主键保全锁定（review-r62 §3 分离负例）]** 隔离写失败（新增键败+覆盖可成）→
+>   persistLocked：主键永不覆盖/persistSnapshot 短路/编辑仅内存态/**stageOutbound 拒发**
+>   （不冒充已落账）；retryDraftPersistence 恢复路径（释放存储→隔离成功→解锁）。20/20。
+> - **[§3 日常配置路径]** MembersPage「配置 runtime」（member.setRuntime：渠道/claude 模型
+>   必填/executable/permissionMode；fake 仅环境允许时可选）；保存后回读+**refreshMembers
+>   刷新 store.memberRuntimes 投影**（发送区提示即时消失）；Composer 发送区未绑定就地原因+
+>   「去成员页配置」直达（AUTO=无已绑定 agent、@ 指派=该成员未绑定）；SettingsPage「数据与
+>   草稿存储」（app.identity 数据根/快照健康度四态/recoveryNote/重试按钮）。
+> - **[§4 ZS_ALLOW_FAKE 打包形态泄漏修复（验证中发现）]** main.ts 原 `?? '1'` 缺省注入使
+>   打包形态永远 fakeAllowed=true——现打包形态仅透传显式设置（dev 保持缺省放开；演练包启动
+>   器自设不受影响）。日常包 runtime.status 实证 fakeAllowed=false/realDispatchGuard=false。
+> - **[§5 日常包（make-desktop-daily.mjs）]** 同构建门；启动器 ZS_RUNTIME=claude（成员绑定
+>   优先解析）、无 ALLOW_FAKE/GUARD/BOOTSTRAP、**不运行 seed 不带 seed/samples**；数据根=包内
+>   server-data（稳定、与演练根分清）；README-DAILY（首次三步/数据根/常见情况/工程-日常覆盖
+>   边界分列）。验证脚本 8 段全绿（欢迎无 seed 双库证/环境自述/打开实际项目引导执行成员+
+>   默认房间/绑定表单 fake 选项不存在+落库回读/未绑定提示绑定后消失/仅记录+草稿跨重开/
+>   real_calls=0/零残留）。
+> - **[§6 Android 就地提示（低优先级顺手修）]** remoteClient 发送失败就地显示发送区
+>   （send-error 行，绑定发起目标切走即清；事件流保留诊断）：空正文校验人话化（'Too small:
+>   expected string…'→附件非正文替代，正文仍需≥1 字符）、IMAGE_INPUT_UNVERIFIED 三选项
+>   （去图/仅记录/继续文字——**不放开图片能力门**）、服务拒绝；草稿附件一律保留；pending
+>   重试同路。文本级核对入库（未做移动端重设计；随之后必要产物带出）。
+> - **坑（本轮新增）**：main.ts spawn env 的 ?? 缺省会污染打包形态（环境自述要与形态核对）；
+>  日常包验证点击必须断言 find 结果（?.click() 静默 false 掩盖路由未达）；CDP eval 在关窗
+>   销毁期超时属预期（以进程归零为准）；members 页渲染等待窗口受首启装载影响（45s）；
+>  bat pause=启动器不随窗退（exit 判据以副本进程归零为准）。
+> - 全量 **894/894**；主+hifi 双门 0 错。Android DEV25 v6/CA/RESULTS 未动。
 ## 当前真实状态（2026-10-06 第六十二轮，唯一权威快照）
 
 > R62=复核缺口收口+Git 只读入口批次（review-r61-next-round 全项）。**新基线
