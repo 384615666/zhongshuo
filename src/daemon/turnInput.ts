@@ -171,8 +171,12 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
     rootAttachments.push(doc.entry);
   }
+  // R67：同 dm_turn——正文空+有附件引用=合法文件-only 任务；空且无附件仍拒。
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
-    return assemblyFailure('empty-root-message', '根消息正文为空');
+    const rootAttCount2 = (db.prepare('SELECT count(*) c FROM message_attachments WHERE message_id = ?').get(root.id) as { c: number }).c;
+    if (rootAttCount2 === 0) {
+      return assemblyFailure('empty-root-message', '根消息正文为空且无附件（拒绝构造空模型输入）');
+    }
   }
 
   const projectRoot = (db.prepare('SELECT canonical_path FROM projects WHERE id = ?').get(task.projectId) as { canonical_path: string } | undefined)?.canonical_path;
@@ -356,8 +360,14 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     return assemblyFailure('root-scope-mismatch', `根消息任务归属不符（msg.task_id=${root.task_id ?? 'null'} ≠ 本任务）——拒绝组装`);
   }
   const rootBody = JSON.parse(root.body_json) as { text: string };
+  // R67（用户已批准：只有文件也沿用当前模式发送）：正文可空——前提是根消息**带附件引用**
+  //（模型输入=附件注入文本；上方 hasImages/omit-images 门已在提交侧挡掉「仅图片+仅文字」
+  // 的空输入组合）。无正文且无附件仍按空根消息拒绝（不构造空输入）。
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
-    return assemblyFailure('empty-root-message', 'dm_turn 根消息正文为空');
+    const rootAttCount = (db.prepare('SELECT count(*) c FROM message_attachments WHERE message_id = ?').get(root.id) as { c: number }).c;
+    if (rootAttCount === 0) {
+      return assemblyFailure('empty-root-message', 'dm_turn 根消息正文为空且无附件（拒绝构造空模型输入）');
+    }
   }
   if (task.inputThroughSeq == null) {
     return assemblyFailure('missing-input-boundary', 'dm_turn 缺少输入水位（input_through_seq）——拒绝组装（边界必须可解释）');

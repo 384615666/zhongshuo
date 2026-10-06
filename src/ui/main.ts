@@ -451,6 +451,20 @@ let hifiLoseOnce = false; // 受控丢回执一次性闸（ZS_H1_LOSE_SUBMIT_ONC
     const raw = Buffer.from(p.contentBase64, 'base64');
     if (raw.length === 0) throw new Error('另存为内容为空');
     if (raw.length > 64 * 1024 * 1024) throw new Error(`另存为内容超限（${raw.length}B > 64MB）`);
+    // 工程验证钩子（ZS_SAVEAS_AUTO_DIR，仅显式设置的测试/演练环境）：跳过对话框直写指定
+    // 目录（同名自动加序号）——使保存链的**落盘字节**可被自动化逐字核验；产品默认不设该
+    // 变量，用户路径始终走系统另存为对话框。
+    const autoDir = process.env.ZS_SAVEAS_AUTO_DIR;
+    if (autoDir != null && autoDir.length > 0) {
+      mkdirSync(autoDir, { recursive: true });
+      let target = join(autoDir, safeName);
+      for (let n = 2; existsSync(target); n += 1) {
+        const dotAt = safeName.lastIndexOf('.');
+        target = join(autoDir, dotAt > 0 ? `${safeName.slice(0, dotAt)}-${n}${safeName.slice(dotAt)}` : `${safeName}-${n}`);
+      }
+      writeFileSync(target, raw);
+      return { ok: true, path: target, bytes: raw.length, auto: true };
+    }
     const picked = await dialog.showSaveDialog(win, {
       title: '另存为',
       defaultPath: safeName,
