@@ -68,6 +68,7 @@ button.primary{background:#2456d6;color:#fff;border-color:#2456d6}
     <div id="thread-list" class="meta"></div>
     <div id="messages" class="card"></div>
     <div id="composer">
+      <div id="send-error" class="meta warn hidden" style="margin:4px 0"></div>
       <textarea id="send-text" placeholder="输入消息（默认交给 AI；房间消息进主池，私信按 1 对 1，线程内跟进串内）"></textarea>
       <div>
         <select id="mention-sel" class="hidden" title="指派成员（DIRECT）：留空=自动路由——M0 模式下房间消息未指派会被门禁阻塞（如实标 BLOCKED，不冒充执行）"><option value="">不指派（自动路由）</option></select>
@@ -379,6 +380,7 @@ let restoring = false; // 恢复轮内抑制自动加载（第三十五轮一：
 function switchTarget(t) {
   currentTarget = t;
   currentThread = null; // 切目标回到线程列表
+  clearSendError(); // r63：就地错误绑定发起目标——切走即清
   void refreshMentionPicker();
   if (t != null) {
     const d = draftOf(t.key);
@@ -577,6 +579,26 @@ function renderChips() {
 }
 
 // ---------- 发送（按实际提交信封清算；失败语义分明确拒绝/未知） ----------
+/** r63（review-r62 §5）：发送失败就地显示在发送区（绑定发起目标——切走即清）；事件流保留诊断行。
+ * 实际失败原因人话化：空正文（有附件时正文仍必填——附件不是正文替代）、图片能力未认证、
+ * 服务端明确拒绝；草稿与附件一律保留。 */
+function showSendError(message) {
+  const el = document.getElementById('send-error');
+  if (el == null) return;
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+function clearSendError() {
+  const el = document.getElementById('send-error');
+  if (el != null) { el.textContent = ''; el.classList.add('hidden'); }
+}
+function humanizeSendError(e) {
+  if (e && e.code === 'IMAGE_INPUT_UNVERIFIED') return '图片输入能力未认证：图片不会作为模型输入发送。请去掉图片附件、改为「仅记录」，或继续发送文字部分（草稿与附件已保留）';
+  const msg = String((e && e.message) || e || '未知错误');
+  if (/expected string to have >=1 characters/i.test(msg)) return '发送失败：正文不能为空——有附件时也需填写至少一个字符的正文（附件单独发送暂不支持）；草稿与附件已保留';
+  return '发送失败：' + msg + '（草稿与附件已保留，可修正后重试）';
+}
+
 async function send(intent) {
   if (currentTarget == null) return;
   const t = currentTarget;
@@ -593,7 +615,7 @@ async function send(intent) {
       settleDraft(t.key, pending.params);
       await loadMessages();
       return;
-    } catch (e) { showErr(e); return; }
+    } catch (e) { showSendError(humanizeSendError(e)); feedLine('error', humanizeSendError(e)); return; }
   }
   const target = currentThread != null && t.kind === 'room'
     ? { kind: 'thread', projectId: t.projectId, conversationId: t.conversationId, threadId: currentThread }
@@ -609,13 +631,15 @@ async function send(intent) {
   const mentions = mentionValue !== '' ? [{ kind: 'member', memberId: mentionValue }] : [];
   const params = { target, body: text, intent, mentions };
   if (d.attachIds.length > 0) params.attachmentRefs = [...d.attachIds];
+  clearSendError();
   try {
     await cmdOnce(opKey, 'message.submit', params);
     settleDraft(t.key, params); // 按实际提交的信封清算（不是「全清」）
     await loadMessages();
   } catch (e) {
-    if (e.code === 'IMAGE_INPUT_UNVERIFIED') feedLine('gate', '图片输入能力未认证——请去掉图片附件或选「仅记录」（草稿与附件已保留，修正后可重发）');
-    else showErr(e);
+    // r63：实际原因就地显示（空正文校验/图片能力门/服务拒绝）；诊断行仍入事件流。
+    showSendError(humanizeSendError(e));
+    feedLine('error', humanizeSendError(e));
   }
 }
 /** 按实际提交信封清算（第三十三轮四）：只移除已发送 refs；正文被修改则保留；B 的上传不受 A 清算影响。 */
@@ -637,7 +661,7 @@ function settleDraft(targetKey, submittedParams) {
 }
 document.getElementById('send-btn').onclick = () => void send('default');
 document.getElementById('record-btn').onclick = () => void send('record_only');
-document.getElementById('send-text').oninput = (ev) => { if (currentTarget != null) draftOf(currentTarget.key).text = ev.target.value; };
+document.getElementById('send-text').oninput = (ev) => { clearSendError(); if (currentTarget != null) draftOf(currentTarget.key).text = ev.target.value; };
 
 // ---------- 任务（房间看板+DM 执行态合并；状态事件驱动刷新；操作键绑版本） ----------
 /**
