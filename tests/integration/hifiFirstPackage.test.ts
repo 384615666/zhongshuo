@@ -271,14 +271,15 @@ describe('第四十七轮 H1：打包 hifi 前端 × 正式 daemon × fake 库/w
       await new Promise((r) => setTimeout(r, 50));
       await L.openProjectByPath(dirB); // B 后发先至
       // R65 多项目合同：打开 B **合并不替换**——A/B 都在集合，焦点=B；迟到 A 不得覆盖焦点/顺序。
-      expect(store.getState().activeProjectId).toBe(store.getState().projects.find((x) => x.displayName === 'projB')?.id);
-      expect(store.getState().projects.map((x) => x.displayName)).toContain('projB');
+      const stMulti = () => store.getState() as unknown as { activeProjectId: string; projects: Array<{ id: string; displayName: string }> };
+      expect(stMulti().activeProjectId).toBe(stMulti().projects.find((x) => x.displayName === 'projB')?.id);
+      expect(stMulti().projects.map((x) => x.displayName)).toContain('projB');
       slowA.forEach((r) => r()); // 放行 A——迟到响应不得覆盖焦点（代次门丢弃旧 open 的 UI 投影）
       await pA;
-      expect(store.getState().activeProjectId).toBe(store.getState().projects.find((x) => x.displayName === 'projB')?.id);
+      expect(stMulti().activeProjectId).toBe(stMulti().projects.find((x) => x.displayName === 'projB')?.id);
       // A 已在服务端注册（daemon 先落库）——注册表重载即找回（不因迟到丢失项目）
       await L.loadProjectRegistry();
-      expect(store.getState().projects.map((x) => x.displayName)).toContain('projA');
+      expect(stMulti().projects.map((x) => x.displayName)).toContain('projA');
       globalWindow.zs.command = realCommand;
 
       // ---------- ③ 标读统一门（review-r47 §4：发起点重查，不信请求前快照） ----------
