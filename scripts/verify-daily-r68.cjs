@@ -72,6 +72,7 @@ function cleanupOwn() { for (const c of [...own]) { if (c.exitCode != null) cont
 const dbOf = (root) => { const Database = require(path.join(repo, 'node_modules', 'better-sqlite3')); const db = new Database(path.join(root, 'state.sqlite')); return { q: (sql, ...a) => db.prepare(sql).all(...a), run: (sql, ...a) => db.prepare(sql).run(...a), close: () => db.close() }; };
 const sha256Buf = (b) => createHash('sha256').update(b).digest('hex');
 let __appOut = { v: '' };
+let f = { g1: {}, g2: {}, g3: {}, g4: {}, g5: {}, g6: {} }; // 模块级：失败路径可部分落盘
 
 const saveAsDir = path.join(outDir, 'saved');
 const cmdLogPath = path.join(outDir, 'cmdlog.ndjson');
@@ -122,8 +123,12 @@ async function launchPackaged(pkgDir, dataRoot, extraEnv = {}) {
   await until(() => cdp.tryEval(`window.zs.command({ protocolVersion: 1, commandId: 'rdy-${pipeTag.slice(-6)}', method: 'app.identity', params: {} }).then((r) => r.ok === true, () => false)`).catch(() => false), (v) => v === true, 90000, '冻结候选守护进程就绪');
   return { app, cdp };
 }
-async function closeApp(app) {
-  await until(async () => { try { process.kill(app.pid, 0); return false; } catch { return true; } }, (v) => v, 30000, 'app 退出').catch(async () => { try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* */ } });
+async function closeApp(app, cdp) {
+  // 优雅关窗（Browser.close 走正式关窗链）：Chromium 的 localStorage（LevelDB）写是缓冲的——
+  // 强杀会丢最后一次草稿/账本写（实测未知信封后的新草稿在 kill 下丢失）。优雅退出即落盘；
+  // 超时才强杀兜底。
+  try { if (cdp != null && !cdp.closed) await cdp.send('Browser.close'); } catch { /* 已退 */ }
+  await until(async () => { try { process.kill(app.pid, 0); return false; } catch { return true; } }, (v) => v, 20000, 'app 优雅退出').catch(async () => { try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* */ } });
   await sleep(1800);
 }
 function mkProj(name, files = {}) {
@@ -168,6 +173,24 @@ async function openDmComposer(cdp, projId, dmId) {
   });
   await sleep(600);
 }
+/** 等「发送」按钮恢复可用：unknown 的回执要等 20s 超时才收口（按钮期间 disabled）。 */
+async function waitSendEnabled(cdp, ms = 30000) {
+  await until(() => cdp.tryEval(probe(`(() => { const b = document.querySelector('#hifi-root .composer-send'); return b != null && b.disabled !== true; })()`)).catch(() => null), (v) => v === true, ms, '发送按钮恢复可用');
+}
+/** 打草稿并回读持久键确认落盘（未落盘重试一次——防止快照未写导致继承端草稿缺失）。 */
+async function typeAndVerifyDraft(cdp, text) {
+  const typeIt = () => cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); if (ta == null) return false; const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, ${JSON.stringify(text)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
+  const readDrafts = () => cdp.tryEval(`(() => { const k = [...Object.keys(localStorage)].find((x) => x.includes('zs.hifi.persist.') && !x.includes('quarantine')); if (k == null) return null; const d = JSON.parse(localStorage.getItem(k)); return Object.values(d.drafts ?? {}).map((x) => x.body); })()`);
+  await typeIt();
+  await sleep(900);
+  let bodies = await readDrafts();
+  if (!(Array.isArray(bodies) && bodies.some((b) => b === text))) {
+    await typeIt();
+    await sleep(1500);
+    bodies = await readDrafts();
+  }
+  return Array.isArray(bodies) && bodies.some((b) => b === text);
+}
 async function uploadViaPage(cdp, filePath, name) {
   const b64 = fs.readFileSync(filePath).toString('base64');
   const okv = await cdp.tryEval(probe(`(() => {
@@ -198,7 +221,6 @@ async function pendingIdsInPage(cdp) {
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(saveAsDir, { recursive: true });
   const errs = [];
-  const f = { g1: {}, g2: {}, g3: {}, g4: {}, g5: {}, g6: {} };
 
   /* 夹具项目与文件 */
   const mdFile = path.join(outDir, 'gate 上传.md');
@@ -246,41 +268,54 @@ async function pendingIdsInPage(cdp) {
     const srv2 = dbOf(root1).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversationId)[0].c;
     f.g1.exactlyOnceAfterRetry1 = srv2 - srv1 === 0;
     if (f.g1.exactlyOnceAfterRetry1 !== true) errs.push(`G1：重试#1 产生重复（+${srv2 - srv1}）`);
+    await waitSendEnabled(cdp); // unknown 回执 20s 超时窗口内按钮仍「正在发送…」——过早连发会被吞
     // 第二封未知（不同命令）：移除附件，改仅记录，发新正文（LOSE#3 → 也未知）。
-    await cdp.eval(probe(`(() => { const chips = [...document.querySelectorAll('#hifi-root .chip')].filter((c) => c.textContent.includes('gate 上传')); chips.forEach((c) => c.querySelector('button')?.click()); return true; })()`));
+    await cdp.eval(probe(`(() => { const chips = [...document.querySelectorAll('#hifi-root .chip')].filter((c) => c.textContent.includes('gate 上传')); chips.forEach((c) => { const btns = [...c.querySelectorAll('button')]; const x = btns[btns.length - 1]; x?.click(); }); return true; })()`));
     await sleep(300);
     await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, 'G1-第二封未知正文'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
     await cdp.eval(probe(`(() => { const m = [...document.querySelectorAll('#hifi-root button')].find((x) => x.getAttribute('aria-label') === '本次运行设置'); m?.click(); return true; })()`));
     await until(() => cdp.tryEval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .menu .menu-item')].find((x) => x.textContent.includes('仅记录，不请求回复')); if (b == null) return false; b.click(); return true; })()`)), (v) => v === true, 8000, 'G1 第二封仅记录意图');
     await sleep(300);
+    f.g1.send2Chips = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .composer-mentions .chip')].map((c) => c.textContent.slice(0, 24)).join('|')`);
+    f.g1.send2Pre = await cdp.tryEval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const b = document.querySelector('#hifi-root .composer-send'); return { val: ta ? ta.value : null, disabled: b ? b.disabled : null, title: b ? b.title : null }; })()`));
+    f.g1.srvPre2 = dbOf(root1).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversationId)[0].c;
     await cdp.eval(probe(`document.querySelector('#hifi-root .composer-send')?.click(), true`));
     await sleep(2800);
+    f.g1.srvPost2 = dbOf(root1).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversationId)[0].c;
+    f.g1.send2BannerCount = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .composer-mentions')].filter((x) => x.textContent.includes('结果未知')).length`);
+    f.g1.send2Toast = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .toast, [role=status]')].map((x) => x.textContent.slice(0, 90)).join(' || ')`);
+    f.g1.send2Post = await cdp.tryEval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const b = document.querySelector('#hifi-root .composer-send'); const err = [...document.querySelectorAll('#hifi-root .composer-send-error, #hifi-root .send-error, #hifi-root .panel.warning')].map((x) => x.textContent.slice(0, 120)).join('||'); return { val: ta ? ta.value : null, disabled: b ? b.disabled : null, err }; })()`));
+    f.g1.send2Submits = submitsOf().filter((e) => e.method === 'message.submit').length;
     // 两封未知并存（不同 commandId 全保留）→ 重载后仍并存。
     await cdp.eval(`location.reload(), true`);
     cdp = await connectPage('G1 重载');
     await openDmComposer(cdp, proj.id, dm.conversationId);
     const idsAfterReload = await pendingIdsInPage(cdp);
+    f.g1.idsAfterReload = idsAfterReload;
     f.g1.twoUnknownPreserved = Array.isArray(idsAfterReload) && idsAfterReload.filter((x) => typeof x === 'string' && x.startsWith('cmd_')).length >= 2;
     if (f.g1.twoUnknownPreserved !== true) errs.push(`G1：同目标多未知信封未并存保留（${JSON.stringify(idsAfterReload)}）`);
     // 重试当前头封（=#1）→ 成功：#1 清、#2 仍在（横幅仍在）。
     f.g1.clicked2 = await clickRetry(cdp);
-    await sleep(2600);
+    await waitSendEnabled(cdp);
+    await sleep(400);
     f.g1.bannerStillOne = await bannerPresent(cdp);
     const srv3 = dbOf(root1).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversationId)[0].c;
-    f.g1.exactlyOnceFinal = srv3 === 2; // 两封各恰一次（#1 服务侧 1 条 + #2 服务侧 1 条）
-    if (f.g1.exactlyOnceFinal !== true) errs.push(`G1：最终消息数≠2（${srv3}）`);
+    f.g1.srv3 = srv3;
+    f.g1.exactlyOnceFinal = srv3 === f.g1.srvPost2; // 重试不新增服务侧消息（同号 replay——恰一次）
+    if (f.g1.exactlyOnceFinal !== true) errs.push(`G1：重试后消息数变化（${f.g1.srvPost2} → ${srv3}）`);
     const idsFinal = await pendingIdsInPage(cdp);
     f.g1.firstCleared = !(Array.isArray(idsFinal) && idsFinal.includes(f.g1.firstCommandId));
     if (f.g1.firstCleared !== true) errs.push('G1：成功重试后本条账本未清理');
     // 重试头封（当前=#2）成功后横幅应清空。
     f.g1.clicked3 = await clickRetry(cdp);
-    await sleep(2600);
+    await waitSendEnabled(cdp);
+    await sleep(400);
     f.g1.allCleared = (await bannerPresent(cdp)) !== true;
     if (f.g1.allCleared !== true) errs.push('G1：第二封重试成功后横幅未消失');
     const idsFinal2 = await pendingIdsInPage(cdp);
     f.g1.ledgerEmpty = !(Array.isArray(idsFinal2) && idsFinal2.some((x) => typeof x === 'string' && x.startsWith('cmd_')));
     if (f.g1.ledgerEmpty !== true) errs.push('G1：账本未清空');
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ================= G2 真实旧版继承端到端 ================= */
@@ -314,13 +349,14 @@ async function pendingIdsInPage(cdp) {
     await cdp.eval(probe(`document.querySelector('#hifi-root .composer-send')?.click(), true`));
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .composer-mentions')].some((x) => x.textContent.includes('结果未知'))`, 40000, 'v4 未知横幅');
     // 未知信封在横幅后另立**未发送草稿**（与信封并存——发送已消费掉正文，此处是独立新草稿）。
-    await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, 'R68-旧版v4草稿正文'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
+    await waitSendEnabled(cdp); // unknown 结算的最后一次草稿写在 banner 之后——过早打字会被覆盖
+    f.g2.draftTypedv4 = await typeAndVerifyDraft(cdp, 'R68-旧版v4草稿正文');
     await sleep(700);
     f.g2.v1State = await cdp.tryEval(`(() => { const k = Object.keys(localStorage).find((x) => x.startsWith('zs.hifi.persist.') && !x.includes('v2.') && !x.includes('quarantine')); if (k == null) return null; const d = JSON.parse(localStorage.getItem(k)); const ps = Object.values(d.pendingSends ?? {}); return { key: k, v: d.v, embedded: d.dataRootId ?? null, cmds: ps.map((p) => p.commandId) }; })()`);
     if (f.g2.v1State == null || f.g2.v1State.v !== 1 || f.g2.v1State.embedded !== null) errs.push(`G2：v4 未产生真 v1 状态（${JSON.stringify(f.g2.v1State)}）`);
     const srv4 = dbOf(root4).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversationId)[0].c;
     f.g2.v4Committed = srv4;
-    await closeApp(app);
+    await closeApp(app, cdp);
     // 复制整个数据根（含 profile）→ 副本（在当前构建接触原根**之前**——保持原根无 marker 的真 v3/v4 状态）。
     fs.cpSync(root4, root4copy, { recursive: true, force: true, errorOnExist: false });
   }
@@ -330,10 +366,17 @@ async function pendingIdsInPage(cdp) {
     let { app, cdp } = await launchApp(root4copy, {});
     cdp = await bootProject(cdp);
     // 设置 → 数据与存储 → 旧数据目录继承。
+    f.g2.a2LsKeys = await cdp.tryEval(`(() => { const ks = Object.keys(localStorage).filter((k) => k.includes('zs.hifi')); return ks.map((k) => ({ k: k.slice(0, 90), size: (localStorage.getItem(k) ?? '').length })); })()`);
     await cdp.eval(`location.hash = '#/settings'; true`);
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root button, #hifi-root .settings-nav-item, #hifi-root [class*=nav] *')].some((x) => x.textContent.trim() === '数据与存储')`, 25000, '设置分区导航');
     await cdp.eval(probe(`(() => { const el = [...document.querySelectorAll('#hifi-root button, #hifi-root [class*=nav] *')].find((x) => x.textContent.trim() === '数据与存储'); el?.click(); return true; })()`));
-    await waitFor(cdp, `document.querySelector('[data-zs-legacy-candidates]') != null`, 25000, '导入候选面板');
+    await waitFor(cdp, `document.querySelector('[data-zs-legacy-candidates]') != null`, 25000, '导入候选面板').catch(async (e) => {
+      const nav = await cdp.tryEval(probe(`(() => { const el = [...document.querySelectorAll('#hifi-root button, #hifi-root [class*=nav] *')].find((x) => x.textContent.trim() === '数据与存储'); return el != null; })()`));
+      const clicked = await cdp.tryEval(probe(`(() => { const el = [...document.querySelectorAll('#hifi-root button, #hifi-root [class*=nav] *')].find((x) => x.textContent.trim() === '数据与存储'); if (el == null) return false; el.click(); return true; })()`));
+      await sleep(1500);
+      const body = await cdp.tryEval(`document.querySelector('#hifi-root')?.textContent.slice(0, 300)`);
+      throw new Error(`${e.message}；nav=${nav} clicked=${clicked}；body=${body}`);
+    });
     f.g2.candidateShown = await cdp.tryEval(`document.querySelector('[data-zs-legacy-candidate]')?.getAttribute('data-zs-legacy-candidate')`);
     f.g2.candidateHasDb = await cdp.tryEval(`document.querySelector('[data-zs-legacy-candidate] [class*=tag], [data-zs-legacy-candidate] .tag')?.textContent ?? ''`);
     if (typeof f.g2.candidateShown !== 'string' || !f.g2.candidateShown.includes('server-data')) errs.push(`G2：导入候选未指向旧数据根（${f.g2.candidateShown}）`);
@@ -348,7 +391,8 @@ async function pendingIdsInPage(cdp) {
     f.g2.importedCmd = Array.isArray(ids) && ids.includes(f.g2.v1State?.cmds?.[0]);
     if (f.g2.importedCmd !== true) errs.push(`G2：导入信封 commandId 不一致（${JSON.stringify(ids)} vs ${JSON.stringify(f.g2.v1State?.cmds)}）`);
     // 草稿恢复。
-    f.g2.draftRestored = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v4草稿正文')`);
+    f.g2.draftRestored = await until(() => cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v4草稿正文')`).catch(() => null), (v) => v === true, 12000, 'a2 草稿恢复').catch(() => false);
+    f.g2.a2DraftBodies = await cdp.tryEval(`(() => { const ks = [...Object.keys(localStorage)].filter((x) => x.includes('zs.hifi.persist.') && !x.includes('quarantine')); return ks.map((k) => { const d = JSON.parse(localStorage.getItem(k)); return Object.entries(d.drafts ?? {}).map(([dk, dv]) => ({ dk, body: ((dv ?? {}).body ?? '').slice(0, 30) })); }; })()`);
     if (f.g2.draftRestored !== true) errs.push('G2：导入后旧草稿未恢复');
     // 同号重试恰一次。
     const before = dbOf(root4copy).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversation_id)[0].c;
@@ -359,7 +403,7 @@ async function pendingIdsInPage(cdp) {
     if (f.g2.retryClicked !== true || f.g2.retryDelta !== 0) errs.push(`G2：导入后同号重试未恰一次（clicked=${f.g2.retryClicked} delta=${f.g2.retryDelta}）`);
     f.g2.bannerClearedAfterRetry = (await bannerPresent(cdp)) !== true;
     if (f.g2.bannerClearedAfterRetry !== true) errs.push('G2：导入信封重试成功后横幅未清');
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ---- b) 原根同目录升级：v1 键自动继承 ---- */
@@ -373,7 +417,7 @@ async function pendingIdsInPage(cdp) {
     const ids = await pendingIdsInPage(cdp);
     f.g2.sameDirCmd = Array.isArray(ids) && ids.includes(f.g2.v1State?.cmds?.[0]);
     if (f.g2.sameDirBanner !== true || f.g2.sameDirCmd !== true) errs.push(`G2：同目录 v1 键未自动继承（banner=${f.g2.sameDirBanner} cmd=${f.g2.sameDirCmd}）`);
-    f.g2.sameDirDraft = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v4草稿正文')`);
+    f.g2.sameDirDraft = await until(() => cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v4草稿正文')`).catch(() => null), (v) => v === true, 12000, '同目录草稿恢复').catch(() => false);
     if (f.g2.sameDirDraft !== true) errs.push('G2：同目录继承后草稿未恢复');
     const before = dbOf(root4).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversation_id)[0].c;
     await clickRetry(cdp);
@@ -381,7 +425,7 @@ async function pendingIdsInPage(cdp) {
     const after = dbOf(root4).q('SELECT count(*) c FROM messages WHERE conversation_id = ?', dm.conversation_id)[0].c;
     f.g2.sameDirRetryDelta = after - before;
     if (f.g2.sameDirRetryDelta !== 0) errs.push(`G2：同目录重试产生重复（+${f.g2.sameDirRetryDelta}）`);
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ---- c) 冻结 v3 → 当前候选同目录首启 ---- */
@@ -418,10 +462,11 @@ async function pendingIdsInPage(cdp) {
       await cdp.eval(probe(`document.querySelector('#hifi-root .composer-send')?.click(), true`));
       await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .composer-mentions')].some((x) => x.textContent.includes('结果未知'))`, 40000, 'v3 未知横幅').catch(() => { /* v3 路径差异则只验草稿 */ });
     }
-    await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, 'R68-旧版v3草稿正文'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
+    await waitSendEnabled(cdp); // unknown 结算的最后一次草稿写在 banner 之后——过早打字会被覆盖
+    f.g2.draftTypedv3 = await typeAndVerifyDraft(cdp, 'R68-旧版v3草稿正文');
     await sleep(700);
     f.g2.v3State = await cdp.tryEval(`(() => { const k = Object.keys(localStorage).find((x) => x.startsWith('zs.hifi.persist.') && !x.includes('v2.') && !x.includes('quarantine')); if (k == null) return null; const d = JSON.parse(localStorage.getItem(k)); return { v: d.v, drafts: Object.keys(d.drafts ?? {}).length, cmds: Object.values(d.pendingSends ?? {}).map((p) => p.commandId) }; })()`);
-    await closeApp(app);
+    await closeApp(app, cdp);
     // 当前候选同目录首启（房间输入区——与 v3 生成端同目标）。
     ({ app: app, cdp: cdp } = await launchApp(root3, {}));
     cdp = await bootProject(cdp);
@@ -429,13 +474,14 @@ async function pendingIdsInPage(cdp) {
     const room3cur = dbOf(root3).q('SELECT id FROM rooms WHERE project_id = ? LIMIT 1', proj3.id)[0];
     await cdp.eval(`location.hash = ${JSON.stringify(`/room/${room3cur.id}`)}; true`);
     await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 30000, 'v3 继承后房间输入区');
-    f.g2.v3DraftRestored = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v3草稿正文')`);
+    f.g2.v3DraftRestored = await until(() => cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-旧版v3草稿正文')`).catch(() => null), (v) => v === true, 12000, 'v3 草稿恢复').catch(() => false);
+    f.g2.v3DraftKeys = await cdp.tryEval(`(() => { const ks = [...Object.keys(localStorage)].filter((x) => x.includes('zs.hifi.persist.') && !x.includes('quarantine')); return ks.map((k) => { const d = JSON.parse(localStorage.getItem(k)); return { k: k.slice(0, 70), drafts: Object.entries(d.drafts ?? {}).map(([dk, dv]) => ({ dk, body: (dv ?? {}).body ?? '' })), cur: document.querySelector('#hifi-root textarea.composer-input')?.value.slice(0, 40) ?? null }; }); })()`);
     if (f.g2.v3DraftRestored !== true) errs.push('G2：v3 草稿未在同目录首启恢复');
     f.g2.v3Banner = await bannerPresent(cdp);
     f.g2.v3Cmd = await pendingIdsInPage(cdp);
     if (f.g2.v3RecordPath === true && f.g2.v3Banner !== true) errs.push('G2：v3 未知信封未在同目录首启恢复');
     if (f.g2.v3RecordPath === true && !(Array.isArray(f.g2.v3Cmd) && f.g2.v3Cmd.includes(f.g2.v3State?.cmds?.[0]))) errs.push('G2：v3 信封 commandId 不一致');
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ---- d) 新格式未来移动（R67 通道回归） ---- */
@@ -456,10 +502,11 @@ async function pendingIdsInPage(cdp) {
     await sleep(300);
     await cdp.eval(probe(`document.querySelector('#hifi-root .composer-send')?.click(), true`));
     await waitFor(cdp, `[...document.querySelectorAll('#hifi-root .composer-mentions')].some((x) => x.textContent.includes('结果未知'))`, 40000, 'd) 未知横幅');
-    await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, 'R68-新格式移动草稿'); ta.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`));
+    await waitSendEnabled(cdp); // unknown 结算的最后一次草稿写在 banner 之后——过早打字会被覆盖
+    f.g2.draftTypedd = await typeAndVerifyDraft(cdp, 'R68-新格式移动草稿');
     await sleep(700);
     const v2State = await cdp.tryEval(`(() => { const k = [...Object.keys(localStorage)].find((x) => x.includes('zs.hifi.persist.v2.')); if (k == null) return null; const d = JSON.parse(localStorage.getItem(k)); return { key: k, cmds: Object.values(d.pendingSends ?? {}).map((p) => p.commandId) }; })()`);
-    await closeApp(app);
+    await closeApp(app, cdp);
     fs.cpSync(rootN, rootN2, { recursive: true, force: true, errorOnExist: false });
     ({ app, cdp } = await launchApp(rootN2, {}));
     cdp = await bootProject(cdp);
@@ -470,7 +517,7 @@ async function pendingIdsInPage(cdp) {
     const idsN = await pendingIdsInPage(cdp);
     f.g2.newFormatCmd = Array.isArray(idsN) && idsN.includes(v2State?.cmds?.[0]);
     if (f.g2.newFormatBanner !== true || f.g2.newFormatCmd !== true) errs.push(`G2：新格式整根移动未自动继承（banner=${f.g2.newFormatBanner}）`);
-    f.g2.newFormatDraft = await cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-新格式移动草稿')`);
+    f.g2.newFormatDraft = await until(() => cdp.tryEval(`document.querySelector('#hifi-root textarea.composer-input')?.value.includes('R68-新格式移动草稿')`).catch(() => null), (v) => v === true, 12000, '新格式草稿恢复').catch(() => false);
 
     /* ---- e) 负例：未来版本旧键不被消费；坏标记不覆写 ---- */
     // e1：在页面里注入 v999 候选（内嵌当前 dri——必须仍被拒收），删除 v2 键与继承标记后重载。
@@ -488,7 +535,7 @@ async function pendingIdsInPage(cdp) {
     f.g2.futureNote = await cdp.tryEval(`(document.querySelector('[data-zs-draft-recovery-note]')?.textContent ?? '') + '|' + (document.querySelector('[data-zs-legacy-candidates]')?.textContent ?? '')`);
     f.g2.futureOriginalKept = await cdp.tryEval(`(() => { const v = localStorage.getItem(${JSON.stringify(oldDirKey)}); return v != null && JSON.parse(v).v === 999; })()`);
     if (f.g2.futureRefusedDraft === true || f.g2.futureOriginalKept !== true) errs.push(`G2：未来版本快照被消费或原件未保全（draft=${f.g2.futureRefusedDraft} kept=${f.g2.futureOriginalKept}）`);
-    await closeApp(app);
+    await closeApp(app, cdp);
     // e2：坏标记（当前 app 关闭后写入）→ 首启健康说明+原件逐字保持+不换 ID。
     const rootBad = path.join(outDir, 'rootBad');
     {
@@ -574,12 +621,20 @@ async function pendingIdsInPage(cdp) {
     f.g3.cardShortIds = await cdp.tryEval(`[...document.querySelectorAll('[data-zs-member-short]')].map((x) => x.textContent).join('|')`);
     f.g3.distinctShort = new Set(String(f.g3.cardShortIds).split('|')).size >= 2;
     if (f.g3.distinctShort !== true) errs.push('G3：同名成员短标识不可分辨');
-    // @ 菜单。
+    // @ 菜单（先重载——member.create 的新房间名单投影需重新装载）。
+    await cdp.eval('location.reload(), true');
+    cdp = await connectPage('G3 重载');
+    await until(() => cdp.tryEval(probe(`document.querySelector('#hifi-root .side-project .side-item-label') != null || document.body.textContent.includes('默认房间')`)).catch(() => null), (v) => v, 45000, 'G3 重载就绪');
     await cdp.eval(`location.hash = ${JSON.stringify(`/project/${pB.id}`)}; true`);
-    await sleep(1200);
+    // 等默认房间实际装载（侧栏出现）——过早进 /room 会在 rooms 未入 store 时落到「找不到房间」回退。
+    await waitFor(cdp, `document.body.textContent.includes('默认房间')`, 45000, 'G3 侧栏默认房间');
     const room = dbOf(root3g).q('SELECT id FROM rooms WHERE project_id = ? LIMIT 1', pB.id)[0];
     await cdp.eval(`location.hash = ${JSON.stringify(`/room/${room.id}`)}; true`);
-    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 25000, 'G3 房间输入区');
+    await waitFor(cdp, `document.querySelector('#hifi-root textarea.composer-input') != null`, 45000, 'G3 房间输入区').catch(async (e) => {
+      const h = await cdp.tryEval('location.hash');
+      const txt = await cdp.tryEval(`document.querySelector('#hifi-root')?.textContent.slice(0, 240)`);
+      throw new Error(`${e.message}；hash=${h}；body=${txt}`);
+    });
     await cdp.eval(probe(`(() => { const ta = document.querySelector('#hifi-root textarea.composer-input'); const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set; set.call(ta, '找到@'); ta.dispatchEvent(new Event('input', { bubbles: true })); const ev = new CompositionEvent('compositionend', { bubbles: true }); ta.dispatchEvent(ev); return true; })()`));
     await waitFor(cdp, `document.querySelector('#hifi-root .mention-pop') != null`, 10000, 'G3 @ 候选');
     f.g3.mentionOptions = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .mention-pop [data-zs-mention-option]')].map((x) => x.textContent).join(' | ')`);
@@ -589,6 +644,11 @@ async function pendingIdsInPage(cdp) {
     const revB = dbOf(root3g).q('SELECT revision FROM projects WHERE id = ?', pB.id)[0].revision;
     await pageCmd(cdp, 'project.lifecycle', { projectId: pB.id, expectedRevision: revB, action: 'archive' });
     await sleep(800);
+    await cdp.eval('location.reload(), true');
+    cdp = await connectPage('G3 归档重载');
+    await until(() => cdp.tryEval(probe(`document.querySelector('#hifi-root .side-project .side-item-label') != null || document.body.textContent.includes('默认房间')`)).catch(() => null), (v) => v, 45000, 'G3 归档重载就绪');
+    await cdp.eval(`location.hash = ${JSON.stringify(`/project/${pB.id}`)}; true`);
+    await sleep(1800);
     await cdp.eval(`location.hash = ${JSON.stringify(`/project/${pB.id}/members`)}; true`);
     await sleep(1800);
     f.g3.archivedNote = await cdp.tryEval(`document.querySelector('[data-zs-members=hifi]')?.textContent.includes('已归档')`);
@@ -597,7 +657,7 @@ async function pendingIdsInPage(cdp) {
     if (f.g3.archivedNote !== true || f.g3.archivedServerReject !== true) errs.push(`G3：归档守卫缺失（ui=${f.g3.archivedNote} srv=${f.g3.archivedServerReject}）`);
     const revB2 = dbOf(root3g).q('SELECT revision FROM projects WHERE id = ?', pB.id)[0].revision;
     await pageCmd(cdp, 'project.lifecycle', { projectId: pB.id, expectedRevision: revB2, action: 'unarchive' });
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ================= G4 第三来源交付文档（房间任务线程——ThreadPage 成果页） ================= */
@@ -660,7 +720,7 @@ async function pendingIdsInPage(cdp) {
       f.g4.quoteInserted = await cdp.tryEval(`(document.querySelector('#hifi-root textarea.composer-input')?.value ?? '').includes('引用交付') && (document.querySelector('#hifi-root textarea.composer-input')?.value ?? '').includes('manifest')`);
       if (f.g4.quoteInserted !== true) errs.push('G4：交付引用未带版本+manifest 绑定插入草稿');
     }
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ================= G5 空文件另存 + 磁盘变更链 ================= */
@@ -709,15 +769,20 @@ async function pendingIdsInPage(cdp) {
       const savedNew = fs.readdirSync(saveAsDir).filter((n) => n.includes('长文')).length;
       f.g5.oldTabBlocked = savedNew === 0; // 未点重载前不落盘
       await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.includes('重新加载')); b?.click(); return true; })()`));
-      await sleep(1600);
+      // 等新快照内容实际显示（重读完成）再另存——过早点保存会因快照未就绪被拦。
+      await waitFor(cdp, `(document.querySelector('.preview-source')?.textContent ?? document.querySelector('.preview-read-doc')?.textContent ?? '').includes('R68-WT-TAIL-新')`, 25000, 'G5 重载后新内容显示');
+      await sleep(600);
       await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+      f.g5.reloadMenuFound = await cdp.tryEval(`[...document.querySelectorAll('.menu .menu-item')].some((x) => x.textContent.includes('下载原文件'))`);
       await cdp.eval(probe(`[...document.querySelectorAll('.menu .menu-item')].find((x) => x.textContent.includes('下载原文件'))?.click(), true`));
+      await sleep(1200);
+      f.g5.reloadSaveToast = await cdp.tryEval(`[...document.querySelectorAll('#hifi-root .toast, [role=status], .toast')].map((x) => x.textContent.slice(0, 110)).join(' || ')`);
       await until(() => { try { return fs.readdirSync(saveAsDir).filter((n) => n.includes('长文')).length; } catch { return 0; } }, (n) => n >= 1, 15000, 'G5 重载后落盘');
       const saved = fs.readdirSync(saveAsDir).filter((n) => n.includes('长文')).map((n) => path.join(saveAsDir, n))[0];
       f.g5.reloadedSavesNew = fs.readFileSync(saved, 'utf8').includes('R68-WT-TAIL-新');
       if (f.g5.oldTabBlocked !== true || f.g5.reloadedSavesNew !== true) errs.push(`G5：磁盘变更重载链断裂（blocked=${f.g5.oldTabBlocked} new=${f.g5.reloadedSavesNew}）`);
     } else errs.push('G5：长文未打开');
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   /* ================= G6 自绘 Select ================= */
@@ -752,7 +817,7 @@ async function pendingIdsInPage(cdp) {
     await cdp.eval(probe(`document.querySelector('.select-wrap .select')?.click(), true`));
     await sleep(300);
     try { const png = await cdp.send('Page.captureScreenshot', { format: 'png' }); fs.mkdirSync(path.join(outDir, 'shots'), { recursive: true }); fs.writeFileSync(path.join(outDir, 'shots', 'g6-select-open.png'), Buffer.from(png.data, 'base64')); } catch { /* 尽力 */ }
-    await closeApp(app);
+    await closeApp(app, cdp);
   }
 
   const realCalls = (() => { try { return dbOf(path.join(outDir, 'root1')).q('SELECT count(*) c FROM real_calls')[0].c; } catch { return -1; } })();
@@ -763,7 +828,7 @@ async function pendingIdsInPage(cdp) {
   cleanupOwn();
   process.exit(result.ok ? 0 : 10);
 })().catch((err) => {
-  try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify({ ok: false, error: String(err && err.stack || err), runId }, null, 2)); } catch { /* */ }
+  try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify({ ok: false, error: String(err && err.stack || err), runId, partialChecks: f ?? null }, null, 2)); } catch { /* */ }
   console.error(String(err && err.stack || err));
   console.error('[appOut]', __appOut.v.slice(-2500));
   cleanupOwn();

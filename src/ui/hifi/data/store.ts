@@ -718,28 +718,54 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
 }
 
 /** R68 §2：用户显式确认导入单个旧键（设置 → 草稿存储）。版本门/保全规则与自动继承同判；
- * 导入后从候选清单移除（importedAt 记录来源与时间），旧键原样保留。 */
+ * 导入后候选标记 importedAt 并**写回继承标记**（重载后仍是「已导入」——不因重启复活），
+ * 旧键原样保留。 */
 export function importLegacySnapshot(key: string, dir: string): { ok: boolean; error?: string; outcome?: InheritOutcome } {
   let raw: string | null = null;
   try { raw = localStorage.getItem(key); } catch (e) { return { ok: false, error: `旧键读取失败：${e instanceof Error ? e.message : String(e)}` }; }
   if (raw == null) return { ok: false, error: '旧键不存在（可能已被清除）' };
   const outcome = mergeInheritedSnapshots([{ raw, sourceDir: dir }], `用户确认导入旧目录 ${dir} 的键 ${key}（原件保留）`);
+  const importedAt = Date.now();
   setState((s) => ({
     ...s,
     draftPersist: {
       ...s.draftPersist,
       legacyImport: s.draftPersist.legacyImport == null ? null : {
         ...s.draftPersist.legacyImport,
-        candidates: s.draftPersist.legacyImport.candidates.map((c) => (c.key === key ? { ...c, importedAt: Date.now() } : c)),
+        candidates: s.draftPersist.legacyImport.candidates.map((c) => (c.key === key ? { ...c, importedAt } : c)),
       },
     },
   }));
+  if (persistNs != null) {
+    const m = readInheritMarker(persistNs) ?? { state: 'done' as const, at: importedAt };
+    m.candidates = (m.candidates ?? []).map((c) => (c.key === key ? { ...c, importedAt } : c));
+    if (!(m.candidates ?? []).some((c) => c.key === key)) m.candidates.push({ key, dir, hasStateDb: null, importedAt });
+    writeInheritMarker(persistNs, m);
+  }
   return { ok: true, outcome };
 }
 
 /** R68 §2：登记/更新未自动继承的旧键候选（loader 扫描结果）。hasStateDb=null 表示未探测。 */
-export function setLegacyImportCandidates(candidates: Array<{ key: string; dir: string; hasStateDb: boolean | null }>, scanError: string | null = null): void {
+export function setLegacyImportCandidates(candidates: Array<{ key: string; dir: string; hasStateDb: boolean | null; importedAt?: number | null }>, scanError: string | null = null): void {
   setState((s) => ({ ...s, draftPersist: { ...s.draftPersist, legacyImport: { candidates, lastScanAt: Date.now(), error: scanError } } }));
+}
+
+/* ---------- R68 §2：继承标记（与 v2 键存在解耦；同时是导入候选队列的**持久层**——
+ * 重载/重开后「设置 → 数据与存储」的候选列表由此恢复，不因进程重启丢失后永久跳过） ---------- */
+
+interface InheritMarker { state: 'done' | 'pending'; at: number; auto?: number; candidates?: Array<{ key: string; dir: string; hasStateDb: boolean | null; importedAt?: number | null }> }
+function inheritMarkerKeyOf(ns: string): string { return `zs.hifi.inherit.${ns}`; }
+export function readInheritMarker(ns: string): InheritMarker | null {
+  try {
+    const raw = localStorage.getItem(inheritMarkerKeyOf(ns));
+    if (raw == null) return null;
+    const m = JSON.parse(raw) as InheritMarker;
+    if (m == null || typeof m !== 'object') return null;
+    return m;
+  } catch { return null; }
+}
+export function writeInheritMarker(ns: string, m: InheritMarker): void {
+  try { localStorage.setItem(inheritMarkerKeyOf(ns), JSON.stringify(m)); } catch { /* 标记写失败：下次启动重扫（旧键原样保留，安全） */ }
 }
 
 /** 显式重试（r63 P2 恢复路径）：重新初始化=重读主键→再试隔离。隔离成功（存储已释放）→

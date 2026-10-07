@@ -211,6 +211,12 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
     // 深链/直开项目主页=聚焦该项目（原型语义：项目页上下文即该项目；已聚焦则不重复刷新）。
     if (activeId !== projectId) void switchFocusProject(projectId);
   }, [projectId, activeId]);
+  // R68（与 DmPage 同判）：重载/偏好恢复后 activeProjectId 已=本项目时 switchFocusProject
+  // 早退——房间/成员投影无人装载，页面会停在空态。挂载即补一次轻量装载。
+  useEffect(() => {
+    if (activeId !== projectId) return;
+    void import('../loader').then((m) => { m.refreshRooms(projectId).catch(() => { /* 下次进入重试 */ }); m.refreshMembers(projectId).catch(() => { /* 同上 */ }); });
+  }, [projectId, activeId]);
   const p = s.projects.find((x) => x.id === projectId);
   const rooms = roomsOfProject(s, projectId);
   const members = s.members.filter((m) => m.projectId === projectId);

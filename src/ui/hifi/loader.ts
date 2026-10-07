@@ -11,7 +11,7 @@
  */
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
-import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates } from './data/store';
+import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
@@ -80,23 +80,26 @@ async function initDraftPersistenceFromIdentity(): Promise<void> {
     }
     const ns = `v2.${id.dataRootId}|${id.localUserId}`;
     initDraftPersistence(ns, id.dataRootId);
-    // 继承标记门：与 v2 键存在与否解耦（先写空新键不再导致永久跳过继承）。
-    const markerKey = `zs.hifi.inherit.${ns}`;
-    let markerDone = false;
-    try {
-      const m = localStorage.getItem(markerKey);
-      markerDone = m != null && (() => { try { return (JSON.parse(m) as { state?: unknown }).state === 'done'; } catch { return false; } })();
-    } catch { markerDone = false; /* 不可读=未判定，重试 */ }
-    if (markerDone) return;
+    // 继承标记门：与 v2 键存在与否解耦（先写空新键不再导致永久跳过继承）。标记同时是
+    // **导入候选队列的持久层**——重载/重开后设置页的候选列表由此恢复（不因重启丢失后永久
+    // 跳过——R68 反例：首轮登记后进程重启即空表）。state 未结论时再跑一次判定。
+    const marker = readInheritMarker(ns);
+    if (marker != null && Array.isArray(marker.candidates) && marker.candidates.length > 0) {
+      setLegacyImportCandidates(marker.candidates, null);
+    }
+    if (marker?.state === 'done') return;
     await attemptLegacyInheritance(ns, { localUserId: id.localUserId, appDataDir: id.appDataDir, dataRootId: id.dataRootId });
   } catch (e) {
     markPersistenceDegraded(`持久化身份不可用（${e instanceof Error ? e.message : String(e)}）——草稿仅本次进程内有效`);
   }
 }
 
-/** 一次继承判定（自动通道 ①②③ + 用户导入候选登记 ④）。结论写继承标记；失败不写（下次重试）。 */
+/** 一次继承判定（自动通道 ①②③ + 用户导入候选登记 ④）。结论写继承标记（含候选队列）；
+ * 失败不写 done（下次重试）。重扫保留已导入项的 importedAt（不复活已处理候选）。 */
 async function attemptLegacyInheritance(ns: string, id: { localUserId: string; appDataDir: string; dataRootId: string }): Promise<void> {
-  const markerKey = `zs.hifi.inherit.${ns}`;
+  const prevMarker = readInheritMarker(ns);
+  const prevImportedAt = new Map<string, number>();
+  for (const c of prevMarker?.candidates ?? []) if (c.importedAt != null) prevImportedAt.set(c.key, c.importedAt);
   const candidates = collectLegacyPersistKeys(id.localUserId);
   const validated: Array<{ raw: string; sourceDir: string }> = [];
   const importable: Array<{ key: string; dir: string; hasStateDb: boolean | null }> = [];
@@ -148,8 +151,10 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
     recordWrite('draft.inherit', `发现 ${candidates.length} 个旧命名空间键但无一同属当前数据根（内嵌异根/标记异根）——不合并（无关根/他机数据不混入）`);
   }
   if (scanError == null) {
-    // 全部候选已有结论（继承/登记/明确异根）——写 done；此后不再扫描（用户导入/重扫走设置页）。
-    try { localStorage.setItem(markerKey, JSON.stringify({ state: 'done', at: Date.now(), auto: validated.length, importable: importable.length })); } catch { /* 标记写失败：下次启动重扫（旧键原样保留，安全） */ }
+    // 全部候选已有结论（继承/登记/明确异根）——写 done 并持久化候选队列（设置页导入入口
+    // 重载后由此恢复）；保留已导入项的 importedAt（重扫不复活已处理候选）。
+    const persisted = importable.map((c) => ({ ...c, importedAt: prevImportedAt.get(c.key) ?? null }));
+    writeInheritMarker(ns, { state: 'done', at: Date.now(), auto: validated.length, candidates: persisted });
   }
 }
 

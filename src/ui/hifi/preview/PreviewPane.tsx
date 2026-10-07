@@ -443,7 +443,7 @@ export function PreviewPane({
           <button
             className="tag-btn warning"
             title="磁盘上的文件已更新。点击重新加载会切换到这个标签的读取快照；已插入草稿的引用仍绑定原版本"
-            onClick={() => { reloadResource(active.pendingRevision!, active.key); worktreeReadBump(active.resourceId); }}
+            onClick={() => { reloadResource(active.pendingRevision!, active.key); }}
           >
             <Icon name="alert-triangle" size={10} /> 磁盘已更新 · 重新加载
           </button>
@@ -895,13 +895,13 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wt.projectId, wt.path, rev?.revision]);
 
-  // R68 §6：磁盘脏检测（低频轮询，可见时每 8s）——mtime/bytes 与读取快照不一致 → 追加新
-  // 版本并标记 pendingRevision（工具行出现「磁盘已更新·重新加载」；保存被拦截）。用户显式
-  // 重载才切换快照；旧引用仍绑原版本（引用在插入时冻结 hash）。不可见/装载失败静默重试。
+  // R68 §6：磁盘脏检测（低频轮询，每 8s）——mtime/bytes 与读取快照不一致 → 追加新版本并
+  // 标记 pendingRevision（工具行出现「磁盘已更新·重新加载」；保存被拦截）。用户显式重载才
+  // 切换快照；旧引用仍绑原版本（引用在插入时冻结 hash）。stat 是轻量命令——不做可见性门
+  //（窗口被遮挡/后台时也要能提示，回来第一时间看到）；stat 失败静默（删除等由重载呈现）。
   useEffect(() => {
     if (loadedFor === '') return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
       void command<{ mtimeMs: number; bytes: number }>('project.file.stat', { projectId: wt.projectId, path: wt.path })
         .then((st) => {
           const snap = worktreeSnapshots.get(`${resource.id}:${rev?.revision ?? 0}`);
@@ -948,11 +948,10 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
   return <ResourceBodyContent content={c} viewMode={viewMode} wrapSource={wrapSource} zoom={0} onOpenComment={onOpenComment} />;
 }
 
-/** 工作区「重新加载」：bump 读取代次（触发 WorktreeBody 重读）。 */
-function worktreeReadBump(resourceId: string): void {
-  // reloadResource 已把 tab.revision 指向 pendingRevision；资源侧补一个新读取版本
-  markResourceUpdated(resourceId);
-}
+/** 工作区「重新加载」：R68 起由 reloadResource 直接切换到 pendingRevision（标签换版本即
+ *  重挂重读）——不再额外 bump（旧实现会在切换后再追加一个脏版本，把刚清掉的
+ *  pendingRevision 又设回去，保存永远被拦）。保留空壳以显式记录该演化。 */
+void 0;
 
 /* ============================================================
    正文渲染 B2：正式 AI 交付文档（R68 §6 第三来源）——delivery.document 按需装载。
