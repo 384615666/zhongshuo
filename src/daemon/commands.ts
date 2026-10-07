@@ -3492,6 +3492,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const cut = truncateUtf8Bytes(content, ATT_EXCERPT_BYTES);
         return withCommandId({ ok: true, data: { projectId: proj.id, path: params.path, baseName: basename(realTarget), bytes: raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, content: cut.text, note: '项目文件只读快照（非托管副本——源文件后续变化不追溯；不进模型输入）' } });
       }
+      case 'project.file.stat': {
+        // R68 §6：工作区文件**轻量 stat**（脏检测通道）——路径安全链与 readFull 同源，只
+        // 返回 mtime/bytes（不读内容）。预览面板低频轮询比对读取快照，磁盘变化→提示「磁盘
+        // 已更新」（用户显式重载才换版本；旧引用仍绑原版本）。
+        const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500) }).parse(env.params);
+        const st = resolveProjectTextStat(deps, params.projectId, params.path);
+        return withCommandId({ ok: true, data: { projectId: params.projectId, path: params.path, ...st } });
+      }
       case 'project.file.readFull': {
         // R67 P1-A/P2-B：工作区**完整文件读取**（屏幕阅读通道）——与 project.file.read
         //（64KB 提取窗，沿用）分列：本命令返回**全文**（≤256KB 有界）+ 实际字节 sha256 +
@@ -4423,6 +4431,48 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     }
     // 不吞异常假装成功（§16.5）。
     return withCommandId({ ok: false, error: { code: 'STORAGE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error), retryable: false } });
+  }
+}
+
+/**
+ * R68 §6：项目文本文件**轻量 stat**（工作区脏检测——路径安全链与 readFull 同源：resolve
+ * 边界 + realpath 实身份 + 文本白名单；只 statSync 不读内容不做 UTF-8 校验）。预览面板
+ * 据此提示「磁盘已更新」（用户显式重载才换快照——不自动重读、不静默另存新字节）。
+ */
+function resolveProjectTextStat(
+  deps: { db: ZhongshuoDatabase; appDataDir?: string },
+  projectId: string,
+  path: string,
+): { mtimeMs: number; bytes: number } {
+  const proj = deps.db.prepare('SELECT id, canonical_path FROM projects WHERE id = ?').get(projectId) as { id: string; canonical_path: string } | undefined;
+  if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${projectId}`);
+  const root = resolve(proj.canonical_path);
+  const target = resolve(root, path.replace(/^[/\\]+/, ''));
+  const rootSep = root.includes('/') ? '/' : '\\';
+  if (target !== root && !target.startsWith(root + rootSep)) {
+    throw new DaemonCommandError('FORBIDDEN', `项目文件路径越界：${path}——拒绝读取`);
+  }
+  let realTarget: string;
+  let realRoot: string;
+  try {
+    realTarget = realpathSync(target);
+    realRoot = realpathSync(root);
+  } catch {
+    throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件不存在或不可读：${path}`);
+  }
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + rootSep)) {
+    throw new DaemonCommandError('FORBIDDEN', '项目文件路径含链接越界（realpath 实身份拒绝）');
+  }
+  const dot = realTarget.lastIndexOf('.');
+  const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
+  if (!TEXT_PREVIEW_EXTENSIONS.has(ext)) {
+    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本白名单`);
+  }
+  try {
+    const st = statSync(realTarget);
+    return { mtimeMs: st.mtimeMs, bytes: st.size };
+  } catch {
+    throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件不可读：${path}`);
   }
 }
 

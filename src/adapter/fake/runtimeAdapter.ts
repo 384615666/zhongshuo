@@ -233,9 +233,18 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
       if (item == null) break;
 
       if (item.kind === 'event') {
-        const rendered = item.event.kind === 'turn.completed' && turn.structuredFinal
-          ? { ...item.event, finalText: renderStructuredFinal(item.event, turn.resultKey) }
+        const renderedFinal = item.event.kind === 'turn.completed' && turn.structuredFinal
+          ? renderStructuredFinal(item.event, turn.resultKey)
+          : null;
+        const rendered = renderedFinal != null && item.event.kind === 'turn.completed'
+          ? { ...item.event, finalText: renderedFinal }
           : item.event;
+        if (renderedFinal != null && item.event.kind === 'turn.completed') {
+          // 真实合同对齐（R68 交付文档通道）：最终输出=TaskComplete JSON **且是最后一条消息**
+          //（final-result 提交通道——真实 CLI 的末条消息即提交结果）。fake 同构：turn.completed
+          // 前先发携带同一文本的 message.completed，交付文档据此按 manifest 核对 hash。
+          this.emit(state, { kind: 'message.completed', messageId: 'final_result', text: renderedFinal }, turn.turnId);
+        }
         this.emit(state, rendered as never, turn.turnId);
       } else if (item.kind === 'unresponsiveToInterrupt') {
         turn.unresponsive = true;

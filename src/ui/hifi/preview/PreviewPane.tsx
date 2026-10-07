@@ -871,7 +871,9 @@ interface FileReadFullData { projectId: string; path: string; baseName: string; 
 function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resource: PreviewResource; viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void }) {
   const wt = resource.formalWorktree!;
   const [err, setErr] = useState<string | null>(null);
-  const rev = resource.revisions[0];
+  // R68 修正：读取代次取**最新追加版本**（markResourceUpdated 会追加 r2/r3；此前固定读
+  // revisions[0] 会在重载切换后拿旧代次——快照键与活动标签错位导致「快照不可用」）。
+  const rev = resource.revisions[resource.revisions.length - 1];
   const [loadedFor, setLoadedFor] = useState('');
   useEffect(() => {
     let done = false;
@@ -892,6 +894,25 @@ function WorktreeBody({ resource, viewMode, wrapSource, onOpenComment }: { resou
     // 读取按 (project, path, revision)——重新加载 bump revision 后重读（快照键同步替换）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wt.projectId, wt.path, rev?.revision]);
+
+  // R68 §6：磁盘脏检测（低频轮询，可见时每 8s）——mtime/bytes 与读取快照不一致 → 追加新
+  // 版本并标记 pendingRevision（工具行出现「磁盘已更新·重新加载」；保存被拦截）。用户显式
+  // 重载才切换快照；旧引用仍绑原版本（引用在插入时冻结 hash）。不可见/装载失败静默重试。
+  useEffect(() => {
+    if (loadedFor === '') return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void command<{ mtimeMs: number; bytes: number }>('project.file.stat', { projectId: wt.projectId, path: wt.path })
+        .then((st) => {
+          const snap = worktreeSnapshots.get(`${resource.id}:${rev?.revision ?? 0}`);
+          if (snap == null) return;
+          if (st.mtimeMs !== snap.mtimeMs || st.bytes !== snap.bytes) markResourceUpdated(resource.id);
+        })
+        .catch(() => { /* stat 失败（文件被删等）：读取失败路径由打开/重载呈现——轮询静默 */ });
+    }, 8000);
+    return () => { window.clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedFor, wt.projectId, wt.path, rev?.revision]);
   if (err != null) {
     return (
       <div className="preview-unsupported">

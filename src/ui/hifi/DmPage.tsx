@@ -86,9 +86,15 @@ export function DmPage() {
   useEffect(() => {
     if (activeId === '') return;
     const box = listRef.current;
-    const nearBottom = box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true;
+    const nearBottom = box != null ? box.scrollHeight - box.scrollTop - box.clientHeight < 80 : true;
     void loadDmHistory(activeId, { markRead: document.visibilityState === 'visible' && nearBottom });
   }, [activeId]);
+
+  // R68：挂载/项目就绪即刷新私信清单（一次）。重载/深链直达 #/dm/<id> 且项目由服务端导航
+  // 偏好恢复时 switchFocusProject 会因「已激活」早退——store.dms 为空会停在「还没有私聊」
+  // 回退态，此前只能等 5s 可见性轮询（窗口被遮挡时 visibility=hidden 更是无限期）。
+  const mountProjectId = useStore((s) => s.activeProjectId);
+  useEffect(() => { if (mountProjectId !== '') void refreshDms().catch(() => { /* 下次 interval 重试 */ }); }, [mountProjectId]);
 
   // 可见时轻量刷新：执行态/新消息可见（隐藏/接管时暂停）。
   useEffect(() => {

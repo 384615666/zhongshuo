@@ -16,7 +16,7 @@ import { MessageView } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
-import { useStore, toast, setState, recordLocalOnly } from '../shell';
+import { useStore, toast, setState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
 import {
   buildRoomRootEnvelope, buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview,
@@ -45,7 +45,7 @@ import {
 import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary } from '../data/types';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
 import { audienceAllows } from '../lib/resource';
-import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, openPreview, setNavAutoHidden, setPreviewContextSide } from '../data/actions-preview';
+import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
 import { useElementWidth } from '../lib/useElementWidth';
 
@@ -2478,7 +2478,7 @@ function ThreadArtifacts({
         return (
           <>
             {data.deliveries.map((d) => (
-              <div key={d.deliveryId} className="card tight">
+              <div key={d.deliveryId} className="card tight" data-zs-delivery-row={d.deliveryId}>
                 <div className="row tight" style={{ marginBottom: 4 }}>
                   <Icon name="package" size={14} className="faint" />
                   <span className="strong truncate" style={{ fontSize: 12 }}>{d.title}</span>
@@ -2486,6 +2486,23 @@ function ThreadArtifacts({
                   <Tag plain>manifest {d.manifestHash.slice(0, 8)}…</Tag>
                   <div className="spacer" />
                   <span className="small faint">{d.reviewedAt != null ? `已复核 ${relTime(d.reviewedAt)}` : '待验收'}</span>
+                </div>
+                <div className="row tight">
+                  <button
+                    className="btn ghost sm"
+                    title="在共享预览打开交付文档（delivery.document——正文 hash 与 manifest 核对；阅读/源码切换、另存、引用均可用）"
+                    onClick={() => {
+                      // R68 §6 第三来源：登记 delivery 资源并开标签（与 ThreadPage 成果页同一通道）。
+                      const target = { kind: 'thread' as const, projectId, roomId: thread?.roomId ?? '', threadId, tab: 'artifacts' as const };
+                      const rid = registerDeliveryResource({
+                        deliveryId: d.deliveryId, revision: d.revision, manifestHash: d.manifestHash,
+                        conversationId, threadId, taskTitle: d.title, audience: 'room', roomId: thread?.roomId ?? '',
+                        openedFrom: target,
+                      });
+                      openPreviewTab(rid, d.revision, { target });
+                      recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（manifest ${d.manifestHash.slice(0, 8)}…）`);
+                    }}
+                  >打开文档</button>
                 </div>
                 <div className="small faint">验收/返工在「详情 → 交付与验收」按冻结三重身份执行。</div>
               </div>

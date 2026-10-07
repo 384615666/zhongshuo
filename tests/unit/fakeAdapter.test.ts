@@ -84,7 +84,7 @@ describe('fake adapter：成功 fixture', () => {
 
     expect(events.map((e) => e.kind)).toEqual([
       'session.ready', 'turn.started', 'message.delta', 'message.completed',
-      'usage.updated', 'turn.completed', 'process.exited',
+      'usage.updated', 'message.completed', 'turn.completed', 'process.exited',
     ]);
     expect(events.map((e) => e.eventKey)).toHaveLength(new Set(events.map((e) => e.eventKey)).size);
     const turnEvents = events.filter((e) => e.kind.startsWith('turn.'));

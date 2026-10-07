@@ -256,8 +256,8 @@ describe('第十九轮三/四/五：新建分离/输入水位/会话续接', () 
     expect(adapter.startTurnLog[1]!.text).not.toContain('第三条消息');
     expect(adapter.startTurnLog[2]!.text).toContain('第三条消息');
     const agentReplies = (db.prepare("SELECT conversation_seq FROM messages WHERE conversation_id = ? AND author_type = 'agent' ORDER BY conversation_seq").all(conv.conversationId) as Array<{ conversation_seq: number }>);
-    expect(agentReplies).toHaveLength(3);
-    expect(agentReplies.map((r) => r.conversation_seq)).toEqual([4, 5, 6]); // 三条用户消息（1/2/3）在排队时已保存，回复依次落 4/5/6——串行下序可解释
+    expect(agentReplies).toHaveLength(6); // R68：每轮=可见回复+最终 TaskComplete 消息（真实合同对齐）
+    expect(agentReplies.map((r) => r.conversation_seq)).toEqual([4, 5, 6, 7, 8, 9]); // 三条用户消息（1/2/3）在排队时已保存，回复依次落 4..9——串行下序可解释
     db.close();
   }, 60_000);
 

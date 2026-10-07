@@ -386,6 +386,7 @@ export function markResourceUpdated(resourceId: string) {  const s = getState();
   if (!res) return;
   const latest = latestRevisionOf(res);
   if (!latest) return;
+  if (latest.hash.endsWith(`_r${latest.revision}`)) return; // 已标记脏（R68 轮询幂等）——等用户重载
   const nextRev = latest.revision + 1;
   setState((prev) => ({
     ...prev,
