@@ -41,7 +41,7 @@ await build({
 mkdirSync(join(root, 'dist', 'ui', 'renderer', 'hifi'), { recursive: true });
 writeFileSync(
   join(root, 'dist', 'ui', 'renderer', 'hifi', 'app.css'),
-  ['tokens.css', 'base.css', 'components.css', 'titlebar.css', 'h1-overrides.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
+  ['tokens.css', 'base.css', 'components.css', 'preview.css', 'titlebar.css', 'h1-overrides.css'].map((f) => readFileSync(join(root, 'src', 'ui', 'hifi', 'styles', f), 'utf8')).join('\n'),
   'utf8',
 );
 
