@@ -1184,7 +1184,7 @@ const fileToBase64 = async (file: File): Promise<string> => {
   return btoa(bin);
 };
 
-export interface UploadReceipt { attachmentId: string; hash: string; revision: number; kind: string }
+export interface UploadReceipt { attachmentId: string; hash: string; revision: number; kind: string; /** R69 P1-D：Office 软解析失败=已保存但提取不可用（分列状态，非上传失败）。 */ extractionFailed?: string }
 
 /** 上传分类 → artifacts.kind（与 daemon kindForFilename 同口径的 UI 侧推导：code 扩展名=
  * code_file，其余文本=text_file；Office 按扩展名三类——服务端按内容嗅探为准）。 */
@@ -1208,27 +1208,26 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
   const cls = classifyAttachmentFile(file.name, file.size);
   if (cls.cls === 'unsupported') throw new Error(cls.reason ?? '不支持的附件类型');
   if (cls.cls === 'text') {
-    // 字节合同（review-r51 §5 修复）：不能用 File.text()——它把非法 UTF-8 字节替换成 U+FFFD
-    // 后照样上传，服务端持久化有损副本（旧界面第 27 轮已修，换装不得回退）。读真实字节 +
-    // fatal 解码：非法字节在此明确失败（零上传命令/零 artifact，草稿保留可换文件）。
-    const buf = await file.arrayBuffer();
-    let content: string;
-    try {
-      content = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-    } catch {
-      throw new Error('内容不是合法 UTF-8 文本（检测到损坏字节）——请修正文件后重选（未上传任何内容）');
-    }
-    if (content.length === 0) throw new Error('文本内容为空——未上传');
-    const r = await command<Omit<UploadReceipt, 'kind'>>('attachment.uploadText', { conversationId, filename: file.name, content });
-    // uploadText 回执不含 revision——服务端事务固定首传 revision=1（artifacts 插入常量），
-    // 按合同事实补默认；不为其它 upload* 猜值（它们各自回执字段以实际为准）。
-    return { ...r, revision: r.revision ?? 1, kind: kindOfClass('text', file.name) };
+    // R69 P1-C：文本走**原字节上传**（attachment.uploadTextRaw）——hash/副本=真实字节，
+    // BOM/UTF-16/GB18030 原样保存（另存原文件逐字节一致）；编码检测/0B 允许在服务端裁决
+    // （同一 decodeTextBytes 检测链——旧实现 renderer 解码后重编码会剥 BOM、把正常 UTF-16
+    // 当「损坏字节」拒绝、0B 一律失败）。
+    const buf = new Uint8Array(await file.arrayBuffer());
+    if (buf.length > ATTACHMENT_LIMITS.text) throw new Error(`文本附件超过 ${ATTACHMENT_LIMITS.text / 1024}KB 上限（服务端同限裁决）`);
+    const contentBase64 = await fileToBase64(file);
+    const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number }>('attachment.uploadTextRaw', { conversationId, filename: file.name, contentBase64 });
+    return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass('text', file.name) };
   }
   const contentBase64 = await fileToBase64(file);
   const method = cls.cls === 'image' ? 'attachment.uploadImage' : cls.cls === 'pdf' ? 'attachment.uploadPdf' : cls.cls === 'csv' ? 'attachment.uploadCsv' : 'attachment.uploadOffice';
-  const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number }>(method, { conversationId, filename: file.name, contentBase64 });
+  const r = await command<Omit<UploadReceipt, 'kind'> & { bytes?: number; extraction?: string; extractionCode?: string; extractionMessage?: string }>(method, { conversationId, filename: file.name, contentBase64 });
+  // R69 P1-D：Office 软解析失败=上传成功（原件已保存、本地预览可开）+提取分列不可用——
+  // 不再吞掉整次上传；失败原因随回执带出（芯片就地呈现，模型注入侧 fail-closed 拒绝）。
+  const extractionFailed = r.extraction === 'failed'
+    ? `内容提取失败（${r.extractionCode ?? '未知'}：${r.extractionMessage ?? ''}）——文件已保存可预览；发给 AI 会因无提取文本被拒`
+    : undefined;
   // 各 upload* 首传均为 artifacts 插入 revision=1（响应不带回执字段——按合同事实补默认，不为重传猜值）。
-  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass(cls.cls, file.name) };
+  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass(cls.cls, file.name), ...(extractionFailed != null ? { extractionFailed } : {}) };
 }
 
 /** 文本/代码附件预览（骨架：真实 attachment.previewText——其余类型如实分列到原界面）。 */

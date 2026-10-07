@@ -96,6 +96,28 @@ describe('DOCX', () => {
     expect(String(r.error?.message)).toContain('宏');
     env.close();
   }, 60_000);
+  it('R69 P1-B：嵌入 xlsb macroEnabled 声明不污染主 PPTX 定类（真实用户 11.7MB/55 页反例形态）；真宏主 part 仍拒', async () => {
+    const env = makeEnv();
+    const withEmbeddedXlsb = (macroMain = false): Buffer => {
+      const files = makePptxZipEntries({ presentationRids: [{ rid: 'rId1', target: 'slides/slide1.xml' }], slideFiles: { 1: [macroMain ? 'x' : '第一页文字'] } });
+      const bag = files as Record<string, string | Buffer>;
+      const ct = String(bag['[Content_Types].xml']);
+      const nextCt = macroMain
+        ? ct.replace('presentationml.presentation.main+xml', 'vnd.ms-powerpoint.presentation.macroEnabled.main+xml')
+        : ct.replace('</Types>', '<Default Extension="xlsb" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/></Types>');
+      bag['[Content_Types].xml'] = nextCt;
+      if (!macroMain) bag['ppt/embeddings/workbook1.xlsb'] = Buffer.from('fake-embedded-xlsb-bytes');
+      return zipToBuffer(bag as Parameters<typeof zipToBuffer>[0]);
+    };
+    // ① 普通 PPTX + 内嵌 xlsb 部件类型声明（Default Extension="xlsb" ContentType=...binary.macroEnabled.12）
+    const up = await env.cmd<{ attachmentId: string; slides: number }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '江西系统建设方案@0605.pptx', contentBase64: withEmbeddedXlsb().toString('base64') });
+    expect(up.slides).toBe(1); // 主文档正常定类+解析（嵌入声明不改主类型、不拒整份）
+    // ② 主 part 自身为 macroEnabled（.pptm 形态）仍明确拒绝
+    const r2 = await env.cmdRaw('attachment.uploadOffice', { conversationId: 'dm_a', filename: '宏.pptm', contentBase64: withEmbeddedXlsb(true).toString('base64') });
+    expect(r2.ok).toBe(false);
+    expect(String(r2.error?.message)).toContain('宏');
+    env.close();
+  }, 90_000);
 });
 
 describe('XLSX / CSV', () => {
@@ -320,13 +342,16 @@ describe('第四十轮·选型 A：previewOffice 视觉字节通道（includeByt
     const pv2 = await env.cmd<{ bytesBase64?: string; visualBytesAvailable?: boolean }>('attachment.previewOffice', { attachmentId: up2.attachmentId, includeBytes: true });
     expect(pv2.visualBytesAvailable).toBe(true);
     expect(Buffer.from(pv2.bytesBase64!, 'base64').equals(docx)).toBe(true);
-    // XLSX（sheet）：视觉=网格分列，includeBytes 也不带字节。
+    // XLSX（sheet）：R69 起 includeBytes 同样带核验字节（Excel 本地渲染器吃原件字节）；
+    // 不带 includeBytes 时无字节字段（旧调用面不受影响）。
     const xlsx = makeXlsx([{ name: 'Sheet1', rows: [['a', '1']] }]);
     const up3 = await env.cmd<{ attachmentId: string }>('attachment.uploadOffice', { conversationId: 'dm_a', filename: '通道.xlsx', contentBase64: xlsx.toString('base64') });
     const pv3 = await env.cmd<{ bytesBase64?: string; visualBytesAvailable?: boolean; pixelRendering: string }>('attachment.previewOffice', { attachmentId: up3.attachmentId, includeBytes: true });
-    expect(pv3.bytesBase64).toBeUndefined();
-    expect(pv3.visualBytesAvailable).toBeUndefined();
-    expect(pv3.pixelRendering).toBe('grid-preview');
+    expect(pv3.visualBytesAvailable).toBe(true);
+    expect(Buffer.from(pv3.bytesBase64!, 'base64').equals(xlsx)).toBe(true);
+    expect(pv3.pixelRendering).toBe('renderer-xlsx+grid');
+    const pv3b = await env.cmd<{ bytesBase64?: string }>('attachment.previewOffice', { attachmentId: up3.attachmentId });
+    expect(pv3b.bytesBase64).toBeUndefined();
     env.close();
   }, 120_000);
 });

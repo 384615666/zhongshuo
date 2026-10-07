@@ -363,7 +363,7 @@ export function Composer({
       const cls = classifyAttachmentFile(f.name, f.size);
       const uploadId = `upl_${Math.random().toString(36).slice(2, 10)}`;
       if (cls.cls === 'unsupported') {
-        addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'failed', error: cls.reason });
+        addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'failed', error: `${cls.reason ?? '不支持的附件类型'}（${f.name} · ${f.size}B）——可换支持类型重选` });
         continue;
       }
       addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'uploading' });
@@ -371,8 +371,11 @@ export function Composer({
         const r = await uploadAttachmentFile(attachmentUpload.conversationId, f);
         const accepted = settleUploadReady(draftKey, uploadId, attachmentUpload.conversationId, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
         void accepted; // 被丢弃=用户已在上传中移除——不写任何草稿 ref，芯片保持消失
+        // R69 P1-D：已保存但提取不可用（分列状态）——芯片就地警示，不算上传失败。
+        if (r.extractionFailed != null) settleUpload(draftKey, uploadId, { warning: r.extractionFailed });
       } catch (e) {
-        settleUpload(draftKey, uploadId, { status: 'failed', error: (e as Error).message });
+        // R69 P1-C：失败原因就地可见（文件/阶段/可行操作），不再只藏 title。
+        settleUpload(draftKey, uploadId, { status: 'failed', error: `${f.name}（${f.size}B）：${(e as Error).message}` });
       }
     }
   };
@@ -951,18 +954,19 @@ export function Composer({
         </div>
       ) : null}
 
-      {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败保留可移除；按 uploadId 移除
-          ——上传中移除=回执到达即弃，不复活。review-r51 §2） */}
+      {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败**原因就地可见**——R69 P1-C
+          不再只藏 title；就绪字段统一 名称+大小+v版本+预览（空文件显示 0B 也可预览）；提取
+          不可用分列警示（P1-D）。按 uploadId 移除——上传中移除=回执到达即弃，不复活。 */}
       {attachments.length > 0 ? (
-        <div className="composer-mentions">
+        <div className="composer-mentions" data-zs-attach-chips="1">
           {attachments.map((a) => (
-            <span key={a.uploadId} className="chip mono" title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…（可移除——回执到达即弃）' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
+            <span key={a.uploadId} className="chip mono" data-zs-att={a.status} title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…（可移除——回执到达即弃）' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
               <Icon name="paperclip" size={11} />
               {a.name}
-              {a.size > 0 ? <span className="faint">{Math.round(a.size / 1024)}KB</span> : null}
+              <span className="faint">{a.size > 0 ? `${Math.max(1, Math.round(a.size / 1024))}KB` : '0B'}</span>
               {a.status === 'uploading' ? <span className="faint">上传中…</span> : null}
-              {a.status === 'failed' ? <span style={{ color: 'var(--warning)' }}>失败</span> : null}
               {a.status === 'ready' ? <span className="faint">v{a.revision}</span> : null}
+              {a.status === 'ready' && a.size === 0 && (a.kind === 'text_file' || a.kind === 'code_file') ? <span className="faint">空文件</span> : null}
               {a.status === 'ready' && attachmentUpload != null ? (
                 <button title="打开共享预览（只读——来源/版本/hash；表格可设注入范围）" onClick={() => openPreview({ attachmentId: a.attachmentId ?? '', filename: a.name, kind: a.kind ?? 'text_file', conversationId: attachmentUpload.conversationId, origin: '草稿附件', draftKey, hashHint: a.hash, revisionHint: a.revision })}>预览</button>
               ) : null}
@@ -971,6 +975,32 @@ export function Composer({
               </button>
             </span>
           ))}
+          {attachments.filter((a) => a.status === 'failed').map((a) => (
+            <span key={`${a.uploadId}-err`} className="chip mono zs-att-error" data-zs-att-error={a.name} role="alert" title={a.error ?? '未知原因'}>
+              <Icon name="alert-triangle" size={11} />
+              <span style={{ color: 'var(--warning)' }}>{a.name} 上传失败：{a.error ?? '未知原因'}</span>
+              <button title="重新打开文件选择框（换一个文件或修正后重选）" onClick={() => fileInputRef.current?.click()}>重选文件</button>
+            </span>
+          ))}
+          {attachments.filter((a) => a.status === 'ready' && a.warning != null).map((a) => (
+            <span key={`${a.uploadId}-warn`} className="chip mono" data-zs-att-warn={a.name} title={a.warning}>
+              <Icon name="alert-triangle" size={11} />
+              {a.name} 已保存，但{a.warning}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {/* R69 P1-C：空文件发 AI 门——正文为空且可发送附件全是 0B 空文本时，发给 AI 没有任何
+          可用内容；就地说明并给可行操作（不静默造空派发、不禁上传——仅记录/补充正文均可）。 */}
+      {sendAs === 'ai' && body.trim().length === 0 && readyAttachmentCount > 0
+        && attachments.filter((x) => x.status === 'ready').every((x) => x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file')) ? (
+        <div className="composer-mentions" data-zs-empty-text-gate="1">
+          <span className="chip record-chip" title="这些附件都是 0 字节空文本——发给 AI 不会带上任何可用内容（不冒充模型已读、不造空派发）">
+            <Icon name="alert-triangle" size={11} />
+            空文件没有可发送给 AI 的内容（{attachments.filter((x) => x.status === 'ready' && x.size === 0).map((x) => x.name).join('、')}）
+            <button title="本次只保存内容、不派发（空文件照常作为记录保存）" onClick={() => setSendAs('record')}>本次仅记录</button>
+          </span>
         </div>
       ) : null}
 

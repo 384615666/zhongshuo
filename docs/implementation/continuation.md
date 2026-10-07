@@ -2,7 +2,15 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-07 第六十八轮，唯一权威快照）
+## 当前真实状态（2026-10-07 第六十九轮，唯一权威快照）
+
+> R69=文件预览集中修复与 ZCode 源码对照（用户五图验收基准）。**主交付=desktop-daily-win-v7**（buildId/commit 见包 BUILD.json，dirty=false，清单核对一致）；交互门 `verify-daily-r69.cjs` **G1–G7 全绿**（real_calls=0，用户真 PPT 11.7MB/55 页+PNG+四态文本+PDF/Word/Excel/MD/HTML+文件树+DM+已发消息+宏/损坏负例）；视觉门 `visual-pairs-r69.cjs` 7 对同视口（2560×1380）vision 全 PASS；r68 门适配新外壳后全绿；全量 917/917+双类型门 0 错。
+> - **对照源码**：zai-org/ZCode @29628c9（映射表 `zcode-preview-mapping-r69-20261007.md`）；新依赖 @extend-ai/react-xlsx 0.16.0（MIT，PROVENANCE 溯源；worker 构建期预 bundle——裸 import fflate 陷阱）。
+> - **P1**：房间首开死锁=store.openPreview 调度层同步开标签；PPT 误判=classifyOfficeMain 按**主 part** content type（嵌入 xlsb 不污染；宏只看主 part）；文本原字节=attachment.uploadTextRaw+decodeTextBytes（BOM/UTF-16/GB18030/0B 允许；控制字节=二进制判据）；Office 软解析失败不再吞上传（extraction:'failed' 分列，注入 fail-closed 保持）。
+> - **统一阅读器**：PreviewPane 重写（标签条/面包屑/内容三层=参考结构）；fileSource 统一字节链（附件/工作区 readFull 二进制扩展/交付）；PPT=同库引擎架构（缩略图列/主舞台/底栏）；PDF=真实面板 contain 适应+页码输入；Word=分页纸张全白流（无第二副本）；Excel=WASM 引擎+sheet 页签+回退网格；文件树同阅读器。
+> - **未覆盖/延期**：HTML 交互（脚本仍禁）、图片自由缩放、PPT 连续滚动、Excel 回退网格无样式、Android/安装器/价值评价既有延期不扩。
+
+## 历史快照（2026-10-07 第六十八轮）
 
 > R68=真实旧版继承与保全收口（R67 独立复核：跨目录继承四缺口/版本门与坏标记/重试门无牙/成员边界/交付文档第三来源/Select 展开态）。**主交付=desktop-daily-win-v6** `bld_99dadb937ca3bc87`（commit `9c11154`，dirty=false，591/591，verify-desktop-daily 绿）；交互门 `verify-daily-r68.cjs` **G1–G6 全绿**（real_calls=0）；视觉门 `visual-pairs-r68.cjs` 11 场景+vision 复核（含 Select 展开态/表格修复后）；升级门 `verify-upgrade-r67` ok（47→48+负对照 4/4）；全量 912/912+r68Contracts 7/7+双类型门 0 错。
 > - **真实旧版继承（§2）**：继承标记 `zs.hifi.inherit.<ns>` 与 v2 键存在解耦；同目录 v1 键自动继承（构造性可信）；旧根无标记→设置页「旧数据目录继承」持久化候选+用户逐键确认导入（hasStateDb 核对）；冻结 v4/v3 包真启动链端到端演练全过（原 commandId 完整、同号重试恰一次、草稿恢复）。

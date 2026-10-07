@@ -336,7 +336,7 @@ let __appOutRef = { v: '' };
   if (f.g3.recordOnlyZeroTask !== true) errs.push('G3：仅记录产生了任务（应零任务）');
   await shot('g3-html-isolated');
   // 下载原文件：更多菜单项存在 + zsDownload 桥存在 + originalFile 字节 hash 对账（不点真实对话框）。
-  await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+  await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
   f.g3.downloadItem = await cdp.tryEval(`[...document.querySelectorAll('.menu .menu-item')].some((b) => b.textContent.includes('下载原文件 / 另存为'))`);
   f.g3.zsDownloadBridge = await cdp.tryEval(`typeof window.zsDownload?.saveAs === 'function'`);
   {

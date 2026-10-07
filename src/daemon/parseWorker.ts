@@ -167,6 +167,73 @@ function requireEntry(files: Record<string, Uint8Array>, name: string): Uint8Arr
   return f;
 }
 
+/**
+ * R69 P1-B：按**包根 officeDocument 关系的主 part content type** 定类。
+ *
+ * 旧实现用 `[Content_Types].xml` 全文 `includes('macroEnabled')` 拒整份——普通 PPTX 内嵌
+ * `Default Extension="xlsb" ContentType="...binary.macroEnabled.12"`（嵌入 Excel 部件声明）
+ * 会把整份主演示文稿误判成宏文档（用户实测 11.7MB/55 页正常 PPTX 被拒）。嵌入类型声明
+ * 不证明主演示文稿含可执行宏；宏判定只看**主 part 自身**的 content type（.pptm/.docm/.xlsm
+ * 的主 part 声明即 macroEnabled.*）。
+ */
+function attrOf(tagXml: string, name: string): string | null {
+  const m1 = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`).exec(tagXml);
+  if (m1 != null) return m1[1]!;
+  const m2 = new RegExp(`\\b${name}\\s*=\\s*'([^']*)'`).exec(tagXml);
+  return m2 != null ? m2[1]! : null;
+}
+
+export interface OfficeMainClass {
+  family: 'docx' | 'xlsx' | 'pptx' | 'unknown';
+  macro: boolean;
+  mainPart: string;
+  contentType: string;
+}
+
+export function classifyOfficeMain(files: Record<string, Uint8Array>): OfficeMainClass {
+  const ctText = Buffer.from(requireEntry(files, '[Content_Types].xml')).toString('utf8');
+  const relsXml = files['_rels/.rels'] != null ? Buffer.from(files['_rels/.rels']!).toString('utf8') : '';
+  // 包根 officeDocument 关系 → 主 part 路径（属性顺序不定；Target 可能带前导 / 或 ./）
+  let mainPart = '';
+  for (const m of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = m[0]!;
+    const type = attrOf(tag, 'Type') ?? '';
+    if (!/\/officeDocument$/.test(type)) continue;
+    const target = attrOf(tag, 'Target');
+    if (target == null || target.length === 0) continue;
+    mainPart = target.replace(/^\//, '').replace(/^\.\//, '');
+    break;
+  }
+  if (mainPart.length === 0) {
+    // 兜底（极少见：关系声明用绝对 part 名或 rels 缺失）——按三个规范主 part 名直查。
+    for (const cand of ['word/document.xml', 'xl/workbook.xml', 'ppt/presentation.xml']) {
+      if (files[cand] != null) { mainPart = cand; break; }
+    }
+    if (mainPart.length === 0) {
+      throw new ParseError('office-corrupt', '包根关系未声明 officeDocument 主文档，且无规范主 part——不是 Office 文档');
+    }
+  }
+  // 主 part 的 content type：Override 优先，其次按扩展名 Default
+  let contentType = '';
+  for (const m of ctText.matchAll(/<Override\b[^>]*>/g)) {
+    const tag = m[0]!;
+    const pn = (attrOf(tag, 'PartName') ?? '').replace(/^\//, '');
+    if (pn === mainPart) { contentType = attrOf(tag, 'ContentType') ?? ''; break; }
+  }
+  if (contentType.length === 0) {
+    const dot = mainPart.lastIndexOf('.');
+    const ext = dot >= 0 ? mainPart.slice(dot + 1).toLowerCase() : '';
+    for (const m of ctText.matchAll(/<Default\b[^>]*>/g)) {
+      const tag = m[0]!;
+      if ((attrOf(tag, 'Extension') ?? '').toLowerCase() === ext) { contentType = attrOf(tag, 'ContentType') ?? ''; break; }
+    }
+  }
+  const family = contentType.includes('wordprocessingml') ? 'docx'
+    : contentType.includes('spreadsheetml') ? 'xlsx'
+      : contentType.includes('presentationml') ? 'pptx' : 'unknown';
+  return { family, macro: contentType.includes('macroEnabled'), mainPart, contentType };
+}
+
 function decodeXmlEntities(s: string): string {
   return s
     .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&apos;', "'")
@@ -214,10 +281,17 @@ function sanitizeOfficeHtml(html: string): string {
 async function parseDocx(raw: Buffer, sourceHash: string, preUnzipped?: Record<string, Uint8Array>): Promise<ExtractCache> {
   const mammothPkg = (await import('mammoth/package.json', { with: { type: 'json' } })).default;
   const files = preUnzipped ?? safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES }); // 护栏先于 mammoth（条目/尺寸/穿越）；office 路径复用同一解包
-  const ct = requireEntry(files, '[Content_Types].xml');
-  const ctText = Buffer.from(ct).toString('utf8');
-  if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
-    throw new ParseError('docx-macro', '宏/旧版二进制 Word 文档不支持（.docm/.doc 明确拒绝——不执行宏）');
+  // R69 P1-B：宏判定按**主 part content type**（classifyOfficeMain）——嵌入部件的
+  // macroEnabled 类型声明（如内嵌 xlsb）不再把整份普通文档误判成宏文档。
+  const mainCls = classifyOfficeMain(files);
+  if (mainCls.family !== 'docx') {
+    throw new ParseError('office-corrupt', `主文档不是 Word（主 part ${mainCls.mainPart} = ${mainCls.contentType || '未知类型'}）——不以扩展名冒充`);
+  }
+  if (mainCls.macro) {
+    throw new ParseError('docx-macro', '宏 Word 文档不支持（主文档 content type 为 macroEnabled——.docm 明确拒绝，不执行宏）');
+  }
+  if (mainCls.contentType.includes('wordprocessingml.2003')) {
+    throw new ParseError('docx-macro', '旧版 Word 2003 XML/二进制文档不支持（.doc 明确拒绝）');
   }
   requireEntry(files, 'word/document.xml');
   const mammoth = await import('mammoth');
@@ -543,17 +617,21 @@ async function handle(job: ParseJob): Promise<ParseResponse> {
       case 'csv': result = parseCsv(raw, hash); break;
       case 'pptx': result = await parsePptx(raw, hash); break;
       case 'office': {
-        // 定类按解压后的 [Content_Types]（zip 条目已压缩——字面嗅探不可靠）；**单次解包结果
-        // 供定类与逐格式解析复用**（第三十轮二：不再二次解压重复膨胀）；宏/模板变体在此拒。
+        // R69 P1-B：定类按**包根 officeDocument 关系的主 part content type**
+        // （classifyOfficeMain）——单次解包结果供定类与逐格式解析复用；宏判定只看主 part
+        // 自身（.pptm/.docm/.xlsm 拒），嵌入其它 Office 部件的类型声明不再污染定类。
         const sniffFiles = safeUnzipWith(raw, { maxEntries: ZIP_MAX_ENTRIES, entryMax: ZIP_ENTRY_MAX_BYTES, totalMax: ZIP_TOTAL_MAX_BYTES });
-        const ctText = Buffer.from(requireEntry(sniffFiles, '[Content_Types].xml')).toString('utf8');
-        if (ctText.includes('macroEnabled') || ctText.includes('wordprocessingml.2003')) {
-          throw new ParseError('docx-macro', '宏/旧版二进制 Office 文档不支持（.docm/.xlsm/.pptm/.doc 明确拒绝——不执行宏）');
+        const cls = classifyOfficeMain(sniffFiles);
+        if (cls.macro) {
+          const extName = cls.family === 'docx' ? '.docm' : cls.family === 'xlsx' ? '.xlsm' : '.pptm';
+          throw new ParseError('docx-macro', `宏 Office 文档不支持（主 part ${cls.mainPart} content type 为 macroEnabled——${extName} 明确拒绝，不执行宏；嵌入部件的宏类型声明不在此列）`);
         }
-        if (ctText.includes('wordprocessingml')) result = await parseDocx(raw, hash, sniffFiles);
-        else if (ctText.includes('spreadsheetml')) result = await parseXlsx(raw, hash, sniffFiles);
-        else if (ctText.includes('presentationml')) result = parsePptx(raw, hash, sniffFiles);
-        else throw new ParseError('office-corrupt', '未知 Office 类型（[Content_Types] 不含 word/spreadsheet/presentation 主文档）——不以扩展名冒充');
+        if (cls.family === 'unknown') {
+          throw new ParseError('office-corrupt', `未知 Office 类型（主 part ${cls.mainPart} = ${cls.contentType || '无类型声明'}）——不以扩展名冒充`);
+        }
+        if (cls.family === 'docx') result = await parseDocx(raw, hash, sniffFiles);
+        else if (cls.family === 'xlsx') result = await parseXlsx(raw, hash, sniffFiles);
+        else result = parsePptx(raw, hash, sniffFiles);
         break;
       }
     }

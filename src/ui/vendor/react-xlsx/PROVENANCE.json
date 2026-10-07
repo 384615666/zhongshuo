@@ -1,0 +1,11 @@
+{
+  "name": "@extend-ai/react-xlsx",
+  "version": "0.16.0",
+  "license": "MIT",
+  "vendoredAt": "2026-10-07",
+  "source": "npm registry (@extend-ai/react-xlsx@0.16.0 tarball)",
+  "why": "R69 文件预览：Excel 阅读器复用 ZCode 同款成熟实现（github.com/zai-org/ZCode @29628c9 previewPaneOfficeXlsxContent.tsx 同库同用法——用户参考图即该引擎渲染效果）。vendored 文件为 tarball 内 dist 产物逐字节拷贝。",
+  "usage": "运行时经 new URL('assets/vendor/react-xlsx/*.js', document.baseURI) 动态加载（与 pptx-renderer vendored 同模式）；setWasmSource 指向随包 wasm。只读预览（readOnly, showDefaultToolbar=false, toolbar=只读 sheet tabs）。若宿主协议下 Worker/WASM 不可用→回退提取网格（不影响其它格式）。",
+  "notes": "npm 包内 LICENSE（MIT）随包保留；THIRD-PARTY 汇总见 src/ui/vendor/react-xlsx/LICENSE。",
+  "buildChannel": "node_modules 依赖（pnpm add --save-exact @extend-ai/react-xlsx@0.16.0——esbuild 与 app 同一 react 实例打包；pnpm-lock 钉版本）。本目录仅保留 PROVENANCE+LICENSE 作溯源记录，不重复携带 dist 大文件；随包资产（xlsx-worker.js / duke_sheets_wasm_bg.wasm）由 build-ui.mjs 从 node_modules 拷贝到 dist/ui/renderer/hifi/。"
+}

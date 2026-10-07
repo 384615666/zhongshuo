@@ -241,8 +241,11 @@ export function readVerifiedBlob(blobPath: string, expectedHash: string, storeRo
 export function readVerifiedCopy(blobPath: string, expectedHash: string, storeRoot?: string): { ok: true; copy: VerifiedCopy } | { ok: false; error: AttachmentReadError } {
   const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'txt');
   if (!r.ok) return r;
-  const text = r.raw.toString('utf8');
-  const cut = truncateUtf8Bytes(text, ATT_EXCERPT_BYTES);
+  // R69 P1-C：托管副本可能以**原字节**保存（BOM/UTF-16/GB18030——uploadTextRaw 起不再
+  // 重编码）。读取时按同一检测链解码（与上传时确定性一致）；旧副本=纯 UTF-8 不受影响。
+  const dec = decodeTextBytes(r.raw);
+  if (!dec.ok) return { ok: false, error: { code: 'attachment-corrupted', message: `文本副本解码失败（${dec.error.message}）——原件字节完整（另存原文件仍逐字节一致），仅阅读/提取通道不可用` } };
+  const cut = truncateUtf8Bytes(dec.text, ATT_EXCERPT_BYTES);
   return { ok: true, copy: { text: cut.text, originalBytes: r.raw.length, truncated: cut.truncated, excerptBytes: cut.excerptBytes, hash: expectedHash } };
 }
 
@@ -257,8 +260,84 @@ export function readVerifiedFullText(
   blobPath: string,
   expectedHash: string,
   storeRoot?: string,
-): { ok: true; text: string; originalBytes: number } | { ok: false; error: AttachmentReadError } {
+): { ok: true; text: string; originalBytes: number; encoding?: string } | { ok: false; error: AttachmentReadError } {
   const r = readStoreBytes(blobPath, expectedHash, storeRoot, 'txt');
   if (!r.ok) return r;
-  return { ok: true, text: r.raw.toString('utf8'), originalBytes: r.raw.length };
+  // R69 P1-C：同 readVerifiedCopy——原字节副本按检测链解码（BOM/UTF-16/GB18030）。
+  const dec = decodeTextBytes(r.raw);
+  if (!dec.ok) return { ok: false, error: { code: 'attachment-corrupted', message: `文本副本解码失败（${dec.error.message}）——原件字节完整（另存原文件仍逐字节一致），仅阅读通道不可用` } };
+  return { ok: true, text: dec.text, originalBytes: r.raw.length, encoding: dec.encoding };
+}
+
+/* ============================================================
+   R69 P1-C：文本字节解码（上传/读取同一检测链——确定性一致）
+   ============================================================ */
+
+export interface TextDecodeOk { ok: true; text: string; encoding: string }
+export interface TextDecodeFail { ok: false; error: { code: 'text-undecodable'; message: string } }
+
+/**
+ * 解码文本副本字节：BOM 优先（UTF-8/UTF-16LE/BE——TextDecoder 默认剥 BOM），其后
+ * fatal UTF-8 → 无 BOM UTF-16 启发（偶长度+单侧零字节占比）→ GB18030（Node full-ICU；
+ * Windows 常见中文编码）。**解码成功但含二进制控制字节（00-08/0E-1F）视为该编码失败**
+ * （GB18030 可解码几乎任意字节序列——控制字节才是二进制判据），全部失败=二进制/未知编码
+ * （明确拒绝，不静默替换 U+FFFD——原件字节仍完整保存，另存原文件逐字节一致）。
+ */
+export function decodeTextBytes(raw: Buffer): TextDecodeOk | TextDecodeFail {
+  if (raw.length === 0) return { ok: true, text: '', encoding: 'empty' };
+  const CONTROL_RE = /[\u0000-\u0008\u000E-\u001F]/;
+  let decodedWithControls = false;
+  const tryDecode = (label: string): TextDecodeOk | null => {
+    try {
+      // ignoreBOM 默认 false=剥 BOM（UTF-8 BOM 不进正文、不再重编码损失）。
+      const text = new TextDecoder(label, { fatal: true }).decode(raw);
+      if (CONTROL_RE.test(text)) {
+        decodedWithControls = true;
+        return null;
+      }
+      return { ok: true, text, encoding: label.replace(/-/g, '').toLowerCase() };
+    } catch {
+      return null;
+    }
+  };
+  if (raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
+    const r = tryDecode('utf-8');
+    if (r != null) return { ...r, encoding: 'utf-8-bom' };
+  }
+  if (raw[0] === 0xff && raw[1] === 0xfe) {
+    const r = tryDecode('utf-16le');
+    if (r != null) return { ...r, encoding: 'utf-16le-bom' };
+  }
+  if (raw[0] === 0xfe && raw[1] === 0xff) {
+    const r = tryDecode('utf-16be');
+    if (r != null) return { ...r, encoding: 'utf-16be-bom' };
+  }
+  const utf8 = tryDecode('utf-8');
+  if (utf8 != null) return utf8;
+  // 无 BOM 的 UTF-16 启发：偶长度且某一侧字节近半为 0（ASCII/中文 UTF-16 特征）。
+  if (raw.length % 2 === 0 && raw.length >= 8) {
+    let zeroOdd = 0;
+    let zeroEven = 0;
+    const half = raw.length / 2;
+    for (let i = 0; i < raw.length; i += 2) {
+      if (raw[i] === 0) zeroEven += 1;
+      if (raw[i + 1] === 0) zeroOdd += 1;
+    }
+    if (zeroEven / half > 0.3) {
+      const r = tryDecode('utf-16be');
+      if (r != null) return r;
+    }
+    if (zeroOdd / half > 0.3) {
+      const r = tryDecode('utf-16le');
+      if (r != null) return r;
+    }
+  }
+  const gb = tryDecode('gb18030');
+  if (gb != null) return gb;
+  return {
+    ok: false,
+    error: decodedWithControls
+      ? { code: 'text-undecodable', message: '内容含二进制控制字节——不是文本附件（图片/PDF/Office 请用对应类型上传）' }
+      : { code: 'text-undecodable', message: '不是支持的文本编码（UTF-8/UTF-8 BOM/UTF-16LE/BE/GB18030）——可能是二进制文件或未识别编码' },
+  };
 }

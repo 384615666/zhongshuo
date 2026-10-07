@@ -93,57 +93,9 @@ export function setPreviewContextSide(side: 'thread' | 'pool') {
    资源登记（正式侧：真实身份，不伪造内容）
    ============================================================ */
 
-/**
- * 登记一个**会话附件/成果**资源（真实 attachmentId/hash/revision 来自服务端回执或消息摘要）。
- * audience 按来源会话推导：房间/线程→room、私信→dm。内容不内联——预览面板经
- * attachment.preview* 按需装载（正式渲染器）。
- */
-export function registerAttachmentResource(input: {
-  attachmentId: string;
-  filename: string;
-  kind: string;
-  revision?: number;
-  hash?: string;
-  sizeBytes?: number;
-  audience: ContextTarget;
-  origin?: string;
-}): void {
-  const t = input.audience;
-  const audience: PreviewResource['audience'] = t.kind === 'dm'
-    ? { kind: 'dm', conversationId: t.conversationId, memberIds: [] }
-    : t.kind === 'room' || t.kind === 'thread'
-      ? { kind: 'room', roomId: t.roomId }
-      : { kind: 'project' };
-  const origin: PreviewResource['origin'] = t.kind === 'dm'
-    ? { kind: 'dm', conversationId: t.conversationId }
-    : t.kind === 'thread'
-      ? { kind: 'message', messageId: t.threadId, roomId: t.roomId, threadId: t.threadId }
-      : t.kind === 'room'
-        ? { kind: 'message', messageId: t.roomId, roomId: t.roomId }
-        : { kind: 'workspace' };
-  setState((prev) => {
-    if (prev.resources.some((r) => r.id === input.attachmentId)) return prev;
-    const res: PreviewResource = {
-      id: input.attachmentId,
-      projectId: t.projectId,
-      kind: 'attachment',
-      title: input.filename,
-      mimeType: input.kind,
-      origin,
-      audience,
-      revisions: [{
-        revision: input.revision ?? 1,
-        hash: input.hash ?? '(读取时核验)',
-        sizeBytes: input.sizeBytes ?? 0,
-        createdAt: Date.now(),
-        content: { kind: 'unsupported', reason: 'not_connected', note: '内容由共享预览按需装载' },
-      }],
-      createdAt: Date.now(),
-      formalAttachment: { attachmentId: input.attachmentId, kind: input.kind, conversationId: input.origin ?? '' },
-    };
-    return { ...prev, resources: [...prev.resources, res] };
-  });
-}
+// R69 P1-A：registerAttachmentResource 移入 store 层（store.openPreview 统一入口需要在
+// 调度层同步登记+开标签）；此处再导出保持既有 import 路径兼容。
+export { registerAttachmentResource } from './store';
 
 /**
  * 登记一个**项目工作区文件**资源（文件树入口）：内容经 project.file.read 实际读取

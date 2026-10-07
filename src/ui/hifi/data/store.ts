@@ -9,7 +9,8 @@
  * 读取错误/接管状态）。未接通集合保持空值，由页面如实呈现；不伪造时间/成员/状态。
  */
 import { useSyncExternalStore } from 'react';
-import type { AppState, Thread, ThreadCard } from './types';
+import type { AppState, ContextTarget, Thread, ThreadCard } from './types';
+import { openTab } from '../lib/resource';
 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
@@ -247,6 +248,8 @@ export interface UploadItem {
   revision?: number;
   kind?: string;
   error?: string;
+  /** R69 P1-D：已保存但提取不可用（Office 软解析失败——分列状态，非上传失败）。 */
+  warning?: string;
   /** 上传中被移除：回执/失败到达后即整体清除（不复活、不再显示）。 */
   removed?: boolean;
 }
@@ -264,11 +267,143 @@ export interface PreviewTarget {
   revisionHint?: number | string;
 }
 
-export function openPreview(target: PreviewTarget): void {
-  setState((s) => ({ ...s, previewPane: { target } }));
+/**
+ * 从当前 hash 路由推导上下文（R69 P1-A：store 层统一打开入口需要——此前在 PreviewPane
+ * 组件内，首开转换依赖组件挂载形成死锁）。规则与 PreviewPane 旧实现逐条一致。
+ */
+export function contextTargetFromRoute(projectId: string): ContextTarget {
+  const hash = (location.hash ?? '').replace(/^#/, '');
+  const path = hash.split('?')[0] ?? '';
+  const oldThread = /^\/thread\/([^/?]+)/.exec(path);
+  if (oldThread != null) {
+    const ent = getState().threadEntities[oldThread[1]!];
+    if (ent != null) return { kind: 'thread', projectId: ent.projectId, roomId: ent.roomId, threadId: ent.id, tab: 'replies' };
+  }
+  const oldRoom = /^\/room\/([^/?]+)/.exec(path);
+  if (oldRoom != null) return { kind: 'room', projectId, roomId: oldRoom[1]!, view: 'chat' };
+  const th = /^\/project\/([^/]+)\/room\/([^/]+)$/.exec(path);
+  if (th != null) {
+    const q = new URLSearchParams(hash.split('?')[1] ?? '');
+    const tid = q.get('thread');
+    return tid != null
+      ? { kind: 'thread', projectId, roomId: th[2]!, threadId: tid, tab: 'replies' }
+      : { kind: 'room', projectId, roomId: th[2]!, view: 'chat' };
+  }
+  if (/^\/project\/([^/]+)\/files/.test(path)) return { kind: 'files', projectId, view: 'files' };
+  const dm = /^\/dm\/([^/?]+)/.exec(path);
+  if (dm != null) return { kind: 'dm', projectId, conversationId: dm[1]! };
+  if (path.startsWith('/dm')) {
+    const st = getState();
+    const cur = st.dms.find((d) => d.id === st.ui.activeThreadId) ?? st.dms[0];
+    if (cur != null) return { kind: 'dm', projectId, conversationId: cur.id };
+  }
+  return { kind: 'room', projectId, roomId: getState().ui.activeRoomId, view: 'chat' };
 }
+
+/**
+ * 登记一个**会话附件/成果**资源（R69 P1-A：从 actions-preview 移入 store 层——统一打开
+ * 入口 store.openPreview 需要在调度层同步完成登记+开标签，不再依赖组件内 effect 桥接）。
+ * 语义与原实现逐条一致（audience 按来源会话推导；内容不内联——预览面板按需装载）。
+ */
+export function registerAttachmentResource(input: {
+  attachmentId: string;
+  filename: string;
+  kind: string;
+  revision?: number;
+  hash?: string;
+  sizeBytes?: number;
+  audience: ContextTarget;
+  origin?: string;
+}): void {
+  const t = input.audience;
+  const audience: import('./types').PreviewResource['audience'] = t.kind === 'dm'
+    ? { kind: 'dm', conversationId: t.conversationId, memberIds: [] }
+    : t.kind === 'room' || t.kind === 'thread'
+      ? { kind: 'room', roomId: t.roomId }
+      : { kind: 'project' };
+  const origin: import('./types').PreviewResource['origin'] = t.kind === 'dm'
+    ? { kind: 'dm', conversationId: t.conversationId }
+    : t.kind === 'thread'
+      ? { kind: 'message', messageId: t.threadId, roomId: t.roomId, threadId: t.threadId }
+      : t.kind === 'room'
+        ? { kind: 'message', messageId: t.roomId, roomId: t.roomId }
+        : { kind: 'workspace' };
+  setState((prev) => {
+    if (prev.resources.some((r) => r.id === input.attachmentId)) return prev;
+    const res: import('./types').PreviewResource = {
+      id: input.attachmentId,
+      projectId: t.projectId,
+      kind: 'attachment',
+      title: input.filename,
+      mimeType: input.kind,
+      origin,
+      audience,
+      revisions: [{
+        revision: input.revision ?? 1,
+        hash: input.hash ?? '(读取时核验)',
+        sizeBytes: input.sizeBytes ?? 0,
+        createdAt: Date.now(),
+        content: { kind: 'unsupported', reason: 'not_connected', note: '内容由共享预览按需装载' },
+      }],
+      createdAt: Date.now(),
+      formalAttachment: { attachmentId: input.attachmentId, kind: input.kind, conversationId: input.origin ?? '' },
+    };
+    return { ...prev, resources: [...prev.resources, res] };
+  });
+}
+
+/**
+ * 打开一个附件预览（R69 P1-A 统一入口）：**同步**完成 资源登记→标签会话开启——
+ * 不再把单目标态丢给组件内 effect（旧链：RoomPage 只在 preview.tabs 非空才挂 PreviewPane，
+ * 而首标签转换 effect 又只在 PreviewPane 内跑 → 首开死锁；草稿 TXT/PNG 点击无面板）。
+ * 返回是否成功（失败已 toast：资源不存在/版本不可用）。
+ */
+export function openPreview(target: PreviewTarget): boolean {
+  const ctx = contextTargetFromRoute(getState().activeProjectId);
+  registerAttachmentResource({
+    attachmentId: target.attachmentId,
+    filename: target.filename,
+    kind: target.kind,
+    hash: target.hashHint,
+    revision: typeof target.revisionHint === 'number' ? target.revisionHint : undefined,
+    audience: ctx,
+    origin: target.conversationId ?? '',
+  });
+  const s = getState();
+  const res = s.resources.find((r) => r.id === target.attachmentId);
+  if (res == null) {
+    toast('这份资源不存在或已被移除', 'error');
+    return false;
+  }
+  const rev = typeof target.revisionHint === 'number' ? target.revisionHint
+    : res.revisions[res.revisions.length - 1]?.revision;
+  if (rev === undefined) {
+    toast('该版本不可用，未回退到其他版本', 'error');
+    return false;
+  }
+  const ordinal = s.preview.tabs.reduce((max, t) => Math.max(max, t.ordinal), -1) + 1;
+  setState((prev) => {
+    const { tabs, activeKey } = openTab(prev.preview.tabs, res, rev, { target: ctx }, ordinal);
+    return {
+      ...prev,
+      preview: {
+        ...prev.preview,
+        tabs,
+        activeKey,
+        hidden: false,
+        returnSnapshot: prev.preview.returnSnapshot ?? { target: ctx, sizes: { ...prev.layout.sizes } },
+        contextChangedSinceOpen: false,
+        side: ctx.kind === 'thread' ? 'thread' as const : 'pool' as const,
+      },
+    };
+  });
+  recordWrite('preview.open', `resource=${target.attachmentId} revision=${rev} from=${ctx.kind}（store 统一入口，只读不发送）`);
+  return true;
+}
+
+/** 兼容保留：单目标态已由标签会话直接接管（R69 P1-A）；不再设置。 */
 export function closePreview(): void {
-  setState((s) => ({ ...s, previewPane: null }));
+  setState((s) => (s.previewPane == null ? s : { ...s, previewPane: null }));
 }
 
 /** 上传项操作（store 层——回执按 draftKey+uploadId 精确收敛，绝不按文件名匹配）。 */
@@ -276,7 +411,7 @@ export function addUploadItem(item: UploadItem): void {
   setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [item.draftKey]: [...(s.uploadItems[item.draftKey] ?? []), item] } }));
   persistSnapshot();
 }
-export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error'>>): void {
+export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error' | 'warning'>>): void {
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
     const idx = list.findIndex((x) => x.uploadId === uploadId);

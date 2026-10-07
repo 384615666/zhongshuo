@@ -69,5 +69,24 @@ copyFileSync(join(root, 'node_modules', 'jszip', 'dist', 'jszip.min.js'), join(v
 copyFileSync(join(root, 'node_modules', 'dompurify', 'dist', 'purify.min.js'), join(vendorDir, 'purify.min.js'));
 copyFileSync(join(root, 'node_modules', 'markdown-it', 'dist', 'markdown-it.min.js'), join(vendorDir, 'markdown-it.min.js'));
 
+// R69 Excel 阅读引擎（@extend-ai/react-xlsx 0.16.0，MIT——pnpm 钉版依赖；PROVENANCE 见
+// src/ui/vendor/react-xlsx/）：组件经 esbuild 进 app.mjs（与 app 同一 react 实例）；其
+// Worker（new URL("./xlsx-worker.js", import.meta.url, {type:'module'})——bundle 后相对
+// app.mjs）为**裸 import fflate 的 ESM**（期望消费方 bundler 预打包——esbuild 不处理运行期
+// URL Worker），故构建期单独 bundle 成自包含 ESM worker 放 app.mjs 同目录；WASM 同目录
+// （setWasmSource 指向 import.meta.url 基准）。
+const hifiOut = join(root, 'dist', 'ui', 'renderer', 'hifi');
+mkdirSync(hifiOut, { recursive: true });
+await build({
+  entryPoints: [join(root, 'node_modules', '@extend-ai', 'react-xlsx', 'dist', 'xlsx-worker.js')],
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  outfile: join(hifiOut, 'xlsx-worker.js'),
+  sourcemap: false,
+  logLevel: 'info',
+});
+copyFileSync(join(root, 'node_modules', '@extend-ai', 'react-xlsx', 'dist', 'duke_sheets_wasm_bg.wasm'), join(hifiOut, 'duke_sheets_wasm_bg.wasm'));
+
 cpSync(join(root, 'src', 'ui', 'renderer'), join(root, 'dist', 'ui', 'renderer'), { recursive: true });
-process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs + assets/vendor）\n');
+process.stdout.write('[build:ui] dist/ui 就绪（main.cjs / preload.cjs / renderer/ + assets/pdfjs + assets/vendor + hifi/xlsx 引擎资产）\n');

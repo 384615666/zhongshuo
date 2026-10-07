@@ -19,6 +19,7 @@
     "build:ui": "node scripts/build-ui.mjs"
   },
   "dependencies": {
+    "@extend-ai/react-xlsx": "0.16.0",
     "@types/ws": "^8.18.2",
     "better-sqlite3": "^13.0.3",
     "docx-preview": "0.4.1",

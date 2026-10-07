@@ -130,10 +130,9 @@ export function DmPage() {
   const dmShowContext = !dmSingle || dmRegion === 'context';
   const dmShowPreview = dmHasPreview && (!dmSingle || dmRegion === 'preview');
   const dmShowList = !dmHasPreview || dmKeepList;
-  /** 挂载判定与布局判定分离：存在待归一的 legacy 单目标（首个预览）时也要挂载——
-   *  组件内部 effect 完成归一后 dmHasPreview 才会为真（否则首个标签永远不出现）。 */
-  const st2 = useStore((x) => x.previewPane?.target ?? null);
-  const dmMountPreview = active != null && (dmShowPreview || st2 != null);
+  /** R69 P1-A：store.openPreview 已在调度层直接开标签——挂载判定回归 dmShowPreview，
+   *  不再需要「legacy 单目标待归一」的额外挂载条件（死锁桥已拆除）。 */
+  const dmMountPreview = active != null && dmShowPreview;
 
   const dailyDms = useMemo(() => dms.filter((d) => d.archivedAt == null), [dms]);
   const archivedDms = useMemo(() => dms.filter((d) => d.archivedAt != null), [dms]);

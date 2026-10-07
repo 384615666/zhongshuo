@@ -38,7 +38,7 @@ import { join, resolve, basename } from 'node:path';
 
 /** DEV-24 文本附件（第二十六轮五）：副本上限与截断规则——超过 128KB 保存原文但预览/注入
  * 截断至 64KB（注明 originalBytes）；>256KB 拒绝（明确规则不静默）。 */
-import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedFullText, readVerifiedBlob, readVerifiedStoreRaw, validateImageBuffer, truncateUtf8Bytes } from './attachments.ts';
+import { ATT_MAX_BYTES, ATT_EXCERPT_BYTES, ATT_TEXT_KINDS, ATT_IMAGE_MAX_BYTES, kindForFilename, readVerifiedCopy, readVerifiedFullText, readVerifiedBlob, readVerifiedStoreRaw, validateImageBuffer, truncateUtf8Bytes, decodeTextBytes } from './attachments.ts';
 import { writeExport, TEXT_PREVIEW_EXTENSIONS, ExportWriterError } from './exportWriter.ts';
 import { readRemoteConfig, writeRemoteConfig, createPairingCode, listDevices, revokeDeviceInDb, lanIps } from './remoteServer.ts';
 import {
@@ -445,23 +445,52 @@ async function uploadDocumentAttachment(
     const validated = validateExtractCache(sibling.extracted_text_json, hash, cacheKind);
     if (validated != null) cacheJson = JSON.stringify(validated);
   }
-  let cache: ExtractCache;
+  let cache: ExtractCache | null = null;
+  let extractionFailed: { code: string; message: string } | null = null;
   if (cacheJson != null) {
     cache = JSON.parse(cacheJson) as ExtractCache;
-  } else if (params.parseKind === 'office') {
-    const sniffed = await runOfficeSniff(blobPath, hash);
-    if (!sniffed.ok) throw new DaemonCommandError('VALIDATION_INVALID', `[${sniffed.error.code}] ${sniffed.error.message}`);
-    cache = sniffed.result;
-    const { artifactKind: _ak, ...cacheBody } = cache as ExtractCache & { artifactKind?: string };
-    cacheJson = JSON.stringify(cacheBody);
   } else {
-    const parsed = await getParsePool().run(params.parseKind, blobPath, hash);
-    if (!parsed.ok) throw new DaemonCommandError('VALIDATION_INVALID', `[${parsed.error.code}] ${parsed.error.message}`);
-    cache = parsed.result;
-    const { artifactKind: _ak, ...cacheBody } = cache as ExtractCache & { artifactKind?: string };
-    cacheJson = JSON.stringify(cacheBody);
+    // R69 P1-D：Office **软解析失败不再吞掉整次上传**——原件已按内容寻址落盘（上方 blobPath），
+    // 「保存原件/本地静态预览」与「文本提取/模型注入」分列：结构解析失败（损坏/解析器覆盖不足）
+    // 时仍建 artifact（kind 按主 part 定类），extracted_text_json=null（注入侧既有 fail-closed：
+    // 明确拒派发并提示重新预览生成缓存——预览时 ensureDocumentCache 会重试解析，成功则回写）。
+    // **硬拒绝不变**：宏主文档（docx-macro）、ZIP 护栏（zip-*）、非 Office zip（office-corrupt/
+    // PK 头缺失）、超限——安全边界不因分列放宽。
+    const parseOutcome = params.parseKind === 'office'
+      ? await runOfficeSniff(blobPath, hash)
+      : await getParsePool().run(params.parseKind, blobPath, hash);
+    if (!parseOutcome.ok) {
+      const hardReject = parseOutcome.error.code === 'docx-macro' || parseOutcome.error.code.startsWith('zip-')
+        || parseOutcome.error.code === 'office-corrupt' || parseOutcome.error.code === 'office-too-large'
+        || parseOutcome.error.code === `${params.parseKind}-too-large`;
+      if (params.parseKind !== 'office' || hardReject) {
+        throw new DaemonCommandError('VALIDATION_INVALID', `[${parseOutcome.error.code}] ${parseOutcome.error.message}`);
+      }
+      // 同会话同 hash 已有「提取失败」占位行（此前软失败上传）→ 去重返回，不重复建行。
+      const failedExisting = deps.db.prepare(`SELECT id, revision FROM artifacts WHERE conversation_id = ? AND hash = ? AND kind IN (${DOC_ARTIFACT_KINDS.map(() => '?').join(',')}) AND extracted_text_json IS NULL ORDER BY rowid LIMIT 1`)
+        .get(params.conversationId, hash, ...DOC_ARTIFACT_KINDS) as { id: string; revision: number } | undefined;
+      if (failedExisting != null) {
+        const txDedup = deps.db.transaction((): Record<string, unknown> => {
+          assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+          const archived3 = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+          if (archived3 != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传');
+          return { attachmentId: failedExisting.id, hash, bytes: raw.length, deduped: true, revision: failedExisting.revision, extraction: 'failed', extractionCode: parseOutcome.error.code };
+        });
+        const rDedup = runTx(txDedup);
+        return { data: rDedup.data as Record<string, unknown>, replayed: rDedup.replayed };
+      }
+      extractionFailed = { code: parseOutcome.error.code, message: parseOutcome.error.message };
+    } else {
+      cache = parseOutcome.result;
+      const { artifactKind: _ak, ...cacheBody } = cache as ExtractCache & { artifactKind?: string };
+      cacheJson = JSON.stringify(cacheBody);
+    }
   }
-  const artifactKind = cache.kind === 'pdf' ? 'pdf_file' : cache.kind === 'docx' ? 'docx_file' : cache.kind === 'slides' ? 'slides_file' : 'sheet_file';
+  // 软失败占位行的 kind：按扩展名三类（结构未解析成——不以扩展名冒充服务端定类事实，
+  // 但保存/本地渲染只依赖原件字节与扩展名入口）。
+  const artifactKind = cache != null
+    ? (cache.kind === 'pdf' ? 'pdf_file' : cache.kind === 'docx' ? 'docx_file' : cache.kind === 'slides' ? 'slides_file' : 'sheet_file')
+    : (/\.(xlsx)$/i.test(params.filename) ? 'sheet_file' : /\.(pptx)$/i.test(params.filename) ? 'slides_file' : 'docx_file');
   const tx = deps.db.transaction((): Record<string, unknown> => {
     assertConversationAudience(deps.db, deps.localUserId, params.conversationId); // 事务内重检
     const archived2 = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
@@ -470,7 +499,12 @@ async function uploadDocumentAttachment(
     deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at, extracted_text_json)
                      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`)
       .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, artifactKind, hash, blobPath, params.filename, Date.now(), cacheJson);
-    return { attachmentId, hash, bytes: raw.length, ...summaryOf(cache) };
+    return {
+      attachmentId, hash, bytes: raw.length,
+      ...(cache == null
+        ? { extraction: 'failed' as const, extractionCode: extractionFailed?.code, extractionMessage: extractionFailed?.message }
+        : summaryOf(cache)),
+    };
   });
   const r = runTx(tx);
   return { data: r.data as Record<string, unknown>, replayed: r.replayed };
@@ -2574,6 +2608,40 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const r = run(tx);
         return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
       }
+      case 'attachment.uploadTextRaw': {
+        // R69 P1-C：文本附件**原字节上传**——hash/副本=真实原字节（BOM/UTF-16/GB18030
+        // 原样保存，另存原文件逐字节一致）；阅读/提取经 decodeTextBytes 检测链解码
+        // （元信息随回执返回，解码失败=二进制/未知编码明确拒绝）。0 字节空文件允许保存
+        // （预览显示 0B 空态；「发 AI 只有空文件」由发送侧能力门处理）。与 uploadText
+        // （旧界面仍用）并存：同 blobstore/{hash}.txt 内容寻址。
+        const params = z.strictObject({
+          conversationId: z.string().min(1),
+          filename: z.string().min(1).max(200),
+          contentBase64: z.string().max(512 * 1024),
+        }).parse(env.params);
+        const convInfo = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        const raw = Buffer.from(params.contentBase64, 'base64');
+        if (raw.length > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `文件 ${raw.length}B 超过文本附件上限 ${ATT_MAX_BYTES}B（明确规则：不静默截断保存）`);
+        const convArchived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at;
+        if (convArchived != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '会话已归档：禁止新上传（历史附件仍可预览）');
+        const dec = decodeTextBytes(raw);
+        if (!dec.ok) throw new DaemonCommandError('VALIDATION_INVALID', `${dec.error.message}——请确认是文本文件后重选（未上传任何内容）`);
+        if (/[\u0000-\u0008\u000E-\u001F]/.test(dec.text)) throw new DaemonCommandError('VALIDATION_INVALID', '解码后内容含二进制控制字节——不是文本附件（图片/PDF/Office 请用对应类型上传）');
+        const hash = createHash('sha256').update(raw).digest('hex');
+        const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
+        mkdirSync(blobRoot, { recursive: true });
+        writeFileSync(join(blobRoot, `${hash}.txt`), raw); // **原字节**直写（内容寻址——同内容不重复；BOM/编码保持）
+        const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; truncated: boolean; originalBytes: number; encoding: string; kind: string } => {
+          const attachmentId = `art_${randomUUID()}`;
+          const kind = kindForFilename(params.filename);
+          deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
+                           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`)
+            .run(attachmentId, convInfo.projectId, params.conversationId, deps.localUserId, kind, hash, join(blobRoot, `${hash}.txt`), params.filename, Date.now());
+          return { attachmentId, hash, bytes: raw.length, truncated: raw.length > ATT_EXCERPT_BYTES, originalBytes: raw.length, encoding: dec.encoding, kind };
+        });
+        const r = run(tx);
+        return withCommandId({ ok: true, data: r.data, replayed: r.replayed });
+      }
       case 'attachment.previewText': {
         // 能力②预览+③提取正文：读**获准副本**（blob_path——原文件变化不改变已保存版本）；
         // audience：归属会话（或本地用户可达）——跨会话/他人 DM 拒绝。读取经共享完整性路径
@@ -2605,7 +2673,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!(ATT_TEXT_KINDS as readonly string[]).includes(row.kind)) throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非文本/代码附件范围（完整读取面向文本类）`);
         const full = readVerifiedFullText(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
         if (!full.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', full.error.message);
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, text: full.text, originalBytes: full.originalBytes, complete: true, note: '屏幕阅读=托管副本全文；模型注入仍走 64KB 提取窗（预算合同不变）' } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, text: full.text, originalBytes: full.originalBytes, complete: true, encoding: full.encoding ?? 'utf-8', note: '屏幕阅读=托管副本全文；模型注入仍走 64KB 提取窗（预算合同不变）' } });
       }
       case 'attachment.originalFile': {
         // R66 P5：下载原文件/另存为——按资源 kind 的实际存储扩展名读**原件字节**
@@ -2904,14 +2972,29 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (convId !== row.conversation_id) throw new DaemonCommandError('FORBIDDEN', '附件不属于该会话（audience 校验拒绝）');
         if (row.kind !== 'docx_file' && row.kind !== 'sheet_file' && row.kind !== 'slides_file') throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该附件类型（${row.kind}）非 Office 附件范围`);
         const cacheKind = (ARTIFACT_PARSE_KINDS[row.kind] ?? { cache: 'docx' as const }).cache;
-        const cache = await ensureDocumentCache(deps, row, cacheKind);
-        if (cache.kind !== cacheKind) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '提取缓存类型不符——拒绝冒充');
-        const common = { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, extractedAt: cache.extractedAt, parser: `${cache.parserName}@${cache.parserVersion}`, truncatedTotal: cache.truncatedTotal };
-        // 视觉字节通道（第四十轮）：docx/slides 才有渲染器侧视觉；sheet 维持网格分列不带字节。
+        // R69 P1-D：提取缓存不可用（软解析失败/null 缓存——原件已保存）时**预览不整体失败**：
+        // 返回字节通道 + extraction:'failed'（本地静态渲染可继续；模型注入保持 fail-closed）。
+        // 读取原件字节与成功路径共用同一 readVerifiedBlob 完整性链。
+        let cache: ExtractCache | null;
+        try {
+          cache = await ensureDocumentCache(deps, row, cacheKind);
+          if (cache.kind !== cacheKind) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '提取缓存类型不符——拒绝冒充');
+        } catch (e) {
+          const msg = String((e as Error).message);
+          if (/原件已不可解析|提取缓存缺失/.test(msg)) {
+            cache = null;
+          } else {
+            throw e;
+          }
+        }
+        const common = { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: row.hash, ...(cache != null ? { extractedAt: cache.extractedAt, parser: `${cache.parserName}@${cache.parserVersion}`, truncatedTotal: cache.truncatedTotal } : { parser: 'unavailable', truncatedTotal: false }) };
+        // 视觉字节通道（第四十轮；R69 起三类 Office 全带——Excel 本地渲染器同样吃原件字节）：
+        // docx/slides/sheet 原件字节经 readVerifiedBlob（实根+sha256 核验后）一次性返回；
+        // 上限双保险（OFFICE_MAX_BYTES 20MiB），超限/缺参=明确不带字节（前端如实降级）。
         let visualBytesBase64: string | undefined;
         let visualBytesAvailable = false;
         let visualBytesReason: string | null = null;
-        if (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file')) {
+        if (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file' || row.kind === 'sheet_file')) {
           const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
           if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
           if (verified.raw.length > OFFICE_MAX_BYTES) {
@@ -2923,14 +3006,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         const visualBytes = visualBytesAvailable
           ? { visualBytesAvailable: true as const, bytesBase64: visualBytesBase64 }
-          : (params.includeBytes === true && (row.kind === 'docx_file' || row.kind === 'slides_file')
+          : (params.includeBytes === true
             ? { visualBytesAvailable: false as const, visualBytesReason }
             : {});
+        if (cache == null) {
+          // R69 P1-D 分列态：提取不可用（软解析失败）——字节/保存/引用不受影响；注入 fail-closed。
+          return withCommandId({ ok: true, data: { ...common, extraction: 'failed' as const, modelInput: 'unavailable-fail-closed', pixelRendering: 'renderer-local-bytes', ...visualBytes } });
+        }
         switch (cache.kind) {
           case 'docx':
             return withCommandId({ ok: true, data: { ...common, html: cache.html, htmlTruncated: cache.htmlTruncated, paragraphCount: cache.paragraphCount, ocr: 'unsupported', pixelRendering: 'safe-html+docx-preview', modelInput: 'extracted-text', ...visualBytes } });
           case 'sheet':
-            return withCommandId({ ok: true, data: { ...common, sourceFormat: cache.sourceFormat, encoding: cache.encoding, sheets: cache.sheets, pixelRendering: 'grid-preview', formulaExecution: 'never-cached-values-only', modelInput: 'range-window' } });
+            return withCommandId({ ok: true, data: { ...common, sourceFormat: cache.sourceFormat, encoding: cache.encoding, sheets: cache.sheets, pixelRendering: 'renderer-xlsx+grid', formulaExecution: 'never-cached-values-only', modelInput: 'range-window', ...visualBytes } });
           case 'slides':
             return withCommandId({ ok: true, data: { ...common, slides: cache.slides, totalSlides: cache.totalSlides, totalTextBytes: cache.totalTextBytes, truncatedTotal: cache.truncatedTotal, pixelRendering: 'renderer-pptx-renderer', textInput: 'extracted-text', modelInput: 'extracted-text', ...visualBytes } });
           default:
@@ -3501,30 +3588,36 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         return withCommandId({ ok: true, data: { projectId: params.projectId, path: params.path, ...st } });
       }
       case 'project.file.readFull': {
-        // R67 P1-A/P2-B：工作区**完整文件读取**（屏幕阅读通道）——与 project.file.read
-        //（64KB 提取窗，沿用）分列：本命令返回**全文**（≤256KB 有界）+ 实际字节 sha256 +
-        // includeBytes 时原字节（renderer 保存原件用**读取时快照**——源文件后来变化不静默
-        // 换字节）。路径安全链（resolve 边界+realpath 实身份+文本白名单+fatal UTF-8+大小
-        // 上限）与 project.file.read 完全一致；不进模型输入（注入窗合同不变）。
+        // R67 P1-A/P2-B（R69 §A 扩展二进制）：工作区**完整文件读取**（屏幕阅读通道）——
+        // 文本类（白名单）解码全文（R69 起 decodeTextBytes：BOM/UTF-16/GB18030 与上传同一
+        // 检测链，不再一律 fatal-UTF-8 拒）；二进制阅读类（图片/PDF/Office——与上传/预览
+        // 同类型面）返回原字节快照（不建 artifact、不进模型输入）。includeBytes 时文本类也
+        // 带原字节（保存原件=读取时快照）。路径安全链（resolve 边界+realpath 实身份+类型
+        // 白名单+按类大小上限）不变。
         const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500), includeBytes: z.boolean().optional() }).parse(env.params);
-        const safe = resolveProjectTextFile(deps, params.projectId, params.path);
-        let content: string;
-        try { content = new TextDecoder('utf-8', { fatal: true }).decode(safe.raw); }
-        catch { throw new DaemonCommandError('VALIDATION_INVALID', '项目文件不是有效 UTF-8 文本——完整阅读拒绝（二进制走 Git/系统工具）'); }
+        const safe = resolveProjectPreviewFile(deps, params.projectId, params.path);
+        if (safe.isBinary) {
+          return withCommandId({ ok: true, data: {
+            projectId: safe.projectId, path: params.path, baseName: safe.baseName, bytes: safe.raw.length, sha256: safe.sha256,
+            content: null, binaryKind: safe.binaryKind, truncated: false, mtimeMs: safe.mtimeMs, bytesBase64: safe.raw.toString('base64'),
+            note: '工作区二进制只读快照（本地渲染；不进模型输入）',
+          } });
+        }
+        const dec = decodeTextBytes(safe.raw);
+        if (!dec.ok) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件${dec.error.message}——完整阅读拒绝（另存原件仍可用）`);
         return withCommandId({ ok: true, data: {
           projectId: safe.projectId, path: params.path, baseName: safe.baseName, bytes: safe.raw.length, sha256: safe.sha256,
-          content, truncated: false, mtimeMs: safe.mtimeMs,
+          content: dec.text, encoding: dec.encoding, truncated: false, mtimeMs: safe.mtimeMs,
           ...(params.includeBytes === true ? { bytesBase64: safe.raw.toString('base64') } : {}),
           note: '完整文件只读快照（屏幕阅读全文；模型注入仍走 64KB 提取窗——分列）',
         } });
       }
       case 'project.file.originalFile': {
-        // R67 P1-A：工作区**原文件字节**（保存原件通道）——同一路径安全链+文本白名单+
-        // ≤256KB；返回原字节（不重编码：BOM/行尾保持）与实际 sha256。落盘由主进程「另存为」
-        // 对话框完成（renderer 不能指定路径）；保存=读取时快照字节，源文件变化由界面另行
-        // 提示重新加载（不静默另存新字节）。
+        // R67 P1-A（R69 扩展同 readFull 类型面）：工作区**原文件字节**（保存原件通道）——
+        // 同一路径安全链+白名单+按类上限；返回原字节（不重编码：BOM/行尾保持）与实际
+        // sha256。落盘由主进程「另存为」对话框完成；保存=读取时快照字节。
         const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(500) }).parse(env.params);
-        const safe = resolveProjectTextFile(deps, params.projectId, params.path);
+        const safe = resolveProjectPreviewFile(deps, params.projectId, params.path);
         return withCommandId({ ok: true, data: {
           projectId: safe.projectId, path: params.path, filename: safe.baseName, bytes: safe.raw.length, sha256: safe.sha256,
           bytesBase64: safe.raw.toString('base64'), mtimeMs: safe.mtimeMs,
@@ -4465,8 +4558,10 @@ function resolveProjectTextStat(
   }
   const dot = realTarget.lastIndexOf('.');
   const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
-  if (!TEXT_PREVIEW_EXTENSIONS.has(ext)) {
-    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本白名单`);
+  // R69：脏检测（stat）白名单与 readFull 同面（文本+阅读二进制）——二进制工作区文件同样
+  // 能提示「磁盘已更新」。
+  if (!isProjectPreviewableExt(ext)) {
+    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读阅读白名单`);
   }
   try {
     const st = statSync(realTarget);
@@ -4477,16 +4572,31 @@ function resolveProjectTextStat(
 }
 
 /**
- * R67 P1-A：项目文本文件**共享路径安全读取**（project.file.read / readFull / originalFile
- * 同链）：resolve 边界 + realpath 实身份（链接越界拒）+ 文本白名单扩展 + fatal UTF-8 决定由
- * 调用方做（originalFile 保留原字节不解码）+ 大小上限（ATT_MAX_BYTES）。返回原字节与
- * 实际 sha256（读取快照身份）。
+ * R67 P1-A（R69 扩展）：项目文件**共享路径安全读取**（project.file.readFull / originalFile
+ * 同链）：resolve 边界 + realpath 实身份（链接越界拒）+ 白名单扩展（文本类 TEXT_PREVIEW_
+ * EXTENSIONS ≤256KB；R69 增阅读二进制类 PREVIEW_BINARY_EXTENSIONS 按类上限——与上传同
+ * 类型面，文件树/上传/预览三入口支持类型一致）+ 实际字节 sha256（读取快照身份）。
  */
-function resolveProjectTextFile(
+const PREVIEW_BINARY_EXTENSIONS: Record<string, { cap: number; kind: 'image_file' | 'pdf_file' | 'docx_file' | 'sheet_file' | 'slides_file' }> = {
+  '.png': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.jpg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.jpeg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.gif': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.webp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.bmp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  '.pdf': { cap: 20 * 1024 * 1024, kind: 'pdf_file' },
+  '.docx': { cap: 20 * 1024 * 1024, kind: 'docx_file' },
+  '.xlsx': { cap: 20 * 1024 * 1024, kind: 'sheet_file' },
+  '.pptx': { cap: 20 * 1024 * 1024, kind: 'slides_file' },
+};
+function isProjectPreviewableExt(ext: string): boolean {
+  return TEXT_PREVIEW_EXTENSIONS.has(ext) || PREVIEW_BINARY_EXTENSIONS[ext] != null;
+}
+function resolveProjectPreviewFile(
   deps: { db: ZhongshuoDatabase; appDataDir?: string },
   projectId: string,
   path: string,
-): { projectId: string; baseName: string; raw: Buffer; sha256: string; mtimeMs: number } {
+): { projectId: string; baseName: string; raw: Buffer; sha256: string; mtimeMs: number; ext: string; isBinary: boolean; binaryKind?: string } {
   const proj = deps.db.prepare('SELECT id, canonical_path FROM projects WHERE id = ?').get(projectId) as { id: string; canonical_path: string } | undefined;
   if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${projectId}`);
   const root = resolve(proj.canonical_path);
@@ -4508,19 +4618,21 @@ function resolveProjectTextFile(
   }
   const dot = realTarget.lastIndexOf('.');
   const ext = dot >= 0 ? realTarget.slice(dot).toLowerCase() : '';
-  if (!TEXT_PREVIEW_EXTENSIONS.has(ext)) {
-    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读文本白名单——二进制/未知格式不执行不转码`);
+  const binary = PREVIEW_BINARY_EXTENSIONS[ext];
+  const cap = binary?.cap ?? ATT_MAX_BYTES;
+  if (!TEXT_PREVIEW_EXTENSIONS.has(ext) && binary == null) {
+    throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `该项目文件类型（${ext || '无扩展名'}）不在只读阅读白名单——与上传同类型面（文本/图片/PDF/Office/CSV）；未知格式不执行不转码`);
   }
   let raw: Buffer;
   let mtimeMs: number;
   try {
     const st = statSync(realTarget);
-    if (st.size > ATT_MAX_BYTES) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读上限 ${ATT_MAX_BYTES}B（完整阅读/原件保存拒绝——不静默截断）`);
+    if (st.size > cap) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读上限 ${cap}B（完整阅读/原件保存拒绝——不静默截断）`);
     raw = readFileSync(realTarget);
     mtimeMs = st.mtimeMs;
   } catch (error) {
     if (error instanceof DaemonCommandError) throw error;
     throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目文件读取失败：${path}`);
   }
-  return { projectId: proj.id, baseName: basename(realTarget), raw, sha256: createHash('sha256').update(raw).digest('hex'), mtimeMs };
+  return { projectId: proj.id, baseName: basename(realTarget), raw, sha256: createHash('sha256').update(raw).digest('hex'), mtimeMs, ext, isBinary: binary != null, ...(binary != null ? { binaryKind: binary.kind } : {}) };
 }

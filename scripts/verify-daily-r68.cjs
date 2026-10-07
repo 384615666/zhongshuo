@@ -705,7 +705,7 @@ async function pendingIdsInPage(cdp) {
       await waitFor(cdp, `document.querySelector('.preview-source')?.textContent.includes('task-complete')`, 20000, 'G4 源码 JSON');
       f.g4.sourceJson = true;
       // 另存（字节=文档正文 UTF-8）。
-      await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+      await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
       await cdp.eval(probe(`[...document.querySelectorAll('.menu .menu-item')].find((x) => x.textContent.includes('下载原文件'))?.click(), true`));
       await until(() => { try { return fs.readdirSync(saveAsDir).filter((n) => n.includes('v1.md')).length; } catch { return 0; } }, (n) => n >= 1, 15000, 'G4 落盘');
       const g4saved = fs.readdirSync(saveAsDir).filter((n) => n.includes('v1.md')).map((n) => path.join(saveAsDir, n))[0];
@@ -715,7 +715,10 @@ async function pendingIdsInPage(cdp) {
       // 引用（版本+manifest 绑定）——切回回复标签让输入区可见后点「引用到」。
       await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.trim() === '回复'); b?.click(); return true; })()`));
       await sleep(600);
-      await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root button')].find((x) => x.textContent.includes('引用到')); b?.click(); return true; })()`)).catch(() => null);
+      // R69 外壳：引用入口收进「更多」菜单——先开菜单再点。
+await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+await sleep(400);
+await cdp.eval(probe(`(() => { const b = [...document.querySelectorAll('#hifi-root .menu .menu-item')].find((x) => x.textContent.includes('引用到')); b?.click(); return true; })()`)).catch(() => null);
       await sleep(900);
       f.g4.quoteInserted = await cdp.tryEval(`(document.querySelector('#hifi-root textarea.composer-input')?.value ?? '').includes('引用交付') && (document.querySelector('#hifi-root textarea.composer-input')?.value ?? '').includes('manifest')`);
       if (f.g4.quoteInserted !== true) errs.push('G4：交付引用未带版本+manifest 绑定插入草稿');
@@ -746,7 +749,7 @@ async function pendingIdsInPage(cdp) {
     if (f.g5.emptyOpened !== true) errs.push('G5：空文件未打开');
     else {
       await sleep(1200);
-      await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+      await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
       const clicked = await cdp.tryEval(probe(`(() => { const b = [...document.querySelectorAll('.menu .menu-item')].find((x) => x.textContent.includes('下载原文件')); if (b == null) return false; b.click(); return true; })()`));
       f.g5.emptySavedClicked = clicked === true;
       if (clicked !== true) errs.push('G5：空文件另存菜单未找到');
@@ -763,7 +766,7 @@ async function pendingIdsInPage(cdp) {
       await sleep(1000);
       fs.writeFileSync(path.join(projG, 'gate 长文.md'), `# 长文\n${'新正文。'.repeat(200)}\nR68-WT-TAIL-新\n`, 'utf8');
       await waitFor(cdp, `document.body.textContent.includes('磁盘已更新')`, 40000, 'G5 磁盘更新提示');
-      await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+      await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
       await cdp.eval(probe(`[...document.querySelectorAll('.menu .menu-item')].find((x) => x.textContent.includes('下载原文件'))?.click(), true`));
       await sleep(1200);
       const savedNew = fs.readdirSync(saveAsDir).filter((n) => n.includes('长文')).length;
@@ -772,7 +775,7 @@ async function pendingIdsInPage(cdp) {
       // 等新快照内容实际显示（重读完成）再另存——过早点保存会因快照未就绪被拦。
       await waitFor(cdp, `(document.querySelector('.preview-source')?.textContent ?? document.querySelector('.preview-read-doc')?.textContent ?? '').includes('R68-WT-TAIL-新')`, 25000, 'G5 重载后新内容显示');
       await sleep(600);
-      await cdp.eval(probe(`document.querySelector('.preview-tools .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
+      await cdp.eval(probe(`document.querySelector('.preview-tabs-actions .preview-icon-btn[aria-label="更多文件操作"]')?.click(), true`));
       f.g5.reloadMenuFound = await cdp.tryEval(`[...document.querySelectorAll('.menu .menu-item')].some((x) => x.textContent.includes('下载原文件'))`);
       await cdp.eval(probe(`[...document.querySelectorAll('.menu .menu-item')].find((x) => x.textContent.includes('下载原文件'))?.click(), true`));
       await sleep(1200);

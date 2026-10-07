@@ -10,7 +10,7 @@ import { describe, expect, it, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -133,6 +133,71 @@ describe('DEV-24 首包：交给模型（输入注入+record_only 不派发+归�
     db.close();
   });
 });
+
+describe('R69 P1-C：attachment.uploadTextRaw（原字节上传+编码检测+0B）', () => {
+  it('UTF-8 BOM：原字节保存（另存逐字节一致）；阅读解码剥 BOM；encoding 如实', async () => {
+    const { db, cmd } = makeEnv();
+    const raw = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# BOM 文档', 'utf8'), Buffer.from([0x0a]), Buffer.from('正文行', 'utf8')]);
+    const up = await cmd<{ attachmentId: string; hash: string; bytes: number; encoding: string }>('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: 'bom.md', contentBase64: raw.toString('base64') });
+    expect(up.encoding).toBe('utf-8-bom');
+    expect(up.bytes).toBe(raw.length);
+    // 原件字节通道=真实原字节（含 BOM——另存原文件逐字节一致）。
+    const of = await cmd<{ bytes: number; bytesBase64: string }>('attachment.originalFile', { attachmentId: up.attachmentId });
+    expect(of.bytes).toBe(raw.length);
+    expect(Buffer.from(of.bytesBase64, 'base64').equals(raw)).toBe(true);
+    // 阅读通道解码（BOM 剥离、正文完整）。
+    const full = await cmd<{ text: string; encoding: string }>('attachment.readFull', { attachmentId: up.attachmentId });
+    expect(full.text.startsWith('# BOM 文档')).toBe(true);
+    expect(full.text.includes('﻿')).toBe(false);
+    expect(full.encoding).toBe('utf-8-bom');
+    db.close();
+  });
+  it('UTF-16LE BOM 与无 BOM GB18030：上传成功+阅读正确解码；哈希=原字节 sha256', async () => {
+    const { db, cmd } = makeEnv();
+    const u16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('中文UTF16内容', 'utf16le')]);
+    const up16 = await cmd<{ attachmentId: string; hash: string; encoding: string }>('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: 'u16.txt', contentBase64: u16.toString('base64') });
+    expect(up16.encoding).toBe('utf-16le-bom');
+    expect(up16.hash).toBe(createHash('sha256').update(u16).digest('hex'));
+    const full16 = await cmd<{ text: string }>('attachment.readFull', { attachmentId: up16.attachmentId });
+    expect(full16.text).toContain('中文UTF16内容');
+    // 无 BOM GB18030（中文 GBK 双字节序列——非 UTF-8/无零字节特征→GB18030 链）。
+    const gb = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x41, 0x42]);
+    const upGb = await cmd<{ attachmentId: string; encoding: string }>('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: 'gb.txt', contentBase64: gb.toString('base64') });
+    expect(upGb.encoding).toBe('gb18030');
+    const fullGb = await cmd<{ text: string }>('attachment.readFull', { attachmentId: upGb.attachmentId });
+    expect(fullGb.text.startsWith('中文AB')).toBe(true);
+    db.close();
+  });
+  it('0 字节空文件：允许保存；阅读全文=空串；另存 0B', async () => {
+    const { db, cmd } = makeEnv();
+    const up = await cmd<{ attachmentId: string; bytes: number; encoding: string }>('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: '下载 (5).txt', contentBase64: '' });
+    expect(up.bytes).toBe(0);
+    expect(up.encoding).toBe('empty');
+    const full = await cmd<{ text: string; originalBytes: number }>('attachment.readFull', { attachmentId: up.attachmentId });
+    expect(full.text).toBe('');
+    expect(full.originalBytes).toBe(0);
+    const of = await cmd<{ bytes: number }>('attachment.originalFile', { attachmentId: up.attachmentId });
+    expect(of.bytes).toBe(0);
+    db.close();
+  });
+  it('不可解码字节明确拒绝（不静默替换）；UTF-16 解码文本经注入链进入模型输入', async () => {
+    const { db, cmd, cmdRaw, makeWorker } = makeEnv();
+    const bin = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x11, 0x22, 0x33]);
+    const bad = await cmdRaw('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: 'pic.png', contentBase64: bin.toString('base64') });
+    expect(bad.ok).toBe(false);
+    // PNG 头（GB18030 能解出控制字节）→ 二进制控制字节判据（解码链内判——非「编码不支持」误称）。
+    expect(String(bad.error?.message)).toContain('内容含二进制控制字节');
+    // 注入：UTF-16 附件经 readVerifiedCopy 解码进 startTurn 输入。
+    const u16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('UTF十六注入内容', 'utf16le')]);
+    const up = await cmd<{ attachmentId: string }>('attachment.uploadTextRaw', { conversationId: 'dm_a', filename: 'inj.txt', contentBase64: u16.toString('base64') });
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_a' }, body: '按文档执行', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
+    const { worker, adapter } = makeWorker();
+    await worker.runOnce();
+    expect(adapter.startTurnLog[0]!.text).toContain('UTF十六注入内容');
+    db.close();
+  });
+});
+void ReminderScheduler;
 
 void ({} as unknown as ZhongshuoDatabase);
 void ReminderScheduler;
