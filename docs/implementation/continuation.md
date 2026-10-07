@@ -2,6 +2,19 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前真实状态（2026-10-07 第六十八轮，唯一权威快照）
+
+> R68=真实旧版继承与保全收口（R67 独立复核：跨目录继承四缺口/版本门与坏标记/重试门无牙/成员边界/交付文档第三来源/Select 展开态）。**主交付=desktop-daily-win-v6** `bld_99dadb937ca3bc87`（commit `9c11154`，dirty=false，591/591，verify-desktop-daily 绿）；交互门 `verify-daily-r68.cjs` **G1–G6 全绿**（real_calls=0）；视觉门 `visual-pairs-r68.cjs` 11 场景+vision 复核（含 Select 展开态/表格修复后）；升级门 `verify-upgrade-r67` ok（47→48+负对照 4/4）；全量 912/912+r68Contracts 7/7+双类型门 0 错。
+> - **真实旧版继承（§2）**：继承标记 `zs.hifi.inherit.<ns>` 与 v2 键存在解耦；同目录 v1 键自动继承（构造性可信）；旧根无标记→设置页「旧数据目录继承」持久化候选+用户逐键确认导入（hasStateDb 核对）；冻结 v4/v3 包真启动链端到端演练全过（原 commandId 完整、同号重试恰一次、草稿恢复）。
+> - **版本/身份保全（§3）**：mergeInheritedSnapshots 版本门同判（v999 整体拒收+原件保持）；坏 root-identity 不覆写不换 ID（rootIdentityHealth=invalid-marker+修复指引）；仅缺失才原子创建。
+> - **重试门真牙（§4）**：按按钮正文定位+ZS_COMMAND_LOG_FILE 管道信封日志（commandId/params 逐字比对）+负对照实跑；两封不同命令未知并存（queued 按 commandId 并集）；等待期编辑保留。
+> - **成员边界（§5）**：归档/移除/空白名服务端守卫+replayGuard；AddMemberModal 捕获打开目标（切换作废）；同名成员 #短标识（卡片/名单/@/配置）。
+> - **第三来源与尾项（§6）**：delivery.document 正式命令+Room/ThreadPage「打开文档」（阅读=TaskComplete 结构/源码 JSON/另存对账/引用带 manifest 绑定）；project.file.stat 脏检测→磁盘已更新提示→保存拦截→重载新快照（修复重载后 pendingRevision 重复追加）；空文件 0B 另存；自绘 Select listbox（原生清零、键盘可达、展开可截图）。
+> - **衍生真缺陷**：**preview.css 漏出包**（正式构建全量缺预览样式——MD 表格无边框；build-ui 清单补入，vision 复核修复）；继承候选只存内存→重载即空表永久跳过（标记持久化队列）；重载+偏好恢复后 DM/房间投影无人装载（DmPage/ProjectHome 挂载即刷新）；fake 结构化终态补末条消息（真实 final-result 同构——测试基线同步 912）。
+> - **README v6**：情况 A（首次从 v3/v4 升级：复制 server-data→设置页确认导入）/情况 B（v5/v6 自建根整根移动：自动继承）分列；回退=升级前完整根+匹配旧程序。**用户实际数据在 v3——按情况 A 走**。
+> - 交互门工程事实：强杀丢 LevelDB 缓冲写（实证）→门内 Browser.close 优雅关窗；v3 侧栏不列注册表项目→autoOpen 记忆路径+「默认房间」通用就绪信号。
+> - 下一轮（R69）待办登记：v6 自然使用反馈优先；HTML 交互网页（脚本仍禁用）如实边界；R64 遗留 project.open 响应 rootPath/canonicalPath；多远端 upstream 复核；交付文档 UI 的私信任务线程形态核对。
+
 ## 当前真实状态（2026-10-06 第六十七轮，唯一权威快照）
 
 > R67=日常使用与数据继承收口（R66 独立复核四反例+升级门修正+控件/原型补齐）。**主交付=
