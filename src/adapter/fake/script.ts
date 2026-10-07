@@ -10,6 +10,9 @@ type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never
 
 export type FakeScriptItem =
   | { kind: 'event'; event: FakeEventSpec }
+  /** 写文件到工作区（R70 F7：模拟真实 agent 的落盘副作用——写入会话 cwd 内相对路径；
+   *  越界（..）/绝对路径拒绝；文本 content 或二进制 contentBase64 二选一）。 */
+  | { kind: 'writeFile'; path: string; content?: string; contentBase64?: string }
   /** 发出 approval.requested 并阻塞，等 respondApproval 决定走向（§9.6 最小确认通道）。 */
   | {
       kind: 'waitApproval';

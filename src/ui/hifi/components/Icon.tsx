@@ -388,6 +388,38 @@ const P: Record<string, JSX.Element> = {
       <line x1="15" y1="3" x2="15" y2="21" />
     </>
   ),
+  'presentation': (
+    <>
+      <rect x="3" y="3" width="18" height="14" rx="2" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <polyline points="7 13 10 9 13 11.5 17 6" />
+    </>
+  ),
+  'grid': (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="3" y1="9" x2="21" y2="9" />
+      <line x1="3" y1="15" x2="21" y2="15" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+      <line x1="15" y1="3" x2="15" y2="21" />
+    </>
+  ),
+  'zoom-in': (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.5" y2="16.5" />
+      <line x1="11" y1="8" x2="11" y2="14" />
+      <line x1="8" y1="11" x2="14" y2="11" />
+    </>
+  ),
+  'zoom-out': (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.5" y2="16.5" />
+      <line x1="8" y1="11" x2="14" y2="11" />
+    </>
+  ),
   'at-sign': (
     <>
       <circle cx="12" cy="12" r="4" />

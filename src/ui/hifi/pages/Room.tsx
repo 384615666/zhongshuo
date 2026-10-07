@@ -1350,11 +1350,26 @@ function ThreadPanel({
    *
    * 讨论串没有 taskId，`artifactsOfThread` 恒为空，但消息附件是独立聚合的 ——
    * 所以不能用"Artifact 需要 taskId"推断讨论串没有附件（减负 §2）。
+   *
+   * R70 修复：**根消息（锚）附件一并纳入**——锚消息 thread_id=null，旧选择器只按
+   * m.threadId===thread.id 过滤结构性看不到根附件（记录串「附件」页签恒隐藏、
+   * 已发记录的附件无处打开——独立复核反例的"已发根消息"入口）。loader 水合的
+   * threadAnchors[tid].formalAttachments 即根附件事实（thread.history rootAttachments）。
    */
   const threadAttachments = useMemo(
-    () => (thread
-      ? s.messageAttachments.filter((l) => s.messages.some((m) => m.id === l.messageId && m.threadId === thread.id))
-      : []),
+    () => {
+      if (thread == null) return [];
+      const anchor = s.threadAnchors[thread.id];
+      const anchorAtts = (anchor as unknown as { formalAttachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null)?.formalAttachments ?? [];
+      const fromAnchor = anchorAtts.map((a, i) => ({ messageId: anchor?.id ?? '', attachmentId: a.artifactId, filename: a.filename, kind: a.kind, ordinal: i }));
+      const fromReplies = s.messageAttachments
+        .filter((l) => s.messages.some((m) => m.id === l.messageId && m.threadId === thread.id))
+        .map((l) => {
+          const res = s.resources.find((r) => r.id === l.resourceId);
+          return { messageId: l.messageId, attachmentId: l.resourceId, filename: res?.title ?? l.resourceId, kind: res?.mimeType ?? '', ordinal: l.ordinal };
+        });
+      return [...fromAnchor, ...fromReplies];
+    },
     [s, thread?.id],
   );
   /**

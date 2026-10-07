@@ -58,6 +58,9 @@ export interface LoadedFile {
     paragraphCount?: number;
     parser?: string;
   };
+  /** 交付文档事实（R70 F8：hashMatch/bytes 来自 delivery.document 回执——不得丢弃或用
+   *  字符串长度冒充 UTF-8 字节数）。 */
+  delivery?: { hashMatch: boolean | null; bytes: number };
   /** 工作区读取快照元数据（mtimeMs——脏检测/保存快照对账用）。 */
   mtimeMs?: number;
   /** 图片直通（previewImage dataUrl+尺寸）。 */
@@ -121,6 +124,7 @@ export async function loadFileForResource(resource: PreviewResource, revision: n
       hash: resource.formalDelivery.manifestHash,
       revision,
       filename: title,
+      delivery: { hashMatch: d.hashMatch, bytes: d.bytes },
     };
   }
   const fa = resource.formalAttachment;

@@ -1,12 +1,14 @@
 /**
- * PPT 阅读视图（R69，对照 reference-ppt.png / ZCode pptx-preview-viewer.tsx @29628c9）：
- * 左缩略图列（IntersectionObserver 懒渲染+当前页描边+页码）+ 主舞台（fit×zoom 居中白页）+
- * 底部控制条「‹ [页码] / 总数 ›｜− 缩放% ＋｜下载原件」。提取文本不再铺在正文（入文件信息）。
- * 外部关系不加载、宏不执行（引擎侧静态渲染——与上传解析护栏同一边界）。
+ * PPT 阅读视图（R69 建立 / R70 补阅读状态）：左缩略图列（懒渲染+页码+选中描边）+
+ * 主舞台（fit×zoom 居中白页）+ 底部控制条「‹ [页码] / 总数 ›｜− 缩放% ＋｜下载原件」。
+ * R70：页码/缩放按 资源+读取版本 存取（readerState）——切标签/收起重开/后台刷新不回第 1 页；
+ * bytes prop 由 FileStage 提供稳定引用（身份不变=引擎不重开）。内嵌图片经本地 blob URL
+ * 渲染（CSP img-src 含 blob:——R70 F2）。外部关系不加载、宏不执行。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../../components/Icon';
 import { openPptxDocument, type PptxPreviewDocument } from './pptxEngine';
+import { saveReaderState, type ReaderState } from '../readerState';
 
 function RenderedSlide({ doc, pageIndex, scale, onReady }: {
   doc: PptxPreviewDocument; pageIndex: number; scale: number; onReady?: () => void;
@@ -91,49 +93,69 @@ function useElementSize(node: HTMLElement | null): { width: number; height: numb
   return size;
 }
 
-export function PptxView({ bytes, filename, revisionLabel, onDownload, onMeta }: {
+export function PptxView({ bytes, filename, revisionLabel, onDownload, resourceId, revision, initialState }: {
   bytes: ArrayBuffer; filename: string; revisionLabel: string;
-  onDownload: () => void; onMeta?: (meta: { pages: number; page: number }) => void;
+  onDownload: () => void;
+  resourceId?: string; revision?: number; initialState?: ReaderState;
 }): ReactElement {
+  const restored = initialState?.kind === 'pptx' ? initialState : null;
   const [doc, setDoc] = useState<PptxPreviewDocument | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [pageNumber, setPageNumber] = useState(1);
-  const [pageInput, setPageInput] = useState('1');
-  const [zoomPercent, setZoomPercent] = useState(100);
+  const [pageNumber, setPageNumber] = useState(restored?.page ?? 1);
+  const [pageInput, setPageInput] = useState(String(restored?.page ?? 1));
+  const [zoomPercent, setZoomPercent] = useState(restored?.zoomPercent ?? 100);
   const [thumbRoot, setThumbRoot] = useState<HTMLElement | null>(null);
   const [stageViewport, setStageViewport] = useState<HTMLElement | null>(null);
   const viewportSize = useElementSize(stageViewport);
   const genRef = useRef(0);
+  const didOpenRef = useRef(false);
+
+  // 阅读状态保存（资源+版本）——切标签/收起重开后恢复。
+  useEffect(() => {
+    if (resourceId == null || revision == null || doc == null) return;
+    saveReaderState(resourceId, revision, { kind: 'pptx', page: pageNumber, zoomPercent });
+  }, [resourceId, revision, doc, pageNumber, zoomPercent]);
 
   useEffect(() => {
     const gen = ++genRef.current;
     let opened: PptxPreviewDocument | null = null;
-    setDoc(null); setErr(null); setPageNumber(1); setPageInput('1'); setZoomPercent(100);
+    const firstMount = !didOpenRef.current;
+    didOpenRef.current = true;
+    setDoc(null); setErr(null);
+    // R70 F4：首挂不复位页码/缩放（从 readerState 恢复的值要保留）；换文件/换快照才回第 1 页。
+    if (!firstMount || restored == null) { setPageNumber(1); setPageInput('1'); setZoomPercent(100); }
     void openPptxDocument(bytes.slice(0))
       .then((d) => {
         opened = d;
         if (gen !== genRef.current) { d.dispose(); return; }
+        docRef.current = d;
         setDoc(d);
-        onMeta?.({ pages: d.pageCount, page: 1 });
+        if (firstMount && restored != null) {
+          const target = Math.min(Math.max(1, restored.page), d.pageCount);
+          setPageInput(String(target));
+          setPageNumber(target);
+        }
       })
       .catch((e: unknown) => { if (gen === genRef.current) setErr(String((e as Error).message).slice(0, 160)); });
     return () => {
       genRef.current += 1; // 迟到结果只能释放资源，不污染新会话
+      docRef.current = null;
       opened?.dispose();
     };
+    // bytes=稳定引用（FileStage）——重挂不重开；身份变化才重解析。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bytes]);
 
+  // R70 修复：直接 set（旧实现把 setState 嵌进 setDoc updater——React 非法模式，
+  // 页码/缩放从不真正落到组件状态，恢复与跳页全失效）。
+  const docRef = useRef<PptxPreviewDocument | null>(null);
   const goToPage = useCallback((target: number) => {
-    setDoc((d) => {
-      if (d == null || d.pageCount === 0) return d;
-      const next = Math.min(Math.max(1, Math.round(target)), d.pageCount);
-      setPageInput(String(next));
-      setPageNumber(next);
-      onMeta?.({ pages: d.pageCount, page: next });
-      return d;
-    });
-  }, [onMeta]);
+    const d = docRef.current;
+    if (d == null || d.pageCount === 0) return;
+    const next = Math.min(Math.max(1, Math.round(target)), d.pageCount);
+    setPageInput(String(next));
+    setPageNumber(next);
+  }, []);
   const commitPageInput = () => {
     const parsed = Number.parseInt(pageInput.trim(), 10);
     if (Number.isNaN(parsed)) { setPageInput(String(pageNumber)); return; }
@@ -163,7 +185,7 @@ export function PptxView({ bytes, filename, revisionLabel, onDownload, onMeta }:
   if (doc.pageCount === 0) return <div className="panel info">这份演示文稿没有任何幻灯片（0 页——如实呈现）。</div>;
 
   return (
-    <div className="pptx-view" data-zs-pptx-view="1" data-zs-pptx-pages={doc.pageCount}>
+    <div className="pptx-view" data-zs-pptx-view="1" data-zs-pptx-pages={doc.pageCount} data-zs-pptx-page={pageNumber}>
       <aside className="pptx-thumbs" ref={setThumbRoot} aria-label="幻灯片缩略图">
         {Array.from({ length: doc.pageCount }, (_, i) => (
           <Thumbnail key={i} doc={doc} pageIndex={i} selected={i === pageNumber - 1} scrollRoot={thumbRoot} onSelect={() => goToPage(i + 1)} />

@@ -14,7 +14,7 @@ import { Icon } from '../components/Icon';
 import { Menu, MenuItem, Modal, PanelNavButton, Tag, anchorFromElement } from '../components/ui';
 import { useStore, getState, toast, queueDraftInsert } from '../data/store';
 import {
-  activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge,
+  activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge, registerWorktreeResource, openPreviewTab,
   hidePreview, quoteResource, reloadResource, rememberScroll, showPreview,
   togglePreviewMaximized, applyWorktreeRead, markResourceUpdated, applyDeliveryRead,
 } from '../data/actions-preview';
@@ -27,6 +27,7 @@ import { command } from '../bridge';
 import type { ContextTarget, PreviewResource, ResourceRevision } from '../data/types';
 import { MarkdownView } from './MarkdownView';
 import { loadFileForResource, formatKindOf, type LoadedFile } from './fileSource';
+import { readerStateOf, clearReaderState } from './readerState';
 import { PptxView } from './viewers/PptxView';
 import { PdfView } from './viewers/PdfView';
 import { DocxView } from './viewers/DocxView';
@@ -366,7 +367,7 @@ export function PreviewPane({
                   aria-selected={on}
                   className="preview-tab-label"
                   onClick={() => activatePreview(t.key)}
-                  onAuxClick={(e) => { if (e.button === 1) closePreviewTab(t.key); }}
+                  onAuxClick={(e) => { if (e.button === 1) { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); closePreviewTab(t.key); } }}
                   title={`${r?.relativePath ?? r?.title ?? t.key}${ver ? ` · ${ver}` : ''}`}
                 >
                   <span className="preview-tab-icon" style={{ color: badge.color }}><Icon name={badge.icon} size={11} /></span>
@@ -377,7 +378,7 @@ export function PreviewPane({
                   className="preview-tab-close"
                   aria-label={`关闭 ${shown}${ver ? ` ${ver}` : ''}`}
                   title="关闭这个文件（不影响其他标签）"
-                  onClick={() => closePreviewTab(t.key)}
+                  onClick={() => { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); closePreviewTab(t.key); }}
                 >
                   <Icon name="x" size={10} />
                 </button>
@@ -526,7 +527,7 @@ export function PreviewPane({
               </MenuItem>
             );
           })}
-          <MenuItem icon="x" onClick={() => { closeAllPreviews(); setOpenList(null); }}>关闭所有文件</MenuItem>
+          <MenuItem icon="x" onClick={() => { for (const t of tabs) { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); } closeAllPreviews(); setOpenList(null); }}>关闭所有文件</MenuItem>
         </Menu>
       ) : null}
 
@@ -557,8 +558,8 @@ export function PreviewPane({
           {singleRegion ? (
             <MenuItem icon="chevron-right" title="保留全部标签与阅读位置，稍后可重开（不会关闭文件）" onClick={() => { hidePreview(); setMoreAt(null); }}>收起预览</MenuItem>
           ) : null}
-          <MenuItem icon="x" title="只关闭当前这个标签，其他标签不受影响" onClick={() => { closePreviewTab(active.key); setMoreAt(null); }}>关闭此文件</MenuItem>
-          <MenuItem icon="panel-right" title="清空全部标签、退出预览；不会删除磁盘文件" onClick={() => { closeAllPreviews(); setMoreAt(null); }}>关闭所有文件</MenuItem>
+          <MenuItem icon="x" title="只关闭当前这个标签，其他标签不受影响" onClick={() => { dropLoadedCache(active.resourceId); clearReaderState(active.resourceId); closePreviewTab(active.key); setMoreAt(null); }}>关闭此文件</MenuItem>
+          <MenuItem icon="panel-right" title="清空全部标签、退出预览；不会删除磁盘文件" onClick={() => { for (const t of tabs) { dropLoadedCache(t.resourceId); clearReaderState(t.resourceId); } closeAllPreviews(); setMoreAt(null); }}>关闭所有文件</MenuItem>
         </Menu>
       ) : null}
 
@@ -636,6 +637,25 @@ function flavorByExt(filename: string, formalKind: string): FileFlavor {
    统一正文：FileStage（R69——所有来源同一装载链+格式分发）
    ============================================================ */
 
+/** 装载缓存（R70 F3/F4）：键=资源:版本 → LoadedFile（含稳定 bytes 引用）。切标签回来自
+ * 缓存瞬时恢复（字节身份不变=引擎不重开）；脏重载 bump 版本=新键新快照。上限 12 条
+ * 逐出最旧（bytes 持有大文件的内存有界）。 */
+const loadedCache = new Map<string, LoadedFile>();
+function cachedLoad(key: string, load: () => Promise<LoadedFile>): Promise<LoadedFile> {
+  const hit = loadedCache.get(key);
+  if (hit != null) return Promise.resolve(hit);
+  return load().then((r) => {
+    if (loadedCache.size >= 12) loadedCache.delete(loadedCache.keys().next().value as string);
+    loadedCache.set(key, r);
+    return r;
+  });
+}
+function dropLoadedCache(resourceId: string): void {
+  for (const k of [...loadedCache.keys()]) {
+    if (k.startsWith(`${resourceId}:`)) loadedCache.delete(k);
+  }
+}
+
 function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComment, onDownload }: {
   resource: PreviewResource; revision: ResourceRevision;
   viewMode: 'preview' | 'source'; wrapSource: boolean; zoom: number;
@@ -645,12 +665,13 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
   const [loaded, setLoaded] = useState<LoadedFile | null>(null);
   const [nonce, setNonce] = useState(0);
   const genRef = useRef(0);
+  const stateKey = `${resource.id}:${revision.revision}`;
 
   useEffect(() => {
     const gen = ++genRef.current;
     let done = false;
     setErr(null); setLoaded(null);
-    void loadFileForResource(resource, revision.revision)
+    void cachedLoad(`${stateKey}${nonce > 0 ? `:r${nonce}` : ''}`, () => loadFileForResource(resource, revision.revision))
       .then((r) => {
         if (done || gen !== genRef.current) return;
         setLoaded(r);
@@ -662,6 +683,17 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
           worktreeSnapshots.set(`${resource.id}:${revision.revision}`, { bytesBase64: btoa(bin), sha256: r.hash, bytes: r.originalBytes, mtimeMs: r.mtimeMs ?? 0 });
           worktreeKindCache.set(resource.id, r.kind);
         }
+        // R70 F8：读取事实回填 store（hash/大小不再停留占位值；文本类带解码内容供引用/摘录）。
+        if (resource.formalWorktree != null) {
+          applyWorktreeRead(resource.id, {
+            ...(r.kind === 'text' || r.kind === 'code' || r.kind === 'markdown' || r.kind === 'html' || r.kind === 'csv'
+              ? { text: r.text ?? '' }
+              : { binaryKind: r.kind }),
+            hash: r.hash,
+            sizeBytes: r.originalBytes,
+            revision: revision.revision,
+          });
+        }
         if (r.text != null) reportExcerpt(resource.id, r.text);
         else if (r.office?.slides != null) reportExcerpt(resource.id, r.office.slides.map((sl) => `${sl.text}${sl.notes ? `\n${sl.notes}` : ''}`).join('\n\n'));
         else if (r.office?.sheets != null && r.office.sheets[0] != null) reportExcerpt(resource.id, r.office.sheets[0].cells.map((row) => row.join('\t')).join('\n'));
@@ -670,6 +702,16 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
     return () => { done = true; genRef.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resource.id, revision.revision, nonce]);
+
+  /** R70 F3：字节身份稳定——同一 loaded 快照只派生一次 ArrayBuffer/Uint8Array（render 期
+   * 重建会让 react-xlsx/pptx 引擎把同一文件当新输入重开，切表/页码被重置——独立复核反例）。
+   * 各视图内部再按需 slice 也是基于这个稳定引用。 */
+  const stableBytes = useMemo(() => loaded?.bytes ?? null, [loaded]);
+  const stableArrayBuffer = useMemo(() => {
+    if (stableBytes == null) return null;
+    return stableBytes.buffer.slice(stableBytes.byteOffset, stableBytes.byteOffset + stableBytes.byteLength) as ArrayBuffer;
+  }, [stableBytes]);
+  const stablePdfBytes = stableBytes;
 
   // 工作区脏检测（R68 §6：8s stat 轮询——mtime/bytes 不一致提示而不替换）。
   useEffect(() => {
@@ -706,31 +748,37 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
   const revLabel = revisionLabel(resource, revision.revision);
   const dl = onDownload;
 
-  // ---------- 格式分发 ----------
+  // ---------- 格式分发（R70：字节=稳定引用；阅读状态=按资源+版本恢复/保存） ----------
+  const readerProps = {
+    resourceId: resource.id,
+    revision: revision.revision,
+    initialState: readerStateOf(resource.id, revision.revision),
+  };
   if (loaded.kind === 'pptx') {
-    if (loaded.bytes == null) return <BytesUnavailableView reason={loaded.extractionError ?? '未取到原件字节'} onDownload={dl} revLabel={revLabel} />;
-    return <PptxView bytes={loaded.bytes.buffer.slice(loaded.bytes.byteOffset, loaded.bytes.byteOffset + loaded.bytes.byteLength) as ArrayBuffer} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} />;
+    if (stableArrayBuffer == null) return <BytesUnavailableView reason={loaded.extractionError ?? '未取到原件字节'} onDownload={dl} revLabel={revLabel} />;
+    return <PptxView bytes={stableArrayBuffer} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} {...readerProps} />;
   }
   if (loaded.kind === 'pdf') {
-    if (loaded.bytes == null) return <BytesUnavailableView reason="未取到原件字节" onDownload={dl} revLabel={revLabel} />;
-    return <PdfView bytes={loaded.bytes} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} />;
+    if (stablePdfBytes == null) return <BytesUnavailableView reason="未取到原件字节" onDownload={dl} revLabel={revLabel} />;
+    return <PdfView bytes={stablePdfBytes} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} {...readerProps} />;
   }
   if (loaded.kind === 'docx') {
-    if (loaded.bytes == null) return <BytesUnavailableView reason={loaded.extractionError ?? '未取到原件字节'} onDownload={dl} revLabel={revLabel} />;
-    return <DocxView bytes={loaded.bytes} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} />;
+    if (stableBytes == null) return <BytesUnavailableView reason={loaded.extractionError ?? '未取到原件字节'} onDownload={dl} revLabel={revLabel} />;
+    return <DocxView bytes={stableBytes} filename={loaded.filename} revisionLabel={revLabel} onDownload={dl} {...readerProps} />;
   }
   if (loaded.kind === 'xlsx') {
-    if (loaded.bytes == null) {
+    if (stableArrayBuffer == null) {
       return <BytesUnavailableView reason={loaded.extractionError ?? '未取到原件字节'} onDownload={dl} revLabel={revLabel} />;
     }
     return (
       <XlsxView
-        bytes={loaded.bytes.buffer.slice(loaded.bytes.byteOffset, loaded.bytes.byteOffset + loaded.bytes.byteLength) as ArrayBuffer}
+        bytes={stableArrayBuffer}
         filename={loaded.filename}
         revisionLabel={revLabel}
         onDownload={dl}
         fallbackSheets={loaded.office?.sheets ?? []}
         fallbackNote={loaded.extraction === 'failed' ? `提取不可用（${loaded.extractionError ?? '解析失败'}）——模型注入侧 fail-closed` : undefined}
+        {...readerProps}
       />
     );
   }
@@ -754,7 +802,7 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
   // ---------- 文本类（text/code/markdown/html/csv；交付报告走 delivery 视图） ----------
   const text = loaded.text ?? '';
   if (resource.formalDelivery != null) {
-    return <DeliveryDocView resource={resource} revision={revision} rawText={text} viewMode={viewMode} wrapSource={wrapSource} onOpenComment={onOpenComment} />;
+    return <DeliveryDocView resource={resource} revision={revision} rawText={text} delivery={loaded.delivery} viewMode={viewMode} wrapSource={wrapSource} onOpenComment={onOpenComment} onOpenWorktreeFile={(path, bytes) => openWorktreeFileFromDelivery(resource.projectId, path, bytes)} />;
   }
   if (loaded.originalBytes === 0 && text.length === 0) {
     return (
@@ -907,17 +955,21 @@ interface TaskCompleteDoc {
 /** 交付文档装载缓存（resourceId:revision → 文档）——下载原文件用同一份文本，不二次请求。 */
 const deliveryDocs = new Map<string, { text: string | null; hashMatch: boolean | null; bytes: number }>();
 
-function DeliveryDocView({ resource, revision, rawText, viewMode, wrapSource, onOpenComment }: {
+function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrapSource, onOpenComment, onOpenWorktreeFile }: {
   resource: PreviewResource; revision: ResourceRevision; rawText: string;
+  delivery?: { hashMatch: boolean | null; bytes: number };
   viewMode: 'preview' | 'source'; wrapSource: boolean; onOpenComment: () => void;
+  onOpenWorktreeFile: (path: string, bytes: number) => void;
 }) {
   const fd = resource.formalDelivery!;
-  // 装载缓存：FileStage 已取 delivery.document 正文——这里登记供「下载原文件」复用。
+  const realBytes = delivery?.bytes ?? rawText.length; // R70 F8：回执真实字节数优先（不丢、不用长度冒充）
+  const hashMatch = delivery?.hashMatch ?? null;
+  // 装载缓存：FileStage 已取 delivery.document 正文——这里登记供「下载原文件」复用（真实事实）。
   useEffect(() => {
-    deliveryDocs.set(`${resource.id}:${revision.revision}`, { text: rawText, hashMatch: null, bytes: rawText.length });
-    if (rawText.length > 0) applyDeliveryRead(resource.id, { text: rawText, bytes: rawText.length, revision: revision.revision });
+    deliveryDocs.set(`${resource.id}:${revision.revision}`, { text: rawText, hashMatch, bytes: realBytes });
+    if (rawText.length > 0) applyDeliveryRead(resource.id, { text: rawText, bytes: realBytes, revision: revision.revision });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resource.id, revision.revision, rawText]);
+  }, [resource.id, revision.revision, rawText, realBytes, hashMatch]);
   if (rawText.length === 0) {
     return (
       <div className="preview-unsupported">
@@ -942,7 +994,12 @@ function DeliveryDocView({ resource, revision, rawText, viewMode, wrapSource, on
       <div className="preview-read-doc" data-zs-delivery-doc="1">
         <MarkdownView text={tc.changeSummary ?? '（changeSummary 缺失）'} />
         {tc.files != null && tc.files.length > 0 ? (
-          <div className="small" style={{ marginTop: 10 }}><strong>涉及文件</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => <li key={i} className="mono-sm">{f}</li>)}</ul></div>
+          <div className="small" style={{ marginTop: 10 }} data-zs-delivery-files="1"><strong>涉及文件（点击在阅读器打开——文件本体与报告分列）</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.files.map((f, i) => (
+            <li key={i} className="mono-sm">
+              {f}
+              <button className="btn ghost sm" style={{ marginLeft: 6 }} data-zs-delivery-file={f} title="以工作区文件打开（只读快照：真实路径/hash/版本）" onClick={() => onOpenWorktreeFile(f, 0)}>打开文件</button>
+            </li>
+          ))}</ul></div>
         ) : null}
         {tc.executedVerifications != null && tc.executedVerifications.length > 0 ? (
           <div className="small" style={{ marginTop: 8 }}><strong>已执行验证</strong><ul style={{ marginTop: 4, paddingLeft: 18, listStyle: 'disc' }}>{tc.executedVerifications.map((v, i) => <li key={i}>{v}</li>)}</ul></div>
@@ -960,6 +1017,13 @@ function DeliveryDocView({ resource, revision, rawText, viewMode, wrapSource, on
     );
   }
   return <SourceView text={rawText} language="json" wrap={wrapSource} />;
+}
+
+
+/** R70 F7：从交付报告打开 AI 实际产出的文件（工作区资源——同一阅读器；不冒充交付快照）。 */
+function openWorktreeFileFromDelivery(projectId: string, path: string, sizeBytes: number): void {
+  const resId = registerWorktreeResource(projectId, path, sizeBytes);
+  openPreviewTab(resId, 1, { target: { kind: 'files', projectId, view: 'files', selection: path } });
 }
 
 /* ============================================================

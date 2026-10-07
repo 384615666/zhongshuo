@@ -4,8 +4,8 @@
  * 六类 fixture 编排见 script.ts（成功/失败/审批/超时/停止不响应/迟到）。
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
   AdapterProcessIdentity,
@@ -114,6 +114,8 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
   private emitSeq = 0;
   /** 测试观测：startTurn 收到的输入（DEV-21 验证实际注入文本与 bundle 一致）。 */
   readonly startTurnLog: Array<{ turnId: string; inputBundleId: string; text: string; developerInstructions?: string; promptVersion?: string }> = [];
+  /** R70 F7：writeFile 脚本项的落盘观测（工程验证用——真实路径/字节数）。 */
+  readonly writtenFiles: Array<{ turnId: string; path: string; bytes: number }> = [];
   /** 会话续接观测（第十九轮五）：每次 openSession 的 resume 来源与返回的 provider 身份。 */
   readonly openSessionLog: Array<{ resumedFrom: string | null; returned: string; generation: number }> = [];
 
@@ -248,6 +250,31 @@ export class FakeRuntimeAdapter implements RuntimeAdapter {
         this.emit(state, rendered as never, turn.turnId);
       } else if (item.kind === 'unresponsiveToInterrupt') {
         turn.unresponsive = true;
+      } else if (item.kind === 'writeFile') {
+        // R70 F7：模拟真实 agent 的落盘副作用——写入会话 cwd 内相对路径（resolve 边界 +
+        // .. 拒绝；文本/二进制）。写入失败如实抛错终结本 turn（不静默吞）。
+        try {
+          const cwd = state.ref.cwd;
+          const rel = item.path.replace(/^[\\/]+/, '');
+          if (rel.split(/[\\/]/).some((seg) => seg === '..')) {
+            throw new Error(`fake writeFile 拒绝越界路径：${item.path}`);
+          }
+          const target = resolve(cwd, rel);
+          const sep = target === cwd ? '' : cwd.endsWith('/') || cwd.endsWith('\\') ? '' : '/';
+          if (target !== cwd && !target.startsWith(cwd + sep) && !target.startsWith(cwd)) {
+            throw new Error(`fake writeFile 目标越出工作区：${item.path}`);
+          }
+          mkdirSync(dirname(target), { recursive: true });
+          const bytes = item.contentBase64 != null
+            ? Buffer.from(item.contentBase64, 'base64')
+            : Buffer.from(item.content ?? '', 'utf8');
+          writeFileSync(target, bytes);
+          this.writtenFiles.push({ turnId: turn.turnId, path: rel, bytes: bytes.length });
+        } catch (error) {
+          this.emit(state, { kind: 'turn.failed', code: 'FAKE_WRITE_FAILED', message: String((error as Error).message).slice(0, 160), retryable: false }, turn.turnId);
+          this.finishTurn(state, turn, { exitCode: 1, expected: true });
+          return;
+        }
       } else if (item.kind === 'stall') {
         await this.wait(item.ms, turn);
       } else if (item.kind === 'late') {
@@ -508,6 +535,16 @@ function renderStructuredFinal(
   event: { kind: 'turn.completed'; finalText?: string },
   resultKey: string | null,
 ): string {
+  // R70 F7：脚本已给出结构化 TaskComplete（如 ZS_FAKE_WRITE_FILES 列出真实落盘文件）时
+  // 原样采用——**resultKey 一律以 turn 绑定值为准**（worker 校验 result_<turnId>；脚本
+  // 里的占位 resultKey 不可信，透传会让合法 final 被判 outputInvalid——全量 19 例反例）。
+  try {
+    const pre = JSON.parse(event.finalText ?? '') as { schemaVersion?: string; resultKey?: string };
+    if (pre != null && typeof pre.schemaVersion === 'string' && pre.schemaVersion.startsWith('task-complete')) {
+      const boundKey = resultKey ?? pre.resultKey ?? 'result_fake_unbound';
+      return JSON.stringify({ ...pre, resultKey: boundKey });
+    }
+  } catch { /* 纯文本 finalText 走下方默认渲染 */ }
   return JSON.stringify({
     schemaVersion: 'task-complete-v1',
     resultKey: resultKey ?? 'result_fake_unbound',

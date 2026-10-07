@@ -155,7 +155,35 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
                           },
                         };
                       })()
-                    : undefined,
+                    : process.env.ZS_FAKE_WRITE_FILES != null && process.env.ZS_FAKE_WRITE_FILES.length > 0
+                      ? (() => {
+                          // R70 F7：ZS_FAKE_WRITE_FILES="<relpath::内容文本>;…"——fake 首 turn 在
+                          // 工作区真实落盘（模拟真实 agent 副作用），TaskComplete.files 同步列出；
+                          // 后续 turn 回落默认成功脚本。工程验证「成果→真实文件→同一阅读器」
+                          // 全链（零真实模型调用）。
+                          const files = process.env.ZS_FAKE_WRITE_FILES.split(';').filter((x) => x.length > 0).map((x) => {
+                            const [rel, body] = x.split('::');
+                            return { path: rel ?? '', content: body ?? '' };
+                          });
+                          let writeTurnUsed = false;
+                          return {
+                            turnScriptSequencer: (): FakeTurnScript => {
+                              if (writeTurnUsed) return successTurn();
+                              writeTurnUsed = true;
+                              const items: FakeTurnScript = files.map((fl) => ({ kind: 'writeFile', path: fl.path, content: fl.content }));
+                              const finalText = JSON.stringify({
+                                schemaVersion: 'task-complete-v1',
+                                changeSummary: 'R70 自然交付：已生成下列文件（文件本体在工作区——从「打开文件」进入阅读器；本报告为交付说明，两者分列）。',
+                                files: files.map((fl) => fl.path),
+                                executedVerifications: ['文件已写入工作区（fake 落盘=真实字节）'],
+                                unexecutedVerifications: [],
+                                remainingIssues: [],
+                              });
+                              return [...items, { kind: 'event', event: { kind: 'turn.completed', finalText } }];
+                            },
+                          };
+                        })()
+                      : undefined,
             );
 
     // REC-LIFE-1（第十二轮·五）：受管运行时注入——ZS_MANAGED_RUNTIME=1 时生产 adapter 的

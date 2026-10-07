@@ -99,10 +99,16 @@ export { registerAttachmentResource } from './store';
 
 /**
  * 登记一个**项目工作区文件**资源（文件树入口）：内容经 project.file.read 实际读取
- * （安全根内、只读、白名单文本）；hash 在读取成功后由预览面板回填。同路径去重。
+ * （安全根内、只读、白名单）；hash 在读取成功后由预览面板回填。同路径去重。
+ *
+ * R70 F1：资源 ID=**项目 ID + 完整规范路径的无损编码**（encodeURIComponent——任意中文/
+ * 标点/大小写差异都不同键，可逆且不碰撞；旧实现把非 ASCII 压成下划线，`甲文.md` 与
+ * `乙文.md`、`a-b.md` 与 `a_b.md` 均碰撞成同一资源——串读反例根因）。展示名（title）与
+ * 身份键分离；版本/快照/重载/另存/摘录都按此具体资源绑定。
  */
 export function registerWorktreeResource(projectId: string, relativePath: string, sizeBytes: number): string {
-  const resourceId = `res_wt_${projectId}_${relativePath.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+  const normalizedPath = relativePath.replace(/\\/g, '/');
+  const resourceId = `res_wt_${projectId}_${encodeURIComponent(normalizedPath)}`;
   setState((prev) => {
     if (prev.resources.some((r) => r.id === resourceId)) return prev;
     const ext = relativePath.split('.').pop()?.toLowerCase() ?? '';
@@ -111,7 +117,7 @@ export function registerWorktreeResource(projectId: string, relativePath: string
       projectId,
       kind: 'worktree',
       title: relativePath.split(/[\\/]/).pop() ?? relativePath,
-      relativePath,
+      relativePath: normalizedPath,
       mimeType: ext ? `text/${ext}` : 'text/plain',
       origin: { kind: 'workspace' },
       audience: { kind: 'project' },
@@ -124,7 +130,7 @@ export function registerWorktreeResource(projectId: string, relativePath: string
         content: { kind: 'unsupported', reason: 'not_connected', note: '内容由共享预览按需装载' },
       }],
       createdAt: Date.now(),
-      formalWorktree: { projectId, path: relativePath },
+      formalWorktree: { projectId, path: normalizedPath },
     };
     return { ...prev, resources: [...prev.resources, res] };
   });
@@ -292,11 +298,19 @@ export function togglePreviewMaximized() {
    工作区文件重新读取（PV-09）
    ============================================================ */
 
-/** 工作区文件读取到的真实内容/身份回填（预览面板装载后调用——hash/大小为服务端事实）。 */
+/** 工作区文件读取到的真实内容/身份回填（预览面板装载后调用——hash/大小为服务端事实）。
+ *  R70 F8：binaryKind=二进制阅读类（pdf/docx/xlsx/pptx/image——content 记 unsupported
+ *  binary 类（正文由格式视图自带），mimeType 按 kind 修正；hash/大小必为真实值）。 */
 export function applyWorktreeRead(
   resourceId: string,
-  data: { text?: string; hash?: string; sizeBytes?: number; revision?: number; notPreviewable?: 'binary' | 'too_large'; note?: string },
+  data: { text?: string; hash?: string; sizeBytes?: number; revision?: number; notPreviewable?: 'binary' | 'too_large'; note?: string; binaryKind?: string },
 ): void {
+  const kindLabel: Record<string, string> = {
+    pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    image: 'image/*', markdown: 'text/markdown', html: 'text/html', csv: 'text/csv',
+  };
   setState((prev) => ({
     ...prev,
     resources: prev.resources.map((r) => {
@@ -304,13 +318,16 @@ export function applyWorktreeRead(
       const ext = (r.relativePath ?? '').split('.').pop()?.toLowerCase() ?? '';
       const content = data.notPreviewable != null
         ? { kind: 'unsupported' as const, reason: data.notPreviewable === 'binary' ? 'binary' as const : 'too_large' as const, note: data.note ?? '不可预览' }
-        : ext === 'md'
-          ? { kind: 'markdown' as const, text: data.text ?? '' }
-          : ext === 'csv' || ext === 'tsv'
-            ? { kind: 'csv' as const, text: data.text ?? '' }
-            : { kind: ext === 'ts' || ext === 'tsx' || ext === 'js' || ext === 'mjs' || ext === 'json' ? 'code' as const : 'text' as const, language: ext, text: data.text ?? '' };
+        : data.binaryKind != null
+          ? { kind: 'unsupported' as const, reason: 'binary' as const, note: `二进制阅读类（${data.binaryKind}）——正文由格式视图按原字节渲染` }
+          : ext === 'md' || data.binaryKind === 'markdown'
+            ? { kind: 'markdown' as const, text: data.text ?? '' }
+            : ext === 'csv' || ext === 'tsv'
+              ? { kind: 'csv' as const, text: data.text ?? '' }
+              : { kind: ext === 'ts' || ext === 'tsx' || ext === 'js' || ext === 'mjs' || ext === 'json' ? 'code' as const : 'text' as const, language: ext, text: data.text ?? '' };
       return {
         ...r,
+        ...(data.binaryKind != null && kindLabel[data.binaryKind] != null ? { mimeType: kindLabel[data.binaryKind] } : {}),
         revisions: r.revisions.map((rev) => (rev.revision === (data.revision ?? rev.revision)
           ? { ...rev, hash: data.hash ?? rev.hash, sizeBytes: data.sizeBytes ?? rev.sizeBytes, content }
           : rev)),

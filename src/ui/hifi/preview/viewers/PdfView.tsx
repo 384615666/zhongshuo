@@ -1,62 +1,84 @@
 /**
- * PDF 阅读视图（R69，对照 reference-pdf.png / ZCode pdf-viewer.tsx @29628c9 的单页模式）：
- * 白纸单页居中连续阅读、**按真实面板宽度适应**（fit=面板内容宽/纸宽——旧实现固定 480px）、
- * 底部控制条「‹ [页码] / 总数 ›｜− 缩放% ＋」。字节一次取全量（≤20MiB 上传链已限），
- * 翻页/缩放本地 canvas 渲染（服务端零像素解码）；提取文本入文件信息不铺正文。
+ * PDF 阅读视图（R69 建立 / R70 修 fit 观察器+DPR+阅读状态）：白纸单页居中、
+ * **按真实面板 contain 适应**（观察器挂在真实渲染节点上——loading 态也先挂壳，宽度与
+ * 高度变化都重算；旧实现 observer 初次跑在 null 节点上永不生效，缩窄后画布越界）。
+ * 页码/缩放按 资源+读取版本 存取；快翻 renderTask 取消；DPR 感知清晰度。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../../components/Icon';
 import { loadRendererPdfjs, type PdfLikeDoc } from '../renderers';
+import { saveReaderState, type ReaderState } from '../readerState';
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 200];
 
-export function PdfView({ bytes, filename, revisionLabel, onDownload, onMeta }: {
+export function PdfView({ bytes, filename, revisionLabel, onDownload, resourceId, revision, initialState }: {
   bytes: Uint8Array; filename: string; revisionLabel: string;
-  onDownload: () => void; onMeta?: (meta: { pages: number; page: number }) => void;
+  onDownload: () => void;
+  resourceId?: string; revision?: number; initialState?: ReaderState;
 }): ReactElement {
+  const restored = initialState?.kind === 'pdf' ? initialState : null;
   const [doc, setDoc] = useState<PdfLikeDoc | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [pageNumber, setPageNumber] = useState(1);
-  const [pageInput, setPageInput] = useState('1');
-  const [zoomMode, setZoomMode] = useState<'fit' | number>('fit');
-  const [paperSize, setPaperSize] = useState<{ w: number; h: number } | null>(null);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [pageNumber, setPageNumber] = useState(restored?.page ?? 1);
+  const [pageInput, setPageInput] = useState(String(restored?.page ?? 1));
+  const [zoomMode, setZoomMode] = useState<'fit' | number>(restored?.zoomMode ?? 'fit');
+  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel(): void } | null>(null);
-  const [viewportW, setViewportW] = useState(0);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const genRef = useRef(0);
+  const didOpenRef = useRef(false);
 
-  // 文档打开（字节复制防 detach；切换/卸载销毁）。
+  // 观察器挂真实节点：.pdf-stage 壳在 loading 期就渲染（旧实现 loading 早退导致节点缺失，
+  // observer 空挂）。doc 就位后再校正一轮尺寸。
+  const observeStage = () => {
+    const el = stageRef.current;
+    if (el == null) return () => {};
+    const update = () => setStageSize({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  };
+  useEffect(observeStage, []);
+  useEffect(observeStage, [doc != null]);
+
+  // 阅读状态保存（资源+版本）。
+  useEffect(() => {
+    if (resourceId == null || revision == null || doc == null) return;
+    saveReaderState(resourceId, revision, { kind: 'pdf', page: pageNumber, zoomMode });
+  }, [resourceId, revision, doc, pageNumber, zoomMode]);
+
+  // 文档打开（bytes=稳定引用；复制防 transfer detach；切换/卸载销毁；迟到只释放自身）。
   useEffect(() => {
     const gen = ++genRef.current;
     let opened: PdfLikeDoc | null = null;
-    setDoc(null); setErr(null); setPageNumber(1); setPageInput('1'); setPaperSize(null);
+    const firstMount = !didOpenRef.current;
+    didOpenRef.current = true;
+    setDoc(null); setErr(null);
+    // R70 F4：首挂保留 readerState 恢复的页码/缩放；换文件/换快照才复位。
+    if (!firstMount || restored == null) { setPageNumber(1); setPageInput('1'); setZoomMode('fit'); }
     void loadRendererPdfjs().then(async (lib) => {
       opened = await lib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
       if (gen !== genRef.current) { void opened.destroy(); return; }
+      docRef.current = opened;
       setDoc(opened);
-      onMeta?.({ pages: opened.numPages, page: 1 });
+      if (firstMount && restored != null) {
+        const target = Math.min(Math.max(1, restored.page), opened.numPages);
+        setPageInput(String(target));
+        setPageNumber(target);
+      }
     }).catch((e: unknown) => { if (gen === genRef.current) setErr(String((e as Error).message).slice(0, 160)); });
     return () => {
       genRef.current += 1;
+      docRef.current = null;
       try { renderTaskRef.current?.cancel(); } catch { /* 已结束 */ }
       void opened?.destroy().catch(() => { /* 已销毁 */ });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bytes]);
 
-  // 面板宽度观测（fit 基准=真实内容宽）。
-  useEffect(() => {
-    const el = viewportRef.current;
-    if (el == null) return;
-    const update = () => setViewportW(el.clientWidth);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // 页渲染：fit=面板宽-32 与 fit 高度取小（不放大超 1.5 倍防糊），绝对倍率按步进值。
+  // 页渲染：fit=舞台内容区 contain（宽/高都受限）；绝对倍率按步进；DPR 感知像素密度。
   useEffect(() => {
     if (doc == null || canvasRef.current == null) return;
     let cancelled = false;
@@ -68,15 +90,21 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, onMeta }: 
         const page = await doc.getPage(pageNo);
         if (cancelled || canvasRef.current == null) return;
         const base = page.getViewport({ scale: 1 });
-        const fitW = viewportW > 0 ? (viewportW - 56) / base.width : 1;
-        const fitH = (viewportRef.current?.clientHeight ?? 0) > 0 ? ((viewportRef.current!.clientHeight!) - 56) / base.height : Infinity;
-        const fit = Math.min(Math.min(fitW, fitH) || fitW, 2);
-        const scale = zoomMode === 'fit' ? Math.max(0.2, fit) : zoomMode / 100;
+        const margin = 56;
+        const fitW = stageSize.w > 0 ? (stageSize.w - margin) / base.width : 1;
+        const fitH = stageSize.h > 0 ? (stageSize.h - margin) / base.height : Infinity;
+        const fit = Math.max(0.2, Math.min(fitW, fitH === Infinity ? fitW : fitH, 3));
+        const scale = zoomMode === 'fit' ? fit : zoomMode / 100;
         const viewport = page.getViewport({ scale });
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        setPaperSize({ w: base.width, h: base.height });
-        const task = page.render({ canvasContext: canvas.getContext('2d')!, viewport });
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        const ctx = canvas.getContext('2d');
+        if (ctx != null) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (ctx == null) return;
+        const task = page.render({ canvasContext: ctx, viewport });
         renderTaskRef.current = task;
         await task.promise;
       } catch (e) {
@@ -86,18 +114,17 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, onMeta }: 
       }
     })();
     return () => { cancelled = true; try { renderTaskRef.current?.cancel(); } catch { /* 已结束 */ } };
-  }, [doc, pageNumber, zoomMode, viewportW]);
+  }, [doc, pageNumber, zoomMode, stageSize]);
 
+  // R70 修复：直接 set（去 setDoc updater 嵌套 setState——同 PptxView）。
+  const docRef = useRef<PdfLikeDoc | null>(null);
   const goToPage = useCallback((target: number) => {
-    setDoc((d) => {
-      if (d == null) return d;
-      const next = Math.min(Math.max(1, Math.round(target)), d.numPages);
-      setPageInput(String(next));
-      setPageNumber(next);
-      onMeta?.({ pages: d.numPages, page: next });
-      return d;
-    });
-  }, [onMeta]);
+    const d = docRef.current;
+    if (d == null) return;
+    const next = Math.min(Math.max(1, Math.round(target)), d.numPages);
+    setPageInput(String(next));
+    setPageNumber(next);
+  }, []);
   const commitPageInput = () => {
     const parsed = Number.parseInt(pageInput.trim(), 10);
     if (Number.isNaN(parsed)) { setPageInput(String(pageNumber)); return; }
@@ -124,33 +151,35 @@ export function PdfView({ bytes, filename, revisionLabel, onDownload, onMeta }: 
       </div>
     );
   }
-  if (doc == null) return <div className="panel info" data-zs-pdf-loading="1">正在打开 PDF（{filename}）…</div>;
   return (
-    <div className="pdf-view" data-zs-pdf-view="1" data-zs-pdf-pages={doc.numPages}>
-      <div className="pdf-stage" ref={viewportRef}>
+    <div className="pdf-view" data-zs-pdf-view="1" data-zs-pdf-pages={doc?.numPages ?? ''} data-zs-pdf-page={pageNumber} data-zs-pdf-zoom={zoomMode === 'fit' ? 'fit' : `${zoomMode}%`}>
+      <div className="pdf-stage" ref={stageRef}>
         <div className="pdf-stage-inner">
-          <canvas ref={canvasRef} className="pdf-canvas" data-zs-pdf-canvas="r69" />
+          {doc == null ? <div className="panel info" data-zs-pdf-loading="1">正在打开 PDF（{filename}）…</div> : (
+            <canvas ref={canvasRef} className="pdf-canvas" data-zs-pdf-canvas="r70" />
+          )}
         </div>
       </div>
       <div className="preview-bottom-bar" data-zs-pdf-bar="1">
-        <button className="preview-icon-btn" aria-label="上一页" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}><Icon name="chevron-left" size={14} /></button>
+        <button className="preview-icon-btn" aria-label="上一页" disabled={doc == null || pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}><Icon name="chevron-left" size={14} /></button>
         <input
           className="pptx-page-input"
           type="text"
           inputMode="numeric"
           aria-label="页码"
           value={pageInput}
+          disabled={doc == null}
           onChange={(e) => setPageInput(e.target.value)}
           onBlur={commitPageInput}
           onKeyDown={(e) => { if (e.key === 'Enter') { commitPageInput(); e.currentTarget.blur(); } }}
         />
-        <span className="pptx-page-total">/ {doc.numPages}</span>
-        <button className="preview-icon-btn" aria-label="下一页" disabled={pageNumber >= doc.numPages} onClick={() => goToPage(pageNumber + 1)}><Icon name="chevron-right" size={14} /></button>
+        <span className="pptx-page-total">/ {doc?.numPages ?? '-'}</span>
+        <button className="preview-icon-btn" aria-label="下一页" disabled={doc == null || pageNumber >= (doc?.numPages ?? 1)} onClick={() => goToPage(pageNumber + 1)}><Icon name="chevron-right" size={14} /></button>
         <span className="pptx-bar-sep" />
         <button className="preview-icon-btn" aria-label="缩小" onClick={zoomOut}><Icon name="zoom-out" size={14} /></button>
         <span className="pptx-zoom-label">{zoomMode === 'fit' ? '适应' : `${zoomMode}%`}</span>
         <button className="preview-icon-btn" aria-label="放大" onClick={zoomIn}><Icon name="zoom-in" size={14} /></button>
-        <button className="preview-icon-btn" aria-label="适应面板宽度" title="按面板实际宽度适应显示" onClick={() => setZoomMode('fit')}><Icon name="maximize" size={13} /></button>
+        <button className="preview-icon-btn" aria-label="适应面板宽度" title="按面板实际宽高适应显示" onClick={() => setZoomMode('fit')}><Icon name="maximize" size={13} /></button>
         <span className="pptx-bar-sep" />
         <button className="preview-icon-btn" aria-label="下载原文件" title="保存这份 PDF 的原件字节（另存为）" onClick={onDownload}><Icon name="download" size={14} /></button>
       </div>

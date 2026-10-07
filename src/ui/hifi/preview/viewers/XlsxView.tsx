@@ -1,13 +1,17 @@
 /**
- * Excel 阅读视图（R69，对照 reference-excel.png / ZCode previewPaneOfficeXlsxContent.tsx @29628c9）：
- * 主渲染=@extend-ai/react-xlsx 0.16.0（vendored MIT——ZCode 同库同用法：只读、关默认工具栏、
- * toolbar=只读 sheet 页签 + 键盘 ←→/Home/End 切表、WASM 源指随包资产）。工作表页签/行列标/
- * 合并单元格/列宽行高/填充色/双向滚动=引擎真实渲染（非提取网格冒充）。
- * 引擎不可用（宿主协议 Worker/WASM 失败等）→ 回退提取网格（如实标注「回退：字符串网格，
- * 无样式/合并」）。公式不执行（缓存值）、外部链接不加载。
+ * Excel 阅读视图（R69 建立 / R70 修重开+切表保持）：主渲染=@extend-ai/react-xlsx 0.16.0
+ * （WASM 引擎：sheet 页签/行列标/合并/列宽/填充样式真实渲染），引擎不可用回退提取网格。
+ *
+ * R70 F3（独立复核反例）：旧实现每次 render 都 `file={bytes.slice(0)}` 新建 ArrayBuffer——
+ * 房间 5s 轮询等任何重渲染都会让引擎把**同一文件当新输入重开**，切表几秒后弹回第一张。
+ * 修法=file prop 用 `useMemo(bytes, …)` 派生的**稳定引用**（FileStage 也已按装载快照稳定
+ * bytes）；引擎只在新快照（真正换文件/换版本）时重开。
+ * R70 F4：选中工作表按 资源+读取版本 存取；引擎就绪后恢复到上次所选表（控制器 setActiveTabIndex），
+ * 回退网格同步恢复。切表/编辑草稿/开信息/调尺寸不重置；跨两个轮询周期仍保持。
  */
-import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../../components/Icon';
+import { saveReaderState, type ReaderState } from '../readerState';
 
 interface XlsxViewerController { activeTabIndex: number; setActiveTabIndex(i: number): void; tabs: Array<{ id: string; name: string }> }
 interface XlsxViewerProps {
@@ -27,7 +31,6 @@ const LazyXlsxViewer = lazy(async () => {
     const mod = await import('@extend-ai/react-xlsx');
     const setWasmSource = (mod as unknown as { setWasmSource: (u: string) => void }).setWasmSource;
     if (!wasmConfigured && typeof setWasmSource === 'function') {
-      // wasm 随包资产（build-ui 从 node_modules 拷贝到 app.mjs 同目录——与 import.meta.url 同基准）。
       setWasmSource(new URL('duke_sheets_wasm_bg.wasm', import.meta.url).href);
       wasmConfigured = true;
     }
@@ -39,7 +42,17 @@ const LazyXlsxViewer = lazy(async () => {
   }
 });
 
-function SheetTabs({ controller }: { controller: XlsxViewerController }): ReactElement {
+function SheetTabs({ controller, restoreSheet, onSwitch }: {
+  controller: XlsxViewerController; restoreSheet: string | null; onSwitch: (name: string) => void;
+}): ReactElement {
+  // R70 F4：引擎就绪后恢复到上次所选表（恰一次——恢复动作不触发保存循环）。
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || restoreSheet == null) return;
+    const idx = controller.tabs.findIndex((t) => t.name === restoreSheet);
+    if (idx >= 0 && idx !== controller.activeTabIndex) controller.setActiveTabIndex(idx);
+    restoredRef.current = true;
+  }, [controller, restoreSheet]);
   if (controller.tabs.length <= 1) return <></>;
   const next = (cur: number, key: string): number | null => {
     const n = controller.tabs.length;
@@ -62,12 +75,14 @@ function SheetTabs({ controller }: { controller: XlsxViewerController }): ReactE
             aria-selected={on}
             className={`xlsx-sheet-tab${on ? ' on' : ''}`}
             title={t.name}
-            onClick={() => controller.setActiveTabIndex(i)}
+            data-zs-sheet-tab={t.name}
+            onClick={() => { controller.setActiveTabIndex(i); onSwitch(t.name); }}
             onKeyDown={(e) => {
               const ni = next(i, e.key);
               if (ni != null) {
                 e.preventDefault();
                 controller.setActiveTabIndex(ni);
+                onSwitch(controller.tabs[ni]?.name ?? '');
                 (e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[ni])?.focus();
               }
             }}
@@ -82,16 +97,23 @@ function SheetTabs({ controller }: { controller: XlsxViewerController }): ReactE
 
 export interface XlsxFallbackSheet { name: string; rowCount: number; colCount: number; cells: string[][]; rowTruncated?: boolean; colTruncated?: boolean; merges?: unknown[]; formulaMissing?: boolean }
 
-export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackSheets, fallbackNote }: {
+export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackSheets, fallbackNote, resourceId, revision, initialState }: {
   bytes: ArrayBuffer; filename: string; revisionLabel: string; onDownload: () => void;
   fallbackSheets: XlsxFallbackSheet[]; fallbackNote?: string;
+  resourceId?: string; revision?: number; initialState?: ReaderState;
 }): ReactElement {
+  const restoredSheet = initialState?.kind === 'xlsx' ? initialState.sheetName : null;
   const [engineFailed, setEngineFailed] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
-  const [sheetIdx, setSheetIdx] = useState(0);
+  const [sheetIdx, setSheetIdx] = useState(() => {
+    if (restoredSheet == null) return 0;
+    const i = fallbackSheets.findIndex((s) => s.name === restoredSheet);
+    return i >= 0 ? i : 0;
+  });
+  // R70 F3：file 身份稳定——同一 bytes 引用只派生一次（引擎不因父级重渲染而重开）。
+  const stableFile = useMemo(() => bytes.slice(0), [bytes]);
   const hostRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => { setSheetIdx(0); }, [bytes]);
-  // 引擎模块加载失败广播（lazy factory catch）→ 切回退视图。
+  useEffect(() => { setSheetIdx((cur) => { if (restoredSheet == null) return 0; const i = fallbackSheets.findIndex((s) => s.name === restoredSheet); return i >= 0 ? i : cur; }); }, [bytes]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (engineLoadError != null) { setEngineError(engineLoadError); setEngineFailed(true); return; }
     const onFail = (ev: Event) => {
@@ -101,13 +123,20 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
     window.addEventListener('zs:xlsx-engine-failed', onFail);
     return () => window.removeEventListener('zs:xlsx-engine-failed', onFail);
   }, []);
-  const renderTabs = useCallback((controller: XlsxViewerController) => <SheetTabs controller={controller} />, []);
+  const saveSheet = useCallback((name: string) => {
+    if (resourceId != null && revision != null && name.length > 0) {
+      saveReaderState(resourceId, revision, { kind: 'xlsx', sheetName: name });
+    }
+  }, [resourceId, revision]);
+  const renderTabs = useCallback((controller: XlsxViewerController) => (
+    <SheetTabs controller={controller} restoreSheet={restoredSheet} onSwitch={saveSheet} />
+  ), [restoredSheet, saveSheet]);
 
   if (engineFailed) {
     // 回退：提取网格（字符串单元格——无样式/合并渲染；如实标注，不冒充引擎效果）。
     const sh = fallbackSheets[sheetIdx] ?? fallbackSheets[0];
     return (
-      <div className="xlsx-view xlsx-fallback" data-zs-xlsx-view="fallback" data-zs-xlsx-fail={engineError?.slice(0, 40) ?? ''}>
+      <div className="xlsx-view xlsx-fallback" data-zs-xlsx-view="fallback" data-zs-xlsx-fail={engineError?.slice(0, 40) ?? ''} data-zs-xlsx-sheet={sh?.name ?? ''}>
         <div className="xlsx-fallback-note panel info">
           <div className="panel-title"><Icon name="alert-triangle" size={13} /> 高保真表格引擎不可用（{engineError ?? '未知'}）——以下为提取网格回退：字符串单元格、无样式/合并渲染。原件已保存（{revisionLabel}），可下载后用系统工具打开。</div>
           <div className="panel-actions"><button className="btn sm" onClick={onDownload}><Icon name="download" size={12} /> 下载原文件</button></div>
@@ -115,7 +144,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
         {fallbackSheets.length > 1 ? (
           <div className="xlsx-sheet-tabs" role="tablist">
             {fallbackSheets.map((s, i) => (
-              <button key={s.name} type="button" role="tab" aria-selected={i === sheetIdx} className={`xlsx-sheet-tab${i === sheetIdx ? ' on' : ''}`} onClick={() => setSheetIdx(i)}>{s.name}</button>
+              <button key={s.name} type="button" role="tab" aria-selected={i === sheetIdx} className={`xlsx-sheet-tab${i === sheetIdx ? ' on' : ''}`} onClick={() => { setSheetIdx(i); saveSheet(s.name); }}>{s.name}</button>
             ))}
           </div>
         ) : null}
@@ -145,7 +174,7 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
     <div className="xlsx-view" ref={hostRef} data-zs-xlsx-view="engine">
       <Suspense fallback={<div className="panel info">正在打开表格（{filename}）…</div>}>
         <LazyXlsxViewer
-          file={bytes.slice(0)}
+          file={stableFile}
           fileName={filename}
           height="100%"
           readOnly
@@ -154,7 +183,6 @@ export function XlsxView({ bytes, filename, revisionLabel, onDownload, fallbackS
           toolbar={renderTabs}
           loadingState={<div className="panel info" data-zs-xlsx-loading="1">正在解析表格（WASM 引擎）…</div>}
           errorState={(error: Error) => {
-            // render-prop 期间不能 setState（另一组件渲染中）——延迟一拍切回退视图。
             window.setTimeout(() => { setEngineError(error.message.slice(0, 120)); setEngineFailed(true); }, 0);
             return <div className="panel info">表格引擎错误：{error.message.slice(0, 120)}——切换回退视图…</div>;
           }}
