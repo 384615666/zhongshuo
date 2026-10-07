@@ -4,7 +4,7 @@
 
 ## 当前真实状态（2026-10-07 第七十轮，唯一权威快照）
 
-> R70=文件阅读器可靠性与视觉收口（R69 独立复核五类反例+CSP 图片拦截全部先修后验）。**主交付=desktop-daily-win-v8**（BUILD/commit 见包，dirty=false，清单核对一致）；交互门 `verify-daily-r70.cjs` **G1–G8 全绿**（ok:true, errs:[]；realCallRoots 8×0——每独立根核 real_calls）；视觉门 `visual-pairs-r70.cjs` 8 帧+Word 红字/高亮补帧全 PASS（逐帧记录整窗 2560×1380/DPR1 与**实际预览 rect x=1932 w=620**——两者分列）；r69 门回归全绿；全量 917/917+双类型门 0 错。
+> R70=文件阅读器可靠性与视觉收口（R69 独立复核五类反例+CSP 图片拦截全部先修后验）。**主交付=desktop-daily-win-v8** `bld_6d502ccefe8159b3`（commit `33230aa`，dirty=false，593/593；包级门 r63 --src v8 ok realCalls=0；升级门 ok 负例 4/4）；交互门 `verify-daily-r70.cjs` **G1–G8 全绿**（ok:true, errs:[]；realCallRoots 8×0——每独立根核 real_calls）；视觉门 `visual-pairs-r70.cjs` 8 帧+Word 红字/高亮补帧全 PASS（逐帧记录整窗 2560×1380/DPR1 与**实际预览 rect x=1932 w=620**——两者分列）；r69 门回归全绿；全量 917/917+双类型门 0 错。
 > - **反例修复**：①资源 ID=encodeURIComponent 无损键（中文/标点/跨项目不碰撞）②Excel 切表弹回=render 重建 ArrayBuffer→FileStage 稳定 bytes+装载缓存 ③PPT 图片=CSP `img-src … blob:`（zsres 本地 blob 放行；外部边界不变；真件 p5=3/3 解码）④阅读状态=readerState 按资源+版本存取（PPT/PDF 页缩放、Excel 表、Word scrollTop；切标签/收起重开保持）——**goToPage 嵌套 setState 是真根因**（R69 起存在，r69 门只断言输入框值未暴露）⑤PDF fit 观察器挂常驻节点+DPR ⑥Word wrapper 渲染后内联覆盖+四缺失图标 ⑦交付真文件=fake `writeFile` 脚本项+`ZS_FAKE_WRITE_FILES`+报告「涉及文件」逐项打开文件→同一阅读器 ⑧事实回填 applyWorktreeRead+delivery hashMatch/bytes 真值。
 > - **三枚行生真缺陷**：Room 线程附件选择器结构性看不到锚附件（thread_id=null——已发消息入口恒空）；renderStructuredFinal 透传破坏 resultKey 绑定（19 例测试翻红——resultKey 一律以 turn 绑定为准）；探针直接 `input.value=` 被 React valueTracker 去重（假阴性来源——改走真实 UI 路径：缩略图点击/翻页箭头）。
 > - **判据纪律**：R69 曾把 xlsxTabSwitch=false 记 ok=true——R70 门全部必要判据进 errs（任一假值 exit≠0）；18 轮迭代每个假阴性先翻 FAIL 再修。

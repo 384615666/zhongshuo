@@ -28,7 +28,7 @@
 
 ## 3. 发布形态复核（v8）
 
-- v8=干净 commit 构建（BUILD.json 落账）；`verify-desktop-daily-r63 --src v8` 独立副本×真实启动器 ok（realCalls=0）；升级门 `verify-upgrade-r67` 负对照 4/4。
+- v8=`bld_6d502ccefe8159b3`（commit `33230aa`，dirty=false，593/593）；`verify-desktop-daily-r63 --src dist/desktop/desktop-daily-win-v8` ok:true（独立副本×真实启动器，realCalls=0）；升级门 `verify-upgrade-r67` ok（负对照 4/4：blob/msg/token/outbox；旧程序开升级库被版本门拒）。
 - 发布 zsres 协议下 blob: 图片（G4 的 CSP 判据在 dev zsres://app 同协议验证；v8 包内 index.html 同字节）。
 
 ## 4. 判据修正声明（R69 漏判教训）
