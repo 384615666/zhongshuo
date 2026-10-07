@@ -29,7 +29,7 @@
 - **视觉成对复核**（2560×1380 同视口 vs 参考图，视觉子代理逐对判定）：PPT/PDF/Word/Excel/MD/TXT/图片 7 组全 PASS（Word 首轮深灰横带=灰底舞台，已改全白连续流后复报 PASS；表格帧补验 PASS）。
 - **旧门回归**：verify-daily-r68（G1–G6）适配新外壳选择器后全绿 realCalls=0；verify-parity-r66 选择器同步适配。
 - **全量 vitest 917/917**（新增 r69 5 例：文本原字节族+Office 定类正负例）；主/hifi 双类型门 0 错。
-- **r63 打包门**（--src v7）与 verify-desktop-daily 见 v7 包验证记录。
+- **包级门**：`verify-desktop-daily-r63 --src dist/desktop/desktop-daily-win-v7` ok:true（独立副本×真实启动器，realCalls=0）；升级门 `verify-upgrade-r67` ok（负对照 4/4：blob/msg/token/outbox；旧程序开升级库被版本门拒）。
 
 ## 4. 真实衍生缺陷（本轮发现并修复）
 

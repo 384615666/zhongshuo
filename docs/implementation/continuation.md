@@ -4,7 +4,7 @@
 
 ## 当前真实状态（2026-10-07 第六十九轮，唯一权威快照）
 
-> R69=文件预览集中修复与 ZCode 源码对照（用户五图验收基准）。**主交付=desktop-daily-win-v7**（buildId/commit 见包 BUILD.json，dirty=false，清单核对一致）；交互门 `verify-daily-r69.cjs` **G1–G7 全绿**（real_calls=0，用户真 PPT 11.7MB/55 页+PNG+四态文本+PDF/Word/Excel/MD/HTML+文件树+DM+已发消息+宏/损坏负例）；视觉门 `visual-pairs-r69.cjs` 7 对同视口（2560×1380）vision 全 PASS；r68 门适配新外壳后全绿；全量 917/917+双类型门 0 错。
+> R69=文件预览集中修复与 ZCode 源码对照（用户五图验收基准）。**主交付=desktop-daily-win-v7** `bld_e6abb00832d9dce2`（commit `70b86b2`，dirty=false，593/593；包级门 r63 --src v7 ok realCalls=0；升级门 ok 负例 4/4）；交互门 `verify-daily-r69.cjs` **G1–G7 全绿**（real_calls=0，用户真 PPT 11.7MB/55 页+PNG+四态文本+PDF/Word/Excel/MD/HTML+文件树+DM+已发消息+宏/损坏负例）；视觉门 `visual-pairs-r69.cjs` 7 对同视口（2560×1380）vision 全 PASS；r68 门适配新外壳后全绿；全量 917/917+双类型门 0 错。
 > - **对照源码**：zai-org/ZCode @29628c9（映射表 `zcode-preview-mapping-r69-20261007.md`）；新依赖 @extend-ai/react-xlsx 0.16.0（MIT，PROVENANCE 溯源；worker 构建期预 bundle——裸 import fflate 陷阱）。
 > - **P1**：房间首开死锁=store.openPreview 调度层同步开标签；PPT 误判=classifyOfficeMain 按**主 part** content type（嵌入 xlsb 不污染；宏只看主 part）；文本原字节=attachment.uploadTextRaw+decodeTextBytes（BOM/UTF-16/GB18030/0B 允许；控制字节=二进制判据）；Office 软解析失败不再吞上传（extraction:'failed' 分列，注入 fail-closed 保持）。
 > - **统一阅读器**：PreviewPane 重写（标签条/面包屑/内容三层=参考结构）；fileSource 统一字节链（附件/工作区 readFull 二进制扩展/交付）；PPT=同库引擎架构（缩略图列/主舞台/底栏）；PDF=真实面板 contain 适应+页码输入；Word=分页纸张全白流（无第二副本）；Excel=WASM 引擎+sheet 页签+回退网格；文件树同阅读器。
