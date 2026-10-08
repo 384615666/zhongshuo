@@ -94,6 +94,11 @@ export async function refreshGitState(projectId: string): Promise<void> {
       status: statusEntries,
       commitMessage: cur.commitMessage,
       reflog: cur.reflog,
+      // R72：本次回执是权威——成功必须清掉旧的非 Git 中性标记（folder 变成仓库后不再显示
+      // 「未初始化」），并清掉**已被本次成功解决的读取失败**（失败→成功往返不靠重启）。
+      // 其他操作（暂存/提交等）的 lastOp 属于各自事实，不被 status 刷新抹掉。
+      notARepo: undefined,
+      lastOp: cur.lastOp?.op === 'git.status' && !cur.lastOp.ok ? undefined : cur.lastOp,
     };
     setState((s) => ({
       ...s,
@@ -108,14 +113,21 @@ export async function refreshGitState(projectId: string): Promise<void> {
     // R71：普通非 Git 目录是支持的项目形态——中性标注（isGit=false），不进失败横幅；
     // 真实 Git 执行错误/权限/目录失效仍走红「失败」面板（不吞错）。
     if (msg.startsWith('NOT_A_GIT_REPO')) {
-      setState((s) => ({
-        ...s,
-        projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, isGit: false } : pr)),
-        git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: true, lastOp: undefined } },
-      }));
+      setState((s) => {
+        const cur2 = s.git[projectId] ?? emptyGit();
+        return {
+          ...s,
+          projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, isGit: false } : pr)),
+          // R72：非 Git 同样按本次回执清**失效的仓库投影**（旧分支/状态/远端/历史不再显示——
+          // 仓库→普通目录往返不留幻影）；用户输入的提交信息/reflog 草稿不属于服务端投影，保留。
+          git: { ...s.git, [projectId]: { ...emptyGit(), commitMessage: cur2.commitMessage, reflog: cur2.reflog, notARepo: true, lastOp: undefined } },
+        };
+      });
       recordWrite('git.status', '此文件夹未初始化 Git（中性状态）——文件阅读与预览不受影响');
       return;
     }
+    // 真实 Git 执行错误：权威失败——旧的非 Git 中性标记一并失效（红失败面板取代中性面板）。
+    setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: undefined } } }));
     markOp('git.status', false, msg);
   }
 }

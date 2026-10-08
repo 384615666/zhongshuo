@@ -293,6 +293,17 @@ export function RoomPage({
     noteContextChanged();
   }, [threadId, hasPreview]);
 
+  /**
+   * R72：路由直达线程（/project/:pid/room/:rid?thread=…）时上下文侧必须显示线程。
+   * 上面那只 effect 只看**变化**——组件因路由重挂载时 prevThreadIdRef 初值即当前
+   * threadId（比较相等、不动作），而上传芯片在主池侧打开的预览把 previewSide 留在
+   * 'pool'，线程面板会被 `previewSide !== 'pool'` 判断整个隐藏（深链进来只见主池）。
+   */
+  useEffect(() => {
+    if (threadId != null) setPreviewContextSide('thread');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+
   const openResource = useCallback(
     (resourceId: string, revision: number | undefined, from?: ContextLocation) => {
       const target: ContextLocation = from ?? { target: context };
@@ -1480,19 +1491,26 @@ function ThreadPanel({
    */
   const backToPool = onBackToPool ?? (() => navigate(`/project/${s.activeProjectId}/room/${thread?.roomId ?? ''}`));
 
-  // 直达链接：滚到目标消息并高亮（§15.5 只定位已有记录，不执行任何命令）
+  // 直达链接：滚到目标消息并高亮（§15.5 只定位已有记录，不执行任何命令）。
+  // R72：消息由 loadThread 异步装载——冷启动深链时 +350ms 元素常不存在（单次定时器
+  // 静默漏定位）。有界重试（~18s）等元素真正挂载；到期仍无=如实不高亮（不伪造）。
   useEffect(() => {
     if (!highlightMessageId) return;
     setTab('replies');
-    const t = window.setTimeout(() => {
+    let tries = 0;
+    let timer = 0;
+    const tryHighlight = () => {
       const el = document.getElementById(`msg-${highlightMessageId}`);
-      if (el) {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        el.classList.add('msg-highlight');
-        window.setTimeout(() => el.classList.remove('msg-highlight'), 2600);
+      if (el == null) {
+        if (tries < 60) { tries += 1; timer = window.setTimeout(tryHighlight, 300); }
+        return;
       }
-    }, 350);
-    return () => window.clearTimeout(t);
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('msg-highlight');
+      window.setTimeout(() => el.classList.remove('msg-highlight'), 2600);
+    };
+    timer = window.setTimeout(tryHighlight, 350);
+    return () => window.clearTimeout(timer);
   }, [highlightMessageId, threadId]);
 
   if (!thread || !anchor) {

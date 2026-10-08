@@ -863,6 +863,66 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
   }
 }
 
+/**
+ * R72：把指定项目对齐为活跃项目（线程/房间跨项目定位的公共前置）。
+ * loadThread/loadRoomPool 的 stillCurrent 双门（loadGen+activeProjectId）把「目标
+ * ≠ 活跃项目」的装载当迟到响应丢弃——看板/待办/归档跨项目跳线程、深链冷启动都会踩中。
+ * 对齐方式按会话内事实分列：房间数据已装载（旧项目缓存保留）→ focusProject 轻切换
+ * （与侧栏点击同链）；未装载 → openProjectByPath 全链（幂等合并不替换）。
+ * 有界重试吸收与启动恢复观察器并发打开的窗口。
+ */
+export async function ensureProjectActive(projectId: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    // 「活跃」不等于「已装载」：applyServerNavPrefs 重启后会恢复 activeProjectId 但不装
+    // 房间/成员（不走 openProjectByPath）——此时直达房间/线程仍会「找不到该房间」。
+    // 活跃且房间已装载才可早退。
+    if (getState().activeProjectId === projectId && getState().rooms.some((r) => r.projectId === projectId)) return;
+    let proj = getState().projects.find((p) => p.id === projectId);
+    if (proj == null) await loadProjectRegistry().catch(() => undefined);
+    proj = getState().projects.find((p) => p.id === projectId);
+    if (proj == null || typeof proj.rootPath !== 'string' || proj.rootPath.length === 0) {
+      throw new Error(`项目不在注册表或路径缺失（可能已归档/移除/目录失效）：${projectId}`);
+    }
+    if (getState().rooms.some((r) => r.projectId === projectId)) {
+      const { focusProject } = await import('./data/actions-nav');
+      focusProject(projectId);
+      if (getState().activeProjectId === projectId) return; // 聚焦已落位
+      // focusProject 静默未落位（如注册表瞬时缺行）——落到下一轮的全链打开
+    } else {
+      await openProjectByPath(proj.rootPath);
+    }
+    if (getState().activeProjectId === projectId) return;
+    // 并发打开抢先（如启动恢复观察器晚到落位）：有界重试
+  }
+  throw new Error('项目切换未落位（并发打开抢占）——请重试');
+}
+
+/**
+ * R72：线程直达（#/thread/:id）**定位**装载——修「深链不稳定」根因。
+ *
+ * 先探归属（thread.get——服务端 audience 裁决，本地不猜），所属项目未激活时先
+ * ensureProjectActive 对齐，再交回常规链（RoomPage 挂载后 ThreadPanel 的 loadThread
+ * 代次/归属已对齐，不再被 stillCurrent 双门丢弃）。
+ */
+export async function locateThread(threadId: string): Promise<{ projectId: string; roomId: string }> {
+  // 等 boot 定型（ready/failed，bootRemembered 有界 60s）——避免与其 openProjectByPath 互抢代次。
+  for (let i = 0; i < 70; i += 1) {
+    const b = getState().boot;
+    if (b === 'ready' || b === 'failed') break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  const probe = await command<ThreadGetData>('thread.get', { threadId }); // 不存在/不可访问=如实抛出
+  // 对齐链偶发竞态（注册表瞬时缺行/装载竞态）吸收一次重试——深链是用户明确意图，
+  // 一次瞬时失败就报「不存在」是误报。
+  let lastErr: unknown = null;
+  for (let i = 0; i < 2; i += 1) {
+    try { await ensureProjectActive(probe.thread.projectId); lastErr = null; break; }
+    catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 1200)); }
+  }
+  if (lastErr != null) throw lastErr;
+  return { projectId: probe.thread.projectId, roomId: probe.thread.roomId };
+}
+
 /** 显式推进线程阅读水位（ThreadPage 贴底滚动时调用——发起此刻重查独立门；未来序号服务端拒）。 */
 export async function markThreadReadIfAllowed(threadId: string): Promise<void> {
   const { canMarkThreadRead } = await import('./data/store');

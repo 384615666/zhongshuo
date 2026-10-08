@@ -619,12 +619,14 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   if (threadDirect != null) {
     const tid = decodeURIComponent(threadDirect[1] ?? '');
     const ent = (s as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[tid];
-    if (ent != null) {
+    // R72：实体已缓存**且归属项目正是活跃项目**才直接渲染——否则 loadThread 的
+    // stillCurrent 双门会丢弃装载（切项目后点旧直链=线程面板拿不到数据），走定位器对齐。
+    if (ent != null && ent.projectId === s.activeProjectId) {
       return <RoomPage roomId={ent.roomId} threadId={tid} highlightMessageId={query.message} tab={isThreadTab(query.tab) ? query.tab : undefined} />;
     }
     return (
       <div className="main"><div className="page">
-        <div className="panel info">正在定位线程（thread.get 装载后自动进入所属房间）…</div>
+        <div className="panel info">正在定位线程（对齐所属项目后自动进入房间）…</div>
         <LocateThread threadId={tid} messageId={query.message} tab={query.tab} />
       </div></div>
     );
@@ -652,6 +654,13 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
 
   m = path.match(/^\/project\/([^/]+)\/room\/([^/?]+)$/);
   if (m != null) {
+    const pid = m[1] ?? '';
+    // R72：看板/待办/归档会带任务自己的 projectId 跨项目跳房间/线程；房间与线程装载
+    // （roomOf/loadThread）绑活跃项目——未对齐时房间报「不存在」、线程被 stillCurrent
+    // 丢弃。先对齐（已装载=轻切焦点；未装载=全链打开），对齐后本路由自然重渲 RoomPage。
+    if (pid !== s.activeProjectId) {
+      return <div className="main"><div className="page"><div className="panel info">正在打开所属项目…</div><ProjectAlign projectId={pid} /></div></div>;
+    }
     return (
       <RoomPage
         roomId={m[2] ?? ''}
@@ -686,22 +695,42 @@ function RedirectTo({ to }: { to: string }) {
   return <div className="main"><div className="page"><div className="small faint">正在打开…</div></div></div>;
 }
 
-/** 旧线程路由的装载定位（thread.get 完成后跳所属房间）。 */
+/** R72：项目路由对齐器（房间/线程跨项目跳转前置）——对齐成功由路由自然重渲接管。 */
+function ProjectAlign({ projectId }: { projectId: string }) {
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { ensureProjectActive } = await import('./shell');
+      try {
+        await ensureProjectActive(projectId);
+      } catch (e) {
+        if (cancelled) return;
+        toast(`打开所属项目失败：${(e as Error).message}`, 'error');
+        navigate('/', { replace: true });
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+  return null;
+}
+
+/** 旧线程路由的装载定位（R72：locateThread 对齐所属项目后跳该房间——修跨项目深链丢弃）。 */
 function LocateThread({ threadId, messageId, tab }: { threadId: string; messageId?: string; tab?: string }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const { loadThread } = await import('./shell');
-      await loadThread(threadId).catch(() => undefined);
-      if (cancelled) return;
-      const ent = (getState() as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[threadId];
-      if (ent != null) {
+      const { locateThread } = await import('./shell');
+      try {
+        const ent = await locateThread(threadId); // {projectId, roomId}——项目已对齐激活
+        if (cancelled) return;
         const q = new URLSearchParams();
         q.set('thread', threadId);
         if (tab != null && tab !== 'replies') q.set('tab', tab);
         if (messageId != null) q.set('message', messageId);
         navigate(`/project/${ent.projectId}/room/${ent.roomId}?${q.toString()}`, { replace: true });
-      } else {
+      } catch {
+        if (cancelled) return;
         toast('链接指向的回复串不存在或不可访问', 'error');
         navigate('/', { replace: true });
       }

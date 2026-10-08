@@ -4580,6 +4580,12 @@ function resolveProjectTextStat(
  * EXTENSIONS ≤256KB；R69 增阅读二进制类 PREVIEW_BINARY_EXTENSIONS 按类上限——与上传同
  * 类型面，文件树/上传/预览三入口支持类型一致）+ 实际字节 sha256（读取快照身份）。
  */
+/**
+ * R72：容量**从共享合同取值**（parseContracts 常量），不再散落副本——R71 只调了
+ * OFFICE_MAX_BYTES（上传/视觉字节），此处仍留 20MiB 导致文件树点击真实 22.54MiB PPT
+ * 被 readFull/originalFile 拒绝（review-r71 §P1：上传通道通过不能替代原始路径）。
+ * 分道不变：Office=OFFICE_MAX_BYTES；PDF/图片保持各自通道限额。
+ */
 const PREVIEW_BINARY_EXTENSIONS: Record<string, { cap: number; kind: 'image_file' | 'pdf_file' | 'docx_file' | 'sheet_file' | 'slides_file' }> = {
   '.png': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.jpg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
@@ -4587,10 +4593,10 @@ const PREVIEW_BINARY_EXTENSIONS: Record<string, { cap: number; kind: 'image_file
   '.gif': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.webp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.bmp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
-  '.pdf': { cap: 20 * 1024 * 1024, kind: 'pdf_file' },
-  '.docx': { cap: 20 * 1024 * 1024, kind: 'docx_file' },
-  '.xlsx': { cap: 20 * 1024 * 1024, kind: 'sheet_file' },
-  '.pptx': { cap: 20 * 1024 * 1024, kind: 'slides_file' },
+  '.pdf': { cap: PDF_MAX_BYTES, kind: 'pdf_file' },
+  '.docx': { cap: OFFICE_MAX_BYTES, kind: 'docx_file' },
+  '.xlsx': { cap: OFFICE_MAX_BYTES, kind: 'sheet_file' },
+  '.pptx': { cap: OFFICE_MAX_BYTES, kind: 'slides_file' },
 };
 function isProjectPreviewableExt(ext: string): boolean {
   return TEXT_PREVIEW_EXTENSIONS.has(ext) || PREVIEW_BINARY_EXTENSIONS[ext] != null;

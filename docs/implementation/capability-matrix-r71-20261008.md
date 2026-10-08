@@ -14,9 +14,9 @@
 | PNG/JPEG/GIF/WebP | previewImage（dataUrl） | ✅ | r71 G2（QQ 截图 1043×1439 解码） | — |
 | PDF 分页/适应/缩放/DPR | previewPdf includeBytes | ✅ | r71 G2（19 页真件）+G8（真窗口 resize 回弹+DPR2 背板 2×） | — |
 | Word 分页/表格/红字/高亮 | previewOffice includeBytes | ✅ | r71 G2（真合同 391KB）+G4（交付 docx） | 字号观感 |
-| Excel WASM 引擎/回退网格 | previewOffice includeBytes（三类） | ✅ | r71 G2（9.8MB 真件 69793 行） | 行高观感 |
-| PPT 缩略图/翻页/缩放/图文页 | previewOffice includeBytes | ✅ | r71 G1（22.54MiB/82 页真件全链） | — |
-| 容量分道 | Office 32MiB/单条目 128MiB/PDF 20MiB/图 8MiB | ✅ 就地人话错误 | r71 G7（33.5MiB 合成件拒+MiB 文案） | — |
+| Excel WASM 引擎/回退网格 | previewOffice includeBytes（三类） | ✅ | r71 G2（9.8MB 真件 69793 行）**口径注（R72 纠正）：r71 只证引擎挂载+页签+另存；首/中/末数据行与源事实核对、横纵滚动/键盘响应/返回状态在 R72 G4 补齐** | 行高观感 |
+| PPT 缩略图/翻页/缩放/图文页 | previewOffice includeBytes | ✅ | r71 G1（22.54MiB 真件：**82 页识别+首/中/末抽样**——逐页渲染 R72 G3 补齐） | — |
+| 容量分道 | Office 32MiB/单条目 128MiB/PDF 20MiB/图 8MiB | ✅ 就地人话错误 | r71 G7（33.5MiB 合成件拒+MiB 文案）**口径注（R72 纠正）：r71 只覆盖上传/视觉字节通道；文件树 readFull/originalFile 仍 20MiB（真 22.54MiB PPT 被拒）——R72 修为共享合同取值并加 20–32MiB 树正例** | — |
 | 阅读状态（页/表/滚动） | —（renderer readerState） | ✅ | r70 G3+r71 回归 | — |
 | 文件树同阅读器（二进制） | project.file.readFull 二进制扩展 | ✅ | r70 G5+r71 G3 | — |
 

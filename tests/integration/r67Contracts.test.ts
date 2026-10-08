@@ -87,6 +87,26 @@ describe('R67：工作区完整读取与原字节', () => {
     writeFileSync(join(projDir, 'bin.dat'), Buffer.from([0, 1, 2]), 'utf8');
     await expect(cmd('project.file.originalFile', { projectId, path: 'bin.dat' })).rejects.toThrow(/白名单/);
   });
+  it('R72：20–32MiB 区间 Office 文件树读取不再被旧 20MiB 拒（readFull+originalFile 双通道；readFull 只认扩展名，合成件即可锁边界）', async () => {
+    // 21MiB 合成 .pptx——真实 22.54MiB 内蒙古 PPT 走 UI 门；此处锁 daemon 合同边界。
+    const body = Buffer.alloc(21 * 1024 * 1024, 0x50);
+    const bigPath = join(projDir, '大件.pptx');
+    writeFileSync(bigPath, body);
+    const expectSha = createHash('sha256').update(body).digest('hex');
+    const full = await cmd<{ bytes: number; sha256: string; bytesBase64: string; binaryKind: string }>('project.file.readFull', { projectId, path: '大件.pptx' });
+    expect(full.binaryKind).toBe('slides_file');
+    expect(full.sha256).toBe(expectSha);
+    expect(Buffer.from(full.bytesBase64, 'base64').length).toBe(body.length);
+    const orig = await cmd<{ bytes: number; sha256: string; bytesBase64: string }>('project.file.originalFile', { projectId, path: '大件.pptx' });
+    expect(orig.sha256).toBe(expectSha); // 另存原件=同字节
+    // 33MiB 负例仍在 32MiB 上限外被拒（humanized 消息）。
+    const over = Buffer.alloc(33 * 1024 * 1024 + 512, 0x51);
+    writeFileSync(join(projDir, '超大.pptx'), over);
+    await expect(cmd('project.file.readFull', { projectId, path: '超大.pptx' })).rejects.toThrow(/33.*MiB|32MiB|超只读上限 32MiB/);
+    // PDF 分道：21MiB PDF 仍按自己的 20MiB 通道限额拒绝（不因 Office 扩容被带上车）。
+    writeFileSync(join(projDir, '大.pdf'), Buffer.alloc(21 * 1024 * 1024, 0x25));
+    await expect(cmd('project.file.readFull', { projectId, path: '大.pdf' })).rejects.toThrow(/超只读上限 20MiB/);
+  });
 });
 
 describe('R67：member.create 与 search visible', () => {
