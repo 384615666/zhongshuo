@@ -2,7 +2,17 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-08 第七十一轮，唯一权威快照）
+## 当前真实状态（2026-10-08 第七十二轮，唯一权威快照）
+
+> R72=原始使用路径修复与桌面日常收口（review-r71 独立复核：文件树 22.54MiB 仍被 20MiB 拒/Git 往返残留/深链不稳定/验证口径纠正）。**主交付=desktop-daily-win-v10** `bld_0558b208779db4a7`（commit `a700a58`，dirty=false，593/593；r63 --src v10 ok realCalls=0；**启动器原始路径复证 ok**：树开真件 82 页 5.4s+p40 图 1/1 解码+console 0 错）；交互门 `verify-daily-r72.cjs` **G1–G7 全绿**（ok:true, errs:[]；realCallRoots 6×0）；全量 921/921；r71 门回归 ok（前两次环境 CPU 争用 flake，第三次干净通过+G1 单段绿，如实登记）。
+> - **P1 文件树容量**：PREVIEW_BINARY_EXTENSIONS 接共享合同（Office=OFFICE_MAX_BYTES 32MiB、PDF 分道 20MiB、图片 8MiB）——readFull/originalFile 双通道；r67Contracts 增 20–32MiB 边界永久用例（21MiB 过+33.5 拒+21MiB PDF 仍拒）；G1 用户原始路径真件 82 页 5.4s+另存 sha 一致+上传件/成果件分列。
+> - **P2 Git 往返**：成功清 notARepo+已解决的 git.status 读失败（其他操作 lastOp 不抹）；非 Git 重置 emptyGit 投影（留 commitMessage/reflog）；真实错误清中性标记——G2 七步含 objects 损坏=红（`.git` 变文件会被 simple-git 归 NOT_A_GIT_REPO，换 objects 变文件注入）+跨项目 trunk/main 分列。
+> - **深链四修（真缺陷）**：loadThread stillCurrent 双门丢跨项目装载→ensureProjectActive（**活跃≠已装载**：applyServerNavPrefs 恢复 active 不装房间→直达房间报不存在；现要求活跃且房间已装载才早退+focusProject 落位校验+openProjectByPath 兜底）+locateThread（探归属→对齐→一次重试）+`/project/:pid/room` ProjectAlign+**Room 挂载期 previewSide 让位**（路由重挂载 prevThreadIdRef 相等不动作→上传芯片 pool 侧把线程面板整个隐藏）+消息高亮有界重试。G6 十步矩阵 10/10（真跨项目/看板/待办[二次派发造未读]/收藏[scope 切全部]/搜索[Enter 检索+scope]/冷启动/不串）。
+> - **口径补齐**：G3 82/82 逐页渲染 walk 0 失败；G4 Excel aria 69913+Ctrl+Home 8000→0+横纵滚动+sheet 恢复+**视觉判读首/中/末与 openpyxl 全对上**（末行 DATA_AS2.BIN_01478/内部字段表；绝对底部=~120 行尾部空网格行带——正常形态）；G5 全进程采样 worker 峰 887MiB<896 硬界+收拢回基线；**不再上调任何限额**。
+> - **R71 证据错位修正**：六源③实为房间级记录（`.composer-input` 全局选择器命中房间区）→.col-thread 作用域+thread_id DB 断言；②「本次仅记录」按钮 2025-09-25 起已收进 ⋯ 菜单（r71 点击实为 no-op、其二实为 AI 派发）→真实仅记录+DB 落库断言。
+> - **边界**：canvas 选择/复制合成输入驱动不了（键盘滚动正常）——视觉判读替代；深链对齐链低频竞态已加产品级吸收（take-18 双轮未达→take-19/启动器稳定）；既有延期不动。报告 `r72-original-path-git-roundtrip-20261008.md`+矩阵 `capability-matrix-r72-20261008.md`。
+
+## 历史快照（2026-10-08 第七十一轮）
 
 > R71=真实文档容量与非 Git 收口（用户 v8 真实样本反馈优先：22.54MiB PPT 被 20MiB 上限拦+非 Git 红横幅）。**主交付=desktop-daily-win-v9** `bld_a03ef3a265fd6513`（commit `f4fa0e4`，dirty=false，593/593；包级门 r63 --src v9 ok）；交互门 `verify-daily-r71.cjs` **G1–G8 全绿**（ok:true, errs:[]；realCallRoots 8×0）；全量 920/920+双类型门 0 错；r70 门回归全绿。
 > - **容量分道**：Office 20→32MiB（真 22.54MiB/82 页 PPT 全链：上传 5.9s/首屏 4.5s/中页图文/末页/缩放/回位 82/另存一致/堆 13→111MB）；ZIP 单条目 64→128MiB（真 73MiB 表 XML——9.8MB XLSX 69793 行此前被整份误拒）；解析堆 320→768MB+整进程 896MiB（alloc 反例测试改相对常量）；Office 解析截止 120s；超限错误人话 MiB。
