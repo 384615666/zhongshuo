@@ -2,7 +2,17 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-07 第七十轮，唯一权威快照）
+## 当前真实状态（2026-10-08 第七十一轮，唯一权威快照）
+
+> R71=真实文档容量与非 Git 收口（用户 v8 真实样本反馈优先：22.54MiB PPT 被 20MiB 上限拦+非 Git 红横幅）。**主交付=desktop-daily-win-v9** `bld_a03ef3a265fd6513`（commit `f4fa0e4`，dirty=false，593/593；包级门 r63 --src v9 ok）；交互门 `verify-daily-r71.cjs` **G1–G8 全绿**（ok:true, errs:[]；realCallRoots 8×0）；全量 920/920+双类型门 0 错；r70 门回归全绿。
+> - **容量分道**：Office 20→32MiB（真 22.54MiB/82 页 PPT 全链：上传 5.9s/首屏 4.5s/中页图文/末页/缩放/回位 82/另存一致/堆 13→111MB）；ZIP 单条目 64→128MiB（真 73MiB 表 XML——9.8MB XLSX 69793 行此前被整份误拒）；解析堆 320→768MB+整进程 896MiB（alloc 反例测试改相对常量）；Office 解析截止 120s；超限错误人话 MiB。
+> - **非 Git 中性态**：git.status 保留 NOT_A_GIT_REPO 结构码→UI 中性面板（真 Git 错误仍红）；G3 在真正仓库外临时目录实测（gate 目录在 zhongshuo 仓库内——git 向上发现外层仓库是正确行为）。
+> - **登记项收口**：project.open DTO 补 rootPath/canonicalPath（新建+命中两分支+测试）；多远端 upstream 真值（upstreamMultiRemote 永久测试：origin+backup ahead=2/behind=1 与 rev-list 对上）；能力矩阵 `capability-matrix-r71-20261008.md`。
+> - **交付真文件+六源**：fake writeFile 支持 contentBase64+ZS_FAKE_WRITE_FILES_JSON；真 DOCX/XLSX/PDF 字节自然落盘（sha256 逐一相等）→成果「打开文件」→同一阅读器→另存一致；六真源逐项判据（草稿/已发/**线程回复附件**/DM/文件树/**成果文件**）全绿。
+> - **真窗口回弹真缺陷修复**：useThreadWidth resize 棘轮（620→380 不回弹——R70 疑点确认为产品缺陷）→删收敛写回；1283→760→1283 pane 608→514→**609** 实测；DPR2 背板 780=2×390。
+> - **未覆盖**：69793 行引擎滚动逐帧性能（观感待用户）；/thread/:id 深链 G5 场景定位不稳（卡片路径替代，独立登记）；82 页逐页视觉（首/中/末+缩略图断言）。
+
+## 历史快照（2026-10-07 第七十轮）
 
 > R70=文件阅读器可靠性与视觉收口（R69 独立复核五类反例+CSP 图片拦截全部先修后验）。**主交付=desktop-daily-win-v8** `bld_6d502ccefe8159b3`（commit `33230aa`，dirty=false，593/593；包级门 r63 --src v8 ok realCalls=0；升级门 ok 负例 4/4）；交互门 `verify-daily-r70.cjs` **G1–G8 全绿**（ok:true, errs:[]；realCallRoots 8×0——每独立根核 real_calls）；视觉门 `visual-pairs-r70.cjs` 8 帧+Word 红字/高亮补帧全 PASS（逐帧记录整窗 2560×1380/DPR1 与**实际预览 rect x=1932 w=620**——两者分列）；r69 门回归全绿；全量 917/917+双类型门 0 错。
 > - **反例修复**：①资源 ID=encodeURIComponent 无损键（中文/标点/跨项目不碰撞）②Excel 切表弹回=render 重建 ArrayBuffer→FileStage 稳定 bytes+装载缓存 ③PPT 图片=CSP `img-src … blob:`（zsres 本地 blob 放行；外部边界不变；真件 p5=3/3 解码）④阅读状态=readerState 按资源+版本存取（PPT/PDF 页缩放、Excel 表、Word scrollTop；切标签/收起重开保持）——**goToPage 嵌套 setState 是真根因**（R69 起存在，r69 门只断言输入框值未暴露）⑤PDF fit 观察器挂常驻节点+DPR ⑥Word wrapper 渲染后内联覆盖+四缺失图标 ⑦交付真文件=fake `writeFile` 脚本项+`ZS_FAKE_WRITE_FILES`+报告「涉及文件」逐项打开文件→同一阅读器 ⑧事实回填 applyWorktreeRead+delivery hashMatch/bytes 真值。
