@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 import { ParsePool, disposeParsePool, getParsePool } from '../../src/daemon/parsePool.ts';
+import { PARSE_TOTAL_MEMORY_LIMIT_BYTES } from '../../src/daemon/parseContracts.ts';
 import { jobObjectCapability } from '../../src/daemon/parseJobObject.ts';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
@@ -187,11 +188,14 @@ describe('dev worker 源码指纹', () => {
 });
 
 describe('整进程内存（Job Object）——外部 Buffer 分配反例', () => {
-  it('allocMB=600（--max-old-space-size 不约束 Buffer）：子进程被收拢、daemon 命令正常', async () => {
+  it('allocMB 超整进程硬界（--max-old-space-size 不约束 Buffer）：子进程被收拢、daemon 命令正常', async () => {
     const hasJob = jobObjectCapability();
     const pool = new ParsePool();
     const a = blobOf(makeAsciiPdf([['内存反例探针 MEM-1']]));
-    const r = await pool.run('pdf', a.path, a.hash, { hooks: { allocMB: 600 } });
+    // R71：PARSE_TOTAL_MEMORY_LIMIT_BYTES 384→896MiB（真 73MiB 表 XML）——600MB 不再超界；
+    // 反例分配量相对常量取（硬界 + 200MB），保证仍验证 Buffer 不游离于限额外。
+    const overAllocMB = Math.ceil(PARSE_TOTAL_MEMORY_LIMIT_BYTES / (1024 * 1024)) + 200;
+    const r = await pool.run('pdf', a.path, a.hash, { hooks: { allocMB: overAllocMB } });
     // Job Object 生效：分配被拒/进程被终止（分类为失败），exit 确认后槽释放。
     // 附加失败的平台：Buffer 分配可能成功并继续解析（ok=true）——按降级口径如实断言。
     if (hasJob) {

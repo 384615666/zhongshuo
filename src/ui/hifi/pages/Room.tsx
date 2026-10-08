@@ -109,21 +109,12 @@ function threadMaxWidth() {
 function useThreadWidth() {
   const [width, setWidth] = useState(620);
 
-  // 窗口尺寸变化或侧栏折叠时，把宽度重新收敛到合法区间
-  useEffect(() => {
-    const onResize = () => setWidth((w) => Math.min(Math.max(w, THREAD_MIN), threadMaxWidth()));
-    window.addEventListener('resize', onResize);
-    // 侧栏折叠会改变可用宽度；用 rAF 等布局落定后再收敛
-    const ro = new ResizeObserver(() => {
-      requestAnimationFrame(onResize);
-    });
-    const body = document.querySelector('.app-body');
-    if (body) ro.observe(body);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      ro.disconnect();
-    };
-  }, []);
+  // R71（真窗口拉宽反弹）：**不做 resize 收敛写回**。旧实现窗口收窄时把 width 永久
+  // clamp 到下限（620→380），拉宽后不回弹（棘轮——独立实测 1283→760→1283 后
+  // pane 380≠608）。显示侧上限由消费处的动态 min 承担（rightColW =
+  // max(380, min(width, navVisibleWidth-420-SPLIT))）——窗口窄时视觉收缩、宽时
+  // 自动回到用户宽度；width 只在用户拖拽分隔条时改写（用户意图不被窗口变化覆盖）。
+  void setWidth;
 
   const dragRef = useRef<{ startX: number; startWidth: number; invert: boolean } | null>(null);
   /**

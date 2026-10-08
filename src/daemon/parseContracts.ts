@@ -14,8 +14,8 @@ export const PARSE_CONCURRENCY = 1; // 串行解析：内存上限=单 worker 32
 export const PARSE_QUEUE_MAX = 4; // 等待队列上限：超=parse-busy 明确拒绝（不悬挂）
 export const PARSE_DEADLINE_MS = 30_000; // 整体截止：覆盖加载、逐页/逐项提取、结果传输与收拢
 export const PARSE_KILL_GRACE_MS = 2_000; // SIGTERM→SIGKILL 升级窗口
-export const PARSE_MEMORY_LIMIT_MB = 320; // 子进程 --max-old-space-size（仅 V8 老生代——外部 Buffer 不受其约束）
-export const PARSE_TOTAL_MEMORY_LIMIT_BYTES = 384 * 1024 * 1024; // 整进程提交内存硬界（Windows Job Object PROCESS_MEMORY；第三十轮二）
+export const PARSE_MEMORY_LIMIT_MB = 768; // 子进程 --max-old-space-size（R71：真实 XLSX 单表 73MiB XML+全表对象超 320——按真件上调；仍为硬界，非无界）
+export const PARSE_TOTAL_MEMORY_LIMIT_BYTES = 896 * 1024 * 1024; // 整进程提交内存硬界（R71 随 V8 上限同步上调；Job Object PROCESS_MEMORY 仍为硬界）
 export const PARSE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024; // 单次响应 JSON 上限（防御性——worker 侧已限输出）
 
 // ---------- PDF 限额（解析侧执行） ----------
@@ -25,10 +25,17 @@ export const PDF_PAGE_TEXT_MAX = 64 * 1024;
 export const PDF_TOTAL_TEXT_MAX = 512 * 1024;
 
 // ---------- Office 共同限额（zip 预检 + 解析输出） ----------
-export const OFFICE_MAX_BYTES = 20 * 1024 * 1024; // 原件上限（DOCX/XLSX/PPTX）
+/**
+ * R71：Office 原件上限 20MiB→**32MiB**（用户真实 PPT 22.54MiB 被拦——渲染器
+ * RECOMMENDED_ZIP_LIMITS（4000 条目/单条目 32MiB/总量 256MiB/媒体 192MiB）与解析池
+ * ZIP 护栏（1500/64MiB/160MiB）均远高于该档，20MiB 只是入口常量过紧）。
+ * **分道**：此值只管「保存原件+本地预览+视觉字节通道」；文本提取输出仍受
+ * PARSE_TOTAL_TEXT_MAX/SLIDES_MAX_SLIDES 等预算约束（预览扩容不等于 AI 拿到全文）。
+ */
+export const OFFICE_MAX_BYTES = 32 * 1024 * 1024; // 原件上限（DOCX/XLSX/PPTX）
 export const CSV_MAX_BYTES = 5 * 1024 * 1024;
 export const ZIP_MAX_ENTRIES = 1_500;
-export const ZIP_ENTRY_MAX_BYTES = 64 * 1024 * 1024; // 单条目声明解压上限
+export const ZIP_ENTRY_MAX_BYTES = 128 * 1024 * 1024; // 单条目声明解压上限（R71：真实 XLSX 单表 XML 解压 73.4MiB 被 64MiB 拒——同 PPT 容量同类；zip 炸弹护栏由条目数+总量+解析子进程 Job Object 内存/截止共同承担）
 export const ZIP_TOTAL_MAX_BYTES = 160 * 1024 * 1024; // 全部条目声明解压总量上限
 export const DOCX_PARAGRAPH_MAX = 10_000;
 export const SLIDES_MAX_SLIDES = 200;

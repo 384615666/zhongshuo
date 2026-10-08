@@ -12,7 +12,7 @@
  */
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync , readFileSync} from 'node:fs';
 import { openDatabase } from '../persistence/db.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { acquireSingletonLock } from './singletonLock.ts';
@@ -155,6 +155,29 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
                           },
                         };
                       })()
+                    : process.env.ZS_FAKE_WRITE_FILES_JSON != null && process.env.ZS_FAKE_WRITE_FILES_JSON.length > 0
+                      ? (() => {
+                          // R71：二进制交付样本（真实 DOCX/XLSX/PDF 字节）——JSON 文件承载
+                          // [{path, contentBase64}]（环境变量字符串放不下 MB 级 base64）。
+                          const spec = JSON.parse(readFileSync(process.env.ZS_FAKE_WRITE_FILES_JSON, 'utf8')) as Array<{ path: string; contentBase64?: string; content?: string }>;
+                          let writeTurnUsed = false;
+                          return {
+                            turnScriptSequencer: (): FakeTurnScript => {
+                              if (writeTurnUsed) return successTurn();
+                              writeTurnUsed = true;
+                              const items: FakeTurnScript = spec.map((fl) => ({ kind: 'writeFile', path: fl.path, content: fl.content, contentBase64: fl.contentBase64 }));
+                              const finalText = JSON.stringify({
+                                schemaVersion: 'task-complete-v1',
+                                changeSummary: 'R71 自然交付：已生成下列文件（文件本体在工作区——从「打开文件」进入阅读器；本报告为交付说明，两者分列）。',
+                                files: spec.map((fl) => fl.path),
+                                executedVerifications: ['文件已写入工作区（fake 落盘=真实字节）'],
+                                unexecutedVerifications: [],
+                                remainingIssues: [],
+                              });
+                              return [...items, { kind: 'event', event: { kind: 'turn.completed', finalText } }];
+                            },
+                          };
+                        })()
                     : process.env.ZS_FAKE_WRITE_FILES != null && process.env.ZS_FAKE_WRITE_FILES.length > 0
                       ? (() => {
                           // R70 F7：ZS_FAKE_WRITE_FILES="<relpath::内容文本>;…"——fake 首 turn 在

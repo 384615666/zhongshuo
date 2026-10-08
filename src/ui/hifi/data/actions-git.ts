@@ -104,7 +104,19 @@ export async function refreshGitState(projectId: string): Promise<void> {
     if (status.truncated) markOp('git.status', true, '状态条目超过 200 已截断（porcelain 上限）');
     recordWrite('git.status', `分支 ${status.branch} · ${statusEntries.length} 个未提交改动`);
   } catch (e) {
-    markOp('git.status', false, (e as Error).message);
+    const msg = String((e as Error).message);
+    // R71：普通非 Git 目录是支持的项目形态——中性标注（isGit=false），不进失败横幅；
+    // 真实 Git 执行错误/权限/目录失效仍走红「失败」面板（不吞错）。
+    if (msg.startsWith('NOT_A_GIT_REPO')) {
+      setState((s) => ({
+        ...s,
+        projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, isGit: false } : pr)),
+        git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: true, lastOp: undefined } },
+      }));
+      recordWrite('git.status', '此文件夹未初始化 Git（中性状态）——文件阅读与预览不受影响');
+      return;
+    }
+    markOp('git.status', false, msg);
   }
 }
 

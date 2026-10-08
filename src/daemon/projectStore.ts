@@ -27,6 +27,10 @@ function rowToProject(row: ProjectRow): Project {
   return {
     id: row.id,
     displayName: row.display_name,
+    // R71（R64 登记）：DTO 补 rootPath/canonicalPath——前端 loader 声明早有此二字段，
+    // 服务端此前不回（前端回落 project.list/自身路径推导）。registry 行真实路径直出。
+    rootPath: row.root_path,
+    canonicalPath: row.canonical_path,
     directoryIdentity: JSON.parse(row.directory_identity) as Project['directoryIdentity'],
     status: row.status as Project['status'],
     revision: row.revision,
@@ -90,7 +94,8 @@ export function openProject(
     project.writeConcurrencyPolicy,
     project.createdAt,
   );
-  return domainOk({ project, created: true });
+  // R71：新建路径同样直出真实路径（与 rowToProject 命中路径一致——open 响应两分支同 DTO）。
+  return domainOk({ project: { ...project, rootPath: identity.value.rootPath, canonicalPath: identity.value.canonicalPath }, created: true });
 }
 
 /**

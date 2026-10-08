@@ -309,7 +309,16 @@ export function FilesGitPage({ projectId, query }: { projectId: string; query: R
           ) : null}
         </div>
 
-        {/* 失败不静默（§16.5）：成功态已收进状态条一行，失败才占一块说清楚。 */}
+        {/* R71：普通非 Git 目录=中性形态（不是失败）——一行说明即可；文件阅读照常。 */}
+        {git?.notARepo ? (
+          <div className="panel info" style={{ marginBottom: 14 }} data-zs-git-neutral="1">
+            <div className="panel-title"><Icon name="info" size={13} /> 此文件夹未初始化 Git</div>
+            <span className="small faint">普通目录是受支持的项目形态——文件树与预览不受影响；Git 页的历史/差异/提交操作需要 Git 仓库。</span>
+          </div>
+        ) : null}
+
+        {/* 失败不静默（§16.5）：成功态已收进状态条一行，失败才占一块说清-
+            楚。真实 Git 执行错误/权限/目录失效仍在此（NOT_A_GIT_REPO 已分流为上方中性态）。 */}
         {git?.lastOp && !git.lastOp.ok ? (
           <div className="panel danger" style={{ marginBottom: 14 }}>
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> {git.lastOp.op} 失败</div>

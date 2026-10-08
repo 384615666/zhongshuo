@@ -1004,6 +1004,8 @@ export interface GitState {
   status: GitStatusEntry[];
   /** 已经写好的提交信息草稿 */
   commitMessage: string;
+  /** R71：普通非 Git 目录（中性形态——文件阅读可用；Git 页操作按无仓库处理） */
+  notARepo?: boolean;
   /** 最近一次操作的如实结果；失败时保留原因而不是静默 */
   lastOp?: {
     op: string;

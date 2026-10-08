@@ -1156,7 +1156,7 @@ export const ATTACHMENT_LIMITS = {
   text: 256 * 1024,
   image: 8 * 1024 * 1024,
   pdf: 20 * 1024 * 1024,
-  office: 20 * 1024 * 1024,
+  office: 32 * 1024 * 1024, // R71：与 daemon OFFICE_MAX_BYTES 分道对齐（真实 22.54MiB PPT）
   csv: 5 * 1024 * 1024,
 } as const;
 
@@ -1172,7 +1172,7 @@ export function classifyAttachmentFile(name: string, size: number): AttachmentCl
   if (/\.(png|jpe?g|gif|webp)$/.test(lower)) return size > ATTACHMENT_LIMITS.image ? { cls: 'unsupported', reason: `图片原件超过 ${ATTACHMENT_LIMITS.image / 1024 / 1024}MB 上限` } : { cls: 'image' };
   if (/\.(pdf)$/.test(lower)) return size > ATTACHMENT_LIMITS.pdf ? { cls: 'unsupported', reason: `PDF 超过 ${ATTACHMENT_LIMITS.pdf / 1024 / 1024}MiB 上限` } : { cls: 'pdf' };
   if (/\.(csv|tsv)$/.test(lower)) return size > ATTACHMENT_LIMITS.csv ? { cls: 'unsupported', reason: `CSV 超过 ${ATTACHMENT_LIMITS.csv / 1024 / 1024}MB 上限` } : { cls: 'csv' };
-  if (OFFICE_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.office ? { cls: 'unsupported', reason: `Office 原件超过 ${ATTACHMENT_LIMITS.office / 1024 / 1024}MiB 上限` } : { cls: 'office' };
+  if (OFFICE_EXTS.test(lower)) return size > ATTACHMENT_LIMITS.office ? { cls: 'unsupported', reason: `Office 原件 ${(size / 1048576).toFixed(1)}MiB 超过 ${(ATTACHMENT_LIMITS.office / 1048576).toFixed(0)}MiB 上限` } : { cls: 'office' };
   return { cls: 'unsupported', reason: '未接入的附件类型（文本/图片/PDF/Office/CSV 之外）' };
 }
 

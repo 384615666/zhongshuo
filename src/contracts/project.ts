@@ -49,6 +49,10 @@ export const directoryIdentitySchema = z.strictObject({
 export interface Project {
   id: ProjectId;
   displayName: string;
+  /** R71（R64 登记）：注册表真实路径直出（此前仅 project.list 回——open 响应缺失）。
+   *  rootPath=用户打开时的入口路径；canonicalPath=realpath 规范身份（身份键由此派生）。 */
+  rootPath?: string;
+  canonicalPath?: string;
   directoryIdentity: DirectoryIdentity;
   status: ProjectStatus;
   revision: Revision;
@@ -62,6 +66,8 @@ export interface Project {
 export const projectSchema = z.strictObject({
   id: z.string().min(1),
   displayName: z.string().min(1),
+  rootPath: z.string().optional(),
+  canonicalPath: z.string().optional(),
   directoryIdentity: directoryIdentitySchema,
   status: z.enum(['active', 'archived', 'directory_missing', 'removed']),
   revision: z.number().int().nonnegative(),

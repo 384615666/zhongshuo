@@ -405,7 +405,7 @@ async function uploadDocumentAttachment(
   }
   const raw = Buffer.from(params.contentBase64, 'base64');
   if (raw.length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '文档内容为空');
-  if (raw.length > params.byteCap) throw new DaemonCommandError('VALIDATION_INVALID', `文档原件 ${raw.length}B 超过上限 ${params.byteCap}B（明确规则拒绝）`);
+  if (raw.length > params.byteCap) throw new DaemonCommandError('VALIDATION_INVALID', `文档原件 ${raw.length.toLocaleString('en-US')}B（约 ${(raw.length / 1048576).toFixed(1)}MiB）超过上限 ${(params.byteCap / 1048576).toFixed(0)}MiB（明确规则拒绝——不静默截断保存）`);
   const hash = createHash('sha256').update(raw).digest('hex');
   const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
   mkdirSync(blobRoot, { recursive: true });
@@ -458,6 +458,7 @@ async function uploadDocumentAttachment(
     // PK 头缺失）、超限——安全边界不因分列放宽。
     const parseOutcome = params.parseKind === 'office'
       ? await runOfficeSniff(blobPath, hash)
+      // R71：pdf/csv 截止维持默认 30s（此处 parseKind 只为这两种；office 分支在 runOfficeSniff）。
       : await getParsePool().run(params.parseKind, blobPath, hash);
     if (!parseOutcome.ok) {
       const hardReject = parseOutcome.error.code === 'docx-macro' || parseOutcome.error.code.startsWith('zip-')
@@ -517,7 +518,7 @@ async function runOfficeSniff(blobPath: string, hash: string): Promise<{ ok: tru
   if (raw.subarray(0, 4).toString('latin1') !== 'PK\u0003\u0004') {
     return { ok: false, error: { code: 'office-corrupt', message: '内容不是 Office 文档（zip 头 PK 缺失——不以扩展名冒充）' } };
   }
-  return getParsePool().run('office', blobPath, hash);
+  return getParsePool().run('office', blobPath, hash, { deadlineMs: 120_000 });
 }
 
 /** 文档缓存保障（预览/注入共用）：副本实根+实身份+sha256 核对 → 缓存严格校验 → 无效则
@@ -1863,7 +1864,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
         const { gitRepoStatus } = await import('./gitStatus.ts');
         const r = await gitRepoStatus(project.canonical_path);
-        if (!r.ok) throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? 'VALIDATION_INVALID' : 'STORAGE_UNAVAILABLE', r.message);
+        // R71：NOT_A_GIT_REPO 保留原码透传（UI 中性态分列——普通目录≠失败；真实 Git 错误仍 STORAGE_UNAVAILABLE）。
+        if (!r.ok) throw new DaemonCommandError(r.code === 'NOT_A_GIT_REPO' ? ('NOT_A_GIT_REPO' as never) : 'STORAGE_UNAVAILABLE', `${r.code}: ${r.message}`);
         return withCommandId({ ok: true, data: r });
       }
       case 'git.diff': {
@@ -2923,10 +2925,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // Office 三类（第二十九轮四）：zip 头+[Content_Types] 嗅探定类（DOCX/XLSX/PPTX）——
         // 逐类结构由解析子进程校验；宏/模板变体拒绝；外部关系不加载、公式不执行、图片不解码。
         // 四能力分别记录（保存/预览/提取/受限输入）——"可上传"不等于完成。
+        // R71：base64 参数上限 48MiB（32MiB 原件 ×4/3≈44.9MiB；PDF 分道仍 28MiB）。
         const params = z.strictObject({
           conversationId: z.string().min(1),
           filename: z.string().min(1).max(200),
-          contentBase64: z.string().min(1).max(28 * 1024 * 1024),
+          contentBase64: z.string().min(1).max(48 * 1024 * 1024),
         }).parse(env.params);
         const r = await uploadDocumentAttachment(deps, run, { scope, commandId: env.commandId, payloadHash }, {
           conversationId: params.conversationId,
@@ -2998,7 +3001,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
           if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
           if (verified.raw.length > OFFICE_MAX_BYTES) {
-            visualBytesReason = `原件 ${verified.raw.length}B 超视觉通道上限（${OFFICE_MAX_BYTES}B）——视觉预览不可用，文字提取不受影响`;
+            visualBytesReason = `原件 ${verified.raw.length.toLocaleString('en-US')}B（约 ${(verified.raw.length / 1048576).toFixed(1)}MiB）超视觉通道上限 ${(OFFICE_MAX_BYTES / 1048576).toFixed(0)}MiB——视觉预览不可用，文字提取不受影响`;
           } else {
             visualBytesBase64 = verified.raw.toString('base64');
             visualBytesAvailable = true;
@@ -4627,7 +4630,7 @@ function resolveProjectPreviewFile(
   let mtimeMs: number;
   try {
     const st = statSync(realTarget);
-    if (st.size > cap) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size}B 超只读上限 ${cap}B（完整阅读/原件保存拒绝——不静默截断）`);
+    if (st.size > cap) throw new DaemonCommandError('VALIDATION_INVALID', `项目文件 ${st.size.toLocaleString('en-US')}B（约 ${(st.size / 1048576).toFixed(1)}MiB）超只读上限 ${(cap / 1048576).toFixed(0)}MiB（完整阅读/原件保存拒绝——不静默截断）`);
     raw = readFileSync(realTarget);
     mtimeMs = st.mtimeMs;
   } catch (error) {
