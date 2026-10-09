@@ -15,6 +15,7 @@ import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead,
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
+import { currentNavSeq } from './lib/router';
 import { navIntentActive, cancelAllNavIntents, type NavIntent } from './lib/navIntent';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
@@ -332,38 +333,83 @@ export async function collabSet(projectId: string, patch: { absenceToleranceMs?:
 export async function pickAndOpenFolder(): Promise<void> {
   const dir = await bridge().pickFolder();
   if (dir == null) return;
-  await openProjectByPath(dir).catch((e) => {
+  const opened = await openProjectByPath(dir).catch((e): { id: string } => {
     toast(`打开项目失败：${(e as Error).message}`, 'error');
     // r58 P4：已有项目在用时打开/切换失败**不降级启动态**——当前项目保持可用（错误走
     // toast）；boot:failed 只描述「首启无项目」场景，避免误导性失败横幅。
     setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: (e as Error).message } : s));
+    return { id: '' };
   });
+  // R75：按本次目标落位（打开动作始终绑定目标——不读异步结束时的 activeProjectId）。
+  if (opened.id !== '') {
+    const st = getState();
+    const first = st.rooms.find((r) => r.projectId === opened.id);
+    const { navigate } = await import('./lib/router');
+    navigate(first != null ? `/project/${opened.id}/room/${first.id}` : `/project/${opened.id}`);
+  }
 }
 
-export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntent }): Promise<void> {
+export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntent }): Promise<{ id: string }> {
   // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
   // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
   // R73：fromIntent=定位/对齐链内部调用（不取消所属意图）；用户级打开（打开文件夹/启动恢复）
-  // 取消所有在途定位意图——旧定位不得在新项目落位后把焦点抢回去。
+  // 取消所有在途定位意图。
   // R74（review-r73 §P1）：fromIntent 只是「不取消自己」的布尔开关，**取消凭据必须贯穿函数
   // 内部**——project.open 回执之后、焦点/可见集合提交、本地导航记忆（zs.lastProjectPath）、
   // persistNav 之前逐一核有效性。用户跳走（navigate/新深链/切项目/返回）的旧打开安静收尾：
   // 不切项目、不写偏好、不弹旧错误、不再重试。
+  // R75（review-r74 §P1/§P2）：①落位所有权——提交时登记 openInFlightTarget（目标+发起时
+  // URL 代次），打开窗口内陈旧路由让位（见 App/ProjectHome）；返回**本次目标 id**，调用方
+  // （打开弹窗）按目标落位，不按异步结束时的 activeProjectId。②取消回滚完整性——装载刷新期
+  // 取消不只还原焦点：zs.lastProjectPath 与本操作整表替换的 rooms/members/memberRuntimes/dms
+  // 投影一并还原（只撤销本操作仍拥有的值；项目注册表不回滚——注册是既成事实）。
   if (opts?.fromIntent !== true) cancelAllNavIntents();
   const intent = opts?.intent;
+  const urlSeqAtStart = currentNavSeq();
   const prevFocus = getState().activeProjectId; // 装载刷新期取消时还原焦点（仅当焦点仍指向本次结果）
+  let prevLastPath: string | null = null;
+  try { prevLastPath = localStorage.getItem('zs.lastProjectPath'); } catch { prevLastPath = null; }
+  const prevProjections = {
+    rooms: getState().rooms,
+    members: getState().members,
+    memberRuntimes: getState().memberRuntimes,
+    dms: getState().dms,
+  };
   const gen = getState().loadGen + 1;
   setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null, openInFlight: true }));
+  let openedId: string | null = null; // 提交时置——回滚只针对本次已提交的目标
+  /** R75：装载期取消/装载失败+取消共用回滚——焦点/本地记忆/整表投影还原到入口快照。
+   * 守卫：本次确已提交、焦点仍指向本次目标且无更新代次、且不是同项目重开——
+   * 不覆盖用户随后主动切走的项目/新打开（review-r74 §P2）。 */
+  const rollbackOwned = (): boolean => {
+    if (openedId == null || prevFocus === openedId) return false;
+    const cur = getState();
+    if (cur.loadGen !== gen || cur.activeProjectId !== openedId) return false;
+    setState((s) => ({
+      ...s,
+      activeProjectId: prevFocus,
+      rooms: prevProjections.rooms,
+      members: prevProjections.members,
+      memberRuntimes: prevProjections.memberRuntimes,
+      dms: prevProjections.dms,
+    }));
+    try {
+      if (prevLastPath == null) localStorage.removeItem('zs.lastProjectPath');
+      else localStorage.setItem('zs.lastProjectPath', prevLastPath);
+    } catch { /* 本地记忆不可写——尽力 */ }
+    return true;
+  };
   try {
     const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
-    if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
+    if (getState().loadGen !== gen) return { id: '' }; // 期间有更新的打开请求——旧响应丢弃
     if (!navIntentActive(intent)) {
       // project.open 在途回执到达时定位意图已取消（review-r73 反例：URL 已是 settings 而
       // activeProjectId 被旧请求切成 A + 取消后 navigation.set(A)）——零提交。
       recordWrite('project.open.cancelled', `「${path}」回执到达时定位意图已取消——零提交（焦点/可见集合/本地记忆/导航偏好均未改动）`);
-      return;
+      return { id: '' };
     }
     const p = data.project;
+    openedId = p.id;
     recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已注册·幂等重开）'}`);
     // R65（review-r64 §1A/§4A）：**合并不替换**——B 打开后 A 仍在侧栏/注册表；焦点/可见/展开
     // 各自 upsert（不覆盖其它项目的显示偏好）；旧项目的房间/主池缓存保留为事实，重进即用。
@@ -382,25 +428,33 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
         activeProjectId: p.id,
         visibleProjectIds: [...new Set([...s.visibleProjectIds, p.id])],
         expandedProjectIds: [...new Set([...s.expandedProjectIds, p.id])],
+        openInFlightTarget: { projectId: p.id, urlSeqAtStart }, // R75：陈旧路由让位（App/ProjectHome 消费）
       };
     });
     try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
     await Promise.all([loadProjectRegistry(), refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
     if (!navIntentActive(intent)) {
-      // 成员/房间/DM 装载等待期取消到达——不写导航偏好；焦点已提交的还原到打开前的项目
-      //（仅当焦点仍指向本次结果且无更新代次——不覆盖用户随后主动切到的项目；旧项目的
-      // 房间缓存是事实，还原后仍可用）。
-      recordWrite('project.open.cancelled', `「${p.displayName}」装载期间定位意图已取消——跳过导航偏好写入${getState().activeProjectId === p.id && prevFocus !== p.id ? '，焦点还原到打开前项目' : ''}`);
-      if (getState().loadGen === gen && getState().activeProjectId === p.id && prevFocus !== p.id) {
-        setState((s) => ({ ...s, activeProjectId: prevFocus }));
-      }
-      return;
+      // 成员/房间/DM 装载等待期取消到达——不写导航偏好；本操作拥有的状态回滚到入口快照
+      //（焦点/本地记忆 zs.lastProjectPath/整表投影；房间缓存是事实但被本波整表替换——还原）。
+      const rolled = rollbackOwned();
+      recordWrite('project.open.cancelled', `「${p.displayName}」装载期间定位意图已取消——跳过导航偏好写入${rolled ? '，焦点/本地记忆/装载投影已还原到打开前' : '（焦点已不在本次目标——不回滚，尊重用户后续选择）'}`);
+      return { id: '' };
     }
     const { persistNav } = await import('./data/store');
     persistNav(getState()); // R65：服务端导航偏好同步（跨机权威；本地 localStorage 为快速镜像）
+    return { id: p.id }; // R75：本次目标 id——调用方按此落位（不读异步结束时的 activeProjectId）
+  } catch (e) {
+    if (!navIntentActive(intent)) {
+      // 装载失败 + 意图已取消（review-r74 §P2 覆盖面）：与装载期取消同口径回滚，安静收尾
+      //（不向已离开的用户弹旧错误）；未取消的失败照旧抛出（调用方如实提示）。
+      rollbackOwned();
+      recordWrite('project.open.cancelled', `「${path}」装载失败且定位意图已取消——按取消口径收尾（不弹旧错误）`);
+      return { id: '' };
+    }
+    throw e;
   } finally {
-    // 在途结束（成功/失败/被取代）——按代次条件清：旧调用的收尾不清掉更新调用的标记。
-    setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false } : s));
+    // 在途结束（成功/失败/被取代/取消）——按代次条件清：旧调用的收尾不清掉更新调用的标记/目标。
+    setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false, openInFlightTarget: null } : s));
   }
 }
 

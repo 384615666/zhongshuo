@@ -7,7 +7,7 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron';
-import { writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -314,6 +314,7 @@ app.whenReady().then(async () => {
   // pickFolder 与 daemon 无依赖，立即可用。受控延迟钩子（测试同步点）：
   // ZS_UI_DAEMON_DELAY_MS=daemon 启动前延迟；ZS_UI_FIRST_COMMAND_DELAY_MS=首条命令响应延迟。
   let firstCommandDelayed = false;
+let pickFolderSeq = 0; // R75 测试钩子：ZS_PICK_FOLDER_FILE 按序弹出计数
 let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / ZS_H1_LOSE_SUBMIT_TIMES=N）
   // 本机可信 UI 的 IPC sender 校验（第三十一轮三）：preload 桥（zs:command/openPath/pickFolder）
   // 只接受**本应用窗口**（zsres://app/ 源）的帧——其他任何加载进该窗口的内容拿不到桥；
@@ -376,6 +377,17 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
     assertTrustedSender(event);
     // 自动化测试钩子（仅显式 ZS_PICK_FOLDER 时替代原生对话框返回值；后续链路不变）。
     if (process.env.ZS_PICK_FOLDER != null) return process.env.ZS_PICK_FOLDER;
+    // R75：ZS_PICK_FOLDER_FILE=按行排列的目录清单——每次调用按序弹出下一行（一次运行内经真实弹窗连续打开多个项目）；
+    // 取尽返回 null（等价取消选择）。同为工程观测钩子，产品默认不设置。
+    const pickListPath = process.env.ZS_PICK_FOLDER_FILE;
+    if (pickListPath != null && pickListPath.length > 0) {
+      try {
+        const lines = readFileSync(pickListPath, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+        const picked = lines[pickFolderSeq] ?? null;
+        pickFolderSeq += 1;
+        return picked;
+      } catch { return null; /* 清单不可读——等价取消 */ }
+    }
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });

@@ -12,7 +12,7 @@ import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from './shell';
 import { getState } from './data/store';
 import { command } from './bridge';
-import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
+import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive } from './lib/navIntent';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
@@ -661,7 +661,21 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     // 丢弃。先对齐（已装载=轻切焦点；未装载=全链打开），对齐后本路由自然重渲 RoomPage。
     // R73：**活跃≠已装载**——applyServerNavPrefs 恢复 active 但房间未装时（冷房间直链）
     // 同样要对齐，否则 RoomPage 落「找不到该房间」（review-r72 §2 源码疑点，先证后修）。
+    // R75（review-r74 §P1/§P2）：打开链所有权——
+    //  ①**本项目的打开在途**（openInFlightTarget=pid）：保持对齐分支挂载（ProjectAlign
+    //    及其意图存活），装载波收尾后自然切 RoomPage。此前房间中途就绪就让 RoomPage 抢挂、
+    //    ProjectAlign 卸载释放意图——用户此刻跳走时波内已无主（navigation.set(A) 照写，
+    //    review-r74 §P2 反例）；而卸载即取消又会把成功交接误判取消（project.open 循环）。
+    //  ②**他项目的用户打开在途**且 URL 自该打开起未变（弹窗期用户点不了侧栏）：本路由是
+    //    打开前的陈旧 URL——让位，不抢回焦点（打开动作自身按目标落位导航）。
+    const openT = s.openInFlightTarget;
+    if (openT != null && openT.projectId === pid) {
+      return <div className="main"><div className="page"><div className="panel info">正在打开所属项目…</div><ProjectAlign projectId={pid} /></div></div>;
+    }
     if (pid !== s.activeProjectId || !s.rooms.some((r) => r.projectId === pid)) {
+      if (openT != null && openT.projectId !== pid && openT.urlSeqAtStart >= currentNavSeq()) {
+        return <div className="main"><div className="page"><div className="panel info">正在打开项目…</div></div></div>;
+      }
       return <div className="main"><div className="page"><div className="panel info">正在打开所属项目…</div><ProjectAlign projectId={pid} /></div></div>;
     }
     return (
@@ -699,7 +713,11 @@ function RedirectTo({ to }: { to: string }) {
 }
 
 /** R72：项目路由对齐器（房间/线程跨项目跳转前置）——对齐成功由路由自然重渲接管。
- *  R73：意图登记——用户跳走/切项目后，链内每个 await 之后不再抢焦点/写偏好/弹旧错。 */
+ * R73：意图登记——用户跳走/切项目后，链内每个 await 之后不再抢焦点/写偏好/弹旧错。
+ * R75：卸载≠必然取消——**目标已达成**（本项目已活跃且房间已装载=装载波中途路由就
+ * 切到 RoomPage 的成功交接）只释放不取消；否则（用户真跳走/组件被替换）才取消。
+ * 此前无条件取消会让装载波收尾被误判为取消并回滚整表投影——路由又回对齐分支，
+ * 形成 project.open 无限循环（r75 探针 cmds.log 实证）。 */
 function ProjectAlign({ projectId }: { projectId: string }) {
   useEffect(() => {
     const intent = registerNavIntent();
@@ -713,7 +731,17 @@ function ProjectAlign({ projectId }: { projectId: string }) {
         navigate('/', { replace: true });
       }
     })();
-    return () => { intent.cancelled = true; releaseNavIntent(intent); };
+    return () => {
+      // 卸载≠必然取消，判据=**URL 是否仍指向本项目**：
+      // ①装载波中途房间就绪、路由自然切到 RoomPage（成功交接）——hash 未变（仍在
+      // /project/<pid>/…），只释放不取消（否则装载收尾被误判取消并回滚整表投影，
+      // 路由又回对齐分支形成 project.open 无限循环——r75 探针 cmds.log 实证 47k 条）；
+      // ②用户跳走（hash 变成设置页/其它项目）——取消，链内安静停+回滚本操作拥有的状态。
+      const h = window.location.hash.replace(/^#/, '') || '/welcome';
+      const stillOnThisProject = h === `/project/${projectId}` || h.startsWith(`/project/${projectId}/`);
+      if (stillOnThisProject !== true) intent.cancelled = true;
+      releaseNavIntent(intent);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
   return null;

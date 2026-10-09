@@ -74,6 +74,14 @@ export interface HifiExtension {
    *（openProjectByPath 入口置位、收尾清除；避免「打开在途时观察器抢代次」覆盖用户选择）。 */
   openInFlight: boolean;
   /**
+   * R75：在途用户打开的**落位目标**（提交时置、收尾清）。
+   * 打开窗口内（提交→装载刷新→persistNav）URL 仍是打开前的旧路由：
+   * 当目标≠旧路由 pid 且 URL 代次自打开发起未再前进时，旧路由（房间/项目主页对齐）
+   * 让位——不再由它们把焦点抢回扚项目（review-r74 §P1：从房间打开弹窗选 B 被旧 A 路由抢回）。
+   * 弹窗完成后按本目标 id（而非异步结束时的 activeProjectId）落位导航。
+   */
+  openInFlightTarget?: { projectId: string; urlSeqAtStart: number } | null;
+  /**
    * daemon 实时连接态（r55：标题栏接真实断连/重连——首启 ready 不能永久等同在线）。
    * main 进程在管道关闭时发 zs:disconnect、重连成功后发 zs:reconnected；浏览器宿主
    * （探针/无 preload）收不到事件，保持 'online' 缺省并按 boot 呈现。connInfo 为断线
@@ -132,7 +140,7 @@ function makeEmptyState(): HifiState {
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
-    boot: 'pending', bootError: null, openInFlight: false,
+    boot: 'pending', bootError: null, openInFlight: false, openInFlightTarget: null,
     conn: 'online', connInfo: null,
     savedMessageRefs: {},
     draftInserts: {},

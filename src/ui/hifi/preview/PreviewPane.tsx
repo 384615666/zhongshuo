@@ -537,6 +537,7 @@ export function PreviewPane({
           key={`${resource.id}:${active.revision}`}
           resource={resource}
           revision={revision}
+          context={context}
           viewMode={viewMode}
           wrapSource={wrapSource}
           zoom={zoom}
@@ -697,8 +698,9 @@ function dropLoadedCache(resourceId: string): void {
   }
 }
 
-function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComment, onDownload }: {
+function FileStage({ resource, revision, context, viewMode, wrapSource, zoom, onOpenComment, onDownload }: {
   resource: PreviewResource; revision: ResourceRevision;
+  context: ContextTarget;
   viewMode: 'preview' | 'source'; wrapSource: boolean; zoom: number;
   onOpenComment: () => void; onDownload: () => void;
 }) {
@@ -843,7 +845,7 @@ function FileStage({ resource, revision, viewMode, wrapSource, zoom, onOpenComme
   // ---------- 文本类（text/code/markdown/html/csv；交付报告走 delivery 视图） ----------
   const text = loaded.text ?? '';
   if (resource.formalDelivery != null) {
-    return <DeliveryDocView resource={resource} revision={revision} rawText={text} delivery={loaded.delivery} viewMode={viewMode} wrapSource={wrapSource} onOpenComment={onOpenComment} onOpenWorktreeFile={(path, bytes) => openWorktreeFileFromDelivery(resource.projectId, path, bytes)} />;
+    return <DeliveryDocView resource={resource} revision={revision} rawText={text} delivery={loaded.delivery} viewMode={viewMode} wrapSource={wrapSource} onOpenComment={onOpenComment} onOpenWorktreeFile={(path, bytes) => openWorktreeFileFromDelivery(resource.projectId, path, bytes, context)} />;
   }
   if (loaded.originalBytes === 0 && text.length === 0) {
     return (
@@ -1062,9 +1064,15 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
 
 
 /** R70 F7：从交付报告打开 AI 实际产出的文件（工作区资源——同一阅读器；不冒充交付快照）。 */
-function openWorktreeFileFromDelivery(projectId: string, path: string, sizeBytes: number): void {
+/**
+ * 交付文档内「打开文件」：按**当前预览上下文**作为 openedFrom（R74-A 语义——对话内
+ * 主动打开=显式，不被自动收起折叠）。此前硬编码 files 来源：R74 上线自动收起后，
+ * 线程里点交付文件会**即刻被折叠**（r72 门 G1 成果文件视图超时暴露——files 来源+
+ * explicitShow=false 命中自动收起判据）。
+ */
+function openWorktreeFileFromDelivery(projectId: string, path: string, sizeBytes: number, openedFrom: ContextTarget): void {
   const resId = registerWorktreeResource(projectId, path, sizeBytes);
-  openPreviewTab(resId, 1, { target: { kind: 'files', projectId, view: 'files', selection: path } });
+  openPreviewTab(resId, 1, { target: openedFrom });
 }
 
 /* ============================================================

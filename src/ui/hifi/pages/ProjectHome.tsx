@@ -11,7 +11,7 @@ import { useStore, toast } from '../shell';
 import { activeTasksOfProject, coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
 import { switchFocusProject, projectLifecycleReal, openProjectByPath } from '../loader';
 import { relTime } from '../lib/format';
-import { navigate } from '../lib/router';
+import { navigate, currentNavSeq } from '../lib/router';
 import { CreateRoomModal } from './Room';
 
 /* ============================================================
@@ -38,12 +38,15 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
     if (pickedPath == null) return;
     setBusy(true);
     try {
-      await openProjectByPath(pickedPath);
+      // R75（review-r74 §P1）：落位按**本次打开目标**（返回 id）——不读异步结束时的
+      // activeProjectId（旧房间路由/其它装载可能已改写它）。取消/被取代时 id=''：不落位。
+      const opened = await openProjectByPath(pickedPath);
       onClose();
-      // 落点：新（或重开）项目的第一个房间
+      if (opened.id === '') return;
       const st = (await import('../data/store')).getState();
-      const first = st.rooms.find((r) => r.projectId === st.activeProjectId);
-      if (first != null) navigate(`/project/${st.activeProjectId}/room/${first.id}`);
+      const first = st.rooms.find((r) => r.projectId === opened.id);
+      if (first != null) navigate(`/project/${opened.id}/room/${first.id}`);
+      else navigate(`/project/${opened.id}`);
     } catch (e) {
       toast(`打开项目失败：${(e as Error).message}（选择保留，可重试或换目录）`, 'error');
     } finally { setBusy(false); }
@@ -207,10 +210,17 @@ export function RelocateButton({ projectId }: { projectId: string }) {
 export function ProjectHomePage({ projectId }: { projectId: string }) {
   const s = useStore((x) => x);
   const activeId = useStore((x) => x.activeProjectId);
+  const openTarget = useStore((x) => x.openInFlightTarget);
   useEffect(() => {
     // 深链/直开项目主页=聚焦该项目（原型语义：项目页上下文即该项目；已聚焦则不重复刷新）。
-    if (activeId !== projectId) void switchFocusProject(projectId);
-  }, [projectId, activeId]);
+    // R75（review-r74 §P1）：在途用户打开的落位目标≠本页项目且 URL 自打开发起未再变——
+    // 本页是**打开前的陈旧路由**，不抢焦点（打开动作自身按目标落位）；用户其后主动导航
+    // 过（代次前进）或目标正是本页项目 → 照常聚焦。
+    if (activeId !== projectId) {
+      if (openTarget != null && openTarget.projectId !== projectId && openTarget.urlSeqAtStart >= currentNavSeq()) return;
+      void switchFocusProject(projectId);
+    }
+  }, [projectId, activeId, openTarget]);
   // R68（与 DmPage 同判）：重载/偏好恢复后 activeProjectId 已=本项目时 switchFocusProject
   // 早退——房间/成员投影无人装载，页面会停在空态。挂载即补一次轻量装载。
   useEffect(() => {

@@ -7,10 +7,18 @@
 import { useEffect, useState } from 'react';
 import { cancelAllNavIntents } from './navIntent';
 
+/**
+ * URL 代次（R75）：每次 hashchange +1。openProjectByPath 在入口记录 currentNavSeq()，
+ * 打开窗口内若 URL 未再变（代次未前进），旧路由视为**打开前的陈旧 URL** 让位——
+ * 不由它对齐抢回焦点；用户在打开发起后主动导航（代次前进）则路由照常工作。
+ */
+let navSeqCounter = 0;
+export function currentNavSeq(): number { return navSeqCounter; }
+
 export function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash.replace(/^#/, '') || '/welcome');
   useEffect(() => {
-    const onChange = () => setHash(window.location.hash.replace(/^#/, '') || '/welcome');
+    const onChange = () => { navSeqCounter += 1; setHash(window.location.hash.replace(/^#/, '') || '/welcome'); };
     window.addEventListener('hashchange', onChange);
     /**
      * 挂上监听后立刻补读一次。
