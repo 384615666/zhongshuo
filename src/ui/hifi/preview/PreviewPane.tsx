@@ -194,11 +194,33 @@ export function PreviewPane({
   const resource = active ? resourceOf(s, active.resourceId) : undefined;
   const revision = resource && active ? revOf(resource, active.revision) : undefined;
 
-  // 恢复阅读位置
+  // 恢复阅读位置。R74-P2：挂载时内容往往还没长到位（工作区/附件正文异步装载，
+  // scrollHeight 尚小）——一次性赋值会被钳到 0（r73 实测 reopen 后 scrollTop=0）。改为
+  // 逐帧重试到目标可达为止（有界）；用户一动手（滚轮/按下）即停，不与用户抢滚动。
   useEffect(() => {
-    if (bodyRef.current && active) bodyRef.current.scrollTop = active.scrollTop;
+    const el = bodyRef.current;
+    if (el == null || active == null) return;
+    const target = active.scrollTop ?? 0;
+    if (target <= 0) return;
+    let raf = 0;
+    let tries = 0;
+    const stop = () => { if (raf !== 0) cancelAnimationFrame(raf); raf = 0; };
+    const tick = () => {
+      const e = bodyRef.current;
+      // 只在目标可达时赋值：内容未长到位就赋值会被钳制，且触发的 scroll 事件会让
+      // rememberScroll 把**钳制值**写回标签（等于丢位置——r74 实测反例）。
+      if (e != null && e.scrollHeight - e.clientHeight >= target - 1) {
+        e.scrollTop = target;
+        if (Math.abs(e.scrollTop - target) <= 1) return; // 已落位
+      }
+      if (tries++ < 90) raf = requestAnimationFrame(tick); // ~1.5s 内内容装载完成即恢复
+    };
+    tick();
+    el.addEventListener('wheel', stop, { once: true, passive: true });
+    el.addEventListener('pointerdown', stop, { once: true, passive: true });
+    return () => { stop(); el.removeEventListener('wheel', stop); el.removeEventListener('pointerdown', stop); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.key]);
+  }, [active?.key, revision?.content]);
 
   const isWorktree = resource?.formalWorktree != null;
   const isDelivery = resource?.formalDelivery != null;

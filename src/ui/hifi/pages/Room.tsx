@@ -45,7 +45,7 @@ import {
 import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary } from '../data/types';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
 import { audienceAllows, resourceOf } from '../lib/resource';
-import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation } from '../data/actions-preview';
+import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
 import { useElementWidth } from '../lib/useElementWidth';
 
@@ -248,25 +248,17 @@ export function RoomPage({
   );
 
   /**
-   * R73-A：文件页来源的预览**不占房间**。进入对话上下文（房间/线程）时，若预览可见、
-   * 用户未显式要求看见（explicitShow）、且当前上下文可见的标签**全部**来自文件页
-   * （工作区只读资源 audience=project，房间过滤本就放行——这就是此前「预览占着房间」
-   * 的机制），则自动收起：只改可见性，标签/阅读位置/各草稿全保留，房间头部「文件预览」
-   * 重开按钮可恢复（恢复即显式，本会话不再自动收起）。
-   * 房间内正常打开的文件（openedFrom=room/thread）不触发；DM 资源在房间上下文本就
-   * 不可见（visiblePreviewTabs 过滤），无需处理。
+   * R73-A：文件页来源的预览**不占房间**。进入对话上下文（房间/线程）时自动收起：只改可见性，
+   * 标签/阅读位置/各草稿全保留，房间头部「文件预览」重开按钮可恢复（恢复即显式，本会话不再
+   * 自动收起）。房间内正常打开的文件（openedFrom=room/thread，explicitShow=true）不触发；
+   * DM 资源在房间上下文本就不可见（audience 过滤），无需处理。
+   * R74-P2（review-r73 §P2）：判据改为**当前活动预览的来源**（shouldAutoHidePreviewFor）——
+   * 房间里保留的历史标签（room-file.md）不再让「全部标签都来自文件页」条件失效；只有本次
+   * 文件页活动（activeKey 指向 files 来源标签且未显式恢复）才收起。
    */
   const autoHideCtxKey = `${s.activeProjectId}:${roomId}:${threadId ?? ''}:${roomTab}`;
   useEffect(() => {
-    const st = getState();
-    if (st.preview.hidden || st.preview.tabs.length === 0) return;
-    if (st.preview.explicitShow === true) return;
-    const visible = st.preview.tabs.filter((t) => {
-      const res = resourceOf(st, t.resourceId);
-      return res ? audienceAllows(res.audience, context) : false;
-    });
-    if (visible.length === 0) return;
-    if (visible.every((t) => t.openedFrom?.target.kind === 'files')) {
+    if (shouldAutoHidePreviewFor(context)) {
       autoHidePreviewForConversation(autoHideCtxKey);
     }
     // s.resources 必须在依赖里：在途工作区读取（大文件 readFull）的资源登记晚于进房，

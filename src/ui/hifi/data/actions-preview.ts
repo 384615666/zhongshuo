@@ -293,6 +293,26 @@ export function autoHidePreviewForConversation(reason: string) {
   recordWrite('preview.autoHide', `进入对话上下文自动收起（${reason}）——标签/阅读位置/草稿保留，重开按钮可恢复`);
 }
 
+/**
+ * R74-P2（review-r73 §P2 混合标签反例）：进入对话上下文（房间/线程/私信）时是否自动收起。
+ * 判据=**当前活动预览的来源**（本次文件页活动的最后动作），而非「历史全部标签都来自文件页」
+ * ——保留的房间/线程历史标签不再阻止收起；用户随后手动激活的非文件页标签也不收起。
+ * explicitShow=true（房间/线程/私信内主动打开、或显式重开）恒不收起；本上下文无可见标签
+ * （跨项目/私信隔离）不动全局状态。
+ */
+export function shouldAutoHidePreviewFor(target: ContextTarget): boolean {
+  const st = getState();
+  if (st.preview.hidden || st.preview.tabs.length === 0) return false;
+  if (st.preview.explicitShow === true) return false;
+  const visible = st.preview.tabs.filter((t) => {
+    const res = resourceOf(st, t.resourceId);
+    return res ? audienceAllows(res.audience, target) : false;
+  });
+  if (visible.length === 0) return false;
+  const active = visible.find((t) => t.key === st.preview.activeKey) ?? visible[0];
+  return active.openedFrom?.target.kind === 'files';
+}
+
 export function closeAllPreviews() {
   const n = getState().preview.tabs.length;
   setState((s) => ({

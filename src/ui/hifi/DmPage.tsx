@@ -26,7 +26,8 @@ import { navigate, pathOf, useHashRoute } from './lib/router';
 import { useElementWidth } from './lib/useElementWidth';
 import { SIDEBAR_WIDTH } from './lib/layout';
 import { audienceAllows, resourceOf } from './lib/resource';
-import { PreviewPane } from './preview/PreviewPane';
+import { autoHidePreviewForConversation, shouldAutoHidePreviewFor } from './data/actions-preview';
+import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
 
 const EXEC_TEXT: Record<string, string> = {
   idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
@@ -133,6 +134,20 @@ export function DmPage() {
   /** R69 P1-A：store.openPreview 已在调度层直接开标签——挂载判定回归 dmShowPreview，
    *  不再需要「legacy 单目标待归一」的额外挂载条件（死锁桥已拆除）。 */
   const dmMountPreview = active != null && dmShowPreview;
+
+  /**
+   * R74-P2（review-r73 §P2）：文件页来源的预览**不占私信**——工作区资源 audience=project 在
+   * DM 上下文同样放行（audienceAllows），侧栏点进私信与点进房间是同一占用问题。判据与房间
+   * 一致（shouldAutoHidePreviewFor：当前活动预览来源+explicitShow）；私信内主动打开/显式重开
+   * 恒尊重，标签与阅读位置保留。
+   */
+  const dmAutoHideKey = active != null ? `dm:${active.projectId}:${active.id}` : '';
+  useEffect(() => {
+    if (active != null && shouldAutoHidePreviewFor({ kind: 'dm', projectId: active.projectId, conversationId: active.id, threadId: active.threadId })) {
+      autoHidePreviewForConversation(dmAutoHideKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dmAutoHideKey, st.preview.hidden, st.preview.tabs, st.resources]);
 
   const dailyDms = useMemo(() => dms.filter((d) => d.archivedAt == null), [dms]);
   const archivedDms = useMemo(() => dms.filter((d) => d.archivedAt != null), [dms]);
@@ -392,6 +407,9 @@ export function DmPage() {
                       {active.stopPending === true ? ' · 停止退出未确认' : ''}
                     </span>
                     <span style={{ flex: 1 }} />
+                    {/* R74-P2：收起预览后的重开入口（与房间头部同款——hidden 时 PreviewPane
+                        不挂载，私信内需有独立恢复入口，自动收起不是单向门）。 */}
+                    <PreviewReopenButton />
                     {/* 状态动作：执行态相关（停止/继续）就地常驻——它们是当前会话的事实，不是菜单项 */}
                     {active.activeTaskId != null && active.activeRunId != null ? (
                       <button className="btn ghost sm" disabled={busy != null} title={`停止执行（task.run 三重绑定：代次 ${active.activeStopGeneration ?? 0}——过时绑定由服务端拒绝）`} onClick={() => void doStop()}>停止执行</button>

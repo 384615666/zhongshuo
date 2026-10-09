@@ -340,17 +340,29 @@ export async function pickAndOpenFolder(): Promise<void> {
   });
 }
 
-export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean }): Promise<void> {
+export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntent }): Promise<void> {
   // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
   // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
   // R73：fromIntent=定位/对齐链内部调用（不取消所属意图）；用户级打开（打开文件夹/启动恢复）
   // 取消所有在途定位意图——旧定位不得在新项目落位后把焦点抢回去。
+  // R74（review-r73 §P1）：fromIntent 只是「不取消自己」的布尔开关，**取消凭据必须贯穿函数
+  // 内部**——project.open 回执之后、焦点/可见集合提交、本地导航记忆（zs.lastProjectPath）、
+  // persistNav 之前逐一核有效性。用户跳走（navigate/新深链/切项目/返回）的旧打开安静收尾：
+  // 不切项目、不写偏好、不弹旧错误、不再重试。
   if (opts?.fromIntent !== true) cancelAllNavIntents();
+  const intent = opts?.intent;
+  const prevFocus = getState().activeProjectId; // 装载刷新期取消时还原焦点（仅当焦点仍指向本次结果）
   const gen = getState().loadGen + 1;
   setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null, openInFlight: true }));
   try {
     const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
     if (getState().loadGen !== gen) return; // 期间有更新的打开请求——旧响应丢弃
+    if (!navIntentActive(intent)) {
+      // project.open 在途回执到达时定位意图已取消（review-r73 反例：URL 已是 settings 而
+      // activeProjectId 被旧请求切成 A + 取消后 navigation.set(A)）——零提交。
+      recordWrite('project.open.cancelled', `「${path}」回执到达时定位意图已取消——零提交（焦点/可见集合/本地记忆/导航偏好均未改动）`);
+      return;
+    }
     const p = data.project;
     recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已注册·幂等重开）'}`);
     // R65（review-r64 §1A/§4A）：**合并不替换**——B 打开后 A 仍在侧栏/注册表；焦点/可见/展开
@@ -374,6 +386,16 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
     });
     try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
     await Promise.all([loadProjectRegistry(), refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
+    if (!navIntentActive(intent)) {
+      // 成员/房间/DM 装载等待期取消到达——不写导航偏好；焦点已提交的还原到打开前的项目
+      //（仅当焦点仍指向本次结果且无更新代次——不覆盖用户随后主动切到的项目；旧项目的
+      // 房间缓存是事实，还原后仍可用）。
+      recordWrite('project.open.cancelled', `「${p.displayName}」装载期间定位意图已取消——跳过导航偏好写入${getState().activeProjectId === p.id && prevFocus !== p.id ? '，焦点还原到打开前项目' : ''}`);
+      if (getState().loadGen === gen && getState().activeProjectId === p.id && prevFocus !== p.id) {
+        setState((s) => ({ ...s, activeProjectId: prevFocus }));
+      }
+      return;
+    }
     const { persistNav } = await import('./data/store');
     persistNav(getState()); // R65：服务端导航偏好同步（跨机权威；本地 localStorage 为快速镜像）
   } finally {
@@ -899,7 +921,9 @@ export async function ensureProjectActive(projectId: string, intent?: NavIntent)
       if (getState().activeProjectId === projectId) return; // 聚焦已落位
       // focusProject 静默未落位（如注册表瞬时缺行）——落到下一轮的全链打开
     } else {
-      await openProjectByPath(proj.rootPath, { fromIntent: true });
+      // R74（review-r73 §P1）：concrete intent 传入函数内部——openProjectByPath 的每段
+      // 异步回执后（project.open/装载刷新）按意图决定是否提交焦点/写偏好。
+      await openProjectByPath(proj.rootPath, { fromIntent: true, intent });
     }
     if (!navIntentActive(intent)) return;
     if (getState().activeProjectId === projectId) return;
