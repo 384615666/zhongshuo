@@ -2,7 +2,18 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-08 第七十二轮，唯一权威快照）
+## 当前真实状态（2026-10-09 第七十三轮，唯一权威快照）
+
+> R73=页面切换/预览布局/导航取消收口（v10 用户实测三项：切房间预览占用+无分隔条+放大无效；review-r72 §P1 已取消定位仍切项目）。**主交付=desktop-daily-win-v11** `bld_87d8fd4ec1c6283c`（commit `ed39838`，dirty=false，593/593；r63 --src v11 ok realCalls=0；**启动器发布协议复证三项修复 ok**：自动收起/拖动 608→460/放大铺满+Esc，console 0）；交互门 `verify-daily-r73.cjs` **G1–G6 全绿**（ok:true, errs:[]；realCallRoots 6×0）；全量 921/921（一次环境 flake 复跑绿）；r72 门回归 ok errs=[]。
+> - **A 自动收起**：进对话上下文时纯文件页来源预览 hidden（标签/阅读位置/草稿保留；房间头部重开按钮=显式不乒乓）；explicitShow 两处 openPreview 统一（**actions-preview 漏设是在途回弹根因**——门迭代挖出）+effect 补 s.resources 依赖。
+> - **B 真分隔条**：usePreviewWidth 驱动 L3/L4 上下文|预览真实边界（原生 pointer/380 下限/双击复位/窗口缩窄拉宽不棘轮）；旧 L4 回复串左缘反转语义移除。
+> - **C 真放大**：paneCls 消费 maximized 铺满 .workspace/.main；**hifi-flag.js 注入的 frameless top:38px!important 需同级 !important 压回**；Esc 还原（.menu/.scrim 打开时不穿透）。
+> - **导航取消（真缺陷）**：lib/navIntent 登记簿（navigate/用户级 focus/open 取消全部在途意图；system/fromIntent 标记防自杀；启动恢复标记系统防误杀冷启动深链）；定位链每个 await 后/重试/提交焦点前核意图；LocateThread deps 补 message/tab（同 threadId 取最新）；错误按真实原因分列；冷房间直链条件（active 已恢复但房间未装载——§2 疑点证实）。
+> - **PPT 页级 render-ready**：RenderedSlide data-zs-render=pending/ready/error（页+代次绑定，live 防迟到旧页误标；此前 ready 拒绝被吞）——G5 82/82 ready 0 失败。
+> - **坑**：window.zs 是 contextBridge 不可重定义（延迟注入改用「同刻 hash 双写」制造在途取消时序）；文件树挂载时扫描（新复制文件需离回重扫）；raw pageCmd 不写前端注册表（重载装载）；r73 门 XLSX 上传 15s 主进程超时=环境抖动（门内重传）。
+> - **边界**：触屏/触摸板、<940px 分隔条细分、逐页像素级对照未覆盖；既有延期不动。报告 `r73-layout-navigation-cancellation-20261009.md`+矩阵 `capability-matrix-r73-20261009.md`。
+
+## 历史快照（2026-10-08 第七十二轮）
 
 > R72=原始使用路径修复与桌面日常收口（review-r71 独立复核：文件树 22.54MiB 仍被 20MiB 拒/Git 往返残留/深链不稳定/验证口径纠正）。**主交付=desktop-daily-win-v10** `bld_0558b208779db4a7`（commit `a700a58`，dirty=false，593/593；r63 --src v10 ok realCalls=0；**启动器原始路径复证 ok**：树开真件 82 页 5.4s+p40 图 1/1 解码+console 0 错）；交互门 `verify-daily-r72.cjs` **G1–G7 全绿**（ok:true, errs:[]；realCallRoots 6×0）；全量 921/921；r71 门回归 ok（前两次环境 CPU 争用 flake，第三次干净通过+G1 单段绿，如实登记）。
 > - **P1 文件树容量**：PREVIEW_BINARY_EXTENSIONS 接共享合同（Office=OFFICE_MAX_BYTES 32MiB、PDF 分道 20MiB、图片 8MiB）——readFull/originalFile 双通道；r67Contracts 增 20–32MiB 边界永久用例（21MiB 过+33.5 拒+21MiB PDF 仍拒）；G1 用户原始路径真件 82 页 5.4s+另存 sha 一致+上传件/成果件分列。
