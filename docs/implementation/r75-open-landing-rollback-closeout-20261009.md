@@ -1,7 +1,7 @@
 # R75 项目切换落位/取消收口（2026-10-09）
 
 > 依据：`review-r74-project-open-and-rollback-next-round-20261009.md`（独立证据 `dist/desktop/review-r74-audit-20261009/`：open-from-room 两连败 + member-cancel-clean 回滚不完整）。
-> 主交付：`desktop-daily-win-v13`（`bld_…`，commit `…`，dirty=false，593/593；r63 --src v13 ok；启动器发布协议复证普通打开路线 ok——见 §五）。
+> 主交付：`desktop-daily-win-v13`（`bld_d4510629e370c260`，commit `6ddd41e`，dirty=false，593/593；r63 --src v13 ok realCalls=0；启动器发布协议复证普通打开路线 ok——见 §五）。
 > 零新增真实模型调用；迁移 001–048 冻结；旧包/用户数据原地未动；UNKNOWN 合同未动；渲染/容量边界未动。
 
 ## 一、P1：从房间打开另一项目被旧路由抢回（review-r74 §P1）
@@ -52,9 +52,9 @@
 | 集成 `hifiNavCancelRound74`（S1–S8+R75 扩展） | 1/1（含 S3b/S3c） |
 | 全量 vitest | **922/922** |
 | r73 / r74 门回归 | ok:true errs:[] 各（r74 前两次环境残留进程撞管道名假阴性——清杀后绿，如实登记） |
-| r72 门回归（看板/待办/收藏/搜索矩阵） | ok:true errs:[]（见交付时 result） |
+| r72 门回归（看板/待办/收藏/搜索矩阵+成果文件链） | ok:true errs:[]（**其 G1 超时暴露 R74 交付文件回归**——见 §二衍生②，修复后绿） |
 | typecheck | main 0 / hifi 0 |
-| v13 包 / r63 --src v13 / 启动器复证 | 593/593 / ok realCalls=0 / ok（§五） |
+| v13 包 / r63 --src v13 / 启动器复证 | 593/593（bld_d4510629e370c260/6ddd41e/dirty=false）/ ok realCalls=0 / ok（A 房间真实弹窗开 B 全落位+再开 C+重启进 C+console 0+realCalls 0） |
 
 ## 五、交付形态（源码测试 / 独立 UI 演练 / 最终启动器 三分列）
 - **源码测试**：集成 + 全量 922 + typecheck（上表）。

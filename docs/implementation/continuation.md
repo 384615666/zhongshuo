@@ -2,7 +2,17 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-09 第七十四轮，唯一权威快照）
+## 当前真实状态（2026-10-09 第七十五轮，唯一权威快照）
+
+> R75=项目切换落位/取消收口（review-r74 独立复核：从房间经真实弹窗打开 B 被旧 A 路由抢回×2+装载期取消只还原焦点留 A 的 lastPath）。**主交付=desktop-daily-win-v13** `bld_d4510629e370c260`（commit `6ddd41e`，dirty=false，593/593；r63 --src v13 ok realCalls=0；**启动器发布协议复证普通打开路线 ok**：A 房间真实弹窗开已注册 B 全落位/A 保留/零 toast+再开新目录 C 最新意图+重启进 C+console 0+realCalls 0）；交互门 `verify-daily-r75.cjs` **G1–G3 全绿**（ok:true, errs:[]；realCallRoots 3×0）；全量 922/922；r72/r73/r74 门回归全绿。
+> - **P1 落位所有权**：openProjectByPath 提交时登记 `openInFlightTarget{projectId,urlSeqAtStart}`（router `currentNavSeq()` 每次 hashchange +1）+收尾按代次清；房间路由/ProjectHomePage 在「他项目打开在途且 URL 自打开发起未变」**让位**；**返回 {id:目标}**——打开弹窗/pickAndOpenFolder 按目标 id 选房间落位（不读异步结束时的 activeProjectId）。**先复现**：stash 后「A 房间→真实弹窗开 B」FAIL（URL/active 留 A+lastPath=B=复核签名）。
+> - **P2 回滚完整性**：装载期取消回滚=焦点+**zs.lastProjectPath**+**rooms/members/memberRuntimes/dms 整表投影**（守卫 openedId 已提交/焦点仍指本次目标/无新代次/非同项目重开——不覆盖用户后续选 C；注册表不回滚）；装载**失败**+取消同口径安静收尾。门 G2③：active/lastPath 回 B+侧栏 B 房间投影恢复+i4NavSets=0；集成 S3/S3b/S3c。
+> - **衍生真缺陷①ProjectAlign 双态**：R74 窄回滚掩盖的churn 在补齐投影回滚后变 **project.open 无限循环**（探针 cmds.log 47,172 条）——房间路由在「本项目打开在途」**保持对齐分支挂载**（意图存活到波收尾），清理判据=**URL 是否仍指向本项目**（成功交接只释放/用户真跳走才取消）。修后 31 条 6s 进房。
+> - **衍生真缺陷②R74 回归：交付文档内「打开文件」**硬编码 files 来源→对话内点击被 R74 自动收起即刻折叠（r72 门 G1 成果文件视图超时暴露——R74 门未覆盖该链）——改按当前预览上下文 openedFrom；r72 门修复后全绿。
+> - **坑**：弹窗 autoPick 挂载即取目录（测试再点「浏览…」会多取一行）；ZS_PICK_FOLDER_FILE 按行序供目录（一次运行连开多项目）；member.list 延迟钩子会被 B 基线装载消耗（改 saved.list）；**daemonPipeNameFor 按 home 派生=用户级单例管道**（残留 electron 树占管道→后开的 app 连到旧 daemon→「no such table/directory」假阴性——清杀残留后绿，非代码缺陷）；r72 门 G1 是交付文件链的唯一回归覆盖。
+> - **边界**：发布启动器无延迟钩子（bat 清洗 ZS_*，显式直通 ZS_DEV25_DEBUG_PORT/ZS_PICK_FOLDER*）；装载期取消强复现在源码门/集成；触屏/<940px/像素对照（沿用）；15s 上传悬置；既有延期不动。报告 `r75-open-landing-rollback-closeout-20261009.md`+矩阵 `capability-matrix-r75-20261009.md`。
+
+## 历史快照（2026-10-09 第七十四轮）
 
 > R74=两个交叉场景修复与日常使用收口（review-r73 独立复核：project.open 在途取消失效+混合标签自动收起失效，各复现 2 次）。**主交付=desktop-daily-win-v12** `bld_49bb7307dfac1435`（commit `1dbf27b`，dirty=false，593/593；r63 --src v12 ok realCalls=0；**启动器发布协议复证两交叉场景+基本布局 ok**：混合收起/恢复 2 标签/拖动 608→460/放大+Esc/双 hash 取消 prefs=B（与包库核对）/正例 A，console 0，realCalls=0）；交互门 `verify-daily-r74.cjs` **G1–G5 全绿**（ok:true, errs:[]；realCallRoots 5×0）；集成 `hifiNavCancelRound74` 1/1；全量 **922/922**（921+新增 1）；r73 门回归 ok errs:[]。
 > - **P1 取消凭据进项目打开内部**：openProjectByPath 收具体 NavIntent——project.open 回执后（焦点/可见集合/zs.lastProjectPath 提交前）与装载刷新波后（persistNav 前）核意图；取消=零提交（不切项目/不写记忆/不写偏好/不弹错/安静返回，recordWrite 'project.open.cancelled' 观测）；**装载期取消还原焦点**（仅当焦点仍指向本次结果且无更新代次）。验证分列：集成 S2/S3/S4（project.open/成员装载/thread.get 等待期）+S5 反序+S6 合同（启动恢复不被无关意图拦、用户级打开仍取消在途）；门 G2 用 **main.ts 既有观测钩子 ZS_UI_DELAY_METHOD_MS**（真实转发层受控延迟——重启注入 project.open:3200/member.list:2500 造确定性窗口）。**先复现**：unfixed 集成 FAIL 于 S2、unfixed 门 G2①② FAIL（active=A+prefs=A=复核签名）。
