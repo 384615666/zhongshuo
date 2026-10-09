@@ -153,7 +153,26 @@ export function PreviewPane({
   const [zoom, setZoom] = useState<number>(0);
   const [selection, setSelection] = useState('');
   const [tabsOverflow, setTabsOverflow] = useState(false);
-  const paneCls = `preview-pane${className ? ` ${className}` : ''}`;
+  // R73-C：放大状态真正进入布局——`.preview-pane.maximized` 以绝对定位铺满当前
+  // 工作内容区（.workspace/.page 为定位锚点；导航在 .main 之外仍可达）。
+  const paneCls = `preview-pane${session.maximized ? ' maximized' : ''}${className ? ` ${className}` : ''}`;
+
+  /**
+   * R73-C：放大态按 Esc 还原（既有约定：收起/返回类动作都可用 Esc）。弹层（Menu/Modal/
+   * scrim）优先消化自己的 Esc——检测到任一弹层打开时不穿透处理（它们各自注册的 window
+   * 监听会先行关闭自身；React 卸载在下一拍，这里同步查询 DOM 即可判别）。
+   */
+  useEffect(() => {
+    if (!session.maximized) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('.menu, .scrim, [role=dialog], .modal') != null) return;
+      togglePreviewMaximized();
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.maximized]);
 
   /* R69 P1-A：legacy 桥接 effect 已移除——store.openPreview(target) 在调度层同步完成
    * 登记+开标签，首个标签不再依赖"面板挂载后才出现的转换"，房间/草稿首开死锁消除。 */

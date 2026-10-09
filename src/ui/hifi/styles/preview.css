@@ -104,13 +104,30 @@
   border-left: none;
 }
 
-/* 放大：临时占满工作内容区（导航保留） */
+/* 放大：临时占满工作内容区（导航保留）——R73-C。
+   锚点：房间/私信的 .workspace 与文件页的 .page（见下方 position:relative 声明）。 */
 .preview-pane.maximized {
   position: absolute;
   inset: 0;
   z-index: 40;
   border-left: none;
+  background: var(--bg-surface);
+  flex: 1 1 auto;
 }
+/* 无边框窗（自定义标题栏 38px）下有 `body.zs-frameless .preview-pane { top: 38px }`
+   （给并排态留出标题栏）——特异性高于 .preview-pane.maximized，会把放大层往下压 38px。
+   放大层锚定 .workspace（已在标题栏之下），top 必须归零、铺满整个工作区。 */
+body.zs-frameless .preview-pane.maximized {
+  /* 该 38px 来自 hifi-flag.js 运行时注入的 `!important` 规则——同用 !important 压回 */
+  top: 0 !important;
+}
+/* 放大覆盖层的定位锚点（最近 positioned 祖先）：
+   · 房间/私信：.workspace（不滚动的 flex 容器，覆盖即视口内工作区）；
+   · 文件页：.main（.page 自身是滚动容器——position:relative 的 absolute 会锚到
+     滚动内容顶、随滚动漂移；.main 不滚动，覆盖始终贴合可视工作区）。
+   .menu/toast 均为 position:fixed，不受祖先定位影响。 */
+.workspace { position: relative; }
+.main { position: relative; }
 
 /* ---------- 第一行：文件标签 ---------- */
 

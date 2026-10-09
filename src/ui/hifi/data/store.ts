@@ -391,6 +391,9 @@ export function openPreview(target: PreviewTarget): boolean {
         tabs,
         activeKey,
         hidden: false,
+        // R73-A：对话上下文里打开=用户明确要看见（永不自动收起）；文件页打开=重新武装
+        // 自动收起（下一次进入对话上下文时收起，不占房间）。
+        explicitShow: ctx.kind !== 'files',
         returnSnapshot: prev.preview.returnSnapshot ?? { target: ctx, sizes: { ...prev.layout.sizes } },
         contextChangedSinceOpen: false,
         side: ctx.kind === 'thread' ? 'thread' as const : 'pool' as const,

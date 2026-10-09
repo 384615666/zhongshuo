@@ -16,7 +16,7 @@ import { MessageView } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
-import { useStore, toast, setState, recordLocalOnly, recordWrite } from '../shell';
+import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
 import {
   buildRoomRootEnvelope, buildThreadEnvelope, sendEnvelope, stopThreadTask, submitTaskReview,
@@ -44,8 +44,8 @@ import {
 } from '../lib/threadNav';
 import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary } from '../data/types';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
-import { audienceAllows } from '../lib/resource';
-import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide } from '../data/actions-preview';
+import { audienceAllows, resourceOf } from '../lib/resource';
+import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
 import { useElementWidth } from '../lib/useElementWidth';
 
@@ -162,6 +162,41 @@ function useThreadWidth() {
   return { width, onPointerDown, onPointerMove, onPointerUp, reset, invertRef };
 }
 
+/**
+ * 文件预览列宽度（R73-B）：L3（主池＋预览）/ L4（回复串＋预览）**真实两区边界**的
+ * 分隔条拖动值。与 useThreadWidth 同一纪律：
+ *  - 不跨会话记忆、**不做 resize 收敛写回**（R71 棘轮教训）——窗口缩窄只影响显示侧
+ *    的动态 clamp（消费处 min/max），拉宽后自动回到用户拖动宽度；
+ *  - 宽度只在用户拖拽/双击复位时改写。
+ * 拖动语义：分隔条在「上下文列 | 预览列」之间，向右拖 = 预览变窄。
+ */
+const PREVIEW_DEFAULT_W = 620;
+function usePreviewWidth() {
+  const [width, setWidth] = useState(PREVIEW_DEFAULT_W);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startWidth: width };
+  };
+  const onPointerMove = (e: React.PointerEvent, maxW: number) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    setWidth(Math.max(380, Math.min(maxW, d.startWidth - dx))); // 向右拖=预览变窄
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* 指针已释放 */ }
+  };
+  /** 双击分隔条：恢复默认宽度 */
+  const reset = () => setWidth(PREVIEW_DEFAULT_W);
+
+  return { width, onPointerDown, onPointerMove, onPointerUp, reset };
+}
+
 export function RoomPage({
   roomId,
   threadId,
@@ -197,6 +232,7 @@ export function RoomPage({
   // room 不会从"有"变"无"，但任何"房间被删后组件仍挂载"的路径都会崩。
   const narrow = useNarrow();
   const threadWidth = useThreadWidth();
+  const previewWidth = usePreviewWidth();
 
   /* ---------- UX-PREVIEW-01：共享预览（§17.9） ----------
      用**容器宽度**而不是 window.innerWidth 决定布局（§5.2 第 4 条）。
@@ -210,6 +246,33 @@ export function RoomPage({
     () => contextTargetOf(s.activeProjectId, { roomId, threadId, roomView: roomTab }),
     [s.activeProjectId, roomId, threadId, roomTab],
   );
+
+  /**
+   * R73-A：文件页来源的预览**不占房间**。进入对话上下文（房间/线程）时，若预览可见、
+   * 用户未显式要求看见（explicitShow）、且当前上下文可见的标签**全部**来自文件页
+   * （工作区只读资源 audience=project，房间过滤本就放行——这就是此前「预览占着房间」
+   * 的机制），则自动收起：只改可见性，标签/阅读位置/各草稿全保留，房间头部「文件预览」
+   * 重开按钮可恢复（恢复即显式，本会话不再自动收起）。
+   * 房间内正常打开的文件（openedFrom=room/thread）不触发；DM 资源在房间上下文本就
+   * 不可见（visiblePreviewTabs 过滤），无需处理。
+   */
+  const autoHideCtxKey = `${s.activeProjectId}:${roomId}:${threadId ?? ''}:${roomTab}`;
+  useEffect(() => {
+    const st = getState();
+    if (st.preview.hidden || st.preview.tabs.length === 0) return;
+    if (st.preview.explicitShow === true) return;
+    const visible = st.preview.tabs.filter((t) => {
+      const res = resourceOf(st, t.resourceId);
+      return res ? audienceAllows(res.audience, context) : false;
+    });
+    if (visible.length === 0) return;
+    if (visible.every((t) => t.openedFrom?.target.kind === 'files')) {
+      autoHidePreviewForConversation(autoHideCtxKey);
+    }
+    // s.resources 必须在依赖里：在途工作区读取（大文件 readFull）的资源登记晚于进房，
+    // 资源到达后本效应须重估——否则文件页来源的预览会因「当时还看不见」而漏收起（回弹）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoHideCtxKey, s.preview.hidden, s.preview.tabs, s.resources]);
 
   // 当前上下文下可见的预览标签（DM 隔离：不可见的既不显示也不计数标题）
   const visiblePreviewTabs = useMemo(
@@ -405,21 +468,22 @@ export function RoomPage({
    */
   const SPLIT_W = 8;
   /**
-   * 注意：这里必须用 `navVisibleWidth`（**内容区**宽度 = app-body − 侧栏），
-   * 不能用 `workspace.width`（那是整个 app-body，含 246px 侧栏）。
-   * 用错基准会让两列基准之和超出容器，flex 只能按比例收缩，
-   * 结果"对调"变成"各缩一点"（实测 1440px：应为 566/620，实际 677/517）。
+   * R73-B：L3/L4 的预览列宽度改由**专用分隔条**驱动（`usePreviewWidth`——真实两区
+   * 边界「上下文列 | 预览列」；此前 L3 无分隔条、L4 的分隔条在回复串左缘都不在边界上，
+   * 用户无法拖动）。显示侧动态 clamp（R71 纪律：窗口缩窄不写回用户宽度，拉宽即回弹）：
+   * 预览 ∈ [380, navVisible−420−split]，上下文列保底 420。
    */
-  const rightColW = Math.max(380, Math.min(threadWidth.width, Math.max(380, navVisibleWidth - 420 - SPLIT_W)));
+  const previewMaxW = Math.max(380, navVisibleWidth - 420 - SPLIT_W);
+  const rightColW = Math.max(380, Math.min(previewWidth.width, previewMaxW));
   const leftColW = Math.max(420, navVisibleWidth - rightColW - SPLIT_W);
   const contextFlex = twoRegion
     ? { flex: `0 1 ${leftColW}px`, minWidth: 0 } as React.CSSProperties
     : undefined;
   const previewFlex = undefined; // 预览列宽度改由 CSS 的 --preview-w 表达（见 preview.css，便于做入场动画）
 
-  /* 分隔条方向：L4 里它在回复串左缘，语义与 L2 相反（见 useThreadWidth 注释）。
-     写 ref 而不是 state —— 它只被事件处理器读取，不参与渲染输出。 */
-  threadWidth.invertRef.current = twoRegion;
+  /* R73-B：L2 分隔条（主池|回复串）恒不反转；L4 的边界分隔条改为预览宽拖条，
+     旧的「回复串左缘反转」语义随之一并移除。 */
+  threadWidth.invertRef.current = false;
 
   // L2（主池 + 线程）也把线程宽度交给既有 threadWidth 逻辑，不改动它的既有行为
   const layoutStyle = twoRegion
@@ -670,7 +734,7 @@ export function RoomPage({
            * 现在改为：线程按 showThreadRegion 渲染，用 narrow 决定**布局形态**，
            * 而不是决定**渲染与否**。
            */}
-          {!single && !narrow ? (
+          {!single && !narrow && !twoRegion ? (
             <div
               className="splitter"
               role="separator"
@@ -705,6 +769,23 @@ export function RoomPage({
             })}
           />
         </>
+      ) : null}
+
+      {/* R73-B：L3/L4 的**真实两区边界**分隔条（上下文列 | 预览列）——位于 PreviewPane
+          紧左侧；原生 pointer 拖动直接改 previewWidth（rect 实际变化），双击复位。
+          窄窗单区域（single）没有并排边界，不渲染。 */}
+      {showPreviewRegion && twoRegion && !single ? (
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整文件预览宽度"
+          title="拖动调整宽度 · 双击恢复默认"
+          onPointerDown={previewWidth.onPointerDown}
+          onPointerMove={(e) => previewWidth.onPointerMove(e, previewMaxW)}
+          onPointerUp={previewWidth.onPointerUp}
+          onDoubleClick={previewWidth.reset}
+        />
       ) : null}
 
       {/* ---------- 共享预览区（L3/L4，§17.9） ---------- */}

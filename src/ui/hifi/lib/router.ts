@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { cancelAllNavIntents } from './navIntent';
 
 export function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash.replace(/^#/, '') || '/welcome');
@@ -31,6 +32,8 @@ export function useHashRoute(): string {
 export function navigate(to: string, opts?: { replace?: boolean }) {
   const next = to.startsWith('/') ? to : `/${to}`;
   if (window.location.hash.replace(/^#/, '') === next) return;
+  // R73：用户级导航即刻失效所有在途定位/对齐意图（旧请求不得再抢焦点/写偏好/弹旧错）。
+  cancelAllNavIntents();
   if (opts?.replace) {
     // 切 tab 这类动作不该堆历史记录（否则"返回"要按很多次）
     const url = `${window.location.pathname}${window.location.search}#${next}`;

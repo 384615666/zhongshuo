@@ -10,20 +10,30 @@ import { Icon } from '../../components/Icon';
 import { openPptxDocument, type PptxPreviewDocument } from './pptxEngine';
 import { saveReaderState, type ReaderState } from '../readerState';
 
-function RenderedSlide({ doc, pageIndex, scale, onReady }: {
-  doc: PptxPreviewDocument; pageIndex: number; scale: number; onReady?: () => void;
+function RenderedSlide({ doc, pageIndex, scale }: {
+  doc: PptxPreviewDocument; pageIndex: number; scale: number;
 }): ReactElement {
   const mountRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const mount = mountRef.current;
     if (mount == null) return;
+    // R73-三：把引擎的真实 render 事实暴露到 DOM（data-zs-render=pending/ready/error），
+    // 与**本次挂载的页**绑定——live 标志保证迟到的旧页 resolve/reject 不给换页后的
+    // mount 标错状态（此前 handle.ready 的拒绝被吞，0 张 img 也可能被当成完成）。
+    let live = true;
+    mount.setAttribute('data-zs-render', 'pending');
     let handle: ReturnType<PptxPreviewDocument['renderPage']> | null = null;
     try {
       handle = doc.renderPage(pageIndex, mount);
-      void handle.ready.then(() => onReady?.(), () => { /* 页内节点失败：引擎按页分列 */ });
-    } catch { /* 页码越界等——上层已按 pageCount 收敛 */ }
-    return () => { handle?.dispose(); mount.replaceChildren(); };
-  }, [doc, pageIndex, onReady]);
+      void handle.ready.then(
+        () => { if (live) mount.setAttribute('data-zs-render', 'ready'); },
+        () => { if (live) mount.setAttribute('data-zs-render', 'error'); },
+      );
+    } catch {
+      if (live) mount.setAttribute('data-zs-render', 'error'); // 页码越界等——上层已按 pageCount 收敛
+    }
+    return () => { live = false; handle?.dispose(); mount.replaceChildren(); };
+  }, [doc, pageIndex]);
   return (
     <div
       className="pptx-slide-frame"

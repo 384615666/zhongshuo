@@ -13,6 +13,7 @@
  */
 
 import { getState, setState, recordWrite, recordLocalOnly, persistNav, toast } from './store';
+import { cancelAllNavIntents } from '../lib/navIntent';
 import type { HifiState } from './store';
 
 function commitNav(s: HifiState, detail: string, api: string) {
@@ -32,10 +33,12 @@ function ensureVisible(visible: string[], projectId: string): string[] {
  * 房间点击、成员页项目切换、看板单项目筛选都走它，保证行为一致。
  * 焦点项目自动加入可见集合（点未勾选的项目名 = 聚焦并显示，不清空其他选择）。
  */
-export function focusProject(projectId: string, opts?: { announce?: boolean }): void {
+export function focusProject(projectId: string, opts?: { announce?: boolean; system?: boolean }): void {
   const s0 = getState();
   const p = s0.projects.find((x) => x.id === projectId);
   if (!p) return;
+  // R73：用户级焦点切换取消在途定位意图（system=定位链内部调用，不取消自己）。
+  if (opts?.system !== true) cancelAllNavIntents();
 
   const wasVisible = s0.visibleProjectIds.includes(projectId);
   const visible = ensureVisible(s0.visibleProjectIds, projectId);

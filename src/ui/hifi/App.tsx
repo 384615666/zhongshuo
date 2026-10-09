@@ -13,6 +13,7 @@ import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from '.
 import { getState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute } from './lib/router';
+import { registerNavIntent, releaseNavIntent, navIntentActive } from './lib/navIntent';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
 import { DmPage } from './DmPage';
@@ -658,7 +659,9 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     // R72：看板/待办/归档会带任务自己的 projectId 跨项目跳房间/线程；房间与线程装载
     // （roomOf/loadThread）绑活跃项目——未对齐时房间报「不存在」、线程被 stillCurrent
     // 丢弃。先对齐（已装载=轻切焦点；未装载=全链打开），对齐后本路由自然重渲 RoomPage。
-    if (pid !== s.activeProjectId) {
+    // R73：**活跃≠已装载**——applyServerNavPrefs 恢复 active 但房间未装时（冷房间直链）
+    // 同样要对齐，否则 RoomPage 落「找不到该房间」（review-r72 §2 源码疑点，先证后修）。
+    if (pid !== s.activeProjectId || !s.rooms.some((r) => r.projectId === pid)) {
       return <div className="main"><div className="page"><div className="panel info">正在打开所属项目…</div><ProjectAlign projectId={pid} /></div></div>;
     }
     return (
@@ -695,49 +698,53 @@ function RedirectTo({ to }: { to: string }) {
   return <div className="main"><div className="page"><div className="small faint">正在打开…</div></div></div>;
 }
 
-/** R72：项目路由对齐器（房间/线程跨项目跳转前置）——对齐成功由路由自然重渲接管。 */
+/** R72：项目路由对齐器（房间/线程跨项目跳转前置）——对齐成功由路由自然重渲接管。
+ *  R73：意图登记——用户跳走/切项目后，链内每个 await 之后不再抢焦点/写偏好/弹旧错。 */
 function ProjectAlign({ projectId }: { projectId: string }) {
   useEffect(() => {
-    let cancelled = false;
+    const intent = registerNavIntent();
     void (async () => {
       const { ensureProjectActive } = await import('./shell');
       try {
-        await ensureProjectActive(projectId);
+        await ensureProjectActive(projectId, intent);
       } catch (e) {
-        if (cancelled) return;
+        if (!navIntentActive(intent)) return; // 已取消：不弹旧错误
         toast(`打开所属项目失败：${(e as Error).message}`, 'error');
         navigate('/', { replace: true });
       }
     })();
-    return () => { cancelled = true; };
+    return () => { intent.cancelled = true; releaseNavIntent(intent); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
   return null;
 }
 
-/** 旧线程路由的装载定位（R72：locateThread 对齐所属项目后跳该房间——修跨项目深链丢弃）。 */
+/** 旧线程路由的装载定位（R72：locateThread 对齐所属项目后跳该房间——修跨项目深链丢弃）。
+ *  R73：①意图登记（取消后链内不再抢焦点/重试/弹旧错）；②deps 补 message/tab——同一
+ *  threadId 快速改定位目标时采用**最新**用户意图，旧 effect 的取消标志随清理置位。 */
 function LocateThread({ threadId, messageId, tab }: { threadId: string; messageId?: string; tab?: string }) {
   useEffect(() => {
-    let cancelled = false;
+    const intent = registerNavIntent();
     void (async () => {
       const { locateThread } = await import('./shell');
       try {
-        const ent = await locateThread(threadId); // {projectId, roomId}——项目已对齐激活
-        if (cancelled) return;
+        const ent = await locateThread(threadId, intent); // {projectId, roomId}——项目已对齐激活
+        if (!navIntentActive(intent)) return;
         const q = new URLSearchParams();
         q.set('thread', threadId);
         if (tab != null && tab !== 'replies') q.set('tab', tab);
         if (messageId != null) q.set('message', messageId);
         navigate(`/project/${ent.projectId}/room/${ent.roomId}?${q.toString()}`, { replace: true });
-      } catch {
-        if (cancelled) return;
-        toast('链接指向的回复串不存在或不可访问', 'error');
+      } catch (e) {
+        if (!navIntentActive(intent)) return; // 已取消：不弹旧错误
+        // 真实原因分列（review-r72 §1）：不存在/权限/装载失败按服务端与链路原话，不用「不可访问」覆盖一切。
+        toast(`打开回复串失败：${(e as Error).message}`, 'error');
         navigate('/', { replace: true });
       }
     })();
-    return () => { cancelled = true; };
+    return () => { intent.cancelled = true; releaseNavIntent(intent); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
+  }, [threadId, messageId, tab]);
   return null;
 }
 /* DM 页自渲染共享预览（R66 P2：原型 320/440/480 宽度降级 + 列表收起 + 单区切换在

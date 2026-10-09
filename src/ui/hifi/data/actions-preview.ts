@@ -216,6 +216,8 @@ export function openPreview(
         tabs: tabs.map((t) => (t.key === activeKey ? { ...t, requestGeneration: generation } : t)),
         activeKey,
         hidden: false,
+        // R73-A：与 store.openPreview 同一语义——文件页打开=重新武装自动收起；对话内打开=显式。
+        explicitShow: openedFrom.target.kind !== 'files',
         returnSnapshot: prev.preview.returnSnapshot ?? {
           target: openedFrom.target,
           sizes: { ...prev.layout.sizes },
@@ -277,14 +279,25 @@ export function hidePreview() {
 }
 
 export function showPreview() {
-  setState((s) => ({ ...s, preview: { ...s.preview, hidden: false } }));
+  // R73-A：重开=用户显式要看见——本会话不再自动收起（尊重用户动作，不玩乒乓）。
+  setState((s) => ({ ...s, preview: { ...s.preview, hidden: false, explicitShow: true } }));
+}
+
+/**
+ * R73-A：进入对话上下文时**自动收起**文件页来源的预览（用户反馈：文件页打开文件后
+ * 点房间，房间已打开但预览仍占着）。只改可见性：标签、阅读位置、各草稿全部保留；
+ * 文件页本身不受影响（该页不消费 hidden）。与 hidePreview（用户手点收起）分列记录。
+ */
+export function autoHidePreviewForConversation(reason: string) {
+  setState((s) => (s.preview.hidden ? s : { ...s, preview: { ...s.preview, hidden: true, maximized: false, explicitShow: false } }));
+  recordWrite('preview.autoHide', `进入对话上下文自动收起（${reason}）——标签/阅读位置/草稿保留，重开按钮可恢复`);
 }
 
 export function closeAllPreviews() {
   const n = getState().preview.tabs.length;
   setState((s) => ({
     ...s,
-    preview: { ...s.preview, tabs: [], activeKey: undefined, maximized: false, returnSnapshot: undefined, side: undefined },
+    preview: { ...s.preview, tabs: [], activeKey: undefined, maximized: false, returnSnapshot: undefined, side: undefined, explicitShow: undefined },
   }));
   recordWrite('preview.close_all', `清空 ${n} 个标签 → 退出预览；未删除任何磁盘文件`);
   toast(`已关闭全部 ${n} 个文件`, 'info');

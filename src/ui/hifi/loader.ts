@@ -15,6 +15,7 @@ import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead,
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
+import { navIntentActive, cancelAllNavIntents, type NavIntent } from './lib/navIntent';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number; rootPath?: string; canonicalPath?: string }; created?: boolean }
@@ -204,7 +205,7 @@ export async function bootRemembered(): Promise<void> {
       if (typeof path === 'string' && path.length > 0) {
         try {
           if (getState().boot === 'ready' || getState().boot === 'failed') return;
-          await openProjectByPath(path);
+          await openProjectByPath(path, { fromIntent: true }); // 启动恢复=系统动作，不取消在途深链意图
         } catch (e) {
           // r57：记忆路径失效≠服务未就绪——如实报错并保持可操作（选择其它目录/重试），
           // 不再被外层 catch 归类成「连接中」空转 60 秒。
@@ -233,7 +234,7 @@ export async function bootRemembered(): Promise<void> {
             const p2 = again?.values?.['ui.autoOpenProjectPath'];
             if (typeof p2 === 'string' && p2.length > 0) {
               if (getState().activeProjectId !== '') return;
-              await openProjectByPath(p2).catch(() => { /* 种子写入的路径异常：保持欢迎+如实控制台 */ });
+              await openProjectByPath(p2, { fromIntent: true }).catch(() => { /* 种子写入的路径异常：保持欢迎+如实控制台 */ });
               return;
             }
           } catch { /* 服务暂不可达——继续观察 */ }
@@ -339,9 +340,12 @@ export async function pickAndOpenFolder(): Promise<void> {
   });
 }
 
-export async function openProjectByPath(path: string): Promise<void> {
+export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean }): Promise<void> {
   // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
   // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
+  // R73：fromIntent=定位/对齐链内部调用（不取消所属意图）；用户级打开（打开文件夹/启动恢复）
+  // 取消所有在途定位意图——旧定位不得在新项目落位后把焦点抢回去。
+  if (opts?.fromIntent !== true) cancelAllNavIntents();
   const gen = getState().loadGen + 1;
   setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null, openInFlight: true }));
   try {
@@ -871,26 +875,33 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
  * （与侧栏点击同链）；未装载 → openProjectByPath 全链（幂等合并不替换）。
  * 有界重试吸收与启动恢复观察器并发打开的窗口。
  */
-export async function ensureProjectActive(projectId: string): Promise<void> {
+export async function ensureProjectActive(projectId: string, intent?: NavIntent): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    // R73：每个 await 之后/每次重试/每次提交焦点之前核意图——用户跳走或切项目后，
+    // 旧定位不得再抢焦点或继续重试（review-r72 §P1 反例：迟到 thread.get 回执后
+    // locateThread 已把焦点从 B 切到 A，而用户停留在设置页）。
+    if (!navIntentActive(intent)) return;
     // 「活跃」不等于「已装载」：applyServerNavPrefs 重启后会恢复 activeProjectId 但不装
     // 房间/成员（不走 openProjectByPath）——此时直达房间/线程仍会「找不到该房间」。
     // 活跃且房间已装载才可早退。
     if (getState().activeProjectId === projectId && getState().rooms.some((r) => r.projectId === projectId)) return;
     let proj = getState().projects.find((p) => p.id === projectId);
     if (proj == null) await loadProjectRegistry().catch(() => undefined);
+    if (!navIntentActive(intent)) return;
     proj = getState().projects.find((p) => p.id === projectId);
     if (proj == null || typeof proj.rootPath !== 'string' || proj.rootPath.length === 0) {
       throw new Error(`项目不在注册表或路径缺失（可能已归档/移除/目录失效）：${projectId}`);
     }
     if (getState().rooms.some((r) => r.projectId === projectId)) {
       const { focusProject } = await import('./data/actions-nav');
-      focusProject(projectId);
+      if (!navIntentActive(intent)) return;
+      focusProject(projectId, { system: true }); // system：定位链内部调用，不取消所属意图
       if (getState().activeProjectId === projectId) return; // 聚焦已落位
       // focusProject 静默未落位（如注册表瞬时缺行）——落到下一轮的全链打开
     } else {
-      await openProjectByPath(proj.rootPath);
+      await openProjectByPath(proj.rootPath, { fromIntent: true });
     }
+    if (!navIntentActive(intent)) return;
     if (getState().activeProjectId === projectId) return;
     // 并发打开抢先（如启动恢复观察器晚到落位）：有界重试
   }
@@ -904,21 +915,27 @@ export async function ensureProjectActive(projectId: string): Promise<void> {
  * ensureProjectActive 对齐，再交回常规链（RoomPage 挂载后 ThreadPanel 的 loadThread
  * 代次/归属已对齐，不再被 stillCurrent 双门丢弃）。
  */
-export async function locateThread(threadId: string): Promise<{ projectId: string; roomId: string }> {
+export async function locateThread(threadId: string, intent?: NavIntent): Promise<{ projectId: string; roomId: string }> {
   // 等 boot 定型（ready/failed，bootRemembered 有界 60s）——避免与其 openProjectByPath 互抢代次。
   for (let i = 0; i < 70; i += 1) {
     const b = getState().boot;
     if (b === 'ready' || b === 'failed') break;
     await new Promise((r) => setTimeout(r, 1000));
+    if (!navIntentActive(intent)) return { projectId: '', roomId: '' }; // 已取消：安静停（调用方以 intent 再核）
   }
   const probe = await command<ThreadGetData>('thread.get', { threadId }); // 不存在/不可访问=如实抛出
+  if (!navIntentActive(intent)) return { projectId: '', roomId: '' };
   // 对齐链偶发竞态（注册表瞬时缺行/装载竞态）吸收一次重试——深链是用户明确意图，
-  // 一次瞬时失败就报「不存在」是误报。
+  // 一次瞬时失败就报「不存在」是误报。已取消的意图不再重试（review-r72：旧请求不继续重试抢焦点）。
   let lastErr: unknown = null;
   for (let i = 0; i < 2; i += 1) {
-    try { await ensureProjectActive(probe.thread.projectId); lastErr = null; break; }
-    catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 1200)); }
+    try { await ensureProjectActive(probe.thread.projectId, intent); lastErr = null; break; }
+    catch (e) {
+      if (!navIntentActive(intent)) return { projectId: '', roomId: '' };
+      lastErr = e; await new Promise((r) => setTimeout(r, 1200));
+    }
   }
+  if (!navIntentActive(intent)) return { projectId: '', roomId: '' };
   if (lastErr != null) throw lastErr;
   return { projectId: probe.thread.projectId, roomId: probe.thread.roomId };
 }
