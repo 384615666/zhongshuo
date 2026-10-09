@@ -2,7 +2,17 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-09 第七十三轮，唯一权威快照）
+## 当前真实状态（2026-10-09 第七十四轮，唯一权威快照）
+
+> R74=两个交叉场景修复与日常使用收口（review-r73 独立复核：project.open 在途取消失效+混合标签自动收起失效，各复现 2 次）。**主交付=desktop-daily-win-v12** `bld_49bb7307dfac1435`（commit `1dbf27b`，dirty=false，593/593；r63 --src v12 ok realCalls=0；**启动器发布协议复证两交叉场景+基本布局 ok**：混合收起/恢复 2 标签/拖动 608→460/放大+Esc/双 hash 取消 prefs=B（与包库核对）/正例 A，console 0，realCalls=0）；交互门 `verify-daily-r74.cjs` **G1–G5 全绿**（ok:true, errs:[]；realCallRoots 5×0）；集成 `hifiNavCancelRound74` 1/1；全量 **922/922**（921+新增 1）；r73 门回归 ok errs:[]。
+> - **P1 取消凭据进项目打开内部**：openProjectByPath 收具体 NavIntent——project.open 回执后（焦点/可见集合/zs.lastProjectPath 提交前）与装载刷新波后（persistNav 前）核意图；取消=零提交（不切项目/不写记忆/不写偏好/不弹错/安静返回，recordWrite 'project.open.cancelled' 观测）；**装载期取消还原焦点**（仅当焦点仍指向本次结果且无更新代次）。验证分列：集成 S2/S3/S4（project.open/成员装载/thread.get 等待期）+S5 反序+S6 合同（启动恢复不被无关意图拦、用户级打开仍取消在途）；门 G2 用 **main.ts 既有观测钩子 ZS_UI_DELAY_METHOD_MS**（真实转发层受控延迟——重启注入 project.open:3200/member.list:2500 造确定性窗口）。**先复现**：unfixed 集成 FAIL 于 S2、unfixed 门 G2①② FAIL（active=A+prefs=A=复核签名）。
+> - **P2 混合标签收起**：判据改 `shouldAutoHidePreviewFor`（**当前活动预览来源**+explicitShow——保留的历史房间/线程标签不再阻止收起）；Room/线程共用，**DmPage 同判据新增+DM 头部 PreviewReopenButton**（hidden 时 pane 不挂载——单向门反例）。门 G1 矩阵（真实侧栏点击+原生滚轮）：room+files/thread+files/显式再往返/显式保护/跨项目/在途/DM+草稿+阅读位置 240 保持。**先复现**：unfixed G1 FAIL 于①③⑤⑥+截图视觉判读（两标签占房无重开按钮）。
+> - **衍生真缺陷：阅读位置恢复**——原 effect 挂载即赋 scrollTop，异步内容装载前被钳 0（r73 实测 reopen=0 未断言）；且钳制赋值触发 scroll→rememberScroll 把钳制值写回=丢位置。修复：逐帧重试到**目标可达**才赋值（≤90 帧），用户滚轮/按下即停。
+> - **上传重传口径**：uploadDiagnosed 逐次记录（耗时/错误原文/artifacts 落库/分类）——本轮 3 次 XLSX 首次通过（4.7–5.1s），**15s 未复现→归类悬置**（r73「环境抖动」维持未证实；仪器常驻）；UNKNOWN 合同未动。
+> - **坑**：ZS_UI_DELAY_METHOD_MS 只延迟首个匹配方法（重启换钩子）；start-desktop.bat 清洗父环境 ZS_*（发布形态取消复证用同刻双 hash——取消先于任何异步回执）；侧栏房间只列最后聚焦项目（refreshRooms 替换语义——跨项目回房走项目页路由）；合成 scroll 事件不触发 React onScroll（门内滚动用 CDP 原生滚轮）；import.meta.env 在 esbuild 打包链未定义（调试行曾致渲染回退）。
+> - **边界**：触屏/触摸板、<940px 分隔条细分、逐页像素级对照（沿用）；既有延期不动。报告 `r74-cross-scenarios-closeout-20261009.md`+矩阵 `capability-matrix-r74-20261009.md`。
+
+## 历史快照（2026-10-09 第七十三轮）
 
 > R73=页面切换/预览布局/导航取消收口（v10 用户实测三项：切房间预览占用+无分隔条+放大无效；review-r72 §P1 已取消定位仍切项目）。**主交付=desktop-daily-win-v11** `bld_87d8fd4ec1c6283c`（commit `ed39838`，dirty=false，593/593；r63 --src v11 ok realCalls=0；**启动器发布协议复证三项修复 ok**：自动收起/拖动 608→460/放大铺满+Esc，console 0）；交互门 `verify-daily-r73.cjs` **G1–G6 全绿**（ok:true, errs:[]；realCallRoots 6×0）；全量 921/921（一次环境 flake 复跑绿）；r72 门回归 ok errs=[]。
 > - **A 自动收起**：进对话上下文时纯文件页来源预览 hidden（标签/阅读位置/草稿保留；房间头部重开按钮=显式不乒乓）；explicitShow 两处 openPreview 统一（**actions-preview 漏设是在途回弹根因**——门迭代挖出）+effect 补 s.resources 依赖。
