@@ -1,0 +1,973 @@
+{
+  "scope": "R76 required acceptance; repository-wide external environment checks are separate",
+  "pass": true,
+  "package": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v15",
+  "build": {
+    "buildId": "bld_e1445d7659d870b2",
+    "commit": "485386ca3c3d591fb53fc62c58b1bd0881c89bc4",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-11T04:13:59.197Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "manifest": {
+    "checked": 593,
+    "mismatches": []
+  },
+  "sourceTests": {
+    "files": 118,
+    "total": 927,
+    "passed": 927,
+    "failed": 0
+  },
+  "lint": {
+    "baselineErrors": 49,
+    "finalErrors": 49,
+    "newErrors": []
+  },
+  "finalImageVerification": {
+    "pass": true,
+    "errs": [],
+    "facts": {
+      "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v15",
+      "stages": [
+        "selection/upload"
+      ],
+      "realCalls": 0,
+      "protocolUrl": "zsres://app/index.html",
+      "pipeName": "zs-daily-876ba370-6e4b-4d65-a1fd-2318ed27b980",
+      "upload": [
+        {
+          "status": "ready",
+          "text": "中文图片.png2233KBv1预览"
+        }
+      ],
+      "preview": {
+        "text": "中文图片.pngv1默认房间 · 某人的消息 · 中文图片.png会话资源适应窗口原尺寸−41%＋复位另存原件1043 × 1439 · 拖动查看",
+        "naturalWidth": 1043,
+        "naturalHeight": 1439,
+        "rect": {
+          "width": 422.6875,
+          "height": 583.1875
+        }
+      },
+      "afterSend": {
+        "text": "众说\n已连接\n项目管理\n·\n图片验证\n后台任务 0 · 0 turn\n真实派发\n搜索与收藏\n全局搜索\n文件与 Git\n任务看板\n成员管理\n私信\n项目\n图片验证\n默认房间\n默认房间\n打开/切换项目\n恢复检查\n待我处理\n设置\n默认房间\n执行成员 · 1 名成员\n对话池\n任务看板\n文件\n记录 · 无任务号\n刚刚\n中文图片.png\n图片\n0 条回复\n项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型\n去成员页配置\nM0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——本次推导为未指派（AUTO），发送后任务会立即受阻\n@ 指定成员\n本次仅记录\n计划模式\n发送\n中文图片.png\nv1\n默认房间 · 某人的消息 · 中文图片.png\n会话资源\n适应窗口\n原尺寸\n−\n41%\n＋\n复位\n另存原件\n1043 × 1439 · 拖动查看\n已仅记录（不派发）",
+        "hash": "#/project/prj_230c304c-2a1b-4593-8c97-64121928287a/room/room_default_prj_230c304c-2a1b-4593-8c97-64121928287a"
+      },
+      "links": [
+        {
+          "message_id": "msg_75d73e04-b3ba-40d2-b213-384f4b54176f",
+          "artifact_id": "art_175ba541-a473-46af-b090-52cd0e0dfd55"
+        }
+      ],
+      "cold": [
+        {
+          "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+          "name": "中文图片.png图片"
+        }
+      ],
+      "threadExpanded": true,
+      "samples": [
+        {
+          "t": 1791692064186,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692064438,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692064691,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692064941,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692065193,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692065445,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692065710,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692065961,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692066212,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692066479,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692066731,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692066996,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692067262,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692067513,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692067776,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692068027,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692068290,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692068552,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692068817,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692069080,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692069345,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692069610,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692069874,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692070137,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692070388,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692070639,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692070899,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692071152,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692071413,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692071665,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692071931,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692072182,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692072444,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692072707,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692072969,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692073233,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692073498,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692073748,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692073999,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692074250,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692074503,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692074753,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692075004,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692075270,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692075537,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692075789,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692076041,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692076293,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692076545,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692076796,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692077047,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692077299,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692077552,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692077804,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692078056,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692078318,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692078583,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692078848,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692079102,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692079354,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692079605,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692079857,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692080110,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692080362,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        },
+        {
+          "t": 1791692080614,
+          "chips": [
+            {
+              "id": "art_175ba541-a473-46af-b090-52cd0e0dfd55",
+              "name": "中文图片.png图片"
+            }
+          ]
+        }
+      ],
+      "extended": {
+        "sentMessagePreview": {
+          "pass": true,
+          "image": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 422.6875,
+            "drawHeight": 583.1875,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          }
+        },
+        "zoomDragMaximizeEsc": {
+          "pass": true,
+          "original": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 1043,
+            "drawHeight": 1439,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "enlarged": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 1303.75,
+            "drawHeight": 1798.75,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "dragged": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 1303.75,
+            "drawHeight": 1798.75,
+            "visible": true,
+            "transform": "translate(65px, 35px)"
+          },
+          "max": true,
+          "restored": true
+        },
+        "saveOriginalBytes": {
+          "pass": true,
+          "sourceHash": "3982c283d3af959108104026ac6bb02fbb594962294a4ad6055a210afd435967",
+          "savedHash": "3982c283d3af959108104026ac6bb02fbb594962294a4ad6055a210afd435967"
+        },
+        "formatsAndTabState": {
+          "pass": true,
+          "images": [
+            {
+              "name": "中文照片.jpg",
+              "image": {
+                "width": 96,
+                "height": 64,
+                "drawWidth": 96,
+                "drawHeight": 64,
+                "visible": true,
+                "transform": "translate(0px, 0px)"
+              }
+            },
+            {
+              "name": "中文网页.webp",
+              "image": {
+                "width": 96,
+                "height": 64,
+                "drawWidth": 96,
+                "drawHeight": 64,
+                "visible": true,
+                "transform": "translate(0px, 0px)"
+              }
+            },
+            {
+              "name": "中文动图.gif",
+              "image": {
+                "width": 96,
+                "height": 64,
+                "drawWidth": 96,
+                "drawHeight": 64,
+                "visible": true,
+                "transform": "translate(0px, 0px)"
+              }
+            }
+          ],
+          "restored": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 1303.75,
+            "drawHeight": 1798.75,
+            "visible": true,
+            "transform": "translate(65px, 35px)"
+          }
+        },
+        "threadBodyAndMultiAttachments": {
+          "pass": true,
+          "attachmentNames": [
+            "中文照片.jpg",
+            "中文网页.webp",
+            "中文动图.gif"
+          ],
+          "image": {
+            "width": 96,
+            "height": 64,
+            "drawWidth": 96,
+            "drawHeight": 64,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          }
+        },
+        "threadArtifactsPicture": {
+          "pass": true,
+          "image": {
+            "width": 96,
+            "height": 64,
+            "drawWidth": 96,
+            "drawHeight": 64,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          }
+        },
+        "corruptDecodeAndCapacity": {
+          "pass": true,
+          "error": "图片字节已读取，但浏览器无法解码。文件可能损坏或格式不受支持；已保存原件保留。重试预览另存原件",
+          "warning": "损坏图片.png 已保存，但浏览器无法解码图片；文件可能损坏或格式不受支持。原件已保存；可打开预览重试或另存原件。",
+          "tooLarge": "超容量.jpg 上传失败：图片原件超过 8MB 上限（超容量.jpg · 8388609B）——可换支持类型重选重选文件",
+          "acceptedBytes": 8388608
+        },
+        "roomFilesResource": {
+          "pass": true,
+          "image": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 1303.75,
+            "drawHeight": 1798.75,
+            "visible": true,
+            "transform": "translate(65px, 35px)"
+          }
+        },
+        "worktreePicture": {
+          "pass": true,
+          "image": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 291.6499938964844,
+            "drawHeight": 402.38751220703125,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "fit": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 291.6499938964844,
+            "drawHeight": 402.38751220703125,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          }
+        },
+        "worktreeBmpSvg": {
+          "pass": true,
+          "images": [
+            {
+              "name": "中文位图.bmp",
+              "image": {
+                "width": 96,
+                "height": 64,
+                "drawWidth": 96,
+                "drawHeight": 64,
+                "visible": true,
+                "transform": "translate(0px, 0px)"
+              }
+            },
+            {
+              "name": "中文矢量.svg",
+              "image": {
+                "width": 96,
+                "height": 64,
+                "drawWidth": 96,
+                "drawHeight": 64,
+                "visible": true,
+                "transform": "translate(0px, 0px)"
+              }
+            }
+          ]
+        },
+        "unverifiedImageActions": {
+          "pass": true,
+          "gate": {
+            "text": "codex / gpt-6-luna：本组合图片输入尚未认证：中文照片.jpg仅发送文字（图片不送模型）改为仅记录移除图片继续成员配置取消",
+            "emptyTextDisabled": true
+          }
+        },
+        "certifiedMemberPreflight": {
+          "pass": true,
+          "members": [
+            {
+              "memberId": "m_default_prj_230c304c-2a1b-4593-8c97-64121928287a_0",
+              "kind": "claude",
+              "model": "deepseek-flash",
+              "status": "supported",
+              "evidence": "r76-20261011-claude-deepseek-flash-vision"
+            }
+          ]
+        },
+        "dmImageOnlyRecord": {
+          "pass": true,
+          "draft": {
+            "width": 96,
+            "height": 64,
+            "drawWidth": 96,
+            "drawHeight": 64,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "sent": {
+            "width": 96,
+            "height": 64,
+            "drawWidth": 96,
+            "drawHeight": 64,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "conversationId": "dm_74b18ddf-a41c-49ca-a62c-25f02be4703c"
+        },
+        "deliveryDocumentPicture": {
+          "pass": true,
+          "image": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 422.6875,
+            "drawHeight": 583.1875,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          },
+          "fixture": "formal FakeRuntimeAdapter/worker generated; not a real model delivery"
+        },
+        "reopenRecordPreview": {
+          "pass": true,
+          "image": {
+            "width": 1043,
+            "height": 1439,
+            "drawWidth": 422.6875,
+            "drawHeight": 583.1875,
+            "visible": true,
+            "transform": "translate(0px, 0px)"
+          }
+        }
+      }
+    },
+    "dir": "D:\\zhongshuo\\dist\\desktop\\r76-images-1791692055970"
+  },
+  "finalOpenVerification": {
+    "ok": true,
+    "errs": [],
+    "facts": {
+      "buildId": "bld_e1445d7659d870b2",
+      "commit": "485386ca3c3d591fb53fc62c58b1bd0881c89bc4",
+      "origin": {
+        "hash": "#/project/prj_0c330dd7-9706-4560-9196-f3d42a5c",
+        "active": "项目A"
+      },
+      "openB": {
+        "hash": "#/project/prj_e944717e-e9ce-4860-9d4e-ecae385f5b04/room/room_default_prj_e944717e-e9ce-4860-9d4e-ecae385f5b04",
+        "active": "项目B",
+        "composer": true,
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791692055980\\项目B",
+        "projAKept": true,
+        "toasts": []
+      },
+      "openC": {
+        "hash": "#/project/prj_8a90c830-2457-4d24-b6e2-b0bb5052c754/room/room_default_prj_8a90c830-2457-4d24-b6e2-b0bb5052c754",
+        "active": "项目C",
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791692055980\\项目C",
+        "toasts": []
+      },
+      "restart": {
+        "active": "项目C",
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791692055980\\项目C"
+      },
+      "filesOk": true,
+      "consoleErrors": [],
+      "realCalls": 0
+    },
+    "dir": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791692055980"
+  },
+  "simultaneousFreshRoots": {
+    "pass": true,
+    "uiPipe": "zs-daily-876ba370-6e4b-4d65-a1fd-2318ed27b980",
+    "openPipe": "zs-daily-40513341-4dbc-43bc-8e93-156083483631"
+  },
+  "cancellationRegression": {
+    "pass": true,
+    "dir": "D:\\zhongshuo\\dist\\desktop\\gate-r75-r75-gate-20261011031047",
+    "realCalls": {
+      "root2": 0
+    }
+  },
+  "realImageCertification": {
+    "startTurnCalls": 2,
+    "claudeDeepseekFlash": "supported for pinned tested combination",
+    "codexGpt6Luna": "unverified after 120s upstream timeout"
+  },
+  "excludedEnvironmentTests": [
+    "docxWordValidation: WPS/Word environment",
+    "githubSandbox: schannel TLS"
+  ],
+  "originalFailuresRetained": [
+    "review-attachment-flicker-20261011/ui-result.json",
+    "r76-v14-image-baseline-20261011.json",
+    "dist/r76-tests-all.log",
+    "dist/r76-tests-final-ownership.json",
+    "dist/r76-foreign-pool-before-fix.log",
+    "dist/r76-first-clean-launcher-failed.log"
+  ],
+  "userSamplesProfilesCredentialsCommitted": false,
+  "migrationsModified": false
+}
