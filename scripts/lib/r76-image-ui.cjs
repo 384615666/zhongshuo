@@ -164,7 +164,8 @@ module.exports = async function verifyImages({ cdp, facts, errs, outDir, project
       await until(()=>cdp.tryEval(`document.querySelector('[data-zs-image-capability="${peer.id}"]')?.textContent.includes('已认证')`),v=>v,12000,'R77 member certification status');
       const member=await cdp.eval(`document.querySelector('[data-zs-image-capability="${peer.id}"]').textContent`);
       await cdp.shot(path.join(outDir,'r77-member-status.png'));
-      await cdp.eval(`location.hash='/project/${pid}/dm/${conv}';true`);await pause(600);
+      await cdp.eval(`location.hash='/dm/${conv}';true`);
+      await until(()=>cdp.tryEval("[...document.querySelectorAll('#hifi-root .msg-attach')].some(x=>x.textContent.includes('中文照片.jpg'))"),v=>v,12000,'R77 return to DM history');
       checks.r77ConfigurationStatus={pass:mismatch.ok&&!mismatch.data.supported&&preview.visible&&member.includes('deepseek-flash')&&member.includes('协议')&&matching.includes('模型ID')&&mismatchText.includes('无法确定'),matching,mismatch: mismatch.data.members, mismatchText,member,preview};
       if(!checks.r77ConfigurationStatus.pass)errs.push('R77 configuration status failed');
     }
