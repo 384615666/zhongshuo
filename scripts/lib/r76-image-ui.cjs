@@ -147,6 +147,27 @@ module.exports = async function verifyImages({ cdp, facts, errs, outDir, project
     await cmd('member.setRuntime',{memberId:peer.id,kind:'claude',model:'deepseek-flash',permissionMode:'plan'});
     const capable=await cmd('message.imageCapability',{target:{kind:'dm',projectId:pid,conversationId:conv},mentions:[]});
     checks.certifiedMemberPreflight={pass:capable.ok&&capable.data.supported,members:capable.data?.members};if(!checks.certifiedMemberPreflight.pass)errs.push('certifiedMemberPreflight failed');
+    if (facts.source.includes('v16')) {
+      await choose([path.join(project,'中文照片.jpg')]);
+      await until(()=>cdp.tryEval("document.querySelector('[data-zs-image-status]')?.textContent.includes('真实识图已认证')"),v=>v,12000,'R77 certified composer status');
+      const matching=await cdp.eval("document.querySelector('[data-zs-image-status]').textContent");
+      const localSettings=path.join(project,'.claude','settings.local.json');fs.mkdirSync(path.dirname(localSettings),{recursive:true});
+      fs.writeFileSync(localSettings,JSON.stringify({env:{ANTHROPIC_BASE_URL:'http://127.0.0.1:1/r77-own-fixture'}}));
+      await until(()=>cdp.tryEval("document.querySelector('[data-zs-image-status]')?.textContent.includes('渠道覆盖')"),v=>v,12000,'R77 project mismatch composer status');
+      const mismatch=await cmd('message.imageCapability',{target:{kind:'dm',projectId:pid,conversationId:conv},mentions:[]});
+      const mismatchText=await cdp.eval("document.querySelector('[data-zs-image-status]').textContent");
+      await cdp.shot(path.join(outDir,'r77-config-mismatch.png'));
+      const preview=await previewDraft('中文照片.jpg');
+      fs.unlinkSync(localSettings);
+      await until(()=>cdp.tryEval("document.querySelector('[data-zs-image-status]')?.textContent.includes('真实识图已认证')"),v=>v,12000,'R77 restored composer status');
+      await cdp.eval(`location.hash='/project/${pid}/members';true`);
+      await until(()=>cdp.tryEval(`document.querySelector('[data-zs-image-capability="${peer.id}"]')?.textContent.includes('已认证')`),v=>v,12000,'R77 member certification status');
+      const member=await cdp.eval(`document.querySelector('[data-zs-image-capability="${peer.id}"]').textContent`);
+      await cdp.shot(path.join(outDir,'r77-member-status.png'));
+      await cdp.eval(`location.hash='/project/${pid}/dm/${conv}';true`);await pause(600);
+      checks.r77ConfigurationStatus={pass:mismatch.ok&&!mismatch.data.supported&&preview.visible&&member.includes('deepseek-flash')&&member.includes('协议')&&matching.includes('模型ID')&&mismatchText.includes('无法确定'),matching,mismatch: mismatch.data.members, mismatchText,member,preview};
+      if(!checks.r77ConfigurationStatus.pass)errs.push('R77 configuration status failed');
+    }
 
     const h=await cmd('conversation.history',{conversationId:conv});
     await click('#hifi-root .msg-attach','中文照片.jpg');const sent=await decoded('中文照片.jpg');

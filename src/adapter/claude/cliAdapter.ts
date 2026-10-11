@@ -31,7 +31,9 @@
 import { claudeInput } from '../imageInput.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { resolveClaudeConfiguration } from './configuration.ts';
+export { resolveClaudeConfiguration } from './configuration.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
@@ -47,6 +49,20 @@ import type {
 } from '../../contracts/runtime.ts';
 
 export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.3';
+
+const executableHashes = new Map<string, { stamp: string; hash: string }>();
+export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: string) {
+  const entry = resolveClaudeExecutable(options.executable);
+  const path = entry.prefixArgs[0] ?? entry.command;
+  const st = statSync(path); const stamp = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
+  let cached = executableHashes.get(path);
+  if (cached?.stamp !== stamp) { cached = { stamp, hash: createHash('sha256').update(readFileSync(path)).digest('hex') }; executableHashes.set(path, cached); }
+  const configuration = resolveClaudeConfiguration(cwd, options.extraArgs);
+  const identityKey = createHash('sha256').update(JSON.stringify({ executableHash: cached.hash,
+    model: options.model ?? process.env.ZS_CLAUDE_MODEL, permissionMode: options.permissionMode ?? 'plan',
+    adapterVersion: CLAUDE_ADAPTER_VERSION, configurationKey: configuration.configurationKey })).digest('hex');
+  return { ...configuration, executableHash: cached.hash, identityKey };
+}
 
 /** 渠道裸模型名（deepseek-flash / deepseek/deepseek-v4.1-flash / glm-5.3…）；拒绝 [1m] 类后缀语法。 */
 const CLAUDE_MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -239,14 +255,16 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
    * REC-LIFE-1（第十二轮）：ZS_MANAGED_RUNTIME=1 时走受管桥（Job Object 挂起纳管）——
    * 桥不可用直接抛错拒绝派发，**不降级为未受管运行**；未设变量维持既有 spawn 路径。 */
   private productionSpawn(options: ClaudeCliAdapterOptions): (args: string[], cwd: string) => ChildProcessWithoutNullStreams {
-    const entry = resolveClaudeExecutable(options.executable);
-    return (args, cwd) =>
-      spawn(entry.command, [...entry.prefixArgs, ...args], {
+    return (args, cwd) => {
+      const entry = resolveClaudeExecutable(options.executable);
+      const context = resolveClaudeConfiguration(cwd, options.extraArgs);
+      return spawn(entry.command, [...entry.prefixArgs, ...args], {
         cwd,
-        env: process.env, // 继承本机环境（渠道配置 ANTHROPIC_BASE_URL/AUTH_TOKEN 在用户 settings，由 CLI 自行读取；本适配器不读取不回显）
+        env: context.env, // Preserve all actual CLI sources; never force settings to match a certificate.
         shell: false,
         windowsHide: true,
       }) as ChildProcessWithoutNullStreams;
+    };
   }
 
   probe(): Promise<ProbeResult> {
@@ -332,6 +350,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       args.push('--resume', resumeId);
     }
     args.push(...(this.options.extraArgs ?? []));
+    if (input.imageConfigurationKey != null && input.images?.length) {
+      const identity = claudeLaunchIdentity(this.options, session.cwd);
+      if (identity.reason != null || identity.identityKey !== input.imageConfigurationKey) {
+        throw new AdapterCallError('CAPABILITY_UNSUPPORTED', `图片启动配置已变化或无法核实：${identity.reason ?? 'CLI、模型、权限或配置快照不匹配'}；原件保留`);
+      }
+    }
     const proc = this.spawnFn(args, session.cwd);
     // prompt 全文经 stdin 原样传入（CLI -p 无位置参数时读 stdin）：不经 shell、不进 argv。
     if (proc.stdin != null) {

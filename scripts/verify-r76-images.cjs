@@ -65,7 +65,7 @@ async function modalOpenCurrentPick(cdp) {
  const cmd = async (method,params) => cdp.eval(`window.zs.command(${JSON.stringify({protocolVersion:1,commandId:'r76-'+Math.random().toString(36).slice(2),method,params})})`);
  const click = async (selector,text) => cdp.eval(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(selector)})].find(b=>b.textContent.includes(${JSON.stringify(text)}));b?.click();return !!b})()`);
  try {
- start(); cdp=await connect('start'); facts.protocolUrl=cdp.pageUrl;facts.pipeName=fs.readFileSync(path.join(copyDir,'server-data','pipe-name.txt'),'utf8').trim();if(src.includes('v15')&&!/^zs-daily-[0-9a-f-]{36}$/.test(facts.pipeName))errs.push('new data root must use GUID pipe identity'); if(!String(cdp.pageUrl).startsWith('zsres:'))errs.push('published protocol must be zsres');
+ start(); cdp=await connect('start'); facts.protocolUrl=cdp.pageUrl;facts.pipeName=fs.readFileSync(path.join(copyDir,'server-data','pipe-name.txt'),'utf8').trim();if(/v(?:15|16)/.test(src)&&!/^zs-daily-[0-9a-f-]{36}$/.test(facts.pipeName))errs.push('new data root must use GUID pipe identity'); if(!String(cdp.pageUrl).startsWith('zsres:'))errs.push('published protocol must be zsres');
  await until(()=>cdp.tryEval("document.body.classList.contains('hifi-on')"),v=>v,60000,'hifi');
  console.log('stage project'); const opened=await cmd('project.open',{path:project}); if(!opened.ok) throw new Error(JSON.stringify(opened));
  const made=await cmd('room.create',{projectId:opened.data.project.id,name:'默认房间'}); if(!made.ok) throw new Error(JSON.stringify(made));
@@ -97,16 +97,16 @@ async function modalOpenCurrentPick(cdp) {
  if(facts.links.length!==1) errs.push('record-only must persist one exact attachment');
  if(th){
  const chipsExpr="[...document.querySelectorAll('.root-card .msg-attach')].map(x=>({id:x.dataset.zsArtifactId,name:x.textContent}))";
- facts.cold=await cdp.eval(chipsExpr); if(facts.cold.length!==1||src.includes('v15')&&facts.cold[0]?.id!==facts.links[0]?.artifact_id) errs.push('cold pool attachment absent');
+ facts.cold=await cdp.eval(chipsExpr); if(facts.cold.length!==1||/v(?:15|16)/.test(src)&&facts.cold[0]?.id!==facts.links[0]?.artifact_id) errs.push('cold pool attachment absent');
  await cdp.eval("document.querySelector('#hifi-root .root-replies-btn')?.click();true");
  await until(()=>cdp.tryEval("document.querySelector('#hifi-root .col-thread textarea.composer-input')!=null"),v=>v,20000,'expanded thread');
  facts.threadExpanded=true;
  await sleep(300);
  facts.samples=[];const end=Date.now()+16500;while(Date.now()<end){facts.samples.push({t:Date.now(),chips:await cdp.eval(chipsExpr)});await sleep(250);}
- if(facts.samples.some(s=>s.chips.length!==1||src.includes('v15')&&s.chips[0]?.id!==facts.links[0]?.artifact_id))errs.push('pool chips unstable over >=3 refresh cycles');
+ if(facts.samples.some(s=>s.chips.length!==1||/v(?:15|16)/.test(src)&&s.chips[0]?.id!==facts.links[0]?.artifact_id))errs.push('pool chips unstable over >=3 refresh cycles');
  await cdp.shot(path.join(outDir,'sent-stability.png'));
  }
- if(src.includes('v15')){
+ if(/v(?:15|16)/.test(src)){
    const roomId=facts.afterSend.hash.match(/\/room\/([^?]+)/)[1];
    const restart=async(beforeStart)=>{if(cdp&&!cdp.closed){try{await Promise.race([cdp.send('Browser.close'),sleep(2000)]);}catch{ /* already exited */ }}await sleep(2500);killCopy();if(beforeStart)await beforeStart();start();cdp=await connect('restart');await until(()=>cdp.tryEval("document.body.classList.contains('hifi-on')"),v=>v,60000,'restart UI');await sleep(1000);return cdp;};
    const seedDelivery=async()=>{let delivery;const fresh=await restart(async()=>{const entry=path.join(outDir,'seed-delivery.cjs');require('esbuild').buildSync({entryPoints:[path.join(repo,'scripts/lib/r76-seed-delivery.ts')],bundle:true,platform:'node',format:'cjs',outfile:entry,external:['better-sqlite3','esbuild']});const result=spawnSync(process.execPath,[entry,path.join(copyDir,'server-data'),opened.data.project.id,roomId],{cwd:repo,encoding:'utf8',timeout:30000});if(result.status!==0)throw new Error(result.stderr.slice(-500));delivery=JSON.parse(result.stdout.trim());});return {cdp:fresh,delivery};};

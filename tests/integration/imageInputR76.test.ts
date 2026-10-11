@@ -80,8 +80,8 @@ function makeEnv() {
 
 
 // A protocol-only supported fixture enables the full daemon → worker path without a model call.
-const status=vi.hoisted(()=>({supported:true}));
-vi.mock('../../src/daemon/imageCapability.ts',()=>({memberImageCapability:()=>({status:status.supported?'supported':'unverified'})}));
+const status=vi.hoisted(()=>({supported:true,identityKey:'original'}));
+vi.mock('../../src/daemon/imageCapability.ts',()=>({memberImageCapability:()=>({status:status.supported?'supported':'unverified',identityKey:status.identityKey})}));
 
 describe('R76 image sends and frozen omission',()=>{
  it('image-only positive, original envelope replay once, worker passes actual bytes; omission persists',async()=>{
@@ -125,6 +125,18 @@ describe('R76 image sends and frozen omission',()=>{
    const hash=(await import('node:crypto')).createHash('sha256').update(svg).digest('hex');expect(r.sha256).toBe(hash);
    const up=await env.cmdRaw('attachment.uploadImage',{conversationId:'conv_room',filename:'中文.svg',contentBase64:svg.toString('base64')});expect(up.ok).toBe(false);
   }finally{env.close();}
+ });
+ it('R77 same certified channel but configuration snapshot changes during openSession: no startTurn, no UNKNOWN',async()=>{
+  const env=makeEnv();try{
+   const up=await env.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:'conv_room',filename:'配置.png',contentBase64:makePng().toString('base64')});
+   await env.cmd('message.submit',{target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'',intent:'default',mentions:[{kind:'member',memberId:'mA'}],attachmentRefs:[up.attachmentId]});
+   const {worker,adapter}=env.makeWorker();const open=adapter.openSession.bind(adapter);
+   adapter.openSession=async input=>{const session=await open(input);status.identityKey='changed-configuration';return session;};
+   await expect(worker.runOnce()).rejects.toThrow('图片输入认证');expect(status.supported).toBe(true);expect(adapter.startTurnLog).toHaveLength(0);
+   expect((env.db.prepare("SELECT count(*) c FROM agent_turns WHERE status='UNKNOWN'").get() as {c:number}).c).toBe(0);
+   expect((env.db.prepare('SELECT count(*) c FROM message_attachments').get() as {c:number}).c).toBe(1);
+   await adapter.closeAllSessions();
+  }finally{status.identityKey='original';env.close();}
  });
  it('WebP truncated lossless header rejects without a range exception',async()=>{
   const env=makeEnv();try{const raw=Buffer.alloc(21);raw.write('RIFF');raw.write('WEBP',8);raw.write('VP8L',12);raw[20]=0x2f;

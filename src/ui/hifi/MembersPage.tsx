@@ -29,6 +29,7 @@ interface RuntimeInfo {
   installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null;
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
   environment?: { realDispatchGuard?: boolean; allowFake?: boolean };
+  imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
 }
 
 const runtimeAuthOf = (raw: string | null): string => {
@@ -237,6 +238,12 @@ export function MembersPage() {
                   </div>
                 </div>
                 <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                  {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <div data-zs-image-capability={m.id}>
+                    配置：{runtimes[m.id]!.imageInput!.configuration} · 模型ID：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
+                    渠道：{runtimes[m.id]!.imageInput!.channel}<br />
+                    协议：{runtimes[m.id]!.imageInput!.protocol}<br />
+                    真实识图：{runtimes[m.id]!.imageInput!.status === 'supported' ? '已认证' : '未认证'} · {runtimes[m.id]!.imageInput!.reason}
+                  </div> : null}
                   {running.length > 0 ? `负责任务 ${running.map((t) => `#${t.roomTaskNumber}`).join('、')}` : '当前没有负责的未结束任务'}
                   {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
                 </div>

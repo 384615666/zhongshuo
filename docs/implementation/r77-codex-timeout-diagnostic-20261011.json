@@ -1,0 +1,226 @@
+{
+  "round": "R77",
+  "newModelCalls": 0,
+  "liveReadOnly": {
+    "at": "2026-10-11T05:08:36.012Z",
+    "realCalls": 0,
+    "methods": [
+      "initialize",
+      "config/read",
+      "config/read",
+      "model/list"
+    ],
+    "modelId": "gpt-6-luna",
+    "cliVersion": "codex-cli 0.160.0",
+    "configs": [
+      {
+        "scope": "repository cwd",
+        "provider": "custom",
+        "model": "gpt-6.1-sol",
+        "baseUrl": null,
+        "endpointResolution": "default endpoint depends on authentication; not inferred",
+        "wireApi": "responses",
+        "supportsWebsockets": true,
+        "streamMaxRetries": null,
+        "streamIdleTimeoutMs": null,
+        "origins": [
+          "user",
+          "system"
+        ]
+      },
+      {
+        "scope": "R76 certification cwd",
+        "provider": "custom",
+        "model": "gpt-6.1-sol",
+        "baseUrl": null,
+        "endpointResolution": "default endpoint depends on authentication; not inferred",
+        "wireApi": "responses",
+        "supportsWebsockets": true,
+        "streamMaxRetries": null,
+        "streamIdleTimeoutMs": null,
+        "origins": [
+          "user",
+          "system"
+        ]
+      }
+    ],
+    "models": [
+      {
+        "id": "gpt-6.1-sol",
+        "model": "gpt-6.1-sol",
+        "displayName": "GPT-6.1-Sol"
+      },
+      {
+        "id": "gpt-6-astra",
+        "model": "gpt-6-astra",
+        "displayName": "GPT-6-Astra"
+      },
+      {
+        "id": "gpt-6-sol",
+        "model": "gpt-6-sol",
+        "displayName": "GPT-6-Sol"
+      },
+      {
+        "id": "gpt-6-luna",
+        "model": "gpt-6-luna",
+        "displayName": "GPT-6-Luna"
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "model": "gpt-5.6-sol",
+        "displayName": "GPT-5.6-Sol"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "model": "gpt-5.6-terra",
+        "displayName": "GPT-5.6-Terra"
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "model": "gpt-5.6-luna",
+        "displayName": "GPT-5.6-Luna"
+      },
+      {
+        "id": "gpt-daybreak-blue-latest",
+        "model": "gpt-daybreak-blue-latest",
+        "displayName": "Daybreak Blue"
+      },
+      {
+        "id": "gpt-daybreak-red-latest",
+        "model": "gpt-daybreak-red-latest",
+        "displayName": "Daybreak Red"
+      },
+      {
+        "id": "gpt-5.5",
+        "model": "gpt-5.5",
+        "displayName": "GPT-5.5"
+      },
+      {
+        "id": "codex-auto-review",
+        "model": "codex-auto-review",
+        "displayName": "Codex Auto Review"
+      }
+    ],
+    "modelFound": true,
+    "nextCursor": null,
+    "cachedModel": [
+      {
+        "slug": "gpt-6-luna",
+        "displayName": "GPT-6-Luna"
+      }
+    ],
+    "pass": true
+  },
+  "originalTurnContext": [
+    {
+      "type": "session_meta",
+      "id": "01a128db-a5bd-7f12-af00-2ff207c3f6e7",
+      "model_provider": "custom",
+      "cwdKind": "R76 engineering certification",
+      "cli_version": "0.160.0"
+    },
+    {
+      "type": "turn_context",
+      "model": "gpt-6-luna",
+      "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+      "approval_policy": "never",
+      "sandbox": "read-only"
+    }
+  ],
+  "originalUpstreamLog": [
+    {
+      "timestamp": "2026-10-11T02:48:03.289417Z",
+      "level": "WARN",
+      "fields": {
+        "message": "stream disconnected - retrying sampling request (1/5 in 201ms)...",
+        "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+        "retries": 1,
+        "max_retries": 5,
+        "sampling_error": "request timed out"
+      },
+      "target": "codex_core::responses_retry"
+    },
+    {
+      "timestamp": "2026-10-11T02:48:18.519220Z",
+      "level": "WARN",
+      "fields": {
+        "message": "stream disconnected - retrying sampling request (2/5 in 394ms)...",
+        "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+        "retries": 2,
+        "max_retries": 5,
+        "sampling_error": "request timed out"
+      },
+      "target": "codex_core::responses_retry"
+    },
+    {
+      "timestamp": "2026-10-11T02:48:33.937667Z",
+      "level": "WARN",
+      "fields": {
+        "message": "stream disconnected - retrying sampling request (3/5 in 819ms)...",
+        "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+        "retries": 3,
+        "max_retries": 5,
+        "sampling_error": "request timed out"
+      },
+      "target": "codex_core::responses_retry"
+    },
+    {
+      "timestamp": "2026-10-11T02:48:49.779697Z",
+      "level": "WARN",
+      "fields": {
+        "message": "stream disconnected - retrying sampling request (4/5 in 1.54s)...",
+        "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+        "retries": 4,
+        "max_retries": 5,
+        "sampling_error": "request timed out"
+      },
+      "target": "codex_core::responses_retry"
+    },
+    {
+      "timestamp": "2026-10-11T02:49:06.355827Z",
+      "level": "WARN",
+      "fields": {
+        "message": "stream disconnected - retrying sampling request (5/5 in 2.937s)...",
+        "turn_id": "01a128db-b97d-7bf1-9694-68e92dd91029",
+        "retries": 5,
+        "max_retries": 5,
+        "sampling_error": "request timed out"
+      },
+      "target": "codex_core::responses_retry"
+    },
+    {
+      "timestamp": "2026-10-11T02:49:24.315946Z",
+      "level": "WARN",
+      "fields": {
+        "message": "falling back to HTTP"
+      },
+      "target": "codex_core::client"
+    }
+  ],
+  "originalFailure": "dist/desktop/r76-vision-cert/result.json (unchanged)",
+  "conclusion": {
+    "initialization": "completed before openSession returned",
+    "threadStart": "succeeded; original session_meta and turn_context preserved",
+    "turnStart": "reached provider turn; original turn_context.model=gpt-6-luna",
+    "upstream": "five sampling request timed out errors, then HTTP fallback, 120-second engineering deadline without completion",
+    "notEstablished": [
+      "model nonexistent",
+      "account has no access",
+      "image unsupported",
+      "exact network/proxy/provider cause",
+      "HTTP completion after timeout"
+    ],
+    "certification": "unverified",
+    "followupIfRequested": {
+      "minimumStartTurns": 1,
+      "model": "gpt-6-luna",
+      "sample": "same engineering PNG, 360x180, red square / blue circle / green triangle / hidden digits 5837",
+      "requires": "explicit new authorization and reachable configured provider; no user samples; no automatic retries"
+    }
+  },
+  "sources": [
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server"
+  ],
+  "secretsIncluded": false
+}

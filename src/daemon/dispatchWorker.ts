@@ -542,9 +542,10 @@ export class DispatchWorker {
         }
       : undefined;
     const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
+    const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
     const assembled = assembleDirectTurn({
       db: this.db,
-      allowImages: memberImageCapability(this.db, member.id).status === 'supported',
+      allowImages: imageCapabilityAtAssembly.status === 'supported',
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
@@ -806,7 +807,9 @@ export class DispatchWorker {
         return;
       }
 
-      if ((assembled.value.images?.length ?? 0) > 0 && (memberImageCapability(this.db, member.id).status !== 'supported'
+      const imageCapabilityAtLaunch = memberImageCapability(this.db, member.id);
+      if ((assembled.value.images?.length ?? 0) > 0 && (imageCapabilityAtLaunch.status !== 'supported'
+        || imageCapabilityAtLaunch.identityKey !== imageCapabilityAtAssembly.identityKey
         || JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf())) !== imageBindingAtAssembly)) {
         startupPhase = 'session-record'; // No turn request has been made; close the opened session normally.
         throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
@@ -824,6 +827,7 @@ export class DispatchWorker {
         inputBundleId: assembled.value.bundleId,
         text: assembled.value.text,
         images: assembled.value.images,
+        imageConfigurationKey: imageCapabilityAtLaunch.identityKey ?? undefined,
         policyId: 'policy-analyze',
         taskRevision: 0,
         resultKey: assembled.value.resultKey,

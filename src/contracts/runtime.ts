@@ -78,6 +78,8 @@ export interface TurnRequest {
   text: string;
   /** Protocol transport support is separate from real model vision certification. */
   images?: Array<{ artifactId: string; hash: string; mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; dataBase64: string }>;
+  /** Transient launch identity; never changes the frozen send envelope. */
+  imageConfigurationKey?: string;
   policyId: string;
   taskRevision: number;
   resultKey?: string;

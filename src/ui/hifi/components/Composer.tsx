@@ -398,6 +398,29 @@ export function Composer({
   /** 当前挂载目标键（结算时核对——迟到回执只在同键在挂时同步当前输入）。 */
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
+  const imageProjectId = useStore((s) => s.activeProjectId);
+  const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
+  const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
+    mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
+  useEffect(() => {
+    if (!attachments.some(a => a.status === 'ready' && a.kind === 'image_file')) return;
+    let cancelled = false; let reading = false;
+    const read = async () => {
+      if (reading) return; reading = true;
+      const conversationId = attachmentUpload?.conversationId ?? target.dmId ?? '';
+      const formalTarget = target.kind === 'room_root' ? { kind: target.kind, projectId: imageProjectId, conversationId, roomId: target.roomId }
+        : target.kind === 'thread' ? { kind: target.kind, projectId: imageProjectId, conversationId, threadId: target.threadId }
+        : { kind: target.kind, projectId: imageProjectId, conversationId };
+      try {
+        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
+        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.map(m => `${m.kind} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel} · 配置 ${m.configuration} · ${m.protocol} · 真实识图${m.status === 'supported' ? '已认证' : '未认证'}：${m.reason}`).join('；') : '线程回复按现有合同仅记录；图片可保存和预览'});
+      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览或仅记录，发送前可重试`}); }
+      finally { reading = false; }
+    };
+    void read(); const timer = setInterval(() => void read(), 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+    // imageContext includes the complete read scope; avoid unstable parent target objects.
+  }, [imageContext, draftKey]);
   /** 本目标的结果未知信封（store 持有——切走/卸载不丢）。 */
   const pendingEnv = useStore((st) => st.pendingSends[draftKey]);
   const [sending, setSending] = useState(false);
@@ -611,11 +634,11 @@ export function Composer({
         const formalTarget = target.kind === 'room_root' ? { kind: target.kind, projectId, conversationId, roomId: target.roomId }
           : target.kind === 'thread' ? { kind: target.kind, projectId, conversationId, threadId: target.threadId }
           : { kind: target.kind, projectId, conversationId };
-        const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string }> }>('message.imageCapability', {
+        const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string; channel: string; reason: string; configuration: string; protocol: string }> }>('message.imageCapability', {
           target: formalTarget, mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
         });
         if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
-        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置渠道'} / ${m.model ?? '未配置模型'}：${m.status === 'supported' ? '图片输入已认证；请 @ 单个成员后发送' : m.status === 'unsupported' ? '不支持图片输入' : '本组合图片输入尚未认证'}`).join('；') }); return; }
+        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置运行时'} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel ?? '无法确定'} · 配置 ${m.configuration ?? '未知'} · ${m.protocol ?? '协议未验证'} · 真实识图${m.status === 'supported' ? '已认证；请 @ 单个成员后发送' : '未认证'}：${m.reason ?? '尚无本组合真实识图证据'}`).join('；') }); return; }
       } catch (error) {
         setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试或改为仅记录。`);
         return;
@@ -1024,6 +1047,9 @@ export function Composer({
       ) : null}
 
       {/* 图片能力门（第五十二轮 §6.3）：显式二选一——选择前不发送；结果一次性冻结进信封。 */}
+      {imageStatus?.key === imageContext && attachments.some(a => a.status === 'ready' && a.kind === 'image_file') ? <div className="composer-mentions" data-zs-image-status="1">
+        <span className="chip record-chip" style={{ whiteSpace: 'normal' }}>{sendAs === 'record' ? '本次仅记录：图片本地保存与预览可用。' : ''}{imageStatus.text}</span>
+      </div> : null}
       {imageGate != null ? (
         <div className="composer-mentions">
           <span className="chip record-chip" title="模型图片输入能力未认证（IMAGE_INPUT_UNVERIFIED）——图片不会作为模型输入；两种选择都会如实注明">

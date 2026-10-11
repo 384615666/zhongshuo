@@ -221,9 +221,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       if (!avail.ok) {
         throw new Error(`受管运行时启用（ZS_MANAGED_RUNTIME=1）但不可用——拒绝启动，不降级为未受管执行：${avail.reason}`);
       }
-      const { resolveClaudeExecutable } = claudeCliMod;
+      const { resolveClaudeExecutable, resolveClaudeConfiguration } = claudeCliMod;
       return (executable: string | undefined) => (args: string[], cwd: string) =>
-        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd }) as never; // env 缺省=继承父环境（与未受管 spawn 的 env:process.env 等价）
+        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd, env: resolveClaudeConfiguration(cwd).env }) as never;
     })();
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
