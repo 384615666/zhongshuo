@@ -726,7 +726,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
   const gen = getState().loadGen;
   const projectId = getState().activeProjectId;
   const room = getState().rooms.find((r) => r.id === roomId);
-  if (room == null) return;
+  if (room == null || room.projectId !== projectId) return;
   try {
     const data = await command<PoolData>('room.pool', { roomId, limit: 50 });
     if (!stillCurrent(gen, projectId) || poolTickets.get(roomId) !== ticket) return;

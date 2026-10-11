@@ -79,7 +79,7 @@ interface StoreApi {
   setState(fn: (s: ReturnType<StoreApi['getState']>) => ReturnType<StoreApi['getState']>): void;
   getState(): {
     activeProjectId: string; loadGen: number;
-    messages: Array<{id: string; body: string; authorId: string; formalAttachments?: Array<{artifactId: string}>}>;
+    messages: Array<{id: string; projectId: string; body: string; authorId: string; formalAttachments?: Array<{artifactId: string}>}>;
     rooms: Array<{ id: string; conversationId?: string; memberIds: string[] }>;
     roomPool: Record<string, Array<{ threadId: string; taskId: string | null; replyCount: number; unread: number }>>;
     threadEntities: Record<string, { id: string; conversationId?: string; rootTaskId?: string; roomId: string }>;
@@ -182,6 +182,8 @@ describe('R76 atomic attachment roots', () => {
       bridge.command=async env=>{const r=await h.raw(env.method,env.params,env.commandId);await new Promise<void>(res=>{finish=res;});return r;};
       const late=h.bundle.loader.loadRoomPool(room.id);while(finish==null)await new Promise(r=>setTimeout(r,5));
       h.bundle.store.setState(s=>({...s,activeProjectId:'elsewhere',loadGen:s.loadGen+1}));finish();await late;expect(current()).toEqual([]);
+      let foreignReads=0;bridge.command=async env=>{foreignReads+=1;return h.raw(env.method,env.params,env.commandId);};
+      await h.bundle.loader.loadRoomPool(room.id);expect(foreignReads).toBe(0);expect(root().projectId).toBe(pid);
       expect((h.db.prepare('SELECT count(*) c FROM real_calls').get() as {c:number}).c).toBe(0);
     } finally { h.close(); }
   });

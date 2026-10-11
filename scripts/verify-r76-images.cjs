@@ -65,7 +65,7 @@ async function modalOpenCurrentPick(cdp) {
  const cmd = async (method,params) => cdp.eval(`window.zs.command(${JSON.stringify({protocolVersion:1,commandId:'r76-'+Math.random().toString(36).slice(2),method,params})})`);
  const click = async (selector,text) => cdp.eval(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(selector)})].find(b=>b.textContent.includes(${JSON.stringify(text)}));b?.click();return !!b})()`);
  try {
- start(); cdp=await connect('start'); facts.protocolUrl=cdp.pageUrl; if(!String(cdp.pageUrl).startsWith('zsres:'))errs.push('published protocol must be zsres');
+ start(); cdp=await connect('start'); facts.protocolUrl=cdp.pageUrl;facts.pipeName=fs.readFileSync(path.join(copyDir,'server-data','pipe-name.txt'),'utf8').trim();if(src.includes('v15')&&!/^zs-daily-[0-9a-f-]{36}$/.test(facts.pipeName))errs.push('new data root must use GUID pipe identity'); if(!String(cdp.pageUrl).startsWith('zsres:'))errs.push('published protocol must be zsres');
  await until(()=>cdp.tryEval("document.body.classList.contains('hifi-on')"),v=>v,60000,'hifi');
  console.log('stage project'); const opened=await cmd('project.open',{path:project}); if(!opened.ok) throw new Error(JSON.stringify(opened));
  const made=await cmd('room.create',{projectId:opened.data.project.id,name:'默认房间'}); if(!made.ok) throw new Error(JSON.stringify(made));
