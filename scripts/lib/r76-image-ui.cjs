@@ -154,6 +154,9 @@ module.exports = async function verifyImages({ cdp, facts, errs, outDir, project
   });
   await step('deliveryDocumentPicture',async()=>{
     const seeded=await seedDelivery();cdp=seeded.cdp;
+    // Close the read-only recovery dialog; never continue dispatch or release protection.
+    await cdp.eval("(()=>{const m=[...document.querySelectorAll('#hifi-root .modal')].find(x=>x.textContent.includes('恢复检查'));[...m?.querySelectorAll('button')??[]].find(b=>b.textContent.trim()==='关闭')?.click()})();true");
+    await until(()=>cdp.tryEval("document.querySelector('#hifi-root .scrim, #hifi-root .modal')==null"),v=>v,10000,'close read-only recovery overlay');
     await cdp.eval(`location.hash=${JSON.stringify('/thread/'+seeded.delivery.threadId+'?tab=artifacts')};true`);
     await until(()=>cdp.tryEval(`document.querySelector('[data-zs-delivery-row] button')!=null`),v=>v,20000,'fixture delivery list');
     await click('[data-zs-delivery-row] button','打开文档');
