@@ -1013,3 +1013,11 @@ body.zs-frameless .preview-pane.maximized {
 .preview-image-wrap.scroll { justify-content: flex-start; align-items: flex-start; }
 .preview-image { object-fit: contain; }
 .preview-image-meta { flex: none; }
+
+/* R76: bounded image canvas; intrinsic ratio, drag and actual decoder outcomes. */
+.zs-image-reader { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.zs-image-tools { flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.zs-image-viewport { flex: 1; min-height: 120px; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--bg-surface-2); touch-action: none; cursor: grab; }
+.zs-image-viewport:active { cursor: grabbing; }
+.zs-image-viewport img { flex: none; max-width: none; max-height: none; object-fit: contain; user-select: none; }
+.zs-image-error { position: absolute; inset: 24px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; cursor: default; }

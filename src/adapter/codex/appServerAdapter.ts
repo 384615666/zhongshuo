@@ -16,6 +16,7 @@
  * - 能力自报：仅 structuredEvents=supported（真实进程观察到通知链路）；其余 unverified
  *   或 unsupported——协议字段存在、方法实现、真实行为通过是三个不同状态。
  */
+import { codexInput } from '../imageInput.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -501,6 +502,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
+    const providerInput = codexInput(input);
     const state = this.stateOf(session);
     // 先登记 awaiting（通知可能早于响应到达，修复轮）。
     state.awaitingTurn = { internalTurnId: input.turnId, providerTurnId: null };
@@ -508,7 +510,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       'turn/start',
       {
         threadId: state.providerThreadId,
-        input: [{ type: 'text', text: input.text, text_elements: [] }],
+        input: providerInput,
         clientUserMessageId: input.dispatchKey,
       },
       (r) => {
@@ -539,7 +541,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     await this.request('turn/steer', {
       threadId: state.providerThreadId,
       expectedTurnId: providerTurnId,
-      input: [{ type: 'text', text: input.text, text_elements: [] }],
+      input: codexInput(input),
     });
   }
 

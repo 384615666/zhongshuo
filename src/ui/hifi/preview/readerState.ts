@@ -8,6 +8,7 @@
  * 既有合同回到首屏，不承诺跨重启恢复阅读位置）。
  */
 export type ReaderState =
+  | { kind: 'image'; zoom: number; x: number; y: number }
   | { kind: 'pptx'; page: number; zoomPercent: number }
   | { kind: 'pdf'; page: number; zoomMode: 'fit' | number }
   | { kind: 'xlsx'; sheetName: string | null }

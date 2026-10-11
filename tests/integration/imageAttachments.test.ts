@@ -122,7 +122,7 @@ describe('DEV-24 图片首包：预览/OCR/模型输入如实分列', () => {
     expect(pv.width).toBe(32);
     expect(pv.dataUrl.startsWith('data:image/png;base64,')).toBe(true);
     expect(pv.ocr).toBe('unsupported'); // OCR 如实未实现
-    expect(pv.modelInput).toBe('unverified-unsupported'); // 模型图片输入未认证
+    expect(pv.modelInput).toBe('depends-on-target-member'); // 模型图片输入未认证
     expect(pv.revision).toBe(1);
     // 原件被改写 → 完整性拒绝。
     const blobPath = (env.db.prepare('SELECT blob_path FROM artifacts WHERE id = ?').get(up.attachmentId) as { blob_path: string }).blob_path;

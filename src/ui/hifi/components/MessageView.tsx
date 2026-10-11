@@ -70,6 +70,7 @@ function MessageAttachments({
         {(message.formalAttachments ?? []).map((a) => (
           <button
             key={a.artifactId}
+            data-zs-artifact-id={a.artifactId}
             className="msg-attach"
             title={`打开 ${a.filename}（只读预览，不发送给 AI）`}
             onClick={() => onOpenAttachment?.(a)}

@@ -11,6 +11,7 @@
  * - 验收策略收尾：user_review → REVIEW + pending 交付；auto_deliver → DONE + not_required（§10.5）。
  * - 迟到完成不复活停止：turn 已 STOPPING 时完成事件走取消收尾并留 lateCompletion 审计（RT-06 形态）。
  */
+import { memberImageCapability } from './imageCapability.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ import type { OutboxRow } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { holdDmPauseGate, pumpDmQueue } from '../persistence/stores/dm.ts';
 import { isDispatchGateHeld } from '../persistence/daemonState.ts';
+import { AdapterCallError } from '../contracts/runtime.ts';
 import type { RuntimeAdapter, NormalizedRuntimeEvent, SessionRef } from '../contracts/runtime.ts';
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { BudgetState } from '../contracts/budget.ts';
@@ -539,8 +541,10 @@ export class DispatchWorker {
           originalText: repairItem.source_output_text,
         }
       : undefined;
+    const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
     const assembled = assembleDirectTurn({
       db: this.db,
+      allowImages: memberImageCapability(this.db, member.id).status === 'supported',
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
@@ -802,6 +806,11 @@ export class DispatchWorker {
         return;
       }
 
+      if ((assembled.value.images?.length ?? 0) > 0 && (memberImageCapability(this.db, member.id).status !== 'supported'
+        || JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf())) !== imageBindingAtAssembly)) {
+        startupPhase = 'session-record'; // No turn request has been made; close the opened session normally.
+        throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
+      }
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
       // pre-launch 登记（supervisor 衔接）：请求可能已发出的窗口可区分「从未启动」——
       // startTurn 成功后由 registerProcessIdentity REPLACE 为完整身份。
@@ -814,6 +823,7 @@ export class DispatchWorker {
         dispatchKey: claimed.dispatch_key,
         inputBundleId: assembled.value.bundleId,
         text: assembled.value.text,
+        images: assembled.value.images,
         policyId: 'policy-analyze',
         taskRevision: 0,
         resultKey: assembled.value.resultKey,

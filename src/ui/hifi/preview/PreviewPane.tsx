@@ -31,6 +31,7 @@ import { readerStateOf, clearReaderState } from './readerState';
 import { PptxView } from './viewers/PptxView';
 import { PdfView } from './viewers/PdfView';
 import { DocxView } from './viewers/DocxView';
+import { ImageView } from './viewers/ImageView';
 import { XlsxView } from './viewers/XlsxView';
 
 const KIND_LABEL: Record<string, string> = {
@@ -150,7 +151,7 @@ export function PreviewPane({
   const [wrapSource, setWrapSource] = useState(false);
   /** 下载原文件忙态（R66 P5——顶部声明：hooks 顺序不随后续早退分支变化）。 */
   const [dlBusy, setDlBusy] = useState(false);
-  const [zoom, setZoom] = useState<number>(0);
+  const [downloadError, setDownloadError] = useState<{ resourceId: string; text: string } | null>(null);
   const [selection, setSelection] = useState('');
   const [tabsOverflow, setTabsOverflow] = useState(false);
   // R73-C：放大状态真正进入布局——`.preview-pane.maximized` 以绝对定位铺满当前
@@ -229,7 +230,8 @@ export function PreviewPane({
   const flavor = resource != null && revision != null
     ? flavorOf(resource.title, isFormalAttachment ? resource.formalAttachment?.kind ?? '' : '', revision.content.kind)
     : null;
-  const canChooseReading = flavor === 'markdown' || flavor === 'html' || flavor === 'csv' || flavor === 'code' || flavor === 'text';
+  const imageResource = resource != null && formatKindOf(resource.relativePath ?? resource.title, resource.formalAttachment?.kind) === 'image';
+  const canChooseReading = !imageResource && (flavor === 'markdown' || flavor === 'html' || flavor === 'csv' || flavor === 'code' || flavor === 'text');
   const supportsRendered = flavor === 'markdown' || flavor === 'csv' || flavor === 'html';
 
   useEffect(() => {
@@ -332,7 +334,7 @@ export function PreviewPane({
    */
   const doDownloadOriginal = async () => {
     if (dlBusy) return;
-    setDlBusy(true);
+    setDlBusy(true); setDownloadError(null);
     try {
       let name = resource.title;
       let contentBase64 = '';
@@ -367,7 +369,7 @@ export function PreviewPane({
       if (dl != null) {
         const r = await dl.saveAs({ suggestedName: name, contentBase64 });
         if (r.cancelled === true) { toast('已取消另存为', 'info'); return; }
-        if (!r.ok || r.path == null) { toast('另存为失败（主进程拒绝）', 'error'); return; }
+        if (!r.ok || r.path == null) { setDownloadError({ resourceId: resource.id, text: '另存为失败（主进程拒绝）；原件保留，可重试' }); return; }
         toast(`已保存原文件：${r.path}（${fact}）`, 'success');
       } else {
         const a = document.createElement('a');
@@ -377,7 +379,7 @@ export function PreviewPane({
         toast(`已触发浏览器下载「${name}」（${fact}）`, 'success');
       }
     } catch (e: unknown) {
-      toast(`保存原文件失败：${(e as Error).message}`, 'error');
+      setDownloadError({ resourceId: resource.id, text: `保存原文件失败：${(e as Error).message}。原件保留，可重试。` });
     } finally {
       setDlBusy(false);
     }
@@ -481,13 +483,6 @@ export function PreviewPane({
         <Tag plain title={isWorktree ? '项目工作区文件——只读快照' : isDelivery ? '正式 AI 交付文档——不可变快照' : '会话附件/成果——服务端托管'}>
           {isWorktree ? '工作区只读' : isDelivery ? 'AI 交付文档' : '会话资源'}
         </Tag>
-        {flavor === 'binary' && (isFormalAttachment ? resource.formalAttachment?.kind === 'image_file' : /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url)) ? (
-          <span className="seg tiny" role="group" aria-label="图片缩放">
-            <button className={zoom === 0 ? 'on' : ''} onClick={() => setZoom(0)} title="适应窗口">适应</button>
-            <button className={zoom === 1 ? 'on' : ''} onClick={() => setZoom(1)} title="原始尺寸">1:1</button>
-            <button className={zoom === 1.5 ? 'on' : ''} onClick={() => setZoom(1.5)} title="放大 150%">150%</button>
-          </span>
-        ) : null}
         {canChooseReading ? (
           <button
             className="btn ghost sm preview-read"
@@ -519,6 +514,7 @@ export function PreviewPane({
         </button>
       ) : null}
 
+      {downloadError?.resourceId === resource.id ? <div className="small" role="alert" style={{ padding: '6px 12px', color: 'var(--warning)' }}>{downloadError.text}</div> : null}
       {/* ---------- 正文：统一 FileStage（所有来源同一阅读链） ---------- */}
       <div
         className="preview-body"
@@ -540,7 +536,6 @@ export function PreviewPane({
           context={context}
           viewMode={viewMode}
           wrapSource={wrapSource}
-          zoom={zoom}
           onOpenComment={() => setCommentOpen(true)}
           onDownload={() => void doDownloadOriginal()}
         />
@@ -698,10 +693,10 @@ function dropLoadedCache(resourceId: string): void {
   }
 }
 
-function FileStage({ resource, revision, context, viewMode, wrapSource, zoom, onOpenComment, onDownload }: {
+function FileStage({ resource, revision, context, viewMode, wrapSource, onOpenComment, onDownload }: {
   resource: PreviewResource; revision: ResourceRevision;
   context: ContextTarget;
-  viewMode: 'preview' | 'source'; wrapSource: boolean; zoom: number;
+  viewMode: 'preview' | 'source'; wrapSource: boolean;
   onOpenComment: () => void; onDownload: () => void;
 }) {
   const [err, setErr] = useState<string | null>(null);
@@ -826,22 +821,11 @@ function FileStage({ resource, revision, context, viewMode, wrapSource, zoom, on
     );
   }
   if (loaded.kind === 'image' && loaded.image != null) {
-    const known = loaded.image.width > 0;
-    return (
-      <div className={`preview-image-wrap${zoom > 1 ? ' scroll' : ''}`} data-zs-image-stage="1">
-        <img
-          src={loaded.image.dataUrl}
-          alt={loaded.filename}
-          className="preview-image"
-          data-zs-image-preview="hifi"
-          style={zoom === 0 ? { maxWidth: '100%', maxHeight: '100%' } : { width: `${(known ? loaded.image.width : 800) * zoom}px` }}
-        />
-        <div className="preview-image-meta small faint">
-          {loaded.image.mime} · {known ? `${loaded.image.width}×${loaded.image.height} · ` : ''}原件 {formatBytes(loaded.image.bytes)}（本地预览——不依赖模型看图能力；发送时图片能力门另列）
-        </div>
-      </div>
-    );
+    return <ImageView key={`${stateKey}:${nonce}`} resourceId={resource.id} revision={revision.revision}
+      dataUrl={loaded.image.dataUrl} filename={loaded.filename}
+      onRetry={() => setNonce((n) => n + 1)} onDownload={dl} />;
   }
+
   // ---------- 文本类（text/code/markdown/html/csv；交付报告走 delivery 视图） ----------
   const text = loaded.text ?? '';
   if (resource.formalDelivery != null) {

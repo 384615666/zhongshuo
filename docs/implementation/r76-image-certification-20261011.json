@@ -1,0 +1,64 @@
+{
+  "at": "2026-10-11T02:49:30.974Z",
+  "maxCalls": 2,
+  "facts": [
+    {
+      "kind": "claude",
+      "model": "deepseek-flash",
+      "imageHash": "9754a668586a770980ea4c41850bad161c01d05cdeefd1787ef6a9eba0fdf8c5",
+      "calls": 1,
+      "status": "supported",
+      "claudeAdapterVersion": "claude-cli-2.1.283-adapter-0.3",
+      "probe": {
+        "version": "2.1.283 (Claude Code)",
+        "capabilities": {
+          "structuredEvents": "supported",
+          "taskContextIsolation": "unverified",
+          "resumeSession": "unverified",
+          "steerActiveTurn": "unsupported",
+          "interrupt": "supported",
+          "interactiveApprovals": "unverified",
+          "structuredFinal": "supported",
+          "restrictWrites": "unverified",
+          "restrictShell": "unverified",
+          "disableDelegation": "unverified",
+          "usageTokens": "supported",
+          "usageCost": "supported"
+        }
+      },
+      "usage": {
+        "model": "deepseek-flash",
+        "inputTokens": 1426,
+        "outputTokens": 116,
+        "cost": 0.01003
+      },
+      "response": "```json\n{\n  \"shapes\": [\n    { \"color\": \"红色\", \"shape\": \"正方形\" },\n    { \"color\": \"蓝色\", \"shape\": \"圆形\" },\n    { \"color\": \"绿色\", \"shape\": \"三角形\" }\n  ],\n  \"digits\": \"5837\"\n}\n```\n```json\n{\n  \"shapes\": [\n    { \"color\": \"红色\", \"shape\": \"正方形\" },\n    { \"color\": \"蓝色\", \"shape\": \"圆形\" },\n    { \"color\": \"绿色\", \"shape\": \"三角形\" }\n  ],\n  \"digits\": \"5837\"\n}\n```"
+    },
+    {
+      "kind": "codex",
+      "model": "gpt-6-luna",
+      "imageHash": "9754a668586a770980ea4c41850bad161c01d05cdeefd1787ef6a9eba0fdf8c5",
+      "calls": 1,
+      "status": "unverified",
+      "claudeAdapterVersion": "claude-cli-2.1.283-adapter-0.3",
+      "probe": {
+        "version": "codex-cli 0.160.0",
+        "capabilities": {
+          "structuredEvents": "supported",
+          "taskContextIsolation": "unverified",
+          "resumeSession": "unverified",
+          "steerActiveTurn": "unverified",
+          "interrupt": "unverified",
+          "interactiveApprovals": "unverified",
+          "structuredFinal": "unverified",
+          "restrictWrites": "unverified",
+          "restrictShell": "unverified",
+          "disableDelegation": "unverified",
+          "usageTokens": "unverified",
+          "usageCost": "unsupported"
+        }
+      },
+      "error": "认证 120 秒超时；不自动重试"
+    }
+  ]
+}

@@ -315,3 +315,18 @@ describe('回放（修复轮 3）：真实协议形状反例', () => {
   });
 });
 
+
+describe('R76 zero-call image protocol', () => {
+  it('formal adapter sends inline image item, not filename or model-readable claim', async () => {
+    scenario([{notifications:[{kind:'turn.completed',status:'completed'}]}]);adapter=mockAdapter();
+    const session=await openMockSession(adapter);
+    const raw=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1kAAAAASUVORK5CYII=','base64');
+    const {createHash}=await import('node:crypto');
+    await adapter.startTurn(session,{...turnRequest('image',''),images:[{artifactId:'a',hash:createHash('sha256').update(raw).digest('hex'),mime:'image/png',dataBase64:raw.toString('base64')}]});
+    const entry=rpcLogEntries().filter(e=>e['method']==='turn/start').at(-1)!;
+    const params=entry['params'] as {input:Array<{type:string;url:string}>};
+    expect(params.input).toHaveLength(1);expect(params.input[0]!.type).toBe('image');
+    expect(params.input[0]!.url).toBe('data:image/png;base64,'+raw.toString('base64'));
+    await adapter.dispose();
+  });
+});

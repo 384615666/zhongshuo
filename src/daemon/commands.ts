@@ -27,6 +27,7 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
+import { memberImageCapability } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
@@ -324,9 +325,9 @@ function resolveAttachmentRefs(
 }
 
 /**
- * 图片能力门（第二十九轮三）：模型图片输入能力**未认证**（runtime 无已验证的图片输入渠道）
+ * 图片能力门（R76）：按实测 CLI/适配器/渠道/模型组合判断，未认证组合不能宣称模型已读图
  * ——引用图片附件且本次会派发时，不允许悄悄省略图片后以任务成功冒充处理完成。用户须明确
- * 二选一：仅发送文字（imageAck:"omit-images"——组装注入明示「图片未发送+用户已确认」）或
+ * 选择：仅发送文字（imageAck:"omit-images"——组装注入明示「图片未发送+用户已确认」）或
  * 仅记录（record_only，零派发）。保存/预览不受此门影响。
  */
 function assertImageGate(
@@ -335,6 +336,7 @@ function assertImageGate(
   imageAck: string | undefined,
   /** R66 P3：正文（文件-only 语义下可为空）——仅图片+「继续文字」+空正文会形成**空模型输入**。 */
   bodyForModel?: string,
+  imagesSupported = false,
 ): void {
   if (!willDispatch) return; // record_only/记录串/无派发路由：不进模型，无门禁
   const images = resolved.filter((a) => a.kind === 'image_file');
@@ -348,6 +350,7 @@ function assertImageGate(
     }
     return; // 用户明确选择仅发送文字（组装侧如实注入说明）
   }
+  if (imagesSupported) return;
   throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `IMAGE_INPUT_UNVERIFIED：目标成员的模型图片输入能力未认证，不能发送图片后宣称模型已读。请明确选择其一：仅发送文字（imageAck:"omit-images"——消息与注入文本将注明图片未发送及用户确认）或仅记录（intent:"record_only"，不派发）。${images.map((i) => i.displayName).join('、')}`);
 }
 
@@ -553,7 +556,11 @@ function attachMessageRefs(
   messageId: string,
   resolved: Array<{ artifactId: string; displayName: string; hash: string }>,
   ranges?: Record<string, string>,
+  imageMode?: 'include' | 'omit' | 'local-only',
 ): void {
+  if (imageMode != null) {
+    db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.imageInput',?) WHERE id=?").run(imageMode, messageId);
+  }
   for (const a of resolved) {
     db.prepare('INSERT INTO message_attachments (id, message_id, artifact_id, display_name, source_hash, range_spec) VALUES (?, ?, ?, ?, ?, ?)')
       .run(`matt_${randomUUID()}`, messageId, a.artifactId, a.displayName, a.hash, ranges?.[a.artifactId] ?? null);
@@ -1107,7 +1114,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const effective = resolveMemberRuntime(deps.db, params.memberId, process.env.ZS_RUNTIME ?? null);
         // 环境模式（第三十八轮 #2：验收防护包真实渠道被拒绑——设置 UI 据此提供 fake 正路径，
         // 用户不再需要脚本自救；正式部署两标志皆 false=fake 不进产品设置面，原决策不变）。
-        return withCommandId({ ok: true, data: { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved', kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null }, environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
+        return withCommandId({ ok: true, data: { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved', kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null }, imageInput: memberImageCapability(deps.db, params.memberId), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
@@ -1138,9 +1145,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const anchorRow = deps.db.prepare('SELECT id, author_type, author_id, body_json, created_at, conversation_seq FROM messages WHERE id = ?').get(th.anchor_message_id) as
           | { id: string; author_type: string; author_id: string; body_json: string; created_at: number; conversation_seq: number }
           | undefined;
-        let anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number } | null = null;
+        let anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments: Array<{ artifactId: string; filename: string; kind: string }> } | null = null;
         if (anchorRow != null) {
-          try { anchor = { id: anchorRow.id, authorType: anchorRow.author_type, authorId: anchorRow.author_id, body: JSON.parse(anchorRow.body_json) as { text: string }, createdAt: anchorRow.created_at, conversationSeq: anchorRow.conversation_seq }; } catch { /* 残缺正文不虚构——anchor 置空由呈现层标注 */ }
+          const attachments = messageAttachmentSummaries(deps.db, [anchorRow.id]).get(anchorRow.id) ?? [];
+          try { anchor = { id: anchorRow.id, authorType: anchorRow.author_type, authorId: anchorRow.author_id, body: JSON.parse(anchorRow.body_json) as { text: string }, createdAt: anchorRow.created_at, conversationSeq: anchorRow.conversation_seq, attachments }; } catch { /* 残缺正文不虚构——anchor 置空由呈现层标注 */ }
         }
         const lastReadSeq = (deps.db.prepare('SELECT last_read_message_seq FROM thread_read_states WHERE thread_id = ? AND viewer_id = ?').get(params.threadId, deps.localUserId) as { last_read_message_seq: number } | undefined)?.last_read_message_seq ?? 0;
         return withCommandId({ ok: true, data: { thread: { id: th.id, projectId: th.project_id, conversationId: th.conversation_id, roomId: th.room_id, anchorMessageId: th.anchor_message_id, rootTaskId: th.root_task_id, status: th.status, lastMessageSeq: th.last_message_seq, revision: th.revision }, anchor, lastReadSeq } });
@@ -1167,6 +1175,28 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // r59：完整执行身份随行（deliveryId/manifestHash/sourceRunId——命令快照绑定用）。
         const reworkDerived = reworkPendingOf(deps.db, params.taskId);
         return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
+      }
+      case 'message.imageCapability': {
+        const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);
+        const target = params.target;
+        assertConversationAudience(deps.db, deps.localUserId, target.conversationId);
+        const scope = deps.db.prepare('SELECT project_id, kind, room_id FROM conversations WHERE id=?').get(target.conversationId) as { project_id: string; kind: string; room_id: string | null } | undefined;
+        if (scope == null || scope.project_id !== target.projectId || target.kind === 'dm' && scope.kind !== 'dm'
+          || target.kind === 'room_root' && scope.room_id !== target.roomId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '图片能力读取目标与会话归属不一致');
+        if (target.kind === 'thread') {
+          const th = deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id=?').get(target.threadId) as { conversation_id: string } | undefined;
+          if (th?.conversation_id !== target.conversationId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '图片能力读取目标与线程归属不一致');
+        }
+        let members: string[] = []; const willDispatch = target.kind !== 'thread'; let direct = true;
+        if (target.kind === 'dm') {
+          const peer = dmPeerOf(deps.db, target.conversationId); if (peer != null) members = [peer.principal_id];
+        } else if (target.kind === 'room_root') {
+          const route = resolveTopLevelRoute({ intent: 'default', mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
+          if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
+          if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode === 'DIRECT'; }
+        }
+        const capabilities = members.map((id) => memberImageCapability(deps.db, id));
+        return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || direct && capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
@@ -1210,7 +1240,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                   authorId: deps.localUserId,
                   taskId: null,
                 });
-                attachMessageRefs(deps.db, saved.messageId, resolvedAtts, params.attachmentRanges);
+                attachMessageRefs(deps.db, saved.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
                 return saved;
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
@@ -1228,7 +1258,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 authorId: deps.localUserId,
                 taskId: thread.root_task_id,
               });
-              attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges);
+              attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
               return { ...message, disposition: 'none' as const, taskId: thread.root_task_id, followUpRecorded: true };
             })();
           }
@@ -1239,7 +1269,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             // 走四通道共用 resolveAttachmentRefs（第二十七轮二），消息-附件关联同事务。
             if (params.mentions.length > 0) throw new DaemonCommandError('VALIDATION_INVALID', '私信不做 @ 派工（§4.6 一对一）：mentions 必须为空');
             const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
-            assertImageGate(resolvedAtts, params.intent === 'default', params.imageAck, params.body); // 默认意图=派发（能力门先于落库；空正文+仅图片+仅文字=空模型输入拒）
+            const imagePeer = dmPeerOf(deps.db, target.conversationId);
+            assertImageGate(resolvedAtts, params.intent === 'default', params.imageAck, params.body, imagePeer != null && memberImageCapability(deps.db, imagePeer.principal_id).status === 'supported'); // 默认意图=派发（能力门先于落库；空正文+仅图片+仅文字=空模型输入拒）
             assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
             const conv = dmConversationOf(deps.db, target.conversationId);
             if (conv == null || conv.kind !== 'dm' || conv.project_id !== target.projectId) {
@@ -1261,7 +1292,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 title: taskTitleOf(params.body, resolvedAtts.map((a) => a.displayName)),
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
-              attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges);
+              attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -1285,7 +1316,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
+          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.mode === 'DIRECT' && route.value.frozenMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
           return deps.db.transaction(() => {
             const ids = {
@@ -1311,7 +1342,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
-            attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges);
+            attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
             return created.value;
           })();
         }, submitReplayGuard);
@@ -2855,8 +2886,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'attachment.previewImage': {
         // 能力②预览：audience+实根+sha256 原件核对；返回 mime/尺寸/原件字节+dataUrl（渲染
         // 由 renderer <img>——浏览器沙箱解码；服务端零像素解码依赖）。能力③**OCR 提取正文=
-        // 未实现（如实 unsupported）**；能力④**模型图片输入=未认证**（注入链路只注文本——
-        // 不发文件路径冒充模型已读；runtime 图片输入能力认证属后续批次）。
+        // 未实现（如实 unsupported）**；能力④按实际目标成员认证，独立于本地预览（R76）。
         const params = z.strictObject({ attachmentId: z.string().min(1), conversationId: z.string().min(1).optional() }).parse(env.params);
         const row = deps.db.prepare('SELECT id, conversation_id, hash, blob_path, source_name, kind, revision FROM artifacts WHERE id = ?').get(params.attachmentId) as
           | { id: string; conversation_id: string; hash: string; blob_path: string; source_name: string | null; kind: string; revision: number } | undefined;
@@ -2869,7 +2899,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
         const meta = validateImageBuffer(verified.raw);
         if (!meta.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不再可解析：${meta.message}`);
-        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'unverified-unsupported' } });
+        return withCommandId({ ok: true, data: { attachmentId: row.id, filename: row.source_name, kind: row.kind, revision: row.revision, hash: verified.raw ? row.hash : row.hash, mime: meta.meta.mime, width: meta.meta.width, height: meta.meta.height, bytes: verified.raw.length, dataUrl: `data:${meta.meta.mime};base64,${verified.raw.toString('base64')}`, ocr: 'unsupported', modelInput: 'depends-on-target-member' } });
       }
       case 'attachment.uploadPdf': {
         // PDF 附件（第二十八轮五→第二十九轮二重构）：能力①保存原件+隔离解析验证（子进程
@@ -4172,7 +4202,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const limit = params.limit ?? 50;
         const threads = deps.db.prepare(
           `SELECT t.id, t.anchor_message_id, t.root_task_id, t.last_message_seq, t.revision,
-                  m.body_json, m.created_at,
+                  m.body_json, m.created_at, m.author_type, m.author_id,
                   tk.status AS task_status, tk.room_task_number, tk.title AS task_title
            FROM conversation_threads t
            JOIN messages m ON m.id = t.anchor_message_id
@@ -4181,8 +4211,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
            ORDER BY m.created_at DESC LIMIT ?`,
         ).all(params.roomId, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
-          body_json: string; created_at: number; task_status: string | null; room_task_number: number | null; task_title: string | null;
+          body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; room_task_number: number | null; task_title: string | null;
         }>;
+        const attachments = messageAttachmentSummaries(deps.db, threads.map((t) => t.anchor_message_id));
         const items = [];
         for (const t of threads) {
           const replyCount = (deps.db.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get(t.id) as { c: number }).c;
@@ -4199,6 +4230,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             anchorMessageId: t.anchor_message_id,
             body: JSON.parse(t.body_json) as { text: string },
             createdAt: t.created_at,
+            authorType: t.author_type, authorId: t.author_id,
+            attachments: attachments.get(t.anchor_message_id) ?? [],
             replyCount,
             lastReplyAt: lastReply?.created_at ?? null,
             taskId: t.root_task_id,
@@ -4593,6 +4626,8 @@ const PREVIEW_BINARY_EXTENSIONS: Record<string, { cap: number; kind: 'image_file
   '.gif': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.webp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.bmp': { cap: 8 * 1024 * 1024, kind: 'image_file' },
+  // Local SVG remains an <img> byte source, never a document/script or model input.
+  '.svg': { cap: 8 * 1024 * 1024, kind: 'image_file' },
   '.pdf': { cap: PDF_MAX_BYTES, kind: 'pdf_file' },
   '.docx': { cap: OFFICE_MAX_BYTES, kind: 'docx_file' },
   '.xlsx': { cap: OFFICE_MAX_BYTES, kind: 'sheet_file' },

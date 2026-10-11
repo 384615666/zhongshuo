@@ -264,6 +264,9 @@ export interface ThreadCard {
   roomTaskNumber: number | null;
   /** R64：任务标题（room.pool 只读投影——未装载详情的卡片也能显示真实标题；记录串为 null） */
   taskTitle: string | null;
+  authorType?: Message['authorType'];
+  authorId?: string;
+  formalAttachments?: FormalAttachmentSummary[];
   body: string;
   createdAt: number;
   replyCount: number;

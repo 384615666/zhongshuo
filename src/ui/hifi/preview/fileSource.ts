@@ -15,7 +15,7 @@ const CODE_EXTS = /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|h|cpp|hpp|cs|rb|php|
 /** 按文件名/附件 kind 推导阅读格式（与上传分类、文件树支持面同口径）。 */
 export function formatKindOf(filename: string, attachmentKind?: string): FormatKind {
   const lower = filename.toLowerCase();
-  if (IMAGE_EXTS.test(lower)) return 'image';
+  if (attachmentKind === 'image_file' || IMAGE_EXTS.test(lower)) return 'image';
   if (/\.pdf$/.test(lower) || attachmentKind === 'pdf_file') return 'pdf';
   if (/\.pptx?$/.test(lower) || attachmentKind === 'slides_file') return 'pptx';
   if (/\.docx$/.test(lower) || attachmentKind === 'docx_file') return 'docx';

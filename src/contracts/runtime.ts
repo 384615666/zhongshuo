@@ -76,6 +76,8 @@ export interface TurnRequest {
   dispatchKey: string;
   inputBundleId: string;
   text: string;
+  /** Protocol transport support is separate from real model vision certification. */
+  images?: Array<{ artifactId: string; hash: string; mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; dataBase64: string }>;
   policyId: string;
   taskRevision: number;
   resultKey?: string;

@@ -459,7 +459,6 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               const draftKey = `thread:${threadId}`;
               const refs = attachmentRefsFromDraft(draftKey, intent);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-              if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
               const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
               env.revAtSend = p.draftRev;

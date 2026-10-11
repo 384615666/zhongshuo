@@ -444,3 +444,20 @@ describe('中断/退出确认/收拢（本地真实进程 fixture，零额度）
     expect(results[0]).toMatchObject({ turnId: 't_dispose', stopRequested: true, exitConfirmed: true, terminal: 'interrupted' });
   }, 15_000);
 });
+
+describe('R76 zero-call image protocol', () => {
+  it('formal adapter writes actual image bytes in stream-json, including image-only', async () => {
+    const raw=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1kAAAAASUVORK5CYII=','base64');
+    const {createHash}=await import('node:crypto');
+    const proc=makeProc([{delayMs:10,lines:[j({type:'result',subtype:'success',session_id:'cs_image',result:'protocol replay'})],exit:0}]);
+    let args:string[]=[];
+    const adapter=new ClaudeCliAdapter({model:'test-model'},a=>{args=a;return proc;});
+    const session=await adapter.openSession(openInput());
+    await adapter.startTurn(session,{...turnInput('image'),text:'',images:[{artifactId:'a',mime:'image/png',hash:createHash('sha256').update(raw).digest('hex'),dataBase64:raw.toString('base64')}]});
+    expect(args).toContain('--input-format');expect(args).toContain('stream-json');
+    const message=JSON.parse(proc._stdinText()) as {message:{content:Array<{type:string;source:{data:string;media_type:string}}>}};
+    expect(message.message.content).toHaveLength(1);expect(message.message.content[0]!.type).toBe('image');
+    expect(Buffer.from(message.message.content[0]!.source.data,'base64')).toEqual(raw);
+    await collect(adapter,session,'completed');await adapter.close(session);
+  });
+});

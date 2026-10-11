@@ -106,7 +106,7 @@ export function parseImageMeta(buf: Buffer): ImageMeta | null {
       if (w === 0 || h === 0) return null;
       return { mime: 'image/webp', width: w, height: h };
     }
-    if (chunk === 'VP8L' && buf.length >= 21) {
+    if (chunk === 'VP8L' && buf.length >= 25) {
       if (buf[20] !== 0x2f) return null; // 无损签名
       const bits = buf.readUInt32LE(21);
       const w = (bits & 0x3fff) + 1;

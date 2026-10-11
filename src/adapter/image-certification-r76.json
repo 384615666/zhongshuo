@@ -1,0 +1,10 @@
+{
+  "model": "deepseek-flash",
+  "cliVersion": "2.1.283 (Claude Code)",
+  "adapterVersion": "claude-cli-2.1.283-adapter-0.3",
+  "executableHash": "9dbe16dafed59da5cdabbfe11ad0335738c753fad794989b47f9446accd6de3a",
+  "endpointHash": "eb5c1aa5b693b3b2e18fe301de78d9b9ff7e603e238251bd0f5ba112332e9a84",
+  "imageHash": "9754a668586a770980ea4c41850bad161c01d05cdeefd1787ef6a9eba0fdf8c5",
+  "evidence": "r76-20261011-claude-deepseek-flash-vision",
+  "testedMime": "image/png"
+}

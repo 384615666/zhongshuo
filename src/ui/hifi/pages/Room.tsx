@@ -922,7 +922,6 @@ function RoomPool({
             const draftKey = `room:${roomId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
             const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
@@ -1064,6 +1063,7 @@ function RootCard({
             {atts.map((att) => (
               <button
                 key={att.artifactId}
+                data-zs-artifact-id={att.artifactId}
                 className="msg-attach"
                 title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不派任务、不发言`}
                 onClick={(e) => {
@@ -1175,6 +1175,7 @@ function RootCard({
           {(message.formalAttachments ?? []).map((att) => (
             <button
               key={att.artifactId}
+              data-zs-artifact-id={att.artifactId}
               className="msg-attach"
               title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不发送给 AI`}
               onClick={(e) => {
@@ -2003,7 +2004,6 @@ function ThreadPanel({
             const draftKey = `thread:${threadId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
             if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
             const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
@@ -2050,7 +2050,6 @@ function ThreadPanel({
             const draftKey = `thread:${threadId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
             if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
             const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;

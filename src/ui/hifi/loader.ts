@@ -24,7 +24,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
@@ -714,14 +714,22 @@ export async function refreshDms(projectIdArg?: string): Promise<void> {  const 
 
 /* ---------- 快照装载（读失败≠空态：保留旧快照+readErrors） ---------- */
 
+// Read tickets cover both root projections: late replies cannot roll back newer facts.
+let rootReadTicket = 0;
+const rootTickets = new Map<string, number>();
+const poolTickets = new Map<string, number>();
+const threadTickets = new Map<string, number>();
+
 export async function loadRoomPool(roomId: string): Promise<void> {
+  const ticket = ++rootReadTicket;
+  poolTickets.set(roomId, ticket);
   const gen = getState().loadGen;
   const projectId = getState().activeProjectId;
   const room = getState().rooms.find((r) => r.id === roomId);
   if (room == null) return;
   try {
     const data = await command<PoolData>('room.pool', { roomId, limit: 50 });
-    if (!stillCurrent(gen, projectId)) return;
+    if (!stillCurrent(gen, projectId) || poolTickets.get(roomId) !== ticket) return;
     // 主池条目=线程卡（第五十一轮 H2）：room.pool 的真实投影——记录串 taskId=null（E1），
     // 不伪造任务标题；正文缺省空串由呈现层标注。
     const cards: ThreadCard[] = (data.items ?? []).map((it) => ({
@@ -730,6 +738,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, roomTaskNumber: it.roomTaskNumber ?? null,
       taskTitle: it.taskTitle ?? null,
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
+      authorType: it.authorType, authorId: it.authorId, formalAttachments: it.attachments,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
       unread: it.unread ?? 0, muted: it.muted === true, followed: it.followed === true,
     }));
@@ -737,9 +746,9 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       const errors = { ...prev.readErrors }; delete errors[roomId];
       return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, readErrors: errors };
     });
-    hydrateRoomFromPool(getState(), projectId, roomId, cards);
+    hydrateRoomFromPool(getState(), projectId, roomId, cards, ticket);
   } catch (e) {
-    if (!stillCurrent(gen, projectId)) return;
+    if (!stillCurrent(gen, projectId) || poolTickets.get(roomId) !== ticket) return;
     const msg = (e as Error).message;
     setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [roomId]: msg } }));
   }
@@ -756,7 +765,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
  * 投影：真实 id/标题/状态/号）、subscriptions（muted/followed 只读事实——切换走 thread.subscribe）。
  * 未装载回复的线程其 unread/replyCount 由 selectors 兜底读卡片（见 selectors.ts R64 注）。
  */
-function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string, cards: ThreadCard[]): void {
+function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string, cards: ThreadCard[], ticket: number): void {
   const room = prev.rooms.find((r) => r.id === roomId);
   const convId = room?.conversationId ?? '';
   const threads = cards.map((c) => ({
@@ -766,9 +775,20 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
   }));
   const roots = cards.filter((c) => c.body.length > 0 || c.createdAt > 0).map((c) => ({
     id: c.anchorMessageId || `anchor:${c.threadId}`, projectId, roomId, threadId: undefined,
-    authorType: 'human' as const, authorId: 'you', kind: 'text' as const,
-    body: c.body, createdAt: c.createdAt,
+    authorType: c.authorType ?? 'human', authorId: c.authorId ?? 'you', kind: 'text' as const,
+    body: c.body, createdAt: c.createdAt, formalAttachments: c.formalAttachments,
   }));
+  const stableRoots = roots.map((root) => {
+    const old = prev.messages.find((m) => m.id === root.id);
+    if ((rootTickets.get(root.id) ?? 0) > ticket && old != null) return old;
+    rootTickets.set(root.id, ticket);
+    return root.formalAttachments == null && old != null ? { ...root, formalAttachments: old.formalAttachments } : root;
+  });
+  const anchors = { ...prev.threadAnchors };
+  for (const c of cards) {
+    const root = stableRoots.find((m) => m.id === c.anchorMessageId);
+    if (root != null && anchors[c.threadId] != null) anchors[c.threadId] = root;
+  }
   const tasks = cards.filter((c) => c.taskId != null).map((c) => ({
     id: c.taskId as string, projectId, roomId, conversationThreadId: c.threadId,
     roomTaskNumber: c.roomTaskNumber ?? 0, title: c.taskTitle ?? '',
@@ -780,9 +800,10 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
   setState((s) => ({
     ...s,
     threads: [...s.threads.filter((t) => t.roomId !== roomId), ...threads],
-    messages: [...s.messages.filter((m) => m.roomId !== roomId || m.threadId != null), ...roots],
+    messages: [...s.messages.filter((m) => m.roomId !== roomId || m.threadId != null), ...stableRoots],
     tasks: [...s.tasks.filter((t) => t.roomId !== roomId), ...tasks],
     subscriptions: { ...s.subscriptions, ...subscriptions },
+    threadAnchors: anchors,
   }));
 }
 
@@ -791,7 +812,7 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
  * 回复消息、完整任务投影（title/status/号 + pendingDelivery/reworkPending → taskDeliveries/
  * runs 最小投影）、readStates（threadReadSeq 同步——首条未读分隔线用真实水位）。
  */
-function hydrateThreadFromSnapshots(threadId: string): void {
+function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket): void {
   const s = getState();
   const thread = s.threadEntities[threadId];
   if (thread == null) return;
@@ -802,7 +823,10 @@ function hydrateThreadFromSnapshots(threadId: string): void {
   setState((prev) => {
     const otherThreads = prev.threads.filter((t) => t.id !== threadId);
     const otherMessages = prev.messages.filter((m) => m.threadId !== threadId && m.id !== anchor?.id);
-    const anchorMsg = anchor == null ? [] : [{
+    const oldRoot = prev.messages.find((m) => m.id === anchor?.id);
+    const staleRoot = anchor != null && (rootTickets.get(anchor.id) ?? 0) > ticket;
+    if (anchor != null && !staleRoot) rootTickets.set(anchor.id, ticket);
+    const anchorMsg = staleRoot && oldRoot != null ? [oldRoot] : anchor == null ? [] : [{
       id: anchor.id, projectId: thread.projectId, roomId: thread.roomId, threadId: undefined,
       authorType: anchor.authorType, authorId: anchor.authorId, kind: 'text' as const,
       body: anchor.body, createdAt: anchor.createdAt,
@@ -862,7 +886,7 @@ function hydrateThreadFromSnapshots(threadId: string): void {
 
 
 interface ThreadGetData {  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
-  anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number } | null;
+  anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null;
   lastReadSeq: number;
 }
 interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text: string }; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
@@ -888,11 +912,14 @@ const msgOfReply = (projectId: string, roomId: string, threadId: string, it: Thr
  * （当前线程+前台/贴底/接管——ThreadPage 注册；与 DM conversationSeq 门分开，review-r50 §4）。
  */
 export async function loadThread(threadId: string, opts: { markRead?: boolean } = {}): Promise<void> {
+  const ticket = ++rootReadTicket;
+  threadTickets.set(threadId, ticket);
+  const initialProjectId = getState().activeProjectId;
   const gen = getState().loadGen;
   try {
     const got = await command<ThreadGetData>('thread.get', { threadId });
     const projectId = got.thread.projectId;
-    if (!stillCurrent(gen, projectId)) return; // 项目已切走——丢弃迟到响应
+    if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return; // 项目已切走——丢弃迟到响应
     const thread = {
       id: got.thread.id, projectId, conversationId: got.thread.conversationId, roomId: got.thread.roomId,
       anchorMessageId: got.thread.anchorMessageId, rootTaskId: got.thread.rootTaskId ?? undefined,
@@ -903,20 +930,22 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
       id: got.anchor.id, projectId, roomId: thread.roomId, threadId: undefined,
       authorType: got.anchor.authorType as Message['authorType'], authorId: got.anchor.authorId,
       kind: 'text', body: got.anchor.body?.text ?? '', createdAt: got.anchor.createdAt,
-      attachmentIds: [],
+      attachmentIds: [], formalAttachments: got.anchor.attachments ?? getState().threadAnchors[threadId]?.formalAttachments,
     };
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[`thread:${threadId}`];
       return {
         ...prev,
         threadEntities: { ...prev.threadEntities, [threadId]: thread },
-        threadAnchors: { ...prev.threadAnchors, [threadId]: anchor },
+        threadAnchors: { ...prev.threadAnchors, [threadId]: anchor != null && (rootTickets.get(anchor.id) ?? 0) > ticket
+          ? prev.messages.find((m) => m.id === anchor.id) ?? prev.threadAnchors[threadId] ?? anchor : anchor },
         threadReadSeq: { ...prev.threadReadSeq, [threadId]: got.lastReadSeq },
         readErrors: errors,
       };
     });
+    hydrateThreadFromSnapshots(threadId, ticket);
     const hist = await command<ThreadHistoryData>('thread.history', { threadId, limit: 100 });
-    if (!stillCurrent(gen, projectId)) return;
+    if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
     const replies = (hist.items ?? []).map((it) => msgOfReply(projectId, thread.roomId, threadId, it));
     // r56：**合并**而非整表替换——可见期轻量刷新（5s）会把补读出的更早历史整页冲掉
     //（长历史定位后元素消失）。按 id 去重合并、seq 升序，保留已补读窗口。
@@ -926,17 +955,16 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
       for (const m of replies) byId.set(m.id, m);
       const merged = [...byId.values()].sort((a, b) => (a.threadMessageSeq ?? 0) - (b.threadMessageSeq ?? 0));
       return { ...prev, threadMessages: { ...prev.threadMessages, [threadId]: merged } };
-    });    // 根附件挂到根消息（线程视图锚块芯片来源——rootAttachments 与 items 分列返回）。
-    if ((hist.rootAttachments ?? []).length > 0 && anchor != null) {
-      setState((prev) => ({
-        ...prev,
-        threadAnchors: { ...prev.threadAnchors, [threadId]: { ...(prev.threadAnchors[threadId] ?? anchor), formalAttachments: hist.rootAttachments } },
-      }));
+    });    // thread.get owns the atomic root projection. Legacy missing attachments are unread,
+    // while [] is authoritative; history failures must never clear confirmed roots.
+    if (anchor != null && got.anchor?.attachments == null && hist.rootAttachments != null) {
+      setState((prev) => ({ ...prev, threadAnchors: { ...prev.threadAnchors,
+        [threadId]: { ...anchor, formalAttachments: hist.rootAttachments } } }));
     }
     // 任务详情（记录串无根任务——不查不写键；「详情」分组如实显示记录串说明）。
     if (thread.rootTaskId != null) {
       const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
-      if (!stillCurrent(gen, projectId)) return;
+      if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
       const detail: ThreadTaskDetail = {
         id: tg.task.id, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
         threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
@@ -951,13 +979,13 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
       setState((prev) => { const next = { ...prev.threadTasks }; delete next[threadId]; return { ...prev, threadTasks: next }; });
     }
     // R64：真实快照 → AppState 视图模型水合（原型线程面板消费 threads/messages/tasks/readStates）。
-    hydrateThreadFromSnapshots(threadId);
+    hydrateThreadFromSnapshots(threadId, ticket);
     // 阅读水位（独立门）：最新回复 seq ≤ thread.lastMessageSeq（未来序号服务端拒绝）。
     const lastSeq = replies.length > 0 ? (replies[replies.length - 1]?.threadMessageSeq ?? 0) : 0;
     if (opts.markRead === true && lastSeq > got.lastReadSeq && canMarkThreadRead(threadId)) {
       void command('thread.markRead', { threadId, throughMessageSeq: lastSeq })
         .then(() => {
-          if (!stillCurrent(gen, projectId)) return;
+          if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
           setState((prev) => ({ ...prev, threadReadSeq: { ...prev.threadReadSeq, [threadId]: lastSeq } }));
           void loadRoomPool(thread.roomId).catch(() => { /* 主池未读汇总下次刷新再对 */ });
         })
@@ -966,7 +994,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
   } catch (e) {
     const s = getState();
     // 归属未变才记错（迟到失败不污染当前线程）。
-    if (s.threadEntities[threadId] == null || stillCurrent(gen, s.threadEntities[threadId]!.projectId)) {
+    if (stillCurrent(gen, initialProjectId) && threadTickets.get(threadId) === ticket && (s.threadEntities[threadId] == null || s.threadEntities[threadId]!.projectId === initialProjectId)) {
       setState((prev) => ({ ...prev, readErrors: { ...prev.readErrors, [`thread:${threadId}`]: (e as Error).message } }));
     }
   }
@@ -1368,7 +1396,7 @@ const fileToBase64 = async (file: File): Promise<string> => {
   return btoa(bin);
 };
 
-export interface UploadReceipt { attachmentId: string; hash: string; revision: number; kind: string; /** R69 P1-D：Office 软解析失败=已保存但提取不可用（分列状态，非上传失败）。 */ extractionFailed?: string }
+export interface UploadReceipt { previewWarning?: string; attachmentId: string; hash: string; revision: number; kind: string; /** R69 P1-D：Office 软解析失败=已保存但提取不可用（分列状态，非上传失败）。 */ extractionFailed?: string }
 
 /** 上传分类 → artifacts.kind（与 daemon kindForFilename 同口径的 UI 侧推导：code 扩展名=
  * code_file，其余文本=text_file；Office 按扩展名三类——服务端按内容嗅探为准）。 */
@@ -1410,8 +1438,21 @@ export async function uploadAttachmentFile(conversationId: string, file: File): 
   const extractionFailed = r.extraction === 'failed'
     ? `内容提取失败（${r.extractionCode ?? '未知'}：${r.extractionMessage ?? ''}）——文件已保存可预览；发给 AI 会因无提取文本被拒`
     : undefined;
+  let previewWarning: string | undefined;
+  if (cls.cls === 'image' && typeof Image !== 'undefined') {
+    const url = URL.createObjectURL(file);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => image.naturalWidth > 0 && image.naturalHeight > 0 ? resolve() : reject(new Error('浏览器未解码出有效图片尺寸'));
+        image.onerror = () => reject(new Error('浏览器无法解码图片；文件可能损坏或格式不受支持'));
+        image.src = url;
+      });
+    } catch (error) { previewWarning = `${(error as Error).message}。原件已保存；可打开预览重试或另存原件。`; }
+    finally { URL.revokeObjectURL(url); }
+  }
   // 各 upload* 首传均为 artifacts 插入 revision=1（响应不带回执字段——按合同事实补默认，不为重传猜值）。
-  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass(cls.cls, file.name), ...(extractionFailed != null ? { extractionFailed } : {}) };
+  return { attachmentId: r.attachmentId, hash: r.hash, revision: r.revision ?? 1, kind: kindOfClass(cls.cls, file.name), ...(previewWarning != null ? { previewWarning } : {}), ...(extractionFailed != null ? { extractionFailed } : {}) };
 }
 
 /** 文本/代码附件预览（骨架：真实 attachment.previewText——其余类型如实分列到原界面）。 */

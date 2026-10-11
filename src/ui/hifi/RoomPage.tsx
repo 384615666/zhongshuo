@@ -120,7 +120,6 @@ export function RoomPage({ roomId }: { roomId: string }) {
           const draftKey = `room:${roomId}`;
           const refs = attachmentRefsFromDraft(draftKey, intent);
           if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-          if (refs.hasImages === true && p.imageAck == null) return { status: 'failed', error: '图片能力门：请先在输入区选择「仅发送文字」或「改为仅记录」' };
           const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
           env.revAtSend = p.draftRev;
           const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账（三态收口）

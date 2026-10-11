@@ -3,24 +3,36 @@
  * 必要材料（用户根消息、获准线程历史）缺失 → 组装失败，调用方不得继续派发；
  * 渲染全文敏感扫描零命中（PP-03）；信封与渲染文本、hash 由本函数一并产出（PP-04）。
  */
+import type { TurnRequest } from '../contracts/runtime.ts';
 import { createHash } from 'node:crypto';
-import { readVerifiedCopy, readVerifiedBlob, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
+import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
 import { validateExtractCache, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
 
-/** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=能力门已过（用户明确仅发送文字）——
- * 注入**未发送说明**（不读原件、不宣称已读）；文档类=原件实根+实身份+sha256 核对 +
+/** 组装行 → 信封附件条目（第二十九轮二/三/四）。图片=持久发送选择：include 经成员认证与原件核验后提供字节输入；
+ * omit/local-only/旧记录注入**未发送说明**，不宣称已读；文档类=原件实根+实身份+sha256 核对 +
  * 提取缓存严格校验（schema v2——结构/版本/预算不符=fail-closed 不派发）后按类渲染：
  * PDF 页标注 / DOCX 有序文本 / 幻灯片按页+备注 / 表格按范围窗口（有界默认）。返回
  * string=组装失败原因（fail-closed）。 */
-type DocAttachmentRow = { id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec?: string | null };
+type DocAttachmentRow = { id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec?: string | null; image_mode?: string | null };
 function documentAttachmentForInput(
   row: DocAttachmentRow,
   blobRoot: string | undefined,
-): { entry: { ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string } } | { error: string } {
+  allowImages = false,
+): { entry: { ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }; image?: NonNullable<TurnRequest['images']>[number] } | { error: string } {
   const label = row.source_name ?? row.id;
   const NL = String.fromCharCode(10);
   if (row.kind === 'image_file') {
-    return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes: 0, truncated: false, text: `【图片附件未发送】「${label}」（sha256 ${row.hash.slice(0, 12)}… v${row.revision}）：目标成员的模型图片输入能力未认证——用户已明确选择仅发送文字；图片内容未发送，模型未读图。` } };
+    if (row.image_mode === 'include') {
+      if (!allowImages) return { error: 'IMAGE_INPUT_UNVERIFIED：当前实际派发成员不在图片认证组合内；原消息与原件保留' };
+      const verified = readVerifiedBlob(row.blob_path, row.hash, blobRoot);
+      if (!verified.ok) return { error: verified.error.message };
+      const meta = validateImageBuffer(verified.raw);
+      if (!meta.ok) return { error: meta.message };
+      return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes: verified.raw.length, truncated: false,
+        text: `【图片输入附件】「${label}」（sha256 ${row.hash} v${row.revision}）；内容通过本轮独立图片输入块提供。` },
+        image: { artifactId: row.id, hash: row.hash, mime: meta.meta.mime, dataBase64: verified.raw.toString('base64') } };
+    }
+    return { entry: { ref: row.id, filename: label, hash: row.hash, revision: row.revision, originalBytes: 0, truncated: false, text: `【图片附件未发送】「${label}」（sha256 ${row.hash.slice(0, 12)}… v${row.revision}）：${row.image_mode === 'omit' ? '用户已明确选择仅发送文字' : row.image_mode === 'local-only' ? '该消息选择仅记录，只保存原件' : '历史版本没有图片输入授权'}；图片内容未发送，模型未读图。` } };
   }
   const mapping = ARTIFACT_PARSE_KINDS[row.kind];
   if (mapping == null) return { error: `附件类型（${row.kind}）不在注入范围——拒绝组装` };
@@ -100,6 +112,7 @@ export interface AssembledTurnInput {
   db: ZhongshuoDatabase;
   /** 本次 appData 的托管存储根（{appData}/blobstore——第二十八轮三：附件读取按实际根校验路径越界）。 */
   blobRoot?: string;
+  allowImages?: boolean;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
   turnId: string;
@@ -117,6 +130,7 @@ export interface AssembledTurnInput {
 }
 
 export interface AssembledTurn {
+  images?: TurnRequest['images'];
   envelope: TurnBundleEnvelope;
   /** 层 B 渲染文本（发给模型的形态）。 */
   text: string;
@@ -149,16 +163,17 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   // 已落库的消息=不提前读后续）。读**获准副本**（artifacts.blob_path——原文件变化不影响
   // 已保存版本）经共享完整性路径（第二十七轮四：路径限定托管存储+sha256 实际字节核对——
   // 损坏/越界拒绝组装，不以路径冒充已读）；UTF-8 字节截断保留完整字符。
+  const images: NonNullable<TurnRequest['images']> = [];
   const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
   const attRows = db.prepare(
-    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec,
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, json_extract(m.body_json, '$.imageInput') AS image_mode,
             CASE WHEN ma.message_id = ? THEN -1 ELSE COALESCE(m.thread_message_seq, 999999) END AS ord
      FROM message_attachments ma
      JOIN artifacts a ON a.id = ma.artifact_id
      LEFT JOIN messages m ON m.id = ma.message_id
      WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
      ORDER BY ord, ma.rowid`,
-  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null }>;
+  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
   for (const row of attRows) {
     if (row.kind === 'text_file' || row.kind === 'code_file') {
       const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
@@ -167,9 +182,10 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       continue;
     }
     // 文档类（PDF/DOCX/表格/幻灯片=严格缓存+原件核对；图片=未发送说明）——第二十九轮二/三/四。
-    const doc = documentAttachmentForInput(row, input.blobRoot);
+    const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages);
     if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
     rootAttachments.push(doc.entry);
+    if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);
   }
   // R67：同 dm_turn——正文空+有附件引用=合法文件-only 任务；空且无附件仍拒。
   if (typeof rootBody.text !== 'string' || rootBody.text.length === 0) {
@@ -311,6 +327,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   }
   const hash = computeTurnBundleHash(envelope);
   return domainOk({
+    images,
     envelope,
     text,
     bundleId: `cb_${hash.slice(0, 24)}`,
@@ -385,19 +402,20 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   // 消息进入正确一轮（该轮水位恰含此消息）；水位后（未来）消息的附件不提前读；根消息即使
   // 滑出历史窗口也必含（本轮输入本体）。读取经共享完整性路径（第二十七轮四：路径限定托管
   // 存储+sha256 实际字节核对——损坏/越界拒绝组装）；UTF-8 字节截断保留完整字符。
+  const images: NonNullable<TurnRequest['images']> = [];
   const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
   const dmAttIds = history.map((h) => h.id);
   if (!dmAttIds.includes(root.id)) dmAttIds.push(root.id);
   if (dmAttIds.length > 0) {
     const dmAttRows = db.prepare(
-      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec,
+      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, json_extract(m.body_json, '$.imageInput') AS image_mode,
               CASE WHEN ma.message_id = ? THEN -1 ELSE m.conversation_seq END AS ord
        FROM message_attachments ma
        JOIN artifacts a ON a.id = ma.artifact_id
        JOIN messages m ON m.id = ma.message_id
        WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
        ORDER BY ord, ma.rowid`,
-    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null }>;
+    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
     for (const row of dmAttRows) {
       if (row.kind === 'text_file' || row.kind === 'code_file') {
         const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
@@ -406,9 +424,10 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
         continue;
       }
       // 文档类（同房间装配——严格缓存+原件核对；图片=未发送说明）。
-      const doc = documentAttachmentForInput(row, input.blobRoot);
+      const doc = documentAttachmentForInput(row, input.blobRoot, input.allowImages);
       if ('error' in doc) return assemblyFailure('attachment-unreadable', doc.error);
       rootAttachments.push(doc.entry);
+    if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);
     }
   }
   const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
@@ -495,6 +514,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   }
   const hash = computeTurnBundleHash(envelope);
   return domainOk({
+    images,
     envelope,
     text,
     bundleId: `cb_${hash.slice(0, 24)}`,

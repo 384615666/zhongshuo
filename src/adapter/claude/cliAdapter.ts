@@ -28,6 +28,7 @@
  * taskContextIsolation=unverified（实现存在、真实认证未完成，不按支持处理）；steerActiveTurn
  * =unsupported（headless -p 无 turn 内追加输入，明确拒绝不模拟）。
  */
+import { claudeInput } from '../imageInput.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -298,9 +299,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       throw new AdapterCallError('WORKSPACE_BUSY', '会话已有进行中的 turn（进程模型：串行）');
     }
     if (state.closed) throw new AdapterCallError('RESOURCE_NOT_FOUND', '会话已关闭');
-    if (input.text == null || input.text.length === 0) {
-      throw new AdapterCallError('VALIDATION_INVALID', '输入文本为空');
-    }
+    const payload = claudeInput(input);
     const model = this.options.model ?? process.env.ZS_CLAUDE_MODEL;
     if (model == null || model.length === 0) {
       throw new AdapterCallError('CAPABILITY_UNSUPPORTED', 'Claude 需显式模型（ZS_CLAUDE_MODEL / options.model）——默认配置模型不被 CLI 接受');
@@ -324,6 +323,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
+    if (payload.stream) args.push('--input-format', 'stream-json');
     const resumeId = state.providerSessionId ?? state.resumeRequested;
     if (resumeId != null) {
       if (!PROVIDER_SESSION_ID_RE.test(resumeId)) {
@@ -337,7 +337,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     if (proc.stdin != null) {
       try {
         proc.stdin.on?.('error', () => { /* EPIPE：进程早死由 close 处理器兜底 failed */ });
-        proc.stdin.write(input.text, 'utf8');
+        proc.stdin.write(payload.stdin, 'utf8');
         proc.stdin.end();
       } catch {
         // 进程在 write 前退出：close 处理器按无终态 failed。

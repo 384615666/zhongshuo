@@ -18,10 +18,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, memberShortId, Tag } from './ui';
-import { useStore, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound } from '../data/store';
+import { useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
+import { command } from '../bridge';
 import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
 
@@ -129,6 +130,7 @@ export interface ComposerTarget {
 
 /** 每键发送锁（review-r48 §4）：多目标在途互不解除——A 回执的 finally 只清 A 的键。 */
 const sendingKeys = new Set<string>();
+const imageCheckingKeys = new Set<string>();
 /** 附件上传项的稳定空集（selector 引用稳定——useSyncExternalStore 契约）。 */
 const EMPTY_UPLOADS: UploadItem[] = [];
 
@@ -348,7 +350,7 @@ export function Composer({
   const readyAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'ready').length, [attachments]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   /** 图片能力门待选（第五十二轮：显式二选一，不再硬拦——发送暂停在选择上）。 */
-  const [imageGate, setImageGate] = useState<{ names: string[] } | null>(null);
+  const [imageGate, setImageGate] = useState<{ names: string[]; reason?: string } | null>(null);
 
   /**
    * 真实附件上传：先本地分类+前置限幅（文本 256KB/图片 8MB/PDF、Office 20MiB/CSV 5MB——
@@ -372,6 +374,7 @@ export function Composer({
         const accepted = settleUploadReady(draftKey, uploadId, attachmentUpload.conversationId, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
         void accepted; // 被丢弃=用户已在上传中移除——不写任何草稿 ref，芯片保持消失
         // R69 P1-D：已保存但提取不可用（分列状态）——芯片就地警示，不算上传失败。
+        if (r.previewWarning != null) settleUpload(draftKey, uploadId, { warning: r.previewWarning });
         if (r.extractionFailed != null) settleUpload(draftKey, uploadId, { warning: r.extractionFailed });
       } catch (e) {
         // R69 P1-C：失败原因就地可见（文件/阶段/可行操作），不再只藏 title。
@@ -576,7 +579,7 @@ export function Composer({
     return `cmd_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function submit(imageAck?: 'omit-images') {
+  async function submit(imageAck?: 'omit-images') {
     const text = body.trim();
     // R66 P3（用户已批准）：没有正文但有**就绪附件**也可发送（默认发 AI；仅记录只保存）——
     // 草稿 refs 只含已就绪 attachmentId；真正空白（无正文且无可发送附件）仍拒绝。
@@ -592,7 +595,7 @@ export function Composer({
     }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
     // 独立可发；A 的回执 finally 只删 A 的键（不清 B 的锁）。
-    if (sendingKeys.has(draftKey)) return;
+    if (sendingKeys.has(draftKey) || imageCheckingKeys.has(draftKey)) return;
     // 图片能力门（第五十二轮，§6.3）：图片附件+派发意图→**显式二选一**（仅发送文字=图片不送
     // 模型并如实注明；或改为仅记录），选择前不发送；选择结果一次性冻结进信封（imageAck）。
     // R66 P3：选了「仅发送文字」但正文为空且**其余附件也全是图片**→会形成空模型输入——
@@ -600,8 +603,24 @@ export function Composer({
     const draftRefs = getDraftFull(draftKey).attachments;
     const imageNames = draftRefs.filter((a) => a.kind === 'image_file').map((a) => a.name);
     if (imageNames.length > 0 && sendAs === 'ai' && imageAck !== 'omit-images') {
-      setImageGate({ names: imageNames });
-      return;
+      const revisionAtCheck = getDraftFull(draftKey).rev;
+      imageCheckingKeys.add(draftKey);
+      try {
+        const projectId = getState().activeProjectId;
+        const conversationId = attachmentUpload?.conversationId ?? target.dmId ?? '';
+        const formalTarget = target.kind === 'room_root' ? { kind: target.kind, projectId, conversationId, roomId: target.roomId }
+          : target.kind === 'thread' ? { kind: target.kind, projectId, conversationId, threadId: target.threadId }
+          : { kind: target.kind, projectId, conversationId };
+        const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string }> }>('message.imageCapability', {
+          target: formalTarget, mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
+        });
+        if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
+        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置渠道'} / ${m.model ?? '未配置模型'}：${m.status === 'supported' ? '图片输入已认证；请 @ 单个成员后发送' : m.status === 'unsupported' ? '不支持图片输入' : '本组合图片输入尚未认证'}`).join('；') }); return; }
+      } catch (error) {
+        setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试或改为仅记录。`);
+        return;
+      } finally { imageCheckingKeys.delete(draftKey); }
+
     }
     if (imageAck === 'omit-images' && text.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
       setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）——请先添加文字、改为「仅记录」，或换非图片附件');
@@ -1009,9 +1028,11 @@ export function Composer({
         <div className="composer-mentions">
           <span className="chip record-chip" title="模型图片输入能力未认证（IMAGE_INPUT_UNVERIFIED）——图片不会作为模型输入；两种选择都会如实注明">
             <Icon name="image" size={11} />
-            图片能力门：{imageGate.names.join('、')}
-            <button title="仅发送文字：图片随消息保存给用户看，但注入文本将如实注明「图片未送给模型」" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
+            {imageGate.reason ?? '当前目标图片输入尚未认证'}：{imageGate.names.join('、')}
+            <button disabled={body.trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="仅发送文字：图片随消息保存给用户看，但注入文本将如实注明「图片未送给模型」" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
             <button title="本次改为仅记录：不派发、不注入，图片只作为记录保存" onClick={() => { setImageGate(null); setSendAs('record'); }}>改为仅记录</button>
+            <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
+            {showMentions ? <button title="重新选择已认证图片输入的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
             <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
           </span>
         </div>

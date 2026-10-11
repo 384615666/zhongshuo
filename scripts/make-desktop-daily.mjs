@@ -47,9 +47,9 @@ const BAT = ['@echo off',
   'if not exist "%APP_DIR%" mkdir "%APP_DIR%"',
   'rem Clean parent-environment ZS_* overrides: this package owns its runtime.',
   'rem Engineering pass-through (verification only, documented): ZS_DEV25_DEBUG_PORT (CDP),',
-  'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (automated dir-picker substitute for open-path verification).',
+  'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (dir-picker), ZS_SAVEAS_AUTO_DIR (isolated save verification).',
   'for /f "delims== tokens=1" %%V in (\'set ZS_ 2^>nul\') do (',
-  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" set "%%V="',
+  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" set "%%V="',
   ')',
   'rem Pipe name is generated once per data root (package copies never collide).',
   'if not exist "%APP_DIR%\\pipe-name.txt" (',
@@ -81,15 +81,15 @@ writeFileSync(join(out, 'start-desktop.bat'), BAT + '\r\n', 'utf8');
 //    「已有新逻辑身份的数据整根移动（自动继承）」两条路径——R68 真实旧版继承收口）
 writeFileSync(join(out, 'README-DAILY.md'), `# 众说·日常桌面版 ${outArg ?? 'desktop-daily-win-v1'}
 
-## R75 接手收尾（2026-10-11）
+## R76 附件与图片（2026-10-11）
 
-- 打开项目时取消、关闭弹窗或跳走后，旧请求不再导航或改写当前项目。
-- B 尚在装载时另开 C，迟到的 B 成功/失败均不会抢回 C，也不会误关新弹窗。
-- 最终导航与打开占位同步交接；普通项目打开和冷房间深链保持可用。
-- 无新增数据库迁移；旧包与旧数据原地保留。最新验证范围见本包交付说明。
+- 房间主池首次打开即可显示根消息附件；主池与线程刷新使用同一附件事实，空列表与读取失败分开。
+- 本地图片阅读：适应窗口、原尺寸、连续缩放、拖动、复位、放大/Esc、另存原件；解码失败就地显示原因与重试，原件保留。
+- 只有图片也能发送；「仅记录」只保存，不调用模型。已认证的 Claude/deepseek-flash 组合实际传递图片字节；认证绑定 CLI/适配器/渠道，其他组合保持明确提示。
+- Codex/gpt-6-luna 的一次真实图片认证超时，未认证；可仅记录、移除图片继续，或改选可用成员后发送。
+- 数据库迁移 001–048 未修改；旧包、旧数据、草稿、未知发送账本保留；无自动发送、对账或解除保护。
 
-只需一次自然确认：在房间中打开另一个已注册项目，再打开一个已有文件。
-无需发 AI 消息、制造竞态或重复长清单。
+只需一次约 3 分钟增量确认：选一张图片 → 预览并缩放 → 仅记录发送 → 等待刷新后图片仍在 → 关窗重开后再预览。
 
 **这是给你日常使用的正式入口**——不是演练包：启动**不会**创建 Guide 演练会话或模拟回复，
 也不会自动调用任何模型；真实模型调用只在你主动发送消息给已配置的成员时发生。
