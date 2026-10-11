@@ -31,7 +31,8 @@
     "cancelThreePhases": true,
     "zeroModelCalls": true,
     "publishedProtocol": true,
-    "independentPipes": true
+    "independentPipes": true,
+    "unobscuredReopenedImageWithProtection": true
   },
   "sourceValidation": {
     "tests": {
@@ -522,7 +523,7 @@
       "r77-member-status.png",
       "r77-config-mismatch.png",
       "zoom-drag.png",
-      "reopen-preview.png"
+      "dist\\desktop\\r77-final-reopen-1791696848963\\reopen-unobscured.png"
     ]
   },
   "finalProjects": {
@@ -589,6 +590,18 @@
     {
       "receipt": "dist/desktop/r76-vision-cert/result.json",
       "meaning": "original Codex 120-second timeout unchanged; unverified"
+    },
+    {
+      "receipt": "dist/desktop/r76-images-1791696357086/reopen-preview.png",
+      "meaning": "numeric reopen check passed, but first screenshot had read-only engineering recovery overlay; visual acceptance supplemented with unobscured final-copy receipt, no protection released"
+    },
+    {
+      "receipt": "dist/desktop/r77-final-reopen/result.json",
+      "meaning": "supplemental probe evaluated body.classList before DOM body existed; initial failed receipt retained"
+    },
+    {
+      "receipt": "dist/desktop/r77-final-reopen-1791696820469/result.json",
+      "meaning": "same early DOM readiness error; fixed by waiting for actual body and published command bridge; original failed receipt retained"
     }
   ],
   "certification": {
@@ -616,5 +629,24 @@
     "Word/GitHub external environment suites and historical full-repository lint not re-certified in R77",
     "Android, installer, signing, extreme memory/animated playback and earlier postponements outside scope"
   ],
-  "userFollowup": "No configuration mismatch tasks or historical checklist required"
+  "userFollowup": "No configuration mismatch tasks or historical checklist required",
+  "unobscuredReopen": {
+    "receipt": "dist\\desktop\\r77-final-reopen-1791696848963\\result.json",
+    "screenshot": "dist\\desktop\\r77-final-reopen-1791696848963\\reopen-unobscured.png",
+    "pass": true,
+    "image": {
+      "width": 1043,
+      "height": 1439,
+      "drawWidth": 422.6875,
+      "drawHeight": 583.1875,
+      "noOverlay": true
+    },
+    "protocol": "zsres://app/index.html",
+    "gateHeldBefore": true,
+    "gateHeldAfter": true,
+    "pendingDispatchCount": 0,
+    "realCalls": 0
+  },
+  "runtimeSourceUnchangedAfterBuild": true,
+  "verificationScriptCommit": "f5bd377"
 }

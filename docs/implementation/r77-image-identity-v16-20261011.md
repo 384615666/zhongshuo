@@ -38,8 +38,11 @@ Windows 注册表不存在与读取失败分开。测试发现中文 reg.exe 输
 旧包、用户数据/凭据/草稿/未知账本未改；迁移001–048冻结，无自动发送、对账、解除保护。Android、安装器、签名和其他延期范围不扩展。未验证的托管/宿主动态来源和真实项目渠道过滤保持明确边界；不更换查看器。
 
 
-最终 v16 BUILD：`bld_7c03ac9a82f2fd60`，clean，源码 `473c7f96a1397d1f7d00c74ba78361b96775235f`。最终包及两个真实启动器副本均593/593字节大小与SHA256一致；后续交付记录提交只改docs，运行时源码与BUILD不变。
+最终 v16 BUILD：`bld_7c03ac9a82f2fd60`，clean，源码 `473c7f96a1397d1f7d00c74ba78361b96775235f`。最终包及两个真实启动器副本均593/593字节大小与SHA256一致；后续提交仅改验证脚本及docs，运行时源码与BUILD不变。
 
 最终集中验收：[r77-v16-delivery-20261011.json](r77-v16-delivery-20261011.json)，requiredChecks全部true。图片证据 `r76-images-1791696357086/result.json`：64次/16256ms采样，16个图片入口与配置阶段全过，real_calls=0，发布协议zsres；已检查最终成员状态、配置失配、拖动缩放和重开画面。项目证据 `r75-launcher-check-1791696332198/result.json`：真实v16启动器A→B→C→重开C、console errors0、real_calls0。两独立数据根pipe GUID不同。取消三相位源形态门 `gate-r75-r75-gate-20261011051914/result.json`通过，real_calls0。最终源码 `dist/r77-source-release.json`为119文件935/935，双类型检查0错，lint无新增。原失败和错误目标探针仍在，未改记成首次成功。
 
 用户无需再手工制造配置变化或重跑历史验收；下一步真实Codex认证须按上述最小调用需求另行授权。
+
+
+最终重开截图曾被工程夹具的只读恢复检查弹窗遮挡，尺寸验证虽已通过，画面验收单独补充。永久脚本现在仅点「关闭」，并断言 recovery.status.gateHeld 仍为true，再拍无遮挡画面。补证 `r77-final-reopen-1791696848963/result.json` 为pass：同一最终473c7f9构建副本，图片1043×1439、实际显示422.6875×583.1875、无覆盖弹窗、保护前后均held、pending0、real_calls0。已检查无遮挡截图。补充探针最初两次过早读DOM body失败（`r77-final-reopen/result.json`、`r77-final-reopen-1791696820469/result.json`），原回执保留；没有把它们改记成功。新增验证脚本不改变任何runtime源文件或构建输入；BUILD仍如实指向473c7f9。集中JSON增加无遮挡/保护保留为必要判据，全部true。
