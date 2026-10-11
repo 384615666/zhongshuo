@@ -86,7 +86,7 @@ async function modalOpenCurrentPick(cdp) {
     child.stdout.on('data', () => {}); child.stderr.on('data', () => {});
   };
   const stopBat = async () => {
-    try { if (currentCdp != null && !currentCdp.closed) await currentCdp.send('Browser.close'); } catch { /* 已退出 */ }
+    try { if (currentCdp != null && !currentCdp.closed) await Promise.race([currentCdp.send('Browser.close'), sleep(2000)]); } catch { /* 已退出 */ }
     await sleep(2500);
     killCopy();
   };

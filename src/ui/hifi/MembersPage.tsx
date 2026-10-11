@@ -169,7 +169,7 @@ export function MembersPage() {
       return { text: '未绑定（点「配置 runtime」选择渠道与模型）', problem: true };
     }
     if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
-    return { text: `${rt.installation.kind} · ${runtimeAuthOf(rt.installation.capabilities_json)}` };
+    return { text: `${rt.installation.kind} · 工具权限限制认证：${runtimeAuthOf(rt.installation.capabilities_json)}` };
   };
 
   return (
