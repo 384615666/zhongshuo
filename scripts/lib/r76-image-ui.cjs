@@ -16,7 +16,7 @@ module.exports = async function verifyImages({ cdp, facts, errs, outDir, project
     await pause(120);
   };
   const decoded = async name => {
-    await until(() => cdp.tryEval(`(()=>{const i=document.querySelector('#hifi-root [data-zs-image-preview]');return i?.alt===${JSON.stringify(name)}&&i.naturalWidth>0&&i.naturalHeight>0})()`), v=>v, 15000, `decode ${name}`);
+    await until(() => cdp.tryEval(`(()=>{const i=document.querySelector('#hifi-root [data-zs-image-preview]');if(i?.alt!==${JSON.stringify(name)}||i.naturalWidth<=0||i.naturalHeight<=0)return false;const r=i.getBoundingClientRect(),v=i.parentElement.getBoundingClientRect();return r.width>0&&r.height>0&&Math.min(r.right,v.right)>Math.max(r.left,v.left)&&Math.min(r.bottom,v.bottom)>Math.max(r.top,v.top)&&i.closest('[data-zs-image-stage]')?.dataset.zsImageStatus==='decoded'})()`), v=>v, 15000, `decode and visible layout ${name}`);
     return cdp.eval(`(()=>{const i=document.querySelector('#hifi-root [data-zs-image-preview]');const r=i.getBoundingClientRect();const v=i.parentElement.getBoundingClientRect();return {width:i.naturalWidth,height:i.naturalHeight,drawWidth:r.width,drawHeight:r.height,visible:r.width>0&&r.height>0&&Math.min(r.right,v.right)>Math.max(r.left,v.left)&&Math.min(r.bottom,v.bottom)>Math.max(r.top,v.top),transform:i.style.transform}})()`);
   };
   const choose = async files => {
