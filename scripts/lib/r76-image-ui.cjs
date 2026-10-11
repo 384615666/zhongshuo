@@ -188,10 +188,13 @@ module.exports = async function verifyImages({ cdp, facts, errs, outDir, project
   });
   await step('reopenRecordPreview',async()=>{
     cdp=await restart();
+    await cdp.eval("(()=>{const m=[...document.querySelectorAll('#hifi-root .modal')].find(x=>x.textContent.includes('恢复检查'));[...m?.querySelectorAll('button')??[]].find(b=>b.textContent.trim()==='关闭')?.click()})();true");
+    await until(()=>cdp.tryEval("document.querySelector('#hifi-root .scrim, #hifi-root .modal')==null"),v=>v,10000,'dismiss read-only recovery overlay, keep protection');
+    const recovery=await cmd('recovery.status',{});if(!recovery.ok||!recovery.data.gateHeld)throw new Error('engineering recovery protection must remain held');
     await cdp.eval(`location.hash=${JSON.stringify('/project/'+pid+'/room/'+roomId)};true`);
     await until(()=>cdp.tryEval(`document.querySelector('#hifi-root .root-card .msg-attach')!=null`),v=>v,30000,'cold reopen pool chip');
     await click('#hifi-root .root-card .msg-attach','中文图片.png');const image=await decoded('中文图片.png');
-    await cdp.shot(path.join(outDir,'reopen-preview.png'));return {pass:image.visible,image};
+    await cdp.shot(path.join(outDir,'reopen-preview.png'));return {pass:image.visible,image,gateHeld:recovery.data.gateHeld};
   });
   return cdp;
 };
