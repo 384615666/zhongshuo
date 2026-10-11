@@ -1,0 +1,620 @@
+{
+  "round": "R77",
+  "date": "2026-10-11",
+  "baseline": "8898b23",
+  "branch": "codex/full-implementation",
+  "package": "dist/desktop/desktop-daily-win-v16",
+  "build": {
+    "buildId": "bld_7c03ac9a82f2fd60",
+    "commit": "473c7f96a1397d1f7d00c74ba78361b96775235f",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-11T05:25:04.945Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "pass": true,
+  "requiredChecks": {
+    "sourceTests": true,
+    "typechecks": true,
+    "noNewLint": true,
+    "manifest": true,
+    "oldV15Preserved": true,
+    "cleanBuild": true,
+    "exactFinalCopies": true,
+    "imageTotal": true,
+    "allImageStages": true,
+    "certificationMismatchAndRestore": true,
+    "coldPool": true,
+    "threeCycles": true,
+    "projectLauncher": true,
+    "cancelThreePhases": true,
+    "zeroModelCalls": true,
+    "publishedProtocol": true,
+    "independentPipes": true
+  },
+  "sourceValidation": {
+    "tests": {
+      "files": 119,
+      "passed": 935,
+      "failed": 0,
+      "receipt": "dist/r77-source-release.json",
+      "excludedExternalEnvironmentTests": [
+        "tests/integration/docxWordValidation.test.ts",
+        "tests/integration/githubSandbox.test.ts"
+      ]
+    },
+    "typechecks": [
+      "pnpm typecheck",
+      "pnpm typecheck:hifi"
+    ],
+    "lint": {
+      "pass": true,
+      "records": [
+        {
+          "file": "scripts/diagnose-r77-codex.cjs",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "scripts/lib/r76-image-ui.cjs",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "scripts/make-desktop-daily.mjs",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "scripts/verify-r75-launcher.cjs",
+          "before": 27,
+          "after": 27,
+          "newMessages": []
+        },
+        {
+          "file": "scripts/verify-r76-images.cjs",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/adapter/claude/cliAdapter.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/adapter/claude/configuration.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/adapter/codex/configuration.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/contracts/runtime.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/daemon/dispatchWorker.ts",
+          "before": 1,
+          "after": 1,
+          "newMessages": []
+        },
+        {
+          "file": "src/daemon/entry.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/daemon/imageCapability.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "src/ui/hifi/MembersPage.tsx",
+          "before": 1,
+          "after": 1,
+          "newMessages": []
+        },
+        {
+          "file": "src/ui/hifi/components/Composer.tsx",
+          "before": 3,
+          "after": 3,
+          "newMessages": []
+        },
+        {
+          "file": "src/ui/hifi/preview/viewers/ImageView.tsx",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "tests/integration/imageConfigurationR77.test.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        },
+        {
+          "file": "tests/integration/imageInputR76.test.ts",
+          "before": 0,
+          "after": 0,
+          "newMessages": []
+        }
+      ]
+    }
+  },
+  "copies": {
+    "images": {
+      "manifestFiles": 593,
+      "mismatches": [],
+      "build": {
+        "buildId": "bld_7c03ac9a82f2fd60",
+        "commit": "473c7f96a1397d1f7d00c74ba78361b96775235f",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-11T05:25:04.945Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "pass": true
+    },
+    "projects": {
+      "manifestFiles": 593,
+      "mismatches": [],
+      "build": {
+        "buildId": "bld_7c03ac9a82f2fd60",
+        "commit": "473c7f96a1397d1f7d00c74ba78361b96775235f",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-11T05:25:04.945Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "pass": true
+    }
+  },
+  "manifestReceipts": {
+    "v15": {
+      "files": 593,
+      "mismatch": [],
+      "pass": true,
+      "build": {
+        "buildId": "bld_e1445d7659d870b2",
+        "commit": "485386ca3c3d591fb53fc62c58b1bd0881c89bc4",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-11T04:13:59.197Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      }
+    },
+    "v16": {
+      "files": 593,
+      "mismatch": [],
+      "pass": true,
+      "build": {
+        "buildId": "bld_7c03ac9a82f2fd60",
+        "commit": "473c7f96a1397d1f7d00c74ba78361b96775235f",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-11T05:25:04.945Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      }
+    }
+  },
+  "finalImages": {
+    "receipt": "dist\\desktop\\r76-images-1791696357086\\result.json",
+    "receiptSHA256": "4018706a08cdb2a0e8d664e682854f738b9f643030856f3a8ed4de6983196e8e",
+    "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v16",
+    "protocol": "zsres://app/index.html",
+    "pipe": "zs-daily-02183d47-cfb6-4b37-9a5e-707536598fc9",
+    "coldPool": [
+      {
+        "id": "art_cb7bbaaa-1e3d-4d21-9742-fa0fdc3d15b1",
+        "name": "中文图片.png图片"
+      }
+    ],
+    "stability": {
+      "samples": 64,
+      "spanMs": 16256,
+      "attachmentId": "art_cb7bbaaa-1e3d-4d21-9742-fa0fdc3d15b1",
+      "allSamplesCorrect": true
+    },
+    "extended": {
+      "sentMessagePreview": {
+        "pass": true,
+        "image": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 422.6875,
+          "drawHeight": 583.1875,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      },
+      "zoomDragMaximizeEsc": {
+        "pass": true,
+        "original": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 1043,
+          "drawHeight": 1439,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "enlarged": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 1303.75,
+          "drawHeight": 1798.75,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "dragged": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 1303.75,
+          "drawHeight": 1798.75,
+          "visible": true,
+          "transform": "translate(65px, 35px)"
+        },
+        "max": true,
+        "restored": true
+      },
+      "saveOriginalBytes": {
+        "pass": true,
+        "sourceHash": "3982c283d3af959108104026ac6bb02fbb594962294a4ad6055a210afd435967",
+        "savedHash": "3982c283d3af959108104026ac6bb02fbb594962294a4ad6055a210afd435967"
+      },
+      "formatsAndTabState": {
+        "pass": true,
+        "images": [
+          {
+            "name": "中文照片.jpg",
+            "image": {
+              "width": 96,
+              "height": 64,
+              "drawWidth": 96,
+              "drawHeight": 64,
+              "visible": true,
+              "transform": "translate(0px, 0px)"
+            }
+          },
+          {
+            "name": "中文网页.webp",
+            "image": {
+              "width": 96,
+              "height": 64,
+              "drawWidth": 96,
+              "drawHeight": 64,
+              "visible": true,
+              "transform": "translate(0px, 0px)"
+            }
+          },
+          {
+            "name": "中文动图.gif",
+            "image": {
+              "width": 96,
+              "height": 64,
+              "drawWidth": 96,
+              "drawHeight": 64,
+              "visible": true,
+              "transform": "translate(0px, 0px)"
+            }
+          }
+        ],
+        "restored": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 1303.75,
+          "drawHeight": 1798.75,
+          "visible": true,
+          "transform": "translate(65px, 35px)"
+        }
+      },
+      "threadBodyAndMultiAttachments": {
+        "pass": true,
+        "attachmentNames": [
+          "中文照片.jpg",
+          "中文网页.webp",
+          "中文动图.gif"
+        ],
+        "image": {
+          "width": 96,
+          "height": 64,
+          "drawWidth": 96,
+          "drawHeight": 64,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      },
+      "threadArtifactsPicture": {
+        "pass": true,
+        "image": {
+          "width": 96,
+          "height": 64,
+          "drawWidth": 96,
+          "drawHeight": 64,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      },
+      "corruptDecodeAndCapacity": {
+        "pass": true,
+        "error": "图片字节已读取，但浏览器无法解码。文件可能损坏或格式不受支持；已保存原件保留。重试预览另存原件",
+        "warning": "损坏图片.png 已保存，但浏览器无法解码图片；文件可能损坏或格式不受支持。原件已保存；可打开预览重试或另存原件。",
+        "tooLarge": "超容量.jpg 上传失败：图片原件超过 8MB 上限（超容量.jpg · 8388609B）——可换支持类型重选重选文件",
+        "acceptedBytes": 8388608
+      },
+      "roomFilesResource": {
+        "pass": true,
+        "image": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 1303.75,
+          "drawHeight": 1798.75,
+          "visible": true,
+          "transform": "translate(65px, 35px)"
+        }
+      },
+      "worktreePicture": {
+        "pass": true,
+        "image": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 291.6499938964844,
+          "drawHeight": 402.38751220703125,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "fit": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 291.6499938964844,
+          "drawHeight": 402.38751220703125,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      },
+      "worktreeBmpSvg": {
+        "pass": true,
+        "images": [
+          {
+            "name": "中文位图.bmp",
+            "image": {
+              "width": 96,
+              "height": 64,
+              "drawWidth": 96,
+              "drawHeight": 64,
+              "visible": true,
+              "transform": "translate(0px, 0px)"
+            }
+          },
+          {
+            "name": "中文矢量.svg",
+            "image": {
+              "width": 96,
+              "height": 64,
+              "drawWidth": 96,
+              "drawHeight": 64,
+              "visible": true,
+              "transform": "translate(0px, 0px)"
+            }
+          }
+        ]
+      },
+      "unverifiedImageActions": {
+        "pass": true,
+        "gate": {
+          "text": "codex · 模型ID gpt-6-luna · 渠道 custom · responses · 默认地址由登录方式决定 · 配置 已配置 · 适配器图片字节协议回放通过 · 真实识图未认证：R76 gpt-6-luna 上游响应等待超时；没有真实识图结果，不代表模型名称无效或不支持图片：中文照片.jpg仅发送文字（图片不送模型）改为仅记录移除图片继续成员配置取消",
+          "emptyTextDisabled": true
+        }
+      },
+      "certifiedMemberPreflight": {
+        "pass": true,
+        "members": [
+          {
+            "memberId": "m_default_prj_b821ac44-45d4-425b-a21c-e5f2838ddf85_0",
+            "kind": "claude",
+            "model": "deepseek-flash",
+            "permissionMode": "plan",
+            "status": "supported",
+            "evidence": "r76-20261011-claude-deepseek-flash-vision",
+            "channel": "http://192.0.2.10",
+            "endpointSource": "用户 settings.json",
+            "configuration": "已配置",
+            "protocol": "适配器图片字节协议回放通过",
+            "reason": "真实识图已认证（工程 PNG；当前 CLI、渠道、模型ID与 plan 权限匹配）",
+            "identityKey": "33c20cfd5ec6cfc97190dbf10b7da9b94d32f6c61b9ddbecba246b7519ee4981"
+          }
+        ]
+      },
+      "r77ConfigurationStatus": {
+        "pass": true,
+        "matching": "claude · 模型ID deepseek-flash · 渠道 http://192.0.2.10 · 配置 已配置 · 适配器图片字节协议回放通过 · 真实识图已认证：真实识图已认证（工程 PNG；当前 CLI、渠道、模型ID与 plan 权限匹配）",
+        "mismatch": [
+          {
+            "memberId": "m_default_prj_b821ac44-45d4-425b-a21c-e5f2838ddf85_0",
+            "kind": "claude",
+            "model": "deepseek-flash",
+            "permissionMode": "plan",
+            "status": "unverified",
+            "evidence": null,
+            "channel": "无法确定（候选用户渠道：http://192.0.2.10）",
+            "endpointSource": "用户 settings.json",
+            "configuration": "已配置",
+            "protocol": "适配器图片字节协议回放通过",
+            "reason": "项目 settings.local.json含渠道覆盖；CLI 项目信任或托管过滤结果未核实",
+            "identityKey": "e292d109b588b5d208584065b24dbda1cf79dda4f5183762701ca36f6fa58367"
+          }
+        ],
+        "mismatchText": "claude · 模型ID deepseek-flash · 渠道 无法确定（候选用户渠道：http://192.0.2.10） · 配置 已配置 · 适配器图片字节协议回放通过 · 真实识图未认证：项目 settings.local.json含渠道覆盖；CLI 项目信任或托管过滤结果未核实",
+        "member": "配置：已配置 · 模型ID：deepseek-flash · 权限：plan渠道：http://192.0.2.10协议：适配器图片字节协议回放通过真实识图：已认证 · 真实识图已认证（工程 PNG；当前 CLI、渠道、模型ID与 plan 权限匹配）",
+        "preview": {
+          "width": 96,
+          "height": 64,
+          "drawWidth": 96,
+          "drawHeight": 64,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      },
+      "dmImageOnlyRecord": {
+        "pass": true,
+        "draft": {
+          "width": 96,
+          "height": 64,
+          "drawWidth": 96,
+          "drawHeight": 64,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "sent": {
+          "width": 96,
+          "height": 64,
+          "drawWidth": 96,
+          "drawHeight": 64,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "conversationId": "dm_2459008d-3611-4386-b360-9bc1bb7ff9fd"
+      },
+      "deliveryDocumentPicture": {
+        "pass": true,
+        "image": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 422.6875,
+          "drawHeight": 583.1875,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        },
+        "fixture": "formal FakeRuntimeAdapter/worker generated; not a real model delivery"
+      },
+      "reopenRecordPreview": {
+        "pass": true,
+        "image": {
+          "width": 1043,
+          "height": 1439,
+          "drawWidth": 422.6875,
+          "drawHeight": 583.1875,
+          "visible": true,
+          "transform": "translate(0px, 0px)"
+        }
+      }
+    },
+    "realCalls": 0,
+    "visuallyInspected": [
+      "r77-member-status.png",
+      "r77-config-mismatch.png",
+      "zoom-drag.png",
+      "reopen-preview.png"
+    ]
+  },
+  "finalProjects": {
+    "receipt": "dist\\desktop\\r75-launcher-check-1791696332198\\result.json",
+    "facts": {
+      "buildId": "bld_7c03ac9a82f2fd60",
+      "commit": "473c7f96a1397d1f7d00c74ba78361b96775235f",
+      "origin": {
+        "hash": "#/project/prj_196e3e62-9bfa-4dfb-9de1-8e8a8509",
+        "active": "项目A"
+      },
+      "openB": {
+        "hash": "#/project/prj_6308707f-9b7c-4a2b-b404-758935b4589d/room/room_default_prj_6308707f-9b7c-4a2b-b404-758935b4589d",
+        "active": "项目B",
+        "composer": true,
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791696332198\\项目B",
+        "projAKept": true,
+        "toasts": []
+      },
+      "openC": {
+        "hash": "#/project/prj_a321dc04-cc67-4a94-adff-7708c2a7f8f1/room/room_default_prj_a321dc04-cc67-4a94-adff-7708c2a7f8f1",
+        "active": "项目C",
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791696332198\\项目C",
+        "toasts": []
+      },
+      "restart": {
+        "active": "项目C",
+        "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791696332198\\项目C"
+      },
+      "filesOk": true,
+      "consoleErrors": [],
+      "realCalls": 0
+    },
+    "pipe": "zs-daily-b6944a43-ba5a-46fa-99b4-07a586a08e81"
+  },
+  "sourceCancelGate": {
+    "receipt": "dist/desktop/gate-r75-r75-gate-20261011051914/result.json",
+    "ok": true,
+    "realCallRoots": {
+      "root2": 0
+    }
+  },
+  "retainedFailures": [
+    {
+      "receipt": "dist/desktop/review-r76-v15-audit-20261011/config-dir-result.json",
+      "meaning": "original R76 wrong config-directory identity; unchanged"
+    },
+    {
+      "receipt": "dist/r77-focused-final.json",
+      "meaning": "Chinese Windows reg.exe GBK decoding false read-failure; fixed; original receipt retained"
+    },
+    {
+      "receipt": "dist/desktop/r76-images-1791695883925/result.json",
+      "meaning": "first R77 probe wrong DM route; original total fail retained"
+    },
+    {
+      "receipt": "dist/desktop/r76-images-1791696018889/result.json",
+      "meaning": "decoded natural image sampled with zero drawing box; original total fail retained; existing viewer initial layout and visible QA fixed"
+    },
+    {
+      "receipt": "dist/desktop/r75-launcher-check-1791695904176/result.json",
+      "meaning": "engineering invocation missed --src and tested v13; invalid for v16, not counted"
+    },
+    {
+      "receipt": "dist/desktop/r76-vision-cert/result.json",
+      "meaning": "original Codex 120-second timeout unchanged; unverified"
+    }
+  ],
+  "certification": {
+    "newModelCalls": 0,
+    "certificateChanged": false,
+    "claude": "R76 engineering PNG, deepseek-flash, plan, matching actual CLI SHA/endpoint SHA/adapter; current default matching combo verified by native preflight; no new live inference",
+    "codex": "gpt-6-luna present in actual CLI list and original turn_context; provider custom; initialization/thread start complete; upstream sampling retries time out then HTTP fallback; no true vision result; unverified",
+    "diagnostic": "docs/implementation/r77-codex-timeout-diagnostic-20261011.json",
+    "unsupportedSources": "project routing env, managed/dynamic/host sources without provable final CLI filtering stay unverified",
+    "nextRealCertificationRequires": "new explicit authorization for minimum one gpt-6-luna startTurn using own PNG after provider connectivity resolved"
+  },
+  "preservation": {
+    "migrations001to048": "unchanged",
+    "userSamplesCommitted": false,
+    "credentialsProfilesCommitted": false,
+    "oldDataDraftsUnknownLedger": "untouched",
+    "automaticSendReconcileProtectionRelease": false,
+    "viewerReplacement": false
+  },
+  "boundaries": [
+    "No new real model certification; Codex name/permission/image-support failure not established",
+    "Project/managed/host routing filters not live-network certified; fail closed with source reason",
+    "Real R76 Claude recognition covers engineering PNG only; other formats verified local decode and adapter bytes, no extra per-format inference",
+    "Delivery image entry uses labeled formal FakeRuntimeAdapter/worker engineering fixture, not new real-model delivery",
+    "Word/GitHub external environment suites and historical full-repository lint not re-certified in R77",
+    "Android, installer, signing, extreme memory/animated playback and earlier postponements outside scope"
+  ],
+  "userFollowup": "No configuration mismatch tasks or historical checklist required"
+}
