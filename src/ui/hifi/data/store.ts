@@ -1068,7 +1068,8 @@ import { saveNavPrefs } from './navPrefs';
  * board.view scope=all 的可见集读本表——review-r64 §4A：不能只写本地叫正式 navigation 命令）。
  * 服务端写为 fire-and-forget（失败不阻塞导航；下次导航动作重写）。
  */
-export function persistNav(s: HifiState): void {
+export function persistNav(s: HifiState, isCurrent: () => boolean = () => true): void {
+  if (!isCurrent()) return;
   try {
     saveNavPrefs({
       version: 1,
@@ -1082,6 +1083,7 @@ export function persistNav(s: HifiState): void {
   void (async () => {
     try {
       const { command } = await import('../bridge');
+      if (!isCurrent()) return;
       await command('navigation.set', {
         clientId: 'desktop-hifi',
         activeProjectId: s.activeProjectId === '' ? null : s.activeProjectId,

@@ -15,8 +15,8 @@ import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead,
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
 import type { AppState, Message, Task, Thread, ThreadCard, WorkflowRun } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
-import { currentNavSeq } from './lib/router';
-import { navIntentActive, cancelAllNavIntents, type NavIntent } from './lib/navIntent';
+import { currentNavSeq, navigate } from './lib/router';
+import { navIntentActive, cancelAllNavIntents, beginUserNavIntent, onNavIntentCancel, releaseNavIntent, type NavIntent } from './lib/navIntent';
 
 /* ---------- 正式响应的最小类型（真实形状字段子集——具体投影，不用 any） ---------- */
 interface ProjectOpenData { project: { id: string; displayName: string; revision?: number; rootPath?: string; canonicalPath?: string }; created?: boolean }
@@ -331,25 +331,28 @@ export async function collabSet(projectId: string, patch: { absenceToleranceMs?:
 }
 
 export async function pickAndOpenFolder(): Promise<void> {
-  const dir = await bridge().pickFolder();
-  if (dir == null) return;
-  const opened = await openProjectByPath(dir).catch((e): { id: string } => {
+  const intent = beginUserNavIntent();
+  try {
+    const dir = await bridge().pickFolder();
+    if (dir == null || !navIntentActive(intent)) return;
+    await openProjectByPath(dir, { intent, navigateToRoom: true });
+  } catch (e) {
+    if (!navIntentActive(intent)) return;
     toast(`打开项目失败：${(e as Error).message}`, 'error');
-    // r58 P4：已有项目在用时打开/切换失败**不降级启动态**——当前项目保持可用（错误走
-    // toast）；boot:failed 只描述「首启无项目」场景，避免误导性失败横幅。
     setState((s) => (s.activeProjectId === '' ? { ...s, boot: 'failed', bootError: (e as Error).message } : s));
-    return { id: '' };
-  });
-  // R75：按本次目标落位（打开动作始终绑定目标——不读异步结束时的 activeProjectId）。
-  if (opened.id !== '') {
-    const st = getState();
-    const first = st.rooms.find((r) => r.projectId === opened.id);
-    const { navigate } = await import('./lib/router');
-    navigate(first != null ? `/project/${opened.id}/room/${first.id}` : `/project/${opened.id}`);
+  } finally {
+    releaseNavIntent(intent);
   }
 }
 
-export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntent }): Promise<{ id: string }> {
+export interface OpenProjectResult {
+  id: string;
+  /** 返回后到最终导航之间也可能被新动作取代，调用方不得只凭 id 落位。 */
+  isCurrent(): boolean;
+}
+const cancelledOpen = (): OpenProjectResult => ({ id: '', isCurrent: () => false });
+
+export async function openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntent; navigateToRoom?: boolean }): Promise<OpenProjectResult> {
   // 代次在**请求入口**分配（review-r47 §4：旧 A 响应不得覆盖后来已打开的 B——先请求 A 延迟、
   // 再请求 B 完成，A 回来须被丢弃）。启动自动恢复同理不能覆盖手动打开。
   // R73：fromIntent=定位/对齐链内部调用（不取消所属意图）；用户级打开（打开文件夹/启动恢复）
@@ -363,8 +366,11 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
   // （打开弹窗）按目标落位，不按异步结束时的 activeProjectId。②取消回滚完整性——装载刷新期
   // 取消不只还原焦点：zs.lastProjectPath 与本操作整表替换的 rooms/members/memberRuntimes/dms
   // 投影一并还原（只撤销本操作仍拥有的值；项目注册表不回滚——注册是既成事实）。
-  if (opts?.fromIntent !== true) cancelAllNavIntents();
-  const intent = opts?.intent;
+  // 无显式凭据的用户直呼也受导航取消约束；启动恢复的系统调用保持原合同。
+  const ownsIntent = opts?.fromIntent !== true && opts?.intent == null;
+  const intent = ownsIntent ? beginUserNavIntent() : opts?.intent;
+  if (!navIntentActive(intent)) return cancelledOpen();
+  if (opts?.fromIntent !== true) cancelAllNavIntents(intent);
   const urlSeqAtStart = currentNavSeq();
   const prevFocus = getState().activeProjectId; // 装载刷新期取消时还原焦点（仅当焦点仍指向本次结果）
   let prevLastPath: string | null = null;
@@ -378,6 +384,7 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
   const gen = getState().loadGen + 1;
   setState((s) => ({ ...s, loadGen: gen, boot: 'ready', bootError: null, openInFlight: true }));
   let openedId: string | null = null; // 提交时置——回滚只针对本次已提交的目标
+  let landedHash: string | null = null;
   /** R75：装载期取消/装载失败+取消共用回滚——焦点/本地记忆/整表投影还原到入口快照。
    * 守卫：本次确已提交、焦点仍指向本次目标且无更新代次、且不是同项目重开——
    * 不覆盖用户随后主动切走的项目/新打开（review-r74 §P2）。 */
@@ -399,14 +406,20 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
     } catch { /* 本地记忆不可写——尽力 */ }
     return true;
   };
+  const operationActive = (): boolean => getState().loadGen === gen && navIntentActive(intent)
+    && (opts?.fromIntent === true || (landedHash != null ? window.location.hash === landedHash : currentNavSeq() === urlSeqAtStart));
+  const canLand = (): boolean => operationActive() && openedId != null && getState().activeProjectId === openedId;
+  const stopListening = intent == null ? () => {} : onNavIntentCancel(intent, () => {
+    rollbackOwned();
+    setState((s) => s.loadGen === gen ? { ...s, openInFlight: false, openInFlightTarget: null } : s);
+  });
   try {
     const data = await command<ProjectOpenData>('project.open', { path }); // 正式合同：{path}
-    if (getState().loadGen !== gen) return { id: '' }; // 期间有更新的打开请求——旧响应丢弃
-    if (!navIntentActive(intent)) {
+    if (!operationActive()) {
       // project.open 在途回执到达时定位意图已取消（review-r73 反例：URL 已是 settings 而
       // activeProjectId 被旧请求切成 A + 取消后 navigation.set(A)）——零提交。
       recordWrite('project.open.cancelled', `「${path}」回执到达时定位意图已取消——零提交（焦点/可见集合/本地记忆/导航偏好均未改动）`);
-      return { id: '' };
+      return cancelledOpen();
     }
     const p = data.project;
     openedId = p.id;
@@ -433,26 +446,39 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
     });
     try { localStorage.setItem('zs.lastProjectPath', path); } catch { /* 忽略 */ }
     await Promise.all([loadProjectRegistry(), refreshMembers(), refreshRooms(), refreshDms(), refreshSavedMessageRefs()]);
-    if (!navIntentActive(intent)) {
+    if (!canLand()) {
       // 成员/房间/DM 装载等待期取消到达——不写导航偏好；本操作拥有的状态回滚到入口快照
       //（焦点/本地记忆 zs.lastProjectPath/整表投影；房间缓存是事实但被本波整表替换——还原）。
       const rolled = rollbackOwned();
       recordWrite('project.open.cancelled', `「${p.displayName}」装载期间定位意图已取消——跳过导航偏好写入${rolled ? '，焦点/本地记忆/装载投影已还原到打开前' : '（焦点已不在本次目标——不回滚，尊重用户后续选择）'}`);
-      return { id: '' };
+      return cancelledOpen();
     }
     const { persistNav } = await import('./data/store');
-    persistNav(getState()); // R65：服务端导航偏好同步（跨机权威；本地 localStorage 为快速镜像）
-    return { id: p.id }; // R75：本次目标 id——调用方按此落位（不读异步结束时的 activeProjectId）
+    if (!canLand()) { rollbackOwned(); return cancelledOpen(); }
+    // 桥模块等待也受代次/归属门保护；成功落位自身的 navigate 不撤销已接受的偏好。
+    persistNav(getState(), () => stillCurrent(gen, p.id));
+    if (opts?.navigateToRoom === true) {
+      // 最终落位也是本操作的一部分：先完成路由交接，再释放占位，旧路由不能插入新打开。
+      stopListening();
+      if (intent != null) releaseNavIntent(intent);
+      const first = getState().rooms.find((r) => r.projectId === p.id);
+      const target = first != null ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`;
+      navigate(target);
+      landedHash = `#${target}`;
+    }
+    return { id: p.id, isCurrent: canLand };
   } catch (e) {
-    if (!navIntentActive(intent)) {
+    if (!operationActive()) {
       // 装载失败 + 意图已取消（review-r74 §P2 覆盖面）：与装载期取消同口径回滚，安静收尾
       //（不向已离开的用户弹旧错误）；未取消的失败照旧抛出（调用方如实提示）。
       rollbackOwned();
       recordWrite('project.open.cancelled', `「${path}」装载失败且定位意图已取消——按取消口径收尾（不弹旧错误）`);
-      return { id: '' };
+      return cancelledOpen();
     }
     throw e;
   } finally {
+    stopListening();
+    if (ownsIntent && intent != null) releaseNavIntent(intent);
     // 在途结束（成功/失败/被取代/取消）——按代次条件清：旧调用的收尾不清掉更新调用的标记/目标。
     setState((s) => (s.openInFlight && s.loadGen === gen ? { ...s, openInFlight: false, openInFlightTarget: null } : s));
   }
@@ -464,8 +490,11 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
  * archived/removed→archivedAt/removedAt 标记位（选择器按真值过滤，不用假时间戳）。
  */
 export async function loadProjectRegistry(): Promise<void> {
+  const gen = getState().loadGen;
   try {
     const data = await command<{ items: RegistryItem[] }>('project.list', {});
+    // 旧打开的注册表快照可能还没有刚注册的C；迟到后不能整表抹掉最新项目。
+    if (getState().loadGen !== gen) return;
     setState((prev) => {
       const byIdMap = new Map(prev.projects.map((pr) => [pr.id, pr]));
       const next = (data.items ?? []).map((it) => {
@@ -1398,15 +1427,18 @@ export async function previewTextAttachment(attachmentId: string, conversationId
  * （不静默跳转、不猜实体）。刷新/前进后退走内部路由（斜杠形态），不再进本函数。
  */
 export async function openExternalDeepLink(hash: string): Promise<void> {
+  const urlSeq = currentNavSeq();
   const res = await command<ResolvedDeepLink>('deepLink.resolve', { hash });
+  if (currentNavSeq() !== urlSeq) return;
   const s = getState();
   if (res.projectId !== s.activeProjectId) {
     if (res.rootPath == null || res.rootPath.length === 0) throw new Error('深链指向其它项目但未返回项目路径——无法打开');
-    await openProjectByPath(res.rootPath); // 归属门+代次在 openProjectByPath 内
+    const opened = await openProjectByPath(res.rootPath);
+    if (!opened.isCurrent()) return;
   }
   const route = routeForResolved(res, getState());
   if (route == null) throw new Error(`深链解析成功但无对应界面落点（kind=${res.kind}）`);
-  const { navigate } = await import('./lib/router');
+  if (currentNavSeq() !== urlSeq) return;
   navigate(route);
   recordWrite('deepLink.resolve', `深链 ${hash.slice(0, 40)} → ${route}`);
 }

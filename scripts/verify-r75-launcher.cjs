@@ -44,7 +44,8 @@ async function connect(label) {
   }
 }
 function killCopy() {
-  try { spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${copyDir.replace(/\\/g, '\\\\')}*' -and $_.Name -notin @('powershell.exe','WmiPrvSE.exe','conhost.exe','bash.exe','cmd.exe') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { encoding: 'utf8', timeout: 60000 }); } catch { /* */ }
+  const prefix = (copyDir + path.sep).replaceAll("'", "''");
+  try { spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${prefix}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { encoding: 'utf8', timeout: 60000 }); } catch { /* */ }
 }
 const activeLabel = (cdp) => cdp.tryEval(probe(`(document.querySelector('#hifi-root .side-row.context-active .side-item-label')?.textContent ?? 'none').trim()`));
 const lastPathOf = (cdp) => cdp.tryEval(`localStorage.getItem('zs.lastProjectPath')`);
@@ -58,8 +59,13 @@ async function modalOpenCurrentPick(cdp) {
 }
 
 (async () => {
-  const srcPkg = path.join(repo, 'dist', 'desktop', 'desktop-daily-win-v13');
-  if (!fs.existsSync(srcPkg)) throw new Error('v13 包不存在');
+  // 拒绝接入其它验证实例的调试端口；只控制本脚本创建的独立副本。
+  const portProbe = require('node:net').createServer();
+  await new Promise((resolve, reject) => { portProbe.once('error', reject); portProbe.listen(PORT, '127.0.0.1', resolve); });
+  await new Promise((resolve) => portProbe.close(resolve));
+  const srcArg = process.argv.indexOf('--src');
+  const srcPkg = srcArg < 0 ? path.join(repo, 'dist', 'desktop', 'desktop-daily-win-v13') : path.resolve(process.argv[srcArg + 1]);
+  if (!fs.existsSync(srcPkg)) throw new Error(`候选包不存在：${srcPkg}`);
   fs.mkdirSync(copyDir, { recursive: true });
   spawnSync('robocopy', [srcPkg, copyDir, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'], { timeout: 300_000 });
   const build = JSON.parse(fs.readFileSync(path.join(copyDir, 'ZhongshuoDual', 'BUILD.json'), 'utf8'));
@@ -72,20 +78,23 @@ async function modalOpenCurrentPick(cdp) {
   const facts = { buildId: build.buildId, commit: build.commit };
   const errs = [];
   let child = null;
+  let currentCdp = null;
   const startBat = () => {
     const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(PORT), ZS_PICK_FOLDER_FILE: pickFile };
     delete env.ZS_RUNTIME; delete env.ZS_ALLOW_FAKE; delete env.ZS_APP_DATA; delete env.ZS_PIPE_NAME; delete env.ZS_REAL_DISPATCH_GUARD; delete env.ZS_UI_DELAY_METHOD_MS;
-    child = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copyDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copyDir, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', () => {}); child.stderr.on('data', () => {});
   };
   const stopBat = async () => {
-    try { spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${copyDir.replace(/\\/g, '\\\\')}*' -and $_.Name -notin @('powershell.exe','WmiPrvSE.exe','conhost.exe','bash.exe','cmd.exe') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { encoding: 'utf8', timeout: 60000 }); } catch { /* */ }
+    try { if (currentCdp != null && !currentCdp.closed) await currentCdp.send('Browser.close'); } catch { /* 已退出 */ }
     await sleep(2500);
+    killCopy();
   };
   try {
     /* ① A 房间 → 真实弹窗开已注册 B（反例本体） */
     startBat();
     let cdp = await connect('启动器');
+    currentCdp = cdp;
     await until(() => cdp.tryEval(`document.body.classList.contains('hifi-on')`), (v) => v, 90000, 'hifi');
     await sleep(2500);
     const openRaw = (p) => cdp.eval(`window.zs.command({ protocolVersion: 1, commandId: 'r75lc-${Math.random().toString(36).slice(2, 10)}', method: 'project.open', params: ${JSON.stringify({ path: p })} }).then((r) => JSON.stringify(r))`).then((s) => JSON.parse(s));
@@ -95,6 +104,7 @@ async function modalOpenCurrentPick(cdp) {
     const projAId = oa.data.project.id;
     await cdp.eval('location.reload(), true');
     cdp = await connect('重载');
+    currentCdp = cdp;
     await until(() => cdp.tryEval(`document.body.classList.contains('hifi-on')`), (v) => v, 90000, 'hifi 重载');
     await sleep(2500);
     // 进入 A 房间（发布形态正常路由）
@@ -131,6 +141,7 @@ async function modalOpenCurrentPick(cdp) {
     await stopBat();
     startBat();
     cdp = await connect('重启');
+    currentCdp = cdp;
     await until(() => cdp.tryEval(`document.querySelector('#hifi-root .side-row.context-active .side-item-label') != null`), (v) => v, 90000, '重启就绪');
     await sleep(2000);
     facts.restart = { active: await activeLabel(cdp), lastPath: await lastPathOf(cdp) };

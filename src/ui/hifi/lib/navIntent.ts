@@ -18,6 +18,7 @@ export interface NavIntent {
 }
 
 const registry = new Set<NavIntent>();
+const cancelListeners = new WeakMap<NavIntent, Set<() => void>>();
 
 /** 登记一个在途导航意图（定位器挂载时调用；卸载/完成时 release）。 */
 export function registerNavIntent(): NavIntent {
@@ -31,8 +32,29 @@ export function releaseNavIntent(t: NavIntent): void {
 }
 
 /** 用户发起了新的导航动作——所有在途意图即刻失效。 */
-export function cancelAllNavIntents(): void {
-  for (const t of registry) t.cancelled = true;
+export function cancelNavIntent(t: NavIntent): void {
+  if (t.cancelled) return;
+  t.cancelled = true;
+  for (const listener of cancelListeners.get(t) ?? []) listener();
+}
+
+/** 先撤销旧操作的临时投影，再让新操作捕获基线；不用等迟到回执才回滚。 */
+export function onNavIntentCancel(t: NavIntent, listener: () => void): () => void {
+  if (t.cancelled) { listener(); return () => {}; }
+  const listeners = cancelListeners.get(t) ?? new Set<() => void>();
+  listeners.add(listener);
+  cancelListeners.set(t, listeners);
+  return () => { listeners.delete(listener); };
+}
+
+export function cancelAllNavIntents(except?: NavIntent): void {
+  for (const t of registry) if (t !== except) cancelNavIntent(t);
+}
+
+/** 用户级打开（含目录选择等待）与定位链共用取消登记簿。 */
+export function beginUserNavIntent(): NavIntent {
+  cancelAllNavIntents();
+  return registerNavIntent();
 }
 
 /** 意图仍有效（未传=无取消约束，供用户直呼路径保持原行为）。 */

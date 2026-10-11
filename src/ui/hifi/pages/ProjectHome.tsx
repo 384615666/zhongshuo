@@ -4,7 +4,7 @@
  * project.open（注册幂等·合并不替换）；最近项目卡片点击=焦点切换（不重开目录）。
  * 目录失效卡给「重新定位」（project.lifecycle relocate——保留 projectId/历史）。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, Modal, Tag, TaskStatusTag, Avatar, memberColor } from '../components/ui';
 import { useStore, toast } from '../shell';
@@ -12,6 +12,7 @@ import { activeTasksOfProject, coordinatorOfRoom, memberLabel, roomsOfProject } 
 import { switchFocusProject, projectLifecycleReal, openProjectByPath } from '../loader';
 import { relTime } from '../lib/format';
 import { navigate, currentNavSeq } from '../lib/router';
+import { beginUserNavIntent, cancelNavIntent, navIntentActive, releaseNavIntent, type NavIntent } from '../lib/navIntent';
 import { CreateRoomModal } from './Room';
 
 /* ============================================================
@@ -22,34 +23,50 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const [pickReason, setPickReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const operation = useRef<NavIntent | null>(null);
+  const pickerSeq = useRef(0);
+  const mounted = useRef(true);
+  const cancelOpen = () => {
+    pickerSeq.current += 1;
+    if (operation.current != null) { cancelNavIntent(operation.current); releaseNavIntent(operation.current); operation.current = null; }
+  };
+  const close = () => { cancelOpen(); onClose(); };
 
   const doPick = async () => {
+    const seq = ++pickerSeq.current;
+    const urlSeq = currentNavSeq();
     const { bridge } = await import('../bridge');
     const dir = await bridge().pickFolder();
+    if (!mounted.current || pickerSeq.current !== seq || currentNavSeq() !== urlSeq) return;
     if (dir != null && dir.length > 0) { setPickedPath(dir); setPickReason(null); return; }
     setPickReason(dir == null ? '已取消选择。' : '当前宿主没有系统目录选择器。');
   };
   useEffect(() => {
+    mounted.current = true;
     if (autoPick) void doPick();
+    return () => { mounted.current = false; cancelOpen(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const open = async () => {
-    if (pickedPath == null) return;
+    if (pickedPath == null || operation.current != null) return;
+    const intent = beginUserNavIntent();
+    operation.current = intent;
     setBusy(true);
     try {
       // R75（review-r74 §P1）：落位按**本次打开目标**（返回 id）——不读异步结束时的
       // activeProjectId（旧房间路由/其它装载可能已改写它）。取消/被取代时 id=''：不落位。
-      const opened = await openProjectByPath(pickedPath);
+      const opened = await openProjectByPath(pickedPath, { intent, navigateToRoom: true });
+      if (!mounted.current || operation.current !== intent || !opened.isCurrent()) return;
       onClose();
-      if (opened.id === '') return;
-      const st = (await import('../data/store')).getState();
-      const first = st.rooms.find((r) => r.projectId === opened.id);
-      if (first != null) navigate(`/project/${opened.id}/room/${first.id}`);
-      else navigate(`/project/${opened.id}`);
     } catch (e) {
-      toast(`打开项目失败：${(e as Error).message}（选择保留，可重试或换目录）`, 'error');
-    } finally { setBusy(false); }
+      if (mounted.current && operation.current === intent && navIntentActive(intent)) {
+        toast(`打开项目失败：${(e as Error).message}（选择保留，可重试或换目录）`, 'error');
+      }
+    } finally {
+      releaseNavIntent(intent);
+      if (operation.current === intent) { operation.current = null; if (mounted.current) setBusy(false); }
+    }
   };
 
   return (
@@ -57,11 +74,11 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
       size="sm"
       title="打开文件夹"
       subtitle="选择一个本地目录作为项目（已打开过则幂等重开——不会重复注册）"
-      onClose={onClose}
+      onClose={close}
       footer={
         <>
           <div className="spacer" />
-          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn" onClick={close}>取消</button>
           <button className="btn primary" disabled={busy} onClick={pickedPath != null ? () => void open() : () => void doPick()}>
             <Icon name="folder" size={12} />
             {pickedPath != null ? (busy ? '正在打开…' : '打开这个目录') : '浏览…'}
@@ -73,7 +90,7 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
         <label className="field-label">目录路径</label>
         <div className="row wrap" style={{ gap: 8 }}>
           <input className="input mono" style={{ flex: '1 1 260px' }} value={pickedPath ?? ''} readOnly placeholder="点「浏览…」调用系统目录选择器" />
-          <button className="btn" onClick={() => void doPick()}><Icon name="folder" size={12} /> 浏览…</button>
+          <button className="btn" disabled={busy} onClick={() => void doPick()}><Icon name="folder" size={12} /> 浏览…</button>
         </div>
         {pickReason != null ? <div className="panel warning" style={{ marginTop: 8 }}>{pickReason}</div> : null}
         <div className="field-hint">

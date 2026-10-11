@@ -8,17 +8,22 @@ import { useEffect, useState } from 'react';
 import { cancelAllNavIntents } from './navIntent';
 
 /**
- * URL 代次（R75）：每次 hashchange +1。openProjectByPath 在入口记录 currentNavSeq()，
+ * URL 代次（R75）：每次实际路径变化 +1（同步通知与原生事件去重）。打开入口记录代次，
  * 打开窗口内若 URL 未再变（代次未前进），旧路由视为**打开前的陈旧 URL** 让位——
  * 不由它对齐抢回焦点；用户在打开发起后主动导航（代次前进）则路由照常工作。
  */
 let navSeqCounter = 0;
+let observedHash: string | undefined;
 export function currentNavSeq(): number { return navSeqCounter; }
 
 export function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash.replace(/^#/, '') || '/welcome');
   useEffect(() => {
-    const onChange = () => { navSeqCounter += 1; setHash(window.location.hash.replace(/^#/, '') || '/welcome'); };
+    const onChange = () => {
+      const next = window.location.hash.replace(/^#/, '') || '/welcome';
+      if (observedHash !== next) { navSeqCounter += 1; observedHash = next; }
+      setHash(next);
+    };
     window.addEventListener('hashchange', onChange);
     /**
      * 挂上监听后立刻补读一次。
@@ -50,6 +55,9 @@ export function navigate(to: string, opts?: { replace?: boolean }) {
     return;
   }
   window.location.hash = next;
+  // 同步交接路由，再释放打开操作的占位；否则旧房间会在原生事件到达前再次对齐。
+  // 原生事件随后仍会到达，但订阅按真实路径去重，不重复增加代次。
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
 }
 
 /**

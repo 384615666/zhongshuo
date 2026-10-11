@@ -13,7 +13,7 @@ import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from '.
 import { getState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
-import { registerNavIntent, releaseNavIntent, navIntentActive } from './lib/navIntent';
+import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
 import { DmPage } from './DmPage';
@@ -739,7 +739,7 @@ function ProjectAlign({ projectId }: { projectId: string }) {
       // ②用户跳走（hash 变成设置页/其它项目）——取消，链内安静停+回滚本操作拥有的状态。
       const h = window.location.hash.replace(/^#/, '') || '/welcome';
       const stillOnThisProject = h === `/project/${projectId}` || h.startsWith(`/project/${projectId}/`);
-      if (stillOnThisProject !== true) intent.cancelled = true;
+      if (stillOnThisProject !== true) cancelNavIntent(intent);
       releaseNavIntent(intent);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -770,7 +770,7 @@ function LocateThread({ threadId, messageId, tab }: { threadId: string; messageI
         navigate('/', { replace: true });
       }
     })();
-    return () => { intent.cancelled = true; releaseNavIntent(intent); };
+    return () => { cancelNavIntent(intent); releaseNavIntent(intent); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, messageId, tab]);
   return null;

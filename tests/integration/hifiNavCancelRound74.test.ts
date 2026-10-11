@@ -48,8 +48,9 @@ export { loader, store, navIntent };
 }
 
 interface NavIntentLike { cancelled: boolean }
+interface OpenResult { id: string; isCurrent(): boolean }
 interface LoaderApi {
-  openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntentLike }): Promise<void>;
+  openProjectByPath(path: string, opts?: { fromIntent?: boolean; intent?: NavIntentLike }): Promise<OpenResult>;
   ensureProjectActive(projectId: string, intent?: NavIntentLike): Promise<void>;
   locateThread(threadId: string, intent?: NavIntentLike): Promise<{ projectId: string; roomId: string }>;
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; error?: { message: string } }>;
@@ -58,17 +59,23 @@ interface StoreApi {
   getState(): {
     activeProjectId: string; openInFlight: boolean; loadGen: number;
     rooms: Array<{ id: string; projectId: string }>;
+    members: Array<{ id: string }>;
+    memberRuntimes: Record<string, unknown>;
+    dms: Array<{ id: string; projectId: string }>;
+    projects: Array<{ id: string }>;
     ui: { toast?: { text: string }; writeLog: Array<{ api: string; detail: string }> };
   };
 }
 interface NavIntentApi {
   registerNavIntent(): NavIntentLike;
+  beginUserNavIntent(): NavIntentLike;
+  cancelNavIntent(t: NavIntentLike): void;
   releaseNavIntent(t: NavIntentLike): void;
   cancelAllNavIntents(): void;
   navIntentActive(t?: NavIntentLike): boolean;
 }
 
-interface Hold { match: (env: { method: string; params: Record<string, unknown> }) => boolean; promise: Promise<void>; release: () => void }
+interface Hold { match: (env: { method: string; params: Record<string, unknown> }) => boolean; promise: Promise<void>; release: () => void; fail?: boolean; after?: boolean; once?: boolean; entered?: boolean }
 interface Harness {
   bundle: { loader: LoaderApi; store: StoreApi; navIntent: NavIntentApi };
   raw(method: string, params: unknown, commandId?: string): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string } }>;
@@ -106,13 +113,16 @@ async function makeHarness(): Promise<Harness> {
     zs: {
       command: async (env: { commandId: string; method: string; params: Record<string, unknown> }) => {
         sent.push({ method: env.method, params: env.params });
-        const h = holds.find((x) => x.match(env));
+        const h = holds.find((x) => !(x.once && x.entered) && x.match(env));
+        if (h != null) h.entered = true;
+        const reply = h?.after ? await raw(env.method, env.params, env.commandId) : null;
         if (h != null) await h.promise; // 受控保持：真实回执按测试节奏放行（内容不 mock）
-        return raw(env.method, env.params, env.commandId);
+        if (h?.fail) throw new Error('OWN_HELD_READ_FAILURE');
+        return reply ?? raw(env.method, env.params, env.commandId);
       },
     },
   };
-  const bundle = await import(pathToFileURL(bundlePath).href) as unknown as Harness['bundle'];
+  const bundle = await import(`${pathToFileURL(bundlePath).href}?run=${randomUUID()}`) as unknown as Harness['bundle'];
   const hold = (match: Hold['match']): Hold => {
     let release!: () => void;
     const promise = new Promise<void>((res) => { release = res; });
@@ -183,6 +193,8 @@ describe('第七十四轮 P1：取消凭据贯穿项目打开内部（真实链�
       /* ── S3 成员装载等待期取消：焦点已提交 → 不写偏好 + 焦点还原 ── */
       // 先让 A 的房间不在 state（S2 取消未装载）——保持全链 open 路径。
       const intent2 = h.bundle.navIntent.registerNavIntent();
+      const beforeS3 = st();
+      const beforeS3Path = h.localStorageBacked.get('zs.lastProjectPath');
       const holdRoster = h.hold((env) => env.method === 'member.list' && env.params.projectId === a.id && env.params.roomId == null);
       const pA2 = h.bundle.loader.ensureProjectActive(a.id, intent2);
       await waitForSent(h, (x) => x.method === 'member.list' && x.params.projectId === a.id && x.params.roomId == null, 'S3 成员装载派发');
@@ -195,6 +207,12 @@ describe('第七十四轮 P1：取消凭据贯穿项目打开内部（真实链�
       await settle(80);
       expect(navSetsOf(h).length).toBe(navAfterS3open); // 取消后零 navigation.set
       expect(st().activeProjectId).toBe(b.id); // 焦点还原到打开前项目
+      expect(h.localStorageBacked.get('zs.lastProjectPath')).toBe(beforeS3Path);
+      expect(st().rooms).toEqual(beforeS3.rooms);
+      expect(st().members).toEqual(beforeS3.members);
+      expect(st().memberRuntimes).toEqual(beforeS3.memberRuntimes);
+      expect(st().dms).toEqual(beforeS3.dms);
+      expect(st().projects.some((p) => p.id === a.id)).toBe(true); // 注册事实不回滚
       h.bundle.navIntent.releaseNavIntent(intent2);
 
       /* ── S4 thread.get 等待期取消（locateThread 安静停，不进对齐链） ── */
@@ -263,5 +281,105 @@ describe('第七十四轮 P1：取消凭据贯穿项目打开内部（真实链�
     } finally {
       h.close();
     }
+  });
+});
+
+describe('R75 接手收尾：用户打开生命周期与真实交叉', () => {
+  it.each(['open', 'load', 'load-failure'] as const)('取消 %s 等待：恢复基线且零旧导航写入', async (phase) => {
+    await buildHifiBundle();
+    const h = await makeHarness();
+    try {
+      const aDir = mkProj(`cancel-${phase}-A`), bDir = mkProj(`cancel-${phase}-B`);
+      const a = await h.bundle.loader.openProjectByPath(aDir);
+      await settle();
+      const baseline = h.bundle.store.getState();
+      const navCount = navSetsOf(h).length;
+      const hold = h.hold((e) => phase === 'open'
+        ? e.method === 'project.open' && e.params.path === bDir
+        : e.method === 'member.list' && e.params.roomId == null);
+      hold.fail = phase === 'load-failure';
+      const intent = h.bundle.navIntent.beginUserNavIntent();
+      const sentStart = h.sent.length;
+      const pending = h.bundle.loader.openProjectByPath(bDir, { intent });
+      await waitForSent(h, (e) => h.sent.indexOf(e) >= sentStart && hold.match(e), '取消等待窗');
+      h.bundle.navIntent.cancelNavIntent(intent);
+      // 取消即时还原；下一次打开不能把尚未回滚的B当成基线。
+      expect(h.bundle.store.getState().activeProjectId).toBe(a.id);
+      expect(h.localStorageBacked.get('zs.lastProjectPath')).toBe(aDir);
+      hold.release();
+      const result = await pending;
+      await settle();
+      expect(result.id).toBe('');
+      expect(result.isCurrent()).toBe(false);
+      const after = h.bundle.store.getState();
+      expect(after.activeProjectId).toBe(a.id);
+      expect(after.rooms).toEqual(baseline.rooms);
+      expect(after.members).toEqual(baseline.members);
+      expect(after.memberRuntimes).toEqual(baseline.memberRuntimes);
+      expect(after.dms).toEqual(baseline.dms);
+      expect(after.openInFlight).toBe(false);
+      expect(navSetsOf(h).length).toBe(navCount);
+      expect(after.ui.toast).toBeUndefined();
+      if (phase !== 'open') expect(after.projects.length).toBeGreaterThan(baseline.projects.length);
+      h.bundle.navIntent.releaseNavIntent(intent);
+    } finally { h.holds.forEach((x) => x.release()); h.close(); }
+  });
+
+  it.each(['open', 'load', 'registry', 'late-failure'] as const)('重叠 B→C，B %s 迟到只落实 C', async (phase) => {
+    await buildHifiBundle();
+    const h = await makeHarness();
+    try {
+      const aDir = mkProj(`overlap-${phase}-A`), bDir = mkProj(`overlap-${phase}-B`), cDir = mkProj(`overlap-${phase}-C`);
+      await h.bundle.loader.openProjectByPath(aDir);
+      const b = ((await h.raw('project.open', { path: bDir })).data as { project: { id: string } }).project;
+      const hold = h.hold((e) => phase === 'registry' ? e.method === 'project.list' : phase === 'open'
+        ? e.method === 'project.open' && e.params.path === bDir
+        : e.method === 'member.list' && e.params.projectId === b.id && e.params.roomId == null);
+      hold.after = phase === 'registry'; hold.once = phase === 'registry';
+      hold.fail = phase === 'late-failure';
+      const oldIntent = h.bundle.navIntent.beginUserNavIntent();
+      const sentStart = h.sent.length;
+      const pending = h.bundle.loader.openProjectByPath(bDir, { intent: oldIntent });
+      await waitForSent(h, (e) => h.sent.indexOf(e) >= sentStart && hold.match(e), 'B仍在途');
+      const newIntent = h.bundle.navIntent.beginUserNavIntent();
+      const c = await h.bundle.loader.openProjectByPath(cDir, { intent: newIntent });
+      expect(c.id).not.toBe('');
+      expect(c.isCurrent()).toBe(true);
+      const atC = h.bundle.store.getState();
+      await settle();
+      const navCount = navSetsOf(h).length;
+      hold.release();
+      const stale = await pending;
+      await settle();
+      expect(stale.id).toBe('');
+      expect(stale.isCurrent()).toBe(false);
+      expect(h.bundle.store.getState().activeProjectId).toBe(c.id);
+      expect(h.localStorageBacked.get('zs.lastProjectPath')).toBe(cDir);
+      expect(h.bundle.store.getState().rooms).toEqual(atC.rooms);
+      expect(h.bundle.store.getState().members).toEqual(atC.members);
+      expect(h.bundle.store.getState().dms).toEqual(atC.dms);
+      expect(h.bundle.store.getState().projects.some((p) => p.id === c.id)).toBe(true);
+      expect(navSetsOf(h).length).toBe(navCount);
+      expect(h.bundle.store.getState().ui.toast).toBeUndefined();
+      h.bundle.navIntent.releaseNavIntent(oldIntent);
+      h.bundle.navIntent.releaseNavIntent(newIntent);
+    } finally { h.holds.forEach((x) => x.release()); h.close(); }
+  });
+
+  it('打开已返回后仍须核最终落位所有权', async () => {
+    await buildHifiBundle();
+    const h = await makeHarness();
+    try {
+      const a = await h.bundle.loader.openProjectByPath(mkProj('return-A'));
+      expect(a.isCurrent()).toBe(true);
+      const b = await h.bundle.loader.openProjectByPath(mkProj('return-B'));
+      expect(a.isCurrent()).toBe(false);
+      expect(b.isCurrent()).toBe(true);
+      const intent = h.bundle.navIntent.beginUserNavIntent();
+      const c = await h.bundle.loader.openProjectByPath(mkProj('return-C'), { intent });
+      h.bundle.navIntent.cancelNavIntent(intent);
+      expect(c.isCurrent()).toBe(false);
+      h.bundle.navIntent.releaseNavIntent(intent);
+    } finally { h.close(); }
   });
 });
