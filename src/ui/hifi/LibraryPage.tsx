@@ -52,6 +52,8 @@ function taskStatusZh(status: string): string {
 
 export function LibraryPage() {
   const projectId = useStore((s) => s.activeProjectId);
+  const visibleProjectIds = useStore((s) => s.visibleProjectIds);
+  const pinnedProjectIds = useStore((s) => s.pinnedProjectIds);
   const allRooms = useStore((s) => s.rooms);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const [tab, setTab] = useState<'search' | 'saved'>('search');
@@ -64,71 +66,96 @@ export function LibraryPage() {
   const [fromDay, setFromDay] = useState('');
   const [toDay, setToDay] = useState('');
   const [convId, setConvId] = useState('');
-  const [page, setPage] = useState(1);
   const [result, setResult] = useState<SearchData | null>(null);
+  const [resultKey, setResultKey] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchErr, setSearchErr] = useState<string | null>(null);
+  const [searchErrKey, setSearchErrKey] = useState('');
   const [saved, setSaved] = useState<SavedItem[] | null>(null);
   const [savedErr, setSavedErr] = useState<string | null>(null);
   const [busyRef, setBusyRef] = useState<string | null>(null);
-  const genRef = useRef(0);
+  const searchGenRef = useRef(0);
+  const savedGenRef = useRef(0);
+  const mountedRef = useRef(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchKey = JSON.stringify([q.trim(), scope,
+    scope === 'project' ? projectId : scope === 'visible' ? [...new Set([...visibleProjectIds, ...pinnedProjectIds])].sort() : '',
+    kind, author.trim(), fromDay, toDay, scope === 'project' ? convId : '']);
+  const visibleResult = resultKey === searchKey ? result : null;
+  const visibleSearchErr = searchErrKey === searchKey ? searchErr : null;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; searchGenRef.current += 1; savedGenRef.current += 1; };
+  }, []);
 
   const runSearch = useCallback(async (nextPage: number) => {
+    if (!mountedRef.current) return;
     const text = q.trim();
     if (text.length === 0) {
       // r56（review-r55 §2）：清空关键词必须**作废在途请求**——旧实现直接 return，清空前发出
       // 的合法旧响应回来时 q 已空，6 条旧结果倒灌回页面。同时结束旧加载态、清结果与错误。
-      genRef.current += 1;
+      searchGenRef.current += 1;
       setResult(null);
+      setResultKey('');
       setSearchErr(null);
       setSearching(false);
       return;
     }
     if (scope === 'project' && (projectId == null || projectId === '')) {
-      genRef.current += 1; // 同判：切换到无效范围也作废在途（迟到结果不归属新上下文）
+      searchGenRef.current += 1; // 同判：切换到无效范围也作废在途（迟到结果不归属新上下文）
       setSearching(false);
       setSearchErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」');
+      setSearchErrKey(searchKey);
       return;
     }
-    const gen = ++genRef.current;
-    setSearching(true); setSearchErr(null);
+    const gen = ++searchGenRef.current;
+    setSearching(true);
     try {
       const r = await command<SearchData>('search.query', {
         text, scope, ...(scope === 'project' ? { projectId } : {}), kind, page: nextPage, pageSize: 20,
         ...(author.trim().length > 0 ? { authorDisplayName: author.trim() } : {}),
         ...(fromDay !== '' ? { fromDay } : {}),
         ...(toDay !== '' ? { toDay } : {}),
-        ...(convId !== '' ? { conversationId: convId } : {}),
+        ...(scope === 'project' && convId !== '' ? { conversationId: convId } : {}),
       });
-      if (gen !== genRef.current) return;
-      setResult(r); setPage(nextPage);
+      if (!mountedRef.current || gen !== searchGenRef.current) return;
+      setResult(r); setResultKey(searchKey); setSearchErr(null); setSearchErrKey(searchKey);
     } catch (e) {
-      if (gen === genRef.current) setSearchErr((e as Error).message);
+      if (mountedRef.current && gen === searchGenRef.current) { setSearchErr((e as Error).message); setSearchErrKey(searchKey); }
     } finally {
-      if (gen === genRef.current) setSearching(false);
+      if (mountedRef.current && gen === searchGenRef.current) setSearching(false);
     }
-  }, [q, scope, projectId, kind, author, fromDay, toDay, convId]);
+  }, [q, scope, projectId, kind, author, fromDay, toDay, convId, searchKey]);
 
   const loadSaved = useCallback(async () => {
-    const gen = ++genRef.current;
-    setSavedErr(null);
+    if (!mountedRef.current) return;
+    const gen = ++savedGenRef.current;
     try {
       const r = await command<{ items: SavedItem[] }>('saved.list', {});
-      if (gen !== genRef.current) return;
+      if (!mountedRef.current || gen !== savedGenRef.current) return;
       setSaved(r.items ?? []);
+      setSavedErr(null);
     } catch (e) {
-      if (gen === genRef.current) setSavedErr((e as Error).message);
+      if (mountedRef.current && gen === savedGenRef.current) setSavedErr((e as Error).message);
     }
   }, []);
 
   useEffect(() => {
+    if (tab !== 'search') return;
+    searchTimerRef.current = setTimeout(() => { searchTimerRef.current = null; void runSearch(1); }, 250);
+    return () => { if (searchTimerRef.current != null) clearTimeout(searchTimerRef.current); searchTimerRef.current = null; searchGenRef.current += 1; };
+  }, [tab, runSearch]);
+  useEffect(() => {
     if (tab === 'saved') void loadSaved();
-    else { void runSearch(1); }
-  }, [tab, loadSaved, runSearch, scope, kind, projectId]);
+    return () => { savedGenRef.current += 1; };
+  }, [tab, loadSaved]);
+  const searchNow = (nextPage: number) => {
+    if (searchTimerRef.current != null) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = null;
+    void runSearch(nextPage);
+  };
 
   // 范围/类型/筛选变化即回到第 1 页重新检索（依赖 runSearch 的变化触发）。
-  useEffect(() => { setPage(1); }, [scope, kind, q, author, fromDay, toDay, convId]);
-
   const locate = (link: string | null) => {
     if (link == null) return;
     void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
@@ -143,10 +170,10 @@ export function LibraryPage() {
       // r61 G6：消息行书签按钮与收藏页同步——取消后线程/私信里的已收藏标记同批消失。
       if (it.kind === 'message') void refreshSavedMessageRefs();
     } catch (e) { toast(`取消收藏失败：${(e as Error).message}`, 'error'); }
-    finally { setBusyRef(null); }
+    finally { if (mountedRef.current) setBusyRef(null); }
   };
 
-  const rows: Array<SearchRow> = result == null ? [] : [...result.messages, ...result.threads, ...result.tasks]
+  const rows: Array<SearchRow> = visibleResult == null ? [] : [...visibleResult.messages, ...visibleResult.threads, ...visibleResult.tasks]
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   const total = rows.length;
 
@@ -192,7 +219,7 @@ export function LibraryPage() {
                   placeholder={scope === 'project' ? '在当前项目搜消息/线程/任务标题…（Enter 检索）' : '在全部可访问项目搜消息/线程/任务标题…（Enter 检索）'}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void runSearch(1); } }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); searchNow(1); } }}
                 />
               </div>
               <label className="field inline" title="按作者显示名过滤（跨项目同名都收——文本匹配如实）">
@@ -211,26 +238,27 @@ export function LibraryPage() {
                   <Select value={convId} ariaLabel="会话" onChange={setConvId} options={[{ value: '', label: '全部会话' }, ...rooms.map((r) => ({ value: r.conversationId ?? '', label: `#${r.name}` }))]} />
                 </label>
               ) : null}
-              <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => void runSearch(1)}>{searching ? '检索中…' : '检索'}</button>
+              <button className="btn ghost sm" disabled={searching || q.trim().length === 0} onClick={() => searchNow(1)}>{searching ? '检索中…' : '检索'}</button>
             </>
           ) : null}
           <span className="filter-note">
-            {tab === 'search' ? '搜索不覆盖文件正文，附件按所在消息的文件名检索' : `收藏共 ${saved?.length ?? 0} 条`}
+            {tab === 'search' ? '搜索不覆盖文件正文，附件按所在消息的文件名检索' : `收藏总计 ${saved?.length ?? 0} 条；下方按当前范围筛选`}
           </span>
         </div>
 
       {tab === 'search' ? (
         <>
-          {searchErr != null ? <div className="panel warning">搜索失败：{searchErr}——结果保持上次事实（可重试）</div> : null}          {result == null && searchErr == null && q.trim().length === 0 && !searching ? (
+          {visibleSearchErr != null ? <div className="panel warning">搜索失败：{visibleSearchErr}——同条件旧结果保持；其它条件的结果未冒充当前检索（可重试）</div> : null}
+          {visibleResult == null && visibleSearchErr == null && q.trim().length === 0 && !searching ? (
             <EmptyState icon="search" title="输入关键词开始搜索" detail="结果会标出来源项目与房间，点击回原处并聚焦该项目；附件按所在消息的文件名检索（正文提取未实施——如实）。" />
           ) : null}
-          {result == null && searchErr == null && (q.trim().length > 0 || searching) ? (
+          {visibleResult == null && visibleSearchErr == null && (q.trim().length > 0 || searching) ? (
             <div className="panel info">{searching ? '正在检索…' : '按 Enter 或点「检索」开始'}</div>
           ) : null}
-          {result != null ? (
+          {visibleResult != null ? (
             <>
               {total === 0 ? (
-                <EmptyState icon="search" title="本页没有命中" detail={`第 ${result.page} 页——换关键词或范围再试；没有结果不等于内容不存在（附件正文提取未实施）。`} />
+                <EmptyState icon="search" title="本页没有命中" detail={`第 ${visibleResult.page} 页——换关键词或范围再试；没有结果不等于内容不存在（附件正文提取未实施）。`} />
               ) : null}
               <div className="col" style={{ gap: 8 }}>
                 {rows.map((r) => (
@@ -250,11 +278,11 @@ export function LibraryPage() {
                 ))}
               </div>
               <div className="row tight" style={{ marginTop: 10 }}>
-                <button className="btn ghost sm" disabled={result.page <= 1 || searching} onClick={() => void runSearch(result.page - 1)}>上一页</button>
-                <span className="faint small">第 {result.page} 页（本页 {total} 条 · 每页 {result.pageSize}）</span>
-                <button className="btn ghost sm" disabled={total < result.pageSize || searching} onClick={() => void runSearch(result.page + 1)}>下一页</button>
+                <button className="btn ghost sm" disabled={visibleResult.page <= 1 || searching} onClick={() => searchNow(visibleResult.page - 1)}>上一页</button>
+                <span className="faint small">第 {visibleResult.page} 页（本页 {total} 条 · 每页 {visibleResult.pageSize}）</span>
+                <button className="btn ghost sm" disabled={total < visibleResult.pageSize || searching} onClick={() => searchNow(visibleResult.page + 1)}>下一页</button>
               </div>
-              <div className="faint small" style={{ marginTop: 6 }}>{result.attachmentNote}</div>
+              <div className="faint small" style={{ marginTop: 6 }}>{visibleResult.attachmentNote}</div>
             </>
           ) : null}
         </>
@@ -264,20 +292,24 @@ export function LibraryPage() {
           // 过滤——别的项目的收藏仍显示）。按收藏行的 projectId 过滤；无项目关联的链接不属
           // 任何项目，收窄范围时明确计数说明（不静默消失），并给「复制链接」可用动作（定位
           // 按钮对链接本来就无落点——不再无声）。
-          const inScope = scope === 'project' && projectId != null && projectId !== ''
-            ? (saved ?? []).filter((it) => it.projectId === projectId)
-            : saved ?? [];
-          const linksHidden = scope === 'project' ? (saved ?? []).filter((it) => it.projectId == null).length : 0;
-          const otherHidden = scope === 'project' ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length : 0;
+          const visibleSet = new Set([...visibleProjectIds, ...pinnedProjectIds]);
+          const inScope = scope === 'project'
+            ? (saved ?? []).filter((it) => projectId !== '' && it.projectId === projectId)
+            : scope === 'visible' ? (saved ?? []).filter((it) => it.projectId != null && visibleSet.has(it.projectId)) : saved ?? [];
+          const linksHidden = scope !== 'all' ? (saved ?? []).filter((it) => it.projectId == null).length : 0;
+          const otherHidden = scope === 'project'
+            ? (saved ?? []).filter((it) => it.projectId != null && it.projectId !== projectId).length
+            : scope === 'visible' ? (saved ?? []).filter((it) => it.projectId != null && !visibleSet.has(it.projectId)).length : 0;
           return (
             <>
+              {scope === 'project' && projectId === '' ? <div className="panel info">尚未打开项目；请选择项目或切到其它范围。收藏事实仍保留。</div> : null}
               {savedErr != null ? <div className="panel warning">收藏读取失败：{savedErr}——列表保持上次事实（可刷新重试）</div> : null}
               {saved == null && savedErr == null ? <div className="panel info">正在读取收藏…</div> : null}
               {saved != null && saved.length === 0 ? (
                 <EmptyState icon="bookmark" title="还没有收藏" detail="在线程回复消息上点书签按钮收藏（saved.add 独立保存，不改动原内容；收藏本身不把内容共享给其他成员）。" />
               ) : null}
-              {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) ? (
-                <div className="panel info">当前项目没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
+              {saved != null && saved.length > 0 && inScope.length === 0 && (linksHidden > 0 || otherHidden > 0) && !(scope === 'project' && projectId === '') ? (
+                <div className="panel info">当前范围没有收藏{otherHidden > 0 ? `（另有 ${otherHidden} 条其它项目的收藏）` : ''}{linksHidden > 0 ? `；${linksHidden} 条链接收藏无项目关联` : ''}——切「全部可访问项目」可见。</div>
               ) : null}
               <div className="col" style={{ gap: 8 }}>
                 {inScope.map((it) => (

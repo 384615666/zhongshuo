@@ -9,7 +9,6 @@
  * （#conv= 不在正式深链族——不用未支持的形式）；都查不到=不显示定位按钮（如实，不猜）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Icon } from './components/Icon';
 import { EmptyState, Tag } from './components/ui';
 import { useStore, toast } from './shell';
 import { command } from './bridge';
@@ -29,33 +28,74 @@ export function ActivityPage() {
   const rooms = useStore((s) => s.rooms);
   const [scope, setScope] = useState<'all' | 'project'>('all'); // §17.7：聚合流默认全部可访问项目
   const [items, setItems] = useState<ActivityItem[] | null>(null);
+  const [itemsKey, setItemsKey] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [errKey, setErrKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  const [gapNotice, setGapNotice] = useState(false);
   const genRef = useRef(0);
+  const moreFlight = useRef<string | null>(null);
+  const flightRef = useRef<string | null>(null);
+  const scopeKey = scope === 'project' ? `project:${projectId ?? ''}` : 'all';
+  const visibleItems = itemsKey === scopeKey ? items : null;
+  const visibleErr = errKey === scopeKey ? err : null;
 
-  const load = useCallback(async (mode: 'reset' | 'more') => {
-    if (scope === 'project' && (projectId == null || projectId === '')) { setErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」'); setItems([]); return; }
+  const load = useCallback(async (mode: 'reset' | 'more' | 'head') => {
+    if (scope === 'project' && (projectId == null || projectId === '')) {
+      genRef.current += 1;
+      setLoading(false);
+      setErr('尚未打开项目——先在侧栏打开项目，或把范围切到「全部可访问项目」');
+      setErrKey(scopeKey);
+      return;
+    }
+    if (mode === 'head' && (visibleItems == null || flightRef.current != null)) return;
+    if (mode === 'more' && (visibleItems == null || visibleItems.length === 0 || flightRef.current != null || moreFlight.current === scopeKey)) return;
+    if (mode === 'reset' && flightRef.current?.startsWith(`${scopeKey}:`)) return;
+    if (mode === 'more') moreFlight.current = scopeKey;
     const gen = ++genRef.current;
+    flightRef.current = `${scopeKey}:${gen}`;
     setLoading(true);
-    if (mode === 'reset') setErr(null);
     try {
-      const tail = mode === 'more' && items != null && items.length > 0 ? items[items.length - 1] : null;
+      const tail = mode === 'more' && visibleItems != null && visibleItems.length > 0 ? visibleItems[visibleItems.length - 1] : null;
       const r = await command<{ items: ActivityItem[]; note?: string }>('activity.list', {
         scope, ...(scope === 'project' ? { projectId } : {}), limit: PAGE_LIMIT,
         ...(tail != null ? { before: tail.at, beforeSeq: tail.seq } : {}),
       });
       if (gen !== genRef.current) return;
-      setItems((prev) => (mode === 'reset' ? r.items : [...(prev ?? []), ...r.items]));
-      setHasMore(r.items.length === PAGE_LIMIT);
+      setErr(null); setErrKey(scopeKey);
+      const headKeys = new Set(r.items.map((it) => `${it.eventId}:${it.seq}`));
+      const headGap = mode === 'head' && visibleItems != null && visibleItems.length > 0
+        && r.items.length === PAGE_LIMIT && !headKeys.has(`${visibleItems[0]!.eventId}:${visibleItems[0]!.seq}`);
+      if (mode === 'reset') setGapNotice(false);
+      if (headGap) setGapNotice(true);
+      setItems((prev) => {
+        if (mode === 'reset') return r.items;
+        const old = itemsKey === scopeKey ? prev ?? [] : [];
+        if (mode === 'more') return [...old, ...r.items];
+        if (headGap) return r.items; // no overlap: retaining old tail would create an invisible cursor gap
+        return [...r.items, ...old.filter((it) => !headKeys.has(`${it.eventId}:${it.seq}`))];
+      });
+      setItemsKey(scopeKey);
+      setHasMore((old) => mode === 'head' ? headGap || old || r.items.length === PAGE_LIMIT : r.items.length === PAGE_LIMIT);
     } catch (e) {
-      if (gen === genRef.current) setErr((e as Error).message); // 失败保留已加载事实
+      if (gen === genRef.current) { setErr((e as Error).message); setErrKey(scopeKey); } // 失败保留同范围事实
     } finally {
       if (gen === genRef.current) setLoading(false);
+      if (mode === 'more' && moreFlight.current === scopeKey) moreFlight.current = null;
+      if (flightRef.current === `${scopeKey}:${gen}`) flightRef.current = null;
     }
-  }, [scope, projectId, items]);
+  }, [scope, projectId, visibleItems, itemsKey, scopeKey]);
 
-  useEffect(() => { setItems(null); setHasMore(false); void load('reset'); }, [scope, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => {
+    void loadRef.current('reset');
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) void loadRef.current('head');
+    }, 5000);
+    return () => { window.clearInterval(timer); genRef.current += 1; moreFlight.current = null; flightRef.current = null; };
+  }, [scopeKey]);
 
   /** 定位分列：taskId→#task=（服务端解析）；DM→#dm=；房间会话无任务→本地房间主池。
    *  注意 daemon 的 locate 在「有线程但任务号缺失」时可能是 `#task=`（空 id）——按长度
@@ -69,7 +109,7 @@ export function ActivityPage() {
         return { label: '定位会话', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); } };
       }
       const room = rooms.find((r) => r.conversationId === it.conversationId);
-      if (room != null) return { label: '打开房间', go: () => navigate(`/room/${room.id}`) };
+      if (room != null) return { label: '打开房间', go: () => navigate(`/project/${it.projectId}/room/${room.id}`) };
     }
     return null;
   };
@@ -90,16 +130,17 @@ export function ActivityPage() {
           <div className="spacer" />
           <button className="btn ghost sm" onClick={() => void load('reset')}>刷新</button>
         </div>
-        {err != null ? <div className="panel warning">活动流读取失败：{err}——已加载内容保持（可刷新重试）</div> : null}
-        {items == null && err == null ? <div className="panel info">正在装载…</div> : null}
-        {items != null && items.length === 0 && err == null ? (
+        {visibleErr != null ? <div className="panel warning">活动流读取失败：{visibleErr}——同范围已加载内容保持；其它范围旧结果未冒充当前结果（可刷新重试）</div> : null}
+        {gapNotice && visibleItems != null ? <div className="panel info">刷新期间新增活动超过首页窗口；已从最新事件重新定位。点“加载更早”可按游标补读，中间历史未被假装连续。</div> : null}
+        {visibleItems == null && visibleErr == null ? <div className="panel info">正在装载…</div> : null}
+        {visibleItems != null && visibleItems.length === 0 && visibleErr == null ? (
           <EmptyState icon="activity" title="当前范围内还没有活动事件" detail="任务派发、交付、恢复等事件会按时间倒序出现在这里（零运行零唤醒的只读聚合）。" />
         ) : null}
-        {items != null && items.length > 0 ? (
+        {visibleItems != null && visibleItems.length > 0 ? (
           <>
-            <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {items.length} 条 · 按发生时间倒序（同毫秒按 seq 决定性排序——不漏同刻事件）</div>
+            <div className="faint small" style={{ marginBottom: 6 }}>共已加载 {visibleItems.length} 条 · 按发生时间倒序（同毫秒按 seq 决定性排序——不漏同刻事件）</div>
             <div className="col" style={{ gap: 6 }}>
-              {items.map((it) => {
+              {visibleItems.map((it) => {
                 const loc = locateOf(it);
                 return (
                   <div key={`${it.eventId}:${it.seq}`} className="card tight" data-zs-activity-item={it.kind}>
@@ -115,7 +156,7 @@ export function ActivityPage() {
               })}
             </div>
             <div className="row tight" style={{ marginTop: 10 }}>
-              <button className="btn ghost sm" disabled={!hasMore || loading} onClick={() => void load('more')}>
+              <button className="btn ghost sm" disabled={!hasMore || loading || itemsKey !== scopeKey} onClick={() => void load('more')}>
                 {loading ? '加载中…' : hasMore ? '加载更早' : '没有更早的事件了'}
               </button>
             </div>

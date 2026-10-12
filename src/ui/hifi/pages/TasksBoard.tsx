@@ -46,8 +46,10 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const [snapshot, setSnapshot] = useState<{ key: string; groups: BoardGroup[] } | null>(null);
   const data = snapshot?.key === scopeKey ? snapshot : null;
   const readGeneration = useRef(0);
-  const [err, setErr] = useState<string | null>(null);
+  const [readError, setReadError] = useState<{ key: string; message: string } | null>(null);
+  const err = readError?.key === scopeKey ? readError.message : null;
   const [gen, setGen] = useState(0);
+  const [reading, setReading] = useState(false);
 
   const setParam = (patch: Record<string, string>) => {
     const qs = new URLSearchParams({ scope, projectId: scopeProjectId, roomId: roomFilter, ...patch });
@@ -59,22 +61,23 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     const ticket = ++readGeneration.current;
     let disposed = false;
     let inFlight = false;
-    setErr(null);
+    setReadError(null);
     const params = scope === 'project' && scopeProjectId !== ''
       ? { scope: 'project' as const, projectId: scopeProjectId }
       : { scope: 'all' as const };
     const reload = async () => {
       if (disposed || inFlight) return;
       inFlight = true;
+      setReading(true);
       try {
         const r = await command<{ groups: BoardGroup[] }>('board.view', params);
         if (!disposed && ticket === readGeneration.current) {
           setSnapshot({ key: scopeKey, groups: r.groups ?? [] });
-          setErr(null);
+          setReadError(null);
         }
       } catch (e: unknown) {
-        if (!disposed && ticket === readGeneration.current) setErr((e as Error).message);
-      } finally { inFlight = false; }
+        if (!disposed && ticket === readGeneration.current) setReadError({key: scopeKey, message: (e as Error).message});
+      } finally { inFlight = false; if (!disposed && ticket === readGeneration.current) setReading(false); }
     };
     void reload();
     const timer = window.setInterval(() => {
@@ -139,7 +142,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
             />
           </label>
           <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`} · 在任务详情中处理</span>
-          <button className="btn ghost" onClick={() => setGen((v) => v + 1)}>刷新</button>
+          <button className="btn ghost" disabled={reading} onClick={() => setGen((v) => v + 1)}>{reading ? '读取中…' : '刷新'}</button>
         </div>
 
         {err != null ? (

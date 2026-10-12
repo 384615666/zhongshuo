@@ -22,7 +22,7 @@ import { recordWrite } from './data/store';
 interface PendingData {
   projects: Array<{
     projectId: string; displayName: string;
-    reviewTasks: Array<{ task_id: string; title?: string; conversation_id: string | null; status: string; delivery_id: string | null; revision: number | null; manifest_hash: string | null; actionable: boolean }>;
+    reviewTasks: Array<{ task_id: string; title: string; conversation_id: string | null; status: string; delivery_id: string | null; revision: number | null; manifest_hash: string | null; actionable: boolean }>;
     dmUnread: Array<{ conversation_id: string; title: string | null; unread: number }>;
     threadUnread: Array<{ thread_id: string; unread: number }>;
     followedThreads: Array<{ thread_id: string; unread: number }>;
@@ -48,19 +48,35 @@ export function PendingPage() {
    *  「当前项目」是显式收窄，页头写明范围。 */
   const [scope, setScope] = useState<'all' | 'project'>('all');
   const genRef = useRef(0);
+  const mountedRef = useRef(false);
+  const inFlightRef = useRef<Promise<void> | null>(null);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback((): Promise<void> => {
+    if (!mountedRef.current) return Promise.resolve();
+    if (inFlightRef.current != null) return inFlightRef.current;
     const gen = ++genRef.current;
-    setErr(null);
-    try {
-      const r = await command<PendingData>('mine.pending', {});
-      if (gen !== genRef.current) return;
-      setData(r);
-    } catch (e) {
-      if (gen === genRef.current) setErr((e as Error).message);
-    }
+    const work = (async () => {
+      try {
+        const r = await command<PendingData>('mine.pending', {});
+        if (!mountedRef.current || gen !== genRef.current) return;
+        setData(r);
+        setErr(null);
+      } catch (e) {
+        if (mountedRef.current && gen === genRef.current) setErr((e as Error).message);
+      }
+    })();
+    inFlightRef.current = work;
+    void work.finally(() => { if (inFlightRef.current === work) inFlightRef.current = null; });
+    return work;
   }, []);
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    mountedRef.current = true;
+    void reload();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) void reload();
+    }, 5000);
+    return () => { window.clearInterval(timer); mountedRef.current = false; genRef.current += 1; inFlightRef.current = null; };
+  }, [reload]);
 
   const locate = (link: string) => {
     void openExternalDeepLink(link).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
@@ -73,15 +89,16 @@ export function PendingPage() {
       await command('reminder.confirm', { reminderId: r.reminderId, scheduledAt: r.scheduledAt });
       recordWrite('reminder.confirm', `确认提醒「${r.title ?? r.reminderId}」→ 正式执行派发`);
       toast('已确认：经正式执行链派发（任务+预占，author=system）', 'success');
-      await reload();
+      if (mountedRef.current) await reload();
     } catch (e) {
       toast(`确认失败：${(e as Error).message}`, 'error');
     } finally {
-      setConfirming(null);
+      if (mountedRef.current) setConfirming(null);
     }
   };
 
-  const sections = scope === 'project' && activeProjectId !== ''
+  const projectMissing = scope === 'project' && activeProjectId === '';
+  const sections = scope === 'project'
     ? (data?.projects.filter((p) => p.projectId === activeProjectId) ?? [])
     : (data?.projects ?? []);
   const omittedProjects = scope === 'project' && data != null
@@ -111,8 +128,9 @@ export function PendingPage() {
         {scope === 'project' && omittedProjects.length > 0 ? (
           <div className="faint small" style={{ marginBottom: 6 }}>范围=当前项目——另有 {omittedProjects.length} 个项目的待办未显示（切「全部可访问项目」可见，不会因此清掉）。</div>
         ) : null}
+        {projectMissing ? <div className="panel info">尚未打开项目；请选择项目或切回「全部可访问项目」。全部待办仍保留。</div> : null}
         {err != null ? <div className="panel warning">装载失败：{err}——列表保持上次事实，不伪清（可刷新重试）</div> : null}
-        {data != null && empty ? (
+        {data != null && empty && !projectMissing ? (
           <EmptyState icon="check-circle" title="没有需要你处理的事情" detail={scope === 'project' ? '当前项目没有待处理事项。' : '全部可访问项目都没有待处理事项——这里安静意味着确实没有待办，而不是漏了通知。'} />
         ) : null}
         {sections.map((p) => (
