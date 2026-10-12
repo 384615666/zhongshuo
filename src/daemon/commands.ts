@@ -27,6 +27,7 @@ import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHisto
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
+import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
@@ -1264,6 +1265,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const target = deps.db.prepare('SELECT project_id, conversation_id FROM tasks WHERE id = ?').get(params.taskId) as
           | { project_id: string; conversation_id: string } | undefined;
         if (target == null || target.project_id !== params.projectId) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '任务不属于目标项目或不存在');
+        if (params.conversationId!=null&&params.conversationId!==target.conversation_id) throw new DaemonCommandError('RESOURCE_NOT_FOUND','任务不属于当前会话');
         assertConversationAudience(deps.db, deps.localUserId, target.conversation_id);
         if (params.runId != null && deps.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.runId, params.taskId, target.conversation_id) == null) {
           throw new DaemonCommandError('RESOURCE_NOT_FOUND', '运行不属于目标任务或不存在');
@@ -2295,6 +2297,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               : archived ? '私信已归档；先恢复会话，再重新核对任务状态。' : blocked?.message ?? null };
         });
         return withCommandId({ ok: true, data: { conversationId: params.conversationId, items, truncated: rows.length > 20 } });
+      }
+      case 'conversation.tasks': {
+        const params=conversationTasksParamsSchema.parse(env.params);
+        const conv=dmConversationOf(deps.db,params.conversationId);
+        if(conv==null||conv.kind!=='dm'||conv.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','私信不属于目标项目或不存在');
+        assertConversationAudience(deps.db,deps.localUserId,params.conversationId);
+        let before=Number.MAX_SAFE_INTEGER;
+        if(params.beforeTaskId){const row=deps.db.prepare('SELECT rowid AS seq FROM tasks WHERE id=? AND project_id=? AND conversation_id=?').get(params.beforeTaskId,params.projectId,params.conversationId) as {seq:number}|undefined;if(!row)throw new DaemonCommandError('RESOURCE_NOT_FOUND','历史任务游标不属于当前私信');before=row.seq;}
+        const rows=deps.db.prepare(`SELECT t.id,t.title,t.status,t.revision,r.id AS run_id,r.status AS run_status FROM tasks t
+          LEFT JOIN workflow_runs r ON r.id=(SELECT w.id FROM workflow_runs w WHERE w.task_id=t.id AND w.conversation_id=t.conversation_id ORDER BY w.rowid DESC LIMIT 1)
+          WHERE t.project_id=? AND t.conversation_id=? AND t.rowid<? ORDER BY t.rowid DESC LIMIT 21`).all(params.projectId,params.conversationId,before) as Array<{id:string;title:string;status:string;revision:number;run_id:string|null;run_status:string|null}>;
+        return withCommandId({ok:true,data:{conversationId:params.conversationId,items:rows.slice(0,20).map(r=>({id:r.id,title:r.title,status:r.status,revision:r.revision,latestRun:r.run_id?{id:r.run_id,status:r.run_status}:null})),nextCursor:rows.length>20?rows[19]!.id:null}});
       }
       case 'conversation.history': {
         const params = z.strictObject({ conversationId: z.string().min(1), beforeSeq: z.number().int().positive().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);

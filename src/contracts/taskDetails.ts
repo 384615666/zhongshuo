@@ -1,13 +1,15 @@
 /** Read-only task detail projection. Every collection reports whether the bounded page is complete. */
 import { z } from 'zod';
 
-export interface TaskDetailsParams { projectId: string; taskId: string; runId?: string }
+export interface TaskDetailsParams { projectId: string; taskId: string; runId?: string; conversationId?:string }
 export const taskDetailsParamsSchema = z.strictObject({
   projectId: z.string().min(1), taskId: z.string().min(1), runId: z.string().min(1).optional(),
+  conversationId:z.string().min(1).optional(),
 });
 export const taskHistoryParamsSchema = z.strictObject({
   projectId: z.string().min(1), taskId: z.string().min(1),
   kind: z.enum(['runs', 'activity', 'deliveries']), runId: z.string().min(1).optional(),
+  conversationId:z.string().min(1).optional(),
   cursor: z.string().min(1).max(2048).optional(),
 });
 export type TaskHistoryParams = z.infer<typeof taskHistoryParamsSchema>;

@@ -6,7 +6,7 @@ import { fullTime } from '../lib/format';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
 const detailReads = new Map<string, Promise<TaskDetailsResult>>();
-function readDetails(key: string, params: { projectId: string; taskId: string; runId?: string }) {
+function readDetails(key: string, params: { projectId: string; taskId: string; runId?: string; conversationId?:string }) {
   const existing = detailReads.get(key);
   if (existing) return existing;
   const pending = command<TaskDetailsResult>('task.details', params).finally(() => {
@@ -16,11 +16,11 @@ function readDetails(key: string, params: { projectId: string; taskId: string; r
   return pending;
 }
 
-export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined) {
-  const target = JSON.stringify([projectId, taskId]);
+export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined, conversationId?:string) {
+  const target = JSON.stringify([projectId, taskId,conversationId]);
   const [requested, setRequested] = useState<{ target: string; runId: string } | null>(null);
   const selectedRunId = requested?.target === target ? requested.runId : runId;
-  const key = JSON.stringify([projectId, taskId, selectedRunId]);
+  const key = JSON.stringify([projectId, taskId, selectedRunId,conversationId]);
   const [state, setState] = useState<{ key: string; data: TaskDetailsResult | null; error: string | null; loading: boolean; updatedAt: number | null }>({ key: '', data: null, error: null, loading: false, updatedAt: null });
   const read = useRef<(() => void) | null>(null);
   const source = useRef({ key, revision, runStatus });
@@ -36,8 +36,11 @@ export function useTaskDetails(projectId: string | undefined, taskId: string | u
       if (busy) { pending = true; return; }
       busy = true; pending = false; const ticket = ++intent;
       setState(old => ({ key, data: old.key === key ? old.data : null, error: old.key === key ? old.error : null, updatedAt: old.key === key ? old.updatedAt : null, loading: true }));
-      void readDetails(key, { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}) }).then(
-        data => { if (alive && ticket === intent && visible()) setState({ key, data, error: null, loading: false, updatedAt: Date.now() }); },
+      void readDetails(key, { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}),...(conversationId?{conversationId}:{}) }).then(
+        data => { if (alive && ticket === intent && visible()) {
+          if(data.task.id!==taskId||data.task.projectId!==projectId||conversationId!=null&&data.task.conversationId!==conversationId||selectedRunId!=null&&data.selectedRunId!==selectedRunId){setState(old=>({...old,key,error:'详情回执目标不匹配；保留已确认事实，可刷新重试',loading:false}));return;}
+          setState({ key, data, error: null, loading: false, updatedAt: Date.now() });
+        } },
         (e: unknown) => { if (alive && ticket === intent && visible()) setState(old => ({ key, data: old.key === key ? old.data : null, updatedAt: old.key === key ? old.updatedAt : null, error: e instanceof Error ? e.message : String(e), loading: false })); },
       ).finally(() => { busy = false; if (alive && pending && visible()) request(); });
     };
@@ -51,7 +54,7 @@ export function useTaskDetails(projectId: string | undefined, taskId: string | u
     const timer = window.setInterval(() => { if (!busy && visible()) request(); }, 5000);
     request();
     return () => { alive = false; intent++; read.current = null; window.clearInterval(timer); takeover.disconnect(); document.removeEventListener('visibilitychange', visibility); };
-  }, [projectId, taskId, selectedRunId, key]);
+  }, [projectId, taskId, selectedRunId, key,conversationId]);
   useEffect(() => {
     const old = source.current;
     source.current = { key, revision, runStatus };
@@ -136,7 +139,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
   const current=state.key===key?state:null;
   const next=current?.page?current.page.nextCursor:cursor;
   const load=()=>{if(busy.current||!next)return;busy.current=true;const id=++ticket.current;setState(old=>({key,page:old.key===key?old.page:null,error:null,loading:true}));
-    void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,kind,...(runId?{runId}:{}),cursor:next}).then(page=>{if(ticket.current===id)setState({key,page,error:null,loading:false});},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
+    void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,conversationId:detail.task.conversationId,kind,...(runId?{runId}:{}),cursor:next}).then(page=>{if(ticket.current===id)setState({key,page,error:null,loading:false});},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
   if (!next && !current?.page && !current?.loading && !current?.error) return null;
   return <div className="card tight" data-zs-history={kind}>
     {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>

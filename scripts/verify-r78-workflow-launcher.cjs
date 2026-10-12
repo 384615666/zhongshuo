@@ -375,6 +375,21 @@ function verifyManifest(packageRoot) {
     must(await cdp.eval(button('[data-zs-dm-review=hifi]', '确认验收')), 'DM confirm accept missing');
     await until(() => queryOne('SELECT status FROM tasks WHERE id=?', dmTask.id)?.status, (v) => v === 'DONE', 'DM DONE');
     facts.steps.push('DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept');
+    if (process.argv.includes('--r79')) {
+      must(await cdp.eval(js("document.querySelector('[data-zs-dm-ops=hifi]')?.click();return true;")), 'DM records operations');
+      must(await cdp.eval(button('body', '任务记录…')), 'DM task records entry');
+      await until(() => cdp.eval("document.querySelector('[data-zs-dm-task-records]')?.textContent.includes('R78 UI DM') === true"), Boolean, 'DM completed task details');
+      must(await cdp.eval(button('[data-zs-dm-task-records]', '查看这次运行')), 'DM historical run entry');
+      await until(() => cdp.eval("document.querySelector('[data-zs-dm-task-records]')?.textContent.includes('执行成功') === true"), Boolean, 'DM historical run facts');
+      must(await cdp.eval(button('[data-zs-dm-task-records] .details-subnav', '交付历史')), 'DM delivery history tab');
+      await until(() => cdp.eval("(()=>{const t=document.querySelector('[data-zs-dm-task-records]')?.textContent;return t?.includes('交付 v1')&&t.includes('交付 v2')})()"), Boolean, 'DM both delivery versions');
+      await cdp.shot('r79-dm-task-records.png');
+      await cdp.send('Input.dispatchKeyEvent', { type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27 });
+      await cdp.send('Input.dispatchKeyEvent', { type:'keyUp', key:'Escape', code:'Escape', windowsVirtualKeyCode:27 });
+      await until(() => cdp.eval("document.querySelector('[data-zs-dm-task-records]') == null && document.querySelector('#hifi-root textarea.composer-input') != null"), Boolean, 'DM records closes to composer');
+      facts.dmRecords={sameTask:dmTask.id,completed:true,historicalRun:true,versions:[1,2],closedToConversation:true};
+      facts.steps.push('R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation');
+    }
     must(await cdp.eval(js("const b=document.querySelector('[data-zs-dm-ops=hifi]');if(!b)return false;b.click();return true;")), 'DM operations menu missing');
     must(await cdp.eval(button('body', '归档会话…')), 'DM archive menu item missing');
     await until(() => queryOne('SELECT archived_at FROM conversations WHERE id=?', dm.conversationId)?.archived_at, (v) => v != null, 'DM archived');

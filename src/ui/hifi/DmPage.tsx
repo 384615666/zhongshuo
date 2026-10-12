@@ -29,6 +29,7 @@ import { audienceAllows, resourceOf } from './lib/resource';
 import { autoHidePreviewForConversation, shouldAutoHidePreviewFor } from './data/actions-preview';
 import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
 import type { ConversationFailedTasksResult, FailedDmTask } from '../../contracts/taskDetails.ts';
+import { DmTaskRecords } from './components/DmTaskRecords';
 
 const EXEC_TEXT: Record<string, string> = {
   idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
@@ -57,6 +58,7 @@ export function DmPage() {
   const [opsAt, setOpsAt] = useState<{ x: number; y: number } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [recordsFor,setRecordsFor]=useState<string|null>(null);
   const [acceptedRetry, setAcceptedRetry] = useState<string | null>(null);
   const failedReadGen = useRef(0);
   const [failedView, setFailedView] = useState<{ conversationId: string; items: FailedDmTask[]; truncated: boolean; error: string | null }>({ conversationId: '', items: [], truncated: false, error: null });
@@ -84,7 +86,7 @@ export function DmPage() {
   const [insertText, setInsertText] = useState<{ id: number; text: string } | null>(null);
   const savedRefs = useStore((s) => s.savedMessageRefs);
   // 切换会话：编辑框一律作废关闭（零提交、零串扰）——A 打开的框不会作用于 B。
-  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); setOpsAt(null); }, [activeId]);
+  useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); setOpsAt(null);setRecordsFor(null); }, [activeId]);
   useEffect(() => {
     if (active?.id != null) void readFailedTasks(active.id, active.projectId);
     return () => { failedReadGen.current += 1; };
@@ -696,11 +698,13 @@ export function DmPage() {
           <MenuItem icon="download" title="导出这条会话的 HTML 记录" onClick={() => { setOpsAt(null); void doExport('html'); }}>导出会话记录（HTML）…</MenuItem>
           <MenuItem icon="download" title="导出这条会话的 DOCX 记录" onClick={() => { setOpsAt(null); void doExport('docx'); }}>导出会话记录（DOCX）…</MenuItem>
           <div className="menu-sep" />
+          <MenuItem icon="terminal" onClick={()=>{setOpsAt(null);setRecordsFor(activeId);}}>任务记录…</MenuItem>
           <MenuItem icon="external-link" title="在本会话的原界面打开（尚未换装的能力经此可达）" onClick={() => { setOpsAt(null); void import('./App').then((m) => m.takeLegacy('current-dm')); }}>在原界面打开</MenuItem>
         </Menu>
       ) : null}
 
       {/* 新建私聊（1 对 1：选一位成员——正式 conversation.create）。 */}
+      {active&&recordsFor===active.id?<DmTaskRecords projectId={active.projectId} conversationId={active.id} onClose={()=>setRecordsFor(null)} retryBusy={busy!=null} acceptedRetry={acceptedRetry} onRetry={failedView.conversationId===active.id?async detail=>{if(detail.task.projectId!==active.projectId||detail.task.conversationId!==active.id||!detail.latestRunId)return;await doRetryFailed({taskId:detail.task.id,title:detail.task.title,taskRevision:detail.task.revision,stopGeneration:detail.task.stopGeneration,latestRunId:detail.latestRunId,...detail.failedRetry});}:undefined}/>:null}
       {createOpen ? (
         <CreateDmModal members={members} onClose={() => setCreateOpen(false)} onCreated={(cid) => { setCreateOpen(false); navigate(`/dm/${cid}`); }} />
       ) : null}

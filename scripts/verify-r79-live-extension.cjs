@@ -74,10 +74,12 @@ module.exports = async function verifyR79(ctx) {
   must(await cdp.eval(button('[data-zs-history=activity]', '加载更早历史')), 'R79 run activity history click');
   await until(() => cdp.eval("document.querySelector('[data-zs-history=activity]')?.textContent.includes('已到历史起点')"), Boolean, 'older run events reached');
   await cdp.shot('r79-historical-run.png');
-  await navigate(cdp, `/thread/${scale.threadId}?tab=activity`, scale.threadId);
+  must(await cdp.eval(button('.details-subnav','活动与进展')), 'R79 activity section action');
+  await until(() => cdp.eval("[...document.querySelectorAll('.details-subnav [aria-selected=true]')].some(b=>b.textContent.includes('活动与进展')) && document.querySelector('.details-body')?.textContent.includes('正式活动记录')"), Boolean, 'actual activity section ready');
   must(await cdp.eval(button('[data-zs-history=activity]', '加载更早历史')), 'R79 task activity history click');
   await until(() => cdp.eval("document.querySelector('[data-zs-history=activity]')?.textContent.includes('更早历史页')"), Boolean, 'task activity page');
-  await navigate(cdp, `/thread/${scale.threadId}?tab=delivery`, scale.threadId);
+  must(await cdp.eval(button('.details-subnav','交付与验收')), 'R79 delivery section action');
+  await until(() => cdp.eval("[...document.querySelectorAll('.details-subnav [aria-selected=true]')].some(b=>b.textContent.includes('交付与验收')) && document.querySelector('.details-body')?.textContent.includes('交付版本与验收历史')"), Boolean, 'actual delivery section ready');
   must(await cdp.eval(button('[data-zs-history=deliveries]', '加载更早历史')), 'R79 delivery history click');
   await until(() => cdp.eval("document.querySelector('[data-zs-history=deliveries]')?.textContent.includes('交付 v11')"), Boolean, 'older delivery page');
   const geometry=await cdp.eval(`(()=>{const area=document.querySelector('[data-zs-history=deliveries]');const button=area?.querySelector('button');button?.scrollIntoView({block:'center'});const body=document.querySelector('.details-body'),composer=document.querySelector('.col-thread .composer'),b=button?.getBoundingClientRect(),c=composer?.getBoundingClientRect();return{overflow:body?getComputedStyle(body).overflowY:null,bodyClientHeight:body?.clientHeight,bodyScrollHeight:body?.scrollHeight,buttonTop:b?.top,buttonBottom:b?.bottom,composerTop:c?.top,visible:Boolean(b&&c&&b.bottom<=c.top&&b.top>=body.getBoundingClientRect().top)}})()`);
