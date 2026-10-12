@@ -798,6 +798,20 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }));
         return withCommandId({ ok: true, data: { items } });
       }
+      case 'project.memberWorkload': {
+        const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+        if (deps.db.prepare('SELECT 1 FROM projects WHERE id=?').get(params.projectId) == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '项目不存在');
+        const rows = deps.db.prepare(`WITH visible_tasks AS (
+          SELECT t.id,t.owner_member_id,t.status FROM tasks t JOIN conversations c ON c.id=t.conversation_id
+          WHERE t.project_id=? AND (c.kind<>'dm' OR EXISTS(SELECT 1 FROM dm_participants dp WHERE dp.conversation_id=c.id AND dp.principal_type='human' AND dp.principal_id=?))
+        ), owned AS (SELECT owner_member_id,COUNT(*) n FROM visible_tasks WHERE status NOT IN ('DONE','CANCELLED') GROUP BY owner_member_id),
+        executing AS (SELECT a.member_id,SUM(CASE WHEN a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING') THEN 1 ELSE 0 END) active_n,
+          SUM(CASE WHEN a.status='UNKNOWN' THEN 1 ELSE 0 END) unknown_n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN visible_tasks t ON t.id=r.task_id GROUP BY a.member_id)
+        SELECT pm.id memberId,COALESCE(o.n,0) unfinishedTasks,COALESCE(e.active_n,0) activeTurns,COALESCE(e.unknown_n,0) unknownTurns
+        FROM project_members pm LEFT JOIN owned o ON o.owner_member_id=pm.id LEFT JOIN executing e ON e.member_id=pm.id WHERE pm.project_id=? ORDER BY pm.id LIMIT 501`)
+          .all(params.projectId, deps.localUserId, params.projectId);
+        return withCommandId({ ok: true, data: { projectId: params.projectId, items: rows.slice(0,500), truncated: rows.length>500 } });
+      }
       case 'project.taskSummary': {
         const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
         if (deps.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(params.projectId) == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '项目不存在');

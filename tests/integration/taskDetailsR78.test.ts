@@ -41,6 +41,26 @@ function fixture(scripts?: FakeTurnScript[]) {
 }
 
 describe('R78 task.details formal read projection', () => {
+  it('R79 member workload follows formal running, delivery and acceptance independently of loaded UI tasks', async () => {
+    const env = fixture([[
+      { kind:'event',event:{kind:'tool.started',toolCallId:'workload',toolName:'Read',argumentsSummary:''} },
+      { kind:'stall',ms:500 },
+      { kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:TASK_COMPLETE_SCHEMA_VERSION,resultKey:'workload',changeSummary:'完成',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})} },
+    ]]);
+    try {
+      const sent=await env.raw('message.submit',{target:{kind:'room_root',projectId:'p1',conversationId:'conv_room',roomId:'r0'},body:'成员工作量真实闭环',intent:'default',mentions:[{kind:'member',memberId:'mA'}]});
+      const taskId=(sent.data as {taskId:string}).taskId;
+      const pumping=env.worker().runOnce();
+      for(let i=0;i<50;i++){if(env.db.prepare("SELECT 1 FROM agent_turns WHERE status='RUNNING'").get())break;await new Promise(r=>setTimeout(r,5));}
+      const workload=async()=>(await env.raw('project.memberWorkload',{projectId:'p1'})).data as {items:Array<{memberId:string;unfinishedTasks:number;activeTurns:number;unknownTurns:number}>};
+      expect((await workload()).items).toContainEqual({memberId:'mA',unfinishedTasks:1,activeTurns:1,unknownTurns:0});
+      await pumping;
+      expect((await workload()).items).toContainEqual({memberId:'mA',unfinishedTasks:1,activeTurns:0,unknownTurns:0});
+      const detail=(await env.raw('task.details',{projectId:'p1',taskId})).data as TaskDetailsResult;const d=detail.deliveries[0]!;
+      expect((await env.raw('task.review',{taskId,deliveryId:d.id,deliveryRevision:d.revision,manifestHash:d.manifestHash,decision:'accept'})).ok).toBe(true);
+      expect((await workload()).items).toContainEqual({memberId:'mA',unfinishedTasks:0,activeTurns:0,unknownTurns:0});
+    } finally {env.close();}
+  });
   it('exposes a persisted latest-run hint in room.pool and counts only audience-visible unfinished project work', async () => {
     const env = fixture([[{ kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '夹具失败', retryable: true } }]]);
     try {

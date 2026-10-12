@@ -396,6 +396,10 @@ function verifyManifest(packageRoot) {
     facts.ids.stoppedTaskId = stopped.id;
     facts.steps.push('room UI stop during active Fake turn→run CANCELLED; no delivery');
 
+    if (process.argv.includes('--r79')) {
+      facts.r79 = await require('./verify-r79-live-extension.cjs')({ cdp, projectId, room, memberId, project, data, out, command, rawCommand, navigate, uiSend, until, queryOne, queryAll, must, sleep, button, facts });
+    }
+
     facts.deliveries = { room: [roomD1.id, roomD2.id], dm: [dmD1.id, dmD2.id] };
     facts.realCallsBeforeReopen = queryOne('SELECT count(*) c FROM real_calls').c;
     must(facts.realCallsBeforeReopen === 0, 'real_calls is nonzero');
@@ -416,6 +420,16 @@ function verifyManifest(packageRoot) {
     await navigate(cdp, `/dm/${dm.conversationId}`, dm.conversationId);
     await until(() => cdp.eval("document.body.textContent.includes('R78 UI DM')"), (v) => v, 'reopen DM');
     facts.steps.push('final launcher reopen preserves room/DM identities and deliveries');
+    if (facts.r79) {
+      await navigate(cdp, `/thread/${facts.r79.live.threadId}?tab=run`, facts.r79.live.threadId);
+      await until(() => cdp.eval("document.body.textContent.includes('R79_LIVE_PROGRESS_MARKER')"), Boolean, 'R79 live history after reopen');
+      await navigate(cdp, `/thread/${facts.r79.scale.threadId}?tab=run`, facts.r79.scale.threadId);
+      must(await cdp.eval(button('[data-zs-history=runs]', '加载更早历史')), 'R79 history after reopen control');
+      await until(() => cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点')"), Boolean, 'R79 older runs after reopen');
+      facts.r79.reopen = true;
+      await cdp.shot('r79-history-reopened.png');
+      facts.steps.push('R79 completed live facts and older history remain reachable after real launcher reopen');
+    }
     facts.realCalls = queryOne('SELECT count(*) c FROM real_calls').c;
     must(facts.realCalls === 0, 'real_calls after reopen nonzero');
     captureUi('engineering-reopen');

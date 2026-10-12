@@ -52,6 +52,12 @@ describe('R79 isolated history scale (not normal business lifecycle)', () => {
       expect((await raw('task.history',{projectId:'p',taskId:'t',kind:'activity',runId:'foreign'})).ok).toBe(false);
       db.prepare(`UPDATE dm_participants SET principal_id='other' WHERE conversation_id='c'`).run();
       expect((await raw('task.history',{projectId:'p',taskId:'t',kind:'runs',cursor:head.data.nextCursors!.runs})).ok).toBe(false);
+      db.prepare("UPDATE tasks SET owner_member_id='m' WHERE id='t'").run();
+      db.prepare("UPDATE agent_turns SET status='UNKNOWN' WHERE id='a0'").run();
+      const privateCounts=(await raw('project.memberWorkload',{projectId:'p'})).data as {items:unknown[]};
+      expect(privateCounts.items).toContainEqual({memberId:'m',unfinishedTasks:0,activeTurns:0,unknownTurns:0});
+      db.prepare("UPDATE dm_participants SET principal_id='u' WHERE conversation_id='c'").run();
+      expect(((await raw('project.memberWorkload',{projectId:'p'})).data as {items:unknown[]}).items).toContainEqual({memberId:'m',unfinishedTasks:1,activeTurns:0,unknownTurns:1});
     } finally { db.close(); }
   });
 });

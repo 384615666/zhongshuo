@@ -34,8 +34,29 @@ process.env.ZS_REAL_DISPATCH_GUARD = '1';
 process.env.ZS_APP_MODE = 'fake-sim';
 
 const revisions = { room: 0, dm: 0 };
+let r79Failures = 0;
 const adapter = new FakeRuntimeAdapter({
   turnScriptSequencer: ({ text }): FakeTurnScript => {
+    if (text.includes('R79 UI LIVE') || text.includes('R79 UI FAIL') || text.includes('R79 UI SCALE')) {
+      if (text.includes('R79 UI FAIL') && r79Failures++ === 0) return [
+        { kind: 'event', event: { kind: 'tool.started', toolCallId: 'r79-fail-tool', toolName: 'R79_ENGINEERING_FAILURE', argumentsSummary: '' } },
+        { kind: 'event', event: { kind: 'turn.failed', code: 'R79_ENGINEERING_FAILURE', message: '独立工程明确失败；显式继续才恢复', retryable: true } },
+      ];
+      const file = text.includes('R79 UI SCALE') ? 'results/r79-scale-original.md' : 'results/r79-live.md';
+      const finalText = JSON.stringify({ schemaVersion: 'task-complete-v1', changeSummary: 'R79 工程自然交付', files: [file], executedVerifications: ['正式 worker + 显式 Fake adapter'], unexecutedVerifications: [], remainingIssues: [] });
+      return [
+        ...(text.includes('R79 UI LIVE') ? [
+          { kind: 'stall' as const, ms: 2500 },
+          { kind: 'event' as const, event: { kind: 'tool.started' as const, toolCallId: 'r79-live-tool', toolName: 'R79_LIVE_PROGRESS_MARKER', argumentsSummary: '' } },
+          { kind: 'stall' as const, ms: 6000 },
+          { kind: 'event' as const, event: { kind: 'tool.completed' as const, toolCallId: 'r79-live-tool', outcome: 'success' as const } },
+          { kind: 'event' as const, event: { kind: 'usage.updated' as const, accounting: 'cumulative' as const, inputTokens: 321, outputTokens: 22, costQuality: 'unknown' as const } },
+          { kind: 'stall' as const, ms: 20_000 },
+        ] : []),
+        { kind: 'writeFile', path: file, content: '# R79 工程原件\n\n正式 worker 自然生成；零真实模型调用。\n' },
+        { kind: 'event', event: { kind: 'turn.completed', finalText } },
+      ];
+    }
     if (text.includes('R78 UI STOP')) return [
       { kind: 'event', event: { kind: 'message.completed', messageId: `r78-stop-progress-${randomUUID()}`, text: 'R78 UI STOP：运行中等待停止' } },
       { kind: 'stall', ms: 60_000 },

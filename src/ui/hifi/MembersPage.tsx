@@ -21,6 +21,8 @@ import { refreshMembers } from './loader';
 import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
+import { useMemberWorkload } from './components/useMemberWorkload';
+import { fullTime } from './lib/format';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string }
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
@@ -44,11 +46,10 @@ export function MembersPage() {
   const projectId = useStore((s) => s.activeProjectId);
   const projects = useStore((s) => s.projects);
   // selector 必须返回稳定引用（useSyncExternalStore 契约——filter 新数组会造成快照死循环，
-  // R46 实证）：先取整份 rooms/tasks，再按项目 memo 过滤。
+  // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
   const allRooms = useStore((s) => s.rooms);
-  const allTasks = useStore((s) => s.tasks);
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
-  const tasks = useMemo(() => (projectId != null && projectId !== '' ? allTasks.filter((t) => t.projectId === projectId) : allTasks), [allTasks, projectId]);
+  const workload = useMemberWorkload(projectId);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
   const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
   const membersInScope = membersProjectId === projectId ? members : null;
@@ -202,7 +203,7 @@ export function MembersPage() {
           </span>
           <div className="spacer" />
           <button
-            className="btn ghost sm" onClick={() => void reload()} title="重新装载成员/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
+            className="btn ghost sm" onClick={() => { workload.refresh(); void reload(); }} title="重新装载成员/工作量/绑定/房间名单（迟到响应不污染当前项目）">刷新</button>
           {projArchived ? (
             <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已归档（只读）——不能添加成员</span>
           ) : projRemoved ? (
@@ -218,6 +219,9 @@ export function MembersPage() {
           <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>
         ) : null}
         {err != null ? <div className="panel warning">成员装载失败：{err}（可刷新重试）</div> : null}
+        {workload.error ? <div className="panel warning">成员工作量读取失败：{workload.error}。{workload.updatedAt ? `保留 ${fullTime(workload.updatedAt)} 的事实。` : '尚未取得工作量快照。'}</div> : null}
+        {workload.updatedAt ? <div className="faint small">工作量更新于 {fullTime(workload.updatedAt)}；负责的任务与实际在途执行分开统计。</div> : null}
+        {workload.data?.truncated ? <div className="faint small">工作量仅覆盖前 500 名成员；未读取的成员不推断为空。</div> : null}
         {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
         {membersInScope != null && membersInScope.length === 0 ? (
@@ -228,7 +232,7 @@ export function MembersPage() {
         <div className="grid grid-2">
           {membersInScope?.map((m) => {
             const rt = runtimeLabel(m);
-            const running = tasks.filter((t) => t.ownerMemberId === m.id && ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(t.status));
+            const running = workload.data?.items.find(row=>row.memberId===m.id);
             return (
               <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} #${memberShortId(m.id)} 的成员详情（完整 ID ${m.id}）`}
                 role="link" tabIndex={0} style={{ cursor: 'pointer' }}
@@ -251,7 +255,7 @@ export function MembersPage() {
                   </div>
                 </div>
                 <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
-                  {running.length > 0 ? `负责任务 ${running.map((t) => `#${t.roomTaskNumber}`).join('、')}` : '当前没有负责的未结束任务'}
+                  {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
                   {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
                   {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <details data-zs-image-capability={m.id} style={{ marginTop: 5 }}>
                     <summary>识图能力：{runtimes[m.id]!.imageInput!.status === 'supported' ? '已认证' : '未认证'} · 查看配置依据</summary>
