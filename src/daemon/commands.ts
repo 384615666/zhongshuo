@@ -23,11 +23,13 @@ import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
+import { taskDetailsParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
+import { readTaskDetails } from './taskDetails.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
-import { memberImageCapability } from './imageCapability.ts';
+import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
@@ -131,6 +133,17 @@ export class DaemonCommandError extends Error {
     this.name = 'DaemonCommandError';
     this.code = code;
   }
+}
+
+function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?: ImageCapabilityReadContext) {
+  const binding = readMemberRuntimeBinding(db, memberId);
+  if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${memberId}`);
+  const installation = binding.installationId == null ? null
+    : (db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
+  const effective = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
+  return { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
+    kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
+    imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
 
 /**
@@ -1103,18 +1116,31 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'member.runtime': {
         const params = z.strictObject({ memberId: z.string().min(1) }).parse(env.params);
-        const binding = readMemberRuntimeBinding(deps.db, params.memberId);
-        if (binding == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
-        const installation = binding.installationId == null ? null
-          : (deps.db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
         // R66 P5：**有效派发来源**分列（R65 反例：界面显示「未绑定」，实际未绑定成员回落到
         // 全局默认渠道 ZS_RUNTIME=claude——两件不同事实）。与派发侧 MemberRuntimeRegistry
         // 同一解析（resolveMemberRuntime：未绑定→defaultKind+默认模型），defaultKind 与
         // entry.ts 的 options.runtime 同源（ZS_RUNTIME）。
-        const effective = resolveMemberRuntime(deps.db, params.memberId, process.env.ZS_RUNTIME ?? null);
         // 环境模式（第三十八轮 #2：验收防护包真实渠道被拒绑——设置 UI 据此提供 fake 正路径，
         // 用户不再需要脚本自救；正式部署两标志皆 false=fake 不进产品设置面，原决策不变）。
-        return withCommandId({ ok: true, data: { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved', kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null }, imageInput: memberImageCapability(deps.db, params.memberId), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } } });
+        return withCommandId({ ok: true, data: memberRuntimeInfo(deps.db, params.memberId) });
+      }
+      case 'member.runtimes': {
+        const params = z.strictObject({ projectId: z.string().min(1), memberIds: z.array(z.string().min(1)).max(500).optional() }).parse(env.params);
+        if (deps.db.prepare('SELECT id FROM projects WHERE id=?').get(params.projectId) == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '成员读取项目不存在');
+        const selected = params.memberIds == null ? null : [...new Set(params.memberIds)];
+        const rows = selected == null
+          ? deps.db.prepare('SELECT id FROM project_members WHERE project_id=? ORDER BY id LIMIT 501').all(params.projectId) as Array<{id:string}>
+          : selected.length === 0 ? [] : deps.db.prepare(`SELECT id FROM project_members WHERE project_id=? AND id IN (${selected.map(() => '?').join(',')})`).all(params.projectId, ...selected) as Array<{id:string}>;
+        if (rows.length > 500) throw new DaemonCommandError('VALIDATION_INVALID', '项目成员超过批量读取上限500；请分批读取成员配置');
+        const inProject = new Set(rows.map(r => r.id));
+        const ids = selected ?? rows.map(r => r.id);
+        if (ids.some(id => !inProject.has(id))) throw new DaemonCommandError('VALIDATION_INVALID', '批量读取中的成员不属于目标项目');
+        const readContext: ImageCapabilityReadContext = new Map(); // Bounded to this one read command, not a cache across polls or sends.
+        const items = ids.map(memberId => {
+          try { return { memberId, info: memberRuntimeInfo(deps.db, memberId, readContext) }; }
+          catch (error) { return { memberId, error: { code: error instanceof DaemonCommandError ? error.code : 'STORAGE_UNAVAILABLE', message: (error as Error).message } }; }
+        });
+        return withCommandId({ ok: true, data: { projectId: params.projectId, items, snapshot: 'one-read-request', dispatchRecheck: 'independent-before-send-and-spawn' } });
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
@@ -1175,6 +1201,19 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // r59：完整执行身份随行（deliveryId/manifestHash/sourceRunId——命令快照绑定用）。
         const reworkDerived = reworkPendingOf(deps.db, params.taskId);
         return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
+      }
+      case 'task.details': {
+        // R78: bounded read-only projection. Bind claimed project/task/run before reading children,
+        // turns, event payload summaries or private delivery history.
+        const params = taskDetailsParamsSchema.parse(env.params);
+        const target = deps.db.prepare('SELECT project_id, conversation_id FROM tasks WHERE id = ?').get(params.taskId) as
+          | { project_id: string; conversation_id: string } | undefined;
+        if (target == null || target.project_id !== params.projectId) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '任务不属于目标项目或不存在');
+        assertConversationAudience(deps.db, deps.localUserId, target.conversation_id);
+        if (params.runId != null && deps.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.runId, params.taskId, target.conversation_id) == null) {
+          throw new DaemonCommandError('RESOURCE_NOT_FOUND', '运行不属于目标任务或不存在');
+        }
+        return withCommandId({ ok: true, data: readTaskDetails(deps.db, params.taskId, params.runId) });
       }
       case 'message.imageCapability': {
         const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);

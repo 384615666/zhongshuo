@@ -35,7 +35,7 @@ import {
   toggleThreadSubscription, markThreadReadReal, reactMessageReal, createRoomReal, exportThreadReal,
 } from '../data/actions-room';
 import { updateRoomReal, roomArchiveReal, roomMembersSetReal } from '../loader';
-import { formatBytes, formatDuration, fullTime, relTime, routeModeCopy, stageLabel } from '../lib/format';
+import { formatBytes, fullTime, relTime, routeModeCopy, stageLabel } from '../lib/format';
 import { navigate } from '../lib/router';
 import { type ThreadTabKey } from '../lib/threadNav';
 import {
@@ -48,6 +48,8 @@ import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
 import { useElementWidth } from '../lib/useElementWidth';
+import { ActualMembers, DeliveryHistoryFacts, DetailReadState, RunExtraFacts, TaskEventFacts, TaskExtraFacts, taskRunGuidance, useTaskDetails } from '../components/TaskDetailsFacts';
+import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
 
 /** 正式侧能力锁定（未接通能力点击前禁用并说明——不在原型位置伪造可用）。 */
 const FORMAL_LIMITS = {
@@ -2097,11 +2099,12 @@ function ThreadDetails({
   onChangeSection: (sec: DetailsSection) => void;
   onChangeTab: (tab: ThreadTabLocal) => void;
 }) {
+  const formal = useTaskDetails(task?.projectId, task?.id, task?.revision, run?.id, run?.status);
   const pendingDelivery = task?.currentDeliveryId
     ? s.taskDeliveries.find((d) => d.id === task.currentDeliveryId)
     : undefined;
   const hasDelivery = Boolean(
-    task && (task.currentDeliveryId || s.taskDeliveries.some((d) => d.taskId === task.id)),
+    task && (task.currentDeliveryId || s.taskDeliveries.some((d) => d.taskId === task.id) || formal.data?.deliveries.length),
   );
 
   const groups: { key: DetailsSection; label: string; icon: string; hint: string }[] = [
@@ -2109,13 +2112,13 @@ function ThreadDetails({
     { key: 'members', label: '参与成员', icon: 'users', hint: '线程成员与跟进名单：移出=停止自动唤醒，历史保留，可再 @ 回来' },
     { key: 'activity', label: '活动与进展', icon: 'activity', hint: '本串执行记录与普通过程说明（路由推导、校验通过、阶段推进）' },
   ];
-  if (run) {
+  if (task) {
     groups.push({ key: 'run', label: '运行详情', icon: 'terminal', hint: '工具活动、用量、错误与原始诊断' });
   }
   if (hasDelivery || section === 'delivery') {
     groups.push({ key: 'delivery', label: '交付与验收', icon: 'check-circle', hint: '完成摘要、版本、验证、残余问题与验收决定（可选验收的唯一入口）' });
   }
-  if (task && run?.mode === 'DELIBERATE') {
+  if (task && formal.data?.runs[0]?.mode === 'DELIBERATE') {
     groups.push({ key: 'deliberation', label: '研讨详情', icon: 'layers', hint: '初稿、互评、争议、确认矩阵' });
   }
 
@@ -2145,6 +2148,7 @@ function ThreadDetails({
       </div>
 
       <div className="details-body">
+        {task ? <DetailReadState error={formal.error} loading={formal.loading} refresh={formal.refresh} /> : null}
         {active !== section ? (
           <div className="panel info" style={{ margin: '0 0 10px' }}>
             <div className="panel-title"><Icon name="info" size={13} /> 该分组在当前任务上不适用</div>
@@ -2153,14 +2157,14 @@ function ThreadDetails({
           </div>
         ) : null}
         {active === 'overview' ? (
-          <ThreadOverview s={s} anchor={anchor} task={task} run={run} isDiscussion={isDiscussion} />
+          <ThreadOverview s={s} anchor={anchor} task={task} isDiscussion={isDiscussion} formal={formal.data} />
         ) : null}
-        {active === 'members' ? <ThreadMembers threadId={threadId} isDiscussion={isDiscussion} /> : null}
-        {active === 'activity' ? <ThreadActivity threadId={threadId} onChangeTab={onChangeTab} /> : null}
-        {active === 'run' && run ? <ThreadRunFacts run={run} /> : null}
+        {active === 'members' ? <>{formal.data ? <ActualMembers detail={formal.data} /> : null}<ThreadMembers threadId={threadId} isDiscussion={isDiscussion} /></> : null}
+        {active === 'activity' ? <ThreadActivity threadId={threadId} detail={formal.data} onChangeTab={onChangeTab} /> : null}
+        {active === 'run' && task ? <ThreadRunFacts detail={formal.data} onSelectRun={formal.selectRun} /> : null}
         {/* v1.12 §10.5：交付详情仍是**可选验收的唯一主入口**，决定只在这里做一次 */}
-        {active === 'delivery' && task ? <ThreadDeliveryPanel threadId={threadId} task={task} /> : null}
-        {active === 'deliberation' && run ? (
+        {active === 'delivery' && task ? <><ThreadDeliveryPanel threadId={threadId} task={task} />{formal.data ? <DeliveryHistoryFacts detail={formal.data} /> : null}</> : null}
+        {active === 'deliberation' && formal.data?.runs[0]?.mode === 'DELIBERATE' ? (
           <div className="msg-list">
             <div className="panel info">
               <div className="panel-title"><Icon name="layers" size={13} /> 研讨详情（阶段/初稿/互评/确认矩阵）</div>
@@ -2186,13 +2190,13 @@ function ThreadDetails({
  * 预算明细、定向跟进因此一个都不丢（停止在输入区、研讨与交付在详情分组里另有入口）。
  */
 function ThreadOverview({
-  s, anchor, task, run, isDiscussion,
+  s, anchor, task, isDiscussion, formal,
 }: {
   s: AppState;
   anchor: Message;
   task?: Task;
-  run?: WorkflowRun;
   isDiscussion: boolean;
+  formal: TaskDetailsResult | null;
 }) {
   const room = roomOf(s, anchor.roomId);
   const project = s.projects.find((p) => p.id === anchor.projectId);
@@ -2206,7 +2210,10 @@ function ThreadOverview({
    *  · 「派发」行只在**存在独立派发信息**时出现 —— 这条原消息到底点了谁、
    *    或者是某个任务的子任务；没有点名也没有父任务就整行不渲染。
    */
-  const modeCopy = task ? routeModeCopy[task.mode] : undefined;
+  // task.get hydration keeps a minimal UI shape with placeholder mode/stage/budget.
+  // Detail labels must come from the formal run projection, never from that placeholder.
+  const latestRun = formal?.runs[0];
+  const modeCopy = latestRun ? routeModeCopy[latestRun.mode as Task['mode']] : undefined;
   const parentTask = task?.parentTaskId ? s.tasks.find((x) => x.id === task.parentTaskId) : undefined;
   const mentionIds = anchor.payload?.mentionIds ?? [];
   const dispatchParts: string[] = [];
@@ -2237,13 +2244,13 @@ function ThreadOverview({
               <dd className="mono-sm">#{task.roomTaskNumber}</dd>
               <dt>状态</dt>
               <dd className="row tight wrap">
-                <TaskStatusTag status={task.status} />
-                {run ? <RunStatusTag status={run.status} /> : null}
+                <TaskStatusTag status={(formal?.task.status ?? task.status) as Task['status']} />
+                {latestRun ? <RunStatusTag status={latestRun.status as WorkflowRun['status']} /> : null}
               </dd>
               <dt>方式</dt>
-              <dd title={modeCopy?.detail}>{modeCopy?.label}</dd>
+              <dd title={modeCopy?.detail}>{modeCopy?.label ?? '读取运行详情后显示'}</dd>
               <dt>阶段</dt>
-              <dd>{run ? stageLabel(run.stage) : '尚无运行'}</dd>
+              <dd>{latestRun ? (latestRun.stage == null ? '无阶段记录' : stageLabel(latestRun.stage as WorkflowRun['stage'])) : '尚无运行详情'}</dd>
               {dispatchParts.length > 0 ? (
                 <>
                   <dt>派发</dt>
@@ -2257,6 +2264,8 @@ function ThreadOverview({
         </dl>
       </div>
 
+      {formal ? <div className="panel info">{taskRunGuidance(formal)}</div> : null}
+
       {/* 完整原始要求：不裁剪、不折叠，长文本完整可读（原消息身份与定位能力保留） */}
       <div className="card tight">
         <div className="section-title">原始要求（原消息）</div>
@@ -2269,7 +2278,7 @@ function ThreadOverview({
       </div>
 
       {task ? (
-        <ThreadTaskFacts threadId={anchor.threadId ?? ''} task={task} />
+        <ThreadTaskFacts threadId={anchor.threadId ?? ''} task={task} formal={formal} />
       ) : (
         <div className="panel info">
           <div className="panel-title"><Icon name="info" size={13} /> 记录串没有任务、运行与验收</div>
@@ -2328,7 +2337,7 @@ function ThreadPendingStrip({
           <div className="row tight wrap">
             <Icon name="octagon" size={13} />
             <span className="strong" style={{ fontSize: 12 }}>任务被阻塞，需要你处理</span>
-            <span className="small faint truncate">缺少必要的前置成果，已有部分成果保留</span>
+            <span className="small faint truncate">请在详情查看正式受阻原因与下一步</span>
             <div className="spacer" />
             <button className="btn sm" onClick={() => onOpenSection(run ? 'run' : 'overview')}>
               查看详情
@@ -2614,19 +2623,15 @@ function ThreadArtifacts({
 
 /* ---------------- 任务事实卡（ThreadOverview 内嵌——task.get 真实投影） ---------------- */
 
-function ThreadTaskFacts({ threadId, task }: { threadId: string; task?: Task }) {
+function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: Task; formal: TaskDetailsResult | null }) {
   const s = useStore((x) => x);
   const detail = (s as AppState & { threadTasks?: Record<string, { revision: number; stopGeneration: number; activeRun: { id: string; status: string } | null; lastStartupFailureMessage?: string | null }> }).threadTasks?.[threadId];
   if (task == null) return null;
   return (
+    <>
     <div className="card tight">
-      <div className="section-title">任务事实（task.get）</div>
-      <dl className="kv">
-        <dt>任务 revision</dt><dd className="mono-sm">{detail?.revision ?? task.revision}</dd>
-        <dt>停止代次</dt><dd className="mono-sm">{detail?.stopGeneration ?? '—'}</dd>
-        <dt>活跃 run</dt>
-        <dd>{detail?.activeRun != null ? `${detail.activeRun.id.slice(0, 14)}… · ${detail.activeRun.status}` : '无（未在执行或已结束）'}</dd>
-      </dl>
+      <div className="section-title">任务当前事实</div>
+      <div className="small">{detail?.activeRun != null ? `最近运行：${detail.activeRun.status}` : '尚无运行'}</div>
       {detail?.lastStartupFailureMessage != null ? (
         <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div>
       ) : null}
@@ -2647,30 +2652,18 @@ function ThreadTaskFacts({ threadId, task }: { threadId: string; task?: Task }) 
             );
           }}
         >复制定位链接</button>
-        <span className="faint small">子任务/改动集/参与缺席明细的只读投影未接入本卡——经「⋯ → 原界面」可查，不伪造。</span>
       </div>
+      <details className="small faint"><summary>操作快照身份</summary>任务 revision {detail?.revision ?? task.revision} · 停止代次 {detail?.stopGeneration ?? '—'} · 最近 run {detail?.activeRun?.id ?? '—'}</details>
     </div>
+    {formal ? <TaskExtraFacts detail={formal} /> : null}
+    </>
   );
 }
 
 /* ---------------- 运行事实（详情分组——activeRun 真实投影） ---------------- */
 
-function ThreadRunFacts({ run }: { run: WorkflowRun }) {
-  return (
-    <div className="msg-list">
-      <div className="card tight">
-        <div className="section-title">当前运行</div>
-        <dl className="kv">
-          <dt>run</dt><dd className="mono-sm">{run.id}</dd>
-          <dt>状态</dt><dd><RunStatusTag status={run.status} /></dd>
-        </dl>
-        <div className="small faint" style={{ marginTop: 6 }}>
-          轮次/工具活动/用量明细的只读投影尚未接入本分组——经「⋯ → 原界面」可查完整运行记录。
-          这里只显示 task.get 返回的真实活跃 run 事实，不伪造阶段与预算。
-        </div>
-      </div>
-    </div>
-  );
+function ThreadRunFacts({ detail, onSelectRun }: { detail: TaskDetailsResult | null; onSelectRun: (runId: string) => void }) {
+  return detail ? <RunExtraFacts detail={detail} onSelectRun={onSelectRun} /> : <div className="card tight">运行详情尚未读到；可刷新重试。</div>;
 }
 
 /* ---------------- 交付与验收（详情分组——正式验收/返工两步走，冻结三重身份） ---------------- */
@@ -2782,10 +2775,8 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
 
 /* ---------------- 串内活动 tab ---------------- */
 
-function ThreadActivity({ threadId, onChangeTab }: { threadId: string; onChangeTab: (t: ThreadTabLocal) => void }) {
+function ThreadActivity({ threadId, detail, onChangeTab }: { threadId: string; detail: TaskDetailsResult | null; onChangeTab: (t: ThreadTabLocal) => void }) {
   const s = useStore((x) => x);
-  const turns = s.turns.filter((t) => t.threadId === threadId);
-  const diags = s.diagnostics.filter((d) => d.trace.turnId && turns.some((t) => t.id === d.trace.turnId));
   /**
    * 普通过程说明（路由推导、程序校验通过、派发规则、阶段推进）。
    *
@@ -2797,10 +2788,8 @@ function ThreadActivity({ threadId, onChangeTab }: { threadId: string; onChangeT
   return (
     <div className="msg-list">
       <div className="panel">
-        <div className="panel-title"><Icon name="terminal" size={13} /> 工具输出折叠在运行详情</div>
-        这是本回复串的执行记录：成员的原始工具活动、用量与诊断不进入对话正文。
-        普通的路由推导与程序校验说明也从对话里移到这里，故障与权限请求仍留在对话中。
-        全局「待我处理」在左侧栏底部，是另一回事。
+        <div className="panel-title"><Icon name="terminal" size={13} /> 活动与进展</div>
+        正式任务事件按时间列在下方；工具事件来自 worker 审计，用量见运行详情。
       </div>
 
       {/* 普通过程说明：正常信息不占对话区域，但记录一条都不少 */}
@@ -2823,42 +2812,8 @@ function ThreadActivity({ threadId, onChangeTab }: { threadId: string; onChangeT
         </>
       ) : null}
 
-      <div className="section-title">本串执行记录（AgentTurn）<span className="count">{turns.length}</span></div>
-      {turns.map((t) => (
-        <div key={t.id} className="card tight">
-          <div className="row tight wrap">
-            <Avatar name={byId(s.members, t.memberId)?.displayName ?? '?'} ordinal={byId(s.members, t.memberId)?.ordinal} color={memberColor(t.memberId)} size={18} />
-            <span className="strong" style={{ fontSize: 12 }}>{memberLabel(byId(s.members, t.memberId))}</span>
-            <Tag plain icon="layers">{stageLabel(t.stageKey)}</Tag>
-            <Tag plain>attempt {t.attempt}</Tag>
-            <div className="spacer" />
-            <button className="btn ghost sm" onClick={() => onChangeTab('run')}>
-              运行详情 <Icon name="chevron-right" size={11} />
-            </button>
-          </div>
-          <div className="row tight wrap small faint" style={{ marginTop: 5 }}>
-            <span className="mono-sm">dispatchKey {t.dispatchKey}</span>
-            <span>epoch {t.epoch}</span>
-            {t.durationMs ? <span>{formatDuration(t.durationMs)}</span> : null}
-          </div>
-        </div>
-      ))}
-
-      {/**
-       * 诊断不再在这里重复一遍（减负：同一份内容两处渲染）。
-       * 运行详情里有完整的诊断条目与上下文，这里只给出口与数量。
-       */}
-      <div className="card tight">
-        <div className="row tight wrap">
-          <Icon name="info" size={13} className="faint" />
-          <span className="strong" style={{ fontSize: 12 }}>错误与原始诊断（{diags.length}）</span>
-          <span className="small faint">完整条目带 trace 字段，在运行详情里查看，避免两处各渲染一份</span>
-          <div className="spacer" />
-          <button className="btn sm" onClick={() => onChangeTab('run')}>
-            运行详情 <Icon name="chevron-right" size={11} />
-          </button>
-        </div>
-      </div>
+      {detail ? <TaskEventFacts detail={detail} /> : <div className="card tight faint small">正式活动尚未读到；可刷新重试。</div>}
+      {detail?.runs.some((r) => r.turns.length > 0) ? <button className="btn sm" onClick={() => onChangeTab('run')}>查看执行轮次与用量 <Icon name="chevron-right" size={11} /></button> : null}
     </div>
   );
 }

@@ -22,7 +22,7 @@ import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 
-interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean }
+interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string }
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
 interface RuntimeInfo {
   binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null };
@@ -50,6 +50,8 @@ export function MembersPage() {
   const rooms = useMemo(() => (projectId != null && projectId !== '' ? allRooms.filter((r) => r.projectId === projectId) : allRooms), [allRooms, projectId]);
   const tasks = useMemo(() => (projectId != null && projectId !== '' ? allTasks.filter((t) => t.projectId === projectId) : allTasks), [allTasks, projectId]);
   const [members, setMembers] = useState<MemberRow[] | null>(null);
+  const [membersProjectId, setMembersProjectId] = useState<string | null>(null);
+  const membersInScope = membersProjectId === projectId ? members : null;
   const [roomMembers, setRoomMembers] = useState<Record<string, MemberRow[]>>({});
   const [runtimes, setRuntimes] = useState<Record<string, RuntimeInfo>>({});
   /** runtime/房间名单的逐项读取失败（r55：查询失败≠未绑定——分列如实，
@@ -68,18 +70,24 @@ export function MembersPage() {
       const r = await command<{ items: MemberRow[] }>('member.list', { projectId });
       if (gen !== genRef.current) return; // 已切换——迟到响应不污染
       setMembers(r.items);
+      setMembersProjectId(projectId);
       const rt: Record<string, RuntimeInfo> = {};
       const rtErr: Record<string, string> = {};
-      await Promise.all(r.items.map(async (m) => {
+      const chunks = Array.from({ length: Math.ceil(r.items.length / 500) }, (_, n) => r.items.slice(n * 500, (n + 1) * 500));
+      await Promise.all(chunks.map(async (chunk) => {
         try {
-          const info = await command<RuntimeInfo>('member.runtime', { memberId: m.id });
-          if (gen === genRef.current) rt[m.id] = info;
+          const batch = await command<{ projectId: string; items: Array<{memberId:string;info?:RuntimeInfo;error?:{message:string}}> }>('member.runtimes', { projectId, memberIds: chunk.map(m => m.id) });
+          if (gen !== genRef.current || batch.projectId !== projectId) return;
+          for (const row of batch.items) {
+            if (row.info != null) rt[row.memberId] = row.info;
+            else rtErr[row.memberId] = row.error?.message ?? '成员配置未提供';
+          }
         } catch (e) {
-          if (gen === genRef.current) rtErr[m.id] = (e as Error).message; // 查询失败如实记录
+          if (gen === genRef.current) for (const m of chunk) rtErr[m.id] = (e as Error).message;
         }
       }));
       if (gen !== genRef.current) return;
-      setRuntimes(rt);
+      setRuntimes(prev => Object.fromEntries(r.items.flatMap(m => rt[m.id] != null ? [[m.id, rt[m.id]]] : prev[m.id] != null ? [[m.id, prev[m.id]]] : [])));
       setRuntimeErrs(rtErr);
       const perRoom: Record<string, MemberRow[]> = {};
       const roomErr: Record<string, string> = {};
@@ -92,14 +100,14 @@ export function MembersPage() {
         }
       }));
       if (gen !== genRef.current) return;
-      setRoomMembers(perRoom);
+      setRoomMembers(prev => Object.fromEntries(rooms.flatMap(room => perRoom[room.id] != null ? [[room.id, perRoom[room.id]]] : prev[room.id] != null ? [[room.id, prev[room.id]]] : [])));
       setRoomMemberErrs(roomErr);
     } catch (e) {
       if (gen === genRef.current) setErr((e as Error).message);
     }
   }, [projectId, rooms]);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { void reload(); return () => { genRef.current += 1; }; }, [reload]);
 
   const toggle = async (m: MemberRow) => {
     setBusyId(m.id);
@@ -148,6 +156,7 @@ export function MembersPage() {
    */
   const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string } => {
     const rt = runtimes[m.id];
+    if (runtimeErrs[m.id] != null) return { text: `配置读取失败（${runtimeErrs[m.id]}）${rt != null ? '——保留已确认的配置，可刷新重试' : '——暂无已确认配置，可刷新重试'}`, problem: true };
     if (rt == null) {
       const failure = runtimeErrs[m.id];
       if (failure != null) return { text: `查询失败（${failure}）——保留上次事实`, problem: true };
@@ -189,7 +198,7 @@ export function MembersPage() {
             />
           </label>
           <span className="filter-note">
-            {members?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
+            {membersInScope?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
           </span>
           <div className="spacer" />
           <button
@@ -209,15 +218,15 @@ export function MembersPage() {
           <div className="panel info">尚未打开项目——从侧栏项目菜单或顶栏「项目管理」进入（成员按项目分列）。</div>
         ) : null}
         {err != null ? <div className="panel warning">成员装载失败：{err}（可刷新重试）</div> : null}
-        {members == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
+        {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
-        {members != null && members.length === 0 ? (
+        {membersInScope != null && membersInScope.length === 0 ? (
           <div className="panel info">这个项目还没有成员。成员在项目注册时建立；添加新成员的界面入口属后续批次（不放假成功按钮）。</div>
         ) : null}
 
         {/* 成员卡片（原型 grid-2：头像+名称+身份标签 / runtime 有效来源 / 在跑任务） */}
         <div className="grid grid-2">
-          {members?.map((m) => {
+          {membersInScope?.map((m) => {
             const rt = runtimeLabel(m);
             const running = tasks.filter((t) => t.ownerMemberId === m.id && ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(t.status));
             return (
@@ -233,19 +242,23 @@ export function MembersPage() {
                       {!m.enabled ? <Tag tone="neutral" icon="slash">已停用</Tag> : null}
                     </div>
                     <div className="small faint" style={{ marginTop: 3 }}>
+                      {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
                       {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>runtime：{rt.text}</span> : <>runtime：{rt.text}</>}
                     </div>
                   </div>
                 </div>
                 <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
-                  {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <div data-zs-image-capability={m.id}>
+                  {running.length > 0 ? `负责任务 ${running.map((t) => `#${t.roomTaskNumber}`).join('、')}` : '当前没有负责的未结束任务'}
+                  {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
+                  {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <details data-zs-image-capability={m.id} style={{ marginTop: 5 }}>
+                    <summary>识图能力：{runtimes[m.id]!.imageInput!.status === 'supported' ? '已认证' : '未认证'} · 查看配置依据</summary>
+                    <div style={{ marginTop: 4 }}>
                     配置：{runtimes[m.id]!.imageInput!.configuration} · 模型ID：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
                     渠道：{runtimes[m.id]!.imageInput!.channel}<br />
                     协议：{runtimes[m.id]!.imageInput!.protocol}<br />
-                    真实识图：{runtimes[m.id]!.imageInput!.status === 'supported' ? '已认证' : '未认证'} · {runtimes[m.id]!.imageInput!.reason}
-                  </div> : null}
-                  {running.length > 0 ? `负责任务 ${running.map((t) => `#${t.roomTaskNumber}`).join('、')}` : '当前没有负责的未结束任务'}
-                  {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
+                    真实识图：{runtimes[m.id]!.imageInput!.reason}
+                    </div>
+                  </details> : null}
                 </div>
                 {m.principalType === 'agent' ? (
                   <div className="row tight" style={{ marginTop: 10 }}>

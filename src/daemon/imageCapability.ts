@@ -22,7 +22,8 @@ export function claudeCertificationMismatches(identity: {executableHash:string;e
 }
 
 /** Immutable certificate: match the actual project launch context, never just a model label. */
-export function memberImageCapability(db: ZhongshuoDatabase, memberId: string) {
+export type ImageCapabilityReadContext = Map<string, ReturnType<typeof claudeLaunchIdentity>>;
+export function memberImageCapability(db: ZhongshuoDatabase, memberId: string, readContext?: ImageCapabilityReadContext) {
   const runtime = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
   const project = db.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(memberId) as {canonical_path:string} | undefined;
   const base = { memberId, kind: runtime.kind, model: runtime.model, permissionMode: runtime.permissionMode ?? 'plan',
@@ -35,8 +36,16 @@ export function memberImageCapability(db: ZhongshuoDatabase, memberId: string) {
   if (runtime.kind !== 'claude') return { ...base, reason: runtime.kind === 'codex' ? 'R76 gpt-6-luna 上游响应等待超时；没有真实识图结果，不代表模型名称无效或不支持图片' : '运行时未配置或未支持图片协议' };
   if (project == null) return { ...base, reason: '成员项目上下文缺失，无法核实执行配置' };
   try {
-    const identity = claudeLaunchIdentity({ executable: runtime.executable ?? undefined, model: runtime.model ?? undefined,
-      permissionMode: (runtime.permissionMode ?? 'plan') as 'plan' }, project.canonical_path);
+    const options = { executable: runtime.executable ?? undefined, model: runtime.model ?? undefined,
+      permissionMode: (runtime.permissionMode ?? 'plan') as 'plan' };
+    const contextKey = JSON.stringify({ ...options, cwd: project.canonical_path });
+    // Only the bulk display command supplies this request-local context. Submit/worker/adapter
+    // never receive it and still re-read files, environment and managed policies independently.
+    let identity = readContext?.get(contextKey);
+    if (identity == null) {
+      identity = claudeLaunchIdentity(options, project.canonical_path);
+      readContext?.set(contextKey, identity);
+    }
     const actual = { ...base, channel: identity.channel, endpointSource: identity.endpointSource, identityKey: identity.identityKey };
     const mismatches = claudeCertificationMismatches(identity, runtime.model, runtime.permissionMode);
     return mismatches.length ? { ...actual, reason: mismatches.join('；') } : { ...actual, status: 'supported' as const, evidence: certification.evidence, reason: '真实识图已认证（工程 PNG；当前 CLI、渠道、模型ID与 plan 权限匹配）' };
