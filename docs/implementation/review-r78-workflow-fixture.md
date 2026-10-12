@@ -13,6 +13,11 @@
 
 ## 最终启动器连接约束
 
-先用上述脚本生成独立根并完成写入，关闭脚本数据库句柄。v17 最终启动器必须核对 BUILD 与 `--src` 对应同一构建，只给此工程实例显式 `ZS_APP_DATA=<独立根>\app-data`；若需让该实例执行新任务，才显式启用 `ZS_RUNTIME=fake` 与 `ZS_ALLOW_FAKE=1`。日常启动器不可默认 fake、seed 或此根。启动时本机默认 `localUserId` 与夹具一致，故 DM audience 可见；换机器或用户身份需重新生成夹具，不能改库冒充成员。
-
+预生成持久夹具只用于命令层磁盘重开与只读身份对照。daily 启动器拥有自己的 server-data/pipe，清除外部 ZS_APP_DATA/ZS_RUNTIME 覆盖，因此不能把环境变量指向预生成库冒充最终启动器完整流程。最终形态验证在新副本 server-data 建工程 marker，按下节实际 UI 发送、worker 自然交付并重开；用户原包与原根不参与。
 本次重开是命令层磁盘重开；最终发布窗口、BUILD、`--src` 来源及视觉/交互审计由发布总体验证单独记录，不能引用本测试声称已通过。
+
+## 最终启动器工程验证（待 v17 候选来源）
+
+`scripts/verify-r78-workflow-launcher.cjs --src <最终日常包>` 只接受显式来源，校验源包与自有副本的 BUILD/MANIFEST 及 BAT 字节一致。它将 `scripts/lib/r78-live-engineering-daemon.ts` 编译到**副本** `server-data/engineering/daemon.cjs`，创建三字段 `engineering-r78.json`（nonce、规范数据根、入口绝对路径）；正常 daily 包不含 helper 或 marker。该入口由真实 BAT 经过受控 marker gate 传给 UI，UI 正常 spawn 它。入口从同一副本的最终打包 `daemon.cjs` 取得 `startDaemon`，只注入单个工程 Fake adapter，令未绑定成员走这个实例；强制 `ZS_REAL_DISPATCH_GUARD=1`，不透传真实模型权限旗标。
+
+验证脚本先测无 token 且父环境污染时 fake/guard 被清理，以及错 token、缺调试端口、marker 数据根错配时 BAT 拒绝启动；然后在真实 UI 点击房间和 DM 的发送、返工意见、执行返工、验收，核排队/运行/进度/交付两版/成果文档与项目文件；旧交付验收须 `STALE_REVISION`。它关闭并重开同一启动器，比对新 daemon PID/同 BUILD、任务身份及 `real_calls=0`。历史 v16 旧 BAT 负例：`dist/desktop/review-r78-v16-launcher-preflight-3/result.json` 证明无 token 的正常清理；v16 尚无工程直通，正例 ready 超时为预期失败，不能作为 v17 通过证据。最终结果以 v17 的 `result.json` 为准。

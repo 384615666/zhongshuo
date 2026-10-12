@@ -49,7 +49,19 @@ const BAT = ['@echo off',
   'rem Engineering pass-through (verification only, documented): ZS_DEV25_DEBUG_PORT (CDP),',
   'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (dir-picker), ZS_SAVEAS_AUTO_DIR (isolated save verification).',
   'for /f "delims== tokens=1" %%V in (\'set ZS_ 2^>nul\') do (',
-  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" set "%%V="',
+  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" if /i not "%%V"=="ZS_R78_ENGINEERING_TOKEN" if /i not "%%V"=="ZS_DAEMON_ENTRY" set "%%V="',
+  ')',
+  'rem R78 explicit engineering entry: own isolated root, nonce marker, debug port, no bundled fixture.',
+  'if not "!ZS_R78_ENGINEERING_TOKEN!"=="" (',
+  '  if "!ZS_DEV25_DEBUG_PORT!"=="" exit 9',
+  "  powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; try { $root=[IO.Path]::GetFullPath($env:APP_DIR).TrimEnd([char]92); $entry=[IO.Path]::GetFullPath($env:ZS_DAEMON_ENTRY); $m=Get-Content -LiteralPath (Join-Path $root 'engineering-r78.json') -Raw | ConvertFrom-Json; if ($m.token -cne $env:ZS_R78_ENGINEERING_TOKEN -or [IO.Path]::GetFullPath($m.appDataDir).TrimEnd([char]92) -ine $root -or [IO.Path]::GetFullPath($m.daemonEntry) -ine $entry -or -not $entry.StartsWith(($root+[char]92+'engineering'+[char]92),[StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $entry -PathType Leaf)) { exit 9 }; exit 0 } catch { exit 9 }\"",
+  '  if errorlevel 1 (',
+  '    echo Engineering root identity mismatch. Startup refused.',
+  '    exit 9',
+  '  )',
+  '  set ZS_APP_MODE=fake-sim',
+  ') else (',
+  '  set "ZS_DAEMON_ENTRY="',
   ')',
   'rem Pipe name is generated once per data root (package copies never collide).',
   'if not exist "%APP_DIR%\\pipe-name.txt" (',
@@ -86,6 +98,15 @@ writeFileSync(join(out, 'start-desktop.bat'), BAT + '\r\n', 'utf8');
 //    「已有新逻辑身份的数据整根移动（自动继承）」两条路径——R68 真实旧版继承收口）
 writeFileSync(join(out, 'README-DAILY.md'), `# 众说·日常桌面版 ${outArg ?? 'desktop-daily-win-v1'}
 
+## R78 桌面工作流（2026-10-12）
+
+任务、运行与交付分别呈现；详情通过正式只读接口显示实际执行成员、进展、成果版本、验收和返工。
+本轮工程验证零新增真实模型调用。日常入口仍使用用户实际配置，不附带演示数据或默认 fake。
+成员卡可进入单成员详情，修改运行程序/模型并回读实际认证状态；未接入的系统动作说明真实限制。
+主池、看板、活动与任务详情保持同一实体，读取失败保留已确认事实并显示原因。
+本轮只需一次约 5 分钟自然确认：打开常用项目 → 从成员卡查看配置 → 从看板打开一项已有任务 → 查看运行详情与成果文件 → 返回待我处理或活动定位同一任务 → 关窗重开。图片结果继承，不重复历史长清单。
+工程验证专用直通：只有显式 ZS_R78_ENGINEERING_TOKEN、调试端口和本副本 server-data/engineering-r78.json 的 nonce / appDataDir / daemonEntry 完全匹配，且外部入口在该独立根 engineering/ 下时才允许 ZS_DAEMON_ENTRY；缺少或错配拒绝启动。正常启动清除此变量。工程 helper 不随包。
+
 ## R77 图片认证配置与诊断（2026-10-11）
 
 成员页与图片发送区分别显示配置、适配器协议回放、真实识图认证及实际模型 ID / 渠道来源。
@@ -102,7 +123,7 @@ Codex gpt-6-luna 已在本机模型列表找到，R76 失败发生在上游响�
 - Codex/gpt-6-luna 的一次真实图片认证超时，未认证；可仅记录、移除图片继续，或改选可用成员后发送。
 - 数据库迁移 001–048 未修改；旧包、旧数据、草稿、未知发送账本保留；无自动发送、对账或解除保护。
 
-只需一次约 3 分钟增量确认：选一张图片 → 预览并缩放 → 仅记录发送 → 等待刷新后图片仍在 → 关窗重开后再预览。
+R76 图片发送与预览已获用户确认，本轮继承该结果，不重复历史手测清单。
 
 **这是给你日常使用的正式入口**——不是演练包：启动**不会**创建 Guide 演练会话或模拟回复，
 也不会自动调用任何模型；真实模型调用只在你主动发送消息给已配置的成员时发生。
@@ -158,7 +179,7 @@ Codex gpt-6-luna 已在本机模型列表找到，R76 失败发生在上游响�
 - **文件树打开的文件磁盘上被外部修改**：预览工具行会出现「磁盘已更新 · 重新加载」，
   保存被拦截——点重新加载拿到新快照后再保存（不会静默把新字节当旧版本存出）。
 - **Git 历史/差异/停止任务/验收/返工/附件/搜索/导出**：都在新界面直接可用；少数未换装
-  操作（Git 写操作、远程访问变更等）有直达原界面按钮。
+  操作有直达原界面按钮；Git 写操作和连接设备设置在新界面有正式入口。
 
 工程验证与日常运行的边界：本包的启动/配置/仅记录/草稿/真实旧版继承（v3/v4 端到端）/
 文件阅读与原件保存/交付文档/恢复分列路径已由工程在独立副本验证（零真实模型调用）；
