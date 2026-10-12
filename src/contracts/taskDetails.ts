@@ -5,6 +5,17 @@ export interface TaskDetailsParams { projectId: string; taskId: string; runId?: 
 export const taskDetailsParamsSchema = z.strictObject({
   projectId: z.string().min(1), taskId: z.string().min(1), runId: z.string().min(1).optional(),
 });
+export const taskHistoryParamsSchema = z.strictObject({
+  projectId: z.string().min(1), taskId: z.string().min(1),
+  kind: z.enum(['runs', 'activity', 'deliveries']), runId: z.string().min(1).optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+});
+export type TaskHistoryParams = z.infer<typeof taskHistoryParamsSchema>;
+export interface TaskHistoryPage {
+  kind: TaskHistoryParams['kind'];
+  items: TaskDetailRun[] | TaskDetailEvent[] | TaskDetailsResult['deliveries'];
+  nextCursor: string | null;
+}
 
 export const conversationFailedTasksParamsSchema = z.strictObject({ projectId: z.string().min(1), conversationId: z.string().min(1) });
 export interface FailedDmTask {
@@ -25,6 +36,8 @@ export interface TaskDetailRun {
   turns: Array<{ id: string; memberId: string; displayName: string; status: string; stageKey: string; purpose: string; attempt: number; usage: Array<{ normalized: unknown; quality: string }>; usageTruncated: boolean }>;
   turnsTruncated: boolean;
   events: TaskDetailEvent[]; eventsTruncated: boolean;
+  /** False means only a run summary was read, never an authoritative empty detail. */
+  detailLoaded?: boolean;
 }
 
 export interface TaskDetailsResult {
@@ -40,5 +53,6 @@ export interface TaskDetailsResult {
   deliveries: Array<{ id: string; revision: number; manifestHash: string; runId: string | null; reviewStatus: string; reviewedAt: number | null; reviewNote: string | null; artifactRefs: string[]; changeSetRefs: string[]; verificationRefs: string[]; locate: string }>;
   changeSets: Array<{ id: string; applicationStatus: string; beforeRef: string; afterRef: string; locate: string; files: Array<{ path: string; state: string; sha256: string | null; size: number | null }>; filesTruncated: boolean }>;
   artifacts: Array<{ id: string; kind: string; revision: number; hash: string }>;
+  nextCursors?: { runs: string | null; activity: string | null; deliveries: string | null; runActivity: string | null };
   truncated: { children: boolean; runs: boolean; events: boolean; deliveries: boolean; changeSets: boolean; artifacts: boolean };
 }

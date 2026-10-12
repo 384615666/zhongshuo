@@ -154,7 +154,10 @@ describe('R78 task.details formal read projection', () => {
       expect(selected.truncated.events).toBe(true);
       expect(selected.events.some((e) => e.toolCallId === 'first_read')).toBe(false);
       expect(selected.runs.find((r) => r.id === first.latestRunId)?.events.map((e) => e.toolCallId)).toContain('first_read');
-      expect(selected.runs.find((r) => r.id === selected.latestRunId)?.eventsTruncated).toBe(true);
+      // R79 unselected summaries are unread, not authoritative empty details.
+      expect(selected.runs.find((r) => r.id === selected.latestRunId)?.detailLoaded).toBe(false);
+      const latestDetails = (await env.raw('task.details', { projectId: 'p1', taskId })).data as TaskDetailsResult;
+      expect(latestDetails.runs.find((r) => r.id === selected.latestRunId)?.eventsTruncated).toBe(true);
       expect(selected.runs.find((r) => r.id === first.latestRunId)?.eventsTruncated).toBe(false);
     } finally { env.close(); }
   });

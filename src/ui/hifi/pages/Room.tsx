@@ -2175,7 +2175,7 @@ function ThreadDetails({
       </div>
 
       <div className="details-body">
-        {task ? <DetailReadState error={formal.error} loading={formal.loading} refresh={formal.refresh} /> : null}
+        {task ? <DetailReadState error={formal.error} loading={formal.loading} updatedAt={formal.updatedAt} refresh={formal.refresh} /> : null}
         {active !== section ? (
           <div className="panel info" style={{ margin: '0 0 10px' }}>
             <div className="panel-title"><Icon name="info" size={13} /> 该分组在当前任务上不适用</div>

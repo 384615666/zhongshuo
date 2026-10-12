@@ -1,33 +1,69 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
+import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun } from '../../../contracts/taskDetails.ts';
 import { command } from '../bridge';
 import { RunStatusTag, TaskStatusTag } from './ui';
 import { fullTime } from '../lib/format';
 
-export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined) {
-  const [state, setState] = useState<{ taskId: string; data: TaskDetailsResult | null; error: string | null; loading: boolean }>({ taskId: '', data: null, error: null, loading: false });
-  const generation = useRef(0);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [requested, setRequested] = useState<{ taskId: string; runId: string } | null>(null);
-  const selectedRunId = requested != null && requested.taskId === taskId ? requested.runId : runId;
-  const refresh = useCallback(() => setRefreshKey((x) => x + 1), []);
-  const selectRun = useCallback((id: string) => { if (taskId) setRequested({ taskId, runId: id }); }, [taskId]);
-  useEffect(() => {
-    const gen = ++generation.current;
-    if (!projectId || !taskId) return;
-    setState((old) => ({ taskId, data: old.taskId === taskId ? old.data : null, error: null, loading: true }));
-    void command<TaskDetailsResult>('task.details', { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}) }).then(
-      (data) => { if (generation.current === gen) setState({ taskId, data, error: null, loading: false }); },
-      (e: unknown) => { if (generation.current === gen) setState((old) => ({ taskId, data: old.taskId === taskId ? old.data : null, error: e instanceof Error ? e.message : String(e), loading: false })); },
-    );
-    return () => { generation.current += 1; };
-  }, [projectId, taskId, revision, selectedRunId, runStatus, refreshKey]);
-  return { data: state.taskId === taskId ? state.data : null, error: state.taskId === taskId ? state.error : null, loading: state.taskId === taskId && state.loading, refresh, selectRun };
+// Pending transports only, not a fact cache. Returning to the same target joins its existing read.
+const detailReads = new Map<string, Promise<TaskDetailsResult>>();
+function readDetails(key: string, params: { projectId: string; taskId: string; runId?: string }) {
+  const existing = detailReads.get(key);
+  if (existing) return existing;
+  const pending = command<TaskDetailsResult>('task.details', params).finally(() => {
+    if (detailReads.get(key) === pending) detailReads.delete(key);
+  });
+  detailReads.set(key, pending);
+  return pending;
 }
 
-export function DetailReadState({ error, loading, refresh }: { error: string | null; loading: boolean; refresh: () => void }) {
+export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined) {
+  const target = JSON.stringify([projectId, taskId]);
+  const [requested, setRequested] = useState<{ target: string; runId: string } | null>(null);
+  const selectedRunId = requested?.target === target ? requested.runId : runId;
+  const key = JSON.stringify([projectId, taskId, selectedRunId]);
+  const [state, setState] = useState<{ key: string; data: TaskDetailsResult | null; error: string | null; loading: boolean; updatedAt: number | null }>({ key: '', data: null, error: null, loading: false, updatedAt: null });
+  const read = useRef<(() => void) | null>(null);
+  const source = useRef({ key, revision, runStatus });
+  const refresh = useCallback(() => read.current?.(), []);
+  const selectRun = useCallback((id: string) => { if (taskId) setRequested({ target, runId: id }); }, [target, taskId]);
+  useEffect(() => {
+    if (!projectId || !taskId) return;
+    let alive = true; let busy = false; let pending = false; let intent = 0;
+    const visible = () => document.visibilityState !== 'hidden' && !document.body.classList.contains('legacy-on');
+    const request = () => {
+      if (!alive) return;
+      if (!visible()) { pending = true; return; }
+      if (busy) { pending = true; return; }
+      busy = true; pending = false; const ticket = ++intent;
+      setState(old => ({ key, data: old.key === key ? old.data : null, error: old.key === key ? old.error : null, updatedAt: old.key === key ? old.updatedAt : null, loading: true }));
+      void readDetails(key, { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}) }).then(
+        data => { if (alive && ticket === intent && visible()) setState({ key, data, error: null, loading: false, updatedAt: Date.now() }); },
+        (e: unknown) => { if (alive && ticket === intent && visible()) setState(old => ({ key, data: old.key === key ? old.data : null, updatedAt: old.key === key ? old.updatedAt : null, error: e instanceof Error ? e.message : String(e), loading: false })); },
+      ).finally(() => { busy = false; if (alive && pending && visible()) request(); });
+    };
+    const visibility = () => { if (!visible()) { intent++; pending = true; } else request(); };
+    read.current = request;
+    document.addEventListener('visibilitychange', visibility);
+    let wasVisible = visible();
+    const takeover = new MutationObserver(() => { const now = visible(); if (now !== wasVisible) { wasVisible = now; visibility(); } });
+    takeover.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    // Polls skip in-flight reads rather than accumulating a queue. Explicit intent coalesces once.
+    const timer = window.setInterval(() => { if (!busy && visible()) request(); }, 5000);
+    request();
+    return () => { alive = false; intent++; read.current = null; window.clearInterval(timer); takeover.disconnect(); document.removeEventListener('visibilitychange', visibility); };
+  }, [projectId, taskId, selectedRunId, key]);
+  useEffect(() => {
+    const old = source.current;
+    source.current = { key, revision, runStatus };
+    if (old.key === key && (old.revision !== revision || old.runStatus !== runStatus)) refresh();
+  }, [key, revision, runStatus, refresh]);
+  return { data: state.key === key ? state.data : null, error: state.key === key ? state.error : null, loading: state.key === key && state.loading, updatedAt: state.key === key ? state.updatedAt : null, refresh, selectRun };
+}
+
+export function DetailReadState({ error, loading, updatedAt, refresh }: { error: string | null; loading: boolean; updatedAt?: number | null; refresh: () => void }) {
   return <div className="row tight wrap small" style={{ marginBottom: 8 }}>
-    {error ? <span className="panel warning">详情读取失败：{error}。以下保留上次成功读取的事实。</span> : null}
+    {error ? <span className="panel warning">详情读取失败：{error}。{updatedAt ? '保留上次成功读取的事实。' : '尚未取得详情快照。'}</span> : null}
+    {updatedAt ? <span className="faint">更新于 {fullTime(updatedAt)}</span> : <span className="faint">尚未读取详情</span>}
     {loading ? <span className="faint">正在读取正式详情…</span> : null}
     <button className="btn ghost sm" onClick={refresh}>刷新详情</button>
   </div>;
@@ -55,11 +91,53 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   return '查看活动、交付及验收记录，确认任务下一步。';
 }
 
+const qualityLabel: Record<string,string> = { reported:'渠道报告', estimated:'估算', unknown:'未确认' };
+const eventLabel: Record<string,string> = {
+  'tool.started':'工具开始', 'tool.completed':'工具结束', 'turn.started':'开始执行', 'turn.completed':'执行完成', 'turn.failed':'执行失败',
+  'usage.updated':'用量更新', 'message.completed':'回复已保存', 'task.reviewRecorded':'验收意见已记录', 'task.reworkRequested':'返工已请求',
+  'run.reconcileRequired':'运行结果需要核对', 'task.deliveryCreated':'新交付已保存', 'run.started':'运行开始', 'run.failed':'运行失败',
+};
+export function activityLabel(kind: string): string { return eventLabel[kind] ?? (kind.includes('Failed') || kind.includes('failure') ? '执行诊断' : '执行记录'); }
+export function budgetText(value: unknown): string {
+  if (value == null || typeof value !== 'object') return '无可解析的预算记录';
+  const b=value as Record<string,unknown>; const n=(key:string)=>typeof b[key]==='number'?String(b[key]):'未提供';
+  return `调用上限 ${n('maxTurns')} · 已结算 ${n('usedTurns')} · 在途预占 ${n('inFlightReservedTurns')}。这是调用额度，不代表费用或 token 余额。`;
+}
+
+/** Only the newest cumulative record is summarized; never add cumulative snapshots. */
+export function usageSummary(records: Array<{normalized:unknown;quality:string}>): string {
+  const cumulative=records.find(u=>u.normalized!=null&&typeof u.normalized==='object'&&(u.normalized as Record<string,unknown>).accounting==='cumulative');
+  return cumulative ? `最近累计上报：${usageText(cumulative.normalized,cumulative.quality)}；其余记录未重复相加。` : '没有累计上报；以下是独立增量或未明口径的记录，不据部分记录推算总用量。';
+}
+
 function usageText(value: unknown, quality: string): string {
-  if (value == null || typeof value !== 'object') return `用量数据无法解析 · 质量 ${quality}`;
+  if (value == null || typeof value !== 'object') return `用量数据无法解析 · 质量 ${qualityLabel[quality] ?? '未确认'}`;
   const u = value as Record<string, unknown>;
   const n = (key: string): string => typeof u[key] === 'number' ? String(u[key]) : '未报告';
-  return `${u.accounting === 'delta' ? '本次增量' : u.accounting === 'cumulative' ? '累计上报' : '上报口径未明'} · 输入 ${n('inputTokens')} tokens · 缓存 ${n('cachedTokens')} tokens · 输出 ${n('outputTokens')} tokens · 成本 ${typeof u.cost === 'number' ? `${u.cost} ${typeof u.currency === 'string' ? u.currency : ''}` : '未报告'} · 质量 ${quality}${typeof u.model === 'string' ? ` · 模型 ${u.model}` : ''}`;
+  return `${u.accounting === 'delta' ? '本次增量' : u.accounting === 'cumulative' ? '累计上报' : '上报口径未明'} · 输入 ${n('inputTokens')} tokens · 缓存 ${n('cachedTokens')} tokens · 输出 ${n('outputTokens')} tokens · 成本 ${typeof u.cost === 'number' ? `${u.cost} ${typeof u.currency === 'string' ? u.currency : ''}` : '未报告'} · 质量 ${qualityLabel[quality] ?? '未确认'}${typeof u.model === 'string' ? ` · 模型 ${u.model}` : ''}`;
+}
+
+/** One bounded page at a time, no ever-growing history cache. */
+function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:TaskDetailsResult; kind:'runs'|'activity'|'deliveries'; runId?:string; cursor?:string|null; onSelectRun?:(id:string)=>void }) {
+  const key=JSON.stringify([detail.task.projectId,detail.task.id,kind,runId]);
+  const [state,setState]=useState<{key:string;page:TaskHistoryPage|null;error:string|null;loading:boolean}>({key:'',page:null,error:null,loading:false});
+  const ticket=useRef(0);const busy=useRef(false);
+  useEffect(()=>{busy.current=false;ticket.current++;return()=>{ticket.current++;};},[key]);
+  const current=state.key===key?state:null;
+  const next=current?.page?current.page.nextCursor:cursor;
+  const load=()=>{if(busy.current||!next)return;busy.current=true;const id=++ticket.current;setState(old=>({key,page:old.key===key?old.page:null,error:null,loading:true}));
+    void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,kind,...(runId?{runId}:{}),cursor:next}).then(page=>{if(ticket.current===id)setState({key,page,error:null,loading:false});},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
+  return <div className="card tight" data-zs-history={kind}>
+    {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>
+      {kind==='runs'?(current.page.items as TaskDetailRun[]).map(r=><div key={r.id}><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']}/><button className="btn ghost sm" onClick={()=>onSelectRun?.(r.id)}>查看这次运行</button><details className="faint small"><summary>运行身份</summary>{r.id}</details></div>):null}
+      {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind)}{e.summary?` · ${e.summary}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
+      {kind==='deliveries'?(current.page.items as TaskDetailsResult['deliveries']).map(d=><div key={d.id}><a href={d.locate}>交付 v{d.revision}</a> · {reviewLabel[d.reviewStatus]??d.reviewStatus}{d.reviewNote?<div>{d.reviewNote}</div>:null}<details className="faint small"><summary>版本身份</summary>{d.id} · {d.manifestHash}</details></div>):null}
+      {current.page.items.length===0?<span>本页权威读取为空。</span>:null}
+      <button className="btn ghost sm" disabled={current?.loading} onClick={()=>{ticket.current++;busy.current=false;setState({key,page:null,error:null,loading:false});}}>返回最新窗口</button></>:null}
+    {current?.error?<div className="panel warning">历史读取失败：{current.error}。保留已读取的当前页，可重试。</div>:null}
+    {next?<button className="btn ghost sm" disabled={current?.loading} onClick={load}>{current?.error?'重试读取更早历史':'加载更早历史'}</button>:current?.page?<span className="faint small">已到历史起点</span>:null}
+    {current?.loading?<span className="faint small">正在读取历史…</span>:null}
+  </div>;
 }
 
 export function TaskExtraFacts({ detail }: { detail: TaskDetailsResult }) {
@@ -81,9 +159,10 @@ export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
     <div className="section-title">实际执行成员</div>
     {detail.runs.length === 0 ? <div className="faint small">尚无运行与执行轮次。</div> : detail.runs.map((r) => <div key={r.id} style={{ marginBottom: 8 }}>
       <div className="small strong">{r.mode} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></div>
+      {r.detailLoaded === false ? <div className="faint small">在运行详情中选择本次运行后读取执行成员。</div> : null}
       {r.participants.length > 0 ? r.participants.map((p) => <div key={p.memberId} className="small">{p.displayName} · {p.role} · {p.status}{p.expected ? '' : ' · 非预期参与'}</div>) : null}
       {r.turns.map((t) => <div key={t.id} className="small">{t.displayName} · {t.status} · {t.stageKey} · 第 {t.attempt} 次尝试</div>)}
-      {r.participants.length === 0 && r.turns.length === 0 ? <div className="faint small">本次运行尚无成员参与记录。</div> : null}
+      {r.detailLoaded !== false && r.participants.length === 0 && r.turns.length === 0 ? <div className="faint small">本次运行尚无成员参与记录。</div> : null}
       {r.turnsTruncated ? <div className="faint small">仅显示最近 80 轮</div> : null}
     </div>)}
     {detail.truncated.runs ? <div className="faint small">显示最近 20 次运行及已定位的旧运行；其他历史运行未在本窗口内。</div> : null}
@@ -105,10 +184,10 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
       {r.id !== detail.selectedRunId ? <div className="small"><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /> · 选择后查看轮次、用量与工具活动</div> : <>
       <dl className="kv"><dt>状态</dt><dd><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></dd>
         <dt>阶段 / 轮次</dt><dd>{r.stage ?? '无阶段记录'}{r.roundNo == null ? '' : ` · 第 ${r.roundNo} 轮`}</dd>
-        <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.budget, null, 2)}</pre>}</dd>
+        <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <>{budgetText(r.budget)}<details className="small faint"><summary>预算原始详情</summary><pre>{JSON.stringify(r.budget,null,2)}</pre></details></>}</dd>
         <dt>执行轮次</dt><dd>{r.turns.length === 0 ? '尚无轮次' : r.turns.map((t) => <div key={t.id}>
           {t.displayName} · {t.status} · {t.stageKey} · 第 {t.attempt} 次尝试
-          {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary>{t.usage.map((u, k) => <div key={k} className="small">{usageText(u.normalized, u.quality)}</div>)}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
+          {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => <div key={k} className="small">{usageText(u.normalized, u.quality)}</div>)}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
           <details className="small faint"><summary>轮次身份</summary>{t.id}</details>
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>
       </dl><details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>
@@ -116,18 +195,19 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
       {r.events.filter((e) => e.kind.startsWith('tool.') || e.kind.includes('Failed') || e.kind.includes('failure') || e.kind === 'run.reconcileRequired').length === 0
         ? <div className="faint small">这次运行的可见窗口没有工具或诊断事件。</div>
         : r.events.filter((e) => e.kind.startsWith('tool.') || e.kind.includes('Failed') || e.kind.includes('failure') || e.kind === 'run.reconcileRequired').map((e) =>
-          <div key={e.seq} className="small">{fullTime(e.at)} · {e.kind === 'tool.started' ? '工具开始' : e.kind === 'tool.completed' ? '工具结束' : e.kind}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>活动身份</summary>事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
-      {r.eventsTruncated ? <div className="faint small">仅显示这次运行最近 120 条事件；更早的工具或诊断未在本窗口内。</div> : null}
+          <div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>活动身份</summary>{e.kind} · 事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
+      {r.eventsTruncated ? <div className="faint small">仅显示这次运行最近 120 条事件。</div> : null}<HistoryReader detail={detail} kind="activity" runId={r.id} cursor={detail.nextCursors?.runActivity}/>
       </>}
     </div>)}
     {detail.truncated.runs ? <div className="faint small">显示最近 20 次运行及已定位的旧运行；其他历史运行未在本窗口内。</div> : null}
+    <HistoryReader detail={detail} kind="runs" cursor={detail.nextCursors?.runs} onSelectRun={onSelectRun}/>
   </div>;
 }
 
 export function TaskEventFacts({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight"><div className="section-title">正式活动记录</div>
-    {detail.events.length === 0 ? <div className="faint small">没有任务事件记录。</div> : detail.events.map((e) => <div key={e.seq} className="small" style={{ marginBottom: 5 }}><span className="faint">{fullTime(e.at)}</span> · {e.kind}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>事件身份</summary>#{e.seq} · run {e.runId ?? '—'} · turn {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
-    {detail.truncated.events ? <div className="faint small">仅显示最近 120 条活动；旧界面可继续查询历史事件。</div> : null}
+    {detail.events.length === 0 ? <div className="faint small">没有任务事件记录。</div> : detail.events.map((e) => <div key={e.seq} className="small" style={{ marginBottom: 5 }}><span className="faint">{fullTime(e.at)}</span> · {activityLabel(e.kind)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>事件身份</summary>{e.kind} · #{e.seq} · run {e.runId ?? '—'} · turn {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
+    {detail.truncated.events ? <div className="faint small">当前显示最近 120 条活动。</div> : null}<HistoryReader detail={detail} kind="activity" cursor={detail.nextCursors?.activity}/>
   </div>;
 }
 
@@ -141,7 +221,7 @@ export function DeliveryHistoryFacts({ detail }: { detail: TaskDetailsResult }) 
       {d.verificationRefs.length > 0 ? <details className="small"><summary>验证引用</summary>{d.verificationRefs.map((x) => <div key={x} className="mono-sm">{x}</div>)}</details> : null}
       {d.changeSetRefs.length > 0 ? <details className="small"><summary>改动集引用</summary>{d.changeSetRefs.map((x) => <div key={x} className="mono-sm">{x}</div>)}</details> : null}
       <details className="small faint"><summary>版本身份</summary>{d.id} · manifest {d.manifestHash} · run {d.runId ?? '—'}</details>
-    </div>)}{detail.truncated.deliveries ? <div className="faint small">仅显示最近 50 个版本</div> : null}
+    </div>)}{detail.truncated.deliveries ? <div className="faint small">仅显示最近 50 个版本</div> : null}<HistoryReader detail={detail} kind="deliveries" cursor={detail.nextCursors?.deliveries}/>
     <div className="section-title">已保存成果</div>
     {detail.artifacts.length === 0 ? <div className="faint small">没有任务成果记录。</div> : detail.artifacts.map((a) => <div key={a.id} className="small">{a.kind} · v{a.revision}<details className="faint"><summary>成果身份</summary>{a.id} · hash {a.hash}</details></div>)}
     {detail.truncated.artifacts ? <div className="faint small">仅显示最近 100 个成果</div> : null}

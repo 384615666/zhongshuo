@@ -23,10 +23,10 @@ import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
-import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema } from '../contracts/taskDetails.ts';
+import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHistoryParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
-import { readTaskDetails } from './taskDetails.ts';
+import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
@@ -1242,10 +1242,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const { route_json: route, ...facts } = task;
         return withCommandId({ ok: true, data: { task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
+      case 'task.history':
       case 'task.details': {
         // R78: bounded read-only projection. Bind claimed project/task/run before reading children,
         // turns, event payload summaries or private delivery history.
-        const params = taskDetailsParamsSchema.parse(env.params);
+        const params = (env.method === 'task.history' ? taskHistoryParamsSchema : taskDetailsParamsSchema).parse(env.params);
         const target = deps.db.prepare('SELECT project_id, conversation_id FROM tasks WHERE id = ?').get(params.taskId) as
           | { project_id: string; conversation_id: string } | undefined;
         if (target == null || target.project_id !== params.projectId) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '任务不属于目标项目或不存在');
@@ -1253,7 +1254,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (params.runId != null && deps.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.runId, params.taskId, target.conversation_id) == null) {
           throw new DaemonCommandError('RESOURCE_NOT_FOUND', '运行不属于目标任务或不存在');
         }
-        return withCommandId({ ok: true, data: readTaskDetails(deps.db, params.taskId, params.runId) });
+        return withCommandId({ ok: true, data: env.method === 'task.history' ? readTaskHistory(deps.db, taskHistoryParamsSchema.parse(env.params)) : readTaskDetails(deps.db, params.taskId, params.runId) });
       }
       case 'message.imageCapability': {
         const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);
