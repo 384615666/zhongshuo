@@ -1,0 +1,208 @@
+{
+  "round": "R78",
+  "date": "2026-10-12",
+  "baseline": "d87f699",
+  "branch": "codex/full-implementation",
+  "package": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v17",
+  "build": {
+    "buildId": "bld_d314a9678136efa5",
+    "commit": "fddc8f8fc32df639e9f2773b2c913efed1ae7922",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-12T11:48:01.513Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "pass": true,
+  "requiredChecks": {
+    "sourceTests": true,
+    "contractRegressions": true,
+    "typechecks": true,
+    "noNewLint": true,
+    "cleanBuild": true,
+    "manifest": true,
+    "exactFinalCopies": true,
+    "unmodifiedLauncher": true,
+    "ordinaryAndEngineeringFullFlow": true,
+    "rendererErrors": true,
+    "navigationAndCancellation": true,
+    "boardReadRaces": true,
+    "readSurfaceRaces": true,
+    "titlebarSummary": true,
+    "memberIdentitySaveAndFailure": true,
+    "settingsSaveAndReopen": true,
+    "pairedVisualGeometry": true,
+    "manualVisualReview": true,
+    "zeroModelCalls": true,
+    "independentPipes": true,
+    "oldV16Preserved": true,
+    "sourceContainsNoData": true,
+    "migrationsFrozen": true
+  },
+  "sourceValidation": {
+    "tests": {
+      "files": 129,
+      "passed": 963,
+      "failed": 0,
+      "path": "D:\\zhongshuo\\dist\\r78-full-tests-final.json",
+      "sha256": "a643962ffc35f53da57d1eb8f95bff5f48318150032ab2c6f6e418ca4d89cb47"
+    },
+    "regressions": {
+      "passed": 43,
+      "path": "D:\\zhongshuo\\dist\\r78-final-contract-regressions-2.json",
+      "sha256": "ee6ba7cd29bff1598b147b9ec06014f528e56579d3fb5ada50bc1a6d734d6630"
+    },
+    "typechecks": [
+      {
+        "config": "tsconfig.json",
+        "pass": true,
+        "receipt": "D:\\zhongshuo\\dist\\r78-final-tsconfig.json.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "config": "tsconfig.hifi.json",
+        "pass": true,
+        "receipt": "D:\\zhongshuo\\dist\\r78-final-tsconfig.hifi.json.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "lint": {
+      "path": "D:\\zhongshuo\\dist\\r78-lint-final-delta.json",
+      "sha256": "9162827eb37509419ebc77c1cf9bb91d14143e5d8a10d72ca25ff28ab60038ea",
+      "legacyErrors": 65,
+      "deliveryScripts": {
+        "path": "D:\\zhongshuo\\dist\\r78-delivery-scripts-lint-2.json",
+        "sha256": "2f0beb3a3a14ed318647fac9b63b3af5aac76bce1087dd71576afecb71461c0c"
+      }
+    }
+  },
+  "packageValidation": {
+    "sourceManifest": 593,
+    "copyManifest": 593,
+    "navigationCopyManifest": 593,
+    "launcher": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r78-v17-launcher-final\\result.json",
+      "sha256": "2067af399e00b06cbbee0fb0c4bd3807551b51bcb8d66651d0d90cb57efeec4f"
+    },
+    "navigation": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791805784717\\result.json",
+      "sha256": "bea83f02786a81f627ece4feab52057af9dba7a809a6661f009f53f1819dd116"
+    },
+    "cancel": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-completion-1791805806843\\result.json",
+      "sha256": "412a058fe9f60e5333b99d7b9fc950adb5aa327fba44e27a8a22e8fc8cfe8678"
+    },
+    "independentPipes": [
+      "zs-daily-439e2ee7-e0a8-426f-b3b9-a3e01f28b53c",
+      "zs-daily-de6fecca-5e8f-4273-8af2-8d53e5dd3f21"
+    ]
+  },
+  "uiValidation": {
+    "board": {
+      "path": "D:\\zhongshuo\\dist\\r78-board-races-root-final\\result.json",
+      "sha256": "0c681c3bd8e5323b7854d423de65908ca8bd9a144db214468ad494d6a003505c"
+    },
+    "readSurfaces": {
+      "path": "D:\\zhongshuo\\dist\\r78-read-surfaces-1791781239041\\result.json",
+      "sha256": "c47c3e09d0a72720fb0b7f100e97c15ddb454a8702298f164727fe6a3c3db816"
+    },
+    "titlebar": {
+      "path": "D:\\zhongshuo\\dist\\r78-titlebar-summary-1791805277016\\result.json",
+      "sha256": "b45ec96397ebc09c294670eb5695233d123e599961252ae20a8186408c4e1d1b"
+    },
+    "visual": {
+      "path": "D:\\zhongshuo\\dist\\r78-visual-pairs-20261012120103\\manifest.json",
+      "sha256": "a800f56db0c57f0369234495fdf115408aa51c6abf01d810a4f3379260acf3ad"
+    },
+    "manualReview": {
+      "path": "D:\\zhongshuo\\dist\\r78-v17-visual-review.json",
+      "sha256": "281f965ce9a9ce6641cda8d1577d975e48f12d6a5ff345f0d609233d5d851ce7"
+    }
+  },
+  "performance": {
+    "before": {
+      "kind": "20 independent member.runtime requests",
+      "at": "2026-10-12T04:04:35.061Z",
+      "cold": {
+        "durationMs": 644.5146,
+        "eventLoopDelayMs": 644.571,
+        "returned": 20,
+        "allIdentityRead": true
+      },
+      "warm": [
+        {
+          "durationMs": 483.03639999999996,
+          "eventLoopDelayMs": 483.7197000000001,
+          "returned": 20,
+          "allIdentityRead": true
+        },
+        {
+          "durationMs": 421.70550000000003,
+          "eventLoopDelayMs": 421.80269999999996,
+          "returned": 20,
+          "allIdentityRead": true
+        },
+        {
+          "durationMs": 432.0068000000001,
+          "eventLoopDelayMs": 432.1313,
+          "returned": 20,
+          "allIdentityRead": true
+        }
+      ],
+      "realCalls": 0,
+      "projectMemberCount": 20
+    },
+    "after": {
+      "kind": "one member.runtimes request for 20 members",
+      "at": "2026-10-12T04:10:06.100Z",
+      "cold": {
+        "durationMs": 173.40300000000002,
+        "eventLoopDelayMs": 173.4339,
+        "returned": 20,
+        "allIdentityRead": true
+      },
+      "warm": [
+        {
+          "durationMs": 22.754500000000007,
+          "eventLoopDelayMs": 23.162300000000016,
+          "returned": 20,
+          "allIdentityRead": true
+        },
+        {
+          "durationMs": 22.544399999999996,
+          "eventLoopDelayMs": 22.56809999999996,
+          "returned": 20,
+          "allIdentityRead": true
+        },
+        {
+          "durationMs": 22.728700000000003,
+          "eventLoopDelayMs": 23.493100000000027,
+          "returned": 20,
+          "allIdentityRead": true
+        }
+      ],
+      "realCalls": 0,
+      "projectMemberCount": 20
+    },
+    "scope": "20 matching native Claude configuration identities; request-local deduplication only; submit/worker/spawn continue fresh checks"
+  },
+  "boundaries": {
+    "realModelCalls": 0,
+    "userImageAcceptance": "inherited R77 user confirmation; no repeat manual checklist",
+    "codexVision": "gpt-6-luna remains unverified; no startTurn retry",
+    "notImplemented": [
+      "member rename/templates/thinking strength/process reset",
+      "tray/autostart/aggregate notifications/MCP/backup controls",
+      "split analysis/write deadlines"
+    ],
+    "deferred": [
+      "AUTO/DELIBERATE",
+      "parallel managed writes",
+      "tool permission certification",
+      "Android/installers/signing/auto-update/value evaluation"
+    ],
+    "pixelExactParity": false,
+    "userAcceptance": "pending one natural ~5-minute route"
+  },
+  "verificationScriptNote": "Build is clean fddc8f8; later script correction selects a non-coordinator for disable test. No runtime source or package executable was changed."
+}

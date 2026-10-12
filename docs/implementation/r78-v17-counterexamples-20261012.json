@@ -1,0 +1,97 @@
+{
+  "round": "R78",
+  "baseline": "d87f699",
+  "cases": [
+    {
+      "receipt": "dist\\r78-room-create-before.json",
+      "sha256": "dc0f59194734c44371f07bf94334d9f5216abeeb8a0e7416e0292fda7edae0f6",
+      "classification": "产品缺陷：跨项目成员建房/归档写入/空白名无守卫；正式永久roomCreationScopeR78正反例修复",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-task-projection-before.json",
+      "sha256": "98bd94f460bf369084dd67848ed60322fb501f363d84575315db242fd02ff62b",
+      "classification": "旧d87 loader有限投影制造AUTO/人工验收/空objective；同真实输入对旧loader失败",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-activity-review-before-2.json",
+      "sha256": "87629de7785e3c8aa0454bb417f1e76734e96f5281e85e59eb8f14f5c094f84c",
+      "classification": "产品缺陷：房间与DM验收活动無定位，task-only DM事件泄露；正式workflow负例已修",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-git-read-before\\result.json",
+      "sha256": "7ab368e4f0c685c4346f0fad10b47e12a059adb86903ff08c7ad48e54ce74cc6",
+      "classification": "产品缺陷：Git子读取失败使确认列表变空且不报错",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-board-races-root-final\\result.json",
+      "sha256": "0c681c3bd8e5323b7854d423de65908ca8bd9a144db214468ad494d6a003505c",
+      "classification": "同脚本旧d87失败4判据/当前通过5判据",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-read-surfaces-1791781239041\\result.json",
+      "sha256": "c47c3e09d0a72720fb0b7f100e97c15ddb454a8702298f164727fe6a3c3db816",
+      "classification": "同脚本旧d87失败7判据/当前15判据通过",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\desktop\\review-r78-stage-launcher-1\\result.json",
+      "sha256": "e9dfd2c6d7ddb12eff2b801bdbc911e69c314928929da25869aabbeff34ad625",
+      "classification": "工程启动器新增拒启分支退出码不正确，实际未启helper；后续stage3 exit9通过",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\desktop\\review-r78-stage-launcher-2\\result.json",
+      "sha256": "a01d212d9ae00cbc7968a14c996e2986b7cf971254794b5f467a1907c08dbc4c",
+      "classification": "endlocal & exit/b9尝试仍失败；不代记首次成功",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\desktop\\review-r78-stage-launcher-3\\result.json",
+      "sha256": "52b6b0e95ff267ecbd587104abdfbe61c5c7e974a02fac010ad73e5adad98a0d",
+      "classification": "工程脚本未选择DIRECT成员导致正式M0拒绝；修UI成员选择，产品M0合同保持",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\desktop\\review-r78-stage-launcher-5\\result.json",
+      "sha256": "cc638e6bb4e3a5a6b97a8fcb5548430b3929e92af76301d666cc9f983d035397",
+      "classification": "真实发布UI暴露验收活动無定位产品缺陷",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\desktop\\review-r78-stage-launcher-8\\result.json",
+      "sha256": "eecf40422577e303967a349f3f6bbaccf2e6a8f5716fa4399806cbaa1865b790",
+      "classification": "工程脚本点击busy禁用返工按钮未入队；修为等待enabled，产品不绕过",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-final-contract-regressions.json",
+      "sha256": "3f3c5c9f466ef551fc3ebe240c95f2cf499df9d2e9b12e07cafdf6428c25ecd7",
+      "classification": "工程改末消息为人话导致交付原文hash判据失败，已还原正式原文通道，后续43项通过",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-visual-pairs-20261012114019\\failure.txt",
+      "sha256": "47b0050dc1f562c2fd36fa2c16e6494b0bca604af4848d669e7442e7361e5f19",
+      "classification": "工程错配目标测试注册表未重读，后续重读明确foreign member拒绝",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-visual-pairs-20261012114812\\failure.txt",
+      "sha256": "88d403b4dbc30b600a1dcea2607a3671cb61db4ab25f764e2eaac9c8e13cdb11",
+      "classification": "工程使用placeholder而非实际BUILD，身份门正确拒绝，随后明确实际BUILD",
+      "firstFailureRetained": true
+    },
+    {
+      "receipt": "dist\\r78-visual-pairs-20261012114822\\failure.txt",
+      "sha256": "143207ef96f3f0766b8b209d01ce28e648fccac6f8a68a7668cb95b3c3f77281",
+      "classification": "工程停用对象实际为房间协调者，正式规则拒；后续按权威coordinatorId选择非协调者通过",
+      "firstFailureRetained": true
+    }
+  ],
+  "policy": "首次失败原回执不覆写；正常业务结果仅正式命令/worker产生，不手改库制造完成；工程通过不替代用户验收或真实模型认证"
+}

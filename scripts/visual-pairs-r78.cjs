@@ -1,4 +1,6 @@
 'use strict';
+/* eslint-disable @typescript-eslint/no-require-imports */
+/* global require, __dirname, process, setTimeout, fetch, AbortSignal, WebSocket, Buffer, console */
 /**
  * R78 常用界面视觉门。只启动本脚本创建的进程；独立数据根、独立端口；零模型调用。
  * 先运行 pnpm build:ui，再运行 node scripts/visual-pairs-r78.cjs。
@@ -64,7 +66,7 @@ class Cdp {
       const item = this.pending.get(msg.id);
       if (!item) return;
       this.pending.delete(msg.id);
-      msg.error ? item.reject(new Error(msg.error.message)) : item.resolve(msg.result);
+      if (msg.error) item.reject(new Error(msg.error.message)); else item.resolve(msg.result);
     });
   }
   send(method, params = {}) {
@@ -217,7 +219,7 @@ async function main() {
           await until(() => cdp.eval(probe(`document.querySelector('[data-zs-member-detail]')?.textContent.includes('模型与能力') && !document.querySelector('[data-zs-member-detail]')?.textContent.includes('读取中…')`)), 15000, '成员详情事实已读取');
         }
         if (scene.name === 'project-settings-advanced') {
-          await cdp.eval(probe(`(() => { const el = document.querySelector('.main'); if (el) el.scrollTop = el.scrollHeight; return el?.scrollTop ?? -1; })()`));
+          await cdp.eval(probe(`(() => { const target = document.querySelector('#pset-write'); target?.scrollIntoView({block:'start'}); return target != null; })()`));
           await sleep(300);
         }
         if (scene.name === 'project-menu') {
@@ -230,6 +232,11 @@ async function main() {
           await until(() => cdp.eval(probe(`document.querySelector('.modal') != null`)), 5000, `建房弹窗/${name}`);
         }
         await sleep(650);
+        if (scene.name === 'project-settings-advanced') {
+          const visible = await cdp.eval(probe(`(() => {const el=document.querySelector('#pset-write');if(!el)return false;const r=el.getBoundingClientRect();return r.top<innerHeight && r.bottom>38;})()`));
+          if (!visible) throw new Error(`项目写入限制不在实际视口：${name}/${viewport.name}`);
+          pair.sidesAdvancedVisible = { ...(pair.sidesAdvancedVisible ?? {}), [name]: true };
+        }
         const meta = await cdp.eval(probe(`(() => { const root = document.querySelector(${JSON.stringify(name === 'formal' ? '#hifi-root' : '.app')}) || document.body; const main = root.querySelector('.main') || root; const r = main.getBoundingClientRect(); return {route:location.hash, viewport:{w:innerWidth,h:innerHeight,dpr:devicePixelRatio,scale:visualViewport?.scale}, theme:document.documentElement.getAttribute('data-theme') || document.body.getAttribute('data-theme'), mainRect:{x:r.x,y:r.y,w:r.width,h:r.height}, overflowX:main.scrollWidth>main.clientWidth+1, density:{cards:root.querySelectorAll('.card').length, rootCards:root.querySelectorAll('.root-card').length, rows:root.querySelectorAll('.pset-row,.member-row,.file-row,.git-list-row').length, panels:root.querySelectorAll('.panel').length}}; })()`));
         const image = await cdp.send('Page.captureScreenshot', { format: 'png' });
         const imagePath = path.join(out, `${viewport.name}-${scene.name}-${name}.png`);
@@ -259,7 +266,8 @@ async function main() {
   }
   // 单成员入口/写入/错误门：仅独立工程成员，真实 formal commands，零 startTurn。
   const memberRows = (await cmd('member.list', { projectId })).items;
-  const reviewer = memberRows.find(m => m.principalType === 'agent' && m.id !== agent.id);
+  const coordinatorIds = new Set(roomRows.map(r=>r.coordinatorMemberId).filter(Boolean));
+  const reviewer = memberRows.find(m => m.principalType === 'agent' && !coordinatorIds.has(m.id));
   if (!reviewer) throw new Error('成员测试缺独立审查者');
   const clickFormal = async (label, scope = '#hifi-root') => {
     const hit = await formal.eval(`(() => { const b = [...(document.querySelector(${JSON.stringify(scope)})?.querySelectorAll('button') ?? [])].find(b=>b.textContent.trim()===${JSON.stringify(label)} && !b.disabled); if(!b)return false;b.click();return true; })()`);
@@ -281,6 +289,8 @@ async function main() {
   await until(()=>formal.eval(probe(`document.querySelector('.modal .panel.warning')?.textContent.includes('绑定失败')`)),15000,'真实绑定防护失败就地提示');
   const retained = await formal.eval(`document.querySelector('.modal input[placeholder*="deepseek"]').value === 'r78-engineering-config'`);
   if(!retained) throw new Error('绑定失败丢失输入');
+  const failurePng=await formal.send('Page.captureScreenshot',{format:'png'});
+  fs.writeFileSync(path.join(out,'member-binding-failure-retained.png'),Buffer.from(failurePng.data,'base64'));
   await formal.eval(`document.querySelector('.modal [aria-label="runtime 渠道"]').click();true`);
   await until(()=>formal.eval(probe(`document.querySelector('[data-zs-option="fake"]') != null`)),5000,'工程fake选项');
   await formal.eval(`document.querySelector('[data-zs-option="fake"]').click();true`);
@@ -330,7 +340,7 @@ async function main() {
     routeSwitchOk = await until(() => formal.eval(probe(`document.querySelector('#hifi-root .page-title')?.textContent.includes('fixture-project-B ·') && !document.querySelector('#hifi-root')?.textContent.includes('本页编辑绑定原项目')`)), 15000, 'A→B 项目设置');
   } catch (e) {
     const diagnostic = await formal.eval(probe(`({route:location.hash, text:document.querySelector('#hifi-root')?.textContent.slice(0,450)})`));
-    throw new Error(`${e.message}：${JSON.stringify(diagnostic)}`);
+    throw new Error(`${e.message}：${JSON.stringify(diagnostic)}`, { cause: e });
   }
   await formal.eval(probe(`(() => { const input = document.querySelector('#hifi-root input[placeholder="项目显示名"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'R78 project B'); input.dispatchEvent(new Event('input', {bubbles:true})); return true; })()`));
   await until(() => formal.eval(probe(`[...document.querySelectorAll('#hifi-root button')].some(b => b.textContent.trim() === '保存' && !b.disabled)`)), 5000, 'B 属性可保存');
