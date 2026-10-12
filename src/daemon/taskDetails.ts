@@ -6,10 +6,11 @@ type EventRow = { seq: number; kind: string; created_at: number; run_id: string 
 const eventOf = (e: EventRow): TaskDetailEvent => {
     const payload: unknown = JSON.parse(e.payload_json);
     const p = payload != null && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-    const summary = [p.message, p.reason, p.status, p.toolName, p.outcome, p.note]
+    const summary = [p.message, p.reason, p.question, p.status, p.toolName, p.outcome, p.note]
       .find((x): x is string => typeof x === 'string')?.slice(0, 200) ?? '';
     return { seq: e.seq, kind: e.kind, at: e.created_at, runId: e.run_id, turnId: e.turn_id,
-      toolCallId: typeof p.toolCallId === 'string' ? p.toolCallId : null, summary };
+      toolCallId: typeof p.toolCallId === 'string' ? p.toolCallId : null, summary,
+      status: typeof p.status==='string'?p.status:null, code:typeof p.code==='string'?p.code:null };
   };
 
 const historyCursor = (projectId: string, taskId: string, kind: string, runId: string | undefined, before: number) => Buffer.from(JSON.stringify({ projectId, taskId, kind, runId: runId ?? null, before })).toString('base64url');

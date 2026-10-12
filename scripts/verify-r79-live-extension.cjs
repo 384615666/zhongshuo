@@ -34,7 +34,7 @@ module.exports = async function verifyR79(ctx) {
   await uiSend(cdp, 'R79 UI FAIL：工程明确失败，然后显式继续', memberId);
   const failed = await until(() => taskBy('R79 UI FAIL'), v => v?.id, 'R79 failed task');
   await navigate(cdp, `/thread/${failed.threadId}?tab=run`, failed.threadId);
-  await until(() => cdp.eval("document.body.textContent.includes('R79_ENGINEERING_FAILURE') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='继续最近失败运行'&&!b.disabled)"), Boolean, 'R79 failure reason and action');
+  await until(() => cdp.eval("document.querySelector('.thread-details')?.textContent.includes('独立工程明确失败；显式继续才恢复') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='继续最近失败运行'&&!b.disabled)"), Boolean, 'R79 explicit failure reason and action');
   await cdp.shot('r79-failure-details.png');
   must(await cdp.eval(button('.thread-details', '继续最近失败运行')), 'R79 explicit continue');
   await until(() => queryOne('SELECT id FROM task_deliveries WHERE task_id=?', failed.id), v => v?.id, 'R79 explicit recovery delivery');
@@ -88,5 +88,5 @@ module.exports = async function verifyR79(ctx) {
   facts.steps.push('R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read');
   heaps.push({at:Date.now(),phase:'history-pages-after-navigation',...(await cdp.send('Runtime.getHeapUsage'))});
   fs.writeFileSync(join(out,'r79-live-samples.json'),JSON.stringify({scope:'final copied package, unmodified launcher, formal worker + engineering Fake adapter',samples,heaps,memoryScope:'observational CDP heap snapshots during formal workflow; not a multi-day leak certification',realCalls:0},null,2));
-  return {live,failed,scale,selectedHistoricalRun:chosen,threeCycles:true,automaticToolsAndUsage:true,naturalDelivery:true,explicitFailureRecovery:true,scaleInjection:'separate historical scale only; no normal state updates',runs:26,events:3250,deliveries:61,historyRead:true,reading,afterReading,geometry,zeroCalls:true};
+  return {live,failed,scale,selectedHistoricalRun:chosen,threeCycles:true,automaticToolsAndUsage:true,naturalDelivery:true,explicitFailureRecovery:true,failureReasonVisible:true,scaleInjection:'separate historical scale only; no normal state updates',runs:26,events:3250,deliveries:61,historyRead:true,reading,afterReading,geometry,zeroCalls:true};
 };

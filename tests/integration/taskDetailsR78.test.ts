@@ -163,6 +163,7 @@ describe('R78 task.details formal read projection', () => {
       expect(first.currentRunId).toBeNull();
       expect(first.latestRunId).toBe(first.runs[0]!.id);
       expect(first.runs[0]!.status).toBe('FAILED');
+      expect(first.runs[0]!.events).toContainEqual(expect.objectContaining({kind:'turn.statusChanged',status:'FAILED',summary:'夹具失败'}));
       const retry = await env.raw('task.redispatch', { taskId, sourceRunId: first.latestRunId, reason: '检查诊断后明确继续' });
       expect(retry.ok).toBe(true);
       await env.worker().runOnce();

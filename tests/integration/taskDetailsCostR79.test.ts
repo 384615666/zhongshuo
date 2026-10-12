@@ -58,6 +58,8 @@ describe('R79 isolated history scale (not normal business lifecycle)', () => {
       expect(privateCounts.items).toContainEqual({memberId:'m',unfinishedTasks:0,activeTurns:0,unknownTurns:0});
       db.prepare("UPDATE dm_participants SET principal_id='u' WHERE conversation_id='c'").run();
       expect(((await raw('project.memberWorkload',{projectId:'p'})).data as {items:unknown[]}).items).toContainEqual({memberId:'m',unfinishedTasks:1,activeTurns:0,unknownTurns:1});
+      db.prepare(`INSERT INTO domain_events(event_id,schema_version,kind,project_id,conversation_id,task_id,run_id,payload_json,created_at) VALUES('waiting-question',1,'input.requested','p','c','t','r0',?,999)`).run(JSON.stringify({question:'请确认输出目录；这是只读历史规模夹具'}));
+      expect(readTaskDetails(db,'t','r0').runs.find(r=>r.id==='r0')?.events[0]?.summary).toContain('请确认输出目录');
     } finally { db.close(); }
   });
 });

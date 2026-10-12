@@ -92,15 +92,22 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
 }
 
 const qualityLabel: Record<string,string> = { reported:'渠道报告', estimated:'估算', unknown:'未确认' };
-const executionLabel: Record<string,string> = { PENDING:'待派发',DISPATCHING:'正在启动',RUNNING:'执行中',WAITING_APPROVAL:'等待批准',WAITING_INPUT:'等待输入',STOPPING:'停止中',SUCCEEDED:'已交付',FAILED:'执行失败',CANCELLED:'已停止',UNKNOWN:'结果待核对' };
+const executionLabel: Record<string,string> = { PENDING:'待派发',DISPATCHING:'正在启动',RUNNING:'执行中',WAITING_APPROVAL:'等待批准',WAITING_INPUT:'等待输入',STOPPING:'停止中',SUCCEEDED:'执行成功',FAILED:'执行失败',CANCELLED:'已停止',UNKNOWN:'结果待核对' };
 const purposeLabel: Record<string,string> = { stage_work:'任务执行',checkpoint:'检查点',format_repair:'格式修复' };
 const roleLabel: Record<string,string> = { executor:'执行成员',coordinator:'协调成员',worker:'执行成员' };
 const eventLabel: Record<string,string> = {
   'tool.started':'工具开始', 'tool.completed':'工具结束', 'turn.started':'开始执行', 'turn.completed':'执行完成', 'turn.failed':'执行失败',
   'usage.updated':'用量更新', 'message.completed':'回复已保存', 'task.reviewRecorded':'验收意见已记录', 'task.reworkRequested':'返工已请求',
   'run.reconcileRequired':'运行结果需要核对', 'task.deliveryCreated':'新交付已保存', 'run.started':'运行开始', 'run.failed':'运行失败',
+  'input.requested':'等待补充输入', 'approval.requested':'等待批准',
 };
-export function activityLabel(kind: string): string { return eventLabel[kind] ?? (kind.includes('Failed') || kind.includes('failure') ? '执行诊断' : '执行记录'); }
+export function isDiagnosticEvent(kind:string):boolean {
+  return kind.startsWith('tool.') || /failed|failure/i.test(kind) || ['turn.statusChanged','run.reconcileRequired','input.requested','approval.requested'].includes(kind);
+}
+export function activityLabel(kind: string, status?:string|null): string {
+  if(kind==='turn.statusChanged') return status!=null ? executionLabel[status]??'执行状态更新' : '执行状态更新';
+  return eventLabel[kind] ?? (kind.includes('Failed') || kind.includes('failure') ? '执行诊断' : '执行记录');
+}
 export function budgetText(value: unknown): string {
   if (value == null || typeof value !== 'object') return '无可解析的预算记录';
   const b=value as Record<string,unknown>; const n=(key:string)=>typeof b[key]==='number'?String(b[key]):'未提供';
@@ -134,7 +141,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
   return <div className="card tight" data-zs-history={kind}>
     {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>
       {kind==='runs'?(current.page.items as TaskDetailRun[]).map(r=><div key={r.id}><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']}/><button className="btn ghost sm" onClick={()=>onSelectRun?.(r.id)}>查看这次运行</button><details className="faint small"><summary>运行身份</summary>{r.id}</details></div>):null}
-      {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind)}{e.summary?` · ${e.summary}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
+      {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{e.summary?` · ${e.summary}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
       {kind==='deliveries'?(current.page.items as TaskDetailsResult['deliveries']).map(d=><div key={d.id}><a href={d.locate}>交付 v{d.revision}</a> · {reviewLabel[d.reviewStatus]??d.reviewStatus}{d.reviewNote?<div>{d.reviewNote}</div>:null}<details className="faint small"><summary>版本身份</summary>{d.id} · {d.manifestHash}</details></div>):null}
       {current.page.items.length===0?<span>本页权威读取为空。</span>:null}
       <button className="btn ghost sm" disabled={current?.loading} onClick={()=>{ticket.current++;busy.current=false;setState({key,page:null,error:null,loading:false});}}>返回最新窗口</button></>:null}
@@ -196,10 +203,10 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>
       </dl><details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>
       <div className="section-title">工具与诊断活动</div>
-      {r.events.filter((e) => e.kind.startsWith('tool.') || e.kind.includes('Failed') || e.kind.includes('failure') || e.kind === 'run.reconcileRequired').length === 0
+      {r.events.filter((e) => isDiagnosticEvent(e.kind)).length === 0
         ? <div className="faint small">这次运行的可见窗口没有工具或诊断事件。</div>
-        : r.events.filter((e) => e.kind.startsWith('tool.') || e.kind.includes('Failed') || e.kind.includes('failure') || e.kind === 'run.reconcileRequired').map((e) =>
-          <div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>活动身份</summary>{e.kind} · 事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
+        : r.events.filter((e) => isDiagnosticEvent(e.kind)).map((e) =>
+          <div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>活动身份</summary>{e.kind}{e.code?` · ${e.code}`:''} · 事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
       {r.eventsTruncated ? <div className="faint small">仅显示这次运行最近 120 条事件。</div> : null}<HistoryReader detail={detail} kind="activity" runId={r.id} cursor={detail.nextCursors?.runActivity}/>
       </>}
     </div>)}
@@ -210,7 +217,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
 
 export function TaskEventFacts({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight"><div className="section-title">正式活动记录</div>
-    {detail.events.length === 0 ? <div className="faint small">没有任务事件记录。</div> : detail.events.map((e) => <div key={e.seq} className="small" style={{ marginBottom: 5 }}><span className="faint">{fullTime(e.at)}</span> · {activityLabel(e.kind)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>事件身份</summary>{e.kind} · #{e.seq} · run {e.runId ?? '—'} · turn {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
+    {detail.events.length === 0 ? <div className="faint small">没有任务事件记录。</div> : detail.events.map((e) => <div key={e.seq} className="small" style={{ marginBottom: 5 }}><span className="faint">{fullTime(e.at)}</span> · {activityLabel(e.kind,e.status)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>事件身份</summary>{e.kind} · #{e.seq} · run {e.runId ?? '—'} · turn {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
     {detail.truncated.events ? <div className="faint small">当前显示最近 120 条活动。</div> : null}<HistoryReader detail={detail} kind="activity" cursor={detail.nextCursors?.activity}/>
   </div>;
 }

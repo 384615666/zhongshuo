@@ -80,7 +80,9 @@ async function modalOpenCurrentPick(cdp) {
   let child = null;
   let currentCdp = null;
   const startBat = () => {
-    const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(PORT), ZS_PICK_FOLDER_FILE: pickFile };
+    const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(PORT), ZS_PICK_FOLDER_FILE: pickFile,
+      // eslint-disable-next-line no-undef
+      ...(process.argv.includes('--r79-read') ? { ZS_SAVEAS_AUTO_DIR: path.join(outDir,'saved-originals') } : {}) };
     delete env.ZS_RUNTIME; delete env.ZS_ALLOW_FAKE; delete env.ZS_APP_DATA; delete env.ZS_PIPE_NAME; delete env.ZS_REAL_DISPATCH_GUARD; delete env.ZS_UI_DELAY_METHOD_MS;
     child = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copyDir, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', () => {}); child.stderr.on('data', () => {});
@@ -151,6 +153,8 @@ async function modalOpenCurrentPick(cdp) {
     await cdp.eval('location.hash = ' + JSON.stringify(`/project/${pidC}/files`) + '; true');
     await until(() => cdp.tryEval(`document.querySelector('#hifi-root .file-tree') != null`), (v) => v, 45000, '文件页');
     facts.filesOk = true;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+    if (process.argv.includes('--r79-read')) facts.readRegression = await require('./verify-r79-read-extension.cjs')({ cdp, projectId:pidC, project:projC, copy:copyDir, out:outDir, until, sleep });
     facts.consoleErrors = (cdp.errors ?? []).filter((e) => !e.includes('React DevTools')).slice(0, 3);
     if (facts.consoleErrors.length > 0) errs.push(`console=${JSON.stringify(facts.consoleErrors)}`);
     const dbPath = path.join(copyDir, 'server-data', 'state.sqlite');

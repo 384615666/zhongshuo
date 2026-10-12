@@ -46,6 +46,8 @@ describe('R78 run detail rendering', () => {
 
     const old = run('old', 'FAILED');
     old.events.push({ seq: 1, kind: 'tool.completed', at: 1000, runId: 'old', turnId: 't1', toolCallId: 'read_1', summary: 'failure' });
+    old.events.push({seq:2,kind:'turn.statusChanged',status:'FAILED',code:'PROVIDER_ERROR',at:1001,runId:'old',turnId:'t1',toolCallId:null,summary:'工程失败说明，需先修复渠道'});
+    old.events.push({seq:3,kind:'input.requested',at:1002,runId:'old',turnId:'t1',toolCallId:null,summary:'请确认输出目录'});
     old.turns.push({ id: 't1', memberId: 'm1', displayName: '执行甲', status: 'FAILED', stageKey: 'direct.work', purpose: 'stage_work', attempt: 1,
       usage: [{ normalized: { accounting: 'cumulative', inputTokens: 7, outputTokens: 3 }, quality: 'reported' }], usageTruncated: false });
     const newest = run('new', 'SUCCEEDED'); newest.eventsTruncated = true;
@@ -55,6 +57,7 @@ describe('R78 run detail rendering', () => {
     expect(html).toContain('工具结束 · failure');
     expect(html).toContain('工具 read_1');
     expect(html).toContain('输入 7 tokens');
+    expect(html).toContain('工程失败说明，需先修复渠道');expect(html).toContain('等待补充输入 · 请确认输出目录');
     const latestHtml = renderToStaticMarkup(createElement(RunExtraFacts, { detail: detail('REVIEW', [newest, old]) }));
     expect(latestHtml).toContain('仅显示这次运行最近 120 条事件');
   });

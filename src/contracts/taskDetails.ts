@@ -27,6 +27,7 @@ export interface ConversationFailedTasksResult { conversationId: string; items: 
 export interface TaskDetailEvent {
   seq: number; kind: string; at: number; runId: string | null; turnId: string | null;
   toolCallId: string | null; summary: string;
+  status?: string | null; code?: string | null;
 }
 
 export interface TaskDetailRun {
