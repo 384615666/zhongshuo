@@ -92,6 +92,9 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
 }
 
 const qualityLabel: Record<string,string> = { reported:'渠道报告', estimated:'估算', unknown:'未确认' };
+const executionLabel: Record<string,string> = { PENDING:'待派发',DISPATCHING:'正在启动',RUNNING:'执行中',WAITING_APPROVAL:'等待批准',WAITING_INPUT:'等待输入',STOPPING:'停止中',SUCCEEDED:'已交付',FAILED:'执行失败',CANCELLED:'已停止',UNKNOWN:'结果待核对' };
+const purposeLabel: Record<string,string> = { stage_work:'任务执行',checkpoint:'检查点',format_repair:'格式修复' };
+const roleLabel: Record<string,string> = { executor:'执行成员',coordinator:'协调成员',worker:'执行成员' };
 const eventLabel: Record<string,string> = {
   'tool.started':'工具开始', 'tool.completed':'工具结束', 'turn.started':'开始执行', 'turn.completed':'执行完成', 'turn.failed':'执行失败',
   'usage.updated':'用量更新', 'message.completed':'回复已保存', 'task.reviewRecorded':'验收意见已记录', 'task.reworkRequested':'返工已请求',
@@ -127,6 +130,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
   const next=current?.page?current.page.nextCursor:cursor;
   const load=()=>{if(busy.current||!next)return;busy.current=true;const id=++ticket.current;setState(old=>({key,page:old.key===key?old.page:null,error:null,loading:true}));
     void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,kind,...(runId?{runId}:{}),cursor:next}).then(page=>{if(ticket.current===id)setState({key,page,error:null,loading:false});},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
+  if (!next && !current?.page && !current?.loading && !current?.error) return null;
   return <div className="card tight" data-zs-history={kind}>
     {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>
       {kind==='runs'?(current.page.items as TaskDetailRun[]).map(r=><div key={r.id}><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']}/><button className="btn ghost sm" onClick={()=>onSelectRun?.(r.id)}>查看这次运行</button><details className="faint small"><summary>运行身份</summary>{r.id}</details></div>):null}
@@ -160,8 +164,8 @@ export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
     {detail.runs.length === 0 ? <div className="faint small">尚无运行与执行轮次。</div> : detail.runs.map((r) => <div key={r.id} style={{ marginBottom: 8 }}>
       <div className="small strong">{r.mode} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></div>
       {r.detailLoaded === false ? <div className="faint small">在运行详情中选择本次运行后读取执行成员。</div> : null}
-      {r.participants.length > 0 ? r.participants.map((p) => <div key={p.memberId} className="small">{p.displayName} · {p.role} · {p.status}{p.expected ? '' : ' · 非预期参与'}</div>) : null}
-      {r.turns.map((t) => <div key={t.id} className="small">{t.displayName} · {t.status} · {t.stageKey} · 第 {t.attempt} 次尝试</div>)}
+      {r.participants.length > 0 ? r.participants.map((p) => <div key={p.memberId} className="small">{p.displayName} · {roleLabel[p.role]??'参与成员'} · {executionLabel[p.status]??'状态未提供'}{p.expected ? '' : ' · 非预期参与'}<details className="faint"><summary>参与身份</summary>{p.role} · {p.status}</details></div>) : null}
+      {r.turns.map((t) => <div key={t.id} className="small">{t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试</div>)}
       {r.detailLoaded !== false && r.participants.length === 0 && r.turns.length === 0 ? <div className="faint small">本次运行尚无成员参与记录。</div> : null}
       {r.turnsTruncated ? <div className="faint small">仅显示最近 80 轮</div> : null}
     </div>)}
@@ -186,9 +190,9 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
         <dt>阶段 / 轮次</dt><dd>{r.stage ?? '无阶段记录'}{r.roundNo == null ? '' : ` · 第 ${r.roundNo} 轮`}</dd>
         <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <>{budgetText(r.budget)}<details className="small faint"><summary>预算原始详情</summary><pre>{JSON.stringify(r.budget,null,2)}</pre></details></>}</dd>
         <dt>执行轮次</dt><dd>{r.turns.length === 0 ? '尚无轮次' : r.turns.map((t) => <div key={t.id}>
-          {t.displayName} · {t.status} · {t.stageKey} · 第 {t.attempt} 次尝试
+          {t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试
           {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => <div key={k} className="small">{usageText(u.normalized, u.quality)}</div>)}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
-          <details className="small faint"><summary>轮次身份</summary>{t.id}</details>
+          <details className="small faint"><summary>轮次身份与原始状态</summary>{t.id} · {t.status} · {t.stageKey} · {t.purpose}</details>
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>
       </dl><details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>
       <div className="section-title">工具与诊断活动</div>

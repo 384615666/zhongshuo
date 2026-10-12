@@ -75,6 +75,8 @@ class Cdp {
     return r.result.value;
   }
   async shot(name) {
+    await this.eval('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    await sleep(120);
     const png = await this.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(out, name), Buffer.from(png.data, 'base64'));
   }
@@ -424,6 +426,7 @@ function verifyManifest(packageRoot) {
       await navigate(cdp, `/thread/${facts.r79.live.threadId}?tab=run`, facts.r79.live.threadId);
       await until(() => cdp.eval("document.body.textContent.includes('R79_LIVE_PROGRESS_MARKER')"), Boolean, 'R79 live history after reopen');
       await navigate(cdp, `/thread/${facts.r79.scale.threadId}?tab=run`, facts.r79.scale.threadId);
+      await until(() => cdp.eval("[...document.querySelectorAll('[data-zs-history=runs] button')].some(b=>b.textContent.trim()==='加载更早历史'&&!b.disabled)"), Boolean, 'R79 reopened history read ready');
       must(await cdp.eval(button('[data-zs-history=runs]', '加载更早历史')), 'R79 history after reopen control');
       await until(() => cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点')"), Boolean, 'R79 older runs after reopen');
       facts.r79.reopen = true;

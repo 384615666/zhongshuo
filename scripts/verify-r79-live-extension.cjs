@@ -10,7 +10,7 @@ module.exports = async function verifyR79(ctx) {
   const live = await until(() => taskBy('R79 UI LIVE'), v => v?.id, 'R79 live task');
   await navigate(cdp, `/thread/${live.threadId}?tab=run`, live.threadId);
   await until(() => cdp.eval("document.body.textContent.includes('工具与诊断活动')"), Boolean, 'R79 actual details');
-  const start = Date.now(); const samples = [];
+  const start = Date.now(); const samples = []; const heaps=[{at:Date.now(),phase:'live-details-start',...(await cdp.send('Runtime.getHeapUsage'))}];
   while (Date.now() - start < 17_500) {
     const persisted = queryOne(`SELECT t.revision taskRevision,r.id runId,r.status runStatus,(SELECT count(*) FROM domain_events e WHERE e.run_id=r.id AND e.kind LIKE 'tool.%') toolEvents,(SELECT count(*) FROM usage_records u JOIN agent_turns a ON a.id=u.turn_id WHERE a.run_id=r.id) usageRecords FROM tasks t JOIN workflow_runs r ON r.task_id=t.id WHERE t.id=? ORDER BY r.rowid DESC LIMIT 1`, live.id);
     const text = await cdp.eval("document.querySelector('.thread-details')?.textContent || ''");
@@ -24,6 +24,10 @@ module.exports = async function verifyR79(ctx) {
   const document = await command(cdp, 'delivery.document', { deliveryId: delivery.id });
   must(document.hashMatch === true && fs.existsSync(join(project, 'results/r79-live.md')), 'R79 live natural file/document');
   await until(() => cdp.eval("document.body.textContent.includes('等待人工验收')"), Boolean, 'R79 natural delivery visible automatically');
+  heaps.push({at:Date.now(),phase:'natural-delivery',...(await cdp.send('Runtime.getHeapUsage'))});
+  await navigate(cdp, `/project/${projectId}/board`, '/board');
+  await navigate(cdp, `/thread/${live.threadId}?tab=run`, live.threadId);
+  await until(() => cdp.eval("document.body.textContent.includes('R79_LIVE_PROGRESS_MARKER')"),Boolean,'live facts after leaving page');
   facts.steps.push('R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery');
 
   await navigate(cdp, `/project/${projectId}/room/${room.id}`, `/room/${room.id}`);
@@ -61,7 +65,11 @@ module.exports = async function verifyR79(ctx) {
   await until(() => cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点')"), Boolean, 'older runs reached');
   const chosen = await cdp.eval("(()=>{const area=document.querySelector('[data-zs-history=runs]');const row=area.querySelector('button');const id=area.querySelector('details')?.textContent.replace('运行身份','');row.click();return id})()");
   await until(() => cdp.eval("document.querySelector('.thread-details')?.textContent.includes('历史运行 · 已定位')"), Boolean, 'older run actually selected');
-  await sleep(5500);
+  const reading=await cdp.eval("(()=>{const body=document.querySelector('.details-body');body.scrollTop=500;const d=document.querySelector('.thread-details details');if(d)d.open=true;return{scrollTop:body.scrollTop,open:d?.open}})()");
+  await sleep(10500);
+  const afterReading=await cdp.eval("(()=>{const body=document.querySelector('.details-body');return{scrollTop:body.scrollTop,open:document.querySelector('.thread-details details')?.open}})()");
+  must(Math.abs(reading.scrollTop-afterReading.scrollTop)<=2&&afterReading.open,'poll reset history reading position or expansion');
+  must(await cdp.eval(`document.querySelector('.thread-details')?.textContent.includes(${JSON.stringify(chosen)})`),'selected historical run lost after poll');
   must((await command(cdp,'task.details',{projectId,taskId:scale.id,runId:chosen})).selectedRunId===chosen,'selected history mismatch');
   must(await cdp.eval(button('[data-zs-history=activity]', '加载更早历史')), 'R79 run activity history click');
   await until(() => cdp.eval("document.querySelector('[data-zs-history=activity]')?.textContent.includes('已到历史起点')"), Boolean, 'older run events reached');
@@ -72,10 +80,13 @@ module.exports = async function verifyR79(ctx) {
   await navigate(cdp, `/thread/${scale.threadId}?tab=delivery`, scale.threadId);
   must(await cdp.eval(button('[data-zs-history=deliveries]', '加载更早历史')), 'R79 delivery history click');
   await until(() => cdp.eval("document.querySelector('[data-zs-history=deliveries]')?.textContent.includes('交付 v11')"), Boolean, 'older delivery page');
+  const geometry=await cdp.eval(`(()=>{const area=document.querySelector('[data-zs-history=deliveries]');const button=area?.querySelector('button');button?.scrollIntoView({block:'center'});const body=document.querySelector('.details-body'),composer=document.querySelector('.col-thread .composer'),b=button?.getBoundingClientRect(),c=composer?.getBoundingClientRect();return{overflow:body?getComputedStyle(body).overflowY:null,bodyClientHeight:body?.clientHeight,bodyScrollHeight:body?.scrollHeight,buttonTop:b?.top,buttonBottom:b?.bottom,composerTop:c?.top,visible:Boolean(b&&c&&b.bottom<=c.top&&b.top>=body.getBoundingClientRect().top)}})()`);
+  must(geometry.overflow==='auto'&&geometry.visible,'history control is not reachable in the bounded detail scroll');
   await cdp.shot('r79-delivery-history.png');
   const olderDocument=await command(cdp,'delivery.document',{deliveryId:'r79-scale-delivery-10'});
   must(olderDocument.hashMatch===true,'older fixture document original bytes no longer readable');
   facts.steps.push('R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read');
-  fs.writeFileSync(join(out,'r79-live-samples.json'),JSON.stringify({scope:'final copied package, unmodified launcher, formal worker + engineering Fake adapter',samples,realCalls:0},null,2));
-  return {live,failed,scale,selectedHistoricalRun:chosen,threeCycles:true,automaticToolsAndUsage:true,naturalDelivery:true,explicitFailureRecovery:true,scaleInjection:'separate historical scale only; no normal state updates',runs:26,events:3250,deliveries:61,historyRead:true,zeroCalls:true};
+  heaps.push({at:Date.now(),phase:'history-pages-after-navigation',...(await cdp.send('Runtime.getHeapUsage'))});
+  fs.writeFileSync(join(out,'r79-live-samples.json'),JSON.stringify({scope:'final copied package, unmodified launcher, formal worker + engineering Fake adapter',samples,heaps,memoryScope:'observational CDP heap snapshots during formal workflow; not a multi-day leak certification',realCalls:0},null,2));
+  return {live,failed,scale,selectedHistoricalRun:chosen,threeCycles:true,automaticToolsAndUsage:true,naturalDelivery:true,explicitFailureRecovery:true,scaleInjection:'separate historical scale only; no normal state updates',runs:26,events:3250,deliveries:61,historyRead:true,reading,afterReading,geometry,zeroCalls:true};
 };
