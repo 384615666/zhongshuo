@@ -17,7 +17,7 @@
  *    （名称+拖动+三枚窗口按钮，零 store 订阅），主界面与窗口控制不再被连带卸载；
  *    ProjectMenu 另有一层内边界——菜单异常只关菜单，标题栏其余功能保留。
  *  - 项目入口还原原型形态：`项目管理 · [分支] · 当前项目名 ▾` 单按钮开菜单；
- *    「后台任务 N · N turn」状态按钮用真实 tasks/turns 计数（无数据=0，不冒充）。
+ *    「后台任务 N · N turn」状态按钮通过正式 project.taskSummary 读取项目计数（未读显示 —）。
  */
 import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -27,8 +27,8 @@ import { useStore, toast } from '../data/store';
 import { command } from '../bridge';
 import { switchFocusProject } from '../loader';
 import { toggleProjectVisible } from '../data/actions-nav';
-import { activeTasksOfProject } from '../data/selectors';
 import { navigate } from '../lib/router';
+import type { ProjectTaskSummary } from '../../../contracts/projectTaskSummary';
 
 interface ZsWindowState { maximized: boolean; fullScreen: boolean; focused: boolean }
 type ZsWindowBridge = {
@@ -159,8 +159,7 @@ export function TitleBar() {
           <Icon name="chevron-down" size={11} className="faint" />
         </button>
 
-        {/* 后台任务状态（原型形态）：真实 store 计数——只统计已装载任务/turn（未装载=0，
-            不冒充全量；点开进看板）。 */}
+        {/* 后台任务状态（原型形态）：正式项目任务/turn 汇总，受众过滤；未读显示未知，点击进看板。 */}
         <TitleBarStatButton />
 
         {guard != null ? (
@@ -202,25 +201,47 @@ export function TitleBar() {
   );
 }
 
-/** 后台任务状态按钮：真实计数（当前项目活跃任务 + 全局在跑 turn），点击进当前项目看板。 */
-function TitleBarStatButton() {
+/** 当前项目持久任务/turn 汇总；项目切换立即隐藏旧范围，失败保留同范围的上次事实。 */
+export function TitleBarStatButton() {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === s.activeProjectId) ?? null;
-  const runningTasks = project != null ? activeTasksOfProject(s, project.id).length : 0;
-  const runningTurns = s.turns.filter((t) => ['RUNNING', 'DISPATCHING', 'WAITING_APPROVAL', 'STOPPING'].includes(t.status)).length;
+  const projectId = project?.id;
+  const [snapshot, setSnapshot] = useState<ProjectTaskSummary | null>(null);
+  const [failure, setFailure] = useState<{ projectId: string; message: string } | null>(null);
+  useEffect(() => {
+    if (projectId == null) return;
+    let alive = true;
+    let pending = false;
+    const refresh = () => {
+      if (pending) return;
+      pending = true;
+      void command<ProjectTaskSummary>('project.taskSummary', { projectId })
+        .then((data) => { if (alive && data.projectId === projectId) { setSnapshot(data); setFailure(null); } })
+        .catch((e: unknown) => { if (alive) setFailure({ projectId, message: (e as Error).message }); })
+        .finally(() => { pending = false; });
+    };
+    refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) refresh();
+    }, 5000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [projectId]);
+  const facts = snapshot?.projectId === projectId ? snapshot : null;
+  const error = failure != null && failure.projectId === projectId ? failure.message : null;
   return (
     <button
       className="zs-tb-stat zs-tb-no-drag"
-      data-zs-running-tasks={String(runningTasks)}
-      data-zs-running-turns={String(runningTurns)}
+      data-zs-running-tasks={facts == null ? undefined : String(facts.unfinishedTasks)}
+      data-zs-running-turns={facts == null ? undefined : String(facts.activeTurns)}
       title={project != null
-        ? `${project.displayName} 的未结束任务（单项目范围）；turn 为全局已装载在跑数`
+        ? `${project.displayName} 的未结束任务与在途 turn（项目范围、受众过滤）${error != null ? `；读取失败：${error}（保留上次事实）` : ''}`
         : '打开项目后显示该项目的任务状态'}
       onClick={() => navigate(project != null ? `/board?scope=project&projectId=${project.id}` : '/board')}
     >
       <Icon name="activity" size={12} />
-      后台任务 <strong>{runningTasks}</strong>
-      <span className="faint"> · {runningTurns} turn</span>
+      后台任务 <strong>{facts?.unfinishedTasks ?? '—'}</strong>
+      <span className="faint"> · {facts?.activeTurns ?? '—'} turn</span>
+      {error != null ? <span title={error}> · 读取失败</span> : null}
     </button>
   );
 }

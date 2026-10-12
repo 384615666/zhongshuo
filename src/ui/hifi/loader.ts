@@ -24,7 +24,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
@@ -737,6 +737,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       taskTitle: it.taskTitle ?? null,
       taskObjective: it.taskObjective, taskReviewPolicy: it.taskReviewPolicy, taskRevision: it.taskRevision,
       taskMode: it.taskMode, ownerMemberId: it.ownerMemberId,
+      latestRun: it.latestRun,
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
       authorType: it.authorType, authorId: it.authorId, formalAttachments: it.attachments,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
@@ -794,6 +795,7 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
     roomTaskNumber: c.roomTaskNumber ?? 0, title: c.taskTitle ?? '',
     objective: c.taskObjective ?? null, status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: c.taskRevision ?? 0,
     reviewPolicy: c.taskReviewPolicy ?? undefined, mode: c.taskMode ?? undefined, ownerMemberId: c.ownerMemberId ?? undefined,
+    latestRun: c.latestRun,
     displayNumber: c.roomTaskNumber ?? 0,
   }));
   const subscriptions: Record<string, { followed: boolean; muted: boolean }> = {};
@@ -843,7 +845,7 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
         revision: detail.revision, reviewPolicy: detail.reviewPolicy,
         currentDeliveryId: detail.currentDeliveryId ?? undefined,
         ownerMemberId: detail.ownerMemberId ?? undefined, parentTaskId: detail.parentTaskId ?? undefined,
-        mode: detail.mode, displayNumber: detail.roomTaskNumber,
+        mode: detail.mode, latestRun: detail.activeRun as Task['latestRun'], displayNumber: detail.roomTaskNumber,
       };
       if (idx >= 0) nextTasks[idx] = taskView; else nextTasks.push(taskView);
       // task.get only supplies a run hint and a pending-delivery identity. It cannot certify

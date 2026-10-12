@@ -268,6 +268,7 @@ export interface ThreadCard {
   taskReviewPolicy?: 'auto_deliver' | 'user_review' | null;
   taskRevision?: number | null;
   taskMode?: RouteMode | null;
+  latestRun?: { id: string; status: RunStatus } | null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;
@@ -488,6 +489,8 @@ export interface Task {
   /** 当前交付版本（v1.12 §10.5）；一个任务最多一个 pending 交付 */
   currentDeliveryId?: string;
   mode?: RouteMode;
+  /** room.pool/task.get 的有限最近运行提示；详情由 task.details 读取。 */
+  latestRun?: { id: string; status: RunStatus } | null;
   displayNumber: number;
 }
 
@@ -1020,6 +1023,8 @@ export interface GitState {
   commitMessage: string;
   /** R71：普通非 Git 目录（中性形态——文件阅读可用；Git 页操作按无仓库处理） */
   notARepo?: boolean;
+  /** 部分只读命令失败时保留上次已确认的列表，同时逐项上屏原因；成功空列表才清旧值。 */
+  readErrors?: { branches?: string; history?: string; remotes?: string };
   /** 最近一次操作的如实结果；失败时保留原因而不是静默 */
   lastOp?: {
     op: string;

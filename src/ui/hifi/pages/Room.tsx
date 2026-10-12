@@ -16,6 +16,7 @@ import { MessageView } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
+import { taskRunHint } from '../lib/taskRunHint';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
 import {
@@ -982,7 +983,7 @@ function RootCard({
   /** 卡片 ⋯ 菜单锚点（关注/静音/复制链接等次级操作的家） */
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const task = thread ? taskOfThread(s, thread) : undefined;
-  const run = task ? s.runs.find((r) => r.taskId === task.id) : undefined;
+  const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
   // 主池只留 2 条预览：它是"要不要点进去"的判断依据，不是正文（§3.4 允许 2—3 条）
@@ -1022,8 +1023,9 @@ function RootCard({
     if (task.status === 'CANCELLED') {
       return { label: '已取消', icon: 'slash', tone: 'neutral' as const, detail: '' };
     }
-    // 2) 仍在跑：说明"谁在工作"，而不是罗列状态词
-    if (run?.status === 'WAITING' || s.turns.some((t) => t.threadId === thread?.id && t.status === 'RUNNING')) {
+    // 2) 未结束任务与最近运行分列：FAILED run 下的 ACTIVE task 并非正在执行。
+    if (run != null && run.status !== 'RUNNING') return taskRunHint(run.status);
+    if (run?.status === 'RUNNING' || s.turns.some((t) => t.threadId === thread?.id && t.status === 'RUNNING')) {
       const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
       return {
@@ -1031,7 +1033,7 @@ function RootCard({
         detail: who.length > 0 ? `${who.join('、')} 正在处理` : '成员正在处理',
       };
     }
-    return { label: '执行中', icon: 'play', tone: 'info' as const, detail: '' };
+    return taskRunHint(run?.status);
   }, [task, run, s.changeSets, s.issues, s.turns, s.members, thread?.id]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
@@ -1415,7 +1417,7 @@ function ThreadPanel({
   const entityConversationId = (s as AppState & { threadEntities?: Record<string, { conversationId?: string }> }).threadEntities?.[threadId]?.conversationId ?? '';
   const threadRoom = thread ? roomOf(s, thread.roomId) : undefined;
   const task = thread ? taskOfThread(s, thread) : undefined;
-  const run = task ? s.runs.find((r) => r.taskId === task.id) : undefined;
+  const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const followers = thread ? s.followers[thread.id] ?? [] : [];
   const absence = s.absence[threadId];
@@ -1983,7 +1985,7 @@ function ThreadPanel({
                   ? '房间还没有成员，请先添加成员'
                   : undefined
           }
-          runBudget={run ? { used: run.budget.usedAgentTurns, max: run.budget.maxAgentTurns } : undefined}
+          runBudget={run != null && 'budget' in run && run.budget != null ? { used: (run as WorkflowRun).budget.usedAgentTurns, max: (run as WorkflowRun).budget.maxAgentTurns } : undefined}
           /* 停止入口按**任务真实状态**出现（stop=task.stop 三重绑定；关闭/收起永不触发） */
           stop={task && (canStop || stopping)
             ? {
@@ -2092,7 +2094,7 @@ function ThreadDetails({
   threadId: string;
   anchor: Message;
   task?: Task;
-  run?: WorkflowRun;
+  run?: WorkflowRun | NonNullable<Task['latestRun']>;
   isDiscussion: boolean;
   section: DetailsSection;
   followerCount: number;
@@ -2330,7 +2332,7 @@ function ThreadPendingStrip({
 }: {
   s: AppState;
   task?: Task;
-  run?: WorkflowRun;
+  run?: WorkflowRun | NonNullable<Task['latestRun']>;
   onOpenSection: (sec: DetailsSection) => void;
 }) {
   // 讨论串没有任务：不渲染任何任务/运行/验收控件（§8）

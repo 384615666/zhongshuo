@@ -41,6 +41,33 @@ function fixture(scripts?: FakeTurnScript[]) {
 }
 
 describe('R78 task.details formal read projection', () => {
+  it('exposes a persisted latest-run hint in room.pool and counts only audience-visible unfinished project work', async () => {
+    const env = fixture([[{ kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '夹具失败', retryable: true } }]]);
+    try {
+      const sent = await env.raw('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body: '运行失败', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] });
+      const taskId = (sent.data as { taskId: string }).taskId;
+      await env.worker().runOnce();
+      const latest = env.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(taskId);
+      const pool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; taskStatus: string; latestRun: unknown }> };
+      expect(pool.items.find((item) => item.taskId === taskId)).toMatchObject({ taskStatus: 'ACTIVE', latestRun: latest });
+      expect(pool.items.find((item) => item.taskId === taskId)?.latestRun).toEqual(latest);
+      expect((await env.raw('project.taskSummary', { projectId: 'p1' })).data).toEqual({ projectId: 'p1', unfinishedTasks: 1, activeTurns: 0 });
+      env.db.prepare('UPDATE workflow_runs SET revision = 99 WHERE task_id = ?').run(taskId);
+      env.db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, status) VALUES ('new_queued_run', ?, 'conv_room', 'DIRECT', 'QUEUED')`).run(taskId);
+      const updatedPool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; latestRun: unknown }> };
+      expect(updatedPool.items.find((item) => item.taskId === taskId)?.latestRun).toEqual({ id: 'new_queued_run', status: 'QUEUED' });
+
+      env.db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('foreign_dm','p1','dm',NULL)`).run();
+      env.db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','foreign_dm','human','u_local'),('p1','foreign_dm','agent','mA')`).run();
+      env.db.prepare(`INSERT INTO tasks (id, project_id, conversation_id, kind, title, status) VALUES ('dm_task','p1','foreign_dm','dm_turn','私信任务','ACTIVE')`).run();
+      env.db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, mode, status) VALUES ('dm_run','dm_task','foreign_dm','DIRECT','RUNNING')`).run();
+      env.db.prepare(`INSERT INTO agent_turns (id, run_id, conversation_id, member_id, stage_key, status) VALUES ('dm_turn','dm_run','foreign_dm','mA','direct.work','RUNNING')`).run();
+      expect((await env.raw('project.taskSummary', { projectId: 'p1' })).data).toEqual({ projectId: 'p1', unfinishedTasks: 2, activeTurns: 1 });
+      env.db.prepare(`UPDATE dm_participants SET principal_id = 'u_other' WHERE conversation_id = 'foreign_dm' AND principal_type = 'human'`).run();
+      expect((await env.raw('project.taskSummary', { projectId: 'p1' })).data).toEqual({ projectId: 'p1', unfinishedTasks: 1, activeTurns: 0 });
+    } finally { env.close(); }
+  });
+
   it('shows the worker-created run, real turn, activity, usage and delivery with its persisted budget', async () => {
     const env = fixture();
     try {

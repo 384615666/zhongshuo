@@ -798,6 +798,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }));
         return withCommandId({ ok: true, data: { items } });
       }
+      case 'project.taskSummary': {
+        const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
+        if (deps.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(params.projectId) == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '项目不存在');
+        const audience = `AND (c.kind <> 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))`;
+        const unfinishedTasks = (deps.db.prepare(`SELECT COUNT(*) AS n FROM tasks t JOIN conversations c ON c.id = t.conversation_id WHERE t.project_id = ? AND t.status NOT IN ('DONE', 'CANCELLED') ${audience}`)
+          .get(params.projectId, deps.localUserId) as { n: number }).n;
+        const activeTurns = (deps.db.prepare(`SELECT COUNT(*) AS n FROM agent_turns a JOIN workflow_runs r ON r.id = a.run_id JOIN tasks t ON t.id = r.task_id JOIN conversations c ON c.id = t.conversation_id WHERE t.project_id = ? AND a.status IN ('PENDING', 'DISPATCHING', 'RUNNING', 'WAITING_APPROVAL', 'WAITING_INPUT', 'STOPPING') ${audience}`)
+          .get(params.projectId, deps.localUserId) as { n: number }).n;
+        return withCommandId({ ok: true, data: { projectId: params.projectId, unfinishedTasks, activeTurns } });
+      }
       case 'project.update': {
         // R65（review-r64 §4B）：项目属性真实写——displayName/description（描述=migration 046 列；
         // 不重命名磁盘目录）。expectedRevision 乐观锁（A 的编辑不写进 B；过时=STALE_REVISION）。
@@ -4300,21 +4310,27 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 房间主池（修复轮 6）：room 限定的根消息+线程摘要——不用事件拼接、不混其他房间。
         const params = z.strictObject({ roomId: z.string().min(1), limit: z.number().int().min(1).max(100).optional() }).parse(env.params);
         const limit = params.limit ?? 50;
+        const roomScope = deps.db.prepare("SELECT c.id AS conversation_id FROM rooms r JOIN conversations c ON c.room_id = r.id AND c.kind = 'room' WHERE r.id = ?").get(params.roomId) as { conversation_id: string } | undefined;
+        if (roomScope == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '房间不存在');
+        assertConversationAudience(deps.db, deps.localUserId, roomScope.conversation_id);
         const threads = deps.db.prepare(
-          `SELECT t.id, t.anchor_message_id, t.root_task_id, t.last_message_seq, t.revision,
+          `SELECT t.id, t.anchor_message_id, tk.id AS root_task_id, t.last_message_seq, t.revision,
                   m.body_json, m.created_at, m.author_type, m.author_id,
                   tk.status AS task_status, tk.room_task_number, tk.title AS task_title,
                   tk.objective AS task_objective, tk.review_policy AS task_review_policy, tk.revision AS task_revision,
                   tk.owner_member_id AS task_owner, tk.route_json AS task_route
+                  ,(SELECT r.id FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_id
+                  ,(SELECT r.status FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_status
            FROM conversation_threads t
            JOIN messages m ON m.id = t.anchor_message_id
-           LEFT JOIN tasks tk ON tk.id = t.root_task_id
-           WHERE t.room_id = ?
+           LEFT JOIN tasks tk ON tk.id = t.root_task_id AND tk.room_id = t.room_id AND tk.kind = 'room_task'
+           WHERE t.room_id = ? AND t.conversation_id = ?
            ORDER BY m.created_at DESC LIMIT ?`,
-        ).all(params.roomId, limit) as Array<{
+        ).all(params.roomId, roomScope.conversation_id, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
           body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; room_task_number: number | null; task_title: string | null;
           task_objective: string | null; task_review_policy: 'auto_deliver' | 'user_review' | null; task_revision: number | null; task_owner: string | null; task_route: string | null;
+          latest_run_id: string | null; latest_run_status: string | null;
         }>;
         const attachments = messageAttachmentSummaries(deps.db, threads.map((t) => t.anchor_message_id));
         const items = [];
@@ -4343,6 +4359,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskTitle: t.task_title,
             taskObjective: t.task_objective, taskReviewPolicy: t.task_review_policy, taskRevision: t.task_revision,
             ownerMemberId: t.task_owner, taskMode: taskModeFromRoute(t.task_route),
+            latestRun: t.latest_run_id != null && t.latest_run_status != null ? { id: t.latest_run_id, status: t.latest_run_status } : null,
           });
         }
         return withCommandId({ ok: true, data: { items } });
