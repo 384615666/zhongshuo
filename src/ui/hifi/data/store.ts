@@ -11,6 +11,7 @@
 import { useSyncExternalStore } from 'react';
 import type { AppState, ContextTarget, Thread, ThreadCard, RouteMode } from './types';
 import { openTab } from '../lib/resource';
+import { configureReadingPositions, readingPosition, saveReadingPosition } from './readingPositions';
 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
@@ -93,7 +94,7 @@ export interface HifiExtension {
    * （探针/无 preload）收不到事件，保持 'online' 缺省并按 boot 呈现。connInfo 为断线
    * 时 main 给出的说明（原样透传，不虚构）。
    */
-  conn: 'online' | 'offline';
+  conn: 'online' | 'offline' | 'recovering' | 'failed' | 'suspended';
   connInfo: string | null;
   /** r61 G6：本用户 message 类收藏事实（saved_refs 投影）——消息行书签按钮的已收藏状态
    * 与收藏页取消后的行内同步共用这一份；项目打开时刷新，切换成功即更新。 */
@@ -161,7 +162,16 @@ let state: HifiState = makeEmptyState();
 const listeners = new Set<() => void>();
 function emit() { for (const l of listeners) l(); }
 export function getState(): HifiState { return state; }
-export function setState(updater: (prev: HifiState) => HifiState) { state = updater(state); emit(); }
+export function setState(updater: (prev: HifiState) => HifiState) {
+  const old=state;state = updater(state);
+  if(state.preview!==old.preview){
+    const preview={...state.preview,tabs:state.preview.tabs.slice(-12).map(t=>({...t,openedFrom:{target:t.openedFrom.target,...(t.openedFrom.messageId?{messageId:t.openedFrom.messageId}:{})}})),maximized:false};
+    const ids=new Set(preview.tabs.map(t=>t.resourceId));
+    const resources=state.resources.filter(r=>ids.has(r.id)&&(r.formalAttachment||r.formalDelivery||r.formalWorktree)).map(r=>({...r,revisions:r.revisions.filter(v=>preview.tabs.some(t=>t.resourceId===r.id&&t.revision===v.revision)).map(v=>({...v,content:{kind:'unsupported',reason:'not_connected',note:'恢复阅读位置，需重新读取原件'}}))}));
+    saveReadingPosition('preview',{preview,resources});
+  }
+  emit();
+}
 function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 export function useStore<T>(selector: (s: HifiState) => T): T {
   return useSyncExternalStore(subscribe, () => selector(state), () => selector(state));
@@ -678,6 +688,13 @@ function persistSnapshot(): void {
  * 普通草稿按批准约定 24h 过期（updatedAt 缺失回退快照 savedAt）；未确认发送账本不清理。
  */
 export function initDraftPersistence(ns: string, rootId?: string | null): boolean {
+  configureReadingPositions(ns);
+  const saved=readingPosition<{preview:HifiState['preview'];resources:HifiState['resources']}>('preview');
+  if(state.preview.tabs.length===0&&saved?.preview&&Array.isArray(saved.preview.tabs)&&saved.preview.tabs.length<=12&&Array.isArray(saved.resources)){
+    const resources=saved.resources.filter(r=>r&&typeof r.id==='string'&&typeof r.projectId==='string'&&typeof r.title==='string'&&r.origin&&r.audience&&Array.isArray(r.revisions)&&r.revisions.every(v=>typeof v.revision==='number'&&v.content?.kind==='unsupported')&&(r.formalAttachment||r.formalDelivery||r.formalWorktree));
+    const tabs=saved.preview.tabs.filter(t=>t&&typeof t.key==='string'&&t.openedFrom?.target&&resources.some(r=>r.id===t.resourceId&&r.revisions.some(v=>v.revision===t.revision)));
+    state={...state,resources:[...state.resources,...resources.filter(r=>!state.resources.some(old=>old.id===r.id))],preview:{...state.preview,...saved.preview,tabs,maximized:false}};
+  }
   persistNs = ns;
   persistRootId = rootId ?? null;
   persistLocked = false; // 每次初始化重判（重启/显式重试=隔离重试路径）

@@ -3,6 +3,7 @@ import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun
 import { command } from '../bridge';
 import { RunStatusTag, TaskStatusTag } from './ui';
 import { fullTime } from '../lib/format';
+import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
 const detailReads = new Map<string, Promise<TaskDetailsResult>>();
@@ -18,14 +19,15 @@ function readDetails(key: string, params: { projectId: string; taskId: string; r
 
 export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined, conversationId?:string) {
   const target = JSON.stringify([projectId, taskId,conversationId]);
-  const [requested, setRequested] = useState<{ target: string; runId: string } | null>(null);
-  const selectedRunId = requested?.target === target ? requested.runId : runId;
+  const [requested, setRequested] = useState<{ target: string; runId: string } | null>(()=>{const id=readingPosition<string>(`run:${target}`);return typeof id==='string'?{target,runId:id}:null;});
+  const remembered=readingPosition<string>(`run:${target}`);
+  const selectedRunId = requested?.target === target ? requested.runId : typeof remembered==='string'?remembered:runId;
   const key = JSON.stringify([projectId, taskId, selectedRunId,conversationId]);
   const [state, setState] = useState<{ key: string; data: TaskDetailsResult | null; error: string | null; loading: boolean; updatedAt: number | null }>({ key: '', data: null, error: null, loading: false, updatedAt: null });
   const read = useRef<(() => void) | null>(null);
   const source = useRef({ key, revision, runStatus });
   const refresh = useCallback(() => read.current?.(), []);
-  const selectRun = useCallback((id: string) => { if (taskId) setRequested({ target, runId: id }); }, [target, taskId]);
+  const selectRun = useCallback((id: string) => { if (taskId) {saveReadingPosition(`run:${target}`,id);setRequested({ target, runId: id });} }, [target, taskId]);
   useEffect(() => {
     if (!projectId || !taskId) return;
     let alive = true; let busy = false; let pending = false; let intent = 0;
@@ -60,11 +62,19 @@ export function useTaskDetails(projectId: string | undefined, taskId: string | u
     source.current = { key, revision, runStatus };
     if (old.key === key && (old.revision !== revision || old.runStatus !== runStatus)) refresh();
   }, [key, revision, runStatus, refresh]);
-  return { data: state.key === key ? state.data : null, error: state.key === key ? state.error : null, loading: state.key === key && state.loading, updatedAt: state.key === key ? state.updatedAt : null, refresh, selectRun };
+  return { data: state.key === key ? state.data : null, error: state.key === key ? state.error : null, loading: state.key === key && state.loading, updatedAt: state.key === key ? state.updatedAt : null, refresh, selectRun,readingKey:JSON.stringify([target,state.key===key?state.data?.selectedRunId:selectedRunId]) };
 }
 
-export function DetailReadState({ error, loading, updatedAt, refresh }: { error: string | null; loading: boolean; updatedAt?: number | null; refresh: () => void }) {
-  return <div className="row tight wrap small" style={{ marginBottom: 8 }}>
+export function DetailReadState({ error, loading, updatedAt, refresh,readingKey }: { error: string | null; loading: boolean; updatedAt?: number | null; refresh: () => void;readingKey?:string }) {
+  const ref=useRef<HTMLDivElement>(null);
+  useEffect(()=>{if(!readingKey||!updatedAt)return;const body=ref.current?.closest<HTMLElement>('.details-body');if(!body)return;const scope=`detail-position:${readingKey}:${body.parentElement?.querySelector('.details-subnav [aria-selected=true]')?.textContent??''}`;
+    const position=readingPosition<{top:number;open:number[]}>(scope);let timer:ReturnType<typeof setTimeout>|undefined;
+    const frame=requestAnimationFrame(()=>{if(position){for(const [i,d] of Array.from(body.querySelectorAll('details')).entries())d.open=Array.isArray(position.open)&&position.open.includes(i);body.scrollTop=Number.isFinite(position.top)?position.top:0;}});
+    const save=()=>saveReadingPosition(scope,{top:body.scrollTop,open:Array.from(body.querySelectorAll('details')).flatMap((d,i)=>d.open?[i]:[])});
+    const changed=()=>{if(timer)clearTimeout(timer);timer=setTimeout(save,220);};body.addEventListener('scroll',changed);body.addEventListener('toggle',changed,true);
+    return()=>{cancelAnimationFrame(frame);if(timer)clearTimeout(timer);save();body.removeEventListener('scroll',changed);body.removeEventListener('toggle',changed,true);};
+  },[readingKey,Boolean(updatedAt)]);
+  return <div ref={ref} className="row tight wrap small" style={{ marginBottom: 8 }}>
     {error ? <span className="panel warning">详情读取失败：{error}。{updatedAt ? '保留上次成功读取的事实。' : '尚未取得详情快照。'}</span> : null}
     {updatedAt ? <span className="faint">更新于 {fullTime(updatedAt)}</span> : <span className="faint">尚未读取详情</span>}
     {loading ? <span className="faint">正在读取正式详情…</span> : null}
@@ -138,8 +148,9 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
   useEffect(()=>{busy.current=false;ticket.current++;return()=>{ticket.current++;};},[key]);
   const current=state.key===key?state:null;
   const next=current?.page?current.page.nextCursor:cursor;
-  const load=()=>{if(busy.current||!next)return;busy.current=true;const id=++ticket.current;setState(old=>({key,page:old.key===key?old.page:null,error:null,loading:true}));
-    void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,conversationId:detail.task.conversationId,kind,...(runId?{runId}:{}),cursor:next}).then(page=>{if(ticket.current===id)setState({key,page,error:null,loading:false});},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
+  const load=(requestedCursor=next)=>{if(busy.current||!requestedCursor)return;busy.current=true;const id=++ticket.current;setState(old=>({key,page:old.key===key?old.page:null,error:null,loading:true}));
+    void command<TaskHistoryPage>('task.history',{projectId:detail.task.projectId,taskId:detail.task.id,conversationId:detail.task.conversationId,kind,...(runId?{runId}:{}),cursor:requestedCursor}).then(page=>{if(ticket.current===id){saveReadingPosition(`history:${key}`,requestedCursor);setState({key,page,error:null,loading:false});}},(e:unknown)=>{if(ticket.current===id)setState(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{if(ticket.current===id)busy.current=false;});};
+  useEffect(()=>{const saved=readingPosition<string>(`history:${key}`);if(typeof saved==='string'&&saved.length>0)load(saved);},[key]);
   if (!next && !current?.page && !current?.loading && !current?.error) return null;
   return <div className="card tight" data-zs-history={kind}>
     {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>
@@ -147,9 +158,9 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
       {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{e.summary?` · ${e.summary}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
       {kind==='deliveries'?(current.page.items as TaskDetailsResult['deliveries']).map(d=><div key={d.id}><a href={d.locate}>交付 v{d.revision}</a> · {reviewLabel[d.reviewStatus]??d.reviewStatus}{d.reviewNote?<div>{d.reviewNote}</div>:null}<details className="faint small"><summary>版本身份</summary>{d.id} · {d.manifestHash}</details></div>):null}
       {current.page.items.length===0?<span>本页权威读取为空。</span>:null}
-      <button className="btn ghost sm" disabled={current?.loading} onClick={()=>{ticket.current++;busy.current=false;setState({key,page:null,error:null,loading:false});}}>返回最新窗口</button></>:null}
+      <button className="btn ghost sm" disabled={current?.loading} onClick={()=>{ticket.current++;busy.current=false;saveReadingPosition(`history:${key}`,null);setState({key,page:null,error:null,loading:false});}}>返回最新窗口</button></>:null}
     {current?.error?<div className="panel warning">历史读取失败：{current.error}。保留已读取的当前页，可重试。</div>:null}
-    {next?<button className="btn ghost sm" disabled={current?.loading} onClick={load}>{current?.error?'重试读取更早历史':'加载更早历史'}</button>:current?.page?<span className="faint small">已到历史起点</span>:null}
+    {next?<button className="btn ghost sm" disabled={current?.loading} onClick={()=>load()}>{current?.error?'重试读取更早历史':'加载更早历史'}</button>:current?.page?<span className="faint small">已到历史起点</span>:null}
     {current?.loading?<span className="faint small">正在读取历史…</span>:null}
   </div>;
 }

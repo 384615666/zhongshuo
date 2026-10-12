@@ -121,15 +121,15 @@ export function TitleBar() {
 
   // 连接态合成（r55）：断线优先于 boot（首启后掉线不再显示「已连接」）；重连由 main 负责，
   // 恢复即回到在线。connInfo 为 main 给的断线说明（原样透传）。
-  const connLabel = conn === 'offline'
+  const connLabel = conn === 'failed' ? '恢复失败 · 可查看本地诊断' : conn==='suspended' ? '宿主已挂起' : conn==='recovering' ? '正在恢复连接…' : conn === 'offline'
     ? `已断开——重连中${connInfo != null && connInfo.length > 0 ? `（${connInfo}）` : ''}`
     : boot === 'pending' ? '连接服务中…' : boot === 'failed' ? '服务连接失败' : '已连接';
-  const connOff = conn === 'offline' || boot !== 'ready';
+  const connOff = conn !== 'online' || boot !== 'ready';
   return createPortal(
     <TitleBarBoundary>
       <div className="zs-titlebar" data-zs-titlebar-rendered="react">
         <span className="zs-tb-name">众说</span>
-        <span className="zs-tb-stat zs-tb-no-drag" data-zs-conn={conn === 'offline' ? 'offline' : 'online'} title={conn === 'offline' ? `连接已断开，主进程正在重连${connInfo != null && connInfo.length > 0 ? `：${connInfo}` : ''}——命令会以「结果未知」回执，草稿与信封保留` : project != null ? `当前项目：${project.displayName}` : '尚未打开项目'}>
+        <span className="zs-tb-stat zs-tb-no-drag" data-zs-conn={connOff ? 'offline' : 'online'} data-zs-connection-phase={conn} title={connOff ? `连接状态：${conn}${connInfo ? ` · ${connInfo}` : ''}；未知结果信封保留，不自动重发。恢复失败可查看设置中的本地诊断。` : project != null ? `当前项目：${project.displayName}` : '尚未打开项目'}>
           <span className={connOff ? 'dot-off' : 'dot'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 5, verticalAlign: 1, background: connOff ? '#c9312e' : '#22a55e' }} />
           {connLabel}
         </span>

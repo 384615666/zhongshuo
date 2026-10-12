@@ -28,6 +28,7 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
+import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
@@ -443,7 +444,7 @@ async function uploadDocumentAttachment(
   const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
   mkdirSync(blobRoot, { recursive: true });
   const blobPath = join(blobRoot, `${hash}.bin`);
-  if (!existsSync(blobPath)) writeFileSync(blobPath, raw); // 内容寻址——同内容单副本
+  if (!existsSync(blobPath)) atomicWriteFile(blobPath, raw); // 内容寻址——同内容单副本
   const summaryOf = (cache: ExtractCache): Record<string, unknown> => {
     switch (cache.kind) {
       case 'pdf': return { pages: cache.totalPages, truncatedTotal: cache.truncatedTotal };
@@ -2765,7 +2766,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const hash = createHash('sha256').update(params.content, 'utf8').digest('hex');
         const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
         mkdirSync(blobRoot, { recursive: true });
-        writeFileSync(join(blobRoot, `${hash}.txt`), params.content, 'utf8'); // 副本（内容寻址——同内容不重复）
+        atomicWriteFile(join(blobRoot, `${hash}.txt`), params.content); // 内容寻址原件，失败不截断现有副本
         const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; truncated: boolean; originalBytes: number } => {
           const attachmentId = `art_${randomUUID()}`;
           deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
@@ -2798,7 +2799,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const hash = createHash('sha256').update(raw).digest('hex');
         const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
         mkdirSync(blobRoot, { recursive: true });
-        writeFileSync(join(blobRoot, `${hash}.txt`), raw); // **原字节**直写（内容寻址——同内容不重复；BOM/编码保持）
+        atomicWriteFile(join(blobRoot, `${hash}.txt`), raw); // 原字节；失败不截断现有副本
         const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; truncated: boolean; originalBytes: number; encoding: string; kind: string } => {
           const attachmentId = `art_${randomUUID()}`;
           const kind = kindForFilename(params.filename);
@@ -3007,7 +3008,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const hash = createHash('sha256').update(raw).digest('hex');
         const blobRoot = join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore');
         mkdirSync(blobRoot, { recursive: true });
-        writeFileSync(join(blobRoot, `${hash}.bin`), raw); // 内容寻址原件（同内容不重复）
+        atomicWriteFile(join(blobRoot, `${hash}.bin`), raw); // 内容寻址原件，失败不截断现有副本
         const tx = deps.db.transaction((): { attachmentId: string; hash: string; bytes: number; width: number; height: number; mime: string } => {
           const attachmentId = `art_${randomUUID()}`;
           deps.db.prepare(`INSERT INTO artifacts (id, project_id, conversation_id, author_id, kind, revision, hash, blob_path, source_name, created_at)
@@ -4107,6 +4108,21 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({ batchId: z.string().min(1).max(100).optional() }).parse(env.params);
         const { realCallSummary } = await import('./realCallLedger.ts');
         return withCommandId({ ok: true, data: realCallSummary(deps.db, params.batchId) });
+      }
+      case 'app.health': {
+        z.strictObject({}).parse(env.params);
+        return withCommandId({ok:true,data:{ready:true,at:Date.now()}});
+      }
+      case 'app.diagnostics': {
+        if(deps.remoteAudit)throw new DaemonCommandError('FORBIDDEN','本地诊断仅在本机可信入口读取');
+        const p=z.strictObject({projectId:z.string().min(1).optional()}).parse(env.params);
+        const {isDispatchGateHeld}=await import('../persistence/daemonState.ts');
+        if(p.projectId&&!deps.db.prepare('SELECT 1 FROM projects WHERE id=?').get(p.projectId))throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
+        const rows=p.projectId?deps.db.prepare('SELECT id FROM project_members WHERE project_id=? ORDER BY rowid LIMIT 21').all(p.projectId) as Array<{id:string}>:[];
+        const context:ImageCapabilityReadContext=new Map();
+        const runtime=rows.slice(0,20).map(row=>{const c=memberImageCapability(deps.db,row.id,context);let channel:string|null=null;try{channel=new URL(c.channel).host;}catch{/* uncertain channel */}return{memberId:createHash('sha256').update(row.id).digest('hex').slice(0,16),channel,kind:c.kind,model:c.model&&/^[a-zA-Z0-9._/-]{1,80}$/.test(c.model)&&!c.model.startsWith('sk-')?c.model:null,status:c.status,configuration:c.configuration,source:c.endpointSource?.includes('环境')?'进程环境':c.endpointSource?.includes('项目')?'项目配置':c.endpointSource?.includes('用户')?'用户配置':c.endpointSource?.includes('托管')?'托管配置':c.endpointSource==='官方默认'?'官方默认':'未提供',reason:c.status==='supported'?'当前有效身份与既有认证匹配':c.reason.includes('不匹配')?'有效配置与认证不匹配':c.reason.includes('超时')?'此前真实认证等待上游超时':c.reason.includes('不可读')||c.reason.includes('无法')?'有效配置不可确定':'此组合未认证',identityKey:c.identityKey};});
+        const count=(sql:string)=>(deps.db.prepare(sql).get() as {n:number}).n;
+        return withCommandId({ok:true,data:{at:Date.now(),service:'ready',runtime,truncated:rows.length>20,protection:{dispatchGateHeld:isDispatchGateHeld(deps.db),unknownTurns:count("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN'"),pendingDispatches:count("SELECT count(*) n FROM outbox WHERE status='pending'")}}});
       }
       case 'app.identity': {
         // r61（review-r60 §6）：稳定身份——renderer 草稿/未知信封持久化的命名空间用。

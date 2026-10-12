@@ -6,11 +6,13 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { ConnectionMonitor } from './connectionMonitor.ts';
+import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
 import type { PipeClient } from '../contracts/daemonIpc.ts';
@@ -211,18 +213,18 @@ async function ensureConnection(): Promise<void> {
   if (exitFacts != null && !daemonShuttingDown) throw new Error(`daemon 已退出（code=${exitFacts.code}）——连接不可用`);
   // 并发共享：同一段时间内所有请求等同一次连接过程（不各自重试放大负载）。
   if (connectInFlight != null) return connectInFlight;
-  const deadline = Date.now() + READY_DEADLINE_MS;
+  const deadline = performance.now() + READY_DEADLINE_MS;
   connectInFlight = (async () => {
     let lastError: unknown = null;
     for (;;) {
-      if (Date.now() > deadline) break;
+      if (performance.now() > deadline) break;
       const ex = readDaemonExitFacts();
       if (ex != null && !daemonShuttingDown) throw new Error(`daemon 启动中退出（code=${ex.code}）——连接中止`);
       try {
         // 剩余时间传入连接/握手时限（第二十二轮三）：最后一次握手不额外超出截止。
         pipe = await connectPipe(daemonPipe, {
           token: daemonToken,
-          connectTimeoutMs: Math.max(1_000, deadline - Date.now()),
+          connectTimeoutMs: Math.max(1, deadline - performance.now()),
           signal: readyAbort.signal,
         });
         if (!daemonAuthed) {
@@ -231,6 +233,7 @@ async function ensureConnection(): Promise<void> {
 `);
         }
         pipeClosedCheck();
+        connectionMonitor.connected();
         return;
       } catch (error) {
         if (readyAbort.signal.aborted) throw new Error(`daemon 连接已取消（应用退出/关停）：${error instanceof Error ? error.message : String(error)}`);
@@ -243,21 +246,15 @@ async function ensureConnection(): Promise<void> {
   return connectInFlight;
 }
 
-let closedNotified = false;
-function pipeClosedCheck(): void {
-  if (pipe == null) return;
-  if (pipe.closed && !closedNotified) {
-    closedNotified = true;
-    for (const win of BrowserWindow.getAllWindows()) win.webContents.send('zs:disconnect', '连接已断开，正在重连…');
-    void ensureConnection()
-      .then(() => {
-        closedNotified = false;
-        for (const win of BrowserWindow.getAllWindows()) win.webContents.send('zs:reconnected', {});
-      })
-      .catch(() => { /* 下一次命令触发重连 */ });
-  } else {
-    setTimeout(pipeClosedCheck, 500).unref?.();
+const connectionMonitor=new ConnectionMonitor({healthy:()=>pipe!=null&&!pipe.closed,connect:ensureConnection,verify:async()=>{try{await pipe!.send({protocolVersion:1,commandId:`health-${randomUUID()}`,method:'app.health',params:{}});}catch(e){pipe?.close();throw e;}},notify:facts=>{
+  for(const win of BrowserWindow.getAllWindows()){
+    win.webContents.send('zs:connection',facts);
+    if(facts.phase==='online')win.webContents.send('zs:reconnected',{});
+    else win.webContents.send('zs:disconnect',facts.phase==='failed'?'恢复失败；确认服务可用后读取会重试，必要时正常重开应用':facts.phase==='suspended'?'宿主挂起；返回后核实连接':'连接已断开，正在恢复…');
   }
+}});
+function pipeClosedCheck(): void {
+  connectionMonitor.start();
 }
 
 // 远程壳证书钉选（第三十一轮五）：必须在 Chromium 初始化（app ready）前 appendSwitch——
@@ -267,6 +264,9 @@ if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI 
 }
 
 app.whenReady().then(async () => {
+  powerMonitor.on('suspend',()=>connectionMonitor.suspend());
+  powerMonitor.on('resume',()=>connectionMonitor.resume());
+  app.once('will-quit',()=>connectionMonitor.dispose());
   // 远程浏览器验收壳（第三十一轮五；仅显式 ZS_REMOTE_SHELL_URL）：复用本包 Chromium 打开
   // 远程客户端页——**无 preload**（远程页不获本机桥）；证书以 SPKI 钉选信任（等价「用户核对
   // 指纹后信任」，不关闭证书校验）。用于 DEV-25 本机浏览器闭环/双机验收的客户端侧。
@@ -325,6 +325,11 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
       throw new Error(`IPC 来源不可信（${frameUrl.slice(0, 60) || '空'}）——本机桥仅限应用窗口`);
     }
   };
+  ipcMain.handle('zs:diagnostics',event=>{
+    assertTrustedSender(event);
+    let build:unknown=null;try{const b=JSON.parse(readFileSync(join(appRoot,'..','..','BUILD.json'),'utf8'));build={buildId:b.buildId,commit:b.commit,dirty:b.dirty};}catch{/* development/unknown */}
+    return{build,connection:connectionMonitor.metrics,dataRootIdentity:createHash('sha256').update(resolve(appDataDir)).digest('hex').slice(0,16),daemon:{spawned:daemonProcess!=null,exit:readDaemonExitFacts(),shuttingDown:daemonShuttingDown},at:Date.now()};
+  });
   ipcMain.handle('zs:command', async (event, envelope: unknown) => {
     assertTrustedSender(event);
     // 工程观测钩子（R68 §4，ZS_COMMAND_LOG_FILE——仅显式设置的测试/演练环境）：把**实际
@@ -395,6 +400,7 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
     await new Promise((r) => setTimeout(r, Number(process.env.ZS_UI_DAEMON_DELAY_MS) || 0));
   }
   await startDaemonProcess(appDataDir, runtime);
+  connectionMonitor.start();
   // 就绪不再以 spawn 返回为准（第二十一轮一）：认证完成（ensureConnection 内 auth.ok）才可用；
   // 预热连接立即发起——首条命令与预热共享同一过程。
   void ensureConnection().catch((error) => {
@@ -485,7 +491,7 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
         const dotAt = safeName.lastIndexOf('.');
         target = join(autoDir, dotAt > 0 ? `${safeName.slice(0, dotAt)}-${n}${safeName.slice(dotAt)}` : `${safeName}-${n}`);
       }
-      writeFileSync(target, raw);
+      atomicWriteFile(target, raw);
       return { ok: true, path: target, bytes: raw.length, auto: true };
     }
     const picked = await dialog.showSaveDialog(win, {
@@ -493,7 +499,7 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
       defaultPath: safeName,
     });
     if (picked.canceled || picked.filePath == null || picked.filePath.length === 0) return { ok: false, cancelled: true };
-    writeFileSync(picked.filePath, raw);
+    atomicWriteFile(picked.filePath, raw);
     return { ok: true, path: picked.filePath, bytes: raw.length };
   });
   const pushWindowState = (): void => {

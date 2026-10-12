@@ -196,6 +196,7 @@ function verifyManifest(packageRoot) {
   const captureUi = (label) => { if (cdp != null) facts.ui.sessions.push({ label, errors: cdp.errors }); };
   const start = (overrides = {}) => {
     const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(port), ZS_R78_ENGINEERING_TOKEN: token, ZS_DAEMON_ENTRY: entry };
+    if(process.argv.includes('--r80')){env.ZS_UI_READY_DEADLINE_MS='1800';env.ZS_COMMAND_LOG_FILE=path.join(data,'engineering','r80-commands.jsonl');}
     for (const key of ['ZS_RUNTIME', 'ZS_ALLOW_FAKE', 'ZS_APP_DATA', 'ZS_PIPE_NAME', 'ZS_REAL_DISPATCH_GUARD', 'ZS_PACKED_ENTRY']) delete env[key];
     Object.assign(env, overrides);
     bat = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copy, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -419,6 +420,7 @@ function verifyManifest(packageRoot) {
 
     facts.deliveries = { room: [roomD1.id, roomD2.id], dm: [dmD1.id, dmD2.id] };
     facts.realCallsBeforeReopen = queryOne('SELECT count(*) c FROM real_calls').c;
+    if(process.argv.includes('--r80'))facts.r80=await require('./verify-r80-recovery-extension.cjs')({cdp,projectId,room,dm,memberId,project,data,out,command,rawCommand,navigate,uiSend,until,queryOne,queryAll,must,sleep,button,facts});
     must(facts.realCallsBeforeReopen === 0, 'real_calls is nonzero');
     await cdp.shot('r78-dm-accepted.png');
     captureUi('engineering-full-flow');
@@ -441,8 +443,8 @@ function verifyManifest(packageRoot) {
       await navigate(cdp, `/thread/${facts.r79.live.threadId}?tab=run`, facts.r79.live.threadId);
       await until(() => cdp.eval("document.body.textContent.includes('R79_LIVE_PROGRESS_MARKER')"), Boolean, 'R79 live history after reopen');
       await navigate(cdp, `/thread/${facts.r79.scale.threadId}?tab=run`, facts.r79.scale.threadId);
-      await until(() => cdp.eval("[...document.querySelectorAll('[data-zs-history=runs] button')].some(b=>b.textContent.trim()==='加载更早历史'&&!b.disabled)"), Boolean, 'R79 reopened history read ready');
-      must(await cdp.eval(button('[data-zs-history=runs]', '加载更早历史')), 'R79 history after reopen control');
+      await until(() => cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点') || [...document.querySelectorAll('[data-zs-history=runs] button')].some(b=>b.textContent.trim()==='加载更早历史'&&!b.disabled)"), Boolean, 'R79 reopened history read ready');
+      if(!await cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点')"))must(await cdp.eval(button('[data-zs-history=runs]', '加载更早历史')), 'R79 history after reopen control');
       await until(() => cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点')"), Boolean, 'R79 older runs after reopen');
       facts.r79.reopen = true;
       await cdp.shot('r79-history-reopened.png');

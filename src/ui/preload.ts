@@ -9,11 +9,13 @@ contextBridge.exposeInMainWorld('zs', {
   command: (envelope: unknown): Promise<unknown> => ipcRenderer.invoke('zs:command', envelope),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('zs:pickFolder'),
   openPath: (target: string): Promise<string> => ipcRenderer.invoke('zs:openPath', target) as Promise<string>,
-  onDisconnect: (cb: (info: string) => void): void => {
-    ipcRenderer.on('zs:disconnect', (_e, info) => cb(info));
+  diagnostics: () => ipcRenderer.invoke('zs:diagnostics'),
+  onConnection: (cb: (facts:unknown)=>void) => {const listener=(_e:Electron.IpcRendererEvent,facts:unknown)=>cb(facts);ipcRenderer.on('zs:connection',listener);return()=>ipcRenderer.removeListener('zs:connection',listener);},
+  onDisconnect: (cb: (info: string) => void) => {
+    const listener=(_e:Electron.IpcRendererEvent,info:string)=>cb(info);ipcRenderer.on('zs:disconnect',listener);return()=>ipcRenderer.removeListener('zs:disconnect',listener);
   },
-  onReconnected: (cb: () => void): void => {
-    ipcRenderer.on('zs:reconnected', () => cb());
+  onReconnected: (cb: () => void) => {
+    const listener=()=>cb();ipcRenderer.on('zs:reconnected',listener);return()=>ipcRenderer.removeListener('zs:reconnected',listener);
   },
   onDemoStatus: (cb: (status: string) => void): void => {
     ipcRenderer.on('zs:demo-status', (_e, status) => cb(status));

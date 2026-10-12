@@ -23,6 +23,8 @@ function fallbackToLegacy(err: unknown): void {
  * 无 preload 桥：注册失败保持缺省，状态行按 boot 呈现，不假装收得到事件。
  */
 function watchConnection(): void {
+  const modern=(window as unknown as {zs?:{onConnection?:(cb:(facts:{phase:'online'|'recovering'|'failed'|'suspended';code:string|null})=>void)=>()=>void;diagnostics?:()=>Promise<{connection:{phase:'online'|'recovering'|'failed'|'suspended';code:string|null}}>}}).zs;
+  if(modern?.onConnection){let seen=false;const apply=(facts:{phase:'online'|'recovering'|'failed'|'suspended';code:string|null})=>setState(s=>({...s,conn:facts.phase,connInfo:facts.code}));const unsubscribe=modern.onConnection(facts=>{seen=true;apply(facts);});void modern.diagnostics?.().then(r=>{if(!seen)apply(r.connection);}).catch(()=>{});window.addEventListener('pagehide',unsubscribe,{once:true});return;}
   const zs = (window as unknown as { zs?: { onDisconnect?: (cb: (info: string) => void) => void; onReconnected?: (cb: () => void) => void } }).zs;
   if (zs == null || typeof zs.onDisconnect !== 'function' || typeof zs.onReconnected !== 'function') return;
   zs.onDisconnect((info) => setState((s) => ({ ...s, conn: 'offline', connInfo: String(info ?? '') })));

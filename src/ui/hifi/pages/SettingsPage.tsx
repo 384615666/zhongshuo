@@ -16,6 +16,7 @@ import { navigate } from '../lib/router';
 import { refreshMembers } from '../loader';
 import { ArchiveManager } from './ArchivePage';
 import { isExternalDeepLink } from '../lib/deepLink';
+import { LocalDiagnostics } from '../components/LocalDiagnostics';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -588,6 +589,7 @@ function SectionHelp() {
   return (
     <div>
       <SectionHead title="帮助与关于" sub={<>版本、构建身份与诊断。</>} />
+      <LocalDiagnostics />
       <ReadOnlyRow label="应用" value="众说 · 本地多成员协作工作台" />
       <ReadOnlyRow label="界面" value="已批准原型还原版（R64）——正式链路 + 原型布局" />
       <ReadOnlyRow label="数据根" value={identity?.appDataDir ?? '（读取中…）'} />

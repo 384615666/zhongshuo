@@ -13,15 +13,18 @@ export type ReaderState =
   | { kind: 'pdf'; page: number; zoomMode: 'fit' | number }
   | { kind: 'xlsx'; sheetName: string | null }
   | { kind: 'docx'; scrollTop: number };
+import { readingPosition, saveReadingPosition, readingNamespace, forgetReadingPositions } from '../data/readingPositions';
 
 const states = new Map<string, ReaderState>();
 
 export function readerStateOf(resourceId: string, revision: number): ReaderState | undefined {
-  return states.get(`${resourceId}:${revision}`);
+  return readingNamespace()?readingPosition<ReaderState>(`reader:${resourceId}:${revision}`):states.get(`${resourceId}:${revision}`);
 }
 
 export function saveReaderState(resourceId: string, revision: number, state: ReaderState): void {
   states.set(`${resourceId}:${revision}`, state);
+  if(states.size>64)states.delete(states.keys().next().value!);
+  saveReadingPosition(`reader:${resourceId}:${revision}`,state);
   // 工程验证观测（只读镜像——不参与逻辑）：门/探针可直读保存事实。
   try {
     const w = window as unknown as { __zsReaderStates?: Record<string, unknown> };
@@ -32,6 +35,7 @@ export function saveReaderState(resourceId: string, revision: number, state: Rea
 
 /** 显式关闭标签/全部关闭时清理对应状态（重开=按既有合同从首页开始）。 */
 export function clearReaderState(resourceId: string): void {
+  forgetReadingPositions(`reader:${resourceId}:`);
   for (const k of [...states.keys()]) {
     if (k.startsWith(`${resourceId}:`)) states.delete(k);
   }

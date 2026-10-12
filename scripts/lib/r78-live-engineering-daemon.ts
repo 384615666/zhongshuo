@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { Server, type Socket } from 'node:net';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 
@@ -16,6 +17,12 @@ const packageRoot = resolve(data, '..', 'ZhongshuoDual');
 const packedEntry = join(packageRoot, 'resources', 'app', 'daemon', 'daemon.cjs');
 const buildFile = join(packageRoot, 'BUILD.json');
 const markerFile = join(data, 'engineering-r78.json');
+// Isolated engineering host only. Product daemon and daily package do not contain this hook.
+const ownedSockets=new Set<Socket>();let blockedUntil=0;
+const originalEmit=Server.prototype.emit;
+Server.prototype.emit=function(event:string,...args:unknown[]){if(event==='connection'){const socket=args[0] as Socket;if(performance.now()<blockedUntil){socket.destroy();return true;}ownedSockets.add(socket);socket.once('close',()=>ownedSockets.delete(socket));}return Reflect.apply(originalEmit,this,[event,...args]);};
+const controlPath=join(data,'engineering','r80-control.json');
+const controlTimer=setInterval(()=>{if(!existsSync(controlPath))return;try{const control=JSON.parse(readFileSync(controlPath,'utf8')) as {op:string;ms:number};rmSync(controlPath);if(control.op==='disconnect'){blockedUntil=performance.now()+Math.min(30_000,Math.max(0,control.ms));for(const socket of ownedSockets)socket.destroy();writeFileSync(join(data,'engineering','r80-control-receipt.json'),JSON.stringify({op:control.op,at:Date.now(),ms:control.ms,pid:process.pid}));}}catch{/* own fixture control */}},250);controlTimer.unref();
 for (const file of [packedEntry, buildFile, markerFile]) if (!existsSync(file)) throw new Error(`R78 engineering daemon missing ${file}`);
 const build = JSON.parse(readFileSync(buildFile, 'utf8')) as { buildId: string };
 const marker = JSON.parse(readFileSync(markerFile, 'utf8')) as { token?: string; appDataDir?: string; daemonEntry?: string };

@@ -31,6 +31,8 @@ export type BridgeOutcome<T> = BridgeOk<T> | BridgeFailed | BridgeUnknown
 
 /** 结果未知判定窗口：超过即视为 unknown（同 commandId 重试由调用方决定）。 */
 const UNKNOWN_TIMEOUT_MS = 20_000;
+const recentErrors:Array<{at:number;method:string;code:string;status:'failed'|'unknown'}>=[];
+export function bridgeErrorFacts(){return recentErrors.map(e=>({...e}));}
 
 export function bridge(): ZsBridge {
   const zs = (window as unknown as { zs?: ZsBridge }).zs;
@@ -53,6 +55,7 @@ export async function sendCommand<T>(commandId: string, method: string, params: 
 }
 
 async function commandOutcome<T>(commandId: string, method: string, params: Record<string, unknown>): Promise<BridgeOutcome<T>> {
+  const finish=(outcome:BridgeOutcome<T>)=>{if(outcome.status!=='ok'){const code=outcome.status==='unknown'?'TRANSPORT_RESULT_UNKNOWN':/^[A-Z_][A-Z0-9_]{0,63}$/.test(outcome.code)?outcome.code:'SERVICE_REJECTED';recentErrors.push({at:Date.now(),method:/^[a-zA-Z]+(?:\.[a-zA-Z]+)*$/.test(method)?method:'command',code,status:outcome.status});if(recentErrors.length>20)recentErrors.shift();}return outcome;};
   const zs = bridge();
   let settle: ((v: ZsResult<T> | 'timeout') => void) | null = null;
   const timer = setTimeout(() => { settle?.('timeout'); }, UNKNOWN_TIMEOUT_MS);
@@ -64,13 +67,13 @@ async function commandOutcome<T>(commandId: string, method: string, params: Reco
       settle?.({ ok: false, error: { code: '__TRANSPORT__', message: e instanceof Error ? e.message : String(e) } });
     });
     const r = await wrapped;
-    if (r === 'timeout') return { status: 'unknown', error: '服务未在时限内回执' };
+    if (r === 'timeout') return finish({ status: 'unknown', error: '服务未在时限内回执' });
     if (r.ok) return { status: 'ok', data: r.data as T };
-    if (r.error?.code === '__TRANSPORT__') return { status: 'unknown', error: r.error.message };
-    return { status: 'failed', code: r.error?.code ?? 'ERROR', error: r.error?.message ?? '未知错误' };
+    if (r.error?.code === '__TRANSPORT__') return finish({ status: 'unknown', error: r.error.message });
+    return finish({ status: 'failed', code: r.error?.code ?? 'ERROR', error: r.error?.message ?? '未知错误' });
   } catch (e) {
     // 桥本身抛错（断连/序列化）：结果未知——不是服务端拒绝。
-    return { status: 'unknown', error: e instanceof Error ? e.message : String(e) };
+    return finish({ status: 'unknown', error: e instanceof Error ? e.message : String(e) });
   } finally {
     clearTimeout(timer);
   }
