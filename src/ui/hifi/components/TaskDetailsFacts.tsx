@@ -48,7 +48,10 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if (latest.status === 'WAITING') return '本次运行正在等待输入或批准；到回复串查看明确的待处理请求。';
   if (latest.status === 'STOPPING') return '停止请求正在收敛；先等待状态刷新，避免重复派发。';
   if (latest.status === 'INTERRUPTED') return '本次运行已中断，结果可能尚未确认。先到恢复入口核对退出与保护状态，再决定是否继续。';
-  if (latest.status === 'FAILED' || latest.status === 'PARTIAL') return `最近一次运行${latest.status === 'FAILED' ? '失败' : '仅部分完成'}；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看下方诊断，修复原因后从原任务入口显式继续。`;
+  if (latest.status === 'FAILED' && detail.failedRetry.pending) return '最近一次运行失败；继续请求已入队，等待正式 worker 派发。请勿重复提交。';
+  if (latest.status === 'FAILED' && detail.failedRetry.blockReason) return `最近一次运行失败，任务仍未完成。当前不能继续：${detail.failedRetry.blockReason}`;
+  if (latest.status === 'FAILED') return `最近一次运行失败；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看诊断、修复原因后，在「运行详情」点“继续最近失败运行”。`;
+  if (latest.status === 'PARTIAL') return '最近一次运行只完成一部分；查看诊断与已有成果，再从原回复串明确补充需要处理的部分。';
   return '查看活动、交付及验收记录，确认任务下一步。';
 }
 
@@ -87,12 +90,15 @@ export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
   </div>;
 }
 
-export function RunExtraFacts({ detail, onSelectRun }: { detail: TaskDetailsResult; onSelectRun?: (runId: string) => void }) {
+export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = false }: { detail: TaskDetailsResult; onSelectRun?: (runId: string) => void; onRetryFailed?: () => void; retryBusy?: boolean }) {
   const selected = detail.runs.find((r) => r.id === detail.selectedRunId);
   const ordered = selected != null && selected.id !== detail.latestRunId
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
     <div className="panel info">{taskRunGuidance(detail)}</div>
+    {detail.failedRetry.available && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>继续最近失败运行</button> : null}
+    {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}
+    {detail.failedRetry.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
     {detail.runs.length === 0 ? <div className="card tight">任务尚无运行记录。</div> : ordered.map((r) => <div key={r.id} className="card tight">
       <div className="section-title">{r.id === detail.currentRunId ? '当前运行' : r.id === detail.latestRunId ? '最近运行' : '历史运行'}{r.id === detail.selectedRunId && detail.selectedRunId !== detail.latestRunId ? ' · 已定位' : ''} · {r.mode}</div>
       {r.id !== detail.selectedRunId && onSelectRun ? <button className="btn ghost sm" onClick={() => onSelectRun(r.id)}>查看这次运行</button> : null}

@@ -27,7 +27,7 @@ function fixture(scripts?: FakeTurnScript[]) {
   db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('conv_room','p1','room','r0')`).run();
   db.prepare(`UPDATE projects SET task_review_enabled = 1 WHERE id = 'p1'`).run();
   const deps = { db, localUserId: 'u_local', interruptTurn: async () => {}, appDataDir: join(root, 'app') };
-  const raw = (method: string, params: unknown) => dispatchDaemonCommand(deps, { protocolVersion: 1, commandId: `r78-${randomUUID().slice(0, 8)}`, method, params }) as Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string } }>;
+  const raw = (method: string, params: unknown, commandId = `r78-${randomUUID().slice(0, 8)}`) => dispatchDaemonCommand(deps, { protocolVersion: 1, commandId, method, params }) as Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string } }>;
   const script: FakeTurnScript = [
     { kind: 'event', event: { kind: 'tool.started', toolCallId: 'read_1', toolName: 'Read', argumentsSummary: '' } },
     { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'read_1', outcome: 'success' } },
@@ -62,6 +62,8 @@ describe('R78 task.details formal read projection', () => {
       expect(d.events.map((e) => e.kind)).toEqual(expect.arrayContaining(['tool.started', 'tool.completed']));
       expect(d.events.filter((e) => e.kind.startsWith('tool.')).map((e) => e.toolCallId)).toEqual(['read_1', 'read_1']);
       expect(d.deliveries[0]).toMatchObject({ reviewStatus: 'pending', revision: 1, locate: expect.stringMatching(/^#delivery=/) });
+      const mine = (await env.raw('mine.pending', {})).data as { projects: Array<{ reviewTasks: Array<{ task_id: string; title: string; actionable: boolean }> }> };
+      expect(mine.projects.flatMap((p) => p.reviewTasks)).toEqual(expect.arrayContaining([expect.objectContaining({ task_id: taskId, title: '执行并交付', actionable: true })]));
       expect(d.truncated).toEqual({ children: false, runs: false, events: false, deliveries: false, changeSets: false, artifacts: false });
       expect(counts()).toEqual(before);
       expect((await env.raw('task.details', { projectId: 'wrong', taskId })).error?.code).toBe('RESOURCE_NOT_FOUND');
@@ -181,6 +183,65 @@ describe('R78 task.details formal read projection', () => {
       expect(selected.runs[0]!.id).toBe(selected.latestRunId);
       expect(selected.runs.at(-1)!.id).toBe(oldest);
       expect(selected.selectedRunId).toBe(oldest);
+    } finally { env.close(); }
+  });
+
+  it('retries a FAILED task only from an explicit frozen snapshot and rejects stale run/task/stop identities', async () => {
+    const fail: FakeTurnScript = [{ kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '夹具失败', retryable: true } }];
+    const env = fixture([fail]);
+    try {
+      const sent = await env.raw('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body: '失败后显式继续', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] });
+      expect(sent.ok).toBe(true);
+      const taskId = (sent.data as { taskId: string }).taskId;
+      await env.worker().runOnce();
+      const before = (await env.raw('task.details', { projectId: 'p1', taskId })).data as TaskDetailsResult;
+      expect(before.task.status).toBe('ACTIVE');
+      expect(before.runs[0]!.status).toBe('FAILED');
+      expect(before.failedRetry).toEqual({ available: true, pending: false, blockReason: null });
+      const snap = { taskId, sourceRunId: before.latestRunId, expectedTaskRevision: before.task.revision,
+        expectedStopGeneration: before.task.stopGeneration, expectedRunStatus: 'FAILED', reason: '用户明确继续' };
+      expect((await env.raw('task.redispatch', { ...snap, expectedStopGeneration: 1 })).error?.code).toBe('STALE_REVISION');
+      expect((await env.raw('task.redispatch', { ...snap, expectedTaskRevision: before.task.revision + 1 })).error?.code).toBe('STALE_REVISION');
+      expect((env.db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key GLOB 'task:*:redispatch*'").get() as { c: number }).c).toBe(0);
+      expect((await env.raw('task.redispatch', snap)).ok).toBe(true);
+      const pending = (await env.raw('task.details', { projectId: 'p1', taskId })).data as TaskDetailsResult;
+      expect(pending.failedRetry).toEqual({ available: false, pending: true, blockReason: null });
+      expect((await env.raw('task.redispatch', snap)).ok).toBe(false);
+      await env.worker().runOnce();
+      const after = (await env.raw('task.details', { projectId: 'p1', taskId })).data as TaskDetailsResult;
+      expect(after.latestRunId).not.toBe(before.latestRunId);
+      expect(after.runs[0]!.status).toBe('SUCCEEDED');
+      const runCount = (env.db.prepare('SELECT count(*) c FROM workflow_runs WHERE task_id = ?').get(taskId) as { c: number }).c;
+      expect((await env.raw('task.redispatch', snap)).error?.code).toBe('STALE_REVISION');
+      expect((env.db.prepare('SELECT count(*) c FROM workflow_runs WHERE task_id = ?').get(taskId) as { c: number }).c).toBe(runCount);
+    } finally { env.close(); }
+  });
+
+  it('lists only the viewer DM failed task with retry identity; foreign DM cannot query or redispatch it', async () => {
+    const fail: FakeTurnScript = [{ kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '私信失败', retryable: true } }];
+    const env = fixture([fail]);
+    try {
+      env.db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('dm_retry','p1','dm',NULL)`).run();
+      env.db.prepare(`INSERT INTO dm_participants (project_id, conversation_id, principal_type, principal_id) VALUES ('p1','dm_retry','human','u_local'),('p1','dm_retry','agent','mA')`).run();
+      const sent = await env.raw('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: 'dm_retry' }, body: '私信失败后继续', intent: 'default', mentions: [] });
+      expect(sent.ok).toBe(true);
+      const taskId = (sent.data as { taskId: string }).taskId;
+      await env.worker().runOnce();
+      const listed = await env.raw('conversation.failedTasks', { projectId: 'p1', conversationId: 'dm_retry' });
+      expect(listed.ok).toBe(true);
+      const items = (listed.data as { items: Array<{ taskId: string; latestRunId: string; available: boolean; taskRevision: number; stopGeneration: number }> }).items;
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ taskId, available: true, stopGeneration: 0 });
+      const snapshot = { taskId, sourceRunId: items[0]!.latestRunId, expectedTaskRevision: items[0]!.taskRevision,
+        expectedStopGeneration: items[0]!.stopGeneration, expectedRunStatus: 'FAILED', reason: '私信中明确继续' };
+      const retryCommandId = `r78-dm-retry-${randomUUID().slice(0, 8)}`;
+      expect((await env.raw('task.redispatch', snapshot, retryCommandId)).ok).toBe(true);
+      const queued = await env.raw('conversation.failedTasks', { projectId: 'p1', conversationId: 'dm_retry' });
+      expect((queued.data as { items: Array<{ pending: boolean; available: boolean }> }).items[0]).toMatchObject({ pending: true, available: false });
+      env.db.prepare(`UPDATE dm_participants SET principal_id = 'u_other' WHERE conversation_id = 'dm_retry' AND principal_type = 'human'`).run();
+      expect((await env.raw('conversation.failedTasks', { projectId: 'p1', conversationId: 'dm_retry' })).error?.code).toBe('FORBIDDEN');
+      expect((await env.raw('task.redispatch', snapshot)).error?.code).toBe('FORBIDDEN');
+      expect((await env.raw('task.redispatch', snapshot, retryCommandId)).error?.code).toBe('FORBIDDEN');
     } finally { env.close(); }
   });
 });

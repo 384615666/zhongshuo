@@ -880,9 +880,11 @@ export function Composer({
   const navigateToMembers = (): void => { void import('../lib/router').then((m) => m.navigate('/members')); };
   const runtimeHint = useMemo(() => {
     if (sendAs !== 'ai' || target.kind === 'dm') return null; // DM 走成员自身绑定链；仅记录不派发
+    // 房间根输入在 M0 非 DIRECT 时先要选定单个成员；此刻未绑定提示指向尚未确定的执行
+    // 成员，会与同位置的 M0 派发提示叠成两张警示。选定成员后再核其真实 runtime。
+    if (target.kind === 'room_root' && route.mode !== 'DIRECT') return null;
     const bound = (id: string) => memberRuntimes[id]?.status === 'bound';
     const agentIds = memberIds.filter((id) => allMembers.find((m) => m.id === id)?.principalType === 'agent');
-    const unbound = agentIds.filter((id) => memberRuntimes[id] == null || memberRuntimes[id].status !== 'bound');
     if (agentIds.length === 0) return null;
     const named = route.resolvedMemberIds.filter((id) => id !== 'all');
     if (named.length > 0) {
@@ -896,7 +898,7 @@ export function Composer({
       if (!agentIds.some((id) => bound(id))) return { text: '项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型', who: agentIds.length };
     }
     return null;
-  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.resolvedMemberIds]);
+  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds]);
 
   return (
     <div className="composer">

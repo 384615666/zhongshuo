@@ -9,7 +9,7 @@
  * 读取错误/接管状态）。未接通集合保持空值，由页面如实呈现；不伪造时间/成员/状态。
  */
 import { useSyncExternalStore } from 'react';
-import type { AppState, ContextTarget, Thread, ThreadCard } from './types';
+import type { AppState, ContextTarget, Thread, ThreadCard, RouteMode } from './types';
 import { openTab } from '../lib/resource';
 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
@@ -23,6 +23,12 @@ export interface ThreadTaskDetail {
   roomTaskNumber: number;
   revision: number;
   stopGeneration: number;
+  objective?: string | null;
+  reviewPolicy?: 'auto_deliver' | 'user_review';
+  mode?: RouteMode;
+  ownerMemberId?: string | null;
+  parentTaskId?: string | null;
+  currentDeliveryId?: string | null;
   activeRun: { id: string; status: string } | null;
   pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离呈现）；r59 含完整执行身份（点击冻结快照）。 */

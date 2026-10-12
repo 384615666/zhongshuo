@@ -264,6 +264,11 @@ export interface ThreadCard {
   roomTaskNumber: number | null;
   /** R64：任务标题（room.pool 只读投影——未装载详情的卡片也能显示真实标题；记录串为 null） */
   taskTitle: string | null;
+  taskObjective?: string | null;
+  taskReviewPolicy?: 'auto_deliver' | 'user_review' | null;
+  taskRevision?: number | null;
+  taskMode?: RouteMode | null;
+  ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;
   formalAttachments?: FormalAttachmentSummary[];
@@ -476,13 +481,13 @@ export interface Task {
   ownerMemberId?: string;
   parentTaskId?: string;
   title: string;
-  objective: string;
+  objective: string | null;
   status: TaskStatus;
   revision: number;
-  reviewPolicy: 'auto_deliver' | 'user_review';
+  reviewPolicy?: 'auto_deliver' | 'user_review';
   /** 当前交付版本（v1.12 §10.5）；一个任务最多一个 pending 交付 */
   currentDeliveryId?: string;
-  mode: RouteMode;
+  mode?: RouteMode;
   displayNumber: number;
 }
 

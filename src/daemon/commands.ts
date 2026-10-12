@@ -23,7 +23,7 @@ import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
 import type { TopLevelRouteOutcome, MentionNode } from '../contracts/routing.ts';
 import { commandEnvelopeSchema } from '../contracts/commands.ts';
-import { taskDetailsParamsSchema } from '../contracts/taskDetails.ts';
+import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails } from './taskDetails.ts';
@@ -146,6 +146,12 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
 
+function taskModeFromRoute(route: unknown): 'DIRECT' | 'AUTO' | 'DELIBERATE' | null {
+  try { const mode = typeof route === 'string' ? (JSON.parse(route) as {mode?:unknown}).mode : null;
+    return mode === 'DIRECT' || mode === 'AUTO' || mode === 'DELIBERATE' ? mode : null;
+  } catch { return null; }
+}
+
 /**
  * 服务端退出取证解析（reconcile / releaseProtection 共用）：probeId 引用则校验
  * turn 归属/登记一致/新鲜（≤10 分钟）；否则按该 turn 已登记身份自动取证。
@@ -200,6 +206,16 @@ function assertTaskAudience(db: ZhongshuoDatabase, viewerId: string, taskId: str
   if (row.conversation_kind !== 'dm') return;
   const inDm = db.prepare("SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = ? AND dp.principal_type = 'human' AND dp.principal_id = ?").get(row.conversation_id, viewerId);
   if (inDm == null) throw new DaemonCommandError('FORBIDDEN', '任务属于他人私信会话——按 ID 直查不绕过 audience');
+}
+
+function assertTaskDispatchScope(db: ZhongshuoDatabase, taskId: string): void {
+  const scope = db.prepare(`SELECT p.status AS project_status, c.archived_at AS conversation_archived,
+    r.archived_at AS room_archived FROM tasks t JOIN projects p ON p.id = t.project_id
+    JOIN conversations c ON c.id = t.conversation_id LEFT JOIN rooms r ON r.id = t.room_id WHERE t.id = ?`)
+    .get(taskId) as { project_status: string; conversation_archived: number | null; room_archived: number | null } | undefined;
+  if (scope != null && (scope.project_status !== 'active' || scope.conversation_archived != null || scope.room_archived != null)) {
+    throw new DaemonCommandError('STALE_REVISION', '项目、房间或会话已归档或不可用——先恢复并刷新任务事实');
+  }
 }
 
 function visibleProjectIdsOf(db: ZhongshuoDatabase, viewerId: string): string[] {
@@ -972,7 +988,20 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'room.create': {
         // 建房命令（M1 收口轮）：房间为项目的正式聚合单元——跨房间切换/隔离 UI 场景的前提。
         const params = z.strictObject({ projectId: z.string().min(1), name: z.string().min(1).max(60), memberIds: z.array(z.string().min(1)).optional() }).parse(env.params);
+        if (params.name.trim().length === 0) throw new DaemonCommandError('VALIDATION_INVALID', '房间名称不能为空白');
+        const assertRoomCreationScope = (): void => {
+          const project = deps.db.prepare('SELECT status FROM projects WHERE id = ?').get(params.projectId) as { status: string } | undefined;
+          if (project == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '项目不存在');
+          if (project.status === 'archived' || project.status === 'removed') throw new DaemonCommandError('VALIDATION_INVALID', '项目已归档或移除，不能新建房间；请先恢复项目');
+          for (const memberId of params.memberIds ?? []) {
+            if (deps.db.prepare('SELECT id FROM project_members WHERE id = ? AND project_id = ?').get(memberId, params.projectId) == null) {
+              throw new DaemonCommandError('VALIDATION_INVALID', '房间成员不属于目标项目；请刷新成员列表');
+            }
+          }
+        };
+        assertRoomCreationScope();
         const result = run(() => {
+          assertRoomCreationScope();
           const roomCount = (deps.db.prepare('SELECT count(*) c FROM rooms WHERE project_id = ?').get(params.projectId) as { c: number }).c;
           const roomId = `room_${randomUUID()}`;
           const defaultMember = (deps.db.prepare('SELECT id FROM project_members WHERE project_id = ? AND principal_type = ? ORDER BY id LIMIT 1').get(params.projectId, 'agent') as { id: string } | undefined)?.id;
@@ -984,7 +1013,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             deps.db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) VALUES (?, ?)').run(roomId, memberId);
           }
           return { room: { id: roomId, name: params.name, conversationId: convId }, roomIndex: roomCount + 1 };
-        });
+        }, assertRoomCreationScope);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'room.list': {
@@ -1182,9 +1211,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 按 ID 直查不绕过私信边界（第三十二轮一）
-        const task = deps.db.prepare('SELECT id, title, status, room_id, conversation_thread_id, room_task_number, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
+        const task = deps.db.prepare('SELECT id, title, objective, status, project_id, conversation_id, room_id, conversation_thread_id, room_task_number, owner_member_id, parent_task_id, review_policy, current_delivery_id, route_json, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
-        const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
+        const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
         // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
         const pendingDelivery = deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number; manifest_hash: string } | undefined;
         // 最近一次启动失败原因（第十六轮四：验收防护拒绝等如实上屏——「待处理/失败」无解释=用户不可知）。
@@ -1200,7 +1229,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // r58 返工待执行（验收与执行分离呈现：「意见已记录、尚未执行」/已入队）。
         // r59：完整执行身份随行（deliveryId/manifestHash/sourceRunId——命令快照绑定用）。
         const reworkDerived = reworkPendingOf(deps.db, params.taskId);
-        return withCommandId({ ok: true, data: { task: { ...task, stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
+        const { route_json: route, ...facts } = task;
+        return withCommandId({ ok: true, data: { task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'task.details': {
         // R78: bounded read-only projection. Bind claimed project/task/run before reading children,
@@ -2213,6 +2243,33 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const all = listDmConversations(deps.db, deps.localUserId, params.projectId);
         const rows = params.archived == null ? all : all.filter((c) => params.archived === (c.archivedAt != null));
         return withCommandId({ ok: true, data: { conversations: rows } });
+      }
+      case 'conversation.failedTasks': {
+        // R78: failed DM attempts stay task ACTIVE. Surface only a viewer's own DM tasks,
+        // with the exact retry snapshot and shared recovery guard; no automatic dispatch.
+        const params = conversationFailedTasksParamsSchema.parse(env.params);
+        const conv = assertConversationAudience(deps.db, deps.localUserId, params.conversationId);
+        if (conv.projectId !== params.projectId || conv.kind !== 'dm') throw new DaemonCommandError('RESOURCE_NOT_FOUND', '目标不是该项目的私信会话');
+        const archived = (deps.db.prepare('SELECT archived_at FROM conversations WHERE id = ?').get(params.conversationId) as { archived_at: number | null }).archived_at != null;
+        const projectActive = (deps.db.prepare('SELECT status FROM projects WHERE id = ?').get(params.projectId) as { status: string }).status === 'active';
+        const rows = deps.db.prepare(`SELECT t.id, t.title, t.revision, t.stop_generation, r.id AS run_id
+          FROM tasks t JOIN workflow_runs r ON r.id = (
+            SELECT rr.id FROM workflow_runs rr WHERE rr.task_id = t.id AND rr.conversation_id = t.conversation_id ORDER BY rr.rowid DESC LIMIT 1)
+          WHERE t.project_id = ? AND t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE'
+            AND t.stop_generation = 0 AND r.status = 'FAILED'
+          ORDER BY t.rowid DESC LIMIT 21`).all(params.projectId, params.conversationId) as Array<{
+            id: string; title: string; revision: number; stop_generation: number; run_id: string;
+          }>;
+        const items = rows.slice(0, 20).map((t) => {
+          const pending = deps.db.prepare("SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'")
+            .get(`task:${t.id}:redispatch:${t.run_id}`) != null;
+          const blocked = pending ? null : assessTaskRedispatchReadiness(deps.db, t.id);
+          return { taskId: t.id, title: t.title, taskRevision: t.revision, stopGeneration: t.stop_generation,
+            latestRunId: t.run_id, available: projectActive && !archived && !pending && blocked == null, pending,
+            blockReason: !projectActive ? '项目已归档或不可用；先恢复项目。'
+              : archived ? '私信已归档；先恢复会话，再重新核对任务状态。' : blocked?.message ?? null };
+        });
+        return withCommandId({ ok: true, data: { conversationId: params.conversationId, items, truncated: rows.length > 20 } });
       }
       case 'conversation.history': {
         const params = z.strictObject({ conversationId: z.string().min(1), beforeSeq: z.number().int().positive().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
@@ -3822,7 +3879,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           // REVIEW 任务 delivery 如实 null+actionable=false（已处理/被替代交付不因聚合成为
           // 可批准对象——验收入口据此拒绝并显示诊断，不假装正常待验收）。
           const reviewTasks = (deps.db.prepare(
-            `SELECT t.id AS task_id, t.kind AS task_kind, t.conversation_id, c.kind AS conversation_kind, t.status,
+            `SELECT t.id AS task_id, t.kind AS task_kind, t.title, t.conversation_id, c.kind AS conversation_kind, t.status,
                     d.id AS delivery_id, d.revision, d.manifest_hash
              FROM tasks t
              JOIN conversations c ON c.id = t.conversation_id
@@ -3830,7 +3887,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              WHERE t.project_id = ? AND t.status = 'REVIEW'
                AND (c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ORDER BY t.rowid`,
-          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; conversation_id: string | null; conversation_kind: string; status: string; delivery_id: string | null; revision: number | null; manifest_hash: string | null }>)
+          ).all(p.id, deps.localUserId) as Array<{ task_id: string; task_kind: string; title: string; conversation_id: string | null; conversation_kind: string; status: string; delivery_id: string | null; revision: number | null; manifest_hash: string | null }>)
             .map((r) => ({ ...r, actionable: r.delivery_id != null }));
           const dmUnread = (deps.db.prepare(
             `SELECT c.id AS conversation_id, c.title,
@@ -4242,7 +4299,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const threads = deps.db.prepare(
           `SELECT t.id, t.anchor_message_id, t.root_task_id, t.last_message_seq, t.revision,
                   m.body_json, m.created_at, m.author_type, m.author_id,
-                  tk.status AS task_status, tk.room_task_number, tk.title AS task_title
+                  tk.status AS task_status, tk.room_task_number, tk.title AS task_title,
+                  tk.objective AS task_objective, tk.review_policy AS task_review_policy, tk.revision AS task_revision,
+                  tk.owner_member_id AS task_owner, tk.route_json AS task_route
            FROM conversation_threads t
            JOIN messages m ON m.id = t.anchor_message_id
            LEFT JOIN tasks tk ON tk.id = t.root_task_id
@@ -4251,6 +4310,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         ).all(params.roomId, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
           body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; room_task_number: number | null; task_title: string | null;
+          task_objective: string | null; task_review_policy: 'auto_deliver' | 'user_review' | null; task_revision: number | null; task_owner: string | null; task_route: string | null;
         }>;
         const attachments = messageAttachmentSummaries(deps.db, threads.map((t) => t.anchor_message_id));
         const items = [];
@@ -4277,6 +4337,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskStatus: t.task_status,
             roomTaskNumber: t.room_task_number,
             taskTitle: t.task_title,
+            taskObjective: t.task_objective, taskReviewPolicy: t.task_review_policy, taskRevision: t.task_revision,
+            ownerMemberId: t.task_owner, taskMode: taskModeFromRoute(t.task_route),
           });
         }
         return withCommandId({ ok: true, data: { items } });
@@ -4284,12 +4346,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'run.progress': {
         // 研讨进度（只读）：阶段/轮次/成员状态/预算——「模型说一致」不作为程序共识。
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
-        const run = deps.db.prepare("SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(params.taskId) as
-          | { id: string; stage: string | null; round_no: number | null; status: string; budget_json: string | null }
+        assertTaskAudience(deps.db, deps.localUserId, params.taskId);
+        const run = deps.db.prepare("SELECT * FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1").get(params.taskId) as
+          | { id: string; mode: string; stage: string | null; round_no: number | null; status: string; budget_json: string | null }
           | undefined;
-        if (run == null) {
-          const direct = deps.db.prepare('SELECT stage, status FROM workflow_runs WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(params.taskId) as { stage: string | null; status: string } | undefined;
-          return withCommandId({ ok: true, data: { mode: 'DIRECT', stage: direct?.stage ?? null, runStatus: direct?.status ?? null, participants: [], budget: null, issues: [] } });
+        if (run == null || run.mode !== 'DELIBERATE') {
+          const direct = deps.db.prepare('SELECT stage, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { stage: string | null; status: string } | undefined;
+          return withCommandId({ ok: true, data: { mode: run?.mode ?? null, stage: direct?.stage ?? null, runStatus: direct?.status ?? null, participants: [], budget: null, issues: [] } });
         }
         const participants = (deps.db.prepare(
           'SELECT rp.member_id, rp.role, rp.status, pm.display_name FROM run_participants rp JOIN project_members pm ON pm.id = rp.member_id WHERE rp.run_id = ? ORDER BY rp.role, rp.member_id',
@@ -4362,14 +4425,31 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // - **恢复意图绑定源执行**：非修复派发键=task:<id>:redispatch:<sourceRunId>（缺省取任务
         //   最新 run；无 run 保持旧键）。同源重试在途=幂等冲突；同源已完成=STALE（该次恢复已
         //   派发过——新一次合法中断产生新源 run=新意图）；不再撞固定唯一键。
-        const params = z.strictObject({ taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional(), sourceRunId: z.string().min(1).optional() }).parse(env.params);
+        const params = z.strictObject({
+          taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional(),
+          sourceRunId: z.string().min(1).optional(), expectedTaskRevision: z.number().int().nonnegative().optional(),
+          expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED']).optional(),
+        }).parse(env.params);
+        assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 回执重放也不能绕过 DM audience
+        assertTaskDispatchScope(deps.db, params.taskId);
         const result = run(() => {
           const task = deps.db
-            .prepare('SELECT id, status, stop_generation FROM tasks WHERE id = ?')
-            .get(params.taskId) as { id: string; status: string; stop_generation: number } | undefined;
+            .prepare('SELECT id, status, revision, stop_generation, conversation_id FROM tasks WHERE id = ?')
+            .get(params.taskId) as { id: string; status: string; revision: number; stop_generation: number; conversation_id: string } | undefined;
           if (task == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `任务不存在：${params.taskId}`);
+          assertConversationAudience(deps.db, deps.localUserId, task.conversation_id);
+          assertTaskDispatchScope(deps.db, params.taskId);
+          if (params.expectedTaskRevision != null && task.revision !== params.expectedTaskRevision) throw new DaemonCommandError('STALE_REVISION', '任务版本已变化——请刷新后按当前任务事实重试');
+          if (params.expectedStopGeneration != null && task.stop_generation !== params.expectedStopGeneration) throw new DaemonCommandError('STALE_REVISION', '停止代次已变化——旧运行的继续请求已作废');
           if (['DONE', 'CANCELLED'].includes(task.status)) throw new DaemonCommandError('STALE_REVISION', `任务已终态（${task.status}）：不再追加 turn`);
           if (task.stop_generation > 0) throw new DaemonCommandError('STALE_REVISION', '任务停止已生效：不再追加 turn');
+          if (params.expectedRunStatus != null) {
+            if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
+            const expected = deps.db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.sourceRunId, params.taskId, task.conversation_id) as { status: string } | undefined;
+            if (expected == null || expected.status !== params.expectedRunStatus || task.status !== 'ACTIVE') {
+              throw new DaemonCommandError('STALE_REVISION', '失败运行或任务状态已变化——请刷新后重新决定');
+            }
+          }
           // 恢复就绪=共享判定（第四十轮 §2 四分离：在途/保护未解除/UNKNOWN 未闭环——
           // 与 dm.ts 可恢复性呈现同源；FAILED+未释放租约、settled 但无正式保护解除事件均拦）。
           const blockedEarly = assessTaskRedispatchReadiness(deps.db, params.taskId);

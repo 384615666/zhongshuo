@@ -2100,6 +2100,31 @@ function ThreadDetails({
   onChangeTab: (tab: ThreadTabLocal) => void;
 }) {
   const formal = useTaskDetails(task?.projectId, task?.id, task?.revision, run?.id, run?.status);
+  const [retryBusyTask, setRetryBusyTask] = useState<string | null>(null);
+  const [acceptedRetryRun, setAcceptedRetryRun] = useState<string | null>(null);
+  const retryFailed = () => {
+    const details = formal.data;
+    const latest = details?.runs.find((r) => r.id === details.latestRunId);
+    if (task == null || details == null || latest?.status !== 'FAILED' || !details.failedRetry.available || acceptedRetryRun === latest.id) return;
+    const snapshot = { taskId: details.task.id, sourceRunId: latest.id,
+      expectedTaskRevision: details.task.revision, expectedStopGeneration: details.task.stopGeneration,
+      expectedRunStatus: 'FAILED' as const };
+    setRetryBusyTask(snapshot.taskId);
+    void (async () => {
+      try {
+        await command('task.redispatch', { ...snapshot, reason: '用户在运行详情显式继续最近失败运行' });
+        setAcceptedRetryRun(snapshot.sourceRunId);
+        recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
+        toast('继续请求已入队；等待正式执行结果', 'success');
+      } catch (e) {
+        toast(`继续被拒：${(e as Error).message}——请按当前任务事实重新决定`, 'error');
+      } finally {
+        setRetryBusyTask((current) => current === snapshot.taskId ? null : current);
+        formal.refresh();
+        void loadThread(threadId).catch(() => { /* 读取失败由详情保留事实并提示 */ });
+      }
+    })();
+  };
   const pendingDelivery = task?.currentDeliveryId
     ? s.taskDeliveries.find((d) => d.id === task.currentDeliveryId)
     : undefined;
@@ -2157,11 +2182,11 @@ function ThreadDetails({
           </div>
         ) : null}
         {active === 'overview' ? (
-          <ThreadOverview s={s} anchor={anchor} task={task} isDiscussion={isDiscussion} formal={formal.data} />
+          <ThreadOverview s={s} threadId={threadId} anchor={anchor} task={task} isDiscussion={isDiscussion} formal={formal.data} />
         ) : null}
         {active === 'members' ? <>{formal.data ? <ActualMembers detail={formal.data} /> : null}<ThreadMembers threadId={threadId} isDiscussion={isDiscussion} /></> : null}
         {active === 'activity' ? <ThreadActivity threadId={threadId} detail={formal.data} onChangeTab={onChangeTab} /> : null}
-        {active === 'run' && task ? <ThreadRunFacts detail={formal.data} onSelectRun={formal.selectRun} /> : null}
+        {active === 'run' && task ? <ThreadRunFacts detail={formal.data} onSelectRun={formal.selectRun} onRetryFailed={retryFailed} retryBusy={retryBusyTask === task.id || acceptedRetryRun === formal.data?.latestRunId} /> : null}
         {/* v1.12 §10.5：交付详情仍是**可选验收的唯一主入口**，决定只在这里做一次 */}
         {active === 'delivery' && task ? <><ThreadDeliveryPanel threadId={threadId} task={task} />{formal.data ? <DeliveryHistoryFacts detail={formal.data} /> : null}</> : null}
         {active === 'deliberation' && formal.data?.runs[0]?.mode === 'DELIBERATE' ? (
@@ -2190,9 +2215,10 @@ function ThreadDetails({
  * 预算明细、定向跟进因此一个都不丢（停止在输入区、研讨与交付在详情分组里另有入口）。
  */
 function ThreadOverview({
-  s, anchor, task, isDiscussion, formal,
+  s, threadId, anchor, task, isDiscussion, formal,
 }: {
   s: AppState;
+  threadId: string;
   anchor: Message;
   task?: Task;
   isDiscussion: boolean;
@@ -2213,7 +2239,8 @@ function ThreadOverview({
   // task.get hydration keeps a minimal UI shape with placeholder mode/stage/budget.
   // Detail labels must come from the formal run projection, never from that placeholder.
   const latestRun = formal?.runs[0];
-  const modeCopy = latestRun ? routeModeCopy[latestRun.mode as Task['mode']] : undefined;
+  const modeCopy = latestRun != null && (latestRun.mode === 'AUTO' || latestRun.mode === 'DELIBERATE' || latestRun.mode === 'DIRECT')
+    ? routeModeCopy[latestRun.mode] : undefined;
   const parentTask = task?.parentTaskId ? s.tasks.find((x) => x.id === task.parentTaskId) : undefined;
   const mentionIds = anchor.payload?.mentionIds ?? [];
   const dispatchParts: string[] = [];
@@ -2278,7 +2305,7 @@ function ThreadOverview({
       </div>
 
       {task ? (
-        <ThreadTaskFacts threadId={anchor.threadId ?? ''} task={task} formal={formal} />
+        <ThreadTaskFacts threadId={threadId} task={task} formal={formal} />
       ) : (
         <div className="panel info">
           <div className="panel-title"><Icon name="info" size={13} /> 记录串没有任务、运行与验收</div>
@@ -2626,12 +2653,13 @@ function ThreadArtifacts({
 function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: Task; formal: TaskDetailsResult | null }) {
   const s = useStore((x) => x);
   const detail = (s as AppState & { threadTasks?: Record<string, { revision: number; stopGeneration: number; activeRun: { id: string; status: string } | null; lastStartupFailureMessage?: string | null }> }).threadTasks?.[threadId];
+  const recentRun = formal?.runs.find((r) => r.id === formal.latestRunId);
   if (task == null) return null;
   return (
     <>
     <div className="card tight">
       <div className="section-title">任务当前事实</div>
-      <div className="small">{detail?.activeRun != null ? `最近运行：${detail.activeRun.status}` : '尚无运行'}</div>
+      <div className="small">{recentRun != null ? `最近运行：${recentRun.status}` : formal != null ? '尚无运行' : detail?.activeRun != null ? `最近运行：${detail.activeRun.status}` : '正在读取运行事实'}</div>
       {detail?.lastStartupFailureMessage != null ? (
         <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div>
       ) : null}
@@ -2662,8 +2690,8 @@ function ThreadTaskFacts({ threadId, task, formal }: { threadId: string; task?: 
 
 /* ---------------- 运行事实（详情分组——activeRun 真实投影） ---------------- */
 
-function ThreadRunFacts({ detail, onSelectRun }: { detail: TaskDetailsResult | null; onSelectRun: (runId: string) => void }) {
-  return detail ? <RunExtraFacts detail={detail} onSelectRun={onSelectRun} /> : <div className="card tight">运行详情尚未读到；可刷新重试。</div>;
+function ThreadRunFacts({ detail, onSelectRun, onRetryFailed, retryBusy }: { detail: TaskDetailsResult | null; onSelectRun: (runId: string) => void; onRetryFailed: () => void; retryBusy: boolean }) {
+  return detail ? <RunExtraFacts detail={detail} onSelectRun={onSelectRun} onRetryFailed={onRetryFailed} retryBusy={retryBusy} /> : <div className="card tight">运行详情尚未读到；可刷新重试。</div>;
 }
 
 /* ---------------- 交付与验收（详情分组——正式验收/返工两步走，冻结三重身份） ---------------- */

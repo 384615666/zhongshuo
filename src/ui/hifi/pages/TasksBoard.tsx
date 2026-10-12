@@ -5,12 +5,12 @@
  * （用任务自己的 projectId/roomId/threadId——不拿全局焦点拼链接）；操作（停止/验收/返工）
  * 在线程内按三重身份执行——看板不拖卡改状态（原型语义）。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { Select, EmptyState, Tag, TaskStatusTag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
-import { switchFocusProject } from '../loader';
+import { switchFocusProject, openExternalDeepLink } from '../loader';
 import { navigate } from '../lib/router';
 
 type BoardScope = 'visible' | 'project' | 'all';
@@ -27,11 +27,12 @@ interface BoardGroup { projectId: string; displayName: string; rooms: Array<{ ro
 
 const STATUS_GROUPS: { label: string; statuses: string[] }[] = [
   { label: '待开始', statuses: ['OPEN'] },
-  { label: '执行中', statuses: ['ACTIVE'] },
+  { label: '进行中', statuses: ['ACTIVE'] },
   { label: '等我处理', statuses: ['WAITING_USER'] },
   { label: '阻塞', statuses: ['BLOCKED'] },
   { label: '待审阅', statuses: ['REVIEW'] },
-  { label: '已完成', statuses: ['DONE', 'FAILED'] },
+  { label: '已完成', statuses: ['DONE'] },
+  { label: '失败', statuses: ['FAILED'] },
   { label: '已停止', statuses: ['CANCELLED'] },
 ];
 
@@ -41,7 +42,10 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const scope: BoardScope = q.scope === 'project' ? 'project' : q.scope === 'all' ? 'all' : 'visible';
   const scopeProjectId = q.projectId ?? s.activeProjectId;
   const [roomFilter, setRoomFilter] = useState(q.roomId ?? 'all');
-  const [data, setData] = useState<{ groups: BoardGroup[] } | null>(null);
+  const scopeKey = scope === 'project' ? `project:${scopeProjectId}` : 'visible';
+  const [snapshot, setSnapshot] = useState<{ key: string; groups: BoardGroup[] } | null>(null);
+  const data = snapshot?.key === scopeKey ? snapshot : null;
+  const readGeneration = useRef(0);
   const [err, setErr] = useState<string | null>(null);
   const [gen, setGen] = useState(0);
 
@@ -52,25 +56,39 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
 
   /** board.view 权威装载（scope=project 显式项目；visible/all 走服务端可见集——与导航偏好一致）。 */
   useEffect(() => {
-    const myGen = gen;
-    setData(null); setErr(null);
-    // scope=project 走显式项目；visible 走服务端可见集（board.view scope=all 按导航偏好过滤，
-    // 无偏好行=全量——与侧栏一致）。s 只用于取 activeProjectId 兜底。
+    const ticket = ++readGeneration.current;
+    let disposed = false;
+    let inFlight = false;
+    setErr(null);
     const params = scope === 'project' && scopeProjectId !== ''
       ? { scope: 'project' as const, projectId: scopeProjectId }
       : { scope: 'all' as const };
-    void command<{ groups: BoardGroup[] }>('board.view', params)
-      .then((r) => { if (myGen === gen) setData({ groups: r.groups ?? [] }); })
-      .catch((e: unknown) => { if (myGen === gen) setErr((e as Error).message); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, scopeProjectId, gen]);
+    const reload = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        const r = await command<{ groups: BoardGroup[] }>('board.view', params);
+        if (!disposed && ticket === readGeneration.current) {
+          setSnapshot({ key: scopeKey, groups: r.groups ?? [] });
+          setErr(null);
+        }
+      } catch (e: unknown) {
+        if (!disposed && ticket === readGeneration.current) setErr((e as Error).message);
+      } finally { inFlight = false; }
+    };
+    void reload();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') void reload();
+    }, 5000);
+    return () => { disposed = true; ++readGeneration.current; window.clearInterval(timer); };
+  }, [scope, scopeProjectId, scopeKey, gen]);
 
   /** 范围内的房间（来自聚合自带 groups.rooms——同名房间带项目名区分）。 */
   const scopeRooms = useMemo(() => (data?.groups ?? []).flatMap((g) => (g.rooms ?? []).map((r) => ({ ...r, projectId: g.projectId, projectName: g.displayName }))), [data]);
   const roomStillValid = roomFilter === 'all' || scopeRooms.some((r) => r.roomId === roomFilter);
   useEffect(() => {
-    if (!roomStillValid) { setRoomFilter('all'); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
-  }, [roomStillValid]);
+    if (data != null && !roomStillValid) { setRoomFilter('all'); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
+  }, [roomStillValid, data]);
 
   const cardsOf = (g: BoardGroup) => g.rooms.flatMap((r) => r.cards).filter((c) => roomFilter === 'all' || c.roomId === roomFilter);
   const totalCount = (data?.groups ?? []).reduce((n, g) => n + cardsOf(g).length, 0);
@@ -120,12 +138,14 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
               options={[{ value: 'all', label: '当前范围全部房间' }, ...scopeRooms.map((r) => ({ value: r.roomId, label: `${r.projectName} · ${r.name}` }))]}
             />
           </label>
-          <span className="filter-note">共 {totalCount} 项 · board.view 只读聚合（操作走线程内正式命令）</span>
+          <span className="filter-note">{data == null ? '正在读取任务' : `共 ${totalCount} 项`} · 在任务详情中处理</span>
+          <button className="btn ghost" onClick={() => setGen((v) => v + 1)}>刷新</button>
         </div>
 
         {err != null ? (
-          <div className="panel warning">看板读取失败：{err}（切换筛选或稍后自动重试可恢复）</div>
-        ) : data == null ? (
+          <div className="panel warning">看板读取失败：{err}。{data != null ? '保留上次已确认的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
+        ) : null}
+        {data == null ? (
           <div className="panel info">正在读取看板（board.view）…</div>
         ) : totalCount === 0 ? (
           <EmptyState icon="list" title="这个范围里还没有任务" detail="在对话池发布一条任务后，看板会按项目与状态自动分组。" />
@@ -161,17 +181,17 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
                               <div
                                 key={c.taskId}
                                 className="card"
+                                data-zs-task-id={c.taskId}
                                 style={{ cursor: 'pointer' }}
                                 onClick={() => {
                                   if (c.threadId == null) { toast('该任务无线程（异常形态）——不定位', 'warn'); return; }
-                                  void switchFocusProject(c.projectId);
-                                  navigate(`/project/${c.projectId}/room/${c.roomId}?thread=${c.threadId}&tab=task`);
+                                  void openExternalDeepLink(c.locate).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error'));
                                 }}
                               >
                                 <div className="row tight wrap">
                                   {c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : null}
                                   <TaskStatusTag status={c.taskStatus as 'OPEN'} />
-                                  {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{c.runStatus}</Tag> : null}
+                                  {c.runStatus != null && c.runStatus !== c.taskStatus ? <Tag plain icon="activity">{({ QUEUED: '运行已排队', RUNNING: '运行中', WAITING: '运行等待中', FAILED: '本轮运行失败', SUCCEEDED: '本轮运行成功', STOPPING: '正在停止', INTERRUPTED: '运行中断', CANCELLED: '运行已停止' } as Record<string, string>)[c.runStatus] ?? c.runStatus}</Tag> : null}
                                   {c.exitUnconfirmed ? <Tag tone="warning" icon="help-circle" title="运行中断且存在结果未知的 turn（恢复中心/详情取证）">退出未确认</Tag> : null}
                                   {c.pendingDelivery != null ? <Tag tone="warning" icon="eye" title={`待验收交付 v${c.pendingDelivery.revision}（manifest ${c.pendingDelivery.manifestHash.slice(0, 8)}…）——在线程详情按冻结三重身份验收`}>待验收 v{c.pendingDelivery.revision}</Tag> : null}
                                 </div>

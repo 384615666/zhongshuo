@@ -6,6 +6,13 @@ export const taskDetailsParamsSchema = z.strictObject({
   projectId: z.string().min(1), taskId: z.string().min(1), runId: z.string().min(1).optional(),
 });
 
+export const conversationFailedTasksParamsSchema = z.strictObject({ projectId: z.string().min(1), conversationId: z.string().min(1) });
+export interface FailedDmTask {
+  taskId: string; title: string; taskRevision: number; stopGeneration: number; latestRunId: string;
+  available: boolean; pending: boolean; blockReason: string | null;
+}
+export interface ConversationFailedTasksResult { conversationId: string; items: FailedDmTask[]; truncated: boolean }
+
 export interface TaskDetailEvent {
   seq: number; kind: string; at: number; runId: string | null; turnId: string | null;
   toolCallId: string | null; summary: string;
@@ -21,7 +28,8 @@ export interface TaskDetailRun {
 }
 
 export interface TaskDetailsResult {
-  task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
+  task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; stopGeneration: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
+  failedRetry: { available: boolean; pending: boolean; blockReason: string | null };
   children: Array<{ id: string; title: string; status: string; locate: string }>;
   /** Latest creation order is stable; selectedRunId can point to an older run appended to the bounded list. */
   latestRunId: string | null;

@@ -28,6 +28,7 @@ import { SIDEBAR_WIDTH } from './lib/layout';
 import { audienceAllows, resourceOf } from './lib/resource';
 import { autoHidePreviewForConversation, shouldAutoHidePreviewFor } from './data/actions-preview';
 import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
+import type { ConversationFailedTasksResult, FailedDmTask } from '../../contracts/taskDetails.ts';
 
 const EXEC_TEXT: Record<string, string> = {
   idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
@@ -56,6 +57,21 @@ export function DmPage() {
   const [opsAt, setOpsAt] = useState<{ x: number; y: number } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [acceptedRetry, setAcceptedRetry] = useState<string | null>(null);
+  const failedReadGen = useRef(0);
+  const [failedView, setFailedView] = useState<{ conversationId: string; items: FailedDmTask[]; truncated: boolean; error: string | null }>({ conversationId: '', items: [], truncated: false, error: null });
+  const readFailedTasks = async (conversationId: string, projectId: string) => {
+    const gen = ++failedReadGen.current;
+    try {
+      const data = await command<ConversationFailedTasksResult>('conversation.failedTasks', { conversationId, projectId });
+      if (gen === failedReadGen.current && data.conversationId === conversationId) {
+        setFailedView({ conversationId, items: data.items, truncated: data.truncated, error: null });
+      }
+    } catch (e) {
+      if (gen === failedReadGen.current) setFailedView((old) => ({ conversationId, items: old.conversationId === conversationId ? old.items : [],
+        truncated: old.conversationId === conversationId ? old.truncated : false, error: (e as Error).message }));
+    }
+  };
   /**
    * 编辑框目标快照（r57，review-r56 §4 跨会话误提交修复）：打开时捕获 conversationId（+
    * 重命名的 revision / 验收框的交付三重身份）。切换会话即作废（effect 清除）；提交前再核对
@@ -69,6 +85,11 @@ export function DmPage() {
   const savedRefs = useStore((s) => s.savedMessageRefs);
   // 切换会话：编辑框一律作废关闭（零提交、零串扰）——A 打开的框不会作用于 B。
   useEffect(() => { setRenaming(null); setRenameText(''); setReviewBox(null); setInsertText(null); setOpsAt(null); }, [activeId]);
+  useEffect(() => {
+    if (active?.id != null) void readFailedTasks(active.id, active.projectId);
+    return () => { failedReadGen.current += 1; };
+    // The read is scoped by the selected conversation identity, not each refreshed list object.
+  }, [activeId, active?.projectId]);
 
   // 活动目标追踪（接管定位用）：当前会话写入 ui.activeThreadId。
   useEffect(() => { if (activeId !== '') setState((s) => ({ ...s, ui: { ...s.ui, activeThreadId: activeId } })); }, [activeId]);
@@ -105,9 +126,10 @@ export function DmPage() {
       const nearBottom = box != null ? (box.scrollHeight - box.scrollTop - box.clientHeight < 80) : true;
       if (activeId !== '') void loadDmHistory(activeId, { markRead: nearBottom });
       void refreshDms();
+      if (active?.id != null) void readFailedTasks(active.id, active.projectId);
     }, 5000);
     return () => { window.clearInterval(t); };
-  }, [activeId]);
+  }, [activeId, active?.projectId]);
 
   /* ---------- 布局解析（原型 §17.9：320 列表 / 440 对话 / 480 预览；先收列表再单区） ---------- */
   const workspace = useElementWidth<HTMLDivElement>('.app-body');
@@ -153,7 +175,7 @@ export function DmPage() {
   const archivedDms = useMemo(() => dms.filter((d) => d.archivedAt != null), [dms]);
 
   /** ── 头部正式操作（每项取打开时的目标快照+提交前重核当前归属；失败如实）。 ── */
-  const reloadAll = async () => { await refreshDms(); if (activeId !== '') await loadDmHistory(activeId); };
+  const reloadAll = async () => { await refreshDms(); if (activeId !== '') await loadDmHistory(activeId); if (active?.id != null) await readFailedTasks(active.id, active.projectId); };
   const doRename = async () => {
     if (renaming == null || renameText.trim().length === 0) return;
     // 提交前核对：框属于哪个会话就用哪个会话的快照（捕获的 conversationId/revision）——
@@ -260,6 +282,24 @@ export function DmPage() {
       await reloadAll();
     } catch (e) { toast(`恢复被拒：${(e as Error).message}`, 'error'); }
     finally { setBusy(null); }
+  };
+  const doRetryFailed = async (it: FailedDmTask) => {
+    if (active?.id == null || failedView.conversationId !== active.id || !it.available || acceptedRetry === `${it.taskId}:${it.latestRunId}`) return;
+    const snapshot = { taskId: it.taskId, sourceRunId: it.latestRunId,
+      expectedTaskRevision: it.taskRevision, expectedStopGeneration: it.stopGeneration,
+      expectedRunStatus: 'FAILED' as const };
+    setBusy(`failed:${it.taskId}`);
+    try {
+      await command('task.redispatch', { ...snapshot, reason: '用户在私信中显式继续失败任务' });
+      setAcceptedRetry(`${it.taskId}:${it.latestRunId}`);
+      recordWrite('task.redispatch', `私信失败任务显式继续（task ${it.taskId.slice(0, 10)}…）`);
+      toast('继续请求已入队；等待正式执行结果', 'success');
+    } catch (e) {
+      toast(`继续被拒：${(e as Error).message}——请按当前任务事实重新决定`, 'error');
+    } finally {
+      await reloadAll().catch(() => { /* 保留原事实与错误，下次读取重试 */ });
+      setBusy(null);
+    }
   };
   /** 执行返工（r58 验收与执行分离；r59 完整身份）：点击时冻结 reworkPending 快照——
    * 服务端核对当前返工事实，旧引用（数据已推进）STALE 拒绝不改绑。 */
@@ -532,6 +572,22 @@ export function DmPage() {
                         {(active.interruptedTasks ?? []).filter((it) => !it.recoverable && it.blockReason != null).map((it) => `· ${it.title}：${it.blockReason}`).join(' ')}
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+                {failedView.conversationId === active.id && (failedView.items.length > 0 || failedView.error != null) ? (
+                  <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">
+                    <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>失败任务待处理</strong><span className="faint small">任务尚未完成；继续需要明确点击，旧结果不会自动重发</span></div>
+                    {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{failedView.error}（保留上次成功读取的事实）</div> : null}
+                    {failedView.items.map((it) => <div key={it.taskId} style={{ marginTop: 7 }}>
+                      <div className="row tight wrap">
+                        <span style={{ flex: 1, minWidth: 0 }}>{it.title}</span><Tag tone="danger">运行失败</Tag>
+                        {it.available ? <button className="btn sm" disabled={busy != null || acceptedRetry === `${it.taskId}:${it.latestRunId}`} onClick={() => void doRetryFailed(it)}>继续失败任务</button> : null}
+                        {it.pending ? <span className="faint small">继续已入队，等待派发</span> : null}
+                        {it.available && acceptedRetry === `${it.taskId}:${it.latestRunId}` ? <span className="faint small">继续已提交，正在核对</span> : null}
+                      </div>
+                      {it.blockReason != null ? <div className="faint small">暂不可继续：{it.blockReason}</div> : null}
+                    </div>)}
+                    {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务；其余请从原界面逐项查看。</div> : null}
                   </div>
                 ) : null}
                 <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>

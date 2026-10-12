@@ -1,9 +1,10 @@
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { TaskDetailEvent, TaskDetailsResult } from '../contracts/taskDetails.ts';
+import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 
 /** Query only facts already persisted by the formal task/worker path. Caller checks scope and audience. */
 export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requestedRunId?: string): TaskDetailsResult {
-  const task = db.prepare(`SELECT t.id, t.project_id, t.conversation_id, t.title, t.objective, t.status, t.review_policy, t.revision,
+  const task = db.prepare(`SELECT t.id, t.project_id, t.conversation_id, t.title, t.objective, t.status, t.review_policy, t.revision, t.stop_generation,
     t.room_task_number, t.owner_member_id, pm.display_name AS owner_display_name, t.parent_task_id, t.current_delivery_id
     FROM tasks t LEFT JOIN project_members pm ON pm.id = t.owner_member_id AND pm.project_id = t.project_id WHERE t.id = ?`).get(taskId) as Record<string, unknown>;
   const projectId = task.project_id as string;
@@ -38,6 +39,17 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const selectedIsOutsideWindow = selectedRunId != null && !runRows.items.some((r) => r.id === selectedRunId);
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT id, mode, status, stage, round_no, revision, budget_json
     FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedRunId, taskId, conversationId) as RunRow | undefined : undefined;
+  const failedLatest = task.status === 'ACTIVE' && task.stop_generation === 0 && runRows.items[0]?.status === 'FAILED';
+  const availability = db.prepare(`SELECT p.status AS project_status, c.archived_at AS conversation_archived,
+    r.archived_at AS room_archived FROM tasks t JOIN projects p ON p.id = t.project_id
+    JOIN conversations c ON c.id = t.conversation_id LEFT JOIN rooms r ON r.id = t.room_id WHERE t.id = ?`)
+    .get(taskId) as { project_status: string; conversation_archived: number | null; room_archived: number | null };
+  const scopeBlock = availability.project_status !== 'active' ? '项目已归档或不可用；先恢复项目。'
+    : availability.conversation_archived != null ? '会话已归档；先恢复会话。'
+      : availability.room_archived != null ? '房间已归档；先恢复房间。' : null;
+  const pendingRedispatch = failedLatest && db.prepare(`SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
+    .get(`task:${taskId}:redispatch:${latestRunId}`) != null;
+  const blockedRetry = failedLatest && !pendingRedispatch && scopeBlock == null ? assessTaskRedispatchReadiness(db, taskId) : null;
   const visibleRunRows = selectedRow == null ? runRows.items : [...runRows.items, selectedRow];
   const runs = visibleRunRows.map((r) => {
     const participants = (db.prepare(`SELECT rp.member_id, pm.display_name, rp.role, rp.expected, rp.status
@@ -76,9 +88,12 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     task: { id: task.id as string, projectId: task.project_id as string, conversationId: task.conversation_id as string,
       title: task.title as string, objective: task.objective as string | null, status: task.status as string,
       reviewPolicy: task.review_policy as string, revision: task.revision as number,
+      stopGeneration: task.stop_generation as number,
       roomTaskNumber: task.room_task_number as number | null, ownerMemberId: task.owner_member_id as string | null,
       ownerDisplayName: task.owner_display_name as string | null,
       parentTaskId: task.parent_task_id as string | null, currentDeliveryId: task.current_delivery_id as string | null },
+    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,
+      pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
     latestRunId, currentRunId, selectedRunId, runs, events,
     deliveries: deliveryRows.items.map((d) => ({ id: d.id, revision: d.revision, manifestHash: d.manifest_hash,
