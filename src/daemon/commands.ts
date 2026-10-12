@@ -3587,12 +3587,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           'tool.started': '工具调用开始', 'tool.completed': '工具调用完成', 'usage.updated': '用量更新',
         };
         const rows = deps.db.prepare(
-          `SELECT e.event_id, e.seq, e.kind, e.created_at, e.project_id, e.conversation_id, e.thread_id, e.task_id, e.payload_json,
+          `SELECT e.event_id, e.seq, e.kind, e.created_at, e.project_id, c.id AS conversation_id, COALESCE(e.thread_id, task.conversation_thread_id) AS thread_id, e.task_id, e.payload_json,
                   p.display_name AS project_name, c.kind AS conversation_kind
            FROM domain_events e
            LEFT JOIN projects p ON p.id = e.project_id
-           LEFT JOIN conversations c ON c.id = e.conversation_id
+           LEFT JOIN tasks task ON task.id = e.task_id
+           LEFT JOIN conversation_threads th ON th.id = e.thread_id
+           LEFT JOIN conversations c ON c.id = COALESCE(task.conversation_id, th.conversation_id, e.conversation_id)
            WHERE e.project_id IN (${projectIds.map(() => '?').join(',')})
+             AND (task.id IS NULL OR task.project_id = e.project_id)
+             AND (c.id IS NULL OR c.project_id = e.project_id)
              AND (c.id IS NULL OR c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ${params.before != null ? (params.beforeSeq != null ? 'AND (e.created_at < ? OR (e.created_at = ? AND e.seq < ?))' : 'AND e.created_at < ?') : ''}
            ORDER BY e.created_at DESC, e.seq DESC LIMIT ?`,
@@ -3608,7 +3612,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             eventId: e.event_id, seq: e.seq, kind: e.kind, kindLabel: KIND_LABEL[e.kind] ?? e.kind, at: e.created_at, summary,
             projectId: e.project_id, projectName: e.project_name ?? e.project_id,
             conversationId: e.conversation_id, threadId: e.thread_id, taskId: e.task_id,
-            locate: e.thread_id != null ? `#task=${e.task_id ?? ''}` : e.conversation_id != null ? (e.conversation_kind === 'dm' ? `#dm=${e.conversation_id}` : `#conv=${e.conversation_id}`) : null,
+            locate: e.task_id != null ? `#task=${e.task_id}` : e.conversation_id != null ? (e.conversation_kind === 'dm' ? `#dm=${e.conversation_id}` : `#conv=${e.conversation_id}`) : null,
           };
         });
         return withCommandId({ ok: true, data: { items, note: 'Activity 流（只读——domain_events 聚合；DM 事件仅本人参与可见）' } });

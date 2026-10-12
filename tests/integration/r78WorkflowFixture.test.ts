@@ -60,6 +60,9 @@ describe('R78 persistent formal workflow and cross-page facts', () => {
       expect(JSON.stringify(search)).toContain(f.roomTaskId);
       expect(JSON.stringify(activity)).toContain(f.roomTaskId);
       expect(JSON.stringify(activity)).toContain(f.dmTaskId);
+      const reviewEvents = (activity as {items:Array<{kind:string;taskId:string;locate:string|null}>}).items.filter(e=>e.kind==='task.reviewRecorded');
+      expect.soft(reviewEvents.some(e=>e.taskId===f.roomTaskId && e.locate===`#task=${f.roomTaskId}`)).toBe(true);
+      expect.soft(reviewEvents.some(e=>e.taskId===f.dmTaskId && e.locate===`#task=${f.dmTaskId}`)).toBe(true);
       await read('thread.subscribe', { threadId: f.roomThreadId, follow: true });
       const favorites = await read('thread.subscriptions', { projectId: f.projectId });
       expect(JSON.stringify(favorites)).toContain(f.roomThreadId);
@@ -76,6 +79,8 @@ describe('R78 persistent formal workflow and cross-page facts', () => {
       const otherSearch = await dispatchDaemonCommand(outsider, { protocolVersion: 1, commandId: `r78-out-${randomUUID()}`, method: 'search.query', params: { text: 'R78 DM DIRECT', scope: 'project', projectId: f.projectId } }) as { ok: boolean; data?: unknown };
       expect(otherSearch.ok).toBe(true);
       expect(JSON.stringify(otherSearch.data)).not.toContain(f.dmTaskId);
+      const otherActivity = await dispatchDaemonCommand(outsider, {protocolVersion:1,commandId:randomUUID(),method:'activity.list',params:{scope:'project',projectId:f.projectId,limit:200}}) as {ok:boolean;data?:unknown};
+      expect(otherActivity.ok).toBe(true);expect(JSON.stringify(otherActivity.data)).not.toContain(f.dmTaskId);
     } finally { db.close(); }
   }, 60_000);
 });
