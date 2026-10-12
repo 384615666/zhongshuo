@@ -1,0 +1,162 @@
+{
+  "round": "R79",
+  "beforeEvidence": [
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r78-v17-audit-20261012\\ui-result.json",
+      "sha256": "e367c22acf4b59e90f3ab5688c62288a2699f96e55b5c411ccace1959d65b222"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r78-v17-audit-20261012\\manual-control\\ui-result.json",
+      "sha256": "72f6f96836544d8fc13fbc58f84aef50916320693a17ce55e24906eed65a6771"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r79-member-workload-before\\result.json",
+      "sha256": "66bb6d25218c08dab59867fe3477abcad2639212d1e1090668a9c6da691d2667"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r79-diagnostic-before-after\\result.json",
+      "sha256": "872f09a109b3197f5f167d18d707c1df102b458a31d3dadfa6244c2e1b31fcf3"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-stage\\result.json",
+      "sha256": "484e59724bbbdf726701218dc31891a8efa429a4c95bc6dc0132b137983f5638"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-2\\result.json",
+      "sha256": "b26685282a9ea7e4aba010006456c1c1fe2468aaeb508e250851f371706e7a55"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791811008863\\interruption.json",
+      "sha256": "dec0dc704ad1c0bc002f3f74c652942070df668f06d162c813f1d2fae13806c4"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r79-full-tests-stage.json",
+      "sha256": "318b073260e4e0696f8d1dff7bedcb55441322769d2ea277fdbf1ab069f4a16b"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r79-pre-diagnostic-delivery.json",
+      "sha256": "d8ba219b57aa9dc27f0318511f2c079e986433b3535329791fe9e333bc6da495"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-completion-1791819603289\\interruption.json",
+      "sha256": "0dad470b55e1fada4740f6f023c9e4bd558d6221a6c2073aa36b50f35bedb572"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r79-dm-records-controlled\\result.json",
+      "sha256": "30ce1f65cccacb39710454186da882667a1734987b5519157de28a8f0a065798"
+    }
+  ],
+  "archives": [
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-stage\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\stage-program-0",
+      "buildId": "bld_2dc3196f56cf7815",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-stage-2\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\stage-program-1",
+      "buildId": "bld_2dc3196f56cf7815",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v18-stage\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\stage-program-2",
+      "buildId": "bld_2dc3196f56cf7815",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791811008863\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\auxiliary-program-0",
+      "buildId": "bld_f2a7e61547b29eb5",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791810714551\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\auxiliary-program-1",
+      "buildId": "bld_f2a7e61547b29eb5",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\old-final-f2-program",
+      "buildId": "bld_f2a7e61547b29eb5",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-2\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\section-probe-program",
+      "buildId": "bld_3951c449d65cf5e7",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v18",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\candidate-before-diagnostic\\ZhongshuoDual",
+      "buildId": "bld_f2a7e61547b29eb5",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "engineering DB/profile/screenshots/results remain at original root; no user package/data moved"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v18",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\candidate-before-dm\\ZhongshuoDual",
+      "buildId": "bld_3951c449d65cf5e7",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "only own generated program moved; DB/profile/screenshots/receipts remain at original root; user old packages untouched"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-3\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\pre-dm-program-0",
+      "buildId": "bld_3951c449d65cf5e7",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "only own generated program moved; DB/profile/screenshots/receipts remain at original root; user old packages untouched"
+    },
+    {
+      "original": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791812926114\\copy\\ZhongshuoDual",
+      "recoverableProgramRoot": "C:\\Users\\user\\.codex\\tmp\\r79-stage-programs-20261012\\pre-dm-program-1",
+      "buildId": "bld_3951c449d65cf5e7",
+      "files": 593,
+      "manifestMatches": true,
+      "errors": [],
+      "dataAndEvidence": "only own generated program moved; DB/profile/screenshots/receipts remain at original root; user old packages untouched"
+    }
+  ],
+  "capacityNote": "D reached ENOSPC while writing engineering lint output; incomplete report not a pass. Automatic review rejected recursive deletion (blocked by policy); recoverable native moves of generated programs restored space. A contemporaneous reading probe was incomplete, direct product cause unestablished; fresh success retained separately. No user package/data deleted or moved.",
+  "failureNotes": {
+    "live": "two independent old v17 failures retained",
+    "members": "cold local empty store falsely reported no owner tasks",
+    "diagnostic": "same natural worker turn.statusChanged FAILED reason absent in old component, present after; old screenshot retained",
+    "stageLauncher": "first reopen probe clicked before async details read; failure not counted as first success",
+    "final2": "URL-only section transition probe clicked wrong retiring section; fixed to native section buttons and visible selected/content gate",
+    "externalGit": "2 upstream network/commit_refs failures retained; no automated repeat",
+    "dmControlled": "first probe exported close callback before React mounted; corrected deferred closure, original failed receipt retained",
+    "cancelParameter": "wrong engineering --src duplicated renderer path; interrupted partial failures retained, correct short-directory invocation passed all10",
+    "readParameter": "short-directory --src rejected before copy/model work; correct full candidate path subsequently passed ordinary real BAT"
+  }
+}

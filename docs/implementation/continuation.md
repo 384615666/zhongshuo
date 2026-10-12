@@ -2,7 +2,19 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前真实状态（2026-10-09 第七十五轮，唯一权威快照）
+## 当前交接入口（2026-10-12，R79 / v18）
+
+本段和 [R79交付记录](r79-desktop-stability-v18-20261012.md)、[必要判据](r79-v18-delivery-20261012.json) 是当前入口。下面 R75/v13 及各旧轮次仅作历史，不能作为当前能力矩阵。
+
+- 工作区 `D:\zhongshuo`，分支 `codex/full-implementation`；R79 接手 HEAD `cbc6d15`。当前冻结运行源码 HEAD `83ec701e70f2eb903df5a1017fe99d333f2c008e`，clean BUILD `bld_8f7f491551feeaf7`；日常候选 `dist/desktop/desktop-daily-win-v18/start-desktop.bat`，与旧 v17 独立。此后仓库提交仅工程探针/交付文档，实际仓库 HEAD 请读取 `git rev-parse HEAD`，不要把构建源码身份替换成文档提交身份。
+- 当前能力：继承 R78 房间DIRECT/DM完整闭环、项目打开/取消/最新导航意图、附件事实链、图片阅读、草稿与未知原信封保护；新增可见详情5秒有界单飞读取、隐藏/接管暂停、历史run选择保持、失败快照和读取时间、选中run按需明细、运行/活动/交付稳定游标单页历史、详情长列表统一滚动、权威成员工作量、预算/用量及执行摘要。看 [R79当前矩阵](r79-current-capabilities-20261012.md)，完整工作流基面仍对应 R78 当前矩阵而非 R59/R64 旧表。
+- 工程验收：962项本地确定性测试、双类型检查、修改文件lint无新增错误；最终真实BAT20步（普通首启/房间与DM两版交付返工验收/失败显式继续/停止/持续活动/历史/重开），10取消交叉场景；正式仅记录工程PNG实际解码、3轮刷新、缩放拖动/Esc/树入口/原件hash。593清单绑定同BUILD。既有外部GitHub沙盒测试初次2项失败原样保留，未称全量967通过。
+- 用户已通过：图片发送与本地预览（继承此前明确反馈）；R79工程通过不代记本轮用户验收。用户只需记录里一条约5分钟已有任务阅读路线，不制造长任务/竞态/故障，也不重复图片清单。
+- 边界：本批真实模型调用0；Codex `gpt-6-luna`真实识图仍unverified，无retry/startTurn。Claude仅沿用有效配置身份相符的旧认证，不扩大认证范围。普通任务由正式worker产生；26run/3250活动/61交付历史规模夹具明确分列，非真实模型成果。所选run的80轮/每轮50用量、子任务50/改动集100/成果100仍显式截断，没有本轮分页；分钟级交互与恢复验证不等于多日挂机/睡眠唤醒认证。AUTO/DELIBERATE、并行写入、工具权限、Android、安装器/签名/自动更新/价值评价仍延期。
+- 保留：用户旧包/数据/配置/草稿/未知账本原地未动，迁移001–048无改动，无自动重发/对账/解除保护。D盘曾ENOSPC，若干本轮生成的重复程序副本可恢复转移到 `C:\Users\user\.codex\tmp\r79-stage-programs-20261012`，工程数据库/截图/失败回执保留在原dist路径，详情见反例记录；不删除用户包。
+- 下一步：使用v18自然阅读已有任务，收集实际业务问题；真实模型认证只在另行明确授权最小调用预算后推进。不要因旧报告重做R75/R76/R78，也不要自动启动模型或处理未知命令。
+
+## 历史快照（2026-10-09 第七十五轮；R75/v13 已被下述 R79/v18 替代）
 
 > R75=项目切换落位/取消收口（review-r74 独立复核：从房间经真实弹窗打开 B 被旧 A 路由抢回×2+装载期取消只还原焦点留 A 的 lastPath）。**主交付=desktop-daily-win-v13** `bld_d4510629e370c260`（commit `6ddd41e`，dirty=false，593/593；r63 --src v13 ok realCalls=0；**启动器发布协议复证普通打开路线 ok**：A 房间真实弹窗开已注册 B 全落位/A 保留/零 toast+再开新目录 C 最新意图+重启进 C+console 0+realCalls 0）；交互门 `verify-daily-r75.cjs` **G1–G3 全绿**（ok:true, errs:[]；realCallRoots 3×0）；全量 922/922；r72/r73/r74 门回归全绿。
 > - **P1 落位所有权**：openProjectByPath 提交时登记 `openInFlightTarget{projectId,urlSeqAtStart}`（router `currentNavSeq()` 每次 hashchange +1）+收尾按代次清；房间路由/ProjectHomePage 在「他项目打开在途且 URL 自打开发起未变」**让位**；**返回 {id:目标}**——打开弹窗/pickAndOpenFolder 按目标 id 选房间落位（不读异步结束时的 activeProjectId）。**先复现**：stash 后「A 房间→真实弹窗开 B」FAIL（URL/active 留 A+lastPath=B=复核签名）。

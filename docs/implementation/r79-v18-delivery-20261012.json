@@ -1,0 +1,279 @@
+{
+  "round": "R79",
+  "date": "2026-10-12",
+  "baseline": "cbc6d15",
+  "branch": "codex/full-implementation",
+  "package": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v18",
+  "build": {
+    "buildId": "bld_8f7f491551feeaf7",
+    "commit": "83ec701e70f2eb903df5a1017fe99d333f2c008e",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-12T15:38:49.233Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "pass": true,
+  "requiredChecks": {
+    "localSourceTests": true,
+    "typechecks": true,
+    "noNewLint": true,
+    "preservedLiveCounterexample": true,
+    "preservedMemberCounterexample": true,
+    "liveReadRaces": true,
+    "dmReadRaces": true,
+    "dmCompletedHistory": true,
+    "memberAuthorityAndRecovery": true,
+    "readCostBounded": true,
+    "cleanBuild": true,
+    "manifests": true,
+    "sameFinalBuild": true,
+    "launcherBytes": true,
+    "fullRoomDmWorkflow": true,
+    "sustainedRunning": true,
+    "explicitFailureReason": true,
+    "deliveryAndExplicitFailureRecovery": true,
+    "accessibleHistory": true,
+    "readingPreserved": true,
+    "historyLayout": true,
+    "zeroRendererErrors": true,
+    "projectCancelAndCrossOpen": true,
+    "imageDecodeAndOriginal": true,
+    "attachmentStability": true,
+    "zeroModelCalls": true,
+    "independentRoots": true,
+    "oldV17Preserved": true,
+    "noShippedProfileOrFixture": true,
+    "migrationsFrozen": true
+  },
+  "receipts": {
+    "launcher": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\result.json",
+      "sha256": "d8194b5ef28aea308a152f2989a32823de113692f3c1e3634288c0b0bf893e42"
+    },
+    "reading": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791819714746\\result.json",
+      "sha256": "b5d08c22fca9fde7839de290a1623d91cda2c629e20a0d9839e5e3dd0ee51e58"
+    },
+    "cancel": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-completion-1791819675574\\result.json",
+      "sha256": "482bccfd4151146e2e8dfe2745eb8bda96caa462fdbedf8746bc9dd168beb169"
+    },
+    "live": {
+      "path": "D:\\zhongshuo\\dist\\r79-details-live-release\\result.json",
+      "sha256": "261463430c614652672435a770b6947605b2a262f3da33345dcd49916a34dbb3"
+    },
+    "dm": {
+      "path": "D:\\zhongshuo\\dist\\r79-dm-records-controlled-final\\result.json",
+      "sha256": "755471ea601cbf322328a72ae090324c1b1ac71941090b9ea6dd190ee3174131"
+    },
+    "memberBefore": {
+      "path": "D:\\zhongshuo\\dist\\r79-member-workload-before\\result.json",
+      "sha256": "66bb6d25218c08dab59867fe3477abcad2639212d1e1090668a9c6da691d2667"
+    },
+    "memberAfter": {
+      "path": "D:\\zhongshuo\\dist\\r79-member-workload-after\\result.json",
+      "sha256": "cb0718126881b2590ade79666016c2d038fed61b6c1ce7114e883c1d2245bc4f"
+    },
+    "costBefore": {
+      "path": "D:\\zhongshuo\\dist\\r79-details-cost-before.json",
+      "sha256": "f9ac67badb3399a69b300305981f3f00a39383eadb937d6ac0aa8d8e302024ed"
+    },
+    "costAfter": {
+      "path": "D:\\zhongshuo\\dist\\r79-details-cost-final-2.json",
+      "sha256": "6d891f5a5c9e2756ce3a8e161892e46d7c454f404f3d0387d82360ef45762232"
+    },
+    "tests": {
+      "path": "D:\\zhongshuo\\dist\\r79-local-full-tests-final-3.json",
+      "sha256": "b578c68f67553e97f9cc6107998cc19e5f212bea2b84e26d43d02cd528b7fc6b"
+    },
+    "externalTests": {
+      "path": "D:\\zhongshuo\\dist\\r79-full-tests-stage.json",
+      "sha256": "318b073260e4e0696f8d1dff7bedcb55441322769d2ea277fdbf1ab069f4a16b"
+    },
+    "lint": {
+      "path": "D:\\zhongshuo\\dist\\r79-lint-final-delta.json",
+      "sha256": "c9734a769d25bc016f6fb3f6509237655b546052879cafc5d8e09a77e61d73fd"
+    },
+    "samples": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-live-samples.json",
+      "sha256": "88c7b76fcf7670a72570c18fd5c3eef195009ad841fb008c6a07602f409356ea"
+    }
+  },
+  "sourceValidation": {
+    "localTests": 962,
+    "localFiles": 131,
+    "typechecks": [
+      {
+        "pass": true,
+        "path": "D:\\zhongshuo\\dist\\r79-tsconfig.json.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "pass": true,
+        "path": "D:\\zhongshuo\\dist\\r79-tsconfig.hifi.json.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "lintScope": "all changed TypeScript/JavaScript files, error multiset comparison, not full-repository lint success",
+    "externalGitSandbox": {
+      "scope": "existing real GitHub sandbox file; not an R79 deterministic gate",
+      "passed": 3,
+      "failed": 2,
+      "totalSuitePassed": 964,
+      "totalSuiteFailed": 2,
+      "claim": "not passed, retained without automatic repeat; failures ls-remote/network and upstream commit_refs",
+      "receipt": {
+        "path": "D:\\zhongshuo\\dist\\r79-full-tests-stage.json",
+        "sha256": "318b073260e4e0696f8d1dff7bedcb55441322769d2ea277fdbf1ab069f4a16b"
+      }
+    }
+  },
+  "packageValidation": {
+    "source": 593,
+    "launcherCopy": 593,
+    "readingCopy": 593,
+    "oldV17": 593,
+    "pipes": [
+      "zs-daily-2f8a9957-b1f0-4197-81dd-7b32ad8afe17",
+      "zs-daily-fbf80646-83e6-4021-8983-fc3924b18a63"
+    ]
+  },
+  "performance": {
+    "before": {
+      "scope": "isolated synthetic history, 25 runs x 130 events; 20 reads, no worker completion claims",
+      "queriesPerRead": 88,
+      "payloadBytes": 1189470,
+      "durationMs": [
+        11.339400000000012,
+        10.487300000000005,
+        9.087199999999996,
+        9.597300000000018,
+        9.376800000000003,
+        10.729899999999986,
+        8.751100000000008,
+        10.943300000000022,
+        9.162000000000035,
+        8.799800000000005,
+        8.86529999999999,
+        9.278400000000033,
+        9.098600000000033,
+        9.796199999999999,
+        9.000400000000013,
+        8.931499999999971,
+        8.951900000000023,
+        9.027900000000045,
+        9.96859999999998,
+        8.843200000000024
+      ],
+      "realCalls": 0
+    },
+    "after": {
+      "scope": "isolated synthetic history, 25 runs x 130 events; 20 reads, no worker completion claims",
+      "queriesPerRead": 12,
+      "payloadBytes": 124350,
+      "durationMs": [
+        3.4809000000000196,
+        1.2077000000000453,
+        1.1339000000000397,
+        0.8274999999999864,
+        0.8628999999999678,
+        0.800899999999956,
+        0.777300000000082,
+        0.7789000000000215,
+        0.8072999999999411,
+        0.9105999999999312,
+        0.7806000000000495,
+        1.0043000000000575,
+        0.8337999999999965,
+        0.77049999999997,
+        0.7590000000000146,
+        0.7559999999999718,
+        0.738999999999919,
+        0.789600000000064,
+        0.7575999999999112,
+        0.7453000000000429
+      ],
+      "realCalls": 0
+    },
+    "queryReduction": 0.8636363636363636,
+    "payloadReduction": 0.8954576407980025,
+    "heaps": [
+      {
+        "at": 1791819597467,
+        "phase": "live-details-start",
+        "usedSize": 11406924,
+        "totalSize": 20574208,
+        "embedderHeapUsedSize": 5484440,
+        "backingStorageSize": 8719373
+      },
+      {
+        "at": 1791819622393,
+        "phase": "natural-delivery",
+        "usedSize": 11470232,
+        "totalSize": 14807040,
+        "embedderHeapUsedSize": 5771896,
+        "backingStorageSize": 8734718
+      },
+      {
+        "at": 1791819641017,
+        "phase": "history-pages-after-navigation",
+        "usedSize": 12187668,
+        "totalSize": 28700672,
+        "embedderHeapUsedSize": 7427672,
+        "backingStorageSize": 8701705
+      }
+    ],
+    "scope": "observational CDP heap snapshots during formal workflow; not a multi-day leak certification"
+  },
+  "boundaries": {
+    "realModelCalls": 0,
+    "codexVision": "gpt-6-luna remains unverified; no retry/startTurn",
+    "claudeVision": "only previously certified effective identity; no expansion of certification",
+    "userImageAcceptance": "inherited user confirmation; no repeated user checklist",
+    "scaleFixture": "26 runs / 3250 synthetic events / 61 versions separately labelled; ordinary states and files from worker remain separate",
+    "boundedDetails": "selected run latest80 turns / latest50 usage records per turn; children50/changeSets100/artifacts100 still explicitly bounded; no new pagination for these collections",
+    "memory": "minute-scale continuous workflows and controlled races, not multi-day idle/suspend/leak certification",
+    "deferred": [
+      "AUTO/DELIBERATE",
+      "parallel managed writes",
+      "tool permission certification",
+      "Android",
+      "installer/signing/auto-update",
+      "value evaluation"
+    ],
+    "userAcceptance": false,
+    "externalGitSandbox": "2 original external-service failures remain; local Git contracts passed"
+  },
+  "scriptChangesAfterBuild": "later commits are QA/read smoke/records only; runtime bytes remain clean 83ec701",
+  "screenshots": {
+    "buildId": "bld_8f7f491551feeaf7",
+    "visuallyInspected": true,
+    "files": [
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-dm-task-records.png",
+        "sha256": "60506d4f1ca8a0de1cc7ecfd4d317bf1bc50d6a1bd9a4787da1ce8a04929e442"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-live-running.png",
+        "sha256": "272eb78883924487af9218d9808d72cfde35e49bc31ff902e3ce1055d0fe7132"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-failure-details.png",
+        "sha256": "213499a732a62f1d573979afd5c8a478627e48f959ef5159b48056aca1bfec85"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-delivery-history.png",
+        "sha256": "c9c4a81840e405c11833448166c00963c0ad87825b29f0097c51d5fe7a37ce7a"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r79-v18-launcher-final-dm\\r79-history-reopened.png",
+        "sha256": "cf7eec1ef231c2405320fda6564d40f832565924eb60542c02403c3937cfb1e8"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791819714746\\r79-image-reading.png",
+        "sha256": "05bdbaa79ac08dbef2a9c1ce9060de1aa25a08cbfd91c23427762bc14ab7902b"
+      }
+    ]
+  }
+}
