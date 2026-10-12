@@ -22,9 +22,9 @@ import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 
-interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string }
+export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string }
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
-interface RuntimeInfo {
+export interface RuntimeInfo {
   binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null };
   installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null;
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
@@ -32,7 +32,7 @@ interface RuntimeInfo {
   imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
 }
 
-const runtimeAuthOf = (raw: string | null): string => {
+export const runtimeAuthOf = (raw: string | null): string => {
   if (raw == null) return '未认证';
   try {
     const caps = JSON.parse(raw) as { permissionAuth?: string; modelAvailability?: string };
@@ -230,7 +230,10 @@ export function MembersPage() {
             const rt = runtimeLabel(m);
             const running = tasks.filter((t) => t.ownerMemberId === m.id && ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(t.status));
             return (
-              <div key={m.id} className="card" data-zs-member-card={m.id} title={`成员实例 ${m.displayName}（完整 ID ${m.id}）`}>
+              <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} #${memberShortId(m.id)} 的成员详情（完整 ID ${m.id}）`}
+                role="link" tabIndex={0} style={{ cursor: 'pointer' }}
+                onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; navigate(`/project/${projectId}/member/${m.id}`); }}
+                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate(`/project/${projectId}/member/${m.id}`); } }}>
                 <div className="row tight">
                   <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round />
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -321,7 +324,7 @@ export function MembersPage() {
           projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
           activeProjectId={projectId}
           onClose={() => setAddFor(null)}
-          onCreated={async (memberId) => {
+          onCreated={async () => {
             setAddFor(null);
             toast(`已添加成员（自动加入未归档房间；协调者与 runtime 不变——随后可「配置 runtime」）`, 'success');
             // 迟到回执：只刷新**提交目标项目**的名单（当前焦点若已切到别的项目，不覆盖其视图）。
@@ -345,7 +348,7 @@ export function MembersPage() {
   );
 }
 
-function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
+export function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
   member: MemberRow;
   initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
@@ -354,9 +357,14 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
 }) {
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const savePending = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const save = async () => {
+    if (savePending.current) return;
     if (form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 绑定必须显式指定模型（服务端同判）', 'warn'); return; }
-    setBusy(true);
+    savePending.current = true; setBusy(true); setSaveError(null);
     try {
       await command('member.setRuntime', {
         memberId: member.id, kind: form.kind,
@@ -366,10 +374,11 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
       });
       recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${form.model ? `（${form.model}）` : ''}——配置成功≠能力已认证`);
       toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${form.model ? ' · ' + form.model : ''}）——能力认证状态以成员页回读为准`, 'success');
-      await onSaved();
+      if (mounted.current) await onSaved();
     } catch (e) {
+      if (mounted.current) setSaveError((e as Error).message);
       toast(`绑定失败：${(e as Error).message}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
-    } finally { setBusy(false); }
+    } finally { savePending.current = false; if (mounted.current) setBusy(false); }
   };
   return (
     <Modal
@@ -387,6 +396,7 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
       }
     >
       <div className="col" style={{ gap: 10 }}>
+        {saveError != null ? <div className="panel warning">绑定失败：{saveError}。输入已保留，可调整后重试。</div> : null}
         <label className="field" title="runtime 渠道（派发侧按此选 adapter）">
           <span className="field-label">渠道</span>
           <Select
@@ -400,10 +410,10 @@ function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
             ]}
           />
         </label>
-        {form.kind === 'claude' ? (
+        {form.kind !== 'fake' ? (
           <label className="field" title="claude 必须显式指定模型（服务端同判拒绝空模型）">
-            <span className="field-label">模型（必填）</span>
-            <input className="input" placeholder="如 deepseek-flash" value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))} />
+            <span className="field-label">{form.kind === 'claude' ? '模型（必填）' : '模型 ID（可选）'}</span>
+            <input className="input" placeholder={form.kind === 'claude' ? '如 deepseek-flash' : '如 gpt-6-luna；留空使用渠道默认'} value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))} />
           </label>
         ) : null}
         <label className="field" title="可执行文件（留空=渠道默认名：claude/codex）">

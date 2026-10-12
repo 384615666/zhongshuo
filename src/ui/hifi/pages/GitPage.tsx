@@ -217,14 +217,15 @@ export function GitPage({
     );
   }
   if (!project || !git || git.branches.length === 0) {
+    const branchReadError = git?.readErrors?.branches;
     const empty = (
       <>
         <EmptyState
-          icon="folder"
-          title={project?.isGit === false ? '尚未初始化 Git' : '没有 Git 数据'}
-          detail="众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。"
+          icon={branchReadError != null ? 'alert-triangle' : 'folder'}
+          title={branchReadError != null ? '分支列表读取失败' : project?.isGit === false ? '尚未初始化 Git' : '没有 Git 数据'}
+          detail={branchReadError != null ? `${branchReadError}；当前分支/工作区仍按 git.status 显示。` : '众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。'}
         />
-        <div className="panel">
+        {branchReadError != null ? <div className="panel-actions"><button className="btn sm" onClick={() => void refreshGitState(projectId)}>重试读取</button></div> : <div className="panel">
           <div className="panel-title"><Icon name="info" size={13} /> 非 Git 目录下的改动记录仍然完整</div>
           任务改动照旧记录成改动集并支持 diff 与撤销（E15：非 Git 目录用整目录快照做内容级前像）。
           Git 标签只提供版本控制本身的能力，两者互不替代。
@@ -233,7 +234,7 @@ export function GitPage({
               <Icon name="file-text" size={12} /> {embedded ? '返回文件' : '去看文件与改动'}
             </button>
           </div>
-        </div>
+        </div>}
       </>
     );
     // 合页模式：外壳（含页头、状态条、文件/Git 标签）由 FilesGitPage 提供，

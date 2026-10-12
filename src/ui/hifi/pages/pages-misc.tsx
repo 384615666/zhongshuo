@@ -91,6 +91,11 @@ function TreeNodeRow({
 }
 
 export function FilesGitPage({ projectId, query }: { projectId: string; query: Record<string, string> }) {
+  // 文件树、选中对象和阅读器按项目隔离；路由从 A 直切 B 时卸载 A 的在途读取。
+  return <FilesGitPageForProject key={projectId} projectId={projectId} query={query} />;
+}
+
+function FilesGitPageForProject({ projectId, query }: { projectId: string; query: Record<string, string> }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === projectId);
 
@@ -308,6 +313,15 @@ export function FilesGitPage({ projectId, query }: { projectId: string; query: R
             </>
           ) : null}
         </div>
+
+        {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
+          <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
+            <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
+            {git.readErrors.branches != null ? <div>分支：{git.readErrors.branches}（保留上次已确认列表）</div> : null}
+            {git.readErrors.history != null ? <div>历史：{git.readErrors.history}（保留上次已确认列表）</div> : null}
+            {git.readErrors.remotes != null ? <div>远端：{git.readErrors.remotes}（保留上次已确认列表）</div> : null}
+          </div>
+        ) : null}
 
         {/* R71：普通非 Git 目录=中性形态（不是失败）——一行说明即可；文件阅读照常。 */}
         {git?.notARepo ? (

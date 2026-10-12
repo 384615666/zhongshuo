@@ -8,8 +8,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, Modal, Tag, TaskStatusTag, Avatar, memberColor } from '../components/ui';
 import { useStore, toast } from '../shell';
-import { activeTasksOfProject, coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
+import { coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
 import { switchFocusProject, projectLifecycleReal, openProjectByPath } from '../loader';
+import { command } from '../bridge';
+import { refreshGitState } from '../data/actions-git';
+import type { TaskStatus } from '../data/types';
 import { relTime } from '../lib/format';
 import { navigate, currentNavSeq } from '../lib/router';
 import { beginUserNavIntent, cancelNavIntent, navIntentActive, releaseNavIntent, type NavIntent } from '../lib/navIntent';
@@ -139,7 +142,6 @@ export function WelcomePage() {
           <div className="grid grid-auto">
             {s.projects.filter((p) => !p.removedAt).map((p) => {
               const rooms = roomsOfProject(s, p.id);
-              const active = activeTasksOfProject(s, p.id).length;
               return (
                 <div
                   key={p.id}
@@ -167,7 +169,7 @@ export function WelcomePage() {
                     ) : (
                       <>
                         <Tag plain icon="hash">{rooms.length} 房间</Tag>
-                        <Tag plain icon="activity">{active} 活跃任务</Tag>
+                        <Tag plain icon="activity">打开后查看任务</Tag>
                         {p.isGit ? <Tag plain icon="git-branch">Git</Tag> : null}
                       </>
                     )}
@@ -244,10 +246,39 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
     if (activeId !== projectId) return;
     void import('../loader').then((m) => { m.refreshRooms(projectId).catch(() => { /* 下次进入重试 */ }); m.refreshMembers(projectId).catch(() => { /* 同上 */ }); });
   }, [projectId, activeId]);
+  type ActiveTask = { id: string; projectId: string; roomId: string; threadId: string | null; roomTaskNumber: number | null; status: TaskStatus; title: string };
+  const [boardTasks, setBoardTasks] = useState<{ projectId: string; items: ActiveTask[] } | null>(null);
+  const [boardError, setBoardError] = useState<{ projectId: string; message: string } | null>(null);
+  const refreshBoard = useRef<() => void>(() => {});
+  useEffect(() => {
+    let current = true;
+    let seq = 0;
+    let inFlight = false;
+    const load = () => {
+      if (inFlight) return; // 慢读期间合并定时/手动刷新，避免每 10 秒作废上一条而永远不落事实。
+      inFlight = true;
+      const request = ++seq;
+      void command<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskId: string; projectId: string; roomId: string; threadId: string | null; roomTaskNumber: number | null; taskStatus: string; title: string }> }> }> }>('board.view', { scope: 'project', projectId })
+        .then((response) => {
+          if (!current || request !== seq) return;
+          const active = response.groups.flatMap((g) => g.rooms.flatMap((r) => r.cards)).filter((c) => ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(c.taskStatus));
+          setBoardTasks({ projectId, items: active.map((c) => ({ id: c.taskId, projectId: c.projectId, roomId: c.roomId, threadId: c.threadId, roomTaskNumber: c.roomTaskNumber, status: c.taskStatus as TaskStatus, title: c.title })) });
+          setBoardError(null);
+        })
+        .catch((e: unknown) => { if (current && request === seq) setBoardError({ projectId, message: (e as Error).message }); })
+        .finally(() => { if (current && request === seq) inFlight = false; });
+    };
+    refreshBoard.current = load;
+    load();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') load(); }, 10_000);
+    return () => { current = false; seq += 1; window.clearInterval(timer); };
+  }, [projectId]);
+  useEffect(() => { void refreshGitState(projectId); }, [projectId]);
   const p = s.projects.find((x) => x.id === projectId);
   const rooms = roomsOfProject(s, projectId);
   const members = s.members.filter((m) => m.projectId === projectId);
-  const tasks = activeTasksOfProject(s, projectId);
+  const tasks = boardTasks?.projectId === projectId ? boardTasks.items : null;
+  const taskError = boardError?.projectId === projectId ? boardError.message : null;
   const [createRoom, setCreateRoom] = useState(false);
 
   if (p == null) {
@@ -285,11 +316,10 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
         <div className="page-head">
           <div>
             <div className="row tight wrap">
-              {p.isGit ? <Tag plain icon="git-branch">Git 仓库</Tag> : <Tag plain icon="folder">普通目录</Tag>}
+              {s.git[projectId]?.notARepo === true ? <Tag plain icon="folder">普通目录</Tag> : p.isGit ? <Tag plain icon="git-branch">Git 仓库</Tag> : <Tag plain icon="folder">目录类型读取中…</Tag>}
               <Tag plain icon="layers">{rooms.length} 个房间</Tag>
               <Tag plain icon="users">{members.length} 名成员</Tag>
-              <Tag plain icon="activity">{tasks.length} 个活跃任务</Tag>
-              <span className="small faint">revision {p.revision}</span>
+              <Tag plain icon="activity">{tasks?.length ?? '…'} 个活跃任务</Tag>
             </div>
           </div>
           <div className="page-head-actions">
@@ -326,26 +356,27 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
           </div>
 
           <div>
-            <div className="section-title">活跃任务<span className="count">{tasks.length}</span></div>
-            {tasks.length === 0 ? (
+            <div className="section-title">活跃任务<span className="count">{tasks?.length ?? '…'}</span><button className="btn ghost sm" onClick={() => refreshBoard.current()}>刷新</button></div>
+            {taskError != null ? <div className="panel warning">任务概况读取失败：{taskError}（保留本项目上次已确认的任务列表，可刷新重试）</div> : null}
+            {tasks == null && taskError == null ? <div className="panel info">正在读取本项目任务概况…</div> : tasks != null && tasks.length === 0 ? (
               <div className="panel">当前没有活跃任务。房间里的任务看板会保留已完成与已取消的记录。</div>
-            ) : (
+            ) : tasks != null ? (
               tasks.map((t) => (
                 <div
                   key={t.id}
                   className="card tight"
                   style={{ marginBottom: 8, cursor: 'pointer' }}
-                  onClick={() => navigate(`/project/${t.projectId}/room/${t.roomId}?thread=${t.conversationThreadId}&tab=task`)}
+                  onClick={() => { if (t.threadId == null) { toast('任务无线程定位信息；请从任务看板查看', 'warn'); return; } navigate(`/project/${t.projectId}/room/${t.roomId}?thread=${t.threadId}&tab=task`); }}
                 >
                   <div className="row tight wrap">
-                    <span className="root-task-no">#{t.roomTaskNumber}</span>
+                    {t.roomTaskNumber != null ? <span className="root-task-no">#{t.roomTaskNumber}</span> : null}
                     <TaskStatusTag status={t.status} />
                     <div className="spacer" />
                   </div>
-                  <div className="strong" style={{ marginTop: 5, fontSize: 12.5 }}>{t.title || t.objective || '（标题未装载——进线程查看）'}</div>
+                  <div className="strong" style={{ marginTop: 5, fontSize: 12.5 }}>{t.title || '（标题未装载——进线程查看）'}</div>
                 </div>
               ))
-            )}
+            ) : null}
 
             <div className="section-title" style={{ marginTop: 18 }}>成员<span className="count">{members.length}</span></div>
             {members.map((m) => (

@@ -15,6 +15,7 @@ import { command } from '../bridge';
 import { navigate } from '../lib/router';
 import { refreshMembers } from '../loader';
 import { ArchiveManager } from './ArchivePage';
+import { isExternalDeepLink } from '../lib/deepLink';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -76,7 +77,7 @@ function NotConnectedRow({ label, hint }: { label: string; hint: string }) {
     </SettingsRow>
   );
 }
-import { Tag } from '../components/ui';
+import { Modal, Select, Tag } from '../components/ui';
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const s = useStore((x) => x);
@@ -189,6 +190,7 @@ function SectionGeneral() {
   const [autoOpen, setAutoOpen] = useState('');
   const [autoOpenSaved, setAutoOpenSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
   const [deepLinkInput, setDeepLinkInput] = useState('');
   const genRef = useRef(0);
   const reload = useCallback(async () => {
@@ -198,7 +200,8 @@ function SectionGeneral() {
       if (gen !== genRef.current) return;
       setAutoOpen(r.values['ui.autoOpenProjectPath'] ?? '');
       setAutoOpenSaved(r.values['ui.autoOpenProjectPath'] ?? '');
-    } catch { /* 读取失败保持空态 */ }
+      setReadError(null);
+    } catch (e) { if (gen === genRef.current) setReadError((e as Error).message); }
   }, []);
   useEffect(() => { void reload(); }, [reload]);
   const save = async () => {
@@ -218,28 +221,38 @@ function SectionGeneral() {
   const openDeepLink = async () => {
     const { openExternalDeepLink } = await import('../loader');
     const raw = deepLinkInput.trim();
-    if (!raw.startsWith('#')) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
+    if (!isExternalDeepLink(raw)) { toast('定位链接格式应为 #task=… / #delivery=… / #msg=… / #dm=…（从线程详情「复制定位链接」获得）', 'warn'); return; }
     try { await openExternalDeepLink(raw); toast('已定位', 'success'); }
     catch (e) { toast(`定位失败：${(e as Error).message}`, 'error'); }
   };
   return (
     <div>
       <SectionHead title="通用" sub={<>整个软件的启动与界面行为。<span className="faint">想改某个项目：侧栏项目行 ⋯ → 项目设置。</span></>} />
-      <SettingsRow label="启动时打开的项目" hint="留空=上次状态；填写项目文件夹完整路径（保存后回读核对，重启生效）">
-        <div className="row tight" style={{ minWidth: 260 }}>
-          <input className="input sm" style={{ minWidth: 200 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\项目\我的项目" />
-          <button className="btn sm" disabled={busy || autoOpen.trim() === (autoOpenSaved ?? '')} onClick={() => void save()}>保存</button>
-        </div>
-      </SettingsRow>
-      <SettingsRow label="打开定位" hint="桌面端没有地址栏——粘贴「复制定位链接」产出的 #task=… 等深链（deepLink.resolve 正式定位）">
-        <div className="row tight" style={{ minWidth: 260 }}>
-          <input className="input sm" style={{ minWidth: 200 }} placeholder="如 #task=task_ab12…" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
-          <button className="btn sm" onClick={() => void openDeepLink()}>打开</button>
-        </div>
-      </SettingsRow>
-      <NotConnectedRow label="开机自动启动 / 托盘常驻" hint="系统桥（开机项/托盘）尚未接入本包——不显示可切换的假开关" />
-      <NotConnectedRow label="重启后自动继续任务" hint="保持关闭（E7 不自动续跑——恢复中心需显式确认）；设置化命令未接" />
-      <NotConnectedRow label="应用级运行并发上限" hint="调度器限额命令尚未接入（§10.3 决策 12 的配置面）——当前按服务端默认执行" />
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-title">启动与托盘</div>
+        <SettingsRow label="启动时打开的项目" hint="留空=上次状态；填写项目文件夹完整路径（保存后回读核对，重启生效）" wide control={
+          <div className="row tight" style={{ minWidth: 260 }}>
+            <input className="input sm" style={{ minWidth: 200 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\项目\我的项目" />
+            <button className="btn sm" disabled={busy || readError != null || autoOpenSaved == null || autoOpen.trim() === autoOpenSaved} onClick={() => void save()}>保存</button>
+          </div>
+        } />
+        {readError != null ? <div className="panel warning">启动项目设置读取失败：{readError}；保存已暂停，避免用未知旧值覆盖。<button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
+        <NotConnectedRow label="开机自动启动 / 托盘常驻" hint="系统桥（开机项/托盘）尚未接入本包——不显示可切换的假开关" />
+        <NotConnectedRow label="重启后自动继续任务" hint="保持关闭（E7 不自动续跑——恢复中心需显式确认）；设置化命令未接" />
+      </div>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-title">运行并发</div>
+        <NotConnectedRow label="应用级运行并发上限" hint="调度器限额命令尚未接入（§10.3 决策 12 的配置面）——当前按服务端默认执行" />
+      </div>
+      <div className="card">
+        <div className="card-title">打开定位</div>
+        <SettingsRow label="打开定位" hint="桌面端没有地址栏——粘贴「复制定位链接」产出的 #task=… 等深链（deepLink.resolve 正式定位）" wide control={
+          <div className="row tight" style={{ minWidth: 260 }}>
+            <input className="input sm" style={{ minWidth: 200 }} placeholder="如 #task=task_ab12…" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
+            <button className="btn sm" onClick={() => void openDeepLink()}>打开</button>
+          </div>
+        } />
+      </div>
     </div>
   );
 }
@@ -317,34 +330,142 @@ function SectionRuntime() {
 
 /* ============================================================ 分区：连接与设备 ============================================================ */
 
-interface RemoteCfg { allowLan: boolean; running?: boolean; address?: string; fingerprint?: string; caFingerprint?: string; certNotAfter?: number; lanSelfCheck?: { ok: boolean; detail?: string } | null; note: string }
+interface RemoteCfg {
+  enabled: boolean; listenHost: string; port: number; allowLan: boolean;
+  running?: boolean; address?: string; fingerprint?: string; caFingerprint?: string;
+  certNotAfter?: number; lanSelfCheck?: { ok: boolean; detail?: string; error?: string } | null;
+  note: string;
+}
+interface RemoteDevice { deviceId: string; deviceName: string; createdAt: number; lastSeenAt: number | null; revokedAt: number | null }
+interface PairCode { pairingId: string; code: string; expiresAt: number; address: string | null; fingerprint: string | null }
 
 function SectionConnections() {
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
+  const [identityErr, setIdentityErr] = useState<string | null>(null);
   const [remote, setRemote] = useState<RemoteCfg | null>(null);
   const [remoteErr, setRemoteErr] = useState<string | null>(null);
+  const [host, setHost] = useState('127.0.0.1');
+  const [port, setPort] = useState('0');
+  const [configDirty, setConfigDirty] = useState(false);
+  const configDirtyRef = useRef(false);
+  const [devices, setDevices] = useState<RemoteDevice[] | null>(null);
+  const [devicesErr, setDevicesErr] = useState<string | null>(null);
+  const [pair, setPair] = useState<PairCode | null>(null);
+  const [revoke, setRevoke] = useState<RemoteDevice | null>(null);
+  const [busy, setBusy] = useState(false);
+  const readSeq = useRef(0);
+  const readRemote = useCallback(async (syncDraft = false): Promise<RemoteCfg | null> => {
+    const seq = ++readSeq.current;
+    const [cfgResult, devicesResult] = await Promise.allSettled([
+      command<RemoteCfg>('remote.config.get', {}),
+      command<{ devices: RemoteDevice[] }>('remote.devices.list', {}),
+    ]);
+    if (seq !== readSeq.current) return null;
+    if (cfgResult.status === 'fulfilled') {
+      setRemote(cfgResult.value); setRemoteErr(null);
+      if (syncDraft && !configDirtyRef.current) { setHost(cfgResult.value.listenHost); setPort(String(cfgResult.value.port)); setConfigDirty(false); }
+    } else setRemoteErr((cfgResult.reason as Error).message);
+    if (devicesResult.status === 'fulfilled') { setDevices(devicesResult.value.devices); setDevicesErr(null); }
+    else setDevicesErr((devicesResult.reason as Error).message);
+    return cfgResult.status === 'fulfilled' ? cfgResult.value : null;
+  }, []);
   useEffect(() => {
     let done = false;
-    void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch(() => { /* 不显示 */ });
-    void command<RemoteCfg>('remote.config.get').then((r) => { if (!done) setRemote(r); }).catch((e: unknown) => { if (!done) setRemoteErr((e as Error).message); });
-    return () => { done = true; };
-  }, []);
+    void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch((e: unknown) => { if (!done) setIdentityErr((e as Error).message); });
+    void readRemote(true);
+    return () => { done = true; readSeq.current += 1; };
+  }, [readRemote]);
+  const applyRemote = async (enabled: boolean) => {
+    const requestedPort = Number(port);
+    if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) { toast('端口须为 0–65535 整数（0=自动选择）', 'warn'); return; }
+    setBusy(true);
+    try {
+      await command('remote.config.set', { enabled, listenHost: enabled ? host : '127.0.0.1', port: requestedPort, allowLan: enabled && host === '0.0.0.0' });
+      configDirtyRef.current = false;
+      setConfigDirty(false);
+      const applied = await readRemote(true);
+      setPair(null);
+      if (applied == null || applied.enabled !== enabled || applied.listenHost !== (enabled ? host : '127.0.0.1') || applied.port !== requestedPort || applied.running !== enabled) {
+        toast('远程命令已返回，但配置或实际监听回读未核实；请刷新事实后再操作', 'warn');
+      } else toast(enabled ? '远程访问已启用（配置与实际监听回读一致）' : '远程访问已停用（回读一致）', 'success');
+    } catch (e) { toast(`远程配置失败：${(e as Error).message}`, 'error'); void readRemote(); }
+    finally { setBusy(false); }
+  };
+  const createPair = async () => {
+    setBusy(true); setPair(null);
+    try { setPair(await command<PairCode>('remote.pairing.create', {})); }
+    catch (e) { toast(`配对码创建失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(false); }
+  };
+  const revokeDevice = async () => {
+    if (revoke == null) return;
+    setBusy(true);
+    try {
+      await command('remote.device.revoke', { deviceId: revoke.deviceId });
+      setRevoke(null);
+      await readRemote();
+      toast('设备已吊销（该设备的凭据与连接立即失效）', 'success');
+    } catch (e) { toast(`吊销失败：${(e as Error).message}`, 'error'); }
+    finally { setBusy(false); }
+  };
   return (
     <div>
-      <SectionHead title="连接与设备" sub={<>本机身份与远程访问监听事实（只读）。<span className="faint">配对/吊销与 MCP 接入的命令面未接本包——如实标注。</span></>} />
-      <ReadOnlyRow label="本机用户（localUserId）" value={identity?.localUserId ?? '（读取中…）'} />
-      <ReadOnlyRow label="数据根（appDataDir）" value={identity?.appDataDir ?? '（读取中…）'} />
-      <SettingsRow label="远程访问（监听事实）" hint="remote.config.get 只读——变更在原界面「远程访问」">
+      <SectionHead title="连接与设备" sub={<>本机身份、远程访问与已配对设备。<span className="faint">远程设备拥有与本机相同的任务和设置权限；启用局域网前核对监听地址与证书指纹。</span></>} />
+      <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-title">本机与远程访问</div>
+      <ReadOnlyRow label="本机用户（localUserId）" value={identityErr != null ? `读取失败：${identityErr}` : identity?.localUserId ?? '（读取中…）'} />
+      <ReadOnlyRow label="数据根（appDataDir）" value={identityErr != null ? `读取失败：${identityErr}` : identity?.appDataDir ?? '（读取中…）'} />
+      <SettingsRow label="远程访问（已应用事实）" hint="配置值与真实监听分列；保存后重新读取（remote.config.get/set）" valueWrap>
         {remoteErr != null ? <Tag tone="danger">读取失败：{remoteErr.slice(0, 60)}</Tag> : remote == null ? <span className="faint small">读取中…</span> : (
           <div className="small" style={{ lineHeight: 1.7 }}>
-            <div>{remote.allowLan ? '局域网' : '仅本机'} · {remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.fingerprint != null ? <div className="mono faint small">服务证书 {remote.fingerprint.slice(0, 24)}…{remote.caFingerprint != null ? ` · CA ${remote.caFingerprint.slice(0, 16)}…` : ''}</div> : null}
-            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
+            <div>配置：{remote.enabled ? '启用' : '停用'} · {remote.listenHost}:{remote.port} · {remote.allowLan ? '局域网' : '仅本机'}</div>
+            <div>实际：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
+            {remote.fingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>服务证书 SHA-256：{remote.fingerprint}</div> : null}
+            {remote.caFingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>信任根 SHA-256：{remote.caFingerprint}</div> : null}
+            {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.error ?? remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
+            {configDirty ? <div className="small faint">下方有未应用的编辑</div> : null}
           </div>
         )}
       </SettingsRow>
-      <NotConnectedRow label="生成配对码 / 已连接设备吊销" hint="设备配对命令面尚未接入本包" />
+      <SettingsRow label="远程访问配置" hint="默认关闭。仅本机=127.0.0.1；局域网=0.0.0.0。0 端口由系统选择。" wide control={
+        <div className="row tight wrap">
+          <Select size="sm" ariaLabel="远程监听范围" value={host} disabled={busy} onChange={(v) => { setHost(v); setConfigDirty(true); configDirtyRef.current = true; }} options={[{ value: '127.0.0.1', label: '仅本机' }, { value: '0.0.0.0', label: '局域网' }]} />
+          <input className="input sm" type="number" min={0} max={65535} step={1} value={port} disabled={busy} aria-label="远程监听端口" style={{ width: 110 }} onChange={(e) => { setPort(e.target.value); setConfigDirty(true); configDirtyRef.current = true; }} />
+          <button className="btn sm" disabled={busy || remote == null} onClick={() => void applyRemote(true)}>启用/应用</button>
+          <button className="btn sm" disabled={busy || remote == null || !remote.enabled} onClick={() => void applyRemote(false)}>停用</button>
+          <button className="btn sm" disabled={busy} onClick={() => void readRemote(!configDirty)}>刷新事实</button>
+        </div>
+      } />
+      </div>
+      <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-title">配对与设备</div>
+      <SettingsRow label="生成配对码" hint="仅本机可信入口；一次有效、5 分钟过期。码只在本次回执显示，不进入诊断或日志。" wide control={
+        <div>
+          <button className="btn sm" disabled={busy || remote?.running !== true} onClick={() => void createPair()}>生成配对码</button>
+          {pair != null ? <div className="panel warning" style={{ marginTop: 6 }}>
+            <div>配对 ID：<span className="mono">{pair.pairingId}</span> · 配对码：<strong className="mono">{pair.code}</strong></div>
+            <div>有效至 {new Date(pair.expiresAt).toLocaleTimeString()} · 地址 {pair.address ?? '监听已停止'}</div>
+            {pair.fingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>服务证书 SHA-256：{pair.fingerprint}</div> : null}
+          </div> : null}
+        </div>
+      } />
+      <SettingsRow label="已配对设备" hint="吊销后设备凭据、会话和事件流立即失效（remote.devices.list / remote.device.revoke）" wide control={
+        <div className="col" style={{ gap: 6 }}>
+          {devicesErr != null ? <div className="panel warning">读取失败：{devicesErr}</div> : devices == null ? <span className="small faint">读取中…</span> : devices.length === 0 ? <span className="small faint">暂无设备</span> : devices.map((d) => (
+            <div key={d.deviceId} className="row tight wrap small">
+              <span>{d.deviceName} · <span className="mono">{d.deviceId.slice(0, 12)}…</span> · {d.revokedAt != null ? '已吊销' : `最近 ${d.lastSeenAt != null ? new Date(d.lastSeenAt).toLocaleString() : '未见'}`}</span>
+              {d.revokedAt == null ? <button className="btn sm" disabled={busy} onClick={() => setRevoke(d)}>吊销</button> : null}
+            </div>
+          ))}
+        </div>
+      } />
+      </div>
+      <div className="card">
       <NotConnectedRow label="外部 AI 连接（MCP 授权范围）" hint="MCP 连接管理命令面尚未接入本包" />
+      </div>
+      {revoke != null ? <Modal size="sm" title={`吊销设备「${revoke.deviceName}」`} onClose={() => setRevoke(null)} footer={<><div className="spacer" /><button className="btn" onClick={() => setRevoke(null)}>取消</button><button className="btn danger" disabled={busy} onClick={() => void revokeDevice()}>确认吊销</button></>}>
+        吊销会让这台设备当前连接立即失效；需要再次访问时须重新配对。
+      </Modal> : null}
     </div>
   );
 }

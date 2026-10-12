@@ -18,6 +18,7 @@ import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
+import { MemberDetailPage } from './pages/MemberDetailPage';
 import { PendingPage } from './PendingPage';
 import { LibraryPage } from './LibraryPage';
 import { ActivityPage } from './ActivityPage';
@@ -314,7 +315,7 @@ export default function App() {
     activity: path === '/activity',
     files: /^\/project\/[^/]+\/files$/.test(path) || path === '/files',
     tasks: path === '/board',
-    members: /^\/project\/[^/]+\/members$/.test(path) || path === '/members',
+    members: /^\/project\/[^/]+\/(?:members|member\/[^/]+)$/.test(path) || path === '/members',
     settings: path === '/settings',
     dm: path === '/dm' || path.startsWith('/dm/') || /^\/project\/[^/]+\/dm$/.test(path),
     pending: path === '/pending',
@@ -696,6 +697,9 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
 
   m = path.match(/^\/project\/([^/]+)\/members$/);
   if (m != null) return <MembersPage />;
+
+  m = path.match(/^\/project\/([^/]+)\/member\/([^/?]+)$/);
+  if (m != null) return <MemberDetailPage key={`${m[1]}:${m[2]}`} projectId={m[1] ?? ''} memberId={m[2] ?? ''} />;
 
   m = path.match(/^\/project\/([^/]+)$/);
   if (m != null) return <ProjectHomePage projectId={m[1] ?? ''} />;

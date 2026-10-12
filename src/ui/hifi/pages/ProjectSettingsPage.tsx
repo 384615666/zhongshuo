@@ -5,13 +5,14 @@
  * 单一时限，分列字段标真实能力限制）、归档（project.lifecycle archive——未结束工作守卫）、
  * 项目全停（board.view→逐任务 task.stop 三重绑定）。并行写入策略（§14.7）后端延期——只读呈现。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { NumberField, SwitchRow } from '../components/SettingsRow';
 import { ErrorState, Modal, Tag } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, collabSet, stopAllProjectReal } from '../loader';
 import { navigate } from '../lib/router';
+import { command } from '../bridge';
 
 export type ProjectSettingsAnchor = 'collab' | 'write' | 'delivery';
 
@@ -26,19 +27,113 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
   const project = s.projects.find((p) => p.id === projectId);
   const [nameDraft, setNameDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  const lastInfo = useRef<{ id: string; name: string; description: string } | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [collab, setCollab] = useState<{ absenceToleranceMs: number | null; turnDeadlineMs: number | null; revision: number } | null>(null);
+  const [collabError, setCollabError] = useState<string | null>(null);
+  const [collabSaving, setCollabSaving] = useState(false);
+  const collabSavingRef = useRef(false);
+  const routeIdentity = useRef({ id: projectId, generation: 0 });
+  if (routeIdentity.current.id !== projectId) routeIdentity.current = { id: projectId, generation: routeIdentity.current.generation + 1 };
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; routeIdentity.current.generation += 1; };
+  }, []);
   const [stopAllOpen, setStopAllOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  /** 页面接收的 projectId（保存绑定原目标——切项目旧框作废，不写进 B）。 */
-  const [boundId] = useState(projectId);
-  useEffect(() => { void collabGet(boundId).then(setCollab); }, [boundId]);
+  const [pendingReview, setPendingReview] = useState<{ projectId: string; count: number } | null>(null);
+  const [pendingReviewError, setPendingReviewError] = useState<{ projectId: string; message: string } | null>(null);
+  const [unfinished, setUnfinished] = useState<{ projectId: string; count: number } | null>(null);
+  const [unfinishedError, setUnfinishedError] = useState<{ projectId: string; message: string } | null>(null);
+  /** 同一组件可从 A 设置路由切到 B；旧回执不可回填 B，下一次渲染再绑定 B。 */
+  const [boundId, setBoundId] = useState(projectId);
+  useEffect(() => {
+    setBoundId(projectId);
+    setCollab(null);
+    setCollabError(null);
+    collabSavingRef.current = false;
+    setCollabSaving(false);
+    setBusy(false);
+    setArchiveOpen(false);
+    setStopAllOpen(false);
+  }, [projectId]);
+  useEffect(() => {
+    let current = true;
+    void collabGet(boundId).then((value) => {
+      if (!current) return;
+      setCollab(value);
+      setCollabError(null);
+    }).catch((e: unknown) => { if (current) setCollabError(`协作限制读取失败：${(e as Error).message}；当前值不能当作默认值。`); });
+    return () => { current = false; };
+  }, [boundId]);
+  useEffect(() => {
+    let current = true;
+    void command<{ projects: Array<{ projectId: string; reviewTasks: unknown[] }> }>('mine.pending', {})
+      .then((result) => { if (current) { setPendingReview({ projectId, count: result.projects.find((p) => p.projectId === projectId)?.reviewTasks.length ?? 0 }); setPendingReviewError(null); } })
+      .catch((e: unknown) => { if (current) setPendingReviewError({ projectId, message: (e as Error).message }); });
+    return () => { current = false; };
+  }, [projectId]);
+  useEffect(() => {
+    let current = true;
+    let inFlight = false;
+    const load = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void command<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskStatus: string }> }> }> }>('board.view', { scope: 'project', projectId })
+        .then((result) => {
+          if (!current) return;
+          const count = result.groups.flatMap((g) => g.rooms.flatMap((r) => r.cards)).filter((c) => ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(c.taskStatus)).length;
+          setUnfinished({ projectId, count }); setUnfinishedError(null);
+        })
+        .catch((e: unknown) => { if (current) setUnfinishedError({ projectId, message: (e as Error).message }); })
+        .finally(() => { if (current) inFlight = false; });
+    };
+    load();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') load(); }, 10_000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [projectId]);
+
+  const saveCollab = async (patch: { absenceToleranceMs?: number | null; turnDeadlineMs?: number | null }) => {
+    if (collabError != null) { toast('请先重试读取协作限制，再提交新值', 'warn'); return; }
+    if (collab == null || collabSavingRef.current || boundId !== projectId) return;
+    const id = projectId;
+    const targetName = project?.displayName ?? id;
+    const routeGeneration = routeIdentity.current.generation;
+    collabSavingRef.current = true;
+    setCollabSaving(true);
+    setCollabError(null);
+    try {
+      const result = await collabSet(id, patch, collab.revision);
+      if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) {
+        toast(`「${targetName}」协作限制${result.ok ? '保存命令已接受，回读待重新进入原项目核对' : `保存失败：${result.error}`}（当前页面已切换/关闭）`, result.ok ? 'warn' : 'error');
+        return;
+      }
+      if (!result.ok) { setCollabError(`保存失败：${result.error}`); toast(`保存失败：${result.error}`, 'error'); return; }
+      let reread: Awaited<ReturnType<typeof collabGet>>;
+      try { reread = await collabGet(id); }
+      catch (e) { if (mounted.current && id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`保存命令已接受，但回读失败：${(e as Error).message}；当前值未获确认。`); return; }
+      if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) return;
+      setCollab(reread);
+      toast('协作限制已保存并回读', 'success');
+    } finally {
+      if (mounted.current && id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) { collabSavingRef.current = false; setCollabSaving(false); }
+    }
+  };
 
   useEffect(() => {
     if (project == null) return;
-    setNameDraft(project.displayName);
-    setDescDraft(project.description ?? '');
+    const last = lastInfo.current;
+    if (last == null || last.id !== project.id) {
+      setNameDraft(project.displayName);
+      setDescDraft(project.description ?? '');
+    } else {
+      // 背景注册表刷新可能推进 revision；只同步未编辑字段，保留当前用户草稿。
+      setNameDraft((draft) => draft === last.name ? project.displayName : draft);
+      setDescDraft((draft) => draft === last.description ? (project.description ?? '') : draft);
+    }
+    lastInfo.current = { id: project.id, name: project.displayName, description: project.description ?? '' };
     setSaveErr(null);
   }, [project?.id, project?.revision]);
 
@@ -46,7 +141,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
     if (project != null && boundId !== projectId) {
       return (
         <div className="main"><div className="page">
-          <ErrorState code="STALE_REVISION" detail="路由已切到其它项目——本页编辑绑定原项目，已作废（零提交）。请从侧栏重新进入目标项目的设置。" />
+          <ErrorState code="STALE_REVISION" detail="正在切换项目设置；旧项目的编辑与回执不会写入当前项目。" />
         </div></div>
       );
     }
@@ -60,15 +155,21 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
     );
   }
 
-  const unfinishedCount = s.tasks.filter(
-    (t) => t.projectId === project.id && ['ACTIVE', 'WAITING_USER', 'BLOCKED', 'REVIEW'].includes(t.status),
-  ).length;
+  const unfinishedCount = unfinished?.projectId === project.id ? unfinished.count : null;
+  const unfinishedReadError = unfinishedError?.projectId === project.id ? unfinishedError.message : null;
   const dirtyInfo = nameDraft.trim() !== project.displayName || descDraft !== (project.description ?? '');
 
   const saveInfo = async () => {
+    const id = project.id;
+    const targetName = project.displayName;
+    const routeGeneration = routeIdentity.current.generation;
     setBusy(true);
     setSaveErr(null);
-    const r = await updateProjectReal(project.id, project.revision, { displayName: nameDraft.trim(), description: descDraft });
+    const r = await updateProjectReal(id, project.revision, { displayName: nameDraft.trim(), description: descDraft });
+    if (!mounted.current || id !== routeIdentity.current.id || routeGeneration !== routeIdentity.current.generation) {
+      toast(`「${targetName}」项目信息${r.ok ? '已保存' : `保存失败：${r.error}`}（当前页面已切换/关闭）`, r.ok ? 'info' : 'error');
+      return;
+    }
     setBusy(false);
     if (r.ok) toast('项目信息已保存（回读一致；revision 已推进）', 'success');
     else { setSaveErr(r.error ?? '未知错误'); toast(`保存失败：${r.error}（输入已保留）`, 'error'); }
@@ -120,10 +221,13 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 label="任务交付后需要我确认"
                 hint="开启后，任务交付会等你验收才算完成；关闭后，满足交付要求即完成。仅影响新任务（创建时快照）。"
                 checked={project.taskReviewEnabled ?? false}
-                onChange={(v) => { void setTaskReviewReal(project.id, v, project.revision).then((r) => { if (!r.ok) toast(`验收开关保存失败：${r.error}`, 'error'); }); }}
-              />
+                onChange={(v) => { const targetName = project.displayName; void setTaskReviewReal(project.id, v, project.revision).then((r) => { if (!r.ok) toast(`「${targetName}」验收开关保存失败：${r.error}`, 'error'); }); }}
+              >
+                {pendingReview?.projectId === project.id && pendingReview.count > 0 ? <button className="pset-link" onClick={() => navigate('/pending')} title="去待我处理逐条验收">还有 {pendingReview.count} 个已有任务等待验收 → 查看</button> : null}
+                {pendingReviewError?.projectId === project.id ? <span className="small faint">待验收数量读取失败：{pendingReviewError.message}（去待我处理查看）</span> : null}
+              </SwitchRow>
               <div className="pset-note">
-                关闭验收不等于自动批准权限、自动提交或推送 Git。与是否 Git 仓库无关：本项目{project.isGit ? '是' : '不是'} Git 仓库，开关照常可用。
+                关闭验收不等于自动批准权限、自动提交或推送 Git。这个开关与项目是否为 Git 仓库无关。
               </div>
             </div>
           </section>
@@ -132,7 +236,8 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
           <section className="pset-section" id="pset-collab">
             <div className="pset-section-title">协作限制</div>
             <div className="card">
-              {collab == null ? <div className="small faint">正在读取协作限制（project.collab.get）…</div> : (
+              {collabError != null ? <div className="panel warning">{collabError} <button className="btn sm" onClick={() => { const id = project.id; const routeGeneration = routeIdentity.current.generation; setCollabError(null); void collabGet(id).then((value) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollab(value); }).catch((e: unknown) => { if (id === routeIdentity.current.id && routeGeneration === routeIdentity.current.generation) setCollabError(`协作限制读取失败：${(e as Error).message}`); }); }}>重试读取</button></div> : null}
+              {collab == null ? (collabError == null ? <div className="small faint">正在读取协作限制（project.collab.get）…</div> : null) : (
                 <>
                   <NumberField
                     label="成员无响应后继续"
@@ -141,7 +246,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                     min={0}
                     max={1440}
                     unit="分钟"
-                    onCommit={(v) => { void collabSet(project.id, { absenceToleranceMs: v > 0 ? v * 60000 : null }, collab.revision).then((r) => { if (r.ok) void collabGet(project.id).then(setCollab); else toast(`保存失败：${r.error}`, 'error'); }); }}
+                    onCommit={(v) => { void saveCollab({ absenceToleranceMs: v > 0 ? v * 60000 : null }); }}
                     integer
                   />
                   <div className="pset-divider" />
@@ -152,12 +257,13 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                     min={0}
                     max={720}
                     unit="分钟"
-                    onCommit={(v) => { void collabSet(project.id, { turnDeadlineMs: v > 0 ? v * 60000 : null }, collab.revision).then((r) => { if (r.ok) void collabGet(project.id).then(setCollab); else toast(`保存失败：${r.error}`, 'error'); }); }}
+                    onCommit={(v) => { void saveCollab({ turnDeadlineMs: v > 0 ? v * 60000 : null }); }}
                     integer
                   />
                   <div className="pset-note">
                     新派发 turn 起生效（在途 turn 保持派发时的时限）。原型把时限分为「分析/修改」两档——当前后端为单一时限（真实能力限制），不伪造分档。
                   </div>
+                  {collabSaving ? <div className="small faint">正在保存并回读协作限制…</div> : null}
                 </>
               )}
             </div>
@@ -197,7 +303,8 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 <div className="strong" style={{ fontSize: 12 }}>归档项目</div>
                 <div className="small faint" style={{ marginTop: 2, lineHeight: 1.6 }}>
                   退出日常项目列表、历史保留只读；其下房间不再收消息、不建任务、不被唤醒。磁盘文件不受影响。
-                  {unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束（已装载视图口径），需要先处理。</> : null}
+                  {unfinishedCount != null ? unfinishedCount > 0 ? <> 当前还有 <strong>{unfinishedCount}</strong> 个工作未结束（board.view 最近回读），需要先处理。</> : <> 最近读取没有未结束任务；归档时服务端会再次复查。</> : <> 未结束任务数读取中；归档时服务端会再次复查。</>}
+                  {unfinishedReadError != null ? <> 最近一次任务数读取失败：{unfinishedReadError}（保留上次回读，操作前请查看任务看板）。</> : null}
                 </div>
               </div>
               <button className="btn sm" disabled={Boolean(project.archivedAt)} onClick={() => setArchiveOpen(true)}>
@@ -232,11 +339,18 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 className="btn primary"
                 disabled={busy}
                 onClick={() => {
+                  const routeGeneration = routeIdentity.current.generation;
+                  const targetId = project.id;
+                  const targetName = project.displayName;
                   setBusy(true);
-                  void projectLifecycleReal(project.id, project.revision, 'archive').then((r) => {
+                  void projectLifecycleReal(targetId, project.revision, 'archive').then((r) => {
+                    if (!mounted.current || routeGeneration !== routeIdentity.current.generation || targetId !== routeIdentity.current.id) {
+                      toast(`「${targetName}」归档${r.ok ? '完成' : `失败：${r.error}`}（当前页面已切换/关闭）`, r.ok ? 'info' : 'error');
+                      return;
+                    }
                     setBusy(false);
                     setArchiveOpen(false);
-                    if (r.ok) { toast('项目已归档（历史保留只读）——可在项目 ⋯ 菜单恢复', 'success'); navigate(`/project/${project.id}`); }
+                    if (r.ok) { toast('项目已归档（历史保留只读）——可在项目 ⋯ 菜单恢复', 'success'); navigate(`/project/${targetId}`); }
                     else toast(`归档被拒：${r.error}`, 'error');
                   });
                 }}
@@ -267,8 +381,15 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                 className="btn danger"
                 disabled={busy}
                 onClick={() => {
+                  const routeGeneration = routeIdentity.current.generation;
+                  const targetId = project.id;
+                  const targetName = project.displayName;
                   setBusy(true);
-                  void stopAllProjectReal(project.id).then((r) => {
+                  void stopAllProjectReal(targetId).then((r) => {
+                    if (!mounted.current || routeGeneration !== routeIdentity.current.generation || targetId !== routeIdentity.current.id) {
+                      toast(`「${targetName}」全停完成（当前页面已切换/关闭）：停止 ${r.stopped} 个；失败 ${r.failed.length} 个`, r.failed.length > 0 ? 'warn' : 'info');
+                      return;
+                    }
                     setBusy(false);
                     setStopAllOpen(false);
                     toast(`项目全停完成：停止 ${r.stopped} 个${r.failed.length > 0 ? `；失败 ${r.failed.length} 个（${r.failed.slice(0, 3).join('；')}）` : ''}`, r.failed.length > 0 ? 'warn' : 'success');

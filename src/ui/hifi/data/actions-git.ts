@@ -50,41 +50,54 @@ const entryOf = (e: { xy: string; path: string; renamedFrom?: string }, staged: 
   conflict: undefined,
 });
 
+/** 轮询、显式刷新与写后刷新可重叠；仅同项目最后发起的读取能更新投影。
+ * Map 只留在途请求，ticket 全局单调——清 Map 后旧请求也不可能误匹配新请求。 */
+const gitRefreshInFlight = new Map<string, number>();
+let nextGitRefreshTicket = 0;
+
 /** 装载某项目的 Git 状态（status+branch.list+commitPreview+history → s.git 投影）。 */
 export async function refreshGitState(projectId: string): Promise<void> {
-  const prev = getState().git[projectId];
+  const ticket = ++nextGitRefreshTicket;
+  gitRefreshInFlight.set(projectId, ticket);
+  const current = () => gitRefreshInFlight.get(projectId) === ticket;
   const markOp = (op: string, ok: boolean, detail: string): void => {
+    if (!current()) return;
     setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), lastOp: { op, ok, detail, at: Date.now() } } } }));
   };
   try {
     const status = await command<RepoStatusData>('git.status', { projectId });
-    const box: { branches: BranchListData | null; history: HistoryData | null; remotes: RemoteListData | null } = { branches: null, history: null, remotes: null };
-    await Promise.all([
-      command<BranchListData>('git.branch.list', { projectId }).then((r) => { box.branches = r; }).catch(() => { box.branches = null; }),
-      command<HistoryData>('git.history', { projectId, limit: 50 }).then((r) => { box.history = r; }).catch(() => { box.history = null; }),
-      command<RemoteListData>('git.remote.list', { projectId }).then((r) => { box.remotes = r; }).catch(() => { box.remotes = null; }),
+    const [branchesRead, historyRead, remotesRead] = await Promise.allSettled([
+      command<BranchListData>('git.branch.list', { projectId }),
+      command<HistoryData>('git.history', { projectId, limit: 50 }),
+      command<RemoteListData>('git.remote.list', { projectId }),
     ]);
+    if (!current()) return;
     const cur = getState().git[projectId] ?? emptyGit();
     const statusEntries: GitStatusEntry[] = [
       ...status.staged.map((e) => entryOf(e, true)),
       ...status.unstaged.map((e) => entryOf(e, false)),
       ...status.untracked.map((e) => ({ ...entryOf(e, false), state: 'untracked' as const })),
     ];
-    const branchList: GitBranch[] = (box.branches?.branches ?? []).map((b: BranchItem) => ({
+    const branchList: GitBranch[] = branchesRead.status === 'fulfilled' ? branchesRead.value.branches.map((b: BranchItem) => ({
       name: b.name, head: b.oid,
       upstream: b.upstream,
       ahead: b.ahead, behind: b.behind,
       isCurrent: b.name === status.branch,
       updatedAt: b.lastCommitTs,
-    }));
-    const remotes: import('./types').GitRemote[] = (box.remotes?.remotes ?? []).map((r) => ({ name: r.name, url: r.url, authState: 'unknown' as const }));
-    const commits: GitCommit[] = (box.history?.items ?? []).map((c: HistoryItem) => ({
+    })) : cur.branches;
+    const remotes: import('./types').GitRemote[] = remotesRead.status === 'fulfilled' ? remotesRead.value.remotes.map((r) => ({ name: r.name, url: r.url, authState: 'unknown' as const })) : cur.remotes;
+    const commits: GitCommit[] = historyRead.status === 'fulfilled' ? historyRead.value.items.map((c: HistoryItem) => ({
       hash: c.oid, shortHash: c.oid.slice(0, 8), subject: c.subject, body: undefined,
       authorName: c.authorName, authorEmail: c.authorEmail,
       authoredBy: (c.taskIds.length > 0 || c.changeSetIds.length > 0 ? 'agent' : 'human') as 'human' | 'agent',
       committedAt: c.timestamp, parents: c.parents, refs: [],
       files: [], taskId: c.taskIds[0], changeSetId: c.changeSetIds[0],
-    }));
+    })) : cur.commits;
+    const readErrors = {
+      ...(branchesRead.status === 'rejected' ? { branches: String((branchesRead.reason as Error).message ?? branchesRead.reason) } : {}),
+      ...(historyRead.status === 'rejected' ? { history: String((historyRead.reason as Error).message ?? historyRead.reason) } : {}),
+      ...(remotesRead.status === 'rejected' ? { remotes: String((remotesRead.reason as Error).message ?? remotesRead.reason) } : {}),
+    };
     const next: GitState = {
       ...cur,
       currentBranch: status.branch,
@@ -92,6 +105,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
       remotes,
       commits,
       status: statusEntries,
+      readErrors,
       commitMessage: cur.commitMessage,
       reflog: cur.reflog,
       // R72：本次回执是权威——成功必须清掉旧的非 Git 中性标记（folder 变成仓库后不再显示
@@ -109,6 +123,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
     if (status.truncated) markOp('git.status', true, '状态条目超过 200 已截断（porcelain 上限）');
     recordWrite('git.status', `分支 ${status.branch} · ${statusEntries.length} 个未提交改动`);
   } catch (e) {
+    if (!current()) return;
     const msg = String((e as Error).message);
     // R71：普通非 Git 目录是支持的项目形态——中性标注（isGit=false），不进失败横幅；
     // 真实 Git 执行错误/权限/目录失效仍走红「失败」面板（不吞错）。
@@ -129,6 +144,8 @@ export async function refreshGitState(projectId: string): Promise<void> {
     // 真实 Git 执行错误：权威失败——旧的非 Git 中性标记一并失效（红失败面板取代中性面板）。
     setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: undefined } } }));
     markOp('git.status', false, msg);
+  } finally {
+    if (current()) gitRefreshInFlight.delete(projectId);
   }
 }
 
