@@ -69,9 +69,11 @@ export function DetailReadState({ error, loading, updatedAt, refresh,readingKey 
   const ref=useRef<HTMLDivElement>(null);
   useEffect(()=>{if(!readingKey||!updatedAt)return;const body=ref.current?.closest<HTMLElement>('.details-body');if(!body)return;const scope=`detail-position:${readingKey}:${body.parentElement?.querySelector('.details-subnav [aria-selected=true]')?.textContent??''}`;
     const position=readingPosition<{top:number;open:number[]}>(scope);let timer:ReturnType<typeof setTimeout>|undefined;
-    const frame=requestAnimationFrame(()=>{if(position){for(const [i,d] of Array.from(body.querySelectorAll('details')).entries())d.open=Array.isArray(position.open)&&position.open.includes(i);body.scrollTop=Number.isFinite(position.top)?position.top:0;}});
-    const save=()=>saveReadingPosition(scope,{top:body.scrollTop,open:Array.from(body.querySelectorAll('details')).flatMap((d,i)=>d.open?[i]:[])});
-    const changed=()=>{if(timer)clearTimeout(timer);timer=setTimeout(save,220);};body.addEventListener('scroll',changed);body.addEventListener('toggle',changed,true);
+    const capture=()=>({top:body.scrollTop,open:Array.from(body.querySelectorAll('details')).flatMap((d,i)=>d.open?[i]:[])});
+    let snapshot=position??capture();
+    const frame=requestAnimationFrame(()=>{if(position){for(const [i,d] of Array.from(body.querySelectorAll('details')).entries())d.open=Array.isArray(position.open)&&position.open.includes(i);body.scrollTop=Number.isFinite(position.top)?position.top:0;}snapshot=capture();});
+    const save=()=>saveReadingPosition(scope,snapshot);
+    const changed=()=>{snapshot=capture();if(timer)clearTimeout(timer);timer=setTimeout(save,220);};body.addEventListener('scroll',changed);body.addEventListener('toggle',changed,true);
     return()=>{cancelAnimationFrame(frame);if(timer)clearTimeout(timer);save();body.removeEventListener('scroll',changed);body.removeEventListener('toggle',changed,true);};
   },[readingKey,Boolean(updatedAt)]);
   return <div ref={ref} className="row tight wrap small" style={{ marginBottom: 8 }}>

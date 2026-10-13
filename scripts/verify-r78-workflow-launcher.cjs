@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const repo = path.resolve(__dirname, '..');
-const port = 9782;
+const port = process.argv.includes('--port')?Number(process.argv[process.argv.indexOf('--port')+1]):9782;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const opt = (name) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 const srcArg = opt('--src');
@@ -277,6 +277,12 @@ function verifyManifest(packageRoot) {
     const dm = await command(cdp, 'conversation.create', { projectId, peerMemberId: memberId, title: 'R78 UI 流程私信' });
     facts.ids = { projectId, memberId, roomId: room.id, roomConversationId: room.conversationId, dmConversationId: dm.conversationId };
 
+    if(process.argv.includes('--r80-unknown')){
+      facts.unknown=await require('./verify-r80-unknown-extension.cjs')({cdp,projectId,room,memberId,project,data,out,command,navigate,inputText,until,queryOne,queryAll,must,sleep,button,facts,reopen:async()=>{
+        await closeUi(cdp);cdp=null;await until(()=>!fs.existsSync(path.join(data,'daemon.pid')),Boolean,'unknown test daemon graceful close',30000);await until(portIsFree,Boolean,'unknown test old UI closed',30000);start();await until(()=>fs.existsSync(path.join(data,'engineering','ready.json')),Boolean,'unknown test reopen ready',35000);({cdp}=await connectUi('unknown-reopen'));return cdp;
+      }});
+      captureUi('unknown-envelope-final');facts.pass=facts.unknown.pass&&facts.ui.sessions.every(s=>s.errors.length===0);facts.steps.push('R80 dropped committed submit receipt, ordinary reopen keeps original envelope and draft; explicit same-ID replay creates no duplicate');
+    }else{
     await navigate(cdp, `/project/${projectId}/room/${room.id}`, `/room/${room.id}`);
     await uiSend(cdp, 'R78 UI ROOM：请生成工程交付并等待我验收', memberId);
     const roomTask = await until(() => queryOne('SELECT id, conversation_thread_id AS threadId FROM tasks WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1', room.conversationId), (v) => v?.id != null, 'room UI task');
@@ -322,6 +328,7 @@ function verifyManifest(packageRoot) {
     must(staleRoom.ok === false && staleRoom.error?.code === 'STALE_REVISION', `old room delivery accepted: ${JSON.stringify(staleRoom)}`);
     facts.steps.push('stale room v1 acceptance rejected while v2 awaits review');
     await until(() => cdp.eval("document.body.textContent.includes('待验收交付') && document.body.textContent.includes('v2')"), (v) => v, 'room v2 review UI');
+    await until(() => cdp.eval("[...document.querySelectorAll('#hifi-root button')].some(b=>b.textContent.trim()==='验收通过'&&!b.disabled)"),Boolean,'room current review snapshot action ready');
     must(await cdp.eval(button('#hifi-root', '验收通过')), 'room accept missing');
     must(await cdp.eval(button('#hifi-root', '确认验收')), 'room confirm accept missing');
     await until(() => queryOne('SELECT status FROM tasks WHERE id=?', roomTask.id)?.status, (v) => v === 'DONE', 'room DONE');
@@ -454,6 +461,7 @@ function verifyManifest(packageRoot) {
     captureUi('engineering-reopen');
     facts.pass = facts.ui.sessions.every((s) => s.errors.length === 0)&&(!facts.r80||facts.r80.pass===true);
     if (!facts.pass) facts.error = `renderer errors: ${JSON.stringify(facts.ui.sessions.filter((s) => s.errors.length > 0))}`;
+    }
   } catch (error) {
     captureUi('failed-step');
     facts.error = error instanceof Error ? error.stack ?? error.message : String(error);
