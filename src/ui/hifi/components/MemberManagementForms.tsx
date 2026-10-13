@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
-import { refreshDms, refreshMembers } from '../loader';
+import { refreshDms, refreshMembers,refreshRooms } from '../loader';
 import { getState, useStore } from '../shell';
 import { currentNavSeq } from '../lib/router';
 import { memberWrite, pendingMemberWrites, memberWriteState, memberWriteStorageError, type MemberWrite } from '../data/memberWrites';
@@ -19,7 +19,15 @@ export interface ConfigTemplate {
         permissionMode: string | null;
     };
 }
-export async function refreshMemberIdentity(projectId: string) { await Promise.all([refreshMembers(projectId), refreshDms(projectId)]); window.dispatchEvent(new CustomEvent('zs-member-changed', { detail: { projectId } })); }
+export async function refreshMemberIdentity(projectId: string) {
+  await Promise.all([refreshMembers(projectId),refreshRooms(projectId),refreshDms(projectId)]);
+  const state=getState();
+  if(state.activeProjectId===projectId) {
+    const failed=state.rooms.find(r=>r.projectId===projectId&&state.readErrors[`roster:${r.id}`]);
+    if(failed)throw Error(`房间名单回读失败：${state.readErrors[`roster:${failed.id}`]}；成员已保存，原名单保留，请重试读取`);
+  }
+  window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));
+}
 /** Capture target and navigation generation. A -> B -> A does not revive the original form. */
 export function useFormGuard(projectId?: string) {
     const active = useStore(s => s.activeProjectId);
