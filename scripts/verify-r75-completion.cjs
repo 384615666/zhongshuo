@@ -10,7 +10,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { build } = require('esbuild');
 const repo = path.resolve(__dirname, '..');
-const scenarios = ['normal', 'cancel-open', 'cancel-load', 'cancel-load-failure', 'cancel-external', 'overlap-open', 'overlap-load', 'overlap-registry', 'overlap-late-failure', 'old-modal-new-modal'];
+const scenarios = ['normal', 'cross-project-settings', 'cancel-open', 'cancel-load', 'cancel-load-failure', 'cancel-external', 'overlap-open', 'overlap-load', 'overlap-registry', 'overlap-late-failure', 'old-modal-new-modal'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function parent() {
@@ -117,7 +117,8 @@ async function child() {
     await js(`location.hash=${JSON.stringify(`#/project/${ids.A}/room/${roomA}`)};true`);
     await wait(() => js(`!!document.querySelector('.pool-head')`), 'A room');
     facts.before = await snapshot();
-    if (name !== 'normal') beginHold(name.includes('external') ? 'external' : name.includes('registry') ? 'registry' : name.includes('open') ? 'open' : 'load');
+    const normal=name==='normal'||name==='cross-project-settings';
+    if (!normal) beginHold(name.includes('external') ? 'external' : name.includes('registry') ? 'registry' : name.includes('open') ? 'open' : 'load');
     if (name === 'cancel-external') {
       const room = db.prepare('SELECT id FROM rooms WHERE project_id=? LIMIT 1').get(ids.B);
       const conversation = db.prepare("SELECT id FROM conversations WHERE project_id=? AND kind='room' LIMIT 1").get(ids.B);
@@ -125,8 +126,20 @@ async function child() {
       const msg = db.prepare("SELECT id FROM messages WHERE body_json LIKE '%OWN-EXTERNAL-CANCEL%' LIMIT 1").get();
       await js(`location.hash=${JSON.stringify('#msg=' + msg.id)};true`);
     } else { await choose('B'); await submit(); }
-    if (name === 'normal') {
+    if (normal) {
       await wait(() => js(`!document.querySelector('.modal') && document.querySelector('#zs-titlebar')?.textContent.includes('项目B')`), 'B complete');
+      if(name==='cross-project-settings') {
+        await js(`location.hash=${JSON.stringify(`#/project/${ids.A}/settings`)};true`);
+        await wait(()=>js(`document.querySelector('#zs-titlebar')?.textContent.includes('项目A')&&!!document.querySelector('[data-zs-write-toggle]:not([disabled])')`),'A settings aligned and actual authorization read');
+        await js(`document.querySelector('[data-zs-write-toggle]').click();true`);
+        await wait(()=>js(`!!document.querySelector('[data-zs-write-confirm]:not([disabled])')`),'A explicit grant confirmation');
+        await js(`document.querySelector('[data-zs-write-confirm]').click();true`);
+        await wait(()=>js(`!document.querySelector('.modal')&&document.querySelector('[data-zs-project-write]')?.textContent.includes('已授权项目内文件编辑')`),'A grant committed/readback');
+        facts.settings={a:(await raw('project.writeAccess.get',{projectId:ids.A})).data,b:(await raw('project.writeAccess.get',{projectId:ids.B})).data};
+        if(!facts.settings.a.authorized||facts.settings.b.authorized)throw Error('cross settings grant must belong only to A');
+        await js(`location.hash=${JSON.stringify(`#/project/${ids.B}/settings`)};true`);
+        await wait(()=>js(`document.querySelector('#zs-titlebar')?.textContent.includes('项目B')&&!!document.querySelector('[data-zs-write-toggle]:not([disabled])')&&document.querySelector('[data-zs-project-write]')?.textContent.includes('默认只读')`),'B settings retains own readonly scope');
+      }
     } else {
       await wait(() => hold.entered, 'pending B'); facts.pending = await snapshot();
       if (name !== 'cancel-external') {
@@ -149,7 +162,7 @@ async function child() {
     facts.after = await snapshot();
     facts.prefs = db.prepare('SELECT active_project_id FROM navigation_preferences WHERE client_id=?').get('desktop-hifi')?.active_project_id;
     const final = facts.after;
-    if (name === 'normal') pass = final.hash.includes(ids.B) && final.lastPath === dirs.B && facts.prefs === ids.B;
+    if (normal) pass = final.hash.includes(ids.B) && final.lastPath === dirs.B && facts.prefs === ids.B;
     else if (name.startsWith('cancel')) pass = final.hash.startsWith('#/settings') && final.title.includes('项目A') && final.lastPath === dirs.A && facts.prefs !== ids.B;
     else if (name === 'old-modal-new-modal') pass = final.modal && await js(`document.querySelector('.modal input[readonly]')?.value===${JSON.stringify(dirs.C)}`);
     else pass = final.hash.includes(ids.C) && final.title.includes('项目C') && final.lastPath === dirs.C && facts.prefs === ids.C;

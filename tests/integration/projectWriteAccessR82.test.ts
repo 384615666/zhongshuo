@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
-import {mkdtempSync,mkdirSync,readFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -29,6 +29,13 @@ async function fixture(){
   return {db,root,data,a,p,q,member,raw,cmd,send,grant};
 }
 describe('R82 explicit project write contracts (isolated fake/protocol, zero real calls)',()=>{
+  it('replacing the physical directory at the same path invalidates the previous grant',async()=>{const f=await fixture();try{
+    await f.grant(true,0);const t=await f.send();expect(effectiveTaskWriteAccess(f.db,t.taskId,f.member,'fake').modificationAuthorized).toBe(true);
+    renameSync(f.a,join(f.root,'保留的原目录'));mkdirSync(f.a);
+    expect(()=>effectiveTaskWriteAccess(f.db,t.taskId,f.member,'fake')).toThrow(/物理身份.*拒绝写入/);
+    expect((await f.cmd('project.writeAccess.get',{projectId:f.q})).authorized).toBe(false);
+    expect(f.db.prepare('SELECT 1 FROM agent_turns').get()).toBeUndefined();
+  }finally{f.db.close();}});
   it('display rename does not change execution identity; actual runtime change does',async()=>{const f=await fixture();try{
     await f.grant(true,0);const t=await f.send();const before=effectiveTaskWriteAccess(f.db,t.taskId,f.member,'fake');
     const member=(await f.cmd('member.list',{projectId:f.p})).items.find(m=>m.id===f.member)!;

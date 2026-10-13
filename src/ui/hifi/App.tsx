@@ -693,7 +693,18 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   if (m != null) return <FilesGitPage projectId={m[1] ?? ''} query={query} />;
 
   m = path.match(/^\/project\/([^/]+)\/settings$/);
-  if (m != null) return <ProjectSettingsPage projectId={m[1] ?? ''} query={query} />;
+  if (m != null) {
+    const pid=m[1]??'';
+    const open=s.openInFlightTarget;
+    // Settings writes use the same current-project guard as member forms. Mount only
+    // after the explicit route's project has settled; otherwise its initial read and
+    // guard bind to the previously active project and cannot become usable later.
+    if(pid!==s.activeProjectId||open?.projectId===pid) {
+      if(open!=null&&open.projectId!==pid&&open.urlSeqAtStart>=currentNavSeq())return <div className="main"><div className="page"><div className="panel info">正在打开项目…</div></div></div>;
+      return <div className="main"><div className="page"><div className="panel info">正在打开所属项目…</div><ProjectAlign projectId={pid}/></div></div>;
+    }
+    return <ProjectSettingsPage key={pid} projectId={pid} query={query} />;
+  }
 
   m = path.match(/^\/project\/([^/]+)\/members$/);
   if (m != null) return <MembersPage projectId={m[1]} />;
