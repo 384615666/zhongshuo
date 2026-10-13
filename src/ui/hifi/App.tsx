@@ -696,7 +696,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
   if (m != null) return <ProjectSettingsPage projectId={m[1] ?? ''} query={query} />;
 
   m = path.match(/^\/project\/([^/]+)\/members$/);
-  if (m != null) return <MembersPage />;
+  if (m != null) return <MembersPage projectId={m[1]} />;
 
   m = path.match(/^\/project\/([^/]+)\/member\/([^/?]+)$/);
   if (m != null) return <MemberDetailPage key={`${m[1]}:${m[2]}`} projectId={m[1] ?? ''} memberId={m[2] ?? ''} />;

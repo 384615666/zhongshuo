@@ -9,15 +9,14 @@
  * 查询失败 / 未解析，不把「未绑定」显示成"不会用任何渠道"。
  *
  * 布局=原型 pages-misc MembersPage：筛选行（项目选择+计数）+ 成员卡片 grid + 房间名单 +
- * 说明面板；配置 runtime 从卡片进弹窗（不再行内铺表单）。「添加成员」按钮**不设**：成员由
- * 项目注册建立（member.create 属 DEV-10 后续批次）——不放一个点了会假成功的按钮。
+ * 说明面板；配置 runtime 从卡片进弹窗。R67 已接正式创建，R81 接资料编辑和独立配置模板。
  * 人的关注（阅读订阅）不属于成员管理——在「待我处理」分列（原型同判）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
 import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
 import { useStore, toast, getState } from './shell';
-import { refreshMembers } from './loader';
+import { refreshMembers, switchFocusProject } from './loader';
 import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
@@ -45,9 +44,11 @@ export const runtimeAuthOf = (raw: string | null): string => {
   } catch { return '未认证'; }
 };
 
-export function MembersPage() {
-  const projectId = useStore((s) => s.activeProjectId);
+export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const projectId=routeProjectId??activeProjectId;
   const projects = useStore((s) => s.projects);
+  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${(e as Error).message}`,'error');});},[routeProjectId,activeProjectId,projects]);
   // selector 必须返回稳定引用（useSyncExternalStore 契约——filter 新数组会造成快照死循环，
   // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
   const allRooms = useStore((s) => s.rooms);
@@ -214,7 +215,7 @@ export function MembersPage() {
             />
           </label>
           <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明 / 短ID" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
-          <Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/>
+          <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
           <span className="filter-note">
             {membersInScope?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
           </span>
@@ -349,7 +350,7 @@ export function MembersPage() {
         <AddMemberModal
           projectId={addFor}
           projectName={projects.find((x) => x.id === addFor)?.displayName ?? addFor}
-          activeProjectId={projectId}
+          activeProjectId={activeProjectId}
           onClose={() => setAddFor(null)}
           onCreated={async () => {
             setAddFor(null);
