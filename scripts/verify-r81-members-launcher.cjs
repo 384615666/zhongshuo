@@ -1,9 +1,9 @@
-/* global require, __dirname, process, WebSocket, setTimeout, clearTimeout, fetch, console, Buffer */
+/* global require, __dirname, process, WebSocket, setTimeout, clearTimeout, fetch, console, Buffer, AbortSignal, module */
 /* eslint-disable @typescript-eslint/no-require-imports -- CommonJS release fixture */
 /* R81: actual daily BAT in an owned copy, formal commands, DOM interactions, database receipts. */
 const fs=require('node:fs');
 const path=require('node:path');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const {randomUUID,createHash}=require('node:crypto');
 const repo=path.resolve(__dirname,'..');
 const src=path.resolve(process.argv[2]??path.join(repo,'dist/desktop/desktop-daily-win-v20'));
@@ -14,7 +14,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const must=(ok,label)=>{if(!ok)throw Error(label);};
 const sha=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 class Cdp{
-  constructor(ws){this.ws=ws;this.seq=0;this.pending=new Map();this.errors=[];ws.addEventListener('message',e=>{const d=JSON.parse(e.data);if(d.id&&this.pending.has(d.id)){const p=this.pending.get(d.id);this.pending.delete(d.id);clearTimeout(p.timer);d.error?p.reject(Error(d.error.message)):p.resolve(d.result);}if(d.method==='Runtime.consoleAPICalled'&&d.params.type==='error')this.errors.push(d.params.args.map(a=>a.value??a.description??'').join(' '));if(d.method==='Runtime.exceptionThrown')this.errors.push(d.params.exceptionDetails.exception?.description??d.params.exceptionDetails.text);});}
+  constructor(ws){this.ws=ws;this.seq=0;this.pending=new Map();this.errors=[];ws.addEventListener('message',e=>{const d=JSON.parse(e.data);if(d.id&&this.pending.has(d.id)){const p=this.pending.get(d.id);this.pending.delete(d.id);clearTimeout(p.timer);if(d.error)p.reject(Error(d.error.message));else p.resolve(d.result);}if(d.method==='Runtime.consoleAPICalled'&&d.params.type==='error')this.errors.push(d.params.args.map(a=>a.value??a.description??'').join(' '));if(d.method==='Runtime.exceptionThrown')this.errors.push(d.params.exceptionDetails.exception?.description??d.params.exceptionDetails.text);});}
   send(method,params={}){const id=++this.seq;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout '+method));},30000);this.pending.set(id,{resolve,reject,timer});this.ws.send(JSON.stringify({id,method,params}));});}
   async eval(expression){const r=await this.send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value;}
   async shot(name){const r=await this.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(out,name+'.png'),Buffer.from(r.data,'base64'));}
@@ -23,8 +23,8 @@ async function until(fn,ok,label,ms=45000){const at=Date.now();for(;;){const v=a
 async function connect(){return until(async()=>{try{const rows=await fetch(`http://127.0.0.1:${port}/json/list`,{signal:AbortSignal.timeout(1500)}).then(r=>r.json());const t=rows.find(t=>t.type==='page'&&t.url.includes('index.html'));if(!t)return null;const ws=new WebSocket(t.webSocketDebuggerUrl);await new Promise((r,j)=>{ws.addEventListener('open',r,{once:true});ws.addEventListener('error',j,{once:true});});const c=new Cdp(ws);await c.send('Runtime.enable');return c;}catch{return null;}},Boolean,'owned BAT window',90000);}
 const q=s=>JSON.stringify(s);
 let cdp=null,bat=null;const sessions=[];
-function start(){const env={...process.env,ZS_DEV25_DEBUG_PORT:String(port)};for(const k of ['ELECTRON_RUN_AS_NODE','ZS_APP_DATA','ZS_RUNTIME','ZS_ALLOW_FAKE','ZS_REAL_DISPATCH_GUARD','ZS_DAEMON_ENTRY','ZS_R78_ENGINEERING_TOKEN'])delete env[k];bat=spawn('cmd',['/c','start-desktop.bat'],{cwd:copy,env,windowsHide:true,stdio:['ignore','pipe','pipe']});for(const stream of [bat.stdout,bat.stderr])stream.on('data',b=>fs.appendFileSync(path.join(out,'launcher.log'),b));}
-async function stop(){if(cdp){sessions.push(cdp.errors);try{await Promise.race([cdp.eval('window.close();true'),sleep(2500)]);}catch{ /* Own window may already have closed. */ }cdp.ws.close();cdp=null;}await until(async()=>!fs.existsSync(path.join(copy,'server-data','daemon.pid')),Boolean,'own daemon closed',30000);}
+function start(){const env={...process.env,ZS_DEV25_DEBUG_PORT:String(port),ZS_PICK_FOLDER_FILE:path.join(out,'pick.txt')};for(const k of ['ELECTRON_RUN_AS_NODE','ZS_APP_DATA','ZS_RUNTIME','ZS_ALLOW_FAKE','ZS_REAL_DISPATCH_GUARD','ZS_DAEMON_ENTRY','ZS_R78_ENGINEERING_TOKEN'])delete env[k];bat=spawn('cmd',['/c','start-desktop.bat'],{cwd:copy,env,windowsHide:true,stdio:['ignore','pipe','pipe']});for(const stream of [bat.stdout,bat.stderr])stream.on('data',b=>fs.appendFileSync(path.join(out,'launcher.log'),b));}
+async function stop(){if(cdp){sessions.push(cdp.errors);try{await Promise.race([cdp.eval('window.close();true'),sleep(2500)]);}catch{ /* Own window may already have closed. */ }cdp.ws.close();cdp=null;}await until(async()=>!fs.existsSync(path.join(copy,'server-data','daemon.pid')),Boolean,'own daemon closed',30000);const prefix=(copy+path.sep).replaceAll("'","''");await until(async()=>{const r=spawnSync('powershell',['-NoProfile','-Command',`@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${prefix}',[StringComparison]::OrdinalIgnoreCase) }).Count`],{encoding:'utf8',windowsHide:true});return Number(r.stdout.trim())===0;},Boolean,'owned application processes fully closed',30000);await sleep(400);}
 async function raw(method,params,commandId=`r81-ui-${randomUUID()}`){return cdp.eval(`window.zs.command(${q({protocolVersion:1,commandId,method,params})})`);}
 async function cmd(method,params){const r=await raw(method,params);must(r.ok,`${method}: ${JSON.stringify(r.error)}`);return r.data;}
 async function route(hash,selector){await cdp.eval(`location.hash=${q(hash)};true`);await until(()=>cdp.eval(`document.querySelector(${q(selector)})!=null`),Boolean,hash);await sleep(500);}
@@ -34,12 +34,13 @@ async function closeModal(){await cdp.eval(`(()=>{const b=[...document.querySele
 async function modalDone(){await until(()=>cdp.eval(`document.querySelector('.modal')==null`),Boolean,'successful formal write and readback');}
 async function viewport(width,height,dpr){await cdp.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:dpr,mobile:false});await cdp.eval(`document.documentElement.dataset.theme='light';true`);await sleep(300);}
 function manifest(root){const base=path.join(root,'ZhongshuoDual');const m=JSON.parse(fs.readFileSync(path.join(base,'MANIFEST-SHA256.json'),'utf8'));const entries=Array.isArray(m)?m:m.files;let n=0;for(const row of entries){const file=path.join(base,row.path);must(fs.statSync(file).size===row.bytes&&sha(file)===row.sha256,'manifest '+row.path);n++;}return n;}
-(async()=>{
+module.exports={Cdp,until};
+if(require.main===module){(async()=>{
   const probe=require('node:net').createServer();await new Promise((r,j)=>{probe.once('error',j);probe.listen(port,'127.0.0.1',r);});await new Promise(r=>probe.close(r));
   fs.mkdirSync(out,{recursive:true});fs.cpSync(src,copy,{recursive:true});
   const build=JSON.parse(fs.readFileSync(path.join(copy,'ZhongshuoDual','BUILD.json'),'utf8'));
   const facts={pass:false,before,build,source:src,copy,manifestSource:manifest(src),manifestCopy:manifest(copy),launcherSha:sha(path.join(copy,'start-desktop.bat')),steps:[],screenshots:[],realCalls:null};
-  const project=path.join(out,'工程甲'),projectB=path.join(out,'工程乙');fs.mkdirSync(project);fs.mkdirSync(projectB);fs.writeFileSync(path.join(project,'工程原件.md'),'# 独立工程原件\n');
+  const project=path.join(out,'工程甲'),projectB=path.join(out,'工程乙');fs.mkdirSync(project);fs.mkdirSync(projectB);fs.writeFileSync(path.join(project,'工程原件.md'),'# 独立工程原件\n');fs.writeFileSync(path.join(out,'pick.txt'),projectB+'\r\n');
   try{
     start();cdp=await connect();await until(()=>cdp.eval(`document.body?.classList.contains('hifi-on')`),Boolean,'hifi boot');
     const identity=await cmd('app.identity',{});must(path.resolve(identity.appDataDir)===path.resolve(copy,'server-data'),'independent root identity');
@@ -55,6 +56,8 @@ function manifest(root){const base=path.join(root,'ZhongshuoDual');const m=JSON.
     if(before){await route(`/project/${p}/member/${member}`,'[data-zs-member-detail]');await until(()=>cdp.eval(`document.querySelector('[data-zs-member-detail] input')!=null`),Boolean,'baseline display name');facts.readonly=await cdp.eval(`document.querySelector('[data-zs-member-detail] input').disabled`);facts.metadata=(await raw('member.update',{projectId:p,memberId:member,expectedRevision:1,displayName:'基线缺口',description:''})).error;facts.templates=(await raw('memberTemplate.list',{})).error;must(facts.readonly&&facts.metadata.code==='VALIDATION_INVALID'&&facts.templates.code==='VALIDATION_INVALID','v19 missing contracts');await cdp.shot('before-member-readonly');facts.steps.push('v19 readonly metadata and unknown template command independently reproduced');}
     else{
       await until(()=>cdp.eval(`document.querySelector(${q(`[data-zs-member-edit="${member}"]`)})!=null`),Boolean,'member card loaded');
+      await cdp.eval(`(()=>{const button=[...document.querySelectorAll('#hifi-root .side-item')].find(x=>x.textContent.includes('打开/切换项目'));button?.click();return true})()`);await until(()=>cdp.eval(`document.querySelector('.modal input.input')?.value===${q(projectB)}`),Boolean,'registered B picker');await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.textContent.includes('打开这个目录'))?.click();true`);await modalDone();await until(()=>cdp.eval(`location.hash.includes(${q('/project/'+b+'/room/')})`),Boolean,'member-page open B latest intent');facts.steps.push('member-page registered-project open preserves latest navigation intent');await route(`/project/${p}/members`,'[data-zs-members]');
+
       await click(`[data-zs-member-edit="${member}"]`);await setInput('[data-zs-member-name]','改名实现者');await setInput('[data-zs-member-description]','中文说明 · 执行职责');
       await cdp.eval(`(()=>{const b=document.querySelector(${q(`[data-zs-member-edit-save="${member}"]`)});b.click();b.click();return true})()`);await modalDone();
       must((await getMember()).displayName==='改名实现者','rename readback');facts.steps.push('UI rename/description and double-click single formal CAS write');
@@ -91,3 +94,4 @@ function manifest(root){const base=path.join(root,'ZhongshuoDual');const m=JSON.
   finally{try{await stop();}catch(e){facts.teardownError=e.message;facts.pass=false;}facts.rendererErrors=sessions.flat();if(facts.rendererErrors.length)facts.pass=false;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(facts,null,2));console.log(JSON.stringify({pass:facts.pass,out,error:facts.error,steps:facts.steps,buildId:build.buildId}));}
   process.exit(facts.pass?0:1);
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});
+}

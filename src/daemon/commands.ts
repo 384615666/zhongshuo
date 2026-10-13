@@ -34,7 +34,7 @@ import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
-import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
+import { CLAUDE_ADAPTER_VERSION } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
 import { checkProcessLiveness, type LivenessResult, type TreeScan } from './processCheck.ts';
@@ -144,7 +144,8 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const installation = binding.installationId == null ? null
     : (db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
   const effective = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
-  return { binding, installation, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
+  const permissionExecution=effective.kind==='codex'?{effective:'read-only',reason:'正式 Codex adapter 固定只读，审批 never；保存的权限档尚未映射，不提升权限或宣称认证'}:effective.kind==='claude'?{effective:binding.permissionMode??'plan',reason:'正式 Claude CLI 请求的权限档；工具权限限制认证另行判定'}:null;
+  return { binding, installation, permissionExecution, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
@@ -1059,6 +1060,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'member.list': {
         const params = z.strictObject({ projectId: z.string().min(1), roomId: z.string().min(1).optional() }).parse(env.params);
+        if(deps.db.prepare('SELECT id FROM projects WHERE id=?').get(params.projectId)==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员名单项目不存在');
+        if(params.roomId!=null){const room=deps.db.prepare('SELECT project_id FROM rooms WHERE id=?').get(params.roomId) as {project_id:string}|undefined;if(room==null||room.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','房间不存在或不属于名单项目');}
         const rows = params.roomId != null
           ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled, pm.description, pm.settings_revision FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? AND pm.project_id = ? ORDER BY pm.id`).all(params.roomId, params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>)
           : (deps.db.prepare('SELECT id, display_name, principal_type, enabled, description, settings_revision FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>);

@@ -19,8 +19,8 @@
 import { codexInput } from '../imageInput.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join, dirname, delimiter } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
   AdapterProcessIdentity,
@@ -61,6 +61,8 @@ interface ToolLikeItem extends Record<string, unknown> {
 }
 
 export interface CodexAdapterOptions {
+  /** Explicit member program reference; default names retain the existing npm shim lookup. */
+  executable?: string;
   codexCmdPath?: string;
   requestTimeoutMs?: number;
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -74,6 +76,23 @@ export interface CodexAdapterOptions {
   spawnFn?: (cmd: string, args: string[]) => ChildProcessWithoutNullStreams;
 }
 
+export interface CodexInvocation { command:string;args:string[];identityPath:string }
+/** File-only resolver shared by display and actual spawning. Never substitutes an explicit reference. */
+export function resolveCodexInvocation(executable?:string,codexCmdPath?:string):CodexInvocation {
+  const explicit=executable!=null&&!/^(codex|codex\.cmd)$/i.test(executable)?executable:null;
+  const script=(p:string):CodexInvocation=>({command:process.execPath,args:[p],identityPath:p});
+  if(explicit!=null&&!/\.(cmd|bat)$/i.test(explicit))return /\.(js|cjs|mjs)$/i.test(explicit)?script(explicit):{command:explicit,args:[],identityPath:explicit};
+  const cmdPath=explicit??codexCmdPath??(process.env.PATH??'').split(delimiter).filter(Boolean).map(dir=>join(dir.trim(),'codex.cmd')).find(p=>existsSync(p));
+  if(cmdPath==null)throw new AdapterCallError('RUNTIME_NOT_FOUND','未找到 codex 可执行入口（PATH 无 codex.cmd）');
+  try{if(!statSync(cmdPath).isFile())throw Error('not a file');}catch{throw new AdapterCallError('RUNTIME_NOT_FOUND','保存的 Codex 程序引用不存在；不回落其他程序');}
+  const candidate=join(cmdPath,'..','node_modules','@openai','codex','bin','codex.js');
+  if(existsSync(candidate))return script(candidate);
+  let shim:string;try{shim=readFileSync(cmdPath,'utf8');}catch{throw new AdapterCallError('RUNTIME_NOT_FOUND','保存的 Codex 程序引用不可读取；不回落其他程序');}
+  const m=shim.match(/"([^"]+[@\\/]openai[\\/][^"]*codex[^"]*\.js)"/)??shim.match(/node\s+"([^"]+codex[^"]*\.js)"/);
+  if(m==null)throw new AdapterCallError('RUNTIME_NOT_FOUND','保存的 Codex shim 无法解析脚本入口；不回落其他程序');
+  return script(m[1]!.replaceAll(/%dp0%|%~dp0/gi,dirname(cmdPath)+(process.platform==='win32'?'\\':'/')));
+}
+
 export class CodexAppServerAdapter implements RuntimeAdapter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private childGeneration = 0;
@@ -85,12 +104,13 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.options = {
+      executable:options.executable,
       codexCmdPath: options.codexCmdPath,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       sandboxMode: options.sandboxMode ?? 'read-only',
@@ -105,9 +125,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.child != null && this.child.exitCode == null) return this.child;
-    const entry = this.options.mockEntry != null
-      ? { executable: this.options.mockEntry.executable, args: this.options.mockEntry.args ?? [] }
-      : this.resolveEntry();
+    const entry = this.invocation();
     const generation = ++this.childGeneration;
     this.buffer = '';
     this.stderrTail = '';
@@ -117,7 +135,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     }) as ChildProcessWithoutNullStreams);
-    const child = spawnServer(process.execPath, [entry.executable, ...entry.args, 'app-server']);
+    const child = spawnServer(entry.command, [...entry.args, 'app-server']);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
@@ -151,29 +169,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return child;
   }
 
-  /** 解析 npm shim（.cmd 不能直接 spawn，§9.5）到 node 入口。 */
-  private resolveEntry(): { executable: string; args: string[] } {
-    const cmdPath = this.options.codexCmdPath ?? this.findOnPath('codex.cmd');
-    if (cmdPath == null) {
-      throw new AdapterCallError('RUNTIME_NOT_FOUND', '未找到 codex 可执行入口（PATH 无 codex.cmd）');
-    }
-    const candidate = join(cmdPath, '..', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-    if (existsSync(candidate)) return { executable: candidate, args: [] };
-    const shim = readFileSync(cmdPath, 'utf8');
-    const m = shim.match(/"([^"]+[@\\/]openai[\\/][^"]*codex[^"]*\.js)"/) ?? shim.match(/node\s+"([^"]+codex[^"]*\.js)"/);
-    if (m == null) {
-      throw new AdapterCallError('RUNTIME_NOT_FOUND', `无法从 shim 解析 codex.js 入口：${cmdPath}`);
-    }
-    return { executable: m[1]!, args: [] };
-  }
-
-  private findOnPath(name: string): string | null {
-    for (const dir of (process.env.PATH ?? '').split(';')) {
-      if (dir.length === 0) continue;
-      const candidate = join(dir.trim(), name);
-      if (existsSync(candidate)) return candidate;
-    }
-    return null;
+  private invocation():CodexInvocation {
+    if(this.options.mockEntry!=null)return{command:process.execPath,args:[this.options.mockEntry.executable,...(this.options.mockEntry.args??[])],identityPath:this.options.mockEntry.executable};
+    return resolveCodexInvocation(this.options.executable,this.options.codexCmdPath);
   }
 
   private request<T = unknown>(method: string, params?: unknown, onResult?: (v: unknown) => void): Promise<T> {
@@ -419,18 +417,16 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   async probe(): Promise<ProbeResult> {
     if (this.codexVersion == null) {
-      const entry = this.options.mockEntry != null
-        ? this.options.mockEntry.executable
-        : this.resolveEntry().executable;
-      this.executable = entry;
+      const entry=this.invocation();
+      this.executable=entry.identityPath;
       this.codexVersion = await this.readVersion(entry);
     }
     return { executable: this.executable ?? '(npm shim)', version: this.codexVersion!, capabilities: this.capabilities() };
   }
 
-  private readVersion(entry: string): Promise<string> {
+  private readVersion(entry: CodexInvocation): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [entry, '--version'], { windowsHide: true });
+      const child = spawn(entry.command, [...entry.args, '--version'], { windowsHide: true });
       let out = '';
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (c: string) => (out += c));

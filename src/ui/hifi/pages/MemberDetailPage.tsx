@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon';
 import { Avatar, ErrorState, Tag, memberColor, memberShortId } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
-import { navigate } from '../lib/router';
+import { navigate, currentNavSeq } from '../lib/router';
 import { refreshMembers, switchFocusProject } from '../loader';
 import { memberWrite } from '../data/memberWrites';
 import { recordWrite } from '../data/store';
@@ -14,6 +14,8 @@ import { BindRuntimeModal, runtimeAuthOf, type MemberRow, type RuntimeInfo } fro
 export function MemberDetailPage({ projectId, memberId }: { projectId: string; memberId: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
   const activeId = useStore((s) => s.activeProjectId);
+  const opening=useStore(s=>s.openInFlightTarget);
+  const navSequence=currentNavSeq();
   const [member, setMember] = useState<MemberRow | null>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +49,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   }, [projectId, memberId]);
 
   useEffect(() => { mounted.current = true; setMember(null);setRuntime(null);setRuntimeError(null);setBindOpen(false);setEditOpen(false);setTemplateOpen(false);void reload(); return () => { mounted.current = false; seq.current += 1; }; }, [reload]);
-  useEffect(() => { if (project != null && activeId !== projectId) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${(e as Error).message}`, 'error')); }, [project, projectId, activeId]);
+  useEffect(() => { if (project != null && activeId !== projectId && !(opening!=null&&opening.projectId!==projectId&&opening.urlSeqAtStart>=navSequence)) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${(e as Error).message}`, 'error')); }, [project, projectId, activeId,opening,navSequence]);
 
   const toggle = async () => {
     if (member == null || member.principalType !== 'agent' || togglePending.current) return;
@@ -120,7 +122,8 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
               <dl className="kv">
                 <dt>模型</dt><dd>{runtime?.binding?.model ?? effective?.model ?? '（未指定／未获确认）'}</dd>
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
-                <dt>权限模式</dt><dd>{runtime?.binding?.permissionMode ?? '（渠道默认／未获确认）'}</dd>
+                <dt>保存的权限模式</dt><dd>{runtime?.binding?.permissionMode ?? '未指定'}</dd>
+                <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
                 <dt>真实识图</dt><dd>{runtime?.imageInput?.status === 'supported' ? '已认证' : '未认证'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
               </dl>

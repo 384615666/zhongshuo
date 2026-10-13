@@ -12,6 +12,26 @@ async function setup(reply: () => Promise<unknown>) {
     return { command, ns, journal: await import('../../src/ui/hifi/data/memberWrites.ts') };
 }
 describe('R81 durable unknown configuration creation contracts', () => {
+    it('late authoritative root initialization makes a previously unread durable envelope reachable without transmitting it', async () => {
+        const f=await setup(async()=>{throw Error('ack dropped');});
+        await f.journal.memberWrite('create:p:t','memberTemplate.createMember',{projectId:'p',templateId:'t',expectedRevision:0,displayName:'原成员',description:''});
+        vi.resetModules();
+        const bus=new EventTarget();const command=vi.fn(async()=>({ok:true,data:{}}));
+        vi.stubGlobal('window',{zs:{command},dispatchEvent:(e:Event)=>bus.dispatchEvent(e)});
+        const journal=await import('../../src/ui/hifi/data/memberWrites.ts');
+        expect(()=>journal.pendingMemberWrites()).toThrow('数据根尚未确认');
+        let restored=0;bus.addEventListener('zs-member-writes',()=>{restored=journal.pendingMemberWrites().length;});
+        const store=await import('../../src/ui/hifi/data/store.ts');store.initDraftPersistence('r81-root');
+        expect(restored).toBe(1);expect(journal.pendingMemberWrites()[0]?.params.displayName).toBe('原成员');expect(command).not.toHaveBeenCalled();
+    });
+    it('successful or rejected server receipts retain their classification when post-receipt local storage fails',async()=>{
+        const f=await setup(async()=>{failStorage=true;return{ok:true,data:{memberId:'committed'}};});
+        expect(await f.journal.memberWrite('create','member.create',{projectId:'p',displayName:'已提交'})).toMatchObject({status:'ok',data:{memberId:'committed'}});
+        expect(f.journal.memberWriteStorageError).toContain('成功');expect(f.journal.memberWriteState(f.journal.pendingMemberWrites()[0]!)).toBe('ok');
+        failStorage=false;f.command.mockImplementation(async()=>{failStorage=true;return{ok:false,error:{code:'STALE_REVISION',message:'refused'}};});
+        expect(await f.journal.memberWrite('update','member.update',{projectId:'p',memberId:'m'})).toMatchObject({status:'failed',code:'STALE_REVISION'});
+        expect(f.journal.memberWriteStorageError).toContain('明确拒绝');
+    });
     it('double submission coalesces; unknown close/reload preserves original command and parameters, only explicit same-ID replay sends', async () => {
         const f = await setup(async () => { throw Error('ack dropped'); });
         const params = { projectId: 'p', templateId: 't', expectedRevision: 3, displayName: '甲', description: '原输入' };

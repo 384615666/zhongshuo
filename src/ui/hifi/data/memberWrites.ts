@@ -17,15 +17,16 @@ export function pendingMemberWrites(): MemberWrite[] {
     const raw = localStorage.getItem(key());
     if (raw == null)
         return [];
+    if(new TextEncoder().encode(raw).byteLength>262144)throw Error('成员操作账本超过容量限制；原件保留');
     const parsed = JSON.parse(raw) as {
         v: number;
         items: MemberWrite[];
     };
-    if (parsed.v !== 1 || !Array.isArray(parsed.items) || parsed.items.length > 64 || raw.length > 262144 || parsed.items.some(p => !allowed.has(p.method) || typeof p.scope !== 'string' || typeof p.commandId !== 'string' || !p.params || typeof p.params !== 'object'))
+    if (parsed.v !== 1 || !Array.isArray(parsed.items) || parsed.items.length > 64 || new TextEncoder().encode(raw).byteLength > 262144 || parsed.items.some(p => !allowed.has(p.method) || typeof p.scope !== 'string' || typeof p.commandId !== 'string' || !p.params || typeof p.params !== 'object'))
         throw Error('成员操作账本不可读；保留原件，未自动执行');
     return parsed.items;
 }
-function persist(items: MemberWrite[]) { const raw = JSON.stringify({ v: 1, items }); if (items.length > 64 || raw.length > 262144)
+function persist(items: MemberWrite[]) { const raw = JSON.stringify({ v: 1, items }); if (items.length > 64 || new TextEncoder().encode(raw).byteLength > 262144)
     throw Error('成员操作账本达到上限；请先处理已有未知结果'); localStorage.setItem(key(), raw); window.dispatchEvent(new Event('zs-member-writes')); }
 export async function memberWrite<T>(scope: string, method: string, params: Record<string, unknown>, replay = false): Promise<BridgeOutcome<T>> {
     if (busy.has(scope))
@@ -49,6 +50,7 @@ export async function memberWrite<T>(scope: string, method: string, params: Reco
         const result = await sendCommand<T>(envelope.commandId, envelope.method, envelope.params);
         if (result.status !== 'unknown') {
             confirmed.set(envelope.commandId,result.status);
+            if(confirmed.size>64)confirmed.delete(confirmed.keys().next().value!);
             // Never remove another data root's ledger after a delayed acknowledgement.
             if (key() === rootKey) {
                 try { persist(pendingMemberWrites().filter(x => x.commandId !== envelope.commandId)); confirmed.delete(envelope.commandId); memberWriteStorageError=null; }

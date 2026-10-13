@@ -103,15 +103,35 @@ async function fixture(old = false) {
     return { db, root, data, file, deps, raw, cmd, p, q, member, list, row };
 }
 describe('R81 formal member and independent configuration template contracts', () => {
+    it('stable bounded template pages remain reachable; legacy extra-setting injection is never copied into a template',async()=>{
+        const f=await fixture();try{
+            const revision=(await f.row()).revision;
+            // Separate legacy/fault injection, after the normal identity and runtime came from commands.
+            // This is not a normal member configuration or a fabricated model certification.
+            const profile=f.db.prepare('SELECT profile_id FROM project_members WHERE id=?').get(f.member) as {profile_id:string};
+            f.db.prepare('UPDATE agent_profiles SET settings_json=? WHERE id=?').run(JSON.stringify({model:null,permissionMode:'plan',apiKey:'ENGINEERING_SECRET_SENTINEL',prompt:'ENGINEERING_PRIVATE_SENTINEL',certificate:'FAKE_CERT_MUST_NOT_COPY'}),profile.profile_id);
+            for(let n=0;n<51;n++)await f.cmd('memberTemplate.saveFromMember',{projectId:f.p,memberId:f.member,expectedRevision:revision,name:`分页模板${n}`,description:''});
+            const first=await f.cmd('memberTemplate.list',{limit:50});
+            expect(first.items).toHaveLength(50);expect(JSON.stringify(first)).not.toMatch(/ENGINEERING_SECRET|ENGINEERING_PRIVATE|FAKE_CERT/);
+            const cursor=(first as unknown as {nextCursor:string}).nextCursor;expect(cursor).toBeTruthy();
+            const second=await f.cmd('memberTemplate.list',{afterId:cursor,limit:50});expect(second.items).toHaveLength(1);
+            expect(new Set([...first.items,...second.items].map(t=>t.id)).size).toBe(51);
+            expect((second as unknown as {nextCursor:string|null}).nextCursor).toBeNull();
+            expect((await f.raw('memberTemplate.list',{limit:101})).ok).toBe(false);
+            expect((f.db.prepare('SELECT count(*) c FROM real_calls').get() as {c:number}).c).toBe(0);
+        }finally{f.db.close();}
+    });
     it('rename CAS preserves exact identity, runtime, DM, task ownership and message text; all live read projections agree', async () => {
         const f = await fixture();
         try {
             const rooms = (await f.cmd('room.list', { projectId: f.p })).items;
             const room = rooms[0]!;
+            expect((await f.raw('member.list',{projectId:f.q,roomId:room.id})).error?.code).toBe('RESOURCE_NOT_FOUND');
             const dm = await f.cmd('conversation.create', { projectId: f.p, peerMemberId: f.member });
             const submitted = await f.cmd('message.submit', { target: { kind: 'room_root', projectId: f.p, conversationId: room.conversationId, roomId: room.id }, body: '旧正文 @同名 保留', intent: 'default', mentions: [{ kind: 'member', memberId: f.member }] });
             const before = f.db.prepare('SELECT * FROM project_members WHERE id=?').get(f.member) as SqlRow;
-            const oldBody = f.db.prepare('SELECT body_json FROM messages WHERE id=?').get(submitted.messageId);
+            const oldBody = f.db.prepare('SELECT body_json FROM messages WHERE id=?').get(submitted.messageId) as {body_json:string}|undefined;
+            expect(oldBody).toBeDefined();expect(JSON.parse(oldBody!.body_json).text).toBe('旧正文 @同名 保留');
             const rev = (await f.row()).revision;
             const params = { projectId: f.p, memberId: f.member, expectedRevision: rev, displayName: '新名字', description: '中文说明' };
             const first = await f.raw('member.update', params, 'r81-rename-fixed');
@@ -119,6 +139,7 @@ describe('R81 formal member and independent configuration template contracts', (
             expect((await f.raw('member.update', params, 'r81-rename-fixed')).replayed).toBe(true);
             expect((await f.raw('member.update', { ...params, description: 'ABA' })).error?.code).toBe('STALE_REVISION');
             expect((await f.raw('member.update', { ...params, projectId: f.q })).error?.code).toBe('RESOURCE_NOT_FOUND');
+            expect((await f.raw('member.setRuntime',{projectId:f.q,memberId:f.member,expectedRevision:rev+1,kind:'fake'})).error?.code).toBe('RESOURCE_NOT_FOUND');
             const after = f.db.prepare('SELECT * FROM project_members WHERE id=?').get(f.member) as SqlRow;
             expect(after.profile_id).toBe(before.profile_id);
             expect(after.id).toBe(before.id);
@@ -224,6 +245,12 @@ describe('R81 formal member and independent configuration template contracts', (
             expect((await f.raw('member.setRuntime', { memberId: f.member, kind: 'fake' })).ok).toBe(false);
             expect((await f.raw('member.setEnabled', { memberId: f.member, enabled: false })).ok).toBe(false);
             expect((await f.raw('memberTemplate.saveFromMember', { ...params, name: '只读', description: '' })).ok).toBe(false);
+            let current=(await f.cmd('project.list',{})).items.find(p=>p.id===f.p)!;
+            await f.cmd('project.lifecycle',{projectId:f.p,expectedRevision:current.revision,action:'unarchive'});
+            current=(await f.cmd('project.list',{})).items.find(p=>p.id===f.p)!;
+            await f.cmd('project.lifecycle',{projectId:f.p,expectedRevision:current.revision,action:'remove'});
+            expect((await f.raw('member.update',{...params,expectedRevision:params.expectedRevision+1})).ok).toBe(false);
+            expect((await f.raw('memberTemplate.createMember',{projectId:f.p,templateId:'missing',expectedRevision:0,displayName:'拒绝',description:''})).ok).toBe(false);
         }
         finally {
             f.db.close();

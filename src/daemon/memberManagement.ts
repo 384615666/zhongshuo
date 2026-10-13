@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
+import { resolveCodexInvocation } from '../adapter/codex/appServerAdapter.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
-import { CLAUDE_ADAPTER_VERSION, claudeCapabilities } from '../adapter/claude/cliAdapter.ts';
+import { CLAUDE_ADAPTER_VERSION, claudeCapabilities, resolveClaudeExecutable } from '../adapter/claude/cliAdapter.ts';
 const name = z.string().trim().min(1).max(60);
 const description = z.string().trim().max(200);
 const id = z.string().min(1);
@@ -51,13 +52,22 @@ export function memberExecutableStatus(kind: string | null, executable: string |
     catch {
         return false;
     } };
-    if (isAbsolute(executable))
-        return { status: file(executable) ? 'found' as const : 'missing' as const, reason: file(executable) ? '已找到程序引用；未执行认证' : '配置的程序文件不存在或不可读取' };
-    if (/[\\/]/.test(executable))
-        return { status: 'unknown' as const, reason: '相对路径依赖执行上下文；请使用明确的程序引用' };
-    const suffixes = process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')] : [''];
-    const found = (process.env.PATH ?? '').split(delimiter).filter(Boolean).some(dir => suffixes.some(ext => file(join(dir, executable + ext))));
-    return { status: found ? 'found' as const : 'missing' as const, reason: found ? '当前 PATH 找到程序；未执行认证' : '当前服务 PATH 找不到程序，请配置可用程序后再派工' };
+    const locate=(program:string)=>{
+      if(isAbsolute(program))return file(program);
+      if(/[\\/]/.test(program))return null;
+      const suffixes=process.platform==='win32'?['',...(process.env.PATHEXT??'.EXE;.CMD;.BAT').split(';')]:[''];
+      return(process.env.PATH??'').split(delimiter).filter(Boolean).some(dir=>suffixes.some(ext=>file(join(dir,program+ext))));
+    };
+    try{
+      const entry=kind==='claude'?resolveClaudeExecutable(executable):kind==='codex'?resolveCodexInvocation(executable):{command:executable,args:[]};
+      const args='prefixArgs' in entry?entry.prefixArgs:entry.args;
+      const present=locate(entry.command);const scripts=args.filter(a=>/\.(js|cjs|mjs)$/i.test(a));
+      const found=present!==false&&scripts.every(p=>locate(p)!==false);
+      if(!found)return{status:'missing' as const,reason:'当前正式 adapter 的程序或脚本引用不存在或不可读取，请配置后再派工'};
+      if(present==null||scripts.some(p=>locate(p)==null))return{status:'unknown' as const,reason:'相对程序路径依赖执行上下文；请保存明确的程序引用'};
+      return{status:'found' as const,reason:'已找到正式 adapter 使用的程序引用；未执行或认证模型'};
+    }catch{return{status:'missing' as const,reason:'当前正式 adapter 无法解析保存的程序引用；请配置后再派工'};}
+
 }
 export function assertMemberProject(db: ZhongshuoDatabase, projectId: string, fail: Fail) {
     const p = db.prepare('SELECT status FROM projects WHERE id=?').get(projectId) as {

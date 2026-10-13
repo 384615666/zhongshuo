@@ -690,6 +690,8 @@ function persistSnapshot(): void {
  */
 export function initDraftPersistence(ns: string, rootId?: string | null): boolean {
   configureReadingPositions(ns);
+  // R81: deep-link panels may mount before the authoritative root identity is ready.
+  if(typeof window!=='undefined'&&typeof window.dispatchEvent==='function')window.dispatchEvent(new Event('zs-member-writes'));
   const saved=readingPosition<{preview:HifiState['preview'];resources:HifiState['resources']}>('preview');
   if(state.preview.tabs.length===0&&saved?.preview&&Array.isArray(saved.preview.tabs)&&saved.preview.tabs.length<=12&&Array.isArray(saved.resources)){
     const resources=saved.resources.filter(r=>r&&typeof r.id==='string'&&typeof r.projectId==='string'&&typeof r.title==='string'&&r.origin&&r.audience&&Array.isArray(r.revisions)&&r.revisions.every(v=>typeof v.revision==='number'&&v.content?.kind==='unsupported')&&(r.formalAttachment||r.formalDelivery||r.formalWorktree));

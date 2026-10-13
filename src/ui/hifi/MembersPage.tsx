@@ -17,7 +17,7 @@ import { Icon } from './components/Icon';
 import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
 import { useStore, toast, getState } from './shell';
 import { refreshMembers, switchFocusProject } from './loader';
-import { navigate } from './lib/router';
+import { navigate, currentNavSeq } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
@@ -32,6 +32,7 @@ export interface RuntimeInfo {
   installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null;
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
   executableStatus?:{status:'found'|'missing'|'unknown';reason:string};
+  permissionExecution?:{effective:string;reason:string}|null;
   environment?: { realDispatchGuard?: boolean; allowFake?: boolean };
   imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
 }
@@ -48,7 +49,9 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const projectId=routeProjectId??activeProjectId;
   const projects = useStore((s) => s.projects);
-  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${(e as Error).message}`,'error');});},[routeProjectId,activeProjectId,projects]);
+  const opening=useStore(s=>s.openInFlightTarget);
+  const navSequence=currentNavSeq();
+  useEffect(()=>{if(routeProjectId&&routeProjectId!==activeProjectId&&projects.some(p=>p.id===routeProjectId)&&!(opening!=null&&opening.projectId!==routeProjectId&&opening.urlSeqAtStart>=navSequence))void switchFocusProject(routeProjectId).catch((e:unknown)=>{if(getState().activeProjectId===routeProjectId)toast(`成员项目聚焦失败：${(e as Error).message}`,'error');});},[routeProjectId,activeProjectId,projects,opening,navSequence]);
   // selector 必须返回稳定引用（useSyncExternalStore 契约——filter 新数组会造成快照死循环，
   // R46 实证）：先取整份 rooms，再按项目 memo 过滤。
   const allRooms = useStore((s) => s.rooms);
@@ -185,7 +188,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         // 用户 v3 实测 startupFailed 根因）时必须明示发送会失败及解法，不等到派发失败。
         const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
         return {
-          text: `未绑定 → 实际用全局默认（${eff.kind}${eff.model != null && eff.model.length > 0 ? ` · ${eff.model}` : ''}${eff.defaultKindEnv != null ? `，ZS_RUNTIME=${eff.defaultKindEnv}` : ''}）${noModel ? '——全局默认未配置模型名（ZS_CLAUDE_MODEL），发送会启动失败：请为本成员「配置 runtime」并填模型名' : ''}`,
+          text: `未绑定 · 默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 未指定模型，请配置后派工':''}`,
           problem: true,
           effective: eff.kind,
         };
@@ -193,15 +196,14 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       return { text: '未绑定（点「配置 runtime」选择渠道与模型）', problem: true };
     }
     if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
-    if(rt.executableStatus?.status==='missing')return {text:`已保存配置 · 程序不可用：${rt.executableStatus.reason}；请配置可用程序后再派工`,problem:true};
-    return { text: `${rt.installation.kind} · 工具权限限制认证：${runtimeAuthOf(rt.installation.capabilities_json)}` };
+    if(rt.executableStatus?.status==='missing')return {text:`配置已保存 · ${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 程序不可用，请配置后派工`,problem:true};
+    return { text: `配置已保存 · ${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 工具权限：${runtimeAuthOf(rt.installation.capabilities_json)}` };
   };
 
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
       <div className="page">
-        {/* 筛选行（原型：项目选择与顶栏同源——切换即聚焦并路由；「添加成员」按钮不设：
-            成员由项目注册建立（member.create 属 DEV-10 后续批次），不放假成功入口）。 */}
+        {/* 筛选行：项目与顶栏同源，名称/说明/短ID搜索不改变任何成员状态。 */}
         <UnknownMemberOperations/>
         <div className="page-filters">
           <label className="field inline">
@@ -264,7 +266,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                       <span className="mono-sm faint" data-zs-member-short={m.id}>#{memberShortId(m.id)}</span>
                       {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                       {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
-                      {!m.enabled ? <Tag tone="neutral" icon="slash">已停用</Tag> : null}
+                      {m.enabled ? <Tag plain>启用</Tag> : <Tag tone="neutral" icon="slash">停用</Tag>}
                     </div>
                     <div className="small faint" style={{ marginTop: 3 }}>
                       {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
@@ -457,7 +459,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <input className="input" placeholder="留空=默认（claude/codex）" value={form.executable} onChange={(e) => setForm((f) => ({ ...f, executable: e.target.value }))} />
         </label>
         <label className="field" title="权限模式（可选——默认按 runtime 自身配置）">
-          <span className="field-label">权限模式</span>
+          <span className="field-label">保存的权限模式</span>
           <Select
             value={form.permissionMode}
             ariaLabel="权限模式"
@@ -472,6 +474,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
               { value: 'bypassPermissions', label: 'bypassPermissions' },
             ]}
           />
+          <div className="field-hint">{form.kind==='codex'?'Codex 正式执行保持 read-only，审批 never；此权限档仅保存，尚未映射。':'Claude 留空时正式 CLI 请求 plan；保存与实际工具权限认证分别判定。'}</div>
         </label>
       </div>
     </Modal>

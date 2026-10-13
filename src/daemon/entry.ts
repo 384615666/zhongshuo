@@ -248,6 +248,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const productionFactories: Record<string, MemberAdapterFactory> = {
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         model: binding.model ?? process.env.ZS_E2E_MODEL,
+        executable:binding.executable??undefined,
         ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
       }), 'codex', dbForLedger, binding.model ?? defaultModelFor('codex')),
       claude: (binding) => wrapRealCallLedger(new ClaudeCliAdapter(
