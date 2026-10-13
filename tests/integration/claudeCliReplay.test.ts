@@ -74,6 +74,12 @@ async function collect(adapter: ClaudeCliAdapter, session: SessionRef, until: 'c
 const j = (o: unknown) => JSON.stringify(o);
 
 describe('正常流（stream-json）', () => {
+  it('native JSON schema/result object is transported exactly; tool result is factual and content not copied into audit',async()=>{
+    const captured:string[][]=[];const structured={answer:4};
+    const adapter=new ClaudeCliAdapter({model:'test-model'},args=>{captured.push(args);return makeProc([{lines:[j({type:'assistant',message:{content:[{type:'tool_use',id:'pure-json',name:'StructuredOutput',input:structured}]}}),j({type:'user',message:{content:[{type:'tool_result',tool_use_id:'pure-json',content:'PRIVATE_RESULT_BODY'}]}}),j({type:'result',subtype:'success',result:'',structured_output:structured})],exit:0}]);});
+    const s=await adapter.openSession(openInput()),schema={type:'object',required:['answer'],properties:{answer:{type:'integer',const:4}}};await adapter.startTurn(s,{...turnInput('schema'),outputSchema:schema});const events=await collect(adapter,s,'completed');
+    expect(captured[0]![captured[0]!.indexOf('--json-schema')+1]).toBe(JSON.stringify(schema));expect(events.find(e=>e.kind==='turn.completed')).toMatchObject({finalText:'{"answer":4}',structuredResult:structured});expect(events.find(e=>e.kind==='tool.completed')).toMatchObject({outcome:'success',resultRef:'tool-success'});expect(JSON.stringify(events)).not.toContain('PRIVATE_RESULT_BODY');await adapter.close(s);
+  });
   it('init→assistant→result：turn.started 合成、消息、usage、结构化 finalText、session 绑定', async () => {
     const adapter = new ClaudeCliAdapter({ model: 'test-model' }, fakeProc([
       { lines: [j({ type: 'system', subtype: 'init', session_id: 'cs_1', model: 'test-model' })] },

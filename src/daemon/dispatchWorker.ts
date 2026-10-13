@@ -857,6 +857,7 @@ export class DispatchWorker {
         policyId: writeAccess.policyId,
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
+        outputSchema:{type:'object',additionalProperties:false,required:['schemaVersion','resultKey','changeSummary','files','executedVerifications','unexecutedVerifications','remainingIssues'],properties:{schemaVersion:{type:'string',const:'task-complete-v1'},resultKey:{type:'string',const:assembled.value.resultKey},changeSummary:{type:'string'},files:{type:'array',items:{type:'string'}},executedVerifications:{type:'array',items:{type:'string'}},unexecutedVerifications:{type:'array',items:{type:'object',additionalProperties:false,required:['item','reason'],properties:{item:{type:'string'},reason:{type:'string'}}}},remainingIssues:{type:'array',items:{type:'string'}}}},
       });
       this.registerProcessIdentity(turnId, runId, member.id, adapter, session);
       // 会话绑定（第八轮迟到成果泵：UNKNOWN turn 的 lateEvents 按 session 找回 adapter 通道）。

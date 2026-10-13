@@ -80,6 +80,8 @@ export interface TurnRequest {
   images?: Array<{ artifactId: string; hash: string; mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; dataBase64: string }>;
   /** Transient launch identity; never changes the frozen send envelope. */
   imageConfigurationKey?: string;
+  /** Optional authoritative output contract; transport must preserve, never synthesize success. */
+  outputSchema?: Record<string,unknown>;
   policyId: string;
   taskRevision: number;
   resultKey?: string;

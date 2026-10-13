@@ -359,6 +359,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         ...CLAUDE_PROJECT_WRITE_TOOL_ARGS);
     }
     if (payload.stream) args.push('--input-format', 'stream-json');
+    if(input.outputSchema)args.push('--json-schema',JSON.stringify(input.outputSchema));
     const resumeId = state.providerSessionId ?? state.resumeRequested;
     if (resumeId != null) {
       if (!PROVIDER_SESSION_ID_RE.test(resumeId)) {
@@ -665,8 +666,10 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
           ...this.baseEvent(state, turn, randomUUID().slice(0, 6)),
         } as NormalizedRuntimeEvent);
       }
-      if (turn.lastMessageId != null && !isError) {
-        this.pushEvent(state, turn, { kind: 'message.completed', messageId: turn.lastMessageId, text: String(parsed['result'] ?? ''), ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+      const structured=!isError?parsed['structured_output']:undefined;
+      const finalText=structured!=null?JSON.stringify(structured):String(parsed['result']??'');
+      if (!isError && (turn.lastMessageId!=null || structured!=null)) {
+        this.pushEvent(state, turn, { kind: 'message.completed', messageId: turn.lastMessageId??`claude_final_${turn.turnId}`, text: finalText, ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
       }
       if (isError) {
         const subtype = String(parsed['subtype'] ?? 'error_max_turns');
@@ -678,7 +681,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         } as NormalizedRuntimeEvent);
       } else {
         turn.terminalKind = 'result';
-        this.pushEvent(state, turn, { kind: 'turn.completed', finalText: String(parsed['result'] ?? ''), ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+        this.pushEvent(state, turn, { kind: 'turn.completed', finalText,...(structured!=null?{structuredResult:structured}:{}), ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
       }
       this.finishTurn(state, turn);
     }

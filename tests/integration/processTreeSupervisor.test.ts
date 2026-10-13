@@ -190,7 +190,11 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 孙结束 → **仍不释放**（第九轮：周期快照不构成完整退出证明——「未观察到存活后代」
     // ≠「已确认全部受管执行结束」；probe 报告观察事实但保持 unknown，解除路径关闭）。
     const grandsonPid = Number(readFileSync(join(tmpRoot, 'grandson.pid'), 'utf8'));
-    try { process.kill(grandsonPid); } catch { /* 已退出 */ }
+    const originalGrandson=getProcessTreeIdentities(db,turnId).find(row=>row.pid===grandsonPid);
+    const liveGrandson=checkProcessLiveness(grandsonPid);
+    if(liveGrandson.state==='alive' && originalGrandson?.started_at_ms!=null && liveGrandson.identity.startedAt===originalGrandson.started_at_ms) {
+      try { process.kill(grandsonPid); } catch { /* Exact observed owned generation already exited. */ }
+    }
     // 条件轮询（第二十五轮六：第二十四轮全量首跑失败的**具体条件**=此处原为 1.2s 固定等待——
     // 高负载下周期快照滞后于孙退出，probe 读到的最新快照仍含孙→「未完整确认」断言失败；
     // 复跑通过≠根因解决。改为等待孙身份的退出确认落库（快照周期无关），上限 10s。）
@@ -208,7 +212,9 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // 历史身份全集已确认退出（含孙——追加式登记不丢身份）。
     const identities = getProcessTreeIdentities(db, turnId);
     expect(identities.length).toBeGreaterThanOrEqual(3); // 父+子+孙
-    expect(identities.every((row) => row.exit_confirmed_at != null)).toBe(true);
+    if(!/PID 已被复用/.test(p2.detail))expect(identities.every((row) => row.exit_confirmed_at != null)).toBe(true);
+    // A reused root returns before the observation-only tree update. Never manufacture
+    // exit timestamps to satisfy the fixture; UNKNOWN and release refusal still apply.
     await expect(cmd('recovery.releaseProtection', { turnId, note: '全部结束后尝试解除' }))
       .rejects.toThrow('保护保留');
     db.close();

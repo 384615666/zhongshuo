@@ -93,7 +93,7 @@ const BAT = ['@echo off',
   'pause',
   'endlocal'].join('\r\n');
 writeFileSync(join(out, 'start-desktop.bat'), BAT + '\r\n', 'utf8');
-if(outArg==='desktop-daily-win-v21')writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面首版候选 · v21
+if(outArg?.startsWith('desktop-daily-win-v21'))writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面首版候选 · v21
 
 启动入口：start-desktop.bat。本包独立数据根，旧包、旧库、凭据、草稿与未知账本保持原地；没有演示数据或默认 Fake。
 

@@ -513,6 +513,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         clientUserMessageId: input.dispatchKey,
         sandboxPolicy:state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
         approvalPolicy:'never',
+        ...(input.outputSchema?{outputSchema:input.outputSchema}:{}),
       },
       (r) => {
         // 响应解析同步点：立即固化映射（同 chunk 的通知随后处理时即可命中）。
