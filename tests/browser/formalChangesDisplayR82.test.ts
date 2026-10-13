@@ -1,9 +1,10 @@
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {createElement} from 'react';
+import type * as ReactModule from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {ChangeSnapshot} from '../../src/contracts/changeSnapshot';
 const state=vi.hoisted(()=>({values:[] as unknown[]}));
-vi.mock('react',async()=>({...await vi.importActual<typeof import('react')>('react'),useState:()=>[state.values.shift(),vi.fn()]}));
+vi.mock('react',async()=>({...await vi.importActual<typeof ReactModule>('react'),useState:()=>[state.values.shift(),vi.fn()]}));
 import {FormalChangeDetail} from '../../src/ui/hifi/components/FormalChanges';
 const entry={changeSetId:'cs',taskId:'t',taskTitle:'正式任务',applicationStatus:'applied',beforeRef:'b',afterRef:'a',locate:'#task=t'};
 const snapshot:ChangeSnapshot={projectId:'p',taskId:'t',changeSetId:'cs',applicationStatus:'applied',files:[{path:'说明.md',change:'modified',beforeHash:'before',afterHash:'after'}],truncated:false};
