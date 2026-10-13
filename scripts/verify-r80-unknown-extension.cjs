@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 /* global require, module, Buffer */
 const fs=require('node:fs'),path=require('node:path'),zlib=require('node:zlib');const{createHash}=require('node:crypto');
-module.exports=async function(ctx){let{cdp}=ctx;const{projectId,room,memberId,project,data,out,navigate,inputText,until,queryOne,must,sleep,button,reopen}=ctx;
+module.exports=async function(ctx){let{cdp}=ctx;const{projectId,room,memberId,project,data,navigate,inputText,until,queryOne,must,sleep,button,reopen}=ctx;
   const hash=v=>createHash('sha256').update(v).digest('hex');const chunk=(name,b)=>{const t=Buffer.from(name),n=Buffer.alloc(4),crc=Buffer.alloc(4);n.writeUInt32BE(b.length);crc.writeUInt32BE(zlib.crc32(Buffer.concat([t,b]))>>>0);return Buffer.concat([n,t,b,crc]);};const h=Buffer.alloc(13);h.writeUInt32BE(1);h.writeUInt32BE(1,4);h[8]=8;const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',h),chunk('IDAT',zlib.deflateSync(Buffer.from([0,255]))),chunk('IEND',Buffer.alloc(0))]);const file=path.join(project,'R80未知回执工程图.png');fs.writeFileSync(file,png);
   await navigate(cdp,`/project/${projectId}/room/${room.id}`,room.id);await until(()=>cdp.eval("document.querySelector('input[data-zs-file-input]')!=null"),Boolean,'unknown test composer');
   await cdp.eval("document.querySelector('button[aria-label=\"本次运行设置\"]').click();true");await until(()=>cdp.eval("[...document.querySelectorAll('button')].some(b=>b.textContent.includes('仅记录，不请求回复'))"),Boolean,'record intent menu');must(await cdp.eval(button('body','仅记录，不请求回复')),'record intent');

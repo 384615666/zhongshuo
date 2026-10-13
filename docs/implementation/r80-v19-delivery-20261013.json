@@ -1,0 +1,245 @@
+{
+  "round": "R80",
+  "date": "2026-10-13",
+  "baseline": "10d9e8c",
+  "branch": "codex/full-implementation",
+  "build": {
+    "buildId": "bld_02c536c5b5eb3ab3",
+    "commit": "7de88268e1730d227254458d362e20309a1f93b7",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-13T02:31:54.847Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "package": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v19",
+  "pass": true,
+  "required": {
+    "sourceTests": true,
+    "typechecks": true,
+    "lintIncrement": true,
+    "cleanBuild": true,
+    "sourceManifest": true,
+    "finalCopyManifests": true,
+    "sameBuild": true,
+    "realLauncher": true,
+    "transportRecovery": true,
+    "reloadHistory": true,
+    "actualThirtyMinutes": true,
+    "sharedBoundedRecovery": true,
+    "noAutomaticBusiness": true,
+    "measuredReads": true,
+    "rendererBoundedByRoute": true,
+    "projectPreviewAndGroupReading": true,
+    "redactedClipboard": true,
+    "unknownRealUi": true,
+    "editedDraftAndOriginal": true,
+    "storageInjections": true,
+    "originalBytesCounterexample": true,
+    "clockCapacityCounterexample": true,
+    "originalConnectionCounterexample": true,
+    "originalGroupCounterexample": true,
+    "nativeHostScope": true,
+    "projectCancelRegression": true,
+    "normalLaunchRegression": true,
+    "attachmentAndOriginal": true,
+    "zeroRealCalls": true,
+    "noRendererErrors": true,
+    "oldV18Preserved": true,
+    "noShippedProfile": true,
+    "frozenMigrations": true
+  },
+  "receipts": {
+    "launcher": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\result.json",
+      "sha256": "a96c0b331e4eae9090243d8b9d568c04a0d25c7cbb1a62e0ac2b065bb5e01413"
+    },
+    "soak": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r80-soak-result.json",
+      "sha256": "eb791c2fd0d23146aa0ce454546390881f31e8bf6b999b5e7a18637ba3731b76"
+    },
+    "samples": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r80-soak-progress.json",
+      "sha256": "2e94654592bc4e7a15bc5e51f36aeae66031a28045f803ae8f63402e483ae686"
+    },
+    "sidecar": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r80-sidecar-result.json",
+      "sha256": "501ebfd5f0b9abf81950defc9667326a290825f760c8be68f3bc45a2c8c13755"
+    },
+    "unknown": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-unknown-release-20261013\\result.json",
+      "sha256": "5edca9448404d201bc46f3a0ca24f8bf5b8077cadf4f5f0ee863160b6614c9fa"
+    },
+    "reading": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791859216164\\result.json",
+      "sha256": "d83da87d93a4b7ce01f5271da6656eee5b5b0d9bf79e4b33b14d5e733ab05c0a"
+    },
+    "cancel": {
+      "path": "D:\\zhongshuo\\dist\\desktop\\r75-completion-1791858781781\\result.json",
+      "sha256": "2971363b2f9702cdce69e9d052db1d5df9e99f3d3aa03778c6195f483bd8f48a"
+    },
+    "host": {
+      "path": "D:\\zhongshuo\\dist\\r80-host-lifecycle-release\\result.json",
+      "sha256": "06c13829110c29a3cb034e238c333b3be5ae71eda9fd62f8df5f72c435684306"
+    },
+    "tests": {
+      "path": "D:\\zhongshuo\\dist\\r80-source-release-tests.json",
+      "sha256": "4ae0ad9e0eef5db0cba1557dfdada939ed30c0975c7eb7349e535ed5adca983e"
+    },
+    "storage": {
+      "path": "D:\\zhongshuo\\dist\\r80-storage-faults-final.json",
+      "sha256": "d09cc0262efdd42b161da116487653975c5bc168c4de11bcfa442b6957421451"
+    },
+    "original": {
+      "path": "D:\\zhongshuo\\dist\\r80-original-before-after-release\\result.json",
+      "sha256": "2b01e24f8ff2ff3337b72e2e1b57a6d872d677bf2717c04d43c2369baefe0599"
+    },
+    "clockBefore": {
+      "path": "D:\\zhongshuo\\dist\\r80-reading-clock-before.json",
+      "sha256": "a36ba75a8e06382ed488648255bcda2fd7263ea0a3d5077bb8ab973f19560cae"
+    },
+    "clockAfter": {
+      "path": "D:\\zhongshuo\\dist\\r80-reading-clock-after.json",
+      "sha256": "5540b0889c355ecaf0c3832e70913b393e8d449ef35789988cbadfd00f1c40ec"
+    },
+    "lint": {
+      "path": "D:\\zhongshuo\\dist\\r80-lint-release.json",
+      "sha256": "3e14fef23d5703083dc4fea23bc1bd6b308c647b93803cab74863e6d95a59259"
+    }
+  },
+  "counterexamples": [
+    {
+      "path": "D:\\zhongshuo\\dist\\r80-connection-before\\result.json",
+      "sha256": "1c211dfbe2c0386aba57938d87a5a7399dd2141e37ab38ff77c719aba4d803ff"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r80-reading-clock-before.json",
+      "sha256": "a36ba75a8e06382ed488648255bcda2fd7263ea0a3d5077bb8ab973f19560cae"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-recovery-20261013\\result.json",
+      "sha256": "0e4140040b632b6d9fd4a8af1bee847c3306872bbe07d0b29459907313dca9e3"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-recovery-20261013\\same-thread-navigation-before.json",
+      "sha256": "fad88a09ab26bb5de82e01571d703c8035711f4e74f638e492e86fafc7e440df"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-recovery-final-20261013\\result.json",
+      "sha256": "d030b57bcb538a8f79c3649d48f523016c763eef2c5243b0dcf106110b2dcffd"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-recovery-final-20261013\\native-copy-check.json",
+      "sha256": "496fea6ccdf7dfd751facb37c3980bb1b57ff02bf2c0eda8de8f951632bb6f70"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-final-observation-20261013\\result.json",
+      "sha256": "a7612d50239ce34daf26068d119b2183b1fcd5d79fc6f3fce278e6f51252a66f"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-final-observation-2-20261013\\result.json",
+      "sha256": "2e6c61eea022129f75b14cb380cef330936539049a47ed365df1e1895e86ffba"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-final-observation-2-20261013\\r80-reading-section-counter.json",
+      "sha256": "9c7258d0d8611bb168b3925ff02fa2a1936ef504750aed0f9c5049ed6eb097ee"
+    },
+    {
+      "path": "D:\\zhongshuo\\dist\\r80-host-lifecycle-final\\result.json",
+      "sha256": "a4966db8d17af3c4ba475ea370395b9d35b21eb16d1173febe3d2d741a47b4e5"
+    }
+  ],
+  "screenshots": {
+    "buildId": "bld_02c536c5b5eb3ab3",
+    "files": [
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r80-disconnected.png",
+        "sha256": "25675b838a6de85840fc78e02ac5f8003feca611d5e647fcc6b7c7599dbac641"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r80-local-diagnostics.png",
+        "sha256": "8f1064b4d0e5bc3be7bfd3f0989e639e4f1be57f07ade35410e18f9eac7f33a5"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r79-historical-run.png",
+        "sha256": "7b9c3ec0ee52796a8724d6d6438407526780410ce1158d6419fcdd48b028e32d"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-release-20261013\\r79-history-reopened.png",
+        "sha256": "cc907f7f84e1fadc432694ae3cacdc63482fa7229df0a4cfc846a827971bb192"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-unknown-release-20261013\\r80-unknown-before-reopen.png",
+        "sha256": "48ad4a0d1e3914b66151fe4c7a778f4e5296ffaa1e1d4797d07dedafea622c6f"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\review-r80-v19-unknown-release-20261013\\r80-unknown-after-explicit-replay.png",
+        "sha256": "615131b3c674e829c1d7dcc067d091d7e87e6cf800d278ef07abfee0e39d8523"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791859216164\\r79-image-reading.png",
+        "sha256": "1ce63f9e06fb80dbeedf9eb07612f7bde9991c74f491ea00b0e571168efb277c"
+      }
+    ],
+    "visuallyInspected": true
+  },
+  "sourceValidation": {
+    "tests": 978,
+    "files": 136,
+    "typecheckLogs": [
+      {
+        "path": "D:\\zhongshuo\\dist\\r80-typecheck-main.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "D:\\zhongshuo\\dist\\r80-typecheck-hifi.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "lintScope": "all changed TypeScript/JavaScript files, error multiset comparison, not full-repository lint success",
+    "externalGit": "existing R79 2 external sandbox failures retained, not rerun; not included in deterministic gate"
+  },
+  "manifests": {
+    "source": 593,
+    "flow": 593,
+    "unknown": 593,
+    "normal": 593,
+    "v18": 593
+  },
+  "observation": {
+    "durationMs": 1800006,
+    "cycles": 82,
+    "start": 1791858860488,
+    "end": 1791860660494,
+    "requestsStart": 520,
+    "requestsEnd": 2129,
+    "peakInFlight": 0,
+    "heapMin": 11306820,
+    "heapMax": 20419892,
+    "heapFirst": 14913956,
+    "heapLast": 16125372,
+    "scope": "final own fake host; instrumented renderer intervals/document listeners; sampled JS heaps, not all native resources or multi-day leak certification",
+    "sampleTiming": "once after each action, approximately20 seconds between cycles; sampled inFlight is not a continuous peak trace",
+    "hostPeakInFlight": 9
+  },
+  "boundaries": {
+    "realModelCalls": 0,
+    "codexVision": "gpt-6-luna unverified; no retry/startTurn",
+    "realOsSleep": false,
+    "powerNotifications": "explicit simulation only",
+    "processPause": "native own headless Electron PID, 3 seconds; not OS sleep",
+    "hardwarePowerLoss": false,
+    "readingMetadata": "64 entries/512KiB; maximum12 restored tabs including active; no bytes/body",
+    "userAcceptance": false,
+    "userDataChanges": "none; no deletion/cleanup/moving user files or old packages",
+    "deferred": [
+      "AUTO/DELIBERATE",
+      "parallel managed writes",
+      "tool permission certification",
+      "Android",
+      "installer/signing",
+      "auto-update",
+      "value evaluation"
+    ]
+  }
+}
