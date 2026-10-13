@@ -5,6 +5,7 @@ import { command } from '../bridge';
 import { fullTime } from '../lib/format';
 import { Modal, Select, TaskStatusTag } from './ui';
 import { ActualMembers, DeliveryHistoryFacts, DetailReadState, RunExtraFacts, TaskEventFacts, TaskExtraFacts, useTaskDetails } from './TaskDetailsFacts';
+import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 const pending=new Map<string,Promise<ConversationTaskPage>>();
 function readPage(projectId:string,conversationId:string,beforeTaskId?:string){
@@ -19,11 +20,11 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
   const [chosen,setChosen]=useState<{key:string;id:string}|null>(null);
   const generation=useRef(0);const trigger=useRef<((before?:string|null)=>void)|null>(null);
   useEffect(()=>{
-    let alive=true;let busy=false;let before:string|undefined;let wanted:string|undefined;let reread=false;
+    const restored=readingPosition<string>(`dm-page:${key}`);let alive=true;let busy=false;let before:string|undefined;let wanted:string|undefined=typeof restored==='string'?restored:undefined;let reread=false;
     const visible=()=>document.visibilityState!=='hidden'&&!document.body.classList.contains('legacy-on');
     const load=(cursor:string|null|undefined=wanted)=>{if(!alive||!visible())return;const desired=cursor===null?undefined:cursor;if(busy){if(wanted!==desired)generation.current++;wanted=desired;reread=true;return;}wanted=desired;busy=true;reread=false;const id=++generation.current;
       setPage(old=>({key,data:old.key===key?old.data:null,before:old.key===key?old.before:undefined,error:old.key===key?old.error:null,at:old.key===key?old.at:null,loading:true}));
-      void readPage(projectId,conversationId,desired).then(data=>{if(alive&&id===generation.current&&visible()){if(data.conversationId!==conversationId){setPage(old=>({...old,error:'任务列表回执不属于当前私信',loading:false}));return;}before=desired;setPage({key,data,before:desired,error:null,loading:false,at:Date.now()});setChosen(old=>old?.key===key?old:data.items[0]?{key,id:data.items[0].id}:null);}},(e:unknown)=>{if(alive&&id===generation.current&&visible())setPage(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{busy=false;if(alive&&reread&&visible())load();});};
+      void readPage(projectId,conversationId,desired).then(data=>{if(alive&&id===generation.current&&visible()){if(data.conversationId!==conversationId){setPage(old=>({...old,error:'任务列表回执不属于当前私信',loading:false}));return;}before=desired;saveReadingPosition(`dm-page:${key}`,desired??null);setPage({key,data,before:desired,error:null,loading:false,at:Date.now()});setChosen(old=>{if(old?.key===key)return old;const saved=readingPosition<string>(`dm-task:${key}`);return typeof saved==='string'?{key,id:saved}:data.items[0]?{key,id:data.items[0].id}:null;});}},(e:unknown)=>{if(alive&&id===generation.current&&visible())setPage(old=>({...old,error:e instanceof Error?e.message:String(e),loading:false}));}).finally(()=>{busy=false;if(alive&&reread&&visible())load();});};
     trigger.current=load;
     const visibility=()=>{if(visible())load();else{generation.current++;reread=true;}};
     document.addEventListener('visibilitychange',visibility);
@@ -31,14 +32,14 @@ export function DmTaskRecords({projectId,conversationId,onClose,onRetry,retryBus
     const timer=window.setInterval(()=>{if(!busy&&before===undefined)load();},5000);load();
     return()=>{alive=false;generation.current++;trigger.current=null;window.clearInterval(timer);observer.disconnect();document.removeEventListener('visibilitychange',visibility);};
   },[key,projectId,conversationId]);
-  const current=page.key===key?page:null;const taskId=chosen?.key===key?chosen.id:undefined;
+  const current=page.key===key?page:null;const remembered=readingPosition<string>(`dm-task:${key}`);const taskId=chosen?.key===key?chosen.id:typeof remembered==='string'?remembered:undefined;
   const row=current?.data?.items.find(x=>x.id===taskId);
   const options=current?.data?.items.map(t=>({value:t.id,label:t.title}))??[];
   if(taskId&&!options.some(o=>o.value===taskId))options.unshift({value:taskId,label:'继续查看当前任务（本页之外）'});
   return <Modal title="私信任务记录" subtitle="读取当前会话的任务、运行和版本；继续失败运行仍沿用正式快照合同。" size="lg" onClose={onClose}>
     <div data-zs-dm-task-records="1" className="thread-details" style={{height:'min(65vh,680px)',minHeight:240}}>
       <div className="row tight wrap" style={{padding:'8px 0'}}>
-        <Select value={taskId??''} options={options} ariaLabel="选择私信任务" onChange={id=>setChosen({key,id})}/>
+        <Select value={taskId??''} options={options} ariaLabel="选择私信任务" onChange={id=>{saveReadingPosition(`dm-task:${key}`,id);setChosen({key,id});}}/>
         {row?<TaskStatusTag status={row.status as Parameters<typeof TaskStatusTag>[0]['status']}/>:null}
         {current?.before?<button className="btn ghost sm" disabled={current.loading} onClick={()=>trigger.current?.(null)}>返回最近任务</button>:null}
         {current?.data?.nextCursor?<button className="btn ghost sm" disabled={current.loading} onClick={()=>trigger.current?.(current.data!.nextCursor!)}>加载更早任务</button>:null}
@@ -59,7 +60,7 @@ function DmTaskRecord({projectId,conversationId,taskId,revision,runStatus,onRetr
   return <>
     <div className="details-subnav" role="tablist" aria-label="私信任务详情分组">{[['overview','任务概况'],['run','运行详情'],['activity','活动与进展'],['delivery','交付历史']].map(([value,label])=><button key={value} className={`details-chip${section===value?' on':''}`} role="tab" aria-selected={section===value} onClick={()=>setSection(value!)}>{label}</button>)}</div>
     <div className="details-body">
-      <DetailReadState {...formal}/>
+      <DetailReadState {...formal} readingKey={`${formal.readingKey}:${section}`}/>
       {detail?<>
         <div className="card tight"><strong>{detail.task.title}</strong><TaskStatusTag status={detail.task.status as Parameters<typeof TaskStatusTag>[0]['status']}/></div>
         {section==='overview'?<><TaskExtraFacts detail={detail}/><ActualMembers detail={detail}/></>:null}

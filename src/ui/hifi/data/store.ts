@@ -165,7 +165,8 @@ export function getState(): HifiState { return state; }
 export function setState(updater: (prev: HifiState) => HifiState) {
   const old=state;state = updater(state);
   if(state.preview!==old.preview){
-    const preview={...state.preview,tabs:state.preview.tabs.slice(-12).map(t=>({...t,openedFrom:{target:t.openedFrom.target,...(t.openedFrom.messageId?{messageId:t.openedFrom.messageId}:{})}})),maximized:false};
+    const recent=state.preview.tabs.slice(-12);const active=state.preview.tabs.find(t=>t.key===state.preview.activeKey);if(active&&!recent.some(t=>t.key===active.key)){recent.shift();recent.unshift(active);}
+    const preview={...state.preview,tabs:recent.map(t=>({...t,openedFrom:{target:t.openedFrom.target,...(t.openedFrom.messageId?{messageId:t.openedFrom.messageId}:{})}})),maximized:false};
     const ids=new Set(preview.tabs.map(t=>t.resourceId));
     const resources=state.resources.filter(r=>ids.has(r.id)&&(r.formalAttachment||r.formalDelivery||r.formalWorktree)).map(r=>({...r,revisions:r.revisions.filter(v=>preview.tabs.some(t=>t.resourceId===r.id&&t.revision===v.revision)).map(v=>({...v,content:{kind:'unsupported',reason:'not_connected',note:'恢复阅读位置，需重新读取原件'}}))}));
     saveReadingPosition('preview',{preview,resources});

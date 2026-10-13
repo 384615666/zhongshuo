@@ -4,8 +4,8 @@
  * 与不同版本互不污染（键含资源 ID 与 revision）。迟到渲染只释放自身资源（各视图 effect
  * cleanup），不写他人状态。
  *
- * 存放=模块级 Map（会话内存——与 tab.scrollTop 同生命周期；不进持久化快照：重开应用按
- * 既有合同回到首屏，不承诺跨重启恢复阅读位置）。
+ * R80：数据根命名空间中的有界阅读元数据；恢复仍重新读取原件与权限。显式关闭标签清位置。
+ * 未初始化的独立宿主保留最多64项会话内存，不保存图片或正文。
  */
 export type ReaderState =
   | { kind: 'image'; zoom: number; x: number; y: number }
