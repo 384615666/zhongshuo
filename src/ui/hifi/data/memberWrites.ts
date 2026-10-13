@@ -6,7 +6,7 @@ export interface MemberWrite {
     method: string;
     params: Record<string, unknown>;
 }
-const allowed = new Set(['member.create', 'member.update', 'member.setRuntime', 'member.setEnabled', 'memberTemplate.saveFromMember', 'memberTemplate.update', 'memberTemplate.createMember']);
+const allowed = new Set(['project.writeAccess.set','member.create', 'member.update', 'member.setRuntime', 'member.setEnabled', 'memberTemplate.saveFromMember', 'memberTemplate.update', 'memberTemplate.createMember']);
 const busy = new Set<string>();
 const confirmed = new Map<string, 'ok' | 'failed'>();
 export let memberWriteStorageError: string | null = null;

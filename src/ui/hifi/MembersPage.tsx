@@ -465,16 +465,14 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
             ariaLabel="权限模式"
             onChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}
             options={[
-              { value: '', label: '（默认）' },
-              { value: 'plan', label: 'plan' },
-              { value: 'manual', label: 'manual' },
-              { value: 'acceptEdits', label: 'acceptEdits' },
-              { value: 'auto', label: 'auto' },
-              { value: 'dontAsk', label: 'dontAsk' },
-              { value: 'bypassPermissions', label: 'bypassPermissions' },
+              { value: '', label: '默认：只读' },
+              { value: 'plan', label: 'plan：只读分析' },
+              { value: 'acceptEdits', label: 'acceptEdits：项目授权后文件编辑' },
+              { value: 'dontAsk', label: 'dontAsk：同一项目文件编辑边界' },
+              ...(['manual','auto','bypassPermissions'].includes(form.permissionMode)?[{value:form.permissionMode,label:`${form.permissionMode}（旧配置保留，实际只读）`}]:[]),
             ]}
           />
-          <div className="field-hint">{form.kind==='codex'?'Codex 正式执行保持 read-only，审批 never；此权限档仅保存，尚未映射。':'Claude 留空时正式 CLI 请求 plan；保存与实际工具权限认证分别判定。'}</div>
+          <div className="field-hint">默认只读。文件编辑还需在项目设置明确授权；Claude 使用 restricted 文件工具，Codex 使用项目沙箱。保存配置不等于渠道认证；Shell、网络工具、委派与全盘访问未开放。</div>
         </label>
       </div>
     </Modal>

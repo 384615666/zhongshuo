@@ -18,7 +18,7 @@ const EMPTY: never[] = [];
 /** 正式侧能力锁定（第四十七轮）：未接通的能力点击前禁用并说明。 */
 const FORMAL_LIMITS = {
   method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链（H3）——当前按项目默认方式派发',
-  access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——当前按成员默认权限执行',
+  access: '实际执行权限由明确项目授权与成员配置共同决定；发送前显示回读事实，派发前服务端复查',
 } as const;
 
 const TASK_STATUS: Record<string, { label: string; tone: 'success' | 'info' | 'neutral' | 'warning' }> = {

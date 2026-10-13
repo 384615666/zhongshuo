@@ -47,6 +47,7 @@ interface JsonRpcRequest {
 type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 
 interface SessionState {
+  writeAccess?: OpenSessionInput['writeAccess'];
   ref: SessionRef;
   stream: EventStream;
   providerThreadId: string;
@@ -455,6 +456,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
+    if(input.writeAccess?.modificationAuthorized && (this.options.sandboxMode!=='workspace-write' || input.writeAccess.allowedWriteRoots.length!==1 || input.writeAccess.allowedWriteRoots[0]!==input.cwd)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目写入范围与成员权限不匹配');
     this.ensureProcess();
     if (!this.handshakeDone) {
       await this.request('initialize', {
@@ -466,7 +468,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     }
     const threadParams: Record<string, unknown> = {
       cwd: input.cwd,
-      sandbox: this.options.sandboxMode,
+      sandbox: input.writeAccess?.modificationAuthorized ? 'workspace-write' : 'read-only',
       approvalPolicy: this.options.approvalPolicy ?? 'never',
     };
     if (this.options.model != null && this.options.model.length > 0) threadParams['model'] = this.options.model;
@@ -485,6 +487,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       cwd: input.cwd,
     };
     const state: SessionState = {
+      writeAccess: input.writeAccess,
       ref,
       stream: new EventStream(),
       providerThreadId,
@@ -508,6 +511,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         threadId: state.providerThreadId,
         input: providerInput,
         clientUserMessageId: input.dispatchKey,
+        sandboxPolicy:state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
+        approvalPolicy:'never',
       },
       (r) => {
         // 响应解析同步点：立即固化映射（同 chunk 的通知随后处理时即可命中）。

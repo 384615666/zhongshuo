@@ -110,6 +110,8 @@ export interface ProbeResult {
 }
 
 export interface OpenSessionInput {
+  /** Effective immutable project/member scope; absent remains read-only. */
+  writeAccess?: { modificationAuthorized: boolean; allowedWriteRoots: string[]; identityKey: string; launchConfigurationKey?: string };
   projectId: string;
   memberId: string;
   taskId: string;

@@ -13,6 +13,7 @@ import { useStore, toast } from '../shell';
 import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, collabSet, stopAllProjectReal } from '../loader';
 import { navigate } from '../lib/router';
 import { command } from '../bridge';
+import { ProjectWriteAccessPanel } from '../components/ProjectWriteAccessPanel';
 
 export type ProjectSettingsAnchor = 'collab' | 'write' | 'delivery';
 
@@ -283,7 +284,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
               <div className="pset-note">
                 并行写入策略（§14.7）在正式合同中延期——本节只读呈现当前策略，不提供切换（不伪造可配置）。
               </div>
-              <div className="pset-status">当前没有任务在修改文件时，这里不显示占用（写入占用见房间主池一行）。</div>
+              <ProjectWriteAccessPanel key={projectId} projectId={projectId} name={project.displayName} path={project.rootPath??''}/>
             </div>
           </section>
 

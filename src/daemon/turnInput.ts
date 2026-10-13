@@ -4,6 +4,7 @@
  * 渲染全文敏感扫描零命中（PP-03）；信封与渲染文本、hash 由本函数一并产出（PP-04）。
  */
 import type { TurnRequest } from '../contracts/runtime.ts';
+import type { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { createHash } from 'node:crypto';
 import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
 import { validateExtractCache, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
@@ -113,6 +114,7 @@ export interface AssembledTurnInput {
   /** 本次 appData 的托管存储根（{appData}/blobstore——第二十八轮三：附件读取按实际根校验路径越界）。 */
   blobRoot?: string;
   allowImages?: boolean;
+  writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
   turnId: string;
@@ -250,13 +252,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
     },
-    permission: {
-      tier: 'plan',
-      intent: 'analyze',
-      policyId: 'policy-analyze',
-      modificationAuthorized: false,
-      allowedWriteRoots: [],
-    },
+    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
       taskId: task.id,
       threadId: task.threadId,
@@ -450,13 +446,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
     },
-    permission: {
-      tier: 'plan',
-      intent: 'analyze',
-      policyId: 'policy-analyze',
-      modificationAuthorized: false,
-      allowedWriteRoots: [],
-    },
+    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
       taskId: task.id,
       threadId: null, // DM 无线程（R4 §2.2）

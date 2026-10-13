@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
+import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
@@ -144,7 +145,10 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const installation = binding.installationId == null ? null
     : (db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
   const effective = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
-  const permissionExecution=effective.kind==='codex'?{effective:'read-only',reason:'正式 Codex adapter 固定只读，审批 never；保存的权限档尚未映射，不提升权限或宣称认证'}:effective.kind==='claude'?{effective:binding.permissionMode??'plan',reason:'正式 Claude CLI 请求的权限档；工具权限限制认证另行判定'}:null;
+  const owner=db.prepare('SELECT project_id FROM project_members WHERE id=?').get(memberId) as {project_id:string};
+  const access=projectWriteAccess(db,owner.project_id);
+  const editable=access.authorized && ['acceptEdits','dontAsk'].includes(binding.permissionMode??'');
+  const permissionExecution=['codex','claude'].includes(effective.kind??'')?{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':!access.authorized?'项目尚未明确授权；保存的成员权限不会自动提权。':'成员仍为只读权限档；可明确选择文件编辑档。'}:null;
   return { binding, installation, permissionExecution, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
@@ -785,6 +789,31 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     const management = memberManagementCommand(deps.db, env.method, env.params, run, (code,message) => { throw new DaemonCommandError(code,message); }, deps.remoteAudit != null);
     if (management != null) return withCommandId({ok:true,...management});
     switch (env.method) {
+      case 'project.writeAccess.get': {
+        if(deps.remoteAudit) throw new DaemonCommandError('FORBIDDEN','项目写入授权仅限本机');
+        const p=z.strictObject({projectId:z.string().min(1)}).parse(env.params);
+        if(!deps.db.prepare('SELECT 1 FROM projects WHERE id=?').get(p.projectId)) throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
+        return withCommandId({ok:true,data:projectWriteAccess(deps.db,p.projectId)});
+      }
+      case 'project.writeAccess.set': {
+        if(deps.remoteAudit) throw new DaemonCommandError('FORBIDDEN','项目写入授权仅限本机明确操作');
+        const p=z.strictObject({projectId:z.string().min(1),expectedRevision:z.number().int().nonnegative(),authorized:z.boolean()}).parse(env.params);
+        const result=run(()=>{
+          const project=deps.db.prepare('SELECT status,canonical_path,root_path FROM projects WHERE id=?').get(p.projectId) as {status:string;canonical_path:string;root_path:string}|undefined;
+          if(!project) throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
+          if(project.status!=='active') throw new DaemonCommandError('FORBIDDEN','归档、移除或失效项目不能变更写入授权');
+          const current=projectWriteAccess(deps.db,p.projectId);
+          if(current.revision!==p.expectedRevision) throw new DaemonCommandError('STALE_REVISION','写入授权已变化，请回读后重新决定');
+          const held=deps.db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id WHERE t.project_id=? AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN') OR a.protection_state='retained') LIMIT 1`).get(p.projectId);
+          if(held) throw new DaemonCommandError('WORKER_STILL_RUNNING','仍有运行或结果未知：请先明确停止并确认退出，再变更授权；未自动停止或重发');
+          const root=realpathSync.native(project.canonical_path);
+          if(realpathSync.native(project.root_path)!==root) throw new DaemonCommandError('FORBIDDEN','项目入口的物理目录已变化，请先重新定位并核对目标');
+          if(p.authorized && root.replace(/[\\/]+$/,'')===resolve(root,'..').replace(/[\\/]+$/,'')) throw new DaemonCommandError('FORBIDDEN','不能授权整盘根目录，请打开明确项目子目录');
+          deps.db.prepare(`INSERT INTO project_write_authorizations(project_id,authorized,canonical_root,physical_identity,revision,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET authorized=excluded.authorized,canonical_root=excluded.canonical_root,physical_identity=excluded.physical_identity,revision=excluded.revision,updated_at=excluded.updated_at`).run(p.projectId,p.authorized?1:0,root,physicalRootIdentity(root),current.revision+1,Date.now());
+          return projectWriteAccess(deps.db,p.projectId);
+        });
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
+      }
       case 'project.list': {
         // R65（review-r64 §1A）：注册表只读——多项目前端集合的事实源（此前 UI 只装当前单个，
         // 误标「无多项目注册表」）。status 原样（active/archived/directory_missing/removed）；
@@ -872,6 +901,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (params.action === 'relocate') {
             if (params.newRootPath == null) throw new DaemonCommandError('VALIDATION_INVALID', 'relocate 需要 newRootPath');
             if (!existsSync(params.newRootPath)) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `新目录不存在：${params.newRootPath}`);
+            if(deps.db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id WHERE t.project_id=? AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN') OR a.protection_state='retained') LIMIT 1`).get(params.projectId)) throw new DaemonCommandError('WORKER_STILL_RUNNING','运行或退出未确认时不能重定位项目；先明确停止并确认退出');
           }
           if (params.action === 'relocate') {
             const newPath = resolve(params.newRootPath ?? '');
@@ -880,6 +910,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           } else {
             deps.db.prepare('UPDATE projects SET status = ?, revision = revision + 1 WHERE id = ?').run(nextStatus, params.projectId);
           }
+          if(['archive','remove','relocate'].includes(params.action)) deps.db.prepare('UPDATE project_write_authorizations SET authorized=0,revision=revision+1,updated_at=? WHERE project_id=?').run(Date.now(),params.projectId);
           const after = deps.db.prepare('SELECT id, status, revision FROM projects WHERE id = ?').get(params.projectId) as { id: string; status: string; revision: number };
           return { project: after };
         });
@@ -1266,6 +1297,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         return withCommandId({ ok: true, data: env.method === 'task.history' ? readTaskHistory(deps.db, taskHistoryParamsSchema.parse(env.params)) : readTaskDetails(deps.db, params.taskId, params.runId) });
       }
+      case 'message.writeCapability':
       case 'message.imageCapability': {
         const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);
         const target = params.target;
@@ -1284,6 +1316,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const route = resolveTopLevelRoute({ intent: 'default', mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
           if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode === 'DIRECT'; }
+        }
+        if(env.method==='message.writeCapability') {
+          const grant=projectWriteAccess(deps.db,target.projectId);
+          const project=deps.db.prepare('SELECT canonical_path,root_path,status FROM projects WHERE id=?').get(target.projectId) as {canonical_path:string;root_path:string;status:string};
+          let reason=!willDispatch?'线程跟进仅保存记录':!direct?'当前仅支持指定成员的 DIRECT 派发':!grant.authorized?'项目默认只读，尚未明确授权':null;
+          if(!reason)try{if(project.status!=='active'||realpathSync.native(project.root_path)!==grant.root||physicalRootIdentity(project.canonical_path)!==grant.physicalIdentity)reason='项目目录身份已变化或不可用';}catch{reason='授权目录不可读取，未开放写入';}
+          if(!reason && (!members.length||members.some(id=>{const r=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return !['claude','codex','fake'].includes(r.kind??'')||!['acceptEdits','dontAsk'].includes(r.permissionMode??'');}))) reason='执行成员仍为只读权限档';
+          return withCommandId({ok:true,data:{willDispatch,modificationAuthorized:reason==null,reason:reason??'项目内文件编辑；Shell、网络工具与委派未开放，派发前再次核对授权与配置'}});
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
         return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || direct && capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
@@ -1383,6 +1423,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
               attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+              snapshotTaskWriteAccess(deps.db,r.taskId);
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -1432,6 +1473,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
+            snapshotTaskWriteAccess(deps.db,ids.taskId);
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
             return created.value;
           })();

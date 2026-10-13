@@ -277,6 +277,7 @@ describe('启动路径安全（用户令 2026-09-28：用户文本不经 shell/a
     expect(seenArgs).toEqual([['-p', '--output-format', 'stream-json', '--verbose', '--model', 'deepseek-flash',
       '--permission-mode', 'plan', '--permission-prompts', 'none',
       '--allowedTools', 'Read,Glob,Grep',
+      '--tools', 'Read,Glob,Grep',
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands']]);
     expect(proc._stdinText()).toBe(nasty); // 字节级原样：不转义、不二次解释

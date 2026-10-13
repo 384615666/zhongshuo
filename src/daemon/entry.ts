@@ -223,7 +223,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }
       const { resolveClaudeExecutable, resolveClaudeConfiguration } = claudeCliMod;
       return (executable: string | undefined) => (args: string[], cwd: string) =>
-        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd, env: resolveClaudeConfiguration(cwd).env }) as never;
+        spawnManagedBridge(resolveClaudeExecutable(executable).command, [...resolveClaudeExecutable(executable).prefixArgs, ...args], { cwd, env: args.includes('--restricted') ? resolveClaudeConfiguration(cwd).restrictedEnv : resolveClaudeConfiguration(cwd).env }) as never;
     })();
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
@@ -249,6 +249,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
         model: binding.model ?? process.env.ZS_E2E_MODEL,
         executable:binding.executable??undefined,
+        sandboxMode:['acceptEdits','dontAsk'].includes(binding.permissionMode??'')?'workspace-write':'read-only',
         ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
       }), 'codex', dbForLedger, binding.model ?? defaultModelFor('codex')),
       claude: (binding) => wrapRealCallLedger(new ClaudeCliAdapter(

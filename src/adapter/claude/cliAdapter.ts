@@ -35,7 +35,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolveClaudeConfiguration } from './configuration.ts';
 export { resolveClaudeConfiguration } from './configuration.ts';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join,relative } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { AdapterProcessIdentity } from '../../contracts/runtime.ts';
 import type {
@@ -192,6 +192,7 @@ interface QueuedEvent {
 }
 
 interface SessionState {
+  writeAccess?: OpenSessionInput['writeAccess'];
   ref: SessionRef;
   /** 当前 turn 进程与事件缓冲（进程模型：单会话内串行 turn）。 */
   active: ActiveTurn | null;
@@ -260,7 +261,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const context = resolveClaudeConfiguration(cwd, options.extraArgs);
       return spawn(entry.command, [...entry.prefixArgs, ...args], {
         cwd,
-        env: context.env, // Preserve all actual CLI sources; never force settings to match a certificate.
+        env: args.includes('--restricted') ? context.restrictedEnv : context.env,
         shell: false,
         windowsHide: true,
       }) as ChildProcessWithoutNullStreams;
@@ -307,7 +308,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       sessionGeneration: input.sessionGeneration,
       cwd: input.cwd,
     };
-    this.sessions.set(id, { ref, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
+    this.sessions.set(id, { ref, writeAccess: input.writeAccess, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
     return ref;
   }
 
@@ -335,12 +336,25 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     // - --disable-slash-commands：禁用技能。
     // 注：--restricted 能移除执行类内置工具，但会忽略 user settings（渠道 env/凭据在其中）——不可用。
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', model,
-      '--permission-mode', this.options.permissionMode ?? 'plan',
+      '--permission-mode', 'plan',
       '--permission-prompts', 'none',
       '--allowedTools', 'Read,Glob,Grep',
+      '--tools', 'Read,Glob,Grep',
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
+    if (state.writeAccess?.modificationAuthorized) {
+      if(state.writeAccess.allowedWriteRoots.length!==1 || state.writeAccess.allowedWriteRoots[0]!==session.cwd || !['acceptEdits','dontAsk'].includes(this.options.permissionMode??'') || this.options.extraArgs?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入范围或成员权限不匹配，未启动');
+      const context=resolveClaudeConfiguration(session.cwd);
+      if(context.reason) throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`不能核实受限执行的实际渠道：${context.reason}`);
+      if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入启动配置已变化，未启动模型');
+      // Restricted file tools enforce physical working-directory boundaries; no shell/MCP/delegation.
+      args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,
+        '--restricted','--permission-mode','dontAsk','--permission-prompts','none',
+        '--tools','Read,Glob,Grep,Write,Edit','--allowedTools','Read,Glob,Grep,Write,Edit',
+        '--disallowedTools','Bash,PowerShell,REPL,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,mcp__*',
+        '--strict-mcp-config','--bare','--disable-slash-commands');
+    }
     if (payload.stream) args.push('--input-format', 'stream-json');
     const resumeId = state.providerSessionId ?? state.resumeRequested;
     if (resumeId != null) {
@@ -605,10 +619,18 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       }
       // 工具事件（2.x stream-json 的 tool_use 块在 assistant 消息内）：只读档下理论不触发；
       // 出现则按块映射 tool.started/completed（outcome unknown——CLI 不回传工具结果状态）。
-      const toolBlocks = (message?.content ?? []).filter((c): c is { type: string; name?: string; id?: string } => c.type === 'tool_use');
+      const toolBlocks = (message?.content ?? []).filter((c): c is { type: string; name?: string; id?: string;input?:{file_path?:string;path?:string} } => c.type === 'tool_use');
       for (const block of toolBlocks) {
-        this.pushEvent(state, turn, { kind: 'tool.started', toolCallId: block.id ?? randomUUID().slice(0, 8), toolName: block.name ?? 'unknown', argumentsSummary: '', ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
-        this.pushEvent(state, turn, { kind: 'tool.completed', toolCallId: block.id ?? 'unknown', outcome: 'unknown', ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+        const path=block.input?.file_path??block.input?.path;
+        this.pushEvent(state, turn, { kind: 'tool.started', toolCallId: block.id ?? randomUUID().slice(0, 8), toolName: block.name ?? 'unknown', argumentsSummary: typeof path==='string'?JSON.stringify({path:relative(state.ref.cwd,path).slice(0,400)}):'', ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+      }
+      return;
+    }
+    if(type==='user') {
+      const message=parsed['message'] as {content?:Array<{type:string;tool_use_id?:string;is_error?:boolean;content?:unknown}>}|undefined;
+      for(const block of message?.content??[])if(block.type==='tool_result'&&block.tool_use_id) {
+        const denied=block.is_error===true && /permission|outside|restricted|denied|权限|拒绝|工作目录/i.test(JSON.stringify(block.content));
+        this.pushEvent(state,turn,{kind:'tool.completed',toolCallId:block.tool_use_id,outcome:block.is_error?'failure':'success',resultRef:denied?'permission-denied':block.is_error?'tool-error':'tool-success',...this.baseEvent(state,turn,`tool-result:${block.tool_use_id}`)});
       }
       return;
     }

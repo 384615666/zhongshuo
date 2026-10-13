@@ -69,7 +69,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   let channel = '无法确定';
   try { const url = new URL(endpoint); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('invalid endpoint'); channel = `${url.origin}${url.pathname.replace(/\/$/, '')}`; } catch { reasons.push('有效 endpoint 无效或包含私密参数'); }
   const routing = Object.entries(env).filter(([key]) => routingKey.test(key)).sort(([a], [b]) => a.localeCompare(b));
-  return { env: { ...inherited }, configDir, cwd: resolve(cwd), endpointHash: digest(endpoint), channel: reasons.length ? `无法确定（候选用户渠道：${channel}）` : channel, endpointSource, sources,
+  return { env: { ...inherited }, restrictedEnv: env, configDir, cwd: resolve(cwd), endpointHash: digest(endpoint), channel: reasons.length ? `无法确定（候选用户渠道：${channel}）` : channel, endpointSource, sources,
     reason: [...new Set(reasons)].join('；') || null,
     configurationKey: digest(JSON.stringify({ configDir, cwd: resolve(cwd), stamps, routing, extraArgs })),
   };

@@ -402,6 +402,22 @@ export function Composer({
   const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
     mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
+  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions});
+  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;reason:string;readAt:number;error?:string}|null>(null);
+  useEffect(()=>{
+    if(!formalLimits?.access||sendAs!=='ai')return;
+    let cancelled=false,reading=false;
+    const read=async()=>{
+      if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
+      const conversationId=attachmentUpload?.conversationId??target.dmId??'';
+      const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
+      try{const c=await command<{modificationAuthorized:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,reason:c.reason,readAt:Date.now()});}
+      catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
+      finally{reading=false;}
+    };
+    void read();const timer=window.setInterval(()=>void read(),5000),visible=()=>void read();document.addEventListener('visibilitychange',visible);
+    return()=>{cancelled=true;window.clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
+  },[writeContext,draftKey,sendAs,formalLimits?.access]);
   useEffect(() => {
     if (!attachments.some(a => a.status === 'ready' && a.kind === 'image_file')) return;
     let cancelled = false; let reading = false;
@@ -975,6 +991,7 @@ export function Composer({
           @全体/多人（DELIBERATE）发送后任务会立即受阻（服务端同文案 mode_unavailable_in_m0，
           任务与消息保留、可补发指派）。发送前就说清楚并给可用动作：不静默改目标、不禁发送、
           不开放 AUTO 来消除受阻——模式边界保持。 */}
+      {sendAs==='ai'&&writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip record-chip">{writeHint.error}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
           <span className="chip record-chip" title={runtimeHint.text}>
@@ -1331,10 +1348,10 @@ export function Composer({
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
                   disabled={Boolean(inputDisabledReason) || Boolean(formalLimits?.access)}
                   onClick={() => setAccessOpen((v) => !v)}
-                  title={formalLimits?.access ?? inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
+                  title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {currentMode.label}
+                  {formalLimits?.access ? writeHint?.key===writeContext&&writeHint.readAt ? writeHint.authorized?'项目内文件编辑':'只读 / 记录' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 

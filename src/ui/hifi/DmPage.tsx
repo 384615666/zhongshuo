@@ -36,7 +36,7 @@ const EXEC_TEXT: Record<string, string> = {
 };
 const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
-  access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——私信按成员默认权限执行',
+  access: '实际执行权限由明确项目授权与成员配置共同决定；发送前显示回读事实，派发前服务端复查',
 } as const;
 
 export function DmPage() {

@@ -267,14 +267,14 @@ describe('R81 formal member and independent configuration template contracts', (
             cpSync(f.data, copied, { recursive: true });
             const backup = join(copied, 'backups');
             const upgraded = openDatabase(join(copied, 'state.sqlite'), { backupDir: backup });
-            expect(upgraded.pragma('user_version', { simple: true })).toBe(49);
+            expect(upgraded.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
             expect(upgraded.prepare('SELECT * FROM project_members ORDER BY id').all()).toEqual(before);
             expect(readFileSync(join(copied, 'draft-evidence.json'), 'utf8')).toBe('engineering draft only');
             upgraded.close();
             const old = new Database(join(copied, 'state.sqlite'));
             try {
                 expect(() => migrate(old, {}, MIGRATIONS.filter(m => m.id <= 48))).toThrow('SCHEMA_VERSION_UNSUPPORTED');
-                expect(old.pragma('user_version', { simple: true })).toBe(49);
+                expect(old.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
             }
             finally {
                 old.close();
