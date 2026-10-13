@@ -1,7 +1,7 @@
 /* global require,process,console,__dirname */
 /* eslint-disable @typescript-eslint/no-require-imports -- offline release evidence audit */
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),cp=require('node:child_process');
-const root=path.resolve(__dirname,'..'),name=process.argv[2]??'desktop-daily-win-v21-rc5';
+const root=path.resolve(__dirname,'..'),name=process.argv[2]??'desktop-daily-win-v21-rc6';
 const pkg=path.join(root,'dist/desktop',name),suffix=name.replace('desktop-daily-win-',''),prefix=`dist/desktop/review-r82-${suffix}`;
 const sha=p=>crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');
 const json=p=>JSON.parse(fs.readFileSync(path.join(root,p),'utf8'));
@@ -39,8 +39,8 @@ const cancelLog=fs.readFileSync(path.join(root,`dist/r82-${suffix.split('-').at(
 const readLog=JSON.parse(fs.readFileSync(path.join(root,`dist/r82-${suffix.split('-').at(-1)}-launcher-regression.log`),'utf8'));gate('same final BUILD stable attachments/actual image decode/original hash/ordinary reopen',readLog.ok===true&&readLog.facts.buildId===build.buildId,{facts:readLog.facts});
 evidence.push({path:`dist/r82-${suffix.split('-').at(-1)}-launcher-regression.log`,sha256:sha(`dist/r82-${suffix.split('-').at(-1)}-launcher-regression.log`)});
 const strict=add('dist/r82-real-glm-create-boundary-20261013/result.json');gate('original real adjacent and junction native write refusal evidence',strict.pass&&strict.denied===2&&strict.outsideExists===false&&strict.junctionOutputExists===false&&strict.originalPreserved===true,{model:strict.model,version:strict.version,denied:strict.denied});
-const suite=fs.readFileSync(path.join(root,'dist/r82-suite-stage12.log'),'utf8');gate('source tests and both type checks',/Tests\s+1015 passed/.test(suite)&&/Test Files\s+144 passed/.test(suite)&&!(/error TS/.test(fs.readFileSync(path.join(root,'dist/r82-diff-main-type.log'),'utf8')+fs.readFileSync(path.join(root,'dist/r82-diff-ui-type.log'),'utf8'))),{tests:1015,files:144,excluded:'existing external githubSandbox; not recertified'});
-const lint=add('dist/r82-lint-stage9.json');gate('changed-file lint has no additional errors',lint.pass,{files:lint.files.length});
+const suite=fs.readFileSync(path.join(root,'dist/r82-suite-stage13.log'),'utf8');gate('source tests and both type checks',/Tests\s+1017 passed/.test(suite)&&/Test Files\s+145 passed/.test(suite)&&!(/error TS/.test(fs.readFileSync(path.join(root,'dist/r82-diff-main-type.log'),'utf8')+fs.readFileSync(path.join(root,'dist/r82-diff-ui-type.log'),'utf8'))),{tests:1017,files:145,excluded:'existing external githubSandbox; not recertified'});
+const lint=add('dist/r82-lint-stage10.json');gate('changed-file lint has no additional errors',lint.pass,{files:lint.files.length});
 const frozen=cp.execFileSync('git',['diff','411932e','--name-only','--','src/persistence/migrations'],{cwd:root,encoding:'utf8'}).trim().split(/\r?\n/).filter(Boolean);gate('001-049 migrations stay frozen',frozen.every(p=>p.endsWith('050-project-write-authorization.ts')||p.endsWith('registry.ts')),{changed:frozen});
 const unique=new Map(),origins=[];
 for(const n of ['review-r82-stage1-real-flow-20261013','review-r82-stage1-real-flow-2-20261013','review-r82-stage1-real-continue-20261013','review-r82-v21-real-release-20261013','review-r82-v21-rc2-real-release-20261013','review-r82-v21-rc3-real-release-20261013','review-r82-v21-rc4-real-release-20261013',`review-r82-${suffix}-real-release-20261013`]) {

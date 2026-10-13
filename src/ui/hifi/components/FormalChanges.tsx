@@ -44,7 +44,7 @@ export function FormalChangeDetail({projectId,entry}:{projectId:string;entry?:Fo
       {data.files.length===0?<div className="small faint">{entry.afterRef?'本次确认没有文件内容变化。':'改动后快照尚未定型，不推断没有变化。'}</div>:null}
       {data.files.map(f=><div key={f.path} className="card tight" style={{marginTop:8}}><button className="btn ghost sm" data-zs-change-path={f.path} onClick={()=>setChosen(f.path)}>{f.path} · {({added:'新增',removed:'删除',modified:'修改',unknown:'无法判断'} as Record<string,string>)[f.change]}</button><details className="small faint"><summary>文件hash</summary>前：{f.beforeHash??'未提供'}<br/>后：{f.afterHash??'未提供'}</details></div>)}
       {data.truncated?<div className="small faint">仅显示前100个路径，未冒充完整改动。</div>:null}
-      {data.content?.path===chosen?<div data-zs-change-content={chosen} style={{marginTop:12}}><strong>{chosen} · 前后内容</strong>{(['before','after'] as const).map(side=><div key={side}><div className="small faint">{side==='before'?'修改前快照':'修改后快照'} · {data.content![side].reason??'hash已核验的UTF-8文本'}</div>{data.content![side].text!=null?<pre style={{maxHeight:240,overflow:'auto',whiteSpace:'pre',border:'1px solid var(--border)',padding:8}}>{data.content![side].text}</pre>:null}</div>)}</div>:null}
+      {data.content&&data.content.path===chosen?<div data-zs-change-content={chosen} style={{marginTop:12}}><strong>{chosen} · 前后内容</strong>{(['before','after'] as const).map(side=><div key={side}><div className="small faint">{side==='before'?'修改前快照':'修改后快照'} · {data.content![side].reason??'hash已核验的UTF-8文本'}</div>{data.content![side].text!=null?<pre style={{maxHeight:240,overflow:'auto',whiteSpace:'pre',border:'1px solid var(--border)',padding:8}}>{data.content![side].text}</pre>:null}</div>)}</div>:null}
     </>}
   </div>;
 }
