@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
-import {mkdtempSync,mkdirSync,readFileSync,renameSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,renameSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -75,7 +75,25 @@ describe('R82 explicit project write contracts (isolated fake/protocol, zero rea
     expect(readFileSync(join(f.a,'工程结果.md'),'utf8')).toBe('FAKE ENGINEERING ONLY');
     const cs=f.db.prepare('SELECT after_ref,application_status FROM change_sets WHERE task_id=?').get(t.taskId) as {after_ref:string;application_status:string};expect(cs.after_ref).not.toBe('');expect(cs.application_status).toBe('applied');
     const d=f.db.prepare('SELECT change_set_refs_json FROM task_deliveries WHERE task_id=?').get(t.taskId) as {change_set_refs_json:string};expect(JSON.parse(d.change_set_refs_json)).toHaveLength(1);
+    const setId=JSON.parse(d.change_set_refs_json)[0] as string;
+    const page=await f.raw('files.view',{scope:'project',projectId:f.p});expect(JSON.stringify(page.data)).toContain(setId);
+    const preview=await f.raw('changeset.readSnapshot',{projectId:f.p,taskId:t.taskId,changeSetId:setId,path:'工程结果.md'});
+    expect(preview.ok).toBe(true);expect(JSON.stringify(preview.data)).toContain('FAKE ENGINEERING ONLY');
+    if(!dm){
+      const file=f.db.prepare("SELECT content_ref FROM change_set_files WHERE change_set_id=? AND role='after' AND path=?").get(setId,'工程结果.md') as {content_ref:string};
+      const stored=join(f.data,'preimages',f.p,file.content_ref),original=readFileSync(stored);writeFileSync(stored,'CORRUPTED OWN TEST PREIMAGE');
+      const bad=await f.raw('changeset.readSnapshot',{projectId:f.p,taskId:t.taskId,changeSetId:setId,path:'工程结果.md'});expect(bad.ok).toBe(true);expect(JSON.stringify(bad.data)).toContain('核对失败');expect(JSON.stringify(bad.data)).not.toContain('CORRUPTED OWN TEST PREIMAGE');writeFileSync(stored,original);
+    }
+    expect((await f.raw('changeset.readSnapshot',{projectId:f.q,taskId:t.taskId,changeSetId:setId})).error?.code).toBe('RESOURCE_NOT_FOUND');
+    const other=await dispatchDaemonCommand({db:f.db,localUserId:'other-human',appDataDir:f.data,interruptTurn:async()=>{}},{protocolVersion:1,commandId:randomUUID(),method:'changeset.readSnapshot',params:{projectId:f.p,taskId:t.taskId,changeSetId:setId}}) as Reply;
+    if(dm){expect(other.ok).toBe(false);const privateList=await dispatchDaemonCommand({db:f.db,localUserId:'other-human',appDataDir:f.data,interruptTurn:async()=>{}},{protocolVersion:1,commandId:randomUUID(),method:'files.view',params:{scope:'project',projectId:f.p}});expect(JSON.stringify(privateList)).not.toContain(setId);}else expect(other.ok).toBe(true);
     expect(f.db.prepare("SELECT 1 FROM workspace_leases WHERE status!='released'").get()).toBeUndefined();
+  }finally{f.db.close();}});
+  it('snapshot content has a strict per-side byte budget; no full content returned above it',async()=>{const f=await fixture();try{
+    await f.grant(true,0);const t=await f.send();const adapter=new FakeRuntimeAdapter({turnScripts:[[{kind:'writeFile',path:'bounded.txt',content:'x'.repeat(256*1024+1)},{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',changeSummary:'独立容量工程夹具',files:['bounded.txt'],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}]]});
+    const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r82-budget',appDataDir:f.data});for(let n=0;n<8&&await worker.runOnce();n++);
+    const cs=f.db.prepare('SELECT id FROM change_sets WHERE task_id=?').get(t.taskId) as {id:string};
+    const r=await f.raw('changeset.readSnapshot',{projectId:f.p,taskId:t.taskId,changeSetId:cs.id,path:'bounded.txt'});expect(r.ok).toBe(true);expect(JSON.stringify(r.data)).toContain('256 KiB');expect(JSON.stringify(r.data).length).toBeLessThan(4096);
   }finally{f.db.close();}});
   it('revocation invalidates frozen task; changing member config does not silently elevate',async()=>{const f=await fixture();try{
     await f.grant(true,0);const t=await f.send();expect(effectiveTaskWriteAccess(f.db,t.taskId,f.member,'fake').modificationAuthorized).toBe(true);

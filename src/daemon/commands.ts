@@ -1972,6 +1972,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (!r.ok) throw new DaemonCommandError(r.error.code, r.error.message);
         return withCommandId({ ok: true, data: r.value });
       }
+      case 'changeset.readSnapshot': {
+        const params=z.strictObject({projectId:z.string().min(1),taskId:z.string().min(1),changeSetId:z.string().min(1),path:z.string().min(1).max(4096).optional()}).parse(env.params);
+        const target=deps.db.prepare('SELECT t.conversation_id FROM change_sets cs JOIN tasks t ON t.id=cs.task_id WHERE cs.id=? AND cs.project_id=? AND t.project_id=? AND t.id=?').get(params.changeSetId,params.projectId,params.projectId,params.taskId) as {conversation_id:string}|undefined;
+        if(!target)throw new DaemonCommandError('RESOURCE_NOT_FOUND','改动集不属于此项目/任务');
+        assertConversationAudience(deps.db,deps.localUserId,target.conversation_id);
+        if(!deps.appDataDir)throw new DaemonCommandError('STORAGE_UNAVAILABLE','前像存储未提供');
+        const {readChangeSnapshot}=await import('./changeSnapshot.ts');
+        return withCommandId({ok:true,data:readChangeSnapshot(deps.db,deps.appDataDir,params.projectId,params.taskId,params.changeSetId,params.path)});
+      }
       case 'changeset.listByTask': {
         // DEV-14（第八轮增强）：任务串的变更记录清单——application_status+文件级 state
         // +撤销进度/冲突原因（不可撤销与恢复进度的用户可见来源）。只读；撤销走
@@ -3580,9 +3589,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }));
           const drafts = (deps.db.prepare(
             `SELECT cs.id, cs.task_id, cs.application_status, cs.before_ref, cs.after_ref, t.title AS task_title
-             FROM change_sets cs LEFT JOIN tasks t ON t.id = cs.task_id
-             WHERE cs.project_id = ? ORDER BY cs.rowid DESC LIMIT 100`,
-          ).all(p.id) as Array<{ id: string; task_id: string | null; application_status: string; before_ref: string; after_ref: string; task_title: string | null }>).map((d) => ({
+             FROM change_sets cs JOIN tasks t ON t.id = cs.task_id JOIN conversations c ON c.id=t.conversation_id
+             WHERE cs.project_id = ? AND (c.kind='room' OR (c.kind='dm' AND EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id=c.id AND dp.principal_type='human' AND dp.principal_id=?))) ORDER BY cs.rowid DESC LIMIT 100`,
+          ).all(p.id,deps.localUserId) as Array<{ id: string; task_id: string | null; application_status: string; before_ref: string; after_ref: string; task_title: string | null }>).map((d) => ({
             changeSetId: d.id, taskId: d.task_id, taskTitle: d.task_title, applicationStatus: d.application_status,
             beforeRef: d.before_ref, afterRef: d.after_ref, locate: d.task_id != null ? `#task=${d.task_id}` : null,
           }));

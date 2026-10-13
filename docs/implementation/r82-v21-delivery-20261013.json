@@ -1,0 +1,907 @@
+{
+  "pass": false,
+  "candidate": "desktop-daily-win-v21-rc4",
+  "build": {
+    "buildId": "bld_50dcb1d7c8077116",
+    "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-13T13:08:36.564Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "gates": [
+    {
+      "name": "clean frozen source and all package bytes",
+      "pass": true,
+      "facts": {
+        "build": {
+          "buildId": "bld_50dcb1d7c8077116",
+          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "dirty": false,
+          "dirtyDiffHash": null,
+          "builtAt": "2026-10-13T13:08:36.564Z",
+          "manifest": "MANIFEST-SHA256.json",
+          "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+        },
+        "matched": 593,
+        "total": 593
+      }
+    },
+    {
+      "name": "daily package has no test root or seed",
+      "pass": true,
+      "facts": {
+        "entry": "start-desktop.bat",
+        "sha256": "592dcd8367bf35a4a9d875128158651bd3b7327dd97bcf7fdb8bd159a8a63d3f"
+      }
+    },
+    {
+      "name": "same final BUILD real launcher business route plus zero-call read completion",
+      "pass": true,
+      "facts": {
+        "steps": [
+          "UI explicit project grant",
+          "real pending delivery and board locate same project/task/thread",
+          "normal UI readonly→authorize→selected member→real files/diff/v1→note→explicit rework/v2→accept",
+          "UI revoke after confirmed exit",
+          "UI reusable template creates independent B member; B remains readonly; real shared-adapter cross project refusal",
+          "UI explicit project grant",
+          "UI revoke after confirmed exit",
+          "ordinary UI DM real file v1→note→explicit rework→native session boundary→real v2→accept",
+          "new task after explicit revocation uses real readonly tools and leaves files unchanged"
+        ],
+        "readCompletion": [
+          "real activity official event locator reaches original project/task",
+          "ordinary close/reopen reads accepted room v2 actual file and revoked scope",
+          "same accepted DM task and both versions reopened; actual v2 source decoded via existing project file tree with unchanged original hash",
+          "read-only verification makes zero new model calls"
+        ],
+        "calls": [
+          {
+            "id": 1,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_442c81fd-5b9b-4163-a7ca-0076bf8a057e",
+            "task_id": "task_75520f27-aa70-4e58-9a52-4cede4fe9261"
+          },
+          {
+            "id": 2,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d"
+          },
+          {
+            "id": 3,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d"
+          },
+          {
+            "id": 4,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_fc9ef110-6712-4b92-b97a-88fde59f511f",
+            "task_id": "task_c7bef9bc-3cfb-46bf-861e-f11fc5e07add"
+          },
+          {
+            "id": 5,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_c6f529f7-9334-447b-854d-5ce467dd845b",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035"
+          },
+          {
+            "id": 6,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035"
+          },
+          {
+            "id": 7,
+            "runtime_kind": "claude",
+            "model": "glm-5.3-flash",
+            "response_model": "glm-5.3-flash",
+            "status": "succeeded",
+            "turn_id": "turn_4da1f547-4c42-4022-b4e3-02ad2737ae36",
+            "task_id": "task_d9c68055-cc67-493a-a21b-7ac3567d6bc4"
+          }
+        ],
+        "initialProbePass": false,
+        "initialProbeFailure": "Error: timeout real activity task locator: false\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r82-real-launcher.cjs:82:53",
+        "originalFailurePreserved": true,
+        "closed": true
+      }
+    },
+    {
+      "name": "actual final file bytes and protected originals",
+      "pass": true,
+      "facts": {
+        "projectId": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+        "files": [
+          {
+            "file": "说明.md",
+            "sha256": "1c0087417311db20719b8ca0e54ec294fa89550e9b25f17e329a1243c6bc23f3",
+            "bytes": 11
+          },
+          {
+            "file": "math.js",
+            "sha256": "6dfa8f3a16b67f1554c92aff27dba107bdbd5b64aaed631becc623d0f15fe1b3",
+            "bytes": 44
+          },
+          {
+            "file": "私信成果.md",
+            "sha256": "5ffce83cc8a265385485b87033b4c434a90e4488449fc9f379a3fe2038f0fddc",
+            "bytes": 15
+          }
+        ]
+      }
+    },
+    {
+      "name": "room and DM natural v1/v2 with version-bound acceptance and actual diffs",
+      "pass": true,
+      "facts": {
+        "tasks": [
+          {
+            "id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
+            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+            "status": "DONE",
+            "writeScope": {
+              "authorized": 1,
+              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc4-real-release-20261013\\授权中文工程",
+              "revision": 3,
+              "memberRevision": 1,
+              "memberPermission": "acceptEdits",
+              "runtime": {
+                "memberId": "m_7ebfa623-6c52-40cd-a90a-2c779c573250",
+                "bound": true,
+                "kind": "claude",
+                "model": "glm-5.3-flash",
+                "installationId": "ri_claude_89ade9281c",
+                "permissionMode": "acceptEdits",
+                "executable": "claude"
+              },
+              "launchIdentity": "68b5a4a7e775a69afe1d98e975a97700de0d2513c063176a9007459cbdb64050"
+            }
+          },
+          {
+            "id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
+            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+            "status": "DONE",
+            "writeScope": {
+              "authorized": 1,
+              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc4-real-release-20261013\\授权中文工程",
+              "revision": 1,
+              "memberRevision": 1,
+              "memberPermission": "acceptEdits",
+              "runtime": {
+                "memberId": "m_7ebfa623-6c52-40cd-a90a-2c779c573250",
+                "bound": true,
+                "kind": "claude",
+                "model": "glm-5.3-flash",
+                "installationId": "ri_claude_89ade9281c",
+                "permissionMode": "acceptEdits",
+                "executable": "claude"
+              },
+              "launchIdentity": "acd435f25ddae5832d48509036ace38625aefcc4859571b00d7adb983a98a72c"
+            }
+          }
+        ],
+        "versions": [
+          {
+            "id": "dlv_turn_c6f529f7-9334-447b-854d-5ce467dd845b",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
+            "run_id": "run_73c29044-2ec6-4d90-8d8c-c24f49a122d8",
+            "revision": 1,
+            "manifest_hash": "f233434e45c78f850a8d15728488c15d28228e415300a091facb08c23f25aecf",
+            "change_set_refs_json": "[\"cs_6612d174-4ce8-4929-93f3-ea1106312174\"]",
+            "review_status": "changes_requested"
+          },
+          {
+            "id": "dlv_turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
+            "run_id": "run_b942ba0e-0460-4415-ba56-1eb38fa271bc",
+            "revision": 2,
+            "manifest_hash": "edd8707a3e74bcd8de978e3218b2cb6d3f7c5ab505113b0cd24625560baf8801",
+            "change_set_refs_json": "[\"cs_bcbf1a9e-eb5f-4719-b25e-69923e2329aa\"]",
+            "review_status": "accepted"
+          },
+          {
+            "id": "dlv_turn_51135221-ad58-4059-b109-cc452ee76d8d",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
+            "run_id": "run_f8adf29c-f0da-4456-a823-f9cb3820a0bb",
+            "revision": 1,
+            "manifest_hash": "23f346ceb9aa51822de673d7c60b74c0c75c014ee02bf9a36f5de4ee2a56845f",
+            "change_set_refs_json": "[\"cs_19104475-11b9-4dda-9bae-39468deb2dd6\"]",
+            "review_status": "changes_requested"
+          },
+          {
+            "id": "dlv_turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
+            "run_id": "run_b57798a4-b9fe-4338-bf43-6cfd69327295",
+            "revision": 2,
+            "manifest_hash": "e45f598d1f16abfd20738bdcfebf7acc18cc818a172c0feb9b27dc2b66e92255",
+            "change_set_refs_json": "[\"cs_ca41aced-9056-4111-8a7d-ea7f64e35c68\"]",
+            "review_status": "accepted"
+          }
+        ],
+        "diffs": [
+          {
+            "id": "cs_19104475-11b9-4dda-9bae-39468deb2dd6",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_0a7fa1d1-ac1c-4b27-8ef7-02fb26f6dd7f\",\"capturedAt\":1791896988656,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_fda3d591-4a18-4bfa-8661-9fee1be76382\",\"capturedAt\":1791897022440}",
+            "application_status": "applied"
+          },
+          {
+            "id": "cs_ca41aced-9056-4111-8a7d-ea7f64e35c68",
+            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_e5c47057-fa4c-44aa-8e47-ba53f1824749\",\"capturedAt\":1791897027792,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_a8e84568-05cf-4776-9609-8cc2dd8d6223\",\"capturedAt\":1791897087479}",
+            "application_status": "applied"
+          },
+          {
+            "id": "cs_6612d174-4ce8-4929-93f3-ea1106312174",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_a5b76804-51d7-4eb4-b6f5-92be909c042f\",\"capturedAt\":1791897177648,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_81db7f4a-5202-4a53-a452-bd4445282924\",\"capturedAt\":1791897209479}",
+            "application_status": "applied"
+          },
+          {
+            "id": "cs_bcbf1a9e-eb5f-4719-b25e-69923e2329aa",
+            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_338a7e5f-726d-48e0-a12c-46fc7dd14b51\",\"capturedAt\":1791897212665,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_e4f83bc5-16e7-4b92-b2ef-096c2f405c5d\",\"capturedAt\":1791897235701}",
+            "application_status": "applied"
+          }
+        ]
+      }
+    },
+    {
+      "name": "native tools actually ran and all write processes released only on confirmed exit",
+      "pass": true,
+      "facts": {
+        "grants": [
+          {
+            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+            "authorized": 0,
+            "revision": 4
+          }
+        ],
+        "held": [],
+        "writeEvents": [
+          {
+            "turnId": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
+            "toolCallId": "call_f8431c866a09451abfe57e87",
+            "toolName": "Edit",
+            "eventKey": "cevt_9f5a01ab0d2aa08e9ba2"
+          },
+          {
+            "turnId": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
+            "toolCallId": "call_4a55f8e701134c8982ef725f",
+            "toolName": "Edit",
+            "eventKey": "cevt_6a335c1e0cbf9b6e9ddb"
+          },
+          {
+            "turnId": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
+            "toolCallId": "call_6689eef6e9e3499c939fc137",
+            "toolName": "Edit",
+            "eventKey": "cevt_36896c77de3c7db395ae"
+          },
+          {
+            "turnId": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
+            "toolCallId": "call_c1a21de29bf24f7ebb2a90f6",
+            "toolName": "Edit",
+            "eventKey": "cevt_f4f1649e51214fc5e297"
+          },
+          {
+            "turnId": "turn_c6f529f7-9334-447b-854d-5ce467dd845b",
+            "toolCallId": "call_07b5acfb61fd482484fe280a",
+            "toolName": "Edit",
+            "eventKey": "cevt_840f62ed893c14747223"
+          },
+          {
+            "turnId": "turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
+            "toolCallId": "call_7fc7bf305cde4617ab3c56d1",
+            "toolName": "Edit",
+            "eventKey": "cevt_f2ae2c1aa59a3926532d"
+          }
+        ],
+        "dmSessions": [
+          {
+            "session_generation": 0,
+            "provider_session_id": "06fd3f9d-30d4-44a9-bb09-12c19ca766a0",
+            "capabilities_json": "{\"runtimeKind\":\"claude\",\"model\":\"glm-5.3-flash\",\"installationId\":\"ri_claude_89ade9281c\",\"writeIdentity\":\"68b5a4a7e775a69afe1d98e975a97700de0d2513c063176a9007459cbdb64050\",\"permissionMode\":\"acceptEdits\",\"cwd\":\"D:\\\\zhongshuo\\\\dist\\\\desktop\\\\review-r82-v21-rc4-real-release-20261013\\\\授权中文工程\"}"
+          }
+        ]
+      }
+    },
+    {
+      "name": "same final BUILD normal-workflow",
+      "pass": true,
+      "facts": {
+        "steps": [
+          "default gate clears fake/runtime/guard/entry overrides",
+          "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+          "marker token mismatch: BAT refused before spawning UI/daemon",
+          "missing debug port: BAT refused before spawning UI/daemon",
+          "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+          "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+          "room result tab opens delivery document and actual worktree file",
+          "board/pending locate same room task while v1 awaits review",
+          "stale room v1 acceptance rejected while v2 awaits review",
+          "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+          "search/saved/activity UI locate the same room task",
+          "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+          "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+          "DM archive read-only and explicit restore preserve task/versions without dispatch",
+          "room UI stop during active Fake turn→run CANCELLED; no delivery",
+          "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+          "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+          "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read",
+          "final launcher reopen preserves room/DM identities and deliveries",
+          "R79 completed live facts and older history remain reachable after real launcher reopen"
+        ],
+        "realCalls": 0
+      }
+    },
+    {
+      "name": "same final BUILD unknown",
+      "pass": true,
+      "facts": {
+        "steps": [
+          "default gate clears fake/runtime/guard/entry overrides",
+          "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+          "marker token mismatch: BAT refused before spawning UI/daemon",
+          "missing debug port: BAT refused before spawning UI/daemon",
+          "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+          "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+          "R80 dropped committed submit receipt, ordinary reopen keeps original envelope and draft; explicit same-ID replay creates no duplicate"
+        ]
+      }
+    },
+    {
+      "name": "same final BUILD visual",
+      "pass": true,
+      "facts": {
+        "steps": [
+          "same viewport/light/zoom1 native candidate member/settings/auth state screenshots; no model calls"
+        ],
+        "viewports": [
+          {
+            "name": "wide",
+            "width": 1440,
+            "height": 960,
+            "dpr": 1
+          },
+          {
+            "name": "narrow",
+            "width": 900,
+            "height": 800,
+            "dpr": 1
+          },
+          {
+            "name": "hidpi",
+            "width": 1280,
+            "height": 800,
+            "dpr": 1.5
+          }
+        ],
+        "realCalls": 0
+      }
+    },
+    {
+      "name": "full owned old-root upgrade and actual old-version rejection/backup reopen",
+      "pass": true,
+      "facts": {
+        "oldBuild": {
+          "buildId": "bld_12c5ceedf87665ec",
+          "commit": "ab418320a827803fb56d9de54a28100822e451ed",
+          "dirty": false,
+          "dirtyDiffHash": null,
+          "builtAt": "2026-10-13T06:21:17.616Z",
+          "manifest": "MANIFEST-SHA256.json",
+          "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+        },
+        "newBuild": {
+          "buildId": "bld_50dcb1d7c8077116",
+          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "dirty": false,
+          "dirtyDiffHash": null,
+          "builtAt": "2026-10-13T13:08:36.564Z",
+          "manifest": "MANIFEST-SHA256.json",
+          "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+        },
+        "copiedFiles": 92,
+        "legacyTableCount": 67
+      }
+    },
+    {
+      "name": "latest project intent and settings target regressions",
+      "pass": true,
+      "facts": {
+        "scenarios": [
+          {
+            "name": "normal",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "cross-project-settings",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "cancel-open",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "cancel-load",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "cancel-load-failure",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "cancel-external",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "overlap-open",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "overlap-load",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "overlap-registry",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "overlap-late-failure",
+            "pass": true,
+            "realCalls": 0
+          },
+          {
+            "name": "old-modal-new-modal",
+            "pass": true,
+            "realCalls": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "same final BUILD stable attachments/actual image decode/original hash/ordinary reopen",
+      "pass": true,
+      "facts": {
+        "facts": {
+          "buildId": "bld_50dcb1d7c8077116",
+          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "origin": {
+            "hash": "#/project/prj_32322d57-76a5-4556-a2cd-107b0d07",
+            "active": "项目A"
+          },
+          "openB": {
+            "hash": "#/project/prj_ab95dc6a-dbb8-4b75-9449-034b4a1668e8/room/room_default_prj_ab95dc6a-dbb8-4b75-9449-034b4a1668e8",
+            "active": "项目B",
+            "composer": true,
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目B",
+            "projAKept": true,
+            "toasts": []
+          },
+          "openC": {
+            "hash": "#/project/prj_602e52fe-7cb1-4bb9-910b-fd91db983163/room/room_default_prj_602e52fe-7cb1-4bb9-910b-fd91db983163",
+            "active": "项目C",
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目C",
+            "toasts": []
+          },
+          "restart": {
+            "active": "项目C",
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目C"
+          },
+          "filesOk": true,
+          "readRegression": {
+            "pass": true,
+            "scope": "own generated 64x48 PNG only; normal final BAT, no engineering runtime; record-only formal submit",
+            "attachmentId": "art_f6821d50-6173-4a5b-a5ea-e6fdfefd10ab",
+            "messageId": "msg_29a9d3ce-3f6b-4916-b7d8-06ec03a60a0c",
+            "sha256": "48ebaec455f7781a07b76fcf6bc2f80cdd78a18022b2e80869cd4a7f15144c1b",
+            "image": {
+              "width": 64,
+              "height": 48,
+              "displayWidth": 64,
+              "displayHeight": 48
+            },
+            "samples": [
+              {
+                "at": 1791897055080,
+                "chips": 1
+              },
+              {
+                "at": 1791897060286,
+                "chips": 1
+              },
+              {
+                "at": 1791897065494,
+                "chips": 1
+              },
+              {
+                "at": 1791897070703,
+                "chips": 1
+              }
+            ],
+            "zoom": "适应窗口原尺寸−125%＋复位另存原件",
+            "transform": "translate(30px, 20px)",
+            "saveHashMatched": true,
+            "fileTreeDecoded": true,
+            "realCalls": 0
+          },
+          "consoleErrors": [],
+          "realCalls": 0
+        }
+      }
+    },
+    {
+      "name": "original real adjacent and junction native write refusal evidence",
+      "pass": true,
+      "facts": {
+        "model": "glm-5.3-flash",
+        "version": "2.1.283 (Claude Code)",
+        "denied": 2
+      }
+    },
+    {
+      "name": "source tests and both type checks",
+      "pass": true,
+      "facts": {
+        "tests": 1014,
+        "files": 144,
+        "excluded": "existing external githubSandbox; not recertified"
+      }
+    },
+    {
+      "name": "changed-file lint has no additional errors",
+      "pass": true,
+      "facts": {
+        "files": 42
+      }
+    },
+    {
+      "name": "001-049 migrations stay frozen",
+      "pass": true,
+      "facts": {
+        "changed": [
+          "src/persistence/migrations/050-project-write-authorization.ts",
+          "src/persistence/migrations/registry.ts"
+        ]
+      }
+    },
+    {
+      "name": "authoritative changes visible in file page",
+      "pass": false
+    }
+  ],
+  "realCalls": {
+    "definition": "unique real turn attempts, not HTTP round trips/tokens/billing; cloned database turn IDs deduplicated",
+    "formal": [
+      {
+        "turn_id": "turn_326a8895-c86a-4cdd-ab56-1acff5647622",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_fd1a2454-fe88-42f2-bbaa-20f49a9e458a",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_8c8bdff7-0da0-4308-8059-f6ab11c37126",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_9140d192-5f77-4f76-bcc4-618bab6ac0eb",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_e859ec58-9233-4d25-9f22-59226177a12b",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_ea3d8366-663b-401d-9ecb-8f11f98edc4e",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "failed"
+      },
+      {
+        "turn_id": "turn_63760815-915f-497c-a676-cbf667e1bb29",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_9e8e2a4e-87dd-4797-a197-472d6a4f3953",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_3d3b926f-9fa9-4270-93ff-021aacffa3d0",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_f097dc73-800c-493d-ad6c-4fe491f58de7",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_5c1fcc48-aac2-4660-a56e-8c9d5c8dc0c7",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_8a6e4609-ceb1-4bee-bb28-d599a3c8f418",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_1a6fd3f6-dbe2-4636-b51d-dab898f4b5d9",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_442c81fd-5b9b-4163-a7ca-0076bf8a057e",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_fc9ef110-6712-4b92-b97a-88fde59f511f",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_c6f529f7-9334-447b-854d-5ce467dd845b",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_4da1f547-4c42-4022-b4e3-02ad2737ae36",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      }
+    ],
+    "probes": [
+      {
+        "path": "dist/r82-real-permission-first-20261013/result.json",
+        "model": "deepseek-flash",
+        "attempts": 1,
+        "pass": false,
+        "purpose": "r82-real-permission-first-20261013"
+      },
+      {
+        "path": "dist/r82-real-permission-glm-first-20261013/result.json",
+        "model": "glm-5.3-flash",
+        "attempts": 1,
+        "pass": true,
+        "purpose": "r82-real-permission-glm-first-20261013"
+      },
+      {
+        "path": "dist/r82-real-permission-glm-boundary-20261013/result.json",
+        "model": "glm-5.3-flash",
+        "attempts": 1,
+        "pass": true,
+        "purpose": "r82-real-permission-glm-boundary-20261013"
+      },
+      {
+        "path": "dist/r82-real-glm-create-boundary-20261013/result.json",
+        "model": "glm-5.3-flash",
+        "attempts": 1,
+        "pass": true,
+        "purpose": "r82-real-glm-create-boundary-20261013"
+      },
+      {
+        "path": "dist/r82-glm-structured-20261013/result.json",
+        "model": "glm-5.3-flash",
+        "attempts": 1,
+        "pass": true,
+        "purpose": "native JSON schema support, zero file writes"
+      }
+    ],
+    "origins": [
+      {
+        "path": "dist/desktop/review-r82-stage1-real-flow-20261013/copy/server-data/state.sqlite",
+        "calls": 2
+      },
+      {
+        "path": "dist/desktop/review-r82-stage1-real-flow-2-20261013/copy/server-data/state.sqlite",
+        "calls": 2
+      },
+      {
+        "path": "dist/desktop/review-r82-stage1-real-continue-20261013/copy/server-data/state.sqlite",
+        "calls": 3
+      },
+      {
+        "path": "dist/desktop/review-r82-v21-real-release-20261013/copy/server-data/state.sqlite",
+        "calls": 1
+      },
+      {
+        "path": "dist/desktop/review-r82-v21-rc2-real-release-20261013/copy/server-data/state.sqlite",
+        "calls": 3
+      },
+      {
+        "path": "dist/desktop/review-r82-v21-rc3-real-release-20261013/copy/server-data/state.sqlite",
+        "calls": 4
+      },
+      {
+        "path": "dist/desktop/review-r82-v21-rc4-real-release-20261013/copy/server-data/state.sqlite",
+        "calls": 7
+      }
+    ],
+    "total": 25
+  },
+  "evidence": [
+    {
+      "path": "dist/desktop/desktop-daily-win-v21-rc4/ZhongshuoDual/MANIFEST-SHA256.json",
+      "sha256": "f816a24b676040d7f5f55da78b49da7aa0075b72d57d2b819ce993a403d53b1a",
+      "bytes": 111596
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc4-real-release-20261013/result.json",
+      "sha256": "e0c1616d8a223eca42e5b218aeb0f8b61afb01b6cb73d3f48f0d1f1568b446e5",
+      "bytes": 7037
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc4-read-completion-2-20261013/result.json",
+      "sha256": "0735256c22c562ffead0182a559fc6552eb3cd7f991c2886337f417395fd1503",
+      "bytes": 6093
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc4-normal-workflow-20261013/result.json",
+      "sha256": "5ab8d9cfdf98dc73ef9f91ed05a3777d8a41df69498e6834eafa6466d4a0a2b8",
+      "bytes": 5783
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc4-unknown-20261013/result.json",
+      "sha256": "f37fc45f6080940673d0d27f45b31d50c3b2cbac2d13dc030ab2cb3ac7091548",
+      "bytes": 2723
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc4-visual-20261013/result.json",
+      "sha256": "5b3cf8f8fbfaea004e727d8842d238285d53388da90f105ced8ab76212113ef2",
+      "bytes": 1942
+    },
+    {
+      "path": "dist/r82-upgrade-rc4/result.json",
+      "sha256": "7c6f9ce3e38ae97574273bf9f21209076e3aa5770ec2be092eb20bc30cc67727",
+      "bytes": 2176
+    },
+    {
+      "path": "dist/desktop/r75-completion-1791896943615/result.json",
+      "sha256": "a59667b8a08270b1f3ba6df8b644de69e09b7d3a40c2dca6c5778cca439a04f0",
+      "bytes": 92371
+    },
+    {
+      "path": "dist/r82-rc4-launcher-regression.log",
+      "sha256": "be394ab13ba69fef140b284d3d2c5be8b565899294cf66e189d07006f6eca735"
+    },
+    {
+      "path": "dist/r82-real-glm-create-boundary-20261013/result.json",
+      "sha256": "2eee28746b0b85024820db96d9e0906e8118ce677719c4e91f0f34de1fb11d98",
+      "bytes": 400
+    },
+    {
+      "path": "dist/r82-lint-stage8.json",
+      "sha256": "da36622f7a4796a34f4ddd4f5184e91e9a23aca954943689e29151b4b904579b",
+      "bytes": 6755
+    },
+    {
+      "path": "dist/r82-real-permission-first-20261013/result.json",
+      "sha256": "d4418d1929f96d8a7d8d479dec478a41b53ff681a000bd6b773427119a5877e6",
+      "bytes": 446
+    },
+    {
+      "path": "dist/r82-real-permission-glm-first-20261013/result.json",
+      "sha256": "ef1a227d47b846e86109dbe09e59a11bca26d9b30c8e6293303945428e39f54c",
+      "bytes": 566
+    },
+    {
+      "path": "dist/r82-real-permission-glm-boundary-20261013/result.json",
+      "sha256": "3a803e45246b344b82673da864b3111bd2eb7918c9cdac4c7f00e944d9725b38",
+      "bytes": 631
+    },
+    {
+      "path": "dist/r82-real-glm-create-boundary-20261013/result.json",
+      "sha256": "2eee28746b0b85024820db96d9e0906e8118ce677719c4e91f0f34de1fb11d98",
+      "bytes": 400
+    },
+    {
+      "path": "dist/r82-glm-structured-20261013/result.json",
+      "sha256": "6b6c7cf517c80651395147058d2221e672b369305d8611519a74dbea65dcf285",
+      "bytes": 468
+    }
+  ],
+  "scope": "actual Claude/glm-5.3-flash native restricted project file tools; no real Codex/write or new vision certification; no user acceptance",
+  "status": "superseded stage, not final R82 release",
+  "coverageGaps": [
+    "Actual file page showed zero change sets although formal database had four; final release blocked until authoritative read UI is verified"
+  ]
+}

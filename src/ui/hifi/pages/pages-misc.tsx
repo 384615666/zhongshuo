@@ -27,6 +27,7 @@ import { NewBranchModal } from './GitDialogs';
 import { PreviewPane } from '../preview/PreviewPane';
 import { openWorktreePreview } from '../data/actions-preview';
 import type { AppState, ContextLocation } from '../data/types';
+import {useFormalChanges,FormalChangeList,FormalChangeDetail} from '../components/FormalChanges';
 
 /* ============================================================
    成果预览（§17.2 成果预览 / §6.6 报告模板）
@@ -98,6 +99,7 @@ export function FilesGitPage({ projectId, query }: { projectId: string; query: R
 function FilesGitPageForProject({ projectId, query }: { projectId: string; query: Record<string, string> }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === projectId);
+  const formalChanges=useFormalChanges(projectId);
 
   /**
    * 标签解析顺序（§17.7）：**URL 显式 tab 优先于记忆**。
@@ -162,9 +164,9 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
    * 现在列表与详情用同一个 activeCs，切项目或改动集消失时自动回落到第一条。
    */
   const activeCs = useMemo(() => {
-    if (csId && changeSets.some((c) => c.id === csId)) return csId;
-    return changeSets[0]?.id;
-  }, [csId, changeSets]);
+    if (csId && formalChanges.items?.some(c=>c.changeSetId===csId)) return csId;
+    return formalChanges.items?.[0]?.changeSetId;
+  }, [csId, formalChanges.items]);
 
   /** 换选中对象时详情从顶部开始；左栏自己的滚动位置不动（两栏互不干扰） */
   useEffect(() => {
@@ -378,7 +380,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                     { value: 'tree', label: '目录树' },
                     /* 「改动 N」→「改动集 N」：这里是**改动集的数量**，
                        不是改动文件数，也不是待提交数。 */
-                    { value: 'changes', label: `改动集 ${changeSets.length}` },
+                    { value: 'changes', label: formalChanges.items===null?'改动集 · 未读取':`改动集 · 最近 ${formalChanges.items.length} 项` },
                   ]}
                 />
               </div>
@@ -386,9 +388,9 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
               {/* 左栏唯一滚动容器：目录树很长时在这里滚，不影响右栏 */}
               <div className="fg-pane-scroll files-tree" ref={listRef}>
                 {leftTab === 'changes' ? (
-                  <ChangeSetList
-                    projectId={projectId}
-                    activeId={activeCs}
+                  <FormalChangeList
+                    facts={formalChanges}
+                    selected={activeCs}
                     onSelect={(id) => { setCsId(id); openDetail(); }}
                   />
                 ) : tree.error != null ? (
@@ -453,7 +455,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
 
               {leftTab === 'changes' ? (
                 <div className="fg-pane-scroll" ref={detailRef}>
-                  <ChangeSetDetail projectId={projectId} setId={activeCs} />
+                  <FormalChangeDetail key={`${projectId}:${activeCs}`} projectId={projectId} entry={formalChanges.items?.find(c=>c.changeSetId===activeCs)} />
                 </div>
               ) : selected ? (
                 /*
