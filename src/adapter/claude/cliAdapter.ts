@@ -49,6 +49,12 @@ import type {
 } from '../../contracts/runtime.ts';
 
 export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.3';
+export const CLAUDE_PROJECT_WRITE_TOOL_ARGS = [
+  '--restricted','--permission-mode','dontAsk','--permission-prompts','none',
+  '--tools','Read,Glob,Grep,Write,Edit','--allowedTools','Read,Glob,Grep,Write,Edit',
+  '--disallowedTools','Bash,PowerShell,REPL,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,mcp__*',
+  '--strict-mcp-config','--bare','--disable-slash-commands',
+] as const;
 
 const executableHashes = new Map<string, { stamp: string; hash: string }>();
 export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: string) {
@@ -350,10 +356,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入启动配置已变化，未启动模型');
       // Restricted file tools enforce physical working-directory boundaries; no shell/MCP/delegation.
       args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,
-        '--restricted','--permission-mode','dontAsk','--permission-prompts','none',
-        '--tools','Read,Glob,Grep,Write,Edit','--allowedTools','Read,Glob,Grep,Write,Edit',
-        '--disallowedTools','Bash,PowerShell,REPL,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,mcp__*',
-        '--strict-mcp-config','--bare','--disable-slash-commands');
+        ...CLAUDE_PROJECT_WRITE_TOOL_ARGS);
     }
     if (payload.stream) args.push('--input-format', 'stream-json');
     const resumeId = state.providerSessionId ?? state.resumeRequested;

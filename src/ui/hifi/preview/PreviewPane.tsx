@@ -14,7 +14,7 @@ import { Icon } from '../components/Icon';
 import { Menu, MenuItem, Modal, PanelNavButton, Tag, anchorFromElement } from '../components/ui';
 import { useStore, getState, toast, queueDraftInsert } from '../data/store';
 import {
-  activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge, registerWorktreeResource, openPreviewTab,
+  activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge, openWorktreePreview,
   hidePreview, quoteResource, reloadResource, rememberScroll, showPreview,
   togglePreviewMaximized, applyWorktreeRead, markResourceUpdated, applyDeliveryRead,
 } from '../data/actions-preview';
@@ -1055,8 +1055,7 @@ function DeliveryDocView({ resource, revision, rawText, delivery, viewMode, wrap
  * explicitShow=false 命中自动收起判据）。
  */
 function openWorktreeFileFromDelivery(projectId: string, path: string, sizeBytes: number, openedFrom: ContextTarget): void {
-  const resId = registerWorktreeResource(projectId, path, sizeBytes);
-  openPreviewTab(resId, 1, { target: openedFrom });
+  openWorktreePreview(projectId,path,sizeBytes,{target:openedFrom});
 }
 
 /* ============================================================

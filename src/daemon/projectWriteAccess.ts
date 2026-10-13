@@ -4,6 +4,7 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { claudeLaunchIdentity, resolveClaudeConfiguration } from '../adapter/claude/cliAdapter.ts';
 import {codexConfigurationIdentity} from '../adapter/codex/configuration.ts';
+import {fileWriteCapability,CLAUDE_PROJECT_WRITE_POLICY_HASH} from '../adapter/writeCapability.ts';
 
 export interface WriteScope {
   authorized: boolean; root: string; revision: number; physicalIdentity?:string;
@@ -28,10 +29,11 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
   if(requested && (realpathSync.native(row.root_path)!==root || physicalRootIdentity(root)!==current.physicalIdentity)) throw Error('授权目录的物理身份或入口已变化，拒绝写入');
   if(requested && snapshot.runtime && JSON.stringify(snapshot.runtime)!==JSON.stringify(runtime)) throw Error('成员执行配置已变化；旧授权任务未派发，请明确重新提交');
   const writable = requested && ['acceptEdits','dontAsk'].includes(snapshot.memberPermission??'') && ['acceptEdits','dontAsk'].includes(runtime.permissionMode ?? '') && ['claude','codex','fake'].includes(runtime.kind ?? '');
+  if(writable && runtime.kind!=='fake') {const capability=fileWriteCapability(runtime,root);if(capability.status!=='supported')throw Error(`文件写入未认证：${capability.reason}`);}
   const configuration = runtime.kind === 'claude' ? writable ? claudeLaunchIdentity({executable:runtime.executable??undefined,model:runtime.model??undefined,permissionMode:runtime.permissionMode as 'plan'},root) : resolveClaudeConfiguration(root) : null;
   if(writable && configuration?.reason) throw Error(`写入渠道配置无法确定：${configuration.reason}`);
   const launchConfigurationKey=configuration && 'identityKey' in configuration ? configuration.identityKey as string : undefined;
-  const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,grant:current,snapshot:{authorized:snapshot.authorized,root:snapshot.root,revision:snapshot.revision,memberRevision:snapshot.memberRevision,memberPermission:snapshot.memberPermission},root,runtime,configurationKey:runtime.kind==='codex'?codexConfigurationIdentity(root):launchConfigurationKey??configuration?.configurationKey??null,writable})).digest('hex');
+  const identityKey = createHash('sha256').update(JSON.stringify({projectId:row.project_id,grant:current,snapshot:{authorized:snapshot.authorized,root:snapshot.root,revision:snapshot.revision,memberRevision:snapshot.memberRevision,memberPermission:snapshot.memberPermission},root,runtime,configurationKey:runtime.kind==='codex'?codexConfigurationIdentity(root):launchConfigurationKey??configuration?.configurationKey??null,writable,writePolicyHash:writable?CLAUDE_PROJECT_WRITE_POLICY_HASH:null})).digest('hex');
   if(snapshot.launchIdentity && snapshot.launchIdentity!==identityKey) throw Error('有效渠道、执行程序、模型或权限已变化；未沿用旧任务授权');
   return { modificationAuthorized:Boolean(writable), allowedWriteRoots:writable?[root]:[], identityKey, root, launchConfigurationKey,
     tier:writable?'auto_edit' as const:'plan' as const, intent:writable?'modify' as const:'analyze' as const,

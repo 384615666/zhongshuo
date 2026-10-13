@@ -33,6 +33,7 @@ export interface RuntimeInfo {
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
   executableStatus?:{status:'found'|'missing'|'unknown';reason:string};
   permissionExecution?:{effective:string;reason:string}|null;
+  writeCapability?:{status:string;reason:string};
   environment?: { realDispatchGuard?: boolean; allowFake?: boolean };
   imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
 }
@@ -289,6 +290,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                 </div>
                 {m.principalType === 'agent' ? (
                   <div className="row tight wrap" style={{ marginTop: 10 }}>
+                    {runtimes[m.id]?.writeCapability?<span className="small faint" data-zs-write-capability={m.id}>文件编辑{runtimes[m.id]!.writeCapability!.status==='supported'?'组合已验证':'未认证'} · {runtimes[m.id]!.writeCapability!.reason}</span>:null}
                     <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
                     <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                     <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}

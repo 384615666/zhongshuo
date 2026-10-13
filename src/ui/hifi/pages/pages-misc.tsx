@@ -25,7 +25,7 @@ import { GitPage, useNarrowPane } from './GitPage';
 import { NewBranchModal } from './GitDialogs';
 /* UX-PREVIEW-01：文件与 Git 复用共享预览（§17.9 第 2 条） */
 import { PreviewPane } from '../preview/PreviewPane';
-import { registerWorktreeResource, openPreview } from '../data/actions-preview';
+import { openWorktreePreview } from '../data/actions-preview';
 import type { AppState, ContextLocation } from '../data/types';
 
 /* ============================================================
@@ -423,8 +423,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                            * 只有**文件**节点才打开；目录节点不产生预览。
                            */
                           if (node.kind === 'file') {
-                            const resId = registerWorktreeResource(projectId, node.path, node.sizeBytes ?? 0);
-                            openPreview(resId, 1, {
+                            openWorktreePreview(projectId,node.path,node.sizeBytes??0, {
                               target: { kind: 'files', projectId, view: 'files', selection: node.path },
                             });
                             openDetail();

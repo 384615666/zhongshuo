@@ -31,7 +31,7 @@ import { navigate } from './lib/router';
 const EMPTY: never[] = [];
 const FORMAL_LIMITS = {
   method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链（H3）——线程内按任务既有方式跟进',
-  access: '实际执行权限由明确项目授权与成员配置共同决定；发送前显示回读事实，派发前服务端复查',
+  access: '权限档位声明尚未接入本包（H3 按已认证能力开放）——按成员默认权限执行',
 } as const;
 
 const STATUS_LABEL: Record<string, string> = {

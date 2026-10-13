@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
+import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { createRoomRootTask } from '../persistence/stores/roomRootTask.ts';
@@ -147,9 +148,13 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const effective = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
   const owner=db.prepare('SELECT project_id FROM project_members WHERE id=?').get(memberId) as {project_id:string};
   const access=projectWriteAccess(db,owner.project_id);
-  const editable=access.authorized && ['acceptEdits','dontAsk'].includes(binding.permissionMode??'');
-  const permissionExecution=['codex','claude'].includes(effective.kind??'')?{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':!access.authorized?'项目尚未明确授权；保存的成员权限不会自动提权。':'成员仍为只读权限档；可明确选择文件编辑档。'}:null;
-  return { binding, installation, permissionExecution, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
+  const projectScope=db.prepare('SELECT canonical_path,root_path,status FROM projects WHERE id=?').get(owner.project_id) as {canonical_path:string;root_path:string;status:string};
+  const cwd=projectScope.canonical_path;
+  let scopeUsable=false;try{scopeUsable=access.authorized&&projectScope.status==='active'&&realpathSync.native(projectScope.root_path)===access.root&&physicalRootIdentity(cwd)===access.physicalIdentity;}catch{/* No grant is inferred from an unreadable directory. */}
+  const writeCapability=fileWriteCapability(effective,cwd);
+  const editable=scopeUsable && writeCapability.status==='supported';
+  const permissionExecution=['codex','claude'].includes(effective.kind??'')?{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':!access.authorized?'项目尚未明确授权；保存的成员权限不会自动提权。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
+  return { binding, installation, permissionExecution, writeCapability, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
@@ -1323,6 +1328,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           let reason=!willDispatch?'线程跟进仅保存记录':!direct?'当前仅支持指定成员的 DIRECT 派发':!grant.authorized?'项目默认只读，尚未明确授权':null;
           if(!reason)try{if(project.status!=='active'||realpathSync.native(project.root_path)!==grant.root||physicalRootIdentity(project.canonical_path)!==grant.physicalIdentity)reason='项目目录身份已变化或不可用';}catch{reason='授权目录不可读取，未开放写入';}
           if(!reason && (!members.length||members.some(id=>{const r=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return !['claude','codex','fake'].includes(r.kind??'')||!['acceptEdits','dontAsk'].includes(r.permissionMode??'');}))) reason='执行成员仍为只读权限档';
+          if(!reason)for(const id of members){const r=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);if(r.kind!=='fake'){const c=fileWriteCapability(r,project.canonical_path);if(c.status!=='supported'){reason=c.reason;break;}}}
           return withCommandId({ok:true,data:{willDispatch,modificationAuthorized:reason==null,reason:reason??'项目内文件编辑；Shell、网络工具与委派未开放，派发前再次核对授权与配置'}});
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
@@ -1423,7 +1429,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
               attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
-              snapshotTaskWriteAccess(deps.db,r.taskId);
+              try{snapshotTaskWriteAccess(deps.db,r.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -1473,7 +1479,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
-            snapshotTaskWriteAccess(deps.db,ids.taskId);
+            try{snapshotTaskWriteAccess(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
             return created.value;
           })();

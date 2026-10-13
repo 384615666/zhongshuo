@@ -1,0 +1,29 @@
+{
+  "runtime": "claude",
+  "model": "glm-5.3-flash",
+  "cliVersion": "2.1.283 (Claude Code)",
+  "executableHash": "9dbe16dafed59da5cdabbfe11ad0335738c753fad794989b47f9446accd6de3a",
+  "endpointHash": "eb5c1aa5b693b3b2e18fe301de78d9b9ff7e603e238251bd0f5ba112332e9a84",
+  "policyId": "claude-restricted-project-files-v1",
+  "permissionModes": [
+    "acceptEdits",
+    "dontAsk"
+  ],
+  "scope": "file creation/edit only; shell/network tools/delegation excluded",
+  "evidence": {
+    "creation": {
+      "path": "dist/r82-real-permission-glm-first-20261013/result.json",
+      "sha256": "ef1a227d47b846e86109dbe09e59a11bca26d9b30c8e6293303945428e39f54c"
+    },
+    "boundary": {
+      "path": "dist/r82-real-glm-create-boundary-20261013/result.json",
+      "sha256": "2eee28746b0b85024820db96d9e0906e8118ce677719c4e91f0f34de1fb11d98"
+    },
+    "rawBoundary": {
+      "path": "dist/r82-real-glm-create-boundary-20261013/raw-stream.ndjson",
+      "sha256": "e83e3a625601eee2d3e6111f7052aa01ecd38366e83ed298f8b952e090771677"
+    }
+  },
+  "note": "Native file policy real evidence, not vision certification or a claim that every channel/model works",
+  "policyHash": "470880fe376d69c1e5064b7bfb0f3fae470e4d7bd45166a5081da4b362cfaa01"
+}

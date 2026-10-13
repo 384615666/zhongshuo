@@ -125,6 +125,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>保存的权限模式</dt><dd>{runtime?.binding?.permissionMode ?? '未指定'}</dd>
                 <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
+                <dt>项目文件编辑认证</dt><dd>{runtime?.writeCapability?.status==='supported'?'当前组合已验证':'未认证'}<div className="small faint">{runtime?.writeCapability?.reason??'未提供证据'}</div></dd>
                 <dt>真实识图</dt><dd>{runtime?.imageInput?.status === 'supported' ? '已认证' : '未认证'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
               </dl>
               {runtime?.imageInput != null ? <details style={{ marginTop: 8 }}><summary>识图配置依据</summary><div className="small mono" style={{ overflowWrap: 'anywhere' }}>配置 {runtime.imageInput.configuration} · 模型 {runtime.imageInput.model ?? '未指定'} · 权限 {runtime.imageInput.permissionMode} · 渠道 {runtime.imageInput.channel} · 协议 {runtime.imageInput.protocol}</div></details> : null}

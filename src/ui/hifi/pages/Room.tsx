@@ -55,7 +55,7 @@ import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
 /** 正式侧能力锁定（未接通能力点击前禁用并说明——不在原型位置伪造可用）。 */
 const FORMAL_LIMITS = {
   method: '执行方式开关（计划/跳过初稿/分工）尚未接入本包执行链——当前按项目默认方式派发',
-  access: '权限档位声明尚未接入本包——按成员默认权限执行',
+  access: '实际执行权限由明确项目授权与成员配置共同决定；发送前显示回读事实，派发前服务端复查',
 } as const;
 
 /** 打开会话附件：登记资源（真实 attachmentId/audience）→ 共享预览标签。 */

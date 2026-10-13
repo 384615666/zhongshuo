@@ -137,6 +137,13 @@ export function registerWorktreeResource(projectId: string, relativePath: string
   return resourceId;
 }
 
+/** Mutable file entries open the latest confirmed reading snapshot. A restored resource may
+ * no longer contain revision 1; fixed delivery/attachment callers still pass their exact version. */
+export function openWorktreePreview(projectId:string,path:string,sizeBytes:number,openedFrom:ContextLocation):boolean {
+  const id=registerWorktreeResource(projectId,path,sizeBytes);
+  return openPreview(id,undefined,openedFrom);
+}
+
 /**
  * R68 §6：登记一个**正式 AI 交付文档**资源（共享预览第三来源）。版本=交付 revision、
  * hash=manifestHash（不可变快照）；内容经 delivery.document 按需装载（自然链持久化的

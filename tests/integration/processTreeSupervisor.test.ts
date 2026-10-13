@@ -204,7 +204,7 @@ describe('supervisor 进程树证据（第八轮：全树归属分析 + 活跃�
     // The OS may reuse the exited root PID under concurrent load. Both observations
     // lack authoritative exit evidence and must keep the exact same protection below.
     expect(p2.detail).toMatch(/未观察到存活后代|PID 已被复用/);
-    expect(p2.detail).toContain('未完整确认');
+    expect(p2.detail).toMatch(/未完整确认|退出事实不可据此判定/); // PID reuse also lacks authoritative exit proof; protection remains held below.
     // 历史身份全集已确认退出（含孙——追加式登记不丢身份）。
     const identities = getProcessTreeIdentities(db, turnId);
     expect(identities.length).toBeGreaterThanOrEqual(3); // 父+子+孙
