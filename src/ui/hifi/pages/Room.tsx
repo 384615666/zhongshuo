@@ -1541,6 +1541,7 @@ function ThreadPanel({
 
   /** 切 tab 时把 tab 写回 URL，便于分享与返回（不 reload） */
   const changeTab = (next: ThreadTabLocal) => {
+    urlTabRef.current = next;
     setTab(next);
     if (next !== 'artifacts') setOpenArtifactId(undefined);
     if (!thread) return;

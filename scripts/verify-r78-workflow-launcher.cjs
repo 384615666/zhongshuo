@@ -196,7 +196,6 @@ function verifyManifest(packageRoot) {
   const captureUi = (label) => { if (cdp != null) facts.ui.sessions.push({ label, errors: cdp.errors }); };
   const start = (overrides = {}) => {
     const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(port), ZS_R78_ENGINEERING_TOKEN: token, ZS_DAEMON_ENTRY: entry };
-    if(process.argv.includes('--r80')){env.ZS_UI_READY_DEADLINE_MS='1800';env.ZS_COMMAND_LOG_FILE=path.join(data,'engineering','r80-commands.jsonl');}
     for (const key of ['ZS_RUNTIME', 'ZS_ALLOW_FAKE', 'ZS_APP_DATA', 'ZS_PIPE_NAME', 'ZS_REAL_DISPATCH_GUARD', 'ZS_PACKED_ENTRY']) delete env[key];
     Object.assign(env, overrides);
     bat = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copy, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -453,7 +452,7 @@ function verifyManifest(packageRoot) {
     facts.realCalls = queryOne('SELECT count(*) c FROM real_calls').c;
     must(facts.realCalls === 0, 'real_calls after reopen nonzero');
     captureUi('engineering-reopen');
-    facts.pass = facts.ui.sessions.every((s) => s.errors.length === 0);
+    facts.pass = facts.ui.sessions.every((s) => s.errors.length === 0)&&(!facts.r80||facts.r80.pass===true);
     if (!facts.pass) facts.error = `renderer errors: ${JSON.stringify(facts.ui.sessions.filter((s) => s.errors.length > 0))}`;
   } catch (error) {
     captureUi('failed-step');
