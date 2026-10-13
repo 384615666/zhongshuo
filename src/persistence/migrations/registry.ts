@@ -47,6 +47,7 @@ import { migration045 } from './045-turn-probe-field-integrity.ts';
 import { migration046 } from './046-project-description.ts';
 import { migration047 } from './047-navigation-pinned-column.ts';
 import { migration048 } from './048-member-description.ts';
+import { migration049 } from './049-member-templates.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -98,4 +99,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration046,
   migration047,
   migration048,
+  migration049,
 ];

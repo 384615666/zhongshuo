@@ -22,14 +22,17 @@ import { navigate } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
+import { memberWrite } from './data/memberWrites';
 import { fullTime } from './lib/format';
+import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
-export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string }
+export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
 export interface RuntimeInfo {
   binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null };
   installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null;
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
+  executableStatus?:{status:'found'|'missing'|'unknown';reason:string};
   environment?: { realDispatchGuard?: boolean; allowFake?: boolean };
   imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
 }
@@ -62,6 +65,12 @@ export function MembersPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const genRef = useRef(0);
+  const [query,setQuery]=useState('');
+  const [statusFilter,setStatusFilter]=useState('all');
+  const [editFor,setEditFor]=useState<{projectId:string;member:MemberRow}|null>(null);
+  const [saveTemplateFor,setSaveTemplateFor]=useState<{projectId:string;member:MemberRow}|null>(null);
+  const visibleMembers=membersInScope?.filter(m => `${m.displayName} ${m.description??''} ${memberShortId(m.id)}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()) && (statusFilter==='all'||(statusFilter==='enabled'?m.enabled:!m.enabled)));
+
 
   const reload = useCallback(async () => {
     if (projectId == null || projectId === '') return;
@@ -113,7 +122,9 @@ export function MembersPage() {
   const toggle = async (m: MemberRow) => {
     setBusyId(m.id);
     try {
-      await command('member.setEnabled', { memberId: m.id, enabled: !m.enabled });
+      const outcome=await memberWrite(`member.setEnabled:${projectId}:${m.id}`,'member.setEnabled',{projectId,memberId:m.id,expectedRevision:m.revision,enabled:!m.enabled});
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；请在未知成员操作区同号重放`:`${outcome.code}：${outcome.error}`);
+      if(getState().activeProjectId!==projectId)return;
       recordWrite('member.setEnabled', `${m.displayName} → ${!m.enabled ? '启用' : '停用'}（作用=之后的派发；在途不受影响）`);
       toast(`已${!m.enabled ? '启用' : '停用'} ${m.displayName}（作用范围：之后的新派发）`, 'success');
       await reload();
@@ -126,7 +137,7 @@ export function MembersPage() {
 
   /** r63→R66：绑定编辑弹窗（member.setRuntime——正式命令；fake 仅环境显式允许时可选）。 */
   const guard = useStore((st) => st.dispatchGuard);
-  const [bindFor, setBindFor] = useState<MemberRow | null>(null);
+  const [bindFor, setBindFor] = useState<{projectId:string;member:MemberRow}|null>(null);
   /** R67：添加成员（member.create 正式合同——已批准原型入口，无用户延期依据）。
    * R68 §5B：捕获**打开时**的 projectId（addFor）——弹窗存续期间全局项目切换（标题栏菜单/
    * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。 */
@@ -141,8 +152,10 @@ export function MembersPage() {
       executable: cur?.installation?.executable ?? '',
       permissionMode: cur?.binding?.permissionMode ?? '',
     });
-    setBindFor(m);
+    setBindFor({projectId,member:m});
   };
+
+  useEffect(()=>{const changed=(event:Event)=>{const p=(event as CustomEvent<{projectId?:string}>).detail?.projectId;if(p==null||p===projectId)void reload();};window.addEventListener('zs-member-changed',changed);return()=>window.removeEventListener('zs-member-changed',changed);},[reload,projectId]);
 
   const coordinatorIds = new Set(rooms.map((r) => r.coordinatorMemberId).filter((x): x is string => x != null));
   /** R68 §5A：当前项目归档/移除——添加入口禁用+说明（服务端同判拒绝，双保险）。 */
@@ -179,6 +192,7 @@ export function MembersPage() {
       return { text: '未绑定（点「配置 runtime」选择渠道与模型）', problem: true };
     }
     if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
+    if(rt.executableStatus?.status==='missing')return {text:`已保存配置 · 程序不可用：${rt.executableStatus.reason}；请配置可用程序后再派工`,problem:true};
     return { text: `${rt.installation.kind} · 工具权限限制认证：${runtimeAuthOf(rt.installation.capabilities_json)}` };
   };
 
@@ -187,6 +201,7 @@ export function MembersPage() {
       <div className="page">
         {/* 筛选行（原型：项目选择与顶栏同源——切换即聚焦并路由；「添加成员」按钮不设：
             成员由项目注册建立（member.create 属 DEV-10 后续批次），不放假成功入口）。 */}
+        <UnknownMemberOperations/>
         <div className="page-filters">
           <label className="field inline">
             <span className="field-label">项目</span>
@@ -198,6 +213,8 @@ export function MembersPage() {
               options={projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
             />
           </label>
+          <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明 / 短ID" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
+          <Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/>
           <span className="filter-note">
             {membersInScope?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
           </span>
@@ -230,7 +247,7 @@ export function MembersPage() {
 
         {/* 成员卡片（原型 grid-2：头像+名称+身份标签 / runtime 有效来源 / 在跑任务） */}
         <div className="grid grid-2">
-          {membersInScope?.map((m) => {
+          {visibleMembers?.map((m) => {
             const rt = runtimeLabel(m);
             const running = workload.data?.items.find(row=>row.memberId===m.id);
             return (
@@ -268,7 +285,9 @@ export function MembersPage() {
                   </details> : null}
                 </div>
                 {m.principalType === 'agent' ? (
-                  <div className="row tight" style={{ marginTop: 10 }}>
+                  <div className="row tight wrap" style={{ marginTop: 10 }}>
+                    <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
+                    <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                     <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
                       title={m.enabled ? '停用：不再参与之后派发（在途不受影响）' : '启用：恢复参与之后的派发'}>
                       {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
@@ -283,6 +302,8 @@ export function MembersPage() {
           })}
         </div>
 
+        {membersInScope!=null && visibleMembers?.length===0 && membersInScope.length>0 ? <div className="panel">没有匹配的成员；筛选不会修改成员或任务。</div>:null}
+        <TemplatePanel projectId={projectId} readOnly={projArchived||projRemoved} onChanged={reload}/>
         <div className="section-title" style={{ marginTop: 22 }}>房间名单</div>
         <div className="panel">
           <div className="faint small" style={{ marginBottom: 8 }}>成员参与派发的实际边界；建房默认全加入（★=该房间协调者）。</div>
@@ -322,6 +343,8 @@ export function MembersPage() {
         </div>
       </div>
 
+      {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}
+      {saveTemplateFor ? <SaveMemberTemplateModal key={`${saveTemplateFor.projectId}:${saveTemplateFor.member.id}`} projectId={saveTemplateFor.projectId} member={saveTemplateFor.member} onClose={()=>setSaveTemplateFor(null)} onSaved={()=>{setSaveTemplateFor(null);window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));}}/>:null}
       {addFor != null ? (
         <AddMemberModal
           projectId={addFor}
@@ -339,9 +362,10 @@ export function MembersPage() {
       ) : null}
 
       {/* 配置 runtime 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变） */}
-      {bindFor != null && bindFor.principalType === 'agent' ? (
+      {bindFor != null && bindFor.member.principalType === 'agent' ? (
         <BindRuntimeModal
-          member={bindFor}
+          member={bindFor.member}
+          projectId={bindFor.projectId}
           initial={bindForm}
           guard={guard}
           onClose={() => setBindFor(null)}
@@ -352,13 +376,16 @@ export function MembersPage() {
   );
 }
 
-export function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
+export function BindRuntimeModal({ member, projectId, initial, guard, onClose, onSaved }: {
   member: MemberRow;
+  projectId:string;
   initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
+  const targetProject=useRef(projectId).current;
+  const formGuard=useFormGuard(targetProject);
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -366,20 +393,23 @@ export function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
   const savePending = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const save = async () => {
-    if (savePending.current) return;
+    if (savePending.current||!formGuard.valid()) return;
     if (form.kind === 'claude' && form.model.trim().length === 0) { toast('claude 绑定必须显式指定模型（服务端同判）', 'warn'); return; }
     savePending.current = true; setBusy(true); setSaveError(null);
     try {
-      await command('member.setRuntime', {
+      const outcome=await memberWrite(`member.setRuntime:${targetProject}:${member.id}`,'member.setRuntime', {projectId:targetProject,expectedRevision:member.revision,
         memberId: member.id, kind: form.kind,
         ...(form.model.trim().length > 0 ? { model: form.model.trim() } : {}),
         ...(form.executable.trim().length > 0 ? { executable: form.executable.trim() } : {}),
         ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
       });
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
+      if(!formGuard.valid())return;
       recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${form.model ? `（${form.model}）` : ''}——配置成功≠能力已认证`);
       toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${form.model ? ' · ' + form.model : ''}）——能力认证状态以成员页回读为准`, 'success');
       if (mounted.current) await onSaved();
     } catch (e) {
+      if (!formGuard.valid())return;
       if (mounted.current) setSaveError((e as Error).message);
       toast(`绑定失败：${(e as Error).message}`, 'error'); // 防护模式拒真实绑定/模型缺失等真实原因上屏
     } finally { savePending.current = false; if (mounted.current) setBusy(false); }
@@ -395,11 +425,12 @@ export function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
           <span className="small faint">{guard?.realDispatchGuard === true ? '当前为验收防护环境：真实渠道绑定会被拒绝' : '保存后回读显示能力状态'}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary sm" disabled={busy} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存绑定'}</button>
+          <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存绑定'}</button>
         </>
       }
     >
       <div className="col" style={{ gap: 10 }}>
+        {formGuard.invalid?<div className="panel warning">目标已切换，本表单作废；请关闭后重新配置。</div>:null}
         {saveError != null ? <div className="panel warning">绑定失败：{saveError}。输入已保留，可调整后重试。</div> : null}
         <label className="field" title="runtime 渠道（派发侧按此选 adapter）">
           <span className="field-label">渠道</span>
@@ -450,24 +481,30 @@ export function BindRuntimeModal({ member, initial, guard, onClose, onSaved }: {
  * projectId**：存续期间全局项目切换（标题栏/深链/受控事件）→ 表单作废（提交禁用+可见说明），
  * 提交前再核对一次；迟到回执只刷新提交目标项目（onCreated 侧门控）。 */
 function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCreated }: { projectId: string; projectName: string; activeProjectId: string; onClose: () => void; onCreated: (memberId: string) => void | Promise<void> }) {
+  const formGuard=useFormGuard(projectId);
+  const inFlight=useRef(false);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rooms = useStore((s) => s.rooms);
   const joinable = rooms.filter((r) => r.projectId === projectId && r.archivedAt == null);
-  const stale = activeProjectId !== projectId; // 打开后全局项目被切走——旧表单作废
+  const stale = formGuard.invalid||activeProjectId !== projectId; // 打开后全局项目被切走——旧表单作废
   const submit = async () => {
-    if (stale) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
+    if(inFlight.current)return;
+    if (stale||!formGuard.valid()) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
     if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
-    setBusy(true); setErr(null);
+    inFlight.current=true;setBusy(true); setErr(null);
     try {
-      const r = await command<{ memberId: string; roomsJoined: number }>('member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}) });
+      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}) });
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
+      const r=outcome.data;
+      if(!formGuard.valid())return;
       recordWrite('member.create', `添加成员「${name.trim()}」到 ${projectName}（加入 ${r.roomsJoined} 个未归档房间；不自动协调者）`);
       await onCreated(r.memberId);
     } catch (e) {
-      setErr(`添加失败：${(e as Error).message}`); // 归档/移除守卫等真实原因上屏
-    } finally { setBusy(false); }
+      if(formGuard.valid())setErr(`添加未确认：${(e as Error).message}`); // 归档/移除守卫等真实原因上屏
+    } finally { inFlight.current=false;if(formGuard.alive.current)setBusy(false); }
   };
   return (
     <Modal

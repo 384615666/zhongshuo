@@ -6,7 +6,9 @@ import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { navigate } from '../lib/router';
 import { refreshMembers, switchFocusProject } from '../loader';
+import { memberWrite } from '../data/memberWrites';
 import { recordWrite } from '../data/store';
+import { EditMemberModal, SaveMemberTemplateModal, UnknownMemberOperations } from '../components/MemberManagementForms';
 import { BindRuntimeModal, runtimeAuthOf, type MemberRow, type RuntimeInfo } from '../MembersPage';
 
 export function MemberDetailPage({ projectId, memberId }: { projectId: string; memberId: string }) {
@@ -18,6 +20,8 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bindOpen, setBindOpen] = useState(false);
+  const [editOpen,setEditOpen]=useState(false);
+  const [templateOpen,setTemplateOpen]=useState(false);
   const seq = useRef(0);
   const mounted = useRef(false);
   const togglePending = useRef(false);
@@ -42,7 +46,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
     } catch (e) { if (current === seq.current) setError((e as Error).message); }
   }, [projectId, memberId]);
 
-  useEffect(() => { mounted.current = true; void reload(); return () => { mounted.current = false; seq.current += 1; }; }, [reload]);
+  useEffect(() => { mounted.current = true; setMember(null);setRuntime(null);setRuntimeError(null);setBindOpen(false);setEditOpen(false);setTemplateOpen(false);void reload(); return () => { mounted.current = false; seq.current += 1; }; }, [reload]);
   useEffect(() => { if (project != null && activeId !== projectId) void switchFocusProject(projectId).catch((e: unknown) => toast(`聚焦项目失败：${(e as Error).message}`, 'error')); }, [project, projectId, activeId]);
 
   const toggle = async () => {
@@ -50,7 +54,10 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
     togglePending.current = true;
     setBusy(true);
     try {
-      await command('member.setEnabled', { memberId: member.id, enabled: !member.enabled });
+      const version=seq.current;
+      const outcome=await memberWrite(`member.setEnabled:${projectId}:${member.id}`,'member.setEnabled',{projectId,memberId:member.id,expectedRevision:member.revision,enabled:!member.enabled});
+      if(!mounted.current||seq.current!==version)return;
+      if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；请在未知成员操作区人工同号重放`:`${outcome.code}：${outcome.error}`);
       recordWrite('member.setEnabled', `${member.displayName} → ${member.enabled ? '停用' : '启用'}（之后新派发）`);
       if (mounted.current) await reload();
       toast(`已${member.enabled ? '停用' : '启用'}「${member.displayName}」——只影响之后的新派发`, 'success');
@@ -84,23 +91,24 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           </div>
         </div>
 
+        <UnknownMemberOperations/>
         {error != null ? <div className="panel warning">成员读取失败：{error} <button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
         {member == null && error == null ? <div className="panel info">正在读取成员身份…</div> : null}
         {member != null ? <>
           <div className="grid grid-2">
             <div className="card">
               <div className="card-title" style={{ marginBottom: 12 }}>身份与执行程序</div>
-              <label className="field">
-                <span className="field-label">显示名</span>
-                <input className="input" value={member.displayName} disabled title="成员改名命令尚未接入，历史身份不能由本页模拟修改" readOnly />
-                <span className="field-hint">成员改名命令未接入；同名成员依稳定 ID 区分，不能用名称推断身份。</span>
-              </label>
+              <div className="strong">{member.displayName} <span className="mono-sm faint">#{memberShortId(member.id)}</span></div>
+              <div className="small faint" style={{margin:'6px 0 10px'}}>{member.description||'尚未填写说明'}</div>
+              <div className="row tight wrap"><button className="btn sm" data-zs-member-edit={member.id} disabled={project.archivedAt!=null||project.removedAt!=null} onClick={()=>setEditOpen(true)}>编辑名称与说明…</button>
+              {member.principalType==='agent'?<button className="btn sm" data-zs-member-template={member.id} disabled={project.archivedAt!=null||project.removedAt!=null||runtimeError!=null||runtime?.installation==null} onClick={()=>setTemplateOpen(true)}>保存配置模板…</button>:null}</div>
               <dl className="kv">
                 <dt>项目</dt><dd>{project.displayName}</dd>
                 <dt>成员 ID</dt><dd className="mono-sm" style={{ overflowWrap: 'anywhere' }}>{member.id}</dd>
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
                 <dt>Runtime</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已绑定` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 全局默认（未绑定）` : '未绑定／来源未解析'}</dd>
+                <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${runtime.executableStatus.reason}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
                 <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
               </dl>
               {runtimeError != null ? <div className="panel warning">runtime 读取失败：{runtimeError}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
@@ -133,7 +141,9 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           </div>
         </> : null}
       </div>
-      {member != null && bindOpen ? <BindRuntimeModal member={member} initial={initial} guard={guard} onClose={() => setBindOpen(false)} onSaved={async () => { if (!mounted.current) return; setBindOpen(false); await reload(); void refreshMembers(projectId).catch(() => {}); }} /> : null}
+      {member!=null&&editOpen?<EditMemberModal key={`${projectId}:${memberId}`} projectId={projectId} member={member} onClose={()=>setEditOpen(false)} onSaved={async()=>{setEditOpen(false);await reload();}}/>:null}
+      {member!=null&&templateOpen?<SaveMemberTemplateModal key={`${projectId}:${memberId}`} projectId={projectId} member={member} onClose={()=>setTemplateOpen(false)} onSaved={()=>{setTemplateOpen(false);toast('配置模板已保存；成员管理页可查看与复用','success');}}/>:null}
+      {member != null && bindOpen ? <BindRuntimeModal member={member} projectId={projectId} initial={initial} guard={guard} onClose={() => setBindOpen(false)} onSaved={async () => { if (!mounted.current) return; setBindOpen(false); await reload(); void refreshMembers(projectId).catch(() => {}); }} /> : null}
     </div>
   );
 }

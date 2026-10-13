@@ -204,6 +204,8 @@ export interface AgentProfile {
 }
 
 export interface ProjectMember {
+  description?:string;
+  revision?:number;
   id: string;
   projectId: string;
   profileId: string;

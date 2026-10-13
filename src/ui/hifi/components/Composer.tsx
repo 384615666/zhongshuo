@@ -1170,7 +1170,7 @@ export function Composer({
               <button key={m.id} className="menu-item" onClick={() => insertMention(m.id)} disabled={!m.enabled} data-zs-mention-option={m.id} title={`成员实例 ${m.displayName}（完整 ID ${m.id}）`}>
                 <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={16} />
                 <span style={{ flex: 1 }}>{memberLabel(m)}<span className="mono-sm faint"> #{memberShortId(m.id)}</span></span>
-                <span className="hint">{runtimeLabelOf(m)}</span>
+                <span className="hint">{m.description?`${m.description} · `:''}{runtimeLabelOf(m)}</span>
               </button>
             ))}
           </div>

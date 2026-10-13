@@ -23,7 +23,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 /** R65：注册表条目（project.list——多项目前端集合的事实源）。 */
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
-interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean }> }
+interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
@@ -600,7 +600,7 @@ export async function refreshMembers(projectIdArg?: string): Promise<void> {
   setState((prev) => ({
     ...prev,
     members: (data.items ?? []).map((m) => ({
-      id: m.id, projectId, profileId: '', displayName: m.displayName, enabled: m.enabled,
+      id: m.id, projectId, profileId: '', displayName: m.displayName, description:m.description,revision:m.revision, enabled: m.enabled,
       principalType: m.principalType,
       workState: 'idle' as const, model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
     })),

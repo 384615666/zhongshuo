@@ -27,6 +27,7 @@ import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHisto
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
+import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus } from './memberManagement.ts';
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
@@ -143,7 +144,7 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const installation = binding.installationId == null ? null
     : (db.prepare('SELECT id, kind, executable, capabilities_json FROM runtime_installations WHERE id = ?').get(binding.installationId) as { id: string; kind: string; executable: string; capabilities_json: string | null } | undefined) ?? null;
   const effective = resolveMemberRuntime(db, memberId, process.env.ZS_RUNTIME ?? null);
-  return { binding, installation, effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
+  return { binding, installation, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
 }
@@ -780,6 +781,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
   };
 
   try {
+    const management = memberManagementCommand(deps.db, env.method, env.params, run, (code,message) => { throw new DaemonCommandError(code,message); }, deps.remoteAudit != null);
+    if (management != null) return withCommandId({ok:true,...management});
     switch (env.method) {
       case 'project.list': {
         // R65（review-r64 §1A）：注册表只读——多项目前端集合的事实源（此前 UI 只装当前单个，
@@ -1057,9 +1060,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'member.list': {
         const params = z.strictObject({ projectId: z.string().min(1), roomId: z.string().min(1).optional() }).parse(env.params);
         const rows = params.roomId != null
-          ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled, pm.description FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? ORDER BY pm.id`).all(params.roomId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null }>)
-          : (deps.db.prepare('SELECT id, display_name, principal_type, enabled, description FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null }>);
-        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1, description: r.description ?? undefined })) } });
+          ? (deps.db.prepare(`SELECT pm.id, pm.display_name, pm.principal_type, pm.enabled, pm.description, pm.settings_revision FROM room_members rm JOIN project_members pm ON pm.id = rm.member_id WHERE rm.room_id = ? AND pm.project_id = ? ORDER BY pm.id`).all(params.roomId, params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>)
+          : (deps.db.prepare('SELECT id, display_name, principal_type, enabled, description, settings_revision FROM project_members WHERE project_id = ? ORDER BY id').all(params.projectId) as Array<{ id: string; display_name: string; principal_type: string; enabled: number; description: string | null; settings_revision:number }>);
+        return withCommandId({ ok: true, data: { items: rows.map((r) => ({ id: r.id, displayName: r.display_name, principalType: r.principal_type, enabled: r.enabled === 1, description: r.description ?? undefined, revision:r.settings_revision })) } });
       }
       case 'member.create': {
         // R67 P4（review-r66 §4：已批准原型有成员添加/实例配置入口——无用户延期依据，补正式合同）：
@@ -1102,17 +1105,20 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'member.setEnabled': {
         // 协作参与设置（第十六轮六）：停用成员=不再参与之后派发（enabledAgents 过滤已在生产链路）；
         // 在途 turn 不受影响（派发时点读取）。协调者不可停用（AUTO 路由依赖，明确拒绝不静默换人）。
-        const params = z.strictObject({ memberId: z.string().min(1), enabled: z.boolean() }).parse(env.params);
+        const params = z.strictObject({ memberId: z.string().min(1), projectId:z.string().min(1).optional(),expectedRevision:z.number().int().nonnegative().optional(), enabled: z.boolean() }).parse(env.params);
         // 校验在事务外（run 内抛领域错会被幂等网关包装成 STORAGE_UNAVAILABLE——丢失错误码）。
         const member = deps.db.prepare('SELECT pm.id, pm.enabled, r.coordinator_member_id FROM project_members pm LEFT JOIN rooms r ON r.coordinator_member_id = pm.id WHERE pm.id = ? LIMIT 1').get(params.memberId) as { id: string; enabled: number; coordinator_member_id: string | null } | undefined;
         if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
         if (params.enabled === false && member.coordinator_member_id === member.id) {
           throw new DaemonCommandError('VALIDATION_INVALID', '协调者不可停用（房间 AUTO 路由依赖协调者——如需更换请先调整协调者）');
         }
+        const scope=()=>{const row=deps.db.prepare('SELECT project_id FROM project_members WHERE id=?').get(params.memberId) as {project_id:string};assertMemberProject(deps.db,row.project_id,(c,m)=>{throw new DaemonCommandError(c,m);});};scope();
+        const checkTarget=()=>{const target=deps.db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(params.memberId) as {project_id:string;settings_revision:number}|undefined;if(target==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');if(params.projectId!=null&&target.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不属于目标项目');if(params.expectedRevision!=null&&target.settings_revision!==params.expectedRevision)throw new DaemonCommandError('STALE_REVISION','成员版本已变化，请刷新后确认');};
         const result = run(() => {
-          deps.db.prepare('UPDATE project_members SET enabled = ? WHERE id = ?').run(params.enabled ? 1 : 0, params.memberId);
+          checkTarget();
+          deps.db.prepare('UPDATE project_members SET enabled = ?, settings_revision=settings_revision+1 WHERE id = ?').run(params.enabled ? 1 : 0, params.memberId);
           return { memberId: params.memberId, enabled: params.enabled, scope: '该成员之后的派发（在途 turn 不受影响）' };
-        });
+        },()=>{scope();if(params.projectId!=null){const row=deps.db.prepare("SELECT project_id FROM project_members WHERE id=?").get(params.memberId) as {project_id:string};if(row.project_id!==params.projectId)throw new DaemonCommandError("RESOURCE_NOT_FOUND","成员不属于目标项目");}});
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'member.setRuntime': {
@@ -1121,6 +1127,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // capabilities_json 分开记录工具能力三态/模型可用性/权限认证——不因配置成功宣称已认证。
         const params = z.strictObject({
           memberId: z.string().min(1),
+          projectId:z.string().min(1).optional(),expectedRevision:z.number().int().nonnegative().optional(),
           kind: z.enum(['codex', 'claude', 'fake']),
           model: z.string().min(1).optional(),
           executable: z.string().min(1).optional(),
@@ -1140,33 +1147,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (process.env.ZS_REAL_DISPATCH_GUARD === '1' && (params.kind === 'claude' || params.kind === 'codex')) {
           throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', `验收防护模式（ZS_REAL_DISPATCH_GUARD=1）下不可绑定真实 runtime（${params.kind}）：绑定后该成员的所有任务派发都会被防护拒绝（零真实调用护栏）。本包用于模拟/验收——请保持 fake（member.setRuntime kind=fake，需 ZS_ALLOW_FAKE=1），或在正式部署环境（不设该变量）绑定真实渠道`);
         }
+        const scope = () => { const m=deps.db.prepare('SELECT project_id FROM project_members WHERE id=?').get(params.memberId) as {project_id:string}|undefined; if(m==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');assertMemberProject(deps.db,m.project_id,(c,m)=>{throw new DaemonCommandError(c,m);}); };
+        scope();
+        const checkTarget=()=>{const target=deps.db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(params.memberId) as {project_id:string;settings_revision:number}|undefined;if(target==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');if(params.projectId!=null&&target.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不属于目标项目');if(params.expectedRevision!=null&&target.settings_revision!==params.expectedRevision)throw new DaemonCommandError('STALE_REVISION','成员版本已变化，请刷新后确认');};
         const result = run(() => {
+          checkTarget();
+          scope();
           const member = deps.db.prepare('SELECT id FROM project_members WHERE id = ?').get(params.memberId) as { id: string } | undefined;
           if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
-          const executable = params.executable ?? (params.kind === 'claude' ? 'claude' : params.kind);
-          const installationId = `ri_${params.kind}_${createHash('sha256').update(`${params.kind}|${executable}`).digest('hex').slice(0, 10)}`;
-          const adapterVersion = params.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : params.kind === 'codex' ? 'codex-appserver-adapter' : 'fake-adapter';
-          // 能力登记（单一真源=adapter 能力表；分别记录：工具能力三态/模型可用性/权限认证——
-          // 配置成功≠已认证，真实认证结论只适用于实测组合）。
-          const toolCapabilities = params.kind === 'claude' ? claudeCapabilities() : { note: 'codex/fake 能力表随各自 adapter 认证轮登记' };
-          const capabilities = {
-            toolCapabilities,
-            modelAvailability: params.model != null ? 'configured-unverified' : 'not-specified',
-            permissionAuth: 'unverified',
-          };
-          deps.db.prepare(
-            `INSERT INTO runtime_installations (id, kind, executable, version, adapter_version, capabilities_json, detected_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET capabilities_json = excluded.capabilities_json, detected_at = excluded.detected_at`,
-          ).run(installationId, params.kind, executable, '', adapterVersion, JSON.stringify(capabilities), Date.now());
-          const profileId = `ap_${params.memberId}`;
-          deps.db.prepare(
-            `INSERT INTO agent_profiles (id, name, description, runtime_installation_id, settings_json) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET runtime_installation_id = excluded.runtime_installation_id, settings_json = excluded.settings_json`,
-          ).run(profileId, `成员 ${params.memberId} 的 runtime profile`, null, installationId, JSON.stringify({ model: params.model ?? null, permissionMode: params.permissionMode ?? null }));
-          deps.db.prepare('UPDATE project_members SET profile_id = ?, settings_revision = settings_revision + 1 WHERE id = ?').run(profileId, params.memberId);
-          return { memberId: params.memberId, installationId, kind: params.kind, model: params.model ?? null, permissionMode: params.permissionMode ?? null };
-        });
+          return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??params.kind,model:params.model??null,permissionMode:params.permissionMode??null});
+        },()=>{scope();if(params.projectId!=null){const row=deps.db.prepare("SELECT project_id FROM project_members WHERE id=?").get(params.memberId) as {project_id:string};if(row.project_id!==params.projectId)throw new DaemonCommandError("RESOURCE_NOT_FOUND","成员不属于目标项目");}});
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
       case 'member.runtime': {
