@@ -1,12 +1,12 @@
 {
-  "pass": false,
-  "candidate": "desktop-daily-win-v21-rc4",
+  "pass": true,
+  "candidate": "desktop-daily-win-v21-rc6",
   "build": {
-    "buildId": "bld_50dcb1d7c8077116",
-    "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+    "buildId": "bld_13dda5dba459bbd4",
+    "commit": "ab6a2b07db70b899d38e826801608e53d021c4e1",
     "dirty": false,
     "dirtyDiffHash": null,
-    "builtAt": "2026-10-13T13:08:36.564Z",
+    "builtAt": "2026-10-13T13:42:44.605Z",
     "manifest": "MANIFEST-SHA256.json",
     "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
   },
@@ -16,11 +16,11 @@
       "pass": true,
       "facts": {
         "build": {
-          "buildId": "bld_50dcb1d7c8077116",
-          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "buildId": "bld_13dda5dba459bbd4",
+          "commit": "ab6a2b07db70b899d38e826801608e53d021c4e1",
           "dirty": false,
           "dirtyDiffHash": null,
-          "builtAt": "2026-10-13T13:08:36.564Z",
+          "builtAt": "2026-10-13T13:42:44.605Z",
           "manifest": "MANIFEST-SHA256.json",
           "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
         },
@@ -37,7 +37,16 @@
       }
     },
     {
-      "name": "same final BUILD real launcher business route plus zero-call read completion",
+      "name": "actual final launcher copy matches every packaged file",
+      "pass": true,
+      "facts": {
+        "matched": 593,
+        "total": 593,
+        "copy": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc6-real-release-20261013\\copy"
+      }
+    },
+    {
+      "name": "same final BUILD real launcher complete business and reading route",
       "pass": true,
       "facts": {
         "steps": [
@@ -49,13 +58,11 @@
           "UI explicit project grant",
           "UI revoke after confirmed exit",
           "ordinary UI DM real file v1→note→explicit rework→native session boundary→real v2→accept",
-          "new task after explicit revocation uses real readonly tools and leaves files unchanged"
-        ],
-        "readCompletion": [
+          "new task after explicit revocation uses real readonly tools and leaves files unchanged",
           "real activity official event locator reaches original project/task",
-          "ordinary close/reopen reads accepted room v2 actual file and revoked scope",
-          "same accepted DM task and both versions reopened; actual v2 source decoded via existing project file tree with unchanged original hash",
-          "read-only verification makes zero new model calls"
+          "existing file layout reads authoritative room/DM change sets and actual immutable v1/v2 text snapshots",
+          "ordinary close/reopen keeps v2 accepted history and actual source preview",
+          "reopen same DM accepted task and two actual delivery versions, original bytes unchanged"
         ],
         "calls": [
           {
@@ -64,8 +71,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_442c81fd-5b9b-4163-a7ca-0076bf8a057e",
-            "task_id": "task_75520f27-aa70-4e58-9a52-4cede4fe9261"
+            "turn_id": "turn_9f348f34-6ade-4fc5-b23f-7f16edf9b274",
+            "task_id": "task_0c52c08d-0ffe-4ec8-ace6-aa73cfb07aa6"
           },
           {
             "id": 2,
@@ -73,8 +80,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d"
+            "turn_id": "turn_c67a682a-4306-4ceb-8f7a-e1afe83e93d3",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3"
           },
           {
             "id": 3,
@@ -82,8 +89,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d"
+            "turn_id": "turn_7e8c0944-ef93-4fd7-84e7-56ee099fefd8",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3"
           },
           {
             "id": 4,
@@ -91,8 +98,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_fc9ef110-6712-4b92-b97a-88fde59f511f",
-            "task_id": "task_c7bef9bc-3cfb-46bf-861e-f11fc5e07add"
+            "turn_id": "turn_cbaf0dc7-d682-497f-93ab-fa30d45ffc88",
+            "task_id": "task_6d0287a4-050c-47e8-bec0-2da2ec3e9b82"
           },
           {
             "id": 5,
@@ -100,8 +107,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_c6f529f7-9334-447b-854d-5ce467dd845b",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035"
+            "turn_id": "turn_174bd904-797c-4f75-952b-52136ab66a94",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df"
           },
           {
             "id": 6,
@@ -109,8 +116,8 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035"
+            "turn_id": "turn_2aea6e7b-fd9d-4a1e-a32b-d2034eaaf216",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df"
           },
           {
             "id": 7,
@@ -118,13 +125,11 @@
             "model": "glm-5.3-flash",
             "response_model": "glm-5.3-flash",
             "status": "succeeded",
-            "turn_id": "turn_4da1f547-4c42-4022-b4e3-02ad2737ae36",
-            "task_id": "task_d9c68055-cc67-493a-a21b-7ac3567d6bc4"
+            "turn_id": "turn_6cd8a7f2-1041-47de-a1db-9d10304223b7",
+            "task_id": "task_cf7d76a0-cad9-4535-92a6-616fa43b70d1"
           }
         ],
-        "initialProbePass": false,
-        "initialProbeFailure": "Error: timeout real activity task locator: false\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r82-real-launcher.cjs:82:53",
-        "originalFailurePreserved": true,
+        "initialProbePass": true,
         "closed": true
       }
     },
@@ -132,7 +137,7 @@
       "name": "actual final file bytes and protected originals",
       "pass": true,
       "facts": {
-        "projectId": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+        "projectId": "prj_5690bcb6-4bae-4a9e-b8eb-714bb3535c99",
         "files": [
           {
             "file": "说明.md",
@@ -158,39 +163,17 @@
       "facts": {
         "tasks": [
           {
-            "id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
-            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+            "id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3",
+            "project_id": "prj_5690bcb6-4bae-4a9e-b8eb-714bb3535c99",
             "status": "DONE",
             "writeScope": {
               "authorized": 1,
-              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc4-real-release-20261013\\授权中文工程",
-              "revision": 3,
-              "memberRevision": 1,
-              "memberPermission": "acceptEdits",
-              "runtime": {
-                "memberId": "m_7ebfa623-6c52-40cd-a90a-2c779c573250",
-                "bound": true,
-                "kind": "claude",
-                "model": "glm-5.3-flash",
-                "installationId": "ri_claude_89ade9281c",
-                "permissionMode": "acceptEdits",
-                "executable": "claude"
-              },
-              "launchIdentity": "68b5a4a7e775a69afe1d98e975a97700de0d2513c063176a9007459cbdb64050"
-            }
-          },
-          {
-            "id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
-            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
-            "status": "DONE",
-            "writeScope": {
-              "authorized": 1,
-              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc4-real-release-20261013\\授权中文工程",
+              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc6-real-release-20261013\\授权中文工程",
               "revision": 1,
               "memberRevision": 1,
               "memberPermission": "acceptEdits",
               "runtime": {
-                "memberId": "m_7ebfa623-6c52-40cd-a90a-2c779c573250",
+                "memberId": "m_d35e5dbb-09b4-47ab-8509-93fd1df365db",
                 "bound": true,
                 "kind": "claude",
                 "model": "glm-5.3-flash",
@@ -198,75 +181,97 @@
                 "permissionMode": "acceptEdits",
                 "executable": "claude"
               },
-              "launchIdentity": "acd435f25ddae5832d48509036ace38625aefcc4859571b00d7adb983a98a72c"
+              "launchIdentity": "be0dcb7c767a874323cc81c949576a9235476786f961c121f7d4bb774e80566b"
+            }
+          },
+          {
+            "id": "task_c9423c65-cbce-4410-af90-848cddcd60df",
+            "project_id": "prj_5690bcb6-4bae-4a9e-b8eb-714bb3535c99",
+            "status": "DONE",
+            "writeScope": {
+              "authorized": 1,
+              "root": "D:\\zhongshuo\\dist\\desktop\\review-r82-v21-rc6-real-release-20261013\\授权中文工程",
+              "revision": 3,
+              "memberRevision": 1,
+              "memberPermission": "acceptEdits",
+              "runtime": {
+                "memberId": "m_d35e5dbb-09b4-47ab-8509-93fd1df365db",
+                "bound": true,
+                "kind": "claude",
+                "model": "glm-5.3-flash",
+                "installationId": "ri_claude_89ade9281c",
+                "permissionMode": "acceptEdits",
+                "executable": "claude"
+              },
+              "launchIdentity": "368b3d0408fe3528ef95ddad8f46077c0909c08b0c6f6562b0614b4ced4e6c31"
             }
           }
         ],
         "versions": [
           {
-            "id": "dlv_turn_c6f529f7-9334-447b-854d-5ce467dd845b",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
-            "run_id": "run_73c29044-2ec6-4d90-8d8c-c24f49a122d8",
+            "id": "dlv_turn_c67a682a-4306-4ceb-8f7a-e1afe83e93d3",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3",
+            "run_id": "run_179c9d52-f9e8-4333-b387-c6c348b7b4d4",
             "revision": 1,
-            "manifest_hash": "f233434e45c78f850a8d15728488c15d28228e415300a091facb08c23f25aecf",
-            "change_set_refs_json": "[\"cs_6612d174-4ce8-4929-93f3-ea1106312174\"]",
+            "manifest_hash": "83e10066ac9408df8ab59c3c058466c8de33c198d82f6233d5fd20baa003770c",
+            "change_set_refs_json": "[\"cs_bb66a208-3d3e-42eb-a663-74a5404276c7\"]",
             "review_status": "changes_requested"
           },
           {
-            "id": "dlv_turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
-            "run_id": "run_b942ba0e-0460-4415-ba56-1eb38fa271bc",
+            "id": "dlv_turn_7e8c0944-ef93-4fd7-84e7-56ee099fefd8",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3",
+            "run_id": "run_7885e4d5-d348-49af-add6-9e9c3a71fe97",
             "revision": 2,
-            "manifest_hash": "edd8707a3e74bcd8de978e3218b2cb6d3f7c5ab505113b0cd24625560baf8801",
-            "change_set_refs_json": "[\"cs_bcbf1a9e-eb5f-4719-b25e-69923e2329aa\"]",
+            "manifest_hash": "f699c7b57ee34ac02a91f2cca77e29e910c2d8afcaa8c822b03bc91a514c3acb",
+            "change_set_refs_json": "[\"cs_11fa925d-7438-4d1a-bd68-dc8c1aeda151\"]",
             "review_status": "accepted"
           },
           {
-            "id": "dlv_turn_51135221-ad58-4059-b109-cc452ee76d8d",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
-            "run_id": "run_f8adf29c-f0da-4456-a823-f9cb3820a0bb",
+            "id": "dlv_turn_174bd904-797c-4f75-952b-52136ab66a94",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df",
+            "run_id": "run_e1160063-5830-4167-b1fa-e1bbcdfecdff",
             "revision": 1,
-            "manifest_hash": "23f346ceb9aa51822de673d7c60b74c0c75c014ee02bf9a36f5de4ee2a56845f",
-            "change_set_refs_json": "[\"cs_19104475-11b9-4dda-9bae-39468deb2dd6\"]",
+            "manifest_hash": "cbb3c658b84f05ebc12cc66613ab9e33e6b39562ab705ace8a5452b224c768b5",
+            "change_set_refs_json": "[\"cs_728381cc-d974-4ac9-8a6c-dc5bf711a4b6\"]",
             "review_status": "changes_requested"
           },
           {
-            "id": "dlv_turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
-            "run_id": "run_b57798a4-b9fe-4338-bf43-6cfd69327295",
+            "id": "dlv_turn_2aea6e7b-fd9d-4a1e-a32b-d2034eaaf216",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df",
+            "run_id": "run_0ae396bd-63c9-4b43-8f4a-8044725a8f90",
             "revision": 2,
-            "manifest_hash": "e45f598d1f16abfd20738bdcfebf7acc18cc818a172c0feb9b27dc2b66e92255",
-            "change_set_refs_json": "[\"cs_ca41aced-9056-4111-8a7d-ea7f64e35c68\"]",
+            "manifest_hash": "3bfd279fd734e626fd5f2a606f1e110315968e6e29f6cfe3305974a34bf108f0",
+            "change_set_refs_json": "[\"cs_e2617018-c10d-4b16-968d-e90fecebb9a8\"]",
             "review_status": "accepted"
           }
         ],
         "diffs": [
           {
-            "id": "cs_19104475-11b9-4dda-9bae-39468deb2dd6",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
-            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_0a7fa1d1-ac1c-4b27-8ef7-02fb26f6dd7f\",\"capturedAt\":1791896988656,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
-            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_fda3d591-4a18-4bfa-8661-9fee1be76382\",\"capturedAt\":1791897022440}",
+            "id": "cs_bb66a208-3d3e-42eb-a663-74a5404276c7",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_79882d1c-3237-453e-b75b-09187c3b05c6\",\"capturedAt\":1791899084363,\"git\":{\"isRepo\":true,\"head\":\"ab6a2b07db70b899d38e826801608e53d021c4e1\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_e5490a24-00ab-426e-bccc-2ce98a70115a\",\"capturedAt\":1791899130042}",
             "application_status": "applied"
           },
           {
-            "id": "cs_ca41aced-9056-4111-8a7d-ea7f64e35c68",
-            "task_id": "task_71c5031e-9fe4-46fd-849c-a964d29a6e2d",
-            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_e5c47057-fa4c-44aa-8e47-ba53f1824749\",\"capturedAt\":1791897027792,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
-            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_a8e84568-05cf-4776-9609-8cc2dd8d6223\",\"capturedAt\":1791897087479}",
+            "id": "cs_11fa925d-7438-4d1a-bd68-dc8c1aeda151",
+            "task_id": "task_2ec6dac5-eec9-4c54-a7d2-29b19bf65ae3",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_5354deec-7ed8-4901-920a-e87e76e51af0\",\"capturedAt\":1791899135703,\"git\":{\"isRepo\":true,\"head\":\"ab6a2b07db70b899d38e826801608e53d021c4e1\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_b94ae49e-0c79-4a70-be35-4c079ce0bac3\",\"capturedAt\":1791899184998}",
             "application_status": "applied"
           },
           {
-            "id": "cs_6612d174-4ce8-4929-93f3-ea1106312174",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
-            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_a5b76804-51d7-4eb4-b6f5-92be909c042f\",\"capturedAt\":1791897177648,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
-            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_81db7f4a-5202-4a53-a452-bd4445282924\",\"capturedAt\":1791897209479}",
+            "id": "cs_728381cc-d974-4ac9-8a6c-dc5bf711a4b6",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_01fa3043-8032-4f73-a90d-5e0ed11f7739\",\"capturedAt\":1791899240146,\"git\":{\"isRepo\":true,\"head\":\"ab6a2b07db70b899d38e826801608e53d021c4e1\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_a477e2a3-53af-4f14-a3e9-c7ae701de3b4\",\"capturedAt\":1791899275107}",
             "application_status": "applied"
           },
           {
-            "id": "cs_bcbf1a9e-eb5f-4719-b25e-69923e2329aa",
-            "task_id": "task_5c9a8a48-b83f-429b-8edd-a64ebe49d035",
-            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_338a7e5f-726d-48e0-a12c-46fc7dd14b51\",\"capturedAt\":1791897212665,\"git\":{\"isRepo\":true,\"head\":\"3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
-            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_e4f83bc5-16e7-4b92-b2ef-096c2f405c5d\",\"capturedAt\":1791897235701}",
+            "id": "cs_e2617018-c10d-4b16-968d-e90fecebb9a8",
+            "task_id": "task_c9423c65-cbce-4410-af90-848cddcd60df",
+            "before_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_53bc5769-4958-4313-9ac5-d4c23127a38d\",\"capturedAt\":1791899279874,\"git\":{\"isRepo\":true,\"head\":\"ab6a2b07db70b899d38e826801608e53d021c4e1\",\"indexStatusHash\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"error\":null}}",
+            "after_ref": "{\"kind\":\"preimage\",\"captureId\":\"pre_04c9209c-315e-45a1-b8a9-4a3a8e3b5a67\",\"capturedAt\":1791899311106}",
             "application_status": "applied"
           }
         ]
@@ -278,7 +283,7 @@
       "facts": {
         "grants": [
           {
-            "project_id": "prj_14529e97-a713-4b96-b648-35fe742733cc",
+            "project_id": "prj_5690bcb6-4bae-4a9e-b8eb-714bb3535c99",
             "authorized": 0,
             "revision": 4
           }
@@ -286,47 +291,47 @@
         "held": [],
         "writeEvents": [
           {
-            "turnId": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
-            "toolCallId": "call_f8431c866a09451abfe57e87",
+            "turnId": "turn_c67a682a-4306-4ceb-8f7a-e1afe83e93d3",
+            "toolCallId": "call_c61b5469ab7e45a79d680af4",
             "toolName": "Edit",
-            "eventKey": "cevt_9f5a01ab0d2aa08e9ba2"
+            "eventKey": "cevt_7914cb5079c6efe0fbb1"
           },
           {
-            "turnId": "turn_51135221-ad58-4059-b109-cc452ee76d8d",
-            "toolCallId": "call_4a55f8e701134c8982ef725f",
+            "turnId": "turn_c67a682a-4306-4ceb-8f7a-e1afe83e93d3",
+            "toolCallId": "call_c5cf26f42d6c49e7bfe699c7",
             "toolName": "Edit",
-            "eventKey": "cevt_6a335c1e0cbf9b6e9ddb"
+            "eventKey": "cevt_42a40c3a419560184375"
           },
           {
-            "turnId": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
-            "toolCallId": "call_6689eef6e9e3499c939fc137",
+            "turnId": "turn_7e8c0944-ef93-4fd7-84e7-56ee099fefd8",
+            "toolCallId": "call_1d012564207d4a419af29d8a",
             "toolName": "Edit",
-            "eventKey": "cevt_36896c77de3c7db395ae"
+            "eventKey": "cevt_d6aa14770a6a03557a92"
           },
           {
-            "turnId": "turn_5f32d67b-ded8-4c69-8aab-d70877a909ce",
-            "toolCallId": "call_c1a21de29bf24f7ebb2a90f6",
+            "turnId": "turn_7e8c0944-ef93-4fd7-84e7-56ee099fefd8",
+            "toolCallId": "call_aa59d7c6e18f435d842cee56",
             "toolName": "Edit",
-            "eventKey": "cevt_f4f1649e51214fc5e297"
+            "eventKey": "cevt_fb7dc40e01d629ee5a5d"
           },
           {
-            "turnId": "turn_c6f529f7-9334-447b-854d-5ce467dd845b",
-            "toolCallId": "call_07b5acfb61fd482484fe280a",
+            "turnId": "turn_174bd904-797c-4f75-952b-52136ab66a94",
+            "toolCallId": "call_7183c114467849698af6d93d",
             "toolName": "Edit",
-            "eventKey": "cevt_840f62ed893c14747223"
+            "eventKey": "cevt_7175e252e814d1dc43b1"
           },
           {
-            "turnId": "turn_728bb607-e6f5-4bc3-8652-c7a78b9c0bb8",
-            "toolCallId": "call_7fc7bf305cde4617ab3c56d1",
+            "turnId": "turn_2aea6e7b-fd9d-4a1e-a32b-d2034eaaf216",
+            "toolCallId": "call_9edfc31963e04c3d83b6d55d",
             "toolName": "Edit",
-            "eventKey": "cevt_f2ae2c1aa59a3926532d"
+            "eventKey": "cevt_663f5100a8ff0c40c899"
           }
         ],
         "dmSessions": [
           {
             "session_generation": 0,
-            "provider_session_id": "06fd3f9d-30d4-44a9-bb09-12c19ca766a0",
-            "capabilities_json": "{\"runtimeKind\":\"claude\",\"model\":\"glm-5.3-flash\",\"installationId\":\"ri_claude_89ade9281c\",\"writeIdentity\":\"68b5a4a7e775a69afe1d98e975a97700de0d2513c063176a9007459cbdb64050\",\"permissionMode\":\"acceptEdits\",\"cwd\":\"D:\\\\zhongshuo\\\\dist\\\\desktop\\\\review-r82-v21-rc4-real-release-20261013\\\\授权中文工程\"}"
+            "provider_session_id": "3d4208f7-0a21-4735-b3cb-b96547f24d38",
+            "capabilities_json": "{\"runtimeKind\":\"claude\",\"model\":\"glm-5.3-flash\",\"installationId\":\"ri_claude_89ade9281c\",\"writeIdentity\":\"368b3d0408fe3528ef95ddad8f46077c0909c08b0c6f6562b0614b4ced4e6c31\",\"permissionMode\":\"acceptEdits\",\"cwd\":\"D:\\\\zhongshuo\\\\dist\\\\desktop\\\\review-r82-v21-rc6-real-release-20261013\\\\授权中文工程\"}"
           }
         ]
       }
@@ -406,6 +411,34 @@
       }
     },
     {
+      "name": "same final BUILD visible change detail and paired prototype viewports",
+      "pass": true,
+      "facts": {
+        "viewports": [
+          {
+            "name": "wide",
+            "width": 1440,
+            "height": 960,
+            "dpr": 1
+          },
+          {
+            "name": "narrow",
+            "width": 900,
+            "height": 800,
+            "dpr": 1
+          },
+          {
+            "name": "hidpi",
+            "width": 1280,
+            "height": 800,
+            "dpr": 1.5
+          }
+        ],
+        "density": "formal four actual change sets versus approved prototype five; formal six members/three templates in member comparison",
+        "scope": "viewport/visibility gates plus manually inspected PNGs, not pixel identity or user acceptance"
+      }
+    },
+    {
       "name": "full owned old-root upgrade and actual old-version rejection/backup reopen",
       "pass": true,
       "facts": {
@@ -419,11 +452,11 @@
           "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
         },
         "newBuild": {
-          "buildId": "bld_50dcb1d7c8077116",
-          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "buildId": "bld_13dda5dba459bbd4",
+          "commit": "ab6a2b07db70b899d38e826801608e53d021c4e1",
           "dirty": false,
           "dirtyDiffHash": null,
-          "builtAt": "2026-10-13T13:08:36.564Z",
+          "builtAt": "2026-10-13T13:42:44.605Z",
           "manifest": "MANIFEST-SHA256.json",
           "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
         },
@@ -499,36 +532,36 @@
       "pass": true,
       "facts": {
         "facts": {
-          "buildId": "bld_50dcb1d7c8077116",
-          "commit": "3d11a6b2fd9d4bab3c9bbbd824ddd71400afb635",
+          "buildId": "bld_13dda5dba459bbd4",
+          "commit": "ab6a2b07db70b899d38e826801608e53d021c4e1",
           "origin": {
-            "hash": "#/project/prj_32322d57-76a5-4556-a2cd-107b0d07",
+            "hash": "#/project/prj_0988b7e8-fc0c-46d6-8d27-5fe2f2c7",
             "active": "项目A"
           },
           "openB": {
-            "hash": "#/project/prj_ab95dc6a-dbb8-4b75-9449-034b4a1668e8/room/room_default_prj_ab95dc6a-dbb8-4b75-9449-034b4a1668e8",
+            "hash": "#/project/prj_9e18617b-908f-4297-a45b-f1bbc76e0190/room/room_default_prj_9e18617b-908f-4297-a45b-f1bbc76e0190",
             "active": "项目B",
             "composer": true,
-            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目B",
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791899162658\\项目B",
             "projAKept": true,
             "toasts": []
           },
           "openC": {
-            "hash": "#/project/prj_602e52fe-7cb1-4bb9-910b-fd91db983163/room/room_default_prj_602e52fe-7cb1-4bb9-910b-fd91db983163",
+            "hash": "#/project/prj_d09ee90e-ae1d-4026-8668-3a4bf14660a5/room/room_default_prj_d09ee90e-ae1d-4026-8668-3a4bf14660a5",
             "active": "项目C",
-            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目C",
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791899162658\\项目C",
             "toasts": []
           },
           "restart": {
             "active": "项目C",
-            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791897035230\\项目C"
+            "lastPath": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791899162658\\项目C"
           },
           "filesOk": true,
           "readRegression": {
             "pass": true,
             "scope": "own generated 64x48 PNG only; normal final BAT, no engineering runtime; record-only formal submit",
-            "attachmentId": "art_f6821d50-6173-4a5b-a5ea-e6fdfefd10ab",
-            "messageId": "msg_29a9d3ce-3f6b-4916-b7d8-06ec03a60a0c",
+            "attachmentId": "art_eac6072b-954e-4787-b3ac-52796bfda47f",
+            "messageId": "msg_a11c3c31-0264-4cb9-a4c1-1ef79d18dfd1",
             "sha256": "48ebaec455f7781a07b76fcf6bc2f80cdd78a18022b2e80869cd4a7f15144c1b",
             "image": {
               "width": 64,
@@ -538,19 +571,19 @@
             },
             "samples": [
               {
-                "at": 1791897055080,
+                "at": 1791899182462,
                 "chips": 1
               },
               {
-                "at": 1791897060286,
+                "at": 1791899187676,
                 "chips": 1
               },
               {
-                "at": 1791897065494,
+                "at": 1791899192880,
                 "chips": 1
               },
               {
-                "at": 1791897070703,
+                "at": 1791899198084,
                 "chips": 1
               }
             ],
@@ -578,8 +611,8 @@
       "name": "source tests and both type checks",
       "pass": true,
       "facts": {
-        "tests": 1014,
-        "files": 144,
+        "tests": 1017,
+        "files": 145,
         "excluded": "existing external githubSandbox; not recertified"
       }
     },
@@ -587,7 +620,7 @@
       "name": "changed-file lint has no additional errors",
       "pass": true,
       "facts": {
-        "files": 42
+        "files": 47
       }
     },
     {
@@ -599,10 +632,6 @@
           "src/persistence/migrations/registry.ts"
         ]
       }
-    },
-    {
-      "name": "authoritative changes visible in file page",
-      "pass": false
     }
   ],
   "realCalls": {
@@ -747,6 +776,55 @@
         "model": "glm-5.3-flash",
         "response_model": "glm-5.3-flash",
         "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_9f348f34-6ade-4fc5-b23f-7f16edf9b274",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_c67a682a-4306-4ceb-8f7a-e1afe83e93d3",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_7e8c0944-ef93-4fd7-84e7-56ee099fefd8",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_cbaf0dc7-d682-497f-93ab-fa30d45ffc88",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_174bd904-797c-4f75-952b-52136ab66a94",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_2aea6e7b-fd9d-4a1e-a32b-d2034eaaf216",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
+      },
+      {
+        "turn_id": "turn_6cd8a7f2-1041-47de-a1db-9d10304223b7",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "glm-5.3-flash",
+        "status": "succeeded"
       }
     ],
     "probes": [
@@ -814,54 +892,262 @@
       {
         "path": "dist/desktop/review-r82-v21-rc4-real-release-20261013/copy/server-data/state.sqlite",
         "calls": 7
+      },
+      {
+        "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/copy/server-data/state.sqlite",
+        "calls": 7
       }
     ],
-    "total": 25
+    "total": 32
   },
+  "realCodexCalls": 0,
+  "newVisionCalls": 0,
+  "userAcceptance": "not yet confirmed; engineering verification only",
   "evidence": [
     {
-      "path": "dist/desktop/desktop-daily-win-v21-rc4/ZhongshuoDual/MANIFEST-SHA256.json",
-      "sha256": "f816a24b676040d7f5f55da78b49da7aa0075b72d57d2b819ce993a403d53b1a",
+      "path": "dist/desktop/desktop-daily-win-v21-rc6/ZhongshuoDual/MANIFEST-SHA256.json",
+      "sha256": "2cd17b13fd769096a7199d94aa5fd955464a6db26ff47200cfdbb01e4415a6c0",
       "bytes": 111596
     },
     {
-      "path": "dist/desktop/review-r82-v21-rc4-real-release-20261013/result.json",
-      "sha256": "e0c1616d8a223eca42e5b218aeb0f8b61afb01b6cb73d3f48f0d1f1568b446e5",
-      "bytes": 7037
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/result.json",
+      "sha256": "0373e8c226431ee57eb1f19b55ef99f573f78d2f63a392b18174e536e47645b5",
+      "bytes": 7530
     },
     {
-      "path": "dist/desktop/review-r82-v21-rc4-read-completion-2-20261013/result.json",
-      "sha256": "0735256c22c562ffead0182a559fc6552eb3cd7f991c2886337f417395fd1503",
-      "bytes": 6093
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/member-effective-readonly.png",
+      "sha256": "a7bb03bd7b42827bf5e4284567e8948b0d0f50ba6654ece742277bad5812bc18"
     },
     {
-      "path": "dist/desktop/review-r82-v21-rc4-normal-workflow-20261013/result.json",
-      "sha256": "5ab8d9cfdf98dc73ef9f91ed05a3777d8a41df69498e6834eafa6466d4a0a2b8",
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/authorize-confirm.png",
+      "sha256": "a8a096d87fc4ed5bccd42ce4e7a55b0ceb0ca0ec956f9e8d06ff2766d1b6ddf2"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/room-v1-delivery.png",
+      "sha256": "2bc0261bfb9d6359920e1fa8288d4371a847c4d8e348a703e7c630295132ddd9"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/preview-___md-3.png",
+      "sha256": "be35aef89abdf6f6cf266c4e1947e33d842095fb8cd5d0ae33fbf034152d8c62"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/rework-recorded.png",
+      "sha256": "d7323fce91dd8ef8db94c634a872c03cf3656ddb4516f50279984370e88b762e"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/preview-___md-5.png",
+      "sha256": "68e1da3773b1ecad40c6726dcbdb1a6862e8752cfc8da2099069e5f24432ba2c"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/revoke-confirm.png",
+      "sha256": "febabfa340f9d04dc833e25735bc2d3de90a688350c3fc199dc3588f7a02ce96"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/dm-real-v2-accepted.png",
+      "sha256": "01176700b460b1f78324c3258c7edec996a126fbf958e5c22bc7986f6b6b59c3"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/actual-diff-___md.png",
+      "sha256": "a0ee50a4e8cc45eb4294d188c5f75b333c236915367e64825c13188d89347565"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/actual-diff-_____md.png",
+      "sha256": "e7399307b91c2d9388acce4ae1667f8b77f29420b736e079f0b311434a7b7256"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/preview-___md-12.png",
+      "sha256": "2cce60628385390d86146e4b15da768acffa52c7e4f66e0f83e2c99d11ddf64a"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-real-release-20261013/dm-reopen-history.png",
+      "sha256": "c1ad8ff9505fcd069a2a3bcbaaa24406fa4366c5ed14dbbb8eb1dd75643626d0"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-normal-workflow-20261013/result.json",
+      "sha256": "15eadb7cfb5bee7ae02223fb097d215da16a70a15e2069567886406906d73f62",
       "bytes": 5783
     },
     {
-      "path": "dist/desktop/review-r82-v21-rc4-unknown-20261013/result.json",
-      "sha256": "f37fc45f6080940673d0d27f45b31d50c3b2cbac2d13dc030ab2cb3ac7091548",
+      "path": "dist/desktop/review-r82-v21-rc6-unknown-20261013/result.json",
+      "sha256": "239e958f418278f8dca4b5e6da347fa262cc96cff047cf42b1c641d9e6db5479",
       "bytes": 2723
     },
     {
-      "path": "dist/desktop/review-r82-v21-rc4-visual-20261013/result.json",
-      "sha256": "5b3cf8f8fbfaea004e727d8842d238285d53388da90f105ced8ab76212113ef2",
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/result.json",
+      "sha256": "5c42dcb3530826369d24302a96841a0f394c6671a6a541f95c5658ea89189b45",
       "bytes": 1942
     },
     {
-      "path": "dist/r82-upgrade-rc4/result.json",
-      "sha256": "7c6f9ce3e38ae97574273bf9f21209076e3aa5770ec2be092eb20bc30cc67727",
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/result.json",
+      "sha256": "642a07bd846f4e6bcd21a19ade88bd50d827fe25bf56604dba7bac81dbe58d34",
+      "bytes": 7363
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/result.json",
+      "sha256": "5ffdb3fef9b95b3f4df954b2504cb26c2ab012fcdbc9a34379f7b429919e6551",
+      "bytes": 492
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/member-effective-readonly.png",
+      "sha256": "d2e1403ef0bf864afdf68c6c100c9a2f9a3f56621f9e2bd72c199309237ba7f8"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/members-wide.png",
+      "sha256": "d230bf37cffb2d5c52ac5f4ed3e4823429196de556febce7a232276776834b24"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/detail-wide.png",
+      "sha256": "0c20a0b0ba048bfaf90d7da72d088d8d86dd0b5f6a0c28896bb3569d6f571d9d"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/settings-wide.png",
+      "sha256": "7c0642fb3846a30fab7488f94ed085d285a782c505ab8e7d7532cdc9f42d5086"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/write-wide.png",
+      "sha256": "0ad107d04bfcc39df86b8c8a07c86e35dc2be1e10f567439409cd42629ae5987"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/authorization-wide.png",
+      "sha256": "80550a422e72b721a67584f632be922449561c21a014f5a15eb0fdb9132a28b6"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/members-narrow.png",
+      "sha256": "44eb905150cf1220cf7a8c60c9e32bb2ad1c06e6f5db13d1e3dc095dfcc6df95"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/detail-narrow.png",
+      "sha256": "738859d85df5115474a04019f5f41f42cdba0b35dd926f1b4b4a33c5a80062bf"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/settings-narrow.png",
+      "sha256": "ed562d29bedf11eb492d08cb0b3da4ad79043a2fd9ba6d7540727104131c7464"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/write-narrow.png",
+      "sha256": "46691006f11ee76d48608b15835b31aa7c064205049022b86991b5c183b4248c"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/authorization-narrow.png",
+      "sha256": "b97a503a97bdcf481116bea3aa48f1461cd74f6ead252b5f759871e9fc33260d"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/members-hidpi.png",
+      "sha256": "84b2bcd89a24ce71f639766b68f09d05aa85ce5bac83ad2e0e1b409dc14dcf8e"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/detail-hidpi.png",
+      "sha256": "366b625e50d768fe106384b135ed2f9d11c5e316ab6cbb59abf27fcf8393f76f"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/settings-hidpi.png",
+      "sha256": "aa5f1c927813b2f79af55a36a7644d94351048126fec6333b44c5c7ae22d77c5"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/write-hidpi.png",
+      "sha256": "7c7d074169178a40d515f03ce8b98ca9d054739ee050b01409c768c786608f44"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-visual-20261013/authorization-hidpi.png",
+      "sha256": "250b1b34f49bc32cf60bb23e43fde9a57a1582a132a46b3009e802e19e09cbd1"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/preview-___md-0.png",
+      "sha256": "2f115cb84deab47aa5683f443a7bc891496f5bf22a59ca2bfd5f185090858bb2"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/dm-reopen-history.png",
+      "sha256": "5056bbf0f643aaa30b2881242c1611346a49d3f8e17916ad6f4445315b1dae62"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/dm-reopened-actual-file-tree.png",
+      "sha256": "4be7f7c9f7e4df7f4c4e5dd30724b16ee5f8b11691baff9f3bd6b79b8eef511e"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/actual-diff-___md.png",
+      "sha256": "4f95aced8758899b6a7b2f23c05f2293f58dc42804fd928418b33097900fdc7b"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/actual-diff-_____md.png",
+      "sha256": "aaa0c24550c32e20567ffa3c0a2057deb8faf58fc97944f7efb2bcad254ad892"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/change-detail-wide.png",
+      "sha256": "caea183136b38d631e092c3cf7490b07890658a5e5c4593e4ac59a847087c489"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/change-detail-narrow.png",
+      "sha256": "99268f4f48f6e699cc37070c1279409edf33d81873cd809def36ed63c21db685"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/change-list-narrow.png",
+      "sha256": "24445d016476a12a9bc361e055b941a6077e200d1e639337630a240e9a2a7fec"
+    },
+    {
+      "path": "dist/desktop/review-r82-v21-rc6-change-visual-2-20261013/change-detail-hidpi.png",
+      "sha256": "6e2742fa2e7eb9459fe01b012e1de945d4c2455815f8478094424e1dfae4a114"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/members-wide.png",
+      "sha256": "de51c015ab62e25193b68cf9829731a80f38a3d1aca16ebbbf526c1bf51fcedf"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/detail-wide.png",
+      "sha256": "aef0dae804b0c226c129b34f99ed5fb60e36cead4b655a2da62a4c35b01eea6a"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/write-wide.png",
+      "sha256": "4047fa5314f077f047da33d68896cb52fc2ac592e4d9d82a9c39a1f1707e65fc"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/change-detail-wide.png",
+      "sha256": "37556921951bbdcbdbc6aa97d65a0035bc61512983730c3a50afa5abc10482fa"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/members-narrow.png",
+      "sha256": "d7089294e51e89bb8ff44ad54ccf30eed890cdf96852028c45e9b5704f884a03"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/detail-narrow.png",
+      "sha256": "6dbaffbad7b33adb0b633de1ad9186ffeccb79eba60b6127e92866ce67d36971"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/write-narrow.png",
+      "sha256": "8daf9cbc90e33ce846cfcf8f50244ed904532cb463b3015b7756fd44a0c9d3cd"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/change-detail-narrow.png",
+      "sha256": "cc86caf3bf7425f6be9642dc522c7f90f846342fe121812b5c12750582a33cb1"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/members-hidpi.png",
+      "sha256": "7cfc0922fc72256365b37db8908f93e93055fdfaa480d964abbe2c91a5372ccf"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/detail-hidpi.png",
+      "sha256": "35f783994617950b1cc8df9543c607bb26f60177a1147ddc7b9da1ccc3af2995"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/write-hidpi.png",
+      "sha256": "4f1f92b2593da6553e15334db26b146bea3a82fa2dea5e8de6c8b96cba6738e1"
+    },
+    {
+      "path": "dist/desktop/review-r82-final-prototype-20261013/change-detail-hidpi.png",
+      "sha256": "6611ac767cf8017100ec3e8f29178ae2976954db25f0ebbbe4e7efaa3eeb0167"
+    },
+    {
+      "path": "dist/r82-upgrade-rc6/result.json",
+      "sha256": "bcab93e93f0ee8a30e238e9ce351178757c192e47d22c7c975a103f1b71c217d",
       "bytes": 2176
     },
     {
-      "path": "dist/desktop/r75-completion-1791896943615/result.json",
-      "sha256": "a59667b8a08270b1f3ba6df8b644de69e09b7d3a40c2dca6c5778cca439a04f0",
-      "bytes": 92371
+      "path": "dist/desktop/r75-completion-1791899037592/result.json",
+      "sha256": "39db35b04510131e54d21dff0c7d500a6b3cd404bb18f3a82debf1f8e7b88dca",
+      "bytes": 92372
     },
     {
-      "path": "dist/r82-rc4-launcher-regression.log",
-      "sha256": "be394ab13ba69fef140b284d3d2c5be8b565899294cf66e189d07006f6eca735"
+      "path": "dist/r82-rc6-launcher-regression.log",
+      "sha256": "7b0bfd9416dc3d163ce549329f214ce99c8af8e61d6b86f472f3cc88ffe9a5f8"
     },
     {
       "path": "dist/r82-real-glm-create-boundary-20261013/result.json",
@@ -869,9 +1155,9 @@
       "bytes": 400
     },
     {
-      "path": "dist/r82-lint-stage8.json",
-      "sha256": "da36622f7a4796a34f4ddd4f5184e91e9a23aca954943689e29151b4b904579b",
-      "bytes": 6755
+      "path": "dist/r82-lint-final-qa.json",
+      "sha256": "3478e36f102073256943f1ad02d3140bfa8a32d6b409c461ce79914a9bfb7303",
+      "bytes": 7533
     },
     {
       "path": "dist/r82-real-permission-first-20261013/result.json",
@@ -899,9 +1185,5 @@
       "bytes": 468
     }
   ],
-  "scope": "actual Claude/glm-5.3-flash native restricted project file tools; no real Codex/write or new vision certification; no user acceptance",
-  "status": "superseded stage, not final R82 release",
-  "coverageGaps": [
-    "Actual file page showed zero change sets although formal database had four; final release blocked until authoritative read UI is verified"
-  ]
+  "scope": "actual Claude/glm-5.3-flash native restricted project file tools; no real Codex/write or new vision certification; no user acceptance"
 }
