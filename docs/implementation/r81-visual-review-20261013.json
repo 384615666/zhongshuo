@@ -1,0 +1,33 @@
+{
+  "pass": true,
+  "buildId": "bld_12c5ceedf87665ec",
+  "runtimeSource": "ab418320a827803fb56d9de54a28100822e451ed",
+  "product": "dist/desktop/review-r81-v20-visual-release-3-20261013",
+  "reference": "dist/desktop/review-r81-prototype-3-20261013",
+  "method": "actual screenshot inspection of paired viewport/theme/zoom and representative form/error frames, independent of functional/DB gate",
+  "density": { "productMembers": 6, "prototypeMembers": 6, "productTemplates": 3, "prototypeProfiles": 3 },
+  "viewportChecks": [
+    { "name": "wide", "css": [1440, 960], "dpr": 1, "theme": "light", "zoom": 1, "pass": true },
+    { "name": "narrow", "css": [900, 800], "dpr": 1, "theme": "light", "zoom": 1, "pass": true },
+    { "name": "hidpi", "css": [1280, 800], "dpr": 1.5, "theme": "light", "zoom": 1, "pass": true }
+  ],
+  "reviewed": [
+    "two-column member identity/config/workload hierarchy and stable short IDs",
+    "same unified field/select/button/modal controls and keyboard-reachable action paths",
+    "template section, source-member save, edit/disable and explicit target-project creation",
+    "member details including model ID, missing program, saved/effective permission and unverified truth",
+    "actual conflict, retained-read failure, known-success read retry and unknown/manual replay feedback"
+  ],
+  "intentionalDifferences": [
+    "real configuration and certification facts replace prototype ready/mock fields",
+    "real member editing/config/template actions increase card height; scrolling remains available",
+    "no fake effort/internal-helper/lifecycle switches or inferred template instance count",
+    "template snapshots and independent member profiles implement the explicitly requested semantics"
+  ],
+  "rejectedFrames": [
+    "premature core edit/create modal animation frames",
+    "prototype second-pass translucent animation frame",
+    "visual second-pass HiDPI list retaining previous template scroll position; final third pass checks top-of-list geometry"
+  ],
+  "userAcceptance": "not claimed; only one final natural five-minute confirmation requested"
+}

@@ -1,5 +1,10 @@
 # 众说正式工程 · 施工总账
 
+## R81 当前增量（2026-10-13，v20）
+
+当前正式能力以 [R81能力矩阵](r81-current-capabilities-20261013.md)、[交付记录](r81-member-management-v20-20261013.md) 和 [同BUILD验收](r81-v20-delivery-20261013.json) 为准。成员资料/查找/独立配置模板已接正式合同并工程验证；clean运行源码ab41832，BUILD bld_12c5ceedf87665ec，追加迁移049，001–048冻结。以下旧阶段/旧缺口表保留为历史，不代表当前未实现。992项/双类型检查及最终真实启动器证据通过不代用户验收或真实模型认证。
+
+
 > 本文件是跨会话施工进度唯一真源之一（与 requirements-traceability / continuation 配套）。
 > 状态取值：`NOT_STARTED / IN_PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED / DEFERRED_BY_USER`。
 > `IMPLEMENTED ≠ VERIFIED`；`BLOCKED` 必须写具体外部条件；`DEFERRED_BY_USER` 引用用户明确决定。

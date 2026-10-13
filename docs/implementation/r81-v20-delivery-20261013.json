@@ -1,0 +1,509 @@
+{
+  "pass": true,
+  "baseline": "56a8b87462a6309825a96ffb0592cc769cb41bbf",
+  "runtimeSource": "ab418320a827803fb56d9de54a28100822e451ed",
+  "build": {
+    "buildId": "bld_12c5ceedf87665ec",
+    "commit": "ab418320a827803fb56d9de54a28100822e451ed",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-13T06:21:17.616Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "requiredChecks": [
+    {
+      "name": "clean actual runtime BUILD matches frozen source",
+      "pass": true
+    },
+    {
+      "name": "all five final/source copies match593 manifest files and BUILD",
+      "pass": true
+    },
+    {
+      "name": "final daily has no data/profile/seeds/default engineering host",
+      "pass": true
+    },
+    {
+      "name": "previous v19 package593 bytes unchanged",
+      "pass": true
+    },
+    {
+      "name": "unmodified true BAT identity across final copies",
+      "pass": true
+    },
+    {
+      "name": "members7 formal interactions and reopen",
+      "pass": true
+    },
+    {
+      "name": "six-member/three-template settled UI visual supplement",
+      "pass": true
+    },
+    {
+      "name": "UI template disable and explicit restore",
+      "pass": true
+    },
+    {
+      "name": "actual reopen and reuse creates new identity, source unchanged",
+      "pass": true
+    },
+    {
+      "name": "fault5 critical paths incl known-success/read-only retry and manual original envelope",
+      "pass": true
+    },
+    {
+      "name": "final BUILD bound across members/faults/visual/upgrade",
+      "pass": true
+    },
+    {
+      "name": "real factory passes exact explicit program and gpt-6-luna, read-only retained",
+      "pass": true
+    },
+    {
+      "name": "complete previous engineering root upgrades with66 legacy business tables preserved",
+      "pass": true
+    },
+    {
+      "name": "real v19 refuses49, matching48 backup opens",
+      "pass": true
+    },
+    {
+      "name": "R78/R79 actual BAT formal worker workflow20 steps, zero calls",
+      "pass": true
+    },
+    {
+      "name": "ordinary final BAT reading and project switch/reopen",
+      "pass": true
+    },
+    {
+      "name": "actual generated PNG decode,3 poll periods and original hash",
+      "pass": true
+    },
+    {
+      "name": "project cancellation/cross-open10 independent regressions",
+      "pass": true
+    },
+    {
+      "name": "prototype reference real renderer,6-member density and3 viewports",
+      "pass": true
+    },
+    {
+      "name": "main typecheck clean",
+      "pass": true
+    },
+    {
+      "name": "hifi typecheck clean",
+      "pass": true
+    },
+    {
+      "name": "992 deterministic source checks/139 files (external GitHub excluded)",
+      "pass": true
+    },
+    {
+      "name": "14 current member/template/program tests",
+      "pass": true
+    },
+    {
+      "name": "changed-file lint has no new errors",
+      "pass": true
+    },
+    {
+      "name": "001-048 frozen, only registry and049 added",
+      "pass": true
+    },
+    {
+      "name": "runtime source unchanged after clean BUILD",
+      "pass": true
+    },
+    {
+      "name": "all original product counterexamples retained, not overwritten by final pass",
+      "pass": true
+    },
+    {
+      "name": "18 settled final member/form/template screenshots use declared viewport/dpr",
+      "pass": true
+    },
+    {
+      "name": "manual visual review of settled paired frames and operation/error layouts",
+      "pass": true
+    }
+  ],
+  "manifests": [
+    {
+      "root": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v20",
+      "count": 593,
+      "bad": [],
+      "buildId": "bld_12c5ceedf87665ec"
+    },
+    {
+      "root": "D:\\zhongshuo\\dist\\desktop\\review-r81-v20-release-20261013\\copy",
+      "count": 593,
+      "bad": [],
+      "buildId": "bld_12c5ceedf87665ec"
+    },
+    {
+      "root": "D:\\zhongshuo\\dist\\desktop\\review-r81-v20-faults-release-20261013\\copy",
+      "count": 593,
+      "bad": [],
+      "buildId": "bld_12c5ceedf87665ec"
+    },
+    {
+      "root": "D:\\zhongshuo\\dist\\desktop\\review-r81-v20-workflow-release-20261013\\copy",
+      "count": 593,
+      "bad": [],
+      "buildId": "bld_12c5ceedf87665ec"
+    },
+    {
+      "root": "D:\\zhongshuo\\dist\\desktop\\r75-launcher-check-1791872714674\\copy",
+      "count": 593,
+      "bad": [],
+      "buildId": "bld_12c5ceedf87665ec"
+    }
+  ],
+  "previousPackage": {
+    "root": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v19",
+    "count": 593,
+    "bad": [],
+    "buildId": "bld_02c536c5b5eb3ab3"
+  },
+  "evidence": {
+    "members": {
+      "path": "dist/desktop/review-r81-v20-release-20261013/result.json",
+      "sha256": "8d758ad1ef3d2c8dda0041be155ee97b4592fb3d8c5c4ea02183d9b6797cf1df"
+    },
+    "faults": {
+      "path": "dist/desktop/review-r81-v20-faults-release-20261013/result.json",
+      "sha256": "5cd2b647cc6fa2330885732f8223429fe5e69a258179f2c6d5a8332230a12400"
+    },
+    "visual": {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/result.json",
+      "sha256": "65e804e349bd21e5e3a83addc86a4753ef9959aa3aadde3c201e7bebd61f3967"
+    },
+    "prototype": {
+      "path": "dist/desktop/review-r81-prototype-3-20261013/result.json",
+      "sha256": "5ffdb3fef9b95b3f4df954b2504cb26c2ab012fcdbc9a34379f7b429919e6551"
+    },
+    "workflow": {
+      "path": "dist/desktop/review-r81-v20-workflow-release-20261013/result.json",
+      "sha256": "36dab7d8d219789bde4e9a80cfc7e11198acb9a0e9877cc1e691d6dc76869fad"
+    },
+    "upgrade": {
+      "path": "dist/r81-upgrade-release/result.json",
+      "sha256": "4c3c1dbfe0d16cca308f065a5dfa308115a431ba6ee1e8f7b0a23658329f7580"
+    },
+    "reference": {
+      "path": "dist/r81-codex-reference-release/result.json",
+      "sha256": "36b394faaa7cae0f60496c2db7f8e81709be5a3ed80974fc36f48c63de847c2c"
+    },
+    "reading": {
+      "path": "dist/desktop/r75-launcher-check-1791872714674/result.json",
+      "sha256": "f3f2a92c974bde6bc6fea342563e516b0afb9c4e550a9727547b0aedb6223e97"
+    },
+    "cancellation": {
+      "path": "dist/desktop/r75-completion-1791872929059/result.json",
+      "sha256": "c947b7ccf5f68f6c4900b3966122a66d4a0e529d562e633c4a3873a9a41fe6bf"
+    },
+    "lint": {
+      "path": "dist/r81-lint-final-qa.json",
+      "sha256": "986af0252c7ed789f3a8460797dd9054aa28e8da27376937ee0ce01ea3b642ea"
+    }
+  },
+  "before": {
+    "readonly": "dist/desktop/review-r81-v19-before-4-20261013/result.json",
+    "target": "dist/desktop/review-r81-v20-stage1-20261013/result.json",
+    "bootstrap": "dist/desktop/review-r81-v20-faults-stage1-20261013/result.json",
+    "postread": "dist/desktop/review-r81-v20-postread-before-20261013/result.json",
+    "navigation": "dist/desktop/review-r81-v20-navigation-before-20261013/result.json",
+    "reference": "dist/r81-codex-reference-before-2/result.json"
+  },
+  "views": {
+    "theme": "light",
+    "browserZoom": 1,
+    "viewports": [
+      {
+        "name": "wide",
+        "width": 1440,
+        "height": 960,
+        "dpr": 1
+      },
+      {
+        "name": "narrow",
+        "width": 900,
+        "height": 800,
+        "dpr": 1
+      },
+      {
+        "name": "hidpi",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5
+      }
+    ],
+    "productMemberCount": 6,
+    "productTemplateCount": 3,
+    "prototypeMemberCount": 6,
+    "prototypeTemplateCount": 3,
+    "visuallyInspected": true,
+    "review": {
+      "pass": true,
+      "buildId": "bld_12c5ceedf87665ec",
+      "runtimeSource": "ab418320a827803fb56d9de54a28100822e451ed",
+      "product": "dist/desktop/review-r81-v20-visual-release-3-20261013",
+      "reference": "dist/desktop/review-r81-prototype-3-20261013",
+      "method": "actual screenshot inspection of paired viewport/theme/zoom and representative form/error frames, independent of functional/DB gate",
+      "density": {
+        "productMembers": 6,
+        "prototypeMembers": 6,
+        "productTemplates": 3,
+        "prototypeProfiles": 3
+      },
+      "viewportChecks": [
+        {
+          "name": "wide",
+          "css": [
+            1440,
+            960
+          ],
+          "dpr": 1,
+          "theme": "light",
+          "zoom": 1,
+          "pass": true
+        },
+        {
+          "name": "narrow",
+          "css": [
+            900,
+            800
+          ],
+          "dpr": 1,
+          "theme": "light",
+          "zoom": 1,
+          "pass": true
+        },
+        {
+          "name": "hidpi",
+          "css": [
+            1280,
+            800
+          ],
+          "dpr": 1.5,
+          "theme": "light",
+          "zoom": 1,
+          "pass": true
+        }
+      ],
+      "reviewed": [
+        "two-column member identity/config/workload hierarchy and stable short IDs",
+        "same unified field/select/button/modal controls and keyboard-reachable action paths",
+        "template section, source-member save, edit/disable and explicit target-project creation",
+        "member details including model ID, missing program, saved/effective permission and unverified truth",
+        "actual conflict, retained-read failure, known-success read retry and unknown/manual replay feedback"
+      ],
+      "intentionalDifferences": [
+        "real configuration and certification facts replace prototype ready/mock fields",
+        "real member editing/config/template actions increase card height; scrolling remains available",
+        "no fake effort/internal-helper/lifecycle switches or inferred template instance count",
+        "template snapshots and independent member profiles implement the explicitly requested semantics"
+      ],
+      "rejectedFrames": [
+        "premature core edit/create modal animation frames",
+        "prototype second-pass translucent animation frame",
+        "visual second-pass HiDPI list retaining previous template scroll position; final third pass checks top-of-list geometry"
+      ],
+      "userAcceptance": "not claimed; only one final natural five-minute confirmation requested"
+    },
+    "excludedPrematureModalFrames": "core release edit/create snapshots and prototype second-pass transient animation are not visual gate evidence"
+  },
+  "pictures": [
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/members-wide.png",
+      "sha256": "021a8e79289d84844b9095f171ecf1631b47e6f73e8237c3bd930f94545374bf",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/edit-wide.png",
+      "sha256": "83a84dc7aa2bd07ed1d026dd5d09507486cbce98e06fa1c946d77afd58d3afda",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/templates-wide.png",
+      "sha256": "bba8b4b80ec9d36ceee3783ec8a2faf32f917ce09abc802254e438aae40d86ca",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/template-edit-wide.png",
+      "sha256": "fdf1750e4d2e6190b7b28febbed708bb695de820843ac6a53d926308f216f9c5",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/create-wide.png",
+      "sha256": "65639bcfd30aa08dfe8f825bdae6a880c5c6ecd089529145063a61bedc463b61",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/save-template-wide.png",
+      "sha256": "8b11d7d2a604a98164d061b465224892de125df1f8dc5af19678b83149132e0d",
+      "width": 1440,
+      "height": 960,
+      "expected": [
+        1440,
+        960
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/members-narrow.png",
+      "sha256": "99c569b52f1a8124d7ad73db3282ff6b6c35af0b80b7a82f3a042556a8bda770",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/edit-narrow.png",
+      "sha256": "5c98d309d249e4d354ad2f96aefbb62a6447994c2586a03b9e21cb3445ae12c6",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/templates-narrow.png",
+      "sha256": "5162cc8d50c6c8907b12bd454866b9105c2a1607c173a2d2928d2cbea871307f",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/template-edit-narrow.png",
+      "sha256": "e343432426a1fd95935608e8987deac858d9d267556af2a0e501eb7e2db206b1",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/create-narrow.png",
+      "sha256": "476bfbb671928bde4499cc1f8468b8d41710be41a2fb5b72787f1d9628c20f2e",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/save-template-narrow.png",
+      "sha256": "c32b3815e89b3cfcd64073fba14206d9dbf2192ffa046d998d1bd83ae91b3082",
+      "width": 900,
+      "height": 800,
+      "expected": [
+        900,
+        800
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/members-hidpi.png",
+      "sha256": "fe3290ee3ef7d899c86301322ec6b69c18259de281562fee32f62de5c4082e21",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/edit-hidpi.png",
+      "sha256": "7a7eef14ff011e3bec79bf96ce798fc3ed990afe72364bc64db9d8d34c9b238e",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/templates-hidpi.png",
+      "sha256": "2b567a3f496ca79caf2483d2fa8860c1a05a827ee4226324ff2720f310d26014",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/template-edit-hidpi.png",
+      "sha256": "48b499b4b532221f62e70b45582186a678c2052d21bcfd14b6cfd6b2dcf02161",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/create-hidpi.png",
+      "sha256": "482331102eda9686c5af1880b7a5744b19eadb213ac3b7d4989a0b7683b111ea",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    },
+    {
+      "path": "dist/desktop/review-r81-v20-visual-release-3-20261013/save-template-hidpi.png",
+      "sha256": "2ac381a9cd3e8a3f038f5c076334817191a6c68fcc557d6617df576f94e60a18",
+      "width": 1920,
+      "height": 1200,
+      "expected": [
+        1920,
+        1200
+      ]
+    }
+  ],
+  "modelCalls": 0,
+  "externalGitHub": "excluded; previously retained external failures not recertified",
+  "boundaries": [
+    "no real model/vision/tool-permission certification",
+    "no user original root migration or rollback of post-upgrade new data",
+    "no new OS sleep/multiday certification",
+    "no template-to-existing-member synchronization",
+    "no forged template usage counts or deferred switches"
+  ]
+}
