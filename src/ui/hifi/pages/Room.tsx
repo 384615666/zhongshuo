@@ -1009,7 +1009,7 @@ function RootCard({
       return { label: '阻塞', icon: 'octagon', tone: 'danger' as const, detail: '缺少必要的前置成果，需要你处理' };
     }
     if (task.status === 'DONE') {
-      return { label: '已完成', icon: 'check-circle', tone: 'success' as const, detail: '已完成' };
+      return { label: task.responseKind==='conversation'?'已回复':'已完成', icon: 'check-circle', tone: 'success' as const, detail: task.responseKind==='conversation'?'这是对话回答，没有工作交付或验收待办':'已完成' };
     }
     if (task.status === 'CANCELLED') {
       return { label: '已取消', icon: 'slash', tone: 'neutral' as const, detail: '' };
@@ -2013,7 +2013,7 @@ function ThreadPanel({
             else confirmOutboundUnknown(draftKey, env);
             if (r.status === 'ok') {
               void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-              toast(intent === 'record_only' ? '已保存记录（不唤醒）' : '已跟进（延续当前任务）', 'success');
+              toast(r.data.disposition==='enqueued'?'已发送，等待原成员回复':'已保存跟进记录（未启动执行）', 'success');
               return { status: 'ok' };
             }
             return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
@@ -2101,14 +2101,14 @@ function ThreadDetails({
   const retryFailed = () => {
     const details = formal.data;
     const latest = details?.runs.find((r) => r.id === details.latestRunId);
-    if (task == null || details == null || latest?.status !== 'FAILED' || !details.failedRetry.available || acceptedRetryRun === latest.id) return;
+    if (task == null || details == null || !(latest?.status==='FAILED'&&details.failedRetry.available||latest?.status==='SUCCEEDED'&&details.clarificationRetry?.available) || acceptedRetryRun === latest.id) return;
     const snapshot = { taskId: details.task.id, sourceRunId: latest.id,
       expectedTaskRevision: details.task.revision, expectedStopGeneration: details.task.stopGeneration,
-      expectedRunStatus: 'FAILED' as const };
+      expectedRunStatus: latest.status as 'FAILED'|'SUCCEEDED' };
     setRetryBusyTask(snapshot.taskId);
     void (async () => {
       try {
-        await command('task.redispatch', { ...snapshot, reason: '用户在运行详情显式继续最近失败运行' });
+        await command('task.redispatch', { ...snapshot, reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':'用户在运行详情显式继续最近失败运行' });
         setAcceptedRetryRun(snapshot.sourceRunId);
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
         toast('继续请求已入队；等待正式执行结果', 'success');

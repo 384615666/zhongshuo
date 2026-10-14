@@ -24,7 +24,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
@@ -734,7 +734,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
     const cards: ThreadCard[] = (data.items ?? []).map((it) => ({
       threadId: it.threadId, projectId, roomId,
       anchorMessageId: it.anchorMessageId ?? '',
-      taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, roomTaskNumber: it.roomTaskNumber ?? null,
+      taskId: it.taskId ?? null, taskStatus: it.taskStatus ?? null, taskResponseKind:it.taskResponseKind, roomTaskNumber: it.roomTaskNumber ?? null,
       taskTitle: it.taskTitle ?? null,
       taskObjective: it.taskObjective, taskReviewPolicy: it.taskReviewPolicy, taskRevision: it.taskRevision,
       taskMode: it.taskMode, ownerMemberId: it.ownerMemberId,
@@ -794,7 +794,7 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
   const tasks = cards.filter((c) => c.taskId != null).map((c) => ({
     id: c.taskId as string, projectId, roomId, conversationThreadId: c.threadId,
     roomTaskNumber: c.roomTaskNumber ?? 0, title: c.taskTitle ?? '',
-    objective: c.taskObjective ?? null, status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: c.taskRevision ?? 0,
+    responseKind:c.taskResponseKind, objective: c.taskObjective ?? null, status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: c.taskRevision ?? 0,
     reviewPolicy: c.taskReviewPolicy ?? undefined, mode: c.taskMode ?? undefined, ownerMemberId: c.ownerMemberId ?? undefined,
     latestRun: c.latestRun,
     displayNumber: c.roomTaskNumber ?? 0,
@@ -842,7 +842,7 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
       const taskView = {
         id: detail.id, projectId: thread.projectId, roomId: thread.roomId,
         conversationThreadId: threadId, roomTaskNumber: detail.roomTaskNumber,
-        title: detail.title, objective: detail.objective ?? null, status: detail.status as Task['status'],
+        responseKind:detail.responseKind, title: detail.title, objective: detail.objective ?? null, status: detail.status as Task['status'],
         revision: detail.revision, reviewPolicy: detail.reviewPolicy,
         currentDeliveryId: detail.currentDeliveryId ?? undefined,
         ownerMemberId: detail.ownerMemberId ?? undefined, parentTaskId: detail.parentTaskId ?? undefined,
@@ -869,10 +869,10 @@ interface ThreadGetData {  thread: { id: string; projectId: string; conversation
   anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null;
   lastReadSeq: number;
 }
-interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text: string }; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
+interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text: string }; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
-  task: { id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
+  task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
     objective?: string | null; review_policy?: Task['reviewPolicy']; mode?: Task['mode'] | null; owner_member_id?: string | null; parent_task_id?: string | null; current_delivery_id?: string | null };
   activeRun: { id: string; status: string } | null;
   pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
@@ -885,6 +885,7 @@ const msgOfReply = (projectId: string, roomId: string, threadId: string, it: Thr
   authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
   body: chatAnswer(it.body?.text??'',it.authorType), createdAt: it.createdAt, threadMessageSeq: it.seq,
   attachmentIds: [], formalAttachments: it.attachments ?? [],
+  formalReplyExecution:it.replyExecution,
 });
 
 /**
@@ -947,7 +948,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
       const tg = await command<TaskGetData>('task.get', { taskId: thread.rootTaskId });
       if (!stillCurrent(gen, projectId) || threadTickets.get(threadId) !== ticket) return;
       const detail: ThreadTaskDetail = {
-        id: tg.task.id, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
+        id: tg.task.id, responseKind:tg.task.response_kind, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
         threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
         revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
         objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,
@@ -1104,7 +1105,7 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
   const projectId = s.activeProjectId;
   if (!stillCurrent(s.loadGen, projectId)) return;
   const detail: ThreadTaskDetail = {
-    id: tg.task.id, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
+    id: tg.task.id, responseKind:tg.task.response_kind, title: tg.task.title, status: tg.task.status, roomId: tg.task.room_id,
     threadId: tg.task.conversation_thread_id, roomTaskNumber: tg.task.room_task_number,
     revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
     objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,

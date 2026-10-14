@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
 import {MessageProtocol} from './MessageProtocol';
+import {navigate} from '../lib/router';
 import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLabel } from '../lib/format';
@@ -232,6 +233,10 @@ export function MessageView({
                 这是"主池普通附件也能预览"的入口：附件挂在消息上，
                 **不要求 taskId**。点击打开共享预览，不发送、不执行。 */}
             <MessageAttachments message={message} onOpen={onOpenResource} onOpenAttachment={onOpenAttachment} />
+            {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
+              {message.formalReplyExecution.status==='queued'?'等待原成员回复':message.formalReplyExecution.status==='running'?'原成员正在回复':message.formalReplyExecution.error??'本次回复未完成'}
+              {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
+            </div>:null}
           </>
         )}
 

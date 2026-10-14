@@ -263,6 +263,7 @@ export interface ThreadCard {
   /** 记录串为 null（E1——卡片不显示任务号/状态，串内默认仅记录、永不唤醒 agent） */
   taskId: string | null;
   taskStatus: string | null;
+  taskResponseKind?:'conversation'|'work'|null;
   roomTaskNumber: number | null;
   /** R64：任务标题（room.pool 只读投影——未装载详情的卡片也能显示真实标题；记录串为 null） */
   taskTitle: string | null;
@@ -321,6 +322,7 @@ export interface Message {
   createdAt: number;
   /** 流式消息：in-place 更新，终结时保存完整版本（§17.3） */
   streaming?: boolean;
+  formalReplyExecution?:{status:string;error:string|null;runId:string|null;turnId:string|null};
   /**
    * 该消息携带的资源附件（UX-PREVIEW-01）。
    *
@@ -402,6 +404,7 @@ export interface AssignmentCard {
     deliverable: string;
     acceptance: string[];
     status: TaskStatus;
+  responseKind?:'conversation'|'work'|null;
   }[];
   integrationPlan: string;
 }
@@ -486,6 +489,7 @@ export interface Task {
   title: string;
   objective: string | null;
   status: TaskStatus;
+  responseKind?:'conversation'|'work'|null;
   revision: number;
   reviewPolicy?: 'auto_deliver' | 'user_review';
   /** 当前交付版本（v1.12 §10.5）；一个任务最多一个 pending 交付 */

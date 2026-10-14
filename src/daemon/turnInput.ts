@@ -6,6 +6,7 @@
 import type { TurnRequest } from '../contracts/runtime.ts';
 import type { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { createHash } from 'node:crypto';
+import { chatAnswer } from '../contracts/chatAnswer.ts';
 import { readVerifiedCopy, readVerifiedBlob, validateImageBuffer, truncateUtf8Bytes as truncateUtf8BytesInput, ATT_EXCERPT_BYTES } from './attachments.ts';
 import { validateExtractCache, renderSheetWindow, ARTIFACT_PARSE_KINDS } from './parseContracts.ts';
 
@@ -101,6 +102,8 @@ export interface AssemblyTaskRef {
   taskRevision: number;
   /** DM 输入水位（第十九轮四）：本轮用户消息 conversation_seq——历史边界（房间任务为 null）。 */
   inputThroughSeq?: number | null;
+  /** Ordinary reply boundary: later queued human inputs must not leak into this turn. */
+  inputThreadMessageSeq?: number;
 }
 
 export interface AssemblyIdentity {
@@ -174,8 +177,9 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
      JOIN artifacts a ON a.id = ma.artifact_id
      LEFT JOIN messages m ON m.id = ma.message_id
      WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
+       AND (? IS NULL OR ma.message_id=? OR ((m.author_type='agent' OR m.thread_message_seq<=?) AND COALESCE(json_extract(m.body_json,'$.conversationIntent'),'default')!='record_only'))
      ORDER BY ord, ma.rowid`,
-  ).all(root.id, root.id, task.threadId) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
+  ).all(root.id, root.id, task.threadId,task.inputThreadMessageSeq??null,root.id,task.inputThreadMessageSeq??null) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
   for (const row of attRows) {
     if (row.kind === 'text_file' || row.kind === 'code_file') {
       const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
@@ -201,12 +205,15 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   const fileDiscovery = projectRoot != null ? projectScopedFileListing(projectRoot) : null;
 
   // 必要材料 2：本线程获准历史（§13.1-6：当前 root message、线程回复）。
-  const history = db
-    .prepare('SELECT id, body_json, author_id, thread_message_seq FROM messages WHERE thread_id = ? ORDER BY thread_message_seq')
-    .all(task.threadId) as Array<{ id: string; body_json: string; author_id: string; thread_message_seq: number }>;
+  const history = (task.inputThreadMessageSeq==null?db
+    .prepare('SELECT id, body_json, author_id, author_type, thread_message_seq FROM messages WHERE thread_id = ? ORDER BY thread_message_seq')
+    .all(task.threadId):db.prepare(`SELECT id,body_json,author_id,author_type,thread_message_seq FROM messages WHERE thread_id=?
+      AND (author_type='agent' OR thread_message_seq<=?) AND COALESCE(json_extract(body_json,'$.conversationIntent'),'default')!='record_only'
+      ORDER BY thread_message_seq DESC LIMIT 201`).all(task.threadId,task.inputThreadMessageSeq).reverse()) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
+  const historyTruncated=task.inputThreadMessageSeq!=null&&history.length>200;if(historyTruncated)history.shift();
   const historyTexts = history.map((h) => {
     const body = JSON.parse(h.body_json) as { text: string };
-    return { messageId: h.id, author: h.author_id, text: body.text ?? '' };
+    return { messageId: h.id, author: h.author_id, text: chatAnswer(body.text ?? '',h.author_type) };
   });
 
   // §13.4 过滤：指令白名单 + 本线程消息（root + 回复）。
@@ -269,9 +276,9 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     threadDigest: {
       rootMessageId: root.id,
       rootText: rootBody.text,
-      fromSeq: 1,
-      toSeq: history.length,
-      truncated: false,
+      fromSeq: task.inputThreadMessageSeq!=null?(history[0]?.thread_message_seq??1):1,
+      toSeq: task.inputThreadMessageSeq!=null?(history.at(-1)?.thread_message_seq??0):history.length,
+      truncated: historyTruncated,
       messages: historyTexts,
     },
     // 文件发现（经授权清单，第六轮）：项目根存在时注入；生成失败不加键（不阻断派发）。
@@ -387,12 +394,12 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   }
   // 本会话历史（≤ 水位）：按 conversation_seq 取最近 N 条（截断如实标注）。
   const history = db
-    .prepare('SELECT id, conversation_seq, body_json, author_id FROM messages WHERE conversation_id = ? AND conversation_seq <= ? ORDER BY conversation_seq DESC LIMIT ?')
-    .all(task.conversationId, task.inputThroughSeq, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string }>;
+    .prepare('SELECT id, conversation_seq, body_json, author_id,author_type FROM messages WHERE conversation_id = ? AND conversation_seq <= ? ORDER BY conversation_seq DESC LIMIT ?')
+    .all(task.conversationId, task.inputThroughSeq, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string;author_type:string }>;
   history.reverse();
   const historyTexts = history.map((h) => {
     const body = JSON.parse(h.body_json) as { text: string };
-    return { messageId: h.id, author: h.author_id, text: body.text ?? '' };
+    return { messageId: h.id, author: h.author_id, text: chatAnswer(body.text ?? '',h.author_type) };
   });
   // DEV-24 附件注入（DM；第二十七轮二扩展到**水位内全部历史消息**）：排队消息的附件随其
   // 消息进入正确一轮（该轮水位恰含此消息）；水位后（未来）消息的附件不提前读；根消息即使

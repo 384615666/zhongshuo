@@ -15,12 +15,12 @@ export function projectWriteAccess(db: ZhongshuoDatabase, projectId: string): Wr
   return { authorized: row?.authorized === 1, root: row?.canonical_root ?? '', revision: row?.revision ?? 0,physicalIdentity:row?.physical_identity };
 }
 /** Task creation snapshot AND current grant AND actual physical root must match. */
-export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, memberId: string, defaultKind: string|null) {
+export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, memberId: string, defaultKind: string|null, requestSnapshot?:string) {
   const row = db.prepare('SELECT t.project_id, t.write_scope_json, p.root_path, p.canonical_path, p.status FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?').get(taskId) as {project_id:string;write_scope_json:string;root_path:string;canonical_path:string;status:string}|undefined;
   if (!row || row.status !== 'active') throw Error('项目未处于可执行状态');
   const runtime = resolveMemberRuntime(db,memberId,defaultKind);
   const current = projectWriteAccess(db,row.project_id);
-  const snapshot = JSON.parse(row.write_scope_json) as Partial<WriteScope> & {memberRevision?:number;memberPermission?:string;launchIdentity?:string;runtime?:unknown};
+  const snapshot = JSON.parse(requestSnapshot??row.write_scope_json) as Partial<WriteScope> & {memberRevision?:number;memberPermission?:string;launchIdentity?:string;runtime?:unknown};
   const member=db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(memberId) as {project_id:string;settings_revision:number}|undefined;
   if(!member || member.project_id!==row.project_id) throw Error('执行成员不属于该项目');
   if('executionMode' in snapshot && snapshot.executionMode==='readonly' && JSON.stringify(snapshot.runtime)!==JSON.stringify(runtime))throw Error('成员执行配置已变化；旧只读任务保留，请明确重新提交');
@@ -50,6 +50,22 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
   return { fullAccess:false, modificationAuthorized:Boolean(writable), allowedWriteRoots:writable?[root]:[], identityKey, root, launchConfigurationKey,
     tier:writable?'auto_edit' as const:'plan' as const, intent:writable?'modify' as const:'analyze' as const,
     policyId:writable?'policy-project-write':'policy-analyze' };
+}
+/** A newly authorized ordinary question gets its own current configuration
+ * snapshot. The original task and every already queued request remain immutable. */
+export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:string,defaultKind:string|null) {
+  const row=db.prepare('SELECT owner_member_id,project_id FROM tasks WHERE id=?').get(taskId) as {owner_member_id:string;project_id:string};
+  const runtime=resolveMemberRuntime(db,row.owner_member_id,defaultKind),grant=projectWriteAccess(db,row.project_id);
+  const p=db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(row.project_id) as {canonical_path:string};
+  let snapshot:Record<string,unknown>;
+  if(runtime.permissionMode==='bypassPermissions'||runtime.permissionMode==null&&['claude','codex'].includes(runtime.kind??'')){
+    const root=realpathSync.native(p.canonical_path);snapshot={executionMode:'full',root,physicalIdentity:physicalRootIdentity(root),runtime};
+  }else{
+    const member=db.prepare('SELECT settings_revision FROM project_members WHERE id=?').get(row.owner_member_id) as {settings_revision:number};
+    snapshot={authorized:grant.authorized,root:grant.root,revision:grant.revision,memberRevision:member.settings_revision,memberPermission:runtime.permissionMode,runtime,...(!grant.authorized?{executionMode:'readonly'}:{})};
+  }
+  const effective=effectiveTaskWriteAccess(db,taskId,row.owner_member_id,defaultKind,JSON.stringify(snapshot));
+  return JSON.stringify({...snapshot,launchIdentity:effective.identityKey});
 }
 /** Called inside the original formal send transaction, never after returning its receipt. */
 export function snapshotTaskWriteAccess(db:ZhongshuoDatabase,taskId:string|null) {

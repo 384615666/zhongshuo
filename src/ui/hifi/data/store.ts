@@ -16,6 +16,7 @@ import { configureReadingPositions, readingPosition, saveReadingPosition } from 
 /** 任务详情（第五十一轮 H2）：task.get 的真实 DTO——pendingDelivery 只有 id/revision/manifest_hash
  * 三重身份，不猜其余字段；lastStartupFailureMessage 缺省为 null（服务端没有就不显示）。 */
 export interface ThreadTaskDetail {
+  responseKind?:'conversation'|'work'|null;
   id: string;
   title: string;
   status: string;

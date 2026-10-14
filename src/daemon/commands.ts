@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
+import { conversationFacts, conversationBlock, enqueueConversationReply } from './conversationReplies.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
@@ -1245,6 +1246,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'thread.history': {
         const params = z.strictObject({ threadId: z.string().min(1), beforeSeq: z.number().int().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
+        const scope=deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id=?').get(params.threadId) as {conversation_id:string}|undefined;
+        if(!scope)throw new DaemonCommandError('RESOURCE_NOT_FOUND','回复串不存在');
+        assertConversationAudience(deps.db,deps.localUserId,scope.conversation_id);
         const limit = params.limit ?? 50;
         const rows = (params.beforeSeq != null
           ? deps.db.prepare('SELECT id, author_type, author_id, thread_message_seq, body_json, created_at FROM messages WHERE thread_id = ? AND thread_message_seq < ? ORDER BY thread_message_seq DESC LIMIT ?').all(params.threadId, params.beforeSeq, limit)
@@ -1252,6 +1256,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const items = rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at }));
         // 消息附件（第二十七轮三：已发消息附件可点击预览——能力②闭环到页面）。
         attachMessageSummaries(deps.db, items);
+        const requestRows=(items.length?deps.db.prepare(`SELECT r.message_id,r.status,r.error_message,r.run_id,r.turn_id FROM conversation_reply_requests r JOIN messages m ON m.id=r.message_id
+          WHERE r.thread_id=? AND r.conversation_id=? AND r.project_id=m.project_id AND r.task_id=m.task_id AND r.thread_id=m.thread_id AND r.message_id IN (${items.map(()=>'?').join(',')})`).all(params.threadId,scope.conversation_id,...items.map(i=>i.id)):[]) as Array<{message_id:string;status:string;error_message:string|null;run_id:string|null;turn_id:string|null}>;
+        const requestByMessage=new Map(requestRows.map(r=>[r.message_id,r]));
+        for(const item of items){const r=requestByMessage.get(item.id);if(r)Object.assign(item,{replyExecution:{status:r.status,error:r.error_message,runId:r.run_id,turnId:r.turn_id}});}
         // 根消息（房间级锚消息——不在 thread 历史内）的附件摘要：线程视图锚块渲染芯片来源。
         const anchorId = (deps.db.prepare('SELECT anchor_message_id FROM conversation_threads WHERE id = ?').get(params.threadId) as { anchor_message_id: string | null } | undefined)?.anchor_message_id ?? null;
         const rootAttachments = anchorId != null ? (messageAttachmentSummaries(deps.db, [anchorId]).get(anchorId) ?? []) : [];
@@ -1283,7 +1291,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 按 ID 直查不绕过私信边界（第三十二轮一）
-        const task = deps.db.prepare('SELECT id, title, objective, status, project_id, conversation_id, room_id, conversation_thread_id, room_task_number, owner_member_id, parent_task_id, review_policy, current_delivery_id, route_json, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
+        const task = deps.db.prepare('SELECT id, title, objective, status, project_id, conversation_id, room_id, conversation_thread_id, room_task_number, owner_member_id, parent_task_id, review_policy, current_delivery_id, response_kind, route_json, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
         const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
         // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
@@ -1340,7 +1348,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const th = deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id=?').get(target.threadId) as { conversation_id: string } | undefined;
           if (th?.conversation_id !== target.conversationId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '图片能力读取目标与线程归属不一致');
         }
-        let members: string[] = []; const willDispatch = target.kind !== 'thread'; let direct = true;
+        let members: string[] = []; let willDispatch = target.kind !== 'thread'; let direct = true;
+        const conversation=target.kind==='thread'?conversationFacts(deps.db,target.threadId):null;
+        if(conversation){willDispatch=true;members=[conversation.memberId];const blocked=conversationBlock(deps.db,conversation,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:blocked.message,supported:false,members:[]}});}
         if (target.kind === 'dm') {
           const peer = dmPeerOf(deps.db, target.conversationId); if (peer != null) members = [peer.principal_id];
         } else if (target.kind === 'room_root') {
@@ -1366,7 +1376,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // 重放守卫（第三十一轮一）：旧回执不绕过当前状态——重放同号同参请求时若目标
         // 会话已归档/归属变化/audience 失效，明确拒绝。
         const submitReplayGuard = (): void => {
-          const t = params.target as { kind: string; projectId: string; conversationId: string };
+          const t = params.target as { kind: string; projectId: string; conversationId: string; threadId?:string };
           if (t.kind === 'thread') {
             const th = deps.db.prepare('SELECT conversation_id, project_id FROM conversation_threads WHERE id = ?').get((params.target as { threadId: string }).threadId) as { conversation_id: string; project_id: string } | undefined;
             if (th == null || th.conversation_id !== t.conversationId || th.project_id !== t.projectId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '线程目标与项目/会话不一致（重放拒绝）');
@@ -1374,9 +1384,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const conv = deps.db.prepare('SELECT id, project_id, kind, archived_at FROM conversations WHERE id = ?').get(t.conversationId) as { id: string; project_id: string; kind: string; archived_at: number | null } | undefined;
           if (conv == null || conv.project_id !== t.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标会话不存在或不属于该项目（重放拒绝）');
           assertConversationAudience(deps.db, deps.localUserId, t.conversationId);
+          if(t.kind==='thread'){const th=deps.db.prepare('SELECT th.status,r.archived_at,p.status projectStatus FROM conversation_threads th JOIN rooms r ON r.id=th.room_id JOIN projects p ON p.id=th.project_id WHERE th.id=?').get(t.threadId) as {status:string;archived_at:number|null;projectStatus:string}|undefined;if(!th||th.status!=='open'||th.archived_at!=null||th.projectStatus!=='active')throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目、房间或回复串已归档；不能追加消息');}
           if (t.kind === 'dm' && conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑（重放拒绝）');
         };
         const result = run(() => {
+          submitReplayGuard();
           if (params.target.kind === 'thread') {
             const target = params.target;
             // 线程跟进（修复轮 6）：沿用绑定线程的当前任务（§4.2 串内跟进）——
@@ -1408,7 +1420,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
+              const ordinary=conversationFacts(deps.db,thread.id);
+              const dispatchOrdinary=params.intent==='default'&&ordinary!=null;
+              if(params.intent==='default'&&!ordinary&&deps.db.prepare("SELECT 1 FROM conversation_reply_requests WHERE task_id=?").get(thread.root_task_id)&&deps.db.prepare("SELECT 1 FROM task_deliveries WHERE task_id=?").get(thread.root_task_id))throw new DaemonCommandError('CONVERSATION_BECAME_WORK','这段对话已产生工作交付；请明确选择仅记录保存意见，再从原交付执行返工。输入保留');
+              if(dispatchOrdinary){
+                const blocked=conversationBlock(deps.db,ordinary,process.env.ZS_RUNTIME??null,deps.localUserId);
+                if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
+                if(params.mentions.some(m=>m.kind!=='member'||m.memberId!==ordinary.memberId))throw new DaemonCommandError('CONVERSATION_TARGET_CHANGED','普通续问绑定原执行成员，不能静默更换成员');
+              }
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
+              assertImageGate(resolvedAtts,dispatchOrdinary,params.imageAck,params.body,ordinary!=null&&memberImageCapability(deps.db,ordinary.memberId).status==='supported');
               assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
               const message = insertThreadMessage(deps.db, {
                 projectId: params.target.projectId,
@@ -1422,6 +1443,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 taskId: thread.root_task_id,
               });
               attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
+              deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent',?) WHERE id=?").run(params.intent,message.messageId);
+              if(dispatchOrdinary){const dispatchKey=enqueueConversationReply(deps.db,ordinary,message.messageId,message.threadMessageSeq);return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey};}
               return { ...message, disposition: 'none' as const, taskId: thread.root_task_id, followUpRecorded: true };
             })();
           }
@@ -4439,7 +4462,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const threads = deps.db.prepare(
           `SELECT t.id, t.anchor_message_id, tk.id AS root_task_id, t.last_message_seq, t.revision,
                   m.body_json, m.created_at, m.author_type, m.author_id,
-                  tk.status AS task_status, tk.room_task_number, tk.title AS task_title,
+                  tk.status AS task_status, tk.response_kind AS task_response_kind, tk.room_task_number, tk.title AS task_title,
                   tk.objective AS task_objective, tk.review_policy AS task_review_policy, tk.revision AS task_revision,
                   tk.owner_member_id AS task_owner, tk.route_json AS task_route
                   ,(SELECT r.id FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_id
@@ -4451,7 +4474,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
            ORDER BY m.created_at DESC LIMIT ?`,
         ).all(params.roomId, roomScope.conversation_id, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
-          body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; room_task_number: number | null; task_title: string | null;
+          body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; task_response_kind:'conversation'|'work'|null; room_task_number: number | null; task_title: string | null;
           task_objective: string | null; task_review_policy: 'auto_deliver' | 'user_review' | null; task_revision: number | null; task_owner: string | null; task_route: string | null;
           latest_run_id: string | null; latest_run_status: string | null;
         }>;
@@ -4477,7 +4500,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             replyCount,
             lastReplyAt: lastReply?.created_at ?? null,
             taskId: t.root_task_id,
-            taskStatus: t.task_status,
+            taskStatus: t.task_status, taskResponseKind:t.task_response_kind,
             roomTaskNumber: t.room_task_number,
             taskTitle: t.task_title,
             taskObjective: t.task_objective, taskReviewPolicy: t.task_review_policy, taskRevision: t.task_revision,
@@ -4572,7 +4595,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const params = z.strictObject({
           taskId: z.string().min(1), reason: z.string().min(1).max(200).optional(), formatRepair: z.boolean().optional(),
           sourceRunId: z.string().min(1).optional(), expectedTaskRevision: z.number().int().nonnegative().optional(),
-          expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED']).optional(),
+          expectedStopGeneration: z.number().int().nonnegative().optional(), expectedRunStatus: z.enum(['FAILED','SUCCEEDED']).optional(),
         }).parse(env.params);
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 回执重放也不能绕过 DM audience
         assertTaskDispatchScope(deps.db, params.taskId);
@@ -4590,7 +4613,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
             const expected = deps.db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.sourceRunId, params.taskId, task.conversation_id) as { status: string } | undefined;
-            if (expected == null || expected.status !== params.expectedRunStatus || task.status !== 'ACTIVE') {
+            if (expected == null || expected.status !== params.expectedRunStatus || (params.expectedRunStatus==='FAILED'?task.status!=='ACTIVE':task.status!=='WAITING_USER'||params.expectedTaskRevision==null||params.expectedStopGeneration==null||deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(params.taskId,params.sourceRunId)==null)) {
               throw new DaemonCommandError('STALE_REVISION', '失败运行或任务状态已变化——请刷新后重新决定');
             }
           }

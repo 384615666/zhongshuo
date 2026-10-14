@@ -202,9 +202,9 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
     <div className="panel info">{taskRunGuidance(detail)}</div>
-    {detail.failedRetry.available && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>继续最近失败运行</button> : null}
+    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':'继续最近失败运行'}</button> : null}
     {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}
-    {detail.failedRetry.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
+    {detail.failedRetry.pending||detail.clarificationRetry?.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
     {detail.runs.length === 0 ? <div className="card tight">任务尚无运行记录。</div> : ordered.map((r) => <div key={r.id} className="card tight">
       <div className="section-title">{r.id === detail.currentRunId ? '当前运行' : r.id === detail.latestRunId ? '最近运行' : '历史运行'}{r.id === detail.selectedRunId && detail.selectedRunId !== detail.latestRunId ? ' · 已定位' : ''} · {r.mode}</div>
       {r.id !== detail.selectedRunId && onSelectRun ? <button className="btn ghost sm" onClick={() => onSelectRun(r.id)}>查看这次运行</button> : null}

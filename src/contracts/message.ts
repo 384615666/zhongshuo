@@ -26,6 +26,8 @@ export type MessageStatus = 'saved' | 'streaming' | 'final' | 'invalid';
 export interface MessageBodyJson {
   text: string;
   mentions?: readonly MentionNode[];
+  conversationIntent?: 'default'|'record_only';
+  runtimeControlResult?:string;
 }
 
 export interface Message {
@@ -51,6 +53,8 @@ export interface Message {
 
 export const messageBodyJsonSchema = z.strictObject({
   text: z.string(),
+  conversationIntent:z.enum(['default','record_only']).optional(),
+  runtimeControlResult:z.string().optional(),
   mentions: z.array(z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('member'), memberId: z.string().min(1) }),
     z.strictObject({ kind: z.literal('all') }),

@@ -258,8 +258,8 @@ describe('第四十三/四十四轮：40→最新（文件库）——回填/修
 
     const res = migrate(db);
     expect(res.fromVersion).toBe(40);
-    expect(res.applied).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50]); // 46=R65 projects.description；47=R66 navigation.pinned；48=R67 member.description（加性列，不影响保护状态判定）
-    expect(db.pragma('user_version', { simple: true })).toBe(50);
+    expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=41).map(m=>m.id)); // 46=R65 projects.description；47=R66 navigation.pinned；48=R67 member.description（加性列，不影响保护状态判定）
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
 
     // ① 回填结果：事件顺序+保守分类推导的每 turn 最新保护事实。
     for (const f of fx.list) expect(protectionStateOf(db, f.turnId), f.fixture.key).toBe(f.fixture.expectState);
@@ -349,7 +349,7 @@ describe('第四十三轮 §4：41→最新（内存库）——先复现漏洞�
     db.prepare(`DELETE FROM outbox WHERE dispatch_key GLOB 'task:${keep.taskId}:redispatch*'`).run();
 
     const res = migrate(db);
-    expect(res.applied).toEqual([42, 43, 44, 45, 46, 47, 48, 49, 50]);
+    expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=42).map(m=>m.id));
     // 收口：retained 回填 → 呈现不可恢复、准入拒绝且零新派发、恢复中心可见。
     expect(protectionStateOf(db, keep.turnId)).toBe('retained');
     const cmd = cmdOn(db, join(tmpRoot, 'upg41', 'app'));
@@ -402,7 +402,7 @@ describe('第四十三轮 §4：42→最新——042 已按宽松判定误回填
     const before = snapshot(db);
 
     const res = migrate(db);
-    expect(res.applied).toEqual([43, 44, 45, 46, 47, 48, 49, 50]);
+    expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=43).map(m=>m.id));
     // 只降级修正：误回填行→retained；可靠释放行保持 released；预算/审计逐字节不变。
     expect(protectionStateOf(db, exited.turnId)).toBe('retained');
     expect(protectionStateOf(db, contra.turnId)).toBe('retained');
@@ -468,8 +468,8 @@ describe('第四十四轮 §1：43→最新（文件库）——043 已按残缺
     const before = snapshot(db);
 
     const res = migrate(db);
-    expect(res.applied).toEqual([44, 45, 46, 47, 48, 49, 50]);
-    expect(db.pragma('user_version', { simple: true })).toBe(50);
+    expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=44).map(m=>m.id));
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
     // 只降级修正：残缺证据行→retained；完整正例不动；预算/审计逐字节不变。
     expect(protectionStateOf(db, badmev.turnId)).toBe('retained');
     expect(protectionStateOf(db, reasonover.turnId)).toBe('retained');
@@ -545,8 +545,8 @@ describe('第四十五轮 §2：44→最新（文件库）——044 已按「损
     const before = snapshot(db);
 
     const res = migrate(db);
-    expect(res.applied).toEqual([45, 46, 47, 48, 49, 50]);
-    expect(db.pragma('user_version', { simple: true })).toBe(50);
+    expect(res.applied).toEqual(MIGRATIONS.filter(m=>m.id>=45).map(m=>m.id));
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS.at(-1)!.id);
     // 只降级修正：损坏 probe 行→retained；三类正例不动；预算/审计逐字节不变。
     expect(protectionStateOf(db, corruptNull.turnId)).toBe('retained');
     expect(protectionStateOf(db, corruptArr.turnId)).toBe('retained');

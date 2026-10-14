@@ -24,18 +24,18 @@ export interface RecoveryBlockReason {
 }
 
 /** 任务是否可新建派发（redispatch/恢复）：null=可；否则返回阻断原因。 */
-export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: string): RecoveryBlockReason | null {
+export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: string, options: { queueOnly?: boolean } = {}): RecoveryBlockReason | null {
   const inFlightRuns = db.prepare(
     `SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
   ).get(taskId) as { c: number };
-  if (inFlightRuns.c > 0) {
+  if (inFlightRuns.c > 0 && !options.queueOnly) {
     return { code: 'WORKER_STILL_RUNNING', message: `该任务已有在途执行（run ${inFlightRuns.c} 个）：不得并发追加`, fact: { kind: 'in-flight-runs', count: inFlightRuns.c } };
   }
   const inFlightTurns = db.prepare(
     `SELECT count(*) c FROM agent_turns t JOIN workflow_runs r ON r.id = t.run_id
      WHERE r.task_id = ? AND t.status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
   ).get(taskId) as { c: number };
-  if (inFlightTurns.c > 0) {
+  if (inFlightTurns.c > 0 && !options.queueOnly) {
     return { code: 'WORKER_STILL_RUNNING', message: `该任务已有在途/未收口 turn（${inFlightTurns.c} 个）：不得并发追加`, fact: { kind: 'in-flight-turns', count: inFlightTurns.c } };
   }
   // 保护未解除（第四十一轮 §2 P1——权威持久事实）：对账明确保留（protectionRetained）的
@@ -61,8 +61,9 @@ export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: str
      JOIN agent_turns t ON t.id = l.owner_turn_id
      JOIN workflow_runs r ON r.id = t.run_id
      WHERE r.task_id = ? AND l.status != 'released'
+       AND (? = 0 OR t.status IN ('SUCCEEDED','FAILED','CANCELLED','UNKNOWN'))
      LIMIT 1`,
-  ).get(taskId) as { lockDomain: string; turnId: string } | undefined;
+  ).get(taskId, options.queueOnly ? 1 : 0) as { lockDomain: string; turnId: string } | undefined;
   if (heldLease != null) {
     return {
       code: 'RECONCILE_REQUIRED',

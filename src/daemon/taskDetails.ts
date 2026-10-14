@@ -77,6 +77,9 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const pendingRedispatch = failedLatest && db.prepare(`SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
     .get(`task:${taskId}:redispatch:${latestRunId}`) != null;
   const blockedRetry = failedLatest && !pendingRedispatch && scopeBlock == null ? assessTaskRedispatchReadiness(db, taskId) : null;
+  const clarificationLatest=task.status==='WAITING_USER'&&task.stop_generation===0&&runRows.items[0]?.status==='SUCCEEDED'&&db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(taskId,latestRunId)!=null;
+  const clarificationPending=clarificationLatest&&db.prepare("SELECT 1 FROM outbox WHERE dispatch_key=? AND status!='done'").get(`task:${taskId}:redispatch:${latestRunId}`)!=null;
+  const clarificationBlock=clarificationLatest&&!clarificationPending&&scopeBlock==null?assessTaskRedispatchReadiness(db,taskId):null;
   const visibleRunRows = selectedRow == null ? runRows.items : [...runRows.items, selectedRow];
   const runs = visibleRunRows.map((r) => {
     if (r.id !== selectedRunId) return { id: r.id, mode: r.mode, status: r.status, stage: r.stage, roundNo: r.round_no, revision: r.revision,
@@ -121,6 +124,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       roomTaskNumber: task.room_task_number as number | null, ownerMemberId: task.owner_member_id as string | null,
       ownerDisplayName: task.owner_display_name as string | null,
       parentTaskId: task.parent_task_id as string | null, currentDeliveryId: task.current_delivery_id as string | null },
+    clarificationRetry:{available:clarificationLatest&&!clarificationPending&&scopeBlock==null&&clarificationBlock==null,pending:clarificationPending,blockReason:scopeBlock??clarificationBlock?.message??null},
     failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,
       pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),

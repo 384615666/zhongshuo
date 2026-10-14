@@ -405,8 +405,9 @@ export function Composer({
   const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
     mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
-  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions});
-  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;reason:string;readAt:number;error?:string}|null>(null);
+  const threadFactRevision=useStore(s=>target.kind==='thread'&&target.threadId?s.threadTasks[target.threadId]?.revision:null);
+  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions,threadFactRevision});
+  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;blocked?:boolean;reason:string;readAt:number;error?:string}|null>(null);
   useEffect(()=>{
     if(!formalLimits?.access||sendAs!=='ai')return;
     let cancelled=false,reading=false;
@@ -414,7 +415,7 @@ export function Composer({
       if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,reason:c.reason,readAt:Date.now()});}
+      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
       catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
@@ -1352,7 +1353,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? '选择执行成员' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? '选择执行成员' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 
