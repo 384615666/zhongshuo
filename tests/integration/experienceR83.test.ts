@@ -1,5 +1,5 @@
 import {afterEach,describe,it,expect,vi} from 'vitest';
-import {mkdtempSync,mkdirSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -39,7 +39,7 @@ describe('R83 effective execution and readable conversation, no real inference',
       await cmd('member.setRuntime',{memberId:member,kind:'fake',permissionMode:'plan',effort:'low'});
       expect(()=>effectiveTaskWriteAccess(db,first.taskId,member,'fake')).toThrow(/配置已变化/);
       const second=await send();expect(effectiveTaskWriteAccess(db,second.taskId,member,'fake')).toMatchObject({fullAccess:false,modificationAuthorized:false});
-      const adapter=new FakeRuntimeAdapter({turnScripts:[[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({...control,responseKind:'conversation'})}}]]});
+      const adapter=new FakeRuntimeAdapter({turnScripts:[[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({...control,responseKind:'conversation',files:['合成图片引用.png'],unexecutedVerifications:[{item:'像素精确测量',reason:'仅目视识别，无此工作请求'}]})}}]]});
       const worker=new DispatchWorker({db,adapter,leaseOwner:'r83-conversation',appDataDir:root});
       await worker.runOnce();await worker.runOnce();
       expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(first.taskId)).toMatchObject({status:'BLOCKED'});
@@ -55,6 +55,18 @@ describe('R83 effective execution and readable conversation, no real inference',
       const outsider=await dispatchDaemonCommand({...deps,localUserId:'outside-audience'},{protocolVersion:1,commandId:randomUUID(),method:'message.protocol',params:{projectId:p,messageId:dmReply.id}}) as {ok:boolean};expect(outsider.ok).toBe(false);
       const copy=await cmd('memberTemplate.createMember',{projectId:p,templateId:template.id,expectedRevision:template.revision,displayName:'另一成员',description:''});
       const binding=(await cmd('member.runtime',{memberId:copy.memberId})).binding;expect(binding).toMatchObject({permissionMode:'bypassPermissions',effort:'high'});
+      await cmd('member.setRuntime',{memberId:member,kind:'fake',permissionMode:'bypassPermissions',effort:'low'});
+      const actualWork=await send();
+      const workAdapter=new FakeRuntimeAdapter({turnScripts:[[
+        {kind:'event',event:{kind:'tool.started',toolCallId:'write-one',toolName:'Write',argumentsSummary:'result.txt'}},
+        {kind:'writeFile',path:'result.txt',content:'独立工程工具产出'},
+        {kind:'event',event:{kind:'tool.completed',toolCallId:'write-one',outcome:'success'}},
+        {kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({...control,responseKind:'conversation',files:['result.txt']})}},
+      ]]});
+      await new DispatchWorker({db,adapter:workAdapter,leaseOwner:'r83-work-evidence',appDataDir:root}).runOnce();
+      expect(readFileSync(join(project,'result.txt'),'utf8')).toBe('独立工程工具产出');
+      expect((db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(actualWork.taskId) as {n:number}).n).toBe(1);
+      expect((db.prepare("SELECT count(*) n FROM domain_events WHERE task_id=? AND kind='turn.conversationWorkObserved'").get(actualWork.taskId) as {n:number}).n).toBe(1);
       vi.stubEnv('ZS_REAL_DISPATCH_GUARD','0'); // Configuration only, worker has already finished; no real adapter factory.
       const optionsSpy=vi.spyOn(runtimeOptionsModule,'runtimeOptions').mockResolvedValue({efforts:['high'],source:'isolated CLI declaration fixture',reason:'protocol only',imageInput:'automatic'});
       const currentRevision=(await cmd('member.list',{projectId:p})).items.find(m=>m.id===member)!.revision;

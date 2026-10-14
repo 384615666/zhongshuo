@@ -1824,11 +1824,15 @@ export class DispatchWorker {
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const result=taskCompleteSchema.parse(JSON.parse(finalText));
-          if(result.responseKind==='conversation'&&result.files.length===0&&result.executedVerifications.length===0&&result.unexecutedVerifications.length===0) {
+          const workTools=(this.db.prepare("SELECT count(*) n FROM domain_events WHERE turn_id=? AND kind='tool.started' AND json_extract(payload_json,'$.toolName') IN ('Write','Edit','MultiEdit','NotebookEdit','Bash','PowerShell','REPL')").get(turnId) as {n:number}).n;
+          // Input references or a note that exact measurement was not performed are
+          // not a work delivery. Actual execution/write tools override that hint.
+          if(result.responseKind==='conversation'&&workTools===0) {
             this.transitionTask(task.id,'DONE');
             this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'正常回答，无工作交付与验收待办'});
             return;
           }
+          if(result.responseKind==='conversation')this.audit(task,runId,turnId,'turn.conversationWorkObserved',{workTools,note:'实际执行/写工具已发生，保留工作交付；原协议不改写'});
           const manifestHash = createHash('sha256').update(finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';

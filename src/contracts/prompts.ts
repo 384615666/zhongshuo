@@ -380,7 +380,7 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
     `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"直接回答用户的自然语言","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
   );
   lines.push('严格 schema：除上述字段外不得新增任何字段（未知键将被拒绝）；resultKey 必须逐字使用上方给定值。');
-  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 的 files 和验证数组必须为空。answer 按用户实际问题回答：问候直接简短回应；孤立数字或“测试”简短确认或澄清，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
+  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 按用户实际问题回答：问候直接简短回应；孤立数字或“测试”简短确认或澄清，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
     lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
@@ -489,8 +489,6 @@ export const taskCompleteSchema = z.strictObject({
   executedVerifications: z.array(z.string()),
   unexecutedVerifications: z.array(z.strictObject({ item: z.string(), reason: z.string() })),
   remainingIssues: z.array(z.string()),
-}).superRefine((result,ctx)=>{
-  if(result.responseKind==='conversation'&&(result.files.length||result.executedVerifications.length||result.unexecutedVerifications.length))ctx.addIssue({code:'custom',message:'普通对话不能携带工作文件或验证；有工作成果应使用 work'});
 });
 
 export type TaskComplete = z.infer<typeof taskCompleteSchema>;
