@@ -418,6 +418,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
 
     let stopPromise: Promise<DaemonStopResult> | null = null; // 优雅关闭（幂等缓存）
     let forcePromise: Promise<DaemonStopResult> | null = null; // 强制关闭（另行定义，幂等缓存）
+    // Once IPC is closed the remaining disposal deadlines may all be unref'ed.
+    // A Promise alone cannot keep Node alive: retain one handle until the actual
+    // stop result has been persisted, the database closed and the lock released.
+    const keepStopAlive=(action:()=>Promise<DaemonStopResult>)=>{
+      const keeper=setInterval(()=>{},1000);
+      try{return action().finally(()=>clearInterval(keeper));}catch(error){clearInterval(keeper);throw error;}
+    };
+
     return {
       pipeName,
       db,
@@ -461,7 +469,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         };
         const beginGraceful = (): Promise<DaemonStopResult> => {
           if (stopPromise != null) return stopPromise; // 重复 stop 幂等：同一关闭过程同一结果
-          stopPromise = runGraceful();
+          stopPromise = keepStopAlive(runGraceful);
           return stopPromise;
         };
         const runGraceful = async (): Promise<DaemonStopResult> => {
@@ -521,7 +529,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           // 对象则返回 incomplete（不关库、不释放锁——宿主若仍退出=崩溃语义，WAL 保留现场），
           // 不声称已确认杀完进程或已完成 UNKNOWN 落库。
           if (forcePromise != null) return forcePromise;
-          forcePromise = (async (): Promise<DaemonStopResult> => {
+          forcePromise = keepStopAlive(async (): Promise<DaemonStopResult> => {
             const gracefulResult = await beginGraceful();
             if (gracefulResult.complete) return gracefulResult;
             const disposeReport = await boundedDisposeAll(Math.min(settleMs, 5_000));
@@ -561,7 +569,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               inFlightRemaining: [], startingRemaining: [],
               reason: '强制路径：杀进程+消费器按 UNKNOWN 收尾，收拢结果已核对后关库',
             };
-          })();
+          });
           return forcePromise;
         }
         // 非强制：若强制已发生，返回其结果（同一关闭过程的最终结果）。
@@ -615,6 +623,8 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
     writeFileSync(pidPath, String(process.pid), 'utf8');
     let shutdownStarted = false;
     const shutdown = async () => {
+      const finalizerAlive=setInterval(()=>{},1000);
+      try {
       let result = await daemon.stop();
       if (!result.complete) {
         // 优雅关闭未完成：走强制路径（恢复依据已持久化），退出码区分。
@@ -639,6 +649,7 @@ if (process.argv[1]?.replaceAll('\\', '/').endsWith('src/daemon/entry.ts') || pr
         stopRecord: 'daemon_state[daemon:stop:last]（appData/state.sqlite）',
       })}\n`);
       process.exit(result.complete ? 0 : 3);
+      }finally{clearInterval(finalizerAlive);}
     };
     requestShutdown = () => {
       if (shutdownStarted) return; // 重复 shutdown/信号=同一关闭过程（stop 本身幂等）

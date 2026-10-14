@@ -198,7 +198,7 @@ function verifyManifest(packageRoot) {
     const env = { ...process.env, ZS_DEV25_DEBUG_PORT: String(port), ZS_R78_ENGINEERING_TOKEN: token, ZS_DAEMON_ENTRY: entry };
     for (const key of ['ZS_RUNTIME', 'ZS_ALLOW_FAKE', 'ZS_APP_DATA', 'ZS_PIPE_NAME', 'ZS_REAL_DISPATCH_GUARD', 'ZS_PACKED_ENTRY']) delete env[key];
     Object.assign(env, overrides);
-    bat = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copy, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    bat = spawn('cmd', ['/c', 'start-desktop.bat'], { cwd: copy, env, windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
     bat.stdout.on('data', (chunk) => fs.appendFileSync(path.join(out, 'launcher.stdout.log'), chunk));
     bat.stderr.on('data', (chunk) => fs.appendFileSync(path.join(out, 'launcher.stderr.log'), chunk));
     return bat;
@@ -281,7 +281,7 @@ function verifyManifest(packageRoot) {
       facts.unknown=await require('./verify-r80-unknown-extension.cjs')({cdp,projectId,room,memberId,project,data,out,command,navigate,inputText,until,queryOne,queryAll,must,sleep,button,facts,reopen:async()=>{
         await closeUi(cdp);cdp=null;await until(()=>!fs.existsSync(path.join(data,'daemon.pid')),Boolean,'unknown test daemon graceful close',30000);await until(portIsFree,Boolean,'unknown test old UI closed',30000);start();await until(()=>fs.existsSync(path.join(data,'engineering','ready.json')),Boolean,'unknown test reopen ready',35000);({cdp}=await connectUi('unknown-reopen'));return cdp;
       }});
-      captureUi('unknown-envelope-final');facts.pass=facts.unknown.pass&&facts.ui.sessions.every(s=>s.errors.length===0);facts.steps.push('R80 dropped committed submit receipt, ordinary reopen keeps original envelope and draft; explicit same-ID replay creates no duplicate');
+      captureUi('unknown-envelope-final');facts.pass=facts.unknown.pass&&facts.ui.sessions.every(s=>s.errors.length===0);facts.steps.push(facts.unknown.retainedUnknown?'R84 legacy compatibility source: dropped committed receipt, original envelope retained across reopen; no replay performed':'R80 dropped committed submit receipt, ordinary reopen keeps original envelope and draft; explicit same-ID replay creates no duplicate');
     }else{
     await navigate(cdp, `/project/${projectId}/room/${room.id}`, `/room/${room.id}`);
     await uiSend(cdp, 'R78 UI ROOM：请生成工程交付并等待我验收', memberId);

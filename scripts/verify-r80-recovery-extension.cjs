@@ -4,8 +4,8 @@ const fs=require('node:fs');const path=require('node:path');
 module.exports=async function({cdp,projectId,room,dm,memberId,data,out,command,navigate,uiSend,until,queryOne,must,sleep,button,facts,durationMs=30*60_000}){
   const start=Date.now(),duration=Math.min(3*60*60_000,Math.max(30*60_000,durationMs));const samples=[];
   const target=facts.r79.scale;
-  let ordinary=null;
-  if(duration>=2*60*60_000){
+  let ordinary=facts.r84Ordinary?{id:facts.r84Ordinary.taskId,conversation_thread_id:facts.r84Ordinary.threadId}:null;
+  if(duration>=2*60*60_000&&!ordinary){
     await navigate(cdp,`/project/${projectId}/room/${room.id}`,room.id);
     await uiSend(cdp,'R84 UI CHAT：工程普通问候',memberId);
     ordinary=await until(()=>queryOne("SELECT id,conversation_thread_id FROM tasks WHERE title LIKE '%R84 UI CHAT%' ORDER BY rowid DESC LIMIT 1"),Boolean,'R84 ordinary root');
@@ -36,9 +36,11 @@ module.exports=async function({cdp,projectId,room,dm,memberId,data,out,command,n
   await until(()=>cdp.eval("document.querySelector('[data-zs-connection-phase]')?.getAttribute('data-zs-connection-phase')"),v=>v==='online','R80 connection auto recovery',25_000);
   must(queryOne('SELECT count(*) n FROM messages').n===before,'recovery dispatched a message');
   await cdp.send('Page.reload');
-  await cdp.send('Page.bringToFront');
-  await until(()=>cdp.eval('document.visibilityState'),v=>v==='visible','reload returned visible before expecting detail reads',15000);
   await until(()=>cdp.eval("document.querySelector('textarea.composer-input')?.value"),v=>v===draft,'R80 reload durable draft',35_000);
+  fs.writeFileSync(path.join(out,'awaiting-visible.json'),JSON.stringify({buildId:facts.buildId,at:Date.now(),phase:'reload renderer mounted; waiting for actual visible return'}));
+  await cdp.send('Page.bringToFront');
+  await until(()=>cdp.eval('document.visibilityState'),v=>v==='visible','reload returned visible before expecting detail reads',60000);
+  fs.writeFileSync(path.join(out,'awaiting-visible.json'),JSON.stringify({buildId:facts.buildId,at:Date.now(),phase:'visible confirmed'}));
   await until(()=>cdp.eval("document.querySelector('.details-body')?.textContent.includes('历史运行')"),Boolean,'R80 reload historical selection',35_000);
   const historyRestored=await cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点') === true");
   must(historyRestored,'R80 reload historical window not restored');
