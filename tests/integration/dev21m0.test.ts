@@ -68,7 +68,7 @@ describe('① 实际模型输入包含用户根消息与获准历史正文', () 
 
     expect(adapter.startTurnLog).toHaveLength(1);
     const call = adapter.startTurnLog[0]!;
-    expect(call.text).toContain('【本轮输入 zs-turn-v0.1.2】');
+    expect(call.text).toContain('【本轮输入 zs-turn-v0.1.3】');
     expect(call.text).toContain('请阅读 README 并总结要点'); // 用户根消息正文（§13.1-1/6）
     expect(call.text).toContain('用户根消息（msg_root_1）');
     expect(call.text).toContain('你是本任务唯一执行成员'); // DIRECT 指令模板
@@ -122,7 +122,7 @@ describe('② 输入与 ContextBundle/版本/hash 一致（PP-02/04）', () => {
     const recomputed = createHash('sha256').update(canonicalJson(envelope)).digest('hex');
     expect(recomputed).toBe(row.hash);
     // 版本留档（PP-02：会话/运行关联实际使用版本）
-    expect(envelope.bundleVersion).toBe('zs-turn-v0.1.2');
+    expect(envelope.bundleVersion).toBe('zs-turn-v0.1.3');
     expect(envelope.promptVersion).toBe('zs-standing-v0.1.1');
     // 材料引用与线程摘要一致（PP-04：可见材料与 included_refs 对应）
     expect(envelope.threadDigest.rootMessageId).toBe('msg_root_2');

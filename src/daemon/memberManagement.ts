@@ -14,6 +14,7 @@ export const templateConfigSchema = z.strictObject({
     model: z.string().trim().min(1).max(200).nullable(),
     executable: z.string().trim().min(1).max(1024),
     permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).nullable(),
+    effort: z.enum(['none','minimal','low','medium','high','xhigh','max']).nullable().optional(),
 });
 export type TemplateConfig = z.infer<typeof templateConfigSchema>;
 type Fail = (code: string, message: string) => never;
@@ -114,9 +115,9 @@ export function bindMemberRuntime(db: ZhongshuoDatabase, memberId: string, confi
     ON CONFLICT(id) DO NOTHING`).run(installationId, config.kind, config.executable, '', config.kind === 'claude' ? CLAUDE_ADAPTER_VERSION : config.kind === 'codex' ? 'codex-appserver-adapter' : 'fake-adapter', JSON.stringify(capabilities), Date.now());
     const profileId = `ap_${memberId}`;
     db.prepare(`INSERT INTO agent_profiles (id,name,description,runtime_installation_id,settings_json) VALUES (?,?,NULL,?,?)
-    ON CONFLICT(id) DO UPDATE SET runtime_installation_id=excluded.runtime_installation_id, settings_json=excluded.settings_json`).run(profileId, `成员 ${memberId} 的 runtime profile`, installationId, JSON.stringify({ model: config.model, permissionMode: config.permissionMode }));
+    ON CONFLICT(id) DO UPDATE SET runtime_installation_id=excluded.runtime_installation_id, settings_json=excluded.settings_json`).run(profileId, `成员 ${memberId} 的 runtime profile`, installationId, JSON.stringify({ model: config.model, permissionMode: config.permissionMode, effort:config.effort??null }));
     db.prepare('UPDATE project_members SET profile_id=?, settings_revision=settings_revision+1 WHERE id=?').run(profileId, memberId);
-    return { memberId, installationId, kind: config.kind, model: config.model, permissionMode: config.permissionMode };
+    return { memberId, installationId, kind: config.kind, model: config.model, permissionMode: config.permissionMode,effort:config.effort??null };
 }
 function dto(t: Template) { return { id: t.id, name: t.name, description: t.description, config: templateConfigSchema.parse(JSON.parse(t.config_json)), enabled: t.enabled === 1, revision: t.revision, createdAt: t.created_at, updatedAt: t.updated_at }; }
 /** Local configuration templates: strict whitelist, CAS, transactions and durable command receipts. */
@@ -164,7 +165,7 @@ export function memberManagementCommand(db: ZhongshuoDatabase, method: string, p
             if (binding == null)
                 fail('VALIDATION_INVALID', '此成员没有明确的 runtime 绑定；请先为成员保存配置，不能把动态全局默认冒充模板快照');
             const settings = JSON.parse(binding.settings_json) as Record<string, unknown>;
-            const config = templateConfigSchema.parse({ kind: binding.kind, executable: binding.executable, model: settings.model ?? null, permissionMode: settings.permissionMode ?? null });
+            const config = templateConfigSchema.parse({ kind: binding.kind, executable: binding.executable, model: settings.model ?? null, permissionMode: settings.permissionMode ?? null,...(settings.effort?{effort:settings.effort}:{}) });
             configGuard(config, fail);
             const templateId = `mt_${randomUUID()}`, now = Date.now();
             db.prepare('INSERT INTO member_templates (id,name,description,config_json,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(templateId, p.name, p.description, JSON.stringify(config), now, now);

@@ -1,7 +1,7 @@
 /**
  * 提示词契约（DEV-21-M0；依据 docs/zhongshuo-prompts-v0.1.md，模板文本照录不改编）。
  * - 层 A 常驻提示词 `zs-standing-v0.1.1`：openSession 时绑定会话（快照+hash）。
- * - 层 B 本轮输入包 `zs-turn-v0.1.2`：每 turn 组装（信封→固定分节渲染，hash 入 context_bundles）。
+ * - 层 B 本轮输入包 `zs-turn-v0.1.3`：每 turn 组装（信封→固定分节渲染，hash 入 context_bundles）。
  * - 层 C 事件注入：随 DEV-08/09/11 调度接入。
  * 程序边界（路由/隔离/预算/权限/停止）一律不依赖提示词；模板只让模型配合（规格 §6）。
  */
@@ -13,7 +13,7 @@ import { domainErr, domainOk } from './errors.ts';
 import type { DomainResult } from './errors.ts';
 
 export const STANDING_PROMPT_VERSION = 'zs-standing-v0.1.1';
-export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.2';
+export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.3';
 export const TASK_COMPLETE_SCHEMA_VERSION = 'task-complete-v1';
 
 // ---------- 层 A：常驻提示词模板（规格 §3 全文照录） ----------
@@ -235,6 +235,7 @@ export const turnPermissionHeaderSchema = z.strictObject({
   intent: z.enum(['analyze', 'modify']),
   policyId: z.string().min(1),
   modificationAuthorized: z.boolean(),
+  fullAccess:z.boolean().optional(),
   allowedWriteRoots: z.array(z.string()),
 });
 
@@ -336,7 +337,7 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
     `预算：本运行上限 ${b.runMaxTurns}，已用 ${b.usedTurns}，在途预留 ${b.inFlightReservedTurns}（含本轮），总剩余 ${b.remainingTurns}，尾部预留 ${b.tailReserved}，当前阶段可新增调用 ${b.stageAvailableTurns}`,
   );
   lines.push(
-    `有效策略：${envelope.permission.policyId}；修改授权：${envelope.permission.modificationAuthorized ? '有' : '无'}；允许写入目录：${envelope.permission.allowedWriteRoots.length > 0 ? envelope.permission.allowedWriteRoots.join('、') : '无'}`,
+    `有效策略：${envelope.permission.policyId}；修改授权：${envelope.permission.modificationAuthorized ? '有' : '无'}；允许写入目录：${envelope.permission.fullAccess?'CLI 完整权限（可执行命令、读写电脑文件；仅按用户目标操作）':envelope.permission.allowedWriteRoots.length > 0 ? envelope.permission.allowedWriteRoots.join('、') : '无'}`,
   );
   lines.push('── 任务 ──');
   lines.push(envelope.task.objective || '（见用户根消息）');
@@ -376,9 +377,10 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
   lines.push(
-    `最终结果必须是一个 JSON 对象（仅此对象，作为最后一条消息，不要放进 Markdown 代码围栏）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","changeSummary":"完成内容摘要：分析类任务的全部结论/清单正文完整放在本字段（带依据逐条列出，不要为字段名或长度缩短内容）","files":["涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
+    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"直接回答用户的自然语言","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
   );
   lines.push('严格 schema：除上述字段外不得新增任何字段（未知键将被拒绝）；resultKey 必须逐字使用上方给定值。');
+  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 的 files 和验证数组必须为空。answer 按用户实际问题回答：问候直接简短回应；孤立数字或“测试”简短确认或澄清，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
     lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
@@ -481,10 +483,14 @@ export const taskCompleteSchema = z.strictObject({
   schemaVersion: z.literal(TASK_COMPLETE_SCHEMA_VERSION),
   resultKey: z.string().min(1),
   changeSummary: z.string(),
+  answer:z.string().optional(),
+  responseKind:z.enum(['conversation','work']).optional(),
   files: z.array(z.string()),
   executedVerifications: z.array(z.string()),
   unexecutedVerifications: z.array(z.strictObject({ item: z.string(), reason: z.string() })),
   remainingIssues: z.array(z.string()),
+}).superRefine((result,ctx)=>{
+  if(result.responseKind==='conversation'&&(result.files.length||result.executedVerifications.length||result.unexecutedVerifications.length))ctx.addIssue({code:'custom',message:'普通对话不能携带工作文件或验证；有工作成果应使用 work'});
 });
 
 export type TaskComplete = z.infer<typeof taskCompleteSchema>;

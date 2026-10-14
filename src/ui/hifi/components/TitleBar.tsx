@@ -19,10 +19,10 @@
  *  - 项目入口还原原型形态：`项目管理 · [分支] · 当前项目名 ▾` 单按钮开菜单；
  *    「后台任务 N · N turn」状态按钮通过正式 project.taskSummary 读取项目计数（未读显示 —）。
  */
-import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useState,useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import { Tag } from './ui';
+import { Tag,Menu } from './ui';
 import { useStore, toast } from '../data/store';
 import { command } from '../bridge';
 import { switchFocusProject } from '../loader';
@@ -89,6 +89,7 @@ export function TitleBar() {
   /** 派发防护标识（r56：演练包自绘标题栏必须可见「模拟/真实派发」——runtime.status 自述）。 */
   const [guard, setGuard] = useState<{ fakeAllowed: boolean; realDispatchGuard: boolean } | null>(null);
   const [pmAt, setPmAt] = useState<{ x: number; y: number } | null>(null);
+  const projectTrigger=useRef<HTMLButtonElement>(null);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
   const d = bridge();
 
@@ -140,6 +141,7 @@ export function TitleBar() {
         <button
           className="zs-tb-stat zs-tb-no-drag zs-tb-project"
           data-zs-project-menu-btn="1"
+          ref={projectTrigger}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, padding: '2px 8px' }}
           title={project != null
             ? `项目管理：切换当前项目 / 侧栏显示 / 打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
@@ -191,8 +193,7 @@ export function TitleBar() {
         </button>
         {pmAt != null ? (
           <MenuBoundary name="项目管理菜单">
-            <div style={{ position: 'fixed', inset: 0, zIndex: 290 }} onClick={() => setPmAt(null)} />
-            <ProjectMenu anchor={pmAt} onClose={() => setPmAt(null)} />
+            <ProjectMenu anchor={pmAt} trigger={projectTrigger.current} onClose={() => setPmAt(null)} />
           </MenuBoundary>
         ) : null}
       </div>
@@ -248,7 +249,7 @@ export function TitleBarStatButton() {
 
 /** 项目管理下拉（原型 projectMenu：勾选=显示在侧栏；点名=切换当前项目并进入其房间/主页；
  *  +打开文件夹；目录失效时给「重新定位」入口）。 */
-function ProjectMenu({ anchor, onClose }: { anchor: { x: number; y: number }; onClose: () => void }) {
+function ProjectMenu({ anchor, onClose,trigger }: { anchor: { x: number; y: number }; onClose: () => void;trigger:HTMLElement|null }) {
   // useSyncExternalStore 合同：selector 必须返回稳定引用——先取 s.projects（数组引用随
   // store 版本变化），再用 useMemo 派生过滤结果（R66 P1 根因修复；内联 .filter 每次快照
   // 产生新数组 → getSnapshot 不缓存 → Maximum update depth → 整树卸载）。
@@ -263,7 +264,7 @@ function ProjectMenu({ anchor, onClose }: { anchor: { x: number; y: number }; on
     [projects, filter],
   );
   return (
-    <div className="menu" style={{ position: 'fixed', left: anchor.x, top: anchor.y, zIndex: 300, minWidth: 300 }} role="menu">
+    <Menu anchor={anchor} onClose={onClose} trigger={trigger}>
       <div className="menu-label">项目管理 · 显示在侧栏 / 切换当前项目</div>
       <div className="menu-search">
         <Icon name="search" size={12} className="faint" />
@@ -307,7 +308,7 @@ function ProjectMenu({ anchor, onClose }: { anchor: { x: number; y: number }; on
           </div>
         );
       })}
-      {projects.length === 0 ? (
+      {list.length === 0 ? (
         <div className="side-empty" style={{ padding: '6px 10px' }}>{s_emptyText(filter)}</div>
       ) : null}
       <div className="menu-sep" />
@@ -317,7 +318,7 @@ function ProjectMenu({ anchor, onClose }: { anchor: { x: number; y: number }; on
       <button className="menu-item" onClick={() => { onClose(); if (activeId !== '') navigate(`/project/${activeId}`); }}>
         <Icon name="refresh" size={13} /> 项目主页（目录失效时重新定位）
       </button>
-    </div>
+    </Menu>
   );
 }
 

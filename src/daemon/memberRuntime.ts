@@ -18,6 +18,7 @@
  */
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { RuntimeAdapter } from '../contracts/runtime.ts';
+import {codexConfigurationIdentity} from '../adapter/codex/configuration.ts';
 
 export interface MemberRuntimeBinding {
   memberId: string;
@@ -26,6 +27,7 @@ export interface MemberRuntimeBinding {
   executable: string | null;
   model: string | null;
   permissionMode: string | null;
+  effort?: string | null;
 }
 
 interface BindingRow {
@@ -46,10 +48,10 @@ export function readMemberRuntimeBinding(db: ZhongshuoDatabase, memberId: string
     )
     .get(memberId) as BindingRow | undefined;
   if (row == null) return null;
-  let settings: { model?: string; permissionMode?: string } = {};
+  let settings: { model?: string; permissionMode?: string; effort?:string } = {};
   if (row.settings_json != null) {
     try {
-      settings = JSON.parse(row.settings_json) as { model?: string; permissionMode?: string };
+      settings = JSON.parse(row.settings_json) as typeof settings;
     } catch {
       settings = {};
     }
@@ -61,6 +63,7 @@ export function readMemberRuntimeBinding(db: ZhongshuoDatabase, memberId: string
     executable: row.executable,
     model: settings.model ?? null,
     permissionMode: settings.permissionMode ?? null,
+    effort: settings.effort ?? null,
   };
 }
 
@@ -77,6 +80,7 @@ export function defaultModelOf(kind: string | null): string | null {
 /** 统一解析结果（第二十二轮三）：成员 runtime 身份的一份事实——快照与 adapter 选择同源。
  * bound=false（未绑定成员回落全局默认）时 installationId 如实 null（无持久安装身份）。 */
 export interface ResolvedRuntimeBinding {
+  effort?:string|null;
   memberId: string;
   bound: boolean;
   kind: string | null;
@@ -102,6 +106,7 @@ export function resolveMemberRuntime(db: ZhongshuoDatabase, memberId: string, de
     model: binding!.model ?? defaultModelOf(kind),
     installationId: binding!.installationId,
     permissionMode: binding!.permissionMode,
+    effort:binding!.effort ?? null,
     executable: binding!.executable ?? null,
   };
 }
@@ -145,7 +150,9 @@ export class MemberRuntimeRegistry {
     if (factory == null) {
       throw new Error(`成员 ${memberId} 绑定的 runtime kind=${resolved.kind} 在当前 daemon 不可用（未注册 adapter 工厂）`);
     }
-    const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}|${resolved.executable ?? ''}`;
+    const context=resolved.kind==='codex'?(this.db.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(memberId) as {canonical_path:string}|undefined)?.canonical_path:null;
+    const configurationKey=context?`${memberId}|${context}|${codexConfigurationIdentity(context)}`:'';
+    const key = `${resolved.installationId}|${resolved.model ?? ''}|${resolved.permissionMode ?? ''}|${resolved.executable ?? ''}|${resolved.effort??''}|${configurationKey}`;
     let adapter = this.cache.get(key);
     if (adapter == null) {
       adapter = factory({
@@ -155,6 +162,7 @@ export class MemberRuntimeRegistry {
         executable: resolved.executable, // 实际可执行路径（第二十三轮四回归修复：绑定路径必须传到生产 spawn 链——不得置 null 让工厂回落全局默认）
         model: resolved.model,
         permissionMode: resolved.permissionMode,
+        effort:resolved.effort,
       });
       this.cache.set(key, adapter);
     }

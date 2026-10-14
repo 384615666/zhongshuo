@@ -17,6 +17,7 @@
  *   或 unsupported——协议字段存在、方法实现、真实行为通过是三个不同状态。
  */
 import { codexInput } from '../imageInput.ts';
+import {codexConfigurationIdentity} from './configuration.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -62,6 +63,8 @@ interface ToolLikeItem extends Record<string, unknown> {
 }
 
 export interface CodexAdapterOptions {
+  /** Project context for metadata discovery and the actual app-server process. */
+  cwd?:string;
   /** Explicit member program reference; default names retain the existing npm shim lookup. */
   executable?: string;
   codexCmdPath?: string;
@@ -69,12 +72,13 @@ export interface CodexAdapterOptions {
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
   /** thread/start 的 model 覆盖（e2e 认证用低成本渠道，如 gpt-6 luna）。 */
   model?: string;
+  effort?:string;
   /** 审批策略（默认 never=M0 不开审批桥；认证用例可开 on-request）。 */
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
   /** 测试注入：替换 spawn 的脚本入口（本地协议回放，不消耗额度）。 */
   mockEntry?: { executable: string; args?: string[] };
   /** 生产 spawn 注入点（REC-LIFE-1：daemon 层注入 Job Object 受管桥；缺省=普通 spawn）。 */
-  spawnFn?: (cmd: string, args: string[]) => ChildProcessWithoutNullStreams;
+  spawnFn?: (cmd: string, args: string[],cwd?:string) => ChildProcessWithoutNullStreams;
 }
 
 export interface CodexInvocation { command:string;args:string[];identityPath:string }
@@ -105,17 +109,19 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   private stderrTail = '';
   /** 每个进程连接的握手状态：连接重建即重置（修复轮）。 */
   private handshakeDone = false;
-  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
+  private readonly options: Required<Pick<CodexAdapterOptions, 'requestTimeoutMs' | 'sandboxMode'>> & { cwd?:string; effort?:string; executable?:string; codexCmdPath?: string; model?: string; approvalPolicy?: CodexAdapterOptions['approvalPolicy']; mockEntry?: CodexAdapterOptions['mockEntry']; spawnFn?: CodexAdapterOptions['spawnFn'] };
   private codexVersion: string | null = null;
   private executable: string | null = null;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.options = {
       executable:options.executable,
+      cwd:options.cwd,
       codexCmdPath: options.codexCmdPath,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
-      sandboxMode: options.sandboxMode ?? 'read-only',
+      sandboxMode: options.sandboxMode ?? 'danger-full-access',
       model: options.model,
+      effort:options.effort,
       approvalPolicy: options.approvalPolicy,
       mockEntry: options.mockEntry,
       spawnFn: options.spawnFn,
@@ -135,8 +141,10 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     const spawnServer = this.options.spawnFn ?? ((cmd: string, args: string[]) => spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      cwd:this.options.cwd,
     }) as ChildProcessWithoutNullStreams);
-    const child = spawnServer(entry.command, [...entry.args, 'app-server']);
+    const args=[...entry.args,'app-server'];
+    const child = this.options.cwd ? spawnServer(entry.command,args,this.options.cwd) : spawnServer(entry.command,args);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
@@ -425,6 +433,16 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     return { executable: this.executable ?? '(npm shim)', version: this.codexVersion!, capabilities: this.capabilities() };
   }
 
+  /** Metadata only: no thread/start or turn/start, therefore no model inference. */
+  async listModels():Promise<Array<{id:string;model:string;displayName?:string;defaultReasoningEffort?:string;supportedReasoningEfforts?:Array<{reasoningEffort:string;description?:string}>;inputModalities?:string[]}>> {
+    this.ensureProcess();
+    if(!this.handshakeDone){await this.request('initialize',{clientInfo:{name:'zhongshuo',version:ADAPTER_VERSION}});this.writeLine(JSON.stringify({jsonrpc:'2.0',method:'initialized',params:{}}));this.handshakeDone=true;}
+    const items:Array<{id:string;model:string;displayName?:string;defaultReasoningEffort?:string;supportedReasoningEfforts?:Array<{reasoningEffort:string;description?:string}>;inputModalities?:string[]}>=[];
+    let cursor:string|undefined;
+    for(let page=0;page<5;page++){const result=await this.request<{data:typeof items;nextCursor?:string|null}>('model/list',{limit:100,...(cursor?{cursor}:{})});items.push(...result.data);if(!result.nextCursor)return items;cursor=result.nextCursor;}
+    throw new AdapterCallError('CAPABILITY_UNSUPPORTED','模型列表超出有界读取窗口，不能确认完整选项');
+  }
+
   private readVersion(entry: CodexInvocation): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(entry.command, [...entry.args, '--version'], { windowsHide: true });
@@ -456,7 +474,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   async openSession(input: OpenSessionInput): Promise<SessionRef> {
-    if(input.writeAccess?.modificationAuthorized && (this.options.sandboxMode!=='workspace-write' || input.writeAccess.allowedWriteRoots.length!==1 || input.writeAccess.allowedWriteRoots[0]!==input.cwd)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目写入范围与成员权限不匹配');
+    if(this.options.effort){const models=await this.listModels();const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(!model?.supportedReasoningEfforts?.some(e=>e.reasoningEffort===this.options.effort))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前 model/list 未声明所选思考等级；请重新配置');}
+    if(input.writeAccess?.fullAccess && this.options.sandboxMode!=='danger-full-access') throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
+    if(!input.writeAccess?.fullAccess && input.writeAccess?.modificationAuthorized && (this.options.sandboxMode!=='workspace-write' || input.writeAccess.allowedWriteRoots.length!==1 || input.writeAccess.allowedWriteRoots[0]!==input.cwd)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目写入范围与成员权限不匹配');
     this.ensureProcess();
     if (!this.handshakeDone) {
       await this.request('initialize', {
@@ -468,7 +488,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     }
     const threadParams: Record<string, unknown> = {
       cwd: input.cwd,
-      sandbox: input.writeAccess?.modificationAuthorized ? 'workspace-write' : 'read-only',
+      sandbox: input.writeAccess?.fullAccess ? 'danger-full-access' : input.writeAccess?.modificationAuthorized ? 'workspace-write' : 'read-only',
       approvalPolicy: this.options.approvalPolicy ?? 'never',
     };
     if (this.options.model != null && this.options.model.length > 0) threadParams['model'] = this.options.model;
@@ -501,6 +521,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
   }
 
   async startTurn(session: SessionRef, input: TurnRequest): Promise<void> {
+    if(input.images?.length&&input.imageConfigurationKey&&input.imageConfigurationKey!==codexConfigurationIdentity(session.cwd))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','图片执行配置已变化；未发送，原件保留',true);
+    if(input.images?.length){let models:Awaited<ReturnType<CodexAppServerAdapter['listModels']>>;try{models=await this.listModels();}catch(e){throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`图片模型信息读取失败；没有发送模型输入：${e instanceof Error?e.message:'元数据不可读'}`,true);}const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(model?.inputModalities&&!model.inputModalities.includes('image'))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前模型明确不支持图片；原件保留，可仅记录或换成员',true);}
     const providerInput = codexInput(input);
     const state = this.stateOf(session);
     // 先登记 awaiting（通知可能早于响应到达，修复轮）。
@@ -511,8 +533,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         threadId: state.providerThreadId,
         input: providerInput,
         clientUserMessageId: input.dispatchKey,
-        sandboxPolicy:state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
+        sandboxPolicy:state.writeAccess?.fullAccess ? {type:'dangerFullAccess'} : state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
         approvalPolicy:'never',
+        ...(this.options.effort?{effort:this.options.effort}:{}),
         ...(input.outputSchema?{outputSchema:input.outputSchema}:{}),
       },
       (r) => {

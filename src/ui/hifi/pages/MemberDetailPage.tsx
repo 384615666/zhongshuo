@@ -68,11 +68,11 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   };
 
   const currentKind = runtime?.installation?.kind;
-  const initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string } = {
+  const initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string } = {
     kind: currentKind === 'codex' || currentKind === 'fake' ? currentKind : 'claude',
     model: runtime?.binding?.model ?? '',
     executable: runtime?.installation?.executable ?? '',
-    permissionMode: runtime?.binding?.permissionMode ?? '',
+    permissionMode: runtime?.binding?.permissionMode ?? '',effort:runtime?.binding?.effort??'',
   };
   const guard = runtime?.environment != null ? { fakeAllowed: runtime.environment.allowFake === true, realDispatchGuard: runtime.environment.realDispatchGuard === true } : null;
   const effective = runtime?.effective;
@@ -123,15 +123,17 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>模型</dt><dd>{runtime?.binding?.model ?? effective?.model ?? '（未指定／未获确认）'}</dd>
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
                 <dt>保存的权限模式</dt><dd>{runtime?.binding?.permissionMode ?? '未指定'}</dd>
+                <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>
                 <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
                 <dt>项目文件编辑认证</dt><dd>{runtime?.writeCapability?.status==='supported'?'当前组合已验证':'未认证'}<div className="small faint">{runtime?.writeCapability?.reason??'未提供证据'}</div></dd>
-                <dt>真实识图</dt><dd>{runtime?.imageInput?.status === 'supported' ? '已认证' : '未认证'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
+                <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
+                <dt>历史识图证据</dt><dd>{runtime?.imageInput?.evidence?'当前组合匹配历史证据':'本组合没有匹配的历史证据；不阻止自动输入'}</dd>
               </dl>
               {runtime?.imageInput != null ? <details style={{ marginTop: 8 }}><summary>识图配置依据</summary><div className="small mono" style={{ overflowWrap: 'anywhere' }}>配置 {runtime.imageInput.configuration} · 模型 {runtime.imageInput.model ?? '未指定'} · 权限 {runtime.imageInput.permissionMode} · 渠道 {runtime.imageInput.channel} · 协议 {runtime.imageInput.protocol}</div></details> : null}
               {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>配置 runtime 与模型…</button> : null}
               <div className="pset-divider" />
-              <div className="small faint">思考强度、内部子助手与成员级生命周期重置尚无正式配置命令；本页不显示可切换的假开关。</div>
+              <div className="small faint">内部子助手与成员级生命周期重置仍未接入；不显示假开关。</div>
             </div>
           </div>
 

@@ -228,7 +228,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const managedCodexSpawn = (() => {
       if (process.env.ZS_MANAGED_RUNTIME !== '1') return undefined;
       const { spawnManagedBridge } = managedBridgeMod;
-      return (cmd: string, args: string[]) => spawnManagedBridge(cmd, args, {}) as never; // env 缺省=继承父环境
+      return (cmd: string, args: string[],cwd?:string) => spawnManagedBridge(cmd, args, {cwd}) as never; // env 缺省=继承父环境
     })();
     if (options.runtime === 'codex' && managedCodexSpawn != null) {
       adapter = wrapRealCallLedger(new CodexAppServerAdapter({ model: process.env.ZS_E2E_MODEL, spawnFn: managedCodexSpawn }), 'codex', db, process.env.ZS_E2E_MODEL ?? null);
@@ -247,9 +247,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const defaultModelFor = (kind: 'codex' | 'claude'): string | null => defaultModelOf(kind);
     const productionFactories: Record<string, MemberAdapterFactory> = {
       codex: (binding) => wrapRealCallLedger(new CodexAppServerAdapter({
+        cwd:(dbForLedger.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(binding.memberId) as {canonical_path:string}).canonical_path,
         model: binding.model ?? process.env.ZS_E2E_MODEL,
         executable:binding.executable??undefined,
-        sandboxMode:['acceptEdits','dontAsk'].includes(binding.permissionMode??'')?'workspace-write':'read-only',
+        sandboxMode:binding.permissionMode==null||binding.permissionMode==='bypassPermissions'?'danger-full-access':['acceptEdits','dontAsk'].includes(binding.permissionMode)?'workspace-write':'read-only',
+        effort:binding.effort??undefined,
         ...(managedCodexSpawn != null ? { spawnFn: managedCodexSpawn } : {}),
       }), 'codex', dbForLedger, binding.model ?? defaultModelFor('codex')),
       claude: (binding) => wrapRealCallLedger(new ClaudeCliAdapter(
@@ -257,6 +259,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           model: binding.model ?? process.env.ZS_CLAUDE_MODEL,
           executable: binding.executable ?? undefined,
           permissionMode: claudePermissionOf(binding.permissionMode),
+          effort:binding.effort??undefined,
           installationId: binding.installationId ?? undefined,
         },
         managedClaudeSpawn != null ? managedClaudeSpawn(binding.executable ?? undefined) : undefined,

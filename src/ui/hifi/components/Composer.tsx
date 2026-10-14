@@ -323,10 +323,13 @@ export function Composer({
     const byId = new Map(runtimes.map((r) => [r.id, r.label]));
     const profById = new Map(profiles.map((p) => [p.id, p]));
     return (m: ProjectMember) => {
+      const actual=memberRuntimes[m.id];
+      if(actual?.status==='bound')return `${actual.kind} · ${actual.model??'渠道默认模型'}`;
+      if(actual?.status==='unbound')return '全局默认渠道';
       const prof = profById.get(m.profileId);
       return prof ? byId.get(prof.runtimeInstallationId) ?? '未配置' : '未配置';
     };
-  }, [runtimes, profiles]);
+  }, [runtimes, profiles,memberRuntimes]);
 
   const [body, setBody] = useState('');
   /**
@@ -403,7 +406,7 @@ export function Composer({
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
     mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions});
-  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;reason:string;readAt:number;error?:string}|null>(null);
+  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;reason:string;readAt:number;error?:string}|null>(null);
   useEffect(()=>{
     if(!formalLimits?.access||sendAs!=='ai')return;
     let cancelled=false,reading=false;
@@ -411,7 +414,7 @@ export function Composer({
       if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,reason:c.reason,readAt:Date.now()});}
+      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,reason:c.reason,readAt:Date.now()});}
       catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
@@ -429,7 +432,7 @@ export function Composer({
         : { kind: target.kind, projectId: imageProjectId, conversationId };
       try {
         const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
-        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.map(m => `${m.kind} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel} · 配置 ${m.configuration} · ${m.protocol} · 真实识图${m.status === 'supported' ? '已认证' : '未认证'}：${m.reason}`).join('；') : '线程回复按现有合同仅记录；图片可保存和预览'});
+        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.map(m => `${m.kind} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel} · 配置 ${m.configuration} · ${m.protocol} · 图片输入${m.status === 'supported' ? '自动传递' : '不可用或未确认'}：${m.reason}`).join('；') : '线程回复按现有合同仅记录；图片可保存和预览'});
       } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览或仅记录，发送前可重试`}); }
       finally { reading = false; }
     };
@@ -654,7 +657,7 @@ export function Composer({
           target: formalTarget, mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
         });
         if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
-        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置运行时'} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel ?? '无法确定'} · 配置 ${m.configuration ?? '未知'} · ${m.protocol ?? '协议未验证'} · 真实识图${m.status === 'supported' ? '已认证；请 @ 单个成员后发送' : '未认证'}：${m.reason ?? '尚无本组合真实识图证据'}`).join('；') }); return; }
+        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置运行时'} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel ?? '无法确定'} · 配置 ${m.configuration ?? '未知'} · ${m.protocol ?? '协议未验证'} · 图片输入${m.status === 'supported' ? '自动传递；请 @ 单个成员后发送' : '不可用或未确认'}：${m.reason ?? '当前配置无法传递图片'}`).join('；') }); return; }
       } catch (error) {
         setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试或改为仅记录。`);
         return;
@@ -1268,8 +1271,6 @@ export function Composer({
 
           <div className="spacer" />
 
-          <div className="spacer" />
-
           {/**
            * 右侧操作簇：预算提示 / 停止 / 本次运行设置 / 权限档位 / 发送。
            *
@@ -1351,7 +1352,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? writeHint?.key===writeContext&&writeHint.readAt ? writeHint.authorized?'项目内文件编辑':'只读 / 记录' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? writeHint?.key===writeContext&&writeHint.readAt ? writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读 / 记录' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 

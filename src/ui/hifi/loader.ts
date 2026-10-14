@@ -28,12 +28,13 @@ interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; 
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
+import {chatAnswer} from '../../contracts/chatAnswer';
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
 
 const textOf = (m: HistoryMessage): string => {
   const raw = m.bodyJson ?? m.body_json;
   if (raw == null) return '';
-  try { return ((JSON.parse(raw) ?? {}) as { text?: string }).text ?? ''; } catch { return String(raw); }
+  try { const text=((JSON.parse(raw) ?? {}) as { text?: string }).text ?? '';return chatAnswer(text,m.authorType??m.author_type??'system'); } catch { return String(raw); }
 };
 /** created_at 如实映射：响应没有则置 0（「未知」）并由呈现层标注，不用当前时间伪造。 */
 const createdAtOf = (m: HistoryMessage): number => m.createdAt ?? m.created_at ?? 0;
@@ -882,7 +883,7 @@ interface TaskGetData {
 const msgOfReply = (projectId: string, roomId: string, threadId: string, it: ThreadHistoryItem): Message => ({
   id: it.id, projectId, roomId, threadId, taskId: undefined,
   authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
-  body: it.body?.text ?? '', createdAt: it.createdAt, threadMessageSeq: it.seq,
+  body: chatAnswer(it.body?.text??'',it.authorType), createdAt: it.createdAt, threadMessageSeq: it.seq,
   attachmentIds: [], formalAttachments: it.attachments ?? [],
 });
 
@@ -909,7 +910,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     const anchor: Message | null = got.anchor == null ? null : {
       id: got.anchor.id, projectId, roomId: thread.roomId, threadId: undefined,
       authorType: got.anchor.authorType as Message['authorType'], authorId: got.anchor.authorId,
-      kind: 'text', body: got.anchor.body?.text ?? '', createdAt: got.anchor.createdAt,
+      kind: 'text', body: chatAnswer(got.anchor.body?.text??'',got.anchor.authorType), createdAt: got.anchor.createdAt,
       attachmentIds: [], formalAttachments: got.anchor.attachments ?? getState().threadAnchors[threadId]?.formalAttachments,
     };
     setState((prev) => {

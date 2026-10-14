@@ -9,6 +9,8 @@
  */
 
 import { useState } from 'react';
+import {chatAnswer} from '../../../contracts/chatAnswer';
+import {MessageProtocol} from './MessageProtocol';
 import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLabel } from '../lib/format';
@@ -122,6 +124,8 @@ function MessageAttachments({
 
 export function MessageView({
   message,
+  domId,
+  linkThreadId,
   author,
   isMentioned,
   mode,
@@ -142,6 +146,8 @@ export function MessageView({
   onOpenAttachment,
 }: {
   message: Message;
+  domId?:string;
+  linkThreadId?:string;
   author?: ProjectMember;
   isMentioned?: boolean;
   /** 结果卡是否需要显示共识状态，由任务模式决定（DIRECT/AUTO 不计算共识） */
@@ -164,11 +170,13 @@ export function MessageView({
   onCorrection?: (message: Message) => void;
 }) {
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [protocolOpen,setProtocolOpen]=useState(false);
+  const visibleBody=chatAnswer(message.body,message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
 
   return (
-    <div className={`msg${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={`msg-${message.id}`}>
+    <div className={`msg${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={domId??`msg-${message.id}`}>
       <div className="msg-avatar">
         {isSystem ? (
           <span
@@ -288,9 +296,10 @@ export function MessageView({
 
       {menuAt ? (
         <Menu anchor={menuAt} onClose={() => setMenuAt(null)}>
-          <MenuItem icon="copy" onClick={() => { navigator.clipboard?.writeText(message.body); setMenuAt(null); }}>
+          <MenuItem icon="copy" onClick={() => { navigator.clipboard?.writeText(visibleBody); setMenuAt(null); }}>
             复制文字
           </MenuItem>
+          {message.authorType==='agent'?<MenuItem icon="file" onClick={()=>{setMenuAt(null);setProtocolOpen(true);}}>查看运行协议…</MenuItem>:null}
           {onOpenThread ? (
             <MenuItem icon="message-square" onClick={() => { onOpenThread(); setMenuAt(null); }}>
               在回复串中打开
@@ -301,8 +310,8 @@ export function MessageView({
             onClick={() => {
               // §15.5：应用内直达链接用 /thread/:id?message=:mid，路由表能解析并定位。
               // 原来写成 zhongshuo://#/thread/...，但路由没有 /thread 分支，点开落到欢迎页。
-              const link = message.threadId
-                ? `#/thread/${message.threadId}?message=${message.id}`
+              const link = linkThreadId??message.threadId
+                ? `#/thread/${linkThreadId??message.threadId}?message=${message.id}`
                 : `#/project/${message.projectId}/room/${message.roomId}`;
               navigator.clipboard?.writeText(link);
               recordLocalOnly(
@@ -340,6 +349,7 @@ export function MessageView({
           {/* 追加更正：正式命令未接入前不出现入口（r61——不以本地日志冒充功能）。 */}
         </Menu>
       ) : null}
+      {protocolOpen?<MessageProtocol key={message.id} projectId={message.projectId} messageId={message.id} onClose={()=>setProtocolOpen(false)}/>:null}
     </div>
   );
 }
@@ -361,6 +371,7 @@ function MessageBody({
   onOpenArtifact?: (id: string) => void;
   onApproval?: (c: 'allow_once' | 'deny') => void;
 }) {
+  const visibleBody=chatAnswer(message.body,message.authorType);
   const a = message.payload?.assignment;
   const p = message.payload?.progress;
   const r = message.payload?.report;
@@ -372,7 +383,7 @@ function MessageBody({
     <>
       {message.body && message.kind !== 'progress' ? (
         <div className="msg-text">
-          <RichText text={message.body} />
+          <RichText text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
       ) : (message.formalAttachments ?? []).length > 0 ? (
@@ -391,7 +402,7 @@ function MessageBody({
            三行字里两行是重复/恒定值，所以整张卡片删除，正文直接作为消息渲染。
            缺席/迟到这类真正需要看见的状态用标签附着在消息头，不另开卡片。 */
         <div className="msg-text">
-          <RichText text={message.body} />
+          <RichText text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
       ) : null}

@@ -33,6 +33,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
+import {chatAnswer} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -741,6 +742,7 @@ export class DispatchWorker {
         installationId: dmResolved?.installationId ?? null,
         writeIdentity: writeAccess.identityKey,
         permissionMode: dmResolved?.permissionMode ?? null,
+        effort:dmResolved?.effort??null,
         cwd: project.canonical_path,
       });
       const dmPrevSession = isDm
@@ -809,9 +811,9 @@ export class DispatchWorker {
       // 房间会话维持任务隔离：每任务一行，openSession 后即插（身份立即可用/无续接语义）。
       if (!isDm) {
         this.db.prepare(
-          `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id)
-           VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)`,
-        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null);
+          `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id, capabilities_json)
+           VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null,JSON.stringify({runtime:resolveMemberRuntime(this.db,member.id,this.defaultKindOf()),writeIdentity:writeAccess.identityKey,effortVerification:'requested-not-provider-certified'}));
       } else {
         this.dmPending.set(turnId, { task, session, resumeRef, bindingSnap: dmBindingSnap, cwd: project.canonical_path, generation, memberId: member.id, turnRequested: false });
       }
@@ -857,7 +859,7 @@ export class DispatchWorker {
         policyId: writeAccess.policyId,
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
-        outputSchema:{type:'object',additionalProperties:false,required:['schemaVersion','resultKey','changeSummary','files','executedVerifications','unexecutedVerifications','remainingIssues'],properties:{schemaVersion:{type:'string',const:'task-complete-v1'},resultKey:{type:'string',const:assembled.value.resultKey},changeSummary:{type:'string'},files:{type:'array',items:{type:'string'}},executedVerifications:{type:'array',items:{type:'string'}},unexecutedVerifications:{type:'array',items:{type:'object',additionalProperties:false,required:['item','reason'],properties:{item:{type:'string'},reason:{type:'string'}}}},remainingIssues:{type:'array',items:{type:'string'}}}},
+        outputSchema:{type:'object',additionalProperties:false,required:['schemaVersion','resultKey','answer','responseKind','changeSummary','files','executedVerifications','unexecutedVerifications','remainingIssues'],properties:{schemaVersion:{type:'string',const:'task-complete-v1'},resultKey:{type:'string',const:assembled.value.resultKey},answer:{type:'string'},responseKind:{type:'string',enum:['conversation','work']},changeSummary:{type:'string'},files:{type:'array',items:{type:'string'}},executedVerifications:{type:'array',items:{type:'string'}},unexecutedVerifications:{type:'array',items:{type:'object',additionalProperties:false,required:['item','reason'],properties:{item:{type:'string'},reason:{type:'string'}}}},remainingIssues:{type:'array',items:{type:'string'}}}},
       });
       this.registerProcessIdentity(turnId, runId, member.id, adapter, session);
       // 会话绑定（第八轮迟到成果泵：UNKNOWN turn 的 lateEvents 按 session 找回 adapter 通道）。
@@ -900,6 +902,7 @@ export class DispatchWorker {
     openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null,
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
+    if(phase==='startTurn'&&error instanceof AdapterCallError&&error.notStarted)phase='session-record';
     const finishUncertain = (note: string): void => {
       // ② 不确定：UNKNOWN（settleUnknown 含 DIRECT run→INTERRUPTED/审计）；live 清理
       // （未登记消费器）；可能残留的进程由 stop 状态机的 adapter 级 dispose 收拢。
@@ -1679,6 +1682,9 @@ export class DispatchWorker {
       return;
     }
     switch (event.kind) {
+      case 'session.ready':
+        if(event.providerSessionId)this.db.prepare('UPDATE runtime_sessions SET provider_session_id=? WHERE id=? AND task_id=? AND project_id=?').run(event.providerSessionId,event.sessionId,task.id,task.project_id);
+        break;
       case 'turn.started': {
         const turn = this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string };
         if (turn.status === 'STOPPING') {
@@ -1691,7 +1697,7 @@ export class DispatchWorker {
         break;
       }
       case 'message.completed':
-        this.insertThreadReply(task, turnId, event.messageId, event.text);
+        this.insertThreadReply(task, turnId, event.messageId, event.text,event.controlResult);
         break;
       case 'tool.started': {
         // 实际工具调用记录（用户令 2026-09-28）：模型自述 executedVerifications 的核对依据——
@@ -1817,6 +1823,12 @@ export class DispatchWorker {
           }
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
+          const result=taskCompleteSchema.parse(JSON.parse(finalText));
+          if(result.responseKind==='conversation'&&result.files.length===0&&result.executedVerifications.length===0&&result.unexecutedVerifications.length===0) {
+            this.transitionTask(task.id,'DONE');
+            this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'正常回答，无工作交付与验收待办'});
+            return;
+          }
           const manifestHash = createHash('sha256').update(finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
@@ -2297,7 +2309,10 @@ export class DispatchWorker {
     return row?.cid ?? null;
   }
 
-  private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string): void {
+  private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string): void {
+    const visibleText=chatAnswer(text,'agent');
+    const original=controlResult??(visibleText!==text?text:null);
+    const bodyJson=JSON.stringify({text:visibleText,...(original?{runtimeControlResult:original}:{})});
     // 消息身份以 turn 为命名空间：同 turn 内重放去重（RT-05），跨 turn/会话的同名 provider id 不冲突。
     const rowId = `msg_${turnId}_${messageId}`;
     const isDm = task.kind === 'dm_turn';
@@ -2318,7 +2333,7 @@ export class DispatchWorker {
           `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
              thread_message_seq, author_type, author_id, body_json, status, created_at)
            VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, 'agent', ?, ?, 'final', ?)`,
-        ).run(rowId, task.project_id, task.conversation_id, convSeq.last_message_seq, task.id, author?.member_id ?? 'unknown_member', JSON.stringify({ text }), Date.now());
+        ).run(rowId, task.project_id, task.conversation_id, convSeq.last_message_seq, task.id, author?.member_id ?? 'unknown_member', bodyJson, Date.now());
         return;
       }
       const threadSeq = this.db
@@ -2331,7 +2346,7 @@ export class DispatchWorker {
       ).run(
         rowId, task.project_id, task.conversation_id, convSeq.last_message_seq,
         task.room_id, task.conversation_thread_id, task.id, threadSeq.last_message_seq,
-        author?.member_id ?? 'unknown_member', JSON.stringify({ text }), Date.now(),
+        author?.member_id ?? 'unknown_member', bodyJson, Date.now(),
       );
       appendDomainEvent(this.db, {
         schemaVersion: 1,

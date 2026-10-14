@@ -87,7 +87,7 @@ const BAT = ['@echo off',
   '  start "ZhongshuoDaily" "%PKG%ZhongshuoDual\\electron.exe"',
   ')',
   'echo.',
-  'echo Data root: %APP_DIR%   (shown in Settings - Data & draft storage)',
+  'echo Data root: %APP_DIR%   (shown in Settings - Data and draft storage)',
   'echo First run: open your own project folder from the welcome screen.',
   'echo Keep this console open. Closing the app window exits the app.',
   'pause',
@@ -237,6 +237,25 @@ R76 图片发送与预览已获用户确认，本轮继承该结果，不重复�
 `.replaceAll('\n', '\r\n'), 'utf8');
 
 // 3) 清单核对（同 h1 口径：与 pack-desktop MANIFEST 一致性）
+if(outArg?.startsWith('desktop-daily-win-v22')) {
+  writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面体验候选 · v22
+
+从 start-desktop.bat 启动。新任务的执行成员默认使用 CLI 原生完整权限，可以读写整个电脑并执行命令；保留显式 plan 只读和项目编辑模式。旧任务、旧草稿及已经明确保存的限制不自动升级。实际成员权限在配置与发送区显示。
+
+图片默认输入实际字节，不需要手选识图资格；渠道明确不支持或请求失败时如实提示。保存与本地预览独立可用，上传成功不等于真实模型理解成功。
+
+思考等级从本机 Claude CLI / Codex model/list 读取，保存到成员、模板及运行快照并传入正式参数。第三方渠道未回报有效强度时，只报告请求值，不伪造认证。
+
+普通对话显示可读回答；根消息、附件、作者与时间保留。原始成果协议在成果与运行证据中查看。自然交流不创建虚假的工作交付；实质工作仍保留返工、版本绑定验收。
+
+结果未知仍由用户人工同号同参处理；重连、重开不会自动派发或解除保护。single_writer 与改动集只覆盖受管理项目，不能保护或捕获整台电脑的全部修改。
+
+工程使用独立目录、合成输入与真实渠道验收；详见仓库 R83 交付记录。用户验收与工程通过分开记录。Android、安装器、签名、自动更新及既有延期未扩展。
+`,'utf8');
+  const daily=join(out,'README-DAILY.md');
+  const previous=await (await import('node:fs/promises')).readFile(daily,'utf8');
+  writeFileSync(daily,`# R83 当前行为（2026-10-14）\r\n\r\n权限、图片与思考等级以 README-CANDIDATE.md 为准；下列历轮记录保留为历史，旧的图片认证限制已被本轮自动输入替代。\r\n\r\n${previous}`,'utf8');
+}
 const manifestPath = join(out, 'ZhongshuoDual', 'MANIFEST-SHA256.json');
 const manifest = JSON.parse(await (await import('node:fs/promises')).readFile(manifestPath, 'utf8'));
 let checked = 0; let missing = 0;

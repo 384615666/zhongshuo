@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
+import {RuntimeEffort} from './RuntimeEffort';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
 import { getState, useStore } from '../shell';
 import { currentNavSeq } from '../lib/router';
@@ -17,6 +18,7 @@ export interface ConfigTemplate {
         model: string | null;
         executable: string;
         permissionMode: string | null;
+        effort?:string|null;
     };
 }
 export async function refreshMemberIdentity(projectId: string) {
@@ -101,6 +103,7 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     onSaved: () => void | Promise<void>;
 }) {
     const [form, setForm] = useState(t);
+    const projectId=useStore(s=>s.activeProjectId);
     const f = useWriteForm(`memberTemplate.update:${t.id}`);
     const fake = useStore(s => s.dispatchGuard?.fakeAllowed === true);
     const config = (patch: Partial<ConfigTemplate['config']>) => setForm(s => ({ ...s, config: { ...s.config, ...patch } }));
@@ -111,7 +114,8 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: 'fake · 工程夹具' }] : [])]} onChange={v => config({ kind: v as ConfigTemplate['config']['kind'] })}/></label>
     <label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model ?? ''} maxLength={200} onChange={e => config({ model: e.target.value || null })}/></label>
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
-    <label className="field"><span className="field-label">现有权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={['', 'plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'].map(value => ({ value, label: value || '渠道默认 · 未认证' }))} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">权限沿显式配置保存，不增加认证。程序不可用仍可保存，创建后需回读实际可用性。</div>
+    {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}；打开项目后可读取真实选项。</div>}
+    <label className="field"><span className="field-label">现有权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={['', 'plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'].map(value => ({ value, label: value || '默认：CLI 完整权限' }))} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">权限沿显式配置保存，不增加认证。程序不可用仍可保存，创建后需回读实际可用性。</div>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {
@@ -126,7 +130,7 @@ export function CreateFromTemplateModal({ projectId, template: t, onClose, onSav
     return <Modal title="从模板创建独立成员" size="md" onClose={onClose} subtitle={`目标项目：${project?.displayName ?? projectId} · 模板：${t.name} · 第 ${t.revision + 1} 个配置版本`} footer={<><button className="btn" onClick={onClose}>取消</button><div className="spacer"/><button className="btn primary" data-zs-template-create-save disabled={f.busy || f.invalid || f.committed || !name.trim()} onClick={() => void f.save('memberTemplate.createMember', { projectId, templateId: t.id, expectedRevision: t.revision, displayName: name, description: desc }, async (isCurrent) => { await refreshMemberIdentity(projectId); if(isCurrent())await onSaved(); })}>创建独立成员</button></>}>
     {f.invalid ? <div className="panel warning">目标项目已切换，本表单作废。</div> : null}<FormFeedback state={f}/>
     <label className="field"><span className="field-label">成员名</span><input className="input" disabled={f.busy||f.committed} data-zs-template-member-name maxLength={60} value={name} onChange={e => setName(e.target.value)}/></label><label className="field"><span className="field-label">成员说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={desc} onChange={e => setDesc(e.target.value)}/></label>
-    <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限档 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />{t.config.kind==='codex'?'Codex 项目沙箱协议已映射；文件写入尚无真实认证，不能继承 Claude 证据。':null}<br/>配置成功不等于可派工或识图认证。不自动派发、不成为协调者，不复用旧会话；加入未归档房间只影响之后派发。</div>
+    <div className="panel">{t.config.kind} · {t.config.model ?? '模型由渠道默认'} · 保存权限档 {t.config.permissionMode ?? '未指定'}<br />程序：{t.config.executable}<br />{t.config.kind==='codex'?'Codex 使用保存的原生权限；真实渠道结果单独记录。':null}<br/>配置成功不等于可派工或识图认证。不自动派发、不成为协调者，不复用旧会话；加入未归档房间只影响之后派发。</div>
   </Modal>;
 }
 export function TemplatePanel({ projectId, readOnly, onChanged }: {

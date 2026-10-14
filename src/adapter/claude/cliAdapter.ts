@@ -29,6 +29,7 @@
  * =unsupported（headless -p 无 turn 内追加输入，明确拒绝不模拟）。
  */
 import { claudeInput } from '../imageInput.ts';
+import {chatAnswer} from '../../contracts/chatAnswer.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -65,7 +66,7 @@ export function claudeLaunchIdentity(options: ClaudeCliAdapterOptions, cwd: stri
   if (cached?.stamp !== stamp) { cached = { stamp, hash: createHash('sha256').update(readFileSync(path)).digest('hex') }; executableHashes.set(path, cached); }
   const configuration = resolveClaudeConfiguration(cwd, options.extraArgs);
   const identityKey = createHash('sha256').update(JSON.stringify({ executableHash: cached.hash,
-    model: options.model ?? process.env.ZS_CLAUDE_MODEL, permissionMode: options.permissionMode ?? 'plan',
+    model: options.model ?? process.env.ZS_CLAUDE_MODEL, permissionMode: options.permissionMode ?? 'bypassPermissions', effort:options.effort??null,
     adapterVersion: CLAUDE_ADAPTER_VERSION, configurationKey: configuration.configurationKey })).digest('hex');
   return { ...configuration, executableHash: cached.hash, identityKey };
 }
@@ -126,6 +127,7 @@ export interface ClaudeCliAdapterOptions {
   model?: string;
   /** 权限模式（CLI 2.1.283 实际枚举；默认 plan 只读档）。 */
   permissionMode?: 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions';
+  effort?:string;
   /** 额外 CLI 参数（测试注入）。 */
   extraArgs?: string[];
   installationId?: string;
@@ -349,7 +351,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
-    if (state.writeAccess?.modificationAuthorized) {
+    if (state.writeAccess?.fullAccess) {
+      if (!['bypassPermissions',undefined].includes(this.options.permissionMode)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
+      if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','启动配置已变化，未启动模型');
+      args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,'--permission-mode','bypassPermissions','--dangerously-skip-permissions');
+    } else if (state.writeAccess?.modificationAuthorized) {
       if(state.writeAccess.allowedWriteRoots.length!==1 || state.writeAccess.allowedWriteRoots[0]!==session.cwd || !['acceptEdits','dontAsk'].includes(this.options.permissionMode??'') || this.options.extraArgs?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入范围或成员权限不匹配，未启动');
       const context=resolveClaudeConfiguration(session.cwd);
       if(context.reason) throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`不能核实受限执行的实际渠道：${context.reason}`);
@@ -358,6 +364,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,
         ...CLAUDE_PROJECT_WRITE_TOOL_ARGS);
     }
+    if(this.options.effort) args.push('--effort',this.options.effort);
     if (payload.stream) args.push('--input-format', 'stream-json');
     if(input.outputSchema)args.push('--json-schema',JSON.stringify(input.outputSchema));
     const resumeId = state.providerSessionId ?? state.resumeRequested;
@@ -603,8 +610,9 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const sid = typeof parsed['session_id'] === 'string' ? (parsed['session_id'] as string) : null;
       if (sid != null) {
         this.recordReportedId(state, sid); // 原地更新+观察序列（init 上报）
+        this.pushEvent(state,turn,{kind:'session.ready',providerSessionId:sid,...this.baseEvent(state,turn,`session-ready:${sid}`)});
       }
-      return; // init 不外发（合成 turn.started 以首条 assistant 消息为准）
+      return; // Session identity is an actual init receipt; turn.started still waits for assistant output.
     }
     if (type === 'assistant') {
       const message = parsed['message'] as { model?: string; content?: Array<{ type: string; text?: string; id?: string }> } | undefined;
@@ -669,7 +677,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const structured=!isError?parsed['structured_output']:undefined;
       const finalText=structured!=null?JSON.stringify(structured):String(parsed['result']??'');
       if (!isError && (turn.lastMessageId!=null || structured!=null)) {
-        this.pushEvent(state, turn, { kind: 'message.completed', messageId: turn.lastMessageId??`claude_final_${turn.turnId}`, text: finalText, ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+        this.pushEvent(state, turn, { kind: 'message.completed', messageId: turn.lastMessageId??`claude_final_${turn.turnId}`, text: chatAnswer(finalText,'agent'), ...(structured!=null?{controlResult:finalText}:{}), ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
       }
       if (isError) {
         const subtype = String(parsed['subtype'] ?? 'error_max_turns');

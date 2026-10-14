@@ -50,6 +50,9 @@ function handleRequest(msg) {
       setTimeout(() => reply({ codexHome: 'mock', userAgent: 'mock/0.157.1' }), delay);
       break;
     }
+    case 'model/list':
+      reply({data:scenario.models??[],nextCursor:null});
+      break;
     case 'thread/start':
     case 'thread/resume': {
       threadCounter += 1;

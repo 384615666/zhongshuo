@@ -36,6 +36,8 @@ import { appendDomainEvent, listEvents } from '../persistence/events.ts';
 import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
+import {runtimeOptions} from './runtimeOptions.ts';
+import {chatAnswer} from '../contracts/chatAnswer.ts';
 import { CLAUDE_ADAPTER_VERSION } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
 import { refundReservedTurn as _refundReservedTurn, settleTurn as _settleTurn } from '../contracts/deliberation.ts';
@@ -152,8 +154,9 @@ function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?
   const cwd=projectScope.canonical_path;
   let scopeUsable=false;try{scopeUsable=access.authorized&&projectScope.status==='active'&&realpathSync.native(projectScope.root_path)===access.root&&physicalRootIdentity(cwd)===access.physicalIdentity;}catch{/* No grant is inferred from an unreadable directory. */}
   const writeCapability=fileWriteCapability(effective,cwd);
-  const editable=scopeUsable && writeCapability.status==='supported';
-  const permissionExecution=['codex','claude'].includes(effective.kind??'')?{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':!access.authorized?'项目尚未明确授权；保存的成员权限不会自动提权。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
+  const editable=scopeUsable && ['acceptEdits','dontAsk'].includes(effective.permissionMode??'') && ['claude','codex'].includes(effective.kind??'');
+  const full=effective.permissionMode==null||effective.permissionMode==='bypassPermissions';
+  const permissionExecution=['codex','claude'].includes(effective.kind??'')?full?{effective:'CLI 完整权限',reason:'新任务使用原生完整权限，可读写电脑并执行命令；原有只读任务不自动升级。'}:{effective:editable?(effective.kind==='claude'?'restricted · 文件创建/编辑':'workspace-write · 项目范围'):'read-only',reason:editable?'派发复查冻结授权、配置和物理目录；Shell/网络/委派未开放。真实认证仅以对应组合证据为准。':!access.authorized?'项目尚未明确授权；保存的成员权限不会自动提权。':!scopeUsable?'授权目录身份已变化或不可用；未开放写入。':writeCapability.reason}:null;
   return { binding, installation, permissionExecution, writeCapability, executableStatus:memberExecutableStatus(binding.kind,binding.executable), effective: { source: binding.installationId != null ? 'binding' : effective.kind != null ? 'global-default' : 'unresolved',
     kind: effective.kind, model: effective.model ?? defaultModelOf(effective.kind), defaultKindEnv: process.env.ZS_RUNTIME ?? null },
     imageInput: memberImageCapability(db, memberId, readContext), environment: { realDispatchGuard: process.env.ZS_REAL_DISPATCH_GUARD === '1', allowFake: process.env.ZS_ALLOW_FAKE === '1' } };
@@ -1171,6 +1174,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           model: z.string().min(1).optional(),
           executable: z.string().min(1).optional(),
           permissionMode: z.enum(['plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']).optional(),
+          effort:z.enum(['none','minimal','low','medium','high','xhigh','max']).optional(),
         }).parse(env.params);
         if (params.kind === 'fake' && process.env.ZS_ALLOW_FAKE !== '1') {
           throw new DaemonCommandError('CAPABILITY_UNSUPPORTED', 'fake runtime 仅限显式开发模式（ZS_ALLOW_FAKE=1）');
@@ -1189,14 +1193,27 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const scope = () => { const m=deps.db.prepare('SELECT project_id FROM project_members WHERE id=?').get(params.memberId) as {project_id:string}|undefined; if(m==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');assertMemberProject(deps.db,m.project_id,(c,m)=>{throw new DaemonCommandError(c,m);}); };
         scope();
         const checkTarget=()=>{const target=deps.db.prepare('SELECT project_id,settings_revision FROM project_members WHERE id=?').get(params.memberId) as {project_id:string;settings_revision:number}|undefined;if(target==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不存在');if(params.projectId!=null&&target.project_id!==params.projectId)throw new DaemonCommandError('RESOURCE_NOT_FOUND','成员不属于目标项目');if(params.expectedRevision!=null&&target.settings_revision!==params.expectedRevision)throw new DaemonCommandError('STALE_REVISION','成员版本已变化，请刷新后确认');};
+        if(params.effort&&params.kind!=='fake'&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(localScope(deps.localUserId),env.commandId)) {
+          checkTarget();
+          const context=deps.db.prepare('SELECT p.canonical_path FROM project_members m JOIN projects p ON p.id=m.project_id WHERE m.id=?').get(params.memberId) as {canonical_path:string};
+          const options=await runtimeOptions(params.kind,params.executable,params.model,context.canonical_path);
+          if(!options.efforts.includes(params.effort))throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',`当前实际配置未声明思考等级 ${params.effort}：${options.reason}`);
+        }
         const result = run(() => {
           checkTarget();
           scope();
           const member = deps.db.prepare('SELECT id FROM project_members WHERE id = ?').get(params.memberId) as { id: string } | undefined;
           if (member == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `成员不存在：${params.memberId}`);
-          return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??params.kind,model:params.model??null,permissionMode:params.permissionMode??null});
+          return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??params.kind,model:params.model??null,permissionMode:params.permissionMode??(params.kind==='fake'?'plan':'bypassPermissions'),effort:params.effort??null});
         },()=>{scope();if(params.projectId!=null){const row=deps.db.prepare("SELECT project_id FROM project_members WHERE id=?").get(params.memberId) as {project_id:string};if(row.project_id!==params.projectId)throw new DaemonCommandError("RESOURCE_NOT_FOUND","成员不属于目标项目");}});
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'member.runtimeOptions': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','CLI 选项读取仅限本机可信入口');
+        const params=z.strictObject({projectId:z.string().min(1),kind:z.enum(['claude','codex','fake']),model:z.string().optional(),executable:z.string().optional()}).parse(env.params);
+        const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string}|undefined;
+        if(!project)throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
+        return withCommandId({ok:true,data:await runtimeOptions(params.kind,params.executable,params.model,project.canonical_path)});
       }
       case 'member.runtime': {
         const params = z.strictObject({ memberId: z.string().min(1) }).parse(env.params);
@@ -1302,6 +1319,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         }
         return withCommandId({ ok: true, data: env.method === 'task.history' ? readTaskHistory(deps.db, taskHistoryParamsSchema.parse(env.params)) : readTaskDetails(deps.db, params.taskId, params.runId) });
       }
+      case 'message.protocol': {
+        const p=z.strictObject({projectId:z.string().min(1),messageId:z.string().min(1)}).parse(env.params);
+        const row=deps.db.prepare('SELECT project_id,conversation_id,author_type,body_json FROM messages WHERE id=? AND project_id=?').get(p.messageId,p.projectId) as {project_id:string;conversation_id:string;author_type:string;body_json:string}|undefined;
+        if(!row)throw new DaemonCommandError('RESOURCE_NOT_FOUND','消息不存在或不属于目标项目');
+        assertConversationAudience(deps.db,deps.localUserId,row.conversation_id);
+        const body=JSON.parse(row.body_json) as {text?:string;runtimeControlResult?:string};
+        const text=row.author_type==='agent'?body.runtimeControlResult??(body.text&&chatAnswer(body.text,'agent')!==body.text?body.text:null):null;
+        return withCommandId({ok:true,data:{text,sha256:text?createHash('sha256').update(text).digest('hex'):null,note:text?'原始运行结果，只读；普通复制使用可读回答':'这条消息没有运行控制协议'}});
+      }
       case 'message.writeCapability':
       case 'message.imageCapability': {
         const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);
@@ -1323,12 +1349,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode === 'DIRECT'; }
         }
         if(env.method==='message.writeCapability') {
+          const full=members.length>0&&members.every(id=>{const runtime=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return runtime.permissionMode==null||runtime.permissionMode==='bypassPermissions';});
+          if(willDispatch&&direct&&full)return withCommandId({ok:true,data:{willDispatch,fullAccess:true,modificationAuthorized:true,reason:'CLI 完整权限：可读写电脑并执行命令；仅按本次用户目标操作'}});
           const grant=projectWriteAccess(deps.db,target.projectId);
           const project=deps.db.prepare('SELECT canonical_path,root_path,status FROM projects WHERE id=?').get(target.projectId) as {canonical_path:string;root_path:string;status:string};
           let reason=!willDispatch?'线程跟进仅保存记录':!direct?'当前仅支持指定成员的 DIRECT 派发':!grant.authorized?'项目默认只读，尚未明确授权':null;
           if(!reason)try{if(project.status!=='active'||realpathSync.native(project.root_path)!==grant.root||physicalRootIdentity(project.canonical_path)!==grant.physicalIdentity)reason='项目目录身份已变化或不可用';}catch{reason='授权目录不可读取，未开放写入';}
           if(!reason && (!members.length||members.some(id=>{const r=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return !['claude','codex','fake'].includes(r.kind??'')||!['acceptEdits','dontAsk'].includes(r.permissionMode??'');}))) reason='执行成员仍为只读权限档';
-          if(!reason)for(const id of members){const r=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);if(r.kind!=='fake'){const c=fileWriteCapability(r,project.canonical_path);if(c.status!=='supported'){reason=c.reason;break;}}}
           return withCommandId({ok:true,data:{willDispatch,modificationAuthorized:reason==null,reason:reason??'项目内文件编辑；Shell、网络工具与委派未开放，派发前再次核对授权与配置'}});
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
@@ -2955,7 +2982,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           for (const row of rows) {
             let text: string | null = null;
             try {
-              const parsedText = ((JSON.parse(row.body_json ?? '{}') ?? {}) as { text?: unknown }).text;
+              const body=(JSON.parse(row.body_json??'{}')??{}) as {text?:unknown;runtimeControlResult?:unknown};
+              const parsedText=body.runtimeControlResult??body.text;
               text = typeof parsedText === 'string' ? parsedText : null;
             } catch { text = null; }
             if (text == null) continue;
@@ -4624,7 +4652,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             const messageId = (JSON.parse(replyEvt.payload_json) as { messageId: string }).messageId;
             const msg = deps.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(messageId) as { body_json: string } | undefined;
             if (msg == null) throw new DaemonCommandError('STALE_REVISION', `源输出消息缺失：${messageId}`);
-            const outputText = (JSON.parse(msg.body_json) as { text?: string }).text ?? '';
+            const body=JSON.parse(msg.body_json) as {text?:string;runtimeControlResult?:string};
+            const outputText=body.runtimeControlResult??body.text??'';
             // 源逻辑输出 resultKey=确定性约定 result_<turnId>（与该 turn 的 run.created 审计
             // payload.resultKey 核对一致）——散文类失败同样可修复（原文全文入上下文）。
             const sourceResultKey = `result_${sourceTurn.id}`;

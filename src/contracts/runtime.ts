@@ -45,10 +45,12 @@ export const runtimeCapabilitiesSchema = z.strictObject({
 /** adapter 调用失败的结构化错误（CAPABILITY_UNSUPPORTED 等）。 */
 export class AdapterCallError extends Error {
   readonly code: ErrorCode;
-  constructor(code: ErrorCode, message: string) {
+  readonly notStarted:boolean;
+  constructor(code: ErrorCode, message: string, notStarted=false) {
     super(message);
     this.name = 'AdapterCallError';
     this.code = code;
+    this.notStarted=notStarted;
   }
 }
 
@@ -113,7 +115,7 @@ export interface ProbeResult {
 
 export interface OpenSessionInput {
   /** Effective immutable project/member scope; absent remains read-only. */
-  writeAccess?: { modificationAuthorized: boolean; allowedWriteRoots: string[]; identityKey: string; launchConfigurationKey?: string };
+  writeAccess?: { fullAccess?: boolean; modificationAuthorized: boolean; allowedWriteRoots: string[]; identityKey: string; launchConfigurationKey?: string };
   projectId: string;
   memberId: string;
   taskId: string;
@@ -175,7 +177,7 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
     | { kind: 'session.ready'; providerSessionId: string }
     | { kind: 'turn.started'; providerTurnId?: string }
     | { kind: 'message.delta'; messageId: string; text: string }
-    | { kind: 'message.completed'; messageId: string; text: string }
+    | { kind: 'message.completed'; messageId: string; text: string; controlResult?:string }
     | {
         kind: 'tool.started';
         toolCallId: string;

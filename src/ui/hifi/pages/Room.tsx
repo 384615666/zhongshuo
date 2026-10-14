@@ -227,6 +227,7 @@ export function RoomPage({
       : undefined;
   const [roomTab, setRoomTab] = useState<'chat' | 'tasks' | 'files'>('chat');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection,setSettingsSection]=useState<'general'|'members'|'archive'>('general');
   /** 房间「⋯」菜单锚点（房间设置/成员/归档统一入口） */
   const [roomMenuAnchor, setRoomMenuAnchor] = useState<{ x: number; y: number } | null>(null);
 
@@ -663,16 +664,9 @@ export function RoomPage({
             <MenuItem
               icon="settings"
               title="改房间名称、成员与协调者"
-              onClick={() => { setRoomMenuAnchor(null); setSettingsOpen(true); }}
+              onClick={() => { setRoomMenuAnchor(null);setSettingsSection('general'); setSettingsOpen(true); }}
             >
               房间设置
-            </MenuItem>
-            <MenuItem
-              icon="users"
-              title="添加或移出房间成员、指定协调者"
-              onClick={() => { setRoomMenuAnchor(null); setSettingsOpen(true); }}
-            >
-              房间成员
             </MenuItem>
             {room.archivedAt ? (
               <MenuItem
@@ -691,7 +685,7 @@ export function RoomPage({
               <MenuItem
                 icon="archive"
                 title="进入房间设置里的归档区块；存在活跃任务时会被阻止"
-                onClick={() => { setRoomMenuAnchor(null); setSettingsOpen(true); }}
+                onClick={() => { setRoomMenuAnchor(null);setSettingsSection('archive'); setSettingsOpen(true); }}
               >
                 归档房间
               </MenuItem>
@@ -711,7 +705,7 @@ export function RoomPage({
           </button>
         </div>
 
-        {roomTab === 'chat' ? <RoomPool roomId={room.id} threadId={threadId} onOpenSettings={() => setSettingsOpen(true)} onOpenResource={openResource} /> : null}
+        {roomTab === 'chat' ? <RoomPool roomId={room.id} threadId={threadId} onOpenSettings={() => {setSettingsSection('members');setSettingsOpen(true);}} onOpenResource={openResource} /> : null}
         {roomTab === 'tasks' ? <RoomTasks roomId={room.id} /> : null}
         {roomTab === 'files' ? <RoomFiles roomId={room.id} onOpenResource={openResource} /> : null}
       </div>
@@ -798,7 +792,7 @@ export function RoomPage({
       {/* 收起后的重开入口现在放在房间头部里（见 .pool-head），不再浮在右下角：
           原先它压在输入区的发送按钮上（用户截图反馈）。这里不再单独渲染。 */}
 
-      {settingsOpen ? <RoomSettings roomId={room.id} onClose={() => setSettingsOpen(false)} /> : null}
+      {settingsOpen ? <RoomSettings roomId={room.id} initialSection={settingsSection} onClose={() => setSettingsOpen(false)} /> : null}
     </div>
   );
 }
@@ -1018,7 +1012,7 @@ function RootCard({
       return { label: '阻塞', icon: 'octagon', tone: 'danger' as const, detail: '缺少必要的前置成果，需要你处理' };
     }
     if (task.status === 'DONE') {
-      return { label: '已完成', icon: 'check-circle', tone: 'success' as const, detail: '成果已交付' };
+      return { label: '已完成', icon: 'check-circle', tone: 'success' as const, detail: '已完成' };
     }
     if (task.status === 'CANCELLED') {
       return { label: '已取消', icon: 'slash', tone: 'neutral' as const, detail: '' };
@@ -1409,10 +1403,10 @@ function ThreadPanel({
    * 首条未读的判定和分隔线必须跟着这份列表走，否则"跳转首条未读"会指向
    * 一个没有渲染的元素而静默失效（lib/threadNav 与 selectors 的同一口径）。
    */
-  const list = useMemo(() => (thread ? replyThreadMessages(s, thread.id) : []), [s, thread?.id]);
   /** 我们自己写进 URL 的 tab：用于区分"外部深链改了 tab"与"内部切页写了 URL" */
   const urlTabRef = useRef<ThreadTabLocal>(initialTab ?? 'replies');
-  const anchor = thread ? anchorOf(s, thread) : (s as AppState & { threadAnchors?: Record<string, Message | null> }).threadAnchors?.[threadId] ?? undefined;
+  const anchor = (thread ? anchorOf(s, thread) : undefined) ?? (s as AppState & { threadAnchors?: Record<string, Message | null> }).threadAnchors?.[threadId] ?? undefined;
+  const list = useMemo(()=>{const replies=thread?replyThreadMessages(s,thread.id):[];return anchor?[anchor,...replies.filter(m=>m.id!==anchor.id)]:replies;},[s,thread?.id,anchor]);
   /** 线程归属会话（正式 thread.get 实体——发送信封 target 用，不从 UI 目标重造）。 */
   const entityConversationId = (s as AppState & { threadEntities?: Record<string, { conversationId?: string }> }).threadEntities?.[threadId]?.conversationId ?? '';
   const threadRoom = thread ? roomOf(s, thread.roomId) : undefined;
@@ -1579,7 +1573,7 @@ function ThreadPanel({
     let tries = 0;
     let timer = 0;
     const tryHighlight = () => {
-      const el = document.getElementById(`msg-${highlightMessageId}`);
+      const el = document.getElementById(`thread-msg-${highlightMessageId}`);
       if (el == null) {
         if (tries < 60) { tries += 1; timer = window.setTimeout(tryHighlight, 300); }
         return;
@@ -1881,6 +1875,8 @@ function ThreadPanel({
                     ) : null}
                     <MessageView
                       message={m}
+                      domId={`thread-msg-${m.id}`}
+                      linkThreadId={thread.id}
                       author={m.authorType === 'human' ? undefined : byId(s.members, m.authorId)}
                       mode={task?.mode}
                       isMentioned={Boolean(m.payload?.mentionIds?.includes('you') || m.payload?.mentionIds?.some((id) => id === m.authorId))}
@@ -3144,7 +3140,9 @@ function RoomFiles({
    房间设置抽屉
    ============================================================ */
 
-function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void }) {
+function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: string; initialSection?:'general'|'members'|'archive'; onClose: () => void }) {
+  const memberSection=useRef<HTMLDivElement>(null),archiveSection=useRef<HTMLDivElement>(null);
+  useEffect(()=>{const target=initialSection==='members'?memberSection.current:initialSection==='archive'?archiveSection.current:null;target?.scrollIntoView({block:'start'});target?.focus({preventScroll:true});},[roomId,initialSection]);
   const s = useStore((x) => x);
   const room = roomOf(s, roomId)!;
   const [saveBusy, setSaveBusy] = useState(false);
@@ -3229,7 +3227,7 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
 
       {/* ---------- 房间成员管理（room.members.add / remove，§15.2） ---------- */}
       <div className="divider" />
-      <div className="section-title" style={{ marginTop: 0 }}>
+      <div ref={memberSection} data-zs-room-section="members" tabIndex={-1} className="section-title" style={{ marginTop: 0 }}>
         房间成员<span className="count">{roomMembers.length}</span>
       </div>
       <div className="field-hint" style={{ marginBottom: 10 }}>
@@ -3315,6 +3313,7 @@ function RoomSettings({ roomId, onClose }: { roomId: string; onClose: () => void
       ) : null}
 
       <div className="divider" />
+      <div ref={archiveSection} data-zs-room-section="archive" tabIndex={-1}/>
       {activeTasks.length > 0 ? (
         <div className="panel danger" style={{ marginBottom: 12 }}>
           <div className="panel-title"><Icon name="octagon" size={13} /> 当前有 {activeTasks.length} 个活跃任务，不能归档</div>

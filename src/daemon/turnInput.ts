@@ -252,7 +252,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
     },
-    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
+    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, fullAccess:input.writeAccess.fullAccess, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
       taskId: task.id,
       threadId: task.threadId,
@@ -446,7 +446,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
     },
-    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
+    permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, fullAccess:input.writeAccess.fullAccess, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
       taskId: task.id,
       threadId: null, // DM 无线程（R4 §2.2）

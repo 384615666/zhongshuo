@@ -33,7 +33,8 @@ describe('R78 member runtime bulk read preserves identity and dispatch checks',(
     const f=await fixture();try{
       const a=await f.cmd('member.runtimes',{projectId:f.projectId,memberIds:f.ids}) as unknown as Batch;
       expect(a.projectId).toBe(f.projectId);expect(a.items.map(r=>r.memberId)).toEqual(f.ids);expect(new Set(a.items.map(r=>r.info.imageInput.identityKey)).size).toBe(1);
-      expect(a.items.every(r=>r.info.binding.memberId===r.memberId&&r.info.imageInput.status==='unverified')).toBe(true);
+      // R83 automatic protocol input no longer depends on the old certificate list.
+      expect(a.items.every(r=>r.info.binding.memberId===r.memberId&&r.info.imageInput.status==='supported')).toBe(true);
       expect(claudeLaunchIdentity).toHaveBeenCalledTimes(1);
       writeFileSync(f.settings,JSON.stringify({env:{ANTHROPIC_BASE_URL:'http://127.0.0.1:1/changed'}}));
       const b=await f.cmd('member.runtimes',{projectId:f.projectId,memberIds:f.ids}) as unknown as Batch;

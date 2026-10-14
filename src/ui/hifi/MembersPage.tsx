@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
+import {RuntimeEffort} from './components/RuntimeEffort';
 import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
 import { useStore, toast, getState } from './shell';
 import { refreshMembers, switchFocusProject } from './loader';
@@ -28,14 +29,14 @@ import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberO
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
 /** member.runtime DTO：binding/installation/effective（R66 P5 有效来源）/environment。 */
 export interface RuntimeInfo {
-  binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null };
+  binding?: { installationId?: string | null; model?: string | null; permissionMode?: string | null;effort?:string|null };
   installation?: { id: string; kind: string; executable: string; capabilities_json: string | null } | null;
   effective?: { source: 'binding' | 'global-default' | 'unresolved'; kind: string | null; model: string | null; defaultKindEnv: string | null };
   executableStatus?:{status:'found'|'missing'|'unknown';reason:string};
   permissionExecution?:{effective:string;reason:string}|null;
   writeCapability?:{status:string;reason:string};
   environment?: { realDispatchGuard?: boolean; allowFake?: boolean };
-  imageInput?: { status: string; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string };
+  imageInput?: { status: string; evidence?:string|null; model: string | null; channel: string; reason: string; configuration: string; protocol: string; permissionMode: string; effort?:string };
 }
 
 export const runtimeAuthOf = (raw: string | null): string => {
@@ -147,7 +148,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    * R68 §5B：捕获**打开时**的 projectId（addFor）——弹窗存续期间全局项目切换（标题栏菜单/
    * 深链/受控事件）时旧表单作废，不再出现「旧 A 输入随全局 activeProjectId 写进 B」。 */
   const [addFor, setAddFor] = useState<string | null>(null);
-  const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
+  const [bindForm, setBindForm] = useState<{ kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string }>({ kind: 'claude', model: '', executable: '', permissionMode: '' });
   const openBind = (m: MemberRow) => {
     const cur = runtimes[m.id];
     const curKind = cur?.installation?.kind;
@@ -155,7 +156,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
       kind: curKind === 'codex' || curKind === 'fake' ? curKind : 'claude',
       model: cur?.binding?.model ?? '',
       executable: cur?.installation?.executable ?? '',
-      permissionMode: cur?.binding?.permissionMode ?? '',
+      permissionMode: cur?.binding?.permissionMode ?? '',effort:cur?.binding?.effort??'',
     });
     setBindFor({projectId,member:m});
   };
@@ -279,12 +280,12 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                   {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
                   {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
                   {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <details data-zs-image-capability={m.id} style={{ marginTop: 5 }}>
-                    <summary>识图能力：{runtimes[m.id]!.imageInput!.status === 'supported' ? '已认证' : '未认证'} · 查看配置依据</summary>
+                    <summary>图片输入：{runtimes[m.id]!.imageInput!.status === 'supported' ? '自动传递图片' : '不可用或未能确认'} · 查看配置依据</summary>
                     <div style={{ marginTop: 4 }}>
                     配置：{runtimes[m.id]!.imageInput!.configuration} · 模型ID：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
                     渠道：{runtimes[m.id]!.imageInput!.channel}<br />
                     协议：{runtimes[m.id]!.imageInput!.protocol}<br />
-                    真实识图：{runtimes[m.id]!.imageInput!.reason}
+                    输入方式：{runtimes[m.id]!.imageInput!.reason}
                     </div>
                   </details> : null}
                 </div>
@@ -384,7 +385,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
 export function BindRuntimeModal({ member, projectId, initial, guard, onClose, onSaved }: {
   member: MemberRow;
   projectId:string;
-  initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string };
+  initial: { kind: 'claude' | 'codex' | 'fake'; model: string; executable: string; permissionMode: string; effort?:string };
   guard: { fakeAllowed: boolean; realDispatchGuard: boolean } | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
@@ -407,6 +408,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
         ...(form.model.trim().length > 0 ? { model: form.model.trim() } : {}),
         ...(form.executable.trim().length > 0 ? { executable: form.executable.trim() } : {}),
         ...(form.permissionMode.length > 0 ? { permissionMode: form.permissionMode } : {}),
+        ...(form.effort?{effort:form.effort}:{}),
       });
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
       if(!formGuard.valid())return;
@@ -460,6 +462,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <span className="field-label">可执行文件</span>
           <input className="input" placeholder="留空=默认（claude/codex）" value={form.executable} onChange={(e) => setForm((f) => ({ ...f, executable: e.target.value }))} />
         </label>
+        <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
         <label className="field" title="权限模式（可选——默认按 runtime 自身配置）">
           <span className="field-label">保存的权限模式</span>
           <Select
@@ -467,14 +470,15 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
             ariaLabel="权限模式"
             onChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}
             options={[
-              { value: '', label: '默认：只读' },
+              { value: '', label: '默认：CLI 完整权限' },
+              {value:'bypassPermissions',label:'完整权限：读写电脑与执行命令'},
               { value: 'plan', label: 'plan：只读分析' },
               { value: 'acceptEdits', label: 'acceptEdits：项目授权后文件编辑' },
               { value: 'dontAsk', label: 'dontAsk：同一项目文件编辑边界' },
-              ...(['manual','auto','bypassPermissions'].includes(form.permissionMode)?[{value:form.permissionMode,label:`${form.permissionMode}（旧配置保留，实际只读）`}]:[]),
+              ...(['manual','auto'].includes(form.permissionMode)?[{value:form.permissionMode,label:`${form.permissionMode}（旧配置保留，实际只读）`}]:[]),
             ]}
           />
-          <div className="field-hint">默认只读。文件编辑还需在项目设置明确授权；Claude 使用 restricted 文件工具，Codex 使用项目沙箱。保存配置不等于渠道认证；Shell、网络工具、委派与全盘访问未开放。</div>
+          <div className="field-hint">完整权限沿用 CLI 的原生机制，可读写电脑并执行命令。选择 plan 可保持只读；项目编辑模式保留明确授权边界。保存配置不等于渠道已实测。</div>
         </label>
       </div>
     </Modal>

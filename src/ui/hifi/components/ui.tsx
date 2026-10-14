@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {createPortal} from 'react-dom';
 import { Icon, type IconName } from './Icon';
 import {
   errorCopy, formatCost, taskStatusCopy, runStatusCopy, turnStatusCopy, memberWorkCopy,
@@ -343,6 +344,7 @@ export function Drawer({
 }
 
 function useEsc(onClose: () => void) {
+  useEffect(()=>{window.dispatchEvent(new Event('zs:overlay-open'));},[]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -416,10 +418,12 @@ export function Menu({
   anchor,
   onClose,
   children,
+  trigger,
 }: {
   anchor: { x: number; y: number };
   onClose: () => void;
   children: ReactNode;
+  trigger?:HTMLElement|null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: anchor.x, y: anchor.y });
@@ -427,31 +431,38 @@ export function Menu({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    const x = Math.min(anchor.x, window.innerWidth - r.width - 8);
-    const y = Math.min(anchor.y, window.innerHeight - r.height - 8);
-    setPos({ x: Math.max(8, x), y: Math.max(8, y) });
+    const clamp=()=>{const r = el.getBoundingClientRect();
+      const x = Math.min(anchor.x, window.innerWidth - r.width - 8);
+      const y = Math.min(anchor.y, window.innerHeight - r.height - 8);
+      setPos({ x: Math.max(8, x), y: Math.max(8, y) });};
+    clamp();window.addEventListener('resize',clamp);
+    const observer=new ResizeObserver(clamp);observer.observe(el);
+    return()=>{window.removeEventListener('resize',clamp);observer.disconnect();};
   }, [anchor.x, anchor.y]);
 
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      if (ref.current && !ref.current.contains(e.target as Node)&&!trigger?.contains(e.target as Node)) onClose();
     };
     const k = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {onClose();trigger?.focus();}
     };
     window.addEventListener('mousedown', h);
     window.addEventListener('keydown', k);
+    window.addEventListener('hashchange',onClose);
+    window.addEventListener('zs:overlay-open',onClose);
     return () => {
       window.removeEventListener('mousedown', h);
       window.removeEventListener('keydown', k);
+      window.removeEventListener('hashchange',onClose);
+      window.removeEventListener('zs:overlay-open',onClose);
     };
-  }, [onClose]);
+  }, [onClose,trigger]);
 
   return (
-    <div ref={ref} className="menu" style={{ left: pos.x, top: pos.y }} role="menu">
+    createPortal(<div ref={ref} className="menu" style={{ left: pos.x, top: pos.y,zIndex:2147480100,WebkitAppRegion:'no-drag' } as React.CSSProperties} role="menu">
       {children}
-    </div>
+    </div>,document.body)
   );
 }
 
