@@ -177,7 +177,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
      JOIN artifacts a ON a.id = ma.artifact_id
      LEFT JOIN messages m ON m.id = ma.message_id
      WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
-       AND (? IS NULL OR ma.message_id=? OR ((m.author_type='agent' OR m.thread_message_seq<=?) AND COALESCE(json_extract(m.body_json,'$.conversationIntent'),'default')!='record_only'))
+       AND (? IS NULL OR ma.message_id=? OR (m.author_type='agent' OR (m.thread_message_seq<=? AND json_extract(m.body_json,'$.conversationIntent')='default')))
      ORDER BY ord, ma.rowid`,
   ).all(root.id, root.id, task.threadId,task.inputThreadMessageSeq??null,root.id,task.inputThreadMessageSeq??null) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
   for (const row of attRows) {
@@ -208,7 +208,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   const history = (task.inputThreadMessageSeq==null?db
     .prepare('SELECT id, body_json, author_id, author_type, thread_message_seq FROM messages WHERE thread_id = ? ORDER BY thread_message_seq')
     .all(task.threadId):db.prepare(`SELECT id,body_json,author_id,author_type,thread_message_seq FROM messages WHERE thread_id=?
-      AND (author_type='agent' OR thread_message_seq<=?) AND COALESCE(json_extract(body_json,'$.conversationIntent'),'default')!='record_only'
+      AND (author_type='agent' OR (thread_message_seq<=? AND json_extract(body_json,'$.conversationIntent')='default'))
       ORDER BY thread_message_seq DESC LIMIT 201`).all(task.threadId,task.inputThreadMessageSeq).reverse()) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
   const historyTruncated=task.inputThreadMessageSeq!=null&&history.length>200;if(historyTruncated)history.shift();
   const historyTexts = history.map((h) => {

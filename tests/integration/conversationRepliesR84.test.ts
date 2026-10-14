@@ -157,6 +157,18 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       await f.cmd('message.submit',f.params('补充的原文','record_only'));await f.cmd('task.redispatch',snapshot);await f.worker.runOnce();expect(f.count('task_deliveries')).toBe(2);expect(f.db.prepare('SELECT max(revision) n FROM task_deliveries').get()).toEqual({n:2});
     }finally{f.db.close();}
   });
+  it('legacy encoding injection: unmarked old human followups remain readable but are never presumed model input',async()=>{
+    const f=await fixture([final('你好！'),final('只结合明确输入回答')]);
+    try{
+      const legacy=await f.cmd<Root>('message.submit',f.params('LEGACY_PRIVATE_RECORD_ONLY','record_only'));
+      // Compatibility fixture only: remove the new intent field to represent a
+      // pre-051 encoding. No normal business state/completion is fabricated.
+      f.db.prepare("UPDATE messages SET body_json=json_remove(body_json,'$.conversationIntent') WHERE id=?").run(legacy.messageId);
+      await f.cmd('message.submit',f.params('新明确续问'));await f.worker.runOnce();
+      const bundle=f.db.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get() as {included_refs_json:string};expect(bundle.included_refs_json).not.toContain('LEGACY_PRIVATE_RECORD_ONLY');
+      const history=await f.cmd<{items:Array<{id:string;body:{text:string}}>}>('thread.history',{threadId:f.root.threadId});expect(history.items.find(m=>m.id===legacy.messageId)?.body.text).toBe('LEGACY_PRIVATE_RECORD_ONLY');expect(f.count('real_calls')).toBe(0);
+    }finally{f.db.close();}
+  });
   it('unknown provider outcome stays unknown across reopen and exact command replay never starts another turn',async()=>{
     const f=await fixture([final('你好！'),[{kind:'event',event:{kind:'turn.failed',code:'INTERRUPTED',message:'isolated unconfirmed deadline',retryable:false}}]]);
     try{
