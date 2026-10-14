@@ -29,7 +29,7 @@ describe('R84 Codex new-intent configuration preparation, isolated adapter fixtu
       const old=(await f.raw('message.submit',f.params)).data.taskId as string;const scope=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(old);
       f.open.mockImplementation(async input=>{writeFileSync(join(f.config,'config.toml'),'model_provider="own"\n[projects.synthetic]\ntrust_level="trusted"\n');return{id:'own',providerSessionId:'metadata',runtimeInstallationId:'own',adapterVersion:'fixture',threadId:input.threadId,sessionGeneration:0,cwd:input.cwd};});
       const id=randomUUID(),fresh=await f.raw('message.submit',f.params,id,true);expect(fresh.ok).toBe(true);
-      expect(f.open.mock.calls[0]![0].cwd).toBe(f.project);expect(f.open.mock.calls[0]![0].policyId).toBe('configuration-preparation');expect(f.start).not.toHaveBeenCalled();
+      expect(f.open.mock.calls[0]![0].cwd).toBe(f.project);expect(f.open.mock.calls[0]![0].policyId).toBe('configuration-preparation');expect(f.open.mock.calls[0]![0].writeAccess).toMatchObject({fullAccess:true,modificationAuthorized:true,allowedWriteRoots:[]});expect(f.start).not.toHaveBeenCalled();
       expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(old)).toEqual(scope);expect(()=>effectiveTaskWriteAccess(f.db,old,f.memberId,null)).toThrow('有效执行配置已变化');expect(effectiveTaskWriteAccess(f.db,fresh.data.taskId as string,f.memberId,null).fullAccess).toBe(true);
       await f.raw('message.submit',f.params,id,true);expect(f.open).toHaveBeenCalledTimes(1);
       writeFileSync(join(f.config,'config.toml'),'model_provider="different"\n');expect(()=>effectiveTaskWriteAccess(f.db,fresh.data.taskId as string,f.memberId,null)).toThrow('有效执行配置已变化');expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
@@ -48,6 +48,20 @@ describe('R84 Codex new-intent configuration preparation, isolated adapter fixtu
       if(field==='permission')await f.cmd('member.setRuntime',{memberId:f.memberId,kind:'codex',model:'gpt-6.1-sol',permissionMode:'plan'});
       else writeFileSync(join(f.config,'config.toml'),field==='provider'?'model_provider="changed"\n':field==='mcp'?'model_provider="own"\n[mcp_servers.synthetic]\ncommand="changed"\n':'model_provider="own"\n[projects.synthetic]\ntrust_level="untrusted"\n');
       expect(()=>effectiveTaskWriteAccess(f.db,taskId,f.memberId,null)).toThrow(/配置已变化/);expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(taskId)).toEqual(before);expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
+  it.each(['plan','scoped'])('metadata preparation preserves actual %s permission and does not promote it to full access',async mode=>{
+    const f=await fixture();try{
+      await f.cmd('member.setRuntime',{memberId:f.memberId,kind:'codex',model:'gpt-6.1-sol',permissionMode:mode==='plan'?'plan':'acceptEdits'});
+      if(mode==='scoped')await f.cmd('project.writeAccess.set',{projectId:f.projectId,expectedRevision:0,authorized:true});
+      await f.prepare(f.memberId,f.projectId);expect(f.open.mock.calls[0]![0].writeAccess).toMatchObject({fullAccess:false,modificationAuthorized:mode==='scoped',allowedWriteRoots:mode==='scoped'?[f.project]:[]});expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
+  it('grant revocation while preparing rejects before freezing a business intent',async()=>{
+    const f=await fixture();try{
+      await f.cmd('member.setRuntime',{memberId:f.memberId,kind:'codex',model:'gpt-6.1-sol',permissionMode:'acceptEdits'});await f.cmd('project.writeAccess.set',{projectId:f.projectId,expectedRevision:0,authorized:true});
+      const original=f.open.getMockImplementation()!;f.open.mockImplementation(async input=>{await f.cmd('project.writeAccess.set',{projectId:f.projectId,expectedRevision:1,authorized:false});return original(input);});
+      expect(await f.raw('message.submit',f.params,randomUUID(),true)).toMatchObject({ok:false,error:{code:'CONFIGURATION_NOT_READY'}});expect(f.db.prepare('SELECT count(*) n FROM tasks').get()).toEqual({n:0});expect(f.start).not.toHaveBeenCalled();
     }finally{f.db.close();}
   });
   it('preparation timeout/rejection saves no intent and record-only never initializes a session',async()=>{

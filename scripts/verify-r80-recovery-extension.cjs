@@ -36,6 +36,8 @@ module.exports=async function({cdp,projectId,room,dm,memberId,data,out,command,n
   await until(()=>cdp.eval("document.querySelector('[data-zs-connection-phase]')?.getAttribute('data-zs-connection-phase')"),v=>v==='online','R80 connection auto recovery',25_000);
   must(queryOne('SELECT count(*) n FROM messages').n===before,'recovery dispatched a message');
   await cdp.send('Page.reload');
+  await cdp.send('Page.bringToFront');
+  await until(()=>cdp.eval('document.visibilityState'),v=>v==='visible','reload returned visible before expecting detail reads',15000);
   await until(()=>cdp.eval("document.querySelector('textarea.composer-input')?.value"),v=>v===draft,'R80 reload durable draft',35_000);
   await until(()=>cdp.eval("document.querySelector('.details-body')?.textContent.includes('历史运行')"),Boolean,'R80 reload historical selection',35_000);
   const historyRestored=await cdp.eval("document.querySelector('[data-zs-history=runs]')?.textContent.includes('已到历史起点') === true");
