@@ -29,6 +29,29 @@ describe('R83 effective execution and readable conversation, no real inference',
     expect(claudeEffortsFromHelp('  --effort <level> (low, high)\n  --another high medium')).toEqual(['low','high']);
     expect(claudeEffortsFromHelp('  --unrelated low medium high')).toEqual([]);
   });
+  it.each(['commandExecution','fileChange'])('Codex normalized %s must retain actual work delivery despite a conversation hint',async toolName=>{
+    vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
+    const root=mkdtempSync(join(tmpdir(),'r83-codex-work-')),project=join(root,'own-project');mkdirSync(project);
+    const db=openDatabase(join(root,'state.sqlite')),deps={db,localUserId:'u_local',appDataDir:root,interruptTurn:async()=>{}};
+    const cmd=async(method:string,params:unknown)=>{const response=await dispatchDaemonCommand(deps,{protocolVersion:1,commandId:randomUUID(),method,params}) as {ok:boolean;data:FixtureFacts;error?:unknown};expect(response.ok,JSON.stringify(response.error)).toBe(true);return response.data;};
+    try{
+      const projectId=(await cmd('project.open',{path:project})).project.id;
+      const memberId=(await cmd('member.create',{projectId,displayName:'fixture worker'})).memberId;
+      await cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'bypassPermissions'});
+      const room=(await cmd('room.list',{projectId})).items[0]!;
+      const task=await cmd('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'创建结果文件',intent:'default',mentions:[{kind:'member',memberId}]});
+      const adapter=new FakeRuntimeAdapter({turnScripts:[[
+        {kind:'event',event:{kind:'tool.started',toolCallId:'codex-tool',toolName,argumentsSummary:'result.txt'}},
+        {kind:'writeFile',path:'result.txt',content:'isolated normalized event fixture'},
+        {kind:'event',event:{kind:'tool.completed',toolCallId:'codex-tool',outcome:'success'}},
+        {kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({...control,responseKind:'conversation',files:['result.txt']})}},
+      ]]});
+      await new DispatchWorker({db,adapter,leaseOwner:'r83-codex-output',appDataDir:root}).runOnce();
+      expect(readFileSync(join(project,'result.txt'),'utf8')).toBe('isolated normalized event fixture');
+      expect((db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.taskId) as {n:number}).n).toBe(1);
+      expect((db.prepare('SELECT count(*) n FROM real_calls').get() as {n:number}).n).toBe(0);
+    }finally{db.close();}
+  });
   it('projects and members created by commands freeze full/readonly policy; config change rejects old dispatch; templates keep independent effort',async()=>{
     vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
     const root=mkdtempSync(join(tmpdir(),'r83-policy-'));const project=join(root,'工程');mkdirSync(project);
