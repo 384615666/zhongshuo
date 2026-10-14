@@ -1,0 +1,12 @@
+{
+  "pass": true,
+  "build": {"buildId":"bld_06a536e62475c22f","commit":"7af617e68697e549cab16bf96d427a67c7429a79","dirty":false},
+  "method":"Agent visually inspected real decoded screenshots; geometry checks supplement, not replace inspection",
+  "prototype":"dist/desktop/review-r83-prototype-corrected-20261014",
+  "viewports":[{"name":"wide","width":1440,"height":960,"dpr":1},{"name":"narrow","width":900,"height":800,"dpr":1},{"name":"hidpi","width":1280,"height":800,"dpr":1.5}],
+  "theme":"light",
+  "density":"six AI member identities; normal task facts from real worker; layout-only extra members made by formal commands, not fake task results",
+  "inspected":["members-wide.png","members-hidpi.png","detail-narrow.png","actual-effort-high.png","room-wide.png","room-narrow.png","thread-narrow.png","thread-hidpi.png","dm-wide.png","natural-123.png"],
+  "findings":["shared rounded cards, side navigation, identity/ability hierarchy retained","member card facts are denser than prototype; full-permission history caveat remains readable, wraps and scrolls","narrow chat/file single-region navigation remains reachable","paperclip/@ and nested settings geometry passed at all three viewports; actual screenshots inspected","original user 123 visible before short agent answer; no control JSON in normal bubbles","source and model Markdown remain in existing right preview area; model Markdown table itself contains an unescaped union pipe, not a claim of perfect model document formatting"],
+  "limits":["DPR 1.5 is renderer emulation, not physical monitor certification","structural comparison, not pixel-identical restoration","native titlebar movement independently unverified and must remain a release gate"]
+}

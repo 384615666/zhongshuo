@@ -1,0 +1,58 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_06a536e62475c22f",
+    "commit": "7af617e68697e549cab16bf96d427a67c7429a79",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-14T07:22:39.039Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "actions": [
+    {
+      "action": "native search/outside click closes",
+      "pass": true
+    },
+    {
+      "action": "native Escape",
+      "pass": true
+    },
+    {
+      "action": "native repeated trigger closes",
+      "pass": true
+    },
+    {
+      "action": "native project selection closes",
+      "pass": true
+    },
+    {
+      "action": "native navigation closes menu",
+      "pass": true
+    },
+    {
+      "action": "native typing after menu closes, unsent only",
+      "pass": true
+    },
+    {
+      "action": "native maximize",
+      "pass": true
+    },
+    {
+      "action": "native restore",
+      "pass": true
+    }
+  ],
+  "dragVerification": {
+    "status": "unverified",
+    "before": {
+      "x": 728,
+      "y": 151
+    },
+    "after": {
+      "x": 728,
+      "y": 151
+    },
+    "scope": "actual final BAT; zero measured displacement; previous minimal same Electron also zero, no product-specific cause proven"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_06a536e62475c22f",
+    "commit": "7af617e68697e549cab16bf96d427a67c7429a79",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-14T07:22:39.039Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "attachmentSamples": [
+    {
+      "at": 1791968054047,
+      "visible": "visible",
+      "ids": [
+        "art_5929641c-dfea-4cf9-88e4-4f9d7eb7fcdd"
+      ]
+    },
+    {
+      "at": 1791968059148,
+      "visible": "visible",
+      "ids": [
+        "art_5929641c-dfea-4cf9-88e4-4f9d7eb7fcdd"
+      ]
+    },
+    {
+      "at": 1791968064262,
+      "visible": "visible",
+      "ids": [
+        "art_5929641c-dfea-4cf9-88e4-4f9d7eb7fcdd"
+      ]
+    },
+    {
+      "at": 1791968069367,
+      "visible": "visible",
+      "ids": [
+        "art_5929641c-dfea-4cf9-88e4-4f9d7eb7fcdd"
+      ]
+    }
+  ],
+  "steps": [
+    "cold root attachment identity/count stable across three 5-second periods",
+    "general settings entry unique; member chip enters and focuses member section directly",
+    "full permission UI matches actual execution; historical certificate does not say readonly"
+  ],
+  "roomMenu": [
+    "房间设置",
+    "归档房间"
+  ]
+}

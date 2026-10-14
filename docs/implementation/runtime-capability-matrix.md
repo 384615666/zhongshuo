@@ -1,5 +1,9 @@
 # Runtime 能力矩阵
 
+## 当前入口（2026-10-14，R83）
+
+以 [R83当前矩阵](r83-current-capabilities-20261014.md) 和 [实证报告](r83-desktop-experience-v22-20261014.md) 为准。下文2026-09-27及旧轮次为历史，不能据其认定Claude尚未接或Shell仍固定禁用。新任务原生完整权限/自动图片已接，GLM最终真实8次通过；Codex本轮仅元数据/回放，第三方有效思考强度未证。完整桌面放行因原生移动未验证保持false，用户验收待定。
+
 > 逐 runtime/adapter/平台/版本登记真实验证状态（§9.3/§19）。`unverified` 不得按 supported 处理。
 > 本文件只登记**实机验证证据**；契约层定义（RuntimeCapabilities/TierVerification schema）已在 DEV-01 落地（`src/contracts/project.ts`、`src/contracts/permission.ts`）。
 

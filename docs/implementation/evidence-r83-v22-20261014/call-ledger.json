@@ -1,0 +1,330 @@
+[
+  {
+    "root": "review-r83-stage1-natural-20261013",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_68e774f9-f9b9-4af6-8cce-713d99545463"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_56ef0d8f-72a3-4837-a867-399e4ebaf65b"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-stage3-natural-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_42e9f2dc-20ed-41ae-8d42-0648c9dd844c"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_b296f560-cedd-4d34-98ab-06efc3067372"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_29cd0961-8388-481f-a9a4-4a6e34935f62"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "inflight",
+        "turn_id": "turn_941fd6e9-93e0-4ca8-8996-7fd28b591d0c"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-final-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_b6e4ecad-616a-428a-b527-3c70facc7e37"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_04e31083-4161-4126-be19-e9916d33dcd9"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_784cd04f-5251-4cc8-a608-9595911a43f0"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_5fc1699d-d9bd-43a5-97bb-8263482b5cfb"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "failed",
+        "turn_id": "turn_cdd1407e-84bd-4fac-8746-79e83e0c69b2"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-rc2-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_cddc4126-1b26-4020-8886-d3437a4646db"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_a175820f-5fb0-46b8-af4b-27f3fc4e563e"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_0c1884d2-6e6f-4200-b1a1-6f4aa61aaf2e"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_e1d8a251-02ef-42df-9c58-47eef8939ed4"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_f565061f-f406-4f26-9c41-cbc6e097c76b"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_7bdce3f2-f080-4069-b981-f7539b81eb3c"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-final-fixed-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_3fc4e256-2823-4248-990c-bd959555d393"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_0e23016e-e79c-405e-a9b7-edaf00969884"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_28cec64a-5604-4151-8286-da5208de976a"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_87195445-124b-407f-b8ba-9eb5ef0a3fbe"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_1211ac9f-51e4-4bb7-8ba6-0a29154cdd23"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_b6cd0c73-6e2a-46d3-9984-4b2455d1e63c"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_ee88a33a-d238-4fb1-a8b1-80405ba39941"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_f8db30c6-2b4d-4927-a867-23621a0ed26d"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-release-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_823cbb27-930a-4b94-9bf5-fa9ce012377c"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_8b071dea-4b87-4156-a137-7313689d8dd9"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_6c2254ff-e648-44c4-b13d-570a9b4a6d60"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_5137d83d-c910-4245-a11c-7a3860f8623d"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_ffea0c05-b1bd-4def-b0e1-cfbb608f43c2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_5fc87429-278f-4173-9fae-2be162fac487"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_5ff0d7a3-0f1b-47b7-bf02-85ea02c07e68"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_c8a0f0fa-4d25-4426-a5ef-2bf42a2fc241"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-rc5-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_2058af0c-cd62-4a3d-87aa-25e83fcdf640"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_c7e754ac-966a-4905-a5b3-9bc2737ce45f"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_e77a2afb-e26b-472f-b5bf-d4ebd3824fa3"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_a246b990-9071-4464-8364-b12fe42fac5c"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_7907c790-8531-4da0-8be3-aae0fa42da87"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_c92cc56f-673a-4a6c-a0e4-fa06996aa91b"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_ccc69df2-0496-448b-8e0d-ba5b2393705d"
+      }
+    ]
+  },
+  {
+    "root": "review-r83-v22-rc6-20261014",
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_b24f73dc-44e1-45ca-b3ca-eaf039f128f2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_761427b4-a5e2-4d64-84de-f10c148644bd"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_e735edee-49fa-4fb3-acad-3a2dfcf50b31"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_40b1f79d-1750-4b1f-b4e4-7ad219412d32"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_7664d2bc-b357-440e-8d86-dc6fbc4aeca7"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_dd595480-d09d-4342-8600-c04980054dfe"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_fff377d1-0728-433b-aaab-09347eeb1647"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "status": "succeeded",
+        "turn_id": "turn_fa349460-ecf0-44fd-8457-f4084e29e516"
+      }
+    ]
+  }
+]

@@ -1,0 +1,198 @@
+{
+  "pass": false,
+  "corePass": true,
+  "releaseStatus": "engineering-candidate; native titlebar movement gate unverified; user acceptance pending",
+  "sourceChecks": {
+    "files": 146,
+    "tests": 1027,
+    "typecheck": true,
+    "typecheckHifi": true,
+    "incrementalLint": true,
+    "externalGithubSandbox": "excluded original schannel SEC_E_ILLEGAL_MESSAGE failure, not counted passed"
+  },
+  "realCalls": {
+    "attempts": 48,
+    "succeeded": 46,
+    "failed": 1,
+    "interruptedUnconfirmed": 1,
+    "runtime": "claude",
+    "model": "glm-5.3-flash",
+    "finalBuildSucceeded": 8,
+    "codexInferenceCalls": 0,
+    "ledger": "evidence-r83-v22-20261014/call-ledger.json"
+  },
+  "immutableRuntimeSource": "7af617e68697e549cab16bf96d427a67c7429a79",
+  "entry": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v22-rc6\\start-desktop.bat",
+  "build": {
+    "buildId": "bld_06a536e62475c22f",
+    "commit": "7af617e68697e549cab16bf96d427a67c7429a79",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-14T07:22:39.039Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "gates": [
+    {
+      "name": "BUILD closeout.json",
+      "pass": true
+    },
+    {
+      "name": "BUILD native-ui.json",
+      "pass": true
+    },
+    {
+      "name": "BUILD readonly-ui.json",
+      "pass": true
+    },
+    {
+      "name": "BUILD visual-review.json",
+      "pass": true
+    },
+    {
+      "name": "clean source BUILD",
+      "pass": true
+    },
+    {
+      "name": "natural questions and image bytes",
+      "pass": true
+    },
+    {
+      "name": "eight original successful real calls",
+      "pass": true
+    },
+    {
+      "name": "native menus and window controls",
+      "pass": true
+    },
+    {
+      "name": "cold attachment / room shortcut / truthful permissions",
+      "pass": true
+    },
+    {
+      "name": "real native tool results",
+      "pass": true
+    },
+    {
+      "name": "paired visual inspection",
+      "pass": true
+    },
+    {
+      "name": "BUILD result.json",
+      "pass": true
+    },
+    {
+      "name": "formal fake workflow",
+      "pass": true
+    },
+    {
+      "name": "BUILD result.json",
+      "pass": true
+    },
+    {
+      "name": "unknown original envelope",
+      "pass": true
+    },
+    {
+      "name": "project cancellation/cross-open",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v22-rc6",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\review-r83-v22-rc6-20261014\\copy",
+      "pass": true
+    },
+    {
+      "name": "same actual launcher",
+      "pass": true
+    },
+    {
+      "name": "no engineering data in distribution",
+      "pass": true
+    },
+    {
+      "name": "both source typechecks",
+      "pass": true
+    },
+    {
+      "name": "incremental lint no new errors",
+      "pass": true
+    },
+    {
+      "name": "deterministic source suite",
+      "pass": true
+    },
+    {
+      "name": "native titlebar movement verified",
+      "pass": false
+    }
+  ],
+  "manifests": {
+    "distribution": {
+      "files": 593,
+      "bytes": 533282046,
+      "sha256": "44eb3704df67e5b0e3fc413a8ca8ddce3af510b45bc6337efd2b4c9202c550a8"
+    },
+    "actualCopy": {
+      "files": 593,
+      "bytes": 533282046,
+      "sha256": "44eb3704df67e5b0e3fc413a8ca8ddce3af510b45bc6337efd2b4c9202c550a8"
+    }
+  },
+  "evidence": [
+    {
+      "path": "dist\\desktop\\review-r83-v22-rc6-20261014\\closeout.json",
+      "sha256": "96e1d05279b299123450dbf3498ed5a8e3a2a11bc698234098c2d0d98ce108af"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-v22-rc6-20261014\\native-ui.json",
+      "sha256": "ab6cfdfd5c5dd2476d9a5533ecf4db8acba668aa88e02aee8fd4c105c7ce4afd"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-v22-rc6-20261014\\readonly-ui.json",
+      "sha256": "c5f4881997567d26b56642f6789b887762da38d987f6e742a698e6ecabbca550"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-v22-rc6-20261014\\native-tool-proof.json",
+      "sha256": "9c399b2546d2958d79cbd3b689bef00159f361d473dd0715173958204260deb0"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-v22-rc6-20261014\\visual-review.json",
+      "sha256": "654d43602593e4b4bff5a0d9fdba54b50177e12540c4f6ca03b3a1cb3e28d463"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-rc6-fake-workflow-20261014\\result.json",
+      "sha256": "66944360689c4dfd1949695ab62d4c2566ddf728473cfe2b4115e6596ae0522e"
+    },
+    {
+      "path": "dist\\desktop\\review-r83-rc6-unknown-20261014\\result.json",
+      "sha256": "dde594c40bbcf87104161e4a2daba627970b0b24370708ec862bf0d1711e5b95"
+    },
+    {
+      "path": "dist\\desktop\\r75-completion-1791966509450\\result.json",
+      "sha256": "41da590c4bd2d18c173fc5728a31dd634809dde57aa53748ccf5c91647a456d7"
+    },
+    {
+      "path": "dist\\r83-source-check-receipt.json",
+      "sha256": "771a47f79bc1afa0fbc54f9add89215b94c0c183f2f5e2e03347a4e8d6260506"
+    },
+    {
+      "path": "dist\\r83-delivery-lint.json",
+      "sha256": "3a83b862c901b8526193e722ecc834bfd24143a8bad271b95203173e17ee7adb"
+    },
+    {
+      "path": "dist\\r83-rc6-all-tests.log",
+      "sha256": "9b5ca5da29b2c99d02fb647436f2180d844fefb2bf30512b9a66d7922dbf4085"
+    }
+  ],
+  "unverified": [
+    "native titlebar movement",
+    "Codex real inference",
+    "third-party effective reasoning intensity",
+    "all native tools / all models"
+  ],
+  "userAcceptance": "pending"
+}
