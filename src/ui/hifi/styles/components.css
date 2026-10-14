@@ -426,7 +426,7 @@ button.composer-target-summary:hover {
   min-width: 0;
   row-gap: 4px;
 }
-.composer-toolbar > .icon-btn.sm {
+.composer-toolbar .icon-btn.sm {
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -436,7 +436,7 @@ button.composer-target-summary:hover {
   line-height:1;
   flex:0 0 30px;
 }
-.composer-toolbar > .icon-btn.sm svg {display:block;flex:none;pointer-events:none;}
+.composer-toolbar .icon-btn.sm svg {display:block;flex:none;pointer-events:none;}
 .composer-toolbar .seg {
   padding: 2px;
   flex: none;

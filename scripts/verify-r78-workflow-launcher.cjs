@@ -404,7 +404,7 @@ function verifyManifest(packageRoot) {
     await until(() => queryOne('SELECT archived_at FROM conversations WHERE id=?', dm.conversationId)?.archived_at, (v) => v != null, 'DM archived');
     await until(() => cdp.eval("document.body.textContent.includes('已归档 · 只读') && document.querySelector('#hifi-root textarea.composer-input') == null"), (v) => v, 'DM archived read-only UI');
     must(await cdp.eval(js("const b=document.querySelector('[data-zs-dm-ops=hifi]');if(!b)return false;b.click();return true;")), 'DM operations reopen missing');
-    must(await cdp.eval(button('body', '取消归档')), 'DM restore menu item missing');
+    must(await cdp.eval(button('[role=menu]', '取消归档')), 'DM restore visible menu item missing');
     await until(() => queryOne('SELECT archived_at FROM conversations WHERE id=?', dm.conversationId)?.archived_at, (v) => v === null, 'DM restored');
     await until(() => cdp.eval("document.querySelector('#hifi-root textarea.composer-input') != null"), (v) => v, 'DM restored composer');
     must(queryAll('SELECT id FROM workflow_runs WHERE task_id=?', dmTask.id).length === 2, 'DM archive/restore auto-dispatched');
