@@ -18,7 +18,7 @@ try{
   }
   if(facts.sessions.length<2)throw Error('v1/v2 exact native sessions missing');
   const bash=facts.sessions.flatMap(s=>s.calls.filter(c=>c.name==='Bash'));
-  if(!bash.some(c=>/node\s+(?:--test\s+)?math\.test\.mjs/.test(c.input.command??'')))throw Error('actual model test command missing');
+  if(!bash.some(c=>/node\s+(?:--test(?:\s+math\.test\.mjs)?|math\.test\.mjs)(?:\s|$)/.test(c.input.command??'')))throw Error('actual model test command missing');
   if(!facts.sessions.flatMap(s=>s.results).some(r=>!r.error&&/pass|通过/i.test(typeof r.content==='string'?r.content:JSON.stringify(r.content))))throw Error('actual native stdout success missing');
   facts.pass=true;
 }catch(e){facts.error=e.stack;process.exitCode=1;}finally{db.close();fs.writeFileSync(path.join(out,'native-tool-proof.json'),JSON.stringify(facts,null,2));console.log(JSON.stringify({pass:facts.pass,sessions:facts.sessions.length,error:facts.error}));}

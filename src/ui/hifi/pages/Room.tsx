@@ -616,17 +616,14 @@ export function RoomPage({
             <Tag tone="neutral" icon="archive">{room.archivedAt ? '已归档 · 只读' : ownerReadOnly}</Tag>
           ) : null}
           {/**
-           * 协调者与成员数合并成**一个轻量房间信息入口**（减负 §3）。
-           * 原来它们是两个并列元素（「协调者 X」标签 + 「N 名成员」文字），
-           * 加上右侧的「房间设置」按钮，同一件事有多个入口。
-           * 现在信息入口只负责"看"，设置统一进房间「⋯」，不再互相竞争。
+           * 人数入口直接定位成员与协调者；通用设置仍经右侧菜单进入。
            */}
           <button
             type="button"
             className="pool-info"
-            title={`房间信息：协调者 ${memberLabel(coord)}，${room.memberIds.length} 名成员；名称、成员、归档在右侧 ⋯ 里改`}
-            aria-haspopup="menu"
-            onClick={(e) => setRoomMenuAnchor(anchorFromElement(e.currentTarget))}
+            title={`查看房间成员与协调者：${memberLabel(coord)}，${room.memberIds.length} 名成员`}
+            aria-haspopup="dialog"
+            onClick={() => {setRoomMenuAnchor(null);setSettingsSection('members');setSettingsOpen(true);}}
           >
             <Icon name="users" size={11} />
             {memberLabel(coord)} · {room.memberIds.length} 名成员

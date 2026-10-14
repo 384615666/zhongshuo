@@ -13,10 +13,17 @@ import {claudeEffortsFromHelp} from '../../src/daemon/runtimeOptions.ts';
 import * as runtimeOptionsModule from '../../src/daemon/runtimeOptions.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
+import {fileWriteCapability} from '../../src/adapter/writeCapability.ts';
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
 const control={schemaVersion:'task-complete-v1',resultKey:'result_a',answer:'你好！',changeSummary:'回应问候',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]};
 interface FixtureFacts {project:{id:string};memberId:string;items:Array<{id:string;revision:number;conversationId:string}>;taskId:string;id:string;revision:number;config:{effort:string};binding:{permissionMode:string;effort:string};text:string|null}
 describe('R83 effective execution and readable conversation, no real inference',()=>{
+  it.each(['claude','codex'])('full %s execution is not described as readonly by old scoped certification',kind=>{
+    for(const permissionMode of [null,'bypassPermissions']){
+      const evidence=fileWriteCapability({kind,model:'own-model',permissionMode,executable:null},'own-cwd');
+      expect(evidence.status).toBe('unverified');expect(evidence.reason).toContain('CLI 原生完整权限');expect(evidence.reason).not.toContain('当前只读');
+    }
+  });
   it('Claude wrapped help yields only the actual declared levels, absent or limited CLI stays honest',()=>{
     expect(claudeEffortsFromHelp('  --effort <level> Effort for session\n    (low, medium, high, xhigh, max)\n  --environment <id> unrelated')).toEqual(['low','medium','high','xhigh','max']);
     expect(claudeEffortsFromHelp('  --effort <level> (low, high)\n  --another high medium')).toEqual(['low','high']);

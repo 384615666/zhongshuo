@@ -126,7 +126,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>
                 <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>
-                <dt>项目文件编辑认证</dt><dd>{runtime?.writeCapability?.status==='supported'?'当前组合已验证':'未认证'}<div className="small faint">{runtime?.writeCapability?.reason??'未提供证据'}</div></dd>
+                <dt>项目编辑档历史证据</dt><dd>{runtime?.writeCapability?.status==='supported'?'匹配历史证据':'无匹配证据'}<div className="small faint">{runtime?.writeCapability?.reason??'未提供证据'}</div></dd>
                 <dt>图片输入</dt><dd>{runtime?.imageInput?.status === 'supported' ? '自动传递图片' : '不可用或未能确认'}{runtime?.imageInput?.reason != null ? ` · ${runtime.imageInput.reason}` : ''}</dd>
                 <dt>历史识图证据</dt><dd>{runtime?.imageInput?.evidence?'当前组合匹配历史证据':'本组合没有匹配的历史证据；不阻止自动输入'}</dd>
               </dl>

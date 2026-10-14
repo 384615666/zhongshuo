@@ -6,6 +6,7 @@ export const CLAUDE_PROJECT_WRITE_POLICY_HASH=createHash('sha256').update(JSON.s
 /** Narrow real combination evidence. Configuration/program references do not manufacture support. */
 export function fileWriteCapability(runtime:{kind:string|null;model:string|null;permissionMode:string|null;executable:string|null},cwd:string) {
   if(runtime.kind==='fake')return {status:'unsupported' as const,reason:'工程 Fake 不是实际工具认证'};
+  if(['claude','codex'].includes(runtime.kind??'') && [null,'bypassPermissions'].includes(runtime.permissionMode))return {status:'unverified' as const,reason:'当前使用 CLI 原生完整权限；旧项目编辑档认证不适用。实际写入与命令结果见运行和文件事实，不以此认证限制执行'};
   if(runtime.kind!=='claude')return {status:'unverified' as const,reason:'当前渠道文件写入尚无真实认证；可改只读/仅记录，或换已验证的 Claude/glm-5.3-flash 成员'};
   if(runtime.model!==certificate.model || !certificate.permissionModes.includes(runtime.permissionMode??''))return {status:'unverified' as const,reason:runtime.model!==certificate.model?'模型不匹配（已验证 Claude/glm-5.3-flash）；可改只读/仅记录或换成员':'成员未选择项目文件编辑档；当前只读'};
   try {
