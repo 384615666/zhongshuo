@@ -2,6 +2,10 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前进行中（2026-10-14，R84）
+
+先读 [R84进度](r84-progress-20261014.md)、[完整要求](prompt-r84-daylong-desktop-closeout-20261014.md)。R84基线969302b，当前HEAD用git读取。Codex当前gpt-6.1-sol/xhigh/custom阶段7次真实成功，原生鼠标移动仍未证（可见标准窗口键盘移动+12为观察正例）。普通同串续问仅记录的真实反例已交审查侧等待人类产品决定，不自动派发/返工补绕过。源码有只读矩形/诊断观测、Composer准确路由文案，最终v23和同包2小时观察尚未开始；不要套用下文R83为本轮已交付，也不要重跑任何旧未知请求。
+
 ## 当前交接入口（2026-10-14，R83主要路线已证，原生拖动门未验证）
 
 先读 [R83交付与剩余门](r83-desktop-experience-v22-20261014.md)、[当前矩阵](r83-current-capabilities-20261014.md)、[总门](r83-v22-delivery-20261014.json)，再按git实读HEAD。运行源码冻结7af617e68697e549cab16bf96d427a67c7429a79，clean BUILD bld_06a536e62475c22f，最新入口dist/desktop/desktop-daily-win-v22-rc6/start-desktop.bat；后续QA/文档提交不是构建源码。1027源码项/双类型/增量lint、最终8次GLM普通语言真实请求、模型实际写文件/Bash/项目外自有写入、图片字节、返工v2验收/重开、593清单、原生菜单8项及必要Fake/UNKNOWN/导航回归已通过。corePass=true，完整pass=false：原生标题栏移动未取得位移证据，最小Electron同样，不能宣布首版已放行。下轮只接该剩余原生验证及新用户反馈，不重跑真实48调用或重新开发六项。

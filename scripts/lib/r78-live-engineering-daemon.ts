@@ -21,7 +21,7 @@ const markerFile = join(data, 'engineering-r78.json');
 const ownedSockets=new Set<Socket>();let blockedUntil=0;
 let r81Action:{method:string;kind:'drop'|'delay'|'reject';ms:number}|null=null;
 let dropNextSubmit=false;const requestMethods=new Map<string,string>();const requestHashes=new Map<string,string>();
-const hostMetrics={requests:0,completed:0,inFlight:0,peakInFlight:0};
+const hostMetrics={requests:0,completed:0,inFlight:0,peakInFlight:0,pid:process.pid,parentPid:process.ppid,get memory(){return process.memoryUsage();}};
 const pendingBySocket=new Map<Socket,Set<string>>();
 const originalEmit=Server.prototype.emit;
 Server.prototype.emit=function(event:string,...args:unknown[]){if(event==='connection'){const socket=args[0] as Socket;if(performance.now()<blockedUntil){socket.destroy();return true;}ownedSockets.add(socket);const pending=new Set<string>();pendingBySocket.set(socket,pending);let buffer='';

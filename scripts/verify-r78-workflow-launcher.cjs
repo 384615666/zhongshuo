@@ -428,7 +428,7 @@ function verifyManifest(packageRoot) {
 
     facts.deliveries = { room: [roomD1.id, roomD2.id], dm: [dmD1.id, dmD2.id] };
     facts.realCallsBeforeReopen = queryOne('SELECT count(*) c FROM real_calls').c;
-    if(process.argv.includes('--r80'))facts.r80=await require('./verify-r80-recovery-extension.cjs')({cdp,projectId,room,dm,memberId,project,data,out,command,rawCommand,navigate,uiSend,until,queryOne,queryAll,must,sleep,button,facts});
+    if(process.argv.includes('--r80'))facts.r80=await require('./verify-r80-recovery-extension.cjs')({cdp,projectId,room,dm,memberId,project,data,out,command,rawCommand,navigate,uiSend,until,queryOne,queryAll,must,sleep,button,facts,durationMs:process.argv.includes('--r84-observe')?2*60*60_000:30*60_000});
     must(facts.realCallsBeforeReopen === 0, 'real_calls is nonzero');
     await cdp.shot('r78-dm-accepted.png');
     captureUi('engineering-full-flow');

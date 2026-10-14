@@ -237,8 +237,10 @@ R76 图片发送与预览已获用户确认，本轮继承该结果，不重复�
 `.replaceAll('\n', '\r\n'), 'utf8');
 
 // 3) 清单核对（同 h1 口径：与 pack-desktop MANIFEST 一致性）
-if(outArg?.startsWith('desktop-daily-win-v22')) {
-  writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面体验候选 · v22
+if(outArg?.startsWith('desktop-daily-win-v22')||outArg?.startsWith('desktop-daily-win-v23')) {
+  const r84=outArg.startsWith('desktop-daily-win-v23'),version=r84?'v23':'v22',round=r84?'R84':'R83';
+  if(r84)cpSync(join(repo,'docs','desktop-quickstart.md'),join(out,'开始使用.md'));
+  writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面体验候选 · ${version}
 
 从 start-desktop.bat 启动。新任务的执行成员默认使用 CLI 原生完整权限，可以读写整个电脑并执行命令；保留显式 plan 只读和项目编辑模式。旧任务、旧草稿及已经明确保存的限制不自动升级。实际成员权限在配置与发送区显示。
 
@@ -250,11 +252,11 @@ if(outArg?.startsWith('desktop-daily-win-v22')) {
 
 结果未知仍由用户人工同号同参处理；重连、重开不会自动派发或解除保护。single_writer 与改动集只覆盖受管理项目，不能保护或捕获整台电脑的全部修改。
 
-工程使用独立目录、合成输入与真实渠道验收；详见仓库 R83 交付记录。用户验收与工程通过分开记录。Android、安装器、签名、自动更新及既有延期未扩展。
+工程使用独立目录、合成输入与真实渠道验收；详见仓库 ${round} 交付记录。用户验收与工程通过分开记录。Android、安装器、签名、自动更新及既有延期未扩展。
 `,'utf8');
   const daily=join(out,'README-DAILY.md');
   const previous=await (await import('node:fs/promises')).readFile(daily,'utf8');
-  writeFileSync(daily,`# R83 当前行为（2026-10-14）\r\n\r\n权限、图片与思考等级以 README-CANDIDATE.md 为准；下列历轮记录保留为历史，旧的图片认证限制已被本轮自动输入替代。\r\n\r\n${previous}`,'utf8');
+  writeFileSync(daily,`# ${round} 当前行为（2026-10-14）\r\n\r\n权限、图片与思考等级以 README-CANDIDATE.md 为准；下列历轮记录保留为历史，旧的图片认证限制已被本轮自动输入替代。\r\n\r\n${previous}`,'utf8');
 }
 const manifestPath = join(out, 'ZhongshuoDual', 'MANIFEST-SHA256.json');
 const manifest = JSON.parse(await (await import('node:fs/promises')).readFile(manifestPath, 'utf8'));

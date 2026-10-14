@@ -328,7 +328,8 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
   ipcMain.handle('zs:diagnostics',event=>{
     assertTrustedSender(event);
     let build:unknown=null;try{const b=JSON.parse(readFileSync(join(appRoot,'..','..','BUILD.json'),'utf8'));build={buildId:b.buildId,commit:b.commit,dirty:b.dirty};}catch{/* development/unknown */}
-    return{build,connection:connectionMonitor.metrics,dataRootIdentity:createHash('sha256').update(resolve(appDataDir)).digest('hex').slice(0,16),daemon:{spawned:daemonProcess!=null,exit:readDaemonExitFacts(),shuttingDown:daemonShuttingDown},at:Date.now()};
+    const processes=app.getAppMetrics().slice(0,32).map(p=>({pid:p.pid,type:p.type,memory:p.memory,cpuPercent:p.cpu.percentCPUUsage}));
+    return{build,connection:connectionMonitor.metrics,dataRootIdentity:createHash('sha256').update(resolve(appDataDir)).digest('hex').slice(0,16),daemon:{spawned:daemonProcess!=null,pid:daemonProcess?.pid??null,exit:readDaemonExitFacts(),shuttingDown:daemonShuttingDown},host:{pid:process.pid,memory:process.memoryUsage(),processes},at:Date.now()};
   });
   ipcMain.handle('zs:command', async (event, envelope: unknown) => {
     assertTrustedSender(event);
@@ -455,7 +456,9 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
     }
     if (action === 'close') { win.close(); return { ok: true }; }
     if (action === 'getState') {
-      return { ok: true, state: { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused() } };
+      // Read the native Electron window rectangle; renderer screenX/Y and captured
+      // image bounds have different DPI/frame semantics and cannot prove movement.
+      return { ok: true, state: { maximized: win.isMaximized(), fullScreen: win.isFullScreen(), focused: win.isFocused(), bounds: win.getBounds(), contentBounds: win.getContentBounds() } };
     }
     throw new Error(`未知窗口操作：${String(action)}`);
   });

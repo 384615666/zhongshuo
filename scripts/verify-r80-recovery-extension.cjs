@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 /* global require, module, console */
 const fs=require('node:fs');const path=require('node:path');
-module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,queryOne,must,sleep,button,facts}){
-  const start=Date.now(),duration=30*60_000;const samples=[];
+module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,queryOne,must,sleep,button,facts,durationMs=30*60_000}){
+  const start=Date.now(),duration=Math.min(3*60*60_000,Math.max(30*60_000,durationMs));const samples=[];
   const target=facts.r79.scale;
   await navigate(cdp,`/thread/${target.threadId}?tab=run`,target.threadId);
   await until(()=>cdp.eval("document.querySelector('.details-body')?.textContent.includes('R79_SYNTHETIC_HISTORY_ONLY')"),Boolean,'R80 historical details ready');
@@ -43,7 +43,7 @@ module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,
     else if(phase===3){await navigate(cdp,`/project/${projectId}/files`,projectId);await cdp.eval("window.zsWindow.minimize();true");await sleep(2500);await cdp.eval('window.zsWindow.toggleMaximize()');await cdp.send('Page.bringToFront');}
     else{await navigate(cdp,'/settings?section=help','settings');await cdp.eval(button('[data-zs-local-diagnostics]','查看诊断 / 刷新'));}
     const local=await cdp.eval('window.zs.diagnostics()');const metrics=await cdp.eval('window.__r80Metrics()');const heap=await cdp.send('Runtime.getHeapUsage');const host=JSON.parse(fs.readFileSync(path.join(data,'engineering','r80-host-metrics.json')));
-    const sample={at:Date.now(),elapsedMs:Date.now()-start,cycle,phase,requests:host.requests,inFlight:host.inFlight,...metrics,connection:local.connection,heap,messages:queryOne('SELECT count(*) n FROM messages').n,realCalls:queryOne('SELECT count(*) n FROM real_calls').n};samples.push(sample);
+    const sample={at:Date.now(),elapsedMs:Date.now()-start,cycle,phase,requests:host.requests,inFlight:host.inFlight,...metrics,connection:local.connection,hostProcesses:local.host,daemonPid:host.pid,daemonParentPid:host.parentPid,daemonMemory:host.memory,heap,messages:queryOne('SELECT count(*) n FROM messages').n,realCalls:queryOne('SELECT count(*) n FROM real_calls').n};samples.push(sample);
     must(sample.connection.monitorTimers===1&&sample.connection.inFlight<=1,'monitor multiplied');must(sample.messages===before&&sample.realCalls===0,'unexpected business dispatch');
     fs.writeFileSync(path.join(out,'r80-soak-progress.json'),JSON.stringify({buildId:facts.buildId,start,elapsedMs:Date.now()-start,samples,scope:'real final launcher; external own Fake host; transport disconnect injection; actual minimize/return and reload; no OS sleep'},null,2));
     if(cycle%2===0)console.log(JSON.stringify({r80SoakMinutes:((Date.now()-start)/60000).toFixed(1),cycle,requests:host.requests,intervals:metrics.intervals,listeners:metrics.documentListeners}));cycle++;
@@ -51,6 +51,6 @@ module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,
   }
   const byPhase=[0,1,2,3,4].map(p=>samples.filter(s=>s.phase===p));
   must(byPhase.every(v=>v.length>=2&&v.at(-1).intervals<=v[1].intervals+1&&v.at(-1).documentListeners<=v[1].documentListeners+2),'polling/listener count grows across identical routes');
-  const result={pass:true,buildId:facts.buildId,elapsedMs:Date.now()-start,cycles:cycle,transportDisconnect:true,confirmedFactsRetained:true,draftRetained:true,historyRestored,diagnosticRedacted:true,reloaded:true,modelCalls:0,scope:'30-minute route/visibility/transport/reload observation; no real OS sleep, no multi-day certification'};
-  fs.writeFileSync(path.join(out,'r80-soak-result.json'),JSON.stringify(result,null,2));facts.steps.push('R80 real pipe failure/recovery retains facts and draft; reload restores historical reading; local redacted diagnostics; 30-minute bounded route observation');return result;
+  const result={pass:true,buildId:facts.buildId,start,endedAt:Date.now(),elapsedMs:Date.now()-start,cycles:cycle,transportDisconnect:true,confirmedFactsRetained:true,draftRetained:true,historyRestored,diagnosticRedacted:true,reloaded:true,modelCalls:0,scope:`${duration/60000}-minute route/visibility/transport/reload observation; no real OS sleep, no multi-day certification`};
+  fs.writeFileSync(path.join(out,'r80-soak-result.json'),JSON.stringify(result,null,2));facts.steps.push(`R80 real pipe failure/recovery retains facts and draft; reload restores historical reading; local redacted diagnostics; ${duration/60000}-minute bounded route observation`);return result;
 };

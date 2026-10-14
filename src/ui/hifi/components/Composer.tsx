@@ -406,7 +406,7 @@ export function Composer({
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
     mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions});
-  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;reason:string;readAt:number;error?:string}|null>(null);
+  const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;reason:string;readAt:number;error?:string}|null>(null);
   useEffect(()=>{
     if(!formalLimits?.access||sendAs!=='ai')return;
     let cancelled=false,reading=false;
@@ -414,7 +414,7 @@ export function Composer({
       if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,reason:c.reason,readAt:Date.now()});}
+      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,reason:c.reason,readAt:Date.now()});}
       catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
@@ -1008,11 +1008,11 @@ export function Composer({
         <div className="composer-mentions" data-zs-m0-hint={route.mode}>
           <span
             className="chip record-chip"
-            title="M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——发送后任务会立即受阻（消息与任务保留）；@ 单个成员即走 DIRECT 派发，或本次选择仅记录"
+            title="选择一位执行成员后交给 AI；也可以仅保存记录"
           >
             <Icon name="alert-triangle" size={11} />
-            M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——本次推导为{route.mode === 'AUTO' ? '未指派（AUTO）' : '全体/多人（DELIBERATE）'}，发送后任务会立即受阻
-            <button title="打开 @ 候选：选择一个成员即走 DIRECT 派发（不会自动替你选——目标不静默改变）" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>@ 指定成员</button>
+            {route.mode === 'AUTO' ? '选择执行成员后开始处理' : '请选择一位执行成员；暂不支持多人执行'}
+            <button title="选择一位成员，不会自动发送" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>选择执行成员</button>
             <button title="本次只保存内容、不派发（一次性意图——不受模式边界影响）" onClick={() => setSendAs('record')}>本次仅记录</button>
           </span>
         </div>
@@ -1352,7 +1352,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? writeHint?.key===writeContext&&writeHint.readAt ? writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读 / 记录' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? '选择执行成员' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 

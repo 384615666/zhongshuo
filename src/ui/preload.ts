@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('zsWindow', {
   minimize: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:window', 'minimize'),
   toggleMaximize: (): Promise<{ ok: boolean; maximized?: boolean }> => ipcRenderer.invoke('zs:window', 'toggleMaximize'),
   close: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('zs:window', 'close'),
-  getState: (): Promise<{ ok: boolean; state?: { maximized: boolean; fullScreen: boolean; focused: boolean } }> => ipcRenderer.invoke('zs:window', 'getState'),
+  getState: (): Promise<{ ok: boolean; state?: { maximized: boolean; fullScreen: boolean; focused: boolean; bounds: Electron.Rectangle; contentBounds: Electron.Rectangle } }> => ipcRenderer.invoke('zs:window', 'getState'),
   onStateChange: (cb: (s: { maximized: boolean; fullScreen: boolean; focused: boolean }) => void): (() => void) => {
     const listener = (_e: unknown, s: { maximized: boolean; fullScreen: boolean; focused: boolean }): void => cb(s);
     ipcRenderer.on('zs:window-state', listener);

@@ -19,8 +19,9 @@ describe('R81 explicit program references, zero process/model calls',()=>{
       const cwd=join(root,'project');mkdirSync(cwd);const p=(await cmd('project.open',{path:cwd})).project.id;
       const memberId=(await cmd('member.create',{projectId:p,displayName:'Codex引用'})).memberId;
       const executable=join(root,'missing-codex.exe');await cmd('member.setRuntime',{memberId,kind:'codex',executable,model:'gpt-6-luna',permissionMode:'plan'});
-      const actual=daemon.memberRuntime.adapterFor(memberId) as unknown as {options:{executable:string;model:string;sandboxMode:string}};
+      const actual=daemon.memberRuntime.adapterFor(memberId) as unknown as {options:{executable:string;model:string;sandboxMode:string;cwd:string}};
       expect(actual.options.executable).toBe(executable);expect(actual.options.model).toBe('gpt-6-luna');expect(actual.options.sandboxMode).toBe('read-only');
+      expect(actual.options.cwd).toBe(cwd); // project metadata discovery and actual production process share this context
       expect(memberExecutableStatus('codex',executable).status).toBe('missing');
       expect((daemon.db.prepare('SELECT count(*) c FROM real_calls').get() as {c:number}).c).toBe(0);
     }finally{expect((await daemon.stop()).complete).toBe(true);}
