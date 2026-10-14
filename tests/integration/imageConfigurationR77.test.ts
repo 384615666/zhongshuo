@@ -18,6 +18,23 @@ function fixture() {
   return {root,user,cwd,settings,save,env:{CLAUDE_CONFIG_DIR:user,ANTHROPIC_BASE_URL:'https://shell.example.test'} };
 }
 describe('R77 configuration identity: no model calls, immutable certificate', () => {
+  it('R83 CLI startup/usage metadata does not invalidate a completed task, actual configuration still does',()=>{
+    const f=fixture(),legacy=join(f.user,'.claude.json');
+    const absent=resolveClaudeConfiguration(f.cwd,[],f.env);
+    writeFileSync(legacy,JSON.stringify({numStartups:1,tipsHistory:{one:1}}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).toBe(absent.configurationKey);
+    const config={mcpServers:{},projects:{[f.cwd]:{allowedTools:['Read']}},numStartups:1,tipsHistory:{one:1},pluginUsage:{}};
+    writeFileSync(legacy,JSON.stringify(config));const before=resolveClaudeConfiguration(f.cwd,[],f.env);
+    writeFileSync(legacy,JSON.stringify({...config,numStartups:2,tipsHistory:{one:2},pluginUsage:{count:3},projects:{...config.projects,[join(f.root,'别的项目')]:{lastCost:10}}},null,2));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).toBe(before.configurationKey);
+    writeFileSync(legacy,JSON.stringify({...config,mcpServers:{engineering:{command:'own-server'}}}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).not.toBe(before.configurationKey);
+    writeFileSync(legacy,JSON.stringify({...config,projects:{[f.cwd]:{allowedTools:['Write']}}}));
+    expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).not.toBe(before.configurationKey);
+    writeFileSync(legacy,JSON.stringify({...config,env:{ANTHROPIC_BASE_URL:'https://changed.example.test'}}));
+    const changed=resolveClaudeConfiguration(f.cwd,[],f.env);expect(changed.configurationKey).not.toBe(before.configurationKey);expect(changed.reason).toContain('渠道覆盖');
+    writeFileSync(legacy,JSON.stringify(config));expect(resolveClaudeConfiguration(f.cwd,[],f.env).configurationKey).toBe(before.configurationKey);
+  });
   it('CLAUDE_CONFIG_DIR changes effective user endpoint and restoring it restores identity', () => {
     const f=fixture(); const a=resolveClaudeConfiguration(f.cwd,[],f.env);
     expect(a.reason).toBeNull(); expect(a.channel).toBe('https://user.example.test/v1');

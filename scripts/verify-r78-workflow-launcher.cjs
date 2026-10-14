@@ -335,7 +335,9 @@ function verifyManifest(packageRoot) {
     facts.steps.push('room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept');
     await navigate(cdp, `/thread/${roomTask.threadId}?tab=replies`, roomTask.threadId);
     await until(() => cdp.eval("document.querySelector('#hifi-root button[data-zs-saved=\"0\"]') != null"), (v) => v, 'room bookmark button');
-    must(await cdp.eval(js("const b=document.querySelector('#hifi-root button[data-zs-saved=\"0\"]');if(!b)return false;b.click();return true;")), 'room bookmark click failed');
+    // R83 now also shows the original root. This regression bookmarks a reply,
+    // whose formal saved locator is a thread; root bookmarks return to the pool.
+    must(await cdp.eval(js("const b=[...document.querySelectorAll('#hifi-root button[data-zs-saved=\"0\"]')].at(-1);if(!b)return false;b.click();return true;")), 'room reply bookmark click failed');
     await navigate(cdp, '/library', '/library');
     await until(() => cdp.eval("document.querySelector('[data-zs-library=hifi]') != null"), (v) => v, 'library UI');
     await inputText(cdp, '[data-zs-library=hifi] input[placeholder*="搜消息"]', 'R78 UI ROOM');

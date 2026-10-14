@@ -30,6 +30,14 @@ fs.writeFileSync(host,`const{app,BrowserWindow,ipcMain}=require('electron');app.
       await c.eval(`location.hash='/project/proj_zs_01/members?recovery=0';true`);await until(()=>c.eval(`document.querySelector('.page-filters')!=null`),Boolean,'prototype member list');await shot(`members-${v.name}`);
       await c.eval(`location.hash='/member/member_codex?recovery=0';true`);await until(()=>c.eval(`document.querySelector('.page-title')?.textContent.includes('Codex')`),Boolean,'prototype member detail');await shot(`detail-${v.name}`);
       await c.eval(`location.hash='/project/proj_zs_01/members?recovery=0';true`);await until(()=>c.eval(`document.querySelector('.page-filters')!=null`),Boolean,'prototype create entry');await c.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('添加成员'))?.click();true`);await until(()=>c.eval(`document.querySelector('.modal')!=null`),Boolean,'prototype create');await shot(`create-${v.name}`);await c.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.textContent.trim()==='取消')?.click();true`);
+      if(process.argv.includes('--r83')) {
+        await c.eval(`location.hash='/project/proj_zs_01/room/room_dev_hall?recovery=0';true`);
+        await until(()=>c.eval(`document.querySelector('textarea.composer-input')!=null`),Boolean,'prototype room');
+        await shot(`room-${v.name}`);
+        await c.eval(`[...document.querySelectorAll('button')].find(b=>b.title==='房间菜单')?.click();true`);
+        await shot(`room-menu-${v.name}`);
+        await c.eval(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));true`);
+      }
       facts.viewports.push(v);
     }
     facts.count=await c.eval(`window.r81PrototypeDensity()`);facts.errors=c.errors;facts.pass=facts.count===6&&facts.errors.length===0;

@@ -6,6 +6,23 @@ import { join, resolve } from 'node:path';
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const routingKey = /^(ANTHROPIC_|CLAUDE_CODE_(?:USE_|HOST_|PROVIDER_|PROCESS_WRAPPER)|HTTP_PROXY$|HTTPS_PROXY$|ALL_PROXY$)/i;
+// The CLI rewrites these local UI/usage facts during an ordinary turn. They are
+// not launch configuration. Keep all other (including unknown) fields guarded.
+const legacyStateKeys = new Set(['numStartups','tipsHistory','promptQueueUseCount','firstStartTime','seenNotifications','changelogLastFetched','hasCompletedOnboarding','lastOnboardingVersion','lastReleaseNotesSeen','tipLifetimeShownCounts','closedIssuesLastChecked','pluginUsage','officialMarketplaceAutoInstallAttempted','officialMarketplaceAutoInstalled','hasSeenAutoModeEntryWarning','hasSeenAutoDefaultNotice','hasResetAutoModeOptInForDefaultOffer','unpinOpus47LaunchEffort','unpinOpus48LaunchEffort','unpinFable5LaunchEffort','opusProMigrationComplete','sonnet1m45MigrationComplete','migrationVersion']);
+function stableConfiguration(value:unknown):unknown {
+  if(Array.isArray(value))return value.map(stableConfiguration);
+  if(value!=null&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stableConfiguration(v)]));
+  return value;
+}
+function legacyConfiguration(settings:Record<string,unknown>,cwd:string) {
+  const result=Object.fromEntries(Object.entries(settings).filter(([k])=>!legacyStateKeys.has(k)&&k!=='projects'));
+  const projects=settings.projects;
+  if(projects!=null&&typeof projects==='object'&&!Array.isArray(projects)) {
+    const entry=Object.entries(projects).find(([path])=>resolve(path).toLowerCase()===resolve(cwd).toLowerCase());
+    if(entry)result.projects={[entry[0]]:entry[1]};
+  }else if(projects!=null)result.projects=projects;
+  return stableConfiguration(result);
+}
 /** Read-only launch context. Never exports credentials or changes the CLI's settings sources.
  * Project env can be filtered by CLI trust/provider rules: don't certify a guessed merge.
  * This resolver is consumed both by capability checks and the formal adapter immediately before spawn.
@@ -21,9 +38,9 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   const read = (file: string, label: string, uncertain = false) => {
     try {
       const raw = readFileSync(file, 'utf8');
-      stamps.push(`${file}:${digest(raw)}`); sources.push(label);
       const settings = JSON.parse(raw) as { env?: Record<string, unknown>; apiKeyHelper?: unknown; processWrapper?: unknown };
       if (settings == null || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('object required');
+      stamps.push(`${file}:${digest(label.includes('旧配置')?JSON.stringify(legacyConfiguration(settings,cwd)):raw)}`); sources.push(label);
       if (settings.env != null && (typeof settings.env !== 'object' || Array.isArray(settings.env))) throw new Error('env object required');
       if (settings.apiKeyHelper != null || settings.processWrapper != null) reasons.push(`${label}含动态凭据或进程包装，无法核实有效渠道`);
       const entries = Object.entries(settings.env ?? {});
@@ -37,7 +54,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
         if (key === 'ANTHROPIC_BASE_URL') { endpoint = String(value); endpointSource = label; }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { stamps.push(`${file}:absent`); return; }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { stamps.push(`${file}:${label.includes('旧配置')?digest('{}'):'absent'}`); return; }
       reasons.push(`${label}读取或解析失败`); stamps.push(`${file}:unreadable`);
     }
   };
