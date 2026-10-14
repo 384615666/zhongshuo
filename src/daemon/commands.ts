@@ -66,6 +66,8 @@ const deliberationBudgetFns = { refundReservedTurn: _refundReservedTurn, settleT
 import { z } from 'zod';
 
 export interface DaemonCommandDeps {
+  /** No-inference configuration preparation before a new send is frozen. */
+  prepareRuntimeConfiguration?:(memberId:string,projectId:string)=>Promise<void>;
   db: ZhongshuoDatabase;
   localUserId: string;
   interruptTurn: (turnId: string) => Promise<void>;
@@ -1387,6 +1389,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if(t.kind==='thread'){const th=deps.db.prepare('SELECT th.status,r.archived_at,p.status projectStatus FROM conversation_threads th JOIN rooms r ON r.id=th.room_id JOIN projects p ON p.id=th.project_id WHERE th.id=?').get(t.threadId) as {status:string;archived_at:number|null;projectStatus:string}|undefined;if(!th||th.status!=='open'||th.archived_at!=null||th.projectStatus!=='active')throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目、房间或回复串已归档；不能追加消息');}
           if (t.kind === 'dm' && conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑（重放拒绝）');
         };
+        if(params.intent==='default'&&deps.prepareRuntimeConfiguration&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
+          submitReplayGuard();
+          let memberId:string|null=null;
+          if(params.target.kind==='dm'){
+            const audience=deps.db.prepare("SELECT principal_id FROM dm_participants WHERE conversation_id=? AND principal_type='agent'").get(params.target.conversationId) as {principal_id:string}|undefined;
+            memberId=audience?.principal_id??null;
+          }else if(params.target.kind==='thread'){const f=conversationFacts(deps.db,params.target.threadId);if(f){const blocked=conversationBlock(deps.db,f,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);}memberId=f?.memberId??null;}
+          else if(params.mentions.length===1&&params.mentions[0]?.kind==='member')memberId=params.mentions[0].memberId;
+          if(memberId&&resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null).kind==='codex'){
+            try{await deps.prepareRuntimeConfiguration(memberId,params.target.projectId);}catch(e){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`执行配置尚未就绪：${(e as Error).message}；没有提交模型输入，草稿保留`);}
+          }
+        }
         const result = run(() => {
           submitReplayGuard();
           if (params.target.kind === 'thread') {

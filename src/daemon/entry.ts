@@ -19,6 +19,7 @@ import { acquireSingletonLock } from './singletonLock.ts';
 import { applyRecovery } from './stopFlow.ts';
 import { startNamedPipeIpc } from './namedPipeIpc.ts';
 import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
+import { createCodexConfigurationPreparation } from './prepareCodexConfiguration.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
 import { MemberRuntimeRegistry, defaultModelOf, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
@@ -344,8 +345,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       verifyLanBinding: () => remoteServer.verifyLanBinding(),
       selfcheck: () => remoteServer.runSelfcheck(),
     };
+    const prepareRuntimeConfiguration=createCodexConfigurationPreparation(db!);
     const makeCommandDeps = (): Parameters<typeof dispatchDaemonCommand>[0] => ({
       db: db!,
+      prepareRuntimeConfiguration,
       localUserId,
       interruptTurn: (turnId: string) => worker.interruptTurn(turnId),
       appDataDir: options.appDataDir,

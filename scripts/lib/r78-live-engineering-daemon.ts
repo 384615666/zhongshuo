@@ -51,8 +51,10 @@ process.env.ZS_APP_MODE = 'fake-sim';
 
 const revisions = { room: 0, dm: 0 };
 let r79Failures = 0;
+let r84ChatReplies=0;
 const adapter = new FakeRuntimeAdapter({
   turnScriptSequencer: ({ text }): FakeTurnScript => {
+    if(text.includes('R84 UI CHAT'))return[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',responseKind:'conversation',answer:`R84 工程普通对话第${++r84ChatReplies}轮；这是独立Fake，非真实模型认证`,changeSummary:'工程普通回复',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}];
     if (text.includes('R79 UI LIVE') || text.includes('R79 UI FAIL') || text.includes('R79 UI SCALE')) {
       if (text.includes('R79 UI FAIL') && r79Failures++ === 0) return [
         { kind: 'event', event: { kind: 'tool.started', toolCallId: 'r79-fail-tool', toolName: 'R79_ENGINEERING_FAILURE', argumentsSummary: '' } },

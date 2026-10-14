@@ -1,9 +1,28 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 /* global require, module, console */
 const fs=require('node:fs');const path=require('node:path');
-module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,queryOne,must,sleep,button,facts,durationMs=30*60_000}){
+module.exports=async function({cdp,projectId,room,dm,memberId,data,out,command,navigate,uiSend,until,queryOne,must,sleep,button,facts,durationMs=30*60_000}){
   const start=Date.now(),duration=Math.min(3*60*60_000,Math.max(30*60_000,durationMs));const samples=[];
   const target=facts.r79.scale;
+  let ordinary=null;
+  if(duration>=2*60*60_000){
+    await navigate(cdp,`/project/${projectId}/room/${room.id}`,room.id);
+    await uiSend(cdp,'R84 UI CHAT：工程普通问候',memberId);
+    ordinary=await until(()=>queryOne("SELECT id,conversation_thread_id FROM tasks WHERE title LIKE '%R84 UI CHAT%' ORDER BY rowid DESC LIMIT 1"),Boolean,'R84 ordinary root');
+    await until(()=>queryOne('SELECT status FROM tasks WHERE id=?',ordinary.id)?.status,v=>v==='DONE','R84 ordinary first reply');
+    await navigate(cdp,`/thread/${ordinary.conversation_thread_id}`,ordinary.conversation_thread_id);
+    for(const text of ['你刚才怎么回答我的问候的？','结合前面两次，这是第几轮？']){
+      const before=queryOne('SELECT count(*) n FROM workflow_runs WHERE task_id=?',ordinary.id).n;
+      await cdp.eval(`(()=>{const e=document.querySelector('textarea.composer-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(text)});e.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+      await until(()=>cdp.eval("document.querySelector('button.composer-send:not([disabled])')!=null"),Boolean,'R84 ordinary send');await cdp.eval("document.querySelector('button.composer-send').click();true");
+      await until(()=>queryOne('SELECT count(*) n FROM workflow_runs WHERE task_id=?',ordinary.id).n,v=>v===before+1,'R84 ordinary formal followup');
+      await until(()=>queryOne('SELECT status FROM tasks WHERE id=?',ordinary.id)?.status,v=>v==='DONE','R84 ordinary completed reply');
+    }
+    must(queryOne('SELECT count(*) n FROM task_deliveries WHERE task_id=?',ordinary.id).n===0,'ordinary invented a delivery');
+    facts.r84Ordinary={taskId:ordinary.id,threadId:ordinary.conversation_thread_id,rounds:3,realCalls:0,scope:'external Fake formal worker; not real model certification'};
+    await cdp.shot('r84-ordinary-fixture.png');
+  }
+
   await navigate(cdp,`/thread/${target.threadId}?tab=run`,target.threadId);
   await until(()=>cdp.eval("document.querySelector('.details-body')?.textContent.includes('R79_SYNTHETIC_HISTORY_ONLY')"),Boolean,'R80 historical details ready');
   const draft='R80 durable unsent draft — no automatic submit';
@@ -36,11 +55,12 @@ module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,
   await cdp.eval(`(()=>{const intervals=new Set();const si=window.setInterval.bind(window),ci=window.clearInterval.bind(window);window.setInterval=(fn,ms,...a)=>{const id=si(fn,ms,...a);intervals.add(id);return id;};window.clearInterval=id=>{intervals.delete(id);return ci(id);};let listeners=0;const originalAdd=document.addEventListener.bind(document),originalRemove=document.removeEventListener.bind(document);const tracked=new Map();document.addEventListener=(type,fn,...a)=>{let set=tracked.get(type);if(!set)tracked.set(type,set=new Set());if(!set.has(fn)){set.add(fn);listeners++;}return originalAdd(type,fn,...a);};document.removeEventListener=(type,fn,...a)=>{if(tracked.get(type)?.delete(fn))listeners--;return originalRemove(type,fn,...a);};window.__r80Metrics=()=>({intervals:intervals.size,documentListeners:listeners});return true;})()`);
   let cycle=0;
   while(Date.now()-start<duration){
-    const phase=cycle%5;
+    const phase=cycle%(ordinary?6:5);
     if(phase===0){await navigate(cdp,`/thread/${target.threadId}?tab=run`,target.threadId);await until(()=>cdp.eval("document.querySelector('.details-body')?.textContent.includes('R79_SYNTHETIC_HISTORY_ONLY')"),Boolean,'soak details');}
     else if(phase===1){await navigate(cdp,`/project/${projectId}/members`,projectId);await command(cdp,'project.memberWorkload',{projectId});}
     else if(phase===2){await navigate(cdp,`/dm/${dm.conversationId}`,dm.conversationId);await until(()=>cdp.eval("document.querySelector('[data-zs-dm-ops=hifi]')!=null"),Boolean,'soak DM');await cdp.eval("document.querySelector('[data-zs-dm-ops=hifi]').click();true");must(await cdp.eval(button('body','任务记录…')),'soak DM records');await sleep(500);await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});}
     else if(phase===3){await navigate(cdp,`/project/${projectId}/files`,projectId);await cdp.eval("window.zsWindow.minimize();true");await sleep(2500);await cdp.eval('window.zsWindow.toggleMaximize()');await cdp.send('Page.bringToFront');}
+    else if(phase===5){await navigate(cdp,`/thread/${ordinary.conversation_thread_id}`,ordinary.conversation_thread_id);await until(()=>cdp.eval("document.querySelector('textarea.composer-input')!=null"),Boolean,'ordinary return');const text='R84 未发送草稿 '+cycle;await cdp.eval(`(()=>{const e=document.querySelector('textarea.composer-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(text)});e.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);must(queryOne('SELECT count(*) n FROM workflow_runs WHERE task_id=?',ordinary.id).n===3,'reading/draft auto-dispatched ordinary reply');}
     else{await navigate(cdp,'/settings?section=help','settings');await cdp.eval(button('[data-zs-local-diagnostics]','查看诊断 / 刷新'));}
     const local=await cdp.eval('window.zs.diagnostics()');const metrics=await cdp.eval('window.__r80Metrics()');const heap=await cdp.send('Runtime.getHeapUsage');const host=JSON.parse(fs.readFileSync(path.join(data,'engineering','r80-host-metrics.json')));
     const sample={at:Date.now(),elapsedMs:Date.now()-start,cycle,phase,requests:host.requests,inFlight:host.inFlight,...metrics,connection:local.connection,hostProcesses:local.host,daemonPid:host.pid,daemonParentPid:host.parentPid,daemonMemory:host.memory,heap,messages:queryOne('SELECT count(*) n FROM messages').n,realCalls:queryOne('SELECT count(*) n FROM real_calls').n};samples.push(sample);
@@ -49,7 +69,7 @@ module.exports=async function({cdp,projectId,dm,data,out,command,navigate,until,
     if(cycle%2===0)console.log(JSON.stringify({r80SoakMinutes:((Date.now()-start)/60000).toFixed(1),cycle,requests:host.requests,intervals:metrics.intervals,listeners:metrics.documentListeners}));cycle++;
     await sleep(Math.min(20_000,Math.max(1,duration-(Date.now()-start))));
   }
-  const byPhase=[0,1,2,3,4].map(p=>samples.filter(s=>s.phase===p));
+  const byPhase=(ordinary?[0,1,2,3,4,5]:[0,1,2,3,4]).map(p=>samples.filter(s=>s.phase===p));
   must(byPhase.every(v=>v.length>=2&&v.at(-1).intervals<=v[1].intervals+1&&v.at(-1).documentListeners<=v[1].documentListeners+2),'polling/listener count grows across identical routes');
   const result={pass:true,buildId:facts.buildId,start,endedAt:Date.now(),elapsedMs:Date.now()-start,cycles:cycle,transportDisconnect:true,confirmedFactsRetained:true,draftRetained:true,historyRestored,diagnosticRedacted:true,reloaded:true,modelCalls:0,scope:`${duration/60000}-minute route/visibility/transport/reload observation; no real OS sleep, no multi-day certification`};
   fs.writeFileSync(path.join(out,'r80-soak-result.json'),JSON.stringify(result,null,2));facts.steps.push(`R80 real pipe failure/recovery retains facts and draft; reload restores historical reading; local redacted diagnostics; ${duration/60000}-minute bounded route observation`);return result;
