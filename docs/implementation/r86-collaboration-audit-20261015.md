@@ -138,3 +138,13 @@ code v2六次新调用自然交付，精确native-proof-code-v2-completed通过�
 DELIB Codex INDEPENDENT请求被明确CODEX_ERROR/invalid_json_schema拒绝：claims.items的properties包含uncertainty但required缺该字段。DeepSeek首稿成功，程序按1/2失败席位推进互评是现有缺席规则，不能计双模型有效首稿/互评。原生精确停止该研讨，CANCELLED；保留一条failed和正在进行互评的interrupted，无UNKNOWN自动重放。code两版12成功，DELIB首稿1成功+1失败+1中断，共15原始账本行。
 
 新增零模型递归strict-dialect反例before1失败/6通过。最小修复仅生成新transport schema时要求所有已声明属性（包含嵌套）；可选说明缺内容用空串或空数组，保留原类型/约束、业务版本/身份/引用校验和历史可省略字段。不加null，不改库或伪造证据。六阶段合法值同时通过原Zod和本地Ajv，错schemaVersion拒绝；历史省略uncertainty仍可读，新transport确实拒绝省略；八种正式schema递归遍历含普通/规划AUTO，34定向及双types/lint通过。新冻结先验此前未认证的完整真实DELIB，再补同最终BUILD其他流程，不以rc8成功票拼新包通过。
+
+## rc9正式研讨完整通过，其他同包路线继续
+
+运行冻结05b1331 / bld_19cfe41229996380，源候选593 hash/size及无data/profile独立复核过。源码首次163文件1157例全部通过；双types与51改动文件相对R85增量lint无新增（33条既有错误匹配，不宣称全仓零lint）。同BUILD final-rc9-full完整Fake/重开及final-rc9-upgrade整根保全/拒52/匹配回退通过，实际模型调用均0。
+
+用户原生手选Codex与DeepSeek各自席位，DELIB task_fdbb8db3-808b-475d-a091-0fadacf44a5d完成14次正式真实turn：Codex8/DeepSeek6，全部succeeded。双方有效IND/CR、三轮ISS、CHK/SYN/RAT及PUBLISH全链；当前首选Codex为主持，房间AUTO协调者仍DeepSeek，不按显示名猜角色。15份不可变成果、精确双方交叉引用、14个输入hash/原生session、实际policy-analyze/fullAccess=false通过。原生报告自然正文保留共识和未解决分歧，明确只讨论、未测试未改文件。独立audit-v2也通过；原literal比较JSON转义导致的独立harness false另票保留，正式QA在取票前改为解析真实listing并核精确artifact/revision/author/summary，不重跑模型。
+
+报告两处synthesis模型文本使用完整成员UUID，经独立评估非本轮阻断可读性边界，原文与hash不改写，不据此换BUILD。外置README补真实项目设置人工验收开关与仅影响新任务规则，guide hash重算且与最终own副本同步，593程序及BUILD不动。所有后续QA/说明HEAD与运行冻结分列。
+
+AUTO最终真实任务已原生发起，实施/Codex独立读取复跑已成功，后续修正/整合在途；v2验收重开、文档预览、原生导航与原型配对未完成，最终总门尚未放行。
