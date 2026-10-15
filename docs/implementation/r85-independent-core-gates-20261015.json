@@ -1,0 +1,46 @@
+{
+  "pass": true,
+  "checks": {
+    "clean source and pristine verified distribution": true,
+    "deterministic source, both type projects and incremental lint": true,
+    "same BUILD full launcher workflows and reopen": true,
+    "complete daily scope, every required outcome and real Git identities": true,
+    "same final BUILD real v1, explicit rework v2, accept and reopen": true,
+    "old whole-root backup, original envelope and matching full rollback": true,
+    "native mouse and keyboard, correct project and durable normal close": true,
+    "six paired visible layouts and inspected original screenshots": true,
+    "all four actual calls counted once, including earlier candidate": true
+  },
+  "failed": [],
+  "userAcceptance": "pending",
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "distribution": {
+    "pass": true,
+    "verifiedCopies": 4,
+    "files": 593,
+    "pristine": true,
+    "runtimeUnchanged": true,
+    "migrationsUnchanged": true,
+    "manifestSha256": "caf78d07b2c759702091d850bd80418e3144b7ad4cbc1e131ce6471045ff0094",
+    "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da"
+  },
+  "source": {
+    "pass": true,
+    "files": 156,
+    "tests": 1088,
+    "mainTypes": true,
+    "hifiTypes": true,
+    "lint": true,
+    "testedRuntimeCommit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19"
+  },
+  "at": "2026-10-15T07:21:38.575Z",
+  "callTotal": 4
+}

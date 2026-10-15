@@ -1,2 +1,3 @@
 # Release evidence is byte-addressed; preserve its recorded newline bytes.
 docs/implementation/evidence-r85-v24-20261015/** -text
+docs/implementation/r85-independent-*-20261015.json -text

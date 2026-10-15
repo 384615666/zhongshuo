@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "reviewerThread": "01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79",
+  "scope": "R85 mandatory desktop release scope, independent source/byte/receipt/visual review; not whole-product user acceptance",
+  "pass": true,
+  "auditedHead": "c4b9fb9a453ecd9fe4b726d9e5c7953d2d612026",
+  "runtime": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "core": {
+    "path": "dist/review-r85-independent-probes/final-core-20261015/final-gates.json",
+    "sha256": "02b7093b60f4a9eccca1ca66ceb87d3ec828f04c536032a36e6bc19f27a09691",
+    "exitCode": 0,
+    "failed": []
+  },
+  "release": {
+    "path": "docs/implementation/evidence-r85-v24-20261015/release-gates.json",
+    "sha256": "a748990f14bc52b38577610cb291fbf581532d5ec385382c163836bea74ee2c3",
+    "originalCoreHashMatches": true,
+    "currentGuideHashesMatch": true,
+    "pristineCandidate": true,
+    "evidenceFilesVerifiedWorkingTreeAndGit": 65,
+    "releaseManifestGitBytesMatch": true
+  },
+  "source": {
+    "independentTargeted": {
+      "files": 9,
+      "tests": 56,
+      "failed": 0,
+      "exitCode": 0,
+      "log": "dist/review-r85-independent-probes/final-regression-source.log"
+    },
+    "independentMainTypes": {
+      "exitCode": 0,
+      "log": "dist/review-r85-independent-probes/final-main-types.log"
+    },
+    "independentHifiTypes": {
+      "exitCode": 0,
+      "log": "dist/review-r85-independent-probes/final-hifi-types.log"
+    },
+    "developerFrozenFullSuite": {
+      "files": 156,
+      "tests": 1088,
+      "receipt": "docs/implementation/evidence-r85-v24-20261015/source-tests.log"
+    },
+    "runtimeSourceDiffEmpty": true,
+    "migrationsUnchanged": true
+  },
+  "visual": {
+    "independentlyViewedPairs": 6,
+    "images": 12,
+    "review": "Wide and narrow Git/archive and emulated DPR1.5 reference pairs all actually viewed. No blocking modal/loading frame accepted, archive selector bounded; matched Git source bytes visible. Declared grouping/order, actual-vs-prototype state and read-feedback differences retained; not exact-pixel equivalence or physical DPI certification."
+  },
+  "business": {
+    "realModelCalls": 4,
+    "finalBuildCalls": 2,
+    "allSucceeded": true,
+    "finalRealTaskAcceptedV2": true,
+    "actualNativeNodeProofs": 2,
+    "modelFilesHashMatch": true,
+    "upgradeOriginalEnvelopeAndWholeRootRollback": true,
+    "draftUploadRootMemberProfileTokenHashesCompared": true,
+    "finalFullScope": "complete",
+    "dailyRequiredSteps": 20,
+    "fakeFinalRealCalls": 0,
+    "nativeMenuAndDurableCloseReceiptReviewed": true
+  },
+  "limitations": [
+    "New native input or new model calls were not performed by this independent audit; native producer evidence and selected native screenshots were inspected",
+    "Original first reviewer commit fault JSON was overwritten by a re-run; the separately labeled old tool/repository summary is reconstructed, not an original preserved JSON",
+    "Known brief project-home roster loading zero/empty frame remains explicitly listed; it is outside the completed archive/board authoritative index fixes",
+    "No OS sleep/power loss/multiple-day or physical high-DPI/all-channel certification; userAcceptance remains pending"
+  ],
+  "newRequiredBlockers": []
+}
