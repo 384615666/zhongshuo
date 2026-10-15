@@ -9,7 +9,7 @@ function nodeTestCommand(command,files){
  const c=String(command??''),segments=[];let start=0,quote=null;
  for(let i=0;i<c.length;i++){const ch=c[i];if(quote){if(ch===quote&&c[i-1]!=='\\')quote=null;continue;}if(ch==='"'||ch==="'"){quote=ch;continue;}if(ch===';'||ch==='\n'||ch==='&'&&c[i+1]==='&'){segments.push(c.slice(start,i));if(ch==='&')i++;start=i+1;}}
  segments.push(c.slice(start));
- return files.length>0&&segments.some(segment=>{const match=/^\s*node(?:\.exe)?\s+(?:--[\w=-]+\s+)*--test(?:\s+(.*?))?\s*$/i.exec(segment);if(!match)return false;const args=match[1]?.trim()??'';if(!args||args.split(/\s+/).every(a=>/^--[\w=-]+$/.test(a)))return true;return files.some(file=>args.split(/\s+/).some(arg=>arg.replace(/^['"]|['"]$/g,'').toLowerCase()===path.basename(file).toLowerCase()));});
+ return files.length>0&&segments.some(segment=>{const match=/^\s*node(?:\.exe)?\s+(?:--[\w=-]+\s+)*--test(?:\s+(.*?))?\s*$/i.exec(segment);if(!match)return false;const args=(match[1]??'').replace(/\s*(?:[12]?>&[12])(?=\s|$)/g,'').trim();if(!args||args.split(/\s+/).every(a=>/^--[\w=-]+$/.test(a)))return true;return files.some(file=>args.split(/\s+/).some(arg=>arg.replace(/^['"]|['"]$/g,'').toLowerCase()===path.basename(file).toLowerCase()));});
 }
 // eslint-disable-next-line no-control-regex -- Strip native CLI ANSI colors before validating test summaries.
 function tapPassed(output){const normalized=String(output).replace(/\u001b\[[0-9;]*m/g,'').replace(/(?:^|\n)\s*ℹ\s*/g,'\n# ');return /(?:^|\n)\s*#\s*tests\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*pass\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*fail\s+0\b/.test(normalized);}

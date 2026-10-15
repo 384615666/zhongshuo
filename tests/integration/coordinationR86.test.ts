@@ -172,6 +172,17 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
     }finally{f.db.close();}
   });
+  it('publishes a readable planning message before any child finishes, retaining the original protocol in formal history',async()=>{
+    const f=await fixture();try{
+      const root=await f.send(),answer='已排好分工，正在逐步执行。';await f.run(output(answer,f.plan));
+      expect(f.adapter.startTurnLog).toHaveLength(1);expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
+      const row=f.db.prepare("SELECT id,body_json FROM messages WHERE thread_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(root.threadId) as {id:string;body_json:string},saved=JSON.parse(row.body_json) as {text:string;runtimeControlResult:string};
+      expect(saved.text).toBe(answer);expect(JSON.parse(saved.runtimeControlResult).coordinationPlan).toEqual(f.plan);
+      const history=await f.cmd<{items:Array<{id:string;body:{text:string;runtimeControlResult:string}}>}>('thread.history',{threadId:root.threadId});expect(history.items.find(m=>m.id===row.id)?.body).toEqual(saved);
+      const pool=await f.cmd<{items:Array<{threadId:string;taskId:string;replyCount:number}>}>('room.pool',{roomId:f.room.id});expect(pool.items.find(m=>m.threadId===root.threadId)).toMatchObject({taskId:root.taskId,replyCount:1});
+      expect(f.db.prepare('SELECT body_json FROM messages WHERE id=?').get(row.id)).toEqual({body_json:row.body_json});
+    }finally{f.db.close();}
+  });
   it('creates genuine independent children, freezes upstream versions, integrates and reopens',async()=>{
     const f=await fixture();
     try{
@@ -209,9 +220,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
   });
   it('keeps ordinary no-mention questions as one natural coordinator response',async()=>{
     const f=await fixture();try{
-      const root=await f.send();await f.run(output('你好！'));
+      const root=await f.send();await f.run(output('你好！',undefined,{coordinationPlan:null}));
       expect((f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId) as {status:string}).status).toBe('DONE');
       expect((f.db.prepare('SELECT count(*) n FROM coordination_steps').get() as {n:number}).n).toBe(0);
+      const first=f.db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(root.taskId) as {body_json:string};expect(JSON.parse(first.body_json).text).toBe('你好！');expect(JSON.parse(JSON.parse(first.body_json).runtimeControlResult).coordinationPlan).toBeNull();expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
       expect(f.adapter.startTurnLog).toHaveLength(1);
       await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:root.threadId},body:'刚才说了什么？',intent:'default',mentions:[]});
       await f.run(output('刚才向你问好了。'));expect(f.adapter.startTurnLog).toHaveLength(2);

@@ -8,14 +8,15 @@
 const ATT_EXCERPT_BYTES = 64 * 1024; // 与 turnInput 一致
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { coordinationPlanSchema } from './coordination.ts';
+import {TASK_COMPLETE_SCHEMA_VERSION} from './taskComplete.ts';
+export {TASK_COMPLETE_SCHEMA_VERSION,taskCompleteSchema,taskCompleteOutputSchema} from './taskComplete.ts';
+export type {TaskComplete} from './taskComplete.ts';
 import { canonicalJson } from './common.ts';
 import { domainErr, domainOk } from './errors.ts';
 import type { DomainResult } from './errors.ts';
 
 export const STANDING_PROMPT_VERSION = 'zs-standing-v0.1.1';
 export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.3';
-export const TASK_COMPLETE_SCHEMA_VERSION = 'task-complete-v1';
 
 // ---------- 层 A：常驻提示词模板（规格 §3 全文照录） ----------
 
@@ -480,29 +481,6 @@ export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
 };
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------
-
-export const taskCompleteSchema = z.strictObject({
-  schemaVersion: z.literal(TASK_COMPLETE_SCHEMA_VERSION),
-  resultKey: z.string().min(1),
-  changeSummary: z.string(),
-  answer:z.string().optional(),
-  responseKind:z.enum(['conversation','work']).optional(),
-  files: z.array(z.string()),
-  executedVerifications: z.array(z.string()),
-  unexecutedVerifications: z.array(z.strictObject({ item: z.string(), reason: z.string() })),
-  remainingIssues: z.array(z.string()),
-  coordinationPlan: coordinationPlanSchema.nullable().optional(),
-});
-
-export function taskCompleteOutputSchema(resultKey: string, planning = false) {
-  const common = taskCompleteSchema.omit({coordinationPlan:true}).extend({
-    resultKey:z.literal(resultKey), answer:z.string(), responseKind:z.enum(['conversation','work']),
-  });
-  // Claude CLI validates with draft-07; keep one compatible schema for both adapters.
-  return z.toJSONSchema(planning ? common.extend({coordinationPlan:coordinationPlanSchema.nullable()}) : common,{target:'draft-7'});
-}
-
-export type TaskComplete = z.infer<typeof taskCompleteSchema>;
 
 // ---------- 敏感模式扫描（PP-03：层 A+B+C 渲染全文零命中，命中即失败） ----------
 

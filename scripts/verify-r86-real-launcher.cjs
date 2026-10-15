@@ -7,6 +7,8 @@
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net');
 const {spawn,spawnSync}=require('node:child_process'),{randomUUID,createHash}=require('node:crypto');
 const Database=require('better-sqlite3'),{Cdp,until}=require('./verify-r81-members-launcher.cjs');
+const markdown=new (require('markdown-it'))({html:false});
+function markdownPlain(text){const parts=[];const visit=tokens=>{for(const token of tokens){if(token.children)visit(token.children);else if(['text','code_inline','code_block','fence'].includes(token.type))parts.push(token.content);}};visit(markdown.parse(text,{}));return parts.join('\n');}
 const candidate=path.resolve(process.argv[2]??''),out=path.resolve(process.argv[3]??'');
 const mode=process.argv.includes('--prepare')?'prepare':process.argv.includes('--observe')?'observe':'inspect';
 const port=Number(process.argv.find(x=>x.startsWith('--port='))?.split('=')[1]??52786),q=JSON.stringify;
@@ -79,13 +81,21 @@ async function observe(){
   result={pass:false,scope:'one original native UI real AUTO send, v1 only; no automatic rework/retry',build:progress.build,startedAt:Date.now(),calls:[]};save();
   const root=await until(()=>db.prepare("SELECT id,conversation_thread_id,title,root_message_id,route_json FROM tasks WHERE project_id=? AND parent_task_id IS NULL AND json_extract(route_json,'$.mode')='AUTO' ORDER BY rowid LIMIT 1").get(progress.ids.projectId),Boolean,'native original AUTO send',900000);result.root=root;must(JSON.parse(root.route_json).mode==='AUTO','original UI intent must be actual AUTO');
   const original=db.prepare('SELECT body_json FROM messages WHERE id=?').get(root.root_message_id);must(JSON.parse(original.body_json).text===progress.prompt,'exact original natural UI intent');save();let last=0;
-  const delivery=await until(()=>{const current=facts(root.id);if(Date.now()-last>5000){result.live=current;result.calls=calls(root.id);save();last=Date.now();}
+  const delivery=await until(async()=>{const current=facts(root.id);if(Date.now()-last>5000){result.live=current;result.calls=calls(root.id);save();last=Date.now();}
+    if(!result.planningWindow&&current.steps?.some(s=>s.status!=='DONE')&&!current.deliveries.some(d=>d.task_id===root.id)){
+      const planning=db.prepare("SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq").all(root.id).map(row=>({row,body:JSON.parse(row.body_json)})).find(({body})=>{try{return JSON.parse(body.runtimeControlResult??'null')?.coordinationPlan?.steps?.length>0;}catch{return false;}});
+      if(planning){const raw=planning.body.runtimeControlResult,control=JSON.parse(raw),answer=control.answer?.trim()?control.answer:control.changeSummary;
+        const view=await c.eval(`(()=>{const card=[...document.querySelectorAll('.root-card')].find(e=>e.querySelector('.root-title')?.textContent===${q(root.title)});const thread=document.getElementById(${q('thread-msg-'+planning.row.id)})?.querySelector('.msg-body');return{main:card?.querySelector('.root-preview')?.textContent??null,thread:thread?.innerText??null,hash:location.hash}})()`);
+        if(view.main!=null&&view.thread!=null){const normalize=s=>String(s).replace(/\s/g,'');const mainPool=normalize(view.main).includes(normalize(answer)),thread=normalize(view.thread).includes(normalize(markdownPlain(answer)));const noControl=!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.main)&&!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.thread);result.planningWindow={pass:mainPool&&thread&&noControl,mainPool,thread,noControl,whileChildrenUnfinished:true,originalProtocolPreserved:db.prepare('SELECT body_json FROM messages WHERE id=?').get(planning.row.id).body_json===planning.row.body_json,rawProtocolHash:hash(raw),messageId:planning.row.id,at:Date.now(),view};save();await screenshot('planning-visible-before-children-finish');must(result.planningWindow.pass&&result.planningWindow.originalProtocolPreserved,'planning chat leaked control JSON before child completion');}
+      }
+    }
     if(current.turns.some(t=>['UNKNOWN','FAILED','CANCELLED'].includes(t.status))||current.task.status==='BLOCKED'){result.failure=current;save();throw Error('original collaboration failed/unknown; not automatically repeated');}
     return current.deliveries.find(d=>d.task_id===root.id&&d.revision===1);},Boolean,'real multi-model parent v1',2700000);
   result.final=facts(root.id);result.calls=calls(root.id);result.delivery=delivery;result.otherTaskCalls=calls().filter(call=>!result.calls.some(own=>own.id===call.id)).length;
   const models=new Set(result.calls.filter(x=>x.status==='succeeded').map(x=>`${x.runtime_kind}/${x.model}`));
   must(new Set(progress.expectedModels).size===2&&progress.expectedModels.every(model=>models.has(model)),'two distinct configured actual model calls in one task family');
   must(result.calls.every(call=>call.status==='succeeded'),'all actual calls must succeed');must(result.final.steps.length>=2&&result.final.steps.every(step=>step.status==='DONE'),'all genuine child steps done');
+  must(result.planningWindow?.pass===true&&result.planningWindow.originalProtocolPreserved===true,'planning visible window was not validated; final reply cannot replace it');
   must(fs.existsSync(path.join(progress.project,'greeting.mjs')),'model output source file missing');
   result.files=fs.readdirSync(progress.project).filter(name=>fs.statSync(path.join(progress.project,name)).isFile()).map(name=>({name,sha256:hash(fs.readFileSync(path.join(progress.project,name)))}));
   const testFiles=result.files.filter(file=>/test/i.test(file.name));must(testFiles.length>0,'model test file missing');

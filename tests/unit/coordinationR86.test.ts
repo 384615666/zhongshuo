@@ -4,6 +4,7 @@ import {deliberationOutputSchema} from '../../src/daemon/deliberationRunner.ts';
 import {analysisDraftPayloadSchema,reviewPayloadSchema,issuePositionPayloadSchema,checkpointVerdictPayloadSchema,synthesisPayloadSchema,ratifyPayloadSchema} from '../../src/contracts/deliberation.ts';
 import { describe, expect, it } from 'vitest';
 import { coordinationCallAvailable, validateCoordinationPlan } from '../../src/contracts/coordination.ts';
+import {chatAnswer} from '../../src/contracts/chatAnswer.ts';
 
 const step = (key: string, memberId = 'a', dependsOn: string[] = []) => ({ key, memberId, dependsOn, title: key, objective: '真实工作', role: 'analysis' });
 describe('R86 authoritative collaboration plan', () => {
@@ -59,4 +60,13 @@ it('strict transport accepts actual six-stage values without relaxing historical
  ] as const;
  for(const [stage,business,value] of cases){const validate=new Ajv({strict:false}).compile(deliberationOutputSchema(stage));expect(validate(value),stage).toBe(true);expect(business.safeParse(value).success,stage).toBe(true);expect(validate({...value,schemaVersion:'wrong'})).toBe(false);}
  const historical={schemaVersion:'analysis-draft-v1',summary:'原件',claims:[{claimId:'c1',statement:'原结论',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]};expect(analysisDraftPayloadSchema.safeParse(historical).success).toBe(true);expect(new Ajv({strict:false}).compile(deliberationOutputSchema('IND'))(historical)).toBe(false);
+});
+
+const planningChat={schemaVersion:'task-complete-v1',resultKey:'original-result',answer:'已排好分工，开始执行。',responseKind:'work',changeSummary:'只读规划完成',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],coordinationPlan:{summary:'实际分工',steps:[{key:'implement',memberId:'selected-member',title:'实现',objective:'完成合成任务',role:'implementation',dependsOn:[]}]}};
+it('projects the formally supported AUTO planning result in agent chat and leaves human JSON and original bytes exact',()=>{
+ const raw=JSON.stringify(planningChat);expect(chatAnswer(raw,'agent')).toBe(planningChat.answer);expect(chatAnswer(raw,'human')).toBe(raw);expect(chatAnswer(raw,'third_party_app')).toBe(raw);expect(JSON.stringify(planningChat)).toBe(raw);
+});
+it('accepts a nullable official plan but never hides malformed or extra-field planning JSON',()=>{
+ expect(chatAnswer(JSON.stringify({...planningChat,coordinationPlan:null}),'agent')).toBe(planningChat.answer);
+ for(const bad of [{...planningChat,unexpected:'keep me'},{...planningChat,files:[{path:'not a string'}]},{...planningChat,responseKind:'administrative'},{...planningChat,unexecutedVerifications:[{item:'unknown',reason:1}]},{...planningChat,coordinationPlan:{summary:'bad',steps:[]}},{...planningChat,coordinationPlan:{summary:'bad',steps:[{...planningChat.coordinationPlan.steps[0],role:'full-computer-authority'}]}}]){const raw=JSON.stringify(bad);expect(chatAnswer(raw,'agent')).toBe(raw);}
 });

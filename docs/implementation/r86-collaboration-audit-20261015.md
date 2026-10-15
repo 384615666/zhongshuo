@@ -148,3 +148,13 @@ DELIB Codex INDEPENDENT请求被明确CODEX_ERROR/invalid_json_schema拒绝：cl
 报告两处synthesis模型文本使用完整成员UUID，经独立评估非本轮阻断可读性边界，原文与hash不改写，不据此换BUILD。外置README补真实项目设置人工验收开关与仅影响新任务规则，guide hash重算且与最终own副本同步，593程序及BUILD不动。所有后续QA/说明HEAD与运行冻结分列。
 
 AUTO最终真实任务已原生发起，实施/Codex独立读取复跑已成功，后续修正/整合在途；v2验收重开、文档预览、原生导航与原型配对未完成，最终总门尚未放行。
+
+## rc9路线收齐与规划聊天协议回归（必须再冻结）
+
+rc9真实29turn全success：DELIB14、代码两版各5、文档5。代码v1/v2条件修正均未发现必须修缺陷，no-op复核不虚构修复；v2按用户返工真实trim/空白回退实现，独立7/7、hash不变，原生两步确认accepted/DONE。文档实际Markdown画面/全章节/不可变交付hash及系统原生另存为相同hash通过，最终稿不同于已评审上游，reviewCoversCurrentBytes=false不冒充终版复核。实际只读新文件及副本，未改任何模型原件。
+
+v2规划发表、子步骤在途时真实主池预览露原TaskComplete JSON，截图/DOM、原消息e708bb...及planning-chat-original-failure.json false保留。chatAnswer仍用旧字段表，coordinationPlan非空和null都被当陌生JSON。根因修复共源：抽纯browser-safe TaskComplete合同leaf，prompts原API兼容re-export，所有投影/adapter/worker/历史读取共享safeParse；agent限定、human/第三方JSON原文、legacy摘要与原始runtimeControlResult字节保持，错额外字段/数组/枚举/plan仍原文。不把Node crypto带进UI。46定向、12证据门/原生解析正负、双types和正式hifi构建通过，独立8正式schema指纹对旧05b完全一致；不改任务/预算/权限/持久化合同。
+
+新总门强制规划可见窗口（主池＋线程、子步尚未完、原协议hash保持），不能用最后回复掩盖；还将实测默认无@问候和同串续问（coordinationPlan:null），不产工作交付/验收。rc9仅阶段证据，不能交付。真实调用本轮仍已授权，无需为必要新冻结再问用户。
+
+用户正在查看rc9自有文档窗口并选中文字，正常关闭动作被SKY用户输入保护拒绝，工程已重读并明确保留，未关闭/重开该副本。接下来新独立根验证，不碰用户在用v23或这份正在读的窗口。
