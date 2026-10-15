@@ -47,6 +47,8 @@ gate('complete old UNKNOWN root copy upgrade, explicit original replay only',upg
 gate('upgraded original bytes and actual browser decode',upgradeRead.pass&&upgradeRead.realCalls===0&&upgradeRead.legacyAbsoluteBlobPathRebased&&upgradeRead.decoded.width>0&&upgradeRead.decoded.height>0);
 gate('real native menu close/search/navigation',nativeMenu.pass&&nativeMenu.steps.length>=7);
 const ui=receipt(path.join(path.resolve(glmArg),'readonly-ui.json')),mention=receipt(path.join(path.resolve(glmArg),'mention-rejection-ui.json'));
+const saveas=receipt(path.join(path.resolve(glmArg),'saveas-flow.json'));
+gate('native cancel, original save bytes, honest failure and explicit restored retry',saveas.pass&&saveas.normalClose&&saveas.modelCalls===0&&saveas.callsBefore===10&&saveas.callsAfter===10&&saveas.phases.length===4&&saveas.phases.every(p=>p.pass)&&saveas.phases.some(p=>p.name==='invalid-directory'&&p.originalUnchanged&&p.priorSavedUnchanged));
 gate('cold attachments across three five-second refreshes',ui.pass&&ui.attachmentSamples.length>=4&&ui.attachmentSamples.at(-1).at-ui.attachmentSamples[0].at>=15000&&ui.attachmentSamples.every(s=>s.ids.length===1&&s.ids[0]===ui.attachmentSamples[0].ids[0]));
 gate('different-member mention rejects and retains draft',mention.pass&&mention.inputAndMentionRetained&&mention.noDispatch&&JSON.stringify(mention.before)===JSON.stringify(mention.after));
 const project=receipt(projectArg,false),visual=receipt(visualArg);
