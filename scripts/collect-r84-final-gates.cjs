@@ -40,7 +40,10 @@ gate('post-observation cold reopen retains exact history identity and target dra
 gate('all eight observation routes repeatedly exercised',Array.from({length:8},(_,phase)=>progress.samples.filter(s=>s.phase===phase).length).every(n=>n>=2));
 gate('bounded connection monitor and no observation dispatch',progress.samples.every(s=>s.connection.monitorTimers===1&&s.connection.inFlight<=1&&s.realCalls===0&&s.messages===progress.samples[0].messages));
 manifests.engineeringCopy=manifest(workflow.copy);
+gate('engineering copy uses the original launcher',sha(path.join(candidate,'start-desktop.bat'))===sha(path.join(workflow.copy,'start-desktop.bat')));
 const upgraded=path.resolve(upgradeArg),upgrade=receipt(path.join(upgraded,'result.json')),upgradeRead=receipt(path.join(upgraded,'read-reopen.json')),nativeMenu=receipt(path.join(upgraded,'native-menu.json'));
+manifests.upgradedCopy=manifest(upgrade.copy);
+gate('upgraded copy uses the original launcher',sha(path.join(candidate,'start-desktop.bat'))===sha(path.join(upgrade.copy,'start-desktop.bat')));
 const rollback=receipt(path.join(upgraded,'old-version-and-matching-rollback.json'));
 const controls=receipt(path.join(upgraded,'native-window-controls.json'));
 gate('native maximize/restore, preview expand/Escape and close',controls.pass&&controls.nativeClose&&controls.pidMarkerRemoved&&controls.realCalls===0);
