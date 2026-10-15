@@ -33,11 +33,15 @@ gate('formal Fake complete workflow/reopen',workflow.pass&&workflow.ui?.sessions
 gate('same BUILD actual continuous two hours, not probe',observation.pass&&observation.observationCertified===true&&observation.probeCycles===null&&observation.elapsedMs>=7200000&&observation.endedAt-observation.start>=7200000&&observation.modelCalls===0);
 gate('real pipe disconnect/recovery, reload and redacted clipboard',recovery.pass&&recovery.transportDisconnect&&recovery.confirmedFactsRetained&&recovery.draftRetained&&recovery.historyRestored&&recovery.diagnosticRedacted&&recovery.reloaded);
 const progress=receipt(path.join(soakRoot,'r80-soak-progress.json'));
+const measured=receipt(path.join(soakRoot,'observation-summary.json'));
+gate('actual per-route observation metrics and stable host identities',measured.pass&&measured.elapsedMs>=7200000&&measured.byPhase.every(p=>p.samePhaseBounded));
 gate('all eight observation routes repeatedly exercised',Array.from({length:8},(_,phase)=>progress.samples.filter(s=>s.phase===phase).length).every(n=>n>=2));
 gate('bounded connection monitor and no observation dispatch',progress.samples.every(s=>s.connection.monitorTimers===1&&s.connection.inFlight<=1&&s.realCalls===0&&s.messages===progress.samples[0].messages));
 manifests.engineeringCopy=manifest(workflow.copy);
 const upgraded=path.resolve(upgradeArg),upgrade=receipt(path.join(upgraded,'result.json')),upgradeRead=receipt(path.join(upgraded,'read-reopen.json')),nativeMenu=receipt(path.join(upgraded,'native-menu.json'));
 const rollback=receipt(path.join(upgraded,'old-version-and-matching-rollback.json'));
+const controls=receipt(path.join(upgraded,'native-window-controls.json'));
+gate('native maximize/restore, preview expand/Escape and close',controls.pass&&controls.nativeClose&&controls.pidMarkerRemoved&&controls.realCalls===0);
 gate('old program refuses final schema; matching complete backup opens',rollback.pass&&rollback.oldRefusal.schemaUnsupported&&rollback.rollback.schema===50&&rollback.rollback.calls===0&&rollback.rollback.tokenBytesMatch&&rollback.rollback.commandId===upgrade.retainedBeforeReplay.commandId&&rollback.rollback.paramsHash===upgrade.retainedBeforeReplay.paramsHash);
 gate('complete old UNKNOWN root copy upgrade, explicit original replay only',upgrade.pass&&upgrade.backupFiles>0&&upgrade.schemaVersion===51&&upgrade.retainedBeforeReplay.noAutomaticReplay&&upgrade.manualSameIdentityReplay&&upgrade.draftPreserved&&upgrade.originalSourceUnchanged&&upgrade.modelCalls===0&&upgrade.shutdown);
 gate('upgraded original bytes and actual browser decode',upgradeRead.pass&&upgradeRead.realCalls===0&&upgradeRead.legacyAbsoluteBlobPathRebased&&upgradeRead.decoded.width>0&&upgradeRead.decoded.height>0);
@@ -48,11 +52,15 @@ gate('different-member mention rejects and retains draft',mention.pass&&mention.
 const project=receipt(projectArg,false),visual=receipt(visualArg);
 gate('project latest intent/cancellation regressions',project.pass);
 gate('paired visual inspection',visual.pass&&visual.reviewed===true);
-const source=receipt('dist/r84-final6-source-checks.json'),lint=receipt('dist/r84-final6-lint-3.json',false),testLog=path.resolve('dist/r84-source-suite-10.log');evidence.push({path:path.relative(process.cwd(),testLog),sha256:sha(testLog)});
+const source=receipt('dist/r84-final6-source-checks.json'),lint=receipt('dist/r84-final6-lint-release.json',false),testLog=path.resolve('dist/r84-source-suite-10.log');evidence.push({path:path.relative(process.cwd(),testLog),sha256:sha(testLog)});
+gate('typecheck receipt binds frozen runtime commit',source.runtimeCommit===build.commit);
+gate('lint coverage still matches current checked file bytes',lint.covered.every(f=>sha(f.file)===f.sha256));
 gate('both source typechecks',source.typecheck.exitCode===0&&source.typecheckHifi.exitCode===0);gate('incremental lint no added errors',lint.pass);
 gate('deterministic source suite',/Test Files\s+150 passed \(150\)/.test(fs.readFileSync(testLog,'utf8'))&&/Tests\s+1057 passed \(1057\)/.test(fs.readFileSync(testLog,'utf8')));
 gate('distribution has no data root or fake fixture',!fs.existsSync(path.join(candidate,'server-data'))&&!fs.existsSync(path.join(candidate,'seed')));
 gate('current practical guide bytes in final distribution',sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'README-DAILY.md'))&&sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'开始使用.md')));
+const ledger=receipt('dist/r84-call-ledger-completed.json',false);
+gate('original real-call identities are deduplicated without conflicts',ledger.pass&&ledger.conflicts.length===0&&ledger.uniqueCalls===ledger.calls.length&&new Set(ledger.calls.map(c=>c.turn_id)).size===ledger.calls.length);
 const corePass=gates.every(g=>g.pass);
 // Mouse movement remains a separate mandatory gate; no keyboard or setBounds substitution.
 gate('native titlebar mouse movement verified',nativeMenu.mouseDrag==='passed');
