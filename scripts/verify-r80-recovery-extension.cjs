@@ -56,6 +56,11 @@ module.exports=async function({cdp,projectId,room,dm,memberId,data,out,command,n
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...copyPoint});await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...copyPoint});
   await until(()=>cdp.eval("document.querySelector('[data-zs-local-diagnostics]')?.textContent.includes('已复制脱敏诊断')"),Boolean,'actual clipboard acknowledgement');
   const copied=await cdp.eval('navigator.clipboard.readText()');must(JSON.parse(copied).build.buildId===facts.buildId&&!copied.includes(draft)&&!copied.includes(data),'clipboard content not redacted');
+  if(duration>=2*60*60_000){
+    const continuous=await require('./verify-r84-continuous-observation.cjs')({cdp,projectId,dm,data,out,command,navigate,until,queryOne,must,sleep,button,facts,durationMs:duration,recoveryEvidence:{transportDisconnect:true,confirmedFactsRetained:true,draftRetained:true,historyRestored,diagnosticRedacted:true,reloaded:true}});
+    const composite={...continuous,transportDisconnect:true,confirmedFactsRetained:true,draftRetained:true,historyRestored,diagnosticRedacted:true,reloaded:true,scope:'same BUILD formal Fake workflow + actual pipe failure/recovery + mounted reload/visible return, followed by at least two hours of continuous interaction'};
+    fs.writeFileSync(path.join(out,'r80-soak-result.json'),JSON.stringify(composite,null,2));return composite;
+  }
   await cdp.eval(`(()=>{const intervals=new Set();const si=window.setInterval.bind(window),ci=window.clearInterval.bind(window);window.setInterval=(fn,ms,...a)=>{const id=si(fn,ms,...a);intervals.add(id);return id;};window.clearInterval=id=>{intervals.delete(id);return ci(id);};let listeners=0;const originalAdd=document.addEventListener.bind(document),originalRemove=document.removeEventListener.bind(document);const tracked=new Map();document.addEventListener=(type,fn,...a)=>{let set=tracked.get(type);if(!set)tracked.set(type,set=new Set());if(!set.has(fn)){set.add(fn);listeners++;}return originalAdd(type,fn,...a);};document.removeEventListener=(type,fn,...a)=>{if(tracked.get(type)?.delete(fn))listeners--;return originalRemove(type,fn,...a);};window.__r80Metrics=()=>({intervals:intervals.size,documentListeners:listeners});return true;})()`);
   let cycle=0;
   while(Date.now()-start<duration){

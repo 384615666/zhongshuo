@@ -248,15 +248,18 @@ if(outArg?.startsWith('desktop-daily-win-v22')||outArg?.startsWith('desktop-dail
 
 思考等级从本机 Claude CLI / Codex model/list 读取，保存到成员、模板及运行快照并传入正式参数。第三方渠道未回报有效强度时，只报告请求值，不伪造认证。
 
-普通对话显示可读回答；根消息、附件、作者与时间保留。原始成果协议在成果与运行证据中查看。自然交流不创建虚假的工作交付；实质工作仍保留返工、版本绑定验收。
+普通对话显示可读回答；在同一回复串默认由原执行成员结合前文继续回答，明确“仅记录”才只保存。根消息、附件、作者与时间保留。原始成果协议在成果与运行证据中查看。自然交流不创建虚假的工作交付；实质工作仍保留返工、版本绑定验收。
 
 结果未知仍由用户人工同号同参处理；重连、重开不会自动派发或解除保护。single_writer 与改动集只覆盖受管理项目，不能保护或捕获整台电脑的全部修改。
 
 工程使用独立目录、合成输入与真实渠道验收；详见仓库 ${round} 交付记录。用户验收与工程通过分开记录。Android、安装器、签名、自动更新及既有延期未扩展。
 `,'utf8');
   const daily=join(out,'README-DAILY.md');
+  if(r84){const guide=await (await import('node:fs/promises')).readFile(join(repo,'docs','desktop-quickstart.md'),'utf8');writeFileSync(daily,guide,'utf8');}
+  else {
   const previous=await (await import('node:fs/promises')).readFile(daily,'utf8');
   writeFileSync(daily,`# ${round} 当前行为（2026-10-14）\r\n\r\n权限、图片与思考等级以 README-CANDIDATE.md 为准；下列历轮记录保留为历史，旧的图片认证限制已被本轮自动输入替代。\r\n\r\n${previous}`,'utf8');
+  }
 }
 const manifestPath = join(out, 'ZhongshuoDual', 'MANIFEST-SHA256.json');
 const manifest = JSON.parse(await (await import('node:fs/promises')).readFile(manifestPath, 'utf8'));

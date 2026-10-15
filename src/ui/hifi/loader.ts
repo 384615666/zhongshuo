@@ -1202,7 +1202,7 @@ export function buildDmEnvelope(commandId: string, conversationId: string, body:
 
 /** 线程跟进信封（第五十一轮 H2）：目标=打开的线程（projectId/conversationId/threadId 来自
  * thread.get 实体——不从界面焦点重造）；记录串（rootTaskId 空）由服务端强制 record_only。 */
-export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
+export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { mentionIds?:string[]; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
   const s = getState();
   const thread = s.threadEntities[threadId];
   return {
@@ -1210,7 +1210,7 @@ export function buildThreadEnvelope(commandId: string, threadId: string, body: s
     method: 'message.submit',
     params: {
       target: { kind: 'thread', projectId: thread?.projectId ?? s.activeProjectId, conversationId: thread?.conversationId ?? '', threadId },
-      body, intent, mentions: [],
+      body, intent, mentions: mentionPayload(opts?.mentionIds??[]),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
       ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),

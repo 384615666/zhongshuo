@@ -623,9 +623,16 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     const ent = (s as { threadEntities?: Record<string, { projectId: string; roomId: string }> }).threadEntities?.[tid];
     // R72：实体已缓存**且归属项目正是活跃项目**才直接渲染——否则 loadThread 的
     // stillCurrent 双门会丢弃装载（切项目后点旧直链=线程面板拿不到数据），走定位器对齐。
-    if (ent != null && ent.projectId === s.activeProjectId) {
+    const opening=s.openInFlightTarget;
+    // Cached identity does not mean its project refresh finished. Keep the
+    // locating component (and its intent) mounted until its whole owned wave
+    // settles; early RoomPage handoff cancels it and rolls focus back forever.
+    if (ent != null && ent.projectId === s.activeProjectId
+      && s.rooms.some(r=>r.projectId===ent.projectId)
+      && opening?.projectId!==ent.projectId) {
       return <RoomPage roomId={ent.roomId} threadId={tid} highlightMessageId={query.message} tab={isThreadTab(query.tab) ? query.tab : undefined} />;
     }
+    if(ent!=null&&opening!=null&&opening.projectId!==ent.projectId&&opening.urlSeqAtStart>=currentNavSeq())return <div className="main"><div className="page"><div className="panel info">正在打开项目…</div></div></div>;
     return (
       <div className="main"><div className="page">
         <div className="panel info">正在定位线程（对齐所属项目后自动进入房间）…</div>

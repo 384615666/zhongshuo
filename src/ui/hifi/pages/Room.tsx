@@ -2003,7 +2003,7 @@ function ThreadPanel({
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
             if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
@@ -2049,7 +2049,7 @@ function ThreadPanel({
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
             if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env);
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };

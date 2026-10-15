@@ -460,7 +460,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               const refs = attachmentRefsFromDraft(draftKey, intent);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
               env.revAtSend = p.draftRev;
               // r62 P1：完整信封在交给 bridge 之前耐久落账；ok/failed/unknown 三态收口
               //（unknown→pendingSends 横幅=人工同号确认；崩溃窗口见 store 出站账本注释）。

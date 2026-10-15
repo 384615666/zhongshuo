@@ -66,7 +66,7 @@ interface LoaderApi {
   loadRoomPool(roomId: string): Promise<void>;
   loadThread(threadId: string, opts?: { markRead?: boolean }): Promise<void>;
   refreshThreadTask(threadId: string): Promise<void>;
-  buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[]): { commandId: string; method: 'message.submit'; params: Record<string, unknown>; targetLabel: string };
+  buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?:{mentionIds?:string[]}): { commandId: string; method: 'message.submit'; params: Record<string, unknown>; targetLabel: string };
   sendEnvelope(env: { commandId: string; method: 'message.submit'; params: Record<string, unknown> }): Promise<{ status: string; code?: string; error?: string }>;
   stopThreadTask(threadId: string): Promise<{ ok: boolean; error?: string }>;
   submitTaskReview(snapshot: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string }, decision: 'accept' | 'changes_requested', note?: string, threadIdForRefresh?: string): Promise<{ ok: boolean; error?: string }>;
@@ -185,7 +185,8 @@ describe('第五十一轮 H2：回复串/任务详情/附件/深链（真实链�
 
       // ── 线程回复（产品 builder）：完整目标+**不另建根任务** ──
       const cmd2 = `cmd_${randomUUID().slice(0, 8)}`;
-      const env2 = h.bundle.loader.buildThreadEnvelope(cmd2, th.id, '跟进：补充一点', 'default');
+      const env2 = h.bundle.loader.buildThreadEnvelope(cmd2, th.id, '跟进：补充一点', 'default',undefined,{mentionIds:['mA']});
+      expect(env2.params.mentions).toEqual([{kind:'member',memberId:'mA'}]);
       const target2 = env2.params.target as Record<string, string>;
       expect(target2).toEqual({ kind: 'thread', projectId: projIdRow.id, conversationId: convId, threadId: th.id });
       const r2 = await h.bundle.loader.sendEnvelope(env2);

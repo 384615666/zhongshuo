@@ -169,6 +169,14 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       const history=await f.cmd<{items:Array<{id:string;body:{text:string}}>}>('thread.history',{threadId:f.root.threadId});expect(history.items.find(m=>m.id===legacy.messageId)?.body.text).toBe('LEGACY_PRIVATE_RECORD_ONLY');expect(f.count('real_calls')).toBe(0);
     }finally{f.db.close();}
   });
+  it('an explicit different mention cannot silently retarget an ordinary reply; record-only retains the mention without dispatch',async()=>{
+    const f=await fixture([final('你好！')]);try{
+      const other=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'另一成员'})).memberId;
+      const before={messages:f.count('messages'),outbox:f.count('outbox')},params={...f.params('保留这条指定提及'),mentions:[{kind:'member',memberId:other}]};
+      expect(await f.raw('message.submit',params)).toMatchObject({ok:false,error:{code:'CONVERSATION_TARGET_CHANGED'}});expect(f.count('messages')).toBe(before.messages);expect(f.count('outbox')).toBe(before.outbox);
+      const saved=await f.cmd<Root>('message.submit',{...params,intent:'record_only'});expect(JSON.parse((f.db.prepare('SELECT body_json FROM messages WHERE id=?').get(saved.messageId) as {body_json:string}).body_json).mentions).toEqual(params.mentions);expect(f.count('outbox')).toBe(before.outbox);expect(f.count('agent_turns')).toBe(1);
+    }finally{f.db.close();}
+  });
   it('unknown provider outcome stays unknown across reopen and exact command replay never starts another turn',async()=>{
     const f=await fixture([final('你好！'),[{kind:'event',event:{kind:'turn.failed',code:'INTERRUPTED',message:'isolated unconfirmed deadline',retryable:false}}]]);
     try{
