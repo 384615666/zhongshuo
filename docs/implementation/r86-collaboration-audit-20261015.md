@@ -158,3 +158,11 @@ v2规划发表、子步骤在途时真实主池预览露原TaskComplete JSON，�
 新总门强制规划可见窗口（主池＋线程、子步尚未完、原协议hash保持），不能用最后回复掩盖；还将实测默认无@问候和同串续问（coordinationPlan:null），不产工作交付/验收。rc9仅阶段证据，不能交付。真实调用本轮仍已授权，无需为必要新冻结再问用户。
 
 用户正在查看rc9自有文档窗口并选中文字，正常关闭动作被SKY用户输入保护拒绝，工程已重读并明确保留，未关闭/重开该副本。接下来新独立根验证，不碰用户在用v23或这份正在读的窗口。
+
+## rc10 冻结、额度恢复与继续验收
+
+正式运行冻结 ad513c2 / bld_07ef3cd9b4b08add，clean、593 文件独立清单通过。首次完整源码 163 文件 / 1161 测试全过，双 types 与 57 文件增量 lint 无新增（33 既有匹配）。原 rc10 工程根规划窗口已真实通过，随后 Codex gpt-6.1-sol 明确 usage limit 失败，原 real-code-v1.json 的总 false 保留，不因后续恢复改写。
+
+用户明确额度恢复后，新建 review-r86-final-rc10-restored-20261015（52834），从原生 UI 新发自然合成代码任务；不是自动重放旧失败或 UNKNOWN。规划自然正文在子步未完窗口已同时呈现在主池与回复串，原 runtimeControlResult hash 不变，独立评审票也通过。DeepSeek 真创建文件/测试，Codex 真读取并复跑已成功，最终整合在途。普通无 @ 问候自然答复，无工作交付，续问待收口。
+
+同 BUILD 升级保全/拒52/匹配整根回退已 pass，0 真实调用。首次 full 工程夹具此前业务步骤通过，但 archive 截图 hidden，整票 false 保留；为恢复最小化窗口尝试的 Browser.getWindowForTarget 被当前 Electron CDP 明确拒绝，第二新根 full-v2 同样 false 保留。已撤掉这段未支持的 QA API，不改变产品、不放宽 visible+paint 门；待真实交互结束后单独运行 GUI 回归，避免多个工程宿主争抢前台。最终检查允许显式指定新的 owned full 证据根并继续强制相同 BUILD，旧失败不会覆盖。所有最终门尚未放行。

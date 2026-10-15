@@ -16,6 +16,7 @@ function evaluateR86Final(i){
   explicitV2AcceptanceAndReopen:checkReal(i.lifecycle)&&i.lifecycle.noteOnlyNoCalls===true&&i.lifecycle.explicitExecution===true&&i.lifecycle.v2?.revision===2&&i.lifecycle.v2?.reviewStatus==='accepted'&&i.lifecycle.normalClose===true&&i.lifecycle.reopened===true&&i.lifecycle.originalFilesHashMatched===true,
   documentCollaboration:checkReal(i.document)&&i.document.actualPreview===true&&i.document.contributorsVerified===true&&i.document.originalSavedHashMatched===true,
   selectedDeliberation:checkReal(i.deliberation)&&i.deliberation.distinctModels===true&&i.deliberation.independentInputs===true&&i.deliberation.crossReview===true&&i.deliberation.naturalReport===true,
+  ordinaryConversation:checkReal(i.ordinary)&&i.ordinary.originalRootPreserved===true&&i.ordinary.childTasks===0&&i.ordinary.deliveries===0,
   nativeNavigation:checkReal(i.navigation)&&i.navigation.nativeMouseKeyboard===true&&i.navigation.childTask===true&&i.navigation.exactDelivery===true&&i.navigation.backAndRefresh===true&&i.navigation.rootDraftAndActionsUnchanged===true,
   zeroInferenceRegression:i.full?.pass===true&&i.full?.buildId===i.build?.buildId&&i.full?.finalRealCalls===0&&i.full?.r79?.threeCycles===true&&i.full?.r79?.reopen===true,
   upgradeAndRollback:checkReal(i.upgrade)&&i.upgrade.oldProgramRejection?.databaseUnchanged===true&&i.upgrade.oldProgramRejection?.code==='SCHEMA_VERSION_UNSUPPORTED'&&i.upgrade.draftsAndUploadsComparedToOld===true&&i.upgrade.after?.calls===0,

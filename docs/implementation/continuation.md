@@ -4,6 +4,16 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
+**2026-10-15 额度恢复后的当前断点（覆盖下方旧施工快照）**：源码已冻结并推送 `ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916`，rc10 BUILD `bld_07ef3cd9b4b08add`，593 文件清单独立核验通过。全套 163 文件 / 1161 测试全过；双 types、57 文件增量 lint 过（33 条已匹配既有问题）。首次 rc10 独立根 `review-r86-final-rc10-real-20261015` 的规划可读窗口真实 pass，但 Codex 评审明确报额度耗尽，整条原 false 保留；不自动重放。用户已说额度恢复，现新建 `review-r86-final-rc10-restored-20261015`，端口 52834，原生 UI 发出同一自然合成任务；任务 `task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe`，线程 `thread_e48f08d0-e7ea-4348-83f2-afee7e6e9a28`，observer 等待中。当前窗口保持 replies，须先记录子任务尚未完成时的自然规划窗口，再继续代码 v2、文档、DELIB、普通问答、关闭重开、导航与视觉。所有最终门仍待收齐，不能用 rc9 阶段成功替代。
+
+rc10 `review-r86-final-rc10-upgrade-20261015/upgrade.json` 已 pass，用户原数据根从未访问。首次 rc10 full 工程夹具前述房间/DM/历史等业务步骤成功，但 archive 截图窗口 hidden 导致总 false，保留 `review-r86-final-rc10-full-20261015/result.json`。QA 将为已附着的唯一工程窗口补最小化恢复且继续强制 visible+paint；另用新根复证，不覆写首次失败。源码无运行行为更改。全套测试产生的八个已跟踪 Word 样件已恢复仓库基线（尝试保存生成副本因 Git 引号路径失败，不能宣称生成副本已保全；原完整测试日志已保全）。
+
+**进一步进展（22:52）**：restored 根 v1 已 PASS，4 次真实 turn，全子步 DONE，双实际模型、真实原生读取/测试证明 `native-proof-code-v1.json` 4 sessions 过。普通问候+续问两成功，原串根正文/上下文/原成员正确，0子任务0交付；`ordinary-chat-completed.json` 通过。原 `ordinary-chat.json` 因 QA 错把“同串续问”要求成“同 CLI session”而 false 保留；房间原合同每 turn 独立会话、第一轮规划只读→后续配置权限，实际 threadDigest 精确重放，自然答对你好，不改产品或跨权限强续接。
+
+v1返工意见原生保存后6.5秒0新增调用，明确点击执行返工已绑定原v1/manifest/note，`code-lifecycle.json` 已记录；v2 observer 只读等待。另已原生 @全体明确选中两席研讨 task_fce21525-8a3d-49f6-80ab-12d257a35076（只读，14次预算）与默认AUTO文档 task_f2d78498-540f-4b7c-b6cb-23de9da9cf72 自然请求；两个只读watch分别写delivery-deliberation/document-v1。均未最终收口。
+
+full-v2 的 Browser.getWindowForTarget 在该 Electron CDP 不支持，原false保留，已完全撤销此 QA 尝试；待实际 UI 验收后以单一前台工程宿主复证，不再并行争抢画面。最终门增加普通问答保全必需票及显式 owned full 证据参数，5项门测试通过；QA-only 不换ad513c2运行BUILD。
+
 **最新必要修复待冻结（2026-10-15 21:55，优先）**：rc9最终路线实际29turn全成功：DELIB14、代码v1五/返工v2五、文档五。代码v2已原生两步确认accepted/DONE、独立Node7/7；Markdown实际共享预览、系统另存为原件hash一致（document-preview.json），Codex评审旧稿后整合改变字节，reviewCoversCurrentBytes=false照实。已收齐未见其他预览阻断。但原生v2规划窗口暴露TaskComplete JSON，原封存raw-rework-plan-observation及planning-chat-original-failure.json为false；旧chatAnswer独立字段白名单不含新增coordinationPlan，连null普通问答也漏识别，rc9绝不能最终放行。
 
 新源码仅把TaskComplete版本/schema/output工厂抽成browser-safe contracts/taskComplete.ts（纯zod/coordination），prompts保留原API import/re-export，chatAnswer同源safeParse，agent限定/answer优先/legacy回退、human原文、额外/错字段原文保持；不改历史DB原件。单位before2失败保留，修后46定向＋12证据门/原生解析正负过、双types/hifi构建过；独立unfrozen比较8schema指纹完全同旧05b。正式Fake补规划已发表且子任务未执行的自然正文/原协议/主池线程身份，以及普通AUTO coordinationPlan:null无子任务无交付；新总门必须readablePlanningWindow。即将commit/push/构建rc10，先正式实际挂载，然后native发送代码任务并立即点开回复串，在planner已发表而子步未完窗口取主池/线程可读票，不能最终回复盖住后补拍（观察器自动读DOM/screenshot，不自动导航到replies，需原生打开）。随后v2验收、文档预览/save、手选DELIB与2个极简ordinary真实turn（文件任务后默认无@你好→原串“我刚才说了什么？”；核无子分工/工作交付/验收且原成员回答），最终正常关闭/BAT重开、导航/视觉/总账/总门。QA-only整理随后commit不换BUILD。
