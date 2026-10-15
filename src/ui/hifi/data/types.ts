@@ -1030,11 +1030,12 @@ export interface GitState {
   /** R71：普通非 Git 目录（中性形态——文件阅读可用；Git 页操作按无仓库处理） */
   notARepo?: boolean;
   /** 部分只读命令失败时保留上次已确认的列表，同时逐项上屏原因；成功空列表才清旧值。 */
-  readErrors?: { branches?: string; history?: string; remotes?: string };
+  readErrors?: { status?: string; branches?: string; history?: string; remotes?: string };
   /** 最近一次操作的如实结果；失败时保留原因而不是静默 */
   lastOp?: {
     op: string;
     ok: boolean;
+    outcome?: 'failed' | 'unknown';
     detail: string;
     at: number;
   };

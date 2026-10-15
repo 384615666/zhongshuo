@@ -8,6 +8,8 @@
  * porcelain 分类（staged/unstaged/untracked）呈现；taskIds/changeSetIds 仅在服务端返回时展示。
  */
 import { command } from '../bridge';
+import { gitWrite, pendingGitWrites } from './gitWrites';
+import type { BridgeFailed, BridgeUnknown } from '../bridge';
 import { getState, setState, toast, recordWrite } from './store';
 import type { GitBranch, GitCommit, GitState, GitStatusEntry } from './types';
 import type { DiffHunk } from './types';
@@ -33,22 +35,38 @@ interface CommitPreviewData {
 }
 interface HistoryData { items: Array<{ oid: string; parent: string; parents: string[]; authorName: string; authorEmail: string; timestamp: number; subject: string; taskIds: string[]; changeSetIds: string[] }>; head: string | null; hasMore: boolean }
 
-const stateOf = (xy: string): GitStatusEntry['state'] => {
-  if (xy.includes('R')) return 'renamed';
-  if (xy.includes('A') || xy === '??') return 'added';
-  if (xy.includes('D')) return 'deleted';
-  if (xy.includes('C')) return 'renamed';
+const stateOf = (xy: string, staged: boolean): GitStatusEntry['state'] => {
+  if (xy.includes('U') || xy === 'AA' || xy === 'DD') return 'conflicted';
+  const column = xy === '??' ? '?' : xy[staged ? 0 : 1];
+  if (column === 'R' || column === 'C') return 'renamed';
+  if (column === 'A') return 'added';
+  if (column === 'D') return 'deleted';
+  if (column === '?') return 'untracked';
   return 'modified';
 };
 
 const entryOf = (e: { xy: string; path: string; renamedFrom?: string }, staged: boolean, additions = 0, deletions = 0): GitStatusEntry => ({
   path: e.path,
-  state: stateOf(e.xy),
+  state: stateOf(e.xy, staged),
   staged,
   additions, deletions,
   diff: [],
   conflict: undefined,
 });
+
+export type GitActionResult = { status: 'ok' } | { status: 'failed' | 'unknown'; error: string };
+export function gitOperationLabel(method: string): string {
+  return ({ 'git.status':'读取仓库状态','git.stage':'暂存文件','git.unstage':'取消暂存','git.stageTask':'暂存任务改动','git.commit':'提交','git.push':'推送','git.pull':'拉取','git.checkout':'切换分支','git.branch.create':'创建分支','git.commit.undo':'软回退提交','git.conflict.resolve':'确认冲突内容' } as Record<string,string>)[method] ?? 'Git 操作';
+}
+class GitWriteFailure extends Error {
+  constructor(readonly outcome: BridgeFailed | BridgeUnknown) { super(outcome.status === 'failed' ? `${outcome.code}：${outcome.error}` : outcome.error); }
+}
+async function writeCommand<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  const result = await gitWrite<T>(String(params.projectId ?? ''), method, params);
+  if (result.status !== 'ok') throw new GitWriteFailure(result);
+  return result.data;
+}
+const failedResult = (e: unknown): GitActionResult => ({ status: e instanceof GitWriteFailure && e.outcome.status === 'unknown' ? 'unknown' : 'failed', error: e instanceof Error ? e.message : String(e) });
 
 /** 轮询、显式刷新与写后刷新可重叠；仅同项目最后发起的读取能更新投影。
  * Map 只留在途请求，ticket 全局单调——清 Map 后旧请求也不可能误匹配新请求。 */
@@ -73,24 +91,30 @@ export async function refreshGitState(projectId: string): Promise<void> {
     ]);
     if (!current()) return;
     const cur = getState().git[projectId] ?? emptyGit();
-    const statusEntries: GitStatusEntry[] = [
+    const rawEntries: GitStatusEntry[] = [
       ...status.staged.map((e) => entryOf(e, true)),
       ...status.unstaged.map((e) => entryOf(e, false)),
       ...status.untracked.map((e) => ({ ...entryOf(e, false), state: 'untracked' as const })),
     ];
+    const conflicts = new Set<string>();
+    const statusEntries = rawEntries.filter(e => {
+      if (e.state !== 'conflicted') return true;
+      if (conflicts.has(e.path)) return false;
+      conflicts.add(e.path); e.staged = false; return true;
+    });
     const branchList: GitBranch[] = branchesRead.status === 'fulfilled' ? branchesRead.value.branches.map((b: BranchItem) => ({
       name: b.name, head: b.oid,
       upstream: b.upstream,
       ahead: b.ahead, behind: b.behind,
       isCurrent: b.name === status.branch,
-      updatedAt: b.lastCommitTs,
+      updatedAt: b.lastCommitTs * 1000,
     })) : cur.branches;
     const remotes: import('./types').GitRemote[] = remotesRead.status === 'fulfilled' ? remotesRead.value.remotes.map((r) => ({ name: r.name, url: r.url, authState: 'unknown' as const })) : cur.remotes;
     const commits: GitCommit[] = historyRead.status === 'fulfilled' ? historyRead.value.items.map((c: HistoryItem) => ({
       hash: c.oid, shortHash: c.oid.slice(0, 8), subject: c.subject, body: undefined,
       authorName: c.authorName, authorEmail: c.authorEmail,
       authoredBy: (c.taskIds.length > 0 || c.changeSetIds.length > 0 ? 'agent' : 'human') as 'human' | 'agent',
-      committedAt: c.timestamp, parents: c.parents, refs: [],
+      committedAt: c.timestamp * 1000, parents: c.parents, refs: [],
       files: [], taskId: c.taskIds[0], changeSetId: c.changeSetIds[0],
     })) : cur.commits;
     const readErrors = {
@@ -142,7 +166,7 @@ export async function refreshGitState(projectId: string): Promise<void> {
       return;
     }
     // 真实 Git 执行错误：权威失败——旧的非 Git 中性标记一并失效（红失败面板取代中性面板）。
-    setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: undefined } } }));
+    setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), notARepo: undefined, readErrors: { ...s.git[projectId]?.readErrors, status: msg } } } }));
     markOp('git.status', false, msg);
   } finally {
     if (current()) gitRefreshInFlight.delete(projectId);
@@ -160,10 +184,13 @@ export function getGit(projectId: string): GitState | undefined {
 /* ---------- 单文件 diff（git.diff → DiffHunk 简易解析） ---------- */
 
 export async function loadFileDiff(projectId: string, path: string, staged: boolean): Promise<{ hunks: DiffHunk[]; truncated: boolean; binary: boolean }> {
-  const r = await command<{ patches: Array<{ path: string; binary: boolean; truncated: boolean; text: string; addedCount: number | null; deletedCount: number | null }>; truncatedOverall: boolean }>('git.diff', { projectId, path, staged });
+  const r = await command<{ patches: Array<{ path: string; binary: boolean; truncated: boolean; text: string; source?: string; addedCount: number | null; deletedCount: number | null }>; truncatedOverall: boolean }>('git.diff', { projectId, path, staged });
   const patch = (r.patches ?? [])[0];
   const text = patch?.text ?? '';
-  return { hunks: parseUnifiedDiff(text), truncated: patch?.truncated === true || r.truncatedOverall === true, binary: patch?.binary === true };
+  const hunks: DiffHunk[] = patch?.source === 'worktree-content' && !patch.binary && text.length > 0
+    ? [{ header: '新增文件内容', lines: text.replace(/\n$/, '').split('\n').map((line, i) => ({ type: 'add', text: line, newNo: i + 1 })) }]
+    : parseUnifiedDiff(text);
+  return { hunks, truncated: patch?.truncated === true || r.truncatedOverall === true, binary: patch?.binary === true };
 }
 
 /** unified diff 文本 → DiffHunk（标题行+上下文/增/删行号）。 */
@@ -174,6 +201,7 @@ export function parseUnifiedDiff(text: string): DiffHunk[] {
   let oldNo = 0;
   let newNo = 0;
   for (const line of text.split('\n')) {
+    if (line === '') continue; // A blank context line is " "; a final empty split is not a diff line.
     const hm = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hm != null) {
       cur = { header: line, lines: [] };
@@ -201,14 +229,14 @@ async function afterWrite(projectId: string, op: string, okText: string): Promis
 
 export async function stageFile(projectId: string, path: string): Promise<void> {
   try {
-    await command('git.stage', { projectId, paths: [path] });
+    await writeCommand('git.stage', { projectId, paths: [path] });
     await afterWrite(projectId, 'git.stage', `已暂存 ${path}`);
   } catch (e) { gitFail(projectId, 'git.stage', e); }
 }
 
 export async function unstageFile(projectId: string, path: string): Promise<void> {
   try {
-    await command('git.unstage', { projectId, paths: [path] });
+    await writeCommand('git.unstage', { projectId, paths: [path] });
     await afterWrite(projectId, 'git.unstage', `已取消暂存 ${path}`);
   } catch (e) { gitFail(projectId, 'git.unstage', e); }
 }
@@ -218,7 +246,7 @@ export async function unstageAll(projectId: string): Promise<void> {
   const paths = (g?.status ?? []).filter((x) => x.staged).map((x) => x.path);
   if (paths.length === 0) return;
   try {
-    await command('git.unstage', { projectId, paths });
+    await writeCommand('git.unstage', { projectId, paths });
     await afterWrite(projectId, 'git.unstage', `已取消全部 ${paths.length} 个暂存`);
   } catch (e) { gitFail(projectId, 'git.unstage', e); }
 }
@@ -230,7 +258,7 @@ export async function unstageAll(projectId: string): Promise<void> {
 export async function stageByOwner(projectId: string, owner: 'agent' | 'user' | { taskId?: string; changeSetId?: string }): Promise<void> {
   if (typeof owner === 'object') {
     try {
-      const r = await command<{ staged: string[]; skippedUserPreExisting?: string[] }>('git.stageTask', {
+      const r = await writeCommand<{ staged: string[]; skippedUserPreExisting?: string[] }>('git.stageTask', {
         projectId,
         ...(owner.taskId != null ? { taskId: owner.taskId } : {}),
         ...(owner.changeSetId != null ? { changeSetId: owner.changeSetId } : {}),
@@ -247,15 +275,16 @@ export async function stageByOwner(projectId: string, owner: 'agent' | 'user' | 
 
 /* ---------- 冲突（三方内容如实；不做一键覆盖） ---------- */
 
-export async function loadConflictContent(projectId: string, path: string): Promise<{ base: string | null; ours: string | null; theirs: string | null }> {
+export async function loadConflictContent(projectId: string, path: string): Promise<{ path: string; base: string | null; ours: string | null; theirs: string | null; snapshotHash: string }> {
   return command('git.conflict.content', { projectId, path });
 }
 
-export async function resolveConflict(projectId: string, path: string, content: string): Promise<void> {
+export async function resolveConflict(projectId: string, path: string, content: string, expectedSnapshotHash: string): Promise<GitActionResult> {
   try {
-    await command('git.conflict.resolve', { projectId, path, content });
+    await writeCommand('git.conflict.resolve', { projectId, path, content, expectedSnapshotHash });
     await afterWrite(projectId, 'git.conflict.resolve', `已按你确认的内容解决 ${path} 并暂存`);
-  } catch (e) { gitFail(projectId, 'git.conflict.resolve', e); }
+    return { status: 'ok' };
+  } catch (e) { gitFail(projectId, 'git.conflict.resolve', e); return failedResult(e); }
 }
 
 export function setCommitMessage(projectId: string, message: string): void {
@@ -272,7 +301,7 @@ export async function commit(projectId: string): Promise<void> {
       toast(`暂不能提交：${preview.blockers.join('；') || '索引为空或存在冲突'}`, 'error');
       return;
     }
-    await command('git.commit', {
+    await writeCommand('git.commit', {
       projectId, message,
       expectedHead: preview.head, expectedIndexTree: preview.indexTree, expectedBranch: preview.branch,
     });
@@ -290,7 +319,7 @@ export async function push(projectId: string, remoteName = 'origin'): Promise<vo
     const head = (g?.commits[0]?.hash) ?? null;
     const rh = await command<{ remote: string; branch: string; head: string | null; url: string }>('git.remoteHead', { projectId, remote: remoteName, branch });
     if (head == null) { toast('本地 HEAD 未知（先刷新历史）', 'error'); return; }
-    await command('git.push', { projectId, remote: remoteName, branch, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
+    await writeCommand('git.push', { projectId, remote: remoteName, branch, expectedHead: head, expectedRemoteHead: rh.head, expectedRemoteUrl: rh.url });
     await afterWrite(projectId, 'git.push', `已推送 ${remoteName}/${branch}`);
   } catch (e) { gitFail(projectId, 'git.push', e); }
 }
@@ -302,7 +331,7 @@ export async function pull(projectId: string, remoteName = 'origin'): Promise<vo
   try {
     const head = g?.commits[0]?.hash;
     if (head == null) { toast('本地 HEAD 未知（先刷新历史）', 'error'); return; }
-    const r = await command<{ from: string; to: string; pulledCount: number }>('git.pull', { projectId, remote: remoteName, branch, expectedHead: head });
+    const r = await writeCommand<{ from: string; to: string; pulledCount: number }>('git.pull', { projectId, remote: remoteName, branch, expectedHead: head });
     await afterWrite(projectId, 'git.pull', `已拉取 ${r.pulledCount} 个提交（${remoteName}/${branch}）`);
   } catch (e) { gitFail(projectId, 'git.pull', e); }
 }
@@ -311,25 +340,35 @@ export async function checkoutBranch(projectId: string, branch: string): Promise
   try {
     const g = getGit(projectId);
     const expectedHead = g?.commits[0]?.hash ?? null;
-    await command('git.checkout', { projectId, branch, expectedHead, expectedBranch: g?.currentBranch ?? '' });
+    await writeCommand('git.checkout', { projectId, branch, expectedHead, expectedBranch: g?.currentBranch ?? '' });
     await afterWrite(projectId, 'git.checkout', `已切换到 ${branch}`);
   } catch (e) { gitFail(projectId, 'git.checkout', e); }
 }
 
-export async function createBranch(projectId: string, name: string): Promise<void> {
+export async function createBranch(projectId: string, name: string, expectedHead: string | null): Promise<GitActionResult> {
   try {
-    const g = getGit(projectId);
-    const expectedHead = g?.commits[0]?.hash ?? null;
-    await command('git.branch.create', { projectId, name, expectedHead });
+    await writeCommand('git.branch.create', { projectId, name, expectedHead });
     await afterWrite(projectId, 'git.branch.create', `已创建分支 ${name}`);
-  } catch (e) { gitFail(projectId, 'git.branch.create', e); }
+    return { status: 'ok' };
+  } catch (e) { gitFail(projectId, 'git.branch.create', e); return failedResult(e); }
 }
 
-export async function undoLastCommit(projectId: string): Promise<void> {
+export async function undoLastCommit(projectId: string, approved: { commitOid: string; expectedHead: string; expectedBranch: string }): Promise<GitActionResult> {
   try {
-    await command('git.commit.undo', { projectId });
+    await writeCommand('git.commit.undo', { projectId, ...approved });
     await afterWrite(projectId, 'git.commit.undo', '已撤销最近一次本产品提交（保留工作区内容）');
-  } catch (e) { gitFail(projectId, 'git.commit.undo', e); }
+    return { status: 'ok' };
+  } catch (e) { gitFail(projectId, 'git.commit.undo', e); return failedResult(e); }
+}
+
+export async function replayPendingGitOperation(projectId: string): Promise<GitActionResult> {
+  const prior = pendingGitWrites().find(p => p.projectId === projectId);
+  if (!prior) return { status: 'failed', error: '没有待确认的 Git 操作' };
+  const outcome = await gitWrite(projectId, prior.method, prior.params, true);
+  if (outcome.status !== 'ok') { const error = new GitWriteFailure(outcome); gitFail(projectId, prior.method, error); return failedResult(error); }
+  if (prior.method === 'git.commit' && getGit(projectId)?.commitMessage.trim() === prior.params.message) setCommitMessage(projectId, '');
+  await afterWrite(projectId, prior.method, '原 Git 操作已按同号回执确认；未换身份重建');
+  return { status: 'ok' };
 }
 
 /* ---------- 提交 diff（选父 OID 绑定——R62 合同） ---------- */
@@ -346,6 +385,7 @@ export async function loadCommitDiff(projectId: string, oid: string, parentOid?:
 
 function gitFail(projectId: string, op: string, e: unknown): void {
   const msg = e instanceof Error ? e.message : String(e);
-  setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), lastOp: { op, ok: false, detail: msg, at: Date.now() } } } }));
-  toast(`${op} 失败：${msg}`, 'error');
+  const unknown = e instanceof GitWriteFailure && e.outcome.status === 'unknown';
+  setState((s) => ({ ...s, git: { ...s.git, [projectId]: { ...(s.git[projectId] ?? emptyGit()), lastOp: { op, ok: false, outcome: unknown ? 'unknown' : 'failed', detail: msg, at: Date.now() } } } }));
+  toast(`${gitOperationLabel(op)}${unknown ? '结果待确认' : '未完成'}：${msg}`, unknown ? 'warn' : 'error');
 }

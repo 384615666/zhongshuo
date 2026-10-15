@@ -309,21 +309,22 @@ describe('第十一轮·三：RT-24 剩余功能', () => {
     // 非冲突路径拒绝。
     await expect(f.cmd('git.conflict.content', { projectId: f.projectId, path: 'not-conflicted.txt' })).rejects.toThrow(/不处于未合并/);
     // 三方内容。
-    const tri = await f.cmd<{ base: string | null; ours: string | null; theirs: string | null }>('git.conflict.content', { projectId: f.projectId, path: 'c.txt' });
+    const tri = await f.cmd<{ base: string | null; ours: string | null; theirs: string | null; snapshotHash: string }>('git.conflict.content', { projectId: f.projectId, path: 'c.txt' });
     expect(tri.base).toBe('base\n');
     expect(tri.ours).toBe('ours\n');
     expect(tri.theirs).toBe('theirs\n');
     // 手动解决（合并两边的自定义内容）→ add → 未合并清除。
-    const resolved = await f.cmd<{ resolved: boolean }>('git.conflict.resolve', { projectId: f.projectId, path: 'c.txt', content: '手工合并后的最终内容\n' });
+    const cid = 'c-rt24-resolve-retry';
+    const resolveParams = { projectId: f.projectId, path: 'c.txt', content: '手工合并后的最终内容\n', expectedSnapshotHash: tri.snapshotHash };
+    const resolved = await f.cmd<{ resolved: boolean }>('git.conflict.resolve', resolveParams, cid);
     expect(resolved.resolved).toBe(true);
     expect(git(f.root, 'status', '--porcelain')).not.toContain('UU');
     expect(git(f.root, 'status', '--porcelain')).toContain('M  c.txt'); // 已暂存解决结果
     expect(readFileSync(join(f.root, 'c.txt'), 'utf8')).toBe('手工合并后的最终内容\n');
-    // 崩溃重试：路径已解决 → 既成事实恢复。
-    const cid = 'c-rt24-resolve-retry';
-    await f.cmd('git.conflict.resolve', { projectId: f.projectId, path: 'c.txt', content: '手工合并后的最终内容\n' }, cid);
+    // 新身份不能把已外部/此前解决的路径冒充本次成功；原已完成身份仍可恢复历史回执。
+    await expect(f.cmd('git.conflict.resolve', resolveParams)).rejects.toThrow(/不处于原冲突/);
     f.db.prepare(`DELETE FROM command_receipts WHERE command_id = ?`).run(cid);
-    const retry = await f.cmd<{ resolved: boolean; recovered?: boolean; replayed?: boolean }>('git.conflict.resolve', { projectId: f.projectId, path: 'c.txt', content: '手工合并后的最终内容\n' }, cid);
+    const retry = await f.cmd<{ resolved: boolean; recovered?: boolean; replayed?: boolean }>('git.conflict.resolve', resolveParams, cid);
     expect(retry.recovered ?? retry.replayed).toBeTruthy();
     f.db.close();
   }, 30_000);

@@ -8,7 +8,7 @@
  */
 
 export interface ZsEnvelope { protocolVersion: 1; commandId: string; method: string; params: Record<string, unknown> }
-export interface ZsResult<T> { ok: boolean; data?: T; error?: { code: string; message: string } }
+export interface ZsResult<T> { ok: boolean; data?: T; error?: { code: string; message: string; operationPending?: boolean; operationKnownRejected?: boolean } }
 
 export interface ZsBridge {
   command(envelope: ZsEnvelope): Promise<ZsResult<never>>;
@@ -25,7 +25,7 @@ export async function openExportDir(dir: string): Promise<string> {
 }
 
 export interface BridgeOk<T> { status: 'ok'; data: T }
-export interface BridgeFailed { status: 'failed'; code: string; error: string }
+export interface BridgeFailed { status: 'failed'; code: string; error: string; operationKnownRejected?: true }
 export interface BridgeUnknown { status: 'unknown'; error: string }
 export type BridgeOutcome<T> = BridgeOk<T> | BridgeFailed | BridgeUnknown
 
@@ -69,8 +69,9 @@ async function commandOutcome<T>(commandId: string, method: string, params: Reco
     const r = await wrapped;
     if (r === 'timeout') return finish({ status: 'unknown', error: '服务未在时限内回执' });
     if (r.ok) return { status: 'ok', data: r.data as T };
+    if (r.error?.operationPending === true) return finish({ status: 'unknown', error: `${r.error.code}：${r.error.message}。原操作仍待确认，保留原信封；不会自动重放。` });
     if (r.error?.code === '__TRANSPORT__') return finish({ status: 'unknown', error: r.error.message });
-    return finish({ status: 'failed', code: r.error?.code ?? 'ERROR', error: r.error?.message ?? '未知错误' });
+    return finish({ status: 'failed', code: r.error?.code ?? 'ERROR', error: r.error?.message ?? '未知错误', ...(r.error?.operationKnownRejected === true ? { operationKnownRejected: true as const } : {}) });
   } catch (e) {
     // 桥本身抛错（断连/序列化）：结果未知——不是服务端拒绝。
     return finish({ status: 'unknown', error: e instanceof Error ? e.message : String(e) });

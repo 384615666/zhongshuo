@@ -5,7 +5,8 @@ import {RuntimeEffort} from './RuntimeEffort';
 import { runtimePermissionOptions } from '../lib/runtimePermissions';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
 import { getState, useStore } from '../shell';
-import { currentNavSeq } from '../lib/router';
+import { useFormGuard } from '../lib/useFormGuard';
+export { useFormGuard } from '../lib/useFormGuard';
 import { memberWrite, pendingMemberWrites, memberWriteState, memberWriteStorageError, type MemberWrite } from '../data/memberWrites';
 import type { MemberRow } from '../MembersPage';
 export interface ConfigTemplate {
@@ -30,18 +31,6 @@ export async function refreshMemberIdentity(projectId: string) {
     if(failed)throw Error(`房间名单回读失败：${state.readErrors[`roster:${failed.id}`]}；成员已保存，原名单保留，请重试读取`);
   }
   window.dispatchEvent(new CustomEvent('zs-member-changed',{detail:{projectId}}));
-}
-/** Capture target and navigation generation. A -> B -> A does not revive the original form. */
-export function useFormGuard(projectId?: string) {
-    const active = useStore(s => s.activeProjectId);
-    const origin = useRef(currentNavSeq());
-    const [invalid, setInvalid] = useState(false);
-    const alive = useRef(false);
-    useEffect(() => { alive.current = true; const changed = () => { if (currentNavSeq() !== origin.current)
-        setInvalid(true); }; window.addEventListener('hashchange', changed); return () => { alive.current = false; window.removeEventListener('hashchange', changed); }; }, []);
-    useEffect(() => { if (projectId && active !== projectId)
-        setInvalid(true); }, [projectId, active]);
-    return { alive, invalid: invalid || (projectId != null && active !== projectId), valid: () => alive.current && currentNavSeq() === origin.current && (projectId == null || getState().activeProjectId === projectId) };
 }
 function useWriteForm(scope: string, projectId?: string) {
   const guard=useFormGuard(projectId);

@@ -15,8 +15,8 @@
  * - 身份配置缺失如实报错，不代改用户全局 Git 配置；远端操作不在本模块（另批）。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { resolve, join } from 'node:path';
-import { statSync, openSync, readSync, closeSync, writeFileSync, renameSync } from 'node:fs';
+import { resolve, join, dirname, relative, isAbsolute, sep } from 'node:path';
+import { statSync, lstatSync, realpathSync, openSync, readSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand, getReceipt } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -213,6 +213,7 @@ function persistOperation<T extends object>(
   journal: JournalInput,
   row: { projectId: string; action: GitOpAction; taskId?: string | null; changeSetIds?: string[]; request: unknown; result: T; headBefore?: string | null; headAfter?: string | null; commitOid?: string | null; emit?: () => void },
 ): { replayed: boolean; data: T } {
+  try {
   if (journal.commitGate != null) journal.commitGate();
   const outcome = runCommand<T>(db, { idempotencyScope: journal.scope, commandId: journal.commandId, payloadHash: journal.payloadHash, now: journal.now }, () => {
     db.prepare(
@@ -232,6 +233,12 @@ function persistOperation<T extends object>(
   });
   if (!outcome.ok) throw new GitWriteError(outcome.error.code === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'STORAGE_UNAVAILABLE', outcome.error.message, { details: outcome.error.details });
   return { replayed: outcome.replayed, data: outcome.data };
+  } catch (e) {
+    if (e instanceof GitWriteError && e.code === 'IDEMPOTENCY_CONFLICT') throw e;
+    // A business result was already determined before entering this function. A failed
+    // receipt transaction cannot turn it into a known "not executed" response.
+    throw new GitWriteError(e instanceof GitWriteError ? e.code : 'STORAGE_UNAVAILABLE', `Git 结果已产生，但耐久回执未完成：${e instanceof Error ? e.message : String(e)}`, { operationPending: true });
+  }
 }
 
 /** 测试接缝：按给定 journal 上下文写一条 pending 意图行（模拟崩溃窗口；正式路径由各命令内部写入）。 */
@@ -352,8 +359,20 @@ export async function gitUnstage(db: ZhongshuoDatabase, input: { projectId: stri
       toUnstage.push(path);
     }
     if (toUnstage.length > 0) {
-      // restore --staged 只改索引（不动工作区内容）；新暂存的未跟踪文件回到未跟踪。
-      await mustGit(['-C', loc.worktreeRoot, 'restore', '--staged', '--', ...toUnstage], { env: writeEnv(true), what: 'restore --staged' });
+      const head = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', 'HEAD'], { capBytes: 4096 });
+      if (head.spawnError || head.truncated || ![0,1].includes(head.exitCode ?? -1)) throw new GitWriteError('GIT_COMMAND_FAILED', '取消暂存前无法核实 HEAD');
+      if (head.exitCode === 0) {
+        await mustGit(['-C', loc.worktreeRoot, 'restore', '--staged', '--', ...toUnstage], { env: writeEnv(true), what: 'restore --staged' });
+      } else {
+        // A real unborn branch has no HEAD tree to restore. Remove only these
+        // index entries; never use rm (which could delete the sole working copy).
+        const symbolic = await mustGit(['-C', loc.worktreeRoot, 'symbolic-ref', 'HEAD'], { capBytes: 4096, what: 'unborn branch' });
+        const ref = symbolic.stdout.toString('utf8').trim();
+        if (!ref.startsWith('refs/heads/')) throw new GitWriteError('GIT_COMMAND_FAILED', '无法确认首提交前的分支身份');
+        const exists = await captureGit(['-C', loc.worktreeRoot, 'show-ref', '--verify', '--quiet', ref], { capBytes: 4096 });
+        if (exists.spawnError || exists.truncated || exists.exitCode !== 1) throw new GitWriteError('GIT_COMMAND_FAILED', 'HEAD 不可读且不能证明分支尚无提交，未改索引');
+        await mustGit(['-C', loc.worktreeRoot, 'update-index', '--force-remove', '--', ...toUnstage], { env: writeEnv(true), what: 'unstage unborn index entries' });
+      }
     }
     const result: StageOutcome = { staged: toUnstage, skipped };
     const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'unstage', request: { paths: input.paths }, result });
@@ -1123,7 +1142,7 @@ export async function gitRemoteList(input: { projectRoot: string }): Promise<{ r
   return { remotes };
 }
 
-export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; name: string; expectedHead: string | null; journal: JournalInput }): Promise<{ name: string; oid: string; replayed?: boolean }> {
+export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; name: string; expectedHead: string | null; journal: JournalInput }): Promise<{ name: string; oid: string; replayed?: boolean; recovered?: boolean; verifiedExisting?: boolean }> {
   const replay = replayIfReceipted<{ name: string; oid: string; replayed?: boolean }>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
   validateBranchName(input.name);
@@ -1134,16 +1153,37 @@ export async function gitBranchCreate(db: ZhongshuoDatabase, input: { projectId:
     if (existing != null) {
       requirePendingHashMatch(db, input.journal, existing);
       if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as { name: string; oid: string }), replayed: true };
-    } else {
-      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'branch_create', request: { name: input.name, expectedHead: input.expectedHead } });
     }
+    const metadata = existing ? JSON.parse(existing.request_json ?? '{}') as { creationStarted?: boolean; creationRejected?: boolean } : null;
+    if (metadata?.creationRejected) throw new GitWriteError('VALIDATION_INVALID', '原分支创建已被 Git 明确拒绝，未覆盖已有分支；可修改输入后重新提交', { operationKnownRejected: true });
+    const readTarget = async () => {
+      const r = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.name}`], { capBytes: 4096 });
+      if (r.exitCode === 1 && !r.spawnError && !r.truncated) return null;
+      if (r.exitCode !== 0 || r.spawnError || r.truncated || !OID_RE.test(r.stdout.toString('utf8').trim())) throw new GitWriteError('GIT_COMMAND_FAILED', '目标分支身份读取失败，未当作分支不存在');
+      return r.stdout.toString('utf8').trim();
+    };
+    const target = await readTarget();
+    if (existing && target != null) {
+      if (target !== input.expectedHead) throw new GitWriteError('STALE_REVISION', '原目标分支已指向其他提交，不能按原身份覆盖或重建');
+      const result = { name: input.name, oid: target, recovered: true, verifiedExisting: true };
+      return persistOperation(db, input.journal, { projectId: input.projectId, action: 'branch_create', request: { name: input.name, expectedHead: input.expectedHead }, result }).data;
+    }
+    if (!existing && target != null) throw new GitWriteError('VALIDATION_INVALID', `分支 ${input.name} 已存在；没有覆盖或切换当前分支`);
+    if (existing && metadata?.creationStarted !== false) throw new GitWriteError('STALE_REVISION', '原分支创建结果未能核实，且目标分支当前不存在；保留原身份，不重新创建可能已被删除的分支');
     const headCap = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', 'HEAD'], { capBytes: 4096 });
     const head = headCap.exitCode === 0 ? headCap.stdout.toString('utf8').trim() : null;
-    if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `HEAD 已移动（期望 ${input.expectedHead ?? '空'} → 当前 ${head ?? '空'}）——分支将建于用户未确认的位置，请刷新后重试`);
+    if (head !== input.expectedHead) throw new GitWriteError('STALE_REVISION', `HEAD 已移动（期望 ${input.expectedHead ?? '空'} → 当前 ${head ?? '空'}）——分支将建于用户未确认的位置，请刷新后重试`, metadata?.creationStarted === false ? { operationKnownRejected: true } : undefined);
+    if (input.expectedHead == null) throw new GitWriteError('VALIDATION_INVALID', '仓库尚无提交，请先完成第一次提交后再创建分支');
+    if (!existing) beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'branch_create', request: { name: input.name, expectedHead: input.expectedHead, creationStarted: false } });
+    db.prepare("UPDATE git_operations SET request_json=? WHERE id=? AND status='pending'").run(JSON.stringify({ name: input.name, expectedHead: input.expectedHead, creationStarted: true }), input.journal.commandId);
     const at = input.expectedHead ?? 'HEAD';
     const create = await captureGit(['-C', loc.worktreeRoot, 'branch', input.name, at], { capBytes: 8192 });
     if (create.exitCode !== 0) {
-      throw new GitWriteError('GIT_COMMAND_FAILED', `创建分支失败：${create.stderr.trim().slice(0, 160)}（同名分支已存在等——如实报错，不覆盖）`);
+      if (await readTarget() == null && create.exitCode != null && !create.spawnError) {
+        db.prepare("UPDATE git_operations SET request_json=? WHERE id=? AND status='pending'").run(JSON.stringify({ name: input.name, expectedHead: input.expectedHead, creationStarted: true, creationRejected: true }), input.journal.commandId);
+        throw new GitWriteError('GIT_COMMAND_FAILED', `创建分支被 Git 拒绝：${create.stderr.trim().slice(0,160)}，输入保留`, { operationKnownRejected: true });
+      }
+      throw new GitWriteError('GIT_COMMAND_FAILED', `创建分支结果未能确认：${create.stderr.trim().slice(0, 160)}，原身份保留，不覆盖或自动重建`, { operationPending: true });
     }
     const result = { name: input.name, oid: input.expectedHead ?? '' };
     const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'branch_create', request: { name: input.name, expectedHead: input.expectedHead }, result });
@@ -1454,63 +1494,147 @@ export async function gitPull(db: ZhongshuoDatabase, input: { projectId: string;
   });
 }
 
-export interface ConflictContent { path: string; base: string | null; ours: string | null; theirs: string | null }
+export interface ConflictSnapshot {
+  path: string; head: string | null; branch: string | null;
+  stages: Array<{ mode: string; oid: string; stage: number }>;
+  worktree: { hash: string | null; bytes: number | null };
+}
+export interface ConflictContent { path: string; base: string | null; ours: string | null; theirs: string | null; snapshotHash: string; snapshot: ConflictSnapshot }
+const CONFLICT_TEXT_CAP = 64 * 1024;
+const CONFLICT_PROPOSAL_CAP = 4 * 1024 * 1024;
+const contentHash = (content: string | Buffer): string => createHash('sha256').update(content).digest('hex');
+
+/** No symlink/directory replacement is accepted as an editable conflict file. */
+function conflictWorktree(loc: RepoLocation, path: string): ConflictSnapshot['worktree'] {
+  const file = join(loc.worktreeRoot, ...path.split('/'));
+  const parent = realpathSync.native(dirname(file)), root = realpathSync.native(loc.worktreeRoot);
+  const rel = relative(root, parent);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new GitWriteError('PATH_OUT_OF_REPO', '冲突文件的物理父目录已越出仓库');
+  let st;
+  try { st = lstatSync(file); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { hash: null, bytes: null }; throw e; }
+  if (!st.isFile() || st.isSymbolicLink()) throw new GitWriteError('VALIDATION_INVALID', '冲突路径不是可编辑的普通文件');
+  if (st.size > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '工作区冲突文件超限（>4MiB），请用 Git 客户端处理');
+  const fd = openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(CONFLICT_PROPOSAL_CAP + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) { const n = readSync(fd, buffer, bytes, buffer.length - bytes, bytes); if (n === 0) break; bytes += n; }
+    if (bytes > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '工作区冲突文件读取期间超限');
+    if (bytes !== st.size) throw new GitWriteError('STALE_REVISION', '冲突文件读取期间大小变化，请重新读取');
+    return { hash: contentHash(buffer.subarray(0, bytes)), bytes };
+  } finally { closeSync(fd); }
+}
+async function conflictSnapshot(loc: RepoLocation, path: string, projectId: string): Promise<{ snapshot: ConflictSnapshot; hash: string }> {
+  const index = await mustGit(['-C', loc.worktreeRoot, 'ls-files', '--stage', '-z', '--', path], { capBytes: 32 * 1024, env: writeEnv(true), what: 'ls-files (conflict identity)' });
+  if (index.truncated) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突索引身份读取超限，拒绝不完整快照');
+  const stages = index.stdout.toString('utf8').split('\0').filter(Boolean).map(line => {
+    const m = /^(\d{6}) ([0-9a-f]{40}) ([0-3])\t([\s\S]*)$/.exec(line);
+    if (!m || m[4] !== path) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突索引路径或对象身份无法核实');
+    return { mode: m[1]!, oid: m[2]!, stage: Number(m[3]) };
+  }).sort((a, b) => a.stage - b.stage);
+  const headRead = await captureGit(['-C', loc.worktreeRoot, 'rev-parse', '--verify', 'HEAD'], { capBytes: 4096 });
+  if (headRead.spawnError || headRead.truncated || (stages.some(e => e.stage > 0) && headRead.exitCode !== 0)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突 HEAD 身份读取失败，未当作空提交');
+  const head = headRead.exitCode === 0 ? headRead.stdout.toString('utf8').trim() : null;
+  if (head != null && !OID_RE.test(head)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突 HEAD 对象身份无效');
+  const branchRead = await captureGit(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { capBytes: 4096 });
+  if (branchRead.spawnError || branchRead.truncated || ![0,1].includes(branchRead.exitCode ?? -1)) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突分支身份读取失败');
+  const snapshot: ConflictSnapshot = { path, head, branch: branchRead.exitCode === 0 ? branchRead.stdout.toString('utf8').trim() : null, stages, worktree: conflictWorktree(loc, path) };
+  return { snapshot, hash: contentHash(JSON.stringify({ projectId, root: comparisonKey(realpathSync.native(loc.worktreeRoot)), ...snapshot })) };
+}
+const isConflict = (s: ConflictSnapshot): boolean => s.stages.some(e => e.stage > 0);
+const sameApprovedIndex = (a: ConflictSnapshot, b: ConflictSnapshot): boolean => a.path === b.path && a.head === b.head && a.branch === b.branch && JSON.stringify(a.stages) === JSON.stringify(b.stages);
 
 export async function gitConflictContent(input: { projectId: string; projectRoot: string; path: string }): Promise<ConflictContent> {
   const loc = await repoGuard(input.projectRoot, [input.path]);
-  const status = await currentStatus(loc);
-  if (!status.some((e) => e.path === input.path && isUnmergedXy(e.xy))) {
+  const before = await conflictSnapshot(loc, input.path, input.projectId);
+  if (!isConflict(before.snapshot)) {
     throw new GitWriteError('VALIDATION_INVALID', `该路径当前不处于未合并（冲突）状态：${input.path}`);
   }
   const stage = async (n: 1 | 2 | 3): Promise<string | null> => {
-    const cap = await captureGit(['-C', loc.worktreeRoot, 'show', `:${n}:${input.path}`], { capBytes: 64 * 1024 + 1 });
-    if (cap.exitCode !== 0) return null;
-    return cap.stdout.toString('utf8');
+    const entry = before.snapshot.stages.find(e => e.stage === n);
+    if (!entry) return null; // Actual index absence, not an I/O error or truncated blob.
+    if (!['100644', '100755'].includes(entry.mode)) throw new GitWriteError('VALIDATION_INVALID', '冲突包含非普通文件，不能作为文本编辑');
+    const cap = await captureGit(['-C', loc.worktreeRoot, 'cat-file', 'blob', entry.oid], { capBytes: CONFLICT_TEXT_CAP + 1 });
+    if (cap.truncated || cap.stdout.length > CONFLICT_TEXT_CAP) throw new GitWriteError('VALIDATION_INVALID', '冲突一方正文超限（>64KiB），请用 Git 客户端完整处理；未加载为可编辑内容');
+    if (cap.spawnError || cap.exitCode !== 0) throw new GitWriteError('GIT_COMMAND_FAILED', '冲突对象读取失败，未当作该方不存在');
+    if (cap.stdout.includes(0)) throw new GitWriteError('VALIDATION_INVALID', '二进制冲突不能在文本编辑器中解决');
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(cap.stdout); }
+    catch { throw new GitWriteError('VALIDATION_INVALID', '冲突一方不是有效 UTF-8 文本，请用 Git 客户端处理'); }
   };
-  return { path: input.path, base: await stage(1), ours: await stage(2), theirs: await stage(3) };
+  const base = await stage(1), ours = await stage(2), theirs = await stage(3);
+  if ((await conflictSnapshot(loc, input.path, input.projectId)).hash !== before.hash) throw new GitWriteError('STALE_REVISION', '读取期间冲突已变化，请重新读取三方内容');
+  return { path: input.path, base, ours, theirs, snapshotHash: before.hash, snapshot: before.snapshot };
 }
 
-export async function gitConflictResolve(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; path: string; content: string; journal: JournalInput }): Promise<{ path: string; resolved: true; replayed?: boolean; recovered?: boolean }> {
+export async function gitConflictResolve(db: ZhongshuoDatabase, input: { projectId: string; projectRoot: string; path: string; content: string; expectedSnapshotHash?: string; journal: JournalInput }): Promise<{ path: string; resolved: true; replayed?: boolean; recovered?: boolean }> {
   const replay = replayIfReceipted<{ path: string; resolved: true; replayed?: boolean }>(db, input.journal);
   if (replay != null) return { ...replay.data, replayed: true };
-  if (input.content.length > 4 * 1024 * 1024) throw new GitWriteError('VALIDATION_INVALID', '解决内容超限（>4MB）');
+  const prior = getOperationRow(db, input.journal.commandId);
+  if (prior?.status === 'done') {
+    requirePendingHashMatch(db, input.journal, prior);
+    return { ...(JSON.parse(prior.result_json ?? '{}') as { path: string; resolved: true }), replayed: true, recovered: true };
+  }
+  try {
   const loc = await repoGuard(input.projectRoot, [input.path]);
-  return withRepoWriteLock(loc.worktreeRoot, async () => {
+  return await withRepoWriteLock(loc.worktreeRoot, async () => {
     assertWritable(db, input.projectId, input.projectRoot);
     const existing = getOperationRow(db, input.journal.commandId);
     if (existing != null) {
       requirePendingHashMatch(db, input.journal, existing);
       if (existing.status === 'done') return { ...(JSON.parse(existing.result_json ?? '{}') as { path: string; resolved: true }), replayed: true, recovered: true };
-      // pending：路径仍在冲突=未完成可重试；已不在冲突=已完成（下方校验会给出 satisfied）。
-    } else {
-      beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'conflict_resolve', request: { path: input.path, contentHash: createHash('sha256').update(input.content).digest('hex') } });
     }
-    const status = await currentStatus(loc);
-    const stillConflicted = status.some((e) => e.path === input.path && isUnmergedXy(e.xy));
-    if (!stillConflicted) {
-      // 崩溃重试窗口：路径已解决——按既成事实收口（内容已由用户确认写入）。
+    if (Buffer.byteLength(input.content, 'utf8') > CONFLICT_PROPOSAL_CAP) throw new GitWriteError('VALIDATION_INVALID', '解决内容超限（>4MiB）');
+    const now = await conflictSnapshot(loc, input.path, input.projectId), hash = contentHash(input.content);
+    type Pending = { version?: number; path: string; contentHash: string; approvedSnapshot?: ConflictSnapshot; expectedSnapshotHash?: string; resolvedIndex?: { oid: string; mode: string } };
+    const pending: Pending | null = existing ? JSON.parse(existing.request_json ?? '{}') as Pending : null;
+    const approved = pending?.approvedSnapshot;
+    if (pending?.version != null && (pending.version !== 2 || !approved || pending.expectedSnapshotHash !== input.expectedSnapshotHash)) throw new GitWriteError('STALE_REVISION', '原冲突操作的批准快照不可核实，保留原身份且不写入');
+    if (!isConflict(now.snapshot)) {
+      const index = now.snapshot.stages.length === 1 && now.snapshot.stages[0]?.stage === 0 ? now.snapshot.stages[0] : null;
+      const blob = Buffer.from(input.content, 'utf8'), rawOid = createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${blob.length}\0`), blob])).digest('hex');
+      const expectedMode = approved?.stages.find(s => s.stage === 2)?.mode ?? approved?.stages.find(s => s.stage === 3)?.mode ?? approved?.stages.find(s => s.stage === 1)?.mode ?? '100644';
+      const matchingIndex = index && (pending?.resolvedIndex ? index.oid === pending.resolvedIndex.oid && index.mode === pending.resolvedIndex.mode : index.oid === rawOid && index.mode === expectedMode);
+      if (!pending || pending.path !== input.path || pending.contentHash !== hash || now.snapshot.worktree.hash !== hash || !matchingIndex || (approved && (now.snapshot.head !== approved.head || now.snapshot.branch !== approved.branch))) throw new GitWriteError('STALE_REVISION', '当前路径已不处于原冲突，无法证明原提案已写入并暂存；未认领为本次成功');
       const result = { path: input.path, resolved: true as const };
       const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'conflict_resolve', request: { path: input.path }, result });
       return { ...persisted.data, recovered: true };
     }
+    if (!input.expectedSnapshotHash || !/^[0-9a-f]{64}$/.test(input.expectedSnapshotHash)) throw new GitWriteError('STALE_REVISION', '缺少已读取的冲突快照；请先重新查看三方内容并确认');
+    if (pending && (!approved || pending.contentHash !== hash || pending.path !== input.path || pending.expectedSnapshotHash !== input.expectedSnapshotHash)) throw new GitWriteError('STALE_REVISION', '原待确认操作缺少匹配的批准身份，保留原记录，未重新覆盖冲突');
+    const ownPartialWrite = approved && sameApprovedIndex(approved, now.snapshot) && now.snapshot.worktree.hash === hash;
+    if (now.hash !== input.expectedSnapshotHash && !ownPartialWrite) throw new GitWriteError('STALE_REVISION', '冲突、HEAD、索引或工作区内容已变化；原提案保留，请重新读取后明确确认');
+    const approval = approved ?? now.snapshot;
+    if (!pending) beginPendingOperation(db, input.journal, { projectId: input.projectId, action: 'conflict_resolve', request: { version: 2, path: input.path, contentHash: hash, expectedSnapshotHash: input.expectedSnapshotHash, approvedSnapshot: approval }, headBefore: approval.head });
     // 只接受手动解决内容（§14.6：不提供整文件「一键用某边覆盖」）——写工作区+add。
     const fsPath = join(loc.worktreeRoot, ...input.path.split('/'));
-    writeFileSyncGuarded(fsPath, input.content);
+    if (!ownPartialWrite) writeFileSyncGuarded(fsPath, input.content);
+    const beforeAdd = await conflictSnapshot(loc, input.path, input.projectId);
+    if (!sameApprovedIndex(approval, beforeAdd.snapshot) || beforeAdd.snapshot.worktree.hash !== hash) throw new GitWriteError('STALE_REVISION', '写入后事实变化，未将其他编辑暂存；原操作保留待确认');
     await mustGit(['-C', loc.worktreeRoot, 'add', '--', input.path], { env: writeEnv(true), what: 'add (conflict-resolve)' });
-    const after = await currentStatus(loc);
-    if (after.some((e) => e.path === input.path && isUnmergedXy(e.xy))) {
-      throw new GitWriteError('GIT_COMMAND_FAILED', `解决后路径仍处于未合并状态：${input.path}——如实失败`);
-    }
+    const after = (await conflictSnapshot(loc, input.path, input.projectId)).snapshot;
+    const staged = after.stages.length === 1 && after.stages[0]?.stage === 0 ? after.stages[0] : null;
+    const approvedMode = approval.stages.find(s => s.stage === 2)?.mode ?? approval.stages.find(s => s.stage === 3)?.mode ?? approval.stages.find(s => s.stage === 1)?.mode;
+    if (!staged || !['100644','100755'].includes(staged.mode) || staged.mode !== approvedMode || after.worktree.hash !== hash || after.head !== approval.head || after.branch !== approval.branch) throw new GitWriteError('STALE_REVISION', '暂存后事实不符，原操作尚未确认完成；请保留提案与原身份');
+    const metadata: Pending = { version: 2, path: input.path, contentHash: hash, expectedSnapshotHash: input.expectedSnapshotHash, approvedSnapshot: approval, resolvedIndex: { oid: staged.oid, mode: staged.mode } };
+    db.prepare("UPDATE git_operations SET request_json=? WHERE id=? AND status='pending'").run(JSON.stringify(metadata), input.journal.commandId);
     const result = { path: input.path, resolved: true as const };
     const persisted = persistOperation(db, input.journal, { projectId: input.projectId, action: 'conflict_resolve', request: { path: input.path }, result });
     return persisted.data;
   });
+  } catch (e) {
+    if (getOperationRow(db, input.journal.commandId)?.status === 'pending') {
+      throw new GitWriteError(e instanceof GitWriteError ? e.code : 'STORAGE_UNAVAILABLE', e instanceof Error ? e.message : String(e), { operationPending: true });
+    }
+    throw e;
+  }
 }
 
 /** 同目录临时文件+rename 写入（与撤销链一致的防半写方式）。 */
 function writeFileSyncGuarded(fsPath: string, content: string): void {
   const tmp = `${fsPath}.zs-resolve-${randomUUID().slice(0, 8)}`;
-  writeFileSync(tmp, content, 'utf8');
+  let mode: number | undefined;
+  try { mode = statSync(fsPath).mode & 0o777; } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+  writeFileSync(tmp, content, { encoding: 'utf8', mode });
   renameSync(tmp, fsPath);
 }
 

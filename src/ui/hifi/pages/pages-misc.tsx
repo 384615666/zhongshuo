@@ -17,7 +17,8 @@ import { useStore, toast, recordWrite } from '../data/store';
 import { Modal } from '../components/ui';
 import { byId, lockOfProject } from '../data/selectors';
 import { consensusLabel, formatBytes, formatDuration, fullTime, relTime } from '../lib/format';
-import { pull, push, refreshGitState, stageByOwner } from '../data/actions-git';
+import { pull, push, refreshGitState, stageByOwner, gitOperationLabel } from '../data/actions-git';
+import { PendingGitOperations } from '../components/PendingGitOperations';
 import { focusProject, rememberFileGitTab, resolveFileGitTab } from '../data/actions-nav';
 import { useLazyTree, fileSizeLabel, type TreeNode } from '../data/project-files';
 import { navigate } from '../lib/router';
@@ -174,7 +175,8 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
   }, [activeCs, leftTab, selected?.path, detailRef]);
 
   const git = s.git[projectId];
-  const isGit = Boolean(project?.isGit) && Boolean(git && git.branches.length > 0);
+  const isGit = Boolean(project?.isGit) && git != null && git.notARepo !== true;
+  const changedFileCount = new Set(git?.status.map(e => e.path) ?? []).size;
   /** 状态条要用的两项：当前分支（算领先/落后）与本项目的写入锁（§10.3 锁域 = 同一物理目录） */
   const curBranch = git?.branches.find((b) => b.isCurrent);
   const lock = lockOfProject(s, projectId);
@@ -245,7 +247,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                 {/* 「分支」→「新建分支」：这个按钮是**创建**动作，
                     左栏的「分支」是**查看**视图，两个不能同名。
                     之前同名会让"点顶部想新建"和"点左栏想看分支"分不清。 */}
-                <button className="btn sm" onClick={() => setBranchModal(true)} title="基于当前 HEAD 创建并切换分支">
+                <button className="btn sm" onClick={() => setBranchModal(true)} title="基于已确认的 HEAD 创建分支；切换另行操作">
                   <Icon name="git-branch" size={12} /> 新建分支
                 </button>
               </>
@@ -262,7 +264,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
             <Icon name="git-branch" size={13} /> Git
             {/* 这个数字是**工作区改动文件数**，不是提交数、也不是审批数 */}
             {git && git.status.length > 0 ? (
-              <span className="faint" title="工作区改动文件数">{git.status.length}</span>
+              <span className="faint" title="工作区改动文件数">{changedFileCount}</span>
             ) : null}
             {!isGit ? <span className="faint">未初始化</span> : null}
           </button>
@@ -294,7 +296,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
                     })()}
               </span>
               <span className="fg-sep" />
-              <span title="工作区改动文件数">{git.status.length} 个未提交改动</span>
+              <span title="工作区改动文件数">{changedFileCount} 个未提交改动</span>
             </>
           ) : null}
           {lock ? (
@@ -319,6 +321,7 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
         {git?.readErrors != null && Object.keys(git.readErrors).length > 0 ? (
           <div className="panel warning" style={{ marginBottom: 10 }} data-zs-git-read-errors="1">
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> Git 部分信息读取失败</div>
+            {git.readErrors.status != null ? <div>仓库状态：{git.readErrors.status}（保留上次确认事实）</div> : null}
             {git.readErrors.branches != null ? <div>分支：{git.readErrors.branches}（保留上次已确认列表）</div> : null}
             {git.readErrors.history != null ? <div>历史：{git.readErrors.history}（保留上次已确认列表）</div> : null}
             {git.readErrors.remotes != null ? <div>远端：{git.readErrors.remotes}（保留上次已确认列表）</div> : null}
@@ -337,12 +340,14 @@ function FilesGitPageForProject({ projectId, query }: { projectId: string; query
             楚。真实 Git 执行错误/权限/目录失效仍在此（NOT_A_GIT_REPO 已分流为上方中性态）。 */}
         {git?.lastOp && !git.lastOp.ok ? (
           <div className="panel danger" style={{ marginBottom: 14 }}>
-            <div className="panel-title"><Icon name="alert-triangle" size={13} /> {git.lastOp.op} 失败</div>
+            <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
             {git.lastOp.detail}
             <span className="small faint"> · {relTime(git.lastOp.at)}</span>
+            <button className="btn ghost sm" onClick={() => void refreshGitState(projectId)}>刷新仓库事实</button>
           </div>
         ) : null}
 
+        {tab === 'git' ? <PendingGitOperations projectId={projectId}/> : null}
         {project.status === 'missing' ? (
           <div className="panel warning" style={{ marginBottom: 14 }}>
             <div className="panel-title"><Icon name="alert-triangle" size={13} /> 项目目录失效</div>

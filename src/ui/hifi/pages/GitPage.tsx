@@ -30,12 +30,14 @@ import { EmptyState, Segmented, Tag } from '../components/ui';
 import { useStore, toast } from '../data/store';
 import {
   checkoutBranch, commit, pull, push, refreshGitState, setCommitMessage, stageByOwner, stageFile,
-  undoLastCommit, unstageAll, unstageFile, loadFileDiff, loadCommitDiff, parseUnifiedDiff,
+  unstageAll, unstageFile, loadFileDiff, loadCommitDiff, parseUnifiedDiff, gitOperationLabel,
 } from '../data/actions-git';
 import { fullTime, relTime } from '../lib/format';
 import { navigate } from '../lib/router';
-import { ConflictModal, NewBranchModal } from './GitDialogs';
+import { ConflictModal, NewBranchModal, UndoCommitModal } from './GitDialogs';
 import type { GitStatusEntry } from '../data/types';
+import { gitEntryKey, selectedGitEntry } from '../data/gitEntries';
+import { openExternalDeepLink } from '../loader';
 
 type GitTab = 'worktree' | 'history' | 'branches';
 
@@ -148,6 +150,7 @@ export function GitPage({
   const [openDiff, setOpenDiff] = useState<string[]>([]);
   const [branchModal, setBranchModal] = useState(false);
   const [conflictPath, setConflictPath] = useState<string | null>(null);
+  const [undoApproved, setUndoApproved] = useState<{ commitOid: string; expectedHead: string; expectedBranch: string; subject: string } | null>(null);
   /** 「你自己的改动」默认折叠：它是保护性说明，不是主要工作对象 */
   const [ownOpen, setOwnOpen] = useState(false);
   const { narrow, pane, openDetail, backToList, listRef, detailRef } = useNarrowPane(embedded ? narrowProp : undefined);
@@ -159,6 +162,8 @@ export function GitPage({
     setOpenDiff([]);
     setOwnOpen(false);
     setConflictPath(null);
+    setBranchModal(false);
+    setUndoApproved(null);
     setTab('worktree');
   }, [projectId]);
 
@@ -171,34 +176,66 @@ export function GitPage({
     return () => { window.clearInterval(t); };
   }, [projectId]);
   /* 单文件 diff（选中即装载——git.diff 按需取真实正文）。 */
-  const [entryDiff, setEntryDiff] = useState<{ path: string; hunks: ReturnType<typeof parseUnifiedDiff>; truncated: boolean; binary: boolean } | null>(null);
-  const activeEntryKey = activeEntryOf(git, sel);
+  type FileDiff = Awaited<ReturnType<typeof loadFileDiff>>;
+  const [entryRead, setEntryRead] = useState<{ key: string; data: FileDiff | null; error: string | null; loading: boolean; at: number | null } | null>(null);
+  const entryReload = useRef<() => void>(() => {});
+  const activeEntryKey = selectedGitEntry(git?.status ?? [], sel);
+  const entryReadKey = JSON.stringify([projectId, activeEntryKey?.path, activeEntryKey?.staged]);
+  const entryDiff = entryRead?.key === entryReadKey ? entryRead.data : null;
+  const entryReadError = entryRead?.key === entryReadKey ? entryRead.error : null;
   useEffect(() => {
-    if (tab !== 'worktree' || activeEntryKey == null) { setEntryDiff(null); return; }
-    let cancelled = false;
-    void loadFileDiff(projectId, activeEntryKey.path, activeEntryKey.staged)
-      .then((r) => { if (!cancelled) setEntryDiff({ path: activeEntryKey.path, hunks: r.hunks, truncated: r.truncated, binary: r.binary }); })
-      .catch((e: unknown) => { if (!cancelled) setEntryDiff({ path: activeEntryKey.path, hunks: [], truncated: false, binary: false, ...( { err: String((e as Error).message) } as object) } as never); if (!cancelled) toast(`diff 读取失败：${(e as Error).message}`, 'error'); });
-    return () => { cancelled = true; };
+    if (tab !== 'worktree' || activeEntryKey == null || activeEntryKey.state === 'conflicted') return;
+    let cancelled = false, busy = false;
+    const read = async () => {
+      if (cancelled || busy || document.visibilityState === 'hidden' || document.body.classList.contains('legacy-on')) return;
+      busy = true;
+      setEntryRead(prev => ({ key: entryReadKey, data: prev?.key === entryReadKey ? prev.data : null, error: null, loading: true, at: prev?.key === entryReadKey ? prev.at : null }));
+      try {
+        const data = await loadFileDiff(projectId, activeEntryKey.path, activeEntryKey.staged);
+        if (!cancelled) setEntryRead({ key: entryReadKey, data, error: null, loading: false, at: Date.now() });
+      } catch (e) {
+        if (!cancelled) setEntryRead(prev => ({ key: entryReadKey, data: prev?.key === entryReadKey ? prev.data : null, error: (e as Error).message, loading: false, at: prev?.key === entryReadKey ? prev.at : null }));
+      } finally { busy = false; }
+    };
+    entryReload.current = () => { void read(); };
+    const visible = () => { void read(); };
+    void read();
+    const timer = window.setInterval(visible, 10000);
+    document.addEventListener('visibilitychange', visible);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', visible); entryReload.current = () => {}; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, activeEntryKey?.path, activeEntryKey?.staged]);
+  }, [projectId, tab, entryReadKey, activeEntryKey?.state]);
   /* 提交 diff（历史选中即装载——选父 OID 绑定由 R62 合同保证）。 */
-  const [commitFiles, setCommitFiles] = useState<Array<{ path: string; change: string; binary: boolean; truncated: boolean; diff: ReturnType<typeof parseUnifiedDiff> }>>([]);
-  const [commitFilesLoaded, setCommitFilesLoaded] = useState(false);
+  type CommitDiff = Awaited<ReturnType<typeof loadCommitDiff>>;
+  const [commitParent, setCommitParent] = useState<{ oid: string; parent: string } | null>(null);
+  const [commitRead, setCommitRead] = useState<{ key: string; data: CommitDiff | null; error: string | null; loading: boolean } | null>(null);
+  const commitReload = useRef<() => void>(() => {});
   const activeCommitHash = git?.commits.find((c) => c.hash === sel)?.hash ?? git?.commits[0]?.hash ?? null;
+  const parentOid = commitParent?.oid === activeCommitHash ? commitParent.parent : undefined;
+  const commitReadKey = JSON.stringify([projectId, activeCommitHash, parentOid]);
+  const commitData = commitRead?.key === commitReadKey ? commitRead.data : null;
+  const commitError = commitRead?.key === commitReadKey ? commitRead.error : null;
+  const commitFiles = (commitData?.patches ?? []).map(pt => ({ ...pt, diff: pt.binary ? [] : parseUnifiedDiff(pt.text) }));
+  const commitFilesLoaded = commitData != null;
   useEffect(() => {
-    if (tab !== 'history' || activeCommitHash == null) { setCommitFiles([]); return; }
-    let cancelled = false;
-    void loadCommitDiff(projectId, activeCommitHash)
-      .then((r) => {
-        if (cancelled) return;
-        setCommitFiles((r.patches ?? []).map((pt) => ({ path: pt.path, change: pt.change, binary: pt.binary, truncated: pt.truncated, diff: pt.binary ? [] : parseUnifiedDiff(pt.text) })));
-        setCommitFilesLoaded(true);
-      })
-      .catch((e: unknown) => { if (!cancelled) { toast(`提交 diff 读取失败：${(e as Error).message}`, 'error'); setCommitFiles([]); } });
-    return () => { cancelled = true; };
+    if (tab !== 'history' || activeCommitHash == null) return;
+    let cancelled = false, busy = false;
+    const read = async () => {
+      if (cancelled || busy) return;
+      busy = true;
+      setCommitRead(prev => ({ key: commitReadKey, data: prev?.key === commitReadKey ? prev.data : null, error: null, loading: true }));
+      try {
+        const data = await loadCommitDiff(projectId, activeCommitHash, parentOid);
+        if (data.commit.oid !== activeCommitHash || (parentOid != null && data.comparedParent !== parentOid)) throw Error('提交或比较父身份不匹配，请重新读取');
+        if (!cancelled) setCommitRead({ key: commitReadKey, data, error: null, loading: false });
+      } catch (e) { if (!cancelled) setCommitRead(prev => ({ key: commitReadKey, data: prev?.key === commitReadKey ? prev.data : null, error: (e as Error).message, loading: false })); }
+      finally { busy = false; }
+    };
+    commitReload.current = () => { void read(); };
+    void read();
+    return () => { cancelled = true; commitReload.current = () => {}; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, activeCommitHash]);
+  }, [projectId, tab, activeCommitHash, parentOid, commitReadKey]);
 
   /* 换选中项：详情从顶部开始展示（左栏自己的滚动位置不动） */
   useEffect(() => {
@@ -216,7 +253,7 @@ export function GitPage({
       </div>
     );
   }
-  if (!project || !git || git.branches.length === 0) {
+  if (!project || !git || git.notARepo === true) {
     const branchReadError = git?.readErrors?.branches;
     const empty = (
       <>
@@ -255,17 +292,6 @@ export function GitPage({
     );
   }
 
-  /** 选中文件键（effect 提前计算用——与下方 activeEntry 同一优先级）。 */
-  function activeEntryOf(g: typeof git, key: string | null): GitStatusEntry | null {
-    if (g == null) return null;
-    const found = g.status.find((e) => e.path === key);
-    if (found != null) return found;
-    const conflictsFirst = g.status.find((e) => e.state === 'conflicted');
-    const mineFirst = g.status.find((e) => !e.staged && !e.userPreExisting && e.state !== 'conflicted');
-    const stagedFirst = g.status.find((e) => e.staged);
-    return conflictsFirst ?? mineFirst ?? stagedFirst ?? null;
-  }
-
   const staged = git.status.filter((e) => e.staged);
   const mine = git.status.filter((e) => !e.staged && !e.userPreExisting && e.state !== 'conflicted');
   const userOwn = git.status.filter((e) => e.userPreExisting);
@@ -285,16 +311,13 @@ export function GitPage({
 
   /* 右栏永远有内容：没手动选就回退到该视图的第一条（工作区里冲突优先）。
      左栏高亮用的也是这个 activeEntry —— 列表与详情是同一个有效选中对象。 */
-  const activeEntry =
-    git.status.find((e) => e.path === sel) ?? conflicts[0] ?? mine[0] ?? staged[0] ?? userOwn[0] ?? undefined;
+  const activeEntry = activeEntryKey;
   const activeCommit = git.commits.find((c) => c.hash === sel) ?? git.commits[0];
   const activeBranch =
     git.branches.find((b) => b.name === sel) ?? git.branches.find((b) => b.isCurrent) ?? git.branches[0];
 
   const goTask = (taskId: string) => {
-    const t = s.tasks.find((x) => x.id === taskId);
-    const th = t ? s.threads.find((x) => x.id === t.conversationThreadId) : undefined;
-    if (th) navigate(`/project/${projectId}/room/${th.roomId}?thread=${th.id}`);
+    void openExternalDeepLink(`#task=${encodeURIComponent(taskId)}`).catch((e: unknown) => toast(`任务定位失败：${(e as Error).message}`, 'error'));
   };
 
   /** 左栏选中：窄窗口同时切到详情栏 */
@@ -379,7 +402,7 @@ export function GitPage({
             value={tab}
             onChange={(v) => { setTab(v); setSel(null); }}
             options={[
-              { value: 'worktree', label: git.status.length ? `工作区 ${git.status.length}` : '工作区' },
+              { value: 'worktree', label: git.status.length ? `工作区 ${new Set(git.status.map(e => e.path)).size}` : '工作区' },
               { value: 'history', label: `历史 ${git.commits.length}` },
               { value: 'branches', label: '分支' },
             ]}
@@ -398,7 +421,7 @@ export function GitPage({
                       <span className="count">{conflicts.length}</span>
                     </div>
                     {conflicts.map((e) => (
-                      <ListRow key={e.path} active={activeEntry?.path === e.path} onClick={() => pick(e.path)} title={`${e.path} · 冲突`}>
+                      <ListRow key={gitEntryKey(e)} active={activeEntry != null && gitEntryKey(activeEntry) === gitEntryKey(e)} onClick={() => pick(gitEntryKey(e))} title={`${e.path} · 冲突`}>
                         <span className="git-dot conflicted" />
                         <span className="git-list-path mono">{e.path}</span>
                       </ListRow>
@@ -418,9 +441,9 @@ export function GitPage({
                     <>
                       {staged.map((e) => (
                         <ListRow
-                          key={e.path}
-                          active={activeEntry?.path === e.path}
-                          onClick={() => pick(e.path)}
+                          key={gitEntryKey(e)}
+                          active={activeEntry != null && gitEntryKey(activeEntry) === gitEntryKey(e)}
+                          onClick={() => pick(gitEntryKey(e))}
                           title={`${e.path} · 已暂存（选中可在右侧复核）`}
                           action={
                             <button
@@ -465,7 +488,7 @@ export function GitPage({
                           <div className="row tight">
                             <Icon name="diff" size={13} className="faint" />
                             <span className="strong git-task-title">
-                              {taskId === '__none__' ? '不属于任何任务' : task ? `#${task.roomTaskNumber} ${task.title}` : taskId}
+                              {taskId === '__none__' ? '未提供任务归属' : task ? `#${task.roomTaskNumber} ${task.title}` : taskId}
                             </span>
                             <span className="count">{entries.length}</span>
                           </div>
@@ -475,12 +498,12 @@ export function GitPage({
                                 暂存本任务改动
                               </button>
                             ) : null}
-                            {task ? (
+                            {taskId !== '__none__' ? (
                               <button className="btn ghost sm" onClick={() => goTask(taskId)}>回到任务</button>
                             ) : null}
                           </div>
                           {entries.map((e) => (
-                            <ListRow key={e.path} active={activeEntry?.path === e.path} onClick={() => pick(e.path)} title={e.path}>
+                            <ListRow key={gitEntryKey(e)} active={activeEntry != null && gitEntryKey(activeEntry) === gitEntryKey(e)} onClick={() => pick(gitEntryKey(e))} title={e.path}>
                               <span className={`git-dot ${e.state}`} />
                               <span className="git-list-path mono">{e.path}</span>
                               {e.additions > 0 ? <span className="git-list-num add">+{e.additions}</span> : null}
@@ -506,7 +529,7 @@ export function GitPage({
                       <span>{ownOpen ? '收起' : `展开 ${userOwn.length} 个文件`}</span>
                     </button>
                     {ownOpen ? userOwn.map((e) => (
-                      <ListRow key={e.path} active={activeEntry?.path === e.path} onClick={() => pick(e.path)} title={e.path}>
+                      <ListRow key={gitEntryKey(e)} active={activeEntry != null && gitEntryKey(activeEntry) === gitEntryKey(e)} onClick={() => pick(gitEntryKey(e))} title={e.path}>
                         <span className={`git-dot ${e.state}`} />
                         <span className="git-list-path mono">{e.path}</span>
                       </ListRow>
@@ -578,8 +601,8 @@ export function GitPage({
                         <Icon name="power" size={12} className="faint" />
                         <span className="git-list-path">{r.name}</span>
                         <span
-                          className={`git-dot ${r.authState === 'ok' ? 'added' : r.authState === 'expired' ? 'modified' : 'conflicted'}`}
-                          title={r.authState === 'ok' ? '凭据可用' : r.authState === 'expired' ? '凭据已过期' : '缺少凭据'}
+                          className={`git-dot ${r.authState === 'ok' ? 'added' : r.authState === 'expired' ? 'modified' : r.authState === 'unknown' ? 'untracked' : 'conflicted'}`}
+                          title={r.authState === 'ok' ? '凭据可用' : r.authState === 'expired' ? '凭据已过期' : r.authState === 'unknown' ? '凭据尚未检查' : '缺少凭据'}
                         />
                       </ListRow>
                     ))
@@ -642,16 +665,20 @@ export function GitPage({
                     也不再放一个点了没反应的展开按钮。
                   */}
                   <div className="section-title" style={{ marginTop: 12 }}>
-                    <Icon name="diff" size={13} /> 工作区 diff
+                    <Icon name="diff" size={13} /> {activeEntry.staged ? '已暂存差异' : '工作区差异'}
+                    <div className="spacer" />
+                    <button className="btn ghost sm" disabled={entryRead?.key === entryReadKey && entryRead.loading} onClick={() => entryReload.current()}>刷新差异</button>
                   </div>
+                  {entryReadError ? <div className="panel warning" role="alert">差异读取失败：{entryReadError}。{entryDiff ? '保留上次确认的差异。' : '尚未取得该版本差异。'}可点「刷新差异」重试。</div> : null}
+                  {entryRead?.key === entryReadKey && entryRead.at != null ? <div className="small faint">差异更新于 {fullTime(entryRead.at)}{entryRead.loading ? ' · 正在刷新…' : ''}</div> : null}
                   {activeEntry.staged ? (
                     <div className="git-note" style={{ margin: '0 0 6px' }}>
                       显示的是<strong>{activeEntry.staged ? '已暂存内容' : '工作区当前内容'}</strong>的 diff
                      （git.diff staged={String(activeEntry.staged)}——真实命令按需读取）。
                     </div>
                   ) : null}
-                  {entryDiff == null ? (
-                    <div className="small faint" style={{ padding: '4px 0' }}>正在读取 diff…</div>
+                  {activeEntry.state === 'conflicted' ? <div className="small faint">该文件有未解决冲突；请查看上方三方内容后编辑并确认。</div> : entryDiff == null ? (
+                    entryReadError ? null : <div className="small faint" style={{ padding: '4px 0' }}>正在读取差异…</div>
                   ) : entryDiff.binary ? (
                     <div className="panel">
                       <div className="panel-title"><Icon name="info" size={13} /> 二进制文件</div>
@@ -697,7 +724,7 @@ export function GitPage({
                     <div className="row tight wrap small faint" style={{ marginTop: 6 }}>
                       <span>{activeCommit.authorName}</span>
                       <span>{fullTime(activeCommit.committedAt)}</span>
-                      <span>{commitFiles.length} 个文件</span>
+                      <span>{commitFilesLoaded ? `${commitFiles.length} 个文件` : '文件列表尚未读取'}</span>
                       {activeCommit.taskId ? (
                         <button className="btn ghost sm" onClick={() => goTask(activeCommit.taskId!)}>
                           <Icon name="corner-down-right" size={11} /> 来自任务
@@ -757,7 +784,7 @@ export function GitPage({
                         <>
                           <button
                             className="btn ghost sm"
-                            onClick={() => setOpenDiff(activeCommit.files.map((f) => `h:${activeCommit.hash}:${f.path}`))}
+                            onClick={() => setOpenDiff(commitFiles.map((f) => `h:${activeCommit.hash}:${f.path}`))}
                           >
                             全部展开
                           </button>
@@ -770,8 +797,16 @@ export function GitPage({
                         </>
                       ) : null}
                     </div>
+                    {commitError ? <div className="panel warning" role="alert">提交差异读取失败：{commitError}。{commitData ? '保留上次确认内容。' : '尚未取得该提交差异。'}</div> : null}
+                    <button className="btn ghost sm" disabled={commitRead?.key === commitReadKey && commitRead.loading} onClick={() => commitReload.current()}>刷新提交差异</button>
+                    {(commitData?.parentsMeta?.length ?? 0) > 1 ? <div className="row wrap" data-zs-git-parents>
+                      <span className="small faint">合并提交 · 选择比较父</span>
+                      {commitData!.parentsMeta!.map(p => <button key={p.oid} className={`chip${commitData?.comparedParent === p.oid ? ' on' : ''}`} onClick={() => setCommitParent({ oid: activeCommit.hash, parent: p.oid })}>{p.oid.slice(0,8)} · {p.subject}</button>)}
+                    </div> : null}
+                    {commitData?.mergeNote ? <div className="panel info">{commitData.mergeNote}</div> : null}
+                    {commitData?.comparedParent ? <div className="small faint">相对父 {commitData.comparedParent.slice(0,8)}</div> : null}
                     {commitFiles.length === 0 ? (
-                      <div className="small faint">{commitFilesLoaded ? '该提交没有文件改动（空提交）。' : '正在读取提交 diff…'}</div>
+                      commitError || commitData?.mergeNote ? null : <div className="small faint">{commitFilesLoaded ? '该提交没有文件改动（空提交）。' : '正在读取提交差异…'}</div>
                     ) : (
                       commitFiles.map((f) => {
                         const key = `h:${activeCommit.hash}:${f.path}`;
@@ -824,8 +859,8 @@ export function GitPage({
                     众说不用 <code>git reset --hard</code>、不强制 checkout、不删除你的项目文件。
                     撤销后提交内容回到工作区，一个文件都不会丢。
                     <div className="panel-actions">
-                      <button className="btn danger sm" onClick={() => undoLastCommit(projectId)} disabled={git.commits.length === 0}>
-                        <Icon name="corner-up-left" size={12} /> 撤销最近一次提交
+                      <button className="btn danger sm" onClick={() => { const head=git.commits[0]; if(head)setUndoApproved({commitOid:head.hash,expectedHead:head.hash,expectedBranch:git.currentBranch,subject:head.subject}); }} disabled={git.commits.length === 0 || !!git.readErrors?.history || !git.currentBranch || git.currentBranch === 'HEAD'}>
+                        <Icon name="corner-up-left" size={12} /> 撤销当前 HEAD 提交
                       </button>
                     </div>
                   </div>
@@ -843,17 +878,17 @@ export function GitPage({
                           <Icon name="power" size={14} className="faint" />
                           <span className="strong" style={{ fontSize: 12.5 }}>{r.name}</span>
                           <Tag
-                            tone={r.authState === 'ok' ? 'success' : r.authState === 'expired' ? 'warning' : 'danger'}
-                            icon={r.authState === 'ok' ? 'check-circle' : 'alert-triangle'}
+                            tone={r.authState === 'ok' ? 'success' : r.authState === 'expired' ? 'warning' : r.authState === 'unknown' ? 'neutral' : 'danger'}
+                            icon={r.authState === 'ok' ? 'check-circle' : r.authState === 'unknown' ? 'info' : 'alert-triangle'}
                           >
-                            {r.authState === 'ok' ? '凭据可用' : r.authState === 'expired' ? '凭据已过期' : '缺少凭据'}
+                            {r.authState === 'ok' ? '凭据可用' : r.authState === 'expired' ? '凭据已过期' : r.authState === 'unknown' ? '凭据尚未检查' : '缺少凭据'}
                           </Tag>
                         </div>
                         <div className="small faint" style={{ marginTop: 6 }}>
                           <span className="mono-sm">{r.url}</span>
                         </div>
                         <div className="small faint" style={{ marginTop: 6 }}>
-                          凭据缺失时不假装能推送（AUTH_REQUIRED）——这里如实显示状态，不隐藏失败。
+                          {r.authState === 'unknown' ? '读取远端配置不会验证账号；推送或拉取时按实际回执报告结果。本地远端可能无需网络凭据。' : '实际推送或拉取失败会就地显示原因。'}
                         </div>
                       </div>
                     );
@@ -900,7 +935,7 @@ export function GitPage({
                     </button>
                   </div>
                   <div className="small faint" style={{ marginTop: 6 }}>
-                    基于当前 HEAD 创建并立即切换；分支名不校验远端是否存在。
+                    在已确认的提交上创建分支。需要切换时，在分支列表选择目标后明确切换。
                   </div>
                 </div>
               </>
@@ -919,14 +954,15 @@ export function GitPage({
       onClose={() => setBranchModal(false)}
     />
   ) : null;
-  const conflictNode = conflictEntry?.conflict ? (
-    <ConflictModal projectId={projectId} entry={conflictEntry} onClose={() => setConflictPath(null)} />
+  const conflictNode = conflictEntry?.state === 'conflicted' ? (
+    <ConflictModal key={`${projectId}:${conflictEntry.path}`} projectId={projectId} entry={conflictEntry} onClose={() => setConflictPath(null)} />
   ) : null;
+  const undoNode = undoApproved ? <UndoCommitModal projectId={projectId} approved={undoApproved} onClose={() => setUndoApproved(null)} /> : null;
 
   // 合页模式：外壳（页头 / 状态条 / 顶层标签 / .page.fg-page）由 FilesGitPage 提供，
   // 这里只交出内容，避免出现两层页头与两条互相打架的滚动条。
   if (embedded) {
-    return (<>{body}{branchModalNode}{conflictNode}</>);
+    return (<>{body}{branchModalNode}{conflictNode}{undoNode}</>);
   }
 
   return (
@@ -953,7 +989,7 @@ export function GitPage({
         {/* 最近一次操作失败：不静默（§16.5）。成功态已并入状态条，不在这里重复占一块。 */}
         {git.lastOp && !git.lastOp.ok ? (
           <div className="panel danger" style={{ marginBottom: 14 }}>
-            <div className="panel-title"><Icon name="alert-triangle" size={13} /> {git.lastOp.op} 失败</div>
+            <div className="panel-title"><Icon name="alert-triangle" size={13} /> {gitOperationLabel(git.lastOp.op)}{git.lastOp.outcome === 'unknown' ? '结果待确认' : '未完成'}</div>
             {git.lastOp.detail}
             <span className="small faint"> · {relTime(git.lastOp.at)}</span>
           </div>
@@ -963,6 +999,7 @@ export function GitPage({
       </div>
       {branchModalNode}
       {conflictNode}
+      {undoNode}
     </div>
   );
 }

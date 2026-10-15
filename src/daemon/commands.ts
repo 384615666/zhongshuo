@@ -138,10 +138,14 @@ export interface DaemonCommandDeps {
 
 export class DaemonCommandError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly operationPending: boolean;
+  readonly operationKnownRejected: boolean;
+  constructor(code: string, message: string, operationPending = false, operationKnownRejected = false) {
     super(message);
     this.name = 'DaemonCommandError';
     this.code = code;
+    this.operationPending = operationPending;
+    this.operationKnownRejected = operationKnownRejected;
   }
 }
 
@@ -2157,10 +2161,22 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // commitGate（persistOperation 提交事务前重查设备/代次/会话）。
         const journal = { commandId: env.commandId, scope, payloadHash, now: Date.now(), commitGate: (): void => { if (deps.remoteGate != null) { const g = deps.remoteGate(); if (!g.ok) throw new DaemonCommandError(g.code, g.message); } } };
         const { GitWriteError: GWE } = await import('./gitWrite.ts');
+        const priorGitOperation = deps.db.prepare('SELECT status, request_hash FROM git_operations WHERE id=? AND project_id=?').get(env.commandId, gitProjectId) as { status: string; request_hash: string | null } | undefined;
         const mapErr = (error: unknown): DaemonCommandError => {
-          if (error instanceof DaemonCommandError) return error;
-          if (error instanceof GWE) return new DaemonCommandError(error.code, error.message);
-          return new DaemonCommandError('STORAGE_UNAVAILABLE', error instanceof Error ? error.message : String(error));
+          const code = error instanceof GWE || error instanceof DaemonCommandError ? error.code : 'STORAGE_UNAVAILABLE';
+          const detail = error instanceof GWE ? error.details as { operationPending?: boolean; operationKnownRejected?: boolean } | undefined : undefined;
+          let pending = detail?.operationPending === true || (error instanceof DaemonCommandError && error.operationPending);
+          if (!detail?.operationKnownRejected && code !== 'IDEMPOTENCY_CONFLICT') {
+            // An unsuccessful retry cannot by itself resolve the original interrupted
+            // operation. Fresh preflight rejections are still ordinary failures.
+            if (priorGitOperation?.status === 'pending' && (priorGitOperation.request_hash == null || priorGitOperation.request_hash === payloadHash)) pending = true;
+            if (code === 'STORAGE_UNAVAILABLE') {
+              try { pending ||= (deps.db.prepare('SELECT status FROM git_operations WHERE id=? AND project_id=?').get(env.commandId,gitProjectId) as {status:string}|undefined)?.status === 'pending'; }
+              catch { pending = true; }
+            }
+          }
+          const knownRejected = !pending && (detail?.operationKnownRejected === true || (!priorGitOperation && ['VALIDATION_INVALID','STALE_REVISION'].includes(code)));
+          return new DaemonCommandError(code, error instanceof Error ? error.message : String(error), pending, knownRejected);
         };
         try {
           if (env.method === 'git.stage') {
@@ -2269,7 +2285,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           if (env.method === 'git.conflict.resolve') {
             // 三方内容+手动解决（§14.6：不提供整文件一键用某边覆盖——只接受用户提交的内容）。
-            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400), content: z.string().max(4 * 1024 * 1024) }).parse(env.params);
+            const params = z.strictObject({ projectId: z.string().min(1), path: z.string().min(1).max(400), content: z.string().max(4 * 1024 * 1024), expectedSnapshotHash: z.string().regex(/^[0-9a-f]{64}$/).optional() }).parse(env.params);
             const { gitConflictResolve } = await import('./gitWrite.ts');
             const data = await gitConflictResolve(deps.db, { ...params, projectRoot: gitProject.canonical_path, journal });
             return withCommandId({ ok: true, data });
@@ -4855,7 +4871,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
     }
   } catch (error) {
     if (error instanceof DaemonCommandError) {
-      return withCommandId({ ok: false, error: { code: error.code, message: error.message, retryable: false } });
+      return withCommandId({ ok: false, error: { code: error.code, message: error.message, retryable: false, ...(error.operationPending ? { operationPending: true } : {}), ...(error.operationKnownRejected ? { operationKnownRejected: true } : {}) } });
     }
     if (error instanceof z.ZodError) {
       return withCommandId({ ok: false, error: { code: 'VALIDATION_INVALID', message: error.issues[0]?.message ?? '参数无效', retryable: false } });
