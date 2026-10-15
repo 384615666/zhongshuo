@@ -58,7 +58,7 @@ import { DELIBERATE_OUTPUT_CONTRACTS, selectStageInstruction } from '../contract
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { DomainResult } from '../contracts/errors.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 // ---------- 步骤身份（dispatch_key 语法） ----------
 
@@ -313,7 +313,7 @@ export function prepareDeliberation(
   if (host == null) return domainErr('VALIDATION_INVALID', 'DELIBERATE 路由缺少冻结名单');
   // 复用仅限活跃 run；终态后再次提交=承接新证据的新运行（新键/新版本，§6.5）。
   const existing = db.prepare(
-    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY revision DESC LIMIT 1",
+    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1",
   ).get(task.id) as RunRow | undefined;
   if (existing != null) {
     enqueueIndependentSteps(db, existing.id, task.id, route.frozenMemberIds);
@@ -331,6 +331,7 @@ export function prepareDeliberation(
       `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, stage, round_no, roster_revision, budget_json, stage_started_at)
        VALUES (?, ?, ?, ?, 'DELIBERATE', 0, 'RUNNING', 'INDEPENDENT', 0, ?, ?, ?)`,
     ).run(runId, task.id, task.conversationId, task.threadId, prevRoster.r + 1, JSON.stringify(budget), Date.now());
+    db.prepare('INSERT INTO deliberation_run_scopes(run_id,stop_generation) SELECT ?,stop_generation FROM tasks WHERE id=?').run(runId,task.id);
     for (const memberId of route.frozenMemberIds) {
       db.prepare(
         `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, ?, 1, 'pending')`,
@@ -414,9 +415,17 @@ export interface PumpResult {
 export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options: DeliberationOptions, now = Date.now()): PumpResult {
   // 最新 run（任意状态）：INTERRUPTED 需如实 surfaced；终态的其他状态不推进。
   const run = db.prepare(
-    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' ORDER BY revision DESC LIMIT 1",
+    "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' ORDER BY rowid DESC LIMIT 1",
   ).get(taskId) as (RunRow & { stage_started_at: number | null }) | undefined;
   if (run == null) return { advanced: false };
+  const unknown=db.prepare(`SELECT a.id FROM agent_turns a WHERE a.run_id=? AND a.status='UNKNOWN'
+    AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1) LIMIT 1`).get(run.id) as {id:string}|undefined;
+  if(unknown&&['RUNNING','WAITING'].includes(run.status)){
+    db.prepare("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=?").run(run.id);
+    db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
+    appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:projectIdOf(db,taskId),conversationId:run.conversation_id,threadId:run.thread_id,taskId,runId:run.id,kind:'run.unknownBlocked',createdAt:now,payload:{turnId:unknown.id,message:'成员执行结果未知；保留原请求和保护，不继续自动研讨或生成成功交付'}});
+    return {advanced:false,blocked:'成员执行结果未知，等待人工核实'};
+  }
   if (run.status === 'INTERRUPTED') {
     // 单轮超时/中断后结果不确定（§10.2 不伪造）：如实把任务置 BLOCKED 供用户决策
     // （重开新研讨或停止），不让界面停在"进行中"。
@@ -706,7 +715,7 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     records.map((r) => ({ claimId: r.claim_id, memberId: r.member_id, stance: r.stance, responseStatus: r.response_status })),
   );
   const overall = overallConsensus(summaries);
-  const synthesisPayload = artifactPayload(db, input.synthesis.artifactId) as { summary?: string; claims?: Array<{ statement: string }>; disputedClaims?: Array<{ statement: string }> } | null;
+  const synthesisPayload = artifactPayload(db, input.synthesis.artifactId) as { summary?: string; claims?: Array<{ statement: string }>; disputedClaims?: Array<{ statement: string;disagreementSummary?:string }>;recommendations?:string[] } | null;
   const reportPayload = {
     schemaVersion: 'final-report-v1',
     synthesisRef: { artifactId: input.synthesis.artifactId, revision: input.synthesis.revision },
@@ -718,6 +727,7 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     }),
     overallConsensus: overall,
     disputedClaims: synthesisPayload?.disputedClaims ?? [],
+    recommendations:synthesisPayload?.recommendations??[],
     publishedAt: input.now,
   };
   const artifactId = `art_${randomUUID()}`;
@@ -730,12 +740,26 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
   const tx = db.transaction(() => {
     const deliveryId = `dlv_${randomUUID()}`;
     const reviewStatus = input.reviewPolicy === 'user_review' ? 'pending' : 'not_required';
+    db.prepare("UPDATE task_deliveries SET review_status='superseded' WHERE task_id=? AND review_status='pending'").run(input.taskId);
     db.prepare(
       `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
-       VALUES (?, ?, ?, 1, '', ?, '[]', '[]', ?)`,
-    ).run(deliveryId, input.taskId, input.runId, JSON.stringify([`artifact:${artifactId}`]), reviewStatus);
-    db.prepare('UPDATE tasks SET status = ?, current_delivery_id = ? WHERE id = ?').run(reviewStatus === 'pending' ? 'REVIEW' : 'DONE', deliveryId, input.taskId);
+       VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', ?)`,
+    ).run(deliveryId, input.taskId, input.runId,
+      (db.prepare('SELECT COALESCE(MAX(revision),0)+1 n FROM task_deliveries WHERE task_id=?').get(input.taskId) as {n:number}).n,
+      createHash('sha256').update(JSON.stringify({runId:input.runId,artifactId,reportPayload})).digest('hex'),JSON.stringify([`artifact:${artifactId}`]),reviewStatus);
+    db.prepare('UPDATE tasks SET status = ?, current_delivery_id = ?, response_kind=\'work\',revision=revision+1 WHERE id = ?').run(reviewStatus === 'pending' ? 'REVIEW' : 'DONE', deliveryId, input.taskId);
     db.prepare("UPDATE workflow_runs SET stage = 'PUBLISH', status = 'SUCCEEDED', stage_started_at = ? WHERE id = ?").run(input.now, input.runId);
+    const messageId=`msg_report_${input.runId}`;
+    if(!db.prepare('SELECT 1 FROM messages WHERE id=?').get(messageId)){
+      const task=db.prepare('SELECT project_id,room_id FROM tasks WHERE id=?').get(input.taskId) as {project_id:string;room_id:string};
+      const conv=db.prepare('UPDATE conversations SET last_message_seq=last_message_seq+1 WHERE id=? RETURNING last_message_seq').get(input.conversationId) as {last_message_seq:number};
+      const thread=db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1,revision=revision+1 WHERE id=? RETURNING last_message_seq').get(input.threadId) as {last_message_seq:number};
+      const labels:Record<string,string>={unanimous:'共同确认',qualified:'附条件确认',disputed:'存在分歧',unconfirmed:'尚未核实'};
+      const text=[reportPayload.summary,...reportPayload.claimResults.map(c=>`${c.statement}（${labels[c.consensus]??c.consensus}）`),...reportPayload.disputedClaims.map(c=>`分歧：${c.statement}${c.disagreementSummary?` · ${c.disagreementSummary}`:''}`),...reportPayload.recommendations].filter(Boolean).join('\n\n');
+      db.prepare(`INSERT INTO messages(id,project_id,conversation_id,conversation_seq,room_id,thread_id,task_id,thread_message_seq,author_type,author_id,body_json,status,created_at)
+        VALUES(?,?,?,?,?,?,?,?,'agent',?,?,'final',?)`).run(messageId,task.project_id,input.conversationId,conv.last_message_seq,task.room_id,input.threadId,input.taskId,thread.last_message_seq,hostOf(rosterOf(db,input.runId)),JSON.stringify({text,runtimeControlResult:JSON.stringify(reportPayload)}),input.now);
+      appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:input.conversationId,threadId:input.threadId,taskId:input.taskId,runId:input.runId,kind:'thread.replyAdded',createdAt:input.now,payload:{messageId}});
+    }
     appendDomainEvent(db, {
       schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: projectIdOf(db, input.taskId), conversationId: input.conversationId,
       threadId: input.threadId, taskId: input.taskId, runId: input.runId, kind: 'run.finalReportPublished', createdAt: input.now,
@@ -863,7 +887,8 @@ function renderStageBody(
   const rootText = task.root_message_id != null
     ? ((db.prepare('SELECT body_json FROM messages WHERE id = ?').get(task.root_message_id) as { body_json: string } | undefined)?.body_json ?? '')
     : '';
-  const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}`;
+  const review=db.prepare('SELECT revision,review_status,review_note FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(task.id) as {revision:number;review_status:string;review_note:string|null}|undefined;
+  const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
   if (step.stage === 'IND') {
     // 隔离：不含任何他人草稿（此刻也不读取）。文件发现=项目范围清单（两模式一致规则，第七轮
     // §13.4/§6.3：项目源码默认可读+命名排除；修复 C 组「文件名不可发现+工具面认知差」；
@@ -930,6 +955,11 @@ const STEP_SCHEMAS: Partial<Record<DelibStageCode, z.ZodTypeAny>> = {
   RAT: ratifyPayloadSchema,
 };
 
+export function deliberationOutputSchema(stage:DelibStageCode) {
+  const schema=STEP_SCHEMAS[stage];if(!schema)throw Error('未知研讨输出阶段');
+  return z.toJSONSchema(schema);
+}
+
 /**
  * 步骤完成处理：schema 校验（IND/CR/RAT 含引用与覆盖校验）→ 发布成果（不可变）→
  * 计入屏障（参与者 completed / 立场 / 确认矩阵）→ 尝试推进。校验失败返回 needsRepair
@@ -950,7 +980,8 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   const runRow = db.prepare('SELECT status, stage FROM workflow_runs WHERE id = ?').get(input.runId) as { status: string; stage: string | null } | undefined;
   const taskRow0 = db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(input.taskId) as { stop_generation: number; status: string } | undefined;
   const runTerminal = runRow == null || !['RUNNING', 'WAITING'].includes(runRow.status);
-  const stopped = taskRow0 != null && (taskRow0.stop_generation > 0 || taskRow0.status === 'CANCELLED');
+  const stopScope=db.prepare('SELECT stop_generation FROM deliberation_run_scopes WHERE run_id=?').get(input.runId) as {stop_generation:number}|undefined;
+  const stopped = taskRow0 != null && (taskRow0.stop_generation > (stopScope?.stop_generation??0) || taskRow0.status === 'CANCELLED');
   if (runTerminal || stopped || input.step.runId !== input.runId) {
     return recordLateArrival(db, input, now, runTerminal ? `run-${runRow?.status ?? 'gone'}` : stopped ? 'task-stopped' : 'stale-run');
   }

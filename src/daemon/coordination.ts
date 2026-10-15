@@ -6,9 +6,11 @@ import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { coordinationCallAvailable, validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
 import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
+import { resolveMemberRuntime } from './memberRuntime.ts';
+import { memberExecutableStatus } from './memberManagement.ts';
 
 type ScopeMember = { memberId: string; displayName: string; description: string | null; writeScope: string | null; unavailableReason?: string };
-type Parent = { id: string; project_id: string; conversation_id: string; room_id: string; conversation_thread_id: string; root_message_id: string; owner_member_id: string; title: string; stop_generation: number; status: string };
+type Parent = { id: string; project_id: string; conversation_id: string; room_id: string; conversation_thread_id: string; root_message_id: string; owner_member_id: string; title: string; stop_generation: number; status: string; source_connection_id:string|null };
 export type CoordinationRun = { run_id: string; task_id: string; stop_generation: number; state: string; plan_json: string | null; integration_run_id: string | null };
 
 function event(db: ZhongshuoDatabase, task: Parent, runId: string, kind: string, payload: Record<string, unknown>) {
@@ -22,6 +24,7 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   if (!taskId) return;
   const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) as Parent & { route_json: string | null };
   if (!task?.route_json || !['AUTO','DELIBERATE'].includes(JSON.parse(task.route_json).mode)) return;
+  if(task.source_connection_id!=null)throw Error('本版协作仅开放本机已授权发送；外部来源协作尚未接入授权预算');
   if (db.prepare('SELECT 1 FROM coordination_scopes WHERE task_id=?').get(taskId)) return;
   const route=JSON.parse(task.route_json) as {mode:string;frozenMemberIds:string[]};
   const members = db.prepare(`SELECT pm.id,pm.display_name,pm.description FROM room_members rm
@@ -31,11 +34,21 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   if (members.length > 12) throw Error('自动协作最多选择 12 位房间成员；请先调整房间名单');
   if(!members.some(m=>m.id===task.owner_member_id))throw Error('协调者必须是本房间启用的 AI 成员');
   const roster: ScopeMember[] = members.map(m => {
-    try { return { memberId:m.id, displayName:m.display_name, description:m.description,
+    try {
+      const runtime=resolveMemberRuntime(db,m.id,process.env.ZS_RUNTIME??null);
+      if(!['claude','codex','fake'].includes(runtime.kind??''))throw Error('成员未配置可执行渠道');
+      const program=memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind);if(program.status==='missing')throw Error(program.reason);
+      return { memberId:m.id, displayName:m.display_name, description:m.description,
       writeScope:snapshotConversationWriteAccess(db,taskId,process.env.ZS_RUNTIME??null,m.id) }; }
     catch (error) { return { memberId:m.id,displayName:m.display_name,description:m.description,writeScope:null,unavailableReason:String(error) }; }
   });
   db.prepare('INSERT INTO coordination_scopes(task_id,roster_json,created_at) VALUES(?,?,?)').run(taskId,JSON.stringify(roster),Date.now());
+}
+
+function memberBrief(member:ScopeMember) {
+  const snapshot=member.writeScope?JSON.parse(member.writeScope) as {runtime?:{kind:string;model:string|null;permissionMode:string|null}}:null;
+  return {memberId:member.memberId,displayName:member.displayName,description:member.description,available:member.writeScope!=null,
+    channel:snapshot?.runtime?.kind??null,model:snapshot?.runtime?.model??null,permissionMode:snapshot?.runtime?.permissionMode??null,reason:member.unavailableReason};
 }
 
 export function coordinationRoster(db: ZhongshuoDatabase, taskId: string): ScopeMember[] {
@@ -62,7 +75,7 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   }
   const task=db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string|null};
   if(task.route_json && JSON.parse(task.route_json).mode==='AUTO' && !dispatchKey.includes(':conversation:')) {
-    return {kind:'planning' as const,run:null,readonly:true,note:`你是协调成员。本轮只读规划，不修改文件。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要多成员合作的工作提交 coordinationPlan（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；分析评审程序强制只读；实施按成员现有权限执行、共享目录单写。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify(coordinationRoster(db,taskId).map(m=>({memberId:m.memberId,displayName:m.displayName,description:m.description,available:m.writeScope!=null,reason:m.unavailableReason})))}`};
+    return {kind:'planning' as const,run:null,readonly:true,note:`你是协调成员。本轮只读规划，不修改文件。房间已授权名单内的正式分工不需要用户逐步确认，不使用 request_participant；超出名单的成员不得派发。需要创建或修改文件时请安排实施步骤，不以规划角色只读为由拒绝整个任务；需要协作时优先不同成员实施和独立评审。所有步骤连同本次规划共用信封预算，必须预留2次整合，不能给子任务重新扩充总预算。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要多成员合作的工作提交 coordinationPlan（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；分析评审程序强制只读；实施按成员现有权限执行、共享目录单写。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify(coordinationRoster(db,taskId).map(memberBrief))}`};
   }
   return null;
 }
@@ -74,20 +87,26 @@ export function coordinationCallsUsed(db: ZhongshuoDatabase, runId: string): num
       OR r.task_id IN (SELECT child_task_id FROM coordination_steps WHERE run_id=?)`).get(runId,runId,runId) as {n:number}).n;
 }
 
-function coordinationCallLimit(db: ZhongshuoDatabase,runId:string) {
+export function coordinationCallLimit(db: ZhongshuoDatabase,runId:string) {
   const row=db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string|null};
   const budget=row.budget_json?JSON.parse(row.budget_json) as {maxTurns?:number}:{};
   return Math.min(24,budget.maxTurns??24);
 }
 
 export function validatePlanForRun(db:ZhongshuoDatabase,taskId:string,runId:string,value:unknown) {
-  const plan=validateCoordinationPlan(value,coordinationRoster(db,taskId).filter(m=>m.writeScope).map(m=>m.memberId));
+  const roster=coordinationRoster(db,taskId);
+  const plan=validateCoordinationPlan(value,roster.filter(m=>m.writeScope).map(m=>m.memberId));
+  for(const step of plan.steps)if(step.role==='implementation'){
+    const scope=JSON.parse(roster.find(m=>m.memberId===step.memberId)!.writeScope!) as {executionMode?:string;authorized?:boolean|number;memberPermission?:string};
+    if(scope.executionMode!=='full'&&!(scope.authorized&&['acceptEdits','dontAsk'].includes(scope.memberPermission??'')))throw Error('计划把实施工作分给了只读成员；请选择本轮已获写权限的成员或改为分析/评审');
+  }
   if(coordinationCallsUsed(db,runId)+plan.steps.length+2>coordinationCallLimit(db,runId))throw Error('分工步骤超出本轮总预算与整合预留；请缩减步骤');
   return plan;
 }
 
 export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string, dispatchKey: string, reservedTurnId?: string) {
   const context=coordinationDispatchContext(db,taskId,dispatchKey);
+  if(context&&(db.prepare('SELECT source_connection_id FROM tasks WHERE id=?').get(taskId) as {source_connection_id:string|null}).source_connection_id!=null)throw Error('外部来源协作授权未开放；未派发');
   if (!context?.run) return;
   const parent=db.prepare('SELECT stop_generation,status FROM tasks WHERE id=?').get(context.run.task_id) as {stop_generation:number;status:string};
   if(parent.stop_generation!==context.run.stop_generation || parent.status==='CANCELLED' || (!['running','integrating'].includes(context.run.state)&&!(context.kind==='integration'&&context.repair&&context.run.state==='blocked'))) throw Error('父协作已停止或本轮分工已失效；未派发');
@@ -182,6 +201,7 @@ export function acceptCoordinationPlan(db: ZhongshuoDatabase, taskId: string, ru
     // Migration 050's frozen legacy AFTER INSERT trigger initializes every task.
     // Apply the already-authorized send snapshot afterwards, in this same transaction.
     db.prepare('UPDATE tasks SET write_scope_json=? WHERE id=?').run(member.writeScope,childId);
+    db.prepare('UPDATE tasks SET source_connection_id=? WHERE id=?').run(parent.source_connection_id,childId);
     db.prepare('INSERT INTO coordination_steps(run_id,step_key,child_task_id,role) VALUES(?,?,?,?)').run(runId,step.key,childId,step.role);
   }
   const children=db.prepare('SELECT step_key,child_task_id FROM coordination_steps WHERE run_id=?').all(runId) as {step_key:string;child_task_id:string}[];

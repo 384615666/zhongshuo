@@ -246,10 +246,11 @@ export const turnBundleEnvelopeSchema = z.strictObject({
   promptVersion: z.enum([STANDING_PROMPT_VERSION, DM_STANDING_PROMPT_VERSION]),
   turnId: z.string().min(1),
   taskRevision: z.number().int().nonnegative(),
-  mode: z.literal('DIRECT'), // M0 仅 DIRECT；其他模式随 DEV-08/11 扩展
-  stage: z.null(),
+  mode: z.enum(['DIRECT','AUTO']),
+  stage: z.string().nullable(),
   turnPurpose: z.literal('stage_work'),
-  you: z.strictObject({ memberId: z.string().min(1), role: z.literal('executor') }),
+  you: z.strictObject({ memberId: z.string().min(1), role: z.enum(['executor','coordinator']) }),
+  coordination:z.strictObject({phase:z.enum(['planning','child','integration']),runId:z.string().nullable(),role:z.string()}).optional(),
   roster: z.array(z.strictObject({
     memberId: z.string().min(1),
     displayName: z.string().min(1),

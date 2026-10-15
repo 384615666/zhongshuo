@@ -276,6 +276,10 @@ if(outArg?.startsWith('desktop-daily-win-v24')){
   const {writeR85ReleaseGuides}=await import('./lib/r85-release-guides.mjs');
   writeR85ReleaseGuides(out);
 }
+if(outArg?.startsWith('desktop-daily-win-v25')){
+  const {writeR86ReleaseGuides}=await import('./lib/r86-release-guides.mjs');
+  writeR86ReleaseGuides(out);
+}
 console.log(`[daily-pkg] 就绪：${out}`);
 console.log(`[daily-pkg] 清单核对 ${checked} 一致，不符/缺失 ${missing}；buildId=${build.buildId} commit=${build.commit} dirty=${build.dirty}`);
 if (missing > 0) process.exit(1);

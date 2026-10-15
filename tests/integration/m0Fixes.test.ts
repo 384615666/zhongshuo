@@ -70,13 +70,13 @@ function makeTask(db: ZhongshuoDatabase, n: number, options: { route?: RouteSpec
   return r.value;
 }
 
-describe('FIX-8a：模式门禁——M0 仅 DIRECT，未实现模式明确不可用', () => {
-  for (const mode of ['AUTO', 'DELIBERATE'] as const) {
+describe('FIX-8a retained explicit deliberation-disable guard; R86 AUTO is implemented', () => {
+  for (const mode of ['DELIBERATE'] as const) {
     it(`${mode} 任务不执行、不建 run，任务进 BLOCKED 并留审计`, async () => {
       const db = openMem();
       makeTask(db, 1, { route: mode });
       const adapter = new FakeRuntimeAdapter();
-      const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1' });
+      const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w1',enableDeliberate:false });
       await worker.runOnce();
       expect(db.prepare('SELECT count(*) c FROM workflow_runs').get()).toMatchObject({ c: 0 });
       expect(db.prepare('SELECT count(*) c FROM agent_turns').get()).toMatchObject({ c: 0 });

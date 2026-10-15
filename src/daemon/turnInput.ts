@@ -118,6 +118,7 @@ export interface AssembledTurnInput {
   blobRoot?: string;
   allowImages?: boolean;
   coordinationNote?: string;
+  coordination?:{phase:'planning'|'child'|'integration';runId:string|null;role:string};
   writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
@@ -244,10 +245,11 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     promptVersion: STANDING_PROMPT_VERSION,
     turnId: input.turnId,
     taskRevision: task.taskRevision,
-    mode: 'DIRECT',
-    stage: null,
+    mode: input.coordination&&input.coordination.phase!=='child'?'AUTO':'DIRECT',
+    stage: input.coordination?`coordination.${input.coordination.phase}`:null,
     turnPurpose: 'stage_work',
-    you: { memberId: input.identity.member.id, role: 'executor' },
+    you: { memberId: input.identity.member.id, role: input.coordination&&input.coordination.phase!=='child'?'coordinator':'executor' },
+    ...(input.coordination?{coordination:input.coordination}:{}),
     roster: [
       { memberId: input.identity.member.id, displayName: input.identity.member.displayName, status: 'expected' },
     ],
@@ -314,7 +316,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     },
     communicationContract: {
       mentionEnabled: false,
-      disabledReason: 'E11 提交契约与阶段允许表未完成（规格 §4.4.1）',
+      disabledReason: input.coordination?'本轮由正式分工合同交接；文本提及不会重新派发':'E11 提交契约与阶段允许表未完成（规格 §4.4.1）',
     },
   };
 

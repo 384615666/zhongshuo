@@ -48,7 +48,7 @@ export interface TaskDetailsResult {
   coordination?:CoordinationDetails|null;
   task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; stopGeneration: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
   clarificationRetry?: { available:boolean;pending:boolean;blockReason:string|null };
-  failedRetry: { available: boolean; pending: boolean; blockReason: string | null };
+  failedRetry: { available: boolean; pending: boolean; blockReason: string | null; formatRepair?:boolean };
   children: Array<{ id: string; title: string; status: string; locate: string }>;
   /** Latest creation order is stable; selectedRunId can point to an older run appended to the bounded list. */
   latestRunId: string | null;

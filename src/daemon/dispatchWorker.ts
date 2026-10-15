@@ -1,6 +1,6 @@
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, pumpCoordinations } from './coordination.ts';
-import { validatePlanForRun,coordinationDeliveryRefs } from './coordination.ts';
+import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { acquireLease } from './workspaceLocks.ts';
@@ -12,7 +12,7 @@ import { comparisonKey } from './directoryIdentity.ts';
  * 防线（修复轮 2026-09-27 收口）：
  * - 派发门禁：恢复后 dispatch_gate=held，worker 不领取，等用户确认继续（§16.4-6/决策 44/E7）。
  * - 崩溃重领对账：dispatch_key 已有 turn（DISPATCHING 不确定窗口）→ 不再执行，标 failed 留审计（RT-03 语义）。
- * - 模式门禁：M0 仅 DIRECT；AUTO/DELIBERATE 任务进 BLOCKED，不冒充执行（总任务书 §6.1）。
+ * - 路由门：DIRECT、AUTO 正式执行；显式关闭的研讨或未知路由保留受阻事实。
  * - 会话打开竞态：openSession 返回后复查停止代次/终态，停止已生效则不 startTurn。
  * - 独立截止计时：沉默 runtime 也会按时中断；中断后宽限内仍无终结 → UNKNOWN（结果不确定，不伪造）。
  * - 验收策略收尾：user_review → REVIEW + pending 交付；auto_deliver → DONE + not_required（§10.5）。
@@ -44,6 +44,7 @@ import {
   parseDelibStep,
   parseRepairTarget,
   prepareDeliberation,
+  deliberationOutputSchema,
   pumpDeliberation,
   repairDispatchKey,
   type DelibStep,
@@ -100,9 +101,11 @@ export interface DispatchWorkerOptions {
   interruptGraceMs?: number;
   /** DIRECT 预算上限（决策 12：6）。 */
   maxTurns?: number;
+  /** New AUTO parent envelope cap, including planning, every child and integration/repair. */
+  coordinationMaxCalls?:number;
   /** 应用数据目录（层 A draftDir 变量与未来快照存储）；DEV-07 接真实 appData。 */
   appDataDir?: string;
-  /** DELIBERATE 编排开关（M1）：默认关闭——后端与正式 UI 链路具备证据后才放开。 */
+  /** DELIBERATE 宿主开关：worker 独立构造默认关闭，正式 daemon 在 R86 接通后默认开放。 */
   enableDeliberate?: boolean;
   /** E4 缺席容忍（默认 20 分钟）；测试用小值假时钟推进。 */
   absenceToleranceMs?: number;
@@ -137,6 +140,7 @@ export class DispatchWorker {
   private readonly turnDeadlineMs: number;
   private readonly interruptGraceMs: number;
   private readonly maxTurns: number;
+  private readonly coordinationMaxCalls:number;
   private readonly appDataDir: string;
   private readonly enableDeliberate: boolean;
   private readonly absenceToleranceMs: number;
@@ -182,6 +186,9 @@ export class DispatchWorker {
     this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
     this.interruptGraceMs = options.interruptGraceMs ?? 5_000;
     this.maxTurns = options.maxTurns ?? 6;
+    const coordinationCap=options.coordinationMaxCalls??24;
+    if(!Number.isSafeInteger(coordinationCap)||coordinationCap<0)throw Error('协作调用预算必须是非负整数');
+    this.coordinationMaxCalls=Math.min(24,coordinationCap);
     this.appDataDir = options.appDataDir ?? join(tmpdir(), 'zhongshuo-appdata');
     this.enableDeliberate = options.enableDeliberate === true;
     this.absenceToleranceMs = options.absenceToleranceMs ?? 20 * 60_000;
@@ -403,6 +410,7 @@ export class DispatchWorker {
     }
     try { assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key); }
     catch(error) {this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+    if(coordination?.kind==='planning'&&this.coordinationMaxCalls===0){this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:'本轮协作预算为0；未启动模型'});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     let conversationInput:{text:string;seq:number}|undefined;
     if(conversationRequest){
       const current=conversationFacts(this.db,conversationRequest.threadId);
@@ -441,7 +449,7 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    // 模式门禁：M0 仅 DIRECT；AUTO/DELIBERATE 未实现前明确不可用，不冒充单成员执行。
+    // 未知路由或宿主显式关闭的研讨不可执行；不冒充单成员执行。
     if (route == null || route.kind !== 'dispatch' || !['DIRECT','AUTO'].includes(route.mode)) {
       await this.transitionTask(task.id, 'BLOCKED');
       this.audit(task, null, null, 'task.statusChanged', {
@@ -551,8 +559,8 @@ export class DispatchWorker {
     const priorUsed = settledCount;
     const budget: BudgetState = {
       grantId: runId,
-      maxTurns: this.maxTurns,
-      usedTurns: priorUsed,
+      maxTurns: coordination?.run?coordinationCallLimit(this.db,coordination.run.run_id):coordination?.kind==='planning'?this.coordinationMaxCalls:this.maxTurns,
+      usedTurns: coordination?.run?coordinationCallsUsed(this.db,coordination.run.run_id):priorUsed,
       inFlightReservedTurns: 1,
     };
 
@@ -577,6 +585,7 @@ export class DispatchWorker {
       writeAccess,
       allowImages: imageCapabilityAtAssembly.status === 'supported',
       coordinationNote:coordination?.note,
+      coordination:coordination?{phase:coordination.kind,runId:coordination.run?.run_id??null,role:coordination.kind==='child'?coordination.run.role:'coordinator'}:undefined,
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
@@ -1253,7 +1262,8 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    if (task.stop_generation > 0) {
+    const stopSnapshot=this.db.prepare('SELECT stop_generation FROM deliberation_run_scopes WHERE run_id=?').get(step.runId) as {stop_generation:number}|undefined;
+    if (task.stop_generation > (stopSnapshot?.stop_generation??0)) {
       // 停止已生效：完结本步骤并把运行收尾为取消（停止作用于指定运行，§7.3）。
       const run0 = this.db.prepare("SELECT id, status FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(step.taskId) as { id: string; status: string } | undefined;
       if (run0 != null && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'INTERRUPTED'].includes(run0.status)) {
@@ -1327,6 +1337,27 @@ export class DispatchWorker {
       return;
     }
     const turnId = `turn_${randomUUID()}`;
+    const frozen=coordinationRoster(this.db,task.id);
+    const memberScope=frozen.find(m=>m.memberId===step.memberId);
+    let readAccess:ReturnType<typeof effectiveTaskWriteAccess>;
+    let materials:ReturnType<typeof assembleDirectTurn>;
+    const imageBinding=JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()));
+    const imageCapability=memberImageCapability(this.db,step.memberId);
+    try{
+      if(frozen.length && !memberScope?.writeScope)throw Error(memberScope?.unavailableReason??'成员未包含在发送时的配置快照内');
+      const access=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
+      readAccess={...access,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
+      materials=assembleDirectTurn({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess:readAccess,
+        task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
+        identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
+        budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns}});
+      if(!materials.ok)throw Error(materials.error.message);
+      // Only attachment material is reused. Independent stages never receive other members' drafts through DIRECT history.
+      assembly.value.text+=`\n\n【本轮权限】多人研讨角色只读，使用运行时允许的只读工具，不修改文件；成员原权限配置未改变。\n【附件材料】${JSON.stringify(materials.value.envelope.attachments)}\n图片内容通过独立图片输入块提供（${materials.value.images?.length??0}张）。`;
+    }catch(error){
+      this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=?").run(run.id,step.memberId);
+      this.audit(task,run.id,null,'run.stepFailed',{stage:step.stage,memberId:step.memberId,message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);pumpDeliberation(this.db,task.id,this.deliberationOptions(task.project_id));return;
+    }
     // 统一派发准入（与 DIRECT 同一账本/语义；预算在上方已核对——预算限总量、准入限并发，不混用）。
     const admission = this.admission.tryAcquire(turnId, {
       memberId: step.memberId,
@@ -1397,6 +1428,7 @@ export class DispatchWorker {
         sessionGeneration: generation.c,
         cwd: project.canonical_path,
         policyId: 'policy-analyze',
+        writeAccess:readAccess,
         developerInstructions: standing.value.text,
         promptVersion: standing.value.version,
       });
@@ -1423,12 +1455,18 @@ export class DispatchWorker {
 
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
       this.preRegisterTurnProcess(turnId, run.id, step.memberId);
+      if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==readAccess.identityKey
+        ||JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()))!==imageBinding
+        ||(materials.value.images?.length&&memberImageCapability(this.db,step.memberId).identityKey!==imageCapability.identityKey))throw Error('研讨成员实际配置在启动前变化；未发送');
       startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
         dispatchKey: claimed.dispatch_key,
         inputBundleId: bundleId,
         text: assembly.value.text,
+        images:materials.value.images,
+        imageConfigurationKey:imageCapability.identityKey??undefined,
+        outputSchema:deliberationOutputSchema(step.stage),
         policyId: 'policy-analyze',
         taskRevision: 0,
         resultKey: `result_${turnId}`,
@@ -1681,6 +1719,10 @@ export class DispatchWorker {
       this.settleDmSession(turnId); // UNKNOWN 终态同样结算会话身份（provider 可能已上报）
       this.pumpDmAfterTerminal(task); // dm 会话空闲恢复（UNKNOWN=会话不再占用——泵下一条）
       if (stageKey.startsWith('delib.')) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
+      if(stageKey.startsWith('delib.')){
+        const peers=this.db.prepare("SELECT id FROM agent_turns WHERE run_id=? AND id!=? AND status IN ('RUNNING','WAITING_APPROVAL','WAITING_INPUT')").all(runId,turnId) as {id:string}[];
+        for(const peer of peers){const live=this.live.get(peer.id);if(live){this.audit(task,runId,peer.id,'run.peerUnknownInterrupt',{unknownTurnId:turnId,note:'同轮结果未知，停止其他已知在途工作；不重发或解除未知保护'});void live.adapter.interrupt({id:live.sessionId} as SessionRef,peer.id).catch(()=>{});}}
+      }
     }
   }
 
@@ -2225,7 +2267,11 @@ export class DispatchWorker {
         `INSERT INTO usage_records (turn_id, provider_event_id, reported_json, normalized_json, cost_quality)
          VALUES (?, ?, ?, ?, ?) ON CONFLICT (turn_id, provider_event_id) DO NOTHING`,
       ).run(turnId, event.eventKey, JSON.stringify(event), JSON.stringify(event), event.costQuality);
+      recordRealCallUsage(this.db,turnId,event);
     }
+    if(event.kind==='tool.started')this.audit(task,runId,turnId,'tool.started',{toolCallId:event.toolCallId,toolName:event.toolName,eventKey:event.eventKey});
+    if(event.kind==='tool.completed')this.audit(task,runId,turnId,'tool.completed',{toolCallId:event.toolCallId,outcome:event.outcome,eventKey:event.eventKey});
+    if(event.kind==='session.ready'&&event.providerSessionId)this.db.prepare('UPDATE runtime_sessions SET provider_session_id=? WHERE id=? AND task_id=?').run(event.providerSessionId,event.sessionId,task.id);
   }
 
   /** 全局默认 runtime kind（未绑定成员回落；ZS_RUNTIME 归一——fake 限开发模式）。 */
@@ -2540,7 +2586,7 @@ export interface ActiveDelibRun {
 /** 活跃研讨 run：最新非终态（同任务多 run 时阶段/派发/预算都绑它）。 */
 export function activeDeliberationRun(db: ZhongshuoDatabase, taskId: string): ActiveDelibRun | undefined {
   return db.prepare(
-    "SELECT id, status, stage, round_no, roster_revision, budget_json FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY revision DESC LIMIT 1",
+    "SELECT id, status, stage, round_no, roster_revision, budget_json FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1",
   ).get(taskId) as ActiveDelibRun | undefined;
 }
 

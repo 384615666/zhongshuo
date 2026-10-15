@@ -277,23 +277,22 @@ describe('第三十八轮 #7：中断卡死形态的呈现与显式恢复', () =
     db2.close();
   }, 60_000);
 
-  it('M0 房间 AUTO 任务 BLOCKED → 卡片 statusReason 与待办 reason 含「指派成员」人话', async () => {
+  it('R86 房间 AUTO 由协调者实际处理，不再产生旧模式门禁待办', async () => {
     const { db, cmd } = await makeDb(join(tmpRoot, 'app4'));
     const { worker } = makeWorker(db);
-    // 房间与房间消息（无 mentions → AUTO → M0 门禁 BLOCKED——现场缺陷 #4 的实际路径）。
+    // R86 supersedes the historical M0 unimplemented-mode expectation.
     db.prepare(`INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES ('roomA','p1','大厅','mA')`).run();
     db.prepare(`INSERT INTO conversations (id, project_id, kind, room_id) VALUES ('convRoom','p1','room','roomA')`).run();
     db.prepare(`INSERT INTO room_members (room_id, member_id) VALUES ('roomA','mA'),('roomA','mB')`).run();
     const r = await cmd<{ taskId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'convRoom', roomId: 'roomA' }, body: '房间任务无指派', intent: 'default', mentions: [] });
-    await worker.runOnce(); // 领取 → M0 门禁置 BLOCKED（dispatchWorker 374-384 路径）
-    await waitFor(() => (db.prepare("SELECT count(*) c FROM tasks WHERE id = ? AND status = 'BLOCKED'").get(r.taskId) as { c: number }).c >= 1, 20_000, '任务 BLOCKED');
+    await worker.runOnce();
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(r.taskId)).toMatchObject({status:'DONE'});
     const board = await cmd<{ groups: Array<{ rooms: Array<{ cards: Array<{ taskId: string; column: string; statusReason: string | null }> }> }> }>('board.view', { scope: 'all' });
     const card = board.groups.flatMap((g) => g.rooms).flatMap((rm) => rm.cards).find((c) => c.taskId === r.taskId)!;
-    expect(card.column).toBe('blocked');
-    expect(card.statusReason).toContain('指派成员'); // 人话：M0 需 @ 指定成员
+    expect(card.column).not.toBe('blocked');
+    expect(card.statusReason??'').not.toContain('指派成员');
     const mine = await cmd<{ projects: Array<{ blockedTasks: Array<{ task_id: string; reason: string | null }> }> }>('mine.pending', {});
-    const b = mine.projects.flatMap((p) => p.blockedTasks).find((x) => x.task_id === r.taskId)!;
-    expect(b.reason).toContain('指派成员');
+    expect(mine.projects.flatMap((p) => p.blockedTasks).some(x=>x.task_id===r.taskId)).toBe(false);
   }, 60_000);
 });
 

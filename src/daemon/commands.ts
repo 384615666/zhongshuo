@@ -720,7 +720,7 @@ export function taskStatusReasonOf(db: ZhongshuoDatabase, taskId: string): strin
     }
     if (r.kind === 'task.statusChanged' && p.status === 'BLOCKED') {
       const reason = typeof p.reason === 'string' ? p.reason : '';
-      if (reason === 'mode_unavailable_in_m0') return 'M0 模式下房间任务需 @ 指定成员（AUTO/DELIBERATE 未开放）——重新发送并指派成员';
+      if (reason === 'mode_unavailable_in_m0') return '该历史模式当时未开放或当前宿主已关闭多人研讨；可重新交给协调成员，或 @ 指派成员';
       if (typeof p.message === 'string') return p.message.slice(0, 200);
       return reason.length > 0 ? `受阻：${reason}` : '受阻（无原因事件——见活动页审计）';
     }
@@ -1362,7 +1362,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const th = deps.db.prepare('SELECT conversation_id FROM conversation_threads WHERE id=?').get(target.threadId) as { conversation_id: string } | undefined;
           if (th?.conversation_id !== target.conversationId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '图片能力读取目标与线程归属不一致');
         }
-        let members: string[] = []; let willDispatch = target.kind !== 'thread'; let direct = true;
+        let members: string[] = []; let willDispatch = target.kind !== 'thread'; let direct = true;let routedMode:string|null=null;
         const conversation=target.kind==='thread'?conversationFacts(deps.db,target.threadId):null;
         if(conversation){willDispatch=true;members=[conversation.memberId];const blocked=conversationBlock(deps.db,conversation,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:blocked.message,supported:false,members:[]}});}
         if (target.kind === 'dm') {
@@ -1370,9 +1370,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         } else if (target.kind === 'room_root') {
           const route = resolveTopLevelRoute({ intent: 'default', mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode !== 'DELIBERATE'; }
+          if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode !== 'DELIBERATE';routedMode=route.value.mode; }
         }
         if(env.method==='message.writeCapability') {
+          if(routedMode==='DELIBERATE')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'多人研讨：分析、互评与整合角色均只读；成员原权限配置不改变'}});
+          if(routedMode==='AUTO')return withCommandId({ok:true,data:{willDispatch,fullAccess:false,modificationAuthorized:false,reason:'自动协作：协调规划和评审只读，实施和最终整合按成员本次已授权权限执行，共享目录保持单写'}});
           const full=members.length>0&&members.every(id=>{const runtime=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return runtime.permissionMode==null||runtime.permissionMode==='bypassPermissions';});
           if(willDispatch&&direct&&full)return withCommandId({ok:true,data:{willDispatch,fullAccess:true,modificationAuthorized:true,reason:'CLI 完整权限：可读写电脑并执行命令；仅按本次用户目标操作'}});
           const grant=projectWriteAccess(deps.db,target.projectId);
@@ -1383,7 +1385,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return withCommandId({ok:true,data:{willDispatch,modificationAuthorized:reason==null,reason:reason??'项目内文件编辑；Shell、网络工具与委派未开放，派发前再次核对授权与配置'}});
         }
         const capabilities = members.map((id) => memberImageCapability(deps.db, id));
-        return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || direct && capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
+        return withCommandId({ ok: true, data: { willDispatch, supported: !willDispatch || capabilities.length > 0 && capabilities.every((c) => c.status === 'supported'), members: capabilities } });
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
@@ -1529,7 +1531,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.mode !== 'DELIBERATE' && route.value.initialWakeMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
+          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.initialWakeMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
           return deps.db.transaction(() => {
             const ids = {
@@ -3489,7 +3491,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                       (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_id,
                       (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS run_status
                FROM tasks t JOIN conversations c ON c.id = t.conversation_id
-               WHERE t.room_id = ? AND t.kind = 'room_task' AND c.project_id = ?
+               WHERE t.room_id = ? AND t.kind = 'room_task' AND c.project_id = ? AND t.parent_task_id IS NULL
                ORDER BY t.rowid DESC`,
             ).all(room.id, p.id) as Array<{ id: string; title: string; status: string; stop_generation: number; conversation_thread_id: string | null; owner_member_id: string | null; room_task_number: number | null; run_id: string | null; run_status: string | null }>).map((t) => {
               const pendingDelivery = t.status === 'REVIEW'
@@ -4652,7 +4654,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (params.expectedRunStatus != null) {
             if (params.sourceRunId == null) throw new DaemonCommandError('VALIDATION_INVALID', '绑定失败运行必须携带来源 run');
             const expected = deps.db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.sourceRunId, params.taskId, task.conversation_id) as { status: string } | undefined;
-            if (expected == null || expected.status !== params.expectedRunStatus || (params.expectedRunStatus==='FAILED'?task.status!=='ACTIVE':task.status!=='WAITING_USER'||params.expectedTaskRevision==null||params.expectedStopGeneration==null||deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(params.taskId,params.sourceRunId)==null)) {
+            const failedState=task.status==='ACTIVE'||task.status==='BLOCKED'&&deps.db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(params.taskId)!=null;
+            if (expected == null || expected.status !== params.expectedRunStatus || (params.expectedRunStatus==='FAILED'?!failedState:task.status!=='WAITING_USER'||params.expectedTaskRevision==null||params.expectedStopGeneration==null||deps.db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(params.taskId,params.sourceRunId)==null)) {
               throw new DaemonCommandError('STALE_REVISION', '失败运行或任务状态已变化——请刷新后重新决定');
             }
           }

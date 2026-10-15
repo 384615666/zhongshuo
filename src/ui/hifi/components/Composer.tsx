@@ -846,7 +846,7 @@ export function Composer({
   }
 
   /** 参与者名：用于 @ 按钮的 tooltip，让发送前能看到这次会叫上谁 */
-  const participantNames = route.resolvedMemberIds
+  const participantNames = (route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds)
     .map((id) => memberLabel(allMembers.find((m) => m.id === id)))
     .join('、');
 
@@ -860,18 +860,17 @@ export function Composer({
     if (sendAs === 'record') return null;
     const n = route.resolvedMemberIds.length;
     if (route.mode === 'DELIBERATE' && n > 0) {
-      const core = 6 * n + 1;
-      const withRevision = 7 * n + 2;
+      const core = 6 * n + 2;
       return {
-        calls: withRevision,
+        calls: core,
         // 公式与推导明细收进 tooltip：主界面只显示"最多 N 次调用"
-        detail: `按冻结名单 ${n} 人推导：核心 6N+1=${core}；含一次整合修订 7N+2=${withRevision}。为 SYNTHESIS 1 + RATIFY ${n} 共 ${1 + n} 次预留尾部配额，前面阶段最多占用 ${withRevision - (1 + n)}。`,
+        detail: `默认按冻结名单 ${n} 人及一次检查点推导 6N+2=${core}；整合与确认预留 ${1+n} 次。实际预算以正式运行快照为准。`,
       };
     }
     if (route.mode === 'DIRECT') {
       return { calls: 6, detail: 'DIRECT：用户最初输入引发的模型调用；额外输入创建新的预算段。' };
     }
-    return { calls: 20, detail: 'AUTO：协调、子任务、审查、返工与整合全部计入。' };
+    return { calls: 24, detail: 'AUTO 本轮共用最多24次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。实际以正式运行快照为准。' };
   }, [sendAs, route.mode, route.resolvedMemberIds.length]);
 
   /**
@@ -902,23 +901,22 @@ export function Composer({
     if (sendAs !== 'ai' || target.kind === 'dm') return null; // DM 走成员自身绑定链；仅记录不派发
     // 房间根输入在 M0 非 DIRECT 时先要选定单个成员；此刻未绑定提示指向尚未确定的执行
     // 成员，会与同位置的 M0 派发提示叠成两张警示。选定成员后再核其真实 runtime。
-    if (target.kind === 'room_root' && route.mode !== 'DIRECT') return null;
     const bound = (id: string) => memberRuntimes[id]?.status === 'bound';
     const agentIds = memberIds.filter((id) => allMembers.find((m) => m.id === id)?.principalType === 'agent');
     if (agentIds.length === 0) return null;
-    const named = route.resolvedMemberIds.filter((id) => id !== 'all');
+    const named = route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds.filter((id) => id !== 'all');
     if (named.length > 0) {
       const namedUnbound = named.filter((id) => !bound(id));
       if (namedUnbound.length === 0) return null;
       const names = namedUnbound.map((id) => allMembers.find((m) => m.id === id)?.displayName ?? id).join('、');
-      return { text: `已 @ 的成员（${names}）未绑定 runtime——派发前请先在成员页配置渠道与模型`, who: namedUnbound.length };
+      return { text: `${route.mode==='AUTO'?'协调成员':'选中成员'}（${names}）未绑定 runtime——派发前请先在成员页配置渠道与模型`, who: namedUnbound.length };
     }
     if (route.resolvedMemberIds.includes('all') || named.length === 0) {
       // AUTO/全体：项目内没有任何已绑定 agent 时提示（有部分可用即不拦 AUTO 语义之外的行为）
       if (!agentIds.some((id) => bound(id))) return { text: '项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型', who: agentIds.length };
     }
     return null;
-  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds]);
+  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds,room?.coordinatorMemberId]);
 
   return (
     <div className="composer">
@@ -991,10 +989,7 @@ export function Composer({
         </div>
       ) : null}
 
-      {/* M0 发送前提示（r55 T4）：当前包只开放 @ 指定成员的 DIRECT 派发——未指派（AUTO）与
-          @全体/多人（DELIBERATE）发送后任务会立即受阻（服务端同文案 mode_unavailable_in_m0，
-          任务与消息保留、可补发指派）。发送前就说清楚并给可用动作：不静默改目标、不禁发送、
-          不开放 AUTO 来消除受阻——模式边界保持。 */}
+      {/* 发送前说明真实协作路由；不更改草稿中的提及或发送意图。 */}
       {sendAs==='ai'&&writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip record-chip">{writeHint.error}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
@@ -1012,7 +1007,7 @@ export function Composer({
             title="选择一位执行成员后交给 AI；也可以仅保存记录"
           >
             <Icon name="alert-triangle" size={11} />
-            {route.mode === 'AUTO' ? '由房间协调成员接单：简单问题直接回答，复杂任务规划分工并整合' : '多人研讨接入中；当前请指定单成员或由协调成员自动分工'}
+            {route.mode === 'AUTO' ? `协调成员${room?.coordinatorMemberId?` ${memberLabel(allMembers.find(m=>m.id===room.coordinatorMemberId))}`:''}接单：简单问题直接回答，复杂任务分工并整合` : '所选成员独立分析、互评并汇总；本次研讨只读，写文件任务可交协调成员自动分工'}
             <button title="选择一位成员，不会自动发送" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>选择执行成员</button>
             <button title="本次只保存内容、不派发（一次性意图——不受模式边界影响）" onClick={() => setSendAs('record')}>本次仅记录</button>
           </span>
@@ -1353,7 +1348,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? '选择执行成员' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 分步骤权限':'多人研讨 · 只读' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 

@@ -301,7 +301,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       defaultProviderKey: options.runtime, // 未绑定成员的 provider 准入键=全局 runtime 标识
       appDataDir: options.appDataDir,
       // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
-      enableDeliberate: process.env.ZS_ENABLE_DELIBERATE === '1', // 能力状态合同：fake/UI 已验、真实研讨未完成——显式 opt-in；真实闭环验证后再默认开放
+      enableDeliberate: process.env.ZS_ENABLE_DELIBERATE !== '0', // R86 正式协作入口；只读角色/schema/材料/版本接通，最终真实验收单列。
       // 单轮截止：真实 runtime 的研讨轮（含全部初稿互评正文）常超 60s——默认放宽到
       // 300s（ZS_TURN_DEADLINE_MS 可调）；60s 是 DIRECT 秒级 fixture 时代的默认。
       turnDeadlineMs: process.env.ZS_TURN_DEADLINE_MS != null ? Number(process.env.ZS_TURN_DEADLINE_MS) : 300_000,

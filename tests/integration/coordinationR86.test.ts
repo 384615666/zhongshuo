@@ -5,9 +5,12 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
-import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
+import { DispatchWorker,type DispatchWorkerOptions } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
+import { parseDelibStep } from '../../src/daemon/deliberationRunner.ts';
+import { listRunArtifacts } from '../../src/persistence/stores/deliberation.ts';
+import type {TaskDetailsResult} from '../../src/contracts/taskDetails.ts';
 
 afterEach(() => vi.unstubAllEnvs());
 const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,unknown>={}): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
@@ -15,13 +18,13 @@ const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,u
   files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...(coordinationPlan?{coordinationPlan}:{}),...extra
 })}}];
 
-async function fixture() {
+async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorkerOptions,'turnDeadlineMs'|'interruptGraceMs'|'coordinationMaxCalls'>>={}) {
   vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
   const dir=mkdtempSync(join(tmpdir(),'zs-r86-coordination-')),project=join(dir,'project');mkdirSync(project);
   const db=openDatabase(join(dir,'state.sqlite'));
   let script:FakeTurnScript=output('你好');
-  const adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>script});
-  const worker=new DispatchWorker({db,adapter,leaseOwner:'r86',appDataDir:dir});
+  const adapter=new FakeRuntimeAdapter({structuredFinal:!enableDeliberate,turnScriptSequencer:()=>script});
+  const worker=new DispatchWorker({db,adapter,leaseOwner:'r86',appDataDir:dir,enableDeliberate,coordinationMaxCalls:6,...options});
   const deps={db,localUserId:'u_local',appDataDir:dir,interruptTurn:(id:string)=>worker.interruptTurn(id)};
   async function raw(method:string,params:unknown,commandId:string=randomUUID()) {return await dispatchDaemonCommand(deps,{protocolVersion:1,commandId,method,params}) as {ok:boolean;data?:unknown;error?:unknown};}
   async function cmd<T>(method:string,params:unknown,commandId?:string):Promise<T> {const r=await raw(method,params,commandId);expect(r.ok,JSON.stringify(r)).toBe(true);return (r as {data:unknown}).data as T;}
@@ -32,19 +35,109 @@ async function fixture() {
   for(const memberId of [a,b]) await cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'bypassPermissions'});
   const revision=(db.prepare('SELECT revision FROM rooms WHERE id=?').get(room.id) as {revision:number}).revision;
   await cmd('room.update',{roomId:room.id,expectedRevision:revision,coordinatorMemberId:a});
-  const send=()=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请两位成员协作分析再复核',intent:'default',mentions:[]});
+  const send=(mentions:string[]=[])=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请两位成员协作分析再复核',intent:'default',mentions:mentions.map(memberId=>({kind:'member',memberId}))});
   const plan={summary:'独立分析后复核',steps:[{key:'analysis',memberId:a,title:'分析',objective:'提出实现方案',role:'analysis',dependsOn:[]},{key:'review',memberId:b,title:'复核',objective:'读取并复核上游方案',role:'review',dependsOn:['analysis']}]};
   const run=async(s:FakeTurnScript)=>{script=s;return worker.runOnce();};
   return {db,dir,worker,adapter,cmd,raw,send,run,plan,a,b,room,projectId};
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('does not continue deliberation or falsely publish when a member result becomes UNKNOWN',async()=>{
+    const f=await fixture(true,{turnDeadlineMs:20,interruptGraceMs:10});try{
+      const root=await f.send([f.a,f.b]);await f.worker.runOnce();
+      await f.run([{kind:'unresponsiveToInterrupt'},{kind:'stall',ms:1000}]);
+      await f.worker.runOnce();
+      expect(f.adapter.startTurnLog).toHaveLength(1);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
+      expect((await f.raw('task.redispatch',{taskId:root.taskId})).ok).toBe(false);
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+  it('zero parent budget starts no coordinator and no child',async()=>{
+    const f=await fixture(false,{coordinationMaxCalls:0});try{
+      const root=await f.send();await f.run(output('不应启动',f.plan));
+      expect(f.adapter.startTurnLog).toHaveLength(0);expect(f.db.prepare('SELECT count(*) n FROM workflow_runs').get()).toEqual({n:0});
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
+    }finally{f.db.close();}
+  });
+  it('an UNKNOWN child blocks parent success and fresh parent redispatch without releasing its original identity',async()=>{
+    const f=await fixture(false,{turnDeadlineMs:20,interruptGraceMs:10});try{
+      const root=await f.send();await f.run(output('计划',f.plan));
+      await f.run([{kind:'unresponsiveToInterrupt'},{kind:'stall',ms:1000}]);await f.worker.runOnce();
+      expect(f.adapter.startTurnLog).toHaveLength(2);
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
+      expect((await f.raw('task.redispatch',{taskId:root.taskId})).ok).toBe(false);
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN'").get()).toEqual({n:1});
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+  it('sends exact formal image bytes into each independent read-only deliberation input, zero inference',async()=>{
+    const f=await fixture(true);try{
+      // Saved program reference is a synthetic file; FakeRuntimeAdapter is the sole executor.
+      const executable=join(f.dir,'fixture-codex.exe');writeFileSync(executable,'engineering reference, never spawned');
+      for(const memberId of [f.a,f.b])await f.cmd('member.setRuntime',{memberId,kind:'codex',model:'gpt-6.1-sol',permissionMode:'plan',executable});
+      const raw=readFileSync(join(process.cwd(),'scripts','dev25-dual','samples','preview-r52-样例.png'));
+      const upload=await f.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:f.room.conversationId,filename:'工程图片.png',contentBase64:raw.toString('base64')});
+      const turns=vi.spyOn(f.adapter,'startTurn');
+      await f.cmd('message.submit',{target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},body:'',intent:'default',mentions:[f.a,f.b].map(memberId=>({kind:'member',memberId})),attachmentRefs:[upload.attachmentId]});
+      await f.worker.runOnce();
+      const done:FakeTurnScript=[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'工程协议输入验证',claims:[{claimId:'c1',statement:'夹具不作识图结论',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]})}}];
+      await f.run(done);await f.run(done);
+      expect(turns.mock.calls).toHaveLength(2);
+      for(const [,request] of turns.mock.calls){expect(request.images).toHaveLength(1);expect(Buffer.from(request.images![0]!.dataBase64,'base64')).toEqual(raw);expect(request.policyId).toBe('policy-analyze');expect(request.outputSchema).toBeTruthy();}
+    }finally{f.db.close();}
+  });
+  it('formal selected-member deliberation keeps read-only schemas, readable reports and version-bound rework',async()=>{
+    const f=await fixture(true);try{
+      const revision=(f.db.prepare('SELECT revision FROM projects WHERE id=?').get(f.projectId) as {revision:number}).revision;
+      await f.cmd('project.reviewPolicy.set',{projectId:f.projectId,taskReviewEnabled:true,expectedRevision:revision});
+      const sessions=vi.spyOn(f.adapter,'openSession'),turns=vi.spyOn(f.adapter,'startTurn');
+      const root=await f.send([f.a,f.b]);
+      const completeRound=async()=>{
+        await f.worker.runOnce(); // formal queued root -> prepare, no model
+        for(let count=0;count<30;count++){
+          const next=f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string}|undefined;
+          if(!next)break;const step=parseDelibStep(next.dispatch_key);expect(step).not.toBeNull();
+          let value:unknown;
+          if(step!.stage==='IND')value={schemaVersion:'analysis-draft-v1',summary:`${step!.memberId}独立方案`,claims:[{claimId:'c1',statement:'方案甲可行',kind:'proposal',evidenceIds:[]}],recommendations:['核对约束'],openQuestions:[]};
+          else if(step!.stage==='CR'){
+            const draft=listRunArtifacts(f.db,step!.runId,'analysis_draft').find(a=>a.author_id!==step!.memberId)!;
+            value={schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:draft.id,targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已读取他方方案，约束一致',evidenceIds:[]}]};
+          }else if(step!.stage==='SYN')value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:[],recommendations:['下一步核实工程条件']};
+          else if(step!.stage==='RAT')value={schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm'}]};
+          else throw Error(`非预期阶段 ${step!.stage}`);
+          await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify(value)}}]);
+        }
+      };
+      await completeRound();
+      type Delivery={id:string;revision:number;manifest_hash:string;run_id:string};
+      const first=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=?').get(root.taskId) as Delivery;
+      expect(first.revision).toBe(1);expect(first.manifest_hash).toMatch(/^[a-f0-9]{64}$/);
+      expect(f.db.prepare('SELECT count(*) n FROM messages WHERE task_id=? AND author_type=\'agent\'').get(root.taskId)).toEqual({n:1});
+      const message=f.db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent'").get(root.taskId) as {body_json:string};
+      expect(JSON.parse(message.body_json).text).toContain('两位成员汇总的自然结论');expect(JSON.parse(message.body_json).text).not.toContain('schemaVersion');
+      const calls=f.adapter.startTurnLog.length;
+      await f.cmd('task.review',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:1,manifestHash:first.manifest_hash,decision:'changes_requested',note:'请补充实施约束'});
+      expect(f.adapter.startTurnLog).toHaveLength(calls);
+      await f.cmd('task.executeRework',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:1,manifestHash:first.manifest_hash,sourceRunId:first.run_id});
+      await completeRound();
+      const second=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(root.taskId) as Delivery;
+      expect(second.revision,JSON.stringify({runs:f.db.prepare('SELECT id,status,stage FROM workflow_runs').all(),outbox:f.db.prepare("SELECT dispatch_key,status FROM outbox WHERE status!='done'").all(),events:f.db.prepare('SELECT kind,payload_json FROM domain_events ORDER BY seq DESC LIMIT 4').all()})).toBe(2);expect(second.manifest_hash).not.toBe(first.manifest_hash);
+      expect(f.adapter.startTurnLog[calls]!.text).toContain('请补充实施约束');
+      for(const call of sessions.mock.calls)expect(call[0].writeAccess?.modificationAuthorized).toBe(false);
+      for(const call of turns.mock.calls)expect(call[1].outputSchema).toBeTruthy();
+      await f.cmd('task.review',{taskId:root.taskId,deliveryId:second.id,deliveryRevision:2,manifestHash:second.manifest_hash,decision:'accept'});
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
+    }finally{f.db.close();}
+  });
   it('creates genuine independent children, freezes upstream versions, integrates and reopens',async()=>{
     const f=await fixture();
     try{
       const root=await f.send();await f.run(output('准备分工',f.plan));
       expect((f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId) as {status:string}).status).toBe('ACTIVE');
       expect((f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId) as {n:number}).n).toBe(2);
+      const board=await f.cmd<{groups:Array<{rooms:Array<{cards:Array<{taskId:string}>}>}>}>('board.view',{scope:'project',projectId:f.projectId});
+      expect(board.groups.flatMap(g=>g.rooms.flatMap(r=>r.cards)).map(c=>c.taskId)).toEqual([root.taskId]);
       await f.run(output('上游独立分析：采用方案甲'));
       await f.run(output('独立复核已读取方案甲'));
       expect(f.adapter.startTurnLog[2]!.text).toContain('上游独立分析：采用方案甲');
@@ -60,7 +153,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
   });
   it('rejects a model-invented member without creating children or dispatching it',async()=>{
     const f=await fixture();try{
-      const root=await f.send();await f.run(output('计划',{...f.plan,steps:[{...f.plan.steps[0],memberId:'cross-project'}]}));
+      const other=join(f.dir,'other-project');mkdirSync(other);
+      const foreignProject=(await f.cmd<{project:{id:string}}>('project.open',{path:other})).project.id;
+      const foreignMember=(await f.cmd<{memberId:string}>('member.create',{projectId:foreignProject,displayName:'同名成员'})).memberId;
+      const root=await f.send();await f.run(output('计划',{...f.plan,steps:[{...f.plan.steps[0],memberId:foreignMember}]}));
       expect((f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId) as {n:number}).n).toBe(0);
       expect((f.db.prepare('SELECT state FROM coordination_runs').get() as {state:string}).state).toBe('blocked');
       expect(f.adapter.startTurnLog).toHaveLength(1);
@@ -94,6 +190,15 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       await f.cmd('member.setRuntime',{memberId:f.a,kind:'fake',permissionMode:'bypassPermissions',effort:'high'});
       await f.run(output('不可发出'));await f.worker.runOnce();
       expect(f.adapter.startTurnLog).toHaveLength(1);
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
+    }finally{f.db.close();}
+  });
+  it('does not silently elevate a read-only member to implement a plan',async()=>{
+    const f=await fixture();try{
+      await f.cmd('member.setRuntime',{memberId:f.b,kind:'fake',permissionMode:'plan'});
+      const root=await f.send();await f.run(output('不合法提权计划',{summary:'只读成员不写文件',steps:[{...f.plan.steps[1],role:'implementation',dependsOn:[]}]}));
+      expect(f.adapter.startTurnLog).toHaveLength(1);
+      expect(f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId)).toEqual({n:0});
       expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
     }finally{f.db.close();}
   });
@@ -161,7 +266,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const root=await f.send();await f.run(output('计划',f.plan));await f.run(output('分析甲'));await f.run(output('复核甲'));
       await f.run(output('坏协议',undefined,{remainingIssues:123}));
       const original=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
-      await f.cmd('task.redispatch',{taskId:root.taskId,formatRepair:true,reason:'人工明确修复原输出'});
+      const facts=await f.cmd<TaskDetailsResult>('task.details',{projectId:f.projectId,taskId:root.taskId});
+      expect(facts.failedRetry).toMatchObject({available:true,formatRepair:true,pending:false});
+      await f.cmd('task.redispatch',{taskId:root.taskId,formatRepair:true,reason:'人工明确修复原输出',sourceRunId:facts.latestRunId,expectedRunStatus:'FAILED',expectedTaskRevision:facts.task.revision,expectedStopGeneration:facts.task.stopGeneration});
+      const queued=await f.cmd<TaskDetailsResult>('task.details',{projectId:f.projectId,taskId:root.taskId});expect(queued.failedRetry).toMatchObject({available:false,pending:true});
       await f.run(output('合法整合'));
       expect(f.adapter.startTurnLog).toHaveLength(5);
       expect(f.db.prepare('SELECT count(*) n FROM coordination_runs').get()).toEqual({n:1});

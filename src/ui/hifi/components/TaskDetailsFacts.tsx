@@ -190,7 +190,7 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
   return <div className="card tight" data-zs-coordination>
     <div className="section-title">成员协作 · {states[c.state]??c.state}</div>
     <div style={{whiteSpace:'pre-wrap'}}>{c.summary}</div>
-    <div className="faint small">步骤依次交接，共用 {c.usedCalls} / {c.maxCalls} 次调用额度（包含规划、子任务、修复与整合；未知结果也占用）。</div>
+    <div className="faint small">步骤依次交接，调用格已占用 {c.usedCalls} / {c.maxCalls}（包含规划、子任务、修复与整合的预占；未知结果仍占用）。</div>
     {c.errorMessage?<div className="panel warning" role="alert">{c.errorMessage}。请查看对应步骤与运行原因；结果未知时先人工核实原请求。</div>:null}
     {c.steps.map(s=><div key={s.key} className="card tight">
       <a href={s.locate}>{s.title}</a> · <TaskStatusTag status={s.status as Parameters<typeof TaskStatusTag>[0]['status']}/>
@@ -204,7 +204,8 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
 
 export function ActualMembers({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight">
-    <div className="section-title">实际执行成员</div>
+    <div className="section-title">{detail.coordination?'协调任务的直接运行成员':'实际执行成员'}</div>
+    {detail.coordination?<div className="faint small">分工成员与对应模型见协作面板；子任务的工具、用量和运行可逐项打开。</div>:null}
     {detail.runs.length === 0 ? <div className="faint small">尚无运行与执行轮次。</div> : detail.runs.map((r) => <div key={r.id} style={{ marginBottom: 8 }}>
       <div className="small strong">{r.mode} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></div>
       {r.detailLoaded === false ? <div className="faint small">在运行详情中选择本次运行后读取执行成员。</div> : null}
@@ -223,7 +224,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
     <div className="panel info">{taskRunGuidance(detail)}</div>
-    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':'继续最近失败运行'}</button> : null}
+    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'修复原协作整合输出':'继续最近失败运行'}</button> : null}
     {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}
     {detail.failedRetry.pending||detail.clarificationRetry?.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
     {detail.runs.length === 0 ? <div className="card tight">任务尚无运行记录。</div> : ordered.map((r) => <div key={r.id} className="card tight">

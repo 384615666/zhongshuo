@@ -67,7 +67,11 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const selectedIsOutsideWindow = selectedRunId != null && !runRows.items.some((r) => r.id === selectedRunId);
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT rowid AS cursor_id, id, mode, status, stage, round_no, revision, budget_json
     FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedRunId, taskId, conversationId) as RunRow | undefined : undefined;
-  const failedLatest = task.status === 'ACTIVE' && task.stop_generation === 0 && runRows.items[0]?.status === 'FAILED';
+  const coordinationBlocked=task.status==='BLOCKED'&&db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(taskId)!=null;
+  const failedLatest = (task.status === 'ACTIVE'||coordinationBlocked) && task.stop_generation === 0 && runRows.items[0]?.status === 'FAILED';
+  const integrationRepair=failedLatest&&db.prepare(`SELECT 1 FROM coordination_integration_attempts i JOIN agent_turns a ON a.run_id=i.execution_run_id
+    WHERE i.execution_run_id=? AND a.status='FAILED' AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
+    AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
   const availability = db.prepare(`SELECT p.status AS project_status, c.archived_at AS conversation_archived,
     r.archived_at AS room_archived FROM tasks t JOIN projects p ON p.id = t.project_id
     JOIN conversations c ON c.id = t.conversation_id LEFT JOIN rooms r ON r.id = t.room_id WHERE t.id = ?`)
@@ -75,8 +79,8 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const scopeBlock = availability.project_status !== 'active' ? '项目已归档或不可用；先恢复项目。'
     : availability.conversation_archived != null ? '会话已归档；先恢复会话。'
       : availability.room_archived != null ? '房间已归档；先恢复房间。' : null;
-  const pendingRedispatch = failedLatest && db.prepare(`SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'`)
-    .get(`task:${taskId}:redispatch:${latestRunId}`) != null;
+  const pendingRedispatch = failedLatest && (db.prepare(`SELECT 1 FROM outbox WHERE dispatch_key = ? AND status IN ('pending','leased')`)
+    .get(`task:${taskId}:redispatch:${latestRunId}`) != null || db.prepare(`SELECT 1 FROM format_repair_workitems f JOIN outbox o ON o.dispatch_key=f.target_dispatch_key WHERE f.task_id=? AND f.status='pending' AND o.status IN ('pending','leased')`).get(taskId)!=null);
   const blockedRetry = failedLatest && !pendingRedispatch && scopeBlock == null ? assessTaskRedispatchReadiness(db, taskId) : null;
   const clarificationLatest=task.status==='WAITING_USER'&&task.stop_generation===0&&runRows.items[0]?.status==='SUCCEEDED'&&db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(taskId,latestRunId)!=null;
   const clarificationPending=clarificationLatest&&db.prepare("SELECT 1 FROM outbox WHERE dispatch_key=? AND status!='done'").get(`task:${taskId}:redispatch:${latestRunId}`)!=null;
@@ -113,8 +117,9 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const deliveryRows = bounded<{ id: string; revision: number; manifest_hash: string; run_id: string | null; review_status: string; reviewed_at: number | null; review_note: string | null; artifact_refs_json: string; change_set_refs_json: string; verification_refs_json: string }>(
     `SELECT id, revision, manifest_hash, run_id, review_status, reviewed_at, review_note,
       artifact_refs_json, change_set_refs_json, verification_refs_json FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC`, [taskId], 50);
-  const changeRows = bounded<{ id: string; application_status: string; before_ref: string; after_ref: string }>(
-    'SELECT id, application_status, before_ref, after_ref FROM change_sets WHERE task_id = ? AND project_id = ? ORDER BY rowid DESC', [taskId, projectId], 100);
+  const changeRows = bounded<{ id: string; task_id:string;application_status: string; before_ref: string; after_ref: string }>(
+    `SELECT id,task_id,application_status,before_ref,after_ref FROM change_sets WHERE project_id=? AND (task_id=? OR task_id IN
+      (SELECT id FROM tasks WHERE parent_task_id=? AND project_id=? AND conversation_id=?)) ORDER BY rowid DESC`, [projectId,taskId,taskId,projectId,conversationId], 100);
   const artifactRows = bounded<{ id: string; kind: string; revision: number; hash: string }>(
     'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId], 100);
   return {
@@ -126,7 +131,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       ownerDisplayName: task.owner_display_name as string | null,
       parentTaskId: task.parent_task_id as string | null, currentDeliveryId: task.current_delivery_id as string | null },
     clarificationRetry:{available:clarificationLatest&&!clarificationPending&&scopeBlock==null&&clarificationBlock==null,pending:clarificationPending,blockReason:scopeBlock??clarificationBlock?.message??null},
-    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,
+    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,...(integrationRepair?{formatRepair:true}:{}),
       pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
     coordination:readCoordination(db,taskId,selectedRunId),
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
@@ -139,7 +144,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       const files = bounded<{ path: string; state: string; sha256: string | null; size: number | null }>(
         `SELECT path, state, sha256, size FROM change_set_files WHERE change_set_id = ? AND role = 'after' ORDER BY path`, [c.id], 100);
       return { id: c.id, applicationStatus: c.application_status, beforeRef: c.before_ref,
-        afterRef: c.after_ref, locate: `#task=${taskId}`, files: files.items, filesTruncated: files.truncated };
+        afterRef: c.after_ref, locate: `#task=${c.task_id}`, files: files.items, filesTruncated: files.truncated };
     }),
     artifacts: artifactRows.items,
     nextCursors: {

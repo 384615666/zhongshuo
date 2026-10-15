@@ -2108,7 +2108,7 @@ function ThreadDetails({
     setRetryBusyTask(snapshot.taskId);
     void (async () => {
       try {
-        await command('task.redispatch', { ...snapshot, reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':'用户在运行详情显式继续最近失败运行' });
+        await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户显式修复原协作整合输出':'用户在运行详情显式继续最近失败运行' });
         setAcceptedRetryRun(snapshot.sourceRunId);
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
         toast('继续请求已入队；等待正式执行结果', 'success');
