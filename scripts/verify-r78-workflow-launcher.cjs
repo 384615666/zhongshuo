@@ -76,7 +76,11 @@ class Cdp {
     return r.result.value;
   }
   async shot(name) {
-    await this.eval('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    // Screenshots certify a visible, painted own window. Other independent GUI
+    // verifiers can occlude it; an unbounded double-RAF then never resolves.
+    await this.send('Page.bringToFront');
+    const painted=await this.eval('Promise.race([new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)))),new Promise(resolve=>setTimeout(()=>resolve(false),1500))])');
+    must(painted===true,`own screenshot ${name}: no visible paint after bringToFront`);
     await sleep(120);
     const png = await this.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(out, name), Buffer.from(png.data, 'base64'));

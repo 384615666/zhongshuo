@@ -1146,7 +1146,8 @@ button.composer-target-summary:hover {
   flex: 0 1 260px;
   min-width: 170px;
 }
-.archive-filters .archive-filter-project {
+.archive-filters .archive-filter-project,
+.archive-filters > .select-wrap {
   flex: 0 0 auto;
   width: 180px;
   min-width: 140px;
@@ -1154,7 +1155,8 @@ button.composer-target-summary:hover {
 }
 @media (max-width: 620px) {
   .archive-filters .archive-filter-search,
-  .archive-filters .archive-filter-project {
+  .archive-filters .archive-filter-project,
+  .archive-filters > .select-wrap {
     flex: 1 1 100%;
     width: auto;
   }
