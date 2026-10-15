@@ -54,7 +54,8 @@ export const COORDINATION_INTEGRATION_RESERVE = 2;
 export interface CoordinationDetails {
   runId:string;state:string;summary:string;errorMessage:string|null;usedCalls:number;maxCalls:number;
   steps:Array<{key:string;taskId:string;title:string;status:string;role:string;memberId:string;displayName:string;
-    model:string|null;channel:string|null;dependsOn:string[];deliveryId:string|null;deliveryRevision:number|null;manifestHash:string|null;locate:string}>;
+    model:string|null;channel:string|null;dependsOn:string[];deliveryId:string|null;deliveryRevision:number|null;manifestHash:string|null;locate:string;
+    inputVersions?:Array<{deliveryId:string;revision:number;manifestHash:string}>;reviewVersionCurrent?:boolean|null}>;
 }
 
 /** Includes reserved/unknown attempts. Child-local budgets never enlarge the parent cap. */

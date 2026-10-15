@@ -49,7 +49,7 @@ import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
 import { useElementWidth } from '../lib/useElementWidth';
-import { ActualMembers, DeliveryHistoryFacts, DetailReadState, RunExtraFacts, TaskEventFacts, TaskExtraFacts, taskRunGuidance, useTaskDetails } from '../components/TaskDetailsFacts';
+import { ActualMembers, ChildTaskDetails,DeliveryHistoryFacts, DetailReadState, RunExtraFacts, TaskEventFacts, TaskExtraFacts, taskRunGuidance, useTaskDetails } from '../components/TaskDetailsFacts';
 import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
 
 /** 正式侧能力锁定（未接通能力点击前禁用并说明——不在原型位置伪造可用）。 */
@@ -203,12 +203,14 @@ function usePreviewWidth() {
 export function RoomPage({
   roomId,
   threadId,
+  focusedTaskId,focusedDeliveryId,
   highlightMessageId,
   tab,
   artifactId,
 }: {
   roomId: string;
   threadId?: string;
+  focusedTaskId?:string;focusedDeliveryId?:string;
   /** 来自 #/thread/:id?message=:mid 的直达链接：定位到并高亮该消息（§15.5） */
   highlightMessageId?: string;
   /** 初始 tab（来自 ?tab=）：让"打开任务详情"这类动作落在对应 tab 上 */
@@ -589,6 +591,7 @@ export function RoomPage({
           narrow
           highlightMessageId={highlightMessageId}
           initialTab={tab}
+          focusedTaskId={focusedTaskId} focusedDeliveryId={focusedDeliveryId}
           initialArtifactId={artifactId}
           onBackToPool={collapseThread}
           poolCollapsedByFile={poolCollapsedByFile}
@@ -744,6 +747,7 @@ export function RoomPage({
             flexStyle={twoRegion ? contextFlex : undefined}
             highlightMessageId={highlightMessageId}
             initialTab={tab}
+            focusedTaskId={focusedTaskId} focusedDeliveryId={focusedDeliveryId}
             initialArtifactId={artifactId}
             onBackToPool={collapseThread}
           poolCollapsedByFile={poolCollapsedByFile}
@@ -1302,6 +1306,7 @@ type ThreadTabLocal = ThreadTabKey;
 
 function ThreadPanel({
   threadId,
+  focusedTaskId,focusedDeliveryId,
   narrow,
   width,
   highlightMessageId,
@@ -1313,6 +1318,7 @@ function ThreadPanel({
   flexStyle,
 }: {
   threadId: string;
+  focusedTaskId?:string;focusedDeliveryId?:string;
   narrow?: boolean;
   width?: number;
   /** 两区并排时由布局解析给出的宽度约束（§5.2） */
@@ -1952,6 +1958,7 @@ function ThreadPanel({
             threadId={thread.id}
             anchor={anchor}
             task={task}
+            focusedTaskId={focusedTaskId} focusedDeliveryId={focusedDeliveryId}
             run={run}
             isDiscussion={isDiscussion}
             section={section}
@@ -2081,13 +2088,14 @@ function ThreadPanel({
    ============================================================ */
 
 function ThreadDetails({
-  s, threadId, anchor, task, run, isDiscussion, section, followerCount,
+  s, threadId, anchor, task, run, isDiscussion, section, followerCount,focusedTaskId,focusedDeliveryId,
   onChangeSection, onChangeTab,
 }: {
   s: AppState;
   threadId: string;
   anchor: Message;
   task?: Task;
+  focusedTaskId?:string;focusedDeliveryId?:string;
   run?: WorkflowRun | NonNullable<Task['latestRun']>;
   isDiscussion: boolean;
   section: DetailsSection;
@@ -2095,7 +2103,8 @@ function ThreadDetails({
   onChangeSection: (sec: DetailsSection) => void;
   onChangeTab: (tab: ThreadTabLocal) => void;
 }) {
-  const formal = useTaskDetails(task?.projectId, task?.id, task?.revision, run?.id, run?.status);
+  const childFocused=Boolean(focusedTaskId&&focusedTaskId!==task?.id);
+  const formal = useTaskDetails(task?.projectId, childFocused?undefined:task?.id, task?.revision, run?.id, run?.status);
   const [retryBusyTask, setRetryBusyTask] = useState<string | null>(null);
   const [acceptedRetryRun, setAcceptedRetryRun] = useState<string | null>(null);
   const retryFailed = () => {
@@ -2128,6 +2137,7 @@ function ThreadDetails({
     task && (task.currentDeliveryId || s.taskDeliveries.some((d) => d.taskId === task.id) || formal.data?.deliveries.length),
   );
 
+  if(childFocused&&task&&focusedTaskId)return <ChildTaskDetails deliveryId={focusedDeliveryId} projectId={task.projectId} taskId={focusedTaskId} parentTaskId={task.id} conversationId={threadOf(s,threadId)?.conversationId}/>;
   const groups: { key: DetailsSection; label: string; icon: string; hint: string }[] = [
     { key: 'overview', label: isDiscussion ? '记录信息' : '任务概况', icon: 'list', hint: isDiscussion ? '根消息与参与者' : '标题、编号、完整原始要求、状态与方式' },
     { key: 'members', label: '参与成员', icon: 'users', hint: '线程成员与跟进名单：移出=停止自动唤醒，历史保留，可再 @ 回来' },

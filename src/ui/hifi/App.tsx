@@ -630,13 +630,13 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
     if (ent != null && ent.projectId === s.activeProjectId
       && s.rooms.some(r=>r.projectId===ent.projectId)
       && opening?.projectId!==ent.projectId) {
-      return <RoomPage roomId={ent.roomId} threadId={tid} highlightMessageId={query.message} tab={isThreadTab(query.tab) ? query.tab : undefined} />;
+      return <RoomPage roomId={ent.roomId} threadId={tid} focusedTaskId={query.task} focusedDeliveryId={query.delivery} highlightMessageId={query.message} tab={isThreadTab(query.tab) ? query.tab : undefined} />;
     }
     if(ent!=null&&opening!=null&&opening.projectId!==ent.projectId&&opening.urlSeqAtStart>=currentNavSeq())return <div className="main"><div className="page"><div className="panel info">正在打开项目…</div></div></div>;
     return (
       <div className="main"><div className="page">
         <div className="panel info">正在定位线程（对齐所属项目后自动进入房间）…</div>
-        <LocateThread threadId={tid} messageId={query.message} tab={query.tab} />
+        <LocateThread threadId={tid} messageId={query.message} tab={query.tab} focusedTaskId={query.task} focusedDeliveryId={query.delivery}/>
       </div></div>
     );
   }
@@ -690,6 +690,7 @@ function Routes({ path, route, query }: { path: string; route: string; query: Re
       <RoomPage
         roomId={m[2] ?? ''}
         threadId={query.thread}
+        focusedTaskId={query.task} focusedDeliveryId={query.delivery}
         tab={isThreadTab(query.tab) ? query.tab : undefined}
         artifactId={query.artifact}
       />
@@ -772,7 +773,7 @@ function ProjectAlign({ projectId }: { projectId: string }) {
 /** 旧线程路由的装载定位（R72：locateThread 对齐所属项目后跳该房间——修跨项目深链丢弃）。
  *  R73：①意图登记（取消后链内不再抢焦点/重试/弹旧错）；②deps 补 message/tab——同一
  *  threadId 快速改定位目标时采用**最新**用户意图，旧 effect 的取消标志随清理置位。 */
-function LocateThread({ threadId, messageId, tab }: { threadId: string; messageId?: string; tab?: string }) {
+function LocateThread({ threadId, messageId, tab,focusedTaskId,focusedDeliveryId }: { threadId: string; messageId?: string; tab?: string;focusedTaskId?:string;focusedDeliveryId?:string }) {
   useEffect(() => {
     const intent = registerNavIntent();
     void (async () => {
@@ -784,6 +785,8 @@ function LocateThread({ threadId, messageId, tab }: { threadId: string; messageI
         q.set('thread', threadId);
         if (tab != null && tab !== 'replies') q.set('tab', tab);
         if (messageId != null) q.set('message', messageId);
+        if(focusedTaskId)q.set('task',focusedTaskId);
+        if(focusedDeliveryId)q.set('delivery',focusedDeliveryId);
         navigate(`/project/${ent.projectId}/room/${ent.roomId}?${q.toString()}`, { replace: true });
       } catch (e) {
         if (!navIntentActive(intent)) return; // 已取消：不弹旧错误
@@ -794,7 +797,7 @@ function LocateThread({ threadId, messageId, tab }: { threadId: string; messageI
     })();
     return () => { cancelNavIntent(intent); releaseNavIntent(intent); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, messageId, tab]);
+  }, [threadId, messageId, tab,focusedTaskId,focusedDeliveryId]);
   return null;
 }
 /* DM 页自渲染共享预览（R66 P2：原型 320/440/480 宽度降级 + 列表收起 + 单区切换在

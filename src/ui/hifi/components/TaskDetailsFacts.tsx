@@ -7,7 +7,7 @@ import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
 const detailReads = new Map<string, Promise<TaskDetailsResult>>();
-function readDetails(key: string, params: { projectId: string; taskId: string; runId?: string; conversationId?:string }) {
+function readDetails(key: string, params: { projectId: string; taskId: string; runId?: string; conversationId?:string;deliveryId?:string }) {
   const existing = detailReads.get(key);
   if (existing) return existing;
   const pending = command<TaskDetailsResult>('task.details', params).finally(() => {
@@ -17,12 +17,12 @@ function readDetails(key: string, params: { projectId: string; taskId: string; r
   return pending;
 }
 
-export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined, conversationId?:string) {
-  const target = JSON.stringify([projectId, taskId,conversationId]);
+export function useTaskDetails(projectId: string | undefined, taskId: string | undefined, revision: number | undefined, runId: string | undefined, runStatus: string | undefined, conversationId?:string,deliveryId?:string) {
+  const target = JSON.stringify([projectId, taskId,conversationId,deliveryId]);
   const [requested, setRequested] = useState<{ target: string; runId: string } | null>(()=>{const id=readingPosition<string>(`run:${target}`);return typeof id==='string'?{target,runId:id}:null;});
   const remembered=readingPosition<string>(`run:${target}`);
   const selectedRunId = requested?.target === target ? requested.runId : typeof remembered==='string'?remembered:runId;
-  const key = JSON.stringify([projectId, taskId, selectedRunId,conversationId]);
+  const key = JSON.stringify([projectId, taskId, selectedRunId,conversationId,deliveryId]);
   const [state, setState] = useState<{ key: string; data: TaskDetailsResult | null; error: string | null; loading: boolean; updatedAt: number | null }>({ key: '', data: null, error: null, loading: false, updatedAt: null });
   const read = useRef<(() => void) | null>(null);
   const source = useRef({ key, revision, runStatus });
@@ -38,7 +38,7 @@ export function useTaskDetails(projectId: string | undefined, taskId: string | u
       if (busy) { pending = true; return; }
       busy = true; pending = false; const ticket = ++intent;
       setState(old => ({ key, data: old.key === key ? old.data : null, error: old.key === key ? old.error : null, updatedAt: old.key === key ? old.updatedAt : null, loading: true }));
-      void readDetails(key, { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}),...(conversationId?{conversationId}:{}) }).then(
+      void readDetails(key, { projectId, taskId, ...(selectedRunId ? { runId: selectedRunId } : {}),...(conversationId?{conversationId}:{}),...(deliveryId?{deliveryId}:{}) }).then(
         data => { if (alive && ticket === intent && visible()) {
           if(data.task.id!==taskId||data.task.projectId!==projectId||conversationId!=null&&data.task.conversationId!==conversationId||selectedRunId!=null&&data.selectedRunId!==selectedRunId){setState(old=>({...old,key,error:'详情回执目标不匹配；保留已确认事实，可刷新重试',loading:false}));return;}
           setState({ key, data, error: null, loading: false, updatedAt: Date.now() });
@@ -56,7 +56,7 @@ export function useTaskDetails(projectId: string | undefined, taskId: string | u
     const timer = window.setInterval(() => { if (!busy && visible()) request(); }, 5000);
     request();
     return () => { alive = false; intent++; read.current = null; window.clearInterval(timer); takeover.disconnect(); document.removeEventListener('visibilitychange', visibility); };
-  }, [projectId, taskId, selectedRunId, key,conversationId]);
+  }, [projectId, taskId, selectedRunId, key,conversationId,deliveryId]);
   useEffect(() => {
     const old = source.current;
     source.current = { key, revision, runStatus };
@@ -183,6 +183,23 @@ export function TaskExtraFacts({ detail }: { detail: TaskDetailsResult }) {
   </div>;
 }
 
+/** Child inspection never replaces the thread's root task or draft target. */
+export function ChildTaskDetails({projectId,taskId,parentTaskId,conversationId,deliveryId}:{projectId:string;taskId:string;parentTaskId:string;conversationId?:string;deliveryId?:string}){
+  const formal=useTaskDetails(projectId,taskId,undefined,undefined,undefined,conversationId,deliveryId);
+  const detail=formal.data;
+  const locatedDelivery=deliveryId?detail?.deliveries.find(d=>d.id===deliveryId):undefined;
+  const matches=detail?.task.parentTaskId===parentTaskId&&detail.task.projectId===projectId&&detail.task.id===taskId;
+  return <div className="thread-details" data-zs-child-task={taskId}>
+    <div className="panel info">分工步骤的只读详情 · <a href={`#task=${parentTaskId}`}>返回主协作任务</a><div className="small">回复与草稿仍在原主任务会话；本页不另行派发、验收或改写目标。</div></div>
+    <div className="details-body">
+      <DetailReadState {...formal}/>
+      {detail&&!matches?<div className="panel warning" role="alert">步骤不属于当前项目与主协作；未展示其他目标的详情。</div>:null}
+      {detail&&matches&&deliveryId&&!locatedDelivery?<div className="panel warning" role="alert">指定交付未读取到，未以最新版本代替。</div>:null}
+      {detail&&matches?<>{locatedDelivery?<div className="panel info" data-zs-located-delivery={locatedDelivery.id}>已定位步骤成果 v{locatedDelivery.revision}<details><summary>交付身份</summary>{locatedDelivery.id} · {locatedDelivery.manifestHash}</details></div>:null}<div className="section-title">{detail.task.title}</div><TaskExtraFacts detail={detail}/><ActualMembers detail={detail}/><RunExtraFacts detail={detail} onSelectRun={formal.selectRun}/><DeliveryHistoryFacts detail={detail}/></>:null}
+    </div>
+  </div>;
+}
+
 function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
   const c=detail.coordination!;
   const states:Record<string,string>={planning:'正在规划',running:'分工执行中',integrating:'正在整合',completed:'已完成',blocked:'需要处理',cancelled:'已停止'};
@@ -196,6 +213,8 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
       <a href={s.locate}>{s.title}</a> · <TaskStatusTag status={s.status as Parameters<typeof TaskStatusTag>[0]['status']}/>
       <div className="small">{s.displayName} #{s.memberId.slice(-6)} · {roles[s.role]??s.role}</div>
       <div className="faint small">{s.channel??'渠道未提供'} / {s.model??'模型未提供'}{s.dependsOn.length?` · 等待/接收：${s.dependsOn.map(k=>c.steps.find(x=>x.key===k)?.title??k).join('、')}`:' · 无前置步骤'}</div>
+      {s.inputVersions?.map(input=><div key={input.deliveryId} className="small">接收 <a href={`#delivery=${input.deliveryId}`}>上游成果 v{input.revision}</a><details className="faint"><summary>交接内容身份</summary>{input.deliveryId} · {input.manifestHash}</details></div>)}
+      {s.role==='review'?<div className={s.reviewVersionCurrent===false?'panel warning':'faint small'}>{s.reviewVersionCurrent===false?'评审后产生了新文件版本；这份旧评审不覆盖新改动。':s.reviewVersionCurrent===true?'评审的文件版本与本次最终交付快照一致。':'评审仅针对当时接收的版本，最终文件版本匹配尚未提供。'}</div>:null}
       {s.deliveryId?<div className="small"><a href={`#delivery=${s.deliveryId}`}>查看步骤成果 v{s.deliveryRevision}</a></div>:null}
       <details className="small faint"><summary>交接版本身份</summary>{s.taskId} · {s.deliveryId??'尚无交付'} · {s.manifestHash??'尚无成果hash'}</details>
     </div>)}

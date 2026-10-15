@@ -4,7 +4,7 @@
  * 「外部 hash → 内部路由」的**纯映射**——实体身份以 deepLink.resolve 的服务端事实为准，
  * 不在前端猜归属；跨项目/前进后退/刷新都保留实体身份（内部路由可再解析）。
  */
-import type { HifiState } from '../data/store';
+interface DeepLinkState { rooms: Array<{id:string;conversationId?:string}>; dms:Array<{id:string}> }
 
 /** 外部深链 hash 形态（与 src/daemon/commands.ts deepLink.resolve 同一正则口径）。 */
 export const EXTERNAL_DEEP_LINK_RE = /^#?(dm|task|delivery|msg)=([A-Za-z0-9_:-]+)$/;
@@ -17,6 +17,7 @@ export interface ResolvedDeepLink {
   rootPath?: string | null;
   threadId?: string | null;
   taskId?: string;
+  parentTaskId?:string|null;
   deliveryId?: string;
   revision?: number;
   manifestHash?: string;
@@ -35,12 +36,12 @@ export function isExternalDeepLink(hash: string): boolean {
  * 归属分列（review-r51 §3.1 修复）：DM 任务（无线程）只落 DM；房间会话按 conversationId
  * 匹配已装载房间落主池——**未知归属不得默认当 DM**（此前房间交付被错送到空私信页）。
  */
-export function routeForResolved(res: ResolvedDeepLink, s: HifiState): string | null {
+export function routeForResolved(res: ResolvedDeepLink, s: DeepLinkState): string | null {
   if (res.kind === 'dm') return `/dm/${res.conversationId}`;
   const roomOf = (conversationId: string) => s.rooms.find((r) => r.conversationId === conversationId);
   const isDmConversation = (conversationId: string) => s.dms.some((d) => d.id === conversationId);
   if (res.kind === 'task' || res.kind === 'delivery') {
-    if (res.threadId != null && res.threadId.length > 0) return `/thread/${res.threadId}?tab=task`;
+    if (res.threadId != null && res.threadId.length > 0) return `/thread/${res.threadId}?tab=task${res.parentTaskId&&res.taskId?`&task=${encodeURIComponent(res.taskId)}${res.kind==='delivery'&&res.deliveryId?`&delivery=${encodeURIComponent(res.deliveryId)}`:''}`:''}`;
     // 无线程：DM 任务（dm_turn）落会话；房间会话（异常形态）落主池；都查不到=无落点。
     if (isDmConversation(res.conversationId)) return `/dm/${res.conversationId}`;
     const room = roomOf(res.conversationId);

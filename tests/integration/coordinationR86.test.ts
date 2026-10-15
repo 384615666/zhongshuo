@@ -178,6 +178,9 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const root=await f.send();await f.run(output('准备分工',f.plan));
       expect((f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId) as {status:string}).status).toBe('ACTIVE');
       expect((f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId) as {n:number}).n).toBe(2);
+      const child=f.db.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY rowid LIMIT 1').get(root.taskId) as {id:string};
+      const located=await f.cmd<{taskId:string;parentTaskId:string;threadId:string}>('deepLink.resolve',{hash:`#task=${child.id}`});
+      expect(located).toMatchObject({taskId:child.id,parentTaskId:root.taskId,threadId:root.threadId});
       const board=await f.cmd<{groups:Array<{rooms:Array<{cards:Array<{taskId:string}>}>}>}>('board.view',{scope:'project',projectId:f.projectId});
       expect(board.groups.flatMap(g=>g.rooms.flatMap(r=>r.cards)).map(c=>c.taskId)).toEqual([root.taskId]);
       await f.run(output('上游独立分析：采用方案甲'));
@@ -301,6 +304,27 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const saved=f.db.prepare('SELECT handoff_json FROM coordination_steps ORDER BY rowid').all() as {handoff_json:string}[];
       const hashes=saved.map(s=>(JSON.parse(s.handoff_json) as {output:{files:{sha256:string}[]}}).output.files[0]!.sha256);
       expect(hashes[0]).not.toBe(hashes[1]);
+    }finally{f.db.close();}
+  });
+  it.each(['unchanged','downstream','integration'] as const)('binds review to its actual input version when final files are %s',async variant=>{
+    const f=await fixture();try{
+      const root=await f.send();
+      const steps=[{key:'impl',memberId:f.a,title:'实施',objective:'创建结果',role:'implementation',dependsOn:[]},{key:'review',memberId:f.b,title:'评审',objective:'读取上游文件',role:'review',dependsOn:['impl']}];
+      if(variant==='downstream')steps.push({key:'revise',memberId:f.a,title:'完善',objective:'修改文件',role:'implementation',dependsOn:['review']});
+      await f.run(output('计划',{summary:'核对评审版本',steps}));
+      await f.run([{kind:'writeFile',path:'result.txt',content:'v1'},...output('第一版')]);
+      await f.run(output('已读第一版'));
+      if(variant==='downstream')await f.run([{kind:'writeFile',path:'result.txt',content:'v2'},...output('第二版')]);
+      await f.run([...(variant==='integration'?[{kind:'writeFile' as const,path:'result.txt',content:'v3'}]:[]),...output('整合')]);
+      const detail=await f.cmd<TaskDetailsResult>('task.details',{projectId:f.projectId,taskId:root.taskId});
+      const review=detail.coordination!.steps.find(s=>s.key==='review')!;
+      expect(review.reviewVersionCurrent).toBe(variant==='unchanged');
+      expect(review.inputVersions).toHaveLength(1);
+      const child=detail.coordination!.steps.find(s=>s.key==='impl')!;
+      expect(review.inputVersions![0]).toMatchObject({deliveryId:child.deliveryId,revision:child.deliveryRevision,manifestHash:child.manifestHash});
+      const selected=await f.cmd<TaskDetailsResult>('task.details',{projectId:f.projectId,taskId:child.taskId,conversationId:f.room.conversationId,deliveryId:child.deliveryId});
+      expect(selected.deliveries.some(d=>d.id===child.deliveryId&&d.runId===selected.selectedRunId)).toBe(true);
+      expect((await f.raw('task.details',{projectId:f.projectId,taskId:review.taskId,deliveryId:child.deliveryId})).ok).toBe(false);
     }finally{f.db.close();}
   });
   it('keeps explicit integration format repair in the original plan and aggregate budget',async()=>{

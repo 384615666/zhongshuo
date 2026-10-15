@@ -40,7 +40,7 @@ export function readTaskHistory(db: ZhongshuoDatabase, params: TaskHistoryParams
 }
 
 /** Query only facts already persisted by the formal task/worker path. Caller checks scope and audience. */
-export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requestedRunId?: string): TaskDetailsResult {
+export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requestedRunId?: string,requestedDeliveryId?:string): TaskDetailsResult {
   const task = db.prepare(`SELECT t.id, t.project_id, t.conversation_id, t.title, t.objective, t.status, t.review_policy, t.revision, t.stop_generation,
     t.room_task_number, t.owner_member_id, pm.display_name AS owner_display_name, t.parent_task_id, t.current_delivery_id
     FROM tasks t LEFT JOIN project_members pm ON pm.id = t.owner_member_id AND pm.project_id = t.project_id WHERE t.id = ?`).get(taskId) as Record<string, unknown>;
@@ -63,7 +63,8 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const latestRunId = runRows.items[0]?.id ?? null;
   const currentRunId = runRows.items[0] != null && ['QUEUED', 'RUNNING', 'WAITING', 'STOPPING'].includes(runRows.items[0].status)
     ? runRows.items[0].id : null;
-  const selectedRunId = requestedRunId ?? latestRunId;
+  const deliveryRun=requestedDeliveryId?(db.prepare('SELECT run_id FROM task_deliveries WHERE id=? AND task_id=?').get(requestedDeliveryId,taskId) as {run_id:string|null}|undefined)?.run_id:null;
+  const selectedRunId = requestedRunId ?? deliveryRun ?? latestRunId;
   const selectedIsOutsideWindow = selectedRunId != null && !runRows.items.some((r) => r.id === selectedRunId);
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT rowid AS cursor_id, id, mode, status, stage, round_no, revision, budget_json
     FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedRunId, taskId, conversationId) as RunRow | undefined : undefined;
@@ -122,6 +123,10 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const deliveryRows = bounded<{ id: string; revision: number; manifest_hash: string; run_id: string | null; review_status: string; reviewed_at: number | null; review_note: string | null; artifact_refs_json: string; change_set_refs_json: string; verification_refs_json: string }>(
     `SELECT id, revision, manifest_hash, run_id, review_status, reviewed_at, review_note,
       artifact_refs_json, change_set_refs_json, verification_refs_json FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC`, [taskId], 50);
+  if(requestedDeliveryId&&!deliveryRows.items.some(d=>d.id===requestedDeliveryId)){
+    const pinned=db.prepare('SELECT * FROM task_deliveries WHERE id=? AND task_id=?').get(requestedDeliveryId,taskId) as typeof deliveryRows.items[number]|undefined;
+    if(pinned)deliveryRows.items.push(pinned);
+  }
   const changeRows = bounded<{ id: string; task_id:string;application_status: string; before_ref: string; after_ref: string }>(
     `SELECT id,task_id,application_status,before_ref,after_ref FROM change_sets WHERE project_id=? AND (task_id=? OR task_id IN
       (SELECT id FROM tasks WHERE parent_task_id=? AND project_id=? AND conversation_id=?)) ORDER BY rowid DESC`, [projectId,taskId,taskId,projectId,conversationId], 100);

@@ -306,18 +306,31 @@ export function readCoordination(db:ZhongshuoDatabase,taskId:string,selectedRunI
   if(!run)return null;
   const plan=run.plan_json?JSON.parse(run.plan_json) as CoordinationPlan:null;
   const scope=coordinationRoster(db,taskId);
-  const rows=db.prepare(`SELECT s.step_key,s.role,t.id,t.title,t.status,t.owner_member_id,m.display_name,
+  const rows=db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.status,t.owner_member_id,m.display_name,
     d.id delivery_id,d.revision delivery_revision,d.manifest_hash FROM coordination_steps s
     JOIN tasks t ON t.id=s.child_task_id JOIN project_members m ON m.id=t.owner_member_id AND m.project_id=t.project_id
     JOIN tasks parent ON parent.id=t.parent_task_id AND parent.project_id=t.project_id AND parent.conversation_id=t.conversation_id
-    LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE s.run_id=? AND parent.id=? ORDER BY s.rowid LIMIT 8`).all(run.run_id,taskId) as {step_key:string;role:string;id:string;title:string;status:string;owner_member_id:string;display_name:string;delivery_id:string|null;delivery_revision:number|null;manifest_hash:string|null}[];
+    LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE s.run_id=? AND parent.id=? ORDER BY s.rowid LIMIT 8`).all(run.run_id,taskId) as {step_key:string;role:string;handoff_json:string|null;id:string;title:string;status:string;owner_member_id:string;display_name:string;delivery_id:string|null;delivery_revision:number|null;manifest_hash:string|null}[];
+  const finalFiles=plan&&run.state==='completed'?new Map(managedHandoffFiles(db,run.run_id).map(f=>[f.path,f])):null;
+  if(finalFiles&&run.integration_run_id){
+    const after=db.prepare(`SELECT f.path,f.sha256,f.state FROM task_deliveries d JOIN change_sets c ON c.id IN(SELECT value FROM json_each(d.change_set_refs_json))
+      JOIN change_set_files f ON f.change_set_id=c.id AND f.role='after' WHERE d.task_id=? AND d.run_id=? AND c.task_id=? ORDER BY f.rowid LIMIT 101`).all(taskId,run.integration_run_id,taskId) as FrozenFile[];
+    if(after.length>100)finalFiles.clear();else for(const file of after)finalFiles.set(file.path,file);
+  }
   return {runId:run.run_id,state:run.state,summary:plan?.summary??(run.state==='completed'?'本次由协调成员直接回答，未分工':'协调成员正在判断是否需要分工'),errorMessage:run.error_message,
     usedCalls:coordinationCallsUsed(db,run.run_id),maxCalls:coordinationCallLimit(db,run.run_id),steps:rows.map(r=>{
       const snapshot=scope.find(m=>m.memberId===r.owner_member_id)?.writeScope;
       const runtime=snapshot?(JSON.parse(snapshot) as {runtime?:{kind?:string;model?:string}}).runtime:null;
+      const handoff=JSON.parse(r.handoff_json??'{}') as {upstream?:Array<{id:string;revision:number;manifest_hash:string}>};
+      let reviewVersionCurrent:boolean|null=null;
+      if(r.role==='review'&&plan&&finalFiles?.size){
+        const expected=managedHandoffFiles(db,run.run_id,dependencyKeys(plan,r.step_key));
+        if(expected.length&&expected.every(f=>finalFiles.has(f.path)&&finalFiles.get(f.path)!.state!=='unknown'))reviewVersionCurrent=expected.every(f=>{const current=finalFiles.get(f.path)!;return f.state===current.state&&f.sha256===current.sha256;});
+      }
       return {key:r.step_key,taskId:r.id,title:r.title,status:r.status,role:r.role,memberId:r.owner_member_id,displayName:r.display_name,
         model:runtime?.model??null,channel:runtime?.kind??null,dependsOn:plan?.steps.find(s=>s.key===r.step_key)?.dependsOn??[],
-        deliveryId:r.delivery_id,deliveryRevision:r.delivery_revision,manifestHash:r.manifest_hash,locate:`#task=${r.id}`};})};
+        deliveryId:r.delivery_id,deliveryRevision:r.delivery_revision,manifestHash:r.manifest_hash,locate:`#task=${r.id}`,
+        inputVersions:handoff.upstream?.map(input=>({deliveryId:input.id,revision:input.revision,manifestHash:input.manifest_hash}))??[],reviewVersionCurrent};})};
 }
 
 /** In the parent's stop transaction: generation fences protect queued and opening children. */

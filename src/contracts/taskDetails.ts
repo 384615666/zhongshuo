@@ -4,6 +4,7 @@ import type { CoordinationDetails } from './coordination.ts';
 
 export interface TaskDetailsParams { projectId: string; taskId: string; runId?: string; conversationId?:string }
 export const taskDetailsParamsSchema = z.strictObject({
+  deliveryId:z.string().min(1).optional(),
   projectId: z.string().min(1), taskId: z.string().min(1), runId: z.string().min(1).optional(),
   conversationId:z.string().min(1).optional(),
 });
