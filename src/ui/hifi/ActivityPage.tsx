@@ -141,7 +141,7 @@ export function ActivityPage() {
               {visibleItems.map((it) => {
                 const loc = locateOf(it);
                 return (
-                  <div key={`${it.eventId}:${it.seq}`} className="card tight" data-zs-activity-item={it.kind}>
+                  <div key={`${it.eventId}:${it.seq}`} className="card tight" data-zs-activity-item={it.kind} data-zs-activity-id={it.eventId}>
                     <div className="row tight wrap">
                       <Tag tone="neutral" icon="clock">{it.kindLabel}</Tag>
                       <Tag tone="accent" icon="folder">{it.projectName}</Tag>
