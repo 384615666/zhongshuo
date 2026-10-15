@@ -16,11 +16,15 @@ const frozenMigrations=execFileSync('git',['diff','969302b','--','src/persistenc
 gate('001-050 migration sources frozen',!/^diff --git .*\/0(?:0[1-9]|[1-4][0-9]|50)[^/]*\.ts/m.test(frozenMigrations));
 for(const [kind,rootArg,model,toolFile]of[['codex',codexArg,'gpt-6.1-sol','codex-native-proof.json'],['claude',glmArg,'glm-5.3-flash','native-tool-proof.json']]){
  const root=path.resolve(rootArg),main=receipt(path.join(root,'progress.json')),close=receipt(path.join(root,'closeout.json')),follow=receipt(path.join(root,'ordinary-followup-after.json')),tools=receipt(path.join(root,toolFile));
+ const readonly=receipt(path.join(root,'readonly-result-facts.json'));
+ const finalClose=receipt(path.join(root,'final-close.json'));
  gate(kind+' ordinary/image/actual file v1-v2 acceptance',main.imageFunctionalPass&&main.workflowFunctionalPass&&close.pass);
  gate(kind+' ten original successful real calls',close.calls?.length===10&&close.calls.every(c=>c.status==='succeeded'&&c.runtime_kind===kind&&c.model===model));
  gate(kind+' three same-thread original-member rounds',follow.pass&&follow.steps?.length===2&&follow.steps.every(s=>s.memberId===main.ids.memberId)&&follow.taskId===main.natural['plain-你好'].id&&follow.threadId===main.natural['plain-你好'].conversation_thread_id&&follow.recordOnly===true);
  gate(kind+' actual native execution and test evidence',tools.pass&&tools.sessions?.length>=2);
  gate(kind+' close/reopen and explicit readonly route',close.pass&&close.steps.some(s=>s.includes('normal close/real BAT reopen'))&&close.steps.some(s=>s.includes('readonly')));
+ gate(kind+' readonly answer/plan is not claimed as a created file',readonly.pass&&readonly.actualFileExists===false&&readonly.modelDeclaredFiles.length===0);
+ gate(kind+' final normal close completes durable shutdown',finalClose.pass&&finalClose.pidMarkerRemoved&&finalClose.stop?.pid===finalClose.originalDaemonPid&&finalClose.stop.at>=finalClose.closeAt&&finalClose.stop.phase==='closed'&&finalClose.callsBefore===10&&finalClose.callsAfter===10);
  gate(kind+' same original launcher',sha(path.join(candidate,'start-desktop.bat'))===sha(path.join(main.copy,'start-desktop.bat')));
  manifests[kind]=manifest(main.copy);
 }
@@ -48,6 +52,7 @@ const source=receipt('dist/r84-final6-source-checks.json'),lint=receipt('dist/r8
 gate('both source typechecks',source.typecheck.exitCode===0&&source.typecheckHifi.exitCode===0);gate('incremental lint no added errors',lint.pass);
 gate('deterministic source suite',/Test Files\s+150 passed \(150\)/.test(fs.readFileSync(testLog,'utf8'))&&/Tests\s+1057 passed \(1057\)/.test(fs.readFileSync(testLog,'utf8')));
 gate('distribution has no data root or fake fixture',!fs.existsSync(path.join(candidate,'server-data'))&&!fs.existsSync(path.join(candidate,'seed')));
+gate('current practical guide bytes in final distribution',sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'README-DAILY.md'))&&sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'开始使用.md')));
 const corePass=gates.every(g=>g.pass);
 // Mouse movement remains a separate mandatory gate; no keyboard or setBounds substitution.
 gate('native titlebar mouse movement verified',nativeMenu.mouseDrag==='passed');
