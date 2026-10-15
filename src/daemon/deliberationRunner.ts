@@ -973,7 +973,7 @@ const STEP_SCHEMAS: Partial<Record<DelibStageCode, z.ZodTypeAny>> = {
 
 export function deliberationOutputSchema(stage:DelibStageCode) {
   const schema=STEP_SCHEMAS[stage];if(!schema)throw Error('未知研讨输出阶段');
-  return z.toJSONSchema(schema);
+  return z.toJSONSchema(schema,{target:'draft-7'});
 }
 
 /**

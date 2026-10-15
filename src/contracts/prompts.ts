@@ -498,7 +498,8 @@ export function taskCompleteOutputSchema(resultKey: string, planning = false) {
   const common = taskCompleteSchema.omit({coordinationPlan:true}).extend({
     resultKey:z.literal(resultKey), answer:z.string(), responseKind:z.enum(['conversation','work']),
   });
-  return z.toJSONSchema(planning ? common.extend({coordinationPlan:coordinationPlanSchema.nullable()}) : common);
+  // Claude CLI validates with draft-07; keep one compatible schema for both adapters.
+  return z.toJSONSchema(planning ? common.extend({coordinationPlan:coordinationPlanSchema.nullable()}) : common,{target:'draft-7'});
 }
 
 export type TaskComplete = z.infer<typeof taskCompleteSchema>;

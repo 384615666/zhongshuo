@@ -1,3 +1,5 @@
+import {taskCompleteOutputSchema} from '../../src/contracts/prompts.ts';
+import {deliberationOutputSchema} from '../../src/daemon/deliberationRunner.ts';
 import { describe, expect, it } from 'vitest';
 import { coordinationCallAvailable, validateCoordinationPlan } from '../../src/contracts/coordination.ts';
 
@@ -26,3 +28,9 @@ describe('R86 authoritative collaboration plan', () => {
     expect(coordinationCallAvailable(-1, 'work')).toBe(false);
   });
 });
+
+ it('uses CLI-compatible draft-07 for every actual stage schema without dropping constraints',()=>{
+  const schemas=[taskCompleteOutputSchema('key'),taskCompleteOutputSchema('key',true),...(['IND','CR','ISS','CHK','SYN','RAT'] as const).map(stage=>deliberationOutputSchema(stage))];
+  for(const schema of schemas){expect(schema.$schema).toBe('http://json-schema.org/draft-07/schema#');expect(schema.type).toBe('object');expect(schema.required?.length).toBeGreaterThan(0);expect(JSON.stringify(schema)).not.toContain('2020-12');}
+  expect(taskCompleteOutputSchema('key',true).properties).toHaveProperty('coordinationPlan');
+ });
