@@ -239,12 +239,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     ...page('coordination:pump-stops',"c.state='cancelled' AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.id IN (c.run_id,c.integration_run_id) AND r.status IN ('RUNNING','WAITING','STOPPING'))",20)];
   for(const run of runs) { try { db.transaction(()=>{
     const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(run.task_id) as Parent;
-    if(run.state==='cancelled'){
-      const active=db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
-        WHERE (r.id=? OR r.id=? OR t.parent_task_id=?) AND a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN') LIMIT 1`).get(run.run_id,run.integration_run_id,run.task_id);
-      if(!active){db.prepare("UPDATE workflow_runs SET status='CANCELLED' WHERE id IN (?,?) AND status IN ('RUNNING','WAITING','STOPPING')").run(run.run_id,run.integration_run_id);if(parent.status!=='CANCELLED')db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=?").run(parent.id);}
-      return;
-    }
+    if(run.state==='cancelled'){settleStoppedCoordination(db,run.task_id,run.run_id);return;}
     if(parent.stop_generation!==run.stop_generation || parent.status==='CANCELLED') {
       db.prepare("UPDATE coordination_runs SET state='cancelled',error_message='用户已停止' WHERE run_id=?").run(run.run_id);
       return;
@@ -336,4 +331,16 @@ export function stopCoordinationChildren(db: ZhongshuoDatabase, parentTaskId: st
   db.prepare(`UPDATE workflow_runs SET status='STOPPING' WHERE status IN ('QUEUED','RUNNING','WAITING') AND task_id IN
     (SELECT child_task_id FROM coordination_steps s JOIN coordination_runs c ON c.run_id=s.run_id WHERE c.task_id=? AND c.state IN ('planning','running','integrating'))`).run(parentTaskId);
   db.prepare("UPDATE coordination_runs SET state='cancelled',error_message='用户已停止' WHERE task_id=? AND state IN ('planning','running','integrating')").run(parentTaskId);
+}
+
+export function settleStoppedCoordination(db:ZhongshuoDatabase,taskId:string,targetRunId:string) {
+  const run=db.prepare("SELECT * FROM coordination_runs WHERE task_id=? AND state='cancelled' AND (run_id=? OR integration_run_id=?)").get(taskId,targetRunId,targetRunId) as CoordinationRun|undefined;
+  if(!run)return;
+  const active=db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+    WHERE (r.id=? OR r.id=? OR t.parent_task_id=?) AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
+      OR a.status='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1)) LIMIT 1`).get(run.run_id,run.integration_run_id,taskId);
+  if(active)return;
+  db.prepare("UPDATE workflow_runs SET status='CANCELLED' WHERE id IN (?,?) AND status IN ('RUNNING','WAITING','STOPPING')").run(run.run_id,run.integration_run_id);
+  const latest=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as {id:string}|undefined;
+  if(latest&&(latest.id===run.run_id||latest.id===run.integration_run_id))db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(taskId);
 }

@@ -62,3 +62,13 @@ AUTO 新任务采用专用默认24格，规划、所有子步骤和整合/修复
 当前协作集成21项、计划单元5项、迁移整根保全1项通过；研讨旧E4/flow/identity等必要回归通过，双types通过。首次全量阶段记录 `dist/review-r86-source/full-source-stage.log` 为false：159文件，2项失败均为旧测试要求AUTO永久受阻；更新为当前协调行为并保留显式关闭研讨门禁后，对应4文件47项回归通过。首次全量产生的8份Word/PDF测试输出单独保留于ignored工程证据，再恢复原仓库样本字节，未提交生成样本。最终冻结全量尚需重跑，不将阶段票代记最终通过。
 
 新增schema52完整根测试使用自有schema51根、正式命令和原件/profile保全输入；升级保留任务/消息/成员/outbox/回执，旧程序迁移门拒绝52，匹配备份可回退。它认证源码迁移合同，不冒充最终旧/新真实启动器验证。真实模型调用仍0，尚未制作最终v25。
+
+### 启动窗口和停止收敛
+
+阶段源码 abecc10 已推送，全量160文件1128项通过，双types通过；独立候选v25-rc1 / BUILD bld_6c42cfa0f484ba20、clean abecc10，593清单一致，保持pristine，尚未启动模型或交付。
+
+独立复核发现两项新真反例，原证据在 `dist/review-r86-independent/core-abecc10/`：UNKNOWN发生时另一成员仍在openSession窗口，旧守卫会在回执后误startTurn（v3为有效探针，v1/v2为原harness失败保留）；返工第二run停止时，无run身份的查询读到旧SUCCEEDED而永久STOPPING。
+
+现在openSession回执及最终startTurn前复查精确run/任务/停止代次/同轮UNKNOWN；确认未启动且会话正常关闭的peer只取消自己、退自己的预算及准入，原UNKNOWN及保护保留，关闭未确认仍按未知。当前研讨任务首轮由OPEN进入ACTIVE。停止收敛绑定当前run，只有全部已知执行收口且无未解除UNKNOWN才取消，不改旧成功run/旧交付；排队且无在途的停止在正式命令内直接收敛，不依赖重开派发门。活跃研讨泵加入有界轮转，已收口记录不占窗口。
+
+新增两项永久正式夹具：生产形态single-flight drain+detached消费的交叉openSession/UNKNOWN（1调用保持1，原UNKNOWN保留，peer退款，run仍INTERRUPTED/taskBLOCKED）；v1→正式返工→run2仅prepare时停止（无新增调用，run1/交付保持，run2CANCELLED）。协作集成现23项通过，旧研讨E4/identity/pause等必要5文件46项通过；后续新冻结点独立复跑及最终包仍待完成。

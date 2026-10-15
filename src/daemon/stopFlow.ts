@@ -4,7 +4,8 @@
  * 恢复：标记非终态运行、重排过期租约 outbox（不自动补跑，决策 44/E7）。
  */
 import { randomUUID } from 'node:crypto';
-import { stopCoordinationChildren } from './coordination.ts';
+import { stopCoordinationChildren,settleStoppedCoordination } from './coordination.ts';
+import {settleStoppedDeliberation} from './deliberationRunner.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -82,6 +83,8 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
             createdAt: input.now,
             payload: { status: 'STOPPING', stopGeneration },
           });
+          settleStoppedDeliberation(db,task.id,input.targetRunId);
+          settleStoppedCoordination(db,task.id,input.targetRunId);
         });
         tx();
       }

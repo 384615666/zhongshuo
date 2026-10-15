@@ -46,10 +46,11 @@ import {
   prepareDeliberation,
   deliberationOutputSchema,
   pumpDeliberation,
+  settleStoppedDeliberation,
   repairDispatchKey,
   type DelibStep,
 } from './deliberationRunner.ts';
-import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn } from '../contracts/deliberation.ts';
+import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn,refundReservedTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { acquireReminderTurnSlot, releaseUnlinkedReminderReservations, releaseUnlinkedReminderReservationsForDispatch, settleReminderCallForTurn } from './reminderDispatch.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
@@ -314,10 +315,12 @@ export class DispatchWorker {
   }
 
   private pumpDeliberations(now: number): void {
-    const runs = this.db
-      .prepare("SELECT task_id FROM workflow_runs WHERE mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING')")
-      .all() as Array<{ task_id: string }>;
+    const cursor=Number(this.kvGet('deliberation:pump-cursor')??0);
+    let runs=this.db.prepare("SELECT rowid cursor_id,id,task_id,status FROM workflow_runs WHERE mode='DELIBERATE' AND status IN ('RUNNING','WAITING','STOPPING') AND rowid>? ORDER BY rowid LIMIT 100").all(cursor) as Array<{cursor_id:number;id:string;task_id:string;status:string}>;
+    if(!runs.length)runs=this.db.prepare("SELECT rowid cursor_id,id,task_id,status FROM workflow_runs WHERE mode='DELIBERATE' AND status IN ('RUNNING','WAITING','STOPPING') ORDER BY rowid LIMIT 100").all() as typeof runs;
+    if(runs.length)this.kvSet('deliberation:pump-cursor',String(runs.at(-1)!.cursor_id));
     for (const r of runs) {
+      if(r.status==='STOPPING'){settleStoppedDeliberation(this.db,r.task_id,r.id);continue;}
       const projOf = (this.db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(r.task_id) as { project_id: string } | undefined)?.project_id;
       pumpDeliberation(this.db, r.task_id, this.deliberationOptions(projOf), now);
     }
@@ -1265,12 +1268,11 @@ export class DispatchWorker {
     const stopSnapshot=this.db.prepare('SELECT stop_generation FROM deliberation_run_scopes WHERE run_id=?').get(step.runId) as {stop_generation:number}|undefined;
     if (task.stop_generation > (stopSnapshot?.stop_generation??0)) {
       // 停止已生效：完结本步骤并把运行收尾为取消（停止作用于指定运行，§7.3）。
-      const run0 = this.db.prepare("SELECT id, status FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE'").get(step.taskId) as { id: string; status: string } | undefined;
+      const run0 = this.db.prepare("SELECT id, status FROM workflow_runs WHERE id=? AND task_id = ? AND mode = 'DELIBERATE'").get(step.runId,step.taskId) as { id: string; status: string } | undefined;
       if (run0 != null && !['SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'INTERRUPTED'].includes(run0.status)) {
         const tx0 = this.db.transaction(() => {
-          this.db.prepare("UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?").run(run0.id);
-          this.transitionTask(task.id, 'CANCELLED');
-          this.audit(task, run0.id, null, 'turn.statusChanged', { status: 'CANCELLED', reason: 'stop-before-dispatch' });
+          settleStoppedDeliberation(this.db,task.id,run0.id);
+          this.audit(task, run0.id, null, 'turn.dispatchCancelled', { reason: 'stop-before-dispatch',note:'仅作废本步骤；在途执行未收口时仍显示停止中' });
         });
         tx0();
       }
@@ -1392,7 +1394,7 @@ export class DispatchWorker {
            VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
         // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
         ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text }), textHash);
-        if (task.status === 'PENDING') this.transitionTask(task.id, 'ACTIVE');
+        if (task.status === 'OPEN') this.transitionTask(task.id, 'ACTIVE');
       });
       createTurn();
 
@@ -1441,10 +1443,12 @@ export class DispatchWorker {
 
       if (this.stoppingOrTerminal(task.id, turnId) || this.shutdownStarted) {
         const closeOutcome = await this.closeSessionBounded(adapter, session);
+        if(closeOutcome!=='closed'){this.settleUnknown(task,run.id,turnId,'stop-open-session-close-unconfirmed');await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
         const cancel = this.db.transaction(() => {
           this.casTurn(turnId, 'CANCELLED');
-          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(run.id);
-          this.transitionTask(task.id, 'CANCELLED');
+          this.refundDelibReservation(run.id,turnId,accStage,accStage!=='front'&&budget.tailReservationByStage[accStage]>0);
+          if(this.shutdownStarted)this.db.prepare("UPDATE workflow_runs SET status='STOPPING' WHERE id=? AND status IN ('RUNNING','WAITING')").run(run.id);
+          settleStoppedDeliberation(this.db,task.id,run.id);
           this.audit(task, run.id, turnId, 'turn.statusChanged', { status: 'CANCELLED', reason: this.shutdownStarted ? 'daemon-shutdown-during-session-open' : 'stop-during-session-open', sessionClose: closeOutcome });
         });
         cancel();
@@ -1453,11 +1457,28 @@ export class DispatchWorker {
         return;
       }
 
-      this.live.set(turnId, { turnId, sessionId: session.id, adapter });
-      this.preRegisterTurnProcess(turnId, run.id, step.memberId);
+      const cancelUnavailablePeer=async()=>{
+        const closeOutcome=await this.closeSessionBounded(adapter,session);
+        if(closeOutcome!=='closed'){
+          this.settleUnknown(task,run.id,turnId,'peer-run-invalid-session-close-unconfirmed');
+          await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
+        }
+        this.db.transaction(()=>{
+          this.casTurn(turnId,'CANCELLED');
+          const marked=this.refundDelibReservation(run.id,turnId,accStage,accStage!=='front'&&budget.tailReservationByStage[accStage]>0);
+          this.db.prepare("UPDATE run_participants SET status='unavailable' WHERE run_id=? AND member_id=? AND status IN ('pending','late')").run(run.id,step.memberId);
+          this.audit(task,run.id,turnId,'turn.startupCancelled',{reason:'研讨已中断或同轮结果未知；未请求startTurn',classification:'confirmed-not-started',sessionClose:closeOutcome,budgetRefunded:Boolean(marked)});
+        })();
+        this.releaseAdmission(turnId);await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
+      };
+      if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
+
       if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==readAccess.identityKey
         ||JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()))!==imageBinding
         ||(materials.value.images?.length&&memberImageCapability(this.db,step.memberId).identityKey!==imageCapability.identityKey))throw Error('研讨成员实际配置在启动前变化；未发送');
+      if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
+      this.live.set(turnId, { turnId, sessionId: session.id, adapter });
+      this.preRegisterTurnProcess(turnId, run.id, step.memberId);
       startupPhase = 'startTurn';
       await adapter.startTurn(session, {
         turnId,
@@ -1560,6 +1581,22 @@ export class DispatchWorker {
     if (row?.budget_json == null) return;
     const state = JSON.parse(row.budget_json) as DeliberationBudgetState;
     this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(settleTurn(state)), runId);
+  }
+
+  private refundDelibReservation(runId:string,turnId:string,stage:'front'|'SYNTHESIS'|'RATIFY',restoreTail:boolean):boolean {
+    const marked=this.db.prepare("UPDATE agent_turns SET budget_mark='refunded' WHERE id=? AND budget_mark IS NULL").run(turnId).changes;
+    if(!marked)return false;
+    const current=this.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string};
+    const next=refundReservedTurn(JSON.parse(current.budget_json) as DeliberationBudgetState);
+    if(stage!=='front'&&restoreTail)next.tailReservationByStage[stage]++;
+    this.db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify(next),runId);return true;
+  }
+
+  private deliberationMayLaunch(taskId:string,runId:string):boolean {
+    const run=this.db.prepare(`SELECT r.status,t.status task_status,t.stop_generation,s.stop_generation snapshot FROM workflow_runs r
+      JOIN tasks t ON t.id=r.task_id LEFT JOIN deliberation_run_scopes s ON s.run_id=r.id WHERE r.id=? AND r.task_id=? AND r.mode='DELIBERATE'`).get(runId,taskId) as {status:string;task_status:string;stop_generation:number;snapshot:number|null}|undefined;
+    return Boolean(run&&['RUNNING','WAITING'].includes(run.status)&&!['BLOCKED','CANCELLED','DONE','REVIEW'].includes(run.task_status)
+      &&run.stop_generation===(run.snapshot??0)&&!this.db.prepare("SELECT 1 FROM agent_turns WHERE run_id=? AND status='UNKNOWN' LIMIT 1").get(runId));
   }
 
   private stoppingOrTerminal(taskId: string, turnId: string): boolean {
@@ -2162,9 +2199,8 @@ export class DispatchWorker {
       if (turn.status === 'STOPPING') {
         const tx = this.db.transaction(() => {
           this.casTurn(turnId, 'CANCELLED');
-          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?`).run(runId);
           this.settleDelibBudget(runId);
-          this.transitionTask(task.id, 'CANCELLED');
+          settleStoppedDeliberation(this.db,task.id,runId);
           this.audit(task, runId, turnId, 'turn.lateCompletion', { finalText: event.finalText ?? null });
         });
         tx();
@@ -2250,8 +2286,7 @@ export class DispatchWorker {
         this.casTurn(turnId, userStop ? 'CANCELLED' : 'FAILED');
         this.settleDelibBudget(runId);
         if (userStop) {
-          this.db.prepare(`UPDATE workflow_runs SET status = 'CANCELLED' WHERE id = ?`).run(runId);
-          this.transitionTask(task.id, 'CANCELLED');
+          settleStoppedDeliberation(this.db,task.id,runId);
         } else if (baseStep != null) {
           this.db.prepare("UPDATE run_participants SET status = ? WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')")
             .run(event.code === 'INTERRUPTED' ? 'absent' : 'failed', runId, baseStep.memberId);

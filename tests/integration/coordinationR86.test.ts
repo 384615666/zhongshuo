@@ -18,7 +18,7 @@ const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,u
   files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...(coordinationPlan?{coordinationPlan}:{}),...extra
 })}}];
 
-async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorkerOptions,'turnDeadlineMs'|'interruptGraceMs'|'coordinationMaxCalls'>>={}) {
+async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorkerOptions,'turnDeadlineMs'|'interruptGraceMs'|'coordinationMaxCalls'|'detachedTurnConsumption'>>={}) {
   vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
   const dir=mkdtempSync(join(tmpdir(),'zs-r86-coordination-')),project=join(dir,'project');mkdirSync(project);
   const db=openDatabase(join(dir,'state.sqlite'));
@@ -41,7 +41,62 @@ async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorke
   return {db,dir,worker,adapter,cmd,raw,send,run,plan,a,b,room,projectId};
 }
 
+async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) {
+  await f.worker.runOnce(); // formal queued root -> prepare, no model
+  for(let count=0;count<30;count++){
+    const next=f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string}|undefined;
+    if(!next)break;const step=parseDelibStep(next.dispatch_key);expect(step).not.toBeNull();
+    let value:unknown;
+    if(step!.stage==='IND')value={schemaVersion:'analysis-draft-v1',summary:`${step!.memberId}独立方案`,claims:[{claimId:'c1',statement:'方案甲可行',kind:'proposal',evidenceIds:[]}],recommendations:['核对约束'],openQuestions:[]};
+    else if(step!.stage==='CR'){
+      const draft=listRunArtifacts(f.db,step!.runId,'analysis_draft').find(a=>a.author_id!==step!.memberId)!;
+      value={schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:draft.id,targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已读取他方方案，约束一致',evidenceIds:[]}]};
+    }else if(step!.stage==='SYN')value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:[],recommendations:['下一步核实工程条件']};
+    else if(step!.stage==='RAT')value={schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm'}]};
+    else throw Error(`非预期阶段 ${step!.stage}`);
+    await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify(value)}}]);
+  }
+}
+
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('a peer opening session cannot launch after another detached member becomes UNKNOWN',async()=>{
+    const f=await fixture(true,{detachedTurnConsumption:true,turnDeadlineMs:150,interruptGraceMs:10});let release=()=>{};
+    try{
+      const root=await f.send([f.a,f.b]);await f.worker.runOnce();
+      await f.run([{kind:'unresponsiveToInterrupt'},{kind:'stall',ms:2000}]);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'ACTIVE'});
+      let entered!:()=>void;const openEntered=new Promise<void>(resolve=>{entered=resolve;});const barrier=new Promise<void>(resolve=>{release=resolve;});
+      const original=f.adapter.openSession.bind(f.adapter);f.adapter.openSession=async input=>{entered();await barrier;return original(input);};
+      const pending=f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'不可启动',claims:[{claimId:'c1',statement:'不可启动',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]})}}]);
+      await openEntered;
+      const deadline=Date.now()+3000;while(!f.db.prepare("SELECT 1 FROM agent_turns WHERE status='UNKNOWN'").get()&&Date.now()<deadline)await new Promise(r=>setTimeout(r,5));
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='UNKNOWN'").get()).toEqual({n:1});
+      release();await pending;expect(f.adapter.startTurnLog).toHaveLength(1);
+      expect(f.db.prepare("SELECT count(*) n FROM agent_turns WHERE status='CANCELLED' AND budget_mark='refunded'").get()).toEqual({n:1});
+      const run=f.db.prepare('SELECT status,budget_json FROM workflow_runs').get() as {status:string;budget_json:string};expect(run.status).toBe('INTERRUPTED');
+      expect(JSON.parse(run.budget_json)).toMatchObject({usedTurns:0,inFlightReservedTurns:1});
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
+    }finally{release();await f.adapter.closeAllSessions();await f.worker.awaitSettlement(1000);f.db.close();}
+  });
+  it('stopping the prepared second deliberation run leaves old success and cancels only this run',async()=>{
+    const f=await fixture(true);try{
+      const revision=(f.db.prepare('SELECT revision FROM projects WHERE id=?').get(f.projectId) as {revision:number}).revision;
+      await f.cmd('project.reviewPolicy.set',{projectId:f.projectId,taskReviewEnabled:true,expectedRevision:revision});
+      const root=await f.send([f.a,f.b]);await completeDeliberationRound(f);
+      const first=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=?').get(root.taskId) as {id:string;revision:number;manifest_hash:string;run_id:string};
+      await f.cmd('task.review',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:first.revision,manifestHash:first.manifest_hash,decision:'changes_requested',note:'请补充边界'});
+      await f.cmd('task.executeRework',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:first.revision,manifestHash:first.manifest_hash,sourceRunId:first.run_id});
+      await f.worker.runOnce();const next=f.db.prepare('SELECT id FROM workflow_runs ORDER BY rowid DESC LIMIT 1').get() as {id:string};
+      const before=f.adapter.startTurnLog.length;
+      await f.cmd('task.stop',{taskId:root.taskId,targetRunId:next.id,expectedStopGeneration:0});
+      expect(f.db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(next.id)).toEqual({status:'CANCELLED'});
+      await f.worker.drain();
+      expect(f.adapter.startTurnLog).toHaveLength(before);
+      expect(f.db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(first.run_id)).toEqual({status:'SUCCEEDED'});
+      expect(f.db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(next.id)).toEqual({status:'CANCELLED'});
+      expect(f.db.prepare('SELECT status,current_delivery_id FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'CANCELLED',current_delivery_id:first.id});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
   it('does not continue deliberation or falsely publish when a member result becomes UNKNOWN',async()=>{
     const f=await fixture(true,{turnDeadlineMs:20,interruptGraceMs:10});try{
       const root=await f.send([f.a,f.b]);await f.worker.runOnce();
@@ -93,22 +148,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       await f.cmd('project.reviewPolicy.set',{projectId:f.projectId,taskReviewEnabled:true,expectedRevision:revision});
       const sessions=vi.spyOn(f.adapter,'openSession'),turns=vi.spyOn(f.adapter,'startTurn');
       const root=await f.send([f.a,f.b]);
-      const completeRound=async()=>{
-        await f.worker.runOnce(); // formal queued root -> prepare, no model
-        for(let count=0;count<30;count++){
-          const next=f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string}|undefined;
-          if(!next)break;const step=parseDelibStep(next.dispatch_key);expect(step).not.toBeNull();
-          let value:unknown;
-          if(step!.stage==='IND')value={schemaVersion:'analysis-draft-v1',summary:`${step!.memberId}独立方案`,claims:[{claimId:'c1',statement:'方案甲可行',kind:'proposal',evidenceIds:[]}],recommendations:['核对约束'],openQuestions:[]};
-          else if(step!.stage==='CR'){
-            const draft=listRunArtifacts(f.db,step!.runId,'analysis_draft').find(a=>a.author_id!==step!.memberId)!;
-            value={schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:draft.id,targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已读取他方方案，约束一致',evidenceIds:[]}]};
-          }else if(step!.stage==='SYN')value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:[],recommendations:['下一步核实工程条件']};
-          else if(step!.stage==='RAT')value={schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm'}]};
-          else throw Error(`非预期阶段 ${step!.stage}`);
-          await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify(value)}}]);
-        }
-      };
+      const completeRound=()=>completeDeliberationRound(f);
       await completeRound();
       type Delivery={id:string;revision:number;manifest_hash:string;run_id:string};
       const first=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=?').get(root.taskId) as Delivery;

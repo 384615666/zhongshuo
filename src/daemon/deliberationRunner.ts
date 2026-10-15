@@ -627,6 +627,22 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   }
 }
 
+/** Stop is complete only after this exact run has no unclosed execution facts. */
+export function settleStoppedDeliberation(db:ZhongshuoDatabase,taskId:string,runId:string):boolean {
+  const run=db.prepare("SELECT id FROM workflow_runs WHERE id=? AND task_id=? AND mode='DELIBERATE' AND status='STOPPING'").get(runId,taskId);
+  if(!run)return false;
+  const active=db.prepare(`SELECT 1 FROM agent_turns a WHERE a.run_id=? AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
+    OR a.status='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='recovery.protectionReleased' AND json_extract(e.payload_json,'$.released')=1)) LIMIT 1`).get(runId);
+  if(active)return false;
+  db.transaction(()=>{
+    db.prepare("UPDATE workflow_runs SET status='CANCELLED' WHERE id=? AND task_id=? AND status='STOPPING'").run(runId,taskId);
+    const latest=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as {id:string}|undefined;
+    if(latest?.id===runId)db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(taskId);
+    const task=db.prepare('SELECT project_id,conversation_id,conversation_thread_id FROM tasks WHERE id=?').get(taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string};
+    appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:task.conversation_id,threadId:task.conversation_thread_id,taskId,runId,kind:'run.statusChanged',createdAt:Date.now(),payload:{status:'CANCELLED',reason:'本轮全部已知执行已收口；排队步骤未启动'}});
+  })();return true;
+}
+
 function statusOf(participants: ReadonlyArray<{ memberId: string; status: ParticipantStatus }>, memberId: string): ParticipantStatus {
   return participants.find((p) => p.memberId === memberId)?.status ?? 'pending';
 }
