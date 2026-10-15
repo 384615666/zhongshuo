@@ -35,6 +35,8 @@ gate('real pipe disconnect/recovery, reload and redacted clipboard',recovery.pas
 const progress=receipt(path.join(soakRoot,'r80-soak-progress.json'));
 const measured=receipt(path.join(soakRoot,'observation-summary.json'));
 gate('actual per-route observation metrics and stable host identities',measured.pass&&measured.elapsedMs>=7200000&&measured.byPhase.every(p=>p.samePhaseBounded));
+const reading=receipt(path.join(soakRoot,'reading-after-observation.json'));
+gate('post-observation cold reopen retains exact history identity and target drafts',reading.pass&&reading.history.selectedRunId===reading.expectedRunId&&reading.history.historyOrigin&&reading.history.open&&reading.ordinaryDraft.retained&&reading.modelCalls===0);
 gate('all eight observation routes repeatedly exercised',Array.from({length:8},(_,phase)=>progress.samples.filter(s=>s.phase===phase).length).every(n=>n>=2));
 gate('bounded connection monitor and no observation dispatch',progress.samples.every(s=>s.connection.monitorTimers===1&&s.connection.inFlight<=1&&s.realCalls===0&&s.messages===progress.samples[0].messages));
 manifests.engineeringCopy=manifest(workflow.copy);
@@ -54,11 +56,11 @@ gate('different-member mention rejects and retains draft',mention.pass&&mention.
 const project=receipt(projectArg,false),visual=receipt(visualArg);
 gate('project latest intent/cancellation regressions',project.pass);
 gate('paired visual inspection',visual.pass&&visual.reviewed===true);
-const source=receipt('dist/r84-final6-source-checks.json'),lint=receipt('dist/r84-final6-lint-release.json',false),testLog=path.resolve('dist/r84-source-suite-10.log');evidence.push({path:path.relative(process.cwd(),testLog),sha256:sha(testLog)});
+const source=receipt('dist/r84-final6-source-checks-after-reopen-test.json'),lint=receipt('dist/r84-final6-lint-release.json',false),testLog=path.resolve('dist/r84-source-suite-11.log');evidence.push({path:path.relative(process.cwd(),testLog),sha256:sha(testLog)});
 gate('typecheck receipt binds frozen runtime commit',source.runtimeCommit===build.commit);
 gate('lint coverage still matches current checked file bytes',lint.covered.every(f=>sha(f.file)===f.sha256));
 gate('both source typechecks',source.typecheck.exitCode===0&&source.typecheckHifi.exitCode===0);gate('incremental lint no added errors',lint.pass);
-gate('deterministic source suite',/Test Files\s+150 passed \(150\)/.test(fs.readFileSync(testLog,'utf8'))&&/Tests\s+1057 passed \(1057\)/.test(fs.readFileSync(testLog,'utf8')));
+gate('deterministic source suite',/Test Files\s+150 passed \(150\)/.test(fs.readFileSync(testLog,'utf8'))&&/Tests\s+1058 passed \(1058\)/.test(fs.readFileSync(testLog,'utf8')));
 gate('distribution has no data root or fake fixture',!fs.existsSync(path.join(candidate,'server-data'))&&!fs.existsSync(path.join(candidate,'seed')));
 gate('current practical guide bytes in final distribution',sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'README-DAILY.md'))&&sha('docs/desktop-quickstart.md')===sha(path.join(candidate,'开始使用.md')));
 const ledger=receipt('dist/r84-call-ledger-completed.json',false);

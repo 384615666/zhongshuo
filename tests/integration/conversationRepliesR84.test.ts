@@ -9,6 +9,7 @@ import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
 import {conversationFacts} from '../../src/daemon/conversationReplies.ts';
+import {applyRecovery} from '../../src/daemon/stopFlow.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 const final=(answer:string,work=false):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture-key',responseKind:work?'work':'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}];
@@ -132,7 +133,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       await f.cmd('room.archive',{roomId:f.room.id,expectedRevision:revision+1,action:'unarchive'});await f.cmd('message.submit',f.params('恢复后明确提问'));await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);
     }finally{f.db.close();}
   });
-  it('stopping the active reply cancels queued intents and never starts them after reopen',async()=>{
+  it('stopping the active reply durably cancels queued intents and rejects further automatic continuation',async()=>{
     const f=await fixture([final('你好！'),[{kind:'stall',ms:250},...final('不可迟到复活')]]);
     try{
       await f.cmd('message.submit',f.params('正在回答的提问'));const executing=f.worker.runOnce();
@@ -143,6 +144,28 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       expect(f.count('agent_turns')).toBe(2);expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'cancelled'});
       expect((await f.raw('message.submit',f.params('停止后不自动恢复'))).error?.code).toBe('TASK_STOPPED');
     }finally{f.db.close();}
+  });
+  it('an accepted ordinary reply remains held across a real database reopen and startup recovery without a new turn',async()=>{
+    const f=await fixture([final('你好！')]);
+    try{
+      const commandId=randomUUID(),params=f.params('已接收但尚未领取的续问');
+      const accepted=await f.raw<Root>('message.submit',params,commandId);expect(accepted.ok).toBe(true);
+      const before=f.db.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM conversation_reply_requests WHERE message_id=?').get(accepted.data.messageId);
+      expect(before).toMatchObject({status:'queued'});expect(f.count('agent_turns')).toBe(1);
+      f.db.close();
+      const reopened=openDatabase(join(f.dir,'state.sqlite'));
+      try{
+        applyRecovery(reopened,Date.now());
+        const adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>final('不得自动运行')});
+        const started=vi.spyOn(adapter,'startTurn');
+        const worker=new DispatchWorker({db:reopened,adapter,leaseOwner:'r84-reopened',appDataDir:f.dir});
+        expect(await worker.runOnce()).toBe(false);expect(started).not.toHaveBeenCalled();
+        expect(reopened.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM conversation_reply_requests WHERE message_id=?').get(accepted.data.messageId)).toEqual(before);
+        expect(reopened.prepare('SELECT count(*) n FROM agent_turns').get()).toEqual({n:1});
+        expect(reopened.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
+        expect(reopened.prepare('SELECT command_id FROM command_receipts WHERE command_id=?').get(commandId)).toEqual({command_id:commandId});
+      }finally{reopened.close();}
+    }finally{if(f.db.open)f.db.close();}
   });
   it('work clarification preserves delivery identity; only the latest confirmed clarification with exact task/run/generation can explicitly continue',async()=>{
     const f=await fixture([final('真实工作交付',true),final('需要补充目标，暂未产生新版'),final('补充后工作新版',true)]);
