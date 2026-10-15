@@ -92,3 +92,11 @@ AUTO 新任务采用专用默认24格，规划、所有子步骤和整合/修复
 真实BAT独立根 `dist/desktop/review-r86-real-rc5-20261015`，自然原生发送后CLI越过schema检查。精确自身provider session返回429/1310：周/月额度已用完，提示2026-10-16 19:42:30重置。CLI内置退避最终明确FAILED/PROVIDER_ERROR；应用未另起发送。原观察`real-code-v1.json`保留false，0子任务/0交付，不记作真实协作成功。已提出具体替代本机可用模型/额度资源需求；继续离线工作，不拿离线通过替代双模型认证。
 
 补充本地Ajv draft07校验器编译全部8种正式schema，拒绝空输出；原2020声明全部复现no schema with key/ref。仅校验，不启动模型。原生证据QA收紧：repo/dist绝对边界、namespaced内部派生识别、真实Node --test+对应测试文件+TAP正通过零失败、精确上游交付文件内容/hash匹配；5项反例通过。类型补齐deliveryId，无运行语义变化。
+
+## 实际双Sol规划与配置守卫、升级证明
+
+零推理 model/list 明确列出gpt-6.1-sol和gpt-6-sol。采用同一Codex CLI的两个不同模型，不把别名或两个CLI当不同模型；GLM失败继续保留。`review-r86-real-two-sol-20261015` 真实规划成功，正式生成三步与准确职责。其后实施启动前配置身份拒绝，未发第二turn/start。实读全局config.toml于18:50:42发生变动，零推理thread/start复核没有改写配置（before/after hash一致），不能把守卫正确拒绝判为产品权限缺陷。保留原false，使用当前配置新独立根继续，不改配置、不放宽守卫。
+
+`review-r86-v25-upgrade-v2-20261015/upgrade.json`：最终程序候选rc5真实BAT将完整自有schema51根副本升52，原未知commandId/同参、草稿、附件原件/实际decode、成员配置/凭据hash和root身份保留；0调用/无自动发送。匹配旧程序+整根备份正常回退，旧随包daemon实启拒绝新52且数据库hash未变。首版QA漏ZS_PACKED_ENTRY造成未执行daemon的false保留于upgrade第一目录，不冒充产品回退失败。
+
+e84be3e全套首次162文件中160通过、3测试失败：Word子进程超时及Git2项5秒超时；原full-r86-latest.log保留false。对应原测试未改，分开重跑Word5项和Git10项全部通过，仍不代记首次成功；下一冻结全套单worker降低并发竞争复核。没有延长产品超时或放宽断言。

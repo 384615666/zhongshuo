@@ -79,7 +79,7 @@ try{
     }
   }
   const models=new Set(result.sessions.map(s=>`${s.kind}/${s.configuredModel}`));
-  if(!models.has('claude/glm-5.3-flash')||!models.has('codex/gpt-6.1-sol'))throw Error('same task family distinct native model contexts missing');
+  if(new Set(main.expectedModels).size!==2||!main.expectedModels.every(model=>models.has(model)))throw Error('same task family distinct native model contexts missing');
   if(result.sessions.some(s=>s.nativeDelegationObserved))throw Error('untracked native delegation observed; not counted as bounded formal collaboration');
   const implementers=result.sessions.filter(s=>s.role==='implementation'),reviewers=result.sessions.filter(s=>s.role==='review');
   if(!documentTask&&!implementers.some(s=>s.testCommands.some(c=>c.success)))throw Error('this delivery implementer native successful Node test evidence missing');

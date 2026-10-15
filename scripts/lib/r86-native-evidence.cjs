@@ -10,6 +10,6 @@ function nodeTestCommand(command,files){
  if(!/(?:^|[\s;&|"'])node(?:\.exe)?["']?\s+(?:--[^\s]+\s+)*--test(?:\s|$)/i.test(c))return false;
  return files.some(file=>c.toLowerCase().includes(path.basename(file).toLowerCase()));
 }
-function tapPassed(output){return /(?:^|\n)\s*#\s*tests\s+[1-9]\d*/.test(output)&&/(?:^|\n)\s*#\s*pass\s+[1-9]\d*/.test(output)&&/(?:^|\n)\s*#\s*fail\s+0\b/.test(output);}
+function tapPassed(output){const normalized=String(output).replace(/\u001b\[[0-9;]*m/g,'').replace(/(?:^|\n)\s*ℹ\s*/g,'\n# ');return /(?:^|\n)\s*#\s*tests\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*pass\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*fail\s+0\b/.test(normalized);}
 function fileRead(command,output,files){return files.filter(file=>file.content.length>0&&String(command).replace(/\\/g,'/').toLowerCase().includes(path.basename(file.path).toLowerCase())&&String(output).replace(/\r\n/g,'\n').includes(file.content.replace(/\r\n/g,'\n'))).map(({path,sha256,deliveryId,revision,manifestHash})=>({path,sha256,deliveryId,revision,manifestHash}));}
 module.exports={ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead};

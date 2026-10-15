@@ -12,6 +12,9 @@ const mode=process.argv.includes('--prepare')?'prepare':process.argv.includes('-
 const port=Number(process.argv.find(x=>x.startsWith('--port='))?.split('=')[1]??52786),q=JSON.stringify;
 if(!path.basename(out).startsWith('review-r86-')||!out.startsWith(path.resolve(__dirname,'../dist')+path.sep))throw Error('owned R86 evidence root required');
 if(!path.basename(candidate).startsWith('desktop-daily-win-v25'))throw Error('explicit v25 source candidate required');
+const alternatePair=process.argv.includes('--pair=codex-sol');
+const primary=alternatePair?{kind:'codex',model:'gpt-6.1-sol',name:'协调实现 Sol 6.1'}:{kind:'claude',model:'glm-5.3-flash',name:'协调实现 GLM'};
+const secondary=alternatePair?{kind:'codex',model:'gpt-6-sol',name:'独立评审 Sol 6'}:{kind:'codex',model:'gpt-6.1-sol',name:'独立评审 Codex'};
 const progressFile=path.join(out,'progress.json'),observationFile=path.join(out,'real-code-v1.json');
 const must=(value,why)=>{if(!value)throw Error(why);};const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 let c,db,progress,result;
@@ -52,12 +55,13 @@ async function prepare(){
   fs.writeFileSync(progressFile,JSON.stringify(progress,null,2));start();await connect();
   const project=(await command('project.open',{path:progress.project,displayName:'R86 合成协作工程'})).project;
   await command('project.reviewPolicy.set',{projectId:project.id,expectedRevision:project.revision,taskReviewEnabled:true});
-  const claude=(await command('member.create',{projectId:project.id,displayName:'协调实现 GLM',description:'负责规划与实现，必要时整合评审反馈'})).memberId;
-  const codex=(await command('member.create',{projectId:project.id,displayName:'独立评审 Codex',description:'独立读取上游实际文件并运行只读验证，指出缺陷'})).memberId;
-  await command('member.setRuntime',{memberId:claude,kind:'claude',model:'glm-5.3-flash',permissionMode:'bypassPermissions',effort:'high'});
-  await command('member.setRuntime',{memberId:codex,kind:'codex',model:'gpt-6.1-sol',permissionMode:'bypassPermissions',effort:'xhigh'});
+  const claude=(await command('member.create',{projectId:project.id,displayName:primary.name,description:'负责规划与实现，必要时整合评审反馈'})).memberId;
+  const codex=(await command('member.create',{projectId:project.id,displayName:secondary.name,description:'独立读取上游实际文件并运行只读验证，指出缺陷'})).memberId;
+  await command('member.setRuntime',{memberId:claude,kind:primary.kind,model:primary.model,permissionMode:'bypassPermissions',effort:'high'});
+  await command('member.setRuntime',{memberId:codex,kind:secondary.kind,model:secondary.model,permissionMode:'bypassPermissions',effort:'high'});
   const room=(await command('room.list',{projectId:project.id})).items[0];await command('room.update',{roomId:room.id,expectedRevision:room.revision,coordinatorMemberId:claude});
   const list=await command('member.list',{projectId:project.id,roomId:room.id});for(const member of list.items){if(![claude,codex].includes(member.id))await command('room.members.set',{roomId:room.id,memberId:member.id,action:'remove'});}
+  progress.expectedModels=[`${primary.kind}/${primary.model}`,`${secondary.kind}/${secondary.model}`];
   progress.ids={projectId:project.id,claude,codex,roomId:room.id,conversationId:room.conversationId};
   progress.prompt='请协调两位成员合作完成一个小功能：创建 greeting.mjs，导出 greet(name)，返回“你好，名字”；创建对应的 Node 测试并实际运行。先实现，再让另一位使用不同模型的成员独立读取实际文件并评审、运行测试，最后汇总真实结果交给我验收。只在当前合成工程目录工作，说明简短自然即可。';
   await c.send('Page.reload');await until(()=>c.eval('document.body?.classList.contains("hifi-on")'),Boolean,'fresh formal registry');
@@ -78,7 +82,7 @@ async function observe(){
     return current.deliveries.find(d=>d.task_id===root.id&&d.revision===1);},Boolean,'real multi-model parent v1',2700000);
   result.final=facts(root.id);result.calls=calls(root.id);result.delivery=delivery;result.otherTaskCalls=calls().filter(call=>!result.calls.some(own=>own.id===call.id)).length;
   const models=new Set(result.calls.filter(x=>x.status==='succeeded').map(x=>`${x.runtime_kind}/${x.model}`));
-  must(models.has('claude/glm-5.3-flash')&&models.has('codex/gpt-6.1-sol'),'two distinct configured actual model calls in one task family');
+  must(new Set(progress.expectedModels).size===2&&progress.expectedModels.every(model=>models.has(model)),'two distinct configured actual model calls in one task family');
   must(result.calls.every(call=>call.status==='succeeded'),'all actual calls must succeed');must(result.final.steps.length>=2&&result.final.steps.every(step=>step.status==='DONE'),'all genuine child steps done');
   must(fs.existsSync(path.join(progress.project,'greeting.mjs')),'model output source file missing');
   result.files=fs.readdirSync(progress.project).filter(name=>fs.statSync(path.join(progress.project,name)).isFile()).map(name=>({name,sha256:hash(fs.readFileSync(path.join(progress.project,name)))}));
