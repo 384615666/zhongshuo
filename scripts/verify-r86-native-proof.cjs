@@ -6,9 +6,9 @@ const fs=require('node:fs'),path=require('node:path'),{homedir}=require('node:os
 const {ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths}=require('./lib/r86-native-evidence.cjs');
 const out=path.resolve(process.argv[2]??''),label=process.argv.find(x=>x.startsWith('--label='))?.slice(8)??'v1';
 if(!/^[-a-z0-9]+$/.test(label)||!ownedEvidenceRoot(out,path.resolve(__dirname,'../dist')))throw Error('owned root and safe original proof label required');
-const main=JSON.parse(fs.readFileSync(path.join(out,'progress.json'),'utf8')),observation=JSON.parse(fs.readFileSync(path.join(out,'real-code-v1.json'),'utf8'));
-const taskId=process.argv.find(x=>x.startsWith('--task='))?.slice(7)??observation.root.id,file=path.join(out,`native-proof-${label}.json`);
-const deliveryRevision=Number(process.argv.find(x=>x.startsWith('--delivery='))?.slice(11)??1),documentTask=process.argv.includes('--document');
+const main=JSON.parse(fs.readFileSync(path.join(out,'progress.json'),'utf8')),observation=fs.existsSync(path.join(out,'real-code-v1.json'))?JSON.parse(fs.readFileSync(path.join(out,'real-code-v1.json'),'utf8')):null;
+const taskId=process.argv.find(x=>x.startsWith('--task='))?.slice(7)??observation?.root.id,file=path.join(out,`native-proof-${label}.json`);if(!taskId)throw Error('explicit task required before original code observation');
+const deliveryRevision=Number(process.argv.find(x=>x.startsWith('--delivery='))?.slice(11)??1),documentTask=process.argv.includes('--document'),deliberationTask=process.argv.includes('--deliberation');
 if(fs.existsSync(file))throw Error('original native proof retained; choose a new explicit observation label');
 const db=new Database(path.join(main.dataRoot,'state.sqlite'),{readonly:true}),hash=s=>createHash('sha256').update(s).digest('hex');
 const result={pass:false,scope:'actual own CLI context/tools/results; configured model is separate from upstream response_model',build:main.build,taskId,sessions:[]};
@@ -20,7 +20,7 @@ function exactFiles(base,ids){const found=[];const scan=(dir,depth)=>{if(depth>8
 function readRows(file){if(fs.statSync(file).size>32*1024*1024)throw Error('own transcript exceeds bounded read');const raw=fs.readFileSync(file,'utf8');return {raw,rows:raw.trim().split(/\r?\n/).map(line=>JSON.parse(line))};}
 try{
   const delivery=db.prepare('SELECT id,run_id,manifest_hash FROM task_deliveries WHERE task_id=? AND revision=?').get(taskId,deliveryRevision);if(!delivery)throw Error('exact parent delivery missing');
-  const plan=db.prepare('SELECT c.run_id FROM coordination_runs c JOIN coordination_integration_attempts i ON i.coordination_run_id=c.run_id WHERE i.execution_run_id=? AND c.task_id=?').get(delivery.run_id,taskId);if(!plan)throw Error('delivery has no original collaboration identity');
+  const plan=deliberationTask?db.prepare("SELECT id run_id FROM workflow_runs WHERE id=? AND task_id=? AND mode='DELIBERATE' AND status='SUCCEEDED'").get(delivery.run_id,taskId):db.prepare('SELECT c.run_id FROM coordination_runs c JOIN coordination_integration_attempts i ON i.coordination_run_id=c.run_id WHERE i.execution_run_id=? AND c.task_id=?').get(delivery.run_id,taskId);if(!plan)throw Error('delivery has no original collaboration identity');
   result.delivery={id:delivery.id,revision:deliveryRevision,manifestHash:delivery.manifest_hash,coordinationRunId:plan.run_id};
   const sessions=db.prepare(`SELECT s.id,s.provider_session_id,s.cwd,s.member_id,s.task_id,s.capabilities_json,r.kind,c.model,
       (SELECT role FROM coordination_steps WHERE child_task_id=s.task_id AND run_id=?) role,
@@ -46,7 +46,7 @@ try{
       if(path.resolve(session.cwd)!==path.resolve(main.project))throw Error('native session cwd not the owned project');
       const matches=files.filter(file=>path.basename(file).endsWith(session.provider_session_id+'.jsonl'));if(matches.length!==1)throw Error('exact own transcript missing or ambiguous');
       const {raw,rows}=readRows(matches[0]);
-      const proof={sessionId:session.id,providerSessionId:session.provider_session_id,memberId:session.member_id,taskId:session.task_id,role:session.role??'coordinator',kind,configuredModel:session.model,currentConfiguredModel:session.currentConfiguredModel,actualRuntimeSnapshot:session.actualRuntimeSnapshot,transcriptSha256:hash(raw),testCommands:[],readCommands:[],writeActions:[],tools:[],nativeDelegationObserved:false};
+      const proof={sessionId:session.id,providerSessionId:session.provider_session_id,memberId:session.member_id,taskId:session.task_id,role:session.role??'coordinator',kind,configuredModel:session.model,currentConfiguredModel:session.currentConfiguredModel,actualRuntimeSnapshot:session.actualRuntimeSnapshot,transcriptSha256:hash(raw),commandExecutions:[],testCommands:[],readCommands:[],writeActions:[],tools:[],nativeDelegationObserved:false};
       const handoff=JSON.parse(db.prepare('SELECT handoff_json FROM coordination_steps WHERE child_task_id=? AND run_id=?').get(session.task_id,plan.run_id)?.handoff_json??'{}');
       const frozenFiles=(handoff.upstream??[]).flatMap(delivery=>(delivery.files??[]).filter(f=>f.state==='present').map(f=>({...f,deliveryId:delivery.id,revision:delivery.revision,manifestHash:delivery.manifest_hash})));
       const readableFiles=frozenFiles.flatMap(f=>{
@@ -65,6 +65,7 @@ try{
         const content=rows.flatMap(r=>Array.isArray(r.message?.content)?r.message.content:[]),tools=content.filter(x=>x.type==='tool_use');proof.tools=tools.map(t=>t.name);
         const outputs=content.filter(x=>x.type==='tool_result');
         for(const tool of tools){const command=tool.input?.command??tool.input?.cmd??'';const output=outputs.find(x=>x.tool_use_id===tool.id),body=typeof output?.content==='string'?output.content:JSON.stringify(output?.content??'');
+          if(command)proof.commandExecutions.push({command:safeCommand(command),success:output!=null&&output.is_error!==true,testSummary:tapPassed(body)});
           if(tests(command))proof.testCommands.push({id:tool.id,command:safeCommand(command),success:output!=null&&output.is_error!==true&&tapPassed(body),exitEvidence:'CLI tool success plus TAP tests/pass/fail; no independent exit field',outputSha256:hash(body)});
           if(tool.name==='Read')proof.readCommands.push({id:tool.id,path:safeCommand(tool.input?.file_path??tool.input?.path),matchedInputFiles:fileRead(tool.input?.file_path??tool.input?.path,body.replace(/^\s*\d+[→\t|] ?/gm,''),readableFiles),success:output!=null&&output.is_error!==true,outputSha256:hash(body)});
           if(['Write','Edit','MultiEdit'].includes(tool.name))proof.writeActions.push({id:tool.id,name:tool.name,success:output!=null&&output.is_error!==true,outputSha256:hash(body)});
@@ -81,6 +82,7 @@ try{
         const completed=rows.filter(r=>r.type==='event_msg'&&r.payload?.type==='item_completed'&&r.payload.item?.type==='CommandExecution');
         for(const row of completed){const item=row.payload.item,command=Array.isArray(item.command)?(item.command.includes('-Command')?item.command.slice(item.command.indexOf('-Command')+1).join(' '):item.command.map((part,index)=>index===0?path.basename(part):part).join(' ')):String(item.command??''),output=String(item.aggregated_output??item.stdout??'');
           const evidence={id:item.id??null,command:safeCommand(command),status:item.status,exitCode:item.exit_code,success:item.status==='completed'&&item.exit_code===0,outputSha256:hash(output),testSummary:tapPassed(output),matchedInputFiles:fileRead(command,output,readableFiles)};
+          proof.commandExecutions.push(evidence);
           if(tests(command))proof.testCommands.push({...evidence,success:evidence.success&&evidence.testSummary});
           if(/Get-Content|\bcat\b|\brg\b|\btype\b/i.test(command))proof.readCommands.push(evidence);
         }
@@ -93,9 +95,10 @@ try{
   if(new Set(main.expectedModels).size!==2||!main.expectedModels.every(model=>models.has(model)))throw Error('same task family distinct native model contexts missing');
   if(result.sessions.some(s=>s.nativeDelegationObserved))throw Error('untracked native delegation observed; not counted as bounded formal collaboration');
   const implementers=result.sessions.filter(s=>s.role==='implementation'),reviewers=result.sessions.filter(s=>s.role==='review');
-  if(!documentTask&&!implementers.some(s=>s.testCommands.some(c=>c.success)))throw Error('this delivery implementer native successful Node test evidence missing');
+  if(deliberationTask&&result.sessions.some(s=>s.actualRuntimeSnapshot.effectivePolicy!=='policy-analyze'||s.writeActions.some(a=>a.success)))throw Error('deliberation must remain actually readonly');
+  if(!documentTask&&!deliberationTask&&!implementers.some(s=>s.testCommands.some(c=>c.success)))throw Error('this delivery implementer native successful Node test evidence missing');
   if(documentTask&&!implementers.some(s=>s.writeActions.some(c=>c.success)||s.tools.some(t=>/apply_patch|fileChange/i.test(t??''))))throw Error('this document delivery actual write evidence missing');
-  if(!reviewers.some(s=>s.readCommands.some(c=>c.success&&c.matchedInputFiles?.length)&&implementers.some(impl=>`${impl.kind}/${impl.configuredModel}`!==`${s.kind}/${s.configuredModel}`)))throw Error('actual independent different-model reviewer file read evidence missing');
+  if(!deliberationTask&&!reviewers.some(s=>s.readCommands.some(c=>c.success&&c.matchedInputFiles?.length)&&implementers.some(impl=>`${impl.kind}/${impl.configuredModel}`!==`${s.kind}/${s.configuredModel}`)))throw Error('actual independent different-model reviewer file read evidence missing');
   result.pass=true;
 }catch(error){result.error=error.stack;process.exitCode=1;}
 finally{db.close();fs.writeFileSync(file,JSON.stringify(result,null,2));console.log(JSON.stringify({pass:result.pass,sessions:result.sessions.length,error:result.error}));}

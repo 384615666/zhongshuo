@@ -118,3 +118,23 @@ e84be3e全套首次162文件中160通过、3测试失败：Word子进程超时�
 原生查看发现AUTO父WAITING分工执行被泛化提示成等待人类输入/批准；修正只读UI说明依据真实mode/stage，不扩有限主池投影。需最终新BUILD真实复证，rc6不冒充最终交付。QA总门增加完整绿基线逐门缺失/FALSE、错runtimeCommit、跨BUILD、重复v1替代v2/document等变异；原生工具解析覆盖Node24 spec和FileChange map/array，不以QA-only解析修复新增调用。
 
 用户随后明确替代渠道模型deepseek-flash。下一最终候选用现有Claude/deepseek-flash + Codex/gpt-6.1-sol，必要真实合成调用已授权；原GLM429及双Sol原票保留，不混认证范围。
+
+## rc7真实闭环与名单反例，rc8最终运行冻结
+
+rc7 / 0f3452b / bld_9fa40125a99e71b6：DeepSeek+Codex同任务v1四调用，原生记录返工意见跨刷新零新增、显式执行v2再四调用，验收精确v2后AltF4正常关闭、同BAT重开原文件hash/版本不变、无自动派发；文档另五调用成功。Codex评审draft上游后DeepSeek整合改变文档，reviewVersionCurrent=false如实保留。原生子task/精确子delivery/返回/CtrlR/草稿保持通过；Chromium历史API另列，AltLeft未实现不称通过。
+
+实测project.open无条件补齐默认room_members，明确移出的成员反复复活，归档房间也被补入新成员。原失败room-membership-before-0f3452b.log及独立roster-0f3452b/probe-result.json保留；最小修复仅首次建房初始化，显式member.create加入活动房间合同不变。1cca516独立同探针连续三次打开、归档后新建成员均通过。
+
+rc8 clean运行冻结1cca516eafd065063e4b56ab49aed3615fb186cb / bld_a9b6180a48c8053a / 593清单，源候选无data/profile。新owned final-real根端口52804，原生自然开发一次发送完成6真实成功、4子步骤DONE；native-proof-code-v1-discovery按精确原生6session核实际Node测试、上游读取/版本/hash。CLI合法使用node --test自动发现，附带echo退出码并非echo伪造runner；原QA过窄false保留，quote-aware段识别与八项正负例更正，没有重跑模型。随后原生返工意见6.5秒calls仍6→显式执行原v1，新v2与另一个原生手选两成员只读DELIB在途，尚不记通过。
+
+源码首次全套163文件1154项，1153过、唯一GitHub fetch的Windows TLS SEC_E_ILLEGAL_MESSAGE失败，full-1cca516.log原件保留。相同GitHub五项62.78秒后单独通过（github-1cca516-confirm.log），不代记首次全套绿。双types通过、增量lint无新增（commands既有10项与HEAD逐rule/message一致）。
+
+最终同BUILD升级完整旧工程根/UNKNOWN草稿附件保全/旧程序拒52/匹配整根回退通过final-upgrade。正式Fake完整回归前两次在archive截图双RAF1500ms不足失败，业务此前步骤保持真实，原false保留；工程等待5000ms仍要求双帧已绘制且visibilityState=visible，第三新根final-full-v3完整pass/0真实调用，含DIRECT/DM v2验收、停止、持续详情/历史/重开、归档/看板/Git全范围。QA-only不改变冻结运行包，不为此新增模型。
+
+## rc8研讨真实拒绝与严格schema修复（未最终交付）
+
+code v2六次新调用自然交付，精确native-proof-code-v2-completed通过；提前读取尚不存在v2产生的原false保留。v2尚未人工accept，不写成完整验收。
+
+DELIB Codex INDEPENDENT请求被明确CODEX_ERROR/invalid_json_schema拒绝：claims.items的properties包含uncertainty但required缺该字段。DeepSeek首稿成功，程序按1/2失败席位推进互评是现有缺席规则，不能计双模型有效首稿/互评。原生精确停止该研讨，CANCELLED；保留一条failed和正在进行互评的interrupted，无UNKNOWN自动重放。code两版12成功，DELIB首稿1成功+1失败+1中断，共15原始账本行。
+
+新增零模型递归strict-dialect反例before1失败/6通过。最小修复仅生成新transport schema时要求所有已声明属性（包含嵌套）；可选说明缺内容用空串或空数组，保留原类型/约束、业务版本/身份/引用校验和历史可省略字段。不加null，不改库或伪造证据。六阶段合法值同时通过原Zod和本地Ajv，错schemaVersion拒绝；历史省略uncertainty仍可读，新transport确实拒绝省略；八种正式schema递归遍历含普通/规划AUTO，34定向及双types/lint通过。新冻结先验此前未认证的完整真实DELIB，再补同最终BUILD其他流程，不以rc8成功票拼新包通过。

@@ -4,11 +4,12 @@ const path=require('node:path');
 function ownedEvidenceRoot(out,dist){return path.basename(out).startsWith('review-r86-')&&out.startsWith(path.resolve(dist)+path.sep);}
 function nativeDelegation(name){return /(?:^|[.:/]|__)(?:Task|Agent|spawn_agent|send_input|send_message_to_agent)$/i.test(String(name??''));}
 function nodeTestCommand(command,files){
- const c=String(command??'');
- // Only actual test-runner invocation, never an echoed command or node -e self-report.
- if(/\b(?:echo|printf)\b|\bnode(?:\.exe)?\s+-(?:e|p)\b/i.test(c))return false;
- if(!/(?:^|[\s;&|"'])node(?:\.exe)?["']?\s+(?:--[^\s]+\s+)*--test(?:\s|$)/i.test(c))return false;
- return files.some(file=>c.toLowerCase().includes(path.basename(file).toLowerCase()));
+ // Only actual command segments, not quoted/echoed runner text. Bare --test
+ // legitimately discovers the test files in the already checked native cwd.
+ const c=String(command??''),segments=[];let start=0,quote=null;
+ for(let i=0;i<c.length;i++){const ch=c[i];if(quote){if(ch===quote&&c[i-1]!=='\\')quote=null;continue;}if(ch==='"'||ch==="'"){quote=ch;continue;}if(ch===';'||ch==='\n'||ch==='&'&&c[i+1]==='&'){segments.push(c.slice(start,i));if(ch==='&')i++;start=i+1;}}
+ segments.push(c.slice(start));
+ return files.length>0&&segments.some(segment=>{const match=/^\s*node(?:\.exe)?\s+(?:--[\w=-]+\s+)*--test(?:\s+(.*?))?\s*$/i.exec(segment);if(!match)return false;const args=match[1]?.trim()??'';if(!args||args.split(/\s+/).every(a=>/^--[\w=-]+$/.test(a)))return true;return files.some(file=>args.split(/\s+/).some(arg=>arg.replace(/^['"]|['"]$/g,'').toLowerCase()===path.basename(file).toLowerCase()));});
 }
 // eslint-disable-next-line no-control-regex -- Strip native CLI ANSI colors before validating test summaries.
 function tapPassed(output){const normalized=String(output).replace(/\u001b\[[0-9;]*m/g,'').replace(/(?:^|\n)\s*ℹ\s*/g,'\n# ');return /(?:^|\n)\s*#\s*tests\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*pass\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*fail\s+0\b/.test(normalized);}

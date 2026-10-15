@@ -888,7 +888,7 @@ export function assembleStepInput(db: ZhongshuoDatabase, input: {
     turnPurpose,
     instruction: instruction.value,
     outputContract: contract,
-    text: `${body}\n\n【输出契约】只输出一个 JSON 对象，字段集如下（不得增删字段）：\n${contract}`,
+    text: `${body}\n\n【输出契约】只输出一个 JSON 对象，字段集如下（不得增删字段）。可选说明字段也须提供，无内容时用空字符串或空数组，不伪造证据：\n${contract}`,
   });
 }
 
@@ -973,7 +973,17 @@ const STEP_SCHEMAS: Partial<Record<DelibStageCode, z.ZodTypeAny>> = {
 
 export function deliberationOutputSchema(stage:DelibStageCode) {
   const schema=STEP_SCHEMAS[stage];if(!schema)throw Error('未知研讨输出阶段');
-  return z.toJSONSchema(schema,{target:'draft-7'});
+  const output=z.toJSONSchema(schema,{target:'draft-7'});
+  // Codex strict structured output requires every declared property, including
+  // nested optional explanations. This narrows only the transport schema;
+  // existing stored artifacts retain their original optional-field contract.
+  const requireFields=(node:unknown)=>{
+    if(!node||typeof node!=='object')return;
+    const row=node as Record<string,unknown>;
+    if(row.type==='object'&&row.properties&&typeof row.properties==='object')row.required=Object.keys(row.properties);
+    for(const value of Object.values(row)){if(Array.isArray(value))value.forEach(requireFields);else requireFields(value);}
+  };
+  requireFields(output);return output;
 }
 
 /**

@@ -4,6 +4,10 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
+**最新断点（2026-10-15 20:26）**：rc8 clean1cca516 / bld_a9b6180a48c8053a，owned final-real端口52804。真实AUTO v1六调用、原生意见零调用→显式v2再六调用均自然交付，native-proof-code-v1-discovery及code-v2-completed精确session过。原v2仍REVIEW，未accept，不冒充闭环。手选DELIB真实Codex IND被invalid_json_schema明确拒绝（nested claims uncertainty未required），已原生精确停止该task CANCELLED，原failed/interrupted保留，不能算双模型成功；全部calls终态，无UNKNOWN重放。新产品最小修复在deliberationRunner：生成transport schema递归required全部properties（optional无值用空串/空数组，不加null，不改历史domain可选字段），六stage正例同时过原Zod/Ajv、错版本拒、8种schema含AUTO递归strict检查，before原失败保留；34定向+双types/lint过。即将冻结新rc9，先正式实际DELIB全阶段成功，再同最终BUILD code v1→意见→执行v2→验收→文档预览→全部调用终态关闭/BAT重开→原生导航→视觉配对→最终总门。QA observe已按准确首AUTO选择，不误选先行DELIB；native proof支持显式DELIB task早于code observation。不要因QA-only另换包。
+
+rc8同BUILD完整Fake final-full-v3 pass/0calls、升级final-upgrade pass、独立593清单pass。源码full首次1153/1154，唯一TLS原false保留；同GitHub随后5/5。此前两次1500ms双RAF screenshot失败保留，5000ms且visible后第三新根完整过。最新QA8原生正负＋完整54定向过。当前dirty含新strict修复/tests与QA脚本，Git实读；准备保存审计后commit/push/build，源码不能冒充仍rc8。最终文档/AUTO/DELIB/视觉/导航总门尚未完成，不交半成品。reviewer01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79只读已获授权；最后建议先DELIB避免尾部才发现同类schema缺陷，已采纳。用户deepseek-flash无需再次确认；必要真实合成调用已充分授权。
+
 当前阶段：运行冻结0f3452b870b3a2b1f99433357a1ee496058956dd / desktop-daily-win-v25-rc7 / bld_9fa40125a99e71b6，593程序文件。用户已指定deepseek-flash替代耗尽的GLM；rc7真实同任务DeepSeek+Codex开发v1→意见仅记录零调用→显式v2→验收v2→原生关闭/BAT重开已通过，8次成功；文档协作另5次成功，旧版评审后整合修改，不能称评审覆盖终版。原生子任务/精确子成果/返回/CtrlR/草稿保持已证，Chromium历史另列，AltLeft不声称支持。源码全套163文件1151通过。现已独立复现并修正project.open每次复活默认房间已移出成员，须冻结rc8最终同BUILD复证；原false与rc7阶段证据均保留。最新HEAD用git实读，后续QA/记录提交不冒充运行源码。分支codex/full-implementation，独立审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79只读复核；无其他产品写入者。
 
 立即续工：冻结房间初始化修复（仅首次建房填名册，显式member.create自动加入活动房间合同不变）及永久正负例，rc8 prepare新owned根DeepSeek/Codex medium；最终实际开发v1/v2验收重开、文档及实际预览、显式选两成员DELIBERATE、原生导航、原型成对宽窄/DPR1.5截图实际检查、同BUILD完整源码/Fake/升级回退及593清单、真实调用总账/最终严格总门、提交推送独立复核。rc7 own根review-r86-real-rc7-deepseek-20261015端口52794，文档task_230a20c5-dc9c-4282-ac50-6bd7f8940e7b已REVIEW；不要重放旧任务。native-proof-document-v1原false由编号Get-Content输出解析导致，numbered新票核不可变上游snapshot后pass，QA-only更正不新调用。未完成最终总门，不交半成品。

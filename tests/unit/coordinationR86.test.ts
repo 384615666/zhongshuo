@@ -1,6 +1,7 @@
 import {createRequire} from 'node:module';
 import {taskCompleteOutputSchema} from '../../src/contracts/prompts.ts';
 import {deliberationOutputSchema} from '../../src/daemon/deliberationRunner.ts';
+import {analysisDraftPayloadSchema,reviewPayloadSchema,issuePositionPayloadSchema,checkpointVerdictPayloadSchema,synthesisPayloadSchema,ratifyPayloadSchema} from '../../src/contracts/deliberation.ts';
 import { describe, expect, it } from 'vitest';
 import { coordinationCallAvailable, validateCoordinationPlan } from '../../src/contracts/coordination.ts';
 
@@ -40,3 +41,22 @@ describe('R86 authoritative collaboration plan', () => {
   for(const schema of schemas){const validator=new Ajv({strict:false,validateSchema:true});const validate=validator.compile(schema);expect(validate({})).toBe(false);expect(()=>new Ajv({strict:false}).compile({...schema,$schema:'https://json-schema.org/draft/2020-12/schema'})).toThrow(/no schema with key or ref/);}
 
  });
+
+it('every Codex structured-output object requires all declared properties, including nested deliberation fields',()=>{
+ const visit=(node:unknown)=>{if(!node||typeof node!=='object')return;const row=node as Record<string,unknown>;if(row.type==='object'&&row.properties){expect(row.additionalProperties).toBe(false);expect(new Set(row.required as string[])).toEqual(new Set(Object.keys(row.properties)));}for(const value of Object.values(row)){if(Array.isArray(value))value.forEach(visit);else visit(value);}};
+ for(const schema of [taskCompleteOutputSchema('key'),taskCompleteOutputSchema('key',true),...(['IND','CR','ISS','CHK','SYN','RAT'] as const).map(stage=>deliberationOutputSchema(stage))])visit(schema);
+});
+
+it('strict transport accepts actual six-stage values without relaxing historical business validation',()=>{
+ const req=createRequire(createRequire(import.meta.url).resolve('eslint')),Ajv=req('ajv') as new(options:unknown)=>{compile:(schema:unknown)=>((data:unknown)=>boolean)};
+ const cases=[
+  ['IND',analysisDraftPayloadSchema,{schemaVersion:'analysis-draft-v1',summary:'独立分析',claims:[{claimId:'c1',statement:'主要风险',kind:'proposal',evidenceIds:[],uncertainty:''}],recommendations:[],openQuestions:[]}],
+  ['CR',reviewPayloadSchema,{schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:'real-upstream',targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已有验收例',evidenceIds:[],suggestedVerification:''}]}],
+  ['ISS',issuePositionPayloadSchema,{schemaVersion:'issue-position-v1',positions:[{issueId:'i1',stance:'agree',reason:'范围明确',newEvidence:[]}]}],
+  ['CHK',checkpointVerdictPayloadSchema,{schemaVersion:'checkpoint-verdict-v1',verdict:'stop',reason:'无新增证据',evidenceSummary:''}],
+  ['SYN',synthesisPayloadSchema,{schemaVersion:'synthesis-v1',summary:'整合',claims:[{statement:'结论',sourceRefs:['real-upstream:1:c1']}],disputedClaims:[],recommendations:[]}],
+  ['RAT',ratifyPayloadSchema,{schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm',conditions:[],reason:''}]}],
+ ] as const;
+ for(const [stage,business,value] of cases){const validate=new Ajv({strict:false}).compile(deliberationOutputSchema(stage));expect(validate(value),stage).toBe(true);expect(business.safeParse(value).success,stage).toBe(true);expect(validate({...value,schemaVersion:'wrong'})).toBe(false);}
+ const historical={schemaVersion:'analysis-draft-v1',summary:'原件',claims:[{claimId:'c1',statement:'原结论',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]};expect(analysisDraftPayloadSchema.safeParse(historical).success).toBe(true);expect(new Ajv({strict:false}).compile(deliberationOutputSchema('IND'))(historical)).toBe(false);
+});
