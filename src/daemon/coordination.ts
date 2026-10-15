@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, lstatSync,realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
@@ -21,11 +21,13 @@ function event(db: ZhongshuoDatabase, task: Parent, runId: string, kind: string,
 export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | null) {
   if (!taskId) return;
   const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId) as Parent & { route_json: string | null };
-  if (!task?.route_json || JSON.parse(task.route_json).mode !== 'AUTO') return;
+  if (!task?.route_json || !['AUTO','DELIBERATE'].includes(JSON.parse(task.route_json).mode)) return;
   if (db.prepare('SELECT 1 FROM coordination_scopes WHERE task_id=?').get(taskId)) return;
+  const route=JSON.parse(task.route_json) as {mode:string;frozenMemberIds:string[]};
   const members = db.prepare(`SELECT pm.id,pm.display_name,pm.description FROM room_members rm
-    JOIN project_members pm ON pm.id=rm.member_id WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent' ORDER BY pm.id LIMIT 13`)
-    .all(task.room_id, task.project_id) as {id:string;display_name:string;description:string|null}[];
+    JOIN project_members pm ON pm.id=rm.member_id WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent'
+    AND (?='AUTO' OR pm.id IN (SELECT value FROM json_each(?))) ORDER BY pm.id LIMIT 13`)
+    .all(task.room_id,task.project_id,route.mode,JSON.stringify(route.frozenMemberIds)) as {id:string;display_name:string;description:string|null}[];
   if (members.length > 12) throw Error('自动协作最多选择 12 位房间成员；请先调整房间名单');
   if(!members.some(m=>m.id===task.owner_member_id))throw Error('协调者必须是本房间启用的 AI 成员');
   const roster: ScopeMember[] = members.map(m => {
@@ -50,10 +52,13 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const child = childCoordination(db,taskId);
   if (child) return { kind:'child' as const, run:child, readonly:child.role!=='implementation',
     note:`你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。只完成本步骤，不自行派发成员。分析和评审只读；结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
-  const integration=db.prepare("SELECT * FROM coordination_runs WHERE task_id=? AND state='integrating'").get(taskId) as CoordinationRun|undefined;
-  if(integration && dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`) {
+  const repair=db.prepare(`SELECT c.* FROM format_repair_workitems f JOIN agent_turns a ON a.id=f.source_turn_id
+    JOIN coordination_integration_attempts i ON i.execution_run_id=a.run_id JOIN coordination_runs c ON c.run_id=i.coordination_run_id
+    WHERE f.target_dispatch_key=? AND f.status IN ('pending','consumed') AND c.task_id=? AND c.state IN ('blocked','integrating')`).get(dispatchKey,taskId) as CoordinationRun|undefined;
+  const integration=repair??db.prepare("SELECT * FROM coordination_runs WHERE task_id=? AND state='integrating'").get(taskId) as CoordinationRun|undefined;
+  if(integration && (repair || dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`)) {
     const steps=db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(integration.run_id);
-    return {kind:'integration' as const,run:integration,readonly:false,note:`整合已完成的真实成员工作。不得声称自己代替其他成员执行；核对成果与评审，按用户请求补齐必要整合并交付。不得再次生成计划。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}`};
+    return {kind:'integration' as const,run:integration,repair:Boolean(repair),readonly:false,note:`整合已完成的真实成员工作。不得声称自己代替其他成员执行；核对成果与评审，按用户请求补齐必要整合并交付。不得再次生成计划。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}`};
   }
   const task=db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string|null};
   if(task.route_json && JSON.parse(task.route_json).mode==='AUTO' && !dispatchKey.includes(':conversation:')) {
@@ -65,7 +70,7 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
 /** Conservative aggregate accounting includes failed startup and UNKNOWN reservations. */
 export function coordinationCallsUsed(db: ZhongshuoDatabase, runId: string): number {
   return (db.prepare(`SELECT count(*) n FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
-    WHERE a.run_id=? OR a.run_id=(SELECT integration_run_id FROM coordination_runs WHERE run_id=?)
+    WHERE a.run_id=? OR a.run_id IN (SELECT execution_run_id FROM coordination_integration_attempts WHERE coordination_run_id=?)
       OR r.task_id IN (SELECT child_task_id FROM coordination_steps WHERE run_id=?)`).get(runId,runId,runId) as {n:number}).n;
 }
 
@@ -85,34 +90,69 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   const context=coordinationDispatchContext(db,taskId,dispatchKey);
   if (!context?.run) return;
   const parent=db.prepare('SELECT stop_generation,status FROM tasks WHERE id=?').get(context.run.task_id) as {stop_generation:number;status:string};
-  if(parent.stop_generation!==context.run.stop_generation || parent.status==='CANCELLED' || !['running','integrating'].includes(context.run.state)) throw Error('父协作已停止或本轮分工已失效；未派发');
-  const handoffs=context.kind==='child'?[context.run.handoff_json]:db.prepare('SELECT handoff_json FROM coordination_steps WHERE run_id=? LIMIT 8').all(context.run.run_id).map(r=>(r as {handoff_json:string|null}).handoff_json);
+  if(parent.stop_generation!==context.run.stop_generation || parent.status==='CANCELLED' || (!['running','integrating'].includes(context.run.state)&&!(context.kind==='integration'&&context.repair&&context.run.state==='blocked'))) throw Error('父协作已停止或本轮分工已失效；未派发');
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
-  for(const raw of handoffs)if(raw)verifyHandoffFiles(JSON.parse(raw) as unknown,root);
+  const keys=context.kind==='child'?dependencyKeys(JSON.parse(context.run.plan_json!) as CoordinationPlan,context.run.step_key):undefined;
+  verifyHandoffFiles({files:managedHandoffFiles(db,context.run.run_id,keys)},root);
   const ownReservation=reservedTurnId&&db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(reservedTurnId)?1:0;
   const used=coordinationCallsUsed(db,context.run.run_id)-ownReservation;
   const reserve=context.kind==='integration'?0:2;
   if(!coordinationCallAvailable(used,context.kind==='integration'?'integration':'work') || used>=coordinationCallLimit(db,context.run.run_id)-reserve) throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
 }
 
-function verifyHandoffFiles(value:unknown,root:string,depth=0):void {
+function verifyHandoffFiles(value:unknown,root:string,depth=0,budget={remaining:32*1024*1024}):void {
   if(depth>12)throw Error('交接记录超出有界嵌套范围');
   if(!value || typeof value!=='object')return;
-  if(Array.isArray(value)){for(const item of value)verifyHandoffFiles(item,root,depth+1);return;}
+  if(Array.isArray(value)){for(const item of value)verifyHandoffFiles(item,root,depth+1,budget);return;}
   const row=value as Record<string,unknown>;
   if(Array.isArray(row.files))for(const raw of row.files){
     if(!raw||typeof raw!=='object')continue;
-    const file=raw as {path?:string;sha256?:string;state?:string};if(!file.path||!file.sha256)continue;
+    const file=raw as {path?:string;sha256?:string;state?:string};if(!file.path)throw Error('交接文件缺少路径');
     const path=resolve(root,file.path),rel=relative(root,path);
     if(rel==='..'||rel.startsWith('../')||rel.startsWith('..\\')||isAbsolute(rel))throw Error('交接文件越出项目');
-    const stat=statSync(path);if(!stat.isFile()||stat.size>32*1024*1024||createHash('sha256').update(readFileSync(path)).digest('hex')!==file.sha256)throw Error('交接版本的文件字节已变化；未继续派发');
+    if(file.state==='absent'){
+      try{lstatSync(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
+      throw Error('交接版本已删除的文件被重新创建；未继续派发');
+    }
+    if(file.state!=='present'||!file.sha256)throw Error('交接文件状态或hash未知，不能冒充已核验');
+    const physical=realpathSync.native(path),physicalRelative=relative(realpathSync.native(root),physical);
+    if(physicalRelative==='..'||physicalRelative.startsWith('../')||physicalRelative.startsWith('..\\')||isAbsolute(physicalRelative))throw Error('交接文件物理身份越出项目');
+    const stat=statSync(physical);budget.remaining-=stat.size;
+    if(!stat.isFile()||budget.remaining<0||createHash('sha256').update(readFileSync(physical)).digest('hex')!==file.sha256)throw Error('交接版本的文件字节已变化或超过32MiB总核验上限；未继续派发');
   }
-  for(const key of ['upstream','output'])if(row[key])verifyHandoffFiles(row[key],root,depth+1);
+  for(const key of ['upstream','output'])if(row[key])verifyHandoffFiles(row[key],root,depth+1,budget);
 }
 
-export function beginCoordination(db: ZhongshuoDatabase, taskId: string, runId: string, kind: 'planning'|'integration') {
+type FrozenFile={path:string;sha256:string|null;state:string};
+function dependencyKeys(plan:CoordinationPlan,key:string):Set<string> {
+  const keys=new Set<string>();
+  const visit=(current:string)=>{for(const dependency of plan.steps.find(s=>s.key===current)?.dependsOn??[]){if(keys.has(dependency))continue;keys.add(dependency);visit(dependency);}};
+  visit(key);return keys;
+}
+function managedHandoffFiles(db:ZhongshuoDatabase,runId:string,keys?:Set<string>):FrozenFile[] {
+  const run=db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(runId) as {plan_json:string};
+  const plan=JSON.parse(run.plan_json) as CoordinationPlan;
+  const steps=db.prepare('SELECT step_key,handoff_json FROM coordination_steps WHERE run_id=? ORDER BY rowid LIMIT 8').all(runId) as {step_key:string;handoff_json:string|null}[];
+  const latest=new Map<string,{file:FrozenFile;producer:string}>();
+  for(const step of steps){
+    if(keys&&!keys.has(step.step_key))continue;
+    const data=JSON.parse(step.handoff_json??'{}') as {output?:{files:FrozenFile[]}};
+    const dependencies=dependencyKeys(plan,step.step_key);
+    for(const file of data.output?.files??[]){
+      const previous=latest.get(file.path);
+      const changed=previous&&(previous.file.state!==file.state||previous.file.sha256!==file.sha256);
+      if(changed&&!dependencies.has(previous.producer))throw Error('多个实施步骤改动同一路径但没有显式依赖交接；不能覆盖先前成果');
+      if(!previous||changed)latest.set(file.path,{file,producer:step.step_key});
+    }
+  }
+  return [...latest.values()].map(x=>x.file);
+}
+
+export function beginCoordination(db: ZhongshuoDatabase, taskId: string, runId: string, kind: 'planning'|'integration',coordinationRunId?:string) {
   if(kind==='integration') {
-    db.prepare("UPDATE coordination_runs SET integration_run_id=? WHERE task_id=? AND state='integrating'").run(runId,taskId);
+    if(!coordinationRunId)throw Error('整合缺少原协作身份');
+    db.prepare("UPDATE coordination_runs SET integration_run_id=?,state='integrating',error_message=NULL WHERE run_id=? AND task_id=? AND state IN ('integrating','blocked')").run(runId,coordinationRunId,taskId);
+    db.prepare('INSERT INTO coordination_integration_attempts(coordination_run_id,execution_run_id) VALUES(?,?)').run(coordinationRunId,runId);
     db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='分工已完成' WHERE id=(SELECT run_id FROM coordination_runs WHERE integration_run_id=?)").run(runId);
     db.prepare("UPDATE workflow_runs SET stage='整合交付' WHERE id=?").run(runId);
     return;
@@ -157,23 +197,25 @@ function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   const final=db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq DESC LIMIT 1").get(taskId) as {body_json:string}|undefined;
   const root=(db.prepare('SELECT p.canonical_path FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=?').get(taskId) as {canonical_path:string}).canonical_path;
   const changes=db.prepare(`SELECT f.path,f.sha256,f.state FROM change_set_files f JOIN change_sets c ON c.id=f.change_set_id
-    WHERE c.task_id=? AND c.id IN (SELECT value FROM json_each(?)) AND f.role='after' ORDER BY f.path LIMIT 101`).all(taskId,row.change_set_refs_json) as {path:string;sha256:string|null;state:string}[];
+    WHERE c.task_id=? AND c.id IN (SELECT value FROM json_each(?)) AND f.role='after'
+    AND NOT EXISTS(SELECT 1 FROM change_set_files b WHERE b.change_set_id=f.change_set_id AND b.role='before' AND b.path=f.path AND b.state=f.state AND b.sha256 IS f.sha256)
+    ORDER BY f.path LIMIT 101`).all(taskId,row.change_set_refs_json) as FrozenFile[];
   if(changes.length>100)throw Error('成果文件超过交接核验上限；保留原件，不能冒充完整评审');
-  const files=changes.map(file=>{
-    const path=resolve(root,file.path),rel=relative(root,path);
-    if(rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))throw Error('交接文件路径越出当前项目');
-    if(file.state==='absent')return {...file};
-    if(!file.sha256)return {...file,verification:'未提供文件hash'};
-    const stat=statSync(path);if(!stat.isFile()||stat.size>32*1024*1024)throw Error('交接文件不可读取或超出32MiB核验上限');
-    if(createHash('sha256').update(readFileSync(path)).digest('hex')!==file.sha256)throw Error('上游交付文件已变化；不能将旧评审绑定新文件');
-    return {...file,verification:'当前字节与交付一致'};
-  });
-  return {...row,files,final:final ? JSON.parse(final.body_json) as unknown : null};
+  verifyHandoffFiles({files:changes},root);
+  return {...row,files:changes,final:final ? JSON.parse(final.body_json) as unknown : null};
 }
 
 /** Bounded pump; serialized steps prevent concurrent full-access writers and stale read/write overlap. */
 export function pumpCoordinations(db: ZhongshuoDatabase) {
-  const runs=db.prepare("SELECT * FROM coordination_runs WHERE state IN ('running','integrating','cancelled') ORDER BY created_at LIMIT 100").all() as CoordinationRun[];
+  const page=(key:string,predicate:string,limit:number)=>{
+    const cursor=Number((db.prepare('SELECT value FROM daemon_state WHERE key=?').get(key) as {value:string}|undefined)?.value??0);
+    let rows=db.prepare(`SELECT c.rowid cursor_id,c.* FROM coordination_runs c WHERE ${predicate} AND c.rowid>? ORDER BY c.rowid LIMIT ?`).all(cursor,limit) as (CoordinationRun&{cursor_id:number})[];
+    if(!rows.length)rows=db.prepare(`SELECT c.rowid cursor_id,c.* FROM coordination_runs c WHERE ${predicate} ORDER BY c.rowid LIMIT ?`).all(limit) as (CoordinationRun&{cursor_id:number})[];
+    if(rows.length)db.prepare('INSERT INTO daemon_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').run(key,String(rows.at(-1)!.cursor_id),Date.now());
+    return rows;
+  };
+  const runs=[...page('coordination:pump-active',"c.state IN ('running','integrating')",100),
+    ...page('coordination:pump-stops',"c.state='cancelled' AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.id IN (c.run_id,c.integration_run_id) AND r.status IN ('RUNNING','WAITING','STOPPING'))",20)];
   for(const run of runs) { try { db.transaction(()=>{
     const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(run.task_id) as Parent;
     if(run.state==='cancelled'){
@@ -188,6 +230,10 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     }
     if(run.state!=='running') return;
     const steps=db.prepare(`SELECT s.*,t.status,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(run.run_id) as {step_key:string;child_task_id:string;status:string;handoff_json:string|null;current_delivery_id:string|null}[];
+    for(const step of steps)if(step.status==='DONE'){
+      const saved=JSON.parse(step.handoff_json??'{}') as {output?:unknown};
+      if(!saved.output){step.handoff_json=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,step.step_key);}
+    }
     const blocked=steps.find(s=>['BLOCKED','CANCELLED','WAITING_USER'].includes(s.status) || db.prepare("SELECT 1 FROM workflow_runs WHERE task_id=? AND status IN ('FAILED','INTERRUPTED')").get(s.child_task_id) || db.prepare("SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status='UNKNOWN'").get(s.child_task_id));
     if(blocked) {
       db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=?").run(`步骤「${blocked.step_key}」未完成或结果待核实；不会自动重试`,run.run_id);
@@ -201,14 +247,15 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     const next=plan.steps.find(p=>steps.find(s=>s.step_key===p.key)!.handoff_json==null && p.dependsOn.every(key=>steps.find(s=>s.step_key===key)!.status==='DONE'));
     if(next) {
       const step=steps.find(s=>s.step_key===next.key)!;
-      const upstream=next.dependsOn.map(key=>finalHandoff(db,steps.find(s=>s.step_key===key)!.child_task_id));
+      const upstream=next.dependsOn.map(key=>(JSON.parse(steps.find(s=>s.step_key===key)!.handoff_json!) as {output:unknown}).output);
       if(upstream.some(h=>h==null)) throw Error('上游没有可交接的正式版本');
       db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify({upstream}),run.run_id,next.key);
       enqueueOutbox(db,{dispatchKey:`task:${step.child_task_id}:initial`,stopGenerationAtEnqueue:0});
       event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});return;
     }
     if(steps.every(s=>s.status==='DONE' && s.current_delivery_id)) {
-      for(const s of steps) db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify({upstream:JSON.parse(s.handoff_json??'{}') as unknown,output:finalHandoff(db,s.child_task_id)}),run.run_id,s.step_key);
+      const root=(db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(parent.project_id) as {canonical_path:string}).canonical_path;
+      verifyHandoffFiles({files:managedHandoffFiles(db,run.run_id)},root);
       db.prepare("UPDATE coordination_runs SET state='integrating' WHERE run_id=?").run(run.run_id);
       enqueueOutbox(db,{dispatchKey:`task:${parent.id}:redispatch:coord_${run.run_id}`,stopGenerationAtEnqueue:parent.stop_generation});
       event(db,parent,run.run_id,'coordination.integrationQueued',{steps:steps.map(s=>s.child_task_id)});
@@ -239,7 +286,7 @@ export function coordinationDeliveryRefs(db:ZhongshuoDatabase,integrationRunId:s
 export function readCoordination(db:ZhongshuoDatabase,taskId:string,selectedRunId:string|null):CoordinationDetails|null {
   if(!selectedRunId)return null;
   const run=db.prepare(`SELECT c.* FROM coordination_runs c JOIN tasks t ON t.id=c.task_id
-    WHERE c.task_id=? AND (c.run_id=? OR c.integration_run_id=?)`).get(taskId,selectedRunId,selectedRunId) as (CoordinationRun&{error_message:string|null})|undefined;
+    WHERE c.task_id=? AND (c.run_id=? OR c.run_id IN(SELECT coordination_run_id FROM coordination_integration_attempts WHERE execution_run_id=?))`).get(taskId,selectedRunId,selectedRunId) as (CoordinationRun&{error_message:string|null})|undefined;
   if(!run)return null;
   const plan=run.plan_json?JSON.parse(run.plan_json) as CoordinationPlan:null;
   const scope=coordinationRoster(db,taskId);

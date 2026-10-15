@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync,writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync,writeFileSync,readFileSync,unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,9 +10,9 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 
 afterEach(() => vi.unstubAllEnvs());
-const output = (answer: string, coordinationPlan?: unknown): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
+const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,unknown>={}): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
   schemaVersion:'task-complete-v1',resultKey:'fixture',answer,responseKind:coordinationPlan?'work':'conversation',changeSummary:answer,
-  files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...(coordinationPlan?{coordinationPlan}:{})
+  files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...(coordinationPlan?{coordinationPlan}:{}),...extra
 })}}];
 
 async function fixture() {
@@ -138,6 +138,65 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.adapter.startTurnLog).toHaveLength(2);
       expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
+    }finally{f.db.close();}
+  });
+  it('accepts legitimate dependent implementation revisions while keeping both frozen versions',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();const plan={...f.plan,steps:f.plan.steps.map((s,i)=>({...s,role:'implementation',objective:i?'读取上游并完善文件':'创建文件'}))};
+      await f.run(output('计划',plan));
+      await f.run([{kind:'writeFile',path:'result.txt',content:'managed-v1'},...output('第一版')]);
+      await f.run([{kind:'writeFile',path:'result.txt',content:'managed-v2'},...output('完善第二版')]);
+      await f.run(output('最终整合'));
+      expect(readFileSync(join(f.dir,'project','result.txt'),'utf8')).toBe('managed-v2');
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'completed'});
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:1});
+      const saved=f.db.prepare('SELECT handoff_json FROM coordination_steps ORDER BY rowid').all() as {handoff_json:string}[];
+      const hashes=saved.map(s=>(JSON.parse(s.handoff_json) as {output:{files:{sha256:string}[]}}).output.files[0]!.sha256);
+      expect(hashes[0]).not.toBe(hashes[1]);
+    }finally{f.db.close();}
+  });
+  it('keeps explicit integration format repair in the original plan and aggregate budget',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();await f.run(output('计划',f.plan));await f.run(output('分析甲'));await f.run(output('复核甲'));
+      await f.run(output('坏协议',undefined,{remainingIssues:123}));
+      const original=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
+      await f.cmd('task.redispatch',{taskId:root.taskId,formatRepair:true,reason:'人工明确修复原输出'});
+      await f.run(output('合法整合'));
+      expect(f.adapter.startTurnLog).toHaveLength(5);
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_runs').get()).toEqual({n:1});
+      expect(f.db.prepare('SELECT state FROM coordination_runs WHERE run_id=?').get(original.run_id)).toEqual({state:'completed'});
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_integration_attempts WHERE coordination_run_id=?').get(original.run_id)).toEqual({n:2});
+      const delivery=f.db.prepare('SELECT artifact_refs_json FROM task_deliveries WHERE task_id=?').get(root.taskId) as {artifact_refs_json:string};
+      expect(JSON.parse(delivery.artifact_refs_json)).toHaveLength(3);
+    }finally{f.db.close();}
+  });
+  it('rejects recreation of an absent file before review (isolated fake deletion injection)',async()=>{
+    const f=await fixture();try{
+      const path=join(f.dir,'project','removed.txt');writeFileSync(path,'before');
+      const root=await f.send();await f.run(output('计划',{...f.plan,steps:[{...f.plan.steps[0],role:'implementation'},f.plan.steps[1]]}));
+      const events=f.adapter.events.bind(f.adapter);let removed=false;
+      f.adapter.events=async function*(session){for await(const event of events(session)){if(event.kind==='turn.completed'&&!removed){unlinkSync(path);removed=true;}yield event;}};
+      await f.run(output('工程夹具模拟删除'));
+      writeFileSync(path,'EXTERNAL RECREATION');
+      await f.worker.runOnce();
+      expect(f.adapter.startTurnLog).toHaveLength(2);
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
+    }finally{f.db.close();}
+  });
+  it('does not starve current work behind more than 100 closed cancellation records (history fixture)',async()=>{
+    const f=await fixture();try{
+      const old=await f.send();await f.run(output('旧计划',f.plan));
+      const prior=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
+      await f.cmd('task.stop',{taskId:old.taskId,targetRunId:prior.run_id,expectedStopGeneration:0});await f.worker.runOnce();
+      // Historical scale injection is separate from normal task-state generation above.
+      for(let i=0;i<105;i++){const id=`history_${i}`;
+        f.db.prepare("INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,status) VALUES(?,?,?,?,'AUTO','CANCELLED')").run(id,old.taskId,f.room.conversationId,old.threadId);
+        f.db.prepare("INSERT INTO coordination_runs(run_id,task_id,stop_generation,state,created_at) VALUES(?,?,1,'cancelled',?)").run(id,old.taskId,i);
+      }
+      await f.send();await f.run(output('新计划',f.plan));await f.run(output('新任务实际开始'));
+      expect(f.adapter.startTurnLog).toHaveLength(3);
+      expect((f.db.prepare("SELECT count(*) n FROM task_deliveries d JOIN tasks t ON t.id=d.task_id WHERE t.parent_task_id!=?").get(old.taskId) as {n:number}).n).toBe(1);
     }finally{f.db.close();}
   });
 });

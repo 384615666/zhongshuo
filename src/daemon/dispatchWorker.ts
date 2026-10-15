@@ -394,7 +394,7 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    if (taskBusy && coordination?.kind!=='integration') {
+    if (taskBusy && (coordination?.kind!=='integration'||this.db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING') LIMIT 1`).get(task.id))) {
       // 合法意图 + 任务忙碌（活跃 run/turn 含停止中）：沿既有串行等待——释放租约回 pending，
       // 周期 drain/事件重试（意图入队代次未变，重试判定不变）；本轮不执行也不收口。
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -644,7 +644,7 @@ export class DispatchWorker {
           `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
            VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', ?)`,
         ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, coordination&&coordination.kind!=='child'?'AUTO':'DIRECT', conversationRequest?task.revision:0, JSON.stringify(budget));
-        if(coordination?.kind==='planning'||coordination?.kind==='integration')beginCoordination(this.db,task.id,runId,coordination.kind);
+        if(coordination?.kind==='planning'||coordination?.kind==='integration')beginCoordination(this.db,task.id,runId,coordination.kind,coordination.run?.run_id);
         this.db.prepare(
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
