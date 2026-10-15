@@ -6,6 +6,12 @@
 
 **最高优先新阻断（23:02，需新冻结，不放行 rc10）**：restored 实际v2运行时，AUTO父规划已消费redispatch outbox，父run WAITING、子任务执行，但成果详情回退“返工意见已记录、尚未执行”并重复显示执行按钮。原生 `native-rework-running-mislabel.json/png` 和独立 `rc10-rework-running-original-failure.json` 保留；正式命令仍安全拒绝重复，无自动重发。根因 reworkPendingOf 仅数未done outbox。最小修复只读派生 queued=pendingIntent OR 同task非source真实活跃run，排除历史/别任务；不动执行、幂等、权限、预算、保护。正式worker永久反例 before确实queued false失败，修后33项（coordinationR86＋reworkExecutionContract）过，含只记录false、outboxdone但父WAITING true、真子任务后true、重复执行拒、自然v2后null、再次记录且别任务活跃仍false。双types在跑。
 
+**最新冻结 a2bc37606baa745357b47cf07cb5db012d857e3c / rc11 / bld_cf50e93cc0db5723（23:09）**：593 clean一致；正式33项和双types已过，source-quality-a2bc376.json PASS（59文件/33既有无新增）。全套full-a2bc376.log已163文件/1164项全过（包含额外QA gate断言；full-a2bc376-context.json记录应用src无变化与QA文件hash），生成Word目录已正确完整复制到ignored证据再restore。新rc11根 review-r86-final-rc11-real-20261015 / port52844 已prepare 0calls，尚未真实send；真实模型等待rc10阶段三链全部自然结束后再发，不抢资源。rc11-upgrade和rc11-full（52845）均完整pass/0真实调用，full保持单独前台未再出现隐藏截图。
+
+独立旧投影16case before有四个新run活跃状态错false、修后16/16过（rework-a2bc376），前一次late动态观察 bugReproduced:false不能当独立复现。新增QA verify-r86-rework-window.cjs 只读等待父WAITING、原intent done、子步未完、正式task.get queued=true＋实际交付面板“返工执行中”/无重复按钮；6项总门正负例过，脚本与总门改动还未commit，属于QA-only不换BUILD。新最终门必须这张窗口票。
+
+rc10 restored代码v2已8familycalls自然完成，native-proof-code-v2.json4sessions过，尚未人工accepted，因rc10不是最终不冒充验收完成；doc5calls已自然交付并watch pass，DELIB约12calls进入末尾。所有旧原件保留。Vite53985 session57883存活。最终仍需rc11同BUILD真实代码v1/返工v2/验收/重开、文档原生预览+SaveAs、DELIB、普通问答、原生导航和6组视觉、ledger/总门/记录提交推送。不要停在此阶段。
+
 当前rc10三条真实链继续自然完成作为阶段证据，不中断、不自动重试。code v2 observer37109、DELIB29962、doc14199，均写restored根。full-v3已全部pass/0调用/同rc10 BUILD（含R79三周期、真实BAT重开、R85 daily），旧两false留存。新runtime冻结后需要最终包复证，不将rc10阶段计作新BUILD成功。Vite参照已重新启动53985（session57883），可用时再做六组视觉。后续源改动仅dm.ts及永久回归，其余QA/记录提交分列。
 
 **2026-10-15 额度恢复后的当前断点（覆盖下方旧施工快照）**：源码已冻结并推送 `ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916`，rc10 BUILD `bld_07ef3cd9b4b08add`，593 文件清单独立核验通过。全套 163 文件 / 1161 测试全过；双 types、57 文件增量 lint 过（33 条已匹配既有问题）。首次 rc10 独立根 `review-r86-final-rc10-real-20261015` 的规划可读窗口真实 pass，但 Codex 评审明确报额度耗尽，整条原 false 保留；不自动重放。用户已说额度恢复，现新建 `review-r86-final-rc10-restored-20261015`，端口 52834，原生 UI 发出同一自然合成任务；任务 `task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe`，线程 `thread_e48f08d0-e7ea-4348-83f2-afee7e6e9a28`，observer 等待中。当前窗口保持 replies，须先记录子任务尚未完成时的自然规划窗口，再继续代码 v2、文档、DELIB、普通问答、关闭重开、导航与视觉。所有最终门仍待收齐，不能用 rc9 阶段成功替代。
