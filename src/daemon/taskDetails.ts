@@ -94,13 +94,18 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       .all(r.id, projectId) as Array<{ member_id: string; display_name: string; role: string; expected: number; status: string }>).map((p) => ({
       memberId: p.member_id, displayName: p.display_name, role: p.role, expected: p.expected === 1, status: p.status,
     }));
-    const turnRows = bounded<{ id: string; member_id: string; display_name: string; status: string; stage_key: string; turn_purpose: string; attempt: number }>(
-      `SELECT a.id, a.member_id, pm.display_name, a.status, a.stage_key, a.turn_purpose, a.attempt
-       FROM agent_turns a JOIN project_members pm ON pm.id = a.member_id WHERE a.run_id = ? AND a.conversation_id = ? AND pm.project_id = ? ORDER BY a.rowid DESC`, [r.id, conversationId, projectId], 80);
+    const turnRows = bounded<{ id: string; member_id: string; display_name: string; status: string; stage_key: string; turn_purpose: string; attempt: number;capabilities_json:string|null;input_policy:string|null }>(
+      `SELECT a.id, a.member_id, pm.display_name, a.status, a.stage_key, a.turn_purpose, a.attempt,s.capabilities_json,
+        (SELECT json_extract(b.included_refs_json,'$.permission.policyId') FROM context_bundles b WHERE b.turn_id=a.id ORDER BY b.rowid DESC LIMIT 1) input_policy
+       FROM agent_turns a JOIN project_members pm ON pm.id = a.member_id LEFT JOIN runtime_sessions s ON s.id=a.session_id AND s.member_id=a.member_id
+        AND s.project_id=? AND s.conversation_id=a.conversation_id AND (s.task_id=? OR s.scope_kind='dm' AND s.task_id IS NULL)
+       WHERE a.run_id = ? AND a.conversation_id = ? AND pm.project_id = ? ORDER BY a.rowid DESC`, [projectId,taskId,r.id, conversationId, projectId], 80);
     const turns = turnRows.items.map((t) => {
       const usageRows = bounded<{ normalized_json: string; cost_quality: string }>(
         'SELECT normalized_json, cost_quality FROM usage_records WHERE turn_id = ? ORDER BY rowid DESC', [t.id], 50);
+      const snapshot=parse(t.capabilities_json) as {runtime?:{kind?:string;model?:string;effort?:string};effectivePolicy?:string}|null;
       return { id: t.id, memberId: t.member_id, displayName: t.display_name, status: t.status, stageKey: t.stage_key,
+        ...(snapshot?.runtime?{runtime:{kind:snapshot.runtime.kind??null,model:snapshot.runtime.model??null,effort:snapshot.runtime.effort??null,policy:snapshot.effectivePolicy??t.input_policy}}:{}),
         purpose: t.turn_purpose, attempt: t.attempt, usage: usageRows.items.map((u) => ({ normalized: parse(u.normalized_json), quality: u.cost_quality })), usageTruncated: usageRows.truncated };
     });
     const runEvents = bounded<EventRow>(

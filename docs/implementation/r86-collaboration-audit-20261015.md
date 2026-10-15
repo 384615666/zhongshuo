@@ -72,3 +72,7 @@ AUTO 新任务采用专用默认24格，规划、所有子步骤和整合/修复
 现在openSession回执及最终startTurn前复查精确run/任务/停止代次/同轮UNKNOWN；确认未启动且会话正常关闭的peer只取消自己、退自己的预算及准入，原UNKNOWN及保护保留，关闭未确认仍按未知。当前研讨任务首轮由OPEN进入ACTIVE。停止收敛绑定当前run，只有全部已知执行收口且无未解除UNKNOWN才取消，不改旧成功run/旧交付；排队且无在途的停止在正式命令内直接收敛，不依赖重开派发门。活跃研讨泵加入有界轮转，已收口记录不占窗口。
 
 新增两项永久正式夹具：生产形态single-flight drain+detached消费的交叉openSession/UNKNOWN（1调用保持1，原UNKNOWN保留，peer退款，run仍INTERRUPTED/taskBLOCKED）；v1→正式返工→run2仅prepare时停止（无新增调用，run1/交付保持，run2CANCELLED）。协作集成现23项通过，旧研讨E4/identity/pause等必要5文件46项通过；后续新冻结点独立复跑及最终包仍待完成。
+
+审阅方已在 c845c31 独立复跑peer-v4严判据与second-run停止通过，七项独立反例均关闭。该clean源码全量160文件1130项通过，v25-rc2 / BUILD bld_ef631aafcdb3e9f7 / 593清单一致，仍是未启动模型的工程候选。
+
+为真实验收继续补记录身份：研讨session绑定确切turn与runtime/effort/有效只读策略快照，运行详情显示保存的请求值，不拿当前成员配置冒充历史实际参数。QA脚本的模型判据限定到本条父子家族、原交付/规划轮次及确切provider session；独立native证明只读自己会话日志并保存hash/工具结果摘要，不提交原始profile/凭据。合成工程另建独立Git根，避免CLI把上层产品仓库当作本任务项目。真实调用仍0，后续v2/验收/重开/第二类型及最终总门不能以v1-only观察代替。

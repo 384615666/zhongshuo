@@ -5,7 +5,7 @@
  * --observe waits for the native UI original send and records the actual collaboration.
  * No automatic replay/retry. Original failures and UNKNOWN remain intact. */
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net');
-const {spawn}=require('node:child_process'),{randomUUID,createHash}=require('node:crypto');
+const {spawn,spawnSync}=require('node:child_process'),{randomUUID,createHash}=require('node:crypto');
 const Database=require('better-sqlite3'),{Cdp,until}=require('./verify-r81-members-launcher.cjs');
 const candidate=path.resolve(process.argv[2]??''),out=path.resolve(process.argv[3]??'');
 const mode=process.argv.includes('--prepare')?'prepare':process.argv.includes('--observe')?'observe':'inspect';
@@ -27,7 +27,8 @@ function manifest(root){const base=path.join(root,'ZhongshuoDual'),raw=JSON.pars
   for(const row of rows){const bytes=fs.readFileSync(path.join(base,row.path));must(bytes.length===row.bytes&&hash(bytes)===row.sha256,'program manifest '+row.path);}return rows.length;}
 function start(){const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('ZS_')||key==='ELECTRON_RUN_AS_NODE')delete env[key];env.ZS_DEV25_DEBUG_PORT=String(progress.port);
   const log=fs.openSync(path.join(out,'launcher.log'),'a');spawn('cmd',['/c','start-desktop.bat'],{cwd:progress.copy,env,windowsHide:true,stdio:['ignore',log,log]}).unref();fs.closeSync(log);}
-function calls(){return db.prepare('SELECT id,runtime_kind,model,response_model,status,task_id,turn_id FROM real_calls ORDER BY id').all();}
+function calls(taskId){return taskId?db.prepare(`SELECT id,runtime_kind,model,response_model,status,task_id,turn_id FROM real_calls
+  WHERE task_id=? OR task_id IN(SELECT id FROM tasks WHERE parent_task_id=?) ORDER BY id`).all(taskId,taskId):db.prepare('SELECT id,runtime_kind,model,response_model,status,task_id,turn_id FROM real_calls ORDER BY id').all();}
 function save(){if(result)fs.writeFileSync(observationFile,JSON.stringify(result,null,2));}
 function facts(taskId){return{
   task:db.prepare('SELECT id,status,current_delivery_id,revision,stop_generation FROM tasks WHERE id=?').get(taskId),
@@ -45,7 +46,10 @@ async function prepare(){
   await new Promise((resolve,reject)=>{const server=net.createServer();server.once('error',reject);server.listen(port,'127.0.0.1',()=>server.close(resolve));});
   fs.mkdirSync(out,{recursive:true});const copy=path.join(out,'copy');fs.cpSync(candidate,copy,{recursive:true});
   progress={scope:'R86 isolated real multi-model preparation, not delivery',build,candidate,copy,dataRoot:path.join(copy,'server-data'),project:path.join(out,'R86 合成协作工程'),port,programFiles:manifest(candidate),copyProgramFiles:manifest(copy),steps:[],modelCalls:0};
-  fs.mkdirSync(progress.project);fs.writeFileSync(progressFile,JSON.stringify(progress,null,2));start();await connect();
+  fs.mkdirSync(progress.project);
+  const init=spawnSync('git',['-C',progress.project,'init','-q','-b','main'],{encoding:'utf8',windowsHide:true,timeout:10000});must(init.status===0,'independent synthetic Git root');
+  const config=spawnSync('git',['-C',progress.project,'config','core.autocrlf','false'],{encoding:'utf8',windowsHide:true,timeout:10000});must(config.status===0,'local synthetic Git byte policy');
+  fs.writeFileSync(progressFile,JSON.stringify(progress,null,2));start();await connect();
   const project=(await command('project.open',{path:progress.project,displayName:'R86 合成协作工程'})).project;
   await command('project.reviewPolicy.set',{projectId:project.id,expectedRevision:project.revision,taskReviewEnabled:true});
   const claude=(await command('member.create',{projectId:project.id,displayName:'协调实现 GLM',description:'负责规划与实现，必要时整合评审反馈'})).memberId;
@@ -56,8 +60,10 @@ async function prepare(){
   const list=await command('member.list',{projectId:project.id,roomId:room.id});for(const member of list.items){if(![claude,codex].includes(member.id))await command('room.members.set',{roomId:room.id,memberId:member.id,action:'remove'});}
   progress.ids={projectId:project.id,claude,codex,roomId:room.id,conversationId:room.conversationId};
   progress.prompt='请协调两位成员合作完成一个小功能：创建 greeting.mjs，导出 greet(name)，返回“你好，名字”；创建对应的 Node 测试并实际运行。先实现，再让另一位使用不同模型的成员独立读取实际文件并评审、运行测试，最后汇总真实结果交给我验收。只在当前合成工程目录工作，说明简短自然即可。';
+  await c.send('Page.reload');await until(()=>c.eval('document.body?.classList.contains("hifi-on")'),Boolean,'fresh formal registry');
   await c.eval(`location.hash=${q(`/project/${project.id}/room/${room.id}`)};document.title=${q('R86 合成协作验收 '+port)};true`);
   await until(()=>c.eval('document.querySelector("textarea.composer-input")!=null'),Boolean,'normal room composer');
+  await until(()=>c.eval('document.querySelector("[data-zs-m0-hint=AUTO]")!=null'),Boolean,'actual default AUTO UI without automatic mentions');
   db=new Database(path.join(progress.dataRoot,'state.sqlite'),{readonly:true});must(calls().length===0,'configuration/opening must make zero inference calls');
   progress.prepared=true;progress.steps.push('real BAT / exact root / formal project, members, configuration and coordinator / zero inference');fs.writeFileSync(progressFile,JSON.stringify(progress,null,2));await screenshot('prepared');
 }
@@ -65,11 +71,12 @@ async function observe(){
   must(!fs.existsSync(observationFile),'original observation retained; inspect instead of automatic rerun');
   progress=JSON.parse(fs.readFileSync(progressFile,'utf8'));await connect();db=new Database(path.join(progress.dataRoot,'state.sqlite'),{readonly:true});
   result={pass:false,scope:'one original native UI real AUTO send, v1 only; no automatic rework/retry',build:progress.build,startedAt:Date.now(),calls:[]};save();
-  const root=await until(()=>db.prepare('SELECT id,conversation_thread_id,title FROM tasks WHERE project_id=? AND parent_task_id IS NULL ORDER BY rowid LIMIT 1').get(progress.ids.projectId),Boolean,'native original send',900000);result.root=root;save();let last=0;
-  const delivery=await until(()=>{const current=facts(root.id);if(Date.now()-last>5000){result.live=current;result.calls=calls();save();last=Date.now();}
+  const root=await until(()=>db.prepare('SELECT id,conversation_thread_id,title,root_message_id,route_json FROM tasks WHERE project_id=? AND parent_task_id IS NULL ORDER BY rowid LIMIT 1').get(progress.ids.projectId),Boolean,'native original send',900000);result.root=root;must(JSON.parse(root.route_json).mode==='AUTO','original UI intent must be actual AUTO');
+  const original=db.prepare('SELECT body_json FROM messages WHERE id=?').get(root.root_message_id);must(JSON.parse(original.body_json).text===progress.prompt,'exact original natural UI intent');save();let last=0;
+  const delivery=await until(()=>{const current=facts(root.id);if(Date.now()-last>5000){result.live=current;result.calls=calls(root.id);save();last=Date.now();}
     if(current.turns.some(t=>['UNKNOWN','FAILED','CANCELLED'].includes(t.status))||current.task.status==='BLOCKED'){result.failure=current;save();throw Error('original collaboration failed/unknown; not automatically repeated');}
     return current.deliveries.find(d=>d.task_id===root.id&&d.revision===1);},Boolean,'real multi-model parent v1',2700000);
-  result.final=facts(root.id);result.calls=calls();result.delivery=delivery;
+  result.final=facts(root.id);result.calls=calls(root.id);result.delivery=delivery;result.otherTaskCalls=calls().filter(call=>!result.calls.some(own=>own.id===call.id)).length;
   const models=new Set(result.calls.filter(x=>x.status==='succeeded').map(x=>`${x.runtime_kind}/${x.model}`));
   must(models.has('claude/glm-5.3-flash')&&models.has('codex/gpt-6.1-sol'),'two distinct configured actual model calls in one task family');
   must(result.calls.every(call=>call.status==='succeeded'),'all actual calls must succeed');must(result.final.steps.length>=2&&result.final.steps.every(step=>step.status==='DONE'),'all genuine child steps done');

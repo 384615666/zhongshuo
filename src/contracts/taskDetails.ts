@@ -37,7 +37,7 @@ export interface TaskDetailRun {
   id: string; mode: string; status: string; stage: string | null; roundNo: number | null;
   revision: number; budget: unknown | null;
   participants: Array<{ memberId: string; displayName: string; role: string; expected: boolean; status: string }>;
-  turns: Array<{ id: string; memberId: string; displayName: string; status: string; stageKey: string; purpose: string; attempt: number; usage: Array<{ normalized: unknown; quality: string }>; usageTruncated: boolean }>;
+  turns: Array<{ id: string; memberId: string; displayName: string; status: string; stageKey: string; purpose: string; attempt: number; runtime?:{kind:string|null;model:string|null;effort:string|null;policy:string|null};usage: Array<{ normalized: unknown; quality: string }>; usageTruncated: boolean }>;
   turnsTruncated: boolean;
   events: TaskDetailEvent[]; eventsTruncated: boolean;
   /** False means only a run summary was read, never an authoritative empty detail. */

@@ -1437,9 +1437,11 @@ export class DispatchWorker {
       openedSession = { adapter, session };
       startupPhase = 'session-record';
       this.db.prepare(
-        `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd)
-         VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?)`,
-      ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path);
+        `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd,capabilities_json)
+         VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?,?)`,
+      ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path,
+        JSON.stringify({runtime:resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()),writeIdentity:readAccess.identityKey,effectivePolicy:'policy-analyze',fullAccess:false,effortVerification:'requested-not-provider-certified'}));
+      this.db.prepare('UPDATE agent_turns SET session_id=? WHERE id=? AND run_id=?').run(session.id,turnId,run.id);
 
       if (this.stoppingOrTerminal(task.id, turnId) || this.shutdownStarted) {
         const closeOutcome = await this.closeSessionBounded(adapter, session);

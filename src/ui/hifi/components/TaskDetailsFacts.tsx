@@ -236,6 +236,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
         <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <>{budgetText(r.budget)}<details className="small faint"><summary>预算原始详情</summary><pre>{JSON.stringify(r.budget,null,2)}</pre></details></>}</dd>
         <dt>执行轮次</dt><dd>{r.turns.length === 0 ? '尚无轮次' : r.turns.map((t) => <div key={t.id}>
           {t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试
+          {t.runtime?<div className="small faint">本轮请求：{t.runtime.kind??'渠道未提供'} / {t.runtime.model??'模型未提供'} · 思考 {t.runtime.effort??'未指定'} · {t.runtime.policy==='policy-analyze'?'只读角色':t.runtime.policy==='policy-full-access'?'CLI 完整权限':t.runtime.policy==='policy-project-write'?'项目内编辑':'权限快照未提供'}</div>:<div className="small faint">本轮模型配置快照未提供。</div>}
           {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => <div key={k} className="small">{usageText(u.normalized, u.quality)}</div>)}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
           <details className="small faint"><summary>轮次身份与原始状态</summary>{t.id} · {t.status} · {t.stageKey} · {t.purpose}</details>
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>

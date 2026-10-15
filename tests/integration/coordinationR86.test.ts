@@ -166,6 +166,8 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.adapter.startTurnLog[calls]!.text).toContain('请补充实施约束');
       for(const call of sessions.mock.calls)expect(call[0].writeAccess?.modificationAuthorized).toBe(false);
       for(const call of turns.mock.calls)expect(call[1].outputSchema).toBeTruthy();
+      const recorded=f.db.prepare('SELECT s.capabilities_json FROM runtime_sessions s JOIN agent_turns a ON a.session_id=s.id').all() as {capabilities_json:string}[];
+      expect(recorded).toHaveLength(f.adapter.startTurnLog.length);for(const row of recorded)expect(JSON.parse(row.capabilities_json)).toMatchObject({effectivePolicy:'policy-analyze',fullAccess:false,runtime:{kind:'fake'}});
       await f.cmd('task.review',{taskId:root.taskId,deliveryId:second.id,deliveryRevision:2,manifestHash:second.manifest_hash,decision:'accept'});
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
     }finally{f.db.close();}
