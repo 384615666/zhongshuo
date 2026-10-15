@@ -4,7 +4,7 @@ import { resolve, relative, isAbsolute } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
-import { coordinationCallAvailable, validateCoordinationPlan, type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
+import { coordinationCallAvailable, validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
 import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
 
 type ScopeMember = { memberId: string; displayName: string; description: string | null; writeScope: string | null; unavailableReason?: string };
@@ -134,7 +134,8 @@ function managedHandoffFiles(db:ZhongshuoDatabase,runId:string,keys?:Set<string>
   const plan=JSON.parse(run.plan_json) as CoordinationPlan;
   const steps=db.prepare('SELECT step_key,handoff_json FROM coordination_steps WHERE run_id=? ORDER BY rowid LIMIT 8').all(runId) as {step_key:string;handoff_json:string|null}[];
   const latest=new Map<string,{file:FrozenFile;producer:string}>();
-  for(const step of steps){
+  for(const ordered of coordinationTopologicalSteps(plan)){
+    const step=steps.find(s=>s.step_key===ordered.key);if(!step)throw Error('分工步骤身份缺失');
     if(keys&&!keys.has(step.step_key))continue;
     const data=JSON.parse(step.handoff_json??'{}') as {output?:{files:FrozenFile[]}};
     const dependencies=dependencyKeys(plan,step.step_key);
@@ -170,7 +171,7 @@ export function acceptCoordinationPlan(db: ZhongshuoDatabase, taskId: string, ru
   if(parent.stop_generation!==existing.stop_generation || parent.status==='CANCELLED') throw Error('规划期间用户已停止');
   const roster=coordinationRoster(db,taskId);
   const plan=validatePlanForRun(db,taskId,runId,value);
-  for(const step of plan.steps) {
+  for(const step of coordinationTopologicalSteps(plan)) {
     const member=roster.find(m=>m.memberId===step.memberId)!;
     const current=db.prepare('SELECT project_id,enabled FROM project_members WHERE id=?').get(step.memberId) as {project_id:string;enabled:number}|undefined;
     if(current?.project_id!==parent.project_id || current.enabled!==1) throw Error('计划成员已停用或不属于项目');

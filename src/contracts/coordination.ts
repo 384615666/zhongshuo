@@ -15,6 +15,17 @@ export const coordinationPlanSchema = z.strictObject({
 });
 export type CoordinationPlan = z.infer<typeof coordinationPlanSchema>;
 
+/** Stable dependency order, independent of the model's array presentation order. */
+export function coordinationTopologicalSteps(plan:CoordinationPlan):CoordinationPlan['steps'] {
+  const ordered:CoordinationPlan['steps']=[],visited=new Set<string>(),visiting=new Set<string>();
+  const visit=(key:string):void=>{
+    if(visiting.has(key))throw Error('分工依赖存在循环');if(visited.has(key))return;
+    const step=plan.steps.find(s=>s.key===key);if(!step)throw Error('分工依赖不存在');
+    visiting.add(key);for(const dependency of step.dependsOn)visit(dependency);visiting.delete(key);visited.add(key);ordered.push(step);
+  };
+  for(const step of plan.steps)visit(step.key);return ordered;
+}
+
 export function validateCoordinationPlan(value: unknown, eligibleMemberIds: readonly string[]): CoordinationPlan {
   const plan = coordinationPlanSchema.parse(value);
   const allowed = new Set(eligibleMemberIds);

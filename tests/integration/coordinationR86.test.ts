@@ -140,9 +140,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
     }finally{f.db.close();}
   });
-  it('accepts legitimate dependent implementation revisions while keeping both frozen versions',async()=>{
+  it.each([false,true])('accepts dependent implementation versions with a forward-reference array=%s',async reverse=>{
     const f=await fixture();try{
       const root=await f.send();const plan={...f.plan,steps:f.plan.steps.map((s,i)=>({...s,role:'implementation',objective:i?'读取上游并完善文件':'创建文件'}))};
+      if(reverse)plan.steps.reverse();
       await f.run(output('计划',plan));
       await f.run([{kind:'writeFile',path:'result.txt',content:'managed-v1'},...output('第一版')]);
       await f.run([{kind:'writeFile',path:'result.txt',content:'managed-v2'},...output('完善第二版')]);
@@ -168,6 +169,17 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(f.db.prepare('SELECT count(*) n FROM coordination_integration_attempts WHERE coordination_run_id=?').get(original.run_id)).toEqual({n:2});
       const delivery=f.db.prepare('SELECT artifact_refs_json FROM task_deliveries WHERE task_id=?').get(root.taskId) as {artifact_refs_json:string};
       expect(JSON.parse(delivery.artifact_refs_json)).toHaveLength(3);
+    }finally{f.db.close();}
+  });
+  it('still refuses two independent implementations overwriting the same file without a dependency',async()=>{
+    const f=await fixture();try{
+      const root=await f.send();const steps=f.plan.steps.map(s=>({...s,role:'implementation',dependsOn:[]}));
+      await f.run(output('计划',{...f.plan,steps}));
+      await f.run([{kind:'writeFile',path:'result.txt',content:'first'},...output('首次实施')]);
+      await f.run([{kind:'writeFile',path:'result.txt',content:'second'},...output('无依赖覆盖')]);
+      await f.worker.runOnce();expect(f.adapter.startTurnLog).toHaveLength(3);
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
     }finally{f.db.close();}
   });
   it('rejects recreation of an absent file before review (isolated fake deletion injection)',async()=>{
