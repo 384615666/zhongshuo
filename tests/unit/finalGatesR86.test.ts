@@ -1,0 +1,3 @@
+import {createRequire} from 'node:module';import {it,expect} from 'vitest';
+const {evaluateR86Final}=createRequire(import.meta.url)('../../scripts/lib/r86-final-gates.cjs');
+it('R86 release cannot pass with missing business evidence or partial source success',()=>{for(const input of [{},{build:{dirty:false},source:{pass:true,tests:1142,mainTypes:true,hifiTypes:true,lint:true}},{codeV1:{pass:true,calls:[{status:'succeeded',runtime_kind:'codex',model:'same'},{status:'succeeded',runtime_kind:'codex',model:'same'}]},expectedModels:['codex/same','codex/same']}]){const r=evaluateR86Final(input);expect(r.pass).toBe(false);expect(r.failed.length).toBeGreaterThan(0);expect(r.userAcceptance).toBe('pending');}});

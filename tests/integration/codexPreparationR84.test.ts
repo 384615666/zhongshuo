@@ -24,6 +24,45 @@ async function fixture(){
   return{db,project,projectId,memberId,config,prepare,raw,cmd,params,open,start};
 }
 describe('R84 Codex new-intent configuration preparation, isolated adapter fixture, zero processes/models',()=>{
+  it('AUTO prepares the complete eligible Codex roster before freezing any parent or child scope',async()=>{
+    const f=await fixture();try{
+      const second=(await f.cmd('member.create',{projectId:f.projectId,displayName:'独立成员'})).memberId as string;
+      await f.cmd('member.setRuntime',{memberId:second,kind:'codex',model:'gpt-6-sol',permissionMode:'bypassPermissions'});
+      const roomId=f.params.target.roomId,revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number}).revision;
+      await f.cmd('room.update',{roomId,expectedRevision:revision,coordinatorMemberId:f.memberId});
+      f.open.mockImplementation(async input=>{writeFileSync(join(f.config,'config.toml'),'model_provider="own"\n[projects.synthetic]\ntrust_level="trusted"\n');return{id:'own-'+input.memberId,providerSessionId:'metadata',runtimeInstallationId:'own',adapterVersion:'fixture',threadId:input.threadId,sessionGeneration:0,cwd:input.cwd};});
+      const id=randomUUID(),r=await f.raw('message.submit',{...f.params,mentions:[]},id,true);expect(r.ok,JSON.stringify(r)).toBe(true);
+      expect(f.open.mock.calls.map(call=>call[0].memberId).sort()).toEqual([f.memberId,second].sort());expect(f.start).not.toHaveBeenCalled();
+      const taskId=r.data.taskId as string,roster=JSON.parse((f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(taskId) as {roster_json:string}).roster_json) as Array<{memberId:string;writeScope:string|null}>;
+      for(const memberId of [f.memberId,second])expect(effectiveTaskWriteAccess(f.db,taskId,memberId,null,roster.find(m=>m.memberId===memberId)!.writeScope!).fullAccess).toBe(true);
+      await f.raw('message.submit',{...f.params,mentions:[]},id,true);expect(f.open).toHaveBeenCalledTimes(2);
+      const before=f.open.mock.calls.length;expect((await f.raw('message.submit',{...f.params,mentions:[],intent:'record_only'},randomUUID(),true)).ok).toBe(true);expect(f.open).toHaveBeenCalledTimes(before);
+      writeFileSync(join(f.config,'config.toml'),'model_provider="changed"\n');expect(()=>effectiveTaskWriteAccess(f.db,taskId,f.memberId,null)).toThrow('有效执行配置已变化');
+    }finally{f.db.close();}
+  });
+  it('AUTO refuses a roster change during metadata preparation before saving input or calling a model',async()=>{
+    const f=await fixture();try{
+      const roomId=f.params.target.roomId,revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number}).revision;
+      await f.cmd('room.update',{roomId,expectedRevision:revision,coordinatorMemberId:f.memberId});
+      const original=f.open.getMockImplementation()!;
+      f.open.mockImplementation(async input=>{await f.cmd('member.create',{projectId:f.projectId,displayName:'途中新增'});return original(input);});
+      expect(await f.raw('message.submit',{...f.params,mentions:[]},randomUUID(),true)).toMatchObject({ok:false,error:{code:'CONFIGURATION_NOT_READY'}});
+      expect(f.db.prepare('SELECT count(*) n FROM messages').get()).toEqual({n:0});expect(f.db.prepare('SELECT count(*) n FROM tasks').get()).toEqual({n:0});expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
+  it('selected deliberation prepares only selected eligible room members, not another configured member',async()=>{
+    const f=await fixture();try{
+      const ids=[f.memberId];for(const name of ['选中','不选中']){const id=(await f.cmd('member.create',{projectId:f.projectId,displayName:name})).memberId as string;await f.cmd('member.setRuntime',{memberId:id,kind:'codex',model:'gpt-6-sol',permissionMode:'bypassPermissions'});ids.push(id);}
+      const r=await f.raw('message.submit',{...f.params,mentions:ids.slice(0,2).map(memberId=>({kind:'member',memberId}))},randomUUID(),true);
+      expect(r.ok,JSON.stringify(r)).toBe(true);expect(f.open.mock.calls.map(call=>call[0].memberId).sort()).toEqual(ids.slice(0,2).sort());expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
+  it('archiving the original room while preparing rejects input without retargeting or model calls',async()=>{
+    const f=await fixture();try{
+      const original=f.open.getMockImplementation()!;f.open.mockImplementation(async input=>{const roomId=f.params.target.roomId,revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number}).revision;await f.cmd('room.archive',{roomId,expectedRevision:revision,action:'archive'});return original(input);});
+      expect(await f.raw('message.submit',f.params,randomUUID(),true)).toMatchObject({ok:false,error:{code:'CONVERSATION_UNAVAILABLE'}});expect(f.db.prepare('SELECT count(*) n FROM messages').get()).toEqual({n:0});expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
   it('trust initialization precedes new durable scope; old queued snapshot remains unchanged and invalid',async()=>{
     const f=await fixture();try{
       const old=(await f.raw('message.submit',f.params)).data.taskId as string;const scope=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(old);

@@ -19,6 +19,14 @@ function event(db: ZhongshuoDatabase, task: Parent, runId: string, kind: string,
     runId, kind, payload, createdAt: Date.now() });
 }
 
+/** Shared bounded room roster for pre-submit CLI initialization and durable scope. */
+export function coordinationRoomMembers(db:ZhongshuoDatabase,roomId:string,projectId:string,selectedIds?:readonly string[]) {
+  return db.prepare(`SELECT pm.id,pm.display_name,pm.description FROM room_members rm
+    JOIN project_members pm ON pm.id=rm.member_id WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent'
+    AND (? IS NULL OR pm.id IN(SELECT value FROM json_each(?))) ORDER BY pm.id LIMIT 13`)
+    .all(roomId,projectId,selectedIds?JSON.stringify(selectedIds):null,selectedIds?JSON.stringify(selectedIds):null) as {id:string;display_name:string;description:string|null}[];
+}
+
 /** Called in the original send transaction; never lets the model grant itself new members. */
 export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | null) {
   if (!taskId) return;
@@ -27,10 +35,7 @@ export function freezeCoordinationScope(db: ZhongshuoDatabase, taskId: string | 
   if(task.source_connection_id!=null)throw Error('本版协作仅开放本机已授权发送；外部来源协作尚未接入授权预算');
   if (db.prepare('SELECT 1 FROM coordination_scopes WHERE task_id=?').get(taskId)) return;
   const route=JSON.parse(task.route_json) as {mode:string;frozenMemberIds:string[]};
-  const members = db.prepare(`SELECT pm.id,pm.display_name,pm.description FROM room_members rm
-    JOIN project_members pm ON pm.id=rm.member_id WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent'
-    AND (?='AUTO' OR pm.id IN (SELECT value FROM json_each(?))) ORDER BY pm.id LIMIT 13`)
-    .all(task.room_id,task.project_id,route.mode,JSON.stringify(route.frozenMemberIds)) as {id:string;display_name:string;description:string|null}[];
+  const members=coordinationRoomMembers(db,task.room_id,task.project_id,route.mode==='AUTO'?undefined:route.frozenMemberIds);
   if (members.length > 12) throw Error('自动协作最多选择 12 位房间成员；请先调整房间名单');
   if(!members.some(m=>m.id===task.owner_member_id))throw Error('协调者必须是本房间启用的 AI 成员');
   const roster: ScopeMember[] = members.map(m => {

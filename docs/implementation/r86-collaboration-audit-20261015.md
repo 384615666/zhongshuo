@@ -100,3 +100,11 @@ AUTO 新任务采用专用默认24格，规划、所有子步骤和整合/修复
 `review-r86-v25-upgrade-v2-20261015/upgrade.json`：最终程序候选rc5真实BAT将完整自有schema51根副本升52，原未知commandId/同参、草稿、附件原件/实际decode、成员配置/凭据hash和root身份保留；0调用/无自动发送。匹配旧程序+整根备份正常回退，旧随包daemon实启拒绝新52且数据库hash未变。首版QA漏ZS_PACKED_ENTRY造成未执行daemon的false保留于upgrade第一目录，不冒充产品回退失败。
 
 e84be3e全套首次162文件中160通过、3测试失败：Word子进程超时及Git2项5秒超时；原full-r86-latest.log保留false。对应原测试未改，分开重跑Word5项和Git10项全部通过，仍不代记首次成功；下一冻结全套单worker降低并发竞争复核。没有延长产品超时或放宽断言。
+
+## 纠正配置归因：AUTO漏接已有正式零推理准备链
+
+第二新根再次规划真实成功，第一次实施full thread/start又于全局config新增该工程trust条目时被旧身份守卫拒绝。与R84正式prepareCodexConfiguration已有注释/行为一致：DIRECT/DM/跟进已在新意图前准备，AUTO零mention漏接。此前“外部配置变化”并未证明；mtime单独不足为内容根因，现按重复原生反例与已有实现纠正。未改用户模型/渠道/凭据；原生CLI初始化写入的只是本次选定工程根trust元数据，不应笼统宣称全局config完全未动。
+
+修复复用有界正式房间候选读取，AUTO全启用AI、DELIB仅选中子集，顺序零推理prepare后才冻结任何业务快照。准备后再核原项目/房间/会话权限与归属、协调身份、名单和运行配置；变化时不存业务输入，旧receipt与record-only不初始化。普通切页不取消已授权原目标；不按activeProject重定向。保持原快照与派发前守卫。新增AUTO trust/同号回执/record-only/后续provider失效、名单在途变化、选中研讨子集、房间归档等负例；与正式worker/证据门46项通过。
+
+单worker源码检查期间继续修复，日志`full-r86-serialized.log`包含当时施工SQL反例，不作为冻结总门；该SQL已改为真实conversations.room_id关联，定向重过。下一冻结点再做完整检查。R86尚未最终交付，双模型自然交付仍未通过。

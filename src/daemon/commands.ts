@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
-import { freezeCoordinationScope } from './coordination.ts';
+import { coordinationRoomMembers, freezeCoordinationScope } from './coordination.ts';
 import { conversationFacts, conversationBlock, enqueueConversationReply } from './conversationReplies.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -1404,20 +1404,45 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const conv = deps.db.prepare('SELECT id, project_id, kind, archived_at FROM conversations WHERE id = ?').get(t.conversationId) as { id: string; project_id: string; kind: string; archived_at: number | null } | undefined;
           if (conv == null || conv.project_id !== t.projectId) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '目标会话不存在或不属于该项目（重放拒绝）');
           assertConversationAudience(deps.db, deps.localUserId, t.conversationId);
+          if(params.target.kind==='room_root'){
+            const room=deps.db.prepare('SELECT r.project_id,c.id conversation_id,r.archived_at,p.status FROM rooms r JOIN projects p ON p.id=r.project_id JOIN conversations c ON c.room_id=r.id AND c.project_id=r.project_id WHERE r.id=?').get(params.target.roomId) as {project_id:string;conversation_id:string;archived_at:number|null;status:string}|undefined;
+            if(!room||room.project_id!==params.target.projectId||room.conversation_id!==params.target.conversationId)throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH','房间、项目和会话不匹配；未提交');
+            if(room.status!=='active'||room.archived_at!=null||conv.archived_at!=null)throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目或房间已归档；未提交，输入保留');
+          }
           if(t.kind==='thread'){const th=deps.db.prepare('SELECT th.status,r.archived_at,p.status projectStatus FROM conversation_threads th JOIN rooms r ON r.id=th.room_id JOIN projects p ON p.id=th.project_id WHERE th.id=?').get(t.threadId) as {status:string;archived_at:number|null;projectStatus:string}|undefined;if(!th||th.status!=='open'||th.archived_at!=null||th.projectStatus!=='active')throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目、房间或回复串已归档；不能追加消息');}
           if (t.kind === 'dm' && conv.archived_at != null) throw new DaemonCommandError('CONVERSATION_ARCHIVED', '对话已归档：禁止新发/续跑（重放拒绝）');
         };
         if(params.intent==='default'&&deps.prepareRuntimeConfiguration&&!deps.db.prepare('SELECT 1 FROM command_receipts WHERE idempotency_scope=? AND command_id=?').get(scope,env.commandId)){
           submitReplayGuard();
-          let memberId:string|null=null;
-          if(params.target.kind==='dm'){
-            const audience=deps.db.prepare("SELECT principal_id FROM dm_participants WHERE conversation_id=? AND principal_type='agent'").get(params.target.conversationId) as {principal_id:string}|undefined;
-            memberId=audience?.principal_id??null;
-          }else if(params.target.kind==='thread'){const f=conversationFacts(deps.db,params.target.threadId);if(f){const blocked=conversationBlock(deps.db,f,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);}memberId=f?.memberId??null;}
-          else if(params.mentions.length===1&&params.mentions[0]?.kind==='member')memberId=params.mentions[0].memberId;
-          if(memberId&&resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null).kind==='codex'){
+          const preparationMembers=():string[]=>{
+            if(params.target.kind==='dm'){
+              const audience=deps.db.prepare("SELECT principal_id FROM dm_participants WHERE conversation_id=? AND principal_type='agent'").get(params.target.conversationId) as {principal_id:string}|undefined;
+              return audience?[audience.principal_id]:[];
+            }
+            if(params.target.kind==='thread'){
+              const f=conversationFacts(deps.db,params.target.threadId);
+              if(f){const blocked=conversationBlock(deps.db,f,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);}
+              return f?[f.memberId]:[];
+            }
+            const target=params.target;
+            const route=resolveTopLevelRoute({intent:'default',mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
+            if(!route.ok)throw new DaemonCommandError(route.error.code,route.error.message);
+            if(route.value.kind!=='dispatch')return [];
+            const members=route.value.mode==='DIRECT'?route.value.frozenMemberIds:coordinationRoomMembers(deps.db,target.roomId,target.projectId,route.value.mode==='AUTO'?undefined:route.value.frozenMemberIds).map(m=>m.id);
+            if(members.length>12)throw new DaemonCommandError('CONFIGURATION_NOT_READY','自动协作最多选择12位房间成员，请调整名单');
+            return [...members].sort();
+          };
+          const coordinator=params.target.kind==='room_root'?coordinatorOf(deps.db,params.target.roomId):null;
+          const members=preparationMembers();
+          const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
+          for(const {memberId,runtime} of bindings){
+            if(runtime.kind!=='codex'||memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='missing')continue;
             try{await deps.prepareRuntimeConfiguration(memberId,params.target.projectId);}catch(e){throw new DaemonCommandError('CONFIGURATION_NOT_READY',`执行配置尚未就绪：${(e as Error).message}；没有提交模型输入，草稿保留`);}
           }
+          submitReplayGuard();
+          if(params.target.kind==='room_root'&&coordinator!==coordinatorOf(deps.db,params.target.roomId))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间协调成员变化；未提交，草稿保留');
+          if(JSON.stringify(members)!==JSON.stringify(preparationMembers())||bindings.some(b=>JSON.stringify(b.runtime)!==JSON.stringify(resolveMemberRuntime(deps.db,b.memberId,process.env.ZS_RUNTIME??null))))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间房间名单或成员配置变化；未提交，草稿保留');
+
         }
         const result = run(() => {
           submitReplayGuard();
