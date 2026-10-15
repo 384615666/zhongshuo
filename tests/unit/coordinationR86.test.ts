@@ -1,3 +1,4 @@
+import {createRequire} from 'node:module';
 import {taskCompleteOutputSchema} from '../../src/contracts/prompts.ts';
 import {deliberationOutputSchema} from '../../src/daemon/deliberationRunner.ts';
 import { describe, expect, it } from 'vitest';
@@ -33,4 +34,9 @@ describe('R86 authoritative collaboration plan', () => {
   const schemas=[taskCompleteOutputSchema('key'),taskCompleteOutputSchema('key',true),...(['IND','CR','ISS','CHK','SYN','RAT'] as const).map(stage=>deliberationOutputSchema(stage))];
   for(const schema of schemas){expect(schema.$schema).toBe('http://json-schema.org/draft-07/schema#');expect(schema.type).toBe('object');expect(schema.required?.length).toBeGreaterThan(0);expect(JSON.stringify(schema)).not.toContain('2020-12');}
   expect(taskCompleteOutputSchema('key',true).properties).toHaveProperty('coordinationPlan');
+  // Same draft-07 validator family, entirely local: the original declaration must fail.
+  const dependencyRequire=createRequire(createRequire(import.meta.url).resolve('eslint'));
+  const Ajv=dependencyRequire('ajv') as new(options:unknown)=>{compile:(schema:unknown)=>((data:unknown)=>boolean)};
+  for(const schema of schemas){const validator=new Ajv({strict:false,validateSchema:true});const validate=validator.compile(schema);expect(validate({})).toBe(false);expect(()=>new Ajv({strict:false}).compile({...schema,$schema:'https://json-schema.org/draft/2020-12/schema'})).toThrow(/no schema with key or ref/);}
+
  });

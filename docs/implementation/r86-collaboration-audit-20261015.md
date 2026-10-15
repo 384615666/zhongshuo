@@ -86,3 +86,9 @@ AUTO 新任务采用专用默认24格，规划、所有子步骤和整合/修复
 ## 首次真实调用反例（61112d6 / rc4）
 
 通过独立副本真实 BAT 与原生鼠标键盘发送自然需求，账本1次failed；Claude CLI 在上游前拒绝 `--json-schema` 的 draft-2020-12，原错误/输入/账本保留于 `dist/desktop/review-r86-real-rc4-20261015/real-code-v1.json`。无子任务、无模型文件。修复正式 TaskComplete 与六种研讨 schema 统一生成 draft-07，保留严格业务验证，CLI回放+全部schema+协作53项通过，双类型通过。这是本地兼容性验证，尚不声称真实渠道流程已过；下一独立副本复证。
+
+## 新副本实际渠道资源失败（7f9afe4 / rc5）
+
+真实BAT独立根 `dist/desktop/review-r86-real-rc5-20261015`，自然原生发送后CLI越过schema检查。精确自身provider session返回429/1310：周/月额度已用完，提示2026-10-16 19:42:30重置。CLI内置退避最终明确FAILED/PROVIDER_ERROR；应用未另起发送。原观察`real-code-v1.json`保留false，0子任务/0交付，不记作真实协作成功。已提出具体替代本机可用模型/额度资源需求；继续离线工作，不拿离线通过替代双模型认证。
+
+补充本地Ajv draft07校验器编译全部8种正式schema，拒绝空输出；原2020声明全部复现no schema with key/ref。仅校验，不启动模型。原生证据QA收紧：repo/dist绝对边界、namespaced内部派生识别、真实Node --test+对应测试文件+TAP正通过零失败、精确上游交付文件内容/hash匹配；5项反例通过。类型补齐deliveryId，无运行语义变化。
