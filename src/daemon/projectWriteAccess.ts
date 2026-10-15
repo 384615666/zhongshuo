@@ -53,8 +53,9 @@ export function effectiveTaskWriteAccess(db: ZhongshuoDatabase, taskId: string, 
 }
 /** A newly authorized ordinary question gets its own current configuration
  * snapshot. The original task and every already queued request remain immutable. */
-export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:string,defaultKind:string|null) {
+export function snapshotConversationWriteAccess(db:ZhongshuoDatabase,taskId:string,defaultKind:string|null,memberId?:string) {
   const row=db.prepare('SELECT owner_member_id,project_id FROM tasks WHERE id=?').get(taskId) as {owner_member_id:string;project_id:string};
+  if(memberId)row.owner_member_id=memberId;
   const runtime=resolveMemberRuntime(db,row.owner_member_id,defaultKind),grant=projectWriteAccess(db,row.project_id);
   const p=db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(row.project_id) as {canonical_path:string};
   let snapshot:Record<string,unknown>;

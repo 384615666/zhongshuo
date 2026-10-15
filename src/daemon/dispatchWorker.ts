@@ -1,4 +1,6 @@
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
+import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, pumpCoordinations } from './coordination.ts';
+import { validatePlanForRun,coordinationDeliveryRefs } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { acquireLease } from './workspaceLocks.ts';
@@ -35,7 +37,7 @@ import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
 import {chatAnswer} from '../contracts/chatAnswer.ts';
-import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema } from '../contracts/prompts.ts';
+import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
   onStepOutput,
@@ -292,6 +294,7 @@ export class DispatchWorker {
     // DELIBERATE 泵：屏障推进/下一步入队（幂等；不依赖完成事件驱动）。
     // detached 模式下 drain 不被在途 turn 阻塞——泵可在成员在途期间按 absenceGrace 推进（E4）。
     if (this.enableDeliberate) this.pumpDeliberations(at);
+    pumpCoordinations(this.db);
     const claimed = claimNextOutbox(this.db, {
       leaseOwner: this.leaseOwner,
       leaseUntil: at + this.leaseMs,
@@ -368,6 +371,7 @@ export class DispatchWorker {
 
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
     const conversationRequest=conversationReplyForDispatch(this.db,claimed.dispatch_key);
+    const coordination=task?coordinationDispatchContext(this.db,task.id,claimed.dispatch_key):null;
     // 意图代次判定（§11.4；第二十七轮五修历史代次误拦后第二十八轮二收口——不能以
     // 「stop_generation>0 + 存在任意在途 run/turn」推断停止仍生效：历史停止已结算、合法新
     // run 正在执行时，新到的合法提醒/跟进意图会被误杀静默丢弃）。判定按**派发意图自己的
@@ -390,13 +394,15 @@ export class DispatchWorker {
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    if (taskBusy) {
+    if (taskBusy && coordination?.kind!=='integration') {
       // 合法意图 + 任务忙碌（活跃 run/turn 含停止中）：沿既有串行等待——释放租约回 pending，
       // 周期 drain/事件重试（意图入队代次未变，重试判定不变）；本轮不执行也不收口。
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
       this.busyDeferrals.set(claimed.id, task.id); // 本轮 drain 跳过该 id（防队首热转）
       return;
     }
+    try { assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key); }
+    catch(error) {this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     let conversationInput:{text:string;seq:number}|undefined;
     if(conversationRequest){
       const current=conversationFacts(this.db,conversationRequest.threadId);
@@ -436,7 +442,7 @@ export class DispatchWorker {
       return;
     }
     // 模式门禁：M0 仅 DIRECT；AUTO/DELIBERATE 未实现前明确不可用，不冒充单成员执行。
-    if (route == null || route.kind !== 'dispatch' || route.mode !== 'DIRECT') {
+    if (route == null || route.kind !== 'dispatch' || !['DIRECT','AUTO'].includes(route.mode)) {
       await this.transitionTask(task.id, 'BLOCKED');
       this.audit(task, null, null, 'task.statusChanged', {
         status: 'BLOCKED',
@@ -563,12 +569,14 @@ export class DispatchWorker {
       : undefined;
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
     try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),conversationRequest?.writeScopeJson); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
+    if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
     const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
     const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
     const assembled = assembleDirectTurn({
       db: this.db,
       writeAccess,
       allowImages: imageCapabilityAtAssembly.status === 'supported',
+      coordinationNote:coordination?.note,
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
@@ -634,8 +642,9 @@ export class DispatchWorker {
         acquireReminderTurnSlot(this.db, turnId, claimed.dispatch_key);
         this.db.prepare(
           `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, budget_json)
-           VALUES (?, ?, ?, ?, 'DIRECT', ?, 'RUNNING', ?)`,
-        ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, conversationRequest?task.revision:0, JSON.stringify(budget));
+           VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', ?)`,
+        ).run(runId, task.id, task.conversation_id, task.conversation_thread_id, coordination&&coordination.kind!=='child'?'AUTO':'DIRECT', conversationRequest?task.revision:0, JSON.stringify(budget));
+        if(coordination?.kind==='planning'||coordination?.kind==='integration')beginCoordination(this.db,task.id,runId,coordination.kind);
         this.db.prepare(
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
@@ -859,6 +868,7 @@ export class DispatchWorker {
         throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
       }
       if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),conversationRequest?.writeScopeJson).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
+      assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key,turnId);
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
       // pre-launch 登记（supervisor 衔接）：请求可能已发出的窗口可区分「从未启动」——
       // startTurn 成功后由 registerProcessIdentity REPLACE 为完整身份。
@@ -876,7 +886,7 @@ export class DispatchWorker {
         policyId: writeAccess.policyId,
         taskRevision: 0,
         resultKey: assembled.value.resultKey,
-        outputSchema:{type:'object',additionalProperties:false,required:['schemaVersion','resultKey','answer','responseKind','changeSummary','files','executedVerifications','unexecutedVerifications','remainingIssues'],properties:{schemaVersion:{type:'string',const:'task-complete-v1'},resultKey:{type:'string',const:assembled.value.resultKey},answer:{type:'string'},responseKind:{type:'string',enum:['conversation','work']},changeSummary:{type:'string'},files:{type:'array',items:{type:'string'}},executedVerifications:{type:'array',items:{type:'string'}},unexecutedVerifications:{type:'array',items:{type:'object',additionalProperties:false,required:['item','reason'],properties:{item:{type:'string'},reason:{type:'string'}}}},remainingIssues:{type:'array',items:{type:'string'}}}},
+        outputSchema:taskCompleteOutputSchema(assembled.value.resultKey,coordination?.kind==='planning'),
       });
       this.registerProcessIdentity(turnId, runId, member.id, adapter, session);
       // 会话绑定（第八轮迟到成果泵：UNKNOWN turn 的 lateEvents 按 session 找回 adapter 通道）。
@@ -1519,6 +1529,8 @@ export class DispatchWorker {
       .prepare('SELECT stop_generation, status FROM tasks WHERE id = ?')
       .get(taskId) as { stop_generation: number; status: string } | undefined;
     if (task == null) return true;
+    const child=childCoordination(this.db,taskId);
+    if(child){const parent=this.db.prepare('SELECT stop_generation,status FROM tasks WHERE id=?').get(child.task_id) as {stop_generation:number;status:string};if(parent.stop_generation!==child.stop_generation||parent.status==='CANCELLED'||child.state!=='running')return true;}
     if (task.status === 'CANCELLED' || task.status === 'DONE') return true;
     const turn = this.db
       .prepare('SELECT status, stop_generation_snapshot FROM agent_turns WHERE id = ?')
@@ -1650,6 +1662,7 @@ export class DispatchWorker {
       const stageKey = (this.db.prepare('SELECT stage_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string }).stage_key;
       const tx = this.db.transaction(() => {
         this.db.prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE id = ?`).run(turnId);
+        this.db.prepare("UPDATE coordination_runs SET state='blocked',error_message='协调执行结果未知；不会自动继续' WHERE (run_id=? OR integration_run_id=?) AND state IN ('planning','running','integrating')").run(runId,runId);
         settleConversationReplyForTurn(this.db,turnId,'UNKNOWN');
         if (stageKey.startsWith('delib.')) {
           // 研讨轮结果不确定：成员级缺席（E4），运行继续——不因单成员 UNKNOWN 杀死整个研讨。
@@ -1794,14 +1807,20 @@ export class DispatchWorker {
               rule: 'strip-single-fence-wrapping-entire-text; same strict schema after',
             });
           }
-          const contract = this.validateTaskCompleteOutput(finalText, `result_${turnId}`);
+          let contract = this.validateTaskCompleteOutput(finalText, `result_${turnId}`);
+          const planningRun=this.db.prepare("SELECT 1 FROM coordination_runs WHERE run_id=? AND state='planning'").get(runId);
+          if(contract.ok && planningRun) {
+            const proposed=taskCompleteSchema.parse(JSON.parse(finalText)).coordinationPlan;
+            if(proposed)try{validatePlanForRun(this.db,task.id,runId,proposed);}catch(error){contract={ok:false,issues:[String(error)]};}
+          }
           if (!contract.ok) {
             this.casTurn(turnId, 'FAILED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
             this.settleBudget(runId);
+            this.db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=? AND state='planning'").run(contract.issues.join('; '),runId);
             // 修复轮判定=本 turn 被修复工作项消费（结构化绑定——普通 redispatch 不受影响）。
             const isRepairTurn = (this.db.prepare(`SELECT count(*) c FROM format_repair_workitems WHERE consumed_turn_id = ?`).get(turnId) as { c: number }).c > 0;
-            if (isRepairTurn) {
+            if (isRepairTurn || planningRun) {
               this.transitionTask(task.id, 'BLOCKED');
               this.audit(task, runId, turnId, 'task.statusChanged', { status: 'BLOCKED', reason: 'direct-repair-exhausted' });
             } else {
@@ -1842,6 +1861,11 @@ export class DispatchWorker {
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const result=taskCompleteSchema.parse(JSON.parse(finalText));
+          if(planningRun && result.coordinationPlan) {
+            acceptCoordinationPlan(this.db,task.id,runId,result.coordinationPlan);
+            return;
+          }
+          if(planningRun)this.db.prepare("UPDATE coordination_runs SET state='completed' WHERE run_id=?").run(runId);
           // Read/calculation commands and rejected write attempts are not proof of
           // a work result. Capture actual project differences before deciding;
           // model-declared work retains its formal work/verification contract.
@@ -1855,7 +1879,8 @@ export class DispatchWorker {
             AND json_extract(started.payload_json,'$.toolName') IN ('Write','Edit','MultiEdit','NotebookEdit','fileChange')
             AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
-          if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0) {
+          const integrationRun=this.db.prepare('SELECT 1 FROM coordination_runs WHERE integration_run_id=?').get(runId);
+          if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0&&!childCoordination(this.db,task.id)&&!integrationRun) {
             if(previousWork>0){
               this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
               // A clarification is an answer, not a replacement delivery or an
@@ -1873,7 +1898,8 @@ export class DispatchWorker {
           }
           if(result.responseKind==='conversation')this.audit(task,runId,turnId,'turn.conversationWorkObserved',{changedFiles,successfulWriteActions,trackingScope:'仅当前项目基线；成功写工具可能在范围外',changeSetId:changesetId,note:'实际文件差异已发生，保留工作交付；原协议不改写'});
           this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
-          const manifestHash = createHash('sha256').update(finalText).digest('hex');
+          const collaboration=coordinationDeliveryRefs(this.db,runId);
+          const manifestHash = createHash('sha256').update(collaboration?JSON.stringify({finalText,collaboration}):finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
           const prevRevision = (this.db
@@ -1888,9 +1914,14 @@ export class DispatchWorker {
             `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json,
                change_set_refs_json, verification_refs_json, review_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
-          ).run(deliveryId, task.id, runId, prevRevision + 1, manifestHash, JSON.stringify([`turn:${turnId}:final`]), JSON.stringify(this.kvGet(`write-changeset:${turnId}`)?[this.kvGet(`write-changeset:${turnId}`)]:[]), reviewStatus);
+          ).run(deliveryId, task.id, runId, prevRevision + 1, manifestHash, JSON.stringify([`turn:${turnId}:final`,...(collaboration?.artifactRefs??[])]), JSON.stringify([...new Set([...(this.kvGet(`write-changeset:${turnId}`)?[this.kvGet(`write-changeset:${turnId}`)]:[]),...(collaboration?.changeSetRefs??[])])]), reviewStatus);
           this.db.prepare('UPDATE tasks SET current_delivery_id = ? WHERE id = ?').run(deliveryId, task.id);
           this.transitionTask(task.id, task.review_policy === 'user_review' ? 'REVIEW' : 'DONE');
+          const parentCoordination=this.db.prepare("SELECT run_id FROM coordination_runs WHERE integration_run_id=? AND state='integrating'").get(runId) as {run_id:string}|undefined;
+          if(parentCoordination){
+            this.db.prepare("UPDATE coordination_runs SET state='completed' WHERE run_id=?").run(parentCoordination.run_id);
+            this.db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='整合完成' WHERE id=?").run(parentCoordination.run_id);
+          }
           this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'SUCCEEDED', reviewStatus, deliveryRevision: prevRevision + 1 });
         });
         tx();
@@ -2437,6 +2468,7 @@ export class DispatchWorker {
     // 真实调用护栏（第十七轮四）：终态在唯一收口点结算 startTurn 台账行（inflight→终态；
     // 未知/中断如实保留——覆盖修复/重派/研讨/并发全部路径）。
     if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
+      if(status!=='SUCCEEDED')this.db.prepare("UPDATE coordination_runs SET state=?,error_message=? WHERE (run_id=(SELECT run_id FROM agent_turns WHERE id=?) OR integration_run_id=(SELECT run_id FROM agent_turns WHERE id=?)) AND state IN ('planning','running','integrating')").run(status==='CANCELLED'?'cancelled':'blocked',status==='CANCELLED'?'协调执行已停止':'协调执行未完成，请查看运行原因',turnId,turnId);
       settleConversationReplyForTurn(this.db,turnId,status);
       try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
       try { settleReminderCallForTurn(this.db, turnId, status); } catch { /* 提醒调用台账跟随——尽力而为（UNKNOWN/CANCELLED=保守计数） */ }

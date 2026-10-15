@@ -50,6 +50,7 @@ import { migration048 } from './048-member-description.ts';
 import { migration049 } from './049-member-templates.ts';
 import { migration050 } from './050-project-write-authorization.ts';
 import { migration051 } from './051-conversation-replies.ts';
+import { migration052 } from './052-coordination.ts';
 
 /** 迁移注册表：按 id 升序；已发布迁移不可改写（checksum 留档）。 */
 export const MIGRATIONS: readonly Migration[] = [
@@ -104,4 +105,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration049,
   migration050,
   migration051,
+  migration052,
 ];

@@ -4,6 +4,7 @@
  * 恢复：标记非终态运行、重排过期租约 outbox（不自动补跑，决策 44/E7）。
  */
 import { randomUUID } from 'node:crypto';
+import { stopCoordinationChildren } from './coordination.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
@@ -65,6 +66,7 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
         stopGeneration = task.stop_generation + 1;
         const tx = db.transaction(() => {
           db.prepare('UPDATE tasks SET stop_generation = ? WHERE id = ?').run(stopGeneration, task.id);
+          stopCoordinationChildren(db,task.id);
           db.prepare("UPDATE conversation_reply_requests SET status='cancelled',error_message='用户已停止；这条排队续问未执行',updated_at=? WHERE task_id=? AND status='queued'").run(input.now,task.id);
           db.prepare(`UPDATE workflow_runs SET status = 'STOPPING' WHERE id = ? AND status IN ('QUEUED','RUNNING','WAITING')`).run(input.targetRunId);
           db.prepare(`UPDATE agent_turns SET status = 'STOPPING' WHERE run_id = ? AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')`).run(input.targetRunId);
@@ -91,10 +93,9 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
   }
   // 中断在途 turn（事务外执行：协议中断是外部副作用）。
   if (outcome.data.outcome === 'stopping') {
-    const turn = db
-      .prepare(`SELECT id FROM agent_turns WHERE run_id = ? AND status = 'STOPPING' ORDER BY id LIMIT 1`)
-      .get(input.targetRunId) as { id: string } | undefined;
-    if (turn != null) await input.interruptTurn(turn.id);
+    const turns = db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+      WHERE (a.run_id=? OR t.parent_task_id=?) AND a.status='STOPPING' ORDER BY a.id LIMIT 100`).all(input.targetRunId,input.taskId) as {id:string}[];
+    for(const turn of turns) await input.interruptTurn(turn.id);
   }
   return outcome.data;
 }

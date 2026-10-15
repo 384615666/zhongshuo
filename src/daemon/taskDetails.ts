@@ -1,6 +1,7 @@
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { TaskDetailEvent, TaskDetailsResult, TaskHistoryParams, TaskHistoryPage } from '../contracts/taskDetails.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
+import { readCoordination } from './coordination.ts';
 
 type EventRow = { seq: number; kind: string; created_at: number; run_id: string | null; turn_id: string | null; payload_json: string };
 const eventOf = (e: EventRow): TaskDetailEvent => {
@@ -127,6 +128,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     clarificationRetry:{available:clarificationLatest&&!clarificationPending&&scopeBlock==null&&clarificationBlock==null,pending:clarificationPending,blockReason:scopeBlock??clarificationBlock?.message??null},
     failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,
       pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
+    coordination:readCoordination(db,taskId,selectedRunId),
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
     latestRunId, currentRunId, selectedRunId, runs, events,
     deliveries: deliveryRows.items.map((d) => ({ id: d.id, revision: d.revision, manifestHash: d.manifest_hash,

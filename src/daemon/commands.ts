@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
+import { freezeCoordinationScope } from './coordination.ts';
 import { conversationFacts, conversationBlock, enqueueConversationReply } from './conversationReplies.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -1369,7 +1370,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         } else if (target.kind === 'room_root') {
           const route = resolveTopLevelRoute({ intent: 'default', mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode === 'DIRECT'; }
+          if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode !== 'DELIBERATE'; }
         }
         if(env.method==='message.writeCapability') {
           const full=members.length>0&&members.every(id=>{const runtime=resolveMemberRuntime(deps.db,id,process.env.ZS_RUNTIME??null);return runtime.permissionMode==null||runtime.permissionMode==='bypassPermissions';});
@@ -1504,7 +1505,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
               attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
-              try{snapshotTaskWriteAccess(deps.db,r.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
+              try{snapshotTaskWriteAccess(deps.db,r.taskId);freezeCoordinationScope(deps.db,r.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
               appendDomainEvent(deps.db, {
                 schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: target.projectId,
                 conversationId: target.conversationId, threadId: null, runId: null, taskId: r.taskId,
@@ -1528,7 +1529,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.mode === 'DIRECT' && route.value.frozenMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
+          assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.mode !== 'DELIBERATE' && route.value.initialWakeMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
           return deps.db.transaction(() => {
             const ids = {
@@ -1554,7 +1555,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
-            try{snapshotTaskWriteAccess(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
+            try{snapshotTaskWriteAccess(deps.db,ids.taskId);freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
             attachMessageRefs(deps.db, ids.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
             return created.value;
           })();

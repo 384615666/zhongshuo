@@ -1012,7 +1012,7 @@ export function Composer({
             title="选择一位执行成员后交给 AI；也可以仅保存记录"
           >
             <Icon name="alert-triangle" size={11} />
-            {route.mode === 'AUTO' ? '选择执行成员后开始处理' : '请选择一位执行成员；暂不支持多人执行'}
+            {route.mode === 'AUTO' ? '由房间协调成员接单：简单问题直接回答，复杂任务规划分工并整合' : '多人研讨接入中；当前请指定单成员或由协调成员自动分工'}
             <button title="选择一位成员，不会自动发送" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>选择执行成员</button>
             <button title="本次只保存内容、不派发（一次性意图——不受模式边界影响）" onClick={() => setSendAs('record')}>本次仅记录</button>
           </span>

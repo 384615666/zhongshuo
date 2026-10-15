@@ -8,6 +8,7 @@
 const ATT_EXCERPT_BYTES = 64 * 1024; // 与 turnInput 一致
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { coordinationPlanSchema } from './coordination.ts';
 import { canonicalJson } from './common.ts';
 import { domainErr, domainOk } from './errors.ts';
 import type { DomainResult } from './errors.ts';
@@ -489,7 +490,15 @@ export const taskCompleteSchema = z.strictObject({
   executedVerifications: z.array(z.string()),
   unexecutedVerifications: z.array(z.strictObject({ item: z.string(), reason: z.string() })),
   remainingIssues: z.array(z.string()),
+  coordinationPlan: coordinationPlanSchema.nullable().optional(),
 });
+
+export function taskCompleteOutputSchema(resultKey: string, planning = false) {
+  const common = taskCompleteSchema.omit({coordinationPlan:true}).extend({
+    resultKey:z.literal(resultKey), answer:z.string(), responseKind:z.enum(['conversation','work']),
+  });
+  return z.toJSONSchema(planning ? common.extend({coordinationPlan:coordinationPlanSchema.nullable()}) : common);
+}
 
 export type TaskComplete = z.infer<typeof taskCompleteSchema>;
 

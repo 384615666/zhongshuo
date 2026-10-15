@@ -170,14 +170,35 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
 export function TaskExtraFacts({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight">
     <div className="section-title">任务与关联记录</div>
+    {detail.coordination?<CoordinationFacts detail={detail}/>:null}
     <dl className="kv">
       <dt>原目标</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{detail.task.objective || '未记录独立目标，以原始要求为准'}</dd>
       <dt>验收策略</dt><dd>{detail.task.reviewPolicy === 'user_review' ? '需要人工验收' : '自动交付'}</dd>
       <dt>负责人</dt><dd>{detail.task.ownerDisplayName ?? '未指定'}</dd>
+      {detail.task.parentTaskId?<><dt>所属协作</dt><dd><a href={`#task=${detail.task.parentTaskId}`}>返回协调任务</a> · 本页是其中一个实际步骤</dd></>:null}
       <dt>子任务</dt><dd>{detail.children.length === 0 ? '没有记录' : detail.children.map((c) => <div key={c.id}><a href={c.locate}>{c.title}</a> · <TaskStatusTag status={c.status as Parameters<typeof TaskStatusTag>[0]['status']} /></div>)}{detail.truncated.children ? '仅显示最近 50 条' : null}</dd>
       <dt>改动集</dt><dd>{detail.changeSets.length === 0 ? '没有记录' : detail.changeSets.map((c) => <div key={c.id}>文件应用：{c.applicationStatus} · <a href={c.locate}>定位任务</a>{c.files.map((f) => <div key={f.path} className="small">{f.path} · {f.state}{f.size == null ? '' : ` · ${f.size} 字节`}</div>)}{c.filesTruncated ? <div className="faint small">仅显示前 100 个文件</div> : null}<details className="small faint"><summary>改动集身份</summary>{c.id} · {c.beforeRef} → {c.afterRef}</details></div>)}{detail.truncated.changeSets ? '仅显示最近 100 条' : null}</dd>
     </dl>
     <details className="small faint"><summary>技术身份</summary>任务 {detail.task.id} · 项目 {detail.task.projectId} · 负责人 {detail.task.ownerMemberId ?? '—'} · revision {detail.task.revision}</details>
+  </div>;
+}
+
+function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
+  const c=detail.coordination!;
+  const states:Record<string,string>={planning:'正在规划',running:'分工执行中',integrating:'正在整合',completed:'已完成',blocked:'需要处理',cancelled:'已停止'};
+  const roles:Record<string,string>={analysis:'分析 · 只读',review:'评审 · 只读',implementation:'实施 · 按成员原权限，单写'};
+  return <div className="card tight" data-zs-coordination>
+    <div className="section-title">成员协作 · {states[c.state]??c.state}</div>
+    <div style={{whiteSpace:'pre-wrap'}}>{c.summary}</div>
+    <div className="faint small">步骤依次交接，共用 {c.usedCalls} / {c.maxCalls} 次调用额度（包含规划、子任务、修复与整合；未知结果也占用）。</div>
+    {c.errorMessage?<div className="panel warning" role="alert">{c.errorMessage}。请查看对应步骤与运行原因；结果未知时先人工核实原请求。</div>:null}
+    {c.steps.map(s=><div key={s.key} className="card tight">
+      <a href={s.locate}>{s.title}</a> · <TaskStatusTag status={s.status as Parameters<typeof TaskStatusTag>[0]['status']}/>
+      <div className="small">{s.displayName} #{s.memberId.slice(-6)} · {roles[s.role]??s.role}</div>
+      <div className="faint small">{s.channel??'渠道未提供'} / {s.model??'模型未提供'}{s.dependsOn.length?` · 等待/接收：${s.dependsOn.map(k=>c.steps.find(x=>x.key===k)?.title??k).join('、')}`:' · 无前置步骤'}</div>
+      {s.deliveryId?<div className="small"><a href={`#delivery=${s.deliveryId}`}>查看步骤成果 v{s.deliveryRevision}</a></div>:null}
+      <details className="small faint"><summary>交接版本身份</summary>{s.taskId} · {s.deliveryId??'尚无交付'} · {s.manifestHash??'尚无成果hash'}</details>
+    </div>)}
   </div>;
 }
 

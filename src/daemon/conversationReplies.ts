@@ -18,7 +18,7 @@ export function conversationFacts(db:ZhongshuoDatabase,threadId:string):Conversa
     WHERE th.id=? AND t.kind='room_task' AND t.conversation_thread_id=th.id AND t.root_message_id=m.id
       AND t.project_id=th.project_id AND t.conversation_id=th.conversation_id AND m.author_type='human'
       AND t.owner_member_id IS NOT NULL AND t.current_delivery_id IS NULL
-      AND json_extract(t.route_json,'$.kind')='dispatch' AND json_extract(t.route_json,'$.mode')='DIRECT'
+      AND json_extract(t.route_json,'$.kind')='dispatch' AND json_extract(t.route_json,'$.mode') IN ('DIRECT','AUTO')
       AND json_array_length(json_extract(t.route_json,'$.frozenMemberIds'))=1
       AND json_extract(t.route_json,'$.frozenMemberIds[0]')=t.owner_member_id
       AND NOT EXISTS(SELECT 1 FROM task_deliveries d WHERE d.task_id=t.id)

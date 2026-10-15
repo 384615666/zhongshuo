@@ -25,6 +25,13 @@ export interface RecoveryBlockReason {
 
 /** 任务是否可新建派发（redispatch/恢复）：null=可；否则返回阻断原因。 */
 export function assessTaskRedispatchReadiness(db: ZhongshuoDatabase, taskId: string, options: { queueOnly?: boolean } = {}): RecoveryBlockReason | null {
+  // A parent cannot acquire a fresh planning identity around an unresolved child.
+  // Existing formal UNKNOWN / process-exit / lease checks remain authoritative.
+  const children=db.prepare(`SELECT DISTINCT child.id FROM tasks child JOIN workflow_runs r ON r.task_id=child.id
+    LEFT JOIN agent_turns a ON a.run_id=r.id WHERE child.parent_task_id=? AND
+    (r.status IN ('RUNNING','WAITING','STOPPING','QUEUED') OR a.status IN ('RUNNING','WAITING','STOPPING','QUEUED','UNKNOWN')
+      OR a.protection_state='retained' OR EXISTS(SELECT 1 FROM workspace_leases l WHERE l.owner_turn_id=a.id AND l.status!='released'))`).all(taskId) as {id:string}[];
+  for(const child of children){const blocked=assessTaskRedispatchReadiness(db,child.id,options);if(blocked)return {...blocked,message:`协作子任务尚未安全收口：${blocked.message}`};}
   const inFlightRuns = db.prepare(
     `SELECT count(*) c FROM workflow_runs WHERE task_id = ? AND status IN ('RUNNING','WAITING','STOPPING','QUEUED')`,
   ).get(taskId) as { c: number };

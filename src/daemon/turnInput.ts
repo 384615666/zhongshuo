@@ -117,6 +117,7 @@ export interface AssembledTurnInput {
   /** 本次 appData 的托管存储根（{appData}/blobstore——第二十八轮三：附件读取按实际根校验路径越界）。 */
   blobRoot?: string;
   allowImages?: boolean;
+  coordinationNote?: string;
   writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
@@ -286,7 +287,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     // 附注（仅在存在时加键——显式 undefined 会改变 canonicalJson 键集；非附注轮的信封
     // 必须与既有 hash 完全一致）：格式修复轮 / 返工反馈（RT-25：关联被退回的交付版本）。
     ...(() => {
-      const notes: string[] = [];
+      const notes: string[] = input.coordinationNote ? [input.coordinationNote] : [];
       if (input.repairContext != null) {
         notes.push(
           '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
