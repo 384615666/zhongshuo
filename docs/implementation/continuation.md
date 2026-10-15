@@ -14,7 +14,7 @@ rc6 GLM/glm-5.3-flash/high 与 Codex/gpt-6.1-sol/xhigh已各10次真实全部成
 
 原生菜单最终副本7步真实输入、最大化/还原/预览Esc/关闭通过；鼠标拖动仍unverified，唯一完整门失败，不得改绿或重跑相同实验制造位移。六对成员/详情原型与共享Composer九组通过，DPR1.5仅仿真。最后一次用户约10分钟自然路线即可，用户验收待定；无账号/模型资源阻断。仅可在用户真实反馈或可靠原生位移证据到来后收剩余门；不要重跑81次调用、2h或旧未知根。
 
-唯一当前候选desktop-daily-win-v23-rc6/start-desktop.bat（旧v23/rc2–rc5保留阶段证据）。五份最终程序593文件均核size/hash、候选未启动无数据根，quickstart与随包两份说明同hash。42份白名单证据已入docs，无DB/profile/密钥。源码/QA阶段推送到3266f92；最终记录提交由git实读，不将文档HEAD冒充冻结运行源码。
+唯一当前候选desktop-daily-win-v23-rc6/start-desktop.bat（旧v23/rc2–rc5保留阶段证据）。五份最终程序593文件均核size/hash、候选未启动无数据根，quickstart与随包两份说明同hash。42份白名单证据已入docs，无DB/profile/密钥。源码/QA/42份证据收口已推送d707005，独立审查在该clean提交另跑总门确认同一唯一鼠标缺口；后续只有审查记录提交，当前HEAD由git实读，不将文档HEAD冒充冻结运行源码。
 
 只读Codex返回work/files=[]并进入REVIEW已独立核实为现有“计划档止于方案”的合法文字方案交付；原answer/未执行原因明确未创建文件，不是伪造文件成果。GLM返回conversation属于允许的分类差异。不按中文关键词改worker/旧状态，不为此追加模型调用；quickstart已说明待审方案不代表实际执行，不承诺旧只读任务提权。完整证据readonly-result-facts.json，独立审查答复保留。
 

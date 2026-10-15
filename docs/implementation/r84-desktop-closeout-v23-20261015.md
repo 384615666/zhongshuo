@@ -69,3 +69,7 @@ Codex 请求模型与原生 turn_context 均为 gpt-6.1-sol/xhigh、custom provi
 唯一当前入口：[desktop-daily-win-v23-rc6/start-desktop.bat](../../dist/desktop/desktop-daily-win-v23-rc6/start-desktop.bat)。候选程序及两份真实根、Fake根、升级根五份程序各593文件size/SHA256一致；原BAT一致，候选从未启动、没有server-data或默认工程夹具。源码运行冻结05b549f与BUILD身份不变；后续提交只含测试/QA/记录。
 
 [白名单证据清单](evidence-r84-v23-20261015/MANIFEST-SHA256.json)绑定42份脱敏工程记录与配对截图，不提交DB、profile、token、用户样本或原始provider转录。旧失败根原地保留；其他源码与原始启动器日志仍在各独立dist证据根，清单记其hash。实际可用组合是上述两个已测组合，不将请求的模型/effort冒充渠道未提供的有效身份。
+
+## 独立最终复核
+
+独立只读审查在clean提交d707005上另跑[自己的总门](r84-independent-final-audit-20261015.json)，得到corePass=true/pass=false、退出1，唯一失败仍为native titlebar mouse movement verified。另核五份593程序清单与42份白名单证据字节、两小时原始样本、双渠道10次最终身份、81去重总账、未知副本与匹配完整回退，无新增核心阻断。滚动只接受“最后已确认坐标关窗冷开恢复”的限定证据，不称首个517.6探针通过。后续仅收一次真实鼠标拖动结果；整体用户验收保持pending。该审查后的提交仅保存本段与审查记录，不变更程序或重新构建。
