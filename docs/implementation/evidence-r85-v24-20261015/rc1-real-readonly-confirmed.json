@@ -1,0 +1,36 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_c84b77162bfa038d",
+    "commit": "e745ad879019a785255ac3dee577666fae0dc616",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:21:43.330Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "read-only completion of already-performed original two-call workflow, no resubmission",
+  "originalSha256": "52371514957ed9e95d1a44974f27cd9d50ac6ee006e86d35a96f47603b8498a6",
+  "task": {
+    "id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+    "status": "DONE"
+  },
+  "version": {
+    "id": "dlv_turn_be1d3b88-eddc-4399-91fb-4b30eb0ca7bc",
+    "revision": 2,
+    "manifest_hash": "0273919db5431357f137efaa9f1a761ad1ec9918d68f724e24a241c47b7d7a5b",
+    "review_status": "accepted"
+  },
+  "files": [
+    {
+      "name": "greet.mjs",
+      "sha256": "7052d205d2d9ff74ffc0bb384156434efcbe05f42f701c90374b68da7f114c28"
+    },
+    {
+      "name": "greet.test.mjs",
+      "sha256": "64a1a2d2dfdb51c8bf8fe35693b319164bd99a10f6e57777021d1429867ca72b"
+    }
+  ],
+  "calls": 2,
+  "originalPreserved": true
+}

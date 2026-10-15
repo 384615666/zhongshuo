@@ -272,6 +272,10 @@ for (const entry of (manifest.files ?? [])) {
   if (actual === expected) checked += 1; else missing += 1;
 }
 const build = JSON.parse(await (await import('node:fs/promises')).readFile(join(out, 'ZhongshuoDual', 'BUILD.json'), 'utf8'));
+if(outArg?.startsWith('desktop-daily-win-v24')){
+  const {writeR85ReleaseGuides}=await import('./lib/r85-release-guides.mjs');
+  writeR85ReleaseGuides(out);
+}
 console.log(`[daily-pkg] 就绪：${out}`);
 console.log(`[daily-pkg] 清单核对 ${checked} 一致，不符/缺失 ${missing}；buildId=${build.buildId} commit=${build.commit} dirty=${build.dirty}`);
 if (missing > 0) process.exit(1);

@@ -1,0 +1,20 @@
+{
+  "hash": "#/project/prj_1d5fc64f-ab5d-4988-bee0-7f40fda00a6e",
+  "main": "Git 仓库1 个房间1 名成员0 个活跃任务 新建房间 文件与改动房间1默认房间协调者 执行成员· 1 名成员活跃任务0刷新当前没有活跃任务。房间里的任务看板会保留已完成与已取消的记录。成员1执执行成员",
+  "ratio": 1.25,
+  "viewport": [
+    1282,
+    802
+  ],
+  "calls": 2,
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "inputSource": "@oai/sky actual mouse and keyboard; this collector only reads"
+}

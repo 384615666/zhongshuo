@@ -1,0 +1,24 @@
+{
+  "pass": true,
+  "checks": {
+    "core": true,
+    "guidesIdentity": true,
+    "pristine": true,
+    "guideHashes": true,
+    "currentBehavior": true
+  },
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "userAcceptance": "pending",
+  "coreReceipt": "final-gates.json",
+  "coreSha256": "09fa827913b539a099c28124042f5261e23992e54a1f29dce6dd21a576b28879",
+  "guideManifestSha256": "2d0465ee4f41f0253616ed8868afb35a1c198fdb444621b9501062c3c0d7033a",
+  "note": "User-facing release guides corrected after frozen program build. No program/BAT/BUILD or original core evidence rewritten."
+}

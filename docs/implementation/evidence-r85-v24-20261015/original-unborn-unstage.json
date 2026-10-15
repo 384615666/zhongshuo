@@ -1,0 +1,21 @@
+{
+  "stage": {
+    "commandId": "r85-afba50e6-900e-49b6-b4d4-fdaf6c4455f9",
+    "ok": true,
+    "data": {
+      "staged": [
+        "说明.md"
+      ],
+      "skipped": []
+    }
+  },
+  "unstage": {
+    "commandId": "r85-6e09f0ed-235d-4638-87d0-5203e3e396fd",
+    "ok": false,
+    "error": {
+      "code": "GIT_COMMAND_FAILED",
+      "message": "git restore --staged 失败（exit=128）：fatal: could not resolve 'HEAD'",
+      "retryable": false
+    }
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "pass": false,
+  "stage": "before-captured-leave-own-window-for-native-check",
+  "root": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\copy",
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "programFiles": 593,
+  "projects": {
+    "unborn": "prj_139028ea-eecf-4182-9a6e-759017733829",
+    "partial": "prj_e1cd8204-38ad-496e-960d-9308bb35989a",
+    "conflict": "prj_98f78328-3fe3-46d7-8e22-120fac22cb89"
+  },
+  "findings": {
+    "permission": "默认只读授权只适用于「R85 unborn」。成员还需选择文件编辑权限；Shell、网络工具、委派与并行写入仍不可用。模板不会复制项目授权。刷新授权明确授权此项目文件编辑…",
+    "unborn": {
+      "status": {
+        "ok": true,
+        "branch": "(unknown)",
+        "worktreeRoot": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\全新仓库",
+        "projectRootIsWorktreeRoot": true,
+        "staged": [],
+        "unstaged": [],
+        "untracked": [
+          {
+            "xy": "??",
+            "path": "说明.md",
+            "category": "untracked"
+          }
+        ],
+        "truncated": false
+      },
+      "text": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\全新仓库项目R85 unbornR85 partialR85 conflict 文件 Git1未初始化Git 仓库没有 Git 数据众说不自动 git init，也不会替你在项目里插入配置。你可以自行初始化后回到这里。 非 Git 目录下的改动记录仍然完整任务改动照旧记录成改动集并支持 diff 与撤销（E15：非 Git 目录用整目录快照做内容级前像）。 Git 标签只提供版本控制本身的能力，两者互不替代。 返回文件"
+    },
+    "partial": {
+      "status": {
+        "ok": true,
+        "branch": "main",
+        "worktreeRoot": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\部分暂存",
+        "projectRootIsWorktreeRoot": true,
+        "staged": [
+          {
+            "xy": "MM",
+            "path": "partial.txt",
+            "category": "staged"
+          }
+        ],
+        "unstaged": [
+          {
+            "xy": "MM",
+            "path": "partial.txt",
+            "category": "unstaged"
+          }
+        ],
+        "untracked": [],
+        "truncated": false
+      },
+      "before": "准备提交main将提交 1 个文件全部取消暂存 提交提交信息不能为空partial.txt修改暂存 工作区 diff@@ -1,2 +1,3 @@11 BASE22 INDEX_ONLY3+WORKTREE_ONLY34 ",
+      "afterUnstagedSelected": "准备提交main将提交 1 个文件全部取消暂存 提交提交信息不能为空partial.txt修改已暂存取消暂存 工作区 diff显示的是已暂存内容的 diff （git.diff staged=true——真实命令按需读取）。@@ -1 +1,2 @@11 BASE2+INDEX_ONLY23 "
+    },
+    "conflict": {
+      "status": {
+        "ok": true,
+        "branch": "main",
+        "worktreeRoot": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\真实冲突",
+        "projectRootIsWorktreeRoot": true,
+        "staged": [
+          {
+            "xy": "UU",
+            "path": "conflict.txt",
+            "category": "staged"
+          }
+        ],
+        "unstaged": [
+          {
+            "xy": "UU",
+            "path": "conflict.txt",
+            "category": "unstaged"
+          }
+        ],
+        "untracked": [],
+        "truncated": false
+      },
+      "content": {
+        "path": "conflict.txt",
+        "base": "BASE\n",
+        "ours": "OURS\n",
+        "theirs": "THEIRS\n"
+      },
+      "text": "D:\\zhongshuo\\dist\\desktop\\review-r85-before-20261015\\真实冲突项目R85 unbornR85 partialR85 conflict 拉取 推送 新建分支 文件 Git2Git 仓库main没有上游分支2 个未提交改动工作区 2历史 2分支 已暂存1conflict.txt取消暂存选中任一文件可在右侧复核；「取消暂存」与该行的选中互不影响。 待提交 · 按任务1不属于任何任务1conflict.txt准备提交main将提交 1 个文件全部取消暂存 提交提交信息不能为空conflict.txt修改暂存 工作区 diff 没有可展示的文本 diff二进制、超大文件或未跟踪新文件可能没有 unified diff 正文。"
+    },
+    "archive": {
+      "currentProject": "prj_e1cd8204-38ad-496e-960d-9308bb35989a",
+      "expectedRooms": [
+        {
+          "projectId": "prj_139028ea-eecf-4182-9a6e-759017733829",
+          "id": "room_296c3a7c-bf2e-4d51-8a70-2d512a72a784",
+          "name": "R85 甲已归档房间"
+        },
+        {
+          "projectId": "prj_e1cd8204-38ad-496e-960d-9308bb35989a",
+          "id": "room_d2c552d2-5812-4ff9-8654-84a36be69fe1",
+          "name": "R85 乙已归档房间"
+        }
+      ],
+      "text": "全部项目1 个项目 · 1 个房间R85 partial使用中打开项目主页R85 乙已归档房间已归档房间查看历史恢复房间"
+    }
+  },
+  "screenshots": [
+    "permission-before.png",
+    "unborn-before.png",
+    "partial-before.png",
+    "partial-unstaged-selected-before.png",
+    "conflict-before.png",
+    "archive-before.png"
+  ],
+  "modelCalls": 0,
+  "port": 51730,
+  "rooms": [
+    {
+      "projectId": "prj_139028ea-eecf-4182-9a6e-759017733829",
+      "id": "room_296c3a7c-bf2e-4d51-8a70-2d512a72a784",
+      "name": "R85 甲已归档房间"
+    },
+    {
+      "projectId": "prj_e1cd8204-38ad-496e-960d-9308bb35989a",
+      "id": "room_d2c552d2-5812-4ff9-8654-84a36be69fe1",
+      "name": "R85 乙已归档房间"
+    }
+  ],
+  "rendererErrors": []
+}

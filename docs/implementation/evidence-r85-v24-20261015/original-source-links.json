@@ -1,0 +1,267 @@
+[
+  {
+    "source": "dist/desktop/desktop-daily-win-v24-rc2/ZhongshuoDual/BUILD.json",
+    "file": "BUILD.json",
+    "sha256": "c8532b37bd02a76efde76481e9b7b31351d3d21720b77e3c240ae98cf3471105"
+  },
+  {
+    "source": "dist/desktop/desktop-daily-win-v24-rc2/ZhongshuoDual/MANIFEST-SHA256.json",
+    "file": "program-manifest.json",
+    "sha256": "caf78d07b2c759702091d850bd80418e3144b7ad4cbc1e131ce6471045ff0094"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-daily.json",
+    "file": "daily-result.json",
+    "sha256": "71c7140cd8e8c0b675fb60f7a4993e5b4da26cd115d0b0a486475488a26213e9"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/r85-real.json",
+    "file": "real-final.json",
+    "sha256": "7a0ab60fcf9b6a6801ba8b921b4af2e67dd56e314296d2e7151a1ea3b84f5b56"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-upgrade-20261015/upgrade.json",
+    "file": "upgrade-confirmed.json",
+    "sha256": "41d2c97cc062cc4f63b509242e34842d1aa5d1aff35fe55440b9c63e9426f469"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/visual-pairs.json",
+    "file": "visual-pairs.json",
+    "sha256": "fb41df2d9a1ca4d014df0d9fafba66ecaf3a20d84e1c14cebfd75c3b0ce4ea0f"
+  },
+  {
+    "source": "dist/r85-v24-rc2-source-tests.log",
+    "file": "source-tests.log",
+    "sha256": "93ce0ff789df22c2118ae0ed63e8995d88a1baea30b7e98d0b3db7fd8b3adc2c"
+  },
+  {
+    "source": "dist/r85-final-main-types.log",
+    "file": "main-types.log",
+    "sha256": "1c58641b867a67519c5c0dc5614565eb12017a63cc99d8850d871779c42df70e"
+  },
+  {
+    "source": "dist/r85-final-hifi-types.log",
+    "file": "hifi-types.log",
+    "sha256": "1c58641b867a67519c5c0dc5614565eb12017a63cc99d8850d871779c42df70e"
+  },
+  {
+    "source": "dist/r85-final-lint.json",
+    "file": "incremental-lint.json",
+    "sha256": "cf85277cbc07029d1320e3078010b4cbde753f9e935e92c39145f1a2b6e82d5b"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/before.json",
+    "file": "original-before.json",
+    "sha256": "692846e967c754ae973311d63185070d169d409ea2885dbad6b9c98f93da1a6f"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/unborn-unstage-before.json",
+    "file": "original-unborn-unstage.json",
+    "sha256": "715bb119d97587d7f0311fc3688a662baf88d26420a04557397c2079ac52b322"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-full-20261015/result.json",
+    "file": "original-rc1-full-failure.json",
+    "sha256": "168b840e4716e107c4f4e64026e13945221871c30ac586810f645df2103e63dc"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-20261015/result.json",
+    "file": "original-rc2-paint-failure.json",
+    "sha256": "548f38efa328441fb589aaa9a37dcf7c5a2a869f10e45a1a4998dba08ca2bcb2"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-glm-20261015/r85-real.json",
+    "file": "original-rc1-real-reopen-failure.json",
+    "sha256": "52371514957ed9e95d1a44974f27cd9d50ac6ee006e86d35a96f47603b8498a6"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-glm-20261015/r85-real-reopen-confirmed.json",
+    "file": "rc1-real-readonly-confirmed.json",
+    "sha256": "702730fbc94679884da0351a07e0e6f00dcd6e40683993521a5a75b8996c1e49"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-visual-confirmed2-20261015/visual-pairs.json",
+    "file": "rejected-old-visual-auto-receipt.json",
+    "sha256": "0b97ceec21610e0769bbc6fea219fb8baf394723f4dd548a891cffdf621807c0"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-wide-actual.png",
+    "file": "archive-wide-actual.png",
+    "sha256": "977aabfdb4c621da73330deb0e6ad47bfbd6c2b2c9c10b0e5833458afc777922"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-wide-prototype.png",
+    "file": "archive-wide-prototype.png",
+    "sha256": "25a4060d87c0bd23daef9476419c89b96598a798930d5451b99bf6548fd316af"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-wide-actual.png",
+    "file": "git-wide-actual.png",
+    "sha256": "974af3d2edcdb7a4a2ff9a1cabf0b21ce8545796860d7ede6c6038dca302f44f"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-wide-prototype.png",
+    "file": "git-wide-prototype.png",
+    "sha256": "388abddb181d0e9242ca2754d530eca4565179ab14324c55c6aafde6dee124c6"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-narrow-actual.png",
+    "file": "archive-narrow-actual.png",
+    "sha256": "a493e4a3e3957fd4a889cb11e0e9cfc4b393f2ab137f9b8c70b211c7915361ee"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-narrow-prototype.png",
+    "file": "archive-narrow-prototype.png",
+    "sha256": "37867cec8b7d3fa016bc3e41bf5f5c58a43a542bdc5214e6e90b6424132410b7"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-narrow-actual.png",
+    "file": "git-narrow-actual.png",
+    "sha256": "0eb99efba28688b597f2cee67e74dcdea67c5718b3e4ba45c1cf2e49e5c0c888"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-narrow-prototype.png",
+    "file": "git-narrow-prototype.png",
+    "sha256": "88ca5486d730b0e0563bc0809faa3e16458a6f417d5ea01fb82da74435399f61"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-hidpi-emulated-actual.png",
+    "file": "archive-hidpi-emulated-actual.png",
+    "sha256": "44f45c6955aefb26b4f60ddd703aa861353327eed01506912f40cc81e47279c6"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/archive-hidpi-emulated-prototype.png",
+    "file": "archive-hidpi-emulated-prototype.png",
+    "sha256": "9cfd46b412c738f559a8318af167968ff6ae68b39fa9f4341c9ad92363647bfc"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-hidpi-emulated-actual.png",
+    "file": "git-hidpi-emulated-actual.png",
+    "sha256": "1365aa7a9c958cc14db9156fc43f7d69f8e1ac6bbf61b7d74ef7e3196d8423b4"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-visual-20261015/git-hidpi-emulated-prototype.png",
+    "file": "git-hidpi-emulated-prototype.png",
+    "sha256": "4743bb4becfb160a9ba2ceae03f3e4e608644975555b96670edace5dfd0ffbe2"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-search-confirmed.png",
+    "file": "native-search-confirmed.png",
+    "sha256": "da6aca2dbfc54c06bb97cadee9668911c9270fce13f287e6735a36113a505f6e"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-search-confirmed.json",
+    "file": "native-search-confirmed.json",
+    "sha256": "560bd24b01ee507b63886ef28299b07b4b2ca3039420e1e97b0076c7915b8f68"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-escaped-confirmed.png",
+    "file": "native-escaped-confirmed.png",
+    "sha256": "d7e3b66c2a3cd5c08e22240acf87cd70db0fa445927e5eaee916ae232e468d93"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-escaped-confirmed.json",
+    "file": "native-escaped-confirmed.json",
+    "sha256": "651c447ce4da4023d60de90d59faeb9f183ea60ce9c1ae2e591c3d8f98aa2ac7"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-project-selected-confirmed.png",
+    "file": "native-project-selected-confirmed.png",
+    "sha256": "495d1d669bc4d995afa129d9515aa16a08a68d2b2ae56d1bc57f1ed3fc222ca4"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-project-selected-confirmed.json",
+    "file": "native-project-selected-confirmed.json",
+    "sha256": "fb78618a75621c04b755b73fdea83345358b38cccdc881770c02fee7d1455e79"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-outside-closed-confirmed.png",
+    "file": "native-outside-closed-confirmed.png",
+    "sha256": "6275a47e94a927b15c44fe1a7105f194cc6cc6200b3b241c05b4fc2dde213e00"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/native-outside-closed-confirmed.json",
+    "file": "native-outside-closed-confirmed.json",
+    "sha256": "fb78618a75621c04b755b73fdea83345358b38cccdc881770c02fee7d1455e79"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-archive-read-failure.png",
+    "file": "r85-archive-read-failure.png",
+    "sha256": "922fcb91ad1fabf9890d551a9d14f70241d61e534c278e167cfd343b63e50f77"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-archive-aba.png",
+    "file": "r85-archive-aba.png",
+    "sha256": "411314aa473d6f284d1a3d7d964cc8b0e0473c1b371c2f3080e09508ae805282"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-board-filter-back.png",
+    "file": "r85-board-filter-back.png",
+    "sha256": "64c7da3f83a24bcd25e2c2d321e65ec5ac75c1bf70dd46477e6c2b90c77de2f0"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-activity-cross-project.png",
+    "file": "r85-activity-cross-project.png",
+    "sha256": "3b1275aa85cdc6d9a9fbaecdce5bae63e8fe72c1aa02fee3a11d9a338fdaa629"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-conflict-stale.png",
+    "file": "r85-conflict-stale.png",
+    "sha256": "560603b496d38f58a4509c1e6de41f4139448b678e0516c0deb47533999e250f"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-conflict-resolved.png",
+    "file": "r85-conflict-resolved.png",
+    "sha256": "7349ef6b28986e8aff8594ca24e4594f0df86a6673cc8851a73ccd9780f35152"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-first-commit.png",
+    "file": "r85-first-commit.png",
+    "sha256": "2fae901a9614a907139047ce8c69f36d1efddc0a2ab5f0534802f2b628a74789"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-history-expanded.png",
+    "file": "r85-history-expanded.png",
+    "sha256": "f12412bf1db9293c1a3a3f01a91aec18e46043bc5d80cdec6b1fdc133f7878fe"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-full-confirmed-20261015/r85-undo.png",
+    "file": "r85-undo.png",
+    "sha256": "f403fa8bbca60ff0bcc0246f6a9207dfe2af7b2e3abc3a38665442dd2f07e647"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/r85-real-v1.png",
+    "file": "r85-real-v1.png",
+    "sha256": "f8463c6d05c820ff3d735633cb44361dca30faf20ab740b022cd2ff94acb4608"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/r85-real-v2-accepted.png",
+    "file": "r85-real-v2-accepted.png",
+    "sha256": "3909b30ef6005fb4bc0d08f473fe05af91942040d2798dce1ff65db6d519f7db"
+  },
+  {
+    "source": "dist/desktop/review-r85-v24-rc2-glm-20261015/r85-real-reopened.png",
+    "file": "r85-real-reopened.png",
+    "sha256": "7f271e0dbb6ad3341e470fcf5e141ac74d52b5566ebbac3ecb9ee147d8b2aa7b"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/partial-unstaged-selected-before.png",
+    "file": "original-partial-unstaged-selected-before.png",
+    "sha256": "9571090719a20fa94203632328535e4a2e0405ddc961c087591cd3e267913afe"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/archive-before.png",
+    "file": "original-archive-before.png",
+    "sha256": "85d55d716852d66edc7f98d5a6e8de9a0b60c1f09d3c9c0e60f3e224759e6b05"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/branch-invalid-native-before.png",
+    "file": "original-branch-invalid-native-before.png",
+    "sha256": "dd8faf79003f476582a60a861657de4a1d7d614bcc8ec3651736e7ba0a0ef0b4"
+  },
+  {
+    "source": "dist/desktop/review-r85-before-20261015/unborn-before.png",
+    "file": "original-unborn-before.png",
+    "sha256": "6187a454a5b5a093d937bee244ad47ea9680d3b81dfdbc4f7a9720e8f2660b90"
+  }
+]

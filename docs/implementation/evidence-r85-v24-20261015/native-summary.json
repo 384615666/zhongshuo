@@ -1,0 +1,40 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "calls": 2,
+  "scope": "actual @oai/sky search / Esc / project selection / outside close / normal close; no window-geometry setter or DOM click input",
+  "screenshots": 4,
+  "close": {
+    "pass": true,
+    "build": {
+      "buildId": "bld_5711009e30c663e7",
+      "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+      "dirty": false,
+      "dirtyDiffHash": null,
+      "builtAt": "2026-10-15T06:42:58.556Z",
+      "manifest": "MANIFEST-SHA256.json",
+      "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+    },
+    "root": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-glm-20261015\\copy\\server-data",
+    "pid": 35640,
+    "calls": 2,
+    "beforeAt": 1792047532591,
+    "inputSource": "@oai/sky native close of verified owned final engineering window",
+    "callsAfter": 2,
+    "stop": {
+      "pid": 35640,
+      "at": 1792047533086,
+      "phase": "closed",
+      "stopRequestsSentTo": []
+    },
+    "pidMarkerRemoved": true
+  }
+}

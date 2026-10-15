@@ -1,0 +1,147 @@
+{
+  "pass": false,
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v24-rc1",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-full-20261015\\copy",
+  "buildId": "bld_c84b77162bfa038d",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "port": 51740,
+  "project": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-full-20261015\\R78 UI 工程项目",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read"
+  ],
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "failed-step",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "daemon": {
+    "buildId": "bld_c84b77162bfa038d",
+    "packedEntry": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-full-20261015\\copy\\ZhongshuoDual\\resources\\app\\daemon\\daemon.cjs",
+    "appDataDir": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-full-20261015\\copy\\server-data",
+    "pipeName": "\\\\.\\pipe\\zs-daily-949c2fe6-8a7e-4de4-a485-3ac179acfee9",
+    "pid": 62084,
+    "fakeAdapterInjected": true,
+    "realDispatchGuard": true,
+    "at": 1792045337980
+  },
+  "ids": {
+    "projectId": "prj_34bc544c-568e-4c92-ad66-cfa79a18f09f",
+    "memberId": "m_default_prj_34bc544c-568e-4c92-ad66-cfa79a18f09f_0",
+    "roomId": "room_474f4c08-c630-4836-b7ba-6fc116bba51e",
+    "roomConversationId": "conv_aa0d3194-1573-453c-a716-a6cd35f0ce4b",
+    "dmConversationId": "dm_d192e46c-af1f-4f01-a241-39036d2267ea",
+    "roomTaskId": "task_c767d28b-aa3f-48f5-ac69-81001981a860",
+    "roomThreadId": "thread_0906f60e-6708-4970-927a-8335cd054c58",
+    "dmTaskId": "task_60dc6ff1-2025-4577-ae42-253a6c790511",
+    "stoppedTaskId": "task_c79e9fbf-f865-4631-8279-7e74b9089c94"
+  },
+  "dmRecords": {
+    "sameTask": "task_60dc6ff1-2025-4577-ae42-253a6c790511",
+    "completed": true,
+    "historicalRun": true,
+    "versions": [
+      1,
+      2
+    ],
+    "closedToConversation": true
+  },
+  "r79": {
+    "live": {
+      "id": "task_ba0e2cb5-02db-44a4-916b-bc5a3ace1270",
+      "threadId": "thread_f80c461c-f20e-4a38-b222-76fbb42fabdc"
+    },
+    "failed": {
+      "id": "task_90aaf67d-1494-4f55-8fbe-191a91cc31f1",
+      "threadId": "thread_be8cd768-081a-4cef-84e8-cacc2d1ec8d9"
+    },
+    "scale": {
+      "id": "task_f9bd6d32-7411-4d29-94ae-9f3bedb27bd2",
+      "threadId": "thread_b8471dc3-c276-4f83-a27f-b96d814ae942"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_3564a4c4-d7c4-4561-aa95-073817d5cce5",
+      "dlv_turn_b00743be-e2f8-4166-ab05-e3bd66ff5c0e"
+    ],
+    "dm": [
+      "dlv_turn_1c163fc5-7d9c-4683-ab29-24469353ba44",
+      "dlv_turn_c0446464-cad6-4030-a018-c7ebfeabd173"
+    ]
+  },
+  "realCallsBeforeReopen": 0,
+  "error": "Error: Runtime.evaluate CDP timeout\n    at Timeout._onTimeout (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:68:72)\n    at listOnTimeout (node:internal/timers:605:17)\n    at process.processTimers (node:internal/timers:541:7)",
+  "finalRealCalls": 0
+}

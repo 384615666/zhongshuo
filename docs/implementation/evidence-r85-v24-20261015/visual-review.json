@@ -1,0 +1,63 @@
+{
+  "accepted": true,
+  "reviewer": "primary engineering agent, actual view_image inspection; not human user acceptance",
+  "pairs": 6,
+  "images": 12,
+  "hashesVerified": true,
+  "notes": [
+    "Matched 68 archived/read-only rooms, one staged Git file, light theme and viewport/DPR. No blocking recovery modal or loading screenshot accepted.",
+    "180px archive selector retained. Wide Git shows real staged bytes; narrow uses the approved list/detail split.",
+    "Stable archive cursor ordering differs from the prototype grouping order; toolbar feedback adds read time/partial window/retry. Prototype fictional badges and global focus are not implemented product facts.",
+    "DPR1.5 is emulation, not a physical high-DPI monitor certification."
+  ],
+  "imagesManifest": [
+    {
+      "file": "archive-wide-actual.png",
+      "sha256": "977aabfdb4c621da73330deb0e6ad47bfbd6c2b2c9c10b0e5833458afc777922"
+    },
+    {
+      "file": "archive-wide-prototype.png",
+      "sha256": "25a4060d87c0bd23daef9476419c89b96598a798930d5451b99bf6548fd316af"
+    },
+    {
+      "file": "git-wide-actual.png",
+      "sha256": "974af3d2edcdb7a4a2ff9a1cabf0b21ce8545796860d7ede6c6038dca302f44f"
+    },
+    {
+      "file": "git-wide-prototype.png",
+      "sha256": "388abddb181d0e9242ca2754d530eca4565179ab14324c55c6aafde6dee124c6"
+    },
+    {
+      "file": "archive-narrow-actual.png",
+      "sha256": "a493e4a3e3957fd4a889cb11e0e9cfc4b393f2ab137f9b8c70b211c7915361ee"
+    },
+    {
+      "file": "archive-narrow-prototype.png",
+      "sha256": "37867cec8b7d3fa016bc3e41bf5f5c58a43a542bdc5214e6e90b6424132410b7"
+    },
+    {
+      "file": "git-narrow-actual.png",
+      "sha256": "0eb99efba28688b597f2cee67e74dcdea67c5718b3e4ba45c1cf2e49e5c0c888"
+    },
+    {
+      "file": "git-narrow-prototype.png",
+      "sha256": "88ca5486d730b0e0563bc0809faa3e16458a6f417d5ea01fb82da74435399f61"
+    },
+    {
+      "file": "archive-hidpi-emulated-actual.png",
+      "sha256": "44f45c6955aefb26b4f60ddd703aa861353327eed01506912f40cc81e47279c6"
+    },
+    {
+      "file": "archive-hidpi-emulated-prototype.png",
+      "sha256": "9cfd46b412c738f559a8318af167968ff6ae68b39fa9f4341c9ad92363647bfc"
+    },
+    {
+      "file": "git-hidpi-emulated-actual.png",
+      "sha256": "1365aa7a9c958cc14db9156fc43f7d69f8e1ac6bbf61b7d74ef7e3196d8423b4"
+    },
+    {
+      "file": "git-hidpi-emulated-prototype.png",
+      "sha256": "4743bb4becfb160a9ba2ceae03f3e4e608644975555b96670edace5dfd0ffbe2"
+    }
+  ]
+}

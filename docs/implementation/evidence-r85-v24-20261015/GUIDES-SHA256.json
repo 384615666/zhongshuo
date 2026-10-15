@@ -1,0 +1,19 @@
+{
+  "buildId": "bld_5711009e30c663e7",
+  "runtimeCommit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+  "scope": "external user guides only; not a rebuilt program",
+  "files": [
+    {
+      "file": "README-DAILY.md",
+      "sha256": "192b07ebbad9454129d4c801d546aab7676e0e1c6fcde7825ea940bcb7a3f639"
+    },
+    {
+      "file": "README-CANDIDATE.md",
+      "sha256": "2632538113a128ba860e217f02f6f7b93f61b7c3a18825b6cb859d73cd2e9d44"
+    },
+    {
+      "file": "UPGRADE-V23.md",
+      "sha256": "5d1867a39296cd99b2635e10f91b6ea24da905f67ba68e6e7e90af64006f5746"
+    }
+  ]
+}

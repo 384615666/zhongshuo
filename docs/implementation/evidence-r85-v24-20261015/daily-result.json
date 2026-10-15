@@ -1,0 +1,267 @@
+{
+  "pass": true,
+  "scope": "complete",
+  "buildId": "bld_5711009e30c663e7",
+  "steps": [
+    {
+      "name": "archive-page-1",
+      "at": 1792046924451,
+      "hash": "#/archive"
+    },
+    {
+      "name": "archive-page-2",
+      "at": 1792046924686,
+      "hash": "#/archive"
+    },
+    {
+      "name": "archive-read-failure",
+      "at": 1792046925271,
+      "hash": "#/archive"
+    },
+    {
+      "name": "archive-aba",
+      "at": 1792046928887,
+      "hash": "#/archive?project=prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3"
+    },
+    {
+      "name": "board-default",
+      "at": 1792046929104,
+      "hash": "#/board"
+    },
+    {
+      "name": "board-filter-back",
+      "at": 1792046929434,
+      "hash": "#/board?scope=all&projectId=prj_3ee6b414-8f8d-4103-add2-bc5cac4ac6b2&roomId=room_a4db5a11-26f1-42a3-9e2f-a9850556d5ef"
+    },
+    {
+      "name": "board-invalid-filter-back",
+      "at": 1792046929655
+    },
+    {
+      "name": "archive-project-still-readonly",
+      "at": 1792046930049,
+      "hash": "#/archive?project=prj_56f18c7e-d0fd-4e33-8088-2c155edd69d2"
+    },
+    {
+      "name": "activity-cross-project",
+      "at": 1792046930299,
+      "hash": "#/activity"
+    },
+    {
+      "name": "first-commit",
+      "at": 1792046936606,
+      "hash": "#/project/prj_db451f70-a5b7-4dee-b6d8-f7ccf851eabb/files?tab=git"
+    },
+    {
+      "name": "partial-0",
+      "at": 1792046939056,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "partial-1",
+      "at": 1792046939631,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "diff-read-failure",
+      "at": 1792046940572,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "diff-auto-refresh",
+      "at": 1792046941133,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "branch-failed-input",
+      "at": 1792046941613,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "branch-created",
+      "at": 1792046942766,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "conflict-stale",
+      "at": 1792046946394,
+      "hash": "#/project/prj_a8f7a2ae-a8c2-4628-b476-d0cf7668078c/files?tab=git"
+    },
+    {
+      "name": "conflict-resolved",
+      "at": 1792046947954,
+      "hash": "#/project/prj_a8f7a2ae-a8c2-4628-b476-d0cf7668078c/files?tab=git"
+    },
+    {
+      "name": "history-expanded",
+      "at": 1792046951934,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    },
+    {
+      "name": "undo",
+      "at": 1792046953155,
+      "hash": "#/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git"
+    }
+  ],
+  "faults": [
+    {
+      "kind": "archive read rejected",
+      "retainedRows": 68
+    },
+    {
+      "kind": "archive delayed ABA",
+      "removed": "room_b40ad35f-6ef4-496f-abf3-00d3ab6ac31a",
+      "finalRows": 33
+    }
+  ],
+  "screenshots": [
+    "r85-archive-page-1.png",
+    "r85-archive-page-2.png",
+    "r85-archive-read-failure.png",
+    "r85-archive-aba.png",
+    "r85-board-default.png",
+    "r85-board-filter-back.png",
+    "r85-archive-project-still-readonly.png",
+    "r85-activity-cross-project.png",
+    "r85-first-commit.png",
+    "r85-partial-0.png",
+    "r85-partial-1.png",
+    "r85-diff-read-failure.png",
+    "r85-diff-auto-refresh.png",
+    "r85-branch-failed-input.png",
+    "r85-branch-created.png",
+    "r85-conflict-stale.png",
+    "r85-conflict-resolved.png",
+    "r85-history-expanded.png",
+    "r85-undo.png"
+  ],
+  "samples": [
+    {
+      "at": 1792046953862,
+      "route": "/thread/thread_283eade6-2605-400d-89e7-3f85a016cf50?tab=run",
+      "heap": 27306060,
+      "requests": 1154,
+      "inFlight": 0,
+      "rss": 130330624
+    },
+    {
+      "at": 1792046954598,
+      "route": "/dm/dm_482375fc-6c4f-40ca-a065-88cbe882250b",
+      "heap": 11746080,
+      "requests": 1160,
+      "inFlight": 0,
+      "rss": 130641920
+    },
+    {
+      "at": 1792046955322,
+      "route": "/project/prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3/members",
+      "heap": 13554300,
+      "requests": 1200,
+      "inFlight": 0,
+      "rss": 131244032
+    },
+    {
+      "at": 1792046956045,
+      "route": "/board",
+      "heap": 13137432,
+      "requests": 1201,
+      "inFlight": 0,
+      "rss": 131473408
+    },
+    {
+      "at": 1792046956765,
+      "route": "/activity",
+      "heap": 12083676,
+      "requests": 1202,
+      "inFlight": 0,
+      "rss": 132063232
+    },
+    {
+      "at": 1792046957475,
+      "route": "/archive",
+      "heap": 13561452,
+      "requests": 1203,
+      "inFlight": 0,
+      "rss": 132456448
+    },
+    {
+      "at": 1792046958214,
+      "route": "/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git",
+      "heap": 14533384,
+      "requests": 1214,
+      "inFlight": 5,
+      "rss": 135479296
+    },
+    {
+      "at": 1792046958939,
+      "route": "/thread/thread_283eade6-2605-400d-89e7-3f85a016cf50?tab=run",
+      "heap": 15588792,
+      "requests": 1221,
+      "inFlight": 0,
+      "rss": 139460608
+    },
+    {
+      "at": 1792046959678,
+      "route": "/dm/dm_482375fc-6c4f-40ca-a065-88cbe882250b",
+      "heap": 12101672,
+      "requests": 1225,
+      "inFlight": 0,
+      "rss": 140193792
+    },
+    {
+      "at": 1792046960414,
+      "route": "/project/prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3/members",
+      "heap": 14533280,
+      "requests": 1265,
+      "inFlight": 0,
+      "rss": 145371136
+    },
+    {
+      "at": 1792046961132,
+      "route": "/board",
+      "heap": 15570524,
+      "requests": 1266,
+      "inFlight": 0,
+      "rss": 145825792
+    },
+    {
+      "at": 1792046961857,
+      "route": "/activity",
+      "heap": 13683052,
+      "requests": 1267,
+      "inFlight": 0,
+      "rss": 146059264
+    },
+    {
+      "at": 1792046962581,
+      "route": "/archive",
+      "heap": 12177844,
+      "requests": 1268,
+      "inFlight": 0,
+      "rss": 146063360
+    },
+    {
+      "at": 1792046963305,
+      "route": "/project/prj_70bc66b2-34a9-4664-a050-6340bd4a0116/files?tab=git",
+      "heap": 13148944,
+      "requests": 1280,
+      "inFlight": 6,
+      "rss": 146104320
+    }
+  ],
+  "realCalls": 0,
+  "ids": {
+    "a": "prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3",
+    "b": "prj_3ee6b414-8f8d-4103-add2-bc5cac4ac6b2",
+    "room": "room_a4db5a11-26f1-42a3-9e2f-a9850556d5ef",
+    "br": "room_default_prj_3ee6b414-8f8d-4103-add2-bc5cac4ac6b2"
+  },
+  "firstCommit": {
+    "head": "819edbc73aca1f825156c60df87bd23f0c81002a",
+    "files": "\"\\350\\257\\264\\346\\230\\216.txt\""
+  },
+  "undo": {
+    "approved": "eb14710e64942061bd83b1d57593b0eaa1262a43",
+    "head": "86ea2b59baeea6111a2c10ef7b1559e88911b280"
+  }
+}

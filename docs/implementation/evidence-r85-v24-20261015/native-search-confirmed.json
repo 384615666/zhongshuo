@@ -1,0 +1,21 @@
+{
+  "hash": "#/project/prj_02e0aa9e-7c65-40f1-9493-b8974d81f160/room/room_default_prj_02e0aa9e-7c65-40f1-9493-b8974d81f160?thread=thread_0e0f4cc2-ac79-416f-a644-5fa90b8c0974&tab=delivery",
+  "menu": "项目管理 · 显示在侧栏 / 切换当前项目显示在侧栏项目自然工程当前 打开本地文件夹… 项目主页（目录失效时重新定位）",
+  "search": "自然",
+  "ratio": 1.25,
+  "viewport": [
+    1282,
+    802
+  ],
+  "calls": 2,
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "inputSource": "@oai/sky actual mouse and keyboard; this collector only reads"
+}

@@ -1,0 +1,98 @@
+{
+  "pass": true,
+  "buildId": "bld_5711009e30c663e7",
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v24-rc2",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-full-confirmed-20261015\\copy",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read",
+    "final launcher reopen preserves room/DM identities and deliveries",
+    "R79 completed live facts and older history remain reachable after real launcher reopen"
+  ],
+  "ids": {
+    "projectId": "prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3",
+    "memberId": "m_default_prj_c49b7616-4aa4-41b9-aaa9-acfb77ecaab3_0",
+    "roomId": "room_a4db5a11-26f1-42a3-9e2f-a9850556d5ef",
+    "roomConversationId": "conv_1533e6ef-4b38-41b5-87d0-48163d03db64",
+    "dmConversationId": "dm_482375fc-6c4f-40ca-a065-88cbe882250b",
+    "roomTaskId": "task_b8c77e11-3fcf-4da1-a99d-851f33623721",
+    "roomThreadId": "thread_283eade6-2605-400d-89e7-3f85a016cf50",
+    "dmTaskId": "task_f90aa282-4ba5-4ea5-b7d1-6ff1c83616e0",
+    "stoppedTaskId": "task_7dd86bc1-70f4-4026-bda8-c723d5335559"
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_abb7b5d0-348b-40ce-be14-db9139007c9d",
+      "dlv_turn_54e72b70-ec51-44ab-a8f5-dad584d435f0"
+    ],
+    "dm": [
+      "dlv_turn_fbe3867d-0d6a-434d-9da2-a265af71f5a7",
+      "dlv_turn_0cd28c54-601d-476f-9c61-378aa4549d73"
+    ]
+  },
+  "r79": {
+    "live": {
+      "id": "task_a0ad998c-65ed-427e-b468-501ac62956d5",
+      "threadId": "thread_97f49a27-d811-4f84-a4fd-44fdf2a1e990"
+    },
+    "failed": {
+      "id": "task_acecdda8-0dc9-4778-8915-d6dcff6baf2b",
+      "threadId": "thread_9846f8ab-54c8-4c24-9a84-0a22380f993b"
+    },
+    "scale": {
+      "id": "task_1b95dd15-2577-4b2f-9c17-f728b4ae8596",
+      "threadId": "thread_d8a503e7-2ac3-4e4e-86c6-8ab8ba4d7180"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true,
+    "reopen": true
+  },
+  "finalRealCalls": 0
+}

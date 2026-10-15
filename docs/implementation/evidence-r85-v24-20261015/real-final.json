@@ -1,0 +1,128 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "target": {
+    "kind": "claude",
+    "model": "glm-5.3-flash",
+    "effort": "high"
+  },
+  "stages": [
+    "review note alone created no run",
+    "real v1 / natural rework v2 / accept approved v2",
+    "normal close / exact BAT reopen / accepted v2 preserved with zero additional calls"
+  ],
+  "calls": [
+    {
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "task_id": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+      "turn_id": "turn_f3522d50-e173-41c9-b82e-415418586cb5"
+    },
+    {
+      "id": 2,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "task_id": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+      "turn_id": "turn_902921af-6ed2-4df4-a4ae-3a7b81009bfb"
+    }
+  ],
+  "task": {
+    "id": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+    "conversation_thread_id": "thread_0e0f4cc2-ac79-416f-a644-5fa90b8c0974"
+  },
+  "live": {
+    "at": 1792046730608,
+    "taskId": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+    "turns": [
+      {
+        "id": "turn_902921af-6ed2-4df4-a4ae-3a7b81009bfb",
+        "status": "RUNNING"
+      },
+      {
+        "id": "turn_f3522d50-e173-41c9-b82e-415418586cb5",
+        "status": "SUCCEEDED"
+      }
+    ]
+  },
+  "v1": {
+    "id": "dlv_turn_f3522d50-e173-41c9-b82e-415418586cb5",
+    "revision": 1,
+    "manifestHash": "2a3ffb3bdb6e3152bb617bb808b10fbf9d29d076721f5fe93775f3a3cd09be31",
+    "files": [
+      {
+        "name": "greet.mjs",
+        "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d"
+      },
+      {
+        "name": "greet.test.mjs",
+        "sha256": "e041b743c7a09ed8b279e9d7f09b8657a5988a572980b18b538f1bd50c84a8be"
+      }
+    ]
+  },
+  "v2": {
+    "id": "dlv_turn_902921af-6ed2-4df4-a4ae-3a7b81009bfb",
+    "revision": 2,
+    "manifestHash": "34a687382583f849e03daae265ffe54c8c125c390a2e2a5867ae41343f74348f",
+    "files": [
+      {
+        "name": "greet.mjs",
+        "sha256": "fb666a76c5a8bfaf8f9ac4c5c8db4e44cbc55d00bbd1a31749234e68caabb552"
+      },
+      {
+        "name": "greet.test.mjs",
+        "sha256": "433c8044a2e1765934e937ddbc235ee1de3c8e808f55f0542f4442fca42fc482"
+      }
+    ]
+  },
+  "native": [
+    {
+      "sessionId": "claude_sess_1c59bb7c-f398-47b2-8612-c0839ffce643",
+      "providerSessionId": "235acf44-328a-4daa-aa9d-b73ca1fdd66a",
+      "transcriptSha256": "23bb5a65a1c85b7bd134348051b75a06e0061886afaa1f50c1a4cb4b50b954a9",
+      "toolNames": [
+        "Write",
+        "Write",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "testCommandIds": [
+        "call_3e445a5b4855400d8da8007b"
+      ],
+      "successfulTestResults": [
+        "call_3e445a5b4855400d8da8007b"
+      ]
+    },
+    {
+      "sessionId": "claude_sess_b826c4dc-aa54-4a9d-94af-87a1c1e2b7ba",
+      "providerSessionId": "08f1eb66-a6c9-463d-998d-27ede18e478e",
+      "transcriptSha256": "febd2993af8d9444a484063330ba0865b2cbe7e5c8c4d874cebd636ef258a678",
+      "toolNames": [
+        "Read",
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "testCommandIds": [
+        "call_86edacce9b104750ad9b3771"
+      ],
+      "successfulTestResults": [
+        "call_86edacce9b104750ad9b3771"
+      ]
+    }
+  ]
+}

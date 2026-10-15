@@ -1,0 +1,94 @@
+{
+  "pass": true,
+  "total": 4,
+  "calls": [
+    {
+      "rootId": "dri_98ee6f41-951e-433e-af40-e26e747aadc9",
+      "build": {
+        "buildId": "bld_c84b77162bfa038d",
+        "commit": "e745ad879019a785255ac3dee577666fae0dc616",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T06:21:43.330Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "purpose": "natural v1 file creation and actual Node test",
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "turn_id": "turn_d4cf98d9-8a3b-40fc-8f49-422eeaed2fc1",
+      "task_id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+      "created_at": 1792045352072,
+      "settled_at": 1792045393483
+    },
+    {
+      "rootId": "dri_98ee6f41-951e-433e-af40-e26e747aadc9",
+      "build": {
+        "buildId": "bld_c84b77162bfa038d",
+        "commit": "e745ad879019a785255ac3dee577666fae0dc616",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T06:21:43.330Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "purpose": "explicit rework v2 and actual Node test",
+      "id": 2,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "turn_id": "turn_be1d3b88-eddc-4399-91fb-4b30eb0ca7bc",
+      "task_id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+      "created_at": 1792045394677,
+      "settled_at": 1792045437396
+    },
+    {
+      "rootId": "dri_5c0326c3-adbc-454b-8baf-485aa984684e",
+      "build": {
+        "buildId": "bld_5711009e30c663e7",
+        "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T06:42:58.556Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "purpose": "natural v1 file creation and actual Node test",
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "turn_id": "turn_f3522d50-e173-41c9-b82e-415418586cb5",
+      "task_id": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+      "created_at": 1792046643102,
+      "settled_at": 1792046679072
+    },
+    {
+      "rootId": "dri_5c0326c3-adbc-454b-8baf-485aa984684e",
+      "build": {
+        "buildId": "bld_5711009e30c663e7",
+        "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T06:42:58.556Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "purpose": "explicit rework v2 and actual Node test",
+      "id": 2,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "turn_id": "turn_902921af-6ed2-4df4-a4ae-3a7b81009bfb",
+      "task_id": "task_c07e5b3d-dcec-42af-b1b7-ace8cc5c2e4f",
+      "created_at": 1792046680475,
+      "settled_at": 1792046735618
+    }
+  ]
+}

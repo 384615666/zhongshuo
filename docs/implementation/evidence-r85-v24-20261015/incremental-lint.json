@@ -1,0 +1,259 @@
+{
+  "baseline": "ba0277f",
+  "pass": true,
+  "scope": "all changed TypeScript/JavaScript files, error multiset comparison, not full-repository lint success",
+  "files": [
+    {
+      "file": "scripts/lib/r78-live-engineering-daemon.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r78-workflow-launcher.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r85-daily-extension.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r85-real-reopen.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r85-real-workflow.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r85-upgrade.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "scripts/verify-r85-visual-pairs.cjs",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/daemon/archiveIndex.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/daemon/commands.ts",
+      "beforeErrors": 10,
+      "currentErrors": 10,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/daemon/gitStatus.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/daemon/gitWrite.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/ActivityPage.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/MembersPage.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/bridge.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/components/MemberManagementForms.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/components/PendingGitOperations.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/components/ProjectWriteAccessPanel.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/data/actions-git.ts",
+      "beforeErrors": 1,
+      "currentErrors": 1,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/data/gitEntries.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/data/gitWrites.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/data/types.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/data/useArchiveIndex.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/lib/runtimePermissions.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/lib/useFormGuard.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/ArchivePage.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/GitDialogs.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/GitPage.tsx",
+      "beforeErrors": 2,
+      "currentErrors": 2,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/MemberDetailPage.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/TasksBoard.tsx",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "src/ui/hifi/pages/pages-misc.tsx",
+      "beforeErrors": 7,
+      "currentErrors": 7,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/browser/gitDailyR85.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/integration/archiveActivityR85.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/integration/gitConflictSnapshotR85.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/integration/gitReceiptDurabilityR85.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/integration/gitRt24.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    },
+    {
+      "file": "tests/unit/r85VerifierExpressions.test.ts",
+      "beforeErrors": 0,
+      "currentErrors": 0,
+      "added": [],
+      "removed": []
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_c84b77162bfa038d",
+    "commit": "e745ad879019a785255ac3dee577666fae0dc616",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:21:43.330Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "target": {
+    "kind": "claude",
+    "model": "glm-5.3-flash",
+    "effort": "high"
+  },
+  "stages": [
+    "review note alone created no run",
+    "real v1 / natural rework v2 / accept approved v2"
+  ],
+  "calls": [
+    {
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "task_id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+      "turn_id": "turn_d4cf98d9-8a3b-40fc-8f49-422eeaed2fc1"
+    },
+    {
+      "id": 2,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": "glm-5.3-flash",
+      "status": "succeeded",
+      "task_id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+      "turn_id": "turn_be1d3b88-eddc-4399-91fb-4b30eb0ca7bc"
+    }
+  ],
+  "task": {
+    "id": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+    "conversation_thread_id": "thread_23311c78-8e00-4831-958a-bc153cfcc05f"
+  },
+  "live": {
+    "at": 1792045434878,
+    "taskId": "task_09cf49b0-795f-4b92-a473-d90c21466264",
+    "turns": [
+      {
+        "id": "turn_be1d3b88-eddc-4399-91fb-4b30eb0ca7bc",
+        "status": "RUNNING"
+      },
+      {
+        "id": "turn_d4cf98d9-8a3b-40fc-8f49-422eeaed2fc1",
+        "status": "SUCCEEDED"
+      }
+    ]
+  },
+  "v1": {
+    "id": "dlv_turn_d4cf98d9-8a3b-40fc-8f49-422eeaed2fc1",
+    "revision": 1,
+    "manifestHash": "e3bedd162840d6880beac2a8579d319984550297ef173d5febe2b5ca32f62fe4",
+    "files": [
+      {
+        "name": "greet.mjs",
+        "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d"
+      },
+      {
+        "name": "greet.test.mjs",
+        "sha256": "e59ff304870b3fd90639ab0d6a1f1bd8412fc12d316078c17ade94c9ec9bc86c"
+      }
+    ]
+  },
+  "v2": {
+    "id": "dlv_turn_be1d3b88-eddc-4399-91fb-4b30eb0ca7bc",
+    "revision": 2,
+    "manifestHash": "0273919db5431357f137efaa9f1a761ad1ec9918d68f724e24a241c47b7d7a5b",
+    "files": [
+      {
+        "name": "greet.mjs",
+        "sha256": "7052d205d2d9ff74ffc0bb384156434efcbe05f42f701c90374b68da7f114c28"
+      },
+      {
+        "name": "greet.test.mjs",
+        "sha256": "64a1a2d2dfdb51c8bf8fe35693b319164bd99a10f6e57777021d1429867ca72b"
+      }
+    ]
+  },
+  "native": [
+    {
+      "sessionId": "claude_sess_32f34d08-219d-4ddb-89c6-ed8092279262",
+      "providerSessionId": "8e5397a7-de50-4518-9af7-e7ea8ac905e4",
+      "transcriptSha256": "9d0a1bdf80464be554a97c1a24020f59462e46c123461e0a514b9b4f1e4c0fb4",
+      "toolNames": [
+        "Write",
+        "Write",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "testCommandIds": [
+        "call_88469412c7d344bda8135725"
+      ],
+      "successfulTestResults": [
+        "call_88469412c7d344bda8135725"
+      ]
+    },
+    {
+      "sessionId": "claude_sess_a75a0c65-523c-40e2-accd-3e2a4f430711",
+      "providerSessionId": "c7a53611-1c9b-4bc1-be3a-32fde29fb807",
+      "transcriptSha256": "5876b28ff1b2bf71d34d3a170735c593b7da6578ba67ff4cafd11d6cb7a7aa1c",
+      "toolNames": [
+        "Read",
+        "Read",
+        "Write",
+        "Write",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "testCommandIds": [
+        "call_7e967514d0ba46e390d54861"
+      ],
+      "successfulTestResults": [
+        "call_7e967514d0ba46e390d54861"
+      ]
+    }
+  ],
+  "error": "Error: TypeError: Cannot read properties of null (reading 'classList')\n    at <anonymous>:1:15\n    at Cdp.eval (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:19:148)\n    at async until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:80)\n    at async connect (D:\\zhongshuo\\scripts\\verify-r85-real-workflow.cjs:25:452)\n    at async D:\\zhongshuo\\scripts\\verify-r85-real-workflow.cjs:40:355"
+}

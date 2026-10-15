@@ -1,0 +1,185 @@
+{
+  "pass": true,
+  "scope": "R85 changed Git and archive regions; approved prototype with matched synthetic facts, light theme, emulated viewport/DPR pairs; not OS HiDPI certification",
+  "pairs": [
+    {
+      "page": "archive",
+      "viewport": {
+        "name": "wide",
+        "width": 1280,
+        "height": 800,
+        "deviceScaleFactor": 1
+      },
+      "actual": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 1280,
+        "archiveSelectWidth": 180
+      },
+      "reference": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "files": [
+        "archive-wide-actual.png",
+        "archive-wide-prototype.png"
+      ]
+    },
+    {
+      "page": "git",
+      "viewport": {
+        "name": "wide",
+        "width": 1280,
+        "height": 800,
+        "deviceScaleFactor": 1
+      },
+      "actual": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "reference": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "files": [
+        "git-wide-actual.png",
+        "git-wide-prototype.png"
+      ]
+    },
+    {
+      "page": "archive",
+      "viewport": {
+        "name": "narrow",
+        "width": 900,
+        "height": 760,
+        "deviceScaleFactor": 1
+      },
+      "actual": {
+        "width": 900,
+        "height": 760,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 900,
+        "archiveSelectWidth": 180
+      },
+      "reference": {
+        "width": 900,
+        "height": 760,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 900
+      },
+      "files": [
+        "archive-narrow-actual.png",
+        "archive-narrow-prototype.png"
+      ]
+    },
+    {
+      "page": "git",
+      "viewport": {
+        "name": "narrow",
+        "width": 900,
+        "height": 760,
+        "deviceScaleFactor": 1
+      },
+      "actual": {
+        "width": 900,
+        "height": 760,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 900
+      },
+      "reference": {
+        "width": 900,
+        "height": 760,
+        "dpr": 1.0000000149011612,
+        "theme": "light",
+        "scrollWidth": 900
+      },
+      "files": [
+        "git-narrow-actual.png",
+        "git-narrow-prototype.png"
+      ]
+    },
+    {
+      "page": "archive",
+      "viewport": {
+        "name": "hidpi-emulated",
+        "width": 1280,
+        "height": 800,
+        "deviceScaleFactor": 1.5
+      },
+      "actual": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5000000596046448,
+        "theme": "light",
+        "scrollWidth": 1280,
+        "archiveSelectWidth": 180
+      },
+      "reference": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5000000596046448,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "files": [
+        "archive-hidpi-emulated-actual.png",
+        "archive-hidpi-emulated-prototype.png"
+      ]
+    },
+    {
+      "page": "git",
+      "viewport": {
+        "name": "hidpi-emulated",
+        "width": 1280,
+        "height": 800,
+        "deviceScaleFactor": 1.5
+      },
+      "actual": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5000000596046448,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "reference": {
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5000000596046448,
+        "theme": "light",
+        "scrollWidth": 1280
+      },
+      "files": [
+        "git-hidpi-emulated-actual.png",
+        "git-hidpi-emulated-prototype.png"
+      ]
+    }
+  ],
+  "build": {
+    "buildId": "bld_5711009e30c663e7",
+    "commit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T06:42:58.556Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "density": {
+    "projects": 8,
+    "archiveRooms": 68,
+    "gitFiles": 1
+  }
+}

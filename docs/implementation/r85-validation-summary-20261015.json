@@ -1,0 +1,40 @@
+{
+  "runtimeCommit": "383f2ee5df3260eb424a2c85f6c68c7f31d71b19",
+  "buildId": "bld_5711009e30c663e7",
+  "sourceSuite": {
+    "files": 156,
+    "tests": 1088,
+    "pass": true
+  },
+  "separateReleaseGateContracts": {
+    "files": 1,
+    "tests": 14,
+    "pass": true
+  },
+  "mainTypecheck": true,
+  "hifiTypecheck": true,
+  "incrementalLint": true,
+  "files": [
+    {
+      "file": "dist/r85-v24-rc2-source-tests.log",
+      "sha256": "93ce0ff789df22c2118ae0ed63e8995d88a1baea30b7e98d0b3db7fd8b3adc2c"
+    },
+    {
+      "file": "dist/r85-final-gate-tests.log",
+      "sha256": "9e9544a529f014a22da08add8782b522f242a98c1b2a7b7167512634a22f4da0"
+    },
+    {
+      "file": "dist/r85-final-complete-main-types.log",
+      "sha256": "1c58641b867a67519c5c0dc5614565eb12017a63cc99d8850d871779c42df70e"
+    },
+    {
+      "file": "dist/r85-final-hifi-types.log",
+      "sha256": "1c58641b867a67519c5c0dc5614565eb12017a63cc99d8850d871779c42df70e"
+    },
+    {
+      "file": "dist/r85-final-complete-lint.json",
+      "sha256": "27fa83747fe2b3460a69218dd0e23be81dc128a2790df501f7f985a968b90f4d"
+    }
+  ],
+  "scope": "full source suite plus separately run necessary release-gate contracts; no model certification inferred from test counts"
+}

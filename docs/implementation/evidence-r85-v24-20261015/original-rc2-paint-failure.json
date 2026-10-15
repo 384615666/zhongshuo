@@ -1,0 +1,147 @@
+{
+  "pass": false,
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v24-rc2",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-full-20261015\\copy",
+  "buildId": "bld_5711009e30c663e7",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "port": 51751,
+  "project": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-full-20261015\\R78 UI 工程项目",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read"
+  ],
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "failed-step",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "daemon": {
+    "buildId": "bld_5711009e30c663e7",
+    "packedEntry": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-full-20261015\\copy\\ZhongshuoDual\\resources\\app\\daemon\\daemon.cjs",
+    "appDataDir": "D:\\zhongshuo\\dist\\desktop\\review-r85-v24-rc2-full-20261015\\copy\\server-data",
+    "pipeName": "\\\\.\\pipe\\zs-daily-f9a5c455-92cd-45cd-9ca9-1d5d0f3570ed",
+    "pid": 54620,
+    "fakeAdapterInjected": true,
+    "realDispatchGuard": true,
+    "at": 1792046620104
+  },
+  "ids": {
+    "projectId": "prj_f8d9d075-6133-4a61-adb5-51f99caf8510",
+    "memberId": "m_default_prj_f8d9d075-6133-4a61-adb5-51f99caf8510_0",
+    "roomId": "room_8130ae21-9785-46c5-8c96-96235e2b78a0",
+    "roomConversationId": "conv_300b8225-377d-4856-a860-b4682cf86b37",
+    "dmConversationId": "dm_caf1cf78-bbd8-43c8-91cd-261853cc16f1",
+    "roomTaskId": "task_8804a801-4071-49a6-b592-08b3ac1115f4",
+    "roomThreadId": "thread_a03b7655-02e5-4df5-abea-e92e28c888b5",
+    "dmTaskId": "task_eff2baac-57be-4dfa-8838-8a59ae463cba",
+    "stoppedTaskId": "task_391e1f76-4be1-465d-b84b-878f9ab604d3"
+  },
+  "dmRecords": {
+    "sameTask": "task_eff2baac-57be-4dfa-8838-8a59ae463cba",
+    "completed": true,
+    "historicalRun": true,
+    "versions": [
+      1,
+      2
+    ],
+    "closedToConversation": true
+  },
+  "r79": {
+    "live": {
+      "id": "task_3cfe3e03-1243-4b74-aeb6-d2d9f45f39f1",
+      "threadId": "thread_66b8aebc-eac3-4587-aeec-9065d18d9585"
+    },
+    "failed": {
+      "id": "task_b90f9924-ea83-4215-b6a4-77648752ee8e",
+      "threadId": "thread_18407041-aaac-461e-8b9f-8fdec3f4dee4"
+    },
+    "scale": {
+      "id": "task_809b5292-7563-43dd-9be3-70b1329feedd",
+      "threadId": "thread_c47bc7d2-9d37-4912-a1b8-23ea8c1e1e7c"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_a1ea2c2f-a8d6-48a9-b7ef-0c2b291e5bc2",
+      "dlv_turn_020b38f0-5298-441f-8e02-71d7d623293b"
+    ],
+    "dm": [
+      "dlv_turn_6a6462e2-cf75-43df-8743-30c0415d6bfe",
+      "dlv_turn_6c53110a-b220-4519-8804-014a2f5bbc8d"
+    ]
+  },
+  "realCallsBeforeReopen": 0,
+  "error": "Error: own screenshot r85-conflict-stale.png: no visible paint after bringToFront\n    at must (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:24:62)\n    at Cdp.shot (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:83:5)\n    at async step (D:\\zhongshuo\\scripts\\verify-r85-daily-extension.cjs:11:27)\n    at async module.exports (D:\\zhongshuo\\scripts\\verify-r85-daily-extension.cjs:81:502)\n    at async D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:441:49",
+  "finalRealCalls": 0
+}
