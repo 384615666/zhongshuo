@@ -2,7 +2,7 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前交接（2026-10-15，R84核心工程门完成，完整放行仍未通过）
+## 当前交接（2026-10-15，R84必要门通过，整体用户验收待定）
 
 当前冻结运行源码 clean `05b549f61169b7293521dd42ec38e1a2fe239de1`；候选 `desktop-daily-win-v23-rc6`，BUILD `bld_fcf357a7e1e4ad52`，593清单一致。当前HEAD用git实读，后续QA/记录提交不冒充构建源码。150文件1058确定性测试、双types/增量lint无新增错误通过；外部GitHub TLS旧边界单列。详见 [R84进度](r84-progress-20261014.md)。
 
@@ -12,9 +12,9 @@ rc6 GLM/glm-5.3-flash/high 与 Codex/gpt-6.1-sol/xhigh已各10次真实全部成
 
 最终Fake连续观察北京时间08:31:55.208–10:31:55.212，7200004ms/352采样完成，8路径各44次；原线程/README恢复，消息24/模型调用0，请求+8980，daemon RSS85.79–88.07MiB，恢复计时器保持1。关窗后真实BAT再开，历史run4/历史窗口/展开/草稿和最后确认滚动584.8恢复。早先探针误用分页交互前517.6坐标而失败，原件保留，不代记首次成功。详见 [最终收口](r84-desktop-closeout-v23-20261015.md)、[当前矩阵](r84-current-capabilities-20261015.md)、[必要门](evidence-r84-v23-20261015/final-gates.json)。
 
-原生菜单最终副本7步真实输入、最大化/还原/预览Esc/关闭通过；鼠标拖动仍unverified，唯一完整门失败，不得改绿或重跑相同实验制造位移。六对成员/详情原型与共享Composer九组通过，DPR1.5仅仿真。最后一次用户约10分钟自然路线即可，用户验收待定；无账号/模型资源阻断。仅可在用户真实反馈或可靠原生位移证据到来后收剩余门；不要重跑81次调用、2h或旧未知根。
+原生菜单最终副本7步真实输入、最大化/还原/预览Esc/关闭通过；用户2026-10-15已在审查会话对本BUILD鼠标拖动回填“能正常移动”，已单独按human/manual绑定BUILD/manifest，必要门pass=true。原自动化位移仍unverified，封存false结果保持；整体userAcceptance=pending。六对成员/详情原型与共享Composer九组通过，DPR1.5仅仿真。已收唯一待测拖动项，无需再次向用户索取拖动或历史清单；无账号/模型资源阻断。后续只按新用户反馈推进；不要重跑81次调用、2h或旧未知根。
 
-唯一当前候选desktop-daily-win-v23-rc6/start-desktop.bat（旧v23/rc2–rc5保留阶段证据）。五份最终程序593文件均核size/hash、候选未启动无数据根，quickstart与随包两份说明同hash。42份白名单证据已入docs，无DB/profile/密钥。源码/QA/42份证据收口已推送d707005，独立审查在该clean提交另跑总门确认同一唯一鼠标缺口；后续只有审查记录提交，当前HEAD由git实读，不将文档HEAD冒充冻结运行源码。
+唯一当前候选desktop-daily-win-v23-rc6/start-desktop.bat（旧v23/rc2–rc5保留阶段证据）。五份最终程序593文件均核size/hash、交付前候选未启动无数据根的收据已封存，quickstart与随包两份说明同hash；当前用户已启动产生数据，须原地保留。42份白名单证据已入docs，无DB/profile/密钥。源码/QA/42份证据收口已推送d707005，独立审查在该clean提交另跑总门确认同一唯一鼠标缺口；后续只有审查记录提交，当前HEAD由git实读，不将文档HEAD冒充冻结运行源码。
 
 只读Codex返回work/files=[]并进入REVIEW已独立核实为现有“计划档止于方案”的合法文字方案交付；原answer/未执行原因明确未创建文件，不是伪造文件成果。GLM返回conversation属于允许的分类差异。不按中文关键词改worker/旧状态，不为此追加模型调用；quickstart已说明待审方案不代表实际执行，不承诺旧只读任务提权。完整证据readonly-result-facts.json，独立审查答复保留。
 
@@ -3005,3 +3005,7 @@ rc6 GLM/glm-5.3-flash/high 与 Codex/gpt-6.1-sol/xhigh已各10次真实全部成
 - 三态区分：IMPLEMENTED ≠ VERIFIED；报告写实际命令与退出码。
 - 用户明确延期项（并行写入增强/worktree）不得恢复；G3 已收口，不再重跑已过认证（steer/allow/resume/usage 等）。
 - UI 相关验收：真点击链路用 CDP 方式（ADR-I41）；宿主内 ZS_UI_DEMO 证据只作后台链路口径。
+
+### 2026-10-15 人工回填后收口
+
+[当前总门](evidence-r84-manual-closeout-20261015/final-gates-human-confirmed.json) pass/corePass均true；human-titlebar-drag.json原用户来源已read_thread核对。程序仍05b549f/bld_fcf357a7e1e4ad52，未重包/新增模型/重跑2h。原42封存证据和自动化false原件不改。用户现启动candidate后产生server-data，不能删除、搬移、关闭用户应用或再当工程根运行；新QA只读程序清单并依据同BUILD/manifest交付前无预置数据证明收生命周期门。新增26正负合同/两脚本lint0通过。不要把拖动单项改成整体userAcceptance=passed。

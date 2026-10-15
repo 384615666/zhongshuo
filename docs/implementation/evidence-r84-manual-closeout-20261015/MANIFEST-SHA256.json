@@ -1,0 +1,37 @@
+{
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "runtimeCommit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+  "scope": "additive human/manual single titlebar confirmation; prior automated/unmodified 42-file sealed evidence remains intact; userAcceptance overall pending",
+  "files": [
+    {
+      "path": "automated-after-first-use.json",
+      "bytes": 16768,
+      "sha256": "266fc00b51620e26adb4bd071d2bd0f5c799495727702ee834f113c77a5f8249"
+    },
+    {
+      "path": "final-gates-human-confirmed.json",
+      "bytes": 19215,
+      "sha256": "20777649b3fcaa412a34c754bb4412fbef0985a48eb9e01f5806da241f8f62e5"
+    },
+    {
+      "path": "first-probe-after-user-start.json",
+      "bytes": 18677,
+      "sha256": "ff03f1d8f4bff1e18d8ce497c6f1f0f770d8fee87a6e8c8dac497cb29be59e49"
+    },
+    {
+      "path": "human-titlebar-drag.json",
+      "bytes": 1462,
+      "sha256": "c6f493d7fb404e401175a3e3d36edb24fa8f8a7dff7ba5765c097a206502ec1a"
+    },
+    {
+      "path": "independent-human-confirmed.json",
+      "bytes": 19241,
+      "sha256": "b2abcf77d37b8d8e6e3ab88cd7d840dd823f4a49cb0ae31b10ecf0ccbd17f4bb"
+    },
+    {
+      "path": "source-checks.json",
+      "bytes": 845,
+      "sha256": "8568e2cdee4fa01e66a8f63cc3168d29b836a7fb367a9d1a72cabf673c6ff681"
+    }
+  ]
+}

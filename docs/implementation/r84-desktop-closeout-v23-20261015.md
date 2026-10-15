@@ -1,6 +1,6 @@
 # R84 桌面候选收口记录
 
-最终同 BUILD 两小时连续观察与冷重开补验已完成。核心工程门 corePass=true；完整放行 pass=false，唯一未通过项为原生标题栏鼠标移动未取得可靠位移证据。用户验收仍待确认，不称首版全部放行。运行源码冻结于 clean `05b549f61169b7293521dd42ec38e1a2fe239de1`，BUILD `bld_fcf357a7e1e4ad52`；候选为 `dist/desktop/desktop-daily-win-v23-rc6`。后续 QA 与记录提交不冒充构建源码，运行源码差异由最终收集器复核。旧 v23 与 rc2–rc5 是保留的阶段证据，不是当前入口。
+最终同 BUILD 两小时连续观察与冷重开补验已完成。核心工程门与本批必要门均通过（corePass=true / pass=true）。2026-10-15用户已对该BUILD标题栏鼠标拖动回填“能正常移动”；该单项按human/manual采纳，原自动化未验证记录保持。整体日常体验用户验收仍为pending，不外推所有场景或模型/工具。运行源码冻结于 clean `05b549f61169b7293521dd42ec38e1a2fe239de1`，BUILD `bld_fcf357a7e1e4ad52`；候选为 `dist/desktop/desktop-daily-win-v23-rc6`。后续 QA 与记录提交不冒充构建源码，运行源码差异由最终收集器复核。旧 v23 与 rc2–rc5 是保留的阶段证据，不是当前入口。
 
 ## 已修实际缺陷
 
@@ -40,7 +40,7 @@ Codex 请求模型与原生 turn_context 均为 gpt-6.1-sol/xhigh、custom provi
 
 最终真实启动器 Fake 工程会话保持房间 DIRECT/DM 自然闭环、停止、持续详情、历史规模夹具、只读错误/恢复与重开。规模夹具、故障注入和正常 worker 产出分列；日常包没有演示数据或默认 fake。R75 项目取消/交叉/迟到/旧弹窗等 11 条路线通过。主池冷开附件无需展开串，可见状态跨三次 5.1 秒刷新身份与数量保持。
 
-原生 SKY 鼠标/键盘验证最终副本项目菜单搜索、Esc、外点、重复入口、选项目、导航离开后继续操作；真实最大化/还原的 BrowserWindow 原生矩形变化已记录，右侧预览放大/Esc 还原及原生关闭通过。原生拖动位移仍未取得可靠证据，不能用窗口控制成功或键盘移动代证。
+原生 SKY 鼠标/键盘验证最终副本项目菜单搜索、Esc、外点、重复入口、选项目、导航离开后继续操作；真实最大化/还原的 BrowserWindow 原生矩形变化已记录，右侧预览放大/Esc 还原及原生关闭通过。原自动化拖动位移仍未取得可靠证据，不用窗口控制或键盘移动代证；当前该功能由用户本人单独手测确认。
 
 原件另存补验由同 BUILD 真启动器完成：系统模态框原生取消不写文件；正常 UI 保存的模型原件与原文件 hash 一致；自有目标目录故意设为普通文件时，实际 EEXIST/ENOTDIR 在预览旁报错，没有成功提示，原件、此前副本和失败标记均保留；恢复可用目标后明确重试，新增副本 hash 一致。全部读取/保存与重开真实调用仍为 10。EACCES/ENOSPC/中断的原件保全是既有临时根源测试注入，不冒充真实磁盘填满或 ACL 改动。
 
@@ -58,18 +58,28 @@ Codex 请求模型与原生 turn_context 均为 gpt-6.1-sol/xhigh、custom provi
 
 第一版额外探针误拿R79较早的517.6坐标作为关窗基线（该采样之后还加载了历史并切活动/交付及恢复流程），因此失败；[原失败](evidence-r84-v23-20261015/reading-after-observation-original-probe.json)保留。随后独立记录实际当前目标与已保存坐标，正常关窗，再由原BAT冷开做严格相同基线比较。没有修改运行源码、清读态或把旧坐标改绿；不据此宣称517.6在后续所有交互中恒定。
 
-[最终总门](evidence-r84-v23-20261015/final-gates.json)由 `scripts/collect-r84-final-gates.cjs` 集中读取原始证据并核 BUILD/hash，结果 corePass=true / pass=false（退出1）；非 probe、至少两小时、冷开附件、未知保全、旧程序拒绝/匹配回退、真实工具、正常关闭、双渠道和源码门均参与。原生鼠标拖动仍单独是必要门，未认证保持完整 pass=false、非零退出，不把候选称为全部放行。
+[人工回填前封存总门](evidence-r84-v23-20261015/final-gates.json)由 `scripts/collect-r84-final-gates.cjs` 集中读取原始证据并核 BUILD/hash，结果 corePass=true / pass=false（退出1）；非 probe、至少两小时、冷开附件、未知保全、旧程序拒绝/匹配回退、真实工具、正常关闭、双渠道和源码门均参与。该封存结果保持不改绿；其后新增[人工确认后总门](evidence-r84-manual-closeout-20261015/final-gates-human-confirmed.json)明确采纳本BUILD的用户手测，当前pass=true、退出0，整体userAcceptance仍pending。
 
 未覆盖：真实 OS 睡眠/断电、多日挂机、实体 HiDPI、全部工具/模型组合及第三方有效思考强度。没有新增账号或真实模型认证资源阻断；用户图片已通过的历史结果继承，不重开格式长清单。AUTO/DELIBERATE、并行写入、Android、安装器/签名/自动更新等延期不扩。用户旧包、原数据、凭据、草稿与未知账本原地保留。
 
-最终只安排一次约 10 分钟自然确认：手动拖一下窗口并开关项目菜单 → 查看已有成员配置 → 普通/带图提问 → 创建小文件并运行测试 → 自然意见、显式返工并验收新版 → 重开查看。故障、竞态和长观察由工程承担，不要求用户重跑。
+此前已安排一次自然确认路线；现已收到唯一待测拖动项，无需重复索取拖动、故障或历史清单。工程成绩和标题栏单项确认不代替用户全部日常体验验收。
 
 ## 候选与证据入口
 
-唯一当前入口：[desktop-daily-win-v23-rc6/start-desktop.bat](../../dist/desktop/desktop-daily-win-v23-rc6/start-desktop.bat)。候选程序及两份真实根、Fake根、升级根五份程序各593文件size/SHA256一致；原BAT一致，候选从未启动、没有server-data或默认工程夹具。源码运行冻结05b549f与BUILD身份不变；后续提交只含测试/QA/记录。
+唯一当前入口：[desktop-daily-win-v23-rc6/start-desktop.bat](../../dist/desktop/desktop-daily-win-v23-rc6/start-desktop.bat)。候选程序及两份真实根、Fake根、升级根五份程序各593文件size/SHA256一致；原BAT一致，交付前封存核验候选从未启动、没有server-data或默认工程夹具。用户现已按手测要求启动该目录，正常产生的server-data原地保留；程序清单仍一致，不能清除数据来重造空根。源码运行冻结05b549f与BUILD身份不变；后续提交只含测试/QA/记录。
 
 [白名单证据清单](evidence-r84-v23-20261015/MANIFEST-SHA256.json)绑定42份脱敏工程记录与配对截图，不提交DB、profile、token、用户样本或原始provider转录。旧失败根原地保留；其他源码与原始启动器日志仍在各独立dist证据根，清单记其hash。实际可用组合是上述两个已测组合，不将请求的模型/effort冒充渠道未提供的有效身份。
 
 ## 独立最终复核
 
-独立只读审查在clean提交d707005上另跑[自己的总门](r84-independent-final-audit-20261015.json)，得到corePass=true/pass=false、退出1，唯一失败仍为native titlebar mouse movement verified。另核五份593程序清单与42份白名单证据字节、两小时原始样本、双渠道10次最终身份、81去重总账、未知副本与匹配完整回退，无新增核心阻断。滚动只接受“最后已确认坐标关窗冷开恢复”的限定证据，不称首个517.6探针通过。后续仅收一次真实鼠标拖动结果；整体用户验收保持pending。该审查后的提交仅保存本段与审查记录，不变更程序或重新构建。
+独立只读审查在clean提交d707005上另跑[自己的总门](r84-independent-final-audit-20261015.json)，得到corePass=true/pass=false、退出1，唯一失败仍为native titlebar mouse movement verified。另核五份593程序清单与42份白名单证据字节、两小时原始样本、双渠道10次最终身份、81去重总账、未知副本与匹配完整回退，无新增核心阻断。滚动只接受“最后已确认坐标关窗冷开恢复”的限定证据，不称首个517.6探针通过。这份独立复核发生在本次人工回填之前，原结果保留；整体用户验收保持pending。该审查后的提交仅保存本段与审查记录，不变更程序或重新构建。
+
+## 用户单项手测与必要门收口（2026-10-15）
+
+已直接读取审查会话中的原始人类异步回复：sourceThread `01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79`，sourceUserMessage `01a13dd1-e135-7cd0-8b79-8340baec945e`，针对本候选鼠标拖动回答“能正常移动”。[手测证据](evidence-r84-manual-closeout-20261015/human-titlebar-drag.json)绑定BUILD、运行源码与593文件manifest SHA256；不改原自动化unverified，不等于全部日常路线或所有模型/工具已被用户验收。
+
+用户12:28启动后产生server-data，第一轮总门仍按未使用目录要求为空而失败；[该回执](evidence-r84-manual-closeout-20261015/first-probe-after-user-start.json)保留。新增只读QA收集器要求交付前封存收据中无数据/种子门确实通过，且封存收据hash、BUILD、源码与当前593文件manifest均匹配；当前无seed/工程marker，所有其他当前核心门仍重验。现在的用户数据未启动、清理、搬移、迁移或读取数据库。
+
+新增26项人工来源/目标BUILD/manifest/作用域与封存交付身份正负合同及两脚本lint0通过；当前必要门pass=true/corePass=true，整体userAcceptance=pending。原运行源码、BUILD、真实模型调用81次、两小时原证据不变，不重构、重打包或新增调用。本次只更新QA/证据/文档与随包验收结果，无需用户重复拖动或历史清单。
+
+独立审查另跑当前人工收口wrapper，exit0、pass=true/corePass=true、failed=[]，见[独立人工收口复核](evidence-r84-manual-closeout-20261015/independent-human-confirmed.json)。原自动化启动后空根检查失败和拖动unverified保持，封存程序清单与当前相同；不再追加工程要求。

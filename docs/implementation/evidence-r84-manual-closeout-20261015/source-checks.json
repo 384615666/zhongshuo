@@ -1,0 +1,25 @@
+{
+  "pass": true,
+  "scope": "two additive offline QA scripts only; product/runtime unchanged, earlier 1058 source tests and both typechecks inherited",
+  "lint": {
+    "command": "node node_modules/eslint/bin/eslint.js scripts/collect-r84-final-gates-with-human.cjs scripts/verify-r84-manual-drag-evidence.cjs",
+    "exitCode": 0
+  },
+  "contracts": {
+    "command": "node scripts/verify-r84-manual-drag-evidence.cjs",
+    "cases": 26,
+    "exitCode": 0
+  },
+  "files": [
+    {
+      "file": "scripts/collect-r84-final-gates-with-human.cjs",
+      "sha256": "0c7ee26f62c54fe0360785d1e21b136e10811f93445ddb05871e3efe405bad44"
+    },
+    {
+      "file": "scripts/verify-r84-manual-drag-evidence.cjs",
+      "sha256": "810ac5cba7c555225bd7f2d65395ed33e874b2f95d441330cac3a8d743eee17d"
+    }
+  ],
+  "runtimeChanged": false,
+  "realModelCalls": 0
+}

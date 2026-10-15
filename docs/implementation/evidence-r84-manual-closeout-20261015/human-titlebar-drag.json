@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "authority": "human",
+  "method": "manual",
+  "scope": "native-titlebar-mouse-drag-only",
+  "outcome": "passed",
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "runtimeCommit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+  "candidate": "desktop-daily-win-v23-rc6",
+  "manifestSha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c",
+  "sourceThread": "01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79",
+  "sourceRole": "user",
+  "sourceTurnId": "01a13dd1-e102-7be0-83e6-88873a1fa24c",
+  "sourceUserMessageId": "01a13dd1-e135-7cd0-8b79-8340baec945e",
+  "sourceQuestionItemId": "call_ff5edb80341b4c6a89e959267579cb71:0",
+  "question": "请有空时启动 v23-rc6（D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v23-rc6\\start-desktop.bat），用鼠标拖动窗口顶部的空白标题栏：窗口能正常跟着移动吗？这是当前唯一尚未验证的必要项。",
+  "response": "能正常移动",
+  "confirmedDate": "2026-10-15",
+  "timezone": "Asia/Shanghai",
+  "sourceTurnStartedAt": "2026-10-15T04:28:47.000Z",
+  "recordedAt": "2026-10-15T04:30:29.727Z",
+  "sourceVerification": "read_thread retrieved the original human async reply; reviewer relay retained separately in thread history",
+  "limitations": [
+    "original automated drag observations remain unverified",
+    "no inference of full daily-workflow or all models/tools user acceptance",
+    "no product rebuild, model call or repeated two-hour observation"
+  ]
+}

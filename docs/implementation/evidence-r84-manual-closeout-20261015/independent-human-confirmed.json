@@ -1,0 +1,568 @@
+{
+  "pass": true,
+  "corePass": true,
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "candidate": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v23-rc6",
+  "gates": [
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v23-rc6",
+      "pass": true
+    },
+    {
+      "name": "clean runtime BUILD",
+      "pass": true
+    },
+    {
+      "name": "current runtime bytes still match frozen source",
+      "pass": true
+    },
+    {
+      "name": "001-050 migration sources frozen",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\progress.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\closeout.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\ordinary-followup-after.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\codex-native-proof.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\readonly-result-facts.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-codex-20261015\\final-close.json",
+      "pass": true
+    },
+    {
+      "name": "codex ordinary/image/actual file v1-v2 acceptance",
+      "pass": true
+    },
+    {
+      "name": "codex ten original successful real calls",
+      "pass": true
+    },
+    {
+      "name": "codex three same-thread original-member rounds",
+      "pass": true
+    },
+    {
+      "name": "codex actual native execution and test evidence",
+      "pass": true
+    },
+    {
+      "name": "codex close/reopen and explicit readonly route",
+      "pass": true
+    },
+    {
+      "name": "codex readonly answer/plan is not claimed as a created file",
+      "pass": true
+    },
+    {
+      "name": "codex final normal close completes durable shutdown",
+      "pass": true
+    },
+    {
+      "name": "codex same original launcher",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\review-r84-v23-rc6-codex-20261015\\copy",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\progress.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\closeout.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\ordinary-followup-after.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\native-tool-proof.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\readonly-result-facts.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\final-close.json",
+      "pass": true
+    },
+    {
+      "name": "claude ordinary/image/actual file v1-v2 acceptance",
+      "pass": true
+    },
+    {
+      "name": "claude ten original successful real calls",
+      "pass": true
+    },
+    {
+      "name": "claude three same-thread original-member rounds",
+      "pass": true
+    },
+    {
+      "name": "claude actual native execution and test evidence",
+      "pass": true
+    },
+    {
+      "name": "claude close/reopen and explicit readonly route",
+      "pass": true
+    },
+    {
+      "name": "claude readonly answer/plan is not claimed as a created file",
+      "pass": true
+    },
+    {
+      "name": "claude final normal close completes durable shutdown",
+      "pass": true
+    },
+    {
+      "name": "claude same original launcher",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\review-r84-v23-rc6-glm-20261015\\copy",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\result.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r84-observation-result.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r80-soak-result.json",
+      "pass": true
+    },
+    {
+      "name": "formal Fake complete workflow/reopen",
+      "pass": true
+    },
+    {
+      "name": "same BUILD actual continuous two hours, not probe",
+      "pass": true
+    },
+    {
+      "name": "real pipe disconnect/recovery, reload and redacted clipboard",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r80-soak-progress.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\observation-summary.json",
+      "pass": true
+    },
+    {
+      "name": "actual per-route observation metrics and stable host identities",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-soak-20261015\\reading-after-observation-confirmed.json",
+      "pass": true
+    },
+    {
+      "name": "cold reading baseline was confirmed after observation before normal close",
+      "pass": true
+    },
+    {
+      "name": "post-observation cold reopen retains exact history identity and target drafts",
+      "pass": true
+    },
+    {
+      "name": "all eight observation routes repeatedly exercised",
+      "pass": true
+    },
+    {
+      "name": "bounded connection monitor and no observation dispatch",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\review-r84-v23-rc6-soak-20261015\\copy",
+      "pass": true
+    },
+    {
+      "name": "engineering copy uses the original launcher",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\result.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\read-reopen.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\native-menu.json",
+      "pass": true
+    },
+    {
+      "name": "manifest BUILD D:\\zhongshuo\\dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\copy",
+      "pass": true
+    },
+    {
+      "name": "upgraded copy uses the original launcher",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\old-version-and-matching-rollback.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\native-window-controls.json",
+      "pass": true
+    },
+    {
+      "name": "native maximize/restore, preview expand/Escape and close",
+      "pass": true
+    },
+    {
+      "name": "old program refuses final schema; matching complete backup opens",
+      "pass": true
+    },
+    {
+      "name": "complete old UNKNOWN root copy upgrade, explicit original replay only",
+      "pass": true
+    },
+    {
+      "name": "upgraded original bytes and actual browser decode",
+      "pass": true
+    },
+    {
+      "name": "real native menu close/search/navigation",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\readonly-ui.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\mention-rejection-ui.json",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\saveas-flow.json",
+      "pass": true
+    },
+    {
+      "name": "native cancel, original save bytes, honest failure and explicit restored retry",
+      "pass": true
+    },
+    {
+      "name": "cold attachments across three five-second refreshes",
+      "pass": true
+    },
+    {
+      "name": "different-member mention rejects and retains draft",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\desktop\\review-r84-v23-rc6-glm-20261015\\visual-review.json",
+      "pass": true
+    },
+    {
+      "name": "project latest intent/cancellation regressions",
+      "pass": true
+    },
+    {
+      "name": "paired visual inspection",
+      "pass": true
+    },
+    {
+      "name": "same BUILD dist\\r84-final6-source-checks-after-reopen-test.json",
+      "pass": true
+    },
+    {
+      "name": "typecheck receipt binds frozen runtime commit",
+      "pass": true
+    },
+    {
+      "name": "lint coverage still matches current checked file bytes",
+      "pass": true
+    },
+    {
+      "name": "both source typechecks",
+      "pass": true
+    },
+    {
+      "name": "incremental lint no added errors",
+      "pass": true
+    },
+    {
+      "name": "deterministic source suite",
+      "pass": true
+    },
+    {
+      "name": "current practical guide bytes in final distribution",
+      "pass": true
+    },
+    {
+      "name": "original real-call identities are deduplicated without conflicts",
+      "pass": true
+    },
+    {
+      "name": "pristine delivery before user first-use verified; current user data preserved",
+      "pass": true
+    },
+    {
+      "name": "original automated gate result retained and understood",
+      "pass": true
+    },
+    {
+      "name": "manual evidence identity and negative contracts",
+      "pass": true
+    },
+    {
+      "name": "native titlebar mouse movement confirmed by human on this BUILD",
+      "pass": true
+    }
+  ],
+  "manifests": {
+    "candidate": {
+      "files": 593,
+      "bytes": 533313004,
+      "sha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c"
+    },
+    "codex": {
+      "files": 593,
+      "bytes": 533313004,
+      "sha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c"
+    },
+    "claude": {
+      "files": 593,
+      "bytes": 533313004,
+      "sha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c"
+    },
+    "engineeringCopy": {
+      "files": 593,
+      "bytes": 533313004,
+      "sha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c"
+    },
+    "upgradedCopy": {
+      "files": 593,
+      "bytes": 533313004,
+      "sha256": "90a0346b6994a524fed6075c9a15f34a3f208cd33d4dc505010e430cf0e3a12c"
+    }
+  },
+  "evidence": [
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\progress.json",
+      "sha256": "a41596eb38bb49df2e5519846edb4a40d3169b54017d7f8613dee3e6cf0c25e2"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\closeout.json",
+      "sha256": "b9418ee9a39c1988ffeb983597f74515ba0776a3dc22f7f47aa29afd1be55b65"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\ordinary-followup-after.json",
+      "sha256": "705ae50df8be402c98efa080cf6fab8a885902bd5a0f1d6b9dd8d8084f6303c3"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\codex-native-proof.json",
+      "sha256": "da9a092021ceaf776e23cde56c4902d468fb9d1ede33065a8ef2ec9c14451746"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\readonly-result-facts.json",
+      "sha256": "fdba8c7124167ce28ae30c1802992e096165df05b156556c20fef9f461421705"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-codex-20261015\\final-close.json",
+      "sha256": "2a4d9dc960dbd95f40f7b44f5afa8a96ea8fb4c41235c6dedcac5a8f714e13f9"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\progress.json",
+      "sha256": "3affd16ad043533966c6ecc1cc67b28b05f7b93cd47970f8d514df468eadca09"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\closeout.json",
+      "sha256": "c9b32e0d1b954931158a409b732a13b258032e8ac8fbd202272550fb605bcf10"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\ordinary-followup-after.json",
+      "sha256": "f57b5024099f53e8f258f329e176cc8ca6ef1163d4c3ca3297d2a9aa51687053"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\native-tool-proof.json",
+      "sha256": "9342a6f25c000177278af610b7f04b32f8bb6c5fab85f50394066a5d228234f2"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\readonly-result-facts.json",
+      "sha256": "16410dd178c65abfc52fed68f3f5d10e09c87391310d99aaf45580aeccd72021"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\final-close.json",
+      "sha256": "d1b34abf1646d900b571dfae06db7e97b58e48ba02f456069901c4bf992ae53f"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\result.json",
+      "sha256": "2fc151c445ab2004ba849380ca070aa2c4b191d90379236ad339c4abd23bfd50"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r84-observation-result.json",
+      "sha256": "56474dd2d230313a723eee8eb20d0259c70a7ddff16bc8a7acf6b8338b697c60"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r80-soak-result.json",
+      "sha256": "87cae3ab1948829bd2daaf0af8906d288f84cddd2ac58ffa3ebcf013a16827b8"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\r80-soak-progress.json",
+      "sha256": "9427b2ae40f51efb9e944bb2e24ca44c8f20b7e94c2a04ef146281fe517ec7fa"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\observation-summary.json",
+      "sha256": "bdf086548d74efc6d8449e04660555a16f0f792b98f7d4a2176070358dc388cc"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\reading-after-observation-confirmed.json",
+      "sha256": "fb59dd393c0c38f780b15bb985b2a1e479b90c5aecb51df78f46cc1b6da59c90"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\reading-before-confirmed-close.json",
+      "sha256": "2e8a758042acf3efa15408db015462d09e48ddeaa84ef76fc53789749260d56d"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-soak-20261015\\reading-after-observation.json",
+      "sha256": "27477899b491ec9b5d77b5ee7b19f6affc85b1c1676f7386930b2e54cc4ddcb6"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\result.json",
+      "sha256": "80b9a6e0ae2630b87c712b0565911dee72559c3ad417d95934f11903600ee33c"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\read-reopen.json",
+      "sha256": "78ae04ce081b7aceb26acaf5b57b03316dd8789aeb9a64808927de72746544f3"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\native-menu.json",
+      "sha256": "34cd9852c054340461a7b9231aa6b7e06d9cf7b2e5ee20127cc8b6ff96aed916"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\old-version-and-matching-rollback.json",
+      "sha256": "37d59af00ceac9c81891a967f361e2bdc834c738df60b9a3c4c496e63f4dcd8a"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-unknown-upgrade-20261015\\native-window-controls.json",
+      "sha256": "cefc076d3b34d568436ef67569e70b732a539aecda5236fe7ee9962aa738e9bf"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\readonly-ui.json",
+      "sha256": "d32e249ba799a8dc6f90912e543bcef0de0bc960eed2b5e3ecd0db3ccc67c3ba"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\mention-rejection-ui.json",
+      "sha256": "94edad6e7c2a40a758713ac24071cc59dc7596b348381bacb8353034c1434e3f"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\saveas-flow.json",
+      "sha256": "75029ba8aab0c535d734743570602688d9accf75faded625340e3ecad0881558"
+    },
+    {
+      "path": "dist\\desktop\\r75-completion-1792024287358\\result.json",
+      "sha256": "f7f0d5538972b04df9f809073f18e816321794df081932a6a86e2d3883128ceb"
+    },
+    {
+      "path": "dist\\desktop\\review-r84-v23-rc6-glm-20261015\\visual-review.json",
+      "sha256": "efea5248c2bdc9494cece70f55c98b69f25e7fd715ce19185ced388b0ba5f989"
+    },
+    {
+      "path": "dist\\r84-final6-source-checks-after-reopen-test.json",
+      "sha256": "0b180920f37d955a5c59744c430c774886f28d17984f300fe06763e5172dfa40"
+    },
+    {
+      "path": "dist\\r84-final6-lint-release.json",
+      "sha256": "25f2be9be4754156d815bdb7df3d2a88103d377cbc964439809e31d70a8399d9"
+    },
+    {
+      "path": "dist\\r84-source-suite-11.log",
+      "sha256": "b61bd8faa0d9a50b0fcd5ce67edce5fca5acdf27925b6ce531941f0aa4d3b877"
+    },
+    {
+      "path": "dist\\r84-call-ledger-completed.json",
+      "sha256": "e5c67b0052144add3614b8f01e4b4ce0635c63ded91ee052881f72e2aeb7901d"
+    },
+    {
+      "path": "docs\\implementation\\evidence-r84-manual-closeout-20261015\\human-titlebar-drag.json",
+      "sha256": "c6f493d7fb404e401175a3e3d36edb24fa8f8a7dff7ba5765c097a206502ec1a"
+    },
+    {
+      "path": "dist\\r84-independent-automated-after-user-start-20261015.json",
+      "sha256": "266fc00b51620e26adb4bd071d2bd0f5c799495727702ee834f113c77a5f8249"
+    },
+    {
+      "path": "docs\\implementation\\evidence-r84-v23-20261015\\final-gates.json",
+      "sha256": "d1fab7695e1f81c27b559f25737987c57d880e25cca663320d4aa693b383d468"
+    }
+  ],
+  "unverified": [
+    "provider-reported effective reasoning intensity",
+    "physical HiDPI/real OS sleep/multi-day behavior",
+    "all native tools and all model combinations",
+    "automated native titlebar mouse displacement remains unverified; functional movement is human-confirmed"
+  ],
+  "userAcceptance": "pending",
+  "distributionLifecycle": {
+    "pristineDelivery": true,
+    "currentDataRootExists": true,
+    "userDataUntouched": true,
+    "noSeed": true,
+    "scope": "Current data-root existence after the human launched this candidate is not a bundled-data failure. Original pre-use proof and current program hashes are both required."
+  },
+  "priorAutomatedResult": {
+    "path": "dist\\r84-independent-automated-after-user-start-20261015.json",
+    "sha256": "266fc00b51620e26adb4bd071d2bd0f5c799495727702ee834f113c77a5f8249",
+    "pass": false,
+    "exitCode": 1,
+    "nativeTitlebarDrag": {
+      "name": "native titlebar mouse movement verified",
+      "pass": false
+    }
+  },
+  "manualConfirmations": {
+    "nativeTitlebarDrag": {
+      "accepted": true,
+      "authority": "human",
+      "method": "manual",
+      "sourceThread": "01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79",
+      "sourceUserMessageId": "01a13dd1-e135-7cd0-8b79-8340baec945e",
+      "scope": "native-titlebar-mouse-drag-only",
+      "response": "能正常移动",
+      "buildId": "bld_fcf357a7e1e4ad52"
+    }
+  },
+  "evidenceContractTests": {
+    "exitCode": 0,
+    "output": "{\"pass\":true,\"cases\":26,\"scope\":\"manual evidence provenance/build/scope rejects; no model calls or product writes\"}\n",
+    "collectorSha256": "0c7ee26f62c54fe0360785d1e21b136e10811f93445ddb05871e3efe405bad44",
+    "testSha256": "810ac5cba7c555225bd7f2d65395ed33e874b2f95d441330cac3a8d743eee17d"
+  },
+  "userAcceptanceScope": "Only titlebar dragging was manually confirmed; no overall daily-workflow or all-model/tool user acceptance inferred"
+}
