@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
 import {RuntimeEffort} from './RuntimeEffort';
+import { runtimePermissionOptions } from '../lib/runtimePermissions';
 import { refreshDms, refreshMembers,refreshRooms } from '../loader';
 import { getState, useStore } from '../shell';
 import { currentNavSeq } from '../lib/router';
@@ -115,7 +116,7 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model ?? ''} maxLength={200} onChange={e => config({ model: e.target.value || null })}/></label>
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}；打开项目后可读取真实选项。</div>}
-    <label className="field"><span className="field-label">现有权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={['', 'plan', 'manual', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'].map(value => ({ value, label: value || '默认：CLI 完整权限' }))} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">权限沿显式配置保存，不增加认证。程序不可用仍可保存，创建后需回读实际可用性。</div>
+    <label className="field"><span className="field-label">新成员权限模式</span><Select disabled={f.busy||f.committed} value={form.config.permissionMode ?? ''} ariaLabel="模板权限" options={runtimePermissionOptions(form.config.permissionMode,form.config.kind)} onChange={v => config({ permissionMode: v || null })}/></label><div className="field-hint">从模板创建时复制此权限快照，不改变已有成员。项目内编辑档另需目标项目授权；旧只读配置不自动提权。程序不可用仍可保存，创建后需回读实际可用性。</div>
   </Modal>;
 }
 export function CreateFromTemplateModal({ projectId, template: t, onClose, onSaved }: {

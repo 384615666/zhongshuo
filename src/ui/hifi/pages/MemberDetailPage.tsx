@@ -10,6 +10,7 @@ import { memberWrite } from '../data/memberWrites';
 import { recordWrite } from '../data/store';
 import { EditMemberModal, SaveMemberTemplateModal, UnknownMemberOperations } from '../components/MemberManagementForms';
 import { BindRuntimeModal, runtimeAuthOf, type MemberRow, type RuntimeInfo } from '../MembersPage';
+import { runtimePermissionLabel } from '../lib/runtimePermissions';
 
 export function MemberDetailPage({ projectId, memberId }: { projectId: string; memberId: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
@@ -122,7 +123,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
               <dl className="kv">
                 <dt>模型</dt><dd>{runtime?.binding?.model ?? effective?.model ?? '（未指定／未获确认）'}</dd>
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
-                <dt>保存的权限模式</dt><dd>{runtime?.binding?.permissionMode ?? '未指定'}</dd>
+                <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>
                 <dt>正式执行权限档</dt><dd>{runtime?.permissionExecution?.effective??'未提供'}{runtime?.permissionExecution?.reason?<div className="small faint">{runtime.permissionExecution.reason}</div>:null}</dd>
                 <dt>工具权限认证</dt><dd>{runtime?.installation != null ? runtimeAuthOf(runtime.installation.capabilities_json) : '未认证'}</dd>

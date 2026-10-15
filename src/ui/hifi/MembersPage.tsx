@@ -24,6 +24,7 @@ import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
 import { memberWrite } from './data/memberWrites';
 import { fullTime } from './lib/format';
+import { runtimePermissionOptions } from './lib/runtimePermissions';
 import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
 export interface MemberRow { id: string; displayName: string; principalType: string; enabled: boolean; description?: string; revision:number }
@@ -463,20 +464,13 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <input className="input" placeholder="留空=默认（claude/codex）" value={form.executable} onChange={(e) => setForm((f) => ({ ...f, executable: e.target.value }))} />
         </label>
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
-        <label className="field" title="权限模式（可选——默认按 runtime 自身配置）">
+        <label className="field" title="新任务使用保存的权限档；已有任务保留原快照">
           <span className="field-label">保存的权限模式</span>
           <Select
             value={form.permissionMode}
             ariaLabel="权限模式"
             onChange={(v) => setForm((f) => ({ ...f, permissionMode: v }))}
-            options={[
-              { value: '', label: '默认：CLI 完整权限' },
-              {value:'bypassPermissions',label:'完整权限：读写电脑与执行命令'},
-              { value: 'plan', label: 'plan：只读分析' },
-              { value: 'acceptEdits', label: 'acceptEdits：项目授权后文件编辑' },
-              { value: 'dontAsk', label: 'dontAsk：同一项目文件编辑边界' },
-              ...(['manual','auto'].includes(form.permissionMode)?[{value:form.permissionMode,label:`${form.permissionMode}（旧配置保留，实际只读）`}]:[]),
-            ]}
+            options={runtimePermissionOptions(form.permissionMode, form.kind)}
           />
           <div className="field-hint">完整权限沿用 CLI 的原生机制，可读写电脑并执行命令。选择 plan 可保持只读；项目编辑模式保留明确授权边界。保存配置不等于渠道已实测。</div>
         </label>
