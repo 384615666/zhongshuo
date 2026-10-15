@@ -96,7 +96,14 @@ export function reworkPendingOf(db: ZhongshuoDatabase, taskId: string): { delive
     const last = db.prepare('SELECT id, revision, manifest_hash, review_status, review_note, run_id FROM task_deliveries WHERE task_id = ? ORDER BY revision DESC LIMIT 1').get(taskId) as { id: string; revision: number; manifest_hash: string; review_status: string; review_note: string | null; run_id: string | null } | undefined;
     if (last == null || last.review_status !== 'changes_requested') return null;
     if (last.run_id == null) return null; // 来源 run 缺失=无法绑定执行快照（如实不呈现入口）
-    const queued = (db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key GLOB ? AND status != 'done'`).get(`task:${taskId}:redispatch*`) as { c: number }).c > 0;
+    const pendingIntent = (db.prepare(`SELECT count(*) c FROM outbox WHERE dispatch_key GLOB ? AND status != 'done'`).get(`task:${taskId}:redispatch*`) as { c: number }).c > 0;
+    // AUTO consumes the rework intent once planning has completed. Its parent
+    // run then waits for genuine children; a consumed outbox is not a finished
+    // rework. Read the same task's authoritative execution, excluding the
+    // delivery's original run. This changes presentation only, never admission.
+    const executing = db.prepare(`SELECT 1 FROM workflow_runs WHERE task_id = ? AND id != ?
+      AND status IN ('QUEUED','RUNNING','WAITING','STOPPING') LIMIT 1`).get(taskId,last.run_id) != null;
+    const queued = pendingIntent || executing;
     return { deliveryId: last.id, deliveryRevision: last.revision, manifestHash: last.manifest_hash, sourceRunId: last.run_id, note: last.review_note, queued };
   } catch {
     return null; // 派生呈现失败=不显示（不阻塞会话列表），操作侧守卫仍以命令事实为准

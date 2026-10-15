@@ -11,6 +11,7 @@ import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { parseDelibStep } from '../../src/daemon/deliberationRunner.ts';
 import { listRunArtifacts } from '../../src/persistence/stores/deliberation.ts';
 import type {TaskDetailsResult} from '../../src/contracts/taskDetails.ts';
+import {reworkPendingOf} from '../../src/persistence/stores/dm.ts';
 
 afterEach(() => vi.unstubAllEnvs());
 const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,unknown>={}): FakeTurnScript => [{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
@@ -59,6 +60,32 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('AUTO rework stays executing after its planning outbox settles and while child steps run',async()=>{
+    const f=await fixture();try{
+      const revision=(f.db.prepare('SELECT revision FROM projects WHERE id=?').get(f.projectId) as {revision:number}).revision;
+      await f.cmd('project.reviewPolicy.set',{projectId:f.projectId,taskReviewEnabled:true,expectedRevision:revision});
+      const root=await f.send();await f.run(output('计划',f.plan));await f.run(output('分析'));await f.run(output('评审'));await f.run(output('第一版'));
+      const first=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=?').get(root.taskId) as {id:string;revision:number;manifest_hash:string;run_id:string};
+      await f.cmd('task.review',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:first.revision,manifestHash:first.manifest_hash,decision:'changes_requested',note:'补充边界'});
+      expect(reworkPendingOf(f.db,root.taskId)).toMatchObject({queued:false,deliveryId:first.id});
+      const request={taskId:root.taskId,deliveryId:first.id,deliveryRevision:first.revision,manifestHash:first.manifest_hash,sourceRunId:first.run_id};
+      await f.cmd('task.executeRework',request);expect(reworkPendingOf(f.db,root.taskId)).toMatchObject({queued:true});
+      await f.run(output('新版计划',f.plan));
+      expect(f.db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key GLOB ? AND status!='done'").get(`task:${root.taskId}:redispatch*`)).toEqual({n:0});
+      expect(reworkPendingOf(f.db,root.taskId)).toMatchObject({queued:true,deliveryId:first.id});
+      const detail=await f.cmd<{reworkPending:{queued:boolean}}>('task.get',{taskId:root.taskId});expect(detail.reworkPending.queued).toBe(true);
+      expect((await f.raw('task.executeRework',request)).ok).toBe(false);
+      await f.run(output('新版分析'));expect(reworkPendingOf(f.db,root.taskId)).toMatchObject({queued:true});
+      await f.run(output('新版评审'));await f.run(output('第二版'));expect(reworkPendingOf(f.db,root.taskId)).toBeNull();
+      expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:2});
+      const second=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(root.taskId) as typeof first;
+      await f.cmd('task.review',{taskId:root.taskId,deliveryId:second.id,deliveryRevision:2,manifestHash:second.manifest_hash,decision:'changes_requested',note:'第三版另行决定'});
+      const other=await f.send();await f.run(output('另一任务计划',f.plan));
+      expect(reworkPendingOf(f.db,root.taskId)).toMatchObject({queued:false,deliveryId:second.id});
+      const otherRun=f.db.prepare('SELECT run_id FROM coordination_runs WHERE task_id=?').get(other.taskId) as {run_id:string};
+      await f.cmd('task.stop',{taskId:other.taskId,targetRunId:otherRun.run_id,expectedStopGeneration:0});
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
   it('a peer opening session cannot launch after another detached member becomes UNKNOWN',async()=>{
     const f=await fixture(true,{detachedTurnConsumption:true,turnDeadlineMs:150,interruptGraceMs:10});let release=()=>{};
     try{

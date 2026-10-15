@@ -166,3 +166,11 @@ v2规划发表、子步骤在途时真实主池预览露原TaskComplete JSON，�
 用户明确额度恢复后，新建 review-r86-final-rc10-restored-20261015（52834），从原生 UI 新发自然合成代码任务；不是自动重放旧失败或 UNKNOWN。规划自然正文在子步未完窗口已同时呈现在主池与回复串，原 runtimeControlResult hash 不变，独立评审票也通过。DeepSeek 真创建文件/测试，Codex 真读取并复跑已成功，最终整合在途。普通无 @ 问候自然答复，无工作交付，续问待收口。
 
 同 BUILD 升级保全/拒52/匹配整根回退已 pass，0 真实调用。首次 full 工程夹具此前业务步骤通过，但 archive 截图 hidden，整票 false 保留；为恢复最小化窗口尝试的 Browser.getWindowForTarget 被当前 Electron CDP 明确拒绝，第二新根 full-v2 同样 false 保留。已撤掉这段未支持的 QA API，不改变产品、不放宽 visible+paint 门；待真实交互结束后单独运行 GUI 回归，避免多个工程宿主争抢前台。最终检查允许显式指定新的 owned full 证据根并继续强制相同 BUILD，旧失败不会覆盖。所有最终门尚未放行。
+
+rc10 full-v3 单一前台工程宿主完整通过，0真实调用，原三周期/房间DIRECT和DM两版/历史/Git/归档/重开通过。无产品改动、未降低截图visible+paint门。
+
+## 持续 AUTO 返工窗口的新真实反例
+
+原生持续观察 code v2 实际执行时，交付详情回退“返工意见已记录、尚未执行”，再次显示执行按钮，但父run WAITING、子步骤尚在执行。`native-rework-running-mislabel` 原画面/DOM保留。独立动态读取到达较晚，任务已进入最终整合且outbox重新leased，其 JSON `bugReproduced:false` 如实保留，不能计作独立复现；正式隔离worker反例精确捕获已消费父规划outbox的窗口，before queued=false明确失败。
+
+根因只读 `reworkPendingOf` 仅看redispatch未done，不包含AUTO父等待真实子任务。最小修复追加同task、排除来源run的真实活跃run存在判据。执行、权限、预算、停止、UNKNOWN与重复派发守卫不变，无schema变化。33项正式回归通过，覆盖只记录、父outboxdone/WAITING、子任务执行、重复执行拒绝、自然新版后null、另一任务活跃不影响本任务未执行意见。双types通过。需新冻结后验证实际窗口；rc10已完成和在途真实结果继续保全，不能放行为最终包。
