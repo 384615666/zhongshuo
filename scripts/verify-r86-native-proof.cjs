@@ -3,7 +3,7 @@
 /** Read only exact provider sessions belonging to an owned R86 task family.
  * Persists hashes and bounded synthetic command evidence, never raw transcripts. */
 const fs=require('node:fs'),path=require('node:path'),{homedir}=require('node:os'),{createHash}=require('node:crypto'),Database=require('better-sqlite3');
-const {ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead}=require('./lib/r86-native-evidence.cjs');
+const {ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths}=require('./lib/r86-native-evidence.cjs');
 const out=path.resolve(process.argv[2]??''),label=process.argv.find(x=>x.startsWith('--label='))?.slice(8)??'v1';
 if(!/^[-a-z0-9]+$/.test(label)||!ownedEvidenceRoot(out,path.resolve(__dirname,'../dist')))throw Error('owned root and safe original proof label required');
 const main=JSON.parse(fs.readFileSync(path.join(out,'progress.json'),'utf8')),observation=JSON.parse(fs.readFileSync(path.join(out,'real-code-v1.json'),'utf8'));
@@ -67,8 +67,11 @@ try{
         proof.contexts=rows.filter(r=>r.type==='turn_context').map(r=>({model:r.payload.model,effort:r.payload.effort,cwd:r.payload.cwd,sandboxPolicy:r.payload.sandbox_policy}));
         if(!proof.contexts.some(x=>x.model===session.model))throw Error('actual Codex turn model context mismatch');
         const toolRows=rows.filter(r=>r.type==='response_item'&&['function_call','custom_tool_call'].includes(r.payload.type));proof.tools=toolRows.map(r=>r.payload.name);
+        const nativeItems=rows.filter(r=>r.type==='event_msg'&&r.payload?.type==='item_completed').map(r=>r.payload.item).filter(Boolean);
+        proof.tools.push(...nativeItems.map(item=>item.tool_name??item.toolName??item.name??item.type));
+        proof.writeActions=nativeItems.filter(item=>item.type==='FileChange').map(item=>({id:item.id??null,name:'FileChange',success:item.status==='completed',paths:fileChangePaths(item.changes,main.project)}));
         const completed=rows.filter(r=>r.type==='event_msg'&&r.payload?.type==='item_completed'&&r.payload.item?.type==='CommandExecution');
-        for(const row of completed){const item=row.payload.item,command=Array.isArray(item.command)?item.command.join(' '):String(item.command??''),output=String(item.aggregated_output??item.stdout??'');
+        for(const row of completed){const item=row.payload.item,command=Array.isArray(item.command)?(item.command.includes('-Command')?item.command.slice(item.command.indexOf('-Command')+1).join(' '):item.command.map((part,index)=>index===0?path.basename(part):part).join(' ')):String(item.command??''),output=String(item.aggregated_output??item.stdout??'');
           const evidence={id:item.id??null,command:safeCommand(command),status:item.status,exitCode:item.exit_code,success:item.status==='completed'&&item.exit_code===0,outputSha256:hash(output),testSummary:tapPassed(output),matchedInputFiles:fileRead(command,output,readableFiles)};
           if(tests(command))proof.testCommands.push({...evidence,success:evidence.success&&evidence.testSummary});
           if(/Get-Content|\bcat\b|\brg\b|\btype\b/i.test(command))proof.readCommands.push(evidence);

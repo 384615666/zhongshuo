@@ -108,3 +108,13 @@ e84be3e全套首次162文件中160通过、3测试失败：Word子进程超时�
 修复复用有界正式房间候选读取，AUTO全启用AI、DELIB仅选中子集，顺序零推理prepare后才冻结任何业务快照。准备后再核原项目/房间/会话权限与归属、协调身份、名单和运行配置；变化时不存业务输入，旧receipt与record-only不初始化。普通切页不取消已授权原目标；不按activeProject重定向。保持原快照与派发前守卫。新增AUTO trust/同号回执/record-only/后续provider失效、名单在途变化、选中研讨子集、房间归档等负例；与正式worker/证据门46项通过。
 
 单worker源码检查期间继续修复，日志`full-r86-serialized.log`包含当时施工SQL反例，不作为冻结总门；该SQL已改为真实conversations.room_id关联，定向重过。下一冻结点再做完整检查。R86尚未最终交付，双模型自然交付仍未通过。
+
+## rc6真实同任务双模型v1通过，最终UI增量待冻结
+
+`review-r86-real-rc6-two-sol-20261015/real-code-v1.json` pass：5调用succeeded，gpt-6.1-sol规划/实施/汇总步骤/最终整合，gpt-6-sol独立读取实际文件并复跑测试；3个真实子步骤DONE，父自然交付待验收。`native-proof-code-v1.json`按精确5个原生session、原交付/计划绑定通过；读取内容匹配上游冻结hash，实际Node测试成功，未观察到未跟踪内部委派。另`code-v1-independent-tests.json`工程复跑2测试通过，明确不代替模型亲自验证。此阶段无v2/验收/重开认证。
+
+源码e155074完整163文件1149项通过，双types（后续UI提示改动再复核）；rc6正式Fake完整启动器pass/0调用，以及`review-r86-rc6-upgrade-20261015/upgrade.json`同BUILD完整升级/保全/拒52/匹配回退pass。原始false票全部保留。
+
+原生查看发现AUTO父WAITING分工执行被泛化提示成等待人类输入/批准；修正只读UI说明依据真实mode/stage，不扩有限主池投影。需最终新BUILD真实复证，rc6不冒充最终交付。QA总门增加完整绿基线逐门缺失/FALSE、错runtimeCommit、跨BUILD、重复v1替代v2/document等变异；原生工具解析覆盖Node24 spec和FileChange map/array，不以QA-only解析修复新增调用。
+
+用户随后明确替代渠道模型deepseek-flash。下一最终候选用现有Claude/deepseek-flash + Codex/gpt-6.1-sol，必要真实合成调用已授权；原GLM429及双Sol原票保留，不混认证范围。

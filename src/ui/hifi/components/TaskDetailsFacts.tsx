@@ -96,6 +96,7 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if (latest == null) return '任务尚无运行；检查派发条件或从原任务入口明确发起。';
   if (latest.status === 'QUEUED') return '本次运行已排队，等待派发。若持续无进展，检查成员运行状态和派发门；停止请用原任务的停止入口。';
   if (latest.status === 'RUNNING') return '本次运行正在执行。可查看下方活动；需要停止时使用原任务的停止入口。';
+  if(latest.status==='WAITING'&&latest.mode==='AUTO'&&latest.stage==='分工执行')return '协作正在等待分工步骤完成；查看分工与活动进展。无需重新发送或重复派发。';
   if (latest.status === 'WAITING') return '本次运行正在等待输入或批准；到回复串查看明确的待处理请求。';
   if (latest.status === 'STOPPING') return '停止请求正在收敛；先等待状态刷新，避免重复派发。';
   if (latest.status === 'INTERRUPTED') return '本次运行已中断，结果可能尚未确认。先到恢复入口核对退出与保护状态，再决定是否继续。';

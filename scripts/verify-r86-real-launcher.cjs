@@ -12,8 +12,10 @@ const mode=process.argv.includes('--prepare')?'prepare':process.argv.includes('-
 const port=Number(process.argv.find(x=>x.startsWith('--port='))?.split('=')[1]??52786),q=JSON.stringify;
 if(!path.basename(out).startsWith('review-r86-')||!out.startsWith(path.resolve(__dirname,'../dist')+path.sep))throw Error('owned R86 evidence root required');
 if(!path.basename(candidate).startsWith('desktop-daily-win-v25'))throw Error('explicit v25 source candidate required');
-const alternatePair=process.argv.includes('--pair=codex-sol');
-const primary=alternatePair?{kind:'codex',model:'gpt-6.1-sol',name:'协调实现 Sol 6.1'}:{kind:'claude',model:'glm-5.3-flash',name:'协调实现 GLM'};
+const alternatePair=process.argv.includes('--pair=codex-sol'),deepseekPair=process.argv.includes('--pair=deepseek-codex');
+const effort=process.argv.find(x=>x.startsWith('--effort='))?.slice(9)??'medium';
+if(!['low','medium','high'].includes(effort))throw Error('explicit supported engineering effort required');
+const primary=alternatePair?{kind:'codex',model:'gpt-6.1-sol',name:'协调实现 Sol 6.1'}:{kind:'claude',model:deepseekPair?'deepseek-flash':'glm-5.3-flash',name:deepseekPair?'协调实现 DeepSeek':'协调实现 GLM'};
 const secondary=alternatePair?{kind:'codex',model:'gpt-6-sol',name:'独立评审 Sol 6'}:{kind:'codex',model:'gpt-6.1-sol',name:'独立评审 Codex'};
 const progressFile=path.join(out,'progress.json'),observationFile=path.join(out,'real-code-v1.json');
 const must=(value,why)=>{if(!value)throw Error(why);};const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -57,8 +59,8 @@ async function prepare(){
   await command('project.reviewPolicy.set',{projectId:project.id,expectedRevision:project.revision,taskReviewEnabled:true});
   const claude=(await command('member.create',{projectId:project.id,displayName:primary.name,description:'负责规划与实现，必要时整合评审反馈'})).memberId;
   const codex=(await command('member.create',{projectId:project.id,displayName:secondary.name,description:'独立读取上游实际文件并运行只读验证，指出缺陷'})).memberId;
-  await command('member.setRuntime',{memberId:claude,kind:primary.kind,model:primary.model,permissionMode:'bypassPermissions',effort:'high'});
-  await command('member.setRuntime',{memberId:codex,kind:secondary.kind,model:secondary.model,permissionMode:'bypassPermissions',effort:'high'});
+  await command('member.setRuntime',{memberId:claude,kind:primary.kind,model:primary.model,permissionMode:'bypassPermissions',effort});
+  await command('member.setRuntime',{memberId:codex,kind:secondary.kind,model:secondary.model,permissionMode:'bypassPermissions',effort});
   const room=(await command('room.list',{projectId:project.id})).items[0];await command('room.update',{roomId:room.id,expectedRevision:room.revision,coordinatorMemberId:claude});
   const list=await command('member.list',{projectId:project.id,roomId:room.id});for(const member of list.items){if(![claude,codex].includes(member.id))await command('room.members.set',{roomId:room.id,memberId:member.id,action:'remove'});}
   progress.expectedModels=[`${primary.kind}/${primary.model}`,`${secondary.kind}/${secondary.model}`];

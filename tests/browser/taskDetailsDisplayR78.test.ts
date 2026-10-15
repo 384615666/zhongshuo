@@ -37,6 +37,11 @@ describe('R78 run detail rendering', () => {
     expect(renderToStaticMarkup(createElement(RunExtraFacts, { detail: interrupted, onRetryFailed: () => {} }))).not.toContain('继续最近失败运行');
   });
 
+  it('explains authoritative AUTO dependency waiting without inventing a human input request',()=>{
+    const r=run('coord','WAITING');r.mode='AUTO';r.stage='分工执行';
+    const text=taskRunGuidance(detail('ACTIVE',[r]));expect(text).toContain('分工步骤完成');expect(text).not.toContain('输入或批准');
+    r.mode='DIRECT';expect(taskRunGuidance(detail('ACTIVE',[r]))).toContain('输入或批准');
+  });
   it('renders queued/blocked guidance and surfaces selected historical tools and usage', () => {
     const queued = detail('ACTIVE', [run('queued', 'QUEUED')]);
     expect(taskRunGuidance(queued)).toContain('已排队');

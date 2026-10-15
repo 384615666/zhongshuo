@@ -2,6 +2,24 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
+## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
+
+运行冻结 e155074fdaeabbdad47e2e32e1379a95866bc46a；候选 `desktop-daily-win-v25-rc6`，clean BUILD `bld_bfb38f295d978b95`，593程序文件，源候选未启动。HEAD与dirty以git实读；后续QA/记录提交不冒充新运行源码。分支codex/full-implementation。独立审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79，已有用户跨会话授权；无另一个产品写入者。
+
+用户要求一次房间发送→协调成员自主分工→异构成员交接→整合→人工验收，并支持显式选成员研讨。同任务两个不同实际模型必须通过；不限定两个CLI。必要合成真实调用已授权。GLM/glm-5.3-flash当前429周/月额度耗尽，提示2026-10-16 19:42:30重置；保留失败，不拿成功别的渠道冒充GLM。本机正式model/list已零推理确认gpt-6.1-sol与gpt-6-sol，沿现有Codex配置在独立成员/根使用这组，不改用户渠道/模型/凭据。真实调用账目以各owned根SQLite real_calls实读，不再写“0调用”。
+
+实测反例已修：CLI不接受Zod默认draft2020，所有正式输出schema改draft7并有Ajv正负对照；AUTO漏接R84零推理配置准备，首次full thread/start写本工程trust元数据后旧身份被正确拒绝。rc6发送前按同源房间候选完成准备后才freeze，await后核原目标/权限/名单/运行配置，旧快照与guard保持。不得把后者称未证明的外部配置变更。CLI初始化会写选定工程trust，不能宣称全局config完全不变。
+
+rc6真实现场：`dist/desktop/review-r86-real-rc6-two-sol-20261015`，端口52790，原生鼠标键盘自然发送；真实规划已成功，实施第二调用已启动（原断点已越过），后续评审/整合/v2/验收/重开待完成。observer进程session37313只读不自动重放。源脚本preserve原false，不覆盖旧票。
+
+同BUILD隔离回归 `review-r86-rc6-full-20261015/result.json` 已pass：房间DIRECT和DM完整返工v2验收、停止、普通开关/跨项目、持续17.5秒三周期、历史分页/选择/重开、Git/归档/看板/活动全范围，真实调用0。rc5升级`review-r86-v25-upgrade-v2-20261015/upgrade.json`已pass，含完整旧根复制升级52、原UNKNOWN/草稿/字节、匹配旧程序回退和旧daemon拒52；仍须最终rc6同BUILD复证。全套e155074正在session25666，日志dist/review-r86-source/full-e155074.log；不要在完成前恢复其生成Word样本。先前两次全套false保留，不代记首次成功。
+
+待做：最终同BUILD真实异构自然开发v1→返工意见→显式执行v2→精确验收→关闭/BAT重开；第二类型文档协作与预览；显式多选真实独立研讨；原生子task/精确delivery点击与返回/后退/刷新/草稿身份；新UI宽窄与仿真HiDPI成对图并实际看图；最终完整源码、双types/lint、升级复证、原生会话工具/版本/TAP或spec证据、全总门逐项变异、所有调用/原失败清单、提交推送及独立复核。QA-only解析更正不追加已成功模型调用。当前总门必为false，不交半成品。
+
+用户在用v23-rc6/server-data禁止读/复制/迁移/操作/关闭；仅owned review-r86目录工程。001–051冻结，仅追加052；不自动重放、对账、释放保护；默认CLI完整权限、显式只读、原件/草稿/UNKNOWN/图片既有合同保持。共享工程single_writer，研讨/评审/规划实际只读。不做旧价值评分、Android、安装器签名或其他无关延期。最终仅一条约5分钟增量确认路线。
+
+<details><summary>R86早期阶段记录（历史，非当前状态）</summary>
+
 ## 当前施工：R86 首个桌面多 AI 协作长批次（尚未交付）
 
 用户明确选择“一次发送→协调成员自主分工→汇总→人工验收”，支持手动选择；必要验收至少 Claude/glm-5.3-flash 与 Codex/gpt-6.1-sol 两种真实模型共同完成同一任务。必要真实调用已授权，旧零调用/两次额度限制不适用；工程仅独立合成根，禁止触碰用户使用中的 v23-rc6/server-data。R86 重新开放 AUTO/必要协作，旧业务价值评分未做仍如实记录，不作为停工理由。
@@ -13,6 +31,9 @@
 后续阶段abecc10已实现研讨正式输入/schema/图片/配置/自然报告和v2、界面与父子成果读取，已推送；全量160文件1128通过。v25-rc1工程候选 BUILD bld_6c42cfa0f484ba20 clean abecc10/593清单一致，pristine未启动，非最终交付。独立发现peer openSession跨UNKNOWN误启动、第二研讨run停止读旧run两反例，已修并加正式测试，待最新冻结复核。当前协作集成23项，真实调用仍0。QA准备脚本 scripts/verify-r86-real-launcher.cjs 仅操作owned review-r86根，prepare零推理，observe不自动重试。
 
 继续：新冻结独立复核/全量；独立启动器真实异构开发闭环与第二类型任务，实际文件/测试/返工/验收/重开；再冻结最终clean BUILD候选、清单与独立复核，推送完整交付。不得在审计或单补丁后停止。后续新增变更与记录以git实读为准。
+
+
+</details>
 
 ## 上次交付：R85 / v24-rc2 已完成并独立复核（历史交付记录）
 

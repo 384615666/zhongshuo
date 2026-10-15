@@ -3,12 +3,15 @@
 function evaluateR86Final(i){
  const same=b=>!!i.build?.buildId&&b?.buildId===i.build.buildId&&b?.commit===i.build.commit;
  const pair=i.expectedModels??[],checkReal=r=>r?.pass===true&&same(r.build);
+ const expectedProofs=[{taskId:i.codeV1?.root?.id,id:i.codeV1?.delivery?.id,revision:1},{taskId:i.codeV1?.root?.id,id:i.lifecycle?.v2?.id,revision:2},{taskId:i.document?.taskId,id:i.document?.delivery?.id,revision:i.document?.delivery?.revision}];
+ const validProofs=expectedProofs.every(expected=>expected.taskId&&expected.id&&Number.isSafeInteger(expected.revision)&&i.nativeProofs?.some(p=>checkReal(p)&&p.taskId===expected.taskId&&p.delivery?.id===expected.id&&p.delivery?.revision===expected.revision));
+
  const checks={
-  cleanDistribution:i.build?.dirty===false&&i.distribution?.pass===true&&i.distribution?.pristine===true&&i.distribution?.files===593,
-  source:i.source?.pass===true&&i.source?.tests>0&&i.source?.mainTypes===true&&i.source?.hifiTypes===true&&i.source?.lint===true,
+  cleanDistribution:i.build?.dirty===false&&i.distribution?.pass===true&&i.distribution?.pristine===true&&i.distribution?.files===593&&same(i.distribution?.build),
+  source:i.source?.pass===true&&i.source?.tests>0&&i.source?.mainTypes===true&&i.source?.hifiTypes===true&&i.source?.lint===true&&i.source?.testedRuntimeCommit===i.build?.commit,
   distinctActualModels:pair.length===2&&new Set(pair).size===2&&checkReal(i.codeV1)&&pair.every(model=>i.codeV1.calls?.some(c=>c.status==='succeeded'&&`${c.runtime_kind}/${c.model}`===model)),
   genuineDependencyFlow:checkReal(i.codeV1)&&i.codeV1.final?.steps?.length>=2&&i.codeV1.final.steps.every(s=>s.status==='DONE')&&i.codeV1.final.steps.some(s=>s.role==='review'&&JSON.parse(s.handoff_json??'{}').upstream?.length>0),
-  exactNativeExecution:Array.isArray(i.nativeProofs)&&i.nativeProofs.length>=3&&i.nativeProofs.every(checkReal),
+  exactNativeExecution:Array.isArray(i.nativeProofs)&&i.nativeProofs.length>=3&&i.nativeProofs.every(checkReal)&&validProofs&&new Set(i.nativeProofs.map(p=>`${p.taskId}:${p.delivery?.id}`)).size===i.nativeProofs.length,
   explicitV2AcceptanceAndReopen:checkReal(i.lifecycle)&&i.lifecycle.noteOnlyNoCalls===true&&i.lifecycle.explicitExecution===true&&i.lifecycle.v2?.revision===2&&i.lifecycle.v2?.reviewStatus==='accepted'&&i.lifecycle.normalClose===true&&i.lifecycle.reopened===true&&i.lifecycle.originalFilesHashMatched===true,
   documentCollaboration:checkReal(i.document)&&i.document.actualPreview===true&&i.document.contributorsVerified===true,
   selectedDeliberation:checkReal(i.deliberation)&&i.deliberation.distinctModels===true&&i.deliberation.independentInputs===true&&i.deliberation.crossReview===true&&i.deliberation.naturalReport===true,
