@@ -63,6 +63,31 @@ describe('R84 Codex new-intent configuration preparation, isolated adapter fixtu
       expect(await f.raw('message.submit',f.params,randomUUID(),true)).toMatchObject({ok:false,error:{code:'CONVERSATION_UNAVAILABLE'}});expect(f.db.prepare('SELECT count(*) n FROM messages').get()).toEqual({n:0});expect(f.start).not.toHaveBeenCalled();
     }finally{f.db.close();}
   });
+  it('reopening a project never silently adds a removed member back into the AUTO room roster',async()=>{
+    const f=await fixture();try{
+      const roomId=f.params.target.roomId,coordinator=f.memberId,revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number}).revision;
+      await f.cmd('room.update',{roomId,expectedRevision:revision,coordinatorMemberId:coordinator});
+      const removed=(f.db.prepare('SELECT member_id FROM room_members WHERE room_id=? AND member_id!=? LIMIT 1').get(roomId,coordinator) as {member_id:string}).member_id;
+      await f.cmd('room.members.set',{roomId,memberId:removed,action:'remove'});
+      await f.cmd('project.open',{path:f.project});await f.cmd('project.open',{path:f.project});
+      expect(f.db.prepare('SELECT 1 FROM room_members WHERE room_id=? AND member_id=?').get(roomId,removed)).toBeUndefined();
+      const sent=await f.raw('message.submit',{...f.params,mentions:[]},randomUUID(),true);expect(sent.ok).toBe(true);
+      const scope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(sent.data.taskId) as {roster_json:string};
+      expect((JSON.parse(scope.roster_json) as Array<{memberId:string}>).map(m=>m.memberId)).not.toContain(removed);expect(f.start).not.toHaveBeenCalled();
+      await f.cmd('room.members.set',{roomId,memberId:removed,action:'add'});await f.cmd('project.open',{path:f.project});expect(f.db.prepare('SELECT 1 FROM room_members WHERE room_id=? AND member_id=?').get(roomId,removed)).toBeDefined();
+    }finally{f.db.close();}
+  });
+  it('opening an archived room never backfills a newly created member into its preserved roster',async()=>{
+    const f=await fixture();try{
+      const roomId=f.params.target.roomId,revision=(f.db.prepare('SELECT revision FROM rooms WHERE id=?').get(roomId) as {revision:number}).revision;
+      const before=f.db.prepare('SELECT member_id FROM room_members WHERE room_id=? ORDER BY member_id').all(roomId);
+      await f.cmd('room.archive',{roomId,expectedRevision:revision,action:'archive'});
+      const added=(await f.cmd('member.create',{projectId:f.projectId,displayName:'归档后新成员'})).memberId;
+      await f.cmd('project.open',{path:f.project});
+      expect(f.db.prepare('SELECT member_id FROM room_members WHERE room_id=? ORDER BY member_id').all(roomId)).toEqual(before);
+      expect(f.db.prepare('SELECT 1 FROM room_members WHERE room_id=? AND member_id=?').get(roomId,added)).toBeUndefined();expect(f.start).not.toHaveBeenCalled();
+    }finally{f.db.close();}
+  });
   it('trust initialization precedes new durable scope; old queued snapshot remains unchanged and invalid',async()=>{
     const f=await fixture();try{
       const old=(await f.raw('message.submit',f.params)).data.taskId as string;const scope=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(old);

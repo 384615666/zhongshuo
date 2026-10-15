@@ -276,8 +276,9 @@ function bootstrapProject(db: ZhongshuoDatabase, projectId: string, agentNames?:
       .run(`room_default_${projectId}`, projectId, defaultMember);
   }
   const roomId = `room_default_${projectId}`;
-  // 房间成员关系（修复轮 5：此前 smoke 手工 INSERT 绕过——正式链路必须引导）。
-  db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) SELECT ?, id FROM project_members WHERE project_id = ?')
+  // Only the newly created default room receives the initial roster. Reopening is
+  // a read of existing membership, not permission to undo explicit room removals.
+  if(roomCount===0)db.prepare('INSERT OR IGNORE INTO room_members (room_id, member_id) SELECT ?, id FROM project_members WHERE project_id = ?')
     .run(roomId, projectId);
   const convCount = (db.prepare('SELECT count(*) c FROM conversations WHERE room_id = ?').get(roomId) as { c: number }).c;
   if (convCount === 0) {

@@ -10,4 +10,6 @@ describe('R86 native evidence rejects unrelated or self-reported proof',()=>{
  it('binds source read to path and frozen file contents',()=>{const f=[{path:'greeting.mjs',content:'export const greet=1;',sha256:'h',deliveryId:'d',revision:1,manifestHash:'m'}];expect(fileRead('cat greeting.mjs','export const greet=1;',f)).toHaveLength(1);expect(fileRead('cat AGENTS.md','export const greet=1;',f)).toHaveLength(0);expect(fileRead('cat greeting.mjs','old version',f)).toHaveLength(0);});
 });
 
+it('matches numbered Get-Content output to exact frozen text, rejecting changed or partial lines',()=>{const files=[{path:'requirements.md',content:'# 需求\n\n完整正文\n',sha256:'frozen'}];expect(fileRead('Get-Content requirements.md','  1: # 需求\n  2: \n  3: 完整正文\n',files)).toHaveLength(1);expect(fileRead('Get-Content requirements.md','  1: # 需求\n  2: \n  3: 改变正文\n',files)).toHaveLength(0);expect(fileRead('Get-Content requirements.md','  1: # 需求\n',files)).toHaveLength(0);});
+
 it('reads native FileChange keyed-map and array without reporting outside paths or code bodies',()=>{expect(fileChangePaths({'D:\\own\\greeting.mjs':{diff:'private-body'},'D:\\else\\secret':{}},'D:\\own')).toEqual(['greeting.mjs']);expect(fileChangePaths([{path:'greeting.test.mjs'}],'D:\\own')).toEqual(['greeting.test.mjs']);});

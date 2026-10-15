@@ -40,6 +40,15 @@ describe('R79 isolated history scale (not normal business lifecycle)', () => {
       const ids=[...head.data.runs.map(r=>r.id),...rpage.data.items.map(x=>('id' in x?x.id:''))];expect(new Set(ids).size).toBe(25);
       const dpage=(await raw('task.history',{projectId:'p',taskId:'t',kind:'deliveries',cursor:head.data.nextCursors!.deliveries})) as {ok:boolean;data:TaskHistoryPage};
       expect(dpage.data.items).toHaveLength(10);expect(dpage.data.nextCursor).toBeNull();
+      // R86 delivery-link boundary: explicitly pinned old version is outside both normal windows.
+      db.prepare("UPDATE task_deliveries SET run_id='r0',manifest_hash='old-version-content' WHERE id='d1'").run();
+      const pinned=(await raw('task.details',{projectId:'p',taskId:'t',conversationId:'c',deliveryId:'d1'})) as {ok:boolean;data:TaskDetailsResult};
+      expect(pinned.ok).toBe(true);expect(pinned.data.selectedRunId).toBe('r0');expect(pinned.data.latestRunId).toBe('r24');
+      expect(pinned.data.deliveries).toHaveLength(51);expect(pinned.data.deliveries.find(d=>d.id==='d1')).toMatchObject({revision:1,manifestHash:'old-version-content',runId:'r0'});
+      expect(pinned.data.runs.find(r=>r.id==='r0')?.detailLoaded).toBe(true);expect(pinned.data.truncated.deliveries).toBe(true);
+      expect((await raw('task.details',{projectId:'p',taskId:'t',deliveryId:'missing-old-version'})).ok).toBe(false);
+      db.prepare("INSERT INTO tasks(id,project_id,conversation_id,kind,title,status) VALUES('other-task','p','c','dm_turn','另一个历史目标','DONE')").run();
+      expect((await raw('task.details',{projectId:'p',taskId:'other-task',deliveryId:'d1'})).ok).toBe(false);
       let cursor=head.data.nextCursors!.activity;const seqs=head.data.events.map(e=>e.seq);
       // A new head event while paging must neither duplicate nor displace older rows.
       db.prepare(`INSERT INTO domain_events(event_id,schema_version,kind,project_id,conversation_id,task_id,payload_json,created_at) VALUES('new-head',1,'tool.started','p','c','t','{}',999)`).run();

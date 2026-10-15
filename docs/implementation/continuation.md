@@ -4,7 +4,9 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
-运行冻结 e155074fdaeabbdad47e2e32e1379a95866bc46a；候选 `desktop-daily-win-v25-rc6`，clean BUILD `bld_bfb38f295d978b95`，593程序文件，源候选未启动。HEAD与dirty以git实读；后续QA/记录提交不冒充新运行源码。分支codex/full-implementation。独立审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79，已有用户跨会话授权；无另一个产品写入者。
+当前阶段：运行冻结0f3452b870b3a2b1f99433357a1ee496058956dd / desktop-daily-win-v25-rc7 / bld_9fa40125a99e71b6，593程序文件。用户已指定deepseek-flash替代耗尽的GLM；rc7真实同任务DeepSeek+Codex开发v1→意见仅记录零调用→显式v2→验收v2→原生关闭/BAT重开已通过，8次成功；文档协作另5次成功，旧版评审后整合修改，不能称评审覆盖终版。原生子任务/精确子成果/返回/CtrlR/草稿保持已证，Chromium历史另列，AltLeft不声称支持。源码全套163文件1151通过。现已独立复现并修正project.open每次复活默认房间已移出成员，须冻结rc8最终同BUILD复证；原false与rc7阶段证据均保留。最新HEAD用git实读，后续QA/记录提交不冒充运行源码。分支codex/full-implementation，独立审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79只读复核；无其他产品写入者。
+
+立即续工：冻结房间初始化修复（仅首次建房填名册，显式member.create自动加入活动房间合同不变）及永久正负例，rc8 prepare新owned根DeepSeek/Codex medium；最终实际开发v1/v2验收重开、文档及实际预览、显式选两成员DELIBERATE、原生导航、原型成对宽窄/DPR1.5截图实际检查、同BUILD完整源码/Fake/升级回退及593清单、真实调用总账/最终严格总门、提交推送独立复核。rc7 own根review-r86-real-rc7-deepseek-20261015端口52794，文档task_230a20c5-dc9c-4282-ac50-6bd7f8940e7b已REVIEW；不要重放旧任务。native-proof-document-v1原false由编号Get-Content输出解析导致，numbered新票核不可变上游snapshot后pass，QA-only更正不新调用。未完成最终总门，不交半成品。
 
 用户要求一次房间发送→协调成员自主分工→异构成员交接→整合→人工验收，并支持显式选成员研讨。同任务两个不同实际模型必须通过；不限定两个CLI。必要合成真实调用已授权。GLM/glm-5.3-flash当前429周/月额度耗尽，提示2026-10-16 19:42:30重置；保留失败，不拿成功别的渠道冒充GLM。本机正式model/list已零推理确认gpt-6.1-sol与gpt-6-sol，沿现有Codex配置在独立成员/根使用这组，不改用户渠道/模型/凭据。真实调用账目以各owned根SQLite real_calls实读，不再写“0调用”。
 

@@ -49,7 +49,15 @@ try{
       const proof={sessionId:session.id,providerSessionId:session.provider_session_id,memberId:session.member_id,taskId:session.task_id,role:session.role??'coordinator',kind,configuredModel:session.model,currentConfiguredModel:session.currentConfiguredModel,actualRuntimeSnapshot:session.actualRuntimeSnapshot,transcriptSha256:hash(raw),testCommands:[],readCommands:[],writeActions:[],tools:[],nativeDelegationObserved:false};
       const handoff=JSON.parse(db.prepare('SELECT handoff_json FROM coordination_steps WHERE child_task_id=? AND run_id=?').get(session.task_id,plan.run_id)?.handoff_json??'{}');
       const frozenFiles=(handoff.upstream??[]).flatMap(delivery=>(delivery.files??[]).filter(f=>f.state==='present').map(f=>({...f,deliveryId:delivery.id,revision:delivery.revision,manifestHash:delivery.manifest_hash})));
-      const readableFiles=frozenFiles.flatMap(f=>{const target=path.resolve(main.project,f.path);if(!target.startsWith(path.resolve(main.project)+path.sep)||!fs.existsSync(target)||fs.statSync(target).size>1024*1024)return [];const bytes=fs.readFileSync(target);return hash(bytes)===f.sha256?[{...f,content:bytes.toString('utf8')}]:[];});
+      const readableFiles=frozenFiles.flatMap(f=>{
+        // A later integration may legitimately change the worktree. Prove the
+        // exact frozen upstream version from its immutable content store first.
+        const delivery=db.prepare('SELECT change_set_refs_json FROM task_deliveries WHERE id=? AND revision=? AND manifest_hash=?').get(f.deliveryId,f.revision,f.manifestHash);
+        if(!delivery)return [];
+        const saved=db.prepare("SELECT f.content_ref,f.size FROM change_set_files f JOIN change_sets c ON c.id=f.change_set_id WHERE c.project_id=? AND c.id IN (SELECT value FROM json_each(?)) AND f.role='after' AND f.path=? AND f.sha256=? AND f.state='present' LIMIT 1").get(main.ids.projectId,delivery.change_set_refs_json,f.path,f.sha256);
+        if(saved?.content_ref===f.sha256&&/^[a-f0-9]{64}$/.test(saved.content_ref)&&saved.size<=1024*1024){const stored=path.join(main.dataRoot,'preimages',main.ids.projectId,saved.content_ref);if(fs.existsSync(stored)&&fs.statSync(stored).size===saved.size){const bytes=fs.readFileSync(stored);if(hash(bytes)===f.sha256)return [{...f,content:bytes.toString('utf8'),source:'immutable upstream snapshot'}];}}
+        const target=path.resolve(main.project,f.path);if(!target.startsWith(path.resolve(main.project)+path.sep)||!fs.existsSync(target)||fs.statSync(target).size>1024*1024)return [];const bytes=fs.readFileSync(target);return hash(bytes)===f.sha256?[{...f,content:bytes.toString('utf8'),source:'matching current file'}]:[];
+      });
       proof.expectedInputFiles=frozenFiles.map(({path,sha256,deliveryId,revision,manifestHash})=>({path,sha256,deliveryId,revision,manifestHash}));
       if(kind==='claude'){
         proof.responseModels=[...new Set(rows.filter(r=>r.type==='assistant').map(r=>r.message?.model).filter(Boolean))];
