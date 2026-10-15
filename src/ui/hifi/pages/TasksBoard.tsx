@@ -51,9 +51,9 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const [gen, setGen] = useState(0);
   const [reading, setReading] = useState(false);
 
-  const setParam = (patch: Record<string, string>) => {
+  const setParam = (patch: Record<string, string>,replace=false) => {
     const qs = new URLSearchParams({ scope, projectId: scopeProjectId, roomId: roomFilter, ...patch });
-    navigate(`/board?${qs.toString()}`);
+    navigate(`/board?${qs.toString()}`,{replace});
   };
 
   /** board.view 权威装载（scope=project 显式项目；visible/all 走服务端可见集——与导航偏好一致）。 */
@@ -62,7 +62,8 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
     let disposed = false;
     let inFlight = false;
     setReadError(null);
-    const params = scope === 'project' && scopeProjectId !== ''
+    if(scope==='project'&&!scopeProjectId){setReading(false);setReadError({key:scopeKey,message:'尚未选择项目，请先选择一个项目或切换到侧栏可见项目'});return()=>{disposed=true;++readGeneration.current;};}
+    const params = scope === 'project'
       ? { scope: 'project' as const, projectId: scopeProjectId }
       : { scope: 'all' as const };
     const reload = async () => {
@@ -90,7 +91,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const scopeRooms = useMemo(() => (data?.groups ?? []).flatMap((g) => (g.rooms ?? []).map((r) => ({ ...r, projectId: g.projectId, projectName: g.displayName }))), [data]);
   const roomStillValid = roomFilter === 'all' || scopeRooms.some((r) => r.roomId === roomFilter);
   useEffect(() => {
-    if (data != null && !roomStillValid) { setParam({roomId:'all'}); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
+    if (data != null && !roomStillValid) { setParam({roomId:'all'},true); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
   }, [roomStillValid, data]);
 
   const cardsOf = (g: BoardGroup) => g.rooms.flatMap((r) => r.cards).filter((c) => roomFilter === 'all' || c.roomId === roomFilter);
@@ -149,7 +150,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
           <div className="panel warning">看板读取失败：{err}。{data != null ? '保留上次已确认的任务；可点击刷新重试。' : '可点击刷新重试。'}</div>
         ) : null}
         {data == null ? (
-          <div className="panel info">正在读取看板（board.view）…</div>
+          <div className="panel info">{err?'尚未取得这个范围的看板。':'正在读取看板…'}</div>
         ) : totalCount === 0 ? (
           <EmptyState icon="list" title="这个范围里还没有任务" detail="在对话池发布一条任务后，看板会按项目与状态自动分组。" />
         ) : (

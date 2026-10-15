@@ -79,7 +79,8 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
     } finally { inFlight.current=false;if(alive.current)setBusy(null); }
   };
   const restoreRoom = async (roomId: string) => {
-    const room = groups.flatMap(g=>g.rooms).find((r) => r.id === roomId);
+    const group=groups.find(g=>g.rooms.some(r=>r.id===roomId));
+    const room = group?.rooms.find((r) => r.id === roomId);
     if (room == null||inFlight.current||index.reading) return;
     inFlight.current=true;const target=actionTarget.current.generation;
     setBusy(`room:${roomId}`);
@@ -87,8 +88,9 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
       const r = await roomArchiveReal(roomId, room.revision ?? 0, 'unarchive');
       if(!alive.current||actionTarget.current.generation!==target)return;
       if (r.ok) {
-        recordWrite('room.archive', `恢复房间「${room.name}」（房间恢复可写）`);
-        toast('房间已恢复可写', 'success');
+        const result=group?.project.archived?'已解除房间的单独归档；项目仍归档，恢复项目后才可写':'房间已恢复可写';
+        recordWrite('room.archive', `恢复房间「${room.name}」：${result}`);
+        toast(result, 'success');
         void index.load();
       } else toast(`恢复未确认：${r.error}`, 'error');
     } finally { inFlight.current=false;if(alive.current)setBusy(null); }
@@ -191,10 +193,10 @@ export function ArchiveManager({ query, embedded }: { query?: Record<string, str
                         <button
                           className="btn sm"
                           disabled={busy!=null||index.reading}
-                          title="恢复房间（room.archive unarchive——revision CAS）：房间恢复可写"
+                          title={g.project.archived?'解除房间单独归档；项目仍保持归档，只读，恢复项目后才可写':'解除房间归档，恢复可写'}
                           onClick={() => void restoreRoom(r.id)}
                         >
-                          {busy === `room:${r.id}` ? '恢复中…' : '恢复房间'}
+                          {busy === `room:${r.id}` ? '恢复中…' : g.project.archived?'解除单独归档':'恢复房间'}
                         </button>
                       ) : viaProject ? (
                         <span className="small faint" title="项目恢复后，这个房间会自动回到可写状态">

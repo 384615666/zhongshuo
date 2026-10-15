@@ -25,7 +25,7 @@ module.exports=async function(ctx){
   await cmd('member.setRuntime',{memberId:bm,kind:'fake',permissionMode:'manual'});
   const br=(await cmd('room.list',{projectId:b})).items[0];result.ids={a:projectId,b,room:room.id,br:br.id};
   for(const [pid,r,mid] of [[projectId,room,memberId],[b,br,bm]])for(let i=0;i<6;i++){
-   const sent=await cmd('message.submit',{target:{kind:'room_root',projectId:pid,roomId:r.id,conversationId:r.conversationId},body:`R84 UI CHAT：R85 密度工程 ${i+1}，普通回答`,intent:'default',mentions:[{memberId:mid}]});
+   const sent=await cmd('message.submit',{target:{kind:'room_root',projectId:pid,roomId:r.id,conversationId:r.conversationId},body:`R84 UI CHAT：R85 密度工程 ${i+1}，普通回答`,intent:'default',mentions:[{kind:'member',memberId:mid}]});
    await until(()=>queryOne('SELECT status FROM tasks WHERE id=?',sent.taskId)?.status,s=>s==='DONE','normal Fake conversation task');
   }
   const archives=[];for(let i=0;i<68;i++){const pid=i%2?b:projectId,r=(await cmd('room.create',{projectId:pid,name:`R85 归档 ${String(i).padStart(2,'0')}`})).room;const row=(await cmd('room.list',{projectId:pid})).items.find(x=>x.id===r.id);await cmd('room.archive',{roomId:r.id,expectedRevision:row.revision,action:'archive'});archives.push({projectId:pid,id:r.id,revision:row.revision+1});}
@@ -42,16 +42,22 @@ module.exports=async function(ctx){
   const removed=archives.find(r=>r.projectId===projectId);await cmd('room.archive',{roomId:removed.id,expectedRevision:removed.revision,action:'unarchive'});
   await route(`/archive?project=${b}`,()=>c.eval('location.hash.includes('+q(b)+')'));await route(`/archive?project=${projectId}`,()=>c.eval('document.querySelectorAll("[data-archive-room]").length===33'));await sleep(2800);
   must(!await c.eval(`document.querySelector(${q('[data-archive-room="'+removed.id+'"]')})!=null`),'late ABA archive response resurrected restored room');result.faults.push({kind:'archive delayed ABA',removed:removed.id,finalRows:33});await step('archive-aba');
-  await route('/board',()=>c.eval('document.querySelector("[aria-label=\"看板范围\"]")?.textContent.includes("侧栏可见项目")'));
+  await route('/board',()=>c.eval('document.querySelector("[aria-label=看板范围]")?.textContent.includes("侧栏可见项目")'));
   await until(()=>c.eval('document.querySelectorAll("[data-zs-task-id]").length'),n=>n>=12,'dense board real task cards');await step('board-default');
   await select('房间筛选',room.id);await until(()=>c.eval('location.hash'),s=>s.includes('roomId='+room.id),'room filter written to URL');
   await select('看板范围','project');await until(()=>c.eval('location.hash'),s=>s.includes('scope=project')&&s.includes('roomId=all'),'scope clears room URL');
-  await until(()=>c.eval('document.querySelector("[aria-label=\"房间筛选\"]")?.textContent'),s=>s?.includes('全部房间'),'room control cleared');
-  await c.eval('history.back();true');await until(()=>c.eval('location.hash'),s=>s.includes('roomId='+room.id),'back restores URL room');await until(()=>c.eval('document.querySelector("[aria-label=\"房间筛选\"]")?.textContent'),s=>s?.includes(room.name),'back restores room control');await step('board-filter-back');
+  await until(()=>c.eval('document.querySelector("[aria-label=房间筛选]")?.textContent'),s=>s?.includes('全部房间'),'room control cleared');
+  await c.eval('history.back();true');await until(()=>c.eval('location.hash'),s=>s.includes('roomId='+room.id),'back restores URL room');await until(()=>c.eval('document.querySelector("[aria-label=房间筛选]")?.textContent'),s=>s?.includes(room.name),'back restores room control');await step('board-filter-back');
+  await route('/activity',()=>c.eval('document.querySelector("[data-zs-activity]")!=null'));
+  await route('/board?scope=all&roomId=does-not-exist',()=>c.eval('location.hash.includes("roomId=all")'));await c.eval('history.back();true');await until(()=>c.eval('location.hash'),s=>s==='#/activity','invalid room normalization must replace history rather than trap Back');result.steps.push({name:'board-invalid-filter-back',at:Date.now()});save();
+  const wholeDir=path.join(out,'R85 整体归档');fs.mkdirSync(wholeDir);const whole=(await cmd('project.open',{path:wholeDir,displayName:'R85 整体归档'})).project.id;
+  const wr=(await cmd('room.list',{projectId:whole})).items[0];await cmd('room.archive',{roomId:wr.id,expectedRevision:wr.revision,action:'archive'});await cmd('project.lifecycle',{projectId:whole,expectedRevision:0,action:'archive'});
+  await route(`/archive?project=${whole}`,()=>c.eval(`document.querySelector(${q('[data-archive-room="'+wr.id+'"]')})!=null`));await click('解除单独归档',`[data-archive-room="${wr.id}"]`);await until(()=>c.eval('document.body.textContent'),t=>t.includes('项目仍归档，恢复项目后才可写'),'read-only project accurate restoration feedback');
+  must(queryOne('SELECT status FROM projects WHERE id=?',whole)?.status==='archived','room restore must not restore project');must((await cmd('room.list',{projectId:whole})).items.find(r=>r.id===wr.id).archivedAt===null,'only standalone room archive cleared');await step('archive-project-still-readonly');
   await cmd('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'R85 跨项目普通记录入口',intent:'record_only',mentions:[]});
   await route(`/project/${b}/members`,()=>c.eval('document.querySelector("[data-zs-members]")!=null'));await route('/activity',()=>c.eval('document.querySelector("[data-zs-activity]")!=null'));
-  await until(()=>c.eval('[...document.querySelectorAll("[data-zs-activity-item=\"message.recorded\"]")].some(e=>[...e.querySelectorAll("button")].some(b=>b.textContent.includes("打开房间")))'),Boolean,'cross-project room action');await step('activity-cross-project');
-  await c.eval('[...document.querySelectorAll("[data-zs-activity-item=\"message.recorded\"] button")].find(b=>b.textContent.includes("打开房间")).click();true');await until(()=>c.eval('location.hash'),s=>s.includes(`/project/${projectId}/room/${room.id}`),'activity true project and room');
+  await until(()=>c.eval(`[...document.querySelectorAll('[data-zs-activity-item="message.recorded"]')].some(e=>[...e.querySelectorAll('button')].some(b=>b.textContent.includes('打开房间')))`),Boolean,'cross-project room action');await step('activity-cross-project');
+  await c.eval(`[...document.querySelectorAll('[data-zs-activity-item="message.recorded"] button')].find(b=>b.textContent.includes('打开房间')).click();true`);await until(()=>c.eval('location.hash'),s=>s.includes(`/project/${projectId}/room/${room.id}`),'activity true project and room');
   // True initialized empty repository: stage, unstage, first commit via UI.
   const unborn=repo('unborn',false),up=(await cmd('project.open',{path:unborn,displayName:'R85 首提交'})).project.id;
   await c.send('Page.reload');await until(()=>c.eval('document.body.classList.contains("hifi-on")'),Boolean,'Git registry reload');await gitRoute(up);await until(body,t=>t.includes('说明.txt'),'unborn entry');must((await cmd('git.status',{projectId:up})).branch==='main','unborn real branch name');

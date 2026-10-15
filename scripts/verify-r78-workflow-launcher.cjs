@@ -12,6 +12,7 @@ const port = process.argv.includes('--port')?Number(process.argv[process.argv.in
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const opt = (name) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 const srcArg = opt('--src');
+if(process.argv.includes('--r80-unknown')&&process.argv.includes('--r85'))throw new Error('--r80-unknown is an exclusive receipt-preservation route; run --r85 in a separate fresh host');
 if (!srcArg) throw new Error('usage: node scripts/verify-r78-workflow-launcher.cjs --src <final-v17-daily-package> [--out <fresh-evidence-dir>]');
 const src = path.resolve(srcArg);
 const out = path.resolve(opt('--out') ?? path.join(repo, 'dist', 'desktop', `review-r78-workflow-launcher-${Date.now()}`));
@@ -222,6 +223,11 @@ function verifyManifest(packageRoot) {
     const normal = await command(cdp, 'runtime.status', {});
     must(normal.dispatchGuard?.fakeAllowed === false && normal.dispatchGuard?.realDispatchGuard === false, 'BAT leaked fake/guard parent flags without token');
     must(!fs.existsSync(path.join(data, 'engineering', 'ready.json')), 'helper started without token');
+    if(process.argv.includes('--r85')){
+      await navigate(cdp,'/board?scope=project','/board?scope=project');
+      await until(()=>cdp.eval('document.querySelector(".main")?.textContent.includes("尚未选择项目")'),Boolean,'empty project board must not read all');
+      facts.steps.push('R85 empty current-project board asks for a project instead of reading all');
+    }
     const ordinaryA = path.join(out, 'ordinary-project-A'); const ordinaryB = path.join(out, 'ordinary-project-B');
     fs.mkdirSync(ordinaryA); fs.mkdirSync(ordinaryB);
     const normalA = (await command(cdp, 'project.open', { path: ordinaryA, displayName: 'Ordinary A' })).project.id;

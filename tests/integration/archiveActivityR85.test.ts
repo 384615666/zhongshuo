@@ -40,7 +40,7 @@ describe('R85 archive registry pages and authoritative cross-project activity id
    await f.room(f.a,'单独归档');await f.room(f.b,'即将移除');
    await f.cmd('project.lifecycle',{projectId:f.a,expectedRevision:0,action:'archive'});await f.cmd('project.lifecycle',{projectId:f.b,expectedRevision:0,action:'remove'});
    const seen:Row[]=[];let cursor:string|null=null;let reads=0;
-   do{const p=await f.cmd<Page>('archive.list',{limit:1,...(cursor?{cursor}:{})});seen.push(...p.items);cursor=p.nextCursor;reads++;expect(reads).toBeLessThan(8);}while(cursor);
+   do{const p:Page=await f.cmd<Page>('archive.list',{limit:1,...(cursor?{cursor}:{})});seen.push(...p.items);cursor=p.nextCursor;reads++;expect(reads).toBeLessThan(8);}while(cursor);
    expect(seen.every(r=>r.projectId===f.a&&r.projectArchived)).toBe(true);expect(seen.filter(r=>r.roomId===null)).toHaveLength(1);
    expect(seen.some(r=>r.roomId!==null&&r.roomArchivedAt===null)).toBe(true);
    expect(new Set(seen.map(r=>JSON.stringify([r.projectId,r.roomId]))).size).toBe(seen.length);
