@@ -38,6 +38,7 @@ import { openDispatchGate } from '../persistence/daemonState.ts';
 import { memberImageCapability, type ImageCapabilityReadContext } from './imageCapability.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime, defaultModelOf } from './memberRuntime.ts';
 import {runtimeOptions} from './runtimeOptions.ts';
+import { archiveListParams, readArchiveIndex, ArchiveCursorError } from './archiveIndex.ts';
 import {chatAnswer} from '../contracts/chatAnswer.ts';
 import { CLAUDE_ADAPTER_VERSION } from '../adapter/claude/cliAdapter.ts';
 import { createHash } from 'node:crypto';
@@ -1092,6 +1093,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return { room: { id: roomId, name: params.name, conversationId: convId }, roomIndex: roomCount + 1 };
         }, assertRoomCreationScope);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'archive.list': {
+        const params=archiveListParams.parse(env.params);
+        try { return withCommandId({ok:true,data:readArchiveIndex(deps.db,deps.localUserId,params)}); }
+        catch(e){if(e instanceof ArchiveCursorError)throw new DaemonCommandError('VALIDATION_INVALID',e.message);throw e;}
       }
       case 'room.list': {
         const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
@@ -3760,7 +3766,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         };
         const rows = deps.db.prepare(
           `SELECT e.event_id, e.seq, e.kind, e.created_at, e.project_id, c.id AS conversation_id, COALESCE(e.thread_id, task.conversation_thread_id) AS thread_id, e.task_id, e.payload_json,
-                  p.display_name AS project_name, c.kind AS conversation_kind
+                  p.display_name AS project_name, c.kind AS conversation_kind, c.room_id AS room_id
            FROM domain_events e
            LEFT JOIN projects p ON p.id = e.project_id
            LEFT JOIN tasks task ON task.id = e.task_id
@@ -3772,7 +3778,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
              AND (c.id IS NULL OR c.kind != 'dm' OR EXISTS (SELECT 1 FROM dm_participants dp WHERE dp.conversation_id = c.id AND dp.principal_type = 'human' AND dp.principal_id = ?))
              ${params.before != null ? (params.beforeSeq != null ? 'AND (e.created_at < ? OR (e.created_at = ? AND e.seq < ?))' : 'AND e.created_at < ?') : ''}
            ORDER BY e.created_at DESC, e.seq DESC LIMIT ?`,
-        ).all(...projectIds, deps.localUserId, ...(params.before != null ? (params.beforeSeq != null ? [params.before, params.before, params.beforeSeq] : [params.before]) : []), params.limit) as Array<{ event_id: string; seq: number; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string | null; project_name: string | null; conversation_kind: string | null }>;
+        ).all(...projectIds, deps.localUserId, ...(params.before != null ? (params.beforeSeq != null ? [params.before, params.before, params.beforeSeq] : [params.before]) : []), params.limit) as Array<{ event_id: string; seq: number; kind: string; created_at: number; project_id: string; conversation_id: string | null; thread_id: string | null; task_id: string | null; payload_json: string | null; project_name: string | null; conversation_kind: string | null; room_id:string|null }>;
         const items = rows.map((e) => {
           let summary = '';
           try {
@@ -3784,6 +3790,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             eventId: e.event_id, seq: e.seq, kind: e.kind, kindLabel: KIND_LABEL[e.kind] ?? e.kind, at: e.created_at, summary,
             projectId: e.project_id, projectName: e.project_name ?? e.project_id,
             conversationId: e.conversation_id, threadId: e.thread_id, taskId: e.task_id,
+            roomId:e.conversation_kind==='room'?e.room_id:null,
             locate: e.task_id != null ? `#task=${e.task_id}` : e.conversation_id != null ? (e.conversation_kind === 'dm' ? `#dm=${e.conversation_id}` : `#conv=${e.conversation_id}`) : null,
           };
         });

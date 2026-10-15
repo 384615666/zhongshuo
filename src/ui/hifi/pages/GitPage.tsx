@@ -376,6 +376,7 @@ export function GitPage({
         onChange={(ev) => setCommitMessage(projectId, ev.target.value)}
       />
       <div className="small faint">{commitReason}</div>
+      <details className="small faint"><summary>提交方式</summary>产品内提交不会执行 Git hooks；如果项目要求提交钩子，请先在自己的 Git 工具完成检查。Git 提交与任务验收分别处理。</details>
     </div>
   );
 
@@ -673,8 +674,7 @@ export function GitPage({
                   {entryRead?.key === entryReadKey && entryRead.at != null ? <div className="small faint">差异更新于 {fullTime(entryRead.at)}{entryRead.loading ? ' · 正在刷新…' : ''}</div> : null}
                   {activeEntry.staged ? (
                     <div className="git-note" style={{ margin: '0 0 6px' }}>
-                      显示的是<strong>{activeEntry.staged ? '已暂存内容' : '工作区当前内容'}</strong>的 diff
-                     （git.diff staged={String(activeEntry.staged)}——真实命令按需读取）。
+                      显示的是<strong>{activeEntry.staged ? '已暂存内容' : '工作区当前内容'}</strong>的差异。
                     </div>
                   ) : null}
                   {activeEntry.state === 'conflicted' ? <div className="small faint">该文件有未解决冲突；请查看上方三方内容后编辑并确认。</div> : entryDiff == null ? (

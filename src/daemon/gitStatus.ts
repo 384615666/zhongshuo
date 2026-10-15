@@ -236,8 +236,12 @@ export async function gitRepoStatus(root: string, maxEntries = MAX_ENTRIES): Pro
   }
   let branch = '(unknown)';
   try {
-    const b = await runGitOk(['-C', loc.worktreeRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { capBytes: 4096, what: 'branch' });
-    if (b.exitCode === 0) branch = b.stdout.toString('utf8').trim();
+    const symbolic = await runGitOk(['-C', loc.worktreeRoot, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { capBytes: 4096, what: 'branch' });
+    if (symbolic.exitCode === 0) branch = symbolic.stdout.toString('utf8').trim();
+    else if (symbolic.exitCode === 1) {
+      const b = await runGitOk(['-C', loc.worktreeRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { capBytes: 4096, what: 'detached HEAD' });
+      if (b.exitCode === 0) branch = b.stdout.toString('utf8').trim();
+    }
   } catch { /* 分支不可得（如空仓库）——如实标注，不失败 */ }
   const porcelain = await runGitOk(
     ['-C', loc.worktreeRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],

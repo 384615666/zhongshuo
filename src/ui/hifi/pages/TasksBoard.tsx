@@ -13,7 +13,7 @@ import { command } from '../bridge';
 import { switchFocusProject, openExternalDeepLink } from '../loader';
 import { navigate } from '../lib/router';
 
-type BoardScope = 'visible' | 'project' | 'all';
+type BoardScope = 'project' | 'all';
 
 interface BoardCard {
   taskId: string; title: string; roomTaskNumber: number | null; threadId: string | null;
@@ -39,10 +39,10 @@ const STATUS_GROUPS: { label: string; statuses: string[] }[] = [
 export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const s = useStore((x) => x);
   const q = query ?? {};
-  const scope: BoardScope = q.scope === 'project' ? 'project' : q.scope === 'all' ? 'all' : 'visible';
+  const scope: BoardScope = q.scope === 'project' ? 'project' : 'all';
   const scopeProjectId = q.projectId ?? s.activeProjectId;
-  const [roomFilter, setRoomFilter] = useState(q.roomId ?? 'all');
-  const scopeKey = scope === 'project' ? `project:${scopeProjectId}` : 'visible';
+  const roomFilter = q.roomId || 'all';
+  const scopeKey = scope === 'project' ? `project:${scopeProjectId}` : `visible:${s.visibleProjectIds.slice().sort().join(',')}`;
   const [snapshot, setSnapshot] = useState<{ key: string; groups: BoardGroup[] } | null>(null);
   const data = snapshot?.key === scopeKey ? snapshot : null;
   const readGeneration = useRef(0);
@@ -53,7 +53,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
 
   const setParam = (patch: Record<string, string>) => {
     const qs = new URLSearchParams({ scope, projectId: scopeProjectId, roomId: roomFilter, ...patch });
-    navigate(`/board?${qs.toString()}`, { replace: true });
+    navigate(`/board?${qs.toString()}`);
   };
 
   /** board.view 权威装载（scope=project 显式项目；visible/all 走服务端可见集——与导航偏好一致）。 */
@@ -90,7 +90,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
   const scopeRooms = useMemo(() => (data?.groups ?? []).flatMap((g) => (g.rooms ?? []).map((r) => ({ ...r, projectId: g.projectId, projectName: g.displayName }))), [data]);
   const roomStillValid = roomFilter === 'all' || scopeRooms.some((r) => r.roomId === roomFilter);
   useEffect(() => {
-    if (data != null && !roomStillValid) { setRoomFilter('all'); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
+    if (data != null && !roomStillValid) { setParam({roomId:'all'}); toast('筛选范围已变化，原来的房间筛选已清空', 'info'); }
   }, [roomStillValid, data]);
 
   const cardsOf = (g: BoardGroup) => g.rooms.flatMap((r) => r.cards).filter((c) => roomFilter === 'all' || c.roomId === roomFilter);
@@ -137,7 +137,7 @@ export function TasksBoardPage({ query }: { query?: Record<string, string> }) {
             <Select
               value={roomFilter}
               ariaLabel="房间筛选"
-              onChange={setRoomFilter}
+              onChange={v=>setParam({roomId:v})}
               options={[{ value: 'all', label: '当前范围全部房间' }, ...scopeRooms.map((r) => ({ value: r.roomId, label: `${r.projectName} · ${r.name}` }))]}
             />
           </label>

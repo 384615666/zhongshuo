@@ -5,7 +5,7 @@
  * 取上一页末条；零运行零唤醒。
  *
  * 定位分列（r55）：taskId → #task=（服务端 deepLink.resolve 定位，跨项目自动打开）；
- * DM 会话 → #dm=；房间会话无任务/线程 → 本地按 conversationId 匹配已装载房间落主池
+ * DM 会话 → #dm=；房间会话无任务/线程 → 使用服务端返回的所属项目/房间身份落主池
  * （#conv= 不在正式深链族——不用未支持的形式）；都查不到=不显示定位按钮（如实，不猜）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -18,14 +18,13 @@ import { navigate } from './lib/router';
 interface ActivityItem {
   eventId: string; seq: number; kind: string; kindLabel: string; at: number; summary: string;
   projectId: string; projectName: string; conversationId: string | null; threadId: string | null; taskId: string | null;
-  locate: string | null;
+  locate: string | null; roomId:string|null;
 }
 
 const PAGE_LIMIT = 60;
 
 export function ActivityPage() {
   const projectId = useStore((s) => s.activeProjectId);
-  const rooms = useStore((s) => s.rooms);
   const [scope, setScope] = useState<'all' | 'project'>('all'); // §17.7：聚合流默认全部可访问项目
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [itemsKey, setItemsKey] = useState('');
@@ -108,8 +107,7 @@ export function ActivityPage() {
       if (it.locate != null && it.locate.length > '#dm='.length && it.locate.startsWith('#dm=')) {
         return { label: '定位会话', go: () => { void openExternalDeepLink(it.locate!).catch((e: unknown) => toast(`定位失败：${(e as Error).message}`, 'error')); } };
       }
-      const room = rooms.find((r) => r.conversationId === it.conversationId);
-      if (room != null) return { label: '打开房间', go: () => navigate(`/project/${it.projectId}/room/${room.id}`) };
+      if (it.roomId != null) return { label: '打开房间', go: () => navigate(`/project/${it.projectId}/room/${it.roomId}`) };
     }
     return null;
   };

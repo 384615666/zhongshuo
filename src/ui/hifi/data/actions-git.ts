@@ -307,7 +307,7 @@ export async function commit(projectId: string): Promise<void> {
     });
     setCommitMessage(projectId, '');
     await afterWrite(projectId, 'git.commit', `已提交：${message.split('\n')[0] ?? message}`);
-    toast('已提交（commit-tree 不跑钩子；关联任务/改动集未随意外推）', 'success');
+    toast('已提交', 'success');
   } catch (e) { gitFail(projectId, 'git.commit', e); }
 }
 
