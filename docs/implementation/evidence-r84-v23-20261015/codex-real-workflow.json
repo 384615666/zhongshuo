@@ -1,0 +1,570 @@
+{
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "runtime": {
+    "kind": "codex",
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh"
+  },
+  "imagePass": true,
+  "workflowPass": true,
+  "decoded": [
+    {
+      "label": "image-text",
+      "width": 320,
+      "height": 200,
+      "hash": "5eacbec1b60e56686a4f2e04269b11d470dd91ab2c805223336fa985e2804310"
+    },
+    {
+      "label": "image-only",
+      "width": 320,
+      "height": 200,
+      "hash": "769c03489d9a0934c99a6265486b43227a0af5399ea08ccffddf215d9530bd37"
+    }
+  ],
+  "workV1": {
+    "id": "dlv_turn_d3df5ea7-2e82-4675-b2df-5c303ad407c5",
+    "revision": 1,
+    "manifest_hash": "220fe193b542f1e4f85448416976308b7bebafb80ae25fca73b0fcbf893a6d93"
+  },
+  "workV2": {
+    "id": "dlv_turn_bc0f7f60-1e2a-4afa-9aad-0f70ee4aa92b",
+    "revision": 2,
+    "manifest_hash": "7e4440eb3c6161afd950c7f047b42656021f237686d240daf8b59a233e3f90f4"
+  },
+  "closeout": {
+    "pass": true,
+    "steps": [
+      "model v2 accepted, native Bash activity, actual source preview and original hashes",
+      "actual UI effort save/restore and template independent snapshot",
+      "one ordinary real readonly request refused native write; input/result retained",
+      "normal close/real BAT reopen preserves v2 source, acceptance, effort/template and complete conversation"
+    ],
+    "views": [
+      {
+        "name": "wide",
+        "width": 1440,
+        "height": 960,
+        "dpr": 1,
+        "kind": "room",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "wide",
+        "width": 1440,
+        "height": 960,
+        "dpr": 1,
+        "kind": "thread",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "wide",
+        "width": 1440,
+        "height": 960,
+        "dpr": 1,
+        "kind": "dm",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "narrow",
+        "width": 900,
+        "height": 800,
+        "dpr": 1,
+        "kind": "room",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "narrow",
+        "width": 900,
+        "height": 800,
+        "dpr": 1,
+        "kind": "thread",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "narrow",
+        "width": 900,
+        "height": 800,
+        "dpr": 1,
+        "kind": "dm",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "hidpi",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5,
+        "kind": "room",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "hidpi",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5,
+        "kind": "thread",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "提及成员（也可以直接在输入框里打 @）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      },
+      {
+        "name": "hidpi",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1.5,
+        "kind": "dm",
+        "geometry": [
+          [
+            {
+              "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            },
+            {
+              "title": "本次运行设置：本次执行方式、预算推导与说明",
+              "width": 30,
+              "height": 30,
+              "dx": 0,
+              "dy": 0
+            }
+          ]
+        ]
+      }
+    ],
+    "files": [
+      {
+        "file": "math.mjs",
+        "hash": "c102afd3950a0a411bca63cd1f8f9c6bcfbd82727bdd42ff1c4a3efb13f1a298"
+      },
+      {
+        "file": "math.test.mjs",
+        "hash": "232b65fad3b977dc324cda519217e8cd604c0aa8ff1ae955e9d58d358d3d62d0"
+      },
+      {
+        "file": "original.txt",
+        "hash": "148ad1fedb240306778ea62441733e0eedd769685a178db226f4df1410356f86"
+      },
+      {
+        "file": "README.md",
+        "hash": "20357d3db6adefffb4dd5d3832af359d275fbb0f04290cce1022a73a72508154"
+      }
+    ],
+    "outsideHash": "d01cb8dedc3ed4440cb46406fa09c5fe4572d065a82ede4e27df38d09ac7ce77",
+    "calls": [
+      {
+        "id": 1,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_c4f1435b-e421-462d-9061-eac8a96355c4",
+        "task_id": "task_014928e7-08b9-4d09-ad6b-62b4f9eed288"
+      },
+      {
+        "id": 2,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_0abbcbe0-7a5e-4b23-9616-283db62d9a1d",
+        "task_id": "task_969db962-ef55-405f-8cef-4f12e5fa9845"
+      },
+      {
+        "id": 3,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_71b9294a-8b2e-41e1-b7b2-3ed002262d52",
+        "task_id": "task_3b2dc6f7-0c62-4b4b-afad-3c54a9508791"
+      },
+      {
+        "id": 4,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_fc4e5500-c762-4e19-92ab-8e8bae4483ac",
+        "task_id": "task_83e52a03-1840-4442-b235-e7aaec53d22b"
+      },
+      {
+        "id": 5,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_f3b7751e-5777-4abd-8e46-01418862b4ac",
+        "task_id": "task_2d22c187-b6e9-40a7-a6c7-96b0b13de900"
+      },
+      {
+        "id": 6,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_d3df5ea7-2e82-4675-b2df-5c303ad407c5",
+        "task_id": "task_3593c02a-2b76-4da2-8528-332e5162cd5c"
+      },
+      {
+        "id": 7,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_bc0f7f60-1e2a-4afa-9aad-0f70ee4aa92b",
+        "task_id": "task_3593c02a-2b76-4da2-8528-332e5162cd5c"
+      },
+      {
+        "id": 8,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_a1bd519f-951d-4213-b53a-da5bc6ca256d",
+        "task_id": "task_014928e7-08b9-4d09-ad6b-62b4f9eed288"
+      },
+      {
+        "id": 9,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_bb95e6f1-0a38-482e-956d-30339af904e8",
+        "task_id": "task_014928e7-08b9-4d09-ad6b-62b4f9eed288"
+      },
+      {
+        "id": 10,
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "turn_id": "turn_e614de1c-1f80-41a7-8bce-c590c375aa2e",
+        "task_id": "task_e2cfe595-6ccb-434e-939d-9fb0573a5237"
+      }
+    ]
+  },
+  "ordinary": {
+    "pass": true,
+    "taskId": "task_014928e7-08b9-4d09-ad6b-62b4f9eed288",
+    "threadId": "thread_6cfd08ba-0851-4991-9179-5bfc7da339e2",
+    "recordOnly": true,
+    "steps": [
+      {
+        "text": "你刚才怎么回答我的问候的？",
+        "messageId": "msg_218c1d0b-8afe-462e-b7fc-3830d2fbabb3",
+        "runId": "run_b6c7483e-cb26-4cc9-9791-60558448333d",
+        "turnId": "turn_a1bd519f-951d-4213-b53a-da5bc6ca256d",
+        "memberId": "m_09be3107-f7e0-4393-869b-bb9ba9a0a902",
+        "answer": "我刚才回答的是：“你好！有什么我可以帮你的吗？”",
+        "contextSha256": "5e96d627f132fe3552919fa62b6dc5ed15ec587ae74853ef0d96f10944c8e504"
+      },
+      {
+        "text": "这是我们这段对话的第几次提问？请结合前面两次，简短回答。",
+        "messageId": "msg_164cfc4f-1bf3-45c7-8a5d-d641b2f74019",
+        "runId": "run_9afb8967-0afc-425f-9147-3d39959d6dd6",
+        "turnId": "turn_bb95e6f1-0a38-482e-956d-30339af904e8",
+        "memberId": "m_09be3107-f7e0-4393-869b-bb9ba9a0a902",
+        "answer": "这是第 3 次。前两次分别是“你好”和“你刚才怎么回答我的问候的？”。",
+        "contextSha256": "a7dd402c08095eb823144562910a1566016219a82c0b067fe9e5236f463e72dc"
+      }
+    ]
+  },
+  "native": {
+    "pass": true,
+    "sessions": [
+      {
+        "sessionId": "codex-session-2ddd4953-3916-44b4-a835-aa1bcab19b09",
+        "providerSessionId": "01a13cff-9e24-7e50-8894-687f280602e8",
+        "transcriptSha256": "324218431812c676f4dbdf5aec651b4ecd35e70c50a8d8f70928dae743916bb4",
+        "provider": "custom",
+        "contexts": [
+          {
+            "model": "gpt-6.1-sol",
+            "effort": "xhigh",
+            "approvalPolicy": "never",
+            "sandboxPolicy": {
+              "type": "danger-full-access"
+            }
+          }
+        ],
+        "toolNames": [
+          "exec",
+          "exec",
+          "exec",
+          "exec"
+        ],
+        "completed": [
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": false,
+            "outputSha256": "0e70dc2722a039b0a023d8326a7d7a8aaaf4739be1608c331011c655c93e5aad"
+          },
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": false,
+            "outputSha256": "3159acc9e3f276dffe2035eb71165fb38b4505c74b9273ebb360d07bf10dda3d"
+          },
+          {
+            "type": "FileChange",
+            "status": "completed",
+            "testSuccess": false,
+            "outputSha256": "a089cc9d17b7bae480acb0bfd8da88dac5066e972d02b7ade320f8c2019a8c7d"
+          },
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": true,
+            "outputSha256": "852f7204ce1ecfbfab129d4f73ef8994526d06573747e60682c8ec0984fcb4e7"
+          }
+        ]
+      },
+      {
+        "sessionId": "codex-session-f67825a2-5f01-4988-b401-7d95fafddb87",
+        "providerSessionId": "01a13d02-48ab-70e0-9878-2947c15a9e94",
+        "transcriptSha256": "c5b5f635b5714b54a5333feff7a02c7c32b1f09e2806694810931dec63eba1e5",
+        "provider": "custom",
+        "contexts": [
+          {
+            "model": "gpt-6.1-sol",
+            "effort": "xhigh",
+            "approvalPolicy": "never",
+            "sandboxPolicy": {
+              "type": "danger-full-access"
+            }
+          }
+        ],
+        "toolNames": [
+          "exec",
+          "exec",
+          "exec"
+        ],
+        "completed": [
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": false,
+            "outputSha256": "1e818e7c43f4b13c1e913709e2425959af4b584c0bd6693bb6b5f31c29afd5e0"
+          },
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": false,
+            "outputSha256": "06f3f04dc18e366b9292c177a3b956e628bbd52d8ca6ee311959886f358658dc"
+          },
+          {
+            "type": "FileChange",
+            "status": "completed",
+            "testSuccess": false,
+            "outputSha256": "79225e78fbe9a52b4633fd16b8f2fc47221ea57ebcc1fdfcd168630ba4968e58"
+          },
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": true,
+            "outputSha256": "891287595c7899294ab72f35e57b6e0c20b1ee3c5891015fd25e8a6463eca66e"
+          },
+          {
+            "type": "CommandExecution",
+            "status": "completed",
+            "exitCode": 0,
+            "testSuccess": true,
+            "outputSha256": "eab03f8bd447961f209b2ca944a3702c24c1a38ca272b74bd22faea50849cd2c"
+          }
+        ]
+      }
+    ]
+  }
+}

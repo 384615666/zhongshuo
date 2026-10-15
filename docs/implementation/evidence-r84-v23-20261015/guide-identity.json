@@ -1,0 +1,12 @@
+{
+  "runtimeBuildId": "bld_fcf357a7e1e4ad52",
+  "source": "docs/desktop-quickstart.md",
+  "sha256": "1093f05807688ce7e4cc4acebf7d0be7f0e327f4654176e5f59137eaeea6cd28",
+  "updatedProgram": false,
+  "roots": [
+    "dist/desktop/desktop-daily-win-v23-rc6",
+    "dist/desktop/review-r84-v23-rc6-codex-20261015/copy",
+    "dist/desktop/review-r84-v23-rc6-glm-20261015/copy",
+    "dist/desktop/review-r84-v23-rc6-soak-20261015/copy"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "pass": true,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "baseline": {
+    "file": "reading-before-confirmed-close.json",
+    "at": 1792031874433,
+    "scrollTop": 584.7999877929688,
+    "originalProbe": "reading-after-observation.json",
+    "scope": "last confirmed position after history pagination/navigation; not the earlier pre-pagination R79 coordinate"
+  },
+  "scope": "same final actual launcher, own external Fake worker only, separate post-two-hour cold reopen; no historical re-selection/load-earlier or business dispatch",
+  "before": {
+    "calls": 0,
+    "messages": 24
+  },
+  "history": {
+    "selectedRunId": "r79-scale-run-4",
+    "historyOrigin": true,
+    "scrollTop": 584.7999877929688,
+    "scrollMax": 7146,
+    "open": true,
+    "draft": "R80 durable unsent draft — no automatic submit"
+  },
+  "expectedRunId": "r79-scale-run-4",
+  "ordinaryDraft": {
+    "retained": true,
+    "cycle": 349,
+    "taskId": "task_0ccc7ac2-0a02-4091-ab80-606fc21b8984",
+    "threadId": "thread_0d233637-3d21-441a-8c4e-89b1cb43254f"
+  },
+  "after": {
+    "calls": 0,
+    "messages": 24
+  },
+  "modelCalls": 0,
+  "stop": {
+    "pid": 47956,
+    "at": 1792031877415,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  }
+}

@@ -1,0 +1,402 @@
+{
+  "pass": true,
+  "reviewed": true,
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "pairs": [
+    {
+      "page": "members",
+      "name": "wide",
+      "width": 1440,
+      "height": 960,
+      "dpr": 1,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/members-wide.png",
+        "sha256": "277b2b1df5fa9956b22439cdaa9d1184f6b98160ca432173f1c2ee0658684765"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/members-wide.png",
+        "sha256": "0c5c5d0cce86edd7dbbd1a13b45d673a31c24a31b0bb75dccb870528b54672aa"
+      },
+      "density": "six actual members / six prototype-only density members"
+    },
+    {
+      "page": "members",
+      "name": "narrow",
+      "width": 900,
+      "height": 800,
+      "dpr": 1,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/members-narrow.png",
+        "sha256": "523fb42373b1010dafba325c9e09f0615ad35cbf6b79837dbf7e6ff3a9e71d33"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/members-narrow.png",
+        "sha256": "ed1c9c37e2fdf0d9decd543294263604ede0700fe8da19aa50ae45e47f01a8de"
+      },
+      "density": "six actual members / six prototype-only density members"
+    },
+    {
+      "page": "members",
+      "name": "hidpi",
+      "width": 1280,
+      "height": 800,
+      "dpr": 1.5,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/members-hidpi.png",
+        "sha256": "c02ed8534bd10ed9c761e51b323725d25fb7fd54b61146a33ca33a7635b25362"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/members-hidpi.png",
+        "sha256": "4eb63e073266b1d415a683c8069ab76dcd6891631a9dc7925841e788e89754ec"
+      },
+      "density": "six actual members / six prototype-only density members"
+    },
+    {
+      "page": "detail",
+      "name": "wide",
+      "width": 1440,
+      "height": 960,
+      "dpr": 1,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/detail-wide.png",
+        "sha256": "0625eefa328befe3291111e21157762fe01d4d208d03e2ccde466401240c0ed8"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/detail-wide.png",
+        "sha256": "86b1d14565687f05fba4f99a130a324f1b1729a38703020d4ddc09448f410e46"
+      },
+      "density": "one selected actual member / one prototype member"
+    },
+    {
+      "page": "detail",
+      "name": "narrow",
+      "width": 900,
+      "height": 800,
+      "dpr": 1,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/detail-narrow.png",
+        "sha256": "17f432dd74a7ca1b8f4f17d7174e3480d870f92b98d85e7164c50be1bd50af2c"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/detail-narrow.png",
+        "sha256": "7f09d9be1052e867eae6c7a1e13b18ba1f0c6ba5b313bcaf99cb5a9c72b3839d"
+      },
+      "density": "one selected actual member / one prototype member"
+    },
+    {
+      "page": "detail",
+      "name": "hidpi",
+      "width": 1280,
+      "height": 800,
+      "dpr": 1.5,
+      "theme": "light",
+      "zoom": 1,
+      "actual": {
+        "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/detail-hidpi.png",
+        "sha256": "a977d144d8e658739490c5aac8f242cea9db153dc79bd6d44362eb40fc258bab"
+      },
+      "prototype": {
+        "path": "dist/desktop/review-r84-v23-rc6-prototype-20261015/detail-hidpi.png",
+        "sha256": "35f783994617950b1cc8df9543c607bb26f60177a1147ddc7b9da1ccc3af2995"
+      },
+      "density": "one selected actual member / one prototype member"
+    }
+  ],
+  "interactionGeometry": [
+    {
+      "name": "wide",
+      "width": 1440,
+      "height": 960,
+      "dpr": 1,
+      "kind": "room",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "wide",
+      "width": 1440,
+      "height": 960,
+      "dpr": 1,
+      "kind": "thread",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "wide",
+      "width": 1440,
+      "height": 960,
+      "dpr": 1,
+      "kind": "dm",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "narrow",
+      "width": 900,
+      "height": 800,
+      "dpr": 1,
+      "kind": "room",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "narrow",
+      "width": 900,
+      "height": 800,
+      "dpr": 1,
+      "kind": "thread",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "narrow",
+      "width": 900,
+      "height": 800,
+      "dpr": 1,
+      "kind": "dm",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "hidpi",
+      "width": 1280,
+      "height": 800,
+      "dpr": 1.5,
+      "kind": "room",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "hidpi",
+      "width": 1280,
+      "height": 800,
+      "dpr": 1.5,
+      "kind": "thread",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "提及成员（也可以直接在输入框里打 @）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    },
+    {
+      "name": "hidpi",
+      "width": 1280,
+      "height": 800,
+      "dpr": 1.5,
+      "kind": "dm",
+      "geometry": [
+        [
+          {
+            "title": "添加附件（真实上传：文本≤256KB、图片≤8MB、PDF/Office≤20MiB、CSV≤5MB——超限会被明确拒绝）",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          },
+          {
+            "title": "本次运行设置：本次执行方式、预算推导与说明",
+            "width": 30,
+            "height": 30,
+            "dx": 0,
+            "dy": 0
+          }
+        ]
+      ]
+    }
+  ],
+  "review": [
+    "Shared sidebar, page gutters, cards and two-column detail hierarchy retained. Actual authoritative runtime/error/permission facts wrap and scroll; prototype mock certification/subassistant/reset controls are not falsely enabled.",
+    "Narrow member filters deliberately use two rows; six cards retain readable two-column order and reachable actions. More authoritative facts make actual cards taller than mock cards.",
+    "Room/thread/DM actual screenshots inspected: right-hand original source/Markdown preview, narrow single-region switch, root author/attachment and readable answers, composer attachment/@ centering. Existing reader and layout are retained.",
+    "DPR1.5 is CDP emulation, not physical-monitor certification. No loading screenshot accepted as the final visual result."
+  ],
+  "remaining": [
+    "native titlebar mouse movement unverified",
+    "not pixel-identical mock data; unsupported prototype controls remain explicit"
+  ]
+}

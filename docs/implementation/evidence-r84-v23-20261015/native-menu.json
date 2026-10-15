@@ -1,0 +1,15 @@
+{
+  "pass": true,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "input": "@oai/sky supported native click/type_text/press_key, fresh screenshot per action",
+  "steps": [
+    "mouse opened project management",
+    "focused search and typed Ordinary A: filtered to matching row",
+    "Escape closed menu and returned focus",
+    "mouse outside closed menu",
+    "same entrance toggled closed",
+    "mouse selected Ordinary A: actual current header changed",
+    "navigation to members closed menu and completed authoritative list"
+  ],
+  "mouseDrag": "unverified; no displacement fabricated"
+}

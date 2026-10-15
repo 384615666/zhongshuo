@@ -1,0 +1,234 @@
+{
+  "pass": true,
+  "baseline": "969302b",
+  "scope": "43 unchanged frozen runtime/build/test/QA files baseline error-multiset comparison; modified conversation reopen test and 6 later new QA scripts ESLint zero; not full-repository lint success",
+  "priorReceipt": {
+    "path": "dist/r84-final6-lint-3.json",
+    "sha256": "c7ba5b250caefabf4bcf4d2d7ef0e3f32e1722c6c3bb20ac943a4fb98b66092c",
+    "files": 44
+  },
+  "additional": {
+    "newFiles": [
+      "scripts/collect-r84-call-ledger.cjs",
+      "scripts/collect-r84-final-gates.cjs",
+      "scripts/collect-r84-observation-summary.cjs",
+      "scripts/verify-r84-final-close.cjs",
+      "scripts/verify-r84-reading-after-observation.cjs",
+      "scripts/verify-r84-saveas.cjs"
+    ],
+    "recheckedFiles": [
+      "tests/integration/conversationRepliesR84.test.ts"
+    ],
+    "exitCode": 0
+  },
+  "covered": [
+    {
+      "file": "scripts/collect-r84-call-ledger.cjs",
+      "sha256": "52605c6fe3cbd248e23a0524475eae1b1d80384f614d1621be1521b71deaf994"
+    },
+    {
+      "file": "scripts/collect-r84-final-gates.cjs",
+      "sha256": "8e843df8a52746278f93e35ffdb0828baec32d2ce85c1562d4a034f1f738d733"
+    },
+    {
+      "file": "scripts/collect-r84-observation-summary.cjs",
+      "sha256": "5c4b8b6e99c98aab9b438478a66228ecc07ea8e1d47b3f2798daa0d2edaa6525"
+    },
+    {
+      "file": "scripts/lib/r78-live-engineering-daemon.ts",
+      "sha256": "8544ceae51747e6df5de94d3e605a4834600d8f8a2fc6d69e4910f1cb9f84389"
+    },
+    {
+      "file": "scripts/make-desktop-daily.mjs",
+      "sha256": "09ddec06de122711644627298cf6b34ab9d213949bf78c94e1dedb7233962f1e"
+    },
+    {
+      "file": "scripts/verify-r78-workflow-launcher.cjs",
+      "sha256": "d775a918fcdc99c7d47cea0dc2465face4f93503b04c106232a5ea3dc0720bcb"
+    },
+    {
+      "file": "scripts/verify-r80-recovery-extension.cjs",
+      "sha256": "5aa90fefcd59ac396f4ab6cebe8bfca0bd92d08721a4735f43958f81b68a79db"
+    },
+    {
+      "file": "scripts/verify-r80-unknown-extension.cjs",
+      "sha256": "9d10429acbc0b9a83b1fa817678ce3c0ccabdbbc56b8265c8de33b2494c900fa"
+    },
+    {
+      "file": "scripts/verify-r83-closeout.cjs",
+      "sha256": "b1c8cc3f13bdc1988fe9678773952b2cfcdafcbbceb9f22c5faf0325e189c58f"
+    },
+    {
+      "file": "scripts/verify-r83-prepare.cjs",
+      "sha256": "fec935385f19816691d437e93cbfc1d1878d74537d7ca82e19d1bd3038b89192"
+    },
+    {
+      "file": "scripts/verify-r84-codex-native-proof.cjs",
+      "sha256": "d2e85f2fd011e482ee0da9c03e435093717973190cbe9e6c290283302cf18e66"
+    },
+    {
+      "file": "scripts/verify-r84-continuous-observation.cjs",
+      "sha256": "b5d5529627ffcb067098443a67a972ac15342bff0ec4858e71e44a6a2615da59"
+    },
+    {
+      "file": "scripts/verify-r84-conversation-after.cjs",
+      "sha256": "e4efcbda13da8fc9cfce9276fd4d31a2c453976345fad54c1afafa633b1321a8"
+    },
+    {
+      "file": "scripts/verify-r84-final-close.cjs",
+      "sha256": "2016f0db10d5df7cc80517b612537752e292e6a69d77ef3314ce2c58c6595978"
+    },
+    {
+      "file": "scripts/verify-r84-native-controls.cjs",
+      "sha256": "0396825d6def996dcf6af95b03ab184742cf6192b6663e81f53cd879f8e29276"
+    },
+    {
+      "file": "scripts/verify-r84-reading-after-observation.cjs",
+      "sha256": "657cbe3fbf67e52f54e681327b9da38fe41cdea0a85d03dc3a215016d60c1fd9"
+    },
+    {
+      "file": "scripts/verify-r84-saveas.cjs",
+      "sha256": "b341ca4224e4dc40431f865151191d0bb5a1a4b8d39b365c6c425667bdd1b252"
+    },
+    {
+      "file": "scripts/verify-r84-thread-followup.cjs",
+      "sha256": "bc2556a2f7b506708f84d95fc2f28569eba0b5a39836e4ac510a3b08d5d82805"
+    },
+    {
+      "file": "src/contracts/message.ts",
+      "sha256": "8abeef84d4483cc10b0cd1dad6fb3ef8e221f505dcb637cb66d6037f967b6764"
+    },
+    {
+      "file": "src/contracts/taskDetails.ts",
+      "sha256": "4eeedbc17ff6bff193d59396933add670e2a3123dea71fc6a02f95e536573202"
+    },
+    {
+      "file": "src/daemon/commands.ts",
+      "sha256": "9dbaf9a17df283dcaf322f276d658c28146b5e3257bebb2d568c248f79962baa"
+    },
+    {
+      "file": "src/daemon/conversationReplies.ts",
+      "sha256": "ef94a5721d905b646010413b14b28fe3c2891ab4f222a4c2b2c7e20ac35f1965"
+    },
+    {
+      "file": "src/daemon/dispatchWorker.ts",
+      "sha256": "4f25ba96a9da5257f7f7036c3a99db9b6bef02e9cf3a0eb262ef80d0393c60dd"
+    },
+    {
+      "file": "src/daemon/entry.ts",
+      "sha256": "92bc7d2e5a39fb314dd7e2fc76e61609900be37cb7ebe33470bdcf8100b31701"
+    },
+    {
+      "file": "src/daemon/prepareCodexConfiguration.ts",
+      "sha256": "cfc152e489b97da4092fd64bec1415af174f24fd24a7c9bc00da069a7e57aab6"
+    },
+    {
+      "file": "src/daemon/projectWriteAccess.ts",
+      "sha256": "62a8de2af4500946c7e83845981d6830926d76994c1ebc68f589c5207052a9f1"
+    },
+    {
+      "file": "src/daemon/stopFlow.ts",
+      "sha256": "07f2c7ab11f30f0cafd28e6db4d3a921ce56b18d7f7bb712667adbe19ea3da02"
+    },
+    {
+      "file": "src/daemon/taskDetails.ts",
+      "sha256": "07663ab2a8c47794eb24a69cc8d3f05102abace16341d1ca484af62c0809773b"
+    },
+    {
+      "file": "src/daemon/turnInput.ts",
+      "sha256": "d7bd6bd80f0db03aebc68a50808c2ccfed395e75969eee4b8a4f7cb8780c49f3"
+    },
+    {
+      "file": "src/persistence/migrations/051-conversation-replies.ts",
+      "sha256": "8cb45c9640849fdf47957f045bd6dcc74776bf849b60ecfc7746d5ec8007ef82"
+    },
+    {
+      "file": "src/persistence/migrations/registry.ts",
+      "sha256": "f325e0eab1af518c8b0d5f2254517399256cefa6c12ad56c50846a97e3580b84"
+    },
+    {
+      "file": "src/persistence/stores/recoveryGuard.ts",
+      "sha256": "a5d3c6c06fc47d56e58e2b96b802da402d767df0db8564c3039b7a27d81d4814"
+    },
+    {
+      "file": "src/ui/hifi/App.tsx",
+      "sha256": "e09aebbaf36d1dbf32a1a68cd6424ae821294c749f3e42adfb9e4f7872ccbc5c"
+    },
+    {
+      "file": "src/ui/hifi/ThreadPage.tsx",
+      "sha256": "5783d2f5d50422ed8d4070b816221c0229c1a0622c520300ed8a33b921eebbc3"
+    },
+    {
+      "file": "src/ui/hifi/components/Composer.tsx",
+      "sha256": "42389236f6638ce536148d3afbce44bd47d5a8d9a10a9875045d926d1201ec13"
+    },
+    {
+      "file": "src/ui/hifi/components/MessageView.tsx",
+      "sha256": "f1ebcf1823b8185c0b0854e4a75469178c1a3c2c12d39e8db0bc33de91283985"
+    },
+    {
+      "file": "src/ui/hifi/components/TaskDetailsFacts.tsx",
+      "sha256": "42e3fe0e957a3181146bd6c3d421e4f122a1f8700507a9882a94e9de0ac739c8"
+    },
+    {
+      "file": "src/ui/hifi/data/store.ts",
+      "sha256": "9a9e9ab408f47ef9fdae9f3282c6cfdf7ea47bea22f3d87aac4374715c010d24"
+    },
+    {
+      "file": "src/ui/hifi/data/types.ts",
+      "sha256": "33de8d0ff4a32d0b688ad99d3987ae1a00986d9d781d1dac280f8630332129c0"
+    },
+    {
+      "file": "src/ui/hifi/loader.ts",
+      "sha256": "42cf9ae90d280c2bfa08f4bdf0ca2eddafebb16b76d5a66456eec1b346a654a6"
+    },
+    {
+      "file": "src/ui/hifi/pages/Room.tsx",
+      "sha256": "bbaec519ff5b465326cad2deeaa48caf59bb29981484e1bf544053d5962579f3"
+    },
+    {
+      "file": "src/ui/main.ts",
+      "sha256": "9c9f21362634bcc893fdb2914ee368b3dbb65f90f194d896c9e836fd93c27dfa"
+    },
+    {
+      "file": "src/ui/preload.ts",
+      "sha256": "971a8b013236a2812f73536393f62482f80f14a88a5bc924809d018a41a35536"
+    },
+    {
+      "file": "tests/integration/codexPreparationR84.test.ts",
+      "sha256": "2fdbffd22dc1401e7ec287e8819500dce2e02d1503b4a42a8665b4789be7568a"
+    },
+    {
+      "file": "tests/integration/conversationRepliesR84.test.ts",
+      "sha256": "50ec37dccfc14ea38b590de6dee1793b340d49202600a5842baa98a785f0be64"
+    },
+    {
+      "file": "tests/integration/daemonStopLivenessR84.test.ts",
+      "sha256": "92479932625d91162f3c7914cbfa927efe1e4b1ca399663cf92d8fbe78828fd6"
+    },
+    {
+      "file": "tests/integration/diagnosticImageEvidenceR84.test.ts",
+      "sha256": "2ed8f43aa024b4d5f662936d1139c4999dd16975b8caf8bd03b4393c538d67e9"
+    },
+    {
+      "file": "tests/integration/hifiThreadRound51.test.ts",
+      "sha256": "a656ef068cf9b4a3265ed04e2d48f6ddea63e41d8005b88267424ca70b1bea4b"
+    },
+    {
+      "file": "tests/integration/legacyProtectionUpgrade.test.ts",
+      "sha256": "6e86a99058e581d5106261194df44e1e11d2d248562c1ef05f963b9e0a88cc71"
+    },
+    {
+      "file": "tests/integration/memberExecutableReferenceR81.test.ts",
+      "sha256": "c56bd90a38bef3bb996f248bd0e85f6df37a4dab0618fd3ecd28a2c3a850ec74"
+    }
+  ],
+  "confirmedReadingRecheck": {
+    "files": [
+      "scripts/collect-r84-final-gates.cjs",
+      "scripts/verify-r84-reading-after-observation.cjs"
+    ],
+    "exitCode": 0,
+    "log": "dist/r84-final6-lint-confirmed-reading.log"
+  }
+}

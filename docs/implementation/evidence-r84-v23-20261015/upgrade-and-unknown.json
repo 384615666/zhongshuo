@@ -1,0 +1,69 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "schemaVersion": 51,
+  "backupFiles": 684,
+  "originalEnvelope": {
+    "commandId": "cmd_curuv5pn",
+    "paramsHash": "ddc1f4332d8cae7b2c1ee02d2b7094bda931e4d4a65ec1eb2b7bf56212b42ce0",
+    "recordOnly": true,
+    "mentions": 1,
+    "attachments": 1,
+    "noAutomaticReplay": true
+  },
+  "manualSameIdentityReplay": true,
+  "draftPreserved": true,
+  "originalSourceUnchanged": true,
+  "credentialBytesUnchanged": true,
+  "modelCalls": 0,
+  "shutdown": true,
+  "oldProgramAndMatchingRollback": {
+    "pass": true,
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "modelCalls": 0,
+    "oldRefusal": {
+      "exit": 1,
+      "schemaUnsupported": true,
+      "versions51Over50": true
+    },
+    "rollback": {
+      "schema": 50,
+      "messages": 1,
+      "calls": 0,
+      "commandId": "cmd_curuv5pn",
+      "paramsHash": "ddc1f4332d8cae7b2c1ee02d2b7094bda931e4d4a65ec1eb2b7bf56212b42ce0",
+      "tokenBytesMatch": true,
+      "matchingProgram": "bld_06a536e62475c22f"
+    }
+  },
+  "originalPreview": {
+    "pass": true,
+    "modelCalls": 0,
+    "hash": "d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807",
+    "decoded": {
+      "width": 1,
+      "height": 1
+    },
+    "legacyAbsoluteBlobPathRebased": true,
+    "oldStoredPathUnchanged": true,
+    "realCalls": 0,
+    "unknownClearedOnlyAfterExplicitReplay": true,
+    "build": {
+      "buildId": "bld_fcf357a7e1e4ad52",
+      "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+      "dirty": false,
+      "dirtyDiffHash": null,
+      "builtAt": "2026-10-15T00:28:13.322Z",
+      "manifest": "MANIFEST-SHA256.json",
+      "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+    }
+  }
+}

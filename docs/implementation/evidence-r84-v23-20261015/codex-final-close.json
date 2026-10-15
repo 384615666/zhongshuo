@@ -1,0 +1,24 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "normal close of exact owned engineering copy after completed original calls; no new inference, replay, acceptance or reconciliation",
+  "closeAt": 1792026277863,
+  "originalDaemonPid": 33144,
+  "callsBefore": 10,
+  "stop": {
+    "pid": 33144,
+    "at": 1792026278149,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  },
+  "callsAfter": 10,
+  "pidMarkerRemoved": true
+}

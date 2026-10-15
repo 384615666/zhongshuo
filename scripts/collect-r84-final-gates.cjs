@@ -35,7 +35,10 @@ gate('real pipe disconnect/recovery, reload and redacted clipboard',recovery.pas
 const progress=receipt(path.join(soakRoot,'r80-soak-progress.json'));
 const measured=receipt(path.join(soakRoot,'observation-summary.json'));
 gate('actual per-route observation metrics and stable host identities',measured.pass&&measured.elapsedMs>=7200000&&measured.byPhase.every(p=>p.samePhaseBounded));
-const reading=receipt(path.join(soakRoot,'reading-after-observation.json'));
+const reading=receipt(path.join(soakRoot,'reading-after-observation-confirmed.json'));
+const readingBaseline=receipt(path.join(soakRoot,'reading-before-confirmed-close.json'),false);
+receipt(path.join(soakRoot,'reading-after-observation.json'),false); // Preserve the rejected stale pre-pagination baseline probe.
+gate('cold reading baseline was confirmed after observation before normal close',readingBaseline.afterObservation&&readingBaseline.at>=observation.endedAt&&readingBaseline.normalClose&&readingBaseline.savedTop===readingBaseline.scrollTop&&readingBaseline.taskId===workflow.r79.scale.id&&readingBaseline.runId===workflow.r79.selectedHistoricalRun&&Math.abs(reading.history.scrollTop-readingBaseline.scrollTop)<=2);
 gate('post-observation cold reopen retains exact history identity and target drafts',reading.pass&&reading.history.selectedRunId===reading.expectedRunId&&reading.history.historyOrigin&&reading.history.open&&reading.ordinaryDraft.retained&&reading.modelCalls===0);
 gate('all eight observation routes repeatedly exercised',Array.from({length:8},(_,phase)=>progress.samples.filter(s=>s.phase===phase).length).every(n=>n>=2));
 gate('bounded connection monitor and no observation dispatch',progress.samples.every(s=>s.connection.monitorTimers===1&&s.connection.inFlight<=1&&s.realCalls===0&&s.messages===progress.samples[0].messages));

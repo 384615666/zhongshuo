@@ -1,0 +1,161 @@
+{
+  "pass": true,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "steps": [
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read",
+    "R84 120-minute continuous observation, normal fixture identities unchanged; no model calls",
+    "final launcher reopen preserves room/DM identities and deliveries",
+    "R79 completed live facts and older history remain reachable after real launcher reopen"
+  ],
+  "ids": {
+    "projectId": "prj_524fdbfc-6609-4657-a77a-a3da6675aab8",
+    "memberId": "m_default_prj_524fdbfc-6609-4657-a77a-a3da6675aab8_0",
+    "roomId": "room_9b6e2732-5b06-4dfa-9786-25d4e8249b63",
+    "roomConversationId": "conv_02f39d32-5bd6-42d2-8161-ff706d9d9b02",
+    "dmConversationId": "dm_09c7bc0a-0884-455e-9ba4-3c9de932700e",
+    "roomTaskId": "task_1f0644a6-bfd4-4d62-8aae-daaa8b9ca917",
+    "roomThreadId": "thread_8ad75ae4-5038-465a-b14d-afb244a96094",
+    "dmTaskId": "task_ba80c6c2-897c-42a2-91ca-eef8574e5d7b",
+    "stoppedTaskId": "task_24ee4d3f-8e35-41af-8bf2-16b5963598a6"
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_cae5ce6e-93bf-49e4-b2e2-bd1d97c63c00",
+      "dlv_turn_77b0c649-c8f6-437e-8963-8f9fbbcdc687"
+    ],
+    "dm": [
+      "dlv_turn_b8f8ff21-5a68-47e4-88e6-baf3bea22f2b",
+      "dlv_turn_0b152886-db4c-4f6c-a8a2-47dbf29e8775"
+    ]
+  },
+  "r79": {
+    "live": {
+      "id": "task_dc72f897-93f6-4094-992f-c16cede800ae",
+      "threadId": "thread_528bb5e8-0442-4cca-8dc0-ed6e553160eb"
+    },
+    "failed": {
+      "id": "task_75d94bc0-f4d8-4e0e-b800-79d6ea298642",
+      "threadId": "thread_25e2c241-54e9-4ab5-b1df-7902d1373ba0"
+    },
+    "scale": {
+      "id": "task_2fddb580-8610-4e8b-90db-548696eeec92",
+      "threadId": "thread_a5bbed8e-0e1d-4ccb-a9c5-bd339eb346c1"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true,
+    "reopen": true
+  },
+  "r80": {
+    "pass": true,
+    "observationCertified": true,
+    "probeCycles": null,
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "start": 1792024315208,
+    "endedAt": 1792031515212,
+    "elapsedMs": 7200004,
+    "cycles": 352,
+    "priorRecoveryEvidence": {
+      "transportDisconnect": true,
+      "confirmedFactsRetained": true,
+      "draftRetained": true,
+      "historyRestored": true,
+      "diagnosticRedacted": true,
+      "reloaded": true
+    },
+    "confirmedFactsRetained": true,
+    "draftRetained": true,
+    "historyRestored": true,
+    "diagnosticRedacted": true,
+    "reloaded": true,
+    "modelCalls": 0,
+    "scope": "same BUILD formal Fake workflow + actual pipe failure/recovery + mounted reload/visible return, followed by at least two hours of continuous interaction",
+    "transportDisconnect": true
+  },
+  "r84Ordinary": {
+    "taskId": "task_0ccc7ac2-0a02-4091-ab80-606fc21b8984",
+    "threadId": "thread_0d233637-3d21-441a-8c4e-89b1cb43254f",
+    "rounds": 3,
+    "realCalls": 0,
+    "scope": "external Fake formal worker; not real model certification"
+  },
+  "realCalls": 0,
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "engineering-full-flow",
+        "errors": []
+      },
+      {
+        "label": "engineering-reopen",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "scope": "own formal Fake worker; historical-scale and transport fault injections explicitly separate from ordinary business and real inference"
+}

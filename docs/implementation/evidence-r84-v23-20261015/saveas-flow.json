@@ -1,0 +1,64 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "phases": [
+    {
+      "name": "native-cancel",
+      "pass": true,
+      "originalUnchanged": true
+    },
+    {
+      "name": "save-original",
+      "pass": true,
+      "hash": "0236054e1e45724e538d97f6128735e7a178f45484cc962e95e0370697ab2d8e"
+    },
+    {
+      "name": "invalid-directory",
+      "pass": true,
+      "error": "保存原文件失败：Error invoking remote method 'zs:saveAs': Error: EEXIST: file already exists, mkdir 'D:\\zhongshuo\\dist\\desktop\\review-r84-v23-rc6-glm-20261015\\saveas-not-a-directory'。原件保留，可重试。",
+      "originalUnchanged": true,
+      "priorSavedUnchanged": true,
+      "markerUnchanged": true
+    },
+    {
+      "name": "explicit-retry",
+      "pass": true,
+      "hash": "0236054e1e45724e538d97f6128735e7a178f45484cc962e95e0370697ab2d8e",
+      "priorSavedUnchanged": true
+    }
+  ],
+  "scope": "real final launcher and normal preview; native dialog cancellation, actual atomic bytes, owned invalid-directory failure; EACCES/ENOSPC separate source-level temporary-root injections",
+  "originalHash": "0236054e1e45724e538d97f6128735e7a178f45484cc962e95e0370697ab2d8e",
+  "callsBefore": 10,
+  "phase": "completed",
+  "resumedFrom": "saveas-flow-before-native-cancel-timeout.json",
+  "resumedLaunchFrom": "saveas-flow-before-launcher-generation-timeout.json",
+  "launches": [
+    {
+      "phase": "save-original",
+      "port": 54958,
+      "at": 1792028290481
+    },
+    {
+      "phase": "invalid-directory",
+      "port": 54962,
+      "at": 1792028292999
+    },
+    {
+      "phase": "explicit-retry-after-restored-destination",
+      "port": 54968,
+      "at": 1792028295543
+    }
+  ],
+  "callsAfter": 10,
+  "modelCalls": 0,
+  "normalClose": true
+}

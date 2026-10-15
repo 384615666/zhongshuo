@@ -1,0 +1,314 @@
+{
+  "pass": true,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "start": "2026-10-15T00:31:55.208Z",
+  "end": "2026-10-15T02:31:55.212Z",
+  "elapsedMs": 7200004,
+  "sampleWindowMs": 7183876,
+  "sampleCount": 352,
+  "sampleCadenceMs": {
+    "first": 20100,
+    "last": 20375,
+    "min": 20006,
+    "max": 22637
+  },
+  "counterScope": "interval/document-listener counters are instrumented additions after warm-up, not all pre-existing app listeners",
+  "pids": {
+    "main": [
+      31232
+    ],
+    "daemon": [
+      24400
+    ]
+  },
+  "requests": {
+    "first": 642,
+    "last": 9622,
+    "delta": 8980,
+    "perMinute": 75,
+    "observedInFlight": {
+      "first": 6,
+      "last": 0,
+      "min": 0,
+      "max": 6
+    },
+    "monitorInFlight": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "monitorTimers": {
+      "first": 1,
+      "last": 1,
+      "min": 1,
+      "max": 1
+    }
+  },
+  "business": {
+    "messages": 24,
+    "modelCalls": 0
+  },
+  "byPhase": [
+    {
+      "phase": 0,
+      "samples": 44,
+      "intervals": {
+        "first": 0,
+        "last": 6,
+        "min": 0,
+        "max": 6
+      },
+      "documentListeners": {
+        "first": 0,
+        "last": 2,
+        "min": 0,
+        "max": 2
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 1,
+      "samples": 44,
+      "intervals": {
+        "first": 1,
+        "last": 2,
+        "min": 1,
+        "max": 2
+      },
+      "documentListeners": {
+        "first": 1,
+        "last": 1,
+        "min": 1,
+        "max": 1
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 2,
+      "samples": 44,
+      "intervals": {
+        "first": 2,
+        "last": 4,
+        "min": 2,
+        "max": 4
+      },
+      "documentListeners": {
+        "first": 1,
+        "last": 1,
+        "min": 1,
+        "max": 1
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 3,
+      "samples": 44,
+      "intervals": {
+        "first": 1,
+        "last": 2,
+        "min": 1,
+        "max": 2
+      },
+      "documentListeners": {
+        "first": 1,
+        "last": 1,
+        "min": 1,
+        "max": 1
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 4,
+      "samples": 44,
+      "intervals": {
+        "first": 0,
+        "last": 1,
+        "min": 0,
+        "max": 1
+      },
+      "documentListeners": {
+        "first": 0,
+        "last": 0,
+        "min": 0,
+        "max": 0
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 5,
+      "samples": 44,
+      "intervals": {
+        "first": 4,
+        "last": 5,
+        "min": 4,
+        "max": 5
+      },
+      "documentListeners": {
+        "first": 2,
+        "last": 1,
+        "min": 1,
+        "max": 2
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 6,
+      "samples": 44,
+      "intervals": {
+        "first": 2,
+        "last": 2,
+        "min": 2,
+        "max": 2
+      },
+      "documentListeners": {
+        "first": 1,
+        "last": 1,
+        "min": 1,
+        "max": 1
+      },
+      "samePhaseBounded": true
+    },
+    {
+      "phase": 7,
+      "samples": 44,
+      "intervals": {
+        "first": 6,
+        "last": 6,
+        "min": 6,
+        "max": 6
+      },
+      "documentListeners": {
+        "first": 2,
+        "last": 2,
+        "min": 2,
+        "max": 2
+      },
+      "samePhaseBounded": true
+    }
+  ],
+  "memory": {
+    "nodeSource": "process.memoryUsage bytes converted to MiB; renderer JS heap from CDP Runtime.getHeapUsage",
+    "daemonRssMiB": {
+      "first": 85.95,
+      "last": 87.34,
+      "min": 85.79,
+      "max": 88.07
+    },
+    "daemonHeapUsedMiB": {
+      "first": 25.74,
+      "last": 23.08,
+      "min": 21.31,
+      "max": 29.72
+    },
+    "mainRssMiB": {
+      "first": 139.2,
+      "last": 158.88,
+      "min": 137.16,
+      "max": 162.94
+    },
+    "rendererJsHeapMiB": {
+      "first": 15.32,
+      "last": 13.23,
+      "min": 10.74,
+      "max": 20.26
+    },
+    "perType": {
+      "Browser": {
+        "source": "Electron app.getAppMetrics; memory workingSetSize KiB converted to MiB; CPU percent as reported",
+        "workingSetMiB": {
+          "first": 139.2,
+          "last": 158.88,
+          "min": 137.14,
+          "max": 162.94
+        },
+        "cpuPercent": {
+          "first": 2.439,
+          "last": 1.559,
+          "min": 0.018,
+          "max": 6.529
+        },
+        "processCount": {
+          "first": 1,
+          "last": 1,
+          "min": 1,
+          "max": 1
+        }
+      },
+      "Tab": {
+        "source": "Electron app.getAppMetrics; memory workingSetSize KiB converted to MiB; CPU percent as reported",
+        "workingSetMiB": {
+          "first": 192.15,
+          "last": 193.04,
+          "min": 165.18,
+          "max": 196.64
+        },
+        "cpuPercent": {
+          "first": 0.813,
+          "last": 0.056,
+          "min": 0.011,
+          "max": 9.028
+        },
+        "processCount": {
+          "first": 1,
+          "last": 1,
+          "min": 1,
+          "max": 1
+        }
+      },
+      "GPU": {
+        "source": "Electron app.getAppMetrics; memory workingSetSize KiB converted to MiB; CPU percent as reported",
+        "workingSetMiB": {
+          "first": 137.78,
+          "last": 127.85,
+          "min": 120.45,
+          "max": 137.78
+        },
+        "cpuPercent": {
+          "first": 0.854,
+          "last": 0.14,
+          "min": 0,
+          "max": 8.021
+        },
+        "processCount": {
+          "first": 1,
+          "last": 1,
+          "min": 1,
+          "max": 1
+        }
+      },
+      "Utility": {
+        "source": "Electron app.getAppMetrics; memory workingSetSize KiB converted to MiB; CPU percent as reported",
+        "workingSetMiB": {
+          "first": 46.91,
+          "last": 47.02,
+          "min": 46.88,
+          "max": 47.04
+        },
+        "cpuPercent": {
+          "first": 0,
+          "last": 0,
+          "min": 0,
+          "max": 0.002
+        },
+        "processCount": {
+          "first": 1,
+          "last": 1,
+          "min": 1,
+          "max": 1
+        }
+      }
+    }
+  },
+  "scope": "actual two-hour own Fake session with formal worker and final packaged daemon; bounded metrics, no paid repeat prompts; not real OS sleep, all-object leak proof, or multi-day certification",
+  "evidence": [
+    {
+      "name": "r84-observation-result.json",
+      "sha256": "56474dd2d230313a723eee8eb20d0259c70a7ddff16bc8a7acf6b8338b697c60"
+    },
+    {
+      "name": "r80-soak-progress.json",
+      "sha256": "9427b2ae40f51efb9e944bb2e24ca44c8f20b7e94c2a04ef146281fe517ec7fa"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "taskId": "task_2fddb580-8610-4e8b-90db-548696eeec92",
+  "runId": "r79-scale-run-4",
+  "afterObservation": true,
+  "at": 1792031874433,
+  "hash": "#/project/prj_524fdbfc-6609-4657-a77a-a3da6675aab8/room/room_9b6e2732-5b06-4dfa-9786-25d4e8249b63?thread=thread_a5bbed8e-0e1d-4ccb-a9c5-bd339eb346c1&tab=run",
+  "scrollTop": 584.7999877929688,
+  "savedTop": 584.7999877929688,
+  "open": true,
+  "before": {
+    "calls": 0,
+    "messages": 24
+  },
+  "normalClose": true,
+  "stop": {
+    "pid": 46260,
+    "at": 1792031874753,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  }
+}

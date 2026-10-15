@@ -1,0 +1,59 @@
+{
+  "scope": "original local evidence retained; probe failures are distinct from product failures and are not relabelled first-success",
+  "files": [
+    {
+      "kind": "product",
+      "path": "dist/desktop/review-r84-stage-codex-20261014/ordinary-followup-before.json",
+      "present": true,
+      "sha256": "dba961859dc798ee46873da52ae0dcfb5f48f6cd8fdfeeb57440c56e95a3ebed"
+    },
+    {
+      "kind": "product",
+      "path": "dist/desktop/review-r84-v23-rc4-codex-20261015/closeout.json",
+      "present": true,
+      "sha256": "53f93e38225ba5e84a2ecc772ddaf4ac604d4481041afa66fb1ff52369ce47ae"
+    },
+    {
+      "kind": "product",
+      "path": "dist/desktop/review-r84-v23-rc5-soak-20261015/eight-phase-probe-1/phase-7-failure.json",
+      "present": true,
+      "sha256": "e994ee534903ab83e8d4da7b8aa65e6b5cca34c9d4afb078131c04fbaf712362"
+    },
+    {
+      "kind": "product",
+      "path": "dist/r84-diagnostic-image-before.log",
+      "present": true,
+      "sha256": "1c180e0638affb6c3534cf71f59d5c6a98a80e2cbd93adced6d01c24f31e53f4"
+    },
+    {
+      "kind": "product",
+      "path": "dist/r84-thread-mentions-before.log",
+      "present": true,
+      "sha256": "b134b7c375835f5236ed79f3159c369e4b2d8a21e1da2d162a160d3eb7d89230"
+    },
+    {
+      "kind": "probe",
+      "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/saveas-flow-before-native-cancel-timeout.json",
+      "present": true,
+      "sha256": "0719d29b015eb70cc8f9d6be283cb4c132ed1236095ecb560eace25523e7a187"
+    },
+    {
+      "kind": "probe",
+      "path": "dist/desktop/review-r84-v23-rc6-glm-20261015/saveas-flow-before-launcher-generation-timeout.json",
+      "present": true,
+      "sha256": "eae83f611c1eb8683e71dd1b5d2e38fe4c3d2c83f4626e7cb035054c6219655c"
+    },
+    {
+      "kind": "probe",
+      "path": "dist/desktop/review-r84-v23-rc6-codex-20261015/readonly-ui-before-visible.json",
+      "present": true,
+      "sha256": "ebc85742b6267d24f067d1ca78e96243ab901570bfd4bf16cdd9ea20006340e3"
+    },
+    {
+      "kind": "probe",
+      "path": "dist/desktop/review-r84-v23-rc6-unknown-upgrade-20261015/probe-before-mounted-failure.json",
+      "present": true,
+      "sha256": "6d498c1927598ec0a1d8df3c2f2a6b305343e0e9bbfc893ad8b9cd82731df62c"
+    }
+  ]
+}

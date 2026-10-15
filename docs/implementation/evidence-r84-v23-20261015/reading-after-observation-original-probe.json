@@ -1,0 +1,10 @@
+{
+  "pass": false,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "scope": "same final actual launcher, own external Fake worker only, separate post-two-hour cold reopen; no historical re-selection/load-earlier or business dispatch",
+  "before": {
+    "calls": 0,
+    "messages": 24
+  },
+  "error": "Error: timeout historical identity/window/scroll/expansion restored without selecting again: {\"selectedRunId\":\"r79-scale-run-4\",\"historyOrigin\":true,\"scrollTop\":584.7999877929688,\"scrollMax\":7146,\"open\":true,\"draft\":\"R80 durable unsent draft — no automatic submit\"}\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r84-reading-after-observation.cjs:17:17"
+}

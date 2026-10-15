@@ -1,0 +1,129 @@
+{
+  "pass": true,
+  "buildId": "bld_fcf357a7e1e4ad52",
+  "input": "supported @oai/sky native click and Escape, observed target window/screenshots before each action; CDP reads only verify final facts",
+  "before": {
+    "window": {
+      "ok": true,
+      "state": {
+        "maximized": false,
+        "fullScreen": false,
+        "focused": true,
+        "bounds": {
+          "x": 735,
+          "y": 151,
+          "width": 1282,
+          "height": 802
+        },
+        "contentBounds": {
+          "x": 735,
+          "y": 151,
+          "width": 1281,
+          "height": 802
+        }
+      }
+    },
+    "viewport": {
+      "w": 1282,
+      "h": 802
+    },
+    "hash": ""
+  },
+  "maximized": {
+    "window": {
+      "ok": true,
+      "state": {
+        "maximized": true,
+        "fullScreen": false,
+        "focused": true,
+        "bounds": {
+          "x": -7,
+          "y": -7,
+          "width": 2768,
+          "height": 1120
+        },
+        "contentBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 2752,
+          "height": 1104
+        }
+      }
+    },
+    "viewport": {
+      "w": 2752,
+      "h": 1104
+    }
+  },
+  "restored": {
+    "window": {
+      "ok": true,
+      "state": {
+        "maximized": false,
+        "fullScreen": false,
+        "focused": true,
+        "bounds": {
+          "x": 735,
+          "y": 151,
+          "width": 1282,
+          "height": 802
+        },
+        "contentBounds": {
+          "x": 735,
+          "y": 151,
+          "width": 1281,
+          "height": 802
+        }
+      }
+    },
+    "viewport": {
+      "w": 1282,
+      "h": 802
+    }
+  },
+  "previewExpanded": {
+    "previewClass": "preview-pane maximized files-preview-pane",
+    "previewText": "R78 UI 工程项目",
+    "labels": [
+      {
+        "title": "收起预览区（保留全部标签与阅读位置）",
+        "label": "收起预览区"
+      },
+      {
+        "title": "还原预览大小（回到与对话并排）",
+        "label": null
+      },
+      {
+        "title": "展示真实索引内容与提交前置检查（冲突/身份/保护）；提交时绑定本次预览的 HEAD 与暂存区摘要",
+        "label": null
+      },
+      {
+        "title": "按预览内容提交；预览后 HEAD 或暂存区变化会拒绝并要求重新预览",
+        "label": null
+      },
+      {
+        "title": "收起预览（关闭面板并释放渲染资源）",
+        "label": null
+      },
+      {
+        "title": "展开/收起预览高度（视觉预览区放大；可拖面板下缘调节）",
+        "label": null
+      }
+    ]
+  },
+  "previewRestored": {
+    "previewClass": "preview-pane files-preview-pane",
+    "previewText": "R78 UI 工程项目",
+    "hash": "#/project/prj_eb494f31-a98a-4600-9bd8-c386467d0014/files"
+  },
+  "mouseDrag": "unverified; window controls are separate from displacement evidence",
+  "nativeClose": true,
+  "pidMarkerRemoved": true,
+  "stop": {
+    "pid": 36172,
+    "at": 1792026910377,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  },
+  "realCalls": 0
+}
