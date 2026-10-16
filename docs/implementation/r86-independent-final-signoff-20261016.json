@@ -1,0 +1,55 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:35:26.919Z",
+  "conclusion": "PASS engineering delivery review for same-BUILD Windows portable multi-AI daily candidate; user acceptance pending",
+  "candidate": "D:/zhongshuo/dist/desktop/desktop-daily-win-v25-rc11/start-desktop.bat",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "recordHead": "55f67466e756a19dd63a666dc784b71123d012c5",
+  "remoteHead": "55f67466e756a19dd63a666dc784b71123d012c5",
+  "workingTreeClean": true,
+  "engineeringChecks": 17,
+  "sourceTests": 1164,
+  "additionalQaTests": 20,
+  "archivedFiles": 117,
+  "archiveSha256": "c9b365ae66b82840ca8e29fddebb407b5484ea3a3053f52e4b6706def9d9bba3",
+  "releaseMetadataSha256": "1644f7004c3dc351ef4c83de00cbf379242d4b567a4fd2d2b09a6b6d4d32d507",
+  "actualFinalPair": [
+    "claude/deepseek-flash",
+    "codex/gpt-6-luna"
+  ],
+  "callTotals": {
+    "attempts": 157,
+    "byStatus": {
+      "succeeded": 149,
+      "failed": 7,
+      "interrupted": 1
+    },
+    "byModel": {
+      "claude/deepseek-flash": 99,
+      "codex/gpt-6.1-sol": 36,
+      "codex/gpt-6-luna": 19,
+      "claude/glm-5.3-flash": 2,
+      "codex/gpt-6-sol": 1
+    }
+  },
+  "userAcceptance": "pending",
+  "scope": "Reviewer wrote only ignored independent evidence; no product edits, staged changes, model calls, user root access or process actions. Independent gate reconstructs source/native actual tasks/files/proofs/upgrade/visual receipts; not all channels or product value certification.",
+  "remainingBoundaries": {
+    "crossReview": "one omitted original draft claim preserved; submitted references valid, exhaustive final RATIFY exact and overall unconfirmed; original reviewer v1 false retained",
+    "document": "two pre-integration versions reviewed, final integration not rereviewed by Luna",
+    "navigation": "Chromium history backend used for back, native Alt+Left not certified",
+    "normalReopen": "successful second observation; two prior failures retained and first CDP cause unresolved",
+    "lint": "33 matched existing errors, no added errors; not full-repo lint clean",
+    "visual": "six inspected pairs, emulated DPR only, not whole-app pixel match"
+  },
+  "firstUse": "Pristine package has no synthetic engineering tasks. Configure two own runtime members and room coordinator per README for first natural work task; existing task reading is optional, no historical checklist required.",
+  "errors": []
+}
