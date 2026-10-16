@@ -174,3 +174,17 @@ rc10 full-v3 单一前台工程宿主完整通过，0真实调用，原三周期
 原生持续观察 code v2 实际执行时，交付详情回退“返工意见已记录、尚未执行”，再次显示执行按钮，但父run WAITING、子步骤尚在执行。`native-rework-running-mislabel` 原画面/DOM保留。独立动态读取到达较晚，任务已进入最终整合且outbox重新leased，其 JSON `bugReproduced:false` 如实保留，不能计作独立复现；正式隔离worker反例精确捕获已消费父规划outbox的窗口，before queued=false明确失败。
 
 根因只读 `reworkPendingOf` 仅看redispatch未done，不包含AUTO父等待真实子任务。最小修复追加同task、排除来源run的真实活跃run存在判据。执行、权限、预算、停止、UNKNOWN与重复派发守卫不变，无schema变化。33项正式回归通过，覆盖只记录、父outboxdone/WAITING、子任务执行、重复执行拒绝、自然新版后null、另一任务活跃不影响本任务未执行意见。双types通过。需新冻结后验证实际窗口；rc10已完成和在途真实结果继续保全，不能放行为最终包。
+
+## rc11 同 BUILD 代码闭环、配置边界与补验收（2026-10-16）
+
+最终运行源码冻结 a2bc37606baa745357b47cf07cb5db012d857e3c，候选 desktop-daily-win-v25-rc11 / bld_cf50e93cc0db5723。163 文件 / 1164 源码测试、双类型检查及相对R85的59文件增量lint通过（33条已匹配既有问题），同BUILD正式Fake完整房间DIRECT/DM两版、三刷新周期、历史、停止、重开全部通过/0真实调用；自有完整旧根51→52升级/UNKNOWN与草稿原件保全、旧程序拒52不改库、匹配完整备份回退通过/0调用。用户原根从未迁移或操作。
+
+旧 rc11-real 根 v1 四次成功，但 v2 规划/实施后配置身份检查拒绝 Codex 评审启动，未产生该步骤run/turn或模型调用。用户配置文件时间及宿主会话环境均有变化来源可能，旧授权只有opaque identity，无法唯一归因；不改原guard、不恢复旧凭据、不复用旧scope、不自动重试。原 delivery-code-v2.json / configuration-boundary-blocked.json false 保留。独立工程启动仅过滤四个宿主会话句柄，native配置home、provider、凭据、代理均保留；不改产品权限识别。配置观察脚本记录的是当前verifier按启动recipe重建的环境hash，并非读取已运行daemon的环境；实际冻结组合以正式输入及native会话证据核对。官方预热新增合成项目trust元数据如实记录，不称用户config字节完全未变。
+
+按用户后续采用便宜Luna的选择，新独立 rc11-luna 根真实 DeepSeek + gpt-6-luna 完成代码v1五次/v2五次成功，普通问候及同串续问两次成功。全部由原生UI输入自然请求；模型实际写两个文件、Luna只读读取上游冻结字节并执行Node测试，v2六项通过。条件修复未发现缺陷时只读no-op，不伪造修复。意见仅记录6.5秒0新增调用、原号明确执行、v1 changes_requested/v2 accepted/task DONE、原生正常AltF4→同BAT重开、原件hash和21调用不变均已核实。关键父规划outbox已消费/WAITING/子步骤未完窗口正式queued=true、原生“返工执行中”且无重复执行按钮，独立同刻采样也通过。原生子任务、精确子交付v1、返回、CtrlR、未发送草稿及分列Chromium历史通过；没有将API历史说成原生Alt+Left。
+
+该根后续文档和研讨各有一次 Codex 明确额度失败（两份原false保留），总21次为19成功/2失败。用户返回时原窗口不在，正常BAT启动把旧研讨标记INTERRUPTED并保留恢复保护，未自动重放/解除。额度恢复后新建同BUILD独立 rc11-collaboration 根，通过原生UI新发文档和两席只读研讨；此处是新工程意图，不是旧失败或UNKNOWN重放。两条后续结果尚在收集，不以代码闭环替代其通过。
+
+六组原型配对已逐张查看12张PNG，覆盖1440×900、1000×800及DPR1.5模拟，v5 visual-pairs pass且独立审阅通过。继承导航/房间/回复/详情/Composer层次保持；旧原型缺用户根消息和真实运行/交付状态，DPR1.5记忆列宽也不同，不宣称全APP像素一致或物理HiDPI认证。首次root比较和欢迎恢复modal失败原件保留，统一顶部滚动与深链启动仅修QA。
+
+独立审阅发现旧总门只绑定三份code/document native票，未严格绑定DELIB。保留原反例，新增只读发布delivery/run/manifest投影，强制第四票同task/run/delivery/revision/hash及相同模型对；缺票、错task/run/版本/hash和不同模型对的负例均拒绝。额外QA19项、eslint及双types通过，不改变冻结runtime或重跑推理。pre-closeout-gates.json当前明确总false，剩余真实文档预览/原件另存、研讨及完整调用账本收齐后才运行最终门。
