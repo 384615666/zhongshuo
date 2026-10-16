@@ -1,0 +1,134 @@
+{
+  "pass": false,
+  "scope": "read-only observation of explicit UI delivery request",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+  "revision": 1,
+  "startedAt": 1792131692535,
+  "task": {
+    "id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+    "status": "BLOCKED",
+    "current_delivery_id": null,
+    "revision": 1,
+    "stop_generation": 0
+  },
+  "calls": [
+    {
+      "id": 2,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_a32abf14-697e-4049-a14c-a07cb9aada8d",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 3,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_22d9b7b9-7242-437b-9c41-d38ac88f7145",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 5,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_e85ada0c-63a2-4246-b171-447e8030f2bf",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 6,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_023c1bf7-82e4-4370-aded-3338c5c94858",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 8,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_cb022c65-3d3a-4f0a-b0ca-4e0aa9616d26",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 9,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_d5602cbd-d761-4144-9637-6b8b93da6ab5",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 12,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_ce19ab76-275d-4752-8ab4-490f01052e54",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 13,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_831fa42c-362a-43ee-8275-5807e54e740c",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 15,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_461e358f-9382-417b-b7f8-408e214f7be3",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 16,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_dab8a87a-61e2-4214-bdef-316c19d6b214",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 17,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_feee6b66-a724-4d15-b064-ef2f6f0c9fc6",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 18,
+      "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+      "turn_id": "turn_f596555c-d4d6-44d1-9a40-8865083fa576",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": null,
+      "status": "failed"
+    }
+  ],
+  "steps": []
+}

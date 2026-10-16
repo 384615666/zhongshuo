@@ -1,0 +1,9 @@
+
+ RUN  v5.0.2 D:/zhongshuo
+
+
+ Test Files  2 passed (2)
+      Tests  20 passed (20)
+   Start at  19:24:33
+   Duration  150ms (transform 55%, import 21%, tests 14%, worker 9%)
+

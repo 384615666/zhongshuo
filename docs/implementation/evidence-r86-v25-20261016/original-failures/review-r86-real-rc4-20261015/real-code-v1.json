@@ -1,0 +1,131 @@
+{
+  "pass": false,
+  "scope": "one original native UI real AUTO send, v1 only; no automatic rework/retry",
+  "build": {
+    "buildId": "bld_6ed461af6e2d6884",
+    "commit": "61112d69ad785a38c7ab64a2b9aa6e7411779bb4",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T10:36:02.480Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "startedAt": 1792060629622,
+  "calls": [
+    {
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": null,
+      "status": "failed",
+      "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+      "turn_id": "turn_4e671478-d8ba-4297-903d-8b1da755474b"
+    }
+  ],
+  "root": {
+    "id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+    "conversation_thread_id": "thread_30f5651f-dd72-417d-98ee-a1f507a6587b",
+    "title": "请协调两位成员合作完成一个小功能：创建 greeting.mjs，导出 greet(name)，返回“你好，名字”；创建",
+    "root_message_id": "msg_33e01777-7fbf-4ec2-9d6c-1d8ec71112a5",
+    "route_json": "{\"kind\":\"dispatch\",\"mode\":\"AUTO\",\"coordinatorMemberId\":\"m_dbf810f8-d13b-4622-870f-a8df5f3a60b5\",\"frozenMemberIds\":[\"m_dbf810f8-d13b-4622-870f-a8df5f3a60b5\"],\"initialWakeMemberIds\":[\"m_dbf810f8-d13b-4622-870f-a8df5f3a60b5\"]}"
+  },
+  "live": {
+    "task": {
+      "id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+      "status": "ACTIVE",
+      "current_delivery_id": null,
+      "revision": 1,
+      "stop_generation": 0
+    },
+    "coordination": [
+      {
+        "run_id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+        "stop_generation": 0,
+        "state": "blocked",
+        "plan_json": null,
+        "integration_run_id": null,
+        "error_message": "协调执行未完成，请查看运行原因",
+        "created_at": 1792060626514
+      }
+    ],
+    "steps": [],
+    "runs": [
+      {
+        "id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+        "mode": "AUTO",
+        "status": "FAILED",
+        "stage": "规划分工",
+        "budget_json": "{\"grantId\":\"run_aded6aa1-431c-4c8c-8cd8-c388d392707b\",\"maxTurns\":24,\"usedTurns\":1,\"inFlightReservedTurns\":0}"
+      }
+    ],
+    "turns": [
+      {
+        "id": "turn_4e671478-d8ba-4297-903d-8b1da755474b",
+        "member_id": "m_dbf810f8-d13b-4622-870f-a8df5f3a60b5",
+        "status": "FAILED",
+        "run_id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "dispatch_key": "task:task_0c7f0461-4407-44a1-84ad-be10cdd61906:initial"
+      }
+    ],
+    "deliveries": [],
+    "tools": [
+      {
+        "kind": "turn.statusChanged",
+        "turn_id": "turn_4e671478-d8ba-4297-903d-8b1da755474b",
+        "payload_json": "{\"status\":\"FAILED\",\"code\":\"PROVIDER_ERROR\",\"message\":\"进程退出（code=1）且无 result 终结事件；stderr尾：Error: --json-schema is not a valid JSON Schema: no schema with key or ref \\\"https://json-schema.org/draft/2020-12/schema\\\"\\n\",\"retryable\":true}"
+      }
+    ]
+  },
+  "failure": {
+    "task": {
+      "id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+      "status": "ACTIVE",
+      "current_delivery_id": null,
+      "revision": 1,
+      "stop_generation": 0
+    },
+    "coordination": [
+      {
+        "run_id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+        "stop_generation": 0,
+        "state": "blocked",
+        "plan_json": null,
+        "integration_run_id": null,
+        "error_message": "协调执行未完成，请查看运行原因",
+        "created_at": 1792060626514
+      }
+    ],
+    "steps": [],
+    "runs": [
+      {
+        "id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+        "mode": "AUTO",
+        "status": "FAILED",
+        "stage": "规划分工",
+        "budget_json": "{\"grantId\":\"run_aded6aa1-431c-4c8c-8cd8-c388d392707b\",\"maxTurns\":24,\"usedTurns\":1,\"inFlightReservedTurns\":0}"
+      }
+    ],
+    "turns": [
+      {
+        "id": "turn_4e671478-d8ba-4297-903d-8b1da755474b",
+        "member_id": "m_dbf810f8-d13b-4622-870f-a8df5f3a60b5",
+        "status": "FAILED",
+        "run_id": "run_aded6aa1-431c-4c8c-8cd8-c388d392707b",
+        "dispatch_key": "task:task_0c7f0461-4407-44a1-84ad-be10cdd61906:initial"
+      }
+    ],
+    "deliveries": [],
+    "tools": [
+      {
+        "kind": "turn.statusChanged",
+        "turn_id": "turn_4e671478-d8ba-4297-903d-8b1da755474b",
+        "payload_json": "{\"status\":\"FAILED\",\"code\":\"PROVIDER_ERROR\",\"message\":\"进程退出（code=1）且无 result 终结事件；stderr尾：Error: --json-schema is not a valid JSON Schema: no schema with key or ref \\\"https://json-schema.org/draft/2020-12/schema\\\"\\n\",\"retryable\":true}"
+      }
+    ]
+  },
+  "error": "Error: original collaboration failed/unknown; not automatically repeated\n    at D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:77:153\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:86)\n    at observe (D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:76:24)\n    at async D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:90:77"
+}

@@ -1,0 +1,147 @@
+{
+  "pass": false,
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v25-rc10",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-20261015\\copy",
+  "buildId": "bld_07ef3cd9b4b08add",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "port": 52825,
+  "project": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-20261015\\R78 UI 工程项目",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read"
+  ],
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "failed-step",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "daemon": {
+    "buildId": "bld_07ef3cd9b4b08add",
+    "packedEntry": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-20261015\\copy\\ZhongshuoDual\\resources\\app\\daemon\\daemon.cjs",
+    "appDataDir": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-20261015\\copy\\server-data",
+    "pipeName": "\\\\.\\pipe\\zs-daily-1da9575f-0f0e-4a49-8007-7660920d1c5b",
+    "pid": 60856,
+    "fakeAdapterInjected": true,
+    "realDispatchGuard": true,
+    "at": 1792074997189
+  },
+  "ids": {
+    "projectId": "prj_a717d250-5c8b-43a5-b458-76d1b9d6ccad",
+    "memberId": "m_default_prj_a717d250-5c8b-43a5-b458-76d1b9d6ccad_0",
+    "roomId": "room_de9748a2-c113-49c9-b761-f7371e1a2955",
+    "roomConversationId": "conv_3c4efec9-6bcc-43d2-b3bd-618f29c3b439",
+    "dmConversationId": "dm_eb3f2191-36f3-435c-8c50-658018679885",
+    "roomTaskId": "task_2fd9dd1f-73e6-42c9-932d-840dd2bfea02",
+    "roomThreadId": "thread_bce58ad1-e1db-4024-a785-d3392f31d86d",
+    "dmTaskId": "task_8decce84-075d-4bb3-b056-f954e7354cf5",
+    "stoppedTaskId": "task_84d2b171-1e1f-4aa5-945e-4cfff176e05e"
+  },
+  "dmRecords": {
+    "sameTask": "task_8decce84-075d-4bb3-b056-f954e7354cf5",
+    "completed": true,
+    "historicalRun": true,
+    "versions": [
+      1,
+      2
+    ],
+    "closedToConversation": true
+  },
+  "r79": {
+    "live": {
+      "id": "task_603c869b-534a-48aa-a2bd-9db6f67edc5c",
+      "threadId": "thread_fa0f158a-adb1-4558-8d2f-e6645881f5c4"
+    },
+    "failed": {
+      "id": "task_ca719bc3-4921-439e-b3c2-2c2c4171a45c",
+      "threadId": "thread_2c120ca3-d139-4de0-83f9-07e41de16f50"
+    },
+    "scale": {
+      "id": "task_21443923-5592-45a5-9fd0-517066a6351f",
+      "threadId": "thread_d2f0e0a4-6641-471b-a47d-45a99de8ce85"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_0937ef14-a4a6-4a41-9ad4-ec25d7b6da2c",
+      "dlv_turn_714d7441-5a25-469f-9f6b-c2be20243006"
+    ],
+    "dm": [
+      "dlv_turn_63c0ae42-9591-47de-b0c1-07aae2f5fe41",
+      "dlv_turn_00f466d3-ae49-42a1-9d36-25fdef7c3c3e"
+    ]
+  },
+  "realCallsBeforeReopen": 0,
+  "error": "Error: own screenshot r85-archive-page-1.png: no visible paint after bringToFront {\"visibility\":\"hidden\",\"focus\":true,\"width\":1282,\"height\":802}\n    at must (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:24:62)\n    at Cdp.shot (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:84:5)\n    at async step (D:\\zhongshuo\\scripts\\verify-r85-daily-extension.cjs:11:27)\n    at async module.exports (D:\\zhongshuo\\scripts\\verify-r85-daily-extension.cjs:35:102)\n    at async D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:442:49",
+  "finalRealCalls": 0
+}

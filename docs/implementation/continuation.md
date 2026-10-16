@@ -2,7 +2,13 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
+## 当前：R86 桌面多 AI 协作（工程总门通过，用户验收待定）
+
+**持续用户偏好**：后续 Codex 工程真实测试优先使用本机清单的准确 ID `gpt-6-luna`；已在途/未知信封不换配置、不自动重发，确有复杂缺陷或能力阻断才按既有授权使用 Sol，不默认批量发昂贵模型。开发会话自身仍遵守用户既定 GPT-6.1 Sol；不擅改用户成员、模型或账号设置。
+
+**2026-10-16 19:32 当前权威快照**：clean运行源码 a2bc37606baa745357b47cf07cb5db012d857e3c，desktop-daily-win-v25-rc11 / BUILD bld_cf50e93cc0db5723，593程序和4guide哈希一致，候选不带数据。全部严格17门通过（代码根final-gates.json）；双模型DS+Luna真实代码v1/v2/精确v2验收、普通同串、文档6次/真实SaveAs、聚焦DELIB14次/第四native证明、两个根正常BAT重开均完成。协作最终重开票 collaboration-reopen-completed-v2.json PASS/32calls不增；原两张false保留。后续原生读研讨和恢复原requirements标签/表格也已看图。全13自有准备根157次=149success/7failed/1interrupted/0inflight；账本与独立相符，不新增调用。首DELIB5min超时保留，新自有项目10min通过；CR有一项未逐条互评但12RATIFY与6发布分类精确一致，不称一致同意。源码163文件1164、双types/增量lint、额外QA20、同BUILD full/upgrade/6组视觉已通过；用户图片手测继承。正在完成白名单归档、交付记录/RELEASE-VALIDATION及提交推送/独立终审，未以工程通过代记用户验收。最终入口与边界以 r86-desktop-collaboration-v25-20261016.md 为准。下方全部为历史，不再重复模型任务。
+
+### 历史施工快照（原件保留）
 
 **2026-10-16 14:55 当前最高优先断点**：运行冻结仍 a2bc376 / rc11 / bld_cf50e93cc0db5723，记录HEAD55d611e。新协作根第一研讨 task_41da... 在SYN硬截止失败：旧派发300000ms，real_calls创建14:37:49，turn.started回执14:40:18，停止退出14:42:49；源码consumeUntilTerminal硬截止从消费事件时起算，与absence有效执行时钟分离，未证明计时bug，不改runtime。stderr unrecognized_model不能据此判模型不存在（此前同模型多次success）；原12次11success/1failed及budget/时间/error保留 `deliberation-original-failure.json` 和原 `delivery-deliberation.json` false，未重放旧run、无UNKNOWN/在途/保护。
 

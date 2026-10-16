@@ -1,0 +1,52 @@
+{
+  "pass": false,
+  "scope": "original explicit quota failures; no application replay",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "observedAt": "2026-10-16T06:16:42.653Z",
+  "tasks": [
+    {
+      "id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "status": "ACTIVE"
+    },
+    {
+      "id": "task_e5dca083-a8dd-4b9a-a8d3-e8f9ae3e0080",
+      "status": "BLOCKED"
+    }
+  ],
+  "calls": [
+    {
+      "id": 19,
+      "task_id": "task_8f2b75d6-0399-4554-befd-195f031274bc",
+      "turn_id": "turn_485e78b9-d1b2-4ed4-ad9b-2d10c01261e1",
+      "model": "gpt-6-luna",
+      "status": "failed"
+    },
+    {
+      "id": 21,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_b550d1be-aa5a-4a09-923d-956dbb8c06e9",
+      "model": "gpt-6-luna",
+      "status": "failed"
+    }
+  ],
+  "errors": [
+    {
+      "turn_id": "turn_485e78b9-d1b2-4ed4-ad9b-2d10c01261e1",
+      "kind": "turn.statusChanged",
+      "payload_json": "{\"status\":\"FAILED\",\"code\":\"CODEX_ERROR\",\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 1:43 PM.\",\"retryable\":false}"
+    },
+    {
+      "turn_id": "turn_b550d1be-aa5a-4a09-923d-956dbb8c06e9",
+      "kind": "turn.statusChanged",
+      "payload_json": "{\"status\":\"FAILED\",\"code\":\"CODEX_ERROR\",\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 1:43 PM.\",\"source\":\"member-terminal\"}"
+    }
+  ]
+}

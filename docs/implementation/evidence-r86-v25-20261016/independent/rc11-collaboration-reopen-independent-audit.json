@@ -1,0 +1,46 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:30:34.509Z",
+  "scope": "independent readonly live original DB/file facts against pre-close and same-BAT reopened ticket; native operations owned by writer, no dispatch or replay",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "documentTaskId": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+  "deliberationTaskId": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+  "facts": {
+    "calls": 32,
+    "inflight": 0,
+    "deliveries": [
+      {
+        "id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+        "status": "REVIEW",
+        "current_delivery_id": "dlv_turn_1bad233f-ec1a-40b4-9061-6502714683bc",
+        "revision": 1,
+        "manifest_hash": "103a6f527deb51afd9968dd61b11d4f481e14980b34c33845568ca58c8c44cfb",
+        "run_id": "run_c4d29b12-9815-42fd-b2a6-239149d59664"
+      },
+      {
+        "id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "status": "REVIEW",
+        "current_delivery_id": "dlv_6824f1ed-482f-42ab-96fb-bf317331b9ae",
+        "revision": 1,
+        "manifest_hash": "7efac9f5e55c6fc35ff34b26ede753a97e2fceed0524fcaf408047174fd1b828",
+        "run_id": "run_04318e8c-2b1f-40c1-ab7e-ac4e7d769dc2"
+      }
+    ],
+    "sha256": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1"
+  },
+  "nonterminalRuns": [],
+  "priorFailedObservationsRetained": [
+    "collaboration-reopen.json",
+    "collaboration-reopen-completed.json"
+  ],
+  "originalFalseCause": "first shutdown observation timeout and first CDP reopen timeout retained; no uniquely established product cause/runtime fix claimed",
+  "errors": []
+}

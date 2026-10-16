@@ -1,0 +1,126 @@
+{
+  "pass": true,
+  "scope": "genuine draft/review/revision/re-review/integration plus actual shared Markdown preview and byte-identical system SaveAs; not certification of generated requirements correctness or final third-party rereview",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+  "delivery": {
+    "id": "dlv_turn_1bad233f-ec1a-40b4-9061-6502714683bc",
+    "task_id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+    "run_id": "run_c4d29b12-9815-42fd-b2a6-239149d59664",
+    "revision": 1,
+    "manifest_hash": "103a6f527deb51afd9968dd61b11d4f481e14980b34c33845568ca58c8c44cfb",
+    "change_set_refs_json": "[\"cs_33bc1df2-91cc-4d4a-bd24-15bc0b1637fa\",\"cs_b546394a-c7db-4bf8-9dbb-bd23bc78270d\",\"cs_2f0da1eb-ccfc-4f70-bdea-7f60ecdf3bd3\"]"
+  },
+  "calls": [
+    {
+      "id": 1,
+      "task_id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+      "model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 4,
+      "task_id": "task_84d90f23-a03f-4998-937f-cc102918ce5f",
+      "model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 7,
+      "task_id": "task_ee780596-4a93-41da-88e6-6803b4eaa501",
+      "model": "gpt-6-luna",
+      "status": "succeeded"
+    },
+    {
+      "id": 10,
+      "task_id": "task_84b89525-6009-4f8e-8d68-4b3196adf0bc",
+      "model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 11,
+      "task_id": "task_201c2315-c2fd-4e5a-a7e3-da664e588a86",
+      "model": "gpt-6-luna",
+      "status": "succeeded"
+    },
+    {
+      "id": 14,
+      "task_id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+      "model": "deepseek-flash",
+      "status": "succeeded"
+    }
+  ],
+  "steps": [
+    {
+      "role": "implementation",
+      "key": "draft",
+      "taskId": "task_84d90f23-a03f-4998-937f-cc102918ce5f"
+    },
+    {
+      "role": "review",
+      "key": "review",
+      "taskId": "task_ee780596-4a93-41da-88e6-6803b4eaa501"
+    },
+    {
+      "role": "implementation",
+      "key": "revise",
+      "taskId": "task_84b89525-6009-4f8e-8d68-4b3196adf0bc"
+    },
+    {
+      "role": "review",
+      "key": "verify",
+      "taskId": "task_201c2315-c2fd-4e5a-a7e3-da664e588a86"
+    }
+  ],
+  "nativeHashes": [
+    {
+      "role": "coordinator",
+      "model": "deepseek-flash",
+      "exactHashVerified": true
+    },
+    {
+      "role": "implementation",
+      "model": "deepseek-flash",
+      "exactHashVerified": true
+    },
+    {
+      "role": "implementation",
+      "model": "deepseek-flash",
+      "exactHashVerified": true
+    },
+    {
+      "role": "coordinator",
+      "model": "deepseek-flash",
+      "exactHashVerified": true
+    },
+    {
+      "role": "review",
+      "model": "gpt-6-luna",
+      "exactHashVerified": true
+    },
+    {
+      "role": "review",
+      "model": "gpt-6-luna",
+      "exactHashVerified": true
+    }
+  ],
+  "reviewHashes": [
+    "4d8f2dc36d533ffc77475751b58d71f37d8ed696b3e856a5dcadbb7b91a060c2",
+    "915a182c8e3c58cbb0be5baeeb83a064a808d69e17a06bd0769c56bdf4b5e860"
+  ],
+  "sourceHash": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+  "savedHash": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+  "bytes": 5586,
+  "reviewCoversFinalBytes": false,
+  "scopeBoundary": "integration changed reviewed revision in two subject areas; final bytes not independently rereviewed by Luna, accurately false",
+  "actualTableImageInspected": true,
+  "errors": [],
+  "observedAt": "2026-10-16T06:39:11.696Z"
+}

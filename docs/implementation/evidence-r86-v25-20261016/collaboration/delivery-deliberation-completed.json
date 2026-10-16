@@ -1,0 +1,168 @@
+{
+  "pass": true,
+  "scope": "read-only observation of explicit UI delivery request",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+  "revision": 1,
+  "startedAt": 1792133363021,
+  "task": {
+    "id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+    "status": "REVIEW",
+    "current_delivery_id": "dlv_6824f1ed-482f-42ab-96fb-bf317331b9ae",
+    "revision": 2,
+    "stop_generation": 0
+  },
+  "calls": [
+    {
+      "id": 19,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 20,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_897a3902-73d2-43cd-827d-24e3c8202cdf",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 21,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_f4b5e668-1ccc-4108-b7d2-7e55b79c100a",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 22,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_b272ebf8-f1b5-40e9-931d-009ccfa5538f",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 23,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_1a886897-7113-4e7f-ac18-57e0b953c630",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 24,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_61b75824-9949-4317-a7b3-a4490865d9db",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 25,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_5049ce9a-62d8-4e5f-ac55-c5cb00820ac9",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 26,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_3501b19f-5cd8-4a32-bd0a-034ba96743b5",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 27,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_910adc8f-fc2a-4202-85ea-be9de86ed66e",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 28,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_a61908e3-1b71-4006-b925-0ab4dce9a329",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 29,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_4d611c3e-3436-40f5-aa2c-6697663080f3",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 30,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_e2d7c312-7fc8-4ddf-9017-7cb7d51c9647",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 31,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_03f8627e-3b5c-4b19-991e-99a9352d6d87",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 32,
+      "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+      "turn_id": "turn_460a88b9-e7dc-4c94-b1c3-021f2c8ea027",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    }
+  ],
+  "steps": [],
+  "run": {
+    "id": "run_04318e8c-2b1f-40c1-ab7e-ac4e7d769dc2",
+    "mode": "DELIBERATE",
+    "status": "SUCCEEDED",
+    "stage": "PUBLISH"
+  },
+  "delivery": {
+    "id": "dlv_6824f1ed-482f-42ab-96fb-bf317331b9ae",
+    "run_id": "run_04318e8c-2b1f-40c1-ab7e-ac4e7d769dc2",
+    "revision": 1,
+    "manifest_hash": "7efac9f5e55c6fc35ff34b26ede753a97e2fceed0524fcaf408047174fd1b828",
+    "review_status": "pending",
+    "artifact_refs_json": "[\"artifact:art_f63bd5c6-b4b0-481a-a879-60fca6255564\"]",
+    "change_set_refs_json": "[]"
+  },
+  "finishedAt": 1792134259693
+}

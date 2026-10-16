@@ -1,0 +1,22 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "approved prototype matched own synthetic facts; additions documented separately; DPR emulated, not physical HiDPI",
+  "inspected": false,
+  "pairs": [],
+  "density": {
+    "members": 2,
+    "tasks": 4,
+    "messages": 16
+  },
+  "additions": "Prototype omits the user root from replies; product preserves it as a required R83 improvement. Both load the exact real planning answer and selected thread. Product adds authoritative coordination graph, actual model snapshots and exact child/delivery navigation; prototype has no corresponding engine. Compare inherited room, thread, tabs and Composer hierarchy; no mock graph claims.",
+  "error": "Error: modal blocks visual comparison\n    at shot (D:\\zhongshuo\\scripts\\verify-r86-visual-pairs.cjs:9:550)\n    at async D:\\zhongshuo\\scripts\\verify-r86-visual-pairs.cjs:21:724"
+}

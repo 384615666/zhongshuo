@@ -1,0 +1,81 @@
+{
+  "pass": false,
+  "scope": "read-only observation of explicit UI delivery request",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+  "revision": 1,
+  "startedAt": 1792113641585,
+  "task": {
+    "id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+    "status": "ACTIVE",
+    "current_delivery_id": null,
+    "revision": 1,
+    "stop_generation": 0
+  },
+  "calls": [
+    {
+      "id": 14,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_9136c61e-d306-4433-931a-22eca0802379",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 15,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_b7b8f2e2-eb65-4c61-8139-7202520a9a97",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 17,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_66d49271-8546-49f0-bd14-ba0b345054e3",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 18,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_529afc21-0324-433b-adfc-1ebb0cb55e5c",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 20,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_733339ca-d4b2-4689-b6b3-9e9afce003f9",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 21,
+      "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+      "turn_id": "turn_b550d1be-aa5a-4a09-923d-956dbb8c06e9",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "failed"
+    }
+  ],
+  "steps": [],
+  "error": "Error: timeout explicit requested parent delivery: undefined\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r86-delivery-watch.cjs:14:17"
+}

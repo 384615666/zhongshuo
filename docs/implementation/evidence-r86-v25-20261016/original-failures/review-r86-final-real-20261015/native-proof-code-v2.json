@@ -1,0 +1,16 @@
+{
+  "pass": false,
+  "scope": "actual own CLI context/tools/results; configured model is separate from upstream response_model",
+  "build": {
+    "buildId": "bld_a9b6180a48c8053a",
+    "commit": "1cca516eafd065063e4b56ab49aed3615fb186cb",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T12:01:36.106Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_dd647d17-294c-44cc-9b3b-70ef9405eddb",
+  "sessions": [],
+  "error": "Error: exact parent delivery missing\n    at Object.<anonymous> (D:\\zhongshuo\\scripts\\verify-r86-native-proof.cjs:22:163)\n    at Module._compile (node:internal/modules/cjs/loader:1854:14)\n    at Object..js (node:internal/modules/cjs/loader:1985:10)\n    at Module.load (node:internal/modules/cjs/loader:1577:32)\n    at Module._load (node:internal/modules/cjs/loader:1379:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47"
+}

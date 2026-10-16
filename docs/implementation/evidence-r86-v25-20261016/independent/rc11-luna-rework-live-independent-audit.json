@@ -1,0 +1,55 @@
+{
+  "pass": true,
+  "scope": "independent readonly live sample exactly while original rework window remains active; no business command",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "sourceDeliveryId": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+  "coordinationRunId": "run_e4747eaf-96ec-4c29-a17b-00a6b3948d23",
+  "snapshot": {
+    "task": {
+      "id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "status": "ACTIVE"
+    },
+    "source": {
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "run_id": "run_d792030d-eb69-4c70-a765-80e56ec050ef",
+      "revision": 1,
+      "review_status": "changes_requested"
+    },
+    "run": {
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "status": "WAITING"
+    },
+    "plan": {
+      "state": "running"
+    },
+    "outbox": {
+      "status": "done"
+    },
+    "steps": [
+      {
+        "child_task_id": "task_326e5906-e670-4fdb-8610-f8bd1e4e94f1",
+        "status": "OPEN"
+      },
+      {
+        "child_task_id": "task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa",
+        "status": "ACTIVE"
+      },
+      {
+        "child_task_id": "task_573d07b2-c646-48fd-a8ca-6b43dc0488e2",
+        "status": "OPEN"
+      }
+    ]
+  },
+  "formalObserverQueued": true,
+  "originalWindowImageHash": "efe22440ffeefc6bf5f0b1b6069af6114980aef5d64390d4b2f698f67ea5787d",
+  "observedAt": "2026-10-16T01:14:17.720Z"
+}

@@ -1,0 +1,80 @@
+{
+  "pass": true,
+  "scope": "owned v23 whole-root backup / full data clone into pristine v25 schema52 program / unknown retained / matched full rollback",
+  "steps": [
+    "closed old complete backup and entire data clone before new first launch",
+    "real normal v25 BAT: original unknown / drafts / image bytes / no automatic dispatch across polls and close",
+    "matching complete v23 backup reopened by its matching old program, original unknown untouched"
+  ],
+  "oldBuild": {
+    "buildId": "bld_fcf357a7e1e4ad52",
+    "commit": "05b549f61169b7293521dd42ec38e1a2fe239de1",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T00:28:13.322Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "before": {
+    "messages": 1,
+    "refs": 1,
+    "tasks": 0,
+    "calls": 0,
+    "memberProfilesHash": "26e4ceeb35fde499a22f2421fa71cb8880bcb99a3083af9f990ec1ec072e67b8",
+    "credentialHash": "d2e34a826b5a2756e37acd7104c9ff51f0cb4705f7c8bb305d7071a94c6bf533",
+    "rootIdentity": "dri_9f88fe44-6d25-48c3-8f27-76152ced141a",
+    "artifact": {
+      "id": "art_fff6faf6-e2dc-4660-bb19-8d80cbeee13e",
+      "conversation_id": "conv_75a640a0-01b9-4835-a3c0-1f17509387b7",
+      "hash": "d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807",
+      "blob_path": "D:\\zhongshuo\\dist\\desktop\\review-r85-v23-unknown-source-20261015\\copy\\server-data\\blobstore\\d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807.bin"
+    }
+  },
+  "backupFiles": 683,
+  "rootIdentity": "dri_9f88fe44-6d25-48c3-8f27-76152ced141a",
+  "envelope": {
+    "commandId": "cmd_4mi1u5sz",
+    "paramsHash": "0f7392ed3b4589d2122d040bde0c39dfbffb45a9a7fdbf11a6f03186e20eb6cd",
+    "draftHash": "a6f78cce42109aae67920f3e4291e140202b34c432ec1499b7e4f74d52e88bb9",
+    "uploadHash": "72f9643750fd1839b1d37135294b99416245f764199d29997a4414399387cbe6"
+  },
+  "original": {
+    "hash": "d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807",
+    "decoded": {
+      "width": 1,
+      "height": 1
+    }
+  },
+  "after": {
+    "messages": 1,
+    "refs": 1,
+    "tasks": 0,
+    "calls": 0,
+    "memberProfilesHash": "26e4ceeb35fde499a22f2421fa71cb8880bcb99a3083af9f990ec1ec072e67b8",
+    "credentialHash": "d2e34a826b5a2756e37acd7104c9ff51f0cb4705f7c8bb305d7071a94c6bf533",
+    "rootIdentity": "dri_9f88fe44-6d25-48c3-8f27-76152ced141a",
+    "artifact": {
+      "id": "art_fff6faf6-e2dc-4660-bb19-8d80cbeee13e",
+      "conversation_id": "conv_75a640a0-01b9-4835-a3c0-1f17509387b7",
+      "hash": "d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807",
+      "blob_path": "D:\\zhongshuo\\dist\\desktop\\review-r85-v23-unknown-source-20261015\\copy\\server-data\\blobstore\\d44c0303173ecdb8ba72a7ab688f020583b31865537e2f9ab57e56aeec687807.bin"
+    }
+  },
+  "draftsAndUploadsComparedToOld": true,
+  "memberConfigCredentialAndRootMatch": true,
+  "oldProgramRejection": {
+    "status": 1,
+    "code": "SCHEMA_VERSION_UNSUPPORTED",
+    "databaseUnchanged": true
+  },
+  "schema": "001–051 frozen; real new BAT applied only052, old packaged daemon rejected52, matching whole old backup reopened normally"
+}

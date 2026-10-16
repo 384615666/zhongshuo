@@ -1,0 +1,12 @@
+{
+  "pass": true,
+  "testedRuntimeCommit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+  "mainTypes": true,
+  "hifiTypes": true,
+  "lint": true,
+  "addedErrors": [],
+  "existingErrorCount": 33,
+  "mainTypesOutputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "hifiTypesOutputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "lintedFiles": 59
+}

@@ -1,0 +1,508 @@
+{
+  "pass": true,
+  "auditRevision": 2,
+  "contractBasis": "Approved design §§6.1/6.4 require valid versioned CR references, not exhaustive CR coverage; §6.5 requires exhaustive final RATIFY. Original v1 false retained as reviewer overstrong CR assertion.",
+  "coverageGaps": [
+    {
+      "reviewer": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "peerArtifact": "art_turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf",
+      "peerRevision": 1,
+      "peerClaim": "c2"
+    }
+  ],
+  "omittedClaimTrace": [
+    {
+      "reviewer": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "peerArtifact": "art_turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf",
+      "peerRevision": 1,
+      "peerClaim": "c2",
+      "finalClaims": [
+        {
+          "claimId": "clm_1",
+          "consensus": "unconfirmed"
+        }
+      ]
+    }
+  ],
+  "aggregates": [
+    {
+      "claimId": "clm_1",
+      "consensus": "unconfirmed",
+      "confirms": 1,
+      "conditionals": 0,
+      "objects": 0,
+      "unconfirmedExplicit": 1,
+      "missing": 0
+    },
+    {
+      "claimId": "clm_2",
+      "consensus": "qualified",
+      "confirms": 1,
+      "conditionals": 1,
+      "objects": 0,
+      "unconfirmedExplicit": 0,
+      "missing": 0
+    },
+    {
+      "claimId": "clm_3",
+      "consensus": "qualified",
+      "confirms": 1,
+      "conditionals": 1,
+      "objects": 0,
+      "unconfirmedExplicit": 0,
+      "missing": 0
+    },
+    {
+      "claimId": "clm_4",
+      "consensus": "unanimous",
+      "confirms": 2,
+      "conditionals": 0,
+      "objects": 0,
+      "unconfirmedExplicit": 0,
+      "missing": 0
+    },
+    {
+      "claimId": "clm_5",
+      "consensus": "unanimous",
+      "confirms": 2,
+      "conditionals": 0,
+      "objects": 0,
+      "unconfirmedExplicit": 0,
+      "missing": 0
+    },
+    {
+      "claimId": "clm_6",
+      "consensus": "unconfirmed",
+      "confirms": 1,
+      "conditionals": 0,
+      "objects": 0,
+      "unconfirmedExplicit": 1,
+      "missing": 0
+    }
+  ],
+  "overallConsensus": "unconfirmed",
+  "scope": "independent readonly real selected-DELIB artifact/input/claim-version/policy audit; no UI or model actions, not entire release/user acceptance",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+  "run": {
+    "id": "run_04318e8c-2b1f-40c1-ab7e-ac4e7d769dc2",
+    "mode": "DELIBERATE",
+    "status": "SUCCEEDED",
+    "stage": "PUBLISH"
+  },
+  "selected": [
+    "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+    "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3"
+  ],
+  "calls": [
+    {
+      "id": 19,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf"
+    },
+    {
+      "id": 20,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_897a3902-73d2-43cd-827d-24e3c8202cdf"
+    },
+    {
+      "id": 21,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_f4b5e668-1ccc-4108-b7d2-7e55b79c100a"
+    },
+    {
+      "id": 22,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_b272ebf8-f1b5-40e9-931d-009ccfa5538f"
+    },
+    {
+      "id": 23,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_1a886897-7113-4e7f-ac18-57e0b953c630"
+    },
+    {
+      "id": 24,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_61b75824-9949-4317-a7b3-a4490865d9db"
+    },
+    {
+      "id": 25,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_5049ce9a-62d8-4e5f-ac55-c5cb00820ac9"
+    },
+    {
+      "id": 26,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_3501b19f-5cd8-4a32-bd0a-034ba96743b5"
+    },
+    {
+      "id": 27,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_910adc8f-fc2a-4202-85ea-be9de86ed66e"
+    },
+    {
+      "id": 28,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_a61908e3-1b71-4006-b925-0ab4dce9a329"
+    },
+    {
+      "id": 29,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_4d611c3e-3436-40f5-aa2c-6697663080f3"
+    },
+    {
+      "id": 30,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_e2d7c312-7fc8-4ddf-9017-7cb7d51c9647"
+    },
+    {
+      "id": 31,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "turn_id": "turn_03f8627e-3b5c-4b19-991e-99a9352d6d87"
+    },
+    {
+      "id": 32,
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded",
+      "turn_id": "turn_460a88b9-e7dc-4c94-b1c3-021f2c8ea027"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "art_turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "analysis_draft",
+      "revision": 1,
+      "hash": "42f516ef1b579a3968f51eb8121999ed4470a4ba1656eea68b3dfef840ee5bd4"
+    },
+    {
+      "id": "art_turn_897a3902-73d2-43cd-827d-24e3c8202cdf",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "analysis_draft",
+      "revision": 1,
+      "hash": "7d6be52fa0ff9c2135d1da8aaf3e1d224e949fb501f9dbd55f0abe2956c2790c"
+    },
+    {
+      "id": "art_turn_f4b5e668-1ccc-4108-b7d2-7e55b79c100a",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "cross_review",
+      "revision": 1,
+      "hash": "94980dd166ce01d96d83b876aec9bb4d7632ee47b46f158d84207ff857c74980"
+    },
+    {
+      "id": "art_turn_b272ebf8-f1b5-40e9-931d-009ccfa5538f",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "cross_review",
+      "revision": 1,
+      "hash": "5eb4d84d5c387f4fc93f818ea4691737f2b1b9c134930435d3eaa4520bbaab8d"
+    },
+    {
+      "id": "art_turn_1a886897-7113-4e7f-ac18-57e0b953c630",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "issue_position",
+      "revision": 1,
+      "hash": "7f98e31a4c5c4d57f498219c9dd6e56fdda2905c0761573f23302ec39d261533"
+    },
+    {
+      "id": "art_turn_61b75824-9949-4317-a7b3-a4490865d9db",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "issue_position",
+      "revision": 1,
+      "hash": "1198dae43ab77add2e0225671e479c1eb18927f516b71f21ebcca8f4c8ff130a"
+    },
+    {
+      "id": "art_turn_5049ce9a-62d8-4e5f-ac55-c5cb00820ac9",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "issue_position",
+      "revision": 2,
+      "hash": "f3d3922b3ca2ef002334cd26df9c4008dbd7ac96418bc90ee11e621316f1cf4d"
+    },
+    {
+      "id": "art_turn_3501b19f-5cd8-4a32-bd0a-034ba96743b5",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "issue_position",
+      "revision": 2,
+      "hash": "4b0279f4e6614a9a2b85a5033ad303dcdb2ce0139cb263d8806b36262ccaa276"
+    },
+    {
+      "id": "art_turn_910adc8f-fc2a-4202-85ea-be9de86ed66e",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "issue_position",
+      "revision": 3,
+      "hash": "f0ff930d59ac79e17fdc5d27cdee4454f52b4834163fe542b92a03960f9ceaae"
+    },
+    {
+      "id": "art_turn_a61908e3-1b71-4006-b925-0ab4dce9a329",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "issue_position",
+      "revision": 3,
+      "hash": "51e62d2c80cea3f0b16b9f9dd2a9d801028217e2f20b88df777d78b4f4a25f25"
+    },
+    {
+      "id": "art_turn_4d611c3e-3436-40f5-aa2c-6697663080f3",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "checkpoint_verdict",
+      "revision": 3,
+      "hash": "abd03a722ce74268c17ec8224432252be233462c1b7243115da6b0a6f3e2f223"
+    },
+    {
+      "id": "art_turn_e2d7c312-7fc8-4ddf-9017-7cb7d51c9647",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "synthesis",
+      "revision": 1,
+      "hash": "61758ec1d93dfe021370babac9666a7f7bc5c38326b6cd1913a3fbaf4ebd11f5"
+    },
+    {
+      "id": "art_turn_03f8627e-3b5c-4b19-991e-99a9352d6d87",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "ratify_response",
+      "revision": 1,
+      "hash": "9709bcf193cc9a6f80505bfc098fc31337f80d5caeca2f5cad7d0f18dd88dda5"
+    },
+    {
+      "id": "art_turn_460a88b9-e7dc-4c94-b1c3-021f2c8ea027",
+      "author_id": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "kind": "ratify_response",
+      "revision": 1,
+      "hash": "12533fe988b48597ef5edefaa558a8daf473e6dcc37461f40d308cbfebc470bf"
+    },
+    {
+      "id": "art_f63bd5c6-b4b0-481a-a879-60fca6255564",
+      "author_id": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "kind": "final_report",
+      "revision": 1,
+      "hash": "d33b60c5056e786e7daa927e87c0c679c9c16551b723087bf006e21d8391dcff"
+    }
+  ],
+  "inputs": [
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.independent",
+      "sha256": "39a5bde23549bc9862ff161d767a0cc0c8d51b5c96cf4d5891b3f94edaf5216c"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.independent",
+      "sha256": "d2400c8d12601620ecb6d6964143c142a8c981ff5d597980b4736111aadf7492"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.cross_review",
+      "sha256": "656d3be1080c1122ad6d3befbbb45286ab917c54f896ac9821e5ec4760156e23"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.cross_review",
+      "sha256": "52ccfe17f93ad2909055d8b76610f6425549c40718c7e6fc4d94257f0fd24cf5"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.issue_discussion.r1",
+      "sha256": "0aa0c073ab383669aec4d72362f4fd3313007db5233de55b4fdc6778b7060951"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.issue_discussion.r1",
+      "sha256": "0aa0c073ab383669aec4d72362f4fd3313007db5233de55b4fdc6778b7060951"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.issue_discussion.r2",
+      "sha256": "f40b87b62348dc1e2353e8e8b7b99b360bd2ad0b91c1cc17be2854602ce655e1"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.issue_discussion.r2",
+      "sha256": "f40b87b62348dc1e2353e8e8b7b99b360bd2ad0b91c1cc17be2854602ce655e1"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.issue_discussion.r3",
+      "sha256": "b1bd8373e15af44a27a6a4a808734458d6f81235094816c439e9929cba42e07a"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.issue_discussion.r3",
+      "sha256": "b1bd8373e15af44a27a6a4a808734458d6f81235094816c439e9929cba42e07a"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.issue_discussion.r3.chk",
+      "sha256": "1defe64385f1ec04231a6b20202153345f8da7bae41d7e3991b2dc5b1d87b25a"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.synthesis",
+      "sha256": "5c6cfa98031ffe60c818e06173332f68ac308eaef01555fc8de410962454bc18"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "stage": "delib.ratify",
+      "sha256": "9570821cc4e7599d4904d82573f842b7456be6bc2c3f4a049cbfb14d8b7e01f7"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "stage": "delib.ratify",
+      "sha256": "9570821cc4e7599d4904d82573f842b7456be6bc2c3f4a049cbfb14d8b7e01f7"
+    }
+  ],
+  "sessions": [
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "84c37c87-5ee6-43bb-aa54-ae8335bd9b3d",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a14378-803e-7703-8665-e0f99c481162",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "b613ec53-c2d0-4681-9460-59e6ff2503e0",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a1437a-6e03-7092-a5b2-a8ebf3164b14",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "8816a23b-e2ce-43e2-b3dc-379c9be10204",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a1437c-65f6-78f0-b908-1f5943516ec9",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "d8f27f07-bb89-49e7-b981-0f093b7ec46e",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a1437e-42f3-77b0-855a-0786232ff9e6",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "c53eaedc-08b7-4ea5-b742-e99788999204",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a14380-19f1-7011-b16f-b12ed89dbe3d",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "62c4c361-e75f-4ced-900d-3e1e0705a8fa",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "3f957131-e903-4ebd-ac60-dec44775d3c0",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_6f9f4a99-f189-466f-a01e-dd506c71729d",
+      "providerSessionId": "4edee79e-efa1-4503-b589-fafeb4fc7dd1",
+      "model": "deepseek-flash",
+      "kind": "claude",
+      "policy": "policy-analyze"
+    },
+    {
+      "memberId": "m_8d2a81e2-4dad-420c-938f-ca7e7c9901f3",
+      "providerSessionId": "01a14384-c120-7a62-b122-9eb059162c83",
+      "model": "gpt-6-luna",
+      "kind": "codex",
+      "policy": "policy-analyze"
+    }
+  ],
+  "delivery": {
+    "id": "dlv_6824f1ed-482f-42ab-96fb-bf317331b9ae",
+    "run_id": "run_04318e8c-2b1f-40c1-ab7e-ac4e7d769dc2",
+    "revision": 1,
+    "manifest_hash": "7efac9f5e55c6fc35ff34b26ede753a97e2fceed0524fcaf408047174fd1b828",
+    "artifact_refs_json": "[\"artifact:art_f63bd5c6-b4b0-481a-a879-60fca6255564\"]",
+    "review_status": "pending"
+  },
+  "reportText": "经两稿互评与主持对 requirements.md 的复核，共同结论：首版应保留编辑能力——提问所称“编辑标题”即文档“编辑内容”（F4），按“文本”口径实现、不新增独立标题字段；对“按完成状态筛选”（F7），价值上低于编辑但对 v0.3 范围与 CLI 形态属低增量能力，建议一并保留。若必须削减，双方一致同意先砍 F7、保留 F4，且须显式修订文档（第 2/3/5 节）。未决分歧两处：F7 应“默认在首版”（A）还是“成本很低才提供、否则后置”（B）；以及 B 对 A 的 c1/c7 观察标 needs_evidence、对 c8 提案标 needs_evidence（程序性分歧，经复核 c1/c7 与文件一致，不影响事实结论）。讨论议题投票双方立场两两一致（3 项同同意、1 项同不同意）。\n\n需求文档 v0.3 已将“编辑内容”（F4：修改已有待办的文本，新文本同守 1–500 非空白、修改后立即生效且重启后保持）与“状态筛选”（F7：全部/未完成/已完成视图，各视图只显示对应状态条目）列为首版主要功能并各附验收标准；第 3 节“不做范围”未排除这两项，第 4 节另含“编辑不存在的条目”失败处理口径（主持复核 requirements.md 属实；双方对“文档已含两项”无实质分歧）。（尚未核实）\n\n双方一致：首版保留编辑能力（F4）——可修正误输入、避免只能“删除+重建”而丢失既有位置与完成状态连续性；提问中的“编辑标题”应理解为 F4“编辑内容（文本）”，不新增独立“标题”字段（若本意为独立字段，属数据模型变更、超出 v0.3 范围）。（附条件确认）\n\n双方一致：两项均不引入新数据模型——编辑复用既有“文本”字段与 F1 校验，筛选只读 F3 的完成状态，F6 的 todos.json 结构不变，数据层增量为零（B 已对 A:c3 表态 agree；此为“筛选实现成本很低”判断的基础）。（附条件确认）\n\n双方一致：筛选（F7）的边际价值随清单规模增长，小清单用 F2 全量列表即可区分状态，其首版优先级低于编辑（F4）。（共同确认）\n\n双方一致（削减路径）：若必须削减首版范围，先砍筛选（F7）、保留编辑（F4）；且任何与 v0.3 不一致的取舍应作显式范围变更——A 主张同步修订文档第 2/3/5 节，B 主张明确标注与 v0.3 范围不同。（共同确认）\n\nF4/F7 的验收标准已随功能表逐条给出、可检验；第 5 节 9 条可验收标准未单列筛选（亦未单列编辑成功情形）的专项条目，属轻微需求追踪缺口、不影响可验收性（主持复核 requirements.md 属实；B 对该观察曾标 needs_evidence，见分歧项）。（尚未核实）\n\n分歧：F7（状态筛选）在首版中的默认地位：应“默认保留”并按 v0.3 实现（A），还是“实现成本很低才提供、否则后置”的条件项（B）。 · A（对 B:c4 表态 disagree）认为 F4/F7 均已属 v0.3 范围、数据层零增量，CLI 筛选仅为 list 状态参数，应默认保留、无需“与 v0.3 范围不同”的条件式表述；若必须削减才先砍 F7 并显式修订文档（A:c8）。B（对 A:c8 表态 needs_evidence）保留“文档未说明清单规模与筛选成本”的不确定性（B:c3），主张“成本很低则一并提供、否则可后续补入并明确与 v0.3 范围不同”（B:c4）。双方在“削减时先砍筛选”与“范围变化须显式标注”两点实质一致，分歧仅在 F7 默认在首版还是条件性在首版。\n\n分歧：对 A 的文档事实性观察（c1：v0.3 已含 F4/F7；c7：第 5 节未单列筛选验收项）的证据充分性存在程序性分歧。 · B 对 A:c1、A:c7 均标 needs_evidence，要求补充依据（背景：文件内“v0.3 终稿”标签无变更记录可核）；A 认为两项均为 requirements.md 内可直读事实、无需另证。主持复核确认两项观察与文件一致，该分歧不影响实质结论。\n\n共同建议：首版两项都做——保留“编辑内容”（提问所称“编辑标题”按同义处理，不新增独立“标题”字段）与“按完成状态筛选”（全部/未完成/已完成视图）。\n\n实现口径：编辑复用 F1 的 1–500 非空白校验与第 4 节失败处理；筛选作为 list 状态参数、只读 F3 状态；均不改 todos.json 结构——据此 B 的“成本很低则提供”条件亦成立。\n\n若最终仍须削减：先砍 F7、保留 F4，并作显式范围变更同步修订 requirements.md 第 2/3/5 节（建议顺带在第 5 节补一条筛选/编辑专项验收项，消除追踪缺口；本轮仅讨论不改文件，修订留待后续执行）。\n\n分歧处置：F7“条件式后置”与“默认保留”两种表述可合并为“两项都做”的单一口径（成本条件已满足）；c1/c7 补证争议按复核结论归档（文件直读可核，不阻塞执行）。",
+  "errors": []
+}

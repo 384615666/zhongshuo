@@ -1,0 +1,46 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "sourceDeliveryId": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+  "scope": "native delivery panel during consumed AUTO planning intent and unfinished genuine child tasks; formal readonly task.get",
+  "formalQueued": true,
+  "outboxConsumed": true,
+  "unfinishedSteps": true,
+  "matchingTarget": true,
+  "view": {
+    "hash": "#/project/prj_83c30f65-0d26-43b7-89e3-0650e7389672/room/room_default_prj_83c30f65-0d26-43b7-89e3-0650e7389672?thread=thread_a9540bba-0f59-4e17-9f76-597e219759f5&tab=delivery",
+    "text": "任务概况\n参与成员\n活动与进展\n运行详情\n交付与验收\n更新于 2026-10-16 09:14\n刷新详情\n交付与验收（可选验收的唯一主入口）\n当前没有待验收交付（任务策略为 user_review 且有新交付时在此出现）。\n返工执行中（已入队/派发）\nv1 被要求修改\n完成后交付升级为新待验收版本\n验收意见：请先去掉名字两侧空白，空名字或全空白时返回“你好，朋友”。补上真实测试，再请另一位成员独立复跑评审，给我新版验收。\n交付版本与验收历史\n交付 v1 · 已要求修改 · 2026-10-16 09:12\n验收意见：请先去掉名字两侧空白，空名字或全空白时返回“你好，朋友”。补上真实测试，再请另一位成员独立复跑评审，给我新版验收。\n成果引用 4 · 验证引用 0 · 改动集 3\n成果引用\n改动集引用\n版本身份\n已保存成果\n没有任务成果记录。",
+    "buttons": [
+      "任务概况",
+      "参与成员",
+      "活动与进展",
+      "运行详情",
+      "交付与验收",
+      "刷新详情"
+    ]
+  },
+  "coordinationRunId": "run_e4747eaf-96ec-4c29-a17b-00a6b3948d23",
+  "steps": [
+    {
+      "child_task_id": "task_326e5906-e670-4fdb-8610-f8bd1e4e94f1",
+      "status": "OPEN"
+    },
+    {
+      "child_task_id": "task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa",
+      "status": "ACTIVE"
+    },
+    {
+      "child_task_id": "task_573d07b2-c646-48fd-a8ca-6b43dc0488e2",
+      "status": "OPEN"
+    }
+  ]
+}

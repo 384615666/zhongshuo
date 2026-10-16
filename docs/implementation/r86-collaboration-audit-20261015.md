@@ -188,3 +188,19 @@ rc10 full-v3 单一前台工程宿主完整通过，0真实调用，原三周期
 六组原型配对已逐张查看12张PNG，覆盖1440×900、1000×800及DPR1.5模拟，v5 visual-pairs pass且独立审阅通过。继承导航/房间/回复/详情/Composer层次保持；旧原型缺用户根消息和真实运行/交付状态，DPR1.5记忆列宽也不同，不宣称全APP像素一致或物理HiDPI认证。首次root比较和欢迎恢复modal失败原件保留，统一顶部滚动与深链启动仅修QA。
 
 独立审阅发现旧总门只绑定三份code/document native票，未严格绑定DELIB。保留原反例，新增只读发布delivery/run/manifest投影，强制第四票同task/run/delivery/revision/hash及相同模型对；缺票、错task/run/版本/hash和不同模型对的负例均拒绝。额外QA19项、eslint及双types通过，不改变冻结runtime或重跑推理。pre-closeout-gates.json当前明确总false，剩余真实文档预览/原件另存、研讨及完整调用账本收齐后才运行最终门。
+
+### 真实研讨硬截止与有界项目设置
+
+rc11-collaboration第一条研讨在SYN汇总未完成，旧run FAILED/task BLOCKED，12真实turn为11成功/1失败。派发冻结单轮硬截止300000ms，调用登记14:37:49，收到turn.started回执14:40:18，进程收到中断并退出14:42:49。源码consumeUntilTerminal使用独立墙钟截止（包含初始化/等待事件），absence另用exec_started_at有效时钟；不以回执时点冒充模型内部开始时间，不认定计时bug。仅有stderr unrecognized_model警告不能证明模型不存在，同模型此前已多次成功。原失败、run预算、时间和错误原件保留；没有自动重试旧步骤或扩大14次调用上限。
+
+已有正式项目设置支持有界单轮时限。只对该自有测试项目通过project.collab.set CAS1→2设600000ms，0新增模型调用，仅新派发生效，全局默认仍5分钟。原生项目菜单→项目设置→协作限制实际回读10分钟。新自然问题聚焦编辑标题/完成状态筛选，原生@全体两席产生新task_984b01f8-dcc9-4d98-b557-f522b3256719，不重用旧信封或旧scope；其观察另存delivery-deliberation-completed.json。当前仍在收集最终发布，不把默认5分钟失败写成通过。
+
+最终门额外要求协作根独立正常关闭/同BAT重开、原文档和研讨交付/字节保持及零新增调用；QA20项通过。关闭前先只读确认所有执行终态并保存pre-close-terminal，关闭后必须与之精确相符，避免把正常关闭误当中断在途任务。外置指南明确单轮时限与本轮条件，候选/两个实测副本一致，四份guide的BUILD/hash也纳入发布验证，593程序与运行BUILD未改。
+
+### 2026-10-16 最终收口
+
+聚焦DELIB task_984b01f8 / run_04318e8c 14次真实成功，native14会话与15原件hash、冻结输入及发布精确版本通过。首独立票误要求所有IND主张必须逐条CR而false，依据设计§6.1/6.4纠正，原false与v2独立pass并存；实际一项CR覆盖缺口保留，最终12RATIFY矩阵与6发布分类完全对应，未确认/有条件意见未篡改。不是全体一致内容认证。
+
+最终协作根重开：首次观察器启动时尚未真实关闭，默认票false；实际AltF4/BAT后UI已连接但CDP端口缺失，completed票false；再次原生正常关闭且确认该副本Electron全部退出，再同BAT启动，completed-v2票pass。原文档/研讨精确版本和hash、32calls均未变，独立只读复证通过。未唯一定位首次CDP原因，不称runtime已修。原生再次打开既有研讨、恢复requirements.md原预览标签及表格/阅读位置，另存原件既有hash保持。
+
+全13个自有准备根去重157实际产品turn尝试=149成功/7失败/1中断，无在途；包含DS99、Codex6.1Sol36、Luna19、GLM2、Codex6Sol1。最终精选成功路线32次（代码10+普通2+文档6+研讨14），两个最终根合计53次50成功3失败，旧失败不抹除。源码和最终独立副本全绑定a2bc376/bld_cf50e93cc0db5723，严格17门全过。后续证据与记录以最终交付文档和白名单hash清单为准；整体用户验收pending。

@@ -1,0 +1,32 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_07ef3cd9b4b08add",
+    "commit": "ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T13:56:45.745Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "native default no-mention greeting then same-thread natural follow-up; read-only engineering observation",
+  "childTasks": 0,
+  "deliveries": 0,
+  "turns": [
+    {
+      "id": "turn_4caa7f7a-c1cd-4f59-9cf5-1387325cec5c",
+      "status": "SUCCEEDED",
+      "member_id": "m_62f754d0-2103-4c81-84ad-99f7c3e5d52e",
+      "session_id": "claude_sess_384dae6f-755a-4cda-8059-e298525d7b25",
+      "provider_session_id": "9b493bd8-c955-4b3a-9103-abe284175ba6"
+    },
+    {
+      "id": "turn_f88bcf4d-f828-409a-9bd4-fb18a3a53d9b",
+      "status": "SUCCEEDED",
+      "member_id": "m_62f754d0-2103-4c81-84ad-99f7c3e5d52e",
+      "session_id": "claude_sess_c38e2c8b-f6cb-4893-8698-37f2fefcabda",
+      "provider_session_id": "0db7a854-7a04-4225-83aa-5dc92bcafd19"
+    }
+  ],
+  "error": "Error: same-thread runtime session was not continued\n    at must (D:\\zhongshuo\\scripts\\verify-r86-ordinary-chat.cjs:9:32)\n    at D:\\zhongshuo\\scripts\\verify-r86-ordinary-chat.cjs:20:2\n    at Object.<anonymous> (D:\\zhongshuo\\scripts\\verify-r86-ordinary-chat.cjs:24:188)\n    at Module._compile (node:internal/modules/cjs/loader:1854:14)\n    at Object..js (node:internal/modules/cjs/loader:1985:10)\n    at Module.load (node:internal/modules/cjs/loader:1577:32)\n    at Module._load (node:internal/modules/cjs/loader:1379:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47"
+}

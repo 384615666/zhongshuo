@@ -1,0 +1,132 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:27:07.331Z",
+  "scope": "independent readonly deduplicated product real_calls in prepared owned review-r86 roots, not assistant usage/HTTP billing",
+  "roots": [
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "build": "bld_07ef3cd9b4b08add",
+      "calls": 3,
+      "byStatus": {
+        "succeeded": 2,
+        "failed": 1
+      }
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "build": "bld_07ef3cd9b4b08add",
+      "calls": 29,
+      "byStatus": {
+        "succeeded": 29
+      }
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "build": "bld_cf50e93cc0db5723",
+      "calls": 32,
+      "byStatus": {
+        "succeeded": 31,
+        "failed": 1
+      }
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "build": "bld_cf50e93cc0db5723",
+      "calls": 21,
+      "byStatus": {
+        "succeeded": 19,
+        "failed": 2
+      }
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "build": "bld_cf50e93cc0db5723",
+      "calls": 6,
+      "byStatus": {
+        "succeeded": 6
+      }
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "build": "bld_19cfe41229996380",
+      "calls": 29,
+      "byStatus": {
+        "succeeded": 29
+      }
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "build": "bld_a9b6180a48c8053a",
+      "calls": 15,
+      "byStatus": {
+        "succeeded": 13,
+        "failed": 1,
+        "interrupted": 1
+      }
+    },
+    {
+      "root": "review-r86-real-rc4-20261015",
+      "build": "bld_6ed461af6e2d6884",
+      "calls": 1,
+      "byStatus": {
+        "failed": 1
+      }
+    },
+    {
+      "root": "review-r86-real-rc5-20261015",
+      "build": "bld_7bc2e235e2625fc6",
+      "calls": 1,
+      "byStatus": {
+        "failed": 1
+      }
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "build": "bld_bfb38f295d978b95",
+      "calls": 5,
+      "byStatus": {
+        "succeeded": 5
+      }
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "build": "bld_9fa40125a99e71b6",
+      "calls": 13,
+      "byStatus": {
+        "succeeded": 13
+      }
+    },
+    {
+      "root": "review-r86-real-two-sol-20261015",
+      "build": "bld_7bc2e235e2625fc6",
+      "calls": 1,
+      "byStatus": {
+        "succeeded": 1
+      }
+    },
+    {
+      "root": "review-r86-real-two-sol-current-20261015",
+      "build": "bld_7bc2e235e2625fc6",
+      "calls": 1,
+      "byStatus": {
+        "succeeded": 1
+      }
+    }
+  ],
+  "totals": {
+    "attempts": 157,
+    "byStatus": {
+      "succeeded": 149,
+      "failed": 7,
+      "interrupted": 1
+    },
+    "byModel": {
+      "claude/deepseek-flash": 99,
+      "codex/gpt-6.1-sol": 36,
+      "codex/gpt-6-luna": 19,
+      "claude/glm-5.3-flash": 2,
+      "codex/gpt-6-sol": 1
+    }
+  },
+  "errors": []
+}

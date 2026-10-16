@@ -1,0 +1,22 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "approved prototype matched own synthetic facts; additions documented separately; DPR emulated, not physical HiDPI",
+  "inspected": false,
+  "pairs": [],
+  "density": {
+    "members": 2,
+    "tasks": 4,
+    "messages": 16
+  },
+  "additions": "Product adds authoritative coordination graph, actual model snapshots and exact child/delivery navigation; prototype has no corresponding engine. Compare inherited room, thread, tabs and Composer hierarchy; no mock graph claims.",
+  "error": "Error: timeout actual target and selected tab loaded: {\"selected\":\" 回复12\",\"text\":\"收起\\n回复\\n12\\n成果\\n详情\\n首条未读\\n协\\n协调实现 DeepSeek\\n09:05\\n#2\\n已提交协作计划，按你要求的顺序执行：① DeepSeek 先在当前项目目录创建 greeting.mjs（导出 greet(name)，返回“你好，名字”）和对应的 Node 测试，并实际跑通；\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r86-visual-pairs.cjs:21:266"
+}

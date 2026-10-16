@@ -1,0 +1,125 @@
+{
+  "pass": false,
+  "scope": "one original native UI real AUTO send, v1 only; no automatic rework/retry",
+  "build": {
+    "buildId": "bld_7bc2e235e2625fc6",
+    "commit": "7f9afe484731e831893dd283bf02d74d5c6a2d66",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T10:38:51.483Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "startedAt": 1792060786158,
+  "calls": [
+    {
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "glm-5.3-flash",
+      "response_model": null,
+      "status": "inflight",
+      "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+      "turn_id": "turn_3113abff-7d52-42e7-9552-fb6beb98ce0f"
+    }
+  ],
+  "root": {
+    "id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+    "conversation_thread_id": "thread_9b663b47-e793-4250-9051-ec12b60acad4",
+    "title": "请协调两位成员合作完成一个小功能：创建 greeting.mjs，导出 greet(name)，返回“你好，名字”；创建",
+    "root_message_id": "msg_bb4c7dcc-1320-4d90-aca2-4c34559eed9e",
+    "route_json": "{\"kind\":\"dispatch\",\"mode\":\"AUTO\",\"coordinatorMemberId\":\"m_3dbec27b-7a8f-41df-ac4e-3d1ef8500fe5\",\"frozenMemberIds\":[\"m_3dbec27b-7a8f-41df-ac4e-3d1ef8500fe5\"],\"initialWakeMemberIds\":[\"m_3dbec27b-7a8f-41df-ac4e-3d1ef8500fe5\"]}"
+  },
+  "live": {
+    "task": {
+      "id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+      "status": "ACTIVE",
+      "current_delivery_id": null,
+      "revision": 1,
+      "stop_generation": 0
+    },
+    "coordination": [
+      {
+        "run_id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+        "stop_generation": 0,
+        "state": "planning",
+        "plan_json": null,
+        "integration_run_id": null,
+        "error_message": null,
+        "created_at": 1792060783145
+      }
+    ],
+    "steps": [],
+    "runs": [
+      {
+        "id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+        "mode": "AUTO",
+        "status": "RUNNING",
+        "stage": "规划分工",
+        "budget_json": "{\"grantId\":\"run_b06c51b4-eaed-487e-b3df-691188086eef\",\"maxTurns\":24,\"usedTurns\":0,\"inFlightReservedTurns\":1}"
+      }
+    ],
+    "turns": [
+      {
+        "id": "turn_3113abff-7d52-42e7-9552-fb6beb98ce0f",
+        "member_id": "m_3dbec27b-7a8f-41df-ac4e-3d1ef8500fe5",
+        "status": "RUNNING",
+        "run_id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "dispatch_key": "task:task_05de3804-52d1-4b87-99b7-08f26a899952:initial"
+      }
+    ],
+    "deliveries": [],
+    "tools": []
+  },
+  "failure": {
+    "task": {
+      "id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+      "status": "ACTIVE",
+      "current_delivery_id": null,
+      "revision": 1,
+      "stop_generation": 0
+    },
+    "coordination": [
+      {
+        "run_id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+        "stop_generation": 0,
+        "state": "blocked",
+        "plan_json": null,
+        "integration_run_id": null,
+        "error_message": "协调执行未完成，请查看运行原因",
+        "created_at": 1792060783145
+      }
+    ],
+    "steps": [],
+    "runs": [
+      {
+        "id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+        "mode": "AUTO",
+        "status": "FAILED",
+        "stage": "规划分工",
+        "budget_json": "{\"grantId\":\"run_b06c51b4-eaed-487e-b3df-691188086eef\",\"maxTurns\":24,\"usedTurns\":1,\"inFlightReservedTurns\":0}"
+      }
+    ],
+    "turns": [
+      {
+        "id": "turn_3113abff-7d52-42e7-9552-fb6beb98ce0f",
+        "member_id": "m_3dbec27b-7a8f-41df-ac4e-3d1ef8500fe5",
+        "status": "FAILED",
+        "run_id": "run_b06c51b4-eaed-487e-b3df-691188086eef",
+        "dispatch_key": "task:task_05de3804-52d1-4b87-99b7-08f26a899952:initial"
+      }
+    ],
+    "deliveries": [],
+    "tools": [
+      {
+        "kind": "turn.statusChanged",
+        "turn_id": "turn_3113abff-7d52-42e7-9552-fb6beb98ce0f",
+        "payload_json": "{\"status\":\"FAILED\",\"code\":\"PROVIDER_ERROR\",\"message\":\"API Error: Request rejected (429) · [1310][您已达到每周/每月使用上限，您的限额将在 2026-10-16 19:42:30 重置。][20261015184258dec55145618842d9] (request id: 202610151042587208361598268d9d6angZehvl)\",\"retryable\":true}"
+      }
+    ]
+  },
+  "error": "Error: original collaboration failed/unknown; not automatically repeated\n    at D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:77:153\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:86)\n    at async observe (D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:76:18)\n    at async D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:90:77"
+}

@@ -1,0 +1,98 @@
+{
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "pass": false,
+  "checks": {
+    "cleanDistribution": true,
+    "source": true,
+    "distinctActualModels": true,
+    "genuineDependencyFlow": true,
+    "readablePlanningWindow": true,
+    "exactNativeExecution": false,
+    "explicitV2AcceptanceAndReopen": true,
+    "reworkRunningWindow": true,
+    "documentCollaboration": false,
+    "selectedDeliberation": false,
+    "ordinaryConversation": true,
+    "nativeNavigation": true,
+    "zeroInferenceRegression": true,
+    "upgradeAndRollback": true,
+    "inspectedVisualPairs": true,
+    "originalFailuresAndCalls": false
+  },
+  "failed": [
+    "exactNativeExecution",
+    "documentCollaboration",
+    "selectedDeliberation",
+    "originalFailuresAndCalls"
+  ],
+  "userAcceptance": "pending",
+  "evidence": {
+    "own": "review-r86-final-rc11-luna-20261016",
+    "source": {
+      "pass": true,
+      "testedRuntimeCommit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+      "mainTypes": true,
+      "hifiTypes": true,
+      "lint": true,
+      "addedErrors": [],
+      "existingErrorCount": 33,
+      "mainTypesOutputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "hifiTypesOutputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "lintedFiles": 59,
+      "tests": 1164,
+      "files": 163,
+      "fullLog": "full-a2bc376.log"
+    },
+    "distribution": {
+      "pass": true,
+      "build": {
+        "buildId": "bld_cf50e93cc0db5723",
+        "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T15:02:54.754Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "files": 593,
+      "pristine": true
+    },
+    "nativeProofs": [
+      {
+        "pass": true,
+        "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "delivery": {
+          "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+          "revision": 1,
+          "manifestHash": "4ea0e659b51ff5875940300879bd0e95d240028c9e32c2899089360d4b2462d7",
+          "coordinationRunId": "run_2a620b25-b9b1-487e-9cad-6399bc88689b"
+        }
+      },
+      {
+        "pass": true,
+        "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "delivery": {
+          "id": "dlv_turn_ecbbb943-3339-4c51-920f-659c1e17fb87",
+          "revision": 2,
+          "manifestHash": "eeadb913d7c513e91b8af3be0d3b81eb95f4beedc5a79eab6d9213e2645d175a",
+          "coordinationRunId": "run_e4747eaf-96ec-4c29-a17b-00a6b3948d23"
+        }
+      },
+      null,
+      null
+    ]
+  },
+  "fullEvidence": "review-r86-final-rc11-full-20261015",
+  "codeEvidence": "real-code-v1.json",
+  "collaborationEvidence": "review-r86-final-rc11-collaboration-20261016",
+  "visualEvidence": "review-r86-final-rc11-visual-v5-20261016",
+  "scope": "same frozen runtime BUILD; source tests, native UI/model workflows, explicit engineering Fake and upgrade evidence separated"
+}

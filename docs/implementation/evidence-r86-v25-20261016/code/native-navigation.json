@@ -1,0 +1,68 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "native SKY clicks/task+delivery+return, draft typing and Ctrl+R; Chromium API back/forward separately identified",
+  "nativeMouseKeyboard": true,
+  "nativeBackShortcutHandled": false,
+  "childTask": true,
+  "exactDelivery": true,
+  "backAndRefresh": true,
+  "rootDraftAndActionsUnchanged": true,
+  "history": [
+    {
+      "id": 2,
+      "index": 0,
+      "hash": ""
+    },
+    {
+      "id": 4,
+      "index": 1,
+      "hash": "#task=task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    },
+    {
+      "id": 5,
+      "index": 2,
+      "hash": "#/project/prj_83c30f65-0d26-43b7-89e3-0650e7389672/room/room_default_prj_83c30f65-0d26-43b7-89e3-0650e7389672?thread=thread_a9540bba-0f59-4e17-9f76-597e219759f5&tab=task"
+    },
+    {
+      "id": 6,
+      "index": 3,
+      "hash": "#task=task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa"
+    },
+    {
+      "id": 7,
+      "index": 4,
+      "hash": "#/thread/thread_a9540bba-0f59-4e17-9f76-597e219759f5?tab=task&task=task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa"
+    },
+    {
+      "id": 8,
+      "index": 5,
+      "hash": "#task=task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    },
+    {
+      "id": 9,
+      "index": 6,
+      "hash": "#/thread/thread_a9540bba-0f59-4e17-9f76-597e219759f5?tab=task"
+    },
+    {
+      "id": 10,
+      "index": 7,
+      "hash": "#delivery=dlv_turn_61612d43-0c84-4577-8f8e-f1af0357cc78"
+    },
+    {
+      "id": 11,
+      "index": 8,
+      "hash": "#/project/prj_83c30f65-0d26-43b7-89e3-0650e7389672/room/room_default_prj_83c30f65-0d26-43b7-89e3-0650e7389672?thread=thread_a9540bba-0f59-4e17-9f76-597e219759f5&tab=task&task=task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa&delivery=dlv_turn_61612d43-0c84-4577-8f8e-f1af0357cc78"
+    }
+  ],
+  "actualCalls": 21,
+  "historyBackend": "Chromium Page.navigateToHistoryEntry, not claimed as native Alt+Left support"
+}

@@ -1,0 +1,18 @@
+{
+  "runtimeCommit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+  "fullLog": "full-a2bc376.log",
+  "testFiles": 163,
+  "tests": 1164,
+  "applicationSourceChangedSinceFreeze": false,
+  "qaOnlyAdditionalReworkWindowGate": true,
+  "harness": [
+    {
+      "file": "scripts/lib/r86-final-gates.cjs",
+      "sha256": "f6765fcf611b0b69cda2f760ea14b3a265a893b6f234fe47382191cdc61f13f2"
+    },
+    {
+      "file": "tests/unit/finalGatesR86.test.ts",
+      "sha256": "a1f1550df2811fa12c0d3d7ab1a5504e96f6c0d37bbbaab4767a8d3fc1ad20f3"
+    }
+  ]
+}

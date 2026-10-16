@@ -1,0 +1,23 @@
+{
+  "buildId": "bld_cf50e93cc0db5723",
+  "runtimeCommit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+  "scope": "R86 current external guides",
+  "files": [
+    {
+      "file": "README-DAILY.md",
+      "sha256": "547bbf8514f2c3bf532a1bfb70e9b7122c4efbce67b15470dd0932478efdc5a0"
+    },
+    {
+      "file": "README-CANDIDATE.md",
+      "sha256": "3b68d990b7548049d3f7544b7ba2877c28918ab9666041480572adc82552e56e"
+    },
+    {
+      "file": "UPGRADE.md",
+      "sha256": "30a9ea434dd746962f8730b1c50663c1d24cafd549ea98219badae8a22133944"
+    },
+    {
+      "file": "UPGRADE-V23.md",
+      "sha256": "30a9ea434dd746962f8730b1c50663c1d24cafd549ea98219badae8a22133944"
+    }
+  ]
+}

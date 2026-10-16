@@ -1,0 +1,131 @@
+{
+  "pass": true,
+  "scope": "independent actual inspection of twelve supplied PNGs/six same viewport/theme/DPR pairs, inherited room/thread/details/composer hierarchy only; not pixel equivalence or all-app audit",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "images": [
+    {
+      "file": "replies-wide-actual.png",
+      "sha256": "b5de4d7e3a90963171c6e4ce6402bb4d83557a265426345631182d4744a9be3a",
+      "pixels": {
+        "width": 1440,
+        "height": 900
+      },
+      "viewed": true
+    },
+    {
+      "file": "replies-wide-prototype.png",
+      "sha256": "37482b04f443ced308b11fbf0046bdc03869e67a5edd67a4feafb7f178852c50",
+      "pixels": {
+        "width": 1440,
+        "height": 900
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-wide-actual.png",
+      "sha256": "fac8971fe680dc93542557f1888f5ba9a1de486dc00a3eb22a18666a0f282a66",
+      "pixels": {
+        "width": 1440,
+        "height": 900
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-wide-prototype.png",
+      "sha256": "c33cf0289cf36806f687a08788bf965e66fe11f9ef8b8398010f6386fdc24a45",
+      "pixels": {
+        "width": 1440,
+        "height": 900
+      },
+      "viewed": true
+    },
+    {
+      "file": "replies-narrow-actual.png",
+      "sha256": "0349d417b73c11424725e9ee60b3ab9b39a4f4796e70592f9d09eb370fb9560c",
+      "pixels": {
+        "width": 1000,
+        "height": 800
+      },
+      "viewed": true
+    },
+    {
+      "file": "replies-narrow-prototype.png",
+      "sha256": "ac4f27277ca7242898a1546d880149aa903f298d146bf004d5f01b4722a63c66",
+      "pixels": {
+        "width": 1000,
+        "height": 800
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-narrow-actual.png",
+      "sha256": "15ddbb95c457eebb5fe6dc53fdfe7d24cd3b074a7c8e0f59705e0090b8375756",
+      "pixels": {
+        "width": 1000,
+        "height": 800
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-narrow-prototype.png",
+      "sha256": "0c102777444f7fabe47fda576fa485c58fae93114e3a9844ad17d84b6f6dd6f9",
+      "pixels": {
+        "width": 1000,
+        "height": 800
+      },
+      "viewed": true
+    },
+    {
+      "file": "replies-hidpi-emulated-actual.png",
+      "sha256": "622ed662bc7597290a3c264201082af299589a6b18f2acf5563aa3eba43f9a62",
+      "pixels": {
+        "width": 2160,
+        "height": 1350
+      },
+      "viewed": true
+    },
+    {
+      "file": "replies-hidpi-emulated-prototype.png",
+      "sha256": "f1c9de48e7eeb6787b187386e73bdb42e4a51a24847b020dcdc61ff861aa443f",
+      "pixels": {
+        "width": 2160,
+        "height": 1350
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-hidpi-emulated-actual.png",
+      "sha256": "da25cba4ce8c631c4c611419a4c006b4e9d29a293f9bbfb3d63d6755101f71e8",
+      "pixels": {
+        "width": 2160,
+        "height": 1350
+      },
+      "viewed": true
+    },
+    {
+      "file": "task-hidpi-emulated-prototype.png",
+      "sha256": "4b148e6be389984c13adf1dae96a877a7855ea807711dd11c8f7778df0106912",
+      "pixels": {
+        "width": 2160,
+        "height": 1350
+      },
+      "viewed": true
+    }
+  ],
+  "errors": [],
+  "findings": [
+    "Wide: sidebar/main pool/thread separation and Composer remain readable; actual includes previously required human root and authoritative statuses unlike prototype.",
+    "1000x800: single thread region, back control and Composer reachable; no clipped actual controls observed.",
+    "DPR1.5: explicitly Chromium emulation; prototype retained a narrower thread/split than actual, so not a geometry-identical comparison. Actual text and inputs remain readable.",
+    "Runtime/acceptance sub-tabs, update timestamp and current facts are intentional functional additions; prototype fake status/missing histories not treated as product evidence."
+  ],
+  "observedAt": "2026-10-16T06:27:02.224Z"
+}

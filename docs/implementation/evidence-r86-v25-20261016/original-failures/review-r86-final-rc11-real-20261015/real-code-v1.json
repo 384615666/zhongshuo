@@ -1,0 +1,150 @@
+{
+  "pass": false,
+  "scope": "one original native UI real AUTO send, v1 only; no automatic rework/retry",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "startedAt": 1792077169764,
+  "calls": [
+    {
+      "id": 1,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+      "turn_id": "turn_b3c481a2-b039-43ac-9e29-843b5024e0f9"
+    },
+    {
+      "id": 2,
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": null,
+      "status": "inflight",
+      "task_id": "task_6adeb049-955d-4fc1-a844-01b7202252e3",
+      "turn_id": "turn_f6c5945d-243e-4189-8266-2cc031b2ce09"
+    }
+  ],
+  "root": {
+    "id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+    "conversation_thread_id": "thread_4b85bccb-7db9-47bd-a793-95f88a60ca11",
+    "title": "请协调两位成员合作完成一个小功能：创建 greeting.mjs，导出 greet(name)，返回“你好，名字”；创建",
+    "root_message_id": "msg_23832c88-35fd-4cee-b9ae-abc0b8f27e17",
+    "route_json": "{\"kind\":\"dispatch\",\"mode\":\"AUTO\",\"coordinatorMemberId\":\"m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6\",\"frozenMemberIds\":[\"m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6\"],\"initialWakeMemberIds\":[\"m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6\"]}"
+  },
+  "live": {
+    "task": {
+      "id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+      "status": "ACTIVE",
+      "current_delivery_id": null,
+      "revision": 2,
+      "stop_generation": 0
+    },
+    "coordination": [
+      {
+        "run_id": "run_11bbf8a4-0ecd-407c-aed0-3acda5736795",
+        "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+        "stop_generation": 0,
+        "state": "running",
+        "plan_json": "{\"summary\":\"两人协作完成 greeting.mjs 小功能：先由『协调实现 DeepSeek』在当前合成工程目录创建 greeting.mjs（导出 greet(name)，返回「你好，名字」）与配套 Node 测试，并实际运行、回报真实命令与输出；再由不同模型的『独立评审 Codex』独立读取磁盘实际文件、复跑测试并评审缺陷；最后由协调者汇总实施与评审的真实结果，形成验收摘要交用户。评审步骤依赖实施步骤；评审与后续整合均为只读，实施仅在当前工程目录内写文件。若评审发现真实缺陷，先修复重跑再收尾。\",\"steps\":[{\"key\":\"implement\",\"memberId\":\"m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6\",\"title\":\"创建 greeting.mjs 与 Node 测试并实际运行\",\"objective\":\"在当前合成工程目录内创建 greeting.mjs：导出 greet(name)，返回「你好，名字」形式（即 `你好，${name}`）。创建配套 Node 测试（如 greeting.test.mjs，使用 node:test + node:assert；至少断言 greet('小明') === '你好，小明'，并含一个边界用例如空字符串）。随后实际运行测试（如 `node --test` 或 `node greeting.test.mjs`），回报：文件路径、真实运行命令、原始输出摘要、通过/失败数与任何异常。仅写当前工程目录内的文件；完成后简要说明真实结果。\",\"role\":\"implementation\",\"dependsOn\":[]},{\"key\":\"review\",\"memberId\":\"m_3d689015-c3d5-4137-8338-65e27b8df49b\",\"title\":\"独立读取实际文件并复跑测试评审\",\"objective\":\"在实施完成后，独立读取磁盘上的实际文件 greeting.mjs 与测试文件（以磁盘内容为准，不依赖实施者描述），核验：导出名与导出方式（greet）、参数 name、返回值确为「你好，名字」格式、边界输入（空串/特殊字符等）行为；检查测试是否含有效断言且确实被执行。实际复跑测试命令并记录原始输出。列出发现的任何缺陷（附文件/行为证据与严重程度）或明确说明未发现缺陷；只读，不修改任何文件。\",\"role\":\"review\",\"dependsOn\":[\"implement\"]}]}",
+        "integration_run_id": null,
+        "error_message": null,
+        "created_at": 1792077512968
+      }
+    ],
+    "steps": [
+      {
+        "run_id": "run_11bbf8a4-0ecd-407c-aed0-3acda5736795",
+        "step_key": "implement",
+        "child_task_id": "task_6adeb049-955d-4fc1-a844-01b7202252e3",
+        "role": "implementation",
+        "handoff_json": "{\"upstream\":[]}",
+        "owner_member_id": "m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6",
+        "title": "创建 greeting.mjs 与 Node 测试并实际运行",
+        "status": "ACTIVE",
+        "current_delivery_id": null
+      },
+      {
+        "run_id": "run_11bbf8a4-0ecd-407c-aed0-3acda5736795",
+        "step_key": "review",
+        "child_task_id": "task_3a275dbd-8e42-49c4-a60a-44d65044cb7e",
+        "role": "review",
+        "handoff_json": null,
+        "owner_member_id": "m_3d689015-c3d5-4137-8338-65e27b8df49b",
+        "title": "独立读取实际文件并复跑测试评审",
+        "status": "OPEN",
+        "current_delivery_id": null
+      }
+    ],
+    "runs": [
+      {
+        "id": "run_11bbf8a4-0ecd-407c-aed0-3acda5736795",
+        "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+        "mode": "AUTO",
+        "status": "WAITING",
+        "stage": "分工执行",
+        "budget_json": "{\"grantId\":\"run_11bbf8a4-0ecd-407c-aed0-3acda5736795\",\"maxTurns\":24,\"usedTurns\":1,\"inFlightReservedTurns\":0}"
+      },
+      {
+        "id": "run_eb046b90-1a94-4030-b3bf-85d7082a2794",
+        "task_id": "task_6adeb049-955d-4fc1-a844-01b7202252e3",
+        "mode": "DIRECT",
+        "status": "RUNNING",
+        "stage": null,
+        "budget_json": "{\"grantId\":\"run_eb046b90-1a94-4030-b3bf-85d7082a2794\",\"maxTurns\":24,\"usedTurns\":1,\"inFlightReservedTurns\":1}"
+      }
+    ],
+    "turns": [
+      {
+        "id": "turn_b3c481a2-b039-43ac-9e29-843b5024e0f9",
+        "member_id": "m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6",
+        "status": "SUCCEEDED",
+        "run_id": "run_11bbf8a4-0ecd-407c-aed0-3acda5736795",
+        "dispatch_key": "task:task_693f2a7f-a43a-4c27-8ace-230e026b76d5:initial"
+      },
+      {
+        "id": "turn_f6c5945d-243e-4189-8266-2cc031b2ce09",
+        "member_id": "m_327f9e7c-5b50-45ce-bc64-b84151bdd1e6",
+        "status": "RUNNING",
+        "run_id": "run_eb046b90-1a94-4030-b3bf-85d7082a2794",
+        "dispatch_key": "task:task_6adeb049-955d-4fc1-a844-01b7202252e3:initial"
+      }
+    ],
+    "deliveries": [],
+    "tools": [
+      {
+        "kind": "tool.started",
+        "turn_id": "turn_b3c481a2-b039-43ac-9e29-843b5024e0f9",
+        "payload_json": "{\"toolCallId\":\"call_00_dRIEIu17xnImSIh9sC8F6365\",\"toolName\":\"StructuredOutput\",\"eventKey\":\"cevt_51785eb971106ec883ae\"}"
+      },
+      {
+        "kind": "tool.completed",
+        "turn_id": "turn_b3c481a2-b039-43ac-9e29-843b5024e0f9",
+        "payload_json": "{\"toolCallId\":\"call_00_dRIEIu17xnImSIh9sC8F6365\",\"outcome\":\"success\",\"eventKey\":\"cevt_5178a053c2167d0768f9\"}"
+      }
+    ]
+  },
+  "planningWindow": {
+    "pass": false,
+    "mainPool": true,
+    "thread": false,
+    "noControl": true,
+    "whileChildrenUnfinished": true,
+    "originalProtocolPreserved": true,
+    "rawProtocolHash": "42ab77eb37c2af6aeefbf394a3918affc8a395a1569d3b0d54f4a6d666db9cb5",
+    "messageId": "msg_turn_b3c481a2-b039-43ac-9e29-843b5024e0f9_claude_4ec914f8",
+    "at": 1792077701898,
+    "view": {
+      "main": "协调实现 DeepSeek分工已排好（本轮为只读规划，没有动文件）：\n\n1) 实施：『协调实现 DeepSeek』在当前工程目录创建 greeting.mjs（导出 greet(name)，返回「你好，名字」）和对应 Node 测试（node:test），并实际运行、回报真实命令与原始输出；\n2) 独立评审：完成后由另一模型的『独立评审 Codex』独立读取磁盘上的实际文件、复跑测试，核验导出与返回格式及边界情况，指出缺陷（如有）；\n3) 收尾：随后由我汇总真实运行与评审结论交你验收；若评审发现真实缺陷，先修复重跑再收尾。\n\n文件只会创建在当前合成工程目录内。等实施与评审跑完，我带着真实结果回来。",
+      "thread": "协调实现 DeepSeek\n23:21\n#1\n分工已排好（本轮为只读规划，没有动文件）： 1) 实施：『协调实现 DeepSeek』在当前工程目录创建 greeting.mjs（导出 greet(name)，返回「你好，名字」）和对应 Node 测试（node:test），并实际运行、回报真实命令与原始输出； 2) 独立评审：完成后由另一模型的『独立评审 Codex』独立读取磁盘上的实际文件、复跑测试，核验导出与返回格式及边界情况，指出缺陷（如有）； 3) 收尾：随后由我汇总真实运行与评审结论交你验收；若评审发现真实缺陷，先修复重跑再收尾。 文件只会创建在当前合成工程目录内。等实施与评审跑完，我带着真实结果回来。\n👍\n👀",
+      "hash": "#/project/prj_59ad67a1-7f75-4ded-bbcc-27908726579d/room/room_default_prj_59ad67a1-7f75-4ded-bbcc-27908726579d?thread=thread_4b85bccb-7db9-47bd-a793-95f88a60ca11"
+    }
+  },
+  "error": "Error: planning chat leaked control JSON before child completion\n    at must (D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:23:42)\n    at D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:89:759\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:80)\n    at async observe (D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:84:18)\n    at async D:\\zhongshuo\\scripts\\verify-r86-real-launcher.cjs:106:77"
+}

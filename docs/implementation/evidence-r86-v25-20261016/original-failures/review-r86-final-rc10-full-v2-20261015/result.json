@@ -1,0 +1,76 @@
+{
+  "pass": false,
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v25-rc10",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-v2-20261015\\copy",
+  "buildId": "bld_07ef3cd9b4b08add",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "port": 52835,
+  "project": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-v2-20261015\\R78 UI 工程项目",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept"
+  ],
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "failed-step",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "daemon": {
+    "buildId": "bld_07ef3cd9b4b08add",
+    "packedEntry": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-v2-20261015\\copy\\ZhongshuoDual\\resources\\app\\daemon\\daemon.cjs",
+    "appDataDir": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc10-full-v2-20261015\\copy\\server-data",
+    "pipeName": "\\\\.\\pipe\\zs-daily-1651bf4e-b930-4a5c-b673-8846002c469d",
+    "pid": 44012,
+    "fakeAdapterInjected": true,
+    "realDispatchGuard": true,
+    "at": 1792075295979
+  },
+  "ids": {
+    "projectId": "prj_282e6465-e0a5-444a-b3b6-917730099b4f",
+    "memberId": "m_default_prj_282e6465-e0a5-444a-b3b6-917730099b4f_0",
+    "roomId": "room_a9ed7369-d671-486c-8d3a-e6df936c6b85",
+    "roomConversationId": "conv_57e2a815-b953-4fe1-8e32-a153c6d22181",
+    "dmConversationId": "dm_3ca11df5-8fb7-40bf-839e-6face5fb1196",
+    "roomTaskId": "task_72159e6c-1271-4f7b-90d7-e4a08abb5cfa",
+    "roomThreadId": "thread_66b5b75b-7207-4f64-8071-a8d38e363d5a",
+    "dmTaskId": "task_b8041760-8dcc-4e3a-946e-5165abc786ff"
+  },
+  "error": "Error: 'Browser.getWindowForTarget' wasn't found\n    at WebSocket.<anonymous> (D:\\zhongshuo\\scripts\\verify-r78-workflow-launcher.cjs:56:33)\n    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:843:20)\n    at WebSocket.dispatchEvent (node:internal/event_target:776:26)\n    at fireEvent (node:internal/deps/undici/undici:14186:14)\n    at #onMessage (node:internal/deps/undici/undici:15474:9)\n    at Object.onMessage (node:internal/deps/undici/undici:15187:76)\n    at websocketMessageReceived (node:internal/deps/undici/undici:14190:15)\n    at node:internal/deps/undici/undici:14896:19\n    at node:internal/deps/undici/undici:14710:11\n    at afterWrite (node:internal/streams/writable:708:5)",
+  "finalRealCalls": 0
+}

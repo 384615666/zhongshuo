@@ -1,0 +1,61 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+  "delivery": {
+    "id": "dlv_turn_1bad233f-ec1a-40b4-9061-6502714683bc",
+    "run_id": "run_c4d29b12-9815-42fd-b2a6-239149d59664",
+    "revision": 1,
+    "manifest_hash": "103a6f527deb51afd9968dd61b11d4f481e14980b34c33845568ca58c8c44cfb",
+    "review_status": "pending",
+    "artifact_refs_json": "[\"turn:turn_1bad233f-ec1a-40b4-9061-6502714683bc:final\",\"turn:turn_59797cee-b498-4616-9f11-4c454f29b379:final\",\"turn:turn_dd353053-051b-4960-a1d3-597021f92aff:final\",\"turn:turn_6d305934-2272-43e8-aee4-7cc9db9360db:final\",\"turn:turn_27ddceca-c08e-4593-8b69-567b3f9bee9b:final\"]",
+    "change_set_refs_json": "[\"cs_33bc1df2-91cc-4d4a-bd24-15bc0b1637fa\",\"cs_b546394a-c7db-4bf8-9dbb-bd23bc78270d\",\"cs_2f0da1eb-ccfc-4f70-bdea-7f60ecdf3bd3\"]"
+  },
+  "scope": "native file-tree open and inspected Markdown in existing pane; native system Save As; read-only identity/hash verification",
+  "inspected": true,
+  "sourceHash": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+  "bytes": 5586,
+  "render": {
+    "title": "本地待办清单 需求文档",
+    "headings": [
+      "1. 目标",
+      "2. 主要功能",
+      "3. 不做范围（明确暂不实现）",
+      "4. 失败处理",
+      "5. 可验收标准"
+    ],
+    "text": "本地待办清单 需求文档\n版本：v0.3（终稿：已按独立评审意见修订并经复核整合）\n场景：单人使用，数据仅存本机\n交付形态：本期仅命令行（CLI）工具，单机运行；交互与验收均以命令行为准\n交付物：本文件（requirements.md）\n1. 目标\n\n为单个用户提供轻量、离线、数据完全保存在本机的待办清单工具，实现“快速记录—查看—完成—清理”的闭环。\n\n单人使用：无账号、无登录、无多用户协作。\n数据仅存本机：不联网、不上传、不同步；断网时全部功能可用。\n轻量可靠：操作直接、启动快；异常时不崩溃、不静默丢失数据。\n文本口径（全文统一）：待办“文本”指去掉首尾空白后的内容；长度按 Unicode 码点（code point）计数（组合字符、emoji 按所含码点数计），有效范围 1–500；空格、制表符、换行均属空白字符。\n2. 主要功能\n编号\t功能\t说明\t验收标准\nF1\t新增待办\t输入文本创建一条待办，默认“未完成”\t提交 1–500 字符的非空白文本后，列表立即出现该条目；空/纯空白或超过 500 字符被拒绝并提示\nF2\t查看列表\t展示全部待办及完成状态\t列表完整显示所有条目，完成与未完成状态可区分\nF3\t标记完成/取消完成\t切换单条待办的完成状态\t切换后状态立即变化，且重启后保持一致\nF4\t编辑内容\t修改已有待办的文本\t修改后立即生效，重启后显示新内容；新文本同样满足 1–500 字符且非纯空白\nF5\t删除待办\t删除单条待办\t删除后列表不再显示，重启后不恢复\nF6\t本地持久化\t数据保存到本机文件（默认 todos.json）\t关闭并重启后，清单与关闭前一致\nF7\t状态筛选\t按“全部 / 未完成 / 已完成”筛选列表\t各筛选视图只显示对应状态的条目\n3. 不做范围（明确暂不实现）\n\n以下能力本期明确不做：\n\n多用户与账号体系（注册、登录、权限）。\n云同步、跨设备同步及任何形式的网络传输。\n协作与分享（指派、评论、共享清单）。\n提醒与通知（截止提醒、系统弹窗、声音）。\n截止日期、优先级、标签、分类等高级组织方式。\n全文搜索与批量操作。\n数据导入/导出及与其他应用的集成。\n桌面 GUI 与移动端 App；本期交付形态仅为命令行（CLI）。\n多副本备份与加密存储（数据仅本机单文件存放）。\n4. 失败处理\n失败场景\t处理方式\n首次启动，数据文件不存在\t自动创建空清单，不报错\n数据文件损坏（解析失败）\t不崩溃：将损坏文件重命名（移动）为 todos.json.bak，若该备份已存在则直接覆盖（仅保留最近一份）；重建空清单并提示用户\n写入失败（磁盘满 / 无权限）\t保留内存清单不变，明确提示“保存失败”，不静默丢弃；后续任一写操作（新增/编辑/删除/切换状态）自动重试保存；退出前若仍未保存成功，提示存在未保存内容并要求确认（重试或放弃）\n写入过程意外中断（崩溃 / 断电）\t保存采用“临时文件 todos.json.tmp + 原子重命名”；适用条件（本期）：目标平台为 Windows 本地磁盘，临时文件与数据文件位于同一目录（同一文件系统/卷），todos.json 已存在时由重命名直接覆盖替换；启动时若发现残留 .tmp，直接删除、不读取、不提示错误，一律以 todos.json 为准\n输入为空或全为空白字符\t拒绝保存并提示“内容不能为空”（空白=空格、制表符、换行）\n输入超过 500 字符\t拒绝保存并提示“超过 500 字符上限”（按去掉首尾空白后的 Unicode 码点数计）\n编辑 / 删除不存在的条目\t提示“条目不存在”，刷新列表，不崩溃\n5. 可验收标准\n\n逐条可检验（通过 / 不通过）：\n\n新增待办后列表立即出现；关闭并重启后仍存在。\n标记完成并重启后，完成状态保持一致。\n删除待办后列表不再显示；重启后不恢复。\n提交空或纯空白输入（仅空格/制表符/换行）时，不创建条目并提示“内容不能为空”；提交 501 字符（不含首尾空白）时拒绝并提示上限。\n损坏样例与预期（可重复）：将 todos.json 整体替换为非法内容（如 {bad）或截断为原内容前半段后启动——程序不崩溃；todos.json.bak 内容与改坏后的文件一致；以空清单继续工作。再次重复该操作：旧备份被覆盖，仅保留最近一份。\n断网环境下全部功能与联网时一致（全程无网络请求）。\n数据文件仅出现在本机指定路径下，程序不向其他位置写入数据文件。\n第 4 节所列失败场景逐项验证：均有明确提示、无静默失败，状态保留/恢复方式与第 4 节一致；“无权限”可用只读文件或不可写路径复现，恢复可写后任一写操作即可保存成功并恢复正常提示。\n中断恢复（可重复；在本期平台 Windows 本地磁盘上执行）：保存进行中强制结束进程（或模拟断电）后重启，todos.json 要么为旧的完整版本、要么为新的完整版本，不出现半截内容；残留 .tmp 被清理，程序正常可用。",
+    "width": 562.6375122070312,
+    "height": 28,
+    "url": "#/project/prj_c39cf30e-e0b7-465a-9e0e-c8255eda89f5/files"
+  },
+  "actualPreview": true,
+  "savedHash": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+  "originalSavedHashMatched": true,
+  "contributorsVerified": true,
+  "reviewedFiles": [
+    {
+      "path": "requirements.md",
+      "sha256": "4d8f2dc36d533ffc77475751b58d71f37d8ed696b3e856a5dcadbb7b91a060c2",
+      "deliveryId": "dlv_turn_59797cee-b498-4616-9f11-4c454f29b379",
+      "revision": 1,
+      "manifestHash": "27d056888930392fc316ecd429ab4eab1e4f30aa4e70bf6786d108d907e94048"
+    },
+    {
+      "path": "requirements.md",
+      "sha256": "915a182c8e3c58cbb0be5baeeb83a064a808d69e17a06bd0769c56bdf4b5e860",
+      "deliveryId": "dlv_turn_6d305934-2272-43e8-aee4-7cc9db9360db",
+      "revision": 1,
+      "manifestHash": "83d322fa7705dcd9066c54ebefbb2c968b749dee17a41cfbbd3f25ee16d81612"
+    }
+  ],
+  "reviewCoversCurrentBytes": false
+}

@@ -1,0 +1,175 @@
+{
+  "pass": true,
+  "scope": "new rc11 Luna root v1 only; no claim whole release or user acceptance",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "delivery": {
+    "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+    "revision": 1,
+    "manifest_hash": "4ea0e659b51ff5875940300879bd0e95d240028c9e32c2899089360d4b2462d7"
+  },
+  "calls": [
+    {
+      "id": 1,
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "turn_id": "turn_1ec2396a-834a-42c6-b576-722976f44076",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 2,
+      "task_id": "task_7efd9852-86c3-464e-8964-91e6558f0103",
+      "turn_id": "turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 3,
+      "task_id": "task_71af1dc7-4fce-42b4-aa35-45c22e9db9d7",
+      "turn_id": "turn_fb31cd29-458f-42ea-a864-d53655ffb361",
+      "runtime_kind": "codex",
+      "model": "gpt-6-luna",
+      "response_model": null,
+      "status": "succeeded"
+    },
+    {
+      "id": 4,
+      "task_id": "task_8cb855bb-a272-46d2-a15a-5bc302125353",
+      "turn_id": "turn_869e2ac4-9814-4771-b6be-0969f4ec3bdd",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    },
+    {
+      "id": 6,
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "turn_id": "turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+      "runtime_kind": "claude",
+      "model": "deepseek-flash",
+      "response_model": "deepseek-flash",
+      "status": "succeeded"
+    }
+  ],
+  "steps": [
+    {
+      "key": "impl",
+      "role": "implementation",
+      "taskId": "task_7efd9852-86c3-464e-8964-91e6558f0103"
+    },
+    {
+      "key": "review",
+      "role": "review",
+      "taskId": "task_71af1dc7-4fce-42b4-aa35-45c22e9db9d7"
+    },
+    {
+      "key": "fix",
+      "role": "implementation",
+      "taskId": "task_8cb855bb-a272-46d2-a15a-5bc302125353"
+    }
+  ],
+  "expectedModels": [
+    "claude/deepseek-flash",
+    "codex/gpt-6-luna"
+  ],
+  "reviewInputs": [
+    {
+      "path": "greeting.mjs",
+      "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d",
+      "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+      "revision": 1,
+      "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+    },
+    {
+      "path": "greeting.test.mjs",
+      "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd",
+      "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+      "revision": 1,
+      "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+    }
+  ],
+  "reviewCoversCurrentFinalBytes": true,
+  "reviewScope": "exact immutable upstream version; later dependent implementation/tests are separately bound, no claim Luna reviewed later changed test bytes",
+  "nativeHashes": [
+    {
+      "role": "coordinator",
+      "model": "deepseek-flash",
+      "hashVerified": true,
+      "historicalPrefix": false
+    },
+    {
+      "role": "implementation",
+      "model": "deepseek-flash",
+      "hashVerified": true,
+      "historicalPrefix": false
+    },
+    {
+      "role": "implementation",
+      "model": "deepseek-flash",
+      "hashVerified": true,
+      "historicalPrefix": false
+    },
+    {
+      "role": "coordinator",
+      "model": "deepseek-flash",
+      "hashVerified": true,
+      "historicalPrefix": false
+    },
+    {
+      "role": "review",
+      "model": "gpt-6-luna",
+      "hashVerified": true,
+      "historicalPrefix": false
+    }
+  ],
+  "runVersions": [
+    {
+      "label": "reviewed",
+      "files": [
+        {
+          "name": "greeting.mjs",
+          "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d"
+        },
+        {
+          "name": "greeting.test.mjs",
+          "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd"
+        }
+      ],
+      "exitCode": 0,
+      "tests": 3,
+      "failures": 0
+    },
+    {
+      "label": "final",
+      "files": [
+        {
+          "name": "greeting.mjs",
+          "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d"
+        },
+        {
+          "name": "greeting.test.mjs",
+          "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd"
+        }
+      ],
+      "exitCode": 0,
+      "tests": 3,
+      "failures": 0
+    }
+  ],
+  "planningProtocolUnchanged": true,
+  "errors": [],
+  "observedAt": "2026-10-16T01:12:02.413Z"
+}

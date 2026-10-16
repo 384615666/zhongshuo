@@ -1,0 +1,20 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:26:30.904Z",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "files": 593,
+  "guideFiles": 4,
+  "pristine": true,
+  "committedRuntimeDiff": "",
+  "uncommittedRuntimeDiff": "",
+  "errors": [],
+  "scope": "independent final candidate file sizes/hashes, four guide hashes, unchanged runtime src since clean freeze; not unexecuted user acceptance"
+}

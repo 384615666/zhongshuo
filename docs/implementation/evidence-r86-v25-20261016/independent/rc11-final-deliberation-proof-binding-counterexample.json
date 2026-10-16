@@ -1,0 +1,52 @@
+{
+  "scope": "QA gate binding gap only; not runtime failure or actual DELIB result",
+  "baseline": {
+    "pass": true,
+    "checks": {
+      "cleanDistribution": true,
+      "source": true,
+      "distinctActualModels": true,
+      "genuineDependencyFlow": true,
+      "readablePlanningWindow": true,
+      "exactNativeExecution": true,
+      "explicitV2AcceptanceAndReopen": true,
+      "reworkRunningWindow": true,
+      "documentCollaboration": true,
+      "selectedDeliberation": true,
+      "ordinaryConversation": true,
+      "nativeNavigation": true,
+      "zeroInferenceRegression": true,
+      "upgradeAndRollback": true,
+      "inspectedVisualPairs": true,
+      "originalFailuresAndCalls": true
+    },
+    "failed": [],
+    "userAcceptance": "pending"
+  },
+  "wrongDeliberationNativeTask": {
+    "pass": true,
+    "checks": {
+      "cleanDistribution": true,
+      "source": true,
+      "distinctActualModels": true,
+      "genuineDependencyFlow": true,
+      "readablePlanningWindow": true,
+      "exactNativeExecution": true,
+      "explicitV2AcceptanceAndReopen": true,
+      "reworkRunningWindow": true,
+      "documentCollaboration": true,
+      "selectedDeliberation": true,
+      "ordinaryConversation": true,
+      "nativeNavigation": true,
+      "zeroInferenceRegression": true,
+      "upgradeAndRollback": true,
+      "inspectedVisualPairs": true,
+      "originalFailuresAndCalls": true
+    },
+    "failed": [],
+    "userAcceptance": "pending"
+  },
+  "actualDeliberationTask": "delib-actual",
+  "providedFourthNativeTask": "unrelated-delib",
+  "reproduced": true
+}

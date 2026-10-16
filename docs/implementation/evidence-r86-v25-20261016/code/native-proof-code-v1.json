@@ -1,0 +1,458 @@
+{
+  "pass": true,
+  "expectedModels": [
+    "claude/deepseek-flash",
+    "codex/gpt-6-luna"
+  ],
+  "scope": "actual own CLI context/tools/results; configured model is separate from upstream response_model",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "sessions": [
+    {
+      "sessionId": "claude_sess_392017e6-053e-4ab6-a927-6ae048012009",
+      "providerSessionId": "d1211537-cbc3-4977-81c8-88c6c5d084d4",
+      "memberId": "m_55c35423-5f61-412d-98e6-b0c02ad9cb4a",
+      "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "role": "coordinator",
+      "kind": "claude",
+      "configuredModel": "deepseek-flash",
+      "currentConfiguredModel": "deepseek-flash",
+      "actualRuntimeSnapshot": {
+        "runtime": {
+          "kind": "claude",
+          "model": "deepseek-flash",
+          "permissionMode": "bypassPermissions",
+          "effort": "medium",
+          "installationId": "ri_claude_89ade9281c"
+        },
+        "writeIdentity": "ca877bd8334699a91a3eecbf5b691eeef3f339151199193753eefefd4db316f0",
+        "effectivePolicy": "policy-analyze",
+        "effortVerification": "requested-not-provider-certified",
+        "executablePathHash": "c857d09db23e6822e3600bc06ad8d58f92ed62bc8efd81c753f77048662cb97d"
+      },
+      "transcriptSha256": "a72883ad613d910ccc533caa3c0a22b63785669ce8b4dec6f0570324e9f3a793",
+      "commandExecutions": [],
+      "testCommands": [],
+      "readCommands": [
+        {
+          "id": "call_00_z43Lnr3NL5icKDMN21Wp2383",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.mjs",
+          "matchedInputFiles": [],
+          "success": false,
+          "outputSha256": "f243ca60d99a1304e8a5894efd8e1b5562feb1e6b5bf6e3e0a09bfd06f3397c4"
+        },
+        {
+          "id": "call_01_OwqbSOpx1jw9oeqcCtEp5552",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.test.mjs",
+          "matchedInputFiles": [],
+          "success": false,
+          "outputSha256": "f243ca60d99a1304e8a5894efd8e1b5562feb1e6b5bf6e3e0a09bfd06f3397c4"
+        },
+        {
+          "id": "call_02_na70g1S8OgNCUyCSJivr5668",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\package.json",
+          "matchedInputFiles": [],
+          "success": false,
+          "outputSha256": "f243ca60d99a1304e8a5894efd8e1b5562feb1e6b5bf6e3e0a09bfd06f3397c4"
+        }
+      ],
+      "writeActions": [],
+      "tools": [
+        "Read",
+        "Read",
+        "Read",
+        "StructuredOutput"
+      ],
+      "nativeDelegationObserved": false,
+      "expectedInputFiles": [],
+      "responseModels": [
+        "deepseek-flash"
+      ],
+      "modelEvidence": "actual dispatch plus provider-reported response model"
+    },
+    {
+      "sessionId": "claude_sess_118eb314-7000-4257-88e7-a9db2e1be558",
+      "providerSessionId": "d0fb1cc8-2128-469a-a492-6d0380649b7b",
+      "memberId": "m_55c35423-5f61-412d-98e6-b0c02ad9cb4a",
+      "taskId": "task_7efd9852-86c3-464e-8964-91e6558f0103",
+      "role": "implementation",
+      "kind": "claude",
+      "configuredModel": "deepseek-flash",
+      "currentConfiguredModel": "deepseek-flash",
+      "actualRuntimeSnapshot": {
+        "runtime": {
+          "kind": "claude",
+          "model": "deepseek-flash",
+          "permissionMode": "bypassPermissions",
+          "effort": "medium",
+          "installationId": "ri_claude_89ade9281c"
+        },
+        "writeIdentity": "ca877bd8334699a91a3eecbf5b691eeef3f339151199193753eefefd4db316f0",
+        "effectivePolicy": "policy-full-access",
+        "effortVerification": "requested-not-provider-certified",
+        "executablePathHash": "c857d09db23e6822e3600bc06ad8d58f92ed62bc8efd81c753f77048662cb97d"
+      },
+      "transcriptSha256": "b62950e6f00f89c1c018ec08ad35abbb5afeb0c355a3c5ba20680b89deb51573",
+      "commandExecutions": [
+        {
+          "command": "pwd; node --version; ls -la",
+          "success": true,
+          "testSummary": false
+        },
+        {
+          "command": "node --test; echo \"exit_code=$?\"",
+          "success": true,
+          "testSummary": true
+        },
+        {
+          "command": "git status --porcelain",
+          "success": true,
+          "testSummary": false
+        }
+      ],
+      "testCommands": [
+        {
+          "id": "call_00_gQTUc5N6tXPw0u4RsMQa3311",
+          "command": "node --test; echo \"exit_code=$?\"",
+          "success": true,
+          "exitEvidence": "CLI tool success plus TAP tests/pass/fail; no independent exit field",
+          "outputSha256": "f112084048477c638778c3a297396cd653de0e4fd571ecea6aa2d0a9e54e5de0"
+        }
+      ],
+      "readCommands": [],
+      "writeActions": [
+        {
+          "id": "call_00_SmJuqRRAEaeliLpf8bH11488",
+          "name": "Write",
+          "success": true,
+          "outputSha256": "f09b8a35b5d72b4435a08a377e0e279bf33a718fd0d0a8e6f4ac065eb8307c7b"
+        },
+        {
+          "id": "call_01_dgsahsqCZy0TjWnYekBy8598",
+          "name": "Write",
+          "success": true,
+          "outputSha256": "e52c40bc116e5cf2aefb955d1a7d39c26d485199d510a17f06652e4dbd80fd54"
+        }
+      ],
+      "tools": [
+        "Bash",
+        "Write",
+        "Write",
+        "Bash",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "nativeDelegationObserved": false,
+      "expectedInputFiles": [],
+      "responseModels": [
+        "deepseek-flash"
+      ],
+      "modelEvidence": "actual dispatch plus provider-reported response model"
+    },
+    {
+      "sessionId": "claude_sess_be1ab763-9335-482a-98f9-356a549a84a3",
+      "providerSessionId": "2a3b5a06-0491-4c69-b5d4-df46716f6409",
+      "memberId": "m_55c35423-5f61-412d-98e6-b0c02ad9cb4a",
+      "taskId": "task_8cb855bb-a272-46d2-a15a-5bc302125353",
+      "role": "implementation",
+      "kind": "claude",
+      "configuredModel": "deepseek-flash",
+      "currentConfiguredModel": "deepseek-flash",
+      "actualRuntimeSnapshot": {
+        "runtime": {
+          "kind": "claude",
+          "model": "deepseek-flash",
+          "permissionMode": "bypassPermissions",
+          "effort": "medium",
+          "installationId": "ri_claude_89ade9281c"
+        },
+        "writeIdentity": "ca877bd8334699a91a3eecbf5b691eeef3f339151199193753eefefd4db316f0",
+        "effectivePolicy": "policy-full-access",
+        "effortVerification": "requested-not-provider-certified",
+        "executablePathHash": "c857d09db23e6822e3600bc06ad8d58f92ed62bc8efd81c753f77048662cb97d"
+      },
+      "transcriptSha256": "d160bd0593848685baf54158c0df2bce7794efd65f755f4030e53fdebeb04a3b",
+      "commandExecutions": [
+        {
+          "command": "cd \"D:/zhongshuo/dist/desktop/review-r86-final-rc11-luna-20261016/R86 合成协作工程\" && node --version && node --test 2>&1 && echo \"EXIT_CODE=$?\"",
+          "success": true,
+          "testSummary": true
+        },
+        {
+          "command": "cd \"D:/zhongshuo/dist/desktop/review-r86-final-rc11-luna-20261016/R86 合成协作工程\" && git status --porcelain",
+          "success": true,
+          "testSummary": false
+        }
+      ],
+      "testCommands": [
+        {
+          "id": "call_00_sYpV2vAqIlbZaSpAbfmz7096",
+          "command": "cd \"D:/zhongshuo/dist/desktop/review-r86-final-rc11-luna-20261016/R86 合成协作工程\" && node --version && node --test 2>&1 && echo \"EXIT_CODE=$?\"",
+          "success": true,
+          "exitEvidence": "CLI tool success plus TAP tests/pass/fail; no independent exit field",
+          "outputSha256": "79d3b7fa13f1f364ae8ed621a890784040dea80e502df308e361ed07c1fa77ad"
+        }
+      ],
+      "readCommands": [
+        {
+          "id": "call_00_9YQt7TkBhdCWMu7HRKTV2883",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.mjs",
+          "matchedInputFiles": [],
+          "success": true,
+          "outputSha256": "44aacc7e98ef0674f2dd99ad9e9ed61015b55ed4aee8059feca3dc952d1a1054"
+        },
+        {
+          "id": "call_01_3dqsgkhffOzePcy6WIna5565",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.test.mjs",
+          "matchedInputFiles": [],
+          "success": true,
+          "outputSha256": "5bfd4dd913165177e7a6661b2477b766cfeeb546f9cd659ff7e80d9c7a6b0e2e"
+        }
+      ],
+      "writeActions": [],
+      "tools": [
+        "Read",
+        "Read",
+        "Bash",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "nativeDelegationObserved": false,
+      "expectedInputFiles": [],
+      "responseModels": [
+        "deepseek-flash"
+      ],
+      "modelEvidence": "actual dispatch plus provider-reported response model"
+    },
+    {
+      "sessionId": "claude_sess_24cd08ee-f52a-4751-80a9-ae3bfa018eb6",
+      "providerSessionId": "27757b07-b66a-4f71-a9e7-f82d83ab8b39",
+      "memberId": "m_55c35423-5f61-412d-98e6-b0c02ad9cb4a",
+      "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+      "role": "coordinator",
+      "kind": "claude",
+      "configuredModel": "deepseek-flash",
+      "currentConfiguredModel": "deepseek-flash",
+      "actualRuntimeSnapshot": {
+        "runtime": {
+          "kind": "claude",
+          "model": "deepseek-flash",
+          "permissionMode": "bypassPermissions",
+          "effort": "medium",
+          "installationId": "ri_claude_89ade9281c"
+        },
+        "writeIdentity": "ca877bd8334699a91a3eecbf5b691eeef3f339151199193753eefefd4db316f0",
+        "effectivePolicy": "policy-full-access",
+        "effortVerification": "requested-not-provider-certified",
+        "executablePathHash": "c857d09db23e6822e3600bc06ad8d58f92ed62bc8efd81c753f77048662cb97d"
+      },
+      "transcriptSha256": "96076a24d701faaaea6459eb7a3919f6688d16212686d6301cba86812f33c7ec",
+      "commandExecutions": [
+        {
+          "command": "node --version && node --test; echo \"exit_code=$?\"",
+          "success": true,
+          "testSummary": true
+        },
+        {
+          "command": "git status --porcelain",
+          "success": true,
+          "testSummary": false
+        }
+      ],
+      "testCommands": [
+        {
+          "id": "call_02_p08fdSRtFvg95tvpA1Qf4566",
+          "command": "node --version && node --test; echo \"exit_code=$?\"",
+          "success": true,
+          "exitEvidence": "CLI tool success plus TAP tests/pass/fail; no independent exit field",
+          "outputSha256": "bba1b93de118146363e2958bf7dac6c24f5de2985c529307e089b1ec85003c54"
+        }
+      ],
+      "readCommands": [
+        {
+          "id": "call_00_cnXMRZDTVAVWtrkhG1RK4381",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.mjs",
+          "matchedInputFiles": [],
+          "success": true,
+          "outputSha256": "44aacc7e98ef0674f2dd99ad9e9ed61015b55ed4aee8059feca3dc952d1a1054"
+        },
+        {
+          "id": "call_01_q4mOJoojg4rrQlpQvfZL8101",
+          "path": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程\\greeting.test.mjs",
+          "matchedInputFiles": [],
+          "success": true,
+          "outputSha256": "5bfd4dd913165177e7a6661b2477b766cfeeb546f9cd659ff7e80d9c7a6b0e2e"
+        }
+      ],
+      "writeActions": [],
+      "tools": [
+        "Read",
+        "Read",
+        "Bash",
+        "Bash",
+        "StructuredOutput"
+      ],
+      "nativeDelegationObserved": false,
+      "expectedInputFiles": [],
+      "responseModels": [
+        "deepseek-flash"
+      ],
+      "modelEvidence": "actual dispatch plus provider-reported response model"
+    },
+    {
+      "sessionId": "codex-session-b75267bf-9f67-43c7-9017-e937f9983b87",
+      "providerSessionId": "01a1423e-6eee-7651-9a63-54c9f1da85bd",
+      "memberId": "m_5a9e8d54-e502-4e70-9acf-4068fdb6a623",
+      "taskId": "task_71af1dc7-4fce-42b4-aa35-45c22e9db9d7",
+      "role": "review",
+      "kind": "codex",
+      "configuredModel": "gpt-6-luna",
+      "currentConfiguredModel": "gpt-6-luna",
+      "actualRuntimeSnapshot": {
+        "runtime": {
+          "kind": "codex",
+          "model": "gpt-6-luna",
+          "permissionMode": "bypassPermissions",
+          "effort": "medium",
+          "installationId": "ri_codex_8fd91dcfc1"
+        },
+        "writeIdentity": "2b33827d4a9f88cfd2be7f8768d4a4c5b46c7fc26c6387cc71a44c8e3ac0dcdc",
+        "effectivePolicy": "policy-analyze",
+        "effortVerification": "requested-not-provider-certified",
+        "executablePathHash": "57de4cf40144bdf7d00010f2f5557a7d642c2b9705309bfade167dd313e2ca93"
+      },
+      "transcriptSha256": "dead0fea725a811ab2170a972e9e5c92415976efc1f2815647f97771602432e2",
+      "commandExecutions": [
+        {
+          "id": "exec-2943ac61-4625-450d-9b7d-5f2c9fb1bb7c",
+          "command": "Get-Content -Raw greeting.mjs; Get-Content -Raw greeting.test.mjs; node --version; node --test; $code = $LASTEXITCODE; Write-Output \"EXIT_CODE=$code\"",
+          "status": "completed",
+          "exitCode": 0,
+          "success": true,
+          "outputSha256": "ee3d9498a995faf901a63666d0c00e66721bf96a15de8a732e14274f22a21750",
+          "testSummary": true,
+          "matchedInputFiles": [
+            {
+              "path": "greeting.mjs",
+              "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            },
+            {
+              "path": "greeting.test.mjs",
+              "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            }
+          ]
+        }
+      ],
+      "testCommands": [
+        {
+          "id": "exec-2943ac61-4625-450d-9b7d-5f2c9fb1bb7c",
+          "command": "Get-Content -Raw greeting.mjs; Get-Content -Raw greeting.test.mjs; node --version; node --test; $code = $LASTEXITCODE; Write-Output \"EXIT_CODE=$code\"",
+          "status": "completed",
+          "exitCode": 0,
+          "success": true,
+          "outputSha256": "ee3d9498a995faf901a63666d0c00e66721bf96a15de8a732e14274f22a21750",
+          "testSummary": true,
+          "matchedInputFiles": [
+            {
+              "path": "greeting.mjs",
+              "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            },
+            {
+              "path": "greeting.test.mjs",
+              "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            }
+          ]
+        }
+      ],
+      "readCommands": [
+        {
+          "id": "exec-2943ac61-4625-450d-9b7d-5f2c9fb1bb7c",
+          "command": "Get-Content -Raw greeting.mjs; Get-Content -Raw greeting.test.mjs; node --version; node --test; $code = $LASTEXITCODE; Write-Output \"EXIT_CODE=$code\"",
+          "status": "completed",
+          "exitCode": 0,
+          "success": true,
+          "outputSha256": "ee3d9498a995faf901a63666d0c00e66721bf96a15de8a732e14274f22a21750",
+          "testSummary": true,
+          "matchedInputFiles": [
+            {
+              "path": "greeting.mjs",
+              "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            },
+            {
+              "path": "greeting.test.mjs",
+              "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd",
+              "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+              "revision": 1,
+              "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+            }
+          ]
+        }
+      ],
+      "writeActions": [],
+      "tools": [
+        "exec",
+        "UserMessage",
+        "AgentMessage",
+        "CommandExecution",
+        "AgentMessage"
+      ],
+      "nativeDelegationObserved": false,
+      "expectedInputFiles": [
+        {
+          "path": "greeting.mjs",
+          "sha256": "292fcc752e7499f248623d504bb80ec849c42d7e24be36177f2381ac1ed0970d",
+          "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+          "revision": 1,
+          "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+        },
+        {
+          "path": "greeting.test.mjs",
+          "sha256": "ae1c751391b16ebd9e8999b73e9208b9fad462ae374786fd3c17f4c1d4bceecd",
+          "deliveryId": "dlv_turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+          "revision": 1,
+          "manifestHash": "07018eb022cb75561a506283b44cc442d44f79c735a1e67cc01ca72d36246a7e"
+        }
+      ],
+      "provider": "custom",
+      "contexts": [
+        {
+          "model": "gpt-6-luna",
+          "effort": "medium",
+          "cwd": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-luna-20261016\\R86 合成协作工程",
+          "sandboxPolicy": {
+            "type": "read-only"
+          }
+        }
+      ]
+    }
+  ],
+  "delivery": {
+    "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "revision": 1,
+    "manifestHash": "4ea0e659b51ff5875940300879bd0e95d240028c9e32c2899089360d4b2462d7",
+    "coordinationRunId": "run_2a620b25-b9b1-487e-9cad-6399bc88689b"
+  }
+}

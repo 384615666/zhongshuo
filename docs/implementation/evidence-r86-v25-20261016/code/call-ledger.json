@@ -1,0 +1,2662 @@
+{
+  "pass": true,
+  "scope": "product real_calls in every own R86 root with preparation receipt; development assistant calls excluded",
+  "roots": [
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "build": {
+        "buildId": "bld_07ef3cd9b4b08add",
+        "commit": "ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T13:56:45.745Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 3
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "build": {
+        "buildId": "bld_07ef3cd9b4b08add",
+        "commit": "ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T13:56:45.745Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 29
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "build": {
+        "buildId": "bld_cf50e93cc0db5723",
+        "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T15:02:54.754Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 32
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "build": {
+        "buildId": "bld_cf50e93cc0db5723",
+        "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T15:02:54.754Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 21
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "build": {
+        "buildId": "bld_cf50e93cc0db5723",
+        "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T15:02:54.754Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 6
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "build": {
+        "buildId": "bld_19cfe41229996380",
+        "commit": "05b1331d892e8afad0bde9dc47d53d6d018161a2",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T12:27:41.689Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 29
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "build": {
+        "buildId": "bld_a9b6180a48c8053a",
+        "commit": "1cca516eafd065063e4b56ab49aed3615fb186cb",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T12:01:36.106Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 15
+    },
+    {
+      "root": "review-r86-real-rc4-20261015",
+      "build": {
+        "buildId": "bld_6ed461af6e2d6884",
+        "commit": "61112d69ad785a38c7ab64a2b9aa6e7411779bb4",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T10:36:02.480Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 1
+    },
+    {
+      "root": "review-r86-real-rc5-20261015",
+      "build": {
+        "buildId": "bld_7bc2e235e2625fc6",
+        "commit": "7f9afe484731e831893dd283bf02d74d5c6a2d66",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T10:38:51.483Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 1
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "build": {
+        "buildId": "bld_bfb38f295d978b95",
+        "commit": "e155074fdaeabbdad47e2e32e1379a95866bc46a",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T11:05:53.697Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 5
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "build": {
+        "buildId": "bld_9fa40125a99e71b6",
+        "commit": "0f3452b870b3a2b1f99433357a1ee496058956dd",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T11:20:19.507Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 13
+    },
+    {
+      "root": "review-r86-real-two-sol-20261015",
+      "build": {
+        "buildId": "bld_7bc2e235e2625fc6",
+        "commit": "7f9afe484731e831893dd283bf02d74d5c6a2d66",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T10:38:51.483Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 1
+    },
+    {
+      "root": "review-r86-real-two-sol-current-20261015",
+      "build": {
+        "buildId": "bld_7bc2e235e2625fc6",
+        "commit": "7f9afe484731e831893dd283bf02d74d5c6a2d66",
+        "dirty": false,
+        "dirtyDiffHash": null,
+        "builtAt": "2026-10-15T10:38:51.483Z",
+        "manifest": "MANIFEST-SHA256.json",
+        "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+      },
+      "calls": 1
+    }
+  ],
+  "uniqueCalls": [
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_1d306dd0-68d0-48b6-940e-43bb24710056",
+        "turn_id": "turn_3480c809-18d9-4b0b-990a-f5b3a00690d8",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792072725439,
+        "settled_at": 1792072818804
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_7a292ee0-0280-4fa9-8a60-d82ae10f77dd",
+        "turn_id": "turn_21f7c944-3c85-46e7-9eb9-802aabff5e82",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792072819400,
+        "settled_at": 1792072839015
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_e48d0e80-5620-476b-9387-94e1b943af15",
+        "turn_id": "turn_7c7b4454-59f7-4e8e-a2a4-6c166865e074",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792072839696,
+        "settled_at": 1792072954422
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe",
+        "turn_id": "turn_ffc824ed-c4b8-4361-ab89-184a274347d1",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075108004,
+        "settled_at": 1792075261461
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_804638cb-ca07-478e-93cd-c8bd639a301a",
+        "turn_id": "turn_2346507a-a195-405b-ad8b-99e85b6cf765",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075261775,
+        "settled_at": 1792075280364
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_d8186593-0cbd-4ca6-8d9e-535e466d0a65",
+        "turn_id": "turn_59fb6c43-3bff-41bb-8128-3097cbaaa5b7",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792075283697,
+        "settled_at": 1792075448056
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_ea9de960-42fb-466d-adb3-a129ce088397",
+        "turn_id": "turn_4caa7f7a-c1cd-4f59-9cf5-1387325cec5c",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075434146,
+        "settled_at": 1792075438109
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe",
+        "turn_id": "turn_b14a23be-7277-4c99-9982-3d3f2fe1eb70",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075448361,
+        "settled_at": 1792075504871
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 6,
+        "task_id": "task_ea9de960-42fb-466d-adb3-a129ce088397",
+        "turn_id": "turn_f88bcf4d-f828-409a-9bd4-fb18a3a53d9b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075505425,
+        "settled_at": 1792075521996
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 7,
+        "task_id": "task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe",
+        "turn_id": "turn_3b67c781-014c-4770-82c8-869ef552e736",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075724304,
+        "settled_at": 1792075967810
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 8,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_ec0b48cd-30f4-403d-a2d1-91b249904c62",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792075812776,
+        "settled_at": 1792075950870
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 9,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_0c91491b-71b9-4454-b34c-3c3a720f7532",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792075968128,
+        "settled_at": 1792076015893
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 10,
+        "task_id": "task_f2d78498-540f-4b7c-b6cb-23de9da9cf72",
+        "turn_id": "turn_43493632-94ea-4586-9068-ac5fec5bfd20",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076016213,
+        "settled_at": 1792076168655
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 11,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_d996fb7a-a4b3-451b-be57-888872befa73",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076020275,
+        "settled_at": 1792076174063
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 12,
+        "task_id": "task_26ebd451-62cb-45fe-80ef-7fa39efd36f4",
+        "turn_id": "turn_7b38b0b8-0cb3-4603-9972-b8226cdc035e",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076169176,
+        "settled_at": 1792076196540
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 13,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_2b945a22-9fba-41d4-a727-241887146aa0",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076196664,
+        "settled_at": 1792076240354
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 14,
+        "task_id": "task_5a0656c8-e222-4938-8ba5-8c1cece68759",
+        "turn_id": "turn_cb4d7382-eccf-4143-ad32-592ffaa8ef2c",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076197502,
+        "settled_at": 1792076354763
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 15,
+        "task_id": "task_b78b1bea-23a9-4e4e-8f63-1e068a8df2f9",
+        "turn_id": "turn_bd1e1b06-fd4d-477f-b667-e090cc912ca8",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076240524,
+        "settled_at": 1792076325041
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 16,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_48b0fd2b-0d8f-4053-8a78-bf6aaa2af31f",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076325499,
+        "settled_at": 1792076411792
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 17,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_8a46c23f-9b49-497e-a9bc-b07a2a7b8186",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076357373,
+        "settled_at": 1792076490412
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 18,
+        "task_id": "task_f9464a6c-4f3a-4b4e-b617-6549ceb67dbe",
+        "turn_id": "turn_ba678f52-7d05-4b4c-80a2-87c802ee0000",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076412012,
+        "settled_at": 1792076546947
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 19,
+        "task_id": "task_1c77ee61-ea41-4693-9142-51c4727cc8d0",
+        "turn_id": "turn_d936295c-1472-44cb-ba04-a32646dd0beb",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076490886,
+        "settled_at": 1792076688635
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 20,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_be734b69-7045-46f9-9502-3f8c4a7296fe",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076547477,
+        "settled_at": 1792076660162
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 21,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_c55376ec-e01a-4b82-8b5e-8b92d3986362",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076688916,
+        "settled_at": 1792076819241
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 22,
+        "task_id": "task_d9744303-c471-4743-9b7e-4578188f3ad2",
+        "turn_id": "turn_3aa94160-5fa0-40ae-b2c3-ffdf5f669b57",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076689684,
+        "settled_at": 1792076798765
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 23,
+        "task_id": "task_f2d78498-540f-4b7c-b6cb-23de9da9cf72",
+        "turn_id": "turn_b57dc38b-fd3b-4b0a-b4f1-a86fa13c09ab",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076799420,
+        "settled_at": 1792076848311
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 24,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_0608a2b2-7735-47e4-ae8e-ceb57ed5276f",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792076823174,
+        "settled_at": 1792076957854
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 25,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_f1b19830-3e21-47da-9e1c-a0b36fb9bcfb",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076848613,
+        "settled_at": 1792076961784
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 26,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_afe1be3d-b855-4135-8a13-ae17c47400bd",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792076962200,
+        "settled_at": 1792077078046
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 27,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_44774baa-4bd2-42df-8f5f-61598b8f8d11",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792077078266,
+        "settled_at": 1792077276312
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 28,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_bc9ad705-0dfb-4046-b506-25f6cef284b4",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792077276527,
+        "settled_at": 1792077327804
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "call": {
+        "id": 29,
+        "task_id": "task_fce21525-8a3d-49f6-80ab-12d257a35076",
+        "turn_id": "turn_0e818f6d-6e40-4ca2-a4b2-64de0e96e009",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792077277274,
+        "settled_at": 1792077420619
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 1,
+        "task_id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+        "turn_id": "turn_f60aac34-433e-4e5f-a536-66623c5a1643",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792131590887,
+        "settled_at": 1792131737700
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 2,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_a32abf14-697e-4049-a14c-a07cb9aada8d",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792131661916,
+        "settled_at": 1792131780298
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 3,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_22d9b7b9-7242-437b-9c41-d38ac88f7145",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792131738272,
+        "settled_at": 1792131778206
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 4,
+        "task_id": "task_84d90f23-a03f-4998-937f-cc102918ce5f",
+        "turn_id": "turn_59797cee-b498-4616-9f11-4c454f29b379",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792131778854,
+        "settled_at": 1792131834187
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 5,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_e85ada0c-63a2-4246-b171-447e8030f2bf",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792131783053,
+        "settled_at": 1792131905494
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 6,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_023c1bf7-82e4-4370-aded-3338c5c94858",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792131834634,
+        "settled_at": 1792131925585
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 7,
+        "task_id": "task_ee780596-4a93-41da-88e6-6803b4eaa501",
+        "turn_id": "turn_dd353053-051b-4960-a1d3-597021f92aff",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792131906088,
+        "settled_at": 1792132034368
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 8,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_cb022c65-3d3a-4f0a-b0ca-4e0aa9616d26",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792131925826,
+        "settled_at": 1792131982601
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 9,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_d5602cbd-d761-4144-9637-6b8b93da6ab5",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792132036837,
+        "settled_at": 1792132154893
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 10,
+        "task_id": "task_84b89525-6009-4f8e-8d68-4b3196adf0bc",
+        "turn_id": "turn_6d305934-2272-43e8-aee4-7cc9db9360db",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792132037457,
+        "settled_at": 1792132105201
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 11,
+        "task_id": "task_201c2315-c2fd-4e5a-a7e3-da664e588a86",
+        "turn_id": "turn_27ddceca-c08e-4593-8b69-567b3f9bee9b",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792132155331,
+        "settled_at": 1792132286936
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 12,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_ce19ab76-275d-4752-8ab4-490f01052e54",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792132155847,
+        "settled_at": 1792132347458
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 13,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_831fa42c-362a-43ee-8275-5807e54e740c",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792132289618,
+        "settled_at": 1792132411997
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 14,
+        "task_id": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+        "turn_id": "turn_1bad233f-ec1a-40b4-9061-6502714683bc",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792132347872,
+        "settled_at": 1792132462100
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 15,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_461e358f-9382-417b-b7f8-408e214f7be3",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792132412736,
+        "settled_at": 1792132532758
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 16,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_dab8a87a-61e2-4214-bdef-316c19d6b214",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792132462214,
+        "settled_at": 1792132563490
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 17,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_feee6b66-a724-4d15-b064-ef2f6f0c9fc6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792132563680,
+        "settled_at": 1792132668860
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 18,
+        "task_id": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+        "turn_id": "turn_f596555c-d4d6-44d1-9a40-8865083fa576",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792132669229,
+        "settled_at": 1792132969789
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 19,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_4fe6f6bc-01ba-441c-8538-f63b010a89bf",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133332553,
+        "settled_at": 1792133372999
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 20,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_897a3902-73d2-43cd-827d-24e3c8202cdf",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792133333240,
+        "settled_at": 1792133456136
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 21,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_f4b5e668-1ccc-4108-b7d2-7e55b79c100a",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133456625,
+        "settled_at": 1792133535879
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 22,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_b272ebf8-f1b5-40e9-931d-009ccfa5538f",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792133459645,
+        "settled_at": 1792133587871
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 23,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_1a886897-7113-4e7f-ac18-57e0b953c630",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133587971,
+        "settled_at": 1792133620998
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 24,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_61b75824-9949-4317-a7b3-a4490865d9db",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792133588654,
+        "settled_at": 1792133707733
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 25,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_5049ce9a-62d8-4e5f-ac55-c5cb00820ac9",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133707942,
+        "settled_at": 1792133750895
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 26,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_3501b19f-5cd8-4a32-bd0a-034ba96743b5",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792133710764,
+        "settled_at": 1792133830353
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 27,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_910adc8f-fc2a-4202-85ea-be9de86ed66e",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133830610,
+        "settled_at": 1792133890915
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 28,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_a61908e3-1b71-4006-b925-0ab4dce9a329",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792133831337,
+        "settled_at": 1792133949129
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 29,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_4d611c3e-3436-40f5-aa2c-6697663080f3",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792133949324,
+        "settled_at": 1792134003038
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 30,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_e2d7c312-7fc8-4ddf-9017-7cb7d51c9647",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792134003497,
+        "settled_at": 1792134135403
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 31,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_03f8627e-3b5c-4b19-991e-99a9352d6d87",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792134135533,
+        "settled_at": 1792134156507
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "call": {
+        "id": 32,
+        "task_id": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+        "turn_id": "turn_460a88b9-e7dc-4c94-b1c3-021f2c8ea027",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792134136280,
+        "settled_at": 1792134259665
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 1,
+        "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "turn_id": "turn_1ec2396a-834a-42c6-b576-722976f44076",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112648746,
+        "settled_at": 1792112721167
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 2,
+        "task_id": "task_7efd9852-86c3-464e-8964-91e6558f0103",
+        "turn_id": "turn_40f51e87-dfc8-4aa2-8965-fa78db05bf41",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112721479,
+        "settled_at": 1792112749893
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 3,
+        "task_id": "task_71af1dc7-4fce-42b4-aa35-45c22e9db9d7",
+        "turn_id": "turn_fb31cd29-458f-42ea-a864-d53655ffb361",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792112750475,
+        "settled_at": 1792112873367
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 4,
+        "task_id": "task_8cb855bb-a272-46d2-a15a-5bc302125353",
+        "turn_id": "turn_869e2ac4-9814-4771-b6be-0969f4ec3bdd",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112873792,
+        "settled_at": 1792112894079
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 5,
+        "task_id": "task_ac834fe6-9ee9-4fd9-9cad-33a830ffbad4",
+        "turn_id": "turn_1418f1e2-55ca-431f-b373-7f4ce109dd46",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112894564,
+        "settled_at": 1792112897298
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 6,
+        "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "turn_id": "turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112897659,
+        "settled_at": 1792112924288
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 7,
+        "task_id": "task_ac834fe6-9ee9-4fd9-9cad-33a830ffbad4",
+        "turn_id": "turn_8242dc43-43c3-4dbd-bf3b-55b594ab9d16",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792112980136,
+        "settled_at": 1792112985771
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 8,
+        "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "turn_id": "turn_9067e93f-0531-4a30-8eda-0b67917f590e",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113174703,
+        "settled_at": 1792113248176
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 9,
+        "task_id": "task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa",
+        "turn_id": "turn_61612d43-0c84-4577-8f8e-f1af0357cc78",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113248456,
+        "settled_at": 1792113319741
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 10,
+        "task_id": "task_573d07b2-c646-48fd-a8ca-6b43dc0488e2",
+        "turn_id": "turn_56164264-d4b5-4684-9ab7-809641d2cba8",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792113320346,
+        "settled_at": 1792113442161
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 11,
+        "task_id": "task_326e5906-e670-4fdb-8610-f8bd1e4e94f1",
+        "turn_id": "turn_ddd2e203-7494-43a3-9473-107906c84378",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113442300,
+        "settled_at": 1792113463074
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 12,
+        "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+        "turn_id": "turn_ecbbb943-3339-4c51-920f-659c1e17fb87",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113463548,
+        "settled_at": 1792113527440
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 13,
+        "task_id": "task_e5dca083-a8dd-4b9a-a8d3-e8f9ae3e0080",
+        "turn_id": "turn_580fa3c7-fc52-44bd-bd6d-ae22deae9753",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113535251,
+        "settled_at": 1792113689349
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 14,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_9136c61e-d306-4433-931a-22eca0802379",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792113633812,
+        "settled_at": 1792113753807
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 15,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_b7b8f2e2-eb65-4c61-8139-7202520a9a97",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113689794,
+        "settled_at": 1792113729272
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 16,
+        "task_id": "task_da04c1ba-d2d6-4f1a-bcbb-c7f30d080313",
+        "turn_id": "turn_f702abe4-6668-4cca-ad66-a6483917fb18",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113729785,
+        "settled_at": 1792113781152
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 17,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_66d49271-8546-49f0-bd14-ba0b345054e3",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792113756381,
+        "settled_at": 1792113882066
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 18,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_529afc21-0324-433b-adfc-1ebb0cb55e5c",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113781641,
+        "settled_at": 1792113871582
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 19,
+        "task_id": "task_8f2b75d6-0399-4554-befd-195f031274bc",
+        "turn_id": "turn_485e78b9-d1b2-4ed4-ad9b-2d10c01261e1",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792113882675,
+        "settled_at": 1792113996907
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 20,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_733339ca-d4b2-4689-b6b3-9e9afce003f9",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792113883191,
+        "settled_at": 1792113945897
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "call": {
+        "id": 21,
+        "task_id": "task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a",
+        "turn_id": "turn_b550d1be-aa5a-4a09-923d-956dbb8c06e9",
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792113999485,
+        "settled_at": 1792114113914
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+        "turn_id": "turn_b3c481a2-b039-43ac-9e29-843b5024e0f9",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792077513021,
+        "settled_at": 1792077699934
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_6adeb049-955d-4fc1-a844-01b7202252e3",
+        "turn_id": "turn_f6c5945d-243e-4189-8266-2cc031b2ce09",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792077700139,
+        "settled_at": 1792077719933
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_3a275dbd-8e42-49c4-a60a-44d65044cb7e",
+        "turn_id": "turn_d5670b2d-4b12-4377-8b60-701e3043c2d2",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792077723661,
+        "settled_at": 1792077878603
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+        "turn_id": "turn_39bdd56b-bcf2-43fa-ad37-ebcad58b9b92",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792077879000,
+        "settled_at": 1792077898901
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_693f2a7f-a43a-4c27-8ace-230e026b76d5",
+        "turn_id": "turn_68764734-b4c5-4221-b4f3-a9ccc662ce4b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792111843357,
+        "settled_at": 1792111959082
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "call": {
+        "id": 6,
+        "task_id": "task_c57ac992-60d6-40a0-8c02-382ba28b0388",
+        "turn_id": "turn_c122bc70-1ffc-4302-8326-0c0cd8271909",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792111959551,
+        "settled_at": 1792111974419
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_eeffcb8f-dd1d-4e3f-924e-b8bd53a4907d",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792067398601,
+        "settled_at": 1792067525554
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_02e74c62-4749-4ddc-a2b3-a6e3d46052e7",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067399507,
+        "settled_at": 1792067441690
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_888c9357-5031-4942-818f-179802947d25",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792067526149,
+        "settled_at": 1792067661330
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_800375ef-5dd7-40ae-b3ff-55150c4b8190",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067527242,
+        "settled_at": 1792067566609
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_77ed7d6b-f262-4787-8dac-03dbb08a2fad",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067661887,
+        "settled_at": 1792067728522
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 6,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_fc57f12a-b55e-432a-9a33-06ae003354d7",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792067662849,
+        "settled_at": 1792067794052
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 7,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_1e36b959-7c01-4c28-91ee-d8b7b36df47b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067794540,
+        "settled_at": 1792067948942
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 8,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_b622edc2-eb84-4e97-8b5a-6c3898c12316",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792067795484,
+        "settled_at": 1792067921326
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 9,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_ca1d21a5-6524-4fe7-889d-293670630489",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067949457,
+        "settled_at": 1792068096483
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 10,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_bd18712b-77b1-4e32-923c-6d30e80b2f4a",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792067950555,
+        "settled_at": 1792068077369
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 11,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_8c2e49da-08df-443a-abc6-8e5f805984ba",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792068097172,
+        "settled_at": 1792068217585
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 12,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_00f464de-1bba-4d03-930d-6e599f170286",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792068217927,
+        "settled_at": 1792068352667
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 13,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_e5fd1037-e8d3-4691-bb10-2b20910cbecc",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792068352881,
+        "settled_at": 1792068478869
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 14,
+        "task_id": "task_fdbb8db3-808b-475d-a091-0fadacf44a5d",
+        "turn_id": "turn_1b3dce36-cb6f-413c-b98a-cd929cd2e811",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792068353812,
+        "settled_at": 1792068551743
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 15,
+        "task_id": "task_942e5568-bbf2-41ae-89eb-005beaece98c",
+        "turn_id": "turn_fd00d64a-55a7-4936-8a23-7e2aafc3f1fa",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792068794020,
+        "settled_at": 1792068880711
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 16,
+        "task_id": "task_a3783811-688b-488c-85c1-0e983c7a6c27",
+        "turn_id": "turn_2efffefd-c58a-476f-baaa-5815aa4b696f",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792068881329,
+        "settled_at": 1792068914758
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 17,
+        "task_id": "task_515a2b0d-32f2-46c5-aea3-c3ce5309eb4d",
+        "turn_id": "turn_7cdcdafb-f9b0-4af8-8528-e5d95f7d92e6",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792068915137,
+        "settled_at": 1792069068179
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 18,
+        "task_id": "task_777bf948-df4f-41e4-8f19-cda1364df688",
+        "turn_id": "turn_f4c287a7-1f29-4b1b-9630-42113f9024c6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069068685,
+        "settled_at": 1792069161002
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 19,
+        "task_id": "task_942e5568-bbf2-41ae-89eb-005beaece98c",
+        "turn_id": "turn_14553eb9-bfcf-494f-9e71-751f77c072f7",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069161266,
+        "settled_at": 1792069181290
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 20,
+        "task_id": "task_942e5568-bbf2-41ae-89eb-005beaece98c",
+        "turn_id": "turn_44667759-cd0c-4910-ab57-dcc5d463091c",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069482281,
+        "settled_at": 1792069546142
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 21,
+        "task_id": "task_61dcc53d-a1a5-4918-b79f-7351693e11b8",
+        "turn_id": "turn_5d075eb7-704b-4d70-8683-7d4b492437a0",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069546325,
+        "settled_at": 1792069594873
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 22,
+        "task_id": "task_b7389170-060c-4751-8638-99da7420c86c",
+        "turn_id": "turn_53ba4ba9-2543-4c5c-ada3-7ae9d880ad0e",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792069595310,
+        "settled_at": 1792069754611
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 23,
+        "task_id": "task_4641e419-c364-466b-b7cb-8bbdc862da79",
+        "turn_id": "turn_ed3d7994-367b-4fd1-a7b3-aa5628bd395b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069755235,
+        "settled_at": 1792069814448
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 24,
+        "task_id": "task_942e5568-bbf2-41ae-89eb-005beaece98c",
+        "turn_id": "turn_c4ba101e-3ccd-43c3-8804-5290c421d74c",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792069814888,
+        "settled_at": 1792069861810
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 25,
+        "task_id": "task_94058c96-141b-4b11-9faa-23d3e64e1d2a",
+        "turn_id": "turn_84474f5a-8a12-4eb3-8ee7-f0c4d43e092e",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792070551925,
+        "settled_at": 1792070736748
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 26,
+        "task_id": "task_e7200b5b-b9b5-4b7a-a3d4-fd52a65df98d",
+        "turn_id": "turn_37c704fd-6192-4353-91b2-5997dd60c04e",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792070737234,
+        "settled_at": 1792070792405
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 27,
+        "task_id": "task_2f85d3f0-1b55-4263-acc8-2d5aef4ba61a",
+        "turn_id": "turn_ff66f7d3-f1c2-463d-bd6c-f1328c094dba",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792070792850,
+        "settled_at": 1792070954206
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 28,
+        "task_id": "task_5f370ff2-c041-437b-8aab-8c5270e83261",
+        "turn_id": "turn_53214b06-141b-4bd0-a10f-462bcf15b8dd",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792070954682,
+        "settled_at": 1792071029098
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "call": {
+        "id": 29,
+        "task_id": "task_94058c96-141b-4b11-9faa-23d3e64e1d2a",
+        "turn_id": "turn_8f08f248-bb00-4ea7-a735-1c6a46e01fc6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792071029435,
+        "settled_at": 1792071065518
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_dd647d17-294c-44cc-9b3b-70ef9405eddb",
+        "turn_id": "turn_29513e5b-c686-468d-96e0-6abe5636828f",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792065756600,
+        "settled_at": 1792065869423
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_23b79c3f-c32d-4141-b36b-0884efd5d2d8",
+        "turn_id": "turn_d3aee7d4-1abf-43ec-9a1a-b49c17e0b4a7",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792065869704,
+        "settled_at": 1792065908494
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_4d941c1d-a321-4bcb-ba77-10b398678c15",
+        "turn_id": "turn_2bd9aaf7-9b16-4ce9-ab77-915172757fbc",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792065909226,
+        "settled_at": 1792066061681
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_00a42644-ffad-46a9-9d63-3cee21d2fe76",
+        "turn_id": "turn_06dce369-7247-4f9e-a746-8b227e7ef6b6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066062157,
+        "settled_at": 1792066109009
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_6a85e6a8-6dd0-4751-8ffe-3586c9930d4f",
+        "turn_id": "turn_f3a3c1a9-4408-4b5b-bf6c-d371ed25444c",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792066109760,
+        "settled_at": 1792066231235
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 6,
+        "task_id": "task_dd647d17-294c-44cc-9b3b-70ef9405eddb",
+        "turn_id": "turn_12f22abb-7b96-447a-92d5-ea7f81dc9e08",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066231839,
+        "settled_at": 1792066253842
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 7,
+        "task_id": "task_dd647d17-294c-44cc-9b3b-70ef9405eddb",
+        "turn_id": "turn_d9a603b0-24b1-4f47-a110-6d952b788fad",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066459288,
+        "settled_at": 1792066513471
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 8,
+        "task_id": "task_4e0ae8a1-b93f-4b57-9aa3-0eea9f043e50",
+        "turn_id": "turn_304d40ed-da35-4d15-b3a2-e7fe2c4bd735",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066513942,
+        "settled_at": 1792066548167
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 9,
+        "task_id": "task_f48257fa-2dea-47ae-af81-632b7d019349",
+        "turn_id": "turn_d54e7d47-d80c-4651-8c31-53a742bd01ed",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792066548768,
+        "settled_at": 1792066706967
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 10,
+        "task_id": "task_fc48bad2-e4f6-4f0c-b857-a9b2865f74dd",
+        "turn_id": "turn_18ed5815-4fdd-4658-b029-3b359dd49be9",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066567854,
+        "settled_at": 1792066594484
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 11,
+        "task_id": "task_fc48bad2-e4f6-4f0c-b857-a9b2865f74dd",
+        "turn_id": "turn_c872887c-5a17-47b7-9d38-9e60ecb493c1",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792066707379,
+        "settled_at": 1792066821572
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 12,
+        "task_id": "task_a5380cbc-bc42-49ae-9169-4cedc9b4e38f",
+        "turn_id": "turn_fe22363a-b2e0-4f7a-a350-ca21c340c82b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792066708215,
+        "settled_at": 1792066758734
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 13,
+        "task_id": "task_aa00d3ce-01bf-47c2-912d-cf3e1758c504",
+        "turn_id": "turn_70c72b0b-0cf6-4d2a-9c9f-f312b458841d",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792066822092,
+        "settled_at": 1792066945446
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 14,
+        "task_id": "task_fc48bad2-e4f6-4f0c-b857-a9b2865f74dd",
+        "turn_id": "turn_5d223b48-cc54-4c00-90dd-e114a3eea14a",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": null,
+        "status": "interrupted",
+        "created_at": 1792066823044,
+        "settled_at": 1792067000347
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "call": {
+        "id": 15,
+        "task_id": "task_dd647d17-294c-44cc-9b3b-70ef9405eddb",
+        "turn_id": "turn_fbcc6d05-fd4e-428e-ac0b-b56cd38ccb9b",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792067000744,
+        "settled_at": 1792067044876
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc4-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_0c7f0461-4407-44a1-84ad-be10cdd61906",
+        "turn_id": "turn_4e671478-d8ba-4297-903d-8b1da755474b",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": null,
+        "status": "failed",
+        "created_at": 1792060626574,
+        "settled_at": 1792060627847
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc5-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_05de3804-52d1-4b87-99b7-08f26a899952",
+        "turn_id": "turn_3113abff-7d52-42e7-9552-fb6beb98ce0f",
+        "runtime_kind": "claude",
+        "model": "glm-5.3-flash",
+        "response_model": "<synthetic>",
+        "status": "failed",
+        "created_at": 1792060783206,
+        "settled_at": 1792060978757
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_6151921b-b797-477b-9f52-5d25f6daacde",
+        "turn_id": "turn_6ce525e3-2065-4f8a-a158-6877e3c0f05c",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792062407255,
+        "settled_at": 1792062551115
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_f7a60fb8-ae9b-448f-b33c-b904f02c99ea",
+        "turn_id": "turn_bd3d7221-4efd-4866-8f2d-a77334d6a3f1",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792062551542,
+        "settled_at": 1792062688341
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_8e35b599-f685-4399-b36d-d99baa416829",
+        "turn_id": "turn_8a05233a-5b84-4646-8332-000e81347693",
+        "runtime_kind": "codex",
+        "model": "gpt-6-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792062691227,
+        "settled_at": 1792062822818
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_df3dc54a-1b54-4363-80d4-34cbc3641f09",
+        "turn_id": "turn_43e1794b-2f44-4792-b177-9e8a0c14752b",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792062823137,
+        "settled_at": 1792062955373
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc6-two-sol-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_6151921b-b797-477b-9f52-5d25f6daacde",
+        "turn_id": "turn_acf901bc-ab19-4099-a444-c0ed9e5ba8ea",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792062955814,
+        "settled_at": 1792063082308
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_bfeec9f6-5ecc-42c4-bf2e-79a68e1478e3",
+        "turn_id": "turn_a15a3243-fa78-499b-a638-c6a2c5dae642",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792063287922,
+        "settled_at": 1792063377603
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 2,
+        "task_id": "task_c12f1ad5-d4d1-4170-8cfe-0e7d05814131",
+        "turn_id": "turn_958fc3fe-6e55-4921-b581-fb1294105696",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792063377923,
+        "settled_at": 1792063419856
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 3,
+        "task_id": "task_dededa9d-281d-4113-b0c1-af543d96af8e",
+        "turn_id": "turn_e43bd7c1-93ca-4bbf-bae0-ab6cf5f73fef",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792063420424,
+        "settled_at": 1792063568948
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 4,
+        "task_id": "task_bfeec9f6-5ecc-42c4-bf2e-79a68e1478e3",
+        "turn_id": "turn_e5692c7f-8909-4b5a-b29a-4b160c390ea6",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792063569352,
+        "settled_at": 1792063616324
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 5,
+        "task_id": "task_bfeec9f6-5ecc-42c4-bf2e-79a68e1478e3",
+        "turn_id": "turn_50ef5054-b3a3-46da-a90a-d6ee8535c57c",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792063828383,
+        "settled_at": 1792063866986
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 6,
+        "task_id": "task_66c57d4f-08c0-4336-9a31-c9f76320804c",
+        "turn_id": "turn_dbfc44a8-3d73-419c-8db5-39089f919217",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792063867300,
+        "settled_at": 1792063921511
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 7,
+        "task_id": "task_8c709371-0c0c-4356-a590-7ebb9b46a6ea",
+        "turn_id": "turn_4d1a51bc-eabe-43c5-82da-e3980d88cd96",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792063921895,
+        "settled_at": 1792064081256
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 8,
+        "task_id": "task_bfeec9f6-5ecc-42c4-bf2e-79a68e1478e3",
+        "turn_id": "turn_3ee7c04b-b9ec-4f11-bacf-da511de4c091",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792064081539,
+        "settled_at": 1792064110984
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 9,
+        "task_id": "task_230a20c5-dc9c-4282-ac50-6bd7f8940e7b",
+        "turn_id": "turn_f1283cce-57b3-4a8b-b39f-6478d7a66859",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792064833943,
+        "settled_at": 1792065046457
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 10,
+        "task_id": "task_ca7a1595-e40c-4de3-9ead-14ef04eeed5a",
+        "turn_id": "turn_764955a5-41b3-477d-90c0-2dcf1de78ee5",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792065046921,
+        "settled_at": 1792065092320
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 11,
+        "task_id": "task_039d17af-83df-4b7a-b6af-fa1cf33c5744",
+        "turn_id": "turn_aeaab7f7-b13c-48a3-be9d-7dbf2e61699f",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792065092985,
+        "settled_at": 1792065252628
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 12,
+        "task_id": "task_20bf0a0f-25b5-4626-9564-0074f778b8f9",
+        "turn_id": "turn_86f83ba5-08e8-4b38-b042-4b5341872c88",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792065252834,
+        "settled_at": 1792065339054
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-rc7-deepseek-20261015",
+      "call": {
+        "id": 13,
+        "task_id": "task_230a20c5-dc9c-4282-ac50-6bd7f8940e7b",
+        "turn_id": "turn_d127be59-82e5-4bf7-a465-fe05c6696085",
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "response_model": "deepseek-flash",
+        "status": "succeeded",
+        "created_at": 1792065339687,
+        "settled_at": 1792065375557
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-two-sol-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_ef995980-af52-4518-bacf-20b7ddaab680",
+        "turn_id": "turn_05e880e9-1bfa-4301-b058-598787ef8b4d",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792061294442,
+        "settled_at": 1792061440374
+      },
+      "copies": []
+    },
+    {
+      "root": "review-r86-real-two-sol-current-20261015",
+      "call": {
+        "id": 1,
+        "task_id": "task_a2a79984-c399-4833-a7f7-8b22933d5929",
+        "turn_id": "turn_42858790-d595-4f0f-8959-a2a056c65eb5",
+        "runtime_kind": "codex",
+        "model": "gpt-6.1-sol",
+        "response_model": null,
+        "status": "succeeded",
+        "created_at": 1792061660512,
+        "settled_at": 1792061804708
+      },
+      "copies": []
+    }
+  ],
+  "originalFailures": [
+    {
+      "root": "review-r86-real-rc4-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-real-rc5-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-real-two-sol-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-real-two-sol-current-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "file": "native-proof-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-real-20261015",
+      "file": "native-proof-code-v2.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc9-real-20261015",
+      "file": "planning-chat-original-failure.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc10-real-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc10-full-20261015",
+      "file": "result.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc10-full-v2-20261015",
+      "file": "result.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc10-restored-20261015",
+      "file": "ordinary-chat.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "file": "real-code-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-real-20261015",
+      "file": "delivery-code-v2.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "file": "delivery-document-v1.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "file": "delivery-deliberation.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-luna-20261016",
+      "file": "quota-original-failures.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-visual-20261015",
+      "file": "visual-pairs.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-visual-v3-20261016",
+      "file": "visual-pairs.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "file": "delivery-deliberation.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "file": "deliberation-original-failure.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "file": "collaboration-reopen.json",
+      "pass": false
+    },
+    {
+      "root": "review-r86-final-rc11-collaboration-20261016",
+      "file": "collaboration-reopen-completed.json",
+      "pass": false
+    }
+  ],
+  "originalFailuresRetained": true,
+  "allAttemptsCounted": true,
+  "noAutomaticReplay": true,
+  "totals": {
+    "attempts": 157,
+    "byStatus": {
+      "succeeded": 149,
+      "failed": 7,
+      "interrupted": 1
+    },
+    "byModel": {
+      "claude/deepseek-flash": 99,
+      "codex/gpt-6.1-sol": 36,
+      "codex/gpt-6-luna": 19,
+      "claude/glm-5.3-flash": 2,
+      "codex/gpt-6-sol": 1
+    }
+  }
+}

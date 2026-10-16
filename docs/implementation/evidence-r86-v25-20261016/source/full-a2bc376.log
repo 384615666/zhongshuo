@@ -1,0 +1,38 @@
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+ RUN  v5.0.2 D:/zhongshuo
+
+warning: in the working copy of 'b.txt', LF will be replaced by CRLF the next time Git touches it
+[zhongshuo-daemon] drain error: Error: lp 模拟派发失败（请求前）
+    at LocalProtocolAdapter.startTurn (D:/zhongshuo/tests/helpers/localProtocolAdapter.ts:146:58)
+    at Proxy.interceptStartTurn (D:/zhongshuo/src/daemon/realCallLedger.ts:83:21)
+    at DispatchWorker.dispatchClaimed (D:/zhongshuo/src/daemon/dispatchWorker.ts:891:21)
+    at DispatchWorker.runOnce (D:/zhongshuo/src/daemon/dispatchWorker.ts:313:5)
+    at DispatchWorker.drain (D:/zhongshuo/src/daemon/dispatchWorker.ts:333:12)
+[zhongshuo-worker] turn 消费器异常（turnId=turn_f85f0fd8-5475-44a3-9c49-c28adc3ea492）：TypeError: The database connection is not open
+    at Database.prepare (D:\zhongshuo\node_modules\.pnpm\better-sqlite3@13.0.3\node_modules\better-sqlite3\lib\methods\wrappers.js:5:21)
+    at DispatchWorker.consumeUntilTerminal (D:/zhongshuo/src/daemon/dispatchWorker.ts:1708:10)
+[zhongshuo-daemon] stop 未完成（incomplete）：收拢失败(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+[zhongshuo-daemon] stop 未完成（incomplete）：退出未确认(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+[zhongshuo-daemon] stop 未完成（incomplete）：消费器未收敛(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+[zhongshuo-daemon] stop 未完成（incomplete）：drain 未收敛（启动/消费可能仍在途）；启动中的派发未收尾(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+[zhongshuo-daemon] stop 未完成（incomplete）：drain 未收敛（启动/消费可能仍在途）；启动中的派发未收尾(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+[zhongshuo-daemon] 强制路径仍未收敛：drain 仍挂起；启动中的派发未收尾(1)——不关库不释放锁（崩溃语义，WAL/UNKNOWN 现场保留），不声称已确认杀完/落库
+[zhongshuo-daemon] stop 未完成（incomplete）：收拢失败(1)——恢复依据=崩溃恢复语义（WAL+applyRecovery）+ daemon:stop:last 持久化记录
+npm warn Unknown env config "electron-mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "electron-mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown user config "electron_mirror". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+(node:64428) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+warning: in the working copy of 'committed.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'staged.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'committed.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'staged-new.txt', LF will be replaced by CRLF the next time Git touches it
+[pipeClient] 无等待者响应丢弃（commandId=cmd-A）：{"commandId":"cmd-A","ok":true,"data":"A-late-result"}
+
+ Test Files  163 passed (163)
+      Tests  1164 passed (1164)
+   Start at  23:03:36
+   Duration  236.39s (tests 94%, import 5%, transform 1%)
+

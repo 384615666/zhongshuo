@@ -1,0 +1,421 @@
+{
+  "pass": true,
+  "source": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v25-rc11",
+  "copy": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-full-20261015\\copy",
+  "buildId": "bld_cf50e93cc0db5723",
+  "sourceManifestChecked": 593,
+  "copyManifestChecked": 593,
+  "launcherSha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+  "port": 52845,
+  "project": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-full-20261015\\R78 UI 工程项目",
+  "steps": [
+    "R85 empty current-project board asks for a project instead of reading all",
+    "default gate clears fake/runtime/guard/entry overrides",
+    "ordinary no-helper launcher opens A/B, closes, reopens A/B with zero model calls",
+    "marker token mismatch: BAT refused before spawning UI/daemon",
+    "missing debug port: BAT refused before spawning UI/daemon",
+    "marker canonical data-root mismatch: BAT refused before spawning UI/daemon",
+    "packaged daemon startDaemon+fake adapter attached via unmodified BAT",
+    "room result tab opens delivery document and actual worktree file",
+    "board/pending locate same room task while v1 awaits review",
+    "stale room v1 acceptance rejected while v2 awaits review",
+    "room UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "search/saved/activity UI locate the same room task",
+    "DM UI send→natural v1/file→review note→explicit rework→natural v2/file→accept",
+    "R79 DM completed-task records read historical run and both natural delivery versions, then close to the mounted conversation",
+    "DM archive read-only and explicit restore preserve task/versions without dispatch",
+    "room UI stop during active Fake turn→run CANCELLED; no delivery",
+    "R79 unchanged RUNNING over 17.5 seconds / 3 polls → actual tools and usage → natural delivery",
+    "R79 natural FAILED reason → visible explicit retry → same task new natural delivery; no automatic retry",
+    "R79 separately labelled synthetic 26-run/3250-event/61-delivery scale: older run selection, bounded activity/delivery pages and original document read",
+    "final launcher reopen preserves room/DM identities and deliveries",
+    "R79 completed live facts and older history remain reachable after real launcher reopen"
+  ],
+  "ui": {
+    "sessions": [
+      {
+        "label": "ordinary-first",
+        "errors": []
+      },
+      {
+        "label": "ordinary-reopen",
+        "errors": []
+      },
+      {
+        "label": "engineering-full-flow",
+        "errors": []
+      },
+      {
+        "label": "engineering-reopen",
+        "errors": []
+      }
+    ],
+    "roomV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    },
+    "dmV1": {
+      "queuedLive": true,
+      "queuedViaOutbox": true,
+      "running": true,
+      "progressInUi": true
+    }
+  },
+  "daemon": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "packedEntry": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-full-20261015\\copy\\ZhongshuoDual\\resources\\app\\daemon\\daemon.cjs",
+    "appDataDir": "D:\\zhongshuo\\dist\\desktop\\review-r86-final-rc11-full-20261015\\copy\\server-data",
+    "pipeName": "\\\\.\\pipe\\zs-daily-28a1b6e1-61f7-4c1c-a6a4-a03fd319fb96",
+    "pid": 55452,
+    "fakeAdapterInjected": true,
+    "realDispatchGuard": true,
+    "at": 1792076802074
+  },
+  "ids": {
+    "projectId": "prj_ac209ba6-fa05-49d7-9368-fa6ac564c843",
+    "memberId": "m_default_prj_ac209ba6-fa05-49d7-9368-fa6ac564c843_0",
+    "roomId": "room_0e6a9452-4d58-4f2e-b685-ecb906b3b5e0",
+    "roomConversationId": "conv_4930310f-1bb5-4a1d-8456-55d82b238d26",
+    "dmConversationId": "dm_6d20eb65-bc1e-4397-93cd-de4fafb9d92b",
+    "roomTaskId": "task_98bdab66-ca59-4a5d-a42e-f50c986c9e80",
+    "roomThreadId": "thread_85e83bee-74c9-42e2-afee-daf6a1da4447",
+    "dmTaskId": "task_13cf8040-f00f-4365-8c9a-2ae2e0b7ba3a",
+    "stoppedTaskId": "task_d6f736b9-3041-4e17-a21e-15c5488399cd"
+  },
+  "dmRecords": {
+    "sameTask": "task_13cf8040-f00f-4365-8c9a-2ae2e0b7ba3a",
+    "completed": true,
+    "historicalRun": true,
+    "versions": [
+      1,
+      2
+    ],
+    "closedToConversation": true
+  },
+  "r79": {
+    "live": {
+      "id": "task_cc18328a-13c8-43c2-803d-b1708528e28c",
+      "threadId": "thread_3edd6ac3-6a20-4741-a8c6-e9df274e0db1"
+    },
+    "failed": {
+      "id": "task_4d3f0b3b-da47-4a65-8eb4-ae7ca4917e3c",
+      "threadId": "thread_0ea05eda-69c7-4c61-b169-2cedfe97e68d"
+    },
+    "scale": {
+      "id": "task_0d34fbed-6346-46ea-9e49-f1b77b4d41a6",
+      "threadId": "thread_ede41b83-89cc-47d0-8b08-2a4349553d2b"
+    },
+    "selectedHistoricalRun": "r79-scale-run-4",
+    "threeCycles": true,
+    "automaticToolsAndUsage": true,
+    "naturalDelivery": true,
+    "explicitFailureRecovery": true,
+    "failureReasonVisible": true,
+    "scaleInjection": "separate historical scale only; no normal state updates",
+    "runs": 26,
+    "events": 3250,
+    "deliveries": 61,
+    "historyRead": true,
+    "reading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "afterReading": {
+      "scrollTop": 517.5999755859375,
+      "open": true
+    },
+    "geometry": {
+      "overflow": "auto",
+      "bodyClientHeight": 503,
+      "bodyScrollHeight": 4997,
+      "buttonTop": 550,
+      "buttonBottom": 575.2000007629395,
+      "composerTop": 659.7999877929688,
+      "visible": true
+    },
+    "zeroCalls": true,
+    "reopen": true
+  },
+  "deliveries": {
+    "room": [
+      "dlv_turn_00f19e37-aae1-4b90-87ea-0e516e78155d",
+      "dlv_turn_8de653e5-5c69-4404-a907-d062d81d746a"
+    ],
+    "dm": [
+      "dlv_turn_1e351d27-1fdc-467e-adfa-eeec184f2865",
+      "dlv_turn_1b96fa89-9238-4c47-ace5-0677625f1fb6"
+    ]
+  },
+  "realCallsBeforeReopen": 0,
+  "r85": {
+    "pass": true,
+    "scope": "complete",
+    "buildId": "bld_cf50e93cc0db5723",
+    "steps": [
+      {
+        "name": "archive-page-1",
+        "at": 1792076905567,
+        "hash": "#/archive"
+      },
+      {
+        "name": "archive-page-2",
+        "at": 1792076905785,
+        "hash": "#/archive"
+      },
+      {
+        "name": "archive-read-failure",
+        "at": 1792076906189,
+        "hash": "#/archive"
+      },
+      {
+        "name": "archive-aba",
+        "at": 1792076909404,
+        "hash": "#/archive?project=prj_ac209ba6-fa05-49d7-9368-fa6ac564c843"
+      },
+      {
+        "name": "board-default",
+        "at": 1792076909778,
+        "hash": "#/board"
+      },
+      {
+        "name": "board-filter-back",
+        "at": 1792076910220,
+        "hash": "#/board?scope=all&projectId=prj_d24681d1-4b2a-45f4-ac37-72b04dc0099d&roomId=room_0e6a9452-4d58-4f2e-b685-ecb906b3b5e0"
+      },
+      {
+        "name": "board-invalid-filter-back",
+        "at": 1792076910426
+      },
+      {
+        "name": "archive-project-still-readonly",
+        "at": 1792076910821,
+        "hash": "#/archive?project=prj_a6695332-2fe5-4288-aa0f-cc24db60b784"
+      },
+      {
+        "name": "activity-cross-project",
+        "at": 1792076911074,
+        "hash": "#/activity"
+      },
+      {
+        "name": "first-commit",
+        "at": 1792076916136,
+        "hash": "#/project/prj_7e695ef8-8e2b-42b4-9462-659df9c002cc/files?tab=git"
+      },
+      {
+        "name": "partial-0",
+        "at": 1792076918230,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "partial-1",
+        "at": 1792076918593,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "diff-read-failure",
+        "at": 1792076919153,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "diff-auto-refresh",
+        "at": 1792076919538,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "branch-failed-input",
+        "at": 1792076920019,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "branch-created",
+        "at": 1792076921141,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "conflict-stale",
+        "at": 1792076923714,
+        "hash": "#/project/prj_fa1e7532-fe49-4b8a-bee6-bfe2a3e7ee21/files?tab=git"
+      },
+      {
+        "name": "conflict-resolved",
+        "at": 1792076925072,
+        "hash": "#/project/prj_fa1e7532-fe49-4b8a-bee6-bfe2a3e7ee21/files?tab=git"
+      },
+      {
+        "name": "history-expanded",
+        "at": 1792076928245,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      },
+      {
+        "name": "undo",
+        "at": 1792076929249,
+        "hash": "#/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git"
+      }
+    ],
+    "faults": [
+      {
+        "kind": "archive read rejected",
+        "retainedRows": 68
+      },
+      {
+        "kind": "archive delayed ABA",
+        "removed": "room_cff2da57-2763-46fd-8e19-e499b9377b07",
+        "finalRows": 33
+      }
+    ],
+    "screenshots": [
+      "r85-archive-page-1.png",
+      "r85-archive-page-2.png",
+      "r85-archive-read-failure.png",
+      "r85-archive-aba.png",
+      "r85-board-default.png",
+      "r85-board-filter-back.png",
+      "r85-archive-project-still-readonly.png",
+      "r85-activity-cross-project.png",
+      "r85-first-commit.png",
+      "r85-partial-0.png",
+      "r85-partial-1.png",
+      "r85-diff-read-failure.png",
+      "r85-diff-auto-refresh.png",
+      "r85-branch-failed-input.png",
+      "r85-branch-created.png",
+      "r85-conflict-stale.png",
+      "r85-conflict-resolved.png",
+      "r85-history-expanded.png",
+      "r85-undo.png"
+    ],
+    "samples": [
+      {
+        "at": 1792076929968,
+        "route": "/thread/thread_85e83bee-74c9-42e2-afee-daf6a1da4447?tab=run",
+        "heap": 28116824,
+        "requests": 1286,
+        "inFlight": 0,
+        "rss": 131502080
+      },
+      {
+        "at": 1792076930702,
+        "route": "/dm/dm_6d20eb65-bc1e-4397-93cd-de4fafb9d92b",
+        "heap": 31148008,
+        "requests": 1292,
+        "inFlight": 0,
+        "rss": 131743744
+      },
+      {
+        "at": 1792076931429,
+        "route": "/project/prj_ac209ba6-fa05-49d7-9368-fa6ac564c843/members",
+        "heap": 13861592,
+        "requests": 1332,
+        "inFlight": 0,
+        "rss": 132292608
+      },
+      {
+        "at": 1792076932135,
+        "route": "/board",
+        "heap": 15635484,
+        "requests": 1333,
+        "inFlight": 0,
+        "rss": 132636672
+      },
+      {
+        "at": 1792076932845,
+        "route": "/activity",
+        "heap": 17055456,
+        "requests": 1334,
+        "inFlight": 0,
+        "rss": 132857856
+      },
+      {
+        "at": 1792076933567,
+        "route": "/archive",
+        "heap": 13223484,
+        "requests": 1335,
+        "inFlight": 0,
+        "rss": 133074944
+      },
+      {
+        "at": 1792076934276,
+        "route": "/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git",
+        "heap": 14192912,
+        "requests": 1346,
+        "inFlight": 4,
+        "rss": 136204288
+      },
+      {
+        "at": 1792076935001,
+        "route": "/thread/thread_85e83bee-74c9-42e2-afee-daf6a1da4447?tab=run",
+        "heap": 18097532,
+        "requests": 1353,
+        "inFlight": 0,
+        "rss": 139804672
+      },
+      {
+        "at": 1792076935723,
+        "route": "/dm/dm_6d20eb65-bc1e-4397-93cd-de4fafb9d92b",
+        "heap": 21138796,
+        "requests": 1357,
+        "inFlight": 0,
+        "rss": 140640256
+      },
+      {
+        "at": 1792076936447,
+        "route": "/project/prj_ac209ba6-fa05-49d7-9368-fa6ac564c843/members",
+        "heap": 23562908,
+        "requests": 1397,
+        "inFlight": 0,
+        "rss": 145379328
+      },
+      {
+        "at": 1792076937156,
+        "route": "/board",
+        "heap": 24575932,
+        "requests": 1398,
+        "inFlight": 0,
+        "rss": 146214912
+      },
+      {
+        "at": 1792076937862,
+        "route": "/activity",
+        "heap": 13395188,
+        "requests": 1399,
+        "inFlight": 0,
+        "rss": 146284544
+      },
+      {
+        "at": 1792076938584,
+        "route": "/archive",
+        "heap": 14841072,
+        "requests": 1400,
+        "inFlight": 0,
+        "rss": 146309120
+      },
+      {
+        "at": 1792076939308,
+        "route": "/project/prj_902b3286-17cf-40c3-8863-a38c08148398/files?tab=git",
+        "heap": 15799892,
+        "requests": 1411,
+        "inFlight": 3,
+        "rss": 146911232
+      }
+    ],
+    "realCalls": 0,
+    "ids": {
+      "a": "prj_ac209ba6-fa05-49d7-9368-fa6ac564c843",
+      "b": "prj_d24681d1-4b2a-45f4-ac37-72b04dc0099d",
+      "room": "room_0e6a9452-4d58-4f2e-b685-ecb906b3b5e0",
+      "br": "room_default_prj_d24681d1-4b2a-45f4-ac37-72b04dc0099d"
+    },
+    "firstCommit": {
+      "head": "fe241212d4d16107333e2f79a7d8034c93453857",
+      "files": "\"\\350\\257\\264\\346\\230\\216.txt\""
+    },
+    "undo": {
+      "approved": "12e047beb9622c41f3c01a833d761f4b2f98eced",
+      "head": "8be3bc8d2c720ef245be8e3c5b027586c0a3926a"
+    }
+  },
+  "realCalls": 0,
+  "finalRealCalls": 0
+}

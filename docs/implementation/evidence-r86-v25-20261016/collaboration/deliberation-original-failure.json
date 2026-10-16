@@ -1,0 +1,169 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_41da4d33-ea0e-4fbd-8533-4d99dd773366",
+  "scope": "original synthesis hard deadline; no replay; Read-only source/SQLite diagnosis",
+  "run": {
+    "id": "run_7d23019d-d76e-4507-8f49-16022068a242",
+    "status": "FAILED",
+    "stage": "SYNTHESIS",
+    "budget_json": "{\"runMaxTurns\":14,\"usedTurns\":12,\"inFlightReservedTurns\":0,\"tailReservationByStage\":{\"SYNTHESIS\":0,\"RATIFY\":2}}"
+  },
+  "events": [
+    {
+      "kind": "turn.statusChanged",
+      "turn_id": "turn_f596555c-d4d6-44d1-9a40-8865083fa576",
+      "payload_json": "{\"status\":\"FAILED\",\"code\":\"INTERRUPTED\",\"message\":\"停止请求后进程退出（code=1）且无 result 终结事件；stderr尾：[claude-code:unrecognized_model] {\\\"model\\\":\\\"deepseek-flash\\\",\\\"query_source\\\":\\\"sdk\\\"}\\n\",\"source\":\"member-terminal\"}",
+      "created_at": 1792132969789
+    },
+    {
+      "kind": "run.synthesisUnavailable",
+      "turn_id": null,
+      "payload_json": "{\"reason\":\"budget_exhausted\",\"stageAvailable\":0}",
+      "created_at": 1792132970198
+    }
+  ],
+  "turns": [
+    {
+      "id": "turn_a32abf14-697e-4049-a14c-a07cb9aada8d",
+      "stage_key": "delib.independent",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792131662419,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792131661916,
+      "settled_at": 1792131780298,
+      "model": "gpt-6-luna"
+    },
+    {
+      "id": "turn_22d9b7b9-7242-437b-9c41-d38ac88f7145",
+      "stage_key": "delib.independent",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792131766530,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792131738272,
+      "settled_at": 1792131778206,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_e85ada0c-63a2-4246-b171-447e8030f2bf",
+      "stage_key": "delib.cross_review",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792131783538,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792131783053,
+      "settled_at": 1792131905494,
+      "model": "gpt-6-luna"
+    },
+    {
+      "id": "turn_023c1bf7-82e4-4370-aded-3338c5c94858",
+      "stage_key": "delib.cross_review",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792131837245,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792131834634,
+      "settled_at": 1792131925585,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_cb022c65-3d3a-4f0a-b0ca-4e0aa9616d26",
+      "stage_key": "delib.issue_discussion.r1",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792131929515,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792131925826,
+      "settled_at": 1792131982601,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_d5602cbd-d761-4144-9637-6b8b93da6ab5",
+      "stage_key": "delib.issue_discussion.r1",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132037980,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132036837,
+      "settled_at": 1792132154893,
+      "model": "gpt-6-luna"
+    },
+    {
+      "id": "turn_ce19ab76-275d-4752-8ab4-490f01052e54",
+      "stage_key": "delib.issue_discussion.r2",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132229209,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132155847,
+      "settled_at": 1792132347458,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_831fa42c-362a-43ee-8275-5807e54e740c",
+      "stage_key": "delib.issue_discussion.r2",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132290120,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132289618,
+      "settled_at": 1792132411997,
+      "model": "gpt-6-luna"
+    },
+    {
+      "id": "turn_461e358f-9382-417b-b7f8-408e214f7be3",
+      "stage_key": "delib.issue_discussion.r3",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132413189,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132412736,
+      "settled_at": 1792132532758,
+      "model": "gpt-6-luna"
+    },
+    {
+      "id": "turn_dab8a87a-61e2-4214-bdef-316c19d6b214",
+      "stage_key": "delib.issue_discussion.r3",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132467058,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132462214,
+      "settled_at": 1792132563490,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_feee6b66-a724-4d15-b064-ef2f6f0c9fc6",
+      "stage_key": "delib.issue_discussion.r3.chk",
+      "status": "SUCCEEDED",
+      "exec_started_at": 1792132568876,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132563680,
+      "settled_at": 1792132668860,
+      "model": "deepseek-flash"
+    },
+    {
+      "id": "turn_f596555c-d4d6-44d1-9a40-8865083fa576",
+      "stage_key": "delib.synthesis",
+      "status": "FAILED",
+      "exec_started_at": 1792132818718,
+      "exec_paused_ms": 0,
+      "collab_turn_deadline_ms": 300000,
+      "created_at": 1792132669229,
+      "settled_at": 1792132969789,
+      "model": "deepseek-flash"
+    }
+  ],
+  "source": "dispatchWorker.consumeUntilTerminal starts a separate hard wall deadline when consuming adapter events; absence uses exec_started_at separately; stderr unrecognized_model is not treated as a unique provider cause"
+}

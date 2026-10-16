@@ -1,0 +1,16 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "separate native Alt+F4 then same BAT; readonly original deliveries and source bytes; no dispatch",
+  "documentTaskId": "task_5948b2ac-47ee-482c-a584-51e23f578262",
+  "deliberationTaskId": "task_984b01f8-dcc9-4d98-b557-f522b3256719",
+  "error": "Error: timeout native normal close: false\n    at until (D:\\zhongshuo\\scripts\\verify-r81-members-launcher.cjs:22:135)\n    at async D:\\zhongshuo\\scripts\\verify-r86-collaboration-reopen.cjs:12:2"
+}

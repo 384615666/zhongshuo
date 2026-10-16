@@ -1,0 +1,20 @@
+{
+  "pass": false,
+  "build": {
+    "buildId": "bld_19cfe41229996380",
+    "commit": "05b1331d892e8afad0bde9dc47d53d6d018161a2",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T12:27:41.689Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "messageId": "msg_turn_44667759-cd0c-4910-ab57-dcc5d463091c_claude_final_turn_44667759-cd0c-4910-ab57-dcc5d463091c",
+  "scope": "original planner control rendered in agent chat; child later reply does not repair this original",
+  "uiCapture": "raw-rework-plan-observation.json",
+  "uiRawControlObserved": true,
+  "bodyHash": "e708bbf4e22e876b5017118c93ed50e9484f0b5eae38e23cdbbffa7c30fc6255",
+  "storedTextIsControl": true,
+  "originalProtocolPreserved": true,
+  "visiblePrefix": "{\"schemaVersion\":\"task-complete-v1\",\"resultKey\":\"result_turn_44667759-cd0c-4910-ab57-dcc5d463091c\",\""
+}

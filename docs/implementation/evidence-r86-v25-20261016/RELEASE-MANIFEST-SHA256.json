@@ -1,0 +1,718 @@
+{
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "recordSourceHead": "b11ec8443b4d22ea2bd9ca3ca22a494f3161229a",
+  "scope": "explicit synthetic evidence whitelist; no databases, profiles, raw native transcripts, credentials or user documents",
+  "userAcceptance": "pending",
+  "files": [
+    {
+      "path": "candidate/BUILD.json",
+      "bytes": 302,
+      "sha256": "15a1b57c0d9d891440fe6f30643a76179009f3d6e29721ed4f639808ff65c3fe",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/ZhongshuoDual/BUILD.json"
+    },
+    {
+      "path": "candidate/MANIFEST-SHA256.json",
+      "bytes": 111596,
+      "sha256": "6befd6fd77e4db4f0fb6f95d6483b1ec618916d8a9f0ea9f5548684c62e19718",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/ZhongshuoDual/MANIFEST-SHA256.json"
+    },
+    {
+      "path": "candidate/start-desktop.bat",
+      "bytes": 3131,
+      "sha256": "ef6b3f32031b3ace40b0cbfbc6423839b258133f9cd5e95ea659c2d7812f20da",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/start-desktop.bat"
+    },
+    {
+      "path": "candidate/README-CANDIDATE.md",
+      "bytes": 473,
+      "sha256": "3b68d990b7548049d3f7544b7ba2877c28918ab9666041480572adc82552e56e",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/README-CANDIDATE.md"
+    },
+    {
+      "path": "candidate/README-DAILY.md",
+      "bytes": 4180,
+      "sha256": "547bbf8514f2c3bf532a1bfb70e9b7122c4efbce67b15470dd0932478efdc5a0",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/README-DAILY.md"
+    },
+    {
+      "path": "candidate/UPGRADE.md",
+      "bytes": 1115,
+      "sha256": "30a9ea434dd746962f8730b1c50663c1d24cafd549ea98219badae8a22133944",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/UPGRADE.md"
+    },
+    {
+      "path": "candidate/UPGRADE-V23.md",
+      "bytes": 1115,
+      "sha256": "30a9ea434dd746962f8730b1c50663c1d24cafd549ea98219badae8a22133944",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/UPGRADE-V23.md"
+    },
+    {
+      "path": "candidate/GUIDES-SHA256.json",
+      "bytes": 675,
+      "sha256": "687187c04bcd5995036e6ae6f360645890fa61a74cae9a536063f9084f777f19",
+      "source": "dist/desktop/desktop-daily-win-v25-rc11/GUIDES-SHA256.json"
+    },
+    {
+      "path": "code/final-gates.json",
+      "bytes": 4486,
+      "sha256": "d9d1d2b1a839186bda560203531e103faa898cfdb86f39ed44229935d4307047",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/final-gates.json"
+    },
+    {
+      "path": "code/real-code-v1.json",
+      "bytes": 138935,
+      "sha256": "fb3c60e0725780b596d3f49c7fcf75dcd809a24947ed8ff36e9370002a1c92d3",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/real-code-v1.json"
+    },
+    {
+      "path": "code/delivery-code-v2.json",
+      "bytes": 22154,
+      "sha256": "93b6a2f8e56c9dab5ff40b669b947eab3d27dffe804d772a87179704facc123b",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/delivery-code-v2.json"
+    },
+    {
+      "path": "code/code-lifecycle.json",
+      "bytes": 2925,
+      "sha256": "fb6e52730c7ef032cf319b41a3edd8fea1c113ff415c090b277adfaebe2d154e",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/code-lifecycle.json"
+    },
+    {
+      "path": "code/rework-running-window.json",
+      "bytes": 2457,
+      "sha256": "3388239b993b9a7e672bc54f4bb827a7c1d4da9ce2962868ba9624e4834d0342",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/rework-running-window.json"
+    },
+    {
+      "path": "code/rework-running-window.png",
+      "bytes": 231020,
+      "sha256": "efe22440ffeefc6bf5f0b1b6069af6114980aef5d64390d4b2f698f67ea5787d",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/rework-running-window.png"
+    },
+    {
+      "path": "code/ordinary-chat-completed.json",
+      "bytes": 3069,
+      "sha256": "f571fefa7c19b32f4fb5a2ec1ebbb852b9c0dc0047861553f022c9d524b3f8a9",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/ordinary-chat-completed.json"
+    },
+    {
+      "path": "code/native-proof-code-v1.json",
+      "bytes": 18428,
+      "sha256": "d502220d80bd78f1bd0c211f2cf80359b6a746449080e8f44cda0d54fd5b95e2",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-proof-code-v1.json"
+    },
+    {
+      "path": "code/native-proof-code-v2.json",
+      "bytes": 20533,
+      "sha256": "1e4429135efbde1957cabef7274f4ff89d8bde4c6946675f9728b4fc97c42074",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-proof-code-v2.json"
+    },
+    {
+      "path": "code/native-navigation.json",
+      "bytes": 2171,
+      "sha256": "e4f1358741ce4f90671ca40f96402cb95a272a414d2fe7e4838bfbcae94289e3",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-navigation.json"
+    },
+    {
+      "path": "code/call-ledger.json",
+      "bytes": 82790,
+      "sha256": "2d902dc89d37e1e2c7b05eec90b7617cf3e409f53d52bcd0eea83a6ffdbae71c",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/call-ledger.json"
+    },
+    {
+      "path": "code/quota-original-failures.json",
+      "bytes": 1928,
+      "sha256": "e7f5fe34c29d792475078808207931c457f0709b6b0667becde5d0d0fccf4d15",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/quota-original-failures.json"
+    },
+    {
+      "path": "code/pre-closeout-gates.json",
+      "bytes": 3356,
+      "sha256": "627bf25b477001db853b0358022c982d58723009bbd0ae70aba631d590c8633c",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/pre-closeout-gates.json"
+    },
+    {
+      "path": "code/native-v2-accepted.json",
+      "bytes": 5505,
+      "sha256": "56b92e00c5a08c0936a6533f9c54234900e719a2ab788c65f092fcb732a1f58d",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-v2-accepted.json"
+    },
+    {
+      "path": "code/native-v2-accepted.png",
+      "bytes": 216760,
+      "sha256": "908bcf94414107931e564e7f278fb254f3d7afee0acdbc741f80d4b65c827498",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-v2-accepted.png"
+    },
+    {
+      "path": "code/native-child-task.json",
+      "bytes": 8701,
+      "sha256": "39d68f9b1b8c07ad23d1489f230a93f4aa9a4e81e93515ba18b7dee696102d7c",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-task.json"
+    },
+    {
+      "path": "code/native-child-task.png",
+      "bytes": 223630,
+      "sha256": "71af5e2423a9d874984d4d8f54e4ee095fb81eb851abac1a332a60d47fe94f23",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-task.png"
+    },
+    {
+      "path": "code/native-child-return-parent.json",
+      "bytes": 9160,
+      "sha256": "9de994d941d5196aca7900b75ca933cfb5b79794fc46ec1337a0a93dc7e2d340",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-return-parent.json"
+    },
+    {
+      "path": "code/native-child-return-parent.png",
+      "bytes": 235382,
+      "sha256": "f6349297d4be478dc34a07acb2945125c74f569a91945eea49dc172178eda8ec",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-return-parent.png"
+    },
+    {
+      "path": "code/native-child-delivery-exact.json",
+      "bytes": 8866,
+      "sha256": "796d0de0834823c6b9d25861fae44045b304da23fdd6624057de85f7488781c2",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-delivery-exact.json"
+    },
+    {
+      "path": "code/native-child-delivery-exact.png",
+      "bytes": 225498,
+      "sha256": "405c3dd9e676407626db68859a00195a4dee6739c176243a8a4fb87679f9675e",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-delivery-exact.png"
+    },
+    {
+      "path": "code/native-child-delivery-refreshed.json",
+      "bytes": 9671,
+      "sha256": "4135ac55a93b7e87c94d99cbcee5f8ee73f45e97862cb3a5b2778263dc6166d2",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-delivery-refreshed.json"
+    },
+    {
+      "path": "code/native-child-delivery-refreshed.png",
+      "bytes": 208991,
+      "sha256": "a718da3228b7889571ce96a6f96bf765a18b6eb14b93da9bf022b87fcf1b54d7",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/native-child-delivery-refreshed.png"
+    },
+    {
+      "path": "collaboration/delivery-document-v1.json",
+      "bytes": 45476,
+      "sha256": "e68737e397f3053dd5f5141398161254a326da83c4ed962a9831af9dcfbe1ad0",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/delivery-document-v1.json"
+    },
+    {
+      "path": "collaboration/delivery-deliberation-completed.json",
+      "bytes": 5262,
+      "sha256": "7c64be2ff27387cfb85d1e42610798592aeec163936edc9098dad5e2517f66c1",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/delivery-deliberation-completed.json"
+    },
+    {
+      "path": "collaboration/deliberation-original-failure.json",
+      "bytes": 5899,
+      "sha256": "da1026b2604f93bc79d0e4ad8f11f2311cf0b24dd675311cf267f769cd295fe6",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/deliberation-original-failure.json"
+    },
+    {
+      "path": "collaboration/bounded-new-turn-config.json",
+      "bytes": 949,
+      "sha256": "2e37ace4f6efda698ec8eae5f173fd29bd950c1d7463d713e6b789928ec85325",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/bounded-new-turn-config.json"
+    },
+    {
+      "path": "collaboration/native-proof-document-v1.json",
+      "bytes": 17937,
+      "sha256": "1bc8879a105b64c08b462e9a9782eb6be7ca217ae3c64e13de09a28cacacb372",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-proof-document-v1.json"
+    },
+    {
+      "path": "collaboration/native-proof-deliberation.json",
+      "bytes": 26906,
+      "sha256": "a301164f8b18ec431a9ab4b0edce6773a0cfd51f17ab26c735f9e36f4d2c03ec",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-proof-deliberation.json"
+    },
+    {
+      "path": "collaboration/deliberation-proof.json",
+      "bytes": 17727,
+      "sha256": "345ad772dafbe063123ec987c8196b217cc5b3deb9f44a4d71eba58d1412e9ee",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/deliberation-proof.json"
+    },
+    {
+      "path": "collaboration/document-preview.json",
+      "bytes": 8060,
+      "sha256": "41aa8854abf598630c70dc21787bdeec1f4863660abde6d4cf6b108d5796d3e8",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/document-preview.json"
+    },
+    {
+      "path": "collaboration/document-preview-verified.png",
+      "bytes": 164113,
+      "sha256": "f5e1c96653efa7ee2b79d9df7432cb38424fbdca572cd6181c7ffb08b7b33a7a",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/document-preview-verified.png"
+    },
+    {
+      "path": "collaboration/native-deliberation-report.json",
+      "bytes": 17158,
+      "sha256": "92f3255eff3c93119b875c91d68b7849fe24f842e0ad0b50eb4bca806e33ffc9",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-deliberation-report.json"
+    },
+    {
+      "path": "collaboration/native-deliberation-report.png",
+      "bytes": 323451,
+      "sha256": "8f6b9478db17ba4286ed192253f372281bcfb96ef02ec05e71f1b27eb2d82e1b",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-deliberation-report.png"
+    },
+    {
+      "path": "collaboration/native-saved-original.md",
+      "bytes": 5586,
+      "sha256": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-saved-original.md"
+    },
+    {
+      "path": "collaboration/collaboration-reopen-completed-v2.json",
+      "bytes": 2572,
+      "sha256": "9d3d7352f436ed66302956ecb7947ac6399e6cace3058fe7d95b9f3697cc799b",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/collaboration-reopen-completed-v2.json"
+    },
+    {
+      "path": "collaboration/pre-close-terminal.json",
+      "bytes": 1331,
+      "sha256": "983d564e500c74283c9a3fd0527dd80c6f03e2b80f284431bbda2eab553dc136",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/pre-close-terminal.json"
+    },
+    {
+      "path": "collaboration/native-document-table.json",
+      "bytes": 6887,
+      "sha256": "d8b854692cce5a501c61aba675c3f0cc41324cf21f04f43ca882ff0ee7be540e",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-document-table.json"
+    },
+    {
+      "path": "collaboration/native-document-table.png",
+      "bytes": 145829,
+      "sha256": "5ff91eb2d501dd785285c814d6de5cddac9ed57b3fafea94c6dcd4ae4d9f9e01",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-document-table.png"
+    },
+    {
+      "path": "collaboration/native-project-deadline-readback.json",
+      "bytes": 3861,
+      "sha256": "775b127e0cdb5eed8655ba2b990525dbd993319f4b19b9cc6a4c279539df0b53",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-project-deadline-readback.json"
+    },
+    {
+      "path": "collaboration/native-project-deadline-readback.png",
+      "bytes": 113294,
+      "sha256": "d0ced07b1a2fce876a55c3d2f7cf83df992a9ec700e1815003d22bc8972b96dc",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-project-deadline-readback.png"
+    },
+    {
+      "path": "collaboration/native-reopened-deliberation.json",
+      "bytes": 13657,
+      "sha256": "a574d0b280448b6f8c3fc06a886eb76b5083e3d704e5ddd0372f3f5af8ee9394",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-reopened-deliberation.json"
+    },
+    {
+      "path": "collaboration/native-reopened-deliberation.png",
+      "bytes": 336194,
+      "sha256": "a8c1556f2684f34a430b56665da6858bd8ed513f4768b9b88a6a11057dedbaa3",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-reopened-deliberation.png"
+    },
+    {
+      "path": "collaboration/native-reopened-document.json",
+      "bytes": 12166,
+      "sha256": "2e2a689f125d558db891b464a4efac2e9919fda127e795bf40877c4f5c9d8fe2",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-reopened-document.json"
+    },
+    {
+      "path": "collaboration/native-reopened-document.png",
+      "bytes": 238363,
+      "sha256": "8ad8f6740a6323d5e3a7839f5910f3f40472d1fc1b0f2f05f044479f56ca402f",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/native-reopened-document.png"
+    },
+    {
+      "path": "synthetic-output/greeting.mjs",
+      "bytes": 132,
+      "sha256": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/R86 合成协作工程/greeting.mjs"
+    },
+    {
+      "path": "synthetic-output/greeting.test.mjs",
+      "bytes": 915,
+      "sha256": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/R86 合成协作工程/greeting.test.mjs"
+    },
+    {
+      "path": "synthetic-output/requirements.md",
+      "bytes": 5586,
+      "sha256": "913f7488c77404a1ec6121c17b17ea9c2298576d9ba9457e2cab6edabd6733c1",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/R86 合成协作工程/requirements.md"
+    },
+    {
+      "path": "visual/visual-pairs.json",
+      "bytes": 99814,
+      "sha256": "f5abab58a68cec7f069c24b615d81ea5fe254699043367cb5b6b97ff6cf9e34c",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/visual-pairs.json"
+    },
+    {
+      "path": "visual/replies-wide-actual.png",
+      "bytes": 218683,
+      "sha256": "b5de4d7e3a90963171c6e4ce6402bb4d83557a265426345631182d4744a9be3a",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-wide-actual.png"
+    },
+    {
+      "path": "visual/replies-wide-prototype.png",
+      "bytes": 242167,
+      "sha256": "37482b04f443ced308b11fbf0046bdc03869e67a5edd67a4feafb7f178852c50",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-wide-prototype.png"
+    },
+    {
+      "path": "visual/task-wide-actual.png",
+      "bytes": 194646,
+      "sha256": "fac8971fe680dc93542557f1888f5ba9a1de486dc00a3eb22a18666a0f282a66",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-wide-actual.png"
+    },
+    {
+      "path": "visual/task-wide-prototype.png",
+      "bytes": 212467,
+      "sha256": "c33cf0289cf36806f687a08788bf965e66fe11f9ef8b8398010f6386fdc24a45",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-wide-prototype.png"
+    },
+    {
+      "path": "visual/replies-narrow-actual.png",
+      "bytes": 97880,
+      "sha256": "0349d417b73c11424725e9ee60b3ab9b39a4f4796e70592f9d09eb370fb9560c",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-narrow-actual.png"
+    },
+    {
+      "path": "visual/replies-narrow-prototype.png",
+      "bytes": 92286,
+      "sha256": "ac4f27277ca7242898a1546d880149aa903f298d146bf004d5f01b4722a63c66",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-narrow-prototype.png"
+    },
+    {
+      "path": "visual/task-narrow-actual.png",
+      "bytes": 73544,
+      "sha256": "15ddbb95c457eebb5fe6dc53fdfe7d24cd3b074a7c8e0f59705e0090b8375756",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-narrow-actual.png"
+    },
+    {
+      "path": "visual/task-narrow-prototype.png",
+      "bytes": 69580,
+      "sha256": "0c102777444f7fabe47fda576fa485c58fae93114e3a9844ad17d84b6f6dd6f9",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-narrow-prototype.png"
+    },
+    {
+      "path": "visual/replies-hidpi-emulated-actual.png",
+      "bytes": 542439,
+      "sha256": "622ed662bc7597290a3c264201082af299589a6b18f2acf5563aa3eba43f9a62",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-hidpi-emulated-actual.png"
+    },
+    {
+      "path": "visual/replies-hidpi-emulated-prototype.png",
+      "bytes": 538502,
+      "sha256": "f1c9de48e7eeb6787b187386e73bdb42e4a51a24847b020dcdc61ff861aa443f",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/replies-hidpi-emulated-prototype.png"
+    },
+    {
+      "path": "visual/task-hidpi-emulated-actual.png",
+      "bytes": 380684,
+      "sha256": "da25cba4ce8c631c4c611419a4c006b4e9d29a293f9bbfb3d63d6755101f71e8",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-hidpi-emulated-actual.png"
+    },
+    {
+      "path": "visual/task-hidpi-emulated-prototype.png",
+      "bytes": 416693,
+      "sha256": "4b148e6be389984c13adf1dae96a877a7855ea807711dd11c8f7778df0106912",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v5-20261016/task-hidpi-emulated-prototype.png"
+    },
+    {
+      "path": "regression/full-launcher-result.json",
+      "bytes": 13246,
+      "sha256": "ab695d059a2af7d0b2a510afaebb08d8751793f6f63a7f9bfb48861194c9ed4b",
+      "source": "dist/desktop/review-r86-final-rc11-full-20261015/result.json"
+    },
+    {
+      "path": "regression/upgrade.json",
+      "bytes": 3544,
+      "sha256": "3eb5b6bc5bc73ab706c175e7de6c1001fc71dadde6cf0bc672c18e389f252067",
+      "source": "dist/desktop/review-r86-final-rc11-upgrade-20261015/upgrade.json"
+    },
+    {
+      "path": "source/full-a2bc376.log",
+      "bytes": 4083,
+      "sha256": "5c12272592ac850958f06a9fec8fb9a29364f2645c91818064cb853d5ff0e505",
+      "source": "dist/review-r86-source/full-a2bc376.log"
+    },
+    {
+      "path": "source/full-a2bc376-context.json",
+      "bytes": 537,
+      "sha256": "1834165d8950cad243cc3c720597f3f84b5f05b5ac5560992aa8c5267301c6b0",
+      "source": "dist/review-r86-source/full-a2bc376-context.json"
+    },
+    {
+      "path": "source/source-quality-a2bc376.json",
+      "bytes": 401,
+      "sha256": "566ad40082205cefcecbf6c62e01f46316bb3828a1198e6558dfa4f8a59a5034",
+      "source": "dist/review-r86-source/source-quality-a2bc376.json"
+    },
+    {
+      "path": "source/qa-typecheck-20261016.log",
+      "bytes": 16,
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9",
+      "source": "dist/review-r86-source/qa-typecheck-20261016.log"
+    },
+    {
+      "path": "source/qa-hifi-typecheck-20261016.log",
+      "bytes": 38,
+      "sha256": "d09a85fc52a2eb4a52d611cd947c81d1615001e133ee878567f8cbb762434388",
+      "source": "dist/review-r86-source/qa-hifi-typecheck-20261016.log"
+    },
+    {
+      "path": "source/qa-final-typecheck-20261016.log",
+      "bytes": 16,
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9",
+      "source": "dist/review-r86-source/qa-final-typecheck-20261016.log"
+    },
+    {
+      "path": "independent/rc11-program-integrity.json",
+      "bytes": 452,
+      "sha256": "22b8595c5622f544af2152623f8d1e990b77f93adb596fc97a4656d24a18299e",
+      "source": "dist/review-r86-independent/rc11-program-integrity.json"
+    },
+    {
+      "path": "independent/rc11-final-gates-independent-audit.json",
+      "bytes": 4562,
+      "sha256": "ce9956240b512df5322ee1912cbea043f8b90825ccdb178e19fc10dc629459da",
+      "source": "dist/review-r86-independent/rc11-final-gates-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-qa-final-20-tests-20261016.log",
+      "bytes": 184,
+      "sha256": "a37dd57d5e779cbb1e5e278a62c22ad17b4e891ceed2af6d23e7b5b920559fcc",
+      "source": "dist/review-r86-independent/rc11-qa-final-20-tests-20261016.log"
+    },
+    {
+      "path": "independent/rc11-collaboration-reopen-independent-audit.json",
+      "bytes": 1885,
+      "sha256": "8f2918736b00a22410a8b14cee9eb547390af59bdd18e91fdf4210002ac60fc1",
+      "source": "dist/review-r86-independent/rc11-collaboration-reopen-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-program-integrity-final-20261016.json",
+      "bytes": 672,
+      "sha256": "b1ee64dd50a56b3e2e9ccb71f20c55910ed0555fe89ae6d470ad679c11a5c462",
+      "source": "dist/review-r86-independent/rc11-program-integrity-final-20261016.json"
+    },
+    {
+      "path": "independent/rc11-all-roots-calls-independent-20261016.json",
+      "bytes": 2910,
+      "sha256": "43ca044051fecc9ff3fb88bf563d0f15996e981d9668438ce6e8dca9a4497f7e",
+      "source": "dist/review-r86-independent/rc11-all-roots-calls-independent-20261016.json"
+    },
+    {
+      "path": "independent/rc11-luna-focused-deliberation-independent-audit.json",
+      "bytes": 19434,
+      "sha256": "d5d371ce7ebca1a114a3ae477dd4d650e718b553d3397b58ef50eeb7745ab020",
+      "source": "dist/review-r86-independent/rc11-luna-focused-deliberation-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-focused-deliberation-independent-audit-v2.json",
+      "bytes": 21369,
+      "sha256": "9e2f375a6cd69de2fe4bb2f1898c6c03561d819ac27f6610cfa574907dbfbb67",
+      "source": "dist/review-r86-independent/rc11-luna-focused-deliberation-independent-audit-v2.json"
+    },
+    {
+      "path": "independent/rc11-luna-code-v1-independent-audit.json",
+      "bytes": 5121,
+      "sha256": "435f2729c438a6989dd8aa275653b1b951f723ebbc1c4e485af93ba41286e347",
+      "source": "dist/review-r86-independent/rc11-luna-code-v1-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-v2-acceptance-independent-audit.json",
+      "bytes": 4149,
+      "sha256": "c69c8a20b3fef7eda268382658d98ea6a67d9c675c0fae69edf194a84caa8871",
+      "source": "dist/review-r86-independent/rc11-luna-v2-acceptance-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-code-lifecycle-independent-audit.json",
+      "bytes": 1883,
+      "sha256": "e22a839aa99fd34c760cdcd99ce47a9e8dc316b04ad89a805c01dd38d381e215",
+      "source": "dist/review-r86-independent/rc11-luna-code-lifecycle-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-rework-live-independent-audit.json",
+      "bytes": 1728,
+      "sha256": "d696e32c5d5588af1779c9fe4695c9abc6786a6fd4e0bdcd9ffa98e6a2600fba",
+      "source": "dist/review-r86-independent/rc11-luna-rework-live-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-ordinary-independent-audit.json",
+      "bytes": 1803,
+      "sha256": "38422f7c160dd6ef5a23422ae12fe4ce70f84dea7c41e7bb7f03306b5faef7cf",
+      "source": "dist/review-r86-independent/rc11-luna-ordinary-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-luna-document-original-independent-audit.json",
+      "bytes": 3815,
+      "sha256": "b84119fa9df93ac14f858d850637a2d69a11f9b00ccf9c7e3b6b7162ef1cf904",
+      "source": "dist/review-r86-independent/rc11-luna-document-original-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-six-visual-pairs-independent-audit.json",
+      "bytes": 4116,
+      "sha256": "9fd178fe5bb1914a6f221eefc3475dd765452f43390da32a76503e8da69a12a4",
+      "source": "dist/review-r86-independent/rc11-six-visual-pairs-independent-audit.json"
+    },
+    {
+      "path": "independent/rc11-final-deliberation-proof-binding-counterexample.json",
+      "bytes": 1585,
+      "sha256": "364ccca76a38c8f17c7d685f3ac62513cfa8d7bf54eb3679811fd5f9e74c64cf",
+      "source": "dist/review-r86-independent/rc11-final-deliberation-proof-binding-counterexample.json"
+    },
+    {
+      "path": "independent/rc11-final-deliberation-proof-binding-fixed.json",
+      "bytes": 726,
+      "sha256": "7c6df727e04ab61304a0d4ec55926df31ddb40de34b6688fd2f6efa5dd3f08d9",
+      "source": "dist/review-r86-independent/rc11-final-deliberation-proof-binding-fixed.json"
+    },
+    {
+      "path": "independent/rc11-final-deliberation-proof-binding-fixed-v2.json",
+      "bytes": 972,
+      "sha256": "f86883433447d31d7e55fa4dbc8b468974ac3a47df98e1ca31a425ed93598503",
+      "source": "dist/review-r86-independent/rc11-final-deliberation-proof-binding-fixed-v2.json"
+    },
+    {
+      "path": "original-failures/review-r86-real-rc4-20261015/real-code-v1.json",
+      "bytes": 5393,
+      "sha256": "3d0e959ad4a763ae9e0bd7718e73821a7b03ae0052cb4df9b1dcd6a01f89b55c",
+      "source": "dist/desktop/review-r86-real-rc4-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-real-rc5-20261015/real-code-v1.json",
+      "bytes": 4953,
+      "sha256": "f3af1a14595767d032f619a0f82f054c6f05eda67a7e9244b95819535d25c472",
+      "source": "dist/desktop/review-r86-real-rc5-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-real-two-sol-20261015/real-code-v1.json",
+      "bytes": 12909,
+      "sha256": "afbb6635b3c34239b3afe737f51c04a5e3f97ad46f1baa0d418a0cb128ad9ed3",
+      "source": "dist/desktop/review-r86-real-two-sol-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-real-two-sol-current-20261015/real-code-v1.json",
+      "bytes": 8769,
+      "sha256": "719c67a07f31ef68377ae63bb22c4c72447f94f6cd117372b454ed39078f2415",
+      "source": "dist/desktop/review-r86-real-two-sol-current-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-real-20261015/native-proof-code-v1.json",
+      "bytes": 15647,
+      "sha256": "dd99762e460d6aab05a2c54cca49f82ea0c71ce2a90ce97af3e4f432a6372495",
+      "source": "dist/desktop/review-r86-final-real-20261015/native-proof-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-real-20261015/native-proof-code-v2.json",
+      "bytes": 1133,
+      "sha256": "e5186ac5b7320ef3894a0caae59441c35eda8637d17351b16f96b5fa83769679",
+      "source": "dist/desktop/review-r86-final-real-20261015/native-proof-code-v2.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc9-real-20261015/planning-chat-original-failure.json",
+      "bytes": 945,
+      "sha256": "9c0589b4ae6800242cb4b7326b04b43273e2b8542e6e3791910fbd551651e0dd",
+      "source": "dist/desktop/review-r86-final-rc9-real-20261015/planning-chat-original-failure.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc10-real-20261015/real-code-v1.json",
+      "bytes": 45189,
+      "sha256": "d516ac1e813bce8e7a697642dc6b79c11963565bd17a4157f2db6b17c2423fc7",
+      "source": "dist/desktop/review-r86-final-rc10-real-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc10-full-20261015/result.json",
+      "bytes": 6124,
+      "sha256": "773a0d4be4d5085819a9d072ae60e8d77cc2b0d48c3cd86e439927988ed7bde1",
+      "source": "dist/desktop/review-r86-final-rc10-full-20261015/result.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc10-full-v2-20261015/result.json",
+      "bytes": 3783,
+      "sha256": "9cef46ca87bdb5fa5a672f774cf29bded69bf006ef3386b8655381167bd2a472",
+      "source": "dist/desktop/review-r86-final-rc10-full-v2-20261015/result.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc10-restored-20261015/ordinary-chat.json",
+      "bytes": 1878,
+      "sha256": "82fc4cf2f3a09bc1465bdc4d7fbdf74e522e0d042f9a25b032b010ef5e5c123f",
+      "source": "dist/desktop/review-r86-final-rc10-restored-20261015/ordinary-chat.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-real-20261015/real-code-v1.json",
+      "bytes": 9982,
+      "sha256": "13fea7d8e3e175527857d3bb8bbefe7b5faa95ffe6a0ff163e646eed1da792aa",
+      "source": "dist/desktop/review-r86-final-rc11-real-20261015/real-code-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-real-20261015/delivery-code-v2.json",
+      "bytes": 17033,
+      "sha256": "4faeb4f58697f8aea5aea7b9d42087f877c742e987c8d36b3c1bef9d4682c4cd",
+      "source": "dist/desktop/review-r86-final-rc11-real-20261015/delivery-code-v2.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-luna-20261016/delivery-document-v1.json",
+      "bytes": 13706,
+      "sha256": "5f1fc6c0daa13a92715d6528ee2ac5b2c02d46266a0a6bf5b3a5de0512ab8857",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/delivery-document-v1.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-luna-20261016/delivery-deliberation.json",
+      "bytes": 2629,
+      "sha256": "a2d88398c1a8aae15040adf2503595cd22e7dd57d292bbf386050b35c5e9309f",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/delivery-deliberation.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-luna-20261016/quota-original-failures.json",
+      "bytes": 1928,
+      "sha256": "e7f5fe34c29d792475078808207931c457f0709b6b0667becde5d0d0fccf4d15",
+      "source": "dist/desktop/review-r86-final-rc11-luna-20261016/quota-original-failures.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-visual-20261015/visual-pairs.json",
+      "bytes": 1403,
+      "sha256": "034ec8edc86666e5727ae6295d610a8f1c7fe3fe988821cfecd158657c41a961",
+      "source": "dist/desktop/review-r86-final-rc11-visual-20261015/visual-pairs.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-visual-v3-20261016/visual-pairs.json",
+      "bytes": 1191,
+      "sha256": "d394a67038fed5b0603880a869c1136fe69786b8726843fdc1a8482c072550ff",
+      "source": "dist/desktop/review-r86-final-rc11-visual-v3-20261016/visual-pairs.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-collaboration-20261016/delivery-deliberation.json",
+      "bytes": 4078,
+      "sha256": "e0b56a363563d791b0d97fd1e493494be9bfc4024313b5ec74f16273ef483ab1",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/delivery-deliberation.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-collaboration-20261016/deliberation-original-failure.json",
+      "bytes": 5899,
+      "sha256": "da1026b2604f93bc79d0e4ad8f11f2311cf0b24dd675311cf267f769cd295fe6",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/deliberation-original-failure.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-collaboration-20261016/collaboration-reopen.json",
+      "bytes": 809,
+      "sha256": "38e13a899d0193fe48bf1c6189892cbae89aa9eaef8afabb6bd1868111eb0194",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/collaboration-reopen.json"
+    },
+    {
+      "path": "original-failures/review-r86-final-rc11-collaboration-20261016/collaboration-reopen-completed.json",
+      "bytes": 1910,
+      "sha256": "650e707ffea5a49648345616c18da1c800798b6ba70666cd7853d3fbf1792c5c",
+      "source": "dist/desktop/review-r86-final-rc11-collaboration-20261016/collaboration-reopen-completed.json"
+    }
+  ]
+}

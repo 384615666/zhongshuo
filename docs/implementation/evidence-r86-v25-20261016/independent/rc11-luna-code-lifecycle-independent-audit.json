@@ -1,0 +1,55 @@
+{
+  "pass": true,
+  "scope": "independent readonly original native close/reopen evidence plus post-reopen exact DB versions, files and no additional calls; old quota failures remain, no recovery-unprotect/replay",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "task": {
+    "id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+    "status": "DONE",
+    "current_delivery_id": "dlv_turn_ecbbb943-3339-4c51-920f-659c1e17fb87"
+  },
+  "deliveries": [
+    {
+      "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+      "revision": 1,
+      "review_status": "changes_requested",
+      "manifest_hash": "4ea0e659b51ff5875940300879bd0e95d240028c9e32c2899089360d4b2462d7"
+    },
+    {
+      "id": "dlv_turn_ecbbb943-3339-4c51-920f-659c1e17fb87",
+      "revision": 2,
+      "review_status": "accepted",
+      "manifest_hash": "eeadb913d7c513e91b8af3be0d3b81eb95f4beedc5a79eab6d9213e2645d175a"
+    }
+  ],
+  "files": [
+    {
+      "name": "greeting.mjs",
+      "expected": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761",
+      "actual": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761"
+    },
+    {
+      "name": "greeting.test.mjs",
+      "expected": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590",
+      "actual": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590"
+    }
+  ],
+  "callsBeforeClose": 21,
+  "callsAfterReopen": 21,
+  "currentCalls": 21,
+  "nativeClose": {
+    "pid": 6840,
+    "at": 1792131496879,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  },
+  "errors": [],
+  "observedAt": "2026-10-16T06:28:16.056Z"
+}

@@ -1,0 +1,141 @@
+{
+  "pass": true,
+  "scope": "rc11 Luna original code task exact v2 acceptance and bytes only; final normal close/reopen still pending",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "v1": {
+    "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "revision": 1,
+    "review_status": "changes_requested"
+  },
+  "v2": {
+    "id": "dlv_turn_ecbbb943-3339-4c51-920f-659c1e17fb87",
+    "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+    "revision": 2,
+    "manifest_hash": "eeadb913d7c513e91b8af3be0d3b81eb95f4beedc5a79eab6d9213e2645d175a",
+    "review_status": "accepted"
+  },
+  "calls": [
+    {
+      "id": 1,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    },
+    {
+      "id": 2,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_7efd9852-86c3-464e-8964-91e6558f0103"
+    },
+    {
+      "id": 3,
+      "model": "gpt-6-luna",
+      "status": "succeeded",
+      "task_id": "task_71af1dc7-4fce-42b4-aa35-45c22e9db9d7"
+    },
+    {
+      "id": 4,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_8cb855bb-a272-46d2-a15a-5bc302125353"
+    },
+    {
+      "id": 6,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    },
+    {
+      "id": 8,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    },
+    {
+      "id": 9,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa"
+    },
+    {
+      "id": 10,
+      "model": "gpt-6-luna",
+      "status": "succeeded",
+      "task_id": "task_573d07b2-c646-48fd-a8ca-6b43dc0488e2"
+    },
+    {
+      "id": 11,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_326e5906-e670-4fdb-8610-f8bd1e4e94f1"
+    },
+    {
+      "id": 12,
+      "model": "deepseek-flash",
+      "status": "succeeded",
+      "task_id": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110"
+    }
+  ],
+  "steps": [
+    {
+      "key": "impl-v2",
+      "role": "implementation",
+      "taskId": "task_e5da60e1-3da1-46ea-b9ee-ad6970aa84aa"
+    },
+    {
+      "key": "review-v2",
+      "role": "review",
+      "taskId": "task_573d07b2-c646-48fd-a8ca-6b43dc0488e2"
+    },
+    {
+      "key": "fix-v2",
+      "role": "implementation",
+      "taskId": "task_326e5906-e670-4fdb-8610-f8bd1e4e94f1"
+    }
+  ],
+  "reviewInput": [
+    {
+      "path": "greeting.mjs",
+      "sha256": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761",
+      "deliveryId": "dlv_turn_61612d43-0c84-4577-8f8e-f1af0357cc78",
+      "revision": 1,
+      "manifestHash": "162f8ca00ad8775d8cbbe9723a6647e79c91c5601293b8bb07c05228418f99b9"
+    },
+    {
+      "path": "greeting.test.mjs",
+      "sha256": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590",
+      "deliveryId": "dlv_turn_61612d43-0c84-4577-8f8e-f1af0357cc78",
+      "revision": 1,
+      "manifestHash": "162f8ca00ad8775d8cbbe9723a6647e79c91c5601293b8bb07c05228418f99b9"
+    }
+  ],
+  "independentTests": {
+    "tests": 6,
+    "failures": 0,
+    "exitCode": 0
+  },
+  "currentFiles": [
+    {
+      "path": "greeting.mjs",
+      "reviewedSha256": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761",
+      "currentSha256": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761"
+    },
+    {
+      "path": "greeting.test.mjs",
+      "reviewedSha256": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590",
+      "currentSha256": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590"
+    }
+  ],
+  "reviewCoversCurrentBytes": true,
+  "errors": [],
+  "observedAt": "2026-10-16T01:20:33.691Z"
+}

@@ -1,0 +1,126 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:31:47.867Z",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "scope": "independent original-evidence reconstruction of 17 engineering release checks, plus prior readonly live/native/file audits; final archive and clean pushed docs checked separately, user acceptance pending",
+  "computed": {
+    "pass": true,
+    "checks": {
+      "cleanDistribution": true,
+      "source": true,
+      "distinctActualModels": true,
+      "genuineDependencyFlow": true,
+      "readablePlanningWindow": true,
+      "exactNativeExecution": true,
+      "explicitV2AcceptanceAndReopen": true,
+      "reworkRunningWindow": true,
+      "documentCollaboration": true,
+      "collaborationReopen": true,
+      "selectedDeliberation": true,
+      "ordinaryConversation": true,
+      "nativeNavigation": true,
+      "zeroInferenceRegression": true,
+      "upgradeAndRollback": true,
+      "inspectedVisualPairs": true,
+      "originalFailuresAndCalls": true
+    },
+    "failed": [],
+    "userAcceptance": "pending"
+  },
+  "sourceTests": 1164,
+  "qaTests": 20,
+  "independentAudits": [
+    {
+      "name": "rc11-program-integrity-final-20261016.json",
+      "pass": true,
+      "sha256": "b1ee64dd50a56b3e2e9ccb71f20c55910ed0555fe89ae6d470ad679c11a5c462"
+    },
+    {
+      "name": "rc11-all-roots-calls-independent-20261016.json",
+      "pass": true,
+      "sha256": "43ca044051fecc9ff3fb88bf563d0f15996e981d9668438ce6e8dca9a4497f7e"
+    },
+    {
+      "name": "rc11-luna-code-v1-independent-audit.json",
+      "pass": true,
+      "sha256": "435f2729c438a6989dd8aa275653b1b951f723ebbc1c4e485af93ba41286e347"
+    },
+    {
+      "name": "rc11-luna-v2-acceptance-independent-audit.json",
+      "pass": true,
+      "sha256": "c69c8a20b3fef7eda268382658d98ea6a67d9c675c0fae69edf194a84caa8871"
+    },
+    {
+      "name": "rc11-luna-code-lifecycle-independent-audit.json",
+      "pass": true,
+      "sha256": "e22a839aa99fd34c760cdcd99ce47a9e8dc316b04ad89a805c01dd38d381e215"
+    },
+    {
+      "name": "rc11-luna-rework-live-independent-audit.json",
+      "pass": true,
+      "sha256": "d696e32c5d5588af1779c9fe4695c9abc6786a6fd4e0bdcd9ffa98e6a2600fba"
+    },
+    {
+      "name": "rc11-luna-ordinary-independent-audit.json",
+      "pass": true,
+      "sha256": "38422f7c160dd6ef5a23422ae12fe4ce70f84dea7c41e7bb7f03306b5faef7cf"
+    },
+    {
+      "name": "rc11-luna-document-original-independent-audit.json",
+      "pass": true,
+      "sha256": "b84119fa9df93ac14f858d850637a2d69a11f9b00ccf9c7e3b6b7162ef1cf904"
+    },
+    {
+      "name": "rc11-luna-focused-deliberation-independent-audit-v2.json",
+      "pass": true,
+      "sha256": "9e2f375a6cd69de2fe4bb2f1898c6c03561d819ac27f6610cfa574907dbfbb67"
+    },
+    {
+      "name": "rc11-collaboration-reopen-independent-audit.json",
+      "pass": true,
+      "sha256": "8f2918736b00a22410a8b14cee9eb547390af59bdd18e91fdf4210002ac60fc1"
+    },
+    {
+      "name": "rc11-six-visual-pairs-independent-audit.json",
+      "pass": true,
+      "sha256": "9fd178fe5bb1914a6f221eefc3475dd765452f43390da32a76503e8da69a12a4"
+    },
+    {
+      "name": "rc11-final-deliberation-proof-binding-fixed-v2.json",
+      "pass": true,
+      "sha256": "f86883433447d31d7e55fa4dbc8b468974ac3a47df98e1ca31a425ed93598503"
+    }
+  ],
+  "callTotals": {
+    "attempts": 157,
+    "byStatus": {
+      "succeeded": 149,
+      "failed": 7,
+      "interrupted": 1
+    },
+    "byModel": {
+      "claude/deepseek-flash": 99,
+      "codex/gpt-6.1-sol": 36,
+      "codex/gpt-6-luna": 19,
+      "claude/glm-5.3-flash": 2,
+      "codex/gpt-6-sol": 1
+    }
+  },
+  "boundaries": {
+    "crossReview": "one omitted original draft claim preserved; submitted references valid, exhaustive final RATIFY exact and overall unconfirmed; original reviewer v1 false retained",
+    "document": "two pre-integration versions reviewed, final integration not rereviewed by Luna",
+    "navigation": "Chromium history backend used for back, native Alt+Left not certified",
+    "normalReopen": "successful second observation; two prior failures retained and first CDP cause unresolved",
+    "lint": "33 matched existing errors, no added errors; not full-repo lint clean",
+    "visual": "six inspected pairs, emulated DPR only, not whole-app pixel match"
+  },
+  "errors": []
+}

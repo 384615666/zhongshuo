@@ -1,0 +1,84 @@
+{
+  "pass": true,
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "taskId": "task_e46a8ea9-c6af-42c7-a8ae-90639b704110",
+  "v1": {
+    "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "revision": 1,
+    "manifestHash": "4ea0e659b51ff5875940300879bd0e95d240028c9e32c2899089360d4b2462d7"
+  },
+  "beforeNoteCalls": 7,
+  "stages": [
+    {
+      "name": "native note only across refresh",
+      "calls": 7,
+      "at": 1792113150302
+    },
+    {
+      "name": "native explicit execute original v1",
+      "at": 1792113174864
+    },
+    {
+      "name": "native accepted exact v2 task DONE",
+      "at": 1792113587563
+    },
+    {
+      "name": "same real BAT reopen / original v1+v2 and bytes / no inference",
+      "at": 1792131515326
+    }
+  ],
+  "note": {
+    "id": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "review_status": "changes_requested",
+    "review_note": "请先去掉名字两侧空白，空名字或全空白时返回“你好，朋友”。补上真实测试，再请另一位成员独立复跑评审，给我新版验收。",
+    "revision": 1
+  },
+  "noteOnlyNoCalls": true,
+  "reworkRequest": {
+    "seq": 102,
+    "deliveryId": "dlv_turn_87dd2353-ee44-4c31-bcd5-81ea591015e6",
+    "deliveryRevision": 1,
+    "reviewNote": "请先去掉名字两侧空白，空名字或全空白时返回“你好，朋友”。补上真实测试，再请另一位成员独立复跑评审，给我新版验收。",
+    "sourceRunId": "run_d792030d-eb69-4c70-a765-80e56ec050ef",
+    "dispatchKey": "task:task_e46a8ea9-c6af-42c7-a8ae-90639b704110:redispatch:run_d792030d-eb69-4c70-a765-80e56ec050ef",
+    "reason": "用户点击「执行返工」",
+    "note": "返工执行入队：验收与执行分离——意见已记录（task.review），本次为用户明确执行的续跑（绑定用户所见交付完整身份）"
+  },
+  "explicitExecution": true,
+  "v2": {
+    "id": "dlv_turn_ecbbb943-3339-4c51-920f-659c1e17fb87",
+    "revision": 2,
+    "manifestHash": "eeadb913d7c513e91b8af3be0d3b81eb95f4beedc5a79eab6d9213e2645d175a",
+    "reviewStatus": "accepted"
+  },
+  "originalFiles": [
+    {
+      "name": "greeting.mjs",
+      "sha256": "18a30fba9bd433b6c1df7830d7b31d7a07d7a1a9764bab64f26e383483c73761"
+    },
+    {
+      "name": "greeting.test.mjs",
+      "sha256": "a29c95000e23cbd86266824cf146ce3e2a3743e211e9db0316dafa3617d66590"
+    }
+  ],
+  "close": {
+    "pid": 6840,
+    "at": 1792131496879,
+    "phase": "closed",
+    "stopRequestsSentTo": []
+  },
+  "normalClose": true,
+  "initialReopenedHash": "",
+  "originalFilesHashMatched": true,
+  "callsBeforeClose": 21,
+  "callsAfterReopen": 21,
+  "reopened": true
+}

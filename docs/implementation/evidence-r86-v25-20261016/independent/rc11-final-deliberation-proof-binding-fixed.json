@@ -1,0 +1,38 @@
+{
+  "pass": false,
+  "scope": "QA only original gap now closed; no runtime/build/model calls changed",
+  "baselinePass": false,
+  "negative": [
+    {
+      "field": "task",
+      "rejected": true,
+      "exactNative": false
+    },
+    {
+      "field": "run",
+      "rejected": true,
+      "exactNative": false
+    },
+    {
+      "field": "delivery",
+      "rejected": true,
+      "exactNative": false
+    },
+    {
+      "field": "revision",
+      "rejected": true,
+      "exactNative": false
+    },
+    {
+      "field": "manifest",
+      "rejected": true,
+      "exactNative": false
+    },
+    {
+      "field": "missing",
+      "rejected": true,
+      "exactNative": false
+    }
+  ],
+  "originalCounterexampleRetained": true
+}
