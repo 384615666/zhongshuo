@@ -6,7 +6,7 @@
 
 **2026-10-16 14:25 当前优先断点**：同 a2bc376 / rc11 / bld_cf50e93cc0db5723。上午 Luna 根代码 v1/v2 十次成功、普通两次成功及原生 v2 accepted 均保持；文档 review 和 DELIB 后续各出现一条 Codex quota FAILED。`quota-original-failures.json`、两份 delivery false 原件保留，该根共21实际call（19success/2failed），没有自动重试。用户返回后窗口均无，正常BAT起原根触发恢复保护，旧研讨 RUNNING→INTERRUPTED，未解除。随后原生 AltF4 正常关闭、`reopen-r86-own.cjs` 同BAT重开 PASS，代码v2身份/文件hash保持、21call相同；原生子任务/精确子交付/返回/CtrlR/未发草稿＋分列Chromiumhistory的 `native-navigation.json` PASS。保护保留不影响只读历史，不冒充旧研讨成功。
 
-当前额度API primary3%可用，按用户继续以新明确意图准备 **同BUILD新根 `review-r86-final-rc11-collaboration-20261016` /52864**（不是旧任务重放）。原生新文档 task_5948b2ac-47ee-482c-a584-51e23f578262，watch90934；原生@全体两席DELIB task_41da4d33-ea0e-4fbd-8533-4d99dd773366，watch72134。DS+Luna medium，当前都真实运行。最终门新增显式owned `--collaboration-evidence=<新根>`，只在同BUILD分场景取文档/研讨票，代码根票不变；额外强制所有原生proof及研讨的expectedModels准确匹配，不可换模型拼票。QA18例/lint通过，runtime无改，不再构建。
+当时额度API primary已用3%（余97%），ordinaryUsageAllowed=true；仅代表app账户，不冒充custom上游，按用户继续以新明确意图准备 **同BUILD新根 `review-r86-final-rc11-collaboration-20261016` /52864**（不是旧任务重放）。原生新文档 task_5948b2ac-47ee-482c-a584-51e23f578262，watch90934；原生@全体两席DELIB task_41da4d33-ea0e-4fbd-8533-4d99dd773366，watch72134。DS+Luna medium，当前都真实运行。最终门新增显式owned `--collaboration-evidence=<新根>`，只在同BUILD分场景取文档/研讨票，代码根票不变；额外强制所有原生proof及研讨的expectedModels准确匹配，不可换模型拼票。独立发现旧门漏绑DELIB原生proof，原反例保留；现只读投影真实publish delivery/run/manifest，第四native proof严格绑定task+run+delivery+revision+manifest，缺票/错身份负例过，QA19例/lint及双types通过，runtime无改，不再构建。
 
 视觉首次因原型不含root导致等待false；第二目录v2脚本被工程中止，留目录不称有完整票；第三欢迎恢复modal false；v4六对capture成功但滚动不一致，v5已统一thread顶部。**`review-r86-final-rc11-visual-v5-20261016/visual-pairs.json` PASS，12张实际逐张查看**，wide/narrow/1.5DPR模拟，原型缺用户根/真实runtime/交付状态等差异如实记录，DPR1.5原型列宽较窄/横滚不冒充产品像素一致。新总门 `--visual-evidence=<v5根>`，原false保留。
 
