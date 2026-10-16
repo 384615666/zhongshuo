@@ -15,4 +15,11 @@ function nodeTestCommand(command,files){
 function tapPassed(output){const normalized=String(output).replace(/\u001b\[[0-9;]*m/g,'').replace(/(?:^|\n)\s*ℹ\s*/g,'\n# ');return /(?:^|\n)\s*#\s*tests\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*pass\s+[1-9]\d*/.test(normalized)&&/(?:^|\n)\s*#\s*fail\s+0\b/.test(normalized);}
 function fileRead(command,output,files){const normalized=String(output).replace(/\r\n/g,'\n'),numbered=normalized.replace(/^\s*\d{1,6}: /gm,'');return files.filter(file=>file.content.length>0&&String(command).replace(/\\/g,'/').toLowerCase().includes(path.basename(file.path).toLowerCase())&&[normalized,numbered].some(text=>text.includes(file.content.replace(/\r\n/g,'\n')))).map(({path,sha256,deliveryId,revision,manifestHash})=>({path,sha256,deliveryId,revision,manifestHash}));}
 function fileChangePaths(changes,root){const paths=Array.isArray(changes)?changes.map(c=>c.path):changes&&typeof changes==='object'?Object.keys(changes):[];return paths.filter(p=>typeof p==='string').map(p=>path.relative(root,path.resolve(root,p))).filter(p=>p&&!p.startsWith('..')&&!path.isAbsolute(p));}
-module.exports={ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths};
+function planningTextMatches(visible,answer,markdownText){const norm=s=>String(s).replace(/\s/g,'');return [answer,markdownText].some(s=>typeof s==='string'&&s.trim()&&norm(visible).includes(norm(s)));}
+function expectedNativeModels(prepared,codexModel){
+ if(!Array.isArray(prepared)||prepared.length!==2||new Set(prepared).size!==2)throw Error('exact distinct prepared pair required');
+ if(!codexModel)return prepared;
+ if(!/^gpt-[a-z0-9.-]+$/.test(codexModel)||prepared.filter(s=>s.startsWith('codex/')).length!==1)throw Error('explicit exact Codex model ID required');
+ return prepared.map(s=>s.startsWith('codex/')?'codex/'+codexModel:s);
+}
+module.exports={expectedNativeModels,planningTextMatches,ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths};

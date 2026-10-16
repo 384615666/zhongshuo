@@ -9,17 +9,22 @@ const {spawn,spawnSync}=require('node:child_process'),{randomUUID,createHash}=re
 const Database=require('better-sqlite3'),{Cdp,until}=require('./verify-r81-members-launcher.cjs');
 const markdown=new (require('markdown-it'))({html:false});
 function markdownPlain(text){const parts=[];const visit=tokens=>{for(const token of tokens){if(token.children)visit(token.children);else if(['text','code_inline','code_block','fence'].includes(token.type))parts.push(token.content);}};visit(markdown.parse(text,{}));return parts.join('\n');}
+const {planningTextMatches}=require('./lib/r86-native-evidence.cjs');
 const candidate=path.resolve(process.argv[2]??''),out=path.resolve(process.argv[3]??'');
 const mode=process.argv.includes('--prepare')?'prepare':process.argv.includes('--observe')?'observe':'inspect';
 const port=Number(process.argv.find(x=>x.startsWith('--port='))?.split('=')[1]??52786),q=JSON.stringify;
 if(!path.basename(out).startsWith('review-r86-')||!out.startsWith(path.resolve(__dirname,'../dist')+path.sep))throw Error('owned R86 evidence root required');
 if(!path.basename(candidate).startsWith('desktop-daily-win-v25'))throw Error('explicit v25 source candidate required');
 const alternatePair=process.argv.includes('--pair=codex-sol'),deepseekPair=process.argv.includes('--pair=deepseek-codex');
+const selectedCodexModel=process.argv.find(x=>x.startsWith('--codex-model='))?.slice('--codex-model='.length)??'gpt-6.1-sol';
+if(!['gpt-6.1-sol','gpt-6-luna'].includes(selectedCodexModel))throw Error('explicit locally listed engineering Codex model required');
 const effort=process.argv.find(x=>x.startsWith('--effort='))?.slice(9)??'medium';
 if(!['low','medium','high'].includes(effort))throw Error('explicit supported engineering effort required');
 const primary=alternatePair?{kind:'codex',model:'gpt-6.1-sol',name:'协调实现 Sol 6.1'}:{kind:'claude',model:deepseekPair?'deepseek-flash':'glm-5.3-flash',name:deepseekPair?'协调实现 DeepSeek':'协调实现 GLM'};
-const secondary=alternatePair?{kind:'codex',model:'gpt-6-sol',name:'独立评审 Sol 6'}:{kind:'codex',model:'gpt-6.1-sol',name:'独立评审 Codex'};
-const progressFile=path.join(out,'progress.json'),observationFile=path.join(out,'real-code-v1.json');
+const secondary=alternatePair?{kind:'codex',model:'gpt-6-sol',name:'独立评审 Sol 6'}:{kind:'codex',model:selectedCodexModel,name:'独立评审 Codex'};
+const observationLabel=process.argv.find(x=>x.startsWith('--observation-label='))?.slice('--observation-label='.length);
+if(observationLabel&&!/^[-a-z0-9]+$/.test(observationLabel))throw Error('safe explicit observation label required');
+const progressFile=path.join(out,'progress.json'),observationFile=path.join(out,observationLabel?`real-code-v1-${observationLabel}.json`:'real-code-v1.json');
 const must=(value,why)=>{if(!value)throw Error(why);};const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 let c,db,progress,result;
 async function connect(){
@@ -29,10 +34,10 @@ async function connect(){
   const identity=await command('app.identity',{});must(path.resolve(identity.appDataDir)===path.resolve(progress.dataRoot),'exact isolated data root');
 }
 async function command(method,params){const receipt=await c.eval(`window.zs.command(${q({protocolVersion:1,commandId:randomUUID(),method,params})})`);must(receipt.ok,method+': '+JSON.stringify(receipt.error));return receipt.data;}
-async function screenshot(name){await c.send('Page.bringToFront');await c.eval('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');const shot=await c.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(out,name+'.png'),Buffer.from(shot.data,'base64'));}
+async function screenshot(name){await c.send('Page.bringToFront');await c.eval('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');const shot=await c.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(out,name+(mode==='observe'&&observationLabel?'-'+observationLabel:'')+'.png'),Buffer.from(shot.data,'base64'));}
 function manifest(root){const base=path.join(root,'ZhongshuoDual'),raw=JSON.parse(fs.readFileSync(path.join(base,'MANIFEST-SHA256.json'),'utf8')),rows=Array.isArray(raw)?raw:raw.files;
   for(const row of rows){const bytes=fs.readFileSync(path.join(base,row.path));must(bytes.length===row.bytes&&hash(bytes)===row.sha256,'program manifest '+row.path);}return rows.length;}
-function start(){const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('ZS_')||key==='ELECTRON_RUN_AS_NODE')delete env[key];env.ZS_DEV25_DEBUG_PORT=String(progress.port);
+function start(){const env=require('./lib/r86-launch-env.cjs').engineeringLaunchEnvironment(process.env,progress.port);
   const log=fs.openSync(path.join(out,'launcher.log'),'a');spawn('cmd',['/c','start-desktop.bat'],{cwd:progress.copy,env,windowsHide:true,stdio:['ignore',log,log]}).unref();fs.closeSync(log);}
 function calls(taskId){return taskId?db.prepare(`SELECT id,runtime_kind,model,response_model,status,task_id,turn_id FROM real_calls
   WHERE task_id=? OR task_id IN(SELECT id FROM tasks WHERE parent_task_id=?) ORDER BY id`).all(taskId,taskId):db.prepare('SELECT id,runtime_kind,model,response_model,status,task_id,turn_id FROM real_calls ORDER BY id').all();}
@@ -86,7 +91,7 @@ async function observe(){
       const planning=db.prepare("SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq").all(root.id).map(row=>({row,body:JSON.parse(row.body_json)})).find(({body})=>{try{return JSON.parse(body.runtimeControlResult??'null')?.coordinationPlan?.steps?.length>0;}catch{return false;}});
       if(planning){const raw=planning.body.runtimeControlResult,control=JSON.parse(raw),answer=control.answer?.trim()?control.answer:control.changeSummary;
         const view=await c.eval(`(()=>{const card=[...document.querySelectorAll('.root-card')].find(e=>e.querySelector('.root-title')?.textContent===${q(root.title)});const thread=document.getElementById(${q('thread-msg-'+planning.row.id)})?.querySelector('.msg-body');return{main:card?.querySelector('.root-preview')?.textContent??null,thread:thread?.innerText??null,hash:location.hash}})()`);
-        if(view.main!=null&&view.thread!=null){const normalize=s=>String(s).replace(/\s/g,'');const mainPool=normalize(view.main).includes(normalize(answer)),thread=normalize(view.thread).includes(normalize(markdownPlain(answer)));const noControl=!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.main)&&!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.thread);result.planningWindow={pass:mainPool&&thread&&noControl,mainPool,thread,noControl,whileChildrenUnfinished:true,originalProtocolPreserved:db.prepare('SELECT body_json FROM messages WHERE id=?').get(planning.row.id).body_json===planning.row.body_json,rawProtocolHash:hash(raw),messageId:planning.row.id,at:Date.now(),view};save();await screenshot('planning-visible-before-children-finish');must(result.planningWindow.pass&&result.planningWindow.originalProtocolPreserved,'planning chat leaked control JSON before child completion');}
+        if(view.main!=null&&view.thread!=null){const normalize=s=>String(s).replace(/\s/g,'');const mainPool=normalize(view.main).includes(normalize(answer)),thread=planningTextMatches(view.thread,answer,markdownPlain(answer));const noControl=!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.main)&&!/"schemaVersion"\s*:\s*"task-complete-v1"/.test(view.thread);result.planningWindow={pass:mainPool&&thread&&noControl,mainPool,thread,noControl,whileChildrenUnfinished:true,originalProtocolPreserved:db.prepare('SELECT body_json FROM messages WHERE id=?').get(planning.row.id).body_json===planning.row.body_json,rawProtocolHash:hash(raw),messageId:planning.row.id,at:Date.now(),view};save();await screenshot('planning-visible-before-children-finish');must(result.planningWindow.pass&&result.planningWindow.originalProtocolPreserved,'planning visible text projection did not match the original answer before child completion');}
       }
     }
     if(current.turns.some(t=>['UNKNOWN','FAILED','CANCELLED'].includes(t.status))||current.task.status==='BLOCKED'){result.failure=current;save();throw Error('original collaboration failed/unknown; not automatically repeated');}

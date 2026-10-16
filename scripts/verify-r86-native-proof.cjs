@@ -3,7 +3,7 @@
 /** Read only exact provider sessions belonging to an owned R86 task family.
  * Persists hashes and bounded synthetic command evidence, never raw transcripts. */
 const fs=require('node:fs'),path=require('node:path'),{homedir}=require('node:os'),{createHash}=require('node:crypto'),Database=require('better-sqlite3');
-const {ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths}=require('./lib/r86-native-evidence.cjs');
+const {expectedNativeModels,ownedEvidenceRoot,nativeDelegation,nodeTestCommand,tapPassed,fileRead,fileChangePaths}=require('./lib/r86-native-evidence.cjs');
 const out=path.resolve(process.argv[2]??''),label=process.argv.find(x=>x.startsWith('--label='))?.slice(8)??'v1';
 if(!/^[-a-z0-9]+$/.test(label)||!ownedEvidenceRoot(out,path.resolve(__dirname,'../dist')))throw Error('owned root and safe original proof label required');
 const main=JSON.parse(fs.readFileSync(path.join(out,'progress.json'),'utf8')),observation=fs.existsSync(path.join(out,'real-code-v1.json'))?JSON.parse(fs.readFileSync(path.join(out,'real-code-v1.json'),'utf8')):null;
@@ -11,7 +11,8 @@ const taskId=process.argv.find(x=>x.startsWith('--task='))?.slice(7)??observatio
 const deliveryRevision=Number(process.argv.find(x=>x.startsWith('--delivery='))?.slice(11)??1),documentTask=process.argv.includes('--document'),deliberationTask=process.argv.includes('--deliberation');
 if(fs.existsSync(file))throw Error('original native proof retained; choose a new explicit observation label');
 const db=new Database(path.join(main.dataRoot,'state.sqlite'),{readonly:true}),hash=s=>createHash('sha256').update(s).digest('hex');
-const result={pass:false,scope:'actual own CLI context/tools/results; configured model is separate from upstream response_model',build:main.build,taskId,sessions:[]};
+const expectedModels=expectedNativeModels(main.expectedModels,process.argv.find(x=>x.startsWith('--codex-model='))?.slice('--codex-model='.length));
+const result={pass:false,expectedModels,scope:'actual own CLI context/tools/results; configured model is separate from upstream response_model',build:main.build,taskId,sessions:[]};
 const testFiles=fs.readdirSync(main.project).filter(name=>/(?:test|spec).*\.(?:mjs|cjs|js)$/i.test(name));
 const tests=command=>nodeTestCommand(command,testFiles);
 const safeCommand=command=>String(command??'').replace(/sk-[A-Za-z0-9_-]+/g,'[redacted]').replace(/(?:Bearer\s+)[^\s"']+/gi,'Bearer [redacted]').slice(0,1500);
@@ -92,7 +93,7 @@ try{
     }
   }
   const models=new Set(result.sessions.map(s=>`${s.kind}/${s.configuredModel}`));
-  if(new Set(main.expectedModels).size!==2||!main.expectedModels.every(model=>models.has(model)))throw Error('same task family distinct native model contexts missing');
+  if(new Set(expectedModels).size!==2||!expectedModels.every(model=>models.has(model)))throw Error('same task family distinct native model contexts missing');
   if(result.sessions.some(s=>s.nativeDelegationObserved))throw Error('untracked native delegation observed; not counted as bounded formal collaboration');
   const implementers=result.sessions.filter(s=>s.role==='implementation'),reviewers=result.sessions.filter(s=>s.role==='review');
   if(deliberationTask&&result.sessions.some(s=>s.actualRuntimeSnapshot.effectivePolicy!=='policy-analyze'||s.writeActions.some(a=>a.success)))throw Error('deliberation must remain actually readonly');

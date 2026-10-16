@@ -4,6 +4,24 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
+**2026-10-16 09:05 最新断点，优先于下方历史**：runtime 仍 a2bc37606baa745357b47cf07cb5db012d857e3c / desktop-daily-win-v25-rc11 / bld_cf50e93cc0db5723，593clean。源163文件1164、双types/quality59files无新增33既有、同BUILD full/upgrade零推理全部已过；不为QA换BUILD。当前QA HEAD56cdf3a，另有待提交QA变动。
+
+旧 rc11-real 根 v1 已4真实成功，native4session及独立原件2/2测试通过；real-code-v1-completed.json pass，原real-code-v1.json 因编号比较QA false保留（无JSON泄漏，raw42ab...相同）。第二只读观察复用了PNG名，原JSONview/hash保持但不冒充原截图，planning-observation-provenance.json如实注明，今后label输出独立PNG。新最终门支持显式 --code-evidence，不能覆写原false。
+
+16日重开时原窗口/进程均无、独立根旧daemon.pid仍在；所有模型calls已成功。正常BAT重开同根，未手删PID/改DB；v1原件、名册2人、hash保持，没自动派发。初次短Node退出太快未起进程、一次PowerShell环境清理命令被工具policy拒绝，未执行；用既有Node launch+等待CDP正式BAT成功（continue-launcher-3.log）。这次不是v2正常close认证。
+
+随后原生返工意见6.5s零新增调用、明确execute同task。**rework-running-window.json/png pass**：原intent done、父WAITING/真子步未完、正式task.get queuedtrue、实际“返工执行中”且无重复按钮；已实际查看画面。独立实时采样来晚时任务后续blocked，其独立false已澄清，仅图片确认有效。v2计划与实施两次真成功后，Codex review启动前被旧配置身份guard拒：task.contextAssemblyFailed write-authorization-changed “有效执行配置已变化；未沿用旧会话”，无review run/turn/第7次call。**delivery-code-v2.json false / configuration-boundary-blocked.json false**永久保留；该旧根总6call均success，父blocked，不自动重试/不改旧scope/不手动恢复凭据。source task_693f... 原配置仍gpt6.1sol。
+
+实际global config.toml mtime 16日00:39:58晚于旧scope冻结15日23:18，旧scope只有opaque key；宿主CODEX_SESSION_ID/THREAD_ID/APP_TOOLS_PIPE_PATH/TASK_WORKSPACE_VERIFYING_IDENTITY也有进程噪声敏感性（独立0call夹具证明）。**无法唯一还原旧阻断是有效配置、元数据或两者变化；不据此改runtimeguard/兼容旧授权**。采用QA-only：独立新意图启动/重开统一engineeringLaunchEnvironment，仅去4宿主会话标识、清ZS覆写/ELECTRON_RUN_AS_NODE；CODEX_HOME、OPENAI_*、代理、其他CODEX变量全部保留。程序/用户原根/凭据不动。OpenAI Docs已读官方config basics/reference，配置优先级来源记录，不把官方页当本次唯一原因证据。
+
+人类在独立评审chat最新直接说后续测试尽可能用便宜GPT-6 Luna，已通过read_thread核原人话；本机正式model/list零调用列出准确 gpt-6-luna 和medium。新独立根 **dist/desktop/review-r86-final-rc11-luna-20261016** / **port52854** / 同rc11真实BAT，0call prepare后，已原生新意图send DS+gpt-6-luna，非旧信封重放。**task_e46a8ea9-c6af-42c7-a8ae-90639b704110 / thread_a9540bba-0f59-4e17-9f76-597e219759f5**，observer **66736**，写real-code-v1.json；当前仅DS planner在途。**保持原生UI replies打开，先取子步未完规划窗口再导航**。
+
+新root progress记录launchEnvironmentRecipe名字/移除变量名，无密钥；configuration-prepared/sent/intent-frozen记录配置文件/环境hash。官方预热为新项目添加trust metadata（user config 7690→7813，sent+frozen sha befab347...一致，env hash926993...始终一致），发生正式发送冻结前，不冒充用户配置byte未变。后续每长阶段与重开用 observe-r86-configuration.cjs own unique-label 只读追加hash，不输出明文/不改配置。17项QA门与原生解析/新intent model override/env recipe测试过、lint过。
+
+Native SKY当前会话 global sky 已初始化；**r86Window handle331002**，app完整路径含review-r86-final-rc11-luna.../copy/ZhongshuoDual/electron.exe，title R86 合成协作验收52854，r86State最新root消息+replies。只用SKY做Windows鼠标/键盘，view_image看落盘图。重启后全局var需用var声明；如失效重新list/get唯一窗口。旧rc11-real handle330288保留blocked，不再操作或重试。用户在用v23根始终不碰，旧rc9用户选中文本的窗口之前保留，不主动关闭。
+
+剩余完成：新Luna root同BUILD v1原生proof→原生意见/0call→explicit v2＋rework-window→真版本交付/proof/两步accept；普通无@你好/同串“我刚才说了什么？”0child/0delivery；新真实文档协作/原生Markdown预览/系统SaveAs own/native-saved-original.md hash；原生@全体两席只读DELIB/双方IND+CR+自然report；全部terminal后正常AltF4/BAT重开hash/0新调用；子任务/精确子成果/返回/未发送草稿/CtrlR/实际历史；6组prototype配对wide/narrow/DPR emulated并实际看图；全owned根ledger（含原旧rc11 v2precall false）、总门、RELEASE-VALIDATION、current matrix/continuation更新、白名单证据、commit/push、独立审核。**不要再停在阶段；不要把rc10/旧rc11拼为新根总pass**。新root默认proof读取progress.expectedModels已是Luna；--codex-model可供独立新intent显式模型，旧p.expectedModels不变；final --code-evidence只在该新root自己QA需要时用。full/upgrade默认rc11固定根可直接复用同BUILD已pass；无需新包/无需再发昂贵Sol。
+
 **最高优先新阻断（23:02，需新冻结，不放行 rc10）**：restored 实际v2运行时，AUTO父规划已消费redispatch outbox，父run WAITING、子任务执行，但成果详情回退“返工意见已记录、尚未执行”并重复显示执行按钮。原生 `native-rework-running-mislabel.json/png` 和独立 `rc10-rework-running-original-failure.json` 保留；正式命令仍安全拒绝重复，无自动重发。根因 reworkPendingOf 仅数未done outbox。最小修复只读派生 queued=pendingIntent OR 同task非source真实活跃run，排除历史/别任务；不动执行、幂等、权限、预算、保护。正式worker永久反例 before确实queued false失败，修后33项（coordinationR86＋reworkExecutionContract）过，含只记录false、outboxdone但父WAITING true、真子任务后true、重复执行拒、自然v2后null、再次记录且别任务活跃仍false。双types在跑。
 
 **最新冻结 a2bc37606baa745357b47cf07cb5db012d857e3c / rc11 / bld_cf50e93cc0db5723（23:09）**：593 clean一致；正式33项和双types已过，source-quality-a2bc376.json PASS（59文件/33既有无新增）。全套full-a2bc376.log已163文件/1164项全过（包含额外QA gate断言；full-a2bc376-context.json记录应用src无变化与QA文件hash），生成Word目录已正确完整复制到ignored证据再restore。新rc11根 review-r86-final-rc11-real-20261015 / port52844 已prepare 0calls，尚未真实send；真实模型等待rc10阶段三链全部自然结束后再发，不抢资源。rc11-upgrade和rc11-full（52845）均完整pass/0真实调用，full保持单独前台未再出现隐藏截图。

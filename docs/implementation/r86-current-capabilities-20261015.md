@@ -1,8 +1,8 @@
 # R86 当前能力与验收状态（施工中）
 
-上一已交付候选为 v24-rc2 / R85。本页不替代最终交付结果；当前运行冻结 ad513c2b858f7dac81e7e1f0d02f9d11b0ad3916 / v25-rc10 / bld_07ef3cd9b4b08add（593 文件，clean/pristine 独立核验），尚无最终交付。按用户指定使用 Claude/deepseek-flash + Codex/gpt-6.1-sol；DeepSeek 响应型号如实报告，Codex 原生 turn_context 证明请求 ID，底层 response_model 未报告，不反填。GLM429、早期 CLI/schema/配置初始化及首次 rc10 Codex 额度失败保留；额度恢复后新独立工程验证，不自动重放旧请求。全部 owned 根 real_calls 逐 turn 计量（CLI 内部工具往返不冒充单次 HTTP 请求）。
+上一已交付候选为 v24-rc2 / R85。本页不替代最终交付结果；当前运行冻结 a2bc37606baa745357b47cf07cb5db012d857e3c / v25-rc11 / bld_cf50e93cc0db5723（593 文件，clean/pristine 独立核验），尚无最终交付。按用户指定使用 Claude/deepseek-flash + Codex/gpt-6.1-sol；DeepSeek 响应型号如实报告，Codex 原生 turn_context 证明请求 ID，底层 response_model 未报告，不反填。GLM429、早期 CLI/schema/配置初始化及首次 rc10 Codex 额度失败保留；额度恢复后新独立工程验证，不自动重放旧请求。全部 owned 根 real_calls 逐 turn 计量（CLI 内部工具往返不冒充单次 HTTP 请求）。
 
-rc10 首次完整源码 163 文件 / 1161 项全过、双 types 与 57 改动文件增量 lint 无新增（33 既有错误按 rule/message 匹配）。同 BUILD 完整旧工程根升级/UNKNOWN 保全/旧程序拒52/匹配回退已通过，0 真实调用。restored 独立根 AUTO v1 四次实际调用全部成功，真实异模型评审读取/测试、主池及线程规划可读窗口均过；普通问候与同串续问保持原消息和实际历史，0 子任务 / 0 工作交付。v2 返工已通过只记意见不派发、明确执行的前半合同，后续真实交付及手选研讨、文档、重开、原型配对仍在进行。首次正式 Fake 回归因截图隐藏总 false、第二次因 QA 不支持 API 总 false 均保留，待单一前台工程宿主复证；不把阶段票拼成最终包通过。
+rc11 完整源码 163 文件 / 1164 项全过（含额外 QA 门断言，应用 src 与冻结一致）、双 types 与 59 改动文件增量 lint 无新增（33 既有错误按 rule/message 匹配）。rc11 同 BUILD 完整旧工程根升级/UNKNOWN 保全/旧程序拒52/匹配回退已通过，0 真实调用。restored 独立根 AUTO v1 四次实际调用全部成功，真实异模型评审读取/测试、主池及线程规划可读窗口均过；普通问候与同串续问保持原消息和实际历史，0 子任务 / 0 工作交付。rc10 三链已自然完成：代码两版8、文档5、研讨14、普通问答2，共29真实成功。持续返工详情出现父outbox消费后误标未执行，故rc10不交付；rc11已最小只读修复同task非source活跃run派生，正式worker反例及独立16case过。rc11真实代码v1刚从原生界面发出，后续同BUILD流程、返工窗口、重开与视觉仍待完成。首次正式 Fake 回归因截图隐藏总 false、第二次因 QA 不支持 API 总 false 均保留，rc10 full-v3及rc11同BUILD正式启动器full均已完整通过/0调用；不把阶段票拼成最终包通过。
 
 rc9 两版代码及研讨、文档的 29 次成功属于历史阶段证据；因规划 JSON 泄漏回归而不能最终交付。rc10 已共源修复聊天 TaskComplete 投影，原始协议和用户 JSON 不改写，实际规划窗口独立复核通过。原型旧表也不能替代当前正式事实。
 
