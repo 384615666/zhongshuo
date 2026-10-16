@@ -1,0 +1,63 @@
+{
+  "pass": true,
+  "at": "2026-10-16T11:33:49.315Z",
+  "build": {
+    "buildId": "bld_cf50e93cc0db5723",
+    "commit": "a2bc37606baa745357b47cf07cb5db012d857e3c",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-15T15:02:54.754Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "recordSourceCommit": "7766e9e360b4be86ba3cac862de46918b500d0fd",
+  "candidate": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v25-rc11",
+  "programFiles": 593,
+  "guides": 4,
+  "finalGate": {
+    "file": "docs/implementation/evidence-r86-v25-20261016/code/final-gates.json",
+    "sha256": "d9d1d2b1a839186bda560203531e103faa898cfdb86f39ed44229935d4307047",
+    "checks": {
+      "cleanDistribution": true,
+      "source": true,
+      "distinctActualModels": true,
+      "genuineDependencyFlow": true,
+      "readablePlanningWindow": true,
+      "exactNativeExecution": true,
+      "explicitV2AcceptanceAndReopen": true,
+      "reworkRunningWindow": true,
+      "documentCollaboration": true,
+      "collaborationReopen": true,
+      "selectedDeliberation": true,
+      "ordinaryConversation": true,
+      "nativeNavigation": true,
+      "zeroInferenceRegression": true,
+      "upgradeAndRollback": true,
+      "inspectedVisualPairs": true,
+      "originalFailuresAndCalls": true
+    }
+  },
+  "archive": {
+    "file": "docs/implementation/evidence-r86-v25-20261016/RELEASE-MANIFEST-SHA256.json",
+    "sha256": "c9b365ae66b82840ca8e29fddebb407b5484ea3a3053f52e4b6706def9d9bba3",
+    "files": 117,
+    "workingAndGitBlobHashesMatch": true
+  },
+  "realCalls": {
+    "attempts": 157,
+    "byStatus": {
+      "succeeded": 149,
+      "failed": 7,
+      "interrupted": 1
+    },
+    "byModel": {
+      "claude/deepseek-flash": 99,
+      "codex/gpt-6.1-sol": 36,
+      "codex/gpt-6-luna": 19,
+      "claude/glm-5.3-flash": 2,
+      "codex/gpt-6-sol": 1
+    }
+  },
+  "userAcceptance": "pending",
+  "scope": "same frozen runtime; later QA/docs commit separated; no user data or automatic replay"
+}

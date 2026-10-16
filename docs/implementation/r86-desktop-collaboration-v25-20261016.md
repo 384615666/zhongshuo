@@ -7,7 +7,7 @@
 - 运行源码：clean `a2bc37606baa745357b47cf07cb5db012d857e3c`。
 - BUILD：`bld_cf50e93cc0db5723`，593 程序文件逐字节核清单。
 - 后续 QA、证据与记录提交不冒充 BUILD 源码；冻结后 `src`、`hifi-prototype`、`migrations` 无变动。
-- 四份外置说明独立 `GUIDES-SHA256.json` 核验，BUILD、程序与说明均绑定同一候选。
+- 四份外置说明独立 `GUIDES-SHA256.json` 核验，BUILD、程序与说明均绑定同一候选。外置 `RELEASE-VALIDATION.json` 与 [版本管理的收据](r86-v25-release-validation-20261016.json) 字节一致，记录源码提交 `7766e9e360b4be86ba3cac862de46918b500d0fd`；收据/本段后续文档提交不改变运行源码。
 - 可版本管理的合成证据见 [白名单清单](evidence-r86-v25-20261016/RELEASE-MANIFEST-SHA256.json)，严格总门见 [final-gates](evidence-r86-v25-20261016/code/final-gates.json)。独立副本和大体积原始工程证据保留在 `dist/desktop/review-r86-*`，不提交数据库、profile、原生转录或用户样本。
 
 ## 已修缺口
