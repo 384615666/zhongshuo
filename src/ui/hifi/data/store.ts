@@ -10,6 +10,8 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { AppState, ContextTarget, Thread, ThreadCard, RouteMode } from './types';
+import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
+import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
 import { openTab } from '../lib/resource';
 import { configureReadingPositions, readingPosition, saveReadingPosition } from './readingPositions';
 
@@ -54,6 +56,8 @@ export interface HifiExtension {
   threadMessages: Record<string, AppState['messages']>;
   /** 线程任务详情（task.get）：threadId → 详情（记录串无任务则不写键）。 */
   threadTasks: Record<string, ThreadTaskDetail>;
+  threadMemberships: Record<string, ThreadMembersSnapshot>;
+  threadProgress:Record<string,{items:ThreadVisibleProgress[];readAt:number}>;
   /** 线程阅读水位（thread.get lastReadSeq——首条未读分隔线用；服务端 thread_read_states 为准）。 */
   threadReadSeq: Record<string, number>;
   /** 附件上传项（第五十二轮 review-r51 §2）：draftKey → 在途/就绪/失败上传——跨页面实例
@@ -145,7 +149,7 @@ function makeEmptyState(): HifiState {
     ui: { theme: 'light', activeRoomId: '', writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0,
-    roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
+    roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
     readErrors: {}, pendingSends: {}, readGate: null, threadReadGate: null,
     legacyActive: false, legacyReason: null,
     boot: 'pending', bootError: null, openInFlight: false, openInFlightTarget: null,

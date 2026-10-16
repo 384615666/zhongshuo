@@ -13,6 +13,8 @@ import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
 import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
 import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
+import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
+import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
 import type { AppState, Message, Task, Thread, ThreadCard } from './data/types';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, navigate } from './lib/router';
@@ -866,6 +868,8 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
 
 
 interface ThreadGetData {  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
+  members?:ThreadMembersSnapshot;
+  progress?:ThreadVisibleProgress[];
   anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null;
   lastReadSeq: number;
 }
@@ -922,6 +926,8 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
         threadAnchors: { ...prev.threadAnchors, [threadId]: anchor != null && (rootTickets.get(anchor.id) ?? 0) > ticket
           ? prev.messages.find((m) => m.id === anchor.id) ?? prev.threadAnchors[threadId] ?? anchor : anchor },
         threadReadSeq: { ...prev.threadReadSeq, [threadId]: got.lastReadSeq },
+        ...(got.members?{threadMemberships:{...prev.threadMemberships,[threadId]:got.members},followers:{...prev.followers,[threadId]:got.members.memberIds}}:{}),
+        ...(got.progress?{threadProgress:{...prev.threadProgress,[threadId]:{items:got.progress,readAt:Date.now()}}}:{}),
         readErrors: errors,
       };
     });

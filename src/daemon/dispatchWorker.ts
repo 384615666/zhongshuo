@@ -2,6 +2,7 @@ import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, pumpCoordinations } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
+import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { acquireLease } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
@@ -1794,6 +1795,18 @@ export class DispatchWorker {
       return;
     }
     switch (event.kind) {
+      case 'message.progress': {
+        const text=visibleRuntimeProgress(event.text);
+        if(!text)break;
+        const live=this.db.prepare(`SELECT a.status,a.stop_generation_snapshot,t.stop_generation,t.status task_status
+          FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+          WHERE a.id=? AND r.id=? AND t.id=?`).get(turnId,runId,task.id) as {status:string;stop_generation_snapshot:number;stop_generation:number;task_status:string}|undefined;
+        if(!live||!['RUNNING','WAITING_APPROVAL','WAITING_INPUT'].includes(live.status)||live.task_status==='CANCELLED'||live.stop_generation>live.stop_generation_snapshot)break;
+        this.db.prepare(`INSERT INTO turn_visible_progress(turn_id,source_message_id,text,updated_at) VALUES(?,?,?,?)
+          ON CONFLICT(turn_id) DO UPDATE SET source_message_id=excluded.source_message_id,text=excluded.text,updated_at=excluded.updated_at
+          WHERE turn_visible_progress.text!=excluded.text`).run(turnId,event.messageId,text,this.clock());
+        break;
+      }
       case 'session.ready':
         if(event.providerSessionId)this.db.prepare('UPDATE runtime_sessions SET provider_session_id=? WHERE id=? AND task_id=? AND project_id=?').run(event.providerSessionId,event.sessionId,task.id,task.project_id);
         break;

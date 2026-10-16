@@ -177,6 +177,7 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
     | { kind: 'session.ready'; providerSessionId: string }
     | { kind: 'turn.started'; providerTurnId?: string }
     | { kind: 'message.delta'; messageId: string; text: string }
+    | { kind: 'message.progress'; messageId: string; text: string }
     | { kind: 'message.completed'; messageId: string; text: string; controlResult?:string }
     | {
         kind: 'tool.started';
@@ -215,7 +216,7 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
   );
 
 export const RUNTIME_EVENT_KINDS = [
-  'session.ready', 'turn.started', 'message.delta', 'message.completed',
+  'session.ready', 'turn.started', 'message.delta', 'message.progress', 'message.completed',
   'tool.started', 'tool.completed', 'approval.requested', 'input.requested',
   'usage.updated', 'turn.completed', 'turn.failed', 'process.exited',
 ] as const;

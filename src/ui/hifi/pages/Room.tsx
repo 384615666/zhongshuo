@@ -43,7 +43,7 @@ import {
   type DetailsSection, type ThreadView,
   detailsSectionOfTab, tabFor, viewOfTab,
 } from '../lib/threadNav';
-import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary } from '../data/types';
+import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttachmentSummary,ProjectMember } from '../data/types';
 /* ---------- UX-PREVIEW-01：共享预览（§17.9） ---------- */
 import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
@@ -1905,6 +1905,11 @@ function ThreadPanel({
                   </div>
                 );
               })}
+              {(s.threadProgress[thread.id]?.items??[]).map(progress=><div key={progress.turnId} className="panel" role="status" data-zs-live-progress={progress.turnId}>
+                <div className="row tight"><span className="strong">{memberLabel(byId(s.members,progress.memberId))}</span><span className="small faint">{progress.status==='STOPPING'?'正在停止':progress.status==='WAITING_APPROVAL'?'等待确认':progress.status==='WAITING_INPUT'?'等待补充':progress.phase==='connecting'?'正在连接 AI':progress.phase==='connected'?'已连接，等待回应':'正在处理'}</span></div>
+                {progress.text?<div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',marginTop:6}}>{progress.text}</div>:null}
+                {s.readErrors['thread:'+thread.id]?<div className="small faint">更新失败，保留上次进展 · {new Date(s.threadProgress[thread.id]!.readAt).toLocaleTimeString()}</div>:null}
+              </div>)}
             </div>
 
             {!pinnedToBottom && pendingNew > 0 ? (
@@ -2400,105 +2405,46 @@ function ThreadPendingStrip({
 
 /* ---------------- 串内成员 / 跟进名单（原为头部常驻，现已并入「详情」） ---------------- */
 
-function ThreadMembers({ threadId, isDiscussion }: { threadId: string; isDiscussion: boolean }) {
+function ThreadMembers({ threadId }: { threadId: string; isDiscussion: boolean }) {
   const s = useStore((x) => x);
   const thread = threadOf(s, threadId);
-  const followers = s.followers[threadId] ?? [];
+  const snapshot = s.threadMemberships[threadId];
   const room = thread ? roomOf(s, thread.roomId) : undefined;
-  const roomMembers = room ? room.memberIds.map((id) => byId(s.members, id)).filter(Boolean) : [];
-  const notFollowing = roomMembers.filter((m) => m && !followers.includes(m.id));
-
-  if (isDiscussion) {
-    return (
-      <div className="msg-list">
-        <div className="panel">
-          <div className="panel-title"><Icon name="info" size={13} /> 记录串没有跟进名单</div>
-          记录不派工、不唤醒成员，因此不存在"哪些成员持续跟进"的概念。
-          这里只列出房间成员，方便你决定要不要 @ 谁把它变成任务。
-        </div>
-        <div className="section-title">房间成员<span className="count">{roomMembers.length}</span></div>
-        {roomMembers.map((m) => m && (
-          <div key={m.id} className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="row tight">
-              <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={22} state={m.workState} />
-              <span className="strong">{memberLabel(m)}</span>
-            </span>
-            <span className="small faint">{m.workStateReason}</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="msg-list">
-      <div className="panel info">
-        <div className="panel-title"><Icon name="users" size={13} /> 串内成员与跟进名单（和侧栏的「成员管理」不是一回事）</div>
-        移出跟进 = 不再自动唤醒它；历史与已产出成果都保留；随时可以再 @ 回来。
-        人的关注只控制通知，不改变成员是否运行（13B、§25.4）。
-      </div>
-
-      <div className="section-title">正在跟进<span className="count">{followers.length}</span></div>
-      {followers.length === 0 ? (
-        <EmptyState icon="users" title="没有成员在跟进" detail="在串里 @ 某个成员即可把它叫回来。" />
-      ) : (
-        <div className="col" style={{ gap: 8 }}>
-          {followers.map((id) => {
-            const m = byId(s.members, id);
-            return (
-              <div key={id} className="row" style={{ justifyContent: 'space-between' }}>
-                <span className="row tight">
-                  <Avatar
-                    name={m?.displayName ?? '?'}
-                    ordinal={m?.ordinal}
-                    color={memberColor(id, m?.ordinal)}
-                    size={22}
-                    state={m?.workState}
-                    stateTitle={m?.workStateReason}
-                  />
-                  <span>
-                    <span className="strong">{memberLabel(m)}</span>
-                    <span className="small faint" style={{ marginLeft: 6 }}>{m?.workStateReason}</span>
-                  </span>
-                </span>
-                <button className="btn sm" disabled title="执行侧跟进名单（自动唤醒）尚未接入移出命令——历史与成果保留；人的关注/静音用本串 ⋯ 菜单（thread.subscribe）">
-                  移出跟进（未接入）
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {notFollowing.length > 0 ? (
-        <>
-          <div className="section-title" style={{ marginTop: 16 }}>
-            房间其他成员<span className="count">{notFollowing.length}</span>
-          </div>
-          <div className="small faint" style={{ marginBottom: 8 }}>
-            把它们加入跟进：之后本任务的后续动作会自动唤醒它们（受模式与预算约束）。
-          </div>
-          <div className="col" style={{ gap: 8 }}>
-            {notFollowing.map((m) => m && (
-              <div key={m.id} className="row" style={{ justifyContent: 'space-between' }}>
-                <span className="row tight">
-                  <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={22} state={m.workState} />
-                  <span className="strong">{memberLabel(m)}</span>
-                </span>
-                <button
-                  className="btn sm"
-                  disabled
-                  title="执行侧跟进名单（自动唤醒）尚未接入添加命令——在串里 @ 该成员即可把它叫回来（真实派发）；人的关注用本串 ⋯ 菜单"
-                >
-                  加入跟进（未接入）
-                </button>
-              </div>
-            ))}
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
+  const [operation, setOperation] = useState<{target:string;pending:boolean;error:string|null}>({target:'',pending:false,error:null});
+  const live = useRef(true);
+  const operationSerial=useRef(0);
+  useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
+  const target=threadId+':'+s.activeProjectId;
+  const pending=operation.target===target&&operation.pending;
+  const error=operation.target===target?operation.error:null;
+  const members=(snapshot?.memberIds??[]).map(id=>byId(s.members,id)).filter((m):m is ProjectMember=>Boolean(m));
+  const candidates=(room?.memberIds??[]).map(id=>byId(s.members,id)).filter((m):m is ProjectMember=>Boolean(m)&&!snapshot?.memberIds.includes(m!.id));
+  const change=async(memberId:string,action:'add'|'remove')=>{
+    if(!thread||!snapshot||pending)return;
+    const projectId=s.activeProjectId,gen=s.loadGen,scope=target;
+    const serial=++operationSerial.current;
+    setOperation({target:scope,pending:true,error:null});
+    try {
+      await command('thread.members.change',{projectId,threadId,memberId,action,expectedVersion:snapshot.version});
+      if(getState().activeProjectId===projectId&&getState().loadGen===gen)await loadThread(threadId);
+    } catch(error) {
+      if(live.current&&operationSerial.current===serial&&getState().activeProjectId===projectId&&getState().loadGen===gen)setOperation({target:scope,pending:false,error:(error as Error).message});
+      return;
+    }
+    if(live.current&&operationSerial.current===serial)setOperation({target:scope,pending:false,error:null});
+  };
+  const readError=s.readErrors['thread:'+threadId];
+  return <div className="msg-list">
+    <div className="section-title">本串成员 <span className="count">{snapshot?members.length:'…'}</span></div>
+    {error||readError?<div className="panel danger" role="alert">{error??readError}<button className="btn sm" onClick={()=>void loadThread(threadId)}>刷新名单</button></div>:null}
+    {!snapshot?<div className="small faint">正在读取成员…</div>:members.length===0?<EmptyState icon="users" title="还没有 AI 参与" detail="从下方添加一位 AI，再发消息。"/>:null}
+    {members.map(m=><div key={m.id} className="row" style={{justifyContent:'space-between'}}>
+      <span className="row tight"><Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id,m.ordinal)} size={22} state={m.workState}/><span className="strong">{memberLabel(m)}</span><span className="small faint">{snapshot?.eligibleMemberIds.includes(m.id)?m.workStateReason:'暂不可接收新消息'}</span></span>
+      <button className="btn sm" disabled={pending} onClick={()=>void change(m.id,'remove')}>移出</button>
+    </div>)}
+    {(snapshot?.runningMemberIds??[]).filter(id=>!snapshot?.memberIds.includes(id)).map(id=><div key={id} className="small faint">{memberLabel(byId(s.members,id))} 已移出，当前执行仍在进行；可在任务中停止。</div>)}
+    {candidates.length>0?<><div className="section-title" style={{marginTop:16}}>添加 AI</div>{candidates.map(m=><div key={m.id} className="row" style={{justifyContent:'space-between'}}><span>{memberLabel(m)}</span><button className="btn sm" disabled={pending||!snapshot||m.enabled===false} onClick={()=>void change(m.id,'add')}>添加到本串</button></div>)}</>:null}
+  </div>;
 }
 
 /* ---------------- 串内成果 tab ---------------- */

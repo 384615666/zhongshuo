@@ -304,9 +304,10 @@ export function Composer({
    */
   const dm = useStore((s) => (target.kind === 'dm' && target.dmId ? s.dms.find((d) => d.id === target.dmId) : undefined));
   const room = useStore((s) => (target.kind === 'dm' ? undefined : roomOf(s, target.roomId)));
+  const threadMembers=useStore(s=>target.kind==='thread'&&target.threadId?s.threadMemberships[target.threadId]:undefined);
   const memberIds = useMemo(
-    () => (target.kind === 'dm' ? (dm?.memberIds ?? []) : (room?.memberIds ?? [])),
-    [target.kind, dm, room],
+    () => (target.kind === 'dm' ? (dm?.memberIds ?? []) : target.kind==='thread'?(threadMembers?.eligibleMemberIds??[]):(room?.memberIds ?? [])),
+    [target.kind, dm, room,threadMembers],
   );
   const allMembers = useStore((s) => s.members);
   const memberRuntimes = useStore((s) => s.memberRuntimes);
@@ -1178,8 +1179,8 @@ export function Composer({
             <div className="menu-label">提及</div>
             <button className="menu-item" onClick={() => insertMention('all')}>
               <Icon name="users" size={14} />
-              <span style={{ flex: 1 }}>全体</span>
-              <span className="hint">{target.kind === 'dm' ? '冻结该私信全部启用成员' : '冻结当前房间启用名单'}</span>
+              <span style={{ flex: 1 }}>{target.kind==='thread'?'本串全体':'全体'}</span>
+              <span className="hint">{members.filter(m=>m.enabled).length} 位 AI</span>
             </button>
             <div className="menu-sep" />
             {members.map((m) => (

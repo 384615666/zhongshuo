@@ -30,6 +30,7 @@
  */
 import { claudeInput } from '../imageInput.ts';
 import {chatAnswer} from '../../contracts/chatAnswer.ts';
+import {visibleRuntimeProgress} from '../../contracts/runtimeProgress.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
@@ -667,6 +668,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         const messageId = `claude_${block.id ?? randomUUID().slice(0, 8)}`;
         turn.lastMessageId = messageId;
         this.pushEvent(state, turn, { kind: 'message.delta', messageId, text: block.text ?? '', ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+        // stream-json assistant messages are completed blocks (partial token
+        // notifications are stream_event, not this branch). Keep progress out
+        // of final chat identities and never expose a control JSON prefix.
+        const progress=visibleRuntimeProgress(block.text??'');
+        if(progress&&!turn.stopRequested)this.pushEvent(state,turn,{kind:'message.progress',messageId,text:progress,...this.baseEvent(state,turn,`progress:${messageId}`)});
       }
       // 工具事件（2.x stream-json 的 tool_use 块在 assistant 消息内）：只读档下理论不触发；
       // 出现则按块映射 tool.started/completed（outcome unknown——CLI 不回传工具结果状态）。

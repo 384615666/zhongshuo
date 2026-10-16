@@ -6,6 +6,10 @@
 
 人类在审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79明确说“开始这一轮吧”，已通过read_thread核对原userMessage。权威范围见 [R87完整任务书](r87-product-usability-plan-20261017.md)；原方案“尚未实施”是历史状态，现已授权持续完成施工、真实验收及最终集中交付。唯一产品写入方为本会话，审阅方只读，不启新代理。
 
+**01:07阶段进度**：standing运输阶段提交4e9f6e6、独立精确快照8格复证pass（0模型）。本串正式thread.members.change已接入已有followers表，读thread.get返回统一members/version/eligible集合，原执行者自动在串，实际coordination_steps子成员由权威绑定恢复（不取整房间候选），显式removed覆盖旧证据；CAS支持ABA、同号重放、归档/跨项目拒绝。ThreadMembers真实添加/移出、Composer线程候选仅取本串eligible接线完成。4个正式名单用例过，尚未真实窗口/派发链验收；旧默认续问限制仍待下一步成组更换，不能宣称@发送已修完。
+
+追加迁移053为新消息级路由请求与可见运行进度提供新语义版本门，001–052未改，不升级用户原根。Claude完整自然assistant块转message.progress，控制对象/残缺JSON不进公开进度；worker只接受当前未停止/未终态turn，按turn保存一个最新有界快照，thread.get把根/真实子turn进展交回复区，终态隐藏，不加假聊天回复/计数。3文件48项（含原CLI运输）通过；首进度fixture漏终态导致测试超时已如实纠正，非真实模型故障。当前新thread_reply_requests表尚未用于普通续问；下一步以每条用户消息冻结收件人/本串范围/配置/原交付身份，允许普通串自然进入工作及多成员，原task/消息不改写。之后开放真实结构化handoff消息、角色提示一致性，P1全部范围和最终新手首用同包仍未验收。采用含可发现问题的合成DOCX或PDF作为最终报告材料，不用greeting代替。
+
 基线 clean4f7da14，运行a2bc376/v25-rc11仅作旧基线。R86模型文件/版本及工程事实保留，但用户七项截图和常驻注入反例证明日常体验未达标，不能拿17门继续宣称日常可用。当前先成组P0：Claude native standing注入、本串持久成员与@范围、普通串自然转工作、消息式真实交接与及时可见反馈；再P1配置发现/简单控件/次序/文案及逐页首次/日常/异常/继续使用。最终新同BUILD从空白数据实际UI起完整路线，不预配项目代替首用。
 
 已重跑未修生产Claude adapter+假进程反例：dist/review-r87-source/claude-standing-prompt-transport-counterexample.json，counterexampleConfirmed=true，0真实模型/0原生进程，原独立票未覆盖。CLI本地help确认native append-system-prompt及文件形式支持。首个可review修复：Claude保存developerInstructions，所有权限参数重建后以native --append-system-prompt-file注入，每session独立系统文件，用户文本/图片stdin不混入规则，首次/续接/长指令/权限档都覆盖；确认退出后只清理自己的临时文件。adapter版本升0.4，使身份变化如实可见。Claude12格（readonly/full/project × text/image × first/resume）和会话隔离/覆盖拒绝、Codex真实RPC start/resume系统参数共源；4文件59项及主types/增量lint通过，日志dist/review-r87-source/standing-transport-tests-20261017.log。真实模型0，尚未业务/最终包验收，不新增交付宣称。下一步本串持久成员与消息式唤醒成组实现；Claude中途message.delta未入消息已确认，须分离自然进度/控制JSON后修，不能裸上屏。

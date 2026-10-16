@@ -12,6 +12,8 @@ import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, 
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import { coordinationRoomMembers, freezeCoordinationScope } from './coordination.ts';
 import { conversationFacts, conversationBlock, enqueueConversationReply } from './conversationReplies.ts';
+import {readThreadMembers,persistThreadMember,readThreadProgress} from './threadMembers.ts';
+import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
@@ -1301,7 +1303,30 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           try { anchor = { id: anchorRow.id, authorType: anchorRow.author_type, authorId: anchorRow.author_id, body: JSON.parse(anchorRow.body_json) as { text: string }, createdAt: anchorRow.created_at, conversationSeq: anchorRow.conversation_seq, attachments }; } catch { /* 残缺正文不虚构——anchor 置空由呈现层标注 */ }
         }
         const lastReadSeq = (deps.db.prepare('SELECT last_read_message_seq FROM thread_read_states WHERE thread_id = ? AND viewer_id = ?').get(params.threadId, deps.localUserId) as { last_read_message_seq: number } | undefined)?.last_read_message_seq ?? 0;
-        return withCommandId({ ok: true, data: { thread: { id: th.id, projectId: th.project_id, conversationId: th.conversation_id, roomId: th.room_id, anchorMessageId: th.anchor_message_id, rootTaskId: th.root_task_id, status: th.status, lastMessageSeq: th.last_message_seq, revision: th.revision }, anchor, lastReadSeq } });
+        return withCommandId({ ok: true, data: { thread: { id: th.id, projectId: th.project_id, conversationId: th.conversation_id, roomId: th.room_id, anchorMessageId: th.anchor_message_id, rootTaskId: th.root_task_id, status: th.status, lastMessageSeq: th.last_message_seq, revision: th.revision }, anchor, lastReadSeq, members:readThreadMembers(deps.db,th.id), progress:readThreadProgress(deps.db,th.id) } });
+      }
+      case 'thread.members.change': {
+        const params=threadMembersChangeParams.parse(env.params);
+        const guard=()=>{
+          const th=deps.db.prepare(`SELECT th.project_id,th.conversation_id,th.room_id,th.status,r.archived_at,p.status projectStatus
+            FROM conversation_threads th JOIN rooms r ON r.id=th.room_id JOIN projects p ON p.id=th.project_id WHERE th.id=?`).get(params.threadId) as {project_id:string;conversation_id:string;room_id:string;status:string;archived_at:number|null;projectStatus:string}|undefined;
+          if(!th||th.project_id!==params.projectId)throw new DaemonCommandError('THREAD_SCOPE_MISMATCH','对话不属于当前项目');
+          assertConversationAudience(deps.db,deps.localUserId,th.conversation_id);
+          if(th.status!=='open'||th.archived_at!=null||th.projectStatus!=='active')throw new DaemonCommandError('CONVERSATION_UNAVAILABLE','项目或对话已归档，不能更改成员');
+          return th;
+        };
+        const result=run(()=>{
+          const th=guard(),current=readThreadMembers(deps.db,params.threadId);
+          if(current.version!==params.expectedVersion)throw new DaemonCommandError('STALE_REVISION','本串成员已变化，请刷新名单后重试');
+          const member=deps.db.prepare("SELECT pm.enabled FROM project_members pm JOIN room_members rm ON rm.member_id=pm.id AND rm.room_id=? WHERE pm.id=? AND pm.project_id=? AND pm.principal_type='agent'").get(th.room_id,params.memberId,params.projectId) as {enabled:number}|undefined;
+          if(params.action==='add'&&(!member||member.enabled!==1))throw new DaemonCommandError('MEMBER_DISABLED','请选择本房间可用的 AI');
+          if(params.action==='remove'&&!current.memberIds.includes(params.memberId))throw new DaemonCommandError('RESOURCE_NOT_FOUND','这位 AI 不在本串中');
+          if(params.action==='add'&&!current.memberIds.includes(params.memberId)&&current.memberIds.length>=12)throw new DaemonCommandError('VALIDATION_INVALID','本串最多加入12位 AI');
+          const next=persistThreadMember(deps.db,params.threadId,params.memberId,params.action,deps.localUserId);
+          appendDomainEvent(deps.db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:params.projectId,conversationId:th.conversation_id,threadId:params.threadId,kind:'thread.membersChanged',createdAt:Date.now(),payload:{memberId:params.memberId,action:params.action,version:next.version}});
+          return next;
+        },guard);
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
       case 'task.get': {
         const params = z.strictObject({ taskId: z.string().min(1) }).parse(env.params);
