@@ -4,6 +4,12 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
+**2026-10-16 14:55 当前最高优先断点**：运行冻结仍 a2bc376 / rc11 / bld_cf50e93cc0db5723，记录HEAD55d611e。新协作根第一研讨 task_41da... 在SYN硬截止失败：旧派发300000ms，real_calls创建14:37:49，turn.started回执14:40:18，停止退出14:42:49；源码consumeUntilTerminal硬截止从消费事件时起算，与absence有效执行时钟分离，未证明计时bug，不改runtime。stderr unrecognized_model不能据此判模型不存在（此前同模型多次success）；原12次11success/1failed及budget/时间/error保留 `deliberation-original-failure.json` 和原 `delivery-deliberation.json` false，未重放旧run、无UNKNOWN/在途/保护。
+
+沿已有正式project.collab.set、精确自有项目CAS1→2，将**新派发**turn时限设600000ms，14次调用上限及全局默认5min不变；bounded-new-turn-config.json记录0模型调用配置，原生项目菜单→项目设置→协作限制已实际看到10分钟、native-project-deadline-readback.json/png保留。新原生@全体自然两功能问题 **task_984b01f8-dcc9-4d98-b557-f522b3256719**，watch **25880** 写 `delivery-deliberation-completed.json`，目前IND/CR在途。新正式deliberation-proof/native-proof-deliberation只在此新task真正发布后取票，未写默认proof，不能把旧false改绿。
+
+QA watcher新增最新正式run FAILED/INTERRUPTED/CANCELLED无交付就立即失败，不再纯等45分钟；ledger必保本次SYN两份false。最终archive已改纳入新completed观察、旧失败、10min配置、原生回读、独立文档小票。最终门新增候选4份外置guide的BUILD+hash严格核验；候选与两个own副本已同步说明（各own/guides-before-deadline-note保留旧说明），593程序/BUILD不动。`.gitattributes`新增R86白名单证据 -text，防Git换行破坏hash。改动尚待阶段提交。还需新研讨完成、精确四证明/自然报告、原生关闭+新协作根reopen、全ledger/final门、白名单archive与final文档/RELEASE-VALIDATION/提交推送/独立最终核查。代码根life/nav全pass且21calls保持；文档6call/真实预览SaveAs及独立pass，不再重跑。
+
 **2026-10-16 14:41 最新**：运行BUILD仍不变，记录HEAD b6cf345（另有QA/docs待提交）。新协作根文档已6真实success自然交付，task_5948... / native-proof-document-v1 六精确sessions pass；真实撰写→Luna评审→DS修订→Luna再读→整合。最终requirements.md 5586B / SHA913f7488...，原生文件树/Markdown标题及功能表实际检查，原生系统SaveAs到本own根/native-saved-original.md，document-preview.json pass/hash相同；终版两处整合补文未再第三方评审，reviewCoversCurrentBytes=false如实。独立 rc11-luna-document-original-independent-audit.json pass。DELIB目前12call（11success/DS synthesis在途），watch72134仍等自然结果，不重发。
 
 额外新增QA协作根原生正常AltF4后同BAT重开校验脚本 verify-r86-collaboration-reopen.cjs，待DELIB完成/四证明全收后再关闭；检查正式daemon closed、同根、原doc+DELIB交付、文件hash、零新增call。最终门新增此必要票，20QA正负+eslint过。archive-r86-release.cjs白名单归档脚本需最终门pass才执行，包含既有源/四native证明/六对图/原失败/有限独立票和合成输出；不遍历DB/profile/转录/用户目录，有文件/总体容量及疑似密钥拒绝。当前尚未执行归档/放行。
