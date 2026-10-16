@@ -4,6 +4,20 @@
 
 ## 当前施工：R86 桌面多 AI 协作（尚未最终交付）
 
+**2026-10-16 14:25 当前优先断点**：同 a2bc376 / rc11 / bld_cf50e93cc0db5723。上午 Luna 根代码 v1/v2 十次成功、普通两次成功及原生 v2 accepted 均保持；文档 review 和 DELIB 后续各出现一条 Codex quota FAILED。`quota-original-failures.json`、两份 delivery false 原件保留，该根共21实际call（19success/2failed），没有自动重试。用户返回后窗口均无，正常BAT起原根触发恢复保护，旧研讨 RUNNING→INTERRUPTED，未解除。随后原生 AltF4 正常关闭、`reopen-r86-own.cjs` 同BAT重开 PASS，代码v2身份/文件hash保持、21call相同；原生子任务/精确子交付/返回/CtrlR/未发草稿＋分列Chromiumhistory的 `native-navigation.json` PASS。保护保留不影响只读历史，不冒充旧研讨成功。
+
+当前额度API primary3%可用，按用户继续以新明确意图准备 **同BUILD新根 `review-r86-final-rc11-collaboration-20261016` /52864**（不是旧任务重放）。原生新文档 task_5948b2ac-47ee-482c-a584-51e23f578262，watch90934；原生@全体两席DELIB task_41da4d33-ea0e-4fbd-8533-4d99dd773366，watch72134。DS+Luna medium，当前都真实运行。最终门新增显式owned `--collaboration-evidence=<新根>`，只在同BUILD分场景取文档/研讨票，代码根票不变；额外强制所有原生proof及研讨的expectedModels准确匹配，不可换模型拼票。QA18例/lint通过，runtime无改，不再构建。
+
+视觉首次因原型不含root导致等待false；第二目录v2脚本被工程中止，留目录不称有完整票；第三欢迎恢复modal false；v4六对capture成功但滚动不一致，v5已统一thread顶部。**`review-r86-final-rc11-visual-v5-20261016/visual-pairs.json` PASS，12张实际逐张查看**，wide/narrow/1.5DPR模拟，原型缺用户根/真实runtime/交付状态等差异如实记录，DPR1.5原型列宽较窄/横滚不冒充产品像素一致。新总门 `--visual-evidence=<v5根>`，原false保留。
+
+Native新插件版本26.1013.31256已重读skill/guidance/confirmations；globalThis.sky，r86Window=新协作根265514，r86CodeWindow=代码根264714。仅自身这两窗口操作，用户v23不碰。新模型调用自然结束前可继续docs/QA；还需新根文档原生proof/共享预览/原生SaveAs own/native-saved-original.md、DELIB双方阶段/nativeproof和自然报告；新根必要重开可单独记录，不改代码life既有pass。全ownedledger原失败含本轮quota/视觉、严格总门、最终说明/索引/候选RELEASE-VALIDATION、commitpush独立审阅后方可交付。
+
+**2026-10-16 09:22 最新断点，优先于下方历史**：Git b7ba0ef clean，运行源码仍 a2bc376 / v25-rc11 / bld_cf50e93cc0db5723，不为 QA 换 BUILD。当前最终自有根 `dist/desktop/review-r86-final-rc11-luna-20261016`（52854）已完成代码 v1 五次成功、v2 五次成功、普通问候及同串续问两次成功。v1/v2 各五个真实原生会话 proof pass，Luna 独立读文件并运行 Node 测试，v2 六项通过；原生两步验收后原 task_e46a8ea9-c6af-42c7-a8ae-90639b704110 DONE、v2 accepted、v1 changes_requested，`code-lifecycle.json`已记录 accepted，尚未正常关闭重开。关键 `rework-running-window.json/png` pass，独立同步采样、v2原件与测试也通过，不依赖旧根迟到观察。
+
+已通过原生输入另发自然文档协作 `task_e5dca083-a8dd-4b9a-a8d3-e8f9ae3e0080`（requirements.md，不动 greeting），只读 delivery watcher session4547；原生 @全体明确两席、只读DELIB `task_70e1f0c0-d385-45f4-944d-12f6b09d0a3a`，watcher3539。二者正在真实运行，不自动重放。视觉脚本19588，输出 `review-r86-final-rc11-visual-20261015`，需实际看六组成对图才可填inspected/pass。Vite23607/53985。当前 native globalThis.sky/r86Window/r86State，句柄331002，须用 globalThis 维持跨调用；UIA tree有滞后，按新截图输入并再次观察，不能据旧索引重试。
+
+配置 v2-delivered 仍同 env926993...与冻结用户配置hash；正式预热新增工程trust元数据的历史说明保持。旧 rc11-real v2配置guard阻断原false及六次成功不改、不重试。还需当前文档真实字节/native proof/共享预览/系统SaveAs hash，DELIB阶段和原生proof；全部真实调用终态后原生AltF4→同BAT正常重开/no-autocall；原生子任务/精确子成果/草稿/CtrlR历史；实际视觉检查、所有阶段真实调用账本/严格总门、当前矩阵/交付说明/RELEASE-VALIDATION、提交推送及独立最终复核。full/upgrade/源码已过同BUILD，勿重做昂贵无关测试。
+
 **2026-10-16 09:05 最新断点，优先于下方历史**：runtime 仍 a2bc37606baa745357b47cf07cb5db012d857e3c / desktop-daily-win-v25-rc11 / bld_cf50e93cc0db5723，593clean。源163文件1164、双types/quality59files无新增33既有、同BUILD full/upgrade零推理全部已过；不为QA换BUILD。当前QA HEAD56cdf3a，另有待提交QA变动。
 
 旧 rc11-real 根 v1 已4真实成功，native4session及独立原件2/2测试通过；real-code-v1-completed.json pass，原real-code-v1.json 因编号比较QA false保留（无JSON泄漏，raw42ab...相同）。第二只读观察复用了PNG名，原JSONview/hash保持但不冒充原截图，planning-observation-provenance.json如实注明，今后label输出独立PNG。新最终门支持显式 --code-evidence，不能覆写原false。
