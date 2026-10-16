@@ -32,10 +32,10 @@ import { claudeInput } from '../imageInput.ts';
 import {chatAnswer} from '../../contracts/chatAnswer.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { resolveClaudeConfiguration } from './configuration.ts';
 export { resolveClaudeConfiguration } from './configuration.ts';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join,relative } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { AdapterProcessIdentity } from '../../contracts/runtime.ts';
@@ -49,7 +49,7 @@ import type {
   TurnRequest,
 } from '../../contracts/runtime.ts';
 
-export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.3';
+export const CLAUDE_ADAPTER_VERSION = 'claude-cli-2.1.283-adapter-0.4';
 export const CLAUDE_PROJECT_WRITE_TOOL_ARGS = [
   '--restricted','--permission-mode','dontAsk','--permission-prompts','none',
   '--tools','Read,Glob,Grep,Write,Edit','--allowedTools','Read,Glob,Grep,Write,Edit',
@@ -200,6 +200,8 @@ interface QueuedEvent {
 }
 
 interface SessionState {
+  developerInstructions?: string;
+  systemPromptFile: string | null;
   writeAccess?: OpenSessionInput['writeAccess'];
   ref: SessionRef;
   /** 当前 turn 进程与事件缓冲（进程模型：单会话内串行 turn）。 */
@@ -316,7 +318,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       sessionGeneration: input.sessionGeneration,
       cwd: input.cwd,
     };
-    this.sessions.set(id, { ref, writeAccess: input.writeAccess, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
+    this.sessions.set(id, { ref, developerInstructions: input.developerInstructions, systemPromptFile: null, writeAccess: input.writeAccess, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
     return ref;
   }
 
@@ -381,7 +383,31 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         throw new AdapterCallError('CAPABILITY_UNSUPPORTED', `图片启动配置已变化或无法核实：${identity.reason ?? 'CLI、模型、权限或配置快照不匹配'}；原件保留`);
       }
     }
-    const proc = this.spawnFn(args, session.cwd);
+    // A native system channel, separate from user text/image stdin. Apply after
+    // every permission branch rebuilds args, including resumed CLI processes.
+    // File transport avoids Windows command-line limits and exposing the prompt
+    // itself in process arguments; never writes into the user's project.
+    if (state.developerInstructions != null && state.developerInstructions.length > 0) {
+      if (this.options.extraArgs?.some(arg => /^--(?:append-)?system-prompt(?:-file)?(?:=|$)/.test(arg))) {
+        throw new AdapterCallError('VALIDATION_INVALID', '额外参数不能覆盖本次 AI 指令');
+      }
+      if (state.systemPromptFile == null) {
+        const dir = mkdtempSync(join(tmpdir(), 'zs-claude-standing-'));
+        const file = join(dir, 'standing.txt');
+        try {
+          writeFileSync(file, state.developerInstructions, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+          state.systemPromptFile = file;
+        } catch (error) {
+          try { unlinkSync(file); } catch { /* own partial file only */ }
+          try { rmdirSync(dir); } catch { /* never recursively remove */ }
+          throw error;
+        }
+      }
+      args.push('--append-system-prompt-file', state.systemPromptFile);
+    }
+    let proc: ChildProcessWithoutNullStreams;
+    try { proc = this.spawnFn(args, session.cwd); }
+    catch (error) { this.clearSystemPrompt(state); throw error; }
     // prompt 全文经 stdin 原样传入（CLI -p 无位置参数时读 stdin）：不经 shell、不进 argv。
     if (proc.stdin != null) {
       try {
@@ -425,6 +451,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       }
     });
     proc.on('error', (error) => {
+      this.clearSystemPrompt(state);
       turn.terminalKind = turn.terminalKind ?? 'error';
       this.pushEvent(state, turn, { kind: 'turn.failed', code: 'RUNTIME_NOT_FOUND', message: `${String(error)}${turn.stderrTail ? `；stderr尾：${turn.stderrTail.slice(-300)}` : ''}`, retryable: false, ...this.baseEvent(state, turn) });
       this.finishTurn(state, turn);
@@ -434,6 +461,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       // 退出确认（与停止请求分离）：close 到达才算退出；等待器统一在此解决。
       turn.exitConfirmed = true;
       turn.exitCode = code;
+      if (state.closed) this.clearSystemPrompt(state);
       // 进程退出：无终结事件=缺终态（坏流/静默）——如实 failed，不冒充完成；带 stderr 尾部取证。
       // 停止请求后的无 result 退出=INTERRUPTED（worker 映射 CANCELLED），区别于故障。
       if (!turn.done) {
@@ -535,6 +563,9 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       await this.waitForTurnExit(session, state.active.turnId, 3_000);
     }
     this.sessions.delete(session.id);
+    // An unconfirmed process may still need its input. Its close handler owns
+    // cleanup in that case; do not claim kill() already confirmed exit.
+    if (state.active == null || state.active.exitConfirmed) this.clearSystemPrompt(state);
   }
 
   /** 每 turn 独立子进程（startTurn spawn）——活动 turn 的 PID 专属该 turn（DEV-13 取证）。 */
@@ -568,6 +599,14 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
   }
 
   // ---------- 内部 ----------
+
+  private clearSystemPrompt(state: SessionState): void {
+    const file = state.systemPromptFile;
+    if (file == null) return;
+    try { unlinkSync(file); } catch { /* isolated temporary file only */ }
+    try { rmdirSync(dirname(file)); } catch { /* bounded, nonrecursive cleanup */ }
+    state.systemPromptFile = null;
+  }
 
   private stateOf(session: SessionRef): SessionState {
     const state = this.sessions.get(session.id);

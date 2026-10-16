@@ -2,7 +2,17 @@
 
 > 每轮结束前更新；下一轮收到「继续」后先读本文件 + implementation-status.md，从断点接着做，不重新调研。
 
-## 当前：R86 桌面多 AI 协作（工程总门通过，用户验收待定）
+## 当前施工：R87 自然协作与电脑小白易用性（2026-10-17）
+
+人类在审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79明确说“开始这一轮吧”，已通过read_thread核对原userMessage。权威范围见 [R87完整任务书](r87-product-usability-plan-20261017.md)；原方案“尚未实施”是历史状态，现已授权持续完成施工、真实验收及最终集中交付。唯一产品写入方为本会话，审阅方只读，不启新代理。
+
+基线 clean4f7da14，运行a2bc376/v25-rc11仅作旧基线。R86模型文件/版本及工程事实保留，但用户七项截图和常驻注入反例证明日常体验未达标，不能拿17门继续宣称日常可用。当前先成组P0：Claude native standing注入、本串持久成员与@范围、普通串自然转工作、消息式真实交接与及时可见反馈；再P1配置发现/简单控件/次序/文案及逐页首次/日常/异常/继续使用。最终新同BUILD从空白数据实际UI起完整路线，不预配项目代替首用。
+
+已重跑未修生产Claude adapter+假进程反例：dist/review-r87-source/claude-standing-prompt-transport-counterexample.json，counterexampleConfirmed=true，0真实模型/0原生进程，原独立票未覆盖。CLI本地help确认native append-system-prompt及文件形式支持。首个可review修复：Claude保存developerInstructions，所有权限参数重建后以native --append-system-prompt-file注入，每session独立系统文件，用户文本/图片stdin不混入规则，首次/续接/长指令/权限档都覆盖；确认退出后只清理自己的临时文件。adapter版本升0.4，使身份变化如实可见。Claude12格（readonly/full/project × text/image × first/resume）和会话隔离/覆盖拒绝、Codex真实RPC start/resume系统参数共源；4文件59项及主types/增量lint通过，日志dist/review-r87-source/standing-transport-tests-20261017.log。真实模型0，尚未业务/最终包验收，不新增交付宣称。下一步本串持久成员与消息式唤醒成组实现；Claude中途message.delta未入消息已确认，须分离自然进度/控制JSON后修，不能裸上屏。
+
+持续授权工程合成真实调用优先Claude/deepseek-flash和准确Codex/gpt-6-luna，必要多次；只用自有合成根，绝不发用户文档，不操作正在使用旧包/数据/凭据。默认CLI完整权限继承，分析/评审只读，single_writer、停止、原号同参UNKNOWN人工处理及精确验收不绕过。001–052冻结，必要追加迁移。
+
+## 历史：R86 桌面多 AI 协作（工程总门通过，用户验收待定）
 
 **持续用户偏好**：后续 Codex 工程真实测试优先使用本机清单的准确 ID `gpt-6-luna`；已在途/未知信封不换配置、不自动重发，确有复杂缺陷或能力阻断才按既有授权使用 Sol，不默认批量发昂贵模型。开发会话自身仍遵守用户既定 GPT-6.1 Sol；不擅改用户成员、模型或账号设置。
 

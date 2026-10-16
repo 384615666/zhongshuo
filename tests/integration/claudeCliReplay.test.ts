@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeCliAdapter, CLAUDE_ADAPTER_VERSION, resolveClaudeExecutable } from '../../src/adapter/claude/cliAdapter.ts';
@@ -450,6 +450,64 @@ describe('中断/退出确认/收拢（本地真实进程 fixture，零额度）
     expect(results.length).toBe(1);
     expect(results[0]).toMatchObject({ turnId: 't_dispose', stopRequested: true, exitConfirmed: true, terminal: 'interrupted' });
   }, 15_000);
+});
+
+describe('R87 standing instructions use the native system channel', () => {
+  for (const permission of ['readonly','full','project'] as const) for (const image of [false, true]) for (const resume of [false, true]) {
+    it(`${permission} / ${image ? 'image' : 'text'} / ${resume ? 'resume' : 'first'}`, async () => {
+      const fullAccess = permission === 'full';
+      let args: string[] = [];
+      const proc = makeProc([{ lines: [j({type:'result', subtype:'success', session_id:'r87_provider', result:'done'})], exit:0 }]);
+      const adapter = new ClaudeCliAdapter({model:'test-model', ...(permission==='project'?{permissionMode:'dontAsk' as const}:{})}, a => { args = [...a]; return proc; });
+      // Longer than Windows' argv limit: content must stay out of process args.
+      const standing = '本串协作规则\n'.repeat(6000) + ' STANDING_ONLY';
+      const session = await adapter.openSession({...openInput(), developerInstructions:standing,
+        writeAccess:{fullAccess, modificationAuthorized:permission!=='readonly', allowedWriteRoots:permission==='project'?[cwd]:[], identityKey:'test'},
+        ...(resume ? {resume:{id:'old', providerSessionId:'r87_resume', runtimeInstallationId:'test', adapterVersion:'old', threadId:'th', sessionGeneration:0, cwd}} : {}),
+      });
+      const raw = Buffer.from([137,80,78,71,13,10,26,10]);
+      const {createHash} = await import('node:crypto');
+      await adapter.startTurn(session, {...turnInput('r87'), text:'USER_ONLY', ...(image ? {images:[{artifactId:'a', mime:'image/png' as const, hash:createHash('sha256').update(raw).digest('hex'), dataBase64:raw.toString('base64')}]} : {})});
+      const index = args.indexOf('--append-system-prompt-file');
+      expect(index).toBeGreaterThan(-1);
+      const file = args[index + 1]!;
+      expect(readFileSync(file, 'utf8')).toBe(standing);
+      expect(args.join(' ')).not.toContain('STANDING_ONLY');
+      expect(proc._stdinText()).not.toContain('STANDING_ONLY');
+      expect(proc._stdinText()).toContain('USER_ONLY');
+      if (image) expect(JSON.parse(proc._stdinText()).message.content[1].source.data).toBe(raw.toString('base64'));
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe(fullAccess ? 'bypassPermissions' : permission==='project'?'dontAsk':'plan');
+      expect(args.includes('--resume')).toBe(resume);
+      if (resume) expect(args[args.indexOf('--resume') + 1]).toBe('r87_resume');
+      await collect(adapter, session, 'completed');
+      await adapter.close(session);
+      expect(existsSync(file)).toBe(false);
+    });
+  }
+
+  it('session identity keeps its own standing instructions on successive CLI processes', async () => {
+    const calls: Array<{args:string[]; instructions:string}> = [];
+    const adapter = new ClaudeCliAdapter({model:'test-model'}, args => {
+      calls.push({args:[...args], instructions:readFileSync(args[args.indexOf('--append-system-prompt-file')+1]!, 'utf8')});
+      return makeProc([{lines:[j({type:'result', subtype:'success', session_id:'provider_a', result:'done'})], exit:0}]);
+    });
+    const a = await adapter.openSession({...openInput(), developerInstructions:'MEMBER_A'});
+    const b = await adapter.openSession({...openInput(), memberId:'b', developerInstructions:'MEMBER_B'});
+    for (const [s,id] of [[a,'one'],[b,'two'],[a,'three']] as const) {
+      await adapter.startTurn(s, turnInput(id)); await collect(adapter,s,'completed');
+    }
+    expect(calls.map(c=>c.instructions)).toEqual(['MEMBER_A','MEMBER_B','MEMBER_A']);
+    expect(calls[2]!.args[calls[2]!.args.indexOf('--resume')+1]).toBe('provider_a');
+    await adapter.close(a); await adapter.close(b);
+  });
+
+  it('rejects an extra-argument instruction override before spawning', async () => {
+    let spawned = false;
+    const adapter = new ClaudeCliAdapter({model:'test-model',extraArgs:['--system-prompt=OTHER']}, () => { spawned=true; return makeProc([]); });
+    const s = await adapter.openSession({...openInput(), developerInstructions:'APP_ONLY'});
+    await expect(adapter.startTurn(s,turnInput('override'))).rejects.toMatchObject({code:'VALIDATION_INVALID'});
+    expect(spawned).toBe(false); await adapter.close(s);
+  });
 });
 
 describe('R76 zero-call image protocol', () => {

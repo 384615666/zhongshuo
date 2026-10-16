@@ -221,6 +221,23 @@ describe('回放：生命周期与 resume', () => {
 });
 
 
+describe('R87 native developer instructions', () => {
+  for (const fullAccess of [false,true]) for (const resume of [false,true]) {
+    it(`${fullAccess?'full':'readonly'} / ${resume?'resume':'first'} keeps system instructions out of user input`, async () => {
+      scenario([{notifications:[{kind:'turn.completed',status:'completed',finalText:'ok'}]}]);
+      adapter=mockAdapter();
+      const session=await adapter.openSession({projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:1,cwd:'D:/mock',policyId:'plan',
+        developerInstructions:'R87_NATIVE_DEVELOPER_ONLY',writeAccess:{fullAccess,modificationAuthorized:fullAccess,allowedWriteRoots:[],identityKey:'test'},
+        ...(resume?{resume:{id:'previous',providerSessionId:'r87-native-resume',runtimeInstallationId:'mock',adapterVersion:'old',threadId:'th',sessionGeneration:0,cwd:'D:/mock'}}:{}),
+      });
+      await runOneTurn(adapter,session,'r87-standing'); await adapter.dispose();
+      const rows=rpcLogEntries(),start=rows.find(e=>e['method']===(resume?'thread/resume':'thread/start'));
+      expect(start?.['params']).toMatchObject({developerInstructions:'R87_NATIVE_DEVELOPER_ONLY',sandbox:fullAccess?'danger-full-access':'read-only'});
+      expect(JSON.stringify(rows.filter(e=>e['method']==='turn/start'))).not.toContain('R87_NATIVE_DEVELOPER_ONLY');
+    });
+  }
+});
+
 describe('回放（修复轮 3）：真实协议形状反例', () => {
   it('双会话同时启动 turn：归属互不串扰', async () => {
     scenario([
