@@ -33,12 +33,13 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   const sources: string[] = [];
   const stamps: string[] = [];
   const reasons: string[] = [];
+  let configuredModel:string|null=null;
   let endpoint = env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com';
   let endpointSource = env.ANTHROPIC_BASE_URL == null ? '官方默认' : '进程环境';
   const read = (file: string, label: string, uncertain = false) => {
     try {
       const raw = readFileSync(file, 'utf8');
-      const settings = JSON.parse(raw) as { env?: Record<string, unknown>; apiKeyHelper?: unknown; processWrapper?: unknown };
+      const settings = JSON.parse(raw) as { model?:unknown; env?: Record<string, unknown>; apiKeyHelper?: unknown; processWrapper?: unknown };
       if (settings == null || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('object required');
       stamps.push(`${file}:${digest(label.includes('旧配置')?JSON.stringify(legacyConfiguration(settings,cwd)):raw)}`); sources.push(label);
       if (settings.env != null && (typeof settings.env !== 'object' || Array.isArray(settings.env))) throw new Error('env object required');
@@ -48,6 +49,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
         reasons.push(`${label}含渠道覆盖；CLI 项目信任或托管过滤结果未核实`);
         return;
       }
+      if(!uncertain&&typeof settings.model==='string')configuredModel=settings.model;
       if (!uncertain) for (const [key, value] of entries) {
         if (!['string', 'number', 'boolean'].includes(typeof value)) { reasons.push(`${label}的 env 值无效`); continue; }
         env[key] = String(value);
@@ -86,7 +88,7 @@ export function resolveClaudeConfiguration(cwd: string, extraArgs: string[] = []
   let channel = '无法确定';
   try { const url = new URL(endpoint); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('invalid endpoint'); channel = `${url.origin}${url.pathname.replace(/\/$/, '')}`; } catch { reasons.push('有效 endpoint 无效或包含私密参数'); }
   const routing = Object.entries(env).filter(([key]) => routingKey.test(key)).sort(([a], [b]) => a.localeCompare(b));
-  return { env: { ...inherited }, restrictedEnv: env, configDir, cwd: resolve(cwd), endpointHash: digest(endpoint), channel: reasons.length ? `无法确定（候选用户渠道：${channel}）` : channel, endpointSource, sources,
+  return { env: { ...inherited }, restrictedEnv: env, configuredModel:configuredModel as string|null, configDir, cwd: resolve(cwd), endpointHash: digest(endpoint), channel: reasons.length ? `无法确定（候选用户渠道：${channel}）` : channel, endpointSource, sources,
     reason: [...new Set(reasons)].join('；') || null,
     configurationKey: digest(JSON.stringify({ configDir, cwd: resolve(cwd), stamps, routing, extraArgs })),
   };

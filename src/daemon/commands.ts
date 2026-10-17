@@ -7,6 +7,7 @@
  * - task.stop 委托 requestStop（自包幂等/中断）。
  * - run() 为同步事务（ADR-I37）；异步命令自包 runCommand。
  */
+import {runtimeCatalog} from './runtimeCatalog.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
@@ -35,7 +36,7 @@ import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHisto
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
-import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus } from './memberManagement.ts';
+import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus, templateConfigSchema, configGuard } from './memberManagement.ts';
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
@@ -334,6 +335,17 @@ function taskTitleOf(body: string, attachmentNames: string[]): string {
   if (trimmed.length > 0) return body.slice(0, 60);
   const fromNames = attachmentNames.filter((n) => n != null && n.length > 0).join('、');
   return fromNames.length > 0 ? `📎 ${fromNames}`.slice(0, 60) : '（无正文）';
+}
+
+/** First-use availability is configuration/program discovery, not model certification. */
+function configuredCoordinator(db:ZhongshuoDatabase,memberIds:readonly string[]):string|null{
+  return memberIds.find(id=>{
+    const member=db.prepare("SELECT enabled,principal_type FROM project_members WHERE id=?").get(id) as {enabled:number;principal_type:string}|undefined;
+    if(!member?.enabled||member.principal_type!=='agent')return false;
+    const runtime=resolveMemberRuntime(db,id,process.env.ZS_RUNTIME??null);
+    return ['claude','codex','fake'].includes(runtime.kind??'')&&(runtime.kind!=='claude'||Boolean(runtime.model))
+      &&(runtime.kind!=='fake'||process.env.ZS_ALLOW_FAKE==='1')&&memberExecutableStatus(runtime.kind,runtime.executable??runtime.kind).status==='found';
+  })??null;
 }
 
 function coordinatorOf(db: ZhongshuoDatabase, roomId: string): string {
@@ -1078,7 +1090,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           assertRoomCreationScope();
           const roomCount = (deps.db.prepare('SELECT count(*) c FROM rooms WHERE project_id = ?').get(params.projectId) as { c: number }).c;
           const roomId = `room_${randomUUID()}`;
-          const defaultMember = (deps.db.prepare('SELECT id FROM project_members WHERE project_id = ? AND principal_type = ? ORDER BY id LIMIT 1').get(params.projectId, 'agent') as { id: string } | undefined)?.id;
+          const candidates=params.memberIds??(deps.db.prepare("SELECT id FROM project_members WHERE project_id=? AND principal_type='agent' AND enabled=1 ORDER BY id").all(params.projectId) as {id:string}[]).map(m=>m.id);
+          const defaultMember=configuredCoordinator(deps.db,candidates)??candidates.find(id=>(deps.db.prepare("SELECT 1 FROM project_members WHERE id=? AND principal_type='agent' AND enabled=1").get(id)))??null;
           deps.db.prepare('INSERT INTO rooms (id, project_id, name, coordinator_member_id) VALUES (?, ?, ?, ?)').run(roomId, params.projectId, params.name, defaultMember ?? null);
           const convId = `conv_${randomUUID()}`;
           deps.db.prepare("INSERT INTO conversations (id, project_id, kind, room_id) VALUES (?, ?, 'room', ?)").run(convId, params.projectId, roomId);
@@ -1126,6 +1139,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           projectId: z.string().min(1),
           displayName: z.string().min(1).max(60),
           description: z.string().max(200).optional(),
+          runtime:templateConfigSchema.optional(),
+          useAsDefault:z.boolean().optional(),
         }).parse(env.params);
         if (params.displayName.trim().length === 0) {
           throw new DaemonCommandError('VALIDATION_INVALID', '成员名称不能为空白（全空格）');
@@ -1141,6 +1156,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         assertProjectOpen();
         const proj = deps.db.prepare('SELECT id FROM projects WHERE id = ?').get(params.projectId) as { id: string } | undefined;
         if (proj == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
+        if(params.runtime&&deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','带运行配置的成员创建仅限本机入口');
+        if(params.runtime){
+          configGuard(params.runtime,(code,message)=>{throw new DaemonCommandError(code,message);});
+          if(params.runtime.effort){
+            const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string};
+            const options=await runtimeOptions(params.runtime.kind,params.runtime.executable,params.runtime.model??undefined,project.canonical_path);
+            if(!options.efforts.includes(params.runtime.effort))throw new DaemonCommandError('CAPABILITY_UNSUPPORTED','当前模型没有声明所选思考等级；尚未创建成员，输入保留');
+          }
+        }
         const result = run(() => {
           const memberId = `m_${randomUUID()}`;
           deps.db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled, description)
@@ -1150,7 +1174,16 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                                                 SELECT r.id, ? FROM rooms r WHERE r.project_id = ? AND r.archived_at IS NULL
                                                   AND NOT EXISTS (SELECT 1 FROM room_members rm WHERE rm.room_id = r.id AND rm.member_id = ?)`)
             .run(memberId, params.projectId, memberId).changes);
-          return { memberId, roomsJoined, coordinator: false, note: '已加入全部未归档房间；不自动成为协调者；不影响在途研讨（只影响之后派发）' };
+          if(params.runtime)bindMemberRuntime(deps.db,memberId,params.runtime);
+          let defaultRooms=0;
+          if(params.runtime&&params.useAsDefault&&configuredCoordinator(deps.db,[memberId])){
+            const rooms=deps.db.prepare('SELECT id,coordinator_member_id FROM rooms WHERE project_id=? AND archived_at IS NULL').all(params.projectId) as Array<{id:string;coordinator_member_id:string|null}>;
+            for(const room of rooms){
+              if(room.coordinator_member_id&&configuredCoordinator(deps.db,[room.coordinator_member_id]))continue;
+              defaultRooms+=deps.db.prepare('UPDATE rooms SET coordinator_member_id=?,revision=revision+1 WHERE id=?').run(memberId,room.id).changes;
+            }
+          }
+          return { memberId, roomsJoined, defaultRooms, configuration:params.runtime?'saved-unverified':null, coordinator: defaultRooms>0, note: defaultRooms?'已保存配置，并设为尚无可用协调者房间的默认成员；不自动派发':'已加入未归档房间；已有协调者不变，不影响在途运行' };
         }, assertProjectOpen); // 重放守卫：旧回执重放同样受**当前**项目状态约束（归档/移除后拒绝）
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
       }
@@ -1217,6 +1250,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return bindMemberRuntime(deps.db,params.memberId,{kind:params.kind,executable:params.executable??params.kind,model:params.model??null,permissionMode:params.permissionMode??(params.kind==='fake'?'plan':'bypassPermissions'),effort:params.effort??null});
         },()=>{scope();if(params.projectId!=null){const row=deps.db.prepare("SELECT project_id FROM project_members WHERE id=?").get(params.memberId) as {project_id:string};if(row.project_id!==params.projectId)throw new DaemonCommandError("RESOURCE_NOT_FOUND","成员不属于目标项目");}});
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'member.runtimeCatalog': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','模型清单读取仅限本机入口');
+        const params=z.strictObject({projectId:z.string().min(1),kind:z.enum(['claude','codex','fake']),executable:z.string().optional()}).parse(env.params);
+        const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string}|undefined;
+        if(!project)throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');
+        return withCommandId({ok:true,data:await runtimeCatalog(params.kind,params.executable,project.canonical_path)});
       }
       case 'member.runtimeOptions': {
         if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','CLI 选项读取仅限本机可信入口');

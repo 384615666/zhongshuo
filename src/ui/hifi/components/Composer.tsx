@@ -439,7 +439,7 @@ export function Composer({
         : { kind: target.kind, projectId: imageProjectId, conversationId };
       try {
         const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
-        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.map(m => `${m.kind} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel} · 配置 ${m.configuration} · ${m.protocol} · 图片输入${m.status === 'supported' ? '自动传递' : '不可用或未确认'}：${m.reason}`).join('；') : '线程回复按现有合同仅记录；图片可保存和预览'});
+        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.length&&c.members.every(m=>m.status==='supported')?'图片会随消息发送给所选 AI。':'部分 AI 暂不能接收图片，可换成员或仅记录。' : '图片会保存到本机，可点击预览。'});
       } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览或仅记录，发送前可重试`}); }
       finally { reading = false; }
     };
@@ -1009,19 +1009,6 @@ export function Composer({
           </span>
         </div>
       ) : null}
-      {target.kind === 'room_root' && sendAs === 'ai' && route.mode !== 'DIRECT' && inputDisabledReason == null ? (
-        <div className="composer-mentions" data-zs-m0-hint={route.mode}>
-          <span
-            className="chip record-chip"
-            title="选择一位执行成员后交给 AI；也可以仅保存记录"
-          >
-            <Icon name="alert-triangle" size={11} />
-            {route.mode === 'AUTO' ? `协调成员${room?.coordinatorMemberId?` ${memberLabel(allMembers.find(m=>m.id===room.coordinatorMemberId))}`:''}接单：简单问题直接回答，复杂任务分工并整合` : '所选成员独立分析、互评并汇总；本次研讨只读，写文件任务可交协调成员自动分工'}
-            <button title="选择一位成员，不会自动发送" onClick={() => { setMentionTrigger(null); setMentionOpen(true); }}>选择执行成员</button>
-            <button title="本次只保存内容、不派发（一次性意图——不受模式边界影响）" onClick={() => setSendAs('record')}>本次仅记录</button>
-          </span>
-        </div>
-      ) : null}
 
       {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败**原因就地可见**——R69 P1-C
           不再只藏 title；就绪字段统一 名称+大小+v版本+预览（空文件显示 0B 也可预览）；提取
@@ -1208,7 +1195,7 @@ export function Composer({
            * 只想留字不留回复时，从右侧「⋯」菜单选一次性的「仅记录，不请求回复」——
            * 它是一次发送意图，而不是常驻模式（见下方 record chip）。
            */}
-          {methodChip ? (
+          {methodChip&&!formalLimits?.method ? (
             <button
               className={`method-chip${methodChip.on ? ' on' : ''}`}
               title={formalLimits?.method ?? methodChip.hint}
@@ -1348,7 +1335,7 @@ export function Composer({
                 一条纯记录也会触发写入/命令（两份评审都点出过这个歧义）。
                 注意：只是"不显示"，**档位的值不会被清空或改掉**（取消仅记录后照旧）。
                 只读态（私信归档）下也禁用：这次不会发出去，改档位没有意义。 */}
-            {sendAs === 'ai' ? (
+            {sendAs === 'ai'&&!formalLimits?.access ? (
               <div className="access-picker">
                 <button
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
@@ -1501,7 +1488,7 @@ export function Composer({
                     ? '私信只有一种方式：把这条消息发给这个会话的成员，不涉及房间里的其他人。'
                     : routeModeCopy[route.mode].detail}
                 </div>
-                {methodChip ? (
+                {methodChip&&!formalLimits?.method ? (
                   <div className="small faint" style={{ marginTop: 6, lineHeight: 1.6 }}>
                     方式开关「{methodChip.label}」：{methodChip.on ? '已开启' : '未开启'}（在输入区切换）
                   </div>
@@ -1511,7 +1498,7 @@ export function Composer({
                 <div className="row tight"><Icon name="activity" size={12} /> 预算推导</div>
                 <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
                   {target.kind === 'dm'
-                    ? '私信暂不创建任务：这条消息只发给该成员，不占用任务预算。'
+                    ? '本条发给当前私信成员，实际用量可在任务详情查看。'
                     : budgetPreview
                       ? `最多 ${budgetPreview.calls} 次。${budgetPreview.detail}`
                       : '这种方式不产生额外预算。'}
@@ -1520,7 +1507,7 @@ export function Composer({
               <div className="menu-note">
                 <div className="row tight"><Icon name="shield" size={12} /> 权限档位</div>
                 <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                  当前：{currentMode.label} · {currentMode.v01.available ? currentMode.desc : currentMode.v01.reason}
+                  {formalLimits?.access?(writeHint?.key===writeContext?writeHint.reason:'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
                 </div>
               </div>
             </>

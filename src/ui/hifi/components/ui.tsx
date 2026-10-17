@@ -531,7 +531,7 @@ export type DetailHost = 'page' | 'panel';
  * API 与原生包装版完全一致（value/onChange/options/size/loading/disabled/title/ariaLabel）。
  */
 export function Select({
-  value, onChange, options, size, loading, loadingLabel = '装载中…', disabled, title, ariaLabel,
+  value, onChange, options, size, loading, loadingLabel = '装载中…', disabled, title, ariaLabel, searchable=false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -542,15 +542,17 @@ export function Select({
   disabled?: boolean;
   title?: string;
   ariaLabel?: string;
+  searchable?:boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query,setQuery]=useState('');
   const [activeIdx, setActiveIdx] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const isDisabled = disabled === true || loading === true;
-  const shownOptions = loading === true ? [{ value, label: loadingLabel }] : options;
+  const shownOptions = loading === true ? [{ value, label: loadingLabel }] : searchable&&query.trim()?options.filter(o=>(o.label+' '+o.value).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())):options;
   const selectedIdx = Math.max(0, shownOptions.findIndex((o) => o.value === value));
-  const selectedLabel = shownOptions[selectedIdx]?.label ?? value;
+  const selectedLabel = options.find(o=>o.value===value)?.label ?? value;
 
   useEffect(() => {
     if (!open) return;
@@ -572,8 +574,8 @@ export function Select({
     setOpen(false);
     if (v !== value) onChange(v);
   };
-  const onBtnKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
-    if (isDisabled) return;
+  const onBtnKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+    if (isDisabled||e.nativeEvent.isComposing) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       if (!open) { setOpen(true); setActiveIdx(selectedIdx); return; }
@@ -585,7 +587,7 @@ export function Select({
       });
       return;
     }
-    if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); return; }
+    if (e.key === 'Escape' && open) { e.preventDefault();e.stopPropagation(); setOpen(false); return; }
     if (!open) return;
     if (e.key === 'Home') { e.preventDefault(); setActiveIdx(0); return; }
     if (e.key === 'End') { e.preventDefault(); setActiveIdx(Math.max(0, shownOptions.length - 1)); return; }
@@ -606,14 +608,17 @@ export function Select({
         aria-activedescendant={open ? `${listId}-opt-${activeIdx}` : undefined}
         title={title}
         disabled={isDisabled}
-        onClick={() => { if (!isDisabled) { setOpen((o) => !o); setActiveIdx(selectedIdx); } }}
+        onClick={() => { if (!isDisabled) { setQuery('');setOpen((o) => !o); setActiveIdx(selectedIdx); } }}
         onKeyDown={onBtnKeyDown}
       >
         <span className="select-value truncate">{selectedLabel}</span>
         <Icon name="chevron-down" size={11} />
       </button>
       {open ? (
-        <div className="select-pop" role="listbox" id={listId} ref={listRef} aria-label={ariaLabel ?? title ?? '选项'}>
+        <div className="select-pop" ref={listRef}>
+          {searchable?<input className="input" autoFocus role="searchbox" aria-label={`搜索${ariaLabel??'选项'}`} placeholder="搜索名称或模型 ID" value={query} onChange={e=>{setQuery(e.target.value);setActiveIdx(0);}} onKeyDown={e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Escape'||e.key==='Enter'||e.key==='Tab')onBtnKeyDown(e);}}/>:null}
+          <div role="listbox" id={listId} aria-label={ariaLabel??title??'选项'}>
+          {shownOptions.length===0?<div className="small faint" style={{padding:10}}>没有匹配项</div>:null}
           {shownOptions.map((o, i) => (
             <div
               key={o.value}
@@ -630,6 +635,7 @@ export function Select({
               {o.value === value ? <Icon name="check" size={11} /> : null}
             </div>
           ))}
+          </div>
         </div>
       ) : null}
     </div>

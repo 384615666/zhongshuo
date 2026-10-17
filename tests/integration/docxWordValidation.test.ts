@@ -27,7 +27,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-docxword-'));
 const appData = join(tmpRoot, 'app-data');
-const evidenceDir = join(repoRoot, 'tests', 'artifacts', 'docx-word-evidence');
+// Each run keeps new synthetic evidence without overwriting archived historical files.
+const evidenceDir = join(repoRoot, 'dist', 'test-artifacts', 'docx-word-evidence', `${Date.now()}-${process.pid}`);
 mkdirSync(appData, { recursive: true });
 mkdirSync(evidenceDir, { recursive: true });
 afterAll(() => { for (let i = 0; i < 5; i += 1) { try { rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { /* 句柄延迟 */ } } });

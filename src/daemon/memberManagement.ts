@@ -95,7 +95,7 @@ function checkRevision(actual: number, expected: number, fail: Fail) {
     if (actual !== expected)
         fail('STALE_REVISION', '资料或配置版本已变化；请回读并确认，不自动覆盖新版本');
 }
-function configGuard(config: TemplateConfig, fail: Fail) {
+export function configGuard(config: TemplateConfig, fail: Fail) {
     if (config.kind === 'fake' && process.env.ZS_ALLOW_FAKE !== '1')
         fail('CAPABILITY_UNSUPPORTED', 'fake 配置仅限独立工程环境');
     if (config.kind === 'claude' && config.model == null)

@@ -22,7 +22,7 @@ import { CreateRoomModal } from './Room';
    打开文件夹（真实：pickFolder → project.open 注册/幂等重开）
    ============================================================ */
 
-export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => void; autoPick?: boolean }) {
+export function OpenFolderModal({ onClose, autoPick = true }: { onClose: () => void; autoPick?: boolean }) {
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const [pickReason, setPickReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,13 +36,16 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
   const close = () => { cancelOpen(); onClose(); };
 
   const doPick = async () => {
-    const seq = ++pickerSeq.current;
-    const urlSeq = currentNavSeq();
-    const { bridge } = await import('../bridge');
-    const dir = await bridge().pickFolder();
-    if (!mounted.current || pickerSeq.current !== seq || currentNavSeq() !== urlSeq) return;
-    if (dir != null && dir.length > 0) { setPickedPath(dir); setPickReason(null); return; }
-    setPickReason(dir == null ? '已取消选择。' : '当前宿主没有系统目录选择器。');
+    if(operation.current)return;
+    const seq=++pickerSeq.current,urlSeq=currentNavSeq(),intent=beginUserNavIntent();
+    operation.current=intent;setBusy(true);setPickReason(null);
+    try{
+      const {bridge}=await import('../bridge');const dir=await bridge().pickFolder();
+      if(!mounted.current||pickerSeq.current!==seq||currentNavSeq()!==urlSeq||!navIntentActive(intent))return;
+      if(!dir){setPickReason(dir===null?'已取消选择，原项目和草稿保留。':'当前无法打开系统文件夹选择器。');return;}
+      setPickedPath(dir);await open(dir,intent);
+    }catch(e){if(mounted.current&&navIntentActive(intent))setPickReason(`选择文件夹失败：${(e as Error).message}。可重新选择。`);}
+    finally{releaseNavIntent(intent);if(operation.current===intent){operation.current=null;if(mounted.current)setBusy(false);}}
   };
   useEffect(() => {
     mounted.current = true;
@@ -51,61 +54,30 @@ export function OpenFolderModal({ onClose, autoPick = false }: { onClose: () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const open = async () => {
-    if (pickedPath == null || operation.current != null) return;
-    const intent = beginUserNavIntent();
-    operation.current = intent;
-    setBusy(true);
-    try {
-      // R75（review-r74 §P1）：落位按**本次打开目标**（返回 id）——不读异步结束时的
-      // activeProjectId（旧房间路由/其它装载可能已改写它）。取消/被取代时 id=''：不落位。
-      const opened = await openProjectByPath(pickedPath, { intent, navigateToRoom: true });
-      if (!mounted.current || operation.current !== intent || !opened.isCurrent()) return;
+  const open = async (path=pickedPath,existingIntent?:NavIntent) => {
+    if(!path||operation.current&&operation.current!==existingIntent)return;
+    const intent=existingIntent??beginUserNavIntent();operation.current=intent;setBusy(true);setPickReason(null);
+    try{
+      const opened=await openProjectByPath(path,{intent,navigateToRoom:true});
+      if(!mounted.current||operation.current!==intent||!opened.isCurrent())return;
       onClose();
-    } catch (e) {
-      if (mounted.current && operation.current === intent && navIntentActive(intent)) {
-        toast(`打开项目失败：${(e as Error).message}（选择保留，可重试或换目录）`, 'error');
-      }
-    } finally {
-      releaseNavIntent(intent);
-      if (operation.current === intent) { operation.current = null; if (mounted.current) setBusy(false); }
-    }
+    }catch(e){if(mounted.current&&operation.current===intent&&navIntentActive(intent))setPickReason(`打开失败：${(e as Error).message}。选择已保留，可重试或换文件夹。`);}
+    finally{releaseNavIntent(intent);if(operation.current===intent){operation.current=null;if(mounted.current)setBusy(false);}}
   };
 
   return (
     <Modal
       size="sm"
       title="打开文件夹"
-      subtitle="选择一个本地目录作为项目（已打开过则幂等重开——不会重复注册）"
+      subtitle="选好文件夹后直接进入项目。"
       onClose={close}
-      footer={
-        <>
-          <div className="spacer" />
-          <button className="btn" onClick={close}>取消</button>
-          <button className="btn primary" disabled={busy} onClick={pickedPath != null ? () => void open() : () => void doPick()}>
-            <Icon name="folder" size={12} />
-            {pickedPath != null ? (busy ? '正在打开…' : '打开这个目录') : '浏览…'}
-          </button>
-        </>
-      }
+      footer={<><button className="btn" onClick={close}>取消</button><div className="spacer"/>
+        {pickedPath?<button className="btn" disabled={busy} onClick={()=>void doPick()}>换文件夹</button>:null}
+        <button className="btn primary" disabled={busy} onClick={()=>void (pickedPath?open():doPick())}><Icon name="folder" size={12}/>{busy?'正在打开…':pickedPath?'重试打开':'选择文件夹'}</button>
+      </>}
     >
-      <div className="field">
-        <label className="field-label">目录路径</label>
-        <div className="row wrap" style={{ gap: 8 }}>
-          <input className="input mono" style={{ flex: '1 1 260px' }} value={pickedPath ?? ''} readOnly placeholder="点「浏览…」调用系统目录选择器" />
-          <button className="btn" disabled={busy} onClick={() => void doPick()}><Icon name="folder" size={12} /> 浏览…</button>
-        </div>
-        {pickReason != null ? <div className="panel warning" style={{ marginTop: 8 }}>{pickReason}</div> : null}
-        <div className="field-hint">
-          打开后自动创建默认房间与执行成员；不写项目目录配置文件、不自动 git init、不自动调用模型。
-          再次打开同一目录按目录身份幂等识别（不产生第二个项目）。
-        </div>
-      </div>
-      <div className="panel success">
-        <div className="panel-title"><Icon name="check-circle" size={13} /> 正在桌面客户端中运行</div>
-        「浏览…」调起系统目录选择器；选定后解析目录身份用于识别重复打开与移动后重新定位。
-        打开失败（目录无效等）会如实报错并保留你的选择。
-      </div>
+      {pickedPath?<div className="small" style={{overflowWrap:'anywhere'}}>{pickedPath}</div>:<div className="muted">选择要和 AI 一起处理的本地文件夹。</div>}
+      {pickReason?<div className="panel warning" role="alert">{pickReason}</div>:null}
     </Modal>
   );
 }
@@ -124,9 +96,9 @@ export function WelcomePage() {
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
             <span className="brand-mark" style={{ width: 46, height: 46, fontSize: 22, borderRadius: 12 }}>众</span>
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>打开一个本地文件夹，让多个 agent 在这里协作</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em' }}>打开文件夹，和 AI 一起完成工作</h1>
           <p className="muted" style={{ marginTop: 10, fontSize: 13, maxWidth: '62ch', marginInline: 'auto', lineHeight: 1.75 }}>
-            不需要复制路径、不需要开多个终端、不需要手动转发报告。每次协作都有明确的参与者、执行状态、文件依据和最终成果。
+            选择项目、添加 AI，然后像聊天一样提出需求。文件和对话会保存在本机。
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: 18, gap: 10 }}>
             <button className="btn primary lg" onClick={() => setOpenFolder(true)}>
@@ -185,10 +157,7 @@ export function WelcomePage() {
           </div>
         )}
 
-        <div className="panel" style={{ marginTop: 20 }}>
-          <div className="panel-title"><Icon name="info" size={13} /> 关于项目边界</div>
-          一个本地目录就是一个项目；同一物理目录重复打开按目录身份幂等识别。同一目录同时只有一个受管理写入者（单写者锁域）。
-        </div>
+
       </div>
       {openFolder ? <OpenFolderModal onClose={() => setOpenFolder(false)} /> : null}
     </div>

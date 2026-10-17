@@ -9,15 +9,16 @@
  * 查询失败 / 未解析，不把「未绑定」显示成"不会用任何渠道"。
  *
  * 布局=原型 pages-misc MembersPage：筛选行（项目选择+计数）+ 成员卡片 grid + 房间名单 +
- * 说明面板；配置 runtime 从卡片进弹窗。R67 已接正式创建，R81 接资料编辑和独立配置模板。
+ * 说明面板；AI 设置 从卡片进弹窗。R67 已接正式创建，R81 接资料编辑和独立配置模板。
  * 人的关注（阅读订阅）不属于成员管理——在「待我处理」分列（原型同判）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './components/Icon';
+import {RuntimeModel} from './components/RuntimeModel';
 import {RuntimeEffort} from './components/RuntimeEffort';
 import { Avatar, Modal, Select, Tag, memberColor, memberShortId } from './components/ui';
 import { useStore, toast, getState } from './shell';
-import { refreshMembers, switchFocusProject } from './loader';
+import { refreshMembers,refreshRooms, switchFocusProject } from './loader';
 import { navigate, currentNavSeq } from './lib/router';
 import { command } from './bridge';
 import { recordWrite } from './data/store';
@@ -196,7 +197,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           effective: eff.kind,
         };
       }
-      return { text: '未绑定（点「配置 runtime」选择渠道与模型）', problem: true };
+      return { text: '未绑定（点「AI 设置」选择渠道与模型）', problem: true };
     }
     if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
     if(rt.executableStatus?.status==='missing')return {text:`配置已保存 · ${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 程序不可用，请配置后派工`,problem:true};
@@ -273,7 +274,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     </div>
                     <div className="small faint" style={{ marginTop: 3 }}>
                       {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
-                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>runtime：{rt.text}</span> : <>runtime：{rt.text}</>}
+                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>AI 配置：{rt.text}</span> : <>AI 配置：{rt.text}</>}
                     </div>
                   </div>
                 </div>
@@ -300,7 +301,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                       {busyId === m.id ? '处理中…' : m.enabled ? '停用' : '启用'}
                     </button>
                     <button className="btn ghost sm" data-zs-member-bind={m.id} title="配置该成员的 runtime 与模型（member.setRuntime——配置成功≠能力已认证）" onClick={() => openBind(m)}>
-                      配置 runtime…
+                      AI 设置…
                     </button>
                   </div>
                 ) : null}
@@ -339,15 +340,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           {rooms.length === 0 ? <div className="faint small" style={{ marginTop: 4 }}>（本项目没有房间）</div> : null}
         </div>
 
-        <div className="panel" style={{ marginTop: 18 }}>
-          <div className="panel-title"><Icon name="info" size={13} /> 身份与渠道不要混用</div>
-          <div className="small muted" style={{ lineHeight: 1.7, marginTop: 4 }}>
-            成员是项目级实例（同一渠道/模型在不同项目是不同成员）；runtime 绑定属于成员，未绑定时
-            派发回落<strong>全局默认渠道</strong>（本包由启动器 ZS_RUNTIME 决定——卡片上分列显示，不默默换渠道）。
-            配置成功≠能力已认证（认证状态以回读为准）；fake 渠道仅演练环境可选。
-            人的关注（阅读订阅）在「待我处理」。
-          </div>
-        </div>
+
       </div>
 
       {editFor ? <EditMemberModal key={`${editFor.projectId}:${editFor.member.id}`} projectId={editFor.projectId} member={editFor.member} onClose={()=>setEditFor(null)} onSaved={async()=>{setEditFor(null);await reload();}}/>:null}
@@ -360,7 +353,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           onClose={() => setAddFor(null)}
           onCreated={async () => {
             setAddFor(null);
-            toast(`已添加成员（自动加入未归档房间；协调者与 runtime 不变——随后可「配置 runtime」）`, 'success');
+            toast('已添加 AI 并保存配置', 'success');
+            await refreshRooms(addFor);
             // 迟到回执：只刷新**提交目标项目**的名单（当前焦点若已切到别的项目，不覆盖其视图）。
             if (getState().activeProjectId === addFor) await reload();
             else await refreshMembers(addFor).catch(() => { /* 焦点已切走——store 投影按目标项目刷新即可 */ });
@@ -368,7 +362,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         />
       ) : null}
 
-      {/* 配置 runtime 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变） */}
+      {/* AI 设置 弹窗（R66 P4：从行内表单收进弹窗——字段与命令不变） */}
       {bindFor != null && bindFor.member.principalType === 'agent' ? (
         <BindRuntimeModal
           member={bindFor.member}
@@ -414,7 +408,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
       if(!formGuard.valid())return;
       recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${form.model ? `（${form.model}）` : ''}——配置成功≠能力已认证`);
-      toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${form.model ? ' · ' + form.model : ''}）——能力认证状态以成员页回读为准`, 'success');
+      toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${form.model ? ' · ' + form.model : ''}）`, 'success');
       if (mounted.current) await onSaved();
     } catch (e) {
       if (!formGuard.valid())return;
@@ -425,8 +419,8 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
   return (
     <Modal
       size="md"
-      title={`配置 runtime · ${member.displayName} #${memberShortId(member.id)}`}
-      subtitle={`member.setRuntime——配置成功≠能力已认证；未绑定时该成员派发用全局默认渠道（实例 ${member.id}）`}
+      title={`AI 设置 · ${member.displayName} #${memberShortId(member.id)}`}
+      subtitle="选择本机已有渠道和模型，保存后用于之后的工作。"
       onClose={onClose}
       footer={
         <>
@@ -445,7 +439,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <Select
             value={form.kind}
             ariaLabel="runtime 渠道"
-            onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind }))}
+            onChange={(v) => setForm((f) => ({ ...f, kind: v as typeof f.kind,model:'',executable:'',effort:'' }))}
             options={[
               { value: 'claude', label: 'claude（CLI）' },
               { value: 'codex', label: 'codex' },
@@ -453,17 +447,10 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
             ]}
           />
         </label>
-        {form.kind !== 'fake' ? (
-          <label className="field" title="claude 必须显式指定模型（服务端同判拒绝空模型）">
-            <span className="field-label">{form.kind === 'claude' ? '模型（必填）' : '模型 ID（可选）'}</span>
-            <input className="input" placeholder={form.kind === 'claude' ? '如 deepseek-flash' : '如 gpt-6-luna；留空使用渠道默认'} value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))} />
-          </label>
-        ) : null}
-        <label className="field" title="可执行文件（留空=渠道默认名：claude/codex）">
-          <span className="field-label">可执行文件</span>
-          <input className="input" placeholder="留空=默认（claude/codex）" value={form.executable} onChange={(e) => setForm((f) => ({ ...f, executable: e.target.value }))} />
-        </label>
+        {form.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.kind} executable={form.executable} value={form.model} disabled={busy} onChange={model=>setForm(f=>({...f,model,effort:''}))}/>:null}
         <RuntimeEffort projectId={projectId} kind={form.kind} model={form.model} executable={form.executable} value={form.effort??''} onChange={effort=>setForm(f=>({...f,effort}))}/>
+        <details><summary>高级：执行程序与权限</summary>
+        <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" placeholder="留空使用本机 CLI" value={form.executable} onChange={e=>setForm(f=>({...f,executable:e.target.value}))}/></label>
         <label className="field" title="新任务使用保存的权限档；已有任务保留原快照">
           <span className="field-label">保存的权限模式</span>
           <Select
@@ -474,6 +461,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           />
           <div className="field-hint">完整权限沿用 CLI 的原生机制，可读写电脑并执行命令。选择 plan 可保持只读；项目编辑模式保留明确授权边界。保存配置不等于渠道已实测。</div>
         </label>
+        </details>
       </div>
     </Modal>
   );
@@ -487,6 +475,8 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const inFlight=useRef(false);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [runtime,setRuntime]=useState({kind:'claude' as 'claude'|'codex',model:'',executable:'',permissionMode:'bypassPermissions',effort:''});
+  const [useAsDefault,setUseAsDefault]=useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const rooms = useStore((s) => s.rooms);
@@ -495,10 +485,11 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   const submit = async () => {
     if(inFlight.current)return;
     if (stale||!formGuard.valid()) { setErr('项目已切换——本表单已作废（针对旧项目的输入不再提交；关闭后在新项目重新添加）'); return; }
+    if(runtime.kind==='claude'&&!runtime.model.trim()){setErr('请选择模型；若渠道未返回清单，可在高级设置指定模型 ID。');return;}
     if (name.trim().length === 0) { setErr('请填写成员名称（不能为空白）'); return; }
     inFlight.current=true;setBusy(true); setErr(null);
     try {
-      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}) });
+      const outcome = await memberWrite<{ memberId: string; roomsJoined: number }>(`member.create:${projectId}`,'member.create', { projectId, displayName: name.trim(), ...(desc.trim().length > 0 ? { description: desc.trim() } : {}), runtime:{kind:runtime.kind,model:runtime.model.trim()||null,executable:runtime.executable.trim()||runtime.kind,permissionMode:runtime.permissionMode,effort:runtime.effort||null},useAsDefault });
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
       const r=outcome.data;
       if(!formGuard.valid())return;
@@ -511,8 +502,8 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
   return (
     <Modal
       size="md"
-      title="添加成员"
-      subtitle={`添加到 ${projectName}（成员是项目级实例，同名成员不合并——runtime 绑定随后在卡片「配置 runtime」设置）`}
+      title="添加 AI"
+      subtitle={`添加到 ${projectName}，沿用本机 CLI 当前渠道和账号。`}
       onClose={onClose}
       footer={
         <>
@@ -537,15 +528,15 @@ function AddMemberModal({ projectId, projectName, activeProjectId, onClose, onCr
           <input className="input" value={desc} placeholder="例如 实现与重构，偏好直接给结论" onChange={(e) => setDesc(e.target.value)} />
           <div className="field-hint">出现在成员卡与 @ 选择里，帮模型判断该找谁。</div>
         </div>
-        <div className="panel">
-          <div className="panel-title"><Icon name="info" size={13} /> 添加后会怎样</div>
-          <div className="col small" style={{ gap: 5, marginTop: 4, lineHeight: 1.6 }}>
-            <div>· 自动加入本项目 <strong>{joinable.length}</strong> 个未归档房间；归档房间保持只读不复活。</div>
-            <div>· <strong>不会</strong>自动成为协调者（房间级设置，需在房间设置显式指定）。</div>
-            <div>· <strong>不会</strong>加入正在运行的研讨：新成员只影响之后的派发。</div>
-            <div className="faint">· runtime 未配置时派发回落全局默认渠道；全局默认缺模型名会启动失败——建好后请「配置 runtime」。</div>
-          </div>
-        </div>
+        <label className="field"><span className="field-label">运行渠道</span><Select ariaLabel="运行渠道" value={runtime.kind} disabled={busy} onChange={kind=>setRuntime(f=>({...f,kind:kind as 'claude'|'codex',model:'',executable:'',effort:''}))} options={[{value:'claude',label:'Claude CLI'},{value:'codex',label:'Codex CLI'}]}/></label>
+        <RuntimeModel projectId={projectId} kind={runtime.kind} executable={runtime.executable} value={runtime.model} disabled={busy} onChange={model=>setRuntime(f=>({...f,model,effort:''}))}/>
+        <RuntimeEffort projectId={projectId} kind={runtime.kind} executable={runtime.executable} model={runtime.model} value={runtime.effort} onChange={effort=>setRuntime(f=>({...f,effort}))}/>
+        <label className="row tight"><input type="checkbox" checked={useAsDefault} disabled={busy} onChange={e=>setUseAsDefault(e.target.checked)}/>在没有可用协调者的房间中，默认由它接收消息</label>
+        <details><summary>高级：执行程序与权限</summary>
+          <label className="field"><span className="field-label">执行程序（自动查找）</span><input className="input" disabled={busy} value={runtime.executable} placeholder="留空使用本机 CLI" onChange={e=>setRuntime(f=>({...f,executable:e.target.value}))}/></label>
+          <label className="field"><span className="field-label">执行权限</span><Select ariaLabel="新成员执行权限" value={runtime.permissionMode} disabled={busy} onChange={permissionMode=>setRuntime(f=>({...f,permissionMode}))} options={runtimePermissionOptions(runtime.permissionMode,runtime.kind)}/></label>
+          <div className="field-hint">默认沿用 CLI 完整权限，可修改文件与执行命令；可改为只读。保存本身不调用模型。</div>
+        </details>
         {err != null ? <div className="panel warning">{err}</div> : null}
       </div>
     </Modal>
