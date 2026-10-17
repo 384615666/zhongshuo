@@ -6,6 +6,10 @@
 
 人类在审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79明确说“开始这一轮吧”，已通过read_thread核对原userMessage。权威范围见 [R87完整任务书](r87-product-usability-plan-20261017.md)；原方案“尚未实施”是历史状态，现已授权持续完成施工、真实验收及最终集中交付。唯一产品写入方为本会话，审阅方只读，不启新代理。
 
+**2026-10-17 09:56 最新断点**：28bc59d模板跨渠道修复已提交推送，审阅源级关闭。完整数据引导已有第一层核心src/contracts/localDataCopy.ts与9个正式数据/隔离宿主证明用例：完整字节和空目录、profile不拆分、已关闭证明/活动PID拒绝、重叠/链接拒绝、容量预算、ENOSPC/EACCES、原件变化、schema拒绝、篡改/未完成备份拒恢复；0模型。第一真实工程反例：readonly SQLite检查也在保存payload旁创建wal/shm，导致manifest失配，原data-copy-readonly-sidecar-counterexample票保留；现仅对新建独立scratch复制的DB/WAL/SHM做验证，payload原字节再次核对后才complete，9项过。**尚未宿主/helper/设置入口，不能交付或称完整备份已可用。** 独立审阅额外指出备份容器data/manifest入口先realpath会解引用junction，已在读取前lstat/包含关系拒绝并加容器data-junction负例。需要实现src/ui/main.ts可信窄桥、随包Node关闭后copy worker、独立只读进度窗口、原根同级控制指针及正常BAT记忆数据选择，计划见设计。不得在线cp LevelDB，不得改迁用户原根。
+
+同时强化普通会话型评审/汇总（responseKind=conversation）实际交接仍有正式上游版本的正例，19项成员串回归过；修正审计把只读协作答复误称“已发生文件差异”的文字，workBasis区分coordination-output/project-diff/write-tool，原模型协议不改。2文件27项通过。当前继续设置/恢复/成果与完整数据UI，最后新cleanBUILD原生自然Office两模型闭环；不要停工或重复老包最终宣称。
+
 **2026-10-17 09:49 继续断点**：4840c6a已提交推送，主线7d01→411e8c2→e646d70→1de93be→4840c6a远端一致。审阅对411e8c2五组交接、e646d70十组路由及4840c6a迟布局修复独立PASS，均0模型/非原生。审阅发现模板切渠道只改kind、残留旧model/executable/effort；现已用runtimeChannelPatch修复且正式模板保存/回读Claude↔Codex正例通过，显式plan权限不变、0真实调用，2文件9项（含reading4）过。数据完整引导正在施工设计，详见r87-data-guide-design-20261017.md，**只有设计，尚无代码入口，不能当已完成**。接下去先实现closed-root完整copy+校验+宿主重启指针与本地UI进度，原根不动；再设置/恢复/成果简单化及逐页矩阵、最终同新BUILD真实BAT自然DOCX/PDF两模型流程。不要停在这个提交。
 
 **2026-10-17 09:46 最新断点**：HEAD1de93be（修Codex严格native输出handoffs必填、升级/旧证书保真与旧默认语义回归）；完整第一次源码167文件1230项1223过/7失败，原票保留，逐项修后7文件41项全过。配置及首次入口这组WIP已完成：新member.runtimeCatalog真实元数据（无推理）、搜索模型与等级联动、独立runtime随member.create原事务、首可用协调者默认（不替换旧可用/不改模板合同）、新房间协调者只从自身名单选；8文件38项/双types及新模块lint过。原生尚未验收。OpenFolderModal已改选定后直接打开并保留最新导航意图。审阅精确e646d70发现受控迟布局丢历史锚点，已修8秒有界恢复+用户输入取消，4永久用例过。完整Word测试生成8文件已归档dist后按HEAD原blob恢复，后续新测试输出独立dist目录，用户数据/旧包未动。

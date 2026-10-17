@@ -2022,7 +2022,7 @@ export class DispatchWorker {
             this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'正常回答，无工作交付与验收待办'});
             return;
           }
-          if(result.responseKind==='conversation')this.audit(task,runId,turnId,'turn.conversationWorkObserved',{changedFiles,successfulWriteActions,trackingScope:'仅当前项目基线；成功写工具可能在范围外',changeSetId:changesetId,note:'实际文件差异已发生，保留工作交付；原协议不改写'});
+          if(result.responseKind==='conversation')this.audit(task,runId,turnId,'turn.conversationWorkObserved',{changedFiles,successfulWriteActions,trackingScope:'仅当前项目基线；成功写工具可能在范围外',changeSetId:changesetId,workBasis:childCoordination(this.db,task.id)||integrationRun?'coordination-output':changedFiles>0?'project-diff':'write-tool',note:childCoordination(this.db,task.id)||integrationRun?'按正式协作步骤保存答复成果；不据此声称修改文件，原协议不改写':changedFiles>0?'实际项目文件差异已发生，保留工作交付；原协议不改写':'检测到成功写工具，保留工作交付；不据此声称存在项目内文件差异'});
           this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
           const collaboration=coordinationDeliveryRefs(this.db,runId);
           const manifestHash = createHash('sha256').update(collaboration?JSON.stringify({finalText,collaboration}):finalText).digest('hex');

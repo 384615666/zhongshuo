@@ -47,7 +47,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
   it('hello -> invite B -> thread all routes only A/B, hands the actual attached report to B, and integrates in the same task',async()=>{
     const f=await fixture();try{
       const finish=(answer:string,extra:Record<string,unknown>={}):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...extra})}}];
-      const scripts=[finish('你好！'),finish('请同伴核对表格',{responseKind:'work',handoffs:[{toMemberId:f.ids[1],purpose:'review',message:'请实际读取附上的合成报告，核实总额与明细，给我具体问题以便汇总。'}]}),finish('总额100与明细40+30=70不一致',{responseKind:'work',handoffs:[{toMemberId:f.ids[0],purpose:'reply',message:'我已核对报告，明细合计70而报告总额100，请汇总这个差异和修正建议。'}]}),finish('两位已核对，报告总额需要修正',{responseKind:'work'})];
+      const scripts=[finish('你好！'),finish('请同伴核对表格',{responseKind:'work',handoffs:[{toMemberId:f.ids[1],purpose:'review',message:'请实际读取附上的合成报告，核实总额与明细，给我具体问题以便汇总。'}]}),finish('总额100与明细40+30=70不一致',{handoffs:[{toMemberId:f.ids[0],purpose:'reply',message:'我已核对报告，明细合计70而报告总额100，请汇总这个差异和修正建议。'}]}),finish('两位已核对，报告总额需要修正')];
       let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-thread-all',appDataDir:f.dir});
       await worker.runOnce();
       const members=await f.get();const added=await f.cmd<ThreadMembersSnapshot>('thread.members.change',f.change(f.ids[1]!,'add',members.version));
@@ -72,6 +72,8 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(exchanges.map(m=>[m.source_member_id,m.target_member_id])).toEqual([[f.ids[0],f.ids[1]],[f.ids[1],f.ids[0]]]);
       const integrated=f.db.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get() as {included_refs_json:string};
       expect(integrated.included_refs_json).toContain('明细合计70而报告总额100');
+      const evidence=f.db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.conversationWorkObserved'").all() as {payload_json:string}[];
+      expect(evidence).toHaveLength(2);for(const row of evidence)expect(JSON.parse(row.payload_json)).toMatchObject({changedFiles:0,successfulWriteActions:0,workBasis:'coordination-output'});
     }finally{f.db.close();}
   });
   it.each(['invalid-output','unknown','provider-failure'] as const)('a receiver %s cannot be marked as a completed message or automatically retried',async failure=>{
