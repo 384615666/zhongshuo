@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {openDatabase} from '../../src/persistence/db.ts';
+import {runtimeChannelPatch} from '../../src/contracts/runtimeSelection.ts';
 import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
@@ -47,6 +48,22 @@ describe('R87 first-use member and runtime in one formal transaction, zero infer
       const member=await f.cmd('member.create',{...f.create('以后配置'),runtime:{kind:'claude',model:'fixture-model',executable:'Z:/isolated/nonexistent-claude.exe',permissionMode:'plan'}});
       expect(member.defaultRooms).toBe(0);expect(f.db.prepare('SELECT coordinator_member_id FROM rooms').get()).toEqual(room);
       const runtime=await f.cmd('member.runtime',{memberId:member.memberId});expect(runtime.executableStatus).toMatchObject({status:'missing'});
+      expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
+    }finally{f.db.close();}
+  });
+  it('template channel changes clear the old provider model/program/effort and preserve the explicit read-only grant through save and reread',async()=>{
+    const f=await fixture();try{
+      const member=await f.cmd('member.create',f.create('模板来源'));
+      const saved=await f.cmd('memberTemplate.saveFromMember',{projectId:f.projectId,memberId:member.memberId,expectedRevision:1,name:'切渠道模板',description:''});
+      const initial={kind:'claude' as const,model:'old-provider-model',executable:'Z:/isolated/old-claude.exe',effort:'high',permissionMode:'plan'};
+      await f.cmd('memberTemplate.update',{templateId:saved.id,expectedRevision:0,name:'切渠道模板',description:'',enabled:true,config:initial});
+      const codex={...initial,...runtimeChannelPatch('codex')};
+      const updated=await f.cmd('memberTemplate.update',{templateId:saved.id,expectedRevision:1,name:'切渠道模板',description:'',enabled:true,config:codex});
+      expect(updated.config).toEqual({kind:'codex',model:null,executable:'codex',effort:null,permissionMode:'plan'});
+      const claude={...codex,...runtimeChannelPatch('claude'),model:'new-provider-model'};
+      await f.cmd('memberTemplate.update',{templateId:saved.id,expectedRevision:2,name:'切渠道模板',description:'',enabled:true,config:claude});
+      const reread=await f.cmd('memberTemplate.list',{});
+      expect((reread.items as Array<{id:string;config:unknown}>).find(t=>t.id===saved.id)?.config).toEqual({kind:'claude',model:'new-provider-model',executable:'claude',effort:null,permissionMode:'plan'});
       expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
     }finally{f.db.close();}
   });

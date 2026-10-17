@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Select, memberShortId } from './ui';
 import { command } from '../bridge';
+import {runtimeChannelPatch} from '../../../contracts/runtimeSelection';
 import {RuntimeModel} from './RuntimeModel';
 import {RuntimeEffort} from './RuntimeEffort';
 import { runtimePermissionOptions } from '../lib/runtimePermissions';
@@ -102,7 +103,7 @@ export function EditTemplateModal({ template: t, onClose, onSaved }: {
     <FormFeedback state={f}/>{f.invalid ? <div className="panel warning">页面已切换，表单作废。</div> : null}
     <label className="field"><span className="field-label">模板名</span><input className="input" disabled={f.busy||f.committed} maxLength={60} value={form.name} onChange={e => setForm(s => ({ ...s, name: e.target.value }))}/></label><label className="field"><span className="field-label">说明</span><textarea className="input" disabled={f.busy||f.committed} maxLength={200} value={form.description} onChange={e => setForm(s => ({ ...s, description: e.target.value }))}/></label>
     <label className="field"><span className="field-label">模板状态</span><Select disabled={f.busy||f.committed} value={form.enabled ? 'enabled' : 'disabled'} ariaLabel="模板状态" options={[{ value: 'enabled', label: '启用 · 可创建' }, { value: 'disabled', label: '停用 · 已有成员不变' }]} onChange={v => setForm(s => ({ ...s, enabled: v === 'enabled' }))}/></label>
-    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: 'fake · 工程夹具' }] : [])]} onChange={v => config({ kind: v as ConfigTemplate['config']['kind'] })}/></label>
+    <label className="field"><span className="field-label">渠道</span><Select disabled={f.busy||f.committed} value={form.config.kind} ariaLabel="模板渠道" options={[{ value: 'claude', label: 'claude' }, { value: 'codex', label: 'codex' }, ...(fake ? [{ value: 'fake', label: 'fake · 工程夹具' }] : [])]} onChange={v => config(runtimeChannelPatch(v as ConfigTemplate['config']['kind']))}/></label>
     {projectId&&form.config.kind!=='fake'?<RuntimeModel projectId={projectId} kind={form.config.kind} executable={form.config.executable} value={form.config.model??''} disabled={f.busy||f.committed} onChange={model=>config({model:model||null,effort:null})}/>:<label className="field"><span className="field-label">模型 ID</span><input className="input" disabled={f.busy||f.committed} value={form.config.model??''} onChange={e=>config({model:e.target.value||null})}/></label>}
     <label className="field"><span className="field-label">执行程序引用</span><input className="input" disabled={f.busy||f.committed} value={form.config.executable} maxLength={1024} onChange={e => config({ executable: e.target.value })}/></label>
     {projectId?<RuntimeEffort projectId={projectId} kind={form.config.kind} model={form.config.model??''} executable={form.config.executable} value={form.config.effort??''} onChange={effort=>config({effort:effort||null})}/>:<div className="small faint">思考等级：{form.config.effort??'渠道默认'}；打开项目后可读取真实选项。</div>}
