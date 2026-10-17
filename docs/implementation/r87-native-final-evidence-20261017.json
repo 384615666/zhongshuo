@@ -1,0 +1,182 @@
+{
+  "format": "zhongshuo-r87-native-final-evidence-v1",
+  "ok": true,
+  "build": {
+    "buildId": "bld_939523319bbbd61d",
+    "commit": "9771a8a39caec15c85429580b78827ef9f8baca0",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-17T15:32:27.136Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "project": "D:\\zhongshuo\\dist\\review-r87-final\\synthetic-report-2026-10-17T15-33-08-999Z\\project",
+  "dataGuide": {
+    "source": "D:\\zhongshuo\\dist\\review-r87-source\\r87-data-copy-probe-2026-10-17T15-32-48-812Z\\result.json",
+    "ok": true,
+    "backupFiles": 75,
+    "modelCalls": 0
+  },
+  "collaboration": {
+    "task": {
+      "id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2",
+      "conversation_thread_id": "thread_d6d44fdb-c2f0-48c3-a266-1822b5f35630",
+      "status": "DONE",
+      "current_delivery_id": "dlv_turn_a578783b-ed50-4d01-a04d-90ce23218572"
+    },
+    "delivery": {
+      "id": "dlv_turn_a578783b-ed50-4d01-a04d-90ce23218572",
+      "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2",
+      "revision": 3,
+      "manifest_hash": "11d432d8ae6343a69a5653455ac18474f3f74cea21e83a6afd20c8a87b63a552",
+      "review_status": "accepted",
+      "reviewed_at": 1792251808560
+    },
+    "history": [
+      {
+        "revision": 1,
+        "review_status": "superseded",
+        "manifest_hash": "0c331d5d517384adf38cf7808a2d42020668292451d907c64f53875bb4534128"
+      },
+      {
+        "revision": 2,
+        "review_status": "superseded",
+        "manifest_hash": "889e278ca1814d880caab361ddca2c96ccc68e6f5b24382ac59345f04fb5ebbb"
+      },
+      {
+        "revision": 3,
+        "review_status": "accepted",
+        "manifest_hash": "11d432d8ae6343a69a5653455ac18474f3f74cea21e83a6afd20c8a87b63a552"
+      }
+    ],
+    "calls": [
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      },
+      {
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "status": "succeeded",
+        "response_model": null,
+        "task_id": "task_f7fc5068-fbe6-4d6b-8f85-40ff00f6cb81"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0d6822f8-e8fd-4cdc-b603-edbfa0d62a7f"
+      },
+      {
+        "runtime_kind": "codex",
+        "model": "gpt-6-luna",
+        "status": "succeeded",
+        "response_model": null,
+        "task_id": "task_70da7dd9-9a67-48e1-aeb3-d05bc27840bd"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      },
+      {
+        "runtime_kind": "claude",
+        "model": "deepseek-flash",
+        "status": "succeeded",
+        "response_model": "deepseek-flash",
+        "task_id": "task_0b193d84-c301-4fb8-bbd6-cc063a2165c2"
+      }
+    ],
+    "distinctModels": [
+      "claude/deepseek-flash",
+      "codex/gpt-6-luna"
+    ],
+    "callCount": 9,
+    "afterReopenCallCount": 9
+  },
+  "files": {
+    "inputs": [
+      {
+        "name": "R87交付报告.docx",
+        "bytes": 1358,
+        "sha256": "2b51f48840c2368235410bad6685c29abf00d86e6688915f804a89d99c48f80a"
+      },
+      {
+        "name": "R87交付报告.pdf",
+        "bytes": 3540,
+        "sha256": "3b74685945c790c21aa7533b025dd1e90460f42653f0d32141c5d6c7fcf27ca8"
+      }
+    ],
+    "v1": {
+      "name": "报告复核-v1.md",
+      "bytes": 23222,
+      "sha256": "97565a79de91931605890e6afbcf3983d6504cbb2dcea8c3a9918dff7a351190"
+    },
+    "v2": {
+      "name": "报告复核-v2.md",
+      "bytes": 9116,
+      "sha256": "a6e8a1cfecb9be5430cf76c52349cca4bd9735ae0699a07a79a75d46a9564116"
+    },
+    "saved": {
+      "name": "报告复核-v2.md",
+      "bytes": 9116,
+      "sha256": "a6e8a1cfecb9be5430cf76c52349cca4bd9735ae0699a07a79a75d46a9564116"
+    }
+  },
+  "screenshots": [
+    {
+      "name": "two-model-collaboration.png",
+      "bytes": 166067,
+      "sha256": "7495eb32fb7d33a65d757bfb6f3190c2dc2a78a5d03d9af1237c7f344572cced"
+    },
+    {
+      "name": "v2-file.png",
+      "bytes": 175039,
+      "sha256": "fff47439b9f586556d983d36e49d70430525dbdaa96d6ed476995e81255d1121"
+    },
+    {
+      "name": "v2-preview-saved.png",
+      "bytes": 181275,
+      "sha256": "7e00cdce587888c57eb3d5b1a997ae6847915a35cea59adbd5c093f6a45241dd"
+    },
+    {
+      "name": "reopened-completed.png",
+      "bytes": 66668,
+      "sha256": "b00be84387a82fe1739478fdbebf6dcf760ba5fde70eafd167d1ce05ff375a79"
+    }
+  ],
+  "boundaries": [
+    "Real Windows UI and real Claude/Codex calls on the final clean BUILD; synthetic report only.",
+    "Current accepted delivery is revision 3; the final file is named 报告复核-v2.md. Intermediate revision 2 is retained as superseded.",
+    "Normal close/reopen retained the completed task, accepted delivery and file bytes without new model calls.",
+    "Android, installer, signing, auto-update, parallel writer expansion and user production data were not touched."
+  ],
+  "at": "2026-10-17T15:45:08.137Z"
+}

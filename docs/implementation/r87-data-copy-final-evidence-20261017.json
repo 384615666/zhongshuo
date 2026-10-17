@@ -1,0 +1,50 @@
+{
+  "format": "zhongshuo-r87-data-copy-probe-v1",
+  "ok": true,
+  "package": "D:\\zhongshuo\\dist\\review-r87-final\\final-package-data-test",
+  "build": {
+    "buildId": "bld_939523319bbbd61d",
+    "commit": "9771a8a39caec15c85429580b78827ef9f8baca0",
+    "dirty": false,
+    "dirtyDiffHash": null,
+    "builtAt": "2026-10-17T15:32:27.136Z",
+    "manifest": "MANIFEST-SHA256.json",
+    "manifestRoot": "清单相对本包根（=本文件所在目录）；hash=SHA256"
+  },
+  "modelCalls": 0,
+  "backup": {
+    "status": {
+      "id": "87b85ad5-831e-4d5a-8f0c-62282a5a2365",
+      "state": "succeeded",
+      "at": 1792251171271,
+      "action": "backup"
+    },
+    "manifest": {
+      "checked": 75,
+      "bytes": 9933849,
+      "schemaVersion": 54
+    },
+    "containerCount": 1
+  },
+  "import": {
+    "status": {
+      "id": "03731770-e30d-4e52-a71f-15946d71e362",
+      "state": "succeeded",
+      "at": 1792251175983,
+      "action": "import"
+    },
+    "newRootIsNewCopy": true,
+    "stateSqliteHash": "b1777c4627a1a564b1d4b36342b442b9131bf669dfb34653807d5a86d9776da4"
+  },
+  "batReopen": {
+    "sameDataRoot": true
+  },
+  "screenshots": [
+    "settings-before-backup.png",
+    "after-backup-reopen.png",
+    "after-import-reopen.png",
+    "bat-reopen-imported-root.png"
+  ],
+  "logs": [],
+  "at": "2026-10-17T15:33:04.742Z"
+}
