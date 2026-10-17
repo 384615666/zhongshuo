@@ -61,6 +61,8 @@ export function conversationReplyForDispatch(db:ZhongshuoDatabase,key:string):Co
     q.source_turn_id sourceTurnId,q.input_thread_seq inputSeq,q.dispatch_key dispatchKey,q.status,q.write_scope_json writeScopeJson,a.stop_generation_snapshot sourceStopGeneration FROM conversation_reply_requests q JOIN agent_turns a ON a.id=q.source_turn_id WHERE q.dispatch_key=?`).get(key) as ConversationReplyRow|undefined;
 }
 export function setConversationReplyState(db:ZhongshuoDatabase,messageId:string,status:string,error?:string,runId?:string,turnId?:string) {
+  db.prepare(`UPDATE thread_reply_requests SET status=?,error_message=?,run_id=COALESCE(run_id,?),turn_id=COALESCE(?,turn_id),updated_at=?
+    WHERE message_id=? AND status IN ('queued','running')`).run(status,error?.slice(0,500)??null,runId??null,turnId??null,Date.now(),messageId);
   db.prepare(`UPDATE conversation_reply_requests SET status=?,error_message=?,run_id=COALESCE(?,run_id),turn_id=COALESCE(?,turn_id),updated_at=?
     WHERE message_id=? AND status IN ('queued','running')`).run(status,error?.slice(0,500)??null,runId??null,turnId??null,Date.now(),messageId);
 }

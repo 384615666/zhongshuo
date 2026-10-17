@@ -1,6 +1,6 @@
 /** Browser-safe runtime result contract shared by dispatch and chat projection. */
 import {z} from 'zod';
-import {coordinationPlanSchema} from './coordination.ts';
+import {coordinationPlanSchema,memberHandoffSchema} from './coordination.ts';
 
 export const TASK_COMPLETE_SCHEMA_VERSION='task-complete-v1';
 export const taskCompleteSchema=z.strictObject({
@@ -14,6 +14,7 @@ export const taskCompleteSchema=z.strictObject({
   unexecutedVerifications:z.array(z.strictObject({item:z.string(),reason:z.string()})),
   remainingIssues:z.array(z.string()),
   coordinationPlan:coordinationPlanSchema.nullable().optional(),
+  handoffs:z.array(memberHandoffSchema).max(4).optional(),
 });
 export type TaskComplete=z.infer<typeof taskCompleteSchema>;
 

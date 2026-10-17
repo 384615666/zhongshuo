@@ -52,7 +52,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       expect(context.task.objective).toBe('这是第几轮？请结合前文。');expect(context.threadDigest.rootText).toBe('你好');
       expect(context.threadDigest.messages.map(m=>m.text)).toContain('你好！');expect(context.threadDigest.messages.map(m=>m.text)).toContain('我刚才向你问好了。');expect(JSON.stringify(context.threadDigest)).not.toContain('schemaVersion');
       const before=f.count('outbox');await f.cmd('message.submit',f.params('本条仅记录','record_only'));expect(f.count('outbox')).toBe(before);await f.worker.runOnce();expect(f.count('agent_turns')).toBe(3);
-      expect(f.db.prepare('SELECT status FROM conversation_reply_requests').all()).toEqual([{status:'succeeded'},{status:'succeeded'}]);expect(f.count('real_calls')).toBe(0);
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests').all()).toEqual([{status:'succeeded'},{status:'succeeded'}]);expect(f.count('real_calls')).toBe(0);
     }finally{f.db.close();}
   });
   it('queued requests have fixed human boundary but include preceding answer arriving after the next question; local-only text stays out',async()=>{
@@ -66,13 +66,13 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       expect(bundle.included_refs_json).toContain('前一轮回答');expect(bundle.included_refs_json).toContain('再结合你的前一轮回答说明');expect(bundle.included_refs_json).not.toContain('PRIVATE_LOCAL_ONLY');expect(f.count('workflow_runs')).toBe(3);
     }finally{f.db.close();}
   });
-  it('actual work changes the conversation to work; an already queued ordinary request cannot automatically rework the new delivery',async()=>{
+  it('R87 a queued ordinary question is answered after natural work delivery without automatically replacing it',async()=>{
     const work:FakeTurnScript=[{kind:'event',event:{kind:'tool.started',toolCallId:'write',toolName:'Write',argumentsSummary:'result.txt'}},{kind:'writeFile',path:'result.txt',content:'formal fake engineering result'},{kind:'event',event:{kind:'tool.completed',toolCallId:'write',outcome:'success'}},...final('工作已完成',true)];
-    const f=await fixture([final('你好！'),work]);
+    const f=await fixture([final('你好！'),work,final('这是对刚完成文件的解释，不修改文件')]);
     try{
       await f.cmd('message.submit',f.params('创建文件'));const later=await f.cmd<Root>('message.submit',f.params('随后的一条普通追问'));
-      await f.worker.runOnce();expect(f.count('task_deliveries')).toBe(1);expect(conversationFacts(f.db,f.root.threadId)).toBeNull();await f.worker.runOnce();expect(f.count('workflow_runs')).toBe(2);
-      expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(later.messageId)).toEqual({status:'blocked'});
+      await f.worker.runOnce();expect(f.count('task_deliveries')).toBe(1);expect(conversationFacts(f.db,f.root.threadId)).toBeNull();await f.worker.runOnce();expect(f.count('workflow_runs')).toBe(3);expect(f.count('task_deliveries')).toBe(1);
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(later.messageId)).toEqual({status:'succeeded'});
       const before=f.count('outbox');expect(await f.cmd<Root>('message.submit',f.params('这条工作修改意见先保存','record_only'))).toMatchObject({disposition:'none'});expect(f.count('outbox')).toBe(before);expect(f.count('task_deliveries')).toBe(1);
     }finally{f.db.close();}
   });
@@ -90,16 +90,16 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
     try{
       const parent=f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(f.root.taskId);
       const queued=await f.cmd<Root>('message.submit',f.params('按旧配置排队'));
-      const snapshot=f.db.prepare('SELECT write_scope_json FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId);
+      const snapshot=f.db.prepare('SELECT write_scope_json FROM thread_reply_requests WHERE message_id=?').get(queued.messageId);
       await f.cmd('member.setRuntime',{memberId:f.memberId,kind:'fake',permissionMode:'plan',effort:'low'});
       await f.worker.runOnce();expect(f.count('agent_turns')).toBe(1);
-      expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'blocked'});
-      expect(f.db.prepare('SELECT write_scope_json FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual(snapshot);
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'blocked'});
+      expect(f.db.prepare('SELECT write_scope_json FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual(snapshot);
       const current=await f.cmd<Root>('message.submit',f.params('明确使用当前保存配置回答'));
-      const currentScope=f.db.prepare('SELECT write_scope_json FROM conversation_reply_requests WHERE message_id=?').get(current.messageId) as {write_scope_json:string};
+      const currentScope=f.db.prepare('SELECT write_scope_json FROM thread_reply_requests WHERE message_id=?').get(current.messageId) as {write_scope_json:string};
       expect(JSON.parse(currentScope.write_scope_json)).toMatchObject({executionMode:'readonly',runtime:{permissionMode:'plan',effort:'low'}});
       await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);
-      expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(current.messageId)).toEqual({status:'succeeded'});
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(current.messageId)).toEqual({status:'succeeded'});
       expect(f.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(f.root.taskId)).toEqual(parent);
       expect(f.db.prepare('SELECT count(DISTINCT session_id) n FROM agent_turns').get()).toEqual({n:2});
     }finally{f.db.close();}
@@ -114,13 +114,13 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
     try{await f.cmd('message.submit',f.params('产生文件变化'));await f.worker.runOnce();expect(f.count('task_deliveries')).toBe(1);expect(conversationFacts(f.db,f.root.threadId)).toBeNull();}finally{f.db.close();}
   });
   it('successful fileChange outside the managed project is work evidence, separately from the project changeset',async()=>{
-    const f=await fixture([final('你好！'),[{kind:'event',event:{kind:'tool.started',toolCallId:'outside',toolName:'fileChange',argumentsSummary:'own outside fixture'}},{kind:'event',event:{kind:'tool.completed',toolCallId:'outside',outcome:'success'}},...final('已写入外部目录')]]);
+    const f=await fixture([final('你好！'),[{kind:'event',event:{kind:'tool.started',toolCallId:'outside',toolName:'fileChange',argumentsSummary:'own outside fixture'}},{kind:'event',event:{kind:'tool.completed',toolCallId:'outside',outcome:'success'}},...final('已写入外部目录')],final('对完成结果的普通解释')]);
     try{
       const outside=join(f.dir,'outside.txt');const events=f.adapter.events.bind(f.adapter);
       vi.spyOn(f.adapter,'events').mockImplementation(session=>({async *[Symbol.asyncIterator](){for await(const event of events(session)){if(event.kind==='tool.completed'&&event.toolCallId==='outside')writeFileSync(outside,'synthetic formal adapter side effect');yield event;}}}));
       await f.cmd('message.submit',f.params('修改自有项目外合成文件'));const queued=await f.cmd<Root>('message.submit',f.params('排队追问不能自动返工'));
       await f.worker.runOnce();expect(readFileSync(outside,'utf8')).toBe('synthetic formal adapter side effect');expect(f.count('task_deliveries')).toBe(1);expect(conversationFacts(f.db,f.root.threadId)).toBeNull();
-      await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'blocked'});
+      await f.worker.runOnce();expect(f.count('agent_turns')).toBe(3);expect(f.count('task_deliveries')).toBe(1);expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'succeeded'});
       expect(f.db.prepare("SELECT response_kind FROM tasks WHERE id=?").get(f.root.taskId)).toEqual({response_kind:'work'});
     }finally{f.db.close();}
   });
@@ -141,7 +141,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       const run=f.db.prepare("SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1").get(f.root.taskId) as {id:string};
       const queued=await f.cmd<Root>('message.submit',f.params('还在排队的提问'));
       await f.cmd('task.stop',{taskId:f.root.taskId,targetRunId:run.id,expectedStopGeneration:0});await executing;await f.worker.runOnce();
-      expect(f.count('agent_turns')).toBe(2);expect(f.db.prepare('SELECT status FROM conversation_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'cancelled'});
+      expect(f.count('agent_turns')).toBe(2);expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(queued.messageId)).toEqual({status:'cancelled'});
       expect((await f.raw('message.submit',f.params('停止后不自动恢复'))).error?.code).toBe('TASK_STOPPED');
     }finally{f.db.close();}
   });
@@ -150,7 +150,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
     try{
       const commandId=randomUUID(),params=f.params('已接收但尚未领取的续问');
       const accepted=await f.raw<Root>('message.submit',params,commandId);expect(accepted.ok).toBe(true);
-      const before=f.db.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM conversation_reply_requests WHERE message_id=?').get(accepted.data.messageId);
+      const before=f.db.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM thread_reply_requests WHERE message_id=?').get(accepted.data.messageId);
       expect(before).toMatchObject({status:'queued'});expect(f.count('agent_turns')).toBe(1);
       f.db.close();
       const reopened=openDatabase(join(f.dir,'state.sqlite'));
@@ -160,7 +160,7 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
         const started=vi.spyOn(adapter,'startTurn');
         const worker=new DispatchWorker({db:reopened,adapter,leaseOwner:'r84-reopened',appDataDir:f.dir});
         expect(await worker.runOnce()).toBe(false);expect(started).not.toHaveBeenCalled();
-        expect(reopened.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM conversation_reply_requests WHERE message_id=?').get(accepted.data.messageId)).toEqual(before);
+        expect(reopened.prepare('SELECT message_id,dispatch_key,write_scope_json,status FROM thread_reply_requests WHERE message_id=?').get(accepted.data.messageId)).toEqual(before);
         expect(reopened.prepare('SELECT count(*) n FROM agent_turns').get()).toEqual({n:1});
         expect(reopened.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
         expect(reopened.prepare('SELECT command_id FROM command_receipts WHERE command_id=?').get(commandId)).toEqual({command_id:commandId});
@@ -192,21 +192,25 @@ describe('R84 ordinary same-thread replies, formal commands and worker, zero rea
       const history=await f.cmd<{items:Array<{id:string;body:{text:string}}>}>('thread.history',{threadId:f.root.threadId});expect(history.items.find(m=>m.id===legacy.messageId)?.body.text).toBe('LEGACY_PRIVATE_RECORD_ONLY');expect(f.count('real_calls')).toBe(0);
     }finally{f.db.close();}
   });
-  it('an explicit different mention cannot silently retarget an ordinary reply; record-only retains the mention without dispatch',async()=>{
-    const f=await fixture([final('你好！')]);try{
-      const other=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'另一成员'})).memberId;
-      const before={messages:f.count('messages'),outbox:f.count('outbox')},params={...f.params('保留这条指定提及'),mentions:[{kind:'member',memberId:other}]};
-      expect(await f.raw('message.submit',params)).toMatchObject({ok:false,error:{code:'CONVERSATION_TARGET_CHANGED'}});expect(f.count('messages')).toBe(before.messages);expect(f.count('outbox')).toBe(before.outbox);
-      const saved=await f.cmd<Root>('message.submit',{...params,intent:'record_only'});expect(JSON.parse((f.db.prepare('SELECT body_json FROM messages WHERE id=?').get(saved.messageId) as {body_json:string}).body_json).mentions).toEqual(params.mentions);expect(f.count('outbox')).toBe(before.outbox);expect(f.count('agent_turns')).toBe(1);
+  it('R87 an explicit room member is invited and receives this request without rewriting the original task owner',async()=>{
+    const f=await fixture([final('你好！'),final('我是新受邀成员，已读到原串上下文')]);
+    try{
+      const other=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'新同伴'})).memberId;
+      const saved=await f.cmd<Root>('message.submit',{...f.params('请新同伴看一下'),mentions:[{kind:'member',memberId:other}]});
+      await f.worker.runOnce();
+      expect(f.db.prepare('SELECT member_id FROM agent_turns ORDER BY rowid DESC LIMIT 1').get()).toEqual({member_id:other});
+      expect(f.db.prepare('SELECT owner_member_id FROM tasks WHERE id=?').get(f.root.taskId)).toEqual({owner_member_id:f.memberId});
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(saved.messageId)).toEqual({status:'succeeded'});
+      const before=f.count('outbox');await f.cmd('message.submit',{...f.params('只保存提及','record_only'),mentions:[{kind:'all'}]});expect(f.count('outbox')).toBe(before);
     }finally{f.db.close();}
   });
   it('unknown provider outcome stays unknown across reopen and exact command replay never starts another turn',async()=>{
     const f=await fixture([final('你好！'),[{kind:'event',event:{kind:'turn.failed',code:'INTERRUPTED',message:'isolated unconfirmed deadline',retryable:false}}]]);
     try{
-      const id=randomUUID(),p=f.params('本次回复结果将未知');const saved=await f.raw<Root>('message.submit',p,id);await f.worker.runOnce();expect(f.db.prepare('SELECT status FROM conversation_reply_requests').get()).toEqual({status:'unknown'});
+      const id=randomUUID(),p=f.params('本次回复结果将未知');const saved=await f.raw<Root>('message.submit',p,id);await f.worker.runOnce();expect(f.db.prepare('SELECT status FROM thread_reply_requests').get()).toEqual({status:'unknown'});
       const replay=await f.raw<Root>('message.submit',p,id);expect(replay.replayed).toBe(true);expect(replay.data.messageId).toBe(saved.data.messageId);await f.worker.runOnce();expect(f.count('agent_turns')).toBe(2);
       expect((await f.raw('message.submit',f.params('不能新号绕过未知'))).error?.code).toBe('RECONCILE_REQUIRED');
-      const readonly=openDatabase(join(f.dir,'state.sqlite'));try{expect(readonly.prepare('SELECT status FROM conversation_reply_requests').get()).toEqual({status:'unknown'});}finally{readonly.close();}
+      const readonly=openDatabase(join(f.dir,'state.sqlite'));try{expect(readonly.prepare('SELECT status FROM thread_reply_requests').get()).toEqual({status:'unknown'});}finally{readonly.close();}
     }finally{f.db.close();}
   });
   it('explicit failure is projected next to the original human message with actual reason',async()=>{

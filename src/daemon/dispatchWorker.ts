@@ -3,6 +3,8 @@ import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, 
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
+import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn} from './threadReplies.ts';
+import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { acquireLease } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
@@ -367,7 +369,7 @@ export class DispatchWorker {
       .prepare('SELECT id, status FROM agent_turns WHERE dispatch_key = ?')
       .get(claimed.dispatch_key) as { id: string; status: string } | undefined;
     if (existingTurn != null) {
-      const ordinary=conversationReplyForDispatch(this.db,claimed.dispatch_key);if(ordinary)setConversationReplyState(this.db,ordinary.messageId,'unknown','该原请求已有执行身份，结果待核实；不会自动重发');
+      const ordinary=conversationReplyForDispatch(this.db,claimed.dispatch_key)??threadReplyForDispatch(this.db,claimed.dispatch_key);if(ordinary)setConversationReplyState(this.db,ordinary.messageId,'unknown','该原请求已有执行身份，结果待核实；不会自动重发');
       failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       const taskRow = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
       if (taskRow != null) {
@@ -381,8 +383,13 @@ export class DispatchWorker {
     }
 
     const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined;
-    const conversationRequest=conversationReplyForDispatch(this.db,claimed.dispatch_key);
+    const generalRequest=threadReplyForDispatch(this.db,claimed.dispatch_key);
+    const conversationRequest=conversationReplyForDispatch(this.db,claimed.dispatch_key)??generalRequest;
+    // Per-message execution view only. Do not mutate the task's original owner,
+    // route, write scope, anchor or any already queued envelope in the database.
+    if(task&&generalRequest){task.owner_member_id=generalRequest.memberId;task.route_json=generalRequest.routeJson;}
     const coordination=task?coordinationDispatchContext(this.db,task.id,claimed.dispatch_key):null;
+    if(task&&coordination?.request){task.owner_member_id=coordination.request.memberId;}
     // 意图代次判定（§11.4；第二十七轮五修历史代次误拦后第二十八轮二收口——不能以
     // 「stop_generation>0 + 存在任意在途 run/turn」推断停止仍生效：历史停止已结算、合法新
     // run 正在执行时，新到的合法提醒/跟进意图会被误杀静默丢弃）。判定按**派发意图自己的
@@ -416,12 +423,20 @@ export class DispatchWorker {
     catch(error) {this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     if(coordination?.kind==='planning'&&this.coordinationMaxCalls===0){this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:'本轮协作预算为0；未启动模型'});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     let conversationInput:{text:string;seq:number}|undefined;
+    if(coordination?.request&&!generalRequest){
+      const source=threadReplyForDispatch(this.db,`task:${task.id}:thread-reply:${coordination.request.messageId}`);
+      const blocked=source?threadReplyBlock(this.db,source,this.defaultKindOf()):{code:'THREAD_SCOPE_MISMATCH',message:'协作原请求身份缺失'};
+      if(blocked){if(source)setConversationReplyState(this.db,source.messageId,'blocked',blocked.message);this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',blocked);await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+      conversationInput={text:coordination.request.text,seq:coordination.request.seq};
+    }
     if(conversationRequest){
       const current=conversationFacts(this.db,conversationRequest.threadId);
       const message=this.db.prepare('SELECT task_id,thread_id,project_id,conversation_id,author_id,body_json,thread_message_seq FROM messages WHERE id=?').get(conversationRequest.messageId) as {task_id:string;thread_id:string;project_id:string;conversation_id:string;author_id:string;body_json:string;thread_message_seq:number}|undefined;
       const mismatch=!current||!message||current.taskId!==task.id||current.memberId!==conversationRequest.memberId||message.task_id!==task.id||message.thread_id!==conversationRequest.threadId||message.project_id!==task.project_id||message.conversation_id!==task.conversation_id||message.thread_message_seq!==conversationRequest.inputSeq;
-      const blocked=mismatch?{code:'CONVERSATION_SCOPE_CHANGED',message:'对话已产生工作成果或目标身份变化；不会自动返工'}:conversationBlock(this.db,current!,this.defaultKindOf(),message!.author_id,conversationRequest.writeScopeJson);
-      if(blocked){setConversationReplyState(this.db,conversationRequest.messageId,'blocked',blocked.message);this.audit(task,null,null,'conversation.replyBlocked',{messageId:conversationRequest.messageId,...blocked});if(current)this.transitionTask(task.id,'BLOCKED');failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+      const generalMismatch=generalRequest&&(!message||message.task_id!==task.id||message.thread_id!==generalRequest.threadId||message.project_id!==task.project_id||message.conversation_id!==task.conversation_id||message.thread_message_seq!==generalRequest.inputSeq);
+      const blocked=generalRequest?(generalMismatch?{code:'THREAD_SCOPE_MISMATCH',message:'消息或对话目标已变化；未派发'}:threadReplyBlock(this.db,generalRequest,this.defaultKindOf(),message!.author_id)):
+        mismatch?{code:'CONVERSATION_SCOPE_CHANGED',message:'对话已产生工作成果或目标身份变化；不会自动返工'}:conversationBlock(this.db,current!,this.defaultKindOf(),message!.author_id,conversationRequest.writeScopeJson);
+      if(blocked){setConversationReplyState(this.db,conversationRequest.messageId,'blocked',blocked.message);this.audit(task,null,null,'conversation.replyBlocked',{messageId:conversationRequest.messageId,...blocked});if(current&&!generalRequest)this.transitionTask(task.id,'BLOCKED');failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
       conversationInput={text:(JSON.parse(message!.body_json) as {text:string}).text,seq:conversationRequest.inputSeq};
     }
     // DM 归档门（第十九轮六）：归档即禁止新派发——领取/会话建立/startTurn 各窗口统一拦下
@@ -580,20 +595,22 @@ export class DispatchWorker {
         }
       : undefined;
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
-    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),conversationRequest?.writeScopeJson); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
+    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
     if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
     const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
     const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
+    const executionBasis=generalRequest||coordination?.request?this.db.prepare(`SELECT t.current_delivery_id deliveryId,d.revision,d.manifest_hash manifestHash FROM tasks t LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(task.id) as {deliveryId:string|null;revision:number|null;manifestHash:string|null}:null;
     const assembled = assembleDirectTurn({
       db: this.db,
       writeAccess,
       allowImages: imageCapabilityAtAssembly.status === 'supported',
-      coordinationNote:coordination?.note,
+      coordinationNote:[coordination?.note,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
       coordination:coordination?{phase:coordination.kind,runId:coordination.run?.run_id??null,role:coordination.kind==='child'?coordination.run.role:'coordinator'}:undefined,
+      communicationContract:communicationForTurn(this.db,task.id,member.id,coordination?.kind,coordination?.run?.run_id,claimed.dispatch_key),
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
       repairContext,
       // 返工反馈（第九轮 RT-25）：最近人工验收=changes_requested → 注入被退回版本与说明。
-      reviewFeedback: this.latestReviewFeedback(task.id),
+      reviewFeedback: generalRequest||coordination?.request?undefined:this.latestReviewFeedback(task.id),
       task: {
         id: task.id,
         projectId: task.project_id,
@@ -665,6 +682,7 @@ export class DispatchWorker {
           `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
            VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
         ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
+        bindMemberMessageTurn(this.db,task.id,runId,turnId);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'running',undefined,runId,turnId);
         // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
@@ -880,8 +898,11 @@ export class DispatchWorker {
         startupPhase = 'session-record'; // No turn request has been made; close the opened session normally.
         throw new AdapterCallError('CAPABILITY_UNSUPPORTED', '图片输入认证或成员运行时在派发前已变化；原消息与原件保留，未发送图片');
       }
-      if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),conversationRequest?.writeScopeJson).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
+      if(effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)).identityKey!==writeAccess.identityKey) { startupPhase='session-record'; throw new AdapterCallError('CAPABILITY_UNSUPPORTED','项目授权、配置或目录在启动前变化；未派发'); }
       assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key,turnId);
+      const liveThreadRequest=generalRequest??(coordination?.request?threadReplyForDispatch(this.db,`task:${task.id}:thread-reply:${coordination.request.messageId}`):undefined);
+      if(liveThreadRequest){const blocked=threadReplyBlock(this.db,liveThreadRequest,this.defaultKindOf());if(blocked)throw new AdapterCallError(blocked.code as ConstructorParameters<typeof AdapterCallError>[0],blocked.message,true);}
+      if(executionBasis){const current=this.db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(task.id) as {current_delivery_id:string|null};if(current.current_delivery_id!==executionBasis.deliveryId)throw new AdapterCallError('STALE_REVISION','连接期间成果已更新；本条尚未发给 AI，请确认新版后重试',true);}
       this.live.set(turnId, { turnId, sessionId: session.id, adapter });
       // pre-launch 登记（supervisor 衔接）：请求可能已发出的窗口可区分「从未启动」——
       // startTurn 成功后由 registerProcessIdentity REPLACE 为完整身份。
@@ -1742,6 +1763,8 @@ export class DispatchWorker {
         this.db.prepare(`UPDATE agent_turns SET status = 'UNKNOWN' WHERE id = ?`).run(turnId);
         this.db.prepare("UPDATE coordination_runs SET state='blocked',error_message='协调执行结果未知；不会自动继续' WHERE (run_id=? OR integration_run_id=?) AND state IN ('planning','running','integrating')").run(runId,runId);
         settleConversationReplyForTurn(this.db,turnId,'UNKNOWN');
+        settleThreadReplyForTurn(this.db,turnId,'UNKNOWN');
+        settleMemberMessageTurn(this.db,task.id,turnId,'UNKNOWN','执行结果待核实；不会自动重发');
         if (stageKey.startsWith('delib.')) {
           // 研讨轮结果不确定：成员级缺席（E4），运行继续——不因单成员 UNKNOWN 杀死整个研讨。
           const memberRow = this.db.prepare('SELECT member_id FROM agent_turns WHERE id = ?').get(turnId) as { member_id: string };
@@ -1819,6 +1842,7 @@ export class DispatchWorker {
           break;
         }
         this.casTurn(turnId, 'RUNNING');
+        markMemberMessageStarted(this.db,turnId);
         break;
       }
       case 'message.completed':
@@ -1907,6 +1931,7 @@ export class DispatchWorker {
             const proposed=taskCompleteSchema.parse(JSON.parse(finalText)).coordinationPlan;
             if(proposed)try{validatePlanForRun(this.db,task.id,runId,proposed);}catch(error){contract={ok:false,issues:[String(error)]};}
           }
+          if(contract.ok){const result=taskCompleteSchema.parse(JSON.parse(finalText));if(result.handoffs?.length)try{validateMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs,Boolean(result.coordinationPlan));}catch(error){contract={ok:false,issues:[String(error)]};}}
           if (!contract.ok) {
             this.casTurn(turnId, 'FAILED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
@@ -1955,6 +1980,11 @@ export class DispatchWorker {
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const result=taskCompleteSchema.parse(JSON.parse(finalText));
+          if(result.handoffs?.length){
+            const messages=acceptMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs);
+            for(const message of messages){const recipient=this.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(message.toMemberId) as {display_name:string};this.insertThreadReply(task,turnId,message.id,`给 ${recipient.display_name}：\n${message.text}`);}
+            if(planningRun)return;
+          }
           if(planningRun && result.coordinationPlan) {
             acceptCoordinationPlan(this.db,task.id,runId,result.coordinationPlan);
             return;
@@ -1979,13 +2009,15 @@ export class DispatchWorker {
               this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
               // A clarification is an answer, not a replacement delivery or an
               // acceptance. Preserve the existing version and its review state.
-              this.transitionTask(task.id,'WAITING_USER');
+              const request=this.db.prepare('SELECT 1 FROM thread_reply_requests WHERE turn_id=?').get(turnId);
+              const currentDelivery=request?this.db.prepare('SELECT d.review_status FROM tasks t JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?').get(task.id) as {review_status:string}|undefined:undefined;
+              this.transitionTask(task.id,request&&currentDelivery?(currentDelivery.review_status==='pending'?'REVIEW':['accepted','not_required'].includes(currentDelivery.review_status)?'DONE':currentDelivery.review_status==='changes_requested'?'ACTIVE':'WAITING_USER'):'WAITING_USER');
               this.audit(task,runId,turnId,'turn.workClarification',{note:'等待明确补充后执行；旧交付保持'});
               this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'工作待补充，旧交付保持；没有产生新交付'});
               return;
             }
             this.db.prepare("UPDATE tasks SET response_kind='conversation' WHERE id=?").run(task.id);
-            const pendingConversation=(this.db.prepare("SELECT count(*) n FROM conversation_reply_requests WHERE task_id=? AND status='queued'").get(task.id) as {n:number}).n;
+            const pendingConversation=(this.db.prepare("SELECT (SELECT count(*) FROM conversation_reply_requests WHERE task_id=? AND status='queued')+(SELECT count(*) FROM thread_reply_requests WHERE task_id=? AND status='queued') n").get(task.id,task.id) as {n:number}).n;
             this.transitionTask(task.id,pendingConversation?'ACTIVE':'DONE');
             this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'正常回答，无工作交付与验收待办'});
             return;
@@ -2019,6 +2051,9 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'SUCCEEDED', reviewStatus, deliveryRevision: prevRevision + 1 });
         });
         tx();
+        settleThreadReplyForTurn(this.db,turnId,'SUCCEEDED');
+        const actualTurn=this.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(turnId) as {status:string};
+        settleMemberMessageTurn(this.db,task.id,turnId,actualTurn.status);
         break;
       }
       case 'turn.failed': {
@@ -2040,6 +2075,8 @@ export class DispatchWorker {
           const interrupted = userStop;
           this.casTurn(turnId, interrupted ? 'CANCELLED' : 'FAILED');
           settleConversationReplyForTurn(this.db,turnId,interrupted?'CANCELLED':'FAILED',event.message);
+          settleThreadReplyForTurn(this.db,turnId,interrupted?'CANCELLED':'FAILED',event.message);
+          settleMemberMessageTurn(this.db,task.id,turnId,interrupted?'CANCELLED':'FAILED',event.message);
           this.db.prepare(`UPDATE workflow_runs SET status = ? WHERE id = ?`).run(interrupted ? 'CANCELLED' : 'FAILED', runId);
           this.settleBudget(runId);
           this.transitionTask(task.id, interrupted ? 'CANCELLED' : 'ACTIVE');
@@ -2566,6 +2603,11 @@ export class DispatchWorker {
     if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
       if(status!=='SUCCEEDED')this.db.prepare("UPDATE coordination_runs SET state=?,error_message=? WHERE (run_id=(SELECT run_id FROM agent_turns WHERE id=?) OR integration_run_id=(SELECT run_id FROM agent_turns WHERE id=?)) AND state IN ('planning','running','integrating')").run(status==='CANCELLED'?'cancelled':'blocked',status==='CANCELLED'?'协调执行已停止':'协调执行未完成，请查看运行原因',turnId,turnId);
       settleConversationReplyForTurn(this.db,turnId,status);
+      if(status!=='SUCCEEDED'){
+        settleThreadReplyForTurn(this.db,turnId,status);
+        const bound=this.db.prepare('SELECT r.task_id FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id WHERE a.id=?').get(turnId) as {task_id:string}|undefined;
+        if(bound)settleMemberMessageTurn(this.db,bound.task_id,turnId,status,status==='UNKNOWN'?'执行结果待核实；不会自动重发':status==='CANCELLED'?'执行已停止':'执行未完成，请查看运行原因');
+      }
       try { settleRealCall(this.db, turnId, status === 'SUCCEEDED' ? 'succeeded' : status === 'FAILED' ? 'failed' : status === 'CANCELLED' ? 'interrupted' : 'unknown', `turn 终态=${status}`); } catch { /* 台账尽力而为——不影响业务事务 */ }
       try { settleReminderCallForTurn(this.db, turnId, status); } catch { /* 提醒调用台账跟随——尽力而为（UNKNOWN/CANCELLED=保守计数） */ }
       // DM 会话身份终态结算（第二十轮二）：所有终态路径统一在此核对 provider 上报身份。
@@ -2646,7 +2688,7 @@ function parseInitialTaskId(dispatchKey: string): string | null {
   // reminder:{reminderId}:{occurrence}=提醒跟进派发（第二十六轮一：**完整身份键**——含
   // reminderId（同任务可绑多提醒，同刻触发不撞唯一键），归属/预算沿键解析）。
   // dmtask:=私信内部执行（DEV-22：dm_turn 同走 DIRECT 派发路径，key 前缀区分房间任务）。
-  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch(?::[^:]+)?|repair:[^:]+|conversation:[^:]+|reminder:[^:]+:[^:]+)$/);
+  const m = dispatchKey.match(/^(?:dm)?task:(.+):(?:initial|redispatch(?::[^:]+)?|repair:[^:]+|conversation:[^:]+|thread-reply:[^:]+|reminder:[^:]+:[^:]+)$/);
   return m?.[1] ?? null;
 }
 

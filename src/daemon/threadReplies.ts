@@ -1,0 +1,142 @@
+import {randomUUID} from 'node:crypto';
+import type {ZhongshuoDatabase} from '../persistence/db.ts';
+import type {MentionNode,TopLevelRouteOutcome} from '../contracts/routing.ts';
+import {DaemonCommandError} from './commandError.ts';
+import {readThreadMembers,persistThreadMember} from './threadMembers.ts';
+import {snapshotConversationWriteAccess,effectiveTaskWriteAccess} from './projectWriteAccess.ts';
+import {snapshotTaskWriteAccess} from './projectWriteAccess.ts';
+import {assessTaskRedispatchReadiness} from '../persistence/stores/recoveryGuard.ts';
+import {enqueueOutbox} from '../persistence/outbox.ts';
+import {appendDomainEvent} from '../persistence/events.ts';
+import type {ConversationReplyRow} from './conversationReplies.ts';
+
+export interface ThreadReplyScopeMember {
+  memberId:string;displayName:string;description:string|null;writeScope:string|null;
+}
+export interface ThreadReplySelection {
+  memberId:string;recipientIds:string[];candidateIds:string[];inviteIds:string[];
+  route:TopLevelRouteOutcome;membershipVersion:string;
+}
+
+/** Explicit @ selects recipients, never an implicit fixed deliberation mode.
+ * All is scoped to this thread. An explicit individual room member is an
+ * invitation, applied atomically with the message only after validation. */
+export function selectThreadRecipients(db:ZhongshuoDatabase,threadId:string,mentions:readonly MentionNode[],expectedVersion?:string):ThreadReplySelection {
+  const snapshot=readThreadMembers(db,threadId);
+  if(expectedVersion&&expectedVersion!==snapshot.version)throw new DaemonCommandError('STALE_REVISION','本串成员已变化，请刷新名单后再发送；输入保留');
+  const th=db.prepare('SELECT root_task_id FROM conversation_threads WHERE id=?').get(threadId) as {root_task_id:string|null};
+  const owner=th.root_task_id?(db.prepare('SELECT owner_member_id FROM tasks WHERE id=?').get(th.root_task_id) as {owner_member_id:string|null})?.owner_member_id:null;
+  const all=mentions.some(m=>m.kind==='all');
+  const explicit=[...new Set(mentions.flatMap(m=>m.kind==='member'?[m.memberId]:[]))];
+  const available=(db.prepare(`SELECT pm.id FROM room_members rm JOIN project_members pm ON pm.id=rm.member_id
+    WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent' ORDER BY pm.id`).all(snapshot.roomId,snapshot.projectId) as {id:string}[]).map(m=>m.id);
+  if(!all&&explicit.some(id=>!available.includes(id)))throw new DaemonCommandError('MEMBER_UNAVAILABLE','请选择本房间可用的 AI；输入保留');
+  const recipientIds=all?[...snapshot.eligibleMemberIds]:explicit.length?explicit:[owner&&snapshot.eligibleMemberIds.includes(owner)?owner:snapshot.eligibleMemberIds[0]].filter((id):id is string=>Boolean(id));
+  if(!recipientIds.length)throw new DaemonCommandError(snapshot.memberIds.length?'MEMBER_DISABLED':'MEMBER_UNAVAILABLE',snapshot.memberIds.length?'本串没有可用的 AI，请启用成员或添加其他 AI':'请先为本串添加一位可用的 AI');
+  if(recipientIds.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
+  const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
+  const memberId=owner&&recipientIds.includes(owner)?owner:roomCoordinator&&recipientIds.includes(roomCoordinator)?roomCoordinator:recipientIds[0]!;
+  const inviteIds=all?[]:explicit.filter(id=>!snapshot.memberIds.includes(id));
+  const candidateIds=!all&&!explicit.length?snapshot.eligibleMemberIds:recipientIds;
+  const route:TopLevelRouteOutcome=recipientIds.length===1&&candidateIds.length===1?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}:{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]};
+  return{memberId,recipientIds,candidateIds,inviteIds,route,membershipVersion:snapshot.version};
+}
+
+export interface GeneralThreadReply extends ConversationReplyRow {
+  isGeneral:true;routeJson:string;rosterJson:string;membershipVersion:string;
+  sourceDeliveryId:string|null;sourceTaskStatus:string;
+}
+
+export function assertThreadTaskReady(db:ZhongshuoDatabase,threadId:string){
+  const task=db.prepare(`SELECT t.id,t.status FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {id:string;status:string}|undefined;
+  if(!task)return;
+  if(task.status==='CANCELLED')throw new DaemonCommandError('TASK_STOPPED','该任务已停止，请明确选择新的工作；输入保留');
+  const blocked=assessTaskRedispatchReadiness(db,task.id,{queueOnly:true});
+  if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
+}
+
+/** Explicitly requesting an AI in a record thread creates its first task, not
+ * another human/root message. The old record and its local-only attachments
+ * remain untouched; the new request is the task input anchor. */
+export function createTaskForRecordThread(db:ZhongshuoDatabase,threadId:string,messageId:string,title:string,selection:ThreadReplySelection,reviewPolicy:'auto_deliver'|'user_review'){
+  const th=db.prepare('SELECT project_id,conversation_id,room_id,root_task_id FROM conversation_threads WHERE id=?').get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string|null};
+  if(th.root_task_id)return th.root_task_id;
+  const taskId=`task_${randomUUID()}`,number=(db.prepare('SELECT COALESCE(MAX(room_task_number),0)+1 n FROM tasks WHERE room_id=?').get(th.room_id) as {n:number}).n;
+  db.prepare(`INSERT INTO tasks(id,project_id,conversation_id,kind,room_id,conversation_thread_id,root_message_id,room_task_number,owner_member_id,title,status,review_policy,route_json)
+    VALUES(?,?,?,'room_task',?,?,?,?,?,?,'OPEN',?,?)`).run(taskId,th.project_id,th.conversation_id,th.room_id,threadId,messageId,number,selection.memberId,title,reviewPolicy,JSON.stringify(selection.route));
+  db.prepare('UPDATE conversation_threads SET root_task_id=?,revision=revision+1 WHERE id=? AND root_task_id IS NULL').run(taskId,threadId);
+  db.prepare('UPDATE messages SET task_id=? WHERE id=? AND thread_id=?').run(taskId,messageId,threadId);
+  snapshotTaskWriteAccess(db,taskId);
+  appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:th.project_id,conversationId:th.conversation_id,threadId,taskId,kind:'task.created',createdAt:Date.now(),payload:{source:'thread-message',messageId}});
+  return taskId;
+}
+
+/** Original task, anchor and older request envelopes are never rewritten. */
+export function enqueueThreadReply(db:ZhongshuoDatabase,threadId:string,messageId:string,inputSeq:number,selection:ThreadReplySelection,authorId:string){
+  const th=db.prepare(`SELECT th.project_id,th.conversation_id,th.room_id,th.root_task_id,t.stop_generation,t.status,t.current_delivery_id
+    FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string;stop_generation:number;status:string;current_delivery_id:string|null};
+  const roster=selection.candidateIds.map(memberId=>{
+    const member=db.prepare('SELECT display_name,description FROM project_members WHERE id=? AND project_id=?').get(memberId,th.project_id) as {display_name:string;description:string|null};
+    return{memberId,displayName:member.display_name,description:member.description,writeScope:snapshotConversationWriteAccess(db,th.root_task_id,process.env.ZS_RUNTIME??null,memberId)};
+  });
+  for(const id of selection.inviteIds)persistThreadMember(db,threadId,id,'add',authorId);
+  const source=db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1`).get(th.root_task_id) as {id:string}|undefined;
+  const writeScope=roster.find(m=>m.memberId===selection.memberId)!.writeScope;
+  const now=Date.now(),dispatchKey=`task:${th.root_task_id}:thread-reply:${messageId}`;
+  db.prepare(`INSERT INTO thread_reply_requests(message_id,project_id,conversation_id,thread_id,task_id,member_id,
+    source_turn_id,stop_generation,input_thread_seq,dispatch_key,route_json,roster_json,write_scope_json,membership_version,
+    source_delivery_id,source_task_status,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)`)
+    .run(messageId,th.project_id,th.conversation_id,threadId,th.root_task_id,selection.memberId,source?.id??null,th.stop_generation,inputSeq,dispatchKey,
+      JSON.stringify(selection.route),JSON.stringify(roster),writeScope,readThreadMembers(db,threadId).version,th.current_delivery_id,th.status,now,now);
+  enqueueOutbox(db,{dispatchKey,stopGenerationAtEnqueue:th.stop_generation});
+  // The request is queued independently; don't turn an accepted delivery into an
+  // unaccepted one or replace its version just because the user asks a question.
+  appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:th.project_id,conversationId:th.conversation_id,threadId,taskId:th.root_task_id,
+    kind:'thread.replyEnqueued',createdAt:now,payload:{messageId,memberId:selection.memberId,recipientIds:selection.recipientIds,dispatchKey}});
+  return dispatchKey;
+}
+
+export function threadReplyForDispatch(db:ZhongshuoDatabase,key:string):GeneralThreadReply|undefined {
+  const row=db.prepare(`SELECT q.message_id messageId,q.project_id projectId,q.conversation_id conversationId,q.thread_id threadId,q.task_id taskId,q.member_id memberId,
+    COALESCE(q.source_turn_id,'') sourceTurnId,q.input_thread_seq inputSeq,q.dispatch_key dispatchKey,q.status,q.write_scope_json writeScopeJson,
+    q.stop_generation sourceStopGeneration,th.room_id roomId,m.author_id rootAuthorId,q.route_json routeJson,q.roster_json rosterJson,
+    q.membership_version membershipVersion,q.source_delivery_id sourceDeliveryId,q.source_task_status sourceTaskStatus
+    FROM thread_reply_requests q JOIN conversation_threads th ON th.id=q.thread_id JOIN messages m ON m.id=th.anchor_message_id
+    WHERE q.dispatch_key=?`).get(key) as Omit<GeneralThreadReply,'isGeneral'>|undefined;
+  return row?{...row,isGeneral:true}:undefined;
+}
+
+export function threadReplyBlock(db:ZhongshuoDatabase,q:GeneralThreadReply,defaultKind:string|null,authorId?:string):{code:string;message:string}|null {
+  if(authorId&&authorId!==q.rootAuthorId)return{code:'FORBIDDEN',message:'这段对话不属于当前用户'};
+  const t=db.prepare(`SELECT t.project_id,t.conversation_id,t.conversation_thread_id,t.status,t.stop_generation,t.current_delivery_id,
+    th.root_task_id,th.status threadStatus,p.status projectStatus,r.archived_at FROM tasks t JOIN projects p ON p.id=t.project_id
+    JOIN conversation_threads th ON th.id=t.conversation_thread_id JOIN rooms r ON r.id=th.room_id WHERE t.id=?`).get(q.taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string;status:string;stop_generation:number;current_delivery_id:string|null;root_task_id:string;threadStatus:string;projectStatus:string;archived_at:number|null}|undefined;
+  if(!t||t.project_id!==q.projectId||t.conversation_id!==q.conversationId||t.conversation_thread_id!==q.threadId||t.root_task_id!==q.taskId)return{code:'THREAD_SCOPE_MISMATCH',message:'对话目标已变化；输入保留'};
+  if(t.threadStatus!=='open'||t.projectStatus!=='active'||t.archived_at!=null)return{code:'CONVERSATION_UNAVAILABLE',message:'项目或对话已归档；输入保留'};
+  if(t.status==='CANCELLED'||t.stop_generation!==q.sourceStopGeneration)return{code:'TASK_STOPPED',message:'这条请求之前的任务已停止；不会自动继续'};
+  // This is an ordinary user message, not task.review/executeRework. Its target
+  // and accepted facts stay frozen, while execution assembles the then-current
+  // factual delivery in its immutable input bundle. A preceding queued task's
+  // natural delivery must not make the user send the same question again.
+  const recovery=assessTaskRedispatchReadiness(db,q.taskId,{queueOnly:true});if(recovery)return recovery;
+  const eligible=readThreadMembers(db,q.threadId).eligibleMemberIds;
+  const roster=JSON.parse(q.rosterJson) as ThreadReplyScopeMember[];
+  if(roster.some(m=>!eligible.includes(m.memberId)))return{code:'MEMBER_UNAVAILABLE',message:'本次请求中的 AI 已移出或停用，请调整成员后重新发送'};
+  try{for(const member of roster)effectiveTaskWriteAccess(db,q.taskId,member.memberId,defaultKind,member.writeScope??undefined);}
+  catch(error){return{code:'CONFIGURATION_CHANGED',message:`AI 配置已变化，请确认配置后重新发送；${(error as Error).message}`};}
+  return null;
+}
+
+export function setThreadReplyState(db:ZhongshuoDatabase,messageId:string,status:string,error?:string,runId?:string,turnId?:string){
+  db.prepare(`UPDATE thread_reply_requests SET status=?,error_message=?,run_id=COALESCE(run_id,?),turn_id=COALESCE(?,turn_id),updated_at=?
+    WHERE message_id=? AND status IN ('queued','running',?)`).run(status,error?.slice(0,500)??null,runId??null,turnId??null,Date.now(),messageId,status);
+}
+
+export function settleThreadReplyForTurn(db:ZhongshuoDatabase,turnId:string,status:string,error?:string){
+  const q=db.prepare(`SELECT q.message_id,q.run_id FROM thread_reply_requests q WHERE q.turn_id=? OR q.run_id IN(
+    SELECT coordination_run_id FROM coordination_integration_attempts WHERE execution_run_id=(SELECT run_id FROM agent_turns WHERE id=?))`).get(turnId,turnId) as {message_id:string;run_id:string}|undefined;
+  if(!q)return;
+  const coordination=db.prepare('SELECT state FROM coordination_runs WHERE run_id=?').get(q.run_id) as {state:string}|undefined;
+  if(status==='SUCCEEDED'&&coordination&&!['completed','blocked','cancelled'].includes(coordination.state))return;
+  setThreadReplyState(db,q.message_id,status==='SUCCEEDED'?'succeeded':status==='CANCELLED'?'cancelled':status==='UNKNOWN'?'unknown':'failed',error??(status==='SUCCEEDED'?undefined:status==='UNKNOWN'?'发送结果待确认，原请求保留':status==='CANCELLED'?'回复已停止':'AI 未完成回复，请查看任务详情'));
+}

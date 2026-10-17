@@ -11,9 +11,11 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import { coordinationRoomMembers, freezeCoordinationScope } from './coordination.ts';
-import { conversationFacts, conversationBlock, enqueueConversationReply } from './conversationReplies.ts';
 import {readThreadMembers,persistThreadMember,readThreadProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
+import {DaemonCommandError} from './commandError.ts';
+import {selectThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
+export {DaemonCommandError} from './commandError.ts';
 import {fileWriteCapability} from '../adapter/writeCapability.ts';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { runCommand } from '../persistence/commandGateway.ts';
@@ -140,18 +142,6 @@ export interface DaemonCommandDeps {
   scheduleShutdown?: () => void;
 }
 
-export class DaemonCommandError extends Error {
-  readonly code: string;
-  readonly operationPending: boolean;
-  readonly operationKnownRejected: boolean;
-  constructor(code: string, message: string, operationPending = false, operationKnownRejected = false) {
-    super(message);
-    this.name = 'DaemonCommandError';
-    this.code = code;
-    this.operationPending = operationPending;
-    this.operationKnownRejected = operationKnownRejected;
-  }
-}
 
 function memberRuntimeInfo(db: ZhongshuoDatabase, memberId: string, readContext?: ImageCapabilityReadContext) {
   const binding = readMemberRuntimeBinding(db, memberId);
@@ -324,6 +314,7 @@ const messageSubmitParams = z.strictObject({
   attachmentRefs: z.array(z.string().min(1)).optional(),
   // 图片能力门（第二十九轮三）：omit-images=用户明确选择仅发送文字（注入如实注明图片未发送）。
   imageAck: z.literal('omit-images').optional(),
+  threadMemberVersion:z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // 表格注入范围（第二十九轮四）：artifactId → "Sheet1!A1:D20"；缺省=有界默认窗口（非全量）。
   attachmentRanges: z.record(z.string().min(1), z.string().min(1).max(200)).optional(),
 }).superRefine((p, ctx) => {
@@ -1273,7 +1264,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const items = rows.reverse().map((r) => ({ id: r.id, authorType: r.author_type, authorId: r.author_id, seq: r.thread_message_seq, body: JSON.parse(r.body_json) as { text: string }, createdAt: r.created_at }));
         // 消息附件（第二十七轮三：已发消息附件可点击预览——能力②闭环到页面）。
         attachMessageSummaries(deps.db, items);
-        const requestRows=(items.length?deps.db.prepare(`SELECT r.message_id,r.status,r.error_message,r.run_id,r.turn_id FROM conversation_reply_requests r JOIN messages m ON m.id=r.message_id
+        const requestRows=(items.length?deps.db.prepare(`SELECT r.message_id,r.status,r.error_message,r.run_id,r.turn_id FROM (SELECT message_id,project_id,conversation_id,task_id,thread_id,status,error_message,run_id,turn_id FROM conversation_reply_requests UNION ALL SELECT message_id,project_id,conversation_id,task_id,thread_id,status,error_message,run_id,turn_id FROM thread_reply_requests) r JOIN messages m ON m.id=r.message_id
           WHERE r.thread_id=? AND r.conversation_id=? AND r.project_id=m.project_id AND r.task_id=m.task_id AND r.thread_id=m.thread_id AND r.message_id IN (${items.map(()=>'?').join(',')})`).all(params.threadId,scope.conversation_id,...items.map(i=>i.id)):[]) as Array<{message_id:string;status:string;error_message:string|null;run_id:string|null;turn_id:string|null}>;
         const requestByMessage=new Map(requestRows.map(r=>[r.message_id,r]));
         for(const item of items){const r=requestByMessage.get(item.id);if(r)Object.assign(item,{replyExecution:{status:r.status,error:r.error_message,runId:r.run_id,turnId:r.turn_id}});}
@@ -1393,8 +1384,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (th?.conversation_id !== target.conversationId) throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '图片能力读取目标与线程归属不一致');
         }
         let members: string[] = []; let willDispatch = target.kind !== 'thread'; let direct = true;let routedMode:string|null=null;
-        const conversation=target.kind==='thread'?conversationFacts(deps.db,target.threadId):null;
-        if(conversation){willDispatch=true;members=[conversation.memberId];const blocked=conversationBlock(deps.db,conversation,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:blocked.message,supported:false,members:[]}});}
+        if(target.kind==='thread'){
+          try{
+            assertThreadTaskReady(deps.db,target.threadId);
+            const selected=selectThreadRecipients(deps.db,target.threadId,params.mentions as MentionNode[]);
+            willDispatch=true;members=selected.candidateIds;routedMode=selected.route.kind==='dispatch'?selected.route.mode:null;
+          }catch(error){return withCommandId({ok:true,data:{willDispatch:true,blocked:true,modificationAuthorized:false,reason:(error as Error).message,supported:false,members:[]}});}
+        }
         if (target.kind === 'dm') {
           const peer = dmPeerOf(deps.db, target.conversationId); if (peer != null) members = [peer.principal_id];
         } else if (target.kind === 'room_root') {
@@ -1446,9 +1442,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               return audience?[audience.principal_id]:[];
             }
             if(params.target.kind==='thread'){
-              const f=conversationFacts(deps.db,params.target.threadId);
-              if(f){const blocked=conversationBlock(deps.db,f,process.env.ZS_RUNTIME??null,deps.localUserId);if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);}
-              return f?[f.memberId]:[];
+              assertThreadTaskReady(deps.db,params.target.threadId);
+              return selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion).candidateIds;
             }
             const target=params.target;
             const route=resolveTopLevelRoute({intent:'default',mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
@@ -1459,6 +1454,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             return [...members].sort();
           };
           const coordinator=params.target.kind==='room_root'?coordinatorOf(deps.db,params.target.roomId):null;
+          const preparedThreadSelection=params.target.kind==='thread'?JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion)):null;
           const members=preparationMembers();
           const bindings=members.map(memberId=>({memberId,runtime:resolveMemberRuntime(deps.db,memberId,process.env.ZS_RUNTIME??null)}));
           for(const {memberId,runtime} of bindings){
@@ -1467,6 +1463,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           submitReplayGuard();
           if(params.target.kind==='room_root'&&coordinator!==coordinatorOf(deps.db,params.target.roomId))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间协调成员变化；未提交，草稿保留');
+          if(params.target.kind==='thread'&&preparedThreadSelection!==JSON.stringify(selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion)))throw new DaemonCommandError('CONFIGURATION_NOT_READY','准备期间本串收件人已变化，请确认名单后再发送；草稿保留');
           if(JSON.stringify(members)!==JSON.stringify(preparationMembers())||bindings.some(b=>JSON.stringify(b.runtime)!==JSON.stringify(resolveMemberRuntime(deps.db,b.memberId,process.env.ZS_RUNTIME??null))))throw new DaemonCommandError('CONFIGURATION_NOT_READY','配置准备期间房间名单或成员配置变化；未提交，草稿保留');
 
         }
@@ -1483,7 +1480,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               if (thread == null || thread.project_id !== params.target.projectId || thread.conversation_id !== params.target.conversationId) {
                 throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '线程目标与项目/会话不一致，拒绝提交（§4.5）');
               }
-              if (thread.root_task_id == null) {
+              if (thread.root_task_id == null && params.intent==='record_only') {
                 // 记录串（E1）：讨论线程永不唤醒 agent——默认仍是保存记录（图片门不适用：零派发）。
                 const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
                 assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
@@ -1503,16 +1500,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               }
               // 任务串：M0 阶段人类跟进先落消息并标记待处理（task.steer 的完整调度
               // 由 DEV-08/09 扩展；此处持久化目标+内容，不新建根任务、不假装已派发）。
-              const ordinary=conversationFacts(deps.db,thread.id);
-              const dispatchOrdinary=params.intent==='default'&&ordinary!=null;
-              if(params.intent==='default'&&!ordinary&&deps.db.prepare("SELECT 1 FROM conversation_reply_requests WHERE task_id=?").get(thread.root_task_id)&&deps.db.prepare("SELECT 1 FROM task_deliveries WHERE task_id=?").get(thread.root_task_id))throw new DaemonCommandError('CONVERSATION_BECAME_WORK','这段对话已产生工作交付；请明确选择仅记录保存意见，再从原交付执行返工。输入保留');
-              if(dispatchOrdinary){
-                const blocked=conversationBlock(deps.db,ordinary,process.env.ZS_RUNTIME??null,deps.localUserId);
-                if(blocked)throw new DaemonCommandError(blocked.code,blocked.message);
-                if(params.mentions.some(m=>m.kind!=='member'||m.memberId!==ordinary.memberId))throw new DaemonCommandError('CONVERSATION_TARGET_CHANGED','普通续问绑定原执行成员，不能静默更换成员');
-              }
+              const selection=params.intent==='default'?selectThreadRecipients(deps.db,thread.id,params.mentions as MentionNode[],params.threadMemberVersion):undefined;
+              if(params.intent==='default')assertThreadTaskReady(deps.db,thread.id);
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
-              assertImageGate(resolvedAtts,dispatchOrdinary,params.imageAck,params.body,ordinary!=null&&memberImageCapability(deps.db,ordinary.memberId).status==='supported');
+              assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
               assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
               const message = insertThreadMessage(deps.db, {
                 projectId: params.target.projectId,
@@ -1527,7 +1518,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               });
               attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
               deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent',?) WHERE id=?").run(params.intent,message.messageId);
-              if(dispatchOrdinary){const dispatchKey=enqueueConversationReply(deps.db,ordinary,message.messageId,message.threadMessageSeq);return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey};}
+              if(selection){
+                if(!thread.root_task_id)thread.root_task_id=createTaskForRecordThread(deps.db,thread.id,message.messageId,taskTitleOf(params.body,resolvedAtts.map(a=>a.displayName)),selection,reviewPolicyOf(deps.db,target.projectId));
+                const dispatchKey=enqueueThreadReply(deps.db,thread.id,message.messageId,message.threadMessageSeq,selection,deps.localUserId);
+                return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey};
+              }
               return { ...message, disposition: 'none' as const, taskId: thread.root_task_id, followUpRecorded: true };
             })();
           }

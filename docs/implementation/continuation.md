@@ -6,6 +6,10 @@
 
 人类在审阅会话01a0f257-16b0-7ba2-a9b4-7a3e5aed6b79明确说“开始这一轮吧”，已通过read_thread核对原userMessage。权威范围见 [R87完整任务书](r87-product-usability-plan-20261017.md)；原方案“尚未实施”是历史状态，现已授权持续完成施工、真实验收及最终集中交付。唯一产品写入方为本会话，审阅方只读，不启新代理。
 
+**2026-10-17 09:25 阶段进度（优先于下方早期记录）**：7d01c04后普通thread_reply_requests正式生产者/消费者接通，原task owner/route/旧信封不改；记录串显式新AI请求可启动首task，不自动发送原private record。真正消息交接新增054 coordination_messages，handoffs原成员→同伴→其他获准成员→回原来源，正式worker A→B→C→B→A夹具通过；给协调者回复进入唯一最终integration。运行真实身份/上游文本与版本/预算/只读角色/停止配置守卫保留。无效结果不误报completed、UNKNOWN blocked不重发；成员移除和会话在途停止均0新增startTurn。主/界面types过，4组78用例及新增3停止边界通过；阶段组合复测及提交接下去执行。具体见r87-dialogue-execution-design。**真实模型仍0，P1、主池多@默认自然AUTO及高级明确研讨、最终新包/空白首用DOCX或PDF两模型路线均未完成，继续推进，不交付旧包冒充。** 当前可用空间32.5GiB，未清理用户文件。增量lint显示既有commands/Room等23项，未宣称全过。
+
+### 历史：01:07早期施工快照
+
 **01:07阶段进度**：standing运输阶段提交4e9f6e6、独立精确快照8格复证pass（0模型）。本串正式thread.members.change已接入已有followers表，读thread.get返回统一members/version/eligible集合，原执行者自动在串，实际coordination_steps子成员由权威绑定恢复（不取整房间候选），显式removed覆盖旧证据；CAS支持ABA、同号重放、归档/跨项目拒绝。ThreadMembers真实添加/移出、Composer线程候选仅取本串eligible接线完成。4个正式名单用例过，尚未真实窗口/派发链验收；旧默认续问限制仍待下一步成组更换，不能宣称@发送已修完。
 
 追加迁移053为新消息级路由请求与可见运行进度提供新语义版本门，001–052未改，不升级用户原根。Claude完整自然assistant块转message.progress，控制对象/残缺JSON不进公开进度；worker只接受当前未停止/未终态turn，按turn保存一个最新有界快照，thread.get把根/真实子turn进展交回复区，终态隐藏，不加假聊天回复/计数。3文件48项（含原CLI运输）通过；首进度fixture漏终态导致测试超时已如实纠正，非真实模型故障。当前新thread_reply_requests表尚未用于普通续问；下一步以每条用户消息冻结收件人/本串范围/配置/原交付身份，允许普通串自然进入工作及多成员，原task/消息不改写。之后开放真实结构化handoff消息、角色提示一致性，P1全部范围和最终新手首用同包仍未验收。采用含可发现问题的合成DOCX或PDF作为最终报告材料，不用greeting代替。

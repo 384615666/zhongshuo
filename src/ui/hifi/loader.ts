@@ -1217,6 +1217,7 @@ export function buildThreadEnvelope(commandId: string, threadId: string, body: s
     params: {
       target: { kind: 'thread', projectId: thread?.projectId ?? s.activeProjectId, conversationId: thread?.conversationId ?? '', threadId },
       body, intent, mentions: mentionPayload(opts?.mentionIds??[]),
+      ...(s.threadMemberships[threadId]?{threadMemberVersion:s.threadMemberships[threadId].version}:{}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
       ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),

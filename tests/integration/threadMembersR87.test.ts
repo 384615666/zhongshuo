@@ -24,10 +24,128 @@ async function fixture(){
   const root=await cmd<{threadId:string;taskId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'你好',intent:'default',mentions:[{kind:'member',memberId:ids[0]}]});
   const get=async()=>(await cmd<{members:ThreadMembersSnapshot}>('thread.get',{threadId:root.threadId})).members;
   const change=(memberId:string,action:'add'|'remove',expectedVersion:string)=>({projectId,threadId:root.threadId,memberId,action,expectedVersion});
-  return{file,db,raw,cmd,get,change,ids,projectId,room,root};
+  return{dir,file,db,raw,cmd,get,change,ids,projectId,room,root};
 }
 
 describe('R87 durable thread participants, formal commands, zero inference',()=>{
+  it('an explicit AI request can start in a record thread without resending its private record or duplicating the root',async()=>{
+    const f=await fixture();try{
+      const record=await f.cmd<{threadId:string;messageId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'PRIVATE_RECORD_ONLY',intent:'record_only',mentions:[]});
+      const before=(await f.cmd<{members:ThreadMembersSnapshot}>('thread.get',{threadId:record.threadId})).members;
+      await f.cmd('thread.members.change',{projectId:f.projectId,threadId:record.threadId,memberId:f.ids[0],action:'add',expectedVersion:before.version});
+      const sent=await f.cmd<{taskId:string;messageId:string}>('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:record.threadId},body:'这是新的公开问题',intent:'default',mentions:[]});
+      const finish:FakeTurnScript=[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer:'这是新问题的回答',changeSummary:'这是新问题的回答',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}];
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>finish}),leaseOwner:'r87-record',appDataDir:f.dir});
+      await worker.runOnce();await worker.runOnce();
+      const bundle=f.db.prepare('SELECT included_refs_json FROM context_bundles c JOIN agent_turns a ON a.id=c.turn_id JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=?').get(sent.taskId) as {included_refs_json:string};
+      expect(bundle.included_refs_json).toContain('这是新的公开问题');expect(bundle.included_refs_json).not.toContain('PRIVATE_RECORD_ONLY');
+      expect(f.db.prepare('SELECT task_id FROM messages WHERE id=?').get(record.messageId)).toEqual({task_id:null});
+      expect(f.db.prepare('SELECT anchor_message_id FROM conversation_threads WHERE id=?').get(record.threadId)).toEqual({anchor_message_id:record.messageId});
+      expect(f.db.prepare('SELECT count(*) n FROM tasks').get()).toEqual({n:2});
+    }finally{f.db.close();}
+  });
+  it('hello -> invite B -> thread all routes only A/B, hands the actual attached report to B, and integrates in the same task',async()=>{
+    const f=await fixture();try{
+      const finish=(answer:string,extra:Record<string,unknown>={}):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...extra})}}];
+      const scripts=[finish('你好！'),finish('请同伴核对表格',{responseKind:'work',handoffs:[{toMemberId:f.ids[1],purpose:'review',message:'请实际读取附上的合成报告，核实总额与明细，给我具体问题以便汇总。'}]}),finish('总额100与明细40+30=70不一致',{responseKind:'work',handoffs:[{toMemberId:f.ids[0],purpose:'reply',message:'我已核对报告，明细合计70而报告总额100，请汇总这个差异和修正建议。'}]}),finish('两位已核对，报告总额需要修正',{responseKind:'work'})];
+      let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-thread-all',appDataDir:f.dir});
+      await worker.runOnce();
+      const members=await f.get();const added=await f.cmd<ThreadMembersSnapshot>('thread.members.change',f.change(f.ids[1]!,'add',members.version));
+      const uploaded=await f.cmd<{attachmentId:string}>('attachment.uploadText',{conversationId:f.room.conversationId,filename:'合成报告.txt',content:'报告总额100；项目甲40，项目乙30。'});
+      const sent=await f.cmd<{messageId:string;taskId:string}>('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对这份报告并汇总意见',intent:'default',mentions:[{kind:'all'}],threadMemberVersion:added.version,attachmentRefs:[uploaded.attachmentId]});
+      expect(sent.taskId).toBe(f.root.taskId);
+      const queued=f.db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE message_id=?').get(sent.messageId) as {route_json:string;roster_json:string};
+      expect(JSON.parse(queued.route_json)).toMatchObject({mode:'AUTO',frozenMemberIds:[...added.memberIds]});
+      expect((JSON.parse(queued.roster_json) as Array<{memberId:string}>).map(m=>m.memberId)).not.toContain(f.ids[2]);
+      for(let i=0;i<8&&await worker.runOnce();i++){ /* formal bounded pump */ }
+      expect(index).toBe(4);
+      expect(f.db.prepare('SELECT DISTINCT member_id FROM agent_turns ORDER BY member_id').all()).toEqual([f.ids[0],f.ids[1]].sort().map(member_id=>({member_id})));
+      const bundle=f.db.prepare('SELECT c.included_refs_json FROM context_bundles c JOIN agent_turns a ON a.id=c.turn_id WHERE a.member_id=?').get(f.ids[1]) as {included_refs_json:string};
+      expect(JSON.parse(bundle.included_refs_json).attachments).toEqual(expect.arrayContaining([expect.objectContaining({filename:'合成报告.txt',text:'报告总额100；项目甲40，项目乙30。'})]));
+      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(sent.messageId)).toEqual({status:'succeeded'});
+      const history=await f.cmd<{items:Array<{authorId:string;body:{text:string}}>} >('thread.history',{threadId:f.root.threadId});
+      expect(history.items.some(m=>m.authorId===f.ids[1]&&m.body.text.includes('40+30'))).toBe(true);
+      expect(f.db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(f.root.taskId)).toMatchObject({current_delivery_id:expect.any(String)});
+      expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
+      const exchanges=f.db.prepare('SELECT source_member_id,target_member_id,body,status,target_turn_id FROM coordination_messages ORDER BY created_at,id').all() as Array<{source_member_id:string;target_member_id:string;body:string;status:string;target_turn_id:string}>;
+      expect(exchanges).toHaveLength(2);expect(exchanges.every(m=>m.status==='completed'&&m.target_turn_id)).toBe(true);
+      expect(exchanges.map(m=>[m.source_member_id,m.target_member_id])).toEqual([[f.ids[0],f.ids[1]],[f.ids[1],f.ids[0]]]);
+      const integrated=f.db.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get() as {included_refs_json:string};
+      expect(integrated.included_refs_json).toContain('明细合计70而报告总额100');
+    }finally{f.db.close();}
+  });
+  it.each(['invalid-output','unknown','provider-failure'] as const)('a receiver %s cannot be marked as a completed message or automatically retried',async failure=>{
+    const f=await fixture();try{
+      const finish=(extra:Record<string,unknown>={}):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer:'请核对数字',changeSummary:'核对',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...extra})}}];
+      let index=0;const scripts:FakeTurnScript[]=[finish(),finish({handoffs:[{toMemberId:f.ids[1],purpose:'review',message:'请核对明细总计。'}]}),failure==='invalid-output'?[{kind:'event',event:{kind:'turn.completed',finalText:'{"schemaVersion":"task-complete-v1","unexpected":true}'}}]:[{kind:'event',event:{kind:'turn.failed',code:failure==='unknown'?'INTERRUPTED':'PROVIDER_ERROR',message:'isolated receiver failure',retryable:false}}]];
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-failed-message',appDataDir:f.dir});
+      await worker.runOnce();
+      await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      await worker.runOnce();await worker.runOnce();
+      const message=f.db.prepare('SELECT status,error_message,target_delivery_id,target_turn_id FROM coordination_messages').get() as {status:string;error_message:string|null;target_delivery_id:string|null;target_turn_id:string};
+      expect(message).toMatchObject({status:'blocked',target_delivery_id:null,error_message:expect.any(String)});
+      const turn=f.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(message.target_turn_id);
+      expect(turn).toEqual({status:failure==='unknown'?'UNKNOWN':'FAILED'});
+      for(let i=0;i<3;i++)await worker.runOnce();
+      expect(index).toBe(3);expect(f.db.prepare('SELECT count(*) n FROM coordination_messages').get()).toEqual({n:1});
+    }finally{f.db.close();}
+  });
+  it.each(['foreign-recipient','duplicate','self-echo','child-write-escalation'] as const)('rejects an actual %s proposal without dispatching it',async bad=>{
+    const f=await fixture();try{
+      const finish=(handoffs:unknown[]=[]):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer:'核对请求',changeSummary:'核对请求',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs})}}];
+      const valid={toMemberId:f.ids[1],purpose:'review',message:'请核对总额。'};
+      const invalid=bad==='foreign-recipient'?[{...valid,toMemberId:f.ids[2]}]:bad==='duplicate'?[valid,valid]:bad==='self-echo'?[{...valid,toMemberId:f.ids[0]}]:[{toMemberId:f.ids[0],purpose:'implement',message:'请修改项目文件。'}];
+      const scripts=bad==='child-write-escalation'?[finish(),finish([valid]),finish(invalid)]:[finish(),finish(invalid)];let index=0;
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-invalid-message',appDataDir:f.dir});
+      await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      for(let i=0;i<6;i++)await worker.runOnce();
+      expect(index).toBe(scripts.length);
+      expect(f.db.prepare('SELECT status FROM agent_turns ORDER BY rowid DESC LIMIT 1').get()).toEqual({status:'FAILED'});
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_messages').get()).toEqual({n:bad==='child-write-escalation'?1:0});
+      expect(f.db.prepare('SELECT 1 FROM agent_turns WHERE member_id=?').get(f.ids[2])).toBeUndefined();
+    }finally{f.db.close();}
+  });
+  it('a receiver can ask a third authorized peer and receive its actual reply before replying to the coordinator',async()=>{
+    const f=await fixture();try{
+      const finish=(answer:string,handoffs:unknown[]=[]):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs})}}];
+      const scripts=[finish('你好'),finish('请乙核对',[{toMemberId:f.ids[1],purpose:'review',message:'请核对明细总额。'}]),finish('请丙查原始表',[{toMemberId:f.ids[2],purpose:'ask',message:'请核实原始明细是40和30吗？'}]),finish('原始明细确认40和30',[{toMemberId:f.ids[1],purpose:'reply',message:'我核对原表，40和30合计70。'}]),finish('已收到丙实际核对结果',[{toMemberId:f.ids[0],purpose:'reply',message:'丙已核实明细，正确总额是70。'}]),finish('三位核对后建议总额改为70')];
+      let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-peer-chain',appDataDir:f.dir});
+      await worker.runOnce();for(const member of f.ids.slice(1))await f.cmd('thread.members.change',f.change(member!,'add',(await f.get()).version));
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对明细',intent:'default',mentions:[{kind:'all'}]});
+      for(let i=0;i<12;i++)await worker.runOnce();
+      expect(index).toBe(6);
+      const messages=f.db.prepare('SELECT source_member_id,target_member_id,status,target_turn_id FROM coordination_messages ORDER BY rowid').all() as Array<{source_member_id:string;target_member_id:string;status:string;target_turn_id:string}>;
+      expect(messages.map(m=>[m.source_member_id,m.target_member_id])).toEqual([[f.ids[0],f.ids[1]],[f.ids[1],f.ids[2]],[f.ids[2],f.ids[1]],[f.ids[1],f.ids[0]]]);
+      expect(messages.every(m=>m.status==='completed'&&m.target_turn_id)).toBe(true);
+      const secondB=f.db.prepare('SELECT c.included_refs_json FROM context_bundles c JOIN agent_turns a ON a.id=c.turn_id WHERE a.member_id=? ORDER BY a.rowid DESC LIMIT 1').get(f.ids[1]) as {included_refs_json:string};
+      expect(secondB.included_refs_json).toContain('我核对原表，40和30合计70');
+      expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
+    }finally{f.db.close();}
+  });
+  it.each(['before-dispatch','opening-session','removed-recipient'] as const)('%s does not wake a stopped or removed receiver',async boundary=>{
+    const f=await fixture();try{
+      const finish=(handoffs:unknown[]=[]):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'work',answer:'核对报告',changeSummary:'核对报告',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs})}}];
+      let index=0;const adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>index++===1?finish([{toMemberId:f.ids[1],purpose:'review',message:'请核对明细合计。'}]):finish()});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r87-message-boundary',appDataDir:f.dir});
+      await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      await worker.runOnce();
+      const rootRun=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
+      let opening:Promise<boolean>|undefined,release:(()=>void)|undefined;
+      if(boundary==='opening-session'){
+        const barrier=new Promise<void>(resolve=>{release=resolve;});const original=adapter.openSession.bind(adapter);let entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});
+        adapter.openSession=async input=>{entered();await barrier;return original(input);};opening=worker.runOnce();await ready;
+      }
+      if(boundary==='removed-recipient')await f.cmd('thread.members.change',f.change(f.ids[1]!,'remove',(await f.get()).version));
+      else await f.cmd('task.stop',{taskId:f.root.taskId,targetRunId:rootRun.run_id,expectedStopGeneration:0});
+      release?.();if(opening)await opening;
+      for(let i=0;i<4;i++)await worker.runOnce();
+      expect(index).toBe(2);expect(adapter.startTurnLog).toHaveLength(2);
+      expect(f.db.prepare('SELECT status FROM coordination_messages').get()).toEqual({status:boundary==='removed-recipient'?'blocked':'cancelled'});
+    }finally{f.db.close();}
+  });
   it('shows factual natural progress while running, suppresses control JSON, and stops showing it at terminal',async()=>{
     const f=await fixture();try{
       const script:FakeTurnScript=[

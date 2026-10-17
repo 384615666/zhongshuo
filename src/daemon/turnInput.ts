@@ -119,6 +119,7 @@ export interface AssembledTurnInput {
   allowImages?: boolean;
   coordinationNote?: string;
   coordination?:{phase:'planning'|'child'|'integration';runId:string|null;role:string};
+  communicationContract?:TurnBundleEnvelope['communicationContract'];
   writeAccess?: ReturnType<typeof effectiveTaskWriteAccess>;
   task: AssemblyTaskRef;
   identity: AssemblyIdentity;
@@ -236,7 +237,10 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   const includedMessages = filtered.value.included.filter((r) => r.kind === 'message');
 
   // 模板选择（程序表）：M0 仅 DIRECT/executor/stage_work。
-  const instruction = selectStageInstruction({ mode: 'DIRECT', role: 'executor', stage: null, turnPurpose: 'stage_work' });
+  const mode=input.coordination&&input.coordination.phase!=='child'?'AUTO':'DIRECT';
+  const role=input.coordination&&input.coordination.phase!=='child'?'coordinator':'executor';
+  const stage=input.coordination?`coordination.${input.coordination.phase}`:null;
+  const instruction = selectStageInstruction({ mode, role, stage, turnPurpose: 'stage_work' });
   if (!instruction.ok) return instruction;
 
   const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
@@ -314,10 +318,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       resultKey: `result_${input.turnId}`,
       progressAllowed: true,
     },
-    communicationContract: {
-      mentionEnabled: false,
-      disabledReason: input.coordination?'本轮由正式分工合同交接；文本提及不会重新派发':'E11 提交契约与阶段允许表未完成（规格 §4.4.1）',
-    },
+    communicationContract: input.communicationContract??{mentionEnabled:false,disabledReason:'本条只请求当前成员回应'},
   };
 
   // 信封 schema 校验（缺必填/多余字段在此拦下，不输出半成品输入包）。

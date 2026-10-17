@@ -541,7 +541,7 @@ export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[
 export interface PendingSendEnvelope {
   commandId: string;
   method: 'message.submit';
-  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[] };
+  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[];threadMemberVersion?:string };
   targetLabel: string;
   at: number;
   /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */

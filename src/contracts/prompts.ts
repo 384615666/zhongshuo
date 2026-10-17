@@ -15,8 +15,8 @@ import { canonicalJson } from './common.ts';
 import { domainErr, domainOk } from './errors.ts';
 import type { DomainResult } from './errors.ts';
 
-export const STANDING_PROMPT_VERSION = 'zs-standing-v0.1.1';
-export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.3';
+export const STANDING_PROMPT_VERSION = 'zs-standing-v0.1.2';
+export const TURN_BUNDLE_VERSION = 'zs-turn-v0.1.4';
 
 // ---------- 层 A：常驻提示词模板（规格 §3 全文照录） ----------
 
@@ -50,14 +50,14 @@ export const STANDING_PROMPT_TEMPLATE = `你是「{{memberDisplayName}}」（成
 ## 回复目的地
 
 - 所有回复、进度与成果都回到当前任务线程（{{threadId}}）。回复时复用输入头给出的目标，不要自行更换房间或线程；换目标会被服务端拒绝，这不是可以协商的判断。
-- 需要本任务其他参与成员接手、复核或答复时，使用本轮 communicationContract 指定的结构化 mention 提交方式，填写目标 memberId 与具体请求。只有 daemon 确认已接受调度才能称为已唤醒；文本 @ 本身不作为已派发证据。契约未开放时报告协作需求，不猜测命令或参数。DIRECT 扩员始终走 request_participant 提案。
+- 需要本任务其他参与成员接手、复核或答复时，使用本轮 communicationContract 指定的结构化 mention 提交方式，填写目标 memberId 与具体请求。只有 daemon 确认已接受调度才能称为已唤醒；文本 @ 本身不作为已派发证据。契约未开放时报告协作需求，不猜测命令或参数。只能选择本轮通信合同列出的成员；添加到当前串是用户或已授权协调者的明确操作，不因正文里的 @ 扩大范围。
 - 不参与其他任务的调度；只有输入包明确列出的授权跨任务引用可以作为本任务材料使用，不能沿引用扩读来源会话。
 
 ## 任务与交接
 
 - 任务由系统派发给你，不要尝试认领别人的任务或自行创建平行任务。
-- 认为无法独立完成、需要扩大参与范围时，提交 request_participant 提案等用户确认；提案被拒或未处理时，继续完成你能做的部分。
-- 分工、返工、扩大范围都走本轮输入给出的结构化提案契约；自然语言说"我已经分配给某某"不会产生任何实际分工。
+- 需要同伴时，使用本轮已开放的 handoffs 提交具体消息。程序会核收件人、权限与预算；在已授权名单内无需再让用户逐个确认。名单外成员先说明需要谁，不猜测命令、不声称已唤醒。
+- 分工与具体交接按本轮通信合同提交；返工依据用户明确要求及本轮版本。自然语言说"已经分配"不构成程序已接受的证据。
 
 ## 协作礼仪
 
@@ -295,10 +295,12 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     resultKey: z.string().min(1),
     progressAllowed: z.boolean(),
   }),
-  communicationContract: z.strictObject({
-    mentionEnabled: z.literal(false),
-    disabledReason: z.string(),
-  }),
+  communicationContract: z.discriminatedUnion('mentionEnabled',[
+    z.strictObject({mentionEnabled:z.literal(false),disabledReason:z.string()}),
+    z.strictObject({mentionEnabled:z.literal(true),submitVia:z.literal('final-result'),maxHandoffs:z.number().int().min(1).max(4),
+      members:z.array(z.strictObject({memberId:z.string(),displayName:z.string(),description:z.string().nullable()})).max(12),
+      allowedPurposes:z.array(z.enum(['ask','review','implement','reply'])).max(4),replyToMemberId:z.string().nullable()}),
+  ]),
   /**
    * 文件发现（第七轮：按既有授权合同）：程序侧提供的**项目范围文件清单**——§13.4 项目源码
    * 默认可读（同项目共享，含其他任务 applied 修改），§6.3 默认排除 VCS 内部/依赖缓存/构建
@@ -373,7 +375,9 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
     `（seq ${envelope.threadDigest.fromSeq}–${envelope.threadDigest.toSeq}${envelope.threadDigest.truncated ? '，已截断' : '，未截断'}）`,
   );
   lines.push('── 本轮指令 ──');
-  lines.push(DIRECT_EXECUTOR_INSTRUCTION);
+  const instruction=selectStageInstruction({mode:envelope.mode,role:envelope.you.role,stage:envelope.stage,turnPurpose:envelope.turnPurpose});
+  if(!instruction.ok)throw Error(instruction.error.message);
+  lines.push(instruction.value);
   lines.push('── 输出契约 ──');
   lines.push(
     `kind=${envelope.outputContract.kind}（${TASK_COMPLETE_SCHEMA_VERSION}）；submitVia=${envelope.outputContract.submitVia}；resultKey=${envelope.outputContract.resultKey}；进度消息：${envelope.outputContract.progressAllowed ? '允许' : '不允许'}`,
@@ -382,7 +386,7 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   lines.push(
     `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"直接回答用户的自然语言","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"]}`,
   );
-  lines.push('严格 schema：除上述字段外不得新增任何字段（未知键将被拒绝）；resultKey 必须逐字使用上方给定值。');
+  lines.push('严格 schema：除上述字段及本轮开放的 handoffs、规划阶段 coordinationPlan 外，不得新增字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
   lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 按用户实际问题回答：问候直接简短回应；孤立数字或“测试”简短确认或澄清，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
@@ -391,7 +395,10 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
     lines.push(`清单完整性：${envelope.fileDiscovery.integrityNote}`);
   }
   lines.push('── 协作接口 ──');
-  lines.push(`结构化 mention 未开放：${envelope.communicationContract.disabledReason}；可报告协作需求，不能宣称已唤醒`);
+  if(envelope.communicationContract.mentionEnabled){
+    lines.push('── 可用同伴与消息交接 ──',JSON.stringify(envelope.communicationContract));
+    lines.push('需要具体交接时，在最终对象 handoffs 数组提交 {toMemberId,message,purpose}。message 是给同伴的真实请求或答复，写清任务、材料及希望得到什么；普通文本 @ 不派发。无交接时 handoffs=[]。handoffs 和 coordinationPlan 不可同时提交；复杂依赖可用 coordinationPlan。程序接受后才算已排队，排队不代表同伴已读；同伴结果会带真实来源返回本串。不要为闲聊、收到或空闲创建往返。');
+  }else lines.push(`本轮不追加成员交接：${envelope.communicationContract.disabledReason}`);
   if (envelope.notes != null && envelope.notes.length > 0) {
     lines.push('── 附注 ──');
     for (const note of envelope.notes) lines.push(note);
@@ -410,9 +417,9 @@ function rosterLabel(status: string): string {
 
 // ---------- 阶段指令模板（规格 §4.3；M0 仅 DIRECT） ----------
 
-export const DIRECT_EXECUTOR_INSTRUCTION = `你是本任务唯一执行成员。按任务目标与约束完成工作；进度与成果都发回本线程。
+export const DIRECT_EXECUTOR_INSTRUCTION = `你负责回应这条消息。按用户目标与约束完成工作；进度与成果回到本线程，不冒充其他成员。
 - 权限档位与授权范围以输入头为准；需要修改但未获授权时，输出方案与所需授权，不要动手。
-- 需要帮手时提交 request_participant 提案（契约见输出节），等待用户确认；其他成员在确认前保持静默。
+- 需要同伴时只使用本轮开放的通信合同；未开放则说明需要什么帮助，不编造提案或命令。
 - 完成时按输出契约提交结果；代码类交付必须包含：变更摘要、文件列表、已执行验证、未执行验证及原因、残余问题。`;
 
 /** 模板选择程序表（开工契约 §7）：不匹配或缺少模板 → 组装失败，不降级渲染。 */
@@ -422,6 +429,9 @@ export function selectStageInstruction(input: {
   stage: string | null;
   turnPurpose: string;
 }): DomainResult<string> {
+  if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.planning')return domainOk('你负责协调这条请求。简单问题直接简短回答；复杂工作在获准名单内通过具体 handoffs 消息或 coordinationPlan 分工，最终汇总真实返回。本轮规划只读，涉及修改时交给已授权的实施步骤，不把当前角色只读说成整个任务不能执行。无需用户逐步确认已授权同伴；不向用户讲内部协议。');
+  if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.integration')return domainOk('你负责汇总已实际返回的同伴意见和成果。保留真实作者、条件、分歧及版本，回答用户的问题；必要修改仅按本轮有效权限和用户要求进行。本轮不再追加交接或生成新计划。');
+  if(input.turnPurpose==='stage_work'&&input.mode==='DIRECT'&&input.role==='executor'&&input.stage==='coordination.child')return domainOk('你在接手同伴的具体请求。先核实获准材料、实际文件与上游版本，再给有用答复；分析评审保持只读，实施按本轮权限。需要进一步核对时只向本轮获准成员交接，不扩大目标。回复交回来源成员并回到同一串，不冒充汇总者或其他成员。');
   if (input.mode === 'DIRECT' && input.role === 'executor' && (input.stage == null || input.stage === 'direct.work') && input.turnPurpose === 'stage_work') {
     return domainOk(DIRECT_EXECUTOR_INSTRUCTION);
   }

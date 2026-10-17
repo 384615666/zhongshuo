@@ -69,6 +69,7 @@ export async function requestStop(db: ZhongshuoDatabase, input: RequestStopInput
           db.prepare('UPDATE tasks SET stop_generation = ? WHERE id = ?').run(stopGeneration, task.id);
           stopCoordinationChildren(db,task.id);
           db.prepare("UPDATE conversation_reply_requests SET status='cancelled',error_message='用户已停止；这条排队续问未执行',updated_at=? WHERE task_id=? AND status='queued'").run(input.now,task.id);
+            db.prepare("UPDATE thread_reply_requests SET status='cancelled',error_message='用户已停止；这条排队消息未执行',updated_at=? WHERE task_id=? AND status='queued'").run(input.now,task.id);
           db.prepare(`UPDATE workflow_runs SET status = 'STOPPING' WHERE id = ? AND status IN ('QUEUED','RUNNING','WAITING')`).run(input.targetRunId);
           db.prepare(`UPDATE agent_turns SET status = 'STOPPING' WHERE run_id = ? AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT')`).run(input.targetRunId);
           appendDomainEvent(db, {

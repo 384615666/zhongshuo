@@ -1974,7 +1974,6 @@ function ThreadPanel({
         ) : null}
       </div>
 
-      {!isDiscussion ? (
         <Composer
           target={{ kind: 'thread', roomId: thread.roomId, threadId: thread.id, subtask: subtaskTarget }}
           draftKey={`thread:${thread.id}`}
@@ -2025,59 +2024,12 @@ function ThreadPanel({
             else confirmOutboundUnknown(draftKey, env);
             if (r.status === 'ok') {
               void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-              toast(r.data.disposition==='enqueued'?'已发送，等待原成员回复':'已保存跟进记录（未启动执行）', 'success');
+              toast(r.data.disposition==='enqueued'?'已发送，等待 AI 回复':'已保存记录', 'success');
               return { status: 'ok' };
             }
             return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
           })()}
         />
-      ) : (
-        /* 历史**记录串**（无任务的讨论串）：仍有独立回复历史，但永不唤醒成员。
-           2026-09-25 起它是"仅记录"的兼容例外：在里面回复默认仍是保存记录
-           （recordThread），不会因为删掉常驻切换就被静默变成一次 AI 调用。 */
-        <Composer
-          target={{ kind: 'thread', roomId: thread.roomId, threadId: thread.id }}
-          draftKey={`thread:${thread.id}`}
-          recordThread
-          insertText={composerInsert}
-          formalLimits={FORMAL_LIMITS}
-          attachmentUpload={entityConversationId !== '' ? { conversationId: entityConversationId } : undefined}
-          sendDisabledReason={
-            threadRoom?.archivedAt
-              ? '房间已归档 · 只读，不能发送新内容'
-              : threadRoom && s.projects.find((p) => p.id === threadRoom.projectId)?.archivedAt
-                ? '项目已归档 · 只读，不能发送新内容'
-                : threadRoom?.memberIds.length === 0
-                  ? '房间还没有成员，请先添加成员'
-                  : undefined
-          }
-          onRetrySend={(env) => retryUnknownSend(env).then((r) => {
-            if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }
-            return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
-          })}
-          onSend={(p): Promise<FormalSendOutcome> => (async () => {
-            const intent: 'record_only' = 'record_only';
-            const draftKey = `thread:${threadId}`;
-            const refs = attachmentRefsFromDraft(draftKey, intent);
-            if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            if (entityConversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-            const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
-            env.revAtSend = p.draftRev;
-            const staged = stageOutbound(draftKey, env);
-            if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
-            const r = await sendEnvelope(env);
-            if (r.status === 'ok') settleOutbound(draftKey, env, { recordThread: true });
-            else if (r.status === 'failed') dropOutbound(draftKey, env);
-            else confirmOutboundUnknown(draftKey, env);
-            if (r.status === 'ok') {
-              void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-              toast('已保存记录（不唤醒）', 'success');
-              return { status: 'ok' };
-            }
-            return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
-          })()}
-        />
-      )}
     </aside>
   );
 }

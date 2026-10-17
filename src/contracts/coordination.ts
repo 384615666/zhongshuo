@@ -15,6 +15,15 @@ export const coordinationPlanSchema = z.strictObject({
 });
 export type CoordinationPlan = z.infer<typeof coordinationPlanSchema>;
 
+/** Concrete messages proposed by the executing model; identities, recipients,
+ * permission and budgets are checked by the daemon before accepting a handoff. */
+export const memberHandoffSchema=z.strictObject({
+  toMemberId:z.string().min(1).max(160),
+  message:z.string().trim().min(1).max(7000),
+  purpose:z.enum(['ask','review','implement','reply']),
+});
+export type MemberHandoff=z.infer<typeof memberHandoffSchema>;
+
 /** Stable dependency order, independent of the model's array presentation order. */
 export function coordinationTopologicalSteps(plan:CoordinationPlan):CoordinationPlan['steps'] {
   const ordered:CoordinationPlan['steps']=[],visited=new Set<string>(),visiting=new Set<string>();

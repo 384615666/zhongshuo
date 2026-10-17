@@ -86,7 +86,7 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
   it('DIRECT/executor/stage_work → 模板命中', () => {
     const r = selectStageInstruction({ mode: 'DIRECT', role: 'executor', stage: null, turnPurpose: 'stage_work' });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.value).toContain('你是本任务唯一执行成员');
+    if (r.ok) expect(r.value).toContain('你负责回应这条消息');
   });
 
   it('AUTO/未知阶段/非 host 的 checkpoint → 未实现，组装失败（不降级渲染）', () => {
@@ -158,12 +158,25 @@ describe('敏感模式扫描（PP-03：渲染全文零命中）', () => {
   });
 });
 
+describe('R87 actual collaboration role instructions',()=>{
+  it.each([
+    ['AUTO','coordinator','coordination.planning','规划只读'],
+    ['DIRECT','executor','coordination.child','接手同伴的具体请求'],
+    ['AUTO','coordinator','coordination.integration','不再追加交接'],
+  ] as const)('%s/%s/%s selects the real role, without a conflicting sole executor instruction',(mode,role,stage,expected)=>{
+    const result=selectStageInstruction({mode,role,stage,turnPurpose:'stage_work'});
+    expect(result.ok).toBe(true);if(!result.ok)return;
+    expect(result.value).toContain(expected);expect(result.value).not.toContain('唯一执行成员');
+    expect(result.value).not.toContain('request_participant');
+  });
+});
+
 describe('信封 hash（PP-04 一致性基础）', () => {
   it('canonical 序列化：字段顺序无关 → 同一信封 hash 稳定', () => {
     const a = { b: 1, a: { d: 2, c: [3, 4] } };
     const b = { a: { c: [3, 4], d: 2 }, b: 1 };
     expect(canonicalJson(a)).toBe(canonicalJson(b));
-    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.3');
+    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.4');
     expect(computeTurnBundleHash.name).toBe('computeTurnBundleHash');
   });
 });
