@@ -19,7 +19,7 @@ export const taskCompleteSchema=z.strictObject({
 export type TaskComplete=z.infer<typeof taskCompleteSchema>;
 
 export function taskCompleteOutputSchema(resultKey:string,planning=false){
-  const common=taskCompleteSchema.omit({coordinationPlan:true}).extend({resultKey:z.literal(resultKey),answer:z.string(),responseKind:z.enum(['conversation','work'])});
+  const common=taskCompleteSchema.omit({coordinationPlan:true}).extend({resultKey:z.literal(resultKey),answer:z.string(),responseKind:z.enum(['conversation','work']),handoffs:z.array(memberHandoffSchema).max(4)});
   // Claude CLI validates draft-07; Codex shares the same closed object schema.
   return z.toJSONSchema(planning?common.extend({coordinationPlan:coordinationPlanSchema.nullable()}):common,{target:'draft-7'});
 }

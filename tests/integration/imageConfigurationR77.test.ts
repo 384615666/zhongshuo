@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveClaudeConfiguration } from '../../src/adapter/claude/configuration.ts';
-import { ClaudeCliAdapter, claudeLaunchIdentity } from '../../src/adapter/claude/cliAdapter.ts';
+import { CLAUDE_ADAPTER_VERSION, ClaudeCliAdapter, claudeLaunchIdentity } from '../../src/adapter/claude/cliAdapter.ts';
 import { claudeCertificationMismatches } from '../../src/daemon/imageCapability.ts';
 import certification from '../../src/adapter/image-certification-r76.json' with {type:'json'};
 
@@ -64,14 +64,16 @@ describe('R77 configuration identity: no model calls, immutable certificate', ()
     writeFileSync(f.settings,JSON.stringify({env:{CLAUDE_CONFIG_DIR:join(f.root,'redirected')}}));expect(resolveClaudeConfiguration(f.cwd,[],f.env).reason).toContain('重定向');f.save();
     writeFileSync(join(f.user,'managed-settings.json'),JSON.stringify({permissions:{defaultMode:'auto'}}));expect(resolveClaudeConfiguration(f.cwd,[],f.env).reason).toContain('托管');
   });
-  it('matching immutable certificate is positive; CLI/model/permission/endpoint changes fail; restoration passes', () => {
+  it('the frozen R76 certificate stays invalid after the native standing adapter version changed; config restoration does not forge recertification',()=>{
     const identity={executableHash:certification.executableHash,endpointHash:certification.endpointHash,reason:null};
-    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([]);
-    expect(claudeCertificationMismatches({...identity,executableHash:'different'},certification.model,'plan')).toEqual(['CLI 字节版本与认证不匹配']);
-    expect(claudeCertificationMismatches({...identity,endpointHash:'different'},certification.model,'plan')).toEqual(['有效渠道与认证不匹配']);
+    expect(CLAUDE_ADAPTER_VERSION).not.toBe(certification.adapterVersion);
+    const versionMismatch='适配器版本与认证不匹配';
+    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([versionMismatch]);
+    expect(claudeCertificationMismatches({...identity,executableHash:'different'},certification.model,'plan')).toEqual(['CLI 字节版本与认证不匹配',versionMismatch]);
+    expect(claudeCertificationMismatches({...identity,endpointHash:'different'},certification.model,'plan')).toEqual(['有效渠道与认证不匹配',versionMismatch]);
     expect(claudeCertificationMismatches(identity,'different','plan')[0]).toContain('模型ID');
     expect(claudeCertificationMismatches(identity,certification.model,'auto')[0]).toContain('权限');
-    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([]);
+    expect(claudeCertificationMismatches(identity,certification.model,'plan')).toEqual([versionMismatch]);
   });
   it('formal adapter checks captured identity before spawn; file/env/CLI changes rejected, restore reaches spawn', async () => {
     const f=fixture();vi.stubEnv('CLAUDE_CONFIG_DIR',f.user);

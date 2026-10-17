@@ -54,8 +54,8 @@ function makeEnv(opts: { review?: boolean } = {}) {
   const scripts: FakeTurnScript[] = [];
   const adapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => scripts.shift() ?? validDone() });
   const worker = () => new DispatchWorker({ db, adapter, leaseOwner: `w-${randomUUID().slice(0, 4)}`, appDataDir: join(tmpRoot, 'app') });
-  const submit = (body: string, mentions: unknown[] = [{ kind: 'member', memberId: 'mA' }]) =>
-    cmd<{ taskId: string; threadId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body, intent: 'default', mentions });
+  const submit = (body: string, mentions: unknown[] = [{ kind: 'member', memberId: 'mA' }],collaboration?:'deliberate') =>
+    cmd<{ taskId: string; threadId: string }>('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body, intent: 'default', mentions,...(collaboration?{collaboration}:{}) });
   const board = async () => {
     const data = await cmd<{ groups: Array<{ rooms: Array<{ cards: Card[] }> }> }>('board.view', { scope: 'project', projectId: 'p1' });
     return data.groups[0]!.rooms[0]!.cards;
@@ -151,7 +151,8 @@ describe('看板状态映射（正式链六形态）', () => {
 
   it('阻塞=模式门禁（@全体研讨→DELIBERATE→BLOCKED，正式 worker 路径）', async () => {
     const env = makeEnv();
-    const t = await env.submit('研讨任务', [{ kind: 'all' }]);
+    await env.cmd('member.create',{projectId:'p1',displayName:'第二位研讨成员'});
+    const t = await env.submit('研讨任务', [{ kind: 'all' }],'deliberate');
     await env.worker().runOnce();
     const cards = await env.board();
     expect(cards.find((c) => c.taskId === t.taskId)).toMatchObject({ column: 'blocked', taskStatus: 'BLOCKED' });

@@ -4,7 +4,7 @@ import { cpSync,copyFileSync,mkdtempSync,mkdirSync,readFileSync,readdirSync,writ
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash,randomUUID } from 'node:crypto';
-import { migrate,openDatabase } from '../../src/persistence/db.ts';
+import { migrate } from '../../src/persistence/db.ts';
 import { MIGRATIONS } from '../../src/persistence/migrations/registry.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 
@@ -29,7 +29,8 @@ describe('R86 additive schema 052 in owned complete-root copies',()=>{
     mkdirSync(join(original,'profile'));writeFileSync(join(original,'profile','draft-and-unknown.json'),JSON.stringify({draft:'工程草稿',unknownCommandId:'original-engineering-envelope',body:'原输入',intent:'record_only'}));
     const originalDbHash=sha(join(original,'state.sqlite')),originalProfileHash=sha(join(original,'profile','draft-and-unknown.json'));
     const copied=join(dir,'upgraded');cpSync(original,copied,{recursive:true});
-    const backups=join(copied,'migration-backups'),upgraded=openDatabase(join(copied,'state.sqlite'),{backupDir:backups});
+    const backups=join(copied,'migration-backups'),upgraded=new Database(join(copied,'state.sqlite'));
+    upgraded.pragma('foreign_keys=ON');upgraded.pragma('journal_mode=WAL');migrate(upgraded,{backupDir:backups},MIGRATIONS.filter(m=>m.id<=52));
     expect(upgraded.pragma('user_version',{simple:true})).toBe(52);
     for(const table of tables)expect(upgraded.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()).toEqual(before[table]);
     expect(upgraded.prepare('SELECT count(*) n FROM coordination_runs').get()).toEqual({n:0});upgraded.close();

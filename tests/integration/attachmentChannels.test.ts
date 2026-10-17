@@ -99,7 +99,7 @@ describe('四通道正式链：主池/线程（任务串+记录串）/DM', () =>
     env.close();
   });
 
-  it('任务线程跟进附件：随重派进入第二轮（第一轮不含）；记录串附件只保存不派发', async () => {
+  it('任务线程附件随普通新消息进入第二轮（第一轮不含）；显式仅记录不派发', async () => {
     const env = makeEnv();
     const db0 = openDatabase(env.dbPath);
     db0.prepare('UPDATE projects SET task_review_enabled = 1 WHERE id = ?').run('p1'); // 首轮后停待验收（非终态）——redispatch 合法
@@ -112,11 +112,10 @@ describe('四通道正式链：主池/线程（任务串+记录串）/DM', () =>
     await worker.runOnce(); // 第一轮完成（无附件）
     expect(adapter.startTurnLog.length).toBe(1);
     const up = await env.cmd<{ attachmentId: string; hash: string }>('attachment.uploadText', { conversationId: 'conv_room', filename: '补充 资料.txt', content: '跟进暗号 FOLLOW-7788' });
-    const follow = await env.cmd<{ messageId: string; followUpRecorded: boolean }>('message.submit', { target: { kind: 'thread', projectId: 'p1', conversationId: 'conv_room', threadId }, body: '补充资料见附件', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
-    expect(follow.followUpRecorded).toBe(true);
+    const follow = await env.cmd<{ messageId: string; disposition:string }>('message.submit', { target: { kind: 'thread', projectId: 'p1', conversationId: 'conv_room', threadId }, body: '补充资料见附件', intent: 'default', mentions: [], attachmentRefs: [up.attachmentId] });
+    expect(follow.disposition).toBe('enqueued');
     expect(mattCount(env, follow.messageId)).toBe(1);
     expect(adapter.startTurnLog[0]!.text).not.toContain('FOLLOW-7788'); // 附件在跟进消息后=不回溯进已完成的轮
-    await env.cmd('task.redispatch', { taskId: send.taskId, reason: '按补充资料重跑' });
     await worker.runOnce(); // 第二轮：跟进附件进入本轮输入
     expect(adapter.startTurnLog.length).toBe(2);
     expect(adapter.startTurnLog[1]!.text).toContain('FOLLOW-7788'); // 跟进附件不漏
