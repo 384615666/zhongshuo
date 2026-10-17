@@ -14,6 +14,8 @@ import { mentionShapeOf, resolveMentionTargets } from './mentions.ts';
 
 export interface TopLevelRouteInput {
   intent: SendIntent;
+  /** Explicit advanced workflow; mentions alone only choose recipients. */
+  collaboration?: 'deliberate';
   /** 输入框识别的结构化节点；代码块/引用/正文文本中的 @ 永不进入此数组。 */
   mentions: readonly MentionNode[];
   room: {
@@ -24,15 +26,9 @@ export interface TopLevelRouteInput {
   };
 }
 
-/**
- * §4.2 路由表：
- * - 无 mention → AUTO（默认协调者接单）
- * - 单个明确 mention → DIRECT（仅指定成员）
- * - @全体 → DELIBERATE（冻结房间启用名单）
- * - 多个明确 mention → DELIBERATE（仅所选子集）
- * - @全体 + 单独 mention → 以全体为准，去重
- * - intent='record_only' → 保存记录：零任务/运行/派发/预算，mention 不参与判定、零唤醒
- */
+/** Ordinary multi-recipient messages use natural collaboration. The fixed
+ * independent/review/ratification workflow requires an explicit advanced choice.
+ * Record-only never dispatches, whatever recipients or advanced choice are set. */
 export function resolveTopLevelRoute(input: TopLevelRouteInput): DomainResult<TopLevelRouteOutcome> {
   if (input.intent === 'record_only') {
     return domainOk({ kind: 'record_only', reason: 'explicit_record_only' });
@@ -42,6 +38,11 @@ export function resolveTopLevelRoute(input: TopLevelRouteInput): DomainResult<To
   if (!targets.ok) return targets;
   const shape = mentionShapeOf(targets.value);
 
+  if(input.collaboration==='deliberate'){
+    const frozen=shape==='all'?[...input.room.enabledAgentMemberIds]:[...targets.value.memberIds];
+    if(frozen.length<2)return domainErr('VALIDATION_INVALID','独立研讨需要明确选择至少两位成员，或选择全体');
+    return domainOk({kind:'dispatch',mode:'DELIBERATE',rosterSource:shape==='all'?'all':'selected',frozenMemberIds:frozen,initialWakeMemberIds:frozen});
+  }
   switch (shape) {
     case 'none': {
       if (!input.room.enabledAgentMemberIds.includes(input.room.coordinatorMemberId)) {
@@ -73,31 +74,12 @@ export function resolveTopLevelRoute(input: TopLevelRouteInput): DomainResult<To
         initialWakeMemberIds: [target],
       });
     }
-    case 'multi': {
-      return domainOk<TopLevelRouteOutcome>({
-        kind: 'dispatch',
-        mode: 'DELIBERATE',
-        rosterSource: 'selected',
-        frozenMemberIds: [...targets.value.memberIds],
-        initialWakeMemberIds: [...targets.value.memberIds],
-      });
-    }
+    case 'multi':
     case 'all': {
-      // 以全体为准并去重；名单在创建运行时冻结，不悄悄排除离线成员（§4.3）。
-      const frozen = [...input.room.enabledAgentMemberIds];
-      if (frozen.length === 0) {
-        return domainErr(
-          'MEMBER_UNAVAILABLE',
-          '@全体 但房间没有启用的 Agent 成员，无法冻结名单',
-        );
-      }
-      return domainOk<TopLevelRouteOutcome>({
-        kind: 'dispatch',
-        mode: 'DELIBERATE',
-        rosterSource: 'all',
-        frozenMemberIds: frozen,
-        initialWakeMemberIds: frozen,
-      });
+      const frozen=shape==='all'?[...input.room.enabledAgentMemberIds]:[...targets.value.memberIds];
+      if(!frozen.length)return domainErr('MEMBER_UNAVAILABLE','房间没有可用的 AI 成员，请先添加成员');
+      const coordinator=frozen.includes(input.room.coordinatorMemberId)?input.room.coordinatorMemberId:frozen[0]!;
+      return domainOk({kind:'dispatch',mode:'AUTO',coordinatorMemberId:coordinator,participantScope:'selected',frozenMemberIds:frozen,initialWakeMemberIds:[coordinator]});
     }
   }
 }
@@ -110,10 +92,11 @@ export function resolveTopLevelRouteFromMessage(
   message: {
     body: string;
     intent: SendIntent;
+    collaboration?: 'deliberate';
     mentions: readonly MentionNode[];
   },
   room: TopLevelRouteInput['room'],
 ): DomainResult<TopLevelRouteOutcome> {
   void message.body; // 正文永不构成执行指令（§4.1/§31.1 第 5 条）
-  return resolveTopLevelRoute({ intent: message.intent, mentions: message.mentions, room });
+  return resolveTopLevelRoute({ intent: message.intent, collaboration:message.collaboration, mentions: message.mentions, room });
 }

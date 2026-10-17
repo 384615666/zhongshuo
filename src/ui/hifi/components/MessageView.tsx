@@ -10,7 +10,6 @@
 
 import { useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
-import {MessageProtocol} from './MessageProtocol';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
@@ -126,24 +125,18 @@ function MessageAttachments({
 export function MessageView({
   message,
   domId,
-  linkThreadId,
   author,
   isMentioned,
   mode,
   onOpenSubtask,
-  onOpenThread,
   onOpenArtifact,
-  onReact,
   onSave,
-  onConvertToTask,
   onApproval,
   onRetry,
   onAllowMissing,
   onSteer,
   onQuote,
-  onCorrection,
   onOpenResource,
-  // onCorrection（r61）：正式命令未接入——保留 prop 供后续接线，当前无调用方传入。
   onOpenAttachment,
 }: {
   message: Message;
@@ -171,7 +164,6 @@ export function MessageView({
   onCorrection?: (message: Message) => void;
 }) {
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
-  const [protocolOpen,setProtocolOpen]=useState(false);
   const visibleBody=chatAnswer(message.body,message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
@@ -234,127 +226,23 @@ export function MessageView({
                 **不要求 taskId**。点击打开共享预览，不发送、不执行。 */}
             <MessageAttachments message={message} onOpen={onOpenResource} onOpenAttachment={onOpenAttachment} />
             {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
-              {message.formalReplyExecution.status==='queued'?'等待原成员回复':message.formalReplyExecution.status==='running'?'原成员正在回复':message.formalReplyExecution.error??'本次回复未完成'}
+              {message.formalReplyExecution.status==='queued'?'已发送，等待 AI 回复':message.formalReplyExecution.status==='running'?'AI 正在回复':message.formalReplyExecution.error??'本次回复未完成'}
               {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
             </div>:null}
           </>
         )}
 
-        {/* 表情与操作（r61 G6：无正式处理器的动作不渲染入口——表情/引用仅在页面提供处理器时
-            出现；书签按钮按正式收藏事实显示已收藏状态，再次点击=取消）。 */}
-        {!isSystem ? (
-          <div className="msg-actions">
-            {onReact != null ? (
-              <>
-                <button className="icon-btn sm" title="表情：轻量反馈，不是授权或共识票" onClick={() => onReact('👍')}>
-                  <span style={{ fontSize: 12 }}>👍</span>
-                </button>
-                <button className="icon-btn sm" title="表情" onClick={() => onReact('👀')}>
-                  <span style={{ fontSize: 12 }}>👀</span>
-                </button>
-              </>
-            ) : null}
-            {onSave != null ? (
-              <button
-                className="icon-btn sm"
-                title={message.saved ? '已收藏——再次点击取消收藏（只删收藏行，不改动原内容）' : '收藏（不把内容共享给其他成员）'}
-                aria-pressed={message.saved === true}
-                data-zs-saved={message.saved === true ? '1' : '0'}
-                onClick={onSave}
-              >
-                <Icon name="bookmark" size={13} />
-              </button>
-            ) : null}
-            {onOpenThread ? (
-              <button className="icon-btn sm" title="在回复串中打开 / 定位" onClick={onOpenThread}>
-                <Icon name="message-square" size={13} />
-              </button>
-            ) : null}
-            <button
-              className="icon-btn sm"
-              title="更多操作"
-              onClick={(e) => {
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setMenuAt({ x: r.left - 150, y: r.bottom + 4 });
-              }}
-            >
-              <Icon name="more-horizontal" size={13} />
-            </button>
-            {message.reactions?.length ? (
-              <span className="row tight" style={{ marginLeft: 4 }}>
-                {message.reactions.map((r) => (
-                  <button
-                    key={r.emoji}
-                    className="chip"
-                    style={{ padding: '1px 6px', cursor: 'pointer' }}
-                    onClick={() => onReact?.(r.emoji)}
-                    title={`${r.by.length} 人：表情不作为正式共识记录`}
-                  >
-                    {r.emoji} <span className="faint">{r.by.length}</span>
-                  </button>
-                ))}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
+        {!isSystem?<div className="msg-actions">
+          <button className="icon-btn sm" aria-label="消息操作" title="复制、引用、收藏" onClick={e=>{const r=e.currentTarget.getBoundingClientRect();setMenuAt({x:r.left-150,y:r.bottom+4});}}><Icon name="more-horizontal" size={13}/></button>
+          {message.reactions?.length?<span className="row tight faint" aria-label="历史表情">{message.reactions.map(r=><span key={r.emoji}>{r.emoji} {r.by.length}</span>)}</span>:null}
+        </div>:null}
       </div>
 
-      {menuAt ? (
-        <Menu anchor={menuAt} onClose={() => setMenuAt(null)}>
-          <MenuItem icon="copy" onClick={() => { navigator.clipboard?.writeText(visibleBody); setMenuAt(null); }}>
-            复制文字
-          </MenuItem>
-          {message.authorType==='agent'?<MenuItem icon="file" onClick={()=>{setMenuAt(null);setProtocolOpen(true);}}>查看运行协议…</MenuItem>:null}
-          {onOpenThread ? (
-            <MenuItem icon="message-square" onClick={() => { onOpenThread(); setMenuAt(null); }}>
-              在回复串中打开
-            </MenuItem>
-          ) : null}
-          <MenuItem
-            icon="link"
-            onClick={() => {
-              // §15.5：应用内直达链接用 /thread/:id?message=:mid，路由表能解析并定位。
-              // 原来写成 zhongshuo://#/thread/...，但路由没有 /thread 分支，点开落到欢迎页。
-              const link = linkThreadId??message.threadId
-                ? `#/thread/${linkThreadId??message.threadId}?message=${message.id}`
-                : `#/project/${message.projectId}/room/${message.roomId}`;
-              navigator.clipboard?.writeText(link);
-              recordLocalOnly(
-                'thread.copyLink',
-                `message=${message.id} → ${link}（应用内直达链接，不是公网分享链接）`,
-              );
-              setMenuAt(null);
-            }}
-          >
-            复制应用内链接
-          </MenuItem>
-          {onQuote != null ? (
-            <MenuItem
-              icon="corner-down-right"
-              onClick={() => { onQuote(message); setMenuAt(null); }}
-            >
-              引用
-            </MenuItem>
-          ) : null}
-          {onSave != null ? (
-            <MenuItem icon="bookmark" onClick={() => { onSave(); setMenuAt(null); }}>
-              {message.saved ? '取消收藏' : '收藏'}
-            </MenuItem>
-          ) : null}
-          <div className="menu-sep" />
-          {/* 「转为任务」只对顶层消息有意义：串内回复不可直接转（§27.12 TASK-01） */}
-          <MenuItem
-            icon="file-plus"
-            disabled={!onConvertToTask || Boolean(message.threadId)}
-            hint={message.threadId ? '串内回复不可转' : undefined}
-            onClick={() => { onConvertToTask?.(); setMenuAt(null); }}
-          >
-            转为任务
-          </MenuItem>
-          {/* 追加更正：正式命令未接入前不出现入口（r61——不以本地日志冒充功能）。 */}
-        </Menu>
-      ) : null}
-      {protocolOpen?<MessageProtocol key={message.id} projectId={message.projectId} messageId={message.id} onClose={()=>setProtocolOpen(false)}/>:null}
+      {menuAt?<Menu anchor={menuAt} onClose={()=>setMenuAt(null)}>
+        <MenuItem icon="copy" onClick={()=>{void navigator.clipboard?.writeText(visibleBody);setMenuAt(null);}}>复制</MenuItem>
+        {onQuote?<MenuItem icon="corner-down-right" onClick={()=>{onQuote(message);setMenuAt(null);}}>引用</MenuItem>:null}
+        {onSave?<MenuItem icon="bookmark" onClick={()=>{onSave();setMenuAt(null);}}>{message.saved?'取消收藏':'收藏'}</MenuItem>:null}
+      </Menu>:null}
     </div>
   );
 }

@@ -296,6 +296,7 @@ export function deriveRoute(
   mentionIds: string[],
   sendAs: 'ai' | 'record',
   roomMemberIds: string[],
+  collaboration?: 'deliberate',
 ): { mode: 'AUTO' | 'DELIBERATE' | 'DIRECT'; resolvedMemberIds: string[]; note: string } {
   if (sendAs === 'record') {
     return { mode: 'AUTO', resolvedMemberIds: [], note: '仅记录：不路由、不调用模型' };
@@ -303,7 +304,7 @@ export function deriveRoute(
   const hasAll = mentionIds.includes('all');
   const named = mentionIds.filter((id) => id !== 'all' && roomMemberIds.includes(id));
   if (hasAll) {
-    return { mode: 'DELIBERATE', resolvedMemberIds: roomMemberIds, note: '以全体为准并去重，冻结当前房间启用名单' };
+    return { mode: collaboration==='deliberate'?'DELIBERATE':'AUTO', resolvedMemberIds: roomMemberIds, note: collaboration==='deliberate'?'独立研讨：先独立分析再互评汇总':'全体参与本条协作，由协调成员接收并按需交接' };
   }
   if (named.length === 0) {
     return { mode: 'AUTO', resolvedMemberIds: [], note: '无 @：默认协调者接单，可自行决定是否分工' };
@@ -311,5 +312,5 @@ export function deriveRoute(
   if (named.length === 1) {
     return { mode: 'DIRECT', resolvedMemberIds: named, note: '仅该成员被调用，其他成员零调用' };
   }
-  return { mode: 'DELIBERATE', resolvedMemberIds: named, note: `仅所选 ${named.length} 人参与研讨` };
+  return { mode: collaboration==='deliberate'?'DELIBERATE':'AUTO', resolvedMemberIds: named, note: `所选 ${named.length} 人${collaboration==='deliberate'?'参与独立研讨':'参与本条协作'}` };
 }

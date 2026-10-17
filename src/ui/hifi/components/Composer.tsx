@@ -145,7 +145,9 @@ function pendingIdentityMatches(
   mentionIds: string[],
   sendAs: 'ai' | 'record',
   readyAttachmentIds: string[],
+  collaboration?:'deliberate',
 ): boolean {
+  if(env.params.collaboration!==collaboration)return false;
   const p = env.params as {
     body?: string; intent?: string; mentions?: Array<{ kind: string; memberId?: string }>;
     attachmentRefs?: string[];
@@ -212,6 +214,7 @@ export function Composer({
     attachments: HifiDraftAttachment[];
     /** 图片能力门显式选择（一次性）：'omit-images'=仅发送文字（图片不送模型并如实注明）。 */
     imageAck?: 'omit-images';
+    collaboration?:'deliberate';
     commandId: string;
     target: ComposerTarget;
     /** 发起时草稿编辑代次（页面冻结进信封——清算判定用）。 */
@@ -340,6 +343,8 @@ export function Composer({
    * 否则删掉切换控件会把"只留字"的长串静默变成一次 AI 调用。
    */
   const [sendAs, setSendAs] = useState<'ai' | 'record'>(recordThread ? 'record' : 'ai');
+  const [deliberate,setDeliberate]=useState(false);
+  const collaboration=target.kind==='room_root'&&deliberate?'deliberate' as const:undefined;
   const [mentions, setMentions] = useState<string[]>([]);
   const [skipFirstDraft, setSkipFirstDraft] = useState(false);
   const [splitWork, setSplitWork] = useState(false);
@@ -405,9 +410,9 @@ export function Composer({
   const imageProjectId = useStore((s) => s.activeProjectId);
   const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
-    mentions, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
+    mentions, collaboration, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const threadFactRevision=useStore(s=>target.kind==='thread'&&target.threadId?s.threadTasks[target.threadId]?.revision:null);
-  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions,threadFactRevision});
+  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions,collaboration,threadFactRevision});
   const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;blocked?:boolean;reason:string;readAt:number;error?:string}|null>(null);
   useEffect(()=>{
     if(!formalLimits?.access||sendAs!=='ai')return;
@@ -416,7 +421,7 @@ export function Composer({
       if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
+      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
       catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
@@ -433,7 +438,7 @@ export function Composer({
         : target.kind === 'thread' ? { kind: target.kind, projectId: imageProjectId, conversationId, threadId: target.threadId }
         : { kind: target.kind, projectId: imageProjectId, conversationId };
       try {
-        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
+        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
         if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.map(m => `${m.kind} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel} · 配置 ${m.configuration} · ${m.protocol} · 图片输入${m.status === 'supported' ? '自动传递' : '不可用或未确认'}：${m.reason}`).join('；') : '线程回复按现有合同仅记录；图片可保存和预览'});
       } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览或仅记录，发送前可重试`}); }
       finally { reading = false; }
@@ -488,6 +493,7 @@ export function Composer({
     const saved = getDraftFull(draftKey);
     setBody(saved.body);
     setMentions(saved.mentions);
+    setDeliberate(saved.collaboration==='deliberate');
     // 附件芯片由 store.uploadItems 提供（真源）；已存草稿引用 hydrate 重建（切回/重启恢复）。
     if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
     setAccess(saved.access as AccessMode);
@@ -525,10 +531,11 @@ export function Composer({
       && cur.mentions.length === mentions.length
       && cur.mentions.every((m, i) => m === mentions[i])
       && cur.access === access
-      && cur.sendAs === sendAs;
+      && cur.sendAs === sendAs
+      && cur.collaboration === collaboration;
     if (same) return;
-    setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs });
-  }, [draftKey, body, mentions, access, sendAs]);
+    setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs,collaboration });
+  }, [draftKey, body, mentions, access, sendAs,collaboration]);
 
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
@@ -586,7 +593,7 @@ export function Composer({
     ta.style.height = `${next}px`;
   }, [body]);
 
-  const route = useMemo(() => deriveRoute(mentions, sendAs, memberIds), [mentions, sendAs, memberIds]);
+  const route = useMemo(() => deriveRoute(mentions, sendAs, memberIds,collaboration), [mentions, sendAs, memberIds,collaboration]);
 
   const currentMode = ACCESS_MODES.find((m) => m.value === access) ?? ACCESS_MODES[0];
 
@@ -633,7 +640,7 @@ export function Composer({
     // r62 P1 防重复守卫（R66 P3 修订）：文件-only 的 body 都为空——不能只比 body，须比**完整
     // 意图身份**（正文+意图+@提及+附件引用集合）。同一身份=换新号必重复，只允许同号重发或
     // 显式放弃；等待期改了正文/附件/提及=不同身份，允许新号发送（未知信封仍保留）。
-    if (pendingEnv != null && pendingIdentityMatches(pendingEnv, text, mentions, sendAs, refsAtGuard.map((a) => a.attachmentId!))) {
+    if (pendingEnv != null && pendingIdentityMatches(pendingEnv, text, mentions, sendAs, refsAtGuard.map((a) => a.attachmentId!),collaboration)) {
       setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
       return;
     }
@@ -656,7 +663,7 @@ export function Composer({
           : target.kind === 'thread' ? { kind: target.kind, projectId, conversationId, threadId: target.threadId }
           : { kind: target.kind, projectId, conversationId };
         const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string; channel: string; reason: string; configuration: string; protocol: string }> }>('message.imageCapability', {
-          target: formalTarget, mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
+          target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
         });
         if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
         if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置运行时'} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel ?? '无法确定'} · 配置 ${m.configuration ?? '未知'} · ${m.protocol ?? '协议未验证'} · 图片输入${m.status === 'supported' ? '自动传递；请 @ 单个成员后发送' : '不可用或未确认'}：${m.reason ?? '当前配置无法传递图片'}`).join('；') }); return; }
@@ -685,6 +692,7 @@ export function Composer({
       body: text,
       sendAs,
       mentionIds: mentions,
+      ...(collaboration?{collaboration}:{}),
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
       attachments: sentAttachments,
@@ -1522,6 +1530,11 @@ export function Composer({
            * 入口本身：一次性的"仅记录，不请求回复"。
            * 只有**发给 AI** 的状态下才出现；已经在仅记录时，用输入区的 chip 取消。
            */}
+          {target.kind==='room_root'&&sendAs==='ai'&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{
+            const next=!deliberate;setDeliberate(next);
+            if(next&&!mentions.includes('all')&&mentions.filter(id=>memberIds.includes(id)).length<2)setMentions(['all']);
+            setRunSettingsAnchor(null);
+          }}>{deliberate?'改为自然协作':'高级：独立研讨（先独立分析，再互评汇总）'}</MenuItem>:null}
           {sendAs === 'ai' && !inputDisabledReason ? (
             <MenuItem
               icon="bookmark"

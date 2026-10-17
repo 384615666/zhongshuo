@@ -24,7 +24,7 @@ import {
   executeTaskRework, attachmentRefsFromDraft, attachmentRangesFromDraft, markThreadReadIfAllowed,
   toggleSavedMessage, type ReviewSnapshot,
 } from '../loader';
-import { stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown } from '../data/store';
+import { stageOutbound, settleOutbound, dropOutbound, confirmOutboundUnknown, queueDraftInsert } from '../data/store';
 import { command, openExportDir } from '../bridge';
 import {
   anchorOf, byId, childTasksOf, coordinatorOfRoom,
@@ -48,6 +48,7 @@ import type { AppState, ContextLocation, Message, Task, WorkflowRun, FormalAttac
 import { audienceAllows, resourceOf } from '../lib/resource';
 import { contextTargetOf, hidePreview, noteContextChanged, registerAttachmentResource, registerDeliveryResource, openPreview, openPreviewTab, setNavAutoHidden, setPreviewContextSide, autoHidePreviewForConversation, shouldAutoHidePreviewFor } from '../data/actions-preview';
 import { resolveLayout, SIDEBAR_WIDTH } from '../lib/layout';
+import {useChatReading} from '../lib/useChatReading';
 import { useElementWidth } from '../lib/useElementWidth';
 import { ActualMembers, ChildTaskDetails,DeliveryHistoryFacts, DetailReadState, RunExtraFacts, TaskEventFacts, TaskExtraFacts, taskRunGuidance, useTaskDetails } from '../components/TaskDetailsFacts';
 import type { TaskDetailsResult } from '../../../contracts/taskDetails.ts';
@@ -812,11 +813,11 @@ function RoomPool({
   onOpenResource?: (resourceId: string, revision?: number, from?: ContextLocation) => void;
 }) {
   const s = useStore((x) => x);
-  const listRef = useRef<HTMLDivElement>(null);
   const roots = useMemo(
-    () => rootMessages(s, roomId).slice().sort((a, b) => b.createdAt - a.createdAt),
+    () => rootMessages(s, roomId),
     [s, roomId],
   );
+  const listRef=useChatReading(`room-pool:${s.activeProjectId}:${roomId}`,roots.map(m=>m.id).join('|'));
   const room = roomOf(s, roomId);
   const project = room ? s.projects.find((p) => p.id === room.projectId) : undefined;
   /**
@@ -920,7 +921,7 @@ function RoomPool({
             const draftKey = `room:${roomId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+            const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { collaboration:p.collaboration, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
@@ -1106,8 +1107,6 @@ function RootCard({
     if (!fileFromThread && !s.preview.hidden && s.preview.tabs.length > 0) hidePreview();
     navigate(`/project/${message.projectId}/room/${message.roomId}?thread=${thread.id}`);
   };
-  const followed = Boolean(s.subscriptions[thread.id]?.followed);
-  const muted = Boolean(s.subscriptions[thread.id]?.muted);
 
   /**
    * 整条卡片可点（用户反馈：只点「N 条回复」太难命中）。
@@ -1136,7 +1135,7 @@ function RootCard({
      * （多处回归脚本按它们计数与断言）。
      */
     <div
-      className={`root-card${selected ? ' selected' : ''}`}
+      data-reading-message={message.id} className={`root-card${selected ? ' selected' : ''}`}
       onClick={openFromPointer}
     >
       <div className="root-card-head">
@@ -1244,7 +1243,7 @@ function RootCard({
         <button
           type="button"
           className="icon-btn sm"
-          title="更多：关注这条任务、复制链接"
+          title="复制、引用、收藏"
           aria-label="更多卡片操作"
           aria-haspopup="menu"
           onClick={(e) => { e.stopPropagation(); setMenuAnchor(anchorFromElement(e.currentTarget)); }}
@@ -1257,39 +1256,15 @@ function RootCard({
       {menuAnchor ? (
         <div onClick={(e) => e.stopPropagation()}>
         <Menu anchor={menuAnchor} onClose={() => setMenuAnchor(null)}>
-          <div className="menu-label">{isDiscussion ? '这条记录' : `任务 #${task?.roomTaskNumber}`}</div>
-          <MenuItem icon="message-square" title="打开右侧回复串，查看这条任务的完整讨论" onClick={() => { setMenuAnchor(null); open(); }}>
-            打开回复串
-          </MenuItem>
-          <MenuItem
-            icon={followed ? 'eye' : 'eye-off'}
-            title={followed ? '只停通知，不停止任务，也不改变参与与执行权限' : '关注后这条串的回复会进入你的通知'}
-            hint={followed ? '已关注' : '未关注'}
-            onClick={() => { void toggleThreadSubscription(thread.id, { follow: !followed }); setMenuAnchor(null); }}
-          >
-            {followed ? '取消关注' : '关注'}
-          </MenuItem>
-          <MenuItem
-            icon="bell"
-            title={muted ? '恢复这条串的通知；不改变参与名单与执行权限' : '只改通知偏好，不改变参与名单与执行权限'}
-            hint={muted ? '已静音' : '未静音'}
-            onClick={() => { void toggleThreadSubscription(thread.id, { mute: !muted }); setMenuAnchor(null); }}
-          >
-            {muted ? '取消静音' : '静音'}
-          </MenuItem>
-          <MenuItem
-            icon="copy"
-            title="复制应用内直达链接（不是公网分享链接）"
-            onClick={() => {
-              const link = `zhongshuo://#/thread/${thread.id}`;
-              void navigator.clipboard?.writeText(link);
-              recordLocalOnly('thread.link.copy', `thread=${thread.id} → ${link}（应用内直达链接）`);
-              toast('已复制本串的应用内链接', 'info');
-              setMenuAnchor(null);
-            }}
-          >
-            复制本串链接
-          </MenuItem>
+          <MenuItem icon="copy" onClick={()=>{void navigator.clipboard?.writeText(message.body);setMenuAnchor(null);}}>复制</MenuItem>
+          <MenuItem icon="corner-down-right" onClick={()=>{
+            const key=`room:${message.roomId}`;
+            queueDraftInsert(key,`> ${message.body.replace(/\s+/g,' ').trim().slice(0,400)}`);
+            window.dispatchEvent(new CustomEvent('zs:focus-composer',{detail:key}));setMenuAnchor(null);
+          }}>引用</MenuItem>
+          <MenuItem icon="bookmark" onClick={()=>{
+            setMenuAnchor(null);void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved?'已收藏':'已取消收藏','success');else if(!r.busy)toast(r.error??'收藏失败','error');});
+          }}>{message.saved?'取消收藏':'收藏'}</MenuItem>
         </Menu>
         </div>
       ) : null}
@@ -1482,6 +1457,9 @@ function ThreadPanel({
     }
     return out;
   }, [s, thread?.id, poolCollapsedByFile]);
+
+  const progressContentKey=JSON.stringify((s.threadProgress[threadId]?.items??[]).map(p=>[p.turnId,p.text,p.phase,p.status]));
+  useEffect(()=>{const el=listRef.current;if(el&&pinnedToBottom)el.scrollTop=el.scrollHeight;},[progressContentKey,pinnedToBottom]);
 
   // 流式更新不抢滚动位置：用户向上翻历史时显示"有新消息"，不自动跳到底部（§17.5）
   useEffect(() => {

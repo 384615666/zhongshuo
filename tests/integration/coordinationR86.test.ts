@@ -36,7 +36,7 @@ async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorke
   for(const memberId of [a,b]) await cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'bypassPermissions'});
   const revision=(db.prepare('SELECT revision FROM rooms WHERE id=?').get(room.id) as {revision:number}).revision;
   await cmd('room.update',{roomId:room.id,expectedRevision:revision,coordinatorMemberId:a});
-  const send=(mentions:string[]=[])=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请两位成员协作分析再复核',intent:'default',mentions:mentions.map(memberId=>({kind:'member',memberId}))});
+  const send=(mentions:string[]=[])=>cmd<{taskId:string;threadId:string}>('message.submit',{target:{kind:'room_root',projectId,roomId:room.id,conversationId:room.conversationId},body:'请两位成员协作分析再复核',intent:'default',...(enableDeliberate?{collaboration:'deliberate'}:{}),mentions:mentions.map(memberId=>({kind:'member',memberId}))});
   const plan={summary:'独立分析后复核',steps:[{key:'analysis',memberId:a,title:'分析',objective:'提出实现方案',role:'analysis',dependsOn:[]},{key:'review',memberId:b,title:'复核',objective:'读取并复核上游方案',role:'review',dependsOn:['analysis']}]};
   const run=async(s:FakeTurnScript)=>{script=s;return worker.runOnce();};
   return {db,dir,worker,adapter,cmd,raw,send,run,plan,a,b,room,projectId};
@@ -161,7 +161,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const raw=readFileSync(join(process.cwd(),'scripts','dev25-dual','samples','preview-r52-样例.png'));
       const upload=await f.cmd<{attachmentId:string}>('attachment.uploadImage',{conversationId:f.room.conversationId,filename:'工程图片.png',contentBase64:raw.toString('base64')});
       const turns=vi.spyOn(f.adapter,'startTurn');
-      await f.cmd('message.submit',{target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},body:'',intent:'default',mentions:[f.a,f.b].map(memberId=>({kind:'member',memberId})),attachmentRefs:[upload.attachmentId]});
+      await f.cmd('message.submit',{target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},body:'',intent:'default',collaboration:'deliberate',mentions:[f.a,f.b].map(memberId=>({kind:'member',memberId})),attachmentRefs:[upload.attachmentId]});
       await f.worker.runOnce();
       const done:FakeTurnScript=[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'工程协议输入验证',claims:[{claimId:'c1',statement:'夹具不作识图结论',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]})}}];
       await f.run(done);await f.run(done);

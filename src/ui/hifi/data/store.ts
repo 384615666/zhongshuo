@@ -259,7 +259,7 @@ export interface HifiDraftAttachment {
   /** 表格注入范围（第五十二轮：从预览面板选定——缺省=服务端有界默认窗口）。 */
   range?: string;
 }
-export interface HifiDraft { body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number; /** r62：普通草稿 24h 过期的时间戳（批准 brief §3.3）；未确认发送账本不适用。 */ updatedAt?: number }
+export interface HifiDraft { collaboration?: 'deliberate'; body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number; /** r62：普通草稿 24h 过期的时间戳（批准 brief §3.3）；未确认发送账本不适用。 */ updatedAt?: number }
 
 /**
  * 上传项（review-r51 §2 反例修复）：每笔上传绑定**发起草稿键+独立 uploadId+会话**——
@@ -541,7 +541,7 @@ export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[
 export interface PendingSendEnvelope {
   commandId: string;
   method: 'message.submit';
-  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[];threadMemberVersion?:string };
+  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[];threadMemberVersion?:string;collaboration?:'deliberate' };
   targetLabel: string;
   at: number;
   /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */
@@ -640,6 +640,7 @@ function validateDraft(d: unknown): d is HifiDraft {
   if (typeof d.body !== 'string' || !Array.isArray(d.mentions) || d.mentions.some((m) => typeof m !== 'string')) return false;
   if (!Array.isArray(d.attachments) || d.attachments.some((a) => !isPlainObject(a) || typeof a.attachmentId !== 'string' || typeof a.name !== 'string')) return false;
   if (typeof d.access !== 'string' || (d.sendAs !== 'ai' && d.sendAs !== 'record')) return false;
+  if (d.collaboration != null && d.collaboration !== 'deliberate') return false;
   if (d.rev != null && typeof d.rev !== 'number') return false;
   if (d.updatedAt != null && typeof d.updatedAt !== 'number') return false;
   return true;

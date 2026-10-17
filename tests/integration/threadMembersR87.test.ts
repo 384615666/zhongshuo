@@ -146,6 +146,18 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(f.db.prepare('SELECT status FROM coordination_messages').get()).toEqual({status:boundary==='removed-recipient'?'blocked':'cancelled'});
     }finally{f.db.close();}
   });
+  it('room multi-mention is natural AUTO and its authorized scope excludes unselected room C',async()=>{
+    const f=await fixture();try{
+      const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'请两位一起看看',intent:'default',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId}))});
+      const task=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(sent.taskId) as {route_json:string};
+      expect(JSON.parse(task.route_json)).toMatchObject({mode:'AUTO',participantScope:'selected',initialWakeMemberIds:[f.ids[0]]});
+      const scope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(sent.taskId) as {roster_json:string};
+      expect((JSON.parse(scope.roster_json) as Array<{memberId:string}>).map(m=>m.memberId).sort()).toEqual(f.ids.slice(0,2).sort());
+      expect(scope.roster_json).not.toContain(f.ids[2]);
+      const explicit=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'独立研讨',intent:'default',collaboration:'deliberate',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId}))});
+      const advanced=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(explicit.taskId) as {route_json:string};expect(JSON.parse(advanced.route_json)).toMatchObject({mode:'DELIBERATE'});
+    }finally{f.db.close();}
+  });
   it('shows factual natural progress while running, suppresses control JSON, and stops showing it at terminal',async()=>{
     const f=await fixture();try{
       const script:FakeTurnScript=[

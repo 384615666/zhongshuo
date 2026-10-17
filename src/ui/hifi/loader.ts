@@ -1172,7 +1172,7 @@ const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId:
  * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
  * 附件 refs（第五十一轮 H2）：只在 upload 回执明确成功后进入信封——信封不可变原则不变。
  */
-export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { collaboration?:'deliberate'; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   return {
@@ -1181,6 +1181,7 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
     params: {
       target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room?.conversationId ?? '', roomId },
       body, intent, mentions: mentionPayload(mentionIds),
+      ...(opts?.collaboration?{collaboration:opts.collaboration}:{}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
       ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),

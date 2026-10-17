@@ -47,24 +47,24 @@ describe('§4.2 路由表逐行（SendIntent=default）', () => {
     }
   });
 
-  it('@全体 → DELIBERATE，冻结房间启用名单', () => {
+  it('@全体 → AUTO，仅协调者先接收，冻结获准全体', () => {
     const r = route('default', [ALL]);
     expect(r).toMatchObject({
       ok: true,
       value: {
         kind: 'dispatch',
-        mode: 'DELIBERATE',
-        rosterSource: 'all',
+        mode: 'AUTO',
+        participantScope: 'selected',
         frozenMemberIds: ['m_coord', 'm_a', 'm_b', 'm_c'],
       },
     });
   });
 
-  it('多个明确 mention → DELIBERATE，仅所选子集', () => {
+  it('多个明确 mention → AUTO，仅所选子集', () => {
     const r = route('default', [m('m_a'), m('m_c')]);
     expect(r).toMatchObject({
       ok: true,
-      value: { kind: 'dispatch', mode: 'DELIBERATE', rosterSource: 'selected', frozenMemberIds: ['m_a', 'm_c'] },
+      value: { kind: 'dispatch', mode: 'AUTO', participantScope: 'selected', frozenMemberIds: ['m_a', 'm_c'] },
     });
   });
 
@@ -74,8 +74,8 @@ describe('§4.2 路由表逐行（SendIntent=default）', () => {
       ok: true,
       value: {
         kind: 'dispatch',
-        mode: 'DELIBERATE',
-        rosterSource: 'all',
+        mode: 'AUTO',
+        participantScope: 'selected',
         frozenMemberIds: ['m_coord', 'm_a', 'm_b', 'm_c'],
       },
     });
@@ -88,7 +88,7 @@ describe('§4.2 路由表逐行（SendIntent=default）', () => {
     const r = route('default', [m('m_b'), m('m_a'), m('m_b')]);
     expect(r).toMatchObject({
       ok: true,
-      value: { mode: 'DELIBERATE', frozenMemberIds: ['m_b', 'm_a'] },
+      value: { mode: 'AUTO', frozenMemberIds: ['m_b', 'm_a'] },
     });
   });
 });
@@ -149,5 +149,16 @@ describe('mention 有效性（§4.1/AT-09）', () => {
   it('@全体 但房间无启用 agent → 拒绝', () => {
     const r = route('default', [ALL], { ...ROOM, enabledAgentMemberIds: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'MEMBER_UNAVAILABLE' } });
+  });
+});
+
+describe('R87 explicit advanced deliberation',()=>{
+  it('only an explicit advanced choice starts independent review, while ordinary mentions do not',()=>{
+    expect(resolveTopLevelRoute({intent:'default',mentions:[ALL],room:ROOM,collaboration:'deliberate'})).toMatchObject({ok:true,value:{mode:'DELIBERATE',rosterSource:'all',initialWakeMemberIds:ROOM.enabledAgentMemberIds}});
+    expect(route('default',[m('m_a'),m('m_c')])).toMatchObject({ok:true,value:{mode:'AUTO',coordinatorMemberId:'m_a',initialWakeMemberIds:['m_a'],frozenMemberIds:['m_a','m_c'],participantScope:'selected'}});
+  });
+  it('does not guess recipients for a single or absent advanced selection; record-only still dispatches nothing',()=>{
+    for(const mentions of [[],[m('m_a')]])expect(resolveTopLevelRoute({intent:'default',mentions,room:ROOM,collaboration:'deliberate'})).toMatchObject({ok:false,error:{code:'VALIDATION_INVALID'}});
+    expect(resolveTopLevelRoute({intent:'record_only',mentions:[ALL],room:ROOM,collaboration:'deliberate'})).toEqual({ok:true,value:{kind:'record_only',reason:'explicit_record_only'}});
   });
 });

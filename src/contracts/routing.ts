@@ -46,6 +46,8 @@ export type TopLevelRouteOutcome =
       mode: 'AUTO';
       /** 无 mention：默认协调者接单。 */
       coordinatorMemberId: MemberId;
+      /** R87 explicit recipients constrain the whole natural collaboration. */
+      participantScope?: 'selected';
       frozenMemberIds: readonly MemberId[];
       initialWakeMemberIds: readonly MemberId[];
     }

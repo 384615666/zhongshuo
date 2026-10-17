@@ -446,7 +446,6 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           <Composer
             target={{ kind: 'thread', roomId: entity.roomId, threadId }}
             draftKey={`thread:${threadId}`}
-            recordThread={isRecordThread}
             formalLimits={FORMAL_LIMITS}
             insertText={insertText ?? undefined}
             attachmentUpload={conversationId !== '' ? { conversationId } : undefined}

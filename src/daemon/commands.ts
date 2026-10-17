@@ -314,6 +314,7 @@ const messageSubmitParams = z.strictObject({
   attachmentRefs: z.array(z.string().min(1)).optional(),
   // 图片能力门（第二十九轮三）：omit-images=用户明确选择仅发送文字（注入如实注明图片未发送）。
   imageAck: z.literal('omit-images').optional(),
+  collaboration:z.literal('deliberate').optional(),
   threadMemberVersion:z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // 表格注入范围（第二十九轮四）：artifactId → "Sheet1!A1:D20"；缺省=有界默认窗口（非全量）。
   attachmentRanges: z.record(z.string().min(1), z.string().min(1).max(200)).optional(),
@@ -1373,7 +1374,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'message.writeCapability':
       case 'message.imageCapability': {
-        const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions }).parse(env.params);
+        const params = z.strictObject({ target: messageSubmitParams.shape.target, mentions: messageSubmitParams.shape.mentions, collaboration:messageSubmitParams.shape.collaboration }).parse(env.params);
         const target = params.target;
         assertConversationAudience(deps.db, deps.localUserId, target.conversationId);
         const scope = deps.db.prepare('SELECT project_id, kind, room_id FROM conversations WHERE id=?').get(target.conversationId) as { project_id: string; kind: string; room_id: string | null } | undefined;
@@ -1394,7 +1395,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (target.kind === 'dm') {
           const peer = dmPeerOf(deps.db, target.conversationId); if (peer != null) members = [peer.principal_id];
         } else if (target.kind === 'room_root') {
-          const route = resolveTopLevelRoute({ intent: 'default', mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
+          const route = resolveTopLevelRoute({ intent: 'default', collaboration:params.collaboration, mentions: params.mentions as MentionNode[], room: { coordinatorMemberId: coordinatorOf(deps.db, target.roomId), enabledAgentMemberIds: enabledAgents(deps.db, target.roomId) } });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
           if (route.value.kind === 'dispatch') { members = [...route.value.frozenMemberIds]; direct = route.value.mode !== 'DELIBERATE';routedMode=route.value.mode; }
         }
@@ -1415,6 +1416,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
+        if(params.collaboration&&params.target.kind!=='room_root')throw new DaemonCommandError('VALIDATION_INVALID','独立研讨请从房间发起新话题；当前会话和草稿保留');
         // 重放守卫（第三十一轮一）：旧回执不绕过当前状态——重放同号同参请求时若目标
         // 会话已归档/归属变化/audience 失效，明确拒绝。
         const submitReplayGuard = (): void => {
@@ -1446,10 +1448,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               return selectThreadRecipients(deps.db,params.target.threadId,params.mentions as MentionNode[],params.threadMemberVersion).candidateIds;
             }
             const target=params.target;
-            const route=resolveTopLevelRoute({intent:'default',mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
+            const route=resolveTopLevelRoute({intent:'default',collaboration:params.collaboration,mentions:params.mentions as MentionNode[],room:{coordinatorMemberId:coordinatorOf(deps.db,target.roomId),enabledAgentMemberIds:enabledAgents(deps.db,target.roomId)}});
             if(!route.ok)throw new DaemonCommandError(route.error.code,route.error.message);
             if(route.value.kind!=='dispatch')return [];
-            const members=route.value.mode==='DIRECT'?route.value.frozenMemberIds:coordinationRoomMembers(deps.db,target.roomId,target.projectId,route.value.mode==='AUTO'?undefined:route.value.frozenMemberIds).map(m=>m.id);
+            const members=route.value.mode==='DIRECT'?route.value.frozenMemberIds:coordinationRoomMembers(deps.db,target.roomId,target.projectId,route.value.mode==='AUTO'&&route.value.participantScope!=='selected'?undefined:route.value.frozenMemberIds).map(m=>m.id);
             if(members.length>12)throw new DaemonCommandError('CONFIGURATION_NOT_READY','自动协作最多选择12位房间成员，请调整名单');
             return [...members].sort();
           };
@@ -1574,6 +1576,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
           const route = resolveTopLevelRoute({
             intent: params.intent,
+            collaboration:params.collaboration,
             mentions: params.mentions as MentionNode[],
             room: {
               coordinatorMemberId: coordinatorOf(deps.db, target.roomId),
