@@ -110,12 +110,11 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>成员 ID</dt><dd className="mono-sm" style={{ overflowWrap: 'anywhere' }}>{member.id}</dd>
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
-                <dt>Runtime</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已绑定` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 全局默认（未绑定）` : '未绑定／来源未解析'}</dd>
+                <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已配置` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 使用默认配置` : '未配置'}</dd>
                 <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${runtime.executableStatus.reason}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
                 <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
               </dl>
-              {runtimeError != null ? <div className="panel warning">runtime 读取失败：{runtimeError}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
-              <div className="panel" style={{ marginTop: 10 }}>成员身份属于此项目；runtime 渠道是执行程序。配置成功不等于模型或识图能力已经认证。</div>
+              {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{runtimeError}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
             </div>
 
             <div className="card">
@@ -132,19 +131,8 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
                 <dt>历史识图证据</dt><dd>{runtime?.imageInput?.evidence?'当前组合匹配历史证据':'本组合没有匹配的历史证据；不阻止自动输入'}</dd>
               </dl>
               {runtime?.imageInput != null ? <details style={{ marginTop: 8 }}><summary>识图配置依据</summary><div className="small mono" style={{ overflowWrap: 'anywhere' }}>配置 {runtime.imageInput.configuration} · 模型 {runtime.imageInput.model ?? '未指定'} · 权限 {runtime.imageInput.permissionMode} · 渠道 {runtime.imageInput.channel} · 协议 {runtime.imageInput.protocol}</div></details> : null}
-              {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>配置 runtime 与模型…</button> : null}
-              <div className="pset-divider" />
-              <div className="small faint">内部子助手与成员级生命周期重置仍未接入；不显示假开关。</div>
+              {member.principalType === 'agent' ? <button className="btn primary sm" data-zs-member-detail-bind={member.id} onClick={() => setBindOpen(true)} style={{ marginTop: 12 }}>AI 设置…</button> : null}
             </div>
-          </div>
-
-          <div className="section-title" style={{ marginTop: 20 }}>生命周期动作</div>
-          <div className="grid grid-3">
-            {[
-              ['重启 runtime', '尚无成员级进程重启正式命令'],
-              ['重置任务会话', '尚无成员级会话代次重置正式命令'],
-              ['清理托管私有资料', '尚无成员级私有资料清理正式命令'],
-            ].map(([label, reason]) => <div className="card tight" key={label}><div className="strong">{label}</div><div className="small faint" style={{ marginTop: 4 }}>{reason}</div><button className="btn sm" disabled title={reason} style={{ marginTop: 9 }}>未接入</button></div>)}
           </div>
         </> : null}
       </div>

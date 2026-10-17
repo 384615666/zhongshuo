@@ -1799,12 +1799,7 @@ function ThreadPanel({
             <Icon name="clock" size={13} />
             等 {memberLabel(byId(s.members, absence.memberId))}（已 {Math.round((Date.now() - absence.since) / 60000)} 分钟，容忍 {Math.round(absence.graceMs / 60000)} 分钟）
           </div>
-          超过容忍后会自动"按缺席继续"：不打断仍在运行的成员，阶段屏障以现有成果推进并先生成部分成果，
-          roster 标记该成员迟到。缺席容忍（absenceGrace）与单轮硬保护（turnDeadline）是两个独立设置。
-          <div className="panel-actions">
-            <button className="btn sm" disabled title="成员级重试/按缺席继续命令尚未接入本包（真实能力限制）——可在串里 @ 该成员重新唤起（真实派发）">重试该成员（未接入）</button>
-            <button className="btn sm" disabled title="成员级重试/按缺席继续命令尚未接入本包（真实能力限制）">按现有成员继续（未接入）</button>
-          </div>
+          超过等待时间后会先带着现有成果继续，不会打断仍在工作的成员。需要它继续参与时，可在串里重新 @ 它。
         </div>
       ) : null}
 
@@ -1927,6 +1922,7 @@ function ThreadPanel({
               navigate(`/project/${s.activeProjectId}/room/${thread.roomId}?${q.toString()}`, { replace: true });
             }}
             onOpenResource={onOpenResource}
+            onReview={() => changeTab('delivery')}
           />
         ) : null}
 
@@ -2383,6 +2379,7 @@ function ThreadArtifacts({
   threadId,
   isDiscussion,
   onOpenResource,
+  onReview,
 }: {
   threadId: string;
   /** 讨论串：只有消息附件，没有任务成果（Artifact 需要 taskId） */
@@ -2392,6 +2389,7 @@ function ThreadArtifacts({
   onBack?: () => void;
   /** UX-PREVIEW-01：在共享预览区打开资源 */
   onOpenResource?: (resourceId: string, revision?: number, from?: ContextLocation) => void;
+  onReview?: () => void;
 }) {
   const s = useStore((x) => x);
   /** 线程归属会话与任务（真实实体——附件按会话聚合、交付按任务过滤）。 */
@@ -2463,7 +2461,7 @@ function ThreadArtifacts({
           <div className="card tight" style={{ marginBottom: 10 }}>
             <div className="row tight" style={{ marginBottom: 6 }}>
               <Icon name="paperclip" size={13} className="faint" />
-              <span className="strong" style={{ fontSize: 12 }}>本串附件与产物</span>
+              <span className="strong" style={{ fontSize: 12 }}>附件</span>
               <span className="small faint">{data.attachments.length}</span>
             </div>
             <div className="msg-attach-row" style={{ marginTop: 0 }}>
@@ -2471,7 +2469,7 @@ function ThreadArtifacts({
                 <button
                   key={a.attachmentId}
                   className="msg-attach"
-                  title={`在共享预览打开 ${a.filename}——${ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind} v${a.revision} · sha256=${a.hash.slice(0, 12)}…（只读，不发送给 AI）`}
+                  title={`打开 ${a.filename}，不改变原件`}
                   onClick={() => openAtt(a)}
                 >
                   <Icon name="file-text" size={12} />
@@ -2487,7 +2485,7 @@ function ThreadArtifacts({
       {(() => {
         if (isDiscussion) return null;
         if (data.deliveries.length === 0) {
-          return <div className="small faint" style={{ padding: '4px 2px' }}>还没有已提交的交付版本。</div>;
+          return <div className="small faint" style={{ padding: '4px 2px' }}>还没有任务成果。</div>;
         }
         return (
           <>
@@ -2497,14 +2495,13 @@ function ThreadArtifacts({
                   <Icon name="package" size={14} className="faint" />
                   <span className="strong truncate" style={{ fontSize: 12 }}>{d.title}</span>
                   <Tag tone="info">v{d.revision}</Tag>
-                  <Tag plain>manifest {d.manifestHash.slice(0, 8)}…</Tag>
                   <div className="spacer" />
-                  <span className="small faint">{d.reviewedAt != null ? `已复核 ${relTime(d.reviewedAt)}` : '待验收'}</span>
+                  <span className="small faint">{d.reviewedAt != null ? `已确认 ${relTime(d.reviewedAt)}` : '等你确认'}</span>
                 </div>
                 <div className="row tight">
                   <button
                     className="btn ghost sm"
-                    title="在共享预览打开交付文档（delivery.document——正文 hash 与 manifest 核对；阅读/源码切换、另存、引用均可用）"
+                    title="打开成果；阅读后可在预览里保存原件"
                     onClick={() => {
                       // R68 §6 第三来源：登记 delivery 资源并开标签（与 ThreadPage 成果页同一通道）。
                       const target = { kind: 'thread' as const, projectId, roomId: thread?.roomId ?? '', threadId, tab: 'artifacts' as const };
@@ -2516,16 +2513,17 @@ function ThreadArtifacts({
                       openPreviewTab(rid, d.revision, { target });
                       recordWrite('preview.delivery', `打开交付文档 ${d.deliveryId.slice(0, 14)}… v${d.revision}（manifest ${d.manifestHash.slice(0, 8)}…）`);
                     }}
-                  >打开文档</button>
+                  >打开/保存文件</button>
+                  <button className="btn ghost sm" onClick={onReview}>确认或修改</button>
                 </div>
-                <div className="small faint">验收/返工在「详情 → 交付与验收」按冻结三重身份执行。</div>
+                <details className="small faint"><summary>版本身份</summary>{d.deliveryId} · {d.manifestHash}</details>
               </div>
             ))}
           </>
         );
       })()}
 
-      <div className="faint small">附件=会话级托管资源（真实版本/hash）；交付=任务级成果版本。两者都只读呈现——写操作走各自正式入口。</div>
+      <div className="faint small">“保存文件”保存成果原件；“导出聊天”只导出对话记录。</div>
     </div>
   );
 }
@@ -2596,29 +2594,28 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
   const submitReview = async () => {
     if (reviewBox == null) return;
     if (reviewBox.mode === 'rework' && reviewBox.note.trim().length === 0) {
-      toast('要求修改必须填写意见（意见进入正式任务记录并注入返工输入）', 'warn');
+      toast('请写下希望修改的地方', 'warn');
       return;
     }
     const r = await submitTaskReview(reviewBox.snapshot, reviewBox.mode === 'accept' ? 'accept' : 'changes_requested', reviewBox.mode === 'rework' ? reviewBox.note.trim() : undefined, threadId);
-    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已验收通过（任务完成）' : '返工意见已记录、尚未执行——点击「执行返工」继续', 'success'); setReviewBox(null); void loadThread(threadId); }
-    else toast(`提交失败：${r.error}——意见已保留可修正重提；若交付已变化本框将作废`, 'error');
+    if (r.ok) { toast(reviewBox.mode === 'accept' ? '已确认完成' : '修改意见已保存，下一步可以开始修改', 'success'); setReviewBox(null); void loadThread(threadId); }
+    else toast(`提交失败：${r.error}——意见已保留；如果成果已更新，请对新版本重新操作`, 'error');
   };
   const rp = detail?.reworkPending ?? null;
   return (
     <div className="msg-list">
       <div className="card tight">
-        <div className="section-title">交付与验收（可选验收的唯一主入口）</div>
+        <div className="section-title">确认成果与修改</div>
         {pending == null ? (
-          <div className="small faint" style={{ marginTop: 4 }}>当前没有待验收交付（任务策略为 user_review 且有新交付时在此出现）。</div>
+          <div className="small faint" style={{ marginTop: 4 }}>当前没有等你确认的成果。</div>
         ) : (
           <>
             <div className="small faint" style={{ marginTop: 4 }}>
-              待验收交付：v{pending.revision} · manifest {pending.manifestHash.slice(0, 12)}…
-              （提交按打开时冻结的这三重身份——版本变化不自动套用）
+              v{pending.revision} 等你确认。确认或修改只针对这个版本。
             </div>
             <div className="row tight" style={{ marginTop: 8 }}>
-              <button className="btn sm primary" disabled={reviewBox != null} onClick={() => openReview('accept')} title="验收当前版本（任务→已完成）">验收通过</button>
-              <button className="btn sm" disabled={reviewBox != null} onClick={() => openReview('rework')} title="要求返工（须填意见——任务回到执行）">要求返工</button>
+              <button className="btn sm primary" disabled={reviewBox != null} onClick={() => openReview('accept')} title="确认这份成果已经满足要求">确认完成</button>
+              <button className="btn sm" disabled={reviewBox != null} onClick={() => openReview('rework')} title="写下修改意见，再让 AI 修改">按这些意见修改</button>
             </div>
             {reviewBox != null ? (
               <div style={{ marginTop: 8 }}>
@@ -2633,13 +2630,13 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
                       <textarea
                         className="textarea"
                         style={{ width: '100%', minHeight: 64 }}
-                        placeholder="返工意见（必填——进入正式任务记录并注入返工输入）"
+                        placeholder="写下希望 AI 修改的地方"
                         value={reviewBox.note}
                         onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })}
                       />
-                    ) : <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}（manifest {reviewBox.snapshot.manifestHash.slice(0, 12)}…）。</div>}
+                    ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。<details className="faint"><summary>版本身份</summary>{reviewBox.snapshot.deliveryId} · {reviewBox.snapshot.manifestHash}</details></div>}
                     <div className="row tight" style={{ marginTop: 6 }}>
-                      <button className="btn sm primary" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认验收' : '提交返工意见'}</button>
+                      <button className="btn sm primary" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认完成' : '保存修改意见'}</button>
                       <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
                     </div>
                   </>
@@ -2651,11 +2648,11 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
         {rp != null ? (
           <div className="row tight wrap" style={{ marginTop: 8 }} data-zs-thread-rework="1" data-zs-thread-rework-state={rp.queued ? 'executing' : 'recorded'}>
             <Icon name="refresh" size={13} />
-            <strong>{rp.queued ? '返工执行中（已入队/派发）' : '返工意见已记录、尚未执行'}</strong>
-            <Tag tone="warning">v{rp.deliveryRevision} 被要求修改</Tag>
+            <strong>{rp.queued ? '正在按你的意见修改' : '修改意见已保存，尚未开始'}</strong>
+            <Tag tone="warning">v{rp.deliveryRevision} 待修改</Tag>
             <span style={{ flex: 1 }} />
             {rp.queued ? (
-              <span className="faint small">完成后交付升级为新待验收版本</span>
+              <span className="faint small">完成后会出现新的待确认版本</span>
             ) : (
               <button
                 className="btn sm"
@@ -2673,7 +2670,7 @@ function ThreadDeliveryPanel({ threadId, task }: { threadId: string; task: Task 
                     } finally { setBusyRework(false); }
                   })();
                 }}
-              >执行返工</button>
+              >开始修改</button>
             )}
             {rp.note != null ? <div className="faint small" style={{ width: '100%' }}>验收意见：{rp.note}</div> : null}
           </div>

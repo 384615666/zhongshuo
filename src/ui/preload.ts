@@ -47,3 +47,14 @@ contextBridge.exposeInMainWorld('zsDownload', {
   saveAs: (payload: { suggestedName: string; contentBase64: string }): Promise<{ ok: boolean; cancelled?: boolean; path?: string; bytes?: number }> =>
     ipcRenderer.invoke('zs:saveAs', payload),
 });
+
+/**
+ * Complete local data operations. The renderer only names an enum action; the
+ * source/destination paths come from native folder pickers in main. The current
+ * process exits before the detached worker reads any profile or data root.
+ */
+contextBridge.exposeInMainWorld('zsData', {
+  start: (action: 'backup'|'import'): Promise<{ ok: boolean; cancelled?: boolean; jobId?: string; action?: string }> =>
+    ipcRenderer.invoke('zs:data.start', action),
+  status: (): Promise<unknown> => ipcRenderer.invoke('zs:data.status'),
+});

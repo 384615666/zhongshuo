@@ -4,6 +4,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import Database from 'better-sqlite3';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {prepareDataCopyJob,runDataCopyJob,dataLocationHash,dataControlPaths,readDataLocation,committedDataJobReceipt,claimActiveDataOperation,readActiveDataOperation,readDataJobStatus,reconcileInterruptedDataOperation,type DataCopyJob} from '../../src/contracts/dataCopyJob.ts';
 import {openDatabase} from '../../src/persistence/db.ts';
 import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 import {copyClosedDataRoot,findLocalDataRoot,verifyDataBackupContainer} from '../../src/contracts/localDataCopy.ts';
@@ -82,5 +85,88 @@ describe('R87 complete local closed-root copy; all inputs synthetic, zero model 
     await expect(copyClosedDataRoot({...f.input,verifyDatabase:()=>{throw Error('isolated validation interruption');}})).rejects.toThrow('interruption');
     expect(sha(join(f.source,'state.sqlite'))).toBe(before);
     for(const folder of readdirSync(f.destinationParent))expect(JSON.parse(readFileSync(join(f.destinationParent,folder,'data-copy-manifest.json'),'utf8')).status).toBe('incomplete');
+  });
+});
+
+async function closedOwnerPid(){const child=spawn(process.execPath,['-e',''],{windowsHide:true,stdio:'ignore'});await once(child,'exit');return child.pid!;}
+async function jobFor(f:Awaited<ReturnType<typeof fixture>>,patch:Partial<DataCopyJob>={}){
+  const job:DataCopyJob={format:'zhongshuo-data-job-v1',id:randomUUID(),action:'backup',baseRoot:f.source,currentRoot:f.source,selectedSource:f.source,destinationParent:f.destinationParent,ownerPid:await closedOwnerPid(),expectedLocationHash:dataLocationHash(f.source),...patch};
+  return{job,paths:await prepareDataCopyJob(job)};
+}
+describe('R87 data operation identity and atomic location commit, isolated host processes',()=>{
+  it('a completed backup receipt replays without creating another directory or copying again',async()=>{
+    const f=await fixture(),{job,paths}=await jobFor(f);
+    const first=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase});expect(first.state).toBe('succeeded');
+    const count=readdirSync(f.destinationParent).length;
+    expect(await prepareDataCopyJob(job)).toEqual(paths);
+    expect(await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:()=>{throw Error('must not recopy');}})).toEqual(first);
+    expect(readdirSync(f.destinationParent)).toHaveLength(count);expect(readDataLocation(f.source)).toBe(f.source);
+  });
+  it('using another complete root preserves the current root first, commits only the verified copy, and survives a fresh location read',async()=>{
+    const f=await fixture(),other=await fixture(),before=sha(join(f.source,'state.sqlite')),otherBefore=sha(join(other.source,'state.sqlite'));
+    const {paths}=await jobFor(f,{action:'import',selectedSource:other.source});
+    const result=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase});expect(result.state).toBe('succeeded');expect(result.previous).toBeDefined();
+    expect(sha(join(result.previous!.dataRoot,'state.sqlite'))).toBe(before);expect(sha(join(result.result!.dataRoot,'state.sqlite'))).toBe(otherBefore);
+    expect(readDataLocation(f.source)).toBe(result.result!.dataRoot);expect(sha(join(f.source,'state.sqlite'))).toBe(before);expect(sha(join(other.source,'state.sqlite'))).toBe(otherBefore);
+    expect(JSON.parse(readFileSync(paths.location,'utf8')).operationId).toBe(result.id);
+  });
+  it('waiting for an owner that has not exited fails safely without terminating it or starting a copy',async()=>{
+    const f=await fixture(),{paths}=await jobFor(f,{ownerPid:process.pid});
+    const result=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase,waitForOwnerMs:0});expect(result).toMatchObject({state:'failed',error:expect.stringContaining('DATA_CLOSE_TIMEOUT')});
+    expect(readdirSync(f.destinationParent)).toEqual([]);expect(()=>process.kill(process.pid,0)).not.toThrow();
+  });
+  it('a late location change cannot be overwritten by an earlier import operation',async()=>{
+    const f=await fixture(),other=await fixture(),{paths}=await jobFor(f,{action:'import',selectedSource:other.source});let changed=false;
+    const result=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase,onStatus:status=>{
+      if(status.state==='copying'&&status.stage==='selected'&&status.progress?.phase==='verifying'&&!changed){changed=true;writeFileSync(paths.location,JSON.stringify({format:'zhongshuo-data-location-v1',baseKey:dataControlPaths(f.source).key,operationId:randomUUID(),dataRoot:f.source,manifestHash:'f'.repeat(64)}));}
+    }});
+    expect(changed).toBe(true);expect(result).toMatchObject({state:'failed',error:expect.stringContaining('DATA_LOCATION_CHANGED')});expect(readDataLocation(f.source)).toBe(f.source);expect(result.previous).toBeDefined();
+  });
+});
+
+it('R87 a lost success notification after location commit is identified from the exact operation and immutable manifest, never recopied',async()=>{
+  const f=await fixture(),other=await fixture(),{job,paths}=await jobFor(f,{action:'import',selectedSource:other.source});
+  const result=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase,onStatus:status=>{if(status.state==='succeeded')throw Error('isolated closed progress window');}});
+  expect(result.state).toBe('succeeded');const destination=readDataLocation(f.source),count=readdirSync(f.destinationParent).length;
+  // Isolated receipt-loss injection: the real pointer and verified data commit remain unchanged.
+  writeFileSync(paths.status,JSON.stringify({format:'zhongshuo-data-status-v1',id:job.id,state:'copying',at:Date.now()}));
+  const recovered=committedDataJobReceipt(job);expect(recovered).toMatchObject({state:'succeeded',recoveredReceipt:true,result:{dataRoot:destination}});
+  expect(await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:()=>{throw Error('must not recopy');}})).toMatchObject({state:'succeeded',recoveredReceipt:true});
+  expect(readdirSync(f.destinationParent)).toHaveLength(count);expect(readDataLocation(f.source)).toBe(destination);
+  expect(readDataJobStatus(job)).toMatchObject({state:'succeeded',recoveredReceipt:true});
+});
+
+describe('R87 data operation crash ownership and startup reconciliation',()=>{
+  it('refuses another live operation before writing a job lease or destination',async()=>{
+    const f=await fixture(),first=await jobFor(f),second=await jobFor(f);
+    claimActiveDataOperation(first.job,process.pid);
+    await expect(runDataCopyJob(second.paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase})).rejects.toThrow('DATA_OPERATION_IN_PROGRESS');
+    expect(existsSync(second.paths.lease)).toBe(false);expect(readdirSync(f.destinationParent)).toEqual([]);
+  });
+  it('a dead worker before pointer commit becomes a durable unknown receipt and is never recopied automatically',async()=>{
+    const f=await fixture(),{job,paths}=await jobFor(f);
+    writeFileSync(paths.lease,JSON.stringify({id:job.id,pid:await closedOwnerPid(),at:Date.now()}));
+    writeFileSync(paths.status,JSON.stringify({format:'zhongshuo-data-status-v1',id:job.id,state:'copying',at:Date.now()}));
+    const status=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:()=>{throw Error('must not recopy');}});
+    expect(status).toMatchObject({state:'unknown',error:expect.stringContaining('DATA_OPERATION_INTERRUPTED')});
+    expect(readDataJobStatus(job)).toMatchObject({state:'unknown'});
+    expect(readdirSync(f.destinationParent)).toEqual([]);expect(readDataLocation(f.source)).toBe(f.source);
+  });
+  it('startup reconciliation settles a committed pointer left with a stale progress host, without opening or copying the profile',async()=>{
+    const f=await fixture(),other=await fixture(),{job,paths}=await jobFor(f,{action:'import',selectedSource:other.source});
+    const first=await runDataCopyJob(paths.job,{maxSchemaVersion:54,verifyDatabase:f.verifyDatabase});
+    writeFileSync(paths.status,JSON.stringify({format:'zhongshuo-data-status-v1',id:job.id,state:'copying',at:Date.now()}));
+    claimActiveDataOperation(job,await closedOwnerPid());
+    const recovered=reconcileInterruptedDataOperation(f.source);
+    expect(recovered).toMatchObject({state:'succeeded',recoveredReceipt:true,result:{dataRoot:first.result!.dataRoot}});
+    expect(readActiveDataOperation(f.source)).toBeNull();expect(readDataJobStatus(job)).toMatchObject({state:'succeeded',recoveredReceipt:true});
+    expect(JSON.parse(readFileSync(paths.location,'utf8')).operationId).toBe(job.id);
+  });
+  it('startup reconciliation marks an uncommitted dead operation unknown, clears the host mutex, and preserves the current root',async()=>{
+    const f=await fixture(),{job}=await jobFor(f);
+    claimActiveDataOperation(job,await closedOwnerPid());
+    const interrupted=reconcileInterruptedDataOperation(f.source);
+    expect(interrupted).toMatchObject({state:'unknown',error:expect.stringContaining('原数据位置没有切换')});
+    expect(readActiveDataOperation(f.source)).toBeNull();expect(readDataLocation(f.source)).toBe(f.source);expect(readdirSync(f.destinationParent)).toEqual([]);
   });
 });

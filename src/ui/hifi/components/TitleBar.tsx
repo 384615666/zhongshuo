@@ -144,8 +144,8 @@ export function TitleBar() {
           ref={projectTrigger}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, padding: '2px 8px' }}
           title={project != null
-            ? `项目管理：切换当前项目 / 侧栏显示 / 打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
-            : '项目管理：打开文件夹添加项目'}
+            ? `切换项目、显示项目或打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
+            : '打开文件夹添加项目'}
           aria-haspopup="menu"
           aria-expanded={pmAt != null}
           onClick={(e) => {
@@ -169,11 +169,11 @@ export function TitleBar() {
             className="zs-tb-stat zs-tb-no-drag"
             data-zs-dispatch-guard={guard.fakeAllowed ? 'fake' : 'real'}
             title={guard.fakeAllowed
-              ? `演练模式：允许 fake adapter 模拟执行${guard.realDispatchGuard ? '；真实派发防护开启（真实 startTurn 会被拒）' : ''}——零真实模型调用`
-              : '正式模式：未启用 fake adapter；派发走真实 runtime 合同'}
+              ? '模拟运行：消息不会请求真实 AI'
+              : '真实任务：消息会交给已配置的 AI'}
             style={{ fontSize: 11, padding: '1px 8px', borderRadius: 999, border: guard.fakeAllowed ? '1px solid var(--warning,#b45309)' : '1px solid var(--border,#dbe2ea)', color: guard.fakeAllowed ? 'var(--warning,#b45309)' : 'var(--text-2,#64748b)' }}
           >
-            {guard.fakeAllowed ? '演练·模拟派发' : '真实派发'}
+            {guard.fakeAllowed ? '模拟运行' : '真实任务'}
           </span>
         ) : null}
         <div
@@ -235,13 +235,13 @@ export function TitleBarStatButton() {
       data-zs-running-tasks={facts == null ? undefined : String(facts.unfinishedTasks)}
       data-zs-running-turns={facts == null ? undefined : String(facts.activeTurns)}
       title={project != null
-        ? `${project.displayName} 的未结束任务与在途 turn（项目范围、受众过滤）${error != null ? `；读取失败：${error}（保留上次事实）` : ''}`
+        ? `${project.displayName} 的未完成任务与正在运行的数量${error != null ? `；读取失败：${error}` : ''}`
         : '打开项目后显示该项目的任务状态'}
       onClick={() => navigate(project != null ? `/board?scope=project&projectId=${project.id}` : '/board')}
     >
       <Icon name="activity" size={12} />
-      后台任务 <strong>{facts?.unfinishedTasks ?? '—'}</strong>
-      <span className="faint"> · {facts?.activeTurns ?? '—'} turn</span>
+      进行中 <strong>{facts?.unfinishedTasks ?? '—'}</strong>
+      <span className="faint"> · 正在运行 {facts?.activeTurns ?? '—'}</span>
       {error != null ? <span title={error}> · 读取失败</span> : null}
     </button>
   );

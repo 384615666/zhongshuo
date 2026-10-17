@@ -223,7 +223,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明 / 短ID" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
           <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
           <span className="filter-note">
-            {membersInScope?.length ?? '…'} 名成员 · 成员是项目级实例，同名成员不合并
+            {membersInScope?.length ?? '…'} 名成员
           </span>
           <div className="spacer" />
           <button
@@ -233,8 +233,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           ) : projRemoved ? (
             <span className="filter-note" style={{ color: 'var(--warning,#b45309)' }}>项目已移除——不能添加成员</span>
           ) : (
-            <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加成员实例（member.create——自动加入未归档房间；不自动成为协调者；runtime 绑定随后配置；归档/移除项目服务端同判拒绝）">
-              <Icon name="user-plus" size={12} /> 添加成员
+            <button className="btn primary sm" disabled={projectId == null || projectId === ''} onClick={() => setAddFor(projectId)} title="添加一位使用本机已有渠道的 AI">
+              <Icon name="user-plus" size={12} /> 添加 AI
             </button>
           )}
         </div>
@@ -249,7 +249,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         {membersInScope == null && err == null && projectId != null && projectId !== '' ? <div className="panel info">正在装载…</div> : null}
 
         {membersInScope != null && membersInScope.length === 0 ? (
-          <div className="panel info">这个项目还没有成员。成员在项目注册时建立；添加新成员的界面入口属后续批次（不放假成功按钮）。</div>
+          <div className="panel info">这个项目还没有 AI。点右上角「添加 AI」，选择已有渠道和模型即可开始。</div>
         ) : null}
 
         {/* 成员卡片（原型 grid-2：头像+名称+身份标签 / runtime 有效来源 / 在跑任务） */}
@@ -354,7 +354,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
           onCreated={async () => {
             setAddFor(null);
             toast('已添加 AI 并保存配置', 'success');
-            await refreshRooms(addFor);
+            await Promise.all([refreshRooms(addFor), refreshMembers(addFor)]);
             // 迟到回执：只刷新**提交目标项目**的名单（当前焦点若已切到别的项目，不覆盖其视图）。
             if (getState().activeProjectId === addFor) await reload();
             else await refreshMembers(addFor).catch(() => { /* 焦点已切走——store 投影按目标项目刷新即可 */ });
@@ -427,14 +427,14 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
           <span className="small faint">{guard?.realDispatchGuard === true ? '当前为验收防护环境：真实渠道绑定会被拒绝' : '保存后回读显示能力状态'}</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存绑定'}</button>
+          <button className="btn primary sm" disabled={busy||formGuard.invalid} data-zs-member-bindsave={member.id} onClick={() => void save()}>{busy ? '保存中…' : '保存 AI 设置'}</button>
         </>
       }
     >
       <div className="col" style={{ gap: 10 }}>
         {formGuard.invalid?<div className="panel warning">目标已切换，本表单作废；请关闭后重新配置。</div>:null}
         {saveError != null ? <div className="panel warning">绑定失败：{saveError}。输入已保留，可调整后重试。</div> : null}
-        <label className="field" title="runtime 渠道（派发侧按此选 adapter）">
+        <label className="field" title="选择本机已有的 AI 渠道">
           <span className="field-label">渠道</span>
           <Select
             value={form.kind}

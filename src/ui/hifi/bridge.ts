@@ -19,6 +19,24 @@ export interface ZsBridge {
   onReconnected(cb: () => void): void;
 }
 
+export interface DataOperationStatus {
+  baseRoot: string;
+  currentRoot: string | null;
+  active: {id: string; running: boolean; at: number} | null;
+  activeError: string | null;
+  latest: {id: string; state: 'waiting-close'|'copying'|'succeeded'|'failed'|'unknown'; error?: string; at: number; recoveredReceipt?: boolean; action: 'backup'|'import'|null} | null;
+}
+export interface ZsDataBridge {
+  start(action:'backup'|'import'):Promise<{ok:boolean;cancelled?:boolean;jobId?:string;action?:string}>;
+  status():Promise<DataOperationStatus>;
+}
+
+export function dataBridge(): ZsDataBridge {
+  const bridgeApi=(window as unknown as {zsData?:ZsDataBridge}).zsData;
+  if(bridgeApi==null||typeof bridgeApi.start!=='function'||typeof bridgeApi.status!=='function')throw Error('本机数据操作入口不可用，请从正常启动器打开众说');
+  return bridgeApi;
+}
+
 /** 打开导出目录（窄权限：exports/ 白名单外的路径由 main 拒绝）。 */
 export async function openExportDir(dir: string): Promise<string> {
   return bridge().openPath(dir);

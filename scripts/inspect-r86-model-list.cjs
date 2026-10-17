@@ -2,7 +2,7 @@
 /* global require,process,console,setTimeout,clearTimeout */
 // Read-only model/list. No thread/start, turn/start, inference or user config mutation.
 const {spawn}=require('node:child_process'),fs=require('node:fs'),path=require('node:path');
-const file=path.resolve('dist/review-r86-source/codex-model-list-20261015.json');if(fs.existsSync(file))throw Error('preserve original list');
+const file=path.resolve(process.argv[2]??'dist/review-r86-source/codex-model-list-20261015.json');if(fs.existsSync(file)&&process.argv[2]==null)throw Error('preserve original list');
 const child=spawn(process.execPath,[path.join(process.env.APPDATA,'npm/node_modules/@openai/codex/bin/codex.js'),'app-server'],{windowsHide:true});
 let buffer='',seq=0;const pending=new Map();child.stderr.resume();child.stdout.on('data',raw=>{buffer+=raw;let i;while((i=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);try{const msg=JSON.parse(line),p=pending.get(msg.id);if(p){pending.delete(msg.id);clearTimeout(p.timer);if(msg.error)p.reject(Error(msg.error.message));else p.resolve(msg.result);}}catch{/* non-RPC ignored */}}});
 function rpc(method,params){return new Promise((resolve,reject)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(Error(method+' timeout'));},20000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({id,method,params})+'\n');});}

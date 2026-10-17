@@ -394,8 +394,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         >
           <Icon name={sub?.muted === true ? 'eye-off' : 'eye'} size={13} />{sub?.muted === true ? '已静音' : '静音'}
         </button>
-        <button className="btn ghost sm" title="导出本线程 MD（export.create——快照事务固定消息+附件）" onClick={() => void exportThread('md')}>导出 MD</button>
-        <button className="btn ghost sm" title="导出本线程 DOCX" onClick={() => void exportThread('docx')}>DOCX</button>
+        <details className="menu-wrap" style={{ display: 'inline-block' }}>
+          <summary className="btn ghost sm" style={{ listStyle: 'none' }}><Icon name="download" size={13} /> 导出聊天</summary>
+          <div className="menu" style={{ right: 0, left: 'auto' }}>
+            <button className="menu-item" onClick={() => void exportThread('md')}>聊天记录（Markdown）</button>
+            <button className="menu-item" onClick={() => void exportThread('docx')}>聊天记录（Word）</button>
+          </div>
+        </details>
         <div className="spacer" style={{ flex: 1 }} />
         {isRecordThread
           ? <Tag tone="neutral" icon="message-square">记录串 · 无任务号 · 发送仅保存</Tag>
@@ -490,7 +495,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                   <Tag tone={detail.status === 'DONE' ? 'success' : detail.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{STATUS_LABEL[detail.status] ?? detail.status}</Tag>
                   {detail.activeRun != null ? <span className="faint small">run {STATUS_LABEL[detail.activeRun.status] ?? detail.activeRun.status}</span> : <span className="faint small">无活跃 run</span>}
                 </div>
-                <div className="faint small" style={{ marginTop: 4 }}>任务 revision {detail.revision} · 停止代次 {detail.stopGeneration} · 状态以 task.get 服务端事实为准</div>
+                <div className="faint small" style={{ marginTop: 4 }}>状态会在刷新时按实际进度更新。</div>
                 {detail.lastStartupFailureMessage != null ? <div className="panel warning" style={{ marginTop: 8 }}>最近一次启动失败：{detail.lastStartupFailureMessage}</div> : null}
                 <div className="row tight" style={{ marginTop: 8 }}>
                   {stoppable ? (
@@ -520,17 +525,16 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               <div className="panel info">
                 <div className="row tight"><strong>交付与验收</strong></div>
                 {detail.pendingDelivery == null ? (
-                  <div className="faint small" style={{ marginTop: 4 }}>当前没有待验收交付（任务策略为 user_review 且有新交付时在此出现）。</div>
+                  <div className="faint small" style={{ marginTop: 4 }}>当前没有等你确认的成果。</div>
                 ) : (
                   <>
                     <div className="faint small" style={{ marginTop: 4 }}>
-                      待验收交付：v{detail.pendingDelivery.revision} · id {detail.pendingDelivery.id} · manifest {detail.pendingDelivery.manifestHash.slice(0, 12)}…
-                      （提交按打开时冻结的这三重身份——版本变化不自动套用）
+                      最新成果 v{detail.pendingDelivery.revision} 等你确认。确认或要求修改前，版本不会自动切换。
                     </div>
                     <div className="row tight" style={{ marginTop: 8 }}>
-                      <button className="btn ghost sm" disabled={reviewBox != null} onClick={() => openReview('accept')} title="验收当前版本（任务→已完成）">验收通过</button>
-                      <button className="btn ghost sm" disabled={reviewBox != null} onClick={() => openReview('rework')} title="要求返工（须填意见——任务回到执行）">要求返工</button>
-                      <button className="btn ghost sm" title="查看本任务的交付成果与附件（本页「成果与附件」标签）" onClick={() => setTab('artifacts')}>查看成果与附件</button>
+                      <button className="btn sm primary" disabled={reviewBox != null} onClick={() => openReview('accept')} title="确认这份成果已经满足要求">确认完成</button>
+                      <button className="btn sm" disabled={reviewBox != null} onClick={() => openReview('rework')} title="写下修改意见，再让 AI 修改">按这些意见修改</button>
+                      <button className="btn ghost sm" title="查看本任务的成果与附件" onClick={() => setTab('artifacts')}>查看成果与附件</button>
                     </div>
                     {reviewBox != null ? (
                       <div style={{ marginTop: 8 }}>
@@ -545,13 +549,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                               <textarea
                                 className="composer-input"
                                 style={{ width: '100%', minHeight: 64 }}
-                                placeholder="返工意见（必填——进入正式任务记录并注入返工输入）"
+                                placeholder="写下希望 AI 修改的地方"
                                 value={reviewBox.note}
                                 onChange={(e) => setReviewBox((b) => b == null ? b : { ...b, note: e.target.value })}
                               />
-                            ) : <div className="faint small">将验收通过 v{reviewBox.snapshot.deliveryRevision}（manifest {reviewBox.snapshot.manifestHash.slice(0, 12)}…）。</div>}
+                            ) : <div className="faint small">将确认成果 v{reviewBox.snapshot.deliveryRevision} 完成。<details className="faint"><summary>版本身份</summary>{reviewBox.snapshot.deliveryId} · {reviewBox.snapshot.manifestHash}</details></div>}
                             <div className="row tight" style={{ marginTop: 6 }}>
-                              <button className="btn sm" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认验收' : '提交返工意见'}</button>
+                              <button className="btn sm" onClick={() => void submitReview()}>{reviewBox.mode === 'accept' ? '确认完成' : '保存修改意见'}</button>
                               <button className="btn ghost sm" onClick={() => setReviewBox(null)}>取消</button>
                             </div>
                           </>
@@ -564,13 +568,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                 {detail.reworkPending != null ? (
                   <div className="row tight wrap" style={{ marginTop: 8 }} data-zs-thread-rework="1" data-zs-thread-rework-state={detail.reworkPending.queued ? 'executing' : 'recorded'}>
                     <Icon name="refresh" size={13} />
-                    <strong>{detail.reworkPending.queued ? '返工执行中（已入队/派发）' : '返工意见已记录、尚未执行'}</strong>
-                    <Tag tone="warning">v{detail.reworkPending.deliveryRevision} 被要求修改</Tag>
+                    <strong>{detail.reworkPending.queued ? '正在按你的意见修改' : '修改意见已保存，尚未开始'}</strong>
+                    <Tag tone="warning">v{detail.reworkPending.deliveryRevision} 待修改</Tag>
                     <span style={{ flex: 1 }} />
                     {detail.reworkPending.queued ? (
-                      <span className="faint small">完成后交付升级为新待验收版本</span>
+                      <span className="faint small">完成后会出现新的待确认版本</span>
                     ) : (
-                      <button className="btn sm" disabled={busyRework} title={`执行返工（task.executeRework——同任务新执行，意见注入模型输入；绑定 v${detail.reworkPending.deliveryRevision} 完整身份）`} onClick={doExecuteRework}>执行返工</button>
+                      <button className="btn sm" disabled={busyRework} title="让 AI 按已保存的意见修改，完成后生成新版本" onClick={doExecuteRework}>开始修改</button>
                     )}
                     {detail.reworkPending.note != null ? <div className="faint small" style={{ width: '100%' }}>验收意见：{detail.reworkPending.note}</div> : null}
                   </div>
@@ -579,17 +583,17 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             </>
           )}
 
-          <div className="panel info">
-            <div className="row tight"><strong>未换装分组（经原界面定向）</strong></div>
+          <details className="panel info">
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>更多任务信息</summary>
             <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
               {LEGACY_SECTIONS.map((sec) => (
-                <button key={sec.key} className="btn ghost sm" style={{ justifyContent: 'space-between' }} title={sec.note} onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>
-                  <span>{sec.label} → 原界面</span>
-                  <span className="faint small">{sec.note}</span>
+                <button key={sec.key} className="btn ghost sm" style={{ justifyContent: 'space-between' }} onClick={() => import('./App').then((m) => m.takeLegacy('current-room'))}>
+                  <span>{sec.label}</span>
+                  <span className="faint small">打开</span>
                 </button>
               ))}
             </div>
-          </div>
+          </details>
         </div>
       ) : (
         /* 成果与附件（r55 真实标签——替换原「R52 后接入」占位）：会话附件带真实版本/hash
@@ -598,7 +602,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           <div className="panel info" style={{ marginTop: 0 }}>
             <div className="row tight">
               <strong>会话附件</strong>
-              <span className="faint small">（attachment.listByConversation——本会话全部托管资源，含房间根消息与回复携带；点击只读预览）</span>
+              <span className="faint small">点击打开，不改变原件。</span>
             </div>
             {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : artifacts.attErr != null ? (
               <div className="panel warning" style={{ marginTop: 6 }}>附件列表读取失败：{artifacts.attErr}（可切回其它标签再进重试）</div>
@@ -624,8 +628,8 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
           </div>
           <div className="panel info">
             <div className="row tight">
-              <strong>本任务交付</strong>
-              <span className="faint small">（files.view 只读聚合按本任务过滤——验收/返工在「详情」按冻结三重身份执行）</span>
+              <strong>任务成果</strong>
+              <span className="faint small">当前任务生成的文件与报告。</span>
             </div>
             {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : isRecordThread ? (
               <div className="faint small" style={{ marginTop: 6 }}>记录串没有任务与交付——回复仅保存。</div>
@@ -639,24 +643,24 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
                   <div key={d.deliveryId} className="row tight" style={{ padding: '6px 8px', border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, marginBottom: 6 }} data-zs-delivery-row={d.deliveryId}>
                     <Icon name="package" size={13} />
                     <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
-                    <Tag tone="info">v{d.revision} · manifest {d.manifestHash.slice(0, 8)}…</Tag>
-                    <span className="faint small">{d.reviewedAt != null ? `已复核 ${new Date(d.reviewedAt).toLocaleString()}` : '待验收'}{d.audience === 'dm' ? ' · 私信交付' : ''}</span>
+                    <Tag tone="info">v{d.revision}</Tag>
+                    <span className="faint small">{d.reviewedAt != null ? `已确认 ${new Date(d.reviewedAt).toLocaleString()}` : '等你确认'}{d.audience === 'dm' ? ' · 私信' : ''}</span>
                     <button
                       className="btn ghost sm"
                       title="在共享预览打开交付文档（delivery.document——正文 hash 与 manifest 核对；阅读/源码切换、另存、引用均可用）"
                       onClick={() => openDeliveryDoc(d)}
-                    >打开文档</button>
-                    <button
-                      className="btn ghost sm"
-                      title="定位到线程「详情」的交付与验收（#delivery= 深链——验收绑定具体版本）"
-                      onClick={() => setTab('task')}
-                    >查看验收</button>
+                    >打开/保存文件</button>
+                    {d.deliveryId === detail?.pendingDelivery?.id ? <>
+                      <button className="btn ghost sm" onClick={() => { setTab('task'); openReview('accept'); }}>确认完成</button>
+                      <button className="btn ghost sm" onClick={() => { setTab('task'); openReview('rework'); }}>按意见修改</button>
+                    </> : <button className="btn ghost sm" onClick={() => setTab('task')}>查看版本</button>}
+                    <details className="faint small" style={{ width: '100%' }}><summary>版本身份</summary>{d.deliveryId} · {d.manifestHash}</details>
                   </div>
                 ))}
               </div>
             )}
           </div>
-          <div className="faint small">附件=会话级托管资源（房间根消息与本线程回复共用一个会话）；交付=任务级成果版本。两者都只读呈现——写操作（上传/移除/验收）走各自正式入口。</div>
+          <div className="faint small">“保存文件”保存当前成果原件；“导出聊天”只导出对话记录，两者分开。</div>
         </div>
       )}
     </div>

@@ -10,7 +10,7 @@ const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '
 
 rmSync(join(root, 'dist', 'ui'), { recursive: true, force: true });
 
-for (const entry of ['main', 'preload']) {
+for (const entry of ['main', 'preload', 'dataCopyWorker']) {
   await build({
     entryPoints: [join(root, 'src', 'ui', `${entry}.ts`)],
     bundle: true,

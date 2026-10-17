@@ -49,7 +49,7 @@ const BAT = ['@echo off',
   'rem Engineering pass-through (verification only, documented): ZS_DEV25_DEBUG_PORT (CDP),',
   'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (dir-picker), ZS_SAVEAS_AUTO_DIR (isolated save verification).',
   'for /f "delims== tokens=1" %%V in (\'set ZS_ 2^>nul\') do (',
-  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" if /i not "%%V"=="ZS_R78_ENGINEERING_TOKEN" if /i not "%%V"=="ZS_DAEMON_ENTRY" set "%%V="',
+  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_DATA_PICK_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" if /i not "%%V"=="ZS_R78_ENGINEERING_TOKEN" if /i not "%%V"=="ZS_DAEMON_ENTRY" set "%%V="',
   ')',
   'rem R78 explicit engineering entry: own isolated root, nonce marker, debug port, no bundled fixture.',
   'if not "!ZS_R78_ENGINEERING_TOKEN!"=="" (',
@@ -279,6 +279,34 @@ if(outArg?.startsWith('desktop-daily-win-v24')){
 if(outArg?.startsWith('desktop-daily-win-v25')){
   const {writeR86ReleaseGuides}=await import('./lib/r86-release-guides.mjs');
   writeR86ReleaseGuides(out);
+}
+if(outArg?.startsWith('desktop-daily-win-v26')){
+  writeFileSync(join(out,'README-CANDIDATE.md'),`# 众说 R87 Windows 日常候选
+
+从 \`start-desktop.bat\` 启动。这个包使用自己的数据目录，不读取或改写旧包的数据、账号、草稿和附件。
+
+首次使用：打开一个本地文件夹 → 在成员页点“添加 AI” → 选择已检测到的渠道和模型 → 在默认房间里直接说话。添加 AI 后，房间和回复串的成员名单会立即刷新。
+
+数据与恢复：设置 → 数据与存储。可以“备份全部数据”，也可以“选择已有数据”。程序会先正常关闭，随后复制完整数据目录并逐个核对文件，完成后再自动重开。原目录不会被移动、覆盖或删除；切换位置前也会保留当前副本。备份包含本地对话、附件和账号资料，请妥善保管。
+
+成果：完成回复附近可以打开或保存实际文件；需要修改时点“按这些意见修改”；确认无误后点“确认完成”。聊天导出与保存成果文件是两个不同动作。
+
+恢复：普通界面先显示“发送结果待确认”“上次任务中断”等可读状态和下一步；工程级的详细判定在“查看详情”里。程序不会自动重发未知结果，也不会自动解除文件保护。
+
+本候选完成 R87 的真实 Windows UI、Claude \`deepseek-flash\` 与 Codex \`gpt-6-luna\` 合成报告协作、普通追问、修改、验收、保存原件和正常关闭重开验证。模型是否可用仍取决于你本机的渠道、账号、程序路径和权限配置。Android、安装器、签名、自动更新和并行写入增强不在本轮范围。
+`,'utf8');
+  writeFileSync(join(out,'README-DAILY.md'),`# 众说 R87
+
+双击 \`start-desktop.bat\` 即可使用。
+
+- 打开文件夹后，在成员页添加 AI；模型清单来自本机已有渠道。
+- 房间里直接发送消息，@ 用来选择收件人。
+- 在“设置 → 数据与存储”中备份全部数据或使用已有数据。
+- 在成果与附件中打开、预览、保存实际文件。
+- 关闭后重新打开，会保留项目、对话、成员、成果和接受状态。
+
+需要帮助时，先查看界面的“待我处理”或“恢复检查”；详细信息可以展开查看，不会自动替你做有风险的决定。
+`,'utf8');
 }
 console.log(`[daily-pkg] 就绪：${out}`);
 console.log(`[daily-pkg] 清单核对 ${checked} 一致，不符/缺失 ${missing}；buildId=${build.buildId} commit=${build.commit} dirty=${build.dirty}`);

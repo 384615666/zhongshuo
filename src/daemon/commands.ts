@@ -4344,6 +4344,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const { realCallSummary } = await import('./realCallLedger.ts');
         return withCommandId({ ok: true, data: realCallSummary(deps.db, params.batchId) });
       }
+      case 'app.dataReadiness': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','完整本地数据操作仅限本机入口');
+        z.strictObject({}).parse(env.params);
+        const active=(deps.db.prepare("SELECT count(*) n FROM agent_turns WHERE status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')").get() as {n:number}).n;
+        return withCommandId({ok:true,data:{activeTurns:active,ready:active===0}});
+      }
       case 'app.health': {
         z.strictObject({}).parse(env.params);
         return withCommandId({ok:true,data:{ready:true,at:Date.now()}});

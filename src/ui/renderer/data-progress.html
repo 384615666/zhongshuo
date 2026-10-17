@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>众说 · 数据操作</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eef1f5; color: #18202b; }
+    main { width: min(560px, calc(100vw - 40px)); background: #fff; border: 1px solid #d6dde7; border-radius: 8px; padding: 28px; }
+    .eyebrow { font-size: 12px; color: #607087; letter-spacing: .02em; }
+    h1 { margin: 8px 0 10px; font-size: 24px; line-height: 1.25; }
+    p { margin: 0; color: #4b5c70; line-height: 1.7; overflow-wrap: anywhere; }
+    .status { margin-top: 22px; display: flex; align-items: center; gap: 10px; min-height: 28px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #61748e; flex: none; }
+    .status.wait .dot { animation: pulse 1.2s ease-in-out infinite; }
+    .status.ok .dot { background: #15803d; }
+    .status.bad .dot { background: #b42318; }
+    .hint { margin-top: 18px; padding-top: 16px; border-top: 1px solid #e4e8ee; font-size: 12px; color: #6b7a8e; line-height: 1.6; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    @media (prefers-color-scheme: dark) {
+      body { background: #11161d; color: #eef3f8; }
+      main { background: #19212b; border-color: #354253; }
+      .eyebrow, p, .hint { color: #aebccc; }
+      .hint { border-color: #354253; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">众说 · 本地数据</div>
+    <h1 id="title">准备数据操作</h1>
+    <p id="body">正在读取本次操作的事实…</p>
+    <div id="status" class="status wait" role="status" aria-live="polite">
+      <span class="dot"></span><span id="state">请稍候</span>
+    </div>
+    <div class="hint">复制期间不会启动 AI，也不会继续已停止或结果未知的任务。完成后众说会自动重新打开。</div>
+  </main>
+  <script>
+    window.__setDataProgress = function (value) {
+      document.getElementById('title').textContent = value.title;
+      document.getElementById('body').textContent = value.body;
+      const status = document.getElementById('status');
+      status.className = 'status ' + (value.tone || 'wait');
+      document.getElementById('state').textContent = value.tone === 'ok' ? '已完成' : value.tone === 'bad' ? '未完成' : '正在进行';
+    };
+  </script>
+</body>
+</html>

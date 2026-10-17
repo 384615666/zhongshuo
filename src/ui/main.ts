@@ -7,7 +7,7 @@
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
 import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor } from 'electron';
-import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -16,6 +16,8 @@ import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } from '../contracts/daemonIpc.ts';
 import type { PipeClient } from '../contracts/daemonIpc.ts';
+import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJob,prepareDataCopyJob,processAlive,readActiveDataOperation,readDataJobStatus,readDataLocation,reconcileInterruptedDataOperation,releaseActiveDataOperation,type DataCopyJob,type DataJobStatus} from '../contracts/dataCopyJob.ts';
+import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
 // file:// 源下 ES 模块被模块 CORS 拦截（Chromium 对 file 源互为 opaque）。standard+secure
@@ -189,7 +191,29 @@ let daemonToken = '';
 
 // UI 本地状态（localStorage 等）与 daemon 同仓隔离：不写宿主 %APPDATA%/Electron，
 // 测试/多实例（ZS_APP_DATA）互不串扰。userData 必须在 app ready 前设定。
-const appDataDir = process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo');
+const progressJobIndex = process.argv.indexOf('--zs-data-progress-job');
+const progressJobFile = progressJobIndex >= 0 ? process.argv[progressJobIndex + 1] ?? null : null;
+const baseDataRoot = resolve(process.env.ZS_APP_DATA ?? join(app.getPath('appData'), 'zhongshuo'));
+let dataPickSeq = 0; // R87 data-folder picker test hook (only when ZS_DATA_PICK_FILE is explicit)
+let startupDataLocationError: string | null = null;
+let appDataDir = baseDataRoot;
+if (progressJobFile != null) {
+  // The progress host has its own disposable profile under the sibling control
+  // directory. It never opens the source/destination profile and never starts a daemon.
+  appDataDir = join(dataControlPaths(baseDataRoot).root, 'progress-app');
+} else {
+  try {
+    reconcileInterruptedDataOperation(baseDataRoot);
+    const active = readActiveDataOperation(baseDataRoot);
+    if (active != null && processAlive(active.workerPid)) {
+      throw Error('DATA_OPERATION_IN_PROGRESS：有一项数据操作正在进行，完成前不会打开这份数据。');
+    }
+    appDataDir = readDataLocation(baseDataRoot);
+  } catch (error) {
+    startupDataLocationError = error instanceof Error ? error.message : String(error);
+    appDataDir = join(dataControlPaths(baseDataRoot).root, 'recovery-app');
+  }
+}
 app.setPath('userData', join(appDataDir, 'electron-user-data'));
 
 // 就绪链阶段（第二十一轮一）：spawnOk（进程已创建）→ pipeListening（daemon 侧 listen）→
@@ -236,7 +260,7 @@ async function ensureConnection(): Promise<void> {
         connectionMonitor.connected();
         return;
       } catch (error) {
-        if (readyAbort.signal.aborted) throw new Error(`daemon 连接已取消（应用退出/关停）：${error instanceof Error ? error.message : String(error)}`);
+        if (readyAbort.signal.aborted) throw new Error(`daemon 连接已取消（应用退出/关停）：${error instanceof Error ? error.message : String(error)}`, { cause: error });
         lastError = error;
         await new Promise((r) => setTimeout(r, 250));
       }
@@ -267,6 +291,14 @@ app.whenReady().then(async () => {
   powerMonitor.on('suspend',()=>connectionMonitor.suspend());
   powerMonitor.on('resume',()=>connectionMonitor.resume());
   app.once('will-quit',()=>connectionMonitor.dispose());
+  if (progressJobFile != null) {
+    await showDataProgressWindow(progressJobFile);
+    return;
+  }
+  if (startupDataLocationError != null) {
+    await showStartupDataLocationFailure(startupDataLocationError);
+    return;
+  }
   // 远程浏览器验收壳（第三十一轮五；仅显式 ZS_REMOTE_SHELL_URL）：复用本包 Chromium 打开
   // 远程客户端页——**无 preload**（远程页不获本机桥）；证书以 SPKI 钉选信任（等价「用户核对
   // 指纹后信任」，不关闭证书校验）。用于 DEV-25 本机浏览器闭环/双机验收的客户端侧。
@@ -316,6 +348,7 @@ app.whenReady().then(async () => {
   let firstCommandDelayed = false;
 let pickFolderSeq = 0; // R75 测试钩子：ZS_PICK_FOLDER_FILE 按序弹出计数
 let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / ZS_H1_LOSE_SUBMIT_TIMES=N）
+let dataOperationStarting = false;
   // 本机可信 UI 的 IPC sender 校验（第三十一轮三）：preload 桥（zs:command/openPath/pickFolder）
   // 只接受**本应用窗口**（zsres://app/ 源）的帧——其他任何加载进该窗口的内容拿不到桥；
   // 不以 loopback 地址替代来源校验（远程页面即使被误载也无法调用本机保留命令）。
@@ -462,6 +495,35 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
     }
     throw new Error(`未知窗口操作：${String(action)}`);
   });
+  ipcMain.handle('zs:data.status', (event) => {
+    assertTrustedSender(event);
+    let active: ReturnType<typeof readActiveDataOperation> = null;
+    let activeError: string | null = null;
+    try { active = readActiveDataOperation(baseDataRoot); }
+    catch (error) { activeError = error instanceof Error ? error.message : String(error); }
+    return {
+      baseRoot: baseDataRoot,
+      currentRoot: (() => { try { return readDataLocation(baseDataRoot); } catch { return null; } })(),
+      active: active == null ? null : { id: active.id, running: processAlive(active.workerPid), at: active.at },
+      activeError,
+      latest: latestDataStatus(baseDataRoot),
+    };
+  });
+  ipcMain.handle('zs:data.start', async (event, action: unknown) => {
+    assertTrustedSender(event);
+    if (action !== 'backup' && action !== 'import') throw new Error('数据操作类型无效');
+    if (dataOperationStarting) throw new Error('上一项数据操作正在准备，请稍候');
+    dataOperationStarting = true;
+    try {
+      const result = await startDataOperationFromUi(action, win);
+      if (!result.cancelled) setTimeout(() => {
+        if (!win.isDestroyed()) win.close();
+      }, 250);
+      return result;
+    } finally {
+      dataOperationStarting = false;
+    }
+  });
   // 「另存为」窄桥（R66 P5：预览当前文件的下载原文件/另存为）——renderer 只能提交
   // { suggestedName, contentBase64 }：**路径永远由系统另存为对话框的用户选择决定**
   //（renderer 不能指定路径/命令）；来源与 zs:window 同判（senderFrame 白名单）；
@@ -557,6 +619,210 @@ let hifiLoseCount = 0; // 受控丢回执计数闸（ZS_H1_LOSE_SUBMIT_ONCE=1 / 
   process.stderr.write(`[zhongshuo-ui] 启动失败：${String(error)}\n`);
   app.quit();
 });
+
+function latestDataStatus(baseRoot: string): (Pick<DataJobStatus, 'id'|'state'|'error'|'at'|'recoveredReceipt'> & { action: DataCopyJob['action']|null }) | null {
+  const root = dataControlPaths(baseRoot).root;
+  if (!existsSync(root)) return null;
+  let best: { at: number; value: Pick<DataJobStatus,'id'|'state'|'error'|'at'|'recoveredReceipt'> & { action: DataCopyJob['action']|null } } | null = null;
+  for (const name of readdirSync(root).filter((entry) => entry.startsWith('job-') && entry.endsWith('.json')).slice(0, 128)) {
+    try {
+      const job = loadDataCopyJob(join(root, name));
+      const status = readDataJobStatus(job);
+      if (status == null) continue;
+      const value = { id: status.id, state: status.state, error: status.error, at: status.at, recoveredReceipt: status.recoveredReceipt, action: job.action };
+      if (best == null || value.at > best.at) best = { at: value.at, value };
+    } catch { /* Invalid old control file is not allowed to break the settings page. */ }
+  }
+  return best?.value ?? null;
+}
+
+async function pickDataDirectory(win: BrowserWindow | null, title: string): Promise<string | null> {
+  const pickListPath = process.env.ZS_DATA_PICK_FILE;
+  if (pickListPath != null && pickListPath.length > 0) {
+    try {
+      const lines = readFileSync(pickListPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+      return lines[dataPickSeq++] ?? null;
+    } catch { return null; }
+  }
+  const options: Electron.OpenDialogOptions = { title, properties: ['openDirectory'] };
+  const picked = win == null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(win, options);
+  return picked.canceled ? null : picked.filePaths[0] ?? null;
+}
+
+function dataWorkerCommand(jobFile: string): { command: string; args: string[] } {
+  if (isPackagedUi) {
+    return {
+      command: process.env.ZS_NODE_BIN ?? join(appRoot, 'daemon', 'node', process.platform === 'win32' ? 'node.exe' : 'node'),
+      args: [join(__dirname, 'dataCopyWorker.cjs'), jobFile],
+    };
+  }
+  return {
+    command: process.env.ZS_NODE_BIN ?? 'node',
+    args: ['--experimental-strip-types', join(appRoot, 'src', 'ui', 'dataCopyWorker.ts'), jobFile],
+  };
+}
+
+function spawnDataWorker(jobFile: string): void {
+  const { command, args } = dataWorkerCommand(jobFile);
+  const child = spawn(command, args, {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+    env: { ...process.env, ZS_APP_DATA: baseDataRoot },
+  });
+  if (child.pid == null) throw Error('后台数据操作进程没有启动');
+  child.once('error', (error) => {
+    process.stderr.write(`[zhongshuo-ui] 数据操作进程错误：${error.message}\n`);
+  });
+  child.unref();
+}
+
+async function launchDataJob(input: {
+  action: 'backup'|'import';
+  currentRoot: string;
+  selectedSource: string;
+  destinationParent: string;
+}): Promise<{ ok: true; cancelled: false; jobId: string; action: 'backup'|'import' }> {
+  const job: DataCopyJob = {
+    format: 'zhongshuo-data-job-v1',
+    id: randomUUID(),
+    action: input.action,
+    baseRoot: baseDataRoot,
+    currentRoot: input.currentRoot,
+    selectedSource: input.selectedSource,
+    destinationParent: input.destinationParent,
+    ownerPid: process.pid,
+    expectedLocationHash: dataLocationHash(baseDataRoot),
+  };
+  const paths = await prepareDataCopyJob(job);
+  claimActiveDataOperation(job, process.pid);
+  try {
+    spawnDataWorker(paths.job);
+  } catch (error) {
+    releaseActiveDataOperation(job);
+    atomicWriteFile(paths.status, JSON.stringify({format:'zhongshuo-data-status-v1',id:job.id,state:'failed',error:`DATA_WORKER_START_FAILED：${error instanceof Error ? error.message : String(error)}`,at:Date.now()} satisfies DataJobStatus));
+    throw error;
+  }
+  return { ok: true, cancelled: false, jobId: job.id, action: input.action };
+}
+
+async function startDataOperationFromUi(action: 'backup'|'import', win: BrowserWindow) {
+  if (readActiveDataOperation(baseDataRoot) != null) {
+    throw Error('已有数据操作正在进行，请等它结束或正常重开应用后再试。');
+  }
+  await ensureConnection();
+  const readiness = await pipe!.send({
+    protocolVersion: 1,
+    commandId: `data-readiness-${randomUUID()}`,
+    method: 'app.dataReadiness',
+    params: {},
+  }) as { ok: boolean; data?: { ready?: boolean; activeTurns?: number }; error?: { message?: string } };
+  if (!readiness.ok || readiness.data?.ready !== true) {
+    throw Error(`还有 ${readiness.data?.activeTurns ?? '未完成'} 个任务在处理；请等它们结束并正常关闭/重开后再复制数据。`);
+  }
+  const currentRoot = readDataLocation(baseDataRoot);
+  if (action === 'backup') {
+    const destinationParent = await pickDataDirectory(win, '选择备份保存位置');
+    if (destinationParent == null) return { ok: false as const, cancelled: true as const };
+    return launchDataJob({ action, currentRoot, selectedSource: currentRoot, destinationParent });
+  }
+  const selectedSource = await pickDataDirectory(win, '选择已有的众说数据（旧包、数据文件夹或完整备份）');
+  if (selectedSource == null) return { ok: false as const, cancelled: true as const };
+  const destinationParent = await pickDataDirectory(win, '选择保存新数据副本的位置');
+  if (destinationParent == null) return { ok: false as const, cancelled: true as const };
+  return launchDataJob({ action, currentRoot, selectedSource, destinationParent });
+}
+
+async function showStartupDataLocationFailure(message: string): Promise<void> {
+  const answer = await dialog.showMessageBox({
+    type: 'error',
+    title: '无法打开保存的数据位置',
+    message: '上次选择的数据文件夹不可用。',
+    detail: `${message}\n\n不会自动打开空数据，也不会改动原数据。请选择已有的数据文件夹或完整备份；新副本验证完成后才会切换。`,
+    buttons: ['选择已有数据', '退出'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (answer.response !== 0) { app.quit(); return; }
+  const selectedSource = await pickDataDirectory(null, '选择已有的众说数据（旧包、数据文件夹或完整备份）');
+  const destinationParent = selectedSource == null ? null : await pickDataDirectory(null, '选择保存新数据副本的位置');
+  if (selectedSource == null || destinationParent == null) { app.quit(); return; }
+  let currentRoot = selectedSource;
+  try { currentRoot = findLocalDataRoot(baseDataRoot); } catch { /* no current root to preserve; copy source as the safe fallback */ }
+  try {
+    await launchDataJob({action:'import',currentRoot,selectedSource,destinationParent});
+    app.quit();
+  } catch (error) {
+    await dialog.showMessageBox({type:'error',title:'无法开始数据恢复',message:'数据没有切换。',detail:error instanceof Error?error.message:String(error),buttons:['退出'],noLink:true});
+    app.quit();
+  }
+}
+
+function dataProgressText(status: DataJobStatus | null, action: DataCopyJob['action']): { title: string; body: string; tone: string } {
+  if (status == null) return {title:'准备数据操作',body:'正在读取本次操作的事实…',tone:'wait'};
+  if (status.state === 'waiting-close') return {title:'正在等待众说完全关闭',body:'关闭完成后才会读取数据；不会强制结束任务。',tone:'wait'};
+  if (status.state === 'copying') {
+    const p=status.progress;
+    return {title:'正在复制完整数据',body:p == null ? '正在读取文件…' : `已复制 ${p.files}/${p.totalFiles} 个文件 · ${Math.floor(p.bytes/1048576)}/${Math.max(1,Math.ceil(p.totalBytes/1048576))} MB`,tone:'work'};
+  }
+  if (status.state === 'succeeded') return {title:'数据操作完成',body:action === 'import' ? '新副本已验证；众说将使用新的数据位置重新打开。' : '完整备份已验证；原件保持不动。',tone:'ok'};
+  if (status.state === 'failed') return {title:'数据操作未完成',body:status.error ?? '原件保留，请回到众说查看下一步。',tone:'bad'};
+  return {title:'上次数据操作未确认完成',body:status.error ?? '原数据位置没有切换；未完成的副本已保留。',tone:'bad'};
+}
+
+async function showDataProgressWindow(jobFile: string): Promise<void> {
+  const job = loadDataCopyJob(jobFile);
+  const win = new BrowserWindow({
+    width: 650,
+    height: 390,
+    resizable: true,
+    title: '众说 · 数据操作',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  await win.loadFile(join(__dirname, 'renderer', 'data-progress.html'));
+  let lastStatus: DataJobStatus|null = null;
+  let terminalSince: number | null = null;
+  let lastActivePid: number|null = null;
+  let lastActiveAt = 0;
+  const update = async (status: DataJobStatus | null): Promise<void> => {
+    if (win.isDestroyed()) return;
+    const text=dataProgressText(status,job.action);
+    await win.webContents.executeJavaScript(`window.__setDataProgress(${JSON.stringify(text)})`).catch(()=>{});
+  };
+  const poll = async (): Promise<void> => {
+    if (win.isDestroyed()) return;
+    try { lastStatus = readDataJobStatus(job) ?? lastStatus; } catch { /* show the last confirmed status */ }
+    await update(lastStatus);
+    try {
+      const active=readActiveDataOperation(baseDataRoot);
+      if (active != null && active.id === job.id) { lastActivePid=active.workerPid; lastActiveAt=Date.now(); }
+    } catch { /* The last confirmed status remains visible. */ }
+    if (lastStatus != null && ['succeeded','failed','unknown'].includes(lastStatus.state)) {
+      terminalSince ??= Date.now();
+      if (Date.now() - terminalSince > 1800) win.close();
+      return;
+    }
+    // The worker normally takes over within a second. If it never appears and
+    // the previous host is gone, reopen the original data root instead of
+    // leaving a permanent "preparing" window.
+    if (lastActivePid != null && !processAlive(lastActivePid) && Date.now() - lastActiveAt > 10000) {
+      relaunchApplication(baseDataRoot);
+      win.close();
+    }
+  };
+  await poll();
+  const timer=setInterval(()=>void poll(),350);
+  win.on('closed',()=>clearInterval(timer));
+}
+
+function relaunchApplication(root: string): void {
+  const debugPort = process.env.ZS_DEV25_DEBUG_PORT;
+  const args = [...(isPackagedUi ? [] : [appRoot]), ...(debugPort ? ['--remote-debugging-port=0'] : [])];
+  const child = spawn(process.execPath, args, {detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:root}});
+  child.on('error',()=>{});
+  child.unref();
+}
 
 app.on('window-all-closed', () => {
   // 停机命令须在关闭管道**之前**发出（shutdownDaemon 内部：daemon.shutdown→有界等待→

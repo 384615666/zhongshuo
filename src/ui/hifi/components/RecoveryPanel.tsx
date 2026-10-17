@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { Select, Tag } from './ui';
+import { DetailFold } from './SettingsRow';
 import { command } from '../bridge';
 import { toast } from '../shell';
 import { openExternalDeepLink } from '../loader';
@@ -38,6 +39,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
   /** 对账表单（按 turn 展开：verdict/note/manualRiskAck）。 */
   const [recon, setRecon] = useState<{ turnId: string; verdict: 'notStarted' | 'executed' | 'keepUnknown'; note: string; manualRiskAck: boolean } | null>(null);
   const [relNote, setRelNote] = useState<{ turnId: string; note: string } | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
   const genRef = useRef(0);
 
   const reload = useCallback(async () => {
@@ -102,28 +104,45 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
       <div className="modal lg" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="恢复检查" style={{ maxHeight: '78vh', display: 'flex', flexDirection: 'column', width: 'min(860px, 94vw)' }}>
         <div className="row tight" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
           <Icon name="shield" size={15} />
-          <strong>恢复检查</strong>
+          <strong>检查上次使用</strong>
           {realAttention && origin === 'startup' ? <Tag tone="warning" icon="clock">启动时已有</Tag> : null}
           {realAttention && origin === 'runtime' ? <Tag tone="warning" icon="zap">本次运行新出现</Tag> : null}
           {pendingOnly ? <Tag plain icon="clock">普通排队（非故障）</Tag> : null}
-          <span className="faint small">recovery.status 只读事实——确认继续/对账/解除保护/定位分列，不自动重放</span>
+          <span className="faint small">只检查，不自动重发消息或解除文件保护</span>
           <span style={{ flex: 1 }} />
           <button className="btn ghost sm" onClick={() => void reload()}>刷新</button>
+          <button className="btn ghost sm" onClick={() => setShowDetails((value) => !value)}>{showDetails ? '收起详情' : '查看详情'}</button>
           <button className="btn ghost sm" onClick={onClose}>关闭</button>
         </div>
         <div style={{ padding: '12px 16px', overflow: 'auto' }} className="page-stack">
           {err != null ? <div className="panel warning">恢复状态读取失败：{err}（可刷新重试）</div> : null}
           {data == null && err == null ? <div className="panel info">正在读取恢复事实…</div> : null}
-          {data != null && !attention ? <div className="panel info">没有需要处理的恢复事项（门禁开放、无 UNKNOWN turn、无未解除保护/未收口撤销、队列空闲）。</div> : null}
+          {data != null && !attention ? <div className="panel info">没有需要处理的事项。可以正常继续使用。</div> : null}
+          {data != null && realAttention ? (
+            <div className="panel info" data-zs-recovery-summary="1">
+              <div className="row tight"><Icon name="info" size={14} /><strong>需要你看一下</strong></div>
+              <div className="small" style={{ marginTop: 6, lineHeight: 1.8 }}>
+                {data.gateHeld ? <div>上次关闭时还有未完成的事项；新消息会先等待。</div> : null}
+                {data.unknownTurns.length > 0 ? <div>有 {data.unknownTurns.length} 条发送暂时无法确认结果。不要凭猜测换一条新消息重复发送；可以先打开原任务查看。</div> : null}
+                {data.interruptedRuns.length > 0 ? <div>有 {data.interruptedRuns.length} 个任务上次中断了。任务和文件都还在，可打开原任务继续处理。</div> : null}
+                {data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <div>还有文件保护或修改需要处理；为避免覆盖，众说没有自动继续。</div> : null}
+              </div>
+              <div className="row tight wrap" style={{ marginTop: 8 }}>
+                {data.gateHeld ? <button className="btn sm" disabled={busy != null} onClick={() => void resumeGate()}>{busy === 'gate' ? '正在继续…' : '继续处理已排队的消息'}</button> : null}
+                {data.unknownTurns.slice(0, 3).map((turn, index) => <button key={turn.id} className="btn ghost sm" onClick={() => locate(`#task=${turn.taskId}`)}>查看待确认任务{data.unknownTurns.length > 1 ? ` ${index + 1}` : ''}</button>)}
+                {data.interruptedRuns.slice(0, 3).map((run, index) => <button key={run.id} className="btn ghost sm" onClick={() => locate(`#task=${run.task_id}`)}>查看中断任务{data.interruptedRuns.length > 1 ? ` ${index + 1}` : ''}</button>)}
+                {data.pendingRelease.length > 0 || data.activeUndos.length > 0 ? <button className="btn ghost sm" onClick={() => setShowDetails(true)}>打开处理详情</button> : null}
+              </div>
+            </div>
+          ) : null}
           {pendingOnly ? (
             <div className="panel info">
               <div className="row tight">
                 <Icon name="clock" size={13} />
-                <strong>普通排队（{data?.pendingDispatchCount ?? 0} 条）——不是恢复故障</strong>
+                <strong>有 {data?.pendingDispatchCount ?? 0} 条消息在排队</strong>
               </div>
               <div className="small muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
-                这些是等待派发的排队意图（串行执行/会话队列的正常等待），不是未知结果或中断——
-                无需对账或确认；队列会按合同继续推进。
+                这是正常等待，不是故障；无需确认。队列会按顺序继续处理。
               </div>
               {data != null && data.pendingDispatchKeys.length > 0 ? (
                 <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
@@ -132,7 +151,8 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               ) : null}
             </div>
           ) : null}
-          {data != null && data.gateHeld ? (
+          {showDetails && data != null ? <DetailFold summary="详细状态与人工处理（高级）">
+          {data.gateHeld ? (
             <div className="panel info" style={{ borderColor: 'var(--warning)' }}>
               <div className="row tight">
                 <Icon name="octagon" size={13} />
@@ -241,6 +261,7 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               </div>
             </div>
           ) : null}
+          </DetailFold> : null}
         </div>
       </div>
     </div>

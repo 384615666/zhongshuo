@@ -8,12 +8,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
-import { SettingsRow, SwitchRow, ReadOnlyRow, DetailFold } from '../components/SettingsRow';
+import { SettingsRow, ReadOnlyRow, DetailFold } from '../components/SettingsRow';
 import { recordWrite, retryDraftPersistence, setTheme, clearPersistedSnapshot, importLegacySnapshot } from '../data/store';
 import { rescanLegacyImport } from '../loader';
-import { command } from '../bridge';
+import { bridge, command, dataBridge, type DataOperationStatus } from '../bridge';
 import { navigate } from '../lib/router';
-import { refreshMembers } from '../loader';
 import { ArchiveManager } from './ArchivePage';
 import { isExternalDeepLink } from '../lib/deepLink';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
@@ -35,30 +34,26 @@ export function appSectionOf(raw: string | undefined): AppSettingsSection {
 type NavItem = { key: AppSettingsSection; label: string; icon: string; hint: string };
 
 const NAV: NavItem[] = [
-  { key: 'general', label: '通用', icon: 'settings', hint: '启动、界面行为、打开定位' },
+  { key: 'general', label: '通用', icon: 'settings', hint: '启动与打开位置' },
   { key: 'appearance', label: '外观', icon: 'sun', hint: '主题：浅色 / 深色' },
-  { key: 'notifications', label: '通知', icon: 'bell', hint: '事件提醒与免打扰；房间静音/线程关注在各自 ⋯ 菜单' },
-  { key: 'runtime', label: 'AI 工具', icon: 'cpu', hint: '成员 runtime 绑定、模型与派发防护（应用级）' },
-  { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '本机身份与远程访问监听事实（只读）；配对/MCP 未接' },
-  { key: 'data', label: '数据与存储', icon: 'layers', hint: '数据位置、草稿快照健康、清理本地草稿' },
-  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '版本与构建身份、诊断、打开定位' },
+  { key: 'runtime', label: 'AI 设置', icon: 'cpu', hint: 'AI 成员的模型与权限' },
+  { key: 'connections', label: '连接与设备', icon: 'monitor', hint: '其它设备的连接与授权' },
+  { key: 'data', label: '数据与存储', icon: 'layers', hint: '备份、恢复、草稿与本地文件' },
+  { key: 'help', label: '帮助与关于', icon: 'help-circle', hint: '版本、诊断与本地信息' },
 ];
 
-/** 搜索索引：只索引**真实存在**的项（未接能力的行也如实列出并标注「未接入」）。 */
+/** Search only real actions shown on this page. */
 type SearchEntry = { section: AppSettingsSection; label: string; keywords: string; match: string };
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
-  { section: 'general', label: '打开定位（#task= 等深链）', keywords: '定位 深链 task 链接 跳转', match: '打开定位' },
   { section: 'appearance', label: '主题（深色外观）', keywords: '外观 主题 深色 浅色 暗色', match: '深色外观' },
-  { section: 'notifications', label: '通知偏好（事件/渠道/免打扰）', keywords: '通知 静音 免打扰 渠道', match: '通知偏好' },
-  { section: 'runtime', label: '成员 runtime 绑定与派发防护', keywords: 'runtime 工具 模型 绑定 codex claude fake 防护', match: '成员 runtime 绑定' },
-  { section: 'connections', label: '本机身份与数据根', keywords: '身份 用户 数据根 appdata localuserid', match: '本机身份' },
+  { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
   { section: 'connections', label: '远程访问监听事实', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
-  { section: 'data', label: '数据位置（应用数据目录）', keywords: '数据 目录 位置 路径', match: '应用数据目录' },
+  { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
+  { section: 'data', label: '使用已有数据或从备份恢复', keywords: '恢复 已有数据 旧包 备份', match: '使用已有数据' },
   { section: 'data', label: '草稿快照健康与重试', keywords: '草稿 快照 保存 锁定 重试', match: '草稿快照' },
   { section: 'data', label: '清理本地草稿', keywords: '清理 删除 草稿 本地', match: '清理本地草稿' },
   { section: 'help', label: '版本与构建身份', keywords: '版本 构建 build 关于', match: '版本与构建' },
-  { section: 'help', label: '诊断信息（工程键名）', keywords: '诊断 键名 工程 排障', match: '诊断信息' },
 ];
 
 function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
@@ -70,18 +65,9 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   );
 }
 
-/** 未接能力的统一说明行（原型的 SettingsRow 位置，如实禁用）。 */
-function NotConnectedRow({ label, hint }: { label: string; hint: string }) {
-  return (
-    <SettingsRow label={label} hint={hint}>
-      <Tag tone="neutral" icon="slash">未接入</Tag>
-    </SettingsRow>
-  );
-}
 import { Modal, Select, Tag } from '../components/ui';
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
-  const s = useStore((x) => x);
   const q = query ?? {};
   const section = appSectionOf(q.section);
   const [search, setSearch] = useState('');
@@ -230,29 +216,26 @@ function SectionGeneral() {
     <div>
       <SectionHead title="通用" sub={<>整个软件的启动与界面行为。<span className="faint">想改某个项目：侧栏项目行 ⋯ → 项目设置。</span></>} />
       <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-title">启动与托盘</div>
-        <SettingsRow label="启动时打开的项目" hint="留空=上次状态；填写项目文件夹完整路径（保存后回读核对，重启生效）" wide control={
+        <div className="card-title">启动</div>
+        <SettingsRow label="启动时打开的项目" hint="选择后保存；下次打开众说时回到这个项目" wide control={
           <div className="row tight" style={{ minWidth: 260 }}>
             <input className="input sm" style={{ minWidth: 200 }} value={autoOpen} onChange={(e) => setAutoOpen(e.target.value)} placeholder="例如 D:\项目\我的项目" />
+            <button className="btn sm" onClick={() => { void bridge().pickFolder().then((dir) => { if (dir != null) setAutoOpen(dir); }); }}>选择文件夹</button>
             <button className="btn sm" disabled={busy || readError != null || autoOpenSaved == null || autoOpen.trim() === autoOpenSaved} onClick={() => void save()}>保存</button>
           </div>
         } />
         {readError != null ? <div className="panel warning">启动项目设置读取失败：{readError}；保存已暂停，避免用未知旧值覆盖。<button className="btn sm" onClick={() => void reload()}>重试读取</button></div> : null}
-        <NotConnectedRow label="开机自动启动 / 托盘常驻" hint="系统桥（开机项/托盘）尚未接入本包——不显示可切换的假开关" />
-        <NotConnectedRow label="重启后自动继续任务" hint="保持关闭（E7 不自动续跑——恢复中心需显式确认）；设置化命令未接" />
-      </div>
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-title">运行并发</div>
-        <NotConnectedRow label="应用级运行并发上限" hint="调度器限额命令尚未接入（§10.3 决策 12 的配置面）——当前按服务端默认执行" />
       </div>
       <div className="card">
-        <div className="card-title">打开定位</div>
-        <SettingsRow label="打开定位" hint="桌面端没有地址栏——粘贴「复制定位链接」产出的 #task=… 等深链（deepLink.resolve 正式定位）" wide control={
-          <div className="row tight" style={{ minWidth: 260 }}>
-            <input className="input sm" style={{ minWidth: 200 }} placeholder="如 #task=task_ab12…" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
-            <button className="btn sm" onClick={() => void openDeepLink()}>打开</button>
-          </div>
-        } />
+        <div className="card-title">打开一个定位链接</div>
+        <DetailFold summary="需要从链接打开任务或消息时">
+          <SettingsRow label="定位链接" hint="粘贴复制来的定位链接，打开对应任务或消息" wide control={
+            <div className="row tight" style={{ minWidth: 260 }}>
+              <input className="input sm" style={{ minWidth: 200 }} placeholder="粘贴定位链接" value={deepLinkInput} onChange={(e) => setDeepLinkInput(e.target.value)} />
+              <button className="btn sm" onClick={() => void openDeepLink()}>打开</button>
+            </div>
+          } />
+        </DetailFold>
       </div>
     </div>
   );
@@ -280,11 +263,8 @@ function SectionAppearance() {
 function SectionNotifications() {
   return (
     <div>
-      <SectionHead title="通知" sub={<>应用级通知偏好。<span className="faint">房间静音与线程关注是同一套订阅——在各串 ⋯ 菜单里切换（thread.subscribe，已接真实命令）。</span></>} />
-      <NotConnectedRow label="全部静音 / 免打扰时段" hint="应用级通知聚合命令尚未接入本包——不显示可切换的假开关" />
-      <NotConnectedRow label="哪些事提醒我（审批/失败/完成/提及）" hint="事件订阅的写入命令尚未接入；线程级关注/静音已可用（各串 ⋯ 菜单）" />
-      <NotConnectedRow label="通知渠道与提示音" hint="系统通知桥尚未接入" />
-      <ReadOnlyRow label="已可用的订阅操作" value="线程关注 / 线程静音（回复串 ⋯ 菜单，真实命令）" />
+      <SectionHead title="通知" sub={<>房间和回复串的通知设置在各自菜单中。</>} />
+      <div className="panel info">目前没有需要在这里修改的应用级通知设置。</div>
     </div>
   );
 }
@@ -299,32 +279,34 @@ function SectionRuntime() {
   const projectId = useStore((s) => s.activeProjectId);
   return (
     <div>
-      <SectionHead title="AI 工具" sub={<>成员 runtime 绑定与模型配置（应用级安装、成员级绑定）。<span className="faint">配置成功 ≠ 能力已认证；派发防护按本环境事实显示。</span></>} />
-      <SettingsRow label="派发防护（本环境事实）" hint="runtime.status dispatchGuard——fake 是否允许、真实派发守卫是否开启">
-        <div className="row tight">
-          <Tag tone={guard?.fakeAllowed === false ? 'neutral' : 'warning'} icon={guard?.fakeAllowed === false ? 'check-circle' : 'alert-triangle'}>
-            {guard == null ? '读取中…' : guard.fakeAllowed ? 'fake 允许（演练环境）' : 'fake 禁用（日常/正式）'}
-          </Tag>
-          <Tag tone={guard?.realDispatchGuard ? 'success' : 'neutral'} icon={guard?.realDispatchGuard ? 'check-circle' : 'info'}>
-            {guard == null ? '' : guard.realDispatchGuard ? '真实派发守卫开启' : '真实派发守卫关闭'}
-          </Tag>
-        </div>
-      </SettingsRow>
+      <SectionHead title="AI 设置" sub={<>选择每位 AI 成员使用的程序、模型和权限。</>} />
       {members.map((m) => {
         const rt = runtimes[m.id];
         return (
           <SettingsRow
             key={m.id}
-            label={`成员「${m.displayName}」的 runtime`}
-            hint={rt == null ? '读取中…' : rt.status === 'bound' ? `已绑定 ${rt.kind ?? '?'}${rt.model != null && rt.model !== '' ? ` · 模型 ${rt.model}` : ''}` : rt.status === 'unbound' ? '未绑定（发送区会提示原因）' : '绑定状态读取失败（unknown）'}
+            label={m.displayName}
+            hint={rt == null ? '读取中…' : rt.status === 'bound' ? `${rt.kind === 'codex' ? 'Codex' : rt.kind === 'claude' ? 'Claude' : '已配置'}${rt.model != null && rt.model !== '' ? ` · ${rt.model}` : ''}` : rt.status === 'unbound' ? '还没有选择模型' : '配置读取失败'}
           >
             <button className="btn sm" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
-              {rt?.status === 'bound' ? '查看/修改' : '去配置'}
+              {rt?.status === 'bound' ? '查看/修改' : '配置 AI'}
             </button>
           </SettingsRow>
         );
       })}
-      <div className="small faint" style={{ padding: '6px 14px' }}>绑定/模型/权限的保存与回读在成员页（member.setRuntime——真实命令，保存后回读核对）。</div>
+      {members.length === 0 ? <div className="panel info">还没有 AI 成员。打开项目后，在成员页添加 AI。</div> : null}
+      <DetailFold summary="运行环境详情">
+        <SettingsRow label="本机运行状态" hint="用于排查为什么这里不能发送真实任务">
+          <div className="row tight">
+            <Tag tone={guard?.fakeAllowed === false ? 'neutral' : 'warning'} icon={guard?.fakeAllowed === false ? 'check-circle' : 'alert-triangle'}>
+              {guard == null ? '读取中…' : guard.fakeAllowed ? '当前为演练环境' : '日常运行'}
+            </Tag>
+            <Tag tone={guard?.realDispatchGuard ? 'success' : 'neutral'} icon={guard?.realDispatchGuard ? 'check-circle' : 'info'}>
+              {guard == null ? '' : guard.realDispatchGuard ? '真实任务发送检查已开启' : '真实任务发送检查未开启'}
+            </Tag>
+          </div>
+        </SettingsRow>
+      </DetailFold>
     </div>
   );
 }
@@ -411,24 +393,20 @@ function SectionConnections() {
   };
   return (
     <div>
-      <SectionHead title="连接与设备" sub={<>本机身份、远程访问与已配对设备。<span className="faint">远程设备拥有与本机相同的任务和设置权限；启用局域网前核对监听地址与证书指纹。</span></>} />
+      <SectionHead title="连接与设备" sub={<>允许你在自己的其它设备上继续使用众说。默认关闭。</>} />
       <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-title">本机与远程访问</div>
-      <ReadOnlyRow label="本机用户（localUserId）" value={identityErr != null ? `读取失败：${identityErr}` : identity?.localUserId ?? '（读取中…）'} />
-      <ReadOnlyRow label="数据根（appDataDir）" value={identityErr != null ? `读取失败：${identityErr}` : identity?.appDataDir ?? '（读取中…）'} />
-      <SettingsRow label="远程访问（已应用事实）" hint="配置值与真实监听分列；保存后重新读取（remote.config.get/set）" valueWrap>
+      <SettingsRow label="远程访问" hint="保存后会重新读取实际状态" valueWrap>
         {remoteErr != null ? <Tag tone="danger">读取失败：{remoteErr.slice(0, 60)}</Tag> : remote == null ? <span className="faint small">读取中…</span> : (
           <div className="small" style={{ lineHeight: 1.7 }}>
             <div>配置：{remote.enabled ? '启用' : '停用'} · {remote.listenHost}:{remote.port} · {remote.allowLan ? '局域网' : '仅本机'}</div>
             <div>实际：{remote.running === true ? `运行中（${remote.address ?? '?'}）` : '未运行'}</div>
-            {remote.fingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>服务证书 SHA-256：{remote.fingerprint}</div> : null}
-            {remote.caFingerprint != null ? <div className="mono small" style={{ overflowWrap: 'anywhere' }}>信任根 SHA-256：{remote.caFingerprint}</div> : null}
             {remote.lanSelfCheck != null ? <div className={remote.lanSelfCheck.ok ? 'faint small' : 'small'} style={{ color: remote.lanSelfCheck.ok ? undefined : 'var(--danger)' }}>LAN 自检：{remote.lanSelfCheck.ok ? '通过' : `失败（${remote.lanSelfCheck.error ?? remote.lanSelfCheck.detail ?? '?'}）`}</div> : null}
             {configDirty ? <div className="small faint">下方有未应用的编辑</div> : null}
           </div>
         )}
       </SettingsRow>
-      <SettingsRow label="远程访问配置" hint="默认关闭。仅本机=127.0.0.1；局域网=0.0.0.0。0 端口由系统选择。" wide control={
+      <SettingsRow label="连接范围" hint="仅本机最安全；同一局域网可在手机或平板上打开" wide control={
         <div className="row tight wrap">
           <Select size="sm" ariaLabel="远程监听范围" value={host} disabled={busy} onChange={(v) => { setHost(v); setConfigDirty(true); configDirtyRef.current = true; }} options={[{ value: '127.0.0.1', label: '仅本机' }, { value: '0.0.0.0', label: '局域网' }]} />
           <input className="input sm" type="number" min={0} max={65535} step={1} value={port} disabled={busy} aria-label="远程监听端口" style={{ width: 110 }} onChange={(e) => { setPort(e.target.value); setConfigDirty(true); configDirtyRef.current = true; }} />
@@ -438,6 +416,12 @@ function SectionConnections() {
         </div>
       } />
       </div>
+      <DetailFold summary="本机身份与证书详情">
+        <ReadOnlyRow label="本机用户" value={identityErr != null ? `读取失败：${identityErr}` : identity?.localUserId ?? '（读取中…）'} />
+        <ReadOnlyRow label="当前文件位置" value={identityErr != null ? `读取失败：${identityErr}` : identity?.appDataDir ?? '（读取中…）'} />
+        {remote?.fingerprint != null ? <ReadOnlyRow label="服务证书 SHA-256" value={remote.fingerprint} /> : null}
+        {remote?.caFingerprint != null ? <ReadOnlyRow label="信任根 SHA-256" value={remote.caFingerprint} /> : null}
+      </DetailFold>
       <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-title">配对与设备</div>
       <SettingsRow label="生成配对码" hint="仅本机可信入口；一次有效、5 分钟过期。码只在本次回执显示，不进入诊断或日志。" wide control={
@@ -461,9 +445,6 @@ function SectionConnections() {
         </div>
       } />
       </div>
-      <div className="card">
-      <NotConnectedRow label="外部 AI 连接（MCP 授权范围）" hint="MCP 连接管理命令面尚未接入本包" />
-      </div>
       {revoke != null ? <Modal size="sm" title={`吊销设备「${revoke.deviceName}」`} onClose={() => setRevoke(null)} footer={<><div className="spacer" /><button className="btn" onClick={() => setRevoke(null)}>取消</button><button className="btn danger" disabled={busy} onClick={() => void revokeDevice()}>确认吊销</button></>}>
         吊销会让这台设备当前连接立即失效；需要再次访问时须重新配对。
       </Modal> : null}
@@ -478,11 +459,30 @@ function SectionData() {
   const [identity, setIdentity] = useState<{ localUserId: string; appDataDir: string } | null>(null);
   const [cleared, setCleared] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState<string | null>(null);
+  const [dataOp, setDataOp] = useState<DataOperationStatus | null>(null);
+  const [dataOpError, setDataOpError] = useState<string | null>(null);
+  const [dataOpBusy, setDataOpBusy] = useState<'backup'|'import'|null>(null);
+  const reloadDataOp = useCallback(async () => {
+    try { setDataOp(await dataBridge().status()); setDataOpError(null); }
+    catch (error) { setDataOpError((error as Error).message); }
+  }, []);
   useEffect(() => {
     let done = false;
     void command<{ localUserId: string; appDataDir: string }>('app.identity', {}).then((r) => { if (!done) setIdentity(r); }).catch(() => { /* 不显示 */ });
+    void reloadDataOp();
     return () => { done = true; };
-  }, []);
+  }, [reloadDataOp]);
+  const startDataOp = async (action: 'backup'|'import') => {
+    setDataOpBusy(action); setDataOpError(null);
+    try {
+      const result = await dataBridge().start(action);
+      if (result.cancelled) { toast('已取消，没有复制或切换数据', 'info'); return; }
+      setDataOp((current) => current == null ? current : {...current, active: result.jobId == null ? current.active : {id:result.jobId,running:true,at:Date.now()}});
+      toast(action === 'backup' ? '已开始备份；众说会正常关闭并在完成后自动打开' : '已开始恢复；新副本验证完成后才会切换并自动打开', 'success');
+    } catch (error) {
+      const message=(error as Error).message;setDataOpError(message);toast(`没有开始数据操作：${message}`, 'error');
+    } finally { setDataOpBusy(null); }
+  };
   const clearDrafts = () => {
     const r = clearPersistedSnapshot();
     if (!r.ok) { toast(r.error ?? '清理失败', 'error'); return; }
@@ -506,7 +506,35 @@ function SectionData() {
   return (
     <div>
       <SectionHead title="数据与存储" sub={<>数据位置、草稿快照健康与清理。</>} />
-      <ReadOnlyRow label="数据位置（应用数据目录）" value={identity?.appDataDir ?? '（读取中…）'} />
+      <ReadOnlyRow label="当前数据位置" value={identity?.appDataDir ?? '（读取中…）'} />
+      <div className="card" style={{ marginBottom: 14 }} data-zs-data-guide="1">
+        <div className="card-title">备份全部数据与使用已有数据</div>
+        <div className="small muted" style={{padding:'0 14px 8px',lineHeight:1.7}}>
+          备份会完整保留对话、附件、草稿、本地账号资料和设置。请像保管自己的文件一样妥善保管备份。
+        </div>
+        <SettingsRow label="备份全部数据" hint="选择保存位置；众说正常关闭后复制并逐个核对，原件不会移动或删除" control={
+          <button className="btn primary sm" disabled={dataOpBusy != null} data-zs-data-backup="1" onClick={() => void startDataOp('backup')}>
+            <Icon name="download" size={13} /> {dataOpBusy === 'backup' ? '正在准备…' : '备份全部数据'}
+          </button>
+        } />
+        <SettingsRow label="使用已有数据或从备份恢复" hint="选择旧包、数据文件夹或完整备份，再选择新副本保存位置；验证成功后才切换" control={
+          <button className="btn sm" disabled={dataOpBusy != null} data-zs-data-import="1" onClick={() => void startDataOp('import')}>
+            <Icon name="folder" size={13} /> {dataOpBusy === 'import' ? '正在准备…' : '选择已有数据'}
+          </button>
+        } />
+        <SettingsRow label="最近一次数据操作" hint="完成事实会在这里重新读取；失败或中断不会自动重试" control={
+          <div className="col" style={{alignItems:'flex-end',gap:5,minWidth:230}}>
+            {dataOpError != null ? <Tag tone="danger" icon="alert-triangle">无法读取：{dataOpError}</Tag> : dataOp?.latest == null ? <span className="small faint">还没有数据操作记录</span> : (
+              <Tag tone={dataOp.latest.state === 'succeeded' ? 'success' : dataOp.latest.state === 'failed' || dataOp.latest.state === 'unknown' ? 'warning' : 'info'} icon={dataOp.latest.state === 'succeeded' ? 'check-circle' : dataOp.latest.state === 'copying' || dataOp.latest.state === 'waiting-close' ? 'clock' : 'alert-triangle'}>
+                {dataOp.latest.state === 'succeeded' ? (dataOp.latest.action === 'import' ? '已使用新的数据副本' : '完整备份已完成') : dataOp.latest.state === 'copying' ? '正在复制' : dataOp.latest.state === 'waiting-close' ? '等待关闭' : dataOp.latest.state === 'failed' ? '未完成，原件保留' : '上次操作中断，未切换'}
+              </Tag>
+            )}
+            {dataOp?.active?.running ? <span className="small faint">数据操作仍在进行；完成前不会打开这份数据。</span> : null}
+            {dataOp?.latest?.error != null ? <span className="small" style={{maxWidth:360,textAlign:'right',color:'var(--warning)'}}>{dataOp.latest.error}</span> : null}
+            <button className="btn ghost sm" onClick={() => void reloadDataOp()}>刷新</button>
+          </div>
+        } />
+      </div>
       <SettingsRow label="草稿快照健康" hint="草稿/未确认发送账本的持久化状态（刷新/崩溃后保留；普通草稿 24 小时过期）">
         <div className="small" style={{ lineHeight: 1.7 }}>
           {draftPersist.mode === 'on' && draftPersist.error == null ? <Tag tone="success" icon="check-circle">正常</Tag> : null}
@@ -562,7 +590,6 @@ function SectionData() {
           )}
         </div>
       </SettingsRow>
-      <NotConnectedRow label="备份与恢复（SQLite 快照）" hint="备份命令面尚未接入本包（升级回退演练已验证 VACUUM INTO 路径——正式入口未接）" />
       {/* 归档管理（R66 P4：R65 起命令面已具备——project.lifecycle/room.archive；此前误标
           「未接入」，现按原型嵌入同一管理器，与 /archive 独立页共用状态与动作）。 */}
       <SettingsRow label="归档管理" hint="已归档项目与房间的查看历史 + 恢复（project.lifecycle / room.archive 正式命令；不动磁盘文件与历史）">
@@ -591,13 +618,11 @@ function SectionHelp() {
       <SectionHead title="帮助与关于" sub={<>版本、构建身份与诊断。</>} />
       <LocalDiagnostics />
       <ReadOnlyRow label="应用" value="众说 · 本地多成员协作工作台" />
-      <ReadOnlyRow label="界面" value="已批准原型还原版（R64）——正式链路 + 原型布局" />
-      <ReadOnlyRow label="数据根" value={identity?.appDataDir ?? '（读取中…）'} />
-      <DetailFold summary="诊断信息（工程键名——排障用，不是操作面）">
+      <ReadOnlyRow label="当前文件位置" value={identity?.appDataDir ?? '（读取中…）'} />
+      <DetailFold summary="本机诊断详情">
         <div className="mono faint small" style={{ lineHeight: 1.8 }}>
-          <div>localUserId={identity?.localUserId ?? '?'}</div>
-          <div>persistKey=zs.hifi.persist.{identity ? `${identity.appDataDir}|${identity.localUserId}` : '?'}</div>
-          <div>命令面：app.identity/app.settings.get/set · member.list/setRuntime · runtime.status · room.pool · thread.get/history/subscribe/markRead · task.get/stop/review/executeRework · message.submit/react · saved.* · attachment.upload*/preview* · export.create · project.files.list/file.read · git.status/diff/stage/stageTask/unstage/commit/commitPreview/commitUndo/branch.*/checkout/push/pull/remoteHead/commitDiff/conflict.* · deepLink.resolve</div>
+          <div>本机用户 ID：{identity?.localUserId ?? '?'}</div>
+          <div>本地偏好键：zs.hifi.persist.{identity ? `${identity.appDataDir}|${identity.localUserId}` : '?'}</div>
         </div>
       </DetailFold>
       <div className="small faint" style={{ padding: '6px 14px' }}>遇到问题把上面诊断信息与操作步骤一起反馈即可；不自动上传任何数据。</div>
