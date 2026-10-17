@@ -451,6 +451,17 @@ export function Composer({
   const pendingEnv = useStore((st) => st.pendingSends[draftKey]);
   const [sending, setSending] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMentionTrigger(null);
+      setMentionOpen(false);
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, [mentionOpen]);
   /**
    * @ 触发位置（r55 T2 完整修复）：记录**本次打开候选框的那个 @ 的下标**。选中成员后只
    * 消费这一处触发字符——中文紧邻（「整理任务要点@」）、行首/空白、光标处触发全部覆盖；
@@ -474,8 +485,6 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const appliedInsertRef = useRef<number | null>(null);
-  /** 同步防重锁：setState 是异步的，挡不住同一 tick 的重复提交（§17.4、RT-01） */
-  const sendingRef = useRef(false);
   /** 刚载入过草稿的 key：让紧接着的一次保存 effect 跳过，避免把草稿清空 */
   const skipSaveRef = useRef<string | null>(null);
 
@@ -779,7 +788,7 @@ export function Composer({
   }
 
   /** 重发原信封（结果未知专用）：严格使用冻结参数；成功按发起键结算+清信封；确定失败清信封。 */
-  function retryUnknown(env: import('../data/store').PendingSendEnvelope): void {
+  function retryUnknown(env: PendingSendEnvelope): void {
     if (onRetrySend == null) return;
     if (sendingKeys.has(draftKey)) return;
     sendingKeys.add(draftKey);

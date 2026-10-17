@@ -144,14 +144,17 @@ export function RecoveryPanel({ onClose, origin }: { onClose: () => void; origin
               <div className="small muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
                 这是正常等待，不是故障；无需确认。队列会按顺序继续处理。
               </div>
-              {data != null && data.pendingDispatchKeys.length > 0 ? (
-                <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
-                  {data.pendingDispatchKeys.map((k) => <div key={k}>{k}</div>)}
-                </div>
-              ) : null}
             </div>
           ) : null}
           {showDetails && data != null ? <DetailFold summary="详细状态与人工处理（高级）">
+          {data.pendingDispatchCount > 0 ? (
+            <div className="panel info">
+              <div className="row tight"><strong>排队消息（{data.pendingDispatchCount}）</strong></div>
+              <div className="mono faint small" style={{ marginTop: 6, maxHeight: 84, overflow: 'auto' }}>
+                {data.pendingDispatchKeys.map((k) => <div key={k}>{k}</div>)}
+              </div>
+            </div>
+          ) : null}
           {data.gateHeld ? (
             <div className="panel info" style={{ borderColor: 'var(--warning)' }}>
               <div className="row tight">

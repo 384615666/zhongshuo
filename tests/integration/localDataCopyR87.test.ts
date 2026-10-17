@@ -9,7 +9,7 @@ import {once} from 'node:events';
 import {prepareDataCopyJob,runDataCopyJob,dataLocationHash,dataControlPaths,readDataLocation,committedDataJobReceipt,claimActiveDataOperation,readActiveDataOperation,readDataJobStatus,reconcileInterruptedDataOperation,type DataCopyJob} from '../../src/contracts/dataCopyJob.ts';
 import {openDatabase} from '../../src/persistence/db.ts';
 import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
-import {copyClosedDataRoot,findLocalDataRoot,verifyDataBackupContainer} from '../../src/contracts/localDataCopy.ts';
+import {copyClosedDataRoot,findLocalDataRoot,resolveLocalDataSource,verifyDataBackupContainer} from '../../src/contracts/localDataCopy.ts';
 afterEach(()=>vi.unstubAllEnvs());
 const sha=(file:string)=>createHash('sha256').update(readFileSync(file)).digest('hex');
 async function fixture(){
@@ -85,6 +85,36 @@ describe('R87 complete local closed-root copy; all inputs synthetic, zero model 
     await expect(copyClosedDataRoot({...f.input,verifyDatabase:()=>{throw Error('isolated validation interruption');}})).rejects.toThrow('interruption');
     expect(sha(join(f.source,'state.sqlite'))).toBe(before);
     for(const folder of readdirSync(f.destinationParent))expect(JSON.parse(readFileSync(join(f.destinationParent,folder,'data-copy-manifest.json'),'utf8')).status).toBe('incomplete');
+  });
+  it('selecting a legacy package follows its valid saved location pointer instead of stale server-data',async()=>{
+    const a=await fixture(),b=await fixture();
+    mkdirSync(join(a.source,'electron-user-data'),{recursive:true});mkdirSync(join(b.source,'electron-user-data'),{recursive:true});
+    writeFileSync(join(a.source,'electron-user-data','stale-marker'),'stale-A');writeFileSync(join(b.source,'electron-user-data','current-marker'),'current-B');
+    const control=dataControlPaths(a.source);
+    await prepareDataCopyJob({format:'zhongshuo-data-job-v1',id:randomUUID(),action:'import',baseRoot:a.source,currentRoot:a.source,selectedSource:b.source,destinationParent:a.destinationParent,ownerPid:await closedOwnerPid(),expectedLocationHash:null});
+    writeFileSync(control.location,JSON.stringify({format:'zhongshuo-data-location-v1',baseKey:control.key,operationId:randomUUID(),dataRoot:b.source,manifestHash:'a'.repeat(64)}));
+    const selected=await resolveLocalDataSource(join(a.dir,'old-package'));
+    expect(selected).toMatchObject({root:b.source,kind:'saved-location',baseRoot:a.source});
+    const result=await copyClosedDataRoot({...a.input,source:join(a.dir,'old-package'),kind:'import'});
+    expect(readFileSync(join(result.dataRoot,'electron-user-data','current-marker'),'utf8')).toBe('current-B');
+    expect(existsSync(join(result.dataRoot,'electron-user-data','stale-marker'))).toBe(false);
+  });
+  it('rejects an invalid legacy location pointer instead of silently falling back to server-data',async()=>{
+    const f=await fixture(),control=dataControlPaths(f.source);
+    mkdirSync(control.root,{recursive:true});
+    writeFileSync(control.location,JSON.stringify({format:'zhongshuo-data-location-v1',baseKey:control.key,operationId:randomUUID(),dataRoot:join(f.dir,'missing-current-root'),manifestHash:'b'.repeat(64)}));
+    await expect(resolveLocalDataSource(join(f.dir,'old-package'))).rejects.toThrow('DATA_LOCATION_CHANGED');
+    expect(readdirSync(f.destinationParent)).toEqual([]);
+  });
+  it('treats a complete backup container as immutable even if a neighboring pointer names another root',async()=>{
+    const a=await fixture(),b=await fixture(),backup=await copyClosedDataRoot(a.input);
+    const control=dataControlPaths(backup.container);
+    mkdirSync(control.root,{recursive:true});
+    writeFileSync(control.location,JSON.stringify({format:'zhongshuo-data-location-v1',baseKey:control.key,operationId:randomUUID(),dataRoot:b.source,manifestHash:'c'.repeat(64)}));
+    const selected=await resolveLocalDataSource(backup.container);
+    expect(selected).toMatchObject({root:backup.dataRoot,kind:'backup',baseRoot:null,savedRoot:null});
+    const result=await copyClosedDataRoot({...a.input,source:backup.container,kind:'import'});
+    expect(JSON.parse(readFileSync(join(result.container,'data-copy-manifest.json'),'utf8')).status).toBe('complete');
   });
 });
 

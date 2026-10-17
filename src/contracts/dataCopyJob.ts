@@ -1,30 +1,17 @@
 import {z} from 'zod';
 import {createHash} from 'node:crypto';
-import {closeSync,existsSync,lstatSync,openSync,readFileSync,realpathSync,unlinkSync,writeSync} from 'node:fs';
+import {closeSync,existsSync,lstatSync,openSync,readFileSync,unlinkSync,writeSync} from 'node:fs';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
-import {copyClosedDataRoot,findLocalDataRoot,type DataCopyProgress,type DataCopyResult} from './localDataCopy.ts';
+import {copyClosedDataRoot,type DataCopyProgress,type DataCopyResult} from './localDataCopy.ts';
 import {atomicWriteFile} from './atomicFile.ts';
+import {dataControlPaths,dataLocationHash,readDataLocationPointer} from './dataLocation.ts';
+export {dataControlPaths,dataLocationHash,readDataLocation,readDataLocationPointer,dataLocationSchema} from './dataLocation.ts';
 const sha=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const path=z.string().min(1).max(4096);
 export const dataCopyJobSchema=z.strictObject({format:z.literal('zhongshuo-data-job-v1'),id:z.uuid(),action:z.enum(['backup','import']),
   baseRoot:path,currentRoot:path,selectedSource:path,destinationParent:path,ownerPid:z.number().int().positive(),expectedLocationHash:z.string().regex(/^[a-f0-9]{64}$/).nullable()});
 export type DataCopyJob=z.infer<typeof dataCopyJobSchema>;
-const locationSchema=z.strictObject({format:z.literal('zhongshuo-data-location-v1'),baseKey:z.string(),operationId:z.uuid(),dataRoot:path,manifestHash:z.string().regex(/^[a-f0-9]{64}$/)});
-export function dataControlPaths(baseRoot:string){
-  const resolved=resolve(baseRoot),key=sha(process.platform==='win32'?resolved.toLowerCase():resolved).slice(0,16);
-  const root=join(dirname(resolved),`.zhongshuo-data-${key}`);
-  return{root,key,location:join(root,'location.json'),active:join(root,'active.json')};
-}
-export function dataLocationHash(baseRoot:string){const file=dataControlPaths(baseRoot).location;return existsSync(file)?sha(readFileSync(file)):null;}
-export function readDataLocation(baseRoot:string){
-  const control=dataControlPaths(baseRoot);if(!existsSync(control.location))return resolve(baseRoot);
-  const stat=lstatSync(control.location);if(stat.isSymbolicLink()||!stat.isFile()||stat.size>16384)throw Error('DATA_LOCATION_INVALID：保存的数据位置不可读，请重新选择已有数据。');
-  const pointer=locationSchema.parse(JSON.parse(readFileSync(control.location,'utf8')));
-  const actual=realpathSync(pointer.dataRoot),equal=(a:string,b:string)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
-  if(pointer.baseKey!==control.key||!equal(resolve(pointer.dataRoot),actual)||!equal(findLocalDataRoot(actual),actual))throw Error('DATA_LOCATION_CHANGED：保存的数据位置已变化，请重新选择已有数据。');
-  return actual;
-}
 export interface DataJobStatus{format:'zhongshuo-data-status-v1';id:string;state:'waiting-close'|'copying'|'succeeded'|'failed'|'unknown';stage?:'previous'|'selected';progress?:DataCopyProgress;
   result?:DataCopyResult;previous?:DataCopyResult;error?:string;recoveredReceipt?:boolean;at:number;}
 export function dataJobPaths(job:DataCopyJob){const control=dataControlPaths(job.baseRoot);return{...control,job:join(control.root,`job-${job.id}.json`),status:join(control.root,`job-${job.id}.status.json`),lease:join(control.root,`job-${job.id}.started`)};}
@@ -122,8 +109,8 @@ export function loadDataCopyJob(jobFile:string){
 export function committedDataJobReceipt(job:DataCopyJob):DataJobStatus|null{
   if(job.action!=='import')return null;
   try{
-    const control=dataControlPaths(job.baseRoot),pointer=locationSchema.parse(JSON.parse(readFileSync(control.location,'utf8')));
-    if(pointer.baseKey!==control.key||pointer.operationId!==job.id)return null;
+    const pointer=readDataLocationPointer(job.baseRoot);
+    if(pointer==null||pointer.baseKey!==pointer.control.key||pointer.operationId!==job.id)return null;
     const manifestFile=join(dirname(pointer.dataRoot),'data-copy-manifest.json'),stat=lstatSync(manifestFile);
     if(stat.isSymbolicLink()||stat.size>32*1024*1024)return null;
     const raw=readFileSync(manifestFile);if(sha(raw)!==pointer.manifestHash)return null;

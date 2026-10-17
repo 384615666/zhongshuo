@@ -3,6 +3,7 @@ import {createReadStream,constants,existsSync,lstatSync,readFileSync,realpathSyn
 import {copyFile,mkdir,readdir,writeFile,unlink,rmdir} from 'node:fs/promises';
 import {dirname,isAbsolute,join,relative,resolve,sep} from 'node:path';
 import {atomicWriteFile} from './atomicFile.ts';
+import {readDataLocation} from './dataLocation.ts';
 
 export interface DataCopyProgress{phase:'checking'|'copying'|'verifying'|'complete';files:number;totalFiles:number;bytes:number;totalBytes:number}
 interface InventoryFile{path:string;bytes:number}
@@ -28,6 +29,24 @@ export function findLocalDataRoot(selected:string){
   for(const path of [base,join(base,'server-data'),join(base,'data')])if(existsSync(join(path,'state.sqlite'))){
     if(lstatSync(path).isSymbolicLink()||!contained(base,realpathSync(path)))throw Error('DATA_LINK_REFUSED：所选目录中的数据入口指向其他位置，未沿链接读取。');
     return realpathSync(path);
+  }
+  throw Error('DATA_ROOT_NOT_FOUND：这里没有完整的众说数据，请选择旧包、数据文件夹或完整备份。');
+}
+export type LocalDataSourceKind='backup'|'physical'|'saved-location';
+/** Resolve a user-selected folder the same way the old package's own BAT
+ * would: a valid saved-location pointer wins inside a legacy package, while a
+ * product backup container is authoritative through its immutable manifest. */
+export async function resolveLocalDataSource(selected:string):Promise<{root:string;kind:LocalDataSourceKind;baseRoot:string|null;savedRoot:string|null}>{
+  const base=realpathSync(selected);
+  if(existsSync(join(base,'data-copy-manifest.json'))) {
+    return{root:await verifyDataBackupContainer(base),kind:'backup',baseRoot:null,savedRoot:null};
+  }
+  for(const candidate of [base,join(base,'server-data'),join(base,'data')]) {
+    if(!existsSync(join(candidate,'state.sqlite')))continue;
+    if(lstatSync(candidate).isSymbolicLink()||!contained(base,realpathSync(candidate)))throw Error('DATA_LINK_REFUSED：所选目录中的数据入口指向其他位置，未沿链接读取。');
+    const effective=readDataLocation(candidate);
+    const saved=process.platform==='win32'?effective.toLowerCase()!==resolve(candidate).toLowerCase():effective!==resolve(candidate);
+    return{root:effective,kind:saved?'saved-location':'physical',baseRoot:candidate,savedRoot:saved?effective:null};
   }
   throw Error('DATA_ROOT_NOT_FOUND：这里没有完整的众说数据，请选择旧包、数据文件夹或完整备份。');
 }
@@ -73,7 +92,7 @@ export async function copyClosedDataRoot(input:{source:string;destinationParent:
   verifyDatabase:(copy:string)=>Promise<{schemaVersion:number}>|{schemaVersion:number};onProgress?:(progress:DataCopyProgress)=>void;
   beforeCopyFile?:(relativePath:string)=>void|Promise<void>;
 }):Promise<DataCopyResult>{
-  const source=existsSync(join(input.source,'data-copy-manifest.json'))?await verifyDataBackupContainer(input.source):findLocalDataRoot(input.source),parent=realpathSync(input.destinationParent);
+  const resolved=await resolveLocalDataSource(input.source),source=resolved.root,parent=realpathSync(input.destinationParent);
   if(!lstatSync(parent).isDirectory())throw Error('DATA_TARGET_INVALID：请选择存放新副本的文件夹。');
   if(contained(source,parent))throw Error('DATA_PATH_OVERLAP：新副本不能放在原数据内部。');
   assertDataRootClosed(source);
