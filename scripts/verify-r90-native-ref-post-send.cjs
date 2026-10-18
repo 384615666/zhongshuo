@@ -14,6 +14,7 @@ const humanReport = path.resolve(process.argv[6] ?? 'dist/review-r90-independent
 if (!Number.isInteger(port) || port <= 0 || process.argv[3] == null) {
   throw Error('usage: node scripts/verify-r90-native-ref-post-send.cjs <port> <fixtureRoot> <out> <packageRoot> [humanReport]');
 }
+fs.mkdirSync(out, { recursive: true });
 
 const fixture = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'fixture.json'), 'utf8'));
 const sourceFile = path.join(fixture.projectPath, 'R90_NATIVE_ATTACH_REF.md');
