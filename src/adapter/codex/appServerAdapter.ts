@@ -37,6 +37,12 @@ import { EventStream } from '../eventStream.ts';
 
 const ADAPTER_VERSION = 'codex-appserver-adapter-0.2.0';
 export const SUPPORTED_CODEX_VERSION_PREFIX = '0.157.';
+export const CODEX_STRUCTURED_FINAL_INSTRUCTION = `## 原生结构化终态（最高优先级）
+当本轮 turn/start 携带 outputSchema 时，最后一条 assistant message 必须只包含一个原始 JSON 对象，并严格匹配该 schema。
+- 不得使用 Markdown 或代码围栏。
+- 不得在 JSON 前后添加解释、计划、寒暄、状态、分隔符或其他文本。
+- 用户可见的回答与工作摘要必须写入 schema 约定的 answer/changeSummary 等字段。
+- 中途进度可以单独发送，但 turn 的最后一条 assistant message 必须是完整 JSON 终态。`;
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -486,13 +492,16 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       this.writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }));
       this.handshakeDone = true;
     }
+    const developerInstructions=[input.developerInstructions,CODEX_STRUCTURED_FINAL_INSTRUCTION]
+      .filter((value):value is string=>value!=null&&value.length>0)
+      .join('\n\n');
     const threadParams: Record<string, unknown> = {
       cwd: input.cwd,
       sandbox: input.writeAccess?.fullAccess ? 'danger-full-access' : input.writeAccess?.modificationAuthorized ? 'workspace-write' : 'read-only',
       approvalPolicy: this.options.approvalPolicy ?? 'never',
     };
     if (this.options.model != null && this.options.model.length > 0) threadParams['model'] = this.options.model;
-    if (input.developerInstructions != null) threadParams['developerInstructions'] = input.developerInstructions;
+    if (developerInstructions.length > 0) threadParams['developerInstructions'] = developerInstructions;
     const method = input.resume != null ? 'thread/resume' : 'thread/start';
     if (input.resume != null) threadParams['threadId'] = input.resume.providerSessionId;
     const result = await this.request<{ thread: { id: string } }>(method, threadParams);

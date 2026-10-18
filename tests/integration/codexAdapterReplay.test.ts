@@ -7,7 +7,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
+import { CODEX_STRUCTURED_FINAL_INSTRUCTION, CodexAppServerAdapter } from '../../src/adapter/codex/appServerAdapter.ts';
 import type { NormalizedRuntimeEvent, SessionRef, TurnRequest } from '../../src/contracts/runtime.ts';
 
 interface TurnScript {
@@ -232,10 +232,31 @@ describe('R87 native developer instructions', () => {
       });
       await runOneTurn(adapter,session,'r87-standing'); await adapter.dispose();
       const rows=rpcLogEntries(),start=rows.find(e=>e['method']===(resume?'thread/resume':'thread/start'));
-      expect(start?.['params']).toMatchObject({developerInstructions:'R87_NATIVE_DEVELOPER_ONLY',sandbox:fullAccess?'danger-full-access':'read-only'});
-      expect(JSON.stringify(rows.filter(e=>e['method']==='turn/start'))).not.toContain('R87_NATIVE_DEVELOPER_ONLY');
+      expect(start?.['params']).toMatchObject({sandbox:fullAccess?'danger-full-access':'read-only'});
+      expect((start?.['params'] as Record<string,unknown>).developerInstructions).toContain('R87_NATIVE_DEVELOPER_ONLY');
+      expect((start?.['params'] as Record<string,unknown>).developerInstructions).toContain(CODEX_STRUCTURED_FINAL_INSTRUCTION);
+      const turns=rows.filter(e=>e['method']==='turn/start');
+      expect(JSON.stringify(turns)).not.toContain('R87_NATIVE_DEVELOPER_ONLY');
+      expect(JSON.stringify(turns)).not.toContain(CODEX_STRUCTURED_FINAL_INSTRUCTION);
     });
   }
+
+  it('keeps outputSchema on the native turn request', async () => {
+    scenario([{notifications:[{kind:'turn.completed',status:'completed',finalText:'{"ok":true}'}]}]);
+    adapter=mockAdapter();
+    const session=await adapter.openSession({
+      projectId:'p',memberId:'m',taskId:'t',threadId:'th',sessionGeneration:1,cwd:'D:/mock',policyId:'plan',
+      developerInstructions:'BASE_DEVELOPER_INSTRUCTIONS',
+    });
+    const outputSchema={type:'object',additionalProperties:false,required:['ok'],properties:{ok:{type:'boolean'}}};
+    const reader=new SessionReader(adapter,session);
+    const collecting=reader.readTurn();
+    await adapter.startTurn(session,{...turnRequest('turn_schema'),outputSchema});
+    await collecting;
+    await adapter.dispose();
+    const start=rpcLogEntries().find(entry=>entry['method']==='turn/start');
+    expect(start?.['params']).toMatchObject({outputSchema});
+  });
 });
 
 describe('回放（修复轮 3）：真实协议形状反例', () => {
