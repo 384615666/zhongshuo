@@ -1,8 +1,22 @@
 # 众说正式工程 · 施工总账
 
-## R87 收口（2026-10-17，新 clean BUILD），R86 历史候选在后
+## R87 rc4 当前候选（2026-10-18），R86 历史候选在后
 
-用户 R86 自然使用反馈未通过，R87 已按[批准任务书](r87-product-usability-plan-20261017.md)完成工程与真实产品路线。源码 **`9771a8a39caec15c85429580b78827ef9f8baca0`**（已推送）；从 clean worktree 构建 **`bld_939523319bbbd61d`**，包名 **`desktop-daily-win-v26-r87-20261017`**，`dirty=false`、595 文件清单一致。完整本地数据引导、设置/恢复/成果简化、真实成员投影刷新和首次入口均已接入；同一 BUILD 中 Claude **`deepseek-flash`** 与 Codex **`gpt-6-luna`** 共 9 次真实调用全成功，完成合成 DOCX/PDF → 同串扩员 → @本串全体 → 真实交接 → 普通追问 → 明确修改 → revision 3 精确验收 → 保存原件 → 正常 BAT 重开；重开后调用数保持 9。数据引导在同一 BUILD 的隔离副本完成 75 文件完整备份、切换到新副本及 BAT 重开，0 模型调用。全量 170 文件/1254 项、双类型检查、本轮改动文件 eslint 通过；全仓 eslint 既有历史失败另列。详细证据与边界见[R87收口记录](r87-final-delivery-20261017.md)。用户原根、旧包、`.codex-deepseek/`、配置和凭据未动。以下 R86/R85 候选保留为历史，不冒充 R87。
+**rc4 当前候选**：无协议提示复跑确认自定义 GLM 路由仍可能忽略 Codex 原生 `outputSchema` 并返回 Markdown。修复提交 `ecaef7d5ac7683619986608af7fc294a8b209326` 把“有无 outputSchema 时 final 只能是原始 JSON”的约束放入 Codex developer 指令；`16700ed86a65de28e6ca506c79f4dbf4804f1175` 又在运行时抑制计划步骤重复 handoff 产生的额外 OPEN 任务。从 `16700ed` 的 clean worktree 构建 **`bld_da8c2e34f5842bd5` / `desktop-daily-win-v26-r87-rc4-20261018` / `dirty=false` / 595 清单 / 无 `server-data`**。
+
+同 BUILD 的无协议自然根中，人类正文和成员描述不含 `TaskComplete/schema/JSON/Markdown/answer`；Claude `deepseek-flash` 与 Codex `ccs-new/glm-5.3-flash`（reasoning `high`）共 **6/6** 调用和 turn 全成功。协调 run 完整走完 3 个计划子任务及 integration，根下仅 3 个计划子任务且全部 DONE，`coordination_messages=0`，2 条重复计划 handoff 被审计后抑制。根 task `task_811f8365-3c39-4dc5-9614-4136282cda37` 为 REVIEW，pending delivery `dlv_turn_2470538f-94fa-4ef5-b48f-70d64d05fc2c`（revision 1）；`报告复核-v1.md` 26,876 B、SHA-256 `3dc68cdaffdeb3a89a2506aafa97f24f5eb01fcf5628ce020a8b9f15299fa27d`。
+
+最终聚合 [r87-rc4-final-evidence-20261018.json](r87-rc4-final-evidence-20261018.json) 为 `ok=true`、17 项检查全过，但明确 `releaseQualified=false`，等待审阅方有限独立核验。全量单线程首次 169/170 文件、1258/1259 项，唯一失败为 WPS/Microsoft Office 环境识别；同文件独立复跑 5/5 后，完整单线程再次运行 **170 文件/1259 项全过**（JSON 回执 hash `ecf2e67d53502e0247760b180a614661bf03c173bf68a74b6fd023d35a7e0800`）。
+
+**rc2/d9 历史工程与 UI 基线**：`bld_2b4d48d74833429d` 继续作为非模型 UI、数据、旧包和保存门证据；rc4 两个 scoped commit 未重跑这些门。rc2 mixed-4 的 8/8 是带用户正文协议提示的工程正例，不是最终无协议自然验收。
+
+**977 前候选（历史，不能用于 rc2 放行）**：用户 R86 自然使用反馈未通过，R87 已按[批准任务书](r87-product-usability-plan-20261017.md)完成工程与真实产品路线。源码 **`9771a8a39caec15c85429580b78827ef9f8baca0`**（已推送）；从 clean worktree 构建 **`bld_939523319bbbd61d`**，包名 **`desktop-daily-win-v26-r87-20261017`**，`dirty=false`、595 文件清单一致。完整本地数据引导、设置/恢复/成果简化、真实成员投影刷新和首次入口均已接入；同一 BUILD 中 Claude **`deepseek-flash`** 与 Codex **`gpt-6-luna`** 共 9 次真实调用全成功，完成合成 DOCX/PDF → 同串扩员 → @本串全体 → 真实交接 → 普通追问 → 明确修改 → revision 3 精确验收 → 保存原件 → 正常 BAT 重开；重开后调用数保持 9。数据引导在同一 BUILD 的隔离副本完成 75 文件完整备份、切换到新副本及 BAT 重开，0 模型调用。全量 170 文件/1254 项、双类型检查、本轮改动文件 eslint 通过；全仓 eslint 既有历史失败另列。详细证据与边界见[R87收口记录](r87-final-delivery-20261017.md)。用户原根、旧包、`.codex-deepseek/`、配置和凭据未动。以下 R86/R85 候选保留为历史，不冒充 R87。
+
+**rc2/d9 历史工程状态**：审阅发现并确认 977 旧包已切换数据位置时仍复制陈旧 `server-data` 的反例。修复提交 **`d9bc8c8e14f9d68fe34769e1402ee3dfe06d04db`**；从独立 clean worktree 构建 **`bld_2b4d48d74833429d`** / **`desktop-daily-win-v26-r87-rc2-20261018`** / `dirty=false` / 595 清单 / 无 `server-data`。该 BUILD 已验证欢迎与项目取消、添加 AI 模型发现、模板表单、Enter/Shift+Enter/中文 IME/Esc/Tab、900px/DPR1.5、文件预览与 owned Save-As 取消、看板、恢复摘要高级折叠、75 文件数据备份/恢复/BAT 重开、旧包当前 B 的 UI 导入与重开。逐页证据见[便利性登记](r87-page-usability-registry-20261018.md)。
+
+**rc2 工程提示历史正例**：该根完成 Claude `deepseek-flash` 与 Codex `ccs-new/glm-5.3-flash`（reasoning `high`）的 8/8 成功调用，task `task_6736c142-f74d-431a-97d5-548eb11263e9` 的 accepted delivery 为 `dlv_turn_1e6fd57d-88ae-4e2a-a9b0-0210036a7539`（revision 3），v2 14,085 B / SHA-256 `c62c864f3bcfa8775dc58032ce57510bca4de7f5c688ff73a79202ca4d5ee504`。其用户正文包含协议提示，因此只保留为工程与保存/重开证据，不再是 rc4 无协议自然验收。
+
+本根 `coordination_messages` 为 0，实际有用结果由 `coordination_steps` 的 `downstream.upstream` 引用传递；不把它写成新证明了动态带外 handoff，动态能力只引用此前独立正式 worker 测试或 977 真实票的既有范围。历史失败原样保留并在聚合器中逐项核对：mixed natural-1 的 5 分钟 deadline UNKNOWN、natural-2 的 10 分钟 deadline UNKNOWN、natural-3 的 GLM `turn.outputInvalid`、较早 `gpt-6-luna` 周额度 FAILED，以及首次混合保存重开 CDP timeout；natural-4 原脚本的验收按钮选择器失败也保留，精确 UI 验收另有同 BUILD 证据。当前只待审阅方有限独立核验，不能把自动化写成真人小白认证或用户最终验收。用户原根、旧包、配置、凭据和 `.codex-deepseek/` 未动。
 
 ## R86 历史候选（2026-10-16，工程门通过，随后用户自然体验未通过）
 

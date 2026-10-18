@@ -1,5 +1,7 @@
 # R87 收口记录（2026-10-17）
 
+> 历史前候选：本报告的 977/`bld_939523319bbbd61d` 已被审阅反例、rc2 修复和 rc4 无协议自然协作候选依次取代。当前候选、工程结果、精确模型与保留的失败边界见 [逐页便利性登记](r87-page-usability-registry-20261018.md)、[rc4 最终证据](r87-rc4-final-evidence-20261018.json) 和 [续工](continuation.md)。本文件以下内容保留为 977 当时证据，不再作为 R87 最终放行声明。
+
 ## 交付身份
 
 - 源码分支：`codex/full-implementation`
