@@ -631,7 +631,7 @@ export class DispatchWorker {
     try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
     if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
     let baselineChangeSetId: string | null = null;
-    let baselineReadonlyReason: string | null = null;
+    let baselineContentUnavailable: string[] = [];
     if (writeAccess.modificationAuthorized) {
       const baseline = captureBaseline(this.db, {
         projectId: task.project_id,
@@ -661,23 +661,10 @@ export class DispatchWorker {
         return;
       }
       baselineChangeSetId = baseline.value.changeSetId;
-      if (baseline.value.contentUnavailable.length > 0) {
-        // A complete path/hash inventory can still have files that are too
-        // large for byte-level restore. Ordinary chat must continue, but this
-        // run cannot be granted a write root without a complete recovery basis.
-        writeAccess = {
-          ...writeAccess,
-          fullAccess: false,
-          modificationAuthorized: false,
-          allowedWriteRoots: [],
-          launchConfigurationKey: undefined,
-          tier: 'plan',
-          intent: 'analyze',
-          policyId: 'policy-analyze',
-        };
-        baselineReadonlyReason = `项目内有 ${baseline.value.contentUnavailable.length} 个文件超过内容级前像上限；本次执行按只读进行，普通问答仍可继续。`;
-      }
+      baselineContentUnavailable = baseline.value.contentUnavailable;
     }
+    const baselineContentNote = baselineContentUnavailable.length === 0 ? null
+      : `项目内有 ${baselineContentUnavailable.length} 个文件超过内容级前像上限，无法内容级撤销；这不降低用户明确选择的执行权限，只有在用户目标或协作角色明确只读时才按只读执行。`;
     const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
     const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
     const executionBasis=generalRequest||coordination?.request?this.db.prepare(`SELECT t.current_delivery_id deliveryId,d.revision,d.manifest_hash manifestHash FROM tasks t LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(task.id) as {deliveryId:string|null;revision:number|null;manifestHash:string|null}:null;
@@ -685,7 +672,7 @@ export class DispatchWorker {
       db: this.db,
       writeAccess,
       allowImages: imageCapabilityAtAssembly.status === 'supported',
-      coordinationNote:[coordination?.note,baselineReadonlyReason,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
+      coordinationNote:[coordination?.note,baselineContentNote,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
       coordination:coordination?{phase:coordination.kind,runId:coordination.run?.run_id??null,role:coordination.kind==='child'?coordination.run.role:'coordinator'}:undefined,
       communicationContract:communicationForTurn(this.db,task.id,member.id,coordination?.kind,coordination?.run?.run_id,claimed.dispatch_key),
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
@@ -778,10 +765,11 @@ export class DispatchWorker {
         }
         this.transitionTask(task.id, 'ACTIVE');
         this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
-        if (baselineReadonlyReason != null) {
-          this.audit(task, runId, turnId, 'run.baselineReadonly', {
-            reason: baselineReadonlyReason,
+        if (baselineContentUnavailable.length > 0) {
+          this.audit(task, runId, turnId, 'run.baselineContentUnavailable', {
+            paths: baselineContentUnavailable,
             changeSetId: baselineChangeSetId,
+            note: '路径与 hash 已冻结，但这些文件没有内容级前像；不伪造可撤销，也不覆盖用户明确选择的执行权限',
           });
         }
         // 修复工作项原子消费：与 run/turn 创建同事务（崩溃时二者一致——要么都成、要么

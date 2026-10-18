@@ -46,6 +46,21 @@ describe('R90 composer structured document refs', () => {
     ])).toHaveLength(1);
   });
 
+  it('keeps preparation visible in memory but never persists it or revives it after removal', async () => {
+    const store = await freshStore();
+    store.initDraftPersistence('r90-preparing|user');
+    store.addUploadItem({
+      uploadId: 'upl_preparing', draftKey: 'room:prep', conversationId: 'conv-prep',
+      name: 'slow.txt', size: 12, status: 'preparing',
+    });
+    expect(store.getState().uploadItems['room:prep']?.[0]?.status).toBe('preparing');
+    store.removeUploadItem('room:prep', 'upl_preparing');
+    store.settleUpload('room:prep', 'upl_preparing', { status: 'uploading', contentHash: 'late-hash' });
+    expect(store.getState().uploadItems['room:prep'] ?? []).toEqual([]);
+    const raw = storage.store.get('zs.hifi.persist.r90-preparing|user') ?? '';
+    expect(raw).not.toContain('upl_preparing');
+  });
+
   it('replaces the @ query with one inline file token and strips the token from model-facing text', async () => {
     const store = await freshStore();
     store.setDraftFull('room:r1', {

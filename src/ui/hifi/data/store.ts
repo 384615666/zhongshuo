@@ -311,7 +311,7 @@ export interface UploadItem {
   sourceType?: string;
   /** SHA-256 of the selected bytes. File metadata alone is not a content identity. */
   contentHash?: string;
-  status: 'uploading' | 'ready' | 'failed';
+  status: 'preparing' | 'uploading' | 'ready' | 'failed';
   attachmentId?: string;
   hash?: string;
   revision?: number;
@@ -573,7 +573,7 @@ export function addUploadItem(item: UploadItem): void {
   setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [item.draftKey]: [...(s.uploadItems[item.draftKey] ?? []), item] } }));
   persistSnapshot();
 }
-export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error' | 'warning'>>): void {
+export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'contentHash' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error' | 'warning'>>): void {
   const before = (getState().uploadItems[draftKey] ?? []).find((x) => x.uploadId === uploadId);
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
@@ -667,7 +667,7 @@ export function removeUploadItem(draftKey: string, uploadId: string): void {
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
     if (cur == null) return s;
-    const next = cur.status === 'uploading'
+    const next = cur.status === 'uploading' || cur.status === 'preparing'
       ? list.map((x) => (x.uploadId === uploadId ? { ...x, removed: true } : x)) // 在途：标记，回执到达即弃
       : list.filter((x) => x.uploadId !== uploadId); // 已结算：直接清
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
@@ -713,7 +713,7 @@ export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[
   const sent = new Set(sentAttachmentIds);
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
-    const next = list.filter((x) => !(x.status !== 'uploading' && x.attachmentId != null && sent.has(x.attachmentId)));
+    const next = list.filter((x) => !((x.status === 'ready' || x.status === 'failed') && x.attachmentId != null && sent.has(x.attachmentId)));
     if (next.length === list.length) return s;
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
@@ -857,7 +857,7 @@ function validateEnvelope(e: unknown): e is PendingSendEnvelope {
 function validateUploadItem(u: unknown): u is UploadItem {
   if (!isPlainObject(u)) return false;
   if (typeof u.uploadId !== 'string' || typeof u.draftKey !== 'string' || typeof u.conversationId !== 'string' || typeof u.name !== 'string') return false;
-  if (u.status !== 'uploading' && u.status !== 'ready' && u.status !== 'failed') return false;
+  if (u.status !== 'preparing' && u.status !== 'uploading' && u.status !== 'ready' && u.status !== 'failed') return false;
   if (typeof u.size !== 'number') return false;
   return true;
 }
@@ -868,7 +868,7 @@ function persistSnapshot(): void {
   try {
     const uploadsOut: Record<string, UploadItem[]> = {};
     for (const [k, list] of Object.entries(state.uploadItems)) {
-      const kept = list.filter((x) => x.removed !== true && x.status !== 'uploading');
+      const kept = list.filter((x) => x.removed !== true && x.status !== 'preparing' && x.status !== 'uploading');
       if (kept.length > 0) uploadsOut[k] = kept;
     }
     const draftsOut: Record<string, HifiDraft> = {};
@@ -941,7 +941,7 @@ export function initDraftPersistence(ns: string, rootId?: string | null): boolea
       const uploads: Record<string, UploadItem[]> = {};
       for (const [k, list] of Object.entries((data.uploadItems ?? {}) as Record<string, unknown>)) {
         if (!Array.isArray(list)) { droppedUploads += 1; continue; }
-        const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'uploading' && drafts.has(k));
+        const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'preparing' && u.status !== 'uploading' && drafts.has(k));
         if (kept.length !== list.length) droppedUploads += list.length - kept.length;
         if (kept.length > 0) uploads[k] = kept;
       }
@@ -1075,7 +1075,7 @@ export function mergeInheritedSnapshots(sources: Array<{ raw: string; sourceDir:
     for (const [k, list] of Object.entries((data.uploadItems ?? {}) as Record<string, unknown>)) {
       if (!Array.isArray(list)) continue;
       if (!drafts.has(k)) continue;
-      const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'uploading');
+      const kept = list.filter((u): u is UploadItem => validateUploadItem(u) && u.status !== 'preparing' && u.status !== 'uploading');
       if (kept.length === 0) continue;
       const cur = state.uploadItems[k] ?? [];
       const ids = new Set(cur.map((u) => u.uploadId));

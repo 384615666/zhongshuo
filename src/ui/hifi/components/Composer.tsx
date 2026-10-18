@@ -322,7 +322,13 @@ function editorInsertPlainText(editor: HTMLElement, text: string): void {
 
 function createInlineTokenElement(token: InlineAttachmentToken, uploads: UploadItem[]): HTMLElement {
   const upload = token.uploadId != null ? uploads.find((item) => item.uploadId === token.uploadId) : undefined;
-  const status = token.kind === 'upload' ? 'uploading' : token.kind === 'failed' || upload?.status === 'failed' ? 'failed' : 'ready';
+  const status = upload?.status === 'preparing'
+    ? 'preparing'
+    : token.kind === 'upload'
+      ? 'uploading'
+      : token.kind === 'failed' || upload?.status === 'failed'
+        ? 'failed'
+        : 'ready';
   const host = document.createElement('span');
   host.className = `composer-file-token is-${status}${token.fileKind === 'image_file' ? ' is-image' : ''}`;
   host.contentEditable = 'false';
@@ -333,8 +339,8 @@ function createInlineTokenElement(token: InlineAttachmentToken, uploads: UploadI
   if (token.attachmentId != null) host.dataset.zsAttachmentId = token.attachmentId;
   if (token.uploadId != null) host.dataset.zsUploadId = token.uploadId;
   if (token.fileKind != null) host.dataset.zsFileKind = token.fileKind;
-  const detail = status === 'uploading' ? '上传中…' : status === 'failed' ? '上传失败' : token.fileKind === 'image_file' ? '图片' : '文件';
-  host.title = status === 'failed' ? `${token.name}：${upload?.error ?? '上传失败'}` : status === 'uploading' ? `${token.name}：上传中，可移除` : `${token.name} · ${detail}${token.revision != null ? ` · v${token.revision}` : ''}`;
+  const detail = status === 'preparing' ? '准备中…' : status === 'uploading' ? '上传中…' : status === 'failed' ? '上传失败' : token.fileKind === 'image_file' ? '图片' : '文件';
+  host.title = status === 'failed' ? `${token.name}：${upload?.error ?? '上传失败'}` : status === 'preparing' ? `${token.name}：正在计算内容身份，完成前不会发送` : status === 'uploading' ? `${token.name}：上传中，可移除` : `${token.name} · ${detail}${token.revision != null ? ` · v${token.revision}` : ''}`;
 
   const icon = document.createElement('span');
   icon.className = 'composer-file-token-icon';
@@ -664,6 +670,7 @@ export function Composer({
   const attachments = useMemo(() => uploadItemsRaw.filter((x) => x.removed !== true), [uploadItemsRaw]);
   /** 就绪附件数（R66 P3 文件-only 发送判据：只有 ready 状态才是可发送附件——上传中/失败不算）。 */
   const readyAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'ready').length, [attachments]);
+  const pendingAttachmentCount = useMemo(() => attachments.filter((x) => x.status === 'preparing' || x.status === 'uploading').length, [attachments]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   /** 图片能力门待选（第五十二轮：显式二选一，不再硬拦——发送暂停在选择上）。 */
   const [imageGate, setImageGate] = useState<{ names: string[]; reason?: string } | null>(null);
@@ -680,21 +687,19 @@ export function Composer({
     const startDraftKey = draftKey;
     const startProjectId = activeProjectId;
     const startConversationId = attachmentUpload.conversationId;
-    const acceptedFiles = await prepareUploadFiles(files, getState().uploadItems[startDraftKey] ?? []);
-    if (acceptedFiles.length === 0) return;
-
-    type PlannedUpload = { file: File; uploadId: string; cls: UploadClassification; contentHash: string | null };
-    const planned: PlannedUpload[] = acceptedFiles.map(({ file, cls, contentHash }) => ({
-      file,
-      uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`,
-      cls,
-      contentHash,
-    }));
+    type PlannedUpload = { file: File; uploadId: string; cls: UploadClassification; error?: string };
+    const planned: PlannedUpload[] = files.map((file) => {
+      const cls = classifyAttachmentFile(file.name, file.size);
+      return {
+        file,
+        uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`,
+        cls,
+        ...(cls.cls === 'unsupported' ? { error: `${cls.reason ?? '不支持的附件类型'}（${file.name} · ${file.size}B）——可换支持类型重选` } : {}),
+      };
+    });
+    if (planned.length === 0) return;
 
     for (const item of planned) {
-      const error = item.cls.cls === 'unsupported'
-        ? `${item.cls.reason ?? '不支持的附件类型'}（${item.file.name} · ${item.file.size}B）——可换支持类型重选`
-        : undefined;
       addUploadItem({
         uploadId: item.uploadId,
         draftKey: startDraftKey,
@@ -703,9 +708,8 @@ export function Composer({
         size: item.file.size,
         sourceLastModified: item.file.lastModified,
         sourceType: item.file.type,
-        ...(item.contentHash != null ? { contentHash: item.contentHash } : {}),
-        status: error == null ? 'uploading' : 'failed',
-        ...(error != null ? { error } : {}),
+        status: item.error == null ? 'preparing' : 'failed',
+        ...(item.error != null ? { error: item.error } : {}),
       });
     }
 
@@ -713,7 +717,7 @@ export function Composer({
     const base = getDraftFull(startDraftKey);
     const bodyNow = draftKeyRef.current === startDraftKey ? bodyRef.current : base.body;
     const tokens = planned.map((item) => inlineAttachmentToken({
-      kind: item.cls.cls === 'unsupported' ? 'failed' : 'upload',
+      kind: item.error == null ? 'upload' : 'failed',
       uploadId: item.uploadId,
       name: item.file.name,
       fileKind: item.cls.cls === 'image' ? 'image_file' : undefined,
@@ -734,7 +738,24 @@ export function Composer({
     }
 
     for (const item of planned) {
-      if (item.cls.cls === 'unsupported') continue;
+      if (item.error != null) continue;
+      const current = () => (getState().uploadItems[startDraftKey] ?? []).find((upload) => upload.uploadId === item.uploadId);
+      const beforeHash = current();
+      if (beforeHash == null || beforeHash.removed === true) continue;
+      const contentHash = await uploadFileContentHash(item.file);
+      const afterHash = current();
+      if (afterHash == null || afterHash.removed === true) continue;
+      const identity = contentHash == null ? null : `${item.file.name}\u0000${item.file.size}\u0000${contentHash}`;
+      const duplicate = identity != null && (getState().uploadItems[startDraftKey] ?? []).some((upload) => upload.uploadId !== item.uploadId && uploadContentIdentity(upload) === identity);
+      if (duplicate) {
+        removeUploadItem(startDraftKey, item.uploadId);
+        syncDraftBodyToEditor(startDraftKey);
+        continue;
+      }
+      settleUpload(startDraftKey, item.uploadId, { status: 'uploading', ...(contentHash != null ? { contentHash } : {}) });
+      syncDraftBodyToEditor(startDraftKey);
+      const uploading = current();
+      if (uploading == null || uploading.removed === true) continue;
       try {
         const r = await uploadAttachmentFile(startConversationId, item.file);
         if (draftKeyRef.current !== startDraftKey || getState().activeProjectId !== startProjectId) {
@@ -1100,6 +1121,11 @@ export function Composer({
     // 普通聊天固定交给 AI；没有正文但有 ready 附件仍可发送。
     const refsAtGuard = getDraftFull(draftKey).attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
     if (text.length === 0 && refsAtGuard.length === 0) return;
+    const busyAttachments = (getState().uploadItems[draftKey] ?? []).filter((item) => item.removed !== true && (item.status === 'preparing' || item.status === 'uploading'));
+    if (busyAttachments.length > 0) {
+      setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；完成或移除后再发送，避免文件落到下一条草稿`);
+      return;
+    }
     if (sendDisabledReason) return;
     if (deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all')) {
       setSendErrorFor(draftKey, '请添加至少2位AI');
@@ -1258,6 +1284,11 @@ export function Composer({
   /** 重发原信封（结果未知专用）：严格使用冻结参数；成功按发起键结算+清信封；确定失败清信封。 */
   function retryUnknown(env: PendingSendEnvelope): void {
     if (onRetrySend == null) return;
+    const busyAttachments = (getState().uploadItems[draftKey] ?? []).filter((item) => item.removed !== true && (item.status === 'preparing' || item.status === 'uploading'));
+    if (busyAttachments.length > 0) {
+      setSendErrorFor(draftKey, `仍有 ${busyAttachments.length} 个文件正在准备或上传；本目标完成后才能重发未知信封`);
+      return;
+    }
     if (sendingKeys.has(draftKey)) return;
     sendingKeys.add(draftKey);
     setSending(true);
@@ -2111,7 +2142,7 @@ export function Composer({
           <button
             className="btn primary sm composer-send"
             onClick={() => submit()}
-            disabled={(!hasSendableBody && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason) || modeInvalid || budgetBelowMinimum || budgetAboveMaximum}
+            disabled={pendingAttachmentCount > 0 || (!hasSendableBody && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason) || modeInvalid || budgetBelowMinimum || budgetAboveMaximum}
             title={
               modeInvalid
                 ? '请添加至少2位AI；草稿会保留'
@@ -2119,6 +2150,8 @@ export function Composer({
                   ? `本次上限至少 ${budgetBounds.minimum} 次；草稿会保留`
                   : budgetAboveMaximum
                     ? `本次上限最多 ${budgetBounds.maximum} 次；草稿会保留`
+                : pendingAttachmentCount > 0
+                  ? `有 ${pendingAttachmentCount} 个文件正在准备或上传；完成或移除后再发送`
                 : (!hasSendableBody && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)
                 ? sendDisabledReason ?? (sending ? '正在发送…' : '输入内容、或添加就绪附件后可发送（只有文件也可以发送）')
                 : 'Enter 发送，Shift+Enter 换行（没有正文但有就绪附件时也可发送）'

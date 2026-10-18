@@ -431,6 +431,7 @@ button.composer-target-summary:hover {
   border-color: var(--accent);
   box-shadow: var(--ring);
 }
+.composer-file-token.is-preparing,
 .composer-file-token.is-uploading {
   border-style: dashed;
   color: var(--text-2);

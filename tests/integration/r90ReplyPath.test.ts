@@ -4,7 +4,7 @@
  * path+hash baseline and remain explicitly non-restorable in the changeset;
  * they must not turn the whole conversation into a pre-CLI startup failure.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import { failingTurn, successTurn } from '../../src/adapter/fake/script.ts';
+import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
 process.env.ZS_RUNTIME = 'fake';
@@ -162,7 +163,7 @@ describe('R90 ordinary reply dispatch', () => {
     }
   }, 30_000);
 
-  it('room reply stays available and is downgraded to read-only beside an oversized file', async () => {
+  it('room write keeps the explicit full-access policy beside an unrelated oversized file', async () => {
     const projectRoot = join(root, 'project-room');
     const appDataDir = join(root, 'appdata-room');
     mkdirSync(projectRoot, { recursive: true });
@@ -170,8 +171,17 @@ describe('R90 ordinary reply dispatch', () => {
     writeFileSync(join(projectRoot, 'small-target.txt'), 'unchanged-r90');
 
     const db = openDatabase(join(root, 'room.sqlite'));
-    const workTurn = successTurn('R90_ROOM_REPLY_OK', 'msg_r90_room');
+    const workTurn: FakeTurnScript = [
+      { kind: 'writeFile', path: 'small-target.txt', content: 'modified-r90' },
+      ...successTurn('R90_ROOM_WRITE_OK', 'msg_r90_room'),
+    ];
     const adapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => workTurn });
+    let openedWriteAccess: { fullAccess?: boolean; modificationAuthorized: boolean; policyId?: string } | undefined;
+    const originalOpenSession = adapter.openSession.bind(adapter);
+    vi.spyOn(adapter, 'openSession').mockImplementation(async (input) => {
+      openedWriteAccess = input.writeAccess;
+      return originalOpenSession(input);
+    });
     const worker = new DispatchWorker({ db, adapter, leaseOwner: 'r90-room', appDataDir });
     const deps = { db, localUserId: 'u_r90_room', appDataDir, interruptTurn: (id: string) => worker.interruptTurn(id) };
     const cmd = async <T>(method: string, params: unknown): Promise<T> => {
@@ -202,19 +212,25 @@ describe('R90 ordinary reply dispatch', () => {
       expect(submitted.disposition).toBe('queued');
       await worker.runOnce();
       expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(submitted.taskId)).toEqual({ status: 'DONE' });
-      expect(readFileSync(join(projectRoot, 'small-target.txt'), 'utf8')).toBe('unchanged-r90');
+      expect(openedWriteAccess).toMatchObject({ fullAccess: true, modificationAuthorized: true, policyId: 'policy-full-access' });
+      expect(readFileSync(join(projectRoot, 'small-target.txt'), 'utf8')).toBe('modified-r90');
       const changeset = db.prepare(`SELECT s.id FROM change_sets s
         JOIN change_set_files f ON f.change_set_id=s.id AND f.role='before'
         WHERE s.task_id=? AND f.path='large-synthetic.bin' AND f.content_unavailable IS NOT NULL`)
         .get(submitted.taskId) as { id: string };
       expect(changeset.id).toBeTruthy();
-      const readonlyEvent = db.prepare(`SELECT payload_json FROM domain_events
-        WHERE task_id=? AND kind='run.baselineReadonly' ORDER BY seq DESC LIMIT 1`)
+      const unavailableEvent = db.prepare(`SELECT payload_json FROM domain_events
+        WHERE task_id=? AND kind='run.baselineContentUnavailable' ORDER BY seq DESC LIMIT 1`)
         .get(submitted.taskId) as { payload_json: string } | undefined;
-      expect(readonlyEvent).toBeTruthy();
-      expect(JSON.parse(readonlyEvent!.payload_json)).toMatchObject({ changeSetId: changeset.id });
-      expect(db.prepare('SELECT count(*) n FROM workspace_leases WHERE owner_turn_id IN (SELECT id FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id=?))')
+      expect(unavailableEvent).toBeTruthy();
+      expect(JSON.parse(unavailableEvent!.payload_json)).toMatchObject({ changeSetId: changeset.id, paths: ['large-synthetic.bin'] });
+      expect(db.prepare(`SELECT count(*) n FROM domain_events WHERE task_id=? AND kind='run.baselineReadonly'`)
         .get(submitted.taskId)).toEqual({ n: 0 });
+      expect(db.prepare("SELECT count(*) n FROM workspace_leases WHERE status='active' AND owner_turn_id IN (SELECT id FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id=?))")
+        .get(submitted.taskId)).toEqual({ n: 0 });
+      const diff = db.prepare(`SELECT json_extract(payload_json,'$.modified') modified FROM domain_events
+        WHERE task_id=? AND kind='changeset.finalized' ORDER BY seq DESC LIMIT 1`).get(submitted.taskId) as { modified: string };
+      expect(JSON.parse(diff.modified)).toContain('small-target.txt');
     } finally {
       db.close();
     }
