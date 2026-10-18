@@ -79,7 +79,7 @@ export function resolveTopLevelRoute(input: TopLevelRouteInput): DomainResult<To
       const frozen=shape==='all'?[...input.room.enabledAgentMemberIds]:[...targets.value.memberIds];
       if(!frozen.length)return domainErr('MEMBER_UNAVAILABLE','房间没有可用的 AI 成员，请先添加成员');
       const coordinator=frozen.includes(input.room.coordinatorMemberId)?input.room.coordinatorMemberId:frozen[0]!;
-      return domainOk({kind:'dispatch',mode:'AUTO',coordinatorMemberId:coordinator,participantScope:'selected',frozenMemberIds:frozen,initialWakeMemberIds:[coordinator]});
+      return domainOk({kind:'dispatch',mode:'AUTO',coordinatorMemberId:coordinator,participantScope:'selected',frozenMemberIds:frozen,initialWakeMemberIds:frozen});
     }
   }
 }

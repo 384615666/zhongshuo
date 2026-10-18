@@ -44,36 +44,32 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(f.db.prepare('SELECT count(*) n FROM tasks').get()).toEqual({n:2});
     }finally{f.db.close();}
   });
-  it('hello -> invite B -> thread all routes only A/B, hands the actual attached report to B, and integrates in the same task',async()=>{
+  it('thread all fans out to every current participant, excludes room C, and keeps each reply visible',async()=>{
     const f=await fixture();try{
-      const finish=(answer:string,extra:Record<string,unknown>={}):FakeTurnScript=>[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...extra})}}];
-      const scripts=[finish('你好！'),finish('请同伴核对表格',{responseKind:'work',handoffs:[{toMemberId:f.ids[1],purpose:'review',message:'请实际读取附上的合成报告，核实总额与明细，给我具体问题以便汇总。'}]}),finish('总额100与明细40+30=70不一致',{handoffs:[{toMemberId:f.ids[0],purpose:'reply',message:'我已核对报告，明细合计70而报告总额100，请汇总这个差异和修正建议。'}]}),finish('两位已核对，报告总额需要修正')];
-      let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-thread-all',appDataDir:f.dir});
+      const answers=['你好！','甲的明确回复','乙的明确回复'];
+      let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:(input)=>{
+        const match=input.text.match(/resultKey=([^；\n]+)/)??input.text.match(/"resultKey":"(result_[^"]+)"/);
+        const key=match?.[1]??'result_unknown';
+        const answer=answers[index++]!;
+        const finalText=JSON.stringify({schemaVersion:'task-complete-v1',resultKey:key,responseKind:'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs:[]});
+        return[{kind:'event',event:{kind:'message.completed',messageId:`r89_${index}`,text:finalText}},{kind:'event',event:{kind:'turn.completed',finalText}}] as FakeTurnScript;
+      }}),leaseOwner:'r89-thread-all',appDataDir:f.dir});
       await worker.runOnce();
-      const members=await f.get();const added=await f.cmd<ThreadMembersSnapshot>('thread.members.change',f.change(f.ids[1]!,'add',members.version));
-      const uploaded=await f.cmd<{attachmentId:string}>('attachment.uploadText',{conversationId:f.room.conversationId,filename:'合成报告.txt',content:'报告总额100；项目甲40，项目乙30。'});
-      const sent=await f.cmd<{messageId:string;taskId:string}>('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对这份报告并汇总意见',intent:'default',mentions:[{kind:'all'}],threadMemberVersion:added.version,attachmentRefs:[uploaded.attachmentId]});
+      const added=await f.cmd<ThreadMembersSnapshot>('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
+      const sent=await f.cmd<{messageId:string;taskId:string}>('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'@全体 请分别回复',intent:'default',mentions:[{kind:'all'}],threadMemberVersion:added.version});
       expect(sent.taskId).toBe(f.root.taskId);
-      const queued=f.db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE message_id=?').get(sent.messageId) as {route_json:string;roster_json:string};
-      expect(JSON.parse(queued.route_json)).toMatchObject({mode:'AUTO',frozenMemberIds:[...added.memberIds]});
-      expect((JSON.parse(queued.roster_json) as Array<{memberId:string}>).map(m=>m.memberId)).not.toContain(f.ids[2]);
-      for(let i=0;i<8&&await worker.runOnce();i++){ /* formal bounded pump */ }
-      expect(index).toBe(4);
-      expect(f.db.prepare('SELECT DISTINCT member_id FROM agent_turns ORDER BY member_id').all()).toEqual([f.ids[0],f.ids[1]].sort().map(member_id=>({member_id})));
-      const bundle=f.db.prepare('SELECT c.included_refs_json FROM context_bundles c JOIN agent_turns a ON a.id=c.turn_id WHERE a.member_id=?').get(f.ids[1]) as {included_refs_json:string};
-      expect(JSON.parse(bundle.included_refs_json).attachments).toEqual(expect.arrayContaining([expect.objectContaining({filename:'合成报告.txt',text:'报告总额100；项目甲40，项目乙30。'})]));
-      expect(f.db.prepare('SELECT status FROM thread_reply_requests WHERE message_id=?').get(sent.messageId)).toEqual({status:'succeeded'});
-      const history=await f.cmd<{items:Array<{authorId:string;body:{text:string}}>} >('thread.history',{threadId:f.root.threadId});
-      expect(history.items.some(m=>m.authorId===f.ids[1]&&m.body.text.includes('40+30'))).toBe(true);
-      expect(f.db.prepare('SELECT current_delivery_id FROM tasks WHERE id=?').get(f.root.taskId)).toMatchObject({current_delivery_id:expect.any(String)});
-      expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({n:0});
-      const exchanges=f.db.prepare('SELECT source_member_id,target_member_id,body,status,target_turn_id FROM coordination_messages ORDER BY created_at,id').all() as Array<{source_member_id:string;target_member_id:string;body:string;status:string;target_turn_id:string}>;
-      expect(exchanges).toHaveLength(2);expect(exchanges.every(m=>m.status==='completed'&&m.target_turn_id)).toBe(true);
-      expect(exchanges.map(m=>[m.source_member_id,m.target_member_id])).toEqual([[f.ids[0],f.ids[1]],[f.ids[1],f.ids[0]]]);
-      const integrated=f.db.prepare('SELECT included_refs_json FROM context_bundles ORDER BY rowid DESC LIMIT 1').get() as {included_refs_json:string};
-      expect(integrated.included_refs_json).toContain('明细合计70而报告总额100');
-      const evidence=f.db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.conversationWorkObserved'").all() as {payload_json:string}[];
-      expect(evidence).toHaveLength(2);for(const row of evidence)expect(JSON.parse(row.payload_json)).toMatchObject({changedFiles:0,successfulWriteActions:0,workBasis:'coordination-output'});
+      const children=f.db.prepare(`SELECT t.owner_member_id owner,t.id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id
+        JOIN coordination_runs c ON c.run_id=s.run_id WHERE c.task_id=? ORDER BY t.owner_member_id`).all(f.root.taskId) as Array<{owner:string;id:string}>;
+      expect(children.map(row=>row.owner).sort()).toEqual([f.ids[0],f.ids[1]].sort());
+      expect(f.db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key=? AND status!='done'").get(`task:${f.root.taskId}:initial`)).toEqual({n:0});
+      for(let i=0;i<6&&await worker.runOnce();i++){ /* one formal turn per explicit child */ }
+      expect(index).toBe(3);
+      const history=await f.cmd<{items:Array<{authorId:string;body:{text:string}}>}>('thread.history',{threadId:f.root.threadId});
+      expect(history.items.some(m=>m.body.text.includes('甲的明确回复'))).toBe(true);
+      expect(history.items.some(m=>m.body.text.includes('乙的明确回复'))).toBe(true);
+      expect([...new Set(history.items.filter(m=>m.body.text.includes('明确回复')).map(m=>m.authorId))].sort()).toEqual([f.ids[0],f.ids[1]].sort());
+      expect(f.db.prepare('SELECT 1 FROM agent_turns WHERE member_id=?').get(f.ids[2])).toBeUndefined();
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(f.root.taskId)).toEqual({status:'DONE'});
     }finally{f.db.close();}
   });
   it.each(['invalid-output','unknown','provider-failure'] as const)('a receiver %s cannot be marked as a completed message or automatically retried',async failure=>{
@@ -83,7 +79,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-failed-message',appDataDir:f.dir});
       await worker.runOnce();
       await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
-      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[]});
       await worker.runOnce();await worker.runOnce();
       const message=f.db.prepare('SELECT status,error_message,target_delivery_id,target_turn_id FROM coordination_messages').get() as {status:string;error_message:string|null;target_delivery_id:string|null;target_turn_id:string};
       expect(message).toMatchObject({status:'blocked',target_delivery_id:null,error_message:expect.any(String)});
@@ -101,7 +97,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       const scripts=bad==='child-write-escalation'?[finish(),finish([valid]),finish(invalid)]:[finish(),finish(invalid)];let index=0;
       const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-invalid-message',appDataDir:f.dir});
       await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
-      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[]});
       for(let i=0;i<6;i++)await worker.runOnce();
       expect(index).toBe(scripts.length);
       expect(f.db.prepare('SELECT status FROM agent_turns ORDER BY rowid DESC LIMIT 1').get()).toEqual({status:'FAILED'});
@@ -115,7 +111,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       const scripts=[finish('你好'),finish('请乙核对',[{toMemberId:f.ids[1],purpose:'review',message:'请核对明细总额。'}]),finish('请丙查原始表',[{toMemberId:f.ids[2],purpose:'ask',message:'请核实原始明细是40和30吗？'}]),finish('原始明细确认40和30',[{toMemberId:f.ids[1],purpose:'reply',message:'我核对原表，40和30合计70。'}]),finish('已收到丙实际核对结果',[{toMemberId:f.ids[0],purpose:'reply',message:'丙已核实明细，正确总额是70。'}]),finish('三位核对后建议总额改为70')];
       let index=0;const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScriptSequencer:()=>scripts[index++]!}),leaseOwner:'r87-peer-chain',appDataDir:f.dir});
       await worker.runOnce();for(const member of f.ids.slice(1))await f.cmd('thread.members.change',f.change(member!,'add',(await f.get()).version));
-      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对明细',intent:'default',mentions:[{kind:'all'}]});
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对明细',intent:'default',mentions:[]});
       for(let i=0;i<12;i++)await worker.runOnce();
       expect(index).toBe(6);
       const messages=f.db.prepare('SELECT source_member_id,target_member_id,status,target_turn_id FROM coordination_messages ORDER BY rowid').all() as Array<{source_member_id:string;target_member_id:string;status:string;target_turn_id:string}>;
@@ -132,7 +128,7 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       let index=0;const adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>index++===1?finish([{toMemberId:f.ids[1],purpose:'review',message:'请核对明细合计。'}]):finish()});
       const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r87-message-boundary',appDataDir:f.dir});
       await worker.runOnce();await f.cmd('thread.members.change',f.change(f.ids[1]!,'add',(await f.get()).version));
-      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[{kind:'all'}]});
+      await f.cmd('message.submit',{target:{kind:'thread',projectId:f.projectId,conversationId:f.room.conversationId,threadId:f.root.threadId},body:'请大家核对',intent:'default',mentions:[]});
       await worker.runOnce();
       const rootRun=f.db.prepare('SELECT run_id FROM coordination_runs').get() as {run_id:string};
       let opening:Promise<boolean>|undefined,release:(()=>void)|undefined;
@@ -152,12 +148,49 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
     const f=await fixture();try{
       const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'请两位一起看看',intent:'default',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId}))});
       const task=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(sent.taskId) as {route_json:string};
-      expect(JSON.parse(task.route_json)).toMatchObject({mode:'AUTO',participantScope:'selected',initialWakeMemberIds:[f.ids[0]]});
+      expect(JSON.parse(task.route_json)).toMatchObject({mode:'AUTO',participantScope:'selected',initialWakeMemberIds:f.ids.slice(0,2)});
+      const children=f.db.prepare(`SELECT t.owner_member_id owner FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id
+        JOIN coordination_runs c ON c.run_id=s.run_id WHERE c.task_id=? ORDER BY t.owner_member_id`).all(sent.taskId) as Array<{owner:string}>;
+      expect(children.map(row=>row.owner).sort()).toEqual(f.ids.slice(0,2).sort());
+      const parentInitial=f.db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key=?").get(`task:${sent.taskId}:initial`) as {n:number};
+      expect(parentInitial.n).toBe(0);
       const scope=f.db.prepare('SELECT roster_json FROM coordination_scopes WHERE task_id=?').get(sent.taskId) as {roster_json:string};
       expect((JSON.parse(scope.roster_json) as Array<{memberId:string}>).map(m=>m.memberId).sort()).toEqual(f.ids.slice(0,2).sort());
       expect(scope.roster_json).not.toContain(f.ids[2]);
       const explicit=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'独立研讨',intent:'default',collaboration:'deliberate',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId}))});
       const advanced=f.db.prepare('SELECT route_json FROM tasks WHERE id=?').get(explicit.taskId) as {route_json:string};expect(JSON.parse(advanced.route_json)).toMatchObject({mode:'DELIBERATE'});
+    }finally{f.db.close();}
+  });
+  it('room explicit two-recipient message executes both selected members and no hidden coordinator',async()=>{
+    const f=await fixture();try{
+      const answers=['根回复','第一位明确回复','第二位明确回复'];
+      let index=0;
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:(input)=>{
+        const match=input.text.match(/resultKey=([^；\n]+)/)??input.text.match(/"resultKey":"(result_[^"]+)"/);
+        const key=match?.[1]??'result_unknown';
+        const answer=answers[index++]!;
+        const finalText=JSON.stringify({schemaVersion:'task-complete-v1',resultKey:key,responseKind:'conversation',answer,changeSummary:answer,files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],handoffs:[]});
+        return[{kind:'event',event:{kind:'message.completed',messageId:`r89_room_${index}`,text:finalText}},{kind:'event',event:{kind:'turn.completed',finalText}}] as FakeTurnScript;
+      }}),leaseOwner:'r89-room-multi',appDataDir:f.dir});
+      await worker.runOnce();
+      const uploaded=await f.cmd<{attachmentId:string}>('attachment.uploadText',{conversationId:f.room.conversationId,filename:'R89合成资料.txt',content:'R89_DOC_MARKER_42\n两位必须读取这段实际内容。'});
+      const sent=await f.cmd<{taskId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'@两位 请分别回复',intent:'default',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId})),attachmentRefs:[uploaded.attachmentId]});
+      expect(f.db.prepare('SELECT count(*) n FROM outbox WHERE dispatch_key=?').get(`task:${sent.taskId}:initial`)).toEqual({n:0});
+      const children=f.db.prepare(`SELECT t.id,t.owner_member_id owner FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id
+        JOIN coordination_runs c ON c.run_id=s.run_id WHERE c.task_id=? ORDER BY t.owner_member_id`).all(sent.taskId) as Array<{id:string;owner:string}>;
+      expect(children.map(row=>row.owner).sort()).toEqual(f.ids.slice(0,2).sort());
+      for(let i=0;i<6&&await worker.runOnce();i++){ /* one turn per explicit recipient */ }
+      expect(index).toBe(3);
+      const replies=f.db.prepare(`SELECT t.owner_member_id owner,m.body_json FROM messages m JOIN tasks t ON t.id=m.task_id
+        WHERE t.parent_task_id=? AND m.author_type='agent' ORDER BY m.rowid`).all(sent.taskId) as Array<{owner:string;body_json:string}>;
+      expect(replies.map(row=>JSON.parse(row.body_json).text).sort()).toEqual(answers.slice(1).sort());
+      expect([...new Set(replies.map(row=>row.owner))].sort()).toEqual(f.ids.slice(0,2).sort());
+      const contexts=f.db.prepare(`SELECT c.included_refs_json FROM context_bundles c JOIN agent_turns a ON a.id=c.turn_id
+        JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id WHERE t.parent_task_id=?`).all(sent.taskId) as Array<{included_refs_json:string}>;
+      expect(contexts).toHaveLength(2);
+      expect(contexts.every(row=>row.included_refs_json.includes('R89_DOC_MARKER_42'))).toBe(true);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
+      expect(f.db.prepare('SELECT 1 FROM agent_turns WHERE member_id=?').get(f.ids[2])).toBeUndefined();
     }finally{f.db.close();}
   });
   it('shows factual natural progress while running, suppresses control JSON, and stops showing it at terminal',async()=>{

@@ -100,6 +100,77 @@ describe('单层围栏规范化（worker 正式路径）', () => {
     db.close();
   }, 15_000);
 
+  it('自然正文后追加合法 TaskComplete：控制结果通过 resultKey 校验，消息只投影自然正文', async () => {
+    const { db } = rig([]);
+    const taskId = makeTask(db, 11);
+    const natural = '收到，测试正常。我已就绪。';
+    const adapter = new FakeRuntimeAdapter({
+      structuredFinal: false,
+      turnScriptSequencer: (input) => {
+        const m = input.text.match(/resultKey=([^；\n]+)/) ?? input.text.match(/"resultKey":"(result_[^"]+)"/);
+        const key = m?.[1] ?? 'result_unknown';
+        const control = JSON.stringify({
+          schemaVersion: 'task-complete-v1', resultKey: key, responseKind: 'conversation',
+          answer: natural, changeSummary: natural, files: [], executedVerifications: [],
+          unexecutedVerifications: [], remainingIssues: [], handoffs: [],
+        });
+        const raw = `${natural}\n\n${control}`;
+        return [
+          { kind: 'event', event: { kind: 'message.completed', messageId: 'm_r89_appended', text: raw } },
+          { kind: 'event', event: { kind: 'turn.completed', finalText: raw } },
+        ];
+      },
+    });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-r89-appended', appDataDir: join(tmpRoot, 'r89-appended') });
+    await worker.runOnce();
+    expect((db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId) as {status:string}).status).toBe('DONE');
+    const message=db.prepare(`SELECT m.body_json FROM messages m JOIN conversation_threads th ON th.id=m.thread_id
+      WHERE th.root_task_id=? AND m.author_type='agent' ORDER BY m.conversation_seq DESC LIMIT 1`).get(taskId) as {body_json:string};
+    const body=JSON.parse(message.body_json) as {text:string;runtimeControlResult?:string};
+    expect(body.text).toBe(natural);
+    expect(body.runtimeControlResult).toContain('"schemaVersion":"task-complete-v1"');
+    expect(body.text).not.toContain('task-complete-v1');
+    const normalized=db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.outputNormalized' ORDER BY seq DESC LIMIT 1").get() as {payload_json:string};
+    expect(JSON.parse(normalized.payload_json)).toMatchObject({rule:'separate-valid-appended-taskcomplete; same strict schema/resultKey after'});
+    db.close();
+  }, 15_000);
+
+  it('控制结果只在 message.completed、turn.completed 仅自然文本时按同 turn 身份回收', async () => {
+    const { db } = rig([]);
+    const taskId = makeTask(db, 12);
+    const natural = '确认：我是本项目的 GLM 协调者。';
+    const adapter = new FakeRuntimeAdapter({
+      structuredFinal: false,
+      turnScriptSequencer: (input) => {
+        const m = input.text.match(/resultKey=([^；\n]+)/) ?? input.text.match(/"resultKey":"(result_[^"]+)"/);
+        const key = m?.[1] ?? 'result_unknown';
+        const control = JSON.stringify({
+          schemaVersion: 'task-complete-v1', resultKey: key, responseKind: 'conversation',
+          answer: natural, changeSummary: natural, files: [], executedVerifications: [],
+          unexecutedVerifications: [], remainingIssues: [], handoffs: [],
+        });
+        return [
+          { kind: 'event', event: { kind: 'message.completed', messageId: 'm_r89_natural', text: natural } },
+          { kind: 'event', event: { kind: 'message.completed', messageId: 'm_r89_message_only', text: control } },
+          { kind: 'event', event: { kind: 'turn.completed', finalText: natural } },
+        ];
+      },
+    });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-r89-message-only', appDataDir: join(tmpRoot, 'r89-message-only') });
+    await worker.runOnce();
+    expect((db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId) as {status:string}).status).toBe('DONE');
+    const message=db.prepare(`SELECT m.body_json FROM messages m JOIN conversation_threads th ON th.id=m.thread_id
+      WHERE th.root_task_id=? AND m.author_type='agent' ORDER BY m.conversation_seq DESC LIMIT 1`).get(taskId) as {body_json:string};
+    const body=JSON.parse(message.body_json) as {text:string;runtimeControlResult?:string};
+    expect(body.text).toBe(natural);
+    expect(body.runtimeControlResult).toContain('"schemaVersion":"task-complete-v1"');
+    expect((db.prepare('SELECT count(*) n FROM messages WHERE task_id=? AND author_type=\'agent\'').get(taskId) as {n:number}).n).toBe(1);
+    expect(db.prepare("SELECT count(*) n FROM domain_events WHERE kind='turn.duplicateVisibleReplySuppressed'").get()).toEqual({n:1});
+    const normalized=db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.outputNormalized' ORDER BY seq DESC LIMIT 1").get() as {payload_json:string};
+    expect(JSON.parse(normalized.payload_json)).toMatchObject({rule:'use-validated-control-from-message-completed; same strict schema/resultKey'});
+    db.close();
+  }, 15_000);
+
   it('反例：围栏外带正文 → 照旧拒绝；散文/附加键 → 照旧拒绝（原始输出保留）', async () => {
     const { db, worker } = rig([]);
     const taskId = makeTask(db, 2);

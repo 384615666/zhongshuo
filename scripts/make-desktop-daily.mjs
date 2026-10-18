@@ -338,6 +338,30 @@ if(outArg?.startsWith('desktop-daily-win-v26-r88')){
 - 结果未知、权限变化和恢复动作仍需你明确处理，程序不会自动重发或替你授权。
 `,'utf8');
 }
+if(outArg?.startsWith('desktop-daily-win-v26-r89')){
+  writeFileSync(join(out,'README-CANDIDATE.md'),`# 众说 R89 Windows 日常候选
+
+双击 \`start-desktop.vbs\` 启动。
+
+输入框直接输入 \`@\` 即可选择 AI 或工作区文档；工具条 @ 默认从正文开头插入。可同时选择多位成员，发送后的原消息仍保留可辨别的正文 @。文档引用会先形成带 hash/版本的真实托管快照，再随消息交给被点名 AI。
+
+房间明确 @ 一位或多位 AI 时，所有被点名成员都会实际收到并分别回复；@全体只冻结发送时的房间可用成员。串内 @全体只作用于该串当前参与者。无 @ 时仍由房间协调者接单。
+
+Codex/GLM 等运行时返回自然正文并附带内部 TaskComplete 时，程序会先按本 turn resultKey 验证控制对象，再只展示有来源的自然正文；原始运行结果保留在详情中。非法或身份不匹配仍如实失败。
+
+头像、默认成员、数据迁移、旧私信和用户修改过的成员身份沿用 R88 的保全边界。旧包、旧数据根、草稿和 UNKNOWN 保持不动。
+`,'utf8');
+  writeFileSync(join(out,'README-DAILY.md'),`# 众说 R89
+
+双击 \`start-desktop.vbs\`。
+
+- 输入 \`@\` 选择成员或工作区文档；可连续选择多位 AI。
+- 明确 @ 的成员各自回复；无 @ 由房间协调者处理。
+- 串内 @全体只包括当前串参与者。
+- 设置 → 外观管理头像；设置 → 数据与存储备份或使用已有数据。
+- 结果未知、权限变化和恢复动作仍需你明确处理。
+`,'utf8');
+}
 console.log(`[daily-pkg] 就绪：${out}`);
 console.log(`[daily-pkg] 清单核对 ${checked} 一致，不符/缺失 ${missing}；buildId=${build.buildId} commit=${build.commit} dirty=${build.dirty}`);
 if (missing > 0) process.exit(1);

@@ -1,5 +1,5 @@
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
-import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, pumpCoordinations } from './coordination.ts';
+import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
@@ -39,7 +39,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
-import {chatAnswer} from '../contracts/chatAnswer.ts';
+import {chatAnswer,extractAppendedTaskComplete} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -153,6 +153,10 @@ export class DispatchWorker {
   private readonly clock: () => number;
   private readonly adapterForMember?: (memberId: string) => RuntimeAdapter;
   private readonly live = new Map<string, { turnId: string; sessionId: string; adapter: RuntimeAdapter }>();
+  /** Adapters such as Codex may deliver the structured contract in message.completed
+   * while turn.completed carries only the visible natural text. Cache only validated,
+   * turn-bound control objects for that terminal reconciliation. */
+  private readonly controlFromMessages = new Map<string, string>();
   /** E4 解耦：detached 模式的在途 turn 消费器（成员级互斥+stop 收敛依据）。 */
   private readonly detached: boolean;
   private readonly admission: DispatchAdmission;
@@ -240,7 +244,7 @@ export class DispatchWorker {
         });
       }
     } catch (err) {
-      throw new Error(`准入占位恢复失败——拒绝按未核实账本启动派发（重启 daemon 重试）：${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`准入占位恢复失败——拒绝按未核实账本启动派发（重启 daemon 重试）：${err instanceof Error ? err.message : String(err)}`, { cause: err });
     }
   }
 
@@ -1846,6 +1850,20 @@ export class DispatchWorker {
         break;
       }
       case 'message.completed':
+        {
+          const expected=`result_${turnId}`;
+          const candidate=event.controlResult??event.text;
+          const fenced=stripSingleJsonFence(candidate).text.trim();
+          const appended=extractAppendedTaskComplete(fenced,expected)?.controlText;
+          let valid:string|null=null;
+          for(const text of [candidate.trim(),fenced,appended].filter((value):value is string=>typeof value==='string'&&value.length>0)){
+            try{
+              const parsed=taskCompleteSchema.safeParse(JSON.parse(text));
+              if(parsed.success&&parsed.data.resultKey===expected){valid=text;break;}
+            }catch{ /* not a control object */ }
+          }
+          if(valid!=null)this.controlFromMessages.set(turnId,valid);
+        }
         this.insertThreadReply(task, turnId, event.messageId, event.text,event.controlResult);
         break;
       case 'tool.started': {
@@ -1918,14 +1936,31 @@ export class DispatchWorker {
           const finalTextRaw = event.finalText ?? '';
           // 单层围栏规范化（第六轮，边界严格）：仅当围栏包裹**整个**文本（```json?\n…\n```）
           // 才剥壳后走同一严格 schema；围栏外还有正文/截取首个 JSON 段/删未知字段一律不做。
-          const { text: finalText, normalized } = stripSingleJsonFence(finalTextRaw);
+          const expectedResultKey=`result_${turnId}`;
+          const fenced=stripSingleJsonFence(finalTextRaw);
+          const appended=extractAppendedTaskComplete(fenced.text,expectedResultKey);
+          let finalText=appended?.controlText??fenced.text;
+          let contract=this.validateTaskCompleteOutput(finalText,expectedResultKey);
+          const messageControl=this.controlFromMessages.get(turnId);
+          if(!contract.ok&&messageControl!=null){
+            finalText=messageControl;
+            contract=this.validateTaskCompleteOutput(finalText,expectedResultKey);
+            if(contract.ok)this.audit(task,runId,turnId,'turn.outputNormalized',{
+              originalLength:finalTextRaw.length,normalizedLength:finalText.length,visibleTextLength:finalTextRaw.length,
+              rule:'use-validated-control-from-message-completed; same strict schema/resultKey',
+            });
+          }
+          if(contract.ok&&messageControl!=null)this.suppressUncontrolledTurnReplies(task,runId,turnId);
+          const normalized=fenced.normalized||appended!=null;
           if (normalized) {
             this.audit(task, runId, turnId, 'turn.outputNormalized', {
               originalLength: finalTextRaw.length, normalizedLength: finalText.length,
-              rule: 'strip-single-fence-wrapping-entire-text; same strict schema after',
+              visibleTextLength: appended?.visibleText.length??finalText.length,
+              rule: appended!=null
+                ? 'separate-valid-appended-taskcomplete; same strict schema/resultKey after'
+                : 'strip-single-fence-wrapping-entire-text; same strict schema after',
             });
           }
-          let contract = this.validateTaskCompleteOutput(finalText, `result_${turnId}`);
           const planningRun=this.db.prepare("SELECT 1 FROM coordination_runs WHERE run_id=? AND state='planning'").get(runId);
           if(contract.ok && planningRun) {
             const proposed=taskCompleteSchema.parse(JSON.parse(finalText)).coordinationPlan;
@@ -2004,7 +2039,8 @@ export class DispatchWorker {
             AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
           const integrationRun=this.db.prepare('SELECT 1 FROM coordination_runs WHERE integration_run_id=?').get(runId);
-          if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0&&!childCoordination(this.db,task.id)&&!integrationRun) {
+          if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0
+            &&(!childCoordination(this.db,task.id)||explicitRecipientChild(this.db,task.id))&&!integrationRun) {
             if(previousWork>0){
               this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
               // A clarification is an answer, not a replacement delivery or an
@@ -2573,6 +2609,31 @@ export class DispatchWorker {
     tx();
   }
 
+  /** Some app-server adapters emit both a natural-only agent message and the same turn's
+   * validated control message. The control message is canonical; suppress only uncontrolled
+   * duplicates from that turn/task and retain their raw bodies in the audit payload. */
+  private suppressUncontrolledTurnReplies(task:TaskRow,runId:string,turnId:string):void {
+    const rows=this.db.prepare(`SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent'
+      AND id LIKE ? ORDER BY rowid`).all(task.id,`msg_${turnId}_%`) as Array<{id:string;body_json:string}>;
+    if(rows.length<2)return;
+    const controlled=rows.filter(row=>{
+      try{return typeof (JSON.parse(row.body_json) as {runtimeControlResult?:unknown}).runtimeControlResult==='string';}
+      catch{return false;}
+    });
+    if(controlled.length!==1)return;
+    const keep=controlled[0]!;
+    const suppressed=rows.filter(row=>row.id!==keep.id);
+    if(!suppressed.length)return;
+    for(const row of suppressed){
+      this.db.prepare('DELETE FROM message_attachments WHERE message_id=?').run(row.id);
+      this.db.prepare('DELETE FROM messages WHERE id=?').run(row.id);
+    }
+    this.audit(task,runId,turnId,'turn.duplicateVisibleReplySuppressed',{
+      keptMessageId:keep.id,
+      suppressed:suppressed.map(row=>({messageId:row.id,body:row.body_json.slice(0,2000)})),
+    });
+  }
+
   /** TaskComplete 输出合同校验：JSON 解析、schema、版本、resultKey 绑定（修复轮）。 */
   private validateTaskCompleteOutput(finalText: string, expectedResultKey: string): { ok: true } | { ok: false; issues: string[] } {
     const issues: string[] = [];
@@ -2601,6 +2662,7 @@ export class DispatchWorker {
     // 真实调用护栏（第十七轮四）：终态在唯一收口点结算 startTurn 台账行（inflight→终态；
     // 未知/中断如实保留——覆盖修复/重派/研讨/并发全部路径）。
     if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status)) {
+      this.controlFromMessages.delete(turnId);
       if(status!=='SUCCEEDED')this.db.prepare("UPDATE coordination_runs SET state=?,error_message=? WHERE (run_id=(SELECT run_id FROM agent_turns WHERE id=?) OR integration_run_id=(SELECT run_id FROM agent_turns WHERE id=?)) AND state IN ('planning','running','integrating')").run(status==='CANCELLED'?'cancelled':'blocked',status==='CANCELLED'?'协调执行已停止':'协调执行未完成，请查看运行原因',turnId,turnId);
       settleConversationReplyForTurn(this.db,turnId,status);
       if(status!=='SUCCEEDED'){

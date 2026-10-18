@@ -14,17 +14,30 @@
  *  - 布局：工具条与状态行都是单行不折行；窄窗靠收窄间距与截断，而不是换行堆叠
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound } from '../data/store';
+import { useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound, addFileRefToDraft } from '../data/store';
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
+import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
 import { command } from '../bridge';
 import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
+
+type MentionDocument = {
+  key: string;
+  kind: 'workspace' | 'uploaded';
+  name: string;
+  path?: string;
+  attachmentId?: string;
+  hash?: string;
+  revision?: number;
+  fileKind?: string;
+  sizeBytes?: number | null;
+};
 
 /**
  * 意图标签的说明（E8 / ADR-14）。
@@ -313,6 +326,7 @@ export function Composer({
     [target.kind, dm, room,threadMembers],
   );
   const allMembers = useStore((s) => s.members);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const memberRuntimes = useStore((s) => s.memberRuntimes);
   const profiles = useStore((s) => s.profiles);
   const runtimes = useStore((s) => s.runtimeInstallations);
@@ -328,12 +342,33 @@ export function Composer({
     const profById = new Map(profiles.map((p) => [p.id, p]));
     return (m: ProjectMember) => {
       const actual=memberRuntimes[m.id];
-      if(actual?.status==='bound')return `${actual.kind} · ${actual.model??'渠道默认模型'}`;
+      if(actual?.status==='bound')return actual.kind==='fake'?'测试环境':`${actual.kind} · ${actual.model??'渠道默认模型'}`;
       if(actual?.status==='unbound')return '全局默认渠道';
       const prof = profById.get(m.profileId);
-      return prof ? byId.get(prof.runtimeInstallationId) ?? '未配置' : '未配置';
+      const label=prof ? byId.get(prof.runtimeInstallationId) : undefined;
+      return label==='fake'?'测试环境':label ?? '未配置';
     };
   }, [runtimes, profiles,memberRuntimes]);
+
+  const mentionTokenById = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const member of members) counts.set(member.displayName, (counts.get(member.displayName) ?? 0) + 1);
+    return new Map(members.map((member) => {
+      const duplicate = (counts.get(member.displayName) ?? 0) > 1;
+      const qualifier = runtimeLabelOf(member).replace(/\s+/g, '');
+      const token = member.displayName + (duplicate ? `（${qualifier}）` : '');
+      return [member.id, token] as const;
+    }));
+  }, [members, runtimeLabelOf]);
+
+  const mentionIdByToken = useMemo(
+    () => new Map([...mentionTokenById].map(([id, token]) => [token, id] as const)),
+    [mentionTokenById],
+  );
+
+  const resolveMentionsFromBody = useCallback((text: string): string[] => {
+    return resolveMentionIds(text, mentionIdByToken);
+  }, [mentionIdByToken]);
 
   const [body, setBody] = useState('');
   /**
@@ -346,6 +381,12 @@ export function Composer({
   const [deliberate,setDeliberate]=useState(false);
   const collaboration=target.kind==='room_root'&&deliberate?'deliberate' as const:undefined;
   const [mentions, setMentions] = useState<string[]>([]);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionActive, setMentionActive] = useState(0);
+  const [mentionDocs, setMentionDocs] = useState<MentionDocument[]>([]);
+  const [mentionDocsLoading, setMentionDocsLoading] = useState(false);
+  const [mentionDocsError, setMentionDocsError] = useState<string | null>(null);
+  const [documentBusy, setDocumentBusy] = useState<string | null>(null);
   const [skipFirstDraft, setSkipFirstDraft] = useState(false);
   const [splitWork, setSplitWork] = useState(false);
   const [access, setAccess] = useState<AccessMode>('plan');
@@ -462,6 +503,44 @@ export function Composer({
     document.addEventListener('keydown', onEscape);
     return () => document.removeEventListener('keydown', onEscape);
   }, [mentionOpen]);
+
+  useEffect(() => {
+    if (!mentionOpen || !showMentions) return;
+    let cancelled = false;
+    setMentionDocsLoading(true);
+    setMentionDocsError(null);
+    void (async () => {
+      const loaded: MentionDocument[] = [];
+      try {
+        if (activeProjectId) {
+          const files = await command<{ entries: Array<{ name: string; kind: 'dir' | 'file'; sizeBytes: number | null }> }>('project.files.list', { projectId: activeProjectId, path: '' });
+          for (const entry of files.entries) {
+            if (entry.kind !== 'file') continue;
+            loaded.push({ key: `workspace:${entry.name}`, kind: 'workspace', name: entry.name, path: entry.name, sizeBytes: entry.sizeBytes });
+          }
+        }
+        if (attachmentUpload != null) {
+          const uploaded = await command<{ items: Array<{ attachmentId: string; filename: string; kind: string; hash: string; revision: number }> }>('attachment.listByConversation', { conversationId: attachmentUpload.conversationId });
+          for (const item of uploaded.items) {
+            loaded.push({ key: `uploaded:${item.attachmentId}`, kind: 'uploaded', name: item.filename, attachmentId: item.attachmentId, fileKind: item.kind, hash: item.hash, revision: item.revision });
+          }
+        }
+        if (!cancelled) setMentionDocs(loaded);
+      } catch (error) {
+        if (!cancelled) {
+          setMentionDocs([]);
+          setMentionDocsError(`文档候选读取失败：${(error as Error).message}`);
+        }
+      } finally {
+        if (!cancelled) setMentionDocsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mentionOpen, showMentions, activeProjectId, attachmentUpload?.conversationId]);
+
+  useEffect(() => {
+    setMentionActive(0);
+  }, [mentionQuery, mentionOpen]);
   /**
    * @ 触发位置（r55 T2 完整修复）：记录**本次打开候选框的那个 @ 的下标**。选中成员后只
    * 消费这一处触发字符——中文紧邻（「整理任务要点@」）、行首/空白、光标处触发全部覆盖；
@@ -470,7 +549,7 @@ export function Composer({
    * 外部变更都会清掉——正文里其它合法 @/邮箱文本永不被触碰。draftKey 一起记录：迟到
    * 的选择不跨草稿消费。
    */
-  const [mentionTrigger, setMentionTrigger] = useState<{ index: number; draftKey: string } | null>(null);
+  const [mentionTrigger, setMentionTrigger] = useState<{ index: number; end: number; draftKey: string } | null>(null);
   /** 「本次运行设置」弹层（低频选项的收纳处，§6） */
   const [runSettingsAnchor, setRunSettingsAnchor] = useState<{ x: number; y: number } | null>(null);
   /**
@@ -500,8 +579,16 @@ export function Composer({
   //     空串写回存储，把草稿清掉。因此载入后要让"下一个保存 effect"跳过一轮。
   useEffect(() => {
     const saved = getDraftFull(draftKey);
-    setBody(saved.body);
-    setMentions(saved.mentions);
+    let restoredBody = saved.body;
+    const existingTokens = resolveMentionsFromBody(restoredBody);
+    const missingTokens = saved.mentions.filter((id) => id !== 'all' && !existingTokens.includes(id));
+    if (saved.mentions.includes('all') && !existingTokens.includes('all') && !restoredBody.includes('@全体')) missingTokens.unshift('all');
+    if (missingTokens.length > 0) {
+      const prefix = missingTokens.map((id) => id === 'all' ? '@全体' : `@${mentionTokenById.get(id) ?? memberLabel(allMembers.find((m) => m.id === id))}`).join(' ');
+      restoredBody = `${prefix} ${restoredBody}`.trimStart();
+    }
+    setBody(restoredBody);
+    setMentions(resolveMentionsFromBody(restoredBody));
     setDeliberate(saved.collaboration==='deliberate');
     // 附件芯片由 store.uploadItems 提供（真源）；已存草稿引用 hydrate 重建（切回/重启恢复）。
     if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
@@ -522,7 +609,12 @@ export function Composer({
     // r61 G7：目标未挂载期间排队的摘录/正文插入在此消费（一次性取走——旧队列不在后续
     // 新点击时批量灌入；每条插入恰好一次落正文）。
     applyDraftInserts(takeDraftInserts(draftKey));
-  }, [draftKey, recordThread]);
+  }, [draftKey, recordThread, mentionTokenById, allMembers, resolveMentionsFromBody]);
+
+  useEffect(() => {
+    const derived = resolveMentionsFromBody(body);
+    setMentions((current) => current.length === derived.length && current.every((id, index) => id === derived[index]) ? current : derived);
+  }, [body, resolveMentionsFromBody]);
 
   // 正文与结构化选择变化即写入草稿（草稿不是命令，commandId 保持不变）；持久化状态由
   // store.draftPersist 统一呈现（内存写不失败——失败的是 localStorage 快照，见 persistence 注释）。
@@ -822,22 +914,43 @@ export function Composer({
     });
   }
 
-  function insertMention(id: string) {
-    setMentions((prev) => {
-      if (id === 'all') return ['all'];
-      const next = prev.filter((m) => m !== 'all');
-      return next.includes(id) ? next : [...next, id];
-    });
-    // 只消费**本次触发位置**的 @（r55 T2）：记录下标处仍为 @ 才删那一个字符——中文紧邻
-    // 「整理任务要点@」、行首/空白、光标处触发全覆盖；工具栏打开（无触发）不动正文；
-    // 正文其它合法 @/邮箱文本不被替换。指派事实仍在 mentions/信封（memberId 结构化保留）。
-    const trig = mentionTrigger;
+  function replaceMentionTriggerWithToken(token: string) {
+    const current = textareaRef.current?.value ?? body;
+    const trigger = mentionTrigger?.draftKey === draftKey ? mentionTrigger : { index: 0, end: 0, draftKey };
+    const insertion = `@${token} `;
+    const next = `${current.slice(0, trigger.index)}${insertion}${current.slice(trigger.end)}`.replace(/^\s+/, '');
+    setBody(next);
+    setMentions(resolveMentionsFromBody(next));
     setMentionTrigger(null);
-    if (trig != null && trig.draftKey === draftKey) {
-      setBody((cur) => (cur.charAt(trig.index) === '@' ? cur.slice(0, trig.index) + cur.slice(trig.index + 1) : cur));
-    }
+    setMentionQuery('');
     setMentionOpen(false);
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta == null) return;
+      const cursor = trigger.index + insertion.length;
+      ta.focus();
+      ta.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function insertMention(id: string) {
+    const token = id === 'all' ? '全体' : mentionTokenById.get(id) ?? memberLabel(allMembers.find((member) => member.id === id));
+    replaceMentionTriggerWithToken(token);
+  }
+
+  function openMentionPickerFromToolbar() {
+    const current = textareaRef.current?.value ?? body;
+    if (!current.startsWith('@')) {
+      setBody(`@${current}`);
+      setMentionTrigger({ index: 0, end: 1, draftKey });
+      setMentionQuery('');
+      setMentionOpen(true);
+      requestAnimationFrame(() => textareaRef.current?.setSelectionRange(1, 1));
+      return;
+    }
+    setMentionTrigger({ index: 0, end: 1, draftKey });
+    setMentionQuery('');
+    setMentionOpen((value) => !value);
   }
 
   /**
@@ -849,22 +962,89 @@ export function Composer({
     if (ta == null || composingRef.current) return;
     const v = ta.value;
     const cur = ta.selectionStart ?? v.length;
-    if (cur > 0 && v.charAt(cur - 1) === '@') {
+    const range = detectMentionRange(v, cur);
+    if (range != null) {
       setMentionOpen(true);
-      setMentionTrigger({ index: cur - 1, draftKey });
+      setMentionTrigger({ index: range.index, end: range.end, draftKey });
+      setMentionQuery(range.query);
+      setMentionActive(0);
     } else {
       setMentionOpen(false);
       setMentionTrigger(null);
+      setMentionQuery('');
     }
   }
 
   function onInput(ta: HTMLTextAreaElement) {
     setBody(ta.value);
+    setMentions(resolveMentionsFromBody(ta.value));
     detectMentionTrigger(ta);
   }
 
+  const normalizedMentionQuery = mentionQuery.trim().toLocaleLowerCase();
+  const mentionMemberCandidates = members.filter((member) => {
+    if (!member.enabled) return false;
+    const haystack = `${member.displayName} ${member.description ?? ''} ${runtimeLabelOf(member)}`.toLocaleLowerCase();
+    return normalizedMentionQuery.length === 0 || haystack.includes(normalizedMentionQuery);
+  });
+  const mentionDocumentCandidates = mentionDocs.filter((doc) => {
+    const already = doc.attachmentId != null && attachments.some((item) => item.attachmentId === doc.attachmentId);
+    return !already && (normalizedMentionQuery.length === 0 || doc.name.toLocaleLowerCase().includes(normalizedMentionQuery));
+  });
+  const showAllCandidate = '全体'.includes(normalizedMentionQuery) || normalizedMentionQuery.length === 0;
+  const mentionCandidates: Array<{ kind: 'all' } | { kind: 'member'; id: string } | { kind: 'document'; doc: MentionDocument }> = [
+    ...(showAllCandidate ? [{ kind: 'all' as const }] : []),
+    ...mentionMemberCandidates.map((member) => ({ kind: 'member' as const, id: member.id })),
+    ...mentionDocumentCandidates.map((doc) => ({ kind: 'document' as const, doc })),
+  ];
+
+  async function insertDocument(doc: MentionDocument) {
+    if (documentBusy != null) return;
+    setDocumentBusy(doc.key);
+    setMentionDocsError(null);
+    try {
+      if (doc.kind === 'uploaded') {
+        if (doc.attachmentId == null || doc.fileKind == null) throw Error('上传文档身份不完整');
+        if (attachmentUpload == null) throw Error('当前页面没有可用的会话附件通道');
+        const added = addFileRefToDraft(draftKey, attachmentUpload.conversationId, {
+          attachmentId: doc.attachmentId,
+          name: doc.name,
+          kind: doc.fileKind,
+          hash: doc.hash,
+          revision: doc.revision,
+        });
+        if (!added.ok) throw Error(added.error ?? '文档引用保存失败');
+      } else {
+        if (doc.path == null || !activeProjectId) throw Error('工作区文件身份不完整');
+        if (attachmentUpload == null) throw Error('当前页面没有可用的会话附件通道');
+        const original = await command<{ bytesBase64: string; filename: string }>('project.file.originalFile', {
+          projectId: activeProjectId,
+          path: doc.path,
+        });
+        const binary = atob(original.bytesBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        await uploadPickedFiles([new File([bytes], original.filename)]);
+        const stored = getDraftFull(draftKey).attachments.find((item) => item.name === original.filename);
+        if (stored == null) throw Error('文件未形成可发送的托管快照（上传或提取失败，详见附件提示）');
+      }
+      replaceMentionTriggerWithToken(`文档：${doc.name}`);
+    } catch (error) {
+      setMentionDocsError(`引用「${doc.name}」失败：${(error as Error).message}。输入与已选内容保留。`);
+      setMentionOpen(true);
+    } finally {
+      setDocumentBusy(null);
+    }
+  }
+
+  function chooseMentionCandidate(candidate: typeof mentionCandidates[number]) {
+    if (candidate.kind === 'all') insertMention('all');
+    else if (candidate.kind === 'member') insertMention(candidate.id);
+    else void insertDocument(candidate.doc);
+  }
+
   /** 参与者名：用于 @ 按钮的 tooltip，让发送前能看到这次会叫上谁 */
-  const participantNames = (route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds)
+  const participantNames = (mentions.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds)
     .map((id) => memberLabel(allMembers.find((m) => m.id === id)))
     .join('、');
 
@@ -922,7 +1102,7 @@ export function Composer({
     const bound = (id: string) => memberRuntimes[id]?.status === 'bound';
     const agentIds = memberIds.filter((id) => allMembers.find((m) => m.id === id)?.principalType === 'agent');
     if (agentIds.length === 0) return null;
-    const named = route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds.filter((id) => id !== 'all');
+    const named = mentions.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds.filter((id) => id !== 'all');
     if (named.length > 0) {
       const namedUnbound = named.filter((id) => !bound(id));
       if (namedUnbound.length === 0) return null;
@@ -934,10 +1114,14 @@ export function Composer({
       if (!agentIds.some((id) => bound(id))) return { text: '项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型', who: agentIds.length };
     }
     return null;
-  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds,room?.coordinatorMemberId]);
+  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds,room?.coordinatorMemberId,mentions.length]);
 
   return (
-    <div className="composer">
+    <div
+      className="composer"
+      data-zs-composer-mentions={mentions.join('|')}
+      data-zs-composer-documents={attachments.filter((item) => item.status === 'ready').map((item) => item.attachmentId ?? '').join('|')}
+    >
       {/**
        * 目标摘要行已按用户要求**整行移除**（2026-09-24 第三轮）。
        *
@@ -974,36 +1158,6 @@ export function Composer({
               ? '本次是仅记录：定向只作为备注保留，不会交给该子任务执行'
               : '这条内容直接交给该子任务负责人，不经协调者转述；取消定向即回到整串'}
           </span>
-        </div>
-      ) : null}
-
-      {/* 已选 mention */}
-      {mentions.length > 0 ? (
-        <div className="composer-mentions">
-          {mentions.includes('all') ? (
-            <span
-              className="chip"
-              style={{ borderColor: 'var(--accent-border)', background: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-            >
-              <Icon name="users" size={11} />@全体
-              <button onClick={() => setMentions([])}><Icon name="x" size={11} /></button>
-            </span>
-          ) : null}
-          {mentions
-            .filter((m) => m !== 'all')
-            .map((id) => {
-              const m = allMembers.find((x) => x.id === id);
-              if (!m) return null;
-              return (
-                <span key={id} className="chip" title={`成员 ${m.displayName}`}>
-                  <Icon name="at-sign" size={11} />
-                  {memberLabel(m)}
-                  <button onClick={() => setMentions((p) => p.filter((x) => x !== id))}>
-                    <Icon name="x" size={11} />
-                  </button>
-                </span>
-              );
-            })}
         </div>
       ) : null}
 
@@ -1169,6 +1323,22 @@ export function Composer({
               e.preventDefault();
               return;
             }
+            if (mentionOpen && !composingRef.current && !e.nativeEvent.isComposing) {
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (mentionCandidates.length === 0) return;
+                setMentionActive((current) => {
+                  const delta = e.key === 'ArrowDown' ? 1 : -1;
+                  return (current + delta + mentionCandidates.length) % mentionCandidates.length;
+                });
+                return;
+              }
+              if (e.key === 'Enter' && mentionCandidates.length > 0) {
+                e.preventDefault();
+                chooseMentionCandidate(mentionCandidates[Math.min(mentionActive, mentionCandidates.length - 1)]!);
+                return;
+              }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               // 中文输入法组合态的 Enter 不发送（§17.4）
               if (composingRef.current || e.nativeEvent.isComposing) return;
@@ -1179,21 +1349,63 @@ export function Composer({
         />
 
         {mentionOpen && showMentions ? (
-          <div className="mention-pop">
-            <div className="menu-label">提及</div>
-            <button className="menu-item" onClick={() => insertMention('all')}>
-              <Icon name="users" size={14} />
-              <span style={{ flex: 1 }}>{target.kind==='thread'?'本串全体':'全体'}</span>
-              <span className="hint">{members.filter(m=>m.enabled).length} 位 AI</span>
-            </button>
-            <div className="menu-sep" />
-            {members.map((m) => (
-              <button key={m.id} className="menu-item" onClick={() => insertMention(m.id)} disabled={!m.enabled} data-zs-mention-option={m.id} title={`成员 ${m.displayName}`}>
-                <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={16} subject={`member:${m.id}`} />
-                <span style={{ flex: 1 }}>{memberLabel(m)}</span>
-                <span className="hint">{m.description?`${m.description} · `:''}{runtimeLabelOf(m)}</span>
+          <div className="mention-pop" data-zs-mention-pop="1">
+            <div className="menu-label">@ 成员或文档{normalizedMentionQuery ? ` · 搜索「${mentionQuery}」` : ' · 继续输入可搜索'}</div>
+            {showAllCandidate ? (
+              <button
+                className={`menu-item${mentionActive === 0 ? ' active' : ''}`}
+                onClick={() => insertMention('all')}
+                onMouseEnter={() => setMentionActive(0)}
+                data-zs-mention-option="all"
+              >
+                <Icon name="users" size={14} />
+                <span style={{ flex: 1 }}>{target.kind==='thread'?'本串全体':'全体'}</span>
+                <span className="hint">{members.filter(m=>m.enabled).length} 位 AI</span>
               </button>
-            ))}
+            ) : null}
+            <div className="menu-sep" />
+            <div className="menu-label">成员</div>
+            {mentionMemberCandidates.map((m, memberIndex) => {
+              const candidateIndex = (showAllCandidate ? 1 : 0) + memberIndex;
+              return (
+                <button
+                  key={m.id}
+                  className={`menu-item${mentionActive === candidateIndex ? ' active' : ''}`}
+                  onClick={() => insertMention(m.id)}
+                  onMouseEnter={() => setMentionActive(candidateIndex)}
+                  data-zs-mention-option={m.id}
+                  title={`提及 ${m.displayName}`}
+                >
+                  <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={16} subject={`member:${m.id}`} />
+                  <span style={{ flex: 1 }}>{memberLabel(m)}</span>
+                  <span className="hint">{m.description?`${m.description} · `:''}{runtimeLabelOf(m)}</span>
+                </button>
+              );
+            })}
+            {mentionMemberCandidates.length === 0 ? <div className="small faint" style={{ padding: '4px 8px' }}>没有匹配的成员</div> : null}
+            <div className="menu-sep" />
+            <div className="menu-label">文档</div>
+            {mentionDocsLoading ? <div className="small faint" style={{ padding: '4px 8px' }}>正在读取工作区与已上传文档…</div> : null}
+            {mentionDocsError != null ? <div className="small" role="alert" style={{ padding: '4px 8px', color: 'var(--warning)' }}>{mentionDocsError}</div> : null}
+            {mentionDocumentCandidates.map((doc, docIndex) => {
+              const candidateIndex = (showAllCandidate ? 1 : 0) + mentionMemberCandidates.length + docIndex;
+              return (
+                <button
+                  key={doc.key}
+                  className={`menu-item${mentionActive === candidateIndex ? ' active' : ''}`}
+                  onMouseEnter={() => setMentionActive(candidateIndex)}
+                  onClick={() => void insertDocument(doc)}
+                  disabled={documentBusy != null}
+                  data-zs-mention-document={doc.key}
+                  title={`引用${doc.kind === 'workspace' ? '工作区' : '已上传'}文档 ${doc.name}`}
+                >
+                  <Icon name="file-text" size={14} />
+                  <span style={{ flex: 1 }} className="truncate">{doc.name}</span>
+                  <span className="hint">{documentBusy === doc.key ? '引用中…' : doc.kind === 'workspace' ? '工作区快照' : `已上传 v${doc.revision ?? 1}`}</span>
+                </button>
+              );
+            })}
+            {!mentionDocsLoading && mentionDocumentCandidates.length === 0 ? <div className="small faint" style={{ padding: '4px 8px' }}>没有匹配的文档</div> : null}
           </div>
         ) : null}
 
@@ -1260,11 +1472,7 @@ export function Composer({
                   ? `提及成员（也可以直接打 @）· 当前将叫上：${participantNames}`
                   : '提及成员（也可以直接在输入框里打 @）'
               }
-              onClick={() => {
-                // 工具栏打开=无触发字符可消费（选人不动正文）；关闭=取消（同样清触发位置）。
-                setMentionTrigger(null);
-                setMentionOpen((v) => !v);
-              }}
+              onClick={openMentionPickerFromToolbar}
             >
               <Icon name="at-sign" size={14} />
             </button>
@@ -1528,7 +1736,7 @@ export function Composer({
            */}
           {target.kind==='room_root'&&sendAs==='ai'&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{
             const next=!deliberate;setDeliberate(next);
-            if(next&&!mentions.includes('all')&&mentions.filter(id=>memberIds.includes(id)).length<2)setMentions(['all']);
+            if(next&&!mentions.includes('all')&&mentions.filter(id=>memberIds.includes(id)).length<2)replaceMentionTriggerWithToken('全体');
             setRunSettingsAnchor(null);
           }}>{deliberate?'改为自然协作':'高级：独立研讨（先独立分析，再互评汇总）'}</MenuItem>:null}
           {sendAs === 'ai' && !inputDisabledReason ? (

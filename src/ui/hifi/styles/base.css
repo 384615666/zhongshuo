@@ -1895,7 +1895,8 @@ table.tbl tbody tr:hover {
   cursor: pointer;
   text-align: left;
 }
-.menu-item:hover:not(:disabled) {
+.menu-item:hover:not(:disabled),
+.menu-item.active:not(:disabled) {
   background: var(--bg-hover);
 }
 .menu-item:disabled {

@@ -38,7 +38,10 @@ export function selectThreadRecipients(db:ZhongshuoDatabase,threadId:string,ment
   const memberId=owner&&recipientIds.includes(owner)?owner:roomCoordinator&&recipientIds.includes(roomCoordinator)?roomCoordinator:recipientIds[0]!;
   const inviteIds=all?[]:explicit.filter(id=>!snapshot.memberIds.includes(id));
   const candidateIds=!all&&!explicit.length?snapshot.eligibleMemberIds:recipientIds;
-  const route:TopLevelRouteOutcome=recipientIds.length===1&&candidateIds.length===1?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}:{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]};
+  const explicitScope=all||explicit.length>1;
+  const route:TopLevelRouteOutcome=recipientIds.length===1&&candidateIds.length===1
+    ?{kind:'dispatch',mode:'DIRECT',targetMemberId:memberId,frozenMemberIds:recipientIds,initialWakeMemberIds:[memberId]}
+    :{kind:'dispatch',mode:'AUTO',coordinatorMemberId:memberId,...(explicitScope?{participantScope:'selected' as const}:{}),frozenMemberIds:recipientIds,initialWakeMemberIds:explicitScope?recipientIds:[memberId]};
   return{memberId,recipientIds,candidateIds,inviteIds,route,membershipVersion:snapshot.version};
 }
 
