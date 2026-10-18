@@ -71,6 +71,32 @@ function existingKindMember(db: ZhongshuoDatabase, projectId: string, kind: 'cla
     ORDER BY pm.id LIMIT 1`).get(projectId, kind, displayName) as { id: string; display_name: string } | undefined;
 }
 
+/** A bootstrap placeholder may only disappear when no durable identity/history row points at it.
+ * Room membership is deliberately excluded because bootstrap owns that relation; DM participation
+ * and every task/turn/history reference are included so links cannot disappear from the UI. */
+function hasDurableMemberReferences(db: ZhongshuoDatabase, memberId: string): boolean {
+  const singleReferences = [
+    'SELECT 1 FROM messages WHERE author_id=? LIMIT 1',
+    'SELECT 1 FROM tasks WHERE owner_member_id=? LIMIT 1',
+    "SELECT 1 FROM dm_participants WHERE principal_type='agent' AND principal_id=? LIMIT 1",
+    'SELECT 1 FROM conversation_members WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM run_participants WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM agent_turns WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM runtime_sessions WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM runtime_process_registry WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM real_calls WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM thread_agent_followers WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM reminders WHERE owner_member_id=? LIMIT 1',
+    'SELECT 1 FROM thread_reply_requests WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM conversation_reply_requests WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM positions WHERE member_id=? LIMIT 1',
+    'SELECT 1 FROM ratification_records WHERE member_id=? LIMIT 1',
+  ];
+  if (singleReferences.some((sql) => db.prepare(sql).get(memberId) != null)) return true;
+  return db.prepare('SELECT 1 FROM coordination_messages WHERE source_member_id=? OR target_member_id=? LIMIT 1')
+    .get(memberId, memberId) != null;
+}
+
 /** Stable IDs plus an immediate transaction make reopen and concurrent calls duplicate-free.
  * Existing members are never renamed, rebound, enabled or removed. */
 export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, candidates: DefaultMemberCandidate[], transaction = true): DefaultMemberResult {
@@ -128,10 +154,7 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
       const placeholder = db.prepare(`SELECT id FROM project_members
         WHERE id=? AND project_id=? AND principal_type='agent' AND profile_id IS NULL AND display_name='执行成员'`)
         .get(placeholderId, projectId) as { id: string } | undefined;
-      const referenced = placeholder == null ? 1 : (db.prepare(`SELECT
-        (SELECT count(*) FROM tasks WHERE owner_member_id=?) +
-        (SELECT count(*) FROM messages WHERE author_id=?) AS count`).get(placeholder.id, placeholder.id) as { count: number }).count;
-      if (placeholder != null && referenced === 0) {
+      if (placeholder != null && !hasDurableMemberReferences(db, placeholder.id)) {
         const claude = result.created.find((item) => item.kind === 'claude')
           ?? result.existing.find((item) => item.kind === 'claude');
         if (claude != null) {

@@ -166,6 +166,51 @@ describe('R88 durable appearance and real local default members', () => {
     expect(f.db.prepare("SELECT 1 FROM project_members WHERE id=?").get(`m_default_claude_${opened.project.id}`)).toBeUndefined();
   });
 
+  it('keeps the legacy placeholder when a record-only DM depends on its identity', async () => {
+    const f = await fixture();
+    const claudeDir = join(f.root, 'claude');
+    const codexHome = join(f.root, 'codex');
+    mkdirSync(claudeDir);
+    mkdirSync(codexHome);
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'deepseek-flash' } }));
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6.1-sol"\n');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', claudeDir);
+    vi.stubEnv('CODEX_HOME', codexHome);
+    vi.stubEnv('ZS_DEFAULT_MEMBER_DISCOVERY', '0');
+    const opened = await f.cmd<{ project: { id: string } }>('project.open', { path: f.project });
+    const placeholderId = `m_default_${opened.project.id}_0`;
+    const dm = await f.cmd<{ conversationId: string }>('conversation.create', {
+      projectId: opened.project.id,
+      peerMemberId: placeholderId,
+      title: '仅记录私信',
+    });
+    await f.cmd('message.submit', {
+      target: { kind: 'dm', projectId: opened.project.id, conversationId: dm.conversationId },
+      body: '这条私人记录必须保留入口',
+      intent: 'record_only',
+      mentions: [],
+    });
+    const before = await f.cmd<{ conversations: Array<{ conversationId: string; peerMemberId: string }> }>('conversation.list', {
+      projectId: opened.project.id,
+    });
+    expect(before.conversations).toContainEqual(expect.objectContaining({ conversationId: dm.conversationId, peerMemberId: placeholderId }));
+
+    const discovered = await f.cmd<{ created: Array<{ kind: string }>; removedLegacyPlaceholder: boolean }>('member.discoverDefaults', {
+      projectId: opened.project.id,
+    });
+    expect(discovered.created.map((item) => item.kind).sort()).toEqual(['claude', 'codex']);
+    expect(discovered.removedLegacyPlaceholder).toBe(false);
+    expect(f.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(placeholderId)).toEqual({ display_name: '执行成员' });
+    expect(f.db.prepare("SELECT principal_id FROM dm_participants WHERE conversation_id=? AND principal_type='agent'").get(dm.conversationId)).toEqual({
+      principal_id: placeholderId,
+    });
+    expect((f.db.prepare('SELECT count(*) count FROM messages WHERE conversation_id=?').get(dm.conversationId) as { count: number }).count).toBe(1);
+    const after = await f.cmd<{ conversations: Array<{ conversationId: string; peerMemberId: string }> }>('conversation.list', {
+      projectId: opened.project.id,
+    });
+    expect(after.conversations).toContainEqual(expect.objectContaining({ conversationId: dm.conversationId, peerMemberId: placeholderId }));
+  });
+
   it('auto-discovers during product project.open and keeps the same members on reopen', async () => {
     const f = await fixture();
     const claudeDir = join(f.root, 'claude');
