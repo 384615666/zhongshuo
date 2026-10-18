@@ -6,7 +6,9 @@
 
 同 BUILD 的无协议自然根中，人类正文和成员描述不含 `TaskComplete/schema/JSON/Markdown/answer`；Claude `deepseek-flash` 与 Codex `ccs-new/glm-5.3-flash`（reasoning `high`）共 **6/6** 调用和 turn 全成功。协调 run 完整走完 3 个计划子任务及 integration，根下仅 3 个计划子任务且全部 DONE，`coordination_messages=0`，2 条重复计划 handoff 被审计后抑制。根 task `task_811f8365-3c39-4dc5-9614-4136282cda37` 为 REVIEW，pending delivery `dlv_turn_2470538f-94fa-4ef5-b48f-70d64d05fc2c`（revision 1）；`报告复核-v1.md` 26,876 B、SHA-256 `3dc68cdaffdeb3a89a2506aafa97f24f5eb01fcf5628ce020a8b9f15299fa27d`。
 
-最终聚合 [r87-rc4-final-evidence-20261018.json](r87-rc4-final-evidence-20261018.json) 为 `ok=true`、17 项检查全过，但明确 `releaseQualified=false`，等待审阅方有限独立核验。全量单线程首次 169/170 文件、1258/1259 项，唯一失败为 WPS/Microsoft Office 环境识别；同文件独立复跑 5/5 后，完整单线程再次运行 **170 文件/1259 项全过**（JSON 回执 hash `ecf2e67d53502e0247760b180a614661bf03c173bf68a74b6fd023d35a7e0800`）。
+最终聚合 [r87-rc4-final-evidence-20261018.json](r87-rc4-final-evidence-20261018.json) 在评审前封存为 `ok=true`、17 项检查全过、`releaseQualified=false`；独立评审后不改原票。全量单线程首次 169/170 文件、1258/1259 项，唯一失败为 WPS/Microsoft Office 环境识别；同文件独立复跑 5/5 后，完整单线程再次运行 **170 文件/1259 项全过**（JSON 回执 hash `ecf2e67d53502e0247760b180a614661bf03c173bf68a74b6fd023d35a7e0800`）。
+
+**独立评审通过**：[rc4 独立评审附录](r87-rc4-independent-review-appendix-20261018.md)（SHA-256 `dd8f030f363208ebfa2e1fce6851befa4f2669ef2b1a9dd663dfb0f9dc775557`）与 [机器可读结论](r87-rc4-independent-review-status-20261018.json) 无阻断项，`independentReviewPassed=true`、`candidateReadyForDailyUse=true`。主审 PASS33，Codex transport 8 组 60 项，动态 handoffs 5 场景 71 项，54 份历史原件 hash 全相等。原封存 JSON 保持 `releaseQualified=false` 与 SHA-256 `9e6c4edce9173d567ba3c01168fe57050d080862d0715a25eca2cbe02d2e2df0` 不变。这是有限工程候选评审通过，不是用户已验收任务，也不声称 rc4 原生 UI/保存门重跑。
 
 **rc2/d9 历史工程与 UI 基线**：`bld_2b4d48d74833429d` 继续作为非模型 UI、数据、旧包和保存门证据；rc4 两个 scoped commit 未重跑这些门。rc2 mixed-4 的 8/8 是带用户正文协议提示的工程正例，不是最终无协议自然验收。
 
@@ -16,7 +18,7 @@
 
 **rc2 工程提示历史正例**：该根完成 Claude `deepseek-flash` 与 Codex `ccs-new/glm-5.3-flash`（reasoning `high`）的 8/8 成功调用，task `task_6736c142-f74d-431a-97d5-548eb11263e9` 的 accepted delivery 为 `dlv_turn_1e6fd57d-88ae-4e2a-a9b0-0210036a7539`（revision 3），v2 14,085 B / SHA-256 `c62c864f3bcfa8775dc58032ce57510bca4de7f5c688ff73a79202ca4d5ee504`。其用户正文包含协议提示，因此只保留为工程与保存/重开证据，不再是 rc4 无协议自然验收。
 
-本根 `coordination_messages` 为 0，实际有用结果由 `coordination_steps` 的 `downstream.upstream` 引用传递；不把它写成新证明了动态带外 handoff，动态能力只引用此前独立正式 worker 测试或 977 真实票的既有范围。历史失败原样保留并在聚合器中逐项核对：mixed natural-1 的 5 分钟 deadline UNKNOWN、natural-2 的 10 分钟 deadline UNKNOWN、natural-3 的 GLM `turn.outputInvalid`、较早 `gpt-6-luna` 周额度 FAILED，以及首次混合保存重开 CDP timeout；natural-4 原脚本的验收按钮选择器失败也保留，精确 UI 验收另有同 BUILD 证据。当前只待审阅方有限独立核验，不能把自动化写成真人小白认证或用户最终验收。用户原根、旧包、配置、凭据和 `.codex-deepseek/` 未动。
+该 rc2 工程提示根 `coordination_messages` 为 0，实际有用结果由 `coordination_steps` 的 `downstream.upstream` 引用传递；不把它写成新证明了动态带外 handoff，动态能力只引用此前独立正式 worker 测试或 977 真实票的既有范围。历史失败原样保留并在聚合器中逐项核对：mixed natural-1 的 5 分钟 deadline UNKNOWN、natural-2 的 10 分钟 deadline UNKNOWN、natural-3 的 GLM `turn.outputInvalid`、较早 `gpt-6-luna` 周额度 FAILED，以及首次混合保存重开 CDP timeout；natural-4 原脚本的验收按钮选择器失败也保留，精确 UI 验收另有同 BUILD 证据。rc4 当前状态已由独立评审通过；仍不能把自动化写成真人小白认证或用户最终验收。用户原根、旧包、配置、凭据和 `.codex-deepseek/` 未动。
 
 ## R86 历史候选（2026-10-16，工程门通过，随后用户自然体验未通过）
 

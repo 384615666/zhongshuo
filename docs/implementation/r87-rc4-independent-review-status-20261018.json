@@ -1,0 +1,60 @@
+{
+  "format": "zhongshuo-r87-rc4-independent-review-status-v1",
+  "independentReviewPassed": true,
+  "candidateReadyForDailyUse": true,
+  "release": {
+    "sourceCommit": "16700ed86a65de28e6ca506c79f4dbf4804f1175",
+    "buildId": "bld_da8c2e34f5842bd5",
+    "package": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v26-r87-rc4-20261018"
+  },
+  "sealedEvidence": {
+    "file": "D:\\zhongshuo\\docs\\implementation\\r87-rc4-final-evidence-20261018.json",
+    "sha256": "9e6c4edce9173d567ba3c01168fe57050d080862d0715a25eca2cbe02d2e2df0",
+    "releaseQualified": false,
+    "unchangedAfterReview": true
+  },
+  "appendix": {
+    "file": "D:\\zhongshuo\\docs\\implementation\\r87-rc4-independent-review-appendix-20261018.md",
+    "sha256": "dd8f030f363208ebfa2e1fce6851befa4f2669ef2b1a9dd663dfb0f9dc775557"
+  },
+  "independentResults": {
+    "primary": {
+      "file": "D:\\zhongshuo\\dist\\review-r87-independent\\rc4-final-16700ed-confirmed\\result.json",
+      "sha256": "9a863d22aeb8102af22be5439a1937f84416449818268a4056d2db4361b360a6",
+      "checksPassed": 33
+    },
+    "codexTransport": {
+      "file": "D:\\zhongshuo\\dist\\review-r87-independent\\codex-transport-16700ed-confirmed\\result.json",
+      "sha256": "10e3a72cc9bc9ed2dc8db385f1868eba20d4f765e1e978c966a9a3e54b5b25d0",
+      "groups": 8,
+      "checksPassed": 60
+    },
+    "handoffs": {
+      "file": "D:\\zhongshuo\\dist\\review-r87-independent\\handoffs-16700ed\\result.json",
+      "sha256": "ecba384848471d7e79766d79725d4afaba7175e30085de23c76fd0d50db9ec27",
+      "scenarios": 5,
+      "checksPassed": 71
+    },
+    "historicalArtifacts": {
+      "file": "D:\\zhongshuo\\dist\\review-r87-independent\\rc4-final-16700ed-confirmed\\historical-artifact-hashes.json",
+      "sha256": "1941683a62ed99e9b77e9012480d08520454bbe04be61981a48a7fda2f55b6e7",
+      "artifacts": 54,
+      "hashesEqual": true
+    }
+  },
+  "scope": {
+    "limitedEngineeringCandidateReview": true,
+    "userTaskAccepted": false,
+    "humanNoviceCertified": false,
+    "rc4NativeUiOrSaveRerunClaimed": false,
+    "actualCodexModel": "ccs-new/glm-5.3-flash",
+    "actualCodexReasoning": "high",
+    "coordinationPath": "planned-step-upstream",
+    "coordinationMessages": 0,
+    "newModelCallsForReview": 0
+  },
+  "dailyUse": {
+    "starter": "D:\\zhongshuo\\dist\\desktop\\desktop-daily-win-v26-r87-rc4-20261018\\start-desktop.bat",
+    "existingDataEntry": "设置 → 数据与存储 → 使用已有数据"
+  }
+}

@@ -30,11 +30,12 @@
 - 混合网关：产品子进程默认读取 `C:\Users\user\.codex\config.toml`，provider `custom`，本地 endpoint `http://127.0.0.1:15721/v1`，wire API `responses`；网关模型目录含 `ccs-new/deepseek-flash` 与 `ccs-new/glm-5.3-flash`。未记录任何凭据。
 - 实际协作类型：Codex 在计划子任务读取同一 DOCX/PDF，独立给出表格、字体、元数据和内容流发现；DeepSeek 在后续计划步骤汇总写入文件，最后 integration 生成根交付。Codex 子任务、`coordination_steps.downstream.upstream`、manifest/hash 与最终文件均由聚合器绑定。
 - 根 task `task_811f8365-3c39-4dc5-9614-4136282cda37` 为 REVIEW，pending delivery `dlv_turn_2470538f-94fa-4ef5-b48f-70d64d05fc2c`（revision 1）；`报告复核-v1.md` 26,876 B，SHA-256 `3dc68cdaffdeb3a89a2506aafa97f24f5eb01fcf5628ce020a8b9f15299fa27d`。
-- 最终聚合 [r87-rc4-final-evidence-20261018.json](r87-rc4-final-evidence-20261018.json) 当前 `ok=true`，17 项检查全过；`releaseQualified=false`，等待审阅方独立核验。
+- 最终聚合 [r87-rc4-final-evidence-20261018.json](r87-rc4-final-evidence-20261018.json) 在评审前封存为 `ok=true`、17 项检查全过、`releaseQualified=false`；独立评审后不改原票。
+- 独立评审 [附录](r87-rc4-independent-review-appendix-20261018.md) 与 [机器可读结论](r87-rc4-independent-review-status-20261018.json) 无阻断：`independentReviewPassed=true`、`candidateReadyForDailyUse=true`。主审 PASS33、Codex transport 60 项、动态 handoffs 71 项、54 份历史原件 hash 相等；原封存 JSON 的 `releaseQualified=false` 与 SHA-256 `9e6c4edce9173d567ba3c01168fe57050d080862d0715a25eca2cbe02d2e2df0` 保持不变。
 
 rc4 根 `coordination_messages` 为 0，实际结果通过 3 个计划步骤的 `downstream.upstream` 引用传递；2 条与计划下游目标重复的 handoff 被审计后抑制，未生成额外任务。失败根继续保留并纳入聚合检查：mixed natural-1 的 5 分钟 deadline UNKNOWN、natural-2 的 10 分钟 deadline UNKNOWN、natural-3 的 GLM TaskComplete `turn.outputInvalid`、较早 `gpt-6-luna` 周额度 FAILED、无协议提示的早期 `outputInvalid`、rc3 重复 OPEN 子任务、rc4 提前关窗 UNKNOWN 和首次混合保存 CDP timeout。rc4 clean 复核根本身没有 UNKNOWN、FAILED、inflight 或额外子任务。
 
-当前状态是工程/产品路线候选已聚合通过，等待审阅方有限独立核验；这里的自动化不等同真人小白认证或用户最终验收，包也保持冻结不变。
+当前状态是有限工程候选经独立评审通过，可开始日常使用；这里的自动化与 review 不等同真人小白认证或用户最终验收，包也保持冻结不变。
 
 ## 仍需保留的文案残留
 
