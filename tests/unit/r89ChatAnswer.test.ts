@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatAnswer, extractAppendedTaskComplete, isExplicitTaskCompleteOutput } from '../../src/contracts/chatAnswer.ts';
+import { agentReplyText, chatAnswer, extractAppendedTaskComplete, isExplicitTaskCompleteOutput } from '../../src/contracts/chatAnswer.ts';
 
 const control = {
   schemaVersion: 'task-complete-v1',
@@ -52,5 +52,16 @@ describe('R89 task-complete projection', () => {
     expect(isExplicitTaskCompleteOutput(JSON.stringify({ ...control, files: 'not-an-array' }))).toBe(true);
     expect(isExplicitTaskCompleteOutput(`${natural}\n\n${JSON.stringify({ ...control, resultKey: 'result_other' })}`)).toBe(true);
     expect(isExplicitTaskCompleteOutput('普通说明\n\n{"note":"用户 JSON 示例"}')).toBe(false);
+  });
+
+  it('keeps the final structured answer visible after a progress prefix', () => {
+    const prefix = '结构化终态已准备好，正在提交。';
+    const appended = `${prefix}\n\n${JSON.stringify(control)}`;
+    expect(agentReplyText(appended, undefined, control.resultKey))
+      .toBe(`${prefix}\n\n${control.answer}`);
+    expect(agentReplyText(control.answer, JSON.stringify(control), control.resultKey))
+      .toBe(control.answer);
+    expect(agentReplyText(prefix, JSON.stringify(control), control.resultKey))
+      .toBe(`${prefix}\n\n${control.answer}`);
   });
 });

@@ -79,3 +79,19 @@ export function chatAnswer(text:string,authorType:string,expectedResultKey?:stri
   } catch { /* mixed/natural text is handled by the appended-control projection */ }
   return extractAppendedTaskComplete(text,expectedResultKey)?.visibleText??text;
 }
+
+/** Conversation replies may carry a short progress/status prefix followed by the
+ * validated TaskComplete object. Keep that prefix, but never hide the actual answer
+ * from the reply bubble. A separate control result is considered too because some
+ * runtimes emit the readable message and the structured result as different fields. */
+export function agentReplyText(text:string,controlResult?:string,expectedResultKey?:string):string {
+  const appended=extractAppendedTaskComplete(text,expectedResultKey)
+    ??(controlResult!=null?extractAppendedTaskComplete(controlResult,expectedResultKey):null);
+  const projectedControl=controlResult!=null?chatAnswer(controlResult,'agent',expectedResultKey):null;
+  const answer=appended?.parsed.answer?.trim()
+    ||(projectedControl!=null&&projectedControl!==controlResult?projectedControl.trim():undefined);
+  const visible=chatAnswer(text,'agent',expectedResultKey).trim();
+  const answerKey=answer?.replace(/[。！？.!?]+$/u,'').trim();
+  if(!answer||(answerKey&&visible.includes(answerKey)))return visible||answer||text;
+  return visible?`${visible}\n\n${answer}`:answer;
+}

@@ -39,7 +39,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
-import {chatAnswer,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
+import {agentReplyText,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -2674,7 +2674,7 @@ export class DispatchWorker {
 
   private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string): void {
     const expectedResultKey=`result_${turnId}`;
-    const visibleText=chatAnswer(text,'agent',expectedResultKey);
+    const visibleText=agentReplyText(text,controlResult,expectedResultKey);
     const original=controlResult??(visibleText!==text?text:null);
     const bodyJson=JSON.stringify({text:visibleText,...(original?{runtimeControlResult:original}:{})});
     // 消息身份以 turn 为命名空间：同 turn 内重放去重（RT-05），跨 turn/会话的同名 provider id 不冲突。
