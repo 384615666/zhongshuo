@@ -126,8 +126,8 @@ async function reload() {
     };
     await shot('03-members');
 
-    const bindClicked = await cdp.eval(`(()=>{const b=document.querySelector('[data-zs-member-bind]');if(!b)return false;b.click();return true})()`);
-    if (bindClicked) {
+    const modalClicked = await cdp.eval(`(()=>{const b=document.querySelector('[data-zs-member-edit]');if(!b)return false;b.click();return true})()`);
+    if (modalClicked) {
       await until(() => cdp.eval('document.querySelector(".modal")!=null'), Boolean, 'member modal', 10000);
       await sleep(750);
       const modalOpacity = await cdp.eval(`(()=>{
@@ -141,6 +141,10 @@ async function reload() {
       })()`);
       const closeMetrics = await cdp.eval(`(()=>{const h=document.querySelector('.overlay-head').getBoundingClientRect();const b=document.querySelector('.overlay-head > .icon-btn').getBoundingClientRect();const i=document.querySelector('.overlay-head > .icon-btn svg').getBoundingClientRect();return {dx:Math.abs((b.left+b.right)/2-(i.left+i.right)/2),dy:Math.abs((b.top+b.bottom)/2-(i.top+i.bottom)/2),headerDy:Math.abs((h.top+h.bottom)/2-(b.top+b.bottom)/2),rightInset:h.right-b.right,header:{left:h.left,right:h.right,top:h.top,bottom:h.bottom},button:{left:b.left,right:b.right,top:b.top,bottom:b.bottom},icon:{left:i.left,right:i.right,top:i.top,bottom:i.bottom}}})()`);
       closeMetrics.opacity = modalOpacity;
+      closeMetrics.technicalIdVisible = await cdp.eval(`(()=>{
+        const text=document.querySelector('.modal')?.textContent??'';
+        return /m_[A-Za-z0-9_-]{8,}|#[0-9a-z]{2,}(?:_[0-9]+)?\\b/i.test(text);
+      })()`);
       report.checks.modal = closeMetrics;
       await shot('04-modal-close');
       await cdp.eval(`(()=>{document.querySelector('.overlay-head > .icon-btn')?.click();return true})()`);
@@ -183,7 +187,7 @@ async function reload() {
       && report.checks.avatarSettings.previewAvatars >= 3
       && report.checks.avatarSettings.uploadButtons >= 3
       && report.checks.avatarChat.avatars > 0
-      && (!report.checks.modal || (report.checks.modal.dx < 1.5 && report.checks.modal.dy < 1.5 && report.checks.modal.headerDy < 2 && report.checks.modal.opacity >= 0.99));
+      && (!report.checks.modal || (report.checks.modal.dx < 1.5 && report.checks.modal.dy < 1.5 && report.checks.modal.headerDy < 2 && report.checks.modal.opacity >= 0.99 && report.checks.modal.technicalIdVisible === false));
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2), 'utf8');
     process.stdout.write(`${JSON.stringify({ ok: report.ok, checks: report.checks, nativeWindow: report.nativeWindow, placement: report.placement }, null, 2)}\n`);
     cdp.ws.close();

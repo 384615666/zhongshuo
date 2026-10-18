@@ -208,7 +208,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
   return (
     <div className="main" style={{ overflow: 'auto' }} data-zs-members="hifi">
       <div className="page">
-        {/* 筛选行：项目与顶栏同源，名称/说明/短ID搜索不改变任何成员状态。 */}
+        {/* 筛选行：项目与顶栏同源，名称/说明搜索不改变任何成员状态。 */}
         <UnknownMemberOperations/>
         <div className="page-filters">
           <label className="field inline">
@@ -221,7 +221,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
               options={projects.filter((p) => p.removedAt == null).map((p) => ({ value: p.id, label: p.displayName }))}
             />
           </label>
-          <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明 / 短ID" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
+          <input className="input" aria-label="查找成员" data-zs-member-search placeholder="名称 / 说明" value={query} onChange={e=>setQuery(e.target.value)} style={{maxWidth:240}}/>
           <label className="field inline"><span className="field-label">状态</span><Select value={statusFilter} ariaLabel="成员启用状态筛选" options={[{value:'all',label:'全部状态'},{value:'enabled',label:'启用'},{value:'disabled',label:'停用'}]} onChange={setStatusFilter}/></label>
           <span className="filter-note">
             {membersInScope?.length ?? '…'} 名成员
