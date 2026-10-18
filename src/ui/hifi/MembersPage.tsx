@@ -178,13 +178,13 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    */
   const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string } => {
     const rt = runtimes[m.id];
-    if (runtimeErrs[m.id] != null) return { text: '配置读取失败，打开成员详情可重试', problem: true };
+    if (runtimeErrs[m.id] != null) return { text: '配置暂时读取失败，打开成员详情可重试', problem: true };
     if (rt == null) {
       const failure = runtimeErrs[m.id];
-      if (failure != null) return { text: `查询失败（${failure}）——保留上次事实`, problem: true };
-      return { text: '读取中…' };
+      if (failure != null) return { text: '配置暂时读取失败，保留上次结果', problem: true };
+      return { text: '正在读取配置…' };
     }
-    if (rt.binding == null) return { text: '配置信息缺失，打开成员详情查看', problem: true };
+    if (rt.binding == null) return { text: '尚未读到配置，打开成员详情可重试', problem: true };
     if (rt.binding.installationId == null || rt.binding.installationId === '') {
       const eff = rt.effective;
       if (eff != null && eff.source === 'global-default' && eff.kind != null) {
@@ -192,16 +192,17 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         // 用户 v3 实测 startupFailed 根因）时必须明示发送会失败及解法，不等到派发失败。
         const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
         return {
-          text: `使用本机默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 尚未指定模型':''}`,
+          text: `使用本机默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 需要选择模型':''}`,
           problem: true,
           effective: eff.kind,
         };
       }
-      return { text: '未单独配置，可在「AI 设置」中选择', problem: true };
+      return { text: '尚未单独配置，打开「AI 设置」选择模型', problem: true };
     }
-    if (rt.installation == null) return { text: '配置不可用，打开成员详情查看', problem: true };
-    if(rt.executableStatus?.status==='missing')return {text:`${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 程序不可用`,problem:true};
-    return { text: `${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''}` };
+    if (rt.installation == null) return { text: '配置暂不可用，打开成员详情查看', problem: true };
+    const kind = rt.installation.kind === 'fake' ? '测试环境' : rt.installation.kind;
+    if(rt.executableStatus?.status==='missing')return {text:`${kind}${rt.binding?.model?' · '+rt.binding.model:''} · 执行程序未找到`,problem:true};
+    return { text: `${kind}${rt.binding?.model?' · '+rt.binding.model:''}` };
   };
 
   return (
@@ -273,26 +274,16 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     </div>
                     <div className="small faint" style={{ marginTop: 3 }}>
                       {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
-                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>AI 配置：{rt.text}</span> : <>AI 配置：{rt.text}</>}
+                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>当前配置：{rt.text}</span> : <>当前配置：{rt.text}</>}
                     </div>
                   </div>
                 </div>
                 <div className="small faint" style={{ marginTop: 8, lineHeight: 1.6 }}>
                   {running ? `负责未结束任务 ${running.unfinishedTasks} · 在途执行 ${running.activeTurns} · 待核对结果 ${running.unknownTurns}` : '成员工作量尚未读到'}
                   {m.principalType === 'agent' ? '' : '（本地用户——不可停用）'}
-                  {m.principalType === 'agent' && runtimes[m.id]?.imageInput ? <details data-zs-image-capability={m.id} style={{ marginTop: 5 }}>
-                    <summary>图片输入：{runtimes[m.id]!.imageInput!.status === 'supported' ? '自动传递图片' : '不可用或未能确认'} · 查看配置依据</summary>
-                    <div style={{ marginTop: 4 }}>
-                    配置：{runtimes[m.id]!.imageInput!.configuration} · 模型ID：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
-                    渠道：{runtimes[m.id]!.imageInput!.channel}<br />
-                    协议：{runtimes[m.id]!.imageInput!.protocol}<br />
-                    输入方式：{runtimes[m.id]!.imageInput!.reason}
-                    </div>
-                  </details> : null}
                 </div>
                 {m.principalType === 'agent' ? (
                   <div className="row tight wrap" style={{ marginTop: 10 }}>
-                    {runtimes[m.id]?.writeCapability?<span className="small faint" data-zs-write-capability={m.id}>项目编辑档证据{runtimes[m.id]!.writeCapability!.status==='supported'?'匹配':'无匹配'} · {runtimes[m.id]!.writeCapability!.reason}</span>:null}
                     <button className="btn ghost sm" data-zs-member-edit={m.id} disabled={projArchived||projRemoved} onClick={()=>setEditFor({projectId,member:m})}>编辑资料</button>
                     <button className="btn ghost sm" data-zs-member-template={m.id} disabled={projArchived||projRemoved||runtimeErrs[m.id]!=null||runtimes[m.id]?.installation==null} onClick={()=>setSaveTemplateFor({projectId,member:m})}>保存配置模板</button>
                     <button className="btn ghost sm" disabled={busyId === m.id} onClick={() => void toggle(m)}
@@ -303,6 +294,23 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                       AI 设置…
                     </button>
                   </div>
+                ) : null}
+                {m.principalType === 'agent' && (runtimes[m.id]?.imageInput != null || runtimes[m.id]?.writeCapability != null) ? (
+                  <details className="small faint" data-zs-member-advanced={m.id} style={{ marginTop: 8 }}>
+                    <summary>高级状态</summary>
+                    <div style={{ marginTop: 5, lineHeight: 1.6 }}>
+                      {runtimes[m.id]?.imageInput != null ? <div data-zs-image-capability={m.id}>
+                        图片输入：{runtimes[m.id]!.imageInput!.status === 'supported' ? '自动传递图片' : '暂未确认'}<br />
+                        配置：{runtimes[m.id]!.imageInput!.configuration} · 模型：{runtimes[m.id]!.imageInput!.model ?? '未指定'} · 权限：{runtimes[m.id]!.imageInput!.permissionMode}<br />
+                        渠道：{runtimes[m.id]!.imageInput!.channel}<br />
+                        协议：{runtimes[m.id]!.imageInput!.protocol}<br />
+                        依据：{runtimes[m.id]!.imageInput!.reason}
+                      </div> : null}
+                      {runtimes[m.id]?.writeCapability != null ? <div data-zs-write-capability={m.id}>
+                        项目编辑档：{runtimes[m.id]!.writeCapability!.status === 'supported' ? '已有匹配证据' : '暂无匹配证据'} · {runtimes[m.id]!.writeCapability!.reason}
+                      </div> : null}
+                    </div>
+                  </details>
                 ) : null}
               </div>
             );

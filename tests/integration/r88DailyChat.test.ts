@@ -89,7 +89,10 @@ describe('R88 durable appearance and real local default members', () => {
     vi.stubEnv('ZS_DEFAULT_MEMBER_DISCOVERY', '0');
     const opened = await f.cmd<{ project: { id: string } }>('project.open', { path: f.project });
     const userMember = await f.cmd<{ memberId: string }>('member.create', { projectId: opened.project.id, displayName: '我的助手' });
-    const first = await f.cmd<{ created: Array<{ kind: string }>; removedLegacyPlaceholder: boolean; notes: string[] }>('member.discoverDefaults', { projectId: opened.project.id });
+    const discoveryCommandId = randomUUID();
+    const first = await f.cmd<{ created: Array<{ kind: string }>; removedLegacyPlaceholder: boolean; notes: string[] }>(
+      'member.discoverDefaults', { projectId: opened.project.id }, discoveryCommandId,
+    );
     expect(first.created.map((item) => item.kind).sort(),JSON.stringify(first)).toEqual(['claude', 'codex']);
     expect(first.removedLegacyPlaceholder).toBe(true);
     expect(JSON.stringify(first)).not.toContain('fixture-secret');
@@ -111,6 +114,12 @@ describe('R88 durable appearance and real local default members', () => {
     const second = await f.cmd<{ created: unknown[]; existing: unknown[] }>('member.discoverDefaults', { projectId: opened.project.id });
     expect(second.created).toEqual([]);
     expect(second.existing).toHaveLength(2);
+    const lateReplay = await f.raw('member.discoverDefaults', { projectId: opened.project.id }, discoveryCommandId);
+    expect(lateReplay).toMatchObject({
+      ok: true,
+      replayed: true,
+      data: { created: [{ kind: 'claude' }, { kind: 'codex' }] },
+    });
     expect((f.db.prepare('SELECT count(*) count FROM project_members WHERE project_id=?').get(opened.project.id) as { count: number }).count).toBe(3);
     const otherDir = join(f.root, 'other');
     mkdirSync(otherDir);
@@ -121,6 +130,72 @@ describe('R88 durable appearance and real local default members', () => {
     expect(f.db.prepare('SELECT count(*) count FROM project_members WHERE project_id=?').get(opened.project.id)).toEqual({ count: 3 });
     expect(f.db.prepare('SELECT count(*) count FROM tasks').get()).toEqual({ count: 0 });
     f.db.close();
+    const reopened = openDatabase(join(f.root, 'state.sqlite'));
+    databases.push(reopened);
+    expect(reopened.prepare('SELECT count(*) count FROM project_members WHERE project_id=?').get(opened.project.id)).toEqual({ count: 3 });
+    expect(reopened.prepare('SELECT count(*) count FROM project_members WHERE project_id=?').get(other.project.id)).toEqual({ count: 2 });
+  });
+
+  it('preserves a manually named member instead of replacing it with an automatic default', async () => {
+    const f = await fixture();
+    const claudeDir = join(f.root, 'claude');
+    const codexHome = join(f.root, 'codex');
+    mkdirSync(claudeDir);
+    mkdirSync(codexHome);
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'deepseek-flash' } }));
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "xhigh"\n');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', claudeDir);
+    vi.stubEnv('CODEX_HOME', codexHome);
+    vi.stubEnv('ZS_DEFAULT_MEMBER_DISCOVERY', '0');
+    const opened = await f.cmd<{ project: { id: string } }>('project.open', { path: f.project });
+    const manual = await f.cmd<{ memberId: string }>('member.create', {
+      projectId: opened.project.id,
+      displayName: 'Claude',
+      description: '手工配置，保留原名与说明',
+    });
+    const discovered = await f.cmd<{
+      created: Array<{ kind: string }>;
+      existing: Array<{ memberId: string; kind: string; displayName: string }>;
+    }>('member.discoverDefaults', { projectId: opened.project.id });
+    expect(discovered.created).toEqual([{ memberId: expect.any(String), kind: 'codex', displayName: 'Codex' }]);
+    expect(discovered.existing).toEqual([{ memberId: manual.memberId, kind: 'claude', displayName: 'Claude' }]);
+    expect(f.db.prepare('SELECT display_name,description FROM project_members WHERE id=?').get(manual.memberId)).toEqual({
+      display_name: 'Claude',
+      description: '手工配置，保留原名与说明',
+    });
+    expect(f.db.prepare("SELECT 1 FROM project_members WHERE id=?").get(`m_default_claude_${opened.project.id}`)).toBeUndefined();
+  });
+
+  it('auto-discovers during product project.open and keeps the same members on reopen', async () => {
+    const f = await fixture();
+    const claudeDir = join(f.root, 'claude');
+    const codexHome = join(f.root, 'codex');
+    mkdirSync(claudeDir);
+    mkdirSync(codexHome);
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'deepseek-flash' } }));
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "xhigh"\n');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', claudeDir);
+    vi.stubEnv('CODEX_HOME', codexHome);
+    vi.stubEnv('ZS_DEFAULT_MEMBER_DISCOVERY', '1');
+    const savedVitest = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      const opened = await f.cmd<{ project: { id: string }; created: boolean }>('project.open', { path: f.project });
+      expect(opened.created).toBe(true);
+      const rows = f.db.prepare(`SELECT pm.id,pm.display_name,ri.kind FROM project_members pm
+        LEFT JOIN agent_profiles ap ON ap.id=pm.profile_id
+        LEFT JOIN runtime_installations ri ON ri.id=ap.runtime_installation_id
+        WHERE pm.project_id=? ORDER BY pm.id`).all(opened.project.id) as Array<{ id: string; display_name: string; kind: string | null }>;
+      expect(rows.map((row) => row.kind).sort()).toEqual(['claude', 'codex']);
+
+      const reopened = await f.cmd<{ project: { id: string }; created: boolean }>('project.open', { path: f.project });
+      expect(reopened).toMatchObject({ created: false, project: { id: opened.project.id } });
+      expect(f.db.prepare('SELECT count(*) count FROM project_members WHERE project_id=?').get(opened.project.id)).toEqual({ count: 2 });
+      expect(f.db.prepare('SELECT count(*) count FROM tasks').get()).toEqual({ count: 0 });
+    } finally {
+      if (savedVitest == null) delete process.env.VITEST;
+      else process.env.VITEST = savedVitest;
+    }
   });
 
   it('keeps the same project identity across relocate and reopening a removed project path', async () => {
