@@ -147,10 +147,11 @@ async function composerMentions() {
     await until(() => cdp.eval(`document.querySelector('.composer-send')?.textContent.includes('保存记录')`), Boolean, 'record-only send');
     await cdp.eval(`document.querySelector('.composer-send').click();true`);
     await until(() => cdp.eval(`document.body.textContent.includes('@Claude')&&document.body.textContent.includes('@Codex')&&document.body.textContent.includes('@文档：合成资料.md')`), Boolean, 'sent body visible', 20000);
+    await until(async () => (await composerValue()).trim() === '', Boolean, 'composer settled', 10000);
     report.checks.sentBody = {
       membersVisible: await cdp.eval(`document.body.textContent.includes('@Claude')&&document.body.textContent.includes('@Codex')`),
       documentVisible: await cdp.eval(`document.body.textContent.includes('@文档：合成资料.md')`),
-      composerCleared: (await composerValue()) === '',
+      composerCleared: (await composerValue()).trim() === '',
     };
     await shot('05-sent-body-mentions');
 
