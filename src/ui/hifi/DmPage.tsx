@@ -386,7 +386,7 @@ export function DmPage() {
                     title={d.title !== '' ? d.title : `${d.peerDisplayName ?? '成员'} 的一对一私信`}
                     onClick={() => navigate(`/dm/${d.id}`)}
                   >
-                    <Avatar name={peer?.displayName ?? d.peerDisplayName ?? '成员'} color={peer != null ? memberColor(peer.id) : undefined} size={22} round />
+                    <Avatar name={peer?.displayName ?? d.peerDisplayName ?? '成员'} color={peer != null ? memberColor(peer.id) : undefined} size={22} round subject={peer!=null?`member:${peer.id}`:undefined} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: d.unread > 0 ? 600 : 400 }}>
                         {d.title != null && d.title.length > 0 ? d.title : d.peerDisplayName ?? '成员'}
@@ -614,7 +614,7 @@ export function DmPage() {
                       onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${(e as Error).message}`, 'error')); }}
                       onQuote={() => {
                         const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
-                        setInsertText({ id: Date.now(), text: `> 引用消息（${m.id.slice(0, 10)}…）：${excerpt}` });
+                        setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
                         toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
                       }}
                     />
@@ -754,7 +754,7 @@ function CreateDmModal({ members, onClose, onCreated }: {
             <label key={m.id} className={`wpolicy${picked === m.id ? ' on' : ''}`} style={{ padding: '8px 10px', cursor: 'pointer' }}>
               <input type="radio" name="dm-member" checked={picked === m.id} onChange={() => setPicked(m.id)} />
               <div className="row tight" style={{ flex: 1 }}>
-                <Avatar name={m.displayName} size={22} round />
+                <Avatar name={m.displayName} color={memberColor(m.id)} size={22} round subject={`member:${m.id}`} />
                 <span className="strong">{m.displayName}</span>
                 <div className="spacer" />
                 {m.model != null ? <span className="small faint">{m.model}</span> : null}

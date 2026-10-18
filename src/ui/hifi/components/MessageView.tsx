@@ -12,27 +12,13 @@ import { useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
-import { Avatar, ConsensusTag, CostText, Menu, MenuItem, Tag, memberColor } from './ui';
+import { Avatar, ConsensusTag, CostText, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLabel } from '../lib/format';
 import type { Message, ProjectMember, RouteMode } from '../data/types';
 import { recordLocalOnly, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
-
-/* ---------------- 极简富文本：仅支持 `code` 与 **粗体** ---------------- */
-
-function RichText({ text }: { text: string }) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (p.startsWith('`') && p.endsWith('`')) return <code key={i}>{p.slice(1, -1)}</code>;
-        if (p.startsWith('**') && p.endsWith('**')) return <strong key={i}>{p.slice(2, -2)}</strong>;
-        return <span key={i}>{p}</span>;
-      })}
-    </>
-  );
-}
+import { MarkdownView } from '../preview/MarkdownView';
 
 /* ---------------- 消息携带的资源（UX-PREVIEW-01） ---------------- */
 
@@ -163,13 +149,25 @@ export function MessageView({
   onQuote?: (message: Message) => void;
   onCorrection?: (message: Message) => void;
 }) {
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
   const visibleBody=chatAnswer(message.body,message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
+  const roleClass=isSystem?' msg-system':isHuman?' msg-human':' msg-agent';
+  const copyMessage=async():Promise<void>=>{
+    try{
+      if(navigator.clipboard==null)throw Error('clipboard unavailable');
+      await navigator.clipboard.writeText(visibleBody);
+      setCopyState('copied');
+      window.setTimeout(()=>setCopyState('idle'),1400);
+    }catch{
+      setCopyState('failed');
+      window.setTimeout(()=>setCopyState('idle'),1800);
+    }
+  };
 
   return (
-    <div className={`msg${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={domId??`msg-${message.id}`}>
+    <div className={`msg${roleClass}${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={domId??`msg-${message.id}`}>
       <div className="msg-avatar">
         {isSystem ? (
           <span
@@ -187,6 +185,7 @@ export function MessageView({
             size={22}
             state={author?.workState}
             stateTitle={author?.workStateReason}
+            subject={isHuman?'user':author!=null?`member:${author.id}`:undefined}
           />
         )}
       </div>
@@ -233,16 +232,15 @@ export function MessageView({
         )}
 
         {!isSystem?<div className="msg-actions">
-          <button className="icon-btn sm" aria-label="消息操作" title="复制、引用、收藏" onClick={e=>{const r=e.currentTarget.getBoundingClientRect();setMenuAt({x:r.left-150,y:r.bottom+4});}}><Icon name="more-horizontal" size={13}/></button>
+          <button type="button" className="btn ghost sm msg-action-btn" aria-label="复制消息" title="复制可读正文" onClick={()=>void copyMessage()}>
+            <Icon name="copy" size={12}/> 复制
+          </button>
+          {onQuote?<button type="button" className="btn ghost sm msg-action-btn" aria-label="引用消息" title="引用到输入区" onClick={()=>onQuote(message)}><Icon name="corner-down-right" size={12}/> 引用</button>:null}
+          {onSave?<button type="button" className="btn ghost sm msg-action-btn" data-zs-saved={message.saved?'1':undefined} aria-label={message.saved?'取消收藏':'收藏消息'} title={message.saved?'取消收藏':'收藏，不改动原消息'} onClick={()=>onSave()}><Icon name="bookmark" size={12}/> {message.saved?'已收藏':'收藏'}</button>:null}
+          <span className="small msg-action-feedback" aria-live="polite">{copyState==='copied'?'已复制':copyState==='failed'?'复制失败':''}</span>
           {message.reactions?.length?<span className="row tight faint" aria-label="历史表情">{message.reactions.map(r=><span key={r.emoji}>{r.emoji} {r.by.length}</span>)}</span>:null}
         </div>:null}
       </div>
-
-      {menuAt?<Menu anchor={menuAt} onClose={()=>setMenuAt(null)}>
-        <MenuItem icon="copy" onClick={()=>{void navigator.clipboard?.writeText(visibleBody);setMenuAt(null);}}>复制</MenuItem>
-        {onQuote?<MenuItem icon="corner-down-right" onClick={()=>{onQuote(message);setMenuAt(null);}}>引用</MenuItem>:null}
-        {onSave?<MenuItem icon="bookmark" onClick={()=>{onSave();setMenuAt(null);}}>{message.saved?'取消收藏':'收藏'}</MenuItem>:null}
-      </Menu>:null}
     </div>
   );
 }
@@ -276,7 +274,7 @@ function MessageBody({
     <>
       {message.body && message.kind !== 'progress' ? (
         <div className="msg-text">
-          <RichText text={visibleBody} />
+          <MarkdownView text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
       ) : (message.formalAttachments ?? []).length > 0 ? (
@@ -295,7 +293,7 @@ function MessageBody({
            三行字里两行是重复/恒定值，所以整张卡片删除，正文直接作为消息渲染。
            缺席/迟到这类真正需要看见的状态用标签附着在消息头，不另开卡片。 */
         <div className="msg-text">
-          <RichText text={visibleBody} />
+          <MarkdownView text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
       ) : null}
@@ -402,7 +400,7 @@ function MessageBody({
               <div key={i} className="position-row">
                 <div className="position-stance">
                   <span className="row tight">
-                    <Avatar name={p.memberId.includes('claude') ? 'C' : 'X'} color={memberColor(p.memberId)} size={16} />
+                    <Avatar name={p.memberId.includes('claude') ? 'C' : 'X'} color={memberColor(p.memberId)} size={16} subject={`member:${p.memberId}`} />
                     <span className="small strong truncate">{p.memberId.replace('member_', '')}</span>
                   </span>
                 </div>

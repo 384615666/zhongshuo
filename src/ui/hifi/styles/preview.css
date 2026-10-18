@@ -545,7 +545,7 @@ body.zs-frameless .preview-pane.maximized {
 .md-h1 { font-size: var(--fs-20); font-weight: 650; }
 .md-h2 { font-size: var(--fs-17); font-weight: 650; padding-bottom: 5px; border-bottom: 1px solid var(--border-subtle); }
 .md-h3 { font-size: var(--fs-15); font-weight: 600; }
-.md-p { margin: 9px 0; }
+.md-p { margin: 9px 0; white-space: pre-wrap; }
 .md-ul, .md-ol { margin: 8px 0; padding-left: 22px; }
 .md-ul li, .md-ol li { margin: 4px 0; }
 .md-quote {
@@ -564,24 +564,146 @@ body.zs-frameless .preview-pane.maximized {
   background: var(--bg-sunken);
   border: 1px solid var(--border-subtle);
 }
-.md-pre {
+.md-code-card {
+  margin: 10px 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+}
+.md-code-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+}
+.md-code-lang {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  text-transform: lowercase;
+}
+.md-code-card .md-pre {
   margin: 10px 0;
   padding: 12px 14px;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   line-height: 1.65;
+  overflow-x: auto;
+  white-space: pre;
+}
+.md-code-card .md-pre[data-wrap='1'] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.md-code-card .md-pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
 }
 .md-hr { margin: 16px 0; border: none; border-top: 1px solid var(--border); }
-.md-table-wrap { overflow-x: auto; margin: 10px 0; }
-.md-table { border-collapse: collapse; font-size: var(--fs-12); min-width: 100%; }
-.md-table th, .md-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+}
+.md-table { border-collapse: collapse; font-size: var(--fs-12); width: max-content; min-width: 100%; }
+.md-table th, .md-table td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+.md-table th:last-child, .md-table td:last-child { border-right: 0; }
+.md-table tbody tr:last-child td { border-bottom: 0; }
 .md-table th { background: var(--bg-surface-2); font-weight: 600; }
 .md-link { color: var(--accent-text); }
 .md-link-mark { font-size: 0.8em; opacity: 0.7; }
+.md-diagram-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+}
+.md-diagram {
+  display: block;
+  max-width: none;
+  min-width: min(100%, 320px);
+  color: var(--text);
+}
+.md-diagram-node {
+  fill: var(--bg-surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+}
+.md-diagram-node.accent {
+  fill: var(--accent-soft);
+  stroke: var(--accent-border);
+}
+.md-diagram-edge {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.4;
+}
+.md-diagram-label {
+  fill: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.md-diagram-edge-label {
+  fill: var(--text-3);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 10px;
+  text-anchor: middle;
+}
+.md-safe-note {
+  padding: 6px 10px;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.md-chart {
+  padding: 12px;
+}
+.md-chart-title {
+  margin-bottom: 10px;
+  font-weight: 650;
+  font-size: var(--fs-13);
+}
+.md-chart-bars {
+  display: grid;
+  gap: 7px;
+}
+.md-chart-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 28%) minmax(100px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-12);
+}
+.md-chart-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--bg-surface-3);
+}
+.md-chart-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
 
 /* ---------- 收起后的重开入口 ----------
    房间头部里的普通 chip（不是浮层）：原先浮在右下角会压住输入区的发送按钮

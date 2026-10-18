@@ -1,10 +1,4 @@
 /* ---------- H1 空间修正（第四十九轮·视觉对照 review-r48 §5）----------
-   两项明显空间问题（视觉子代理实测）：
-   ① 房间/私信消息卡右缘留白（原型为通栏卡）且与通栏输入区不齐——主池/会话消息取消
-      max-width，与输入区同宽；
-   ② 私信会话列表列与阅读区约 50/50——列表收窄为固定窄列（DmPage flexBasis 配合）。
-   其余对照差异（全局顶栏/房间 tabs/composer 状态行等）为 H1 范围裁剪，登记于
-   hifi-integration 计划，不在本包补。 */
-.page-stack .msg-list .msg,
-.workspace .msg-list .msg,
-#hifi-root .msg-list .msg { max-width: 100% !important; width: 100%; }
+   私信会话列表列与阅读区约 50/50——列表收窄为固定窄列（DmPage flexBasis 配合）。
+   R88 起消息列不再强制通栏：人类消息右对齐，AI 消息左侧阅读，宽度由 components.css
+   的消息列规则统一约束。 */

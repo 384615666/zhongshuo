@@ -178,13 +178,13 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    */
   const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string } => {
     const rt = runtimes[m.id];
-    if (runtimeErrs[m.id] != null) return { text: `配置读取失败（${runtimeErrs[m.id]}）${rt != null ? '——保留已确认的配置，可刷新重试' : '——暂无已确认配置，可刷新重试'}`, problem: true };
+    if (runtimeErrs[m.id] != null) return { text: '配置读取失败，打开成员详情可重试', problem: true };
     if (rt == null) {
       const failure = runtimeErrs[m.id];
       if (failure != null) return { text: `查询失败（${failure}）——保留上次事实`, problem: true };
       return { text: '读取中…' };
     }
-    if (rt.binding == null) return { text: '绑定信息缺失（member.runtime 响应异常）', problem: true };
+    if (rt.binding == null) return { text: '配置信息缺失，打开成员详情查看', problem: true };
     if (rt.binding.installationId == null || rt.binding.installationId === '') {
       const eff = rt.effective;
       if (eff != null && eff.source === 'global-default' && eff.kind != null) {
@@ -192,16 +192,16 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         // 用户 v3 实测 startupFailed 根因）时必须明示发送会失败及解法，不等到派发失败。
         const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
         return {
-          text: `未绑定 · 默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 未指定模型，请配置后派工':''}`,
+          text: `使用本机默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 尚未指定模型':''}`,
           problem: true,
           effective: eff.kind,
         };
       }
-      return { text: '未绑定（点「AI 设置」选择渠道与模型）', problem: true };
+      return { text: '未单独配置，可在「AI 设置」中选择', problem: true };
     }
-    if (rt.installation == null) return { text: '已绑定，但安装信息缺失（runtime 安装不可读/已移除）', problem: true };
-    if(rt.executableStatus?.status==='missing')return {text:`配置已保存 · ${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 程序不可用，请配置后派工`,problem:true};
-    return { text: `配置已保存 · ${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 工具权限：${runtimeAuthOf(rt.installation.capabilities_json)}` };
+    if (rt.installation == null) return { text: '配置不可用，打开成员详情查看', problem: true };
+    if(rt.executableStatus?.status==='missing')return {text:`${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''} · 程序不可用`,problem:true};
+    return { text: `${rt.installation.kind}${rt.binding?.model?' · '+rt.binding.model:''}` };
   };
 
   return (
@@ -258,16 +258,15 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
             const rt = runtimeLabel(m);
             const running = workload.data?.items.find(row=>row.memberId===m.id);
             return (
-              <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} #${memberShortId(m.id)} 的成员详情（完整 ID ${m.id}）`}
+              <div key={m.id} className="card" data-zs-member-card={m.id} title={`查看 ${m.displayName} 的成员详情`}
                 role="link" tabIndex={0} style={{ cursor: 'pointer' }}
                 onClick={(e) => { if ((e.target as HTMLElement).closest('button, a, input, select, summary')) return; navigate(`/project/${projectId}/member/${m.id}`); }}
                 onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate(`/project/${projectId}/member/${m.id}`); } }}>
                 <div className="row tight">
-                  <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round />
+                  <Avatar name={m.displayName} color={memberColor(m.id)} size={36} round subject={`member:${m.id}`} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="row tight">
                       <span className="strong">{m.displayName}</span>
-                      <span className="mono-sm faint" data-zs-member-short={m.id}>#{memberShortId(m.id)}</span>
                       {coordinatorIds.has(m.id) ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                       {m.principalType === 'agent' ? null : <Tag plain icon="users">人类</Tag>}
                       {m.enabled ? <Tag plain>启用</Tag> : <Tag tone="neutral" icon="slash">停用</Tag>}
@@ -328,8 +327,8 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                 {list != null ? (
                   <div className="row tight wrap" style={{ marginTop: 4 }}>
                     {list.map((m) => (
-                      <span key={m.id} className="chip" title={`${m.displayName} #${memberShortId(m.id)}（完整 ID ${m.id}）${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
-                        {m.displayName}<span className="mono-sm faint">#{memberShortId(m.id)}</span>{room.coordinatorMemberId === m.id ? ' ★' : ''}
+                      <span key={m.id} className="chip" title={`${m.displayName}${m.enabled ? '' : '（已停用）'}`} style={{ opacity: m.enabled ? 1 : 0.5 }}>
+                        {m.displayName}{room.coordinatorMemberId === m.id ? ' ★' : ''}
                       </span>
                     ))}
                   </div>
@@ -419,7 +418,7 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
   return (
     <Modal
       size="md"
-      title={`AI 设置 · ${member.displayName} #${memberShortId(member.id)}`}
+      title={`AI 设置 · ${member.displayName}`}
       subtitle="选择本机已有渠道和模型，保存后用于之后的工作。"
       onClose={onClose}
       footer={

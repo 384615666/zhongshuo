@@ -15,7 +15,7 @@ import {
   consensusCopy, type Tone,
 } from '../lib/format';
 import type { Consensus, ErrorCode, RunStatus, TaskStatus, TurnStatus } from '../data/types';
-import { recordLocalOnly } from '../data/store';
+import { recordLocalOnly, useStore } from '../data/store';
 
 /* ---------------- 状态标签 ---------------- */
 
@@ -162,6 +162,8 @@ export function Avatar({
   round,
   state,
   stateTitle,
+  subject,
+  show,
 }: {
   name: string;
   ordinal?: number;
@@ -170,11 +172,19 @@ export function Avatar({
   round?: boolean;
   state?: string;
   stateTitle?: string;
+  /** Durable appearance subject: "user" or "member:<memberId>". */
+  subject?: string;
+  /** Settings previews may force visibility; normal surfaces follow the saved preference. */
+  show?: boolean;
 }) {
+  const showAvatars=useStore(s=>s.ui.showAvatars===true);
+  const avatars=useStore(s=>s.ui.avatars??{});
+  if(!(show ?? showAvatars))return null;
   // 同名成员用序号消歧（§3.2）
   const initials = (name.replace(/[^\p{L}\p{N}]/gu, '')[0] ?? '?').toUpperCase();
   const label = ordinal && ordinal > 1 ? `${initials}${ordinal}` : initials;
   const bg = color ?? 'var(--neutral)';
+  const image=subject==null?undefined:avatars[subject];
   const dotColor =
     state === 'running' ? 'var(--info)'
       : state === 'idle' ? 'var(--success)'
@@ -187,8 +197,8 @@ export function Avatar({
       style={{ background: bg }}
       title={stateTitle ? `${name}${ordinal && ordinal > 1 ? `#${ordinal}` : ''} · ${stateTitle}` : undefined}
     >
-      {label}
-      {state ? <i className="state-dot" style={{ background: dotColor }} /> : null}
+      {image!=null?<img src={image} alt="" draggable={false}/>:label}
+      {state && state !== 'unknown' ? <i className="state-dot" style={{ background: dotColor }} /> : null}
     </span>
   );
 }
@@ -198,7 +208,9 @@ export function memberColor(memberId: string, ordinal?: number): string {
   if (memberId.includes('claude')) return 'var(--m-claude)';
   if (ordinal && ordinal > 1) return 'var(--m-codex2)';
   if (memberId.includes('codex')) return 'var(--m-codex)';
-  return 'var(--neutral)';
+  const palette=['var(--m-claude)','var(--m-codex)','var(--m-codex2)'];
+  const hash=[...memberId].reduce((sum,char)=>(sum*31+char.codePointAt(0)!)>>>0,0);
+  return palette[hash%palette.length]!;
 }
 
 /** R68 §6：实例短标识（成员 id 尾 4 位）——同名成员在卡片/名单/@/配置入口的可见区分

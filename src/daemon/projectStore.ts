@@ -68,6 +68,20 @@ export function openProject(
     return domainOk({ project: rowToProject(hit), created: false });
   }
 
+  const removed = db.prepare(`SELECT * FROM projects WHERE status='removed' ORDER BY created_at LIMIT 50`).all() as ProjectRow[];
+  const removedHit = removed.find((row) => {
+    try {
+      return (JSON.parse(row.directory_identity) as { identityKey: string }).identityKey === identity.value.identityKey;
+    } catch {
+      return false;
+    }
+  });
+  if (removedHit != null) {
+    db.prepare("UPDATE projects SET status='active', revision=revision+1 WHERE id=?").run(removedHit.id);
+    const restored = db.prepare('SELECT * FROM projects WHERE id=?').get(removedHit.id) as ProjectRow;
+    return domainOk({ project: rowToProject(restored), created: false });
+  }
+
   const project: Project = {
     id: `prj_${randomUUID()}`,
     displayName: input.displayName ?? identity.value.canonicalPath.split(/[\\/]/).pop() ?? '未命名项目',

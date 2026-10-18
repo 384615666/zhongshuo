@@ -47,9 +47,10 @@ const BAT = ['@echo off',
   'if not exist "%APP_DIR%" mkdir "%APP_DIR%"',
   'rem Clean parent-environment ZS_* overrides: this package owns its runtime.',
   'rem Engineering pass-through (verification only, documented): ZS_DEV25_DEBUG_PORT (CDP),',
-  'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (dir-picker), ZS_SAVEAS_AUTO_DIR (isolated save verification).',
+  'rem ZS_PICK_FOLDER / ZS_PICK_FOLDER_FILE (dir-picker), ZS_SAVEAS_AUTO_DIR (isolated save verification),',
+  'rem ZS_TEST_DISPLAY / ZS_TEST_WINDOW_BOUNDS / ZS_TEST_PLACEMENT_FILE (non-primary visible evidence).',
   'for /f "delims== tokens=1" %%V in (\'set ZS_ 2^>nul\') do (',
-  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_DATA_PICK_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" if /i not "%%V"=="ZS_R78_ENGINEERING_TOKEN" if /i not "%%V"=="ZS_DAEMON_ENTRY" set "%%V="',
+  '  if /i not "%%V"=="ZS_DEV25_DEBUG_PORT" if /i not "%%V"=="ZS_PICK_FOLDER" if /i not "%%V"=="ZS_PICK_FOLDER_FILE" if /i not "%%V"=="ZS_DATA_PICK_FILE" if /i not "%%V"=="ZS_SAVEAS_AUTO_DIR" if /i not "%%V"=="ZS_TEST_DISPLAY" if /i not "%%V"=="ZS_TEST_WINDOW_BOUNDS" if /i not "%%V"=="ZS_TEST_PLACEMENT_FILE" if /i not "%%V"=="ZS_R78_ENGINEERING_TOKEN" if /i not "%%V"=="ZS_DAEMON_ENTRY" set "%%V="',
   ')',
   'rem R78 explicit engineering entry: own isolated root, nonce marker, debug port, no bundled fixture.',
   'if not "!ZS_R78_ENGINEERING_TOKEN!"=="" (',
@@ -80,19 +81,24 @@ const BAT = ['@echo off',
   'rem Global default = claude channel; no fake, no dispatch guard, no demo bootstrap.',
   'set ZS_RUNTIME=claude',
   'set ZS_PIPE_NAME=!PIPE_NAME!',
-  'echo Starting Zhongshuo (daily desktop - real runtime config, no demo data)...',
   'if not "%ZS_DEV25_DEBUG_PORT%"=="" (',
   '  start "ZhongshuoDaily" "%PKG%ZhongshuoDual\\electron.exe" --remote-debugging-port=%ZS_DEV25_DEBUG_PORT%',
   ') else (',
   '  start "ZhongshuoDaily" "%PKG%ZhongshuoDual\\electron.exe"',
   ')',
-  'echo.',
-  'echo Data root: %APP_DIR%   (shown in Settings - Data and draft storage)',
-  'echo First run: open your own project folder from the welcome screen.',
-  'echo Keep this console open. Closing the app window exits the app.',
-  'pause',
-  'endlocal'].join('\r\n');
+  'endlocal',
+  'exit /b 0'].join('\r\n');
 writeFileSync(join(out, 'start-desktop.bat'), BAT + '\r\n', 'utf8');
+writeFileSync(join(out, 'start-desktop.vbs'), [
+  'Option Explicit',
+  'Dim shell, fso, root',
+  'Set shell = CreateObject("WScript.Shell")',
+  'Set fso = CreateObject("Scripting.FileSystemObject")',
+  'root = fso.GetParentFolderName(WScript.ScriptFullName)',
+  'shell.CurrentDirectory = root',
+  'shell.Run "cmd.exe /c """ & root & "\\start-desktop.bat""", 0, False',
+  '',
+].join('\r\n'), 'utf8');
 if(outArg?.startsWith('desktop-daily-win-v21'))writeFileSync(join(out,'README-CANDIDATE.md'),`# Windows 桌面首版候选 · v21
 
 启动入口：start-desktop.bat。本包独立数据根，旧包、旧库、凭据、草稿与未知账本保持原地；没有演示数据或默认 Fake。
@@ -306,6 +312,30 @@ if(outArg?.startsWith('desktop-daily-win-v26')){
 - 关闭后重新打开，会保留项目、对话、成员、成果和接受状态。
 
 需要帮助时，先查看界面的“待我处理”或“恢复检查”；详细信息可以展开查看，不会自动替你做有风险的决定。
+`,'utf8');
+}
+if(outArg?.startsWith('desktop-daily-win-v26-r88')){
+  writeFileSync(join(out,'README-CANDIDATE.md'),`# 众说 R88 Windows 日常候选
+
+双击 \`start-desktop.vbs\` 启动，测试台窗口和后台进程不会保留控制台。
+
+打开本地文件夹后，程序会读取本机当前 Claude / Codex 默认配置，并为新项目准备可修改的 Claude、Codex 成员；已有人工成员、任务和设置不会被覆盖。若本机配置无法核实，程序只保留原占位成员并在诊断中说明，不伪造模型或权限。
+
+聊天默认按阅读顺序呈现：你的消息在右，AI 消息在左；复制、引用、收藏直接可见。正文支持 Markdown、宽表格、代码块、安全流程图和有界柱状图，复杂源码保持为不可执行文本。
+
+头像默认隐藏但姓名保留。设置 → 外观可显示头像，并为“我”和当前项目 AI 上传/恢复 PNG、JPEG、WebP 图片；图片随数据根保存。
+
+工程可见复核固定在非主屏，主窗、重开与数据进度窗在显示前定位；若目标屏不可用会明确失败，不会静默回到主屏。所有可见证据来自同 BUILD 的隔离测试副本，不使用用户项目或凭据。
+`,'utf8');
+  writeFileSync(join(out,'README-DAILY.md'),`# 众说 R88
+
+双击 \`start-desktop.vbs\`。
+
+- 新项目优先使用本机真实 Claude / Codex 默认模型；已有成员不自动改名或重绑。
+- 直接打开房间或回复串阅读；宽表格和代码只在消息内滚动。
+- 设置 → 外观管理头像开关和个人/AI 头像。
+- 设置 → 数据与存储可备份全部数据或使用已有数据。
+- 结果未知、权限变化和恢复动作仍需你明确处理，程序不会自动重发或替你授权。
 `,'utf8');
 }
 console.log(`[daily-pkg] 就绪：${out}`);

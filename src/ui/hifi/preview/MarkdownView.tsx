@@ -13,7 +13,8 @@
  * 施工说明 §3 要求"必要依赖应最小化"。渲染需求很窄，自实现可控且可测。
  */
 
-import { Fragment, useMemo } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
+import { Icon } from '../components/Icon';
 
 interface Block {
   kind: 'h' | 'p' | 'ul' | 'ol' | 'code' | 'quote' | 'table' | 'hr';
@@ -169,6 +170,244 @@ function renderInline(text: string): React.ReactNode[] {
   return out;
 }
 
+function CodeCard({ text, lang, safeNote }: { text: string; lang?: string; safeNote?: string }) {
+  const [wrapped, setWrapped] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setFeedback('已复制');
+      window.setTimeout(() => setFeedback(''), 1400);
+    } catch {
+      setFeedback('复制失败');
+    }
+  };
+  const language = lang?.trim() || 'text';
+  return (
+    <div className="md-code-card" data-md-code={language}>
+      <div className="md-code-head">
+        <span className="md-code-lang">{language}</span>
+        <span className="small faint" aria-live="polite">{feedback}</span>
+        <button type="button" className="btn ghost sm" onClick={() => setWrapped((value) => !value)} title={wrapped ? '保持代码原行宽' : '让长代码在栏内换行'}>
+          <Icon name="align-left" size={12} /> {wrapped ? '不换行' : '换行'}
+        </button>
+        <button type="button" className="icon-btn sm" onClick={() => void copy()} aria-label="复制代码" title="复制代码">
+          <Icon name="copy" size={12} />
+        </button>
+      </div>
+      {safeNote ? <div className="md-safe-note">{safeNote}</div> : null}
+      <pre className="md-pre" data-wrap={wrapped ? '1' : '0'}><code>{text}</code></pre>
+    </div>
+  );
+}
+
+type FlowNode = { id: string; label: string; shape: 'rect' | 'round' | 'diamond' };
+type FlowEdge = { from: string; to: string; label?: string };
+type ParsedFlowchart = { direction: 'TD' | 'LR'; nodes: FlowNode[]; edges: FlowEdge[]; depths: Map<string, number> };
+
+function flowchartNode(id: string, square?: string, diamond?: string, round?: string, into?: Map<string, FlowNode>): void {
+  if (into == null || into.has(id)) return;
+  const raw = square ?? diamond ?? round ?? id;
+  const label = raw.replace(/^["']|["']$/g, '').trim().slice(0, 80) || id;
+  into.set(id, { id, label, shape: diamond != null ? 'diamond' : round != null ? 'round' : 'rect' });
+}
+
+function parseFlowchart(source: string): ParsedFlowchart | null {
+  if (source.length > 12_000) return null;
+  const lines = source.replace(/\r\n/g, '\n').split('\n').map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith('%%'));
+  const header = lines.shift() ?? '';
+  const directionMatch = /^(?:flowchart|graph)\s+(TD|TB|LR)$/i.exec(header);
+  if (directionMatch == null) return null;
+  const direction = directionMatch[1]!.toUpperCase() === 'LR' ? 'LR' : 'TD';
+  if (lines.length === 0 || lines.length > 80) return null;
+  const nodeMap = new Map<string, FlowNode>();
+  const edges: FlowEdge[] = [];
+  const edgePattern = /^([A-Za-z0-9_-]{1,40})(?:\[([^\]\r\n]{0,80})\]|\{([^}\r\n]{0,80})\}|\(([^)\r\n]{0,80})\))?\s*-->\s*(?:\|([^|\r\n]{0,40})\|\s*)?([A-Za-z0-9_-]{1,40})(?:\[([^\]\r\n]{0,80})\]|\{([^}\r\n]{0,80})\}|\(([^)\r\n]{0,80})\))?$/;
+  const nodePattern = /^([A-Za-z0-9_-]{1,40})(?:\[([^\]\r\n]{0,80})\]|\{([^}\r\n]{0,80})\}|\(([^)\r\n]{0,80})\))$/;
+  for (const line of lines) {
+    const edge = edgePattern.exec(line);
+    if (edge != null) {
+      flowchartNode(edge[1]!, edge[2], edge[3], edge[4], nodeMap);
+      flowchartNode(edge[6]!, edge[7], edge[8], edge[9], nodeMap);
+      edges.push({ from: edge[1]!, to: edge[6]!, ...(edge[5] != null ? { label: edge[5].trim().slice(0, 40) } : {}) });
+      if (nodeMap.size > 24 || edges.length > 40) return null;
+      continue;
+    }
+    const node = nodePattern.exec(line);
+    if (node != null) {
+      flowchartNode(node[1]!, node[2], node[3], node[4], nodeMap);
+      if (nodeMap.size > 24) return null;
+      continue;
+    }
+    return null;
+  }
+  if (nodeMap.size === 0 || edges.length === 0) return null;
+  const depths = new Map<string, number>();
+  const incoming = new Set(edges.map((edge) => edge.to));
+  for (const node of nodeMap.values()) if (!incoming.has(node.id)) depths.set(node.id, 0);
+  if (depths.size === 0) return null;
+  for (let pass = 0; pass < nodeMap.size; pass += 1) {
+    let changed = false;
+    for (const edge of edges) {
+      const from = depths.get(edge.from);
+      if (from == null) continue;
+      const next = from + 1;
+      if (next > 12) return null;
+      if ((depths.get(edge.to) ?? -1) < next) {
+        depths.set(edge.to, next);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  if ([...nodeMap.keys()].some((id) => !depths.has(id))) return null;
+  return { direction, nodes: [...nodeMap.values()], edges, depths };
+}
+
+function FlowchartView({ source }: { source: string }) {
+  const parsed = useMemo(() => parseFlowchart(source), [source]);
+  const markerId = `md-arrow-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
+  if (parsed == null) {
+    return <CodeCard text={source} lang="mermaid" safeNote="未识别的流程图保持为安全文本；不会加载远程 Mermaid 或执行脚本。" />;
+  }
+  const layers = new Map<number, FlowNode[]>();
+  for (const node of parsed.nodes) {
+    const depth = parsed.depths.get(node.id) ?? 0;
+    layers.set(depth, [...(layers.get(depth) ?? []), node]);
+  }
+  const layerCount = Math.max(...layers.keys()) + 1;
+  const widest = Math.max(...[...layers.values()].map((items) => items.length));
+  const nodeW = 150;
+  const nodeH = 46;
+  const gapX = 62;
+  const gapY = 34;
+  const margin = 22;
+  const width = margin * 2 + (parsed.direction === 'LR' ? layerCount * nodeW + (layerCount - 1) * gapX : widest * nodeW + (widest - 1) * gapX);
+  const height = margin * 2 + (parsed.direction === 'TD' ? layerCount * nodeH + (layerCount - 1) * (gapY + 20) : widest * nodeH + (widest - 1) * gapY);
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [depth, items] of layers.entries()) {
+    items.forEach((node, index) => {
+      const x = parsed.direction === 'LR' ? margin + depth * (nodeW + gapX) : margin + index * (nodeW + gapX);
+      const y = parsed.direction === 'LR' ? margin + index * (nodeH + gapY) : margin + depth * (nodeH + gapY + 20);
+      positions.set(node.id, { x, y });
+    });
+  }
+  return (
+    <div className="md-diagram-wrap" data-md-diagram="flowchart">
+      <svg className="md-diagram" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="流程图">
+        <defs>
+          <marker id={markerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--text-3)" />
+          </marker>
+        </defs>
+        {parsed.edges.map((edge, index) => {
+          const from = positions.get(edge.from);
+          const to = positions.get(edge.to);
+          if (from == null || to == null) return null;
+          const x1 = parsed.direction === 'LR' ? from.x + nodeW : from.x + nodeW / 2;
+          const y1 = parsed.direction === 'LR' ? from.y + nodeH / 2 : from.y + nodeH;
+          const x2 = parsed.direction === 'LR' ? to.x : to.x + nodeW / 2;
+          const y2 = parsed.direction === 'LR' ? to.y + nodeH / 2 : to.y;
+          const midX = (x1 + x2) / 2;
+          const midY = (y1 + y2) / 2;
+          const path = parsed.direction === 'LR'
+            ? `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`
+            : `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+          return (
+            <g key={`${edge.from}-${edge.to}-${index}`}>
+              <path className="md-diagram-edge" d={path} markerEnd={`url(#${markerId})`} />
+              {edge.label ? <text className="md-diagram-edge-label" x={midX} y={midY - 5}>{edge.label}</text> : null}
+            </g>
+          );
+        })}
+        {parsed.nodes.map((node) => {
+          const pos = positions.get(node.id)!;
+          return (
+            <g key={node.id} data-flow-node={node.id}>
+              {node.shape === 'diamond' ? (
+                <polygon
+                  className={`md-diagram-node${(parsed.depths.get(node.id) ?? 0) === 0 ? ' accent' : ''}`}
+                  points={`${pos.x + nodeW / 2},${pos.y} ${pos.x + nodeW},${pos.y + nodeH / 2} ${pos.x + nodeW / 2},${pos.y + nodeH} ${pos.x},${pos.y + nodeH / 2}`}
+                />
+              ) : (
+                <rect
+                  className={`md-diagram-node${(parsed.depths.get(node.id) ?? 0) === 0 ? ' accent' : ''}`}
+                  x={pos.x}
+                  y={pos.y}
+                  width={nodeW}
+                  height={nodeH}
+                  rx={node.shape === 'round' ? nodeH / 2 : 9}
+                />
+              )}
+              <text className="md-diagram-label" x={pos.x + nodeW / 2} y={pos.y + nodeH / 2}>
+                {node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label}
+                <title>{node.label}</title>
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+type ChartDatum = { label: string; value: number };
+type ChartSpec = { title: string | null; data: ChartDatum[] };
+
+function parseChart(source: string): ChartSpec | null {
+  if (source.length > 20_000) return null;
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    const record = parsed != null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    const type = record?.type;
+    if (typeof type === 'string' && !['bar', 'column', 'horizontal-bar'].includes(type.toLowerCase())) return null;
+    const rows = Array.isArray(parsed) ? parsed : record != null && Array.isArray(record.data) ? record.data : null;
+    if (rows == null || rows.length === 0 || rows.length > 24) return null;
+    const data: ChartDatum[] = [];
+    for (const row of rows) {
+      if (Array.isArray(row)) {
+        const value = Number(row[1]);
+        if (typeof row[0] === 'string' && Number.isFinite(value)) data.push({ label: row[0].slice(0, 80), value });
+        continue;
+      }
+      if (row == null || typeof row !== 'object') continue;
+      const item = row as Record<string, unknown>;
+      const label = [item.label, item.name, item.category, item.x].find((value) => typeof value === 'string');
+      const value = Number([item.value, item.y, item.count].find((candidate) => Number.isFinite(Number(candidate))));
+      if (typeof label === 'string' && Number.isFinite(value)) data.push({ label: label.slice(0, 80), value });
+    }
+    if (data.length === 0) return null;
+    const title = record != null && typeof record.title === 'string' && record.title.trim().length > 0 ? record.title.trim().slice(0, 100) : null;
+    return { title, data };
+  } catch {
+    return null;
+  }
+}
+
+function ChartView({ source }: { source: string }) {
+  const chart = useMemo(() => parseChart(source), [source]);
+  if (chart == null) {
+    return <CodeCard text={source} lang="chart" safeNote="图表数据未通过有界 JSON 校验，保留为安全文本；不会执行配置或脚本。" />;
+  }
+  const max = Math.max(...chart.data.map((item) => Math.abs(item.value)), 1);
+  return (
+    <div className="md-diagram-wrap" data-md-diagram="chart" role="img" aria-label={chart.title ?? '数据图表'}>
+      <div className="md-chart">
+        {chart.title ? <div className="md-chart-title">{chart.title}</div> : null}
+        <div className="md-chart-bars">
+          {chart.data.map((item, index) => (
+            <div className="md-chart-row" key={`${item.label}-${index}`}>
+              <span className="truncate" title={item.label}>{item.label}</span>
+              <span className="md-chart-track"><span className="md-chart-fill" style={{ width: `${Math.max(2, Math.abs(item.value) / max * 100)}%` }} /></span>
+              <span className="mono-sm">{item.value.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MarkdownView({ text }: { text: string }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
 
@@ -197,11 +436,9 @@ export function MarkdownView({ text }: { text: string }) {
           case 'quote':
             return <blockquote className="md-quote" key={i}>{renderInline(b.text ?? '')}</blockquote>;
           case 'code':
-            return (
-              <pre className="md-pre" key={i} data-lang={b.lang}>
-                <code>{b.text}</code>
-              </pre>
-            );
+            if ((b.lang ?? '').toLowerCase() === 'mermaid') return <FlowchartView key={i} source={b.text ?? ''} />;
+            if (['chart', 'vega', 'vega-lite'].includes((b.lang ?? '').toLowerCase())) return <ChartView key={i} source={b.text ?? ''} />;
+            return <CodeCard key={i} text={b.text ?? ''} lang={b.lang} />;
           case 'table':
             return (
               <div className="md-table-wrap" key={i}>

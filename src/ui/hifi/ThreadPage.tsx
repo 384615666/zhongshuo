@@ -295,9 +295,9 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   };
 
   /** 消息引用（r56：插入草稿——只改变草稿，不直接派发）。 */
-  const quoteMessage = (m: { id: string; body: string }) => {
+  const quoteMessage = (m: { id: string; body: string; authorType?: string }) => {
     const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
-    setInsertText({ id: Date.now(), text: `> 引用消息（${m.id.slice(0, 10)}…）：${excerpt}` });
+    setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
     toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
   };
   /** 消息表情（r56：message.react 正式命令——toggle 幂等；本地用户操作，不作为共识）。 */

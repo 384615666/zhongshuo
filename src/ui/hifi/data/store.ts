@@ -146,7 +146,7 @@ function makeEmptyState(): HifiState {
       runtimeLimits: { maxActiveTurns: 3, maxTurnsPerMember: 1, providerCapEnabled: false, providerCapTurns: 3 },
     },
     preview: { tabs: [], hidden: true, maximized: false, contextChangedSinceOpen: false },
-    ui: { theme: 'light', activeRoomId: '', writeLog: [] },
+    ui: { theme: 'light', activeRoomId: '', showAvatars: false, avatars: {}, writeLog: [] },
     // —— 正式侧扩展 ——
     loadGen: 0,
     roomPool: {}, dmHistory: {}, threadEntities: {}, threadAnchors: {}, threadMessages: {}, threadTasks: {}, threadMemberships: {}, threadProgress:{}, threadReadSeq: {}, uploadItems: {}, previewPane: null,
@@ -1138,6 +1138,9 @@ export function clearToast() { setState((s) => ({ ...s, ui: { ...s.ui, toast: un
 export function setTheme(theme: 'light' | 'dark') {
   setState((s) => ({ ...s, ui: { ...s.ui, theme } }));
   try { localStorage.setItem('zs.hifi.theme', theme); } catch { /* 忽略 */ }
+}
+export function setAppearanceState(showAvatars:boolean,avatars:Record<string,string>){
+  setState((s)=>({...s,ui:{...s.ui,showAvatars,avatars:{...avatars}}}));
 }
 
 /* ---------- 写操作留痕（真实侧：只记不改状态——供诊断展示，H3 归位） ---------- */

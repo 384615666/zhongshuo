@@ -1,4 +1,5 @@
 import {resolveClaudeConfiguration} from '../adapter/claude/configuration.ts';
+import {resolveCodexDefaultMetadata} from '../adapter/codex/configuration.ts';
 import {runtimeOptions} from './runtimeOptions.ts';
 import {memberExecutableStatus} from './memberManagement.ts';
 
@@ -45,7 +46,9 @@ export async function runtimeCatalog(kind:'claude'|'codex'|'fake',executable:str
   if(kind==='codex'){
     const options=await runtimeOptions(kind,executable,undefined,cwd);
     const models='models' in options?options.models??[]:[];
-    return{kind,program,models:models.filter(m=>validId(m.model??m.id)).map(m=>({id:m.model??m.id,label:m.displayName??m.model??m.id,source:'reported' as const})),defaultModel:process.env.ZS_E2E_MODEL??null,source:'本机 Codex model/list',warning:null,truncated:false};
+    const metadata=resolveCodexDefaultMetadata(cwd);
+    const defaultModel=process.env.ZS_E2E_MODEL??metadata.model;
+    return{kind,program,models:models.filter(m=>validId(m.model??m.id)).map(m=>({id:m.model??m.id,label:m.displayName??m.model??m.id,source:'reported' as const})),defaultModel,source:metadata.model!=null?'本机 Codex 配置 + model/list':'本机 Codex model/list',warning:defaultModel==null?metadata.reason:null,truncated:false};
   }
   return{kind,program,models:[],defaultModel:null,source:'工程夹具',warning:'仅工程环境使用，不是真实模型。',truncated:false};
 }

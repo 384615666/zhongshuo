@@ -110,7 +110,10 @@ const walk = (dir) => {
 };
 const files = walk(staging).map((p) => ({ path: relative(staging, p).replaceAll('\\', '/'), bytes: statSync(p).size, sha256: sha256(p) }));
 const commit = spawnSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-const dirtyState = spawnSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+const dirtyState = spawnSync('git', ['-C', repo, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).stdout
+  .split(/\r?\n/)
+  .filter((line) => line.length > 0 && !/^\?\? \.codex-deepseek(?:\/|$)/.test(line))
+  .join('\n');
 const dirty = dirtyState.trim().length > 0;
 const dirtyDiffHash = dirty ? createHash('sha256').update(spawnSync('git', ['-C', repo, 'diff', 'HEAD'], { encoding: 'utf8' }).stdout + dirtyState).digest('hex') : null;
 const buildId = `bld_${createHash('sha256').update(JSON.stringify({ commit, dirty, dirtyDiffHash, files })).digest('hex').slice(0, 16)}`;

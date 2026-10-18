@@ -10,7 +10,7 @@ import { NavUnreadDot } from './components/NavMarks';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
 import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from './shell';
-import { getState } from './data/store';
+import { getState, setAppearanceState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
@@ -212,6 +212,14 @@ export default function App() {
   const [openFolder, setOpenFolder] = useState(false);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
+
+  useEffect(()=>{
+    let cancelled=false;
+    void command<{showAvatars:boolean;avatars:Record<string,string>}>('app.appearance.get',{})
+      .then(value=>{if(!cancelled)setAppearanceState(value.showAvatars,value.avatars);})
+      .catch(()=>{/* 读取失败保留默认隐藏头像，不伪造设置 */});
+    return()=>{cancelled=true;};
+  },[]);
 
   // Ctrl/Cmd+K 命令面板（仅 hifi 可见时响应）
   useEffect(() => {

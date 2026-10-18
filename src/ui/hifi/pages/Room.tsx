@@ -15,6 +15,7 @@ import { Icon } from '../components/Icon';
 import { MessageView } from '../components/MessageView';
 import { ATTACHMENT_KIND_LABEL } from '../components/MessageView';
 import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
+import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
 import { taskRunHint } from '../lib/taskRunHint';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
@@ -37,6 +38,7 @@ import {
 } from '../data/actions-room';
 import { updateRoomReal, roomArchiveReal, roomMembersSetReal } from '../loader';
 import { formatBytes, fullTime, relTime, routeModeCopy, stageLabel } from '../lib/format';
+import { chatAnswer } from '../../../contracts/chatAnswer';
 import { navigate } from '../lib/router';
 import { type ThreadTabKey } from '../lib/threadNav';
 import {
@@ -967,6 +969,36 @@ function RoomPool({
 
 /* ---------------- 主池原消息卡 ---------------- */
 
+function RootCardActions({ message, saved }: { message: Message; saved: boolean }) {
+  const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
+  const visibleBody=chatAnswer(message.body,message.authorType);
+  const copy=async():Promise<void>=>{
+    try{
+      if(navigator.clipboard==null)throw Error('clipboard unavailable');
+      await navigator.clipboard.writeText(visibleBody);
+      setCopyState('copied');
+      window.setTimeout(()=>setCopyState('idle'),1400);
+    }catch{
+      setCopyState('failed');
+      window.setTimeout(()=>setCopyState('idle'),1800);
+    }
+  };
+  return (
+    <div className="root-card-actions" onClick={(event)=>event.stopPropagation()}>
+      <button type="button" className="btn ghost sm" title="复制可读正文" onClick={()=>void copy()}><Icon name="copy" size={12}/> 复制</button>
+      <button type="button" className="btn ghost sm" title="引用到输入区" onClick={()=>{
+        const key=`room:${message.roomId}`;
+        queueDraftInsert(key,`> ${visibleBody.replace(/\s+/g,' ').trim().slice(0,400)}`);
+        window.dispatchEvent(new CustomEvent('zs:focus-composer',{detail:key}));
+      }}><Icon name="corner-down-right" size={12}/> 引用</button>
+      <button type="button" className="btn ghost sm" data-zs-saved={saved?'1':undefined} title={saved?'取消收藏':'收藏，不改动原消息'} onClick={()=>{
+        void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved?'已收藏':'已取消收藏','success');else if(!r.busy)toast(r.error??'收藏失败','error');});
+      }}><Icon name="bookmark" size={12}/> {saved?'已收藏':'收藏'}</button>
+      <span className="small msg-action-feedback" aria-live="polite">{copyState==='copied'?'已复制':copyState==='failed'?'复制失败':''}</span>
+    </div>
+  );
+}
+
 function RootCard({
   message, selected, onOpenResource,
 }: {
@@ -976,12 +1008,11 @@ function RootCard({
 }) {
   const s = useStore((x) => x);
   const thread = s.threads.find((t) => t.anchorMessageId === message.id);
-  /** 卡片 ⋯ 菜单锚点（关注/静音/复制链接等次级操作的家） */
-  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const task = thread ? taskOfThread(s, thread) : undefined;
   const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
+  const saved = s.savedMessageRefs[message.id] === true || message.saved === true;
   // 主池只留 2 条预览：它是"要不要点进去"的判断依据，不是正文（§3.4 允许 2—3 条）
   const preview = thread ? replyPreview(s, thread.id, 2) : [];
 
@@ -1055,7 +1086,7 @@ function RootCard({
           <div className="spacer" />
           <span className="small faint">{relTime(message.createdAt)}</span>
         </div>
-        <div className="root-body">{message.body}</div>
+        <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 
         {/* 附件：**无 taskId 也能打开只读预览**（PV-01 的核心证据；正式=真实 attachmentId） */}
         {atts.length > 0 ? (
@@ -1084,6 +1115,8 @@ function RootCard({
 
         <div className="root-foot">
           <span className="small faint">这条消息没有派发任务，因此没有回复串</span>
+          <div className="spacer" />
+          <RootCardActions message={message} saved={saved}/>
         </div>
       </div>
     );
@@ -1165,7 +1198,7 @@ function RootCard({
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
       {primary?.detail ? <div className="root-next">{primary.detail}</div> : null}
-      <div className="root-body clamp-2">{message.body}</div>
+      <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 
       {/* 主池消息携带的附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
       {(message.formalAttachments ?? []).length > 0 ? (
@@ -1236,38 +1269,8 @@ function RootCard({
         </button>
         {unread > 0 ? <Tag tone="info" icon="message-square">{unread} 条未读</Tag> : null}
         <div className="spacer" />
-        {/**
-         * 卡片 ⋯（新建 UI）：关注状态不再常驻在每张卡上，移到这里查看/切换。
-         * 与线程 ⋯ 读的是**同一份订阅状态**（s.subscriptions），不各存一份。
-         */}
-        <button
-          type="button"
-          className="icon-btn sm"
-          title="复制、引用、收藏"
-          aria-label="更多卡片操作"
-          aria-haspopup="menu"
-          onClick={(e) => { e.stopPropagation(); setMenuAnchor(anchorFromElement(e.currentTarget)); }}
-        >
-          <Icon name="more-horizontal" size={14} />
-        </button>
+        <RootCardActions message={message} saved={saved}/>
       </div>
-
-      {/* 菜单挂在卡片里，但点菜单项不应该顺手把回复串也打开 */}
-      {menuAnchor ? (
-        <div onClick={(e) => e.stopPropagation()}>
-        <Menu anchor={menuAnchor} onClose={() => setMenuAnchor(null)}>
-          <MenuItem icon="copy" onClick={()=>{void navigator.clipboard?.writeText(message.body);setMenuAnchor(null);}}>复制</MenuItem>
-          <MenuItem icon="corner-down-right" onClick={()=>{
-            const key=`room:${message.roomId}`;
-            queueDraftInsert(key,`> ${message.body.replace(/\s+/g,' ').trim().slice(0,400)}`);
-            window.dispatchEvent(new CustomEvent('zs:focus-composer',{detail:key}));setMenuAnchor(null);
-          }}>引用</MenuItem>
-          <MenuItem icon="bookmark" onClick={()=>{
-            setMenuAnchor(null);void toggleSavedMessage(message,message.projectId).then(r=>{if(r.ok)toast(r.saved?'已收藏':'已取消收藏','success');else if(!r.busy)toast(r.error??'收藏失败','error');});
-          }}>{message.saved?'取消收藏':'收藏'}</MenuItem>
-        </Menu>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1586,7 +1589,8 @@ function ThreadPanel({
   };
 
   const insertMessageAction = (message: Message, kind: 'quote' | 'correction') => {
-    const prefix = kind === 'quote' ? `> ${message.body}` : `更正（针对消息 ${message.id}）：`;
+    const visible=chatAnswer(message.body,message.authorType).replace(/\s+/g,' ').trim().slice(0,400);
+    const prefix = kind === 'quote' ? `> ${visible}` : '更正（针对上一条消息）：';
     setComposerInsert({ id: Date.now(), text: prefix });
     recordLocalOnly(
       `message.${kind}`,
@@ -1850,7 +1854,7 @@ function ThreadPanel({
                       </div>
                     ) : null}
                     <MessageView
-                      message={m}
+                      message={{...m,saved:s.savedMessageRefs[m.id]===true||m.saved===true}}
                       domId={`thread-msg-${m.id}`}
                       linkThreadId={thread.id}
                       author={m.authorType === 'human' ? undefined : byId(s.members, m.authorId)}
@@ -2234,7 +2238,7 @@ function ThreadOverview({
       <div className="card tight">
         <div className="section-title">原始要求（原消息）</div>
         <div className="row tight">
-          <Avatar name="我" color="var(--m-human)" size={18} />
+          <Avatar name="我" color="var(--m-human)" size={18} subject="user" />
           <span className="strong">你</span>
           <span className="small faint">{fullTime(anchor.createdAt)}</span>
         </div>
@@ -2365,7 +2369,7 @@ function ThreadMembers({ threadId }: { threadId: string; isDiscussion: boolean }
     {error||readError?<div className="panel danger" role="alert">{error??readError}<button className="btn sm" onClick={()=>void loadThread(threadId)}>刷新名单</button></div>:null}
     {!snapshot?<div className="small faint">正在读取成员…</div>:members.length===0?<EmptyState icon="users" title="还没有 AI 参与" detail="从下方添加一位 AI，再发消息。"/>:null}
     {members.map(m=><div key={m.id} className="row" style={{justifyContent:'space-between'}}>
-      <span className="row tight"><Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id,m.ordinal)} size={22} state={m.workState}/><span className="strong">{memberLabel(m)}</span><span className="small faint">{snapshot?.eligibleMemberIds.includes(m.id)?m.workStateReason:'暂不可接收新消息'}</span></span>
+      <span className="row tight"><Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id,m.ordinal)} size={22} state={m.workState} subject={`member:${m.id}`}/><span className="strong">{memberLabel(m)}</span><span className="small faint">{snapshot?.eligibleMemberIds.includes(m.id)?(m.workStateReason||'状态未提供'):'暂不可接收新消息'}</span></span>
       <button className="btn sm" disabled={pending} onClick={()=>void change(m.id,'remove')}>移出</button>
     </div>)}
     {(snapshot?.runningMemberIds??[]).filter(id=>!snapshot?.memberIds.includes(id)).map(id=><div key={id} className="small faint">{memberLabel(byId(s.members,id))} 已移出，当前执行仍在进行；可在任务中停止。</div>)}
@@ -2821,9 +2825,7 @@ function RoomFiles({
   return (
     <div className="page" style={{ paddingTop: 14 }}>
       <div className="panel info" style={{ marginBottom: 14 }}>
-        这里集合本房间消息的附件与已提交成果（房间级汇总）。
-        磁盘文件的改动看侧栏「文件与改动」，Git 状态看「Git」页——三者各管一段，不要混淆。
-        附件摄取为本机不可变副本并记录 hash，避免原临时文件消失后报告失去依据。
+        这里汇总本房间的附件和已提交成果。工作区文件改动与 Git 状态分别在侧栏对应页面查看。
       </div>
 
       {/* 决策 31 / 33（M3 批次）：附件七类格式与文件选区评论 */}
@@ -2838,11 +2840,12 @@ function RoomFiles({
             <Tag key={t} plain>{t}</Tag>
           ))}
         </div>
-        <div className="small faint" style={{ marginTop: 8, lineHeight: 1.65 }}>
-          七类格式都保证保存与预览（决策 31）。<strong>正文能否被 agent 解析由 runtime 能力决定</strong>：
-          不支持时显示「可保存/预览，当前成员无法解析」，不会默默跳过附件再宣称分析完成。
-          文件摄取过程不执行脚本，也不把整个来源目录加入权限。
-        </div>
+        <details className="small faint" style={{ marginTop: 8 }}>
+          <summary>查看格式与安全说明</summary>
+          <div style={{ lineHeight: 1.65, marginTop: 6 }}>
+            文件可保存和预览；成员能否解析取决于当前 AI 配置。系统不会执行文件内脚本，也不会把整个来源目录加入权限。
+          </div>
+        </details>
         <div className="row tight wrap" style={{ marginTop: 8 }}>
           <button className="btn sm" onClick={() => setCommentOpen(true)}>
             <Icon name="message-square" size={12} /> 文件选区评论（决策 33）
@@ -3128,13 +3131,14 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                   size={22}
                   state={m.workState}
                   stateTitle={m.workStateReason}
+                  subject={`member:${m.id}`}
                 />
                 <span style={{ minWidth: 0 }}>
                   <span className="row tight">
                     <span className="strong">{memberLabel(m)}</span>
                     {isCoord ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                   </span>
-                  <span className="small faint">{m.model} · {m.workStateReason}</span>
+                  <span className="small faint">{[m.model,m.workStateReason].map((part)=>part?.trim()).filter(Boolean).join(' · ')||(m.enabled?'可用':'已停用')}</span>
                 </span>
               </span>
               <button
@@ -3165,7 +3169,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
             {projectMembersNotInRoom.map((m) => (
               <div key={m.id} className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="row tight">
-                  <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={22} state={m.workState} />
+                  <Avatar name={m.displayName} ordinal={m.ordinal} color={memberColor(m.id, m.ordinal)} size={22} state={m.workState} stateTitle={m.workStateReason} subject={`member:${m.id}`} />
                   <span className="strong">{memberLabel(m)}</span>
                 </span>
                 <button

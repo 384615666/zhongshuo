@@ -38,7 +38,7 @@ export type TurnStatus =
   | 'CANCELLED'
   | 'UNKNOWN';
 
-export type MemberWorkState = 'running' | 'idle' | 'waiting' | 'error' | 'offline' | 'stopped';
+export type MemberWorkState = 'running' | 'idle' | 'waiting' | 'error' | 'offline' | 'stopped' | 'unknown';
 
 /* ---------- §4.2 路由模式 ---------- */
 
@@ -1403,6 +1403,8 @@ export interface AppState {
     theme: 'light' | 'dark';
     activeThreadId?: string;
     activeRoomId: string;
+    showAvatars?: boolean;
+    avatars?: Record<string,string>;
     toast?: { text: string; tone: 'info' | 'warn' | 'error' | 'success' };
     /** 原型留痕，便于评审时回看每一步写操作 */
     writeLog: { at: number; api: string; detail: string }[];

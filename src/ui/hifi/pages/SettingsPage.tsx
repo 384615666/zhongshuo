@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { useStore, toast } from '../shell';
 import { SettingsRow, ReadOnlyRow, DetailFold } from '../components/SettingsRow';
-import { recordWrite, retryDraftPersistence, setTheme, clearPersistedSnapshot, importLegacySnapshot } from '../data/store';
+import { recordWrite, retryDraftPersistence, setTheme, setAppearanceState, clearPersistedSnapshot, importLegacySnapshot } from '../data/store';
 import { rescanLegacyImport } from '../loader';
 import { bridge, command, dataBridge, type DataOperationStatus } from '../bridge';
 import { navigate } from '../lib/router';
@@ -65,7 +65,7 @@ function SectionHead({ title, sub }: { title: string; sub: React.ReactNode }) {
   );
 }
 
-import { Modal, Select, Tag } from '../components/ui';
+import { Avatar, Modal, Select, Switch, Tag, memberColor } from '../components/ui';
 
 export function SettingsPage({ query }: { query?: Record<string, string> }) {
   const q = query ?? {};
@@ -245,15 +245,136 @@ function SectionGeneral() {
 
 function SectionAppearance() {
   const theme = useStore((s) => s.ui.theme);
+  const showAvatars = useStore((s) => s.ui.showAvatars === true);
+  const membersAll = useStore((s) => s.members);
+  const members = useMemo(() => membersAll.filter((member) => member.principalType === 'agent'), [membersAll]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const save = useCallback(async (key: string, patch: { showAvatars?: boolean; avatar?: { subject: string; dataUrl: string | null } }): Promise<void> => {
+    setBusy(key);
+    try {
+      await command('app.appearance.set', patch);
+      const readBack = await command<{ showAvatars: boolean; avatars: Record<string, string> }>('app.appearance.get', {});
+      if (patch.showAvatars !== undefined && readBack.showAvatars !== patch.showAvatars) {
+        toast('外观设置保存后回读不一致，未显示为成功', 'error');
+        return;
+      }
+      if (patch.avatar !== undefined) {
+        const expected = patch.avatar.dataUrl;
+        if ((readBack.avatars[patch.avatar.subject] ?? null) !== expected) {
+          toast('头像保存后回读不一致，未显示为成功', 'error');
+          return;
+        }
+      }
+      setAppearanceState(readBack.showAvatars, readBack.avatars);
+      recordWrite('app.appearance.set', patch.avatar === undefined
+        ? `头像显示 → ${readBack.showAvatars ? '显示' : '隐藏'}（已回读）`
+        : `${patch.avatar.subject === 'user' ? '我的头像' : 'AI 头像'}${patch.avatar.dataUrl == null ? '已恢复默认' : '已更新'}（已回读）`);
+      toast(patch.avatar === undefined ? `已${readBack.showAvatars ? '显示' : '隐藏'}头像` : patch.avatar.dataUrl == null ? '已恢复默认头像' : '头像已保存', 'success');
+    } catch (error) {
+      toast(`外观保存失败：${(error as Error).message}`, 'error');
+    } finally {
+      setBusy(null);
+    }
+  }, []);
   return (
     <div>
-      <SectionHead title="外观" sub={<>界面主题（本机偏好，立即生效并随数据根记忆）。</>} />
+      <SectionHead title="外观" sub={<>主题、头像显示与个人图片（本机偏好，随数据根保存）。</>} />
       <SettingsRow label="主题" hint="浅色 / 深色">
         <div className="seg" role="group" aria-label="主题">
           <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>浅色</button>
           <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>深色</button>
         </div>
       </SettingsRow>
+      <SettingsRow label="显示头像" hint="默认关闭，姓名仍会显示；打开后使用你设置的个人或 AI 头像">
+        <Switch
+          checked={showAvatars}
+          disabled={busy === 'visibility'}
+          label={showAvatars ? '显示' : '隐藏'}
+          onChange={(next) => void save('visibility', { showAvatars: next })}
+        />
+      </SettingsRow>
+      <div className="card" style={{ marginTop: 14 }} data-zs-avatar-settings="1">
+        <div className="card-title">头像</div>
+        <div className="small faint" style={{ padding: '0 14px 8px' }}>PNG、JPEG 或 WebP，文件不超过 256 KiB。预览始终可见，聊天中的头像遵循上方开关。</div>
+        <AppearanceAvatarRow subject="user" name="我" color="var(--m-human)" busy={busy} onSave={save} />
+        {members.map((member) => (
+          <AppearanceAvatarRow
+            key={member.id}
+            subject={`member:${member.id}`}
+            name={member.displayName}
+            color={memberColor(member.id, member.ordinal)}
+            busy={busy}
+            onSave={save}
+          />
+        ))}
+        {members.length === 0 ? <div className="small faint" style={{ padding: '8px 14px 12px' }}>当前项目还没有 AI 成员。</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function AppearanceAvatarRow({
+  subject,
+  name,
+  color,
+  busy,
+  onSave,
+}: {
+  subject: string;
+  name: string;
+  color: string;
+  busy: string | null;
+  onSave: (key: string, patch: { avatar: { subject: string; dataUrl: string | null } }) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const hasImage = useStore((state) => state.ui.avatars?.[subject] != null);
+  const key = `avatar:${subject}`;
+  const pick = (file: File | undefined): void => {
+    if (file == null) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      toast('请选择 PNG、JPEG 或 WebP 图片', 'warn');
+      return;
+    }
+    if (file.size === 0 || file.size > 256 * 1024) {
+      toast('头像文件须在 1 B–256 KiB 之间', 'warn');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string' || !reader.result.startsWith('data:image/')) {
+        toast('图片读取失败，未保存', 'error');
+        return;
+      }
+      void onSave(key, { avatar: { subject, dataUrl: reader.result } });
+    };
+    reader.onerror = () => toast('图片读取失败，未保存', 'error');
+    reader.readAsDataURL(file);
+  };
+  return (
+    <div className="row" style={{ justifyContent: 'space-between', padding: '9px 14px', borderTop: '1px solid var(--border-subtle)' }} data-zs-avatar-subject={subject}>
+      <div className="row tight" style={{ minWidth: 0 }}>
+        <Avatar name={name} color={color} size={36} round subject={subject} show />
+        <div style={{ minWidth: 0 }}>
+          <div className="strong truncate">{name}</div>
+          <div className="small faint">{subject === 'user' ? '本地用户' : 'AI 成员'}</div>
+        </div>
+      </div>
+      <div className="row tight">
+        <input
+          ref={inputRef}
+          className="hidden"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          aria-label={`选择${name}的头像`}
+          onChange={(event) => { pick(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }}
+        />
+        <button type="button" className="btn sm" disabled={busy != null} onClick={() => inputRef.current?.click()} title={`上传${name}的头像`}>
+          <Icon name="upload" size={12} /> 选择图片
+        </button>
+        <button type="button" className="btn ghost sm" disabled={busy != null || !hasImage} onClick={() => void onSave(key, { avatar: { subject, dataUrl: null } })} title={hasImage ? `恢复${name}的默认头像` : '当前已是默认头像'}>
+          <Icon name="trash" size={12} /> 恢复默认
+        </button>
+      </div>
     </div>
   );
 }

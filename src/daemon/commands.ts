@@ -26,7 +26,7 @@ import {
   releaseDmPauseGate, pumpDmQueue, dmHasActiveRun, createDmTurn, holdDmPauseGate, reworkPendingOf,
 } from '../persistence/stores/dm.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
-import { openProject } from './projectStore.ts';
+import { openProject, relocateProject } from './projectStore.ts';
 import { computeNextAt, validateSchedule, checkReminderBudget, recheckReminderAuthority, type ReminderSchedule } from './reminderScheduler.ts';
 import { dispatchReminderExecution, reminderCallUsage } from './reminderDispatch.ts';
 import { resolveTopLevelRoute } from '../domain/routing/topLevelRoute.ts';
@@ -37,6 +37,8 @@ import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
 import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
 import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus, templateConfigSchema, configGuard } from './memberManagement.ts';
+import {readAppearance,writeAvatar,writeShowAvatars} from './appearance.ts';
+import { discoverLocalMemberDefaults, ensureDefaultMembers, type DefaultMemberCandidate } from './defaultMembers.ts';
 import { conversationTasksParamsSchema } from '../contracts/conversationTasks.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { appendDomainEvent, listEvents } from '../persistence/events.ts';
@@ -252,7 +254,10 @@ function visibleProjectIdsOf(db: ZhongshuoDatabase, viewerId: string): string[] 
 }
 
 /** project.open 的默认引导（成员/房间/房间成员关系/会话；重复打开不重复创建）。 */
-function bootstrapProject(db: ZhongshuoDatabase, projectId: string, agentNames?: string[]): void {
+function bootstrapProject(db: ZhongshuoDatabase, projectId: string, agentNames?: string[], defaultCandidates?: DefaultMemberCandidate[]): void {
+  if(agentNames==null&&defaultCandidates!=null&&defaultCandidates.length>0){
+    ensureDefaultMembers(db,projectId,defaultCandidates,false);
+  }
   const memberCount = (db.prepare('SELECT count(*) c FROM project_members WHERE project_id = ?').get(projectId) as { c: number }).c;
   if (memberCount === 0) {
     // 可选多成员引导（M1 研讨用；缺省单成员「执行成员」不变）。
@@ -929,9 +934,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             if(deps.db.prepare(`SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id WHERE t.project_id=? AND (a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING','UNKNOWN') OR a.protection_state='retained') LIMIT 1`).get(params.projectId)) throw new DaemonCommandError('WORKER_STILL_RUNNING','运行或退出未确认时不能重定位项目；先明确停止并确认退出');
           }
           if (params.action === 'relocate') {
-            const newPath = resolve(params.newRootPath ?? '');
-            deps.db.prepare('UPDATE projects SET root_path = ?, canonical_path = ?, directory_identity = ?, status = ?, revision = revision + 1 WHERE id = ?')
-              .run(newPath, newPath, `dir:${newPath}`, 'active', params.projectId);
+            const relocated=relocateProject(deps.db,{projectId:params.projectId,newRootPath:params.newRootPath!,expectedRevision:params.expectedRevision});
+            if(!relocated.ok)throw new DaemonCommandError(relocated.error.code,relocated.error.message);
           } else {
             deps.db.prepare('UPDATE projects SET status = ?, revision = revision + 1 WHERE id = ?').run(nextStatus, params.projectId);
           }
@@ -1066,7 +1070,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const result = run(() => {
           const opened = openProject(deps.db, { rootPath: params.path, displayName: params.displayName, now: Date.now() });
           if (!opened.ok) throw new DaemonCommandError(opened.error.code, opened.error.message);
-          bootstrapProject(deps.db, opened.value.project.id, params.agentNames ?? (process.env.ZS_BOOTSTRAP_AGENTS?.split(',').filter((n) => n.trim().length > 0)));
+          const names = params.agentNames ?? (process.env.ZS_BOOTSTRAP_AGENTS?.split(',').filter((n) => n.trim().length > 0));
+          const discoverDefaults = names == null && process.env.ZS_DEFAULT_MEMBER_DISCOVERY !== '0' && process.env.VITEST == null;
+          const project = deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(opened.value.project.id) as { canonical_path: string };
+          const defaultCandidates = discoverDefaults ? discoverLocalMemberDefaults(project.canonical_path).candidates : undefined;
+          bootstrapProject(deps.db, opened.value.project.id, names, defaultCandidates);
           return { project: opened.value.project, created: opened.value.created };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
@@ -1119,6 +1127,19 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return { id: r.id, name: r.name, archived: r.archived_at != null, archivedAt: r.archived_at, conversationId: conversation?.id ?? null, coordinatorMemberId: r.coordinator_member_id ?? null, description, revision: r.revision };
         });
         return withCommandId({ ok: true, data: { items } });
+      }
+      case 'member.discoverDefaults': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','本机默认 AI 发现仅限本机入口');
+        const params=z.strictObject({projectId:z.string().min(1)}).parse(env.params);
+        const assertProject=()=>{const p=deps.db.prepare('SELECT status FROM projects WHERE id=?').get(params.projectId) as {status:string}|undefined;if(p==null)throw new DaemonCommandError('RESOURCE_NOT_FOUND','项目不存在');if(p.status!=='active')throw new DaemonCommandError('VALIDATION_INVALID','项目已归档或移除，不能自动添加成员');};
+        assertProject();
+        const result=run(()=>{
+          assertProject();
+          const project=deps.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(params.projectId) as {canonical_path:string};
+          const discovered=discoverLocalMemberDefaults(project.canonical_path);
+          return{...ensureDefaultMembers(deps.db,params.projectId,discovered.candidates,false),notes:discovered.notes};
+        },assertProject);
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
       case 'member.list': {
         const params = z.strictObject({ projectId: z.string().min(1), roomId: z.string().min(1).optional() }).parse(env.params);
@@ -4465,6 +4486,28 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           return { key: params.key, value: params.value };
         });
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
+      }
+      case 'app.appearance.get': {
+        return withCommandId({ok:true,data:readAppearance(deps.db)});
+      }
+      case 'app.appearance.set': {
+        if(deps.remoteAudit)throw new DaemonCommandError('PERMISSION_DENIED','头像与应用外观仅限本机修改');
+        const params=z.strictObject({
+          showAvatars:z.boolean().optional(),
+          avatar:z.strictObject({
+            subject:z.string().min(1).max(140),
+            dataUrl:z.string().max(524288).nullable(),
+          }).optional(),
+        }).refine(value=>value.showAvatars!==undefined||value.avatar!==undefined,{message:'至少提供一项外观设置'}).parse(env.params);
+        const result=run(()=>{
+          if(params.showAvatars!==undefined)writeShowAvatars(deps.db,params.showAvatars);
+          if(params.avatar!==undefined){
+            try{writeAvatar(deps.db,params.avatar.subject,params.avatar.dataUrl);}
+            catch(error){throw new DaemonCommandError('VALIDATION_INVALID',error instanceof Error?error.message:'头像保存失败');}
+          }
+          return{...readAppearance(deps.db),updatedAt:Date.now()};
+        });
+        return withCommandId({ok:true,data:result.data,replayed:result.replayed});
       }
       case 'task.review': {
         // RT-25 可选任务验收（第八轮）：按任务创建时的策略快照（review_policy=user_review

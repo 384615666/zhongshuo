@@ -6,7 +6,7 @@
  * - 连接断开时通知 renderer（'zs:disconnect'），重连由 main 负责。
  * - ZS_UI_DEMO=<json 路径> 自动化演示：开项目→发任务→轮询→截图→退出（G3 取证）。
  */
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, protocol, net, powerMonitor, screen } from 'electron';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -18,6 +18,7 @@ import { connectPipe, daemonPipeNameFor, ensureLocalCredential, localUserId } fr
 import type { PipeClient } from '../contracts/daemonIpc.ts';
 import {claimActiveDataOperation,dataControlPaths,dataLocationHash,loadDataCopyJob,prepareDataCopyJob,processAlive,readActiveDataOperation,readDataJobStatus,readDataLocation,reconcileInterruptedDataOperation,releaseActiveDataOperation,type DataCopyJob,type DataJobStatus} from '../contracts/dataCopyJob.ts';
 import {findLocalDataRoot} from '../contracts/localDataCopy.ts';
+import { resolveDisplayPlacement } from './testDisplay.ts';
 
 // zsres:// 特权协议（第二十九轮三）：受限预览侧加载随包 pdfjs ESM 模块与 worker 需要——
 // file:// 源下 ES 模块被模块 CORS 拦截（Chromium 对 file 源互为 opaque）。standard+secure
@@ -58,6 +59,7 @@ async function startDaemonProcess(appDataDirToUse: string, runtime: 'fake' | 'co
     : 'node');
   const daemonArgs = isPackagedUi ? [entry] : ['--experimental-strip-types', entry];
   daemonProcess = spawn(nodeBin, daemonArgs, {
+    windowsHide: true,
     env: {
       ...process.env,
       ZS_APP_DATA: appDataDirToUse,
@@ -281,6 +283,28 @@ function pipeClosedCheck(): void {
   connectionMonitor.start();
 }
 
+function applyRequestedTestDisplay(win: BrowserWindow, useExplicitBounds: boolean): void {
+  const placement = resolveDisplayPlacement({
+    displays: screen.getAllDisplays(),
+    primaryId: screen.getPrimaryDisplay().id,
+    displaySpec: process.env.ZS_TEST_DISPLAY,
+    boundsSpec: useExplicitBounds ? process.env.ZS_TEST_WINDOW_BOUNDS : undefined,
+    current: win.getBounds(),
+  });
+  if (placement == null) return;
+  win.setBounds(placement.bounds, false);
+  const evidence = process.env.ZS_TEST_PLACEMENT_FILE;
+  if (useExplicitBounds && evidence != null && evidence.length > 0) {
+    atomicWriteFile(evidence, JSON.stringify({
+      display: { id: placement.display.id, label: placement.display.label, bounds: placement.display.bounds, workArea: placement.display.workArea },
+      requested: placement.bounds,
+      actual: win.getBounds(),
+      primaryId: screen.getPrimaryDisplay().id,
+      at: Date.now(),
+    }));
+  }
+}
+
 // 远程壳证书钉选（第三十一轮五）：必须在 Chromium 初始化（app ready）前 appendSwitch——
 // ready 后追加无效（实测 ERR_CERT_INVALID）。SPKI=证书公钥 SHA-256（标准 base64）。
 if (process.env.ZS_REMOTE_SHELL_URL != null && process.env.ZS_REMOTE_SHELL_SPKI != null && process.env.ZS_REMOTE_SHELL_SPKI.length > 0) {
@@ -427,7 +451,10 @@ let dataOperationStarting = false;
         return picked;
       } catch { return null; /* 清单不可读——等价取消 */ }
     }
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner == null
+      ? await dialog.showOpenDialog({ properties: ['openDirectory'] })
+      : await dialog.showOpenDialog(owner, { properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   if (process.env.ZS_UI_DAEMON_DELAY_MS != null) {
@@ -451,6 +478,7 @@ let dataOperationStarting = false;
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    show: false,
     // 无边框窗口（第五十四轮 H3 §3）：默认自绘标题栏接管外壳；--no-hifi（legacy 专项对照，
     // 无自绘栏）保留系统原生框——窗口控制不因换装失败/对照模式失去可达性。
     frame: process.argv.includes('--no-hifi'),
@@ -466,6 +494,7 @@ let dataOperationStarting = false;
       backgroundThrottling: false,
     },
   });
+  applyRequestedTestDisplay(win, true);
   // renderer 故障恢复（r60 P3，review-r60 §2）：真实崩溃（Page.crash 级）此前留白屏——
   // 用户只能重开应用。此处按「界面重载、daemon 不动」恢复：daemon/任务状态不受 renderer
   // 故障影响（独立进程），重载后经既有装载链恢复项目/会话/历史；草稿为内存态按既有合同
@@ -606,6 +635,8 @@ let dataOperationStarting = false;
   // --no-hifi：工程逃生口（第四十六轮 H1）——legacy 专项验证器/对照运行时跳过换装壳，
   // 直接呈现原界面（产品默认仍为 hifi 壳）。不面向最终用户文档。
   await win.loadURL(process.argv.includes('--no-hifi') ? 'zsres://app/index.html?nohifi=1' : 'zsres://app/index.html');
+  applyRequestedTestDisplay(win, true);
+  if (!win.isVisible()) win.show();
 
   const demo = process.env.ZS_UI_DEMO;
   if (demo != null) {
@@ -776,11 +807,14 @@ async function showDataProgressWindow(jobFile: string): Promise<void> {
   const win = new BrowserWindow({
     width: 650,
     height: 390,
+    show: false,
     resizable: true,
     title: '众说 · 数据操作',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   await win.loadFile(join(__dirname, 'renderer', 'data-progress.html'));
+  applyRequestedTestDisplay(win, false);
+  win.show();
   let lastStatus: DataJobStatus|null = null;
   let terminalSince: number | null = null;
   let lastActivePid: number|null = null;
@@ -819,7 +853,7 @@ async function showDataProgressWindow(jobFile: string): Promise<void> {
 function relaunchApplication(root: string): void {
   const debugPort = process.env.ZS_DEV25_DEBUG_PORT;
   const args = [...(isPackagedUi ? [] : [appRoot]), ...(debugPort ? ['--remote-debugging-port=0'] : [])];
-  const child = spawn(process.execPath, args, {detached:true,windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:root}});
+  const child = spawn(process.execPath, args, {detached:true,windowsHide:true,stdio:'ignore',env:{...process.env,ZS_APP_DATA:root}});
   child.on('error',()=>{});
   child.unref();
 }

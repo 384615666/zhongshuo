@@ -1,7 +1,7 @@
 /** 成员详情：批准原型的单成员两列布局，字段来自明确项目的 member.list/member.runtime。 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { Avatar, ErrorState, Tag, memberColor, memberShortId } from '../components/ui';
+import { Avatar, ErrorState, Tag, memberColor } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { command } from '../bridge';
 import { navigate, currentNavSeq } from '../lib/router';
@@ -83,9 +83,9 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
     <div className="main" data-zs-member-detail={memberId}>
       <div className="page">
         <div className="page-head">
-          {member != null ? <Avatar name={member.displayName} color={memberColor(member.id)} size={36} round /> : null}
+          {member != null ? <Avatar name={member.displayName} color={memberColor(member.id)} size={36} round subject={`member:${member.id}`} /> : null}
           <div style={{ minWidth: 0 }}>
-            <div className="page-title" style={{ fontSize: 18 }}>{member != null ? `${member.displayName} #${memberShortId(member.id)}` : '成员详情'}</div>
+            <div className="page-title" style={{ fontSize: 18 }}>{member != null ? member.displayName : '成员详情'}</div>
             <div className="page-sub">{project.displayName} · {member?.description ?? '项目级成员实例'}</div>
           </div>
           <div className="page-head-actions">
@@ -101,19 +101,22 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
           <div className="grid grid-2">
             <div className="card">
               <div className="card-title" style={{ marginBottom: 12 }}>身份与执行程序</div>
-              <div className="strong">{member.displayName} <span className="mono-sm faint">#{memberShortId(member.id)}</span></div>
+              <div className="strong">{member.displayName}</div>
               <div className="small faint" style={{margin:'6px 0 10px'}}>{member.description||'尚未填写说明'}</div>
               <div className="row tight wrap"><button className="btn sm" data-zs-member-edit={member.id} disabled={project.archivedAt!=null||project.removedAt!=null} onClick={()=>setEditOpen(true)}>编辑名称与说明…</button>
               {member.principalType==='agent'?<button className="btn sm" data-zs-member-template={member.id} disabled={project.archivedAt!=null||project.removedAt!=null||runtimeError!=null||runtime?.installation==null} onClick={()=>setTemplateOpen(true)}>保存配置模板…</button>:null}</div>
               <dl className="kv">
                 <dt>项目</dt><dd>{project.displayName}</dd>
-                <dt>成员 ID</dt><dd className="mono-sm" style={{ overflowWrap: 'anywhere' }}>{member.id}</dd>
                 <dt>类型</dt><dd>{member.principalType === 'agent' ? 'AI 成员' : '本地用户'}</dd>
                 <dt>状态</dt><dd>{member.enabled ? '启用' : '停用'}</dd>
                 <dt>AI 渠道</dt><dd>{runtimeError != null ? <Tag tone="warning">配置读取失败</Tag> : runtime == null ? '读取中…' : runtime.installation != null ? `${runtime.installation.kind} · 已配置` : effective?.source === 'global-default' ? `${effective.kind ?? '未知'} · 使用默认配置` : '未配置'}</dd>
                 <dt>程序可用性</dt><dd>{runtime?.executableStatus?.status==='missing'?`不可派工：${runtime.executableStatus.reason}`:runtime?.executableStatus?.status==='found'?'已找到程序引用（未执行认证）':'尚未确认'}</dd>
                 <dt>可执行文件</dt><dd className="mono-sm">{runtime?.installation?.executable ?? '（未获确认）'}</dd>
               </dl>
+              <details className="small" style={{ marginTop: 10 }}>
+                <summary>高级身份信息</summary>
+                <div className="mono-sm faint" style={{ marginTop: 6, overflowWrap: 'anywhere' }}>成员 ID：{member.id}</div>
+              </details>
               {runtimeError != null ? <div className="panel warning">AI 设置读取失败：{runtimeError}（保留上次已确认事实） <button className="btn sm" onClick={() => void reload()}>重试</button></div> : null}
             </div>
 

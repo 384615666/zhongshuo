@@ -425,6 +425,12 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
     const p = data.project;
     openedId = p.id;
     recordWrite('project.open', `打开项目「${p.displayName}」${data.created === true ? '（新注册）' : '（已注册·幂等重开）'}`);
+    try {
+      const defaults=await command<{created:Array<{displayName:string}>;existing:Array<{displayName:string}>;removedLegacyPlaceholder:boolean}>('member.discoverDefaults',{projectId:p.id});
+      if(defaults.created.length>0||defaults.removedLegacyPlaceholder)recordWrite('member.discoverDefaults',`已从本机默认配置准备 ${defaults.created.length} 位 AI 成员${defaults.removedLegacyPlaceholder?'，并替换未使用的旧占位成员':''}（不自动派发）`);
+    } catch (error) {
+      recordWrite('member.discoverDefaults.failed',`本机默认 AI 发现未完成：${(error as Error).message}`);
+    }
     // R65（review-r64 §1A/§4A）：**合并不替换**——B 打开后 A 仍在侧栏/注册表；焦点/可见/展开
     // 各自 upsert（不覆盖其它项目的显示偏好）；旧项目的房间/主池缓存保留为事实，重进即用。
     setState((s) => {
@@ -605,7 +611,7 @@ export async function refreshMembers(projectIdArg?: string): Promise<void> {
     members: (data.items ?? []).map((m) => ({
       id: m.id, projectId, profileId: '', displayName: m.displayName, description:m.description,revision:m.revision, enabled: m.enabled,
       principalType: m.principalType,
-      workState: 'idle' as const, model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
+      workState: 'unknown' as const, workStateReason:'实时状态未提供', model: '', effort: 'medium' as const, internalSubagents: false, isCoordinatorDefault: false,
     })),
   }));
 }

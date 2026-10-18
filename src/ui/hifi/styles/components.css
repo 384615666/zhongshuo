@@ -1652,6 +1652,20 @@ button.composer-target-summary:hover {
   gap: 10px;
   align-items: flex-start;
   position: relative;
+  width: min(100%, 920px);
+  max-width: 920px;
+}
+.msg.msg-agent {
+  margin-right: auto;
+}
+.msg.msg-human {
+  flex-direction: row-reverse;
+  margin-left: auto;
+  max-width: min(78%, 760px);
+}
+.msg.msg-system {
+  width: 100%;
+  max-width: 100%;
 }
 /**
  * 消息气泡（规范 §5.3）。
@@ -1668,13 +1682,13 @@ button.composer-target-summary:hover {
 .msg-body {
   flex: 1;
   min-width: 0;
-  /* 气泡外观：圆角 + 内边距 + 最大宽度，与头像拉开 */
+  padding: 0;
+  background: transparent;
+}
+/* 仅人类主消息保留气泡；AI 正文直接落在阅读面，不再套一层卡片。 */
+.msg.msg-human .msg-body {
   padding: 8px 12px;
   border-radius: var(--r-lg);
-  background: var(--bg-surface-2);
-}
-/* 人类消息：浅蓝底，一眼看出"这是我说的" */
-.msg-body.is-human {
   background: var(--accent-soft);
 }
 /* 系统消息不是"某人说的话"，不套气泡 */
@@ -1695,6 +1709,10 @@ button.composer-target-summary:hover {
   gap: 7px;
   margin-bottom: 3px;
   flex-wrap: wrap;
+}
+.msg.msg-human .msg-head,
+.msg.msg-human .msg-actions {
+  justify-content: flex-end;
 }
 .msg-author {
   font-weight: 650;
@@ -1731,6 +1749,9 @@ button.composer-target-summary:hover {
   color: var(--text);
   max-width: 76ch;
 }
+.msg-text .md-view {
+  max-width: none;
+}
 .msg-text p + p {
   margin-top: 8px;
 }
@@ -1742,15 +1763,18 @@ button.composer-target-summary:hover {
 }
 .msg-actions {
   display: flex;
-  gap: 3px;
-  margin-top: 5px;
-  opacity: 0;
-  transition: opacity 0.12s;
+  gap: 4px;
+  margin-top: 7px;
   align-items: center;
+  min-height: 24px;
 }
-.msg:hover .msg-actions,
-.msg-actions:focus-within {
-  opacity: 1;
+.msg-action-btn {
+  min-height: 24px;
+  color: var(--text-3);
+}
+.msg-action-feedback {
+  min-width: 2.5em;
+  color: var(--success);
 }
 .msg.mention-me .msg-body {
   border-left: 2px solid var(--accent);
@@ -2082,7 +2106,7 @@ button.composer-target-summary:hover {
   flex-wrap: wrap;
 }
 /**
- * 卡足里的两个**入口按钮**（减负 §3）：回复数、卡片 ⋯。
+ * 卡足里的入口按钮（减负 §3）：回复数与直显的复制/引用/收藏。
  *
  * 回复数是显式打开入口（去掉了常驻的「打开回复串」按钮），
  * 保留原来的 accent 文字观感；⋯ 是 `icon-btn`，不要被这条规则染色。
@@ -2099,6 +2123,19 @@ button.composer-target-summary:hover {
 }
 .root-foot button:not(.icon-btn):hover {
   background: var(--accent-soft);
+}
+.root-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.root-foot .root-card-actions button {
+  color: var(--text-3);
+}
+.root-foot .root-card-actions button:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 /**

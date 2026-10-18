@@ -350,7 +350,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
             <div className="section-title" style={{ marginTop: 18 }}>成员<span className="count">{members.length}</span></div>
             {members.map((m) => (
               <div key={m.id} className="member-row" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
-                <Avatar name={m.displayName} color={memberColor(m.id)} size={22} />
+                <Avatar name={m.displayName} color={memberColor(m.id)} size={22} subject={`member:${m.id}`} />
                 <span className="member-row-name">{memberLabel(m)}</span>
                 <span className="member-row-state">{m.model || ''}</span>
               </div>
