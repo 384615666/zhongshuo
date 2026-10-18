@@ -15,13 +15,26 @@ async function shot(cdp,name){await cdp.send('Page.bringToFront');await cdp.eval
  const cdp=await connect();
  try{
   const greeting=result.stages.find(s=>s.stage==='coordinator-greeting');
+  const single=result.stages.find(s=>s.stage==='explicit-single-non-coordinator');
+  const all=result.stages.find(s=>s.stage==='room-all');
   const multi=result.stages.find(s=>s.stage==='explicit-multi-document');
   await cdp.eval(`location.hash=${JSON.stringify(`/project/${fixture.projectId}/room/${fixture.roomId}?thread=${greeting.threadId}`)};true`);
   await until(()=>cdp.eval('document.querySelector(`.col-thread .msg`)!=null'),Boolean,'coordinator thread',30000);await sleep(500);await shot(cdp,'01-real-coordinator-greeting');
+  await cdp.eval(`location.hash=${JSON.stringify(`/project/${fixture.projectId}/room/${fixture.roomId}?thread=${single.threadId}`)};true`);
+  await until(()=>cdp.eval('document.querySelector(`.col-thread .msg`)!=null'),Boolean,'single thread',30000);await sleep(500);await shot(cdp,'02-real-single-non-coordinator');
+  await cdp.eval(`location.hash=${JSON.stringify(`/project/${fixture.projectId}/room/${fixture.roomId}?thread=${all.threadId}`)};true`);
+  await until(()=>cdp.eval('document.querySelector(`.col-thread .msg`)!=null'),Boolean,'all thread',30000);await sleep(500);await shot(cdp,'03-real-room-all');
   await cdp.eval(`location.hash=${JSON.stringify(`/project/${fixture.projectId}/room/${fixture.roomId}?thread=${multi.threadId}`)};true`);
-  await until(()=>cdp.eval('document.querySelector(`.col-thread .msg`)!=null'),Boolean,'multi thread',30000);await sleep(500);await shot(cdp,'02-real-multi-document');
+  await until(()=>cdp.eval('document.querySelector(`.col-thread .msg`)!=null'),Boolean,'multi thread',30000);await sleep(500);await shot(cdp,'04-real-toolbar-multi-document');
   const text=await cdp.eval("document.querySelector('.col-thread')?.textContent??''");
-  fs.writeFileSync(path.join(out,'visible-summary.json'),JSON.stringify({ok:!String(text).includes('task-complete-v1')&&String(text).includes('R89_REAL_DOC_7531'),text}),'utf8');
+  const visible={
+    coordinator:greeting.text,
+    single:single.agents.map(item=>item.text),
+    roomAll:all.agents.map(item=>item.text),
+    multi:multi.agents.map(item=>item.text),
+    currentThreadText:text,
+  };
+  fs.writeFileSync(path.join(out,'visible-summary.json'),JSON.stringify({ok:Object.values(visible).flat().every(value=>!/(task-complete-v1|schemaVersion|resultKey)/.test(String(value)))&&String(text).includes('R89_REAL_DOC_7531'),visible}),'utf8');
   cdp.ws.close();
  }catch(e){cdp.ws.close();throw e}
 })().catch(e=>{console.error(e.stack??e);process.exitCode=1});

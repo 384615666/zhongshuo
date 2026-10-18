@@ -17,6 +17,7 @@ mkdirSync(projectPath, { recursive: true });
 mkdirSync(otherProjectPath, { recursive: true });
 writeFileSync(join(projectPath, '合成资料.md'), '# R89 合成资料\n\n内容标记：R89_DOC_WORKSPACE_42\n\n这是只用于界面和引用通道验证的合成文档。\n', 'utf8');
 writeFileSync(join(projectPath, 'README.md'), '# R89 visible fixture\n\nSynthetic local project.\n', 'utf8');
+writeFileSync(join(projectPath, '异步读取.md'), `# R89 async document\n\nSYNTHETIC_ONLY\n\n${'A'.repeat(200 * 1024)}\n`, 'utf8');
 writeFileSync(join(otherProjectPath, 'README.md'), '# R89 async switch fixture\n\nSynthetic second project.\n', 'utf8');
 
 process.env.ZS_ALLOW_FAKE = '1';

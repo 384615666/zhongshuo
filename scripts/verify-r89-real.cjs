@@ -156,6 +156,45 @@ async function waitReplyCount(threadId, count) {
     });
 
     await route(`/project/${fixture.projectId}/room/${fixture.roomId}`);
+    const beforeSingle = new Set((await pool()).map((item) => item.threadId));
+    await setComposer('');
+    await chooseToolbarMember(fixture.members[1].id);
+    await until(async () => (await cdp.eval('document.querySelector("textarea.composer-input").value')).includes('@DeepSeek'), Boolean, 'single non-coordinator toolbar token');
+    await setComposer(`${await cdp.eval('document.querySelector("textarea.composer-input").value')} 请用一句自然中文确认你能收到这条单独点名。`);
+    await clickSend();
+    const singleThread = await waitThreadWithBody('单独点名', beforeSingle);
+    const singleTerminal = await waitTerminal(singleThread.threadId);
+    const singleHistory = await waitReplyCount(singleThread.threadId, 1);
+    const singleAgents = singleHistory.filter((item) => item.authorType === 'agent');
+    report.stages.push({
+      stage: 'explicit-single-non-coordinator',
+      threadId: singleThread.threadId,
+      taskId: singleThread.taskId,
+      taskStatus: singleTerminal.taskStatus,
+      latestRunStatus: singleTerminal.latestRunStatus,
+      agents: singleAgents.map((item) => ({ authorId: item.authorId, text: item.body?.text ?? '' })),
+      protocolVisible: singleHistory.some((item) => item.authorType === 'agent' && /task-complete-v1|schemaVersion|resultKey/.test(String(item.body?.text ?? ''))),
+    });
+
+    await route(`/project/${fixture.projectId}/room/${fixture.roomId}`);
+    const beforeAll = new Set((await pool()).map((item) => item.threadId));
+    await setComposer('@全体 请分别用一句自然中文问候。');
+    await clickSend();
+    const allThread = await waitThreadWithBody('请分别用一句自然中文问候', beforeAll);
+    const allTerminal = await waitTerminal(allThread.threadId);
+    const allHistory = await waitReplyCount(allThread.threadId, 2);
+    const allAgents = allHistory.filter((item) => item.authorType === 'agent');
+    report.stages.push({
+      stage: 'room-all',
+      threadId: allThread.threadId,
+      taskId: allThread.taskId,
+      taskStatus: allTerminal.taskStatus,
+      latestRunStatus: allTerminal.latestRunStatus,
+      agents: allAgents.map((item) => ({ authorId: item.authorId, text: item.body?.text ?? '' })),
+      protocolVisible: allHistory.some((item) => item.authorType === 'agent' && /task-complete-v1|schemaVersion|resultKey/.test(String(item.body?.text ?? ''))),
+    });
+
+    await route(`/project/${fixture.projectId}/room/${fixture.roomId}`);
     const beforeMulti = new Set((await pool()).map((item) => item.threadId));
     await setComposer('');
     await chooseToolbarMember(fixture.members[0].id);
@@ -214,13 +253,23 @@ async function waitReplyCount(threadId, count) {
       && toolbarMembersBody.includes(`@${fixture.members[1].displayName}`)
       && toolbarMembersMentions.includes(fixture.members[0].id)
       && toolbarMembersMentions.includes(fixture.members[1].id)
+      && report.stages.find((s) => s.stage === 'explicit-single-non-coordinator')?.taskStatus === 'DONE'
+      && report.stages.find((s) => s.stage === 'explicit-single-non-coordinator')?.agents.length === 1
+      && report.stages.find((s) => s.stage === 'explicit-single-non-coordinator')?.agents[0]?.authorId === fixture.members[1].id
+      && report.stages.find((s) => s.stage === 'explicit-single-non-coordinator')?.protocolVisible === false
+      && report.stages.find((s) => s.stage === 'room-all')?.taskStatus === 'DONE'
+      && report.stages.find((s) => s.stage === 'room-all')?.agents.length === 2
+      && new Set(report.stages.find((s) => s.stage === 'room-all')?.agents.map((item) => item.authorId)).size === 2
+      && report.stages.find((s) => s.stage === 'room-all')?.protocolVisible === false
       && report.stages.find((s) => s.stage === 'explicit-multi-document')?.taskStatus === 'DONE'
       && multiAgents.length === 2
       && new Set(multiAgents.map((item) => item.authorId)).size === 2
       && contexts.length === 2
       && contexts.every((row) => String(row.included_refs_json).includes('R89_REAL_DOC_7531'))
       && childRows.length === 2
-      && report.stages.find((s) => s.stage === 'explicit-multi-document')?.protocolVisible === false;
+      && report.stages.find((s) => s.stage === 'explicit-multi-document')?.protocolVisible === false
+      && report.realCalls.length === 7
+      && report.realCalls.every((call) => call.status === 'succeeded');
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2), 'utf8');
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     cdp.ws.close();

@@ -71,10 +71,14 @@ async function clickMentionToolbar() {
   await cdp.eval(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.title.includes('提及成员'));if(!b)throw Error('mention toolbar missing');b.click();return true})()`);
 }
 
-async function chooseToolbarMember(memberId) {
-  await clickMentionToolbar();
+async function chooseOpenToolbarMember(memberId) {
   await until(() => cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]')!=null`), Boolean, 'toolbar candidate', 10000);
   await cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]').click();true`);
+}
+
+async function chooseToolbarMember(memberId) {
+  await clickMentionToolbar();
+  await chooseOpenToolbarMember(memberId);
 }
 
 (async () => {
@@ -88,7 +92,7 @@ async function chooseToolbarMember(memberId) {
     await clickMentionToolbar();
     await until(() => cdp.eval(`document.querySelector('textarea.composer-input')?.value.startsWith('@')`), Boolean, 'toolbar @ at start');
     const toolbarInsertedAtStart = (await composerValue()).startsWith('@');
-    await chooseToolbarMember(fixture.members[0].id);
+    await chooseOpenToolbarMember(fixture.members[0].id);
     await until(async () => (await composerValue()).includes(`@${fixture.members[0].display_name}`), Boolean, 'first toolbar member');
     await chooseToolbarMember(fixture.members[1].id);
     await until(async () => {
@@ -192,37 +196,23 @@ async function chooseToolbarMember(memberId) {
     report.checks.narrow = narrow;
     await shot('06-narrow-mentions');
 
-    await setComposer('@合成');
-    await until(() => cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:合成资料.md"]')!=null`), Boolean, 'async document candidate', 10000);
-    const delayPatch = await cdp.eval(`(()=>{
-      const target=window.zs;
-      const original=target.command.bind(target);
-      const command=async envelope=>{
-        if(envelope?.method==='project.file.originalFile')await new Promise(resolve=>setTimeout(resolve,1200));
-        return original(envelope);
-      };
-      try{Object.defineProperty(target,'command',{configurable:true,value:command});return {patched:true,scope:'zs'};}
-      catch(firstError){
-        try{
-          const proxy=new Proxy(target,{get(value,key){if(key==='command')return command;const item=Reflect.get(value,key,value);return typeof item==='function'?item.bind(value):item;}});
-          Object.defineProperty(window,'zs',{configurable:true,value:proxy});
-          return {patched:true,scope:'window'};
-        }catch(secondError){return {patched:false,error:String(secondError),first:String(firstError)};}
-      }
-    })()`);
-    if (!delayPatch.patched) throw Error(`async document delay hook unavailable: ${JSON.stringify(delayPatch)}`);
-    await cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:合成资料.md"]').click();true`);
-    await sleep(120);
-    await route(`/project/${fixture.otherProjectId}/room/${fixture.otherRoomId}`, 'textarea.composer-input');
+    await setComposer('@异步');
+    await until(() => cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:异步读取.md"]')!=null`), Boolean, 'async document candidate', 10000);
+    const otherRoute=`/project/${fixture.otherProjectId}/room/${fixture.otherRoomId}`;
+    await cdp.eval(`(()=>{document.querySelector('[data-zs-mention-document="workspace:异步读取.md"]').click();location.hash=${q(otherRoute)};return true})()`);
+    await until(() => cdp.eval(`location.hash.includes(${q(fixture.otherProjectId)})&&document.querySelector('textarea.composer-input')!=null`), Boolean, 'async switched project', 30000);
+    await sleep(250);
     await setComposer('切换后的新草稿');
-    await sleep(1500);
+    await sleep(3000);
     const asyncAfter = await composerValue();
     const asyncDocuments = await cdp.eval(`document.querySelector('.composer')?.getAttribute('data-zs-composer-documents')??''`);
     report.checks.asyncDocumentGuard = {
-      patched: delayPatch.scope,
+      sourceDocument: '异步读取.md',
+      switchedProject: await cdp.eval(`location.hash.includes(${q(fixture.otherProjectId)})`),
       valueUnchanged: asyncAfter === '切换后的新草稿',
       noOldDocumentToken: !asyncAfter.includes('@文档：合成资料.md'),
-      noOldDocumentRef: !asyncDocuments.includes('合成资料.md'),
+      noOldDocumentTokenAsync: !asyncAfter.includes('@文档：异步读取.md'),
+      noOldDocumentRef: !asyncDocuments.includes('异步读取.md'),
       value: asyncAfter,
     };
     await shot('07-async-project-switch');
@@ -248,6 +238,7 @@ async function chooseToolbarMember(memberId) {
       && report.checks.narrow.overflow === false
       && report.checks.asyncDocumentGuard.valueUnchanged
       && report.checks.asyncDocumentGuard.noOldDocumentToken
+      && report.checks.asyncDocumentGuard.noOldDocumentTokenAsync
       && report.checks.asyncDocumentGuard.noOldDocumentRef;
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2), 'utf8');
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
