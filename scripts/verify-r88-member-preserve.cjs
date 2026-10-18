@@ -62,6 +62,41 @@ async function command(cdp, method, params = {}) {
     const discovered = await command(cdp, 'member.discoverDefaults', { projectId });
     const afterMembers = await command(cdp, 'member.list', { projectId });
     const afterConversations = await command(cdp, 'conversation.list', { projectId });
+
+    const describedPath = path.join(fixtureRoot, 'dm-preserve-description-project');
+    fs.mkdirSync(describedPath, { recursive: true });
+    const describedOpened = await command(cdp, 'project.open', { path: describedPath, displayName: '说明保留样例', agentNames: ['执行成员'] });
+    const describedProjectId = describedOpened.project.id;
+    const describedBefore = await command(cdp, 'member.list', { projectId: describedProjectId });
+    const describedLegacy = describedBefore.items.find((member) => member.displayName === '执行成员');
+    if (describedLegacy == null) throw Error('description bootstrap member missing');
+    await command(cdp, 'member.update', {
+      projectId: describedProjectId,
+      memberId: describedLegacy.id,
+      expectedRevision: describedLegacy.revision,
+      displayName: '执行成员',
+      description: '我自己改过的说明',
+    });
+    const describedDiscovery = await command(cdp, 'member.discoverDefaults', { projectId: describedProjectId });
+    const describedAfter = await command(cdp, 'member.list', { projectId: describedProjectId });
+    const describedKept = describedAfter.items.find((member) => member.id === describedLegacy.id);
+
+    const avatarPath = path.join(fixtureRoot, 'dm-preserve-avatar-project');
+    fs.mkdirSync(avatarPath, { recursive: true });
+    const avatarOpened = await command(cdp, 'project.open', { path: avatarPath, displayName: '头像保留样例', agentNames: ['执行成员'] });
+    const avatarProjectId = avatarOpened.project.id;
+    const avatarBefore = await command(cdp, 'member.list', { projectId: avatarProjectId });
+    const avatarLegacy = avatarBefore.items.find((member) => member.displayName === '执行成员');
+    if (avatarLegacy == null) throw Error('avatar bootstrap member missing');
+    const avatarDataUrl = await cdp.eval(`(()=>{
+      const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;
+      const ctx=canvas.getContext('2d');ctx.fillStyle='#b45309';ctx.fillRect(0,0,32,32);
+      return canvas.toDataURL('image/png');
+    })()`);
+    await command(cdp, 'app.appearance.set', { avatar: { subject: `member:${avatarLegacy.id}`, dataUrl: avatarDataUrl } });
+    const avatarDiscovery = await command(cdp, 'member.discoverDefaults', { projectId: avatarProjectId });
+    const avatarAfter = await command(cdp, 'member.list', { projectId: avatarProjectId });
+    const avatarAppearance = await command(cdp, 'app.appearance.get');
     report.projectId = projectId;
     report.legacyMemberId = legacy.id;
     report.dmConversationId = dm.conversationId;
@@ -70,12 +105,30 @@ async function command(cdp, method, params = {}) {
     report.legacyStillPresent = afterMembers.items.some((member) => member.id === legacy.id);
     report.dmPresentBefore = beforeConversations.conversations.some((conversation) => conversation.conversationId === dm.conversationId);
     report.dmPresentAfter = afterConversations.conversations.some((conversation) => conversation.conversationId === dm.conversationId);
+    report.customCases = {
+      description: {
+        removedLegacyPlaceholder: describedDiscovery.removedLegacyPlaceholder,
+        legacyStillPresent: describedAfter.items.some((member) => member.id === describedLegacy.id),
+        description: describedKept?.description,
+      },
+      avatar: {
+        removedLegacyPlaceholder: avatarDiscovery.removedLegacyPlaceholder,
+        legacyStillPresent: avatarAfter.items.some((member) => member.id === avatarLegacy.id),
+        avatarStillStored: avatarAppearance.avatars[`member:${avatarLegacy.id}`] === avatarDataUrl,
+      },
+    };
     report.ok = report.createdKinds.includes('claude')
       && report.createdKinds.includes('codex')
       && report.removedLegacyPlaceholder === false
       && report.legacyStillPresent
       && report.dmPresentBefore
-      && report.dmPresentAfter;
+      && report.dmPresentAfter
+      && report.customCases.description.removedLegacyPlaceholder === false
+      && report.customCases.description.legacyStillPresent
+      && report.customCases.description.description === '我自己改过的说明'
+      && report.customCases.avatar.removedLegacyPlaceholder === false
+      && report.customCases.avatar.legacyStillPresent
+      && report.customCases.avatar.avatarStillStored;
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2), 'utf8');
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     cdp.ws.close();
