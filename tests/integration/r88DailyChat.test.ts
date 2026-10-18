@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand, type DaemonCommandDeps } from '../../src/daemon/commands.ts';
+import { resolveCodexDefaultMetadata } from '../../src/adapter/codex/configuration.ts';
 
 const roots: string[] = [];
 const databases: Array<ReturnType<typeof openDatabase>> = [];
@@ -209,6 +210,91 @@ describe('R88 durable appearance and real local default members', () => {
       projectId: opened.project.id,
     });
     expect(after.conversations).toContainEqual(expect.objectContaining({ conversationId: dm.conversationId, peerMemberId: placeholderId }));
+  });
+
+  it('preserves a legacy placeholder customized by description or avatar', async () => {
+    const f = await fixture();
+    const claudeDir = join(f.root, 'claude');
+    const codexHome = join(f.root, 'codex');
+    mkdirSync(claudeDir);
+    mkdirSync(codexHome);
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'deepseek-flash' } }));
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6.1-sol"\n');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', claudeDir);
+    vi.stubEnv('CODEX_HOME', codexHome);
+    vi.stubEnv('ZS_DEFAULT_MEMBER_DISCOVERY', '0');
+
+    const png = `data:image/png;base64,${Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]).toString('base64')}`;
+    const described = await f.cmd<{ project: { id: string } }>('project.open', { path: f.project });
+    const describedMemberId = `m_default_${described.project.id}_0`;
+    await f.cmd('member.update', {
+      projectId: described.project.id,
+      memberId: describedMemberId,
+      expectedRevision: 0,
+      displayName: '执行成员',
+      description: '我自己改过的说明',
+    });
+    const describedDiscovery = await f.cmd<{ removedLegacyPlaceholder: boolean }>('member.discoverDefaults', { projectId: described.project.id });
+    expect(describedDiscovery.removedLegacyPlaceholder).toBe(false);
+    expect(f.db.prepare('SELECT display_name,description,settings_revision FROM project_members WHERE id=?').get(describedMemberId)).toEqual({
+      display_name: '执行成员',
+      description: '我自己改过的说明',
+      settings_revision: 1,
+    });
+
+    const avatarProject = join(f.root, 'avatar-project');
+    mkdirSync(avatarProject);
+    const avatar = await f.cmd<{ project: { id: string } }>('project.open', { path: avatarProject });
+    const avatarMemberId = `m_default_${avatar.project.id}_0`;
+    await f.cmd('app.appearance.set', { avatar: { subject: `member:${avatarMemberId}`, dataUrl: png } });
+    const avatarDiscovery = await f.cmd<{ removedLegacyPlaceholder: boolean }>('member.discoverDefaults', { projectId: avatar.project.id });
+    expect(avatarDiscovery.removedLegacyPlaceholder).toBe(false);
+    expect(f.db.prepare('SELECT 1 FROM project_members WHERE id=?').get(avatarMemberId)).toBeDefined();
+    expect(await f.cmd<{ avatars: Record<string, string> }>('app.appearance.get', {})).toMatchObject({
+      avatars: { [`member:${avatarMemberId}`]: png },
+    });
+  });
+
+  it('resolves the selected Codex profile when table keys are quoted', async () => {
+    const f = await fixture();
+    const codexHome = join(f.root, 'codex-profile');
+    mkdirSync(codexHome);
+    writeFileSync(join(codexHome, 'config.toml'), [
+      'model = "gpt-6.1-sol"',
+      'profile = "review"',
+      '',
+      '[[skills.config]]',
+      'name = "unrelated-array-table"',
+      '',
+      '[profiles."review"]',
+      'model = "gpt-6-luna"',
+      'model_reasoning_effort = "low"',
+      '',
+      '[profiles."daily"]',
+      'model = "gpt-6.1-sol"',
+      '',
+    ].join('\n'));
+    vi.stubEnv('CODEX_HOME', codexHome);
+    expect(resolveCodexDefaultMetadata(f.project)).toEqual({
+      model: 'gpt-6-luna',
+      effort: 'low',
+      provider: null,
+      reason: null,
+    });
+    writeFileSync(join(codexHome, 'config.toml'), [
+      'model = "gpt-6.1-sol"',
+      'profile = "review"',
+      '',
+      '[profiles.review]',
+      'model = "gpt-6-luna"',
+      'model_reasoning_effort = "low"',
+      '',
+    ].join('\n'));
+    expect(resolveCodexDefaultMetadata(f.project)).toMatchObject({
+      model: 'gpt-6-luna',
+      effort: 'low',
+      reason: null,
+    });
   });
 
   it('auto-discovers during product project.open and keeps the same members on reopen', async () => {

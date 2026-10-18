@@ -2,6 +2,83 @@ import { readFileSync, existsSync,statSync } from 'node:fs';
 import {createHash} from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
+
+interface TomlFacts {
+  scalars: Map<string, string>;
+  unsupportedTable: boolean;
+}
+
+function parseTomlKeyPath(raw: string): string[] | null {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < raw.length) {
+    while (index < raw.length && /\s/.test(raw[index]!)) index++;
+    if (index >= raw.length) return null;
+    let part = '';
+    const quote = raw[index] === '"' || raw[index] === "'" ? raw[index] : null;
+    if (quote != null) {
+      index++;
+      let closed = false;
+      while (index < raw.length) {
+        let char = raw[index++]!;
+        if (char === quote) { closed = true; break; }
+        if (quote === '"' && char === '\\') {
+          if (index >= raw.length) return null;
+          char = raw[index++]!;
+        }
+        part += char;
+      }
+      if (!closed || part.length === 0) return null;
+    } else {
+      const start = index;
+      while (index < raw.length && /[A-Za-z0-9_-]/.test(raw[index]!)) index++;
+      if (index === start) return null;
+      part = raw.slice(start, index);
+    }
+    parts.push(part);
+    while (index < raw.length && /\s/.test(raw[index]!)) index++;
+    if (index >= raw.length) return parts;
+    if (raw[index] !== '.') return null;
+    index++;
+  }
+  return null;
+}
+
+/** Conservative TOML subset for root scalars and table paths. Quoted table keys are supported;
+ * unsupported syntax is surfaced instead of leaving a stale section that can select another profile. */
+function parseTomlFacts(text: string): TomlFacts {
+  const scalars = new Map<string, string>();
+  let section = '';
+  let unsupportedTable = false;
+  for (const line of text.split(/\r?\n/)) {
+    const arrayTable = /^\s*\[\[(.+?)\]\]\s*(?:#.*)?$/.exec(line);
+    if (arrayTable) {
+      const path = parseTomlKeyPath(arrayTable[1]!);
+      if (path == null) {
+        unsupportedTable = true;
+        section = '';
+      } else {
+        section = path.join('.');
+      }
+      continue;
+    }
+    const table = /^\s*\[(.+?)\]\s*(?:#.*)?$/.exec(line);
+    if (table) {
+      const path = parseTomlKeyPath(table[1]!);
+      if (path == null) {
+        unsupportedTable = true;
+        section = '';
+      } else {
+        section = path.join('.');
+      }
+      continue;
+    }
+    const scalar = /^\s*([\w-]+)\s*=\s*(?:"([^"\\]*)"|'([^']*)'|(true|false))\s*(?:#.*)?$/.exec(line);
+    if (scalar) scalars.set(`${section}:${scalar[1]}`, scalar[2] ?? scalar[3] ?? scalar[4]!);
+  }
+  return { scalars, unsupportedTable };
+}
+
 /** Conservative invalidation of local source changes; not a capability certification. */
 export function codexConfigurationIdentity(cwd:string) {
   const home=resolve(process.env.CODEX_HOME??join(homedir(),'.codex'));
@@ -17,13 +94,8 @@ export function codexConfigurationIdentity(cwd:string) {
 export function codexChannelDescription(cwd: string) {
   try {
     const text = readFileSync(join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'config.toml'), 'utf8');
-    let section = ''; const scalars = new Map<string, string>();
-    for (const line of text.split(/\r?\n/)) {
-      const table = line.match(/^\s*\[([\w.-]+)\]\s*(?:#.*)?$/);
-      if (table) { section = table[1]!; continue; }
-      const scalar = line.match(/^\s*([\w-]+)\s*=\s*(?:"([^"\\]*)"|'([^']*)'|(true|false))\s*(?:#.*)?$/);
-      if (scalar) scalars.set(`${section}:${scalar[1]}`, scalar[2] ?? scalar[3] ?? scalar[4]!);
-    }
+    const { scalars, unsupportedTable } = parseTomlFacts(text);
+    if (unsupportedTable) return 'Codex 配置含尚未核实的表头，有效渠道需 CLI 核实';
     const provider = scalars.get(':model_provider');
     if (provider == null || scalars.has(':profile')) return '无法确定 Codex 有效 provider（默认或 profile 覆盖需 CLI 核实）';
     for (let folder = resolve(cwd); ; folder = dirname(folder)) {
@@ -65,14 +137,8 @@ export function resolveCodexDefaultMetadata(cwd: string): CodexDefaultMetadata {
   } catch {
     return { model: null, effort: null, provider: null, reason: 'Codex 全局配置不可读' };
   }
-  let section = '';
-  const scalars = new Map<string, string>();
-  for (const line of text.split(/\r?\n/)) {
-    const table = /^\s*\[([\w.-]+)\]\s*(?:#.*)?$/.exec(line);
-    if (table) { section = table[1]!; continue; }
-    const scalar = /^\s*([\w-]+)\s*=\s*(?:"([^"\\]*)"|'([^']*)'|(true|false))\s*(?:#.*)?$/.exec(line);
-    if (scalar) scalars.set(`${section}:${scalar[1]}`, scalar[2] ?? scalar[3] ?? scalar[4]!);
-  }
+  const { scalars, unsupportedTable } = parseTomlFacts(text);
+  if (unsupportedTable) return { model: null, effort: null, provider: null, reason: 'Codex 全局配置含尚未核实的表头，需由 CLI 核实' };
   const profile = scalars.get(':profile');
   const profilePrefix = profile != null ? `profiles.${profile}:` : '';
   const model = scalars.get(`${profilePrefix}model`) ?? scalars.get(':model') ?? null;

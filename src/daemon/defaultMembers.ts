@@ -151,10 +151,14 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
     const kinds = new Set([...result.created.map((item) => item.kind), ...result.existing.map((item) => item.kind)]);
     if (kinds.has('claude') && kinds.has('codex')) {
       const placeholderId = `m_default_${projectId}_0`;
-      const placeholder = db.prepare(`SELECT id FROM project_members
+      const placeholder = db.prepare(`SELECT id,description,settings_revision FROM project_members
         WHERE id=? AND project_id=? AND principal_type='agent' AND profile_id IS NULL AND display_name='执行成员'`)
-        .get(placeholderId, projectId) as { id: string } | undefined;
-      if (placeholder != null && !hasDurableMemberReferences(db, placeholder.id)) {
+        .get(placeholderId, projectId) as { id: string; description: string | null; settings_revision: number } | undefined;
+      const untouched = placeholder != null
+        && placeholder.settings_revision === 0
+        && (placeholder.description == null || placeholder.description.trim() === '')
+        && db.prepare('SELECT 1 FROM daemon_state WHERE key=?').get(`appearance:avatar:member:${placeholder.id}`) == null;
+      if (placeholder != null && untouched && !hasDurableMemberReferences(db, placeholder.id)) {
         const claude = result.created.find((item) => item.kind === 'claude')
           ?? result.existing.find((item) => item.kind === 'claude');
         if (claude != null) {
