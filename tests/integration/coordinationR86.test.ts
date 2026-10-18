@@ -234,6 +234,25 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(reopened.prepare('SELECT child_task_id,handoff_json FROM coordination_steps ORDER BY step_key').all()).toEqual(saved);reopened.close();
     }finally{if(f.db.open)f.db.close();}
   });
+  it('does not duplicate a planned downstream child when the upstream step also emits a handoff',async()=>{
+    const f=await fixture();
+    try{
+      const root=await f.send();
+      await f.run(output('准备分工',f.plan));
+      expect(f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId)).toEqual({n:2});
+      await f.run(output('分析完成',undefined,{
+        responseKind:'work',
+        handoffs:[{toMemberId:f.b,message:'请复核上游分析',purpose:'review'}],
+      }));
+      expect(f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId)).toEqual({n:2});
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_messages').get()).toEqual({n:0});
+      expect(f.db.prepare("SELECT count(*) n FROM domain_events WHERE kind='member.messageIgnoredRedundantPlan'").get()).toEqual({n:1});
+      await f.run(output('评审完成'));
+      await f.run(output('综合完成'));
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:2});
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'completed'});
+    }finally{f.db.close();}
+  });
   it('rejects a model-invented member without creating children or dispatching it',async()=>{
     const f=await fixture();try{
       const other=join(f.dir,'other-project');mkdirSync(other);
