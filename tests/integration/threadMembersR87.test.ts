@@ -8,7 +8,7 @@ import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 import type {ThreadMembersSnapshot} from '../../src/contracts/threadMembers.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
-import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
+import {successTurn,type FakeTurnScript} from '../../src/adapter/fake/script.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 async function fixture(){
@@ -191,6 +191,27 @@ describe('R87 durable thread participants, formal commands, zero inference',()=>
       expect(contexts.every(row=>row.included_refs_json.includes('R89_DOC_MARKER_42'))).toBe(true);
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
       expect(f.db.prepare('SELECT 1 FROM agent_turns WHERE member_id=?').get(f.ids[2])).toBeUndefined();
+    }finally{f.db.close();}
+  });
+  it('explicit recipients accept a natural plain-text reply when there is no work evidence',async()=>{
+    const f=await fixture();try{
+      const rootFinal:FakeTurnScript=[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'task-complete-v1',resultKey:'fixture',responseKind:'conversation',answer:'根回复',changeSummary:'根回复',files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[]})}}];
+      const scripts:FakeTurnScript[]=[rootFinal,successTurn('第一位自然回复'),successTurn('第二位自然回复')];
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({structuredFinal:false,turnScriptSequencer:()=>scripts.shift()??successTurn('extra')}),leaseOwner:'r90-natural-child',appDataDir:f.dir});
+      await worker.runOnce();
+      const sent=await f.cmd<{taskId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},
+        body:'@两位 请分别用自然中文回复',intent:'default',mentions:f.ids.slice(0,2).map(memberId=>({kind:'member',memberId})),
+      });
+      for(let i=0;i<6&&await worker.runOnce();i++){/* one child per turn */}
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
+      const children=f.db.prepare('SELECT status,owner_member_id FROM tasks WHERE parent_task_id=? ORDER BY rowid').all(sent.taskId) as Array<{status:string;owner_member_id:string}>;
+      expect(children.map(row=>row.status)).toEqual(['DONE','DONE']);
+      expect(children.map(row=>row.owner_member_id).sort()).toEqual(f.ids.slice(0,2).sort());
+      const replies=f.db.prepare(`SELECT body_json FROM messages WHERE task_id IN (SELECT id FROM tasks WHERE parent_task_id=?) AND author_type='agent' ORDER BY rowid`).all(sent.taskId) as Array<{body_json:string}>;
+      expect(replies.map(row=>JSON.parse(row.body_json).text).sort()).toEqual(['第一位自然回复','第二位自然回复']);
+      expect(f.db.prepare('SELECT id,task_id,run_id FROM task_deliveries WHERE task_id IN (SELECT id FROM tasks WHERE parent_task_id=?)').all(sent.taskId)).toEqual([]);
+      expect(f.db.prepare("SELECT count(*) n FROM domain_events WHERE task_id IN (SELECT id FROM tasks WHERE parent_task_id=?) AND kind='turn.outputInvalid'").get(sent.taskId)).toEqual({n:0});
     }finally{f.db.close();}
   });
   it('shows factual natural progress while running, suppresses control JSON, and stops showing it at terminal',async()=>{

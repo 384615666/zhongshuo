@@ -2056,6 +2056,48 @@ export class DispatchWorker {
             if(proposed)try{validatePlanForRun(this.db,task.id,runId,proposed);}catch(error){contract={ok:false,issues:[String(error)]};}
           }
           if(contract.ok){const result=taskCompleteSchema.parse(JSON.parse(finalText));if(result.handoffs?.length)try{validateMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs,Boolean(result.coordinationPlan));}catch(error){contract={ok:false,issues:[String(error)]};}}
+          const naturalText=finalTextRaw.trim();
+          const integrationRun=this.db.prepare('SELECT 1 FROM coordination_runs WHERE integration_run_id=?').get(runId);
+          const ordinaryReplyRequest=this.db.prepare(`SELECT 1 FROM conversation_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running'
+            UNION ALL SELECT 1 FROM thread_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running' LIMIT 1`).get(runId,turnId,runId,turnId);
+          const naturalOrdinaryReply=!contract.ok&&!planningRun&&!integrationRun&&messageControl==null&&!explicitTerminalControl
+            &&(explicitRecipientChild(this.db,task.id)||ordinaryReplyRequest!=null)
+            &&naturalText.length>0&&!/^[{[]/.test(naturalText)&&!/task-complete-v1|schemaVersion|resultKey/i.test(naturalText);
+          if(naturalOrdinaryReply){
+            const successfulWriteActions=(this.db.prepare(`SELECT count(*) n FROM domain_events started JOIN domain_events completed
+              ON completed.turn_id=started.turn_id AND completed.kind='tool.completed'
+              AND json_extract(completed.payload_json,'$.toolCallId')=json_extract(started.payload_json,'$.toolCallId')
+              WHERE started.turn_id=? AND started.kind='tool.started'
+              AND json_extract(started.payload_json,'$.toolName') IN ('Write','Edit','MultiEdit','NotebookEdit','fileChange')
+              AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
+            const changesetId=this.kvGet(`write-changeset:${turnId}`);
+            const changes=changesetId?finalizeChangeset(this.db,{changeSetId:changesetId,appDataDir:this.appDataDir}):null;
+            const changedFiles=changes?.ok?changes.value.diff.added.length+changes.value.diff.removed.length+changes.value.diff.modified.length:0;
+            if(successfulWriteActions===0&&changedFiles===0){
+              const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
+              this.casTurn(turnId,'SUCCEEDED');
+              this.db.prepare(`UPDATE workflow_runs SET status='SUCCEEDED' WHERE id=?`).run(runId);
+              this.settleBudget(runId);
+              this.audit(task,runId,turnId,'turn.outputNaturalConversation',{
+                rawLength:naturalText.length,
+                rule:'explicit-recipient-or-ordinary-chat-natural-output; no write evidence; no TaskComplete fabricated',
+              });
+              if(previousWork>0){
+                this.db.prepare("UPDATE tasks SET response_kind='work' WHERE id=?").run(task.id);
+                const request=this.db.prepare('SELECT 1 FROM thread_reply_requests WHERE turn_id=?').get(turnId);
+                const currentDelivery=request?this.db.prepare('SELECT d.review_status FROM tasks t JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?').get(task.id) as {review_status:string}|undefined:undefined;
+                this.transitionTask(task.id,request&&currentDelivery?(currentDelivery.review_status==='pending'?'REVIEW':['accepted','not_required'].includes(currentDelivery.review_status)?'DONE':currentDelivery.review_status==='changes_requested'?'ACTIVE':'WAITING_USER'):'WAITING_USER');
+                this.audit(task,runId,turnId,'turn.workClarification',{note:'普通追问按自然正文回答；旧交付保持'});
+                this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'工作待补充，旧交付保持；没有产生新交付'});
+              }else{
+                this.db.prepare("UPDATE tasks SET response_kind='conversation' WHERE id=?").run(task.id);
+                const pendingConversation=(this.db.prepare("SELECT (SELECT count(*) FROM conversation_reply_requests WHERE task_id=? AND status='queued')+(SELECT count(*) FROM thread_reply_requests WHERE task_id=? AND status='queued') n").get(task.id,task.id) as {n:number}).n;
+                this.transitionTask(task.id,pendingConversation?'ACTIVE':'DONE');
+                this.audit(task,runId,turnId,'turn.statusChanged',{status:'SUCCEEDED',responseKind:'conversation',note:'普通问答按自然正文完成；没有工作交付或验收待办'});
+              }
+              return;
+            }
+          }
           if (!contract.ok) {
             this.casTurn(turnId, 'FAILED');
             this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?`).run(runId);
@@ -2127,7 +2169,6 @@ export class DispatchWorker {
             AND json_extract(started.payload_json,'$.toolName') IN ('Write','Edit','MultiEdit','NotebookEdit','fileChange')
             AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
-          const integrationRun=this.db.prepare('SELECT 1 FROM coordination_runs WHERE integration_run_id=?').get(runId);
           if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0
             &&(!childCoordination(this.db,task.id)||explicitRecipientChild(this.db,task.id))&&!integrationRun) {
             if(previousWork>0){
