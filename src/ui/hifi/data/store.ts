@@ -193,7 +193,12 @@ export function useStore<T>(selector: (s: HifiState) => T): T {
  * - 去重：同 attachmentId+revision 已在草稿→existed（同文件同版本不积压；新版本=新行）；
  * - 失败零写入：目标缺失/参数非法返回错误，不产生幽灵芯片或幽灵 ref。
  */
-export function addFileRefToDraft(draftKey: string, conversationId: string, ref: { attachmentId: string; name: string; kind: string; revision?: number; hash?: string }): { ok: boolean; existed?: boolean; error?: string } {
+export function addFileRefToDraft(
+  draftKey: string,
+  conversationId: string,
+  ref: { attachmentId: string; name: string; kind: string; revision?: number; hash?: string },
+  opts?: { bodyInsertAt?: number; replaceRange?: { start: number; end: number } },
+): { ok: boolean; existed?: boolean; error?: string } {
   if (draftKey.length === 0) return { ok: false, error: '目标草稿未知' };
   if (ref.attachmentId == null || ref.attachmentId.length === 0) return { ok: false, error: '资源身份缺失（attachmentId）——不凭文件名猜身份' };
   const d = getDraftFull(draftKey);
@@ -208,7 +213,22 @@ export function addFileRefToDraft(draftKey: string, conversationId: string, ref:
     attachmentId: ref.attachmentId, hash: ref.hash, revision: ref.revision, kind: ref.kind,
   };
   setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: [...(s.uploadItems[draftKey] ?? []), item] } }));
-  setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: ref.name, size: 0, attachmentId: ref.attachmentId, hash: ref.hash, revision: ref.revision, kind: ref.kind }] });
+  const token = inlineAttachmentToken({
+    kind: 'file', attachmentId: ref.attachmentId, uploadId: item.uploadId,
+    name: ref.name, fileKind: ref.kind, revision: ref.revision,
+  });
+  const rangeStart = opts?.replaceRange != null ? Math.max(0, Math.min(opts.replaceRange.start, d.body.length)) : -1;
+  const rangeEnd = opts?.replaceRange != null ? Math.max(rangeStart, Math.min(opts.replaceRange.end, d.body.length)) : -1;
+  const at = rangeStart >= 0 ? rangeStart : Math.max(0, Math.min(opts?.bodyInsertAt ?? d.body.length, d.body.length));
+  const before = d.body.slice(0, at);
+  const after = d.body.slice(rangeStart >= 0 ? rangeEnd : at);
+  const prefix = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+  const suffix = after.length > 0 && !/^\s/.test(after) ? ' ' : '';
+  setDraftFull(draftKey, {
+    ...d,
+    body: `${before}${prefix}${token}${suffix}${after}`,
+    attachments: [...d.attachments, { name: ref.name, size: 0, attachmentId: ref.attachmentId, hash: ref.hash, revision: ref.revision, kind: ref.kind }],
+  });
   return { ok: true, existed: false };
 }
 
@@ -259,7 +279,21 @@ export interface HifiDraftAttachment {
   /** 表格注入范围（第五十二轮：从预览面板选定——缺省=服务端有界默认窗口）。 */
   range?: string;
 }
-export interface HifiDraft { collaboration?: 'deliberate'; body: string; mentions: string[]; attachments: HifiDraftAttachment[]; access: string; sendAs: 'ai' | 'record'; rev?: number; /** r62：普通草稿 24h 过期的时间戳（批准 brief §3.3）；未确认发送账本不适用。 */ updatedAt?: number }
+export interface HifiDraft {
+  collaboration?: 'deliberate';
+  body: string;
+  mentions: string[];
+  attachments: HifiDraftAttachment[];
+  access: string;
+  /** 独立研讨本次预算（调用次数）。只随本目标草稿保存，发送时冻结进信封。 */
+  budgetMaxTurns?: number;
+  /** 独立研讨的明确成员快照；不写入正文，也不通过切换模式偷偷新增 @全体。 */
+  deliberateMemberIds?: string[];
+  sendAs: 'ai' | 'record';
+  rev?: number;
+  /** r62：普通草稿 24h 过期的时间戳（批准 brief §3.3）；未确认发送账本不适用。 */
+  updatedAt?: number;
+}
 
 /**
  * 上传项（review-r51 §2 反例修复）：每笔上传绑定**发起草稿键+独立 uploadId+会话**——
@@ -272,6 +306,9 @@ export interface UploadItem {
   conversationId: string;
   name: string;
   size: number;
+  /** Browser File identity metadata helps distinguish same-name/same-size files. */
+  sourceLastModified?: number;
+  sourceType?: string;
   status: 'uploading' | 'ready' | 'failed';
   attachmentId?: string;
   hash?: string;
@@ -282,6 +319,96 @@ export interface UploadItem {
   warning?: string;
   /** 上传中被移除：回执/失败到达后即整体清除（不复活、不再显示）。 */
   removed?: boolean;
+}
+
+/**
+ * 输入区正文里的结构化附件标记。
+ *
+ * textarea 只能保存纯文本；我们把附件身份作为不可见 token 写进草稿正文，编辑器把 token
+ * 渲染成可预览/移除的气泡。发送时正文会剔除 token，附件仍走唯一 attachmentRefs 通道；
+ * 因而不会把文件路径或伪 @成员文本发给模型，也不会产生第二份附件真源。
+ */
+export type InlineAttachmentToken = {
+  kind: 'file' | 'upload' | 'failed';
+  attachmentId?: string;
+  uploadId?: string;
+  name: string;
+  fileKind?: string;
+  revision?: number;
+};
+
+export type InlineBodySegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'attachment'; raw: string; token: InlineAttachmentToken };
+
+const INLINE_TOKEN_START = '\uE000ZS';
+const INLINE_TOKEN_FIELD = '\uE001';
+const INLINE_TOKEN_END = '\uE002';
+const INLINE_TOKEN_RE = /\uE000ZS\uE001(file|upload|failed)\uE001([^\uE001\uE002]*)\uE001([^\uE001\uE002]*)\uE001([^\uE001\uE002]*)\uE001([^\uE001\uE002]*)\uE001([^\uE001\uE002]*)\uE002/g;
+
+export function inlineAttachmentToken(token: InlineAttachmentToken): string {
+  const safe = (value: string | number | undefined): string => encodeURIComponent(value == null ? '' : String(value));
+  return `${INLINE_TOKEN_START}${INLINE_TOKEN_FIELD}${token.kind}${INLINE_TOKEN_FIELD}${safe(token.attachmentId)}${INLINE_TOKEN_FIELD}${safe(token.uploadId)}${INLINE_TOKEN_FIELD}${safe(token.name)}${INLINE_TOKEN_FIELD}${safe(token.fileKind)}${INLINE_TOKEN_FIELD}${safe(token.revision)}${INLINE_TOKEN_END}`;
+}
+
+export function parseInlineBody(text: string): InlineBodySegment[] {
+  const out: InlineBodySegment[] = [];
+  let cursor = 0;
+  INLINE_TOKEN_RE.lastIndex = 0;
+  for (let match = INLINE_TOKEN_RE.exec(text); match != null; match = INLINE_TOKEN_RE.exec(text)) {
+    if (match.index > cursor) out.push({ kind: 'text', text: text.slice(cursor, match.index) });
+    const raw = match[0];
+    const kind = match[1] as InlineAttachmentToken['kind'];
+    const decode = (value: string): string => {
+      try { return decodeURIComponent(value); } catch { return value; }
+    };
+    out.push({
+      kind: 'attachment',
+      raw,
+      token: {
+        kind,
+        attachmentId: decode(match[2]!) || undefined,
+        uploadId: decode(match[3]!) || undefined,
+        name: decode(match[4]!),
+        fileKind: decode(match[5]!) || undefined,
+        revision: Number(decode(match[6]!)) || undefined,
+      },
+    });
+    cursor = match.index + raw.length;
+  }
+  if (cursor < text.length) out.push({ kind: 'text', text: text.slice(cursor) });
+  return out;
+}
+
+export function stripInlineAttachmentTokens(text: string): string {
+  return text.replace(/\uE000ZS\uE001(?:file|upload|failed)\uE001(?:[^\uE001\uE002]*\uE001){4}[^\uE001\uE002]*\uE002/g, '');
+}
+
+export function replaceInlineUploadToken(
+  text: string,
+  uploadId: string,
+  next: { kind: 'file' | 'failed'; attachmentId?: string; name: string; fileKind?: string; revision?: number },
+): string {
+  let replaced = false;
+  const parts = parseInlineBody(text).map((segment) => {
+    if (segment.kind === 'text') return segment.text;
+    if (segment.token.kind !== 'upload' || segment.token.uploadId !== uploadId) return segment.raw;
+    replaced = true;
+    return inlineAttachmentToken({ ...next, uploadId });
+  });
+  return replaced ? parts.join('') : `${text}${text.length > 0 ? ' ' : ''}${inlineAttachmentToken({ ...next, uploadId })}`;
+}
+
+export function removeInlineAttachmentToken(
+  text: string,
+  match: { attachmentId?: string; uploadId?: string },
+): string {
+  return parseInlineBody(text).map((segment) => {
+    if (segment.kind === 'text') return segment.text;
+    const hit = (match.uploadId != null && segment.token.uploadId === match.uploadId)
+      || (match.attachmentId != null && segment.token.attachmentId === match.attachmentId);
+    return hit ? '' : segment.raw;
+  }).join('');
 }
 
 /** 预览目标（消息附件/草稿附件芯片点击打开）：hashHint/revisionHint 用于头部身份行。 */
@@ -445,6 +572,7 @@ export function addUploadItem(item: UploadItem): void {
   persistSnapshot();
 }
 export function settleUpload(draftKey: string, uploadId: string, patch: Partial<Pick<UploadItem, 'status' | 'attachmentId' | 'hash' | 'revision' | 'kind' | 'error' | 'warning'>>): void {
+  const before = (getState().uploadItems[draftKey] ?? []).find((x) => x.uploadId === uploadId);
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
     const idx = list.findIndex((x) => x.uploadId === uploadId);
@@ -459,6 +587,13 @@ export function settleUpload(draftKey: string, uploadId: string, patch: Partial<
     next[idx] = { ...cur, ...patch };
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
+  if (patch.status === 'failed' && before != null) {
+    const d = getDraftFull(draftKey);
+    const body = replaceInlineUploadToken(d.body, uploadId, {
+      kind: 'failed', name: before.name, fileKind: before.kind, revision: before.revision,
+    });
+    if (body !== d.body) setDraftFull(draftKey, { ...d, body });
+  }
   persistSnapshot();
 }
 
@@ -483,6 +618,11 @@ export function settleUploadReady(draftKey: string, uploadId: string, conversati
   if (cur.conversationId !== conversationId) {
     // 回执会话与发起会话不一致（跨会话串线）：按失败分列，不写草稿 ref。
     setState((s) => ({ ...s, uploadItems: { ...s.uploadItems, [draftKey]: (s.uploadItems[draftKey] ?? []).map((x) => (x.uploadId === uploadId ? { ...x, status: 'failed' as const, error: `回执会话不一致（${conversationId}）——已丢弃` } : x)) } }));
+    const d = getDraftFull(draftKey);
+    setDraftFull(draftKey, {
+      ...d,
+      body: replaceInlineUploadToken(d.body, uploadId, { kind: 'failed', name: cur.name, fileKind: cur.kind, revision: cur.revision }),
+    });
     persistSnapshot();
     return false;
   }
@@ -496,33 +636,74 @@ export function settleUploadReady(draftKey: string, uploadId: string, conversati
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
   const d = getDraftFull(draftKey);
-  if (!d.attachments.some((a) => a.attachmentId === receipt.attachmentId)) {
-    setDraftFull(draftKey, { ...d, attachments: [...d.attachments, { name: receipt.name, size: receipt.size, attachmentId: receipt.attachmentId, hash: receipt.hash, revision: receipt.revision, kind: receipt.kind }] });
-  }
+  const body = replaceInlineUploadToken(d.body, uploadId, {
+    kind: 'file', attachmentId: receipt.attachmentId, name: receipt.name,
+    fileKind: receipt.kind, revision: receipt.revision,
+  });
+  const attachments = d.attachments.some((a) => a.attachmentId === receipt.attachmentId)
+    ? d.attachments
+    : [...d.attachments, { name: receipt.name, size: receipt.size, attachmentId: receipt.attachmentId, hash: receipt.hash, revision: receipt.revision, kind: receipt.kind }];
+  if (body !== d.body || attachments !== d.attachments) setDraftFull(draftKey, { ...d, body, attachments });
   return true;
 }
+
+/** Upload ids whose visible body token was removed (backspace, selection
+ * replacement, paste overwrite). Ready refs are matched by attachmentId;
+ * in-flight/failed refs are matched by uploadId. */
+export function staleAttachmentUploadIds(body: string, items: readonly UploadItem[]): string[] {
+  const inline = parseInlineBody(body).filter((segment): segment is Extract<InlineBodySegment, { kind: 'attachment' }> => segment.kind === 'attachment');
+  const uploads = new Set(inline.flatMap((segment) => segment.token.uploadId ? [segment.token.uploadId] : []));
+  const attachments = new Set(inline.flatMap((segment) => segment.token.attachmentId ? [segment.token.attachmentId] : []));
+  return items.filter((item) => {
+    if (item.removed === true) return false;
+    if (item.status === 'ready' && item.attachmentId != null) return !attachments.has(item.attachmentId);
+    return !uploads.has(item.uploadId);
+  }).map((item) => item.uploadId);
+}
 export function removeUploadItem(draftKey: string, uploadId: string): void {
+  const cur = (getState().uploadItems[draftKey] ?? []).find((x) => x.uploadId === uploadId);
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
-    const cur = list.find((x) => x.uploadId === uploadId);
     if (cur == null) return s;
     const next = cur.status === 'uploading'
       ? list.map((x) => (x.uploadId === uploadId ? { ...x, removed: true } : x)) // 在途：标记，回执到达即弃
       : list.filter((x) => x.uploadId !== uploadId); // 已结算：直接清
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
+  if (cur != null) {
+    const d = getDraftFull(draftKey);
+    const body = removeInlineAttachmentToken(d.body, {
+      uploadId,
+      ...(cur.attachmentId != null ? { attachmentId: cur.attachmentId } : {}),
+    });
+    const attachments = cur.attachmentId == null ? d.attachments : d.attachments.filter((item) => item.attachmentId !== cur.attachmentId);
+    if (body !== d.body || attachments !== d.attachments) setDraftFull(draftKey, { ...d, body, attachments });
+  }
   persistSnapshot();
 }
 /** 草稿就绪引用并入上传项（切回草稿时按草稿恢复的 ready 项重建芯片；已存在同 attachmentId 不重复）。 */
 export function hydrateUploadRefs(draftKey: string, conversationId: string, refs: HifiDraftAttachment[]): void {
+  const added: UploadItem[] = [];
   setState((s) => {
     const list = s.uploadItems[draftKey] ?? [];
     const have = new Set(list.map((x) => x.attachmentId));
     const add = refs.filter((r) => r.attachmentId != null && !have.has(r.attachmentId))
       .map((r) => ({ uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`, draftKey, conversationId, name: r.name, size: r.size, status: 'ready' as const, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind }));
     if (add.length === 0) return s;
+    added.push(...add);
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: [...list, ...add] } };
   });
+  if (added.length > 0) {
+    const d = getDraftFull(draftKey);
+    const missing = added.filter((item) => !parseInlineBody(d.body).some((segment) => segment.kind === 'attachment' && segment.token.attachmentId === item.attachmentId));
+    if (missing.length > 0) {
+      const suffix = missing.map((item) => inlineAttachmentToken({
+        kind: 'file', attachmentId: item.attachmentId, uploadId: item.uploadId,
+        name: item.name, fileKind: item.kind, revision: item.revision,
+      })).join(' ');
+      setDraftFull(draftKey, { ...d, body: `${d.body}${d.body.length > 0 && !/\s$/.test(d.body) ? ' ' : ''}${suffix}` });
+    }
+  }
   persistSnapshot();
 }
 /** 清空已结算项（发送成功按 refs 清——保留仍在途/失败的）。 */
@@ -541,7 +722,17 @@ export function clearSettledUploads(draftKey: string, sentAttachmentIds: string[
 export interface PendingSendEnvelope {
   commandId: string;
   method: 'message.submit';
-  params: { target: Record<string, unknown>; body: string; intent: 'default' | 'record_only'; mentions: Array<{ kind: string; memberId?: string }>; attachmentRefs?: string[];threadMemberVersion?:string;collaboration?:'deliberate' };
+  params: {
+    target: Record<string, unknown>;
+    body: string;
+    intent: 'default' | 'record_only';
+    mentions: Array<{ kind: string; memberId?: string }>;
+    attachmentRefs?: string[];
+    threadMemberVersion?: string;
+    collaboration?: 'deliberate';
+    /** 本次独立研讨的冻结预算；UNKNOWN 重试只能沿用这一份，不能被新草稿设置改写。 */
+    deliberationBudget?: { maxTurns: number };
+  };
   targetLabel: string;
   at: number;
   /** 发起时的草稿编辑代次（review-r48 §4）：清算只在代次未变时剥离已发内容。 */
@@ -641,6 +832,8 @@ function validateDraft(d: unknown): d is HifiDraft {
   if (!Array.isArray(d.attachments) || d.attachments.some((a) => !isPlainObject(a) || typeof a.attachmentId !== 'string' || typeof a.name !== 'string')) return false;
   if (typeof d.access !== 'string' || (d.sendAs !== 'ai' && d.sendAs !== 'record')) return false;
   if (d.collaboration != null && d.collaboration !== 'deliberate') return false;
+  if (d.budgetMaxTurns != null && (typeof d.budgetMaxTurns !== 'number' || !Number.isInteger(d.budgetMaxTurns) || d.budgetMaxTurns < 1)) return false;
+  if (d.deliberateMemberIds != null && (!Array.isArray(d.deliberateMemberIds) || d.deliberateMemberIds.some((id) => typeof id !== 'string'))) return false;
   if (d.rev != null && typeof d.rev !== 'number') return false;
   if (d.updatedAt != null && typeof d.updatedAt !== 'number') return false;
   return true;
@@ -653,6 +846,7 @@ function validateEnvelope(e: unknown): e is PendingSendEnvelope {
   if (typeof e.commandId !== 'string' || e.commandId.length === 0 || e.method !== 'message.submit') return false;
   const p = e.params;
   if (!isPlainObject(p) || typeof p.body !== 'string' || (p.intent !== 'default' && p.intent !== 'record_only') || !isPlainObject(p.target)) return false;
+  if (p.deliberationBudget != null && (!isPlainObject(p.deliberationBudget) || !Number.isInteger(p.deliberationBudget.maxTurns) || (p.deliberationBudget.maxTurns as number) < 1)) return false;
   if (e.at != null && typeof e.at !== 'number') return false;
   if (e.queued != null && (!Array.isArray(e.queued) || e.queued.some((q) => !validateEnvelope(q)))) return false;
   return true;
@@ -1022,7 +1216,12 @@ export function stageOutbound(draftKey: string, env: PendingSendEnvelope): { ok:
 export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?: { recordThread?: boolean }): HifiDraft {
   const d = getDraftFull(draftKey);
   const unchanged = env.revAtSend == null || d.rev === env.revAtSend;
-  const nextBody = unchanged && d.body.startsWith(env.params.body) ? d.body.slice(env.params.body.length).replace(/^\s+/, '') : d.body;
+  // 正文 token 只是编辑器里的结构化文件气泡；发送信封走 attachmentRefs。成功后按真实
+  // 可见正文清算，避免 token 残留或把已发文件错误带入下一条消息。
+  const plainBefore = stripInlineAttachmentTokens(d.body).replace(/^\s+/, '');
+  const nextBody = unchanged && plainBefore.startsWith(env.params.body)
+    ? plainBefore.slice(env.params.body.length).replace(/^\s+/, '')
+    : unchanged ? '' : d.body;
   const sentMentionKeys = env.params.mentions.map((m) => (m.kind === 'all' ? 'all' : m.memberId ?? ''));
   const mentionsClear = unchanged && d.mentions.length === sentMentionKeys.length && d.mentions.every((m, i) => m === sentMentionKeys[i]);
   const sentIds = new Set(env.params.attachmentRefs ?? []);
@@ -1032,7 +1231,8 @@ export function settleOutbound(draftKey: string, env: PendingSendEnvelope, opts?
     body: nextBody,
     mentions: mentionsClear ? [] : d.mentions,
     attachments: keptAttachments,
-    sendAs: env.params.intent === 'record_only' ? (opts?.recordThread === true ? 'record' : 'ai') : d.sendAs,
+    // 兼容旧调用方的明确记录串结算标记；R90 的普通聊天页面不再传这个选项。
+    sendAs: opts?.recordThread === true ? 'record' : 'ai',
   };
   setDraftFull(draftKey, settled);
   clearSettledUploads(draftKey, [...sentIds]);

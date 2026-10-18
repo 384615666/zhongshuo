@@ -4,7 +4,7 @@ import {join,resolve} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createRequire} from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
-import {dataJobPaths,loadDataCopyJob,runDataCopyJob,processAlive,type DataJobStatus} from '../contracts/dataCopyJob.ts';
+import {CURRENT_DATA_SCHEMA_VERSION,dataJobPaths,loadDataCopyJob,runDataCopyJob,processAlive,type DataJobStatus} from '../contracts/dataCopyJob.ts';
 import {atomicWriteFile} from '../contracts/atomicFile.ts';
 
 const appRoot=resolve(__dirname,'..','..'),packaged=existsSync(join(appRoot,'daemon','daemon.cjs'));
@@ -21,7 +21,7 @@ let progress:ChildProcess|undefined;
 const startProgress=()=>{if(progress||!existsSync(electron))return;const child=spawn(electron,[...appArgs,'--zs-data-progress-job',file],{windowsHide:false,stdio:'ignore',env:{...process.env,ZS_APP_DATA:job.baseRoot}});progress=child;child.on('error',()=>{if(progress===child)progress=undefined;});};
 let result:DataJobStatus;
 try{
-  result=await runDataCopyJob(file,{maxSchemaVersion:54,verifyDatabase:path=>{
+  result=await runDataCopyJob(file,{maxSchemaVersion:CURRENT_DATA_SCHEMA_VERSION,verifyDatabase:path=>{
     const db=new Database(path,{readonly:true,fileMustExist:true});
     try{if(db.pragma('integrity_check',{simple:true})!=='ok'||(db.pragma('foreign_key_check') as unknown[]).length)throw Error('DATA_DATABASE_INVALID：数据校验未通过，未启用副本。');return{schemaVersion:db.pragma('user_version',{simple:true}) as number};}finally{db.close();}
   },onStatus:status=>{if(status.state==='waiting-close'||status.state==='copying')startProgress();},waitForOwnerMs:120000});

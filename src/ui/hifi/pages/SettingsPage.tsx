@@ -16,6 +16,7 @@ import { navigate } from '../lib/router';
 import { ArchiveManager } from './ArchivePage';
 import { isExternalDeepLink } from '../lib/deepLink';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
+import { runtimeModelDisplayName } from '../lib/format';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -407,7 +408,7 @@ function SectionRuntime() {
           <SettingsRow
             key={m.id}
             label={m.displayName}
-            hint={rt == null ? '读取中…' : rt.status === 'bound' ? `${rt.kind === 'codex' ? 'Codex' : rt.kind === 'claude' ? 'Claude' : '已配置'}${rt.model != null && rt.model !== '' ? ` · ${rt.model}` : ''}` : rt.status === 'unbound' ? '还没有选择模型' : '配置读取失败'}
+            hint={rt == null ? '读取中…' : rt.status === 'bound' ? `${rt.kind === 'codex' ? 'Codex' : rt.kind === 'claude' ? 'Claude' : '已配置'}${rt.model != null && rt.model !== '' ? <span title={`完整模型 ID：${rt.model}`}> · {runtimeModelDisplayName({id:rt.model,label:rt.model})}</span> : ''}` : rt.status === 'unbound' ? '还没有选择模型' : '配置读取失败'}
           >
             <button className="btn sm" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
               {rt?.status === 'bound' ? '查看/修改' : '配置 AI'}

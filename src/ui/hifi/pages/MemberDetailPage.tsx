@@ -11,6 +11,7 @@ import { recordWrite } from '../data/store';
 import { EditMemberModal, SaveMemberTemplateModal, UnknownMemberOperations } from '../components/MemberManagementForms';
 import { BindRuntimeModal, runtimeAuthOf, type MemberRow, type RuntimeInfo } from '../MembersPage';
 import { runtimePermissionLabel } from '../lib/runtimePermissions';
+import { runtimeModelDisplayName } from '../lib/format';
 
 export function MemberDetailPage({ projectId, memberId }: { projectId: string; memberId: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
@@ -77,6 +78,8 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
   };
   const guard = runtime?.environment != null ? { fakeAllowed: runtime.environment.allowFake === true, realDispatchGuard: runtime.environment.realDispatchGuard === true } : null;
   const effective = runtime?.effective;
+  const modelId = runtime?.binding?.model ?? effective?.model ?? '';
+  const modelName = modelId ? runtimeModelDisplayName({ id: modelId, label: modelId }) : '（未指定／未获确认）';
 
   if (project == null) return <div className="main"><div className="page"><ErrorState code="PROJECT_NOT_FOUND" detail={`项目不存在或不可访问：${projectId}。`} /></div></div>;
   return (
@@ -123,7 +126,7 @@ export function MemberDetailPage({ projectId, memberId }: { projectId: string; m
             <div className="card">
               <div className="card-title" style={{ marginBottom: 12 }}>模型与能力</div>
               <dl className="kv">
-                <dt>模型</dt><dd>{runtime?.binding?.model ?? effective?.model ?? '（未指定／未获确认）'}</dd>
+                <dt>模型</dt><dd title={modelId?`完整模型 ID：${modelId}`:undefined}>{modelName}</dd>
                 <dt>模型来源</dt><dd>{effective?.source === 'binding' ? '成员绑定' : effective?.source === 'global-default' ? '全局默认' : '未解析'}</dd>
                 <dt>保存的权限模式</dt><dd>{runtimePermissionLabel(runtime?.binding?.permissionMode,effective?.kind)}</dd>
                 <dt>请求的思考等级</dt><dd>{runtime?.binding?.effort??'渠道默认'}<div className="small faint">按本机 CLI / 模型列表保存并传入；渠道未回报有效等级时不作已生效认证。</div></dd>

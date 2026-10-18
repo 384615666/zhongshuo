@@ -50,7 +50,7 @@ export type RouteMode = 'AUTO' | 'DELIBERATE' | 'DIRECT';
  *
  * 旧模型是常驻二选一 `'task' | 'discussion'`（决策 21 / E1）：用户每次都要先声明
  * 这次是"发起任务"还是"纯备注"。用户确认后改为：**普通输入默认与 AI 交流**，
- * 只想留字不留回复时用一次性的「仅记录，不请求回复」。
+ * R90 起普通聊天/DM/线程不再提供「仅记录」入口；该合同只保留历史数据与非派发内部语义。
  *
  * 因此这里只剩两种：
  *  - `'ai'`     —— 交给 AI：主池新建根任务、任务串跟进当前任务（沿用既有路由与预算）；
@@ -260,7 +260,7 @@ export interface ThreadCard {
   projectId: string;
   roomId: string;
   anchorMessageId: string;
-  /** 记录串为 null（E1——卡片不显示任务号/状态，串内默认仅记录、永不唤醒 agent） */
+  /** 记录串为 null（E1——卡片不显示任务号/状态；历史 record 消息保持原语义） */
   taskId: string | null;
   taskStatus: string | null;
   taskResponseKind?:'conversation'|'work'|null;
@@ -271,7 +271,7 @@ export interface ThreadCard {
   taskReviewPolicy?: 'auto_deliver' | 'user_review' | null;
   taskRevision?: number | null;
   taskMode?: RouteMode | null;
-  latestRun?: { id: string; status: RunStatus } | null;
+  latestRun?: { id: string; status: RunStatus; stage?: string | null } | null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;
@@ -1120,7 +1120,15 @@ export interface DmConversation {
   activeTaskId?: string | null;
   activeRunId?: string | null;
   activeStopGeneration?: number;
-  interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>;
+  interruptedTasks?: Array<{
+    taskId: string;
+    title: string;
+    lastRunStatus: string | null;
+    lastRunId: string | null;
+    recoverable: boolean;
+    blockReason: string | null;
+    lastFailureReason?: string | null;
+  }>;
   pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离）：意见已记录、任务回 ACTIVE 且无更新交付；queued=已入队执行。
    * r59：完整执行身份（deliveryId/manifestHash/sourceRunId）——点击时冻结快照，服务端核对。 */

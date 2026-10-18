@@ -206,10 +206,11 @@ body.zs-frameless .preview-pane.maximized {
 .preview-tab-close {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 100%;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
   padding: 0;
   border: none;
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--text-4);
   cursor: pointer;
@@ -221,7 +222,7 @@ body.zs-frameless .preview-pane.maximized {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: var(--control-height-sm);
   padding: 0 7px;
   border: 1px solid transparent;
   border-radius: var(--r-sm);

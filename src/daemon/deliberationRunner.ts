@@ -58,6 +58,7 @@ import { DELIBERATE_OUTPUT_CONTRACTS, selectStageInstruction } from '../contract
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { DomainResult } from '../contracts/errors.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
+import { settleThreadReplyForRun } from './threadReplies.ts';
 import { z } from 'zod';
 
 // ---------- 步骤身份（dispatch_key 语法） ----------
@@ -284,6 +285,7 @@ export interface RunRow {
   round_no: number | null;
   roster_revision: number | null;
   budget_json: string | null;
+  dispatch_identity?: string | null;
 }
 
 export interface DeliberationOptions {
@@ -295,6 +297,8 @@ export interface DeliberationOptions {
   dispatchWaitDeadlineMs?: number;
   /** 总调用上限；缺省按 E12 核心公式推导（6N+1）。 */
   runMaxTurns?: number;
+  /** Thread-reply request identity. Non-null disables the task-level budget trigger. */
+  dispatchIdentity?: string | null;
   blobDir: string;
 }
 
@@ -316,6 +320,9 @@ export function prepareDeliberation(
     "SELECT * FROM workflow_runs WHERE task_id = ? AND mode = 'DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1",
   ).get(task.id) as RunRow | undefined;
   if (existing != null) {
+    if(options.dispatchIdentity!=null&&existing.dispatch_identity!==options.dispatchIdentity){
+      return domainErr('WORKSPACE_BUSY','该任务已有另一场独立研讨在途；本条未启动，不会自动重放');
+    }
     enqueueIndependentSteps(db, existing.id, task.id, route.frozenMemberIds);
     return domainOk({ runId: existing.id });
   }
@@ -328,9 +335,9 @@ export function prepareDeliberation(
   });
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, stage, round_no, roster_revision, budget_json, stage_started_at)
-       VALUES (?, ?, ?, ?, 'DELIBERATE', 0, 'RUNNING', 'INDEPENDENT', 0, ?, ?, ?)`,
-    ).run(runId, task.id, task.conversationId, task.threadId, prevRoster.r + 1, JSON.stringify(budget), Date.now());
+      `INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, task_revision, status, stage, round_no, roster_revision, budget_json, stage_started_at, dispatch_identity)
+       VALUES (?, ?, ?, ?, 'DELIBERATE', 0, 'RUNNING', 'INDEPENDENT', 0, ?, ?, ?, ?)`,
+    ).run(runId, task.id, task.conversationId, task.threadId, prevRoster.r + 1, JSON.stringify(budget), Date.now(), options.dispatchIdentity ?? null);
     db.prepare('INSERT INTO deliberation_run_scopes(run_id,stop_generation) SELECT ?,stop_generation FROM tasks WHERE id=?').run(runId,task.id);
     for (const memberId of route.frozenMemberIds) {
       db.prepare(
@@ -423,6 +430,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   if(unknown&&['RUNNING','WAITING'].includes(run.status)){
     db.prepare("UPDATE workflow_runs SET status='INTERRUPTED' WHERE id=?").run(run.id);
     db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
+    settleThreadReplyForRun(db,run.id,'unknown','成员执行结果未知；原请求保留，不会自动重放');
     appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:projectIdOf(db,taskId),conversationId:run.conversation_id,threadId:run.thread_id,taskId,runId:run.id,kind:'run.unknownBlocked',createdAt:now,payload:{turnId:unknown.id,message:'成员执行结果未知；保留原请求和保护，不继续自动研讨或生成成功交付'}});
     return {advanced:false,blocked:'成员执行结果未知，等待人工核实'};
   }
@@ -430,6 +438,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
     // 单轮超时/中断后结果不确定（§10.2 不伪造）：如实把任务置 BLOCKED 供用户决策
     // （重开新研讨或停止），不让界面停在"进行中"。
     db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ? AND status NOT IN ('CANCELLED','DONE','BLOCKED')").run(taskId);
+    settleThreadReplyForRun(db,run.id,'unknown','运行中断且结果未确定；原请求保留，不会自动重放');
     return { advanced: false, blocked: '运行中断（单轮超时结果不确定）' };
   }
   if (!['RUNNING', 'WAITING'].includes(run.status)) return { advanced: false };
@@ -488,6 +497,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         // 全员无有效输入：明确阻塞——不合成虚构研讨报告（§6.1）。
         db.prepare("UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?").run(run.id);
         db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
+        settleThreadReplyForRun(db,run.id,'failed',decision.reason);
         appendDomainEvent(db, {
           schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
           threadId, taskId, runId: run.id, kind: 'run.deliberationBlocked', createdAt: now, payload: { reason: decision.reason },
@@ -590,6 +600,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         // 整合不可得：不合成虚构报告——任务 BLOCKED（如实记录原因）。
         db.prepare("UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?").run(run.id);
         db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ?").run(taskId);
+        settleThreadReplyForRun(db,run.id,'failed',hostFailed?'主持者失败且无整合':'研讨预算不足以完成整合');
         appendDomainEvent(db, {
           schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
           threadId, taskId, runId: run.id, kind: 'run.synthesisUnavailable', createdAt: now,
@@ -636,6 +647,7 @@ export function settleStoppedDeliberation(db:ZhongshuoDatabase,taskId:string,run
   if(active)return false;
   db.transaction(()=>{
     db.prepare("UPDATE workflow_runs SET status='CANCELLED' WHERE id=? AND task_id=? AND status='STOPPING'").run(runId,taskId);
+    settleThreadReplyForRun(db,runId,'cancelled','研讨已停止；原请求不会自动重放');
     const latest=db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as {id:string}|undefined;
     if(latest?.id===runId)db.prepare("UPDATE tasks SET status='CANCELLED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(taskId);
     const task=db.prepare('SELECT project_id,conversation_id,conversation_thread_id FROM tasks WHERE id=?').get(taskId) as {project_id:string;conversation_id:string;conversation_thread_id:string};
@@ -776,6 +788,7 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
         VALUES(?,?,?,?,?,?,?,?,'agent',?,?,'final',?)`).run(messageId,task.project_id,input.conversationId,conv.last_message_seq,task.room_id,input.threadId,input.taskId,thread.last_message_seq,hostOf(rosterOf(db,input.runId)),JSON.stringify({text,runtimeControlResult:JSON.stringify(reportPayload)}),input.now);
       appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:input.conversationId,threadId:input.threadId,taskId:input.taskId,runId:input.runId,kind:'thread.replyAdded',createdAt:input.now,payload:{messageId}});
     }
+    settleThreadReplyForRun(db,input.runId,'succeeded',undefined,messageId);
     appendDomainEvent(db, {
       schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: projectIdOf(db, input.taskId), conversationId: input.conversationId,
       threadId: input.threadId, taskId: input.taskId, runId: input.runId, kind: 'run.finalReportPublished', createdAt: input.now,
@@ -900,11 +913,20 @@ function renderStageBody(
   task: { id: string; title: string; objective: string | null; root_message_id: string | null; project_id: string },
   roster: FrozenRoster,
 ): string {
-  const rootText = task.root_message_id != null
-    ? ((db.prepare('SELECT body_json FROM messages WHERE id = ?').get(task.root_message_id) as { body_json: string } | undefined)?.body_json ?? '')
-    : '';
+  const textOfMessage=(messageId:string|null):string=>{
+    if(messageId==null)return '';
+    const raw=(db.prepare('SELECT body_json FROM messages WHERE id = ?').get(messageId) as { body_json: string } | undefined)?.body_json;
+    if(raw==null)return '';
+    try{
+      const parsed=JSON.parse(raw) as {text?:unknown};
+      return typeof parsed.text==='string'?parsed.text:raw;
+    }catch{return raw;}
+  };
+  const rootText=textOfMessage(task.root_message_id);
+  const request=db.prepare(`SELECT q.message_id messageId FROM thread_reply_requests q WHERE q.run_id=?`).get(runId) as {messageId:string}|undefined;
+  const requestText=request?textOfMessage(request.messageId):'';
   const review=db.prepare('SELECT revision,review_status,review_note FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(task.id) as {revision:number;review_status:string;review_note:string|null}|undefined;
-  const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
+  const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}${requestText?`\n本次回复串研讨请求：${requestText}`:''}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
   if (step.stage === 'IND') {
     // 隔离：不含任何他人草稿（此刻也不读取）。文件发现=项目范围清单（两模式一致规则，第七轮
     // §13.4/§6.3：项目源码默认可读+命名排除；修复 C 组「文件名不可发现+工具面认知差」；

@@ -7,6 +7,9 @@ import {copyClosedDataRoot,type DataCopyProgress,type DataCopyResult} from './lo
 import {atomicWriteFile} from './atomicFile.ts';
 import {dataControlPaths,dataLocationHash,readDataLocationPointer} from './dataLocation.ts';
 export {dataControlPaths,dataLocationHash,readDataLocation,readDataLocationPointer,dataLocationSchema} from './dataLocation.ts';
+/** Highest database schema this build may copy or open. Kept in the browser-safe
+ * contract layer so the data-copy worker does not import persistence directly. */
+export const CURRENT_DATA_SCHEMA_VERSION = 57;
 const sha=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const path=z.string().min(1).max(4096);
 export const dataCopyJobSchema=z.strictObject({format:z.literal('zhongshuo-data-job-v1'),id:z.uuid(),action:z.enum(['backup','import']),

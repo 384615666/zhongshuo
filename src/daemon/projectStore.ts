@@ -4,6 +4,7 @@
  * 移动目录经 relocate 保留 projectId；删除项目=移除应用注册，不动源目录。
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { Project } from '../contracts/project.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
@@ -110,6 +111,50 @@ export function openProject(
   );
   // R71：新建路径同样直出真实路径（与 rowToProject 命中路径一致——open 响应两分支同 DTO）。
   return domainOk({ project: { ...project, rootPath: identity.value.rootPath, canonicalPath: identity.value.canonicalPath }, created: true });
+}
+
+export interface EnsureDefaultProjectResult {
+  project: Project | null;
+  created: boolean;
+  reason: 'created' | 'existing_root_project' | 'existing_projects' | 'default_removed';
+}
+
+/**
+ * R90 first-use bootstrap: create one app-managed project only for a truly empty
+ * project registry. Existing roots are never rewritten, renamed or made current.
+ * Re-running is duplicate-free; if the app-managed directory is already registered,
+ * the same project id is returned.
+ */
+export function ensureDefaultProject(
+  db: ZhongshuoDatabase,
+  input: { rootPath: string; displayName: string; now: number },
+): DomainResult<EnsureDefaultProjectResult> {
+  const rows = db.prepare('SELECT * FROM projects ORDER BY created_at, rowid').all() as ProjectRow[];
+  if (rows.length > 0) {
+    if (!existsSync(input.rootPath)) {
+      return domainOk({ project: null, created: false, reason: 'existing_projects' });
+    }
+    const identity = resolveDirectoryIdentity(input.rootPath);
+    if (!identity.ok) {
+      return domainOk({ project: null, created: false, reason: 'existing_projects' });
+    }
+    const hit = rows.find((row) => {
+      try {
+        return (JSON.parse(row.directory_identity) as { identityKey?: string }).identityKey === identity.value.identityKey;
+      } catch {
+        return false;
+      }
+    });
+    if (hit == null) return domainOk({ project: null, created: false, reason: 'existing_projects' });
+    if (hit.status === 'removed') return domainOk({ project: null, created: false, reason: 'default_removed' });
+    if (hit.status !== 'active') return domainOk({ project: null, created: false, reason: 'existing_projects' });
+    return domainOk({ project: rowToProject(hit), created: false, reason: 'existing_root_project' });
+  }
+
+  mkdirSync(input.rootPath, { recursive: true });
+  const opened = openProject(db, { rootPath: input.rootPath, displayName: input.displayName, now: input.now });
+  if (!opened.ok) return opened;
+  return domainOk({ project: opened.value.project, created: opened.value.created, reason: 'created' });
 }
 
 /**

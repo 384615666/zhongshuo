@@ -6,9 +6,9 @@
  *
  * 窗口控制：window.zsWindow 窄桥（枚举动作经 main 侧 senderFrame 校验，只作用于可信主窗口）；
  * close=win.close() → window-all-closed → shutdownDaemon() 既有优雅收口链（不为无边框绕过）。
- * 浏览器宿主（探针 http 环境）无 zsWindow：如实显示「浏览器宿主」，按钮提示而非假装可用。
- * 状态行只用**真实已取得的服务事实**：当前项目名（store）+ daemon 连接态（boot/断线事件）
- * ——不接入原型种子计数冒充实际运行。
+ * 浏览器宿主（探针 http 环境）无 zsWindow：保留同样的控件布局，按钮 tooltip 说明能力边界。
+ * R90 起正常态只显示品名与当前项目；daemon 在线本身不证明 AI 可回复，
+ * 因此不再常驻“已连接/真实任务”。仅启动中或断线等需要处理的事实才出现状态入口。
  *
  * R66 P1（反例=冻结 v3 点「项目」卸载整个 React root）：
  *  - ProjectMenu 的 selector 必须返回**稳定引用**（先取 s.projects 再 useMemo filter——
@@ -16,19 +16,16 @@
  *  - portal 内容整体包在 TitleBarBoundary 内：标题栏任何渲染错误只降级为**最小控制条**
  *    （名称+拖动+三枚窗口按钮，零 store 订阅），主界面与窗口控制不再被连带卸载；
  *    ProjectMenu 另有一层内边界——菜单异常只关菜单，标题栏其余功能保留。
- *  - 项目入口还原原型形态：`项目管理 · [分支] · 当前项目名 ▾` 单按钮开菜单；
- *    「后台任务 N · N turn」状态按钮通过正式 project.taskSummary 读取项目计数（未读显示 —）。
+ *  - 项目入口保留单个“当前项目名 ▾”按钮，菜单内仍可搜索、切换、显隐与打开文件夹。
  */
-import { Component, useEffect, useMemo, useState,useRef, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import { Tag,Menu } from './ui';
+import { Menu } from './ui';
 import { useStore, toast } from '../data/store';
-import { command } from '../bridge';
 import { switchFocusProject } from '../loader';
 import { toggleProjectVisible } from '../data/actions-nav';
 import { navigate } from '../lib/router';
-import type { ProjectTaskSummary } from '../../../contracts/projectTaskSummary';
 
 interface ZsWindowState { maximized: boolean; fullScreen: boolean; focused: boolean }
 type ZsWindowBridge = {
@@ -60,9 +57,9 @@ class TitleBarBoundary extends Component<{ children: ReactNode }, { failed: bool
           <span className="zs-tb-name">众说</span>
           <span className="zs-tb-stat" title="标题栏渲染出错，已降级为最小控制条；主界面不受影响（可重启应用恢复完整标题栏）">标题栏已降级</span>
           <div className="zs-tb-drag" title="拖动窗口；双击最大化/还原" onDoubleClick={() => { void d?.toggleMaximize(); }} />
-          <button className="zs-winbtn" title="最小化" onClick={() => { void d?.minimize(); }}><Icon name="minus" size={12} /></button>
-          <button className="zs-winbtn" title="最大化/还原" onClick={() => { void d?.toggleMaximize(); }}><Icon name="maximize" size={11} /></button>
-          <button className="zs-winbtn close" title="关闭窗口（经既有优雅停机链）" onClick={() => { void d?.close(); }}><Icon name="x" size={12} /></button>
+          <button type="button" className="zs-winbtn" title="最小化" aria-label="最小化" onClick={() => { void d?.minimize(); }}><Icon name="minus" size={12} /></button>
+          <button type="button" className="zs-winbtn" title="最大化/还原" aria-label="最大化或还原" onClick={() => { void d?.toggleMaximize(); }}><Icon name="maximize" size={11} /></button>
+          <button type="button" className="zs-winbtn close" title="关闭窗口（经既有优雅停机链）" aria-label="关闭窗口" onClick={() => { void d?.close(); }}><Icon name="x" size={12} /></button>
         </div>
       );
     }
@@ -86,8 +83,6 @@ export function TitleBar() {
   // 首启 ready 不再永久等同在线；浏览器宿主收不到事件时保持 online 缺省（按 boot 呈现）。
   const conn = useStore((s) => s.conn);
   const connInfo = useStore((s) => s.connInfo);
-  /** 派发防护标识（r56：演练包自绘标题栏必须可见「模拟/真实派发」——runtime.status 自述）。 */
-  const [guard, setGuard] = useState<{ fakeAllowed: boolean; realDispatchGuard: boolean } | null>(null);
   const [pmAt, setPmAt] = useState<{ x: number; y: number } | null>(null);
   const projectTrigger=useRef<HTMLButtonElement>(null);
   const [state, setState] = useState<ZsWindowState>({ maximized: false, fullScreen: false, focused: true });
@@ -99,14 +94,6 @@ export function TitleBar() {
     void b.getState().then((r) => { if (r.ok && r.state != null) setState(r.state); }).catch(() => { /* 状态读取失败保持默认——按钮仍可用 */ });
     return b.onStateChange(setState);
   }, []);
-
-  // 派发防护状态只在连接就绪后取一次（daemon env 不随运行变化；读取失败不显示标识）。
-  useEffect(() => {
-    if (boot !== 'ready') return;
-    void command<{ dispatchGuard?: { fakeAllowed: boolean; realDispatchGuard: boolean } }>('runtime.status', {})
-      .then((r) => { if (r.dispatchGuard != null) setGuard(r.dispatchGuard); })
-      .catch(() => { /* 旧 daemon 无该字段/读取失败——不显示标识 */ });
-  }, [boot]);
 
   // portal 不会清空容器——挂载时移除 hifi-flag.js 的最小壳兄弟节点（React 版接管）；
   // React 整体失败卸载时由看门狗 __zsTitlebarMinimal 重建（兜底合同不变）。
@@ -120,32 +107,62 @@ export function TitleBar() {
 
   if (mount == null) return null; // --no-hifi（原生框）或挂载点缺失——不自绘
 
-  // 连接态合成（r55）：断线优先于 boot（首启后掉线不再显示「已连接」）；重连由 main 负责，
-  // 恢复即回到在线。connInfo 为 main 给的断线说明（原样透传）。
-  const connLabel = conn === 'failed' ? '恢复失败 · 可查看本地诊断' : conn==='suspended' ? '宿主已挂起' : conn==='recovering' ? '正在恢复连接…' : conn === 'offline'
-    ? `已断开——重连中${connInfo != null && connInfo.length > 0 ? `（${connInfo}）` : ''}`
-    : boot === 'pending' ? '连接服务中…' : boot === 'failed' ? '服务连接失败' : '已连接';
-  const connOff = conn !== 'online' || boot !== 'ready';
+  // 正常在线时不占标题栏；只有需要用户处理（或仍在启动）的状态才出现。
+  // 文案只描述已取得的连接事实，不把 daemon 连上等同为“AI 可回复”。
+  const connectionLabel = conn === 'failed'
+    ? '连接恢复失败'
+    : conn === 'suspended'
+      ? '连接已暂停'
+      : conn === 'recovering'
+        ? '正在恢复连接'
+        : conn === 'offline'
+          ? '连接已断开'
+          : boot === 'pending'
+            ? '正在连接服务'
+            : boot === 'failed'
+              ? '服务连接失败'
+              : null;
+  const connectionTone = conn === 'failed' || conn === 'offline' || boot === 'failed' ? 'danger' : 'warning';
+  const connectionDetail = [
+    connectionLabel,
+    connInfo != null && connInfo.length > 0 ? connInfo : null,
+    '打开设置查看本地诊断；未知结果信封会保留，不自动重发。',
+  ].filter((part): part is string => part != null).join(' · ');
   return createPortal(
     <TitleBarBoundary>
-      <div className="zs-titlebar" data-zs-titlebar-rendered="react">
+      <div
+        className="zs-titlebar"
+        data-zs-titlebar-rendered="react"
+        data-zs-connection-phase={conn}
+        data-zs-boot-phase={boot}
+      >
         <span className="zs-tb-name">众说</span>
-        <span className="zs-tb-stat zs-tb-no-drag" data-zs-conn={connOff ? 'offline' : 'online'} data-zs-connection-phase={conn} title={connOff ? `连接状态：${conn}${connInfo ? ` · ${connInfo}` : ''}；未知结果信封保留，不自动重发。恢复失败可查看设置中的本地诊断。` : project != null ? `当前项目：${project.displayName}` : '尚未打开项目'}>
-          <span className={connOff ? 'dot-off' : 'dot'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 5, verticalAlign: 1, background: connOff ? '#c9312e' : '#22a55e' }} />
-          {connLabel}
-        </span>
+        {connectionLabel != null ? (
+          <button
+            type="button"
+            className="zs-tb-status zs-tb-no-drag"
+            data-tone={connectionTone}
+            data-pending={conn === 'recovering' || boot === 'pending' ? '1' : undefined}
+            title={connectionDetail}
+            aria-label={`${connectionLabel}，打开设置查看本地诊断`}
+            onClick={() => navigate('/settings?section=help')}
+          >
+            <Icon name={conn === 'recovering' || boot === 'pending' ? 'loader' : 'wifi-off'} size={12} />
+            <span>{connectionLabel}</span>
+          </button>
+        ) : null}
 
-        {/* 项目管理入口（原型第十七批 §二形态）：按钮本身显示当前项目名与分支——
-            「项目管理 · [分支] · 项目名 ▾」；点开是同一个菜单（勾选=侧栏显示/点名=切换/
-            打开文件夹）。无项目时显示「未选择项目」。 */}
+        {/* 正常顶栏只保留当前项目入口；搜索、显示/隐藏与打开文件夹仍在同一菜单。 */}
         <button
-          className="zs-tb-stat zs-tb-no-drag zs-tb-project"
+          type="button"
+          className="zs-tb-project zs-tb-no-drag"
           data-zs-project-menu-btn="1"
+          data-project-status={project?.status ?? 'none'}
           ref={projectTrigger}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--border,#dbe2ea)', borderRadius: 6, padding: '2px 8px' }}
           title={project != null
             ? `切换项目、显示项目或打开文件夹\n当前项目：${project.displayName}（${project.rootPath}）`
             : '打开文件夹添加项目'}
+          aria-label={project != null ? `项目管理，当前项目：${project.displayName}` : '项目管理，尚未选择项目'}
           aria-haspopup="menu"
           aria-expanded={pmAt != null}
           onClick={(e) => {
@@ -154,41 +171,22 @@ export function TitleBar() {
           }}
         >
           <Icon name={project?.status === 'missing' ? 'alert-triangle' : 'folder'} size={12} className={project?.status === 'missing' ? 'warn-icon' : 'faint'} />
-          项目管理
-          {project?.isGit && project.gitBranch ? <Tag plain icon="git-branch">{project.gitBranch}</Tag> : null}
-          <span className="faint">·</span>
-          <span style={{ fontWeight: 600 }}>{project?.displayName ?? '未选择项目'}</span>
+          <span className="zs-tb-project-name">{project?.displayName ?? '选择项目'}</span>
           <Icon name="chevron-down" size={11} className="faint" />
         </button>
 
-        {/* 后台任务状态（原型形态）：正式项目任务/turn 汇总，受众过滤；未读显示未知，点击进看板。 */}
-        <TitleBarStatButton />
-
-        {guard != null ? (
-          <span
-            className="zs-tb-stat zs-tb-no-drag"
-            data-zs-dispatch-guard={guard.fakeAllowed ? 'fake' : 'real'}
-            title={guard.fakeAllowed
-              ? '模拟运行：消息不会请求真实 AI'
-              : '真实任务：消息会交给已配置的 AI'}
-            style={{ fontSize: 11, padding: '1px 8px', borderRadius: 999, border: guard.fakeAllowed ? '1px solid var(--warning,#b45309)' : '1px solid var(--border,#dbe2ea)', color: guard.fakeAllowed ? 'var(--warning,#b45309)' : 'var(--text-2,#64748b)' }}
-          >
-            {guard.fakeAllowed ? '模拟运行' : '真实任务'}
-          </span>
-        ) : null}
         <div
           className="zs-tb-drag"
           title="拖动窗口；双击最大化/还原"
           onDoubleClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}
         />
-        {d == null ? <span className="zs-tb-note">浏览器宿主（窗口控制由桌面客户端提供）</span> : null}
-        <button className="zs-winbtn" title={d == null ? '最小化（桌面客户端可用）' : '最小化'} onClick={() => { void d?.minimize(); }}>
+        <button type="button" className="zs-winbtn" title={d == null ? '最小化（桌面客户端可用）' : '最小化'} aria-label="最小化" onClick={() => { void d?.minimize(); }}>
           <Icon name="minus" size={12} />
         </button>
-        <button className="zs-winbtn" title={state.maximized ? '还原' : '最大化'} onClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}>
+        <button type="button" className="zs-winbtn" title={state.maximized ? '还原' : '最大化'} aria-label={state.maximized ? '还原窗口' : '最大化窗口'} onClick={() => { void d?.toggleMaximize().then((r) => { if (r.ok && typeof r.maximized === 'boolean') setState((s) => ({ ...s, maximized: r.maximized as boolean })); }); }}>
           <Icon name={state.maximized ? 'copy' : 'maximize'} size={11} />
         </button>
-        <button className="zs-winbtn close" title="关闭窗口（经既有优雅停机链：daemon 收拢后退出）" onClick={() => { void d?.close(); }}>
+        <button type="button" className="zs-winbtn close" title="关闭窗口（经既有优雅停机链：daemon 收拢后退出）" aria-label="关闭窗口" onClick={() => { void d?.close(); }}>
           <Icon name="x" size={12} />
         </button>
         {pmAt != null ? (
@@ -199,51 +197,6 @@ export function TitleBar() {
       </div>
     </TitleBarBoundary>,
     mount,
-  );
-}
-
-/** 当前项目持久任务/turn 汇总；项目切换立即隐藏旧范围，失败保留同范围的上次事实。 */
-export function TitleBarStatButton() {
-  const s = useStore((x) => x);
-  const project = s.projects.find((p) => p.id === s.activeProjectId) ?? null;
-  const projectId = project?.id;
-  const [snapshot, setSnapshot] = useState<ProjectTaskSummary | null>(null);
-  const [failure, setFailure] = useState<{ projectId: string; message: string } | null>(null);
-  useEffect(() => {
-    if (projectId == null) return;
-    let alive = true;
-    let pending = false;
-    const refresh = () => {
-      if (pending) return;
-      pending = true;
-      void command<ProjectTaskSummary>('project.taskSummary', { projectId })
-        .then((data) => { if (alive && data.projectId === projectId) { setSnapshot(data); setFailure(null); } })
-        .catch((e: unknown) => { if (alive) setFailure({ projectId, message: (e as Error).message }); })
-        .finally(() => { pending = false; });
-    };
-    refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !document.body.classList.contains('legacy-on')) refresh();
-    }, 5000);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, [projectId]);
-  const facts = snapshot?.projectId === projectId ? snapshot : null;
-  const error = failure != null && failure.projectId === projectId ? failure.message : null;
-  return (
-    <button
-      className="zs-tb-stat zs-tb-no-drag"
-      data-zs-running-tasks={facts == null ? undefined : String(facts.unfinishedTasks)}
-      data-zs-running-turns={facts == null ? undefined : String(facts.activeTurns)}
-      title={project != null
-        ? `${project.displayName} 的未完成任务与正在运行的数量${error != null ? `；读取失败：${error}` : ''}`
-        : '打开项目后显示该项目的任务状态'}
-      onClick={() => navigate(project != null ? `/board?scope=project&projectId=${project.id}` : '/board')}
-    >
-      <Icon name="activity" size={12} />
-      进行中 <strong>{facts?.unfinishedTasks ?? '—'}</strong>
-      <span className="faint"> · 正在运行 {facts?.activeTurns ?? '—'}</span>
-      {error != null ? <span title={error}> · 读取失败</span> : null}
-    </button>
   );
 }
 

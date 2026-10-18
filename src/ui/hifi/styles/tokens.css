@@ -145,6 +145,25 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
+
+  /* ---------- 交互控件（R90）----------
+     相同用途的按钮共用尺寸与状态合同。图标按钮另分标准/紧凑两档，
+     项目展开箭头、行尾菜单和弹层关闭键都落在紧凑档。 */
+  --control-height: 30px;
+  --control-height-sm: 26px;
+  --control-icon-size: 28px;
+  --control-icon-compact: 24px;
+  --control-radius: var(--r-sm);
+  --control-focus-width: 2px;
+  --control-focus-offset: 1px;
+  --control-focus-offset-inset: -3px;
+  --control-disabled-opacity: 0.46;
+
+  /* 自绘标题栏（React 版与最小壳共享尺寸；关闭态沿用 Windows 习惯）。 */
+  --titlebar-height: 38px;
+  --titlebar-window-button-width: 44px;
+  --titlebar-close-bg: #d92d20;
+  --titlebar-close-fg: #ffffff;
 }
 
 :root[data-theme='dark'] {

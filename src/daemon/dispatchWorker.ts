@@ -3,7 +3,7 @@ import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, 
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
-import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn} from './threadReplies.ts';
+import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { acquireLease } from './workspaceLocks.ts';
@@ -457,23 +457,52 @@ export class DispatchWorker {
     const route = task.route_json != null ? (JSON.parse(task.route_json) as TopLevelRouteOutcome) : null;
     // DELIBERATE：编排开关开启时走 PREPARE（程序完成）；关闭时维持模式门禁 BLOCKED。
     if (route != null && route.kind === 'dispatch' && route.mode === 'DELIBERATE' && this.enableDeliberate) {
+      if(generalRequest&&task.status==='DONE'){
+        this.transitionTask(task.id,'ACTIVE');
+        task.status='ACTIVE';
+      }
+      let requestBudget:number|undefined;
+      if(generalRequest?.deliberationBudgetJson!=null){
+        try{
+          const parsed=JSON.parse(generalRequest.deliberationBudgetJson) as {maxTurns?:unknown};
+          if(typeof parsed.maxTurns==='number'&&Number.isSafeInteger(parsed.maxTurns)&&parsed.maxTurns>0)requestBudget=parsed.maxTurns;
+        }catch{/* invalid snapshot is rejected below */}
+      }
+      if(generalRequest?.deliberationBudgetJson!=null&&requestBudget==null){
+        setThreadReplyState(this.db,generalRequest.messageId,'failed','本次研讨预算快照损坏；未启动模型，原请求不会自动重放');
+        this.transitionTask(task.id,'BLOCKED');
+        this.audit(task,null,null,'task.deliberationPrepareFailed',{message:'invalid-thread-deliberation-budget',messageId:generalRequest.messageId});
+        await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
+        return;
+      }
+      const baseOptions=this.deliberationOptions(task.project_id);
       const prepared = prepareDeliberation(
         this.db,
         { id: task.id, conversationId: task.conversation_id, threadId: task.conversation_thread_id ?? null },
         route,
-        this.deliberationOptions(task.project_id),
+        {
+          ...baseOptions,
+          ...(requestBudget!=null?{runMaxTurns:requestBudget}:{}),
+          ...(generalRequest?{dispatchIdentity:generalRequest.dispatchIdentity}:{}),
+        },
       );
       if (!prepared.ok) {
+        if(generalRequest)setThreadReplyState(this.db,generalRequest.messageId,'failed',prepared.error.message);
         await this.transitionTask(task.id, 'BLOCKED');
         this.audit(task, null, null, 'task.deliberationPrepareFailed', { message: prepared.error.message });
       } else {
-        this.audit(task, prepared.value.runId, null, 'run.prepared', { mode: 'DELIBERATE' });
+        if(generalRequest)bindThreadReplyRun(this.db,generalRequest.messageId,prepared.value.runId);
+        this.audit(task, prepared.value.runId, null, 'run.prepared', {
+          mode: 'DELIBERATE',
+          ...(generalRequest?{dispatchIdentity:generalRequest.dispatchIdentity,budgetMaxTurns:requestBudget}:{}),
+        });
       }
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
     // 未知路由或宿主显式关闭的研讨不可执行；不冒充单成员执行。
     if (route == null || route.kind !== 'dispatch' || !['DIRECT','AUTO'].includes(route.mode)) {
+      if(generalRequest)setThreadReplyState(this.db,generalRequest.messageId,'failed',route?.kind==='dispatch'&&route.mode==='DELIBERATE'?'独立研讨当前未启用；原请求未启动，不会自动重放':'当前路由不可执行；原请求未启动');
       await this.transitionTask(task.id, 'BLOCKED');
       this.audit(task, null, null, 'task.statusChanged', {
         status: 'BLOCKED',
@@ -601,6 +630,54 @@ export class DispatchWorker {
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
     try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
     if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
+    let baselineChangeSetId: string | null = null;
+    let baselineReadonlyReason: string | null = null;
+    if (writeAccess.modificationAuthorized) {
+      const baseline = captureBaseline(this.db, {
+        projectId: task.project_id,
+        taskId: task.id,
+        runId,
+        appDataDir: this.appDataDir,
+      });
+      if (!baseline.ok) {
+        if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', baseline.error.message);
+        this.transitionTask(task.id, 'BLOCKED');
+        this.audit(task, null, null, 'task.contextAssemblyFailed', {
+          reason: 'write-baseline-failed',
+          message: baseline.error.message,
+        });
+        await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+      if (baseline.value.truncated) {
+        const message = '写入基线不完整：目录扫描失败、路径被拒绝或文件清单超出安全范围，未启动模型';
+        if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', message);
+        this.transitionTask(task.id, 'BLOCKED');
+        this.audit(task, null, null, 'task.contextAssemblyFailed', {
+          reason: 'write-baseline-incomplete',
+          message,
+        });
+        await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
+        return;
+      }
+      baselineChangeSetId = baseline.value.changeSetId;
+      if (baseline.value.contentUnavailable.length > 0) {
+        // A complete path/hash inventory can still have files that are too
+        // large for byte-level restore. Ordinary chat must continue, but this
+        // run cannot be granted a write root without a complete recovery basis.
+        writeAccess = {
+          ...writeAccess,
+          fullAccess: false,
+          modificationAuthorized: false,
+          allowedWriteRoots: [],
+          launchConfigurationKey: undefined,
+          tier: 'plan',
+          intent: 'analyze',
+          policyId: 'policy-analyze',
+        };
+        baselineReadonlyReason = `项目内有 ${baseline.value.contentUnavailable.length} 个文件超过内容级前像上限；本次执行按只读进行，普通问答仍可继续。`;
+      }
+    }
     const imageBindingAtAssembly = JSON.stringify(resolveMemberRuntime(this.db, member.id, this.defaultKindOf()));
     const imageCapabilityAtAssembly = memberImageCapability(this.db, member.id);
     const executionBasis=generalRequest||coordination?.request?this.db.prepare(`SELECT t.current_delivery_id deliveryId,d.revision,d.manifest_hash manifestHash FROM tasks t LEFT JOIN task_deliveries d ON d.id=t.current_delivery_id WHERE t.id=?`).get(task.id) as {deliveryId:string|null;revision:number|null;manifestHash:string|null}:null;
@@ -608,7 +685,7 @@ export class DispatchWorker {
       db: this.db,
       writeAccess,
       allowImages: imageCapabilityAtAssembly.status === 'supported',
-      coordinationNote:[coordination?.note,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
+      coordinationNote:[coordination?.note,baselineReadonlyReason,executionBasis?`本条为用户新发的消息，按当前问题回应；只有明确要求修改时才修改文件。执行时读取的当前成果：${JSON.stringify(executionBasis)}。历史返工意见是上下文，不是本条的自动执行授权。`:null].filter(Boolean).join('\n')||undefined,
       coordination:coordination?{phase:coordination.kind,runId:coordination.run?.run_id??null,role:coordination.kind==='child'?coordination.run.role:'coordinator'}:undefined,
       communicationContract:communicationForTurn(this.db,task.id,member.id,coordination?.kind,coordination?.run?.run_id,claimed.dispatch_key),
       blobRoot: join(this.appDataDir, 'blobstore'), // 附件读取按本次 appData 实根校验（第二十八轮三）
@@ -701,6 +778,12 @@ export class DispatchWorker {
         }
         this.transitionTask(task.id, 'ACTIVE');
         this.audit(task, runId, turnId, 'run.created', { mode: 'DIRECT', bundleId: assembled.value.bundleId, resultKey: assembled.value.resultKey });
+        if (baselineReadonlyReason != null) {
+          this.audit(task, runId, turnId, 'run.baselineReadonly', {
+            reason: baselineReadonlyReason,
+            changeSetId: baselineChangeSetId,
+          });
+        }
         // 修复工作项原子消费：与 run/turn 创建同事务（崩溃时二者一致——要么都成、要么
         // 工作项保持 pending 可重领，不丢失不降级）；resultKey 关联=consumed_turn_id 绑定。
         if (isRepairDispatch && repairItem != null) {
@@ -731,12 +814,7 @@ export class DispatchWorker {
         throw slotError;
       }
 
-      if(writeAccess.modificationAuthorized) {
-        const baseline=captureBaseline(this.db,{projectId:task.project_id,taskId:task.id,runId,appDataDir:this.appDataDir});
-        if(!baseline.ok) throw new Error(`写入基线失败：${baseline.error.message}`);
-        if(baseline.value.truncated || baseline.value.contentUnavailable.length) throw new Error('写入基线不完整：超出安全快照范围，未启动模型');
-        this.kvSet(`write-changeset:${turnId}`,baseline.value.changeSetId);
-      }
+      if (baselineChangeSetId != null) this.kvSet(`write-changeset:${turnId}`, baselineChangeSetId);
       // 层 A 常驻提示词：会话绑定渲染快照（规格 §5.1；渲染失败/敏感命中不开会话）。
       // DM（DEV-22）：私信模板——无房间/线程上下文，不填伪造 roomId。
       startupPhase = 'standing-prompt';
@@ -1330,12 +1408,20 @@ export class DispatchWorker {
     const repairError = isRepair ? this.kvGet(`delib:repair:${claimed.dispatch_key}`) : undefined;
     const assembly = assembleStepInput(this.db, { taskId: step.taskId, runId: run.id, step, repairError: repairError ?? undefined });
     if (!assembly.ok) {
+      this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=? AND status IN ('pending','late')").run(run.id,step.memberId);
       await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       this.audit(task, run.id, null, 'task.contextAssemblyFailed', { reason: 'delib-assembly-failed', message: assembly.error.message, stage: step.stage });
+      pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
     const budget = (run.budget_json != null ? JSON.parse(run.budget_json) : null) as DeliberationBudgetState | null;
     if (budget == null) {
+      this.db.transaction(()=>{
+        this.db.prepare("UPDATE workflow_runs SET status='FAILED' WHERE id=?").run(run.id);
+        this.transitionTask(task.id,'BLOCKED');
+        settleThreadReplyForRun(this.db,run.id,'failed','研讨预算记录损坏；未启动模型，原请求不会自动重放');
+        this.audit(task,run.id,null,'run.stepFailed',{stage:step.stage,memberId:step.memberId,message:'missing-deliberation-budget'});
+      })();
       await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }

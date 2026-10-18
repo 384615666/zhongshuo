@@ -236,19 +236,20 @@ export function Switch({
   disabled?: boolean;
 }) {
   return (
-    <label
+    <button
+      type="button"
       className={`switch${disabled ? ' disabled' : ''}`}
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
       title={hint}
-      onClick={(e) => {
-        e.preventDefault();
-        if (!disabled) onChange(!checked);
-      }}
+      onClick={() => onChange(!checked)}
     >
       <span className={`switch-track${checked ? ' on' : ''}`}>
         <span className="switch-knob" />
       </span>
       {label ? <span>{label}</span> : null}
-    </label>
+    </button>
   );
 }
 
@@ -285,6 +286,14 @@ export function Segmented<T extends string>({
 
 /* ---------------- 浮层 ---------------- */
 
+function OverlayCloseButton({ onClose }: { onClose: () => void }) {
+  return (
+    <button type="button" className="icon-btn overlay-close" title="关闭" aria-label="关闭" onClick={onClose}>
+      <Icon name="x" size={15} />
+    </button>
+  );
+}
+
 export function Modal({
   title,
   subtitle,
@@ -309,9 +318,7 @@ export function Modal({
             <div className="overlay-title">{title}</div>
             {subtitle ? <div className="small muted" style={{ marginTop: 2 }}>{subtitle}</div> : null}
           </div>
-          <button className="icon-btn" onClick={onClose} aria-label="关闭">
-            <Icon name="x" size={15} />
-          </button>
+          <OverlayCloseButton onClose={onClose} />
         </div>
         <div className="overlay-body">{children}</div>
         {footer ? <div className="overlay-foot">{footer}</div> : null}
@@ -344,9 +351,7 @@ export function Drawer({
             <div className="overlay-title">{title}</div>
             {subtitle ? <div className="small muted" style={{ marginTop: 2 }}>{subtitle}</div> : null}
           </div>
-          <button className="icon-btn" onClick={onClose} aria-label="关闭">
-            <Icon name="x" size={15} />
-          </button>
+          <OverlayCloseButton onClose={onClose} />
         </div>
         <div className="overlay-body">{children}</div>
         {footer ? <div className="overlay-foot">{footer}</div> : null}

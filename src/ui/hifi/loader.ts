@@ -12,10 +12,11 @@
 import { command, sendCommand, bridge } from './bridge';
 import type { BridgeOutcome } from './bridge';
 import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead, getDraftFull, setDraftFull as setDraftFullShim, initDraftPersistence, markPersistenceDegraded, mergeInheritedSnapshots, setLegacyImportCandidates, readInheritMarker, writeInheritMarker } from './data/store';
-import type { HifiState, HifiDraftAttachment, ThreadTaskDetail } from './data/store';
+import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
-import type { AppState, Message, Task, Thread, ThreadCard } from './data/types';
+import type { Message, Task, Thread, ThreadCard } from './data/types';
+import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, navigate } from './lib/router';
 import { navIntentActive, cancelAllNavIntents, beginUserNavIntent, onNavIntentCancel, releaseNavIntent, type NavIntent } from './lib/navIntent';
@@ -31,7 +32,7 @@ interface ConvListData { conversations: Array<{ conversationId: string; peerDisp
 interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
 interface HistoryData { messages: HistoryMessage[] }
 import {chatAnswer} from '../../contracts/chatAnswer';
-export interface SendResult { taskId?: string; threadId?: string; disposition?: string }
+export interface SendResult { taskId?: string; threadId?: string; disposition?: string; deliberationBudget?: { maxTurns: number } }
 
 const textOf = (m: HistoryMessage): string => {
   const raw = m.bodyJson ?? m.body_json;
@@ -121,8 +122,9 @@ async function attemptLegacyInheritance(ns: string, id: { localUserId: string; a
   for (const c of crossDir) {
     const raw = localStorage.getItem(c.key) ?? '';
     if (raw.length === 0) continue;
-    let embedded: unknown = null;
-    try { embedded = (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { embedded = null; }
+    const embedded: unknown = (() => {
+      try { return (JSON.parse(raw) as { dataRootId?: unknown })?.dataRootId; } catch { return null; }
+    })();
     if (typeof embedded === 'string' && embedded.length >= 8) {
       if (embedded === id.dataRootId) validated.push({ raw, sourceDir: `${c.dir}（内嵌同根）` });
       // 内嵌异根：不合并、不导入（明确属于其它逻辑根）。
@@ -216,6 +218,52 @@ export async function bootRemembered(): Promise<void> {
           setState((st) => ({ ...st, boot: 'failed', bootError: `记忆的项目路径无法打开：${(e as Error).message}——可打开其它文件夹或修改「启动时打开的项目」` }));
         }
         return;
+      }
+      // R90: a server-side navigation preference may restore focus without a
+      // remembered filesystem path. Load that project so rooms/recipients exist,
+      // but do not navigate over an explicit cold deep link or forced room.
+      const restoredId = getState().activeProjectId;
+      const restored = getState().projects.find((project) => project.id === restoredId);
+      if (restored != null && restored.removedAt == null && restored.archivedAt == null && restored.rootPath.length > 0) {
+        const initialRoute = window.location.hash.replace(/^#/, '') || '/welcome';
+        await openProjectByPath(restored.rootPath, {
+          fromIntent: true,
+          navigateToRoom: initialRoute === '/welcome' || initialRoute === '/',
+        });
+        return;
+      }
+
+      // Truly empty registry only: create the app-managed default project/room and
+      // auto-discovered local AI members. Existing roots are never displaced.
+      if (getState().projects.length === 0) {
+        try {
+          const ensured = await command<{
+            project: { id: string; displayName: string; rootPath?: string; canonicalPath?: string } | null;
+            created: boolean;
+            reason: string;
+            availableAgentCount?: number;
+          }>('project.ensureDefault', {});
+          if (ensured.project != null) {
+            await loadProjectRegistry();
+            recordWrite(
+              'project.ensureDefault',
+              `${ensured.created ? '已创建' : '已复用'}「${ensured.project.displayName}」及默认房间${ensured.availableAgentCount === 0 ? '；尚未发现可用 AI 渠道' : `；已准备 ${ensured.availableAgentCount} 位可用 AI`}`,
+            );
+            const initialRoute = window.location.hash.replace(/^#/, '') || '/welcome';
+            await openProjectByPath(ensured.project.rootPath ?? ensured.project.canonicalPath ?? '', {
+              fromIntent: true,
+              navigateToRoom: initialRoute === '/welcome' || initialRoute === '/',
+            });
+            return;
+          }
+        } catch (error) {
+          setState((st) => ({
+            ...st,
+            boot: 'failed',
+            bootError: `默认项目准备失败：${(error as Error).message}。可重试或直接打开文件夹`,
+          }));
+          return;
+        }
       }
       // r57：成功读到**空记忆**=正常无项目状态——立即就绪并显示欢迎/打开入口，
       // 不再继续等 60 秒后误报「启动失败」（空项目≠失败）。
@@ -468,7 +516,8 @@ export async function openProjectByPath(path: string, opts?: { fromIntent?: bool
       // 最终落位也是本操作的一部分：先完成路由交接，再释放占位，旧路由不能插入新打开。
       stopListening();
       if (intent != null) releaseNavIntent(intent);
-      const first = getState().rooms.find((r) => r.projectId === p.id);
+      const projectRooms = getState().rooms.filter((r) => r.projectId === p.id);
+      const first = projectRooms.find((room) => room.archivedAt == null) ?? projectRooms[0];
       const target = first != null ? `/project/${p.id}/room/${first.id}` : `/project/${p.id}`;
       navigate(target);
       landedHash = `#${target}`;
@@ -588,6 +637,115 @@ export async function switchFocusProject(projectId: string): Promise<boolean> {
   const { persistNav } = await import('./data/store');
   persistNav(getState());
   return true;
+}
+
+export interface SidebarRoomSummary {
+  id: string;
+  name: string;
+  archivedAt?: number;
+  revision: number;
+}
+
+/** Sidebar-only room index. It is deliberately independent of AppState.rooms,
+ * which represents the active project's full roster-bearing projection. */
+export async function loadSidebarRooms(projectId: string): Promise<SidebarRoomSummary[]> {
+  const data = await command<RoomListData>('room.list', { projectId });
+  return (data.items ?? []).map((room) => ({
+    id: room.id,
+    name: room.name,
+    archivedAt: room.archivedAt ?? undefined,
+    revision: room.revision ?? 0,
+  }));
+}
+
+/** Open a room owned by another project without letting a late response steal
+ * navigation from a newer intent. The room is checked before focus is committed;
+ * only after the target project's projections load do we route to it. */
+export async function openSidebarRoom(projectId: string, roomId: string): Promise<boolean> {
+  const intent = beginUserNavIntent();
+  const before = getState();
+  const previous = {
+    activeProjectId: before.activeProjectId,
+    loadGen: before.loadGen ?? 0,
+    visibleProjectIds: before.visibleProjectIds,
+    expandedProjectIds: before.expandedProjectIds,
+    rooms: before.rooms,
+    members: before.members,
+    memberRuntimes: before.memberRuntimes,
+    dms: before.dms,
+  };
+  let gen: number | null = null;
+  let committed = false;
+  try {
+    const project = getState().projects.find((item) => item.id === projectId);
+    if (project == null || project.removedAt != null) {
+      toast('该项目已移除或不在项目列表中，未切换', 'error');
+      return false;
+    }
+    if (project.archivedAt != null) {
+      toast('该项目已归档，历史只读，不能进入日常房间', 'warn');
+      return false;
+    }
+    const rooms = await loadSidebarRooms(projectId);
+    if (!navIntentActive(intent)) return false;
+    const target = rooms.find((room) => room.id === roomId && room.archivedAt == null);
+    if (target == null) {
+      toast('目标房间不存在或已归档，项目与草稿均未切换', 'error');
+      return false;
+    }
+    const nextGen = (getState().loadGen ?? 0) + 1;
+    gen = nextGen;
+    setState((state) => ({
+      ...state,
+      loadGen: nextGen,
+      activeProjectId: projectId,
+      openInFlight: true,
+      visibleProjectIds: [...new Set([...state.visibleProjectIds, projectId])],
+      expandedProjectIds: [...new Set([...state.expandedProjectIds, projectId])],
+    }));
+    const loaded = await Promise.allSettled([refreshRooms(projectId), refreshMembers(projectId), refreshDms(projectId)]);
+    if (loaded[0]?.status === 'rejected') throw loaded[0].reason;
+    if (!navIntentActive(intent) || getState().activeProjectId !== projectId) return false;
+    if (loaded[1]?.status === 'rejected' || loaded[2]?.status === 'rejected') {
+      recordWrite('navigation.room.partial', '房间已装载，但成员或私信投影读取失败；保留旧投影并进入目标房间');
+    }
+    if (!getState().rooms.some((room) => room.id === roomId && room.projectId === projectId)) {
+      toast('房间装载失败，未进入目标房间；当前草稿仍保留', 'error');
+      return false;
+    }
+    const { persistNav } = await import('./data/store');
+    if (!navIntentActive(intent)) return false;
+    persistNav(getState(), () => navIntentActive(intent) && getState().activeProjectId === projectId);
+    recordWrite('navigation.room.open', `切换到项目「${project.displayName}」并进入房间「${target.name}」`);
+    navigate(`/project/${projectId}/room/${roomId}`);
+    setState((state) => ({ ...state, openInFlight: false }));
+    committed = true;
+    return true;
+  } catch (error) {
+    if (navIntentActive(intent)) {
+      toast(`打开项目房间失败：${(error as Error).message}；页面与草稿保留`, 'error');
+    }
+    return false;
+  } finally {
+    if (!committed && gen != null && getState().loadGen === gen) {
+      const stillOwnsFocus = getState().activeProjectId === projectId;
+      setState((state) => stillOwnsFocus
+        ? {
+            ...state,
+            activeProjectId: previous.activeProjectId,
+            loadGen: previous.loadGen,
+            openInFlight: false,
+            visibleProjectIds: previous.visibleProjectIds,
+            expandedProjectIds: previous.expandedProjectIds,
+            rooms: previous.rooms,
+            members: previous.members,
+            memberRuntimes: previous.memberRuntimes,
+            dms: previous.dms,
+          }
+        : { ...state, openInFlight: false });
+    }
+    releaseNavIntent(intent);
+  }
 }
 
 export async function refreshMembers(projectIdArg?: string): Promise<void> {
@@ -883,7 +1041,8 @@ interface ThreadHistoryItem { id: string; authorType: string; authorId: string; 
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
-    objective?: string | null; review_policy?: Task['reviewPolicy']; mode?: Task['mode'] | null; owner_member_id?: string | null; parent_task_id?: string | null; current_delivery_id?: string | null };
+    objective?: string | null; review_policy?: Task['reviewPolicy']; mode?: Task['mode'] | null; owner_member_id?: string | null; parent_task_id?: string | null; current_delivery_id?: string | null;
+    deliberationBudget?: { maxTurns: number } | null };
   activeRun: { id: string; status: string } | null;
   pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
   reworkPending?: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
@@ -1172,13 +1331,18 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
 const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId: string } | { kind: 'all' }> =>
   mentionIds.map((id) => (id === 'all' ? { kind: 'all' as const } : { kind: 'member' as const, memberId: id }));
 
+/** Shared with the Composer mode/budget bubble; the server re-derives and validates it. */
+export function defaultDeliberationMaxTurns(rosterSize: number): number {
+  return deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).core;
+}
+
 /**
  * 唯一正式参数 builder（review-r48 §3）：发送前把**真正要发给 bridge 的完整请求**固化成
  * 不可变信封（原 commandId+完整 target（含 projectId/conversationId/roomId——不从 UI 目标
  * 重造）+body+intent+mentions）。等待/回执/重试/冻结都用这一份。
  * 附件 refs（第五十一轮 H2）：只在 upload 回执明确成功后进入信封——信封不可变原则不变。
  */
-export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { collaboration?:'deliberate'; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
+export function buildRoomRootEnvelope(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[], attachmentRefs?: string[], opts?: { collaboration?:'deliberate'; deliberationBudget?: { maxTurns: number }; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   return {
@@ -1188,6 +1352,9 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
       target: { kind: 'room_root', projectId: s.activeProjectId, conversationId: room?.conversationId ?? '', roomId },
       body, intent, mentions: mentionPayload(mentionIds),
       ...(opts?.collaboration?{collaboration:opts.collaboration}:{}),
+      ...(opts?.collaboration === 'deliberate' && opts.deliberationBudget != null
+        ? { deliberationBudget: { maxTurns: opts.deliberationBudget.maxTurns } }
+        : {}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
       ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
@@ -1197,7 +1364,7 @@ export function buildRoomRootEnvelope(commandId: string, roomId: string, body: s
   };
 }
 
-export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
+export function buildDmEnvelope(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): PendingSendEnvelope {
   const s = getState();
   return {
     commandId,
@@ -1215,7 +1382,20 @@ export function buildDmEnvelope(commandId: string, conversationId: string, body:
 
 /** 线程跟进信封（第五十一轮 H2）：目标=打开的线程（projectId/conversationId/threadId 来自
  * thread.get 实体——不从界面焦点重造）；记录串（rootTaskId 空）由服务端强制 record_only。 */
-export function buildThreadEnvelope(commandId: string, threadId: string, body: string, intent: 'default' | 'record_only', attachmentRefs?: string[], opts?: { mentionIds?:string[]; imageAck?: 'omit-images'; attachmentRanges?: Record<string, string> }): import('./data/store').PendingSendEnvelope {
+export function buildThreadEnvelope(
+  commandId: string,
+  threadId: string,
+  body: string,
+  intent: 'default' | 'record_only',
+  attachmentRefs?: string[],
+  opts?: {
+    mentionIds?:string[];
+    collaboration?:'deliberate';
+    deliberationBudget?:{maxTurns:number};
+    imageAck?: 'omit-images';
+    attachmentRanges?: Record<string, string>;
+  },
+): PendingSendEnvelope {
   const s = getState();
   const thread = s.threadEntities[threadId];
   return {
@@ -1225,6 +1405,10 @@ export function buildThreadEnvelope(commandId: string, threadId: string, body: s
       target: { kind: 'thread', projectId: thread?.projectId ?? s.activeProjectId, conversationId: thread?.conversationId ?? '', threadId },
       body, intent, mentions: mentionPayload(opts?.mentionIds??[]),
       ...(s.threadMemberships[threadId]?{threadMemberVersion:s.threadMemberships[threadId].version}:{}),
+      ...(opts?.collaboration?{collaboration:opts.collaboration}:{}),
+      ...(opts?.collaboration==='deliberate'&&opts.deliberationBudget!=null
+        ?{deliberationBudget:{maxTurns:opts.deliberationBudget.maxTurns}}
+        :{}),
       ...(attachmentRefs != null && attachmentRefs.length > 0 ? { attachmentRefs } : {}),
       ...(opts?.imageAck != null ? { imageAck: opts.imageAck } : {}),
       ...(opts?.attachmentRanges != null ? { attachmentRanges: opts.attachmentRanges } : {}),
@@ -1328,20 +1512,33 @@ export async function executeTaskRework(snapshot: { taskId: string; deliveryId: 
 }
 
 /** 发送不可变信封（正式管道——重试与首次共用，保证同号同参）。 */
-export async function sendEnvelope(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
+export async function sendEnvelope(env: PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
   const r = await sendCommand<SendResult>(env.commandId, env.method, env.params);
   if (r.status === 'ok') recordWrite('message.submit', `${env.params.target.kind === 'dm' ? '私信' : '房间'} ${env.params.intent === 'record_only' ? '仅记录' : '发送'}（${String(env.params.body).slice(0, 24)}…）`);
   return r;
 }
 
-export async function sendRoomRoot(commandId: string, roomId: string, body: string, intent: 'default' | 'record_only', mentionIds: string[]): Promise<BridgeOutcome<SendResult>> {
+export async function sendRoomRoot(
+  commandId: string,
+  roomId: string,
+  body: string,
+  intent: 'default' | 'record_only',
+  mentionIds: string[],
+  opts?: { collaboration?: 'deliberate'; deliberationBudget?: { maxTurns: number } },
+): Promise<BridgeOutcome<SendResult>> {
   const s = getState();
   const room = s.rooms.find((r) => r.id === roomId);
   if (room == null) return { status: 'failed', code: 'NO_ROOM', error: '房间不存在或尚未装载' };
-  if (room.memberIds.length === 0 && intent === 'default') {
-    return { status: 'failed', code: 'NO_MEMBERS', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
+  const projectedMembers = room.memberIds
+    .map((memberId) => getState().members.find((candidate) => candidate.id === memberId))
+    .filter((member) => member != null);
+  const enabledAgentCount = projectedMembers.length > 0
+    ? projectedMembers.filter((member) => member.principalType === 'agent' && member.enabled).length
+    : room.memberIds.length;
+  if (enabledAgentCount === 0 && intent === 'default') {
+    return { status: 'failed', code: 'NO_MEMBERS', error: '该房间没有可用 AI——请先添加 AI' };
   }
-  return sendEnvelope(buildRoomRootEnvelope(commandId, roomId, body, intent, mentionIds));
+  return sendEnvelope(buildRoomRootEnvelope(commandId, roomId, body, intent, mentionIds, undefined, opts));
 }
 
 export async function sendDmMessage(commandId: string, conversationId: string, body: string, intent: 'default' | 'record_only'): Promise<BridgeOutcome<SendResult>> {
@@ -1356,7 +1553,7 @@ export async function createDm(memberId: string): Promise<string> {
 }
 
 /** 结果未知信封的严格重发（review-r47 §2/r48 §3）：原 commandId+原参数逐字重发——不重组。 */
-export async function retryUnknownSend(env: import('./data/store').PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
+export async function retryUnknownSend(env: PendingSendEnvelope): Promise<BridgeOutcome<SendResult>> {
   return sendEnvelope(env);
 }
 

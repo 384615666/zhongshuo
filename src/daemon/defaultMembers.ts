@@ -169,6 +169,29 @@ export function ensureDefaultMembers(db: ZhongshuoDatabase, projectId: string, c
         }
       }
     }
+
+    // The R90 empty-default-project placeholder is disabled and carries no channel.
+    // Once discovery finds any usable AI, remove only that untouched placeholder and
+    // hand the coordinator slot to the discovered member. Explicit user edits or any
+    // durable history keep it intact.
+    const available = result.created[0] ?? result.existing[0];
+    if (available != null) {
+      const waiting = db.prepare(`SELECT id, description, settings_revision FROM project_members
+        WHERE id=? AND project_id=? AND principal_type='agent' AND profile_id IS NULL
+          AND enabled=0 AND display_name='待添加 AI'`)
+        .get(`m_default_${projectId}_0`, projectId) as { id: string; description: string | null; settings_revision: number } | undefined;
+      const untouched = waiting != null
+        && waiting.settings_revision === 0
+        && (waiting.description == null || waiting.description.trim() === '')
+        && db.prepare('SELECT 1 FROM daemon_state WHERE key=?').get(`appearance:avatar:member:${waiting.id}`) == null;
+      if (waiting != null && untouched && !hasDurableMemberReferences(db, waiting.id)) {
+        db.prepare('UPDATE rooms SET coordinator_member_id=?, revision=revision+1 WHERE project_id=? AND coordinator_member_id=?')
+          .run(available.memberId, projectId, waiting.id);
+        db.prepare('DELETE FROM room_members WHERE member_id=?').run(waiting.id);
+        result.removedLegacyPlaceholder = db.prepare('DELETE FROM project_members WHERE id=? AND project_id=?')
+          .run(waiting.id, projectId).changes > 0 || result.removedLegacyPlaceholder;
+      }
+    }
   };
   if (transaction) db.transaction(execute).immediate();
   else execute();

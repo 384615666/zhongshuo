@@ -15,7 +15,7 @@ import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Tag, memberColor } from './ui';
 import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLabel } from '../lib/format';
 import type { Message, ProjectMember, RouteMode } from '../data/types';
-import { recordLocalOnly, useStore } from '../data/store';
+import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
 import { MarkdownView } from '../preview/MarkdownView';
@@ -43,34 +43,12 @@ export const ATTACHMENT_KIND_LABEL: Record<string, string> = {
 };
 
 function MessageAttachments({
-  message, onOpen, onOpenAttachment,
+  message, onOpen,
 }: {
   message: Message;
   onOpen?: (resourceId: string, revision?: number) => void;
-  /** 正式侧（第五十一轮）：真实附件摘要芯片（message_attachments 投影）——优先渲染。 */
-  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
 }) {
   const s = useStore((x) => x);
-  // 正式摘要优先（真实 attachmentId/kind）；无正式数据才走原型 resources 路径。
-  if ((message.formalAttachments ?? []).length > 0) {
-    return (
-      <div className="msg-attach-row">
-        {(message.formalAttachments ?? []).map((a) => (
-          <button
-            key={a.artifactId}
-            data-zs-artifact-id={a.artifactId}
-            className="msg-attach"
-            title={`打开 ${a.filename}（只读预览，不发送给 AI）`}
-            onClick={() => onOpenAttachment?.(a)}
-          >
-            <Icon name="file-text" size={12} />
-            <span className="truncate">{a.filename}</span>
-            <span className="msg-attach-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
-          </button>
-        ))}
-      </div>
-    );
-  }
   const links = attachmentsOfMessage(s, message.id);
   if (links.length === 0) return null;
 
@@ -102,6 +80,35 @@ function MessageAttachments({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** 正式附件气泡：和输入区使用同一“文件在正文里”的视觉语义。 */
+function InlineFormalAttachments({
+  attachments,
+  onOpen,
+}: {
+  attachments: FormalAttachmentSummary[];
+  onOpen?: (att: FormalAttachmentSummary) => void;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="msg-inline-attachments" data-zs-inline-attachments="1">
+      {attachments.map((attachment) => (
+        <button
+          key={attachment.artifactId}
+          type="button"
+          className={`inline-file-chip${attachment.kind === 'image_file' ? ' is-image' : ''}`}
+          data-zs-artifact-id={attachment.artifactId}
+          title={`打开 ${attachment.filename}（只读预览，不发送给 AI）`}
+          onClick={() => onOpen?.(attachment)}
+        >
+          <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
+          <span className="truncate">{attachment.filename}</span>
+          <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[attachment.kind] ?? attachment.kind}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -150,14 +157,15 @@ export function MessageView({
   onCorrection?: (message: Message) => void;
 }) {
   const [copyState,setCopyState]=useState<'idle'|'copied'|'failed'>('idle');
-  const visibleBody=chatAnswer(message.body,message.authorType);
+  const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
   const roleClass=isSystem?' msg-system':isHuman?' msg-human':' msg-agent';
   const copyMessage=async():Promise<void>=>{
     try{
       if(navigator.clipboard==null)throw Error('clipboard unavailable');
-      await navigator.clipboard.writeText(visibleBody);
+      const attachmentCopy = (message.formalAttachments ?? []).map((attachment) => attachment.filename).join('\n');
+      await navigator.clipboard.writeText([visibleBody, attachmentCopy].filter((part) => part.trim().length > 0).join('\n'));
       setCopyState('copied');
       window.setTimeout(()=>setCopyState('idle'),1400);
     }catch{
@@ -218,12 +226,13 @@ export function MessageView({
               onOpenSubtask={onOpenSubtask}
               onOpenArtifact={onOpenArtifact}
               onApproval={onApproval}
+              onOpenAttachment={onOpenAttachment}
             />
 
             {/* 消息携带的资源（UX-PREVIEW-01 / §17.9）
                 这是"主池普通附件也能预览"的入口：附件挂在消息上，
                 **不要求 taskId**。点击打开共享预览，不发送、不执行。 */}
-            <MessageAttachments message={message} onOpen={onOpenResource} onOpenAttachment={onOpenAttachment} />
+            <MessageAttachments message={message} onOpen={onOpenResource} />
             {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
               {message.formalReplyExecution.status==='queued'?'已发送，等待 AI 回复':message.formalReplyExecution.status==='running'?'AI 正在回复':message.formalReplyExecution.error??'本次回复未完成'}
               {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
@@ -254,6 +263,7 @@ function MessageBody({
   onOpenSubtask,
   onOpenArtifact,
   onApproval,
+  onOpenAttachment,
 }: {
   message: Message;
   memberName?: string;
@@ -261,8 +271,9 @@ function MessageBody({
   onOpenSubtask?: (s: { taskId: string; number: number; title: string }) => void;
   onOpenArtifact?: (id: string) => void;
   onApproval?: (c: 'allow_once' | 'deny') => void;
+  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
 }) {
-  const visibleBody=chatAnswer(message.body,message.authorType);
+  const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const a = message.payload?.assignment;
   const p = message.payload?.progress;
   const r = message.payload?.report;
@@ -277,13 +288,9 @@ function MessageBody({
           <MarkdownView text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
-      ) : (message.formalAttachments ?? []).length > 0 ? (
-        /* R66 P3：文件-only 消息（用户已批准的发送语义）——正文为空不是缺陷：
-           用一行**界面说明**标注（不是合成正文），文件芯片在下方正常呈现。 */
-        <div className="small faint" style={{ marginTop: 2, marginBottom: 2 }}>
-          仅文件，无正文（{(message.formalAttachments ?? []).length} 个附件见下方）
-        </div>
       ) : null}
+
+      <InlineFormalAttachments attachments={message.formalAttachments ?? []} onOpen={onOpenAttachment} />
 
       {message.kind === 'progress' ? (
         /* 进度消息 = 正文 + 需要被看见的异常标记。

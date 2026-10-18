@@ -24,7 +24,7 @@ import { command } from './bridge';
 import { recordWrite } from './data/store';
 import { useMemberWorkload } from './components/useMemberWorkload';
 import { memberWrite } from './data/memberWrites';
-import { fullTime } from './lib/format';
+import { fullTime, runtimeModelDisplayName } from './lib/format';
 import { runtimePermissionOptions } from './lib/runtimePermissions';
 import { EditMemberModal, SaveMemberTemplateModal, TemplatePanel, UnknownMemberOperations, useFormGuard } from './components/MemberManagementForms';
 
@@ -176,7 +176,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
    * 未绑定时同时给出**有效来源**（effective.kind——全局默认渠道），不再让「未绑定」
    * 被读成"不会用任何渠道"。
    */
-  const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string } => {
+  const runtimeLabel = (m: MemberRow): { text: string; problem?: boolean; effective?: string; modelId?: string } => {
     const rt = runtimes[m.id];
     if (runtimeErrs[m.id] != null) return { text: '配置暂时读取失败，打开成员详情可重试', problem: true };
     if (rt == null) {
@@ -191,18 +191,22 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
         // R67：全局默认 **claude 未配置模型名**（ZS_CLAUDE_MODEL 缺省——CLI 拒绝默认配置，
         // 用户 v3 实测 startupFailed 根因）时必须明示发送会失败及解法，不等到派发失败。
         const noModel = eff.kind === 'claude' && (eff.model == null || eff.model.length === 0);
+        const modelName = eff.model ? runtimeModelDisplayName({ id: eff.model, label: eff.model }) : '';
         return {
-          text: `使用本机默认 ${eff.kind}${eff.model?` · ${eff.model}`:''}${noModel?' · 需要选择模型':''}`,
+          text: `使用本机默认 ${eff.kind}${modelName?` · ${modelName}`:''}${noModel?' · 需要选择模型':''}`,
           problem: true,
           effective: eff.kind,
+          modelId: eff.model ?? undefined,
         };
       }
       return { text: '尚未单独配置，打开「AI 设置」选择模型', problem: true };
     }
     if (rt.installation == null) return { text: '配置暂不可用，打开成员详情查看', problem: true };
     const kind = rt.installation.kind === 'fake' ? '测试环境' : rt.installation.kind;
-    if(rt.executableStatus?.status==='missing')return {text:`${kind}${rt.binding?.model?' · '+rt.binding.model:''} · 执行程序未找到`,problem:true};
-    return { text: `${kind}${rt.binding?.model?' · '+rt.binding.model:''}` };
+    const modelId = rt.binding?.model ?? '';
+    const modelName = modelId ? runtimeModelDisplayName({ id: modelId, label: modelId }) : '';
+    if(rt.executableStatus?.status==='missing')return {text:`${kind}${modelName?' · '+modelName:''} · 执行程序未找到`,problem:true,modelId};
+    return { text: `${kind}${modelName?' · '+modelName:''}`, modelId };
   };
 
   return (
@@ -274,7 +278,7 @@ export function MembersPage({projectId:routeProjectId}:{projectId?:string}={}) {
                     </div>
                     <div className="small faint" style={{ marginTop: 3 }}>
                       {m.description != null && m.description !== '' ? <div>{m.description}</div> : null}
-                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }}>当前配置：{rt.text}</span> : <>当前配置：{rt.text}</>}
+                      {rt.problem ? <span style={{ color: 'var(--warning,#b45309)' }} title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span> : <span title={rt.modelId?`完整模型 ID：${rt.modelId}`:undefined}>当前配置：{rt.text}</span>}
                     </div>
                   </div>
                 </div>
@@ -414,8 +418,9 @@ export function BindRuntimeModal({ member, projectId, initial, guard, onClose, o
       });
       if(outcome.status!=='ok')throw Error(outcome.status==='unknown'?`结果未知：${outcome.error}；原信封已保存，在成员页人工同号重放`:`${outcome.code}：${outcome.error}`);
       if(!formGuard.valid())return;
-      recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${form.model ? `（${form.model}）` : ''}——配置成功≠能力已认证`);
-      toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${form.model ? ' · ' + form.model : ''}）`, 'success');
+      const modelName = form.model ? runtimeModelDisplayName({ id: form.model, label: form.model }) : '';
+      recordWrite('member.setRuntime', `${member.displayName} → ${form.kind}${modelName ? `（${modelName}）` : ''}——配置成功≠能力已认证`);
+      toast(`已保存 ${member.displayName} 的 runtime 绑定（${form.kind}${modelName ? ' · ' + modelName : ''}）`, 'success');
       if (mounted.current) await onSaved();
     } catch (e) {
       if (!formGuard.valid())return;

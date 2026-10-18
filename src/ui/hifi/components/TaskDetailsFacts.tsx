@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun } from '../../../contracts/taskDetails.ts';
 import { command } from '../bridge';
 import { RunStatusTag, TaskStatusTag } from './ui';
-import { fullTime } from '../lib/format';
+import { fullTime, runtimeModelDisplayName } from '../lib/format';
 import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
@@ -140,7 +140,13 @@ function usageText(value: unknown, quality: string): string {
   if (value == null || typeof value !== 'object') return `用量数据无法解析 · 质量 ${qualityLabel[quality] ?? '未确认'}`;
   const u = value as Record<string, unknown>;
   const n = (key: string): string => typeof u[key] === 'number' ? String(u[key]) : '未报告';
-  return `${u.accounting === 'delta' ? '本次增量' : u.accounting === 'cumulative' ? '累计上报' : '上报口径未明'} · 输入 ${n('inputTokens')} tokens · 缓存 ${n('cachedTokens')} tokens · 输出 ${n('outputTokens')} tokens · 成本 ${typeof u.cost === 'number' ? `${u.cost} ${typeof u.currency === 'string' ? u.currency : ''}` : '未报告'} · 质量 ${qualityLabel[quality] ?? '未确认'}${typeof u.model === 'string' ? ` · 模型 ${u.model}` : ''}`;
+  return `${u.accounting === 'delta' ? '本次增量' : u.accounting === 'cumulative' ? '累计上报' : '上报口径未明'} · 输入 ${n('inputTokens')} tokens · 缓存 ${n('cachedTokens')} tokens · 输出 ${n('outputTokens')} tokens · 成本 ${typeof u.cost === 'number' ? `${u.cost} ${typeof u.currency === 'string' ? u.currency : ''}` : '未报告'} · 质量 ${qualityLabel[quality] ?? '未确认'}${typeof u.model === 'string' ? ` · 模型 ${runtimeModelDisplayName({id:u.model,label:u.model})}` : ''}`;
+}
+
+function runtimeModelId(value: unknown): string | null {
+  if (value == null || typeof value !== 'object') return null;
+  const model = (value as Record<string, unknown>).model;
+  return typeof model === 'string' && model !== '' ? model : null;
 }
 
 /** One bounded page at a time, no ever-growing history cache. */
@@ -213,7 +219,7 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
     {c.steps.map(s=><div key={s.key} className="card tight">
       <a href={s.locate}>{s.title}</a> · <TaskStatusTag status={s.status as Parameters<typeof TaskStatusTag>[0]['status']}/>
       <div className="small">{s.displayName} #{s.memberId.slice(-6)} · {roles[s.role]??s.role}</div>
-      <div className="faint small">{s.channel??'渠道未提供'} / {s.model??'模型未提供'}{s.dependsOn.length?` · 等待/接收：${s.dependsOn.map(k=>c.steps.find(x=>x.key===k)?.title??k).join('、')}`:' · 无前置步骤'}</div>
+      <div className="faint small">{s.channel??'渠道未提供'} / <span title={s.model?`完整模型 ID：${s.model}`:undefined}>{s.model?runtimeModelDisplayName({id:s.model,label:s.model}):'模型未提供'}</span>{s.dependsOn.length?` · 等待/接收：${s.dependsOn.map(k=>c.steps.find(x=>x.key===k)?.title??k).join('、')}`:' · 无前置步骤'}</div>
       {s.inputVersions?.map(input=><div key={input.deliveryId} className="small">接收 <a href={`#delivery=${input.deliveryId}`}>上游成果 v{input.revision}</a><details className="faint"><summary>交接内容身份</summary>{input.deliveryId} · {input.manifestHash}</details></div>)}
       {s.role==='review'?<div className={s.reviewVersionCurrent===false?'panel warning':'faint small'}>{s.reviewVersionCurrent===false?'评审后产生了新文件版本；这份旧评审不覆盖新改动。':s.reviewVersionCurrent===true?'评审的文件版本与本次最终交付快照一致。':'评审仅针对当时接收的版本，最终文件版本匹配尚未提供。'}</div>:null}
       {s.deliveryId?<div className="small"><a href={`#delivery=${s.deliveryId}`}>查看步骤成果 v{s.deliveryRevision}</a></div>:null}
@@ -256,8 +262,8 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
         <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <>{budgetText(r.budget)}<details className="small faint"><summary>预算原始详情</summary><pre>{JSON.stringify(r.budget,null,2)}</pre></details></>}</dd>
         <dt>执行轮次</dt><dd>{r.turns.length === 0 ? '尚无轮次' : r.turns.map((t) => <div key={t.id}>
           {t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试
-          {t.runtime?<div className="small faint">本轮请求：{t.runtime.kind??'渠道未提供'} / {t.runtime.model??'模型未提供'} · 思考 {t.runtime.effort??'未指定'} · {t.runtime.policy==='policy-analyze'?'只读角色':t.runtime.policy==='policy-full-access'?'CLI 完整权限':t.runtime.policy==='policy-project-write'?'项目内编辑':'权限快照未提供'}</div>:<div className="small faint">本轮模型配置快照未提供。</div>}
-          {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => <div key={k} className="small">{usageText(u.normalized, u.quality)}</div>)}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
+          {t.runtime?<div className="small faint">本轮请求：{t.runtime.kind??'渠道未提供'} / <span title={t.runtime.model?`完整模型 ID：${t.runtime.model}`:undefined}>{t.runtime.model?runtimeModelDisplayName({id:t.runtime.model,label:t.runtime.model}):'模型未提供'}</span> · 思考 {t.runtime.effort??'未指定'} · {t.runtime.policy==='policy-analyze'?'只读角色':t.runtime.policy==='policy-full-access'?'CLI 完整权限':t.runtime.policy==='policy-project-write'?'项目内编辑':'权限快照未提供'}</div>:<div className="small faint">本轮模型配置快照未提供。</div>}
+          {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div title={t.usage.map(u=>runtimeModelId(u.normalized)).filter((id):id is string=>id!=null).map(id=>`完整模型 ID：${id}`).join('；')||undefined}>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => {const modelId=runtimeModelId(u.normalized);return <div key={k} className="small" title={modelId?`完整模型 ID：${modelId}`:undefined}>{usageText(u.normalized, u.quality)}</div>;})}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
           <details className="small faint"><summary>轮次身份与原始状态</summary>{t.id} · {t.status} · {t.stageKey} · {t.purpose}</details>
         </div>)}{r.turnsTruncated ? '仅显示最近 80 轮' : null}</dd>
       </dl><details className="small faint"><summary>运行身份</summary>{r.id} · revision {r.revision}</details>

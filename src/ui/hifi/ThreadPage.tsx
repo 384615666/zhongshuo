@@ -6,7 +6,7 @@
  * 正式链（review-r50 §4 修正后的 DTO 适配）：thread.get（实体+根消息+水位）→
  * thread.history（items+rootAttachments）→ task.get（pendingDelivery 只有 id/revision/
  * manifest_hash 三重身份——不猜其余字段）。回复=message.submit thread 目标（**不另建根
- * 任务**；记录串默认仅记录、永不唤醒——服务端强制，UI 同判）；停止绑定装载的 run+停止
+ * 任务**；历史记录串仍保留原消息语义，R90 起续聊发送新的 AI 请求）；停止绑定装载的 run+停止
  * 代次（过时绑定由服务端拒绝）；验收/返工在打开意见框时**冻结交付三重身份快照**（目标
  * 变化不悄悄换稿，review-r44/45 同判）。readGate=线程独立水位+当前导航/前台/贴底/接管
  * （不与 DM conversationSeq 门混用）。**关闭视图不停止执行**——卸载只清定时器/门。
@@ -403,7 +403,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         </details>
         <div className="spacer" style={{ flex: 1 }} />
         {isRecordThread
-          ? <Tag tone="neutral" icon="message-square">记录串 · 无任务号 · 发送仅保存</Tag>
+          ? <Tag tone="neutral" icon="message-square">历史记录串 · 无任务号</Tag>
           : statusLabel != null ? <Tag tone={detail?.status === 'DONE' ? 'success' : detail?.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{taskNo} {statusLabel}</Tag> : null}
       </div>
 
@@ -419,13 +419,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               </div>
               <div style={{ marginTop: 4 }}>{anchor?.body || '（根消息正文不可得——不虚构）'}</div>
               {(anchor?.formalAttachments ?? []).length > 0 ? (
-                <div className="msg-attach-row">
+                <div className="msg-inline-attachments" data-zs-inline-attachments="1">
                   {(anchor?.formalAttachments ?? []).map((a) => (
-                    <button key={a.artifactId} className="msg-attach" title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreviewAtt(a)}>
-                      <Icon name="file-text" size={12} />
+                    <button key={a.artifactId} className={`inline-file-chip${a.kind === 'image_file' ? ' is-image' : ''}`} title={`预览 ${a.filename}（只读，不发送给 AI）`} onClick={() => openPreviewAtt(a)}>
+                      <Icon name={a.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
                       <span className="truncate">{a.filename}</span>
                       {/* r55：与回复芯片同一 kind 映射（此前只认 code/text——PPT 显示成「文本」）。 */}
-                      <span className="msg-attach-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
+                      <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[a.kind] ?? a.kind}</span>
                     </button>
                   ))}
                 </div>
@@ -456,37 +456,43 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             attachmentUpload={conversationId !== '' ? { conversationId } : undefined}
             onRetrySend={(env) => retryUnknownSend(env).then((r) => {
               if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }
-              return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+              return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
             })}
             onSend={(p): Promise<FormalSendOutcome> => (async () => {
-              const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+              const intent = 'default' as const;
               const draftKey = `thread:${threadId}`;
               const refs = attachmentRefsFromDraft(draftKey, intent);
               if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
               if (conversationId === '') return { status: 'failed', error: '线程归属未装载（conversationId 缺失）——稍后重试' };
-              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, { mentionIds:p.mentionIds, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+              const env = buildThreadEnvelope(p.commandId, threadId, p.body, intent, refs.refs, {
+                mentionIds:p.mentionIds,
+                ...(p.collaboration?{collaboration:p.collaboration}:{}),
+                ...(p.collaboration&&p.budgetMaxTurns!=null?{deliberationBudget:{maxTurns:p.budgetMaxTurns}}:{}),
+                imageAck:p.imageAck,
+                attachmentRanges:attachmentRangesFromDraft(draftKey),
+              });
               env.revAtSend = p.draftRev;
               // r62 P1：完整信封在交给 bridge 之前耐久落账；ok/failed/unknown 三态收口
               //（unknown→pendingSends 横幅=人工同号确认；崩溃窗口见 store 出站账本注释）。
               const staged = stageOutbound(draftKey, env);
               if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
               const r = await sendEnvelope(env);
-              if (r.status === 'ok') settleOutbound(draftKey, env, { recordThread: isRecordThread });
+              if (r.status === 'ok') settleOutbound(draftKey, env);
               else if (r.status === 'failed') dropOutbound(draftKey, env);
               else confirmOutboundUnknown(draftKey, env);
               if (r.status === 'ok') {
                 void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-                toast(intent === 'record_only' ? '已保存记录（不唤醒）' : '已跟进（延续当前任务）', 'success');
+                toast('已跟进（延续当前任务）', 'success');
                 return { status: 'ok' };
               }
-              return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+              return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
             })()}
           />
         </>
       ) : tab === 'task' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }} className="page-stack">
           {isRecordThread || detail == null ? (
-            <div className="panel info">这是记录串（无根任务）：没有任务概况与交付——回复仅保存，不派发、不唤醒 agent。</div>
+            <div className="panel info">这是历史记录串（无根任务）：历史消息保持原样；继续回复会发送一条新的 AI 请求。</div>
           ) : (
             <>
               <div className="panel info">
@@ -632,7 +638,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
               <span className="faint small">当前任务生成的文件与报告。</span>
             </div>
             {artifacts == null ? <div className="faint small" style={{ marginTop: 6 }}>正在装载…</div> : isRecordThread ? (
-              <div className="faint small" style={{ marginTop: 6 }}>记录串没有任务与交付——回复仅保存。</div>
+              <div className="faint small" style={{ marginTop: 6 }}>历史记录串没有任务与交付；继续回复会创建新的 AI 请求。</div>
             ) : artifacts.delErr != null ? (
               <div className="panel warning" style={{ marginTop: 6 }}>交付列表读取失败：{artifacts.delErr}</div>
             ) : artifacts.deliveries.length === 0 ? (

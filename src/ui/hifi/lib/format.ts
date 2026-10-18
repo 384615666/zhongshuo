@@ -6,7 +6,7 @@
  *  - §17.5 状态必须文字 + 图标，不能只靠颜色
  */
 
-import type { Consensus, ErrorCode, RouteMode, TaskStatus, TurnStatus, RunStatus } from '../data/types';
+import type { Consensus, ErrorCode, RouteMode, TaskStatus, TurnStatus, RunStatus } from '../data/types.js';
 
 /* ---------- 费用（RT-17） ---------- */
 
@@ -20,6 +20,62 @@ export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+/* ---------- 运行模型展示 ---------- */
+
+export type RuntimeModelMetadata = {
+  id: string;
+  label: string;
+  source: 'reported' | 'configured';
+};
+
+function modelNameWithoutRepeatedId(label: string, id: string): string {
+  const clean = label.trim();
+  const repeated = ` · ${id}`;
+  return clean.endsWith(repeated) ? clean.slice(0, -repeated.length).trim() : clean;
+}
+
+function shortModelChannel(id: string, fallbackChannel: string): string {
+  const separator = id.indexOf('/');
+  return (separator > 0 ? id.slice(0, separator) : fallbackChannel).trim();
+}
+
+/** 常规界面只展示一次可读名称；模型 ID 相等时只去掉渠道前缀，不猜模型清单。 */
+export function runtimeModelDisplayName(model: Pick<RuntimeModelMetadata, 'id' | 'label'>): string {
+  const label = modelNameWithoutRepeatedId(model.label, model.id);
+  if (label !== '' && label !== model.id) return label;
+  const leaf = model.id.split('/').filter(Boolean).at(-1)?.trim();
+  return leaf || model.id || '未命名模型';
+}
+
+/**
+ * 选项的 value 始终是目录返回的完整 ID，label 只承担展示。
+ * 仅当两个可读名称相同时，才追加短渠道帮助区分。
+ */
+export function runtimeModelPickerOptions(
+  models: RuntimeModelMetadata[],
+  { currentValue = '', channelFallback = '' }: { currentValue?: string; channelFallback?: string } = {},
+): Array<{ value: string; label: string }> {
+  const names = models.map(runtimeModelDisplayName);
+  const nameCounts = new Map<string, number>();
+  for (const name of names) {
+    const key = name.toLowerCase();
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+  }
+  const options = models.map((model, index) => {
+    const name = names[index] ?? runtimeModelDisplayName(model);
+    if ((nameCounts.get(name.toLowerCase()) ?? 0) < 2) return { value: model.id, label: name };
+    const channel = shortModelChannel(model.id, channelFallback);
+    return { value: model.id, label: channel === '' ? name : `${name} · ${channel}` };
+  });
+  if (currentValue !== '' && !models.some((model) => model.id === currentValue)) {
+    options.push({
+      value: currentValue,
+      label: runtimeModelDisplayName({ id: currentValue, label: currentValue }),
+    });
+  }
+  return options;
 }
 
 /* ---------- 共识（AT-05 / §6.5） ---------- */
@@ -42,7 +98,7 @@ export function consensusLabel(
 ): string {
   if (absentMemberIds.length > 0) return '有成员缺席，不构成全体一致';
   if (consensus === 'unanimous' && lateMemberIds.length > 0) return '全体确认（含迟到纳入）';
-  return consensusCopy[consensus].label;
+  return consensusCopy[consensus]?.label ?? consensus;
 }
 
 /**

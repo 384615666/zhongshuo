@@ -336,6 +336,10 @@ export function DmPage() {
   const dmTitle = active != null
     ? (active.title != null && active.title.length > 0 ? active.title : active.peerDisplayName ?? '成员')
     : '';
+  const interruptedTaskIds = new Set((active?.interruptedTasks ?? []).map((task) => task.taskId));
+  const failedItemsWithoutRecoveryDuplicate = failedView.items.filter((task) => !interruptedTaskIds.has(task.taskId));
+  const showFailedPanel = failedView.conversationId === active?.id
+    && (failedItemsWithoutRecoveryDuplicate.length > 0 || failedView.error != null);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
@@ -557,30 +561,41 @@ export function DmPage() {
                 {/* 中断待恢复（服务端分列可恢复性——不可恢复给原因，不放按钮）。 */}
                 {(active.interruptedTasks ?? []).length > 0 ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-interrupted="hifi">
-                    <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>中断待恢复</strong><span className="faint small">恢复执行经 outbox 正式编排（绑来源 run）；不自动重放</span></div>
+                    <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>上一次回复没有完成</strong><span className="faint small">原消息与失败记录保留；继续时绑定原运行，不自动重放</span></div>
                     {(active.interruptedTasks ?? []).map((it) => (
-                      <div key={it.taskId} className="row tight" style={{ marginTop: 6 }}>
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
-                        <span className="faint small">上次 run {it.lastRunStatus ?? '?'}</span>
-                        {it.recoverable ? (
-                          <button className="btn sm" disabled={busy != null} title={`恢复执行（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>恢复执行</button>
+                      <div key={it.taskId} style={{ marginTop: 7 }}>
+                        <div className="row tight">
+                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
+                          <span className="faint small">{it.lastRunStatus === 'FAILED' ? '上次运行失败' : it.lastRunStatus === 'INTERRUPTED' ? '上次运行中断' : `上次状态 ${it.lastRunStatus ?? '未知'}`}</span>
+                          {it.recoverable ? (
+                            <button className="btn sm" disabled={busy != null} title={`继续这次请求（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>继续这次请求</button>
+                          ) : (
+                            <Tag tone="warning" icon="octagon" title={it.blockReason ?? '当前不可恢复'}>暂不可继续</Tag>
+                          )}
+                        </div>
+                        {it.lastFailureReason != null ? (
+                          <div className="faint small" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>
+                            原因：{it.lastFailureReason}{it.recoverable ? '。可以继续这次请求，或直接发送一条新消息。' : '。先按下方说明处理后再继续。'}
+                          </div>
                         ) : (
-                          <Tag tone="warning" icon="octagon" title={it.blockReason ?? '不可恢复'}>不可恢复</Tag>
+                          <div className="faint small" style={{ marginTop: 4 }}>
+                            {it.recoverable ? '可以继续这次请求，或直接发送一条新消息。' : '当前未记录可读的失败原因；请按恢复说明处理。'}
+                          </div>
                         )}
                       </div>
                     ))}
                     {(active.interruptedTasks ?? []).some((it) => !it.recoverable && it.blockReason != null) ? (
                       <div className="faint small" style={{ marginTop: 4 }}>
-                        {(active.interruptedTasks ?? []).filter((it) => !it.recoverable && it.blockReason != null).map((it) => `· ${it.title}：${it.blockReason}`).join(' ')}
+                        {(active.interruptedTasks ?? []).filter((it) => !it.recoverable && it.blockReason != null).map((it) => `下一步：${it.blockReason}`).join(' ')}
                       </div>
                     ) : null}
                   </div>
                 ) : null}
-                {failedView.conversationId === active.id && (failedView.items.length > 0 || failedView.error != null) ? (
+                {showFailedPanel ? (
                   <div className="panel info" style={{ margin: '8px 14px 0' }} data-zs-dm-failed="hifi">
                     <div className="row tight"><Icon name="alert-triangle" size={13} /><strong>失败任务待处理</strong><span className="faint small">任务尚未完成；继续需要明确点击，旧结果不会自动重发</span></div>
                     {failedView.error != null ? <div className="small" style={{ marginTop: 5 }}>失败任务读取失败：{failedView.error}（保留上次成功读取的事实）</div> : null}
-                    {failedView.items.map((it) => <div key={it.taskId} style={{ marginTop: 7 }}>
+                    {failedItemsWithoutRecoveryDuplicate.map((it) => <div key={it.taskId} style={{ marginTop: 7 }}>
                       <div className="row tight wrap">
                         <span style={{ flex: 1, minWidth: 0 }}>{it.title}</span><Tag tone="danger">运行失败</Tag>
                         {it.available ? <button className="btn sm" disabled={busy != null || acceptedRetry === `${it.taskId}:${it.latestRunId}`} onClick={() => void doRetryFailed(it)}>继续失败任务</button> : null}
@@ -632,12 +647,12 @@ export function DmPage() {
                     attachmentUpload={{ conversationId: active.id }}
                     onRetrySend={(env) => retryUnknownSend(env).then((r) => {
                       if (r.status === 'ok') { void loadDmHistory(active.id, { markRead: true }); void refreshDms(); toast('重发成功（原信封）', 'success'); }
-                      return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+                      return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
                     })}
                     onSend={(p): Promise<FormalSendOutcome> => (async () => {
                       // 发送前固化完整正式信封（dm 目标=projectId+conversationId——不带 UI 的
                       // roomId/dmId 私有字段，review-r48 §3）；unknown 冻结原信封。
-                      const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+                      const intent = 'default' as const;
                       const draftKey = `dm:${active.id}`;
                       const refs = attachmentRefsFromDraft(draftKey, intent);
                       if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
@@ -652,10 +667,10 @@ export function DmPage() {
                       if (r.status === 'ok') {
                         void loadDmHistory(active.id, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
                         void refreshDms().catch(() => { /* 列表失败另有呈现 */ });
-                        toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
+                        toast('已发送', 'success');
                         return { status: 'ok' };
                       }
-                      return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+                      return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
                     })()}
                   />
                 )}

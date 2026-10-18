@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import type {MentionNode,TopLevelRouteOutcome} from '../contracts/routing.ts';
 import {DaemonCommandError} from './commandError.ts';
@@ -21,7 +21,13 @@ export interface ThreadReplySelection {
 /** Explicit @ selects recipients, never an implicit fixed deliberation mode.
  * All is scoped to this thread. An explicit individual room member is an
  * invitation, applied atomically with the message only after validation. */
-export function selectThreadRecipients(db:ZhongshuoDatabase,threadId:string,mentions:readonly MentionNode[],expectedVersion?:string):ThreadReplySelection {
+export function selectThreadRecipients(
+  db:ZhongshuoDatabase,
+  threadId:string,
+  mentions:readonly MentionNode[],
+  expectedVersion?:string,
+  collaboration?:'deliberate',
+):ThreadReplySelection {
   const snapshot=readThreadMembers(db,threadId);
   if(expectedVersion&&expectedVersion!==snapshot.version)throw new DaemonCommandError('STALE_REVISION','本串成员已变化，请刷新名单后再发送；输入保留');
   const th=db.prepare('SELECT root_task_id FROM conversation_threads WHERE id=?').get(threadId) as {root_task_id:string|null};
@@ -31,6 +37,30 @@ export function selectThreadRecipients(db:ZhongshuoDatabase,threadId:string,ment
   const available=(db.prepare(`SELECT pm.id FROM room_members rm JOIN project_members pm ON pm.id=rm.member_id
     WHERE rm.room_id=? AND pm.project_id=? AND pm.enabled=1 AND pm.principal_type='agent' ORDER BY pm.id`).all(snapshot.roomId,snapshot.projectId) as {id:string}[]).map(m=>m.id);
   if(!all&&explicit.some(id=>!available.includes(id)))throw new DaemonCommandError('MEMBER_UNAVAILABLE','请选择本房间可用的 AI；输入保留');
+  if(collaboration==='deliberate'){
+    const outside=explicit.filter(id=>!snapshot.eligibleMemberIds.includes(id));
+    if(outside.length>0)throw new DaemonCommandError('MEMBER_UNAVAILABLE','独立研讨只使用本回复串当前可用的 AI；请先在本串添加成员，输入保留');
+    const frozen=all||explicit.length===0?[...snapshot.eligibleMemberIds]:explicit;
+    if(frozen.length<2){
+      throw new DaemonCommandError(
+        'VALIDATION_INVALID',
+        snapshot.eligibleMemberIds.length===0
+          ? '本回复串当前没有可用 AI；请先添加至少两位成员，输入保留'
+          : '本回复串至少需要两位可用 AI 才能独立研讨；请添加成员后重试，输入保留',
+      );
+    }
+    if(frozen.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
+    const roomCoordinator=(db.prepare('SELECT coordinator_member_id FROM rooms WHERE id=?').get(snapshot.roomId) as {coordinator_member_id:string|null})?.coordinator_member_id;
+    const memberId=owner&&frozen.includes(owner)?owner:roomCoordinator&&frozen.includes(roomCoordinator)?roomCoordinator:frozen[0]!;
+    const route:TopLevelRouteOutcome={
+      kind:'dispatch',
+      mode:'DELIBERATE',
+      rosterSource:all?'all':'selected',
+      frozenMemberIds:frozen,
+      initialWakeMemberIds:[memberId,...frozen.filter(id=>id!==memberId)],
+    };
+    return{memberId,recipientIds:frozen,candidateIds:frozen,inviteIds:[],route,membershipVersion:snapshot.version};
+  }
   const recipientIds=all?[...snapshot.eligibleMemberIds]:explicit.length?explicit:[owner&&snapshot.eligibleMemberIds.includes(owner)?owner:snapshot.eligibleMemberIds[0]].filter((id):id is string=>Boolean(id));
   if(!recipientIds.length)throw new DaemonCommandError(snapshot.memberIds.length?'MEMBER_DISABLED':'MEMBER_UNAVAILABLE',snapshot.memberIds.length?'本串没有可用的 AI，请启用成员或添加其他 AI':'请先为本串添加一位可用的 AI');
   if(recipientIds.length>12)throw new DaemonCommandError('VALIDATION_INVALID','一次最多请求12位 AI');
@@ -48,6 +78,7 @@ export function selectThreadRecipients(db:ZhongshuoDatabase,threadId:string,ment
 export interface GeneralThreadReply extends ConversationReplyRow {
   isGeneral:true;routeJson:string;rosterJson:string;membershipVersion:string;
   sourceDeliveryId:string|null;sourceTaskStatus:string;
+  deliberationBudgetJson:string|null;dispatchIdentity:string;resultMessageId:string|null;
 }
 
 export function assertThreadTaskReady(db:ZhongshuoDatabase,threadId:string){
@@ -75,7 +106,15 @@ export function createTaskForRecordThread(db:ZhongshuoDatabase,threadId:string,m
 }
 
 /** Original task, anchor and older request envelopes are never rewritten. */
-export function enqueueThreadReply(db:ZhongshuoDatabase,threadId:string,messageId:string,inputSeq:number,selection:ThreadReplySelection,authorId:string){
+export function enqueueThreadReply(
+  db:ZhongshuoDatabase,
+  threadId:string,
+  messageId:string,
+  inputSeq:number,
+  selection:ThreadReplySelection,
+  authorId:string,
+  deliberationBudget?:{maxTurns:number},
+){
   const th=db.prepare(`SELECT th.project_id,th.conversation_id,th.room_id,th.root_task_id,t.stop_generation,t.status,t.current_delivery_id
     FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string;stop_generation:number;status:string;current_delivery_id:string|null};
   const roster=selection.candidateIds.map(memberId=>{
@@ -86,11 +125,24 @@ export function enqueueThreadReply(db:ZhongshuoDatabase,threadId:string,messageI
   const source=db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1`).get(th.root_task_id) as {id:string}|undefined;
   const writeScope=roster.find(m=>m.memberId===selection.memberId)!.writeScope;
   const now=Date.now(),dispatchKey=`task:${th.root_task_id}:thread-reply:${messageId}`;
+  const budgetJson=selection.route.kind==='dispatch'&&selection.route.mode==='DELIBERATE'&&deliberationBudget!=null
+    ?JSON.stringify({maxTurns:deliberationBudget.maxTurns})
+    :null;
+  const membershipVersion=readThreadMembers(db,threadId).version;
+  const dispatchIdentity=createHash('sha256').update(JSON.stringify({
+    version:1,
+    messageId,
+    route:selection.route,
+    roster:roster.map(member=>member.memberId),
+    membershipVersion,
+    deliberationBudget:deliberationBudget??null,
+  })).digest('hex');
   db.prepare(`INSERT INTO thread_reply_requests(message_id,project_id,conversation_id,thread_id,task_id,member_id,
     source_turn_id,stop_generation,input_thread_seq,dispatch_key,route_json,roster_json,write_scope_json,membership_version,
-    source_delivery_id,source_task_status,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)`)
+    source_delivery_id,source_task_status,deliberation_budget_json,dispatch_identity,status,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)`)
     .run(messageId,th.project_id,th.conversation_id,threadId,th.root_task_id,selection.memberId,source?.id??null,th.stop_generation,inputSeq,dispatchKey,
-      JSON.stringify(selection.route),JSON.stringify(roster),writeScope,readThreadMembers(db,threadId).version,th.current_delivery_id,th.status,now,now);
+      JSON.stringify(selection.route),JSON.stringify(roster),writeScope,membershipVersion,th.current_delivery_id,th.status,budgetJson,dispatchIdentity,now,now);
   enqueueOutbox(db,{dispatchKey,stopGenerationAtEnqueue:th.stop_generation});
   // The request is queued independently; don't turn an accepted delivery into an
   // unaccepted one or replace its version just because the user asks a question.
@@ -103,7 +155,8 @@ export function threadReplyForDispatch(db:ZhongshuoDatabase,key:string):GeneralT
   const row=db.prepare(`SELECT q.message_id messageId,q.project_id projectId,q.conversation_id conversationId,q.thread_id threadId,q.task_id taskId,q.member_id memberId,
     COALESCE(q.source_turn_id,'') sourceTurnId,q.input_thread_seq inputSeq,q.dispatch_key dispatchKey,q.status,q.write_scope_json writeScopeJson,
     q.stop_generation sourceStopGeneration,th.room_id roomId,m.author_id rootAuthorId,q.route_json routeJson,q.roster_json rosterJson,
-    q.membership_version membershipVersion,q.source_delivery_id sourceDeliveryId,q.source_task_status sourceTaskStatus
+    q.membership_version membershipVersion,q.source_delivery_id sourceDeliveryId,q.source_task_status sourceTaskStatus,
+    q.deliberation_budget_json deliberationBudgetJson,q.dispatch_identity dispatchIdentity,q.result_message_id resultMessageId
     FROM thread_reply_requests q JOIN conversation_threads th ON th.id=q.thread_id JOIN messages m ON m.id=th.anchor_message_id
     WHERE q.dispatch_key=?`).get(key) as Omit<GeneralThreadReply,'isGeneral'>|undefined;
   return row?{...row,isGeneral:true}:undefined;
@@ -133,6 +186,27 @@ export function threadReplyBlock(db:ZhongshuoDatabase,q:GeneralThreadReply,defau
 export function setThreadReplyState(db:ZhongshuoDatabase,messageId:string,status:string,error?:string,runId?:string,turnId?:string){
   db.prepare(`UPDATE thread_reply_requests SET status=?,error_message=?,run_id=COALESCE(run_id,?),turn_id=COALESCE(?,turn_id),updated_at=?
     WHERE message_id=? AND status IN ('queued','running',?)`).run(status,error?.slice(0,500)??null,runId??null,turnId??null,Date.now(),messageId,status);
+}
+
+/** Bind one frozen request to its own DELIBERATE run. A stale request cannot
+ * overwrite a terminal state, and a different active run is never adopted. */
+export function bindThreadReplyRun(db:ZhongshuoDatabase,messageId:string,runId:string):void{
+  db.prepare(`UPDATE thread_reply_requests SET run_id=?,status='running',error_message=NULL,updated_at=?
+    WHERE message_id=? AND status IN ('queued','running') AND (run_id IS NULL OR run_id=?)`)
+    .run(runId,Date.now(),messageId,runId);
+}
+
+export function settleThreadReplyForRun(
+  db:ZhongshuoDatabase,
+  runId:string,
+  status:'succeeded'|'failed'|'cancelled'|'unknown',
+  error?:string,
+  resultMessageId?:string,
+):void{
+  db.prepare(`UPDATE thread_reply_requests
+    SET status=?,error_message=?,result_message_id=COALESCE(?,result_message_id),updated_at=?
+    WHERE run_id=? AND status IN ('queued','running')`)
+    .run(status,error?.slice(0,500)??null,resultMessageId??null,Date.now(),runId);
 }
 
 export function settleThreadReplyForTurn(db:ZhongshuoDatabase,turnId:string,status:string,error?:string){

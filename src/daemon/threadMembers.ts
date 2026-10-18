@@ -49,7 +49,10 @@ export function persistThreadMember(db:ZhongshuoDatabase,threadId:string,memberI
 }
 
 export function readThreadProgress(db:ZhongshuoDatabase,threadId:string):ThreadVisibleProgress[] {
-  return db.prepare(`SELECT a.id turnId,a.member_id memberId,a.status,p.text,p.updated_at updatedAt,
+  const rows=db.prepare(`SELECT a.id turnId,a.member_id memberId,a.status,p.text,p.updated_at updatedAt,
+    r.id runId,r.stage stage,a.exec_started_at execStartedAt,r.stage_started_at stageStartedAt,
+    (SELECT MAX(e.created_at) FROM domain_events e WHERE e.turn_id=a.id
+      AND e.kind='turn.statusChanged' AND json_extract(e.payload_json,'$.status')=a.status) waitChangedAt,
     CASE WHEN p.text IS NOT NULL THEN 'responding' WHEN rs.provider_session_id IS NOT NULL AND rs.provider_session_id!='' THEN 'connected' ELSE 'connecting' END phase
     FROM conversation_threads th JOIN tasks t ON t.project_id=th.project_id AND (t.conversation_thread_id=th.id OR EXISTS(
       SELECT 1 FROM coordination_steps s JOIN coordination_runs cr ON cr.run_id=s.run_id JOIN tasks parent ON parent.id=cr.task_id
@@ -57,5 +60,18 @@ export function readThreadProgress(db:ZhongshuoDatabase,threadId:string):ThreadV
     JOIN workflow_runs r ON r.task_id=t.id JOIN agent_turns a ON a.run_id=r.id
     LEFT JOIN turn_visible_progress p ON p.turn_id=a.id LEFT JOIN runtime_sessions rs ON rs.id=a.session_id
     WHERE th.id=? AND a.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
-    ORDER BY a.rowid DESC LIMIT 13`).all(threadId) as ThreadVisibleProgress[];
+    ORDER BY a.rowid DESC LIMIT 13`).all(threadId) as Array<Omit<ThreadVisibleProgress,'waitStartedAt'>&{execStartedAt:number|null;stageStartedAt:number|null;waitChangedAt:number|null}>;
+  return rows.map(row=>({
+    turnId:row.turnId,
+    memberId:row.memberId,
+    status:row.status,
+    text:row.text,
+    updatedAt:row.updatedAt,
+    phase:row.phase,
+    runId:row.runId,
+    stage:row.stage,
+    waitStartedAt:row.status==='WAITING_APPROVAL'||row.status==='WAITING_INPUT'
+      ?row.waitChangedAt??row.updatedAt??row.stageStartedAt
+      :row.execStartedAt??row.stageStartedAt??row.updatedAt,
+  }));
 }

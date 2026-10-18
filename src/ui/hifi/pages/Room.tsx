@@ -37,8 +37,9 @@ import {
   toggleThreadSubscription, markThreadReadReal, reactMessageReal, createRoomReal, exportThreadReal,
 } from '../data/actions-room';
 import { updateRoomReal, roomArchiveReal, roomMembersSetReal } from '../loader';
-import { formatBytes, fullTime, relTime, routeModeCopy, stageLabel } from '../lib/format';
+import { formatBytes, formatDuration, fullTime, relTime, routeModeCopy, runtimeModelDisplayName, stageLabel } from '../lib/format';
 import { chatAnswer } from '../../../contracts/chatAnswer';
+import { runtimeProgressWaitLabel } from '../../../contracts/runtimeProgress';
 import { navigate } from '../lib/router';
 import { type ThreadTabKey } from '../lib/threadNav';
 import {
@@ -833,6 +834,10 @@ function RoomPool({
       ? `项目「${project.displayName}」已从应用移除 · 仅可查看历史`
       : undefined;
   const roomReadOnlyReason = room?.archivedAt ? '已归档 · 只读' : projectReadOnlyReason;
+  const enabledRoomAgentIds = room?.memberIds.filter((memberId) => {
+    const member = s.members.find((candidate) => candidate.id === memberId);
+    return member?.principalType === 'agent' && member.enabled;
+  }) ?? [];
   const lease = project ? lockOfProject(s, project.id) : null;
   const parallel = project?.writeConcurrencyPolicy === 'parallel_writers';
   const holders = lease ? (lease.parallelHolders ?? [lease.ownerTaskId]) : [];
@@ -872,13 +877,13 @@ function RoomPool({
           </div>
         ) : null}
 
-        {room && room.memberIds.length === 0 ? (
+        {room && enabledRoomAgentIds.length === 0 ? (
           <div className="panel warning" style={{ marginBottom: 10 }}>
-            <div className="panel-title"><Icon name="users" size={13} /> 这个房间还没有成员</div>
-            当前只能保存草稿，不能发送任务或唤醒 Agent。添加至少一名成员后，已保存的草稿仍会保留并可继续发送。
+            <div className="panel-title"><Icon name="users" size={13} /> 这个房间还没有可用 AI</div>
+            添加 AI 后即可发送；输入与草稿会保留。
             <div className="panel-actions">
               <button className="btn sm primary" onClick={onOpenSettings}>
-                <Icon name="user-plus" size={12} /> 添加房间成员
+                <Icon name="user-plus" size={12} /> 添加 AI
               </button>
             </div>
           </div>
@@ -910,20 +915,26 @@ function RoomPool({
           draftKey={`room:${roomId}`}
           formalLimits={FORMAL_LIMITS}
           attachmentUpload={room.conversationId != null && room.conversationId !== '' ? { conversationId: room.conversationId } : undefined}
-          sendDisabledReason={room.memberIds.length === 0 ? '请先添加房间成员（可先用「仅记录」保存）' : undefined}
+          sendDisabledReason={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
+          sendDisabledLabel={enabledRoomAgentIds.length === 0 ? '添加 AI 后即可发送' : undefined}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
             if (r.status === 'ok') { void loadRoomPool(roomId); toast('重发成功（原信封）', 'success'); }
-            return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+            return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
-            const intent = p.sendAs === 'record' ? 'record_only' : 'default';
-            if (room.memberIds.length === 0 && intent === 'default') {
-              return { status: 'failed', error: '该房间没有启用成员——无法派发（可先用「仅记录」保存）' };
+            const intent = 'default' as const;
+            if (enabledRoomAgentIds.length === 0) {
+              return { status: 'failed', error: '当前房间没有可用 AI——请先添加或启用 AI' };
             }
             const draftKey = `room:${roomId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
-            const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, { collaboration:p.collaboration, imageAck: p.imageAck, attachmentRanges: attachmentRangesFromDraft(draftKey) });
+            const env = buildRoomRootEnvelope(p.commandId, roomId, p.body, intent, p.mentionIds, refs.refs, {
+              collaboration: p.collaboration,
+              ...(p.collaboration != null && p.budgetMaxTurns != null ? { deliberationBudget: { maxTurns: p.budgetMaxTurns } } : {}),
+              imageAck: p.imageAck,
+              attachmentRanges: attachmentRangesFromDraft(draftKey),
+            });
             env.revAtSend = p.draftRev;
             const staged = stageOutbound(draftKey, env); // r62 P1：预 bridge 耐久落账
             if (staged.ok !== true) return { status: 'failed', error: staged.error ?? '原信封未能耐久保存' };
@@ -933,10 +944,10 @@ function RoomPool({
             else confirmOutboundUnknown(draftKey, env);
             if (r.status === 'ok') {
               void loadRoomPool(roomId).catch(() => { /* 读取失败另有呈现 */ });
-              toast(intent === 'record_only' ? '已仅记录（不派发）' : '已发送', 'success');
+              toast('已发送', 'success');
               return { status: 'ok' };
             }
-            return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+            return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })()}
         />
       ) : (
@@ -1055,9 +1066,16 @@ function RootCard({
     if (run?.status === 'RUNNING' || s.turns.some((t) => t.threadId === thread?.id && t.status === 'RUNNING')) {
       const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
+      const startedAt = running.map((turn) => turn.startedAt).filter((at) => Number.isFinite(at) && at > 0).sort((a, b) => a - b)[0];
+      const waited = startedAt != null ? formatDuration(Math.max(0, Date.now() - startedAt)) : null;
+      const stage = run != null && 'stage' in run && typeof run.stage === 'string' && run.stage.length > 0 ? stageLabel(run.stage) : null;
       return {
         label: '执行中', icon: 'play', tone: 'info' as const,
-        detail: who.length > 0 ? `${who.join('、')} 正在处理` : '成员正在处理',
+        detail: [
+          who.length > 0 ? `${who.join('、')} 正在处理` : '成员正在处理',
+          stage,
+          waited != null ? `已运行 ${waited}` : null,
+        ].filter(Boolean).join(' · '),
       };
     }
     return taskRunHint(run?.status);
@@ -1202,12 +1220,12 @@ function RootCard({
 
       {/* 主池消息携带的附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
       {(message.formalAttachments ?? []).length > 0 ? (
-        <div className="msg-attach-row">
+        <div className="msg-inline-attachments" data-zs-inline-attachments="1">
           {(message.formalAttachments ?? []).map((att) => (
             <button
               key={att.artifactId}
               data-zs-artifact-id={att.artifactId}
-              className="msg-attach"
+              className={`inline-file-chip${att.kind === 'image_file' ? ' is-image' : ''}`}
               title={`打开 ${att.filename}（${ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}）· 只读预览，不发送给 AI`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1217,9 +1235,9 @@ function RootCard({
                 }, roomOf(s, message.roomId)?.conversationId ?? '');
               }}
             >
-              <Icon name="paperclip" size={12} />
+              <Icon name={att.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
               <span className="truncate">{att.filename}</span>
-              <span className="msg-attach-kind mono-sm">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
+              <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[att.kind] ?? att.kind}</span>
             </button>
           ))}
         </div>
@@ -1883,7 +1901,7 @@ function ThreadPanel({
                 );
               })}
               {(s.threadProgress[thread.id]?.items??[]).map(progress=><div key={progress.turnId} className="panel" role="status" data-zs-live-progress={progress.turnId}>
-                <div className="row tight"><span className="strong">{memberLabel(byId(s.members,progress.memberId))}</span><span className="small faint">{progress.status==='STOPPING'?'正在停止':progress.status==='WAITING_APPROVAL'?'等待确认':progress.status==='WAITING_INPUT'?'等待补充':progress.phase==='connecting'?'正在连接 AI':progress.phase==='connected'?'已连接，等待回应':'正在处理'}</span></div>
+                <div className="row tight"><span className="strong">{memberLabel(byId(s.members,progress.memberId))}</span><span className="small faint" data-zs-live-wait={progress.status}>{runtimeProgressWaitLabel(progress)}</span>{progress.stage?<span className="small faint truncate" title={progress.stage}>{stageLabel(progress.stage)}</span>:null}</div>
                 {progress.text?<div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',marginTop:6}}>{progress.text}</div>:null}
                 {s.readErrors['thread:'+thread.id]?<div className="small faint">更新失败，保留上次进展 · {new Date(s.threadProgress[thread.id]!.readAt).toLocaleTimeString()}</div>:null}
               </div>)}
@@ -1984,10 +2002,10 @@ function ThreadPanel({
           onClearSubtask={() => setSubtaskTarget(undefined)}
           onRetrySend={(env) => retryUnknownSend(env).then((r) => {
             if (r.status === 'ok') { void loadThread(threadId, { markRead: true }); toast('重发成功（原信封）', 'success'); }
-            return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+            return r.status === 'ok' ? { status: 'ok' } : r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })}
           onSend={(p): Promise<FormalSendOutcome> => (async () => {
-            const intent = p.sendAs === 'record' ? 'record_only' : 'default';
+            const intent = 'default' as const;
             const draftKey = `thread:${threadId}`;
             const refs = attachmentRefsFromDraft(draftKey, intent);
             if (refs.blockError != null) return { status: 'failed', error: refs.blockError };
@@ -2002,10 +2020,10 @@ function ThreadPanel({
             else confirmOutboundUnknown(draftKey, env);
             if (r.status === 'ok') {
               void loadThread(threadId, { markRead: true }).catch(() => { /* 读失败另有呈现 */ });
-              toast(r.data.disposition==='enqueued'?'已发送，等待 AI 回复':'已保存记录', 'success');
+              toast(r.data.disposition==='enqueued'?'已发送，等待 AI 回复':'已跟进', 'success');
               return { status: 'ok' };
             }
-            return r.status === 'failed' ? { status: 'failed', error: `${r.code}: ${r.error}` } : { status: 'unknown', error: r.error };
+            return r.status === 'failed' ? { status: 'failed', error: r.error } : { status: 'unknown', error: r.error };
           })()}
         />
     </aside>
@@ -3138,7 +3156,7 @@ function RoomSettings({ roomId, initialSection='general', onClose }: { roomId: s
                     <span className="strong">{memberLabel(m)}</span>
                     {isCoord ? <Tag tone="accent" icon="star">协调者</Tag> : null}
                   </span>
-                  <span className="small faint">{[m.model,m.workStateReason].map((part)=>part?.trim()).filter(Boolean).join(' · ')||(m.enabled?'可用':'已停用')}</span>
+                  <span className="small faint" title={m.model?`完整模型 ID：${m.model}`:undefined}>{[m.model?runtimeModelDisplayName({id:m.model,label:m.model}):'',m.workStateReason].map((part)=>part?.trim()).filter(Boolean).join(' · ')||(m.enabled?'可用':'已停用')}</span>
                 </span>
               </span>
               <button

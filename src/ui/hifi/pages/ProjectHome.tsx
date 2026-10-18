@@ -6,81 +6,16 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { EmptyState, ErrorState, Modal, Tag, TaskStatusTag, Avatar, memberColor } from '../components/ui';
+import { EmptyState, ErrorState, Tag, TaskStatusTag, Avatar, memberColor } from '../components/ui';
 import { useStore, toast } from '../shell';
 import { coordinatorOfRoom, memberLabel, roomsOfProject } from '../data/selectors';
-import { switchFocusProject, projectLifecycleReal, openProjectByPath } from '../loader';
+import { switchFocusProject, projectLifecycleReal, pickAndOpenFolder } from '../loader';
 import { command } from '../bridge';
 import { refreshGitState } from '../data/actions-git';
 import type { TaskStatus } from '../data/types';
-import { relTime } from '../lib/format';
+import { runtimeModelDisplayName } from '../lib/format';
 import { navigate, currentNavSeq } from '../lib/router';
-import { beginUserNavIntent, cancelNavIntent, navIntentActive, releaseNavIntent, type NavIntent } from '../lib/navIntent';
 import { CreateRoomModal } from './Room';
-
-/* ============================================================
-   打开文件夹（真实：pickFolder → project.open 注册/幂等重开）
-   ============================================================ */
-
-export function OpenFolderModal({ onClose, autoPick = true }: { onClose: () => void; autoPick?: boolean }) {
-  const [pickedPath, setPickedPath] = useState<string | null>(null);
-  const [pickReason, setPickReason] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const operation = useRef<NavIntent | null>(null);
-  const pickerSeq = useRef(0);
-  const mounted = useRef(true);
-  const cancelOpen = () => {
-    pickerSeq.current += 1;
-    if (operation.current != null) { cancelNavIntent(operation.current); releaseNavIntent(operation.current); operation.current = null; }
-  };
-  const close = () => { cancelOpen(); onClose(); };
-
-  const doPick = async () => {
-    if(operation.current)return;
-    const seq=++pickerSeq.current,urlSeq=currentNavSeq(),intent=beginUserNavIntent();
-    operation.current=intent;setBusy(true);setPickReason(null);
-    try{
-      const {bridge}=await import('../bridge');const dir=await bridge().pickFolder();
-      if(!mounted.current||pickerSeq.current!==seq||currentNavSeq()!==urlSeq||!navIntentActive(intent))return;
-      if(!dir){setPickReason(dir===null?'已取消选择，原项目和草稿保留。':'当前无法打开系统文件夹选择器。');return;}
-      setPickedPath(dir);await open(dir,intent);
-    }catch(e){if(mounted.current&&navIntentActive(intent))setPickReason(`选择文件夹失败：${(e as Error).message}。可重新选择。`);}
-    finally{releaseNavIntent(intent);if(operation.current===intent){operation.current=null;if(mounted.current)setBusy(false);}}
-  };
-  useEffect(() => {
-    mounted.current = true;
-    if (autoPick) void doPick();
-    return () => { mounted.current = false; cancelOpen(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const open = async (path=pickedPath,existingIntent?:NavIntent) => {
-    if(!path||operation.current&&operation.current!==existingIntent)return;
-    const intent=existingIntent??beginUserNavIntent();operation.current=intent;setBusy(true);setPickReason(null);
-    try{
-      const opened=await openProjectByPath(path,{intent,navigateToRoom:true});
-      if(!mounted.current||operation.current!==intent||!opened.isCurrent())return;
-      onClose();
-    }catch(e){if(mounted.current&&operation.current===intent&&navIntentActive(intent))setPickReason(`打开失败：${(e as Error).message}。选择已保留，可重试或换文件夹。`);}
-    finally{releaseNavIntent(intent);if(operation.current===intent){operation.current=null;if(mounted.current)setBusy(false);}}
-  };
-
-  return (
-    <Modal
-      size="sm"
-      title="打开文件夹"
-      subtitle="选好文件夹后直接进入项目。"
-      onClose={close}
-      footer={<><button className="btn" onClick={close}>取消</button><div className="spacer"/>
-        {pickedPath?<button className="btn" disabled={busy} onClick={()=>void doPick()}>换文件夹</button>:null}
-        <button className="btn primary" disabled={busy} onClick={()=>void (pickedPath?open():doPick())}><Icon name="folder" size={12}/>{busy?'正在打开…':pickedPath?'重试打开':'选择文件夹'}</button>
-      </>}
-    >
-      {pickedPath?<div className="small" style={{overflowWrap:'anywhere'}}>{pickedPath}</div>:<div className="muted">选择要和 AI 一起处理的本地文件夹。</div>}
-      {pickReason?<div className="panel warning" role="alert">{pickReason}</div>:null}
-    </Modal>
-  );
-}
 
 /* ============================================================
    欢迎页（真实注册表最近项目 + 打开文件夹）
@@ -88,7 +23,7 @@ export function OpenFolderModal({ onClose, autoPick = true }: { onClose: () => v
 
 export function WelcomePage() {
   const s = useStore((x) => x);
-  const [openFolder, setOpenFolder] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
   return (
     <div className="main" data-zs-welcome="hifi">
       <div className="page narrow">
@@ -101,8 +36,16 @@ export function WelcomePage() {
             选择项目、添加 AI，然后像聊天一样提出需求。文件和对话会保存在本机。
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: 18, gap: 10 }}>
-            <button className="btn primary lg" onClick={() => setOpenFolder(true)}>
-              <Icon name="folder" size={14} /> 打开文件夹
+            <button
+              className="btn primary lg"
+              disabled={openingFolder}
+              aria-busy={openingFolder}
+              onClick={() => {
+                setOpeningFolder(true);
+                void pickAndOpenFolder().finally(() => setOpeningFolder(false));
+              }}
+            >
+              <Icon name="folder" size={14} /> {openingFolder ? '正在打开…' : '打开文件夹'}
             </button>
           </div>
         </div>
@@ -159,7 +102,6 @@ export function WelcomePage() {
 
 
       </div>
-      {openFolder ? <OpenFolderModal onClose={() => setOpenFolder(false)} /> : null}
     </div>
   );
 }
@@ -352,7 +294,7 @@ export function ProjectHomePage({ projectId }: { projectId: string }) {
               <div key={m.id} className="member-row" onClick={() => navigate(projectId !== '' ? `/project/${projectId}/members` : '/members')}>
                 <Avatar name={m.displayName} color={memberColor(m.id)} size={22} subject={`member:${m.id}`} />
                 <span className="member-row-name">{memberLabel(m)}</span>
-                <span className="member-row-state">{m.model || ''}</span>
+                <span className="member-row-state" title={m.model?`完整模型 ID：${m.model}`:undefined}>{m.model?runtimeModelDisplayName({id:m.model,label:m.model}):''}</span>
               </div>
             ))}
           </div>

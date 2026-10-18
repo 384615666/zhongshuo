@@ -9,13 +9,13 @@ import { Icon } from './components/Icon';
 import { NavUnreadDot } from './components/NavMarks';
 import { CommandPalette } from './components/CommandPalette';
 import { RecoveryPanel } from './components/RecoveryPanel';
-import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms } from './shell';
+import { useStore, toast, clearToast, hifiUi, refreshRooms, refreshDms, pickAndOpenFolder } from './shell';
 import { getState, setAppearanceState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
 import { isExternalDeepLink } from './lib/deepLink';
-import { openExternalDeepLink } from './loader';
+import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom, type SidebarRoomSummary } from './loader';
 import { DmPage } from './DmPage';
 import { MembersPage } from './MembersPage';
 import { MemberDetailPage } from './pages/MemberDetailPage';
@@ -27,13 +27,13 @@ import { dmUnreadTotal, navTaskStateOfRoom, roomUnread, roomsOfProject } from '.
 import { RoomPage, CreateRoomModal } from './pages/Room';
 import { FilesGitPage } from './pages/pages-misc';
 import { SettingsPage } from './pages/SettingsPage';
-import { ProjectHomePage, WelcomePage, OpenFolderModal } from './pages/ProjectHome';
+import { ProjectHomePage, WelcomePage } from './pages/ProjectHome';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
 import { TasksBoardPage } from './pages/TasksBoard';
 import { ArchivePage } from './pages/ArchivePage';
 import { updateProjectReal, projectLifecycleReal, switchFocusProject } from './loader';
 import { toggleProjectPinned } from './data/actions-nav';
-import { Menu, MenuItem, Modal, Tag } from './components/ui';
+import { Menu, MenuItem, Modal } from './components/ui';
 import { toggleProjectExpanded } from './data/actions-nav';
 
 /** 接管代次：返回新界面/再次接管时取消未完成的定位重试（review-r47 §5）。 */
@@ -201,7 +201,7 @@ export default function App() {
    */
   const startupSignatureRef = useRef<Set<string> | null>(null);
   const lastNotifiedSignatureRef = useRef<string>('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen] = useState(true);
   /* R65：侧栏项目 ⋯ 菜单与其弹窗（编辑信息/归档/移除）+ 项目行 + 建房。 */
   const [projectMenuFor, setProjectMenuFor] = useState<string | null>(null);
   const [projectMenuAt, setProjectMenuAt] = useState<{ x: number; y: number } | null>(null);
@@ -209,7 +209,78 @@ export default function App() {
   const [archiveProjFor, setArchiveProjFor] = useState<string | null>(null);
   const [removeProjFor, setRemoveProjFor] = useState<string | null>(null);
   const [createRoomFor, setCreateRoomFor] = useState<string | null>(null);
-  const [openFolder, setOpenFolder] = useState(false);
+  const [folderPickerBusy, setFolderPickerBusy] = useState(false);
+  const folderIntentRef = useRef(0);
+  const [sidebarRooms, setSidebarRooms] = useState<Record<string, {
+    status: 'loading' | 'ready' | 'error';
+    rooms: SidebarRoomSummary[];
+    error?: string;
+  }>>({});
+  const sidebarRoomRequests = useRef(new Set<string>());
+
+  const chooseFolder = async () => {
+    const request = ++folderIntentRef.current;
+    setFolderPickerBusy(true);
+    try {
+      await pickAndOpenFolder();
+    } finally {
+      if (folderIntentRef.current === request) setFolderPickerBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (s.boot !== 'ready') return;
+    for (const candidate of s.projects) {
+      if (candidate.id === s.activeProjectId || !s.expandedProjectIds.includes(candidate.id)) continue;
+      if (sidebarRooms[candidate.id] != null || sidebarRoomRequests.current.has(candidate.id)) continue;
+      sidebarRoomRequests.current.add(candidate.id);
+      setSidebarRooms((prev) => ({
+        ...prev,
+        [candidate.id]: { status: 'loading', rooms: prev[candidate.id]?.rooms ?? [] },
+      }));
+      void loadSidebarRooms(candidate.id)
+        .then((rooms) => {
+          if (!sidebarRoomRequests.current.has(candidate.id)) return;
+          setSidebarRooms((prev) => ({ ...prev, [candidate.id]: { status: 'ready', rooms } }));
+        })
+        .catch((error: unknown) => {
+          setSidebarRooms((prev) => ({
+            ...prev,
+            [candidate.id]: {
+              status: 'error',
+              rooms: prev[candidate.id]?.rooms ?? [],
+              error: (error as Error).message,
+            },
+          }));
+        })
+        .finally(() => {
+          sidebarRoomRequests.current.delete(candidate.id);
+        });
+    }
+  }, [s.boot, s.projects, s.expandedProjectIds, s.activeProjectId, sidebarRooms]);
+
+  // Keep the independent sidebar cache in sync with room mutations performed
+  // while a project is active (create/archive/rename). Caches for other
+  // projects remain independently loaded by the effect above.
+  useEffect(() => {
+    if (s.boot !== 'ready' || s.activeProjectId === '' || s.openInFlight) return;
+    const rooms = roomsOfProject(s, s.activeProjectId).map((room) => ({
+      id: room.id,
+      name: room.name,
+      archivedAt: room.archivedAt,
+      revision: room.revision,
+    }));
+    setSidebarRooms((prev) => {
+      const current = prev[s.activeProjectId];
+      if (current?.status === 'ready'
+        && current.rooms.length === rooms.length
+        && current.rooms.every((room, index) => room.id === rooms[index]?.id
+          && room.name === rooms[index]?.name
+          && room.archivedAt === rooms[index]?.archivedAt
+          && room.revision === rooms[index]?.revision)) return prev;
+      return { ...prev, [s.activeProjectId]: { status: 'ready', rooms } };
+    });
+  }, [s.boot, s.activeProjectId, s.rooms, s.openInFlight]);
 
   useEffect(() => { document.documentElement.dataset.theme = s.ui.theme; }, [s.ui.theme]);
 
@@ -311,9 +382,7 @@ export default function App() {
   }, [legacyActive]);
 
   const project = s.projects.find((p) => p.id === s.activeProjectId);
-  const rooms = project ? roomsOfProject(s, project.id) : [];
   const dmUnread = dmUnreadTotal(s);
-  const expanded = project != null && s.expandedProjectIds.includes(project.id);
   /** 房间路由匹配（项目路径形态 + 换装期旧 /room/:id）。 */
   const roomMatch = path.match(/^\/project\/([^/]+)\/room\/([^/]+)$/);
   const activeRoomId = roomMatch?.[2] ?? (path.startsWith('/room/') ? path.slice('/room/'.length) : undefined);
@@ -395,7 +464,9 @@ export default function App() {
               {project == null ? (
                 <div className="side-empty">
                   {s.boot === 'pending' ? '正在连接服务…' : s.boot === 'failed' ? `连接失败：${s.bootError ?? '未知'}` : '尚未打开项目'}
-                  <button className="btn ghost sm" onClick={() => setOpenFolder(true)}>打开文件夹</button>
+                  <button className="btn ghost sm" disabled={folderPickerBusy} onClick={() => { void chooseFolder(); }}>
+                    {folderPickerBusy ? '正在打开…' : '打开文件夹'}
+                  </button>
                   {s.boot === 'failed' ? <button className="btn ghost sm" onClick={() => location.reload()}>重试</button> : null}
                 </div>
               ) : null}
@@ -409,7 +480,10 @@ export default function App() {
                 return visibleProjects.map((p) => {
                   const isCurrent = p.id === s.activeProjectId;
                   const expanded = s.expandedProjectIds.includes(p.id);
-                  const rooms = roomsOfProject(s, p.id);
+                  const roomIndex = isCurrent
+                    ? { status: 'ready' as const, rooms: roomsOfProject(s, p.id), error: undefined }
+                    : sidebarRooms[p.id];
+                  const rooms = roomIndex?.rooms ?? [];
                   return (
                     <div key={p.id} className="side-project">
                       <div className={`side-row${isCurrent ? ' context-active' : ''}`}>
@@ -452,6 +526,27 @@ export default function App() {
                           </button>
                         </span>
                       </div>
+                      {expanded && roomIndex?.status === 'loading' && rooms.length === 0 ? (
+                        <div className="side-empty small" role="status">正在加载「{p.displayName}」的房间…</div>
+                      ) : null}
+                      {expanded && roomIndex?.status === 'error' ? (
+                        <div className="side-empty small" role="alert">
+                          房间加载失败：{roomIndex.error ?? '未知原因'}
+                          <button
+                            className="btn ghost sm"
+                            onClick={() => setSidebarRooms((prev) => {
+                              const next = { ...prev };
+                              delete next[p.id];
+                              return next;
+                            })}
+                          >
+                            重试
+                          </button>
+                        </div>
+                      ) : null}
+                      {expanded && roomIndex?.status === 'ready' && rooms.length === 0 ? (
+                        <div className="side-empty small">暂无房间</div>
+                      ) : null}
                       {expanded ? rooms.filter((r) => r.archivedAt == null).map((room) => {
                         const rState = navTaskStateOfRoom(s, room.id);
                         const rUnread = roomUnread(s, room.id);
@@ -459,7 +554,7 @@ export default function App() {
                           <button
                             key={room.id}
                             className={`side-item sub${room.id === activeRoomId ? ' active' : ''}`}
-                            onClick={() => { void switchFocusProject(p.id); navigate(`/project/${p.id}/room/${room.id}`); }}
+                            onClick={() => { void openSidebarRoom(p.id, room.id); }}
                           >
                             {rState.state ? (
                               <span className="side-icon-slot" title={`房间任务状态：${rState.state}（${rState.total} 个未结束）`}>
@@ -481,10 +576,12 @@ export default function App() {
                 className="side-item"
                 data-zs-open-project="hifi"
                 title="打开/注册项目：选择一个文件夹（已注册则幂等重开并切换焦点；其它项目保留在侧栏）"
-                onClick={() => setOpenFolder(true)}
+                onClick={() => { void chooseFolder(); }}
+                aria-busy={folderPickerBusy}
+                disabled={folderPickerBusy}
               >
                 <Icon name="folder" size={13} />
-                <span className="side-item-label">打开/切换项目</span>
+                <span className="side-item-label">{folderPickerBusy ? '正在打开…' : '打开/切换项目'}</span>
               </button>
             </div>
             <div className="sidebar-foot">
@@ -602,7 +699,6 @@ export default function App() {
       })() : null}
 
       {createRoomFor != null ? <CreateRoomModal projectId={createRoomFor} onClose={() => setCreateRoomFor(null)} /> : null}
-      {openFolder ? <OpenFolderModal autoPick onClose={() => setOpenFolder(false)} /> : null}
 
       {paletteOpen ? <CommandPalette onClose={() => setPaletteOpen(false)} /> : null}
       {recoveryOpen ? <RecoveryPanel origin={recoveryOrigin} onClose={() => setRecoveryOpen(false)} /> : null}

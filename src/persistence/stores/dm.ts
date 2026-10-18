@@ -71,7 +71,16 @@ export interface DmConversationSummary {
   /** 中断待恢复的任务（第三十八轮 #7：ACTIVE+只有终态 run 的 dm_turn 永不被泵——如实呈现并给
    * 正式重派入口 task.redispatch。第三十九轮 §2：**可恢复性服务端分列**——前端不得仅凭
    * INTERRUPTED run 显示可执行按钮；UNKNOWN 未对账/停止代次生效=不可恢复并给原因）。 */
-  interruptedTasks: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>;
+  interruptedTasks: Array<{
+    taskId: string;
+    title: string;
+    lastRunStatus: string | null;
+    lastRunId: string | null;
+    recoverable: boolean;
+    blockReason: string | null;
+    /** Last persisted human-readable startup/failure cause for this DM turn. */
+    lastFailureReason: string | null;
+  }>;
   /** 最近一条消息文本预览（侧栏区分同成员多会话——第三十八轮 #6）。 */
   lastMessagePreview: string | null;
   /** 待验收交付（taskReviewEnabled 开启时创建的 dm_turn 完成后进入 REVIEW——验收绑定该版本）。 */
@@ -164,7 +173,15 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       let blockReason: string | null = null;
       if (t.stopGen > 0) blockReason = '停止代次已生效：不再追加执行';
       else if (blocked != null) blockReason = blocked.message;
-      return { taskId: t.taskId, title: t.title, lastRunStatus: t.lastRunStatus, lastRunId: t.lastRunId, recoverable: blockReason == null, blockReason };
+      return {
+        taskId: t.taskId,
+        title: t.title,
+        lastRunStatus: t.lastRunStatus,
+        lastRunId: t.lastRunId,
+        recoverable: blockReason == null,
+        blockReason,
+        lastFailureReason: lastTaskFailureReason(db, t.taskId),
+      };
     });
     const lastMsg = db.prepare(
       `SELECT body_json FROM messages WHERE conversation_id = ? ORDER BY conversation_seq DESC LIMIT 1`,
@@ -201,6 +218,59 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
     });
   }
   return out;
+}
+
+/** Read only the persisted cause already shown by recovery/diagnostics. Never
+ * infer a network/model cause from a bare run status. */
+function lastTaskFailureReason(db: ZhongshuoDatabase, taskId: string): string | null {
+  const rows = db.prepare(
+    `SELECT kind, payload_json FROM domain_events
+     WHERE task_id = ? AND kind IN (
+       'turn.startupFailed','turn.statusChanged','task.statusChanged',
+       'task.memberDisabledBlocked','task.deliberationPrepareFailed','task.contextAssemblyFailed'
+     )
+     ORDER BY seq DESC LIMIT 12`,
+  ).all(taskId) as Array<{ kind: string; payload_json: string }>;
+  for (const row of rows) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (row.kind === 'turn.startupFailed') {
+      const message = typeof payload.message === 'string' ? payload.message : null;
+      if (message != null) return message.slice(0, 240);
+    }
+    if (row.kind === 'turn.statusChanged') {
+      const status = typeof payload.status === 'string' ? payload.status : '';
+      if (!['FAILED', 'UNKNOWN', 'CANCELLED'].includes(status)) continue;
+      const detail = typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.reason === 'string'
+          ? payload.reason
+          : null;
+      if (detail != null) return detail.slice(0, 240);
+    }
+    if (row.kind === 'task.statusChanged' && payload.status === 'BLOCKED') {
+      const detail = typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.reason === 'string'
+          ? payload.reason
+          : null;
+      if (detail != null) return detail.slice(0, 240);
+    }
+    if (row.kind === 'task.memberDisabledBlocked') return '执行成员已停用；重新启用后再恢复。';
+    if (row.kind === 'task.deliberationPrepareFailed' || row.kind === 'task.contextAssemblyFailed') {
+      const detail = typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.reason === 'string'
+          ? payload.reason
+          : null;
+      if (detail != null) return detail.slice(0, 240);
+    }
+  }
+  return null;
 }
 
 export function dmConversationOf(db: ZhongshuoDatabase, conversationId: string): {

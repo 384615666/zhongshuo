@@ -1,7 +1,7 @@
 /* ============================================================
    桌面客户端标题栏
    Electron 里窗口 frameless，这条自绘标题栏取代系统标题栏。
-   在浏览器里同样渲染（右侧显示"浏览器宿主"提示），但按钮不假装有原生能力。
+   在浏览器里同样渲染布局，但按钮不假装有原生窗口能力。
 
    第二十六批：应用内那条 46px 顶部工具栏（.topbar）已整条删除，
    折叠侧栏按钮、原型标注与运行状态都收到这条标题栏上（理由见 TitleBar.tsx 注释）。
@@ -214,6 +214,189 @@
   color: var(--text);
 }
 .winbtn.close:hover {
-  background: #d92d20;
-  color: #fff;
+  background: var(--titlebar-close-bg);
+  color: var(--titlebar-close-fg);
+}
+
+/* ============================================================
+   R90 实际 React 标题栏
+
+   hifi-flag.js 先注入最小壳的内联样式；本文件随后并入 hifi/app.css。
+   这里用 #zs-titlebar 提高一层特异性，保证 React 版接管后沿用设计令牌，
+   同时保留最小壳的拖动区与三枚窗口按钮。
+   ============================================================ */
+
+#zs-titlebar.zs-titlebar {
+  height: var(--titlebar-height);
+  gap: var(--sp-2);
+  padding: 0 0 0 var(--sp-2);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+}
+
+#zs-titlebar .zs-tb-name {
+  flex: none;
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+#zs-titlebar .zs-tb-project {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  max-width: min(420px, 42vw);
+  height: var(--control-icon-size);
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  -webkit-app-region: no-drag;
+}
+
+#zs-titlebar .zs-tb-project:hover,
+#zs-titlebar .zs-tb-project[aria-expanded='true'] {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+#zs-titlebar .zs-tb-project[aria-expanded='true'] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+#zs-titlebar .zs-tb-project-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#zs-titlebar .zs-tb-project > .icon {
+  flex: none;
+}
+
+#zs-titlebar .zs-tb-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-icon-compact);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--control-radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+#zs-titlebar .zs-tb-status[data-tone='danger'] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+#zs-titlebar .zs-tb-status:hover {
+  border-color: currentColor;
+}
+
+#zs-titlebar .zs-tb-status > svg {
+  flex: none;
+}
+
+#zs-titlebar .zs-tb-status[data-pending='1'] > svg {
+  animation: zs-titlebar-spin 1s linear infinite;
+}
+
+@keyframes zs-titlebar-spin {
+  to { transform: rotate(360deg); }
+}
+
+#zs-titlebar .zs-tb-drag {
+  align-self: stretch;
+  min-width: var(--sp-5);
+  height: 100%;
+  -webkit-app-region: drag;
+}
+
+#zs-titlebar .zs-tb-note {
+  flex: none;
+  padding: 0 var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
+#zs-titlebar .zs-winbtn {
+  flex: none;
+  width: var(--titlebar-window-button-width);
+  height: var(--titlebar-height);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+#zs-titlebar .zs-winbtn:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+#zs-titlebar .zs-winbtn.close:hover {
+  background: var(--titlebar-close-bg);
+  color: var(--titlebar-close-fg);
+}
+
+#zs-titlebar .zs-winbtn svg {
+  pointer-events: none;
+}
+
+#zs-titlebar :is(.zs-tb-project, .zs-tb-status, .zs-winbtn):focus-visible {
+  outline: var(--control-focus-width) solid var(--accent);
+  outline-offset: var(--control-focus-offset-inset);
+  box-shadow: none;
+}
+
+@media (max-width: 1040px) {
+  #zs-titlebar .zs-tb-project {
+    max-width: min(220px, 34vw);
+  }
+
+  #zs-titlebar .zs-tb-note {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #zs-titlebar .zs-tb-project,
+  #zs-titlebar .zs-tb-status {
+    transition: none;
+  }
+
+  #zs-titlebar .zs-tb-status[data-pending='1'] > svg {
+    animation: none;
+  }
 }

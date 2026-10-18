@@ -145,6 +145,8 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
   const paths = explicit ? input.paths! : scanned!.files.map((f) => f.slice(root.length + 1));
   const git = captureGitBaseline(root);
   const preimage = captureFilePreimage(root, paths, { storeDir, now, maxBytes: input.maxBytes });
+  const scanIncomplete = scanned != null
+    && (scanned.truncated || scanned.failedDirs.length > 0 || scanned.rejectedEntries.length > 0);
   const changeSetId = `cs_${randomUUID()}`;
   const beforeRef = JSON.stringify({
     kind: 'preimage',
@@ -160,7 +162,7 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
       git,
       preimageRoot: preimage.root,
       scopeKind: explicit ? 'explicit-paths' : 'directory-scan',
-      truncated: scanned?.truncated ?? false,
+      truncated: scanIncomplete,
       scanFailedDirs: scanned?.failedDirs.length ?? 0,
       scanRejected: scanned?.rejectedEntries.length ?? 0,
       scanFailures: scanned?.failedDirs ?? [],
@@ -181,7 +183,7 @@ export function captureBaseline(db: ZhongshuoDatabase, input: CaptureBaselineInp
     git,
     fileCount: preimage.entries.length,
     contentUnavailable: preimage.entries.filter((e) => e.contentUnavailable != null).map((e) => e.path),
-    truncated: scanned?.truncated ?? false,
+    truncated: scanIncomplete,
   });
 }
 

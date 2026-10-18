@@ -126,7 +126,9 @@ describe('派发 worker：成功全链路（G1 核心）', () => {
     enqueueOutbox(db, { dispatchKey: 'task:task_3:initial' });
     await worker.drain();
     expect(db.prepare('SELECT count(*) c FROM workflow_runs WHERE task_id = ?').get('task_3')).toMatchObject({ c: 1 });
-    expect(db.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get('thread_3')).toMatchObject({ c: 2 }); // R68：可见回复+最终 TaskComplete 消息（真实合同对齐）
+    // R89 merges a natural reply and its verified TaskComplete control object
+    // into one visible message while retaining the raw event audit.
+    expect(db.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get('thread_3')).toMatchObject({ c: 1 });
     db.close();
   });
 
@@ -147,7 +149,7 @@ describe('派发 worker：成功全链路（G1 核心）', () => {
     openDispatchGate(reopened); // 用户确认继续
     expect(await worker.drain()).toBe(1);
     expect(reopened.prepare('SELECT status FROM tasks WHERE id = ?').get('task_4')).toMatchObject({ status: 'DONE' });
-    expect(reopened.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get('thread_4')).toMatchObject({ c: 2 }); // R68：可见回复+最终 TaskComplete 消息
+    expect(reopened.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get('thread_4')).toMatchObject({ c: 1 }); // R89: one merged visible reply
     reopened.close();
   });
 });

@@ -3,8 +3,8 @@
  *
  * 关键口径：
  *  - 普通输入**默认交给 AI**（2026-09-25 起）：不再有常驻的「任务/讨论」二选一；
- *    "只想留字、不要回复"改成 ⋯ 菜单里的一次性意图「仅记录，不请求回复」，
- *    历史记录串里默认仍是保存记录（兼容例外，见 recordThread）
+ *    R90 起普通聊天/私信/线程均移除「仅记录」入口；历史 record 消息只保留数据语义，
+ *    在历史记录串里继续聊天也会自然发起新的 AI 请求。
  *  - 协作模式由 @ 结构推导，不手选；发送前持续显示解析结果（§4.1、E6）
  *  - 方式芯片是上下文相关的一个开关，默认全关（E6 方案 A）
  *  - 意图标签显示实际能力，不画锁/盾；说明默认收起，点 ⓘ 才展开（E8、ADR-14）
@@ -15,16 +15,21 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Icon } from './Icon';
 import { Avatar, Menu, MenuItem, anchorFromElement, memberColor, Tag } from './ui';
-import { useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload, settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview, takeDraftInserts, settleOutbound, addFileRefToDraft } from '../data/store';
-import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
+import {
+  useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, addUploadItem, settleUpload,
+  settleUploadReady, removeUploadItem, hydrateUploadRefs, clearSettledUploads, openPreview,
+  takeDraftInserts, settleOutbound, addFileRefToDraft, inlineAttachmentToken, parseInlineBody,
+  stripInlineAttachmentTokens, staleAttachmentUploadIds,
+} from '../data/store';
+import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
-import { detectMentionRange, resolveMentionIds, toolbarMentionInsertion } from '../lib/mentionText';
+import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
 import { command } from '../bridge';
-import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
+import { uploadAttachmentFile, classifyAttachmentFile, defaultDeliberationMaxTurns } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
 
 type MentionDocument = {
@@ -146,21 +151,227 @@ const sendingKeys = new Set<string>();
 const imageCheckingKeys = new Set<string>();
 /** 附件上传项的稳定空集（selector 引用稳定——useSyncExternalStore 契约）。 */
 const EMPTY_UPLOADS: UploadItem[] = [];
+const DELIBERATION_BUDGET_MAX = 500;
+
+/**
+ * 独立研讨实际可冻结的名单人数。`all` 只展开到当前上下文可用成员，
+ * 不会把线程/房间外的成员算进来。
+ */
+export function deliberationRosterSize(mentionIds: string[], availableMemberIds: string[]): number {
+  const available = new Set(availableMemberIds);
+  if (mentionIds.includes('all')) return available.size;
+  return new Set(mentionIds.filter((id) => id !== 'all' && available.has(id))).size;
+}
+
+/** 服务端预算约束：2..500，且至少 1 次整合 + N 次逐成员确认。 */
+export function deliberationBudgetBounds(
+  mentionIds: string[],
+  availableMemberIds: string[],
+): { rosterSize: number; minimum: number; maximum: number } {
+  const rosterSize = deliberationRosterSize(mentionIds, availableMemberIds);
+  return {
+    rosterSize,
+    minimum: Math.max(2, rosterSize + 1),
+    maximum: DELIBERATION_BUDGET_MAX,
+  };
+}
+
+export function isValidDeliberationBudget(value: number, mentionIds: string[], availableMemberIds: string[]): boolean {
+  const bounds = deliberationBudgetBounds(mentionIds, availableMemberIds);
+  return Number.isInteger(value) && value >= bounds.minimum && value <= bounds.maximum;
+}
+
+function serializeEditorNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+  if (node instanceof HTMLElement && node.dataset.zsInlineToken === '1') return node.dataset.zsRawToken ?? '';
+  if (node instanceof HTMLBRElement) return '\n';
+  let text = '';
+  node.childNodes.forEach((child) => { text += serializeEditorNode(child); });
+  if (node instanceof HTMLElement && (node.tagName === 'DIV' || node.tagName === 'P') && text.length > 0 && !text.endsWith('\n')) text += '\n';
+  return text;
+}
+
+function serializeEditor(editor: HTMLElement | null): string {
+  if (editor == null) return '';
+  let text = '';
+  editor.childNodes.forEach((child) => { text += serializeEditorNode(child); });
+  return text;
+}
+
+function serializeEditorForClipboard(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+  if (node instanceof HTMLElement && node.dataset.zsInlineToken === '1') return node.dataset.zsFileName ?? '';
+  if (node instanceof HTMLBRElement) return '\n';
+  let text = '';
+  node.childNodes.forEach((child) => { text += serializeEditorForClipboard(child); });
+  if (node instanceof HTMLElement && (node.tagName === 'DIV' || node.tagName === 'P') && text.length > 0 && !text.endsWith('\n')) text += '\n';
+  return text;
+}
+
+function domPointAtOffset(editor: HTMLElement, target: number): { node: Node; offset: number } {
+  let remaining = Math.max(0, target);
+  const walk = (node: Node): { node: Node; offset: number } | null => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const length = node.textContent?.length ?? 0;
+      if (remaining <= length) return { node, offset: remaining };
+      remaining -= length;
+      return null;
+    }
+    if (node instanceof HTMLElement && node.dataset.zsInlineToken === '1') {
+      const length = node.dataset.zsRawToken?.length ?? 0;
+      if (remaining <= length) return { node: node.parentNode!, offset: Array.from(node.parentNode?.childNodes ?? []).indexOf(node) + (remaining === 0 ? 0 : 1) };
+      remaining -= length;
+      return null;
+    }
+    if (node instanceof HTMLBRElement) {
+      if (remaining === 0) return { node: node.parentNode!, offset: Array.from(node.parentNode?.childNodes ?? []).indexOf(node) };
+      remaining -= 1;
+      return null;
+    }
+    for (const child of Array.from(node.childNodes)) {
+      const point = walk(child);
+      if (point != null) return point;
+    }
+    return null;
+  };
+  return walk(editor) ?? { node: editor, offset: editor.childNodes.length };
+}
+
+function editorCaretOffset(editor: HTMLElement | null): number {
+  if (editor == null) return 0;
+  const selection = window.getSelection();
+  if (selection == null || selection.rangeCount === 0) return serializeEditor(editor).length;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) return serializeEditor(editor).length;
+  const prefix = document.createRange();
+  prefix.selectNodeContents(editor);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const holder = document.createElement('div');
+  holder.appendChild(prefix.cloneContents());
+  return serializeEditor(holder).length;
+}
+
+function setEditorCaret(editor: HTMLElement | null, offset?: number): void {
+  if (editor == null) return;
+  editor.focus();
+  const point = domPointAtOffset(editor, offset ?? serializeEditor(editor).length);
+  const range = document.createRange();
+  range.setStart(point.node, point.offset);
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function editorInsertPlainText(editor: HTMLElement, text: string): void {
+  const selection = window.getSelection();
+  const range = selection != null && selection.rangeCount > 0 && editor.contains(selection.anchorNode)
+    ? selection.getRangeAt(0)
+    : null;
+  if (range == null) {
+    editor.appendChild(document.createTextNode(text));
+    setEditorCaret(editor);
+    return;
+  }
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function createInlineTokenElement(token: InlineAttachmentToken, uploads: UploadItem[]): HTMLElement {
+  const upload = token.uploadId != null ? uploads.find((item) => item.uploadId === token.uploadId) : undefined;
+  const status = token.kind === 'upload' ? 'uploading' : token.kind === 'failed' || upload?.status === 'failed' ? 'failed' : 'ready';
+  const host = document.createElement('span');
+  host.className = `composer-file-token is-${status}${token.fileKind === 'image_file' ? ' is-image' : ''}`;
+  host.contentEditable = 'false';
+  host.draggable = false;
+  host.dataset.zsInlineToken = '1';
+  host.dataset.zsRawToken = inlineAttachmentToken(token);
+  host.dataset.zsFileName = token.name;
+  if (token.attachmentId != null) host.dataset.zsAttachmentId = token.attachmentId;
+  if (token.uploadId != null) host.dataset.zsUploadId = token.uploadId;
+  if (token.fileKind != null) host.dataset.zsFileKind = token.fileKind;
+  const detail = status === 'uploading' ? '上传中…' : status === 'failed' ? '上传失败' : token.fileKind === 'image_file' ? '图片' : '文件';
+  host.title = status === 'failed' ? `${token.name}：${upload?.error ?? '上传失败'}` : status === 'uploading' ? `${token.name}：上传中，可移除` : `${token.name} · ${detail}${token.revision != null ? ` · v${token.revision}` : ''}`;
+
+  const icon = document.createElement('span');
+  icon.className = 'composer-file-token-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  host.appendChild(icon);
+
+  if (status === 'ready' && token.attachmentId != null) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'composer-file-token-open';
+    open.dataset.zsFileOpen = '1';
+    open.textContent = token.name;
+    open.title = '打开只读预览';
+    host.appendChild(open);
+  } else {
+    const label = document.createElement('span');
+    label.className = 'composer-file-token-open';
+    label.textContent = token.name;
+    host.appendChild(label);
+  }
+  const meta = document.createElement('span');
+  meta.className = 'composer-file-token-state';
+  meta.textContent = detail;
+  host.appendChild(meta);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'composer-file-token-remove';
+  remove.dataset.zsFileRemove = '1';
+  remove.setAttribute('aria-label', `移除 ${token.name}`);
+  remove.title = `移除 ${token.name}`;
+  remove.textContent = '×';
+  host.appendChild(remove);
+  return host;
+}
+
+function renderEditorBody(editor: HTMLElement, body: string, uploads: UploadItem[]): void {
+  const fragment = document.createDocumentFragment();
+  for (const segment of parseInlineBody(body)) {
+    if (segment.kind === 'text') {
+      if (segment.text.length > 0) fragment.appendChild(document.createTextNode(segment.text));
+    } else {
+      fragment.appendChild(createInlineTokenElement(segment.token, uploads));
+    }
+  }
+  editor.replaceChildren(fragment);
+}
 
 /**
  * 未知信封的**完整意图身份**比较（R66 P3）：文件-only 发送的 body 都为空——r62 的
  * 「正文逐字相等」判据会把两条不同文件的发送误判为同一草稿。身份=正文+意图+@提及+
  * 附件引用集合（排序后比较——同一身份换新号必重复；任一不同=新草稿，允许新号发送）。
  */
-function pendingIdentityMatches(
+export function pendingIdentityMatches(
   env: PendingSendEnvelope,
   text: string,
   mentionIds: string[],
   sendAs: 'ai' | 'record',
   readyAttachmentIds: string[],
   collaboration?:'deliberate',
+  budgetMaxTurns?: number,
+  defaultBudgetMaxTurns?: number,
 ): boolean {
   if(env.params.collaboration!==collaboration)return false;
+  const envBudget = env.params.deliberationBudget?.maxTurns;
+  const expectedBudget = budgetMaxTurns ?? defaultBudgetMaxTurns;
+  if (collaboration === 'deliberate') {
+    // Older UNKNOWN envelopes predate the budget field. Their frozen meaning
+    // was the deterministic default for the same roster; an explicit new
+    // budget is a different identity and must not reuse that ambiguity.
+    if (envBudget == null && budgetMaxTurns != null) return false;
+    if (envBudget != null && envBudget !== expectedBudget) return false;
+  } else if (envBudget != null) {
+    return false;
+  }
   const p = env.params as {
     body?: string; intent?: string; mentions?: Array<{ kind: string; memberId?: string }>;
     attachmentRefs?: string[];
@@ -219,7 +430,7 @@ export function Composer({
   draftKey: string;
   onSend: (payload: {
     body: string;
-    /** 本次发送意图：ai=交给 AI；record=仅记录、不请求回复（一次性） */
+    /** 普通聊天固定交给 AI；保留字段用于兼容页面既有信封 builder。 */
     sendAs: 'ai' | 'record';
     mentionIds: string[];
     method: { planFirst: boolean; skipFirstDraft: boolean; splitWork: boolean };
@@ -228,6 +439,8 @@ export function Composer({
     /** 图片能力门显式选择（一次性）：'omit-images'=仅发送文字（图片不送模型并如实注明）。 */
     imageAck?: 'omit-images';
     collaboration?:'deliberate';
+    /** 独立研讨本次调用预算；页面必须冻结进 message.submit，而不是只留在 UI。 */
+    budgetMaxTurns?: number;
     commandId: string;
     target: ComposerTarget;
     /** 发起时草稿编辑代次（页面冻结进信封——清算判定用）。 */
@@ -286,13 +499,7 @@ export function Composer({
     /** 真实状态：已发出停止、等活跃 turn 结束时显示"停止中"并防重复点击 */
     stopping: boolean;
   };
-  /**
-   * 历史**记录串**（无任务的讨论串）：默认仍是"保存记录"。
-   *
-   * 这是兼容例外，不是常驻切换：2026-09-25 起普通输入默认交给 AI，
-   * 但已经存在的"只留字"的长串不能因为删掉切换控件就被静默唤醒 ——
-   * 在它们里面回复仍然只保存记录（用户可以显式改成本次交给 AI）。
-   */
+  /** 兼容旧调用方；R90 起忽略此值，历史记录串续聊同样交给 AI。 */
   recordThread?: boolean;
   /**
    * 是否显示 @ 提及（默认显示）。
@@ -314,6 +521,7 @@ export function Composer({
    */
   attachmentUpload?: { conversationId: string };
 }) {
+  void recordThread; // 兼容旧页面传参；R90 起不再改变发送意图。
   /**
    * 成员边界（§4.6）：房间/线程取房间名单，私信取该会话的 audience 名单。
    * @ 候选、方式推导、冻结名单都以它为唯一来源。
@@ -370,17 +578,33 @@ export function Composer({
     return resolveMentionIds(text, mentionIdByToken);
   }, [mentionIdByToken]);
 
+  const bodyRef = useRef('');
   const [body, setBody] = useState('');
+  bodyRef.current = body;
   /**
-   * 本次发送意图（一次性，2026-09-25 起）：默认 `'ai'`。
-   *
-   * 历史记录串（无任务的讨论串）是兼容例外：在它们里面默认仍是 `'record'`，
-   * 否则删掉切换控件会把"只留字"的长串静默变成一次 AI 调用。
+   * 普通聊天只有一种发送语义：交给 AI。历史 record 消息仍按原数据展示/留账；
+   * 在历史记录串里继续聊天也会自然发起新的 AI 请求，不再静默 record_only。
    */
-  const [sendAs, setSendAs] = useState<'ai' | 'record'>(recordThread ? 'record' : 'ai');
+  const sendAs = 'ai' as const;
   const [deliberate,setDeliberate]=useState(false);
-  const collaboration=target.kind==='room_root'&&deliberate?'deliberate' as const:undefined;
+  const [deliberateMemberIds,setDeliberateMemberIds]=useState<string[]>([]);
+  const [budgetMaxTurns,setBudgetMaxTurns]=useState<number | null>(null);
+  const [budgetInput,setBudgetInput]=useState('');
+  const [modeMenuAnchor,setModeMenuAnchor]=useState<{x:number;y:number}|null>(null);
+  const [budgetMenuAnchor,setBudgetMenuAnchor]=useState<{x:number;y:number}|null>(null);
+  const [dragActive,setDragActive]=useState(false);
+  const collaboration=target.kind!=='dm'&&deliberate?'deliberate' as const:undefined;
   const [mentions, setMentions] = useState<string[]>([]);
+  const availableDeliberateIds = useMemo(
+    () => members.filter((member) => member.enabled && member.principalType === 'agent').map((member) => member.id),
+    [members],
+  );
+  const effectiveMentionIds = useMemo(() => {
+    if (!deliberate) return mentions;
+    const selected = deliberateMemberIds.filter((id) => availableDeliberateIds.includes(id));
+    const bodyMentions = mentions.filter((id) => id === 'all' || availableDeliberateIds.includes(id));
+    return [...new Set([...selected, ...bodyMentions])];
+  }, [deliberate, mentions, deliberateMemberIds, availableDeliberateIds]);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionActive, setMentionActive] = useState(0);
   const [mentionDocs, setMentionDocs] = useState<MentionDocument[]>([]);
@@ -415,64 +639,147 @@ export function Composer({
    */
   const uploadPickedFiles = async (files: File[]): Promise<void> => {
     if (attachmentUpload == null) return;
-    for (const f of files) {
-      const cls = classifyAttachmentFile(f.name, f.size);
-      const uploadId = `upl_${Math.random().toString(36).slice(2, 10)}`;
-      if (cls.cls === 'unsupported') {
-        addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'failed', error: `${cls.reason ?? '不支持的附件类型'}（${f.name} · ${f.size}B）——可换支持类型重选` });
-        continue;
+    const startDraftKey = draftKey;
+    const startProjectId = activeProjectId;
+    const startConversationId = attachmentUpload.conversationId;
+    const duplicateKeys = new Set(
+      (getState().uploadItems[startDraftKey] ?? [])
+        .filter((item) => item.removed !== true && item.status !== 'failed')
+        .map((item) => `${item.name}\u0000${item.size}\u0000${item.sourceLastModified ?? ''}\u0000${item.sourceType ?? ''}`),
+    );
+    const acceptedFiles: File[] = [];
+    for (const file of files) {
+      const duplicateKey = `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
+      if (duplicateKeys.has(duplicateKey)) continue;
+      duplicateKeys.add(duplicateKey);
+      acceptedFiles.push(file);
+    }
+    if (acceptedFiles.length === 0) return;
+
+    type PlannedUpload = { file: File; uploadId: string; cls: ReturnType<typeof classifyAttachmentFile> };
+    const planned: PlannedUpload[] = acceptedFiles.map((file) => ({
+      file,
+      uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`,
+      cls: classifyAttachmentFile(file.name, file.size),
+    }));
+
+    for (const item of planned) {
+      const error = item.cls.cls === 'unsupported'
+        ? `${item.cls.reason ?? '不支持的附件类型'}（${item.file.name} · ${item.file.size}B）——可换支持类型重选`
+        : undefined;
+      addUploadItem({
+        uploadId: item.uploadId,
+        draftKey: startDraftKey,
+        conversationId: startConversationId,
+        name: item.file.name,
+        size: item.file.size,
+        sourceLastModified: item.file.lastModified,
+        sourceType: item.file.type,
+        status: error == null ? 'uploading' : 'failed',
+        ...(error != null ? { error } : {}),
+      });
+    }
+
+    const insertionAt = draftKeyRef.current === startDraftKey ? editorCaretOffset(editorRef.current) : getDraftFull(startDraftKey).body.length;
+    const base = getDraftFull(startDraftKey);
+    const bodyNow = draftKeyRef.current === startDraftKey ? bodyRef.current : base.body;
+    const tokens = planned.map((item) => inlineAttachmentToken({
+      kind: item.cls.cls === 'unsupported' ? 'failed' : 'upload',
+      uploadId: item.uploadId,
+      name: item.file.name,
+      fileKind: item.cls.cls === 'image' ? 'image_file' : undefined,
+    }));
+    const before = bodyNow.slice(0, Math.min(insertionAt, bodyNow.length));
+    const after = bodyNow.slice(Math.min(insertionAt, bodyNow.length));
+    const joiner = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const tailJoiner = after.length > 0 && !/^\s/.test(after) ? ' ' : '';
+    const nextBody = `${before}${joiner}${tokens.join(' ')}${tailJoiner}${after}`;
+    setDraftFull(startDraftKey, { ...base, body: nextBody });
+    if (draftKeyRef.current === startDraftKey) {
+      setBody(nextBody);
+      const editor = editorRef.current;
+      if (editor != null) {
+        renderEditorBody(editor, nextBody, getState().uploadItems[startDraftKey] ?? []);
+        setEditorCaret(editor, before.length + joiner.length + tokens.join(' ').length);
       }
-      addUploadItem({ uploadId, draftKey, conversationId: attachmentUpload.conversationId, name: f.name, size: f.size, status: 'uploading' });
+    }
+
+    for (const item of planned) {
+      if (item.cls.cls === 'unsupported') continue;
       try {
-        const r = await uploadAttachmentFile(attachmentUpload.conversationId, f);
-        const accepted = settleUploadReady(draftKey, uploadId, attachmentUpload.conversationId, { name: f.name, size: f.size, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind });
+        const r = await uploadAttachmentFile(startConversationId, item.file);
+        if (draftKeyRef.current !== startDraftKey || getState().activeProjectId !== startProjectId) {
+          // 迟到回执仍按发起草稿键结算；页面切换只影响当前 DOM，不把附件写进新目标。
+        }
+        const accepted = settleUploadReady(startDraftKey, item.uploadId, startConversationId, {
+          name: item.file.name, size: item.file.size, attachmentId: r.attachmentId,
+          hash: r.hash, revision: r.revision, kind: r.kind,
+        });
         void accepted; // 被丢弃=用户已在上传中移除——不写任何草稿 ref，芯片保持消失
+        syncDraftBodyToEditor(startDraftKey);
         // R69 P1-D：已保存但提取不可用（分列状态）——芯片就地警示，不算上传失败。
-        if (r.previewWarning != null) settleUpload(draftKey, uploadId, { warning: r.previewWarning });
-        if (r.extractionFailed != null) settleUpload(draftKey, uploadId, { warning: r.extractionFailed });
+        if (r.previewWarning != null) settleUpload(startDraftKey, item.uploadId, { warning: r.previewWarning });
+        if (r.extractionFailed != null) settleUpload(startDraftKey, item.uploadId, { warning: r.extractionFailed });
       } catch (e) {
         // R69 P1-C：失败原因就地可见（文件/阶段/可行操作），不再只藏 title。
-        settleUpload(draftKey, uploadId, { status: 'failed', error: `${f.name}（${f.size}B）：${(e as Error).message}` });
+        settleUpload(startDraftKey, item.uploadId, { status: 'failed', error: `${item.file.name}（${item.file.size}B）：${(e as Error).message}` });
+        syncDraftBodyToEditor(startDraftKey);
       }
     }
   };
   /** 移除上传项：在途→标记（回执到达即弃，不复活）；已就绪→连同草稿引用一并移除（不再随发送携带）。 */
   const removeAttachment = (uploadId: string): void => {
-    const it = uploadItemsRaw.find((x) => x.uploadId === uploadId);
     removeUploadItem(draftKey, uploadId);
-    if (it != null && it.attachmentId != null) {
-      const d = getDraftFull(draftKey);
-      setDraftFull(draftKey, { ...d, attachments: d.attachments.filter((a) => a.attachmentId !== it.attachmentId) });
+    syncDraftBodyToEditor(draftKey);
+  };
+  /** 上传回执/结构化引用可能更新 store 正文；仅同步其发起草稿，不污染当前其它目标。 */
+  const syncDraftBodyToEditor = (key: string): void => {
+    if (draftKeyRef.current !== key) return;
+    const stored = getDraftFull(key).body;
+    if (stored === bodyRef.current) return;
+    const offset = editorCaretOffset(editorRef.current);
+    setBody(stored);
+    const editor = editorRef.current;
+    if (editor != null) {
+      renderEditorBody(editor, stored, getState().uploadItems[key] ?? []);
+      setEditorCaret(editor, Math.min(offset, serializeEditor(editor).length));
     }
   };
   /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
   const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string } | null>(null);
   const sendError = sendErrorFor != null && sendErrorFor.key === draftKey ? sendErrorFor.text : null;
-  const setSendErrorFor = (key: string, text: string) => setSendErrorState({ key, text });
+  const setSendErrorFor = (key: string, text: string) => setSendErrorState({
+    key,
+    text: text.replace(/(?:^|[\s：])([A-Z][A-Z0-9_]{3,})\s*[:：]\s*/g, ' ').replace(/\s+/g, ' ').trim(),
+  });
   /** 当前挂载目标键（结算时核对——迟到回执只在同键在挂时同步当前输入）。 */
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const imageProjectId = useStore((s) => s.activeProjectId);
   const [imageStatus, setImageStatus] = useState<{ key: string; text: string } | null>(null);
   const imageContext = JSON.stringify({ projectId: imageProjectId, target, conversationId: attachmentUpload?.conversationId,
-    mentions, collaboration, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
+    mentions: effectiveMentionIds, collaboration, images: attachments.filter(a => a.status === 'ready' && a.kind === 'image_file').map(a => a.attachmentId) });
   const threadFactRevision=useStore(s=>target.kind==='thread'&&target.threadId?s.threadTasks[target.threadId]?.revision:null);
-  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions,collaboration,threadFactRevision});
+  const writeContext=JSON.stringify({projectId:imageProjectId,target,conversationId:attachmentUpload?.conversationId,mentions:effectiveMentionIds,collaboration,threadFactRevision});
   const [writeHint,setWriteHint]=useState<{key:string;authorized:boolean;fullAccess?:boolean;willDispatch?:boolean;blocked?:boolean;reason:string;readAt:number;error?:string}|null>(null);
   useEffect(()=>{
     if(!formalLimits?.access||sendAs!=='ai')return;
+    if (sendDisabledReason != null || inputDisabledReason != null) {
+      setWriteHint(null);
+      return;
+    }
     let cancelled=false,reading=false;
     const read=async()=>{
       if(cancelled||reading||document.visibilityState!=='visible')return;reading=true;
       const conversationId=attachmentUpload?.conversationId??target.dmId??'';
       const formalTarget=target.kind==='room_root'?{kind:target.kind,projectId:imageProjectId,conversationId,roomId:target.roomId}:target.kind==='thread'?{kind:target.kind,projectId:imageProjectId,conversationId,threadId:target.threadId}:{kind:target.kind,projectId:imageProjectId,conversationId};
-      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:mentions.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
+      try{const c=await command<{modificationAuthorized:boolean;fullAccess?:boolean;willDispatch:boolean;blocked?:boolean;reason:string}>('message.writeCapability',{target:formalTarget,...(collaboration?{collaboration}:{}),mentions:effectiveMentionIds.map(id=>id==='all'?{kind:'all'}:{kind:'member',memberId:id})});if(!cancelled&&draftKeyRef.current===draftKey)setWriteHint({key:writeContext,authorized:c.modificationAuthorized,fullAccess:c.fullAccess,willDispatch:c.willDispatch,blocked:c.blocked,reason:c.reason,readAt:Date.now()});}
       catch(e){if(!cancelled)setWriteHint(old=>old?.key===writeContext?{...old,error:`权限读取失败：${(e as Error).message}；保留上次确认`}:{key:writeContext,authorized:false,reason:'尚未确认执行权限',readAt:0,error:(e as Error).message});}
       finally{reading=false;}
     };
     void read();const timer=window.setInterval(()=>void read(),5000),visible=()=>void read();document.addEventListener('visibilitychange',visible);
     return()=>{cancelled=true;window.clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
-  },[writeContext,draftKey,sendAs,formalLimits?.access]);
+  },[writeContext,draftKey,sendAs,formalLimits?.access,sendDisabledReason,inputDisabledReason]);
   useEffect(() => {
     if (!attachments.some(a => a.status === 'ready' && a.kind === 'image_file')) return;
     let cancelled = false; let reading = false;
@@ -483,9 +790,9 @@ export function Composer({
         : target.kind === 'thread' ? { kind: target.kind, projectId: imageProjectId, conversationId, threadId: target.threadId }
         : { kind: target.kind, projectId: imageProjectId, conversationId };
       try {
-        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: mentions.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
-        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.length&&c.members.every(m=>m.status==='supported')?'图片会随消息发送给所选 AI。':'部分 AI 暂不能接收图片，可换成员或仅记录。' : '图片会保存到本机，可点击预览。'});
-      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览或仅记录，发送前可重试`}); }
+        const c = await command<{ willDispatch: boolean; members: Array<{kind:string;model:string;channel:string;configuration:string;protocol:string;status:string;reason:string}> }>('message.imageCapability', { target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map(id => id === 'all' ? {kind:'all'} : {kind:'member',memberId:id}) });
+        if (!cancelled && draftKeyRef.current === draftKey) setImageStatus({key:imageContext,text:c.willDispatch ? c.members.length&&c.members.every(m=>m.status==='supported')?'图片会随消息发送给所选 AI。':'部分 AI 暂不能接收图片，可换成员或移除图片。' : '图片会保存到本机，可点击预览。'});
+      } catch (e) { if (!cancelled) setImageStatus({key:imageContext,text:`图片能力读取失败：${(e as Error).message}；仍可本地预览，发送前可重试`}); }
       finally { reading = false; }
     };
     void read(); const timer = setInterval(() => void read(), 5000);
@@ -509,7 +816,7 @@ export function Composer({
   }, [mentionOpen]);
 
   useEffect(() => {
-    if (!mentionOpen || !showMentions) return;
+    if (!mentionOpen) return;
     let cancelled = false;
     setMentionDocsLoading(true);
     setMentionDocsError(null);
@@ -540,7 +847,7 @@ export function Composer({
       }
     })();
     return () => { cancelled = true; };
-  }, [mentionOpen, showMentions, activeProjectId, attachmentUpload?.conversationId]);
+  }, [mentionOpen, activeProjectId, attachmentUpload?.conversationId]);
 
   useEffect(() => {
     setMentionActive(0);
@@ -565,7 +872,7 @@ export function Composer({
   const draftPersist = useStore((st) => st.draftPersist);
   // commandId 在"发送中"保持不变：重复点击不会创建多个任务（RT-01）
   const commandIdRef = useRef<string>(newId());
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const appliedInsertRef = useRef<number | null>(null);
   /** 刚载入过草稿的 key：让紧接着的一次保存 effect 跳过，避免把草稿清空 */
@@ -583,7 +890,9 @@ export function Composer({
   //     空串写回存储，把草稿清掉。因此载入后要让"下一个保存 effect"跳过一轮。
   useEffect(() => {
     const saved = getDraftFull(draftKey);
-    let restoredBody = saved.body;
+    if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
+    // 旧草稿只有 attachment refs、没有行内 token：hydrate 会补齐 token，这里以补齐后的正文为准。
+    let restoredBody = getDraftFull(draftKey).body;
     const existingTokens = resolveMentionsFromBody(restoredBody);
     const missingTokens = saved.mentions.filter((id) => id !== 'all' && !existingTokens.includes(id));
     if (saved.mentions.includes('all') && !existingTokens.includes('all') && !restoredBody.includes('@全体')) missingTokens.unshift('all');
@@ -592,19 +901,22 @@ export function Composer({
       restoredBody = `${prefix} ${restoredBody}`.trimStart();
     }
     setBody(restoredBody);
+    if (editorRef.current != null) {
+      renderEditorBody(editorRef.current, restoredBody, getState().uploadItems[draftKey] ?? []);
+    }
     setMentions(resolveMentionsFromBody(restoredBody));
-    setDeliberate(saved.collaboration==='deliberate');
-    // 附件芯片由 store.uploadItems 提供（真源）；已存草稿引用 hydrate 重建（切回/重启恢复）。
-    if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
+    const restoredDeliberate = saved.collaboration === 'deliberate' && target.kind === 'room_root';
+    setDeliberate(restoredDeliberate);
+    setDeliberateMemberIds(
+      restoredDeliberate
+        ? (saved.deliberateMemberIds ?? availableDeliberateIds).filter((id) => availableDeliberateIds.includes(id))
+        : availableDeliberateIds,
+    );
+    const restoredBudget = saved.budgetMaxTurns != null && Number.isInteger(saved.budgetMaxTurns) && saved.budgetMaxTurns >= 1
+      ? saved.budgetMaxTurns : null;
+    setBudgetMaxTurns(restoredBudget);
+    setBudgetInput(restoredBudget == null ? '' : String(restoredBudget));
     setAccess(saved.access as AccessMode);
-    /*
-     * 意图的恢复规则（2026-09-25）：
-     *  · 记录串：**默认仍是"保存记录"**（历史兼容，见 recordThread 注释）；
-     *  · 其它上下文：恢复草稿里存着的意图 —— 旧草稿的 `discussion` 已在
-     *    store 的 migrateDraft 里迁移成 `record`，所以"上次是仅记录"会原样回来，
-     *    不会因为这次改造变成一次 AI 发送。空白的新输入则是默认的 `'ai'`。
-     */
-    setSendAs(recordThread ? 'record' : saved.sendAs);
     setMentionOpen(false);
     setMentionTrigger(null); // 切草稿即取消：旧触发位置对新草稿无意义
     setAccessOpen(false);
@@ -613,7 +925,7 @@ export function Composer({
     // r61 G7：目标未挂载期间排队的摘录/正文插入在此消费（一次性取走——旧队列不在后续
     // 新点击时批量灌入；每条插入恰好一次落正文）。
     applyDraftInserts(takeDraftInserts(draftKey));
-  }, [draftKey, recordThread, mentionTokenById, allMembers, resolveMentionsFromBody]);
+  }, [draftKey, target.kind, mentionTokenById, allMembers, resolveMentionsFromBody, availableDeliberateIds]);
 
   useEffect(() => {
     const derived = resolveMentionsFromBody(body);
@@ -637,21 +949,31 @@ export function Composer({
       && cur.mentions.every((m, i) => m === mentions[i])
       && cur.access === access
       && cur.sendAs === sendAs
-      && cur.collaboration === collaboration;
+      && cur.collaboration === collaboration
+      && cur.budgetMaxTurns === (budgetMaxTurns ?? undefined)
+      && (cur.deliberateMemberIds ?? []).length === deliberateMemberIds.length
+      && (cur.deliberateMemberIds ?? []).every((id, index) => id === deliberateMemberIds[index]);
     if (same) return;
-    setDraftFull(draftKey, { ...cur, body, mentions, access, sendAs,collaboration });
-  }, [draftKey, body, mentions, access, sendAs,collaboration]);
+    setDraftFull(draftKey, {
+      ...cur, body, mentions, access, sendAs, collaboration,
+      ...(budgetMaxTurns != null ? { budgetMaxTurns } : { budgetMaxTurns: undefined }),
+      deliberateMemberIds,
+    });
+  }, [draftKey, body, mentions, access, sendAs, collaboration, budgetMaxTurns, deliberateMemberIds]);
 
   useEffect(() => {
     if (!insertText || appliedInsertRef.current === insertText.id) return;
     appliedInsertRef.current = insertText.id;
     setMentionOpen(false); // 正文被外部插入——打开中的候选框触发位置已失效
     setMentionTrigger(null);
-    setBody((current) => {
-      const next = current.trim() ? `${current}\n\n${insertText.text}` : insertText.text;
-      return next;
-    });
-    textareaRef.current?.focus();
+    const current = bodyRef.current;
+    const next = current.trim() ? `${current}\n\n${insertText.text}` : insertText.text;
+    setBody(next);
+    const editor = editorRef.current;
+    if (editor != null) {
+      renderEditorBody(editor, next, uploadItemsRaw);
+      setEditorCaret(editor);
+    }
   }, [insertText]);
 
   /** 正文插入应用（r61 G7：摘录等文本块——一次一条，正文保持用户文字，新插入追加不覆盖）。 */
@@ -659,7 +981,13 @@ export function Composer({
     if (items.length === 0) return;
     setMentionOpen(false);
     setMentionTrigger(null);
-    setBody((current) => items.reduce((acc, it) => (acc.trim() ? `${acc}\n\n${it.text}` : it.text), current));
+    const next = items.reduce((acc, it) => (acc.trim() ? `${acc}\n\n${it.text}` : it.text), bodyRef.current);
+    setBody(next);
+    const editor = editorRef.current;
+    if (editor != null) {
+      renderEditorBody(editor, next, getState().uploadItems[draftKey] ?? []);
+      setEditorCaret(editor);
+    }
   };
 
   /**
@@ -670,7 +998,8 @@ export function Composer({
     const onFocusComposer = (e: Event) => {
       if ((e as CustomEvent<string>).detail !== draftKey) return;
       applyDraftInserts(takeDraftInserts(draftKey));
-      textareaRef.current?.focus();
+      syncDraftBodyToEditor(draftKey);
+      editorRef.current?.focus();
     };
     window.addEventListener('zs:focus-composer', onFocusComposer);
     return () => window.removeEventListener('zs:focus-composer', onFocusComposer);
@@ -691,25 +1020,27 @@ export function Composer({
    * `body` 进依赖：所有变更都经 setBody，包括草稿恢复与引用插入。
    */
   useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    const next = Math.min(200, Math.max(54, ta.scrollHeight));
-    ta.style.height = `${next}px`;
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.style.height = 'auto';
+    const next = Math.min(200, Math.max(54, editor.scrollHeight));
+    editor.style.height = `${next}px`;
   }, [body]);
 
-  const route = useMemo(() => deriveRoute(mentions, sendAs, memberIds,collaboration), [mentions, sendAs, memberIds,collaboration]);
+  const route = useMemo(() => deriveRoute(effectiveMentionIds, sendAs, memberIds,collaboration), [effectiveMentionIds, sendAs, memberIds,collaboration]);
+  const budgetBounds = deliberationBudgetBounds(effectiveMentionIds, availableDeliberateIds);
+  const budgetBelowMinimum = deliberate && budgetMaxTurns != null && budgetMaxTurns < budgetBounds.minimum;
+  const budgetAboveMaximum = deliberate && budgetMaxTurns != null && budgetMaxTurns > budgetBounds.maximum;
 
   const currentMode = ACCESS_MODES.find((m) => m.value === access) ?? ACCESS_MODES[0];
 
-  const hasAll = mentions.includes('all');
-  const namedCount = mentions.filter((m) => m !== 'all').length;
+  const hasAll = effectiveMentionIds.includes('all');
+  const namedCount = effectiveMentionIds.filter((m) => m !== 'all').length;
 
   /* E6：方式芯片随 @ 结构切换；默认全关。
      注意：决策 03「先给方案再执行」已并入右侧的「计划模式」权限档，
      因此不 @ 时这里不再重复出现同义开关。 */
   const methodChip = useMemo(() => {
-    if (sendAs === 'record') return null;
     if (hasAll) {
       return {
         key: 'skip_first_draft' as const,
@@ -729,33 +1060,42 @@ export function Composer({
       };
     }
     return null;
-  }, [sendAs, hasAll, namedCount, skipFirstDraft, splitWork]);
+  }, [hasAll, namedCount, skipFirstDraft, splitWork]);
 
   function newId() {
     return `cmd_${Math.random().toString(36).slice(2, 10)}`;
   }
 
   async function submit(imageAck?: 'omit-images') {
-    const text = body.trim();
-    // R66 P3（用户已批准）：没有正文但有**就绪附件**也可发送（默认发 AI；仅记录只保存）——
-    // 草稿 refs 只含已就绪 attachmentId；真正空白（无正文且无可发送附件）仍拒绝。
+    const text = stripInlineAttachmentTokens(body).trim();
+    // 普通聊天固定交给 AI；没有正文但有 ready 附件仍可发送。
     const refsAtGuard = getDraftFull(draftKey).attachments.filter((a) => a.attachmentId != null && a.attachmentId.length > 0);
     if (text.length === 0 && refsAtGuard.length === 0) return;
     if (sendDisabledReason) return;
+    if (deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all')) {
+      setSendErrorFor(draftKey, '请添加至少2位AI');
+      return;
+    }
+    if (deliberate && budgetMaxTurns != null && !isValidDeliberationBudget(budgetMaxTurns, effectiveMentionIds, availableDeliberateIds)) {
+      setSendErrorFor(draftKey, budgetBelowMinimum
+        ? `本次上限至少 ${budgetBounds.minimum} 次`
+        : `本次上限最多 ${budgetBounds.maximum} 次`);
+      return;
+    }
     // r62 P1 防重复守卫（R66 P3 修订）：文件-only 的 body 都为空——不能只比 body，须比**完整
     // 意图身份**（正文+意图+@提及+附件引用集合）。同一身份=换新号必重复，只允许同号重发或
     // 显式放弃；等待期改了正文/附件/提及=不同身份，允许新号发送（未知信封仍保留）。
-    if (pendingEnv != null && pendingIdentityMatches(pendingEnv, text, mentions, sendAs, refsAtGuard.map((a) => a.attachmentId!),collaboration)) {
+    if (pendingEnv != null && pendingIdentityMatches(
+      pendingEnv, text, effectiveMentionIds, sendAs, refsAtGuard.map((a) => a.attachmentId!),
+      collaboration, budgetMaxTurns ?? undefined, collaboration ? budgetPreview?.calls ?? undefined : undefined,
+    )) {
       setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
       return;
     }
     // 防重按**目标键**锁（review-r47 §3/r48 §4）：同一目标在途时挡双击/Enter 并发；其它目标
     // 独立可发；A 的回执 finally 只删 A 的键（不清 B 的锁）。
     if (sendingKeys.has(draftKey) || imageCheckingKeys.has(draftKey)) return;
-    // 图片能力门（第五十二轮，§6.3）：图片附件+派发意图→**显式二选一**（仅发送文字=图片不送
-    // 模型并如实注明；或改为仅记录），选择前不发送；选择结果一次性冻结进信封（imageAck）。
-    // R66 P3：选了「仅发送文字」但正文为空且**其余附件也全是图片**→会形成空模型输入——
-    // 服务端同判拒绝；此处提前给出可行选择（添加文字/改仅记录），不发出必失败的请求。
+    // 图片能力未确认时先给出一次明确选择；普通聊天不存在“改为仅记录”。
     const draftRefs = getDraftFull(draftKey).attachments;
     const imageNames = draftRefs.filter((a) => a.kind === 'image_file').map((a) => a.name);
     if (imageNames.length > 0 && sendAs === 'ai' && imageAck !== 'omit-images') {
@@ -768,18 +1108,18 @@ export function Composer({
           : target.kind === 'thread' ? { kind: target.kind, projectId, conversationId, threadId: target.threadId }
           : { kind: target.kind, projectId, conversationId };
         const capability = await command<{ supported: boolean; willDispatch: boolean; members: Array<{ kind: string; model: string; status: string; channel: string; reason: string; configuration: string; protocol: string }> }>('message.imageCapability', {
-          target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: mentions.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
+          target: formalTarget, ...(collaboration?{collaboration}:{}), mentions: effectiveMentionIds.map((id) => id === 'all' ? { kind: 'all' } : { kind: 'member', memberId: id }),
         });
         if (draftKeyRef.current !== draftKey || getDraftFull(draftKey).rev !== revisionAtCheck || getState().activeProjectId !== projectId) return;
-        if (!capability.supported) { setImageGate({ names: imageNames, reason: capability.members.map((m) => `${m.kind ?? '未配置运行时'} · 模型ID ${m.model ?? '未指定'} · 渠道 ${m.channel ?? '无法确定'} · 配置 ${m.configuration ?? '未知'} · ${m.protocol ?? '协议未验证'} · 图片输入${m.status === 'supported' ? '自动传递；请 @ 单个成员后发送' : '不可用或未确认'}：${m.reason ?? '当前配置无法传递图片'}`).join('；') }); return; }
+        if (!capability.supported) { setImageGate({ names: imageNames, reason: '当前所选 AI 尚不能确认接收图片' }); return; }
       } catch (error) {
-        setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试或改为仅记录。`);
+        setSendErrorFor(draftKey, `图片发送能力读取失败：${(error as Error).message}。草稿与原件保留，可重试、换成员或移除图片。`);
         return;
       } finally { imageCheckingKeys.delete(draftKey); }
 
     }
     if (imageAck === 'omit-images' && text.length === 0 && draftRefs.every((a) => a.kind === 'image_file')) {
-      setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）——请先添加文字、改为「仅记录」，或换非图片附件');
+      setSendErrorFor(draftKey, '已选「仅发送文字」，但没有可用文字（正文为空且附件只有未认证图片）——请先添加文字或换非图片附件');
       return;
     }
     sendingKeys.add(draftKey);
@@ -787,17 +1127,18 @@ export function Composer({
     setSendErrorState(null);
     setImageGate(null);
     const keyAtSend = draftKey;
-    const sentMentions = mentions;
+    const sentMentions = effectiveMentionIds;
     /** 本次实际发送的附件引用（refs 身份——不再按文件名/大小识别，review-r51 §2）。 */
     const sentAttachmentIds = draftRefs.map((a) => a.attachmentId);
     const sentAttachments = draftRefs;
-    const sentAs = sendAs;
+    const sentBudget = collaboration ? (budgetMaxTurns ?? budgetPreview?.calls) : undefined;
 
     const outcome = onSend({
       body: text,
       sendAs,
-      mentionIds: mentions,
+      mentionIds: effectiveMentionIds,
       ...(collaboration?{collaboration}:{}),
+      ...(sentBudget != null ? { budgetMaxTurns: sentBudget } : {}),
       method: { planFirst: access === 'plan', skipFirstDraft, splitWork },
       access,
       attachments: sentAttachments,
@@ -817,7 +1158,7 @@ export function Composer({
     const settleForKey = (key: string): HifiDraft => {
       const d = getDraftFull(key);
       const unchanged = d.rev === revAtSend;
-      const nextBody = unchanged && d.body.startsWith(text) ? d.body.slice(text.length).replace(/^\s+/, '') : d.body;
+      const nextBody = unchanged ? stripInlineAttachmentTokens(d.body).replace(/^\s+/, '') : d.body;
       const mentionsClear = unchanged && d.mentions.length === sentMentions.length && d.mentions.every((m, i) => m === sentMentions[i]);
       const sentIds = new Set(sentAttachmentIds);
       const keptAttachments = d.attachments.filter((a) => !sentIds.has(a.attachmentId));
@@ -826,8 +1167,7 @@ export function Composer({
         body: nextBody,
         mentions: mentionsClear ? [] : d.mentions,
         attachments: keptAttachments,
-        // 「仅记录」一次性：确认成功后回到默认发送方式（失败/未知不复位——重试仍是原意图）。
-        sendAs: sentAs === 'record' ? (recordThread ? 'record' : 'ai') : d.sendAs,
+        sendAs: 'ai',
       };
       setDraftFull(key, settled);
       clearSettledUploads(key, sentAttachmentIds);
@@ -838,7 +1178,10 @@ export function Composer({
       setBody(settled.body);
       setMentions(settled.mentions); // r63：已发 @ 的清理结果随统一清结算同步（此前不同步=芯片残留）
       // 附件芯片由 store 驱动（clearSettledUploads 已按 refs 清）——不同步本地状态。
-      setSendAs(settled.sendAs);
+      if (editorRef.current != null) {
+        renderEditorBody(editorRef.current, settled.body, getState().uploadItems[key] ?? []);
+        setEditorCaret(editorRef.current);
+      }
       setMentionOpen(false);
     };
 
@@ -895,12 +1238,15 @@ export function Composer({
       if (r == null || r.status === 'ok') {
         // r63 P1：重试成功与普通成功共用 settleOutbound 统一清算（正文/mentions/refs/一次性
         // 意图/账本+pendingSends 同号收口与队首顶替；先剥内容后删账的崩溃安全顺序不变）。
-        settleOutbound(keyAtSend, env, { recordThread });
+        settleOutbound(keyAtSend, env);
         const settled = getDraftFull(keyAtSend);
         if (draftKeyRef.current === keyAtSend) {
           setBody(settled.body);
           setMentions(settled.mentions);
-          setSendAs(settled.sendAs);
+          if (editorRef.current != null) {
+            renderEditorBody(editorRef.current, settled.body, getState().uploadItems[keyAtSend] ?? []);
+            setEditorCaret(editorRef.current);
+          }
         }
         return;
       }
@@ -919,7 +1265,7 @@ export function Composer({
   }
 
   function replaceMentionTriggerWithToken(token: string) {
-    const current = textareaRef.current?.value ?? body;
+    const current = serializeEditor(editorRef.current) || bodyRef.current;
     const trigger = mentionTrigger?.draftKey === draftKey ? mentionTrigger : { index: 0, end: 0, draftKey };
     const insertion = `@${token} `;
     const next = `${current.slice(0, trigger.index)}${insertion}${current.slice(trigger.end)}`.replace(/^\s+/, '');
@@ -928,13 +1274,11 @@ export function Composer({
     setMentionTrigger(null);
     setMentionQuery('');
     setMentionOpen(false);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta == null) return;
-      const cursor = trigger.index + insertion.length;
-      ta.focus();
-      ta.setSelectionRange(cursor, cursor);
-    });
+    const editor = editorRef.current;
+    if (editor != null) {
+      renderEditorBody(editor, next, uploadItemsRaw);
+      setEditorCaret(editor, trigger.index + insertion.length);
+    }
   }
 
   function insertMention(id: string) {
@@ -943,14 +1287,22 @@ export function Composer({
   }
 
   function openMentionPickerFromToolbar() {
-    const current = textareaRef.current?.value ?? body;
-    const inserted = toolbarMentionInsertion(current);
-    setBody(inserted.value);
-    setMentions(resolveMentionsFromBody(inserted.value));
-    setMentionTrigger({ index: inserted.index, end: inserted.end, draftKey });
+    const editor = editorRef.current;
+    const current = serializeEditor(editor) || bodyRef.current;
+    const at = editorCaretOffset(editor);
+    const separator = at > 0 && !/\s$/.test(current.slice(0, at)) ? ' ' : '';
+    const inserted = `${separator}@`;
+    const next = `${current.slice(0, at)}${inserted}${current.slice(at)}`;
+    const index = at + separator.length;
+    setBody(next);
+    setMentions(resolveMentionsFromBody(next));
+    setMentionTrigger({ index, end: index + 1, draftKey });
     setMentionQuery('');
     setMentionOpen(true);
-    requestAnimationFrame(() => textareaRef.current?.setSelectionRange(inserted.end, inserted.end));
+    if (editor != null) {
+      renderEditorBody(editor, next, uploadItemsRaw);
+      setEditorCaret(editor, index + 1);
+    }
   }
 
   /**
@@ -958,10 +1310,10 @@ export function Composer({
    * （不再只认「正文末尾的 @」，光标处/中文紧邻触发同判）；IME 组合中不触发（组合结束
    * 再判定一次——输入法过程不被打断，结束时若光标前恰为 @ 候选照常打开）。
    */
-  function detectMentionTrigger(ta: HTMLTextAreaElement | null): void {
-    if (ta == null || composingRef.current) return;
-    const v = ta.value;
-    const cur = ta.selectionStart ?? v.length;
+  function detectMentionTrigger(editor: HTMLDivElement | null): void {
+    if (editor == null || composingRef.current) return;
+    const v = serializeEditor(editor);
+    const cur = editorCaretOffset(editor);
     const range = detectMentionRange(v, cur);
     if (range != null) {
       setMentionOpen(true);
@@ -975,14 +1327,23 @@ export function Composer({
     }
   }
 
-  function onInput(ta: HTMLTextAreaElement) {
-    setBody(ta.value);
-    setMentions(resolveMentionsFromBody(ta.value));
-    detectMentionTrigger(ta);
+  function onInput(editor: HTMLDivElement) {
+    const next = serializeEditor(editor);
+    setBody(next);
+    setMentions(resolveMentionsFromBody(next));
+    const missing = staleAttachmentUploadIds(next, getState().uploadItems[draftKey] ?? []);
+    if (missing.length > 0) {
+      // Keep the visible edit made by the user, then atomically retire the
+      // attachment identities that no longer have a body token.
+      setDraftFull(draftKey, { ...getDraftFull(draftKey), body: next });
+      for (const uploadId of missing) removeUploadItem(draftKey, uploadId);
+      syncDraftBodyToEditor(draftKey);
+    }
+    detectMentionTrigger(editor);
   }
 
   const normalizedMentionQuery = mentionQuery.trim().toLocaleLowerCase();
-  const mentionMemberCandidates = members.filter((member) => {
+  const mentionMemberCandidates = (showMentions ? members : []).filter((member) => {
     if (!member.enabled) return false;
     const haystack = `${member.displayName} ${member.description ?? ''} ${runtimeLabelOf(member)}`.toLocaleLowerCase();
     return normalizedMentionQuery.length === 0 || haystack.includes(normalizedMentionQuery);
@@ -991,7 +1352,7 @@ export function Composer({
     const already = doc.attachmentId != null && attachments.some((item) => item.attachmentId === doc.attachmentId);
     return !already && (normalizedMentionQuery.length === 0 || doc.name.toLocaleLowerCase().includes(normalizedMentionQuery));
   });
-  const showAllCandidate = '全体'.includes(normalizedMentionQuery) || normalizedMentionQuery.length === 0;
+  const showAllCandidate = showMentions && ('全体'.includes(normalizedMentionQuery) || normalizedMentionQuery.length === 0);
   const mentionCandidates: Array<{ kind: 'all' } | { kind: 'member'; id: string } | { kind: 'document'; doc: MentionDocument }> = [
     ...(showAllCandidate ? [{ kind: 'all' as const }] : []),
     ...mentionMemberCandidates.map((member) => ({ kind: 'member' as const, id: member.id })),
@@ -1002,10 +1363,12 @@ export function Composer({
     if (documentBusy != null) return;
     const startDraftKey = draftKey;
     const startProjectId = activeProjectId;
-    const startValue = textareaRef.current?.value ?? body;
+    const startValue = serializeEditor(editorRef.current) || bodyRef.current;
+    const trigger = mentionTrigger?.draftKey === startDraftKey
+      ? { index: mentionTrigger.index, end: mentionTrigger.end }
+      : { index: editorCaretOffset(editorRef.current), end: editorCaretOffset(editorRef.current) };
     const insertionContextIsCurrent = () => draftKeyRef.current === startDraftKey
-      && getState().activeProjectId === startProjectId
-      && (textareaRef.current?.value ?? body) === startValue;
+      && getState().activeProjectId === startProjectId;
     setDocumentBusy(doc.key);
     setMentionDocsError(null);
     try {
@@ -1018,11 +1381,26 @@ export function Composer({
           kind: doc.fileKind,
           hash: doc.hash,
           revision: doc.revision,
-        });
+        }, { replaceRange: { start: trigger.index, end: trigger.end } });
         if (!added.ok) throw Error(added.error ?? '文档引用保存失败');
+        if (added.existed === true) {
+          const d = getDraftFull(startDraftKey);
+          const cleaned = `${startValue.slice(0, trigger.index)}${startValue.slice(trigger.end)}`;
+          setDraftFull(startDraftKey, { ...d, body: cleaned });
+        }
       } else {
         if (doc.path == null || !activeProjectId) throw Error('工作区文件身份不完整');
         if (attachmentUpload == null) throw Error('当前页面没有可用的会话附件通道');
+        const cleaned = `${startValue.slice(0, trigger.index)}${startValue.slice(trigger.end)}`;
+        const beforeAdd = getDraftFull(startDraftKey);
+        setDraftFull(startDraftKey, { ...beforeAdd, body: cleaned });
+        if (draftKeyRef.current === startDraftKey) {
+          setBody(cleaned);
+          if (editorRef.current != null) {
+            renderEditorBody(editorRef.current, cleaned, getState().uploadItems[startDraftKey] ?? []);
+            setEditorCaret(editorRef.current, trigger.index);
+          }
+        }
         const original = await command<{ bytesBase64: string; filename: string }>('project.file.originalFile', {
           projectId: activeProjectId,
           path: doc.path,
@@ -1031,11 +1409,14 @@ export function Composer({
         const bytes = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
         await uploadPickedFiles([new File([bytes], original.filename)]);
-        const stored = getDraftFull(draftKey).attachments.find((item) => item.name === original.filename);
+        const stored = getDraftFull(startDraftKey).attachments.find((item) => item.name === original.filename);
         if (stored == null) throw Error('文件未形成可发送的托管快照（上传或提取失败，详见附件提示）');
       }
       if (!insertionContextIsCurrent()) return;
-      replaceMentionTriggerWithToken(`文档：${doc.name}`);
+      syncDraftBodyToEditor(startDraftKey);
+      setMentionTrigger(null);
+      setMentionQuery('');
+      setMentionOpen(false);
     } catch (error) {
       if (insertionContextIsCurrent()) {
         setMentionDocsError(`引用「${doc.name}」失败：${(error as Error).message}。输入与已选内容保留。`);
@@ -1053,7 +1434,7 @@ export function Composer({
   }
 
   /** 参与者名：用于 @ 按钮的 tooltip，让发送前能看到这次会叫上谁 */
-  const participantNames = (mentions.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds)
+  const participantNames = (effectiveMentionIds.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds)
     .map((id) => memberLabel(allMembers.find((m) => m.id === id)))
     .join('、');
 
@@ -1064,10 +1445,9 @@ export function Composer({
    * 原来只在发送后的系统卡里出现，不满足"发送前显示推导值"。
    */
   const budgetPreview = useMemo(() => {
-    if (sendAs === 'record') return null;
-    const n = route.resolvedMemberIds.length;
+    const n = route.mode === 'DELIBERATE' ? budgetBounds.rosterSize : route.resolvedMemberIds.length;
     if (route.mode === 'DELIBERATE' && n > 0) {
-      const core = 6 * n + 2;
+      const core = defaultDeliberationMaxTurns(n);
       return {
         calls: core,
         // 公式与推导明细收进 tooltip：主界面只显示"最多 N 次调用"
@@ -1078,7 +1458,34 @@ export function Composer({
       return { calls: 6, detail: 'DIRECT：用户最初输入引发的模型调用；额外输入创建新的预算段。' };
     }
     return { calls: 24, detail: 'AUTO 本轮共用最多24次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。实际以正式运行快照为准。' };
-  }, [sendAs, route.mode, route.resolvedMemberIds.length]);
+  }, [route.mode, route.resolvedMemberIds.length, budgetBounds.rosterSize]);
+
+  const effectiveBudget = budgetMaxTurns ?? (route.mode === 'DELIBERATE' ? budgetPreview?.calls ?? null : null);
+  const modeInvalid = deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all');
+  const canUseDeliberate = target.kind === 'room_root' || target.kind === 'thread';
+  const hasSendableBody = stripInlineAttachmentTokens(body).trim().length > 0;
+
+  function enableDeliberate(): void {
+    const explicitlyNamed = mentions.filter((id) => availableDeliberateIds.includes(id));
+    const initial = explicitlyNamed.length >= 2 ? explicitlyNamed : availableDeliberateIds;
+    setDeliberateMemberIds(initial);
+    setDeliberate(true);
+    setModeMenuAnchor(null);
+  }
+
+  function saveBudget(): void {
+    const parsed = Number(budgetInput);
+    if (!isValidDeliberationBudget(parsed, effectiveMentionIds, availableDeliberateIds)) return;
+    setBudgetMaxTurns(parsed);
+    setDraftFull(draftKey, { ...getDraftFull(draftKey), body: bodyRef.current, budgetMaxTurns: parsed });
+    setBudgetMenuAnchor(null);
+  }
+
+  function toggleDeliberateMember(memberId: string): void {
+    setDeliberateMemberIds((current) => current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId]);
+  }
 
   /**
    * 预算可见性（减负 §6.1 / D5 决议）。
@@ -1088,15 +1495,15 @@ export function Composer({
    * 普通任务的预算明细收进「本次运行设置」；只有当它**影响本次执行**时
    * （预算已用完 / 接近上限）才在输入区显式提示。
    */
-  const budgetVisible = sendAs === 'ai' && route.mode === 'DELIBERATE' && Boolean(budgetPreview);
+  const budgetVisible = deliberate && !modeInvalid && effectiveBudget != null;
   const budgetAlert = useMemo(() => {
-    if (sendAs === 'record' || !runBudget) return null;
+    if (!runBudget) return null;
     const { used, max } = runBudget;
     if (max <= 0) return null;
     if (used >= max) return `本次运行预算已用完（${used}/${max} 次），继续会创建新的预算段`;
     if (used >= max - 1) return `本次运行接近上限（${used}/${max} 次）`;
     return null;
-  }, [sendAs, runBudget]);
+  }, [runBudget]);
 
   /**
    * r63：runtime 未绑定提示（发送区就地）——@ 指派成员未绑定（或未指派且项目无任何已绑定
@@ -1104,14 +1511,65 @@ export function Composer({
    * 按认证边界处理），未绑定是明确的配置缺失。
    */
   const navigateToMembers = (): void => { void import('../lib/router').then((m) => m.navigate('/members')); };
+  useEffect(() => {
+    const preventNavigation = (event: DragEvent): void => {
+      if (event.dataTransfer != null && Array.from(event.dataTransfer.types).includes('Files')) event.preventDefault();
+    };
+    window.addEventListener('dragover', preventNavigation);
+    window.addEventListener('drop', preventNavigation);
+    return () => {
+      window.removeEventListener('dragover', preventNavigation);
+      window.removeEventListener('drop', preventNavigation);
+    };
+  }, []);
+
+  const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    if (attachmentUpload == null) {
+      setSendErrorFor(draftKey, '当前页面没有可用的会话附件通道，文件未加入草稿');
+      return;
+    }
+    void uploadPickedFiles(files);
+  };
+
+  const handleInlineTokenClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement;
+    const host = target.closest<HTMLElement>('[data-zs-inline-token="1"]');
+    if (host == null) return;
+    const remove = target.closest<HTMLElement>('[data-zs-file-remove="1"]');
+    if (remove != null) {
+      event.preventDefault();
+      event.stopPropagation();
+      const uploadId = host.dataset.zsUploadId;
+      if (uploadId != null) removeAttachment(uploadId);
+      return;
+    }
+    if (target.closest<HTMLElement>('[data-zs-file-open="1"]') == null) return;
+    const attachmentId = host.dataset.zsAttachmentId;
+    if (attachmentId == null || attachmentUpload == null) return;
+    event.preventDefault();
+    openPreview({
+      attachmentId,
+      filename: host.dataset.zsFileName ?? '附件',
+      kind: host.dataset.zsFileKind ?? 'text_file',
+      conversationId: attachmentUpload.conversationId,
+      origin: '输入区附件',
+      draftKey,
+    });
+  };
+
   const runtimeHint = useMemo(() => {
-    if (sendAs !== 'ai' || target.kind === 'dm') return null; // DM 走成员自身绑定链；仅记录不派发
+    if (target.kind === 'dm') return null; // DM 走成员自身绑定链
     // 房间根输入在 M0 非 DIRECT 时先要选定单个成员；此刻未绑定提示指向尚未确定的执行
     // 成员，会与同位置的 M0 派发提示叠成两张警示。选定成员后再核其真实 runtime。
     const bound = (id: string) => memberRuntimes[id]?.status === 'bound';
     const agentIds = memberIds.filter((id) => allMembers.find((m) => m.id === id)?.principalType === 'agent');
     if (agentIds.length === 0) return null;
-    const named = mentions.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds.filter((id) => id !== 'all');
+    const named = effectiveMentionIds.length===0&&route.mode==='AUTO'&&room?.coordinatorMemberId?[room.coordinatorMemberId]:route.resolvedMemberIds.filter((id) => id !== 'all');
     if (named.length > 0) {
       const namedUnbound = named.filter((id) => !bound(id));
       if (namedUnbound.length === 0) return null;
@@ -1123,14 +1581,34 @@ export function Composer({
       if (!agentIds.some((id) => bound(id))) return { text: '项目成员都还没绑定 runtime——发送给 AI 前请先在成员页配置渠道与模型', who: agentIds.length };
     }
     return null;
-  }, [sendAs, target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds,room?.coordinatorMemberId,mentions.length]);
+  }, [target.kind, memberIds, memberRuntimes, allMembers, route.mode, route.resolvedMemberIds,room?.coordinatorMemberId,effectiveMentionIds.length]);
 
   return (
     <div
-      className="composer"
+      className={`composer${dragActive ? ' is-drag-over' : ''}`}
       data-zs-composer-mentions={mentions.join('|')}
       data-zs-composer-documents={attachments.filter((item) => item.status === 'ready').map((item) => item.attachmentId ?? '').join('|')}
+      onDragEnter={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+        event.preventDefault();
+        setDragActive(true);
+      }}
+      onDragOver={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragActive(false);
+      }}
+      onDrop={handleComposerDrop}
     >
+      {dragActive ? (
+        <div className="composer-drop-hint" data-zs-composer-drop-target="1" role="status">
+          <Icon name="paperclip" size={14} /> 松开以加入当前草稿
+        </div>
+      ) : null}
       {/**
        * 目标摘要行已按用户要求**整行移除**（2026-09-24 第三轮）。
        *
@@ -1160,21 +1638,15 @@ export function Composer({
               </button>
             ) : null}
           </span>
-          {/* 不写内部接口名（task.steer）：用户看到的是"直接交给谁"（减负 §4）。
-              仅记录时**不会**定向派发，所以这行说明按意图换口径，避免许诺一件不会发生的事。 */}
-          <span className="small faint">
-            {sendAs === 'record'
-              ? '本次是仅记录：定向只作为备注保留，不会交给该子任务执行'
-              : '这条内容直接交给该子任务负责人，不经协调者转述；取消定向即回到整串'}
-          </span>
+          <span className="small faint">这条内容直接交给该子任务负责人，不经协调者转述；取消定向即回到整串</span>
         </div>
       ) : null}
 
       {/* 发送前说明真实协作路由；不更改草稿中的提及或发送意图。 */}
-      {sendAs==='ai'&&writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip record-chip">{writeHint.error}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
+      {writeHint?.key===writeContext&&writeHint.error?<div className="composer-mentions" data-zs-write-hint-error role="alert"><span className="chip composer-info-chip">{writeHint.error}{writeHint.readAt?'（保留上次确认；派发前仍会复查）':''}</span></div>:null}
       {runtimeHint != null && sendDisabledReason == null && inputDisabledReason == null ? (
         <div className="composer-mentions" data-zs-runtime-hint="1">
-          <span className="chip record-chip" title={runtimeHint.text}>
+          <span className="chip composer-info-chip" title={runtimeHint.text}>
             <Icon name="alert-triangle" size={11} />
             {runtimeHint.text}
             <button title="打开成员页配置 runtime（渠道/模型/权限模式）" onClick={() => { navigateToMembers(); }}>去成员页配置</button>
@@ -1182,67 +1654,30 @@ export function Composer({
         </div>
       ) : null}
 
-      {/* 附件芯片（store 上传项：uploading/ready/failed 如实；失败**原因就地可见**——R69 P1-C
-          不再只藏 title；就绪字段统一 名称+大小+v版本+预览（空文件显示 0B 也可预览）；提取
-          不可用分列警示（P1-D）。按 uploadId 移除——上传中移除=回执到达即弃，不复活。 */}
-      {attachments.length > 0 ? (
-        <div className="composer-mentions" data-zs-attach-chips="1">
-          {attachments.map((a) => (
-            <span key={a.uploadId} className="chip mono" data-zs-att={a.status} title={a.status === 'failed' ? `上传失败：${a.error ?? '未知原因'}` : a.status === 'uploading' ? '上传中…（可移除——回执到达即弃）' : `已上传（${a.kind ?? '?'} v${a.revision ?? '?'} · ${String(a.hash ?? '').slice(0, 8)}…）——随下一条消息发送`}>
-              <Icon name="paperclip" size={11} />
-              {a.name}
-              <span className="faint">{a.size > 0 ? `${Math.max(1, Math.round(a.size / 1024))}KB` : '0B'}</span>
-              {a.status === 'uploading' ? <span className="faint">上传中…</span> : null}
-              {a.status === 'ready' ? <span className="faint">v{a.revision}</span> : null}
-              {a.status === 'ready' && a.size === 0 && (a.kind === 'text_file' || a.kind === 'code_file') ? <span className="faint">空文件</span> : null}
-              {a.status === 'ready' && attachmentUpload != null ? (
-                <button title="打开共享预览（只读——来源/版本/hash；表格可设注入范围）" onClick={() => openPreview({ attachmentId: a.attachmentId ?? '', filename: a.name, kind: a.kind ?? 'text_file', conversationId: attachmentUpload.conversationId, origin: '草稿附件', draftKey, hashHint: a.hash, revisionHint: a.revision })}>预览</button>
-              ) : null}
-              <button onClick={() => removeAttachment(a.uploadId)} title={a.status === 'failed' ? '移除失败的附件' : '移除附件（已上传的资源仍在会话附件列表中，不再随发送携带）'}>
-                <Icon name="x" size={11} />
-              </button>
-            </span>
-          ))}
-          {attachments.filter((a) => a.status === 'failed').map((a) => (
-            <span key={`${a.uploadId}-err`} className="chip mono zs-att-error" data-zs-att-error={a.name} role="alert" title={a.error ?? '未知原因'}>
-              <Icon name="alert-triangle" size={11} />
-              <span style={{ color: 'var(--warning)' }}>{a.name} 上传失败：{a.error ?? '未知原因'}</span>
-              <button title="重新打开文件选择框（换一个文件或修正后重选）" onClick={() => fileInputRef.current?.click()}>重选文件</button>
-            </span>
-          ))}
-          {attachments.filter((a) => a.status === 'ready' && a.warning != null).map((a) => (
-            <span key={`${a.uploadId}-warn`} className="chip mono" data-zs-att-warn={a.name} title={a.warning}>
-              <Icon name="alert-triangle" size={11} />
-              {a.name} 已保存，但{a.warning}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {/* R69 P1-C：空文件发 AI 门——正文为空且可发送附件全是 0B 空文本时，发给 AI 没有任何
-          可用内容；就地说明并给可行操作（不静默造空派发、不禁上传——仅记录/补充正文均可）。 */}
-      {sendAs === 'ai' && body.trim().length === 0 && readyAttachmentCount > 0
+      {/* 空文件门：不造空派发，也不提供“仅记录”逃生口。 */}
+      {stripInlineAttachmentTokens(body).trim().length === 0 && readyAttachmentCount > 0
         && attachments.filter((x) => x.status === 'ready').every((x) => x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file')) ? (
         <div className="composer-mentions" data-zs-empty-text-gate="1">
-          <span className="chip record-chip" title="这些附件都是 0 字节空文本——发给 AI 不会带上任何可用内容（不冒充模型已读、不造空派发）">
+          <span className="chip composer-info-chip" title="这些附件都是 0 字节空文本——发给 AI 不会带上任何可用内容">
             <Icon name="alert-triangle" size={11} />
             空文件没有可发送给 AI 的内容（{attachments.filter((x) => x.status === 'ready' && x.size === 0).map((x) => x.name).join('、')}）
-            <button title="本次只保存内容、不派发（空文件照常作为记录保存）" onClick={() => setSendAs('record')}>本次仅记录</button>
+            <button title="移除所有空文件后继续输入" onClick={() => {
+              for (const item of attachments.filter((x) => x.status === 'ready' && x.size === 0 && (x.kind === 'text_file' || x.kind === 'code_file'))) removeAttachment(item.uploadId);
+            }}>移除空文件</button>
           </span>
         </div>
       ) : null}
 
       {/* 图片能力门（第五十二轮 §6.3）：显式二选一——选择前不发送；结果一次性冻结进信封。 */}
       {imageStatus?.key === imageContext && attachments.some(a => a.status === 'ready' && a.kind === 'image_file') ? <div className="composer-mentions" data-zs-image-status="1">
-        <span className="chip record-chip" style={{ whiteSpace: 'normal' }}>{sendAs === 'record' ? '本次仅记录：图片本地保存与预览可用。' : ''}{imageStatus.text}</span>
+        <span className="chip composer-info-chip" style={{ whiteSpace: 'normal' }}>{imageStatus.text}</span>
       </div> : null}
       {imageGate != null ? (
         <div className="composer-mentions">
-          <span className="chip record-chip" title="模型图片输入能力未认证（IMAGE_INPUT_UNVERIFIED）——图片不会作为模型输入；两种选择都会如实注明">
+          <span className="chip composer-info-chip" title="当前目标未能确认图片输入能力；图片默认不会作为模型输入">
             <Icon name="image" size={11} />
             {imageGate.reason ?? '当前目标图片输入尚未认证'}：{imageGate.names.join('、')}
-            <button disabled={body.trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="仅发送文字：图片随消息保存给用户看，但注入文本将如实注明「图片未送给模型」" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
-            <button title="本次改为仅记录：不派发、不注入，图片只作为记录保存" onClick={() => { setImageGate(null); setSendAs('record'); }}>改为仅记录</button>
+            <button disabled={stripInlineAttachmentTokens(body).trim().length === 0 && attachments.filter((a) => a.status === 'ready').every((a) => a.kind === 'image_file')} title="图片随消息保存给用户看，但注入文本会如实注明图片未送给模型" onClick={() => submit('omit-images')}>仅发送文字（图片不送模型）</button>
             <button title="移除本草稿图片引用；已保存原件保留，其余内容可继续发送" onClick={() => { for (const a of attachments) if (a.kind === 'image_file') removeAttachment(a.uploadId); setImageGate(null); }}>移除图片继续</button>
             {showMentions ? <button title="重新选择已认证图片输入的成员后发送" onClick={() => { setImageGate(null); setMentionTrigger(null); setMentionOpen(true); }}>换可用成员</button> : <button onClick={navigateToMembers}>成员配置</button>}
             <button title="暂不发送" onClick={() => setImageGate(null)}>取消</button>
@@ -1254,7 +1689,7 @@ export function Composer({
           R66 P3：文件-only 信封 body 为空——摘要显示附件数而不是空正文。 */}
       {pendingEnv != null ? (
         <div className="composer-mentions">
-          <span className="chip record-chip" title={`结果未知的发送：${pendingEnvSummary(pendingEnv)}（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
+          <span className="chip composer-info-chip" title={`结果未知的发送：${pendingEnvSummary(pendingEnv)}（${new Date(pendingEnv.at).toLocaleTimeString()}）`}>
             <Icon name="alert-triangle" size={11} />
             上次发送结果未知：{pendingEnvSummary(pendingEnv).slice(0, 24)}…
             <button title="严格重发原信封（同命令号——服务幂等，不会重复）" onClick={() => retryUnknown(pendingEnv)}>重发原内容</button>
@@ -1263,66 +1698,57 @@ export function Composer({
         </div>
       ) : null}
 
-{/**
-       * 「仅记录」标记（一次性发送意图，2026-09-25）。
-       *
-       * 它表达的是**这一次**不会请求 AI 回复：
-       *  · 可随时用 ✕ 取消，取消后立刻恢复成普通的"发送给 AI"；
-       *  · 保存成功后自动消失（意图只用一次）；
-       *  · 不改变权限档位的值、不清运行、不停任务。
-       * 放在输入框上方与 @／附件同一排，是为了跟"这次要发什么"待在一起，
-       * 而不是又造一条常驻栏。
-       */}
-      {sendAs === 'record' ? (
-        <div className="composer-mentions">
-          <span
-            className="chip record-chip"
-            title={
-              recordThread
-                ? '这是历史记录串：里面的消息一直只保存、不请求 AI 回复；如果你想让它交给 AI，取消这个标记再发送'
-                : '仅记录：这次只保存内容，不请求 AI 回复、不创建运行、不占用预算（点右侧 ✕ 取消，恢复发送给 AI）'
-            }
-          >
-            <Icon name="bookmark" size={11} />
-            仅记录 · 不请求回复
-            <button onClick={() => setSendAs('ai')} title="取消仅记录，恢复发送给 AI" aria-label="取消仅记录">
-              <Icon name="x" size={11} />
-            </button>
-          </span>
-        </div>
-      ) : null}
-
       <div className="composer-box">
-        <textarea
-          ref={textareaRef}
-          className="composer-input"
-          rows={2}
-          disabled={Boolean(inputDisabledReason)}
-          placeholder={
-            /*
-             * 2026-09-25 起：普通输入默认与 AI 交流，placeholder 直接说明"这条会发给谁"。
-             * 不再出现"任务/讨论"二选一，也不再拿"不调用模型"当默认档位 —
-             * 只有本次选了「仅记录」（或身处历史记录串）才写成保存记录。
-             */
+        <div
+          ref={editorRef}
+          className="composer-input composer-editor"
+          contentEditable={!inputDisabledReason}
+          suppressContentEditableWarning
+          role="textbox"
+          aria-label="输入消息"
+          aria-multiline="true"
+          aria-disabled={Boolean(inputDisabledReason)}
+          data-placeholder={
             inputDisabledReason
               ? inputDisabledReason
-              : sendAs === 'record'
-                ? '保存记录 · 不会请求 AI 回复…'
-                : target.kind === 'dm'
-                  ? `给 ${dm?.title ?? '这个成员'} 发消息…`
-                  : target.kind === 'room_root'
-                    ? '发送消息，可 @ 指定成员…'
-                    : `跟进当前任务，可 @ 指定成员…`
+              : target.kind === 'dm'
+                ? `给 ${dm?.title ?? '这个成员'} 发消息…`
+                : target.kind === 'room_root'
+                  ? '发送消息，可 @ 指定成员或文件…'
+                  : '跟进当前任务，可 @ 指定成员或文件…'
           }
-          value={body}
-          onChange={(e) => onInput(e.target)}
+          onInput={(e) => onInput(e.currentTarget)}
+          onClick={handleInlineTokenClick}
+          onCopy={(event) => {
+            const selection = window.getSelection();
+            if (selection == null || selection.rangeCount === 0 || selection.isCollapsed) return;
+            event.preventDefault();
+            const holder = document.createElement('div');
+            holder.appendChild(selection.getRangeAt(0).cloneContents());
+            event.clipboardData.setData('text/plain', serializeEditorForClipboard(holder).replace(/\n+$/, ''));
+          }}
+          onPaste={(e) => {
+            if (inputDisabledReason) return;
+            const files = Array.from(e.clipboardData.files ?? []);
+            if (files.length > 0) {
+              e.preventDefault();
+              void uploadPickedFiles(files);
+              return;
+            }
+            const text = e.clipboardData.getData('text/plain');
+            if (text.length === 0) return;
+            e.preventDefault();
+            const editor = e.currentTarget;
+            editorInsertPlainText(editor, text);
+            onInput(editor);
+          }}
           onCompositionStart={() => {
             composingRef.current = true;
           }}
           onCompositionEnd={() => {
             composingRef.current = false;
             // 组合结束再判一次（IME：组合过程不触发，提交后光标前恰为 @ 照常打开候选）。
-            detectMentionTrigger(textareaRef.current);
+            onInput(editorRef.current!);
           }}
           onKeyDown={(e) => {
             if (e.key === 'Escape' && mentionOpen) {
@@ -1348,6 +1774,14 @@ export function Composer({
                 return;
               }
             }
+            if (e.key === 'Enter' && e.shiftKey) {
+              if (composingRef.current || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              const editor = e.currentTarget;
+              editorInsertPlainText(editor, '\n');
+              onInput(editor);
+              return;
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               // 中文输入法组合态的 Enter 不发送（§17.4）
               if (composingRef.current || e.nativeEvent.isComposing) return;
@@ -1355,11 +1789,11 @@ export function Composer({
               submit();
             }
           }}
-        />
+        ></div>
 
-        {mentionOpen && showMentions ? (
+        {mentionOpen ? (
           <div className="mention-pop" data-zs-mention-pop="1">
-            <div className="menu-label">@ 成员或文档{normalizedMentionQuery ? ` · 搜索「${mentionQuery}」` : ' · 继续输入可搜索'}</div>
+            <div className="menu-label">@ {showMentions ? '成员或文件' : '文件'}{normalizedMentionQuery ? ` · 搜索「${mentionQuery}」` : ' · 继续输入可搜索'}</div>
             {showAllCandidate ? (
               <button
                 className={`menu-item${mentionActive === 0 ? ' active' : ''}`}
@@ -1372,8 +1806,8 @@ export function Composer({
                 <span className="hint">{members.filter(m=>m.enabled).length} 位 AI</span>
               </button>
             ) : null}
-            <div className="menu-sep" />
-            <div className="menu-label">成员</div>
+            {showMentions ? <div className="menu-sep" /> : null}
+            {showMentions ? <div className="menu-label">成员</div> : null}
             {mentionMemberCandidates.map((m, memberIndex) => {
               const candidateIndex = (showAllCandidate ? 1 : 0) + memberIndex;
               return (
@@ -1391,9 +1825,9 @@ export function Composer({
                 </button>
               );
             })}
-            {mentionMemberCandidates.length === 0 ? <div className="small faint" style={{ padding: '4px 8px' }}>没有匹配的成员</div> : null}
+            {showMentions && mentionMemberCandidates.length === 0 ? <div className="small faint" style={{ padding: '4px 8px' }}>没有匹配的成员</div> : null}
             <div className="menu-sep" />
-            <div className="menu-label">文档</div>
+            <div className="menu-label">文件</div>
             {mentionDocsLoading ? <div className="small faint" style={{ padding: '4px 8px' }}>正在读取工作区与已上传文档…</div> : null}
             {mentionDocsError != null ? <div className="small" role="alert" style={{ padding: '4px 8px', color: 'var(--warning)' }}>{mentionDocsError}</div> : null}
             {mentionDocumentCandidates.map((doc, docIndex) => {
@@ -1419,12 +1853,7 @@ export function Composer({
         ) : null}
 
         <div className="composer-toolbar">
-          {/**
-           * 「任务/讨论」常驻切换已按用户决定**移除**（2026-09-25）：普通输入默认与 AI 交流，
-           * 不再要求用户先声明"这次是任务还是备注"。
-           * 只想留字不留回复时，从右侧「⋯」菜单选一次性的「仅记录，不请求回复」——
-           * 它是一次发送意图，而不是常驻模式（见下方 record chip）。
-           */}
+          {/* 普通输入固定交给 AI；不存在“任务/讨论”或“仅记录”开关。 */}
           {methodChip&&!formalLimits?.method ? (
             <button
               className={`method-chip${methodChip.on ? ' on' : ''}`}
@@ -1445,7 +1874,7 @@ export function Composer({
               页面维持 formalLimits 禁用说明——不出现「看起来已附上」的 mock 成功。 */}
           <button
             className="icon-btn sm"
-            disabled={Boolean(inputDisabledReason) || (attachmentUpload == null && Boolean(formalLimits?.attachments))}
+            disabled={Boolean(inputDisabledReason) || attachmentUpload == null}
             title={
               attachmentUpload == null && formalLimits?.attachments
                 ? formalLimits.attachments
@@ -1473,13 +1902,15 @@ export function Composer({
             }}
           />
 
-          {showMentions ? (
+          {showMentions || attachmentUpload != null ? (
             <button
               className={`icon-btn sm${mentionOpen ? ' active' : ''}`}
               title={
-                participantNames
+                showMentions && participantNames
                   ? `提及成员（也可以直接打 @）· 当前将叫上：${participantNames}`
-                  : '提及成员（也可以直接在输入框里打 @）'
+                  : showMentions
+                    ? '提及成员（也可以直接在输入框里打 @）'
+                    : '引用文件（也可以直接在输入框里打 @）'
               }
               onClick={openMentionPickerFromToolbar}
             >
@@ -1498,11 +1929,47 @@ export function Composer({
            * 任务/讨论、方式、附件、@ 与预算明细先让位。
            */}
           <div className="composer-actions">
-            {budgetVisible && budgetPreview ? (
-              <span className="composer-budget" title="发送前推导的本次预算；推导明细在「本次运行设置」里">
-                <Icon name="activity" size={11} />
-                最多 {budgetPreview.calls} 次
+            {deliberate ? (
+              <button
+                type="button"
+                className={`composer-mode-chip${modeMenuAnchor != null ? ' open' : ''}`}
+                onClick={(event) => setModeMenuAnchor(anchorFromElement(event.currentTarget))}
+                aria-haspopup="dialog"
+                title="独立研讨：先独立分析，再互评汇总；点击调整成员或回到自然协作"
+              >
+                <Icon name="users" size={11} />
+                独立研讨 · {effectiveMentionIds.includes('all') ? '全体' : `${effectiveMentionIds.filter((id) => id !== 'all').length}人`}
+                <Icon name="chevron-down" size={10} />
+              </button>
+            ) : null}
+            {modeInvalid ? (
+              <span className="composer-mode-warning" role="alert" title="独立研讨至少需要2位AI成员；草稿不会被改动">
+                <Icon name="alert-triangle" size={11} /> 请添加至少2位AI
               </span>
+            ) : null}
+            {deliberate && !modeInvalid && budgetBelowMinimum ? (
+              <span className="composer-mode-warning" role="alert" data-zs-budget-min-warning="1">
+                <Icon name="alert-triangle" size={11} /> 本次上限至少 {budgetBounds.minimum} 次
+              </span>
+            ) : null}
+            {deliberate && !modeInvalid && budgetAboveMaximum ? (
+              <span className="composer-mode-warning" role="alert" data-zs-budget-max-warning="1">
+                <Icon name="alert-triangle" size={11} /> 本次上限最多 {budgetBounds.maximum} 次
+              </span>
+            ) : null}
+            {budgetVisible && effectiveBudget != null ? (
+              <button
+                type="button"
+                className="composer-budget"
+                title="点击设置本次独立研讨的调用预算；发送时冻结进服务端信封"
+                onClick={(event) => {
+                  setBudgetInput(String(effectiveBudget));
+                  setBudgetMenuAnchor(anchorFromElement(event.currentTarget));
+                }}
+              >
+                <Icon name="activity" size={11} />
+                最多 {effectiveBudget} 次
+              </button>
             ) : null}
             {budgetAlert ? (
               <span className="composer-budget warn" title={budgetAlert}>
@@ -1529,18 +1996,11 @@ export function Composer({
               )
             ) : null}
 
-            {/**
-             * 「⋯」菜单（§6）：低频选项的收纳处，同时也是**「仅记录，不请求回复」**的入口
-             * （2026-09-25 起，常驻的「任务/讨论」切换被它取代）。
-             *
-             * 菜单按**是否调用 AI** 分两套内容，避免展示无意义选项：
-             *  · 交给 AI：本次方式 / 预算推导 / 权限档位 + 「仅记录」入口；
-             *  · 仅记录：只有一句说明（不调用模型、不创建运行）与返回 AI 发送的入口。
-             */}
+            {/* 低频运行设置；普通聊天不存在“仅记录”入口。 */}
             <button
               type="button"
               className={`icon-btn sm${runSettingsAnchor ? ' active' : ''}`}
-              title={sendAs === 'record' ? '本次为仅记录：不请求 AI 回复' : '本次运行设置：本次执行方式、预算推导与说明'}
+              title="本次运行设置：执行方式、研讨模式与说明"
               aria-label="本次运行设置"
               aria-haspopup="menu"
               onClick={(e) => setRunSettingsAnchor(anchorFromElement(e.currentTarget))}
@@ -1556,12 +2016,8 @@ export function Composer({
               </span>
             ) : null}
 
-            {/* 权限模式下拉（四档，仿常见桌面 agent 客户端）。
-                仅记录不调用 AI、不派工，因此**不显示**权限档位 —— 否则会让人以为
-                一条纯记录也会触发写入/命令（两份评审都点出过这个歧义）。
-                注意：只是"不显示"，**档位的值不会被清空或改掉**（取消仅记录后照旧）。
-                只读态（私信归档）下也禁用：这次不会发出去，改档位没有意义。 */}
-            {sendAs === 'ai'&&!formalLimits?.access ? (
+            {/* 权限模式下拉；只读态禁用。 */}
+            {!formalLimits?.access ? (
               <div className="access-picker">
                 <button
                   className={`access-trigger${accessOpen ? ' open' : ''}`}
@@ -1570,7 +2026,7 @@ export function Composer({
                   title={formalLimits?.access ? `${writeHint?.key===writeContext?writeHint.reason:'正在读取项目与成员权限'}${writeHint?.error?`；${writeHint.error}`:''}${writeHint?.readAt?`；确认于 ${new Date(writeHint.readAt).toLocaleTimeString()}`:''}` : inputDisabledReason ?? '本次任务的权限模式（意图声明，不是安全保证）'}
                 >
                   <Icon name={currentMode.icon} size={13} />
-                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 分步骤权限':'多人研讨 · 只读' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'跟进仅记录':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
+                  {formalLimits?.access ? target.kind==='room_root'&&route.mode!=='DIRECT' ? route.mode==='AUTO'?'自动分工 · 分步骤权限':'多人研讨 · 只读' : writeHint?.key===writeContext&&writeHint.readAt ? writeHint.blocked?'暂不可执行':writeHint.willDispatch===false?'仅保存草稿':writeHint.authorized?writeHint.fullAccess?'CLI 完整权限':'项目内文件编辑':'只读执行' : '权限未确认' : currentMode.label}
                   <Icon name="chevron-down" size={12} />
                 </button>
 
@@ -1626,25 +2082,21 @@ export function Composer({
           <button
             className="btn primary sm composer-send"
             onClick={() => submit()}
-            disabled={(body.trim().length === 0 && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)}
+            disabled={(!hasSendableBody && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason) || modeInvalid || budgetBelowMinimum || budgetAboveMaximum}
             title={
-              (body.trim().length === 0 && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)
+              modeInvalid
+                ? '请添加至少2位AI；草稿会保留'
+                : budgetBelowMinimum
+                  ? `本次上限至少 ${budgetBounds.minimum} 次；草稿会保留`
+                  : budgetAboveMaximum
+                    ? `本次上限最多 ${budgetBounds.maximum} 次；草稿会保留`
+                : (!hasSendableBody && readyAttachmentCount === 0) || sending || Boolean(sendDisabledReason)
                 ? sendDisabledReason ?? (sending ? '正在发送…' : '输入内容、或添加就绪附件后可发送（只有文件也可以发送）')
                 : 'Enter 发送，Shift+Enter 换行（没有正文但有就绪附件时也可发送）'
             }
           >
             <Icon name="send" size={12} />
-            {/**
-             * 按钮文案（2026-09-24 第三轮简化）：任务/线程统一「发送」，
-             * 讨论串仍是「写入」（它只存消息、不调用模型、不派工，语义确实不同）。
-             * 原来线程里写「发送补充」，用户反馈两个字就够 —— 发出去的都是这条串的
-             * 一条新消息，"补充"并不改变按钮行为，只是把同一动作说长了一遍。
-             */}
-            {/*
-              按钮文案：普通发送就是「发送」；一次性仅记录（以及历史记录串）
-              写「保存记录」，明确区别于"发给 AI"。
-            */}
-            {sendAs === 'record' ? '保存记录' : '发送'}
+            发送
           </button>
 
           {/**
@@ -1685,81 +2137,108 @@ export function Composer({
         </div>
       </div>
 
-      {/**
-       * ⋯ 菜单（§6）——2026-09-25 起它同时是「仅记录，不请求回复」的入口，
-       * 常驻的「任务/讨论」切换由这个一次性意图取代。
-       *
-       * 两套内容按**是否调用 AI** 区分：
-       *  · 交给 AI：本次方式 / 预算推导 / 权限档位，外加「仅记录」入口；
-       *  · 仅记录：只说明"这次不调用模型、不创建运行、不计预算"，
-       *    并给出"改为发送给 AI"的入口 —— 不摆与本次无关的模型执行配置。
-       */}
+      {/* 本次运行设置：普通聊天固定交给 AI。 */}
       {runSettingsAnchor ? (
         <Menu anchor={runSettingsAnchor} onClose={() => setRunSettingsAnchor(null)}>
           <div className="menu-label">本次运行设置</div>
-          {sendAs === 'record' ? (
-            <div className="menu-note">
-              <div className="row tight"><Icon name="bookmark" size={12} /> 本次为仅记录</div>
-              <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                只保存内容：不调用模型、不创建运行、不占用预算；@ 了谁也不会因此唤醒 AI。
-                保存成功后自动恢复成普通发送。
-              </div>
+          <div className="menu-note">
+            <div className="row tight"><Icon name="git-commit" size={12} /> 本次方式：{routeModeCopy[route.mode].label}</div>
+            <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
+              {target.kind === 'dm'
+                ? '发给当前私信成员，不涉及房间里的其他人。'
+                : routeModeCopy[route.mode].detail}
             </div>
-          ) : (
-            <>
-              <div className="menu-note">
-                <div className="row tight"><Icon name="git-commit" size={12} /> 本次方式：{routeModeCopy[route.mode].label}</div>
-                <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                  {target.kind === 'dm'
-                    ? '私信只有一种方式：把这条消息发给这个会话的成员，不涉及房间里的其他人。'
-                    : routeModeCopy[route.mode].detail}
-                </div>
-                {methodChip&&!formalLimits?.method ? (
-                  <div className="small faint" style={{ marginTop: 6, lineHeight: 1.6 }}>
-                    方式开关「{methodChip.label}」：{methodChip.on ? '已开启' : '未开启'}（在输入区切换）
-                  </div>
-                ) : null}
+            {methodChip&&!formalLimits?.method ? (
+              <div className="small faint" style={{ marginTop: 6, lineHeight: 1.6 }}>
+                方式开关「{methodChip.label}」：{methodChip.on ? '已开启' : '未开启'}（在输入区切换）
               </div>
-              <div className="menu-note">
-                <div className="row tight"><Icon name="activity" size={12} /> 预算推导</div>
-                <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                  {target.kind === 'dm'
-                    ? '本条发给当前私信成员，实际用量可在任务详情查看。'
-                    : budgetPreview
-                      ? `最多 ${budgetPreview.calls} 次。${budgetPreview.detail}`
-                      : '这种方式不产生额外预算。'}
-                </div>
-              </div>
-              <div className="menu-note">
-                <div className="row tight"><Icon name="shield" size={12} /> 权限档位</div>
-                <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                  {formalLimits?.access?(writeHint?.key===writeContext?writeHint.reason:'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
-                </div>
-              </div>
-            </>
-          )}
-
-          {/**
-           * 入口本身：一次性的"仅记录，不请求回复"。
-           * 只有**发给 AI** 的状态下才出现；已经在仅记录时，用输入区的 chip 取消。
-           */}
-          {target.kind==='room_root'&&sendAs==='ai'&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{
-            const next=!deliberate;setDeliberate(next);
-            if(next&&!mentions.includes('all')&&mentions.filter(id=>memberIds.includes(id)).length<2)replaceMentionTriggerWithToken('全体');
+            ) : null}
+          </div>
+          <div className="menu-note">
+            <div className="row tight"><Icon name="activity" size={12} /> 本次预算</div>
+            <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
+              {deliberate && effectiveBudget != null
+                ? `最多 ${effectiveBudget} 次。${budgetPreview?.detail ?? ''}`
+                : target.kind === 'dm'
+                  ? '实际用量可在任务详情查看。'
+                  : '自然协作沿用既有预算；独立研讨可单独设置本次上限。'}
+            </div>
+          </div>
+          <div className="menu-note">
+            <div className="row tight"><Icon name="shield" size={12} /> 权限档位</div>
+            <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
+              {formalLimits?.access?(writeHint?.key===writeContext?writeHint.reason:'正在读取 AI 执行权限'):<>当前：{currentMode.label} · {currentMode.v01.available?currentMode.desc:currentMode.v01.reason}</>}
+            </div>
+          </div>
+          {canUseDeliberate&&!inputDisabledReason?<MenuItem icon="users" onClick={()=>{
+            if (deliberate) {
+              setModeMenuAnchor(runSettingsAnchor);
+            } else {
+              enableDeliberate();
+            }
             setRunSettingsAnchor(null);
-          }}>{deliberate?'改为自然协作':'高级：独立研讨（先独立分析，再互评汇总）'}</MenuItem>:null}
-          {sendAs === 'ai' && !inputDisabledReason ? (
-            <MenuItem
-              icon="bookmark"
-              title="仅记录：这次只保存内容，不请求 AI 回复、不创建运行、不占用预算 —— 加 @ 也不会唤醒 AI（一次性意图，发送后自动恢复）"
-              onClick={() => {
-                setSendAs('record');
-                setRunSettingsAnchor(null);
+          }} hint={deliberate?'已开启':undefined}>{deliberate?'调整独立研讨成员':'独立研讨'}</MenuItem>:null}
+        </Menu>
+      ) : null}
+
+      {modeMenuAnchor ? (
+        <Menu anchor={modeMenuAnchor} onClose={() => setModeMenuAnchor(null)}>
+          <div className="menu-label">独立研讨成员</div>
+          <div className="composer-mode-menu-note">
+            只使用当前{target.kind==='thread'?'回复串':'房间'}内可用成员。成员选择与正文 @ 分开保存。
+          </div>
+          <div className="composer-mode-members">
+            {members.filter((member) => availableDeliberateIds.includes(member.id)).map((member) => {
+              const selected = deliberateMemberIds.includes(member.id);
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  className={`menu-item${selected ? ' active' : ''}`}
+                  onClick={() => toggleDeliberateMember(member.id)}
+                  aria-pressed={selected}
+                >
+                  <Icon name={selected ? 'check-circle' : 'circle'} size={14} />
+                  <span className="truncate" style={{ flex: 1 }}>{memberLabel(member)}</span>
+                  <span className="hint">{runtimeLabelOf(member)}</span>
+                </button>
+              );
+            })}
+          </div>
+          {availableDeliberateIds.length < 2 ? <div className="composer-mode-warning" role="alert">请添加至少2位AI</div> : null}
+          <div className="menu-sep" />
+          <MenuItem icon="users" onClick={() => { setDeliberate(false); setModeMenuAnchor(null); }}>回到自然协作</MenuItem>
+          <MenuItem icon="check" onClick={() => setModeMenuAnchor(null)}>完成</MenuItem>
+        </Menu>
+      ) : null}
+
+      {budgetMenuAnchor ? (
+        <Menu anchor={budgetMenuAnchor} onClose={() => setBudgetMenuAnchor(null)}>
+          <div className="menu-label">本次预算</div>
+          <div className="composer-budget-editor">
+            <label htmlFor={`composer-budget-${draftKey}`}>最多调用次数</label>
+            <input
+              id={`composer-budget-${draftKey}`}
+              type="number"
+              min={budgetBounds.minimum}
+              max={budgetBounds.maximum}
+              step={1}
+              value={budgetInput}
+              onChange={(event) => setBudgetInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  saveBudget();
+                }
               }}
-            >
-              仅记录，不请求回复
-            </MenuItem>
-          ) : null}
+              autoFocus
+            />
+            <div className="small faint">范围 {budgetBounds.minimum}–{budgetBounds.maximum} 次。发送时冻结进本次独立研讨信封；已结果未知的原信封不会被改动。</div>
+            <div className="composer-budget-editor-actions">
+              <button type="button" className="btn ghost sm" onClick={() => setBudgetMenuAnchor(null)}>取消</button>
+              <button type="button" className="btn primary sm" onClick={saveBudget} disabled={!isValidDeliberationBudget(Number(budgetInput), effectiveMentionIds, availableDeliberateIds)}>保存</button>
+            </div>
+          </div>
         </Menu>
       ) : null}
     </div>

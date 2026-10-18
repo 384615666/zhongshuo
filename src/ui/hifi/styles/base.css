@@ -244,15 +244,17 @@ code, pre, .mono {
   flex: none;
   /* 贴右边缘：把按钮推到行尾（用户要求"贴近右边框"） */
   margin-left: auto;
-  width: 24px;
-  height: 26px;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
+  padding: 0;
   display: grid;
   place-items: center;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 .side-icon-btn:hover {
   background: var(--bg-hover);
@@ -293,35 +295,42 @@ code, pre, .mono {
 }
 .side-caret {
   flex: none;
-  width: 20px;
-  height: 26px;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
+  padding: 0;
   display: grid;
   place-items: center;
   border: none;
+  box-shadow: none;
   background: transparent;
-  color: var(--text-4);
+  color: var(--text-3);
   cursor: pointer;
-  border-radius: var(--r-xs);
+  border-radius: var(--control-radius);
+  transition: color 0.12s ease;
 }
 .side-caret:hover {
-  background: var(--bg-active);
-  color: var(--text-2);
+  background: transparent;
+  color: var(--text);
+}
+.side-caret[aria-expanded='true'] {
+  color: var(--text);
 }
 /* 项目名按钮：占满剩余宽度，点击才切换当前项目 */
 .side-item-label-btn {
   flex: 1;
   min-width: 0;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 2px;
+  padding: 3px 8px 3px 2px;
   border: none;
   background: transparent;
   color: var(--text-2);
   font-size: var(--fs-13);
   text-align: left;
   cursor: pointer;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
 }
 .side-item-label-btn:hover {
   color: var(--text);
@@ -467,19 +476,19 @@ code, pre, .mono {
 }
 
 .side-row-act {
-  width: 22px;
-  height: 22px;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease, background-color 0.12s ease;
+  transition: opacity 0.12s ease, color 0.12s ease;
 }
 .side-row-act > svg {
   display: block;
@@ -584,15 +593,16 @@ code, pre, .mono {
 }
 .menu-check {
   flex: none;
-  width: 26px;
-  height: 28px;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
+  padding: 0;
   display: grid;
   place-items: center;
   border: none;
   background: transparent;
   color: var(--text-4);
   cursor: pointer;
-  border-radius: var(--r-xs);
+  border-radius: var(--control-radius);
 }
 .menu-check:hover {
   background: var(--bg-active);
@@ -1077,9 +1087,9 @@ code, pre, .mono {
   justify-content: center;
   gap: 6px;
   padding: 5px 11px;
-  min-height: 28px;
+  min-height: var(--control-height);
   border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   background: var(--bg-surface);
   color: var(--text);
   font-size: var(--fs-12);
@@ -1161,7 +1171,7 @@ code, pre, .mono {
   color: var(--text);
 }
 .btn.sm {
-  min-height: 24px;
+  min-height: var(--control-height-sm);
   padding: 3px 8px;
   font-size: var(--fs-11);
 }
@@ -1177,15 +1187,16 @@ code, pre, .mono {
 .icon-btn {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
   padding: 0;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
   flex: none;
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 .icon-btn > svg {
   display: block;
@@ -1195,7 +1206,8 @@ code, pre, .mono {
   background: var(--bg-hover);
   color: var(--text);
 }
-.icon-btn.active {
+.icon-btn.active,
+.icon-btn[aria-pressed='true'] {
   /* 选中态统一：主题 --bg-surface 垫底渐变（规范 §2.0） */
   /* 分层写：底色与渐变各一条声明。
      用 `background: var(--grad-soft), var(--bg-surface)` 简写时，
@@ -1207,8 +1219,12 @@ code, pre, .mono {
   color: var(--accent-text);
 }
 .icon-btn.sm {
-  width: 22px;
-  height: 22px;
+  width: var(--control-icon-compact);
+  height: var(--control-icon-compact);
+}
+.icon-btn:disabled {
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
 }
 /* r61 G6：已收藏的书签按钮——图标填充（区别于描边的未收藏态），颜色随按钮文字色。 */
 .icon-btn[data-zs-saved='1'] {
@@ -1306,8 +1322,9 @@ code, pre, .mono {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: var(--r-sm);
+  min-height: var(--control-height);
+  padding: 4px 8px;
+  border-radius: var(--control-radius);
   font-size: var(--fs-12);
   cursor: pointer;
   border: none;
@@ -1525,8 +1542,9 @@ code, pre, .mono {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: var(--control-height);
   padding: 6px 8px;
-  border-radius: var(--r-xs, 4px);
+  border-radius: var(--control-radius);
   font-size: var(--fs-13);
   color: var(--text);
   cursor: pointer;
@@ -1566,6 +1584,13 @@ code, pre, .mono {
   display: inline-flex;
   align-items: center;
   gap: 9px;
+  min-height: var(--control-icon-compact);
+  padding: 0;
+  border: none;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
   font-size: var(--fs-13);
 }
@@ -1580,6 +1605,12 @@ code, pre, .mono {
 }
 .switch-track.on {
   background: var(--accent);
+}
+.switch:hover:not(:disabled) .switch-track:not(.on) {
+  background: var(--text-4);
+}
+.switch:hover:not(:disabled) .switch-track.on {
+  background: var(--accent-hover);
 }
 .switch-knob {
   position: absolute;
@@ -1617,10 +1648,11 @@ code, pre, .mono {
   gap: 2px;
 }
 .seg button {
+  min-height: var(--control-icon-compact);
   border: none;
   background: transparent;
   padding: 4px 11px;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   font-size: var(--fs-12);
   color: var(--text-3);
   cursor: pointer;
@@ -1844,6 +1876,9 @@ table.tbl tbody tr:hover {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
 }
+.overlay-head > .overlay-close {
+  margin: -4px -4px -4px 0;
+}
 .overlay-title {
   font-size: var(--fs-15);
   font-weight: 680;
@@ -1886,17 +1921,20 @@ table.tbl tbody tr:hover {
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: var(--control-height);
   padding: 6px 9px;
   border: none;
   background: transparent;
-  border-radius: var(--r-sm);
+  border-radius: var(--control-radius);
   font-size: var(--fs-12);
   color: var(--text);
   cursor: pointer;
   text-align: left;
 }
 .menu-item:hover:not(:disabled),
-.menu-item.active:not(:disabled) {
+.menu-item.active:not(:disabled),
+.menu-item.on:not(:disabled),
+.menu-item[aria-selected='true']:not(:disabled) {
   background: var(--bg-hover);
 }
 .menu-item:disabled {
@@ -1938,6 +1976,84 @@ table.tbl tbody tr:hover {
   font-size: var(--fs-11);
   color: var(--text-2);
   max-width: 360px;
+}
+
+/* ============================================================
+   R90 控件状态合同
+
+   所有可键盘操作的共享控件共用同一套焦点环与禁用语义。
+   尺寸仍由用途（标准图标 28 / 紧凑图标 24）决定，而不是给每页重复写
+   hover、focus、disabled 的近似值。
+   ============================================================ */
+
+:is(
+  .btn,
+  .icon-btn,
+  .side-icon-btn,
+  .side-caret,
+  .side-row-act,
+  .menu-check,
+  .menu-item,
+  .member-row,
+  .seg button,
+  .switch
+):focus-visible {
+  outline: var(--control-focus-width) solid var(--accent);
+  outline-offset: var(--control-focus-offset);
+  box-shadow: none;
+}
+
+:is(
+  .icon-btn,
+  .side-icon-btn,
+  .side-caret,
+  .side-row-act,
+  .menu-check,
+  .menu-item,
+  .member-row,
+  .seg button
+):disabled,
+:is(
+  .icon-btn,
+  .side-icon-btn,
+  .side-caret,
+  .side-row-act,
+  .menu-check,
+  .menu-item,
+  .member-row,
+  .seg button
+)[aria-disabled='true'] {
+  opacity: var(--control-disabled-opacity);
+  cursor: not-allowed;
+}
+
+.card[role='link'] {
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.card[role='link']:hover {
+  border-color: var(--border-strong);
+}
+
+.card[role='link']:focus-visible {
+  outline: var(--control-focus-width) solid var(--accent);
+  outline-offset: var(--control-focus-offset);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    .btn,
+    .icon-btn,
+    .side-icon-btn,
+    .side-caret,
+    .side-row-act,
+    .member-row,
+    .seg button,
+    .card[role='link']
+  ) {
+    transition: none;
+  }
 }
 
 .toast-host {
