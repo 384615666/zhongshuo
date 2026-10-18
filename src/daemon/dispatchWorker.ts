@@ -39,7 +39,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
-import {chatAnswer,extractAppendedTaskComplete} from '../contracts/chatAnswer.ts';
+import {chatAnswer,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -1939,10 +1939,14 @@ export class DispatchWorker {
           const expectedResultKey=`result_${turnId}`;
           const fenced=stripSingleJsonFence(finalTextRaw);
           const appended=extractAppendedTaskComplete(fenced.text,expectedResultKey);
+          const explicitTerminalControl=isExplicitTaskCompleteOutput(fenced.text);
           let finalText=appended?.controlText??fenced.text;
           let contract=this.validateTaskCompleteOutput(finalText,expectedResultKey);
           const messageControl=this.controlFromMessages.get(turnId);
-          if(!contract.ok&&messageControl!=null){
+          // A cached message-completed control may reconcile a natural-only terminal event.
+          // When the terminal event itself presents a TaskComplete-shaped object with the
+          // wrong schema/resultKey, that explicit failure must remain authoritative.
+          if(!contract.ok&&messageControl!=null&&!explicitTerminalControl){
             finalText=messageControl;
             contract=this.validateTaskCompleteOutput(finalText,expectedResultKey);
             if(contract.ok)this.audit(task,runId,turnId,'turn.outputNormalized',{
@@ -1950,7 +1954,6 @@ export class DispatchWorker {
               rule:'use-validated-control-from-message-completed; same strict schema/resultKey',
             });
           }
-          if(contract.ok&&messageControl!=null)this.suppressUncontrolledTurnReplies(task,runId,turnId);
           const normalized=fenced.normalized||appended!=null;
           if (normalized) {
             this.audit(task, runId, turnId, 'turn.outputNormalized', {
@@ -2555,17 +2558,52 @@ export class DispatchWorker {
   }
 
   private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string): void {
-    const visibleText=chatAnswer(text,'agent');
+    const expectedResultKey=`result_${turnId}`;
+    const visibleText=chatAnswer(text,'agent',expectedResultKey);
     const original=controlResult??(visibleText!==text?text:null);
     const bodyJson=JSON.stringify({text:visibleText,...(original?{runtimeControlResult:original}:{})});
     // 消息身份以 turn 为命名空间：同 turn 内重放去重（RT-05），跨 turn/会话的同名 provider id 不冲突。
     const rowId = `msg_${turnId}_${messageId}`;
     const isDm = task.kind === 'dm_turn';
+    const runId=(this.db.prepare('SELECT run_id FROM agent_turns WHERE id=?').get(turnId) as {run_id:string}|undefined)?.run_id??null;
+    const parseBody=(raw:string):{text:string;runtimeControlResult?:string}|null=>{
+      try {
+        const parsed=JSON.parse(raw) as {text?:unknown;runtimeControlResult?:unknown};
+        if(typeof parsed.text!=='string')return null;
+        return{text:parsed.text,...(typeof parsed.runtimeControlResult==='string'?{runtimeControlResult:parsed.runtimeControlResult}:{})};
+      } catch {
+        return null;
+      }
+    };
     const tx = this.db.transaction(() => {
       const existing = this.db
-        .prepare('SELECT id FROM messages WHERE id = ?')
-        .get(rowId) as { id: string } | undefined;
-      if (existing != null) return;
+        .prepare('SELECT id,body_json FROM messages WHERE id = ?')
+        .get(rowId) as { id: string;body_json:string } | undefined;
+      if (existing != null) {
+        const existingBody=parseBody(existing.body_json);
+        if(original!=null&&existingBody!=null&&existingBody.runtimeControlResult==null&&existingBody.text===visibleText){
+          this.db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(bodyJson,rowId);
+          this.audit(task,runId,turnId,'turn.duplicateVisibleReplyMerged',{
+            keptMessageId:rowId,incomingMessageId:rowId,action:'added-control-to-existing-message',incomingBody:bodyJson,
+          });
+        }
+        return;
+      }
+      const priorRows=this.db.prepare(`SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent'
+        AND id LIKE ? ORDER BY rowid`).all(task.id,`msg_${turnId}_%`) as Array<{id:string;body_json:string}>;
+      const duplicate=priorRows.find(row=>parseBody(row.body_json)?.text===visibleText);
+      if(duplicate!=null){
+        const duplicateBody=parseBody(duplicate.body_json)!;
+        const addControl=original!=null&&duplicateBody.runtimeControlResult==null;
+        if(addControl)this.db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(bodyJson,duplicate.id);
+        this.audit(task,runId,turnId,'turn.duplicateVisibleReplyMerged',{
+          keptMessageId:duplicate.id,
+          incomingMessageId:rowId,
+          action:addControl?'added-control-to-existing-message':'kept-existing-visible-message',
+          incomingBody:bodyJson,
+        });
+        return;
+      }
       const convSeq = this.db
         .prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
         .get(task.conversation_id) as { last_message_seq: number };
@@ -2607,31 +2645,6 @@ export class DispatchWorker {
       });
     });
     tx();
-  }
-
-  /** Some app-server adapters emit both a natural-only agent message and the same turn's
-   * validated control message. The control message is canonical; suppress only uncontrolled
-   * duplicates from that turn/task and retain their raw bodies in the audit payload. */
-  private suppressUncontrolledTurnReplies(task:TaskRow,runId:string,turnId:string):void {
-    const rows=this.db.prepare(`SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent'
-      AND id LIKE ? ORDER BY rowid`).all(task.id,`msg_${turnId}_%`) as Array<{id:string;body_json:string}>;
-    if(rows.length<2)return;
-    const controlled=rows.filter(row=>{
-      try{return typeof (JSON.parse(row.body_json) as {runtimeControlResult?:unknown}).runtimeControlResult==='string';}
-      catch{return false;}
-    });
-    if(controlled.length!==1)return;
-    const keep=controlled[0]!;
-    const suppressed=rows.filter(row=>row.id!==keep.id);
-    if(!suppressed.length)return;
-    for(const row of suppressed){
-      this.db.prepare('DELETE FROM message_attachments WHERE message_id=?').run(row.id);
-      this.db.prepare('DELETE FROM messages WHERE id=?').run(row.id);
-    }
-    this.audit(task,runId,turnId,'turn.duplicateVisibleReplySuppressed',{
-      keptMessageId:keep.id,
-      suppressed:suppressed.map(row=>({messageId:row.id,body:row.body_json.slice(0,2000)})),
-    });
   }
 
   /** TaskComplete 输出合同校验：JSON 解析、schema、版本、resultKey 绑定（修复轮）。 */

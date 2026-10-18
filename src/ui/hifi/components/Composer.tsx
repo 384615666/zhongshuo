@@ -22,7 +22,7 @@ import { useStore, getState, getDraftFull, setDraftFull, clearUnknownEnvelope, a
 import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
-import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
+import { detectMentionRange, resolveMentionIds, toolbarMentionInsertion } from '../lib/mentionText';
 import { command } from '../bridge';
 import { uploadAttachmentFile, classifyAttachmentFile } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
@@ -387,6 +387,10 @@ export function Composer({
   const [mentionDocsLoading, setMentionDocsLoading] = useState(false);
   const [mentionDocsError, setMentionDocsError] = useState<string | null>(null);
   const [documentBusy, setDocumentBusy] = useState<string | null>(null);
+  useEffect(() => {
+    setDocumentBusy(null);
+    setMentionDocsError(null);
+  }, [draftKey, activeProjectId]);
   const [skipFirstDraft, setSkipFirstDraft] = useState(false);
   const [splitWork, setSplitWork] = useState(false);
   const [access, setAccess] = useState<AccessMode>('plan');
@@ -940,17 +944,13 @@ export function Composer({
 
   function openMentionPickerFromToolbar() {
     const current = textareaRef.current?.value ?? body;
-    if (!current.startsWith('@')) {
-      setBody(`@${current}`);
-      setMentionTrigger({ index: 0, end: 1, draftKey });
-      setMentionQuery('');
-      setMentionOpen(true);
-      requestAnimationFrame(() => textareaRef.current?.setSelectionRange(1, 1));
-      return;
-    }
-    setMentionTrigger({ index: 0, end: 1, draftKey });
+    const inserted = toolbarMentionInsertion(current);
+    setBody(inserted.value);
+    setMentions(resolveMentionsFromBody(inserted.value));
+    setMentionTrigger({ index: inserted.index, end: inserted.end, draftKey });
     setMentionQuery('');
-    setMentionOpen((value) => !value);
+    setMentionOpen(true);
+    requestAnimationFrame(() => textareaRef.current?.setSelectionRange(inserted.end, inserted.end));
   }
 
   /**
@@ -1000,6 +1000,12 @@ export function Composer({
 
   async function insertDocument(doc: MentionDocument) {
     if (documentBusy != null) return;
+    const startDraftKey = draftKey;
+    const startProjectId = activeProjectId;
+    const startValue = textareaRef.current?.value ?? body;
+    const insertionContextIsCurrent = () => draftKeyRef.current === startDraftKey
+      && getState().activeProjectId === startProjectId
+      && (textareaRef.current?.value ?? body) === startValue;
     setDocumentBusy(doc.key);
     setMentionDocsError(null);
     try {
@@ -1028,12 +1034,15 @@ export function Composer({
         const stored = getDraftFull(draftKey).attachments.find((item) => item.name === original.filename);
         if (stored == null) throw Error('文件未形成可发送的托管快照（上传或提取失败，详见附件提示）');
       }
+      if (!insertionContextIsCurrent()) return;
       replaceMentionTriggerWithToken(`文档：${doc.name}`);
     } catch (error) {
-      setMentionDocsError(`引用「${doc.name}」失败：${(error as Error).message}。输入与已选内容保留。`);
-      setMentionOpen(true);
+      if (insertionContextIsCurrent()) {
+        setMentionDocsError(`引用「${doc.name}」失败：${(error as Error).message}。输入与已选内容保留。`);
+        setMentionOpen(true);
+      }
     } finally {
-      setDocumentBusy(null);
+      if (draftKeyRef.current === startDraftKey) setDocumentBusy(null);
     }
   }
 

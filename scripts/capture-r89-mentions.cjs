@@ -67,6 +67,16 @@ async function composerMentions() {
   return await cdp.eval(`document.querySelector('.composer')?.getAttribute('data-zs-composer-mentions')??''`);
 }
 
+async function clickMentionToolbar() {
+  await cdp.eval(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.title.includes('提及成员'));if(!b)throw Error('mention toolbar missing');b.click();return true})()`);
+}
+
+async function chooseToolbarMember(memberId) {
+  await clickMentionToolbar();
+  await until(() => cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]')!=null`), Boolean, 'toolbar candidate', 10000);
+  await cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]').click();true`);
+}
+
 (async () => {
   fs.mkdirSync(out, { recursive: true });
   cdp = await connect();
@@ -74,10 +84,27 @@ async function composerMentions() {
   try {
     await route(`/project/${fixture.projectId}/room/${fixture.roomId}`, 'textarea.composer-input');
 
-    await cdp.eval(`(()=>{document.querySelector('textarea.composer-input').focus();return true})()`);
-    await cdp.eval(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.title.includes('提及成员'));b?.click();return !!b})()`);
+    await setComposer('');
+    await clickMentionToolbar();
     await until(() => cdp.eval(`document.querySelector('textarea.composer-input')?.value.startsWith('@')`), Boolean, 'toolbar @ at start');
     const toolbarInsertedAtStart = (await composerValue()).startsWith('@');
+    await chooseToolbarMember(fixture.members[0].id);
+    await until(async () => (await composerValue()).includes(`@${fixture.members[0].display_name}`), Boolean, 'first toolbar member');
+    await chooseToolbarMember(fixture.members[1].id);
+    await until(async () => {
+      const value=await composerValue();
+      const mentions=await composerMentions();
+      return value.includes(`@${fixture.members[0].display_name}`)
+        && value.includes(`@${fixture.members[1].display_name}`)
+        && mentions.includes(fixture.members[0].id)
+        && mentions.includes(fixture.members[1].id);
+    }, Boolean, 'consecutive toolbar members');
+    const toolbarConsecutive = {
+      body: await composerValue(),
+      mentions: await composerMentions(),
+      bothVisible: (await composerValue()).includes(`@${fixture.members[0].display_name}`)
+        && (await composerValue()).includes(`@${fixture.members[1].display_name}`),
+    };
     await setComposer('');
 
     await setComposer('@Cl');
@@ -104,6 +131,7 @@ async function composerMentions() {
     const bodyWithAll = await composerValue();
     report.checks.inline = {
       toolbarInsertedAtStart,
+      toolbarConsecutive,
       bothMembers: twoMembers.includes(fixture.members[0].id) && twoMembers.includes(fixture.members[1].id),
       documentNotRecipient: !twoMembers.includes(fixture.members[2].id),
       bodyContainsMembers: bodyWithAll.includes('@Claude') && bodyWithAll.includes('@Codex'),
@@ -164,7 +192,45 @@ async function composerMentions() {
     report.checks.narrow = narrow;
     await shot('06-narrow-mentions');
 
+    await setComposer('@合成');
+    await until(() => cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:合成资料.md"]')!=null`), Boolean, 'async document candidate', 10000);
+    const delayPatch = await cdp.eval(`(()=>{
+      const target=window.zs;
+      const original=target.command.bind(target);
+      const command=async envelope=>{
+        if(envelope?.method==='project.file.originalFile')await new Promise(resolve=>setTimeout(resolve,1200));
+        return original(envelope);
+      };
+      try{Object.defineProperty(target,'command',{configurable:true,value:command});return {patched:true,scope:'zs'};}
+      catch(firstError){
+        try{
+          const proxy=new Proxy(target,{get(value,key){if(key==='command')return command;const item=Reflect.get(value,key,value);return typeof item==='function'?item.bind(value):item;}});
+          Object.defineProperty(window,'zs',{configurable:true,value:proxy});
+          return {patched:true,scope:'window'};
+        }catch(secondError){return {patched:false,error:String(secondError),first:String(firstError)};}
+      }
+    })()`);
+    if (!delayPatch.patched) throw Error(`async document delay hook unavailable: ${JSON.stringify(delayPatch)}`);
+    await cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:合成资料.md"]').click();true`);
+    await sleep(120);
+    await route(`/project/${fixture.otherProjectId}/room/${fixture.otherRoomId}`, 'textarea.composer-input');
+    await setComposer('切换后的新草稿');
+    await sleep(1500);
+    const asyncAfter = await composerValue();
+    const asyncDocuments = await cdp.eval(`document.querySelector('.composer')?.getAttribute('data-zs-composer-documents')??''`);
+    report.checks.asyncDocumentGuard = {
+      patched: delayPatch.scope,
+      valueUnchanged: asyncAfter === '切换后的新草稿',
+      noOldDocumentToken: !asyncAfter.includes('@文档：合成资料.md'),
+      noOldDocumentRef: !asyncDocuments.includes('合成资料.md'),
+      value: asyncAfter,
+    };
+    await shot('07-async-project-switch');
+
     report.ok = report.checks.inline.toolbarInsertedAtStart
+      && report.checks.inline.toolbarConsecutive.bothVisible
+      && report.checks.inline.toolbarConsecutive.mentions.includes(fixture.members[0].id)
+      && report.checks.inline.toolbarConsecutive.mentions.includes(fixture.members[1].id)
       && report.checks.inline.bothMembers
       && report.checks.inline.documentNotRecipient
       && report.checks.inline.bodyContainsMembers
@@ -179,7 +245,10 @@ async function composerMentions() {
       && report.checks.sentBody.membersVisible
       && report.checks.sentBody.documentVisible
       && report.checks.sentBody.composerCleared
-      && report.checks.narrow.overflow === false;
+      && report.checks.narrow.overflow === false
+      && report.checks.asyncDocumentGuard.valueUnchanged
+      && report.checks.asyncDocumentGuard.noOldDocumentToken
+      && report.checks.asyncDocumentGuard.noOldDocumentRef;
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(report, null, 2), 'utf8');
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     cdp.ws.close();

@@ -11,10 +11,13 @@ const fixtureRoot = resolve(root);
 if (existsSync(fixtureRoot)) throw Error(`fixture root already exists: ${fixtureRoot}`);
 const appData = join(fixtureRoot, 'app-data');
 const projectPath = join(fixtureRoot, 'project');
+const otherProjectPath = join(fixtureRoot, 'project-other');
 mkdirSync(appData, { recursive: true });
 mkdirSync(projectPath, { recursive: true });
+mkdirSync(otherProjectPath, { recursive: true });
 writeFileSync(join(projectPath, '合成资料.md'), '# R89 合成资料\n\n内容标记：R89_DOC_WORKSPACE_42\n\n这是只用于界面和引用通道验证的合成文档。\n', 'utf8');
 writeFileSync(join(projectPath, 'README.md'), '# R89 visible fixture\n\nSynthetic local project.\n', 'utf8');
+writeFileSync(join(otherProjectPath, 'README.md'), '# R89 async switch fixture\n\nSynthetic second project.\n', 'utf8');
 
 process.env.ZS_ALLOW_FAKE = '1';
 process.env.ZS_DEFAULT_MEMBER_DISCOVERY = '0';
@@ -52,6 +55,14 @@ try {
     filename: '已上传资料.txt',
     content: '内容标记：R89_DOC_UPLOADED_77\n\n这是已上传合成文档。',
   });
+  const otherOpened = await command<{ project: { id: string } }>('project.open', {
+    path: otherProjectPath,
+    displayName: 'R89 异步切换样例',
+    agentNames: ['Claude'],
+  });
+  const otherProjectId = otherOpened.project.id;
+  const otherRoom = db.prepare('SELECT id FROM rooms WHERE project_id=? ORDER BY rowid LIMIT 1').get(otherProjectId) as { id: string };
+  const otherConversation = db.prepare('SELECT id FROM conversations WHERE room_id=? LIMIT 1').get(otherRoom.id) as { id: string };
   await command('app.settings.set', { key: 'ui.autoOpenProjectPath', value: projectPath });
   const report = {
     format: 'r89-visible-fixture-v1',
@@ -61,6 +72,10 @@ try {
     projectPath,
     roomId: room.id,
     conversationId: conversation.id,
+    otherProjectId,
+    otherProjectPath,
+    otherRoomId: otherRoom.id,
+    otherConversationId: otherConversation.id,
     threadId: thread.threadId,
     threadMessageId: thread.messageId,
     uploadedAttachmentId: uploaded.attachmentId,

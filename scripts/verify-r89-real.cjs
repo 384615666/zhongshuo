@@ -58,6 +58,12 @@ async function setComposer(value, selector = 'textarea.composer-input') {
   await sleep(180);
 }
 
+async function chooseToolbarMember(memberId) {
+  await cdp.eval(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.title.includes('提及成员'));if(!b)throw Error('mention toolbar unavailable');b.click();return true})()`);
+  await until(() => cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]')!=null`), Boolean, 'toolbar member candidate', 10000);
+  await cdp.eval(`document.querySelector('[data-zs-mention-option=${q(memberId)}]').click();true`);
+}
+
 async function clickSend(selector = '.composer-send') {
   await cdp.eval(`(()=>{const b=document.querySelector(${q(selector)});if(!b||b.disabled)throw Error('send unavailable: ${selector}');b.click();return true})()`);
 }
@@ -117,7 +123,7 @@ async function waitReplyCount(threadId, count) {
 
     await route(`/project/${fixture.projectId}/room/${fixture.roomId}`);
     const beforeFirst = new Set((await pool()).map((item) => item.threadId));
-    await setComposer('你好。请只用一句自然中文回复，确认你是 GLM 协调者，不要输出 JSON。');
+    await setComposer('你好。请只用一句自然中文回复，确认你是 GLM 协调者。');
     await clickSend();
     const firstThread = await waitThreadWithBody('确认你是 GLM 协调者', beforeFirst);
     const firstTerminal = await waitTerminal(firstThread.threadId);
@@ -135,7 +141,7 @@ async function waitReplyCount(threadId, count) {
     });
 
     await route(`/project/${fixture.projectId}/room/${fixture.roomId}?thread=${firstThread.threadId}`, '.col-thread textarea.composer-input');
-    await setComposer('继续用一句自然中文说明你仍能收到这条续问，不要输出 JSON。', '.col-thread textarea.composer-input');
+    await setComposer('继续用一句自然中文说明你仍能收到这条续问。', '.col-thread textarea.composer-input');
     await clickSend('.col-thread .composer-send');
     const followUpHistory = await waitReplyCount(firstThread.threadId, 2);
     const followUpTerminal = await waitTerminal(firstThread.threadId);
@@ -151,12 +157,21 @@ async function waitReplyCount(threadId, count) {
 
     await route(`/project/${fixture.projectId}/room/${fixture.roomId}`);
     const beforeMulti = new Set((await pool()).map((item) => item.threadId));
-    await setComposer('@GL');
-    await until(() => cdp.eval(`document.querySelector('[data-zs-mention-option=${q(fixture.members[0].id)}]')!=null`), Boolean, 'GLM token candidate');
-    await cdp.eval(`document.querySelector('[data-zs-mention-option=${q(fixture.members[0].id)}]').click();true`);
-    await setComposer(`${await cdp.eval('document.querySelector("textarea.composer-input").value')}@Deep`);
-    await until(() => cdp.eval(`document.querySelector('[data-zs-mention-option=${q(fixture.members[1].id)}]')!=null`), Boolean, 'DeepSeek token candidate');
-    await cdp.eval(`document.querySelector('[data-zs-mention-option=${q(fixture.members[1].id)}]').click();true`);
+    await setComposer('');
+    await chooseToolbarMember(fixture.members[0].id);
+    await until(async () => (await cdp.eval('document.querySelector("textarea.composer-input").value')).includes(`@${fixture.members[0].displayName}`), Boolean, 'first toolbar member token');
+    await chooseToolbarMember(fixture.members[1].id);
+    await until(async () => {
+      const body=await cdp.eval('document.querySelector("textarea.composer-input").value');
+      const mentions=await cdp.eval('document.querySelector(".composer")?.getAttribute("data-zs-composer-mentions")??""');
+      return body.includes(`@${fixture.members[0].displayName}`)
+        && body.includes(`@${fixture.members[1].displayName}`)
+        && mentions.includes(fixture.members[0].id)
+        && mentions.includes(fixture.members[1].id);
+    }, Boolean, 'consecutive toolbar members', 10000);
+    const toolbarMembersBody = await cdp.eval('document.querySelector("textarea.composer-input").value');
+    const toolbarMembersMentions = await cdp.eval('document.querySelector(".composer")?.getAttribute("data-zs-composer-mentions")??""');
+    report.stages.push({ stage:'toolbar-multi-select', body:toolbarMembersBody, mentions:toolbarMembersMentions });
     const bodyBeforeDoc = await cdp.eval('document.querySelector("textarea.composer-input").value');
     await setComposer(`${bodyBeforeDoc}@合成`);
     await until(() => cdp.eval(`document.querySelector('[data-zs-mention-document="workspace:合成报告.md"]')!=null`), Boolean, 'real workspace doc candidate');
@@ -195,6 +210,10 @@ async function waitReplyCount(threadId, count) {
       && report.stages.find((s) => s.stage === 'coordinator-follow-up')?.taskStatus === 'DONE'
       && report.stages.find((s) => s.stage === 'coordinator-greeting')?.protocolVisible === false
       && report.stages.find((s) => s.stage === 'coordinator-follow-up')?.protocolVisible === false
+      && toolbarMembersBody.includes(`@${fixture.members[0].displayName}`)
+      && toolbarMembersBody.includes(`@${fixture.members[1].displayName}`)
+      && toolbarMembersMentions.includes(fixture.members[0].id)
+      && toolbarMembersMentions.includes(fixture.members[1].id)
       && report.stages.find((s) => s.stage === 'explicit-multi-document')?.taskStatus === 'DONE'
       && multiAgents.length === 2
       && new Set(multiAgents.map((item) => item.authorId)).size === 2

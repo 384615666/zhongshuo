@@ -7,7 +7,18 @@ function escapeRegExp(value: string): string {
 export function codeMaskedText(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, (block) => ' '.repeat(block.length))
-    .replace(/`[^`\n]*`/g, (span) => ' '.repeat(span.length));
+    .replace(/`[^`\n]*`/g, (span) => ' '.repeat(span.length))
+    .replace(/^(\s*>.*)$/gm, (quote) => ' '.repeat(quote.length));
+}
+
+export function toolbarMentionInsertion(text: string): { value: string; index: number; end: number } {
+  // First toolbar mention starts the body; once an inline token already exists,
+  // another toolbar selection appends rather than replacing that first token.
+  const append = text.startsWith('@');
+  const separator = append && !/\s$/u.test(text) ? ' ' : '';
+  const index = append ? text.length + separator.length : 0;
+  if (append) return { value: `${text}${separator}@`, index, end: index + 1 };
+  return { value: `${text.slice(0, index)}@${text.slice(index)}`, index, end: index + 1 };
 }
 
 export function insideCode(text: string, index: number): boolean {
