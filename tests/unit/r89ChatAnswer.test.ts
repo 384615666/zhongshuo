@@ -64,4 +64,14 @@ describe('R89 task-complete projection', () => {
     expect(agentReplyText(prefix, JSON.stringify(control), control.resultKey))
       .toBe(`${prefix}\n\n${control.answer}`);
   });
+
+  it('does not treat a short answer as duplicate merely because it is a substring', () => {
+    const shortControl = { ...control, answer: '是。' };
+    expect(agentReplyText('不是最终结论。', JSON.stringify(shortControl), shortControl.resultKey))
+      .toBe('不是最终结论。\n\n是。');
+    expect(agentReplyText('已经确认', JSON.stringify({ ...control, answer: '已经确认。' }), control.resultKey))
+      .toBe('已经确认');
+    expect(agentReplyText('已检查。测试通过。', JSON.stringify({ ...control, answer: '测试通过' }), control.resultKey))
+      .toBe('已检查。测试通过。');
+  });
 });

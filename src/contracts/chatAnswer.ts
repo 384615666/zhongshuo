@@ -80,6 +80,20 @@ export function chatAnswer(text:string,authorType:string,expectedResultKey?:stri
   return extractAppendedTaskComplete(text,expectedResultKey)?.visibleText??text;
 }
 
+function normalizedAnswerText(value:string):string {
+  return value.trim().replace(/\s+/gu,' ').replace(/[。！？.!?]+$/u,'').trim();
+}
+
+function hasCompleteVisibleAnswer(visible:string,answer:string):boolean {
+  const target=normalizedAnswerText(answer);
+  if(!target)return false;
+  if(normalizedAnswerText(visible)===target)return true;
+  return visible
+    .split(/(?:\r?\n)+|(?<=[。！？.!?])\s*/u)
+    .map(normalizedAnswerText)
+    .some((part)=>part===target);
+}
+
 /** Conversation replies may carry a short progress/status prefix followed by the
  * validated TaskComplete object. Keep that prefix, but never hide the actual answer
  * from the reply bubble. A separate control result is considered too because some
@@ -91,7 +105,6 @@ export function agentReplyText(text:string,controlResult?:string,expectedResultK
   const answer=appended?.parsed.answer?.trim()
     ||(projectedControl!=null&&projectedControl!==controlResult?projectedControl.trim():undefined);
   const visible=chatAnswer(text,'agent',expectedResultKey).trim();
-  const answerKey=answer?.replace(/[。！？.!?]+$/u,'').trim();
-  if(!answer||(answerKey&&visible.includes(answerKey)))return visible||answer||text;
+  if(!answer||hasCompleteVisibleAnswer(visible,answer))return visible||answer||text;
   return visible?`${visible}\n\n${answer}`:answer;
 }
