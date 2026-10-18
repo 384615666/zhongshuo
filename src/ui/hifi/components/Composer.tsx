@@ -44,6 +44,44 @@ type MentionDocument = {
   sizeBytes?: number | null;
 };
 
+type UploadClassification = ReturnType<typeof classifyAttachmentFile>;
+
+function uploadContentIdentity(item: Pick<UploadItem, 'name' | 'size' | 'status' | 'removed' | 'contentHash' | 'hash'>): string | null {
+  if (item.removed === true || item.status === 'failed') return null;
+  const contentHash = item.contentHash ?? (item.status === 'ready' ? item.hash : undefined);
+  return contentHash == null || contentHash.length === 0 ? null : `${item.name}\u0000${item.size}\u0000${contentHash}`;
+}
+
+/** Hash the selected bytes so files with equal name/size metadata never collide by accident. */
+export async function uploadFileContentHash(file: Pick<File, 'arrayBuffer'>): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (subtle == null) return null;
+    const digest = await subtle.digest('SHA-256', await file.arrayBuffer());
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  } catch {
+    // A failed hash must not turn into a false duplicate; accept the explicit selection.
+    return null;
+  }
+}
+
+export async function prepareUploadFiles(
+  files: readonly File[],
+  existing: readonly UploadItem[],
+): Promise<Array<{ file: File; contentHash: string | null; cls: UploadClassification }>> {
+  const seen = new Set(existing.map(uploadContentIdentity).filter((value): value is string => value != null));
+  const accepted: Array<{ file: File; contentHash: string | null; cls: UploadClassification }> = [];
+  for (const file of files) {
+    const cls = classifyAttachmentFile(file.name, file.size);
+    const contentHash = cls.cls === 'unsupported' ? null : await uploadFileContentHash(file);
+    const identity = contentHash == null ? null : `${file.name}\u0000${file.size}\u0000${contentHash}`;
+    if (identity != null && seen.has(identity)) continue;
+    if (identity != null) seen.add(identity);
+    accepted.push({ file, contentHash, cls });
+  }
+  return accepted;
+}
+
 /**
  * 意图标签的说明（E8 / ADR-14）。
  * 这里只讲实际能力，不给安全承诺——不画锁，也不写"受保护"。
@@ -642,25 +680,15 @@ export function Composer({
     const startDraftKey = draftKey;
     const startProjectId = activeProjectId;
     const startConversationId = attachmentUpload.conversationId;
-    const duplicateKeys = new Set(
-      (getState().uploadItems[startDraftKey] ?? [])
-        .filter((item) => item.removed !== true && item.status !== 'failed')
-        .map((item) => `${item.name}\u0000${item.size}\u0000${item.sourceLastModified ?? ''}\u0000${item.sourceType ?? ''}`),
-    );
-    const acceptedFiles: File[] = [];
-    for (const file of files) {
-      const duplicateKey = `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
-      if (duplicateKeys.has(duplicateKey)) continue;
-      duplicateKeys.add(duplicateKey);
-      acceptedFiles.push(file);
-    }
+    const acceptedFiles = await prepareUploadFiles(files, getState().uploadItems[startDraftKey] ?? []);
     if (acceptedFiles.length === 0) return;
 
-    type PlannedUpload = { file: File; uploadId: string; cls: ReturnType<typeof classifyAttachmentFile> };
-    const planned: PlannedUpload[] = acceptedFiles.map((file) => ({
+    type PlannedUpload = { file: File; uploadId: string; cls: UploadClassification; contentHash: string | null };
+    const planned: PlannedUpload[] = acceptedFiles.map(({ file, cls, contentHash }) => ({
       file,
       uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`,
-      cls: classifyAttachmentFile(file.name, file.size),
+      cls,
+      contentHash,
     }));
 
     for (const item of planned) {
@@ -675,6 +703,7 @@ export function Composer({
         size: item.file.size,
         sourceLastModified: item.file.lastModified,
         sourceType: item.file.type,
+        ...(item.contentHash != null ? { contentHash: item.contentHash } : {}),
         status: error == null ? 'uploading' : 'failed',
         ...(error != null ? { error } : {}),
       });

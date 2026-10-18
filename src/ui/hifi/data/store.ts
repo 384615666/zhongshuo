@@ -309,6 +309,8 @@ export interface UploadItem {
   /** Browser File identity metadata helps distinguish same-name/same-size files. */
   sourceLastModified?: number;
   sourceType?: string;
+  /** SHA-256 of the selected bytes. File metadata alone is not a content identity. */
+  contentHash?: string;
   status: 'uploading' | 'ready' | 'failed';
   attachmentId?: string;
   hash?: string;
@@ -632,7 +634,7 @@ export function settleUploadReady(draftKey: string, uploadId: string, conversati
     const idx = curList.findIndex((x) => x.uploadId === uploadId);
     if (idx < 0) return s;
     const next = [...curList];
-    next[idx] = { ...curList[idx]!, status: 'ready', attachmentId: receipt.attachmentId, hash: receipt.hash, revision: receipt.revision, kind: receipt.kind };
+    next[idx] = { ...curList[idx]!, status: 'ready', attachmentId: receipt.attachmentId, hash: receipt.hash, contentHash: receipt.hash ?? curList[idx]!.contentHash, revision: receipt.revision, kind: receipt.kind };
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: next } };
   });
   const d = getDraftFull(draftKey);
@@ -688,7 +690,7 @@ export function hydrateUploadRefs(draftKey: string, conversationId: string, refs
     const list = s.uploadItems[draftKey] ?? [];
     const have = new Set(list.map((x) => x.attachmentId));
     const add = refs.filter((r) => r.attachmentId != null && !have.has(r.attachmentId))
-      .map((r) => ({ uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`, draftKey, conversationId, name: r.name, size: r.size, status: 'ready' as const, attachmentId: r.attachmentId, hash: r.hash, revision: r.revision, kind: r.kind }));
+      .map((r) => ({ uploadId: `upl_${Math.random().toString(36).slice(2, 10)}`, draftKey, conversationId, name: r.name, size: r.size, status: 'ready' as const, attachmentId: r.attachmentId, hash: r.hash, contentHash: r.hash, revision: r.revision, kind: r.kind }));
     if (add.length === 0) return s;
     added.push(...add);
     return { ...s, uploadItems: { ...s.uploadItems, [draftKey]: [...list, ...add] } };

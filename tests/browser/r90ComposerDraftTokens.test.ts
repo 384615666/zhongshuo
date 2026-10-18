@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { pendingIdentityMatches } from '../../src/ui/hifi/components/Composer.tsx';
+import { pendingIdentityMatches, prepareUploadFiles } from '../../src/ui/hifi/components/Composer.tsx';
 
 class MemoryLocalStorage {
   store = new Map<string, string>();
@@ -27,6 +27,25 @@ afterEach(() => {
 });
 
 describe('R90 composer structured document refs', () => {
+  it('deduplicates by file bytes, accepts same-name/same-size different content, and allows failed reselect', async () => {
+    const first = new File(['AAAA'], 'same.txt', { type: 'text/plain', lastModified: 1234 });
+    const second = new File(['BBBB'], 'same.txt', { type: 'text/plain', lastModified: 1234 });
+    const prepared = await prepareUploadFiles([first, second], []);
+    expect(prepared).toHaveLength(2);
+    expect(prepared[0]!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(prepared[1]!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(prepared[0]!.contentHash).not.toBe(prepared[1]!.contentHash);
+
+    const uploading = [{
+      uploadId: 'upl_same', draftKey: 'room:r0', conversationId: 'conv0',
+      name: 'same.txt', size: 4, status: 'uploading' as const, contentHash: prepared[0]!.contentHash!,
+    }];
+    expect(await prepareUploadFiles([new File(['AAAA'], 'same.txt', { type: 'text/plain', lastModified: 1234 })], uploading)).toHaveLength(0);
+    expect(await prepareUploadFiles([new File(['AAAA'], 'same.txt', { type: 'text/plain', lastModified: 1234 })], [
+      { ...uploading[0]!, status: 'failed' as const },
+    ])).toHaveLength(1);
+  });
+
   it('replaces the @ query with one inline file token and strips the token from model-facing text', async () => {
     const store = await freshStore();
     store.setDraftFull('room:r1', {
