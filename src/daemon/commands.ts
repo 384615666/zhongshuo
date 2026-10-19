@@ -637,14 +637,19 @@ async function runOfficeSniff(blobPath: string, hash: string): Promise<{ ok: tru
  * 隔离重提并回写（事务内重检 audience）。失败=明确错误（不虚构缓存）。 */
 async function ensureDocumentCache(
   deps: DaemonCommandDeps,
-  row: { id: string; conversation_id: string; hash: string; blob_path: string; kind: string; revision: number; extracted_text_json: string | null },
+  row: { id: string; conversation_id: string; hash: string; blob_path: string; kind: string; revision: number; extracted_text_json: string | null; source_name?: string | null },
   cacheKind: ExtractCache['kind'],
 ): Promise<ExtractCache> {
   const verified = readVerifiedBlob(row.blob_path, row.hash, join(deps.appDataDir ?? process.env.ZS_APP_DATA ?? process.cwd(), 'blobstore'));
   if (!verified.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', verified.error.message);
   const cached = validateExtractCache(row.extracted_text_json, row.hash, cacheKind);
   if (cached != null) return cached;
-  const parseKind: ParseJobKind = cacheKind === 'sheet' ? 'xlsx' : cacheKind === 'slides' ? 'pptx' : cacheKind;
+  // R91：sheet_file 既可能来自 XLSX 也可能是 CSV/TSV（上传链与生成文件快照同一 kind）——
+  // 缓存缺失时按来源文件名选择既有解析器，避免把 CSV 送进 XLSX 解析器误判“不可解析”。
+  const sourceName = (row.source_name ?? '').toLowerCase();
+  const parseKind: ParseJobKind = cacheKind === 'sheet'
+    ? (/\.(csv|tsv)$/.test(sourceName) ? 'csv' : 'xlsx')
+    : cacheKind === 'slides' ? 'pptx' : cacheKind;
   const parsed = await getParsePool().run(parseKind, row.blob_path, row.hash);
   if (!parsed.ok) throw new DaemonCommandError('STORAGE_UNAVAILABLE', `原件已不可解析：[${parsed.error.code}] ${parsed.error.message}`);
   const cache = { ...(parsed.result as ExtractCache & { artifactKind?: string }) };
@@ -676,17 +681,25 @@ function attachMessageRefs(
   }
 }
 
-/** 历史读取用：批量取消息附件摘要（artifactId/filename——点击预览经 attachment.previewText
- * 走 audience+完整性校验，此处只发 id 与名字不下发正文）。 */
-function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string }>> {
-  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string }>>();
+/** 历史读取用：批量取消息附件摘要（artifactId/filename/kind/sizeBytes——点击预览经
+ * attachment.previewText 走 audience+完整性校验，此处只发 id 与名字/大小不下发正文）。
+ * R91：sizeBytes 取内容寻址副本实际字节数（stat 失败则不提供，绝不编造）。 */
+function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>> {
+  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>>();
   if (messageIds.length === 0) return out;
   const rows = db.prepare(
-    `SELECT ma.message_id, ma.artifact_id, ma.display_name, a.kind FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
-  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null; kind: string }>;
+    `SELECT ma.message_id, ma.artifact_id, ma.display_name, a.kind, a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null; kind: string; blob_path: string }>;
   for (const r of rows) {
     const list = out.get(r.message_id) ?? [];
-    list.push({ artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind });
+    const summary: { artifactId: string; filename: string; kind: string; sizeBytes?: number } = {
+      artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind,
+    };
+    try {
+      const st = statSync(r.blob_path);
+      if (st.isFile()) summary.sizeBytes = st.size;
+    } catch { /* 副本不可读：不提供大小（大小缺失≠伪造 0） */ }
+    list.push(summary);
     out.set(r.message_id, list);
   }
   return out;

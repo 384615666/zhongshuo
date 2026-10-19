@@ -4,6 +4,7 @@
  * DM 消息 room/thread/线程序号为空、conversation_seq 非空；via_connection_id 仅限 human 代发。
  */
 import { z } from 'zod';
+import { collaborationStageSchema, type CollaborationStageMetadata } from './collaborationStage.ts';
 import type { ConversationId, MessageTarget, DispatchDisposition } from './conversation.ts';
 import type { MentionNode, SendIntent, TopLevelRouteOutcome, ThreadFollowUpOutcome, DmRouteOutcome } from './routing.ts';
 import type { ProjectId, RoomId } from './project.ts';
@@ -28,6 +29,8 @@ export interface MessageBodyJson {
   mentions?: readonly MentionNode[];
   conversationIntent?: 'default'|'record_only';
   runtimeControlResult?:string;
+  /** 已完成研讨阶段产物的呈现标记（R91；仅结构化阶段产物消息携带）。 */
+  collaborationStage?: CollaborationStageMetadata;
 }
 
 export interface Message {
@@ -55,6 +58,7 @@ export const messageBodyJsonSchema = z.strictObject({
   text: z.string(),
   conversationIntent:z.enum(['default','record_only']).optional(),
   runtimeControlResult:z.string().optional(),
+  collaborationStage: collaborationStageSchema.optional(),
   mentions: z.array(z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('member'), memberId: z.string().min(1) }),
     z.strictObject({ kind: z.literal('all') }),

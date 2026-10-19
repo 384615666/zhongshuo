@@ -55,6 +55,11 @@ import {
   currentSynthesisVersion,
 } from '../persistence/stores/deliberation.ts';
 import { DELIBERATE_OUTPUT_CONTRACTS, selectStageInstruction } from '../contracts/prompts.ts';
+import {
+  DELIBERATION_VISIBLE_STAGE_LABELS,
+  type CollaborationStageMetadata,
+  type DeliberationVisibleStage,
+} from '../contracts/collaborationStage.ts';
 import type { TopLevelRouteOutcome } from '../contracts/routing.ts';
 import type { DomainResult } from '../contracts/errors.ts';
 import { domainErr, domainOk } from '../contracts/errors.ts';
@@ -974,6 +979,278 @@ function collectIssuePositions(db: ZhongshuoDatabase, runId: string): unknown {
   return db.prepare('SELECT issue_id, issue_revision, member_id, stance FROM positions WHERE issue_id IN (SELECT id FROM issues WHERE run_id = ?)').all(runId);
 }
 
+// ---------- 阶段产物 → 串内正式消息（R91：可见的 AI 间交流） ----------
+//
+// 用户要看见的是**已通过同 run/turn/成员/阶段身份与 schema 校验的结构化阶段成果**，
+// 不是隐式思维链/原始 reasoning/内部协议。因此这里只投影 payload 里模型被要求产出的
+// 可读字段（summary/claims/reviews/positions/verdict/确认），不读取运行时的 reasoning
+// 事件，也不把阶段结果注入其他独立成员的上下文（屏障与输入组装完全不动）。
+// - 只对 counted 成功产物投影（错误输出/格式修复/STOP/UNKNOWN/迟到材料都不走这里）；
+// - 消息 ID 以 turnId 为命名空间：同一 turn 重放不重复；runId/身份写进 body_json；
+// - 阶段失败不伪造消息：workflow_runs/run_participants/domain_events 已是可查状态。
+
+const VISIBLE_STAGE_BY_CODE: Partial<Record<DelibStageCode, DeliberationVisibleStage>> = {
+  IND: 'INDEPENDENT',
+  CR: 'CROSS_REVIEW',
+  ISS: 'ISSUE_DISCUSSION',
+  CHK: 'ISSUE_DISCUSSION',
+  SYN: 'SYNTHESIS',
+  RAT: 'RATIFY',
+};
+
+/** 内部步骤阶段码 → 前端可识别的工作流阶段（检查点归入 ISSUE_DISCUSSION）。 */
+export function visibleStageOfDelib(stage: DelibStageCode): DeliberationVisibleStage | null {
+  return VISIBLE_STAGE_BY_CODE[stage] ?? null;
+}
+
+/** agent_turns.stage_key 前缀（与 assembleStepInput 同口径：ISS/CHK 同属争议讨论阶段）。 */
+const STAGE_KEY_PREFIX: Record<DelibStageCode, string> = {
+  IND: 'delib.independent',
+  CR: 'delib.cross_review',
+  ISS: 'delib.issue_discussion',
+  CHK: 'delib.issue_discussion',
+  SYN: 'delib.synthesis',
+  RAT: 'delib.ratify',
+  RPR: 'delib.rpr',
+};
+
+export function expectedStageKeyPrefix(stage: DelibStageCode): string {
+  return STAGE_KEY_PREFIX[stage];
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asTextList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0) : [];
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** 互评引用解析：读冻结初稿的 claim 文本；读不到就退回 claimId（不编造）。 */
+function claimStatementOf(db: ZhongshuoDatabase, runId: string, artifactId: string, revision: number, claimId: string): string | null {
+  if (artifactId.length === 0 || claimId.length === 0) return null;
+  try {
+    const row = db.prepare('SELECT revision, blob_path FROM artifacts WHERE id = ? AND run_id = ?').get(artifactId, runId) as { revision: number; blob_path: string } | undefined;
+    if (row == null || row.revision !== revision) return null;
+    const payload = JSON.parse(readFileSync(row.blob_path, 'utf8')) as { claims?: Array<{ claimId?: string; statement?: string }> };
+    return payload.claims?.find((c) => c.claimId === claimId)?.statement ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function issueStatementOf(db: ZhongshuoDatabase, runId: string, issueId: string): string | null {
+  try {
+    const row = db.prepare('SELECT statement FROM issues WHERE id = ? AND run_id = ?').get(issueId, runId) as { statement: string } | undefined;
+    return row?.statement ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const CLAIM_KIND_LABEL: Record<string, string> = { observed: '观察到', inferred: '推断', proposal: '建议' };
+const STANCE_LABEL: Record<string, string> = { agree: '同意', disagree: '不同意', needs_evidence: '需要证据' };
+const RATIFY_STANCE_LABEL: Record<string, string> = { confirm: '确认', conditional: '附条件确认', object: '反对', unconfirmed: '未确认' };
+
+/**
+ * 把已验证的结构化阶段成果渲染为自然可读正文（中文阶段标签 + 作者本人的产出要点）。
+ * 不含原始 reasoning、工具参数、内部协议字段。
+ */
+export function renderStageProductText(db: ZhongshuoDatabase, input: {
+  runId: string;
+  step: DelibStep;
+  payload: Record<string, unknown>;
+}): string {
+  const visible = visibleStageOfDelib(input.step.stage);
+  if (visible == null) return '';
+  const label = DELIBERATION_VISIBLE_STAGE_LABELS[visible];
+  const round = input.step.roundNo > 0 ? ` · 第${input.step.roundNo}轮` : '';
+  const payload = input.payload;
+  const lines: string[] = [];
+  /** 列表渲染：number=true 用「1. 」；否则「- 」。 */
+  const pushList = (title: string, items: readonly string[], numbered = false) => {
+    if (items.length === 0) return;
+    lines.push(`${title}：`, ...items.map((item, i) => (numbered ? `${i + 1}. ${item}` : `- ${item}`)));
+  };
+  const pushBlocks = (title: string, items: readonly string[]) => {
+    if (items.length === 0) return;
+    lines.push(`${title}：`);
+    for (const item of items) lines.push(`- ${item}`);
+  };
+  switch (input.step.stage) {
+    case 'IND': {
+      lines.push(`【${label}】`, asText(payload.summary));
+      const claims = (Array.isArray(payload.claims) ? payload.claims : [])
+        .map(asRecord)
+        .filter((c): c is Record<string, unknown> => c != null)
+        .map((c, i) => {
+          const kind = CLAIM_KIND_LABEL[asText(c.kind)] ?? asText(c.kind);
+          const uncertainty = asText(c.uncertainty).trim();
+          // 不在自然正文里拼 evidenceIds/artifactId 等内部身份（原始结构化产物留在 artifact 详情）。
+          return `${i + 1}. 【${kind}】${asText(c.statement)}${uncertainty.length > 0 ? `（不确定：${uncertainty}）` : ''}`;
+        });
+      pushList('结论', claims);
+      pushList('建议', asTextList(payload.recommendations));
+      pushList('待讨论问题', asTextList(payload.openQuestions));
+      break;
+    }
+    case 'CR': {
+      lines.push(`【${label}】`);
+      const reviews = (Array.isArray(payload.reviews) ? payload.reviews : [])
+        .map(asRecord)
+        .filter((r): r is Record<string, unknown> => r != null)
+        .map((r) => {
+          const statement = claimStatementOf(db, input.runId, asText(r.targetArtifactId), asNumber(r.targetRevision) ?? 0, asText(r.targetClaimId))
+            ?? '该结论';
+          const stance = STANCE_LABEL[asText(r.stance)] ?? asText(r.stance);
+          const suggested = asText(r.suggestedVerification).trim();
+          return `对结论「${statement}」：${stance} — ${asText(r.reason)}${suggested.length > 0 ? `（建议验证：${suggested}）` : ''}`;
+        });
+      pushList('互评意见', reviews);
+      break;
+    }
+    case 'ISS': {
+      lines.push(`【${label}${round}】`);
+      const positions = (Array.isArray(payload.positions) ? payload.positions : [])
+        .map(asRecord)
+        .filter((p): p is Record<string, unknown> => p != null)
+        .flatMap((p) => {
+          const issueId = asText(p.issueId);
+          const statement = issueStatementOf(db, input.runId, issueId) ?? '该争议';
+          const stance = STANCE_LABEL[asText(p.stance)] ?? asText(p.stance);
+          const out = [`争议「${statement}」：${stance} — ${asText(p.reason)}`];
+          for (const evidence of (Array.isArray(p.newEvidence) ? p.newEvidence : []).map(asRecord)) {
+            if (evidence == null) continue;
+            out.push(`  新增证据：${asText(evidence.description)}`);
+          }
+          return out;
+        });
+      pushBlocks('讨论立场', positions);
+      break;
+    }
+    case 'CHK': {
+      lines.push(`【${label} · 检查点${round}】`);
+      const verdict = asText(payload.verdict) === 'continue' ? '继续研讨' : asText(payload.verdict) === 'stop' ? '停止研讨' : `未识别（${asText(payload.verdict)}）`;
+      lines.push(`检查点结论：${verdict}`, `理由：${asText(payload.reason)}`);
+      const evidenceSummary = asText(payload.evidenceSummary).trim();
+      if (evidenceSummary.length > 0) lines.push(`新证据摘要：${evidenceSummary}`);
+      break;
+    }
+    case 'SYN': {
+      lines.push(`【${label}】`, asText(payload.summary));
+      const claims = (Array.isArray(payload.claims) ? payload.claims : [])
+        .map(asRecord)
+        .filter((c): c is Record<string, unknown> => c != null)
+        .map((c, i) => `${i + 1}. ${asText(c.statement)}${asTextList(c.sourceRefs).length > 0 ? `（依据 ${asTextList(c.sourceRefs).length} 条分析结论）` : ''}`);
+      // SYN 在 RATIFY 前只是主持者整合稿，不能提前承诺“共识”。
+      pushList('整合结论（待确认）', claims);
+      const disputed = (Array.isArray(payload.disputedClaims) ? payload.disputedClaims : [])
+        .map(asRecord)
+        .filter((c): c is Record<string, unknown> => c != null)
+        .map((c) => `分歧：${asText(c.statement)}${asText(c.disagreementSummary).trim().length > 0 ? ` — ${asText(c.disagreementSummary)}` : ''}`);
+      pushList('保留分歧', disputed);
+      pushList('建议', asTextList(payload.recommendations));
+      break;
+    }
+    case 'RAT': {
+      lines.push(`【${label}】`);
+      const synthesis = frozenSynthesisOf(db, input.runId);
+      const statements = new Map<string, string>();
+      if (synthesis != null) {
+        for (const claim of getSynthesisClaims(db, input.runId, synthesis.artifactId, synthesis.revision)) statements.set(claim.claim_id, claim.statement);
+      }
+      const responses = (Array.isArray(payload.responses) ? payload.responses : [])
+        .map(asRecord)
+        .filter((r): r is Record<string, unknown> => r != null)
+        .map((r) => {
+          const claimId = asText(r.claimId);
+          const stance = RATIFY_STANCE_LABEL[asText(r.stance)] ?? asText(r.stance);
+          const conditions = asTextList(r.conditions);
+          const reason = asText(r.reason).trim();
+          return `结论「${statements.get(claimId) ?? '该结论'}」：${stance}${conditions.length > 0 ? `（条件：${conditions.join('；')}）` : ''}${reason.length > 0 ? ` — ${reason}` : ''}`;
+        });
+      pushList('确认意见', responses);
+      break;
+    }
+    default:
+      return '';
+  }
+  return lines.filter((line) => line.trim().length > 0).join('\n');
+}
+
+/**
+ * 把阶段产物写为持久化串内正式消息。
+ *
+ * 身份稳定键 = (runId, 原阶段, 成员, 轮次)：格式修复轮通过 schema 后的有效产物与首次
+ * 成功产物共用同一身份——只显示一次、同 turn 重放不重复；未通过 schema 的修复尝试在
+ * onStepOutput 的 counted=false 分支就被拒绝，根本到不了这里。
+ */
+export function insertVisibleStageMessage(db: ZhongshuoDatabase, input: {
+  task: { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null; room_id: string | null };
+  runId: string;
+  step: DelibStep;
+  turnId: string;
+  text: string;
+  now: number;
+}): string | null {
+  const visible = visibleStageOfDelib(input.step.stage);
+  if (visible == null) return null;
+  const threadId = input.task.conversation_thread_id;
+  if (threadId == null || threadId.length === 0) return null;
+  const messageId = `msg_delib_${input.runId}_${input.step.stage}_${input.step.memberId}_${input.step.roundNo}`;
+  const existing = db.prepare('SELECT id FROM messages WHERE id = ?').get(messageId) as { id: string } | undefined;
+  if (existing != null) return existing.id;
+  const metadata: CollaborationStageMetadata = {
+    stage: visible,
+    roundNo: input.step.roundNo,
+    turnId: input.turnId,
+    runId: input.runId,
+  };
+  const conversationSeq = (db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
+    .get(input.task.conversation_id) as { last_message_seq: number }).last_message_seq;
+  const threadSeq = (db.prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
+    .get(threadId) as { last_message_seq: number }).last_message_seq;
+  db.prepare(
+    `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+       thread_message_seq, author_type, author_id, body_json, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, ?, 'final', ?)`,
+  ).run(
+    messageId,
+    input.task.project_id,
+    input.task.conversation_id,
+    conversationSeq,
+    input.task.room_id,
+    threadId,
+    input.task.id,
+    threadSeq,
+    input.step.memberId,
+    JSON.stringify({ text: input.text, collaborationStage: metadata }),
+    input.now,
+  );
+  appendDomainEvent(db, {
+    schemaVersion: 1,
+    eventId: `evt_${randomUUID()}`,
+    projectId: input.task.project_id,
+    conversationId: input.task.conversation_id,
+    threadId,
+    taskId: input.task.id,
+    runId: input.runId,
+    turnId: input.turnId,
+    kind: 'thread.replyAdded',
+    createdAt: input.now,
+    payload: { messageId, collaborationStage: metadata },
+  });
+  return messageId;
+}
+
 // ---------- 输出校验与计入屏障 ----------
 
 export interface StepOutputResult {
@@ -1033,6 +1310,24 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   if (runTerminal || stopped || input.step.runId !== input.runId) {
     return recordLateArrival(db, input, now, runTerminal ? `run-${runRow?.status ?? 'gone'}` : stopped ? 'task-stopped' : 'stale-run');
   }
+  // 身份守卫（R91 审核）：产物必须由**本 run 的本阶段本成员 turn** 产生——run 归属任务、
+  // step.taskId、turn 的 run/member/stage 任一不符都拒绝计入与投影（绝不插错误作者消息）。
+  const runOwner = db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(input.runId) as { task_id: string } | undefined;
+  if (runOwner == null || runOwner.task_id !== input.taskId || input.step.taskId !== input.taskId) {
+    return domainErr('TARGET_KIND_MISMATCH', '运行/步骤的任务身份不符，拒绝计入阶段产物');
+  }
+  const turnRow = db.prepare('SELECT run_id, member_id, stage_key FROM agent_turns WHERE id = ?').get(input.turnId) as
+    | { run_id: string; member_id: string; stage_key: string } | undefined;
+  // 可核实的执行轮身份必须完全匹配（防把别的成员/阶段/运行的输出插成本成员发言）；
+  // 历史/迟到合成 turn 可能没有 agent_turns 行——此时仍按原语义计入，但不投影可见消息。
+  if (turnRow != null) {
+    if (turnRow.run_id !== input.runId || turnRow.member_id !== input.step.memberId) {
+      return domainErr('TARGET_KIND_MISMATCH', '执行轮归属的运行/成员与产物不符，拒绝计入');
+    }
+    if (!turnRow.stage_key.startsWith(expectedStageKeyPrefix(input.step.stage))) {
+      return domainErr('STAGE_MISMATCH', `执行轮阶段（${turnRow.stage_key}）与产物阶段（${input.step.stage}）不符，拒绝计入`);
+    }
+  }
   const schema = STEP_SCHEMAS[input.step.stage];
   if (schema == null) return domainErr('VALIDATION_INVALID', `未知研讨步骤 ${input.step.stage}`);
   let parsed: unknown;
@@ -1056,7 +1351,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
     if (!validated.ok) return domainOk({ counted: false, needsRepair: validated.error.message });
   }
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId) as
-    | { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null }
+    | { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null; room_id: string | null }
     | undefined;
   if (task == null) return domainErr('RESOURCE_NOT_FOUND', '任务不存在');
   const threadId = task.conversation_thread_id ?? '';
@@ -1126,6 +1421,31 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
         });
         if (!submitted.ok) throw new Error(`确认提交失败：${submitted.error.message}`);
       }
+    }
+    // R91 可见性：结构化阶段产物通过校验后投影为串内正式消息（作者=真实产物作者）。
+    // 投影失败不阻断研讨屏障/推进（catch 内只留审计）——阶段成功事实仍以 artifact/run 为准。
+    // 只有身份可核实的执行轮（agent_turns 行存在）才投影；合成/历史迟到输出不产生“成功发言”。
+    if (turnRow != null) try {
+      const visibleText = renderStageProductText(db, { runId: input.runId, step: input.step, payload: payload as Record<string, unknown> });
+      if (visibleText.length > 0) {
+        insertVisibleStageMessage(db, {
+          task: { id: task.id, project_id: task.project_id, conversation_id: task.conversation_id, conversation_thread_id: task.conversation_thread_id, room_id: task.room_id },
+          runId: input.runId,
+          step: input.step,
+          turnId: input.turnId,
+          text: visibleText,
+          now,
+        });
+      }
+    } catch (error) {
+      try {
+        appendDomainEvent(db, {
+          schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id, conversationId: task.conversation_id,
+          threadId: task.conversation_thread_id, taskId: input.taskId, runId: input.runId, turnId: input.turnId,
+          kind: 'run.visibleStageMessageFailed', createdAt: now,
+          payload: { stage: input.step.stage, roundNo: input.step.roundNo, message: (error instanceof Error ? error.message : String(error)).slice(0, 300) },
+        });
+      } catch { /* 审计尽力而为：可见性投影失败不影响阶段成功事实 */ }
     }
   });
   try {

@@ -15,7 +15,7 @@ import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead,
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
-import type { Message, Task, Thread, ThreadCard } from './data/types';
+import type { CollaborationStage, Message, Task, Thread, ThreadCard } from './data/types';
 import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, navigate } from './lib/router';
@@ -29,7 +29,7 @@ interface RoomListData { items: Array<{ id: string; name: string; conversationId
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
 interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
-interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> }
+export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }> }
 interface HistoryData { messages: HistoryMessage[] }
 import {chatAnswer} from '../../contracts/chatAnswer';
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string; deliberationBudget?: { maxTurns: number } }
@@ -41,6 +41,64 @@ const textOf = (m: HistoryMessage): string => {
 };
 /** created_at 如实映射：响应没有则置 0（「未知」）并由呈现层标注，不用当前时间伪造。 */
 const createdAtOf = (m: HistoryMessage): number => m.createdAt ?? m.created_at ?? 0;
+
+/**
+ * `body_json.collaborationStage` → 呈现用阶段标记（R91 模块3）。
+ *
+ * 后端把验证通过的阶段产物作为正式消息持久化，`body_json` 形如
+ * `{ text, collaborationStage: { stage, roundNo, turnId, runId } }`。
+ * thread.history 的 `items[].body` 是完整解析后的 body_json；DM 的
+ * `conversation.history` 返回原始 `body_json` 字符串——两条链都经这里转译。
+ *
+ * 容缺省契约：字段缺失/畸形/阶段为空一律返回 undefined（按普通消息渲染），
+ * 不让渲染层去猜，也不把内部 turn/run 身份暴露到界面。
+ */
+export function collaborationStageOfBody(body: unknown): CollaborationStage | undefined {
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const raw = (body as { collaborationStage?: unknown }).collaborationStage;
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const stage = typeof record.stage === 'string' ? record.stage.trim() : '';
+  if (stage.length === 0) return undefined;
+  const result: CollaborationStage = { stage };
+  if (typeof record.roundNo === 'number' && Number.isFinite(record.roundNo) && record.roundNo >= 0) {
+    result.roundNo = Math.floor(record.roundNo);
+  }
+  if (typeof record.turnId === 'string' && record.turnId.length > 0) result.turnId = record.turnId;
+  if (typeof record.runId === 'string' && record.runId.length > 0) result.runId = record.runId;
+  return result;
+}
+
+/**
+ * 阶段产物正文首行的【阶段】标题去重（R91 前后端契约对齐）。
+ *
+ * 后端 `renderStageProductText` 会在正文首行写 `【独立分析】` / `【争议讨论 · 第2轮】` /
+ * `【争议讨论 · 检查点 · 第2轮】`；而消息头已经用 `collaborationStage` 渲染
+ * 简短中文阶段标签和轮次。留着这行会让用户看到两遍标签，故仅在**确认这是带阶段标记的
+ * 正式产物消息**且首行确为已知阶段标题时去掉该标题行；其余正文原样保留，绝不删空。
+ * （用户手写正文、普通消息、无 metadata 的旧消息都不会经过这一步。）
+ */
+const STAGE_HEADING_LABELS = new Set(['独立分析', '互评', '分歧讨论', '争议讨论', '整合', '确认', '发布', '准备']);
+
+export function stripStageHeading(text: string, stage: CollaborationStage | undefined): string {
+  if (stage == null || text.length === 0) return text;
+  const lines = text.split('\n');
+  const first = (lines[0] ?? '').trim();
+  const match = /^【([^】]{1,40})】$/.exec(first);
+  if (match == null) return text;
+  const inner = match[1] ?? '';
+  const headingMatches = [...STAGE_HEADING_LABELS].some((label) => inner === label || inner.startsWith(label + ' · '));
+  if (!headingMatches) return text;
+  const rest = lines.slice(1).join('\n').replace(/^\n+/, '');
+  return rest.length > 0 ? rest : text;
+}
+
+/** 从 DM 原始历史行解析 body_json（解析失败不抛错、不渲染原 JSON）。 */
+function parsedHistoryBody(m: HistoryMessage): unknown {
+  const raw = m.bodyJson ?? m.body_json;
+  if (raw == null) return undefined;
+  try { return JSON.parse(raw) as unknown; } catch { return undefined; }
+}
 
 /** 归属门：请求发起时的 (gen, projectId) 与当前状态一致才落盘。 */
 function stillCurrent(gen: number, projectId: string): boolean {
@@ -1037,7 +1095,11 @@ interface ThreadGetData {  thread: { id: string; projectId: string; conversation
   anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null;
   lastReadSeq: number;
 }
-interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text: string }; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }>;replyExecution?:Message['formalReplyExecution'] }
+/**
+ * thread.history 的回复项。`body` 是服务端 `JSON.parse(body_json)` 的完整对象
+ * （R91：含 `collaborationStage`），loader 只取 `text` 正文并转译阶段标记。
+ */
+export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
@@ -1049,13 +1111,23 @@ interface TaskGetData {
   lastStartupFailureMessage?: string;
 }
 
-const msgOfReply = (projectId: string, roomId: string, threadId: string, it: ThreadHistoryItem): Message => ({
-  id: it.id, projectId, roomId, threadId, taskId: undefined,
-  authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
-  body: chatAnswer(it.body?.text??'',it.authorType), createdAt: it.createdAt, threadMessageSeq: it.seq,
-  attachmentIds: [], formalAttachments: it.attachments ?? [],
-  formalReplyExecution:it.replyExecution,
-});
+/**
+ * 历史回复项 → 呈现用 Message（真实作者/真实 seq/附件摘要保持原样）。
+ * R91 模块3：`body.collaborationStage` 只转译成呈现标签，正文只取 text。
+ */
+export const msgOfReply = (projectId: string, roomId: string, threadId: string, it: ThreadHistoryItem): Message => {
+  const stage = collaborationStageOfBody(it.body);
+  const readable = chatAnswer(it.body?.text??'',it.authorType);
+  const message: Message = {
+    id: it.id, projectId, roomId, threadId, taskId: undefined,
+    authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
+    body: stripStageHeading(readable, stage), createdAt: it.createdAt, threadMessageSeq: it.seq,
+    attachmentIds: [], formalAttachments: it.attachments ?? [],
+    formalReplyExecution:it.replyExecution,
+  };
+  if (stage != null) message.collaborationStage = stage;
+  return message;
+};
 
 /**
  * 装载线程视图：thread.get（实体+根消息+水位）→ thread.history（回复+根附件）→
@@ -1289,6 +1361,23 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
   setState((prev) => ({ ...prev, threadTasks: { ...prev.threadTasks, [threadId]: detail } }));
 }
 
+/**
+ * DM 历史行 → 呈现用 Message。`conversation.history` 返回原始 `body_json`
+ * 字符串：正文与可选的 `collaborationStage` 都从这里转译，**原 JSON 不进正文**。
+ */
+export const msgOfDmHistory = (projectId: string, conversationId: string, m: HistoryMessage, index: number): Message => {
+  const stage = collaborationStageOfBody(parsedHistoryBody(m));
+  const message: Message = {
+    id: m.id, projectId, roomId: `dm:${conversationId}`,
+    authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
+    authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: stripStageHeading(textOf(m), stage),
+    createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? index,
+    attachmentIds: [], formalAttachments: m.attachments ?? [],
+  };
+  if (stage != null) message.collaborationStage = stage;
+  return message;
+};
+
 export async function loadDmHistory(conversationId: string, opts: { markRead?: boolean } = {}): Promise<void> {
   const gen = getState().loadGen;
   const projectId = getState().activeProjectId;
@@ -1296,13 +1385,7 @@ export async function loadDmHistory(conversationId: string, opts: { markRead?: b
     const data = await command<HistoryData>('conversation.history', { conversationId, limit: 100 });
     if (!stillCurrent(gen, projectId)) return;
     const conv = getState().dms.find((d) => d.id === conversationId);
-    const msgs: Message[] = (data.messages ?? []).map((m, i) => ({
-      id: m.id, projectId, roomId: `dm:${conversationId}`,
-      authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
-      authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: textOf(m),
-      createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? i,
-      attachmentIds: [], formalAttachments: m.attachments ?? [],
-    }));
+    const msgs: Message[] = (data.messages ?? []).map((m, i) => msgOfDmHistory(projectId, conversationId, m, i));
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[conversationId];
       return { ...prev, dmHistory: { ...prev.dmHistory, [conversationId]: msgs }, readErrors: errors };

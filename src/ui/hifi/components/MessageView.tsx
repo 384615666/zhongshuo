@@ -13,17 +13,36 @@ import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
 import { Avatar, ConsensusTag, CostText, Tag, memberColor } from './ui';
-import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageLabel } from '../lib/format';
-import type { Message, ProjectMember, RouteMode } from '../data/types';
+import { clockTime, formatDuration, formatTokens, resultConsensusLabel, stageCopy, stageLabel } from '../lib/format';
+import type { CollaborationStage, Message, ProjectMember, RouteMode } from '../data/types';
 import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
 import { MarkdownView } from '../preview/MarkdownView';
+import { ATTACHMENT_KIND_LABEL, GeneratedFiles, normalizeFormalAttachments } from './GeneratedFiles';
+
+/* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
+export { ATTACHMENT_KIND_LABEL };
+
+/* ---------------- 研讨阶段标签（R91 模块3） ---------------- */
+
+/**
+ * 后端 `body_json.collaborationStage` 只允许变成**简短中文标签 + 轮次**：
+ * 内部阶段枚举（INDEPENDENT/CROSS_REVIEW/...）不得裸露，turnId/runId 不展示，
+ * 原 JSON 更不渲染。未知阶段名走「研讨发言」，不把内部字符串直接丢给用户。
+ */
+export function collaborationStageText(mark: CollaborationStage): string {
+  const shifted = mark.stage.toUpperCase();
+  const mapped = stageLabel(shifted);
+  const readable = Object.values(stageCopy).includes(mapped) || /[\u4e00-\u9fff]/.test(mapped) ? mapped : '研讨发言';
+  const round = typeof mark.roundNo === 'number' && Number.isFinite(mark.roundNo) && mark.roundNo > 0 ? ` · 第${Math.floor(mark.roundNo)}轮` : '';
+  return `${readable}${round}`;
+}
 
 /* ---------------- 消息携带的资源（UX-PREVIEW-01） ---------------- */
 
 /**
- * 把消息附件渲染成**可点击的文件 chip**。
+ * 把消息附件渲染成**可点击的文件 chip**（原型 resources 通道，UX-PREVIEW-01）。
  *
  * 修复的确切缺口：此前 Composer 的附件只是 `{name, size}`，
  * 从不落进消息，`MessageView` 里也没有任何可点击的文件名 ——
@@ -32,16 +51,6 @@ import { MarkdownView } from '../preview/MarkdownView';
  * 现在附件经 `Message.attachmentIds` 关联到资源，chip 显示真实标题与版本。
  * 无 taskId 的主池消息同样渲染（§17.9 第 1 条）。
  */
-/**
- * 附件 kind → 中文标签（导出共享，r55）：回复芯片与根消息（线程锚消息）独立渲染路径
- * 用同一映射——此前锚消息路径只认 code/text，PPT（幻灯）/CSV（表格→sheet_file）都
- * 显示成「文本」（用户短测 T5 确认的呈现缺陷）。
- */
-export const ATTACHMENT_KIND_LABEL: Record<string, string> = {
-  text_file: '文本', code_file: '代码', image_file: '图片', pdf_file: 'PDF',
-  docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯',
-};
-
 function MessageAttachments({
   message, onOpen,
 }: {
@@ -80,35 +89,6 @@ function MessageAttachments({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-/** 正式附件气泡：和输入区使用同一“文件在正文里”的视觉语义。 */
-function InlineFormalAttachments({
-  attachments,
-  onOpen,
-}: {
-  attachments: FormalAttachmentSummary[];
-  onOpen?: (att: FormalAttachmentSummary) => void;
-}) {
-  if (attachments.length === 0) return null;
-  return (
-    <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-      {attachments.map((attachment) => (
-        <button
-          key={attachment.artifactId}
-          type="button"
-          className={`inline-file-chip${attachment.kind === 'image_file' ? ' is-image' : ''}`}
-          data-zs-artifact-id={attachment.artifactId}
-          title={`打开 ${attachment.filename}（只读预览，不发送给 AI）`}
-          onClick={() => onOpen?.(attachment)}
-        >
-          <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
-          <span className="truncate">{attachment.filename}</span>
-          <span className="inline-file-kind">{ATTACHMENT_KIND_LABEL[attachment.kind] ?? attachment.kind}</span>
-        </button>
-      ))}
     </div>
   );
 }
@@ -210,6 +190,15 @@ export function MessageView({
               {!isHuman && author?.ordinal && author.ordinal > 1 ? (
                 <span className="small faint">#{author.ordinal}</span>
               ) : null}
+              {/* R91 模块3：已完成的研讨阶段产物就在这里按真实消息出现——
+                  只显示简短中文阶段标签 + 轮次，不新增外框/嵌套气泡。 */}
+              {!isSystem && message.collaborationStage != null ? (
+                <span className="msg-stage-tag">
+                  <Tag tone="info" icon="layers" title="研讨阶段产物（已完成并保存为正式消息）">
+                    {collaborationStageText(message.collaborationStage)}
+                  </Tag>
+                </span>
+              ) : null}
               {!isHuman && message.kind === 'report' ? <Tag tone="accent" icon="file-text">报告</Tag> : null}
               {message.streaming ? <Tag tone="info" icon="loader">流式中</Tag> : null}
               <span className="msg-time">{clockTime(message.createdAt)}</span>
@@ -231,8 +220,12 @@ export function MessageView({
 
             {/* 消息携带的资源（UX-PREVIEW-01 / §17.9）
                 这是"主池普通附件也能预览"的入口：附件挂在消息上，
-                **不要求 taskId**。点击打开共享预览，不发送、不执行。 */}
-            <MessageAttachments message={message} onOpen={onOpenResource} />
+                **不要求 taskId**。点击打开共享预览，不发送、不执行。
+                正式附件（formalAttachments）已由 GeneratedFiles 渲染时，
+                不再叠加原型 resources 通道——同一文件不出现两张卡。 */}
+            {normalizeFormalAttachments(message.formalAttachments).length === 0
+              ? <MessageAttachments message={message} onOpen={onOpenResource} />
+              : null}
             {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
               {message.formalReplyExecution.status==='queued'?'已发送，等待 AI 回复':message.formalReplyExecution.status==='running'?'AI 正在回复':message.formalReplyExecution.error??'本次回复未完成'}
               {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
@@ -283,27 +276,14 @@ function MessageBody({
 
   return (
     <>
-      {message.body && message.kind !== 'progress' ? (
+      {/* 正文（任何 kind 都只渲染一次；进度消息的正文同样在这里） */}
+      {message.body ? (
         <div className="msg-text">
           <MarkdownView text={visibleBody} />
           {message.streaming ? <i className="streaming-caret" /> : null}
         </div>
       ) : null}
 
-      <InlineFormalAttachments attachments={message.formalAttachments ?? []} onOpen={onOpenAttachment} />
-
-      {message.kind === 'progress' ? (
-        /* 进度消息 = 正文 + 需要被看见的异常标记。
-           原来这里有一张"成员进度"卡片，包含「阶段 / 成员」两列网格 + 状态标签，
-           全是占位：payload.progress 从未被写入，因此「成员」恒等于左侧头像旁已有的作者名，
-           「阶段」恒显示兜底字符串"当前阶段"，状态标签恒显示"进行中"。
-           三行字里两行是重复/恒定值，所以整张卡片删除，正文直接作为消息渲染。
-           缺席/迟到这类真正需要看见的状态用标签附着在消息头，不另开卡片。 */
-        <div className="msg-text">
-          <MarkdownView text={visibleBody} />
-          {message.streaming ? <i className="streaming-caret" /> : null}
-        </div>
-      ) : null}
       {message.kind === 'progress' && p?.status ? (
         <div className="row tight wrap" style={{ marginTop: 6 }}>
           <Tag tone={p.status === 'blocked' ? 'danger' : 'warning'} icon={p.status === 'blocked' ? 'octagon' : 'clock'}>
@@ -311,6 +291,10 @@ function MessageBody({
           </Tag>
         </div>
       ) : null}
+
+      {/* R91 模块3：生成文件/正式附件卡固定在正文之后、
+          复制/引用/收藏与结构化卡片之前；不让附件跑到正文顶部，也不重复渲染。 */}
+      <GeneratedFiles attachments={message.formalAttachments} onOpen={onOpenAttachment} />
 
       {/* 分工卡 */}
       {a ? (

@@ -180,9 +180,29 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       type Delivery={id:string;revision:number;manifest_hash:string;run_id:string};
       const first=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=?').get(root.taskId) as Delivery;
       expect(first.revision).toBe(1);expect(first.manifest_hash).toMatch(/^[a-f0-9]{64}$/);
-      expect(f.db.prepare('SELECT count(*) n FROM messages WHERE task_id=? AND author_type=\'agent\'').get(root.taskId)).toEqual({n:1});
-      const message=f.db.prepare("SELECT body_json FROM messages WHERE task_id=? AND author_type='agent'").get(root.taskId) as {body_json:string};
-      expect(JSON.parse(message.body_json).text).toContain('两位成员汇总的自然结论');expect(JSON.parse(message.body_json).text).not.toContain('schemaVersion');
+      // R91：正式研讨现在会把已验证阶段产物投影为串内正式消息（body_json.collaborationStage）。
+      // 原契约继续成立：自然/交付消息仍恰好一条且正文是自然结论（不是阶段消息、不是原 JSON）。
+      const agentMessages=f.db.prepare("SELECT id,author_id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY conversation_seq").all(root.taskId) as Array<{id:string;author_id:string;body_json:string}>;
+      const parsedAgent=agentMessages.map(row=>({row,body:JSON.parse(row.body_json) as {text?:string;collaborationStage?:{stage:string;roundNo:number;turnId:string;runId:string}}}));
+      const naturalMessages=parsedAgent.filter(item=>item.body.collaborationStage==null);
+      expect(naturalMessages).toHaveLength(1);
+      expect(naturalMessages[0]!.body.text).toContain('两位成员汇总的自然结论');
+      expect(naturalMessages[0]!.body.text).not.toContain('schemaVersion');
+      // R91 新增阶段消息：只断言真实产物投影（数量/作者/阶段/run 身份/稳定去重/作用域）。
+      const stageMessages=parsedAgent.filter(item=>item.body.collaborationStage!=null);
+      expect(stageMessages).toHaveLength(7);
+      expect(new Set(stageMessages.map(item=>item.body.collaborationStage!.stage))).toEqual(new Set(['INDEPENDENT','CROSS_REVIEW','SYNTHESIS','RATIFY']));
+      expect(new Set(stageMessages.map(item=>item.row.author_id))).toEqual(new Set([f.a,f.b]));
+      for(const item of stageMessages){
+        const stage=item.body.collaborationStage!;
+        expect(stage.runId).toBe(first.run_id);
+        expect(stage.turnId.length).toBeGreaterThan(0);
+        expect(stage.roundNo).toBeGreaterThanOrEqual(0);
+        expect(item.row.id.startsWith(`msg_delib_${stage.runId}_`)).toBe(true);
+        expect(item.row.id).not.toContain(stage.turnId); // 稳定身份=run/阶段/成员/轮次，不是 turn 命名空间
+      }
+      const stageIdentities=stageMessages.map(item=>`${item.body.collaborationStage!.runId}|${item.body.collaborationStage!.stage}|${item.row.author_id}|${item.body.collaborationStage!.roundNo}`);
+      expect(new Set(stageIdentities).size).toBe(stageMessages.length); // 不重复投影
       const calls=f.adapter.startTurnLog.length;
       await f.cmd('task.review',{taskId:root.taskId,deliveryId:first.id,deliveryRevision:1,manifestHash:first.manifest_hash,decision:'changes_requested',note:'请补充实施约束'});
       expect(f.adapter.startTurnLog).toHaveLength(calls);

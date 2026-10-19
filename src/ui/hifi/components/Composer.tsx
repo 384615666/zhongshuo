@@ -24,7 +24,7 @@ import {
   takeDraftInserts, settleOutbound, addFileRefToDraft, inlineAttachmentToken, parseInlineBody,
   stripInlineAttachmentTokens, staleAttachmentUploadIds,
 } from '../data/store';
-import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken } from '../data/store';
+import type { PendingSendEnvelope, HifiDraft, HifiDraftAttachment, UploadItem, InlineAttachmentToken, InlineBodySegment } from '../data/store';
 import { deriveRoute, memberLabel, roomOf } from '../data/selectors';
 import { routeModeCopy } from '../lib/format';
 import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
@@ -229,11 +229,247 @@ function serializeEditorNode(node: Node): string {
   return text;
 }
 
-function serializeEditor(editor: HTMLElement | null): string {
+/** 编辑区正文序列化（token 保留原始串）——导出供真实 Chromium 验证脚本读取编辑区文本。 */
+export function serializeEditor(editor: HTMLElement | null): string {
   if (editor == null) return '';
   let text = '';
   editor.childNodes.forEach((child) => { text += serializeEditorNode(child); });
   return text;
+}
+
+/**
+ * R91：行内附件 token 的身份（合并时的匹配键）。回执结算保留 uploadId，所以优先用它；
+ * 已就绪引用用 attachmentId；两者都缺时退回 kind+name（仅失败/未知 token 才会走到这里）。
+ */
+function inlineTokenIdentity(token: InlineAttachmentToken): string {
+  if (token.uploadId != null && token.uploadId.length > 0) return `upload:${token.uploadId}`;
+  if (token.attachmentId != null && token.attachmentId.length > 0) return `attachment:${token.attachmentId}`;
+  return `${token.kind}:${token.name}`;
+}
+
+/**
+ * R91：组合输入结束时的「DOM 文本 + 草稿 token」合并（纯函数，便于单测）。
+ *
+ * **权威来源（明确规则）**：
+ *  - 正文文本 = DOM：用户刚完成的组合串绝不能被较早的草稿覆盖（旧实现直接 setBody(草稿)
+ *    会丢字）。
+ *  - token 集合/顺序/最新原始串 = 草稿：组合期间上传回执（upload→file）、引用 hydrate 新增、
+ *    token 移除都可能已落 store。DOM 里过期的 token 不得复活已移除项；store 新增的 token
+ *    不得被丢。DOM 中已有 token 保持 DOM 位置；store 新增而 DOM 缺失的 token 以草稿顺序里
+ *    相邻的已存在 token 为锚插入，无锚时沿用 hydrate 的「追加到末尾」口径。
+ */
+export function mergeCompositionEditorBody(domText: string, storedText: string): string {
+  const domSegments = parseInlineBody(domText);
+  const storedTokens = parseInlineBody(storedText).filter(
+    (segment): segment is Extract<InlineBodySegment, { kind: 'attachment' }> => segment.kind === 'attachment',
+  );
+  const storedRawByKey = new Map<string, string>();
+  for (const segment of storedTokens) storedRawByKey.set(inlineTokenIdentity(segment.token), segment.raw);
+  const presentKeys = new Set<string>();
+  type Item = { kind: 'text'; text: string } | { kind: 'token'; identity: string; raw: string };
+  const items: Item[] = [];
+  for (const segment of domSegments) {
+    if (segment.kind === 'text') {
+      items.push({ kind: 'text', text: segment.text });
+      continue;
+    }
+    const identity = inlineTokenIdentity(segment.token);
+    const raw = storedRawByKey.get(identity);
+    // 草稿里已没有该 token（组合期间被移除）→ 丢弃，不复活；仍在→换成草稿最新 raw。
+    if (raw == null) continue;
+    presentKeys.add(identity);
+    items.push({ kind: 'token', identity, raw });
+  }
+  for (let index = 0; index < storedTokens.length; index += 1) {
+    const identity = inlineTokenIdentity(storedTokens[index]!.token);
+    if (presentKeys.has(identity)) continue;
+    let insertAt = items.length;
+    // 前一个仍存在的草稿 token 之后最接近 DOM 位置。
+    for (let prev = index - 1; prev >= 0; prev -= 1) {
+      const prevKey = inlineTokenIdentity(storedTokens[prev]!.token);
+      const pos = items.findIndex((item) => item.kind === 'token' && item.identity === prevKey);
+      if (pos >= 0) { insertAt = pos + 1; break; }
+    }
+    if (insertAt === items.length) {
+      // 没有前锚时退到后一个仍存在的 token 之前；都没有则追加（hydrate 的既有口径）。
+      for (let next = index + 1; next < storedTokens.length; next += 1) {
+        const nextKey = inlineTokenIdentity(storedTokens[next]!.token);
+        const pos = items.findIndex((item) => item.kind === 'token' && item.identity === nextKey);
+        if (pos >= 0) { insertAt = pos; break; }
+      }
+    }
+    presentKeys.add(identity);
+    items.splice(insertAt, 0, { kind: 'token', identity, raw: storedTokens[index]!.raw });
+  }
+  let merged = '';
+  let afterToken = false;
+  for (const item of items) {
+    if (item.kind === 'text') {
+      merged += afterToken && item.text.length > 0 && !/^\s/.test(item.text) ? ` ${item.text}` : item.text;
+      afterToken = false;
+    } else {
+      merged += merged.length > 0 && !/\s$/.test(merged) ? ` ${item.raw}` : item.raw;
+      afterToken = true;
+    }
+  }
+  return merged;
+}
+
+/**
+ * 编辑区选择快照（R91）：轮询刷新/回执同步前后保持 selection 方向、区间与滚动位置。
+ *
+ * `shape` 是「token 按 1 个占位符计」的结构串；只改变 token 原始串长度（upload→file）时
+ * shape 不变，恢复时使用 `startUnit/endUnit`（按节点/segment 映射），不会把 token 之后的
+ * 文本位置按旧绝对偏移挪走；正文结构真的变了才退回绝对偏移（旧口径）。
+ */
+interface EditorSelectionSnapshot {
+  start: number;
+  end: number;
+  startUnit: number;
+  endUnit: number;
+  direction: 'forward' | 'backward';
+  scrollTop: number;
+  shape: string;
+}
+
+const EDITOR_SHAPE_TOKEN = '\u0001';
+
+/** 结构串：文本逐字、token=1 个占位符、<br>=换行——与 token 原始串长度无关。 */
+function serializeEditorShape(editor: HTMLElement | null): string {
+  if (editor == null) return '';
+  let shape = '';
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) { shape += node.textContent ?? ''; return; }
+    if (node instanceof HTMLElement && node.dataset.zsInlineToken === '1') { shape += EDITOR_SHAPE_TOKEN; return; }
+    if (node instanceof HTMLBRElement) { shape += '\n'; return; }
+    node.childNodes.forEach(walk);
+  };
+  editor.childNodes.forEach(walk);
+  return shape;
+}
+
+/** DOM 点位 → 正文序列化偏移（用与渲染同口径的 serializeEditor 计算前缀长度）。 */
+function serializeOffset(editor: HTMLElement, node: Node, offset: number): number | null {
+  if (!editor.contains(node)) return null;
+  const prefix = document.createRange();
+  prefix.selectNodeContents(editor);
+  prefix.setEnd(node, offset);
+  const holder = document.createElement('div');
+  holder.appendChild(prefix.cloneContents());
+  return serializeEditor(holder).length;
+}
+
+/** DOM 点位 → 结构串偏移（token 只占 1 位，用于 token 原始串变化时的稳定映射）。 */
+function shapeOffset(editor: HTMLElement, node: Node, offset: number): number | null {
+  if (!editor.contains(node)) return null;
+  const prefix = document.createRange();
+  prefix.selectNodeContents(editor);
+  prefix.setEnd(node, offset);
+  const holder = document.createElement('div');
+  holder.appendChild(prefix.cloneContents());
+  return serializeEditorShape(holder).length;
+}
+
+/** 结构串偏移 → DOM 点位（token 作为原子占 1 位；边界落在 token 前后）。 */
+function domPointAtShapeOffset(editor: HTMLElement, target: number): { node: Node; offset: number } {
+  let remaining = Math.max(0, target);
+  const walk = (node: Node): { node: Node; offset: number } | null => {
+    const children = Array.from(node.childNodes);
+    for (let index = 0; index < children.length; index += 1) {
+      const child = children[index]!;
+      if (child.nodeType === Node.TEXT_NODE) {
+        const length = child.textContent?.length ?? 0;
+        if (remaining <= length) return { node: child, offset: remaining };
+        remaining -= length;
+        continue;
+      }
+      if (child instanceof HTMLElement && child.dataset.zsInlineToken === '1') {
+        if (remaining === 0) return { node, offset: index };
+        remaining -= 1;
+        if (remaining === 0) return { node, offset: index + 1 };
+        continue;
+      }
+      if (child instanceof HTMLBRElement) {
+        if (remaining === 0) return { node, offset: index };
+        remaining -= 1;
+        if (remaining === 0) return { node, offset: index + 1 };
+        continue;
+      }
+      const nested = walk(child);
+      if (nested != null) return nested;
+    }
+    return remaining === 0 ? { node, offset: children.length } : null;
+  };
+  return walk(editor) ?? { node: editor, offset: editor.childNodes.length };
+}
+
+function captureEditorSelection(editor: HTMLElement | null): EditorSelectionSnapshot | null {
+  if (editor == null) return null;
+  const serializedLength = serializeEditor(editor).length;
+  const shape = serializeEditorShape(editor);
+  const scrollTop = editor.scrollTop;
+  const selection = window.getSelection();
+  if (selection == null || selection.rangeCount === 0 || selection.anchorNode == null || selection.focusNode == null) {
+    // 选择不在编辑区：沿用旧行为——重建后光标落在正文末尾（上传/引用插入后的既有口径）。
+    return { start: serializedLength, end: serializedLength, startUnit: shape.length, endUnit: shape.length, direction: 'forward', scrollTop, shape };
+  }
+  const anchor = serializeOffset(editor, selection.anchorNode, selection.anchorOffset);
+  const focus = serializeOffset(editor, selection.focusNode, selection.focusOffset);
+  const anchorUnit = shapeOffset(editor, selection.anchorNode, selection.anchorOffset);
+  const focusUnit = shapeOffset(editor, selection.focusNode, selection.focusOffset);
+  if (anchor == null || focus == null || anchorUnit == null || focusUnit == null) {
+    return { start: serializedLength, end: serializedLength, startUnit: shape.length, endUnit: shape.length, direction: 'forward', scrollTop, shape };
+  }
+  return {
+    start: Math.min(anchor, focus),
+    end: Math.max(anchor, focus),
+    startUnit: Math.min(anchorUnit, focusUnit),
+    endUnit: Math.max(anchorUnit, focusUnit),
+    direction: anchor <= focus ? 'forward' : 'backward',
+    scrollTop,
+    shape,
+  };
+}
+
+/** 重建编辑区后恢复选择：保留非折叠区间与方向（backward 用 setBaseAndExtent 反转），并恢复滚动。 */
+function restoreEditorSelection(editor: HTMLElement, snapshot: EditorSelectionSnapshot): void {
+  const shapeNow = serializeEditorShape(editor);
+  // token 原始串长度可能变了（upload→file）：结构未变时按 token=1 位的映射恢复，
+  // 否则 token 之后的文本位置会按旧绝对偏移被挪走。结构真变了才用旧绝对偏移口径。
+  const useShape = shapeNow === snapshot.shape;
+  const serializedLength = serializeEditor(editor).length;
+  const shapeLength = shapeNow.length;
+  const start = useShape
+    ? Math.max(0, Math.min(snapshot.startUnit, shapeLength))
+    : Math.max(0, Math.min(snapshot.start, serializedLength));
+  const end = useShape
+    ? Math.max(start, Math.min(snapshot.endUnit, shapeLength))
+    : Math.max(start, Math.min(snapshot.end, serializedLength));
+  editor.focus({ preventScroll: true });
+  const startPoint = useShape ? domPointAtShapeOffset(editor, start) : domPointAtOffset(editor, start);
+  const endPoint = useShape ? domPointAtShapeOffset(editor, end) : domPointAtOffset(editor, end);
+  const selection = window.getSelection();
+  if (selection == null) return;
+  if (snapshot.direction === 'backward' && start !== end) {
+    selection.setBaseAndExtent(endPoint.node, endPoint.offset, startPoint.node, startPoint.offset);
+  } else {
+    selection.setBaseAndExtent(startPoint.node, startPoint.offset, endPoint.node, endPoint.offset);
+  }
+  editor.scrollTop = snapshot.scrollTop;
+}
+
+/** 重建正文 DOM 并保留当前选择/滚动；用于回执、引用插入、token 删除等**合法**正文同步。 */
+function renderEditorBodyKeepingSelection(editor: HTMLElement, body: string, uploads: UploadItem[]): void {
+  const snapshot = captureEditorSelection(editor);
+  renderEditorBody(editor, body, uploads);
+  if (snapshot != null) restoreEditorSelection(editor, snapshot);
+}
+
+/** 编辑区未聚焦时只保滚动位置——不把焦点/选择从用户当前位置抢回输入框。 */
+function renderEditorBodyKeepingScroll(editor: HTMLElement, body: string, uploads: UploadItem[]): void {
+  const scrollTop = editor.scrollTop;
+  renderEditorBody(editor, body, uploads);
+  editor.scrollTop = scrollTop;
 }
 
 function serializeEditorForClipboard(node: Node): string {
@@ -785,15 +1021,39 @@ export function Composer({
   /** 上传回执/结构化引用可能更新 store 正文；仅同步其发起草稿，不污染当前其它目标。 */
   const syncDraftBodyToEditor = (key: string): void => {
     if (draftKeyRef.current !== key) return;
+    if (composingRef.current) {
+      // IME 组合期间禁止重建子树（会打断组合、丢候选、把光标弹回开头）：先记账，
+      // compositionend 后再用 DOM 文本 + 草稿里较新的 token 一次性收敛。
+      pendingCompositionSyncRef.current = key;
+      return;
+    }
     const stored = getDraftFull(key).body;
     if (stored === bodyRef.current) return;
-    const offset = editorCaretOffset(editorRef.current);
     setBody(stored);
     const editor = editorRef.current;
-    if (editor != null) {
-      renderEditorBody(editor, stored, getState().uploadItems[key] ?? []);
-      setEditorCaret(editor, Math.min(offset, serializeEditor(editor).length));
-    }
+    if (editor == null) return;
+    const uploads = getState().uploadItems[key] ?? [];
+    if (document.activeElement === editor) renderEditorBodyKeepingSelection(editor, stored, uploads);
+    else renderEditorBodyKeepingScroll(editor, stored, uploads);
+  };
+  /**
+   * 组合结束后的回执收敛：DOM 文本是用户最终输入（含组合串），草稿 token 是最新附件身份。
+   * 合并后写回草稿并重建一次（此时组合已结束）——不丢字、不丢已结算/新增附件、不复活已移除
+   * 附件，selection 按结构映射保持。
+   */
+  const flushCompositionSync = (key: string): void => {
+    pendingCompositionSyncRef.current = null;
+    if (composingRef.current || draftKeyRef.current !== key) return;
+    const editor = editorRef.current;
+    if (editor == null) return;
+    const merged = mergeCompositionEditorBody(serializeEditor(editor), getDraftFull(key).body);
+    setBody(merged);
+    setMentions(resolveMentionsFromBody(merged));
+    setDraftFull(key, { ...getDraftFull(key), body: merged });
+    const uploads = getState().uploadItems[key] ?? [];
+    if (document.activeElement === editor) renderEditorBodyKeepingSelection(editor, merged, uploads);
+    else renderEditorBodyKeepingScroll(editor, merged, uploads);
+    detectMentionTrigger(editor);
   };
   /** 行内发送错误（按发起目标键归属——迟到回执不污染当前目标，review-r47 §3）。 */
   const [sendErrorFor, setSendErrorState] = useState<{ key: string; text: string } | null>(null);
@@ -924,6 +1184,8 @@ export function Composer({
   const commandIdRef = useRef<string>(newId());
   const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
+  /** IME 组合期间收到的回执同步：组合结束（compositionend）后一次性收敛（R91）。 */
+  const pendingCompositionSyncRef = useRef<string | null>(null);
   const appliedInsertRef = useRef<number | null>(null);
   /** 刚载入过草稿的 key：让紧接着的一次保存 effect 跳过，避免把草稿清空 */
   const skipSaveRef = useRef<string | null>(null);
@@ -938,29 +1200,59 @@ export function Composer({
   //     载入分支永远不会执行 —— 直接打开某个线程时草稿读不出来。
   //  2) setBody 是异步的：载入后本次渲染里 body 仍是旧值 ''，紧接着保存 effect 会把
   //     空串写回存储，把草稿清掉。因此载入后要让"下一个保存 effect"跳过一轮。
+  //
+  // R91 根因修复：恢复**只能由 draftKey 真正切换触发**。此前依赖
+  // `mentionTokenById / allMembers / resolveMentionsFromBody / availableDeliberateIds`
+  // ——成员、runtime 绑定、线程名单/进度每 5s 轮询都会换引用，effect 随之重跑：
+  // renderEditorBody → replaceChildren 重建编辑区，光标弹回正文开头、非折叠选区丢失、
+  // 输入框滚动复位、@ 候选被 setMentionOpen(false) 清掉、中文 IME 组合被 DOM 重建打断。
+  // 恢复时仍需要**当次最新名单**解析 @token（不能留旧闭包），因此这些值走 latest-ref；
+  // 轮询只让 @ 候选/资格等派生数据随名单更新，不再重载正文。
+  const targetKindRef = useRef(target.kind);
+  targetKindRef.current = target.kind;
+  const attachmentUploadRef = useRef(attachmentUpload);
+  attachmentUploadRef.current = attachmentUpload;
+  const mentionTokenByIdRef = useRef(mentionTokenById);
+  mentionTokenByIdRef.current = mentionTokenById;
+  const allMembersRef = useRef(allMembers);
+  allMembersRef.current = allMembers;
+  const resolveMentionsFromBodyRef = useRef(resolveMentionsFromBody);
+  resolveMentionsFromBodyRef.current = resolveMentionsFromBody;
+  const availableDeliberateIdsRef = useRef(availableDeliberateIds);
+  availableDeliberateIdsRef.current = availableDeliberateIds;
+
   useEffect(() => {
     const saved = getDraftFull(draftKey);
-    if (attachmentUpload != null) hydrateUploadRefs(draftKey, attachmentUpload.conversationId, saved.attachments);
+    const uploadChannel = attachmentUploadRef.current;
+    if (uploadChannel != null) hydrateUploadRefs(draftKey, uploadChannel.conversationId, saved.attachments);
+    const resolveMentions = resolveMentionsFromBodyRef.current;
+    const tokenById = mentionTokenByIdRef.current;
+    const membersAll = allMembersRef.current;
+    const availableIds = availableDeliberateIdsRef.current;
     // 旧草稿只有 attachment refs、没有行内 token：hydrate 会补齐 token，这里以补齐后的正文为准。
     let restoredBody = getDraftFull(draftKey).body;
-    const existingTokens = resolveMentionsFromBody(restoredBody);
+    const existingTokens = resolveMentions(restoredBody);
     const missingTokens = saved.mentions.filter((id) => id !== 'all' && !existingTokens.includes(id));
     if (saved.mentions.includes('all') && !existingTokens.includes('all') && !restoredBody.includes('@全体')) missingTokens.unshift('all');
     if (missingTokens.length > 0) {
-      const prefix = missingTokens.map((id) => id === 'all' ? '@全体' : `@${mentionTokenById.get(id) ?? memberLabel(allMembers.find((m) => m.id === id))}`).join(' ');
+      const prefix = missingTokens.map((id) => id === 'all' ? '@全体' : `@${tokenById.get(id) ?? memberLabel(membersAll.find((m) => m.id === id))}`).join(' ');
       restoredBody = `${prefix} ${restoredBody}`.trimStart();
     }
     setBody(restoredBody);
-    if (editorRef.current != null) {
-      renderEditorBody(editorRef.current, restoredBody, getState().uploadItems[draftKey] ?? []);
+    const editor = editorRef.current;
+    const editorWasFocused = editor != null && document.activeElement === editor;
+    if (editor != null) {
+      renderEditorBody(editor, restoredBody, getState().uploadItems[draftKey] ?? []);
+      // 真正切串时把光标放到该草稿末尾（旧实现重建后选择塌到开头）；未聚焦则不抢焦点。
+      if (editorWasFocused) setEditorCaret(editor);
     }
-    setMentions(resolveMentionsFromBody(restoredBody));
-    const restoredDeliberate = saved.collaboration === 'deliberate' && target.kind === 'room_root';
+    setMentions(resolveMentions(restoredBody));
+    const restoredDeliberate = saved.collaboration === 'deliberate' && targetKindRef.current === 'room_root';
     setDeliberate(restoredDeliberate);
     setDeliberateMemberIds(
       restoredDeliberate
-        ? (saved.deliberateMemberIds ?? availableDeliberateIds).filter((id) => availableDeliberateIds.includes(id))
-        : availableDeliberateIds,
+        ? (saved.deliberateMemberIds ?? availableIds).filter((id) => availableIds.includes(id))
+        : availableIds,
     );
     const restoredBudget = saved.budgetMaxTurns != null && Number.isInteger(saved.budgetMaxTurns) && saved.budgetMaxTurns >= 1
       ? saved.budgetMaxTurns : null;
@@ -972,10 +1264,31 @@ export function Composer({
     setAccessOpen(false);
     commandIdRef.current = newId();
     skipSaveRef.current = draftKey;
+    // 切串会换掉编辑区内容：上一目标的组合/待收敛回执在这里作废（不能带进新草稿）。
+    composingRef.current = false;
+    pendingCompositionSyncRef.current = null;
     // r61 G7：目标未挂载期间排队的摘录/正文插入在此消费（一次性取走——旧队列不在后续
     // 新点击时批量灌入；每条插入恰好一次落正文）。
     applyDraftInserts(takeDraftInserts(draftKey));
-  }, [draftKey, target.kind, mentionTokenById, allMembers, resolveMentionsFromBody, availableDeliberateIds]);
+    // 依赖只有 draftKey：名单/进度轮询换引用不得重放本恢复（R91 根因修复）。
+  }, [draftKey]);
+
+  /**
+   * 会话通道迟到就绪（线程 conversationId 异步装载 / 私信会话出现）时，只补草稿引用与
+   * 缺失的行内 token，再同步编辑区；不重放整份草稿恢复——selection/滚动/@候选都保持。
+   * 同步统一走 syncDraftBodyToEditor：IME 组合期间同样只记账（compositionend 后收敛）。
+   */
+  useEffect(() => {
+    const conversationId = attachmentUpload?.conversationId;
+    if (conversationId == null) return;
+    hydrateUploadRefs(draftKey, conversationId, getDraftFull(draftKey).attachments);
+    if (draftKeyRef.current !== draftKey) return;
+    const editor = editorRef.current;
+    // DOM 与草稿已经一致（hydration 没有新增 token）时不重排。
+    if (editor != null && !composingRef.current && serializeEditor(editor) === getDraftFull(draftKey).body) return;
+    syncDraftBodyToEditor(draftKey);
+    // eslint 不使用 react-hooks 插件；此处以 syncDraftBodyToEditor 的 IME 守卫为准。
+  }, [draftKey, attachmentUpload?.conversationId]);
 
   useEffect(() => {
     const derived = resolveMentionsFromBody(body);
@@ -989,6 +1302,11 @@ export function Composer({
       skipSaveRef.current = null;
       return;
     }
+    // R91：组合输入期间（以及组合刚结束、回执合并尚未收敛的窗口）不落库。此时 onInput 的
+    // DOM 快照可能落后于 store（上传回执/引用 hydrate 已在组合中途结算）——照写会覆盖掉刚
+    // 新增/结算的 token。组合结束由 onCompositionEnd 的 onInput 或 flushCompositionSync
+    // 一次性收敛。
+    if (composingRef.current || pendingCompositionSyncRef.current != null) return;
     // 附件引用由上传/移除动作维护（防串写），这里只落正文/提及/意图/权限——读取现草稿合并。
     const cur = getDraftFull(draftKey);
     // r61：内容未变不重写——重挂载（切页签回来/崩溃恢复重载）会先 setBody(草稿值)再触发本
@@ -1807,6 +2125,15 @@ export function Composer({
           }}
           onCompositionEnd={() => {
             composingRef.current = false;
+            const pendingKey = pendingCompositionSyncRef.current;
+            if (pendingKey != null) {
+              // R91：组合期间收到的回执同步被推迟。组合文本此刻已落进 DOM，放到下一拍
+              // 再做「DOM 文本 + 草稿 token」合并重建——组合本身不被破坏，芯片状态也追上。
+              window.setTimeout(() => {
+                if (!composingRef.current) flushCompositionSync(pendingKey);
+              }, 0);
+              return;
+            }
             // 组合结束再判一次（IME：组合过程不触发，提交后光标前恰为 @ 照常打开候选）。
             onInput(editorRef.current!);
           }}

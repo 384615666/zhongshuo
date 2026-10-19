@@ -6,6 +6,7 @@ import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
+import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
 import { acquireLease } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
 /**
@@ -868,6 +869,7 @@ export class DispatchWorker {
         model: resolvedModel,
         installationId: dmResolved?.installationId ?? null,
         writeIdentity: writeAccess.identityKey,
+        writeAccessMode: { fullAccess: writeAccess.fullAccess, modificationAuthorized: writeAccess.modificationAuthorized, root: writeAccess.root, identityKey: writeAccess.identityKey },
         permissionMode: dmResolved?.permissionMode ?? null,
         effort:dmResolved?.effort??null,
         cwd: project.canonical_path,
@@ -940,7 +942,7 @@ export class DispatchWorker {
         this.db.prepare(
           `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd, provider_session_id, capabilities_json)
            VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null,JSON.stringify({runtime:resolveMemberRuntime(this.db,member.id,this.defaultKindOf()),writeIdentity:writeAccess.identityKey,effortVerification:'requested-not-provider-certified'}));
+        ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, member.id, task.id, generation, project.canonical_path, (session.providerSessionId ?? '').trim() !== '' ? session.providerSessionId : null,JSON.stringify({runtime:resolveMemberRuntime(this.db,member.id,this.defaultKindOf()),writeIdentity:writeAccess.identityKey,writeAccessMode:{fullAccess:writeAccess.fullAccess,modificationAuthorized:writeAccess.modificationAuthorized,root:writeAccess.root,identityKey:writeAccess.identityKey},effortVerification:'requested-not-provider-certified'}));
       } else {
         this.dmPending.set(turnId, { task, session, resumeRef, bindingSnap: dmBindingSnap, cwd: project.canonical_path, generation, memberId: member.id, turnRequested: false });
       }
@@ -1822,6 +1824,10 @@ export class DispatchWorker {
       }
       this.applyEvent(task, runId, turnId, event);
       if (event.kind === 'turn.completed' || event.kind === 'turn.failed') {
+        // R91：成功交付后做生成文件快照（事务外；失败只留可读状态，不影响已完成聊天）。
+        if (event.kind === 'turn.completed') {
+          try { await this.snapshotCompletedFiles(task, runId, turnId); } catch { /* 快照失败不得阻断终态收口 */ }
+        }
         this.pumpDmAfterTerminal(task);
         return;
       }
@@ -1938,7 +1944,7 @@ export class DispatchWorker {
           }
           if(valid!=null)this.controlFromMessages.set(turnId,valid);
         }
-        this.insertThreadReply(task, turnId, event.messageId, event.text,event.controlResult);
+        this.insertThreadReply(task, turnId, event.messageId, event.text,event.controlResult,{finalMessage:true});
         break;
       case 'tool.started': {
         // 实际工具调用记录（用户令 2026-09-28）：模型自述 executedVerifications 的核对依据——
@@ -1991,6 +1997,8 @@ export class DispatchWorker {
           this.db.prepare(`UPDATE agent_turns SET status = 'RUNNING' WHERE id = ? AND status = 'UNKNOWN'`).run(turnId);
           this.audit(task, runId, turnId, 'turn.lateOutputResolvesUnknown', { note: 'UNKNOWN 窗口收到完成输出——不确定收口为确定（走合同校验）' });
         }
+        // R91 生成文件卡：只在“确实要交付/收尾为成功答复”的分支登记候选（不在事务内做文件 I/O）。
+        const snapshotRef: { current: { files: string[]; diff: { added: string[]; modified: string[] } | null } | null } = { current: null };
         const tx = this.db.transaction(() => {
           if (lateAfterStop || stopGenerationInEffect) {
             // 停止已生效：迟到完成不复活任务（RT-06 形态），按取消收尾并留审计。
@@ -2144,6 +2152,9 @@ export class DispatchWorker {
             return;
           }
           if(planningRun)this.db.prepare("UPDATE coordination_runs SET state='completed' WHERE run_id=?").run(runId);
+          // R91：合法结构化终态但 adapter 未发（或只发状态前缀的）message.completed 时，
+          // 形成本轮最终可见回复并绑定文件卡；不改变交付/合同判定。
+          this.ensureStructuredFinalReply(task, turnId, finalText, result);
           // Read/calculation commands and rejected write attempts are not proof of
           // a work result. Capture actual project differences before deciding;
           // model-declared work retains its formal work/verification contract.
@@ -2157,6 +2168,8 @@ export class DispatchWorker {
             AND json_extract(started.payload_json,'$.toolName') IN ('Write','Edit','MultiEdit','NotebookEdit','fileChange')
             AND json_extract(completed.payload_json,'$.outcome')='success'`).get(turnId) as {n:number}).n;
           const previousWork=(this.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(task.id) as {n:number}).n;
+          // 成功合同已确认、任务身份在本 turn 内：记录候选（正式结果 .files + 本 turn 已验证差异）。
+          snapshotRef.current = { files: [...result.files], diff: changes?.ok ? { added: [...changes.value.diff.added], modified: [...changes.value.diff.modified] } : null };
           if(result.responseKind==='conversation'&&changedFiles===0&&successfulWriteActions===0
             &&(!childCoordination(this.db,task.id)||explicitRecipientChild(this.db,task.id))&&!integrationRun) {
             if(previousWork>0){
@@ -2205,6 +2218,12 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.statusChanged', { status: 'SUCCEEDED', reviewStatus, deliveryRevision: prevRevision + 1 });
         });
         tx();
+        // 生成文件快照在事务提交后、后台步骤中执行（见 snapshotCompletedFiles）：文件读取/复制
+        // 不阻塞关键事务；失败只产生可读状态，绝不回滚已成功的聊天/交付。
+        if (snapshotRef.current != null) {
+          this.kvSet(`final-files:${turnId}`, JSON.stringify(snapshotRef.current.files));
+          this.kvSet(`turn-diff:${turnId}`, JSON.stringify(snapshotRef.current.diff));
+        }
         settleThreadReplyForTurn(this.db,turnId,'SUCCEEDED');
         const actualTurn=this.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(turnId) as {status:string};
         settleMemberMessageTurn(this.db,task.id,turnId,actualTurn.status);
@@ -2672,7 +2691,254 @@ export class DispatchWorker {
     return row?.cid ?? null;
   }
 
-  private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string): void {
+  /**
+   * R91：结构化终态没有（或只有状态前缀的）message.completed 时，用已通过 schema/resultKey
+   * 校验的 TaskComplete 生成**本轮最终可见回复**（消息 id 属于本轮命名空间），供文件卡绑定。
+   * 只在成功交付/成功答复路径调用；不是把失败/停止输出转成成功消息。
+   */
+  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string }): void {
+    const visible = (result.answer ?? '').trim() || result.changeSummary.trim();
+    if (visible.length === 0) return;
+    const key = `final-message:${turnId}`;
+    const expectedResultKey = `result_${turnId}`;
+    const normalize = (text: string) => text.replace(/\s+/g, '').replace(/[。！？.!?]+$/u, '');
+    const existingFinalId = this.kvGet(key);
+    if (existingFinalId != null) {
+      const row = this.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(existingFinalId) as { body_json: string } | undefined;
+      if (row != null) {
+        try {
+          const body = JSON.parse(row.body_json) as { text?: unknown; runtimeControlResult?: unknown };
+          const text = typeof body.text === 'string' ? body.text : '';
+          if (text.length > 0) {
+            // R90 final5 回归修复：复用 agentReplyText 的**完整答案/段落**判定，不用任意子串 includes——
+            // “不是最终结论。”不能因为包含“是”就吞掉真实 answer='是。'。
+            const supplemented = agentReplyText(text, finalText, expectedResultKey).trim();
+            if (normalize(supplemented) === normalize(text)) return; // 完整答案已可见，不重复
+            const nextBody = JSON.stringify({
+              ...body,
+              text: supplemented,
+              runtimeControlResult: typeof body.runtimeControlResult === 'string' ? body.runtimeControlResult : finalText,
+            });
+            this.db.prepare('UPDATE messages SET body_json = ? WHERE id = ?').run(nextBody, existingFinalId);
+            this.audit(task, null, turnId, 'turn.structuredFinalSupplemented', {
+              messageId: existingFinalId,
+              previousText: text.slice(0, 200),
+              supplementedText: supplemented.slice(0, 200),
+              rule: 'agentReplyText(existingText, validatedTaskComplete, resultKey)——完整答案/段落判定，非任意子串',
+            });
+            return; // 保持同一最终回复消息绑定（文件卡不挂前缀）
+          }
+        } catch { /* 残缺正文按缺失处理 */ }
+      }
+    }
+    const memberId = (this.db.prepare('SELECT member_id FROM agent_turns WHERE id = ?').get(turnId) as { member_id: string } | undefined)?.member_id
+      ?? task.owner_member_id ?? 'unknown_member';
+    const messageId = `msg_${turnId}_structured_final`;
+    const bodyJson = JSON.stringify({ text: visible, runtimeControlResult: finalText });
+    const tx = this.db.transaction(() => {
+      const existing = this.db.prepare('SELECT 1 AS ok FROM messages WHERE id = ?').get(messageId);
+      if (existing != null) return;
+      const isDm = task.kind === 'dm_turn';
+      const conversationSeq = (this.db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
+        .get(task.conversation_id) as { last_message_seq: number }).last_message_seq;
+      if (isDm) {
+        this.db.prepare(
+          `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+             thread_message_seq, author_type, author_id, body_json, status, created_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, 'agent', ?, ?, 'final', ?)`,
+        ).run(messageId, task.project_id, task.conversation_id, conversationSeq, task.id, memberId, bodyJson, Date.now());
+        return;
+      }
+      const threadSeq = (this.db.prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
+        .get(task.conversation_thread_id) as { last_message_seq: number }).last_message_seq;
+      this.db.prepare(
+        `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+           thread_message_seq, author_type, author_id, body_json, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, ?, 'final', ?)`,
+      ).run(messageId, task.project_id, task.conversation_id, conversationSeq, task.room_id, task.conversation_thread_id, task.id, threadSeq, memberId, bodyJson, Date.now());
+      appendDomainEvent(this.db, {
+        schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id, conversationId: task.conversation_id,
+        threadId: task.conversation_thread_id, taskId: task.id, turnId, kind: 'thread.replyAdded', createdAt: Date.now(),
+        payload: { messageId, source: 'structured-final-fallback' },
+      });
+    });
+    tx();
+    this.kvSet(key, messageId);
+  }
+
+  /**
+   * 本 turn 的**执行时**写权限事实（R91 审核⑤）：
+   * - 优先读 dispatch 时写入 runtime_sessions.capabilities_json 的 writeAccessMode（含 identityKey）；
+   * - 旧会话没有 mode 时，只有"当前有效配置 identityKey == 会话记录的 writeIdentity"才承认，
+   *   避免执行后配置升级被追溯成"本次也拥有 fullAccess"；
+   * - 当前配置变化/不可核实 → null（不登记，给可读状态；不破坏已成功结果）。
+   */
+  private turnRecordedWriteAccess(task: TaskRow, turnId: string, memberId: string): { fullAccess: boolean; modificationAuthorized: boolean; root: string } | null {
+    try {
+      const turn = this.db.prepare('SELECT session_id FROM agent_turns WHERE id = ?').get(turnId) as { session_id: string | null } | undefined;
+      if (turn?.session_id == null) return null;
+      const session = this.db.prepare('SELECT project_id, conversation_id, member_id, task_id, capabilities_json FROM runtime_sessions WHERE id = ?')
+        .get(turn.session_id) as { project_id: string; conversation_id: string; member_id: string; task_id: string | null; capabilities_json: string | null } | undefined;
+      if (session == null) return null;
+      if (session.project_id !== task.project_id || session.conversation_id !== task.conversation_id || session.member_id !== memberId) return null;
+      if (session.task_id != null && session.task_id !== task.id) return null;
+      let caps: { writeIdentity?: unknown; writeAccessMode?: unknown } = {};
+      try { caps = (JSON.parse(session.capabilities_json ?? '{}') ?? {}) as typeof caps; } catch { caps = {}; }
+      const recordedKey = typeof caps.writeIdentity === 'string' ? caps.writeIdentity : null;
+      const rawMode = caps.writeAccessMode != null && typeof caps.writeAccessMode === 'object' && !Array.isArray(caps.writeAccessMode)
+        ? caps.writeAccessMode as Record<string, unknown>
+        : null;
+      if (rawMode != null
+        && typeof rawMode.fullAccess === 'boolean'
+        && typeof rawMode.modificationAuthorized === 'boolean'
+        && typeof rawMode.root === 'string') {
+        const modeKey = typeof rawMode.identityKey === 'string' ? rawMode.identityKey : null;
+        if (recordedKey == null || modeKey == null || modeKey === recordedKey) {
+          return { fullAccess: rawMode.fullAccess, modificationAuthorized: rawMode.modificationAuthorized, root: rawMode.root };
+        }
+      }
+      if (recordedKey != null) {
+        const current = effectiveTaskWriteAccess(this.db, task.id, memberId, this.defaultKindOf());
+        if (current.identityKey === recordedKey) {
+          return { fullAccess: current.fullAccess, modificationAuthorized: current.modificationAuthorized, root: current.root };
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 本轮成功合同路径写入的生成文件候选（.files + 已验证差异）；非成功路径不写键。 */
+  private turnFileSnapshotContext(turnId: string): { files: string[]; diff: { added: string[]; modified: string[] } | null } | null {
+    const raw = this.kvGet(`final-files:${turnId}`);
+    if (raw == null) return null;
+    let files: string[] = [];
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) files = parsed.filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    } catch {
+      return null;
+    }
+    let diff: { added: string[]; modified: string[] } | null = null;
+    const diffRaw = this.kvGet(`turn-diff:${turnId}`);
+    if (diffRaw != null) {
+      try {
+        const parsed = JSON.parse(diffRaw) as { added?: unknown; modified?: unknown } | null;
+        if (parsed != null && typeof parsed === 'object') {
+          const strings = (value: unknown) => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+          diff = { added: strings(parsed.added), modified: strings(parsed.modified) };
+        }
+      } catch { diff = null; }
+    }
+    return { files, diff };
+  }
+
+  /**
+   * R91 生成文件快照（终态后、事务外）：
+   * - 只处理本 turn 已通过 TaskComplete schema/resultKey/任务身份的成功结果（失败/停止/UNKNOWN/
+   *   迟到/研讨轮都不登记）；
+   * - 依据本次有效写权限（fullAccess 可本轮明确列出的项目外文件；受限权限只收项目内且有本
+   *   turn 变更证据的路径；显式只读不登记产出），读取真实字节/hash 后复制到内容寻址存储；
+   * - 只挂到本轮绑定的最终回复消息（final-message 键），不挂会话全部回复；
+   * - 一切失败只产可读状态 + 审计，绝不影响已成功的聊天/交付。
+   */
+  private async snapshotCompletedFiles(task: TaskRow, runId: string, turnId: string): Promise<void> {
+    const context = this.turnFileSnapshotContext(turnId);
+    if (context == null) return;
+    const keys = [`final-files:${turnId}`, `turn-diff:${turnId}`, `final-message:${turnId}`];
+    const cleanup = (): void => {
+      for (const key of keys) { try { this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(key); } catch { /* 尽力清理 */ } }
+    };
+    try {
+      const turn = this.db.prepare('SELECT status, member_id, stage_key FROM agent_turns WHERE id = ?').get(turnId) as
+        | { status: string; member_id: string; stage_key: string } | undefined;
+      if (turn == null || turn.status !== 'SUCCEEDED' || turn.stage_key.startsWith('delib.')) return;
+      const project = this.db.prepare('SELECT canonical_path, status FROM projects WHERE id = ?').get(task.project_id) as
+        | { canonical_path: string; status: string } | undefined;
+      // 审核⑤：按本 turn 执行时记录的权限（不是执行后当前配置）决定 fullAccess/受限/只读。
+      const access = project == null ? null : this.turnRecordedWriteAccess(task, turnId, turn.member_id);
+      // 绑定消息必须属于本轮命名空间（最终回复/合成最终回复），否则不挂附件。
+      const rawMessageId = this.kvGet(`final-message:${turnId}`);
+      const messageId = rawMessageId != null && rawMessageId.startsWith(`msg_${turnId}_`) ? rawMessageId : null;
+      const outcome = snapshotGeneratedFiles({
+        db: this.db,
+        appDataDir: this.appDataDir,
+        projectId: task.project_id,
+        projectRoot: project?.canonical_path ?? '',
+        taskId: task.id,
+        runId,
+        turnId,
+        memberId: turn.member_id,
+        conversationId: task.conversation_id,
+        messageId,
+        declaredFiles: context.files,
+        turnDiff: context.diff,
+        access,
+      });
+      if (outcome.failures.length > 0 || outcome.status === 'blocked') {
+        this.insertFileSnapshotNotice(task, turnId, messageId, outcome);
+      }
+      if (outcome.status !== 'no-candidates') {
+        this.audit(task, runId, turnId, 'turn.generatedFileSnapshot', {
+          status: outcome.status,
+          accessMode: outcome.accessMode,
+          registered: outcome.registered.map((r) => ({ artifactId: r.artifactId, filename: r.filename, kind: r.kind, revision: r.revision, hash: r.hash.slice(0, 16), bytes: r.sizeBytes, source: r.source })),
+          failures: outcome.failures.map((f) => ({ path: f.path, code: f.code, message: f.message, declared: f.declared })),
+          skipped: outcome.skipped,
+          rule: '仅正式结果显式 .files 或本 turn changeset added；真实读取+sha256；fullAccess 可项目外；受限/只读按原权限',
+        });
+      }
+    } catch (error) {
+      try {
+        this.audit(task, runId, turnId, 'turn.generatedFileSnapshot', { status: 'failed', message: (error instanceof Error ? error.message : String(error)).slice(0, 300) });
+      } catch { /* 审计尽力而为 */ }
+    } finally {
+      cleanup();
+    }
+  }
+
+  /** 文件快照失败/未登记的可读状态（system 消息；不伪造成功附件，也不阻塞原回复）。 */
+  private insertFileSnapshotNotice(task: TaskRow, turnId: string, boundMessageId: string | null, outcome: SnapshotOutcome): void {
+    const messageId = `msg_filesnap_${turnId}`;
+    try {
+      if (this.db.prepare('SELECT 1 AS ok FROM messages WHERE id = ?').get(messageId) != null) return;
+      const bound = boundMessageId != null
+        ? this.db.prepare('SELECT thread_id, room_id FROM messages WHERE id = ?').get(boundMessageId) as { thread_id: string | null; room_id: string | null } | undefined
+        : undefined;
+      const threadId = bound?.thread_id ?? task.conversation_thread_id ?? null;
+      const roomId = bound?.room_id ?? task.room_id ?? null;
+      const failures = outcome.failures.slice(0, 6);
+      const lines = ['【文件卡未登记】以下本轮产出没有生成可点击附件（原回复与交付不受影响）：'];
+      for (const f of failures) lines.push(`- ${f.path}：${f.message}`);
+      if (outcome.failures.length > failures.length) lines.push(`- 另有 ${outcome.failures.length - failures.length} 项未登记`);
+      if (outcome.registered.length > 0) lines.push(`已成功登记 ${outcome.registered.length} 个文件。`);
+      const text = lines.join('\n');
+      const tx = this.db.transaction(() => {
+        const conversationSeq = (this.db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
+          .get(task.conversation_id) as { last_message_seq: number }).last_message_seq;
+        let threadSeq: number | null = null;
+        if (threadId != null) {
+          threadSeq = (this.db.prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
+            .get(threadId) as { last_message_seq: number }).last_message_seq;
+        }
+        this.db.prepare(
+          `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+             thread_message_seq, author_type, author_id, body_json, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, 'final', ?)`,
+        ).run(messageId, task.project_id, task.conversation_id, conversationSeq, roomId, threadId, task.id, threadSeq, 'system:file-snapshot', JSON.stringify({ text }), Date.now());
+        if (threadId != null) {
+          appendDomainEvent(this.db, {
+            schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id, conversationId: task.conversation_id,
+            threadId, taskId: task.id, turnId, kind: 'thread.replyAdded', createdAt: Date.now(), payload: { messageId, system: 'file-snapshot' },
+          });
+        }
+      });
+      tx();
+    } catch { /* 可读状态尽力而为：不因提示失败影响原成功结果 */ }
+  }
+
+  private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string,options?:{finalMessage?:boolean}): void {
     const expectedResultKey=`result_${turnId}`;
     const visibleText=agentReplyText(text,controlResult,expectedResultKey);
     const original=controlResult??(visibleText!==text?text:null);
@@ -2702,7 +2968,7 @@ export class DispatchWorker {
             keptMessageId:rowId,incomingMessageId:rowId,action:'added-control-to-existing-message',incomingBody:bodyJson,
           });
         }
-        return;
+        return existing.id;
       }
       const priorRows=this.db.prepare(`SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent'
         AND id LIKE ? ORDER BY rowid`).all(task.id,`msg_${turnId}_%`) as Array<{id:string;body_json:string}>;
@@ -2717,7 +2983,7 @@ export class DispatchWorker {
           action:addControl?'added-control-to-existing-message':'kept-existing-visible-message',
           incomingBody:bodyJson,
         });
-        return;
+        return duplicate.id;
       }
       const convSeq = this.db
         .prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
@@ -2732,7 +2998,7 @@ export class DispatchWorker {
              thread_message_seq, author_type, author_id, body_json, status, created_at)
            VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, 'agent', ?, ?, 'final', ?)`,
         ).run(rowId, task.project_id, task.conversation_id, convSeq.last_message_seq, task.id, author?.member_id ?? 'unknown_member', bodyJson, Date.now());
-        return;
+        return rowId;
       }
       const threadSeq = this.db
         .prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
@@ -2758,8 +3024,12 @@ export class DispatchWorker {
         createdAt: Date.now(),
         payload: { messageId: rowId }, // 与数据库行 ID 一致（UI 按事件可定位到消息）
       });
+      return rowId;
     });
-    tx();
+    const keptMessageId = tx();
+    // R91 生成文件卡绑定：只记“本轮最终可见回复消息”（去重时记实际保留的那条），
+    // 交付后快照只挂这一条（不上全部回复）。
+    if (options?.finalMessage === true && keptMessageId != null) this.kvSet(`final-message:${turnId}`, keptMessageId);
   }
 
   /** TaskComplete 输出合同校验：JSON 解析、schema、版本、resultKey 绑定（修复轮）。 */

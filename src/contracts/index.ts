@@ -21,3 +21,4 @@ export * from './contextBundle.ts';
 export * from './prompts.ts';
 export * from './daemonIpc.ts';
 export * from './deliberation.ts';
+export * from './collaborationStage.ts';

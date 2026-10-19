@@ -290,6 +290,28 @@ export interface FormalAttachmentSummary {
   artifactId: string;
   filename: string;
   kind: string;
+  /** 可选展示信息：后端未提供时不显示大小，绝不伪造。 */
+  sizeBytes?: number;
+}
+
+/**
+ * 研讨阶段产物的呈现标记（R91 模块3）。
+ *
+ * 后端会把验证通过的阶段产物作为**正式消息**持久化，并在
+ * `body_json.collaborationStage` 写入 `{ stage, roundNo, turnId, runId }`。
+ * 这里只承载渲染标签所需的阶段与轮次；消息正文仍是 `Message.body`
+ * 中的自然可读文本——**原 JSON 不渲染**，内部 turn/run 身份也不展示。
+ */
+export interface CollaborationStage {
+  /** DeliberateStage 之一（INDEPENDENT/CROSS_REVIEW/ISSUE_DISCUSSION/SYNTHESIS/RATIFY）。 */
+  stage: string;
+  /**
+   * 阶段轮次。契约：INDEPENDENT/CROSS_REVIEW/SYNTHESIS/RATIFY 为 0，
+   * 争议讨论/检查点为实际轮次；界面只对 >0 显示「第N轮」。缺省=不显示轮次。
+   */
+  roundNo?: number;
+  turnId?: string;
+  runId?: string;
 }
 
 /* ---------- §17.9：线程内部视图键 ----------
@@ -333,6 +355,11 @@ export interface Message {
   attachmentIds?: string[];
   /** 正式侧（第五十一轮）：真实附件摘要（message_attachments 投影）——优先于原型 resources 路径渲染。 */
   formalAttachments?: FormalAttachmentSummary[];
+  /**
+   * 研讨阶段产物标记（后端 `body_json.collaborationStage` 的 loader 转译）。
+   * 缺省=普通消息；仅用于在消息头显示简短中文阶段标签与轮次。
+   */
+  collaborationStage?: CollaborationStage;
   reactions?: { emoji: string; by: string[] }[];
   saved?: boolean;
   /** §17.3 结构化卡片载荷 */
