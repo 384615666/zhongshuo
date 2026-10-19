@@ -198,6 +198,30 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   if(!coordinationCallAvailable(used,context.kind==='integration'?'integration':'work') || used>=coordinationCallLimit(db,context.run.run_id)-reserve) throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
 }
 
+/** Settle only a live integration run rejected before its execution turn was accepted. */
+export function settleIntegrationLaunchFailure(db:ZhongshuoDatabase,coordinationRunId:string,reason:string,allowBlocked=false):boolean{
+  return db.transaction(()=>{
+    const run=db.prepare(`SELECT c.state,c.stop_generation,c.task_id,t.status task_status,t.stop_generation task_stop_generation
+      FROM coordination_runs c JOIN tasks t ON t.id=c.task_id WHERE c.run_id=?`).get(coordinationRunId) as
+      {state:string;stop_generation:number;task_id:string;task_status:string;task_stop_generation:number}|undefined;
+    if(!run||(!(run.state==='integrating'||allowBlocked&&run.state==='blocked'))||run.task_status==='CANCELLED'||run.stop_generation!==run.task_stop_generation)return false;
+    const normalized=reason.slice(0,1000),now=Date.now();
+    const allowedStates=allowBlocked?"('integrating','blocked')":"('integrating')";
+    const changed=db.prepare(`UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=? AND state IN ${allowedStates}`).run(normalized,coordinationRunId);
+    if(changed.changes!==1)return false;
+    const messageStates=allowBlocked?"('accepted','queued','running','blocked')":"('accepted','queued','running')";
+    const handoffs=db.prepare(`SELECT id FROM coordination_messages WHERE coordination_run_id=? AND child_task_id IS NULL
+      AND status IN ${messageStates} ORDER BY created_at,id`).all(coordinationRunId) as {id:string}[];
+    db.prepare(`UPDATE coordination_messages SET status='blocked',error_message=?,updated_at=?
+      WHERE coordination_run_id=? AND child_task_id IS NULL AND status IN ${messageStates}`).run(normalized,now,coordinationRunId);
+    db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=? AND status!='CANCELLED'").run(run.task_id);
+    db.prepare("UPDATE workflow_runs SET status='FAILED',stage='整合未启动' WHERE id=? AND status NOT IN ('CANCELLED','INTERRUPTED')").run(coordinationRunId);
+    const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(run.task_id) as Parent;
+    event(db,parent,coordinationRunId,'coordination.blocked',{source:'integration-launch',reason:normalized,handoffIds:handoffs.map(handoff=>handoff.id)});
+    return true;
+  })();
+}
+
 function verifyHandoffFiles(value:unknown,root:string,depth=0,budget={remaining:32*1024*1024}):void {
   if(depth>12)throw Error('交接记录超出有界嵌套范围');
   if(!value || typeof value!=='object')return;
@@ -319,6 +343,8 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
   const runs=[...page('coordination:pump-active',"c.state IN ('running','integrating')",100),
     ...page('coordination:pump-stops',"c.state='cancelled' AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.id IN (c.run_id,c.integration_run_id) AND r.status IN ('RUNNING','WAITING','STOPPING'))",20)];
   for(const run of runs) { try { db.transaction(()=>{
+    const fresh=db.prepare('SELECT state,integration_run_id FROM coordination_runs WHERE run_id=?').get(run.run_id) as {state:string;integration_run_id:string|null}|undefined;
+    if(!fresh||fresh.state!==run.state||fresh.integration_run_id!==run.integration_run_id)return;
     const parent=db.prepare('SELECT * FROM tasks WHERE id=?').get(run.task_id) as Parent;
     if(run.state==='cancelled'){settleStoppedCoordination(db,run.task_id,run.run_id);return;}
     if(parent.stop_generation!==run.stop_generation || parent.status==='CANCELLED') {
@@ -340,14 +366,38 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       db.prepare("UPDATE thread_reply_requests SET status='blocked',error_message=?,updated_at=? WHERE run_id=? AND status IN ('queued','running')").run(`同伴步骤「${blocked.step_key}」未完成，请查看原因后决定下一步`,Date.now(),run.run_id);
       event(db,parent,run.run_id,'coordination.blocked',{stepKey:blocked.step_key});return;
     }
+    let deferredHandoffs=false;
     const explicitGroup=db.prepare('SELECT 1 FROM coordination_run_rosters WHERE run_id=?').get(run.run_id)!=null;
     if(explicitGroup&&steps.every(s=>s.status==='DONE')){
-      db.prepare("UPDATE coordination_runs SET state='completed',error_message=NULL WHERE run_id=?").run(run.run_id);
-      db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='明确收件人已全部回复' WHERE id=?").run(run.run_id);
-      db.prepare("UPDATE tasks SET status='DONE',revision=revision+1 WHERE id=?").run(parent.id);
-      const roster=coordinationRoster(db,parent.id,run.run_id);
-      event(db,parent,run.run_id,'coordination.completed',{source:'explicit-recipients',memberIds:roster.map(member=>member.memberId)});
-      return;
+      // A reply addressed to the coordinator has no child task: it is a deferred
+      // message for the one final integration turn. Do not close the group while
+      // such a message is still accepted or queued and unconsumed.
+      const deferred=db.prepare(`SELECT id FROM coordination_messages
+        WHERE coordination_run_id=? AND child_task_id IS NULL AND status IN ('accepted','queued')
+        ORDER BY created_at,id`).all(run.run_id) as {id:string}[];
+      deferredHandoffs=deferred.length>0;
+      if(!deferredHandoffs){
+        const closed=db.prepare("UPDATE coordination_runs SET state='completed',error_message=NULL WHERE run_id=? AND state='running'").run(run.run_id);
+        if(closed.changes!==1)return;
+        db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='明确收件人已全部回复' WHERE id=?").run(run.run_id);
+        db.prepare("UPDATE tasks SET status='DONE',revision=revision+1 WHERE id=?").run(parent.id);
+        const roster=coordinationRoster(db,parent.id,run.run_id);
+        event(db,parent,run.run_id,'coordination.completed',{source:'explicit-recipients',memberIds:roster.map(member=>member.memberId)});
+        return;
+      }
+      const used=coordinationCallsUsed(db,run.run_id),maxCalls=coordinationCallLimit(db,run.run_id);
+      if(used>=maxCalls){
+        const reason='本轮协作总调用预算已用尽；无法整合同伴交回消息';
+        const blockedRun=db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=? AND state='running'").run(reason,run.run_id);
+        if(blockedRun.changes!==1)return;
+        const now=Date.now();
+        db.prepare(`UPDATE coordination_messages SET status='blocked',error_message=?,updated_at=?
+          WHERE coordination_run_id=? AND child_task_id IS NULL AND status IN ('accepted','queued')`).run(reason,now,run.run_id);
+        db.prepare("UPDATE workflow_runs SET status='FAILED',stage='整合未启动' WHERE id=?").run(run.run_id);
+        db.prepare("UPDATE tasks SET status='BLOCKED',revision=revision+1 WHERE id=?").run(parent.id);
+        event(db,parent,run.run_id,'coordination.blocked',{reason,handoffIds:deferred.map(message=>message.id),usedCalls:used,maxCalls});
+        return;
+      }
     }
     // Any dispatched unfinished child remains the sole active step, including startup and unknown windows.
     if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE')) return;
@@ -362,10 +412,13 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       db.prepare("UPDATE coordination_messages SET status='queued',updated_at=? WHERE child_task_id=? AND status='accepted'").run(Date.now(),step.child_task_id);
       event(db,parent,run.run_id,'coordination.stepQueued',{stepKey:next.key,childTaskId:step.child_task_id,upstream});return;
     }
-    if(steps.every(s=>s.status==='DONE' && s.current_delivery_id)) {
+    const allDelivered=steps.every(s=>s.status==='DONE'&&s.current_delivery_id);
+    const deferredReady=deferredHandoffs&&steps.every(s=>s.status==='DONE');
+    if(allDelivered||deferredReady) {
       const root=(db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(parent.project_id) as {canonical_path:string}).canonical_path;
       verifyHandoffFiles({files:managedHandoffFiles(db,run.run_id)},root);
-      db.prepare("UPDATE coordination_runs SET state='integrating' WHERE run_id=?").run(run.run_id);
+      const queued=db.prepare("UPDATE coordination_runs SET state='integrating' WHERE run_id=? AND state='running' AND integration_run_id IS NULL").run(run.run_id);
+      if(queued.changes!==1)return;
       enqueueOutbox(db,{dispatchKey:`task:${parent.id}:redispatch:coord_${run.run_id}`,stopGenerationAtEnqueue:parent.stop_generation});
       db.prepare("UPDATE coordination_messages SET status='queued',updated_at=? WHERE coordination_run_id=? AND child_task_id IS NULL AND status='accepted'").run(Date.now(),run.run_id);
       event(db,parent,run.run_id,'coordination.integrationQueued',{steps:steps.map(s=>s.child_task_id)});

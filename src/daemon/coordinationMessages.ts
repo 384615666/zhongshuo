@@ -38,10 +38,13 @@ export function communicationForTurn(db:ZhongshuoDatabase,taskId:string,memberId
   const runRequest=rootRunId?db.prepare('SELECT member_id FROM thread_reply_requests WHERE run_id=?').get(rootRunId) as {member_id:string}|undefined:undefined;
   const scope=request?JSON.parse(request.roster_json) as ReturnType<typeof coordinationRoster>:coordinationRoster(db,parentId,rootRunId);
   const reply=db.prepare('SELECT source_member_id FROM coordination_messages WHERE child_task_id=?').get(taskId) as {source_member_id:string}|undefined;
+  const ownerReply=scope.some(m=>m.memberId===parent.owner_member_id&&m.writeScope&&targetAvailable(db,parent,parent.owner_member_id))?parent.owner_member_id:null;
+  const replyCandidate=phase==='child'?(reply?.source_member_id??runRequest?.member_id??ownerReply):null;
+  const replyTo=replyCandidate&&replyCandidate!==memberId&&scope.some(m=>m.memberId===replyCandidate&&m.writeScope&&targetAvailable(db,parent,replyCandidate))?replyCandidate:null;
   return{mentionEnabled:true,submitVia:'final-result',maxHandoffs:4,
     members:scope.filter(m=>m.writeScope&&targetAvailable(db,parent,m.memberId)).map(m=>({memberId:m.memberId,displayName:m.displayName,description:m.description??null})),
-    allowedPurposes:phase==='planning'?['ask','review','implement']:['ask','review','reply'],
-    replyToMemberId:phase==='child'?(reply?.source_member_id??runRequest?.member_id??parent.owner_member_id):null};
+    allowedPurposes:phase==='planning'?['ask','review','implement']:replyTo?['ask','review','reply']:['ask','review'],
+    replyToMemberId:replyTo};
 }
 
 function proposedSteps(sourceTurnId:string,messages:readonly MemberHandoff[],sourceMemberId:string,dependsOn:string[]){
@@ -74,10 +77,14 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   if(effectiveMessages.length===0)return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred:[],additions:[],plan:null};
   if(effectiveMessages.length>4)throw Error('单轮最多交接4条具体消息');
   const seen=new Set<string>();
+  const inboundReplySource=(db.prepare('SELECT source_member_id FROM coordination_messages WHERE child_task_id=?').get(taskId) as {source_member_id:string}|undefined)?.source_member_id;
+  const coordinatorReply=context.roster.some(m=>m.memberId===context.parent.owner_member_id&&m.writeScope)?context.parent.owner_member_id:null;
+  const allowedReplyTargets=new Set([inboundReplySource,coordinatorReply].filter((memberId):memberId is string=>Boolean(memberId)));
   for(const message of effectiveMessages){
     const member=context.roster.find(m=>m.memberId===message.toMemberId);
     if(!member?.writeScope||!targetAvailable(db,context.parent,message.toMemberId))throw Error('收件人不在本轮获准可用名单中');
     if(message.toMemberId===source.member_id&&message.purpose!=='implement')throw Error('不向自己发送重复提问或回声');
+    if(message.purpose==='reply'&&!allowedReplyTargets.has(message.toMemberId))throw Error('回复只能发给实际来源成员或本轮协调者');
     if(message.purpose==='implement'&&context.phase!=='planning')throw Error('分析、评审或接收角色不能借交接提升写权限');
     if(message.purpose==='reply'&&context.phase!=='child')throw Error('当前没有需要回复的来源成员');
     const fingerprint=message.toMemberId+':'+message.purpose+':'+hash(message.message);

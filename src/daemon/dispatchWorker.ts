@@ -1,5 +1,5 @@
 import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
-import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations } from './coordination.ts';
+import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
 import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
@@ -425,7 +425,12 @@ export class DispatchWorker {
       return;
     }
     try { assertCoordinationDispatch(this.db,task.id,claimed.dispatch_key); }
-    catch(error) {this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+    catch(error) {
+      const reason=String(error).slice(0,1000);
+      if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,reason);
+      else this.transitionTask(task.id,'BLOCKED');
+      this.audit(task,null,null,'coordination.dispatchBlocked',{message:reason});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
+    }
     if(coordination?.kind==='planning'&&this.coordinationMaxCalls===0){this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:'本轮协作预算为0；未启动模型'});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     let conversationInput:{text:string;seq:number}|undefined;
     if(coordination?.request&&!generalRequest){
@@ -629,7 +634,15 @@ export class DispatchWorker {
         }
       : undefined;
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
-    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); } catch(e) { if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',String(e));this.transitionTask(task.id,'BLOCKED'); this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:String(e)}); await completeOutbox(this.db,claimed.id,claimed.attempt_epoch); return; }
+    try { writeAccess=effectiveTaskWriteAccess(this.db,task.id,member.id,this.defaultKindOf(),(conversationRequest?.writeScopeJson??coordination?.request?.writeScopeJson)); }
+    catch(e) {
+      const reason=String(e);
+      if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',reason);
+      if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,reason);
+      else this.transitionTask(task.id,'BLOCKED');
+      this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:reason});
+      await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
+    }
     if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
     let baselineChangeSetId: string | null = null;
     let baselineContentUnavailable: string[] = [];
@@ -642,7 +655,8 @@ export class DispatchWorker {
       });
       if (!baseline.ok) {
         if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', baseline.error.message);
-        this.transitionTask(task.id, 'BLOCKED');
+        if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,baseline.error.message);
+        else this.transitionTask(task.id, 'BLOCKED');
         this.audit(task, null, null, 'task.contextAssemblyFailed', {
           reason: 'write-baseline-failed',
           message: baseline.error.message,
@@ -653,7 +667,8 @@ export class DispatchWorker {
       if (baseline.value.truncated) {
         const message = '写入基线不完整：目录扫描失败、路径被拒绝或文件清单超出安全范围，未启动模型';
         if (conversationRequest) setConversationReplyState(this.db, conversationRequest.messageId, 'blocked', message);
-        this.transitionTask(task.id, 'BLOCKED');
+        if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,message);
+        else this.transitionTask(task.id, 'BLOCKED');
         this.audit(task, null, null, 'task.contextAssemblyFailed', {
           reason: 'write-baseline-incomplete',
           message,
@@ -704,7 +719,8 @@ export class DispatchWorker {
     });
     if (!assembled.ok) {
       if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',assembled.error.message);
-      await this.transitionTask(task.id, 'BLOCKED');
+      if(coordination?.kind==='integration'&&coordination.run)settleIntegrationLaunchFailure(this.db,coordination.run.run_id,assembled.error.message);
+      else await this.transitionTask(task.id, 'BLOCKED');
       this.audit(task, null, null, 'task.contextAssemblyFailed', {
         reason: (assembled.error.details as { reason?: string } | undefined)?.reason ?? 'assembly-failed',
         message: assembled.error.message,
@@ -1036,6 +1052,8 @@ export class DispatchWorker {
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if(phase==='startTurn'&&error instanceof AdapterCallError&&error.notStarted)phase='session-record';
+    const integrationAttempt=this.db.prepare('SELECT coordination_run_id FROM coordination_integration_attempts WHERE execution_run_id=?').get(runId) as {coordination_run_id:string}|undefined;
+    const blockIntegrationStart=()=>integrationAttempt?settleIntegrationLaunchFailure(this.db,integrationAttempt.coordination_run_id,message,true):false;
     const finishUncertain = (note: string): void => {
       // ② 不确定：UNKNOWN（settleUnknown 含 DIRECT run→INTERRUPTED/审计）；live 清理
       // （未登记消费器）；可能残留的进程由 stop 状态机的 adapter 级 dispose 收拢。
@@ -1062,7 +1080,8 @@ export class DispatchWorker {
       const tx = this.db.transaction(() => {
         this.casTurn(turnId, 'FAILED');
         this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
-        this.transitionTask(task.id, 'ACTIVE');
+        if(integrationAttempt)blockIntegrationStart();
+        else this.transitionTask(task.id,'ACTIVE');
         this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started', sessionClose: closeOutcome });
       });
       tx();
@@ -1074,7 +1093,8 @@ export class DispatchWorker {
     const tx = this.db.transaction(() => {
       this.casTurn(turnId, 'FAILED');
       this.db.prepare(`UPDATE workflow_runs SET status = 'FAILED' WHERE id = ? AND status NOT IN ('SUCCEEDED','PARTIAL','FAILED','CANCELLED','INTERRUPTED')`).run(runId);
-      this.transitionTask(task.id, phase === 'standing-prompt' ? 'BLOCKED' : 'ACTIVE');
+      if(integrationAttempt)blockIntegrationStart();
+      else this.transitionTask(task.id, phase === 'standing-prompt' ? 'BLOCKED' : 'ACTIVE');
       this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started' });
     });
     tx();
