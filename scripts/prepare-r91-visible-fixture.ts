@@ -45,6 +45,10 @@ export const R91_FIXTURE_FORMAT = 'r91-visible-fixture-v1';
 export const R93_DETAIL_MARKER = 'R93_CANDIDATE_DETAIL_TAIL';
 export const R93_DETAIL_MARKDOWN = `# R93 合成完整详情\n\n本文件由合法 TaskComplete detailMarkdown 托管，仅用于候选验收。\n\n${'合成证据。'.repeat(80)}\n\n${R93_DETAIL_MARKER}\n`;
 export const R91_LIVE_MARKER = 'R91_LIVE_STAGE_UPDATE';
+export const R91_SYN_DOCUMENT_FILENAME = 'R91合成整合方案.md';
+export const R91_SYN_DOCUMENT_PURPOSE = '供用户复核合成研讨结论与保留分歧';
+export const R91_SYN_DOCUMENT_MARKER = 'R91_SYN_DOCUMENT_FULL';
+export const R91_SYN_DOCUMENT_MARKDOWN = `# ${R91_SYN_DOCUMENT_FILENAME.replace(/\.md$/i, '')}\n\n方案 A 成本更低，方案 B 交付更快。\n\n保留分歧：交付期差异是否可接受。\n\n${R91_SYN_DOCUMENT_MARKER}\n`;
 export const R91_GENERATED_FILES = {
   xlsx: 'results/R91-成本对比-合成版.xlsx',
   csv: 'results/R91-逐条明细-合成版.csv',
@@ -121,6 +125,7 @@ export function createDeliberationSequencer(
       return done({
         schemaVersion: 'analysis-draft-v1',
         summary: `${label}：独立分析${roundMarker}——方案 A 成本更低但交付期偏长；结论与证据均为合成材料。`,
+        document: null,
         claims: [
           { claimId: 'r91_c1', statement: '方案 A 的合成成本比方案 B 低约 6 万元', kind: 'observed', evidenceIds: ['r91_ev_cost'], uncertainty: '样本为合成数据' },
           { claimId: 'r91_c2', statement: '方案 A 的合成交付期比方案 B 长约 1 周', kind: 'inferred', evidenceIds: ['r91_ev_schedule'] },
@@ -140,6 +145,7 @@ export function createDeliberationSequencer(
       const claimId = claims[0]?.claimId ?? 'r91_c1';
       return done({
         schemaVersion: 'cross-review-v1',
+        document: null,
         reviews: [{
           targetArtifactId: target?.id ?? '',
           targetRevision: target?.revision ?? 1,
@@ -156,6 +162,7 @@ export function createDeliberationSequencer(
       const issue = run == null ? undefined : db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id LIMIT 1').get(run.id) as { id: string } | undefined;
       return done({
         schemaVersion: 'issue-position-v1',
+        document: null,
         positions: [{
           issueId: issue?.id ?? 'r91_issue',
           stance: 'needs_evidence',
@@ -165,12 +172,20 @@ export function createDeliberationSequencer(
       });
     }
     if (text.includes('"schemaVersion":"checkpoint-verdict-v1"')) {
-      return done({ schemaVersion: 'checkpoint-verdict-v1', verdict: 'stop', reason: '合成检查点：没有新的可验证证据。' });
+      return done({ schemaVersion: 'checkpoint-verdict-v1', document: null, verdict: 'stop', reason: '合成检查点：没有新的可验证证据。' });
     }
     if (text.includes('"schemaVersion":"synthesis-v1"')) {
+      const run = latestDeliberateRun(db);
+      const issueIds = run == null ? [] : db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(run.id) as Array<{ id: string }>;
       return done({
         schemaVersion: 'synthesis-v1',
         summary: 'R91 合成整合结论：方案 A 成本更低、方案 B 交付更快；分歧保留为合成待验证项。',
+        document: {
+          filename: R91_SYN_DOCUMENT_FILENAME,
+          purpose: R91_SYN_DOCUMENT_PURPOSE,
+          markdown: R91_SYN_DOCUMENT_MARKDOWN,
+        },
+        issueResolutions: issueIds.map((issue) => ({ issueId: issue.id, status: 'insufficient_evidence', reason: '合成夹具保留待验证项', question: '是否需要补充合成对照', owner: '用户' })),
         claims: [
           { statement: '方案 A 合成成本更低', sourceRefs: ['r91_c1'] },
           { statement: '方案 B 合成交付更快', sourceRefs: ['r91_c2'] },
@@ -184,6 +199,14 @@ export function createDeliberationSequencer(
       const claims = run == null ? [] : db.prepare('SELECT claim_id FROM synthesis_claims WHERE run_id=? ORDER BY claim_id').all(run.id) as Array<{ claim_id: string }>;
       return done({
         schemaVersion: 'ratify-v1',
+        document: null,
+        deliveryFeedback: {
+          status: 'ready',
+          reason: '合成整合稿可作为待确认交付',
+          revisionRequest: '',
+          question: '',
+          owner: '',
+        },
         responses: (claims.length > 0 ? claims : [{ claim_id: 'r91_c1' }, { claim_id: 'r91_c2' }]).map((claim, index) => ({
           claimId: claim.claim_id,
           stance: index === 1 ? 'conditional' : 'confirm',
@@ -337,6 +360,30 @@ async function prepare(options: PrepareOptions): Promise<void> {
     if (!stageMessages.some((message) => message.stage === 'CROSS_REVIEW' && message.authorId !== members[0]!.id)) {
       throw new Error('合成互评缺少第二成员作者（真实作者约束）');
     }
+    const synMessage = db.prepare(`SELECT id,body_json FROM messages
+      WHERE task_id=? AND json_extract(body_json,'$.collaborationStage.stage')='SYNTHESIS'
+      ORDER BY thread_message_seq DESC LIMIT 1`).get(taskId) as { id: string; body_json: string } | undefined;
+    if (synMessage == null) throw new Error('合成夹具缺少 SYNTHESIS 消息');
+    const synBody = JSON.parse(synMessage.body_json) as { text?: string; document?: { filename?: string; purpose?: string; artifactId?: string; markdown?: string } };
+    if (synBody.document?.filename !== R91_SYN_DOCUMENT_FILENAME || synBody.document?.purpose !== R91_SYN_DOCUMENT_PURPOSE) {
+      throw new Error('合成 SYNTHESIS 文档元数据不一致');
+    }
+    if (synBody.document.markdown !== undefined) throw new Error('合成 SYNTHESIS 文档应已托管，不能重复内联');
+    const synAttachment = db.prepare(`SELECT a.id artifact_id,a.source_name,a.blob_path,a.hash
+      FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id
+      WHERE ma.message_id=? AND ma.id LIKE 'matt_detail_%'`).get(synMessage.id) as
+      { artifact_id:string;source_name:string;blob_path:string;hash:string } | undefined;
+    if (synAttachment == null || synAttachment.artifact_id !== synBody.document?.artifactId) throw new Error('合成 SYNTHESIS 文档附件身份不一致');
+    if (synAttachment.source_name !== R91_SYN_DOCUMENT_FILENAME || synAttachment.hash !== sha256(R91_SYN_DOCUMENT_MARKDOWN)) throw new Error('合成 SYNTHESIS 文档名称/hash 不一致');
+    if (readFileSync(synAttachment.blob_path, 'utf8') !== R91_SYN_DOCUMENT_MARKDOWN) throw new Error('合成 SYNTHESIS 文档字节不一致');
+    const finalReportMessage = db.prepare('SELECT id,body_json FROM messages WHERE id=?').get(`msg_report_${run.id}`) as { id: string; body_json: string } | undefined;
+    if (finalReportMessage == null) throw new Error('合成研讨缺少最终公开回复');
+    const finalReportBody = JSON.parse(finalReportMessage.body_json) as { text?: string; document?: { artifactId?: string }; delivery?: { status?: string } };
+    const finalReportAttachment = db.prepare(`SELECT artifact_id FROM message_attachments
+      WHERE message_id=? AND id LIKE 'matt_detail_%'`).get(finalReportMessage.id) as { artifact_id: string } | undefined;
+    if (finalReportAttachment?.artifact_id !== synAttachment.artifact_id || finalReportBody.document?.artifactId !== synAttachment.artifact_id) throw new Error('最终公开回复未复用 SYN 文档身份');
+    if (finalReportBody.text !== 'R91 合成整合结论：方案 A 成本更低、方案 B 交付更快；分歧保留为合成待验证项。') throw new Error('最终公开回复未逐字使用模型总览');
+    if (finalReportBody.delivery?.status !== 'delivered_with_questions') throw new Error('合成交付状态应区分已交付与待确认');
 
     // ---------- 正常 Fake 最终回复 + 真实生成文件快照（同一线程） ----------
     const generated = generatedFileContents();
@@ -499,6 +546,10 @@ async function prepare(options: PrepareOptions): Promise<void> {
       rootMessageId: rootSubmit.messageId ?? null,
       rootMessagePreview: 'R91 合成研讨请求：比较方案 A 与方案 B 的成本和交付期（FAKE/SYNTHETIC）。',
       stageMessages,
+      synDocument: {
+        messageId: synMessage.id, filename: R91_SYN_DOCUMENT_FILENAME, purpose: R91_SYN_DOCUMENT_PURPOSE,
+        artifactId: synAttachment.artifact_id, sha256: synAttachment.hash, marker: R91_SYN_DOCUMENT_MARKER,
+      },
       expectedStages: ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION', 'SYNTHESIS', 'RATIFY'],
       generatedMessageId: finalMessage.id,
       generatedMessageAuthor: { id: finalMessage.author_id, displayName: memberName.get(finalMessage.author_id) ?? finalMessage.author_id },

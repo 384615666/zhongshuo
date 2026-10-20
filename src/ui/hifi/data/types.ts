@@ -79,6 +79,33 @@ export type StageKey =
 /** §6.5 共识状态：程序按确认记录计算，主持者不能单方面改写 */
 export type Consensus = 'unanimous' | 'qualified' | 'disputed' | 'unconfirmed';
 
+export type DeliveryState = 'delivered' | 'delivered_with_questions' | 'needs_user' | 'blocked' | 'legacy';
+
+/** Program-projected delivery facts; never inferred from the model's prose. */
+export interface DeliveryFact {
+  status: DeliveryState;
+  overallConsensus?: Consensus;
+  unresolvedIssues?: Array<{ id?: string; issueId?: string; status: string }>;
+  feedback?: Array<{ status?: string; reason?: string; revisionRequest?: string; question?: string; owner?: string }>;
+  issueResolutions?: Array<{ issueId?: string; status?: string; reason?: string; question?: string; owner?: string }>;
+}
+
+export interface CurrentRunBudget {
+  runMaxTurns: number;
+  usedTurns: number;
+  remainingTurns: number;
+  tailReserved: number;
+}
+
+/** Model-authored document metadata; markdown is only present when attachment hosting failed. */
+export interface DocumentView {
+  filename: string;
+  purpose: string;
+  markdown?: string;
+  /** Persisted artifact identity used to bind the card without guessing by filename. */
+  artifactId?: string;
+}
+
 /* ---------- §16.5 统一错误码 ---------- */
 
 export type ErrorCode =
@@ -272,6 +299,9 @@ export interface ThreadCard {
   taskRevision?: number | null;
   taskMode?: RouteMode | null;
   latestRun?: { id: string; status: RunStatus; stage?: string | null } | null;
+  nextInputBudget?: { maxTurns: number } | null;
+  currentRunBudget?: CurrentRunBudget | null;
+  delivery?: DeliveryFact | null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;
@@ -294,6 +324,10 @@ export interface FormalAttachmentSummary {
   sizeBytes?: number;
   /** R93 app-managed complete Markdown derived from a successful answer. */
   detailMarkdown?: boolean;
+  /** R96 model-authored document, as opposed to the legacy complete-detail file. */
+  document?: boolean;
+  /** Why the model produced this document. */
+  purpose?: string;
 }
 
 /**
@@ -359,6 +393,10 @@ export interface Message {
   formalAttachments?: FormalAttachmentSummary[];
   /** Inline fallback when the complete Markdown attachment could not be persisted. */
   detailMarkdown?: string;
+  /** New model-authored document metadata; markdown is an inline fallback only. */
+  document?: DocumentView;
+  /** Program-derived delivery and consensus facts shown beside the model text. */
+  delivery?: DeliveryFact;
   /**
    * 研讨阶段产物标记（后端 `body_json.collaborationStage` 的 loader 转译）。
    * 缺省=普通消息；仅用于在消息头显示简短中文阶段标签与轮次。
@@ -528,6 +566,9 @@ export interface Task {
   mode?: RouteMode;
   /** room.pool/task.get 的有限最近运行提示；详情由 task.details 读取。 */
   latestRun?: { id: string; status: RunStatus } | null;
+  nextInputBudget?: { maxTurns: number } | null;
+  currentRunBudget?: CurrentRunBudget | null;
+  delivery?: DeliveryFact | null;
   displayNumber: number;
 }
 

@@ -96,7 +96,7 @@ describe('R90 independent project room index', () => {
   });
 
   it('freezes the room-only deliberation budget into the envelope', () => {
-    expect(defaultDeliberationMaxTurns(2)).toBe(14);
+    expect(defaultDeliberationMaxTurns(2)).toBe(17);
     const envelope = buildRoomRootEnvelope(
       'r90-envelope-budget',
       'roomA',

@@ -252,7 +252,17 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const backToPool = () => navigate(`/room/${entity.roomId}`);
   const conversationId = entity.conversationId ?? '';
   const taskNo = task != null ? `#${task.roomTaskNumber}` : null;
-  const statusLabel = task != null ? STATUS_LABEL[task.status] ?? task.status : null;
+  const delivery = task?.delivery;
+  const statusLabel = task?.status === 'REVIEW' ? STATUS_LABEL.REVIEW
+    : delivery?.status === 'delivered_with_questions' ? '已交付 · 有待确认'
+      : delivery?.status === 'needs_user' ? '等待你补充'
+        : delivery?.status === 'blocked' ? '交付未完成'
+          : delivery?.status === 'legacy' ? '本轮已结束 · 旧格式'
+            : task != null ? STATUS_LABEL[task.status] ?? task.status : null;
+  const statusTone = task?.status === 'REVIEW' ? 'info'
+    : delivery?.status === 'blocked' ? 'danger'
+      : delivery?.status === 'needs_user' || delivery?.status === 'delivered_with_questions' || delivery?.status === 'legacy' ? 'warning'
+        : task?.status === 'DONE' ? 'success' : 'neutral';
   const stoppable = task != null && ['ACTIVE', 'WAITING_USER', 'BLOCKED'].includes(task.status);
   const runStopping = task?.activeRun?.status === 'STOPPING';
 
@@ -404,7 +414,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
         <div className="spacer" style={{ flex: 1 }} />
         {isRecordThread
           ? <Tag tone="neutral" icon="message-square">历史记录串 · 无任务号</Tag>
-          : statusLabel != null ? <Tag tone={detail?.status === 'DONE' ? 'success' : detail?.status === 'REVIEW' ? 'info' : 'neutral'} icon="activity">{taskNo} {statusLabel}</Tag> : null}
+          : statusLabel != null ? <Tag tone={statusTone} icon="activity">{taskNo} {statusLabel}</Tag> : null}
       </div>
 
       {readError != null ? <div className="panel info" style={{ margin: '8px 14px 0', borderColor: 'var(--warning)' }}>读取失败：{readError}（保留上次快照——重试=切换视图或等待自动刷新）</div> : null}

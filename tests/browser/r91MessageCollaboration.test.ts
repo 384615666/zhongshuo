@@ -98,6 +98,96 @@ describe('R91 loader: collaborationStage 转译（thread.history 完整 body / D
   });
 });
 
+describe('R96 delivery facts and model documents', () => {
+  it('runtimeControlResult.document=null hides an older nested detailMarkdown fallback', () => {
+    const message = msgOfDmHistory('p1', 'dm-null', {
+      id: 'null-document',
+      body_json: JSON.stringify({
+        text: '短回复保持简短',
+        runtimeControlResult: JSON.stringify({
+          schemaVersion: 'task-complete-v1',
+          detailMarkdown: '# 旧格式完整详情\n\nR96_OLD_DETAIL_MUST_NOT_RETURN',
+          document: null,
+        }),
+      }),
+      authorType: 'agent',
+      authorId: 'member_a',
+      createdAt: 1,
+    }, 0);
+    expect(message.body).toBe('短回复保持简短');
+    expect(message.detailMarkdown).toBeUndefined();
+    expect(renderMessage(message)).not.toContain('R96_OLD_DETAIL_MUST_NOT_RETURN');
+  });
+
+  it('maps legacy final-report disputes to an ended legacy fact, never to ready', () => {
+    const message = msgOfDmHistory('p1', 'dm1', {
+      id: 'legacy-final',
+      body_json: JSON.stringify({
+        text: '旧格式最终回复',
+        runtimeControlResult: JSON.stringify({ schemaVersion: 'final-report-v1', overallConsensus: 'disputed', claimResults: [] }),
+      }),
+      authorType: 'agent',
+      authorId: 'member_a',
+      createdAt: 1,
+    }, 0);
+    expect(message.delivery).toEqual({ status: 'legacy', overallConsensus: 'disputed' });
+    const html = renderToStaticMarkup(createElement(MessageView, { message }));
+    expect(html).toContain('data-zs-delivery-state="legacy"');
+    expect(html).toContain('本轮已结束 · 旧格式');
+    expect(html).toContain('仍有分歧');
+    expect(html).not.toContain('data-zs-delivery-state="delivered"');
+  });
+
+  it('renders a named model document and a delivered-with-questions fact separately from the text', () => {
+    const message = msgOfDmHistory('p1', 'dm2', {
+      id: 'new-final',
+      body_json: JSON.stringify({
+        text: '模型正文保持原样',
+        document: { filename: '实施方案.md', purpose: '供用户执行', artifactId: 'art_doc_1' },
+        delivery: { status: 'delivered_with_questions', overallConsensus: 'qualified', unresolvedIssues: [{ id: 'i1', status: 'needs_user' }] },
+      }),
+      authorType: 'agent',
+      authorId: 'member_a',
+      createdAt: 2,
+      attachments: [{ artifactId: 'art_doc_1', filename: '实施方案.md', kind: 'text_file', detailMarkdown: true }],
+    }, 0);
+    expect(message.document).toMatchObject({ filename: '实施方案.md', purpose: '供用户执行', artifactId: 'art_doc_1' });
+    expect(message.formalAttachments?.[0]).toMatchObject({ document: true, purpose: '供用户执行', detailMarkdown: false });
+    const html = renderToStaticMarkup(createElement(MessageView, { message }));
+    expect(html).toContain('实施方案.md');
+    expect(html).toContain('data-zs-delivery-state="delivered_with_questions"');
+    expect(html).toContain('已交付 · 有待确认');
+    expect(html).toContain('1 项未解决');
+  });
+
+  it('shows concrete needs_user questions and needs_revision requests instead of only a count', () => {
+    const base: Message = { id: 'r96-action', projectId: 'p1', roomId: 'r1', authorType: 'agent', authorId: 'member_a', kind: 'text', body: '', createdAt: 1 };
+    const needsUser: Message = {
+      ...base,
+      body: '等待用户补充',
+      delivery: {
+        status: 'needs_user',
+        feedback: [{ status: 'needs_user', question: '请确认生产窗口', owner: '用户' }],
+      },
+    };
+    const needsRevision: Message = {
+      ...base,
+      id: 'r96-action-2',
+      body: '内部 need revision',
+      delivery: {
+        status: 'blocked',
+        feedback: [{ status: 'needs_revision', revisionRequest: '补充回滚步骤' }],
+      },
+    };
+    const userHtml = renderMessage(needsUser);
+    expect(userHtml).toContain('请确认生产窗口（责任方：用户）');
+    expect(userHtml).toContain('等待你补充');
+    const revisionHtml = renderMessage(needsRevision);
+    expect(revisionHtml).toContain('补充回滚步骤');
+    expect(revisionHtml).toContain('交付未完成');
+  });
+});
+
 describe('R91 MessageView: 中文阶段标签/轮次/真实作者，不渲染内部元数据', () => {
   it('renders the existing stageLabel mapping plus round, with the real author', () => {
     const message: Message = {

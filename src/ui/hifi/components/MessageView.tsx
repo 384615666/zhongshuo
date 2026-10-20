@@ -96,6 +96,37 @@ function MessageAttachments({
 
 /* ---------------- 单条消息 ---------------- */
 
+function DeliveryFacts({ delivery }: { delivery?: Message['delivery'] }) {
+  if (delivery == null) return null;
+  const labels = {
+    delivered: '已交付',
+    delivered_with_questions: '已交付 · 有待确认',
+    needs_user: '等待你补充',
+    blocked: '交付未完成',
+    legacy: '本轮已结束 · 旧格式',
+  } as const;
+  const tone = delivery.status === 'blocked' ? 'danger' : delivery.status === 'needs_user' || delivery.status === 'delivered_with_questions' ? 'warning' : delivery.status === 'legacy' ? 'neutral' : 'success';
+  const consensus = delivery.overallConsensus === 'disputed' ? '仍有分歧'
+    : delivery.overallConsensus === 'unconfirmed' ? '仍有成员未确认'
+      : delivery.overallConsensus === 'qualified' ? '附条件确认' : null;
+  const feedback = delivery.feedback?.find((item) => item.status === 'needs_revision')
+    ?? delivery.feedback?.find((item) => item.status === 'needs_user');
+  const issue = delivery.issueResolutions?.find((item) => item.status === 'needs_user')
+    ?? delivery.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
+  const action = (feedback?.question ? `${feedback.question}${feedback.owner ? `（责任方：${feedback.owner}）` : ''}` : '')
+    || feedback?.revisionRequest
+    || (issue?.question ? `${issue.question}${issue.owner ? `（责任方：${issue.owner}）` : ''}` : '')
+    || feedback?.reason || issue?.reason;
+  return (
+    <div className="row tight wrap" data-zs-delivery-state={delivery.status}>
+      <Tag tone={tone} icon={delivery.status === 'blocked' ? 'alert-triangle' : 'check-circle'}>{labels[delivery.status]}</Tag>
+      {consensus != null ? <span className="small faint">{consensus}</span> : null}
+      {delivery.unresolvedIssues?.length ? <span className="small faint">{delivery.unresolvedIssues.length} 项未解决</span> : null}
+      {action ? <span className="small" style={{ overflowWrap: 'anywhere' }}>{action}</span> : null}
+    </div>
+  );
+}
+
 export function MessageView({
   message,
   domId,
@@ -164,6 +195,7 @@ export function MessageView({
           <div className="msg-detail-fallback-body"><MarkdownView text={message.detailMarkdown} specTables={readingAids === true} headingAnchors={readingAids === true} /></div>
         </details>
       ) : null}
+      <DeliveryFacts delivery={message.delivery} />
       <MessageFooter message={message} formalAttachments={formalAttachments} onOpenAttachment={onOpenAttachment} onOpenResource={onOpenResource} />
     </>
   );

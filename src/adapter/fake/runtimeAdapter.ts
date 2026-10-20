@@ -549,6 +549,7 @@ function renderStructuredFinal(
     schemaVersion: 'task-complete-v1',
     resultKey: resultKey ?? 'result_fake_unbound',
     changeSummary: event.finalText ?? '',
+    document: null,
     files: [],
     executedVerifications: [],
     unexecutedVerifications: [],

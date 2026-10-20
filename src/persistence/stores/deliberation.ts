@@ -310,6 +310,7 @@ export interface RatificationRecordRow {
   reason: string | null;
   missing_reason: string | null;
   turn_id: string | null;
+  response_artifact_id: string | null;
   result_key: string;
   payload_hash: string | null;
 }
@@ -317,7 +318,7 @@ export interface RatificationRecordRow {
 export function getRatificationRecords(db: ZhongshuoDatabase, runId: string, synthesisArtifactId: string, synthesisRevision: number): RatificationRecordRow[] {
   return db
     .prepare(
-      `SELECT claim_id, member_id, response_status, stance, conditions_json, reason, missing_reason, turn_id, result_key, payload_hash
+      `SELECT claim_id, member_id, response_status, stance, conditions_json, reason, missing_reason, turn_id, response_artifact_id, result_key, payload_hash
        FROM ratification_records WHERE run_id = ? AND synthesis_artifact_id = ? AND synthesis_revision = ?
        ORDER BY member_id, claim_id`,
     )

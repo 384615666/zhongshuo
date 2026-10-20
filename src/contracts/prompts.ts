@@ -45,7 +45,7 @@ export const STANDING_PROMPT_TEMPLATE = `你是「{{memberDisplayName}}」（成
 - 模型的流式消息由 adapter 回传当前任务线程，不要再用 zs 逐 token 重发。普通命令 stdout/stderr 是执行日志，不自动成为聊天消息或成果。
 - 最终成果严格按本轮 outputContract 提交：final-result 由 adapter 接收结构化结果后交 daemon 入库；zs-submit 使用输入包提供的 zs 提交契约。使用程序提供的 resultKey，不自行生成；同一成果不要在两条路径重复提交。
 - 一次执行一条 zs 命令，读完输出再决定下一条；不要把多条 zs 命令拼进同一个 shell 命令。
-- 复杂答复在「answer」给出简短结论与 3–5 个关键点（通常 200–400 字），完整步骤/证据/明细放入「detailMarkdown」；短问候、简短确认不造空详情。「detailMarkdown」必须是可独立阅读的完整 Markdown，不写内部协议或私有思考；需要写项目文件时仅使用本次有效策略允许的目录，不能因草稿要求突破权限。
+- 用「answer」给最短有用、符合任务的自然回复；只有本次确有可复用的方案、清单或报告时，才在「document」提供 {filename,purpose,markdown}，否则 document 为 null。短问候、简短确认不造文件；document.markdown 必须是可独立阅读的完整 Markdown，不写内部协议或私有思考。
 
 ## 回复目的地
 
@@ -387,10 +387,10 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
   lines.push(
-    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"简短、可直接显示的结论与3-5个关键点","detailMarkdown":"完整 Markdown 详情；短答填空字符串","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
+    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"最短有用、符合任务的自然回复","document":null,"changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
   );
-  lines.push('严格 schema：上述字段与 detailMarkdown 均须出现；短答的 detailMarkdown 填空字符串，复杂答复填完整 Markdown。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
-  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 始终面向用户且保持简短：复杂工作先给结论和3-5个关键点，关键分歧、条件、待确认不可省略；完整细节放 detailMarkdown。短问候、孤立数字或“测试”直接简短回应，detailMarkdown 填空字符串，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
+  lines.push('严格 schema：上述字段与 document 均须出现；不需要文件时 document=null，需要时提供 {filename,purpose,markdown}，filename 必须是安全的 .md basename，purpose 说明交付用途，markdown 原样保留。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
+  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 始终面向用户并使用最短有用表达：按任务需要组织结论，不固定 3–5 点；关键分歧、条件、待确认不可省略。需要完整细节时才提供 document，否则不要造文件。短问候、孤立数字或“测试”直接简短回应，document=null，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
     lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);
@@ -455,7 +455,7 @@ export function selectStageInstruction(input: {
 
 // ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
 
-const DELIBERATE_USER_VIEW_RULE = '- 面向用户的 summary 和 detailMarkdown 必须由你本人提供：summary 用简练语言直接总览；detailMarkdown 写成可独立阅读的完整 Markdown，保留关键分歧、条件与待确认。应用只展示和托管，不再二次总结；没有额外细节的短结果 detailMarkdown 可为空字符串。';
+const DELIBERATE_USER_VIEW_RULE = '- 面向用户先写短 summary。只有本次确有可复用的方案、清单或报告价值时，才提供 document={filename,purpose,markdown}；否则 document=null。filename 使用有业务含义的安全 .md basename，purpose 说明用途，markdown 由你写完整并保留关键分歧、条件与待确认。应用只展示和托管原文，不再二次总结。';
 
 const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
   'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮要求**先独立完成**：
@@ -480,25 +480,28 @@ ${DELIBERATE_USER_VIEW_RULE}
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'SYNTHESIS|stage_work': `你是主持者，负责整合稿。基于各成员报告、互评与最终意见：
+- 汇总可用结果：能形成一套可执行交付的差异要收敛成清晰方案，不能只汇报“两个 AI 意见不同”；外部未知不得擅自决定，必须列明待谁、问什么。
 - 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧必须如实列入 disputedClaims（含分歧摘要），不得用一句总结覆盖反对意见。
+- 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮成员明确同意依据，不能覆盖反对或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
 - 不得把缺席/未回复成员记为同意。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'RATIFY|stage_work': `你是确认成员。对整合稿的每条结论给出独立确认或异议：
 - stance 只能是 confirm / conditional（附条件）/ object（附理由）/ unconfirmed（无法判断）。
 - 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
+- 另外填写 deliveryFeedback：判断当前整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认误写成全员同意，也不要因任意分歧无限要求重做。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
 };
 
 /** 各阶段输出契约（ADR-I39：精确 JSON 字段集，与 deliberation.ts schema 一字不差）。 */
 export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
-  'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
-  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","reviews":[{"targetArtifactId":"art_x","targetRevision":1,"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
-  'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
-  'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
-  'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"AI 自行撰写的整合结论总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
-  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
+  'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"AI 自行撰写的简练总览","document":null,"claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
+  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","summary":"AI 自行撰写的简练总览","document":null,"reviews":[{"targetArtifactId":"art_x","targetRevision":1,"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
+  'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","summary":"AI 自行撰写的简练总览","document":null,"positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
+  'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","summary":"AI 自行撰写的简练总览","document":null,"verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
+  'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"AI 自行撰写的整合结论总览","document":null,"issueResolutions":[{"issueId":"iss_c1","status":"resolved|needs_user|insufficient_evidence","reason":"依据","question":"needs_user 时的问题","owner":"needs_user 时的责任方"}],"claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
+  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","document":null,"deliveryFeedback":{"status":"ready|needs_revision|needs_user","reason":"依据","revisionRequest":"needs_revision 时的修改请求","question":"needs_user 时的问题","owner":"needs_user 时的责任方"},"responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
 };
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------

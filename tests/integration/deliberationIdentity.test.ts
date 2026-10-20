@@ -207,7 +207,7 @@ describe('R94 单有效初稿', () => {
     const detailTail = 'R94_MODEL_DETAIL_TAIL_MUST_NOT_REACH_B';
     const summary = 'A 模型总览：完整依据见详情附件。';
     const detailMarkdown = `# A 完整详情\n\n${'A 完整依据。'.repeat(100)}\n\n${detailTail}`;
-    const aPayload = { ...(draft(summary, [{ claimId: 'c1', statement: 'A canonical claim' }]) as Record<string, unknown>), detailMarkdown };
+    const aPayload = { ...(draft(summary, [{ claimId: 'c1', statement: 'A canonical claim' }]) as Record<string, unknown>), document: { filename: 'A完整方案.md', purpose: '记录 A 的完整依据', markdown: detailMarkdown } };
     scripts.push(done(aPayload));
     await step(worker, scripts); // IND m1 hosts one model-written detail MD
     scripts.push(done(draft('B canonical draft', [{ claimId: 'c1', statement: 'B canonical claim' }])));

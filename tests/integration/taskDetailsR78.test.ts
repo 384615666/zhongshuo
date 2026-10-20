@@ -10,6 +10,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 import type { TaskDetailsResult } from '../../src/contracts/taskDetails.ts';
+import { publishDeliberationArtifact } from '../../src/persistence/stores/deliberation.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
 delete process.env.ZS_REAL_DISPATCH_GUARD;
@@ -86,6 +87,77 @@ describe('R78 task.details formal read projection', () => {
       env.db.prepare(`UPDATE dm_participants SET principal_id = 'u_other' WHERE conversation_id = 'foreign_dm' AND principal_type = 'human'`).run();
       expect((await env.raw('project.taskSummary', { projectId: 'p1' })).data).toEqual({ projectId: 'p1', unfinishedTasks: 1, activeTurns: 0 });
     } finally { env.close(); }
+  });
+
+  it('projects delivery facts and both frozen/current budgets in room.pool and task.get', async () => {
+    const env = fixture();
+    try {
+      const sent = await env.raw('message.submit', { target: { kind: 'room_root', projectId: 'p1', conversationId: 'conv_room', roomId: 'r0' }, body: '投影预算与交付事实', intent: 'default', mentions: [{ kind: 'member', memberId: 'mA' }] });
+      const taskId = (sent.data as { taskId: string }).taskId;
+      await env.worker().runOnce();
+      const taskRow = env.db.prepare('SELECT conversation_thread_id FROM tasks WHERE id=?').get(taskId) as { conversation_thread_id: string };
+      const runRow = env.db.prepare('SELECT id FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(taskId) as { id: string };
+      const published = publishDeliberationArtifact(env.db, {
+        artifactId: `art_r96_final_${taskId}`,
+        projectId: 'p1', conversationId: 'conv_room', threadId: taskRow.conversation_thread_id,
+        taskId, runId: runRow.id, authorId: 'mA', kind: 'final_report', revision: 1,
+        payload: { schemaVersion: 'final-report-v1', overallConsensus: 'disputed', claimResults: [] },
+        blobDir: join(root, 'app', 'blobstore'), now: 1,
+      });
+      expect(published.ok).toBe(true);
+      env.db.prepare('UPDATE tasks SET deliberation_budget_json=? WHERE id=?').run(JSON.stringify({ maxTurns: 10 }), taskId);
+      env.db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify({
+        runMaxTurns: 14, usedTurns: 9, inFlightReservedTurns: 0,
+        tailReservationByStage: { SYNTHESIS: 0, RATIFY: 0 },
+      }), runRow.id);
+      const pool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; delivery: { status: string; overallConsensus: string }; nextInputBudget: { maxTurns: number }; currentRunBudget: { runMaxTurns: number; usedTurns: number; remainingTurns: number } }> };
+      expect(pool.items.find((item) => item.taskId === taskId)).toMatchObject({
+        delivery: { status: 'legacy', overallConsensus: 'disputed' },
+        nextInputBudget: { maxTurns: 10 },
+        currentRunBudget: { runMaxTurns: 14, usedTurns: 9, remainingTurns: 5 },
+      });
+      const tg = (await env.raw('task.get', { taskId })).data as { delivery: { status: string; overallConsensus: string }; task: { deliberationBudget: { maxTurns: number } }; activeRun: { budget: { runMaxTurns: number; usedTurns: number; remainingTurns: number } } };
+      expect(tg.delivery).toMatchObject({ status: 'legacy', overallConsensus: 'disputed' });
+      expect(tg.task.deliberationBudget).toEqual({ maxTurns: 10 });
+      expect(tg.activeRun.budget).toMatchObject({ runMaxTurns: 14, usedTurns: 9, remainingTurns: 5 });
+      const secondRunId = 'run_r96_second';
+      env.db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, status, budget_json)
+        VALUES (?, ?, 'conv_room', ?, 'DELIBERATE', 'PARTIAL', ?)`).run(secondRunId, taskId, taskRow.conversation_thread_id, JSON.stringify({
+        runMaxTurns: 10, usedTurns: 10, inFlightReservedTurns: 0, tailReservationByStage: { SYNTHESIS: 0, RATIFY: 0 },
+      }));
+      const secondArtifact = `art_r96_final_second_${taskId}`;
+      const secondPublished = publishDeliberationArtifact(env.db, {
+        artifactId: secondArtifact, projectId: 'p1', conversationId: 'conv_room', threadId: taskRow.conversation_thread_id,
+        taskId, runId: secondRunId, authorId: 'mA', kind: 'final_report', revision: 1,
+        payload: { schemaVersion: 'final-report-v1', overallConsensus: 'unconfirmed', deliveryStatus: 'needs_user', deliveryFeedback: [{ status: 'needs_user', question: '请确认窗口', owner: '用户' }] },
+        blobDir: join(root, 'app', 'blobstore'), now: 2,
+      });
+      expect(secondPublished.ok).toBe(true);
+      env.db.prepare(`INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
+        VALUES ('dlv_r96_second', ?, ?, 2, ?, ?, '[]', '[]', 'not_required')`).run(taskId, secondRunId, 'b'.repeat(64), JSON.stringify([`artifact:${secondArtifact}`]));
+      env.db.prepare("UPDATE tasks SET current_delivery_id='dlv_r96_second', status='WAITING_USER' WHERE id=?").run(taskId);
+      const secondPool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; delivery: { status: string; overallConsensus: string } | null }> };
+      expect(secondPool.items.find((item) => item.taskId === taskId)?.delivery).toMatchObject({ status: 'needs_user', overallConsensus: 'unconfirmed' });
+      const activeRunId = 'run_r96_active_after_delivery';
+      env.db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, status) VALUES (?, ?, 'conv_room', ?, 'DELIBERATE', 'RUNNING')`).run(activeRunId, taskId, taskRow.conversation_thread_id);
+      const activePool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; delivery: unknown }> };
+      expect(activePool.items.find((item) => item.taskId === taskId)?.delivery).toBeNull();
+      const activeTg = (await env.raw('task.get', { taskId })).data as { delivery: unknown };
+      expect(activeTg.delivery).toBeNull();
+      // A report-less terminal run after an older delivery must not revive that
+      // delivery. This applies to both failed and cancelled latest runs.
+      for (const status of ['FAILED', 'CANCELLED'] as const) {
+        const runId = `run_r96_terminal_${status.toLowerCase()}`;
+        env.db.prepare(`INSERT INTO workflow_runs (id, task_id, conversation_id, thread_id, mode, status)
+          VALUES (?, ?, 'conv_room', ?, 'DELIBERATE', ?)`).run(runId, taskId, taskRow.conversation_thread_id, status);
+        const terminalPool = (await env.raw('room.pool', { roomId: 'r0' })).data as { items: Array<{ taskId: string; delivery: unknown }> };
+        expect(terminalPool.items.find((item) => item.taskId === taskId)?.delivery, status).toBeNull();
+        const terminalTg = (await env.raw('task.get', { taskId })).data as { delivery: unknown };
+        expect(terminalTg.delivery, status).toBeNull();
+      }
+    } finally {
+      env.close();
+    }
   });
 
   it('shows the worker-created run, real turn, activity, usage and delivery with its persisted budget', async () => {

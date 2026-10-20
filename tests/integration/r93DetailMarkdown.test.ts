@@ -39,6 +39,29 @@ function finalScript(input: string, answer: string, detailMarkdown?: string): Fa
   }];
 }
 
+function finalDocumentScript(input: string, answer: string, document: { filename: string; purpose: string; markdown: string } | null): FakeTurnScript {
+  const resultKey = /resultKey=([^；\n]+)/.exec(input)?.[1] ?? /"resultKey":"(result_[^"]+)"/.exec(input)?.[1];
+  if (!resultKey) throw new Error('R96 fixture could not resolve resultKey');
+  return [{
+    kind: 'event',
+    event: {
+      kind: 'turn.completed',
+      finalText: JSON.stringify({
+        schemaVersion: TASK_COMPLETE_SCHEMA_VERSION,
+        resultKey,
+        responseKind: 'work',
+        answer,
+        document,
+        changeSummary: answer,
+        files: [],
+        executedVerifications: [],
+        unexecutedVerifications: [],
+        remainingIssues: [],
+      }),
+    },
+  }];
+}
+
 interface Fixture {
   dir: string;
   db: ZhongshuoDatabase;
@@ -163,6 +186,78 @@ describe('R93 complete Markdown detail and bounded downstream reading', () => {
       expect(JSON.parse(message.body_json).text).toBe('一句话结论。');
       expect(f.db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(message.id)).toEqual({ n: 0 });
       expect(f.db.prepare('SELECT count(*) n FROM real_calls').get()).toEqual({ n: 0 });
+    } finally {
+      await adapter?.closeAllSessions();
+      f.close();
+    }
+  });
+
+  it('stores one model-authored named document with exact bytes while document:null stays attachment-free', async () => {
+    const f = await fixture();
+    const document = { filename: '登录校验方案.md', purpose: '供用户复核实现与验证范围', markdown: '# 登录校验方案\n\n## 验证\n\nR96_DOCUMENT_TAIL\n' };
+    let calls = 0;
+    let adapter: FakeRuntimeAdapter | undefined;
+    try {
+      adapter = new FakeRuntimeAdapter({
+        turnScriptSequencer: ({ text }) => (calls++ === 0
+          ? finalDocumentScript(text, '实现结论：详见方案文档。', document)
+          : finalDocumentScript(text, '短交流不需要文档。', null)),
+      });
+      const worker = new DispatchWorker({ db: f.db, adapter, leaseOwner: 'r96-document', appDataDir: f.dir });
+      const sent = await submitRoom(f, '请给出一个可复核的实现方案');
+      await worker.runOnce();
+      const final = f.db.prepare("SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY rowid DESC LIMIT 1").get(sent.taskId) as { id: string; body_json: string };
+      const body = JSON.parse(final.body_json) as { text: string; document?: { filename: string; purpose: string; artifactId?: string; markdown?: string } };
+      expect(body.text).toBe('实现结论：详见方案文档。');
+      expect(body.document).toMatchObject({ filename: document.filename, purpose: document.purpose });
+      expect(body.document?.artifactId).toBeTruthy();
+      expect(body.document?.markdown).toBeUndefined();
+      const attachment = f.db.prepare(`SELECT ma.display_name,a.id artifact_id,a.source_name,a.hash,a.blob_path
+        FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(final.id) as
+        { display_name: string; artifact_id: string; source_name: string; hash: string; blob_path: string };
+      expect(attachment).toMatchObject({ display_name: document.filename, source_name: document.filename });
+      expect(body.document?.artifactId).toBe(attachment.artifact_id);
+      expect(readFileSync(attachment.blob_path, 'utf8')).toBe(document.markdown);
+      expect(attachment.hash).toBe(sha256(document.markdown));
+
+      const second = await submitRoom(f, '只聊天，不要文件');
+      await worker.runOnce();
+      const secondFinal = f.db.prepare("SELECT id,body_json FROM messages WHERE task_id=? AND author_type='agent' ORDER BY rowid DESC LIMIT 1").get(second.taskId) as { id: string; body_json: string };
+      expect((JSON.parse(secondFinal.body_json) as { document?: unknown }).document).toBeUndefined();
+      expect(f.db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(secondFinal.id)).toEqual({ n: 0 });
+    } finally {
+      await adapter?.closeAllSessions();
+      f.close();
+    }
+  });
+
+  it('does not inject runtimeControlResult.detailMarkdown when document:null is present', async () => {
+    const f = await fixture();
+    let calls = 0;
+    let adapter: FakeRuntimeAdapter | undefined;
+    try {
+      adapter = new FakeRuntimeAdapter({
+        turnScriptSequencer: ({ text }) => {
+          calls += 1;
+          return finalDocumentScript(text, calls === 1 ? '第一条短回复。' : '第二条短回复。', null);
+        },
+      });
+      const worker = new DispatchWorker({ db: f.db, adapter, leaseOwner: 'r96-null-precedence', appDataDir: f.dir });
+      const first = await submitRoom(f, '第一条');
+      await worker.runOnce();
+      const firstAgent = f.db.prepare("SELECT id FROM messages WHERE task_id=? AND author_type='agent' ORDER BY rowid DESC LIMIT 1").get(first.taskId) as { id: string };
+      const control = JSON.stringify({
+        schemaVersion: TASK_COMPLETE_SCHEMA_VERSION,
+        detailMarkdown: '# 旧格式完整详情\n\nR96_NESTED_OLD_DETAIL_MUST_NOT_BE_INJECTED',
+        document: null,
+      });
+      f.db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(JSON.stringify({ text: '第一条短回复。', runtimeControlResult: control }), firstAgent.id);
+
+      await submitThread(f, first.threadId, '引用上一条', firstAgent.id);
+      await worker.runOnce();
+      const rendered = renderTurnBundle(latestContext(f));
+      expect(rendered).toContain('引用上一条');
+      expect(rendered).not.toContain('R96_NESTED_OLD_DETAIL_MUST_NOT_BE_INJECTED');
     } finally {
       await adapter?.closeAllSessions();
       f.close();

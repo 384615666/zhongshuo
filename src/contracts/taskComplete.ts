@@ -1,6 +1,7 @@
 /** Browser-safe runtime result contract shared by dispatch and chat projection. */
 import {z} from 'zod';
 import {coordinationPlanSchema,memberHandoffSchema} from './coordination.ts';
+import {documentSchema} from './document.ts';
 
 export const TASK_COMPLETE_SCHEMA_VERSION='task-complete-v1';
 export const taskCompleteSchema=z.strictObject({
@@ -10,6 +11,8 @@ export const taskCompleteSchema=z.strictObject({
   answer:z.string().optional(),
   /** Short visible reply and its complete, human-readable Markdown detail. */
   detailMarkdown:z.string().optional(),
+  /** Optional model-authored document; null is a valid short-reply result. */
+  document:documentSchema.nullable().optional(),
   responseKind:z.enum(['conversation','work']).optional(),
   files:z.array(z.string()),
   executedVerifications:z.array(z.string()),
@@ -21,12 +24,12 @@ export const taskCompleteSchema=z.strictObject({
 export type TaskComplete=z.infer<typeof taskCompleteSchema>;
 
 export function taskCompleteOutputSchema(resultKey:string,planning=false){
-  const common=taskCompleteSchema.omit({coordinationPlan:true}).extend({
+  const common=taskCompleteSchema.omit({coordinationPlan:true,detailMarkdown:true,document:true}).extend({
     resultKey:z.literal(resultKey),
     answer:z.string(),
     // Provider structured-output schemas require every declared property. Keep it
-    // semantically optional by submitting an empty string for short answers.
-    detailMarkdown:z.string(),
+    // semantically optional through null when no document is useful.
+    document:documentSchema.nullable(),
     responseKind:z.enum(['conversation','work']),
     handoffs:z.array(memberHandoffSchema).max(4),
   });

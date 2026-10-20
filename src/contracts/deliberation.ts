@@ -7,6 +7,7 @@
  * （ADR-I39 教训：字段集足以让陌生模型一次写对）。
  */
 import { z } from 'zod';
+import { documentSchema } from './document.ts';
 
 // ---------- 名单与缺席（§4.3/E4） ----------
 
@@ -35,6 +36,24 @@ export const CHECKPOINT_VERDICT_SCHEMA_VERSION = 'checkpoint-verdict-v1';
 export const SYNTHESIS_SCHEMA_VERSION = 'synthesis-v1';
 export const RATIFY_SCHEMA_VERSION = 'ratify-v1';
 
+export const issueResolutionSchema = z.strictObject({
+  issueId: z.string().min(1),
+  status: z.enum(['resolved', 'needs_user', 'insufficient_evidence']),
+  reason: z.string().min(1),
+  question: z.string().optional(),
+  owner: z.string().optional(),
+});
+export type IssueResolution = z.infer<typeof issueResolutionSchema>;
+
+export const deliveryFeedbackSchema = z.strictObject({
+  status: z.enum(['ready', 'needs_revision', 'needs_user']),
+  reason: z.string().min(1),
+  revisionRequest: z.string().optional(),
+  question: z.string().optional(),
+  owner: z.string().optional(),
+});
+export type DeliveryFeedback = z.infer<typeof deliveryFeedbackSchema>;
+
 
 export const analysisClaimSchema = z.strictObject({
   claimId: z.string().min(1),
@@ -55,6 +74,7 @@ export const analysisDraftPayloadSchema = z.strictObject({
   schemaVersion: z.literal(ANALYSIS_DRAFT_SCHEMA_VERSION),
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
   claims: z.array(analysisClaimSchema).min(1),
   recommendations: z.array(z.string()),
   openQuestions: z.array(z.string()),
@@ -75,6 +95,7 @@ export const reviewPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CROSS_REVIEW_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
   reviews: z.array(z.strictObject({
     targetArtifactId: z.string().min(1),
     targetRevision: z.number().int().min(1),
@@ -92,6 +113,7 @@ export const issuePositionPayloadSchema = z.strictObject({
   schemaVersion: z.literal(ISSUE_POSITION_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
   positions: z.array(z.strictObject({
     issueId: z.string().min(1),
     stance: z.enum(['agree', 'disagree', 'needs_evidence']),
@@ -109,6 +131,7 @@ export const checkpointVerdictPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CHECKPOINT_VERDICT_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
   verdict: z.enum(['continue', 'stop']),
   reason: z.string().min(1),
   /** 值得继续追的新证据摘要（verdict=continue 时必填语义，schema 层不强制）。 */
@@ -121,6 +144,8 @@ export const synthesisPayloadSchema = z.strictObject({
   schemaVersion: z.literal(SYNTHESIS_SCHEMA_VERSION),
   summary: z.string().min(1),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
+  issueResolutions: z.array(issueResolutionSchema).optional(),
   claims: z.array(z.strictObject({
     statement: z.string().min(1),
     sourceRefs: z.array(z.string().min(1)),
@@ -139,6 +164,8 @@ export const ratifyPayloadSchema = z.strictObject({
   schemaVersion: z.literal(RATIFY_SCHEMA_VERSION),
   summary: z.string().min(1).optional(),
   detailMarkdown: z.string().optional(),
+  document: documentSchema.nullable().optional(),
+  deliveryFeedback: deliveryFeedbackSchema.optional(),
   responses: z.array(z.strictObject({
     claimId: z.string().min(1),
     stance: z.enum(['confirm', 'conditional', 'object', 'unconfirmed']),

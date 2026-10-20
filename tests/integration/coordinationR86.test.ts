@@ -130,19 +130,22 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const step=parseDelibStep(next.dispatch_key)!;
       const summary='阶段总览：完整证据与待确认事项见详情附件。';
       const detailMarkdown=`# 阶段完整详情\n\n${'这是需要完整保存但不应全部铺进聊天的证据。'.repeat(80)}\n\n待确认：R93_STAGE_CRITICAL_MARKER`;
+      const document={filename:'阶段证据.md',purpose:'保留完整阶段证据与待确认事项',markdown:detailMarkdown};
       await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
-        schemaVersion:'analysis-draft-v1',summary,detailMarkdown,
+        schemaVersion:'analysis-draft-v1',summary,document,
         claims:[{claimId:'c1',statement:'R93 阶段关键结论',kind:'proposal',evidenceIds:[]}],
         recommendations:['核对完整证据'],openQuestions:[],
       })}}]);
       const row=f.db.prepare(`SELECT id,body_json FROM messages
         WHERE thread_id=? AND json_extract(body_json,'$.collaborationStage.stage')='INDEPENDENT'
         ORDER BY rowid DESC LIMIT 1`).get(root.threadId) as {id:string;body_json:string};
-      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string;collaborationStage?:{stage:string}};
+      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string;document?:{filename?:string;purpose?:string;artifactId?:string;markdown?:string};collaborationStage?:{stage:string}};
       expect(body.collaborationStage?.stage).toBe('INDEPENDENT');
       expect(body.text).toBe(summary);
       expect(body.text).not.toContain('R93_STAGE_CRITICAL_MARKER');
       expect(body.detailMarkdown).toBeUndefined();
+      expect(body.document).toMatchObject({filename:'阶段证据.md',purpose:'保留完整阶段证据与待确认事项'});
+      expect(body.document?.artifactId).toBeTruthy();
       const attachment=f.db.prepare(`SELECT ma.id,a.id artifactId,a.kind,a.hash,a.blob_path,a.author_id
         FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as
         {id:string;artifactId:string;kind:string;hash:string;blob_path:string;author_id:string};
@@ -158,9 +161,9 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       expect(canonical).toHaveLength(1);
       expect(canonical[0]!.author_id).toBe(step.memberId);
       expect(canonical[0]!.id).not.toBe(attachment.artifactId);
-      const canonicalPayload=JSON.parse(readFileSync(canonical[0]!.blob_path,'utf8')) as {summary?:string;detailMarkdown?:string;claims?:unknown[]};
+      const canonicalPayload=JSON.parse(readFileSync(canonical[0]!.blob_path,'utf8')) as {summary?:string;document?:{filename?:string;purpose?:string;markdown?:string};claims?:unknown[]};
       expect(canonicalPayload.summary).toBe(summary);
-      expect(canonicalPayload.detailMarkdown).toBe(detailMarkdown);
+      expect(canonicalPayload.document).toEqual(document);
       expect(canonicalPayload.claims).toHaveLength(1);
     }finally{await f.adapter.closeAllSessions();f.db.close();}
   });
@@ -189,7 +192,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
             sourceRefs:['c1'],
           }));
           const detailMarkdown=`# 整合完整详情\n\n${disputed.map((item,index)=>`${index+1}. ${item.statement}\n   ${item.disagreementSummary}`).join('\n\n')}`;
-          value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',detailMarkdown,claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:disputed,recommendations:['下一步核实工程条件']};
+          value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',document:{filename:'整合方案.md',purpose:'保留全部整合分歧与执行建议',markdown:detailMarkdown},issueResolutions:[],claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:disputed,recommendations:['下一步核实工程条件']};
           synthesisStageSeen=true;
         }else if(step!.stage==='RAT'){
           value={schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm'}]};
@@ -200,9 +203,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const row=f.db.prepare(`SELECT id,body_json FROM messages
         WHERE thread_id=? AND json_extract(body_json,'$.collaborationStage.stage')='SYNTHESIS'
         ORDER BY rowid DESC LIMIT 1`).get(root.threadId) as {id:string;body_json:string};
-      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string};
+      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string;document?:{artifactId?:string;filename?:string}};
       expect(body.text).toBe('两位成员汇总的自然结论');
       expect(body.detailMarkdown).toBeUndefined();
+      expect(body.document?.artifactId).toBeTruthy();
       const attachment=f.db.prepare(`SELECT a.id artifactId,a.hash,a.blob_path FROM message_attachments ma
         JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as {artifactId:string;hash:string;blob_path:string};
       const fullDetail=readFileSync(attachment.blob_path,'utf8');
@@ -212,8 +216,8 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const ratify=listRunArtifacts(f.db,runId,'ratify_response');
       expect(frozen.length).toBeGreaterThan(0);
       expect(ratify.length).toBeGreaterThan(0);
-      const frozenPayload=JSON.parse(readFileSync(frozen[0]!.blob_path,'utf8')) as {detailMarkdown?:string;disputedClaims?:unknown[]};
-      expect(frozenPayload.detailMarkdown).toBe(fullDetail);
+      const frozenPayload=JSON.parse(readFileSync(frozen[0]!.blob_path,'utf8')) as {document?:{markdown?:string};disputedClaims?:unknown[]};
+      expect(frozenPayload.document?.markdown).toBe(fullDetail);
       expect(frozenPayload.disputedClaims).toHaveLength(5);
       for(const artifact of [...frozen,...ratify]){
         expect(createHash('sha256').update(readFileSync(artifact.blob_path)).digest('hex')).toBe(artifact.hash);

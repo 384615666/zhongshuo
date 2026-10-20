@@ -6,6 +6,7 @@ import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import {persistDetailMarkdown} from './detailMarkdownAttachments.ts';
+import type { DocumentArtifact } from '../contracts/document.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
 import { acquireLease } from './workspaceLocks.ts';
@@ -2168,7 +2169,8 @@ export class DispatchWorker {
           // R93: planning (coordinationPlan/handoffs) also needs its visible answer
           // and complete detail bound before any downstream child/queue is created.
           this.ensureStructuredFinalReply(task, turnId, finalText, result);
-          this.bindDetailMarkdown(task, runId, turnId, result);
+          if (Object.prototype.hasOwnProperty.call(result, 'document')) this.bindDocument(task, runId, turnId, result);
+          else this.bindDetailMarkdown(task, runId, turnId, result);
           if(result.handoffs?.length){
             const messages=acceptMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs);
             for(const message of messages){const recipient=this.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(message.toMemberId) as {display_name:string};this.insertThreadReply(task,turnId,message.id,`给 ${recipient.display_name}：\n${message.text}`);}
@@ -2721,6 +2723,27 @@ export class DispatchWorker {
    * 只在成功交付/成功答复路径调用；不是把失败/停止输出转成成功消息。
    */
   /** R93: bind one complete Markdown detail before DONE; on failure keep the full text in the final message. */
+  private bindDocument(task:TaskRow,runId:string,turnId:string,result:{document?:DocumentArtifact|null}):void{
+    const document=result.document;
+    if(document==null||document.markdown.trim().length===0)return;
+    const finalMessageId=this.kvGet(`final-message:${turnId}`);
+    const memberId=(this.db.prepare('SELECT member_id FROM agent_turns WHERE id=?').get(turnId) as {member_id:string}|undefined)?.member_id;
+    if(memberId==null||finalMessageId==null)return;
+    this.db.prepare(`UPDATE messages SET body_json=json_set(body_json,'$.document',json(?)) WHERE id=?`).run(JSON.stringify(document),finalMessageId);
+    const outcome=persistDetailMarkdown({
+      db:this.db,appDataDir:this.appDataDir,projectId:task.project_id,conversationId:task.conversation_id,
+      threadId:task.conversation_thread_id,taskId:task.id,runId,turnId,messageId:finalMessageId,memberId,
+      filename:document.filename,markdown:document.markdown,
+    });
+    if(outcome.status==='ready'){
+      this.db.prepare(`UPDATE messages SET body_json=json_set(json_remove(body_json,'$.document.markdown'),'$.document.artifactId',?) WHERE id=?`).run(outcome.artifactId,finalMessageId);
+      this.audit(task,runId,turnId,'turn.document',{status:'ready',artifactId:outcome.artifactId,attachmentId:outcome.attachmentId,filename:outcome.filename,hash:outcome.hash,bytes:outcome.bytes,reused:outcome.reused});
+      return;
+    }
+    this.audit(task,runId,turnId,'turn.document',{status:'inline-fallback',code:outcome.status==='too-large'?'TOO_LARGE':outcome.code,message:outcome.message,bytes:Buffer.byteLength(document.markdown,'utf8')});
+  }
+
+  /** R93 legacy: older stored TaskComplete payloads may carry detailMarkdown without document. */
   private bindDetailMarkdown(task:TaskRow,runId:string,turnId:string,result:{detailMarkdown?:string}):void{
     const markdown=result.detailMarkdown;
     if(typeof markdown!=='string'||markdown.trim().length===0)return;
@@ -2750,9 +2773,12 @@ export class DispatchWorker {
     }
   }
 
-  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string; detailMarkdown?: string }): void {
+  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string; detailMarkdown?: string; document?: DocumentArtifact|null }): void {
+    const hasDocumentField = Object.prototype.hasOwnProperty.call(result, 'document');
     const visible = (result.answer ?? '').trim() || result.changeSummary.trim()
-      || (result.detailMarkdown?.trim() ? '完整详情见下方 Markdown 附件。' : '');
+      || (hasDocumentField
+        ? (result.document?.markdown.trim() ? `文档：${result.document.filename}` : '')
+        : (result.detailMarkdown?.trim() ? '完整详情见下方 Markdown 附件。' : ''));
     if (visible.length === 0) return;
     const key = `final-message:${turnId}`;
     const expectedResultKey = `result_${turnId}`;

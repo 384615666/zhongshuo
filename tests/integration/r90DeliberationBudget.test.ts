@@ -51,7 +51,7 @@ describe('R90 task-frozen deliberation budget', () => {
       for (const memberId of [firstMember.memberId, secondMember.memberId]) {
         await cmd('room.members.set', { roomId: room.id, memberId, action: 'add' });
       }
-      expect(deriveDeliberateMaxTurns(2, { expectsCheckpointRound3: true }).core).toBe(14);
+      expect(deriveDeliberateMaxTurns(2, { expectsCheckpointRound3: true }).withRevision).toBe(17);
 
       const target = {
         kind: 'room_root' as const,
@@ -85,7 +85,7 @@ describe('R90 task-frozen deliberation budget', () => {
         { expected: 10, sent: await submit(10) },
         { expected: 14, sent: await submit(14) },
         { expected: 20, sent: await submit(20) },
-        { expected: 14, sent: await submit() },
+        { expected: 17, sent: await submit() },
       ];
       const runIds: string[] = [];
       for (const item of cases) {
@@ -134,7 +134,7 @@ describe('R90 task-frozen deliberation budget', () => {
       expect(new Set(runIds).size).toBe(4);
       expect(db.prepare(
         'SELECT count(DISTINCT budget_json) n FROM workflow_runs WHERE mode=?',
-      ).get('DELIBERATE')).toEqual({ n: 3 });
+      ).get('DELIBERATE')).toEqual({ n: 4 });
       const firstRun = db.prepare(
         "SELECT budget_json FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE'",
       ).get(cases[0]!.sent.taskId) as { budget_json: string };

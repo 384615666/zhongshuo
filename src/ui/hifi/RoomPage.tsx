@@ -80,12 +80,22 @@ export function RoomPage({ roomId }: { roomId: string }) {
           >
             <div className="root-card-head" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {c.taskId != null && c.roomTaskNumber != null ? <span className="root-task-no">#{c.roomTaskNumber}</span> : <Tag tone="neutral" icon="message-square">记录 · 无任务号</Tag>}
-              {c.taskId != null && c.taskStatus != null ? <Tag tone={TASK_STATUS[c.taskStatus]?.tone ?? 'neutral'} icon="activity">{TASK_STATUS[c.taskStatus]?.label ?? c.taskStatus}</Tag> : null}
+              {c.taskId != null && c.taskStatus != null && (c.taskStatus === 'REVIEW' || c.taskStatus === 'ACTIVE' || c.delivery == null) ? <Tag tone={TASK_STATUS[c.taskStatus]?.tone ?? 'neutral'} icon="activity">{TASK_STATUS[c.taskStatus]?.label ?? c.taskStatus}</Tag> : null}
+              {c.taskId != null && c.delivery != null && c.delivery.status !== 'delivered' ? <Tag tone={c.delivery.status === 'blocked' || c.delivery.status === 'needs_user' ? 'warning' : 'neutral'} icon="activity">{c.delivery.status === 'delivered_with_questions' ? '已交付 · 有待确认' : c.delivery.status === 'needs_user' ? '等待你补充' : c.delivery.status === 'blocked' ? '交付未完成' : '旧格式 · 结束'}</Tag> : null}
               {c.unread > 0 ? <Tag tone="info" icon="message-square">{c.unread} 条未读</Tag> : null}
               <span style={{ flex: 1 }} />
               <span className="small faint">{c.createdAt > 0 ? new Date(c.createdAt).toLocaleString() : '时间未知'}</span>
             </div>
             <div className="root-body clamp-2" style={{ marginTop: 4 }}>{c.body || '（正文不可得——如实标注）'}</div>
+            {c.delivery?.feedback?.find((item) => item.status === 'needs_revision' || item.status === 'needs_user') ? (
+              <div className="small faint" style={{ marginTop: 4 }}>
+                {(() => {
+                  const item = c.delivery!.feedback!.find((entry) => entry.status === 'needs_revision')
+                    ?? c.delivery!.feedback!.find((entry) => entry.status === 'needs_user')!;
+                  return item.question ? `${item.question}${item.owner ? `（责任方：${item.owner}）` : ''}` : item.revisionRequest;
+                })()}
+              </div>
+            ) : null}
             <div className="root-foot" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
               <button
                 type="button"

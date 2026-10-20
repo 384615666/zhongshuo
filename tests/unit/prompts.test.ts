@@ -81,6 +81,16 @@ describe('层 A：常驻提示词渲染（规格 §3/§5.1）', () => {
     expect(r1.ok && r2.ok && r1.value.templateHash).toBe(r2.ok ? r2.value.templateHash : '');
     expect(STANDING_PROMPT_TEMPLATE).toContain('指令层级');
   });
+
+  it('standing prompt carries shortest-useful chat, nullable document and concrete handoff rules', () => {
+    const r = renderStandingPrompt({ vars: STANDING_VARS, conversationKind: 'room' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.text).toContain('最短有用');
+    expect(r.value.text).toContain('document');
+    expect(r.value.text).toContain('停止前');
+    expect(r.value.text).toContain('具体交接');
+  });
 });
 
 describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
@@ -131,12 +141,17 @@ describe('TaskComplete 输出契约（规格 §4.4：版本不可变、strict）
     expect(taskCompleteSchema.safeParse(valid).success).toBe(true);
   });
 
-  it('accepts one optional complete detailMarkdown while old outputs remain valid', () => {
+  it('accepts nullable model document while keeping legacy detailMarkdown storage compatible', () => {
     expect(taskCompleteSchema.safeParse({ ...valid, answer: '短结论', detailMarkdown: '# 完整详情\n\n证据。' }).success).toBe(true);
     expect(taskCompleteSchema.safeParse(valid).success).toBe(true);
     expect(taskCompleteSchema.safeParse({ ...valid, detailMarkdown: 123 }).success).toBe(false);
+    const document = { filename: '登录校验方案.md', purpose: '记录实际实现与验证', markdown: '# 登录校验方案\n\n证据。' };
+    expect(taskCompleteSchema.safeParse({ ...valid, document }).success).toBe(true);
+    expect(taskCompleteSchema.safeParse({ ...valid, document: null }).success).toBe(true);
+    expect(taskCompleteSchema.safeParse({ ...valid, document: { ...document, filename: '../登录.md' } }).success).toBe(false);
     const providerSchema = taskCompleteOutputSchema('result_test') as { required?: string[] };
-    expect(providerSchema.required).toContain('detailMarkdown');
+    expect(providerSchema.required).toContain('document');
+    expect(providerSchema.required).not.toContain('detailMarkdown');
   });
 
   it('缺项（未执行验证无理由）→ 拒绝', () => {

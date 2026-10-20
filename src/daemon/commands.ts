@@ -706,6 +706,78 @@ function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[])
   return out;
 }
 
+interface DeliveryFactProjection {
+  status: string;
+  overallConsensus: string | null;
+  unresolvedIssues: unknown[];
+  feedback: unknown[];
+  issueResolutions: unknown[];
+}
+
+function deliveryFactsOfTask(db: ZhongshuoDatabase, taskId: string): DeliveryFactProjection | null {
+  const task = db.prepare('SELECT current_delivery_id FROM tasks WHERE id = ?').get(taskId) as { current_delivery_id: string | null } | undefined;
+  if (task == null) return null;
+  const latestRun = db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(taskId) as { id: string; status: string } | undefined;
+  const currentDelivery = task.current_delivery_id == null ? undefined : db.prepare(
+    'SELECT run_id, artifact_refs_json FROM task_deliveries WHERE id = ? AND task_id = ?',
+  ).get(task.current_delivery_id, taskId) as { run_id: string | null; artifact_refs_json: string } | undefined;
+  const latestActive = latestRun != null && ['QUEUED', 'RUNNING', 'WAITING', 'STOPPING'].includes(latestRun.status);
+  // A new run's active facts must not be masked by the previous delivered run.
+  if (latestActive && currentDelivery != null && currentDelivery.run_id !== latestRun.id) return null;
+  const currentDeliveryIsLatest = currentDelivery != null && (latestRun == null || currentDelivery.run_id === latestRun.id);
+  let report: { blob_path: string } | undefined;
+  if (currentDeliveryIsLatest) {
+    let artifactId: string | null = null;
+    try {
+      const refs = JSON.parse(currentDelivery.artifact_refs_json) as unknown;
+      if (Array.isArray(refs)) artifactId = refs.find((ref): ref is string => typeof ref === 'string' && ref.startsWith('artifact:'))?.slice('artifact:'.length) ?? null;
+    } catch { /* malformed delivery refs are surfaced as no report, never guessed */ }
+    if (artifactId != null) {
+      report = db.prepare("SELECT blob_path FROM artifacts WHERE id = ? AND task_id = ? AND kind = 'final_report'").get(artifactId, taskId) as { blob_path: string } | undefined;
+    }
+  }
+  if (report == null && latestRun != null) {
+    report = db.prepare("SELECT blob_path FROM artifacts WHERE task_id = ? AND run_id = ? AND kind = 'final_report' ORDER BY rowid DESC LIMIT 1").get(taskId, latestRun.id) as { blob_path: string } | undefined;
+  }
+  // Never fall back to a previous delivery when a newer run exists. A failed,
+  // cancelled, interrupted, or otherwise report-less latest run must surface as
+  // no delivery instead of silently reviving the older task delivery.
+  if (report == null && currentDelivery?.run_id != null
+    && (latestRun == null || currentDelivery.run_id === latestRun.id)) {
+    report = db.prepare("SELECT blob_path FROM artifacts WHERE task_id = ? AND run_id = ? AND kind = 'final_report' ORDER BY rowid DESC LIMIT 1").get(taskId, currentDelivery.run_id) as { blob_path: string } | undefined;
+  }
+  if (report == null) return null;
+  try {
+    const payload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as Record<string, unknown>;
+    const status = payload.deliveryStatus === 'delivered' || payload.deliveryStatus === 'delivered_with_questions'
+      || payload.deliveryStatus === 'needs_user' || payload.deliveryStatus === 'blocked' || payload.deliveryStatus === 'legacy'
+      ? payload.deliveryStatus : 'legacy';
+    return {
+      status,
+      overallConsensus: typeof payload.overallConsensus === 'string' ? payload.overallConsensus : null,
+      unresolvedIssues: Array.isArray(payload.unresolvedIssues) ? payload.unresolvedIssues : [],
+      feedback: Array.isArray(payload.deliveryFeedback) ? payload.deliveryFeedback : [],
+      issueResolutions: Array.isArray(payload.issueResolutions) ? payload.issueResolutions : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function budgetProjection(json: string | null): { runMaxTurns: number; usedTurns: number; remainingTurns: number; tailReserved: number } | null {
+  if (json == null) return null;
+  try {
+    const value = JSON.parse(json) as { runMaxTurns?: unknown; usedTurns?: unknown; inFlightReservedTurns?: unknown; tailReservationByStage?: { SYNTHESIS?: unknown; RATIFY?: unknown } };
+    if (typeof value.runMaxTurns !== 'number' || typeof value.usedTurns !== 'number') return null;
+    const inFlight = typeof value.inFlightReservedTurns === 'number' ? value.inFlightReservedTurns : 0;
+    const tail = (typeof value.tailReservationByStage?.SYNTHESIS === 'number' ? value.tailReservationByStage.SYNTHESIS : 0)
+      + (typeof value.tailReservationByStage?.RATIFY === 'number' ? value.tailReservationByStage.RATIFY : 0);
+    return { runMaxTurns: value.runMaxTurns, usedTurns: value.usedTurns, remainingTurns: Math.max(0, value.runMaxTurns - value.usedTurns - inFlight), tailReserved: tail };
+  } catch {
+    return null;
+  }
+}
+
 /** 就地为驼峰历史条目（thread.history items）填 attachments 摘要。 */
 function attachMessageSummaries(db: ZhongshuoDatabase, items: Array<{ id: string; attachments?: unknown }>): void {
   const byMsg = messageAttachmentSummaries(db, items.map((i) => i.id));
@@ -1487,7 +1559,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         assertTaskAudience(deps.db, deps.localUserId, params.taskId); // 按 ID 直查不绕过私信边界（第三十二轮一）
         const task = deps.db.prepare('SELECT id, title, objective, status, project_id, conversation_id, room_id, conversation_thread_id, room_task_number, owner_member_id, parent_task_id, review_policy, current_delivery_id, response_kind, route_json, deliberation_budget_json, revision, stop_generation FROM tasks WHERE id = ?').get(params.taskId) as Record<string, unknown> | undefined;
         if (task == null) return withCommandId({ ok: false, error: { code: 'RESOURCE_NOT_FOUND', message: '任务不存在', retryable: false } });
-        const activeRun = deps.db.prepare('SELECT id, status FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string; status: string } | undefined;
+        const activeRun = deps.db.prepare('SELECT id, status, budget_json FROM workflow_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(params.taskId) as { id: string; status: string; budget_json: string | null } | undefined;
         // 待验收交付（第九轮：验收操作绑定具体版本——UI 展示与提交同源）。
         const pendingDelivery = deps.db.prepare(`SELECT id, revision, manifest_hash FROM task_deliveries WHERE task_id = ? AND review_status = 'pending' LIMIT 1`).get(params.taskId) as { id: string; revision: number; manifest_hash: string } | undefined;
         // 最近一次启动失败原因（第十六轮四：验收防护拒绝等如实上屏——「待处理/失败」无解释=用户不可知）。
@@ -1513,7 +1585,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
           } catch { /* corrupt task snapshot is surfaced as null, never guessed */ }
         }
-        return withCommandId({ ok: true, data: { task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation, deliberationBudget }, activeRun: activeRun ?? null, pendingDelivery: pendingDelivery ?? null, reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued }, ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
+        return withCommandId({ ok: true, data: {
+          task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation, deliberationBudget },
+          activeRun: activeRun == null ? null : { id: activeRun.id, status: activeRun.status, budget: budgetProjection(activeRun.budget_json) },
+          delivery: deliveryFactsOfTask(deps.db, params.taskId),
+          pendingDelivery: pendingDelivery ?? null,
+          reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued },
+          ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'task.history':
       case 'task.details': {
@@ -1630,7 +1708,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             throw new DaemonCommandError('VALIDATION_INVALID','独立研讨仅适用于房间新话题或回复串；当前草稿保留');
           }
           const maxTurns = requestedDeliberationBudget?.maxTurns
-            ?? deriveDeliberateMaxTurns(frozenMemberCount, { expectsCheckpointRound3: true }).core;
+            ?? deriveDeliberateMaxTurns(frozenMemberCount, { expectsCheckpointRound3: true }).withRevision;
           assertFrozenDeliberationBudget(maxTurns, frozenMemberCount);
         }
         // 重放守卫（第三十一轮一）：旧回执不绕过当前状态——重放同号同参请求时若目标
@@ -1739,7 +1817,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                   throw new DaemonCommandError('VALIDATION_INVALID','本次未形成有效的回复串独立研讨名单；请至少选择两位当前串内可用 AI，草稿保留');
                 }
                 const maxTurns=requestedDeliberationBudget?.maxTurns
-                  ??deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).core;
+                  ??deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).withRevision;
                 assertFrozenDeliberationBudget(maxTurns,selection.route.frozenMemberIds.length);
                 threadDeliberationBudget={maxTurns};
               }
@@ -1837,7 +1915,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             const rosterSize = route.value.frozenMemberIds.length;
             const maxTurns = requestedDeliberationBudget?.maxTurns
-              ?? deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).core;
+              ?? deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).withRevision;
             assertFrozenDeliberationBudget(maxTurns, rosterSize);
             frozenDeliberationBudget = { maxTurns };
           }
@@ -4859,9 +4937,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                   m.body_json, m.created_at, m.author_type, m.author_id,
                   tk.status AS task_status, tk.response_kind AS task_response_kind, tk.room_task_number, tk.title AS task_title,
                   tk.objective AS task_objective, tk.review_policy AS task_review_policy, tk.revision AS task_revision,
-                  tk.owner_member_id AS task_owner, tk.route_json AS task_route
+                  tk.owner_member_id AS task_owner, tk.route_json AS task_route, tk.deliberation_budget_json AS task_budget_json
                   ,(SELECT r.id FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_id
                   ,(SELECT r.status FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_status
+                  ,(SELECT r.budget_json FROM workflow_runs r WHERE r.task_id = tk.id ORDER BY r.rowid DESC LIMIT 1) AS latest_run_budget_json
            FROM conversation_threads t
            JOIN messages m ON m.id = t.anchor_message_id
            LEFT JOIN tasks tk ON tk.id = t.root_task_id AND tk.room_id = t.room_id AND tk.kind = 'room_task'
@@ -4870,8 +4949,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         ).all(params.roomId, roomScope.conversation_id, limit) as Array<{
           id: string; anchor_message_id: string; root_task_id: string | null; last_message_seq: number; revision: number;
           body_json: string; created_at: number; author_type: string; author_id: string; task_status: string | null; task_response_kind:'conversation'|'work'|null; room_task_number: number | null; task_title: string | null;
-          task_objective: string | null; task_review_policy: 'auto_deliver' | 'user_review' | null; task_revision: number | null; task_owner: string | null; task_route: string | null;
-          latest_run_id: string | null; latest_run_status: string | null;
+          task_objective: string | null; task_review_policy: 'auto_deliver' | 'user_review' | null; task_revision: number | null; task_owner: string | null; task_route: string | null; task_budget_json: string | null;
+          latest_run_id: string | null; latest_run_status: string | null; latest_run_budget_json: string | null;
         }>;
         const attachments = messageAttachmentSummaries(deps.db, threads.map((t) => t.anchor_message_id));
         const items = [];
@@ -4901,6 +4980,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             taskObjective: t.task_objective, taskReviewPolicy: t.task_review_policy, taskRevision: t.task_revision,
             ownerMemberId: t.task_owner, taskMode: taskModeFromRoute(t.task_route),
             latestRun: t.latest_run_id != null && t.latest_run_status != null ? { id: t.latest_run_id, status: t.latest_run_status } : null,
+            nextInputBudget: t.task_budget_json != null ? (() => { try { const v=JSON.parse(t.task_budget_json) as {maxTurns?:unknown}; return typeof v.maxTurns==='number' ? { maxTurns: v.maxTurns } : null; } catch { return null; } })() : null,
+            currentRunBudget: budgetProjection(t.latest_run_budget_json),
+            delivery: deliveryFactsOfTask(deps.db, t.root_task_id ?? ''),
           });
         }
         return withCommandId({ ok: true, data: { items } });

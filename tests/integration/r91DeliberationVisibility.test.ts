@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
 import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import {
+  assembleStepInput,
   onStepOutput,
   type DelibStep,
   type DeliberationOptions,
@@ -95,6 +96,7 @@ interface VisibleMessageRow {
 interface CollaborationStageBody {
   text: string;
   detailMarkdown?: string;
+  document?: { filename?: string; purpose?: string; markdown?: string; artifactId?: string };
   collaborationStage: { stage: string; roundNo: number; turnId: string; runId: string };
 }
 
@@ -288,13 +290,14 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     db.close();
   });
 
-  it('R95：模型 summary 逐字显示，detailMarkdown 逐字托管且 canonical 保留完整载荷', () => {
+  it('R96：模型 summary 逐字显示，有业务名称的 document 逐字托管且 canonical 保留完整载荷', () => {
     const db = openDatabase(':memory:');
     const blobDir = freshBlobDir();
     seed(db);
     addTurn(db, { id: 'turn_ind_r95', stageKey: 'delib.independent' });
     const summary = '模型总览：关键条件与待确认事项见详情。\n第二行保持原样  ';
     const detailMarkdown = '  \n# 模型完整详情\n\n1. A1 字段保持业务编号\n2. 查询条件不是程序摘录依据\n\n日期：2026-10-20\n\nR95_DETAIL_TAIL  ';
+    const document = { filename: '独立分析方案.md', purpose: '供用户复核独立分析结论', markdown: detailMarkdown };
 
     const out = onStepOutput(db, {
       taskId: TASK,
@@ -304,7 +307,7 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
       finalText: JSON.stringify({
         schemaVersion: 'analysis-draft-v1',
         summary,
-        detailMarkdown,
+        document,
         claims: [{ claimId: 'c1', statement: '结论', kind: 'proposal', evidenceIds: [], uncertainty: '' }],
         recommendations: [],
         openQuestions: [],
@@ -318,21 +321,25 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     const body = bodyOf(row);
     expect(body.text).toBe(summary);
     expect(body.detailMarkdown).toBeUndefined();
-    const attachment = db.prepare(`SELECT ma.id,a.hash,a.blob_path FROM message_attachments ma
-      JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as { id: string; hash: string; blob_path: string };
+    expect(body.document).toMatchObject({ filename: document.filename, purpose: document.purpose });
+    expect(typeof body.document?.artifactId).toBe('string');
+    expect(body.document?.markdown).toBeUndefined();
+    const attachment = db.prepare(`SELECT ma.id,ma.display_name,a.hash,a.blob_path FROM message_attachments ma
+      JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as { id: string; display_name: string; hash: string; blob_path: string };
     expect(attachment.id.startsWith('matt_detail_')).toBe(true);
+    expect(attachment.display_name).toBe(document.filename);
     const hosted = readFileSync(attachment.blob_path, 'utf8');
     expect(hosted).toBe(detailMarkdown);
     expect(attachment.hash).toBe(createHash('sha256').update(Buffer.from(detailMarkdown, 'utf8')).digest('hex'));
 
     const canonical = listRunArtifacts(db, RUN, 'analysis_draft')[0]!;
-    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { summary?: string; detailMarkdown?: string };
+    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { summary?: string; document?: { filename?: string; purpose?: string; markdown?: string } };
     expect(canonicalPayload.summary).toBe(summary);
-    expect(canonicalPayload.detailMarkdown).toBe(detailMarkdown);
+    expect(canonicalPayload.document).toEqual(document);
     db.close();
   });
 
-  it('R95：空 detailMarkdown 只显示模型 summary，不生成空附件，也不补写详情', () => {
+  it('R96：document:null 优先于旧 detailMarkdown，短回复零附件', () => {
     const db = openDatabase(':memory:');
     const blobDir = freshBlobDir();
     seed(db);
@@ -346,7 +353,8 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
       finalText: JSON.stringify({
         schemaVersion: 'analysis-draft-v1',
         summary,
-        detailMarkdown: '',
+        document: null,
+        detailMarkdown: '# 旧字段不得生成新附件',
         claims: [{ claimId: 'c1', statement: '简短结论', kind: 'observed', evidenceIds: [] }],
         recommendations: [],
         openQuestions: [],
@@ -360,12 +368,13 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     expect(bodyOf(row).text).toBe(summary);
     expect(db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(row.id)).toEqual({ n: 0 });
     const canonical = listRunArtifacts(db, RUN, 'analysis_draft')[0]!;
-    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { detailMarkdown?: string };
-    expect(canonicalPayload.detailMarkdown).toBe('');
+    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { document?: unknown; detailMarkdown?: string };
+    expect(canonicalPayload.document).toBeNull();
+    expect(canonicalPayload.detailMarkdown).toBe('# 旧字段不得生成新附件');
     db.close();
   });
 
-  it('R95：全空白 summary 不作为模型总览，回退完整 legacy 正文且不伪造详情', () => {
+  it('R96：全空白 summary 不作为模型总览，回退完整 legacy 正文且不伪造详情', () => {
     const db = openDatabase(':memory:');
     const blobDir = freshBlobDir();
     seed(db);
@@ -378,7 +387,7 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
       finalText: JSON.stringify({
         schemaVersion: 'analysis-draft-v1',
         summary: '   ',
-        detailMarkdown: '# 不应作为宿主详情',
+        document: { filename: '不应生成.md', purpose: '不应生成', markdown: '# 不应作为宿主详情' },
         claims: [{ claimId: 'c1', statement: 'legacy 正文保留', kind: 'observed', evidenceIds: [] }],
         recommendations: [],
         openQuestions: [],
@@ -394,6 +403,83 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     expect(body.text).toContain('legacy 正文保留');
     expect(body.text).not.toBe('   ');
     expect(db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(row.id)).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it('R96：resolved issue 必须覆盖冻结 expected 成员的本轮立场，缺席/旧立场不能冒充 resolved', () => {
+    const db = openDatabase(':memory:');
+    const blobDir = freshBlobDir();
+    seed(db, { runStage: 'ISSUE_DISCUSSION' });
+    const issue = insertIssues(db, RUN, [{ issueId: 'iss_r96_old_vote', statement: '是否接受方案', evidenceRefs: [] }], 1);
+    expect(issue.ok).toBe(true);
+    if (!issue.ok) throw new Error(issue.error.message);
+    db.prepare('INSERT INTO positions (issue_id,issue_revision,member_id,stance,conditions_json,source_artifact_id) VALUES (?,?,?,?,NULL,NULL)').run('iss_r96_old_vote', 1, 'm1', 'agree');
+    db.prepare('INSERT INTO positions (issue_id,issue_revision,member_id,stance,conditions_json,source_artifact_id) VALUES (?,?,?,?,NULL,NULL)').run('iss_r96_old_vote', 1, 'm2', 'agree');
+    db.prepare('INSERT INTO positions (issue_id,issue_revision,member_id,stance,conditions_json,source_artifact_id) VALUES (?,?,?,?,NULL,NULL)').run('iss_r96_old_vote', 2, 'm1', 'agree');
+    addTurn(db, { id: 'turn_syn_r96_issue', stageKey: 'delib.synthesis' });
+    const out = onStepOutput(db, {
+      taskId: TASK,
+      runId: RUN,
+      step: { taskId: TASK, runId: RUN, stage: 'SYN', memberId: 'm1', roundNo: 0, purpose: 'stage_work' },
+      turnId: 'turn_syn_r96_issue',
+      finalText: JSON.stringify({
+        schemaVersion: 'synthesis-v1',
+        summary: '尝试错误标记已解决',
+        document: null,
+        issueResolutions: [{ issueId: 'iss_r96_old_vote', status: 'resolved', reason: '错误地只看最新一条同意' }],
+        claims: [{ statement: '结论', sourceRefs: ['c1'] }],
+        disputedClaims: [],
+        recommendations: [],
+      }),
+      options: options(blobDir),
+      now: 1_400,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(out.error.message);
+    expect(out.value.counted).toBe(false);
+    expect(out.value.needsRepair).toContain('没有本轮成员明确同意');
+    expect(db.prepare("SELECT status FROM issues WHERE id='iss_r96_old_vote'").get()).toEqual({ status: 'open' });
+    expect(listRunArtifacts(db, RUN, 'synthesis')).toHaveLength(0);
+    db.close();
+  });
+
+  it('R96：CR/SYN 输入携带冻结初稿的 document 全文、建议和未决问题，IND 不泄漏', () => {
+    const db = openDatabase(':memory:');
+    const blobDir = freshBlobDir();
+    seed(db);
+    const base = {
+      schemaVersion: 'analysis-draft-v1',
+      summary: '初稿',
+      issueResolutions: [],
+      claims: [{ claimId: 'c1', statement: '结论', kind: 'observed', evidenceIds: [] }],
+      recommendations: ['建议甲'],
+      openQuestions: ['问题甲'],
+    };
+    publishSeedArtifact(db, blobDir, {
+      artifactId: 'art_r96_m1_doc', authorId: 'm1', kind: 'analysis_draft', revision: 1,
+      payload: { ...base, summary: '甲初稿', document: { filename: '甲方案.md', purpose: '甲用途', markdown: '# 甲全文\n\nR96_M1_DOC_FULL' }, recommendations: ['建议甲'], openQuestions: ['问题甲'] },
+    });
+    publishSeedArtifact(db, blobDir, {
+      artifactId: 'art_r96_m2_doc', authorId: 'm2', kind: 'analysis_draft', revision: 1,
+      payload: { ...base, summary: '乙初稿', document: { filename: '乙方案.md', purpose: '乙用途', markdown: '# 乙全文\n\nR96_M2_DOC_FULL' }, recommendations: ['建议乙'], openQuestions: ['问题乙'] },
+    });
+    const ind = assembleStepInput(db, { taskId: TASK, runId: RUN, step: indStep() });
+    expect(ind.ok).toBe(true);
+    if (!ind.ok) throw new Error(ind.error.message);
+    expect(ind.value.text).not.toContain('R96_M1_DOC_FULL');
+    expect(ind.value.text).not.toContain('R96_M2_DOC_FULL');
+    const cr = assembleStepInput(db, { taskId: TASK, runId: RUN, step: { ...indStep(), stage: 'CR', memberId: 'm1' } });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) throw new Error(cr.error.message);
+    expect(cr.value.text).toContain('R96_M2_DOC_FULL');
+    expect(cr.value.text).toContain('建议乙');
+    expect(cr.value.text).toContain('问题乙');
+    expect(cr.value.text).not.toContain('R96_M1_DOC_FULL');
+    const syn = assembleStepInput(db, { taskId: TASK, runId: RUN, step: { ...indStep(), stage: 'SYN' } });
+    expect(syn.ok).toBe(true);
+    if (!syn.ok) throw new Error(syn.error.message);
+    expect(syn.value.text).toContain('R96_M1_DOC_FULL');
+    expect(syn.value.text).toContain('R96_M2_DOC_FULL');
     db.close();
   });
 

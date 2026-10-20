@@ -15,7 +15,7 @@ import { setState, getState, toast, recordWrite, canMarkRead, canMarkThreadRead,
 import type { HifiState, PendingSendEnvelope, ThreadTaskDetail } from './data/store';
 import type {ThreadMembersSnapshot} from '../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../contracts/runtimeProgress';
-import type { CollaborationStage, Message, Task, Thread, ThreadCard } from './data/types';
+import type { CollaborationStage, CurrentRunBudget, DeliveryFact, DocumentView, FormalAttachmentSummary, Message, Task, Thread, ThreadCard } from './data/types';
 import { deriveDeliberateMaxTurns } from '../../contracts/deliberation.ts';
 import { routeForResolved, type ResolvedDeepLink } from './lib/deepLink';
 import { currentNavSeq, navigate } from './lib/router';
@@ -27,9 +27,9 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
-export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }> }
+export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[] }
 import {chatAnswer} from '../../contracts/chatAnswer';
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string; deliberationBudget?: { maxTurns: number } }
@@ -103,15 +103,83 @@ function parsedHistoryBody(m: HistoryMessage): unknown {
 /** Raw detail is the visible fallback when the app-managed MD attachment could not be registered. */
 function detailMarkdownOfBody(body: unknown): string | undefined {
   if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
-  const value = body as { detailMarkdown?: unknown; runtimeControlResult?: unknown };
+  const value = body as { detailMarkdown?: unknown; document?: unknown; runtimeControlResult?: unknown };
+  if (Object.prototype.hasOwnProperty.call(value, 'document')) {
+    if (value.document != null && typeof value.document === 'object' && !Array.isArray(value.document)) {
+      const markdown = (value.document as { markdown?: unknown }).markdown;
+      if (typeof markdown === 'string' && markdown.trim().length > 0) return markdown;
+    }
+    return undefined;
+  }
   if (typeof value.detailMarkdown === 'string' && value.detailMarkdown.trim().length > 0) return value.detailMarkdown;
   if (typeof value.runtimeControlResult === 'string') {
     try {
-      const parsed = JSON.parse(value.runtimeControlResult) as { detailMarkdown?: unknown };
+      const parsed = JSON.parse(value.runtimeControlResult) as { detailMarkdown?: unknown; document?: unknown };
+      if (Object.prototype.hasOwnProperty.call(parsed, 'document')) {
+        if (parsed.document != null && typeof parsed.document === 'object' && !Array.isArray(parsed.document)) {
+          const markdown = (parsed.document as { markdown?: unknown }).markdown;
+          if (typeof markdown === 'string' && markdown.trim().length > 0) return markdown;
+        }
+        return undefined;
+      }
       if (typeof parsed.detailMarkdown === 'string' && parsed.detailMarkdown.trim().length > 0) return parsed.detailMarkdown;
     } catch { /* natural text */ }
   }
   return undefined;
+}
+
+function documentOfBody(body: unknown): DocumentView | undefined {
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const value = (body as { document?: unknown }).document;
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const doc = value as { filename?: unknown; purpose?: unknown; markdown?: unknown; artifactId?: unknown };
+  if (typeof doc.filename !== 'string' || doc.filename.length === 0 || typeof doc.purpose !== 'string' || doc.purpose.length === 0) return undefined;
+  return {
+    filename: doc.filename,
+    purpose: doc.purpose,
+    ...(typeof doc.markdown === 'string' ? { markdown: doc.markdown } : {}),
+    ...(typeof doc.artifactId === 'string' && doc.artifactId.length > 0 ? { artifactId: doc.artifactId } : {}),
+  };
+}
+
+function deliveryOfBody(body: unknown): DeliveryFact | undefined {
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const value = body as { delivery?: unknown; runtimeControlResult?: unknown };
+  if (value.delivery != null && typeof value.delivery === 'object' && !Array.isArray(value.delivery)) {
+    const delivery = value.delivery as { status?: unknown; overallConsensus?: unknown; unresolvedIssues?: unknown; feedback?: unknown; issueResolutions?: unknown };
+    if (delivery.status === 'delivered' || delivery.status === 'delivered_with_questions' || delivery.status === 'needs_user' || delivery.status === 'blocked' || delivery.status === 'legacy') {
+      return {
+        status: delivery.status,
+        ...(delivery.overallConsensus === 'unanimous' || delivery.overallConsensus === 'qualified' || delivery.overallConsensus === 'disputed' || delivery.overallConsensus === 'unconfirmed' ? { overallConsensus: delivery.overallConsensus } : {}),
+        ...(Array.isArray(delivery.unresolvedIssues) ? { unresolvedIssues: delivery.unresolvedIssues as DeliveryFact['unresolvedIssues'] } : {}),
+        ...(Array.isArray(delivery.feedback) ? { feedback: delivery.feedback as DeliveryFact['feedback'] } : {}),
+        ...(Array.isArray(delivery.issueResolutions) ? { issueResolutions: delivery.issueResolutions as DeliveryFact['issueResolutions'] } : {}),
+      };
+    }
+  }
+  if (typeof value.runtimeControlResult === 'string') {
+    try {
+      const parsed = JSON.parse(value.runtimeControlResult) as { schemaVersion?: unknown; overallConsensus?: unknown; claimResults?: unknown };
+      if (parsed.schemaVersion === 'final-report-v1' && (parsed.overallConsensus === 'unanimous' || parsed.overallConsensus === 'qualified' || parsed.overallConsensus === 'disputed' || parsed.overallConsensus === 'unconfirmed')) {
+        return {
+          status: 'legacy',
+          overallConsensus: parsed.overallConsensus,
+        };
+      }
+    } catch { /* natural text */ }
+  }
+  return undefined;
+}
+
+function formalAttachmentsOf(raw: readonly { artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }[] | undefined, document: DocumentView | undefined): FormalAttachmentSummary[] | undefined {
+  if (raw == null) return undefined;
+  return raw.map((attachment) => {
+    const isDocument = document?.artifactId != null && attachment.artifactId === document.artifactId;
+    return {
+      ...attachment,
+      ...(isDocument ? { document: true, purpose: document.purpose, detailMarkdown: false } : {}),
+    };
+  });
 }
 
 /** 归属门：请求发起时的 (gen, projectId) 与当前状态一致才落盘。 */
@@ -977,6 +1045,7 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       taskObjective: it.taskObjective, taskReviewPolicy: it.taskReviewPolicy, taskRevision: it.taskRevision,
       taskMode: it.taskMode, ownerMemberId: it.ownerMemberId,
       latestRun: it.latestRun,
+      nextInputBudget: it.nextInputBudget ?? null, currentRunBudget: it.currentRunBudget ?? null, delivery: it.delivery ?? null,
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
       authorType: it.authorType, authorId: it.authorId, formalAttachments: it.attachments,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
@@ -1035,6 +1104,7 @@ function hydrateRoomFromPool(prev: HifiState, projectId: string, roomId: string,
     responseKind:c.taskResponseKind, objective: c.taskObjective ?? null, status: (c.taskStatus ?? 'OPEN') as Task['status'], revision: c.taskRevision ?? 0,
     reviewPolicy: c.taskReviewPolicy ?? undefined, mode: c.taskMode ?? undefined, ownerMemberId: c.ownerMemberId ?? undefined,
     latestRun: c.latestRun,
+    nextInputBudget: c.nextInputBudget ?? null, currentRunBudget: c.currentRunBudget ?? null, delivery: c.delivery ?? null,
     displayNumber: c.roomTaskNumber ?? 0,
   }));
   const subscriptions: Record<string, { followed: boolean; muted: boolean }> = {};
@@ -1085,6 +1155,9 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
         currentDeliveryId: detail.currentDeliveryId ?? undefined,
         ownerMemberId: detail.ownerMemberId ?? undefined, parentTaskId: detail.parentTaskId ?? undefined,
         mode: detail.mode, latestRun: detail.activeRun as Task['latestRun'], displayNumber: detail.roomTaskNumber,
+        nextInputBudget: detail.nextInputBudget ?? null,
+        currentRunBudget: detail.currentRunBudget ?? detail.activeRun?.budget ?? null,
+        delivery: detail.delivery ?? null,
       };
       if (idx >= 0) nextTasks[idx] = taskView; else nextTasks.push(taskView);
       // task.get only supplies a run hint and a pending-delivery identity. It cannot certify
@@ -1113,13 +1186,14 @@ interface ThreadGetData {  thread: { id: string; projectId: string; conversation
  * thread.history 的回复项。`body` 是服务端 `JSON.parse(body_json)` 的完整对象
  * （R91：含 `collaborationStage`），loader 只取 `text` 正文并转译阶段标记。
  */
-export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>;replyExecution?:Message['formalReplyExecution'] }
+export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; document?: unknown; delivery?: unknown; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
     objective?: string | null; review_policy?: Task['reviewPolicy']; mode?: Task['mode'] | null; owner_member_id?: string | null; parent_task_id?: string | null; current_delivery_id?: string | null;
     deliberationBudget?: { maxTurns: number } | null };
-  activeRun: { id: string; status: string } | null;
+  activeRun: { id: string; status: string; budget?: CurrentRunBudget | null } | null;
+  delivery?: DeliveryFact | null;
   pendingDelivery: { id: string; revision: number; manifest_hash: string } | null;
   reworkPending?: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;
   lastStartupFailureMessage?: string;
@@ -1131,15 +1205,19 @@ interface TaskGetData {
  */
 export const msgOfReply = (projectId: string, roomId: string, threadId: string, it: ThreadHistoryItem): Message => {
   const stage = collaborationStageOfBody(it.body);
+  const document = documentOfBody(it.body);
   const readable = chatAnswer(it.body?.text??'',it.authorType);
   const message: Message = {
     id: it.id, projectId, roomId, threadId, taskId: undefined,
     authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
     body: stripStageHeading(readable, stage), createdAt: it.createdAt, threadMessageSeq: it.seq,
-    attachmentIds: [], formalAttachments: it.attachments ?? [],
+    attachmentIds: [], formalAttachments: formalAttachmentsOf(it.attachments, document),
     formalReplyExecution:it.replyExecution,
   detailMarkdown: (it.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(it.body),
   };
+  if (document != null) message.document = document;
+  const delivery = deliveryOfBody(it.body);
+  if (delivery != null) message.delivery = delivery;
   if (stage != null) message.collaborationStage = stage;
   return message;
 };
@@ -1211,7 +1289,9 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
         revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
         objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,
         ownerMemberId: tg.task.owner_member_id, parentTaskId: tg.task.parent_task_id, currentDeliveryId: tg.task.current_delivery_id,
-        activeRun: tg.activeRun, pendingDelivery: tg.pendingDelivery == null ? null
+        activeRun: tg.activeRun, delivery: tg.delivery ?? null,
+        nextInputBudget: tg.task.deliberationBudget ?? null, currentRunBudget: tg.activeRun?.budget ?? null,
+        pendingDelivery: tg.pendingDelivery == null ? null
           : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
         reworkPending: tg.reworkPending ?? null,
         lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
@@ -1368,7 +1448,9 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
     revision: tg.task.revision, stopGeneration: tg.task.stopGeneration,
     objective: tg.task.objective, reviewPolicy: tg.task.review_policy, mode: tg.task.mode ?? undefined,
     ownerMemberId: tg.task.owner_member_id, parentTaskId: tg.task.parent_task_id, currentDeliveryId: tg.task.current_delivery_id,
-    activeRun: tg.activeRun, pendingDelivery: tg.pendingDelivery == null ? null
+    activeRun: tg.activeRun, delivery: tg.delivery ?? null,
+    nextInputBudget: tg.task.deliberationBudget ?? null, currentRunBudget: tg.activeRun?.budget ?? null,
+    pendingDelivery: tg.pendingDelivery == null ? null
       : { id: tg.pendingDelivery.id, revision: tg.pendingDelivery.revision, manifestHash: tg.pendingDelivery.manifest_hash },
     reworkPending: tg.reworkPending ?? null,
     lastStartupFailureMessage: tg.lastStartupFailureMessage ?? null,
@@ -1381,15 +1463,20 @@ export async function refreshThreadTask(threadId: string): Promise<void> {
  * 字符串：正文与可选的 `collaborationStage` 都从这里转译，**原 JSON 不进正文**。
  */
 export const msgOfDmHistory = (projectId: string, conversationId: string, m: HistoryMessage, index: number): Message => {
-  const stage = collaborationStageOfBody(parsedHistoryBody(m));
+  const body = parsedHistoryBody(m);
+  const stage = collaborationStageOfBody(body);
+  const document = documentOfBody(body);
   const message: Message = {
     id: m.id, projectId, roomId: `dm:${conversationId}`,
     authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
     authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: stripStageHeading(textOf(m), stage),
     createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? index,
-    attachmentIds: [], formalAttachments: m.attachments ?? [],
-    detailMarkdown: (m.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(parsedHistoryBody(m)),
+    attachmentIds: [], formalAttachments: formalAttachmentsOf(m.attachments, document),
+    detailMarkdown: (m.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(body),
   };
+  if (document != null) message.document = document;
+  const delivery = deliveryOfBody(body);
+  if (delivery != null) message.delivery = delivery;
   if (stage != null) message.collaborationStage = stage;
   return message;
 };
@@ -1432,7 +1519,7 @@ const mentionPayload = (mentionIds: string[]): Array<{ kind: 'member'; memberId:
 
 /** Shared with the Composer mode/budget bubble; the server re-derives and validates it. */
 export function defaultDeliberationMaxTurns(rosterSize: number): number {
-  return deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).core;
+  return deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).withRevision;
 }
 
 /**

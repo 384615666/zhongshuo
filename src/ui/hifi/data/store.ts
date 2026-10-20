@@ -9,7 +9,7 @@
  * 读取错误/接管状态）。未接通集合保持空值，由页面如实呈现；不伪造时间/成员/状态。
  */
 import { useSyncExternalStore } from 'react';
-import type { AppState, ContextTarget, Thread, ThreadCard, RouteMode } from './types';
+import type { AppState, ContextTarget, CurrentRunBudget, DeliveryFact, Thread, ThreadCard, RouteMode } from './types';
 import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
 import { openTab } from '../lib/resource';
@@ -33,7 +33,10 @@ export interface ThreadTaskDetail {
   ownerMemberId?: string | null;
   parentTaskId?: string | null;
   currentDeliveryId?: string | null;
-  activeRun: { id: string; status: string } | null;
+  activeRun: { id: string; status: string; budget?: CurrentRunBudget | null } | null;
+  delivery?: DeliveryFact | null;
+  nextInputBudget?: { maxTurns: number } | null;
+  currentRunBudget?: CurrentRunBudget | null;
   pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离呈现）；r59 含完整执行身份（点击冻结快照）。 */
   reworkPending: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;

@@ -91,11 +91,25 @@ import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
 function detailMarkdownOfBody(body: unknown): string | null {
   if(body==null||typeof body!=='object')return null;
-  const value=body as {detailMarkdown?:unknown;runtimeControlResult?:unknown};
+  const value=body as {detailMarkdown?:unknown;document?:unknown;runtimeControlResult?:unknown};
+  if(Object.prototype.hasOwnProperty.call(value,'document')){
+    if(value.document!=null&&typeof value.document==='object'&&!Array.isArray(value.document)){
+      const markdown=(value.document as {markdown?:unknown}).markdown;
+      if(typeof markdown==='string'&&markdown.trim().length>0)return markdown;
+    }
+    return null;
+  }
   if(typeof value.detailMarkdown==='string'&&value.detailMarkdown.trim().length>0)return value.detailMarkdown;
   if(typeof value.runtimeControlResult==='string'){
     try{
-      const parsed=JSON.parse(value.runtimeControlResult) as {detailMarkdown?:unknown};
+      const parsed=JSON.parse(value.runtimeControlResult) as {detailMarkdown?:unknown;document?:unknown};
+      if(Object.prototype.hasOwnProperty.call(parsed,'document')){
+        if(parsed.document!=null&&typeof parsed.document==='object'&&!Array.isArray(parsed.document)){
+          const markdown=(parsed.document as {markdown?:unknown}).markdown;
+          if(typeof markdown==='string'&&markdown.trim().length>0)return markdown;
+        }
+        return null;
+      }
       if(typeof parsed.detailMarkdown==='string'&&parsed.detailMarkdown.trim().length>0)return parsed.detailMarkdown;
     }catch{/* raw control may be natural text */}
   }
@@ -111,7 +125,8 @@ function selectedRoomDetailMessageIds(db:ZhongshuoDatabase,task:AssemblyTaskRef,
   }
   const latest=db.prepare(`SELECT m.id FROM messages m WHERE m.thread_id=? AND m.author_type='agent'
     AND (? IS NULL OR m.thread_message_seq<=?) AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=m.id AND ma.id LIKE 'matt_detail_%')
-      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL)
+      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL
+      OR json_extract(m.body_json,'$.document.markdown') IS NOT NULL)
     ORDER BY m.thread_message_seq DESC LIMIT 4`).all(task.threadId,task.inputThreadMessageSeq??null,task.inputThreadMessageSeq??null) as {id:string}[];
   for(const row of latest)ids.add(row.id);
   if(coordination?.phase==='child'){
@@ -131,7 +146,8 @@ function selectedDmDetailMessageIds(db:ZhongshuoDatabase,conversationId:string,i
   if(rootReplyTo)ids.add(rootReplyTo);
   const latest=db.prepare(`SELECT m.id FROM messages m WHERE m.conversation_id=? AND m.conversation_seq<=? AND m.author_type='agent'
     AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=m.id AND ma.id LIKE 'matt_detail_%')
-      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL)
+      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL
+      OR json_extract(m.body_json,'$.document.markdown') IS NOT NULL)
     ORDER BY m.conversation_seq DESC LIMIT 4`).all(conversationId,inputThroughSeq) as {id:string}[];
   for(const row of latest)ids.add(row.id);
   return ids;
@@ -278,7 +294,8 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       WHERE thread_id=? AND (? IS NULL OR thread_message_seq<=?)
         AND id IN (${ids.map(()=> '?').join(',')})
         AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=messages.id AND ma.id LIKE 'matt_detail_%')
-          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL)`).all(task.threadId,task.inputThreadMessageSeq??null,task.inputThreadMessageSeq??null,...ids) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
+          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL
+          OR json_extract(body_json,'$.document.markdown') IS NOT NULL)`).all(task.threadId,task.inputThreadMessageSeq??null,task.inputThreadMessageSeq??null,...ids) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
     for(const message of required)if(!historyIds.has(message.id))history.push(message);
     history.sort((a,b)=>a.thread_message_seq-b.thread_message_seq);
   }
@@ -370,7 +387,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
           JSON.stringify(input.repairContext.issues),
           `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
           input.repairContext.originalText,
-          '修复要求：按输出契约重新提交完整 TaskComplete——answer 保持简短，分析结论/清单完整放入 detailMarkdown（不要缩短或删除内容）；短答可省略 detailMarkdown；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
+          '修复要求：按输出契约重新提交完整 TaskComplete——answer 使用最短有用表达；只有确有可复用方案/清单/报告时才提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
         );
       }
       if (input.reviewFeedback != null) {
@@ -479,7 +496,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     const required=db.prepare(`SELECT id,conversation_seq,body_json,author_id,author_type FROM messages
       WHERE conversation_id=? AND conversation_seq<=? AND id IN (${ids.map(()=> '?').join(',')})
         AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=messages.id AND ma.id LIKE 'matt_detail_%')
-          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL)`).all(task.conversationId,task.inputThroughSeq,...ids) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string;author_type:string }>;
+          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL
+          OR json_extract(body_json,'$.document.markdown') IS NOT NULL)`).all(task.conversationId,task.inputThroughSeq,...ids) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string;author_type:string }>;
     for(const message of required)if(!historyIds.has(message.id))history.push(message);
     history.sort((a,b)=>a.conversation_seq-b.conversation_seq);
   }

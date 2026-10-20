@@ -1829,7 +1829,7 @@ export function Composer({
       return {
         calls: core,
         // 公式与推导明细收进 tooltip：主界面只显示"最多 N 次调用"
-        detail: `默认按冻结名单 ${n} 人及一次检查点推导 6N+2=${core}；整合与确认预留 ${1+n} 次。实际预算以正式运行快照为准。`,
+        detail: `默认按冻结名单 ${n} 人、一次检查点及一次整合修订推导 7N+3=${core}；整合与确认预留 ${1+n} 次。实际预算以正式运行快照为准。`,
       };
     }
     if (route.mode === 'DIRECT') {

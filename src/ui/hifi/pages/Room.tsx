@@ -1024,6 +1024,25 @@ function RootCard({
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
   const saved = s.savedMessageRefs[message.id] === true || message.saved === true;
+  const delivery = task?.delivery;
+  const deliveryFeedback = delivery?.feedback?.find((item) => item.status === 'needs_revision')
+    ?? delivery?.feedback?.find((item) => item.status === 'needs_user')
+    ?? delivery?.feedback?.[0];
+  const deliveryIssue = delivery?.issueResolutions?.find((item) => item.status === 'needs_user')
+    ?? delivery?.issueResolutions?.find((item) => item.status === 'insufficient_evidence');
+  const deliveryDetail = (deliveryFeedback?.question ? `${deliveryFeedback.question}${deliveryFeedback.owner ? `（责任方：${deliveryFeedback.owner}）` : ''}` : '')
+    || deliveryFeedback?.revisionRequest || deliveryFeedback?.reason
+    || (deliveryIssue?.question ? `${deliveryIssue.question}${deliveryIssue.owner ? `（责任方：${deliveryIssue.owner}）` : ''}` : '')
+    || deliveryIssue?.reason
+    || (delivery?.unresolvedIssues?.length ? `${delivery.unresolvedIssues.length} 项未解决，打开详情查看` : '');
+  const deliveryLabel = delivery == null ? null
+    : delivery.status === 'delivered' ? '已交付'
+      : delivery.status === 'delivered_with_questions' ? '已交付 · 有待确认'
+        : delivery.status === 'needs_user' ? '等待你补充'
+          : delivery.status === 'blocked' ? '交付未完成'
+            : '本轮已结束 · 旧格式';
+  const deliveryFactLine = deliveryLabel == null ? null
+    : `程序交付：${deliveryLabel}${delivery?.overallConsensus === 'disputed' ? ' · 仍有分歧' : delivery?.overallConsensus === 'unconfirmed' ? ' · 仍有成员未确认' : delivery?.overallConsensus === 'qualified' ? ' · 附条件确认' : ''}`;
   // 主池只留 2 条预览：它是"要不要点进去"的判断依据，不是正文（§3.4 允许 2—3 条）
   const preview = thread ? replyPreview(s, thread.id, 2) : [];
 
@@ -1045,15 +1064,43 @@ function RootCard({
         detail: n > 0 ? `${memberLabel(byId(s.members, task.ownerMemberId))} 已修改 ${n} 个文件` : '有成果等你确认',
       };
     }
+    const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
+    if (task.status === 'ACTIVE' && (run?.status === 'RUNNING' || running.length > 0)) {
+      const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
+      const startedAt = running.map((t) => t.startedAt).filter((at) => Number.isFinite(at) && at > 0).sort((a, b) => a - b)[0];
+      const waited = startedAt != null ? formatDuration(Math.max(0, Date.now() - startedAt)) : null;
+      const stage = run != null && 'stage' in run && typeof run.stage === 'string' && run.stage.length > 0 ? stageLabel(run.stage) : null;
+      return {
+        label: '执行中', icon: 'play', tone: 'info' as const,
+        detail: [
+          who.length > 0 ? `${who.join('、')} 正在处理` : '成员正在处理',
+          stage,
+          waited != null ? `已运行 ${waited}` : null,
+        ].filter(Boolean).join(' · '),
+      };
+    }
+    if (delivery?.status === 'needs_user') {
+      return { label: '等待你补充', icon: 'hand', tone: 'warning' as const, detail: deliveryDetail || '有具体问题等待你处理' };
+    }
+    if (delivery?.status === 'blocked') {
+      return { label: '交付未完成', icon: 'octagon', tone: 'danger' as const, detail: deliveryDetail || '内部仍有未解决项，打开详情查看' };
+    }
+    if (delivery?.status === 'delivered_with_questions') {
+      return { label: '已交付 · 有待确认', icon: 'alert-circle', tone: 'warning' as const, detail: deliveryDetail || '交付可用，但仍有未确认事项' };
+    }
+    if (delivery?.status === 'legacy') {
+      const consensus = delivery.overallConsensus === 'disputed' ? '仍有分歧' : delivery.overallConsensus === 'unconfirmed' ? '仍有成员未确认' : '交付反馈未提供';
+      return { label: '本轮已结束 · 旧格式', icon: 'history', tone: delivery.overallConsensus === 'disputed' || delivery.overallConsensus === 'unconfirmed' ? 'warning' as const : 'neutral' as const, detail: `${consensus}；打开详情核对实际记录` };
+    }
     if (task.status === 'WAITING_USER') {
       const open = s.issues.filter((i) => i.runId === run?.id && i.status === 'needs_user').length;
       return {
         label: '需要你决定', icon: 'hand', tone: 'warning' as const,
-        detail: open > 0 ? `还有 ${open} 项分歧等你拍板` : '有事项等你处理',
+        detail: deliveryDetail || (open > 0 ? `还有 ${open} 项分歧等你拍板` : '有事项等你处理'),
       };
     }
     if (task.status === 'BLOCKED') {
-      return { label: '阻塞', icon: 'octagon', tone: 'danger' as const, detail: '缺少必要的前置成果，需要你处理' };
+      return { label: '阻塞', icon: 'octagon', tone: 'danger' as const, detail: deliveryDetail || '缺少必要的前置成果，需要你处理' };
     }
     if (task.status === 'DONE') {
       return { label: task.responseKind==='conversation'?'已回复':'已完成', icon: 'check-circle', tone: 'success' as const, detail: task.responseKind==='conversation'?'这是对话回答，没有工作交付或验收待办':'已完成' };
@@ -1063,8 +1110,7 @@ function RootCard({
     }
     // 2) 未结束任务与最近运行分列：FAILED run 下的 ACTIVE task 并非正在执行。
     if (run != null && run.status !== 'RUNNING') return taskRunHint(run.status);
-    if (run?.status === 'RUNNING' || s.turns.some((t) => t.threadId === thread?.id && t.status === 'RUNNING')) {
-      const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
+    if (run?.status === 'RUNNING') {
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
       const startedAt = running.map((turn) => turn.startedAt).filter((at) => Number.isFinite(at) && at > 0).sort((a, b) => a - b)[0];
       const waited = startedAt != null ? formatDuration(Math.max(0, Date.now() - startedAt)) : null;
@@ -1079,7 +1125,7 @@ function RootCard({
       };
     }
     return taskRunHint(run?.status);
-  }, [task, run, s.changeSets, s.issues, s.turns, s.members, thread?.id]);
+  }, [task, run, s.changeSets, s.issues, s.turns, s.members, thread?.id, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
 
@@ -1214,8 +1260,15 @@ function RootCard({
           {task.title}
         </button>
       ) : null}
+      {!isDiscussion && task?.currentRunBudget ? (
+        <div className="faint small">
+          本轮冻结预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
+          {task.currentRunBudget.remainingTurns > 0 ? ` · 剩余 ${task.currentRunBudget.remainingTurns} 次` : ' · 已用尽'}
+        </div>
+      ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
       {primary?.detail ? <div className="root-next">{primary.detail}</div> : null}
+      {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
       <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 
       {/* 主池消息携带的附件（正式=真实 attachmentId 芯片——点击只读预览，不发送给 AI）。 */}
@@ -2232,6 +2285,7 @@ function ThreadOverview({
               <dt>状态</dt>
               <dd className="row tight wrap">
                 <TaskStatusTag status={(formal?.task.status ?? task.status) as Task['status']} />
+                {task.delivery != null && task.delivery.status !== 'delivered' ? <Tag tone={task.delivery.status === 'blocked' || task.delivery.status === 'needs_user' ? 'warning' : 'neutral'} icon="alert-circle">{task.delivery.status === 'delivered_with_questions' ? '已交付 · 有待确认' : task.delivery.status === 'needs_user' ? '等待你补充' : task.delivery.status === 'blocked' ? '交付未完成' : '本轮已结束 · 旧格式'}</Tag> : null}
                 {latestRun ? <RunStatusTag status={latestRun.status as WorkflowRun['status']} /> : null}
               </dd>
               <dt>方式</dt>

@@ -59,7 +59,8 @@ export function GeneratedFiles({
   return (
     <div className="msg-inline-attachments" data-zs-inline-attachments="1">
       {files.map((attachment) => {
-        const kindLabel = attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);
+        const isDocument = attachment.document === true;
+        const kindLabel = isDocument ? '文档' : attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);
         const size = typeof attachment.sizeBytes === 'number' && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0
           ? formatBytes(attachment.sizeBytes)
           : null;
@@ -67,9 +68,10 @@ export function GeneratedFiles({
           <button
             key={attachment.artifactId}
             type="button"
-            className={`inline-file-chip${attachment.kind === 'image_file' ? ' is-image' : ''}${attachment.detailMarkdown ? ' is-detail' : ''}`}
+            className={`inline-file-chip${attachment.kind === 'image_file' ? ' is-image' : ''}${attachment.detailMarkdown ? ' is-detail' : ''}${isDocument ? ' is-document' : ''}`}
             data-zs-artifact-id={attachment.artifactId}
-            title={`打开 ${attachment.filename}（${attachment.detailMarkdown ? '完整 Markdown 详情' : kindLabel}${size != null ? ` · ${size}` : ''}）· 只读预览，不发送给 AI`}
+            data-zs-document={isDocument ? '1' : undefined}
+            title={`打开 ${attachment.filename}（${isDocument ? attachment.purpose ?? '模型生成的业务文档' : attachment.detailMarkdown ? '完整 Markdown 详情' : kindLabel}${size != null ? ` · ${size}` : ''}）· 只读预览，不发送给 AI`}
             onClick={() => onOpen?.(attachment)}
           >
             <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
