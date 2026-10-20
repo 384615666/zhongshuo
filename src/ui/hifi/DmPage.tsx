@@ -607,7 +607,7 @@ export function DmPage() {
                     {failedView.truncated ? <div className="faint small">仅显示最近 20 个失败任务；其余请从原界面逐项查看。</div> : null}
                   </div>
                 ) : null}
-                <div className="msg-list" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
+                <div className="msg-list is-replies" ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                   {readError != null ? (
                     <div className="panel info" style={{ borderColor: 'var(--warning)' }} data-zs-dm-readerror="1">
                       读取失败：{readError}（保留上次快照）
@@ -616,23 +616,25 @@ export function DmPage() {
                   ) : null}
                   {msgs.length === 0 && readError == null ? <div className="panel info">会话暂无消息。</div> : null}
                   {msgs.map((m) => (
-                    <MessageView
-                      key={m.id}
-                      message={{ ...m, saved: savedRefs[m.id] === true }}
-                      author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
-                      onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })}
-                      onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
-                        if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }
-                        if (r.busy === true) return;
-                        toast(`收藏操作失败：${r.error ?? '未知错误'}（状态未变）`, 'error');
-                      })}
-                      onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${(e as Error).message}`, 'error')); }}
-                      onQuote={() => {
-                        const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
-                        setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
-                        toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
-                      }}
-                    />
+                    <div key={m.id} className="msg-item">
+                      <MessageView
+                        message={{ ...m, saved: savedRefs[m.id] === true }}
+                        author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
+                        readingAids
+                        onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })}
+                        onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
+                          if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }
+                          if (r.busy === true) return;
+                          toast(`收藏操作失败：${r.error ?? '未知错误'}（状态未变）`, 'error');
+                        })}
+                        onReact={(emoji) => { void command('message.react', { messageId: m.id, emoji }).then(() => loadDmHistory(active.id)).catch((e: unknown) => toast(`表情失败：${(e as Error).message}`, 'error')); }}
+                        onQuote={() => {
+                          const excerpt = m.body.replace(/\s+/g, ' ').trim().slice(0, 80);
+                          setInsertText({ id: Date.now(), text: `> 引用${m.authorType==='human'?'你':'回复'}：${excerpt}` });
+                          toast('已插入引用到输入框（引用不直接触发新任务）', 'success');
+                        }}
+                      />
+                    </div>
                   ))}
                 </div>
                 {active.archivedAt != null ? (
