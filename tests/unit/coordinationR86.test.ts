@@ -1,5 +1,5 @@
 import {createRequire} from 'node:module';
-import {taskCompleteOutputSchema} from '../../src/contracts/prompts.ts';
+import {DELIBERATE_OUTPUT_CONTRACTS,taskCompleteOutputSchema} from '../../src/contracts/prompts.ts';
 import {deliberationOutputSchema} from '../../src/daemon/deliberationRunner.ts';
 import {analysisDraftPayloadSchema,reviewPayloadSchema,issuePositionPayloadSchema,checkpointVerdictPayloadSchema,synthesisPayloadSchema,ratifyPayloadSchema} from '../../src/contracts/deliberation.ts';
 import { describe, expect, it } from 'vitest';
@@ -51,14 +51,15 @@ it('every Codex structured-output object requires all declared properties, inclu
 it('strict transport accepts actual six-stage values without relaxing historical business validation',()=>{
  const req=createRequire(createRequire(import.meta.url).resolve('eslint')),Ajv=req('ajv') as new(options:unknown)=>{compile:(schema:unknown)=>((data:unknown)=>boolean)};
  const cases=[
-  ['IND',analysisDraftPayloadSchema,{schemaVersion:'analysis-draft-v1',summary:'独立分析',claims:[{claimId:'c1',statement:'主要风险',kind:'proposal',evidenceIds:[],uncertainty:''}],recommendations:[],openQuestions:[]}],
-  ['CR',reviewPayloadSchema,{schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:'real-upstream',targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已有验收例',evidenceIds:[],suggestedVerification:''}]}],
-  ['ISS',issuePositionPayloadSchema,{schemaVersion:'issue-position-v1',positions:[{issueId:'i1',stance:'agree',reason:'范围明确',newEvidence:[]}]}],
-  ['CHK',checkpointVerdictPayloadSchema,{schemaVersion:'checkpoint-verdict-v1',verdict:'stop',reason:'无新增证据',evidenceSummary:''}],
-  ['SYN',synthesisPayloadSchema,{schemaVersion:'synthesis-v1',summary:'整合',claims:[{statement:'结论',sourceRefs:['real-upstream:1:c1']}],disputedClaims:[],recommendations:[]}],
-  ['RAT',ratifyPayloadSchema,{schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm',conditions:[],reason:''}]}],
+  ['IND',analysisDraftPayloadSchema,{schemaVersion:'analysis-draft-v1',summary:'独立分析',detailMarkdown:'# 独立分析详情',claims:[{claimId:'c1',statement:'主要风险',kind:'proposal',evidenceIds:[],uncertainty:''}],recommendations:[],openQuestions:[]}],
+  ['CR',reviewPayloadSchema,{schemaVersion:'cross-review-v1',summary:'互评总览',detailMarkdown:'# 互评详情',reviews:[{targetArtifactId:'real-upstream',targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已有验收例',evidenceIds:[],suggestedVerification:''}]}],
+  ['ISS',issuePositionPayloadSchema,{schemaVersion:'issue-position-v1',summary:'争议讨论总览',detailMarkdown:'# 争议讨论详情',positions:[{issueId:'i1',stance:'agree',reason:'范围明确',newEvidence:[]}]}],
+  ['CHK',checkpointVerdictPayloadSchema,{schemaVersion:'checkpoint-verdict-v1',summary:'检查点总览',detailMarkdown:'# 检查点详情',verdict:'stop',reason:'无新增证据',evidenceSummary:''}],
+  ['SYN',synthesisPayloadSchema,{schemaVersion:'synthesis-v1',summary:'整合',detailMarkdown:'# 整合详情',claims:[{statement:'结论',sourceRefs:['real-upstream:1:c1']}],disputedClaims:[],recommendations:[]}],
+  ['RAT',ratifyPayloadSchema,{schemaVersion:'ratify-v1',summary:'确认总览',detailMarkdown:'# 确认详情',responses:[{claimId:'clm_1',stance:'confirm',conditions:[],reason:''}]}],
  ] as const;
- for(const [stage,business,value] of cases){const validate=new Ajv({strict:false}).compile(deliberationOutputSchema(stage));expect(validate(value),stage).toBe(true);expect(business.safeParse(value).success,stage).toBe(true);expect(validate({...value,schemaVersion:'wrong'})).toBe(false);}
+  for(const [stage,business,value] of cases){const transport=deliberationOutputSchema(stage);const validate=new Ajv({strict:false}).compile(transport);expect(transport.properties,stage).toHaveProperty('summary');expect(transport.properties,stage).toHaveProperty('detailMarkdown');expect(validate(value),stage).toBe(true);expect(business.safeParse(value).success,stage).toBe(true);expect(validate({...value,schemaVersion:'wrong'})).toBe(false);const withoutView=[...Object.entries(value)].filter(([key])=>key!=='summary'&&key!=='detailMarkdown');expect(validate(Object.fromEntries(withoutView)),`${stage} missing model user view`).toBe(false);}
+  for(const [key,contract] of Object.entries(DELIBERATE_OUTPUT_CONTRACTS)){const value=JSON.parse(contract) as Record<string,unknown>;expect(value,key).toHaveProperty('summary');expect(value,key).toHaveProperty('detailMarkdown');}
  const historical={schemaVersion:'analysis-draft-v1',summary:'原件',claims:[{claimId:'c1',statement:'原结论',kind:'proposal',evidenceIds:[]}],recommendations:[],openQuestions:[]};expect(analysisDraftPayloadSchema.safeParse(historical).success).toBe(true);expect(new Ajv({strict:false}).compile(deliberationOutputSchema('IND'))(historical)).toBe(false);
 });
 

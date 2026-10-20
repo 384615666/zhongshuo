@@ -44,10 +44,17 @@ export const analysisClaimSchema = z.strictObject({
   uncertainty: z.string().optional(),
 });
 
+/**
+ * R95 用户展示字段由模型自行撰写：summary 为简练总览，detailMarkdown 为完整 Markdown。
+ * IND/SYN 的既有 summary 保持 required；新增 detailMarkdown 及 CR/ISS/CHK/RAT 的
+ * summary 在存储 schema 中 optional，以兼容历史 artifact。provider 传输 schema 通过
+ * deliberationOutputSchema().requireFields 对新调用强制要求两者。
+ */
 /** INDEPENDENT 阶段模型输出（artifactId/memberId/revision/baselineId 由程序赋值）。 */
 export const analysisDraftPayloadSchema = z.strictObject({
   schemaVersion: z.literal(ANALYSIS_DRAFT_SCHEMA_VERSION),
   summary: z.string().min(1),
+  detailMarkdown: z.string().optional(),
   claims: z.array(analysisClaimSchema).min(1),
   recommendations: z.array(z.string()),
   openQuestions: z.array(z.string()),
@@ -66,6 +73,8 @@ export interface AnalysisReport {
 /** CROSS_REVIEW 阶段模型输出：对他人初稿 claim 的逐条评审（三元组绑定，防跨成员/跨版本混并）。 */
 export const reviewPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CROSS_REVIEW_SCHEMA_VERSION),
+  summary: z.string().min(1).optional(),
+  detailMarkdown: z.string().optional(),
   reviews: z.array(z.strictObject({
     targetArtifactId: z.string().min(1),
     targetRevision: z.number().int().min(1),
@@ -81,6 +90,8 @@ export type ReviewPayload = z.infer<typeof reviewPayloadSchema>;
 /** ISSUE_DISCUSSION 轮次模型输出：对冻结争议列表的立场与（可选）新证据。 */
 export const issuePositionPayloadSchema = z.strictObject({
   schemaVersion: z.literal(ISSUE_POSITION_SCHEMA_VERSION),
+  summary: z.string().min(1).optional(),
+  detailMarkdown: z.string().optional(),
   positions: z.array(z.strictObject({
     issueId: z.string().min(1),
     stance: z.enum(['agree', 'disagree', 'needs_evidence']),
@@ -96,6 +107,8 @@ export type IssuePositionPayload = z.infer<typeof issuePositionPayloadSchema>;
 /** 第 3 轮主持复核（turn_purpose=checkpoint）输出：继续或停止由主持者按证据判断（决策 06）。 */
 export const checkpointVerdictPayloadSchema = z.strictObject({
   schemaVersion: z.literal(CHECKPOINT_VERDICT_SCHEMA_VERSION),
+  summary: z.string().min(1).optional(),
+  detailMarkdown: z.string().optional(),
   verdict: z.enum(['continue', 'stop']),
   reason: z.string().min(1),
   /** 值得继续追的新证据摘要（verdict=continue 时必填语义，schema 层不强制）。 */
@@ -107,6 +120,7 @@ export type CheckpointVerdictPayload = z.infer<typeof checkpointVerdictPayloadSc
 export const synthesisPayloadSchema = z.strictObject({
   schemaVersion: z.literal(SYNTHESIS_SCHEMA_VERSION),
   summary: z.string().min(1),
+  detailMarkdown: z.string().optional(),
   claims: z.array(z.strictObject({
     statement: z.string().min(1),
     sourceRefs: z.array(z.string().min(1)),
@@ -123,6 +137,8 @@ export type SynthesisPayload = z.infer<typeof synthesisPayloadSchema>;
 /** RATIFY 模型输出：逐结论确认/异议；提交事务验证 claimId 全覆盖且无重复（§6.5）。 */
 export const ratifyPayloadSchema = z.strictObject({
   schemaVersion: z.literal(RATIFY_SCHEMA_VERSION),
+  summary: z.string().min(1).optional(),
+  detailMarkdown: z.string().optional(),
   responses: z.array(z.strictObject({
     claimId: z.string().min(1),
     stance: z.enum(['confirm', 'conditional', 'object', 'unconfirmed']),

@@ -455,42 +455,50 @@ export function selectStageInstruction(input: {
 
 // ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
 
+const DELIBERATE_USER_VIEW_RULE = '- 面向用户的 summary 和 detailMarkdown 必须由你本人提供：summary 用简练语言直接总览；detailMarkdown 写成可独立阅读的完整 Markdown，保留关键分歧、条件与待确认。应用只展示和托管，不再二次总结；没有额外细节的短结果 detailMarkdown 可为空字符串。';
+
 const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
   'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮要求**先独立完成**：
 - 只依据任务目标与分析基线资料作答；不假设、不引用其他成员的结论（本轮输入也不包含它们）。
 - 结论逐条给出 claim：说明是观察到的事实（observed）、推断（inferred）还是建议（proposal），附证据编号与不确定性。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'CROSS_REVIEW|stage_work': `你是互评成员。对其他成员的初稿逐条 claim 给出评审意见：
 - 立场只能是 agree / disagree / needs_evidence，必须写明理由与证据编号；可给建议的验证方式。
 - 只评审输入中列出的结论，引用时必须原样使用其 artifactId、revision 与 claimId（三元组缺一即拒绝）。
 - 不引入未提供的内容。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'ISSUE_DISCUSSION|stage_work': `你是分歧讨论参与成员。本轮争议清单与证据版本已冻结：
 - 对每项争议给出立场（agree/disagree/needs_evidence）与理由；有新证据才填 newEvidence（证据编号须来自本轮输入）。
 - 不重复已有立场时也须显式作答（矩阵以本轮记录为准）。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'ISSUE_DISCUSSION|checkpoint': `你是本轮主持复核（第 3 轮强制检查点）。评估是否仍有**新证据**值得继续讨论：
 - verdict=continue 仅当存在明确的新证据或新的可验证路径；否则 stop 转入整合。
 - 理由必须引用本轮输入中的证据；不得以“再聊聊”为由继续。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'SYNTHESIS|stage_work': `你是主持者，负责整合稿。基于各成员报告、互评与最终意见：
 - 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧必须如实列入 disputedClaims（含分歧摘要），不得用一句总结覆盖反对意见。
 - 不得把缺席/未回复成员记为同意。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'RATIFY|stage_work': `你是确认成员。对整合稿的每条结论给出独立确认或异议：
 - stance 只能是 confirm / conditional（附条件）/ object（附理由）/ unconfirmed（无法判断）。
 - 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
+${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
 };
 
 /** 各阶段输出契约（ADR-I39：精确 JSON 字段集，与 deliberation.ts schema 一字不差）。 */
 export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
-  'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"一句话总览","claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
-  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","reviews":[{"targetArtifactId":"art_x","targetRevision":1,"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
-  'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
-  'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
-  'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"整合结论总览","claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
-  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
+  'INDEPENDENT|stage_work': `{"schemaVersion":"analysis-draft-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","claims":[{"claimId":"c1","statement":"结论陈述","kind":"observed|inferred|proposal","evidenceIds":["ev1"],"uncertainty":"可选：不确定性说明"}],"recommendations":["建议"],"openQuestions":["未决问题"]}`,
+  'CROSS_REVIEW|stage_work': `{"schemaVersion":"cross-review-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","reviews":[{"targetArtifactId":"art_x","targetRevision":1,"targetClaimId":"c1","stance":"agree|disagree|needs_evidence","reason":"理由","evidenceIds":["ev1"],"suggestedVerification":"可选：建议验证方式"}]}`,
+  'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
+  'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
+  'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"AI 自行撰写的整合结论总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
+  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","detailMarkdown":"AI 自行撰写的完整 Markdown 详情；短结果可为空字符串","responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
 };
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------

@@ -787,7 +787,10 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     records.map((r) => ({ claimId: r.claim_id, memberId: r.member_id, stance: r.stance, responseStatus: r.response_status })),
   );
   const overall = overallConsensus(summaries);
-  const synthesisPayload = artifactPayload(db, input.synthesis.artifactId) as { summary?: string; claims?: Array<{ statement: string }>; disputedClaims?: Array<{ statement: string;disagreementSummary?:string }>;recommendations?:string[] } | null;
+  const synthesisPayload = artifactPayload(db, input.synthesis.artifactId) as { summary?: string; detailMarkdown?: string; claims?: Array<{ statement: string }>; disputedClaims?: Array<{ statement: string;disagreementSummary?:string }>;recommendations?:string[] } | null;
+  const modelUserView = typeof synthesisPayload?.summary === 'string' && synthesisPayload.summary.trim().length > 0 && typeof synthesisPayload.detailMarkdown === 'string'
+    ? { summary: synthesisPayload.summary, detailMarkdown: synthesisPayload.detailMarkdown }
+    : null;
   const reportPayload = {
     schemaVersion: 'final-report-v1',
     synthesisRef: { artifactId: input.synthesis.artifactId, revision: input.synthesis.revision },
@@ -809,6 +812,8 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     payload: reportPayload, blobDir: input.blobDir, now: input.now,
   });
   if (!published.ok) throw new Error(`最终报告发布失败：${published.error.message}`);
+  const hostMemberId = hostOf(rosterOf(db, input.runId));
+  const messageId = `msg_report_${input.runId}`;
   const tx = db.transaction(() => {
     const deliveryId = `dlv_${randomUUID()}`;
     const reviewStatus = input.reviewPolicy === 'user_review' ? 'pending' : 'not_required';
@@ -821,15 +826,20 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
       createHash('sha256').update(JSON.stringify({runId:input.runId,artifactId,reportPayload})).digest('hex'),JSON.stringify([`artifact:${artifactId}`]),reviewStatus);
     db.prepare('UPDATE tasks SET status = ?, current_delivery_id = ?, response_kind=\'work\',revision=revision+1 WHERE id = ?').run(reviewStatus === 'pending' ? 'REVIEW' : 'DONE', deliveryId, input.taskId);
     db.prepare("UPDATE workflow_runs SET stage = 'PUBLISH', status = 'SUCCEEDED', stage_started_at = ? WHERE id = ?").run(input.now, input.runId);
-    const messageId=`msg_report_${input.runId}`;
     if(!db.prepare('SELECT 1 FROM messages WHERE id=?').get(messageId)){
       const task=db.prepare('SELECT project_id,room_id FROM tasks WHERE id=?').get(input.taskId) as {project_id:string;room_id:string};
       const conv=db.prepare('UPDATE conversations SET last_message_seq=last_message_seq+1 WHERE id=? RETURNING last_message_seq').get(input.conversationId) as {last_message_seq:number};
       const thread=db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1,revision=revision+1 WHERE id=? RETURNING last_message_seq').get(input.threadId) as {last_message_seq:number};
       const labels:Record<string,string>={unanimous:'共同确认',qualified:'附条件确认',disputed:'存在分歧',unconfirmed:'尚未核实'};
-      const text=[reportPayload.summary,...reportPayload.claimResults.map(c=>`${c.statement}（${labels[c.consensus]??c.consensus}）`),...reportPayload.disputedClaims.map(c=>`分歧：${c.statement}${c.disagreementSummary?` · ${c.disagreementSummary}`:''}`),...reportPayload.recommendations].filter(Boolean).join('\n\n');
+      const legacyText=[reportPayload.summary,...reportPayload.claimResults.map(c=>`${c.statement}（${labels[c.consensus]??c.consensus}）`),...reportPayload.disputedClaims.map(c=>`分歧：${c.statement}${c.disagreementSummary?` · ${c.disagreementSummary}`:''}`),...reportPayload.recommendations].filter(Boolean).join('\n\n');
+      const text=modelUserView?.summary??legacyText;
+      const bodyJson=JSON.stringify({
+        text,
+        ...(modelUserView!=null&&modelUserView.detailMarkdown.trim().length>0?{detailMarkdown:modelUserView.detailMarkdown}:{}),
+        runtimeControlResult:JSON.stringify(reportPayload),
+      });
       db.prepare(`INSERT INTO messages(id,project_id,conversation_id,conversation_seq,room_id,thread_id,task_id,thread_message_seq,author_type,author_id,body_json,status,created_at)
-        VALUES(?,?,?,?,?,?,?,?,'agent',?,?,'final',?)`).run(messageId,task.project_id,input.conversationId,conv.last_message_seq,task.room_id,input.threadId,input.taskId,thread.last_message_seq,hostOf(rosterOf(db,input.runId)),JSON.stringify({text,runtimeControlResult:JSON.stringify(reportPayload)}),input.now);
+        VALUES(?,?,?,?,?,?,?,?,'agent',?,?,'final',?)`).run(messageId,task.project_id,input.conversationId,conv.last_message_seq,task.room_id,input.threadId,input.taskId,thread.last_message_seq,hostMemberId,bodyJson,input.now);
       appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${randomUUID()}`,projectId:task.project_id,conversationId:input.conversationId,threadId:input.threadId,taskId:input.taskId,runId:input.runId,kind:'thread.replyAdded',createdAt:input.now,payload:{messageId}});
     }
     settleThreadReplyForRun(db,input.runId,'succeeded',undefined,messageId);
@@ -840,6 +850,21 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     });
   });
   tx();
+  if(modelUserView!=null&&modelUserView.detailMarkdown.trim().length>0){
+    const synthesisTurnId=input.synthesis.artifactId.startsWith('art_')?input.synthesis.artifactId.slice(4):'';
+    const turnBound=synthesisTurnId.length>0
+      ?db.prepare(`SELECT 1 FROM agent_turns WHERE id=? AND run_id=? AND member_id=? AND stage_key LIKE 'delib.synthesis%'`).get(synthesisTurnId,input.runId,hostMemberId)!=null
+      :false;
+    if(turnBound){
+      const persisted=persistDetailMarkdown({
+        db,appDataDir:dirname(input.blobDir),projectId:projectIdOf(db,input.taskId),
+        conversationId:input.conversationId,threadId:input.threadId,taskId:input.taskId,
+        runId:input.runId,turnId:synthesisTurnId,messageId,memberId:hostMemberId,
+        markdown:modelUserView.detailMarkdown,now:input.now,
+      });
+      if(persisted.status==='ready')db.prepare(`UPDATE messages SET body_json=json_remove(body_json,'$.detailMarkdown') WHERE id=?`).run(messageId);
+    }
+  }
 }
 
 function projectIdOf(db: ZhongshuoDatabase, taskId: string): string {
@@ -1225,50 +1250,6 @@ export function renderStageProductText(db: ZhongshuoDatabase, input: {
   return lines.filter((line) => line.trim().length > 0).join('\n');
 }
 
-/**
- * 把阶段产物写为持久化串内正式消息。
- *
- * 身份稳定键 = (runId, 原阶段, 成员, 轮次)：格式修复轮通过 schema 后的有效产物与首次
- * 成功产物共用同一身份——只显示一次、同 turn 重放不重复；未通过 schema 的修复尝试在
- * onStepOutput 的 counted=false 分支就被拒绝，根本到不了这里。
- */
-function stageMessageProjection(visibleText: string): { text: string; detailMarkdown?: string } {
-  const lines = visibleText.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
-  const needsDetail = lines.length > 10 || visibleText.length > 700;
-  if (!needsDetail) return { text: visibleText };
-  const compact = (line: string, limit = 220): string => line.length > limit ? `${line.slice(0, limit)}…` : line;
-  const importantLines: string[] = [];
-  let section = '';
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('- ') && /[:：]\s*$/.test(trimmed)) {
-      section = trimmed;
-      continue;
-    }
-    const bullet = trimmed.startsWith('- ');
-    const standalone = /^(检查点结论|理由)[：:]/.test(trimmed);
-    if ((!bullet && !standalone) || /^(建议|推荐)[：:]/.test(section)) continue;
-    if (/反对|不同意|需要证据|分歧|待确认|未确认|条件|检查点结论|理由/.test(trimmed)) importantLines.push(line);
-  }
-  const important = importantLines.slice(0, 4).map((line) => compact(line, 140));
-  const hiddenImportant = Math.max(0, importantLines.length - important.length);
-  const lead = compact(lines[0] ?? '', 140);
-  const importantSet = new Set(important);
-  const rest = lines.slice(1, 9).map((line) => compact(line, 140)).filter((line) => line !== lead && !importantSet.has(line));
-  const core = [...new Set([lead, ...important, hiddenImportant > 0 ? `另有 ${hiddenImportant} 项关键状态（分歧/条件/待确认），见完整详情。` : ''])]
-    .filter((line) => line.length > 0);
-  let text = core.join('\n');
-  for (const line of rest) {
-    const next = `${text}\n${line}`;
-    if (next.length > 900) break;
-    text = next;
-  }
-  return {
-    text: `${text}\n\n完整详情见下方 Markdown 附件。`,
-    detailMarkdown: visibleText.trimStart().startsWith('#') ? visibleText : `# 阶段完整详情\n\n${visibleText}`,
-  };
-}
-
 export function insertVisibleStageMessage(db: ZhongshuoDatabase, input: {
   task: { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null; room_id: string | null };
   runId: string;
@@ -1499,12 +1480,22 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       }
     }
     // R91 可见性：结构化阶段产物通过校验后投影为串内正式消息（作者=真实产物作者）。
+    // R95：模型自行提供 summary/detailMarkdown 时逐字展示/托管；旧 payload 缺字段时
+    // 保留 renderStageProductText 的完整可读正文兼容显示，不再由程序摘录或改写。
     // 投影失败不阻断研讨屏障/推进（catch 内只留审计）——阶段成功事实仍以 artifact/run 为准。
     // 只有身份可核实的执行轮（agent_turns 行存在）才投影；合成/历史迟到输出不产生“成功发言”。
     if (turnRow != null) try {
-      const visibleText = renderStageProductText(db, { runId: input.runId, step: input.step, payload: payload as Record<string, unknown> });
+      const modelUserView = typeof payload.summary === 'string' && payload.summary.trim().length > 0 && typeof payload.detailMarkdown === 'string'
+        ? { summary: payload.summary, detailMarkdown: payload.detailMarkdown }
+        : null;
+      const visibleText = modelUserView?.summary ?? renderStageProductText(db, { runId: input.runId, step: input.step, payload });
       if (visibleText.length > 0) {
-        const projection = stageMessageProjection(visibleText);
+        const projection = modelUserView != null
+          ? {
+              text: modelUserView.summary,
+              detailMarkdown: modelUserView.detailMarkdown.trim().length > 0 ? modelUserView.detailMarkdown : undefined,
+            }
+          : { text: visibleText };
         const messageId = insertVisibleStageMessage(db, {
           task: { id: task.id, project_id: task.project_id, conversation_id: task.conversation_id, conversation_thread_id: task.conversation_thread_id, room_id: task.room_id },
           runId: input.runId,

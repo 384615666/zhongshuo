@@ -41,6 +41,7 @@ export function simulateDeliberationTurn(text: string): FakeTurnScript {
     return done({
       schemaVersion: 'analysis-draft-v1',
       summary: '模拟独立分析：基于基线给出两条结论',
+      detailMarkdown: '# 独立分析详情\n\n- 关键风险在依赖版本。\n- 建议先补集成测试。',
       claims: [
         { claimId: 'c1', statement: '关键风险在依赖版本', kind: 'inferred', evidenceIds: ['ev1'], uncertainty: '未实测' },
         { claimId: 'c2', statement: '建议先补集成测试', kind: 'proposal', evidenceIds: ['ev1'] },
@@ -66,8 +67,11 @@ export function simulateDeliberationTurn(text: string): FakeTurnScript {
         });
       }
     }
-    if (reviews.length === 0) return done({ schemaVersion: 'cross-review-v1', reviews: [] });
-    return done({ schemaVersion: 'cross-review-v1', reviews });
+    const summary = reviews.length === 0 ? '本轮没有可评审的他人结论。' : '模拟互评：已逐条给出立场与证据要求。';
+    const detailMarkdown = reviews.length === 0
+      ? ''
+      : `# 互评详情\n\n${reviews.map((r, i) => `${i + 1}. 结论 ${String(r.targetClaimId)}：${String(r.stance)} — ${String(r.reason)}`).join('\n')}`;
+    return done({ schemaVersion: 'cross-review-v1', summary, detailMarkdown, reviews });
   }
   if (text.includes('issue-position-v1')) {
     // 对输入中列出的每个 issueId 给立场。
@@ -75,16 +79,25 @@ export function simulateDeliberationTurn(text: string): FakeTurnScript {
     const unique = [...new Set(issueIds)];
     return done({
       schemaVersion: 'issue-position-v1',
+      summary: '模拟争议讨论：已对冻结争议逐项给出立场。',
+      detailMarkdown: `# 争议讨论详情\n\n${unique.map((issueId, i) => `${i + 1}. ${issueId}：需要证据`).join('\n')}`,
       positions: unique.map((issueId) => ({ issueId, stance: 'needs_evidence', reason: '维持需要证据', newEvidence: [] })),
     });
   }
   if (text.includes('checkpoint-verdict-v1')) {
-    return done({ schemaVersion: 'checkpoint-verdict-v1', verdict: 'stop', reason: '无新证据，转入整合' });
+    return done({
+      schemaVersion: 'checkpoint-verdict-v1',
+      summary: '检查点结论：没有新的可验证证据，转入整合。',
+      detailMarkdown: '# 检查点详情\n\n- 结论：停止研讨。\n- 理由：无新证据。',
+      verdict: 'stop',
+      reason: '无新证据，转入整合',
+    });
   }
   if (text.includes('synthesis-v1')) {
     return done({
       schemaVersion: 'synthesis-v1',
       summary: '整合：共识与分歧如下',
+      detailMarkdown: '# 整合详情\n\n## 共识\n\n风险需要更多证据支撑。\n\n## 保留分歧\n\n是否先补测试。',
       claims: [{ statement: '风险需要更多证据支撑（各方认可的方向）', sourceRefs: ['c1'] }],
       disputedClaims: [{ statement: '是否先补测试', disagreementSummary: '一方认为先补测试，另一方认为先验证风险', sourceRefs: ['c2'] }],
       recommendations: ['按证据优先排序'],
@@ -95,6 +108,8 @@ export function simulateDeliberationTurn(text: string): FakeTurnScript {
     const unique = [...new Set(claimIds)];
     return done({
       schemaVersion: 'ratify-v1',
+      summary: '确认意见：已覆盖全部整合结论。',
+      detailMarkdown: `# 确认详情\n\n${unique.map((claimId, i) => `${i + 1}. ${claimId}：确认`).join('\n')}`,
       responses: unique.map((claimId) => ({ claimId, stance: 'confirm' })),
     });
   }

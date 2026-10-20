@@ -20,7 +20,8 @@
  *     仍在（recordLateArrival 记录 + artifact 行），仅不做「成功发言」投影。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
@@ -93,6 +94,7 @@ interface VisibleMessageRow {
 
 interface CollaborationStageBody {
   text: string;
+  detailMarkdown?: string;
   collaborationStage: { stage: string; roundNo: number; turnId: string; runId: string };
 }
 
@@ -282,6 +284,116 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     // artifact 已发布，但不在正文里出现 artifactId。
     expect(listRunArtifacts(db, RUN, 'analysis_draft')).toHaveLength(1);
     expect(body.text).not.toContain('art_turn_ind_1');
+    expect(db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(row.id)).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it('R95：模型 summary 逐字显示，detailMarkdown 逐字托管且 canonical 保留完整载荷', () => {
+    const db = openDatabase(':memory:');
+    const blobDir = freshBlobDir();
+    seed(db);
+    addTurn(db, { id: 'turn_ind_r95', stageKey: 'delib.independent' });
+    const summary = '模型总览：关键条件与待确认事项见详情。\n第二行保持原样  ';
+    const detailMarkdown = '  \n# 模型完整详情\n\n1. A1 字段保持业务编号\n2. 查询条件不是程序摘录依据\n\n日期：2026-10-20\n\nR95_DETAIL_TAIL  ';
+
+    const out = onStepOutput(db, {
+      taskId: TASK,
+      runId: RUN,
+      step: indStep(),
+      turnId: 'turn_ind_r95',
+      finalText: JSON.stringify({
+        schemaVersion: 'analysis-draft-v1',
+        summary,
+        detailMarkdown,
+        claims: [{ claimId: 'c1', statement: '结论', kind: 'proposal', evidenceIds: [], uncertainty: '' }],
+        recommendations: [],
+        openQuestions: [],
+      }),
+      options: options(blobDir),
+      now: 1_100,
+    });
+    expectCounted(out);
+
+    const row = visibleMessages(db)[0]!;
+    const body = bodyOf(row);
+    expect(body.text).toBe(summary);
+    expect(body.detailMarkdown).toBeUndefined();
+    const attachment = db.prepare(`SELECT ma.id,a.hash,a.blob_path FROM message_attachments ma
+      JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as { id: string; hash: string; blob_path: string };
+    expect(attachment.id.startsWith('matt_detail_')).toBe(true);
+    const hosted = readFileSync(attachment.blob_path, 'utf8');
+    expect(hosted).toBe(detailMarkdown);
+    expect(attachment.hash).toBe(createHash('sha256').update(Buffer.from(detailMarkdown, 'utf8')).digest('hex'));
+
+    const canonical = listRunArtifacts(db, RUN, 'analysis_draft')[0]!;
+    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { summary?: string; detailMarkdown?: string };
+    expect(canonicalPayload.summary).toBe(summary);
+    expect(canonicalPayload.detailMarkdown).toBe(detailMarkdown);
+    db.close();
+  });
+
+  it('R95：空 detailMarkdown 只显示模型 summary，不生成空附件，也不补写详情', () => {
+    const db = openDatabase(':memory:');
+    const blobDir = freshBlobDir();
+    seed(db);
+    addTurn(db, { id: 'turn_ind_r95_short', stageKey: 'delib.independent' });
+    const summary = '简短结论：无需额外详情。';
+    const out = onStepOutput(db, {
+      taskId: TASK,
+      runId: RUN,
+      step: indStep(),
+      turnId: 'turn_ind_r95_short',
+      finalText: JSON.stringify({
+        schemaVersion: 'analysis-draft-v1',
+        summary,
+        detailMarkdown: '',
+        claims: [{ claimId: 'c1', statement: '简短结论', kind: 'observed', evidenceIds: [] }],
+        recommendations: [],
+        openQuestions: [],
+      }),
+      options: options(blobDir),
+      now: 1_200,
+    });
+    expectCounted(out);
+
+    const row = visibleMessages(db)[0]!;
+    expect(bodyOf(row).text).toBe(summary);
+    expect(db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(row.id)).toEqual({ n: 0 });
+    const canonical = listRunArtifacts(db, RUN, 'analysis_draft')[0]!;
+    const canonicalPayload = JSON.parse(readFileSync(canonical.blob_path, 'utf8')) as { detailMarkdown?: string };
+    expect(canonicalPayload.detailMarkdown).toBe('');
+    db.close();
+  });
+
+  it('R95：全空白 summary 不作为模型总览，回退完整 legacy 正文且不伪造详情', () => {
+    const db = openDatabase(':memory:');
+    const blobDir = freshBlobDir();
+    seed(db);
+    addTurn(db, { id: 'turn_ind_r95_blank', stageKey: 'delib.independent' });
+    const out = onStepOutput(db, {
+      taskId: TASK,
+      runId: RUN,
+      step: indStep(),
+      turnId: 'turn_ind_r95_blank',
+      finalText: JSON.stringify({
+        schemaVersion: 'analysis-draft-v1',
+        summary: '   ',
+        detailMarkdown: '# 不应作为宿主详情',
+        claims: [{ claimId: 'c1', statement: 'legacy 正文保留', kind: 'observed', evidenceIds: [] }],
+        recommendations: [],
+        openQuestions: [],
+      }),
+      options: options(blobDir),
+      now: 1_300,
+    });
+    expectCounted(out);
+
+    const row = visibleMessages(db)[0]!;
+    const body = bodyOf(row);
+    expect(body.text).toContain('【独立分析】');
+    expect(body.text).toContain('legacy 正文保留');
+    expect(body.text).not.toBe('   ');
+    expect(db.prepare('SELECT count(*) n FROM message_attachments WHERE message_id=?').get(row.id)).toEqual({ n: 0 });
     db.close();
   });
 

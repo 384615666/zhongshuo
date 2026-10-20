@@ -177,7 +177,7 @@ describe('R94 单有效初稿', () => {
     db.close();
   });
 
-  it('keeps a legal uploaded document in sequential IND but excludes a prior auto detail MD', async () => {
+  it('keeps a legal uploaded document in sequential IND but excludes a prior model-written detail MD', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2']);
     const taskId = createDelibTask(db, 11, ['m1', 'm2']);
@@ -204,11 +204,12 @@ describe('R94 单有效初稿', () => {
       VALUES ('art_r94_upload','p1','c1','thread_11',? ,?,'u_human','text_file',1,?,?,'r94-upload.md')`).run(taskId, runId, uploadHash, uploadPath);
     db.prepare(`INSERT INTO message_attachments (id,message_id,thread_id,artifact_id,display_name,mime_type,source_hash)
       VALUES ('matt_r94_upload','msg_root_11','thread_11','art_r94_upload','r94-upload.md','text/markdown',?)`).run(uploadHash);
-    const detailTail = 'R94_AUTO_DETAIL_TAIL_MUST_NOT_REACH_B';
-    const longSummary = `${'A 合成长摘要。'.repeat(100)}\n\n${detailTail}`;
-    const aPayload = { ...(draft(longSummary, [{ claimId: 'c1', statement: 'A canonical claim' }]) as Record<string, unknown>) };
+    const detailTail = 'R94_MODEL_DETAIL_TAIL_MUST_NOT_REACH_B';
+    const summary = 'A 模型总览：完整依据见详情附件。';
+    const detailMarkdown = `# A 完整详情\n\n${'A 完整依据。'.repeat(100)}\n\n${detailTail}`;
+    const aPayload = { ...(draft(summary, [{ claimId: 'c1', statement: 'A canonical claim' }]) as Record<string, unknown>), detailMarkdown };
     scripts.push(done(aPayload));
-    await step(worker, scripts); // IND m1 creates one auto detail MD
+    await step(worker, scripts); // IND m1 hosts one model-written detail MD
     scripts.push(done(draft('B canonical draft', [{ claimId: 'c1', statement: 'B canonical claim' }])));
     await step(worker, scripts); // IND m2 must see upload, not A detail
     const drafts = listRunArtifacts(db, runId, 'analysis_draft');
