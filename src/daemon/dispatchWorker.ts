@@ -1477,8 +1477,10 @@ export class DispatchWorker {
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
         budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns}});
       if(!materials.ok)throw Error(materials.error.message);
-      // Only attachment material is reused. Independent stages never receive other members' drafts through DIRECT history.
-      assembly.value.text+=`\n\n【本轮权限】多人研讨角色只读，使用运行时允许的只读工具，不修改文件；成员原权限配置未改变。\n【附件材料】${JSON.stringify(materials.value.envelope.attachments)}\n图片内容通过独立图片输入块提供（${materials.value.images?.length??0}张）。`;
+      // App-managed R93 details are derived from earlier visible answers, not
+      // canonical stage material for any DELIB step; user uploads remain.
+      const stageAttachments=(materials.value.envelope.attachments??[]).filter((attachment)=>attachment.detail!==true);
+      assembly.value.text+=`\n\n【本轮权限】多人研讨角色只读，使用运行时允许的只读工具，不修改文件；成员原权限配置未改变。\n【附件材料】${JSON.stringify(stageAttachments)}\n图片内容通过独立图片输入块提供（${materials.value.images?.length??0}张）。`;
     }catch(error){
       this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=?").run(run.id,step.memberId);
       this.audit(task,run.id,null,'run.stepFailed',{stage:step.stage,memberId:step.memberId,message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);pumpDeliberation(this.db,task.id,this.deliberationOptions(task.project_id));return;

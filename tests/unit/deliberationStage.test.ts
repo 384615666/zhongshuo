@@ -121,6 +121,11 @@ describe('成果引用三元组与争议身份（修复轮）', () => {
     ]);
     expect(bad.ok).toBe(false);
     expect((bad as { error: { code: string } }).error.code).toBe('CLAIM_NOT_FOUND');
+    const detailPseudoClaim = validateClaimReferences(frozen, [
+      { reviewerMemberId: 'm1', target: { artifactId: 'art_detail_derived', artifactRevision: 1, claimId: 'c1' }, stance: 'agree' },
+    ]);
+    expect(detailPseudoClaim.ok).toBe(false);
+    expect((detailPseudoClaim as { error: { code: string } }).error.code).toBe('CLAIM_NOT_FOUND');
     const ok = validateClaimReferences(frozen, [
       { reviewerMemberId: 'm1', target: { artifactId: 'art_a', artifactRevision: 1, claimId: 'c1' }, stance: 'agree' },
       { reviewerMemberId: 'm1', target: { artifactId: 'art_b', artifactRevision: 1, claimId: 'c1' }, stance: 'disagree' },

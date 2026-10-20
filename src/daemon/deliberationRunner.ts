@@ -410,6 +410,13 @@ function frozenDrafts(db: ZhongshuoDatabase, runId: string): DraftArtifact[] {
   return drafts;
 }
 
+/** CR may only read canonical drafts frozen for this stage, and never the reviewer's own draft. */
+function peerReviewDrafts(db: ZhongshuoDatabase, runId: string, reviewerMemberId: string): DraftArtifact[] {
+  const manifest = frozenStageInputs(db, runId, 'CROSS_REVIEW', 0);
+  const drafts = manifest != null ? draftsFromManifest(db, runId, manifest) : frozenDrafts(db, runId);
+  return drafts.filter((draft) => draft.memberId !== reviewerMemberId);
+}
+
 function draftClaims(drafts: readonly DraftArtifact[]): FrozenClaim[] {
   return drafts.flatMap((d) => d.payload.claims.map((c) => ({ artifactId: d.artifactId, artifactRevision: d.revision, claimId: c.claimId, statement: c.statement })));
 }
@@ -494,6 +501,36 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       }));
       const decision = decideIndependentBarrier(roster, facts);
       if (decision.decision === 'advance') {
+        if (drafts.length < 2) {
+          // No peer exists to review. Do not enqueue a CR whose peer material would be
+          // empty and whose non-empty schema would force a fabricated reference.
+          const reason = drafts.length === 1
+            ? '仅一份有效独立初稿；没有可评审的他人初稿，跳过互评进入整合'
+            : '没有可评审的有效初稿';
+          const host = hostOf(roster);
+          if (['failed', 'absent', 'unavailable'].includes(statusOf(participants, host))) {
+            // The only executable member cannot be silently promoted to host; preserve
+            // the draft and expose the missing host as a blocked state.
+            db.prepare("UPDATE workflow_runs SET status='FAILED' WHERE id=?").run(run.id);
+            db.prepare("UPDATE tasks SET status='BLOCKED' WHERE id=? AND status NOT IN ('CANCELLED','DONE')").run(taskId);
+            settleThreadReplyForRun(db,run.id,'failed','主持人不可执行；保留现有初稿，未自动换主持人');
+            appendDomainEvent(db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
+              threadId, taskId, runId: run.id, kind: 'run.stepFailed', createdAt: now,
+              payload: { stage: 'SYNTHESIS', memberId: host, message: '主持人不可执行；已保留初稿，需处理后显式继续', reason: 'host_failed_or_unavailable', draftMemberIds: drafts.map((draft) => draft.memberId), note: '不自动换主持人；保留初稿' },
+            });
+            return { advanced: true, blocked: '主持人不可执行；保留初稿，等待后续处理' };
+          }
+          advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'INDEPENDENT', reason });
+          freezeSynthesisInputs(db, run.id);
+          enqueueSynthesis(db, run.id, taskId, hostOf(roster));
+          appendDomainEvent(db, {
+            schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
+            threadId, taskId, runId: run.id, kind: 'run.crossReviewSkipped', createdAt: now,
+            payload: { reason, draftMemberIds: drafts.map((draft) => draft.memberId) },
+          });
+          return { advanced: true };
+        }
         advanceStage(db, run.id, taskId, 'CROSS_REVIEW', 0, now, { from: 'INDEPENDENT', reason: decision.reason });
         // 冻结互评输入清单：此后到达的迟到初稿不入本阶段任何成员的互评材料（§4.3/E4 边界）。
         freezeStageInputs(db, run.id, 'CROSS_REVIEW', 0, artifactsEntries(db, run.id, 'analysis_draft'));
@@ -946,9 +983,9 @@ function renderStageBody(
     return `${base}${listingBlock}\n\n你是独立分析成员（${step.memberId}）。请独立完成首轮分析。`;
   }
   if (step.stage === 'CR') {
-    // 冻结清单约束：只读 CROSS_REVIEW 冻结版本中的初稿（迟到初稿不改任何同轮成员材料）。
-    const manifest = frozenStageInputs(db, runId, 'CROSS_REVIEW', 0);
-    const drafts = (manifest != null ? draftsFromManifest(db, runId, manifest) : frozenDrafts(db, runId)).filter((d) => d.memberId !== step.memberId);
+    // 冻结清单约束：只读 CROSS_REVIEW 冻结版本中的他人 canonical 初稿
+    // （迟到初稿不改任何同轮成员材料；自己的初稿不是可评审对象）。
+    const drafts = peerReviewDrafts(db, runId, step.memberId);
     const listing = drafts.map((d) => ({
       artifactId: d.artifactId,
       revision: d.revision,
@@ -1382,7 +1419,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   const payload = result.data as Record<string, unknown>;
   // 引用校验（CR：三元组属冻结可读版本）。
   if (input.step.stage === 'CR') {
-    const drafts = frozenDrafts(db, input.runId);
+    const drafts = peerReviewDrafts(db, input.runId, input.step.memberId);
     const claims = draftClaims(drafts);
     const reviews = (payload.reviews as Array<{ targetArtifactId: string; targetRevision: number; targetClaimId: string; stance: 'agree' | 'disagree' | 'needs_evidence' }>)
       .map((r) => ({ reviewerMemberId: input.step.memberId, target: { artifactId: r.targetArtifactId, artifactRevision: r.targetRevision, claimId: r.targetClaimId }, stance: r.stance }));
@@ -1445,7 +1482,7 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
       advanceStage(db, input.runId, input.taskId, 'RATIFY', 0, now, { from: 'SYNTHESIS', reason: '整合稿冻结，进入确认', synthesisArtifactId: artifactId });
       const tx2members = roster.members.map((m: { memberId: string }) => m.memberId);
       for (const memberId of tx2members) {
-        if (['absent', 'unavailable'].includes(statusOf(participantsOf(db, input.runId), memberId))) continue; // 缺席/排队截止者不再派发确认
+        if (['absent', 'unavailable', 'failed'].includes(statusOf(participantsOf(db, input.runId), memberId))) continue; // 失败/缺席/排队截止者不再派发确认
         enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId: input.taskId, runId: input.runId, stage: 'RAT', memberId, roundNo: 0, purpose: 'stage_work' }) });
       }
     }

@@ -47,9 +47,9 @@ describe('E4 缺席容忍（成员执行事实级；假时钟/短截止，不真
     expect(db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(runId, 'm2')).toMatchObject({ status: 'absent' });
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ status: 'RUNNING' });
     expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get('task_1')).not.toMatchObject({ status: 'CANCELLED' });
-    // 屏障以 m1 现有成果推进到互评。
+    // 仅 m1 有成果、m2 缺席：不派发空 peer CR，直接进入单人整合。
     pumpDeliberation(db, 'task_1', { absenceToleranceMs: 60_000, blobDir: join(tmpRoot, 'app-1', 'artifacts') });
-    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'CROSS_REVIEW' });
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'SYNTHESIS' });
     await adapter.closeAllSessions();
     db.close();
   }, 30_000);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -8,7 +8,6 @@ import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
-import { listRunArtifacts } from '../../src/persistence/stores/deliberation.ts';
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -47,20 +46,14 @@ function deliberationSequencer(db: ReturnType<typeof openDatabase>, taskId: stri
       }));
     }
     if (text.includes('"schemaVersion":"cross-review-v1"')) {
-      const run = db.prepare(
-        "SELECT id FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1",
-      ).get(taskId) as { id: string };
-      const drafts = listRunArtifacts(db, run.id, 'analysis_draft');
-      const draft = drafts[0]!;
-      const payload = JSON.parse(readFileSync(draft.blob_path, 'utf8')) as {
-        claims: Array<{ claimId: string }>;
-      };
+      const peer = /"artifactId"\s*:\s*"([^"]+)"[\s\S]*?"revision"\s*:\s*(\d+)[\s\S]*?"claimId"\s*:\s*"([^"]+)"/.exec(text);
+      if (peer == null) throw new Error(`CR input missing frozen peer JSON: ${text.slice(0, 160)}`);
       return done(JSON.stringify({
         schemaVersion: 'cross-review-v1',
         reviews: [{
-          targetArtifactId: draft.id,
-          targetRevision: draft.revision,
-          targetClaimId: payload.claims[0]!.claimId,
+          targetArtifactId: peer[1],
+          targetRevision: Number(peer[2]),
+          targetClaimId: peer[3],
           stance: 'disagree',
           reason: '需要独立核对边界',
           evidenceIds: ['ev2'],

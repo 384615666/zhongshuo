@@ -42,7 +42,15 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     const taskId = createDelibTask(db, 1, ['m1', 'm2', 'm3']);
     const scripts: FakeTurnScript[] = [];
     let fakeNow = 1_000_000;
-    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const reviewFromFrozenPeer = (text: string): FakeTurnScript | null => {
+      const match = /"artifactId"\s*:\s*"([^"]+)"[\s\S]*?"revision"\s*:\s*(\d+)[\s\S]*?"claimId"\s*:\s*"([^"]+)"/.exec(text);
+      if (match == null || !text.includes('待评审初稿')) return null;
+      return done({ schemaVersion: 'cross-review-v1', reviews: [{
+        targetArtifactId: match[1], targetRevision: Number(match[2]), targetClaimId: match[3],
+        stance: 'agree', reason: '按冻结 peer 输入动态评审', evidenceIds: [],
+      }] });
+    };
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: ({ text }) => reviewFromFrozenPeer(text) ?? scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
     const worker = new DispatchWorker({
       db, adapter, leaseOwner: 'w-det', enableDeliberate: true, detachedTurnConsumption: true,
       absenceToleranceMs: 200, turnDeadlineMs: 8_000, interruptGraceMs: 50,
@@ -74,14 +82,6 @@ describe('E4 调度解耦（detached）：泵在途推进 + 成员互斥 + 迟�
     fakeNow = started.exec_started_at + 250; // 宽限 200 + ε（假时钟；单轮截止 8s 未到）
     const runId = runIdOf(db);
     // CR 载荷引用冻结清单内真实 artifact（m2 评 m3 稿、m3 评 m2 稿）。
-    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
-    const m2Art = drafts.find((a) => a.author_id === 'm2')!;
-    const m3Art = drafts.find((a) => a.author_id === 'm3')!;
-    const reviewOf = (target: string) => done({ schemaVersion: 'cross-review-v1', reviews: [
-      { targetArtifactId: target, targetRevision: 1, targetClaimId: 'c1', stance: 'agree', reason: '认同', evidenceIds: [] },
-    ] });
-    scripts.push(reviewOf(m3Art.id)); // CR m2
-    scripts.push(reviewOf(m2Art.id)); // CR m3
     // CR 阶段完成以**成果**计（首次载荷校验失败→一次格式修复成功=机制按设计自愈，
     // 修复 turn 的 stage_key 带 .fx 后缀，不计入原键 turn 状态）。
     await waitUntil(() => {

@@ -4,7 +4,8 @@
  * 时钟注入（drain 循环不复用进入时 now）。
  */
 import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../../src/persistence/db.ts';
@@ -12,7 +13,7 @@ import type { ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
-import { onStepOutput, prepareDeliberation, type DelibStep } from '../../src/daemon/deliberationRunner.ts';
+import { assembleStepInput, frozenStageInputs, onStepOutput, prepareDeliberation, type DelibStep } from '../../src/daemon/deliberationRunner.ts';
 import { listRunArtifacts } from '../../src/persistence/stores/deliberation.ts';
 import { seed, createDelibTask, done, draft, runIdOf, step } from './deliberationFlow.test.ts';
 
@@ -23,7 +24,7 @@ function opts(absenceMs = 60_000) {
   return { absenceToleranceMs: absenceMs, blobDir: join(tmpRoot, 'art') };
 }
 
-/** 让 m2 的 IND 轮截止中断缺席，run 推进到 CROSS_REVIEW（m1 单人成果）。 */
+/** 让 m2 的 IND 轮截止中断缺席；仅 m1 有初稿时应跳过 CR 进入 SYNTHESIS。 */
 async function setupWithAbsentM2(db: ZhongshuoDatabase): Promise<{ scripts: FakeTurnScript[]; adapter: FakeRuntimeAdapter; worker: DispatchWorker; runId: string; taskId: string }> {
   const taskId = createDelibTask(db, 1, ['m1', 'm2']);
   const scripts: FakeTurnScript[] = [];
@@ -37,12 +38,26 @@ async function setupWithAbsentM2(db: ZhongshuoDatabase): Promise<{ scripts: Fake
   return { scripts, adapter, worker, runId: runIdOf(db), taskId };
 }
 
+async function setupWithFailedHost(db: ZhongshuoDatabase): Promise<{ scripts: FakeTurnScript[]; adapter: FakeRuntimeAdapter; worker: DispatchWorker; runId: string; taskId: string }> {
+  const taskId = createDelibTask(db, 10, ['m1', 'm2']);
+  const scripts: FakeTurnScript[] = [];
+  const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+  const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-failed-host', enableDeliberate: true, absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-failed-host') });
+  await step(worker, scripts); // PREPARE
+  scripts.push([{ kind: 'event', event: { kind: 'turn.failed', code: 'PROVIDER_ERROR', message: '合成主持人失败', retryable: false } }]);
+  await step(worker, scripts); // IND host m1 failed
+  scripts.push(done(draft('乙的唯一稿', [{ claimId: 'c1', statement: '唯一可保留结论' }])));
+  await step(worker, scripts); // IND m2 succeeded; host is unavailable
+  return { scripts, adapter, worker, runId: runIdOf(db), taskId };
+}
+
 describe('迟到成果（E4 后半段）', () => {
   it('未冻结时到达：发布计入 run、absent→late、后续整合可见（不污染已冻结输入）', async () => {
     const db = openDatabase(':memory:');
     seed(db, ['m1', 'm2']);
     const { adapter, runId, taskId } = await setupWithAbsentM2(db);
-    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'CROSS_REVIEW' });
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'SYNTHESIS' });
+    expect(frozenStageInputs(db, runId, 'SYNTHESIS', 0)?.entries).toHaveLength(1);
     // m2 的迟到 IND 成果（其 turn 曾被截止；此处以原 turnId 直接交付模拟迟到到达）。
     const lateStep: DelibStep = { taskId, runId, stage: 'IND', memberId: 'm2', roundNo: 0, purpose: 'stage_work' };
     const out = onStepOutput(db, { taskId, runId, step: lateStep, turnId: 'turn_late_1', finalText: JSON.stringify(draft('乙迟到稿', [{ claimId: 'c1', statement: '迟到结论' }])), options: opts() });
@@ -130,6 +145,154 @@ describe('运行与版本身份（同任务多 run）', () => {
     await adapter.closeAllSessions();
     db.close();
   }, 30_000);
+});
+
+describe('R94 单有效初稿', () => {
+  it('does not dispatch CROSS_REVIEW to the sole author; proceeds to synthesis without an empty peer bundle', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const { adapter, runId } = await setupWithAbsentM2(db);
+    const run = db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId) as { stage: string };
+    expect(run.stage).toBe('SYNTHESIS');
+    expect(db.prepare('SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ?').get(`%${runId}:CR:%`)).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ?').get(`%${runId}:SYN:%`)).toEqual({ n: 1 });
+    expect(frozenStageInputs(db, runId, 'SYNTHESIS', 0)?.entries).toHaveLength(1);
+    expect(db.prepare("SELECT count(*) n FROM agent_turns WHERE run_id=? AND stage_key LIKE 'delib.cross_review%'").get(runId)).toEqual({ n: 0 });
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('blocks with a readable diagnostic and preserves the sole draft when the host failed', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const { adapter, runId, taskId } = await setupWithFailedHost(db);
+    expect(db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(runId)).toEqual({ status: 'FAILED' });
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({ status: 'BLOCKED' });
+    expect(db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ? AND status != 'done'").get(`%${runId}:CR:%`)).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ? AND status != 'done'").get(`%${runId}:SYN:%`)).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) n FROM artifacts WHERE run_id=? AND kind='analysis_draft' AND author_id='m2'").get(runId)).toEqual({ n: 1 });
+    const diagnostic = db.prepare("SELECT payload_json FROM domain_events WHERE run_id=? AND kind='run.stepFailed' ORDER BY seq DESC LIMIT 1").get(runId) as { payload_json: string };
+    expect(JSON.parse(diagnostic.payload_json)).toMatchObject({ stage: 'SYNTHESIS', message: '主持人不可执行；已保留初稿，需处理后显式继续' });
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('keeps a legal uploaded document in sequential IND but excludes a prior auto detail MD', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const taskId = createDelibTask(db, 11, ['m1', 'm2']);
+    const scripts: FakeTurnScript[] = [];
+    const appDataDir = join(tmpRoot, 'r94-ind-isolation');
+    const reviewFromFrozenPeer = (text: string): FakeTurnScript | null => {
+      const match = /"artifactId"\s*:\s*"([^"]+)"[\s\S]*?"revision"\s*:\s*(\d+)[\s\S]*?"claimId"\s*:\s*"([^"]+)"/.exec(text);
+      if (match == null || !text.includes('待评审初稿')) return null;
+      return done({ schemaVersion: 'cross-review-v1', reviews: [{
+        targetArtifactId: match[1], targetRevision: Number(match[2]), targetClaimId: match[3],
+        stance: 'agree', reason: '合法 frozen peer', evidenceIds: [],
+      }] });
+    };
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: ({ text }) => reviewFromFrozenPeer(text) ?? scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({ db, adapter, leaseOwner: 'r94-ind-isolation', enableDeliberate: true, absenceToleranceMs: 60_000, appDataDir });
+    await step(worker, scripts); // PREPARE
+    const runId = runIdOf(db);
+    const uploadBytes = Buffer.from('R94_LEGAL_UPLOAD_TEXT\n', 'utf8');
+    const uploadHash = createHash('sha256').update(uploadBytes).digest('hex');
+    const uploadPath = join(appDataDir, 'blobstore', `${uploadHash}.txt`);
+    mkdirSync(join(appDataDir, 'blobstore'), { recursive: true });
+    writeFileSync(uploadPath, uploadBytes);
+    db.prepare(`INSERT INTO artifacts (id,project_id,conversation_id,thread_id,task_id,run_id,author_id,kind,revision,hash,blob_path,source_name)
+      VALUES ('art_r94_upload','p1','c1','thread_11',? ,?,'u_human','text_file',1,?,?,'r94-upload.md')`).run(taskId, runId, uploadHash, uploadPath);
+    db.prepare(`INSERT INTO message_attachments (id,message_id,thread_id,artifact_id,display_name,mime_type,source_hash)
+      VALUES ('matt_r94_upload','msg_root_11','thread_11','art_r94_upload','r94-upload.md','text/markdown',?)`).run(uploadHash);
+    const detailTail = 'R94_AUTO_DETAIL_TAIL_MUST_NOT_REACH_B';
+    const longSummary = `${'A 合成长摘要。'.repeat(100)}\n\n${detailTail}`;
+    const aPayload = { ...(draft(longSummary, [{ claimId: 'c1', statement: 'A canonical claim' }]) as Record<string, unknown>) };
+    scripts.push(done(aPayload));
+    await step(worker, scripts); // IND m1 creates one auto detail MD
+    scripts.push(done(draft('B canonical draft', [{ claimId: 'c1', statement: 'B canonical claim' }])));
+    await step(worker, scripts); // IND m2 must see upload, not A detail
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    const aArtifact = drafts.find((artifact) => artifact.author_id === 'm1')!;
+    const bArtifact = drafts.find((artifact) => artifact.author_id === 'm2')!;
+    const peerAssembly = assembleStepInput(db, {
+      taskId, runId,
+      step: { taskId, runId, stage: 'CR', memberId: 'm1', roundNo: 0, purpose: 'stage_work' },
+    });
+    expect(peerAssembly.ok).toBe(true);
+    if (!peerAssembly.ok) throw new Error(peerAssembly.error.message);
+    expect(peerAssembly.value.text).toContain(bArtifact.id);
+    expect(peerAssembly.value.text).not.toContain(aArtifact.id);
+    const detail = db.prepare(`SELECT a.id artifact_id,a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id
+      WHERE ma.id LIKE 'matt_detail_%' ORDER BY ma.rowid DESC LIMIT 1`).get() as { artifact_id: string; blob_path: string };
+    expect(detail.artifact_id).toBeTruthy();
+    expect(readFileSync(detail.blob_path, 'utf8')).toContain(detailTail);
+    const latePayload = draft('late unfrozen draft', [{ claimId: 'c1', statement: 'late claim' }]);
+    const lateBytes = Buffer.from(JSON.stringify(latePayload), 'utf8');
+    const lateHash = createHash('sha256').update(lateBytes).digest('hex');
+    const latePath = join(appDataDir, 'blobstore', `${lateHash}.json`);
+    writeFileSync(latePath, lateBytes);
+    db.prepare(`INSERT INTO artifacts (id,project_id,conversation_id,thread_id,task_id,run_id,author_id,kind,revision,hash,blob_path,source_name)
+      VALUES ('art_r94_late','p1','c1','thread_11',?,?,'m2','analysis_draft',1,?,?,'late-draft.json')`).run(taskId, runId, lateHash, latePath);
+    const invalidAttempt = (turnId: string, artifactId: string, revision: number) => onStepOutput(db, {
+      taskId, runId, turnId,
+      step: { taskId, runId, stage: 'CR', memberId: 'm1', roundNo: 0, purpose: 'stage_work' },
+      finalText: JSON.stringify({ schemaVersion: 'cross-review-v1', reviews: [{
+        targetArtifactId: artifactId, targetRevision: revision, targetClaimId: 'c1', stance: 'agree', reason: 'invalid synthetic attempt', evidenceIds: [],
+      }] }),
+      options: opts(),
+    });
+    for (const [turnId, artifactId, revision] of [
+      ['turn_r94_self', aArtifact.id, 1],
+      ['turn_r94_late', 'art_r94_late', 1],
+      ['turn_r94_revision', bArtifact.id, 2],
+      ['turn_r94_detail', detail.artifact_id, 1],
+    ] as const) {
+      const rejected = invalidAttempt(turnId, artifactId, revision);
+      expect(rejected.ok).toBe(true);
+      if (!rejected.ok) throw new Error(rejected.error.message);
+      expect(rejected.value.counted).toBe(false);
+      expect(rejected.value.needsRepair).toContain('互评引用未获准的结论版本');
+    }
+    await step(worker, scripts); // legal frozen peer CR through real DispatchWorker
+    const crTurn = db.prepare("SELECT id,member_id FROM agent_turns WHERE run_id=? AND stage_key='delib.cross_review' ORDER BY rowid DESC LIMIT 1").get(runId) as { id: string; member_id: string };
+    const crBundle = db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(crTurn.id) as { included_refs_json: string };
+    const crText = (JSON.parse(crBundle.included_refs_json) as { text: string }).text;
+    expect(crText).toContain(crTurn.member_id === 'm1' ? bArtifact.id : aArtifact.id);
+    expect(crText).not.toContain(detailTail);
+    expect(crText).not.toContain(detail.artifact_id);
+    const bundle = db.prepare(`SELECT included_refs_json FROM context_bundles cb JOIN agent_turns at ON at.id=cb.turn_id
+      WHERE at.run_id=? AND at.stage_key='delib.independent' AND at.member_id='m2'`).get(runId) as { included_refs_json: string };
+    const text = (JSON.parse(bundle.included_refs_json) as { text: string }).text;
+    expect(text).toContain('R94_LEGAL_UPLOAD_TEXT');
+    expect(text).not.toContain(detailTail);
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('keeps a failed peer missing and overall consensus non-unanimous after skipping CR', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const { scripts, worker, runId, adapter } = await setupWithAbsentM2(db);
+    db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id='m2'").run(runId);
+    scripts.push(done({
+      schemaVersion: 'synthesis-v1',
+      summary: '单人有效初稿的整合',
+      claims: [{ statement: '按合成初稿推进', sourceRefs: ['c1'] }],
+      disputedClaims: [],
+      recommendations: [],
+    }));
+    await step(worker, scripts); // SYN
+    expect(db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ?").get(`%${runId}:RAT:m2:%`)).toEqual({ n: 0 });
+    expect(db.prepare("SELECT count(*) n FROM outbox WHERE dispatch_key LIKE ?").get(`%${runId}:RAT:m1:%`)).toEqual({ n: 1 });
+    scripts.push(done({ schemaVersion: 'ratify-v1', responses: [{ claimId: 'clm_1', stance: 'confirm' }] }));
+    await step(worker, scripts); // RAT m1
+    const report = db.prepare("SELECT blob_path FROM artifacts WHERE run_id=? AND kind='final_report' ORDER BY rowid DESC LIMIT 1").get(runId) as { blob_path: string };
+    const payload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as { overallConsensus: string; claimResults: Array<{ missing: number }> };
+    expect(payload.overallConsensus).not.toBe('unanimous');
+    expect(payload.claimResults[0]?.missing).toBeGreaterThan(0);
+    await adapter.closeAllSessions();
+    db.close();
+  });
 });
 
 describe('时钟注入（drain 不复用进入时的 now）', () => {
