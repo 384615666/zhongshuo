@@ -42,6 +42,8 @@ import { localUserId } from '../src/contracts/daemonIpc.ts';
 import { listRunArtifacts } from '../src/persistence/stores/deliberation.ts';
 
 export const R91_FIXTURE_FORMAT = 'r91-visible-fixture-v1';
+export const R93_DETAIL_MARKER = 'R93_CANDIDATE_DETAIL_TAIL';
+export const R93_DETAIL_MARKDOWN = `# R93 合成完整详情\n\n本文件由合法 TaskComplete detailMarkdown 托管，仅用于候选验收。\n\n${'合成证据。'.repeat(80)}\n\n${R93_DETAIL_MARKER}\n`;
 export const R91_LIVE_MARKER = 'R91_LIVE_STAGE_UPDATE';
 export const R91_GENERATED_FILES = {
   xlsx: 'results/R91-成本对比-合成版.xlsx',
@@ -218,10 +220,11 @@ interface PrepareOptions {
   projectPath: string;
   reportPath: string;
   includeLive: boolean;
+  r93Detail: boolean;
 }
 
 async function prepare(options: PrepareOptions): Promise<void> {
-  const { root, appData, projectPath, reportPath, includeLive } = options;
+  const { root, appData, projectPath, reportPath, includeLive, r93Detail } = options;
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
   assertEmptyOrMissing(appData);
   assertEmptyOrMissing(projectPath);
@@ -349,6 +352,10 @@ async function prepare(options: PrepareOptions): Promise<void> {
           schemaVersion: TASK_COMPLETE_SCHEMA_VERSION,
           resultKey: `result_${turn.id}`,
           changeSummary: 'R91 合成生成文件回复（FAKE/SYNTHETIC）',
+          ...(r93Detail ? {
+            answer: '合成文件已生成，完整说明见下方完整详情。',
+            detailMarkdown: R93_DETAIL_MARKDOWN,
+          } : {}),
           files,
           executedVerifications: ['FakeRuntimeAdapter writeFile + 正式 snapshotGeneratedFiles 链'],
           unexecutedVerifications: [],
@@ -416,6 +423,24 @@ async function prepare(options: PrepareOptions): Promise<void> {
       };
     });
     if (fileReports.length !== 3) throw new Error('生成文件数量不是 3');
+    const detailAttachment = (() => {
+      if (!r93Detail) return null;
+      const row = db.prepare(`SELECT ma.id attachment_id,a.id artifact_id,a.hash,a.blob_path,a.source_name,a.kind
+        FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id
+        WHERE ma.message_id=? AND ma.id LIKE 'matt_detail_%'`).get(finalMessage.id) as
+        {attachment_id:string;artifact_id:string;hash:string;blob_path:string;source_name:string;kind:string}|undefined;
+      if (row == null) throw new Error('R93 候选夹具缺少托管详情附件');
+      const bytes = readFileSync(row.blob_path);
+      if (sha256(bytes) !== row.hash || bytes.toString('utf8') !== R93_DETAIL_MARKDOWN) {
+        throw new Error('R93 候选夹具详情字节/hash 不一致');
+      }
+      return {
+        attachmentId: row.attachment_id, artifactId: row.artifact_id,
+        filename: row.source_name, kind: row.kind,
+        sha256: row.hash, bytes: bytes.length, blobPath: row.blob_path,
+        marker: R93_DETAIL_MARKER, messageId: finalMessage.id,
+      };
+    })();
 
     // ---------- DM（仅记录；用于全 APP 草稿切换验证） ----------
     const dm = await cmd<{ conversationId: string }>('conversation.create', { projectId, peerMemberId: members[0]!.id, title: 'R91 合成私信' });
@@ -454,6 +479,7 @@ async function prepare(options: PrepareOptions): Promise<void> {
     assertions.stageCount = stageMessages.length;
     assertions.stageSet = [...stages].sort();
     assertions.generatedFiles = fileReports.length;
+    assertions.detailAttachment = detailAttachment != null;
     assertions.realCalls = realCalls;
     assertions.pendingTurns = pendingTurns;
     assertions.liveRequestQueued = includeLive;
@@ -477,6 +503,7 @@ async function prepare(options: PrepareOptions): Promise<void> {
       generatedMessageId: finalMessage.id,
       generatedMessageAuthor: { id: finalMessage.author_id, displayName: memberName.get(finalMessage.author_id) ?? finalMessage.author_id },
       generatedFiles: fileReports,
+      detailAttachment,
       dmConversationId: dm.conversationId,
       dmMessageId: dmSubmit.messageId ?? null,
       liveMarker: liveMessageId == null ? null : R91_LIVE_MARKER,
@@ -486,7 +513,7 @@ async function prepare(options: PrepareOptions): Promise<void> {
     };
     mkdirSync(dirname(reportPath), { recursive: true });
     writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
-    process.stdout.write(`${JSON.stringify({ ok: true, report: reportPath, projectId, threadId, stageMessages: stageMessages.length, generatedFiles: fileReports.length, realCalls }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, report: reportPath, projectId, threadId, stageMessages: stageMessages.length, generatedFiles: fileReports.length, detailAttachment: detailAttachment != null, realCalls }, null, 2)}\n`);
   } finally {
     await adapter.closeAllSessions().catch(() => undefined);
     db.close();
@@ -500,14 +527,14 @@ function parseArgs(argv: string[]): PrepareOptions {
     const argument = argv[i]!;
     if (!argument.startsWith('--')) throw new Error(`未知参数：${argument}`);
     const key = argument.slice(2);
-    if (['no-live'].includes(key)) { flags.add(key); continue; }
+    if (['no-live', 'r93-detail'].includes(key)) { flags.add(key); continue; }
     const value = argv[i + 1];
     if (value == null || value.startsWith('--')) throw new Error(`参数缺少值：${argument}`);
     values.set(key, value);
     i += 1;
   }
   const rootValue = values.get('root');
-  if (rootValue == null) throw new Error('usage: node --experimental-strip-types scripts/prepare-r91-visible-fixture.ts --root <fresh-root> [--app-data <dir>] [--project <dir>] [--report <file>] [--no-live]');
+  if (rootValue == null) throw new Error('usage: node --experimental-strip-types scripts/prepare-r91-visible-fixture.ts --root <fresh-root> [--app-data <dir>] [--project <dir>] [--report <file>] [--no-live] [--r93-detail]');
   const root = resolve(rootValue);
   return {
     root,
@@ -515,6 +542,7 @@ function parseArgs(argv: string[]): PrepareOptions {
     projectPath: resolve(values.get('project') ?? join(root, 'project')),
     reportPath: resolve(values.get('report') ?? join(root, 'fixture.json')),
     includeLive: !flags.has('no-live'),
+    r93Detail: flags.has('r93-detail'),
   };
 }
 

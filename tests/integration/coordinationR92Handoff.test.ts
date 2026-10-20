@@ -61,6 +61,38 @@ async function fixture(){
 }
 
 describe('R92 coordinator handoff completion',()=>{
+  it('injects both child complete-detail tails into the formal integration context',async()=>{
+    const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
+    try{
+      const aDetail='# 甲完整详情\n\n甲侧完整证据尾部 R93_CHILD_A_TAIL';
+      const bDetail='# 乙完整详情\n\n乙侧完整证据尾部 R93_CHILD_B_TAIL';
+      adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
+        const identity=turnIdentity(f.db,text);
+        if(identity.integration_run_id!=null)return complete(INTEGRATION_ANSWER);
+        if(identity.owner_member_id===f.b)return complete(B_ANSWER,{detailMarkdown:bDetail,handoffs:[{toMemberId:f.a,purpose:'reply',message:B_REPLY}]});
+        if(identity.owner_member_id===f.a)return complete(A_ANSWER,{detailMarkdown:aDetail});
+        throw Error('合成 fixture 收到未授权成员 turn');
+      }});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r93-child-detail',appDataDir:f.dir});
+      const sent=await f.cmd<{taskId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},
+        body:'合成短消息：两位成员分别给出短结论和完整详情。',intent:'default',
+        mentions:[{kind:'member',memberId:f.a},{kind:'member',memberId:f.b}],
+      });
+      for(let i=0;i<5&&await worker.runOnce();i++){/* child+integration */}
+      const handoff=f.db.prepare("SELECT target_turn_id,status FROM coordination_messages WHERE purpose='reply'").get() as {target_turn_id:string;status:string};
+      expect(handoff.status).toBe('completed');
+      const context=f.db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(handoff.target_turn_id) as {included_refs_json:string};
+      const envelope=JSON.parse(context.included_refs_json) as {attachments?:Array<{detail?:boolean;text?:string;ref?:string;truncated?:boolean}>};
+      const details=(envelope.attachments??[]).filter((item)=>item.detail);
+      expect(details).toHaveLength(2);
+      expect(details.map((item)=>item.text).join('\n')).toContain('R93_CHILD_A_TAIL');
+      expect(details.map((item)=>item.text).join('\n')).toContain('R93_CHILD_B_TAIL');
+      expect(details.every((item)=>item.truncated===false)).toBe(true);
+      expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
+    }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}
+  });
+
   it('routes a deferred reply-to-owner through the visible integration turn instead of completing as explicit-recipients',async()=>{
     const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
     try{

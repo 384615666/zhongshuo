@@ -89,6 +89,54 @@ import type { TurnBundleEnvelope } from '../contracts/prompts.ts';
 import { projectScopedFileListing } from './fileDiscovery.ts';
 import { filterContextScope } from '../domain/isolation/contextFilter.ts';
 
+function detailMarkdownOfBody(body: unknown): string | null {
+  if(body==null||typeof body!=='object')return null;
+  const value=body as {detailMarkdown?:unknown;runtimeControlResult?:unknown};
+  if(typeof value.detailMarkdown==='string'&&value.detailMarkdown.trim().length>0)return value.detailMarkdown;
+  if(typeof value.runtimeControlResult==='string'){
+    try{
+      const parsed=JSON.parse(value.runtimeControlResult) as {detailMarkdown?:unknown};
+      if(typeof parsed.detailMarkdown==='string'&&parsed.detailMarkdown.trim().length>0)return parsed.detailMarkdown;
+    }catch{/* raw control may be natural text */}
+  }
+  return null;
+}
+
+/** Bounded complete-detail context: current input, explicit reply target, frozen upstream, then latest four. */
+function selectedRoomDetailMessageIds(db:ZhongshuoDatabase,task:AssemblyTaskRef,coordination?:{phase:string;runId:string|null}):Set<string>{
+  const ids=new Set<string>();
+  if(task.inputThreadMessageSeq!=null){
+    const current=db.prepare('SELECT reply_to_message_id FROM messages WHERE thread_id=? AND thread_message_seq=?').get(task.threadId,task.inputThreadMessageSeq) as {reply_to_message_id:string|null}|undefined;
+    if(current?.reply_to_message_id)ids.add(current.reply_to_message_id);
+  }
+  const latest=db.prepare(`SELECT m.id FROM messages m WHERE m.thread_id=? AND m.author_type='agent'
+    AND (? IS NULL OR m.thread_message_seq<=?) AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=m.id AND ma.id LIKE 'matt_detail_%')
+      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL)
+    ORDER BY m.thread_message_seq DESC LIMIT 4`).all(task.threadId,task.inputThreadMessageSeq??null,task.inputThreadMessageSeq??null) as {id:string}[];
+  for(const row of latest)ids.add(row.id);
+  if(coordination?.phase==='child'){
+    const upstream=db.prepare(`SELECT DISTINCT m.id FROM messages m JOIN task_dependencies d ON d.depends_on_task_id=m.task_id
+      WHERE d.task_id=? AND m.author_type='agent' AND m.status='final'`).all(task.id) as {id:string}[];
+    for(const row of upstream)ids.add(row.id);
+  }else if(coordination?.phase==='integration'&&coordination.runId){
+    const upstream=db.prepare(`SELECT DISTINCT m.id FROM messages m JOIN coordination_steps s ON s.child_task_id=m.task_id
+      WHERE s.run_id=? AND m.author_type='agent' AND m.status='final'`).all(coordination.runId) as {id:string}[];
+    for(const row of upstream)ids.add(row.id);
+  }
+  return ids;
+}
+
+function selectedDmDetailMessageIds(db:ZhongshuoDatabase,conversationId:string,inputThroughSeq:number,rootReplyTo:string|null):Set<string>{
+  const ids=new Set<string>();
+  if(rootReplyTo)ids.add(rootReplyTo);
+  const latest=db.prepare(`SELECT m.id FROM messages m WHERE m.conversation_id=? AND m.conversation_seq<=? AND m.author_type='agent'
+    AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=m.id AND ma.id LIKE 'matt_detail_%')
+      OR json_extract(m.body_json,'$.detailMarkdown') IS NOT NULL)
+    ORDER BY m.conversation_seq DESC LIMIT 4`).all(conversationId,inputThroughSeq) as {id:string}[];
+  for(const row of latest)ids.add(row.id);
+  return ids;
+}
+
 export interface AssemblyTaskRef {
   id: string;
   projectId: string;
@@ -172,9 +220,11 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   // 已保存版本）经共享完整性路径（第二十七轮四：路径限定托管存储+sha256 实际字节核对——
   // 损坏/越界拒绝组装，不以路径冒充已读）；UTF-8 字节截断保留完整字符。
   const images: NonNullable<TurnRequest['images']> = [];
-  const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
+  const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string; detail?:boolean; fullTextPath?:string }> = [];
+  const selectedDetailIds=selectedRoomDetailMessageIds(db,task,input.coordination);
+  const detailHostedMessageIds=new Set<string>();
   const attRows = db.prepare(
-    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, json_extract(m.body_json, '$.imageInput') AS image_mode,
+    `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, ma.id AS attachment_row_id, ma.message_id, m.author_type AS message_author_type, m.task_id AS message_task_id, json_extract(m.body_json, '$.imageInput') AS image_mode,
             CASE WHEN ma.message_id = ? THEN -1 ELSE COALESCE(m.thread_message_seq, 999999) END AS ord
      FROM message_attachments ma
      JOIN artifacts a ON a.id = ma.artifact_id
@@ -182,12 +232,17 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
      WHERE (ma.message_id = ? OR m.thread_id = ?) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
        AND (? IS NULL OR ma.message_id=? OR (m.author_type='agent' OR (m.thread_message_seq<=? AND json_extract(m.body_json,'$.conversationIntent')='default')))
      ORDER BY ord, ma.rowid`,
-  ).all(root.id, root.id, task.threadId,task.inputThreadMessageSeq??null,root.id,task.inputThreadMessageSeq??null) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
+  ).all(root.id, root.id, task.threadId,task.inputThreadMessageSeq??null,root.id,task.inputThreadMessageSeq??null) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null; attachment_row_id:string; message_id:string; message_author_type:string; message_task_id:string|null }>;
   for (const row of attRows) {
+    const detail=row.attachment_row_id.startsWith('matt_detail_');
+    if(detail){
+      detailHostedMessageIds.add(row.message_id);
+      if(!selectedDetailIds.has(row.message_id))continue;
+    }
     if (row.kind === 'text_file' || row.kind === 'code_file') {
       const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
       if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
-      rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
+      rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text, ...(detail?{detail:true}:{}), ...(detail&&verified.copy.truncated?{fullTextPath:row.blob_path}:{}) });
       continue;
     }
     // 文档类（PDF/DOCX/表格/幻灯片=严格缓存+原件核对；图片=未发送说明）——第二十九轮二/三/四。
@@ -214,9 +269,24 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       AND (author_type='agent' OR (thread_message_seq<=? AND json_extract(body_json,'$.conversationIntent')='default'))
       ORDER BY thread_message_seq DESC LIMIT 201`).all(task.threadId,task.inputThreadMessageSeq).reverse()) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
   const historyTruncated=task.inputThreadMessageSeq!=null&&history.length>200;if(historyTruncated)history.shift();
+  // Explicit reply/dependency/integration details are mandatory even when the
+  // ordinary history window dropped them. Add only those selected IDs back.
+  const historyIds=new Set(history.map((message)=>message.id));
+  if(selectedDetailIds.size>0){
+    const ids=[...selectedDetailIds];
+    const required=db.prepare(`SELECT id,body_json,author_id,author_type,thread_message_seq FROM messages
+      WHERE thread_id=? AND (? IS NULL OR thread_message_seq<=?)
+        AND id IN (${ids.map(()=> '?').join(',')})
+        AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=messages.id AND ma.id LIKE 'matt_detail_%')
+          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL)`).all(task.threadId,task.inputThreadMessageSeq??null,task.inputThreadMessageSeq??null,...ids) as Array<{ id: string; body_json: string; author_id: string;author_type:string; thread_message_seq: number }>;
+    for(const message of required)if(!historyIds.has(message.id))history.push(message);
+    history.sort((a,b)=>a.thread_message_seq-b.thread_message_seq);
+  }
   const historyTexts = history.map((h) => {
-    const body = JSON.parse(h.body_json) as { text: string };
-    return { messageId: h.id, author: h.author_id, text: chatAnswer(body.text ?? '',h.author_type) };
+    const body = JSON.parse(h.body_json) as { text: string;detailMarkdown?:string;runtimeControlResult?:string };
+    const visible=chatAnswer(body.text ?? '',h.author_type);
+    const fallback=selectedDetailIds.has(h.id)&&!detailHostedMessageIds.has(h.id)?detailMarkdownOfBody(body):null;
+    return { messageId: h.id, author: h.author_id, text: fallback?`${visible}\n\n【完整详情（附件不可用，原文保留）】\n${fallback}`:visible };
   });
 
   // §13.4 过滤：指令白名单 + 本线程消息（root + 回复）。
@@ -300,7 +370,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
           JSON.stringify(input.repairContext.issues),
           `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
           input.repairContext.originalText,
-          '修复要求：按输出契约重新提交完整 TaskComplete——分析结论/清单完整放入 changeSummary（不要缩短或删除内容）；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
+          '修复要求：按输出契约重新提交完整 TaskComplete——answer 保持简短，分析结论/清单完整放入 detailMarkdown（不要缩短或删除内容）；短答可省略 detailMarkdown；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
         );
       }
       if (input.reviewFeedback != null) {
@@ -368,8 +438,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   const { db, task } = input;
   if (task.rootMessageId == null) return assemblyFailure('missing-root-message', 'dm_turn 缺少根消息引用（本次用户消息）');
   const root = db
-    .prepare('SELECT id, body_json, author_type, author_id, conversation_id, project_id, task_id FROM messages WHERE id = ?')
-    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string; conversation_id: string; project_id: string; task_id: string | null } | undefined;
+    .prepare('SELECT id, body_json, author_type, author_id, conversation_id, project_id, task_id, reply_to_message_id FROM messages WHERE id = ?')
+    .get(task.rootMessageId) as { id: string; body_json: string; author_type: string; author_id: string; conversation_id: string; project_id: string; task_id: string | null; reply_to_message_id:string|null } | undefined;
   if (root == null) return assemblyFailure('missing-root-message', '根消息记录不存在');
   // 归属校验（第十九轮四）：项目/会话/作者/任务四重——防跨会话/跨项目/伪造归属的根消息进入本轮输入。
   if (root.conversation_id !== task.conversationId || root.project_id !== task.projectId) {
@@ -396,38 +466,51 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
   if (task.inputThroughSeq == null) {
     return assemblyFailure('missing-input-boundary', 'dm_turn 缺少输入水位（input_through_seq）——拒绝组装（边界必须可解释）');
   }
+  const selectedDetailIds=selectedDmDetailMessageIds(db,task.conversationId,task.inputThroughSeq,root.reply_to_message_id);
+  const detailHostedMessageIds=new Set<string>();
   // 本会话历史（≤ 水位）：按 conversation_seq 取最近 N 条（截断如实标注）。
   const history = db
     .prepare('SELECT id, conversation_seq, body_json, author_id,author_type FROM messages WHERE conversation_id = ? AND conversation_seq <= ? ORDER BY conversation_seq DESC LIMIT ?')
     .all(task.conversationId, task.inputThroughSeq, DM_HISTORY_LIMIT) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string;author_type:string }>;
   history.reverse();
-  const historyTexts = history.map((h) => {
-    const body = JSON.parse(h.body_json) as { text: string };
-    return { messageId: h.id, author: h.author_id, text: chatAnswer(body.text ?? '',h.author_type) };
-  });
+  const historyIds=new Set(history.map((message)=>message.id));
+  if(selectedDetailIds.size>0){
+    const ids=[...selectedDetailIds];
+    const required=db.prepare(`SELECT id,conversation_seq,body_json,author_id,author_type FROM messages
+      WHERE conversation_id=? AND conversation_seq<=? AND id IN (${ids.map(()=> '?').join(',')})
+        AND (EXISTS(SELECT 1 FROM message_attachments ma WHERE ma.message_id=messages.id AND ma.id LIKE 'matt_detail_%')
+          OR json_extract(body_json,'$.detailMarkdown') IS NOT NULL)`).all(task.conversationId,task.inputThroughSeq,...ids) as Array<{ id: string; conversation_seq: number; body_json: string; author_id: string;author_type:string }>;
+    for(const message of required)if(!historyIds.has(message.id))history.push(message);
+    history.sort((a,b)=>a.conversation_seq-b.conversation_seq);
+  }
   // DEV-24 附件注入（DM；第二十七轮二扩展到**水位内全部历史消息**）：排队消息的附件随其
   // 消息进入正确一轮（该轮水位恰含此消息）；水位后（未来）消息的附件不提前读；根消息即使
   // 滑出历史窗口也必含（本轮输入本体）。读取经共享完整性路径（第二十七轮四：路径限定托管
   // 存储+sha256 实际字节核对——损坏/越界拒绝组装）；UTF-8 字节截断保留完整字符。
   const images: NonNullable<TurnRequest['images']> = [];
-  const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string }> = [];
+  const rootAttachments: Array<{ ref: string; filename: string; hash: string; revision: number; originalBytes: number; truncated: boolean; text: string; detail?:boolean; fullTextPath?:string }> = [];
   const dmAttIds = history.map((h) => h.id);
   if (!dmAttIds.includes(root.id)) dmAttIds.push(root.id);
   if (dmAttIds.length > 0) {
     const dmAttRows = db.prepare(
-      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, json_extract(m.body_json, '$.imageInput') AS image_mode,
+      `SELECT a.id, a.source_name, a.hash, a.blob_path, a.revision, a.kind, a.extracted_text_json, ma.range_spec, ma.id AS attachment_row_id, ma.message_id, m.author_type AS message_author_type, m.task_id AS message_task_id, json_extract(m.body_json, '$.imageInput') AS image_mode,
               CASE WHEN ma.message_id = ? THEN -1 ELSE m.conversation_seq END AS ord
        FROM message_attachments ma
        JOIN artifacts a ON a.id = ma.artifact_id
        JOIN messages m ON m.id = ma.message_id
        WHERE ma.message_id IN (${dmAttIds.map(() => '?').join(',')}) AND a.kind IN ('text_file','code_file','pdf_file','docx_file','sheet_file','slides_file','image_file')
        ORDER BY ord, ma.rowid`,
-    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null }>;
+    ).all(root.id, ...dmAttIds) as Array<{ id: string; source_name: string | null; hash: string; blob_path: string; revision: number; kind: string; extracted_text_json: string | null; range_spec: string | null; image_mode: string | null; attachment_row_id:string; message_id:string; message_author_type:string; message_task_id:string|null }>;
     for (const row of dmAttRows) {
+      const detail=row.attachment_row_id.startsWith('matt_detail_');
+      if(detail){
+        detailHostedMessageIds.add(row.message_id);
+        if(!selectedDetailIds.has(row.message_id))continue;
+      }
       if (row.kind === 'text_file' || row.kind === 'code_file') {
         const verified = readVerifiedCopy(row.blob_path, row.hash, input.blobRoot);
         if (!verified.ok) return assemblyFailure(verified.error.code, verified.error.message);
-        rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text });
+        rootAttachments.push({ ref: row.id, filename: row.source_name ?? row.id, hash: verified.copy.hash, revision: row.revision, originalBytes: verified.copy.originalBytes, truncated: verified.copy.truncated, text: verified.copy.text, ...(detail?{detail:true}:{}), ...(detail&&verified.copy.truncated?{fullTextPath:row.blob_path}:{}) });
         continue;
       }
       // 文档类（同房间装配——严格缓存+原件核对；图片=未发送说明）。
@@ -437,6 +520,12 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     if (doc.image != null && !images.some((i) => i.artifactId === doc.image!.artifactId)) images.push(doc.image);
     }
   }
+  const historyTexts = history.map((h) => {
+    const body = JSON.parse(h.body_json) as { text: string;detailMarkdown?:string;runtimeControlResult?:string };
+    const visible=chatAnswer(body.text ?? '',h.author_type);
+    const fallback=selectedDetailIds.has(h.id)&&!detailHostedMessageIds.has(h.id)?detailMarkdownOfBody(body):null;
+    return { messageId: h.id, author: h.author_id, text: fallback?`${visible}\n\n【完整详情（附件不可用，原文保留）】\n${fallback}`:visible };
+  });
   const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
   const envelope: TurnBundleEnvelope = {
     bundleVersion: TURN_BUNDLE_VERSION,

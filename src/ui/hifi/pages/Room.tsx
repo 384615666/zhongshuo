@@ -1848,7 +1848,7 @@ function ThreadPanel({
               onOpenSection={(sec) => goView('details', sec)}
             />
             <div
-              className="msg-list"
+              className="msg-list is-replies"
               ref={(el) => { (listRef as { current: HTMLDivElement | null }).current = el; repliesBoxRef.current = el; }}
               onScroll={(e) => {
                 const el = e.currentTarget;
@@ -1863,7 +1863,7 @@ function ThreadPanel({
                 const watermark = s.readStates[thread.id] ?? 0;
                 const isFirstUnread = seq !== undefined && seq > watermark && !list.some((x) => (x.threadMessageSeq ?? 0) > watermark && (x.threadMessageSeq ?? 0) < seq);
                 return (
-                  <div key={m.id} id={seq !== undefined ? `msg-seq-${thread.id}-${seq}` : undefined}>
+                  <div key={m.id} className="msg-item" id={seq !== undefined ? `msg-seq-${thread.id}-${seq}` : undefined}>
                     {isFirstUnread ? (
                       <div className="row tight" style={{ marginBottom: 8 }}>
                         <div className="divider" style={{ flex: 1, margin: 0 }} />
@@ -1875,6 +1875,7 @@ function ThreadPanel({
                       message={{...m,saved:s.savedMessageRefs[m.id]===true||m.saved===true}}
                       domId={`thread-msg-${m.id}`}
                       linkThreadId={thread.id}
+                      readingAids
                       author={m.authorType === 'human' ? undefined : byId(s.members, m.authorId)}
                       mode={task?.mode}
                       isMentioned={Boolean(m.payload?.mentionIds?.includes('you') || m.payload?.mentionIds?.some((id) => id === m.authorId))}

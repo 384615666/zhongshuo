@@ -8,7 +8,7 @@
  *  - E3：点子任务卡 = 定向跟进该子任务
  */
 
-import { useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import {chatAnswer} from '../../../contracts/chatAnswer';
 import {navigate} from '../lib/router';
 import { Icon } from './Icon';
@@ -18,7 +18,7 @@ import type { CollaborationStage, Message, ProjectMember, RouteMode } from '../d
 import { recordLocalOnly, stripInlineAttachmentTokens, useStore } from '../data/store';
 import { attachmentsOfMessage, resourceOf, revisionOf } from '../lib/resource';
 import type { FormalAttachmentSummary } from '../data/types';
-import { MarkdownView } from '../preview/MarkdownView';
+import { MarkdownView, outlineOf } from '../preview/MarkdownView';
 import { ATTACHMENT_KIND_LABEL, GeneratedFiles, normalizeFormalAttachments } from './GeneratedFiles';
 
 /* 兼容既有导入路径（Room.tsx / ThreadPage.tsx 从 MessageView 取中文 kind 映射）。 */
@@ -52,13 +52,14 @@ export function collaborationStageText(mark: CollaborationStage): string {
  * 无 taskId 的主池消息同样渲染（§17.9 第 1 条）。
  */
 function MessageAttachments({
-  message, onOpen,
+  message, onOpen, excludeIds,
 }: {
   message: Message;
   onOpen?: (resourceId: string, revision?: number) => void;
+  excludeIds?: ReadonlySet<string>;
 }) {
   const s = useStore((x) => x);
-  const links = attachmentsOfMessage(s, message.id);
+  const links = attachmentsOfMessage(s, message.id).filter((link) => !excludeIds?.has(link.resourceId));
   if (links.length === 0) return null;
 
   return (
@@ -100,31 +101,30 @@ export function MessageView({
   domId,
   author,
   isMentioned,
+  readingAids,
   mode,
   onOpenSubtask,
   onOpenArtifact,
+  onOpenAttachment,
+  onOpenResource,
   onSave,
   onApproval,
   onRetry,
   onAllowMissing,
   onSteer,
   onQuote,
-  onOpenResource,
-  onOpenAttachment,
 }: {
   message: Message;
   domId?:string;
   linkThreadId?:string;
   author?: ProjectMember;
   isMentioned?: boolean;
-  /** 结果卡是否需要显示共识状态，由任务模式决定（DIRECT/AUTO 不计算共识） */
+  readingAids?: boolean;
   mode?: RouteMode;
   onOpenSubtask?: (subtask: { taskId: string; number: number; title: string }) => void;
   onOpenThread?: () => void;
   onOpenArtifact?: (artifactId: string) => void;
-  /** UX-PREVIEW-01：打开消息携带的资源（主池与线程共用同一回调） */
   onOpenResource?: (resourceId: string, revision?: number) => void;
-  /** 正式侧（第五十一轮）：打开真实附件摘要芯片（attachment.preview* 通道）。 */
   onOpenAttachment?: (att: FormalAttachmentSummary) => void;
   onReact?: (emoji: string) => void;
   onSave?: () => void;
@@ -140,6 +140,8 @@ export function MessageView({
   const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const isSystem = message.authorType === 'system';
   const isHuman = message.authorType === 'human';
+  const formalAttachments = normalizeFormalAttachments(message.formalAttachments);
+  const hasDetail = formalAttachments.some((attachment) => attachment.detailMarkdown === true) || typeof message.detailMarkdown === 'string';
   const roleClass=isSystem?' msg-system':isHuman?' msg-human':' msg-agent';
   const copyMessage=async():Promise<void>=>{
     try{
@@ -153,90 +155,52 @@ export function MessageView({
       window.setTimeout(()=>setCopyState('idle'),1800);
     }
   };
-
+  const messageContent = (
+    <>
+      <MessageBody message={message} mode={mode} readingAids={readingAids === true} hasDetail={hasDetail} memberName={author?.displayName} onOpenSubtask={onOpenSubtask} onOpenArtifact={onOpenArtifact} onApproval={onApproval} />
+      {typeof message.detailMarkdown === 'string' && message.detailMarkdown.trim().length > 0 ? (
+        <details className="msg-detail-fallback">
+          <summary>完整详情（附件不可用，原文已保留）</summary>
+          <div className="msg-detail-fallback-body"><MarkdownView text={message.detailMarkdown} specTables={readingAids === true} headingAnchors={readingAids === true} /></div>
+        </details>
+      ) : null}
+      <MessageFooter message={message} formalAttachments={formalAttachments} onOpenAttachment={onOpenAttachment} onOpenResource={onOpenResource} />
+    </>
+  );
   return (
     <div className={`msg${roleClass}${isSystem ? ' system' : ''}${isMentioned ? ' mention-me' : ''}`} id={domId??`msg-${message.id}`}>
       <div className="msg-avatar">
         {isSystem ? (
-          <span
-            className="avatar avatar-22"
-            style={{ background: 'var(--bg-surface-3)', color: 'var(--text-3)', border: '1px solid var(--border)' }}
-            title="系统消息"
-          >
+          <span className="avatar avatar-22" style={{ background: 'var(--bg-surface-3)', color: 'var(--text-3)', border: '1px solid var(--border)' }} title="系统消息">
             <Icon name="settings" size={12} />
           </span>
         ) : (
-          <Avatar
-            name={isHuman ? '我' : author?.displayName ?? '?'}
-            ordinal={author?.ordinal}
-            color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)}
-            size={22}
-            state={author?.workState}
-            stateTitle={author?.workStateReason}
-            subject={isHuman?'user':author!=null?`member:${author.id}`:undefined}
-          />
+          <Avatar name={isHuman ? '我' : author?.displayName ?? '?'} ordinal={author?.ordinal} color={memberColor(isHuman ? 'you' : author?.id ?? '', author?.ordinal)} size={22} state={author?.workState} stateTitle={author?.workStateReason} subject={isHuman?'user':author!=null?`member:${author.id}`:undefined} />
         )}
       </div>
-
-      {/* msg-body 带 is-human：人类消息用浅蓝气泡，agent 用中性气泡（规范 §5.3）。
-          层级由**气泡自身底色**表达，不再依赖整列灰底 —— 那样看不出任何层级。 */}
       <div className={`msg-body${isHuman ? ' is-human' : ''}`}>
-        {isSystem ? (
-          <SystemCard message={message} onRetry={onRetry} onAllowMissing={onAllowMissing} onSteer={onSteer} />
-        ) : (
+        {isSystem ? <SystemCard message={message} onRetry={onRetry} onAllowMissing={onAllowMissing} onSteer={onSteer} /> : (
           <>
             <div className="msg-head">
+              {!isHuman && author != null ? <span className="msg-dot" aria-hidden="true" style={{ background: memberColor(author.id, author.ordinal) }} /> : null}
               <span className="msg-author">{isHuman ? '你' : author?.displayName ?? '未知成员'}</span>
-              {!isHuman && author?.ordinal && author.ordinal > 1 ? (
-                <span className="small faint">#{author.ordinal}</span>
-              ) : null}
-              {/* R91 模块3：已完成的研讨阶段产物就在这里按真实消息出现——
-                  只显示简短中文阶段标签 + 轮次，不新增外框/嵌套气泡。 */}
-              {!isSystem && message.collaborationStage != null ? (
-                <span className="msg-stage-tag">
-                  <Tag tone="info" icon="layers" title="研讨阶段产物（已完成并保存为正式消息）">
-                    {collaborationStageText(message.collaborationStage)}
-                  </Tag>
-                </span>
-              ) : null}
+              {!isHuman && author?.ordinal && author.ordinal > 1 ? <span className="small faint">#{author.ordinal}</span> : null}
+              {message.collaborationStage != null ? <span className="msg-stage-tag"><Tag tone="info" icon="layers" title="研讨阶段产物（已完成并保存为正式消息）">{collaborationStageText(message.collaborationStage)}</Tag></span> : null}
               {!isHuman && message.kind === 'report' ? <Tag tone="accent" icon="file-text">报告</Tag> : null}
               {message.streaming ? <Tag tone="info" icon="loader">流式中</Tag> : null}
               <span className="msg-time">{clockTime(message.createdAt)}</span>
-              {message.threadMessageSeq !== undefined ? (
-                <span className="msg-seq" title="串内顺序号 thread_message_seq">#{message.threadMessageSeq}</span>
-              ) : null}
+              {message.threadMessageSeq !== undefined ? <span className="msg-seq" title="串内顺序号 thread_message_seq">#{message.threadMessageSeq}</span> : null}
               {message.saved ? <Icon name="bookmark" size={11} className="faint" /> : null}
             </div>
-
-            <MessageBody
-              message={message}
-              mode={mode}
-              memberName={author?.displayName}
-              onOpenSubtask={onOpenSubtask}
-              onOpenArtifact={onOpenArtifact}
-              onApproval={onApproval}
-              onOpenAttachment={onOpenAttachment}
-            />
-
-            {/* 消息携带的资源（UX-PREVIEW-01 / §17.9）
-                这是"主池普通附件也能预览"的入口：附件挂在消息上，
-                **不要求 taskId**。点击打开共享预览，不发送、不执行。
-                正式附件（formalAttachments）已由 GeneratedFiles 渲染时，
-                不再叠加原型 resources 通道——同一文件不出现两张卡。 */}
-            {normalizeFormalAttachments(message.formalAttachments).length === 0
-              ? <MessageAttachments message={message} onOpen={onOpenResource} />
-              : null}
+            {isHuman && readingAids === true ? <div className="msg-human-bubble">{messageContent}</div> : messageContent}
             {message.formalReplyExecution&&message.formalReplyExecution.status!=='succeeded'?<div className="faint" data-zs-reply-execution={message.formalReplyExecution.status} role={['failed','blocked','unknown'].includes(message.formalReplyExecution.status)?'alert':undefined}>
               {message.formalReplyExecution.status==='queued'?'已发送，等待 AI 回复':message.formalReplyExecution.status==='running'?'AI 正在回复':message.formalReplyExecution.error??'本次回复未完成'}
               {['failed','blocked','unknown'].includes(message.formalReplyExecution.status)&&message.threadId?<button className="btn sm ghost" onClick={()=>navigate(message.formalReplyExecution?.status==='unknown'?'/recovery':`/thread/${encodeURIComponent(message.threadId!)}?tab=run`)}>查看{message.formalReplyExecution.status==='unknown'?'恢复状态':'运行历史'}</button>:null}
             </div>:null}
           </>
         )}
-
         {!isSystem?<div className="msg-actions">
-          <button type="button" className="btn ghost sm msg-action-btn" aria-label="复制消息" title="复制可读正文" onClick={()=>void copyMessage()}>
-            <Icon name="copy" size={12}/> 复制
-          </button>
+          <button type="button" className="btn ghost sm msg-action-btn" aria-label="复制消息" title="复制可读正文" onClick={()=>void copyMessage()}><Icon name="copy" size={12}/> 复制</button>
           {onQuote?<button type="button" className="btn ghost sm msg-action-btn" aria-label="引用消息" title="引用到输入区" onClick={()=>onQuote(message)}><Icon name="corner-down-right" size={12}/> 引用</button>:null}
           {onSave?<button type="button" className="btn ghost sm msg-action-btn" data-zs-saved={message.saved?'1':undefined} aria-label={message.saved?'取消收藏':'收藏消息'} title={message.saved?'取消收藏':'收藏，不改动原消息'} onClick={()=>onSave()}><Icon name="bookmark" size={12}/> {message.saved?'已收藏':'收藏'}</button>:null}
           <span className="small msg-action-feedback" aria-live="polite">{copyState==='copied'?'已复制':copyState==='failed'?'复制失败':''}</span>
@@ -252,19 +216,21 @@ export function MessageView({
 function MessageBody({
   message,
   memberName,
+  hasDetail,
+  readingAids,
   mode,
   onOpenSubtask,
   onOpenArtifact,
   onApproval,
-  onOpenAttachment,
 }: {
   message: Message;
   memberName?: string;
+  hasDetail?: boolean;
+  readingAids?: boolean;
   mode?: RouteMode;
   onOpenSubtask?: (s: { taskId: string; number: number; title: string }) => void;
   onOpenArtifact?: (id: string) => void;
   onApproval?: (c: 'allow_once' | 'deny') => void;
-  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
 }) {
   const visibleBody=chatAnswer(stripInlineAttachmentTokens(message.body),message.authorType);
   const a = message.payload?.assignment;
@@ -278,10 +244,7 @@ function MessageBody({
     <>
       {/* 正文（任何 kind 都只渲染一次；进度消息的正文同样在这里） */}
       {message.body ? (
-        <div className="msg-text">
-          <MarkdownView text={visibleBody} />
-          {message.streaming ? <i className="streaming-caret" /> : null}
-        </div>
+        <MessageText message={message} text={visibleBody} readingAids={readingAids === true} hasDetail={hasDetail === true} />
       ) : null}
 
       {message.kind === 'progress' && p?.status ? (
@@ -291,10 +254,6 @@ function MessageBody({
           </Tag>
         </div>
       ) : null}
-
-      {/* R91 模块3：生成文件/正式附件卡固定在正文之后、
-          复制/引用/收藏与结构化卡片之前；不让附件跑到正文顶部，也不重复渲染。 */}
-      <GeneratedFiles attachments={message.formalAttachments} onOpen={onOpenAttachment} />
 
       {/* 分工卡 */}
       {a ? (
@@ -500,6 +459,91 @@ function MessageBody({
         </div>
       ) : null}
     </>
+  );
+}
+
+/** One bottom attachment area shared by human/agent rows; details stay outside any fold. */
+function MessageFooter({
+  message,
+  formalAttachments,
+  onOpenAttachment,
+  onOpenResource,
+}: {
+  message: Message;
+  formalAttachments: readonly FormalAttachmentSummary[];
+  onOpenAttachment?: (att: FormalAttachmentSummary) => void;
+  onOpenResource?: (resourceId: string, revision?: number) => void;
+}) {
+  const formalIds = new Set(formalAttachments.map((attachment) => attachment.artifactId));
+  return (
+    <div className="msg-attachment-footer">
+      <GeneratedFiles attachments={message.formalAttachments} onOpen={onOpenAttachment} />
+      <MessageAttachments message={message} excludeIds={formalIds} onOpen={onOpenResource} />
+    </div>
+  );
+}
+
+/* ---------------- 正文（含回复串阅读辅助） ---------------- */
+
+/** Legacy/over-budget prose folds to roughly 8–12 lines; full detail cards stay outside. */
+const FOLD_LINES = 10;
+const FOLD_CHARS = 600;
+
+function MessageText({ message, text, readingAids, hasDetail }: { message: Message; text: string; readingAids: boolean; hasDetail: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const foldId = useId();
+  const isHuman = message.authorType === 'human';
+  /* 流式中一律不折叠、不出目录、不转字段表：内容还在变，版面不能跟着跳。 */
+  const aids = readingAids && message.streaming !== true;
+  const lineCount = useMemo(() => text.split('\n').filter((l) => l.trim() !== '').length, [text]);
+  const foldable = aids && (lineCount > FOLD_LINES || text.length > FOLD_CHARS);
+  const outline = useMemo(() => (aids && !isHuman ? outlineOf(text) : []), [aids, isHuman, text]);
+  const jumpTo = (index: number): void => {
+    const reveal = (): void => {
+      const el = boxRef.current?.querySelector<HTMLElement>(`[data-md-heading="${index}"]`);
+      if (el == null) return;
+      const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
+    };
+    // A folded body is overflow-hidden; scrolling to a heading still hidden by
+    // the fold would report a DOM position but not make it readable.
+    if (foldable && !expanded) {
+      setExpanded(true);
+      requestAnimationFrame(() => requestAnimationFrame(reveal));
+      return;
+    }
+    reveal();
+  };
+  const toggle = (): void => {
+    setExpanded(!expanded);
+    /* 收起后正文变短，把这条消息拉回视野，避免读者停在一片空白里。 */
+    if (expanded) window.requestAnimationFrame(() => boxRef.current?.scrollIntoView({ block: 'nearest' }));
+  };
+
+  return (
+    <div className="msg-text" ref={boxRef}>
+      {outline.length > 0 ? (
+        <nav className="msg-outline" aria-label="本条回复的章节">
+          {outline.map((o) => (
+            <button key={o.index} type="button" className="msg-outline-chip" title={o.title} onClick={() => jumpTo(o.index)}>{o.title}</button>
+          ))}
+        </nav>
+      ) : null}
+      {foldable ? (
+        <div id={foldId} className={`msg-fold${expanded ? '' : ' is-folded'}`}>
+          <MarkdownView text={text} specTables={aids && !isHuman} headingAnchors={outline.length > 0} />
+        </div>
+      ) : (
+        <MarkdownView text={text} specTables={aids && !isHuman} headingAnchors={outline.length > 0} />
+      )}
+      {message.streaming ? <i className="streaming-caret" /> : null}
+      {foldable ? (
+        <button type="button" className="msg-fold-toggle" aria-expanded={expanded} aria-controls={foldId} onClick={toggle}>
+          {expanded ? '收起' : `${hasDetail ? '展开答复原文' : '展开原文'} · 共 ${lineCount} 行`}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

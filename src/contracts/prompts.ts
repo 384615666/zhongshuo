@@ -45,7 +45,7 @@ export const STANDING_PROMPT_TEMPLATE = `你是「{{memberDisplayName}}」（成
 - 模型的流式消息由 adapter 回传当前任务线程，不要再用 zs 逐 token 重发。普通命令 stdout/stderr 是执行日志，不自动成为聊天消息或成果。
 - 最终成果严格按本轮 outputContract 提交：final-result 由 adapter 接收结构化结果后交 daemon 入库；zs-submit 使用输入包提供的 zs 提交契约。使用程序提供的 resultKey，不自行生成；同一成果不要在两条路径重复提交。
 - 一次执行一条 zs 命令，读完输出再决定下一条；不要把多条 zs 命令拼进同一个 shell 命令。
-- 详细证据放入输出契约的报告正文或引用文件，聊天里只发摘要；需要写文件时仅使用本次有效策略允许的目录，不能因草稿要求突破计划档限制。
+- 复杂答复在「answer」给出简短结论与 3–5 个关键点（通常 200–400 字），完整步骤/证据/明细放入「detailMarkdown」；短问候、简短确认不造空详情。「detailMarkdown」必须是可独立阅读的完整 Markdown，不写内部协议或私有思考；需要写项目文件时仅使用本次有效策略允许的目录，不能因草稿要求突破权限。
 
 ## 回复目的地
 
@@ -280,6 +280,8 @@ export const turnBundleEnvelopeSchema = z.strictObject({
     originalBytes: z.number().int().nonnegative(),
     truncated: z.boolean(),
     text: z.string(),
+    detail: z.boolean().optional(),
+    fullTextPath: z.string().optional(),
   })).default([]), // DEV-24 文本附件（第二十六轮五）：获准副本实际文本+资源身份+截断说明
   threadDigest: z.strictObject({
     rootMessageId: z.string().min(1),
@@ -349,8 +351,9 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   // DEV-24 文本附件（第二十六轮五）：获准副本实际文本注入模型输入——带 文件名/hash/
   // revision/原始字节/截断说明（不拿路径冒充已读）。
   for (const att of envelope.attachments ?? []) {
-    lines.push(`── 附件 ${att.filename}（${att.ref} rev=${att.revision} sha256=${att.hash.slice(0, 16)}… ${att.originalBytes}B${att.truncated ? `，超过 ${ATT_EXCERPT_BYTES}B 截断` : ''}）──`);
+    lines.push(`── ${att.detail?'完整详情':'附件'} ${att.filename}（${att.ref} rev=${att.revision} sha256=${att.hash.slice(0, 16)}… ${att.originalBytes}B${att.truncated ? `，超过 ${ATT_EXCERPT_BYTES}B 截断` : ''}）──`);
     lines.push(att.text);
+    if(att.detail&&att.truncated&&att.fullTextPath)lines.push(`完整托管副本（只读、hash 已验证）：${att.fullTextPath}。本轮只注入前 ${ATT_EXCERPT_BYTES}B；在真实读取前不得声称已读全文。`);
   }
   if (envelope.task.userConstraints.length > 0) {
     lines.push(`用户约束：${envelope.task.userConstraints.join('；')}`);
@@ -384,10 +387,10 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   // 精确字段约束（§4.2：足以无歧义生成结果的字段约束——真实模型不会猜 schema）。
   lines.push(
-    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"直接回答用户的自然语言","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
+    `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"简短、可直接显示的结论与3-5个关键点","detailMarkdown":"完整 Markdown 详情；短答填空字符串","changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
   );
-  lines.push('严格 schema：除上述字段及本轮开放的 handoffs、规划阶段 coordinationPlan 外，不得新增字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
-  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 按用户实际问题回答：问候直接简短回应；孤立数字或“测试”简短确认或澄清，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
+  lines.push('严格 schema：上述字段与 detailMarkdown 均须出现；短答的 detailMarkdown 填空字符串，复杂答复填完整 Markdown。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
+  lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 始终面向用户且保持简短：复杂工作先给结论和3-5个关键点，关键分歧、条件、待确认不可省略；完整细节放 detailMarkdown。短问候、孤立数字或“测试”直接简短回应，detailMarkdown 填空字符串，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
     lines.push(`项目工作目录内可按相对路径直接读取的文件（§13.4 项目源码默认可读；排除 VCS 内部/依赖缓存/构建产物/常见凭据；${envelope.fileDiscovery.files.length} 项${envelope.fileDiscovery.truncated ? '，达清单上限已截断——未列出文件仍可按已知路径读取' : ''}）：`);

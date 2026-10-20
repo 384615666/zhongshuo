@@ -684,15 +684,16 @@ function attachMessageRefs(
 /** 历史读取用：批量取消息附件摘要（artifactId/filename/kind/sizeBytes——点击预览经
  * attachment.previewText 走 audience+完整性校验，此处只发 id 与名字/大小不下发正文）。
  * R91：sizeBytes 取内容寻址副本实际字节数（stat 失败则不提供，绝不编造）。 */
-function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>> {
-  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>>();
+function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>> {
+  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>>();
   if (messageIds.length === 0) return out;
   const rows = db.prepare(
-    `SELECT ma.message_id, ma.artifact_id, ma.display_name, a.kind, a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
-  ).all(...messageIds) as Array<{ message_id: string; artifact_id: string; display_name: string | null; kind: string; blob_path: string }>;
+    `SELECT ma.message_id, ma.id AS attachment_row_id, ma.artifact_id, ma.display_name, a.kind, a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+  ).all(...messageIds) as Array<{ message_id: string; attachment_row_id: string; artifact_id: string; display_name: string | null; kind: string; blob_path: string }>;
   for (const r of rows) {
     const list = out.get(r.message_id) ?? [];
-    const summary: { artifactId: string; filename: string; kind: string; sizeBytes?: number } = {
+    const summary: { artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean } = {
+      ...(r.attachment_row_id.startsWith('matt_detail_')?{detailMarkdown:true}:{}),
       artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind,
     };
     try {
@@ -724,13 +725,14 @@ function insertThreadMessage(
     mentions: readonly MentionNode[];
     authorId: string;
     taskId: string | null;
+    replyToMessageId?: string;
   },
 ): { messageId: string; conversationId: string; threadId: string; threadMessageSeq: number } {
   const messageId = `msg_${randomUUID()}`;
   const conversationSeq = (db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq').get(input.conversationId) as { last_message_seq: number }).last_message_seq;
-  db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id, thread_message_seq, author_type, author_id, body_json, status, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'human', ?, ?, 'saved', ?)`)
-    .run(messageId, input.projectId, input.conversationId, conversationSeq, input.roomId, input.threadId, input.taskId, input.threadMessageSeq, input.authorId, JSON.stringify({ text: input.body, mentions: input.mentions }), Date.now());
+  db.prepare(`INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id, reply_to_message_id, thread_message_seq, author_type, author_id, body_json, status, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'human', ?, ?, 'saved', ?)`)
+    .run(messageId, input.projectId, input.conversationId, conversationSeq, input.roomId, input.threadId, input.taskId, input.replyToMessageId ?? null, input.threadMessageSeq, input.authorId, JSON.stringify({ text: input.body, mentions: input.mentions }), Date.now());
   db.prepare('UPDATE conversation_threads SET last_message_seq = ?, revision = revision + 1 WHERE id = ?')
     .run(input.threadMessageSeq, input.threadId);
   appendDomainEvent(db, {
@@ -1696,6 +1698,15 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               if (thread == null || thread.project_id !== params.target.projectId || thread.conversation_id !== params.target.conversationId) {
                 throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '线程目标与项目/会话不一致，拒绝提交（§4.5）');
               }
+              if (target.replyToMessageId != null) {
+                const replyTo = deps.db.prepare('SELECT thread_id,project_id,conversation_id,thread_message_seq FROM messages WHERE id=?').get(target.replyToMessageId) as
+                  {thread_id:string|null;project_id:string;conversation_id:string;thread_message_seq:number|null}|undefined;
+                if (replyTo == null || replyTo.thread_id !== thread.id || replyTo.project_id !== target.projectId
+                  || replyTo.conversation_id !== target.conversationId || replyTo.thread_message_seq == null
+                  || replyTo.thread_message_seq >= thread.last_message_seq + 1) {
+                  throw new DaemonCommandError('THREAD_SCOPE_MISMATCH', '显式引用目标不属于本线程或不在当前消息之前；拒绝提交');
+                }
+              }
               if (thread.root_task_id == null && params.intent==='record_only') {
                 // 记录串（E1）：讨论线程永不唤醒 agent——默认仍是保存记录（图片门不适用：零派发）。
                 const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
@@ -1710,6 +1721,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                   mentions: params.mentions as MentionNode[],
                   authorId: deps.localUserId,
                   taskId: null,
+                  replyToMessageId: target.replyToMessageId,
                 });
                 attachMessageRefs(deps.db, saved.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
                 return saved;
@@ -1741,6 +1753,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 mentions: params.mentions as MentionNode[],
                 authorId: deps.localUserId,
                 taskId: thread.root_task_id,
+                replyToMessageId: target.replyToMessageId,
               });
               attachMessageRefs(deps.db, message.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
               deps.db.prepare("UPDATE messages SET body_json=json_set(body_json,'$.conversationIntent',?) WHERE id=?").run(params.intent,message.messageId);

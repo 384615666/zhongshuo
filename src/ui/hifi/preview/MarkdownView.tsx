@@ -16,17 +16,25 @@
 import { Fragment, useId, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 
-interface Block {
-  kind: 'h' | 'p' | 'ul' | 'ol' | 'code' | 'quote' | 'table' | 'hr';
+/** 「**标签**：内容」字段；list 是紧跟在标签行后面的列表（如「**验收**：」下面的要点）。 */
+export interface SpecField {
+  label: string;
+  text: string;
+  list?: { ordered: boolean; items: string[] };
+}
+
+export interface Block {
+  kind: 'h' | 'p' | 'ul' | 'ol' | 'code' | 'quote' | 'table' | 'hr' | 'spec';
   level?: number;
   text?: string;
   items?: string[];
   rows?: string[][];
   header?: string[];
   lang?: string;
+  fields?: SpecField[];
 }
 
-function parseBlocks(src: string): Block[] {
+export function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n/g, '\n').split('\n');
   const blocks: Block[] = [];
   let i = 0;
@@ -127,6 +135,91 @@ function parseBlocks(src: string): Block[] {
 
 function splitRow(line: string): string[] {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+}
+
+/* ---------------- 聊天消息阅读辅助（仅 specTables / headingAnchors 开启时使用，文件预览不走这里） ---------------- */
+
+/** 「**标签**：内容」或「**标签：**内容」；标签 1–8 个字，不含星号与冒号。 */
+const SPEC_LABEL = /^\s*\*\*([^*\n：:]{1,8})(?:\*\*[：:]|[：:]\*\*)\s*(.*)$/;
+
+/**
+ * 把一个段落拆成字段。首行不是标签行、或标签行少于 minLabels 时返回 null。
+ * 非标签行并入上一个字段（折行续写），不丢字。
+ */
+function specFieldsOf(text: string, minLabels: number): SpecField[] | null {
+  const fields: SpecField[] = [];
+  for (const line of text.split('\n')) {
+    const m = SPEC_LABEL.exec(line);
+    if (m) { fields.push({ label: m[1]!, text: m[2]! }); continue; }
+    const last = fields[fields.length - 1];
+    if (!last) return null;
+    last.text = last.text ? `${last.text}\n${line}` : line;
+  }
+  return fields.length >= minLabels ? fields : null;
+}
+
+/**
+ * 把「连续 ≥2 个标签行」的段落合成字段表；其后紧跟的列表挂到最后一个字段，
+ * 紧跟的标签段落并入同一张表。其它块原样保留，任何文字都不丢。
+ */
+export function groupSpecBlocks(blocks: Block[]): Block[] {
+  const out: Block[] = [];
+  let open: SpecField[] | null = null;
+  for (const b of blocks) {
+    if (b.kind === 'p') {
+      const fields = specFieldsOf(b.text ?? '', open ? 1 : 2);
+      if (fields) {
+        if (open) open.push(...fields);
+        else { open = fields; out.push({ kind: 'spec', fields: open }); }
+        continue;
+      }
+    }
+    if (open && (b.kind === 'ul' || b.kind === 'ol')) {
+      const last = open[open.length - 1];
+      if (last && !last.list) {
+        last.list = { ordered: b.kind === 'ol', items: b.items ?? [] };
+        continue;
+      }
+    }
+    open = null;
+    out.push(b);
+  }
+  return out;
+}
+
+/** 去掉行内标记，得到可放进目录芯片的纯文本。 */
+export function plainInline(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .trim();
+}
+
+export interface OutlineItem {
+  /** 与 MarkdownView 的 data-md-heading 同一口径：文档里第几个标题（含代码块外的全部层级）。 */
+  index: number;
+  level: number;
+  title: string;
+}
+
+/**
+ * 长回复的章节目录：取「出现 ≥3 次的最浅层标题」（h1→h3 依次试），最多 12 项。
+ * 基于 parseBlocks，代码块里的 `## xxx` 不会被当成标题。
+ */
+export function outlineOf(text: string): OutlineItem[] {
+  const heads: OutlineItem[] = [];
+  let index = 0;
+  for (const b of parseBlocks(text)) {
+    if (b.kind !== 'h') continue;
+    heads.push({ index, level: b.level ?? 1, title: plainInline(b.text ?? '') });
+    index += 1;
+  }
+  for (const level of [1, 2, 3]) {
+    const same = heads.filter((h) => h.level === level && h.title !== '');
+    if (same.length >= 3) return same.slice(0, 12);
+  }
+  return [];
 }
 
 /**
@@ -408,8 +501,20 @@ function ChartView({ source }: { source: string }) {
   );
 }
 
-export function MarkdownView({ text }: { text: string }) {
-  const blocks = useMemo(() => parseBlocks(text), [text]);
+/**
+ * specTables / headingAnchors 默认关闭：文件预览（PreviewPane）与历史行为保持逐字一致，
+ * 只有聊天消息显式开启后才会把「**标签**：内容」段落渲染成字段表、给标题打目录锚点。
+ */
+export function MarkdownView({ text, specTables = false, headingAnchors = false }: { text: string; specTables?: boolean; headingAnchors?: boolean }) {
+  const blocks = useMemo(() => {
+    const parsed = parseBlocks(text);
+    return specTables ? groupSpecBlocks(parsed) : parsed;
+  }, [text, specTables]);
+  /* 标题序号与 outlineOf 同口径：按文档顺序数所有标题块（字段表合并不改变标题块） */
+  const headingIndex = useMemo(() => {
+    let n = 0;
+    return blocks.map((b) => (b.kind === 'h' ? n++ : -1));
+  }, [blocks]);
 
   return (
     <div className="md-view">
@@ -417,8 +522,26 @@ export function MarkdownView({ text }: { text: string }) {
         switch (b.kind) {
           case 'h': {
             const Tag = (`h${Math.min(b.level ?? 1, 6)}`) as 'h1';
-            return <Tag className={`md-h md-h${b.level}`} key={i}>{renderInline(b.text ?? '')}</Tag>;
+            return <Tag className={`md-h md-h${b.level}`} key={i} data-md-heading={headingAnchors ? headingIndex[i] : undefined}>{renderInline(b.text ?? '')}</Tag>;
           }
+          case 'spec':
+            return (
+              <dl className="md-spec" key={i}>
+                {(b.fields ?? []).map((f, j) => (
+                  <div className="md-spec-row" key={j}>
+                    <dt>{f.label}</dt>
+                    <dd>
+                      {f.text ? <span className="md-spec-text">{renderInline(f.text)}</span> : null}
+                      {f.list ? (
+                        f.list.ordered
+                          ? <ol className="md-ol">{f.list.items.map((it, k) => <li key={k}>{renderInline(it)}</li>)}</ol>
+                          : <ul className="md-ul">{f.list.items.map((it, k) => <li key={k}>{renderInline(it)}</li>)}</ul>
+                      ) : null}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            );
           case 'p':
             return <p className="md-p" key={i}>{renderInline(b.text ?? '')}</p>;
           case 'ul':

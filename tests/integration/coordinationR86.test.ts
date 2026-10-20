@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync,writeFileSync,readFileSync,unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { openDatabase } from '../../src/persistence/db.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import { openDatabase, type ZhongshuoDatabase } from '../../src/persistence/db.ts';
 import { dispatchDaemonCommand } from '../../src/daemon/commands.ts';
 import { DispatchWorker,type DispatchWorkerOptions } from '../../src/daemon/dispatchWorker.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
@@ -18,6 +18,32 @@ const output = (answer: string, coordinationPlan?: unknown,extra:Record<string,u
   schemaVersion:'task-complete-v1',resultKey:'fixture',answer,responseKind:coordinationPlan?'work':'conversation',changeSummary:answer,
   files:[],executedVerifications:[],unexecutedVerifications:[],remainingIssues:[],...(coordinationPlan?{coordinationPlan}:{}),...extra
 })}}];
+
+function requireDetailBeforeChild(db:ZhongshuoDatabase,parentTaskId:string):void{
+  db.exec(`
+    CREATE TRIGGER r93_planning_detail_before_child
+    BEFORE INSERT ON tasks
+    WHEN NEW.parent_task_id='${parentTaskId}'
+    BEGIN
+      SELECT CASE WHEN EXISTS(
+        SELECT 1 FROM messages m
+          JOIN message_attachments ma ON ma.message_id=m.id
+          JOIN artifacts a ON a.id=ma.artifact_id
+         WHERE m.thread_id=NEW.conversation_thread_id AND m.author_type='agent'
+           AND ma.id LIKE 'matt_detail_%' AND a.kind='text_file'
+      ) THEN 1 ELSE RAISE(ABORT, 'R93 planning detail must exist before child task/queue') END;
+    END;
+  `);
+}
+
+function assertDetailInContext(db:ZhongshuoDatabase,taskId:string,marker:string):void{
+  const row=db.prepare(`SELECT c.included_refs_json FROM context_bundles c
+    JOIN agent_turns a ON a.id=c.turn_id JOIN workflow_runs r ON r.id=a.run_id
+    WHERE r.task_id=? ORDER BY c.rowid DESC LIMIT 1`).get(taskId) as {included_refs_json:string}|undefined;
+  expect(row).toBeDefined();
+  const envelope=JSON.parse(row!.included_refs_json) as {attachments?:Array<{detail?:boolean;text?:string}>};
+  expect((envelope.attachments??[]).find(item=>item.detail===true)?.text).toContain(marker);
+}
 
 async function fixture(enableDeliberate=false,options:Partial<Pick<DispatchWorkerOptions,'turnDeadlineMs'|'interruptGraceMs'|'coordinationMaxCalls'|'detachedTurnConsumption'>>={}) {
   vi.stubEnv('ZS_ALLOW_FAKE','1');vi.stubEnv('ZS_RUNTIME','fake');
@@ -60,6 +86,133 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('binds planning coordinationPlan detail before child tasks exist and gives the child the full tail',async()=>{
+    const f=await fixture();
+    try{
+      const root=await f.send();
+      requireDetailBeforeChild(f.db,root.taskId);
+      const detail=`# 规划完整详情\n\n${'规划证据。'.repeat(120)}\n\nR93_PLANNING_PLAN_TAIL`;
+      await f.run(output('计划已提交',f.plan,{detailMarkdown:detail}));
+      const step=f.db.prepare('SELECT child_task_id FROM coordination_steps WHERE run_id=(SELECT run_id FROM coordination_runs WHERE task_id=?) ORDER BY rowid LIMIT 1').get(root.taskId) as {child_task_id:string};
+      expect(step.child_task_id).toBeTruthy();
+      await f.run(output('分析完成'));
+      assertDetailInContext(f.db,step.child_task_id,'R93_PLANNING_PLAN_TAIL');
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('binds planning handoff detail before downstream enqueue and gives the receiver the full tail',async()=>{
+    const f=await fixture();
+    try{
+      const root=await f.send([f.a,f.b]);
+      requireDetailBeforeChild(f.db,root.taskId);
+      const detail=`# 交接规划详情\n\n${'交接证据。'.repeat(120)}\n\nR93_PLANNING_HANDOFF_TAIL`;
+      await f.run(output('交接计划已提交',undefined,{
+        responseKind:'work',detailMarkdown:detail,
+        handoffs:[{toMemberId:f.b,purpose:'ask',message:'请接收者复核合成样例。'}],
+      }));
+      const handoff=f.db.prepare(`SELECT child_task_id FROM coordination_messages
+        WHERE target_member_id=? AND purpose='ask' ORDER BY rowid DESC LIMIT 1`).get(f.b) as {child_task_id:string};
+      expect(handoff.child_task_id).toBeTruthy();
+      for(let i=0;i<4;i+=1){
+        await f.run(output(`接收者完成复核${i+1}`));
+        if(f.db.prepare('SELECT 1 FROM context_bundles WHERE turn_id IN (SELECT id FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id=?))').get(handoff.child_task_id))break;
+      }
+      assertDetailInContext(f.db,handoff.child_task_id,'R93_PLANNING_HANDOFF_TAIL');
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('projects a long DELIBERATE stage as a short visible message plus one complete MD without replacing the canonical artifact',async()=>{
+    const f=await fixture(true);
+    try{
+      const root=await f.send([f.a,f.b]);
+      await f.worker.runOnce();
+      const next=f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string};
+      const step=parseDelibStep(next.dispatch_key)!;
+      const longSummary=`阶段长结论。${'这是需要完整保存但不应全部铺进聊天的证据。'.repeat(80)}\n\n待确认：R93_STAGE_CRITICAL_MARKER`;
+      await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
+        schemaVersion:'analysis-draft-v1',summary:longSummary,
+        claims:[{claimId:'c1',statement:'R93 阶段关键结论',kind:'proposal',evidenceIds:[]}],
+        recommendations:['核对完整证据'],openQuestions:[],
+      })}}]);
+      const row=f.db.prepare(`SELECT id,body_json FROM messages
+        WHERE thread_id=? AND json_extract(body_json,'$.collaborationStage.stage')='INDEPENDENT'
+        ORDER BY rowid DESC LIMIT 1`).get(root.threadId) as {id:string;body_json:string};
+      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string;collaborationStage?:{stage:string}};
+      expect(body.collaborationStage?.stage).toBe('INDEPENDENT');
+      expect(body.text).toContain('完整详情见下方 Markdown 附件');
+      expect(body.text).toContain('R93_STAGE_CRITICAL_MARKER');
+      expect(body.detailMarkdown).toBeUndefined();
+      const attachment=f.db.prepare(`SELECT ma.id,a.id artifactId,a.kind,a.hash,a.blob_path,a.author_id
+        FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as
+        {id:string;artifactId:string;kind:string;hash:string;blob_path:string;author_id:string};
+      expect(attachment).toMatchObject({kind:'text_file',author_id:step.memberId});
+      expect(attachment.id.startsWith('matt_detail_')).toBe(true);
+      const fullDetail=readFileSync(attachment.blob_path,'utf8');
+      expect(fullDetail).toContain('这是需要完整保存但不应全部铺进聊天的证据');
+      expect(body.text.length).toBeLessThan(fullDetail.length);
+      expect(attachment.hash).toBe(createHash('sha256').update(fullDetail, 'utf8').digest('hex'));
+      const canonical=listRunArtifacts(f.db,step.runId,'analysis_draft');
+      expect(canonical).toHaveLength(1);
+      expect(canonical[0]!.author_id).toBe(step.memberId);
+      expect(canonical[0]!.id).not.toBe(attachment.artifactId);
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
+  it('counts more than four critical deliberation states without truncating away the notice or final MD tail',async()=>{
+    const f=await fixture(true);
+    try{
+      const root=await f.send([f.a,f.b]);
+      await f.worker.runOnce();
+      const runId=(f.db.prepare("SELECT id FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE' ORDER BY rowid DESC LIMIT 1").get(root.taskId) as {id:string}).id;
+      let synthesisStageSeen=false;
+      for(let count=0;count<30;count+=1){
+        const next=f.db.prepare("SELECT dispatch_key FROM outbox WHERE status='pending' ORDER BY id LIMIT 1").get() as {dispatch_key:string}|undefined;
+        if(!next)break;
+        const step=parseDelibStep(next.dispatch_key);expect(step).not.toBeNull();
+        let value:unknown;
+        if(step!.stage==='IND'){
+          value={schemaVersion:'analysis-draft-v1',summary:`${step!.memberId}独立方案`,claims:[{claimId:'c1',statement:'方案甲可行',kind:'proposal',evidenceIds:[]}],recommendations:['核对约束'],openQuestions:[]};
+        }else if(step!.stage==='CR'){
+          const draft=listRunArtifacts(f.db,step!.runId,'analysis_draft').find(a=>a.author_id!==step!.memberId)!;
+          value={schemaVersion:'cross-review-v1',reviews:[{targetArtifactId:draft.id,targetRevision:1,targetClaimId:'c1',stance:'agree',reason:'已读取他方方案，约束一致',evidenceIds:[]}]};
+        }else if(step!.stage==='SYN'){
+          const disputed=Array.from({length:5},(_,index)=>({
+            statement:`需要保留的分歧 ${index+1}`,
+            disagreementSummary:`这是需要完整保存但不应全部塞进摘要的分歧说明。${'证据和边界。'.repeat(12)}R93_SYN_DISPUTE_${index+1}_TAIL`,
+            sourceRefs:['c1'],
+          }));
+          value={schemaVersion:'synthesis-v1',summary:'两位成员汇总的自然结论',claims:[{statement:'按方案甲推进',sourceRefs:['c1']}],disputedClaims:disputed,recommendations:['下一步核实工程条件']};
+          synthesisStageSeen=true;
+        }else if(step!.stage==='RAT'){
+          value={schemaVersion:'ratify-v1',responses:[{claimId:'clm_1',stance:'confirm'}]};
+        }else throw Error(`非预期阶段 ${step!.stage}`);
+        await f.run([{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify(value)}}]);
+      }
+      expect(synthesisStageSeen).toBe(true);
+      const row=f.db.prepare(`SELECT id,body_json FROM messages
+        WHERE thread_id=? AND json_extract(body_json,'$.collaborationStage.stage')='SYNTHESIS'
+        ORDER BY rowid DESC LIMIT 1`).get(root.threadId) as {id:string;body_json:string};
+      const body=JSON.parse(row.body_json) as {text:string;detailMarkdown?:string};
+      expect(body.text).toContain('另有 1 项关键状态');
+      expect(body.text).toContain('分歧');
+      expect(body.text).not.toContain('R93_SYN_DISPUTE_5_TAIL');
+      expect(body.detailMarkdown).toBeUndefined();
+      const attachment=f.db.prepare(`SELECT a.id artifactId,a.hash,a.blob_path FROM message_attachments ma
+        JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?`).get(row.id) as {artifactId:string;hash:string;blob_path:string};
+      const fullDetail=readFileSync(attachment.blob_path,'utf8');
+      expect(fullDetail).toContain('R93_SYN_DISPUTE_5_TAIL');
+      expect(createHash('sha256').update(fullDetail,'utf8').digest('hex')).toBe(attachment.hash);
+      const frozen=listRunArtifacts(f.db,runId,'synthesis');
+      const ratify=listRunArtifacts(f.db,runId,'ratify_response');
+      expect(frozen.length).toBeGreaterThan(0);
+      expect(ratify.length).toBeGreaterThan(0);
+      for(const artifact of [...frozen,...ratify]){
+        expect(createHash('sha256').update(readFileSync(artifact.blob_path)).digest('hex')).toBe(artifact.hash);
+        expect(artifact.id).not.toBe(attachment.artifactId);
+      }
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
+
   it('AUTO rework stays executing after its planning outbox settles and while child steps run',async()=>{
     const f=await fixture();try{
       const revision=(f.db.prepare('SELECT revision FROM projects WHERE id=?').get(f.projectId) as {revision:number}).revision;

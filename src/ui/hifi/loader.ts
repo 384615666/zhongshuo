@@ -27,9 +27,9 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean }>; body?: { text?: string }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
-export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }> }
+export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }> }
 interface HistoryData { messages: HistoryMessage[] }
 import {chatAnswer} from '../../contracts/chatAnswer';
 export interface SendResult { taskId?: string; threadId?: string; disposition?: string; deliberationBudget?: { maxTurns: number } }
@@ -98,6 +98,20 @@ function parsedHistoryBody(m: HistoryMessage): unknown {
   const raw = m.bodyJson ?? m.body_json;
   if (raw == null) return undefined;
   try { return JSON.parse(raw) as unknown; } catch { return undefined; }
+}
+
+/** Raw detail is the visible fallback when the app-managed MD attachment could not be registered. */
+function detailMarkdownOfBody(body: unknown): string | undefined {
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const value = body as { detailMarkdown?: unknown; runtimeControlResult?: unknown };
+  if (typeof value.detailMarkdown === 'string' && value.detailMarkdown.trim().length > 0) return value.detailMarkdown;
+  if (typeof value.runtimeControlResult === 'string') {
+    try {
+      const parsed = JSON.parse(value.runtimeControlResult) as { detailMarkdown?: unknown };
+      if (typeof parsed.detailMarkdown === 'string' && parsed.detailMarkdown.trim().length > 0) return parsed.detailMarkdown;
+    } catch { /* natural text */ }
+  }
+  return undefined;
 }
 
 /** 归属门：请求发起时的 (gen, projectId) 与当前状态一致才落盘。 */
@@ -1092,14 +1106,14 @@ function hydrateThreadFromSnapshots(threadId: string, ticket = ++rootReadTicket)
 interface ThreadGetData {  thread: { id: string; projectId: string; conversationId: string; roomId: string; anchorMessageId: string; rootTaskId: string | null; status: string; lastMessageSeq: number; revision: number };
   members?:ThreadMembersSnapshot;
   progress?:ThreadVisibleProgress[];
-  anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string }> } | null;
+  anchor: { id: string; authorType: string; authorId: string; body: { text: string }; createdAt: number; conversationSeq: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean }> } | null;
   lastReadSeq: number;
 }
 /**
  * thread.history 的回复项。`body` 是服务端 `JSON.parse(body_json)` 的完整对象
  * （R91：含 `collaborationStage`），loader 只取 `text` 正文并转译阶段标记。
  */
-export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number }>;replyExecution?:Message['formalReplyExecution'] }
+export interface ThreadHistoryItem { id: string; authorType: string; authorId: string; seq: number; body: { text?: string; collaborationStage?: unknown; detailMarkdown?: string; runtimeControlResult?: string } | null; createdAt: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>;replyExecution?:Message['formalReplyExecution'] }
 interface ThreadHistoryData { items: ThreadHistoryItem[]; rootAttachments: Array<{ artifactId: string; filename: string; kind: string }> }
 interface TaskGetData {
   task: { response_kind?:'conversation'|'work'|null; id: string; title: string; status: string; room_id: string; conversation_thread_id: string | null; room_task_number: number; revision: number; stopGeneration: number;
@@ -1124,6 +1138,7 @@ export const msgOfReply = (projectId: string, roomId: string, threadId: string, 
     body: stripStageHeading(readable, stage), createdAt: it.createdAt, threadMessageSeq: it.seq,
     attachmentIds: [], formalAttachments: it.attachments ?? [],
     formalReplyExecution:it.replyExecution,
+  detailMarkdown: (it.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(it.body),
   };
   if (stage != null) message.collaborationStage = stage;
   return message;
@@ -1373,6 +1388,7 @@ export const msgOfDmHistory = (projectId: string, conversationId: string, m: His
     authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: stripStageHeading(textOf(m), stage),
     createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? index,
     attachmentIds: [], formalAttachments: m.attachments ?? [],
+    detailMarkdown: (m.attachments??[]).some(a=>a.detailMarkdown) ? undefined : detailMarkdownOfBody(parsedHistoryBody(m)),
   };
   if (stage != null) message.collaborationStage = stage;
   return message;

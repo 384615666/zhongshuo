@@ -411,7 +411,7 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
 
       {tab === 'replies' ? (
         <>
-          <div className="msg-list" ref={listRef} onScroll={onListScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
+          <div className="msg-list is-replies" ref={listRef} onScroll={onListScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {/* 根消息（房间级锚消息——不在 thread 历史内；thread.get anchor 提供） */}
             <div className="panel info" style={{ marginBottom: 8 }} id={`msg-${anchor?.id ?? 'anchor'}`}>
               <div className="row tight">
@@ -433,12 +433,13 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
             </div>
             {msgs.length === 0 ? <div className="panel info">暂无回复——发送第一条跟进（不另建根任务）。</div> : null}
             {msgs.map((m) => (
-              <div key={m.id}>
+              <div key={m.id} className="msg-item">
                 {m.threadMessageSeq === firstUnreadSeq ? <div className="unread-divider" style={{ borderTop: '1px solid var(--accent, #2563eb)', margin: '8px 0', fontSize: 11, color: 'var(--accent, #2563eb)', textAlign: 'center' }}>以上未读之后的新回复</div> : null}
                 <div id={`msg-${m.id}`}>
                   <MessageView
                     message={{ ...m, saved: savedRefs[m.id] === true }}
                     author={m.authorType === 'human' ? undefined : memberById.get(m.authorId)}
+                    readingAids
                     onOpenAttachment={(att) => openPreviewAtt(att)}
                     onSave={() => void saveMessage(m)}
                     onQuote={() => quoteMessage(m)}

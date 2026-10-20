@@ -8,6 +8,8 @@ export const taskCompleteSchema=z.strictObject({
   resultKey:z.string().min(1),
   changeSummary:z.string(),
   answer:z.string().optional(),
+  /** Short visible reply and its complete, human-readable Markdown detail. */
+  detailMarkdown:z.string().optional(),
   responseKind:z.enum(['conversation','work']).optional(),
   files:z.array(z.string()),
   executedVerifications:z.array(z.string()),
@@ -19,7 +21,15 @@ export const taskCompleteSchema=z.strictObject({
 export type TaskComplete=z.infer<typeof taskCompleteSchema>;
 
 export function taskCompleteOutputSchema(resultKey:string,planning=false){
-  const common=taskCompleteSchema.omit({coordinationPlan:true}).extend({resultKey:z.literal(resultKey),answer:z.string(),responseKind:z.enum(['conversation','work']),handoffs:z.array(memberHandoffSchema).max(4)});
+  const common=taskCompleteSchema.omit({coordinationPlan:true}).extend({
+    resultKey:z.literal(resultKey),
+    answer:z.string(),
+    // Provider structured-output schemas require every declared property. Keep it
+    // semantically optional by submitting an empty string for short answers.
+    detailMarkdown:z.string(),
+    responseKind:z.enum(['conversation','work']),
+    handoffs:z.array(memberHandoffSchema).max(4),
+  });
   // Claude CLI validates draft-07; Codex shares the same closed object schema.
   return z.toJSONSchema(planning?common.extend({coordinationPlan:coordinationPlanSchema.nullable()}):common,{target:'draft-7'});
 }

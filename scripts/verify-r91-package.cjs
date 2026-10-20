@@ -13,7 +13,7 @@
  *   5) 证据写入 dist/review-r91-package-20261019/。
  *
  * 用法：
- *   node scripts/verify-r91-package.cjs --package <candidate-dir> [--out <dir>] [--dry-run]
+ *   node scripts/verify-r91-package.cjs --package <candidate-dir> [--out <dir>] [--dry-run] [--r93-detail]
  *   node scripts/verify-r91-package.cjs --package <candidate-dir> --prepare-only
  *
  * 退出码：0=全部检查通过；1=有检查失败；2=宿主/夹具/环境前置失败（含无次屏）。
@@ -44,7 +44,7 @@ function parseArgs(argv) {
     const value = argv[i];
     if (!value.startsWith('--')) throw new Error(`未知参数：${value}`);
     const key = value.slice(2);
-    if (['dry-run', 'prepare-only', 'keep-copy', 'skip-manifest'].includes(key)) { flags.add(key); continue; }
+    if (['dry-run', 'prepare-only', 'keep-copy', 'skip-manifest', 'r93-detail'].includes(key)) { flags.add(key); continue; }
     const next = argv[i + 1];
     if (next == null || next.startsWith('--')) throw new Error(`参数缺少值：${value}`);
     values.set(key, next);
@@ -53,7 +53,7 @@ function parseArgs(argv) {
   const packageArg = values.get('package') ?? process.env.R91_PACKAGE_ROOT ?? 'dist/desktop/desktop-daily-win-v26-r90-final6-20261018';
   const packageRoot = path.resolve(repoRoot, packageArg);
   const outDir = path.resolve(repoRoot, values.get('out') ?? 'dist/review-r91-package-20261019');
-  return { packageRoot, outDir, dryRun: flags.has('dry-run'), prepareOnly: flags.has('prepare-only'), keepCopy: flags.has('keep-copy'), skipManifest: flags.has('skip-manifest') };
+  return { packageRoot, outDir, dryRun: flags.has('dry-run'), prepareOnly: flags.has('prepare-only'), keepCopy: flags.has('keep-copy'), skipManifest: flags.has('skip-manifest'), r93Detail: flags.has('r93-detail') };
 }
 
 function must(value, message) {
@@ -401,7 +401,7 @@ function prepareEngineeringDaemon(copyDir, runDir) {
   return { engineeringDir, entryPath, token, markerPath };
 }
 
-function runFixturePreparation(copyDir, runDir) {
+function runFixturePreparation(copyDir, runDir, r93Detail = false) {
   const prepareScript = path.join(repoRoot, 'scripts', 'prepare-r91-visible-fixture.ts');
   must(fs.existsSync(prepareScript), `夹具脚本缺失：${prepareScript}`);
   const logFile = path.join(runDir, 'fixture-prep.log');
@@ -412,6 +412,7 @@ function runFixturePreparation(copyDir, runDir) {
     '--project', path.join(runDir, 'project'),
     '--report', path.join(runDir, 'fixture.json'),
     '--no-live',
+    ...(r93Detail ? ['--r93-detail'] : []),
   ], { cwd: repoRoot, env: { ...process.env }, encoding: 'utf8', timeout: 180_000, windowsHide: true });
   fs.writeFileSync(logFile, `${child.stdout ?? ''}\n${child.stderr ?? ''}`, 'utf8');
   if (child.status !== 0) throw new Error(`夹具准备失败（exit=${child.status}）：${(child.stderr ?? '').slice(-800)}`);
@@ -589,10 +590,15 @@ async function main() {
     const stage = el.querySelector('.msg-stage-tag');
     const text = el.querySelector('.msg-text');
     const attachments = el.querySelector('.msg-inline-attachments');
-    const actions = el.querySelector('.msg-actions');
+    const footer = el.querySelector('.msg-attachment-footer');
+    const fold = el.querySelector('.msg-fold');
+    const textRect = text?.getBoundingClientRect() ?? null;
+    const footerRect = footer?.getBoundingClientRect() ?? null;
+    const foldRect = fold?.getBoundingClientRect() ?? null;
     const chips = Array.from(el.querySelectorAll('[data-zs-inline-attachments] [data-zs-artifact-id]')).map((chip) => ({
       artifactId: chip.getAttribute('data-zs-artifact-id'),
       text: (chip.textContent || '').trim(),
+      detail: chip.classList.contains('is-detail'),
     }));
     return {
       id: rawId.startsWith('thread-msg-') ? rawId.slice('thread-msg-'.length) : rawId.startsWith('msg-') ? rawId.slice(4) : rawId,
@@ -603,9 +609,10 @@ async function main() {
       seq: (el.querySelector('.msg-seq')?.textContent || '').trim(),
       text: (text?.textContent || '').trim(),
       hasAttachments: attachments != null,
-      bodyBeforeAttachments: !!(text && attachments && (text.compareDocumentPosition(attachments) & Node.DOCUMENT_POSITION_FOLLOWING)),
-      attachmentsBeforeActions: !!(attachments && actions && (attachments.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING)),
-      attachmentsAfterBody: !!(attachments && text && attachments.previousElementSibling === text),
+      bodyBeforeAttachments: !!(text && footer && (text.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING)
+        && textRect && footerRect && footerRect.top >= textRect.bottom - 1),
+      attachmentsInFooter: !!(attachments && footer && attachments.closest('.msg-attachment-footer') === footer),
+      attachmentsAfterFold: !!(!fold || (footerRect && foldRect && footerRect.top >= foldRect.bottom - 1)),
       chips,
     };
   }); })()`);
@@ -702,10 +709,11 @@ async function main() {
     }
 
     result.phase = 'prepare-fixture';
-    const fixture = runFixturePreparation(copyDir, runDir);
+    const fixture = runFixturePreparation(copyDir, runDir, args.r93Detail);
     result.facts.fixture = fixture;
     check('fixture built by real daemon chain (synthetic/fake)', fixture.synthetic === true && fixture.dedicatedFakeRuntime === true);
     check('fixture zero real model calls', fixture.assertions && fixture.assertions.realCalls === 0);
+    if (args.r93Detail) check('fixture has one actual hosted R93 detail Markdown', fixture.detailAttachment != null && fixture.detailAttachment.kind === 'text_file', q(fixture.detailAttachment));
     check('fixture has stage products (IND/CR/ISS/SYN/RAT)', ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION', 'SYNTHESIS', 'RATIFY'].every((stage) => (fixture.assertions?.stageSet ?? []).includes(stage)), q(fixture.assertions?.stageSet));
     check('fixture has 3 guarded xlsx/csv/txt snapshot attachments', fixture.generatedFiles.length === 3 && fixture.assertions.generatedFiles === 3);
     check('fixture prepared without startup recovery queue (--no-live)', fixture.liveMessageId == null && fixture.assertions?.liveRequestQueued === false);
@@ -908,9 +916,12 @@ async function main() {
     const generated = fixture.generatedFiles;
     const generatedMessage = staticWait.find((message) => message.id === fixture.generatedMessageId);
     check('generated file reply rendered with author', generatedMessage != null && generatedMessage.author === fixture.generatedMessageAuthor.displayName, generatedMessage && generatedMessage.author);
-    check('generated file reply shows exactly 3 unique attachment chips', generatedMessage != null && generatedMessage.chips.length === 3 && new Set(generatedMessage.chips.map((chip) => chip.artifactId)).size === 3, generatedMessage && q(generatedMessage.chips));
-    check('attachment cards are below body and above copy/quote/favorite', generatedMessage != null && generatedMessage.bodyBeforeAttachments && generatedMessage.attachmentsBeforeActions && generatedMessage.attachmentsAfterBody);
-    const expectedFilenames = generated.map((file) => file.filename).sort();
+    const expectedAttachmentCount = 3 + (args.r93Detail ? 1 : 0);
+    check(`generated file reply shows exactly ${expectedAttachmentCount} unique attachment chips`, generatedMessage != null && generatedMessage.chips.length === expectedAttachmentCount && new Set(generatedMessage.chips.map((chip) => chip.artifactId)).size === expectedAttachmentCount, generatedMessage && q(generatedMessage.chips));
+    check('attachment footer is below body/fold and outside the fold',
+      generatedMessage != null && generatedMessage.bodyBeforeAttachments && generatedMessage.attachmentsInFooter
+        && generatedMessage.attachmentsAfterFold);
+    const expectedFilenames = [...generated.map((file) => file.filename), ...(args.r93Detail ? [fixture.detailAttachment.filename] : [])].sort();
     const actualFilenames = (generatedMessage?.chips ?? []).map((chip) => expectedFilenames.find((name) => chip.text.includes(name))).filter(Boolean).sort();
     check('attachment chips show all guarded filenames/kinds', q(actualFilenames) === q(expectedFilenames), q({ expectedFilenames, actual: generatedMessage?.chips }));
     await screenshot('02-thread-stages-and-file-cards');
@@ -920,13 +931,15 @@ async function main() {
       const clicked = await cdp.eval(`(() => { const chip = document.querySelector('[data-zs-artifact-id=${q(artifactId)}]'); if (chip == null) return false; chip.click(); return true; })()`);
       must(clicked, `附件卡不存在：${artifactId}`);
     };
-    const waitPreview = async (filename, kind) => {
+    const waitPreview = async (filename, kind, expectedText = null) => {
       await waitFor(() => cdp.eval(`document.querySelector('.preview-tab.on')?.textContent || ''`), (text) => text.includes(filename), `preview tab ${filename}`, 45_000);
       await waitFor(() => cdp.eval(`document.querySelector('[data-zs-file-loading="1"]') == null`), Boolean, `preview loaded ${filename}`, 90_000);
       const error = await cdp.eval(`document.querySelector('[data-zs-preview-error]')?.getAttribute('data-zs-preview-error') || null`);
       check(`preview ${filename}: no preview error`, error == null, error);
       const text = await cdp.eval(`document.querySelector('.preview-body')?.textContent || ''`);
-      if (kind === 'sheet_file') {
+      if (kind === 'detail_markdown') {
+        check(`preview R93 detail rendered (${filename})`, expectedText == null || text.includes(expectedText), text.slice(-240));
+      } else if (kind === 'sheet_file') {
         const isXlsx = filename.endsWith('.xlsx');
         if (isXlsx) {
           const xlsxReady = await waitFor(() => cdp.eval(`(() => ({ engine: !!document.querySelector('[data-zs-xlsx-view]'), grid: !!document.querySelector('[data-zs-xlsx-grid]') }))()`), (state) => state.engine || state.grid, `xlsx render ${filename}`, 60_000);
@@ -964,6 +977,16 @@ async function main() {
       await clickChip(file.artifactId);
       await waitPreview(file.filename, file.kind);
       await saveAsAndVerify(file);
+    }
+    if (args.r93Detail) {
+      const detail = fixture.detailAttachment;
+      const detailChip = generatedMessage?.chips.find((chip) => chip.artifactId === detail.artifactId);
+      check('R93 detail card is the final attachment card and marked detail', detailChip != null && detailChip.detail === true && generatedMessage.chips.at(-1)?.artifactId === detail.artifactId, q(generatedMessage?.chips));
+      await clickChip(detail.artifactId);
+      await waitPreview(detail.filename, 'detail_markdown', detail.marker);
+      const detailText = await cdp.eval(`document.querySelector('.preview-body')?.textContent || ''`);
+      check('R93 detail preview contains full-tail marker', detailText.includes(detail.marker), detailText.slice(-240));
+      await saveAsAndVerify(detail);
     }
     await screenshot('03-preview-and-saveas');
 
@@ -1101,11 +1124,18 @@ async function main() {
     });
     check('reopen same copy: stage messages/authors/labels retained', reopenStageFailures.length === 0, reopenStageFailures.map((entry) => entry.id).slice(0, 5).join(','));
     const reopenedGenerated = reopenedById.get(fixture.generatedMessageId);
-    check('reopen same copy: exactly 3 file cards retained (no duplicates)', reopenedGenerated != null && reopenedGenerated.chips.length === 3 && new Set(reopenedGenerated.chips.map((chip) => chip.artifactId)).size === 3, reopenedGenerated && q(reopenedGenerated.chips));
+    check(`reopen same copy: exactly ${expectedAttachmentCount} file cards retained (no duplicates)`, reopenedGenerated != null && reopenedGenerated.chips.length === expectedAttachmentCount && new Set(reopenedGenerated.chips.map((chip) => chip.artifactId)).size === expectedAttachmentCount, reopenedGenerated && q(reopenedGenerated.chips));
     await clickChip(fixture.generatedFiles[0].artifactId);
     await waitPreview(fixture.generatedFiles[0].filename, fixture.generatedFiles[0].kind);
     await saveAsAndVerify(fixture.generatedFiles[0]);
     check('reopen same copy: preview + save-as sha256 still equal fixture', true);
+    if (args.r93Detail) {
+      const detail = fixture.detailAttachment;
+      await clickChip(detail.artifactId);
+      await waitPreview(detail.filename, 'detail_markdown', detail.marker);
+      await saveAsAndVerify(detail);
+      check('reopen same copy: R93 detail preview + save-as sha256 still equal fixture', true);
+    }
     await screenshot('05-reopen-persisted');
 
     result.phase = 'complete';

@@ -9,6 +9,7 @@ import {
   DM_STANDING_PROMPT_VERSION,
   TASK_COMPLETE_SCHEMA_VERSION,
   taskCompleteSchema,
+  taskCompleteOutputSchema,
   TURN_BUNDLE_VERSION,
 } from '../../src/contracts/prompts.ts';
 import { canonicalJson } from '../../src/contracts/common.ts';
@@ -128,6 +129,14 @@ describe('TaskComplete 输出契约（规格 §4.4：版本不可变、strict）
 
   it('成功 fixture 通过', () => {
     expect(taskCompleteSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it('accepts one optional complete detailMarkdown while old outputs remain valid', () => {
+    expect(taskCompleteSchema.safeParse({ ...valid, answer: '短结论', detailMarkdown: '# 完整详情\n\n证据。' }).success).toBe(true);
+    expect(taskCompleteSchema.safeParse(valid).success).toBe(true);
+    expect(taskCompleteSchema.safeParse({ ...valid, detailMarkdown: 123 }).success).toBe(false);
+    const providerSchema = taskCompleteOutputSchema('result_test') as { required?: string[] };
+    expect(providerSchema.required).toContain('detailMarkdown');
   });
 
   it('缺项（未执行验证无理由）→ 拒绝', () => {

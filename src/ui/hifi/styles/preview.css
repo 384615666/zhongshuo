@@ -624,6 +624,38 @@ body.zs-frameless .preview-pane.maximized {
 .md-table th:last-child, .md-table td:last-child { border-right: 0; }
 .md-table tbody tr:last-child td { border-bottom: 0; }
 .md-table th { background: var(--bg-surface-2); font-weight: 600; }
+/* 字段表：聊天消息里「**标签**：内容」连续段落（仅 MarkdownView specTables 开启时才会出现，文件预览不受影响） */
+.md-spec {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 10px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.md-spec-row { display: contents; }
+.md-spec dt,
+.md-spec dd {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.md-spec-row:first-child > * { border-top: 0; }
+.md-spec dt {
+  background: var(--bg-surface-2);
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md-spec dd { min-width: 0; overflow-wrap: anywhere; }
+.md-spec-text { display: block; white-space: pre-wrap; }
+.md-spec dd .md-ul,
+.md-spec dd .md-ol { margin: 0; padding-left: 18px; }
+.md-spec-text + .md-ul,
+.md-spec-text + .md-ol { margin-top: 6px; }
+/* 消息目录跳转到标题时留一点上边距（仅开启 headingAnchors 的标题带此属性） */
+[data-md-heading] { scroll-margin-top: 8px; }
 .md-link { color: var(--accent-text); }
 .md-link-mark { font-size: 0.8em; opacity: 0.7; }
 .md-diagram-wrap {

@@ -292,6 +292,8 @@ export interface FormalAttachmentSummary {
   kind: string;
   /** 可选展示信息：后端未提供时不显示大小，绝不伪造。 */
   sizeBytes?: number;
+  /** R93 app-managed complete Markdown derived from a successful answer. */
+  detailMarkdown?: boolean;
 }
 
 /**
@@ -355,6 +357,8 @@ export interface Message {
   attachmentIds?: string[];
   /** 正式侧（第五十一轮）：真实附件摘要（message_attachments 投影）——优先于原型 resources 路径渲染。 */
   formalAttachments?: FormalAttachmentSummary[];
+  /** Inline fallback when the complete Markdown attachment could not be persisted. */
+  detailMarkdown?: string;
   /**
    * 研讨阶段产物标记（后端 `body_json.collaborationStage` 的 loader 转译）。
    * 缺省=普通消息；仅用于在消息头显示简短中文阶段标签与轮次。

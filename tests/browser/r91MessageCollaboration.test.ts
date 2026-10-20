@@ -201,7 +201,7 @@ describe('R91 MessageView: 生成文件卡在正文之后、操作之前且不�
     expect(html).not.toContain('更多');
   });
 
-  it('does not stack the prototype resource channel under formal attachment cards, but keeps it for old messages', () => {
+  it('keeps distinct prototype resources alongside formal cards and still renders resource-only legacy messages', () => {
     const resource: PreviewResource = {
       id: 'res_legacy', projectId: 'p1', kind: 'attachment', title: '旧原型附件.txt', mimeType: 'text/plain',
       origin: { kind: 'message', messageId: 'm_final', roomId: 'r1' },
@@ -216,7 +216,9 @@ describe('R91 MessageView: 生成文件卡在正文之后、操作之前且不�
       messageAttachments: [...s.messageAttachments, { id: 'ma_legacy', messageId: 'm_final', resourceId: 'res_legacy', revision: 1, ordinal: 0 }],
     }));
     const withFormal = renderMessage({ ...reply, attachmentIds: ['res_legacy'] });
-    expect(withFormal).not.toContain('旧原型附件.txt');
+    expect(withFormal).toContain('旧原型附件.txt');
+    expect(withFormal).toContain('msg-attach-row');
+    expect(withFormal.indexOf('季度分析总表')).toBeLessThan(withFormal.indexOf('旧原型附件.txt'));
 
     const oldMessage = renderMessage({ ...reply, formalAttachments: undefined, body: '旧消息正文', collaborationStage: undefined });
     expect(oldMessage).toContain('旧消息正文');

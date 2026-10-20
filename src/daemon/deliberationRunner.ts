@@ -14,7 +14,9 @@
 import { projectScopedFileListing } from './fileDiscovery.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
+import { persistDetailMarkdown } from './detailMarkdownAttachments.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import {
@@ -1193,6 +1195,43 @@ export function renderStageProductText(db: ZhongshuoDatabase, input: {
  * 成功产物共用同一身份——只显示一次、同 turn 重放不重复；未通过 schema 的修复尝试在
  * onStepOutput 的 counted=false 分支就被拒绝，根本到不了这里。
  */
+function stageMessageProjection(visibleText: string): { text: string; detailMarkdown?: string } {
+  const lines = visibleText.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
+  const needsDetail = lines.length > 10 || visibleText.length > 700;
+  if (!needsDetail) return { text: visibleText };
+  const compact = (line: string, limit = 220): string => line.length > limit ? `${line.slice(0, limit)}…` : line;
+  const importantLines: string[] = [];
+  let section = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('- ') && /[:：]\s*$/.test(trimmed)) {
+      section = trimmed;
+      continue;
+    }
+    const bullet = trimmed.startsWith('- ');
+    const standalone = /^(检查点结论|理由)[：:]/.test(trimmed);
+    if ((!bullet && !standalone) || /^(建议|推荐)[：:]/.test(section)) continue;
+    if (/反对|不同意|需要证据|分歧|待确认|未确认|条件|检查点结论|理由/.test(trimmed)) importantLines.push(line);
+  }
+  const important = importantLines.slice(0, 4).map((line) => compact(line, 140));
+  const hiddenImportant = Math.max(0, importantLines.length - important.length);
+  const lead = compact(lines[0] ?? '', 140);
+  const importantSet = new Set(important);
+  const rest = lines.slice(1, 9).map((line) => compact(line, 140)).filter((line) => line !== lead && !importantSet.has(line));
+  const core = [...new Set([lead, ...important, hiddenImportant > 0 ? `另有 ${hiddenImportant} 项关键状态（分歧/条件/待确认），见完整详情。` : ''])]
+    .filter((line) => line.length > 0);
+  let text = core.join('\n');
+  for (const line of rest) {
+    const next = `${text}\n${line}`;
+    if (next.length > 900) break;
+    text = next;
+  }
+  return {
+    text: `${text}\n\n完整详情见下方 Markdown 附件。`,
+    detailMarkdown: visibleText.trimStart().startsWith('#') ? visibleText : `# 阶段完整详情\n\n${visibleText}`,
+  };
+}
+
 export function insertVisibleStageMessage(db: ZhongshuoDatabase, input: {
   task: { id: string; project_id: string; conversation_id: string; conversation_thread_id: string | null; room_id: string | null };
   runId: string;
@@ -1428,14 +1467,48 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
     if (turnRow != null) try {
       const visibleText = renderStageProductText(db, { runId: input.runId, step: input.step, payload: payload as Record<string, unknown> });
       if (visibleText.length > 0) {
-        insertVisibleStageMessage(db, {
+        const projection = stageMessageProjection(visibleText);
+        const messageId = insertVisibleStageMessage(db, {
           task: { id: task.id, project_id: task.project_id, conversation_id: task.conversation_id, conversation_thread_id: task.conversation_thread_id, room_id: task.room_id },
           runId: input.runId,
           step: input.step,
           turnId: input.turnId,
-          text: visibleText,
+          text: projection.text,
           now,
         });
+        if (messageId != null && projection.detailMarkdown != null && threadId.length > 0) {
+          const persisted = persistDetailMarkdown({
+            db,
+            appDataDir: dirname(input.options.blobDir),
+            projectId: task.project_id,
+            conversationId: task.conversation_id,
+            threadId,
+            taskId: task.id,
+            runId: input.runId,
+            turnId: input.turnId,
+            messageId,
+            memberId: input.step.memberId,
+            markdown: projection.detailMarkdown,
+            now,
+          });
+          if (persisted.status === 'ready') {
+            db.prepare(`UPDATE messages SET body_json=json_remove(body_json,'$.detailMarkdown') WHERE id=?`).run(messageId);
+            appendDomainEvent(db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id,
+              conversationId: task.conversation_id, threadId, taskId: input.taskId,
+              runId: input.runId, turnId: input.turnId, kind: 'run.visibleStageDetail',
+              createdAt: now, payload: { stage: input.step.stage, messageId, artifactId: persisted.artifactId, hash: persisted.hash, bytes: persisted.bytes },
+            });
+          } else {
+            db.prepare(`UPDATE messages SET body_json=json_set(body_json,'$.detailMarkdown',?) WHERE id=?`).run(projection.detailMarkdown, messageId);
+            appendDomainEvent(db, {
+              schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id,
+              conversationId: task.conversation_id, threadId, taskId: input.taskId,
+              runId: input.runId, turnId: input.turnId, kind: 'run.visibleStageDetailFallback',
+              createdAt: now, payload: { stage: input.step.stage, messageId, status: persisted.status, code: persisted.status === 'failed' ? persisted.code : 'TOO_LARGE' },
+            });
+          }
+        }
       }
     } catch (error) {
       try {

@@ -5,6 +5,7 @@ import { conversationFacts,conversationBlock,conversationReplyForDispatch,setCon
 import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
+import {persistDetailMarkdown} from './detailMarkdownAttachments.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
 import { acquireLease } from './workspaceLocks.ts';
@@ -40,7 +41,7 @@ import { settleTurns } from '../domain/budget.ts';
 import { assembleDirectTurn } from './turnInput.ts';
 import { readMemberRuntimeBinding, resolveMemberRuntime } from './memberRuntime.ts';
 import { DispatchAdmission } from './admission.ts';
-import {agentReplyText,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
+import {agentReplyText,chatAnswer,extractAppendedTaskComplete,isExplicitTaskCompleteOutput} from '../contracts/chatAnswer.ts';
 import { renderStandingPrompt, scanSensitivePatterns, taskCompleteSchema, taskCompleteOutputSchema } from '../contracts/prompts.ts';
 import {
   assembleStepInput,
@@ -2162,6 +2163,10 @@ export class DispatchWorker {
           // 交付与验收（§10.5）：按任务快照策略收尾；user_review 进 REVIEW + pending 交付（唯一待办）。
           // 追加 turn 的再交付：revision 递增、旧 pending 标 superseded（§10.5-5 替换当前待办）。
           const result=taskCompleteSchema.parse(JSON.parse(finalText));
+          // R93: planning (coordinationPlan/handoffs) also needs its visible answer
+          // and complete detail bound before any downstream child/queue is created.
+          this.ensureStructuredFinalReply(task, turnId, finalText, result);
+          this.bindDetailMarkdown(task, runId, turnId, result);
           if(result.handoffs?.length){
             const messages=acceptMemberHandoffs(this.db,task.id,runId,turnId,result.handoffs);
             for(const message of messages){const recipient=this.db.prepare('SELECT display_name FROM project_members WHERE id=?').get(message.toMemberId) as {display_name:string};this.insertThreadReply(task,turnId,message.id,`给 ${recipient.display_name}：\n${message.text}`);}
@@ -2172,9 +2177,6 @@ export class DispatchWorker {
             return;
           }
           if(planningRun)this.db.prepare("UPDATE coordination_runs SET state='completed' WHERE run_id=?").run(runId);
-          // R91：合法结构化终态但 adapter 未发（或只发状态前缀的）message.completed 时，
-          // 形成本轮最终可见回复并绑定文件卡；不改变交付/合同判定。
-          this.ensureStructuredFinalReply(task, turnId, finalText, result);
           // Read/calculation commands and rejected write attempts are not proof of
           // a work result. Capture actual project differences before deciding;
           // model-declared work retains its formal work/verification contract.
@@ -2716,8 +2718,39 @@ export class DispatchWorker {
    * 校验的 TaskComplete 生成**本轮最终可见回复**（消息 id 属于本轮命名空间），供文件卡绑定。
    * 只在成功交付/成功答复路径调用；不是把失败/停止输出转成成功消息。
    */
-  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string }): void {
-    const visible = (result.answer ?? '').trim() || result.changeSummary.trim();
+  /** R93: bind one complete Markdown detail before DONE; on failure keep the full text in the final message. */
+  private bindDetailMarkdown(task:TaskRow,runId:string,turnId:string,result:{detailMarkdown?:string}):void{
+    const markdown=result.detailMarkdown;
+    if(typeof markdown!=='string'||markdown.trim().length===0)return;
+    const finalMessageId=this.kvGet(`final-message:${turnId}`);
+    const memberId=(this.db.prepare('SELECT member_id FROM agent_turns WHERE id=?').get(turnId) as {member_id:string}|undefined)?.member_id;
+    if(memberId==null){
+      this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'failed',code:'MEMBER_MISSING',bytes:Buffer.byteLength(markdown,'utf8')});
+      return;
+    }
+    if(finalMessageId==null){
+      this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'failed',code:'FINAL_MESSAGE_MISSING',bytes:Buffer.byteLength(markdown,'utf8')});
+      return;
+    }
+    const outcome=persistDetailMarkdown({
+      db:this.db,appDataDir:this.appDataDir,projectId:task.project_id,conversationId:task.conversation_id,
+      threadId:task.conversation_thread_id,taskId:task.id,runId,turnId,messageId:finalMessageId,memberId,markdown,
+    });
+    if(outcome.status==='ready'){
+      this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'ready',artifactId:outcome.artifactId,attachmentId:outcome.attachmentId,hash:outcome.hash,bytes:outcome.bytes,reused:outcome.reused});
+      return;
+    }
+    try{
+      this.db.prepare(`UPDATE messages SET body_json=json_set(body_json,'$.detailMarkdown',?) WHERE id=?`).run(markdown,finalMessageId);
+      this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'inline-fallback',code:outcome.status==='too-large'?'TOO_LARGE':outcome.code,message:outcome.message,bytes:Buffer.byteLength(markdown,'utf8')});
+    }catch(error){
+      this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'failed',code:outcome.status==='too-large'?'TOO_LARGE':outcome.code,message:`${outcome.message}; fallback persistence failed: ${String(error)}`,bytes:Buffer.byteLength(markdown,'utf8')});
+    }
+  }
+
+  private ensureStructuredFinalReply(task: TaskRow, turnId: string, finalText: string, result: { answer?: string; changeSummary: string; detailMarkdown?: string }): void {
+    const visible = (result.answer ?? '').trim() || result.changeSummary.trim()
+      || (result.detailMarkdown?.trim() ? '完整详情见下方 Markdown 附件。' : '');
     if (visible.length === 0) return;
     const key = `final-message:${turnId}`;
     const expectedResultKey = `result_${turnId}`;
@@ -2732,7 +2765,10 @@ export class DispatchWorker {
           if (text.length > 0) {
             // R90 final5 回归修复：复用 agentReplyText 的**完整答案/段落**判定，不用任意子串 includes——
             // “不是最终结论。”不能因为包含“是”就吞掉真实 answer='是。'。
-            const supplemented = agentReplyText(text, finalText, expectedResultKey).trim();
+            const projected = isExplicitTaskCompleteOutput(text)
+              ? chatAnswer(text, 'agent', expectedResultKey).trim()
+              : text;
+            const supplemented = agentReplyText(projected, finalText, expectedResultKey).trim() || visible;
             if (normalize(supplemented) === normalize(text)) return; // 完整答案已可见，不重复
             const nextBody = JSON.stringify({
               ...body,
