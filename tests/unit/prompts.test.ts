@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   computeTurnBundleHash,
   renderStandingPrompt,
+  renderTurnBundle,
   scanSensitivePatterns,
   selectStageInstruction,
   STANDING_PROMPT_TEMPLATE,
   STANDING_PROMPT_VERSION,
   DM_STANDING_PROMPT_VERSION,
   TASK_COMPLETE_SCHEMA_VERSION,
+  turnBundleEnvelopeSchema,
   taskCompleteSchema,
   taskCompleteOutputSchema,
   TURN_BUNDLE_VERSION,
@@ -170,6 +172,40 @@ describe('TaskComplete 输出契约（规格 §4.4：版本不可变、strict）
   });
 });
 
+describe('R97 permission header', () => {
+  it('fullAccess=true 即使 effective tier=auto_edit，也显示完全访问而不是自动编辑', () => {
+    const envelope = turnBundleEnvelopeSchema.parse({
+      bundleVersion: TURN_BUNDLE_VERSION,
+      promptVersion: STANDING_PROMPT_VERSION,
+      turnId: 'turn_full',
+      taskRevision: 1,
+      mode: 'DIRECT',
+      stage: null,
+      turnPurpose: 'stage_work',
+      you: { memberId: 'm_a', role: 'executor' },
+      roster: [{ memberId: 'm_a', displayName: '甲', status: 'expected' }],
+      budget: {
+        runMaxTurns: 4, usedTurns: 0, inFlightReservedTurns: 1, remainingTurns: 3,
+        tailReserved: 0, tailReservationByStage: {}, stageAvailableTurns: 3,
+      },
+      permission: {
+        tier: 'auto_edit', intent: 'modify', policyId: 'policy-full-access',
+        modificationAuthorized: true, fullAccess: true, allowedWriteRoots: [],
+      },
+      task: { taskId: 'task_full', threadId: 'thread_full', objective: '执行', userConstraints: [] },
+      baseline: null,
+      materials: [],
+      threadDigest: { rootMessageId: 'msg_root', rootText: '执行', fromSeq: 1, toSeq: 1, truncated: false, messages: [] },
+      outputContract: { kind: 'TaskComplete', submitVia: 'final-result', resultKey: 'result_turn_full', progressAllowed: true },
+      communicationContract: { mentionEnabled: false, disabledReason: '单一执行者' },
+    });
+    const text = renderTurnBundle(envelope);
+    expect(text).toContain('权限=完全访问(修改)');
+    expect(text).toContain('本轮已明确选择完全访问');
+    expect(text).not.toContain('权限=自动编辑(修改)');
+  });
+});
+
 describe('敏感模式扫描（PP-03：渲染全文零命中）', () => {
   it('干净文本零命中', () => {
     expect(scanSensitivePatterns('普通任务正文，无秘密。')).toEqual([]);
@@ -184,9 +220,9 @@ describe('敏感模式扫描（PP-03：渲染全文零命中）', () => {
 
 describe('R87 actual collaboration role instructions',()=>{
   it.each([
-    ['AUTO','coordinator','coordination.planning','规划只读'],
+    ['AUTO','coordinator','coordination.planning','规划/审核职责不改变'],
     ['DIRECT','executor','coordination.child','接手同伴的具体请求'],
-    ['AUTO','coordinator','coordination.integration','不再追加交接'],
+    ['AUTO','coordinator','coordination.integration','不再生成新计划'],
   ] as const)('%s/%s/%s selects the real role, without a conflicting sole executor instruction',(mode,role,stage,expected)=>{
     const result=selectStageInstruction({mode,role,stage,turnPurpose:'stage_work'});
     expect(result.ok).toBe(true);if(!result.ok)return;
@@ -200,7 +236,7 @@ describe('信封 hash（PP-04 一致性基础）', () => {
     const a = { b: 1, a: { d: 2, c: [3, 4] } };
     const b = { a: { c: [3, 4], d: 2 }, b: 1 };
     expect(canonicalJson(a)).toBe(canonicalJson(b));
-    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.4');
+    expect(TURN_BUNDLE_VERSION).toBe('zs-turn-v0.1.5');
     expect(computeTurnBundleHash.name).toBe('computeTurnBundleHash');
   });
 });

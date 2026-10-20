@@ -56,7 +56,7 @@ import {
   repairDispatchKey,
   type DelibStep,
 } from './deliberationRunner.ts';
-import { budgetAccounting, occupyFrontForDispatch, occupyTailForDispatch, settleTurn,refundReservedTurn } from '../contracts/deliberation.ts';
+import { budgetAccounting, dispatchBudgetStage, occupyFrontForDispatch, occupyTailForDispatch, settleTurn,refundReservedTurn } from '../contracts/deliberation.ts';
 import type { DeliberationBudgetState } from '../contracts/deliberation.ts';
 import { acquireReminderTurnSlot, releaseUnlinkedReminderReservations, releaseUnlinkedReminderReservationsForDispatch, settleReminderCallForTurn } from './reminderDispatch.ts';
 import { checkProcessLiveness, collectTreeRows, snapshotProcessTable } from './processCheck.ts';
@@ -645,7 +645,6 @@ export class DispatchWorker {
       this.audit(task,null,null,'task.contextAssemblyFailed',{reason:'write-authorization-changed',message:reason});
       await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
     }
-    if(coordination?.readonly)writeAccess={...writeAccess,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
     let baselineChangeSetId: string | null = null;
     let baselineContentUnavailable: string[] = [];
     if (writeAccess.modificationAuthorized) {
@@ -886,6 +885,8 @@ export class DispatchWorker {
         runtimeKind: resolvedKind,
         model: resolvedModel,
         installationId: dmResolved?.installationId ?? null,
+        promptVersion: standing.value.version,
+        promptTemplateHash: standing.value.templateHash,
         writeIdentity: writeAccess.identityKey,
         writeAccessMode: { fullAccess: writeAccess.fullAccess, modificationAuthorized: writeAccess.modificationAuthorized, root: writeAccess.root, identityKey: writeAccess.identityKey },
         permissionMode: dmResolved?.permissionMode ?? null,
@@ -899,22 +900,24 @@ export class DispatchWorker {
         : undefined;
       let resumeRef: SessionRef | undefined;
       if (dmPrevSession != null) {
-        // 绑定兼容：候选行的快照与当前统一解析结果一致（无快照=历史行按兼容处理）。不一致=
-        // runtime 切换/权限档变化/工作目录变化 → 不 resume（新会话受限重放——事件如实）。
-        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string } | null = null;
+        // 绑定兼容：候选快照必须与当前 runtime、权限、工作目录及常驻提示词版本/hash 全一致。
+        // 旧快照缺失 prompt 绑定或任一变化 → 不 resume（新会话+获准历史重放，不重放旧工具调用）。
+        let prevSnap: { runtimeKind?: string | null; model?: string | null; installationId?: string | null; promptVersion?: string; promptTemplateHash?: string; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string } | null = null;
         let snapDamaged = false;
         if (dmPrevSession.capabilities_json != null) {
           try {
-            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string };
+            prevSnap = JSON.parse(dmPrevSession.capabilities_json) as { runtimeKind?: string | null; model?: string | null; installationId?: string | null; promptVersion?: string; promptTemplateHash?: string; permissionMode?: string | null; cwd?: string | null; writeIdentity?: string };
             if (typeof prevSnap.runtimeKind !== 'string' && prevSnap.runtimeKind !== null) snapDamaged = true;
           } catch { snapDamaged = true; }
         }
-        // 缺失/损坏快照不默认兼容（第二十一轮三）：按不兼容处理——新会话+历史重放，不冒充续接。
+        // 缺失/损坏快照不默认兼容：按不兼容处理——新会话+历史重放，不冒充续接。
         const compatible = !snapDamaged
           && prevSnap != null
           && (prevSnap.runtimeKind ?? null) === resolvedKind
           && (prevSnap.model ?? null) === resolvedModel
           && (prevSnap.installationId ?? null) === (dmResolved?.installationId ?? null)
+          && prevSnap.promptVersion === standing.value.version
+          && prevSnap.promptTemplateHash === standing.value.templateHash
           && (prevSnap.permissionMode ?? null) === (dmResolved?.permissionMode ?? null)
           && (prevSnap.cwd ?? null) === project.canonical_path
           && prevSnap.writeIdentity === writeAccess.identityKey;
@@ -933,7 +936,8 @@ export class DispatchWorker {
             conversationId: task.conversation_id, memberId: member.id,
             prevSnapshot: prevSnap,
             currentResolved: dmResolved != null ? { kind: dmResolved.kind, model: dmResolved.model, installationId: dmResolved.installationId, permissionMode: dmResolved.permissionMode, bound: dmResolved.bound } : null,
-            note: 'runtime 解析已变化（kind/model/installation/权限档/cwd 之一）：不续接——新会话+历史重放（能力如实）',
+            currentPrompt: { version: standing.value.version, templateHash: standing.value.templateHash },
+            note: 'runtime 解析或常驻提示词版本已变化（kind/model/installation/prompt/权限档/cwd 之一）：不续接——新会话+获准历史重放，不重放旧工具调用',
           });
         }
       }
@@ -1437,7 +1441,8 @@ export class DispatchWorker {
       await failOutbox(this.db, claimed.id, claimed.attempt_epoch);
       return;
     }
-    const accStage = step.stage === 'SYN' ? 'SYNTHESIS' : step.stage === 'RAT' ? 'RATIFY' : 'front';
+    // 格式修复只能使用 non-tail F，不借用尚未执行的 SYN/RAT 保留额。
+    const accStage = dispatchBudgetStage(step.stage === 'SYN' ? 'SYNTHESIS' : step.stage === 'RAT' ? 'RATIFY' : 'front', isRepair);
     const acc = budgetAccounting(budget, accStage);
     if (acc.stageAvailableTurns < 1) {
       this.audit(task, run.id, null, 'run.budgetSkipped', { dispatchKey: claimed.dispatch_key, stageAvailableTurns: acc.stageAvailableTurns, remaining: acc.remainingTurns });
@@ -1465,15 +1470,14 @@ export class DispatchWorker {
     const turnId = `turn_${randomUUID()}`;
     const frozen=coordinationRoster(this.db,task.id);
     const memberScope=frozen.find(m=>m.memberId===step.memberId);
-    let readAccess:ReturnType<typeof effectiveTaskWriteAccess>;
+    let writeAccess:ReturnType<typeof effectiveTaskWriteAccess>;
     let materials:ReturnType<typeof assembleDirectTurn>;
     const imageBinding=JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()));
     const imageCapability=memberImageCapability(this.db,step.memberId);
     try{
       if(frozen.length && !memberScope?.writeScope)throw Error(memberScope?.unavailableReason??'成员未包含在发送时的配置快照内');
-      const access=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
-      readAccess={...access,fullAccess:false,modificationAuthorized:false,allowedWriteRoots:[],launchConfigurationKey:undefined,tier:'plan',intent:'analyze',policyId:'policy-analyze'};
-      materials=assembleDirectTurn({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess:readAccess,
+      writeAccess=effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined);
+      materials=assembleDirectTurn({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess,
         task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
         budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns}});
@@ -1481,7 +1485,12 @@ export class DispatchWorker {
       // App-managed R93 details are derived from earlier visible answers, not
       // canonical stage material for any DELIB step; user uploads remain.
       const stageAttachments=(materials.value.envelope.attachments??[]).filter((attachment)=>attachment.detail!==true);
-      assembly.value.text+=`\n\n【本轮权限】多人研讨角色只读，使用运行时允许的只读工具，不修改文件；成员原权限配置未改变。\n【附件材料】${JSON.stringify(stageAttachments)}\n图片内容通过独立图片输入块提供（${materials.value.images?.length??0}张）。`;
+      const permissionText=writeAccess.fullAccess
+        ? '本轮有效权限为 CLI 完整权限。围绕用户目标直接完成必要查证、命令、修改和验证；分析/评审角色标签不降低 runtime 权限。'
+        : writeAccess.modificationAuthorized
+          ? `本轮已获项目写入授权（${writeAccess.root}）。在授权根目录内直接完成修改和验证；分析/评审角色标签不降低 runtime 权限。`
+          : '本轮有效权限为只读/计划；按实际选择分析，不修改文件。';
+      assembly.value.text+=`\n\n【本轮有效权限】${permissionText}\n【附件材料】${JSON.stringify(stageAttachments)}\n图片内容通过独立图片输入块提供（${materials.value.images?.length??0}张）。`;
     }catch(error){
       this.db.prepare("UPDATE run_participants SET status='failed' WHERE run_id=? AND member_id=?").run(run.id,step.memberId);
       this.audit(task,run.id,null,'run.stepFailed',{stage:step.stage,memberId:step.memberId,message:String(error)});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);pumpDeliberation(this.db,task.id,this.deliberationOptions(task.project_id));return;
@@ -1491,7 +1500,7 @@ export class DispatchWorker {
       memberId: step.memberId,
       projectId: task.project_id,
       providerKey: this.providerKeyOf(step.memberId),
-      writeRootKey: null, // 只读档；写档接入点就绪（B6）
+      writeRootKey: writeAccess.modificationAuthorized ? comparisonKey(writeAccess.root) : null,
     });
     if (!admission.granted) {
       releaseOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -1520,11 +1529,35 @@ export class DispatchWorker {
            VALUES (?, ?, ?, 0, NULL, ?, '[]', ?)`,
         // 全文入 bundle（PP-04：真实输入可核对——审计用 sha256(text) 复核）。
         ).run(bundleId, turnId, task.conversation_thread_id, JSON.stringify({ stage: assembly.value.stage, memberId: step.memberId, roundNo: step.roundNo, turnPurpose: assembly.value.turnPurpose, instruction: assembly.value.instruction, outputContract: assembly.value.outputContract, text: assembly.value.text }), textHash);
+        if(writeAccess.modificationAuthorized){
+          const lease=acquireLease(this.db,{lockDomain:comparisonKey(writeAccess.root),ownerTurnId:turnId,policy:'single_writer',now:Date.now()});
+          if(!lease.ok)throw Object.assign(new Error('研讨写入目录已有持有者'),{name:'WriteLeaseHeld'});
+          this.kvSet(`write-lease:${turnId}`,comparisonKey(writeAccess.root));
+        }
         if (task.status === 'OPEN') this.transitionTask(task.id, 'ACTIVE');
       });
-      createTurn();
-
+      try{
+        createTurn();
+      }catch(turnError){
+        if((turnError as Error).name==='WriteLeaseHeld'){
+          this.releaseAdmission(turnId);
+          releaseOutbox(this.db,claimed.id,claimed.attempt_epoch);
+          this.blockedOutbox.set(claimed.id,'write-root');
+          this.audit(task,run.id,null,'run.admissionDeferred',{reason:'write-root',dispatchKey:claimed.dispatch_key});
+          return;
+        }
+        throw turnError;
+      }
       startupPhase = 'standing-prompt';
+      if(writeAccess.modificationAuthorized){
+        const baseline=captureBaseline(this.db,{projectId:task.project_id,taskId:task.id,runId:run.id,appDataDir:this.appDataDir});
+        if(!baseline.ok)throw Error(`研讨写入基线失败：${baseline.error.message}`);
+        if(baseline.value.truncated)throw Error('研讨写入基线不完整：目录扫描失败、路径被拒绝或文件清单超出安全范围');
+        const baselineChangeSetId=baseline.value.changeSetId;
+        const baselineContentUnavailable=baseline.value.contentUnavailable;
+        this.kvSet(`write-changeset:${turnId}`,baselineChangeSetId);
+        if(baselineContentUnavailable.length>0)this.audit(task,run.id,turnId,'run.baselineContentUnavailable',{paths:baselineContentUnavailable,changeSetId:baselineChangeSetId,note:'这些文件没有内容级前像；不降低已授权执行权限，变更按实际差异留证'});
+      }
       const standing = renderStandingPrompt({
         conversationKind: 'room',
         vars: {
@@ -1555,8 +1588,8 @@ export class DispatchWorker {
         threadId: task.conversation_thread_id,
         sessionGeneration: generation.c,
         cwd: project.canonical_path,
-        policyId: 'policy-analyze',
-        writeAccess:readAccess,
+        policyId: writeAccess.policyId,
+        writeAccess,
         developerInstructions: standing.value.text,
         promptVersion: standing.value.version,
       });
@@ -1566,7 +1599,7 @@ export class DispatchWorker {
         `INSERT INTO runtime_sessions (id, project_id, conversation_id, scope_kind, thread_id, member_id, task_id, session_generation, cwd,capabilities_json)
          VALUES (?, ?, ?, 'task', ?, ?, ?, ?, ?,?)`,
       ).run(session.id, task.project_id, task.conversation_id, task.conversation_thread_id, step.memberId, task.id, generation.c, project.canonical_path,
-        JSON.stringify({runtime:resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()),writeIdentity:readAccess.identityKey,effectivePolicy:'policy-analyze',fullAccess:false,effortVerification:'requested-not-provider-certified'}));
+        JSON.stringify({runtime:resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()),writeIdentity:writeAccess.identityKey,writeAccessMode:{fullAccess:writeAccess.fullAccess,modificationAuthorized:writeAccess.modificationAuthorized,root:writeAccess.root,identityKey:writeAccess.identityKey},effectivePolicy:writeAccess.policyId,effortVerification:'requested-not-provider-certified'}));
       this.db.prepare('UPDATE agent_turns SET session_id=? WHERE id=? AND run_id=?').run(session.id,turnId,run.id);
 
       if (this.stoppingOrTerminal(task.id, turnId) || this.shutdownStarted) {
@@ -1601,7 +1634,7 @@ export class DispatchWorker {
       };
       if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
 
-      if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==readAccess.identityKey
+      if(effectiveTaskWriteAccess(this.db,task.id,step.memberId,this.defaultKindOf(),memberScope?.writeScope??undefined).identityKey!==writeAccess.identityKey
         ||JSON.stringify(resolveMemberRuntime(this.db,step.memberId,this.defaultKindOf()))!==imageBinding
         ||(materials.value.images?.length&&memberImageCapability(this.db,step.memberId).identityKey!==imageCapability.identityKey))throw Error('研讨成员实际配置在启动前变化；未发送');
       if(!this.deliberationMayLaunch(task.id,run.id)){await cancelUnavailablePeer();return;}
@@ -1616,7 +1649,7 @@ export class DispatchWorker {
         images:materials.value.images,
         imageConfigurationKey:imageCapability.identityKey??undefined,
         outputSchema:deliberationOutputSchema(step.stage),
-        policyId: 'policy-analyze',
+        policyId: writeAccess.policyId,
         taskRevision: 0,
         resultKey: `result_${turnId}`,
       });
@@ -1626,7 +1659,10 @@ export class DispatchWorker {
       if (startupPhase === 'startTurn' && openedSession != null) {
         this.registerProcessIdentity(turnId, run.id, step.memberId, openedSession.adapter, openedSession.session);
       }
-      await this.settleDelibStartupFailure(task, run.id, turnId, step, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
+      await this.settleDelibStartupFailure(task, run.id, turnId, step, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession, {
+        stage: accStage,
+        restoreTail: accStage !== 'front' && budget.tailReservationByStage[accStage] > 0,
+      });
       throw dispatchError;
     } finally {
       if (!this.detached) {
@@ -1650,12 +1686,14 @@ export class DispatchWorker {
     phase: 'records' | 'standing-prompt' | 'openSession' | 'session-record' | 'startTurn',
     error: unknown,
     openedSession: { adapter: RuntimeAdapter; session: SessionRef } | null = null,
+    reservation?: { stage: 'front' | 'SYNTHESIS' | 'RATIFY'; restoreTail: boolean },
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     const finishConfirmed = (extra: Record<string, unknown>): void => {
       const tx = this.db.transaction(() => {
         this.casTurn(turnId, 'FAILED');
-        this.settleDelibBudget(runId);
+        if (reservation != null) this.refundDelibReservation(runId, turnId, reservation.stage, reservation.restoreTail);
+        else this.settleDelibBudget(runId);
         this.db.prepare("UPDATE run_participants SET status = 'failed' WHERE run_id = ? AND member_id = ? AND status IN ('pending','late')").run(runId, step.memberId);
         this.audit(task, runId, turnId, 'turn.startupFailed', { phase, message: message.slice(0, 200), classification: 'confirmed-not-started', ...extra });
       });
@@ -2485,6 +2523,8 @@ export class DispatchWorker {
         return;
       }
       if (out.value.counted) {
+        const stageMessageId=`msg_delib_${runId}_${baseStep.stage}_${baseStep.memberId}_${baseStep.roundNo}`;
+        if(this.db.prepare('SELECT 1 FROM messages WHERE id=?').get(stageMessageId))this.kvSet(`final-message:${turnId}`,stageMessageId);
         const tx = this.db.transaction(() => {
           this.casTurn(turnId, 'SUCCEEDED');
           this.settleDelibBudget(runId);
@@ -2511,7 +2551,7 @@ export class DispatchWorker {
       const tx = this.db.transaction(() => {
         this.casTurn(turnId, 'FAILED');
         this.settleDelibBudget(runId);
-        if (repairTurn == null && baseStep.stage !== 'RAT') {
+        if (repairTurn == null) {
           this.kvSet(`delib:repair:${repairKey}`, out.value.needsRepair ?? '格式无效');
           this.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(repairKey, task.stop_generation); // 意图入队代次（迁移 034）
           this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: [out.value.needsRepair ?? ''], repairEnqueued: repairKey });
@@ -2920,8 +2960,8 @@ export class DispatchWorker {
 
   /**
    * R91 生成文件快照（终态后、事务外）：
-   * - 只处理本 turn 已通过 TaskComplete schema/resultKey/任务身份的成功结果（失败/停止/UNKNOWN/
-   *   迟到/研讨轮都不登记）；
+   * - 只处理本 turn 已成功且完成权限/build 校验的结果（失败/停止/UNKNOWN/迟到不登记；
+   *   DELIB 可写轮从已验证 changeset 取差异）；
    * - 依据本次有效写权限（fullAccess 可本轮明确列出的项目外文件；受限权限只收项目内且有本
    *   turn 变更证据的路径；显式只读不登记产出），读取真实字节/hash 后复制到内容寻址存储；
    * - 只挂到本轮绑定的最终回复消息（final-message 键），不挂会话全部回复；
@@ -2929,7 +2969,6 @@ export class DispatchWorker {
    */
   private async snapshotCompletedFiles(task: TaskRow, runId: string, turnId: string): Promise<void> {
     const context = this.turnFileSnapshotContext(turnId);
-    if (context == null) return;
     const keys = [`final-files:${turnId}`, `turn-diff:${turnId}`, `final-message:${turnId}`];
     const cleanup = (): void => {
       for (const key of keys) { try { this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(key); } catch { /* 尽力清理 */ } }
@@ -2937,14 +2976,27 @@ export class DispatchWorker {
     try {
       const turn = this.db.prepare('SELECT status, member_id, stage_key FROM agent_turns WHERE id = ?').get(turnId) as
         | { status: string; member_id: string; stage_key: string } | undefined;
-      if (turn == null || turn.status !== 'SUCCEEDED' || turn.stage_key.startsWith('delib.')) return;
+      if (turn == null || turn.status !== 'SUCCEEDED') return;
       const project = this.db.prepare('SELECT canonical_path, status FROM projects WHERE id = ?').get(task.project_id) as
         | { canonical_path: string; status: string } | undefined;
       // 审核⑤：按本 turn 执行时记录的权限（不是执行后当前配置）决定 fullAccess/受限/只读。
       const access = project == null ? null : this.turnRecordedWriteAccess(task, turnId, turn.member_id);
-      // 绑定消息必须属于本轮命名空间（最终回复/合成最终回复），否则不挂附件。
+      let contextForFiles = context;
+      if (contextForFiles == null) {
+        const changesetId = this.kvGet(`write-changeset:${turnId}`);
+        if (changesetId != null) {
+          const finalized = finalizeChangeset(this.db, { changeSetId: changesetId, appDataDir: this.appDataDir });
+          if (finalized.ok) {
+            contextForFiles = {
+              files: [...finalized.value.diff.added, ...finalized.value.diff.modified],
+              diff: { added: [...finalized.value.diff.added], modified: [...finalized.value.diff.modified] },
+            };
+          }
+        }
+      }
+      // 绑定消息必须属于本轮（DIRECT 最终回复或 DELIB 可见阶段消息），否则不挂附件。
       const rawMessageId = this.kvGet(`final-message:${turnId}`);
-      const messageId = rawMessageId != null && rawMessageId.startsWith(`msg_${turnId}_`) ? rawMessageId : null;
+      const messageId = rawMessageId != null && (rawMessageId.startsWith(`msg_${turnId}_`) || rawMessageId.startsWith('msg_delib_')) ? rawMessageId : null;
       const outcome = snapshotGeneratedFiles({
         db: this.db,
         appDataDir: this.appDataDir,
@@ -2956,8 +3008,8 @@ export class DispatchWorker {
         memberId: turn.member_id,
         conversationId: task.conversation_id,
         messageId,
-        declaredFiles: context.files,
-        turnDiff: context.diff,
+        declaredFiles: contextForFiles?.files ?? [],
+        turnDiff: contextForFiles?.diff ?? null,
         access,
       });
       if (outcome.failures.length > 0 || outcome.status === 'blocked') {

@@ -212,14 +212,15 @@ interface BoundMessage {
  * 在**任何文件读取之前**调用；任何不一致=不登记（不挂跨项目/跨轮附件）。
  */
 function validateBoundMessage(input: GeneratedFileSnapshotInput, messageId: string): { ok: true; message: BoundMessage } | { ok: false; reason: string } {
-  if (!messageId.startsWith(`msg_${input.turnId}_`)) {
-    return { ok: false, reason: `回复消息 id 不属于本轮命名空间（期望 msg_${input.turnId}_…，实际 ${messageId}）` };
+  const delibStageMessage = messageId.startsWith('msg_delib_');
+  if (!delibStageMessage && !messageId.startsWith(`msg_${input.turnId}_`)) {
+    return { ok: false, reason: `回复消息 id 不属于本轮命名空间（期望 msg_${input.turnId}_… 或 msg_delib_…，实际 ${messageId}）` };
   }
   const row = input.db.prepare(
-    'SELECT id, project_id, conversation_id, task_id, author_type, author_id, thread_id, status FROM messages WHERE id = ?',
+    'SELECT id, project_id, conversation_id, task_id, author_type, author_id, thread_id, status, body_json FROM messages WHERE id = ?',
   ).get(messageId) as {
     id: string; project_id: string; conversation_id: string; task_id: string | null;
-    author_type: string; author_id: string; thread_id: string | null; status: string;
+    author_type: string; author_id: string; thread_id: string | null; status: string; body_json: string;
   } | undefined;
   if (row == null) return { ok: false, reason: '本轮最终回复消息不存在（可能已回滚/被清理）' };
   if (row.project_id !== input.projectId) return { ok: false, reason: '回复消息属于其他项目' };
@@ -227,6 +228,16 @@ function validateBoundMessage(input: GeneratedFileSnapshotInput, messageId: stri
   if (row.task_id !== input.taskId) return { ok: false, reason: '回复消息属于其他任务' };
   if (row.author_type !== 'agent') return { ok: false, reason: '目标消息不是 agent 回复（不把文件挂到人类/系统消息上）' };
   if (row.author_id !== input.memberId) return { ok: false, reason: '回复消息作者不是本 turn 成员' };
+  if (delibStageMessage) {
+    try {
+      const body = JSON.parse(row.body_json) as { collaborationStage?: { runId?: unknown; turnId?: unknown } };
+      if (body.collaborationStage?.runId !== input.runId || body.collaborationStage?.turnId !== input.turnId) {
+        return { ok: false, reason: '研讨阶段消息不属于本轮 run/turn' };
+      }
+    } catch {
+      return { ok: false, reason: '研讨阶段消息缺少可核验的阶段身份' };
+    }
+  }
   return { ok: true, message: { id: row.id, thread_id: row.thread_id } };
 }
 

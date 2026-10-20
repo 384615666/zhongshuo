@@ -258,6 +258,17 @@ export function budgetAccounting(state: DeliberationBudgetState, stage: 'SYNTHES
   };
 }
 
+/**
+ * Dispatch accounting stage. Format repairs are front-run and may consume only
+ * non-tail F; normal SYN/RAT turns retain their configured own reserve.
+ */
+export function dispatchBudgetStage(
+  stage: 'SYNTHESIS' | 'RATIFY' | 'front',
+  isRepair: boolean,
+): 'SYNTHESIS' | 'RATIFY' | 'front' {
+  return isRepair ? 'front' : stage;
+}
+
 /** 派发尾部调用：先占用本阶段保留额（S/Q 减 1，I 加 1）。返回新状态（纯函数）。 */
 export function occupyTailForDispatch(
   state: DeliberationBudgetState,

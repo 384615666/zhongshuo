@@ -255,6 +255,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
   it('a peer opening session cannot launch after another detached member becomes UNKNOWN',async()=>{
     const f=await fixture(true,{detachedTurnConsumption:true,turnDeadlineMs:150,interruptGraceMs:10});let release=()=>{};
     try{
+      for(const memberId of [f.a,f.b])await f.cmd('member.setRuntime',{memberId,kind:'fake',permissionMode:'plan'});
       const root=await f.send([f.a,f.b]);await f.worker.runOnce();
       await f.run([{kind:'unresponsiveToInterrupt'},{kind:'stall',ms:2000}]);
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'ACTIVE'});
@@ -335,7 +336,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       for(const [,request] of turns.mock.calls){expect(request.images).toHaveLength(1);expect(Buffer.from(request.images![0]!.dataBase64,'base64')).toEqual(raw);expect(request.policyId).toBe('policy-analyze');expect(request.outputSchema).toBeTruthy();}
     }finally{f.db.close();}
   });
-  it('formal selected-member deliberation keeps read-only schemas, readable reports and version-bound rework',async()=>{
+  it('formal selected-member deliberation keeps effective full permissions, schemas, readable reports and version-bound rework',async()=>{
     const f=await fixture(true);try{
       const revision=(f.db.prepare('SELECT revision FROM projects WHERE id=?').get(f.projectId) as {revision:number}).revision;
       await f.cmd('project.reviewPolicy.set',{projectId:f.projectId,taskReviewEnabled:true,expectedRevision:revision});
@@ -377,10 +378,10 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const second=f.db.prepare('SELECT * FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(root.taskId) as Delivery;
       expect(second.revision,JSON.stringify({runs:f.db.prepare('SELECT id,status,stage FROM workflow_runs').all(),outbox:f.db.prepare("SELECT dispatch_key,status FROM outbox WHERE status!='done'").all(),events:f.db.prepare('SELECT kind,payload_json FROM domain_events ORDER BY seq DESC LIMIT 4').all()})).toBe(2);expect(second.manifest_hash).not.toBe(first.manifest_hash);
       expect(f.adapter.startTurnLog[calls]!.text).toContain('请补充实施约束');
-      for(const call of sessions.mock.calls)expect(call[0].writeAccess?.modificationAuthorized).toBe(false);
+      for(const call of sessions.mock.calls)expect(call[0].writeAccess?.modificationAuthorized).toBe(true);
       for(const call of turns.mock.calls)expect(call[1].outputSchema).toBeTruthy();
       const recorded=f.db.prepare('SELECT s.capabilities_json FROM runtime_sessions s JOIN agent_turns a ON a.session_id=s.id').all() as {capabilities_json:string}[];
-      expect(recorded).toHaveLength(f.adapter.startTurnLog.length);for(const row of recorded)expect(JSON.parse(row.capabilities_json)).toMatchObject({effectivePolicy:'policy-analyze',fullAccess:false,runtime:{kind:'fake'}});
+      expect(recorded).toHaveLength(f.adapter.startTurnLog.length);for(const row of recorded)expect(JSON.parse(row.capabilities_json)).toMatchObject({effectivePolicy:'policy-full-access',writeAccessMode:{fullAccess:true,modificationAuthorized:true},runtime:{kind:'fake'}});
       await f.cmd('task.review',{taskId:root.taskId,deliveryId:second.id,deliveryRevision:2,manifestHash:second.manifest_hash,decision:'accept'});
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'DONE'});
     }finally{f.db.close();}

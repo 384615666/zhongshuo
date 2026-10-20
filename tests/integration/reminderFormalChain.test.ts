@@ -16,7 +16,6 @@ import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { ReminderScheduler } from '../../src/daemon/reminderScheduler.ts';
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
-import { successTurn } from '../../src/adapter/fake/script.ts';
 import { TASK_COMPLETE_SCHEMA_VERSION } from '../../src/contracts/prompts.ts';
 
 process.env.ZS_ALLOW_FAKE = '1';
@@ -77,7 +76,7 @@ describe('DEV-23 正式执行链：创建→到点→获准→恰一次执行→
     expect(adapter.startTurnLog[0]!.text).toContain('【提醒触发】每晚汇总');
     expect(adapter.startTurnLog[0]!.text).toContain(`occurrence：${reminderId}@`);
     expect(adapter.startTurnLog[0]!.text).toContain('来源：task_seed:3');
-    expect(adapter.startTurnLog[0]!.text).toContain('不要自行安排后续循环');
+    expect(adapter.startTurnLog[0]!.text).toContain('后续循环由系统调度器推进');
     // 结果回正确目标：agent 回复落在该 DM 会话（无线程）。
     const reply = db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND author_type = 'agent'").get(conv.conversationId) as Record<string, unknown>;
     expect(reply).toBeTruthy();

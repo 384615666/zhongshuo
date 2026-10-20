@@ -114,4 +114,69 @@ describe('R82 explicit project write contracts (isolated fake/protocol, zero rea
     expect(acquireLease(f.db,{lockDomain:join(f.a,'child'),ownerTurnId:ids[1]!,policy:'single_writer',now:2}).ok).toBe(false);
     expect(acquireLease(f.db,{lockDomain:f.a+'-other',ownerTurnId:ids[2]!,policy:'single_writer',now:2}).ok).toBe(true);
   }finally{f.db.close();}});
+
+  it('R97 DELIB preserves effective full/project-write/plan access in Fake dispatch inputs',async()=>{
+    for(const mode of ['full','project','plan'] as const){
+      const f=await fixture();
+      try{
+        if(mode==='full')await f.cmd('member.setRuntime',{memberId:f.member,kind:'fake',permissionMode:'bypassPermissions'});
+        if(mode==='project'){await f.grant(true,0);await f.cmd('member.setRuntime',{memberId:f.member,kind:'fake',permissionMode:'acceptEdits'});}
+        if(mode==='plan')await f.cmd('member.setRuntime',{memberId:f.member,kind:'fake',permissionMode:'plan'});
+        const second=(await f.cmd('member.create',{projectId:f.p,displayName:'第二成员'}) as {memberId:string}).memberId;
+        await f.cmd('member.setRuntime',{memberId:second,kind:'fake',permissionMode:mode==='full'?'bypassPermissions':mode==='project'?'acceptEdits':'plan'});
+        const room=(await f.cmd('room.list',{projectId:f.p})).items[0] as {id:string;conversationId:string};
+        await f.cmd('room.members.set',{roomId:room.id,memberId:f.member,action:'add'});
+        await f.cmd('room.members.set',{roomId:room.id,memberId:second,action:'add'});
+        const submitted=await f.cmd('message.submit',{target:{kind:'room_root',projectId:f.p,roomId:room.id,conversationId:room.conversationId},body:`R97 ${mode} DELIB access`,intent:'default',mentions:[{kind:'member',memberId:f.member},{kind:'member',memberId:second}],collaboration:'deliberate'}) as {taskId:string};
+        expect(submitted.taskId).toBeTruthy();
+        class Capturing extends FakeRuntimeAdapter{readonly opens:OpenSessionInput[]=[];override async openSession(i:OpenSessionInput){this.opens.push(i);return super.openSession(i);}}
+        const adapter=new Capturing({turnScripts:[[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:`${mode} analysis`,document:null,claims:[{claimId:'c1',statement:'ok',kind:'observed',evidenceIds:['ev1']}],recommendations:[],openQuestions:[]})}}]]});
+        const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:`r97-${mode}`,enableDeliberate:true,absenceToleranceMs:60_000,appDataDir:f.data});
+        await worker.runOnce(); // PREPARE
+        await worker.runOnce(); // first IND
+        expect(adapter.opens[0]?.writeAccess).toMatchObject(mode==='full'?{fullAccess:true,modificationAuthorized:true,policyId:'policy-full-access'}:mode==='project'?{fullAccess:false,modificationAuthorized:true,policyId:'policy-project-write'}:{fullAccess:false,modificationAuthorized:false,policyId:'policy-analyze'});
+        expect(adapter.opens[0]?.policyId).toBe(mode==='full'?'policy-full-access':mode==='project'?'policy-project-write':'policy-analyze');
+        expect(adapter.startTurnLog[0]?.text).toContain('【本轮有效权限】');
+      }finally{f.db.close();}
+    }
+  },60_000);
+
+  it('R97 DELIB persistent lease competition rolls back turn/budget/baseline and retries without duplicate baseline',async()=>{
+    const f=await fixture();
+    try{
+      await f.grant(true,0);
+      await f.cmd('member.setRuntime',{memberId:f.member,kind:'fake',permissionMode:'bypassPermissions'});
+      const second=(await f.cmd('member.create',{projectId:f.p,displayName:'第二成员'}) as {memberId:string}).memberId;
+      await f.cmd('member.setRuntime',{memberId:second,kind:'fake',permissionMode:'bypassPermissions'});
+      const room=(await f.cmd('room.list',{projectId:f.p})).items[0] as {id:string;conversationId:string};
+      await f.cmd('room.members.set',{roomId:room.id,memberId:f.member,action:'add'});
+      await f.cmd('room.members.set',{roomId:room.id,memberId:second,action:'add'});
+      await f.send(); // write-authorized DIRECT turn creates a real lease row
+      const blockerWorker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter(),leaseOwner:'r97-blocker',appDataDir:f.data});
+      await blockerWorker.runOnce();
+      const blockerTurn=(f.db.prepare('SELECT id FROM agent_turns ORDER BY rowid DESC LIMIT 1').get() as {id:string}).id;
+      f.db.prepare("UPDATE workspace_leases SET status='active', lock_domain=?, heartbeat_at=? WHERE owner_turn_id=?").run(f.a,Date.now(),blockerTurn);
+
+      const submitted=await f.cmd('message.submit',{target:{kind:'room_root',projectId:f.p,roomId:room.id,conversationId:room.conversationId},body:'R97 lease competition',intent:'default',mentions:[{kind:'member',memberId:f.member},{kind:'member',memberId:second}],collaboration:'deliberate'}) as {taskId:string};
+      const worker=new DispatchWorker({db:f.db,adapter:new FakeRuntimeAdapter({turnScripts:[[{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({schemaVersion:'analysis-draft-v1',summary:'lease analysis',document:null,claims:[{claimId:'c1',statement:'ok',kind:'observed',evidenceIds:['ev1']}],recommendations:[],openQuestions:[]})}}]]}),leaseOwner:'r97-lease',enableDeliberate:true,absenceToleranceMs:60_000,appDataDir:f.data});
+      await worker.runOnce(); // PREPARE only
+      const before={turns:(f.db.prepare('SELECT count(*) c FROM agent_turns').get() as {c:number}).c,sets:(f.db.prepare('SELECT count(*) c FROM change_sets').get() as {c:number}).c};
+      await worker.runOnce(); // DELIB first IND hits persistent lease
+      const after={turns:(f.db.prepare('SELECT count(*) c FROM agent_turns').get() as {c:number}).c,sets:(f.db.prepare('SELECT count(*) c FROM change_sets').get() as {c:number}).c};
+      expect(after).toEqual(before);
+      const run=f.db.prepare("SELECT budget_json FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE'").get(submitted.taskId) as {budget_json:string};
+      expect((JSON.parse(run.budget_json) as {usedTurns:number}).usedTurns).toBe(0);
+      expect(f.db.prepare("SELECT count(*) c FROM agent_turns WHERE stage_key LIKE 'delib.%'").get()).toEqual({c:0});
+      expect(f.db.prepare("SELECT count(*) c FROM change_sets WHERE task_id=?").get(submitted.taskId)).toEqual({c:0});
+      expect(f.db.prepare("SELECT status FROM outbox WHERE dispatch_key LIKE ? ORDER BY rowid DESC LIMIT 1").get(`%${submitted.taskId}%`)).toMatchObject({status:'pending'});
+      // Release the persistent writer, then let the same worker retry the pending step.
+      f.db.prepare("UPDATE workspace_leases SET status='released' WHERE owner_turn_id=?").run(blockerTurn);
+      await worker.runOnce(); // retry after exclusive lease
+      expect(f.db.prepare("SELECT count(*) c FROM change_sets WHERE task_id=?").get(submitted.taskId)).toEqual({c:1});
+      expect(f.db.prepare("SELECT count(*) c FROM agent_turns WHERE run_id=(SELECT id FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE') AND stage_key LIKE 'delib.%'").get(submitted.taskId)).toEqual({c:1});
+      const retried=f.db.prepare("SELECT budget_json FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE'").get(submitted.taskId) as {budget_json:string};
+      expect((JSON.parse(retried.budget_json) as {usedTurns:number}).usedTurns).toBe(1);
+      expect(f.db.prepare("SELECT count(*) c FROM workspace_leases WHERE status='active'").get()).toEqual({c:0});
+    }finally{f.db.close();}
+  },60_000);
 });

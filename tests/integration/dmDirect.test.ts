@@ -99,7 +99,7 @@ describe('DEV-22 第一包：私信 1 对 1（R4 契约）', () => {
     await expect(cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: convA.conversationId }, body: 'x', intent: 'default', mentions: [], attachmentRefs: ['a1'] })).rejects.toThrow(/附件不存在/); // 文本附件已实施（第二十六轮五）——不存在的附件引用按 RESOURCE_NOT_FOUND 拒绝
     // 派发执行：fake 完成首条；断言 dm scope 会话与无线程回复。
     const scripts: FakeTurnScript[] = [dmDone()];
-    const { worker, adapter } = makeWorker(db, scripts);
+    const { worker } = makeWorker(db, scripts);
     await worker.runOnce(); // dmtask 首条 → DONE
     const run1 = db.prepare('SELECT * FROM workflow_runs WHERE task_id = ?').get(s1.taskId!) as Record<string, unknown>;
     expect(run1.mode).toBe('DIRECT');
@@ -512,8 +512,40 @@ describe('第二十轮二：DM 续接身份链（Claude 真实时序 fixture—�
     await worker.runOnce();
     const skipped = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumeSkipped'").get() as { payload_json: string } | undefined;
     expect(skipped).toBeTruthy();
-    expect(JSON.parse(skipped!.payload_json).note).toContain('runtime 解析已变化');
+    expect(JSON.parse(skipped!.payload_json).note).toContain('runtime 解析或常驻提示词版本已变化');
     expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(2); // 新会话行
+    db.close();
+  }, 60_000);
+
+  it('②b 常驻提示词版本变化：旧 DM 会话不 resume，新模板同版本才续接', async () => {
+    const db = lateDb();
+    const cmd = lateCmd(db);
+    const { worker, adapter } = makeLateWorker(db);
+    const conv = await cmd('conversation.create', { projectId: 'p1', peerMemberId: 'mA' }) as { conversationId: string };
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第一轮（旧提示词快照前）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    const first = db.prepare("SELECT provider_session_id, capabilities_json FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { provider_session_id: string; capabilities_json: string };
+    const caps = JSON.parse(first.capabilities_json) as Record<string, unknown>;
+    expect(typeof caps.promptVersion).toBe('string');
+    expect(typeof caps.promptTemplateHash).toBe('string');
+    // 模拟旧会话快照绑定的是另一版 standing prompt。
+    caps.promptVersion = 'zs-dm-standing-v0.0.0';
+    caps.promptTemplateHash = '0'.repeat(64);
+    db.prepare("UPDATE runtime_sessions SET capabilities_json = ? WHERE conversation_id = ? AND scope_kind='dm'").run(JSON.stringify(caps), conv.conversationId);
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第二轮（提示词已升级）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    expect(adapter.openSessionLog[1]!.resumedFrom).toBeNull();
+    const skipped = db.prepare("SELECT payload_json FROM domain_events WHERE kind='dm.sessionResumeSkipped' ORDER BY rowid DESC LIMIT 1").get() as { payload_json: string };
+    expect(JSON.parse(skipped.payload_json).note).toContain('常驻提示词版本已变化');
+    const rows = db.prepare("SELECT provider_session_id, capabilities_json FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm' ORDER BY rowid").all(conv.conversationId) as Array<{ provider_session_id: string; capabilities_json: string }>;
+    expect(rows).toHaveLength(2);
+    const fresh = JSON.parse(rows[1]!.capabilities_json) as Record<string, unknown>;
+    expect(fresh.promptVersion).toEqual(expect.any(String));
+    expect(fresh.promptTemplateHash).toEqual(expect.any(String));
+    await cmd('message.submit', { target: { kind: 'dm', projectId: 'p1', conversationId: conv.conversationId }, body: '第三轮（同版本续接）', intent: 'default', mentions: [] });
+    await worker.runOnce();
+    expect(adapter.openSessionLog[2]!.resumedFrom).toBe(rows[1]!.provider_session_id);
+    expect((db.prepare("SELECT count(*) c FROM runtime_sessions WHERE conversation_id = ? AND scope_kind='dm'").get(conv.conversationId) as { c: number }).c).toBe(2);
     db.close();
   }, 60_000);
 

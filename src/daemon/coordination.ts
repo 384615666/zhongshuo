@@ -133,10 +133,10 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const request=requestRow('q.dispatch_key',dispatchKey);
   const child = childCoordination(db,taskId);
   if (child) {
-    if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request:undefined as Request|undefined,readonly:true,
-      note:`用户明确选择了你本人。直接回复用户这条原始消息；普通问候或提问使用 responseKind=conversation，不得为凑交付而编造文件或验证。确有实际工作结果时才使用 responseKind=work。不要替其他成员代答，也不要修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
-    return { kind:'child' as const, run:child, request:undefined as Request|undefined, readonly:child.role!=='implementation',
-      note:`你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。只完成本步骤；需要同伴继续核对时使用本轮已开放的 handoffs，不提升写权限或扩大目标。分析和评审只读；结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
+    if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request:undefined as Request|undefined,
+      note:`用户明确选择了你本人。直接回复用户这条原始消息；普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。围绕目标主动完成必要的查证、命令、修改和验证，实际权限以本轮输入头为准；不要替其他成员代答，也不要修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
+    return { kind:'child' as const, run:child, request:undefined as Request|undefined,
+      note:`你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
   }
   const repair=db.prepare(`SELECT c.* FROM format_repair_workitems f JOIN agent_turns a ON a.id=f.source_turn_id
     JOIN coordination_integration_attempts i ON i.execution_run_id=a.run_id JOIN coordination_runs c ON c.run_id=i.coordination_run_id
@@ -145,13 +145,13 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   if(integration && (repair || dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`)) {
     const steps=db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(integration.run_id);
     const incoming=db.prepare(`SELECT h.id,h.source_member_id,h.target_member_id,h.body,h.body_hash,d.id deliveryId,d.revision,d.manifest_hash manifestHash FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id LEFT JOIN task_deliveries d ON d.run_id=a.run_id WHERE h.coordination_run_id=? AND h.child_task_id IS NULL ORDER BY h.created_at,h.id LIMIT 32`).all(integration.run_id);
-    return {kind:'integration' as const,run:integration,request:requestRow('q.run_id',integration.run_id),repair:Boolean(repair),readonly:false,note:`整合已完成的真实成员工作。不得声称自己代替其他成员执行；核对成果与评审，按用户请求补齐必要整合并交付。不得再次生成计划。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
+    return {kind:'integration' as const,run:integration,request:requestRow('q.run_id',integration.run_id),repair:Boolean(repair),note:`整合已完成的真实成员工作。核对成果与评审，主动读取实际文件并完成用户请求所需的整合、修改与验证；保留其他成员作者身份。不再生成新计划，按本轮有效权限执行。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
   }
   const task=db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as {route_json:string|null};
   const queued=db.prepare('SELECT route_json,roster_json FROM thread_reply_requests WHERE dispatch_key=? AND task_id=?').get(dispatchKey,taskId) as {route_json:string;roster_json:string}|undefined;
   const routeJson=queued?.route_json??task.route_json;
   if(routeJson && JSON.parse(routeJson).mode==='AUTO' && !dispatchKey.includes(':conversation:')) {
-    return {kind:'planning' as const,run:null,request,readonly:true,note:`你是协调成员。本轮只读规划，不修改文件。房间已授权名单内的正式分工不需要用户逐步确认，不使用 request_participant；超出名单的成员不得派发。需要创建或修改文件时请安排实施步骤，不以规划角色只读为由拒绝整个任务；需要协作时优先不同成员实施和独立评审。所有步骤连同本次规划共用信封预算，必须预留2次整合，不能给子任务重新扩充总预算。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要同伴接手时可在 handoffs 提交具体消息（toMemberId、message、purpose）；复杂依赖也可提交 coordinationPlan，不能两者同时提交。coordinationPlan 字段为（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；分析评审程序强制只读；实施按成员现有权限执行、共享目录单写。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
+    return {kind:'planning' as const,run:null,request,note:`你是协调成员。先读取完成任务所需的上下文，再在已授权名单内分派实施与独立评审；实施修改交给合适的实施步骤。你的职责是分工、审核和最终整合，不是 runtime 降权理由；本轮实际工具/文件权限以程序输入为准。已授权分工无需用户逐步确认，不使用 request_participant；名单外成员不得派发。所有步骤连同本次规划共用信封预算，预留2次整合，不重新扩充总预算。简单问候、普通提问直接自然回答，responseKind=conversation，coordinationPlan=null。需要同伴接手时可在 handoffs 提交具体消息（toMemberId、message、purpose）；复杂依赖也可提交 coordinationPlan，两者二选一。coordinationPlan 字段为（summary 与 steps，最多8步；每步 key/memberId/title/objective/role/dependsOn）。role 为 analysis/implementation/review；权限由成员快照和本轮有效授权决定，不由角色标签降级。按需安排不同成员，评审须依赖实施并读取实际文件。依赖只能引用本计划key且无环。只有程序接受计划才算已派发。最终整合由你完成。可用成员及配置范围：${JSON.stringify((queued?JSON.parse(queued.roster_json) as ScopeMember[]:coordinationRoster(db,taskId)).map(memberBrief))}`};
   }
   return null;
 }

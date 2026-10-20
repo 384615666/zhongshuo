@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   budgetAccounting,
   deriveDeliberateMaxTurns,
+  dispatchBudgetStage,
   initDeliberationBudget,
   occupyTailForDispatch,
   settleTurn,
@@ -51,5 +52,13 @@ describe('尾部账目（M/U/I、S/Q、R/T/F）', () => {
     expect(front.stageAvailableTurns).toBe(0); // 前置/checkpoint 无预留可用
     expect(budgetAccounting(st, 'SYNTHESIS').stageAvailableTurns).toBe(1);
     expect(budgetAccounting(st, 'RATIFY').stageAvailableTurns).toBe(3);
+  });
+
+  it('format repair always uses F; it never borrows an unfilled RAT reserve', () => {
+    const st = initDeliberationBudget({ rosterSize: 3, runMaxTurns: 4 }); // R=4, T=1+3, F=0
+    expect(budgetAccounting(st, 'front').stageAvailableTurns).toBe(0);
+    expect(dispatchBudgetStage('RATIFY', true)).toBe('front');
+    expect(dispatchBudgetStage('RATIFY', false)).toBe('RATIFY');
+    expect(budgetAccounting(st, dispatchBudgetStage('RATIFY', false)).stageAvailableTurns).toBe(3);
   });
 });

@@ -16,6 +16,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { assembleStepInput, frozenStageInputs, pumpDeliberation } from '../../src/daemon/deliberationRunner.ts';
+import { selectStageInstruction } from '../../src/contracts/prompts.ts';
 import { listRunArtifacts, getRatificationRecords, getSynthesisClaims, currentSynthesisVersion } from '../../src/persistence/stores/deliberation.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-delibflow-'));
@@ -68,6 +69,89 @@ export async function step(worker: DispatchWorker, scripts: FakeTurnScript[], sc
   if (!(await worker.runOnce())) throw new Error('预期有可领取的 outbox 项（上一步后无新步骤入队）');
 }
 
+function expectLastInstruction(
+  adapter: FakeRuntimeAdapter,
+  role: 'host' | 'member',
+  stage: string,
+  turnPurpose: 'stage_work' | 'checkpoint',
+  schemaVersion: string,
+): void {
+  const instruction = selectStageInstruction({ mode: 'DELIBERATE', role, stage, turnPurpose });
+  expect(instruction.ok).toBe(true);
+  if (!instruction.ok) return;
+  expect(adapter.startTurnLog.some((call) => call.text.includes(instruction.value) && call.text.includes(`"schemaVersion":"${schemaVersion}"`))).toBe(true);
+}
+
+/** R97: exercise real worker dispatch while making the first attempt of every stage invalid. */
+function repairingDeliberationSequencer(
+  db: ZhongshuoDatabase,
+  taskId: string,
+  synthesisSummary: string,
+  synthesisDetail: string,
+): (input: { text: string }) => FakeTurnScript {
+  const attempts = new Map<string, number>();
+  const next = (stage: string): number => {
+    const n = attempts.get(stage) ?? 0;
+    attempts.set(stage, n + 1);
+    return n;
+  };
+  const runId = () => (db.prepare("SELECT id FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE' AND status IN ('RUNNING','WAITING') ORDER BY rowid DESC LIMIT 1").get(taskId) as {id:string}).id;
+  return (input) => {
+    const text = input.text;
+    if (text.includes('"schemaVersion":"analysis-draft-v1"')) {
+      if (next('IND') === 0) return done('bad-ind-json');
+      return done({
+        schemaVersion: 'analysis-draft-v1', summary: '独立分析', document: null,
+        claims: [{ claimId: 'c1', statement: '结论一', kind: 'observed', evidenceIds: ['ev1'] }, { claimId: 'c2', statement: '结论二', kind: 'inferred', evidenceIds: ['ev1'] }],
+        recommendations: [], openQuestions: [],
+      });
+    }
+    if (text.includes('"schemaVersion":"cross-review-v1"')) {
+      if (next('CR') === 0) return done('bad-cr-json');
+      const peer = /"artifactId"\s*:\s*"([^"]+)"[\s\S]*?"revision"\s*:\s*(\d+)[\s\S]*?"claimId"\s*:\s*"([^"]+)"/.exec(text);
+      if (peer == null) throw new Error('CR frozen peer identity missing');
+      return done({ schemaVersion: 'cross-review-v1', summary: '互评总览', document: null, reviews: [{
+        targetArtifactId: peer[1], targetRevision: Number(peer[2]), targetClaimId: peer[3],
+        stance: 'disagree', reason: '需要独立核对风险', evidenceIds: ['ev2'],
+      }] });
+    }
+    if (text.includes('"schemaVersion":"issue-position-v1"')) {
+      const attempt = next('ISS');
+      if (attempt === 4) return done('bad-iss-json'); // host's round-3 position repair
+      const issue = db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id LIMIT 1').get(runId()) as {id:string};
+      return done({ schemaVersion: 'issue-position-v1', summary: '争议立场', document: null, positions: [{
+        issueId: issue.id, stance: 'needs_evidence', reason: '保留可验证分歧', newEvidence: [],
+      }] });
+    }
+    if (text.includes('"schemaVersion":"checkpoint-verdict-v1"')) {
+      if (next('CHK') === 0) return done('bad-checkpoint-json');
+      return done({ schemaVersion: 'checkpoint-verdict-v1', summary: '检查点总览', document: null, verdict: 'stop', reason: '没有新的可验证证据' });
+    }
+    if (text.includes('"schemaVersion":"synthesis-v1"')) {
+      if (next('SYN') === 0) return done('bad-syn-json');
+      const issues = db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId()) as Array<{id:string}>;
+      return done({
+        schemaVersion: 'synthesis-v1', summary: synthesisSummary,
+        document: { filename: '整合方案.md', purpose: '供用户执行的整合方案与保留分歧', markdown: synthesisDetail },
+        issueResolutions: issues.map((issue) => ({ issueId: issue.id, status: 'insufficient_evidence', reason: '仍存在风险争议', question: '是否需要先补证据', owner: '用户' })),
+        claims: [{ statement: '风险可控（双方认可）', sourceRefs: ['c2'] }],
+        disputedClaims: [{ statement: '方案 A 风险是否被低估', disagreementSummary: '双方对风险判断不同', sourceRefs: ['c1'] }],
+        recommendations: [],
+      });
+    }
+    if (text.includes('"schemaVersion":"ratify-v1"')) {
+      const attempt = next('RAT');
+      if (attempt === 0) return done('bad-rat-json');
+      const claims = db.prepare('SELECT claim_id FROM synthesis_claims WHERE run_id=? ORDER BY claim_id').all(runId()) as Array<{claim_id:string}>;
+      return done({ schemaVersion: 'ratify-v1', summary: attempt === 1 ? '附条件确认' : '确认', document: null,
+        deliveryFeedback: { status: 'ready', reason: '整合稿满足交付目标', revisionRequest: '', question: '', owner: '' },
+        responses: claims.map((claim) => ({ claimId: claim.claim_id, stance: attempt === 1 ? 'conditional' : 'confirm', ...(attempt === 1 ? { conditions: ['补充风险清单'] } : {}) })),
+      });
+    }
+    throw new Error(`unexpected deliberation input: ${text.slice(0, 120)}`);
+  };
+}
+
 async function reachSynthesisAfterAgreement(
   db: ZhongshuoDatabase,
   worker: DispatchWorker,
@@ -100,7 +184,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
     const worker = new DispatchWorker({
       db, adapter, leaseOwner: 'w1', enableDeliberate: true,
-      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-full'),
+      absenceToleranceMs: 60_000, deliberateMaxTurns: 40, appDataDir: join(tmpRoot, 'app-full'),
     });
 
     await step(worker, scripts); // initial → PREPARE（程序，无模型调用）
@@ -109,11 +193,13 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
       [{ claimId: 'c1', statement: '方案 A 成本更低' }, { claimId: 'c2', statement: '风险可控' }],
       null,
     ))); // m1 IND
+    expectLastInstruction(adapter, 'host', 'INDEPENDENT', 'stage_work', 'analysis-draft-v1');
     await step(worker, scripts, done(draft(
       '乙的分析：方案 A 风险可能被低估。',
       [{ claimId: 'c1', statement: '方案 A 风险被低估' }],
       null,
     ))); // m2 IND
+    expectLastInstruction(adapter, 'member', 'INDEPENDENT', 'stage_work', 'analysis-draft-v1');
     const runId = runIdOf(db);
     const drafts = listRunArtifacts(db, runId, 'analysis_draft');
     expect(drafts).toHaveLength(2);
@@ -131,10 +217,12 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     await step(worker, scripts, done({ schemaVersion: 'cross-review-v1', summary: '互评总览：发现一项风险论证缺口。', document: null, reviews: [
       { targetArtifactId: m2Art.id, targetRevision: 1, targetClaimId: 'c1', stance: 'disagree', reason: '风险论证不足', evidenceIds: ['ev2'] },
     ] })); // m1 CR
+    expectLastInstruction(adapter, 'member', 'CROSS_REVIEW', 'stage_work', 'cross-review-v1');
     await step(worker, scripts, done({ schemaVersion: 'cross-review-v1', summary: '互评总览：一项需要补证，一项同意。', document: null, reviews: [
       { targetArtifactId: m1Art.id, targetRevision: 1, targetClaimId: 'c1', stance: 'needs_evidence', reason: '需要数据佐证', evidenceIds: ['ev3'] },
       { targetArtifactId: m1Art.id, targetRevision: 1, targetClaimId: 'c2', stance: 'agree', reason: '认同', evidenceIds: [] },
     ] })); // m2 CR
+    expectLastInstruction(adapter, 'member', 'CROSS_REVIEW', 'stage_work', 'cross-review-v1');
     expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'ISSUE_DISCUSSION' });
     const issues = db.prepare('SELECT id, statement FROM issues WHERE run_id = ?').all(runId) as Array<{ id: string; statement: string }>;
     expect(issues.length).toBeGreaterThanOrEqual(1);
@@ -149,7 +237,9 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     const issueIds = issues.map((issue) => issue.id);
     for (let round = 1; round <= 3; round += 1) {
       await step(worker, scripts, position(issueId, 'm1', round)); // m1
+      expectLastInstruction(adapter, 'member', 'ISSUE_DISCUSSION', 'stage_work', 'issue-position-v1');
       await step(worker, scripts, position(issueId, 'm2', round)); // m2
+      expectLastInstruction(adapter, 'member', 'ISSUE_DISCUSSION', 'stage_work', 'issue-position-v1');
     }
     await step(worker, scripts, done({
       schemaVersion: 'checkpoint-verdict-v1',
@@ -157,6 +247,8 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
       document: null,
       verdict: 'stop', reason: '无新证据，转入整合',
     })); // CHK host
+    expectLastInstruction(adapter, 'host', 'ISSUE_DISCUSSION', 'checkpoint', 'checkpoint-verdict-v1');
+    expect(adapter.startTurnLog.at(-1)?.text).not.toContain('issue-position-v1');
     expect(db.prepare('SELECT stage FROM workflow_runs WHERE id = ?').get(runId)).toMatchObject({ stage: 'SYNTHESIS' });
 
     const synthesisSummary = '整合结论：方案可附条件推进，风险分歧仍保留。';
@@ -166,6 +258,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     ], disputedClaims: [
       { statement: '方案 A 风险是否被低估', disagreementSummary: '甲认为成本低，乙认为风险被低估', sourceRefs: ['c1'] },
     ], recommendations: [] }));
+    expectLastInstruction(adapter, 'host', 'SYNTHESIS', 'stage_work', 'synthesis-v1');
     const synthesis = currentSynthesisVersion(db, runId);
     expect(synthesis).not.toBeNull();
     expect(getSynthesisClaims(db, runId, synthesis!.artifactId, synthesis!.revision).map((c) => c.claim_id)).toEqual(['clm_1']);
@@ -178,6 +271,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
       deliveryFeedback: { status: 'ready', reason: '当前整合稿可作为交付', revisionRequest: '', question: '', owner: '' },
       responses: [{ claimId: 'clm_1', stance: 'conditional', conditions: ['补充风险清单'] }],
     }));
+    expectLastInstruction(adapter, 'member', 'RATIFY', 'stage_work', 'ratify-v1');
     await step(worker, scripts, done({
       schemaVersion: 'ratify-v1',
       summary: '确认总览：本条结论确认。',
@@ -185,6 +279,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
       deliveryFeedback: { status: 'ready', reason: '当前整合稿可作为交付', revisionRequest: '', question: '', owner: '' },
       responses: [{ claimId: 'clm_1', stance: 'confirm' }],
     }));
+    expectLastInstruction(adapter, 'member', 'RATIFY', 'stage_work', 'ratify-v1');
     const ratBundle = db.prepare(`SELECT cb.included_refs_json FROM context_bundles cb
       JOIN agent_turns a ON a.id=cb.turn_id WHERE a.run_id=? AND a.stage_key='delib.ratify' AND a.member_id='m1'
       ORDER BY cb.rowid DESC LIMIT 1`).get(runId) as { included_refs_json: string } | undefined;
@@ -248,16 +343,90 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
     expect(finalAttachment).toBeDefined();
     expect(readFileSync(finalAttachment!.blob_path, 'utf8')).toBe(synthesisDetail);
     expect(finalAttachment!.artifact_id).toBe(finalBody.document?.artifactId);
-    // 预算账：14 步全结算（IND2+CR2+ISS6+CHK1+SYN1+RAT2，host 多承担 CHK/SYN），尾部保留清零；
+    const repairCases = [
+      { stage: 'IND', roundNo: 0, expected: 'analysis-draft-v1' },
+      { stage: 'CR', roundNo: 0, expected: 'cross-review-v1' },
+      { stage: 'ISS', roundNo: 3, expected: 'issue-position-v1' },
+      { stage: 'CHK', roundNo: 3, expected: 'checkpoint-verdict-v1' },
+      { stage: 'SYN', roundNo: 0, expected: 'synthesis-v1' },
+      { stage: 'RAT', roundNo: 0, expected: 'ratify-v1' },
+    ] as const;
+    for (const repair of repairCases) {
+      const assembled = assembleStepInput(db, {
+        taskId,
+        runId,
+        step: { taskId, runId, stage: repair.stage, memberId: 'm1', roundNo: repair.roundNo, purpose: 'format_repair' },
+        repairError: 'R97 synthetic invalid output',
+      });
+      expect(assembled.ok, repair.stage).toBe(true);
+      if (!assembled.ok) continue;
+      expect(assembled.value.text).toContain('【本轮职责】');
+      expect(assembled.value.text).toContain('【格式修复】');
+      expect(assembled.value.outputContract).toContain(`"schemaVersion":"${repair.expected}"`);
+      if (repair.stage === 'CHK') expect(assembled.value.outputContract).not.toContain('issue-position-v1');
+    }
+    // 预算账：14 步正常阶段全结算，尾部保留清零；
     const budget = JSON.parse((db.prepare('SELECT budget_json FROM workflow_runs WHERE id = ?').get(runId) as { budget_json: string }).budget_json) as { usedTurns: number; tailReservationByStage: { SYNTHESIS: number; RATIFY: number } };
     expect(budget.usedTurns).toBe(14);
     expect(budget.tailReservationByStage.SYNTHESIS).toBe(0);
     expect(budget.tailReservationByStage.RATIFY).toBe(0);
     // §6.2 会话隔离：每步骤新任务专用会话（不复用看过同题他人报告的会话）——
-    // 14 步 14 会话，且每成员各 7 个、无共享。
+    // 14 步 14 会话，且每一步使用独立会话、无共享。
     expect((db.prepare('SELECT count(*) c FROM runtime_sessions').get() as { c: number }).c).toBe(14);
     expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm1'").get()).toMatchObject({ c: 8 });
     expect(db.prepare("SELECT count(*) c FROM runtime_sessions WHERE member_id = 'm2'").get()).toMatchObject({ c: 6 });
+    await adapter.closeAllSessions();
+    db.close();
+  }, 60_000);
+});
+
+describe('R97 real worker six-stage format repairs', () => {
+  it('each stage invalid first attempt is delivered to adapter and the CHK repair key remains checkpoint-specific', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const taskId = createDelibTask(db, 97, ['m1', 'm2']);
+    const summary = 'R97 六阶段修复整合稿';
+    const detail = '# R97 六阶段修复整合稿\n\n合成验证。';
+    const adapter = new FakeRuntimeAdapter({
+      structuredFinal: false,
+      turnScriptSequencer: repairingDeliberationSequencer(db, taskId, summary, detail),
+    });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r97-repair', enableDeliberate: true,
+      absenceToleranceMs: 60_000, deliberateMaxTurns: 40, appDataDir: join(tmpRoot, 'app-r97-repairs'),
+    });
+    for (let i = 0; i < 60 && await worker.runOnce(); i += 1) { /* all stage + repair turns */ }
+    const runId = runIdOf(db);
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).toEqual({status:'DONE'});
+    const repairLogs = adapter.startTurnLog.filter((call) => call.text.includes('【格式修复】'));
+    expect(repairLogs).toHaveLength(6);
+    const schemas = ['analysis-draft-v1','cross-review-v1','issue-position-v1','checkpoint-verdict-v1','synthesis-v1','ratify-v1'];
+    for (const schema of schemas) {
+      expect(repairLogs.some((call) => call.text.includes(`"schemaVersion":"${schema}"`)), schema).toBe(true);
+      expect(repairLogs.some((call) => call.text.includes('【本轮职责】') && call.text.includes(`"schemaVersion":"${schema}"`)), schema).toBe(true);
+    }
+    for (const spec of [
+      { role: 'host' as const, stage: 'INDEPENDENT', purpose: 'stage_work' as const, schema: 'analysis-draft-v1' },
+      { role: 'member' as const, stage: 'CROSS_REVIEW', purpose: 'stage_work' as const, schema: 'cross-review-v1' },
+      { role: 'member' as const, stage: 'ISSUE_DISCUSSION', purpose: 'stage_work' as const, schema: 'issue-position-v1' },
+      { role: 'host' as const, stage: 'ISSUE_DISCUSSION', purpose: 'checkpoint' as const, schema: 'checkpoint-verdict-v1' },
+      { role: 'host' as const, stage: 'SYNTHESIS', purpose: 'stage_work' as const, schema: 'synthesis-v1' },
+      { role: 'member' as const, stage: 'RATIFY', purpose: 'stage_work' as const, schema: 'ratify-v1' },
+    ]) {
+      const expected = selectStageInstruction({ mode: 'DELIBERATE', role: spec.role, stage: spec.stage, turnPurpose: spec.purpose });
+      expect(expected.ok).toBe(true);
+      if (!expected.ok) continue;
+      const actual = repairLogs.find((call) => call.text.includes(`"schemaVersion":"${spec.schema}"`));
+      expect(actual?.text, spec.stage).toContain(expected.value);
+    }
+    const keys = db.prepare("SELECT stage_key,count(*) c FROM agent_turns WHERE run_id=? AND turn_purpose='format_repair' GROUP BY stage_key").all(runId) as Array<{stage_key:string;c:number}>;
+    expect(keys.find((row)=>row.stage_key==='delib.issue_discussion.r3.fx')).toMatchObject({c:1});
+    expect(keys.find((row)=>row.stage_key==='delib.issue_discussion.r3.chk.fx')).toMatchObject({c:1});
+    const budget = JSON.parse((db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string}).budget_json) as {usedTurns:number};
+    expect(budget.usedTurns).toBe(20);
+    expect((db.prepare('SELECT count(*) c FROM runtime_sessions').get() as {c:number}).c).toBe(20);
+    const split = db.prepare("SELECT member_id, count(*) c FROM runtime_sessions GROUP BY member_id").all() as Array<{member_id:string;c:number}>;
+    expect(split.reduce((n,row)=>n+row.c,0)).toBe(20);
     await adapter.closeAllSessions();
     db.close();
   }, 60_000);

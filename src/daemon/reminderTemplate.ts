@@ -45,7 +45,7 @@ export function renderReminderWakeInput(ctx: ReminderWakeContext): string {
   return [
     renderReminderWakeMessage(ctx),
     '',
-    '请处理本次提醒触发：按提醒标题的目标执行本轮工作；这是单次触发输入，',
-    '不要自行安排后续循环（循环计划由系统调度器推进）。',
+    '请处理本次提醒触发：围绕提醒标题中的目标主动完成必要的查证、命令、修改和验证。',
+    '这是单次触发输入；后续循环由系统调度器推进。若真实预算或工具限制阻止继续，说明已完成部分、实际限制和下一步所需条件。',
   ].join('\n');
 }

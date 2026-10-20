@@ -13,6 +13,7 @@ import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeScriptItem } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
 import { canonicalJson } from '../../src/contracts/common.ts';
+import { STANDING_PROMPT_VERSION, TURN_BUNDLE_VERSION } from '../../src/contracts/prompts.ts';
 
 function openMem(): ZhongshuoDatabase {
   const db = openDatabase(':memory:');
@@ -68,13 +69,13 @@ describe('① 实际模型输入包含用户根消息与获准历史正文', () 
 
     expect(adapter.startTurnLog).toHaveLength(1);
     const call = adapter.startTurnLog[0]!;
-    expect(call.text).toContain('【本轮输入 zs-turn-v0.1.4】');
+    expect(call.text).toContain(`【本轮输入 ${TURN_BUNDLE_VERSION}】`);
     expect(call.text).toContain('请阅读 README 并总结要点'); // 用户根消息正文（§13.1-1/6）
     expect(call.text).toContain('用户根消息（msg_root_1）');
     expect(call.text).toContain('你负责回应这条消息'); // DIRECT 指令模板
     expect(call.text).toContain('result_'); // 输出契约 resultKey
     // 层 A 常驻提示词随会话注入（层 A/B 分离）。
-    expect(call.promptVersion).toBe('zs-standing-v0.1.2'); // 层 A 版本随会话传递（PP-02）
+    expect(call.promptVersion).toBe(STANDING_PROMPT_VERSION); // 层 A 版本随会话传递（PP-02）
     expect(call.developerInstructions).toContain('你是「甲」');
     await adapter.closeAllSessions();
     db.close();
@@ -122,8 +123,8 @@ describe('② 输入与 ContextBundle/版本/hash 一致（PP-02/04）', () => {
     const recomputed = createHash('sha256').update(canonicalJson(envelope)).digest('hex');
     expect(recomputed).toBe(row.hash);
     // 版本留档（PP-02：会话/运行关联实际使用版本）
-    expect(envelope.bundleVersion).toBe('zs-turn-v0.1.4');
-    expect(envelope.promptVersion).toBe('zs-standing-v0.1.2');
+    expect(envelope.bundleVersion).toBe(TURN_BUNDLE_VERSION);
+    expect(envelope.promptVersion).toBe(STANDING_PROMPT_VERSION);
     // 材料引用与线程摘要一致（PP-04：可见材料与 included_refs 对应）
     expect(envelope.threadDigest.rootMessageId).toBe('msg_root_2');
     expect(envelope.materials.map((m: { ref: string }) => m.ref)).toContain('msg_root_2');

@@ -387,14 +387,14 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
           JSON.stringify(input.repairContext.issues),
           `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
           input.repairContext.originalText,
-          '修复要求：按输出契约重新提交完整 TaskComplete——answer 使用最短有用表达；只有确有可复用方案/清单/报告时才提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null；除 schema 字段外不得新增字段（未知键会被拒绝）；不要用 Markdown 代码围栏包裹 JSON；resultKey 使用本轮给定值。',
+          '修复要求：直接按输出契约重新提交完整 TaskComplete。answer 使用最短有用表达；确有可复用方案/清单/报告时提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null。字段以 schema 为准，resultKey 使用本轮给定值；直接输出 JSON，不要代码围栏或额外解释。',
         );
       }
       if (input.reviewFeedback != null) {
         notes.push(
           `【返工】此前交付（第 ${input.reviewFeedback.deliveryRevision} 版）未通过人工验收（要求修改）。`,
           `验收说明：${input.reviewFeedback.note ?? '（验收未附说明）'}`,
-          '要求：针对上述验收反馈修改后重新提交完整 TaskComplete。',
+          '要求：先核查当前实际文件与验收意见，完成必要修改和验证后，重新提交完整 TaskComplete。',
         );
       }
       return notes.length > 0 ? { notes } : {};
@@ -595,7 +595,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
         notes.push(
           `【返工】此前交付（第 ${input.reviewFeedback.deliveryRevision} 版）未通过人工验收（要求修改）。`,
           `验收说明：${input.reviewFeedback.note ?? '（验收未附说明）'}`,
-          '要求：针对上述验收反馈修改后重新提交完整 TaskComplete。',
+          '要求：先核查当前实际文件与验收意见，完成必要修改和验证后，重新提交完整 TaskComplete。',
         );
       }
       return notes.length > 0 ? { notes } : {};

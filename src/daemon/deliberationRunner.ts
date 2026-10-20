@@ -1139,6 +1139,11 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
   if (!published.ok) throw new Error(`最终报告发布失败：${published.error.message}`);
   const hostMemberId = hostOf(rosterOf(db, input.runId));
   const messageId = `msg_report_${input.runId}`;
+  const changeSetRefs = (db.prepare(
+    `SELECT DISTINCT json_extract(payload_json,'$.changeSetId') AS id
+     FROM domain_events WHERE run_id=? AND kind='changeset.baselineCaptured'
+     ORDER BY seq`,
+  ).all(input.runId) as Array<{ id: string | null }>).map((row) => row.id).filter((id): id is string => id != null);
   const tx = db.transaction(() => {
     const deliveryId = `dlv_${randomUUID()}`;
     const completedDelivery = deliveryStatus === 'delivered' || deliveryStatus === 'delivered_with_questions' || deliveryStatus === 'legacy';
@@ -1148,10 +1153,10 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     db.prepare("UPDATE task_deliveries SET review_status='superseded' WHERE task_id=? AND review_status='pending'").run(input.taskId);
     db.prepare(
       `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json, change_set_refs_json, verification_refs_json, review_status)
-       VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
     ).run(deliveryId, input.taskId, input.runId,
       (db.prepare('SELECT COALESCE(MAX(revision),0)+1 n FROM task_deliveries WHERE task_id=?').get(input.taskId) as {n:number}).n,
-      createHash('sha256').update(JSON.stringify({runId:input.runId,artifactId,reportPayload})).digest('hex'),JSON.stringify([`artifact:${artifactId}`]),reviewStatus);
+      createHash('sha256').update(JSON.stringify({runId:input.runId,artifactId,reportPayload})).digest('hex'),JSON.stringify([`artifact:${artifactId}`]),JSON.stringify(changeSetRefs),reviewStatus);
     db.prepare('UPDATE tasks SET status = ?, current_delivery_id = ?, response_kind=\'work\',revision=revision+1 WHERE id = ?').run(taskStatus, deliveryId, input.taskId);
     db.prepare("UPDATE workflow_runs SET stage = 'PUBLISH', status = ?, stage_started_at = ? WHERE id = ?").run(runStatus, input.now, input.runId);
     if(!db.prepare('SELECT 1 FROM messages WHERE id=?').get(messageId)){
@@ -1285,6 +1290,7 @@ export function assembleStepInput(db: ZhongshuoDatabase, input: {
   const turnPurpose: StepAssembly['turnPurpose'] = isRepair
     ? 'format_repair'
     : input.step.stage === 'CHK' ? 'checkpoint' : 'stage_work';
+  const semanticPurpose: 'stage_work' | 'checkpoint' = input.step.stage === 'CHK' ? 'checkpoint' : 'stage_work';
   let body: string;
   try {
     body = renderStageBody(db, input.runId, input.taskId, input.step, task, roster);
@@ -1293,20 +1299,21 @@ export function assembleStepInput(db: ZhongshuoDatabase, input: {
     throw error;
   }
   if (isRepair) {
-    body = `${body}\n\n【格式修复】上一次输出未通过合同校验：${input.repairError}。请严格按输出契约重新提交完整 JSON，不要附加解释文本。`;
+    body = `${body}\n\n【格式修复】上一次输出未通过合同校验：${input.repairError}。保持本阶段的原始职责、冻结输入与输出 schema，直接重新提交完整 JSON。`;
   }
-  const contract = DELIBERATE_OUTPUT_CONTRACTS[`${stage}|${turnPurpose}`] ?? DELIBERATE_OUTPUT_CONTRACTS[`${stage}|stage_work`] ?? '';
-  const instruction = selectStageInstruction({ mode: 'DELIBERATE', role, stage, turnPurpose });
+  const contract = DELIBERATE_OUTPUT_CONTRACTS[`${stage}|${semanticPurpose}`] ?? '';
+  if (contract.length === 0) return domainErr('CAPABILITY_UNSUPPORTED', `缺少研讨阶段输出契约：${stage}|${semanticPurpose}`);
+  const instruction = selectStageInstruction({ mode: 'DELIBERATE', role, stage, turnPurpose: semanticPurpose });
   if (!instruction.ok) return domainErr('CAPABILITY_UNSUPPORTED', instruction.error.message);
   return domainOk({
     // stage_key 在 (run, member, stage_key, attempt) 唯一约束下区分轮次/检查点/修复轮。
-    stageKey: `delib.${stage.toLowerCase()}${input.step.roundNo > 0 ? `.r${input.step.roundNo}` : ''}${turnPurpose === 'checkpoint' ? '.chk' : ''}${isRepair ? '.fx' : ''}`,
+    stageKey: `delib.${stage.toLowerCase()}${input.step.roundNo > 0 ? `.r${input.step.roundNo}` : ''}${semanticPurpose === 'checkpoint' ? '.chk' : ''}${isRepair ? '.fx' : ''}`,
     stage,
     role,
     turnPurpose,
     instruction: instruction.value,
     outputContract: contract,
-    text: `${body}\n\n【输出契约】只输出一个 JSON 对象，字段集如下（不得增删字段）。可选说明字段也须提供，无内容时用空字符串或空数组，不伪造证据：\n${contract}`,
+    text: `${body}\n\n【本轮职责】\n${instruction.value}\n\n【输出契约】只输出一个 JSON 对象，字段集如下。可选说明字段也须提供，无内容时用空字符串或空数组，不伪造证据：\n${contract}`,
   });
 }
 
