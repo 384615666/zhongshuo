@@ -1997,7 +1997,7 @@ export class DispatchWorker {
   /** 事件应用（public：迟到输出一致性用例经生产方法定点注入——不绕过状态机）。 */
   applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
-    const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
+    const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key, turn_purpose FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null; turn_purpose: string } | undefined;
     if (event.kind === 'turn.started') {
       this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
     }
@@ -2175,6 +2175,7 @@ export class DispatchWorker {
           const ordinaryReplyRequest=this.db.prepare(`SELECT 1 FROM conversation_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running'
             UNION ALL SELECT 1 FROM thread_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running' LIMIT 1`).get(runId,turnId,runId,turnId);
           const naturalOrdinaryReply=!contract.ok&&!planningRun&&!integrationRun&&messageControl==null&&!explicitTerminalControl
+            &&turnMeta?.turn_purpose!=='format_repair'
             &&(task.kind==='dm_turn'||explicitRecipientChild(this.db,task.id)||ordinaryReplyRequest!=null)
             &&naturalText.length>0&&!/^[{[]/.test(naturalText)&&!/task-complete-v1|schemaVersion|resultKey/i.test(naturalText);
           if(naturalOrdinaryReply){

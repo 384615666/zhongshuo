@@ -231,4 +231,61 @@ describe('R98 DM native resume file lineage', () => {
     expect(repairChanges[0]?.after_sha256).toBeTruthy();
     db.close();
   });
+
+  it('rejects a natural-language format-repair turn instead of treating it as an ordinary DM answer', async () => {
+    const db = openDatabase(':memory:');
+    const projectPath = join(root, 'repair-natural-project');
+    mkdirSync(projectPath, { recursive: true });
+    db.prepare(`INSERT INTO projects (id, display_name, root_path, canonical_path, directory_identity, created_at)
+      VALUES ('p5','自然修复项目',?,?, '{}',0)`).run(projectPath, projectPath);
+    db.prepare(`INSERT INTO project_members (id, project_id, display_name, principal_type, enabled)
+      VALUES ('mA5','p5','Claude','agent',1)`).run();
+    const cmd = commandFor(db);
+    await cmd('member.setRuntime', { projectId: 'p5', memberId: 'mA5', kind: 'fake', permissionMode: 'bypassPermissions' });
+    const conv = await cmd<{ conversationId: string }>('conversation.create', { projectId: 'p5', peerMemberId: 'mA5' });
+    const file = join(projectPath, '修复源文件.md');
+    const failedAdapter = new WritingContractAdapter(file, {
+      messageText: () => '文件已写好',
+      finalText: () => '文件已写好',
+    });
+    const failedWorker = new DispatchWorker({ db, adapter: failedAdapter, leaseOwner: 'r98-natural-repair-source', appDataDir: join(root, 'repair-natural-app') });
+    const submitted = await cmd<{ taskId: string }>('message.submit', {
+      target: { kind: 'dm', projectId: 'p5', conversationId: conv.conversationId },
+      body: '写修复源文件', intent: 'default', mentions: [],
+    });
+    await failedWorker.runOnce();
+    const sourceTask = db.prepare('SELECT status,revision,stop_generation FROM tasks WHERE id=?').get(submitted.taskId) as { status: string; revision: number; stop_generation: number };
+    const sourceRun = db.prepare('SELECT id,status FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(submitted.taskId) as { id: string; status: string };
+    const sourceTurn = db.prepare('SELECT id,status,turn_purpose FROM agent_turns WHERE run_id=?').get(sourceRun.id) as { id: string; status: string; turn_purpose: string };
+    const originalBytes = readFileSync(file, 'utf8');
+    expect(sourceTask.status).toBe('ACTIVE');
+    expect(sourceRun.status).toBe('FAILED');
+    expect(sourceTurn).toMatchObject({ status: 'FAILED', turn_purpose: 'stage_work' });
+    expect((db.prepare('SELECT count(*) c FROM task_deliveries WHERE task_id=?').get(submitted.taskId) as { c: number }).c).toBe(0);
+
+    await cmd('task.redispatch', {
+      taskId: submitted.taskId, sourceRunId: sourceRun.id, expectedTaskRevision: sourceTask.revision,
+      expectedStopGeneration: sourceTask.stop_generation, expectedRunStatus: 'FAILED', formatRepair: true,
+      reason: 'test natural repair rejection',
+    });
+    const repairProbe = new RepairProbeAdapter({
+      noSpawn: true,
+      messageText: () => '仍然不是 JSON',
+      finalText: () => '仍然不是 JSON',
+    });
+    const repairWorker = new DispatchWorker({ db, adapter: repairProbe, leaseOwner: 'r98-natural-repair', appDataDir: join(root, 'repair-natural-app') });
+    await repairWorker.runOnce();
+
+    const repairRun = db.prepare('SELECT id,status FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1').get(submitted.taskId) as { id: string; status: string };
+    const repairTurn = db.prepare('SELECT status,turn_purpose FROM agent_turns WHERE run_id=?').get(repairRun.id) as { status: string; turn_purpose: string };
+    expect(repairProbe.repairOnlySeen).toBe(true);
+    expect(repairRun.status).toBe('FAILED');
+    expect(repairTurn).toEqual({ status: 'FAILED', turn_purpose: 'format_repair' });
+    expect((db.prepare('SELECT status FROM tasks WHERE id=?').get(submitted.taskId) as { status: string }).status).toBe('BLOCKED');
+    expect((db.prepare('SELECT count(*) c FROM domain_events WHERE run_id=? AND kind=\'turn.outputInvalid\'').get(repairRun.id) as { c: number }).c).toBe(1);
+    expect((db.prepare('SELECT count(*) c FROM task_deliveries WHERE task_id=?').get(submitted.taskId) as { c: number }).c).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(originalBytes);
+    expect((db.prepare('SELECT count(*) c FROM domain_events WHERE run_id=? AND kind=\'turn.outputNaturalConversation\'').get(repairRun.id) as { c: number }).c).toBe(0);
+    db.close();
+  });
 });
