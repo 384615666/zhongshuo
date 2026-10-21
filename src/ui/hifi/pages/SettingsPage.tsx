@@ -17,6 +17,12 @@ import { ArchiveManager } from './ArchivePage';
 import { isExternalDeepLink } from '../lib/deepLink';
 import { LocalDiagnostics } from '../components/LocalDiagnostics';
 import { runtimeModelDisplayName } from '../lib/format';
+import {
+  CALL_BUDGET_ENABLED_SETTING_KEY,
+  DEFAULT_CALL_BUDGET_LIMITS,
+  parseCallBudgetEnabledSetting,
+  serializeCallBudgetEnabledSetting,
+} from '../../../contracts/callBudget';
 
 export type AppSettingsSection =
   | 'general' | 'appearance' | 'notifications' | 'runtime' | 'connections' | 'data' | 'help';
@@ -48,6 +54,7 @@ type SearchEntry = { section: AppSettingsSection; label: string; keywords: strin
 const SEARCH_INDEX: SearchEntry[] = [
   { section: 'general', label: '启动时打开的项目', keywords: '启动 打开 项目 自动 路径', match: '启动时打开的项目' },
   { section: 'appearance', label: '主题（深色外观）', keywords: '外观 主题 深色 浅色 暗色', match: '深色外观' },
+  { section: 'runtime', label: '启用调用次数预算', keywords: '调用 次数 预算 上限 DIRECT AUTO DELIBERATE', match: '启用调用次数预算' },
   { section: 'runtime', label: 'AI 成员的模型与权限', keywords: 'AI 成员 模型 权限 设置', match: 'AI 成员的模型' },
   { section: 'connections', label: '远程访问监听事实', keywords: '远程 局域网 lan 证书 指纹 监听', match: '远程访问' },
   { section: 'data', label: '备份全部数据', keywords: '备份 数据 保存', match: '备份全部数据' },
@@ -165,7 +172,7 @@ export function SettingsPage({ query }: { query?: Record<string, string> }) {
 }
 
 function findByLabel(text: string): HTMLElement | null {
-  const all = document.querySelectorAll<HTMLElement>('.settings-body .row, .settings-body .settings-row, .settings-body label');
+  const all = document.querySelectorAll<HTMLElement>('.settings-body .row, .settings-body .pset-row, .settings-body .settings-row, .settings-body label');
   for (const el of all) {
     if ((el.textContent ?? '').includes(text)) return el;
   }
@@ -393,6 +400,124 @@ function SectionNotifications() {
 
 /* ============================================================ 分区：AI 工具 ============================================================ */
 
+/**
+ * 应用级预算开关。正式命令面仍须由主任务把 CALL_BUDGET_ENABLED_SETTING_KEY
+ * 加入 app.settings 白名单；这里只走现有 get/set 并做严格回读，不在 UI 侧伪造持久化。
+ */
+export function callBudgetSettingWrite(enabled: boolean): {
+  key: typeof CALL_BUDGET_ENABLED_SETTING_KEY;
+  value: ReturnType<typeof serializeCallBudgetEnabledSetting>;
+} {
+  return {
+    key: CALL_BUDGET_ENABLED_SETTING_KEY,
+    value: serializeCallBudgetEnabledSetting(enabled),
+  };
+}
+
+/** 回读必须和请求值逐字相同；未设置(null)不能被 false 默认值冒充成功。 */
+export function callBudgetSettingReadBackMatches(
+  raw: string | null | undefined,
+  expected: boolean,
+): boolean {
+  return raw === serializeCallBudgetEnabledSetting(expected);
+}
+
+export function CallBudgetSettingsRow() {
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const generation = useRef(0);
+
+  const reload = useCallback(async () => {
+    const current = ++generation.current;
+    setLoading(true);
+    try {
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', {
+        keys: [CALL_BUDGET_ENABLED_SETTING_KEY],
+      });
+      if (current !== generation.current) return;
+      const raw = result.values[CALL_BUDGET_ENABLED_SETTING_KEY];
+      setEnabled(parseCallBudgetEnabledSetting(raw));
+      setReadError(null);
+    } catch (error) {
+      if (current !== generation.current) return;
+      setReadError((error as Error).message);
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const save = async (next: boolean) => {
+    const write = callBudgetSettingWrite(next);
+    setBusy(true);
+    try {
+      await command('app.settings.set', write);
+      const result = await command<{ values: Record<string, string | null> }>('app.settings.get', {
+        keys: [CALL_BUDGET_ENABLED_SETTING_KEY],
+      });
+      const raw = result.values[CALL_BUDGET_ENABLED_SETTING_KEY];
+      if (!callBudgetSettingReadBackMatches(raw, next)) {
+        const message = `保存后回读为 ${raw ?? '未设置'}，期望 ${write.value}；未显示为成功`;
+        setReadError(message);
+        toast(message, 'error');
+        return;
+      }
+      const readBack = parseCallBudgetEnabledSetting(raw);
+      setEnabled(readBack);
+      setReadError(null);
+      recordWrite('app.settings.set', `启用调用次数预算 = ${readBack ? '开启' : '关闭'}（已回读核对）`);
+      toast(readBack ? '调用次数预算已开启；新请求会冻结当次上限' : '调用次数预算已关闭；继续真实计数，但不按次数拦截', 'success');
+    } catch (error) {
+      toast(`调用次数预算保存失败：${(error as Error).message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = loading ? '读取中…' : readError != null ? '无法确认设置' : enabled ? '已开启' : '默认关闭 · 仅计数';
+  return (
+    <div
+      data-zs-call-budget-setting={CALL_BUDGET_ENABLED_SETTING_KEY}
+      data-zs-call-budget-enabled={enabled ? 'true' : 'false'}
+      data-zs-call-budget-enforcement={enabled ? 'enabled' : 'disabled'}
+      data-zs-call-budget-counting="always"
+    >
+      <SettingsRow
+        id="call-budget"
+        label="启用调用次数预算"
+        hint={<>默认关闭。关闭时继续记录真实调用次数，但不因次数停止。开启后默认 DIRECT {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} 次、AUTO（含明确多人收件）{DEFAULT_CALL_BUDGET_LIMITS.AUTO} 次；独立研讨按人数推导，双人默认 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE} 次。可在单次请求显式覆盖；新请求冻结当次设置。</>}
+        control={(
+          <div className="col" style={{ alignItems: 'flex-end', gap: 5 }}>
+            <Switch
+              checked={enabled}
+              disabled={loading || busy || readError != null}
+              label={enabled ? '开启' : '关闭'}
+              onChange={(next) => void save(next)}
+            />
+            <span className="small faint" data-zs-call-budget-status={status}>{status}</span>
+          </div>
+        )}
+      >
+        <div
+          className="small faint"
+          data-zs-call-budget-defaults={`DIRECT:${DEFAULT_CALL_BUDGET_LIMITS.DIRECT},AUTO:${DEFAULT_CALL_BUDGET_LIMITS.AUTO},DELIBERATE:${DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}`}
+        >
+          开启后的默认上限：DIRECT {DEFAULT_CALL_BUDGET_LIMITS.DIRECT} · AUTO {DEFAULT_CALL_BUDGET_LIMITS.AUTO} · 双人独立研讨 {DEFAULT_CALL_BUDGET_LIMITS.DELIBERATE}（随人数调整）
+        </div>
+      </SettingsRow>
+      {readError != null ? (
+        <div className="panel warning" data-zs-call-budget-read-error="1">
+          调用次数预算设置读取失败：{readError}。为避免覆盖未知旧值，开关暂不可改。
+          <button className="btn sm" onClick={() => void reload()}>重试读取</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SectionRuntime() {
   const membersAll = useStore((s) => s.members);
   const members = useMemo(() => membersAll.filter((m) => m.principalType === 'agent'), [membersAll]);
@@ -402,6 +527,7 @@ function SectionRuntime() {
   return (
     <div>
       <SectionHead title="AI 设置" sub={<>选择每位 AI 成员使用的程序、模型和权限。</>} />
+      <CallBudgetSettingsRow />
       {members.map((m) => {
         const rt = runtimes[m.id];
         return (

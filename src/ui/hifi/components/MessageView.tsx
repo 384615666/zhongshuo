@@ -509,7 +509,7 @@ function MessageFooter({
   const formalIds = new Set(formalAttachments.map((attachment) => attachment.artifactId));
   return (
     <div className="msg-attachment-footer">
-      <GeneratedFiles attachments={message.formalAttachments} onOpen={onOpenAttachment} />
+      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} />
       <MessageAttachments message={message} excludeIds={formalIds} onOpen={onOpenResource} />
     </div>
   );

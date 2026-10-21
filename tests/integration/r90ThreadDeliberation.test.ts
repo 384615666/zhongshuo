@@ -127,6 +127,7 @@ async function fixture() {
     return response.data;
   };
 
+  await cmd('app.settings.set', {key: 'callBudget.enabled', value: 'true'});
   const projectId = (await cmd<{ project: { id: string } }>('project.open', { path: projectRoot })).project.id;
   const memberIds: string[] = [];
   for (const displayName of ['线程甲', '线程乙', '房间丙']) {
@@ -203,11 +204,11 @@ describe('R90 thread independent deliberation', () => {
         mode: 'DELIBERATE',
         frozenMemberIds: [...f.memberIds.slice(0, 2)].sort(),
       });
-      expect(firstRequest.deliberation_budget_json).toBe(JSON.stringify({ maxTurns: 10 }));
+      expect(JSON.parse(firstRequest.deliberation_budget_json)).toMatchObject({maxTurns: 10, callBudget: {enforcement: 'enabled', limit: 10}});
       expect(f.db.prepare(
         'SELECT deliberation_budget_json,dispatch_identity,result_message_id,status FROM thread_reply_requests WHERE message_id=?',
       ).get(first.messageId)).toMatchObject({
-        deliberation_budget_json: JSON.stringify({ maxTurns: 10 }),
+        deliberation_budget_json: firstRequest.deliberation_budget_json,
         dispatch_identity: expect.stringMatching(/^[a-f0-9]{64}$/),
         result_message_id: null,
         status: 'queued',

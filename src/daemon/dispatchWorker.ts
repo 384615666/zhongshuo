@@ -2,13 +2,14 @@ import { effectiveTaskWriteAccess } from './projectWriteAccess.ts';
 import { acceptCoordinationPlan, assertCoordinationDispatch, beginCoordination, childCoordination, coordinationDispatchContext, explicitRecipientChild, pumpCoordinations, settleIntegrationLaunchFailure } from './coordination.ts';
 import { validatePlanForRun,coordinationDeliveryRefs,coordinationRoster,coordinationCallsUsed,coordinationCallLimit } from './coordination.ts';
 import { conversationFacts,conversationBlock,conversationReplyForDispatch,setConversationReplyState,settleConversationReplyForTurn } from './conversationReplies.ts';
-import {visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
+import {runtimeToolAction, visibleRuntimeProgress} from '../contracts/runtimeProgress.ts';
 import {threadReplyForDispatch,threadReplyBlock,settleThreadReplyForTurn,bindThreadReplyRun,setThreadReplyState,settleThreadReplyForRun} from './threadReplies.ts';
 import {communicationForTurn,validateMemberHandoffs,acceptMemberHandoffs,bindMemberMessageTurn,markMemberMessageStarted,settleMemberMessageTurn} from './coordinationMessages.ts';
 import {persistDetailMarkdown} from './detailMarkdownAttachments.ts';
 import type { DocumentArtifact } from '../contracts/document.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
+import { capturedFileChanges, recordMessageFileChanges } from './messageFileChanges.ts';
 import { acquireLease } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
 /**
@@ -26,7 +27,8 @@ import { comparisonKey } from './directoryIdentity.ts';
  */
 import { memberImageCapability } from './imageCapability.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { claimNextOutbox, completeOutbox, failOutbox, releaseOutbox } from '../persistence/outbox.ts';
@@ -64,6 +66,8 @@ import { closeTurnProcessRegistration, getTurnProcessRegistration, registerTurnP
 import { managedJobById } from './managed/bridge.ts';
 import { retireManagedJob } from './managedRetirement.ts';
 import { settleRealCall, recordRealCallUsage } from './realCallLedger.ts';
+import { DEFAULT_CALL_BUDGET_LIMITS, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
+import { parsePersistedCallBudgetSnapshot, runCallBudgetPolicy } from './callBudget.ts';
 
 export interface TaskRow {
   revision:number;
@@ -397,6 +401,27 @@ export class DispatchWorker {
     if(task&&generalRequest){task.owner_member_id=generalRequest.memberId;task.route_json=generalRequest.routeJson;}
     const coordination=task?coordinationDispatchContext(this.db,task.id,claimed.dispatch_key):null;
     if(task&&coordination?.request){task.owner_member_id=coordination.request.memberId;}
+    let dispatchCallBudgetPolicy:FrozenCallBudgetPolicy|null=null;
+    if(task){
+      try{
+        const parentPolicy=coordination?.run
+          ?runCallBudgetPolicy((this.db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(coordination.run.run_id) as {budget_json:string|null}|undefined)?.budget_json??null)
+          :null;
+        const requestPolicy=generalRequest?.deliberationBudgetJson!=null
+          ?parsePersistedCallBudgetSnapshot(generalRequest.deliberationBudgetJson).callBudget
+          :null;
+        const taskPolicy=parsePersistedCallBudgetSnapshot(
+          (this.db.prepare('SELECT deliberation_budget_json FROM tasks WHERE id=?').get(task.id) as {deliberation_budget_json:string|null}|undefined)?.deliberation_budget_json??null,
+        ).callBudget;
+        dispatchCallBudgetPolicy=parentPolicy??requestPolicy??taskPolicy;
+      }catch(error){
+        if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'blocked',`调用次数预算快照损坏：${error instanceof Error?error.message:String(error)}；未启动模型`);
+        this.transitionTask(task.id,'BLOCKED');
+        this.audit(task,null,null,'run.budgetSnapshotInvalid',{message:error instanceof Error?error.message:String(error),dispatchKey:claimed.dispatch_key});
+        await completeOutbox(this.db,claimed.id,claimed.attempt_epoch);
+        return;
+      }
+    }
     // 意图代次判定（§11.4；第二十七轮五修历史代次误拦后第二十八轮二收口——不能以
     // 「stop_generation>0 + 存在任意在途 run/turn」推断停止仍生效：历史停止已结算、合法新
     // run 正在执行时，新到的合法提醒/跟进意图会被误杀静默丢弃）。判定按**派发意图自己的
@@ -433,7 +458,7 @@ export class DispatchWorker {
       else this.transitionTask(task.id,'BLOCKED');
       this.audit(task,null,null,'coordination.dispatchBlocked',{message:reason});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;
     }
-    if(coordination?.kind==='planning'&&this.coordinationMaxCalls===0){this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:'本轮协作预算为0；未启动模型'});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
+    if(coordination?.kind==='planning'&&this.coordinationMaxCalls===0&&dispatchCallBudgetPolicy?.enforcement!=='disabled'){this.transitionTask(task.id,'BLOCKED');this.audit(task,null,null,'coordination.dispatchBlocked',{message:'本轮协作预算为0；未启动模型'});await failOutbox(this.db,claimed.id,claimed.attempt_epoch);return;}
     let conversationInput:{text:string;seq:number}|undefined;
     if(coordination?.request&&!generalRequest){
       const source=threadReplyForDispatch(this.db,`task:${task.id}:thread-reply:${coordination.request.messageId}`);
@@ -470,11 +495,16 @@ export class DispatchWorker {
         task.status='ACTIVE';
       }
       let requestBudget:number|undefined;
+      let requestCallBudget:FrozenCallBudgetPolicy|null;
       if(generalRequest?.deliberationBudgetJson!=null){
         try{
-          const parsed=JSON.parse(generalRequest.deliberationBudgetJson) as {maxTurns?:unknown};
-          if(typeof parsed.maxTurns==='number'&&Number.isSafeInteger(parsed.maxTurns)&&parsed.maxTurns>0)requestBudget=parsed.maxTurns;
-        }catch{/* invalid snapshot is rejected below */}
+          const parsed=parsePersistedCallBudgetSnapshot(generalRequest.deliberationBudgetJson);
+          requestBudget=parsed.maxTurns??undefined;
+          requestCallBudget=parsed.callBudget;
+        }catch{requestCallBudget=null;}
+      }else{
+        const taskBudget=this.db.prepare('SELECT deliberation_budget_json FROM tasks WHERE id=?').get(task.id) as {deliberation_budget_json:string|null}|undefined;
+        requestCallBudget=parsePersistedCallBudgetSnapshot(taskBudget?.deliberation_budget_json??null).callBudget;
       }
       if(generalRequest?.deliberationBudgetJson!=null&&requestBudget==null){
         setThreadReplyState(this.db,generalRequest.messageId,'failed','本次研讨预算快照损坏；未启动模型，原请求不会自动重放');
@@ -491,6 +521,7 @@ export class DispatchWorker {
         {
           ...baseOptions,
           ...(requestBudget!=null?{runMaxTurns:requestBudget}:{}),
+          callBudget:requestCallBudget ?? null,
           ...(generalRequest?{dispatchIdentity:generalRequest.dispatchIdentity}:{}),
         },
       );
@@ -604,13 +635,22 @@ export class DispatchWorker {
          WHERE r.task_id = ? AND r.mode = 'DIRECT' AND (t.budget_mark IS NULL OR t.budget_mark != 'refunded')`,
       ).get(task.id) as { c: number }).c
       : 0;
-    if (isRepairDispatch && settledCount + 1 > this.maxTurns) {
+    const dispatchLimit=coordination?.run
+      ?coordinationCallLimit(this.db,coordination.run.run_id)
+      :coordination?.kind==='planning'
+        ?(dispatchCallBudgetPolicy?.enforcement==='enabled'
+          ?Math.min(dispatchCallBudgetPolicy.limit,this.coordinationMaxCalls)
+          :dispatchCallBudgetPolicy?.enforcement==='disabled'?DEFAULT_CALL_BUDGET_LIMITS.AUTO:this.coordinationMaxCalls)
+        :dispatchCallBudgetPolicy?.enforcement==='enabled'
+          ?dispatchCallBudgetPolicy.limit
+          :dispatchCallBudgetPolicy?.enforcement==='disabled'?DEFAULT_CALL_BUDGET_LIMITS.DIRECT:this.maxTurns;
+    if (isRepairDispatch && dispatchCallBudgetPolicy?.enforcement!=='disabled' && settledCount + 1 > dispatchLimit) {
       // 授权额度已耗尽：修复资格被预算吞噬——如实收口（不绕过上限花调用）。
       const tx = this.db.transaction(() => {
         this.db.prepare(`UPDATE format_repair_workitems SET status = 'closed', note = ?, updated_at = ? WHERE id = ? AND status = 'pending'`)
-          .run(`修复预算耗尽（已用 ${settledCount}+1 > 上限 ${this.maxTurns}）——修复资格按统一授权账目收口`, Date.now(), repairItem!.id);
+          .run(`修复预算耗尽（已用 ${settledCount}+1 > 上限 ${dispatchLimit}）——修复资格按统一授权账目收口`, Date.now(), repairItem!.id);
         this.transitionTask(task.id, 'BLOCKED');
-        this.audit(task, null, null, 'task.repairBudgetExhausted', { workitemId: repairItem!.id, settledCount, maxTurns: this.maxTurns });
+        this.audit(task, null, null, 'task.repairBudgetExhausted', { workitemId: repairItem!.id, settledCount, maxTurns: dispatchLimit, enforcement: dispatchCallBudgetPolicy?.enforcement??'legacy' });
       });
       tx();
       failOutbox(this.db, claimed.id, claimed.attempt_epoch);
@@ -619,20 +659,33 @@ export class DispatchWorker {
     const priorUsed = settledCount;
     const budget: BudgetState = {
       grantId: runId,
-      maxTurns: coordination?.run?coordinationCallLimit(this.db,coordination.run.run_id):coordination?.kind==='planning'?this.coordinationMaxCalls:this.maxTurns,
+      maxTurns: dispatchLimit,
       usedTurns: coordination?.run?coordinationCallsUsed(this.db,coordination.run.run_id):priorUsed,
       inFlightReservedTurns: 1,
+      ...(dispatchCallBudgetPolicy!=null?{callBudget:dispatchCallBudgetPolicy}:{}),
     };
 
     // 输入组装（DEV-21-M0）：必要材料缺失/敏感命中 → 组装失败，不建 run、不派发。
     // 修复上下文来自持久工作项（组装失败/准入延期/崩溃重领不丢失——工作项保持 pending
     // 直至 run/turn 创建同事务置 consumed）。
+    const repairSourceChangeSetId = isRepairDispatch && repairItem != null
+      ? this.changeSetForTurn(repairItem.source_turn_id)
+      : null;
+    const repairSourceFiles = repairSourceChangeSetId == null ? [] : capturedFileChanges(this.db, repairSourceChangeSetId).map((file) => ({
+      path: file.path,
+      state: file.state,
+      beforeHash: file.before?.sha256 ?? null,
+      afterHash: file.after?.sha256 ?? null,
+      size: file.after?.size ?? null,
+    }));
     const repairContext = isRepairDispatch && repairItem != null
       ? {
           originalTurnId: repairItem.source_turn_id,
           sourceResultKey: repairItem.source_result_key,
           issues: JSON.parse(repairItem.invalid_issues_json) as string[],
           originalText: repairItem.source_output_text,
+          ...(repairSourceChangeSetId != null ? { sourceChangeSetId: repairSourceChangeSetId } : {}),
+          ...(repairSourceFiles.length > 0 ? { sourceFiles: repairSourceFiles } : {}),
         }
       : undefined;
     let writeAccess: ReturnType<typeof effectiveTaskWriteAccess>;
@@ -765,12 +818,15 @@ export class DispatchWorker {
           `INSERT INTO run_participants (run_id, member_id, role, expected, status) VALUES (?, ?, 'owner', 1, 'active')`,
         ).run(runId, member.id);
         this.db.prepare(
-          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
-           VALUES (?, ?, ?, ?, ?, 'direct.work', 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
-        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
+          `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
+           VALUES (?, ?, ?, ?, ?, 'direct.work', ?, 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
+        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, isRepairDispatch ? 'format_repair' : 'stage_work', claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
         bindMemberMessageTurn(this.db,task.id,runId,turnId);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'running',undefined,runId,turnId);
+        if (isRepairDispatch && repairSourceChangeSetId != null) {
+          this.kvSet(`repair-source-changeset:${turnId}`, repairSourceChangeSetId);
+        }
         // ContextBundle 落库：信封全文 + hash（与发给模型的文本同源，PP-04 可核对）。
         this.db.prepare(
           `INSERT INTO context_bundles (id, turn_id, thread_id, task_revision, baseline_id, included_refs_json, scope_grants_json, hash)
@@ -1009,6 +1065,8 @@ export class DispatchWorker {
         dispatchKey: claimed.dispatch_key,
         inputBundleId: assembled.value.bundleId,
         text: assembled.value.text,
+        stage: coordination==null?`direct.work`:`coordination.${coordination.kind}`,
+        repairOnly: isRepairDispatch,
         images: assembled.value.images,
         imageConfigurationKey: imageCapabilityAtLaunch.identityKey ?? undefined,
         policyId: writeAccess.policyId,
@@ -1444,8 +1502,8 @@ export class DispatchWorker {
     // 格式修复只能使用 non-tail F，不借用尚未执行的 SYN/RAT 保留额。
     const accStage = dispatchBudgetStage(step.stage === 'SYN' ? 'SYNTHESIS' : step.stage === 'RAT' ? 'RATIFY' : 'front', isRepair);
     const acc = budgetAccounting(budget, accStage);
-    if (acc.stageAvailableTurns < 1) {
-      this.audit(task, run.id, null, 'run.budgetSkipped', { dispatchKey: claimed.dispatch_key, stageAvailableTurns: acc.stageAvailableTurns, remaining: acc.remainingTurns });
+    if (!acc.canDispatch) {
+      this.audit(task, run.id, null, 'run.budgetSkipped', { dispatchKey: claimed.dispatch_key, stageAvailableTurns: acc.stageAvailableTurns, remaining: acc.remainingTurns, enforcement: acc.enforcement });
       await completeOutbox(this.db, claimed.id, claimed.attempt_epoch);
       pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
@@ -1480,7 +1538,7 @@ export class DispatchWorker {
       materials=assembleDirectTurn({db:this.db,blobRoot:join(this.appDataDir,'blobstore'),allowImages:imageCapability.status==='supported',writeAccess,
         task:{id:task.id,projectId:task.project_id,conversationId:task.conversation_id,conversationKind:'room',roomId:task.room_id,threadId:task.conversation_thread_id,rootMessageId:task.root_message_id,title:task.title,objective:task.objective,taskRevision:task.revision,inputThroughSeq:task.input_through_seq},
         identity:{member:{id:member.id,displayName:member.display_name},project:{id:project.id,displayName:project.display_name},room:{id:task.room_id,name:room?.name??'未命名房间'}},turnId,
-        budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns}});
+        budget:{grantId:run.id,maxTurns:budget.runMaxTurns,usedTurns:budget.usedTurns,inFlightReservedTurns:budget.inFlightReservedTurns,...(budget.callBudget?{callBudget:budget.callBudget}:{})}});
       if(!materials.ok)throw Error(materials.error.message);
       // App-managed R93 details are derived from earlier visible answers, not
       // canonical stage material for any DELIB step; user uploads remain.
@@ -1646,6 +1704,7 @@ export class DispatchWorker {
         dispatchKey: claimed.dispatch_key,
         inputBundleId: bundleId,
         text: assembly.value.text,
+        stage: assembly.value.stageKey,
         images:materials.value.images,
         imageConfigurationKey:imageCapability.identityKey??undefined,
         outputSchema:deliberationOutputSchema(step.stage),
@@ -1939,11 +1998,14 @@ export class DispatchWorker {
   applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null } | undefined;
+    if (event.kind === 'turn.started') {
+      this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
+    }
+    if (event.kind === 'tool.started' || event.kind === 'tool.completed') {
+      this.recordToolActivity(task, runId, turnId, event, turnMeta?.stage_key ?? null);
+    }
     if (turnMeta?.stage_key != null && turnMeta.stage_key.startsWith('delib.')) {
       // E4 执行时钟：turn.started 起算；审批/等待输入暂停在状态迁移处累计（生产接线）。
-      if (event.kind === 'turn.started') {
-        this.db.prepare('UPDATE agent_turns SET exec_started_at = ? WHERE id = ? AND exec_started_at IS NULL').run(this.clock(), turnId);
-      }
       if (event.kind === 'approval.requested' || event.kind === 'input.requested') {
         // 暂停起点（kv）；等待审批/输入期间不计入有效执行时间。
         const waitKey = `delib:pause:${turnId}`;
@@ -1993,7 +2055,7 @@ export class DispatchWorker {
       }
       case 'message.completed':
         {
-          const expected=`result_${turnId}`;
+          const expected=this.expectedResultKeyForTurn(turnId);
           const candidate=event.controlResult??event.text;
           const fenced=stripSingleJsonFence(candidate).text.trim();
           const appended=extractAppendedTaskComplete(fenced,expected)?.controlText;
@@ -2008,16 +2070,10 @@ export class DispatchWorker {
         }
         this.insertThreadReply(task, turnId, event.messageId, event.text,event.controlResult,{finalMessage:true});
         break;
-      case 'tool.started': {
-        // 实际工具调用记录（用户令 2026-09-28）：模型自述 executedVerifications 的核对依据——
-        // 有记录=实际行为证据；无记录=模型自述、未采信。
-        this.audit(task, runId, turnId, 'tool.started', { toolCallId: event.toolCallId, toolName: event.toolName, eventKey: event.eventKey });
+      case 'tool.started':
+      case 'tool.completed':
+        // Persisted once by recordToolActivity() before the DIRECT/DELIB branch.
         break;
-      }
-      case 'tool.completed': {
-        this.audit(task, runId, turnId, 'tool.completed', { toolCallId: event.toolCallId, outcome: event.outcome, eventKey: event.eventKey });
-        break;
-      }
       case 'usage.updated':
         this.db
           .prepare(
@@ -2080,7 +2136,7 @@ export class DispatchWorker {
           const finalTextRaw = event.finalText ?? '';
           // 单层围栏规范化（第六轮，边界严格）：仅当围栏包裹**整个**文本（```json?\n…\n```）
           // 才剥壳后走同一严格 schema；围栏外还有正文/截取首个 JSON 段/删未知字段一律不做。
-          const expectedResultKey=`result_${turnId}`;
+          const expectedResultKey=this.expectedResultKeyForTurn(turnId);
           const fenced=stripSingleJsonFence(finalTextRaw);
           const appended=extractAppendedTaskComplete(fenced.text,expectedResultKey);
           const explicitTerminalControl=isExplicitTaskCompleteOutput(fenced.text);
@@ -2119,7 +2175,7 @@ export class DispatchWorker {
           const ordinaryReplyRequest=this.db.prepare(`SELECT 1 FROM conversation_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running'
             UNION ALL SELECT 1 FROM thread_reply_requests WHERE (run_id=? OR turn_id=?) AND status='running' LIMIT 1`).get(runId,turnId,runId,turnId);
           const naturalOrdinaryReply=!contract.ok&&!planningRun&&!integrationRun&&messageControl==null&&!explicitTerminalControl
-            &&(explicitRecipientChild(this.db,task.id)||ordinaryReplyRequest!=null)
+            &&(task.kind==='dm_turn'||explicitRecipientChild(this.db,task.id)||ordinaryReplyRequest!=null)
             &&naturalText.length>0&&!/^[{[]/.test(naturalText)&&!/task-complete-v1|schemaVersion|resultKey/i.test(naturalText);
           if(naturalOrdinaryReply){
             const successfulWriteActions=(this.db.prepare(`SELECT count(*) n FROM domain_events started JOIN domain_events completed
@@ -2259,6 +2315,10 @@ export class DispatchWorker {
           const manifestHash = createHash('sha256').update(collaboration?JSON.stringify({finalText,collaboration}):finalText).digest('hex');
           const deliveryId = `dlv_${turnId}`;
           const reviewStatus = task.review_policy === 'user_review' ? 'pending' : 'not_required';
+          const deliveryChangeSets = [
+            this.kvGet(`write-changeset:${turnId}`),
+            this.kvGet(`repair-source-changeset:${turnId}`),
+          ].filter((value): value is string => value != null);
           const prevRevision = (this.db
             .prepare('SELECT COALESCE(MAX(revision), 0) r FROM task_deliveries WHERE task_id = ?')
             .get(task.id) as { r: number }).r;
@@ -2271,7 +2331,7 @@ export class DispatchWorker {
             `INSERT INTO task_deliveries (id, task_id, run_id, revision, manifest_hash, artifact_refs_json,
                change_set_refs_json, verification_refs_json, review_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
-          ).run(deliveryId, task.id, runId, prevRevision + 1, manifestHash, JSON.stringify([`turn:${turnId}:final`,...(collaboration?.artifactRefs??[])]), JSON.stringify([...new Set([...(this.kvGet(`write-changeset:${turnId}`)?[this.kvGet(`write-changeset:${turnId}`)]:[]),...(collaboration?.changeSetRefs??[])])]), reviewStatus);
+          ).run(deliveryId, task.id, runId, prevRevision + 1, manifestHash, JSON.stringify([`turn:${turnId}:final`,...(collaboration?.artifactRefs??[])]), JSON.stringify([...new Set([...deliveryChangeSets,...(collaboration?.changeSetRefs??[])])]), reviewStatus);
           this.db.prepare('UPDATE tasks SET current_delivery_id = ? WHERE id = ?').run(deliveryId, task.id);
           this.transitionTask(task.id, task.review_policy === 'user_review' ? 'REVIEW' : 'DONE');
           const parentCoordination=this.db.prepare("SELECT run_id FROM coordination_runs WHERE integration_run_id=? AND state='integrating'").get(runId) as {run_id:string}|undefined;
@@ -2595,8 +2655,6 @@ export class DispatchWorker {
       ).run(turnId, event.eventKey, JSON.stringify(event), JSON.stringify(event), event.costQuality);
       recordRealCallUsage(this.db,turnId,event);
     }
-    if(event.kind==='tool.started')this.audit(task,runId,turnId,'tool.started',{toolCallId:event.toolCallId,toolName:event.toolName,eventKey:event.eventKey});
-    if(event.kind==='tool.completed')this.audit(task,runId,turnId,'tool.completed',{toolCallId:event.toolCallId,outcome:event.outcome,eventKey:event.eventKey});
     if(event.kind==='session.ready'&&event.providerSessionId)this.db.prepare('UPDATE runtime_sessions SET provider_session_id=? WHERE id=? AND task_id=?').run(event.providerSessionId,event.sessionId,task.id);
   }
 
@@ -2672,9 +2730,16 @@ export class DispatchWorker {
       }
       if (reported === resumeRef.providerSessionId) {
         // 原生续接：回填候选行（身份不变；capabilities 快照刷新为当前绑定）。
+        // Keep the transport session id on non-successful turns for lateEvents, but
+        // bind successful turns to the persisted canonical row so execution-time
+        // permission facts remain queryable by turn/session joins.
         this.db.prepare(
           "UPDATE runtime_sessions SET provider_session_id = ?, capabilities_json = ? WHERE id = ? AND scope_kind = 'dm'",
         ).run(reported, bindingSnap, resumeRef.id);
+        const turnStatus = (this.db.prepare('SELECT status FROM agent_turns WHERE id = ?').get(turnId) as { status: string } | undefined)?.status;
+        if (turnStatus === 'SUCCEEDED') {
+          this.db.prepare('UPDATE agent_turns SET session_id = ? WHERE id = ? AND status = ?').run(resumeRef.id, turnId, 'SUCCEEDED');
+        }
         this.audit(task, null, turnId, 'dm.sessionResumed', { conversationId: task.conversation_id, resumeRequested: resumeRef.providerSessionId, providerReported: reported, nativeResume: true, note: '同对话原生续接：resume 请求与 provider 上报身份一致' });
         return;
       }
@@ -2774,6 +2839,7 @@ export class DispatchWorker {
       db:this.db,appDataDir:this.appDataDir,projectId:task.project_id,conversationId:task.conversation_id,
       threadId:task.conversation_thread_id,taskId:task.id,runId,turnId,messageId:finalMessageId,memberId,
       filename:document.filename,markdown:document.markdown,
+      versionScopeKey:task.kind==='dm_turn'?task.conversation_id:task.id,
     });
     if(outcome.status==='ready'){
       this.db.prepare(`UPDATE messages SET body_json=json_set(json_remove(body_json,'$.document.markdown'),'$.document.artifactId',?) WHERE id=?`).run(outcome.artifactId,finalMessageId);
@@ -2800,6 +2866,7 @@ export class DispatchWorker {
     const outcome=persistDetailMarkdown({
       db:this.db,appDataDir:this.appDataDir,projectId:task.project_id,conversationId:task.conversation_id,
       threadId:task.conversation_thread_id,taskId:task.id,runId,turnId,messageId:finalMessageId,memberId,markdown,
+      versionScopeKey:task.kind==='dm_turn'?task.conversation_id:task.id,
     });
     if(outcome.status==='ready'){
       this.audit(task,runId,turnId,'turn.detailMarkdown',{status:'ready',artifactId:outcome.artifactId,attachmentId:outcome.attachmentId,hash:outcome.hash,bytes:outcome.bytes,reused:outcome.reused});
@@ -2821,7 +2888,7 @@ export class DispatchWorker {
         : (result.detailMarkdown?.trim() ? '完整详情见下方 Markdown 附件。' : ''));
     if (visible.length === 0) return;
     const key = `final-message:${turnId}`;
-    const expectedResultKey = `result_${turnId}`;
+    const expectedResultKey = this.expectedResultKeyForTurn(turnId);
     const normalize = (text: string) => text.replace(/\s+/g, '').replace(/[。！？.!?]+$/u, '');
     const existingFinalId = this.kvGet(key);
     if (existingFinalId != null) {
@@ -2903,31 +2970,88 @@ export class DispatchWorker {
       if (turn?.session_id == null) return null;
       const session = this.db.prepare('SELECT project_id, conversation_id, member_id, task_id, capabilities_json FROM runtime_sessions WHERE id = ?')
         .get(turn.session_id) as { project_id: string; conversation_id: string; member_id: string; task_id: string | null; capabilities_json: string | null } | undefined;
-      if (session == null) return null;
-      if (session.project_id !== task.project_id || session.conversation_id !== task.conversation_id || session.member_id !== memberId) return null;
-      if (session.task_id != null && session.task_id !== task.id) return null;
-      let caps: { writeIdentity?: unknown; writeAccessMode?: unknown } = {};
-      try { caps = (JSON.parse(session.capabilities_json ?? '{}') ?? {}) as typeof caps; } catch { caps = {}; }
-      const recordedKey = typeof caps.writeIdentity === 'string' ? caps.writeIdentity : null;
-      const rawMode = caps.writeAccessMode != null && typeof caps.writeAccessMode === 'object' && !Array.isArray(caps.writeAccessMode)
-        ? caps.writeAccessMode as Record<string, unknown>
-        : null;
-      if (rawMode != null
-        && typeof rawMode.fullAccess === 'boolean'
-        && typeof rawMode.modificationAuthorized === 'boolean'
-        && typeof rawMode.root === 'string') {
-        const modeKey = typeof rawMode.identityKey === 'string' ? rawMode.identityKey : null;
-        if (recordedKey == null || modeKey == null || modeKey === recordedKey) {
-          return { fullAccess: rawMode.fullAccess, modificationAuthorized: rawMode.modificationAuthorized, root: rawMode.root };
+      if (session != null) {
+        if (session.project_id !== task.project_id || session.conversation_id !== task.conversation_id || session.member_id !== memberId) return null;
+        if (session.task_id != null && session.task_id !== task.id) return null;
+        let caps: { writeIdentity?: unknown; writeAccessMode?: unknown } = {};
+        try { caps = (JSON.parse(session.capabilities_json ?? '{}') ?? {}) as typeof caps; } catch { caps = {}; }
+        const recordedKey = typeof caps.writeIdentity === 'string' ? caps.writeIdentity : null;
+        const rawMode = caps.writeAccessMode != null && typeof caps.writeAccessMode === 'object' && !Array.isArray(caps.writeAccessMode)
+          ? caps.writeAccessMode as Record<string, unknown>
+          : null;
+        if (rawMode != null
+          && typeof rawMode.fullAccess === 'boolean'
+          && typeof rawMode.modificationAuthorized === 'boolean'
+          && typeof rawMode.root === 'string') {
+          const modeKey = typeof rawMode.identityKey === 'string' ? rawMode.identityKey : null;
+          if (recordedKey == null || modeKey == null || modeKey === recordedKey) {
+            return { fullAccess: rawMode.fullAccess, modificationAuthorized: rawMode.modificationAuthorized, root: rawMode.root };
+          }
+        }
+        if (recordedKey != null) {
+          const current = effectiveTaskWriteAccess(this.db, task.id, memberId, this.defaultKindOf());
+          if (current.identityKey === recordedKey) {
+            return { fullAccess: current.fullAccess, modificationAuthorized: current.modificationAuthorized, root: current.root };
+          }
         }
       }
-      if (recordedKey != null) {
-        const current = effectiveTaskWriteAccess(this.db, task.id, memberId, this.defaultKindOf());
-        if (current.identityKey === recordedKey) {
-          return { fullAccess: current.fullAccess, modificationAuthorized: current.modificationAuthorized, root: current.root };
+
+      // Exact-turn fallback for resumed DM sessions: the transport session id may
+      // be process-local while the frozen input bundle still carries the actual
+      // execution-time permission. This never consults the current member setting.
+      const bundle = this.db.prepare(
+        `SELECT b.included_refs_json FROM context_bundles b
+         JOIN agent_turns a ON a.id=b.turn_id
+         JOIN workflow_runs r ON r.id=a.run_id
+         WHERE b.turn_id=? AND a.id=? AND r.task_id=? AND a.member_id=?
+         ORDER BY b.rowid DESC LIMIT 1`,
+      ).get(turnId, turnId, task.id, memberId) as { included_refs_json: string } | undefined;
+      if (bundle != null) {
+        const envelope = JSON.parse(bundle.included_refs_json) as {
+          permission?: { policyId?: unknown; fullAccess?: unknown; modificationAuthorized?: unknown; allowedWriteRoots?: unknown };
+        };
+        const permission = envelope.permission;
+        const project = this.db.prepare('SELECT canonical_path,status FROM projects WHERE id=?').get(task.project_id) as { canonical_path: string; status: string } | undefined;
+        const scopeRow = this.db.prepare('SELECT write_scope_json FROM tasks WHERE id=?').get(task.id) as { write_scope_json: string } | undefined;
+        if (permission != null && project?.status === 'active' && scopeRow != null
+          && typeof permission.fullAccess === 'boolean'
+          && typeof permission.modificationAuthorized === 'boolean'
+          && typeof permission.policyId === 'string'
+          && Array.isArray(permission.allowedWriteRoots)) {
+          const roots = permission.allowedWriteRoots.filter((root): root is string => typeof root === 'string');
+          const scope = JSON.parse(scopeRow.write_scope_json) as { executionMode?: unknown; root?: unknown };
+          let canonical = project.canonical_path;
+          try { canonical = realpathSync.native(project.canonical_path); } catch { /* keep declared canonical path */ }
+          const root = roots[0] ?? canonical;
+          const sameRoot = resolve(root).toLowerCase() === resolve(canonical).toLowerCase();
+          if (sameRoot && permission.fullAccess === true && permission.modificationAuthorized === true
+            && scope.executionMode === 'full' && scope.root === canonical) {
+            return { fullAccess: true, modificationAuthorized: true, root };
+          }
+          if (sameRoot && permission.fullAccess === false && permission.modificationAuthorized === true
+            && permission.policyId === 'policy-project-write' && scope.executionMode !== 'readonly'
+            && typeof scope.root === 'string' && resolve(scope.root).toLowerCase() === resolve(canonical).toLowerCase()) {
+            return { fullAccess: false, modificationAuthorized: true, root };
+          }
         }
       }
       return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Locate the finalized write changeset captured for one execution turn. */
+  private changeSetForTurn(turnId: string): string | null {
+    const turn = this.db.prepare('SELECT run_id FROM agent_turns WHERE id=?').get(turnId) as { run_id: string } | undefined;
+    if (turn == null) return null;
+    const event = this.db.prepare(
+      "SELECT payload_json FROM domain_events WHERE run_id=? AND kind='changeset.baselineCaptured' ORDER BY seq DESC LIMIT 1",
+    ).get(turn.run_id) as { payload_json: string } | undefined;
+    if (event == null) return null;
+    try {
+      const payload = JSON.parse(event.payload_json) as { changeSetId?: unknown };
+      return typeof payload.changeSetId === 'string' ? payload.changeSetId : null;
     } catch {
       return null;
     }
@@ -2969,30 +3093,58 @@ export class DispatchWorker {
    */
   private async snapshotCompletedFiles(task: TaskRow, runId: string, turnId: string): Promise<void> {
     const context = this.turnFileSnapshotContext(turnId);
-    const keys = [`final-files:${turnId}`, `turn-diff:${turnId}`, `final-message:${turnId}`];
+    const keys = [`final-files:${turnId}`, `turn-diff:${turnId}`, `final-message:${turnId}`, `repair-source-changeset:${turnId}`];
     const cleanup = (): void => {
       for (const key of keys) { try { this.db.prepare('DELETE FROM daemon_state WHERE key = ?').run(key); } catch { /* 尽力清理 */ } }
     };
     try {
       const turn = this.db.prepare('SELECT status, member_id, stage_key FROM agent_turns WHERE id = ?').get(turnId) as
         | { status: string; member_id: string; stage_key: string } | undefined;
-      if (turn == null || turn.status !== 'SUCCEEDED') return;
+      if (turn == null) return;
+      const outputInvalid = turn.status === 'FAILED' && this.db.prepare(
+        "SELECT 1 FROM domain_events WHERE turn_id=? AND kind='turn.outputInvalid' LIMIT 1",
+      ).get(turnId) != null;
+      if (turn.status !== 'SUCCEEDED' && !outputInvalid) return;
       const project = this.db.prepare('SELECT canonical_path, status FROM projects WHERE id = ?').get(task.project_id) as
         | { canonical_path: string; status: string } | undefined;
       // 审核⑤：按本 turn 执行时记录的权限（不是执行后当前配置）决定 fullAccess/受限/只读。
       const access = project == null ? null : this.turnRecordedWriteAccess(task, turnId, turn.member_id);
+      let changesetId = this.kvGet(`write-changeset:${turnId}`);
+      if (changesetId == null && outputInvalid) {
+        changesetId = this.changeSetForTurn(turnId);
+      }
+      if (changesetId != null) finalizeChangeset(this.db, { changeSetId: changesetId, appDataDir: this.appDataDir });
+      let captured = changesetId != null ? capturedFileChanges(this.db, changesetId) : [];
+      const repairSourceChangeSetId = this.kvGet(`repair-source-changeset:${turnId}`);
+      if (repairSourceChangeSetId != null && captured.length === 0) {
+        changesetId = repairSourceChangeSetId;
+        captured = capturedFileChanges(this.db, repairSourceChangeSetId);
+      }
       let contextForFiles = context;
-      if (contextForFiles == null) {
-        const changesetId = this.kvGet(`write-changeset:${turnId}`);
-        if (changesetId != null) {
-          const finalized = finalizeChangeset(this.db, { changeSetId: changesetId, appDataDir: this.appDataDir });
-          if (finalized.ok) {
-            contextForFiles = {
-              files: [...finalized.value.diff.added, ...finalized.value.diff.modified],
-              diff: { added: [...finalized.value.diff.added], modified: [...finalized.value.diff.modified] },
-            };
-          }
+      if (repairSourceChangeSetId != null && captured.length > 0) {
+        const sourceDiff = {
+          added: captured.filter(file => file.state === 'added').map(file => file.path),
+          modified: captured.filter(file => file.state === 'modified').map(file => file.path),
+        };
+        if (contextForFiles == null || (contextForFiles.files.length === 0
+          && (contextForFiles.diff?.added.length ?? 0) === 0
+          && (contextForFiles.diff?.modified.length ?? 0) === 0)) {
+          contextForFiles = { files: captured.map(file => file.path), diff: sourceDiff };
+        } else {
+          contextForFiles = {
+            files: [...new Set([...contextForFiles.files, ...captured.map(file => file.path)])],
+            diff: {
+              added: [...new Set([...(contextForFiles.diff?.added ?? []), ...sourceDiff.added])],
+              modified: [...new Set([...(contextForFiles.diff?.modified ?? []), ...sourceDiff.modified])],
+            },
+          };
         }
+      }
+      if (contextForFiles == null) {
+        contextForFiles = { files: [], diff: {
+          added: captured.filter(file => file.state === 'added').map(file => file.path),
+          modified: captured.filter(file => file.state === 'modified').map(file => file.path),
+        } };
       }
       // 绑定消息必须属于本轮（DIRECT 最终回复或 DELIB 可见阶段消息），否则不挂附件。
       const rawMessageId = this.kvGet(`final-message:${turnId}`);
@@ -3007,11 +3159,17 @@ export class DispatchWorker {
         turnId,
         memberId: turn.member_id,
         conversationId: task.conversation_id,
+        versionScopeKey: task.kind === 'dm_turn' ? task.conversation_id : task.id,
         messageId,
         declaredFiles: contextForFiles?.files ?? [],
         turnDiff: contextForFiles?.diff ?? null,
+        capturedHashes: Object.fromEntries(captured.flatMap(file => file.after?.sha256 ? [[file.path, file.after.sha256]] : [])),
         access,
       });
+      recordMessageFileChanges({db: this.db, appDataDir: this.appDataDir, projectRoot: project?.canonical_path ?? '',
+        projectId: task.project_id, conversationId: task.conversation_id, taskId: task.id, runId, turnId,
+        memberId: turn.member_id, messageId, changeSetId: changesetId,
+        declaredFiles: contextForFiles?.files ?? [], registered: outcome.registered});
       if (outcome.failures.length > 0 || outcome.status === 'blocked') {
         this.insertFileSnapshotNotice(task, turnId, messageId, outcome);
       }
@@ -3022,7 +3180,7 @@ export class DispatchWorker {
           registered: outcome.registered.map((r) => ({ artifactId: r.artifactId, filename: r.filename, kind: r.kind, revision: r.revision, hash: r.hash.slice(0, 16), bytes: r.sizeBytes, source: r.source })),
           failures: outcome.failures.map((f) => ({ path: f.path, code: f.code, message: f.message, declared: f.declared })),
           skipped: outcome.skipped,
-          rule: '仅正式结果显式 .files 或本 turn changeset added；真实读取+sha256；fullAccess 可项目外；受限/只读按原权限',
+          rule: '正式结果 .files 与本轮新增/修改取并集；交付文档优先；附件绑定本轮文件版本',
         });
       }
     } catch (error) {
@@ -3075,7 +3233,7 @@ export class DispatchWorker {
   }
 
   private insertThreadReply(task: TaskRow, turnId: string, messageId: string, text: string,controlResult?:string,options?:{finalMessage?:boolean}): void {
-    const expectedResultKey=`result_${turnId}`;
+    const expectedResultKey=this.expectedResultKeyForTurn(turnId);
     const visibleText=agentReplyText(text,controlResult,expectedResultKey);
     const original=controlResult??(visibleText!==text?text:null);
     const bodyJson=JSON.stringify({text:visibleText,...(original?{runtimeControlResult:original}:{})});
@@ -3168,6 +3326,14 @@ export class DispatchWorker {
     if (options?.finalMessage === true && keptMessageId != null) this.kvSet(`final-message:${turnId}`, keptMessageId);
   }
 
+  /** Repair turns retain the source logical-output result key. */
+  private expectedResultKeyForTurn(turnId: string): string {
+    const repair = this.db.prepare(
+      'SELECT source_result_key FROM format_repair_workitems WHERE consumed_turn_id=? ORDER BY created_at DESC LIMIT 1',
+    ).get(turnId) as { source_result_key: string } | undefined;
+    return repair?.source_result_key ?? `result_${turnId}`;
+  }
+
   /** TaskComplete 输出合同校验：JSON 解析、schema、版本、resultKey 绑定（修复轮）。 */
   private validateTaskCompleteOutput(finalText: string, expectedResultKey: string): { ok: true } | { ok: false; issues: string[] } {
     const issues: string[] = [];
@@ -3236,6 +3402,51 @@ export class DispatchWorker {
       const task = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow;
       this.audit(task, null, null, 'task.statusChanged', { status });
     }
+  }
+
+  private recordToolActivity(
+    task: TaskRow,
+    runId: string,
+    turnId: string,
+    event: Extract<NormalizedRuntimeEvent, { kind: 'tool.started' | 'tool.completed' }>,
+    frozenStage: string | null,
+  ): void {
+    if (event.kind === 'tool.started') {
+      this.audit(task, runId, turnId, 'tool.started', {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        action: event.action ?? runtimeToolAction(event.toolName),
+        target: event.target ?? '',
+        argumentsSummary: event.argumentsSummary,
+        memberId: event.memberId ?? null,
+        stage: event.stage ?? frozenStage,
+        eventKey: event.eventKey,
+      });
+      return;
+    }
+    const started = this.db.prepare(
+      `SELECT payload_json FROM domain_events
+       WHERE kind='tool.started' AND turn_id=?
+         AND json_extract(payload_json,'$.toolCallId')=?
+       ORDER BY seq DESC LIMIT 1`,
+    ).get(turnId, event.toolCallId) as { payload_json: string } | undefined;
+    let prior: Record<string, unknown> = {};
+    if (started != null) {
+      try { prior = JSON.parse(started.payload_json) as Record<string, unknown>; } catch { /* malformed legacy row stays isolated */ }
+    }
+    this.audit(task, runId, turnId, 'tool.completed', {
+      toolCallId: event.toolCallId,
+      toolName: typeof prior.toolName === 'string' ? prior.toolName : null,
+      action: event.action ?? prior.action ?? null,
+      target: event.target ?? prior.target ?? '',
+      argumentsSummary: typeof prior.argumentsSummary === 'string' ? prior.argumentsSummary : '',
+      memberId: event.memberId ?? prior.memberId ?? null,
+      stage: event.stage ?? frozenStage,
+      outcome: event.outcome,
+      resultSummary: event.resultSummary ?? '',
+      resultRef: event.resultRef ?? null,
+      eventKey: event.eventKey,
+    });
   }
 
   private audit(

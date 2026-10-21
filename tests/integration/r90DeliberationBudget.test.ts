@@ -36,6 +36,7 @@ describe('R90 task-frozen deliberation budget', () => {
 
     let reopened: ReturnType<typeof openDatabase> | null = null;
     try {
+      await cmd('app.settings.set', {key: 'callBudget.enabled', value: 'true'});
       const project = await cmd<{ project: { id: string } }>('project.open', { path: projectRoot });
       const firstMember = await cmd<{ memberId: string }>('member.create', {
         projectId: project.project.id,
@@ -88,12 +89,14 @@ describe('R90 task-frozen deliberation budget', () => {
         { expected: 17, sent: await submit() },
       ];
       const runIds: string[] = [];
+      const frozenJsonByTask = new Map<string, string>();
       for (const item of cases) {
         expect(item.sent.deliberationBudget).toEqual({ maxTurns: item.expected });
         const taskRow = db.prepare(
           'SELECT route_json, deliberation_budget_json FROM tasks WHERE id=?',
         ).get(item.sent.taskId) as { route_json: string; deliberation_budget_json: string };
-        expect(JSON.parse(taskRow.deliberation_budget_json)).toEqual({ maxTurns: item.expected });
+        expect(JSON.parse(taskRow.deliberation_budget_json)).toMatchObject({ maxTurns: item.expected, callBudget: {enforcement: 'enabled', limit: item.expected} });
+        frozenJsonByTask.set(item.sent.taskId, taskRow.deliberation_budget_json);
         const route = JSON.parse(taskRow.route_json) as Extract<TopLevelRouteOutcome, { kind: 'dispatch'; mode: 'DELIBERATE' }>;
         expect(route.frozenMemberIds).toHaveLength(2);
         const prepared = prepareDeliberation(db, {
@@ -145,7 +148,7 @@ describe('R90 task-frozen deliberation budget', () => {
       for (const item of cases) {
         expect(reopened.prepare(
           'SELECT deliberation_budget_json FROM tasks WHERE id=?',
-        ).get(item.sent.taskId)).toEqual({ deliberation_budget_json: JSON.stringify({ maxTurns: item.expected }) });
+        ).get(item.sent.taskId)).toEqual({ deliberation_budget_json: frozenJsonByTask.get(item.sent.taskId) });
       }
     } finally {
       try { db.close(); } catch { /* already closed for reopen */ }

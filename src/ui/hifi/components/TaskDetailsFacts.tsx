@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun } from '../../../contracts/taskDetails.ts';
 import { command } from '../bridge';
 import { RunStatusTag, TaskStatusTag } from './ui';
-import { fullTime, runtimeModelDisplayName } from '../lib/format';
+import { fullTime, runtimeModelDisplayName, stageLabel } from '../lib/format';
 import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
@@ -102,7 +102,7 @@ export function taskRunGuidance(detail: TaskDetailsResult): string {
   if (latest.status === 'INTERRUPTED') return '本次运行已中断，结果可能尚未确认。先到恢复入口核对退出与保护状态，再决定是否继续。';
   if (latest.status === 'FAILED' && detail.failedRetry.pending) return '最近一次运行失败；继续请求已入队，等待正式 worker 派发。请勿重复提交。';
   if (latest.status === 'FAILED' && detail.failedRetry.blockReason) return `最近一次运行失败，任务仍未完成。当前不能继续：${detail.failedRetry.blockReason}`;
-  if (latest.status === 'FAILED') return `最近一次运行失败；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看诊断、修复原因后，在「运行详情」点“继续最近失败运行”。`;
+  if (latest.status === 'FAILED') return `最近一次运行失败；任务仍是${detail.task.status === 'ACTIVE' ? '待继续处理' : detail.task.status}。查看诊断、修复原因后，在「运行详情」点“${detail.failedRetry.formatRepair ? '修复输出格式' : '继续最近失败运行'}”。`;
   if (latest.status === 'PARTIAL') return '最近一次运行只完成一部分；查看诊断与已有成果，再从原回复串明确补充需要处理的部分。';
   return '查看活动、交付及验收记录，确认任务下一步。';
 }
@@ -127,7 +127,23 @@ export function activityLabel(kind: string, status?:string|null): string {
 export function budgetText(value: unknown): string {
   if (value == null || typeof value !== 'object') return '无可解析的预算记录';
   const b=value as Record<string,unknown>; const n=(key:string)=>typeof b[key]==='number'?String(b[key]):'未提供';
-  return `调用上限 ${n('maxTurns')} · 已结算 ${n('usedTurns')} · 在途预占 ${n('inFlightReservedTurns')}。这是调用额度，不代表费用或 token 余额。`;
+  const call=b.callBudget!=null&&typeof b.callBudget==='object'?b.callBudget as Record<string,unknown>:null;
+  if(call?.enforcement==='disabled'){
+    return `调用次数限制已关闭（仅真实记账）· 已结算 ${n('usedTurns')} · 在途 ${n('inFlightReservedTurns')}。不按次数拦截，也不以次数耗尽结束。`;
+  }
+  const limit = typeof call?.limit === 'number' ? call.limit : typeof b.runMaxTurns === 'number' ? b.runMaxTurns : n('maxTurns');
+  return `调用上限 ${limit} · 已结算 ${n('usedTurns')} · 在途预占 ${n('inFlightReservedTurns')}。这是调用额度，不代表费用或 token 余额。`;
+}
+
+function toolEventText(e:TaskDetailEvent):string {
+  if(e.kind!=='tool.started'&&e.kind!=='tool.completed')return e.summary;
+  const actionLabel:Record<string,string>={read:'读取文件',search:'搜索',command:'执行命令',edit:'编辑文件',other:'工具活动'};
+  const action=e.action!=null?actionLabel[e.action]??'工具活动':'工具活动';
+  const target=e.target?` · ${e.target}`:'';
+  if(e.kind==='tool.started')return `正在${action}${target}`;
+  const outcome=e.outcome??e.status??(e.summary==='success'||e.summary==='failure'?e.summary:null);
+  if(e.resultSummary)return `${action}${outcome==='failure'?'失败':'完成'}${target} · ${e.resultSummary}`;
+  return `${action}${outcome==='failure'?'失败':outcome==='success'?'完成':'结果未知'}${target}`;
 }
 
 /** Only the newest cumulative record is summarized; never add cumulative snapshots. */
@@ -164,7 +180,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
   return <div className="card tight" data-zs-history={kind}>
     {current?.page?<><div className="faint small">更早历史页 · 每页最多 {kind==='runs'?20:kind==='deliveries'?50:120} 条；仅保存当前页。</div>
       {kind==='runs'?(current.page.items as TaskDetailRun[]).map(r=><div key={r.id}><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']}/><button className="btn ghost sm" onClick={()=>onSelectRun?.(r.id)}>查看这次运行</button><details className="faint small"><summary>运行身份</summary>{r.id}</details></div>):null}
-      {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{e.summary?` · ${e.summary}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
+      {kind==='activity'?(current.page.items as TaskDetailEvent[]).map(e=><div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{toolEventText(e)?` · ${toolEventText(e)}`:''}<details className="faint"><summary>事件身份</summary>#{e.seq} · {e.kind} · run {e.runId??'—'}</details></div>):null}
       {kind==='deliveries'?(current.page.items as TaskDetailsResult['deliveries']).map(d=><div key={d.id}><a href={d.locate}>交付 v{d.revision}</a> · {reviewLabel[d.reviewStatus]??d.reviewStatus}{d.reviewNote?<div>{d.reviewNote}</div>:null}<details className="faint small"><summary>版本身份</summary>{d.id} · {d.manifestHash}</details></div>):null}
       {current.page.items.length===0?<span>本页权威读取为空。</span>:null}
       <button className="btn ghost sm" disabled={current?.loading} onClick={()=>{ticket.current++;busy.current=false;saveReadingPosition(`history:${key}`,null);setState({key,page:null,error:null,loading:false});}}>返回最新窗口</button></>:null}
@@ -214,7 +230,9 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
   return <div className="card tight" data-zs-coordination>
     <div className="section-title">成员协作 · {states[c.state]??c.state}</div>
     <div style={{whiteSpace:'pre-wrap'}}>{c.summary}</div>
-    <div className="faint small">步骤依次交接，调用格已占用 {c.usedCalls} / {c.maxCalls}（包含规划、子任务、修复与整合的预占；未知结果仍占用）。</div>
+    <div className="faint small">{c.enforcement==='disabled'
+      ? `调用次数限制已关闭（仅真实记账）：已记录 ${c.usedCalls} 次，在途/未知仍计数，但不按次数拦截或结束。`
+      : `步骤依次交接，调用格已占用 ${c.usedCalls} / ${c.maxCalls}（包含规划、子任务、修复与整合的预占；未知结果仍占用）。`}</div>
     {c.errorMessage?<div className="panel warning" role="alert">{c.errorMessage}。请查看对应步骤与运行原因；结果未知时先人工核实原请求。</div>:null}
     {c.steps.map(s=><div key={s.key} className="card tight">
       <a href={s.locate}>{s.title}</a> · <TaskStatusTag status={s.status as Parameters<typeof TaskStatusTag>[0]['status']}/>
@@ -225,6 +243,15 @@ function CoordinationFacts({detail}:{detail:TaskDetailsResult}) {
       {s.deliveryId?<div className="small"><a href={`#delivery=${s.deliveryId}`}>查看步骤成果 v{s.deliveryRevision}</a></div>:null}
       <details className="small faint"><summary>交接版本身份</summary>{s.taskId} · {s.deliveryId??'尚无交付'} · {s.manifestHash??'尚无成果hash'}</details>
     </div>)}
+    {detail.memberRuns?.length?<div className="card tight" data-zs-member-runs="1">
+      <div className="small strong">成员子运行</div>
+      {detail.memberRuns.map(r=><div key={r.id} className="small" data-zs-member-run={r.id}>
+        {r.memberName??r.memberId??'成员'} · {r.taskTitle} · <RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']}/>
+        {r.failure?<span className="faint"> · {r.failure.code?`${r.failure.code} · `:''}{r.failure.message??r.failure.eventKind}</span>:null}
+        {r.lastActivityAt!=null?<span className="faint"> · 最近活动 {fullTime(r.lastActivityAt)}</span>:null}
+      </div>)}
+      {detail.memberRunsTruncated?<div className="faint small">仅显示最近 32 个成员子运行。</div>:null}
+    </div>:null}
   </div>;
 }
 
@@ -250,7 +277,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
     <div className="panel info">{taskRunGuidance(detail)}</div>
-    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'修复原协作整合输出':'继续最近失败运行'}</button> : null}
+    {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'修复输出格式':'继续最近失败运行'}</button> : null}
     {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}
     {detail.failedRetry.pending||detail.clarificationRetry?.pending ? <div className="panel info">继续已入队；等待派发结果。</div> : null}
     {detail.runs.length === 0 ? <div className="card tight">任务尚无运行记录。</div> : ordered.map((r) => <div key={r.id} className="card tight">
@@ -260,7 +287,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
       <dl className="kv"><dt>状态</dt><dd><RunStatusTag status={r.status as Parameters<typeof RunStatusTag>[0]['status']} /></dd>
         <dt>阶段 / 轮次</dt><dd>{r.stage ?? '无阶段记录'}{r.roundNo == null ? '' : ` · 第 ${r.roundNo} 轮`}</dd>
         <dt>预算</dt><dd>{r.budget == null ? '无预算记录' : <>{budgetText(r.budget)}<details className="small faint"><summary>预算原始详情</summary><pre>{JSON.stringify(r.budget,null,2)}</pre></details></>}</dd>
-        <dt>执行轮次</dt><dd>{r.turns.length === 0 ? '尚无轮次' : r.turns.map((t) => <div key={t.id}>
+        <dt>执行轮次</dt><dd>{r.turns.length === 0 ? (detail.coordination?'协调父运行不直接执行模型；成员子运行和失败原因见“成员协作”。':'尚无轮次') : r.turns.map((t) => <div key={t.id}>
           {t.displayName} · {executionLabel[t.status]??'状态未提供'} · {purposeLabel[t.purpose]??'执行轮次'} · 第 {t.attempt} 次尝试
           {t.runtime?<div className="small faint">本轮请求：{t.runtime.kind??'渠道未提供'} / <span title={t.runtime.model?`完整模型 ID：${t.runtime.model}`:undefined}>{t.runtime.model?runtimeModelDisplayName({id:t.runtime.model,label:t.runtime.model}):'模型未提供'}</span> · 思考 {t.runtime.effort??'未指定'} · {t.runtime.policy==='policy-analyze'?'只读角色':t.runtime.policy==='policy-full-access'?'CLI 完整权限':t.runtime.policy==='policy-project-write'?'项目内编辑':'权限快照未提供'}</div>:<div className="small faint">本轮模型配置快照未提供。</div>}
           {t.usage.length > 0 ? <details><summary>用量记录（{t.usage.length}）</summary><div title={t.usage.map(u=>runtimeModelId(u.normalized)).filter((id):id is string=>id!=null).map(id=>`完整模型 ID：${id}`).join('；')||undefined}>{usageSummary(t.usage)}</div>{t.usage.map((u, k) => {const modelId=runtimeModelId(u.normalized);return <div key={k} className="small" title={modelId?`完整模型 ID：${modelId}`:undefined}>{usageText(u.normalized, u.quality)}</div>;})}{t.usageTruncated ? '仅显示最近 50 条' : null}</details> : ' · 无用量记录'}
@@ -271,11 +298,27 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
       {r.events.filter((e) => isDiagnosticEvent(e.kind)).length === 0
         ? <div className="faint small">这次运行的可见窗口没有工具或诊断事件。</div>
         : r.events.filter((e) => isDiagnosticEvent(e.kind)).map((e) =>
-          <div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{e.summary ? ` · ${e.summary}` : ''}<details className="faint"><summary>活动身份</summary>{e.kind}{e.code?` · ${e.code}`:''} · 事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
+          <div key={e.seq} className="small">{fullTime(e.at)} · {activityLabel(e.kind,e.status)}{toolEventText(e) ? ` · ${toolEventText(e)}` : ''}<details className="faint"><summary>活动身份</summary>{e.kind}{e.code?` · ${e.code}`:''} · 事件 #{e.seq} · 轮次 {e.turnId ?? '—'} · 成员 {e.memberId ?? '—'} · 阶段 {e.stage ?? '—'} · 工具 {e.toolCallId ?? '—'}</details></div>)}
       {r.eventsTruncated ? <div className="faint small">仅显示这次运行最近 120 条事件。</div> : null}<HistoryReader detail={detail} kind="activity" runId={r.id} cursor={detail.nextCursors?.runActivity}/>
       </>}
     </div>)}
     {detail.truncated.runs ? <div className="faint small">显示最近 20 次运行及已定位的旧运行；其他历史运行未在本窗口内。</div> : null}
+    {detail.memberRuns?.length ? <div className="card tight" data-zs-run-members="1">
+      <div className="section-title">成员执行与诊断</div>
+      {detail.memberRuns.map(member => <section className="card tight" key={member.id}>
+        <div className="row wrap"><strong>{member.memberName ?? '成员'}</strong><RunStatusTag status={member.status as Parameters<typeof RunStatusTag>[0]['status']}/>
+          <span>{member.taskTitle}{member.stage ? ` · ${stageLabel(member.stage as Parameters<typeof stageLabel>[0])}` : ''}</span>
+          {onSelectRun && member.id !== detail.selectedRunId ? <button type="button" className="btn ghost sm" onClick={() => onSelectRun(member.id)}>查看执行记录</button> : null}
+        </div>
+        {member.failure ? <div className={member.status === 'FAILED' ? 'small danger' : 'small faint'}>{member.status === 'FAILED' ? '失败原因' : '本次曾遇到的问题'}：{member.failure.message ?? '未提供具体说明'}{member.failure.code ? `（${member.failure.code}）` : ''}</div> : null}
+        <div className="small faint">{member.lastActivityAt != null ? `最近活动 ${fullTime(member.lastActivityAt)}` : '暂未收到执行活动'}</div>
+        {member.id === detail.selectedRunId ? <>
+          {member.turns.map(turn => <div className="small" key={turn.id}>{turn.displayName} · {executionLabel[turn.status] ?? turn.status} · 第 {turn.attempt} 次尝试</div>)}
+          {member.events.filter(event => isDiagnosticEvent(event.kind)).map(event => <div className="small" key={event.seq}>{fullTime(event.at)} · {activityLabel(event.kind, event.status)}{toolEventText(event) ? ` · ${toolEventText(event)}` : ''}</div>)}
+          <HistoryReader detail={detail} kind="activity" runId={member.id} cursor={detail.nextCursors?.memberRunActivity}/>
+        </> : null}
+      </section>)}
+    </div> : null}
     <HistoryReader detail={detail} kind="runs" cursor={detail.nextCursors?.runs} onSelectRun={onSelectRun}/>
   </div>;
 }

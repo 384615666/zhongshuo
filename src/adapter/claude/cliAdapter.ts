@@ -30,14 +30,19 @@
  */
 import { claudeInput } from '../imageInput.ts';
 import {chatAnswer} from '../../contracts/chatAnswer.ts';
-import {visibleRuntimeProgress} from '../../contracts/runtimeProgress.ts';
+import {
+  runtimeToolResultSummary,
+  runtimeToolSummary,
+  visibleRuntimeProgress,
+  type RuntimeToolSummary,
+} from '../../contracts/runtimeProgress.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { resolveClaudeConfiguration } from './configuration.ts';
 export { resolveClaudeConfiguration } from './configuration.ts';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join,relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { AdapterProcessIdentity } from '../../contracts/runtime.ts';
 import type {
@@ -118,6 +123,8 @@ interface RuntimeEventBaseFields {
   eventKey: string;
   sessionId: string;
   turnId?: string;
+  memberId?: string;
+  stage?: string;
   receivedAt: number;
 }
 
@@ -201,6 +208,7 @@ interface QueuedEvent {
 }
 
 interface SessionState {
+  memberId: string;
   developerInstructions?: string;
   systemPromptFile: string | null;
   writeAccess?: OpenSessionInput['writeAccess'];
@@ -217,6 +225,7 @@ interface SessionState {
 
 interface ActiveTurn {
   turnId: string;
+  stage?: string;
   process: ChildProcessWithoutNullStreams;
   buffer: string;
   queue: NormalizedRuntimeEvent[];
@@ -227,6 +236,8 @@ interface ActiveTurn {
   lastMessageId: string | null;
   /** assistant 消息内报的模型（result 不带 model 时的响应取证来源）。 */
   reportedModel: string | null;
+  /** Start metadata paired with tool_result blocks that omit tool name/input. */
+  toolSummaries: Map<string, RuntimeToolSummary>;
   /** stderr 尾部留存（失败取证：真实跑挂时 CLI 的错误行进 message，不丢现场）。 */
   stderrTail: string;
   /** 停止请求已发（与"已确认退出"分离：kill≠退出）。 */
@@ -319,7 +330,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       sessionGeneration: input.sessionGeneration,
       cwd: input.cwd,
     };
-    this.sessions.set(id, { ref, developerInstructions: input.developerInstructions, systemPromptFile: null, writeAccess: input.writeAccess, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
+    this.sessions.set(id, { ref, memberId: input.memberId, developerInstructions: input.developerInstructions, systemPromptFile: null, writeAccess: input.writeAccess, active: null, providerSessionId: null, resumeRequested: input.resume?.providerSessionId ?? null, closed: false, subscribers: [] });
     return ref;
   }
 
@@ -354,11 +365,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       '--disallowedTools', 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,Skill,TodoWrite,mcp__*',
       '--strict-mcp-config', '--bare', '--disable-slash-commands',
     ];
-    if (state.writeAccess?.fullAccess) {
+    if (state.writeAccess?.fullAccess && input.repairOnly !== true) {
       if (!['bypassPermissions',undefined].includes(this.options.permissionMode)) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','完整权限与成员配置不匹配');
       if(state.writeAccess.launchConfigurationKey && claudeLaunchIdentity(this.options,session.cwd).identityKey!==state.writeAccess.launchConfigurationKey) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','启动配置已变化，未启动模型');
       args.splice(0,args.length,'-p','--output-format','stream-json','--verbose','--model',model,'--permission-mode','bypassPermissions','--dangerously-skip-permissions');
-    } else if (state.writeAccess?.modificationAuthorized) {
+    } else if (state.writeAccess?.modificationAuthorized && input.repairOnly !== true) {
       if(state.writeAccess.allowedWriteRoots.length!==1 || state.writeAccess.allowedWriteRoots[0]!==session.cwd || !['acceptEdits','dontAsk'].includes(this.options.permissionMode??'') || this.options.extraArgs?.length) throw new AdapterCallError('CAPABILITY_UNSUPPORTED','写入范围或成员权限不匹配，未启动');
       const context=resolveClaudeConfiguration(session.cwd);
       if(context.reason) throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`不能核实受限执行的实际渠道：${context.reason}`);
@@ -421,6 +432,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     }
     const turn: ActiveTurn = {
       turnId: input.turnId,
+      stage: input.stage?.slice(0,120),
       process: proc,
       buffer: '',
       queue: [],
@@ -429,6 +441,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       startedAnnounced: false,
       lastMessageId: null,
       reportedModel: null,
+      toolSummaries: new Map(),
       stderrTail: '',
       stopRequested: false,
       terminalKind: null,
@@ -655,7 +668,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       return; // Session identity is an actual init receipt; turn.started still waits for assistant output.
     }
     if (type === 'assistant') {
-      const message = parsed['message'] as { model?: string; content?: Array<{ type: string; text?: string; id?: string }> } | undefined;
+      const message = parsed['message'] as { model?: string; content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }> } | undefined;
       // assistant 消息内报的模型：响应取证来源（本次实测 result 不带 model——diag 2026-09-28）。
       if (message?.model != null && turn.reportedModel == null) turn.reportedModel = message.model;
       // 首条 assistant 消息：合成 turn.started（CLI 无显式开始事件——合成依据见文件头）。
@@ -674,12 +687,23 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         const progress=visibleRuntimeProgress(block.text??'');
         if(progress&&!turn.stopRequested)this.pushEvent(state,turn,{kind:'message.progress',messageId,text:progress,...this.baseEvent(state,turn,`progress:${messageId}`)});
       }
-      // 工具事件（2.x stream-json 的 tool_use 块在 assistant 消息内）：只读档下理论不触发；
-      // 出现则按块映射 tool.started/completed（outcome unknown——CLI 不回传工具结果状态）。
-      const toolBlocks = (message?.content ?? []).filter((c): c is { type: string; name?: string; id?: string;input?:{file_path?:string;path?:string} } => c.type === 'tool_use');
+      // 工具事件（2.x stream-json 的 tool_use 块在 assistant 消息内）。CLI 的
+      // tool_result 只带 tool_use_id，故在 ActiveTurn 内用启动摘要补齐动作/目标。
+      const toolBlocks = (message?.content ?? []).filter((c): c is { type: string; name?: string; id?: string; input?: unknown } => c.type === 'tool_use');
       for (const block of toolBlocks) {
-        const path=block.input?.file_path??block.input?.path;
-        this.pushEvent(state, turn, { kind: 'tool.started', toolCallId: block.id ?? randomUUID().slice(0, 8), toolName: block.name ?? 'unknown', argumentsSummary: typeof path==='string'?JSON.stringify({path:relative(state.ref.cwd,path).slice(0,400)}):'', ...this.baseEvent(state, turn, randomUUID().slice(0, 6)) } as NormalizedRuntimeEvent);
+        const toolCallId=block.id??randomUUID().slice(0,8);
+        const toolName=block.name??'unknown';
+        const summary=runtimeToolSummary(toolName,block.input,{cwd:state.ref.cwd});
+        turn.toolSummaries.set(toolCallId,summary);
+        this.pushEvent(state, turn, {
+          kind:'tool.started',
+          toolCallId,
+          toolName,
+          action:summary.action,
+          target:summary.target,
+          argumentsSummary:summary.argumentsSummary,
+          ...this.baseEvent(state, turn, randomUUID().slice(0, 6)),
+        } as NormalizedRuntimeEvent);
       }
       return;
     }
@@ -687,7 +711,17 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       const message=parsed['message'] as {content?:Array<{type:string;tool_use_id?:string;is_error?:boolean;content?:unknown}>}|undefined;
       for(const block of message?.content??[])if(block.type==='tool_result'&&block.tool_use_id) {
         const denied=block.is_error===true && /permission|outside|restricted|denied|权限|拒绝|工作目录/i.test(JSON.stringify(block.content));
-        this.pushEvent(state,turn,{kind:'tool.completed',toolCallId:block.tool_use_id,outcome:block.is_error?'failure':'success',resultRef:denied?'permission-denied':block.is_error?'tool-error':'tool-success',...this.baseEvent(state,turn,`tool-result:${block.tool_use_id}`)});
+        const summary=turn.toolSummaries.get(block.tool_use_id);
+        const resultSummary=block.is_error?runtimeToolResultSummary(block.content):'';
+        this.pushEvent(state,turn,{
+          kind:'tool.completed',
+          toolCallId:block.tool_use_id,
+          outcome:block.is_error?'failure':'success',
+          ...(summary!=null?{action:summary.action,target:summary.target}:{}),
+          ...(resultSummary.length>0?{resultSummary}:{}),
+          resultRef:denied?'permission-denied':block.is_error?'tool-error':'tool-success',
+          ...this.baseEvent(state,turn,`tool-result:${block.tool_use_id}`),
+        });
       }
       return;
     }
@@ -761,6 +795,8 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       eventKey: `cevt_${createHash('sha256').update(`${turn.turnId}|${salt}|${state.ref.id}`).digest('hex').slice(0, 20)}`,
       sessionId: state.ref.id,
       turnId: turn.turnId,
+      memberId: state.memberId,
+      ...(turn.stage!=null&&turn.stage.length>0?{stage:turn.stage}:{}),
       receivedAt: Date.now(),
     };
   }

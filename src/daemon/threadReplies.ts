@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import type {MentionNode,TopLevelRouteOutcome} from '../contracts/routing.ts';
+import type {FrozenCallBudgetPolicy} from '../contracts/callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
 import {readThreadMembers,persistThreadMember} from './threadMembers.ts';
 import {snapshotConversationWriteAccess,effectiveTaskWriteAccess} from './projectWriteAccess.ts';
@@ -113,7 +114,7 @@ export function enqueueThreadReply(
   inputSeq:number,
   selection:ThreadReplySelection,
   authorId:string,
-  deliberationBudget?:{maxTurns:number},
+  callBudgetSnapshot?:{maxTurns:number;callBudget:FrozenCallBudgetPolicy},
 ){
   const th=db.prepare(`SELECT th.project_id,th.conversation_id,th.room_id,th.root_task_id,t.stop_generation,t.status,t.current_delivery_id
     FROM conversation_threads th JOIN tasks t ON t.id=th.root_task_id WHERE th.id=?`).get(threadId) as {project_id:string;conversation_id:string;room_id:string;root_task_id:string;stop_generation:number;status:string;current_delivery_id:string|null};
@@ -125,8 +126,8 @@ export function enqueueThreadReply(
   const source=db.prepare(`SELECT a.id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? ORDER BY a.rowid DESC LIMIT 1`).get(th.root_task_id) as {id:string}|undefined;
   const writeScope=roster.find(m=>m.memberId===selection.memberId)!.writeScope;
   const now=Date.now(),dispatchKey=`task:${th.root_task_id}:thread-reply:${messageId}`;
-  const budgetJson=selection.route.kind==='dispatch'&&selection.route.mode==='DELIBERATE'&&deliberationBudget!=null
-    ?JSON.stringify({maxTurns:deliberationBudget.maxTurns})
+  const budgetJson=selection.route.kind==='dispatch'&&callBudgetSnapshot!=null
+    ?JSON.stringify(callBudgetSnapshot)
     :null;
   const membershipVersion=readThreadMembers(db,threadId).version;
   const dispatchIdentity=createHash('sha256').update(JSON.stringify({
@@ -135,7 +136,7 @@ export function enqueueThreadReply(
     route:selection.route,
     roster:roster.map(member=>member.memberId),
     membershipVersion,
-    deliberationBudget:deliberationBudget??null,
+    callBudgetSnapshot:callBudgetSnapshot??null,
   })).digest('hex');
   db.prepare(`INSERT INTO thread_reply_requests(message_id,project_id,conversation_id,thread_id,task_id,member_id,
     source_turn_id,stop_generation,input_thread_seq,dispatch_key,route_json,roster_json,write_scope_json,membership_version,

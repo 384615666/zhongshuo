@@ -5,6 +5,8 @@ import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import { enqueueOutbox } from '../persistence/outbox.ts';
 import { appendDomainEvent } from '../persistence/events.ts';
 import { coordinationCallAvailable, validateCoordinationPlan, coordinationTopologicalSteps,type CoordinationPlan, type CoordinationDetails } from '../contracts/coordination.ts';
+import { parsePersistedCallBudgetSnapshot, runCallBudgetPolicy } from './callBudget.ts';
+import { DEFAULT_CALL_BUDGET_LIMITS } from '../contracts/callBudget.ts';
 import { snapshotConversationWriteAccess } from './projectWriteAccess.ts';
 import { resolveMemberRuntime } from './memberRuntime.ts';
 import { memberExecutableStatus } from './memberManagement.ts';
@@ -66,10 +68,17 @@ export function coordinationRoster(db: ZhongshuoDatabase, taskId: string,runId?:
 
 /** Deterministic explicit-recipient group. No planning model is called; every
  * selected member gets an independent formal child task and visible reply. */
-export function seedExplicitRecipientCoordination(db:ZhongshuoDatabase,taskId:string,messageId:string,body:string,selectedMemberIds:readonly string[]){
+export function seedExplicitRecipientCoordination(
+  db:ZhongshuoDatabase,
+  taskId:string,
+  messageId:string,
+  body:string,
+  selectedMemberIds:readonly string[],
+  requestBudget?:{maxTurns:number;callBudget:{enforcement:'enabled'|'disabled'}},
+){
   const parent=db.prepare(`SELECT id,project_id,conversation_id,room_id,conversation_thread_id,root_message_id,
-    owner_member_id,title,stop_generation,source_connection_id,route_json,review_policy FROM tasks WHERE id=?`).get(taskId) as
-    (Parent&{route_json:string|null;review_policy:'auto_deliver'|'user_review'})|undefined;
+    owner_member_id,title,stop_generation,source_connection_id,route_json,review_policy,deliberation_budget_json FROM tasks WHERE id=?`).get(taskId) as
+    (Parent&{route_json:string|null;review_policy:'auto_deliver'|'user_review';deliberation_budget_json:string|null})|undefined;
   if(!parent)throw Error('明确收件人任务不存在');
   const recipients=[...new Set(selectedMemberIds)];
   if(recipients.length<2)throw Error('明确多人发送至少需要两位成员');
@@ -83,8 +92,12 @@ export function seedExplicitRecipientCoordination(db:ZhongshuoDatabase,taskId:st
     return{memberId:member.id,displayName:member.display_name,description:member.description,writeScope,unavailableReason};
   });
   const runId=`run_${randomUUID()}`,now=Date.now(),objective=body.slice(0,8000);
+  const callBudget=requestBudget?.callBudget
+    ??parsePersistedCallBudgetSnapshot(parent.deliberation_budget_json).callBudget;
+  const maxTurns=requestBudget?.maxTurns
+    ??(callBudget?.enforcement==='enabled'&&'limit' in callBudget?callBudget.limit:DEFAULT_CALL_BUDGET_LIMITS.AUTO);
   db.prepare(`INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,task_revision,status,stage,budget_json)
-    VALUES(?,?,?,?,'AUTO',0,'WAITING','明确收件人执行',?)`).run(runId,taskId,parent.conversation_id,parent.conversation_thread_id,JSON.stringify({maxTurns:24}));
+    VALUES(?,?,?,?,'AUTO',0,'WAITING','明确收件人执行',?)`).run(runId,taskId,parent.conversation_id,parent.conversation_thread_id,JSON.stringify({maxTurns,...(callBudget!=null?{callBudget}:{})}));
   db.prepare(`INSERT INTO coordination_runs(run_id,task_id,stop_generation,state,created_at)
     VALUES(?,?,?,'running',?)`).run(runId,taskId,parent.stop_generation,now);
   db.prepare('INSERT INTO coordination_run_rosters(run_id,roster_json,created_at) VALUES(?,?,?)').run(runId,JSON.stringify(roster),now);
@@ -169,6 +182,11 @@ export function coordinationCallLimit(db: ZhongshuoDatabase,runId:string) {
   return Math.min(24,budget.maxTurns??24);
 }
 
+export function coordinationCallEnforcement(db: ZhongshuoDatabase,runId:string): 'enabled'|'disabled'|'legacy' {
+  const row=db.prepare('SELECT budget_json FROM workflow_runs WHERE id=?').get(runId) as {budget_json:string|null}|undefined;
+  return runCallBudgetPolicy(row?.budget_json??null)?.enforcement??'legacy';
+}
+
 export function validatePlanForRun(db:ZhongshuoDatabase,taskId:string,runId:string,value:unknown) {
   const roster=coordinationRoster(db,taskId,runId);
   const plan=validateCoordinationPlan(value,roster.filter(m=>m.writeScope).map(m=>m.memberId));
@@ -176,7 +194,7 @@ export function validatePlanForRun(db:ZhongshuoDatabase,taskId:string,runId:stri
     const scope=JSON.parse(roster.find(m=>m.memberId===step.memberId)!.writeScope!) as {executionMode?:string;authorized?:boolean|number;memberPermission?:string};
     if(scope.executionMode!=='full'&&!(scope.authorized&&['acceptEdits','dontAsk'].includes(scope.memberPermission??'')))throw Error('计划把实施工作分给了只读成员；请选择本轮已获写权限的成员或改为分析/评审');
   }
-  if(coordinationCallsUsed(db,runId)+plan.steps.length+2>coordinationCallLimit(db,runId))throw Error('分工步骤超出本轮总预算与整合预留；请缩减步骤');
+  if(coordinationCallEnforcement(db,runId)!=='disabled'&&coordinationCallsUsed(db,runId)+plan.steps.length+2>coordinationCallLimit(db,runId))throw Error('分工步骤超出本轮总预算与整合预留；请缩减步骤');
   return plan;
 }
 
@@ -195,7 +213,9 @@ export function assertCoordinationDispatch(db: ZhongshuoDatabase, taskId: string
   const ownReservation=reservedTurnId&&db.prepare('SELECT 1 FROM agent_turns WHERE id=?').get(reservedTurnId)?1:0;
   const used=coordinationCallsUsed(db,context.run.run_id)-ownReservation;
   const reserve=context.kind==='integration'?0:2;
-  if(!coordinationCallAvailable(used,context.kind==='integration'?'integration':'work') || used>=coordinationCallLimit(db,context.run.run_id)-reserve) throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
+  if(coordinationCallEnforcement(db,context.run.run_id)!=='disabled'
+    &&(!coordinationCallAvailable(used,context.kind==='integration'?'integration':'work') || used>=coordinationCallLimit(db,context.run.run_id)-reserve))
+    throw Error('本轮协作总调用预算已用尽；保留成果，未继续派发');
 }
 
 /** Settle only a live integration run rejected before its execution turn was accepted. */
@@ -386,7 +406,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
         return;
       }
       const used=coordinationCallsUsed(db,run.run_id),maxCalls=coordinationCallLimit(db,run.run_id);
-      if(used>=maxCalls){
+      if(coordinationCallEnforcement(db,run.run_id)!=='disabled'&&used>=maxCalls){
         const reason='本轮协作总调用预算已用尽；无法整合同伴交回消息';
         const blockedRun=db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=? AND state='running'").run(reason,run.run_id);
         if(blockedRun.changes!==1)return;
@@ -466,7 +486,7 @@ export function readCoordination(db:ZhongshuoDatabase,taskId:string,selectedRunI
     if(after.length>100)finalFiles.clear();else for(const file of after)finalFiles.set(file.path,file);
   }
   return {runId:run.run_id,state:run.state,summary:plan?.summary??(run.state==='completed'?'本次由协调成员直接回答，未分工':'协调成员正在判断是否需要分工'),errorMessage:run.error_message,
-    usedCalls:coordinationCallsUsed(db,run.run_id),maxCalls:coordinationCallLimit(db,run.run_id),steps:rows.map(r=>{
+    usedCalls:coordinationCallsUsed(db,run.run_id),maxCalls:coordinationCallLimit(db,run.run_id),enforcement:coordinationCallEnforcement(db,run.run_id),steps:rows.map(r=>{
       const snapshot=scope.find(m=>m.memberId===r.owner_member_id)?.writeScope;
       const runtime=snapshot?(JSON.parse(snapshot) as {runtime?:{kind?:string;model?:string}}).runtime:null;
       const handoff=JSON.parse(r.handoff_json??'{}') as {upstream?:Array<{id:string;revision:number;manifest_hash:string}>};

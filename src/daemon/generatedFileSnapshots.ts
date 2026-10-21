@@ -1,12 +1,14 @@
 /**
  * R91 生成文件快照（后端 helper，独立于 dispatch worker 事务）。
  *
- * 目标：把**正式已验证完成结果**（TaskComplete.files 明确列出的路径，或本 turn 已验证的
- * 新增产物）落成不可变 artifacts + message_attachments，供现有附件预览/导出通道打开/另存。
+ * 目标：把**正式已验证完成结果**（TaskComplete.files 明确列出的路径，以及本 turn 已验证的
+ * added/modified 产物）合并后落成不可变 artifacts + message_attachments，供现有附件预览/
+ * 导出通道打开/另存。
  *
  * 硬边界（与既有附件/项目文件通道同源规则，R91 审核①~⑥修订）：
- * - 只接受**正式结果显式路径**或本 turn changeset 的 added 清单；不扫描全盘、不从正文/正则
- *   抓路径、不把任意路径变成可执行链接。
+ * - 候选只来自**正式结果显式路径**与本 turn changeset 的 added/modified 清单，按实际路径
+ *   取并集去重；登记前稳定优先声明的人读文档，再其他声明文件，最后纯 diff。不扫描全盘、
+ *   不从正文/正则抓路径、不把任意路径变成可执行链接。
  * - **绑定消息先于任何文件读取核对**：messageId 必须属于本轮命名空间 `msg_<turnId>_…`，
  *   且行内 project_id/conversation_id/task_id/author_type='agent'/author_id=本 turn 成员全部
  *   一致；不一致=失败，绝不把文件挂到别的回复/别的项目上。artifact 复用同样核对行内归属。
@@ -26,15 +28,16 @@
  *   行与同一 message_attachment；同路径新内容=新 ID/新 revision，旧消息仍指向旧版本。
  * - 复制到内容寻址 blobstore（文本类 {hash}.txt、其余 {hash}.bin），与现有 preview/export
  *   读取链一致（readVerifiedCopy/readVerifiedStoreRaw）。
- * - 失败只产生可读 failures：显式声明路径失败才汇总给用户（worker 只发一条 system 提示）；
- *   无声明文件且 diff 无候选=no-candidates，绝不产生用户可见失败提示；非声明 diff 候选
- *   失败只进 skipped/audit。
+ * - 失败只产生可读 failures：同路径只要被显式声明，失败就汇总给用户（worker 只发一条
+ *   system 提示）；无声明文件且 diff 无候选=no-candidates，绝不产生用户可见失败提示；
+ *   纯 diff 候选失败只进 skipped/audit。每个失败保留 declared/evidence 事实便于诊断。
  */
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import type { BigIntStats } from 'node:fs';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
+import { humanFacingFile } from '../contracts/messageFileChanges.ts';
 import { atomicWriteFile } from '../contracts/atomicFile.ts';
 import { kindForFilename, validateImageBuffer } from './attachments.ts';
 import { OFFICE_MAX_BYTES, PDF_MAX_BYTES, CSV_MAX_BYTES } from './parseContracts.ts';
@@ -100,16 +103,27 @@ export interface SnapshotFailure {
   message: string;
   /** 是否来自正式结果显式声明（false=本 turn 变更证据的候选，失败只在审计里，不打扰用户）。 */
   declared: boolean;
+  /** 该路径命中的声明/差异事实；同路径可同时为 declared+added/modified。 */
+  evidence: SnapshotEvidence[];
 }
+
+/** 一个真实产出候选的证据来源；与展示层的 source 不同，允许同一路径保留多个事实。 */
+export type SnapshotEvidence = 'declared' | 'added' | 'modified';
 
 export interface SnapshotRegistered {
   artifactId: string;
+  /** Actual project-relative or external absolute identity, not a guessed basename. */
+  sourcePath: string;
   filename: string;
   kind: KindSpec['kind'];
   hash: string;
   revision: number;
   sizeBytes: number;
   source: 'declared' | 'diff';
+  /** 是否同时被正式结果显式声明（source 保留主来源，declared 不因 diff 合并而丢失）。 */
+  declared: boolean;
+  /** 该路径命中的全部候选事实，按 declared → added → modified 稳定排序。 */
+  evidence: SnapshotEvidence[];
 }
 
 export interface SnapshotOutcome {
@@ -117,7 +131,7 @@ export interface SnapshotOutcome {
   accessMode: 'full' | 'project-write' | 'readonly' | 'unavailable';
   registered: SnapshotRegistered[];
   failures: SnapshotFailure[];
-  /** 本 turn 变更清单里因不支持/超限等被跳过的非声明候选（审计用）。 */
+  /** 因不支持/超限等未登记的候选审计项；文件数上限项即使已声明也保留于此。 */
   skipped: string[];
 }
 
@@ -131,12 +145,16 @@ export interface GeneratedFileSnapshotInput {
   turnId: string;
   memberId: string;
   conversationId: string;
+  /** Stable lineage scope (DM conversation; task id for room-local files). */
+  versionScopeKey?: string;
   /** 绑定的最终回复消息；为空则一律不登记（不能把文件挂到别的回复上）。 */
   messageId: string | null;
   /** TaskComplete.files 的显式路径（已通过 TaskComplete schema/resultKey 校验）。 */
   declaredFiles: readonly string[];
   /** 本 turn 已验证的 changeset 差异（相对项目根，`\` 已归一为 `/`）；无写入证据时 null。 */
   turnDiff: { added: readonly string[]; modified: readonly string[] } | null;
+  /** Immutable after-version hashes when a write changeset has already been captured. */
+  capturedHashes?: Readonly<Record<string, string>>;
   /** 本次有效写权限事实（null=任务/配置不可核实——不登记，给可读状态）。 */
   access: { fullAccess: boolean; modificationAuthorized: boolean; root: string } | null;
 }
@@ -167,27 +185,80 @@ function diffKey(path: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-function failure(path: string, code: SnapshotFailureCode, message: string, declared: boolean): SnapshotFailure {
-  return { path, code, message, declared };
+function failure(
+  path: string,
+  code: SnapshotFailureCode,
+  message: string,
+  declared: boolean,
+  evidence: readonly SnapshotEvidence[] = declared ? ['declared'] : [],
+): SnapshotFailure {
+  return { path, code, message, declared, evidence: [...evidence] };
 }
 
 interface Candidate {
   raw: string;
   declared: boolean;
+  evidence: SnapshotEvidence[];
 }
 
-function dedupeCandidates(raw: readonly string[], declared: boolean): Candidate[] {
-  const seen = new Set<string>();
-  const out: Candidate[] = [];
-  for (const value of raw) {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) continue;
-    const key = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ raw: trimmed, declared });
+function hasCandidateInput(
+  declaredFiles: readonly string[],
+  turnDiff: GeneratedFileSnapshotInput['turnDiff'],
+): boolean {
+  return declaredFiles.some((path) => path.trim().length > 0)
+    || (turnDiff?.added.some((path) => path.trim().length > 0) ?? false)
+    || (turnDiff?.modified.some((path) => path.trim().length > 0) ?? false);
+}
+
+/** 路径比较键：先按项目根解析相对/绝对写法，再统一分隔符与 Windows 大小写。 */
+function candidateKey(path: string, baseRoot: string): string {
+  let resolved: string;
+  try {
+    resolved = resolve(baseRoot.trim().length > 0 ? baseRoot : process.cwd(), path);
+  } catch {
+    resolved = normalizeRelative(path);
   }
-  return out;
+  const normalized = resolved.replaceAll('\\', '/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function candidatePriority(candidate: Candidate): 0 | 1 | 2 | 3 {
+  if (humanFacingFile(candidate.raw, candidate.declared)) return candidate.declared ? 0 : 1;
+  return candidate.declared ? 2 : 3;
+}
+
+/**
+ * 声明候选与 added/modified 候选取并集：先声明、再 added、最后 modified。
+ * 同一路径只保留一个文件读取/登记动作，但保留全部 evidence 与 declared 事实。
+ * 登记前按稳定优先级排序：声明人读文档 → 其他声明文件 → added/modified；
+ * 同档保持候选首次出现顺序，避免源码新增占满名额后挤掉声明交付文档。
+ */
+function collectCandidates(
+  declaredFiles: readonly string[],
+  turnDiff: GeneratedFileSnapshotInput['turnDiff'],
+  baseRoot: string,
+): Candidate[] {
+  const byPath = new Map<string, Candidate>();
+  const add = (raw: string, evidence: SnapshotEvidence): void => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) return;
+    const key = candidateKey(trimmed, baseRoot);
+    let candidate = byPath.get(key);
+    if (candidate == null) {
+      candidate = { raw: trimmed, declared: false, evidence: [] };
+      byPath.set(key, candidate);
+    }
+    if (evidence === 'declared') candidate.declared = true;
+    if (!candidate.evidence.includes(evidence)) candidate.evidence.push(evidence);
+  };
+
+  for (const path of declaredFiles) add(path, 'declared');
+  for (const path of turnDiff?.added ?? []) add(path, 'added');
+  for (const path of turnDiff?.modified ?? []) add(path, 'modified');
+  return [...byPath.values()]
+    .map((candidate, index) => ({ candidate, index, priority: candidatePriority(candidate) }))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index)
+    .map(({ candidate }) => candidate);
 }
 
 function kindSpecOf(filename: string): KindSpec | null {
@@ -325,32 +396,28 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
           : 'no-candidates';
     return { status, accessMode, registered, failures, skipped };
   };
-
-  const declaredCandidates = dedupeCandidates(input.declaredFiles, true);
-  const hasDeclared = declaredCandidates.length > 0;
-  // 非声明候选：显式声明优先；未声明时才看本 turn 已验证的新增产物（不扫描）。
-  const diffCandidates = hasDeclared || input.turnDiff == null ? [] : dedupeCandidates(input.turnDiff.added, false);
+  const hasDeclaredInput = input.declaredFiles.some((path) => path.trim().length > 0);
 
   /** 非声明候选的失败只进审计（skipped），不打扰用户。 */
   const report = (candidate: Candidate, code: SnapshotFailureCode, message: string): void => {
-    if (candidate.declared) failures.push(failure(candidate.raw, code, message, true));
-    else skipped.push(`${candidate.raw}：${message}`);
+    if (candidate.declared) failures.push(failure(candidate.raw, code, message, true, candidate.evidence));
+    else skipped.push(`${candidate.raw}（${candidate.evidence.join('+')}）：${message}`);
   };
 
-  // 0) 没有任何候选（无声明文件且 diff 无可登记项）——绝不产生用户可见失败提示。
-  if (declaredCandidates.length === 0 && diffCandidates.length === 0) return finish();
+  // 0) 没有非空候选（无声明文件且 diff 无可登记项）——绝不产生用户可见失败提示。
+  if (!hasCandidateInput(input.declaredFiles, input.turnDiff)) return finish();
 
   // 1) 审核①：绑定消息在任何文件读取前核对（跨项目/跨轮/非 agent 一律拒绝）。
   const rawMessageId = input.messageId;
   if (rawMessageId == null) {
     const reason = '未找到本轮最终可见回复消息，文件不挂到其他回复上';
-    if (hasDeclared) failures.push(failure('（本轮最终回复消息）', 'NO_BOUND_MESSAGE', reason, true));
+    if (hasDeclaredInput) failures.push(failure('（本轮最终回复消息）', 'NO_BOUND_MESSAGE', reason, true));
     else skipped.push(`（本轮最终回复消息）：${reason}`);
     return finish();
   }
   const binding = validateBoundMessage(input, rawMessageId);
   if (!binding.ok) {
-    if (hasDeclared) failures.push(failure('（本轮最终回复消息）', 'MESSAGE_BINDING_MISMATCH', binding.reason, true));
+    if (hasDeclaredInput) failures.push(failure('（本轮最终回复消息）', 'MESSAGE_BINDING_MISMATCH', binding.reason, true));
     else skipped.push(`（本轮最终回复消息）：${binding.reason}`);
     return finish();
   }
@@ -359,13 +426,13 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   // 2) 审核⑤：权限只信 worker 传入的执行时事实；不重新解释。
   if (input.access == null) {
     const reason = '本轮执行权限不可核实（任务/成员配置已变化）——不登记任何产出附件';
-    if (hasDeclared) failures.push(failure('（执行权限）', 'PERMISSION_UNAVAILABLE', reason, true));
+    if (hasDeclaredInput) failures.push(failure('（执行权限）', 'PERMISSION_UNAVAILABLE', reason, true));
     else skipped.push(`（执行权限）：${reason}`);
     return finish();
   }
   if (accessMode === 'readonly') {
     const reason = '本轮执行权限为只读/受限——不会把只读文件当成产出附件';
-    if (hasDeclared) failures.push(failure('（执行权限）', 'PERMISSION_READONLY', reason, true));
+    if (hasDeclaredInput) failures.push(failure('（执行权限）', 'PERMISSION_READONLY', reason, true));
     else skipped.push(`（执行权限）：${reason}`);
     return finish();
   }
@@ -373,17 +440,18 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   const scopeRoot = input.access.root.trim().length > 0 ? input.access.root : input.projectRoot;
   if (scopeRoot.trim().length === 0) {
     const reason = '项目根路径不可用——无法核对产出范围，不登记附件';
-    if (hasDeclared) failures.push(failure('（项目根）', 'PROJECT_ROOT_UNAVAILABLE', reason, true));
+    if (hasDeclaredInput) failures.push(failure('（项目根）', 'PROJECT_ROOT_UNAVAILABLE', reason, true));
     else skipped.push(`（项目根）：${reason}`);
     return finish();
   }
 
-  const candidates = hasDeclared ? declaredCandidates : diffCandidates;
   // 项目根按实际身份规范化（realpath），所有候选都用它做字符串解析基准：
   // 项目内相对路径 → 规范根内；声明绝对路径（fullAccess 项目外）→ 原样。
   const baseRoot = (() => {
     try { return realpathSync.native(resolve(scopeRoot)); } catch { return resolve(scopeRoot); }
   })();
+  const candidates = collectCandidates(input.declaredFiles, input.turnDiff, baseRoot);
+  if (candidates.length === 0) return finish();
   const diffPaths = new Set<string>();
   if (input.turnDiff != null) {
     for (const p of [...input.turnDiff.added, ...input.turnDiff.modified]) diffPaths.add(diffKey(p));
@@ -393,7 +461,10 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   let totalBytes = 0;
   for (const candidate of candidates) {
     if (pending.length >= SNAPSHOT_MAX_FILES) {
-      report(candidate, 'LIMIT_EXCEEDED', `单轮最多登记 ${SNAPSHOT_MAX_FILES} 个文件；其余未登记`);
+      const reason = `单轮最多登记 ${SNAPSHOT_MAX_FILES} 个文件；其余未登记`;
+      // 文件数上限必须进审计 skipped，无论是否声明；声明项同时保留用户可见失败。
+      skipped.push(`${candidate.raw}（${candidate.evidence.join('+')}）：LIMIT_EXCEEDED：${reason}`);
+      if (candidate.declared) failures.push(failure(candidate.raw, 'LIMIT_EXCEEDED', reason, true, candidate.evidence));
       continue;
     }
     if (candidate.raw.includes('\u0000')) {
@@ -477,6 +548,11 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
       }
     }
     const hash = sha256(bytes);
+    const expected = Object.entries(input.capturedHashes ?? {}).find(([path]) => candidateKey(path, baseRoot) === candidateKey(realTarget, baseRoot))?.[1];
+    if (expected != null && expected !== hash) {
+      report(candidate, 'CHANGED_DURING_READ', '文件已不同于本轮保存的版本，未将后续改动挂到这条回复');
+      continue;
+    }
     const blobDir = join(input.appDataDir, 'blobstore');
     const blobPath = join(blobDir, `${hash}.${kindSpec.storage}`);
     // 内容寻址副本：存在则核对实际字节（副本被改写=不可覆盖冲突，如实失败）；不存在才写。
@@ -505,11 +581,16 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
     const identityPath = insideRoot
       ? normalizeRelative(relative(baseRoot, realTarget))
       : (process.platform === 'win32' ? realTarget.toLowerCase() : realTarget);
-    const pathKey = sha256(`${input.projectId}\u0000${input.taskId}\u0000${identityPath}`).slice(0, 16);
-    const artifactId = `art_gf_${pathKey}_${hash.slice(0, 12)}`;
+    const pathKey = sha256(`${input.projectId}\u0000${input.versionScopeKey ?? input.taskId}\u0000${identityPath}`).slice(0, 16);
+    const artifactId = `art_gf_${pathKey}_${input.taskId.slice(-8)}_${hash.slice(0, 12)}`;
+    const sameContent = input.db.prepare(
+      `SELECT id, revision, project_id, conversation_id, task_id, run_id, author_id
+       FROM artifacts WHERE id GLOB ? AND hash=? ORDER BY revision DESC, rowid ASC LIMIT 1`,
+    ).get(`art_gf_${pathKey}_*`, hash) as
+      { id: string; revision: number; project_id: string; conversation_id: string | null; task_id: string | null; run_id: string | null; author_id: string } | undefined;
     const existing = input.db.prepare(
       'SELECT revision, hash, project_id, conversation_id, task_id, run_id, author_id FROM artifacts WHERE id = ?',
-    ).get(artifactId) as {
+    ).get(sameContent?.id ?? artifactId) as {
       revision: number; hash: string; project_id: string; conversation_id: string | null;
       task_id: string | null; run_id: string | null; author_id: string;
     } | undefined;
@@ -520,13 +601,18 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
         report(candidate, 'BLOB_CONFLICT', '同路径同 hash 身份出现不同记录——拒绝以旧记录冒充');
         continue;
       }
-      if (existing.project_id !== input.projectId || existing.task_id !== input.taskId
-        || existing.conversation_id !== input.conversationId || existing.author_id !== input.memberId) {
+      const crossTaskReuse = input.versionScopeKey != null
+        && existing.project_id === input.projectId
+        && existing.conversation_id === input.conversationId
+        && existing.author_id === input.memberId;
+      if (existing.project_id !== input.projectId || existing.author_id !== input.memberId
+        || existing.conversation_id !== input.conversationId
+        || (!crossTaskReuse && existing.task_id !== input.taskId)) {
         report(candidate, 'IDENTITY_MISMATCH', '既有附件记录的归属与本轮任务/会话/成员不一致——拒绝复用（不挂跨范围附件）');
         continue;
       }
       // run 归属校验：同 task 的上一轮可复用同内容 artifact（内容寻址幂等）；跨 task/未知 run 拒绝。
-      if (existing.run_id != null && existing.run_id !== input.runId) {
+      if (!crossTaskReuse && existing.run_id != null && existing.run_id !== input.runId) {
         const owner = input.db.prepare('SELECT task_id FROM workflow_runs WHERE id = ?').get(existing.run_id) as { task_id: string } | undefined;
         if (owner?.task_id !== input.taskId) {
           report(candidate, 'IDENTITY_MISMATCH', '既有附件记录的 run 归属与本轮任务不一致——拒绝复用（不挂跨任务附件）');
@@ -537,17 +623,23 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
     } else {
       const maxRow = input.db.prepare('SELECT COALESCE(MAX(revision), 0) AS n FROM artifacts WHERE id GLOB ?')
         .get(`art_gf_${pathKey}_*`) as { n: number };
-      revision = maxRow.n + 1;
+      const previous = input.db.prepare(`SELECT COALESCE(MAX(a.revision),0) n FROM message_file_changes f
+        JOIN artifacts a ON a.id=f.artifact_id WHERE f.project_id=? AND f.conversation_id=? AND f.path ${process.platform === 'win32' ? 'COLLATE NOCASE' : ''}=?`)
+        .get(input.projectId, input.conversationId, identityPath) as {n: number};
+      revision = Math.max(maxRow.n, previous.n) + 1;
     }
     totalBytes += bytes.length;
     pending.push({
-      artifactId,
+      artifactId: sameContent?.id ?? artifactId,
+      sourcePath: identityPath,
       filename: basename(realTarget),
       kind: kindSpec.kind,
       hash,
       revision,
       sizeBytes: bytes.length,
       source: candidate.declared ? 'declared' : 'diff',
+      declared: candidate.declared,
+      evidence: [...candidate.evidence],
       blobPath,
     });
   }
@@ -581,8 +673,9 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
         throw new Error(`attachment identity mismatch: ${attachmentId}`);
       }
       registered.push({
-        artifactId: item.artifactId, filename: item.filename, kind: item.kind, hash: item.hash,
+        artifactId: item.artifactId, sourcePath: item.sourcePath, filename: item.filename, kind: item.kind, hash: item.hash,
         revision: item.revision, sizeBytes: item.sizeBytes, source: item.source,
+        declared: item.declared, evidence: [...item.evidence],
       });
     }
   });
@@ -591,7 +684,13 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   } catch {
     // 落库失败：不返回任何“已登记”假象；失败作为可读状态上报（已复制的 blob 为内容寻址孤儿，不构成业务附件）。
     registered.length = 0;
-    failures.push(failure('（附件登记事务）', 'INTERNAL', '附件登记事务失败，未产生附件卡（原回复与交付不受影响）', true));
+    failures.push(failure(
+      '（附件登记事务）',
+      'INTERNAL',
+      '附件登记事务失败，未产生附件卡（原回复与交付不受影响）',
+      pending.some((item) => item.declared),
+      [...new Set(pending.flatMap((item) => item.evidence))],
+    ));
   }
   return finish();
 }

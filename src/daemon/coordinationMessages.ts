@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import type {ZhongshuoDatabase} from '../persistence/db.ts';
 import type {TurnBundleEnvelope} from '../contracts/prompts.ts';
 import {validateCoordinationPlan,type CoordinationPlan,type MemberHandoff} from '../contracts/coordination.ts';
-import {acceptCoordinationPlan,childCoordination,coordinationRoster,coordinationCallLimit,coordinationCallsUsed} from './coordination.ts';
+import {acceptCoordinationPlan,childCoordination,coordinationRoster,coordinationCallLimit,coordinationCallsUsed,coordinationCallEnforcement} from './coordination.ts';
 import {effectiveTaskWriteAccess} from './projectWriteAccess.ts';
 import {appendDomainEvent} from '../persistence/events.ts';
 
@@ -100,7 +100,9 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   const plan:CoordinationPlan={summary:current?.summary??'成员消息交接',steps:[...(current?.steps??[]),...additions]};
   if(plan.steps.length)validateCoordinationPlan(plan,context.roster.filter(m=>m.writeScope).map(m=>m.memberId));
   const unstarted=(db.prepare(`SELECT count(*) n FROM coordination_steps s WHERE s.run_id=? AND NOT EXISTS(SELECT 1 FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=s.child_task_id)`).get(context.rootRunId) as {n:number}).n;
-  if(coordinationCallsUsed(db,context.rootRunId)+unstarted+additions.length+2>coordinationCallLimit(db,context.rootRunId))throw Error('消息交接超出本轮剩余额度及汇总预留');
+  if(coordinationCallEnforcement(db,context.rootRunId)!=='disabled'
+    &&coordinationCallsUsed(db,context.rootRunId)+unstarted+additions.length+2>coordinationCallLimit(db,context.rootRunId))
+    throw Error('消息交接超出本轮剩余额度及汇总预留');
   return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred,additions,plan};
 }
 

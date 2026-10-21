@@ -12,8 +12,8 @@ describe('runtime progress projection, no human text rewriting',()=>{
   it('names the actual wait target and elapsed time instead of transport connected',()=>{
     const now=1_000_000;
     expect(runtimeProgressWaitLabel({status:'PENDING',phase:'connecting',waitStartedAt:now-5_000},now)).toBe('等待执行席位 · 已等待 5 秒');
-    expect(runtimeProgressWaitLabel({status:'RUNNING',phase:'connecting',waitStartedAt:now-65_000},now)).toBe('正在连接模型 · 已等待 1 分钟');
-    expect(runtimeProgressWaitLabel({status:'RUNNING',phase:'connected',waitStartedAt:now-7_200_000},now)).toBe('等待模型回应 · 已等待 2 小时 0 分钟');
+    expect(runtimeProgressWaitLabel({status:'RUNNING',phase:'connecting',waitStartedAt:now-65_000},now)).toBe('正在连接模型 · 已等待 1 分钟 5 秒');
+    expect(runtimeProgressWaitLabel({status:'RUNNING',phase:'connected',waitStartedAt:now-7_200_000},now)).toBe('等待模型回应 · 已等待 2 小时 0 分钟 0 秒');
     expect(runtimeProgressWaitLabel({status:'WAITING_INPUT',phase:'connected',waitStartedAt:now-3_000},now)).toBe('等待你补充信息 · 已等待 3 秒');
     expect(runtimeProgressWaitLabel({status:'WAITING_APPROVAL',phase:'connected',waitStartedAt:now-3_000},now)).toBe('等待你确认操作 · 已等待 3 秒');
     expect(runtimeProgressWaitLabel({status:'STOPPING',phase:'connected',waitStartedAt:now-3_000},now)).toBe('正在停止');

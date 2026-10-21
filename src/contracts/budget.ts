@@ -4,6 +4,7 @@
  * 预算是调用额度，不代表模型可以自行派工；读取权限不附带任何模型调用额度。
  */
 import { z } from 'zod';
+import type { FrozenCallBudgetPolicy } from './callBudget.ts';
 
 /**
  * 预算授权：task=任务/运行预算（所有入口共用）；connection_chain=发起连接工作链预算
@@ -33,6 +34,12 @@ export interface BudgetState {
   usedTurns: number;
   /** I=inFlightReservedTurns：已预占未结算。 */
   inFlightReservedTurns: number;
+  /**
+   * R98 request-frozen call-count policy. Missing means a legacy run whose
+   * historical finite budget semantics must be preserved. New requests always
+   * carry an explicit policy, including enforcement=disabled ("count only").
+   */
+  callBudget?: FrozenCallBudgetPolicy;
 }
 
 export const budgetStateSchema = z.strictObject({

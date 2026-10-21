@@ -32,6 +32,8 @@ export interface DetailMarkdownPersistInput {
   markdown:string;
   /** New model-authored document basename; omitted for legacy detail fallback. */
   filename?:string;
+  /** Stable lineage scope: DM conversation for cross-task file versions; task id for task-local files. */
+  versionScopeKey?:string;
   now?:number;
 }
 
@@ -73,8 +75,8 @@ export function persistDetailMarkdown(input:DetailMarkdownPersistInput):DetailMa
   }
 
   const hash=sha256(bytes);
-  const messageKey=sha256(input.messageId).slice(0,16);
-  const artifactId=`${DETAIL_ARTIFACT_ID_PREFIX}${messageKey}_${hash.slice(0,16)}`;
+  const lineageKey=sha256(`${input.projectId}\0${input.versionScopeKey??input.taskId}\0${filename}`).slice(0,16);
+  const artifactId=`${DETAIL_ARTIFACT_ID_PREFIX}${lineageKey}_${hash.slice(0,16)}`;
   const attachmentId=`${DETAIL_ATTACHMENT_ID_PREFIX}${sha256(`${input.messageId}\0${artifactId}`).slice(0,24)}`;
   const blobDir=join(input.appDataDir,'blobstore');
   const blobPath=join(blobDir,`${hash}.txt`);
@@ -95,12 +97,15 @@ export function persistDetailMarkdown(input:DetailMarkdownPersistInput):DetailMa
       const artifact=input.db.prepare('SELECT id,project_id,conversation_id,thread_id,task_id,run_id,author_id,kind,revision,hash,blob_path,source_name FROM artifacts WHERE id=?').get(artifactId) as
         {id:string;project_id:string;conversation_id:string|null;thread_id:string|null;task_id:string|null;run_id:string|null;author_id:string;kind:string;revision:number;hash:string;blob_path:string;source_name:string|null}|undefined;
       if(artifact==null){
+        const max=input.db.prepare(`SELECT COALESCE(MAX(revision),0) n FROM artifacts
+          WHERE project_id=? AND conversation_id=? AND source_name=? AND id GLOB ?`)
+          .get(input.projectId,input.conversationId,filename,`${DETAIL_ARTIFACT_ID_PREFIX}${lineageKey}_*`) as {n:number};
         input.db.prepare(
           `INSERT INTO artifacts (id,project_id,conversation_id,thread_id,task_id,run_id,author_id,kind,revision,hash,blob_path,source_name,created_at)
-           VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)`,
-        ).run(artifactId,input.projectId,input.conversationId,input.threadId,input.taskId,input.runId,input.memberId,'text_file',hash,blobPath,filename,now);
-      }else if(artifact.project_id!==input.projectId||artifact.conversation_id!==input.conversationId||artifact.thread_id!==input.threadId
-        ||artifact.task_id!==input.taskId||artifact.run_id!==input.runId||artifact.author_id!==input.memberId
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ).run(artifactId,input.projectId,input.conversationId,input.threadId,input.taskId,input.runId,input.memberId,'text_file',max.n+1,hash,blobPath,filename,now);
+      }else if(artifact.project_id!==input.projectId||artifact.conversation_id!==input.conversationId
+        ||artifact.thread_id!==input.threadId||artifact.author_id!==input.memberId
         ||artifact.kind!=='text_file'||artifact.hash!==hash||artifact.blob_path!==blobPath||artifact.source_name!==filename){
         throw Object.assign(new Error('detail artifact identity mismatch'),{code:'ARTIFACT_IDENTITY_MISMATCH'});
       }

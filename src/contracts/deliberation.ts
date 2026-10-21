@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import { documentSchema } from './document.ts';
+import type { FrozenCallBudgetPolicy } from './callBudget.ts';
 
 // ---------- 名单与缺席（§4.3/E4） ----------
 
@@ -199,6 +200,8 @@ export interface DeliberationBudgetInit {
   rosterSize: number;
   /** 用户设置的总上限（默认值由调用方决定；推导值发送前可见、设置可改——决策 12）。 */
   runMaxTurns: number;
+  /** R98 request-frozen policy; missing preserves legacy finite-cap behavior. */
+  callBudget?: FrozenCallBudgetPolicy | null;
 }
 
 export interface DeliberationBudgetState {
@@ -210,6 +213,7 @@ export interface DeliberationBudgetState {
   inFlightReservedTurns: number;
   /** S/Q：SYNTHESIS/RATIFY 未占用尾部预留（初始化 S=1、Q=N）。 */
   tailReservationByStage: { SYNTHESIS: number; RATIFY: number };
+  callBudget?: FrozenCallBudgetPolicy | null;
 }
 
 /** E12 公式：核心 6N+1+C、含一次修订 7N+2+C（C=预计进入第 3 轮另加 1，否则 0）。 */
@@ -228,6 +232,7 @@ export function initDeliberationBudget(init: DeliberationBudgetInit): Deliberati
     usedTurns: 0,
     inFlightReservedTurns: 0,
     tailReservationByStage: { SYNTHESIS: 1, RATIFY: init.rosterSize },
+    ...(init.callBudget !== undefined ? { callBudget: init.callBudget } : {}),
   };
 }
 
@@ -240,6 +245,9 @@ export interface BudgetAccounting {
   nonTailAvailable: number;
   /** 当前可用配额 = F + 本阶段 ownReserve（SYNTHESIS=S / RATIFY=Q / 其余 0）。 */
   stageAvailableTurns: number;
+  /** Disabled means count-only: availability numbers stay factual, but dispatch is allowed. */
+  enforcement: 'enabled' | 'disabled' | 'legacy';
+  canDispatch: boolean;
 }
 
 export function budgetAccounting(state: DeliberationBudgetState, stage: 'SYNTHESIS' | 'RATIFY' | 'front'): BudgetAccounting {
@@ -249,12 +257,16 @@ export function budgetAccounting(state: DeliberationBudgetState, stage: 'SYNTHES
   const t = s + q;
   const f = Math.max(0, r - t);
   const ownReserve = stage === 'SYNTHESIS' ? s : stage === 'RATIFY' ? q : 0;
+  const stageAvailableTurns = f + ownReserve;
+  const enforcement = state.callBudget?.enforcement ?? 'legacy';
   return {
     remainingTurns: r,
     tailReserved: t,
     tailReservationByStage: { SYNTHESIS: s, RATIFY: q },
     nonTailAvailable: f,
-    stageAvailableTurns: f + ownReserve,
+    stageAvailableTurns,
+    enforcement,
+    canDispatch: enforcement === 'disabled' || stageAvailableTurns > 0,
   };
 }
 

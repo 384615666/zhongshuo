@@ -13,6 +13,8 @@
 import { Icon } from './Icon';
 import { formatBytes } from '../lib/format';
 import type { FormalAttachmentSummary } from '../data/types';
+import type { MessageFileChange } from '../../../contracts/messageFileChanges.ts';
+import { MessageChangedFiles } from './MessageChangedFiles';
 
 /**
  * 附件 kind → 中文标签（导出共享，r55）：回复芯片与根消息（线程锚消息）独立渲染路径
@@ -49,16 +51,29 @@ export function normalizeFormalAttachments(attachments: readonly FormalAttachmen
 /** 正式附件卡行：正文之后、复制/引用/收藏之前的唯一渲染入口。 */
 export function GeneratedFiles({
   attachments,
+  changes,
   onOpen,
 }: {
   attachments: readonly FormalAttachmentSummary[] | undefined;
+  changes?: readonly MessageFileChange[];
   onOpen?: (att: FormalAttachmentSummary) => void;
 }) {
   const files = normalizeFormalAttachments(attachments);
-  if (files.length === 0) return null;
+  if (files.length === 0 && !changes?.length) return null;
+  const linkedIds = new Set((changes ?? []).flatMap(file => file.artifactId ? [file.artifactId] : []));
+  const hostedDuplicate = (file: FormalAttachmentSummary): boolean => {
+    if (file.document !== true && file.detailMarkdown !== true) return false;
+    return (changes ?? []).some((change) => {
+      if (change.artifactId === file.artifactId || change.afterHash == null || change.afterHash !== file.hash || change.displayName !== file.filename) return false;
+      const real = files.find((candidate) => candidate.artifactId === change.artifactId);
+      if (real == null || real.document === true || real.detailMarkdown === true) return false;
+      return file.sourcePath == null || change.path.replaceAll('\\', '/') === file.sourcePath.replaceAll('\\', '/');
+    });
+  };
   return (
     <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-      {files.map((attachment) => {
+      {changes?.length ? <MessageChangedFiles changes={changes} attachments={files} onOpen={onOpen}/> : null}
+      {files.filter(file => !linkedIds.has(file.artifactId) && !hostedDuplicate(file)).map((attachment) => {
         const isDocument = attachment.document === true;
         const kindLabel = isDocument ? '文档' : attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);
         const size = typeof attachment.sizeBytes === 'number' && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0
@@ -76,6 +91,7 @@ export function GeneratedFiles({
           >
             <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={12} />
             <span className="truncate">{attachment.filename}</span>
+            {attachment.revision != null ? <span className="inline-file-kind">v{attachment.revision}</span> : null}
             {size != null ? <span className="inline-file-kind">{size}</span> : null}
             <span className="inline-file-kind">{kindLabel}</span>
           </button>

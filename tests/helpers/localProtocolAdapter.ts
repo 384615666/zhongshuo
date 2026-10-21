@@ -40,6 +40,10 @@ export interface LocalProtocolOptions {
   selfReportedModel?: string;
   /** 不 spawn 真实子进程（护栏/配额单测——请求边界语义保留，无 OS 进程遗留）。 */
   noSpawn?: boolean;
+  /** Test-only successful terminal projection; default emits the strict TaskComplete. */
+  finalText?: (input: TurnRequest) => string;
+  /** Optional visible assistant message before the terminal event. */
+  messageText?: (input: TurnRequest) => string;
   /** Claude 真实时序（第二十轮二）：openSession 返回空 provider ID，真实 ID 由 provider 首个
    * 事件（此处=startTurn 后异步）**原地回填** SessionRef——续接判定只能在终态核对。 */
   providerIdLate?: boolean;
@@ -163,7 +167,13 @@ export class LocalProtocolAdapter implements RuntimeAdapter {
           costQuality: 'reported', model: this.options.selfReportedModel ?? 'lp-server-reported-model',
         }));
         // DIRECT 交付合同：finalText=TaskComplete JSON（与 fake/真实合同一致——结构化终态）。
-        const finalText = JSON.stringify({
+        const visible = this.options.messageText?.(input);
+        if (visible != null) {
+          this.push(session.id, this.event(session.id, input.turnId, {
+            kind: 'message.completed', messageId: `lp-${input.turnId}-final`, text: visible,
+          }));
+        }
+        const finalText = this.options.finalText?.(input) ?? JSON.stringify({
           schemaVersion: TASK_COMPLETE_SCHEMA_VERSION,
           resultKey: input.resultKey ?? `result_${input.turnId}`,
           changeSummary: `lp 完成：${input.text.slice(0, 60)}`,

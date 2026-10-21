@@ -36,6 +36,7 @@ import {
   type ParticipantStatus,
 } from '../contracts/deliberation.ts';
 import { documentSchema, type DocumentArtifact } from '../contracts/document.ts';
+import type { FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
 import {
   aggregateClaimConsensus,
   decideCrossReviewBarrier,
@@ -357,6 +358,8 @@ export interface DeliberationOptions {
   dispatchWaitDeadlineMs?: number;
   /** 总调用上限；缺省按 E12 核心公式推导（6N+1）。 */
   runMaxTurns?: number;
+  /** Request-frozen R98 policy. Missing preserves legacy finite-cap behavior. */
+  callBudget?: FrozenCallBudgetPolicy | null;
   /** Thread-reply request identity. Non-null disables the task-level budget trigger. */
   dispatchIdentity?: string | null;
   blobDir: string;
@@ -392,6 +395,7 @@ export function prepareDeliberation(
     rosterSize: route.frozenMemberIds.length,
     // E12 完整预估：默认讨论可到第 3 轮 → 含 C=1 检查点（6N+1+C）；用户设置可覆盖。
     runMaxTurns: options.runMaxTurns ?? deriveDeliberateMaxTurns(route.frozenMemberIds.length, { expectsCheckpointRound3: true }).withRevision,
+    callBudget: options.callBudget ?? null,
   });
   const tx = db.transaction(() => {
     db.prepare(
@@ -716,8 +720,9 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
   const budget = readBudget(run.budget_json);
   // §6.5 预算兜底：前置配额耗尽且无在途步骤时，转入整合（有产出即出诚实报告；
   // 无任何产出 → BLOCKED，不合成虚构研讨）。讨论轮被截停属预期（AT-05）。
-  const frontAvail = budgetAccounting(budget, 'front').stageAvailableTurns;
-  if (frontAvail < 1 && ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION'].includes(stage) && drafts.length > 0) {
+  const frontAccounting = budgetAccounting(budget, 'front');
+  if (frontAccounting.enforcement !== 'disabled' && !frontAccounting.canDispatch
+    && ['INDEPENDENT', 'CROSS_REVIEW', 'ISSUE_DISCUSSION'].includes(stage) && drafts.length > 0) {
     const noPendingSteps = (db.prepare("SELECT count(*) c FROM outbox WHERE dispatch_key LIKE ? AND status IN ('pending','leased')").get(`task:${taskId}:delib:${run.id}:%`) as { c: number }).c === 0;
     if (noPendingSteps) {
       advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: stage, reason: '前置预算耗尽，按 §6.5 转入整合' });
@@ -877,7 +882,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         .get(synKey) != null;
       if (!hostFailed && (synPending || synTurnOpen)) return { advanced: false };
       const acc = budgetAccounting(budget, 'SYNTHESIS');
-      if (hostFailed || acc.stageAvailableTurns < 1) {
+      if (hostFailed || (acc.enforcement !== 'disabled' && !acc.canDispatch)) {
         // 整合不可得：不合成虚构报告——任务 BLOCKED（如实记录原因）。
         db.prepare("UPDATE workflow_runs SET status = 'FAILED' WHERE id = ?").run(run.id);
         db.prepare("UPDATE tasks SET status = 'BLOCKED' WHERE id = ?").run(taskId);
@@ -885,7 +890,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         appendDomainEvent(db, {
           schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: '', conversationId: task.conversation_id,
           threadId, taskId, runId: run.id, kind: 'run.synthesisUnavailable', createdAt: now,
-          payload: { reason: hostFailed ? 'host_failed' : 'budget_exhausted', stageAvailable: acc.stageAvailableTurns },
+          payload: { reason: hostFailed ? 'host_failed' : 'budget_exhausted', stageAvailable: acc.stageAvailableTurns, enforcement: acc.enforcement },
         });
         return { advanced: true, blocked: hostFailed ? '主持者失败且无整合' : '预算不足以整合' };
       }
@@ -916,7 +921,9 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       closeRatificationBarrier(db, { runId: run.id, synthesisArtifactId: synthesis.artifactId, synthesisRevision: synthesis.revision, missingReason: '席位终结（失败/缺席/预算跳过），未回复' });
       const feedback = collectDeliveryFeedbacks(db, run.id, synthesis.artifactId, synthesis.revision);
       const delivery = decideDeliveryFeedback(feedback, expectedMembers, records);
-      const revisionBudget = budgetAccounting(budget, 'front').stageAvailableTurns >= 1 + expectedMembers.length;
+      const revisionAccounting = budgetAccounting(budget, 'front');
+      const revisionBudget = revisionAccounting.enforcement === 'disabled'
+        || revisionAccounting.stageAvailableTurns >= 1 + expectedMembers.length;
       if (delivery.status === 'needs_revision' && synthesis.revision === 1 && revisionBudget) {
         const nextRound = 1;
         const revisionEntries = [{
@@ -1298,6 +1305,11 @@ export function assembleStepInput(db: ZhongshuoDatabase, input: {
     if (error instanceof FrozenInputMismatchError) return domainErr('VALIDATION_INVALID', error.message);
     throw error;
   }
+  const runBudget = readBudget(run.budget_json);
+  const budgetFacts = budgetAccounting(runBudget, 'front');
+  body += budgetFacts.enforcement === 'disabled'
+    ? `\n\n【预算事实】调用次数限制已关闭（仅真实记账）：已用 ${runBudget.usedTurns}，在途 ${runBudget.inFlightReservedTurns}。不要因次数接近某个数值提前结束；按阶段职责和用户交付收尾。`
+    : `\n\n【预算事实】调用次数限制已启用：本运行上限 ${runBudget.runMaxTurns}，已用 ${runBudget.usedTurns}，在途 ${runBudget.inFlightReservedTurns}。`;
   if (isRepair) {
     body = `${body}\n\n【格式修复】上一次输出未通过合同校验：${input.repairError}。保持本阶段的原始职责、冻结输入与输出 schema，直接重新提交完整 JSON。`;
   }

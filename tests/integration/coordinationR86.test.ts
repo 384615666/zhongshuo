@@ -304,6 +304,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
   });
   it('zero parent budget starts no coordinator and no child',async()=>{
     const f=await fixture(false,{coordinationMaxCalls:0});try{
+      await f.cmd('app.settings.set',{key:'callBudget.enabled',value:'true'});
       const root=await f.send();await f.run(output('不应启动',f.plan));
       expect(f.adapter.startTurnLog).toHaveLength(0);expect(f.db.prepare('SELECT count(*) n FROM workflow_runs').get()).toEqual({n:0});
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(root.taskId)).toEqual({status:'BLOCKED'});
@@ -519,6 +520,7 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
   });
   it('rejects a plan exceeding the aggregate parent budget including integration reserve',async()=>{
     const f=await fixture();try{
+      await f.cmd('app.settings.set',{key:'callBudget.enabled',value:'true'});
       const root=await f.send();const steps=Array.from({length:4},(_,i)=>({...f.plan.steps[0]!,key:`step${i}`}));await f.run(output('过量计划',{...f.plan,steps}));
       expect(f.db.prepare('SELECT count(*) n FROM tasks WHERE parent_task_id=?').get(root.taskId)).toEqual({n:0});
       expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});

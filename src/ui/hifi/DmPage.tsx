@@ -30,6 +30,7 @@ import { autoHidePreviewForConversation, shouldAutoHidePreviewFor } from './data
 import { PreviewPane, PreviewReopenButton } from './preview/PreviewPane';
 import type { ConversationFailedTasksResult, FailedDmTask } from '../../contracts/taskDetails.ts';
 import { DmTaskRecords } from './components/DmTaskRecords';
+import { LiveProgressCard } from './components/LiveProgress';
 
 const EXEC_TEXT: Record<string, string> = {
   idle: '', running: '运行中…', queued: '排队等待（串行）', paused: '队列已暂停（停止后）', interrupted: '有中断待恢复的任务',
@@ -50,6 +51,7 @@ export function DmPage() {
   const activeId = path.startsWith('/dm/') ? path.slice('/dm/'.length) : dms[0]?.id ?? '';
   const active = useMemo(() => dms.find((d) => d.id === activeId), [dms, activeId]);
   const msgs = historyMap[activeId] ?? EMPTY;
+  const dmProgress = st.threadProgress[`dm:${activeId}`]?.items ?? EMPTY;
   const readError = useStore((s) => s.readErrors[activeId]);
   const listRef = useRef<HTMLDivElement | null>(null);
   /** 头部操作忙态（按动作名——同一时刻一个；失败原因走 toast 如实）。 */
@@ -275,12 +277,20 @@ export function DmPage() {
       setBusy(null); // r58 P4：成功/失败/刷新异常统一释放——不锁死操作忙态
     }
   };
-  const doRecover = async (it: { taskId: string; lastRunId: string | null }) => {
+  const doRecover = async (it: { taskId: string; lastRunId: string | null; taskRevision?: number; stopGeneration?: number; formatRepair?: boolean }) => {
     setBusy(`recover:${it.taskId}`);
     try {
-      await command('task.redispatch', { taskId: it.taskId, reason: '私信中断恢复（新界面显式发起）', ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}) });
-      recordWrite('task.redispatch', `私信中断恢复 task ${it.taskId.slice(0, 10)}…（来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`);
-      toast('恢复执行已提交（经 outbox 正式编排——不自动重放）', 'success');
+      await command('task.redispatch', {
+        taskId: it.taskId,
+        ...(it.formatRepair ? { formatRepair: true } : {}),
+        ...(it.formatRepair && it.taskRevision != null && it.stopGeneration != null
+          ? { expectedTaskRevision: it.taskRevision, expectedStopGeneration: it.stopGeneration, expectedRunStatus: 'FAILED' as const }
+          : {}),
+        reason: it.formatRepair ? '私信输出格式修复（仅补结构化终态，不重执行业务）' : '私信中断恢复（新界面显式发起）',
+        ...(it.lastRunId != null ? { sourceRunId: it.lastRunId } : {}),
+      });
+      recordWrite('task.redispatch', `${it.formatRepair ? '私信输出格式修复' : '私信中断恢复'} task ${it.taskId.slice(0, 10)}…（来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`);
+      toast(it.formatRepair ? '格式修复请求已提交（不会重执行业务写入）' : '恢复执行已提交（经 outbox 正式编排——不自动重放）', 'success');
       await reloadAll();
     } catch (e) { toast(`恢复被拒：${(e as Error).message}`, 'error'); }
     finally { setBusy(null); }
@@ -292,10 +302,14 @@ export function DmPage() {
       expectedRunStatus: 'FAILED' as const };
     setBusy(`failed:${it.taskId}`);
     try {
-      await command('task.redispatch', { ...snapshot, reason: '用户在私信中显式继续失败任务' });
+      await command('task.redispatch', {
+        ...snapshot,
+        ...(it.formatRepair ? { formatRepair: true } : {}),
+        reason: it.formatRepair ? '用户显式修复 Direct 输出格式' : '用户在私信中显式继续失败任务',
+      });
       setAcceptedRetry(`${it.taskId}:${it.latestRunId}`);
-      recordWrite('task.redispatch', `私信失败任务显式继续（task ${it.taskId.slice(0, 10)}…）`);
-      toast('继续请求已入队；等待正式执行结果', 'success');
+      recordWrite('task.redispatch', `${it.formatRepair ? '私信格式修复' : '私信失败任务显式继续'}（task ${it.taskId.slice(0, 10)}…）`);
+      toast(it.formatRepair ? '格式修复请求已入队；不会自动重发旧任务' : '继续请求已入队；等待正式执行结果', 'success');
     } catch (e) {
       toast(`继续被拒：${(e as Error).message}——请按当前任务事实重新决定`, 'error');
     } finally {
@@ -568,7 +582,7 @@ export function DmPage() {
                           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
                           <span className="faint small">{it.lastRunStatus === 'FAILED' ? '上次运行失败' : it.lastRunStatus === 'INTERRUPTED' ? '上次运行中断' : `上次状态 ${it.lastRunStatus ?? '未知'}`}</span>
                           {it.recoverable ? (
-                            <button className="btn sm" disabled={busy != null} title={`继续这次请求（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>继续这次请求</button>
+                            <button className="btn sm" disabled={busy != null} title={it.formatRepair ? `修复输出格式（task.redispatch formatRepair——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）` : `继续这次请求（task.redispatch——来源 run ${it.lastRunId?.slice(0, 10) ?? '?'}）`} onClick={() => void doRecover(it)}>{it.formatRepair ? '修复输出格式' : '继续这次请求'}</button>
                           ) : (
                             <Tag tone="warning" icon="octagon" title={it.blockReason ?? '当前不可恢复'}>暂不可继续</Tag>
                           )}
@@ -621,7 +635,7 @@ export function DmPage() {
                         message={{ ...m, saved: savedRefs[m.id] === true }}
                         author={m.authorType === 'human' ? undefined : members.find((x) => x.id === m.authorId)}
                         readingAids
-                        onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话' })}
+                        onOpenAttachment={(att) => openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId: active.id, origin: '私信会话', revisionHint: att.revision, hashHint: att.hash })}
                         onSave={() => void toggleSavedMessage(m, active.projectId).then((r) => {
                           if (r.ok) { toast(r.saved ? '已收藏（独立保存，不改动原内容）' : '已取消收藏（原消息不受影响）', 'success'); return; }
                           if (r.busy === true) return;
@@ -635,6 +649,15 @@ export function DmPage() {
                         }}
                       />
                     </div>
+                  ))}
+                  {dmProgress.map((progress) => (
+                    <LiveProgressCard
+                      key={progress.turnId}
+                      progress={progress}
+                      memberName={members.find((member) => member.id === progress.memberId)?.displayName ?? active?.peerDisplayName ?? 'AI 成员'}
+                      readError={readError}
+                      readAt={st.threadProgress[`dm:${activeId}`]?.readAt}
+                    />
                   ))}
                 </div>
                 {active.archivedAt != null ? (

@@ -59,7 +59,7 @@ describe('R78 run detail rendering', () => {
     const d = detail('REVIEW', [newest, old], 'old');
     const html = renderToStaticMarkup(createElement(RunExtraFacts, { detail: d }));
     expect(html.indexOf('历史运行 · 已定位')).toBeLessThan(html.indexOf('最近运行'));
-    expect(html).toContain('工具结束 · failure');
+    expect(html).toContain('工具结束 · 工具活动失败');
     expect(html).toContain('工具 read_1');
     expect(html).toContain('输入 7 tokens');
     expect(html).toContain('工程失败说明，需先修复渠道');expect(html).toContain('等待补充输入 · 请确认输出目录');

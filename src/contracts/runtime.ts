@@ -78,6 +78,13 @@ export interface TurnRequest {
   dispatchKey: string;
   inputBundleId: string;
   text: string;
+  /** Validation-only repair: adapters must not execute write-capable tools. */
+  repairOnly?: boolean;
+  /**
+   * Actual frozen workflow-stage key for this turn, when the caller knows it.
+   * Adapters only echo this fact; they never infer a stage from tool activity.
+   */
+  stage?: string;
   /** Protocol transport support is separate from real model vision certification. */
   images?: Array<{ artifactId: string; hash: string; mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; dataBase64: string }>;
   /** Transient launch identity; never changes the frozen send envelope. */
@@ -168,9 +175,16 @@ export interface RuntimeEventBase {
   sessionId: AdapterSessionId;
   /** 进程退出等事件允许无 turn。 */
   turnId?: string;
+  /** Session member identity supplied by the caller (optional for legacy events). */
+  memberId?: string;
+  /** Frozen workflow stage supplied by the caller (optional for legacy events). */
+  stage?: string;
   receivedAt: number;
   providerEventId?: string;
 }
+
+/** Factual tool activity classes shared by adapters, persistence and UI. */
+export type RuntimeToolAction = 'read' | 'search' | 'command' | 'edit' | 'other';
 
 export type NormalizedRuntimeEvent = RuntimeEventBase &
   (
@@ -183,12 +197,22 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
         kind: 'tool.started';
         toolCallId: string;
         toolName: string;
+        /** New adapters always classify; absent on legacy persisted events. */
+        action?: RuntimeToolAction;
+        /** Short, redacted primary target/path/command (not model-authored prose). */
+        target?: string;
+        /** Short, redacted JSON summary of selected input fields. */
         argumentsSummary: string;
       }
     | {
         kind: 'tool.completed';
         toolCallId: string;
         outcome: 'success' | 'failure' | 'unknown';
+        /** Echoed from the matching start event when the transport omits details. */
+        action?: RuntimeToolAction;
+        target?: string;
+        /** Short, redacted factual failure detail; never a fabricated success message. */
+        resultSummary?: string;
         resultRef?: string;
       }
     | {

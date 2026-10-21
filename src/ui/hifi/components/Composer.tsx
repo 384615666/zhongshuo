@@ -31,6 +31,11 @@ import { detectMentionRange, resolveMentionIds } from '../lib/mentionText';
 import { command } from '../bridge';
 import { uploadAttachmentFile, classifyAttachmentFile, defaultDeliberationMaxTurns } from '../loader';
 import type { ProjectMember, Room } from '../data/types';
+import {
+  CALL_BUDGET_ENABLED_SETTING_KEY,
+  DEFAULT_CALL_BUDGET_LIMITS,
+  parseCallBudgetEnabledSetting,
+} from '../../../contracts/callBudget';
 
 type MentionDocument = {
   key: string;
@@ -869,10 +874,29 @@ export function Composer({
   const [deliberate,setDeliberate]=useState(false);
   const [deliberateMemberIds,setDeliberateMemberIds]=useState<string[]>([]);
   const [budgetMaxTurns,setBudgetMaxTurns]=useState<number | null>(null);
+  const [callBudgetEnabled,setCallBudgetEnabled]=useState<boolean | null>(null);
+  const [callBudgetReadError,setCallBudgetReadError]=useState<string | null>(null);
   const [budgetInput,setBudgetInput]=useState('');
   const [modeMenuAnchor,setModeMenuAnchor]=useState<{x:number;y:number}|null>(null);
   const [budgetMenuAnchor,setBudgetMenuAnchor]=useState<{x:number;y:number}|null>(null);
   const [dragActive,setDragActive]=useState(false);
+  useEffect(() => {
+    let alive = true;
+    setCallBudgetReadError(null);
+    void command<{ values: Record<string, string | null> }>('app.settings.get', {
+      keys: [CALL_BUDGET_ENABLED_SETTING_KEY],
+    }).then((result) => {
+      if (!alive) return;
+      const enabled = parseCallBudgetEnabledSetting(result.values[CALL_BUDGET_ENABLED_SETTING_KEY]);
+      setCallBudgetEnabled(enabled);
+      if (!enabled) setBudgetMaxTurns(null);
+    }).catch((error: unknown) => {
+      if (!alive) return;
+      setCallBudgetEnabled(null);
+      setCallBudgetReadError(error instanceof Error ? error.message : String(error));
+    });
+    return () => { alive = false; };
+  }, []);
   const collaboration=target.kind!=='dm'&&deliberate?'deliberate' as const:undefined;
   const [mentions, setMentions] = useState<string[]>([]);
   const availableDeliberateIds = useMemo(
@@ -1397,8 +1421,8 @@ export function Composer({
 
   const route = useMemo(() => deriveRoute(effectiveMentionIds, sendAs, memberIds,collaboration), [effectiveMentionIds, sendAs, memberIds,collaboration]);
   const budgetBounds = deliberationBudgetBounds(effectiveMentionIds, availableDeliberateIds);
-  const budgetBelowMinimum = deliberate && budgetMaxTurns != null && budgetMaxTurns < budgetBounds.minimum;
-  const budgetAboveMaximum = deliberate && budgetMaxTurns != null && budgetMaxTurns > budgetBounds.maximum;
+  const budgetBelowMinimum = callBudgetEnabled === true && deliberate && budgetMaxTurns != null && budgetMaxTurns < budgetBounds.minimum;
+  const budgetAboveMaximum = callBudgetEnabled === true && deliberate && budgetMaxTurns != null && budgetMaxTurns > budgetBounds.maximum;
 
   const currentMode = ACCESS_MODES.find((m) => m.value === access) ?? ACCESS_MODES[0];
 
@@ -1449,7 +1473,7 @@ export function Composer({
       setSendErrorFor(draftKey, '请添加至少2位AI');
       return;
     }
-    if (deliberate && budgetMaxTurns != null && !isValidDeliberationBudget(budgetMaxTurns, effectiveMentionIds, availableDeliberateIds)) {
+    if (callBudgetEnabled === true && deliberate && budgetMaxTurns != null && !isValidDeliberationBudget(budgetMaxTurns, effectiveMentionIds, availableDeliberateIds)) {
       setSendErrorFor(draftKey, budgetBelowMinimum
         ? `本次上限至少 ${budgetBounds.minimum} 次`
         : `本次上限最多 ${budgetBounds.maximum} 次`);
@@ -1460,7 +1484,9 @@ export function Composer({
     // 显式放弃；等待期改了正文/附件/提及=不同身份，允许新号发送（未知信封仍保留）。
     if (pendingEnv != null && pendingIdentityMatches(
       pendingEnv, text, effectiveMentionIds, sendAs, refsAtGuard.map((a) => a.attachmentId!),
-      collaboration, budgetMaxTurns ?? undefined, collaboration ? budgetPreview?.calls ?? undefined : undefined,
+      collaboration,
+      callBudgetEnabled === true ? budgetMaxTurns ?? undefined : undefined,
+      callBudgetEnabled === true && collaboration ? budgetPreview?.calls ?? undefined : undefined,
     )) {
       setSendErrorFor(draftKey, '上次发送结果未知且内容未改——直接再发会换新命令号，可能与已提交的发送重复；请先点上方「重发原内容」（同号幂等）或「放弃」');
       return;
@@ -1504,7 +1530,9 @@ export function Composer({
     /** 本次实际发送的附件引用（refs 身份——不再按文件名/大小识别，review-r51 §2）。 */
     const sentAttachmentIds = draftRefs.map((a) => a.attachmentId);
     const sentAttachments = draftRefs;
-    const sentBudget = collaboration ? (budgetMaxTurns ?? budgetPreview?.calls) : undefined;
+    const sentBudget = callBudgetEnabled === true && collaboration
+      ? (budgetMaxTurns ?? budgetPreview?.calls)
+      : undefined;
 
     const outcome = onSend({
       body: text,
@@ -1823,6 +1851,14 @@ export function Composer({
    * 原来只在发送后的系统卡里出现，不满足"发送前显示推导值"。
    */
   const budgetPreview = useMemo(() => {
+    if (callBudgetEnabled !== true) {
+      return {
+        calls: null as number | null,
+        detail: callBudgetReadError != null
+          ? `调用次数预算设置读取失败：${callBudgetReadError}。服务端仍会在提交时核对；草稿保留。`
+          : '调用次数预算已关闭：真实记账，但不按次数拦截。可在应用设置开启。',
+      };
+    }
     const n = route.mode === 'DELIBERATE' ? budgetBounds.rosterSize : route.resolvedMemberIds.length;
     if (route.mode === 'DELIBERATE' && n > 0) {
       const core = defaultDeliberationMaxTurns(n);
@@ -1833,12 +1869,14 @@ export function Composer({
       };
     }
     if (route.mode === 'DIRECT') {
-      return { calls: 6, detail: 'DIRECT：用户最初输入引发的模型调用；额外输入创建新的预算段。' };
+      return { calls: DEFAULT_CALL_BUDGET_LIMITS.DIRECT, detail: 'DIRECT：用户最初输入引发的模型调用；额外输入创建新的预算段。' };
     }
-    return { calls: 24, detail: 'AUTO 本轮共用最多24次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。实际以正式运行快照为准。' };
-  }, [route.mode, route.resolvedMemberIds.length, budgetBounds.rosterSize]);
+    return { calls: DEFAULT_CALL_BUDGET_LIMITS.AUTO, detail: `AUTO 本轮共用最多${DEFAULT_CALL_BUDGET_LIMITS.AUTO}次，规划、全部子任务、修复和整合计入，预留2次整合；遵守更小任务预算。实际以正式运行快照为准。` };
+  }, [callBudgetEnabled, callBudgetReadError, route.mode, route.resolvedMemberIds.length, budgetBounds.rosterSize]);
 
-  const effectiveBudget = budgetMaxTurns ?? (route.mode === 'DELIBERATE' ? budgetPreview?.calls ?? null : null);
+  const effectiveBudget = callBudgetEnabled === true
+    ? budgetMaxTurns ?? budgetPreview?.calls ?? null
+    : null;
   const modeInvalid = deliberate && effectiveMentionIds.filter((id) => id !== 'all').length < 2 && !effectiveMentionIds.includes('all');
   const canUseDeliberate = target.kind === 'room_root' || target.kind === 'thread';
   const hasSendableBody = stripInlineAttachmentTokens(body).trim().length > 0;
@@ -1852,6 +1890,7 @@ export function Composer({
   }
 
   function saveBudget(): void {
+    if (callBudgetEnabled !== true || !deliberate) return;
     const parsed = Number(budgetInput);
     if (!isValidDeliberationBudget(parsed, effectiveMentionIds, availableDeliberateIds)) return;
     setBudgetMaxTurns(parsed);
@@ -1873,9 +1912,9 @@ export function Composer({
    * 普通任务的预算明细收进「本次运行设置」；只有当它**影响本次执行**时
    * （预算已用完 / 接近上限）才在输入区显式提示。
    */
-  const budgetVisible = deliberate && !modeInvalid && effectiveBudget != null;
+  const budgetVisible = callBudgetEnabled === true && !modeInvalid && effectiveBudget != null;
   const budgetAlert = useMemo(() => {
-    if (!runBudget) return null;
+    if (callBudgetEnabled !== true || !runBudget) return null;
     const { used, max } = runBudget;
     if (max <= 0) return null;
     if (used >= max) return `本次运行预算已用完（${used}/${max} 次），继续会创建新的预算段`;
@@ -2344,7 +2383,7 @@ export function Composer({
                 <Icon name="alert-triangle" size={11} /> 本次上限最多 {budgetBounds.maximum} 次
               </span>
             ) : null}
-            {budgetVisible && effectiveBudget != null ? (
+            {budgetVisible && effectiveBudget != null && deliberate ? (
               <button
                 type="button"
                 className="composer-budget"
@@ -2357,6 +2396,16 @@ export function Composer({
                 <Icon name="activity" size={11} />
                 最多 {effectiveBudget} 次
               </button>
+            ) : budgetVisible && effectiveBudget != null ? (
+              <span className="composer-budget" title={budgetPreview?.detail}>
+                <Icon name="activity" size={11} />
+                最多 {effectiveBudget} 次
+              </span>
+            ) : callBudgetEnabled === false ? (
+              <span className="composer-budget" title={budgetPreview?.detail} data-zs-call-budget="disabled">
+                <Icon name="activity" size={11} />
+                调用预算未启用
+              </span>
             ) : null}
             {budgetAlert ? (
               <span className="composer-budget warn" title={budgetAlert}>
@@ -2546,7 +2595,9 @@ export function Composer({
           <div className="menu-note">
             <div className="row tight"><Icon name="activity" size={12} /> 本次预算</div>
             <div className="small faint" style={{ marginTop: 4, lineHeight: 1.6 }}>
-              {deliberate && effectiveBudget != null
+              {callBudgetEnabled !== true
+                ? (budgetPreview?.detail ?? '调用次数预算设置尚未读取；服务端提交时会核对。')
+                : effectiveBudget != null
                 ? `最多 ${effectiveBudget} 次。${budgetPreview?.detail ?? ''}`
                 : target.kind === 'dm'
                   ? '实际用量可在任务详情查看。'

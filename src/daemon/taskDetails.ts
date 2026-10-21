@@ -1,5 +1,5 @@
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
-import type { TaskDetailEvent, TaskDetailsResult, TaskHistoryParams, TaskHistoryPage } from '../contracts/taskDetails.ts';
+import type { TaskDetailEvent, TaskDetailFailure, TaskDetailMemberRun, TaskDetailRun, TaskDetailsResult, TaskHistoryParams, TaskHistoryPage } from '../contracts/taskDetails.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { readCoordination } from './coordination.ts';
 
@@ -7,19 +7,43 @@ type EventRow = { seq: number; kind: string; created_at: number; run_id: string 
 const eventOf = (e: EventRow): TaskDetailEvent => {
     const payload: unknown = JSON.parse(e.payload_json);
     const p = payload != null && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-    const summary = [p.message, p.reason, p.question, p.status, p.toolName, p.outcome, p.note]
+    const summary = [p.message, p.reason, p.question, p.status, p.resultSummary, p.toolName, p.outcome, p.note]
       .find((x): x is string => typeof x === 'string')?.slice(0, 200) ?? '';
     return { seq: e.seq, kind: e.kind, at: e.created_at, runId: e.run_id, turnId: e.turn_id,
       toolCallId: typeof p.toolCallId === 'string' ? p.toolCallId : null, summary,
-      status: typeof p.status==='string'?p.status:null, code:typeof p.code==='string'?p.code:null };
+      status: typeof p.status==='string'?p.status:null, code:typeof p.code==='string'?p.code:null,
+      action:typeof p.action==='string'?p.action:null,
+      target:typeof p.target==='string'?p.target:null,
+      resultSummary:typeof p.resultSummary==='string'?p.resultSummary:null,
+      memberId:typeof p.memberId==='string'?p.memberId:null,
+      stage:typeof p.stage==='string'?p.stage:null,
+      outcome:typeof p.outcome==='string'?p.outcome:null };
   };
 
 const historyCursor = (projectId: string, taskId: string, kind: string, runId: string | undefined, before: number) => Buffer.from(JSON.stringify({ projectId, taskId, kind, runId: runId ?? null, before })).toString('base64url');
+
+type MemberRunSelection = { run_id: string; task_id: string; coordination_run_id: string; step_key: string; role: string };
+
+function memberRunSelection(db: ZhongshuoDatabase, taskId: string, runId: string, conversationId?: string): MemberRunSelection | undefined {
+  return db.prepare(`SELECT r.id run_id,r.task_id,c.run_id coordination_run_id,s.step_key,s.role
+    FROM workflow_runs r JOIN coordination_steps s ON s.child_task_id=r.task_id
+    JOIN coordination_runs c ON c.run_id=s.run_id
+    WHERE r.id=? AND c.task_id=? ${conversationId == null ? '' : 'AND r.conversation_id=?'}
+    LIMIT 1`).get(runId, taskId, ...(conversationId == null ? [] : [conversationId])) as MemberRunSelection | undefined;
+}
+
+/** Command-layer preflight helper: a details run id is either the task's own run or one member child run. */
+export function taskRunBelongsToDetails(db: ZhongshuoDatabase, taskId: string, runId: string, conversationId?: string): boolean {
+  const own = db.prepare(`SELECT 1 FROM workflow_runs WHERE id=? AND task_id=? ${conversationId == null ? '' : 'AND conversation_id=?'}`)
+    .get(runId, taskId, ...(conversationId == null ? [] : [conversationId]));
+  return own != null || memberRunSelection(db, taskId, runId, conversationId) != null;
+}
 
 /** Stable sequence/rowid pages; command layer rechecks audience on every page. */
 export function readTaskHistory(db: ZhongshuoDatabase, params: TaskHistoryParams): TaskHistoryPage {
   const { projectId, taskId, kind, runId } = params;
   const task = db.prepare('SELECT conversation_id FROM tasks WHERE id = ? AND project_id = ?').get(taskId, projectId) as { conversation_id: string };
+  const historyTaskId = runId == null ? taskId : memberRunSelection(db, taskId, runId, task.conversation_id)?.task_id ?? taskId;
   let before = Number.MAX_SAFE_INTEGER;
   if (params.cursor) {
     const c = JSON.parse(Buffer.from(params.cursor, 'base64url').toString('utf8')) as Record<string, unknown>;
@@ -31,7 +55,7 @@ export function readTaskHistory(db: ZhongshuoDatabase, params: TaskHistoryParams
     return { kind, items: rows.slice(0,20).map(r=>({id:r.id,mode:r.mode,status:r.status,stage:r.stage,roundNo:r.round_no,revision:r.revision,budget:null,participants:[],turns:[],turnsTruncated:false,events:[],eventsTruncated:false,detailLoaded:false})), nextCursor: rows.length>20 ? historyCursor(projectId,taskId,kind,runId,rows[19]!.cursor_id) : null };
   }
   if (kind === 'activity') {
-    const rows = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events WHERE task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL) AND seq<? ${runId ? 'AND run_id=?' : ''} ORDER BY seq DESC LIMIT 121`).all(taskId,projectId,task.conversation_id,before,...(runId?[runId]:[])) as EventRow[];
+    const rows = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events WHERE task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL) AND seq<? ${runId ? 'AND run_id=?' : ''} ORDER BY seq DESC LIMIT 121`).all(historyTaskId,projectId,task.conversation_id,before,...(runId?[runId]:[])) as EventRow[];
     return { kind, items:rows.slice(0,120).map(eventOf), nextCursor:rows.length>120 ? historyCursor(projectId,taskId,kind,runId,rows[119]!.seq):null };
   }
   const rows = db.prepare(`SELECT id,revision,manifest_hash,run_id,review_status,reviewed_at,review_note,artifact_refs_json,change_set_refs_json,verification_refs_json FROM task_deliveries WHERE task_id=? AND revision<? ORDER BY revision DESC LIMIT 51`).all(taskId,before) as Array<{id:string;revision:number;manifest_hash:string;run_id:string|null;review_status:string;reviewed_at:number|null;review_note:string|null;artifact_refs_json:string;change_set_refs_json:string;verification_refs_json:string}>;
@@ -63,16 +87,22 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const latestRunId = runRows.items[0]?.id ?? null;
   const currentRunId = runRows.items[0] != null && ['QUEUED', 'RUNNING', 'WAITING', 'STOPPING'].includes(runRows.items[0].status)
     ? runRows.items[0].id : null;
+  const requestedMemberRun = requestedRunId == null ? undefined : memberRunSelection(db, taskId, requestedRunId, conversationId);
   const deliveryRun=requestedDeliveryId?(db.prepare('SELECT run_id FROM task_deliveries WHERE id=? AND task_id=?').get(requestedDeliveryId,taskId) as {run_id:string|null}|undefined)?.run_id:null;
-  const selectedRunId = requestedRunId ?? deliveryRun ?? latestRunId;
-  const selectedIsOutsideWindow = selectedRunId != null && !runRows.items.some((r) => r.id === selectedRunId);
+  const selectedParentRunId = requestedMemberRun?.coordination_run_id ?? requestedRunId ?? deliveryRun ?? latestRunId;
+  const selectedRunId = requestedMemberRun?.run_id ?? selectedParentRunId;
+  const selectedIsOutsideWindow = selectedParentRunId != null && !runRows.items.some((r) => r.id === selectedParentRunId);
   const selectedRow = selectedIsOutsideWindow ? db.prepare(`SELECT rowid AS cursor_id, id, mode, status, stage, round_no, revision, budget_json
-    FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedRunId, taskId, conversationId) as RunRow | undefined : undefined;
+    FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?`).get(selectedParentRunId, taskId, conversationId) as RunRow | undefined : undefined;
   const coordinationBlocked=task.status==='BLOCKED'&&db.prepare("SELECT 1 FROM coordination_runs WHERE task_id=? AND state='blocked'").get(taskId)!=null;
   const failedLatest = (task.status === 'ACTIVE'||coordinationBlocked) && task.stop_generation === 0 && runRows.items[0]?.status === 'FAILED';
   const integrationRepair=failedLatest&&db.prepare(`SELECT 1 FROM coordination_integration_attempts i JOIN agent_turns a ON a.run_id=i.execution_run_id
     WHERE i.execution_run_id=? AND a.status='FAILED' AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
     AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
+  const directOutputRepair=failedLatest&&db.prepare(`SELECT 1 FROM agent_turns a
+    WHERE a.run_id=? AND a.status='FAILED'
+      AND EXISTS(SELECT 1 FROM domain_events e WHERE e.turn_id=a.id AND e.kind='turn.outputInvalid')
+      AND NOT EXISTS(SELECT 1 FROM format_repair_workitems f WHERE f.source_turn_id=a.id OR f.consumed_turn_id=a.id)`).get(latestRunId)!=null;
   const availability = db.prepare(`SELECT p.status AS project_status, c.archived_at AS conversation_archived,
     r.archived_at AS room_archived FROM tasks t JOIN projects p ON p.id = t.project_id
     JOIN conversations c ON c.id = t.conversation_id LEFT JOIN rooms r ON r.id = t.room_id WHERE t.id = ?`)
@@ -86,10 +116,9 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
   const clarificationLatest=task.status==='WAITING_USER'&&task.stop_generation===0&&runRows.items[0]?.status==='SUCCEEDED'&&db.prepare("SELECT 1 FROM domain_events WHERE task_id=? AND run_id=? AND kind='turn.workClarification'").get(taskId,latestRunId)!=null;
   const clarificationPending=clarificationLatest&&db.prepare("SELECT 1 FROM outbox WHERE dispatch_key=? AND status!='done'").get(`task:${taskId}:redispatch:${latestRunId}`)!=null;
   const clarificationBlock=clarificationLatest&&!clarificationPending&&scopeBlock==null?assessTaskRedispatchReadiness(db,taskId):null;
+  const coordination=readCoordination(db,taskId,selectedParentRunId);
   const visibleRunRows = selectedRow == null ? runRows.items : [...runRows.items, selectedRow];
-  const runs = visibleRunRows.map((r) => {
-    if (r.id !== selectedRunId) return { id: r.id, mode: r.mode, status: r.status, stage: r.stage, roundNo: r.round_no, revision: r.revision,
-      budget: null, participants: [], turns: [], turnsTruncated: false, events: [], eventsTruncated: false, detailLoaded: false };
+  const loadRun = (r: RunRow, runTaskId: string): TaskDetailRun => {
     const participants = (db.prepare(`SELECT rp.member_id, pm.display_name, rp.role, rp.expected, rp.status
       FROM run_participants rp JOIN project_members pm ON pm.id = rp.member_id WHERE rp.run_id = ? AND pm.project_id = ? ORDER BY rp.role, rp.member_id`)
       .all(r.id, projectId) as Array<{ member_id: string; display_name: string; role: string; expected: number; status: string }>).map((p) => ({
@@ -100,7 +129,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
         (SELECT json_extract(b.included_refs_json,'$.permission.policyId') FROM context_bundles b WHERE b.turn_id=a.id ORDER BY b.rowid DESC LIMIT 1) input_policy
        FROM agent_turns a JOIN project_members pm ON pm.id = a.member_id LEFT JOIN runtime_sessions s ON s.id=a.session_id AND s.member_id=a.member_id
         AND s.project_id=? AND s.conversation_id=a.conversation_id AND (s.task_id=? OR s.scope_kind='dm' AND s.task_id IS NULL)
-       WHERE a.run_id = ? AND a.conversation_id = ? AND pm.project_id = ? ORDER BY a.rowid DESC`, [projectId,taskId,r.id, conversationId, projectId], 80);
+       WHERE a.run_id = ? AND a.conversation_id = ? AND pm.project_id = ? ORDER BY a.rowid DESC`, [projectId,runTaskId,r.id, conversationId, projectId], 80);
     const turns = turnRows.items.map((t) => {
       const usageRows = bounded<{ normalized_json: string; cost_quality: string }>(
         'SELECT normalized_json, cost_quality FROM usage_records WHERE turn_id = ? ORDER BY rowid DESC', [t.id], 50);
@@ -112,10 +141,53 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     const runEvents = bounded<EventRow>(
       `SELECT seq, kind, created_at, run_id, turn_id, payload_json FROM domain_events
        WHERE run_id = ? AND task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL)
-       ORDER BY seq DESC`, [r.id, taskId, projectId, conversationId], 120);
+       ORDER BY seq DESC`, [r.id, runTaskId, projectId, conversationId], 120);
     return { id: r.id, mode: r.mode, status: r.status, stage: r.stage, roundNo: r.round_no, revision: r.revision,
       budget: parse(r.budget_json), participants, turns, turnsTruncated: turnRows.truncated,
       events: runEvents.items.map(eventOf), eventsTruncated: runEvents.truncated, detailLoaded: true };
+  };
+  const detailedParentRunId = requestedMemberRun == null ? selectedParentRunId : null;
+  const runs = visibleRunRows.map((r) => {
+    if (r.id !== detailedParentRunId) return { id: r.id, mode: r.mode, status: r.status, stage: r.stage, roundNo: r.round_no, revision: r.revision,
+      budget: null, participants: [], turns: [], turnsTruncated: false, events: [], eventsTruncated: false, detailLoaded: false };
+    return loadRun(r, taskId);
+  });
+  type MemberRunRow = RunRow & { task_id: string; task_title: string; task_status: string; step_key: string;
+    coordination_role: string; coordination_run_id: string; member_id: string | null; member_name: string | null };
+  const memberRunColumns = `r.rowid AS cursor_id,r.id,r.mode,r.status,r.stage,r.round_no,r.revision,r.budget_json,
+    t.id task_id,t.title task_title,t.status task_status,s.step_key,s.role coordination_role,c.run_id coordination_run_id,
+    t.owner_member_id member_id,pm.display_name member_name`;
+  const memberRunRows = coordination == null ? { items: [] as MemberRunRow[], truncated: false } : bounded<MemberRunRow>(
+    `SELECT ${memberRunColumns} FROM coordination_steps s JOIN coordination_runs c ON c.run_id=s.run_id
+      JOIN tasks t ON t.id=s.child_task_id LEFT JOIN project_members pm ON pm.id=t.owner_member_id AND pm.project_id=t.project_id
+      JOIN workflow_runs r ON r.task_id=t.id AND r.conversation_id=?
+      WHERE s.run_id=? AND t.project_id=? AND t.conversation_id=?
+      ORDER BY s.rowid,r.rowid DESC`,
+    [conversationId, coordination.runId, projectId, conversationId], 32);
+  if (requestedMemberRun != null && !memberRunRows.items.some((r) => r.id === requestedMemberRun.run_id)) {
+    const pinned = db.prepare(`SELECT ${memberRunColumns} FROM coordination_steps s JOIN coordination_runs c ON c.run_id=s.run_id
+      JOIN tasks t ON t.id=s.child_task_id LEFT JOIN project_members pm ON pm.id=t.owner_member_id AND pm.project_id=t.project_id
+      JOIN workflow_runs r ON r.task_id=t.id AND r.conversation_id=?
+      WHERE r.id=? AND s.run_id=? AND c.task_id=? AND t.project_id=? AND t.conversation_id=?`)
+      .get(conversationId, requestedMemberRun.run_id, requestedMemberRun.coordination_run_id, taskId, projectId, conversationId) as MemberRunRow | undefined;
+    if (pinned != null) memberRunRows.items.push(pinned);
+  }
+  const failureOf = (runId: string, runTaskId: string): TaskDetailFailure | null => {
+    const row = db.prepare(`SELECT seq,kind,created_at,run_id,turn_id,payload_json FROM domain_events
+      WHERE run_id=? AND task_id=? AND project_id=? AND (conversation_id=? OR conversation_id IS NULL)
+        AND (kind IN ('turn.failed','run.failed','turn.outputInvalid') OR kind='turn.statusChanged' AND json_extract(payload_json,'$.status')='FAILED')
+      ORDER BY CASE kind WHEN 'turn.failed' THEN 0 WHEN 'run.failed' THEN 1 WHEN 'turn.outputInvalid' THEN 2 ELSE 3 END,seq DESC
+      LIMIT 1`).get(runId, runTaskId, projectId, conversationId) as EventRow | undefined;
+    const event = row == null ? null : eventOf(row);
+    return event == null ? null : { eventKind: event.kind, at: event.at, message: event.summary || null, code: event.code ?? null };
+  };
+  const memberRuns: TaskDetailMemberRun[] = memberRunRows.items.map((r) => {
+    const run = loadRun(r, r.task_id);
+    const lastActivityAt = run.events.reduce<number | null>((latest, event) => latest == null || event.at > latest ? event.at : latest, null);
+    return { ...run, scope: 'member', coordinationRunId: r.coordination_run_id, coordinationStepKey: r.step_key,
+      coordinationRole: r.coordination_role, taskId: r.task_id, taskTitle: r.task_title, taskStatus: r.task_status,
+      memberId: r.member_id, memberName: r.member_name, failure: failureOf(r.id, r.task_id), lastActivityAt,
+      locate: `#task=${r.task_id}` };
   });
   const eventRows = bounded<EventRow>(
     'SELECT seq, kind, created_at, run_id, turn_id, payload_json FROM domain_events WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY seq DESC', [taskId, projectId, conversationId], 120);
@@ -132,6 +204,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       (SELECT id FROM tasks WHERE parent_task_id=? AND project_id=? AND conversation_id=?)) ORDER BY rowid DESC`, [projectId,taskId,taskId,projectId,conversationId], 100);
   const artifactRows = bounded<{ id: string; kind: string; revision: number; hash: string }>(
     'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId], 100);
+  const selectedMemberRun = memberRuns.find((r) => r.id === selectedRunId);
   return {
     task: { id: task.id as string, projectId: task.project_id as string, conversationId: task.conversation_id as string,
       title: task.title as string, objective: task.objective as string | null, status: task.status as string,
@@ -141,11 +214,13 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       ownerDisplayName: task.owner_display_name as string | null,
       parentTaskId: task.parent_task_id as string | null, currentDeliveryId: task.current_delivery_id as string | null },
     clarificationRetry:{available:clarificationLatest&&!clarificationPending&&scopeBlock==null&&clarificationBlock==null,pending:clarificationPending,blockReason:scopeBlock??clarificationBlock?.message??null},
-    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,...(integrationRepair?{formatRepair:true}:{}),
+    failedRetry: { available: failedLatest && !pendingRedispatch && scopeBlock == null && blockedRetry == null,...(integrationRepair||directOutputRepair?{formatRepair:true}:{}),
       pending: Boolean(pendingRedispatch), blockReason: scopeBlock ?? blockedRetry?.message ?? null },
-    coordination:readCoordination(db,taskId,selectedRunId),
+    coordination,
     children: children.items.map((c) => ({ ...c, locate: `#task=${c.id}` })),
-    latestRunId, currentRunId, selectedRunId, runs, events,
+    latestRunId, currentRunId, selectedRunId, runs,
+    ...(coordination == null ? {} : { memberRuns, memberRunsTruncated: memberRunRows.truncated }),
+    events,
     deliveries: deliveryRows.items.map((d) => ({ id: d.id, revision: d.revision, manifestHash: d.manifest_hash,
       runId: d.run_id, reviewStatus: d.review_status, reviewedAt: d.reviewed_at, reviewNote: d.review_note,
       artifactRefs: refs(d.artifact_refs_json), changeSetRefs: refs(d.change_set_refs_json),
@@ -161,7 +236,9 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
       runs: runRows.truncated ? historyCursor(projectId, taskId, 'runs', undefined, runRows.items.at(-1)!.cursor_id) : null,
       activity: eventRows.truncated ? historyCursor(projectId, taskId, 'activity', undefined, eventRows.items.at(-1)!.seq) : null,
       deliveries: deliveryRows.truncated ? historyCursor(projectId, taskId, 'deliveries', undefined, deliveryRows.items.at(-1)!.revision) : null,
-      runActivity: (() => { const r=runs.find(x=>x.id===selectedRunId);return r?.eventsTruncated ? historyCursor(projectId,taskId,'activity',selectedRunId ?? undefined,r.events.at(-1)!.seq):null; })(),
+      runActivity: (() => { const r=runs.find(x=>x.id===selectedParentRunId);return r?.eventsTruncated ? historyCursor(projectId,taskId,'activity',selectedParentRunId ?? undefined,r.events.at(-1)!.seq):null; })(),
+      ...(selectedMemberRun == null ? {} : { memberRunActivity: selectedMemberRun.eventsTruncated
+        ? historyCursor(projectId,taskId,'activity',selectedMemberRun.id,selectedMemberRun.events.at(-1)!.seq) : null }),
     },
     truncated: { children: children.truncated, runs: runRows.truncated, events: eventRows.truncated,
       deliveries: deliveryRows.truncated, changeSets: changeRows.truncated, artifacts: artifactRows.truncated },

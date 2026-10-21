@@ -238,6 +238,9 @@ export const turnBudgetSnapshotSchema = z.strictObject({
   tailReserved: z.number().int().nonnegative(),
   tailReservationByStage: z.record(z.string(), z.number().int().nonnegative()),
   stageAvailableTurns: z.number().int().nonnegative(),
+  /** R98: disabled is a real count-only mode, never encoded as a huge limit. */
+  enforcement: z.enum(['enabled','disabled','legacy']).optional(),
+  countOnly: z.boolean().optional(),
 });
 
 export const turnPermissionHeaderSchema = z.strictObject({
@@ -348,9 +351,9 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   );
   lines.push(`你的角色：${envelope.you.role}；参与者：${envelope.roster.map((r) => `${r.displayName}(${rosterLabel(r.status)})`).join('、')}`);
   const b = envelope.budget;
-  lines.push(
-    `预算：本运行上限 ${b.runMaxTurns}，已用 ${b.usedTurns}，在途预留 ${b.inFlightReservedTurns}（含本轮），总剩余 ${b.remainingTurns}，尾部预留 ${b.tailReserved}，当前阶段可新增调用 ${b.stageAvailableTurns}`,
-  );
+  lines.push(b.enforcement === 'disabled'
+    ? `预算：调用次数限制已关闭（仅真实记账）；已用 ${b.usedTurns}，在途预留 ${b.inFlightReservedTurns}（含本轮）。不以次数耗尽结束工作；按交付完成或停止条件收尾。`
+    : `预算：本运行上限 ${b.runMaxTurns}，已用 ${b.usedTurns}，在途预留 ${b.inFlightReservedTurns}（含本轮），总剩余 ${b.remainingTurns}，尾部预留 ${b.tailReserved}，当前阶段可新增调用 ${b.stageAvailableTurns}`);
   lines.push(
     `有效策略：${envelope.permission.policyId}；修改授权：${envelope.permission.modificationAuthorized ? '有' : '无'}；执行范围：${envelope.permission.fullAccess?'CLI 完整权限（可执行命令、读写电脑文件；按用户目标操作）':envelope.permission.allowedWriteRoots.length > 0 ? envelope.permission.allowedWriteRoots.join('、') : '只读/分析'}`,
   );

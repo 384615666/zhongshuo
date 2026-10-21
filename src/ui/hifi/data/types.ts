@@ -3,6 +3,8 @@
  * 严格对齐设计报告 v1.8 §3.1 对象层级与 §12.2 表结构目录。
  * 原型不落库，但命名与关系保持与 daemon 契约一致。
  */
+import type { FrozenCallBudgetPolicy } from '../../../contracts/callBudget.ts';
+import type { MessageFileChange } from '../../../contracts/messageFileChanges.ts';
 
 /* ---------- §10.1 状态机（业务状态与执行状态分离） ---------- */
 
@@ -95,6 +97,7 @@ export interface CurrentRunBudget {
   usedTurns: number;
   remainingTurns: number;
   tailReserved: number;
+  enforcement?: 'enabled' | 'disabled' | 'legacy';
 }
 
 /** Model-authored document metadata; markdown is only present when attachment hosting failed. */
@@ -300,6 +303,7 @@ export interface ThreadCard {
   taskMode?: RouteMode | null;
   latestRun?: { id: string; status: RunStatus; stage?: string | null } | null;
   nextInputBudget?: { maxTurns: number } | null;
+  callBudget?: FrozenCallBudgetPolicy | null;
   currentRunBudget?: CurrentRunBudget | null;
   delivery?: DeliveryFact | null;
   ownerMemberId?: string | null;
@@ -320,6 +324,11 @@ export interface FormalAttachmentSummary {
   artifactId: string;
   filename: string;
   kind: string;
+  /** Content identity for read-time duplicate folding; never guessed from filename. */
+  hash?: string;
+  /** Actual project-relative source path when a real file-change row exists. */
+  sourcePath?: string;
+  revision?: number;
   /** 可选展示信息：后端未提供时不显示大小，绝不伪造。 */
   sizeBytes?: number;
   /** R93 app-managed complete Markdown derived from a successful answer. */
@@ -365,6 +374,7 @@ export type ThreadTabKey =
   | 'run';
 
 export interface Message {
+  fileChanges?: MessageFileChange[];
   id: string;
   projectId: string;
   roomId: string;
@@ -1195,10 +1205,13 @@ export interface DmConversation {
   interruptedTasks?: Array<{
     taskId: string;
     title: string;
+    taskRevision?: number;
+    stopGeneration?: number;
     lastRunStatus: string | null;
     lastRunId: string | null;
     recoverable: boolean;
     blockReason: string | null;
+    formatRepair?: boolean;
     lastFailureReason?: string | null;
   }>;
   pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null;

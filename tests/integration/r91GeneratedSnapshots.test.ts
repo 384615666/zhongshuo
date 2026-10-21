@@ -814,16 +814,16 @@ describe('R91 生产链：结构化终态/负例/fullAccess', () => {
       expect(turn.status).toBe('SUCCEEDED');
       const finalId = env.finalAgentMessages(submitted.taskId)[0]!.id;
       const artifacts = attachmentRowsOf(env, finalId);
-      expect(artifacts).toHaveLength(1);
-      expect(artifacts[0]!.display_name).toBe('完整权限外部.txt');
-      expect(artifacts[0]!.hash).toBe(sha256(outsideText));
-      expect(readFileSync(artifacts[0]!.blob_path)).toEqual(Buffer.from(outsideText, 'utf8'));
+      expect(artifacts.map(artifact => artifact.display_name).sort()).toEqual(['完整权限外部.txt', '项目内说明.txt'].sort());
+      const external = artifacts.find(artifact => artifact.display_name === '完整权限外部.txt')!;
+      expect(external.hash).toBe(sha256(outsideText));
+      expect(readFileSync(external.blob_path)).toEqual(Buffer.from(outsideText, 'utf8'));
       const preview = expectOkData<{ text: string; hash: string }>(
-        await env.raw('attachment.previewText', { attachmentId: artifacts[0]!.artifact_id }), 'attachment.previewText(full access)',
+        await env.raw('attachment.previewText', { attachmentId: external.artifact_id }), 'attachment.previewText(full access)',
       );
       expect(preview.text).toBe(outsideText);
       const original = expectOkData<{ bytesBase64: string; hash: string }>(
-        await env.raw('attachment.originalFile', { attachmentId: artifacts[0]!.artifact_id }), 'attachment.originalFile(full access)',
+        await env.raw('attachment.originalFile', { attachmentId: external.artifact_id }), 'attachment.originalFile(full access)',
       );
       expect(original.hash).toBe(sha256(outsideText));
       expect(Buffer.from(original.bytesBase64, 'base64')).toEqual(Buffer.from(outsideText, 'utf8'));

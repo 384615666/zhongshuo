@@ -39,7 +39,7 @@ import {
 import { updateRoomReal, roomArchiveReal, roomMembersSetReal } from '../loader';
 import { formatBytes, formatDuration, fullTime, relTime, routeModeCopy, runtimeModelDisplayName, stageLabel } from '../lib/format';
 import { chatAnswer } from '../../../contracts/chatAnswer';
-import { runtimeProgressWaitLabel } from '../../../contracts/runtimeProgress';
+import { LiveProgressCard } from '../components/LiveProgress';
 import { navigate } from '../lib/router';
 import { type ThreadTabKey } from '../lib/threadNav';
 import {
@@ -66,9 +66,10 @@ const FORMAL_LIMITS = {
 function openAttachment(att: FormalAttachmentSummary, openedFrom: ContextLocation, conversationId: string): void {
   registerAttachmentResource({
     attachmentId: att.artifactId, filename: att.filename, kind: att.kind,
+    revision: att.revision, hash: att.hash, sizeBytes: att.sizeBytes,
     audience: openedFrom.target, origin: conversationId,
   });
-  openPreview(att.artifactId, undefined, openedFrom);
+  openPreview(att.artifactId, att.revision, openedFrom);
 }
 
 /** 窄窗口判定：右栏改为覆盖式全屏页（§17.1） */
@@ -1262,8 +1263,10 @@ function RootCard({
       ) : null}
       {!isDiscussion && task?.currentRunBudget ? (
         <div className="faint small">
-          本轮冻结预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
-          {task.currentRunBudget.remainingTurns > 0 ? ` · 剩余 ${task.currentRunBudget.remainingTurns} 次` : ' · 已用尽'}
+          {task.currentRunBudget.enforcement === 'disabled'
+            ? `本轮调用次数限制已关闭（仅真实记账）：已记录 ${task.currentRunBudget.usedTurns} 次`
+            : <>本轮冻结预算：已用 {task.currentRunBudget.usedTurns}/{task.currentRunBudget.runMaxTurns} 次调用
+              {task.currentRunBudget.remainingTurns > 0 ? ` · 剩余 ${task.currentRunBudget.remainingTurns} 次` : ' · 已用尽'}</>}
         </div>
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
@@ -1532,7 +1535,7 @@ function ThreadPanel({
     return out;
   }, [s, thread?.id, poolCollapsedByFile]);
 
-  const progressContentKey=JSON.stringify((s.threadProgress[threadId]?.items??[]).map(p=>[p.turnId,p.text,p.phase,p.status]));
+  const progressContentKey=JSON.stringify((s.threadProgress[threadId]?.items??[]).map(p=>[p.turnId,p.text,p.phase,p.status,p.lastActivityAt,p.activities]));
   useEffect(()=>{const el=listRef.current;if(el&&pinnedToBottom)el.scrollTop=el.scrollHeight;},[progressContentKey,pinnedToBottom]);
 
   // 流式更新不抢滚动位置：用户向上翻历史时显示"有新消息"，不自动跳到底部（§17.5）
@@ -1954,11 +1957,13 @@ function ThreadPanel({
                   </div>
                 );
               })}
-              {(s.threadProgress[thread.id]?.items??[]).map(progress=><div key={progress.turnId} className="panel" role="status" data-zs-live-progress={progress.turnId}>
-                <div className="row tight"><span className="strong">{memberLabel(byId(s.members,progress.memberId))}</span><span className="small faint" data-zs-live-wait={progress.status}>{runtimeProgressWaitLabel(progress)}</span>{progress.stage?<span className="small faint truncate" title={progress.stage}>{stageLabel(progress.stage)}</span>:null}</div>
-                {progress.text?<div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',marginTop:6}}>{progress.text}</div>:null}
-                {s.readErrors['thread:'+thread.id]?<div className="small faint">更新失败，保留上次进展 · {new Date(s.threadProgress[thread.id]!.readAt).toLocaleTimeString()}</div>:null}
-              </div>)}
+              {(s.threadProgress[thread.id]?.items??[]).map(progress=><LiveProgressCard
+                key={progress.turnId}
+                progress={progress}
+                memberName={memberLabel(byId(s.members,progress.memberId))}
+                readError={s.readErrors['thread:'+thread.id]}
+                readAt={s.threadProgress[thread.id]?.readAt}
+              />)}
             </div>
 
             {!pinnedToBottom && pendingNew > 0 ? (
@@ -2124,7 +2129,7 @@ function ThreadDetails({
     setRetryBusyTask(snapshot.taskId);
     void (async () => {
       try {
-        await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户显式修复原协作整合输出':'用户在运行详情显式继续最近失败运行' });
+        await command('task.redispatch', { ...snapshot,...(details.failedRetry.formatRepair?{formatRepair:true}:{}), reason: latest.status==='SUCCEEDED'?'用户补充后显式继续工作':details.failedRetry.formatRepair?'用户显式修复输出格式':'用户在运行详情显式继续最近失败运行' });
         setAcceptedRetryRun(snapshot.sourceRunId);
         recordWrite('task.redispatch', `继续失败运行（任务 ${snapshot.taskId.slice(0, 12)}…）`);
         toast('继续请求已入队；等待正式执行结果', 'success');

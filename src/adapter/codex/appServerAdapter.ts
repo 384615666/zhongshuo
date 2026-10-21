@@ -33,6 +33,11 @@ import type {
   SessionRef,
   TurnRequest,
 } from '../../contracts/runtime.ts';
+import {
+  runtimeToolResultSummary,
+  runtimeToolSummary,
+  type RuntimeToolSummary,
+} from '../../contracts/runtimeProgress.ts';
 import { EventStream } from '../eventStream.ts';
 
 const ADAPTER_VERSION = 'codex-appserver-adapter-0.2.0';
@@ -54,6 +59,7 @@ interface JsonRpcRequest {
 type DistOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 
 interface SessionState {
+  memberId: string;
   writeAccess?: OpenSessionInput['writeAccess'];
   ref: SessionRef;
   stream: EventStream;
@@ -61,11 +67,20 @@ interface SessionState {
   providerTurnToInternal: Map<string, string>;
   /** 本会话待认领 turn（按会话隔离：双会话并发 startTurn 不互扰，修复轮 3）。 */
   awaitingTurn: { internalTurnId: string; providerTurnId: string | null } | null;
+  /** Frozen workflow stage per internal turn; association only, never inferred. */
+  turnStages: Map<string, string>;
+  /** Start metadata paired with later completion items that omit details. */
+  toolSummaries: Map<string, RuntimeToolSummary>;
   seq: number;
 }
 
 interface ToolLikeItem extends Record<string, unknown> {
   status?: unknown;
+}
+
+interface CodexToolActivity {
+  toolName: string;
+  summary: RuntimeToolSummary;
 }
 
 export interface CodexAdapterOptions {
@@ -306,17 +321,27 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       case 'item/completed': {
         const item = p['item'] as ToolLikeItem | undefined;
         const type = item?.['type'];
+        const internalTurnId = this.internalTurnOf(session, providerTurnId);
         if (type === 'agentMessage') {
           session.stream.push(this.event(session, {
             kind: 'message.completed',
             messageId: String(item?.['id'] ?? randomUUID()),
             text: String(item?.['text'] ?? ''),
-          }, this.internalTurnOf(session, providerTurnId)));
+          }, internalTurnId));
         } else if (type === 'commandExecution' || type === 'fileChange' || type === 'mcpToolCall' || type === 'dynamicToolCall') {
+          const toolCallId=String(item?.['id'] ?? randomUUID());
+          const activity=codexToolActivity(item,session.ref.cwd);
+          const activityKey=toolActivityKey(internalTurnId??providerTurnId,toolCallId);
+          const stored=session.toolSummaries.get(activityKey);
+          const summary=stored??activity?.summary;
+          if(activity!=null&&stored==null)session.toolSummaries.set(activityKey,activity.summary);
+          const resultSummary=toolFailureSummary(item);
           session.stream.push(this.event(session, {
             kind: 'tool.completed',
-            toolCallId: String(item?.['id'] ?? randomUUID()),
+            toolCallId,
             outcome: toolOutcome(item?.['status']),
+            ...(summary!=null?{action:summary.action,target:summary.target}:{}),
+            ...(resultSummary.length>0?{resultSummary}:{}),
             // 拒绝原因留痕（B6 证据绑定，修复轮 4）：declined=权限拒绝；
             // failed 附 exitCode，且 aggregatedOutput 命中沙箱/权限拒绝签名时标记
             // sandbox-denial——纯 failed（可能是语法错误）不构成可辨识权限拒绝。
@@ -325,7 +350,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
               : item?.['status'] === 'failed'
                 ? { resultRef: `status:failed;exit:${String(item?.['exitCode'] ?? '?')}${sandboxDenialSignature(item) ? ';sandbox-denial' : ''}` }
                 : {}),
-          }, this.internalTurnOf(session, providerTurnId)));
+          }, internalTurnId));
         }
         break;
       }
@@ -333,13 +358,19 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         const item = p['item'] as ToolLikeItem | undefined;
         const type = item?.['type'];
         if (type === 'commandExecution' || type === 'fileChange' || type === 'mcpToolCall' || type === 'dynamicToolCall') {
+          const toolCallId=String(item?.['id'] ?? randomUUID());
+          const activity=codexToolActivity(item,session.ref.cwd);
+          if(activity==null)break;
+          const internalTurnId=this.internalTurnOf(session, providerTurnId);
+          session.toolSummaries.set(toolActivityKey(internalTurnId??providerTurnId,toolCallId),activity.summary);
           session.stream.push(this.event(session, {
             kind: 'tool.started',
-            toolCallId: String(item?.['id'] ?? randomUUID()),
-            toolName: String(type),
-            // 目标路径留痕（B6 证据绑定）：fileChange 取 changes[].path；命令取 command。
-            argumentsSummary: toolTargets(item).slice(0, 200),
-          }, this.internalTurnOf(session, providerTurnId)));
+            toolCallId,
+            toolName: activity.toolName,
+            action: activity.summary.action,
+            target: activity.summary.target,
+            argumentsSummary: activity.summary.argumentsSummary,
+          }, internalTurnId));
         }
         break;
       }
@@ -419,11 +450,14 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
 
   private event(session: SessionState, spec: DistOmit<NormalizedRuntimeEvent, 'eventKey' | 'sessionId' | 'receivedAt'>, turnId?: string): NormalizedRuntimeEvent {
     session.seq += 1;
+    const stage=turnId!=null?session.turnStages.get(turnId):undefined;
     return {
       ...spec,
       eventKey: `${session.ref.id}:${session.seq}`,
       sessionId: session.ref.id,
       ...(turnId != null ? { turnId } : {}),
+      memberId: session.memberId,
+      ...(stage!=null&&stage.length>0?{stage}:{}),
       receivedAt: Date.now(),
     } as NormalizedRuntimeEvent;
   }
@@ -516,12 +550,15 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
       cwd: input.cwd,
     };
     const state: SessionState = {
+      memberId: input.memberId,
       writeAccess: input.writeAccess,
       ref,
       stream: new EventStream(),
       providerThreadId,
       providerTurnToInternal: new Map(),
       awaitingTurn: null,
+      turnStages: new Map(),
+      toolSummaries: new Map(),
       seq: 0,
     };
     this.sessions.set(ref.id, state);
@@ -534,6 +571,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
     if(input.images?.length){let models:Awaited<ReturnType<CodexAppServerAdapter['listModels']>>;try{models=await this.listModels();}catch(e){throw new AdapterCallError('CAPABILITY_UNSUPPORTED',`图片模型信息读取失败；没有发送模型输入：${e instanceof Error?e.message:'元数据不可读'}`,true);}const model=models.find(m=>m.model===this.options.model||m.id===this.options.model);if(model?.inputModalities&&!model.inputModalities.includes('image'))throw new AdapterCallError('CAPABILITY_UNSUPPORTED','当前模型明确不支持图片；原件保留，可仅记录或换成员',true);}
     const providerInput = codexInput(input);
     const state = this.stateOf(session);
+    if(input.stage!=null&&input.stage.trim().length>0)
+      state.turnStages.set(input.turnId,input.stage.trim().slice(0,120));
     // 先登记 awaiting（通知可能早于响应到达，修复轮）。
     state.awaitingTurn = { internalTurnId: input.turnId, providerTurnId: null };
     const result = await this.request<{ turn: { id: string } }>(
@@ -542,7 +581,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         threadId: state.providerThreadId,
         input: providerInput,
         clientUserMessageId: input.dispatchKey,
-        sandboxPolicy:state.writeAccess?.fullAccess ? {type:'dangerFullAccess'} : state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
+        sandboxPolicy:input.repairOnly===true ? {type:'readOnly',networkAccess:false} : state.writeAccess?.fullAccess ? {type:'dangerFullAccess'} : state.writeAccess?.modificationAuthorized ? {type:'workspaceWrite',writableRoots:state.writeAccess.allowedWriteRoots,networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true} : {type:'readOnly',networkAccess:false},
         approvalPolicy:'never',
         ...(this.options.effort?{effort:this.options.effort}:{}),
         ...(input.outputSchema?{outputSchema:input.outputSchema}:{}),
@@ -659,13 +698,81 @@ function sandboxDenialSignature(item: ToolLikeItem | undefined): boolean {
   return /read-only|sandbox|not permitted|denied|permission|access is denied|只读|拒绝/i.test(output);
 }
 
-/** 工具目标摘要：fileChange 用 changes[].path；commandExecution 用 command；其余用工具名。 */
-function toolTargets(item: ToolLikeItem | undefined): string {
-  const type = String(item?.['type'] ?? '');
-  if (type === 'fileChange') {
-    const changes = (item?.['changes'] as Array<{ path?: string }> | undefined) ?? [];
-    return changes.map((c) => String(c['path'] ?? '')).join(', ');
+/** Full factual target extraction, with bounded/redacted projection for persistence. */
+function codexToolActivity(item: ToolLikeItem | undefined,sessionCwd?:string): CodexToolActivity | null {
+  const type=String(item?.['type']??'');
+  if(type==='commandExecution'){
+    const cwd=typeof item?.['cwd']==='string'?item['cwd']:sessionCwd;
+    return {
+      toolName:type,
+      summary:runtimeToolSummary(type,{command:item?.['command'],cwd},{cwd}),
+    };
   }
-  if (type === 'commandExecution') return String(item?.['command'] ?? '');
-  return type;
+  if(type==='fileChange'){
+    const rawChanges=item?.['changes'];
+    const changes=Array.isArray(rawChanges)
+      ?rawChanges.filter(isRecordValue).map(change=>({
+        path:typeof change['path']==='string'?change['path']:'',
+        kind:typeof change['kind']==='string'?change['kind']:'',
+      }))
+      :isRecordValue(rawChanges)
+        ?Object.entries(rawChanges).map(([path,change])=>({
+          path,
+          kind:isRecordValue(change)
+            ?typeof change['kind']==='string'?change['kind']
+              :typeof change['type']==='string'?change['type']:''
+            :'',
+        }))
+        :[];
+    const presentChanges=changes.filter(change=>change.path.length>0);
+    return {toolName:type,summary:runtimeToolSummary(type,{changes:presentChanges},{cwd:sessionCwd})};
+  }
+  if(type==='mcpToolCall'){
+    const server=typeof item?.['server']==='string'?item['server']:'';
+    const tool=typeof item?.['tool']==='string'?item['tool']:'mcpToolCall';
+    const argumentsValue=toolArguments(item?.['arguments']);
+    return {
+      toolName:type,
+      summary:runtimeToolSummary(`${server} ${tool}`,{...argumentsValue,server,tool},{cwd:sessionCwd}),
+    };
+  }
+  if(type==='dynamicToolCall'){
+    const namespace=typeof item?.['namespace']==='string'?item['namespace']:'';
+    const tool=typeof item?.['tool']==='string'?item['tool']:'dynamicToolCall';
+    const argumentsValue=toolArguments(item?.['arguments']);
+    return {
+      toolName:type,
+      summary:runtimeToolSummary(`${namespace} ${tool}`,{...argumentsValue,namespace,tool},{cwd:sessionCwd}),
+    };
+  }
+  return null;
+}
+
+function toolArguments(value:unknown):Record<string,unknown> {
+  if(isRecordValue(value)){
+    const nested=isRecordValue(value['arguments'])?value['arguments']:{};
+    return {...nested,...value};
+  }
+  if(typeof value==='string')return {input:value};
+  return {};
+}
+
+function toolFailureSummary(item:ToolLikeItem|undefined):string {
+  const status=item?.['status'];
+  if(status!=='failed'&&status!=='declined')return '';
+  const detail=runtimeToolResultSummary(
+    item?.['error']??item?.['aggregatedOutput']??item?.['stderr']??item?.['stdout'],
+  );
+  if(detail.length>0)return detail;
+  if(status==='declined')return '工具调用被拒绝';
+  const exitCode=item?.['exitCode'];
+  return exitCode==null?'工具执行失败':`工具执行失败（exit ${String(exitCode)}）`;
+}
+
+function toolActivityKey(turnId:string|undefined,toolCallId:string):string {
+  return `${turnId??''}:${toolCallId}`;
+}
+
+function isRecordValue(value:unknown):value is Record<string,unknown> {
+  return typeof value==='object'&&value!=null&&!Array.isArray(value);
 }

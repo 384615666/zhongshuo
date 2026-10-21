@@ -25,6 +25,7 @@ export const conversationFailedTasksParamsSchema = z.strictObject({ projectId: z
 export interface FailedDmTask {
   taskId: string; title: string; taskRevision: number; stopGeneration: number; latestRunId: string;
   available: boolean; pending: boolean; blockReason: string | null;
+  formatRepair?: boolean;
 }
 export interface ConversationFailedTasksResult { conversationId: string; items: FailedDmTask[]; truncated: boolean }
 
@@ -32,6 +33,12 @@ export interface TaskDetailEvent {
   seq: number; kind: string; at: number; runId: string | null; turnId: string | null;
   toolCallId: string | null; summary: string;
   status?: string | null; code?: string | null;
+  action?: string | null; target?: string | null; resultSummary?: string | null;
+  memberId?: string | null; stage?: string | null; outcome?: string | null;
+}
+
+export interface TaskDetailFailure {
+  eventKind: string; at: number; message: string | null; code: string | null;
 }
 
 export interface TaskDetailRun {
@@ -45,6 +52,17 @@ export interface TaskDetailRun {
   detailLoaded?: boolean;
 }
 
+/** A persisted child-task run reached through coordination_steps. */
+export interface TaskDetailMemberRun extends TaskDetailRun {
+  scope: 'member'; coordinationRunId: string; coordinationStepKey: string; coordinationRole: string;
+  taskId: string; taskTitle: string; taskStatus: string;
+  memberId: string | null; memberName: string | null;
+  /** Only from a persisted failure event; absence is not interpreted as health. */
+  failure: TaskDetailFailure | null;
+  lastActivityAt: number | null;
+  locate: string;
+}
+
 export interface TaskDetailsResult {
   coordination?:CoordinationDetails|null;
   task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; stopGeneration: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
@@ -54,12 +72,16 @@ export interface TaskDetailsResult {
   /** Latest creation order is stable; selectedRunId can point to an older run appended to the bounded list. */
   latestRunId: string | null;
   currentRunId: string | null;
+  /** May identify a member child run when the caller explicitly queried one. */
   selectedRunId: string | null;
   runs: TaskDetailRun[];
+  /** Present only for a coordination parent; ordinary runs keep their original projection. */
+  memberRuns?: TaskDetailMemberRun[];
+  memberRunsTruncated?: boolean;
   events: TaskDetailEvent[];
   deliveries: Array<{ id: string; revision: number; manifestHash: string; runId: string | null; reviewStatus: string; reviewedAt: number | null; reviewNote: string | null; artifactRefs: string[]; changeSetRefs: string[]; verificationRefs: string[]; locate: string }>;
   changeSets: Array<{ id: string; applicationStatus: string; beforeRef: string; afterRef: string; locate: string; files: Array<{ path: string; state: string; sha256: string | null; size: number | null }>; filesTruncated: boolean }>;
   artifacts: Array<{ id: string; kind: string; revision: number; hash: string }>;
-  nextCursors?: { runs: string | null; activity: string | null; deliveries: string | null; runActivity: string | null };
+  nextCursors?: { runs: string | null; activity: string | null; deliveries: string | null; runActivity: string | null; memberRunActivity?: string | null };
   truncated: { children: boolean; runs: boolean; events: boolean; deliveries: boolean; changeSets: boolean; artifacts: boolean };
 }

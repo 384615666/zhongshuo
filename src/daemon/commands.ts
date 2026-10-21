@@ -12,8 +12,10 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, rmSync, cpSync } from 'node:fs';
 import { projectWriteAccess, snapshotTaskWriteAccess,physicalRootIdentity } from './projectWriteAccess.ts';
 import { coordinationRoomMembers, freezeCoordinationScope, seedExplicitRecipientCoordination } from './coordination.ts';
-import {readThreadMembers,persistThreadMember,readThreadProgress} from './threadMembers.ts';
+import {readThreadMembers,persistThreadMember,readThreadProgress,readDmProgress} from './threadMembers.ts';
 import {threadMembersChangeParams} from '../contracts/threadMembers.ts';
+import { CALL_BUDGET_ENABLED_SETTING_KEY, type CallBudgetMode, type FrozenCallBudgetPolicy } from '../contracts/callBudget.ts';
+import { callBudgetSnapshotObject, freezeTaskCallBudget, parsePersistedCallBudgetSnapshot, resolveNewCallBudget, supportsCallBudgetSnapshots } from './callBudget.ts';
 import {DaemonCommandError} from './commandError.ts';
 import {selectThreadRecipients,assertThreadTaskReady,enqueueThreadReply,createTaskForRecordThread} from './threadReplies.ts';
 export {DaemonCommandError} from './commandError.ts';
@@ -35,7 +37,8 @@ import { commandEnvelopeSchema } from '../contracts/commands.ts';
 import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHistoryParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
-import { readTaskDetails, readTaskHistory } from './taskDetails.ts';
+import { readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
+import { messageFileChanges } from './messageFileChanges.ts';
 import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus, templateConfigSchema, configGuard } from './memberManagement.ts';
 import {readAppearance,writeAvatar,writeShowAvatars} from './appearance.ts';
 import { discoverLocalMemberDefaults, ensureDefaultMembers, type DefaultMemberCandidate } from './defaultMembers.ts';
@@ -373,6 +376,41 @@ function assertFrozenDeliberationBudget(maxTurns: number, rosterSize: number): v
 }
 
 /**
+ * Explicit redispatch/rework creates a new execution segment. It freezes the
+ * then-current setting on the task, using the actual frozen roster for a
+ * DELIBERATE continuation (7N+3 is not a universal 17-call cap).
+ */
+function freezeTaskCallBudgetForNewExecution(db: ZhongshuoDatabase, taskId: string): void {
+  if (!supportsCallBudgetSnapshots(db)) return;
+  const latest = db.prepare('SELECT mode FROM workflow_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1')
+    .get(taskId) as { mode: string } | undefined;
+  const route = db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as { route_json: string | null } | undefined;
+  let routeMode: string | null = null;
+  try { routeMode = route?.route_json == null ? null : (JSON.parse(route.route_json) as { mode?: string }).mode ?? null; } catch { /* malformed route remains an execution error elsewhere */ }
+  const rawMode = latest?.mode ?? routeMode ?? 'DIRECT';
+  if (!['DIRECT', 'AUTO', 'DELIBERATE'].includes(rawMode)) {
+    throw new DaemonCommandError('CONFIGURATION_NOT_READY', `任务执行模式不可识别（${rawMode}）；未继续执行`);
+  }
+  const mode = rawMode as CallBudgetMode;
+  let overrideLimit: number | null = null;
+  if (mode === 'DELIBERATE') {
+    const latestRun = db.prepare("SELECT id FROM workflow_runs WHERE task_id=? AND mode='DELIBERATE' ORDER BY rowid DESC LIMIT 1")
+      .get(taskId) as { id: string } | undefined;
+    const rosterSize = latestRun == null
+      ? ((db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as { route_json: string | null }).route_json == null
+          ? 0
+          : (((JSON.parse((db.prepare('SELECT route_json FROM tasks WHERE id=?').get(taskId) as { route_json: string }).route_json) as { frozenMemberIds?: unknown }).frozenMemberIds as unknown[] | undefined)?.length ?? 0))
+      : (db.prepare('SELECT count(*) n FROM run_participants WHERE run_id=?').get(latestRun.id) as { n: number }).n;
+    if (!Number.isSafeInteger(rosterSize) || rosterSize < 2) {
+      throw new DaemonCommandError('CONFIGURATION_NOT_READY', '无法从已冻结研讨名单推导本次调用预算；未继续执行');
+    }
+    overrideLimit = deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).withRevision;
+  }
+  const policy = resolveNewCallBudget(db, mode, overrideLimit);
+  freezeTaskCallBudget(db, taskId, policy);
+}
+
+/**
  * R66 P3：任务标题推导（正文为空的文件-only 发送）——标题是**界面/列表标签**而非模型
  * 输入：正文非空沿用正文前 60 字；正文为空用**附件文件名**（用户决定的合法呈现——不合成
  * 假用户正文，不把界面说明当模型文件内容）。
@@ -684,17 +722,23 @@ function attachMessageRefs(
 /** 历史读取用：批量取消息附件摘要（artifactId/filename/kind/sizeBytes——点击预览经
  * attachment.previewText 走 audience+完整性校验，此处只发 id 与名字/大小不下发正文）。
  * R91：sizeBytes 取内容寻址副本实际字节数（stat 失败则不提供，绝不编造）。 */
-function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>> {
-  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean }>>();
+function messageAttachmentSummaries(db: ZhongshuoDatabase, messageIds: string[]): Map<string, Array<{ artifactId: string; filename: string; kind: string; revision?: number; hash?: string; sourcePath?: string; sizeBytes?: number; detailMarkdown?: boolean }>> {
+  const out = new Map<string, Array<{ artifactId: string; filename: string; kind: string; revision?: number; hash?: string; sourcePath?: string; sizeBytes?: number; detailMarkdown?: boolean }>>();
   if (messageIds.length === 0) return out;
   const rows = db.prepare(
-    `SELECT ma.message_id, ma.id AS attachment_row_id, ma.artifact_id, ma.display_name, a.kind, a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
-  ).all(...messageIds) as Array<{ message_id: string; attachment_row_id: string; artifact_id: string; display_name: string | null; kind: string; blob_path: string }>;
+    `SELECT ma.message_id, ma.id AS attachment_row_id, ma.artifact_id, ma.display_name, a.kind, a.blob_path, a.revision, a.hash,
+       (SELECT f.path FROM message_file_changes f WHERE f.message_id=ma.message_id
+         AND (f.artifact_id=ma.artifact_id OR (f.artifact_id IS NULL AND f.display_name=ma.display_name AND f.after_sha256=a.hash))
+         ORDER BY f.created_at, f.rowid LIMIT 1) AS source_path
+     FROM message_attachments ma JOIN artifacts a ON a.id = ma.artifact_id
+     WHERE ma.message_id IN (${messageIds.map(() => '?').join(',')}) ORDER BY ma.rowid`,
+  ).all(...messageIds) as Array<{ message_id: string; attachment_row_id: string; artifact_id: string; display_name: string | null; kind: string; blob_path: string; revision: number; hash: string; source_path: string | null }>;
   for (const r of rows) {
     const list = out.get(r.message_id) ?? [];
-    const summary: { artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean } = {
+    const summary = {
       ...(r.attachment_row_id.startsWith('matt_detail_')?{detailMarkdown:true}:{}),
-      artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind,
+      artifactId: r.artifact_id, filename: r.display_name ?? r.artifact_id, kind: r.kind, revision: r.revision, hash: r.hash,
+      ...(r.source_path != null ? { sourcePath: r.source_path } : {}), sizeBytes: undefined as number | undefined,
     };
     try {
       const st = statSync(r.blob_path);
@@ -764,7 +808,7 @@ function deliveryFactsOfTask(db: ZhongshuoDatabase, taskId: string): DeliveryFac
   }
 }
 
-function budgetProjection(json: string | null): { runMaxTurns: number; usedTurns: number; remainingTurns: number; tailReserved: number } | null {
+function budgetProjection(json: string | null): { runMaxTurns: number; usedTurns: number; remainingTurns: number; tailReserved: number; enforcement: 'enabled'|'disabled'|'legacy' } | null {
   if (json == null) return null;
   try {
     const value = JSON.parse(json) as { runMaxTurns?: unknown; usedTurns?: unknown; inFlightReservedTurns?: unknown; tailReservationByStage?: { SYNTHESIS?: unknown; RATIFY?: unknown } };
@@ -772,7 +816,8 @@ function budgetProjection(json: string | null): { runMaxTurns: number; usedTurns
     const inFlight = typeof value.inFlightReservedTurns === 'number' ? value.inFlightReservedTurns : 0;
     const tail = (typeof value.tailReservationByStage?.SYNTHESIS === 'number' ? value.tailReservationByStage.SYNTHESIS : 0)
       + (typeof value.tailReservationByStage?.RATIFY === 'number' ? value.tailReservationByStage.RATIFY : 0);
-    return { runMaxTurns: value.runMaxTurns, usedTurns: value.usedTurns, remainingTurns: Math.max(0, value.runMaxTurns - value.usedTurns - inFlight), tailReserved: tail };
+    const enforcement = parsePersistedCallBudgetSnapshot(json).callBudget?.enforcement ?? 'legacy';
+    return { runMaxTurns: value.runMaxTurns, usedTurns: value.usedTurns, remainingTurns: Math.max(0, value.runMaxTurns - value.usedTurns - inFlight), tailReserved: tail, enforcement };
   } catch {
     return null;
   }
@@ -781,7 +826,11 @@ function budgetProjection(json: string | null): { runMaxTurns: number; usedTurns
 /** 就地为驼峰历史条目（thread.history items）填 attachments 摘要。 */
 function attachMessageSummaries(db: ZhongshuoDatabase, items: Array<{ id: string; attachments?: unknown }>): void {
   const byMsg = messageAttachmentSummaries(db, items.map((i) => i.id));
-  for (const it of items) it.attachments = byMsg.get(it.id) ?? [];
+  const changes = messageFileChanges(db, items.map((i) => i.id));
+  for (const it of items) {
+    it.attachments = byMsg.get(it.id) ?? [];
+    (it as {fileChanges?: unknown}).fileChanges = changes.get(it.id) ?? [];
+  }
 }
 
 /** 线程内插入一条消息（修复轮 6：thread 目标提交的持久化路径；会话/线程序号事务内分配）。 */
@@ -1576,17 +1625,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         // r59：完整执行身份随行（deliveryId/manifestHash/sourceRunId——命令快照绑定用）。
         const reworkDerived = reworkPendingOf(deps.db, params.taskId);
         const { route_json: route, deliberation_budget_json: deliberationBudgetJson, ...facts } = task;
-        let deliberationBudget: { maxTurns: number } | null = null;
-        if (deliberationBudgetJson != null) {
-          try {
-            const parsed = JSON.parse(String(deliberationBudgetJson)) as { maxTurns?: unknown };
-            if (typeof parsed.maxTurns === 'number' && Number.isSafeInteger(parsed.maxTurns) && parsed.maxTurns > 0) {
-              deliberationBudget = { maxTurns: parsed.maxTurns };
-            }
-          } catch { /* corrupt task snapshot is surfaced as null, never guessed */ }
-        }
+        const persistedCallBudget = parsePersistedCallBudgetSnapshot(deliberationBudgetJson == null ? null : String(deliberationBudgetJson));
+        const deliberationBudget = persistedCallBudget.maxTurns != null
+          ? { maxTurns: persistedCallBudget.maxTurns }
+          : null;
         return withCommandId({ ok: true, data: {
-          task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation, deliberationBudget },
+          task: { ...facts, mode: taskModeFromRoute(route), stopGeneration: task.stop_generation, deliberationBudget, callBudget: persistedCallBudget.callBudget },
           activeRun: activeRun == null ? null : { id: activeRun.id, status: activeRun.status, budget: budgetProjection(activeRun.budget_json) },
           delivery: deliveryFactsOfTask(deps.db, params.taskId),
           pendingDelivery: pendingDelivery ?? null,
@@ -1603,7 +1647,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         if (target == null || target.project_id !== params.projectId) throw new DaemonCommandError('RESOURCE_NOT_FOUND', '任务不属于目标项目或不存在');
         if (params.conversationId!=null&&params.conversationId!==target.conversation_id) throw new DaemonCommandError('RESOURCE_NOT_FOUND','任务不属于当前会话');
         assertConversationAudience(deps.db, deps.localUserId, target.conversation_id);
-        if (params.runId != null && deps.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ? AND task_id = ? AND conversation_id = ?').get(params.runId, params.taskId, target.conversation_id) == null) {
+        if (params.runId != null && !taskRunBelongsToDetails(deps.db, params.taskId, params.runId, target.conversation_id)) {
           throw new DaemonCommandError('RESOURCE_NOT_FOUND', '运行不属于目标任务或不存在');
         }
         if(env.method==='task.details'){
@@ -1666,6 +1710,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       case 'message.submit': {
         const params = messageSubmitParams.parse(env.params);
         const requestedDeliberationBudget = parseDeliberationBudget(params.deliberationBudget);
+        const resolveRequestCallBudget = (mode: CallBudgetMode, overrideLimit?: number | null): FrozenCallBudgetPolicy => {
+          try {
+            return resolveNewCallBudget(deps.db, mode, overrideLimit);
+          } catch (error) {
+            throw new DaemonCommandError('CONFIGURATION_NOT_READY',
+              `调用次数预算设置无法读取，未提交：${error instanceof Error ? error.message : String(error)}`);
+          }
+        };
         if(params.collaboration&&params.target.kind!=='room_root'&&params.target.kind!=='thread')throw new DaemonCommandError('VALIDATION_INVALID','独立研讨仅适用于房间新话题或回复串；当前会话和草稿保留');
         if(params.collaboration&&params.intent!=='default')throw new DaemonCommandError('VALIDATION_INVALID','独立研讨必须交给 AI，不能与仅记录同时使用；当前草稿保留');
         if(requestedDeliberationBudget!=null&&params.collaboration!=='deliberate'){
@@ -1811,15 +1863,19 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               const resolvedAtts = resolveAttachmentRefs(deps.db, target.conversationId, params.attachmentRefs);
               assertImageGate(resolvedAtts,params.intent==='default',params.imageAck,params.body,(selection?.recipientIds??[]).every(id=>memberImageCapability(deps.db,id).status==='supported'));
               assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
-              let threadDeliberationBudget:{maxTurns:number}|undefined;
-              if(params.collaboration==='deliberate'){
-                if(selection==null||selection.route.kind!=='dispatch'||selection.route.mode!=='DELIBERATE'){
-                  throw new DaemonCommandError('VALIDATION_INVALID','本次未形成有效的回复串独立研讨名单；请至少选择两位当前串内可用 AI，草稿保留');
+              let threadCallBudget:{maxTurns:number;callBudget:FrozenCallBudgetPolicy}|undefined;
+              if(selection?.route.kind==='dispatch'){
+                if(selection.route.mode==='DELIBERATE'){
+                  if(params.collaboration!=='deliberate'){
+                    throw new DaemonCommandError('VALIDATION_INVALID','本次未形成有效的回复串独立研讨名单；请至少选择两位当前串内可用 AI，草稿保留');
+                  }
+                  const maxTurns=requestedDeliberationBudget?.maxTurns
+                    ??deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).withRevision;
+                  assertFrozenDeliberationBudget(maxTurns,selection.route.frozenMemberIds.length);
+                  threadCallBudget=callBudgetSnapshotObject(resolveRequestCallBudget('DELIBERATE',maxTurns));
+                }else{
+                  threadCallBudget=callBudgetSnapshotObject(resolveRequestCallBudget(selection.route.mode));
                 }
-                const maxTurns=requestedDeliberationBudget?.maxTurns
-                  ??deriveDeliberateMaxTurns(selection.route.frozenMemberIds.length,{expectsCheckpointRound3:true}).withRevision;
-                assertFrozenDeliberationBudget(maxTurns,selection.route.frozenMemberIds.length);
-                threadDeliberationBudget={maxTurns};
               }
               const message = insertThreadMessage(deps.db, {
                 projectId: params.target.projectId,
@@ -1840,10 +1896,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 const explicitRecipients=selection.recipientIds.length>1
                   &&(params.mentions.some(m=>m.kind==='all')||params.mentions.filter(m=>m.kind==='member').length>1);
                 if(explicitRecipients&&params.collaboration!=='deliberate'){
-                  const seeded=seedExplicitRecipientCoordination(deps.db,thread.root_task_id,message.messageId,params.body,selection.recipientIds);
+                  const seeded=seedExplicitRecipientCoordination(deps.db,thread.root_task_id,message.messageId,params.body,selection.recipientIds,threadCallBudget);
                   return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey:null,coordinationRunId:seeded.runId,recipientIds:selection.recipientIds};
                 }
-                const dispatchKey=enqueueThreadReply(deps.db,thread.id,message.messageId,message.threadMessageSeq,selection,deps.localUserId,threadDeliberationBudget);
+                const dispatchKey=enqueueThreadReply(deps.db,thread.id,message.messageId,message.threadMessageSeq,selection,deps.localUserId,threadCallBudget);
                 return{...message,disposition:'enqueued' as const,taskId:thread.root_task_id,followUpRecorded:false,dispatchKey};
               }
               return { ...message, disposition: 'none' as const, taskId: thread.root_task_id, followUpRecorded: true };
@@ -1871,6 +1927,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             }
             const peer = dmPeerOf(deps.db, target.conversationId);
             if (peer == null) throw new DaemonCommandError('CONVERSATION_SCOPE_MISMATCH', '私信会话缺少 Agent 对端（数据不完整）');
+            const dmCallBudget = params.intent === 'default'
+              ? callBudgetSnapshotObject(resolveRequestCallBudget('DIRECT'))
+              : null;
             return deps.db.transaction(() => {
               const r = createDmTurn(deps.db, {
                 conversationId: target.conversationId,
@@ -1882,6 +1941,10 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 title: taskTitleOf(params.body, resolvedAtts.map((a) => a.displayName)),
                 reviewPolicy: reviewPolicyOf(deps.db, target.projectId),
               });
+              if (dmCallBudget != null) {
+                if (r.taskId == null) throw new DaemonCommandError('STORAGE_UNAVAILABLE', '私信执行任务未建立；本次未提交，草稿保留');
+                freezeTaskCallBudget(deps.db, r.taskId, dmCallBudget.callBudget);
+              }
               attachMessageRefs(deps.db, r.messageId, resolvedAtts, params.attachmentRanges, params.intent === 'record_only' ? 'local-only' : params.imageAck === 'omit-images' ? 'omit' : 'include');
               try{snapshotTaskWriteAccess(deps.db,r.taskId);freezeCoordinationScope(deps.db,r.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
               appendDomainEvent(deps.db, {
@@ -1890,7 +1953,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
                 turnId: null, kind: 'message.submitted', createdAt: Date.now(),
                 payload: { target: 'dm', disposition: r.disposition, intent: params.intent, taskId: r.taskId, note: r.note ?? null },
               });
-              return { messageId: r.messageId, conversationId: target.conversationId, threadId: null, taskId: r.taskId, disposition: r.disposition, note: r.note ?? null };
+              return { messageId: r.messageId, conversationId: target.conversationId, threadId: null, taskId: r.taskId, disposition: r.disposition, note: r.note ?? null, ...(dmCallBudget == null ? {} : { callBudget: dmCallBudget }) };
             })();
           }
           if (target.kind !== 'room_root') throw new DaemonCommandError('VALIDATION_INVALID', '路由目标缺失');
@@ -1908,7 +1971,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             },
           });
           if (!route.ok) throw new DaemonCommandError(route.error.code, route.error.message);
-          let frozenDeliberationBudget: { maxTurns: number } | null = null;
+          let frozenCallBudget: { maxTurns: number; callBudget: FrozenCallBudgetPolicy } | null = null;
           if (params.collaboration === 'deliberate') {
             if (route.value.kind !== 'dispatch' || route.value.mode !== 'DELIBERATE') {
               throw new DaemonCommandError('VALIDATION_INVALID', '本次未形成有效的独立研讨名单；请至少选择两位可用 AI，草稿保留');
@@ -1917,7 +1980,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             const maxTurns = requestedDeliberationBudget?.maxTurns
               ?? deriveDeliberateMaxTurns(rosterSize, { expectsCheckpointRound3: true }).withRevision;
             assertFrozenDeliberationBudget(maxTurns, rosterSize);
-            frozenDeliberationBudget = { maxTurns };
+            frozenCallBudget = callBudgetSnapshotObject(resolveRequestCallBudget('DELIBERATE', maxTurns));
+          } else if (route.value.kind === 'dispatch') {
+            frozenCallBudget = callBudgetSnapshotObject(resolveRequestCallBudget(route.value.mode));
           }
           assertImageGate(resolvedAtts, route.value.kind === 'dispatch', params.imageAck, params.body, route.value.kind === 'dispatch' && route.value.initialWakeMemberIds.every((id) => memberImageCapability(deps.db, id).status === 'supported')); // 派发路由才设门（record_only 零派发；空正文+仅图片+仅文字=空模型输入拒）
           assertAttachmentRanges(deps.db, resolvedAtts, params.attachmentRanges);
@@ -1945,15 +2010,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
               now: Date.now(),
             });
             if (!created.ok) throw new DaemonCommandError(created.error.code, created.error.message);
-            if (frozenDeliberationBudget != null) {
+            if (frozenCallBudget != null) {
               if (created.value.taskId == null) {
-                throw new DaemonCommandError('STORAGE_UNAVAILABLE', '独立研讨任务未建立；本次未提交，草稿保留');
+                throw new DaemonCommandError('STORAGE_UNAVAILABLE', '请求执行任务未建立；本次未提交，草稿保留');
               }
-              const frozen = deps.db.prepare(
-                'UPDATE tasks SET deliberation_budget_json=? WHERE id=? AND route_json IS NOT NULL',
-              ).run(JSON.stringify(frozenDeliberationBudget), created.value.taskId);
-              if (frozen.changes !== 1) {
-                throw new DaemonCommandError('STORAGE_UNAVAILABLE', '独立研讨预算冻结失败；本次未提交，草稿保留');
+              try {
+                freezeTaskCallBudget(deps.db, created.value.taskId, frozenCallBudget.callBudget);
+              } catch {
+                throw new DaemonCommandError('STORAGE_UNAVAILABLE', '本次调用预算冻结失败；本次未提交，草稿保留');
               }
             }
             try{snapshotTaskWriteAccess(deps.db,ids.taskId);freezeCoordinationScope(deps.db,ids.taskId);}catch(e){throw new DaemonCommandError('CAPABILITY_UNSUPPORTED',(e as Error).message);}
@@ -1961,9 +2025,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             if(route.value.kind==='dispatch'&&route.value.mode==='AUTO'&&route.value.participantScope==='selected'&&route.value.frozenMemberIds.length>1){
               seedExplicitRecipientCoordination(deps.db,ids.taskId,ids.messageId,params.body,route.value.frozenMemberIds);
             }
-            return frozenDeliberationBudget == null
+            return frozenCallBudget == null
               ? created.value
-              : { ...created.value, deliberationBudget: frozenDeliberationBudget };
+              : { ...created.value, callBudget: frozenCallBudget, ...(params.collaboration === 'deliberate' ? { deliberationBudget: { maxTurns: frozenCallBudget.maxTurns } } : {}) };
           })();
         }, submitReplayGuard);
         return withCommandId({ ok: true, data: result.data, replayed: result.replayed });
@@ -1987,14 +2051,18 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         interface ToolCallItem {
           toolCallId: string; toolName: string | null; memberId: string | null; turnId: string | null;
           startedAt: number | null; completedAt: number | null; outcome: string | null;
-          eventKeys: string[]; unattributed: boolean;
+          action: string | null; target: string | null; argumentsSummary: string | null;
+          resultSummary: string | null; eventKeys: string[]; unattributed: boolean;
         }
         const byCall = new Map<string, ToolCallItem>();
         const pushEventKey = (item: ToolCallItem, eventKey: string | undefined): void => {
           if (eventKey != null && !item.eventKeys.includes(eventKey)) item.eventKeys.push(eventKey);
         };
         for (const r of rows) {
-          const payload = JSON.parse(r.payload_json) as { toolCallId?: string; toolName?: string; outcome?: string; eventKey?: string };
+          const payload = JSON.parse(r.payload_json) as {
+            toolCallId?: string; toolName?: string; outcome?: string; eventKey?: string;
+            action?: string; target?: string; argumentsSummary?: string; resultSummary?: string;
+          };
           const hasIdentity = r.turn_id != null && payload.toolCallId != null;
           // 带作用域的合并键：turnId+toolCallId；身份不完整 → 每条事件独立未归属条目（seq 唯一）。
           const key = hasIdentity ? `${r.turn_id}:${payload.toolCallId}` : `unattributed:${r.created_at}:${r.kind}:${payload.eventKey ?? ''}`;
@@ -2003,6 +2071,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             entry = {
               toolCallId: payload.toolCallId ?? '(未归属)', toolName: null, memberId: null,
               turnId: r.turn_id, startedAt: null, completedAt: null, outcome: null,
+              action: null, target: null, argumentsSummary: null, resultSummary: null,
               eventKeys: [], unattributed: !hasIdentity,
             };
             byCall.set(key, entry);
@@ -2011,11 +2080,17 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             // started 取首：时间与工具名取自同一条选定事件。
             entry.startedAt = r.created_at;
             entry.toolName = payload.toolName ?? entry.toolName;
+            entry.action = payload.action ?? entry.action;
+            entry.target = payload.target ?? entry.target;
+            entry.argumentsSummary = payload.argumentsSummary ?? entry.argumentsSummary;
           }
           if (r.kind === 'tool.completed' && r.turn_id === entry.turnId) {
             // completed 取末：结果与完成时间取自同一条选定事件（不同 turn 的同名 id 不串）。
             entry.completedAt = r.created_at;
             entry.outcome = payload.outcome ?? null;
+            entry.action = payload.action ?? entry.action;
+            entry.target = payload.target ?? entry.target;
+            entry.resultSummary = payload.resultSummary ?? entry.resultSummary;
           }
           pushEventKey(entry, payload.eventKey);
         }
@@ -2836,8 +2911,13 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const pending = deps.db.prepare("SELECT 1 FROM outbox WHERE dispatch_key = ? AND status != 'done'")
             .get(`task:${t.id}:redispatch:${t.run_id}`) != null;
           const blocked = pending ? null : assessTaskRedispatchReadiness(deps.db, t.id);
+          const formatRepair = deps.db.prepare(`SELECT 1 FROM agent_turns a
+            JOIN domain_events e ON e.turn_id=a.id AND e.kind='turn.outputInvalid'
+            WHERE a.run_id=? AND a.status='FAILED' LIMIT 1`).get(t.run_id) != null
+            && deps.db.prepare('SELECT 1 FROM format_repair_workitems WHERE task_id=? AND status IN (\'pending\',\'consumed\')').get(t.id) == null;
           return { taskId: t.id, title: t.title, taskRevision: t.revision, stopGeneration: t.stop_generation,
             latestRunId: t.run_id, available: projectActive && !archived && !pending && blocked == null, pending,
+            formatRepair,
             blockReason: !projectActive ? '项目已归档或不可用；先恢复项目。'
               : archived ? '私信已归档；先恢复会话，再重新核对任务状态。' : blocked?.message ?? null };
         });
@@ -2869,10 +2949,12 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const messages = rows.reverse();
         // 消息附件（第二十七轮三：已发消息附件可点击预览；raw 行补 attachments 键）。
         const attByMsg = messageAttachmentSummaries(deps.db, messages.map((m) => String(m.id)));
+        const changesByMsg = messageFileChanges(deps.db, messages.map((m) => String(m.id)));
         for (const m of messages) {
           (m as { attachments?: unknown }).attachments = attByMsg.get(String(m.id)) ?? [];
+          m.fileChanges = changesByMsg.get(String(m.id)) ?? [];
         }
-        return withCommandId({ ok: true, data: { messages, nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
+        return withCommandId({ ok: true, data: { messages, progress: readDmProgress(deps.db, params.conversationId), nextCursor: rows.length === limit ? rows[0]!.conversation_seq : null } });
       }
       case 'conversation.markRead': {
         // DEV-18 首包：通用阅读水位（房间/线程/DM）——幂等（同水位重复=advanced:false；
@@ -4753,7 +4835,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.get': {
         // 应用设置（第九轮）：daemon_state kv 白名单——持久化并跨重开生效；未知键拒绝。
-        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath'])).min(1) }).parse(env.params);
+        const params = z.strictObject({ keys: z.array(z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY])).min(1) }).parse(env.params);
         const values: Record<string, string | null> = {};
         for (const key of params.keys) {
           const row = deps.db.prepare('SELECT value FROM daemon_state WHERE key = ?').get(`app:setting:${key}`) as { value: string } | undefined;
@@ -4763,11 +4845,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
       }
       case 'app.settings.set': {
         const params = z.strictObject({
-          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath']),
+          key: z.enum(['repoStatus.visible', 'ui.autoOpenProjectPath', CALL_BUDGET_ENABLED_SETTING_KEY]),
           value: z.string().min(1).max(600),
         }).parse(env.params);
         const result = run(() => {
-          const allowed: Record<string, string[]> = { 'repoStatus.visible': ['true', 'false'] };
+          const allowed: Record<string, string[]> = {
+            'repoStatus.visible': ['true', 'false'],
+            [CALL_BUDGET_ENABLED_SETTING_KEY]: ['true', 'false'],
+          };
           if (allowed[params.key] != null && !allowed[params.key]!.includes(params.value)) {
             throw new DaemonCommandError('VALIDATION_INVALID', `设置 ${params.key} 不接受值 ${params.value}（允许：${allowed[params.key]!.join('/')}）`);
           }
@@ -5101,7 +5186,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           if (blockedEarly != null) throw new DaemonCommandError(blockedEarly.code, blockedEarly.message);
           // sourceRunId 归属校验（第四十轮 §3）：客户端来源只是引用，不替代服务端事实——
           // 必须存在、属于本任务、且是任务当前最新执行（过时来源拒绝；新一次合法中断产生新源）。
-          if (params.formatRepair !== true && params.sourceRunId != null) {
+          if (params.sourceRunId != null) {
             const src = deps.db.prepare('SELECT id, task_id FROM workflow_runs WHERE id = ?').get(params.sourceRunId) as { id: string; task_id: string } | undefined;
             if (src == null || src.task_id !== params.taskId) {
               throw new DaemonCommandError('RESOURCE_NOT_FOUND', `恢复来源 run 不存在或不属于该任务：${params.sourceRunId}——来源以服务端事实为准，不得以任意号生成恢复意图`);
@@ -5127,7 +5212,9 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             // 源 turn=任务最后一个**有效** turn（豁免 refunded——确认未启动退款无逻辑输出，
             // 不挡住更早有效输出的修复资格）且 FAILED，且**其自身**存在 turn.outputInvalid 事件。
             const sourceTurn = deps.db
-              .prepare(`SELECT id, status FROM agent_turns WHERE dispatch_key LIKE 'task:' || ? || ':%' AND (budget_mark IS NULL OR budget_mark != 'refunded') ORDER BY rowid DESC LIMIT 1`)
+              .prepare(`SELECT a.id, a.status FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id
+                WHERE r.task_id=? AND (a.budget_mark IS NULL OR a.budget_mark != 'refunded')
+                ORDER BY a.rowid DESC LIMIT 1`)
               .get(params.taskId) as { id: string; status: string } | undefined;
             if (sourceTurn == null || sourceTurn.status !== 'FAILED') {
               throw new DaemonCommandError('STALE_REVISION', `格式修复仅适用于最后一个 turn FAILED（实际：${sourceTurn?.status ?? '无 turn'}）`);
@@ -5149,10 +5236,14 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             const replyEvt = deps.db
               .prepare(`SELECT payload_json FROM domain_events WHERE kind = 'thread.replyAdded' AND turn_id = ? ORDER BY seq DESC LIMIT 1`)
               .get(sourceTurn.id) as { payload_json: string } | undefined;
-            if (replyEvt == null) throw new DaemonCommandError('STALE_REVISION', '源 turn 无完成输出消息（不能以任务级最后消息顶替）');
-            const messageId = (JSON.parse(replyEvt.payload_json) as { messageId: string }).messageId;
-            const msg = deps.db.prepare('SELECT body_json FROM messages WHERE id = ?').get(messageId) as { body_json: string } | undefined;
-            if (msg == null) throw new DaemonCommandError('STALE_REVISION', `源输出消息缺失：${messageId}`);
+            const eventMessageId = replyEvt == null ? null : (JSON.parse(replyEvt.payload_json) as { messageId?: unknown }).messageId;
+            // DM 回复不写 thread.replyAdded；按 turn 命名空间直接取本轮最终 agent 消息。
+            const messageRow = typeof eventMessageId === 'string'
+              ? deps.db.prepare('SELECT id, body_json FROM messages WHERE id = ?').get(eventMessageId) as { id: string; body_json: string } | undefined
+              : deps.db.prepare(`SELECT id, body_json FROM messages WHERE task_id=? AND author_type='agent'
+                  AND id LIKE ? ORDER BY created_at DESC LIMIT 1`).get(params.taskId, `msg_${sourceTurn.id}_%`) as { id: string; body_json: string } | undefined;
+            if (messageRow == null) throw new DaemonCommandError('STALE_REVISION', '源 turn 无完成输出消息（不能以任务级最后消息顶替）');
+            const msg = messageRow;
             const body=JSON.parse(msg.body_json) as {text?:string;runtimeControlResult?:string};
             const outputText=body.runtimeControlResult??body.text??'';
             // 源逻辑输出 resultKey=确定性约定 result_<turnId>（与该 turn 的 run.created 审计
@@ -5205,6 +5296,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           // 事实可能已变化，以 INSERT 前最终权威判定为准）。
           const blockedFinal = assessTaskRedispatchReadiness(deps.db, params.taskId);
           if (blockedFinal != null) throw new DaemonCommandError(blockedFinal.code, blockedFinal.message);
+          freezeTaskCallBudgetForNewExecution(deps.db, params.taskId);
           deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0); // 意图入队代次（迁移 034）
           appendDomainEvent(deps.db, {
             schemaVersion: 1,
@@ -5294,6 +5386,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           }
           const blockedFinal = assessTaskRedispatchReadiness(deps.db, params.taskId);
           if (blockedFinal != null) throw new DaemonCommandError(blockedFinal.code, blockedFinal.message);
+          freezeTaskCallBudgetForNewExecution(deps.db, params.taskId);
           deps.db.prepare('INSERT INTO outbox (dispatch_key, stop_generation_at_enqueue) VALUES (?, ?)').run(dispatchKey, (deps.db.prepare('SELECT stop_generation FROM tasks WHERE id = ?').get(params.taskId) as { stop_generation: number } | undefined)?.stop_generation ?? 0);
           appendDomainEvent(deps.db, {
             schemaVersion: 1,

@@ -193,7 +193,14 @@ export interface AssembledTurnInput {
    * 格式修复上下文（第六轮，task.redispatch formatRepair:true）：原输出全文+校验错误注入
    * 下一 turn 输入附注——修复与原逻辑输出正确绑定（不是无反馈重跑）；不截短原内容。
    */
-  repairContext?: { originalTurnId: string; sourceResultKey: string; issues: string[]; originalText: string };
+  repairContext?: {
+    originalTurnId: string;
+    sourceResultKey: string;
+    issues: string[];
+    originalText: string;
+    sourceChangeSetId?: string;
+    sourceFiles?: Array<{ path: string; state: string; beforeHash: string | null; afterHash: string | null; size: number | null }>;
+  };
   /**
    * 返工反馈（第九轮 RT-25 闭环）：最近一次人工验收为 changes_requested 时注入后续派发
    * 输入——明确关联被退回的交付版本与验收说明（不是无反馈重跑）；新交付验收通过后消失。
@@ -330,7 +337,8 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
   const instruction = selectStageInstruction({ mode, role, stage, turnPurpose: 'stage_work' });
   if (!instruction.ok) return instruction;
 
-  const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
+  const rawRemaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
+  const remaining = input.budget.callBudget?.enforcement === 'disabled' ? Math.max(0, rawRemaining) : rawRemaining;
   const envelope: TurnBundleEnvelope = {
     bundleVersion: TURN_BUNDLE_VERSION,
     promptVersion: STANDING_PROMPT_VERSION,
@@ -352,6 +360,8 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
       tailReserved: 0,
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
+      enforcement: input.budget.callBudget?.enforcement ?? 'legacy',
+      countOnly: input.budget.callBudget?.enforcement === 'disabled',
     },
     permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, fullAccess:input.writeAccess.fullAccess, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
@@ -387,7 +397,10 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
           JSON.stringify(input.repairContext.issues),
           `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
           input.repairContext.originalText,
-          '修复要求：直接按输出契约重新提交完整 TaskComplete。answer 使用最短有用表达；确有可复用方案/清单/报告时提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null。字段以 schema 为准，resultKey 使用本轮给定值；直接输出 JSON，不要代码围栏或额外解释。',
+          ...(input.repairContext.sourceFiles?.length
+            ? [`上一轮真实文件变更（禁止再次执行业务写入；仅用于回填交付）：${JSON.stringify(input.repairContext.sourceFiles)}`]
+            : []),
+          '修复要求：本 turn 是只读验证修复，不重复执行业务写入、不重建文件；直接按输出契约重新提交完整 TaskComplete。answer 使用最短有用表达；确有可复用方案/清单/报告时提供 document（filename/purpose/markdown，不要缩短或删除内容），否则 document=null。字段以 schema 为准，resultKey 使用给定源值；直接输出 JSON，不要代码围栏或额外解释。',
         );
       }
       if (input.reviewFeedback != null) {
@@ -402,7 +415,7 @@ export function assembleDirectTurn(input: AssembledTurnInput): DomainResult<Asse
     outputContract: {
       kind: 'TaskComplete',
       submitVia: 'final-result',
-      resultKey: `result_${input.turnId}`,
+      resultKey: input.repairContext?.sourceResultKey ?? `result_${input.turnId}`,
       progressAllowed: true,
     },
     communicationContract: input.communicationContract??{mentionEnabled:false,disabledReason:'本条只请求当前成员回应'},
@@ -544,7 +557,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     const fallback=selectedDetailIds.has(h.id)&&!detailHostedMessageIds.has(h.id)?detailMarkdownOfBody(body):null;
     return { messageId: h.id, author: h.author_id, text: fallback?`${visible}\n\n【完整详情（附件不可用，原文保留）】\n${fallback}`:visible };
   });
-  const remaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
+  const rawRemaining = input.budget.maxTurns - input.budget.usedTurns - input.budget.inFlightReservedTurns;
+  const remaining = input.budget.callBudget?.enforcement === 'disabled' ? Math.max(0, rawRemaining) : rawRemaining;
   const envelope: TurnBundleEnvelope = {
     bundleVersion: TURN_BUNDLE_VERSION,
     promptVersion: DM_STANDING_PROMPT_VERSION,
@@ -563,6 +577,8 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
       tailReserved: 0,
       tailReservationByStage: {},
       stageAvailableTurns: remaining,
+      enforcement: input.budget.callBudget?.enforcement ?? 'legacy',
+      countOnly: input.budget.callBudget?.enforcement === 'disabled',
     },
     permission: input.writeAccess ? { tier: input.writeAccess.tier, intent: input.writeAccess.intent, policyId: input.writeAccess.policyId, fullAccess:input.writeAccess.fullAccess, modificationAuthorized: input.writeAccess.modificationAuthorized, allowedWriteRoots: input.writeAccess.allowedWriteRoots } : { tier:'plan', intent:'analyze', policyId:'policy-analyze', modificationAuthorized:false, allowedWriteRoots:[] },
     task: {
@@ -591,6 +607,18 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     // 存在时加键（非返工轮信封与既有 hash 完全一致）。
     ...(() => {
       const notes: string[] = [];
+      if (input.repairContext != null) {
+        notes.push(
+          '【格式修复轮】上一轮输出未通过 TaskComplete 校验。校验错误：',
+          JSON.stringify(input.repairContext.issues),
+          `上一轮原始输出（turn=${input.repairContext.originalTurnId}，源逻辑输出 resultKey=${input.repairContext.sourceResultKey}，全文保留）：`,
+          input.repairContext.originalText,
+          ...(input.repairContext.sourceFiles?.length
+            ? [`上一轮真实文件变更（禁止再次执行业务写入；仅用于回填交付）：${JSON.stringify(input.repairContext.sourceFiles)}`]
+            : []),
+          '修复要求：直接按输出契约重新提交完整 TaskComplete。不要重复执行业务写入、不要重建文件；依据已完成的实际变更填写 files/changeSummary/document，resultKey 使用给定源值；直接输出 JSON，不要代码围栏或额外解释。',
+        );
+      }
       if (input.reviewFeedback != null) {
         notes.push(
           `【返工】此前交付（第 ${input.reviewFeedback.deliveryRevision} 版）未通过人工验收（要求修改）。`,
@@ -603,7 +631,7 @@ function assembleDmTurn(input: AssembledTurnInput): DomainResult<AssembledTurn> 
     outputContract: {
       kind: 'TaskComplete',
       submitVia: 'final-result',
-      resultKey: `result_${input.turnId}`,
+      resultKey: input.repairContext?.sourceResultKey ?? `result_${input.turnId}`,
       progressAllowed: true,
     },
     communicationContract: {

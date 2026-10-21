@@ -517,12 +517,16 @@ button.composer-file-token-open:hover {
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 5px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .inline-file-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: min(100%, 340px);
+  max-width: 100%;
+  min-width: 0;
   padding: 3px 7px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
@@ -1888,6 +1892,15 @@ button.composer-file-token-open:hover {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /*
+   * R98：消息的响应式判断以"消息所在面板"为准，不以整窗宽度为准。
+   * 主池、回复串、私信和详情复用的都是这层滚动容器；容器查询因此能在
+   * 三栏/双栏/单栏或拖动分栏后立刻得到真实可用宽度。
+   */
+  width: 100%;
+  max-width: none;
+  container-type: inline-size;
+  container-name: zs-message-panel;
 }
 
 .msg {
@@ -1895,8 +1908,8 @@ button.composer-file-token-open:hover {
   gap: 10px;
   align-items: flex-start;
   position: relative;
-  width: min(100%, 920px);
-  max-width: 920px;
+  width: 100%;
+  max-width: none;
 }
 .msg.msg-agent {
   margin-right: auto;
@@ -1904,7 +1917,10 @@ button.composer-file-token-open:hover {
 .msg.msg-human {
   flex-direction: row-reverse;
   margin-left: auto;
-  max-width: min(78%, 760px);
+  /* 短消息贴合内容；长文随当前面板增长，不再叠加 760px 整窗式硬上限。 */
+  align-self: flex-end;
+  width: auto;
+  max-width: 78%;
 }
 .msg.msg-system {
   width: 100%;
@@ -1925,6 +1941,7 @@ button.composer-file-token-open:hover {
 .msg-body {
   flex: 1;
   min-width: 0;
+  width: 100%;
   padding: 0;
   background: transparent;
 }
@@ -1981,16 +1998,18 @@ button.composer-file-token-open:hover {
 /**
  * 消息正文 = **主阅读面**（规范 §3.1/§5.3）：15px / 1.65 / --text。
  *
- * 限宽 76ch 是"大屏不被拉成通栏长行"的硬要求（规范 §3.1、§9.1）。
- * 用 ch 单位而不是 px：它随字号与字体自动缩放，等价于"约 76 个字符"，
- * 在中文环境下约合 38 个汉字，是舒适阅读行长。
+ * R98：默认吃满所在消息面板。原先固定 76ch 会在带鱼屏、三栏主池和
+ * 回复串里留下大片空白；表格、代码和附件也无法随分栏联动。阅读行长
+ * 交给所在面板本身控制，不再用全局字符数上限覆盖局部布局。
  */
 .msg-text {
   font-size: var(--fs-15);
   line-height: 1.65;
   overflow-wrap: anywhere;
   color: var(--text);
-  max-width: 76ch;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
 }
 .msg-text .md-view {
   max-width: none;
@@ -2010,6 +2029,8 @@ button.composer-file-token-open:hover {
   margin-top: 7px;
   align-items: center;
   min-height: 24px;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 .msg-action-btn {
   min-height: 24px;
@@ -2041,6 +2062,8 @@ button.composer-file-token-open:hover {
 }
 /* 用户消息：气泡贴内容宽，不再被拉成 78% 的大块 */
 .msg-list.is-replies .msg.msg-human {
+  align-self: stretch;
+  width: 100%;
   max-width: 100%;
 }
 .msg-list.is-replies .msg.msg-human .msg-body {
@@ -2058,7 +2081,8 @@ button.composer-file-token-open:hover {
 }
 .msg-list.is-replies .msg-human-bubble {
   width: fit-content;
-  max-width: min(600px, 100%);
+  /* 短消息仍由 fit-content 收束，长文/长表格可随回复串宽度增长。 */
+  max-width: 100%;
   margin-left: auto;
   padding: 10px 14px;
   border-radius: var(--r-lg);
@@ -2164,10 +2188,53 @@ button.composer-file-token-open:hover {
   flex-direction: column;
   gap: 6px;
   margin-top: 9px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .msg-attachment-footer:empty { display: none; }
+.message-document-cards { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.message-document-card { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: 100%; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-surface); }
+.message-document-description { display: flex; flex: 1 1 180px; min-width: 0; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.message-document-description strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-document-card > .btn { flex: none; }
+.message-file-changes { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-surface); }
+.message-file-changes > summary { padding: 10px 12px; cursor: pointer; }
+.message-file-change-list { border-top: 1px solid var(--border); }
+.message-file-change-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+.message-file-change-row + .message-file-change-row { border-top: 1px solid var(--border-subtle); }
+.file-change-counts { flex: none; font-size: var(--fs-12); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.file-change-counts > :first-child { color: var(--success, #168250); }
+.file-change-counts > :last-child { color: var(--danger, #c43434); }
+.message-file-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.message-file-diff section { min-width: 0; }
+.message-file-diff pre { overflow: auto; max-height: 65vh; margin-top: 8px; padding: 10px; background: var(--bg-surface-2); border: 1px solid var(--border); }
+@media (max-width: 700px) { .message-file-diff { grid-template-columns: minmax(0, 1fr); } }
 .msg-attachment-footer .msg-inline-attachments,
 .msg-attachment-footer .msg-attach-row { margin-top: 0; }
+.live-progress {
+  width: 100%;
+  max-width: none;
+}
+.live-progress-head { align-items: baseline; }
+.live-progress-activity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.live-progress-activity[data-zs-live-activity="failure"] { color: var(--danger); }
+.live-progress-text {
+  margin-top: 7px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-progress-details { margin-top: 6px; color: var(--text-2); }
+.live-progress-details summary { cursor: pointer; font-size: var(--fs-12); }
+.live-progress-details ol { margin: 6px 0 0 18px; padding: 0; }
+.live-progress-details li { margin: 3px 0; overflow-wrap: anywhere; }
 .msg-detail-fallback {
   margin-top: 9px;
   border-top: 1px solid var(--border-subtle);
@@ -2250,6 +2317,34 @@ button.composer-file-token-open:hover {
    */
   .msg-list.is-replies .msg-actions { max-width: none; flex-wrap: nowrap; gap: 2px; justify-content: flex-end; }
   .msg-list.is-replies .msg-action-btn { padding-inline: 6px; font-size: 0; }
+  .msg-list.is-replies .msg-human-bubble { max-width: calc(100% - 8px); }
+  .msg-list.is-replies .md-spec { grid-template-columns: 64px minmax(0, 1fr); }
+}
+
+/*
+ * R98：同一套窄消息规则同时按面板宽度触发。主池只占三栏之一、
+ * 回复串被拖窄或预览占去空间时，即使整窗仍有 1920/3440px，
+ * 作者行、操作行与正文也会一起切换，不会继续按整窗媒体查询排版。
+ */
+@container zs-message-panel (max-width: 560px) {
+  .msg-list.is-replies .msg-body {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .msg-list.is-replies .msg.msg-human .msg-body {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .msg-list.is-replies .msg.msg-human .msg-body > .msg-actions { grid-column: 2; }
+  .msg-list.is-replies .msg.msg-human .msg-body > .msg-head { grid-column: 1; justify-content: flex-start; }
+  .msg-list.is-replies .msg-actions {
+    max-width: none;
+    flex-wrap: nowrap;
+    gap: 2px;
+    justify-content: flex-end;
+  }
+  .msg-list.is-replies .msg-action-btn {
+    padding-inline: 6px;
+    font-size: 0;
+  }
   .msg-list.is-replies .msg-human-bubble { max-width: calc(100% - 8px); }
   .msg-list.is-replies .md-spec { grid-template-columns: 64px minmax(0, 1fr); }
 }

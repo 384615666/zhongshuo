@@ -266,9 +266,9 @@ export function ThreadPage({ threadId, initialTab, highlightMessageId }: { threa
   const stoppable = task != null && ['ACTIVE', 'WAITING_USER', 'BLOCKED'].includes(task.status);
   const runStopping = task?.activeRun?.status === 'STOPPING';
 
-  const openPreviewAtt = (att: { artifactId: string; filename: string; kind: string }) => {
+  const openPreviewAtt = (att: { artifactId: string; filename: string; kind: string; revision?: number; hash?: string }) => {
     // 共享预览（第五十二轮 §6.1）：全类型经 PreviewPane（正式 preview* 命令+随包渲染器）。
-    openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId, origin: '任务线程' });
+    openPreview({ attachmentId: att.artifactId, filename: att.filename, kind: att.kind, conversationId, origin: '任务线程', revisionHint: att.revision, hashHint: att.hash });
   };
 
   /** R68 §6：打开交付文档（共享预览第三来源）——登记 delivery 资源并开标签；版本=交付

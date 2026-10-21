@@ -17,6 +17,7 @@ import {
   activatePreview, closeAllPreviews, closePreviewTab, createFileCommentBridge, openWorktreePreview,
   hidePreview, quoteResource, reloadResource, rememberScroll, showPreview,
   togglePreviewMaximized, applyWorktreeRead, markResourceUpdated, applyDeliveryRead,
+  registerAttachmentResource, openPreview,
 } from '../data/actions-preview';
 import {
   audienceAllows, openedFromAddsInfo, openedFromLabel, originLabel,
@@ -149,6 +150,8 @@ export function PreviewPane({
   const [infoOpen, setInfoOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [wrapSource, setWrapSource] = useState(false);
+  /** R98：默认铺满预览面板；“限宽阅读”由用户在更多菜单显式开启。 */
+  const [readingMeasure, setReadingMeasure] = useState(false);
   /** 下载原文件忙态（R66 P5——顶部声明：hooks 顺序不随后续早退分支变化）。 */
   const [dlBusy, setDlBusy] = useState(false);
   const [downloadError, setDownloadError] = useState<{ resourceId: string; text: string } | null>(null);
@@ -156,7 +159,7 @@ export function PreviewPane({
   const [tabsOverflow, setTabsOverflow] = useState(false);
   // R73-C：放大状态真正进入布局——`.preview-pane.maximized` 以绝对定位铺满当前
   // 工作内容区（.workspace/.page 为定位锚点；导航在 .main 之外仍可达）。
-  const paneCls = `preview-pane${session.maximized ? ' maximized' : ''}${className ? ` ${className}` : ''}`;
+  const paneCls = `preview-pane${session.maximized ? ' maximized' : ''}${readingMeasure ? ' is-reading-measure' : ''}${className ? ` ${className}` : ''}`;
 
   /**
    * R73-C：放大态按 Esc 还原（既有约定：收起/返回类动作都可用 Esc）。弹层（Menu/Modal/
@@ -194,6 +197,15 @@ export function PreviewPane({
   const active = tabs.find((t) => t.key === session.activeKey) ?? tabs[0];
   const resource = active ? resourceOf(s, active.resourceId) : undefined;
   const revision = resource && active ? revOf(resource, active.revision) : undefined;
+  const messageFiles = [...Object.values(s.threadMessages).flat(), ...Object.values(s.dmHistory).flat()];
+  const fileFacts = messageFiles.flatMap(message => message.fileChanges ?? []);
+  const currentFile = resource ? fileFacts.find(file => file.artifactId === resource.id) : undefined;
+  const newerFile = currentFile ? fileFacts.filter(file => file.projectId === currentFile.projectId
+    && file.conversationId === currentFile.conversationId && file.path === currentFile.path
+    && file.artifactId && file.artifactId !== currentFile.artifactId && file.afterHash !== currentFile.afterHash
+    && file.createdAt >= currentFile.createdAt).sort((a, b) => b.createdAt - a.createdAt)[0] : undefined;
+  const newerMessage = newerFile ? messageFiles.find(message => message.fileChanges?.some(file => file.id === newerFile.id)) : undefined;
+  const newerAttachment = newerMessage?.formalAttachments?.find(attachment => attachment.artifactId === newerFile?.artifactId);
 
   // 恢复阅读位置。R74-P2：挂载时内容往往还没长到位（工作区/附件正文异步装载，
   // scrollHeight 尚小）——一次性赋值会被钳到 0（r73 实测 reopen 后 scrollTop=0）。改为
@@ -386,8 +398,8 @@ export function PreviewPane({
   };
 
   return (
-    <aside className={paneCls} style={flexStyle} aria-label="文件预览">
-      {/* ---------- 第一行：文件标签（参考 ZCode：格式图标+截断名+×，右端收起/放大/更多） ---------- */}
+    <aside className={paneCls} style={flexStyle} aria-label="文件预览" data-zs-reading-measure={readingMeasure ? '1' : '0'}>
+      {/* ---------- 第一行：文件标签（参考 ZCode：格式图标+截断名+×，右端更多/放大/收起） ---------- */}
       <div className="preview-tabs" role="tablist" aria-label="已打开的文件">
         <div className="preview-tab-strip" ref={tabStripRef}>
           {tabs.map((t) => {
@@ -448,26 +460,46 @@ export function PreviewPane({
               {hiddenCount > 0 ? <span className="faint small">{hiddenCount} 暂藏</span> : null}
             </button>
           ) : null}
-          <button className="preview-icon-btn" title="收起预览区（保留全部标签与阅读位置）" aria-label="收起预览区" onClick={hidePreview}>
-            <Icon name="panel-right" size={13} />
+          <button
+            className="preview-icon-btn"
+            aria-label="更多文件操作"
+            title="更多：引用/摘录/文件信息/评论/下载/阅读宽度/关闭"
+            aria-haspopup="menu"
+            data-preview-action="more"
+            onClick={(e) => setMoreAt(anchorFromElement(e.currentTarget))}
+          >
+            <Icon name="more-horizontal" size={13} />
           </button>
           {session.maximized ? (
-            <button className="preview-icon-btn" title="还原预览大小（回到与对话并排）" aria-pressed onClick={togglePreviewMaximized}>
+            <button
+              className="preview-icon-btn"
+              title="还原预览大小（回到与对话并排）"
+              aria-label="还原预览大小"
+              aria-pressed
+              data-preview-action="restore"
+              onClick={togglePreviewMaximized}
+            >
               <Icon name="copy" size={13} />
             </button>
           ) : (
-            <button className="preview-icon-btn" title="放大预览（临时占满内容区，便于细读）" onClick={togglePreviewMaximized}>
+            <button
+              className="preview-icon-btn"
+              title="放大预览（临时占满内容区，便于细读）"
+              aria-label="放大预览"
+              data-preview-action="maximize"
+              onClick={togglePreviewMaximized}
+            >
               <Icon name="maximize" size={13} />
             </button>
           )}
           <button
             className="preview-icon-btn"
-            aria-label="更多文件操作"
-            title="更多：引用/摘录/文件信息/评论/下载/关闭"
-            aria-haspopup="menu"
-            onClick={(e) => setMoreAt(anchorFromElement(e.currentTarget))}
+            title="收起预览区（保留全部标签与阅读位置）"
+            aria-label="收起预览区"
+            data-preview-action="collapse"
+            onClick={hidePreview}
           >
-            <Icon name="more-horizontal" size={13} />
+            <Icon name="panel-right" size={13} />
           </button>
         </span>
       </div>
@@ -504,6 +536,12 @@ export function PreviewPane({
         </button>
       </div>
 
+      {newerFile && newerAttachment ? <button type="button" className="tag-btn warning preview-dirty-banner" data-zs-new-file-version={newerAttachment.artifactId}
+        onClick={() => {
+          registerAttachmentResource({attachmentId: newerAttachment.artifactId, filename: newerAttachment.filename, kind: newerAttachment.kind,
+            revision: newerAttachment.revision, hash: newerAttachment.hash, audience: context, origin: newerFile.conversationId});
+          openPreview(newerAttachment.artifactId, newerAttachment.revision, {target: context, messageId: newerMessage?.id});
+        }}>有更新版本{newerAttachment.revision != null ? ` v${newerAttachment.revision}` : ''} · 打开新版</button> : null}
       {resource.mutable && active.pendingRevision ? (
         <button
           className="tag-btn warning preview-dirty-banner"
@@ -587,6 +625,16 @@ export function PreviewPane({
             {dlBusy ? '正在取原件…' : '下载原文件 / 另存为…'}
           </MenuItem>
           <MenuItem icon="message-square" title="以这份文件的当前版本为锚点发一条仅记录评论到源会话（不触发模型）" onClick={() => { setCommentOpen(true); setMoreAt(null); }}>评论此文件</MenuItem>
+          {supportsRendered && viewMode === 'preview' ? (
+            <MenuItem
+              icon="align-left"
+              title="文档默认为面板满宽；开启后仅将阅读正文收束到约 82 字符，表格与代码仍可横向滚动"
+              hint={readingMeasure ? '当前：限宽' : '当前：铺满'}
+              onClick={() => { setReadingMeasure((v) => !v); setMoreAt(null); }}
+            >
+              {readingMeasure ? '铺满阅读' : '限宽阅读'}
+            </MenuItem>
+          ) : null}
           {canChooseReading ? (
             <MenuItem icon="align-left" title="长行是否折行显示（只影响源码/纯文本视图）" hint={wrapSource ? '当前：换行' : '当前：不换行'} onClick={() => { setWrapSource((v) => !v); setMoreAt(null); }}>
               {wrapSource ? '取消自动换行' : '自动换行'}

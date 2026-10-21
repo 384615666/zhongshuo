@@ -155,16 +155,23 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
     // 不被泵——pumpDmQueue 只放行「无 run」的任务）。不自动重放：恢复经 task.redispatch 正式链
     // （核对停止代次/在途/终态/幂等）。queuedCount 只数「无 run」的排队任务，与此分列。
     const interruptedRaw = db.prepare(
-      `SELECT t.id AS taskId, t.title AS title, t.stop_generation AS stopGen,
+      `SELECT t.id AS taskId, t.title AS title, t.revision AS taskRevision, t.stop_generation AS stopGen,
               (SELECT r.id FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunId,
-              (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunStatus
+              (SELECT r.status FROM workflow_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS lastRunStatus,
+              EXISTS(
+                SELECT 1 FROM workflow_runs latest
+                JOIN agent_turns a ON a.run_id=latest.id
+                JOIN domain_events e ON e.turn_id=a.id AND e.kind='turn.outputInvalid'
+                WHERE latest.id=(SELECT r.id FROM workflow_runs r WHERE r.task_id=t.id ORDER BY r.rowid DESC LIMIT 1)
+                  AND latest.task_id=t.id AND a.status='FAILED'
+              ) AS formatRepair
        FROM tasks t
        WHERE t.conversation_id = ? AND t.kind = 'dm_turn' AND t.status = 'ACTIVE'
          AND EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id)
          AND NOT EXISTS (SELECT 1 FROM workflow_runs r WHERE r.task_id = t.id AND r.status IN ('RUNNING','WAITING','STOPPING'))
          AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.dispatch_key = 'dmtask:' || t.id || ':initial' AND o.status IN ('pending','leased'))
        ORDER BY t.rowid`,
-    ).all(row.id) as Array<{ taskId: string; title: string; stopGen: number; lastRunId: string | null; lastRunStatus: string | null }>;
+    ).all(row.id) as Array<{ taskId: string; title: string; taskRevision: number; stopGen: number; lastRunId: string | null; lastRunStatus: string | null; formatRepair: number }>;
     // 可恢复性（第四十轮 §2：与 task.redispatch 守卫**共用服务端判定**——recoveryGuard
     // 四分离：在途/保护未解除（FAILED+未释放租约同样拦）/UNKNOWN 未闭环（settled 但无
     // 正式 protectionReleased 事件=退出未确认）；停止代次生效另行拦截。
@@ -176,8 +183,11 @@ export function listDmConversations(db: ZhongshuoDatabase, localUserId: string, 
       return {
         taskId: t.taskId,
         title: t.title,
+        taskRevision: t.taskRevision,
+        stopGeneration: t.stopGen,
         lastRunStatus: t.lastRunStatus,
         lastRunId: t.lastRunId,
+        formatRepair: t.formatRepair === 1,
         recoverable: blockReason == null,
         blockReason,
         lastFailureReason: lastTaskFailureReason(db, t.taskId),
