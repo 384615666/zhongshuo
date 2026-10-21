@@ -27,12 +27,14 @@ import {
   deriveDeliberateMaxTurns,
   initDeliberationBudget,
   issuePositionPayloadSchema,
+  ratifyIssueResponseSchema,
   ratifyPayloadSchema,
   reviewPayloadSchema,
   synthesisPayloadSchema,
   type DeliberationBudgetState,
   type DeliveryFeedback,
   type IssueResolution,
+  type RatifyIssueResponse,
   type ParticipantStatus,
 } from '../contracts/deliberation.ts';
 import { documentSchema, type DocumentArtifact } from '../contracts/document.ts';
@@ -612,6 +614,350 @@ function applyIssueResolutions(db: ZhongshuoDatabase, runId: string, taskId: str
   }
 }
 
+interface RatifyIssueSource {
+  memberId: string;
+  turnId: string;
+  responseArtifactId: string;
+  responses: RatifyIssueResponse[];
+}
+
+interface IssueClosureFact {
+  issueId: string;
+  previousStatus: 'open' | 'insufficient_evidence';
+  synthesisArtifactId: string;
+  synthesisRevision: number;
+  synthesisHash: string;
+  sources: Array<{ memberId: string; turnId: string; responseArtifactId: string; reason: string }>;
+  reason: string;
+}
+
+/**
+ * RATIFY issueResponses are optional for compatibility with already stored
+ * ratify-v1 artifacts. When present, every id must resolve to the frozen
+ * synthesis issue set; existence in the live table alone is insufficient.
+ */
+function validateRatifyIssueResponses(db: ZhongshuoDatabase, runId: string, payload: Record<string, unknown>): string | null {
+  if (!hasOwn(payload, 'issueResponses')) return null;
+  const raw = payload.issueResponses;
+  if (!Array.isArray(raw)) return 'issueResponses 必须是数组';
+  const snapshot = frozenSynthesisIssueSnapshot(db, runId, 0);
+  if (raw.length > 0 && snapshot == null) return 'issueResponses 缺少冻结议题快照，不能确认当前整合版本';
+  const frozenIssues = new Map((snapshot?.issues ?? []).map((issue) => [issue.id, issue.revision]));
+  const currentIssues = new Map(
+    (db.prepare('SELECT id, revision FROM issues WHERE run_id = ?').all(runId) as Array<{ id: string; revision: number }>)
+      .map((issue) => [issue.id, issue.revision]),
+  );
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const parsed = ratifyIssueResponseSchema.safeParse(item);
+    if (!parsed.success) return 'issueResponses 字段无效';
+    const issueId = parsed.data.issueId;
+    if (seen.has(issueId)) return `issueResponses 重复引用议题：${issueId}`;
+    if (!currentIssues.has(issueId)) return `issueResponses 引用不属于本 run 的议题：${issueId}`;
+    if (!frozenIssues.has(issueId) || frozenIssues.get(issueId) !== currentIssues.get(issueId)) {
+      return `issueResponses 引用的议题版本不是当前冻结整合版本：${issueId}`;
+    }
+    seen.add(issueId);
+  }
+  return null;
+}
+
+/** Persist each member's explicit statement without changing the visible AI summary. */
+function recordRatifyIssueResponses(db: ZhongshuoDatabase, input: {
+  runId: string;
+  taskId: string;
+  turnId: string;
+  memberId: string;
+  responseArtifactId: string;
+  synthesis: { artifactId: string; revision: number; hash: string };
+  payload: Record<string, unknown>;
+}): void {
+  const raw = input.payload.issueResponses;
+  if (!Array.isArray(raw) || raw.length === 0) return;
+  const task = db.prepare('SELECT project_id, conversation_id, conversation_thread_id FROM tasks WHERE id = ?').get(input.taskId) as
+    | { project_id: string; conversation_id: string; conversation_thread_id: string | null }
+    | undefined;
+  if (task == null) return;
+  const snapshot = frozenSynthesisIssueSnapshot(db, input.runId, 0);
+  const issueRevisions = new Map((snapshot?.issues ?? []).map((issue) => [issue.id, issue.revision]));
+  for (const item of raw) {
+    const parsed = ratifyIssueResponseSchema.safeParse(item);
+    if (!parsed.success) continue;
+    const eventId = `evt_ratify_issue_${input.turnId}_${parsed.data.issueId}`;
+    if (db.prepare('SELECT 1 FROM domain_events WHERE event_id = ?').get(eventId) != null) continue;
+    appendDomainEvent(db, {
+      schemaVersion: 1,
+      eventId,
+      projectId: task.project_id,
+      conversationId: task.conversation_id,
+      threadId: task.conversation_thread_id,
+      taskId: input.taskId,
+      runId: input.runId,
+      turnId: input.turnId,
+      kind: 'run.ratifyIssueResponse',
+      createdAt: Date.now(),
+      payload: {
+        issueId: parsed.data.issueId,
+        issueRevision: issueRevisions.get(parsed.data.issueId) ?? null,
+        stance: parsed.data.stance,
+        reason: parsed.data.reason,
+        memberId: input.memberId,
+        responseArtifactId: input.responseArtifactId,
+        synthesisArtifactId: input.synthesis.artifactId,
+        synthesisRevision: input.synthesis.revision,
+        synthesisHash: input.synthesis.hash,
+      },
+    });
+  }
+}
+
+/**
+ * Close only the exact synthesis issues for which every expected member has a
+ * current-version RATIFY artifact, every claim is plainly confirmed, every
+ * issue response is explicitly `resolved`, and deliveryFeedback is `ready`.
+ * Missing, stale, conditional, objecting, still-open, or needs_user evidence
+ * leaves the persisted issue status untouched.
+ */
+function resolveIssuesAfterRatification(db: ZhongshuoDatabase, input: {
+  runId: string;
+  taskId: string;
+  synthesis: { artifactId: string; revision: number; hash: string };
+  expectedMembers: readonly string[];
+  delivery: DeliveryDecision;
+  now: number;
+}): IssueClosureFact[] {
+  if (input.delivery.status !== 'ready') return [];
+  const synthesisMeta = db.prepare('SELECT run_id, kind, revision, hash FROM artifacts WHERE id = ?').get(input.synthesis.artifactId) as
+    | { run_id: string | null; kind: string; revision: number; hash: string }
+    | undefined;
+  if (synthesisMeta == null || synthesisMeta.run_id !== input.runId || synthesisMeta.kind !== 'synthesis'
+    || synthesisMeta.revision !== input.synthesis.revision || synthesisMeta.hash !== input.synthesis.hash) return [];
+  const synthesisPayload = artifactPayload(db, input.synthesis.artifactId) as Record<string, unknown> | null;
+  const baseResolutions = new Map(
+    (Array.isArray(synthesisPayload?.issueResolutions) ? synthesisPayload.issueResolutions : [])
+      .map((item) => item as Record<string, unknown>)
+      .filter((item) => typeof item.issueId === 'string')
+      .map((item) => [item.issueId as string, item]),
+  );
+  const records = getRatificationRecords(db, input.runId, input.synthesis.artifactId, input.synthesis.revision);
+  const claimIds = getSynthesisClaims(db, input.runId, input.synthesis.artifactId, input.synthesis.revision).map((claim) => claim.claim_id);
+  if (claimIds.length === 0) return [];
+  const sources = new Map<string, RatifyIssueSource>();
+  const ratificationRound = Math.max(0, input.synthesis.revision - 1);
+  const ratificationStageKey = `delib.ratify${ratificationRound > 0 ? `.r${ratificationRound}` : ''}`;
+  for (const memberId of input.expectedMembers) {
+    const memberRecords = records.filter((record) => record.member_id === memberId);
+    if (memberRecords.length !== claimIds.length
+      || memberRecords.some((record) => record.response_status !== 'submitted' || record.stance !== 'confirm')) return [];
+    const artifactIds = [...new Set(memberRecords.map((record) => record.response_artifact_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    if (artifactIds.length !== 1) return [];
+    const responseArtifactId = artifactIds[0]!;
+    const turnIds = [...new Set(memberRecords.map((record) => record.turn_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    if (turnIds.length !== 1) return [];
+    const turn = db.prepare('SELECT run_id, member_id, stage_key, status, turn_purpose FROM agent_turns WHERE id = ?').get(turnIds[0]!) as
+      | { run_id: string; member_id: string; stage_key: string; status: string; turn_purpose: string }
+      | undefined;
+    if (turn == null || turn.run_id !== input.runId || turn.member_id !== memberId || turn.status !== 'SUCCEEDED'
+      || !['stage_work', 'format_repair'].includes(turn.turn_purpose)
+      || ![ratificationStageKey, `${ratificationStageKey}.fx`].includes(turn.stage_key)) return [];
+    const participant = db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(input.runId, memberId) as
+      | { status: string }
+      | undefined;
+    if (participant?.status !== 'completed') return [];
+    const meta = db.prepare('SELECT run_id, author_id, kind, blob_path FROM artifacts WHERE id = ?').get(responseArtifactId) as
+      | { run_id: string | null; author_id: string; kind: string; blob_path: string }
+      | undefined;
+    if (meta == null || meta.run_id !== input.runId || meta.author_id !== memberId || meta.kind !== 'ratify_response') return [];
+    let payload: Record<string, unknown> | null;
+    try {
+      payload = JSON.parse(readFileSync(meta.blob_path, 'utf8')) as Record<string, unknown>;
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(payload.issueResponses)) return [];
+    const responses: RatifyIssueResponse[] = [];
+    const seen = new Set<string>();
+    for (const item of payload.issueResponses) {
+      const parsed = ratifyIssueResponseSchema.safeParse(item);
+      if (!parsed.success || seen.has(parsed.data.issueId)) return [];
+      seen.add(parsed.data.issueId);
+      responses.push(parsed.data);
+    }
+    sources.set(memberId, { memberId, turnId: turnIds[0]!, responseArtifactId, responses });
+  }
+
+  const snapshot = frozenSynthesisIssueSnapshot(db, input.runId, 0);
+  if (snapshot == null) return [];
+  const frozenRevision = new Map(snapshot.issues.map((issue) => [issue.id, issue.revision]));
+  const issues = db.prepare('SELECT id, status, revision FROM issues WHERE run_id = ? ORDER BY id').all(input.runId) as Array<{
+    id: string; status: 'open' | 'resolved' | 'needs_user' | 'insufficient_evidence'; revision: number;
+  }>;
+  const closures: IssueClosureFact[] = [];
+  for (const issue of issues) {
+    if ((issue.status !== 'open' && issue.status !== 'insufficient_evidence') || frozenRevision.get(issue.id) !== issue.revision) continue;
+    if (baseResolutions.get(issue.id)?.status === 'needs_user') continue;
+    const issueSources: IssueClosureFact['sources'] = [];
+    let complete = true;
+    for (const memberId of input.expectedMembers) {
+      const source = sources.get(memberId);
+      const response = source?.responses.find((entry) => entry.issueId === issue.id);
+      if (source == null || response == null || response.stance !== 'resolved') {
+        complete = false;
+        break;
+      }
+      issueSources.push({ memberId, turnId: source.turnId, responseArtifactId: source.responseArtifactId, reason: response.reason });
+    }
+    if (!complete) continue;
+    closures.push({
+      issueId: issue.id,
+      previousStatus: issue.status,
+      synthesisArtifactId: input.synthesis.artifactId,
+      synthesisRevision: input.synthesis.revision,
+      synthesisHash: input.synthesis.hash,
+      sources: issueSources,
+      reason: '本轮所有预期成员已对当前冻结整合稿逐项明确 resolved，且全部确认轮交付反馈为 ready',
+    });
+  }
+  if (closures.length === 0) return [];
+
+  db.transaction(() => {
+    const task = db.prepare('SELECT project_id, conversation_id, conversation_thread_id FROM tasks WHERE id = ?').get(input.taskId) as
+      | { project_id: string; conversation_id: string; conversation_thread_id: string | null }
+      | undefined;
+    for (const closure of closures) {
+      const changed = db.prepare("UPDATE issues SET status = 'resolved' WHERE id = ? AND run_id = ? AND status IN ('open','insufficient_evidence')")
+        .run(closure.issueId, input.runId).changes;
+      if (changed !== 1) continue;
+      const eventId = `evt_issue_closure_${input.runId}_${input.synthesis.artifactId}_${input.synthesis.revision}_${closure.issueId}`;
+      if (task != null && db.prepare('SELECT 1 FROM domain_events WHERE event_id = ?').get(eventId) == null) {
+        appendDomainEvent(db, {
+          schemaVersion: 1,
+          eventId,
+          projectId: task.project_id,
+          conversationId: task.conversation_id,
+          threadId: task.conversation_thread_id,
+          taskId: input.taskId,
+          runId: input.runId,
+          turnId: null,
+          kind: 'run.issueClosure',
+          createdAt: input.now,
+          payload: {
+            issueId: closure.issueId,
+            previousStatus: closure.previousStatus,
+            status: 'resolved',
+            synthesisArtifactId: closure.synthesisArtifactId,
+            synthesisRevision: closure.synthesisRevision,
+            synthesisHash: closure.synthesisHash,
+            sources: closure.sources,
+            reason: closure.reason,
+          },
+        });
+      }
+    }
+  })();
+  return closures;
+}
+
+function successfulHostRatifySummary(db: ZhongshuoDatabase, input: {
+  runId: string;
+  synthesis: { artifactId: string; revision: number; hash: string };
+  hostMemberId: string;
+}): { summary: string; summaryRef: Record<string, string | number> } | null {
+  const records = getRatificationRecords(db, input.runId, input.synthesis.artifactId, input.synthesis.revision)
+    .filter((record) => record.member_id === input.hostMemberId);
+  if (records.length === 0 || records.some((record) => record.response_status !== 'submitted' || record.stance !== 'confirm')) return null;
+  const artifactIds = [...new Set(records.map((record) => record.response_artifact_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  const turnIds = [...new Set(records.map((record) => record.turn_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  if (artifactIds.length !== 1 || turnIds.length !== 1) return null;
+  const turn = db.prepare('SELECT run_id, member_id, stage_key, status, turn_purpose FROM agent_turns WHERE id = ?').get(turnIds[0]!) as
+    | { run_id: string; member_id: string; stage_key: string; status: string; turn_purpose: string }
+    | undefined;
+  const round = Math.max(0, input.synthesis.revision - 1);
+  const expectedStage = `delib.ratify${round > 0 ? `.r${round}` : ''}`;
+  const participant = db.prepare('SELECT status FROM run_participants WHERE run_id = ? AND member_id = ?').get(input.runId, input.hostMemberId) as
+    | { status: string }
+    | undefined;
+  if (turn == null || turn.run_id !== input.runId || turn.member_id !== input.hostMemberId || turn.status !== 'SUCCEEDED'
+    || !['stage_work', 'format_repair'].includes(turn.turn_purpose)
+    || ![expectedStage, `${expectedStage}.fx`].includes(turn.stage_key)
+    || participant?.status !== 'completed') return null;
+  const meta = db.prepare('SELECT run_id, author_id, kind, blob_path FROM artifacts WHERE id = ?').get(artifactIds[0]!) as
+    | { run_id: string | null; author_id: string; kind: string; blob_path: string }
+    | undefined;
+  if (meta == null || meta.run_id !== input.runId || meta.author_id !== input.hostMemberId || meta.kind !== 'ratify_response') return null;
+  let payload: Record<string, unknown> | null;
+  try {
+    payload = JSON.parse(readFileSync(meta.blob_path, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const rawSummary = typeof payload.summary === 'string' ? payload.summary : '';
+  if (rawSummary.trim().length === 0) return null;
+  return {
+    summary: rawSummary,
+    summaryRef: {
+      source: 'ratify',
+      artifactId: artifactIds[0]!,
+      turnId: turnIds[0]!,
+      memberId: input.hostMemberId,
+      synthesisArtifactId: input.synthesis.artifactId,
+      synthesisRevision: input.synthesis.revision,
+      synthesisHash: input.synthesis.hash,
+    },
+  };
+}
+
+const REPORT_RESOLUTION_STATUS = new Set(['resolved', 'needs_user', 'insufficient_evidence']);
+
+/** The final report arrays must describe the same effective issue state as the issues table. */
+function effectiveIssueResolutions(db: ZhongshuoDatabase, runId: string, synthesisPayload: Record<string, unknown> | null): unknown[] {
+  const raw = Array.isArray(synthesisPayload?.issueResolutions) ? synthesisPayload.issueResolutions : [];
+  const original = new Map(
+    raw.map((item) => item as Record<string, unknown>)
+      .filter((item) => typeof item.issueId === 'string')
+      .map((item) => [item.issueId as string, item]),
+  );
+  const closureRows = db.prepare("SELECT payload_json FROM domain_events WHERE run_id = ? AND kind = 'run.issueClosure' ORDER BY seq").all(runId) as Array<{ payload_json: string }>;
+  const closures = new Map<string, Record<string, unknown>>();
+  for (const row of closureRows) {
+    try {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      if (typeof payload.issueId === 'string') closures.set(payload.issueId, payload);
+    } catch {
+      // Ignore malformed historical audit rows; the table remains authoritative.
+    }
+  }
+  const issues = db.prepare('SELECT id, status FROM issues WHERE run_id = ? ORDER BY id').all(runId) as Array<{ id: string; status: string }>;
+  const effective: Array<Record<string, unknown>> = issues.map((issue) => {
+    const base = original.get(issue.id) ?? {};
+    const closure = closures.get(issue.id);
+    const status = issue.status;
+    if (closure != null) {
+      return {
+        issueId: issue.id,
+        status,
+        reason: typeof closure.reason === 'string' ? closure.reason : 'RATIFY 明确关闭',
+        sourceArtifactIds: Array.isArray(closure.sources)
+          ? closure.sources.map((source) => source as Record<string, unknown>).map((source) => source.responseArtifactId).filter((id): id is string => typeof id === 'string')
+          : [],
+      };
+    }
+    return {
+      issueId: issue.id,
+      status: REPORT_RESOLUTION_STATUS.has(status) ? status : 'insufficient_evidence',
+      ...(typeof base.reason === 'string' ? { reason: base.reason } : {}),
+      ...(typeof base.question === 'string' ? { question: base.question } : {}),
+      ...(typeof base.owner === 'string' ? { owner: base.owner } : {}),
+    };
+  });
+  for (const [issueId, base] of original) {
+    if (!issues.some((issue) => issue.id === issueId)) {
+      effective.push({ issueId, status: typeof base.status === 'string' ? base.status : 'insufficient_evidence', ...base });
+    }
+  }
+  return effective;
+}
+
 function validateDeliveryFeedback(payload: Record<string, unknown>): string | null {
   if (!hasOwn(payload, 'deliveryFeedback')) return null;
   const feedback = payload.deliveryFeedback as Record<string, unknown> | null;
@@ -909,7 +1255,14 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       const waiting = expectedMembers.filter((memberId) => {
         const cells = records.filter((r) => r.member_id === memberId);
         if (cells.length === 0) return true; // 矩阵不完整：等（不应发生）
-        if (cells.some((r) => r.response_status === 'submitted')) return false;
+        if (cells.some((r) => r.response_status === 'submitted')) {
+          const turnIds = [...new Set(cells.map((r) => r.turn_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+          const activeTurn = turnIds.length === 0 ? null : db.prepare(`SELECT 1 FROM agent_turns
+            WHERE run_id = ? AND member_id = ? AND stage_key IN (?, ?)
+              AND status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING') LIMIT 1`)
+            .get(run.id, memberId, ratificationStageKey, `${ratificationStageKey}.fx`);
+          return activeTurn != null;
+        }
         const participant = statusOf(participants, memberId);
         if (participant === 'failed' || participant === 'absent' || participant === 'unavailable') return false;
         const step: DelibStep = { taskId, runId: run.id, stage: 'RAT', memberId, roundNo: ratificationRound, purpose: 'stage_work' };
@@ -921,6 +1274,16 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       closeRatificationBarrier(db, { runId: run.id, synthesisArtifactId: synthesis.artifactId, synthesisRevision: synthesis.revision, missingReason: '席位终结（失败/缺席/预算跳过），未回复' });
       const feedback = collectDeliveryFeedbacks(db, run.id, synthesis.artifactId, synthesis.revision);
       const delivery = decideDeliveryFeedback(feedback, expectedMembers, records);
+      // RATIFY issue closure is an explicit, version-bound fact. It is never
+      // inferred from summary text, claim consensus, or generic "ready".
+      resolveIssuesAfterRatification(db, {
+        runId: run.id,
+        taskId,
+        synthesis,
+        expectedMembers,
+        delivery,
+        now,
+      });
       const revisionAccounting = budgetAccounting(budget, 'front');
       const revisionBudget = revisionAccounting.enforcement === 'disabled'
         || revisionAccounting.stageAvailableTurns >= 1 + expectedMembers.length;
@@ -1092,7 +1455,7 @@ type FinalDeliveryStatus = 'delivered' | 'delivered_with_questions' | 'needs_use
 
 function publishFinalReport(db: ZhongshuoDatabase, input: {
   runId: string; taskId: string; conversationId: string; threadId: string;
-  claims: string[]; expectedMembers: string[]; synthesis: { artifactId: string; revision: number };
+  claims: string[]; expectedMembers: string[]; synthesis: { artifactId: string; revision: number; hash: string };
   delivery: DeliveryDecision; now: number; blobDir: string; reviewPolicy: string;
 }): void {
   const records = getRatificationRecords(db, input.runId, input.synthesis.artifactId, input.synthesis.revision);
@@ -1119,10 +1482,20 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     : input.delivery.status === 'needs_revision' || input.delivery.status === 'incomplete' ? 'blocked'
       : input.delivery.status === 'legacy' ? 'legacy'
         : overall === 'unanimous' && unresolvedIssues.length === 0 ? 'delivered' : 'delivered_with_questions';
+  const hostSummary = deliveryStatus === 'delivered' && overall === 'unanimous' && unresolvedIssues.length === 0
+    ? successfulHostRatifySummary(db, {
+      runId: input.runId,
+      synthesis: input.synthesis,
+      hostMemberId: hostOf(rosterOf(db, input.runId)),
+    })
+    : null;
+  const finalSummary = hostSummary?.summary ?? synthesisPayload?.summary ?? '';
   const reportPayload = {
     schemaVersion: 'final-report-v1',
     synthesisRef: { artifactId: input.synthesis.artifactId, revision: input.synthesis.revision },
-    summary: synthesisPayload?.summary ?? '',
+    summary: finalSummary,
+    synthesisSummary: synthesisPayload?.summary ?? '',
+    summaryRef: hostSummary?.summaryRef ?? null,
     claimResults: input.claims.map((claimId) => {
       const s = summaries.find((x) => x.claimId === claimId)!;
       const statement = synthesisPayload?.claims?.find((_, i) => `clm_${i + 1}` === claimId)?.statement ?? '';
@@ -1131,7 +1504,7 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
     overallConsensus: overall,
     deliveryStatus,
     deliveryFeedback: input.delivery.feedback,
-    issueResolutions: Array.isArray(synthesisPayload?.issueResolutions) ? synthesisPayload.issueResolutions : [],
+    issueResolutions: effectiveIssueResolutions(db, input.runId, synthesisPayload as Record<string, unknown> | null),
     unresolvedIssues,
     disputedClaims: synthesisPayload?.disputedClaims ?? [],
     recommendations:synthesisPayload?.recommendations??[],
@@ -1172,9 +1545,10 @@ function publishFinalReport(db: ZhongshuoDatabase, input: {
       const thread=db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1,revision=revision+1 WHERE id=? RETURNING last_message_seq').get(input.threadId) as {last_message_seq:number};
       const labels:Record<string,string>={unanimous:'共同确认',qualified:'附条件确认',disputed:'存在分歧',unconfirmed:'尚未核实'};
       const legacyText=[reportPayload.summary,...reportPayload.claimResults.map(c=>`${c.statement}（${labels[c.consensus]??c.consensus}）`),...reportPayload.disputedClaims.map(c=>`分歧：${c.statement}${c.disagreementSummary?` · ${c.disagreementSummary}`:''}`),...reportPayload.recommendations].filter(Boolean).join('\n\n');
-      const text=modelUserView?.summary??legacyText;
+      const text=hostSummary?.summary ?? modelUserView?.summary ?? legacyText;
       const bodyJson=JSON.stringify({
         text,
+        ...(hostSummary != null ? { summaryRef: hostSummary.summaryRef } : {}),
         ...(modelUserView?.document!=null&&modelUserView.document.markdown.trim().length>0?{document:modelUserView.document}:{}),
         delivery: {
           status: deliveryStatus, overallConsensus: overall, unresolvedIssues: reportPayload.unresolvedIssues,
@@ -1456,9 +1830,14 @@ function renderStageBody(
   if (synthesis == null) return `${base}\n（整合稿缺失）`;
   const claims = getSynthesisClaims(db, runId, synthesis.artifactId, synthesis.revision);
   const synthesisPayload = artifactPayload(db, synthesis.artifactId) as Record<string, unknown> | null;
+  const issues = db.prepare('SELECT id, statement, status, revision FROM issues WHERE run_id = ? ORDER BY id').all(runId);
   return `${base}\n\n冻结整合稿（${synthesis.artifactId} rev${synthesis.revision} hash=${synthesis.hash.slice(0, 12)}…）完整交付材料：\n${JSON.stringify({
     summary: synthesisPayload?.summary ?? '',
     document: synthesisPayload?.document ?? null,
+    synthesisArtifactId: synthesis.artifactId,
+    synthesisRevision: synthesis.revision,
+    synthesisHash: synthesis.hash,
+    issues,
     issueResolutions: synthesisPayload?.issueResolutions ?? [],
     disputedClaims: synthesisPayload?.disputedClaims ?? [],
     recommendations: synthesisPayload?.recommendations ?? [],
@@ -1827,6 +2206,8 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
   if (input.step.stage === 'RAT') {
     const feedbackError = validateDeliveryFeedback(payload);
     if (feedbackError != null) return domainOk({ counted: false, needsRepair: feedbackError });
+    const issueResponseError = validateRatifyIssueResponses(db, input.runId, payload);
+    if (issueResponseError != null) return domainOk({ counted: false, needsRepair: issueResponseError });
   }
   // 引用校验（CR：三元组属冻结可读版本）。
   if (input.step.stage === 'CR') {
@@ -1914,6 +2295,15 @@ export function onStepOutput(db: ZhongshuoDatabase, input: {
           resultKey: `result_${input.turnId}`, responses, now,
         });
         if (!submitted.ok) throw new Error(`确认提交失败：${submitted.error.message}`);
+        recordRatifyIssueResponses(db, {
+          runId: input.runId,
+          taskId: input.taskId,
+          turnId: input.turnId,
+          memberId: input.step.memberId,
+          responseArtifactId: artifactId,
+          synthesis,
+          payload,
+        });
       }
     }
     // R91 可见性：结构化阶段产物通过校验后投影为串内正式消息（作者=真实产物作者）。

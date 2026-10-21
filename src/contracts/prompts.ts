@@ -510,6 +510,8 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
 - 主动核对整合稿、冻结来源和实际可验证内容；能确认的直接确认，有问题写出证据与可执行修改。
 - 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认写成全员同意，也不要因任意分歧无限重做。
+- 主持者的 summary 写经过核验的用户可读结果；交付已可明确确认时不要写“等待本轮确认”，也不要预言其他成员的态度。
+- issueResponses 只针对输入中列出的冻结 issue；逐项写明 resolved 或 still_open 及理由。它确认的是当前冻结 synthesis artifact+revision，不得用 summary、claim 矩阵或 deliveryFeedback=ready 代替；原有 resolution 为 needs_user 的业务决定仍保持 needs_user，不能由你越权关闭。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
 };
@@ -521,7 +523,7 @@ export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
   'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","summary":"AI 自行撰写的简练总览","document":null,"positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
   'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","summary":"AI 自行撰写的简练总览","document":null,"verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
   'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"AI 自行撰写的整合结论总览","document":null,"issueResolutions":[{"issueId":"iss_c1","status":"resolved|needs_user|insufficient_evidence","reason":"依据","question":"needs_user 时的问题","owner":"needs_user 时的责任方"}],"claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
-  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","document":null,"deliveryFeedback":{"status":"ready|needs_revision|needs_user","reason":"依据","revisionRequest":"needs_revision 时的修改请求","question":"needs_user 时的问题","owner":"needs_user 时的责任方"},"responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
+  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","document":null,"deliveryFeedback":{"status":"ready|needs_revision|needs_user","reason":"依据","revisionRequest":"needs_revision 时的修改请求","question":"needs_user 时的问题","owner":"needs_user 时的责任方"},"issueResponses":[{"issueId":"iss_c1","stance":"resolved|still_open","reason":"依据"}],"responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
 };
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------

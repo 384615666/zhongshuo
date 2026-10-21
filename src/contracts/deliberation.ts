@@ -46,6 +46,19 @@ export const issueResolutionSchema = z.strictObject({
 });
 export type IssueResolution = z.infer<typeof issueResolutionSchema>;
 
+/**
+ * RATIFY explicit issue decision. This is deliberately narrower than a
+ * synthesis resolution: a member can only say whether the exact frozen
+ * synthesis version resolves an issue or leaves it open. It is never inferred
+ * from summary/claim consensus or deliveryFeedback=ready.
+ */
+export const ratifyIssueResponseSchema = z.strictObject({
+  issueId: z.string().min(1),
+  stance: z.enum(['resolved', 'still_open']),
+  reason: z.string().trim().min(1),
+});
+export type RatifyIssueResponse = z.infer<typeof ratifyIssueResponseSchema>;
+
 export const deliveryFeedbackSchema = z.strictObject({
   status: z.enum(['ready', 'needs_revision', 'needs_user']),
   reason: z.string().min(1),
@@ -167,6 +180,8 @@ export const ratifyPayloadSchema = z.strictObject({
   detailMarkdown: z.string().optional(),
   document: documentSchema.nullable().optional(),
   deliveryFeedback: deliveryFeedbackSchema.optional(),
+  /** Optional for old artifacts; new RATIFY calls fill it for every current issue. */
+  issueResponses: z.array(ratifyIssueResponseSchema).optional(),
   responses: z.array(z.strictObject({
     claimId: z.string().min(1),
     stance: z.enum(['confirm', 'conditional', 'object', 'unconfirmed']),
