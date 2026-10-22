@@ -8,6 +8,7 @@ import type { Message, ProjectMember } from '../../src/ui/hifi/data/types.ts';
 const FIELDS = ['**做什么**：新增 3 个 Tab。', '**验收**：', '- Tab 名称可配置；', '- 数据互不影响。', '**待确认**：等级名称。'].join('\n');
 const DOC = ['# 总述', '', '## 甲', '正文甲', '', '## 乙', '正文乙', '', '## 丙', '正文丙'].join('\n');
 const LONG = Array.from({ length: 20 }, (_, i) => `第 ${i + 1} 行需求`).join('\n');
+const LONG_PARAGRAPH = '这是一段没有换行但足够长的回复。'.repeat(40);
 
 const human = (body: string, extra: Partial<Message> = {}): Message => ({
   id: 'h1', projectId: 'p', roomId: 'r', authorType: 'human', authorId: 'you', kind: 'text', body, createdAt: 1, ...extra,
@@ -71,7 +72,8 @@ describe('MessageView readingAids', () => {
     const on = render(human(LONG), true);
     expect(on).toContain('msg-fold is-folded');
     expect(on).toContain('aria-expanded="false"');
-    expect(on).toContain('展开原文 · 共 20 行');
+    expect(on).toContain('展开全文');
+    expect(on).not.toContain('共 20 行');
     expect(on).toContain('第 20 行需求');
     expect(on).toContain('msg-actions');
     expect(render(human(LONG))).not.toContain('msg-fold');
@@ -81,11 +83,19 @@ describe('MessageView readingAids', () => {
   it('folds legacy over-budget AI prose but never folds, outlines or tables while streaming', () => {
     const legacy = render(agent(LONG), true);
     expect(legacy).toContain('msg-fold is-folded');
-    expect(legacy).toContain('展开原文 · 共 20 行');
+    expect(legacy).toContain('展开全文');
+    expect(legacy).not.toContain('共 20 行');
     expect(render(human(LONG, { streaming: true }), true)).not.toContain('msg-fold');
     const live = render(agent(`${DOC}\n\n${FIELDS}`, { streaming: true }), true);
     expect(live).not.toContain('msg-outline');
     expect(live).not.toContain('md-spec');
+  });
+
+  it('uses an unambiguous long-paragraph fold label without a logical line count', () => {
+    const html = render(human(LONG_PARAGRAPH), true);
+    expect(html).toContain('msg-fold is-folded');
+    expect(html).toContain('展开全文');
+    expect(html).not.toContain('共 1 行');
   });
 
   it('gives long AI replies outline chips whose anchors exist, and field tables, only when enabled', () => {

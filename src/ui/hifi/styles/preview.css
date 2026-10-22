@@ -87,7 +87,8 @@
  * 那属于结构调整，本轮未做；这里只保留**可靠的宽度过渡**。
  */
 .workspace[data-layout='context-preview'] > .preview-pane {
-  flex: 0 1 var(--preview-w, 480px);
+  /* JS 会写入按真实 .workspace 宽度算出的 --preview-w；56% 只是首帧兜底。 */
+  flex: 0 1 var(--preview-w, 56%);
   min-width: 0;
   transition: flex-basis 0.22s ease;
 }

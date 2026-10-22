@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MessageView, collaborationStageText } from '../../src/ui/hifi/components/MessageView.tsx';
-import { collaborationStageOfBody, msgOfDmHistory, msgOfReply, stripStageHeading } from '../../src/ui/hifi/loader.ts';
+import { collaborationStageOfBody, msgOfDmHistory, msgOfReply } from '../../src/ui/hifi/loader.ts';
 import { getState, setState } from '../../src/ui/hifi/data/store.ts';
 import type { Message, PreviewResource, ProjectMember } from '../../src/ui/hifi/data/types.ts';
 
@@ -38,7 +38,7 @@ let originalState = getState();
 afterEach(() => { setState(() => originalState); originalState = getState(); });
 
 describe('R91 loader: collaborationStage 转译（thread.history 完整 body / DM body_json）', () => {
-  it('thread history item.body.collaborationStage becomes a presentation marker; backend heading is not duplicated', () => {
+  it('thread history item.body.collaborationStage becomes a presentation marker; AI-authored heading is preserved', () => {
     const message = msgOfReply('p1', 'r1', 't1', {
       id: 'msg_stage_1', authorType: 'agent', authorId: 'member_b', seq: 7,
       body: {
@@ -51,8 +51,8 @@ describe('R91 loader: collaborationStage 转译（thread.history 完整 body / D
     expect(message.authorId).toBe('member_b');
     expect(message.threadMessageSeq).toBe(7);
     expect(message.formalAttachments).toEqual([{ artifactId: 'art_a', filename: '复核.md', kind: 'text_file' }]);
-    expect(message.body).toBe('我复核了成员甲的结论，同意其中两条，一条需要补充证据。');
-    expect(message.body).not.toContain('【互评】');
+    expect(message.body).toBe('【互评】\n我复核了成员甲的结论，同意其中两条，一条需要补充证据。');
+    expect(message.body).toContain('【互评】');
     expect(message.body).not.toContain('collaborationStage');
     expect(message.body).not.toContain('{');
   });
@@ -69,17 +69,21 @@ describe('R91 loader: collaborationStage 转译（thread.history 完整 body / D
     expect(message.authorType).toBe('agent');
     expect(message.authorId).toBe('member_b');
     expect(message.threadMessageSeq).toBe(3);
-    expect(message.body).toBe('我的独立分析是：先复核数据口径。');
+    expect(message.body).toBe('【独立分析】\n我的独立分析是：先复核数据口径。');
+    expect(message.body).toContain('【独立分析】');
     expect(message.body).not.toContain('schemaVersion');
   });
 
-  it('only a known stage heading is removed; unknown brackets and ordinary bodies are preserved', () => {
-    expect(stripStageHeading('【争议讨论 · 第2轮】\n我认为需要补充证据。', { stage: 'ISSUE_DISCUSSION', roundNo: 2 })).toBe('我认为需要补充证据。');
-    expect(stripStageHeading('【争议讨论 · 检查点 · 第2轮】\n继续研讨。', { stage: 'ISSUE_DISCUSSION', roundNo: 2 })).toBe('继续研讨。');
-    expect(stripStageHeading('【自定义标题】\n正文', { stage: 'SYNTHESIS', roundNo: 0 })).toBe('【自定义标题】\n正文');
-    expect(stripStageHeading('【整合】', { stage: 'SYNTHESIS', roundNo: 0 })).toBe('【整合】'); // 不把消息删空
-    expect(stripStageHeading('【整合】\n正文', undefined)).toBe('【整合】\n正文'); // 无 metadata 不处理
-    expect(stripStageHeading('普通正文', { stage: 'RATIFY', roundNo: 0 })).toBe('普通正文');
+  it('preserves an AI-authored 【整合】 first line while keeping stage metadata separate', () => {
+    const reply = msgOfReply('p1', 'r1', 't1', {
+      id: 'msg_integrated', authorType: 'agent', authorId: 'member_b', seq: 8,
+      body: {
+        text: '【整合】\n正文首行也是模型原文。',
+        collaborationStage: { stage: 'SYNTHESIS', roundNo: 0, turnId: 'turn_10', runId: 'run_10' },
+      }, createdAt: 1001,
+    });
+    expect(reply.body).toBe('【整合】\n正文首行也是模型原文。');
+    expect(reply.collaborationStage?.stage).toBe('SYNTHESIS');
   });
 
   it('missing or malformed metadata is ignored (ordinary message, no crash, no JSON text)', () => {

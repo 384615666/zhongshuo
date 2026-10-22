@@ -46,6 +46,7 @@ import {
   deriveIssues,
   nextAfterCrossReview,
   overallConsensus,
+  unanimousFrozenIssueStancesInRound,
   validateClaimReferences,
   type FrozenRoster,
   type FrozenClaim,
@@ -58,6 +59,7 @@ import {
   initRatificationMatrix,
   insertIssues,
   insertSynthesisClaims,
+  listIssues,
   listRunArtifacts,
   publishDeliberationArtifact,
   submitRatification,
@@ -571,8 +573,10 @@ function validateAndResolveIssues(
       const positions = latestRevision < 0 ? [] : allPositions.filter((p) => p.issueId === issueId && p.issueRevision === latestRevision);
       const positionMembers = new Set(positions.map((p) => p.memberId));
       const allMembersPresent = expectedMemberIds.every((memberId) => positionMembers.has(memberId));
-      if (positions.length === 0 || !allMembersPresent || positions.some((p) => p.stance !== 'agree')) {
-        return { ok: false, reason: `issue ${issueId} 没有本轮成员明确同意，不能标 resolved` };
+      const stances = new Set(positions.map((p) => p.stance));
+      const unanimous = stances.size === 1 && (stances.has('agree') || stances.has('disagree'));
+      if (positions.length === 0 || !allMembersPresent || !unanimous) {
+        return { ok: false, reason: `issue ${issueId} 没有完整的本轮一致立场（agree 或 disagree），不能标 resolved` };
       }
     }
     seen.add(issueId);
@@ -1170,8 +1174,8 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
     }
     case 'ISSUE_DISCUSSION': {
       const round = run.round_no ?? 1;
-      const reviewers = drafts.map((d) => d.memberId);
-      const facts = reviewers.map((memberId: string) => ({
+      const expectedMemberIds = issueDiscussionExpectedMemberIds(db, run.id, drafts.map((d) => d.memberId));
+      const facts = expectedMemberIds.map((memberId: string) => ({
         memberId,
         status: statusOf(participants, memberId),
         hasStageOutput: listRunArtifacts(db, run.id, 'issue_position').some((a) => a.author_id === memberId && a.revision === round),
@@ -1179,6 +1183,24 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       // 'completed' 指上一阶段产出——本阶段收齐只认本阶段产出或跨阶段终结（缺席/失败/unavailable）。
       const allSettled = facts.every((f) => f.hasStageOutput || f.status === 'absent' || f.status === 'failed' || f.status === 'unavailable');
       if (!allSettled) return { advanced: false };
+      const unanimousStances = unanimousFrozenIssueStancesInRound({
+        issueIds: listIssues(db, run.id).map((issue) => issue.id),
+        expectedMemberIds,
+        roundNo: round,
+        positions: currentRoundIssuePositions(db, run.id, round),
+      });
+      if (unanimousStances != null) {
+        const agreed = unanimousStances.filter((issue) => issue.stance === 'agree').length;
+        const rejected = unanimousStances.filter((issue) => issue.stance === 'disagree').length;
+        advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, {
+          from: 'ISSUE_DISCUSSION',
+          reason: `第 ${round} 轮全部冻结争议已形成完整一致立场（同意 ${agreed} / 一致否定 ${rejected}），提前转入整合`,
+          round,
+        });
+        freezeSynthesisInputs(db, run.id);
+        enqueueSynthesis(db, run.id, taskId, hostOf(roster));
+        return { advanced: true };
+      }
       // 第 3 轮强制检查点（§6.1）：host、意见已收集、未派发过。
       const host = hostOf(roster);
       const checkpointDone = listRunArtifacts(db, run.id, 'checkpoint_verdict').some((a) => a.revision === round);
@@ -1190,7 +1212,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
         const verdict = checkpointVerdictOf(db, run.id, round);
         if (verdict === 'continue') {
           advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: '第 3 轮检查点：继续（有新证据）', round: round + 1 });
-          enqueueIssueSteps(db, run.id, taskId, reviewers, round + 1);
+          enqueueIssueSteps(db, run.id, taskId, expectedMemberIds, round + 1);
           return { advanced: true };
         }
         advanceStage(db, run.id, taskId, 'SYNTHESIS', 0, now, { from: 'ISSUE_DISCUSSION', reason: '检查点停止/预算上限，转入整合' });
@@ -1207,7 +1229,7 @@ export function pumpDeliberation(db: ZhongshuoDatabase, taskId: string, options:
       }
       // round 1→2：直接进入下一轮（每轮开始冻结争议与证据版本；M1 复用 revision 1 争议集）。
       advanceStage(db, run.id, taskId, 'ISSUE_DISCUSSION', round + 1, now, { from: 'ISSUE_DISCUSSION', reason: `第 ${round} 轮意见收齐`, round: round + 1 });
-      enqueueIssueSteps(db, run.id, taskId, reviewers, round + 1);
+      enqueueIssueSteps(db, run.id, taskId, expectedMemberIds, round + 1);
       return { advanced: true };
     }
     case 'SYNTHESIS': {
@@ -1380,6 +1402,42 @@ function enqueueSynthesis(db: ZhongshuoDatabase, runId: string, taskId: string, 
     enqueueOutbox(db, { dispatchKey: delibDispatchKey({ taskId, runId, stage: 'SYN', memberId: hostId, roundNo, purpose: 'stage_work' }) });
   });
   tx();
+}
+
+/** ISSUE_DISCUSSION 的预期成员在进入阶段时冻结；迟到初稿只进入后续材料，不扩张本轮矩阵。 */
+function issueDiscussionExpectedMemberIds(db: ZhongshuoDatabase, runId: string, fallback: readonly string[]): string[] {
+  const manifest = frozenStageInputs(db, runId, 'ISSUE_DISCUSSION', 1);
+  if (manifest == null) return [...new Set(fallback)];
+  const authors = manifest.entries.flatMap((entry) => {
+    const row = db.prepare(
+      "SELECT author_id FROM artifacts WHERE id = ? AND run_id = ? AND kind = 'analysis_draft' AND revision = ?",
+    ).get(entry.artifactId, runId, entry.revision) as { author_id: string } | undefined;
+    return row == null ? [] : [row.author_id];
+  });
+  return [...new Set(authors)];
+}
+
+/** 只读取正确 run、当前 issue、当前轮，且来源为该成员本轮 issue_position 的正式立场。 */
+function currentRoundIssuePositions(db: ZhongshuoDatabase, runId: string, round: number) {
+  return db.prepare(
+    `SELECT p.issue_id AS issueId, p.issue_revision AS issueRevision, p.member_id AS memberId,
+            p.stance, p.source_artifact_id AS sourceArtifactId
+     FROM positions p
+     JOIN issues i ON i.id = p.issue_id
+     JOIN artifacts a ON a.id = p.source_artifact_id
+     WHERE i.run_id = ?
+       AND p.issue_revision = ?
+       AND a.run_id = ?
+       AND a.kind = 'issue_position'
+       AND a.author_id = p.member_id
+       AND a.revision = ?`,
+  ).all(runId, round, runId, round) as Array<{
+    issueId: string;
+    issueRevision: number;
+    memberId: string;
+    stance: 'agree' | 'disagree' | 'needs_evidence';
+    sourceArtifactId: string;
+  }>;
 }
 
 interface CollectedReview {
@@ -1725,6 +1783,11 @@ function renderStageBody(
   const requestText=request?textOfMessage(request.messageId):'';
   const review=db.prepare('SELECT revision,review_status,review_note FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(task.id) as {revision:number;review_status:string;review_note:string|null}|undefined;
   const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}${requestText?`\n本次回复串研讨请求：${requestText}`:''}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
+  const memberNames = new Map(
+    (db.prepare('SELECT id, display_name FROM project_members WHERE project_id = ?').all(task.project_id) as Array<{ id: string; display_name: string }>)
+      .map((member) => [member.id, member.display_name]),
+  );
+  const memberName = (memberId: string): string => memberNames.get(memberId) ?? memberId;
   if (step.stage === 'IND') {
     // 隔离：不含任何他人草稿（此刻也不读取）。文件发现=项目范围清单（两模式一致规则，第七轮
     // §13.4/§6.3：项目源码默认可读+命名排除；修复 C 组「文件名不可发现+工具面认知差」；
@@ -1744,6 +1807,7 @@ function renderStageBody(
       artifactId: d.artifactId,
       revision: d.revision,
       author: d.memberId,
+      authorDisplayName: memberName(d.memberId),
       summary: d.payload.summary,
       document: d.payload.document ?? null,
       recommendations: d.payload.recommendations,
@@ -1754,8 +1818,25 @@ function renderStageBody(
   }
   if (step.stage === 'ISS' || step.stage === 'CHK') {
     const issues = db.prepare('SELECT id, statement, status, revision FROM issues WHERE run_id = ? ORDER BY id').all(runId) as Array<{ id: string; statement: string; status: string; revision: number }>;
-    const positions = collectIssuePositions(db, runId);
-    return `${base}\n\n冻结争议清单（issueId 即身份）：\n${JSON.stringify(issues, null, 2)}\n\n已有立场摘要：\n${JSON.stringify(positions, null, 2)}`;
+    const positions = collectIssuePositions(db, runId).map((position) => ({
+      ...position,
+      memberDisplayName: memberName(position.memberId),
+    }));
+    const manifest = frozenStageInputs(db, runId, 'ISSUE_DISCUSSION', 1);
+    const frozenDrafts = manifest == null ? [] : draftsFromManifest(db, runId, manifest);
+    const existingBusinessDocuments = frozenDrafts.flatMap((draft) => {
+      const document = draft.payload.document;
+      if (document == null) return [];
+      return [{
+        filename: document.filename,
+        purpose: document.purpose,
+        authorId: draft.memberId,
+        authorDisplayName: memberName(draft.memberId),
+        artifactId: draft.artifactId,
+        revision: draft.revision,
+      }];
+    });
+    return `${base}\n\n冻结争议清单（issueId 即身份）：\n${JSON.stringify(issues, null, 2)}\n\n已有立场摘要：\n${JSON.stringify(positions, null, 2)}\n\n可复用既有业务文档（仅来自本阶段冻结材料；不含正文）：\n${JSON.stringify(existingBusinessDocuments, null, 2)}`;
   }
   if (step.stage === 'SYN') {
     const manifest = frozenStageInputs(db, runId, 'SYNTHESIS', 0);
@@ -1763,7 +1844,10 @@ function renderStageBody(
     const reviews = manifest != null ? collectReviewsFromManifest(db, runId, manifest) : collectReviews(db, runId);
     const frozenIssues = frozenSynthesisIssueSnapshot(db, runId, 0);
     const issues = frozenIssues?.issues ?? db.prepare('SELECT id, statement, status, revision FROM issues WHERE run_id = ? ORDER BY id').all(runId) as Array<{ id: string; statement: string; status: string; revision: number }>;
-    const positions = frozenIssues?.positions ?? collectIssuePositions(db, runId);
+    const positions = (frozenIssues?.positions ?? collectIssuePositions(db, runId)).map((position) => ({
+      ...position,
+      memberDisplayName: memberName(position.memberId),
+    }));
     const revisionManifest = step.roundNo > 0 ? frozenStageInputs(db, runId, 'SYNTHESIS_REVISION', step.roundNo) : null;
     const revisionEntries = revisionManifest?.entries ?? [];
     if (step.roundNo > 0 && revisionEntries.length === 0) {
@@ -1823,7 +1907,23 @@ function renderStageBody(
       issueResolutions: priorPayload?.issueResolutions ?? [],
       recommendations: priorPayload?.recommendations ?? [],
     }, null, 2)}\n\n上一轮冻结 RAT 交付反馈（必须据此修订）：\n${JSON.stringify(priorFeedback, null, 2)}`;
-    return `${base}\n\n全部初稿：\n${JSON.stringify(drafts.map((d) => ({ artifactId: d.artifactId, revision: d.revision, author: d.memberId, summary: d.payload.summary, document: d.payload.document ?? null, recommendations: d.payload.recommendations, openQuestions: d.payload.openQuestions, claims: d.payload.claims })), null, 2)}\n\n全部互评：\n${JSON.stringify(reviews, null, 2)}\n\n冻结议题与完整立场：\n${JSON.stringify({ issues, positions }, null, 2)}${priorBlock}\n\n你是主持者（${hostOf(roster)}），产出本次可用整合稿：共识入 claims、分歧如实入 disputedClaims；按冻结 issue 填写 issueResolutions，并只在确有可复用文档时提供 document。`;
+    const namedDrafts = drafts.map((d) => ({
+      artifactId: d.artifactId,
+      revision: d.revision,
+      author: d.memberId,
+      authorDisplayName: memberName(d.memberId),
+      summary: d.payload.summary,
+      document: d.payload.document ?? null,
+      recommendations: d.payload.recommendations,
+      openQuestions: d.payload.openQuestions,
+      claims: d.payload.claims,
+    }));
+    const namedReviews = reviews.map((reviewItem) => ({
+      ...reviewItem,
+      memberDisplayName: memberName(reviewItem.memberId),
+    }));
+    const hostId = hostOf(roster);
+    return `${base}\n\n全部初稿：\n${JSON.stringify(namedDrafts, null, 2)}\n\n全部互评：\n${JSON.stringify(namedReviews, null, 2)}\n\n冻结议题与完整立场：\n${JSON.stringify({ issues, positions }, null, 2)}${priorBlock}\n\n你是主持者${memberName(hostId)}（${hostId}），产出本次可用整合稿：共识入 claims、分歧如实入 disputedClaims；按冻结 issue 填写 issueResolutions，并只在确有可复用文档时提供 document。`;
   }
   // RATIFY：绑定冻结清单的精确整合稿（artifactId+revision+hash；不凭 clm 名/文本片段）。
   const synthesis = frozenSynthesisOf(db, runId, step.roundNo);

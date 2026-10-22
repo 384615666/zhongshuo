@@ -2754,11 +2754,14 @@ button.composer-file-token-open:hover {
 
 .col-thread {
   flex: none;
-  /* 默认 620px：明显宽于原来的 480px，且可拖动（见 .splitter） */
-  width: 620px;
-  /* 兜底：即使存了超大宽度，也至少给中间主池留 420px
-     （JS 的 useThreadWidth 会再扣掉侧栏宽度做精确收敛） */
-  max-width: calc(100% - 420px);
+  /**
+   * JS 会以内联 width 消费真实 .workspace 可用宽度。这里的 clamp 只是
+   * 首帧/无观察值兜底，与 THREAD_PANE_POLICY 保持同一规则：
+   * 回复串占 40%，最低 380px，并给主池至少 420px + 8px 分隔预算。
+   */
+  width: clamp(380px, 40%, calc(100% - 428px));
+  max-width: calc(100% - 428px);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   /**
@@ -3203,31 +3206,8 @@ button.composer-file-token-open:hover {
   color: var(--text);
 }
 
-/* ============================================================
-   窄窗：右栏改为全屏覆盖（§17.1）
-   ============================================================ */
-
-@media (max-width: 1280px) {
-  /**
-   * 覆盖式线程面板**只用于"没有预览、线程接管房间"**的场景（§17.1）。
-   *
-   * 缺陷（用户实测）：在 ≤1280px 打开「回复串 + 附件预览」时，
-   * 线程命中 `:not(.narrow)` 分支被改成 `position: absolute; z-index: 30`，
-   * 而预览区仍在文档流里 —— 线程整块盖在预览上，
-   * 用户看到的就是"附件页只显示半个"（实测 1280px：线程 666..1280 绝对定位，
-   * 预览 246..825，两者重叠 159px）。
-   *
-   * 因此这里加上布局互斥：双区（context-preview）时线程必须留在文档流内。
-   */
-  .workspace:not([data-layout='context-preview']) .col-thread:not(.narrow) {
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: min(720px, 100%);
-    z-index: 30;
-    box-shadow: var(--shadow-lg);
-    border-left: 1px solid var(--border);
-  }
-}
+/* 窄化由 Room 按真实 .workspace 宽度写入 .narrow，不再用视口媒体查询
+   把明明还能并排的两栏改成覆盖层。 */
 
 /* ============================================================
    打开 / 关闭回复串与附件预览的过渡

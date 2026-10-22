@@ -186,6 +186,63 @@ export function nextAfterCrossReview(issues: ReadonlyArray<DerivedIssue>): { nex
   return { next: 'SYNTHESIS', reason: '互评无争议，跳过分歧讨论' };
 }
 
+export interface RoundIssuePosition {
+  issueId: string;
+  issueRevision: number;
+  memberId: string;
+  stance: 'agree' | 'disagree' | 'needs_evidence';
+  sourceArtifactId: string;
+}
+
+export interface FrozenIssueStance {
+  issueId: string;
+  stance: 'agree' | 'disagree';
+}
+
+/**
+ * 当前讨论轮是否已形成每项 issue 的完整一致立场矩阵。
+ *
+ * - 全 agree = 正向共识；
+ * - 全 disagree = 一致否定旧主张/旧表述，同样是可进入整合的明确结论；
+ * - needs_evidence、混合立场、缺项、历史轮或无来源均不收敛。
+ *
+ * 一致否定不能被当作 agree/confirm；它可以表示“争议已按否定意见处理”，
+ * 但必须保留全部 disagree 立场与否定理由，并让更正后的 claims 继续走 RAT 确认。
+ * 来源 artifact 的 run/kind/author/revision 校验由调用方查询完成。
+ */
+export function unanimousFrozenIssueStancesInRound(input: {
+  issueIds: ReadonlyArray<string>;
+  expectedMemberIds: ReadonlyArray<string>;
+  roundNo: number;
+  positions: ReadonlyArray<RoundIssuePosition>;
+}): FrozenIssueStance[] | null {
+  const issueIds = [...new Set(input.issueIds)];
+  const memberIds = [...new Set(input.expectedMemberIds)];
+  if (issueIds.length === 0 || memberIds.length === 0) return null;
+  const result: FrozenIssueStance[] = [];
+  for (const issueId of issueIds) {
+    let issueStance: FrozenIssueStance['stance'] | null = null;
+    for (const memberId of memberIds) {
+      const matches = input.positions.filter((position) =>
+        position.issueId === issueId
+        && position.issueRevision === input.roundNo
+        && position.memberId === memberId
+        && position.sourceArtifactId.length > 0,
+      );
+      if (matches.length === 0) return null;
+      const stances = new Set(matches.map((position) => position.stance));
+      if (stances.size !== 1) return null;
+      const stance = matches[0]!.stance;
+      if (stance === 'needs_evidence') return null;
+      if (issueStance == null) issueStance = stance;
+      else if (issueStance !== stance) return null;
+    }
+    if (issueStance == null) return null;
+    result.push({ issueId, stance: issueStance });
+  }
+  return result;
+}
+
 /** 第 3 轮复核检查点可派发条件（§6.1）：host、roundNo=3、该轮意见已收集或明确记缺席。 */
 export function checkpointEligible(input: {
   role: 'host' | 'member';

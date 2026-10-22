@@ -104,7 +104,14 @@ async function reachRatifyWithIssue(
 
   const position = (memberId: string, round: number) => done({
     schemaVersion: 'issue-position-v1', summary: `${memberId} 第${round}轮`, document: null,
-    positions: [{ issueId: issue.id, stance: 'agree', reason: '已核对', newEvidence: [] }],
+    positions: [{
+      issueId: issue.id,
+      // Keep one real disagreement in the matrix so this legacy RATIFY fixture
+      // still exercises the checkpoint path after R101 early convergence.
+      stance: memberId === 'm1' ? 'needs_evidence' : 'agree',
+      reason: memberId === 'm1' ? '仍需证据' : '已核对',
+      newEvidence: [],
+    }],
   });
   for (let round = 1; round <= 3; round += 1) {
     await step(worker, scripts, position('m1', round));
@@ -373,16 +380,19 @@ describe('RATIFY explicit issue closure', () => {
   }, 20_000);
 
   it('preserves the host RATIFY summary bytes when explicit resolution succeeds', async () => {
+    const hostSummary = '核心结论：方案 A 可按条件推进。交付物：整合稿见答复。关键遗留：无。';
     const exact = await runRatifyScenario({
       ratify: (issue, memberIndex) => ({
-        summary: memberIndex === 0 ? '  原样编号 7  ' : '成员 2 确认',
+        summary: memberIndex === 0 ? hostSummary : '成员 2 确认',
         deliveryFeedback: { status: 'ready', reason: '可交付' },
         issueResponses: [{ issueId: issue, stance: 'resolved', reason: '当前版本已解决' }],
         responses: [{ claimId: 'clm_1', stance: 'confirm' }],
       }),
     });
     const message = exact.db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${exact.runId}`) as { body_json: string };
-    expect((JSON.parse(message.body_json) as { text: string }).text).toBe('  原样编号 7  ');
+    const body = JSON.parse(message.body_json) as { text: string; summaryRef?: { source?: string } };
+    expect(body.text).toBe(hostSummary);
+    expect(body.summaryRef?.source).toBe('ratify');
     exact.db.close();
   }, 20_000);
 

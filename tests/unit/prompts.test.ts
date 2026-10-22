@@ -126,6 +126,57 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
     // checkpoint 模板 host 专属：普通成员不得复用（§6.1）。
     expect(selectStageInstruction({ mode: 'DELIBERATE', role: 'member', stage: 'ISSUE_DISCUSSION', turnPurpose: 'checkpoint' })).toMatchObject({ ok: false });
   });
+
+  it('R101 DELIBERATE 提示词只写新增内容、复用同名文档且不机械造文件', () => {
+    const expected = new Map([
+      ['INDEPENDENT', '本轮新增结论'],
+      ['CROSS_REVIEW', '只写本轮新增'],
+      ['ISSUE_DISCUSSION', '只写本轮新增证据'],
+      ['SYNTHESIS', '沿用合适的同名文件'],
+      ['RATIFY', '不重抄整份整合稿'],
+    ]);
+    for (const [stage, phrase] of expected) {
+      const role = stage === 'SYNTHESIS' ? 'host' : 'member';
+      const result = selectStageInstruction({ mode: 'DELIBERATE', role, stage, turnPurpose: 'stage_work' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.value).toContain(phrase);
+      expect(result.value).toContain('document=null');
+      expect(result.value).toContain('不按字数或数量强行造文件');
+      expect(result.value).toContain('自主判断');
+    }
+  });
+
+  it('R101 主持者 RATIFY 保留最终用户总览，普通成员保持简短确认', () => {
+    const host = selectStageInstruction({ mode: 'DELIBERATE', role: 'host', stage: 'RATIFY', turnPurpose: 'stage_work' });
+    const member = selectStageInstruction({ mode: 'DELIBERATE', role: 'member', stage: 'RATIFY', turnPurpose: 'stage_work' });
+    expect(host.ok).toBe(true);
+    expect(member.ok).toBe(true);
+    if (!host.ok || !member.ok) return;
+    expect(host.value).toContain('最终用户总览');
+    expect(host.value).toContain('核心结论');
+    expect(host.value).toContain('实际交付物');
+    expect(host.value).toContain('关键遗留/限制');
+    expect(host.value).toContain('不能只写“确认通过”');
+    expect(member.value).toContain('简短确认');
+    expect(member.value).toContain('不承担最终用户总览');
+    expect(member.value).not.toContain('你的 summary 是最终用户总览');
+  });
+
+  it('R101 业务沟通用成员自然名，一致否定不写成同意或直接 resolved', () => {
+    const crossReview = selectStageInstruction({ mode: 'DELIBERATE', role: 'member', stage: 'CROSS_REVIEW', turnPurpose: 'stage_work' });
+    const synthesis = selectStageInstruction({ mode: 'DELIBERATE', role: 'host', stage: 'SYNTHESIS', turnPurpose: 'stage_work' });
+    expect(crossReview.ok).toBe(true);
+    expect(synthesis.ok).toBe(true);
+    if (!crossReview.ok || !synthesis.ok) return;
+    expect(crossReview.value).toContain('角色/displayName');
+    expect(crossReview.value).toContain('不要让 UUID 代替自然说明');
+    expect(crossReview.value).toContain('artifactId/revision/claimId');
+    expect(synthesis.value).toContain('全员明确 disagree');
+    expect(synthesis.value).toContain('不要把一致否定写成对原命题的同意');
+    expect(synthesis.value).toContain('保留全部否定立场的前提下把该争议标为已处理');
+    expect(synthesis.value).toContain('更正的 claims 仍须 RAT 确认');
+  });
 });
 
 describe('TaskComplete 输出契约（规格 §4.4：版本不可变、strict）', () => {

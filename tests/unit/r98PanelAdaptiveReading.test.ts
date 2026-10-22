@@ -7,6 +7,7 @@ const read = (relativePath: string): string =>
 const componentsCss = read('src/ui/hifi/styles/components.css');
 const previewCss = read('src/ui/hifi/styles/preview.css');
 const previewPane = read('src/ui/hifi/preview/PreviewPane.tsx');
+const room = read('src/ui/hifi/pages/Room.tsx');
 
 function rule(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -85,5 +86,46 @@ describe('R98 preview reading width and action order', () => {
     expect(previewPane).toContain('铺满阅读');
     expect(previewPane).toContain('setReadingMeasure');
     expect(previewPane).toContain('<MarkdownView text={text} />');
+  });
+});
+
+describe('R101 responsive Room width consumption', () => {
+  it('measures the rendered workspace and applies it to both real pane consumers', () => {
+    expect(room).toContain("const shell = useElementWidth<HTMLDivElement>('.app-body')");
+    expect(room).toContain('const workspace = useElementWidth<HTMLDivElement>()');
+    expect(room).toContain('ref={workspace.ref}');
+    expect(room).toContain('useResponsivePaneWidth(contentAvailableWidth, THREAD_PANE_POLICY)');
+    expect(room).toContain('useResponsivePaneWidth(contentAvailableWidth, PREVIEW_PANE_POLICY)');
+    expect(room).toContain('const narrow = contentAvailableWidth < THREAD_NARROW_NEED');
+    expect(room).toContain('const rightColW = previewWidth.width');
+    expect(room).toContain('const leftColW = previewWidths.secondary');
+    expect(room).toContain('width={single || narrow || twoRegion ? undefined : threadWidth.width}');
+    expect(room.indexOf('const previewWidth = useResponsivePaneWidth'))
+      .toBeLessThan(room.indexOf('\n  if (!room)'));
+  });
+
+  it('resets only local manual intent and does not reintroduce fixed width caps', () => {
+    expect(room).toContain('const [manualWidth, setManualWidth] = useState<number | null>(null)');
+    expect(room).toContain('const reset = () => setManualWidth(null)');
+    expect(room).toContain('onDoubleClick={threadWidth.reset}');
+    expect(room).toContain('onDoubleClick={previewWidth.reset}');
+    expect(room).toContain('双击恢复响应式默认');
+    expect(room).not.toContain('threadMaxWidth');
+    expect(room).not.toContain('window.innerWidth < 1280');
+    expect(room).not.toContain('useState(620)');
+    expect(room).not.toContain('Math.min(1100');
+  });
+
+  it('keeps CSS fallbacks aligned with the policies and confines long content scrolling', () => {
+    expect(componentsCss).toContain('width: clamp(380px, 40%, calc(100% - 428px))');
+    expect(componentsCss).toContain('max-width: calc(100% - 428px)');
+    expect(componentsCss).not.toContain('@media (max-width: 1280px)');
+    expect(previewCss).toContain('flex: 0 1 var(--preview-w, 56%)');
+    expect(componentsCss).toContain('.workspace {');
+    expect(componentsCss).toContain('min-width: 0');
+    expect(componentsCss).toContain('overflow: hidden');
+    expect(previewCss).toContain('.preview-source {');
+    expect(previewCss).toContain('overflow-x: auto');
+    expect(previewCss).toContain('.md-table-wrap {');
   });
 });

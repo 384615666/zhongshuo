@@ -62,11 +62,46 @@ export function GeneratedFiles({
   nonFinal?: boolean;
 }) {
   const files = normalizeFormalAttachments(attachments);
+  const normalizedPath = (value: string | undefined): string | null =>
+    value == null ? null : value.replaceAll('\\', '/').replaceAll(/\/+/g, '/').toLowerCase();
+  const preferredDocuments = files.filter((file) =>
+    file.document === true && (file.revision ?? 0) > 1,
+  );
+  const samePath = (left: string | undefined, right: string | undefined): boolean => {
+    const normalizedLeft = normalizedPath(left);
+    const normalizedRight = normalizedPath(right);
+    return normalizedLeft != null && normalizedRight != null && normalizedLeft === normalizedRight;
+  };
+  const changeMatchesPreferredDocument = (change: MessageFileChange, doc: FormalAttachmentSummary): boolean =>
+    doc.artifactId !== change.artifactId
+    && doc.hash === change.afterHash
+    && doc.filename === change.displayName
+    && (samePath(doc.sourcePath, change.path) || (doc.sourcePath == null && change.artifactId != null));
+  const matchedPreferredDocument = (change: MessageFileChange): boolean =>
+    preferredDocuments.some((doc) => changeMatchesPreferredDocument(change, doc));
+  const fileIsSupersededByPreferredDocument = (file: FormalAttachmentSummary): boolean => {
+    if (file.document === true) return false;
+    return preferredDocuments.some((doc) =>
+      doc.artifactId !== file.artifactId
+      && doc.hash === file.hash
+      && doc.filename === file.filename
+      && (
+        samePath(doc.sourcePath, file.sourcePath)
+        || (changes ?? []).some((change) =>
+          change.artifactId === file.artifactId
+          && changeMatchesPreferredDocument(change, doc)
+          && samePath(change.path, file.sourcePath))
+      ),
+    );
+  };
+  const visibleChanges = (changes ?? []).filter((change) => !matchedPreferredDocument(change));
+  const visibleFiles = files.filter((file) => !fileIsSupersededByPreferredDocument(file));
   if (files.length === 0 && !changes?.length) return null;
-  const linkedIds = new Set((changes ?? []).flatMap(file => file.artifactId ? [file.artifactId] : []));
+  if (visibleFiles.length === 0 && visibleChanges.length === 0) return null;
+  const linkedIds = new Set(visibleChanges.flatMap(file => file.artifactId ? [file.artifactId] : []));
   const hostedDuplicate = (file: FormalAttachmentSummary): boolean => {
     if (file.document !== true && file.detailMarkdown !== true) return false;
-    return (changes ?? []).some((change) => {
+    return visibleChanges.some((change) => {
       if (change.artifactId === file.artifactId || change.afterHash == null || change.afterHash !== file.hash || change.displayName !== file.filename) return false;
       const real = files.find((candidate) => candidate.artifactId === change.artifactId);
       if (real == null || real.document === true || real.detailMarkdown === true) return false;
@@ -75,8 +110,8 @@ export function GeneratedFiles({
   };
   return (
     <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-      {changes?.length ? <MessageChangedFiles changes={changes} attachments={files} onOpen={onOpen}/> : null}
-      {files.filter(file => !linkedIds.has(file.artifactId) && !hostedDuplicate(file)).map((attachment) => {
+      {visibleChanges.length ? <MessageChangedFiles changes={visibleChanges} attachments={files} onOpen={onOpen}/> : null}
+      {visibleFiles.filter(file => !linkedIds.has(file.artifactId) && !hostedDuplicate(file)).map((attachment) => {
         const isDocument = attachment.document === true;
         const kindLabel = isDocument ? '文档' : attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);
         const size = typeof attachment.sizeBytes === 'number' && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0

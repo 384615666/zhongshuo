@@ -43,6 +43,45 @@ describe('R98 message file card identity', () => {
     expect(html).toContain('data-zs-artifact-id="art_gf_other"');
   });
 
+  it('keeps a versioned declared document as the card identity over a generated duplicate', () => {
+    const versionedDocument = { ...hosted, revision: 5 };
+    const generatedDuplicate = { ...real, artifactId: 'art_gf_duplicate', revision: 1 };
+    const html = renderToStaticMarkup(createElement(GeneratedFiles, {
+      attachments: [versionedDocument, generatedDuplicate],
+      changes: [file({ artifactId: 'art_gf_duplicate', revision: 1 })],
+      onOpen: () => {},
+    }));
+    expect(html).toContain('data-zs-artifact-id="art_detail_v2"');
+    expect(html).not.toContain('data-zs-change-artifact-id="art_gf_duplicate"');
+    expect(html).not.toContain('data-zs-artifact-id="art_gf_duplicate"');
+  });
+
+  it('does not filter two formal document versions against each other', () => {
+    const firstVersion = { ...hosted, artifactId: 'art_doc_v2', revision: 2 };
+    const secondVersion = { ...hosted, artifactId: 'art_doc_v3', revision: 3 };
+    const generatedDuplicate = { ...real, artifactId: 'art_gf_current', revision: 1 };
+    const html = renderToStaticMarkup(createElement(GeneratedFiles, {
+      attachments: [firstVersion, secondVersion, generatedDuplicate],
+      changes: [file({ artifactId: 'art_gf_current', revision: 1 })],
+      onOpen: () => {},
+    }));
+    expect(html).toContain('data-zs-artifact-id="art_doc_v2"');
+    expect(html).toContain('data-zs-artifact-id="art_doc_v3"');
+    expect(html).not.toContain('data-zs-artifact-id="art_gf_current"');
+  });
+
+  it('does not treat a missing document source path as a wildcard for another directory', () => {
+    const noPathDocument = { ...hosted, artifactId: 'art_doc_no_path', revision: 5, sourcePath: undefined };
+    const unrelated = { ...real, artifactId: 'art_gf_unrelated', sourcePath: 'another/方案.md' };
+    const html = renderToStaticMarkup(createElement(GeneratedFiles, {
+      attachments: [noPathDocument, unrelated],
+      changes: [file({ artifactId: 'art_gf_unrelated', path: '方案.md' })],
+      onOpen: () => {},
+    }));
+    expect(html).toContain('data-zs-artifact-id="art_doc_no_path"');
+    expect(html).toContain('data-zs-artifact-id="art_gf_unrelated"');
+  });
+
   it('uses a strict source-path fallback only when the exact artifact id is absent', () => {
     const legacy = file({ artifactId: null });
     expect(attachmentForChange(legacy, [hosted, real])).toBe(real);

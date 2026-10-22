@@ -15,9 +15,9 @@ import { createRoomRootTask } from '../../src/persistence/stores/roomRootTask.ts
 import { FakeRuntimeAdapter } from '../../src/adapter/fake/runtimeAdapter.ts';
 import type { FakeTurnScript } from '../../src/adapter/fake/script.ts';
 import { DispatchWorker } from '../../src/daemon/dispatchWorker.ts';
-import { assembleStepInput, frozenStageInputs, pumpDeliberation } from '../../src/daemon/deliberationRunner.ts';
+import { assembleStepInput, delibDispatchKey, frozenStageInputs, pumpDeliberation } from '../../src/daemon/deliberationRunner.ts';
 import { selectStageInstruction } from '../../src/contracts/prompts.ts';
-import { listRunArtifacts, getRatificationRecords, getSynthesisClaims, currentSynthesisVersion } from '../../src/persistence/stores/deliberation.ts';
+import { listRunArtifacts, getRatificationRecords, getSynthesisClaims, currentSynthesisVersion, publishDeliberationArtifact } from '../../src/persistence/stores/deliberation.ts';
 
 const tmpRoot = mkdtempSync(join(tmpdir(), 'zs-delibflow-'));
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
@@ -271,7 +271,7 @@ describe('DELIBERATE 编排：完整正常流程（分歧→讨论→检查点�
       deliveryFeedback: { status: 'ready', reason: '当前整合稿可作为交付', revisionRequest: '', question: '', owner: '' },
       responses: [{ claimId: 'clm_1', stance: 'conditional', conditions: ['补充风险清单'] }],
     }));
-    expectLastInstruction(adapter, 'member', 'RATIFY', 'stage_work', 'ratify-v1');
+    expectLastInstruction(adapter, 'host', 'RATIFY', 'stage_work', 'ratify-v1');
     await step(worker, scripts, done({
       schemaVersion: 'ratify-v1',
       summary: '确认总览：本条结论确认。',
@@ -411,7 +411,7 @@ describe('R97 real worker six-stage format repairs', () => {
       { role: 'member' as const, stage: 'ISSUE_DISCUSSION', purpose: 'stage_work' as const, schema: 'issue-position-v1' },
       { role: 'host' as const, stage: 'ISSUE_DISCUSSION', purpose: 'checkpoint' as const, schema: 'checkpoint-verdict-v1' },
       { role: 'host' as const, stage: 'SYNTHESIS', purpose: 'stage_work' as const, schema: 'synthesis-v1' },
-      { role: 'member' as const, stage: 'RATIFY', purpose: 'stage_work' as const, schema: 'ratify-v1' },
+      { role: 'host' as const, stage: 'RATIFY', purpose: 'stage_work' as const, schema: 'ratify-v1' },
     ]) {
       const expected = selectStageInstruction({ mode: 'DELIBERATE', role: spec.role, stage: spec.stage, turnPurpose: spec.purpose });
       expect(expected.ok).toBe(true);
@@ -609,6 +609,375 @@ describe('R96 delivery feedback and bounded revision', () => {
     expect(db.prepare('SELECT status FROM workflow_runs WHERE id=?').get(runId)).toEqual({ status: 'PARTIAL' });
     const final = db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${runId}`) as { body_json: string };
     expect((JSON.parse(final.body_json) as { delivery?: { status?: string } }).delivery?.status).toBe('blocked');
+    await adapter.closeAllSessions();
+    db.close();
+  });
+});
+
+describe('DELIBERATE 编排：R101 分歧早收敛', () => {
+  it('第 1 轮 issue×expectedMember 全部正式 agree 时直入 SYNTHESIS，不派 ISS r2 或 checkpoint', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const taskId = createDelibTask(db, 101, ['m1', 'm2']);
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r101-agree', enableDeliberate: true,
+      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-r101-agree'),
+    });
+
+    await step(worker, scripts);
+    await step(worker, scripts, done(draft('甲', [{ claimId: 'c1', statement: '结论一' }], {
+      filename: '办公外设采购执行方案.md',
+      purpose: '供采购同事执行',
+      markdown: '# R101_DOC_M1_FULL',
+    })));
+    await step(worker, scripts, done(draft('乙', [{ claimId: 'c1', statement: '结论一（乙）' }], {
+      filename: '办公外设采购执行方案.md',
+      purpose: '供采购同事执行',
+      markdown: '# R101_DOC_M2_FULL',
+    })));
+    const runId = runIdOf(db);
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    for (const memberId of ['m1', 'm2']) {
+      const peer = drafts.find((artifact) => artifact.author_id !== memberId)!;
+      await step(worker, scripts, done({
+        schemaVersion: 'cross-review-v1', summary: '需要讨论', document: null,
+        reviews: [{ targetArtifactId: peer.id, targetRevision: 1, targetClaimId: 'c1', stance: 'disagree', reason: '存在差异', evidenceIds: [] }],
+      }));
+    }
+    const issueIds = (db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId) as Array<{ id: string }>).map((issue) => issue.id);
+    expect(issueIds.length).toBeGreaterThan(0);
+    const crInput = assembleStepInput(db, {
+      taskId, runId,
+      step: { taskId, runId, stage: 'CR', memberId: 'm1', roundNo: 0, purpose: 'stage_work' },
+    });
+    expect(crInput.ok).toBe(true);
+    if (!crInput.ok) throw new Error(crInput.error.message);
+    expect(crInput.value.text).toContain('authorDisplayName');
+    expect(crInput.value.text).toContain('成员2');
+    const issInput = assembleStepInput(db, {
+      taskId, runId,
+      step: { taskId, runId, stage: 'ISS', memberId: 'm1', roundNo: 1, purpose: 'stage_work' },
+    });
+    expect(issInput.ok).toBe(true);
+    if (!issInput.ok) throw new Error(issInput.error.message);
+    expect(issInput.value.text).toContain('可复用既有业务文档');
+    expect(issInput.value.text).toContain('办公外设采购执行方案.md');
+    expect(issInput.value.text).toContain('供采购同事执行');
+    expect(issInput.value.text).toContain('成员2');
+    expect(issInput.value.text).not.toContain('R101_DOC_M1_FULL');
+    expect(issInput.value.text).not.toContain('R101_DOC_M2_FULL');
+    const issuePositions = (memberId: string) => done({
+      schemaVersion: 'issue-position-v1', summary: `${memberId} 同意`, document: null,
+      positions: issueIds.map((issueId) => ({ issueId, stance: 'agree', reason: '已核对并同意', newEvidence: [] })),
+    });
+
+    await step(worker, scripts, issuePositions('m1'));
+    expect(db.prepare('SELECT stage, round_no FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({ stage: 'ISSUE_DISCUSSION', round_no: 1 });
+    await step(worker, scripts, issuePositions('m2'));
+
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({ stage: 'SYNTHESIS' });
+    expect(listRunArtifacts(db, runId, 'issue_position')).toHaveLength(2);
+    expect(listRunArtifacts(db, runId, 'checkpoint_verdict')).toHaveLength(0);
+    const keys = (db.prepare('SELECT dispatch_key FROM outbox').all() as Array<{ dispatch_key: string }>).map((row) => row.dispatch_key);
+    expect(keys.some((key) => key.includes(':ISS:') && key.includes(':2:w'))).toBe(false);
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('全 disagree 一致否定旧命题时可作为已处理争议提前整合，但保留否定立场并经 RAT 确认更正稿', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const taskId = createDelibTask(db, 105, ['m1', 'm2']);
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r101-negative-consensus', enableDeliberate: true,
+      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-r101-negative-consensus'),
+    });
+
+    await step(worker, scripts);
+    await step(worker, scripts, done(draft('甲', [{ claimId: 'c1', statement: '旧表述：改甲一定超期' }])));
+    await step(worker, scripts, done(draft('乙', [{ claimId: 'c1', statement: '旧表述：改甲一定超期（乙）' }])));
+    const runId = runIdOf(db);
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    const m1Draft = drafts.find((artifact) => artifact.author_id === 'm1')!;
+    const m2Draft = drafts.find((artifact) => artifact.author_id === 'm2')!;
+    await step(worker, scripts, done({
+      schemaVersion: 'cross-review-v1', summary: '旧表述需要分时点讨论', document: null,
+      reviews: [{ targetArtifactId: m2Draft.id, targetRevision: 1, targetClaimId: 'c1', stance: 'disagree', reason: '绝对表述不准确', evidenceIds: [] }],
+    }));
+    await step(worker, scripts, done({
+      schemaVersion: 'cross-review-v1', summary: '同意甲稿', document: null,
+      reviews: [{ targetArtifactId: m1Draft.id, targetRevision: 1, targetClaimId: 'c1', stance: 'agree', reason: '表述准确', evidenceIds: [] }],
+    }));
+    const issueIds = (db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId) as Array<{ id: string }>).map((issue) => issue.id);
+    expect(issueIds).toHaveLength(1);
+    const reject = (memberId: string) => done({
+      schemaVersion: 'issue-position-v1', summary: `${memberId} 一致否定旧表述`, document: null,
+      positions: issueIds.map((issueId) => ({
+        issueId, stance: 'disagree',
+        reason: '发货前当日改甲仍在 3 天窗口；只有到货后才发现缺件再改甲才超期', newEvidence: [],
+      })),
+    });
+
+    await step(worker, scripts, reject('m1'));
+    await step(worker, scripts, reject('m2'));
+    expect(db.prepare('SELECT stage, round_no FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({ stage: 'SYNTHESIS', round_no: 0 });
+    expect(listRunArtifacts(db, runId, 'checkpoint_verdict')).toHaveLength(0);
+    const keys = (db.prepare('SELECT dispatch_key FROM outbox').all() as Array<{ dispatch_key: string }>).map((row) => row.dispatch_key);
+    expect(keys.some((key) => key.includes(':ISS:') && key.includes(':2:w'))).toBe(false);
+    const synInput = assembleStepInput(db, {
+      taskId, runId,
+      step: { taskId, runId, stage: 'SYN', memberId: 'm1', roundNo: 0, purpose: 'stage_work' },
+    });
+    expect(synInput.ok).toBe(true);
+    if (!synInput.ok) throw new Error(synInput.error.message);
+    expect(synInput.value.text).toContain('authorDisplayName');
+    expect(synInput.value.text).toContain('memberDisplayName');
+    expect(synInput.value.text).toContain('成员2');
+
+    const synthesisBase = {
+      schemaVersion: 'synthesis-v1', document: null,
+      claims: [{ statement: '改甲是否超期取决于发现时点；发货前当日改单仍可按期', sourceRefs: ['c1'] }],
+      disputedClaims: [], recommendations: [],
+    };
+    await step(worker, scripts, done({
+      ...synthesisBase,
+      summary: '已更正绝对表述：发货前当日改甲仍可按期，到货后损坏再改甲才超期。',
+      issueResolutions: issueIds.map((issueId) => ({
+        issueId, status: 'resolved',
+        reason: '本轮全体成员明确否定旧绝对表述，已按一致否定意见改写；原否定立场保留，更正文案待 RAT 确认',
+      })),
+    }));
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({ stage: 'RATIFY' });
+    expect(listRunArtifacts(db, runId, 'synthesis')).toHaveLength(1);
+    expect(currentSynthesisVersion(db, runId)).not.toBeNull();
+    expect(db.prepare('SELECT status FROM issues WHERE id=?').get(issueIds[0]!)).toEqual({ status: 'resolved' });
+    const preservedPositions = db.prepare('SELECT member_id, stance FROM positions WHERE issue_id=? AND issue_revision=1 ORDER BY member_id').all(issueIds[0]!) as Array<{ member_id: string; stance: string }>;
+    expect(preservedPositions).toEqual([
+      { member_id: 'm1', stance: 'disagree' },
+      { member_id: 'm2', stance: 'disagree' },
+    ]);
+    expect(listRunArtifacts(db, runId, 'final_report')).toHaveLength(0);
+    expect(db.prepare('SELECT status FROM tasks WHERE id=?').get(taskId)).not.toEqual({ status: 'DONE' });
+
+    const hostSummary = '核心结论：更正后的时点表述可直接执行。交付物：见当前答复。关键遗留：无。';
+    await step(worker, scripts, done({
+      schemaVersion: 'ratify-v1', summary: hostSummary, document: null,
+      deliveryFeedback: { status: 'ready', reason: '更正后的冻结稿可交付', revisionRequest: '', question: '', owner: '' },
+      issueResponses: [{ issueId: issueIds[0]!, stance: 'resolved', reason: '确认更正后的冻结稿' }],
+      responses: [{ claimId: 'clm_1', stance: 'confirm' }],
+    }));
+    await step(worker, scripts, done({
+      schemaVersion: 'ratify-v1', summary: '确认', document: null,
+      deliveryFeedback: { status: 'ready', reason: '更正后的冻结稿可交付', revisionRequest: '', question: '', owner: '' },
+      issueResponses: [{ issueId: issueIds[0]!, stance: 'resolved', reason: '确认更正后的冻结稿' }],
+      responses: [{ claimId: 'clm_1', stance: 'confirm' }],
+    }));
+
+    expect(db.prepare('SELECT status FROM issues WHERE id=?').get(issueIds[0]!)).toEqual({ status: 'resolved' });
+    const report = listRunArtifacts(db, runId, 'final_report')[0]!;
+    const reportPayload = JSON.parse(readFileSync(report.blob_path, 'utf8')) as { deliveryStatus: string; overallConsensus: string; unresolvedIssues: unknown[]; issueResolutions: Array<{ issueId: string; status: string; reason: string }> };
+    expect(reportPayload.deliveryStatus).toBe('delivered');
+    expect(reportPayload.overallConsensus).toBe('unanimous');
+    expect(reportPayload.unresolvedIssues).toEqual([]);
+    expect(reportPayload.issueResolutions).toContainEqual(expect.objectContaining({
+      issueId: issueIds[0],
+      status: 'resolved',
+      reason: expect.stringContaining('明确否定旧绝对表述'),
+    }));
+    const finalBody = JSON.parse((db.prepare('SELECT body_json FROM messages WHERE id=?').get(`msg_report_${runId}`) as { body_json: string }).body_json) as { text: string };
+    expect(finalBody.text).toBe(hostSummary);
+    await adapter.closeAllSessions();
+    db.close();
+  }, 20_000);
+
+  it('任一 issue×expectedMember 缺项时不提前收敛，按轮次继续讨论', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    createDelibTask(db, 104, ['m1', 'm2']);
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r101-missing-matrix-cell', enableDeliberate: true,
+      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-r101-missing-matrix-cell'),
+    });
+
+    await step(worker, scripts);
+    await step(worker, scripts, done(draft('甲', [
+      { claimId: 'c1', statement: '结论一' },
+      { claimId: 'c2', statement: '结论二' },
+    ])));
+    await step(worker, scripts, done(draft('乙', [
+      { claimId: 'c1', statement: '结论一（乙）' },
+      { claimId: 'c2', statement: '结论二（乙）' },
+    ])));
+    const runId = runIdOf(db);
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    for (const memberId of ['m1', 'm2']) {
+      const peer = drafts.find((artifact) => artifact.author_id !== memberId)!;
+      await step(worker, scripts, done({
+        schemaVersion: 'cross-review-v1', summary: '两项均需讨论', document: null,
+        reviews: [
+          { targetArtifactId: peer.id, targetRevision: 1, targetClaimId: 'c1', stance: 'disagree', reason: '结论一存在差异', evidenceIds: [] },
+          { targetArtifactId: peer.id, targetRevision: 1, targetClaimId: 'c2', stance: 'disagree', reason: '结论二存在差异', evidenceIds: [] },
+        ],
+      }));
+    }
+    const issueIds = (db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId) as Array<{ id: string }>).map((issue) => issue.id);
+    expect(issueIds).toHaveLength(4);
+    const issuePositions = (memberId: string, includedIssueIds: string[]) => done({
+      schemaVersion: 'issue-position-v1', summary: `${memberId} 同意`, document: null,
+      positions: includedIssueIds.map((issueId) => ({ issueId, stance: 'agree', reason: '已核对并同意', newEvidence: [] })),
+    });
+
+    await step(worker, scripts, issuePositions('m1', issueIds));
+    await step(worker, scripts, issuePositions('m2', issueIds.slice(0, -1)));
+
+    expect(db.prepare('SELECT stage, round_no FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({ stage: 'ISSUE_DISCUSSION', round_no: 2 });
+    expect(listRunArtifacts(db, runId, 'checkpoint_verdict')).toHaveLength(0);
+    const keys = (db.prepare('SELECT dispatch_key FROM outbox').all() as Array<{ dispatch_key: string }>).map((row) => row.dispatch_key);
+    expect(keys.some((key) => key.includes(':ISS:m1:2:w') || key.includes(':ISS:m2:2:w'))).toBe(true);
+    expect(keys.some((key) => key.includes(':SYN:'))).toBe(false);
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('真实 needs_evidence 继续讨论；冻结 expected 忽略迟到草稿，第 2 轮全同意即收敛且缺席者不能被写成 resolved', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2', 'm3']);
+    const taskId = createDelibTask(db, 102, ['m1', 'm2', 'm3']);
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r101-needs-evidence', enableDeliberate: true,
+      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-r101-needs-evidence'),
+    });
+
+    await step(worker, scripts);
+    const runId = runIdOf(db);
+    db.prepare("UPDATE run_participants SET status='unavailable' WHERE run_id=? AND member_id='m3'").run(runId);
+    db.prepare('DELETE FROM outbox WHERE dispatch_key=?').run(delibDispatchKey({
+      taskId, runId, stage: 'IND', memberId: 'm3', roundNo: 0, purpose: 'stage_work',
+    }));
+    await step(worker, scripts, done(draft('甲', [{ claimId: 'c1', statement: '结论一' }])));
+    await step(worker, scripts, done(draft('乙', [{ claimId: 'c1', statement: '结论一（乙）' }])));
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    for (const memberId of ['m1', 'm2']) {
+      const peer = drafts.find((artifact) => artifact.author_id !== memberId)!;
+      await step(worker, scripts, done({
+        schemaVersion: 'cross-review-v1', summary: '需要证据', document: null,
+        reviews: [{ targetArtifactId: peer.id, targetRevision: 1, targetClaimId: 'c1', stance: 'needs_evidence', reason: '缺证据', evidenceIds: [] }],
+      }));
+    }
+    const issueIds = (db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId) as Array<{ id: string }>).map((issue) => issue.id);
+    const taskMeta = db.prepare('SELECT conversation_id, conversation_thread_id FROM tasks WHERE id=?').get(taskId) as { conversation_id: string; conversation_thread_id: string | null };
+    const late = publishDeliberationArtifact(db, {
+      artifactId: 'art_r101_late_m3', projectId: 'p1', conversationId: taskMeta.conversation_id,
+      threadId: taskMeta.conversation_thread_id, taskId, runId, authorId: 'm3', kind: 'analysis_draft',
+      revision: 1, now: 5000, blobDir: join(tmpRoot, 'app-r101-late'),
+      payload: draft('迟到初稿', [{ claimId: 'c1', statement: '迟到结论' }]),
+    });
+    expect(late.ok).toBe(true);
+
+    const positions = (memberId: string, stance: 'agree' | 'needs_evidence') => done({
+      schemaVersion: 'issue-position-v1', summary: `${memberId} ${stance}`, document: null,
+      positions: issueIds.map((issueId) => ({ issueId, stance, reason: '本轮立场', newEvidence: [] })),
+    });
+    await step(worker, scripts, positions('m1', 'needs_evidence'));
+    await step(worker, scripts, positions('m2', 'agree'));
+    expect(db.prepare('SELECT stage, round_no FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({ stage: 'ISSUE_DISCUSSION', round_no: 2 });
+
+    await step(worker, scripts, positions('m1', 'agree'));
+    await step(worker, scripts, positions('m2', 'agree'));
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({ stage: 'SYNTHESIS' });
+    expect(listRunArtifacts(db, runId, 'checkpoint_verdict')).toHaveLength(0);
+    const keys = (db.prepare('SELECT dispatch_key FROM outbox').all() as Array<{ dispatch_key: string }>).map((row) => row.dispatch_key);
+    expect(keys.some((key) => key.includes(':ISS:') && key.includes(':3:w'))).toBe(false);
+
+    const synthesisBase = {
+      schemaVersion: 'synthesis-v1', document: null,
+      claims: [{ statement: '结论一', sourceRefs: ['c1'] }],
+      disputedClaims: [], recommendations: [],
+    };
+    await step(worker, scripts, done({
+      ...synthesisBase,
+      summary: '错误地宣称全员解决',
+      issueResolutions: issueIds.map((issueId) => ({ issueId, status: 'resolved', reason: '仅 m1/m2 已同意' })),
+    }));
+    expect(listRunArtifacts(db, runId, 'synthesis')).toHaveLength(0);
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({ stage: 'SYNTHESIS' });
+    const repairKeys = (db.prepare('SELECT dispatch_key FROM outbox').all() as Array<{ dispatch_key: string }>).map((row) => row.dispatch_key);
+    expect(repairKeys.some((key) => key.includes(':RPR:m1:') && key.endsWith(':SYN'))).toBe(true);
+
+    await step(worker, scripts, done({
+      ...synthesisBase,
+      summary: '结论一可执行；缺席成员未参与，保留为证据不足。',
+      issueResolutions: issueIds.map((issueId) => ({ issueId, status: 'insufficient_evidence', reason: 'm3 未参与本轮讨论，不能记为全员同意' })),
+    }));
+    expect(db.prepare('SELECT stage FROM workflow_runs WHERE id=?').get(runId)).toEqual({ stage: 'RATIFY' });
+    expect(currentSynthesisVersion(db, runId)).not.toBeNull();
+    for (const issueId of issueIds) {
+      expect(db.prepare('SELECT status FROM issues WHERE id=?').get(issueId)).toEqual({ status: 'insufficient_evidence' });
+    }
+    await adapter.closeAllSessions();
+    db.close();
+  });
+
+  it('来源 artifact 不是该成员本轮 issue_position 版本时不把 agree 当收敛依据', async () => {
+    const db = openDatabase(':memory:');
+    seed(db, ['m1', 'm2']);
+    const taskId = createDelibTask(db, 103, ['m1', 'm2']);
+    const scripts: FakeTurnScript[] = [];
+    const adapter = new FakeRuntimeAdapter({ structuredFinal: false, turnScriptSequencer: () => scripts.shift() ?? done({ schemaVersion: 'analysis-draft-v1' }) });
+    const worker = new DispatchWorker({
+      db, adapter, leaseOwner: 'r101-source-version', enableDeliberate: true,
+      absenceToleranceMs: 60_000, appDataDir: join(tmpRoot, 'app-r101-source-version'),
+    });
+
+    await step(worker, scripts);
+    await step(worker, scripts, done(draft('甲', [{ claimId: 'c1', statement: '结论一' }])));
+    await step(worker, scripts, done(draft('乙', [{ claimId: 'c1', statement: '结论一（乙）' }])));
+    const runId = runIdOf(db);
+    const drafts = listRunArtifacts(db, runId, 'analysis_draft');
+    for (const memberId of ['m1', 'm2']) {
+      const peer = drafts.find((artifact) => artifact.author_id !== memberId)!;
+      await step(worker, scripts, done({
+        schemaVersion: 'cross-review-v1', summary: '需要讨论', document: null,
+        reviews: [{ targetArtifactId: peer.id, targetRevision: 1, targetClaimId: 'c1', stance: 'disagree', reason: '存在差异', evidenceIds: [] }],
+      }));
+    }
+    const issueIds = (db.prepare('SELECT id FROM issues WHERE run_id=? ORDER BY id').all(runId) as Array<{ id: string }>).map((issue) => issue.id);
+    const taskMeta = db.prepare('SELECT conversation_id, conversation_thread_id FROM tasks WHERE id=?').get(taskId) as { conversation_id: string; conversation_thread_id: string | null };
+    const payload = {
+      schemaVersion: 'issue-position-v1', summary: '全部同意', document: null,
+      positions: issueIds.map((issueId) => ({ issueId, stance: 'agree', reason: '同意', newEvidence: [] })),
+    };
+    for (const memberId of ['m1', 'm2']) {
+      const current = publishDeliberationArtifact(db, {
+        artifactId: `art_r101_current_${memberId}`, projectId: 'p1', conversationId: taskMeta.conversation_id,
+        threadId: taskMeta.conversation_thread_id, taskId, runId, authorId: memberId, kind: 'issue_position',
+        revision: 1, payload, now: 6000, blobDir: join(tmpRoot, 'app-r101-source-version'),
+      });
+      expect(current.ok).toBe(true);
+      const wrongVersion = publishDeliberationArtifact(db, {
+        artifactId: `art_r101_wrong_rev_${memberId}`, projectId: 'p1', conversationId: taskMeta.conversation_id,
+        threadId: taskMeta.conversation_thread_id, taskId, runId, authorId: memberId, kind: 'issue_position',
+        revision: 2, payload, now: 6001, blobDir: join(tmpRoot, 'app-r101-source-version'),
+      });
+      expect(wrongVersion.ok).toBe(true);
+      for (const issueId of issueIds) {
+        db.prepare(
+          `INSERT INTO positions (issue_id, issue_revision, member_id, stance, conditions_json, source_artifact_id)
+           VALUES (?, 1, ?, 'agree', NULL, ?)`,
+        ).run(issueId, memberId, `art_r101_wrong_rev_${memberId}`);
+      }
+    }
+
+    pumpDeliberation(db, taskId, { absenceToleranceMs: 60_000, blobDir: join(tmpRoot, 'app-r101-source-version') });
+    expect(db.prepare('SELECT stage, round_no FROM workflow_runs WHERE id=?').get(runId)).toMatchObject({ stage: 'ISSUE_DISCUSSION', round_no: 2 });
     await adapter.closeAllSessions();
     db.close();
   });

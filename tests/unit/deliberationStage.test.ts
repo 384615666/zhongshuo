@@ -13,6 +13,7 @@ import {
   issueIdFor,
   nextAfterCrossReview,
   overallConsensus,
+  unanimousFrozenIssueStancesInRound,
   validateClaimReferences,
 } from '../../src/domain/deliberation/stageMachine.ts';
 import type { FrozenRoster, ParticipantStatus } from '../../src/contracts/deliberation.ts';
@@ -150,6 +151,64 @@ describe('第 3 轮检查点资格（§6.1）', () => {
     expect(checkpointEligible({ role: 'host', roundNo: 2, ...base })).toBe(false);
     expect(checkpointEligible({ role: 'host', roundNo: 3, roundOpinionsCollected: false, alreadyDispatchedCheckpoint: false })).toBe(false);
     expect(checkpointEligible({ role: 'host', roundNo: 3, roundOpinionsCollected: true, alreadyDispatchedCheckpoint: true })).toBe(false);
+  });
+});
+
+describe('R101 ISSUE_DISCUSSION 当前轮完整一致立场矩阵', () => {
+  const full = [
+    { issueId: 'iss_1', issueRevision: 1, memberId: 'm1', stance: 'agree' as const, sourceArtifactId: 'art_m1_r1' },
+    { issueId: 'iss_1', issueRevision: 1, memberId: 'm2', stance: 'agree' as const, sourceArtifactId: 'art_m2_r1' },
+    { issueId: 'iss_2', issueRevision: 1, memberId: 'm1', stance: 'agree' as const, sourceArtifactId: 'art_m1_r1' },
+    { issueId: 'iss_2', issueRevision: 1, memberId: 'm2', stance: 'agree' as const, sourceArtifactId: 'art_m2_r1' },
+  ];
+  const input = { issueIds: ['iss_1', 'iss_2'], expectedMemberIds: ['m1', 'm2'], roundNo: 1 };
+
+  it('正向全 agree 与一致全 disagree 都可收敛，并保留真实方向', () => {
+    expect(unanimousFrozenIssueStancesInRound({ ...input, positions: full })).toEqual([
+      { issueId: 'iss_1', stance: 'agree' },
+      { issueId: 'iss_2', stance: 'agree' },
+    ]);
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p) => ({ ...p, stance: 'disagree' as const })),
+    })).toEqual([
+      { issueId: 'iss_1', stance: 'disagree' },
+      { issueId: 'iss_2', stance: 'disagree' },
+    ]);
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p) => p.issueId === 'iss_1'
+        ? { ...p, stance: 'agree' as const }
+        : { ...p, stance: 'disagree' as const }),
+    })).toEqual([
+      { issueId: 'iss_1', stance: 'agree' },
+      { issueId: 'iss_2', stance: 'disagree' },
+    ]);
+  });
+
+  it('缺项、历史轮、空来源、真实异议或需要证据均不收敛', () => {
+    expect(unanimousFrozenIssueStancesInRound({ ...input, positions: full.slice(0, -1) })).toBeNull();
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p) => ({ ...p, issueRevision: 0 })),
+    })).toBeNull();
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p) => ({ ...p, sourceArtifactId: '' })),
+    })).toBeNull();
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p, i) => i === 0 ? { ...p, stance: 'disagree' as const } : p),
+    })).toBeNull();
+    expect(unanimousFrozenIssueStancesInRound({
+      ...input,
+      positions: full.map((p, i) => i === 1 ? { ...p, stance: 'needs_evidence' as const } : p),
+    })).toBeNull();
+  });
+
+  it('空 issue 或空 expected 集合不把空矩阵当收敛', () => {
+    expect(unanimousFrozenIssueStancesInRound({ ...input, issueIds: [], positions: [] })).toBeNull();
+    expect(unanimousFrozenIssueStancesInRound({ ...input, expectedMemberIds: [], positions: [] })).toBeNull();
   });
 });
 

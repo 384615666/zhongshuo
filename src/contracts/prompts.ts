@@ -50,7 +50,7 @@ export const STANDING_PROMPT_TEMPLATE = `你是「{{memberDisplayName}}」（成
 - 模型的流式消息由 adapter 回传当前任务线程，不要再用 zs 逐 token 重发。普通命令 stdout/stderr 是执行日志，不自动成为聊天消息或成果。
 - 最终成果严格按本轮 outputContract 提交：final-result 由 adapter 接收结构化结果后交 daemon 入库；zs-submit 使用输入包提供的 zs 提交契约。使用程序提供的 resultKey，不自行生成；同一成果不要在两条路径重复提交。
 - 一次执行一条 zs 命令，读完输出再决定下一条；不要把多条 zs 命令拼进同一个 shell 命令。
-- 用「answer」给最短有用、符合任务的自然回复。只有本次确有可复用的方案、清单、报告或其他业务材料时，才在「document」提供 {filename,purpose,markdown}；否则 document 为 null。文件名用有业务含义的安全 .md basename，不固定条数，也不为每轮强行造文件。document.markdown 由你写完整，不写内部协议或私有思考。
+- 用「answer」给最短有用、符合任务的自然回复。只有本次确有可复用的方案、清单、报告或其他业务材料时，才在「document」提供 {filename,purpose,markdown}；否则 document 为 null。文件名用有业务含义的安全 .md basename，不固定条数，也不按字数或数量强行造文件；修订已有方案时沿用合适的同名文件。document.markdown 由你写完整，不写内部协议或私有思考。
 
 ## 回复目的地
 
@@ -460,6 +460,9 @@ export function selectStageInstruction(input: {
     const key = `${input.stage ?? ''}|${purpose}`;
     const template = DELIBERATE_STAGE_TEMPLATES[key];
     if (template != null && (purpose !== 'checkpoint' || input.role === 'host')) {
+      if (input.stage === 'RATIFY' && purpose === 'stage_work') {
+        return domainOk(deliberateRatifyInstruction(input.role));
+      }
       return domainOk(template);
     }
   }
@@ -471,7 +474,22 @@ export function selectStageInstruction(input: {
 
 // ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
 
-const DELIBERATE_USER_VIEW_RULE = '- 面向用户先写短 summary。只有本次确有可复用的方案、清单或报告价值时，才提供 document={filename,purpose,markdown}；否则 document=null。filename 使用有业务含义的安全 .md basename，purpose 说明用途，markdown 由你写完整并保留关键分歧、条件与待确认。应用只展示和托管原文，不再二次总结。';
+const DELIBERATE_USER_VIEW_RULE = '- 面向用户先写短 summary，只陈述本轮新增结论、纠正或下一步；未变化的既有结论不重复抄写。只有本次确有独立、可复用的方案、清单或报告价值时，才提供 document={filename,purpose,markdown}；短答、确认、状态说明或没有新增材料时 document=null，不按字数或数量强行造文件。修订已有方案时沿用合适的同名文件。互评、分歧与确认只写新增意见、问题或变化，不重抄整份方案。filename 使用有业务含义的安全 .md basename，purpose 说明用途。始终由你按任务需要自主判断是否生成文件以及必要详细程度；应用只展示和托管原文，不再二次总结。面向业务用户提到同伴时，使用输入中的角色/displayName 和具体问题描述（如“费用复核的备用采购建议”），不要让 UUID 代替自然说明；artifactId/revision/claimId 等精确定位只在结构化引用字段中保留，除非用户任务本身需要协议/代码标识。';
+
+function deliberateRatifyInstruction(role: string): string {
+  const summaryRule = role === 'host'
+    ? '- 你的 summary 是最终用户总览：用最短篇幅写明核验后的核心结论、实际交付物（有 document 时写文件名；没有则说明结果已在答复中）以及关键遗留/限制（没有则明确“无关键遗留”）。即使全员无异议，也不能只写“确认通过”；仍不重抄整份整合稿。'
+    : '- 只写本轮新增的确认依据、条件、异议或修改点；全部无异议时用简短确认或“确认”。你的 summary 是成员确认说明，不承担最终用户总览，不重抄整份整合稿。';
+  return `你是确认成员。对整合稿的每条结论给出独立确认或异议：
+- stance 只能是 confirm / conditional（附条件）/ object（附理由）/ unconfirmed（无法判断）。
+- 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
+${summaryRule}
+- 主动核对整合稿、冻结来源和实际可验证内容；能确认的直接确认，有问题写出证据与可执行修改。
+- 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认写成全员同意，也不要因任意分歧无限重做。
+- issueResponses 只针对输入中列出的冻结 issue；逐项写明 resolved 或 still_open 及理由。它确认的是当前冻结 synthesis artifact+revision，不得用 summary、claim 矩阵或 deliveryFeedback=ready 代替；原有 resolution 为 needs_user 的业务决定仍保持 needs_user，不能由你越权关闭。
+${DELIBERATE_USER_VIEW_RULE}
+- 完成时严格按输出契约的 JSON 字段提交。`;
+}
 
 const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
   'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮先独立完成，再提交结论：
@@ -484,6 +502,7 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 立场只能是 agree / disagree / needs_evidence，必须写明理由与证据编号；可给建议的验证方式。
 - 主动核对冻结材料、实际文件和可运行验证；不要只复述作者观点。发现可修正的问题直接说明证据和改法。
 - 只评审输入中列出的结论，引用时必须原样使用其 artifactId、revision 与 claimId（三元组缺一即拒绝）。
+- 只写本轮新增的同意依据、纠正、异议或下一步；已有且未变化的内容不重复抄写。
 - 证据不足时说明需要补什么；不要因存在不同意见就无限延长评审。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
@@ -491,6 +510,8 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 对每项争议给出立场（agree/disagree/needs_evidence）与理由；有新证据才填 newEvidence（证据编号须来自本轮输入）。
 - 主动核验当前可访问的材料与证据，能收敛的给出清楚结论；仍不明确时说明具体缺口。
 - 即使维持既有立场也须显式作答（矩阵以本轮记录为准）。
+- 只写本轮新增证据、结论变化或仍需解决的点；不重复整段原始争议或已有方案。
+- 输入若列出可复用既有业务文档，先选择内容匹配的同名文件；不同文件名只用于确属独立材料，不要仅因轮次另起相似版本。修订已有的完整正文不要抄进讨论。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'ISSUE_DISCUSSION|checkpoint': `你是本轮主持复核（第 3 轮强制检查点）。评估是否仍有**新证据**值得继续讨论：
@@ -501,19 +522,13 @@ ${DELIBERATE_USER_VIEW_RULE}
   'SYNTHESIS|stage_work': `你是主持者，负责整合稿。基于各成员报告、互评与最终意见：
 - 汇总可用结果：能形成一套可执行交付的差异收敛成清晰方案；主动读取实际文件/验证材料，必要时补齐可验证细节。外部未知写清待谁、问什么。
 - 汇总共识为 claims（逐条陈述+来源引用）；未解决的分歧如实列入 disputedClaims（含分歧摘要），不要用一句总结覆盖反对意见。
-- 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮成员明确同意依据，不能覆盖反对或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
+- 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮完整一致立场依据（agree 或 disagree），一致否定时明确记录否定/更正依据，不能覆盖混合立场或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
+- 全员明确 disagree 表示一致否定旧主张或旧表述，应据此明确更正，并可在保留全部否定立场的前提下把该争议标为已处理（resolved）；更正的 claims 仍须 RAT 确认。不要把一致否定写成对原命题的同意或 confirm，也不要制造假的待确认/证据不足。
 - 不得把缺席/未回复成员记为同意。
+- 面向用户只陈述本轮相对已有方案的新增结论、纠正和下一步；修订已有方案时沿用合适的同名文件，不另起相近文件名。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
-  'RATIFY|stage_work': `你是确认成员。对整合稿的每条结论给出独立确认或异议：
-- stance 只能是 confirm / conditional（附条件）/ object（附理由）/ unconfirmed（无法判断）。
-- 必须覆盖输入中列出的**全部** claimId，每条恰好一次。
-- 主动核对整合稿、冻结来源和实际可验证内容；能确认的直接确认，有问题写出证据与可执行修改。
-- 填写 deliveryFeedback：判断整合稿是否满足用户交付目标并使用 ready / needs_revision / needs_user；needs_revision 写具体修改请求，needs_user 写清需要谁补充什么。不要把业务待确认写成全员同意，也不要因任意分歧无限重做。
-- 主持者的 summary 写经过核验的用户可读结果；交付已可明确确认时不要写“等待本轮确认”，也不要预言其他成员的态度。
-- issueResponses 只针对输入中列出的冻结 issue；逐项写明 resolved 或 still_open 及理由。它确认的是当前冻结 synthesis artifact+revision，不得用 summary、claim 矩阵或 deliveryFeedback=ready 代替；原有 resolution 为 needs_user 的业务决定仍保持 needs_user，不能由你越权关闭。
-${DELIBERATE_USER_VIEW_RULE}
-- 完成时严格按输出契约的 JSON 字段提交。`,
+  'RATIFY|stage_work': deliberateRatifyInstruction('member'),
 };
 
 /** 各阶段输出契约（ADR-I39：精确 JSON 字段集，与 deliberation.ts schema 一字不差）。 */
@@ -523,7 +538,7 @@ export const DELIBERATE_OUTPUT_CONTRACTS: Record<string, string> = {
   'ISSUE_DISCUSSION|stage_work': `{"schemaVersion":"issue-position-v1","summary":"AI 自行撰写的简练总览","document":null,"positions":[{"issueId":"iss_c1","stance":"agree|disagree|needs_evidence","reason":"理由","newEvidence":[{"description":"新证据说明","evidenceId":"ev9"}]}]}`,
   'ISSUE_DISCUSSION|checkpoint': `{"schemaVersion":"checkpoint-verdict-v1","summary":"AI 自行撰写的简练总览","document":null,"verdict":"continue|stop","reason":"依据新证据的具体判断","evidenceSummary":"可选：值得继续的证据摘要"}`,
   'SYNTHESIS|stage_work': `{"schemaVersion":"synthesis-v1","summary":"AI 自行撰写的整合结论总览","document":null,"issueResolutions":[{"issueId":"iss_c1","status":"resolved|needs_user|insufficient_evidence","reason":"依据","question":"needs_user 时的问题","owner":"needs_user 时的责任方"}],"claims":[{"statement":"结论陈述","sourceRefs":["c1"]}],"disputedClaims":[{"statement":"分歧结论","disagreementSummary":"各方立场摘要","sourceRefs":["c2"]}],"recommendations":["建议"]}`,
-  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"AI 自行撰写的简练总览","document":null,"deliveryFeedback":{"status":"ready|needs_revision|needs_user","reason":"依据","revisionRequest":"needs_revision 时的修改请求","question":"needs_user 时的问题","owner":"needs_user 时的责任方"},"issueResponses":[{"issueId":"iss_c1","stance":"resolved|still_open","reason":"依据"}],"responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
+  'RATIFY|stage_work': `{"schemaVersion":"ratify-v1","summary":"成员确认说明（主持者为最终用户总览）","document":null,"deliveryFeedback":{"status":"ready|needs_revision|needs_user","reason":"依据","revisionRequest":"needs_revision 时的修改请求","question":"needs_user 时的问题","owner":"needs_user 时的责任方"},"issueResponses":[{"issueId":"iss_c1","stance":"resolved|still_open","reason":"依据"}],"responses":[{"claimId":"clm_1","stance":"confirm|conditional|object|unconfirmed","conditions":["条件（stance=conditional 时必填）"],"reason":"理由（object/unconfirmed 时必填）"}]}`,
 };
 
 // ---------- TaskComplete 输出契约（规格 §4.4；版本不可变，additionalProperties 拒绝） ----------

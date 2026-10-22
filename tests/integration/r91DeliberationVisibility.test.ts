@@ -437,7 +437,7 @@ describe('a/b. 正例投影与幂等重放（真实 onStepOutput）', () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error(out.error.message);
     expect(out.value.counted).toBe(false);
-    expect(out.value.needsRepair).toContain('没有本轮成员明确同意');
+    expect(out.value.needsRepair).toContain('没有完整的本轮一致立场');
     expect(db.prepare("SELECT status FROM issues WHERE id='iss_r96_old_vote'").get()).toEqual({ status: 'open' });
     expect(listRunArtifacts(db, RUN, 'synthesis')).toHaveLength(0);
     db.close();

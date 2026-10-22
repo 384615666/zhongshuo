@@ -531,8 +531,8 @@ function MessageText({ message, text, readingAids, hasDetail }: { message: Messa
   const isHuman = message.authorType === 'human';
   /* 流式中一律不折叠、不出目录、不转字段表：内容还在变，版面不能跟着跳。 */
   const aids = readingAids && message.streaming !== true;
-  const lineCount = useMemo(() => text.split('\n').filter((l) => l.trim() !== '').length, [text]);
-  const foldable = aids && (lineCount > FOLD_LINES || text.length > FOLD_CHARS);
+  const logicalLineCount = useMemo(() => text.split('\n').filter((l) => l.trim() !== '').length, [text]);
+  const foldable = aids && (logicalLineCount > FOLD_LINES || text.length > FOLD_CHARS);
   const outline = useMemo(() => (aids && !isHuman ? outlineOf(text) : []), [aids, isHuman, text]);
   const jumpTo = (index: number): void => {
     const reveal = (): void => {
@@ -575,7 +575,7 @@ function MessageText({ message, text, readingAids, hasDetail }: { message: Messa
       {message.streaming ? <i className="streaming-caret" /> : null}
       {foldable ? (
         <button type="button" className="msg-fold-toggle" aria-expanded={expanded} aria-controls={foldId} onClick={toggle}>
-          {expanded ? '收起' : `${hasDetail ? '展开答复原文' : '展开原文'} · 共 ${lineCount} 行`}
+          {expanded ? '收起' : hasDetail ? '展开答复原文' : '展开全文'}
         </button>
       ) : null}
     </div>

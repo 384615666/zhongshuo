@@ -10,25 +10,129 @@
  * 视觉稿的媒体查询不得独立再开关主池/线程/预览）。
  *
  * 宽度数值（§5.2）：
- *  - L2 主池 420 / 回复串 380 —— **沿用既有常量，未改全局下限**（v1.1 已撤回 360）；
- *  - L4 对话 440、预览 480 —— **候选值**，必须在 1280/1372/1100/900 真实内容下验证。
- *    这里只把它们作为"验证预算"，不当作已批准的产品断点。
+ *  - L2 主池 420 / 回复串 380；
+ *  - L4 对话 440 / 预览 480；
+ *  - 1280/1920/3440 的默认比例与消费值由下方 SplitPanePolicy 统一计算。
  */
 
 export const LAYOUT_MIN = {
-  /** 房间主池/房间集合：沿用 Room.tsx 的 MAIN_MIN，不自作主张改小 */
+  /** 房间主池/房间集合最小可读宽度 */
   main: 420,
-  /** 回复串：沿用 Room.tsx 的 THREAD_MIN */
+  /** 回复串最小可读宽度 */
   thread: 380,
-  /** L4 对话侧候选值（仅预览实验） */
+  /** L4 对话侧最小可读宽度 */
   contextWide: 440,
-  /** 通用文件预览候选值 */
+  /** 通用文件预览最小可读宽度 */
   preview: 480,
   /** 项目文件/Git 列表候选值 */
   filesList: 280,
   /** 分隔条 */
   splitter: 8,
 } as const;
+
+export interface SplitPanePolicy {
+  /** 主面板（回复串或预览）最小可读宽度 */
+  primaryMin: number;
+  /** 另一侧上下文面板最小可读宽度 */
+  secondaryMin: number;
+  /** 两侧之间用于拖动的净宽度预算 */
+  splitter: number;
+  /** 没有任何手调意图时，主面板占当前可用宽度的比例 */
+  defaultPrimaryRatio: number;
+}
+
+/**
+ * 回复串的响应式宽度契约。
+ *
+ * 40% 的依据：1280 窗口扣除侧栏后约 1034px，回复串约 414px，主池约 612px；
+ * 1920 时约 670/996；3440 时约 1278/1908。两列都随容器增长，且不会在
+ * 常见宽度上只剩一个勉强达到下限的阅读列。拖动手调的上限不另设像素封顶，
+ * 统一由“可用宽度 − 主池下限 − 分隔条”决定，避免宽屏默认值超过手调上限。
+ */
+export const THREAD_PANE_POLICY: SplitPanePolicy = {
+  primaryMin: LAYOUT_MIN.thread,
+  secondaryMin: LAYOUT_MIN.main,
+  splitter: LAYOUT_MIN.splitter,
+  defaultPrimaryRatio: 0.4,
+};
+
+/**
+ * 预览侧的响应式宽度契约。
+ *
+ * 56% 的依据：1280 窗口扣除侧栏后约 1034px，预览约 579px、上下文约 447px；
+ * 1920 时约 937/729；3440 时约 1789/1397。预览获得略多空间以容纳 Markdown
+ * 表格与源码，同时为回复串或主池保留至少 440px 的阅读面。
+ */
+export const PREVIEW_PANE_POLICY: SplitPanePolicy = {
+  primaryMin: LAYOUT_MIN.preview,
+  secondaryMin: LAYOUT_MIN.contextWide,
+  splitter: LAYOUT_MIN.splitter,
+  defaultPrimaryRatio: 0.56,
+};
+
+export interface SplitPaneWidths {
+  /** 主面板当前应消费的宽度 */
+  primary: number;
+  /** 另一侧上下文当前应消费的宽度 */
+  secondary: number;
+  /** 主面板拖动上限；与响应式默认使用同一可用宽度基准 */
+  maxPrimary: number;
+  /** 未手调时的响应式默认宽度 */
+  defaultPrimary: number;
+}
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
+/** 当前可用宽度下，主面板可拖到的最大值。 */
+export function maxSplitPanePrimaryWidth(availableWidth: number, policy: SplitPanePolicy): number {
+  const available = Math.max(0, Math.round(availableWidth));
+  return Math.max(
+    policy.primaryMin,
+    Math.floor(available - policy.secondaryMin - policy.splitter),
+  );
+}
+
+/**
+ * 手调值的显示宽度。
+ *
+ * `manualWidth == null` 表示没有用户意图，始终跟随响应式默认；有手调值时，
+ * 窗口变窄只在显示侧钳制，原始手调值不被写回，拉宽后自然恢复。
+ */
+export function displayedSplitPaneWidth(
+  availableWidth: number,
+  policy: SplitPanePolicy,
+  manualWidth: number | null,
+): number {
+  const available = Math.max(0, Math.round(availableWidth));
+  const maxPrimary = maxSplitPanePrimaryWidth(available, policy);
+  if (manualWidth == null) {
+    return clamp(
+      Math.round(available * policy.defaultPrimaryRatio),
+      policy.primaryMin,
+      maxPrimary,
+    );
+  }
+  return clamp(Math.round(manualWidth), policy.primaryMin, maxPrimary);
+}
+
+/** 一次算出双区两列宽度，避免默认值与拖动上限来自两套基准。 */
+export function resolveSplitPaneWidths(
+  availableWidth: number,
+  policy: SplitPanePolicy,
+  manualWidth: number | null = null,
+): SplitPaneWidths {
+  const available = Math.max(0, Math.round(availableWidth));
+  const maxPrimary = maxSplitPanePrimaryWidth(available, policy);
+  const defaultPrimary = displayedSplitPaneWidth(available, policy, null);
+  const primary = displayedSplitPaneWidth(available, policy, manualWidth);
+  return {
+    primary,
+    secondary: Math.max(policy.secondaryMin, available - primary - policy.splitter),
+    maxPrimary,
+    defaultPrimary,
+  };
+}
 
 export type RegionLayout =
   /** L1：只有上下文 */
@@ -87,67 +191,73 @@ export interface LayoutDecision {
  */
 export function resolveLayout(input: LayoutInput): LayoutDecision {
   const { navVisibleWidth, hasThread, hasPreview, navPinned } = input;
+  const availableVisible = Math.max(0, Math.round(navVisibleWidth));
   /** 隐藏导航后能拿到的宽度（导航可见时的宽度 + 导航本身） */
-  const navHiddenAvailable = navVisibleWidth + SIDEBAR_WIDTH;
-  /** 当前**实际**可用宽度（由是否需要隐藏决定） */
-  const available = navVisibleWidth;
+  const navHiddenAvailable = availableVisible + SIDEBAR_WIDTH;
 
   // 没有预览：保持既有 L1/L2 行为，不动主池与线程的既有下限
   if (!hasPreview) {
     if (!hasThread) {
       return {
         layout: 'context', hideNav: false,
-        contextWidth: available, previewWidth: 0,
-        reason: '无预览：单区域房间上下文',
+        contextWidth: availableVisible, previewWidth: 0,
+        reason: `无预览：单区域房间上下文（可用 ${availableVisible}px）`,
       };
     }
     const need = LAYOUT_MIN.main + LAYOUT_MIN.thread + LAYOUT_MIN.splitter;
-    if (available >= need) {
-      const threadW = Math.min(Math.max(LAYOUT_MIN.thread, 620), available - LAYOUT_MIN.main - LAYOUT_MIN.splitter);
+    if (availableVisible >= need) {
+      const widths = resolveSplitPaneWidths(availableVisible, THREAD_PANE_POLICY);
       return {
         layout: 'context-thread', hideNav: false,
-        contextWidth: available - threadW - LAYOUT_MIN.splitter, previewWidth: threadW,
-        reason: `L2：可用 ${available}px ≥ 需要 ${need}px`,
+        contextWidth: widths.secondary, previewWidth: widths.primary,
+        reason: `L2：可用 ${availableVisible}px ≥ 需要 ${need}px；线程默认 ${widths.primary}px`,
       };
     }
+    if (!navPinned && navHiddenAvailable >= need) {
+      const widths = resolveSplitPaneWidths(navHiddenAvailable, THREAD_PANE_POLICY);
+      return {
+        layout: 'context-thread', hideNav: true,
+        contextWidth: widths.secondary, previewWidth: widths.primary,
+        reason: `L2 需临时隐藏导航：导航可见时 ${availableVisible}px < ${need}px，隐藏后 ${navHiddenAvailable}px；线程默认 ${widths.primary}px`,
+      };
+    }
+    const compactWidth = navPinned ? availableVisible : navHiddenAvailable;
+    const compact = resolveSplitPaneWidths(compactWidth, THREAD_PANE_POLICY);
     return {
       layout: 'context-thread', hideNav: !navPinned,
-      contextWidth: Math.max(LAYOUT_MIN.main, available - LAYOUT_MIN.thread - LAYOUT_MIN.splitter),
-      previewWidth: LAYOUT_MIN.thread,
-      reason: `L2 紧张：可用 ${available}px < 需要 ${need}px${navPinned ? '（用户锁定导航，不能靠隐藏换宽度）' : ' → 建议临时隐藏导航'}`,
+      contextWidth: compact.secondary,
+      previewWidth: compact.primary,
+      reason: `L2 紧张：可用 ${availableVisible}px < 需要 ${need}px；窄屏分支只显示回复串${navPinned ? '（用户锁定导航）' : `并临时隐藏导航，获得 ${compactWidth}px`}`,
     };
   }
 
   // 有预览：L3/L4。对话侧用候选 440，预览侧候选 480
   const need = LAYOUT_MIN.contextWide + LAYOUT_MIN.preview + LAYOUT_MIN.splitter;
-  if (available >= need) {
-    // 预览优先拿约 56%，但保证对话不低于候选下限
-    const previewW = Math.min(
-      Math.max(LAYOUT_MIN.preview, Math.round(available * 0.56)),
-      available - LAYOUT_MIN.contextWide - LAYOUT_MIN.splitter,
-    );
+  if (availableVisible >= need) {
+    const widths = resolveSplitPaneWidths(availableVisible, PREVIEW_PANE_POLICY);
     return {
       layout: 'context-preview', hideNav: false,
-      contextWidth: available - previewW - LAYOUT_MIN.splitter, previewWidth: previewW,
-      reason: `L3/L4：可用 ${available}px ≥ 需要 ${need}px`,
+      contextWidth: widths.secondary, previewWidth: widths.primary,
+      reason: `L3/L4：可用 ${availableVisible}px ≥ 需要 ${need}px；预览默认 ${widths.primary}px`,
     };
   }
 
   // 扣掉导航后可能够：建议自动临时隐藏（不覆盖用户显式偏好）
   if (!navPinned && navHiddenAvailable >= need) {
+    const widths = resolveSplitPaneWidths(navHiddenAvailable, PREVIEW_PANE_POLICY);
     return {
       layout: 'context-preview', hideNav: true,
-      contextWidth: navHiddenAvailable - LAYOUT_MIN.preview - LAYOUT_MIN.splitter,
-      previewWidth: LAYOUT_MIN.preview,
-      reason: `L3/L4 需临时隐藏导航：导航可见时 ${navVisibleWidth}px < ${need}px，隐藏后 ${navHiddenAvailable}px`,
+      contextWidth: widths.secondary,
+      previewWidth: widths.primary,
+      reason: `L3/L4 需临时隐藏导航：导航可见时 ${availableVisible}px < ${need}px，隐藏后 ${navHiddenAvailable}px；预览默认 ${widths.primary}px`,
     };
   }
 
   // 仍不足 → 单区域（对话/文件二选一）
   return {
     layout: 'single', hideNav: false,
-    contextWidth: available, previewWidth: available,
-    reason: `单区域：导航可见时 ${navVisibleWidth}px、隐藏后 ${navHiddenAvailable}px 都不足 ${need}px`,
+    contextWidth: availableVisible, previewWidth: availableVisible,
+    reason: `单区域：导航可见时 ${availableVisible}px、隐藏后 ${navHiddenAvailable}px 都不足 ${need}px`,
   };
 }
 

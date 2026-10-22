@@ -72,30 +72,6 @@ export function collaborationStageOfBody(body: unknown): CollaborationStage | un
   return result;
 }
 
-/**
- * 阶段产物正文首行的【阶段】标题去重（R91 前后端契约对齐）。
- *
- * 后端 `renderStageProductText` 会在正文首行写 `【独立分析】` / `【争议讨论 · 第2轮】` /
- * `【争议讨论 · 检查点 · 第2轮】`；而消息头已经用 `collaborationStage` 渲染
- * 简短中文阶段标签和轮次。留着这行会让用户看到两遍标签，故仅在**确认这是带阶段标记的
- * 正式产物消息**且首行确为已知阶段标题时去掉该标题行；其余正文原样保留，绝不删空。
- * （用户手写正文、普通消息、无 metadata 的旧消息都不会经过这一步。）
- */
-const STAGE_HEADING_LABELS = new Set(['独立分析', '互评', '分歧讨论', '争议讨论', '整合', '确认', '发布', '准备']);
-
-export function stripStageHeading(text: string, stage: CollaborationStage | undefined): string {
-  if (stage == null || text.length === 0) return text;
-  const lines = text.split('\n');
-  const first = (lines[0] ?? '').trim();
-  const match = /^【([^】]{1,40})】$/.exec(first);
-  if (match == null) return text;
-  const inner = match[1] ?? '';
-  const headingMatches = [...STAGE_HEADING_LABELS].some((label) => inner === label || inner.startsWith(label + ' · '));
-  if (!headingMatches) return text;
-  const rest = lines.slice(1).join('\n').replace(/^\n+/, '');
-  return rest.length > 0 ? rest : text;
-}
-
 /** 从 DM 原始历史行解析 body_json（解析失败不抛错、不渲染原 JSON）。 */
 function parsedHistoryBody(m: HistoryMessage): unknown {
   const raw = m.bodyJson ?? m.body_json;
@@ -1224,7 +1200,7 @@ export const msgOfReply = (projectId: string, roomId: string, threadId: string, 
   const message: Message = {
     id: it.id, projectId, roomId, threadId, taskId: undefined,
     authorType: it.authorType as Message['authorType'], authorId: it.authorId, kind: 'text',
-    body: stripStageHeading(readable, stage), createdAt: it.createdAt, threadMessageSeq: it.seq,
+    body: readable, createdAt: it.createdAt, threadMessageSeq: it.seq,
     attachmentIds: [], formalAttachments: formalAttachmentsOf(it.attachments, document),
     fileChanges: (it as ThreadHistoryItem & FileChangeCarrier).fileChanges,
     formalReplyExecution:it.replyExecution,
@@ -1484,7 +1460,7 @@ export const msgOfDmHistory = (projectId: string, conversationId: string, m: His
   const message: Message = {
     id: m.id, projectId, roomId: `dm:${conversationId}`,
     authorType: (m.authorType ?? m.author_type ?? 'system') as Message['authorType'],
-    authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: stripStageHeading(textOf(m), stage),
+    authorId: m.authorId ?? m.author_id ?? '', kind: 'text', body: textOf(m),
     createdAt: createdAtOf(m), threadMessageSeq: m.conversationSeq ?? m.conversation_seq ?? index,
     attachmentIds: [], formalAttachments: formalAttachmentsOf(m.attachments, document),
     fileChanges: (m as HistoryMessage & FileChangeCarrier).fileChanges,
