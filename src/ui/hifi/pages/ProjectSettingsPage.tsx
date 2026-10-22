@@ -25,15 +25,18 @@ export function anchorOf(raw: string | undefined): ProjectSettingsAnchor {
 }
 
 /** Three distinct states: blank=inherit, 0=disabled, positive=explicit hard deadline. */
-function TurnDeadlineField({ value, effective, onCommit }: {
+export function TurnDeadlineField({ value, effective, onCommit, disabled = false }: {
   value: number | null;
   effective: { ms: number | null; source: 'project' | 'global' | 'disabled' };
   onCommit: (value: number | null) => void;
+  /** A save/read-back is in flight; accepting another edit would be silently dropped. */
+  disabled?: boolean;
 }) {
   const [draft, setDraft] = useState(deadlineSecondsText(value));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setDraft(deadlineSecondsText(value)); setError(null); }, [value]);
   const commit = () => {
+    if (disabled) return;
     const parsed = parseDeadlineSeconds(draft);
     if (!parsed.ok) {
       setError(parsed.error);
@@ -59,6 +62,9 @@ function TurnDeadlineField({ value, effective, onCommit }: {
         placeholder="继承"
         aria-label="单轮最长运行（秒）"
         aria-invalid={error ? true : undefined}
+        aria-busy={disabled ? true : undefined}
+        disabled={disabled}
+        title={disabled ? '正在保存并回读，完成后可继续编辑' : undefined}
         onChange={(event) => { setDraft(event.target.value); if (error) setError(null); }}
         onBlur={commit}
         onKeyDown={(event) => {
@@ -306,6 +312,7 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                   <TurnDeadlineField
                     value={collab.turnDeadlineMs}
                     effective={{ ms: collab.effectiveTurnDeadlineMs, source: collab.turnDeadlineSource }}
+                    disabled={collabSaving}
                     onCommit={(value) => { void saveCollab({ turnDeadlineMs: value }); }}
                   />
                   <div className="pset-note">

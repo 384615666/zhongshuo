@@ -7,6 +7,7 @@ import { RunExtraFacts, taskRunGuidance } from '../../src/ui/hifi/components/Tas
 import { GeneratedFiles } from '../../src/ui/hifi/components/GeneratedFiles.tsx';
 import { taskRunHint } from '../../src/ui/hifi/lib/taskRunHint.ts';
 import { OPEN_RECOVERY_EVENT, requestRecoveryOpen } from '../../src/ui/hifi/lib/recovery.ts';
+import { TurnDeadlineField } from '../../src/ui/hifi/pages/ProjectSettingsPage.tsx';
 
 const blocker: TaskExecutionBlocker = {
   reason: 'unknown-turn',
@@ -97,5 +98,18 @@ describe('R99 queued work and non-final evidence presentation', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('disables the deadline input while save/read-back is in flight', () => {
+    const html = renderToStaticMarkup(createElement(TurnDeadlineField, {
+      value: 10_000,
+      effective: { ms: 10_000, source: 'project' },
+      disabled: true,
+      onCommit: () => {},
+    }));
+    expect(html).toContain('value="10"');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('正在保存并回读，完成后可继续编辑');
   });
 });
