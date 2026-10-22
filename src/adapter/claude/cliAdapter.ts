@@ -42,7 +42,7 @@ import { existsSync, readFileSync, statSync, mkdtempSync, writeFileSync, unlinkS
 import { resolveClaudeConfiguration } from './configuration.ts';
 export { resolveClaudeConfiguration } from './configuration.ts';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type { AdapterProcessIdentity } from '../../contracts/runtime.ts';
 import type {
@@ -694,6 +694,14 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         const toolCallId=block.id??randomUUID().slice(0,8);
         const toolName=block.name??'unknown';
         const summary=runtimeToolSummary(toolName,block.input,{cwd:state.ref.cwd});
+        const input=block.input!=null&&typeof block.input==='object'&&!Array.isArray(block.input)?block.input as Record<string,unknown>:{};
+        const rawPath=typeof input['file_path']==='string'?input['file_path']:typeof input['path']==='string'?input['path']:typeof input['notebook_path']==='string'?input['notebook_path']:null;
+        const relativePath=(()=>{
+          if(rawPath==null)return null;
+          if(isAbsolute(rawPath)&&!isAbsolute(state.ref.cwd))return null;
+          const rel=relative(resolve(state.ref.cwd),resolve(state.ref.cwd,rawPath)).replaceAll('\\','/');
+          return rel.length===0||rel==='..'||rel.startsWith('../')||isAbsolute(rel)?null:rel.replace(/^\.\//,'');
+        })();
         turn.toolSummaries.set(toolCallId,summary);
         this.pushEvent(state, turn, {
           kind:'tool.started',
@@ -702,6 +710,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
           action:summary.action,
           target:summary.target,
           argumentsSummary:summary.argumentsSummary,
+          ...(relativePath!=null?{paths:[relativePath]}:{}),
           ...this.baseEvent(state, turn, randomUUID().slice(0, 6)),
         } as NormalizedRuntimeEvent);
       }

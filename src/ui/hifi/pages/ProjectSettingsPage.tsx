@@ -14,6 +14,7 @@ import { updateProjectReal, projectLifecycleReal, setTaskReviewReal, collabGet, 
 import { navigate } from '../lib/router';
 import { command } from '../bridge';
 import { ProjectWriteAccessPanel } from '../components/ProjectWriteAccessPanel';
+import { deadlineSecondsText, parseDeadlineSeconds } from '../lib/deadlineField';
 
 export type ProjectSettingsAnchor = 'collab' | 'write' | 'delivery';
 
@@ -23,6 +24,54 @@ export function anchorOf(raw: string | undefined): ProjectSettingsAnchor {
   return 'collab';
 }
 
+/** Three distinct states: blank=inherit, 0=disabled, positive=explicit hard deadline. */
+function TurnDeadlineField({ value, effective, onCommit }: {
+  value: number | null;
+  effective: { ms: number | null; source: 'project' | 'global' | 'disabled' };
+  onCommit: (value: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(deadlineSecondsText(value));
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setDraft(deadlineSecondsText(value)); setError(null); }, [value]);
+  const commit = () => {
+    const parsed = parseDeadlineSeconds(draft);
+    if (!parsed.ok) {
+      setError(parsed.error);
+      return;
+    }
+    setError(null);
+    if (parsed.value !== value) onCommit(parsed.value);
+  };
+  return <div className="pset-row">
+    <div className="pset-row-label">
+      <div className="pset-row-name">单轮最长运行</div>
+      <div className="pset-row-hint">默认不设总时长上限；启用后达到设定时间会中断；只对之后开始的执行生效。</div>
+      <div className="pset-row-hint">留空表示继承；0 表示明确关闭。当前实际生效：{effective.ms == null ? '不设总时长上限' : `${deadlineSecondsText(effective.ms)} 秒`}{effective.source === 'global' ? '（来自全局设置）' : ''}。</div>
+    </div>
+    <div className="row tight">
+      <input
+        className="input pset-number"
+        type="number"
+        min={0}
+        max={86400}
+        step={0.001}
+        value={draft}
+        placeholder="继承"
+        aria-label="单轮最长运行（秒）"
+        aria-invalid={error ? true : undefined}
+        onChange={(event) => { setDraft(event.target.value); if (error) setError(null); }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') { setDraft(deadlineSecondsText(value)); setError(null); }
+        }}
+      />
+      <span className="pset-unit">秒</span>
+    </div>
+    {error ? <div className="pset-row-error">{error}</div> : null}
+  </div>;
+}
+
 export function ProjectSettingsPage({ projectId, query }: { projectId: string; query: Record<string, string> }) {
   const s = useStore((x) => x);
   const project = s.projects.find((p) => p.id === projectId);
@@ -30,7 +79,10 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
   const [descDraft, setDescDraft] = useState('');
   const lastInfo = useRef<{ id: string; name: string; description: string } | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [collab, setCollab] = useState<{ absenceToleranceMs: number | null; turnDeadlineMs: number | null; revision: number } | null>(null);
+  const [collab, setCollab] = useState<{
+    absenceToleranceMs: number | null; turnDeadlineMs: number | null; revision: number;
+    effectiveTurnDeadlineMs: number | null; turnDeadlineSource: 'project' | 'global' | 'disabled';
+  } | null>(null);
   const [collabError, setCollabError] = useState<string | null>(null);
   const [collabSaving, setCollabSaving] = useState(false);
   const collabSavingRef = useRef(false);
@@ -251,18 +303,13 @@ export function ProjectSettingsPage({ projectId, query }: { projectId: string; q
                     integer
                   />
                   <div className="pset-divider" />
-                  <NumberField
-                    label="单轮最长运行"
-                    hint="到点强制结束这一轮，避免成员卡住一直消耗预算。留空/设 0=服务端默认。"
-                    value={collab.turnDeadlineMs == null ? 0 : Math.round(collab.turnDeadlineMs / 60000)}
-                    min={0}
-                    max={720}
-                    unit="分钟"
-                    onCommit={(v) => { void saveCollab({ turnDeadlineMs: v > 0 ? v * 60000 : null }); }}
-                    integer
+                  <TurnDeadlineField
+                    value={collab.turnDeadlineMs}
+                    effective={{ ms: collab.effectiveTurnDeadlineMs, source: collab.turnDeadlineSource }}
+                    onCommit={(value) => { void saveCollab({ turnDeadlineMs: value }); }}
                   />
                   <div className="pset-note">
-                    新派发 turn 起生效（在途 turn 保持派发时的时限）。原型把时限分为「分析/修改」两档——当前后端为单一时限（真实能力限制），不伪造分档。
+                    默认不设总时长上限；启用后达到设定时间会中断，且只对之后开始的执行生效。
                   </div>
                   {collabSaving ? <div className="small faint">正在保存并回读协作限制…</div> : null}
                 </>

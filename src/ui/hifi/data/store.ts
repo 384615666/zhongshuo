@@ -10,6 +10,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { AppState, ContextTarget, CurrentRunBudget, DeliveryFact, Thread, ThreadCard, RouteMode } from './types';
+import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.ts';
 import type {ThreadMembersSnapshot} from '../../../contracts/threadMembers';
 import type {ThreadVisibleProgress} from '../../../contracts/runtimeProgress';
 import { openTab } from '../lib/resource';
@@ -37,6 +38,7 @@ export interface ThreadTaskDetail {
   delivery?: DeliveryFact | null;
   nextInputBudget?: { maxTurns: number } | null;
   currentRunBudget?: CurrentRunBudget | null;
+  executionBlocker?: TaskExecutionBlocker | null;
   pendingDelivery: { id: string; revision: number; manifestHash: string } | null;
   /** r58 返工待执行（验收与执行分离呈现）；r59 含完整执行身份（点击冻结快照）。 */
   reworkPending: { deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null;

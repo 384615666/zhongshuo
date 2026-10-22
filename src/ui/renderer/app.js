@@ -4148,26 +4148,31 @@ async function renderCollabSettings() {
   }
   const revision = data.revision;
   const fields = [
-    { key: 'absenceToleranceMs', label: '缺席等待（分钟，E4：超时按缺席推进、不打断在途成员）', value: data.absenceToleranceMs },
-    { key: 'turnDeadlineMs', label: '单轮运行时限（分钟，硬保护：到点转状态未知不伪造结果）', value: data.turnDeadlineMs },
+    { key: 'absenceToleranceMs', label: '成员无响应后继续（分钟；只影响之后开始的等待）', value: data.absenceToleranceMs },
+    { key: 'turnDeadlineMs', label: '单轮运行时限（秒，留空=继承；0=关闭；只对之后开始的执行生效）', value: data.turnDeadlineMs },
   ];
   for (const f of fields) {
     const row = document.createElement('div');
     row.className = 'meta';
     const input = document.createElement('input');
     input.type = 'number';
-    input.min = '1';
-    input.placeholder = '默认';
-    input.value = f.value != null ? String(Math.round(f.value / 60000)) : '';
-    input.title = '范围 1–1440 分钟；清空=回落 daemon 全局默认';
+    const deadlineField = f.key === 'turnDeadlineMs';
+    input.min = deadlineField ? '0' : '1';
+    input.max = deadlineField ? '86400' : '1440';
+    input.step = deadlineField ? '0.001' : '1';
+    input.placeholder = deadlineField
+      ? (data.effectiveTurnDeadlineMs == null ? '继承（不设上限）' : `继承（${data.effectiveTurnDeadlineMs / 1000} 秒）`)
+      : '默认';
+    input.value = f.value != null ? (deadlineField ? String(f.value / 1000) : String(Math.round(f.value / 60000))) : '';
+    input.title = deadlineField ? '留空=继承；0=关闭；自定义至少 10 秒、最多 24 小时' : '范围 1–1440 分钟；清空使用默认等待时间';
     const err = document.createElement('span');
     err.className = 'meta';
     const submit = async () => {
       err.textContent = '保存中…';
       const raw = input.value.trim();
-      const ms = raw === '' ? null : Number(raw) * 60000;
-      if (ms != null && (!Number.isInteger(ms) || ms < 10_000 || ms > 86_400_000)) {
-        err.textContent = '范围要求：1–1440 分钟（整数）；未保存';
+      const ms = raw === '' ? null : Number(raw) * (deadlineField ? 1000 : 60000);
+      if (ms != null && (!Number.isInteger(ms) || (deadlineField ? ms !== 0 && ms < 10_000 : ms < 10_000) || ms > 86_400_000)) {
+        err.textContent = deadlineField ? '留空=继承；0=关闭；自定义须为至少 10 秒、最多 24 小时' : '范围要求：1–1440 分钟（整数）；未保存';
         return;
       }
       try {

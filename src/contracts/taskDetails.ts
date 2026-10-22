@@ -1,6 +1,7 @@
 /** Read-only task detail projection. Every collection reports whether the bounded page is complete. */
 import { z } from 'zod';
 import type { CoordinationDetails } from './coordination.ts';
+import type { TaskExecutionBlocker } from './executionBlockers.ts';
 
 export interface TaskDetailsParams { projectId: string; taskId: string; runId?: string; conversationId?:string; deliveryId?:string }
 export const taskDetailsParamsSchema = z.strictObject({
@@ -65,6 +66,8 @@ export interface TaskDetailMemberRun extends TaskDetailRun {
 
 export interface TaskDetailsResult {
   coordination?:CoordinationDetails|null;
+  /** Present only when queued work exists without an executing turn. */
+  executionBlocker?: TaskExecutionBlocker | null;
   task: { id: string; projectId: string; conversationId: string; title: string; objective: string | null; status: string; reviewPolicy: string; revision: number; stopGeneration: number; roomTaskNumber: number | null; ownerMemberId: string | null; ownerDisplayName: string | null; parentTaskId: string | null; currentDeliveryId: string | null };
   clarificationRetry?: { available:boolean;pending:boolean;blockReason:string|null };
   failedRetry: { available: boolean; pending: boolean; blockReason: string | null; formatRepair?:boolean };

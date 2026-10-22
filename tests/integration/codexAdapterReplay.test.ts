@@ -99,7 +99,11 @@ describe('回放：终态按 turn.status 映射（不再一律成功）', () => 
     adapter = mockAdapter();
     const session = await openMockSession(adapter);
     const events = await runOneTurn(adapter, session, 'turn_1');
-    expect(events.find((e) => e.kind === 'turn.failed')).toMatchObject({ code: 'INTERRUPTED', turnId: 'turn_1' });
+    expect(events.find((e) => e.kind === 'turn.failed')).toMatchObject({
+      code: 'INTERRUPTED',
+      turnId: 'turn_1',
+      terminalEvidence: { source: 'provider-turn-completed', status: 'interrupted', providerTurnId: 'mock-turn-1' },
+    });
     await adapter.dispose();
   });
 

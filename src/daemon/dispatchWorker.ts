@@ -10,6 +10,7 @@ import type { DocumentArtifact } from '../contracts/document.ts';
 import { captureBaseline, finalizeChangeset } from './changeset.ts';
 import { snapshotGeneratedFiles, type SnapshotOutcome } from './generatedFileSnapshots.ts';
 import { capturedFileChanges, recordMessageFileChanges } from './messageFileChanges.ts';
+import { humanFacingFile } from '../contracts/messageFileChanges.ts';
 import { acquireLease } from './workspaceLocks.ts';
 import { comparisonKey } from './directoryIdentity.ts';
 /**
@@ -27,7 +28,7 @@ import { comparisonKey } from './directoryIdentity.ts';
  */
 import { memberImageCapability } from './imageCapability.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
@@ -107,7 +108,8 @@ export interface DispatchWorkerOptions {
   leaseOwner: string;
   leaseMs?: number;
   /** 单 turn 截止（独立于事件流计时）：超时先中断。 */
-  turnDeadlineMs?: number;
+  /** Positive=explicit hard deadline; null/0=disabled. Missing means disabled. */
+  turnDeadlineMs?: number | null;
   /** 中断后的等待上限：仍无终结 → UNKNOWN。 */
   interruptGraceMs?: number;
   /** DIRECT 预算上限（决策 12：6）。 */
@@ -148,7 +150,7 @@ export class DispatchWorker {
   private readonly adapter: RuntimeAdapter;
   private readonly leaseOwner: string;
   private readonly leaseMs: number;
-  private readonly turnDeadlineMs: number;
+  private readonly turnDeadlineMs: number | null;
   private readonly interruptGraceMs: number;
   private readonly maxTurns: number;
   private readonly coordinationMaxCalls:number;
@@ -198,7 +200,10 @@ export class DispatchWorker {
     this.defaultProviderKey = options.defaultProviderKey ?? 'default-runtime';
     this.leaseOwner = options.leaseOwner;
     this.leaseMs = options.leaseMs ?? 60_000;
-    this.turnDeadlineMs = options.turnDeadlineMs ?? 60_000;
+    if (options.turnDeadlineMs != null && (!Number.isSafeInteger(options.turnDeadlineMs) || options.turnDeadlineMs < 0)) {
+      throw new Error('turnDeadlineMs 必须是非负整数或 null（0/null=关闭）');
+    }
+    this.turnDeadlineMs = options.turnDeadlineMs == null || options.turnDeadlineMs === 0 ? null : options.turnDeadlineMs;
     this.interruptGraceMs = options.interruptGraceMs ?? 5_000;
     this.maxTurns = options.maxTurns ?? 6;
     const coordinationCap=options.coordinationMaxCalls??24;
@@ -238,7 +243,7 @@ export class DispatchWorker {
          FROM agent_turns t
          JOIN workflow_runs r ON r.id = t.run_id
          JOIN tasks tk ON tk.id = r.task_id
-         WHERE t.status = 'UNKNOWN'
+         WHERE (t.status = 'UNKNOWN' AND t.protection_state IS NOT 'released')
             OR t.protection_state = 'retained'
             OR t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')`,
       ).all() as Array<{ turnId: string; memberId: string; projectId: string;writeRootKey:string|null }>;
@@ -256,7 +261,7 @@ export class DispatchWorker {
   }
 
   /** 项目级协作限制（§17.8，第十七轮三）：项目列优先，NULL/查询失败回落全局默认。 */
-  private collabFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number } {
+  private collabFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number | null } {
     try {
       const row = this.db.prepare('SELECT collab_absence_tolerance_ms, collab_turn_deadline_ms FROM projects WHERE id = ?').get(projectId) as { collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
       return {
@@ -274,7 +279,7 @@ export class DispatchWorker {
    * 全用快照；泵不再每次读最新项目配置——「新派发 turn 起生效（在途不变）」由数据承载，
    * 重启沿持久快照恢复，不重新套当前配置。
    */
-  private collabSnapshotFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number; configRevision: number } {
+  private collabSnapshotFor(projectId: string): { absenceToleranceMs: number; turnDeadlineMs: number | null; configRevision: number } {
     try {
       const row = this.db.prepare('SELECT collab_absence_tolerance_ms, collab_turn_deadline_ms, revision FROM projects WHERE id = ?').get(projectId) as { collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null; revision: number } | undefined;
       return {
@@ -288,7 +293,7 @@ export class DispatchWorker {
   }
 
   /** 在途 turn 的时限快照读取（消费/缺席判定用；快照前历史行回落现行配置）。 */
-  collabSnapshotOfTurn(turnId: string): { absenceToleranceMs: number; turnDeadlineMs: number; snapshotted: boolean } {
+  collabSnapshotOfTurn(turnId: string): { absenceToleranceMs: number; turnDeadlineMs: number | null; snapshotted: boolean } {
     try {
       const row = this.db.prepare('SELECT collab_absence_ms, collab_turn_deadline_ms FROM agent_turns WHERE id = ?').get(turnId) as { collab_absence_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
       if (row != null && row.collab_absence_ms != null && row.collab_turn_deadline_ms != null) {
@@ -353,7 +358,19 @@ export class DispatchWorker {
   async interruptTurn(turnId: string): Promise<void> {
     const liveEntry = this.live.get(turnId);
     if (liveEntry == null) return;
-    await liveEntry.adapter.interrupt({ id: liveEntry.sessionId } as never, turnId);
+    let timer: NodeJS.Timeout | undefined;
+    void Promise.race([
+      liveEntry.adapter.interrupt({ id: liveEntry.sessionId } as never, turnId),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, Math.max(1, this.interruptGraceMs));
+        timer.unref?.();
+      }),
+    ]).catch(() => {
+      // Sending failure is not proof of exit; the consumer's independent stop
+      // confirmation deadline carries the turn to UNKNOWN if no terminal arrives.
+    }).finally(() => {
+      if (timer != null) clearTimeout(timer);
+    });
   }
 
   private async dispatchClaimed(claimed: OutboxRow): Promise<void> {
@@ -820,7 +837,7 @@ export class DispatchWorker {
         this.db.prepare(
           `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
            VALUES (?, ?, ?, ?, ?, 'direct.work', ?, 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
-        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, isRepairDispatch ? 'format_repair' : 'stage_work', claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
+        ).run(turnId, runId, task.conversation_id, task.conversation_thread_id, member.id, isRepairDispatch ? 'format_repair' : 'stage_work', claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs ?? 0, collabSnap.configRevision, task.stop_generation);
         bindMemberMessageTurn(this.db,task.id,runId,turnId);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         if(conversationRequest)setConversationReplyState(this.db,conversationRequest.messageId,'running',undefined,runId,turnId);
@@ -1087,7 +1104,13 @@ export class DispatchWorker {
         // startTurn 已过但抛错（请求可能已发出）：adapter 已知的进程身份尽力登记——UNKNOWN 对账增强。
         this.registerProcessIdentity(turnId, runId, member.id, openedSession.adapter, openedSession.session);
       }
-      await this.settleStartupFailure(task, runId, turnId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
+      try {
+        await this.settleStartupFailure(task, runId, turnId, { id: claimed.id, attemptEpoch: claimed.attempt_epoch }, startupPhase, dispatchError, openedSession);
+      } catch (settleError) {
+        const message = settleError instanceof Error ? settleError.message : String(settleError);
+        if (/database (?:connection is not open|is closed)|database has been closed/i.test(message)) return;
+        throw settleError;
+      }
       throw dispatchError;
     } finally {
       if (!this.detached) {
@@ -1238,20 +1261,37 @@ export class DispatchWorker {
    * 正式解除 recovery.releaseProtection 后经同钩子释放，与重启恢复的占位口径一致）。
    */
   private releaseAdmission(turnId: string): void {
-    const st = this.db.prepare('SELECT status, protection_state FROM agent_turns WHERE id = ?').get(turnId) as { status: string; protection_state: string | null } | undefined;
-    if (st?.status === 'UNKNOWN' || st?.protection_state === 'retained') return;
-    const changeset=this.kvGet(`write-changeset:${turnId}`);
-    if(changeset) {
-      const result=finalizeChangeset(this.db,{changeSetId:changeset,appDataDir:this.appDataDir});
-      if(result.ok || result.error.code==='STALE_REVISION') this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(`write-changeset:${turnId}`);
+    let preserveForRecovery = false;
+    try {
+      const st = this.db.prepare('SELECT status, protection_state FROM agent_turns WHERE id = ?').get(turnId) as { status: string; protection_state: string | null } | undefined;
+      if (st?.status === 'UNKNOWN' || st?.protection_state === 'retained') {
+        preserveForRecovery = true;
+        return;
+      }
+      const changeset=this.kvGet(`write-changeset:${turnId}`);
+      if(changeset) {
+        const result=finalizeChangeset(this.db,{changeSetId:changeset,appDataDir:this.appDataDir});
+        if(result.ok || result.error.code==='STALE_REVISION') this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(`write-changeset:${turnId}`);
+      }
+      const root=this.kvGet(`write-lease:${turnId}`);
+      if(root) {
+        this.db.prepare("UPDATE workspace_leases SET status='released' WHERE owner_turn_id=? AND lock_domain=?").run(turnId,root);
+        this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(`write-lease:${turnId}`);
+      }
+    } catch (error) {
+      // Cleanup can race a forced shutdown that has already closed the DB. Only
+      // that exact condition may be ignored; any other cleanup failure must keep
+      // the admission occupied and surface instead of pretending zero occupancy.
+      if (!isDatabaseClosedError(error)) {
+        preserveForRecovery = true;
+        throw error;
+      }
+    } finally {
+      if (!preserveForRecovery) {
+        this.admission.release(turnId);
+        this.blockedOutbox.clear();
+      }
     }
-    const root=this.kvGet(`write-lease:${turnId}`);
-    if(root) {
-      this.db.prepare("UPDATE workspace_leases SET status='released' WHERE owner_turn_id=? AND lock_domain=?").run(turnId,root);
-      this.db.prepare('DELETE FROM daemon_state WHERE key=?').run(`write-lease:${turnId}`);
-    }
-    this.admission.release(turnId);
-    this.blockedOutbox.clear();
   }
 
   /** 成员绑定的 runtime kind（provider 维度准入键；未绑定回落默认 runtime 标识）。 */
@@ -1579,7 +1619,7 @@ export class DispatchWorker {
         this.db.prepare(
           `INSERT INTO agent_turns (id, run_id, conversation_id, thread_id, member_id, stage_key, turn_purpose, status, dispatch_key, attempt, epoch, collab_absence_ms, collab_turn_deadline_ms, collab_config_revision, stop_generation_snapshot)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, 1, 1, ?, ?, ?, ?)`,
-        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs, collabSnap.configRevision, task.stop_generation);
+        ).run(turnId, run.id, task.conversation_id, task.conversation_thread_id, step.memberId, assembly.value.stageKey, assembly.value.turnPurpose, claimed.dispatch_key, collabSnap.absenceToleranceMs, collabSnap.turnDeadlineMs ?? 0, collabSnap.configRevision, task.stop_generation);
         this.db.prepare('UPDATE outbox SET turn_id = ? WHERE id = ?').run(turnId, claimed.id);
         this.db.prepare('UPDATE workflow_runs SET budget_json = ? WHERE id = ?').run(JSON.stringify(nextBudget), run.id);
         this.db.prepare(
@@ -1848,6 +1888,25 @@ export class DispatchWorker {
     return false;
   }
 
+  /** User stop fact, independent from any automatic turn deadline. */
+  private stopRequestedInEffect(taskId: string, turnId: string): boolean {
+    try {
+      const row = this.db.prepare(`SELECT a.status turn_status,a.stop_generation_snapshot,t.stop_generation,t.status task_status,r.status run_status
+        FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+        WHERE a.id=? AND r.task_id=?`).get(turnId, taskId) as {
+          turn_status: string; stop_generation_snapshot: number; stop_generation: number; task_status: string; run_status: string;
+        } | undefined;
+      if (row == null) return false;
+      if (row.turn_status === 'STOPPING' || row.run_status === 'STOPPING' || row.task_status === 'CANCELLED') return true;
+      const snapshot = row.stop_generation_snapshot ?? -1;
+      return snapshot >= 0 ? row.stop_generation > snapshot : row.stop_generation > 0;
+    } catch {
+      // Database may be closed by a forced shutdown observer. No new stop fact can
+      // be introduced after that point; the existing aborting path owns settlement.
+      return false;
+    }
+  }
+
   /**
    * 消费事件直到终结；截止计时独立于事件流（沉默 runtime 也会按时中断）。
    * 中断后宽限内仍无终结 → UNKNOWN（§10.2 结果不确定，不伪造成功/失败）。
@@ -1862,10 +1921,14 @@ export class DispatchWorker {
     // 快照前历史行（无快照列）回落现行项目配置。排队截止（dispatchWaitDeadline）是全局
     // 调度资源观察线，与本执行截止分属不同机制，不混用。
     const turnCollab = this.collabSnapshotOfTurn(turnId);
-    const deadline = Date.now() + turnCollab.turnDeadlineMs;
-    const interruptDeadline = deadline + this.interruptGraceMs;
+    const deadline = turnCollab.turnDeadlineMs != null && turnCollab.turnDeadlineMs > 0
+      ? Date.now() + turnCollab.turnDeadlineMs
+      : null;
+    const interruptDeadline = deadline == null ? null : deadline + this.interruptGraceMs;
     const iterator = adapter.events({ id: sessionId } as never)[Symbol.asyncIterator]();
     let interruptSent = false;
+    let stopConfirmationDeadline: number | null = null;
+    let stopInterruptSent = false;
     let pending: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> | null = null;
 
     for (;;) {
@@ -1876,10 +1939,35 @@ export class DispatchWorker {
         return;
       }
       const now = Date.now();
-      const wakeAt = interruptSent ? interruptDeadline : deadline;
+      if (stopConfirmationDeadline == null && this.stopRequestedInEffect(task.id, turnId)) {
+        // The user stop path has its own bounded confirmation window. It must not
+        // inherit the optional single-turn deadline, and repeated stop requests do
+        // not reset this deadline.
+        stopConfirmationDeadline = now + this.interruptGraceMs;
+        stopInterruptSent = true;
+        this.audit(task, runId, turnId, 'run.stopConfirmationStarted', {
+          interruptGraceMs: this.interruptGraceMs,
+          deadlineDisabled: deadline == null,
+        });
+        void Promise.race([
+          adapter.interrupt({ id: sessionId } as never, turnId),
+          new Promise((resolve) => {
+            const guard = setTimeout(resolve, Math.max(1, this.interruptGraceMs));
+            guard.unref?.();
+          }),
+        ]).catch(() => {
+          // Send failure/timeout is not an exit fact; the confirmation deadline below
+          // carries the turn to UNKNOWN if no attributable terminal arrives.
+        });
+      }
+      const deadlineCandidates = [
+        interruptSent ? interruptDeadline : deadline,
+        stopConfirmationDeadline,
+      ].filter((value): value is number => value != null);
+      const wakeAt = deadlineCandidates.length === 0 ? null : Math.min(...deadlineCandidates);
       // 等待上限 200ms：多醒仅重评估（截止/中断/中止判定不变）——保证强制退出中止
       // 与既有时序在最坏一个轮询周期内被感知。
-      const waitMs = Math.min(200, Math.max(1, wakeAt - now));
+      const waitMs = wakeAt == null ? 200 : Math.min(200, Math.max(1, wakeAt - now));
       const nextPromise: Promise<IteratorResult<NormalizedRuntimeEvent, undefined>> =
         pending ?? iterator.next();
       pending = null;
@@ -1893,13 +1981,20 @@ export class DispatchWorker {
       if (winner === 'timer') {
         pending = nextPromise; // 保留进行中的读取，不吞事件
         const at = Date.now();
-        if (!interruptSent && at >= deadline) {
+        if (stopConfirmationDeadline != null && at >= stopConfirmationDeadline) {
+          this.audit(task, runId, turnId, 'run.stopConfirmationExpired', {
+            interruptGraceMs: this.interruptGraceMs,
+            note: '用户停止后未收到可归属本 turn 的正式终态；按 UNKNOWN 保留占用',
+          });
+          break;
+        }
+        if (deadline != null && !interruptSent && at >= deadline) {
           interruptSent = true;
           // interrupt 限时发送：不 await 其完成；宽限由主循环计时（挂起也不影响）。
           void Promise.race([
             adapter.interrupt({ id: sessionId } as never, turnId),
             new Promise((resolve) => {
-              const guard = setTimeout(resolve, Math.max(1, interruptDeadline - Date.now()));
+              const guard = setTimeout(resolve, Math.max(1, (interruptDeadline ?? Date.now() + 1) - Date.now()));
               guard.unref?.();
             }),
           ]).catch(() => {
@@ -1907,7 +2002,7 @@ export class DispatchWorker {
           });
           continue;
         }
-        if (interruptSent && at >= interruptDeadline) break; // 中断后仍无终结：不确定
+        if (interruptSent && interruptDeadline != null && at >= interruptDeadline) break; // 中断后仍无终结：不确定
         continue;
       }
       if (winner.done) break;
@@ -1943,7 +2038,7 @@ export class DispatchWorker {
           if(!proof?.exitConfirmed){this.audit(task,runId,turnId,'turn.writeExitUnconfirmed',{observedTerminal:event.kind});this.settleUnknown(task,runId,turnId,'write-process-exit-unconfirmed');return;}
         }
       }
-      this.applyEvent(task, runId, turnId, event);
+      this.applyEvent(task, runId, turnId, event, { deadlineInterruptSent: interruptSent });
       if (event.kind === 'turn.completed' || event.kind === 'turn.failed') {
         // R91：成功交付后做生成文件快照（事务外；失败只留可读状态，不影响已完成聊天）。
         if (event.kind === 'turn.completed') {
@@ -1954,7 +2049,12 @@ export class DispatchWorker {
       }
     }
 
-    this.settleUnknown(task, runId, turnId);
+    const stopExpired = stopConfirmationDeadline != null && Date.now() >= stopConfirmationDeadline;
+    this.settleUnknown(task, runId, turnId,
+      stopExpired ? 'stop-confirmation-grace-expired'
+        : interruptSent ? 'no-terminal-after-deadline'
+          : stopInterruptSent ? 'no-terminal-after-user-stop'
+            : 'no-terminal-after-interrupt');
   }
 
   /** UNKNOWN 收尾（§10.2 结果不确定，不伪造）：截止后无终态/强制退出中止共用。 */
@@ -1981,6 +2081,7 @@ export class DispatchWorker {
         }
       });
       tx();
+      this.snapshotObservedFiles(task, runId, turnId, 'UNKNOWN', reason);
       // 真实调用台账（第十八轮二补漏）：settleUnknown 直接 UPDATE 绕过 casTurn——UNKNOWN 路径
       // （截止中断/强制中止/启动不确定）的 startTurn 台账行必须同样结算，不得永久 inflight。
       try { settleRealCall(this.db, turnId, 'unknown', `turn UNKNOWN（${reason}）`); } catch { /* 台账尽力而为 */ }
@@ -1995,7 +2096,7 @@ export class DispatchWorker {
   }
 
   /** 事件应用（public：迟到输出一致性用例经生产方法定点注入——不绕过状态机）。 */
-  applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent): void {
+  applyEvent(task: TaskRow, runId: string, turnId: string, event: NormalizedRuntimeEvent, context?: { deadlineInterruptSent?: boolean }): void {
     // DELIBERATE turn：终态处理走研讨合同（产物校验/屏障/修复），不复用 DIRECT 交付路径。
     const turnMeta = this.db.prepare('SELECT stage_key, dispatch_key, turn_purpose FROM agent_turns WHERE id = ?').get(turnId) as { stage_key: string; dispatch_key: string | null; turn_purpose: string } | undefined;
     if (event.kind === 'turn.started') {
@@ -2352,6 +2453,9 @@ export class DispatchWorker {
         settleThreadReplyForTurn(this.db,turnId,'SUCCEEDED');
         const actualTurn=this.db.prepare('SELECT status FROM agent_turns WHERE id=?').get(turnId) as {status:string};
         settleMemberMessageTurn(this.db,task.id,turnId,actualTurn.status);
+        if (actualTurn.status === 'FAILED' || actualTurn.status === 'CANCELLED') {
+          this.snapshotObservedFiles(task, runId, turnId, actualTurn.status, event.finalText?.slice(0, 400) ?? 'terminal-contract-settled');
+        }
         break;
       }
       case 'turn.failed': {
@@ -2363,10 +2467,16 @@ export class DispatchWorker {
         const taskNowStop = this.db.prepare('SELECT stop_generation, status FROM tasks WHERE id = ?').get(task.id) as { stop_generation: number; status: string } | undefined;
         const gen0f = (this.db.prepare('SELECT stop_generation_snapshot AS g FROM agent_turns WHERE id = ?').get(turnId) as { g: number } | undefined)?.g ?? -1;
         const runStopping = (this.db.prepare('SELECT status AS s FROM workflow_runs WHERE id = ?').get(runId) as { s: string } | undefined)?.s === 'STOPPING';
-        const userStop = event.code === 'INTERRUPTED' && (runStopping
+        const userStop = event.turnId === turnId && event.code === 'INTERRUPTED' && (runStopping || this.stopRequestedInEffect(task.id, turnId)
           || (taskNowStop != null && (taskNowStop.status === 'CANCELLED' || (gen0f >= 0 ? taskNowStop.stop_generation > gen0f : taskNowStop.stop_generation > 0))));
-        if (event.code === 'INTERRUPTED' && !userStop) {
-          this.settleUnknown(task, runId, turnId, 'turn-deadline-interrupt');
+        const providerConfirmedInterrupt = event.turnId === turnId
+          && event.code === 'INTERRUPTED'
+          && event.terminalEvidence?.source === 'provider-turn-completed'
+          && event.terminalEvidence.status === 'interrupted';
+        if (event.code === 'INTERRUPTED' && !userStop && !providerConfirmedInterrupt) {
+          this.settleUnknown(task, runId, turnId, context?.deadlineInterruptSent === true
+            ? 'turn-deadline-interrupt'
+            : 'provider-interrupted-without-terminal-proof');
           break;
         }
         const tx = this.db.transaction(() => {
@@ -2383,9 +2493,11 @@ export class DispatchWorker {
             code: event.code,
             message: event.message.slice(0, 400), // 失败取证（真实跑挂时 stderr 尾部在此，不丢现场）
             retryable: event.retryable,
+            ...(providerConfirmedInterrupt ? { terminalEvidence: event.terminalEvidence, classification: 'provider-confirmed-interrupt' } : {}),
           });
         });
         tx();
+        this.snapshotObservedFiles(task, runId, turnId, userStop ? 'CANCELLED' : 'FAILED', event.message);
         break;
       }
       default:
@@ -2554,6 +2666,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.lateCompletion', { finalText: event.finalText ?? null });
         });
         tx();
+        this.snapshotObservedFiles(task, runId, turnId, 'CANCELLED', 'deliberation-stopped');
         return;
       }
       if (baseStep == null) {
@@ -2562,6 +2675,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'turn.outputInvalid', { issues: ['dispatch_key 无法解析为研讨步骤'] });
         });
         tx();
+        this.snapshotObservedFiles(task, runId, turnId, 'FAILED', 'deliberation-step-identity-invalid');
         return;
       }
       const out = onStepOutput(this.db, {
@@ -2580,6 +2694,7 @@ export class DispatchWorker {
           this.audit(task, runId, turnId, 'run.stepFailed', { stage: baseStep.stage, message: out.error.message });
         });
         tx();
+        this.snapshotObservedFiles(task, runId, turnId, 'FAILED', out.error.message);
         pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
         return;
       }
@@ -2622,6 +2737,7 @@ export class DispatchWorker {
         }
       });
       tx();
+      this.snapshotObservedFiles(task, runId, turnId, 'FAILED', out.value.needsRepair ?? 'deliberation-output-invalid');
       pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
@@ -2632,7 +2748,7 @@ export class DispatchWorker {
       // 停止结算后的新 turn 被 deadline 中断时误判用户停止）或 run 已 STOPPING；否则
       // INTERRUPTED 是单轮截止中断（取证轮确认的误判源）——成员级缺席，运行继续。
       const gen0d = (this.db.prepare('SELECT stop_generation_snapshot AS g FROM agent_turns WHERE id = ?').get(turnId) as { g: number } | undefined)?.g ?? -1;
-      const userStop = event.code === 'INTERRUPTED' && (runNow?.status === 'STOPPING'
+      const userStop = event.turnId === turnId && event.code === 'INTERRUPTED' && (runNow?.status === 'STOPPING'
         || (taskNow != null && (taskNow.status === 'CANCELLED' || (gen0d >= 0 ? taskNow.stop_generation > gen0d : taskNow.stop_generation > 0))));
       const tx = this.db.transaction(() => {
         this.casTurn(turnId, userStop ? 'CANCELLED' : 'FAILED');
@@ -2646,6 +2762,7 @@ export class DispatchWorker {
         this.audit(task, runId, turnId, 'turn.statusChanged', { status: userStop ? 'CANCELLED' : 'FAILED', code: event.code, message: event.message, source: userStop ? 'user-stop' : 'member-terminal' });
       });
       tx();
+      this.snapshotObservedFiles(task, runId, turnId, userStop ? 'CANCELLED' : 'FAILED', event.message);
       if (!userStop) pumpDeliberation(this.db, task.id, this.deliberationOptions(task.project_id));
       return;
     }
@@ -3084,6 +3201,185 @@ export class DispatchWorker {
   }
 
   /**
+   * Structured, completed write evidence for both Codex fileChange and Claude
+   * Write/Edit/MultiEdit. Paths come only from adapter payloads, never rendered targets.
+   * A successful write attempt is still insufficient when the captured pre-turn hash
+   * proves the file did not change; those paths are excluded here.
+   */
+  private observedFileEvidenceForTurn(turnId: string): { paths: string[]; unchangedHashes: Record<string, string> } | null {
+    const rows = this.db.prepare(`SELECT started.payload_json AS started_json, completed.payload_json AS completed_json
+      FROM domain_events started
+      JOIN domain_events completed ON completed.turn_id=started.turn_id
+        AND completed.kind='tool.completed'
+        AND json_extract(completed.payload_json,'$.toolCallId')=json_extract(started.payload_json,'$.toolCallId')
+      WHERE started.turn_id=? AND started.kind='tool.started'
+        AND json_extract(completed.payload_json,'$.outcome')='success'
+      ORDER BY started.seq`).all(turnId) as Array<{ started_json: string; completed_json: string }>;
+    const candidates: string[] = [];
+    const writeTools = new Set(['fileChange', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.started_json) as { toolName?: unknown; paths?: unknown };
+        if (typeof payload.toolName !== 'string' || !writeTools.has(payload.toolName) || !Array.isArray(payload.paths)) continue;
+        for (const value of payload.paths) {
+          if (typeof value !== 'string') continue;
+          const path = value.replaceAll('\\', '/').replace(/^\.\//, '');
+          if (path.length === 0 || path.startsWith('/') || /^[A-Za-z]:\//.test(path)) continue;
+          if (path.split('/').includes('..') || !humanFacingFile(path) || candidates.includes(path)) continue;
+          candidates.push(path);
+        }
+      } catch { /* malformed historical payload stays isolated */ }
+    }
+    if (candidates.length === 0) return null;
+
+    const changeSetId = this.kvGet(`write-changeset:${turnId}`) ?? this.changeSetForTurn(turnId);
+    if (changeSetId == null) return null;
+    const beforeRows = this.db.prepare(`SELECT path,state,sha256 FROM change_set_files
+      WHERE change_set_id=? AND role='before'`).all(changeSetId) as Array<{ path: string; state: string; sha256: string | null }>;
+    const key = (path: string): string => process.platform === 'win32' ? path.replaceAll('\\', '/').toLowerCase() : path.replaceAll('\\', '/');
+    const before = new Map(beforeRows.map((row) => [key(row.path), row]));
+    const paths: string[] = [];
+    const unchangedHashes: Record<string, string> = {};
+    for (const path of candidates) {
+      const prior = before.get(key(path));
+      // captureBaseline is complete for a writable turn; a path absent from its before
+      // manifest is a newly observed file in this turn.
+      if (prior == null) {
+        paths.push(path);
+      } else if (prior.state === 'present' && prior.sha256 != null) {
+        paths.push(path);
+        unchangedHashes[path] = prior.sha256;
+      } else if (prior.state === 'absent') {
+        paths.push(path);
+      }
+      if (paths.length >= 12) break;
+    }
+    return paths.length === 0 ? null : { paths, unchangedHashes };
+  }
+
+  /**
+   * Persist a stable, immutable observation when a turn failed/stopped/became UNKNOWN
+   * after real fileChange activity. This is evidence, not a delivery: the system message
+   * explicitly says the result is unconfirmed/non-final and never releases the turn slot.
+   */
+  private snapshotObservedFiles(
+    task: TaskRow,
+    runId: string,
+    turnId: string,
+    outcomeStatus: 'FAILED' | 'CANCELLED' | 'UNKNOWN',
+    reason: string,
+  ): void {
+    if (this.db.prepare("SELECT 1 FROM domain_events WHERE turn_id=? AND kind='turn.observedFileSnapshot' LIMIT 1").get(turnId) != null) return;
+    const evidence = this.observedFileEvidenceForTurn(turnId);
+    if (evidence == null) return;
+    const paths = evidence.paths;
+    const messageId = `msg_observed_${turnId}`;
+    const observedAt = Date.now();
+    try {
+      const turn = this.db.prepare('SELECT member_id FROM agent_turns WHERE id=?').get(turnId) as { member_id: string } | undefined;
+      const project = this.db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(task.project_id) as { canonical_path: string } | undefined;
+      if (turn == null || project == null) return;
+      const threadId = task.kind === 'dm_turn' ? null : task.conversation_thread_id;
+      const roomId = task.kind === 'dm_turn' ? null : task.room_id;
+      const metadata = {
+        observedFileSnapshot: { runId, turnId, taskId: task.id, observedAt, outcomeStatus, reason: reason.slice(0, 400) },
+      };
+      const ensureMessage = this.db.transaction(() => {
+        const existing = this.db.prepare('SELECT id FROM messages WHERE id=?').get(messageId);
+        if (existing != null) return;
+        const conversationSeq = (this.db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
+          .get(task.conversation_id) as { last_message_seq: number }).last_message_seq;
+        let threadSeq: number | null = null;
+        if (threadId != null) {
+          threadSeq = (this.db.prepare('UPDATE conversation_threads SET last_message_seq = last_message_seq + 1, revision = revision + 1 WHERE id = ? RETURNING last_message_seq')
+            .get(threadId) as { last_message_seq: number }).last_message_seq;
+        }
+        const text = `【执行结果未确认 · 文件观察快照】\n本轮以 ${outcomeStatus} 收尾；正在保存中断时仍可稳定读取的文件副本。这不是最终交付。`;
+        this.db.prepare(
+          `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+             thread_message_seq, author_type, author_id, body_json, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'system', 'system:file-snapshot', ?, 'saved', ?)`,
+        ).run(messageId, task.project_id, task.conversation_id, conversationSeq, roomId, threadId, task.id, threadSeq,
+          JSON.stringify({ text, ...metadata }), observedAt);
+        if (threadId != null) {
+          appendDomainEvent(this.db, {
+            schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: task.project_id, conversationId: task.conversation_id,
+            threadId, taskId: task.id, turnId, kind: 'thread.replyAdded', createdAt: observedAt,
+            payload: { messageId, system: 'observed-file-snapshot' },
+          });
+        }
+      });
+      ensureMessage();
+
+      const access = this.turnRecordedWriteAccess(task, turnId, turn.member_id);
+      const snapshot = snapshotGeneratedFiles({
+        db: this.db,
+        appDataDir: this.appDataDir,
+        projectId: task.project_id,
+        projectRoot: project.canonical_path,
+        taskId: task.id,
+        runId,
+        turnId,
+        memberId: turn.member_id,
+        conversationId: task.conversation_id,
+        versionScopeKey: task.kind === 'dm_turn' ? task.conversation_id : task.id,
+        messageId,
+        mode: 'observed-unconfirmed',
+        declaredFiles: [],
+        observedFiles: paths,
+        unchangedHashes: evidence.unchangedHashes,
+        turnDiff: null,
+        access,
+      });
+      const lines = [
+        '【执行结果未确认 · 文件观察快照】',
+        `${outcomeStatus === 'UNKNOWN' ? '本轮执行中断，结果尚未确认。' : outcomeStatus === 'CANCELLED' ? '本轮执行已停止。' : '本轮执行未完成。'}观察时间：${new Date(observedAt).toLocaleString('zh-CN', { hour12: false })}。`,
+      ];
+      if (snapshot.registered.length > 0) {
+        lines.push(`以下 ${snapshot.registered.length} 个当时可稳定读取的文件已保存为只读副本，可打开查看。`);
+      } else {
+        lines.push(snapshot.skipped.length > 0 && snapshot.failures.length === 0
+          ? '没有检测到本轮新建或修改的可打开文档，未生成文件卡。'
+          : '没有生成可打开的文件副本。');
+      }
+      lines.push('这些副本不是最终交付，原文件保持原样；请以本轮正式结果为准。');
+      if (snapshot.failures.length > 0) {
+        lines.push(`部分文件未能保存：${snapshot.failures.slice(0, 4).map((failure) => `${basename(failure.path)}（${failure.message}）`).join('；')}${snapshot.failures.length > 4 ? `；另有 ${snapshot.failures.length - 4} 项` : ''}。`);
+      }
+      this.db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(JSON.stringify({ text: lines.join('\n'), ...metadata }), messageId);
+      this.audit(task, runId, turnId, 'turn.observedFileSnapshot', {
+        status: snapshot.status,
+        outcomeStatus,
+        observedAt,
+        paths,
+        registered: snapshot.registered.map((file) => ({
+          artifactId: file.artifactId, path: file.sourcePath, revision: file.revision,
+          sizeBytes: file.sizeBytes, hash: file.hash, source: file.source,
+        })),
+        failures: snapshot.failures.map((failure) => ({ path: failure.path, code: failure.code, message: failure.message })),
+        rule: '真实 fileChange 路径的稳定读取快照；明确非最终交付；不释放租约、不回滚、不重试',
+      });
+    } catch (error) {
+      try {
+        const fallback = `【执行结果未确认 · 文件快照未完成】\n观察时间：${new Date(observedAt).toLocaleString('zh-CN', { hour12: false })}。无法保存可读副本：${error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240)}。原文件保持原样，这些内容不是最终交付。`;
+        const data = JSON.stringify({ text: fallback, observedFileSnapshot: { runId, turnId, taskId: task.id, observedAt, outcomeStatus, reason: reason.slice(0, 400), failed: true } });
+        const update = this.db.prepare('UPDATE messages SET body_json=? WHERE id=?').run(data, messageId);
+        if (update.changes === 0) {
+          const conversationSeq = (this.db.prepare('UPDATE conversations SET last_message_seq = last_message_seq + 1 WHERE id = ? RETURNING last_message_seq')
+            .get(task.conversation_id) as { last_message_seq: number }).last_message_seq;
+          this.db.prepare(
+            `INSERT INTO messages (id, project_id, conversation_id, conversation_seq, room_id, thread_id, task_id,
+               thread_message_seq, author_type, author_id, body_json, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'system', 'system:file-snapshot', ?, 'saved', ?)`,
+          ).run(messageId, task.project_id, task.conversation_id, conversationSeq, task.kind === 'dm_turn' ? null : task.room_id,
+            task.kind === 'dm_turn' ? null : task.conversation_thread_id, task.id, data, observedAt);
+        }
+        this.audit(task, runId, turnId, 'turn.observedFileSnapshot', { status: 'failed', outcomeStatus, observedAt, message: data.slice(0, 300) });
+      } catch { /* observation failures never affect terminal settlement */ }
+    }
+  }
+
+  /**
    * R91 生成文件快照（终态后、事务外）：
    * - 只处理本 turn 已成功且完成权限/build 校验的结果（失败/停止/UNKNOWN/迟到不登记；
    *   DELIB 可写轮从已验证 changeset 取差异）；
@@ -3419,6 +3715,7 @@ export class DispatchWorker {
         action: event.action ?? runtimeToolAction(event.toolName),
         target: event.target ?? '',
         argumentsSummary: event.argumentsSummary,
+        ...(event.paths != null && event.paths.length > 0 ? { paths: event.paths.slice(0, 24) } : {}),
         memberId: event.memberId ?? null,
         stage: event.stage ?? frozenStage,
         eventKey: event.eventKey,
@@ -3441,6 +3738,7 @@ export class DispatchWorker {
       action: event.action ?? prior.action ?? null,
       target: event.target ?? prior.target ?? '',
       argumentsSummary: typeof prior.argumentsSummary === 'string' ? prior.argumentsSummary : '',
+      ...(Array.isArray(prior.paths) ? { paths: prior.paths.filter((value): value is string => typeof value === 'string').slice(0, 24) } : {}),
       memberId: event.memberId ?? prior.memberId ?? null,
       stage: event.stage ?? frozenStage,
       outcome: event.outcome,
@@ -3502,6 +3800,11 @@ function parseInitialTaskId(dispatchKey: string): string | null {
 
 function isTurnTerminalStatus(status: string): boolean {
   return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNKNOWN'].includes(status);
+}
+
+function isDatabaseClosedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database (?:connection is not open|is closed|has been closed)/i.test(message);
 }
 
 /**

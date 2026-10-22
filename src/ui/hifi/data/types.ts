@@ -4,6 +4,7 @@
  * 原型不落库，但命名与关系保持与 daemon 契约一致。
  */
 import type { FrozenCallBudgetPolicy } from '../../../contracts/callBudget.ts';
+import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.ts';
 import type { MessageFileChange } from '../../../contracts/messageFileChanges.ts';
 
 /* ---------- §10.1 状态机（业务状态与执行状态分离） ---------- */
@@ -306,6 +307,7 @@ export interface ThreadCard {
   callBudget?: FrozenCallBudgetPolicy | null;
   currentRunBudget?: CurrentRunBudget | null;
   delivery?: DeliveryFact | null;
+  executionBlocker?: TaskExecutionBlocker | null;
   ownerMemberId?: string | null;
   authorType?: Message['authorType'];
   authorId?: string;

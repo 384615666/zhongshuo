@@ -834,4 +834,119 @@ describe('R91 生产链：结构化终态/负例/fullAccess', () => {
       expect(audit.registered[0]!.source).toBe('declared');
     } finally { env.close(); }
   }, 60_000);
+
+  it('R99 UNKNOWN after real fileChange: stable non-final card, no delivery, lease retained', async () => {
+    const env = await makeProdEnv('bypassPermissions');
+    const content = `# 观察稿\n\n${'合成正文 '.repeat(1800)}\n`;
+    try {
+      const submitted = await env.submit('写一份但结果可能中断');
+      const script: FakeTurnScript = [
+        { kind: 'writeFile', path: '观察稿.md', content },
+        { kind: 'event', event: {
+          kind: 'tool.started', toolCallId: 'observe-1', toolName: 'fileChange',
+          action: 'edit', target: '观察稿.md', argumentsSummary: '{"files":["观察稿.md"]}',
+          paths: ['观察稿.md'],
+        } },
+        { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'observe-1', outcome: 'success' } },
+        { kind: 'stall', ms: 5_000 },
+      ];
+      const adapter = new FakeRuntimeAdapter({ turnScripts: [script] });
+      const worker = new DispatchWorker({
+        db: env.db, adapter, leaseOwner: 'r99-observed', appDataDir: env.data,
+        turnDeadlineMs: 80, interruptGraceMs: 40,
+      });
+      await worker.runOnce();
+      const turn = env.turnOf(submitted.taskId)!;
+      expect(turn.status).toBe('UNKNOWN');
+      expect(env.db.prepare('SELECT count(*) AS c FROM task_deliveries WHERE task_id=?').get(submitted.taskId)).toMatchObject({ c: 0 });
+      expect(env.db.prepare("SELECT count(*) AS c FROM workspace_leases WHERE owner_turn_id=? AND status!='released'").get(turn.turnId)).toMatchObject({ c: 1 });
+
+      const messageId = `msg_observed_${turn.turnId}`;
+      const message = env.db.prepare('SELECT author_type,author_id,body_json FROM messages WHERE id=?').get(messageId) as
+        | { author_type: string; author_id: string; body_json: string }
+        | undefined;
+      expect(message).toMatchObject({ author_type: 'system', author_id: 'system:file-snapshot' });
+      const text = (JSON.parse(message!.body_json) as { text: string }).text;
+      expect(text).toContain('本轮执行中断，结果尚未确认');
+      expect(text).toContain('不是最终交付');
+      expect(text).not.toContain('sha256');
+      expect(text.length).toBeLessThan(420);
+
+      const attachments = attachmentRowsOf(env, messageId);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]).toMatchObject({ display_name: '观察稿.md', revision: 1 });
+      expect(attachments[0]!.hash).toBe(sha256(Buffer.from(content, 'utf8')));
+      expect(readFileSync(attachments[0]!.blob_path)).toEqual(Buffer.from(content, 'utf8'));
+      const audit = env.db.prepare("SELECT payload_json FROM domain_events WHERE kind='turn.observedFileSnapshot' AND turn_id=?").get(turn.turnId) as { payload_json: string };
+      expect(JSON.parse(audit.payload_json)).toMatchObject({ outcomeStatus: 'UNKNOWN', status: 'registered' });
+      await adapter.closeAllSessions();
+    } finally { env.close(); }
+  }, 60_000);
+
+  it('R99 successful write with unchanged pre-turn bytes is not presented as this turn output', async () => {
+    const env = await makeProdEnv('bypassPermissions');
+    const unchanged = '# 未变文件\n\n同一份旧内容\n';
+    try {
+      writeFileSync(join(env.projectRoot, '未变.md'), unchanged, 'utf8');
+      const submitted = await env.submit('写同名旧内容');
+      const script: FakeTurnScript = [
+        { kind: 'writeFile', path: '未变.md', content: unchanged },
+        { kind: 'event', event: {
+          kind: 'tool.started', toolCallId: 'observe-same', toolName: 'Write',
+          action: 'edit', target: '未变.md', argumentsSummary: '{"file_path":"未变.md"}',
+          paths: ['未变.md'],
+        } },
+        { kind: 'event', event: { kind: 'tool.completed', toolCallId: 'observe-same', outcome: 'success' } },
+        { kind: 'stall', ms: 5_000 },
+      ];
+      const adapter = new FakeRuntimeAdapter({ turnScripts: [script] });
+      const worker = new DispatchWorker({
+        db: env.db, adapter, leaseOwner: 'r99-unchanged', appDataDir: env.data,
+        turnDeadlineMs: 80, interruptGraceMs: 40,
+      });
+      await worker.runOnce();
+      const turn = env.turnOf(submitted.taskId)!;
+      expect(turn.status).toBe('UNKNOWN');
+      const messageId = `msg_observed_${turn.turnId}`;
+      expect(attachmentRowsOf(env, messageId)).toHaveLength(0);
+      const body = JSON.parse((env.db.prepare('SELECT body_json FROM messages WHERE id=?').get(messageId) as { body_json: string }).body_json) as { text: string };
+      expect(body.text).toContain('没有检测到本轮新建或修改的可打开文档');
+      await adapter.closeAllSessions();
+    } finally { env.close(); }
+  }, 60_000);
+
+  it('R99 observed project-write still rejects outside-root paths before reading', async () => {
+    const env = await makeProdEnv('acceptEdits');
+    try {
+      await env.grantWriteAccess(true);
+      const submitted = await env.submit('越界观察路径必须拒绝');
+      const outsideDir = join(env.root, '项目外');
+      mkdirSync(outsideDir, { recursive: true });
+      const outsideFile = join(outsideDir, '不得读取.md');
+      writeFileSync(outsideFile, 'OUTSIDE-MUST-NOT-BE-READ\n', 'utf8');
+      const turnId = 'turn_r99_observed_negative';
+      const runId = 'run_r99_observed_negative';
+      const messageId = `msg_observed_${turnId}`;
+      const seq = (env.db.prepare('SELECT last_message_seq FROM conversations WHERE id=?').get(env.roomConversationId) as { last_message_seq: number }).last_message_seq + 1;
+      env.db.prepare(`UPDATE conversations SET last_message_seq=? WHERE id=?`).run(seq, env.roomConversationId);
+      const threadId = env.threadOf(submitted.taskId);
+      const threadSeq = (env.db.prepare('UPDATE conversation_threads SET last_message_seq=last_message_seq+1 WHERE id=? RETURNING last_message_seq').get(threadId) as { last_message_seq: number }).last_message_seq;
+      env.db.prepare(`INSERT INTO messages
+        (id,project_id,conversation_id,conversation_seq,room_id,thread_id,task_id,thread_message_seq,author_type,author_id,body_json,status,created_at)
+        VALUES(?,?,?,?,?,?,?,?,'system','system:file-snapshot',?,'saved',?)`).run(
+        messageId, env.projectId, env.roomConversationId, seq, env.roomId, threadId, submitted.taskId, threadSeq,
+        JSON.stringify({ text: 'observed', observedFileSnapshot: { runId, turnId, taskId: submitted.taskId, observedAt: Date.now() } }), Date.now(),
+      );
+      const outcome = snapshotGeneratedFiles({
+        db: env.db, appDataDir: env.data, projectId: env.projectId, projectRoot: env.projectRoot,
+        taskId: submitted.taskId, runId, turnId, memberId: env.memberId,
+        conversationId: env.roomConversationId, messageId, mode: 'observed-unconfirmed',
+        declaredFiles: [], observedFiles: [outsideFile], turnDiff: null,
+        access: { fullAccess: false, modificationAuthorized: true, root: env.projectRoot },
+      });
+      expect(outcome.registered).toEqual([]);
+      expect(outcome.failures).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'OUTSIDE_SCOPE' })]));
+      expect(attachmentRowsOf(env, messageId)).toHaveLength(0);
+    } finally { env.close(); }
+  }, 60_000);
 });

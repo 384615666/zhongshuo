@@ -37,7 +37,8 @@ import { commandEnvelopeSchema } from '../contracts/commands.ts';
 import { conversationFailedTasksParamsSchema, taskDetailsParamsSchema, taskHistoryParamsSchema } from '../contracts/taskDetails.ts';
 import { computeCommandPayloadHash } from '../domain/idempotency.ts';
 import { requestStop } from './stopFlow.ts';
-import { readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
+import { readExecutionBlocker, readTaskDetails, readTaskHistory, taskRunBelongsToDetails } from './taskDetails.ts';
+import { turnDeadlineFromConfig } from './turnDeadline.ts';
 import { messageFileChanges } from './messageFileChanges.ts';
 import { memberManagementCommand, bindMemberRuntime, assertMemberProject, memberExecutableStatus, templateConfigSchema, configGuard } from './memberManagement.ts';
 import {readAppearance,writeAvatar,writeShowAvatars} from './appearance.ts';
@@ -1635,6 +1636,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           delivery: deliveryFactsOfTask(deps.db, params.taskId),
           pendingDelivery: pendingDelivery ?? null,
           reworkPending: reworkDerived == null ? null : { deliveryId: reworkDerived.deliveryId, deliveryRevision: reworkDerived.deliveryRevision, manifestHash: reworkDerived.manifestHash, sourceRunId: reworkDerived.sourceRunId, note: reworkDerived.note, queued: reworkDerived.queued },
+          executionBlocker: readExecutionBlocker(deps.db, params.taskId),
           ...(lastStartupFailureMessage != null ? { lastStartupFailureMessage } : {}) } });
       }
       case 'task.history':
@@ -2837,12 +2839,26 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           const params = z.strictObject({ projectId: z.string().min(1) }).parse(env.params);
           const row = deps.db.prepare('SELECT revision, collab_absence_tolerance_ms, collab_turn_deadline_ms FROM projects WHERE id = ?').get(params.projectId) as { revision: number; collab_absence_tolerance_ms: number | null; collab_turn_deadline_ms: number | null } | undefined;
           if (row == null) throw new DaemonCommandError('RESOURCE_NOT_FOUND', `项目不存在：${params.projectId}`);
-          return withCommandId({ ok: true, data: { projectId: params.projectId, revision: row.revision, absenceToleranceMs: row.collab_absence_tolerance_ms, turnDeadlineMs: row.collab_turn_deadline_ms, scope: '新派发 turn 起生效（在途 turn 保持派发时的时限）；NULL=回落 daemon 全局默认' } });
+          const globalDeadline = turnDeadlineFromConfig(process.env.ZS_TURN_DEADLINE_MS);
+          const effectiveTurnDeadlineMs = row.collab_turn_deadline_ms === 0
+            ? null
+            : row.collab_turn_deadline_ms ?? globalDeadline;
+          const turnDeadlineSource = row.collab_turn_deadline_ms === 0
+            ? 'disabled'
+            : row.collab_turn_deadline_ms != null ? 'project' : 'global';
+          return withCommandId({ ok: true, data: {
+            projectId: params.projectId, revision: row.revision,
+            absenceToleranceMs: row.collab_absence_tolerance_ms, turnDeadlineMs: row.collab_turn_deadline_ms,
+            effectiveTurnDeadlineMs, turnDeadlineSource,
+            scope: '设置只对之后开始的执行生效；留空继承全局，0 关闭总时长上限，正数为明确上限',
+          } });
         }
         const params = z.strictObject({
           projectId: z.string().min(1),
           absenceToleranceMs: z.number().int().min(10_000).max(86_400_000).nullable().optional(),
-          turnDeadlineMs: z.number().int().min(10_000).max(86_400_000).nullable().optional(),
+          turnDeadlineMs: z.number().int().min(0).max(86_400_000)
+            .refine((value) => value === 0 || value >= 10_000, { message: '单轮硬时限只能是 0（关闭）或至少 10000ms' })
+            .nullable().optional(),
           expectedRevision: z.number().int().nonnegative(),
         }).parse(env.params);
         const result = run(() => {
@@ -2861,7 +2877,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
           appendDomainEvent(deps.db, {
             schemaVersion: 1, eventId: `evt_${randomUUID()}`, projectId: row.id, conversationId: null, threadId: null, taskId: null, runId: null, turnId: null,
             kind: 'project.collabUpdated', createdAt: Date.now(),
-            payload: { fromRevision: params.expectedRevision, toRevision: after.revision, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms, note: '协作限制更新：新派发 turn 起生效（在途不变）' },
+            payload: { fromRevision: params.expectedRevision, toRevision: after.revision, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms, note: '协作限制更新：新派发 turn 起生效（在途不变）；NULL=继承，0=关闭，正数=硬截止' },
           });
           return { projectId: row.id, revision: after.revision, changed: true as const, absenceToleranceMs: after.collab_absence_tolerance_ms, turnDeadlineMs: after.collab_turn_deadline_ms };
         });
@@ -2933,7 +2949,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const rows=deps.db.prepare(`SELECT t.id,t.title,t.status,t.revision,r.id AS run_id,r.status AS run_status FROM tasks t
           LEFT JOIN workflow_runs r ON r.id=(SELECT w.id FROM workflow_runs w WHERE w.task_id=t.id AND w.conversation_id=t.conversation_id ORDER BY w.rowid DESC LIMIT 1)
           WHERE t.project_id=? AND t.conversation_id=? AND t.rowid<? ORDER BY t.rowid DESC LIMIT 21`).all(params.projectId,params.conversationId,before) as Array<{id:string;title:string;status:string;revision:number;run_id:string|null;run_status:string|null}>;
-        return withCommandId({ok:true,data:{conversationId:params.conversationId,items:rows.slice(0,20).map(r=>({id:r.id,title:r.title,status:r.status,revision:r.revision,latestRun:r.run_id?{id:r.run_id,status:r.run_status}:null})),nextCursor:rows.length>20?rows[19]!.id:null}});
+        return withCommandId({ok:true,data:{conversationId:params.conversationId,items:rows.slice(0,20).map(r=>({id:r.id,title:r.title,status:r.status,revision:r.revision,latestRun:r.run_id?{id:r.run_id,status:r.run_status}:null,executionBlocker:readExecutionBlocker(deps.db,r.id)})),nextCursor:rows.length>20?rows[19]!.id:null}});
       }
       case 'conversation.history': {
         const params = z.strictObject({ conversationId: z.string().min(1), beforeSeq: z.number().int().positive().optional(), limit: z.number().int().min(1).max(200).optional() }).parse(env.params);
@@ -5068,6 +5084,7 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             nextInputBudget: t.task_budget_json != null ? (() => { try { const v=JSON.parse(t.task_budget_json) as {maxTurns?:unknown}; return typeof v.maxTurns==='number' ? { maxTurns: v.maxTurns } : null; } catch { return null; } })() : null,
             currentRunBudget: budgetProjection(t.latest_run_budget_json),
             delivery: deliveryFactsOfTask(deps.db, t.root_task_id ?? ''),
+            executionBlocker: t.root_task_id == null ? null : readExecutionBlocker(deps.db, t.root_task_id),
           });
         }
         return withCommandId({ ok: true, data: { items } });

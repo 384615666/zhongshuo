@@ -21,7 +21,7 @@ import {codexConfigurationIdentity} from './configuration.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, dirname, delimiter } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { AdapterCallError } from '../../contracts/runtime.ts';
 import type {
   AdapterProcessIdentity,
@@ -81,6 +81,8 @@ interface ToolLikeItem extends Record<string, unknown> {
 interface CodexToolActivity {
   toolName: string;
   summary: RuntimeToolSummary;
+  /** Safe project-relative file identities for evidence capture; outside paths are omitted. */
+  paths?: string[];
 }
 
 export interface CodexAdapterOptions {
@@ -370,6 +372,7 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
             action: activity.summary.action,
             target: activity.summary.target,
             argumentsSummary: activity.summary.argumentsSummary,
+            ...(activity.paths != null && activity.paths.length > 0 ? { paths: activity.paths } : {}),
           }, internalTurnId));
         }
         break;
@@ -391,6 +394,8 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
         // 按真实终态映射；provider ID 只在 turn.id（TurnCompletedNotification 无顶层 turnId）。
         const turn = p['turn'] as { id?: string; status?: string; error?: { kind?: string; message?: string }; items?: Array<Record<string, unknown>> } | undefined;
         const status = turn?.status ?? 'completed';
+        const providerTurnId = typeof turn?.id === 'string' ? turn.id : null;
+        const exactlyMappedInternalTurnId = providerTurnId == null ? undefined : session.providerTurnToInternal.get(providerTurnId);
         const internalTurnId = this.internalTurnOf(session, turn?.['id']);
         if (status === 'failed' || status === 'interrupted') {
           session.stream.push(this.event(session, {
@@ -400,6 +405,9 @@ export class CodexAppServerAdapter implements RuntimeAdapter {
               ? 'turn 被 interrupt（codex turn.status=interrupted）'
               : String(turn?.error?.['message'] ?? 'codex turn 失败'),
             retryable: false,
+            ...(status === 'interrupted' && exactlyMappedInternalTurnId != null && providerTurnId != null
+              ? { terminalEvidence: { source: 'provider-turn-completed' as const, status: 'interrupted' as const, providerTurnId } }
+              : {}),
           }, internalTurnId));
           break;
         }
@@ -725,7 +733,14 @@ function codexToolActivity(item: ToolLikeItem | undefined,sessionCwd?:string): C
         }))
         :[];
     const presentChanges=changes.filter(change=>change.path.length>0);
-    return {toolName:type,summary:runtimeToolSummary(type,{changes:presentChanges},{cwd:sessionCwd})};
+    const projectPaths = [...new Set(presentChanges.flatMap(change => {
+      const raw = change.path.replaceAll('\\', '/');
+      if (sessionCwd == null || sessionCwd.trim().length === 0) return isAbsolute(raw) ? [] : [raw.replace(/^\.\//, '')];
+      if (isAbsolute(change.path) && !isAbsolute(sessionCwd)) return [];
+      const rel = relative(resolve(sessionCwd), resolve(sessionCwd, change.path)).replaceAll('\\', '/');
+      return rel.length === 0 || rel === '..' || rel.startsWith('../') || isAbsolute(rel) ? [] : [rel.replace(/^\.\//, '')];
+    }))];
+    return {toolName:type,summary:runtimeToolSummary(type,{changes:presentChanges},{cwd:sessionCwd}),...(projectPaths.length>0?{paths:projectPaths}:{})};
   }
   if(type==='mcpToolCall'){
     const server=typeof item?.['server']==='string'?item['server']:'';

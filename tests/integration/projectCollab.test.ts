@@ -3,7 +3,7 @@
  * 校验（范围/类型）/CAS 版本冲突/持久化（文件库重开）/单轮时限按项目生效（项目值先于全局
  * 默认触发 UNKNOWN——执行侧消费证明，非只存字段）。
  */
-import { describe, expect, it, afterAll } from 'vitest';
+import { describe, expect, it, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -87,4 +87,96 @@ describe('项目协作限制（project.collab）', () => {
     expect(elapsed).toBeLessThan(30_000); // 项目值 10s 先于全局 60s 触发——证明消费的是项目值
     db.close();
   }, 60_000);
+
+  it('缺省不含隐式硬时限：无 turnDeadline 配置的健康 301 秒合成轮正常完成', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T00:00:00Z'));
+    const db = openDatabase(':memory:');
+    try {
+      seed(db);
+      createRoomRootTask(db, {
+        ids: { messageId: 'm_long', threadId: 'th_long', taskId: 'tk_long', taskEventId: 'e_long', threadEventId: 'e_thread_long' },
+        projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default', title: '长任务', body: '长任务',
+        mentions: [{ kind: 'member', memberId: 'mX' }], author: { authorType: 'human', authorId: 'u' },
+        reviewPolicy: 'auto_deliver', sourceConnectionId: null,
+        route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mX', frozenMemberIds: ['mX'], initialWakeMemberIds: ['mX'] }, now: 1,
+      });
+      const adapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => [
+        { kind: 'stall', ms: 301_000 },
+        { kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } },
+      ] });
+      const worker = new DispatchWorker({ db, adapter, leaseOwner: 'w-long-default', appDataDir: join(tmpRoot, 'long-default') });
+      const running = worker.runOnce();
+      await vi.advanceTimersByTimeAsync(301_200);
+      await running;
+      expect(db.prepare("SELECT status FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id='tk_long')").get()).toMatchObject({ status: 'SUCCEEDED' });
+    } finally {
+      vi.useRealTimers();
+      db.close();
+    }
+  }, 15_000);
+
+  it('10 秒项目时限原值读回：不四舍五入成 0，并返回实际生效值/来源', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const deps = { db, localUserId: 'u', interruptTurn: async () => {} };
+    const set = await dispatchDaemonCommand(deps, {
+      protocolVersion: 1, commandId: `cb-${randomUUID()}`, method: 'project.collab.set',
+      params: { projectId: 'p1', turnDeadlineMs: 10_000, expectedRevision: 0 },
+    });
+    expect((set as { ok: boolean }).ok).toBe(true);
+    const got = await dispatchDaemonCommand(deps, {
+      protocolVersion: 1, commandId: `cb-${randomUUID()}`, method: 'project.collab.get',
+      params: { projectId: 'p1' },
+    }) as { ok: boolean; data: { turnDeadlineMs: number; effectiveTurnDeadlineMs: number; turnDeadlineSource: string } };
+    expect(got.data).toMatchObject({ turnDeadlineMs: 10_000, effectiveTurnDeadlineMs: 10_000, turnDeadlineSource: 'project' });
+    db.close();
+  });
+
+  it('项目 0=明确关闭并覆盖正数全局；项目 NULL=继承全局', async () => {
+    const db = openDatabase(':memory:');
+    seed(db);
+    const deps = { db, localUserId: 'u', interruptTurn: async () => {} };
+    const set = await dispatchDaemonCommand(deps, {
+      protocolVersion: 1, commandId: `cb-${randomUUID()}`, method: 'project.collab.set',
+      params: { projectId: 'p1', turnDeadlineMs: 0, expectedRevision: 0 },
+    }) as { ok: boolean; data: { revision: number } };
+    expect(set.ok, JSON.stringify(set)).toBe(true);
+    createRoomRootTask(db, {
+      ids: { messageId: 'm_off', threadId: 'th_off', taskId: 'tk_off', taskEventId: 'e_off', threadEventId: 'e_thread_off' },
+      projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default', title: '关闭时限', body: 'B',
+      mentions: [{ kind: 'member', memberId: 'mX' }], author: { authorType: 'human', authorId: 'u' },
+      reviewPolicy: 'auto_deliver', sourceConnectionId: null,
+      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mX', frozenMemberIds: ['mX'], initialWakeMemberIds: ['mX'] }, now: 1,
+    });
+    const offAdapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => [
+      { kind: 'stall', ms: 160 },
+      { kind: 'event', event: { kind: 'turn.completed', finalText: '完成' } },
+    ] });
+    const offWorker = new DispatchWorker({ db, adapter: offAdapter, leaseOwner: 'w-off', turnDeadlineMs: 50, interruptGraceMs: 20, appDataDir: join(tmpRoot, 'off') });
+    await offWorker.runOnce();
+    const offTurn = db.prepare("SELECT status,collab_turn_deadline_ms FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id='tk_off')").get() as { status: string; collab_turn_deadline_ms: number };
+    expect(offTurn).toMatchObject({ status: 'SUCCEEDED', collab_turn_deadline_ms: 0 });
+
+    const setNull = await dispatchDaemonCommand(deps, {
+      protocolVersion: 1, commandId: `cb-${randomUUID()}`, method: 'project.collab.set',
+      params: { projectId: 'p1', turnDeadlineMs: null, expectedRevision: set.data.revision },
+    }) as { ok: boolean };
+    expect(setNull.ok).toBe(true);
+    createRoomRootTask(db, {
+      ids: { messageId: 'm_null', threadId: 'th_null', taskId: 'tk_null', taskEventId: 'e_null', threadEventId: 'e_thread_null' },
+      projectId: 'p1', conversationId: 'c1', roomId: 'r1', intent: 'default', title: '继承时限', body: 'B',
+      mentions: [{ kind: 'member', memberId: 'mX' }], author: { authorType: 'human', authorId: 'u' },
+      reviewPolicy: 'auto_deliver', sourceConnectionId: null,
+      route: { kind: 'dispatch', mode: 'DIRECT', targetMemberId: 'mX', frozenMemberIds: ['mX'], initialWakeMemberIds: ['mX'] }, now: 2,
+    });
+    const inheritAdapter = new FakeRuntimeAdapter({ turnScriptSequencer: () => [{ kind: 'stall', ms: 5_000 }] });
+    const inheritWorker = new DispatchWorker({ db, adapter: inheritAdapter, leaseOwner: 'w-inherit', turnDeadlineMs: 60, interruptGraceMs: 20, appDataDir: join(tmpRoot, 'inherit') });
+    await inheritWorker.runOnce();
+    const inheritedTurn = db.prepare("SELECT status,collab_turn_deadline_ms FROM agent_turns WHERE run_id IN (SELECT id FROM workflow_runs WHERE task_id='tk_null')").get() as { status: string; collab_turn_deadline_ms: number };
+    expect(inheritedTurn).toMatchObject({ status: 'UNKNOWN', collab_turn_deadline_ms: 60 });
+    await offAdapter.closeAllSessions();
+    await inheritAdapter.closeAllSessions();
+    db.close();
+  }, 20_000);
 });

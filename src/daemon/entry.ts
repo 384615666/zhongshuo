@@ -22,6 +22,7 @@ import type { NamedPipeIpcHandle } from './namedPipeIpc.ts';
 import { createCodexConfigurationPreparation } from './prepareCodexConfiguration.ts';
 import { dispatchDaemonCommand } from './commands.ts';
 import { DispatchWorker } from './dispatchWorker.ts';
+import { turnDeadlineFromConfig } from './turnDeadline.ts';
 import { MemberRuntimeRegistry, defaultModelOf, type MemberAdapterFactory, type MemberDisposeReport, type MemberRuntimeBinding } from './memberRuntime.ts';
 import { ReminderScheduler } from './reminderScheduler.ts';
 import { FakeRuntimeAdapter } from '../adapter/fake/runtimeAdapter.ts';
@@ -302,9 +303,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       appDataDir: options.appDataDir,
       // M1 研讨编排：证据齐备后默认开放（ZS_ENABLE_DELIBERATE=0 可关）；缺席容忍默认 20 分钟。
       enableDeliberate: process.env.ZS_ENABLE_DELIBERATE !== '0', // R86 正式协作入口；只读角色/schema/材料/版本接通，最终真实验收单列。
-      // 单轮截止：真实 runtime 的研讨轮（含全部初稿互评正文）常超 60s——默认放宽到
-      // 300s（ZS_TURN_DEADLINE_MS 可调）；60s 是 DIRECT 秒级 fixture 时代的默认。
-      turnDeadlineMs: process.env.ZS_TURN_DEADLINE_MS != null ? Number(process.env.ZS_TURN_DEADLINE_MS) : 300_000,
+      // 单轮硬截止默认关闭：健康的长轮不得被历史五分钟缺省值误杀。显式正数
+      // ZS_TURN_DEADLINE_MS 才启用；0/空值明确关闭。项目级 0 也明确关闭，NULL 才继承全局。
+      turnDeadlineMs: turnDeadlineFromConfig(process.env.ZS_TURN_DEADLINE_MS),
       absenceToleranceMs: process.env.ZS_ABSENCE_MS != null ? Number(process.env.ZS_ABSENCE_MS) : undefined,
       deliberateMaxTurns: process.env.ZS_DELIB_MAX_TURNS != null ? Number(process.env.ZS_DELIB_MAX_TURNS) : undefined,
     });

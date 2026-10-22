@@ -108,7 +108,7 @@ export interface SnapshotFailure {
 }
 
 /** 一个真实产出候选的证据来源；与展示层的 source 不同，允许同一路径保留多个事实。 */
-export type SnapshotEvidence = 'declared' | 'added' | 'modified';
+export type SnapshotEvidence = 'declared' | 'added' | 'modified' | 'observed';
 
 export interface SnapshotRegistered {
   artifactId: string;
@@ -119,7 +119,7 @@ export interface SnapshotRegistered {
   hash: string;
   revision: number;
   sizeBytes: number;
-  source: 'declared' | 'diff';
+  source: 'declared' | 'diff' | 'observed';
   /** 是否同时被正式结果显式声明（source 保留主来源，declared 不因 diff 合并而丢失）。 */
   declared: boolean;
   /** 该路径命中的全部候选事实，按 declared → added → modified 稳定排序。 */
@@ -151,10 +151,22 @@ export interface GeneratedFileSnapshotInput {
   messageId: string | null;
   /** TaskComplete.files 的显式路径（已通过 TaskComplete schema/resultKey 校验）。 */
   declaredFiles: readonly string[];
+  /**
+   * Stable file identities observed from a real fileChange before a turn failed,
+   * was stopped or became UNKNOWN. These are snapshots, never final delivery claims.
+   */
+  observedFiles?: readonly string[];
+  /** `observed-unconfirmed` binds a system evidence message and never implies success. */
+  mode?: 'final' | 'observed-unconfirmed';
   /** 本 turn 已验证的 changeset 差异（相对项目根，`\` 已归一为 `/`）；无写入证据时 null。 */
   turnDiff: { added: readonly string[]; modified: readonly string[] } | null;
   /** Immutable after-version hashes when a write changeset has already been captured. */
   capturedHashes?: Readonly<Record<string, string>>;
+  /**
+   * Current hashes equal to the captured pre-turn version are unchanged and must not be
+   * presented as this turn's output. Missing entries mean the pre-turn file was absent.
+   */
+  unchangedHashes?: Readonly<Record<string, string>>;
   /** 本次有效写权限事实（null=任务/配置不可核实——不登记，给可读状态）。 */
   access: { fullAccess: boolean; modificationAuthorized: boolean; root: string } | null;
 }
@@ -204,8 +216,10 @@ interface Candidate {
 function hasCandidateInput(
   declaredFiles: readonly string[],
   turnDiff: GeneratedFileSnapshotInput['turnDiff'],
+  observedFiles: readonly string[],
 ): boolean {
   return declaredFiles.some((path) => path.trim().length > 0)
+    || observedFiles.some((path) => path.trim().length > 0)
     || (turnDiff?.added.some((path) => path.trim().length > 0) ?? false)
     || (turnDiff?.modified.some((path) => path.trim().length > 0) ?? false);
 }
@@ -236,6 +250,7 @@ function candidatePriority(candidate: Candidate): 0 | 1 | 2 | 3 {
 function collectCandidates(
   declaredFiles: readonly string[],
   turnDiff: GeneratedFileSnapshotInput['turnDiff'],
+  observedFiles: readonly string[],
   baseRoot: string,
 ): Candidate[] {
   const byPath = new Map<string, Candidate>();
@@ -253,6 +268,7 @@ function collectCandidates(
   };
 
   for (const path of declaredFiles) add(path, 'declared');
+  for (const path of observedFiles) add(path, 'observed');
   for (const path of turnDiff?.added ?? []) add(path, 'added');
   for (const path of turnDiff?.modified ?? []) add(path, 'modified');
   return [...byPath.values()]
@@ -283,8 +299,14 @@ interface BoundMessage {
  * 在**任何文件读取之前**调用；任何不一致=不登记（不挂跨项目/跨轮附件）。
  */
 function validateBoundMessage(input: GeneratedFileSnapshotInput, messageId: string): { ok: true; message: BoundMessage } | { ok: false; reason: string } {
+  const observedMode = input.mode === 'observed-unconfirmed';
+  if (observedMode) {
+    if (messageId !== `msg_observed_${input.turnId}`) {
+      return { ok: false, reason: `观察快照消息 id 不属于本轮（期望 msg_observed_${input.turnId}）` };
+    }
+  }
   const delibStageMessage = messageId.startsWith('msg_delib_');
-  if (!delibStageMessage && !messageId.startsWith(`msg_${input.turnId}_`)) {
+  if (!observedMode && !delibStageMessage && !messageId.startsWith(`msg_${input.turnId}_`)) {
     return { ok: false, reason: `回复消息 id 不属于本轮命名空间（期望 msg_${input.turnId}_… 或 msg_delib_…，实际 ${messageId}）` };
   }
   const row = input.db.prepare(
@@ -297,9 +319,23 @@ function validateBoundMessage(input: GeneratedFileSnapshotInput, messageId: stri
   if (row.project_id !== input.projectId) return { ok: false, reason: '回复消息属于其他项目' };
   if (row.conversation_id !== input.conversationId) return { ok: false, reason: '回复消息属于其他会话' };
   if (row.task_id !== input.taskId) return { ok: false, reason: '回复消息属于其他任务' };
-  if (row.author_type !== 'agent') return { ok: false, reason: '目标消息不是 agent 回复（不把文件挂到人类/系统消息上）' };
-  if (row.author_id !== input.memberId) return { ok: false, reason: '回复消息作者不是本 turn 成员' };
-  if (delibStageMessage) {
+  if (observedMode) {
+    if (row.author_type !== 'system' || row.author_id !== 'system:file-snapshot') {
+      return { ok: false, reason: '观察快照消息不是本轮受信任的系统文件卡' };
+    }
+    try {
+      const body = JSON.parse(row.body_json) as { observedFileSnapshot?: { runId?: unknown; turnId?: unknown; taskId?: unknown } };
+      if (body.observedFileSnapshot?.runId !== input.runId || body.observedFileSnapshot?.turnId !== input.turnId || body.observedFileSnapshot?.taskId !== input.taskId) {
+        return { ok: false, reason: '观察快照消息缺少匹配的 run/turn/task 身份' };
+      }
+    } catch {
+      return { ok: false, reason: '观察快照消息缺少可核验的身份' };
+    }
+  } else {
+    if (row.author_type !== 'agent') return { ok: false, reason: '目标消息不是 agent 回复（不把文件挂到人类/系统消息上）' };
+    if (row.author_id !== input.memberId) return { ok: false, reason: '回复消息作者不是本 turn 成员' };
+  }
+  if (delibStageMessage && !observedMode) {
     try {
       const body = JSON.parse(row.body_json) as { collaborationStage?: { runId?: unknown; turnId?: unknown } };
       if (body.collaborationStage?.runId !== input.runId || body.collaborationStage?.turnId !== input.turnId) {
@@ -382,6 +418,8 @@ function readUserFileControlled(
  * 绝不影响已成功的聊天/交付。
  */
 export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): SnapshotOutcome {
+  const mode = input.mode ?? 'final';
+  const observedFiles = input.observedFiles ?? [];
   const failures: SnapshotFailure[] = [];
   const skipped: string[] = [];
   const registered: SnapshotRegistered[] = [];
@@ -397,27 +435,28 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
     return { status, accessMode, registered, failures, skipped };
   };
   const hasDeclaredInput = input.declaredFiles.some((path) => path.trim().length > 0);
+  const hasVisibleInput = hasDeclaredInput || (mode === 'observed-unconfirmed' && observedFiles.some((path) => path.trim().length > 0));
 
   /** 非声明候选的失败只进审计（skipped），不打扰用户。 */
   const report = (candidate: Candidate, code: SnapshotFailureCode, message: string): void => {
-    if (candidate.declared) failures.push(failure(candidate.raw, code, message, true, candidate.evidence));
+    if (candidate.declared || mode === 'observed-unconfirmed') failures.push(failure(candidate.raw, code, message, candidate.declared, candidate.evidence));
     else skipped.push(`${candidate.raw}（${candidate.evidence.join('+')}）：${message}`);
   };
 
   // 0) 没有非空候选（无声明文件且 diff 无可登记项）——绝不产生用户可见失败提示。
-  if (!hasCandidateInput(input.declaredFiles, input.turnDiff)) return finish();
+  if (!hasCandidateInput(input.declaredFiles, input.turnDiff, observedFiles)) return finish();
 
   // 1) 审核①：绑定消息在任何文件读取前核对（跨项目/跨轮/非 agent 一律拒绝）。
   const rawMessageId = input.messageId;
   if (rawMessageId == null) {
-    const reason = '未找到本轮最终可见回复消息，文件不挂到其他回复上';
-    if (hasDeclaredInput) failures.push(failure('（本轮最终回复消息）', 'NO_BOUND_MESSAGE', reason, true));
+    const reason = mode === 'observed-unconfirmed' ? '未创建本轮受信任的观察快照消息，文件不挂到其他回复上' : '未找到本轮最终可见回复消息，文件不挂到其他回复上';
+    if (hasVisibleInput) failures.push(failure('（本轮最终回复消息）', 'NO_BOUND_MESSAGE', reason, hasDeclaredInput));
     else skipped.push(`（本轮最终回复消息）：${reason}`);
     return finish();
   }
   const binding = validateBoundMessage(input, rawMessageId);
   if (!binding.ok) {
-    if (hasDeclaredInput) failures.push(failure('（本轮最终回复消息）', 'MESSAGE_BINDING_MISMATCH', binding.reason, true));
+    if (hasVisibleInput) failures.push(failure('（本轮最终回复消息）', 'MESSAGE_BINDING_MISMATCH', binding.reason, hasDeclaredInput));
     else skipped.push(`（本轮最终回复消息）：${binding.reason}`);
     return finish();
   }
@@ -426,13 +465,13 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   // 2) 审核⑤：权限只信 worker 传入的执行时事实；不重新解释。
   if (input.access == null) {
     const reason = '本轮执行权限不可核实（任务/成员配置已变化）——不登记任何产出附件';
-    if (hasDeclaredInput) failures.push(failure('（执行权限）', 'PERMISSION_UNAVAILABLE', reason, true));
+    if (hasVisibleInput) failures.push(failure('（执行权限）', 'PERMISSION_UNAVAILABLE', reason, hasDeclaredInput));
     else skipped.push(`（执行权限）：${reason}`);
     return finish();
   }
   if (accessMode === 'readonly') {
     const reason = '本轮执行权限为只读/受限——不会把只读文件当成产出附件';
-    if (hasDeclaredInput) failures.push(failure('（执行权限）', 'PERMISSION_READONLY', reason, true));
+    if (hasVisibleInput) failures.push(failure('（执行权限）', 'PERMISSION_READONLY', reason, hasDeclaredInput));
     else skipped.push(`（执行权限）：${reason}`);
     return finish();
   }
@@ -440,7 +479,7 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   const scopeRoot = input.access.root.trim().length > 0 ? input.access.root : input.projectRoot;
   if (scopeRoot.trim().length === 0) {
     const reason = '项目根路径不可用——无法核对产出范围，不登记附件';
-    if (hasDeclaredInput) failures.push(failure('（项目根）', 'PROJECT_ROOT_UNAVAILABLE', reason, true));
+    if (hasVisibleInput) failures.push(failure('（项目根）', 'PROJECT_ROOT_UNAVAILABLE', reason, hasDeclaredInput));
     else skipped.push(`（项目根）：${reason}`);
     return finish();
   }
@@ -450,7 +489,7 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
   const baseRoot = (() => {
     try { return realpathSync.native(resolve(scopeRoot)); } catch { return resolve(scopeRoot); }
   })();
-  const candidates = collectCandidates(input.declaredFiles, input.turnDiff, baseRoot);
+  const candidates = collectCandidates(input.declaredFiles, input.turnDiff, observedFiles, baseRoot);
   if (candidates.length === 0) return finish();
   const diffPaths = new Set<string>();
   if (input.turnDiff != null) {
@@ -499,9 +538,14 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
         report(candidate, 'OUTSIDE_SCOPE', '超出本轮项目写入范围（受限权限下不读取项目外文件）');
         continue;
       }
-      const rel = normalizeRelative(relative(baseRoot, realTarget));
-      if (!diffPaths.has(diffKey(rel))) {
-        report(candidate, 'NO_WRITE_EVIDENCE', '不在本 turn 实际变更范围（无写入证据，未登记为产出）');
+      if (mode === 'final') {
+        const rel = normalizeRelative(relative(baseRoot, realTarget));
+        if (!diffPaths.has(diffKey(rel))) {
+          report(candidate, 'NO_WRITE_EVIDENCE', '不在本 turn 实际变更范围（无写入证据，未登记为产出）');
+          continue;
+        }
+      } else if (!candidate.evidence.includes('observed')) {
+        report(candidate, 'NO_WRITE_EVIDENCE', '观察快照缺少本轮 fileChange 结构证据');
         continue;
       }
     } else if (!candidate.declared && !insideRoot) {
@@ -548,6 +592,12 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
       }
     }
     const hash = sha256(bytes);
+    const unchanged = Object.entries(input.unchangedHashes ?? {}).find(([path]) =>
+      candidateKey(path, baseRoot) === candidateKey(realTarget, baseRoot))?.[1];
+    if (unchanged != null && unchanged === hash) {
+      skipped.push(`${candidate.raw}（observed）：与本轮开始前版本相同，未作为本轮产出登记`);
+      continue;
+    }
     const expected = Object.entries(input.capturedHashes ?? {}).find(([path]) => candidateKey(path, baseRoot) === candidateKey(realTarget, baseRoot))?.[1];
     if (expected != null && expected !== hash) {
       report(candidate, 'CHANGED_DURING_READ', '文件已不同于本轮保存的版本，未将后续改动挂到这条回复');
@@ -637,7 +687,7 @@ export function snapshotGeneratedFiles(input: GeneratedFileSnapshotInput): Snaps
       hash,
       revision,
       sizeBytes: bytes.length,
-      source: candidate.declared ? 'declared' : 'diff',
+      source: candidate.declared ? 'declared' : candidate.evidence.includes('observed') ? 'observed' : 'diff',
       declared: candidate.declared,
       evidence: [...candidate.evidence],
       blobPath,

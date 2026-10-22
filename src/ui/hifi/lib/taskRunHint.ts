@@ -1,7 +1,33 @@
 import type { RunStatus } from '../data/types';
+import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.ts';
+
+export interface TaskRunHint {
+  label: string;
+  detail: string;
+  tone: 'danger' | 'warning' | 'neutral' | 'info';
+  icon: string;
+}
+
+/** Queued work without an executing turn must never read as an active model. */
+export function executionBlockerHint(blocker: TaskExecutionBlocker): TaskRunHint {
+  switch (blocker.reason) {
+    case 'unknown-turn':
+      return { label: '占用未核实', icon: 'help-circle', tone: 'warning',
+        detail: blocker.note };
+    case 'member-occupied':
+      return { label: '等待成员', icon: 'clock', tone: 'neutral',
+        detail: blocker.note };
+    case 'write-root-occupied':
+      return { label: '等待写入目录', icon: 'lock', tone: 'neutral',
+        detail: blocker.note };
+    default:
+      return { label: '等待执行', icon: 'clock', tone: 'neutral', detail: blocker.note };
+  }
+}
 
 /** 主池有限投影的显示语义；任务 ACTIVE 与最近运行 FAILED 必须分开。 */
-export function taskRunHint(status: RunStatus | undefined): { label: string; detail: string; tone: 'danger' | 'warning' | 'neutral' | 'info'; icon: string } {
+export function taskRunHint(status: RunStatus | undefined, blocker?: TaskExecutionBlocker | null): TaskRunHint {
+  if (blocker != null) return executionBlockerHint(blocker);
   switch (status) {
     case 'FAILED': return { label: '运行失败', icon: 'alert-triangle', tone: 'danger', detail: '任务仍未结束；打开详情查看原因与继续入口' };
     case 'INTERRUPTED':

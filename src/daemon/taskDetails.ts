@@ -1,7 +1,9 @@
 import type { ZhongshuoDatabase } from '../persistence/db.ts';
 import type { TaskDetailEvent, TaskDetailFailure, TaskDetailMemberRun, TaskDetailRun, TaskDetailsResult, TaskHistoryParams, TaskHistoryPage } from '../contracts/taskDetails.ts';
+import type { TaskExecutionBlocker } from '../contracts/executionBlockers.ts';
 import { assessTaskRedispatchReadiness } from '../persistence/stores/recoveryGuard.ts';
 import { readCoordination } from './coordination.ts';
+import { lockDomainsOverlap } from './directoryIdentity.ts';
 
 type EventRow = { seq: number; kind: string; created_at: number; run_id: string | null; turn_id: string | null; payload_json: string };
 const eventOf = (e: EventRow): TaskDetailEvent => {
@@ -21,6 +23,219 @@ const eventOf = (e: EventRow): TaskDetailEvent => {
   };
 
 const historyCursor = (projectId: string, taskId: string, kind: string, runId: string | undefined, before: number) => Buffer.from(JSON.stringify({ projectId, taskId, kind, runId: runId ?? null, before })).toString('base64url');
+
+interface PendingOutboxRow {
+  id: number;
+  dispatch_key: string;
+  status: 'pending' | 'leased';
+  lease_until: number | null;
+  turn_id: string | null;
+}
+
+interface OccupyingTurnRow {
+  turnId: string;
+  turnStatus: string;
+  protectionState: string | null;
+  memberId: string;
+  memberName: string;
+  runId: string;
+  taskId: string;
+  taskTitle: string;
+  taskNumber: number | null;
+  rootTaskId: string;
+  rootTaskTitle: string;
+  rootTaskNumber: number | null;
+  writeRootKey: string | null;
+}
+
+function parseDispatchFacts(dispatchKey: string): { stage: string | null; runId: string | null; memberId: string | null } {
+  const delib = /^task:[^:]+:delib:(run_[^:]+):(IND|CR|ISS|CHK|SYN|RAT|RPR):([^:]+):(\d+):(?:w|c|f|IND|CR|ISS|CHK|SYN|RAT)$/.exec(dispatchKey);
+  if (delib != null) return { stage: `delib.${delib[2]!.toLowerCase()}`, runId: delib[1]!, memberId: delib[3]! };
+  return { stage: null, runId: null, memberId: null };
+}
+
+/**
+ * Project the durable reason why a task has queued work but is not executing.
+ *
+ * This query is intentionally read-only. It reports UNKNOWN / retained protection and
+ * write-root occupancy as unresolved facts; it never releases, retries or rewrites them.
+ */
+export function readExecutionBlocker(db: ZhongshuoDatabase, taskId: string): TaskExecutionBlocker | null {
+  const task = db.prepare(`SELECT t.project_id, t.owner_member_id, t.write_scope_json, p.canonical_path
+    FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?`).get(taskId) as
+    | { project_id: string; owner_member_id: string | null; write_scope_json: string; canonical_path: string }
+    | undefined;
+  if (task == null) return null;
+  const pendingWantsWrite = (() => {
+    try {
+      const scope = JSON.parse(task.write_scope_json) as { executionMode?: unknown; authorized?: unknown };
+      return scope.executionMode === 'full' || scope.authorized === true;
+    } catch {
+      return false;
+    }
+  })();
+  const active = db.prepare(`SELECT 1 FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id
+    WHERE r.task_id=? AND t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
+    LIMIT 1`).get(taskId);
+  if (active != null) return null;
+
+  const outboxRows = db.prepare(`SELECT id, dispatch_key, status, lease_until, turn_id
+    FROM outbox
+    WHERE status IN ('pending','leased')
+      AND (dispatch_key LIKE 'task:' || ? || ':%' OR dispatch_key LIKE 'dmtask:' || ? || ':%')
+    ORDER BY id`).all(taskId, taskId) as PendingOutboxRow[];
+  if (outboxRows.length === 0) return null;
+  const first = outboxRows[0]!;
+  const parsed = parseDispatchFacts(first.dispatch_key);
+  const requestedMemberId = parsed.memberId ?? task.owner_member_id;
+  const requestedMember = requestedMemberId == null
+    ? undefined
+    : db.prepare('SELECT display_name FROM project_members WHERE id=? AND project_id=?').get(requestedMemberId, task.project_id) as { display_name: string } | undefined;
+
+  const occupyingSql = `SELECT t.id AS turnId,t.status AS turnStatus,t.protection_state AS protectionState,
+      t.member_id AS memberId,pm.display_name AS memberName,t.run_id AS runId,
+      tk.id AS taskId,tk.title AS taskTitle,tk.room_task_number AS taskNumber,
+      COALESCE(root.id,tk.id) AS rootTaskId,COALESCE(root.title,tk.title) AS rootTaskTitle,
+      COALESCE(root.room_task_number,tk.room_task_number) AS rootTaskNumber,
+      (SELECT w.lock_domain FROM workspace_leases w WHERE w.owner_turn_id=t.id AND w.status!='released'
+       ORDER BY CASE w.status WHEN 'active' THEN 0 ELSE 1 END,w.epoch DESC LIMIT 1) AS writeRootKey
+    FROM agent_turns t JOIN workflow_runs r ON r.id=t.run_id JOIN tasks tk ON tk.id=r.task_id
+    LEFT JOIN tasks root ON root.id=tk.parent_task_id
+    JOIN project_members pm ON pm.id=t.member_id AND pm.project_id=tk.project_id
+    WHERE tk.id!=?`;
+  const unknownCandidates = db.prepare(`${occupyingSql}
+      AND (t.status='UNKNOWN' OR t.protection_state='retained')
+    ORDER BY CASE WHEN t.member_id=? THEN 0 ELSE 1 END,CASE WHEN t.status='UNKNOWN' THEN 0 ELSE 1 END,t.rowid DESC`)
+    .all(taskId, requestedMemberId ?? '') as OccupyingTurnRow[];
+  const unknown = unknownCandidates.find((row) => {
+    if (row.protectionState === 'released') return false;
+    if (requestedMemberId != null && row.memberId === requestedMemberId) return true;
+    return pendingWantsWrite && row.writeRootKey != null && lockDomainsOverlap(row.writeRootKey, task.canonical_path);
+  });
+  if (unknown != null) {
+    return {
+      reason: 'unknown-turn',
+      note: `待执行队列 ${outboxRows.length} 项；任务 #${unknown.rootTaskNumber ?? '?'}（${unknown.memberName}）的上一轮结果未知，当前任务不会越过这项占用自动执行。请到恢复中心核对。`,
+      pendingOutboxCount: outboxRows.length,
+      outboxId: first.id,
+      outboxStatus: first.status,
+      dispatchKey: first.dispatch_key,
+      leaseUntil: first.lease_until,
+      stage: parsed.stage,
+      runId: parsed.runId,
+      turnId: first.turn_id,
+      memberId: requestedMemberId,
+      memberName: requestedMember?.display_name ?? null,
+      blockingTaskId: unknown.taskId,
+      blockingTaskTitle: unknown.taskTitle,
+      blockingTaskNumber: unknown.taskNumber,
+      blockingRootTaskId: unknown.rootTaskId,
+      blockingRootTaskTitle: unknown.rootTaskTitle,
+      blockingRootTaskNumber: unknown.rootTaskNumber,
+      blockingMemberId: unknown.memberId,
+      blockingMemberName: unknown.memberName,
+      blockingTurnId: unknown.turnId,
+      blockingTurnStatus: unknown.turnStatus,
+      protectionState: unknown.protectionState,
+      writeRootKey: unknown.writeRootKey,
+    };
+  }
+
+  const memberBusy = requestedMemberId == null ? undefined : db.prepare(`${occupyingSql}
+      AND t.member_id=? AND t.status IN ('PENDING','DISPATCHING','RUNNING','WAITING_APPROVAL','WAITING_INPUT','STOPPING')
+    ORDER BY t.rowid DESC LIMIT 1`).get(taskId, requestedMemberId) as OccupyingTurnRow | undefined;
+  if (memberBusy != null) {
+    return {
+      reason: 'member-occupied',
+      note: `待执行队列 ${outboxRows.length} 项；${memberBusy.memberName} 正在执行任务 #${memberBusy.rootTaskNumber ?? '?'}，本任务尚未进入模型执行。`,
+      pendingOutboxCount: outboxRows.length,
+      outboxId: first.id,
+      outboxStatus: first.status,
+      dispatchKey: first.dispatch_key,
+      leaseUntil: first.lease_until,
+      stage: parsed.stage,
+      runId: parsed.runId,
+      turnId: first.turn_id,
+      memberId: requestedMemberId,
+      memberName: requestedMember?.display_name ?? null,
+      blockingTaskId: memberBusy.taskId,
+      blockingTaskTitle: memberBusy.taskTitle,
+      blockingTaskNumber: memberBusy.taskNumber,
+      blockingRootTaskId: memberBusy.rootTaskId,
+      blockingRootTaskTitle: memberBusy.rootTaskTitle,
+      blockingRootTaskNumber: memberBusy.rootTaskNumber,
+      blockingMemberId: memberBusy.memberId,
+      blockingMemberName: memberBusy.memberName,
+      blockingTurnId: memberBusy.turnId,
+      blockingTurnStatus: memberBusy.turnStatus,
+      protectionState: memberBusy.protectionState,
+      writeRootKey: memberBusy.writeRootKey,
+    };
+  }
+
+  const writeRootCandidates = pendingWantsWrite ? db.prepare(`${occupyingSql}
+      AND EXISTS(SELECT 1 FROM workspace_leases w WHERE w.owner_turn_id=t.id AND w.status!='released')
+    ORDER BY t.rowid DESC`).all(taskId) as OccupyingTurnRow[] : [];
+  const writeRoot = writeRootCandidates.find((row) =>
+    row.writeRootKey != null
+      && lockDomainsOverlap(row.writeRootKey, task.canonical_path)
+      && !(row.turnStatus === 'UNKNOWN' && row.protectionState === 'released'));
+  if (writeRoot != null) {
+    return {
+      reason: 'write-root-occupied',
+      note: `待执行队列 ${outboxRows.length} 项；同一写入目录仍由任务 #${writeRoot.rootTaskNumber ?? '?'} 占用，本任务尚未进入模型执行。`,
+      pendingOutboxCount: outboxRows.length,
+      outboxId: first.id,
+      outboxStatus: first.status,
+      dispatchKey: first.dispatch_key,
+      leaseUntil: first.lease_until,
+      stage: parsed.stage,
+      runId: parsed.runId,
+      turnId: first.turn_id,
+      memberId: requestedMemberId,
+      memberName: requestedMember?.display_name ?? null,
+      blockingTaskId: writeRoot.taskId,
+      blockingTaskTitle: writeRoot.taskTitle,
+      blockingTaskNumber: writeRoot.taskNumber,
+      blockingRootTaskId: writeRoot.rootTaskId,
+      blockingRootTaskTitle: writeRoot.rootTaskTitle,
+      blockingRootTaskNumber: writeRoot.rootTaskNumber,
+      blockingMemberId: writeRoot.memberId,
+      blockingMemberName: writeRoot.memberName,
+      blockingTurnId: writeRoot.turnId,
+      blockingTurnStatus: writeRoot.turnStatus,
+      protectionState: writeRoot.protectionState,
+      writeRootKey: writeRoot.writeRootKey,
+    };
+  }
+
+  return {
+    reason: 'queued',
+    note: `任务已进入待派发队列（${outboxRows.length} 项）；尚无执行 turn，不能据此显示为模型正在处理。`,
+    pendingOutboxCount: outboxRows.length,
+    outboxId: first.id,
+    outboxStatus: first.status,
+    dispatchKey: first.dispatch_key,
+    leaseUntil: first.lease_until,
+    stage: parsed.stage,
+    runId: parsed.runId,
+    turnId: first.turn_id,
+    memberId: requestedMemberId,
+    memberName: requestedMember?.display_name ?? null,
+    blockingTaskId: null,
+    blockingTaskTitle: null,
+    blockingTaskNumber: null,
+    blockingRootTaskId: null,
+    blockingRootTaskTitle: null,
+    blockingRootTaskNumber: null,
+    blockingMemberId: null,
+    blockingMemberName: null,
+    blockingTurnId: null,
+    blockingTurnStatus: null,
+    protectionState: null,
+    writeRootKey: null,
+  };
+}
 
 type MemberRunSelection = { run_id: string; task_id: string; coordination_run_id: string; step_key: string; role: string };
 
@@ -206,6 +421,7 @@ export function readTaskDetails(db: ZhongshuoDatabase, taskId: string, requested
     'SELECT id, kind, revision, hash FROM artifacts WHERE task_id = ? AND project_id = ? AND (conversation_id = ? OR conversation_id IS NULL) ORDER BY rowid DESC', [taskId, projectId, conversationId], 100);
   const selectedMemberRun = memberRuns.find((r) => r.id === selectedRunId);
   return {
+    executionBlocker: readExecutionBlocker(db, taskId),
     task: { id: task.id as string, projectId: task.project_id as string, conversationId: task.conversation_id as string,
       title: task.title as string, objective: task.objective as string | null, status: task.status as string,
       reviewPolicy: task.review_policy as string, revision: task.revision as number,

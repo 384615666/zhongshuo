@@ -203,6 +203,8 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
         target?: string;
         /** Short, redacted JSON summary of selected input fields. */
         argumentsSummary: string;
+        /** Project-relative paths explicitly present in a structured fileChange item. */
+        paths?: string[];
       }
     | {
         kind: 'tool.completed';
@@ -235,7 +237,22 @@ export type NormalizedRuntimeEvent = RuntimeEventBase &
         model?: string;
       }
     | { kind: 'turn.completed'; finalText?: string; structuredResult?: unknown }
-    | { kind: 'turn.failed'; code: string; message: string; retryable: boolean }
+    | {
+        kind: 'turn.failed';
+        code: string;
+        message: string;
+        retryable: boolean;
+        /**
+         * Structured proof that the provider itself emitted a terminal for the exact
+         * mapped turn. An interrupt RPC acknowledgement, transport close or a shared
+         * process liveness check must never synthesize this fact.
+         */
+        terminalEvidence?: {
+          source: 'provider-turn-completed';
+          status: 'interrupted';
+          providerTurnId: string;
+        };
+      }
     | { kind: 'process.exited'; exitCode: number | null; expected: boolean }
   );
 

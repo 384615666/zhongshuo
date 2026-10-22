@@ -18,6 +18,7 @@ import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
 import { taskRunHint } from '../lib/taskRunHint';
+import { requestRecoveryOpen } from '../lib/recovery';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
 import {
@@ -1022,6 +1023,11 @@ function RootCard({
   const thread = s.threads.find((t) => t.anchorMessageId === message.id);
   const task = thread ? taskOfThread(s, thread) : undefined;
   const run = task ? s.runs.find((r) => r.taskId === task.id) ?? task.latestRun ?? undefined : undefined;
+  const executionBlocker = thread
+    ? s.threadTasks[thread.id]?.executionBlocker
+      ?? s.roomPool[message.roomId]?.find((card) => card.threadId === thread.id)?.executionBlocker
+      ?? null
+    : null;
   const unread = thread ? unreadCount(s, thread.id) : 0;
   const replies = thread ? replyCount(s, thread.id) : 0;
   const saved = s.savedMessageRefs[message.id] === true || message.saved === true;
@@ -1065,6 +1071,7 @@ function RootCard({
         detail: n > 0 ? `${memberLabel(byId(s.members, task.ownerMemberId))} 已修改 ${n} 个文件` : '有成果等你确认',
       };
     }
+    if (executionBlocker != null) return taskRunHint(run?.status, executionBlocker);
     const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
     if (task.status === 'ACTIVE' && (run?.status === 'RUNNING' || running.length > 0)) {
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
@@ -1110,6 +1117,7 @@ function RootCard({
       return { label: '已取消', icon: 'slash', tone: 'neutral' as const, detail: '' };
     }
     // 2) 未结束任务与最近运行分列：FAILED run 下的 ACTIVE task 并非正在执行。
+    if (executionBlocker != null) return taskRunHint(run?.status, executionBlocker);
     if (run != null && run.status !== 'RUNNING') return taskRunHint(run.status);
     if (run?.status === 'RUNNING') {
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
@@ -1125,8 +1133,8 @@ function RootCard({
         ].filter(Boolean).join(' · '),
       };
     }
-    return taskRunHint(run?.status);
-  }, [task, run, s.changeSets, s.issues, s.turns, s.members, thread?.id, delivery, deliveryDetail]);
+    return taskRunHint(run?.status, executionBlocker);
+  }, [task, run, executionBlocker, s.changeSets, s.issues, s.turns, s.members, thread?.id, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
 
@@ -1271,6 +1279,12 @@ function RootCard({
       ) : null}
       {/* 主状态之外，给一句"现在发生了什么、要不要你动手" */}
       {primary?.detail ? <div className="root-next">{primary.detail}</div> : null}
+      {executionBlocker?.reason === 'unknown-turn' ? <div className="faint small">
+        <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={(event) => {
+          event.stopPropagation();
+          requestRecoveryOpen();
+        }}>打开恢复中心核对占用任务 #{executionBlocker.blockingRootTaskNumber ?? '?'} 的退出与保护状态</button>
+      </div> : null}
       {deliveryFactLine ? <div className="faint small" data-zs-delivery-fact={delivery?.status}>{deliveryFactLine}</div> : null}
       <div className="root-body"><MarkdownView text={chatAnswer(message.body,message.authorType)} /></div>
 

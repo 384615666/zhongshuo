@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskDetailsResult, TaskHistoryPage, TaskDetailEvent, TaskDetailRun } from '../../../contracts/taskDetails.ts';
 import { command } from '../bridge';
 import { RunStatusTag, TaskStatusTag } from './ui';
+import { Icon } from './Icon';
 import { fullTime, runtimeModelDisplayName, stageLabel } from '../lib/format';
+import { executionBlockerHint } from '../lib/taskRunHint';
+import { requestRecoveryOpen } from '../lib/recovery';
 import { readingPosition, saveReadingPosition } from '../data/readingPositions';
 
 // Pending transports only, not a fact cache. Returning to the same target joins its existing read.
@@ -89,6 +92,10 @@ const reviewLabel: Record<string, string> = { pending: '待验收', accepted: '�
 /** Keep task progress separate from the latest attempt's outcome. */
 export function taskRunGuidance(detail: TaskDetailsResult): string {
   const latest = detail.runs.find((r) => r.id === detail.latestRunId);
+  if (detail.executionBlocker != null) {
+    const hint = executionBlockerHint(detail.executionBlocker);
+    return `${hint.label}：${hint.detail}`;
+  }
   if (detail.task.status === 'BLOCKED') return '任务受阻。查看活动与运行诊断中的具体原因，处理成员、权限或前置条件后，再由原任务入口显式重试。';
   if (detail.task.status === 'REVIEW') return '新交付等待人工验收；在「交付与验收」核对当前版本后决定。';
   if (detail.task.status === 'DONE') return '任务已完成；历史运行与验收记录仍可查看。';
@@ -192,6 +199,7 @@ function HistoryReader({ detail, kind, runId, cursor, onSelectRun }: { detail:Ta
 
 export function TaskExtraFacts({ detail }: { detail: TaskDetailsResult }) {
   return <div className="card tight">
+    <ExecutionBlockerFacts detail={detail}/>
     <div className="section-title">任务与关联记录</div>
     {detail.coordination?<CoordinationFacts detail={detail}/>:null}
     <dl className="kv">
@@ -220,6 +228,27 @@ export function ChildTaskDetails({projectId,taskId,parentTaskId,conversationId,d
       {detail&&matches&&deliveryId&&!locatedDelivery?<div className="panel warning" role="alert">指定交付未读取到，未以最新版本代替。</div>:null}
       {detail&&matches?<>{locatedDelivery?<div className="panel info" data-zs-located-delivery={locatedDelivery.id}>已定位步骤成果 v{locatedDelivery.revision}<details><summary>交付身份</summary>{locatedDelivery.id} · {locatedDelivery.manifestHash}</details></div>:null}<div className="section-title">{detail.task.title}</div><TaskExtraFacts detail={detail}/><ActualMembers detail={detail}/><RunExtraFacts detail={detail} onSelectRun={formal.selectRun}/><DeliveryHistoryFacts detail={detail}/></>:null}
     </div>
+  </div>;
+}
+
+export function ExecutionBlockerFacts({ detail }: { detail: TaskDetailsResult }) {
+  const blocker = detail.executionBlocker;
+  if (blocker == null) return null;
+  const hint = executionBlockerHint(blocker);
+  return <div className={`panel ${blocker.reason === 'unknown-turn' ? 'warning' : 'info'}`} data-zs-execution-blocker={blocker.reason}>
+    <div className="panel-title"><Icon name={hint.icon} size={13}/> {hint.label}</div>
+    <div>{hint.detail}</div>
+    <div className="small faint" style={{marginTop:6}}>
+      待派发 {blocker.pendingOutboxCount} 项
+      {blocker.stage != null ? ` · 阶段 ${stageLabel(blocker.stage as Parameters<typeof stageLabel>[0])}` : ''}
+      {blocker.memberName != null ? ` · 目标成员 ${blocker.memberName}` : ''}
+      {blocker.blockingRootTaskNumber != null || blocker.blockingRootTaskId != null ? <> · <a href={`#task=${blocker.blockingRootTaskId ?? blocker.blockingTaskId ?? ''}`} title={blocker.blockingRootTaskTitle ?? blocker.blockingTaskTitle ?? ''}>占用任务 #{blocker.blockingRootTaskNumber ?? '?'}</a></> : ''}
+      {blocker.writeRootKey != null ? ` · 写入目录 ${blocker.writeRootKey}` : ''}
+    </div>
+    {blocker.protectionState != null ? <div className="small danger">保护状态：{blocker.protectionState}；不会自动释放或重放。</div> : null}
+    {blocker.reason === 'unknown-turn' ? <div className="small">
+      <button type="button" className="btn ghost sm" data-zs-open-recovery="1" onClick={() => requestRecoveryOpen()}>打开恢复中心核对退出与保护状态</button>
+    </div> : null}
   </div>;
 }
 
@@ -276,6 +305,7 @@ export function RunExtraFacts({ detail, onSelectRun, onRetryFailed, retryBusy = 
   const ordered = selected != null && selected.id !== detail.latestRunId
     ? [selected, ...detail.runs.filter((r) => r.id !== selected.id)] : detail.runs;
   return <div className="msg-list">
+    <ExecutionBlockerFacts detail={detail}/>
     <div className="panel info">{taskRunGuidance(detail)}</div>
     {(detail.failedRetry.available||detail.clarificationRetry?.available) && onRetryFailed ? <button className="btn sm primary" disabled={retryBusy} onClick={onRetryFailed}>{detail.clarificationRetry?.available?'按补充继续工作':detail.failedRetry.formatRepair?'修复输出格式':'继续最近失败运行'}</button> : null}
     {detail.failedRetry.available && retryBusy ? <span className="faint small">继续请求正在提交或核对，暂不重复发送。</span> : null}

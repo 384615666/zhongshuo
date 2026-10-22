@@ -211,7 +211,9 @@ export function MessageView({
         )}
       </div>
       <div className={`msg-body${isHuman ? ' is-human' : ''}`}>
-        {isSystem ? <SystemCard message={message} onRetry={onRetry} onAllowMissing={onAllowMissing} onSteer={onSteer} /> : (
+        {isSystem ? <><SystemCard message={message} onRetry={onRetry} onAllowMissing={onAllowMissing} onSteer={onSteer} />
+          <MessageFooter message={message} formalAttachments={formalAttachments} onOpenAttachment={onOpenAttachment} onOpenResource={onOpenResource} />
+        </> : (
           <>
             <div className="msg-head">
               {!isHuman && author != null ? <span className="msg-dot" aria-hidden="true" style={{ background: memberColor(author.id, author.ordinal) }} /> : null}
@@ -507,9 +509,10 @@ function MessageFooter({
   onOpenResource?: (resourceId: string, revision?: number) => void;
 }) {
   const formalIds = new Set(formalAttachments.map((attachment) => attachment.artifactId));
+  const observedSnapshot = message.authorId === 'system:file-snapshot' && message.id.startsWith('msg_observed_');
   return (
     <div className="msg-attachment-footer">
-      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} />
+      <GeneratedFiles attachments={message.formalAttachments} changes={message.fileChanges} onOpen={onOpenAttachment} nonFinal={observedSnapshot} />
       <MessageAttachments message={message} excludeIds={formalIds} onOpen={onOpenResource} />
     </div>
   );

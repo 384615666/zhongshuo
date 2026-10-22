@@ -80,6 +80,20 @@ describe('正常流（stream-json）', () => {
     const s=await adapter.openSession(openInput()),schema={type:'object',required:['answer'],properties:{answer:{type:'integer',const:4}}};await adapter.startTurn(s,{...turnInput('schema'),outputSchema:schema});const events=await collect(adapter,s,'completed');
     expect(captured[0]![captured[0]!.indexOf('--json-schema')+1]).toBe(JSON.stringify(schema));expect(events.find(e=>e.kind==='turn.completed')).toMatchObject({finalText:'{"answer":4}',structuredResult:structured});expect(events.find(e=>e.kind==='tool.completed')).toMatchObject({outcome:'success',resultRef:'tool-success'});expect(JSON.stringify(events)).not.toContain('PRIVATE_RESULT_BODY');await adapter.close(s);
   });
+  it('Write/Edit tool_use carries only the structured project-relative path for observed-file evidence',async()=>{
+    const adapter=new ClaudeCliAdapter({model:'test-model'},fakeProc([{lines:[
+      j({type:'assistant',message:{content:[{type:'tool_use',id:'write-1',name:'Write',input:{file_path:'docs/observed.md',content:'PRIVATE_BODY'}}]}}),
+      j({type:'user',message:{content:[{type:'tool_result',tool_use_id:'write-1',is_error:false,content:'ok'}]}}),
+      j({type:'result',subtype:'success',session_id:'cs_write',result:'saved'}),
+    ],exit:0}]));
+    const session=await adapter.openSession(openInput());
+    await adapter.startTurn(session,turnInput('turn_write'));
+    const events=await collect(adapter,session,'completed');
+    expect(events.find(e=>e.kind==='tool.started')).toMatchObject({toolName:'Write',paths:['docs/observed.md']});
+    expect(events.find(e=>e.kind==='tool.completed')).toMatchObject({outcome:'success'});
+    expect(JSON.stringify(events)).not.toContain('PRIVATE_BODY');
+    await adapter.close(session);
+  });
   it('init→assistant→result：turn.started 合成、消息、usage、结构化 finalText、session 绑定', async () => {
     const adapter = new ClaudeCliAdapter({ model: 'test-model' }, fakeProc([
       { lines: [j({ type: 'system', subtype: 'init', session_id: 'cs_1', model: 'test-model' })] },

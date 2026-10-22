@@ -14,6 +14,7 @@ import { getState, setAppearanceState } from './data/store';
 import { command } from './bridge';
 import { navigate, pathOf, parseQuery, useHashRoute, currentNavSeq } from './lib/router';
 import { registerNavIntent, releaseNavIntent, navIntentActive, cancelNavIntent } from './lib/navIntent';
+import { OPEN_RECOVERY_EVENT } from './lib/recovery';
 import { isExternalDeepLink } from './lib/deepLink';
 import { openExternalDeepLink, loadSidebarRooms, openSidebarRoom, type SidebarRoomSummary } from './loader';
 import { DmPage } from './DmPage';
@@ -188,6 +189,14 @@ export default function App() {
   const [recoveryOrigin, setRecoveryOrigin] = useState<'startup' | 'runtime' | null>(null);
   const [pendingWaitCount, setPendingWaitCount] = useState(0);
   const recoveryAutoShownRef = useRef(false);
+  useEffect(() => {
+    const openRecovery = (): void => {
+      setRecoveryOrigin((current) => current ?? 'runtime');
+      setRecoveryOpen(true);
+    };
+    window.addEventListener(OPEN_RECOVERY_EVENT, openRecovery);
+    return () => window.removeEventListener(OPEN_RECOVERY_EVENT, openRecovery);
+  }, []);
   /**
    * R67 P2-A（review-r66 §2P2-A 反例）：**启动来源按首次成功快照的异常实体签名固定**——
    * `startupSignatureRef` 在第一次成功 recovery.status 时记录当时全部异常实体 id（UNKNOWN

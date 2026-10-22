@@ -53,10 +53,13 @@ export function GeneratedFiles({
   attachments,
   changes,
   onOpen,
+  nonFinal = false,
 }: {
   attachments: readonly FormalAttachmentSummary[] | undefined;
   changes?: readonly MessageFileChange[];
   onOpen?: (att: FormalAttachmentSummary) => void;
+  /** Observed after an incomplete/UNKNOWN turn; readable evidence, never final delivery. */
+  nonFinal?: boolean;
 }) {
   const files = normalizeFormalAttachments(attachments);
   if (files.length === 0 && !changes?.length) return null;
@@ -93,6 +96,7 @@ export function GeneratedFiles({
             <span className="truncate">{attachment.filename}</span>
             {attachment.revision != null ? <span className="inline-file-kind">v{attachment.revision}</span> : null}
             {size != null ? <span className="inline-file-kind">{size}</span> : null}
+            {nonFinal ? <span className="inline-file-kind" data-zs-non-final-file="1">非最终</span> : null}
             <span className="inline-file-kind">{kindLabel}</span>
           </button>
         );
