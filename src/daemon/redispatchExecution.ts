@@ -9,8 +9,11 @@ export interface RedispatchExecution {
 
 /** A deliberate continue action authorizes a new configuration snapshot. It
  * neither edits historical envelopes nor adds members outside the original group. */
-export function snapshotRedispatchExecution(db: ZhongshuoDatabase, taskId: string): RedispatchExecution {
-  const task=db.prepare('SELECT project_id,room_id FROM tasks WHERE id=?').get(taskId) as {project_id:string;room_id:string|null};
+export function snapshotRedispatchExecution(db: ZhongshuoDatabase, taskId: string): RedispatchExecution|undefined {
+  const task=db.prepare('SELECT project_id,room_id,owner_member_id FROM tasks WHERE id=?').get(taskId) as {project_id:string;room_id:string|null;owner_member_id:string|null};
+  // Legacy records may have no owner. Preserve their existing continuation
+  // behavior; there is no current member configuration to freeze for them.
+  if(!task.owner_member_id)return undefined;
   const original=coordinationRoster(db,taskId);
   const members=task.room_id?coordinationRoomMembers(db,task.room_id,task.project_id,original.map(m=>m.memberId)):[];
   const roster=original.map(previous=>{
