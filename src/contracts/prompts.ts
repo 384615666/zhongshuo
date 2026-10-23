@@ -403,7 +403,8 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   lines.push(
     `最后提交内部成果对象（由程序保存，聊天只显示 answer，不显示此协议）：{"schemaVersion":"${TASK_COMPLETE_SCHEMA_VERSION}","resultKey":"${envelope.outputContract.resultKey}","responseKind":"work","answer":"最短有用、符合任务的自然回复","document":null,"changeSummary":"实际工作摘要","files":["真实涉及的文件路径"],"executedVerifications":["真实执行过的验证"],"unexecutedVerifications":[{"item":"未执行的验证","reason":"原因"}],"remainingIssues":["遗留问题"],"handoffs":[]}`,
   );
-  lines.push('严格 schema：上述字段与 document 均须出现；不需要文件时 document=null，需要时提供 {filename,purpose,markdown}，filename 必须是安全的 .md basename，purpose 说明交付用途，markdown 原样保留。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
+  lines.push('严格 schema：上述字段与 document 均须出现。已把完整业务文档写入项目文件时，files 引用真实路径，document=null 即可，不要在 document.markdown 重抄同名第二副本；未写项目文件而需要可读文档时，自主提供 {filename,purpose,markdown}。用户明确要求两个独立版本时按要求交付。filename 必须是安全的 .md basename，purpose 说明用途，markdown 原样保留。允许本轮开放的 handoffs、规划阶段 coordinationPlan，不得新增其他字段；resultKey 必须逐字使用给定值。handoffs 无请求时为空数组，不输出假交接。');
+  lines.push('用户已明确的条件与规则优先；新增假设只作建议，不缩小适用范围或降级为待确认。answer 只说本轮核验结论、实质纠正和影响交付的问题；详细复算留在已有文档。hash、字节数通常由程序保留，仅内容不一致或用户明确要求时在正文提。返工时 answer 先说本轮实际修改；核对后无需修改则简短确认，不重述整份旧方案。');
   lines.push('内部对象可包含 responseKind：普通交流、问候、澄清用 conversation，程序只保存回答，不创建工作交付；实质工作成果用 work。conversation 可记录已读材料与未进行精测的说明；程序按实际执行或写工具区分工作交付，不把看图当作修改文件。answer 始终面向用户并使用最短有用表达：按任务需要组织结论，不固定 3–5 点；关键分歧、条件、待确认不可省略。需要完整细节时才提供 document，否则不要造文件。短问候、孤立数字或“测试”直接简短回应，document=null，不自行扩成文件审计、hash、政策或输入一致性报告。普通对话不需要工具或验证，相关数组为空。工作任务说明实际结果即可，不向用户讲内部协议。');
   if (envelope.fileDiscovery != null) {
     lines.push('── 文件发现（项目范围清单，程序侧提供）──');
@@ -414,7 +415,7 @@ export function renderTurnBundle(envelope: TurnBundleEnvelope): string {
   lines.push('── 协作接口 ──');
   if(envelope.communicationContract.mentionEnabled){
     lines.push('── 可用同伴与消息交接 ──',JSON.stringify(envelope.communicationContract));
-    lines.push('需要具体交接时，在最终对象 handoffs 数组提交 {toMemberId,message,purpose}。message 是给同伴的真实请求或答复，写清任务、材料及希望得到什么；普通文本 @ 不派发。无交接时 handoffs=[]。handoffs 和 coordinationPlan 不可同时提交；复杂依赖可用 coordinationPlan。程序接受后才算已排队，排队不代表同伴已读；同伴结果会带真实来源返回本串。不要为闲聊、收到或空闲创建往返。');
+    lines.push('需要具体交接时，在最终对象 handoffs 数组提交 {toMemberId,message,purpose}。message 只传对方下一步需要的新增结论和必要证据定位，不重抄 answer 或整段复算；写清希望对方做什么。普通文本 @ 不派发。无交接时 handoffs=[]。handoffs 和 coordinationPlan 不可同时提交；复杂依赖可用 coordinationPlan。程序接受后才算已排队，排队不代表同伴已读；同伴结果会带真实来源返回本串。不要为闲聊、收到或空闲创建往返。');
   }else lines.push(`本轮不追加成员交接：${envelope.communicationContract.disabledReason}`);
   if (envelope.notes != null && envelope.notes.length > 0) {
     lines.push('── 附注 ──');
@@ -450,7 +451,7 @@ export function selectStageInstruction(input: {
 }): DomainResult<string> {
   if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.planning')return domainOk('你负责协调这条请求。简单问题直接回答；复杂工作主动读取所需上下文，并在获准名单内通过具体 handoffs 或 coordinationPlan 分工，最终汇总真实返回。实施修改交给合适的实施步骤；你的规划/审核职责不改变本轮实际 runtime 权限。无需用户逐步确认已授权动作或同伴，不向用户讲内部协议。');
   if(input.turnPurpose==='stage_work'&&input.mode==='AUTO'&&input.role==='coordinator'&&input.stage==='coordination.integration')return domainOk('你负责汇总并审核已实际返回的同伴意见和成果。保留真实作者、条件、分歧及版本，直接完成用户目标；必要修改按本轮有效权限进行，不因“整合”角色标签自行降权。本轮不再生成新计划；确需修正时完成并验证。');
-  if(input.turnPurpose==='stage_work'&&input.mode==='DIRECT'&&input.role==='executor'&&input.stage==='coordination.child')return domainOk('你在接手同伴的具体请求。先核实获准材料、实际文件与上游版本，主动完成需要的查证、命令、修改和验证；实际权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要进一步核实时使用本轮获准成员交接，不扩大目标。回复交回来源成员并回到同一串，不冒充汇总者或其他成员。');
+  if(input.turnPurpose==='stage_work'&&input.mode==='DIRECT'&&input.role==='executor'&&input.stage==='coordination.child')return domainOk('你在接手同伴的具体请求。复核全部一致时简短确认无差异并指出需更新位置；只把新增纠正或具体收口动作交回同伴，不复制 answer 或整段复算。已安排成员无需为同一原任务重复邀请，新增工作才 handoff。先核实获准材料、实际文件与上游版本，主动完成需要的查证、命令、修改和验证；实际权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要进一步核实时使用本轮获准成员交接，不扩大目标。回复交回来源成员并回到同一串，不冒充汇总者或其他成员。');
   if (input.mode === 'DIRECT' && input.role === 'executor' && (input.stage == null || input.stage === 'direct.work') && input.turnPurpose === 'stage_work') {
     return domainOk(DIRECT_EXECUTOR_INSTRUCTION);
   }
@@ -474,7 +475,7 @@ export function selectStageInstruction(input: {
 
 // ---------- DELIBERATE 阶段指令（§6；DEV-21-M1） ----------
 
-const DELIBERATE_USER_VIEW_RULE = '- 面向用户先写短 summary，只陈述本轮新增结论、纠正或下一步；未变化的既有结论不重复抄写。只有本次确有独立、可复用的方案、清单或报告价值时，才提供 document={filename,purpose,markdown}；短答、确认、状态说明或没有新增材料时 document=null，不按字数或数量强行造文件。修订已有方案时沿用合适的同名文件。互评、分歧与确认只写新增意见、问题或变化，不重抄整份方案。filename 使用有业务含义的安全 .md basename，purpose 说明用途。始终由你按任务需要自主判断是否生成文件以及必要详细程度；应用只展示和托管原文，不再二次总结。面向业务用户提到同伴时，使用输入中的角色/displayName 和具体问题描述（如“费用复核的备用采购建议”），不要让 UUID 代替自然说明；artifactId/revision/claimId 等精确定位只在结构化引用字段中保留，除非用户任务本身需要协议/代码标识。';
+const DELIBERATE_USER_VIEW_RULE = '- 用户已明确的条件与规则优先；新增假设只作建议，不缩小适用范围或降级为待确认。面向用户先写短 summary，只陈述本轮新增结论、纠正或下一步；未变化的既有结论不重复抄写。已将完整业务材料写入项目文件时，summary 指出真实文件名，document=null，无需在 document.markdown 复制；未写项目文件且本次材料有独立、可复用价值时，自主提供 document={filename,purpose,markdown}；短答、确认、状态说明或没有新增材料时 document=null，不按字数或数量强行造文件。修订已有方案时沿用合适的同名文件。互评、分歧与确认只写新增意见、问题或变化，不重抄整份方案。filename 使用有业务含义的安全 .md basename，purpose 说明用途。始终由你按任务需要自主判断是否生成文件以及必要详细程度；应用只展示和托管原文，不再二次总结。面向业务用户提到同伴时，使用输入中的角色/displayName 和具体问题描述（如“费用复核的备用采购建议”），不要让 UUID 代替自然说明；artifactId/revision/claimId 等精确定位只在结构化引用字段中保留，除非用户任务本身需要协议/代码标识。';
 
 function deliberateRatifyInstruction(role: string): string {
   const summaryRule = role === 'host'
@@ -493,8 +494,9 @@ ${DELIBERATE_USER_VIEW_RULE}
 
 const DELIBERATE_STAGE_TEMPLATES: Record<string, string> = {
   'INDEPENDENT|stage_work': `你是本任务的独立分析成员。本轮先独立完成，再提交结论：
+- 先提交关键原子判断、必要证据与建议，不提前编写整份统一定稿；统一可交付文件由 SYNTHESIS 形成。用户明确要求各人独立文件时遵从；有独立价值的材料仍可自主提供，不固定篇幅或条数。
 - 依据任务目标、获准材料和实际文件主动查证；可按有效权限运行只读命令、检查代码或验证假设。本轮不读取其他成员的独立结论。
-- 结论逐条给出 claim：区分观察到的事实（observed）、推断（inferred）与建议（proposal），附证据编号和必要的不确定性。
+- 每条 claim 只表达一个可独立核验的判断，区分事实（observed）、推断（inferred）与建议（proposal），附证据编号和必要的不确定性；不要把数量、完整性与可排期性合成一个命题。
 - 能自行解决的问题自行查证；真正需要用户决定、外部权限或缺失材料时明确写出，不用“需要更多信息”代替调查。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
@@ -502,15 +504,14 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 立场只能是 agree / disagree / needs_evidence，必须写明理由与证据编号；可给建议的验证方式。
 - 主动核对冻结材料、实际文件和可运行验证；不要只复述作者观点。发现可修正的问题直接说明证据和改法。
 - 只评审输入中列出的结论，引用时必须原样使用其 artifactId、revision 与 claimId（三元组缺一即拒绝）。
-- 只写本轮新增的同意依据、纠正、异议或下一步；已有且未变化的内容不重复抄写。
+- 完整核查，summary 只说实质变化，不逐条重述同意项。计数或笔误给出证据与更正；拆卡、分组偏好给推荐默认与备选，只有影响交付、资金安全或验收的分歧才作为实质异议。
 - 证据不足时说明需要补什么；不要因存在不同意见就无限延长评审。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'ISSUE_DISCUSSION|stage_work': `你是分歧讨论参与成员。本轮争议清单与证据版本已冻结：
-- 对每项争议给出立场（agree/disagree/needs_evidence）与理由；有新证据才填 newEvidence（证据编号须来自本轮输入）。
+- 对每项争议给出立场（agree/disagree/needs_evidence）与理由；newEvidence 必须是数组，无新证据时填 []，证据编号须来自本轮输入。
 - 主动核验当前可访问的材料与证据，能收敛的给出清楚结论；仍不明确时说明具体缺口。
 - 即使维持既有立场也须显式作答（矩阵以本轮记录为准）。
-- 只写本轮新增证据、结论变化或仍需解决的点；不重复整段原始争议或已有方案。
 - 输入若列出可复用既有业务文档，先选择内容匹配的同名文件；不同文件名只用于确属独立材料，不要仅因轮次另起相似版本。修订已有的完整正文不要抄进讨论。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
@@ -525,7 +526,6 @@ ${DELIBERATE_USER_VIEW_RULE}
 - 基于当前冻结议题与立场填写 issueResolutions：每项必须是 resolved / needs_user / insufficient_evidence；resolved 必须有本轮完整一致立场依据（agree 或 disagree），一致否定时明确记录否定/更正依据，不能覆盖混合立场或缺席；needs_user/insufficient_evidence 写清理由及必要问题/责任方。
 - 全员明确 disagree 表示一致否定旧主张或旧表述，应据此明确更正，并可在保留全部否定立场的前提下把该争议标为已处理（resolved）；更正的 claims 仍须 RAT 确认。不要把一致否定写成对原命题的同意或 confirm，也不要制造假的待确认/证据不足。
 - 不得把缺席/未回复成员记为同意。
-- 面向用户只陈述本轮相对已有方案的新增结论、纠正和下一步；修订已有方案时沿用合适的同名文件，不另起相近文件名。
 ${DELIBERATE_USER_VIEW_RULE}
 - 完成时严格按输出契约的 JSON 字段提交。`,
   'RATIFY|stage_work': deliberateRatifyInstruction('member'),

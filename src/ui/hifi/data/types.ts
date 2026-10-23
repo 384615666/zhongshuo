@@ -315,6 +315,8 @@ export interface ThreadCard {
   body: string;
   createdAt: number;
   replyCount: number;
+  /** Original latest replies from the bounded room-pool snapshot. */
+  recentReplies?: Message[];
   lastReplyAt: number | null;
   unread: number;
   muted: boolean;

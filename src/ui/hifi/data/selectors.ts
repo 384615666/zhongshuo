@@ -5,8 +5,9 @@
 
 import type {
   AppState, Message, ProjectMember, Room, Task, Thread, WorkflowRun, AgentTurn,
-  RuntimeInstallation, Artifact,
+  RuntimeInstallation, Artifact, ThreadCard,
 } from './types';
+import type { HifiState } from './store.ts';
 
 export const byId = <T extends { id: string }>(list: T[], id: string | undefined) =>
   id ? list.find((x) => x.id === id) : undefined;
@@ -115,8 +116,8 @@ export const processNotesOfThread = (s: AppState, threadId: string): Message[] =
 export const anchorOf = (s: AppState, thread: Thread) => byId(s.messages, thread.anchorMessageId);
 
 /** 未装载回复的线程 → room.pool 卡片真实聚合（R64：水合层只装根锚，回复按需装载）。 */
-function poolCardOf(s: AppState, threadId: string): { unread: number; replyCount: number } | undefined {
-  const pool = (s as import('./store').HifiState).roomPool ?? {};
+function poolCardOf(s: AppState, threadId: string): ThreadCard | undefined {
+  const pool = (s as HifiState).roomPool ?? {};
   for (const cards of Object.values(pool)) {
     const c = cards.find((x) => x.threadId === threadId);
     if (c != null) return c;
@@ -124,12 +125,12 @@ function poolCardOf(s: AppState, threadId: string): { unread: number; replyCount
   return undefined;
 }
 
-/** 回复数只统计人类与 agent 的回复；系统/工具事件不计入（TH-10）。
- *  R64：未装载回复的线程按 room.pool 卡片 replyCount（服务端真实计数）。 */
+/** Immutable replies may arrive through either snapshot; a stale cache must
+ * not lower the server total, nor may an older pool lower a newer history. */
 export function replyCount(s: AppState, threadId: string): number {
+  const card=poolCardOf(s,threadId);
   const loaded = s.messages.filter((m) => m.threadId === threadId);
-  if (loaded.length === 0) return poolCardOf(s, threadId)?.replyCount ?? 0;
-  return loaded.filter((m) => m.authorType === 'human' || m.authorType === 'agent').length;
+  return Math.max(card?.replyCount??0,loaded.filter((m) => m.authorType === 'human' || m.authorType === 'agent').length);
 }
 
 /** 主池卡片上的 2—3 条预览：线程消息的投影，不是副本（§3.4） */
@@ -137,6 +138,13 @@ export function replyPreview(s: AppState, threadId: string, limit = 3): Message[
   const list = s.messages.filter(
     (m) => m.threadId === threadId && (m.authorType === 'human' || m.authorType === 'agent'),
   );
+  const recent=poolCardOf(s,threadId)?.recentReplies;
+  if(recent!=null){
+    if(recent.length===0)return list.slice(-limit);
+    const through=Math.max(...recent.map(message=>message.threadMessageSeq??0));
+    return [...recent,...list.filter(message=>(message.threadMessageSeq??0)>through)]
+      .sort((a,b)=>(a.threadMessageSeq??0)-(b.threadMessageSeq??0)).slice(-limit);
+  }
   return list.slice(-limit);
 }
 

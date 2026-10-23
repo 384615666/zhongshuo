@@ -9,6 +9,7 @@ import type {ThreadMembersSnapshot} from '../../src/contracts/threadMembers.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
 import {successTurn,type FakeTurnScript} from '../../src/adapter/fake/script.ts';
+import {runtimeProgressWaitLabel,type ThreadVisibleProgress} from '../../src/contracts/runtimeProgress.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 async function fixture(){
@@ -28,6 +29,20 @@ async function fixture(){
 }
 
 describe('R87 durable thread participants, formal commands, zero inference',()=>{
+  it('does not borrow a long-running stage clock for a member that has never started execution',async()=>{
+    const f=await fixture();try{
+      f.db.prepare("INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,status,stage,stage_started_at) VALUES('run_not_started',?,?,?,'DIRECT','RUNNING','INDEPENDENT',?)")
+        .run(f.root.taskId,f.room.conversationId,f.root.threadId,Date.now()-17*60_000);
+      f.db.prepare("INSERT INTO agent_turns(id,run_id,conversation_id,thread_id,member_id,stage_key,status) VALUES('turn_not_started','run_not_started',?,?,?,'delib.independent','PENDING')")
+        .run(f.room.conversationId,f.root.threadId,f.ids[0]);
+      for(const status of ['PENDING','RUNNING']){
+        f.db.prepare('UPDATE agent_turns SET status=? WHERE id=?').run(status,'turn_not_started');
+        const progress=(await f.cmd<{progress:ThreadVisibleProgress[]}>('thread.get',{threadId:f.root.threadId})).progress[0]!;
+        expect(progress.executionStartedAt).toBeNull();expect(progress.waitStartedAt).toBeNull();expect(progress.lastActivityAt).toBeNull();
+        expect(runtimeProgressWaitLabel(progress)).toBe(status==='PENDING'?'等待执行席位':'准备执行');
+      }
+    }finally{f.db.close();}
+  });
   it('an explicit AI request can start in a record thread without resending its private record or duplicating the root',async()=>{
     const f=await fixture();try{
       const record=await f.cmd<{threadId:string;messageId:string}>('message.submit',{target:{kind:'room_root',projectId:f.projectId,conversationId:f.room.conversationId,roomId:f.room.id},body:'PRIVATE_RECORD_ONLY',intent:'record_only',mentions:[]});

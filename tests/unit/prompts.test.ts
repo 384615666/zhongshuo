@@ -130,8 +130,8 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
   it('R101 DELIBERATE 提示词只写新增内容、复用同名文档且不机械造文件', () => {
     const expected = new Map([
       ['INDEPENDENT', '本轮新增结论'],
-      ['CROSS_REVIEW', '只写本轮新增'],
-      ['ISSUE_DISCUSSION', '只写本轮新增证据'],
+      ['CROSS_REVIEW', '本轮新增结论'],
+      ['ISSUE_DISCUSSION', '本轮新增结论'],
       ['SYNTHESIS', '沿用合适的同名文件'],
       ['RATIFY', '不重抄整份整合稿'],
     ]);
@@ -144,6 +144,12 @@ describe('模板选择程序表（规格 §4.3/开工契约 §7）', () => {
       expect(result.value).toContain('document=null');
       expect(result.value).toContain('不按字数或数量强行造文件');
       expect(result.value).toContain('自主判断');
+      expect(result.value).toContain('不缩小适用范围或降级为待确认');
+      if(stage==='INDEPENDENT'){
+        expect(result.value).toContain('不提前编写整份统一定稿');
+        expect(result.value).toContain('统一可交付文件由 SYNTHESIS 形成');
+        expect(result.value).toContain('用户明确要求各人独立文件时遵从');
+      }
     }
   });
 
@@ -224,6 +230,40 @@ describe('TaskComplete 输出契约（规格 §4.4：版本不可变、strict）
 });
 
 describe('R97 permission header', () => {
+  it.each(['DIRECT', 'AUTO'])('R102 %s work preserves file-only, model-document and explicit two-version delivery choices', mode => {
+    const envelope = turnBundleEnvelopeSchema.parse({
+      bundleVersion: TURN_BUNDLE_VERSION, promptVersion: STANDING_PROMPT_VERSION,
+      turnId: 'turn_document', taskRevision: 1, mode,
+      stage: mode === 'AUTO' ? 'coordination.integration' : 'direct.work', turnPurpose: 'stage_work',
+      you: { memberId: 'm_a', role: mode === 'AUTO' ? 'coordinator' : 'executor' },
+      roster: [{ memberId: 'm_a', displayName: '甲', status: 'expected' }],
+      budget: { runMaxTurns: 4, usedTurns: 0, inFlightReservedTurns: 1, remainingTurns: 3,
+        tailReserved: 0, tailReservationByStage: {}, stageAvailableTurns: 3 },
+      permission: { tier: 'full_access', intent: 'modify', policyId: 'full',
+        modificationAuthorized: true, fullAccess: true, allowedWriteRoots: ['D:/demo'] },
+      task: { taskId: 'task_document', threadId: 'thread_document', objective: '修改业务方案', userConstraints: [] },
+      baseline: null, materials: [],
+      threadDigest: { rootMessageId: 'msg_document', rootText: '修改业务方案', fromSeq: 1, toSeq: 1, truncated: false, messages: [] },
+      outputContract: { kind: 'TaskComplete', submitVia: 'final-result', resultKey: 'result_document', progressAllowed: true },
+      communicationContract: { mentionEnabled: false, disabledReason: '本轮不再交接' },
+    });
+    const text = renderTurnBundle(envelope);
+    expect(text).toContain('files 引用真实路径，document=null');
+    expect(text).toContain('未写项目文件而需要可读文档时，自主提供');
+    expect(text).toContain('用户明确要求两个独立版本时按要求交付');
+    expect(text).toContain('返工时 answer 先说本轮实际修改');
+    expect(text).toContain('无需修改则简短确认');
+    expect(text).toContain('answer 只说本轮核验结论、实质纠正和影响交付的问题');
+    expect(text).toContain('仅内容不一致或用户明确要求时在正文提');
+    const handoffText = renderTurnBundle({ ...envelope, communicationContract: {
+      mentionEnabled: true, submitVia: 'final-result', maxHandoffs: 1,
+      members: [{ memberId: 'm_b', displayName: '数据复核', description: null }],
+      allowedPurposes: ['review'], replyToMemberId: null,
+    } });
+    expect(handoffText).toContain('message 只传对方下一步需要的新增结论和必要证据定位');
+    expect(handoffText).toContain('不重抄 answer 或整段复算');
+  });
+
   it('fullAccess=true 即使 effective tier=auto_edit，也显示完全访问而不是自动编辑', () => {
     const envelope = turnBundleEnvelopeSchema.parse({
       bundleVersion: TURN_BUNDLE_VERSION,

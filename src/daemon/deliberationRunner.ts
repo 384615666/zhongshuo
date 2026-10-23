@@ -1782,7 +1782,10 @@ function renderStageBody(
   const request=db.prepare(`SELECT q.message_id messageId FROM thread_reply_requests q WHERE q.run_id=?`).get(runId) as {messageId:string}|undefined;
   const requestText=request?textOfMessage(request.messageId):'';
   const review=db.prepare('SELECT revision,review_status,review_note FROM task_deliveries WHERE task_id=? ORDER BY revision DESC LIMIT 1').get(task.id) as {revision:number;review_status:string;review_note:string|null}|undefined;
-  const base = `任务：${task.title}\n目标：${task.objective ?? '（无）'}\n原始请求：${rootText}${requestText?`\n本次回复串研讨请求：${requestText}`:''}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
+  const objective=task.objective?.trim();
+  const distinctObjective=objective&&objective!==rootText.trim()?`\n目标：${objective}`:'';
+  const distinctRequest=requestText&&requestText.trim()!==rootText.trim()?`\n本次回复串研讨请求：${requestText}`:'';
+  const base = `任务：${task.title}${distinctObjective}\n原始请求：${rootText}${distinctRequest}${review?.review_status==='changes_requested'?`\n本轮明确执行返工：交付v${review.revision}，用户意见：${review.review_note??'无'}`:''}`;
   const memberNames = new Map(
     (db.prepare('SELECT id, display_name FROM project_members WHERE project_id = ?').all(task.project_id) as Array<{ id: string; display_name: string }>)
       .map((member) => [member.id, member.display_name]),

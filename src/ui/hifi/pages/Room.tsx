@@ -18,6 +18,7 @@ import { PreviewPane, PreviewReopenButton } from '../preview/PreviewPane';
 import { MarkdownView } from '../preview/MarkdownView';
 import { Avatar, EmptyState, ErrorState, Menu, MenuItem, Modal, PanelNavButton, RunStatusTag, Segmented, Tag, TaskStatusTag, anchorFromElement, memberColor } from '../components/ui';
 import { taskRunHint } from '../lib/taskRunHint';
+import { coordinationProgressHint } from '../lib/coordinationProgressHint';
 import { requestRecoveryOpen } from '../lib/recovery';
 import { useStore, toast, setState, getState, recordLocalOnly, recordWrite } from '../shell';
 import { loadRoomPool, loadThread, refreshThreadTask, retryUnknownSend, setThreadReadGate } from '../shell';
@@ -993,6 +994,10 @@ function RootCard({
       };
     }
     if (executionBlocker != null) return taskRunHint(run?.status, executionBlocker);
+    const memberProgress = (thread ? s.threadProgress[thread.id]?.items : undefined) ?? [];
+    const coordinationHint = coordinationProgressHint(task.status, run?.status,
+      memberProgress.map(item => ({ status: item.status, memberName: memberLabel(byId(s.members, item.memberId)) })), executionBlocker);
+    if (coordinationHint != null) return coordinationHint;
     const running = s.turns.filter((t) => t.threadId === thread?.id && t.status === 'RUNNING');
     if (task.status === 'ACTIVE' && (run?.status === 'RUNNING' || running.length > 0)) {
       const who = running.map((t) => memberLabel(byId(s.members, t.memberId))).filter(Boolean);
@@ -1055,7 +1060,7 @@ function RootCard({
       };
     }
     return taskRunHint(run?.status, executionBlocker);
-  }, [task, run, executionBlocker, s.changeSets, s.issues, s.turns, s.members, thread?.id, delivery, deliveryDetail]);
+  }, [task, run, executionBlocker, s.changeSets, s.issues, s.turns, s.threadProgress, s.members, thread, delivery, deliveryDetail]);
   const isDiscussion = Boolean(thread && !thread.rootTaskId);
   const absent = s.absence[thread?.id ?? ''];
 

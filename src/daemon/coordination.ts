@@ -139,6 +139,18 @@ export function explicitRecipientChild(db:ZhongshuoDatabase,childTaskId:string):
     WHERE s.child_task_id=? LIMIT 1`).get(childTaskId)!=null;
 }
 
+/** The original control result remains in storage. Prompt handoffs carry the
+ * visible answer/document plus formal delivery refs, without serializing the
+ * same internal result (including document markdown) a second time. */
+function promptHandoff(json:string|null):unknown {
+  if(json==null)return null;
+  const handoff=JSON.parse(json) as {output?:{final?:Record<string,unknown>};upstream?:Array<{final?:Record<string,unknown>}>};
+  for(const output of [handoff.output,...(handoff.upstream??[])]){
+    if(output?.final)delete output.final.runtimeControlResult;
+  }
+  return handoff;
+}
+
 export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: string, dispatchKey: string) {
   type Request={messageId:string;memberId:string;text:string;seq:number;writeScopeJson:string};
   const requestRow=(where:string,key:string)=>db.prepare(`SELECT q.message_id messageId,q.member_id memberId,json_extract(m.body_json,'$.text') text,q.input_thread_seq seq,q.write_scope_json writeScopeJson
@@ -146,17 +158,21 @@ export function coordinationDispatchContext(db: ZhongshuoDatabase, taskId: strin
   const request=requestRow('q.dispatch_key',dispatchKey);
   const child = childCoordination(db,taskId);
   if (child) {
+    if(child.handoff_json==null&&/^r\d+$/.test(child.step_key))child.handoff_json=freezeRecipientRequests(db,child.run_id,taskId);
+    const coordinator=db.prepare(`SELECT pm.display_name FROM tasks parent JOIN project_members pm ON pm.id=parent.owner_member_id
+      WHERE parent.id=?`).get(child.task_id) as {display_name:string};
     if(explicitRecipientChild(db,taskId))return{kind:'child' as const,run:child,request:undefined as Request|undefined,
-      note:`用户明确选择了你本人。直接回复用户这条原始消息；普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。围绕目标主动完成必要的查证、命令、修改和验证，实际权限以本轮输入头为准；不要替其他成员代答，也不要修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
+      note:`用户明确选择了你本人。协调成员是「${coordinator.display_name}」。本步骤 ${child.step_key}，角色 ${child.role}。统一文档默认由协调成员负责整合和写入；其他成员独立核算、检查并回传实质纠正，不分别覆盖同一份统一文档。用户指定作者、独立文件或多个版本时遵从原文；需要后继修订时走明确依赖的正式分工或交接，当前步骤已明确分派实施或修订的按该步骤和冻结上游完成。任务分工不改变实际工具权限，仍以本轮输入头为准。普通问候或提问使用 responseKind=conversation，确有实际工作结果时使用 responseKind=work。复核全部一致时，answer 简短确认无差异并指出需更新的位置；完整复算留在 executedVerifications 或已有文档。handoff 只交新增纠正或具体收口动作，不复制可见 answer。明确名单中已安排的成员无需为同一原任务重复发送 ask/review 邀请，新增工作才交接。不要替其他成员代答或修改收件人名单。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}`};
     return { kind:'child' as const, run:child, request:undefined as Request|undefined,
-      note:`你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
+      note:`协调成员是「${coordinator.display_name}」。你正在执行协调分工步骤 ${child.step_key}，角色 ${child.role}。完成本步骤需要的查证、命令、修改和验证；实际 runtime 权限以本轮输入头为准，不因分析/评审角色标签自行降权。需要同伴继续核对时使用本轮已开放的 handoffs，不扩大目标。结论作为正式工作交付提交 responseKind=work。\n冻结的上游交接：${child.handoff_json??'无前置步骤'}` };
   }
   const repair=db.prepare(`SELECT c.* FROM format_repair_workitems f JOIN agent_turns a ON a.id=f.source_turn_id
     JOIN coordination_integration_attempts i ON i.execution_run_id=a.run_id JOIN coordination_runs c ON c.run_id=i.coordination_run_id
     WHERE f.target_dispatch_key=? AND f.status IN ('pending','consumed') AND c.task_id=? AND c.state IN ('blocked','integrating')`).get(dispatchKey,taskId) as CoordinationRun|undefined;
   const integration=repair??db.prepare("SELECT * FROM coordination_runs WHERE task_id=? AND state='integrating'").get(taskId) as CoordinationRun|undefined;
   if(integration && (repair || dispatchKey===`task:${taskId}:redispatch:coord_${integration.run_id}`)) {
-    const steps=db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(integration.run_id);
+    const steps=(db.prepare(`SELECT s.step_key,s.role,s.handoff_json,t.id,t.title,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(integration.run_id) as Array<{handoff_json:string|null}>)
+      .map(step=>({...step,handoff_json:promptHandoff(step.handoff_json)}));
     const incoming=db.prepare(`SELECT h.id,h.source_member_id,h.target_member_id,h.body,h.body_hash,d.id deliveryId,d.revision,d.manifest_hash manifestHash FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id LEFT JOIN task_deliveries d ON d.run_id=a.run_id WHERE h.coordination_run_id=? AND h.child_task_id IS NULL ORDER BY h.created_at,h.id LIMIT 32`).all(integration.run_id);
     return {kind:'integration' as const,run:integration,request:requestRow('q.run_id',integration.run_id),repair:Boolean(repair),note:`整合已完成的真实成员工作。核对成果与评审，主动读取实际文件并完成用户请求所需的整合、修改与验证；保留其他成员作者身份。不再生成新计划，按本轮有效权限执行。历史版本仅代表当时材料；后继实施可能已形成新版本，评审只对其冻结输入负责。\n本轮计划：${integration.plan_json}\n步骤与版本交接：${JSON.stringify(steps)}\n同伴交回的真实消息（保留作者、消息hash和来源版本）：${JSON.stringify(incoming)}`};
   }
@@ -351,6 +367,40 @@ function finalHandoff(db: ZhongshuoDatabase, taskId: string) {
   return {...row,files:changes,final:final ? JSON.parse(final.body_json) as unknown : null};
 }
 
+/** Bind reused initial requests before dispatch, also when the paged room pump
+ * has not visited this run yet. Only persisted source versions are handed over. */
+function freezeRecipientRequests(db:ZhongshuoDatabase,runId:string,taskId:string):string|null {
+  return db.transaction(()=>{
+    const current=db.prepare('SELECT handoff_json FROM coordination_steps WHERE run_id=? AND child_task_id=?').get(runId,taskId) as {handoff_json:string|null};
+    if(current.handoff_json!=null)return current.handoff_json;
+    const requests=db.prepare(`SELECT h.id messageId,h.source_turn_id sourceTurnId,h.source_member_id sourceMemberId,
+      h.purpose,h.body message,h.body_hash bodyHash,a.run_id sourceRunId,d.id deliveryId,d.revision,d.manifest_hash manifestHash
+      FROM coordination_messages h JOIN agent_turns a ON a.id=h.source_turn_id
+      LEFT JOIN task_deliveries d ON d.run_id=a.run_id
+      WHERE h.coordination_run_id=? AND h.child_task_id=? AND h.status='accepted' AND h.target_turn_id IS NULL
+      ORDER BY h.created_at,h.id LIMIT 33`).all(runId,taskId);
+    if(!requests.length)return null;
+    if(requests.length>32)throw Error('待派发步骤的交接消息超过核验上限');
+    const run=db.prepare(`SELECT c.plan_json,c.state,c.stop_generation,t.stop_generation current_generation,t.status
+      FROM coordination_runs c JOIN tasks t ON t.id=c.task_id WHERE c.run_id=?`).get(runId) as {plan_json:string;state:string;stop_generation:number;current_generation:number;status:string};
+    if(run.state!=='running'||run.status==='CANCELLED'||run.stop_generation!==run.current_generation)throw Error('交接运行已停止或代次变化');
+    const plan=JSON.parse(run.plan_json) as CoordinationPlan;
+    const steps=db.prepare(`SELECT s.step_key,s.child_task_id,s.handoff_json,t.status FROM coordination_steps s
+      JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=?`).all(runId) as Array<{step_key:string;child_task_id:string;handoff_json:string|null;status:string}>;
+    const step=steps.find(item=>item.child_task_id===taskId)!;
+    const upstream=plan.steps.find(item=>item.key===step.step_key)!.dependsOn.map(key=>{
+      const source=steps.find(item=>item.step_key===key)!;
+      if(source.status!=='DONE'||db.prepare("SELECT 1 FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id WHERE r.task_id=? AND a.status='UNKNOWN'").get(source.child_task_id))throw Error('交接来源未完成或结果未知');
+      const saved=JSON.parse(source.handoff_json??'{}') as {output?:unknown};
+      if(!saved.output){saved.output=finalHandoff(db,source.child_task_id);db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(JSON.stringify(saved),runId,key);}
+      return saved.output;
+    }).filter(value=>value!=null);
+    const frozen=JSON.stringify({upstream,requests});
+    db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND child_task_id=?').run(frozen,runId,taskId);
+    return frozen;
+  })();
+}
+
 /** Bounded pump; serialized steps prevent concurrent full-access writers and stale read/write overlap. */
 export function pumpCoordinations(db: ZhongshuoDatabase) {
   const page=(key:string,predicate:string,limit:number)=>{
@@ -372,7 +422,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       return;
     }
     if(run.state!=='running') return;
-    const steps=db.prepare(`SELECT s.*,t.status,t.current_delivery_id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(run.run_id) as {step_key:string;child_task_id:string;status:string;handoff_json:string|null;current_delivery_id:string|null}[];
+    const steps=db.prepare(`SELECT s.*,t.status,t.current_delivery_id,t.response_kind FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE s.run_id=? ORDER BY s.rowid`).all(run.run_id) as {step_key:string;child_task_id:string;status:string;handoff_json:string|null;current_delivery_id:string|null;response_kind:string|null}[];
     for(const step of steps)if(step.status==='DONE'){
       const saved=JSON.parse(step.handoff_json??'{}') as {output?:unknown};
       if(!saved.output){step.handoff_json=JSON.stringify({...saved,output:finalHandoff(db,step.child_task_id)});db.prepare('UPDATE coordination_steps SET handoff_json=? WHERE run_id=? AND step_key=?').run(step.handoff_json,run.run_id,step.step_key);}
@@ -386,7 +436,17 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       db.prepare("UPDATE thread_reply_requests SET status='blocked',error_message=?,updated_at=? WHERE run_id=? AND status IN ('queued','running')").run(`同伴步骤「${blocked.step_key}」未完成，请查看原因后决定下一步`,Date.now(),run.run_id);
       event(db,parent,run.run_id,'coordination.blocked',{stepKey:blocked.step_key});return;
     }
+    const plan=JSON.parse(run.plan_json!) as CoordinationPlan;
+    // An accepted request may reuse an already queued, never-started explicit
+    // recipient. Freeze its new source versions before that same outbox starts.
+    for(const step of steps.filter(item=>item.handoff_json==null)){
+      if(!db.prepare("SELECT 1 FROM outbox WHERE dispatch_key=? AND status='pending' AND turn_id IS NULL").get(`task:${step.child_task_id}:initial`))continue;
+      const planned=plan.steps.find(item=>item.key===step.step_key)!;
+      if(!planned.dependsOn.every(key=>steps.find(item=>item.step_key===key)?.status==='DONE'))continue;
+      step.handoff_json=freezeRecipientRequests(db,run.run_id,step.child_task_id);
+    }
     let deferredHandoffs=false;
+    let explicitWorkReady=false;
     const explicitGroup=db.prepare('SELECT 1 FROM coordination_run_rosters WHERE run_id=?').get(run.run_id)!=null;
     if(explicitGroup&&steps.every(s=>s.status==='DONE')){
       // A reply addressed to the coordinator has no child task: it is a deferred
@@ -396,7 +456,11 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
         WHERE coordination_run_id=? AND child_task_id IS NULL AND status IN ('accepted','queued')
         ORDER BY created_at,id`).all(run.run_id) as {id:string}[];
       deferredHandoffs=deferred.length>0;
-      if(!deferredHandoffs){
+      // Formal work needs the shared result even when members did not happen to
+      // address a handoff to the owner. Conversation-only replies can end here.
+      const hasWork=steps.some(step=>step.response_kind==='work'||step.current_delivery_id!=null);
+      explicitWorkReady=hasWork;
+      if(!deferredHandoffs&&!hasWork){
         const closed=db.prepare("UPDATE coordination_runs SET state='completed',error_message=NULL WHERE run_id=? AND state='running'").run(run.run_id);
         if(closed.changes!==1)return;
         db.prepare("UPDATE workflow_runs SET status='SUCCEEDED',stage='明确收件人已全部回复' WHERE id=?").run(run.run_id);
@@ -407,7 +471,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
       }
       const used=coordinationCallsUsed(db,run.run_id),maxCalls=coordinationCallLimit(db,run.run_id);
       if(coordinationCallEnforcement(db,run.run_id)!=='disabled'&&used>=maxCalls){
-        const reason='本轮协作总调用预算已用尽；无法整合同伴交回消息';
+        const reason='本轮协作总调用预算已用尽；无法整合成员成果';
         const blockedRun=db.prepare("UPDATE coordination_runs SET state='blocked',error_message=? WHERE run_id=? AND state='running'").run(reason,run.run_id);
         if(blockedRun.changes!==1)return;
         const now=Date.now();
@@ -421,7 +485,6 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     }
     // Any dispatched unfinished child remains the sole active step, including startup and unknown windows.
     if(steps.some(s=>s.handoff_json!=null && s.status!=='DONE')) return;
-    const plan=JSON.parse(run.plan_json!) as CoordinationPlan;
     const next=plan.steps.find(p=>steps.find(s=>s.step_key===p.key)!.handoff_json==null && p.dependsOn.every(key=>steps.find(s=>s.step_key===key)!.status==='DONE'));
     if(next) {
       const step=steps.find(s=>s.step_key===next.key)!;
@@ -434,7 +497,7 @@ export function pumpCoordinations(db: ZhongshuoDatabase) {
     }
     const allDelivered=steps.every(s=>s.status==='DONE'&&s.current_delivery_id);
     const deferredReady=deferredHandoffs&&steps.every(s=>s.status==='DONE');
-    if(allDelivered||deferredReady) {
+    if(allDelivered||deferredReady||explicitWorkReady) {
       const root=(db.prepare('SELECT canonical_path FROM projects WHERE id=?').get(parent.project_id) as {canonical_path:string}).canonical_path;
       verifyHandoffFiles({files:managedHandoffFiles(db,run.run_id)},root);
       const queued=db.prepare("UPDATE coordination_runs SET state='integrating' WHERE run_id=? AND state='running' AND integration_run_id IS NULL").run(run.run_id);

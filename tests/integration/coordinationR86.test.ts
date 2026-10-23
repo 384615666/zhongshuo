@@ -86,6 +86,21 @@ async function completeDeliberationRound(f:Awaited<ReturnType<typeof fixture>>) 
 }
 
 describe('R86 formal command → persistent coordination → DIRECT child worker',()=>{
+  it('captures a DELIB project document from actual changes without a files contract or duplicate document.markdown',async()=>{
+    const f=await fixture(true);try{
+      const root=await f.send([f.a,f.b]);await f.worker.runOnce();
+      const content='# 独立必要证据\n\n按用户原文核对边界。\n';
+      await f.run([{kind:'writeFile',path:'independent-evidence.md',content},{kind:'event',event:{kind:'turn.completed',finalText:JSON.stringify({
+        schemaVersion:'analysis-draft-v1',summary:'边界核对见 independent-evidence.md。',document:null,
+        claims:[{claimId:'c1',statement:'用户已明确全额退费',kind:'observed',evidenceIds:[]}],recommendations:[],openQuestions:[],
+      })}}]);
+      const message=f.db.prepare("SELECT id,body_json FROM messages WHERE thread_id=? AND json_extract(body_json,'$.collaborationStage.stage')='INDEPENDENT'").get(root.threadId) as {id:string;body_json:string};
+      expect(JSON.parse(message.body_json).document??null).toBeNull();
+      const attachments=f.db.prepare('SELECT a.blob_path FROM message_attachments ma JOIN artifacts a ON a.id=ma.artifact_id WHERE ma.message_id=?').all(message.id) as Array<{blob_path:string}>;
+      expect(attachments).toHaveLength(1);
+      expect(readFileSync(attachments[0]!.blob_path,'utf8')).toBe(content);
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
+  });
   it('binds planning coordinationPlan detail before child tasks exist and gives the child the full tail',async()=>{
     const f=await fixture();
     try{
@@ -552,6 +567,40 @@ describe('R86 formal command → persistent coordination → DIRECT child worker
       const hashes=saved.map(s=>(JSON.parse(s.handoff_json) as {output:{files:{sha256:string}[]}}).output.files[0]!.sha256);
       expect(hashes[0]).not.toBe(hashes[1]);
     }finally{f.db.close();}
+  });
+  it.each(['dependent','unrelated','external-change'] as const)('keeps the write → review → revision chain honest: %s',async variant=>{
+    const f=await fixture();try{
+      const root=await f.send();
+      const steps=[
+        {key:'write',memberId:f.a,title:'初稿',objective:'创建统一文档',role:'implementation',dependsOn:[]},
+        {key:'review',memberId:f.b,title:'核对',objective:'检查初稿并提出纠正',role:'review',dependsOn:['write']},
+        {key:'revise',memberId:f.a,title:'后继修订',objective:'根据核对结果修订初稿',role:'implementation',dependsOn:variant==='unrelated'?[]:['review']},
+      ];
+      await f.run(output('明确初稿、复核及后继修订分工',{summary:'统一文档版本链',steps}));
+      await f.run([{kind:'writeFile',path:'decision.md',content:'# 初稿\n金额待核对'},...output('初稿完成')]);
+      await f.run(output('复核发现实际付款应含税，交回作者修订'));
+      await f.run([{kind:'writeFile',path:'decision.md',content:'# 定稿\n含税金额已更正'},...output('已按复核纠正含税金额')]);
+      if(variant==='external-change')writeFileSync(join(f.dir,'project','decision.md'),'未经交付的外部修改');
+      await f.run(output('统一交付：已核验含税金额'));
+      const coordination=f.db.prepare('SELECT state,error_message FROM coordination_runs WHERE task_id=?').get(root.taskId) as {state:string;error_message:string|null};
+      if(variant==='dependent'){
+        expect(coordination.state).toBe('completed');
+        expect(f.adapter.startTurnLog).toHaveLength(5); // plan + write + review + revise + one integration
+        expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:1});
+        expect(readFileSync(join(f.dir,'project','decision.md'),'utf8')).toContain('含税金额已更正');
+        const handoffs=f.db.prepare('SELECT step_key,handoff_json FROM coordination_steps ORDER BY rowid').all() as Array<{step_key:string;handoff_json:string}>;
+        const first=JSON.parse(handoffs.find(row=>row.step_key==='write')!.handoff_json) as {output:{id:string;files:Array<{sha256:string}>}};
+        const review=JSON.parse(handoffs.find(row=>row.step_key==='review')!.handoff_json) as {upstream:Array<{id:string}>};
+        const last=JSON.parse(handoffs.find(row=>row.step_key==='revise')!.handoff_json) as {output:{files:Array<{sha256:string}>}};
+        expect(review.upstream[0]?.id).toBe(first.output.id);
+        expect(first.output.files[0]?.sha256).not.toBe(last.output.files[0]?.sha256);
+      }else{
+        expect(coordination.state).toBe('blocked');
+        expect(coordination.error_message).toContain(variant==='unrelated'?'没有显式依赖交接':'文件字节已变化');
+        expect(f.adapter.startTurnLog).toHaveLength(4);
+        expect(f.db.prepare('SELECT count(*) n FROM task_deliveries WHERE task_id=?').get(root.taskId)).toEqual({n:0});
+      }
+    }finally{await f.adapter.closeAllSessions();f.db.close();}
   });
   it.each(['unchanged','downstream','integration'] as const)('binds review to its actual input version when final files are %s',async variant=>{
     const f=await fixture();try{

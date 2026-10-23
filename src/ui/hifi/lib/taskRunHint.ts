@@ -1,4 +1,4 @@
-import type { RunStatus } from '../data/types';
+import type { RunStatus } from '../data/types.ts';
 import type { TaskExecutionBlocker } from '../../../contracts/executionBlockers.ts';
 
 export interface TaskRunHint {

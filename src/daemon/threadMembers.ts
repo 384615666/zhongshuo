@@ -63,20 +63,20 @@ export function readThreadProgress(db:ZhongshuoDatabase,threadId:string):ThreadV
     ORDER BY a.rowid DESC LIMIT 13`).all(threadId) as Array<Omit<ThreadVisibleProgress,'waitStartedAt'|'executionStartedAt'|'lastActivityAt'|'activities'>&{execStartedAt:number|null;stageStartedAt:number|null;waitChangedAt:number|null}>;
   return rows.map(row=>{
     const activities=readTurnActivities(db,row.turnId);
-    const lastActivityAt=[row.updatedAt,row.execStartedAt,row.stageStartedAt,...activities.map(a=>a.completedAt??a.startedAt)]
+    const lastActivityAt=[row.updatedAt,row.execStartedAt,...activities.map(a=>a.completedAt??a.startedAt)]
       .reduce<number|null>((latest,at)=>at!=null&&(latest==null||at>latest)?at:latest,null);
-    const executionStartedAt=row.execStartedAt??row.stageStartedAt??null;
+    const executionStartedAt=row.execStartedAt??null;
     return {
       turnId:row.turnId,
       memberId:row.memberId,
       status:row.status,
       text:row.text,
       updatedAt:row.updatedAt,
-      phase:row.phase,
+      phase:row.execStartedAt==null?'connecting':row.phase,
       runId:row.runId,
       stage:row.stage,
       waitStartedAt:row.status==='WAITING_APPROVAL'||row.status==='WAITING_INPUT'
-        ?row.waitChangedAt??row.updatedAt??row.stageStartedAt
+        ?row.waitChangedAt??row.updatedAt??row.execStartedAt
         :executionStartedAt??row.updatedAt,
       executionStartedAt,
       lastActivityAt,
@@ -100,20 +100,20 @@ export function readDmProgress(db:ZhongshuoDatabase,conversationId:string):Threa
     ORDER BY a.rowid DESC LIMIT 13`).all(conversationId,conversationId) as Array<Omit<ThreadVisibleProgress,'waitStartedAt'|'executionStartedAt'|'lastActivityAt'|'activities'>&{execStartedAt:number|null;stageStartedAt:number|null;waitChangedAt:number|null}>;
   return rows.map(row=>{
     const activities=readTurnActivities(db,row.turnId);
-    const lastActivityAt=[row.updatedAt,row.execStartedAt,row.stageStartedAt,...activities.map(a=>a.completedAt??a.startedAt)]
+    const lastActivityAt=[row.updatedAt,row.execStartedAt,...activities.map(a=>a.completedAt??a.startedAt)]
       .reduce<number|null>((latest,at)=>at!=null&&(latest==null||at>latest)?at:latest,null);
-    const executionStartedAt=row.execStartedAt??row.stageStartedAt??null;
+    const executionStartedAt=row.execStartedAt??null;
     return {
       turnId:row.turnId,
       memberId:row.memberId,
       status:row.status,
       text:row.text,
       updatedAt:row.updatedAt,
-      phase:row.phase,
+      phase:row.execStartedAt==null?'connecting':row.phase,
       runId:row.runId,
       stage:row.stage,
       waitStartedAt:row.status==='WAITING_APPROVAL'||row.status==='WAITING_INPUT'
-        ?row.waitChangedAt??row.updatedAt??row.stageStartedAt
+        ?row.waitChangedAt??row.updatedAt??row.execStartedAt
         :executionStartedAt??row.updatedAt,
       executionStartedAt,
       lastActivityAt,

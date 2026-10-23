@@ -15,21 +15,15 @@ import { formatBytes } from '../lib/format';
 import type { FormalAttachmentSummary } from '../data/types';
 import type { MessageFileChange } from '../../../contracts/messageFileChanges.ts';
 import { MessageChangedFiles } from './MessageChangedFiles';
+import { humanFacingFile } from '../../../contracts/messageFileChanges.ts';
+import { attachmentKindLabel } from '../lib/attachmentKindLabel';
 
 /**
  * 附件 kind → 中文标签（导出共享，r55）：回复芯片与根消息（线程锚消息）独立渲染路径
  * 用同一映射——此前锚消息路径只认 code/text，PPT（幻灯）/CSV（表格→sheet_file）都
  * 显示成「文本」（用户短测 T5 确认的呈现缺陷）。
  */
-export const ATTACHMENT_KIND_LABEL: Record<string, string> = {
-  text_file: '文本', code_file: '代码', image_file: '图片', pdf_file: 'PDF',
-  docx_file: 'Word', sheet_file: '表格', slides_file: '幻灯',
-};
-
-/** 未知 kind 不裸露内部枚举（例如 unsupported_file）——统一显示「文件」。 */
-export function attachmentKindLabel(kind: string): string {
-  return ATTACHMENT_KIND_LABEL[kind] ?? '文件';
-}
+export { ATTACHMENT_KIND_LABEL, attachmentKindLabel } from '../lib/attachmentKindLabel';
 
 /** 去掉重复/无效登记：同 artifactId 只保留第一次出现；无文件名/身份的不渲染。 */
 export function normalizeFormalAttachments(attachments: readonly FormalAttachmentSummary[] | undefined): FormalAttachmentSummary[] {
@@ -72,11 +66,24 @@ export function GeneratedFiles({
     const normalizedRight = normalizedPath(right);
     return normalizedLeft != null && normalizedRight != null && normalizedLeft === normalizedRight;
   };
+  const documentMatchesChangePath = (doc: FormalAttachmentSummary, change: MessageFileChange): boolean => {
+    if (doc.sourcePath != null) return samePath(doc.sourcePath, change.path);
+    // A pathless hosted document cannot claim several same-content files. Both
+    // registered source paths and change rows participate in the ambiguity check.
+    const candidatePaths = new Set([
+      ...files.filter(file => file.document !== true && file.hash === doc.hash && file.filename === doc.filename)
+        .map(file => normalizedPath(file.sourcePath)),
+      ...(changes ?? []).filter(file => file.afterHash === doc.hash && file.displayName === doc.filename)
+        .map(file => normalizedPath(file.path)),
+    ].filter((path): path is string => path != null));
+    return candidatePaths.size === 1 && change.artifactId != null
+      && samePath(files.find(file => file.artifactId === change.artifactId)?.sourcePath, change.path);
+  };
   const changeMatchesPreferredDocument = (change: MessageFileChange, doc: FormalAttachmentSummary): boolean =>
     doc.artifactId !== change.artifactId
     && doc.hash === change.afterHash
     && doc.filename === change.displayName
-    && (samePath(doc.sourcePath, change.path) || (doc.sourcePath == null && change.artifactId != null));
+    && documentMatchesChangePath(doc, change);
   const matchedPreferredDocument = (change: MessageFileChange): boolean =>
     preferredDocuments.some((doc) => changeMatchesPreferredDocument(change, doc));
   const fileIsSupersededByPreferredDocument = (file: FormalAttachmentSummary): boolean => {
@@ -94,24 +101,42 @@ export function GeneratedFiles({
       ),
     );
   };
-  const visibleChanges = (changes ?? []).filter((change) => !matchedPreferredDocument(change));
+  // Keep real change evidence even when a versioned document owns the visible card.
+  const visibleChanges = changes ?? [];
   const visibleFiles = files.filter((file) => !fileIsSupersededByPreferredDocument(file));
   if (files.length === 0 && !changes?.length) return null;
   if (visibleFiles.length === 0 && visibleChanges.length === 0) return null;
   const linkedIds = new Set(visibleChanges.flatMap(file => file.artifactId ? [file.artifactId] : []));
   const hostedDuplicate = (file: FormalAttachmentSummary): boolean => {
+    if (file.document === true && (file.revision ?? 0) > 1) return false;
     if (file.document !== true && file.detailMarkdown !== true) return false;
     return visibleChanges.some((change) => {
       if (change.artifactId === file.artifactId || change.afterHash == null || change.afterHash !== file.hash || change.displayName !== file.filename) return false;
       const real = files.find((candidate) => candidate.artifactId === change.artifactId);
       if (real == null || real.document === true || real.detailMarkdown === true) return false;
-      return file.sourcePath == null || change.path.replaceAll('\\', '/') === file.sourcePath.replaceAll('\\', '/');
+      return documentMatchesChangePath(file, change);
     });
   };
+  const standaloneFiles = visibleFiles.filter(file => !linkedIds.has(file.artifactId) && !hostedDuplicate(file));
+  const documentFiles = standaloneFiles.filter(file => file.document === true || humanFacingFile(file.filename));
+  const preferredChanges = new Map(documentFiles.flatMap(doc => {
+    const change = visibleChanges.find(change => changeMatchesPreferredDocument(change, doc));
+    return change == null ? [] : [[doc.artifactId, change] as const];
+  }));
+  const suppressedCardIds = new Set(visibleChanges.filter(matchedPreferredDocument).map(change => change.id));
+  const cardContents = [
+    ...documentFiles.map(file => ({name: file.filename, hash: file.hash})),
+    ...visibleChanges.filter(file => file.humanFacing && file.state !== 'removed' && !suppressedCardIds.has(file.id))
+      .map(file => ({name: file.displayName, hash: file.afterHash})),
+  ];
+  // Distinguish proven different contents only; names never determine identity.
+  const distinctContentNames = new Set(cardContents.filter(file => file.hash != null && cardContents.some(other =>
+    other.name.toLowerCase() === file.name.toLowerCase() && other.hash != null && other.hash !== file.hash,
+  )).map(file => file.name.toLowerCase()));
   return (
     <div className="msg-inline-attachments" data-zs-inline-attachments="1">
-      {visibleChanges.length ? <MessageChangedFiles changes={visibleChanges} attachments={files} onOpen={onOpen}/> : null}
-      {visibleFiles.filter(file => !linkedIds.has(file.artifactId) && !hostedDuplicate(file)).map((attachment) => {
+      <MessageChangedFiles changes={visibleChanges} attachments={files} documents={documentFiles} documentChanges={preferredChanges} suppressedCardIds={suppressedCardIds} distinctContentNames={distinctContentNames} onOpen={onOpen} nonFinal={nonFinal}/>
+      {standaloneFiles.filter(file => !documentFiles.includes(file)).map((attachment) => {
         const isDocument = attachment.document === true;
         const kindLabel = isDocument ? '文档' : attachment.detailMarkdown ? '完整详情' : attachmentKindLabel(attachment.kind);
         const size = typeof attachment.sizeBytes === 'number' && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0

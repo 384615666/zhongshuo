@@ -7,8 +7,9 @@ import {openDatabase,type ZhongshuoDatabase} from '../../src/persistence/db.ts';
 import {dispatchDaemonCommand} from '../../src/daemon/commands.ts';
 import {DispatchWorker} from '../../src/daemon/dispatchWorker.ts';
 import {FakeRuntimeAdapter} from '../../src/adapter/fake/runtimeAdapter.ts';
-import {pumpCoordinations} from '../../src/daemon/coordination.ts';
+import {coordinationDispatchContext,pumpCoordinations} from '../../src/daemon/coordination.ts';
 import type {FakeTurnScript} from '../../src/adapter/fake/script.ts';
+import {acceptMemberHandoffs,validateMemberHandoffs} from '../../src/daemon/coordinationMessages.ts';
 
 afterEach(()=>vi.unstubAllEnvs());
 
@@ -61,6 +62,132 @@ async function fixture(){
 }
 
 describe('R92 coordinator handoff completion',()=>{
+  it('merges both review requests into existing frozen recipients and integrates after four real turns',async()=>{
+    const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
+    try{
+      const c=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'交付验收'})).memberId;
+      await f.cmd('member.setRuntime',{memberId:c,kind:'fake',permissionMode:'bypassPermissions'});
+      adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
+        const identity=turnIdentity(f.db,text);
+        if(identity.integration_run_id)return complete(INTEGRATION_ANSWER);
+        if(identity.owner_member_id===f.a)return complete(A_ANSWER,{handoffs:[f.b,c].map(toMemberId=>({toMemberId,purpose:'review',message:`核对你负责的限制，仅交回新增差异 ${toMemberId}`}))});
+        expect(text).toContain('核对你负责的限制，仅交回新增差异');
+        expect(text).toContain('deliveryId');expect(text).toContain('manifestHash');
+        return complete(identity.owner_member_id===f.b?B_ANSWER:C_ANSWER);
+      }});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r102-merge-both',appDataDir:f.dir});
+      const sent=await f.cmd<{taskId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},
+        body:'三位分别核算，主持统一交付。',intent:'default',mentions:[f.a,f.b,c].map(memberId=>({kind:'member',memberId})),
+      });
+      const original=f.db.prepare('SELECT child_task_id FROM coordination_steps ORDER BY rowid').all() as Array<{child_task_id:string}>;
+      const run=f.db.prepare('SELECT run_id FROM coordination_runs WHERE task_id=?').get(sent.taskId) as {run_id:string};
+      f.db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify({maxTurns:5}),run.run_id);
+      await worker.runOnce();
+      // Dispatch can bind the persisted sources even before this run's paged
+      // coordination pump has visited the newly accepted requests.
+      const reused=coordinationDispatchContext(f.db,original[1]!.child_task_id,`task:${original[1]!.child_task_id}:initial`);
+      expect(reused?.note).toContain('sourceTurnId');expect(reused?.note).toContain('manifestHash');
+      for(let i=0;i<4&&await worker.runOnce();i++){/* other originals + integration */}
+      expect(adapter.startTurnLog).toHaveLength(4);
+      expect(f.db.prepare('SELECT child_task_id FROM coordination_steps ORDER BY rowid').all()).toEqual(original);
+      expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'completed'});
+      expect(f.db.prepare("SELECT status FROM coordination_messages WHERE purpose='review' ORDER BY rowid").all()).toEqual([{status:'completed'},{status:'completed'}]);
+      expect(f.db.prepare('SELECT count(*) n FROM task_dependencies').get()).toEqual({n:2});
+      expect(f.db.prepare("SELECT count(*) n FROM domain_events WHERE kind='member.messageAccepted' AND json_extract(payload_json,'$.mergedIntoInitialStep') IS NOT NULL").get()).toEqual({n:2});
+    }finally{await adapter?.closeAllSessions();f.db.close();}
+  });
+
+  it.each(['pending','started','done','unknown','source-unknown','stopped','generation','target-generation','budget','non-roster'] as const)('validates request merging against %s facts',async variant=>{
+    const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
+    try{
+      adapter=new FakeRuntimeAdapter({turnScriptSequencer:()=>complete(A_ANSWER)});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r102-merge-guards',appDataDir:f.dir});
+      const sent=await f.cmd<{taskId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},
+        body:'两位独立检查，主持整合。',intent:'default',mentions:[f.a,f.b].map(memberId=>({kind:'member',memberId})),
+      });
+      await worker.runOnce();
+      const source=f.db.prepare('SELECT a.id turn_id,a.run_id,r.task_id FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id LIMIT 1').get() as {turn_id:string;run_id:string;task_id:string};
+      const target=f.db.prepare('SELECT id FROM tasks WHERE parent_task_id=? AND owner_member_id=?').get(sent.taskId,f.b) as {id:string};
+      const run=f.db.prepare('SELECT run_id FROM coordination_runs WHERE task_id=?').get(sent.taskId) as {run_id:string};
+      if(['started','done','unknown'].includes(variant)){
+        const existing=f.db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(run.run_id) as {plan_json:string};
+        const plan=JSON.parse(existing.plan_json) as {steps:Array<{key:string;dependsOn:string[]}>};
+        plan.steps[1]!.dependsOn=[plan.steps[0]!.key];
+        f.db.prepare('UPDATE coordination_runs SET plan_json=? WHERE run_id=?').run(JSON.stringify(plan),run.run_id);
+        f.db.prepare("INSERT INTO workflow_runs(id,task_id,conversation_id,thread_id,mode,status) SELECT 'target_run',id,conversation_id,conversation_thread_id,'DIRECT',? FROM tasks WHERE id=?")
+          .run(variant==='done'?'SUCCEEDED':variant==='unknown'?'INTERRUPTED':'RUNNING',target.id);
+        f.db.prepare("INSERT INTO agent_turns(id,run_id,conversation_id,thread_id,member_id,stage_key,status,stop_generation_snapshot) SELECT 'target_turn','target_run',conversation_id,conversation_thread_id,owner_member_id,'direct.work',?,0 FROM tasks WHERE id=?")
+          .run(variant==='done'?'SUCCEEDED':variant==='unknown'?'UNKNOWN':'RUNNING',target.id);
+        if(variant==='done')f.db.prepare("UPDATE tasks SET status='DONE' WHERE id=?").run(target.id);
+      }
+      if(variant==='stopped')await f.cmd('task.stop',{taskId:sent.taskId,targetRunId:run.run_id,expectedStopGeneration:0});
+      if(variant==='generation')f.db.prepare('UPDATE tasks SET stop_generation=1 WHERE id=?').run(source.task_id);
+      if(variant==='source-unknown')f.db.prepare("UPDATE agent_turns SET status='UNKNOWN' WHERE id=?").run(source.turn_id);
+      if(variant==='target-generation')f.db.prepare('UPDATE tasks SET stop_generation=1 WHERE id=?').run(target.id);
+      if(variant==='budget')f.db.prepare('UPDATE workflow_runs SET budget_json=? WHERE id=?').run(JSON.stringify({maxTurns:3}),run.run_id);
+      let toMemberId=f.b;
+      if(variant==='non-roster'){
+        toMemberId=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'名单外成员'})).memberId;
+        await f.cmd('member.setRuntime',{memberId:toMemberId,kind:'fake',permissionMode:'bypassPermissions'});
+      }
+      const validate=()=>validateMemberHandoffs(f.db,source.task_id,source.run_id,source.turn_id,[{toMemberId,purpose:'review',message:'新增请求：核对当前金额边界'}]);
+      if(['stopped','generation','source-unknown','budget','non-roster'].includes(variant))expect(validate).toThrow();
+      else{
+        const result=validate()!;
+        expect(result.merged[0]?.childTaskId??null).toBe(variant==='pending'?target.id:null);
+        expect(result.additions).toHaveLength(variant==='pending'?0:1);
+      }
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_messages').get()).toEqual({n:0}); // validation never consumes a request
+      if(['started','done','unknown'].includes(variant)){
+        f.db.transaction(()=>acceptMemberHandoffs(f.db,source.task_id,source.run_id,source.turn_id,[{toMemberId,purpose:'review',message:'新增请求：核对当前金额边界'}]))();
+        const saved=f.db.prepare('SELECT child_task_id,status,target_turn_id FROM coordination_messages').get() as {child_task_id:string;status:string;target_turn_id:string|null};
+        expect(saved).toMatchObject({status:'accepted',target_turn_id:null});
+        expect(saved.child_task_id).not.toBe(target.id);
+        expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:3});
+        if(variant==='unknown'){
+          pumpCoordinations(f.db);
+          expect(f.db.prepare('SELECT state FROM coordination_runs').get()).toEqual({state:'blocked'});
+        }
+      }
+      expect(adapter.startTurnLog).toHaveLength(1);
+    }finally{await adapter?.closeAllSessions();f.db.close();}
+  });
+  it.each([false,true])('integrates formal work once without a handoff, mixed conversation=%s',async(mixedConversation)=>{
+    const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
+    try{
+      adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
+        const identity=turnIdentity(f.db,text);
+        if(identity.integration_run_id!=null)return complete(INTEGRATION_ANSWER);
+        return complete(identity.owner_member_id===f.a?A_ANSWER:B_ANSWER,
+          mixedConversation&&identity.owner_member_id===f.b?{responseKind:'conversation'}:{});
+      }});
+      const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r102-work-integration',appDataDir:f.dir});
+      const sent=await f.cmd<{taskId:string;threadId:string}>('message.submit',{
+        target:{kind:'room_root',projectId:f.projectId,roomId:f.room.id,conversationId:f.room.conversationId},
+        body:'将业务要求拆分成开发需求，交付完整清单。',intent:'default',
+        mentions:[{kind:'member',memberId:f.a},{kind:'member',memberId:f.b}],
+      });
+      const child=f.db.prepare('SELECT child_task_id FROM coordination_steps WHERE run_id=(SELECT run_id FROM coordination_runs WHERE task_id=?) ORDER BY rowid LIMIT 1').get(sent.taskId) as {child_task_id:string};
+      const context=coordinationDispatchContext(f.db,child.child_task_id,`task:${child.child_task_id}:initial`);
+      expect(context?.note).toContain('协调成员是「协调者甲」');
+      expect(context?.note).toContain('统一文档默认由协调成员负责');
+      expect(context?.note).toContain('用户指定作者、独立文件或多个版本时遵从原文');
+      expect(context?.note).toContain('任务分工不改变实际工具权限');
+      await worker.runOnce();await worker.runOnce();
+      expect(f.db.prepare('SELECT status,current_delivery_id FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'ACTIVE',current_delivery_id:null});
+      for(let i=0;i<3&&await worker.runOnce();i++){/* shared integration */}
+      expect(f.db.prepare('SELECT state,integration_run_id FROM coordination_runs WHERE task_id=?').get(sent.taskId)).toMatchObject({state:'completed',integration_run_id:expect.any(String)});
+      expect(f.db.prepare('SELECT status,current_delivery_id FROM tasks WHERE id=?').get(sent.taskId)).toMatchObject({status:'DONE',current_delivery_id:expect.any(String)});
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_messages').get()).toEqual({n:0});
+      expect(f.db.prepare('SELECT count(*) n FROM agent_turns').get()).toEqual({n:3});
+      const history=await f.cmd<{items:Array<{body:{text:string}}>}>('thread.history',{threadId:sent.threadId,limit:50});
+      expect(history.items.at(-1)?.body.text).toBe(INTEGRATION_ANSWER);
+      expect(await worker.runOnce()).toBe(false);
+      expect(f.db.prepare("SELECT count(*) n FROM domain_events WHERE kind='coordination.integrationQueued'").get()).toEqual({n:1});
+    }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}
+  });
   it('injects both child complete-detail tails into the formal integration context',async()=>{
     const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
     try{
@@ -83,12 +210,16 @@ describe('R92 coordinator handoff completion',()=>{
       const handoff=f.db.prepare("SELECT target_turn_id,status FROM coordination_messages WHERE purpose='reply'").get() as {target_turn_id:string;status:string};
       expect(handoff.status).toBe('completed');
       const context=f.db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(handoff.target_turn_id) as {included_refs_json:string};
-      const envelope=JSON.parse(context.included_refs_json) as {attachments?:Array<{detail?:boolean;text?:string;ref?:string;truncated?:boolean}>};
+      const envelope=JSON.parse(context.included_refs_json) as {notes?:string[];attachments?:Array<{detail?:boolean;text?:string;ref?:string;truncated?:boolean}>};
       const details=(envelope.attachments??[]).filter((item)=>item.detail);
       expect(details).toHaveLength(2);
       expect(details.map((item)=>item.text).join('\n')).toContain('R93_CHILD_A_TAIL');
       expect(details.map((item)=>item.text).join('\n')).toContain('R93_CHILD_B_TAIL');
       expect(details.every((item)=>item.truncated===false)).toBe(true);
+      const integrationNote=envelope.notes?.find(note=>note.includes('步骤与版本交接'));
+      expect(integrationNote).toContain('manifest_hash');
+      expect(integrationNote).toContain(A_ANSWER);
+      expect(integrationNote).not.toContain('runtimeControlResult');
       expect(f.db.prepare('SELECT status FROM tasks WHERE id=?').get(sent.taskId)).toEqual({status:'DONE'});
     }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}
   });
@@ -151,13 +282,13 @@ describe('R92 coordinator handoff completion',()=>{
       expect(final).toMatchObject({authorType:'agent',authorId:f.a,body:{text:INTEGRATION_ANSWER}});
     }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}
   });
-  it('does not wake the coordinator without a handoff and does not replay completed work after restart',async()=>{
+  it('closes conversation-only replies without integration and does not replay them after restart',async()=>{
     const f=await fixture();let adapter:FakeRuntimeAdapter|undefined,restartedAdapter:FakeRuntimeAdapter|undefined;let activeDb=f.db;
     try{
       adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
         const identity=turnIdentity(f.db,text);
-        if(identity.owner_member_id===f.a)return complete(A_ANSWER);
-        if(identity.owner_member_id===f.b)return complete(B_ANSWER);
+        if(identity.owner_member_id===f.a)return complete(A_ANSWER,{responseKind:'conversation'});
+        if(identity.owner_member_id===f.b)return complete(B_ANSWER,{responseKind:'conversation'});
         throw Error('合成 fixture 不应产生协调者 turn');
       }});
       const worker=new DispatchWorker({db:f.db,adapter,leaseOwner:'r92-no-handoff',appDataDir:f.dir});
@@ -188,13 +319,14 @@ describe('R92 coordinator handoff completion',()=>{
       expect(reopened.prepare('SELECT state,integration_run_id FROM coordination_runs').get()).toEqual({state:'completed',integration_run_id:null});
     }finally{await restartedAdapter?.closeAllSessions();await adapter?.closeAllSessions();if(activeDb.open)activeDb.close();}
   });
-  it('creates and binds a formal child execution when a handoff targets a non-owner member',async()=>{
+  it('binds a request and its source version to a frozen, never-started non-owner step',async()=>{
     const f=await fixture();let adapter:FakeRuntimeAdapter|undefined;
     try{
       const c=(await f.cmd<{memberId:string}>('member.create',{projectId:f.projectId,displayName:'核对者丙'})).memberId;
       await f.cmd('member.setRuntime',{memberId:c,kind:'fake',permissionMode:'bypassPermissions'});
       adapter=new FakeRuntimeAdapter({turnScriptSequencer:({text})=>{
         const identity=turnIdentity(f.db,text);
+        if(identity.integration_run_id!=null)return complete(INTEGRATION_ANSWER);
         if(identity.owner_member_id===f.b)return complete(B_ANSWER,{handoffs:[{toMemberId:c,purpose:'ask',message:B_REPLY}]});
         if(identity.owner_member_id===f.a)return complete(A_ANSWER);
         if(identity.owner_member_id===c)return complete(C_ANSWER);
@@ -206,15 +338,18 @@ describe('R92 coordinator handoff completion',()=>{
         body:'合成短消息：请三位成员分别核对短样例。',intent:'default',
         mentions:[{kind:'member',memberId:f.a},{kind:'member',memberId:f.b},{kind:'member',memberId:c}],
       });
-      for(let i=0;i<3;i++)expect(await worker.runOnce()).toBe(true);
+      const original=f.db.prepare('SELECT t.id FROM coordination_steps s JOIN tasks t ON t.id=s.child_task_id WHERE t.parent_task_id=? AND t.owner_member_id=?').get(sent.taskId,c) as {id:string};
+      for(let i=0;i<2;i++)expect(await worker.runOnce()).toBe(true);
 
       const accepted=f.db.prepare(`SELECT id,child_task_id,target_turn_id,status FROM coordination_messages WHERE purpose='ask' AND target_member_id=?`).get(c) as
         {id:string;child_task_id:string|null;target_turn_id:string|null;status:string}|undefined;
       expect(accepted).toMatchObject({target_turn_id:null,status:'accepted'});
-      expect(accepted?.child_task_id).not.toBeNull();
+      expect(accepted?.child_task_id).toBe(original.id);
+      expect(f.db.prepare('SELECT count(*) n FROM coordination_steps').get()).toEqual({n:3});
       expect(f.db.prepare('SELECT owner_member_id,status FROM tasks WHERE id=?').get(accepted!.child_task_id)).toEqual({owner_member_id:c,status:'OPEN'});
 
       expect(await worker.runOnce()).toBe(true);
+      expect(await worker.runOnce()).toBe(true); // one shared integration after formal work
       expect(await worker.runOnce()).toBe(false);
       const settled=f.db.prepare('SELECT status,target_turn_id,child_task_id FROM coordination_messages WHERE id=?').get(accepted!.id) as
         {status:string;target_turn_id:string|null;child_task_id:string|null};
@@ -224,6 +359,8 @@ describe('R92 coordinator handoff completion',()=>{
       expect(target).toMatchObject({id:settled.target_turn_id,status:'SUCCEEDED',task_id:settled.child_task_id});
       const context=f.db.prepare('SELECT included_refs_json FROM context_bundles WHERE turn_id=?').get(settled.target_turn_id) as {included_refs_json:string};
       expect(context.included_refs_json).toContain(B_REPLY);
+      expect(context.included_refs_json).toContain('sourceTurnId');
+      expect(context.included_refs_json).toContain('manifestHash');
       expect(f.db.prepare('SELECT state FROM coordination_runs WHERE task_id=?').get(sent.taskId)).toEqual({state:'completed'});
       expect(adapter.startTurnLog).toHaveLength(4);
     }finally{await adapter?.closeAllSessions();if(f.db.open)f.db.close();}

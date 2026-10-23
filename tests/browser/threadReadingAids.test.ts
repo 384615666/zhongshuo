@@ -108,17 +108,30 @@ describe('MessageView readingAids', () => {
   });
 
   it('keeps ordinary files before the one detail card in the shared bottom footer', () => {
-    const html = render(agent('短结论。', {
+    const message = agent('短结论。', {
       formalAttachments: [
         { artifactId: 'art_gf_report', filename: '报告.txt', kind: 'text_file' },
         { artifactId: 'art_detail_complete', filename: '完整详情.md', kind: 'text_file', detailMarkdown: true },
       ],
-    }), true);
-    expect(html.match(/inline-file-chip/g)).toHaveLength(2);
+    });
+    const html = renderToStaticMarkup(createElement(MessageView, {
+      message, author: member, readingAids: true, onOpenAttachment: () => {},
+    }));
+    expect(html.match(/class="message-document-card"/g)).toHaveLength(2);
     expect(html).toContain('msg-attachment-footer');
-    expect(html.indexOf('报告.txt')).toBeLessThan(html.indexOf('完整详情.md'));
-    expect(html).toContain('inline-file-chip is-detail');
+    const footer = html.slice(html.indexOf('msg-attachment-footer'));
+    expect(footer.indexOf('data-zs-artifact-id="art_gf_report"')).toBeLessThan(footer.indexOf('data-zs-artifact-id="art_detail_complete"'));
+    for (const [id, filename] of [['art_gf_report', '报告.txt'], ['art_detail_complete', '完整详情.md']]) {
+      const button = footer.match(new RegExp(`<button[^>]*data-zs-attachment-open="${id}"[^>]*>`))?.[0];
+      expect(button).toBeDefined();
+      expect(button).toContain(`aria-label="打开 ${filename}"`);
+      expect(button).not.toContain('disabled');
+      expect(footer.match(new RegExp(`data-zs-artifact-id="${id}"`, 'g'))).toHaveLength(1);
+    }
     expect(html).toContain('完整详情');
+    expect(footer).not.toContain('查看变更');
+    const withoutOpen = render(message, true);
+    expect(withoutOpen.match(/data-zs-attachment-open="[^"]+"[^>]*disabled=""/g)).toHaveLength(2);
   });
 
   it('keeps an inline detail fallback readable after the folded prose', () => {

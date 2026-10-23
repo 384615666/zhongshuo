@@ -5056,7 +5056,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
         const attachments = messageAttachmentSummaries(deps.db, threads.map((t) => t.anchor_message_id));
         const items = [];
         for (const t of threads) {
-          const replyCount = (deps.db.prepare('SELECT count(*) c FROM messages WHERE thread_id = ?').get(t.id) as { c: number }).c;
+          const replyCount = (deps.db.prepare("SELECT count(*) c FROM messages WHERE thread_id = ? AND author_type IN ('human','agent')").get(t.id) as { c: number }).c;
+          const recentReplies=(deps.db.prepare(`SELECT id,author_type,author_id,thread_message_seq,body_json,created_at FROM messages
+            WHERE thread_id=? AND author_type IN ('human','agent') ORDER BY thread_message_seq DESC LIMIT 2`).all(t.id) as Array<{id:string;author_type:string;author_id:string;thread_message_seq:number;body_json:string;created_at:number}>)
+            .reverse().map(row=>({id:row.id,authorType:row.author_type,authorId:row.author_id,seq:row.thread_message_seq,
+              body:{text:(JSON.parse(row.body_json) as {text?:string}).text??''},createdAt:row.created_at}));
           // 静音尊重（第二十五轮四）：muted 线程未读恒 0（不进未读/通知聚合——卡片仍可见）。
           const muted = (deps.db.prepare('SELECT muted FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(t.id, deps.localUserId) as { muted: number } | undefined)?.muted === 1;
           // 线程未读（第二十三轮一：主池聚合）——agent 回复 thread_message_seq > 水位的条数。
@@ -5064,7 +5068,6 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             `SELECT count(*) c FROM messages m WHERE m.thread_id = ? AND m.author_type = 'agent' AND m.thread_message_seq > COALESCE((SELECT s.last_read_message_seq FROM thread_read_states s WHERE s.thread_id = ? AND s.viewer_id = ?), 0)`,
           ).get(t.id, t.id, deps.localUserId) as { c: number }).c;
           const followed = (deps.db.prepare('SELECT followed FROM thread_subscriptions WHERE thread_id = ? AND viewer_id = ?').get(t.id, deps.localUserId) as { followed: number } | undefined)?.followed === 1;
-          const lastReply = deps.db.prepare('SELECT created_at FROM messages WHERE thread_id = ? ORDER BY thread_message_seq DESC LIMIT 1').get(t.id) as { created_at: number } | undefined;
           items.push({
             threadId: t.id, unread, muted, followed,
             anchorMessageId: t.anchor_message_id,
@@ -5073,7 +5076,8 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             authorType: t.author_type, authorId: t.author_id,
             attachments: attachments.get(t.anchor_message_id) ?? [],
             replyCount,
-            lastReplyAt: lastReply?.created_at ?? null,
+            recentReplies,
+            lastReplyAt: recentReplies.at(-1)?.createdAt ?? null,
             taskId: t.root_task_id,
             taskStatus: t.task_status, taskResponseKind:t.task_response_kind,
             roomTaskNumber: t.room_task_number,
@@ -5085,6 +5089,11 @@ async function dispatchDaemonCommandInner(deps: DaemonCommandDeps, envelope: unk
             currentRunBudget: budgetProjection(t.latest_run_budget_json),
             delivery: deliveryFactsOfTask(deps.db, t.root_task_id ?? ''),
             executionBlocker: t.root_task_id == null ? null : readExecutionBlocker(deps.db, t.root_task_id),
+            // The cold room view needs the same factual child activity as an
+            // opened thread, without fetching each thread's history/details.
+            progress: t.root_task_id != null && ['ACTIVE','WAITING_USER'].includes(t.task_status ?? '')
+              && ['QUEUED','RUNNING','WAITING','STOPPING'].includes(t.latest_run_status ?? '')
+              ? readThreadProgress(deps.db, t.id) : [],
           });
         }
         return withCommandId({ ok: true, data: { items } });

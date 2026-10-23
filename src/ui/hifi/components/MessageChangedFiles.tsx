@@ -6,6 +6,8 @@ import {command} from '../bridge';
 import {MarkdownView} from '../preview/MarkdownView';
 import {Icon} from './Icon';
 import {Modal} from './ui';
+import {formatBytes} from '../lib/format';
+import {attachmentKindLabel} from '../lib/attachmentKindLabel';
 
 const stateLabel = {added: '新增', modified: '已更新', removed: '已删除', unknown: '相关文件'};
 
@@ -29,10 +31,20 @@ export function attachmentForChange(
   return candidates.find((att) => att.document !== true && att.detailMarkdown !== true) ?? candidates[0];
 }
 
-export function MessageChangedFiles({changes, attachments, onOpen}: {
+/** Only a captured added/modified/removed state establishes a real comparison. */
+export function hasFileDiff(file: MessageFileChange): boolean {
+  return file.changeSetId != null && file.state !== 'unknown';
+}
+
+export function MessageChangedFiles({changes, attachments, documents = [], documentChanges, suppressedCardIds, distinctContentNames, onOpen, nonFinal = false}: {
   changes: readonly MessageFileChange[];
   attachments: readonly FormalAttachmentSummary[];
   onOpen?: (attachment: FormalAttachmentSummary) => void;
+  documents?: readonly FormalAttachmentSummary[];
+  documentChanges?: ReadonlyMap<string, MessageFileChange>;
+  suppressedCardIds?: ReadonlySet<string>;
+  distinctContentNames?: ReadonlySet<string>;
+  nonFinal?: boolean;
 }) {
   const [selected, setSelected] = useState<{file: MessageFileChange; mode: 'content' | 'diff'} | null>(null);
   const [snapshot, setSnapshot] = useState<ChangeSnapshot | null>(null);
@@ -46,7 +58,7 @@ export function MessageChangedFiles({changes, attachments, onOpen}: {
       .then(value => {if (alive) setSnapshot(value);}, reason => {if (alive) setError(reason instanceof Error ? reason.message : String(reason));});
     return () => {alive = false;};
   }, [selected]);
-  if (!changes.length) return null;
+  if (!changes.length && !documents.length) return null;
   const findAttachment = (file: MessageFileChange): FormalAttachmentSummary | undefined => attachmentForChange(file, attachments);
   const open = (file: MessageFileChange): void => {
     const att = findAttachment(file);
@@ -54,26 +66,51 @@ export function MessageChangedFiles({changes, attachments, onOpen}: {
   };
   const counts = (file: MessageFileChange) => file.addedLines != null && file.removedLines != null
     ? <span className="file-change-counts"><span>+{file.addedLines}</span> <span>−{file.removedLines}</span></span> : null;
+  const sourceNote = (attachment?: FormalAttachmentSummary, file?: MessageFileChange) => {
+    const name = attachment?.filename ?? file?.displayName;
+    if (name == null || !distinctContentNames?.has(name.toLowerCase())) return null;
+    const hosted = attachment?.document === true || attachment?.detailMarkdown === true;
+    const path = hosted ? undefined : attachment?.sourcePath ?? file?.path;
+    return <span className="small faint" data-zs-file-source={hosted ? 'reply' : path ? 'project' : 'attachment'}>
+      {hosted ? '回复附稿' : path ? `项目文件 · ${path}` : '文件附件'}
+    </span>;
+  };
   return <>
     <div className="message-document-cards">
-      {changes.filter(file => file.humanFacing && file.state !== 'removed').map(file => <div className="message-document-card" key={file.id} data-zs-document-change={file.id}>
+      {documents.map(attachment => {
+        const change = documentChanges?.get(attachment.artifactId);
+        return <div className="message-document-card" key={attachment.artifactId} data-zs-artifact-id={attachment.artifactId} data-zs-document={attachment.document ? '1' : undefined}>
+          <Icon name={attachment.kind === 'image_file' ? 'image' : 'file-text'} size={20}/>
+          <div className="message-document-description"><strong title={attachment.sourcePath ?? attachment.filename}>{attachment.filename}</strong>
+            <span className="small faint">{attachment.document ? '文档 · ' : attachment.detailMarkdown ? '完整详情 · ' : ''}{attachmentKindLabel(attachment.kind)}{attachment.revision != null ? ` · v${attachment.revision}` : ''}{attachment.sizeBytes != null && Number.isFinite(attachment.sizeBytes) && attachment.sizeBytes > 0 ? ` · ${formatBytes(attachment.sizeBytes)}` : ''}{change ? ` · ${stateLabel[change.state]}` : ''}</span>
+            {sourceNote(attachment, change)}
+            {attachment.purpose ? <span className="small faint">{attachment.purpose}</span> : null}
+            {nonFinal ? <span className="small faint" data-zs-non-final-file="1">非最终</span> : null}
+          </div>
+          <button type="button" className="btn sm" data-zs-attachment-open={attachment.artifactId} aria-label={`打开 ${attachment.filename}`} disabled={!onOpen} onClick={() => onOpen?.(attachment)}>打开</button>
+          {change && hasFileDiff(change) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file: change, mode: 'diff'})}>查看变更</button> : null}
+        </div>;
+      })}
+      {changes.filter(file => file.humanFacing && file.state !== 'removed' && !suppressedCardIds?.has(file.id)).map(file => <div className="message-document-card" key={file.id} data-zs-document-change={file.id} data-zs-artifact-id={findAttachment(file)?.artifactId}>
         <Icon name="file-text" size={20}/>
         <div className="message-document-description"><strong title={file.path}>{file.displayName}</strong>
-          <span className="small faint">{stateLabel[file.state]}{file.revision != null ? ` · v${file.revision}` : ''}{file.executionStatus !== 'SUCCEEDED' ? ' · 尚未完成交付' : ''}</span>
+          <span className="small faint">{stateLabel[file.state]} · {attachmentKindLabel(findAttachment(file)?.kind ?? '')}{file.revision != null ? ` · v${file.revision}` : ''}{file.executionStatus !== 'SUCCEEDED' ? ' · 尚未完成交付' : ''}</span>
+          {sourceNote(findAttachment(file), file)}
+          {nonFinal ? <span className="small faint" data-zs-non-final-file="1">非最终</span> : null}
         </div>
         <button type="button" className="btn sm" data-zs-change-open={file.id} data-zs-change-artifact-id={file.artifactId ?? ''} disabled={findAttachment(file) == null && !file.changeSetId} onClick={() => open(file)}>打开</button>
-        {file.changeSetId ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
+        {hasFileDiff(file) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
       </div>)}
     </div>
-    <details className="message-file-changes" data-zs-file-changes="1">
+    {changes.length ? <details className="message-file-changes" data-zs-file-changes="1">
       <summary>{changes.length} 个文件涉及本轮工作</summary>
       <div className="message-file-change-list">{changes.map(file => <div className="message-file-change-row" key={file.id} data-zs-change-path={file.path}>
         <div className="message-document-description"><span title={file.path}>{file.path}</span><span className="small faint">{stateLabel[file.state]}</span></div>
         {counts(file)}
         {findAttachment(file) && file.state !== 'removed' ? <button type="button" className="btn ghost sm" onClick={() => open(file)}>打开</button> : null}
-        {file.changeSetId ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
+        {hasFileDiff(file) ? <button type="button" className="btn ghost sm" onClick={() => setSelected({file, mode: 'diff'})}>查看变更</button> : null}
       </div>)}</div>
-    </details>
+    </details> : null}
     {selected ? <Modal title={`${selected.file.displayName} · ${selected.mode === 'diff' ? '查看变更' : '文件内容'}`} size="xl" onClose={() => setSelected(null)}>
       {error ? <div role="alert">读取失败：{error}</div> : !snapshot ? <div>正在读取这次保存的文件版本…</div> : selected.mode === 'content' ? <>
         {snapshot.content?.after.text != null ? <MarkdownView text={snapshot.content.after.text}/> : <div>{snapshot.content?.after.reason ?? '这份文件没有可预览的文本快照，可查看变更记录。'}</div>}

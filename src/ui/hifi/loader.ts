@@ -29,7 +29,7 @@ interface ProjectOpenData { project: { id: string; displayName: string; revision
 interface RegistryItem { id: string; displayName: string; rootPath: string; canonicalPath: string; directoryIdentity: string; status: string; revision: number; description: string | null; taskReviewEnabled: boolean; createdAt: number }
 interface RoomListData { items: Array<{ id: string; name: string; conversationId: string; coordinatorMemberId?: string | null; archived?: boolean; archivedAt?: number | null; description?: string | null; revision?: number }> }
 interface RoomMembersData { items: Array<{ id: string; displayName: string; principalType: string; enabled: boolean;description?:string;revision?:number }> }
-interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
+interface PoolData { items: Array<{ threadId: string; anchorMessageId?: string; taskId?: string | null; taskStatus?: string | null; taskResponseKind?:'conversation'|'work'|null; taskTitle?: string | null; roomTaskNumber?: number | null; taskObjective?: string | null; taskReviewPolicy?: Task['reviewPolicy'] | null; taskRevision?: number | null; taskMode?: Task['mode'] | null; ownerMemberId?: string | null; latestRun?: Task['latestRun']; nextInputBudget?: {maxTurns:number}|null; currentRunBudget?: CurrentRunBudget|null; delivery?: DeliveryFact|null; executionBlocker?: TaskExecutionBlocker|null; progress?: ThreadVisibleProgress[]; recentReplies?: ThreadHistoryItem[]; authorType?: Message['authorType']; authorId?: string; attachments?: Array<{ artifactId: string; filename: string; kind: string; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: { text?: string; document?: unknown; delivery?: unknown }; createdAt?: number; replyCount?: number; lastReplyAt?: number | null; unread?: number; muted?: boolean; followed?: boolean }> }
 interface ConvListData { conversations: Array<{ conversationId: string; peerDisplayName?: string; title?: string | null; unread?: number; execState?: string; archivedAt?: number | null; lastMessagePreview?: string | null; projectId?: string; revision?: number; activeTaskId?: string | null; activeRunId?: string | null; activeStopGeneration?: number; interruptedTasks?: Array<{ taskId: string; title: string; taskRevision?: number; stopGeneration?: number; lastRunStatus: string | null; lastRunId: string | null; recoverable: boolean; blockReason: string | null; formatRepair?: boolean }>; pendingReview?: { taskId: string; deliveryId: string; revision: number; manifestHash: string } | null; reworkPending?: { taskId: string; deliveryId: string; deliveryRevision: number; manifestHash: string; sourceRunId: string; note: string | null; queued: boolean } | null; queuedCount?: number; stopPending?: boolean }> }
 export interface HistoryMessage { id: string; createdAt?: number; created_at?: number; authorType?: string; author_type?: string; authorId?: string; author_id?: string; bodyJson?: string; body_json?: string; conversationSeq?: number; conversation_seq?: number; attachments?: Array<{ artifactId: string; filename: string; kind: string; sizeBytes?: number; detailMarkdown?: boolean; document?: boolean; purpose?: string }>; body?: unknown }
 interface HistoryData { messages: HistoryMessage[]; progress?: ThreadVisibleProgress[] }
@@ -1012,6 +1012,7 @@ let rootReadTicket = 0;
 const rootTickets = new Map<string, number>();
 const poolTickets = new Map<string, number>();
 const threadTickets = new Map<string, number>();
+const progressTickets = new Map<string, number>();
 
 export async function loadRoomPool(roomId: string): Promise<void> {
   const ticket = ++rootReadTicket;
@@ -1038,11 +1039,18 @@ export async function loadRoomPool(roomId: string): Promise<void> {
       body: it.body?.text ?? '', createdAt: it.createdAt ?? 0,
       authorType: it.authorType, authorId: it.authorId, formalAttachments: it.attachments,
       replyCount: it.replyCount ?? 0, lastReplyAt: it.lastReplyAt ?? null,
+      recentReplies: it.recentReplies?.map(reply=>msgOfReply(projectId,roomId,it.threadId,reply)),
       unread: it.unread ?? 0, muted: it.muted === true, followed: it.followed === true,
     }));
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[roomId];
-      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, readErrors: errors };
+      const threadProgress = { ...prev.threadProgress };
+      for (const item of data.items ?? []) {
+        if (item.progress == null || (progressTickets.get(item.threadId) ?? 0) > ticket) continue;
+        progressTickets.set(item.threadId, ticket);
+        threadProgress[item.threadId] = { items: item.progress, readAt: Date.now() };
+      }
+      return { ...prev, roomPool: { ...prev.roomPool, [roomId]: cards }, threadProgress, readErrors: errors };
     });
     hydrateRoomFromPool(getState(), projectId, roomId, cards, ticket);
   } catch (e) {
@@ -1241,6 +1249,8 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
     };
     setState((prev) => {
       const errors = { ...prev.readErrors }; delete errors[`thread:${threadId}`];
+      const updateProgress = got.progress != null && (progressTickets.get(threadId) ?? 0) <= ticket;
+      if (updateProgress) progressTickets.set(threadId, ticket);
       return {
         ...prev,
         threadEntities: { ...prev.threadEntities, [threadId]: thread },
@@ -1248,7 +1258,7 @@ export async function loadThread(threadId: string, opts: { markRead?: boolean } 
           ? prev.messages.find((m) => m.id === anchor.id) ?? prev.threadAnchors[threadId] ?? anchor : anchor },
         threadReadSeq: { ...prev.threadReadSeq, [threadId]: got.lastReadSeq },
         ...(got.members?{threadMemberships:{...prev.threadMemberships,[threadId]:got.members},followers:{...prev.followers,[threadId]:got.members.memberIds}}:{}),
-        ...(got.progress?{threadProgress:{...prev.threadProgress,[threadId]:{items:got.progress,readAt:Date.now()}}}:{}),
+        ...(updateProgress ? {threadProgress:{...prev.threadProgress,[threadId]:{items:got.progress!,readAt:Date.now()}}} : {}),
         readErrors: errors,
       };
     });

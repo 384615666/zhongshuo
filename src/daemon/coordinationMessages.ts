@@ -61,10 +61,18 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   if(hasPlan)throw Error('同一结果不能同时提出分工计划和消息交接');
   const context=sourceContext(db,taskId,runId);
   if(!context||context.phase==='integration')throw Error('本轮没有开放追加成员消息');
-  const source=db.prepare('SELECT member_id FROM agent_turns WHERE id=? AND run_id=?').get(turnId,runId) as {member_id:string}|undefined;
+  const source=db.prepare(`SELECT a.member_id,a.status,a.stop_generation_snapshot,t.stop_generation
+    FROM agent_turns a JOIN workflow_runs r ON r.id=a.run_id JOIN tasks t ON t.id=r.task_id
+    WHERE a.id=? AND a.run_id=? AND t.id=?`).get(turnId,runId,taskId) as {member_id:string;status:string;stop_generation_snapshot:number;stop_generation:number}|undefined;
   if(!source)throw Error('发件执行身份不存在');
+  const live=db.prepare(`SELECT c.state,c.stop_generation,t.stop_generation current_generation,t.status
+    FROM coordination_runs c JOIN tasks t ON t.id=c.task_id WHERE c.run_id=?`).get(context.rootRunId) as {state:string;stop_generation:number;current_generation:number;status:string};
+  if(!['planning','running'].includes(live.state)||live.status==='CANCELLED'||live.stop_generation!==live.current_generation
+    ||!['RUNNING','SUCCEEDED'].includes(source.status)||source.stop_generation_snapshot!==source.stop_generation)
+    throw Error('交接来源已停止、代次变化或结果待核实；未追加消息');
+  const explicitRun=db.prepare('SELECT 1 FROM coordination_run_rosters WHERE run_id=?').get(context.rootRunId)!=null;
   const plannedTargets=new Set<string>();
-  if(context.phase==='child'&&context.child){
+  if(context.phase==='child'&&context.child&&!explicitRun){
     const planned=db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(context.rootRunId) as {plan_json:string}|undefined;
     if(planned){
       const plan=JSON.parse(planned.plan_json) as CoordinationPlan;
@@ -74,7 +82,7 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
   const effectiveMessages=messages.filter(message=>!plannedTargets.has(message.toMemberId));
   const ignored=(list:readonly MemberHandoff[])=>list.map(message=>({toMemberId:message.toMemberId,purpose:message.purpose,bodyHash:hash(message.message)}));
   const ignoredMessages=ignored(messages.filter(message=>plannedTargets.has(message.toMemberId)));
-  if(effectiveMessages.length===0)return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred:[],additions:[],plan:null};
+  if(effectiveMessages.length===0)return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred:[],merged:[],additions:[],plan:null};
   if(effectiveMessages.length>4)throw Error('单轮最多交接4条具体消息');
   const seen=new Set<string>();
   const inboundReplySource=(db.prepare('SELECT source_member_id FROM coordination_messages WHERE child_task_id=?').get(taskId) as {source_member_id:string}|undefined)?.source_member_id;
@@ -94,16 +102,29 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
     if(message.purpose==='implement'&&!access.modificationAuthorized)throw Error('不能把实施工作交给未获写权限的成员');
   }
   const deferred=effectiveMessages.map(m=>context.phase==='child'&&m.purpose==='reply'&&m.toMemberId===context.parent.owner_member_id);
-  const additions=proposedSteps(turnId,effectiveMessages,source.member_id,context.child?[context.child.step_key]:[]).filter((_,index)=>!deferred[index]);
+  const explicit=context.child&&explicitRun;
+  const merged=effectiveMessages.map((message,index)=>{
+    if(!explicit||deferred[index]||!['ask','review'].includes(message.purpose))return null;
+    const candidate=db.prepare(`SELECT s.step_key stepKey,t.id childTaskId FROM coordination_steps s
+      JOIN tasks t ON t.id=s.child_task_id JOIN outbox o ON o.dispatch_key='task:'||t.id||':initial'
+      WHERE s.run_id=? AND t.owner_member_id=? AND t.parent_task_id=? AND t.status='OPEN'
+        AND t.stop_generation=? AND o.stop_generation_at_enqueue=t.stop_generation AND o.status='pending' AND o.turn_id IS NULL
+        AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.task_id=t.id)
+      ORDER BY s.rowid LIMIT 1`).get(context.rootRunId,message.toMemberId,context.parent.id,live.current_generation) as {stepKey:string;childTaskId:string}|undefined;
+    return candidate&&/^r\d+$/.test(candidate.stepKey)?candidate:null;
+  });
+  const additions=proposedSteps(turnId,effectiveMessages,source.member_id,context.child?[context.child.step_key]:[]).filter((_,index)=>!deferred[index]&&!merged[index]);
   for(let i=1;i<additions.length;i++)additions[i]!.dependsOn=[additions[i-1]!.key];
   const current=context.phase==='child'?JSON.parse((db.prepare('SELECT plan_json FROM coordination_runs WHERE run_id=?').get(context.rootRunId) as {plan_json:string}).plan_json) as CoordinationPlan:null;
-  const plan:CoordinationPlan={summary:current?.summary??'成员消息交接',steps:[...(current?.steps??[]),...additions]};
+  const mergedKeys=new Set(merged.filter(item=>item!=null).map(item=>item.stepKey));
+  const plan:CoordinationPlan={summary:current?.summary??'成员消息交接',steps:[...(current?.steps??[]).map(step=>mergedKeys.has(step.key)
+    ?{...step,dependsOn:[...new Set([...step.dependsOn,context.child!.step_key])]}:step),...additions]};
   if(plan.steps.length)validateCoordinationPlan(plan,context.roster.filter(m=>m.writeScope).map(m=>m.memberId));
   const unstarted=(db.prepare(`SELECT count(*) n FROM coordination_steps s WHERE s.run_id=? AND NOT EXISTS(SELECT 1 FROM workflow_runs r JOIN agent_turns a ON a.run_id=r.id WHERE r.task_id=s.child_task_id)`).get(context.rootRunId) as {n:number}).n;
   if(coordinationCallEnforcement(db,context.rootRunId)!=='disabled'
     &&coordinationCallsUsed(db,context.rootRunId)+unstarted+additions.length+2>coordinationCallLimit(db,context.rootRunId))
     throw Error('消息交接超出本轮剩余额度及汇总预留');
-  return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred,additions,plan};
+  return{...context,sourceMemberId:source.member_id,effectiveMessages,ignoredMessages,deferred,merged,additions,plan};
 }
 
 /** Transactional acceptance. The actual receiver is a formal worker task;
@@ -111,12 +132,17 @@ export function validateMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:
 export function acceptMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:string,turnId:string,messages:readonly MemberHandoff[]){
   const validated=validateMemberHandoffs(db,taskId,runId,turnId,messages);
   if(!validated)return[];
-  const {parent,rootRunId,sourceMemberId,phase,plan,additions,deferred,effectiveMessages,ignoredMessages}=validated;
+  const {parent,rootRunId,sourceMemberId,phase,plan,additions,deferred,merged,effectiveMessages,ignoredMessages}=validated;
   if(ignoredMessages.length>0)appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${hash(`ignored:${turnId}:${JSON.stringify(ignoredMessages)}`)}`,projectId:parent.project_id,conversationId:parent.conversation_id,threadId:parent.conversation_thread_id,taskId:parent.id,runId:rootRunId,turnId,
     kind:'member.messageIgnoredRedundantPlan',createdAt:Date.now(),payload:{sourceMemberId,messages:ignoredMessages,note:'计划已包含同一接收成员的下游步骤；程序自动传递本步骤结果，不再追加重复任务'}});
   if(effectiveMessages.length===0)return[];
   if(phase==='planning')acceptCoordinationPlan(db,parent.id,rootRunId,plan);
   else {
+    for(const target of merged){
+      if(!target)continue;
+      db.prepare('UPDATE coordination_steps SET handoff_json=NULL WHERE run_id=? AND step_key=?').run(rootRunId,target.stepKey);
+      db.prepare('INSERT OR IGNORE INTO task_dependencies(task_id,depends_on_task_id) VALUES(?,?)').run(target.childTaskId,taskId);
+    }
     for(const step of additions){
       const member=validated.roster.find(m=>m.memberId===step.memberId)!;
       const childId=`task_${hash(turnId+':'+step.key).slice(0,32)}`;
@@ -131,13 +157,13 @@ export function acceptMemberHandoffs(db:ZhongshuoDatabase,taskId:string,runId:st
   }
   return effectiveMessages.map((message,index)=>{
     const key=proposedSteps(turnId,[message],sourceMemberId,[])[0]!.key.replace(/_0$/,`_${index}`);
-    const child=deferred[index]?null:(db.prepare('SELECT child_task_id FROM coordination_steps WHERE run_id=? AND step_key=?').get(rootRunId,key) as {child_task_id:string}).child_task_id;
+    const child=deferred[index]?null:merged[index]?.childTaskId??(db.prepare('SELECT child_task_id FROM coordination_steps WHERE run_id=? AND step_key=?').get(rootRunId,key) as {child_task_id:string}).child_task_id;
     const id=`handoff_${hash(turnId+':'+index).slice(0,32)}`,now=Date.now();
     db.prepare(`INSERT INTO coordination_messages(id,coordination_run_id,project_id,conversation_id,thread_id,source_turn_id,source_index,
       source_member_id,target_member_id,purpose,body,body_hash,child_task_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted',?,?)`)
       .run(id,rootRunId,parent.project_id,parent.conversation_id,parent.conversation_thread_id,turnId,index,sourceMemberId,message.toMemberId,message.purpose,message.message,hash(message.message),child,now,now);
     appendDomainEvent(db,{schemaVersion:1,eventId:`evt_${id}`,projectId:parent.project_id,conversationId:parent.conversation_id,threadId:parent.conversation_thread_id,taskId:parent.id,runId:rootRunId,turnId,
-      kind:'member.messageAccepted',createdAt:now,payload:{messageId:id,sourceMemberId,targetMemberId:message.toMemberId,purpose:message.purpose,bodyHash:hash(message.message),childTaskId:child}});
+      kind:'member.messageAccepted',createdAt:now,payload:{messageId:id,sourceMemberId,targetMemberId:message.toMemberId,purpose:message.purpose,bodyHash:hash(message.message),childTaskId:child,...(merged[index]?{mergedIntoInitialStep:merged[index]!.stepKey}:{})}});
     return{id,toMemberId:message.toMemberId,text:message.message};
   });
 }
